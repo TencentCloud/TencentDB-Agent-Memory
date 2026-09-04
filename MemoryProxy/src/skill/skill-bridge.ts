@@ -20,6 +20,7 @@
 import type { Context } from "hono";
 import type { Redis } from "ioredis";
 import { getSessionStore } from "../session/store.js";
+import { sessionKeyCandidates } from "../session/session-key.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { RedisBindingRepo } from "../db/binding-repo.js";
@@ -263,6 +264,7 @@ function stateToIdFields(
   };
 }
 
+
 function bindingToIdFields(
   binding: import("../db/binding-repo.js").SessionBinding,
   spaceId: string,
@@ -294,8 +296,9 @@ function bindingToIdFields(
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`, `hermes:${sessionId}`];
   for (const k of candidates) {
+
     const s = getSessionStore().get(k);
     if (s) {
       const fields = stateToIdFields(s, k);
@@ -319,6 +322,7 @@ async function loadSessionIdsL2(
   spaceId: string,
   sessionId: string,
 ): Promise<SessionIdFields | null> {
+
   if (!bindingRepo) return null;
   try {
     const binding = await bindingRepo.getBinding(spaceId, sessionId);
@@ -327,6 +331,7 @@ async function loadSessionIdsL2(
   } catch (err) {
     console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
     return null;
+
   }
 }
 
