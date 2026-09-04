@@ -90,6 +90,11 @@ import {
   FormData as OCFormData,
   FormStage as OCFormStage,
 } from "./opencode/form.js";
+import {
+  buildFormResponse as buildHermesFormResponse,
+  FormData as HermesFormData,
+  FormStage as HermesFormStage,
+} from "./hermes/form.js";
 
 // Re-export the types under their old names for backward compat
 export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
@@ -233,6 +238,35 @@ export async function handleSessionInit(
       modelId: reqCtx.modelId,
     };
     result.response = buildOpencodeFormResponse(ocFd);
+  }
+
+  // hermes 客户端（Nous Research hermes-agent，PyPI hermes-agent）复用 CB 状态机 +
+  // 自己的 `clarify` 载体。与 workbuddy/dsh/opencode 完全对称：CB 状态机产出
+  // formData 后外层重渲染 response，不共用 CB 的 ask_followup_question（hermes
+  // 的 tool 执行走 OpenAI function-calling + 本地 clarify 工具，schema 是
+  // {questions:[{question, choices≤4, multi_select}]}，choices 有 MAX_CHOICES=4
+  // 硬上限必须分页）。stage 值完全一致直接透传；分页字段按当前 stage 挑对应页码。
+  // 注意：clarify 结果 JSON 会回显 choices_offered（含 MORE/跳过标签），答案
+  // 解包在 codebuddy/extractor.ts 的各提取入口经 hermes/extractor.ts 剥壳完成。
+  //
+  // 详见：session/hermes/form.ts 头部注释（schema 依据 / shape 差异 / bypass 语义）。
+  if (agentSource === "hermes" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    const hFd: HermesFormData = {
+      teams: cbFd.teams,
+      stage: cbFd.stage as HermesFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    };
+    result.response = buildHermesFormResponse(hFd);
   }
 
   return result;

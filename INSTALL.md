@@ -145,6 +145,14 @@ Every memory entry attaches to a `team / agent / task` triple:
 
 You'll want **at least 1 Team + 1 Agent** before you start; Task is optional.
 
+> **Windows / Git Bash tip**: prefer the panel UI for creating assets with
+> non-ASCII names/descriptions. Git Bash's mingw64 `curl` re-encodes non-ASCII
+> **command-line arguments** through the system ANSI code page (GBK on zh-CN
+> Windows), so `curl -d '{"description":"中文"}'` stores mojibake (U+FFFD).
+> If you script asset creation, write the JSON body to a UTF-8 file first and
+> send it with `curl --data-binary @body.json` — request **bodies read from
+> files** pass through byte-exact.
+
 ### Step 3: Point Claude Code at the Proxy
 
 ```bash
@@ -284,7 +292,7 @@ The Proxy supports 9 agent clients. **Full setup instructions, adaptation detail
 | **Codex** | `~/.codex/config.toml` (⚠️ first turn requires Plan mode) | [`agents/codex/`](./agents/codex/) |
 | **DeepSeek Harness (dsh)** | `~/.dsh/settings.yaml` + `.credentials.yaml` | [`agents/dsh/`](./agents/dsh/) |
 | **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
-| **Hermes** | `~/.hermes/config.yaml` + header preselect | [`agents/hermes/`](./agents/hermes/) |
+| **Hermes** | `~/.hermes/config.yaml` + interactive `clarify` form (header preselect optional) | [`agents/hermes/`](./agents/hermes/) |
 | **OpenClaw** | `~/.openclaw/openclaw.json` + header preselect | [`agents/openclaw/`](./agents/openclaw/) |
 | **Pi** | `pi-plugin` extension (env vars) | [`MemoryCore/pi-plugin/`](./MemoryCore/pi-plugin/) |
 | **Other platforms** | Header preselect (generic) | [`agents/README.md`](./agents/README.md) |
@@ -491,28 +499,20 @@ when at least one asset injector is on the pipeline.
 
 ## Known limitation: `x-task-id`
 
-> ⚠️ **Current version limitation**: `x-task-id` is **required** for Hermes / OpenClaw.
+> ✅ **No longer a limitation for interactive clients**: hermes (CLI / gateway, with the native `clarify` tool) and all other form-capable agents pick Team → Agent → Task interactively — `task_id` can simply be skipped in the form, or bound to "本次不关联任务".
 >
-> The Proxy's header auto-select mechanism requires all three of `x-team-id` + `x-agent-id` + `x-task-id` to complete session registration directly. Without `x-task-id`, the Proxy falls back to an interactive form flow — which Hermes / OpenClaw cannot respond to, resulting in session bypass (no memory injection or conversation recording).
+> For header-preselect agents (OpenClaw), `x-task-id` is now **optional**: `x-team-id` + `x-agent-id` are enough to complete session registration. When `x-task-id` is absent, only Team and Agent are bound and memory recall widens across all of the agent's memories.
 >
-> Inconveniences:
->
-> 1. Users must create a Task in the admin panel beforehand and obtain the `task_id`, increasing onboarding friction.
-> 2. Switching tasks requires manually editing the config file.
->
-> In the next version, we will make `x-task-id` optional: when not provided, the Proxy will auto-select the agent's default task or skip task binding entirely.
+> A stale or unknown `x-task-id` header does not block registration either — it is dropped with a warning and recall broadens across all of the agent's memories.
 
 ## Known limitation: `x-conversation-id`
 
-> ⚠️ **Current version limitation**: Hermes and OpenClaw require `x-conversation-id` to be statically specified in the config file. This differs from Claude Code / CodeBuddy (where the SDK automatically manages the session ID).
+> ⚠️ **Partially resolved**: OpenClaw still requires `x-conversation-id` to be statically specified in the config file. **Hermes** can now inject it dynamically via the bundled provider plugin — see [`agents/hermes/README.md` §6](./agents/hermes/README.md) (`tdaimemory-provider-plugin`, which derives `x-conversation-id: ses_<session_id>` from hermes' own session id on every request).
 >
-> Current limitations:
+> Remaining limitations for static configs:
 >
 > 1. **All requests sharing the same conversation ID belong to the same session** — memory injection and conversation recording are bound to this ID.
 > 2. **Starting a new conversation requires manually changing the conversation ID**, otherwise the previous session state continues.
-> 3. **Some clients may not carry extra headers on tool-call follow-up requests**, causing those turns to skip memory injection and conversation recording.
->
-> In the next version, the Proxy will support automatic generation and management of conversation IDs, eliminating the need for clients to specify this field manually.
 
 ## Stop / cleanup
 

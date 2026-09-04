@@ -136,3 +136,12 @@ coverage/
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
 z_config/
+
+# Local-only: hermes 接入验证的临时凭据与试用脚本（2026-08-30 部署会话，不入库）
+deploy/global-images/.business-key
+deploy/global-images/.trial-ids
+deploy/global-images/.trial-setup.sh
+deploy/global-images/.trial-verify.sh
+deploy/global-images/.trial-debug.sh
+deploy/global-images/.trial-hermes-flow.py
+try-reports/

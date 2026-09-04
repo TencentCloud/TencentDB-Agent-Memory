@@ -40,6 +40,7 @@ import {
 import { getLastUserMessageText } from "./cleaner.js";
 import { emitSessionInitTelemetryIfCompleted } from "../init-telemetry.js";
 import { isDshRuntimeContextSnapshot } from "../../common/user-query-extractor.js";
+import { extractHermesAnswers } from "../hermes/extractor.js";
 import {
   CODEX_MORE_LABEL,
   DEFAULT_GATE_PREFIX,
@@ -88,6 +89,8 @@ export interface SessionInitResult {
   taskDetail?: TaskDetail | null;
   /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
   bypassed?: boolean;
+  /** 当前初始化流程是否由 mem:session-reset 触发。 */
+  resetFlow?: boolean;
   /**
    * bypass 触发原因（仅 `bypassed === true` 时有意义）。codexHandler 用它决定
    * 首次 gate 命中是否要返 "Plan 模式提示" 而非直接透传。
@@ -236,6 +239,11 @@ function detectWorkbuddyMorePage(
   // solo-page 断言；对齐 claude-code/init.ts 的 safeNextPage 回绕逻辑。
   const totalPages = computeCCPagination(Math.max(0, total), 0).totalPages;
   return nextPage > totalPages - 1 ? 0 : nextPage;
+}
+
+function paginationAnswerText(answerText: string, agentSource: string): string {
+  if (agentSource !== "hermes") return answerText;
+  return extractHermesAnswers(answerText) ?? answerText;
 }
 
 /** 判断是否是「全新」CodeBuddy / dsh 对话（最多一条真用户输入、无 assistant/tool）。
@@ -849,8 +857,8 @@ async function handleSessionInitInner(
         //
         // opencode 说明：opencode 客户端原生 `question` tool 每次只能弹一个题，
         // 无法承载"同时问 agent+task"的语义，必须拆 stage（同 codex/wb/dsh）。
-        const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
-        const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
+        const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode" || agentSource === "hermes") ? "pending_agent_select" : "pending_agent_task";
+        const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode" || agentSource === "hermes") ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
           status: nextStatus,
           keyId: sessionKey,
@@ -1002,7 +1010,7 @@ async function handleSessionInitInner(
         // codex 分支，避免落到 legacy agent_task stage 后 form 里只问 agent
         // 却按老语义处理的语义歧义。opencode 原生 `question` tool 每次只能弹
         // 一个题，也必须走 split stage。
-        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode";
+        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode" || agentSource === "hermes";
         const nextStatus = useSplitStage ? "pending_agent_select" : "pending_agent_task";
         const nextStage: FormData["stage"] = useSplitStage ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
@@ -1073,6 +1081,37 @@ async function handleSessionInitInner(
   // ── Case 1.5: Awaiting team selection ─────────────────────────────────────
   if (state.status === "pending_team_select") {
     const lastUserText = getLastUserMessageText(messages);
+
+    if (agentSource === "workbuddy" || agentSource === "opencode" || agentSource === "hermes") {
+      const cachedTeams = state.cachedTeams ?? [];
+      const curTeamPage = state.codexPageIndex?.teamPage ?? 0;
+      const nextTeamPage = detectWorkbuddyMorePage(
+        paginationAnswerText(lastUserText, agentSource),
+        curTeamPage,
+        cachedTeams.length,
+      );
+      if (nextTeamPage !== null) {
+        const nextPx = {
+          teamPage: nextTeamPage,
+          agentPage: state.codexPageIndex?.agentPage ?? 0,
+          taskPage: state.codexPageIndex?.taskPage ?? 0,
+        };
+        await store.set(compositeKey, { ...state, codexPageIndex: nextPx });
+        console.log(
+          `[session-init:cb] session=${compositeKey} team MORE page ${curTeamPage} → ${nextTeamPage}`,
+        );
+        const fd: FormData = withCodexPageIndex({
+          teams: cachedTeams,
+          stage: "team",
+          stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
+          modelId: reqCtx.modelId,
+          protocol: reqCtx.protocol,
+        }, nextPx);
+        return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+      }
+    }
+
     const teamId = extractTeamFromOptionText(lastUserText, state.cachedTeams ?? []);
 
     // 用户在 team_select 阶段用 SKIP_RE (跳过/不关联/skip) 主动 bypass
@@ -1098,8 +1137,8 @@ async function handleSessionInitInner(
 
     if (teamId && teamId !== BYPASS_MARKER) {
       // codex/WB/dsh/opencode 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
-      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
-      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
+      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode" || agentSource === "hermes") ? "pending_agent_select" : "pending_agent_task";
+      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode" || agentSource === "hermes") ? "agent_select" : "agent_task";
       const next: SessionInitState = {
         ...state,
         status: nextStatus,
@@ -1162,11 +1201,18 @@ async function handleSessionInitInner(
     // WorkBuddy 复用 CB 状态机 + workbuddy/form.ts 的分页 form（MORE_LABEL="更多 →"）。
     // extractAgentOnly 不识别 MORE，必须在其之前拦截，否则点"更多 →"会被当未识别 →
     // 无限重发第 1 页。命中则 bump agentPage 并重发 agent_select form（页码经
-    // session/index.ts 的 workbuddy/opencode 重渲染分支按 stage 从 codexPageIndex.agentPage 挑出）。
+    // session/index.ts 的 workbuddy/opencode/hermes 重渲染分支按 stage 从
+    // codexPageIndex.agentPage 挑出）。
     // opencode 与 workbuddy 共用 `更多 →` MORE_LABEL 与分页语义，一并拦截。
-    if (agentSource === "workbuddy" || agentSource === "opencode") {
+    // hermes 的 clarify choices 同样是 CC 4-slot 分页（hermes 端 MAX_CHOICES=4
+    // 硬截断），MORE_LABEL 同值，一并拦截。
+    if (agentSource === "workbuddy" || agentSource === "opencode" || agentSource === "hermes") {
       const curAgentPage = state.codexPageIndex?.agentPage ?? 0;
-      const nextAgentPage = detectWorkbuddyMorePage(lastUserText, curAgentPage, team.agents.length);
+      const nextAgentPage = detectWorkbuddyMorePage(
+        paginationAnswerText(lastUserText, agentSource),
+        curAgentPage,
+        team.agents.length,
+      );
       if (nextAgentPage !== null) {
         const nextPx = {
           teamPage: state.codexPageIndex?.teamPage ?? 0,
@@ -1310,11 +1356,16 @@ async function handleSessionInitInner(
 
     // ── WorkBuddy-only: MORE 翻页拦截 ──
     // 同 pending_agent_select：extractTaskOnly 不识别 "更多 →"，必须先拦截。命中则
-    // bump taskPage 并重发 task_select form（页码经 session/index.ts 的 workbuddy/opencode
-    // 重渲染分支按 stage 从 codexPageIndex.taskPage 挑出）。
-    if (agentSource === "workbuddy" || agentSource === "opencode") {
+    // bump taskPage 并重发 task_select form（页码经 session/index.ts 的
+    // workbuddy/opencode/hermes 重渲染分支按 stage 从 codexPageIndex.taskPage 挑出）。
+    // hermes 的 clarify task 分页同款 MORE_LABEL，一并拦截。
+    if (agentSource === "workbuddy" || agentSource === "opencode" || agentSource === "hermes") {
       const curTaskPage = state.codexPageIndex?.taskPage ?? 0;
-      const nextTaskPage = detectWorkbuddyMorePage(lastUserText, curTaskPage, team.tasks.length);
+      const nextTaskPage = detectWorkbuddyMorePage(
+        paginationAnswerText(lastUserText, agentSource),
+        curTaskPage,
+        team.tasks.length,
+      );
       if (nextTaskPage !== null) {
         const nextPx = {
           teamPage: state.codexPageIndex?.teamPage ?? 0,

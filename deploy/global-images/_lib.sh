@@ -77,6 +77,22 @@ find_docker() {
 
 DOCKER="$(find_docker)"
 
+# Windows Git Bash (MSYS) 的路径改写会把 docker -v 的 POSIX 目标路径
+# （如 /data/config.yaml）搅成 "C:\Program Files\Git\data\..."，导致所有
+# bind mount 静默失效——容器内读不到挂载的配置，proxy/核心回退到内置默认
+# （session-init/auth 全被禁用），排障极其隐蔽（容器照样 healthy）。
+# 关闭改写后，docker desktop 可直接识别 /c/... 形式的宿主机路径（已实测）。
+# 仅在 MSYS 环境生效；Linux/macOS 上 uname 不含 mingw，跳过。
+#
+# ⚠ 该 export 是进程级全局：mingw curl 等"原生 exe"的 -o 输出路径不再被
+# MSYS 转换，/tmp/xxx 会被字面解析为 <盘>:\tmp\xxx（目录不存在时 curl 写
+# 文件失败 exit 23，且 -w 仍输出真实 code，与 `|| echo 000` 拼成 "200000"）。
+# 因此所有交给原生 exe 的临时文件一律用 CWD 相对路径（./xxx.$$），
+# 并用显式正则校验 http_code，不要依赖 `|| echo 000` 拼接。
+if uname -s 2>/dev/null | grep -qi mingw; then
+  export MSYS_NO_PATHCONV=1
+fi
+
 # PULL=1 时拉取镜像最新版本。
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。
@@ -162,6 +178,24 @@ if [[ ! -x "$CURL" ]]; then
   fi
 fi
 
+# capture_http_code <code_var> <rc_var> <curl args...>
+#
+# Always returns 0 so callers remain safe under `set -e`. The original curl
+# exit status and normalized three-digit HTTP code are returned via variables.
+capture_http_code() {
+  local code_var="$1" rc_var="$2"
+  shift 2
+  local captured="" status=0
+  if captured=$("$CURL" "$@"); then
+    status=0
+  else
+    status=$?
+  fi
+  [[ $status -eq 0 && "$captured" =~ ^[0-9]{3}$ ]] || captured="000"
+  printf -v "$code_var" '%s' "$captured"
+  printf -v "$rc_var" '%s' "$status"
+}
+
 # check_llm_openai <label> <base_url> <api_key> <model>
 #   OpenAI 兼容：GET {base}/models 只验证 auth+URL，不消耗 token。返回 0 通过 / 1 失败。
 check_llm_openai() {
@@ -170,9 +204,10 @@ check_llm_openai() {
   base="${base%/messages}"
   base="${base%/chat/completions}"
   local url="${base}/models"
-  local code body_file=/tmp/llm-check.$$
-  code=$("$CURL" -sS --max-time 10 -o "$body_file" -w "%{http_code}" \
-    -H "Authorization: Bearer $key" "$url" 2>/dev/null || echo "000")
+  local code transport_rc body_file=./llm-check.$$
+  capture_http_code code transport_rc \
+    -sS --max-time 10 -o "$body_file" -w "%{http_code}" \
+    -H "Authorization: Bearer $key" "$url"
   local rc=0
   if [[ "$code" == "200" ]]; then
     if grep -q "\"$model\"" "$body_file" 2>/dev/null; then
@@ -210,13 +245,14 @@ check_llm_anthropic() {
   else
     url="${base}/v1/messages"
   fi
-  local code body_file=/tmp/llm-check.$$
-  code=$("$CURL" -sS --max-time 15 -o "$body_file" -w "%{http_code}" \
+  local code transport_rc body_file=./llm-check.$$
+  capture_http_code code transport_rc \
+    -sS --max-time 15 -o "$body_file" -w "%{http_code}" \
     -X POST -H "Content-Type: application/json" \
     -H "x-api-key: $key" -H "Authorization: Bearer $key" \
     -H "anthropic-version: 2023-06-01" \
     -d "{\"model\":\"$model\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
-    "$url" 2>/dev/null || echo "000")
+    "$url"
   local rc=0
   case "$code" in
     200) ok "$label Anthropic 协议通路 OK（模型 $model 已应答）" ;;

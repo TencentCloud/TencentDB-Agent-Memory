@@ -16,6 +16,7 @@
 
 import type { SessionInitData, TeamOption } from "../types.js";
 import { SKIP_LABEL, PATH_SEP, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./form.js";
+import { extractHermesAnswers } from "../hermes/extractor.js";
 
 // ── Markers ────────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,13 @@ function extractOpencodeAnswers(content: string): string | null {
  * 返回 true=是（关联资产），false=否（bypass），null=未识别。
  */
 export function extractAssetConfirm(content: string): boolean | null {
+  // hermes: 解包 clarify 结果 JSON。与 opencode 不同，asset_confirm **必须**剥壳：
+  // clarify 结果会回显 choices_offered（同时含"是，关联团队资产"与"否，本次不关联"
+  // 两个标签），不剥壳的话 includes(ASSET_CONFIRM_YES) 恒命中 → 选"否"也会被
+  // 误判为关联资产。
+  const hermesAnswer = extractHermesAnswers(content);
+  if (hermesAnswer !== null) content = hermesAnswer;
+
   // XML parsing
   const xml = parseQuestionAnswerXml(content);
   const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? content;
@@ -143,6 +151,12 @@ export function extractTeamFromOptionText(
   cachedTeams: TeamOption[],
 ): string | null {
   if (cachedTeams.length === 0) return null;
+
+  // hermes: 解包 clarify 结果 JSON —— 剥掉 question 里的 SKIP_HINT 与
+  // choices_offered 回显，避免"跳过"/其他选项标签误触发（见
+  // hermes/extractor.ts 头部注释）。
+  const hermesAnswer = extractHermesAnswers(content);
+  if (hermesAnswer !== null) content = hermesAnswer;
 
   // opencode: 剥壳 tool-result 包裹，避免问题描述里的"跳过"字样触发误 SKIP。
   // 见 extractOpencodeAnswers 头部注释。
@@ -267,6 +281,10 @@ export function extractFromOptionText(
       : null;
   if (!team) return null;
 
+  // hermes: 解包 clarify 结果 JSON（见 hermes/extractor.ts 头部注释）。
+  const hermesAnswer2 = extractHermesAnswers(content);
+  if (hermesAnswer2 !== null) content = hermesAnswer2;
+
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
@@ -336,6 +354,9 @@ export function extractAgentOnly(
       ? cachedTeams[0]
       : null;
   if (!team) return null;
+  // hermes: 解包 clarify 结果 JSON（见 hermes/extractor.ts 头部注释）。
+  const hermesAnswer3 = extractHermesAnswers(content);
+  if (hermesAnswer3 !== null) content = hermesAnswer3;
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
@@ -365,6 +386,9 @@ export function extractTaskOnly(
       ? cachedTeams[0]
       : null;
   if (!team) return null;
+  // hermes: 解包 clarify 结果 JSON（见 hermes/extractor.ts 头部注释）。
+  const hermesAnswer4 = extractHermesAnswers(content);
+  if (hermesAnswer4 !== null) content = hermesAnswer4;
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;

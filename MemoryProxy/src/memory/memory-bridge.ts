@@ -22,6 +22,7 @@
 
 import type { Context } from "hono";
 import { getSessionStore } from "../session/store.js";
+import { buildSessionKeyCandidates } from "../session/bridge-lookup.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
@@ -137,10 +138,9 @@ function bindingToIdFields(
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
-  // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+  // 通常是 bare sessionId。候选前缀从 KNOWN_AGENT_SOURCES 注册表展开
+  // （手写清单随新 adapter 上线漏项 → bridge 全线 40101，hermes 踩过）。
+  const candidates = buildSessionKeyCandidates(sessionId);
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {

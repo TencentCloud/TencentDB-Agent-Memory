@@ -48,7 +48,7 @@ cp -r agents ~/agents
 请阅读 ~/agents/skills/setup-proxy/SKILL.md，帮我配置 Claude Code 接入 Memory Proxy。我的 proxy 地址是 http://localhost:8096，实例 ID 是 default。
 ```
 
-**配置 Hermes/OpenClaw（需要 header 预选）：**
+**配置 Hermes/OpenClaw（OpenClaw 需 header 预选；Hermes 也可走交互表单）：**
 
 ```
 请阅读 ~/agents/skills/setup-proxy/SKILL.md，帮我配置 Hermes 接入 Memory Proxy。面板地址是 http://localhost:8125，帮我从面板拉取 team/agent 列表来选择。
@@ -81,7 +81,7 @@ cp -r agents ~/agents
 | [Codex](./codex/) | OpenAI Responses API | 交互式 Form + Default Gate | `request_user_input` | ✅ | ✅ | ❌ |
 | [WorkBuddy](./workbuddy/) | Responses (Desktop) / Chat (Web) | 交互式 Form | `AskUserQuestion` | ✅ (max 4) | ✅ | ✅ (静默透传) |
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
-| [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
+| [Hermes](./hermes/) | OpenAI Chat Completions | 交互式 Form + Header 预选 | `clarify` | ✅ (max 4) | ❌ | ✅ (无 clarify tool 时) |
 | [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
 
 ---
@@ -120,7 +120,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | Codex | `session-id` | `body.client_metadata.session_id` |
 | WorkBuddy | `session-id` | `body.client_metadata.session_id` |
 | dsh | `x-deepseek-harness-session-id` | `x-session-id` |
-| Hermes | `x-conversation-id` | — (用户静态配置) |
+| Hermes | `x-conversation-id` | — (静态配置或 provider 插件动态注入) |
 | OpenClaw | `x-conversation-id` | — (用户静态配置) |
 
 ---
@@ -154,7 +154,8 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 ## Header 预选（通用，所有 agent 均可使用）
 
 除了交互式 Form 之外，**所有 agent** 都支持通过 HTTP Header 直接完成 session 注册，跳过表单交互。适用于：
-- 无法响应 form（如 Hermes / OpenClaw）
+- 无法响应 form（如 OpenClaw）
+- Hermes 无头形态（api-server / acp，请求里无 clarify 工具时 proxy 自动 bypass）
 - 想跳过表单加速首帧（如 CI/CD 自动化场景）
 - 第三方平台 / 自行开发的 Agent
 

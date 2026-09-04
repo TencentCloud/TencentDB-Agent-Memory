@@ -71,6 +71,17 @@ if [[ "$PROXY_ENABLE_SESSION_INIT" == "1" && "$PROXY_ENABLE_AUTH" != "1" ]]; the
   PROXY_ENABLE_AUTH=1
 fi
 
+# FULL_STACK 时激活持久化 storage（sqlite）→ SessionStore 挂上 BindingRepo，
+# memory-bridge / skill-bridge 的 L2 拍平 binding 才会落地（L1 前缀探测 miss
+# 时的设计兜底，见 docs/design/2026-08-03-binding-flatten.md）。不开时
+# storage.enabled=false → bindingRepo=null → bridge 只能靠 L1 内存命中。
+STORAGE_BLOCK=""
+if [[ "${PROXY_FULL_STACK:-0}" == "1" ]]; then
+  STORAGE_BLOCK='storage:
+  enabled: true
+  backend: sqlite'
+fi
+
 bool() { [[ "$1" == "1" ]] && echo "true" || echo "false"; }
 
 info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI))"
@@ -129,12 +140,20 @@ costGuard:
 
 # 打开 skill + knowledge + tdai-memory 三个注入器；
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
+#
+# externalGatewayUrl：注入文本里工具回调地址的对外基准（如 http://localhost:8096
+# 或 http://<LAN-IP>:8096）。不设时 proxy 会把容器内网 IP 嵌进工具说明——宿主机
+# 客户端（hermes / CC 等）按该地址调用 memory-bridge / skill-bridge 会 502。
+# 可在 .env 设 INJECTION_EXTERNAL_GATEWAY_URL 覆盖。
 injection:
   enabled: true
   injectors:
     - skill
     - knowledge
     - tdai-memory
+${INJECTION_EXTERNAL_GATEWAY_URL:+  externalGatewayUrl: "${INJECTION_EXTERNAL_GATEWAY_URL}"}
+
+${STORAGE_BLOCK}
 
 redis:
   enabled: false
