@@ -24,7 +24,7 @@
 import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
 import type { MemCommandMessage } from "../mem-command/types.js";
-import { getSessionStore } from "../session/store.js";
+import { getSessionStore, buildStoreSessionKey } from "../session/store.js";
 import type { SessionInitState, SessionInfo } from "../session/types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { TaskEntity } from "../meta/client.js";
@@ -151,7 +151,7 @@ function resolveSession(
 ): ResolvedSession | { error: string } {
   if (!sessionKey) return { error: "session_key is required" };
 
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
   const store = getSessionStore();
   const state = store.get(compositeKey);
 
@@ -580,7 +580,7 @@ async function bindTaskIdToSession(
   agentSource: string,
   taskId: string,
 ): Promise<void> {
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
   const store = getSessionStore();
   const state = store.get(compositeKey);
   if (!state || !state.sessionInfo) {

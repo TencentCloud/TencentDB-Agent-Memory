@@ -39,6 +39,8 @@ import {
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
 } from "./session/codex/form.js";
+import { sessionStage, RESPONSES_SESSION_ADAPTER } from "./stages/session.js";
+import type { ReqCtx } from "./stages/types.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import { log } from "./report/log.js";
 import {
@@ -156,22 +158,6 @@ export function classifyCodexRequest(
   if (typeof ts === "string" && CODEX_AUX_THREAD_SOURCES.has(ts)) return "auxiliary";
 
   return "main";
-}
-
-// ── Session ID extraction (exported for unit tests) ──────────────────────────
-
-/**
- * Extract session_id from codex request.
- * Primary: `session-id` header. Fallback: `body.client_metadata.session_id`.
- */
-export function extractCodexSessionId(
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-): string | null {
-  if (headers["session-id"]) return headers["session-id"];
-  const meta = body.client_metadata as { session_id?: string } | undefined;
-  if (typeof meta?.session_id === "string") return meta.session_id;
-  return null;
 }
 
 // ── Default mode gate detection (exported for unit tests) ────────────────────
@@ -344,9 +330,25 @@ export async function handleCodexEndpoint(
     return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null);
   }
 
-  // ── 6. Session ID extraction ───────────────────────────────────────────────
-  const sessionId = extractCodexSessionId(headers, body);
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
+  // ── 6. Session resolution（sessionStage 统一入口）──────────────────────────
+  // 显式 session-id 优先；缺失时按 autoConversationId 自动生成/续接；自动生成
+  // 关闭时回退到首问指纹稳定键（无指纹再退回 `${keyId}:${traceId}`）。
+  // auto-* 回传 ID 仍过签名校验。
+  const sessionStageCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource: "codex",
+    apiKey,
+    keyIdOverride: keyId,
+    earlySpaceId: spaceId,
+    earlyUserId: userId || "",
+    traceId,
+  };
+  await sessionStage(sessionStageCtx, RESPONSES_SESSION_ADAPTER);
+  const sessionId = sessionStageCtx.conversationId;
+  const sessionKey = sessionStageCtx.sessionKey ?? `${keyId}:${traceId}`;
+  const threadId = sessionStageCtx.threadId ?? null;
   const agentSource = "codex";
   const isStream = body.stream !== false;
 
@@ -401,15 +403,20 @@ export async function handleCodexEndpoint(
       const userText = codexAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
+        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = buildStoreSessionKey({
+          agentSource,
+          sessionKey,
+          threadId,
+          threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+        });
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -452,12 +459,18 @@ export async function handleCodexEndpoint(
   if (config.sessionInit?.enabled && sessionId) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
+      const { buildStoreSessionKey } = await import("./session/store.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = `${agentSource}:${sessionKey}`;
+      const compositeKey = buildStoreSessionKey({
+        agentSource,
+        sessionKey,
+        threadId,
+        threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+      });
       const identity = {
         userId: userId || "anonymous",
         agentSource,
@@ -678,10 +691,10 @@ export async function handleCodexEndpoint(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id).slice(-8) : "",
           taskName: initResult.taskDetail?.name,
         };
       }

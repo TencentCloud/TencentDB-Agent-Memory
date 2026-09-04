@@ -11,7 +11,7 @@
 
 // ── 共享模块 ──────────────────────────────────────────────────────────────────
 
-export { SessionStore, getSessionStore } from "./store.js";
+export { SessionStore, getSessionStore, buildStoreSessionKey } from "./store.js";
 export type {
   SessionInitStatus,
   SessionInitState,

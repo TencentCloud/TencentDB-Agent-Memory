@@ -6,6 +6,19 @@ import { handleAnthropicMessages } from "./anthropicHandler.js";
 import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
 import { handleCodexEndpoint } from "./codexHandler.js";
 import { handleWorkbuddyEndpoint } from "./workbuddyHandler.js";
+import {
+  sessionStatsToPrometheus,
+  getSessionStats,
+  getSessionStatsBreakdown,
+} from "./common/session-stats.js";
+import { autoSessionSizes, recentExpiredSessions } from "./session/auto-session.js";
+// 别名引入：协议转换 PR（#1226）会在同一文件按 admin 端点约定引入同名
+// checkAdminAuth/adminAuthError；用别名可让两个 PR 各自独立合入后不产生
+// 重复绑定，顺序合入时 server.ts 不再冲突。
+import {
+  checkAdminAuth as sessionAdminAuth,
+  adminAuthError as sessionAdminAuthError,
+} from "./routes/admin-auth.js";
 import { apiKeyToKeyId, extractBearerToken } from "./opik.js";
 import { createSkillBridgeHandler } from "./skill/skill-bridge.js";
 import { createMemoryBridgeHandler } from "./memory/memory-bridge.js";
@@ -343,6 +356,47 @@ export function createApp(config: ProxyConfig): Hono {
 
   // OpenAI-compatible chat completions (catch-all for any remaining POST paths)
   app.post("/*", (c) => handleChatCompletions(c, config));
+
+  // 会话诊断：只返回聚合数量与决策计数，不暴露具体会话 ID。
+  // 鉴权与 admin 端点一致：config.admin.apiKey 非空时要求 Bearer，为空则公开（建议仅内网暴露）。
+  app.get("/session-debug", (c) => {
+    const authResult = sessionAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return sessionAdminAuthError(c, authResult);
+    const snap = getSessionStats();
+    const reuseRate = snap.created + snap.resumed > 0
+      ? Number((snap.resumed / (snap.created + snap.resumed)).toFixed(3))
+      : 0;
+    const fenceTotal = snap.fenceBlocked + snap.fenceAllowed;
+    const fenceRate = fenceTotal > 0
+      ? Number((snap.fenceBlocked / fenceTotal).toFixed(3))
+      : 0;
+    // fenceCoverage = 有归属信息可校验的写入占比（blocked+allowed）/ (blocked+allowed+miss)
+    const fenceEvaluated = fenceTotal + snap.fenceMiss;
+    const fenceCoverage = fenceEvaluated > 0
+      ? Number((fenceTotal / fenceEvaluated).toFixed(3))
+      : 0;
+    return c.json(
+      {
+        ...autoSessionSizes(),
+        expiredLedger: recentExpiredSessions().length,
+        reuseRate,
+        fenceRate,
+        fenceCoverage,
+        stats: snap,
+        breakdown: getSessionStatsBreakdown(),
+      },
+      200,
+    );
+  });
+
+  // 会话决策指标（Prometheus 文本）。鉴权口径与 /session-debug 一致。
+  // 用专属路径 /session/metrics，避免与协议转换 PR 的 /metrics（协议延迟/
+  // 缓存命中统计）在同仓库路由上互相遮蔽——两者各自单 PR 合入都安全。
+  app.get("/session/metrics", (c) => {
+    const authResult = sessionAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return sessionAdminAuthError(c, authResult);
+    return c.text(sessionStatsToPrometheus(), 200);
+  });
 
   return app;
 }

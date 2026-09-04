@@ -73,6 +73,12 @@ export interface StorageConfig {
    * 默认 7 天，与 COS lifecycle rule 的粒度对齐（COS 天级扫描）。
    */
   ttlDays: number;
+  /** 命名空间级归档规则：命中即视为已归档，会话不恢复、不注入。 */
+  archiveNamespaces?: Array<{
+    spaceId?: string;
+    teamId?: string;
+    agentId?: string;
+  }>;
 
   cos: {
     /**
@@ -288,6 +294,33 @@ export interface SessionInitConfig {
     /** header 值在用户可见列表中查不到时：'form' 回退交互表单（默认）| 'bypass' 直接跳过 session init。 */
     onMismatch: "form" | "bypass";
   };
+  /**
+   * 线程隔离：开启后 x-thread-id 进入 L1/状态机键与遥测分组（默认关）。
+   * 持久层键不含 thread，重启/换副本按 (space,user,agent,sessionId) 收敛。
+   */
+  threadIsolation?: {
+    enabled?: boolean;
+  };
+  /**
+   * 无会话 ID 客户端的 auto 会话配置：签名绑定 + deterministic 派生。
+   * 详见 session/auto-session.ts。
+   */
+  autoConversationId?: {
+    enabled?: boolean;
+    ttlMinutes?: number;
+    /** true → sid 由 (keyId, scope, 首问指纹, epoch) 确定性派生（多实例收敛）。 */
+    deterministic?: boolean;
+    /** deterministic 模式的 epoch 桶宽（分钟），缺省 = ttlMinutes。 */
+    deterministicBucketMinutes?: number;
+    strategy?: "per-key" | "per-key-msg";
+    maxEntries?: number;
+    maxWindowsPerKey?: number;
+    maxWindowsTotal?: number;
+  };
+  /** 缺 task 时的注册策略：skip（默认/推荐）/ default / reject。 */
+  taskMissingPolicy?: "skip" | "default" | "reject";
+  /** 按客户端覆盖 taskMissingPolicy（未列出的走全局策略）。 */
+  taskMissingPolicyByAgent?: Record<string, "skip" | "default" | "reject">;
 }
 
 export interface TdaiConfig {
@@ -767,6 +800,11 @@ export interface RawYamlConfig {
     enabled?: boolean;
     backend?: "cos" | "sqlite" | "fs" | "memory";
     ttlDays?: number;
+    archiveNamespaces?: Array<{
+      spaceId?: string;
+      teamId?: string;
+      agentId?: string;
+    }>;
     cos?: {
       rootPrefix?: string;
       endpointDomain?: string;
@@ -834,6 +872,21 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    autoConversationId?: {
+      enabled?: boolean;
+      ttlMinutes?: number;
+      deterministic?: boolean;
+      deterministicBucketMinutes?: number;
+      strategy?: string;
+      maxEntries?: number;
+      maxWindowsPerKey?: number;
+      maxWindowsTotal?: number;
+    };
+    threadIsolation?: {
+      enabled?: boolean;
+    };
+    taskMissingPolicy?: "skip" | "default" | "reject";
+    taskMissingPolicyByAgent?: Record<string, "skip" | "default" | "reject">;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
@@ -903,6 +956,7 @@ export interface RequestLogEntry {
   sessionKey?: string; // conversationId || keyId — per-conversation isolation key
   upstreamUrl: string;
   stream: boolean;
+  traceId?: string;
   temperature?: number;
   maxTokens?: number;
   routedFrom?: string;     // original model if routing was applied
