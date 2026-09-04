@@ -323,6 +323,59 @@ function findTeamIdForAgent(teams: TeamOption[], agentId: string): string | unde
   return undefined;
 }
 
+// ── [autoDefault] 默认值解析 ──────────────────────────────────────────────────
+
+/**
+ * autoDefault 解析结果：
+ * - `{ agent_id, task_id? }` → 成功，可直接调 completeRegistration 静默注册。
+ * - `"skip"`                 → 已启用但无法解析，按 onUnresolved="skip" 直接放行（不注入）。
+ * - `null`                   → 未启用，或 onUnresolved="form" 需要退化为交互表单。
+ */
+type AutoDefaultResolution = { agent_id: string; task_id?: string } | "skip" | null;
+
+/**
+ * 把 `sessionInit.autoDefault` 解析成可注册的 (agent, task) 组合。
+ *
+ * 见 types.ts SessionInitConfig.autoDefault 的语义。要点：
+ * - team：配了 `teamId` 按 id 匹配，缺省取用户可见列表第一个 team。
+ * - agent：配了 `agentId` 需在该 team 内存在，缺省取该 team 第一个 agent。
+ * - task：配了 `taskId` 用真实任务；缺省/空 → 记为 `config.defaultTaskId` 虚拟项
+ *   （"本次不关联任务"——kernel 不 getTask、注入 task 段为空、记忆走 broad recall）。
+ * - 任一环节无法解析 → 依 `onUnresolved` 返回 "skip"（放行）或 null（回退表单）。
+ *
+ * 导出仅为单元测试；业务调用点在 init.ts 内部。
+ */
+export function resolveAutoDefaultIdentity(
+  teams: TeamOption[],
+  config: SessionInitConfig,
+): AutoDefaultResolution {
+  const ad = config.autoDefault;
+  if (!ad?.enabled) return null;
+  const fallback: AutoDefaultResolution = ad.onUnresolved === "form" ? null : "skip";
+
+  // team：显式 teamId 优先，否则用第一个可见 team（对齐 headerAutoSelect 的"单 team 自动选"直觉）。
+  let team: TeamOption | undefined;
+  if (ad.teamId) team = teams.find((t) => t.team_id === ad.teamId);
+  else team = teams[0];
+  if (!team) return fallback;
+
+  // agent：显式 agentId 需在该 team 内存在，否则取第一个。
+  let agentId = ad.agentId;
+  if (agentId) {
+    if (!team.agents.some((a) => a.agent_id === agentId)) return fallback;
+  } else {
+    if (team.agents.length === 0) return fallback;
+    agentId = team.agents[0].agent_id;
+  }
+
+  // task：显式 taskId 用真实任务；否则记为 defaultTaskId 虚拟项（"本次不关联任务"）。
+  let taskId: string | undefined;
+  if (ad.taskId) taskId = ad.taskId;
+  else if (config.defaultTaskId) taskId = config.defaultTaskId;
+
+  return { agent_id: agentId, task_id: taskId };
+}
+
 /**
  * Assemble the registration payload for a resolved (agent, task). Returns
  * `null` when the agent cannot be matched to any team in the cached list —
@@ -558,6 +611,51 @@ async function handleSessionInitInner(
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);
+
+  // ── [autoDefault] pending 表单超时 → 直接以默认值收敛 ────────────────────
+  //
+  // 状态机是**请求驱动**的：用户挂在一个 pending 表单上迟迟不答复时，proxy 侧不会
+  // 有新的请求进来，因此这里无法"主动解除 DSH 已挂起的 turn"（那需要 DSH 侧给
+  // ask_user_question 加超时——本次不动 DSH 核心）。它的价值在于：超时后**下一次**
+  // 请求（用户终于回来 / sub-agent 继续推进）到达时，不再反复弹表单 / 解析答复，
+  // 直接以 autoDefault 默认值完成注册并注入记忆，让这条真实消息被正常处理。
+  //
+  // 触发条件：autoDefault.enabled 且当前为 pending 状态且距 startedAt 超过
+  // initTimeoutMs。未启用或未超时 → 完全维持现状（含 store 既有的 TTL 丢弃语义）。
+  if (
+    state &&
+    state.status !== "initialized" &&
+    state.status !== "uninitialized" &&
+    state.startedAt &&
+    config.autoDefault?.enabled
+  ) {
+    const timeout = config.initTimeoutMs ?? 15 * 60 * 1000;
+    if (Date.now() - state.startedAt > timeout) {
+      const cachedTeams = state.cachedTeams ?? [];
+      const autoResolved = resolveAutoDefaultIdentity(cachedTeams, config);
+      if (autoResolved && autoResolved !== "skip") {
+        console.log(
+          `[session-init:cb] session=${compositeKey} pending=${state.status} timed out ` +
+            `(${Math.round((Date.now() - state.startedAt) / 1000)}s > ${Math.round(timeout / 1000)}s) → autoDefault register`,
+        );
+        return await completeRegistration(
+          { agent_id: autoResolved.agent_id, task_id: autoResolved.task_id },
+          state, cachedTeams, compositeKey, sessionKey, userId,
+          config, store, messages, metadataClient, userKey, spaceId,
+        );
+      }
+      // autoDefault 无法解析（onUnresolved=skip）→ 显式按 bypass 收敛，避免下一条
+      // 消息又弹表单。onUnresolved=form → resolveAutoDefaultIdentity 返回 null → 不
+      // 拦截，fall through 走原状态机（保持既有 retry/TTL 语义）。
+      if (autoResolved === "skip") {
+        console.warn(
+          `[session-init:cb] session=${compositeKey} pending=${state.status} timed out but autoDefault unresolved → bypass`,
+        );
+        await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
+        return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+      }
+    }
+  }
 
   // ── codex-only pre-checks: Default gate + MORE 分页 ───────────────────────
   //
@@ -874,6 +972,57 @@ async function handleSessionInitInner(
         };
         return { intercepted: true, response: buildFormResponse(fd), formData: fd };
       }
+    }
+
+    // ── [autoDefault] 用户无明确选择意图 → 直接以默认值静默注册 ─────────────
+    //
+    // 在"要弹 asset_confirm 之前"收敛：autoDefault 开启且能解析出 (team, agent) 时，
+    // 不再弹任何交互表单，直接 completeRegistration（注入记忆）。sub-agent 也是一个
+    // 全新 session key，天然走同一路径——因此不需单独判别父/子会话，也不需要 DSH 侧
+    // 携带 parent session header。
+    //
+    // 优先级：headerAutoSelect（header 显式身份）已在**上方**先判，这里只兜底
+    // "无 header、无明确意图"的开新会话场景。host 或客户端想换绑定 → 用 mem:session-reset。
+    {
+      const autoResolved = resolveAutoDefaultIdentity(teams, config);
+      if (autoResolved && autoResolved !== "skip") {
+        console.log(
+          `[session-init:cb] session=${compositeKey} autoDefault team=${findTeamIdForAgent(teams, autoResolved.agent_id) ?? "-"} ` +
+            `agent=${autoResolved.agent_id} task=${autoResolved.task_id ?? "-"} → register directly`,
+        );
+        const seedState: SessionInitState = {
+          status: "uninitialized",
+          keyId: sessionKey,
+          startedAt: Date.now(),
+          attemptCount: 0,
+          userId,
+          cachedTeams: teams,
+        };
+        return await completeRegistration(
+          { agent_id: autoResolved.agent_id, task_id: autoResolved.task_id },
+          seedState, teams, compositeKey, sessionKey, userId,
+          config, store, messages, metadataClient, userKey, spaceId,
+        );
+      }
+      if (autoResolved === "skip") {
+        console.warn(
+          `[session-init:cb] session=${compositeKey} autoDefault enabled but unresolved → bypass (onUnresolved=skip)`,
+        );
+        await store.set(compositeKey, {
+          status: "initialized",
+          keyId: sessionKey,
+          startedAt: Date.now(),
+          attemptCount: 0,
+          userId,
+          cachedTeams: teams,
+          sessionInfo: null,
+          agentDetail: null,
+          taskDetail: null,
+          bypassed: true,
+        } as SessionInitState);
+        return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+      }
+      // null（未启用，或 onUnresolved=form）→ fall through 到原弹表单流程。
     }
 
     // 先弹 asset_confirm 对话框

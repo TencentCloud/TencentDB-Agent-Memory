@@ -399,6 +399,70 @@ this ID marking sessions that opted out of Task binding.
 > template to include `defaultTaskId`, or point `PROXY_CONFIG_DIR` at
 > a directory holding your own hand-edited `config.yaml`.
 
+## Optional: `sessionInit.autoDefault` (silent defaults) + `initTimeoutMs` (timeout convergence)
+
+**Why.** Every fresh session — the main agent and sub-agents alike (a
+sub-agent is also a brand-new session) — asks the user to pick
+team/agent/task, and the interactive form leaves the session hanging
+while it waits for the answer. If you want the session to initialise
+with a configured identity **silently** whenever the user has no explicit
+choice intent (no form, no waiting), use this pair.
+
+**`sessionInit.autoDefault` — silent defaults.**
+
+```yaml
+sessionInit:
+  enabled: true
+  maxRetries: 3
+  injectAgentContext: true
+  injectTaskContext: true
+  defaultTaskId: "no-task"
+  headerAutoSelect:
+    enabled: true
+    teamHeader: "x-team-id"
+    agentHeader: "x-agent-id"
+    taskHeader: "x-task-id"
+    onMismatch: "form"
+  autoDefault:
+    enabled: true        # false (default) = keep the interactive form, zero behaviour change
+    teamId: ""           # default team_id; empty = first team the user can see
+    agentId: ""          # default agent_id; empty = first agent of the chosen team
+    taskId: ""           # default task_id; empty = no task (recorded as the defaultTaskId virtual item)
+    onUnresolved: "skip" # when defaults can't resolve: skip=skip init (default) | form=fall back to the form
+```
+
+**Behaviour & precedence.**
+
+- When enabled, the state machine (before showing the `asset_confirm` form)
+  resolves `(team, agent)` from `autoDefault`; if it can, it **calls the
+  existing `completeRegistration` and injects memory — no interactive form
+  is shown**. Main agent and sub-agent are treated identically: a sub-agent
+  is also a fresh session key, so this path needs **no parent/child session
+  detection and no DSH-side parent-session header**.
+- Precedence: `headerAutoSelect` (explicit identity in headers) wins;
+  `autoDefault` backs up "no header, no explicit intent" on a new session.
+  To re-bind later, use `mem:session-reset`.
+- `taskId` left empty → recorded as the `defaultTaskId` virtual item
+  ("no task binding": kernel skips `getTask`, no `[Task]` block is
+  injected); a real task_id → injected as a real task.
+
+**`sessionInit.initTimeoutMs` — timeout convergence (milliseconds, default
+`900000` = 15 minutes).**
+
+The state machine is **request-driven**: while the user sits on a pending
+form without replying, no new request reaches the proxy (the hang is on
+the DSH side; this feature does **not** touch the DSH core, so it cannot
+actively unblock a hung turn). Its value is: when the **next** request
+arrives after the timeout (user comes back / a sub-agent pushes on), the
+state machine sees that `startedAt` is more than `initTimeoutMs` old and,
+instead of re-showing the form / parsing the reply, **registers with the
+`autoDefault` identity** and injects memory — so that real message is
+processed normally without the session-init hanging in `pending` forever.
+
+> Note: `initTimeoutMs` only applies when `autoDefault.enabled=true`; when
+> disabled, the existing store `DEFAULT_TTL_MS` (30 min) just drops stale
+> pending state — it does not converge to a default identity.
+
 ## Optional: `/analyse` URL marker (asset injection effectiveness review)
 
 **What it does.** The Proxy ships a debug/evaluation feature called
