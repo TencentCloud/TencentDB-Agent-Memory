@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 
 import type { HookCacheRepo } from "../db/hookCacheRepo.js";
+import type { SkillQueueStrategy } from "../types.js";
 import { hasSkillQueueMarkers, stripSkillQueueBlocks } from "./skill-queue-markers.js";
-
-export type SkillQueueStrategy = "session_init" | "every_queue" | "latest_only";
 
 export interface SkillQueueIdentity {
   spaceId: string;
@@ -12,48 +11,15 @@ export interface SkillQueueIdentity {
   sessionId: string;
 }
 
-interface SkillQueueSnapshot {
-  queueKey: string;
-  listingHash: string;
-  blockText: string;
-}
-
-interface SkillQueueHistory {
-  version: 1;
-  revision: number;
-  snapshots: SkillQueueSnapshot[];
-}
-
 interface QueueTarget {
   index: number;
   key: string;
 }
 
-const HISTORY_HOOK = "skill-queue-history-v1";
-const HISTORY_SESSION_SUFFIX = "::skill-queue";
-const memoryHistory = new Map<string, SkillQueueHistory>();
+export const SKILL_QUEUE_HISTORY_HOOK_PREFIX = "skill-queue-history-v1-";
+const memoryHistory = new Map<string, Map<string, string>>();
 const sessionLocks = new Map<string, Promise<void>>();
-
-/** Stable assets always occupy the first Responses message, as before. */
-export function injectStableAssetBlock(
-  body: Record<string, unknown>,
-  injectionBlock: unknown,
-): Record<string, unknown> {
-  const input = body.input;
-  if (!Array.isArray(input)) return body;
-  const targetIndex = input.findIndex((item) => {
-    const message = item as Record<string, unknown> | null;
-    return message?.type === "message" && Array.isArray(message.content);
-  });
-  if (targetIndex < 0) return body;
-  const newInput = [...input];
-  const target = newInput[targetIndex] as Record<string, unknown>;
-  newInput[targetIndex] = {
-    ...target,
-    content: [...(target.content as unknown[]), injectionBlock],
-  };
-  return { ...body, input: newInput };
-}
+const MAX_MEMORY_SESSIONS = 1_000;
 
 /** Reconstruct immutable dynamic snapshots because clients replay only their own history. */
 export async function injectDynamicSkillQueue(
@@ -64,42 +30,47 @@ export async function injectDynamicSkillQueue(
   repo: HookCacheRepo | undefined,
   buildBlock: (text: string) => unknown,
 ): Promise<Record<string, unknown>> {
-  if (strategy === "session_init" || !hasSkillQueueMarkers(blockText)) return body;
+  if (strategy === "session_init") return body;
   const targets = collectUserQueues(body.input);
   if (targets.length === 0) return body;
 
   if (strategy === "latest_only") {
+    if (!hasSkillQueueMarkers(blockText)) return body;
     const current = targets.at(-1)!;
     return appendSnapshots(stripClientSkillBlocks(body), [
-      { ...makeSnapshot(current.key, blockText), target: current },
+      { blockText, target: current },
     ], buildBlock);
   }
 
   return withSessionLock(identityKey(identity), async () => {
-    const history = await loadHistory(identity, repo);
-    const targetByKey = new Map(targets.map((target) => [target.key, target]));
-    const visible = history.snapshots.filter((snapshot) => targetByKey.has(snapshot.queueKey));
     const current = targets.at(-1)!;
-    const listingHash = hash(blockText);
-    const currentSnapshots = visible.filter((snapshot) => snapshot.queueKey === current.key);
-    const alreadyCurrent = currentSnapshots.some((snapshot) => snapshot.listingHash === listingHash);
-    const needsSnapshot = !alreadyCurrent &&
-      (currentSnapshots.length === 0 || currentSnapshots.at(-1)?.listingHash !== listingHash);
+    const stored = await Promise.all(targets.map(async (target) => ({
+      target,
+      blockText: await loadSnapshot(identity, target.key, repo),
+    })));
+    const currentSnapshot = stored.at(-1)!;
 
-    if (needsSnapshot) visible.push(makeSnapshot(current.key, blockText));
-    const nextHistory: SkillQueueHistory = {
-      version: 1,
-      revision: history.revision + 1,
-      snapshots: visible,
-    };
-    await saveHistory(identity, repo, nextHistory);
+    // A queue owns exactly one immutable snapshot. Tool loops reuse it byte-for-byte.
+    if (currentSnapshot.blockText === null && hasSkillQueueMarkers(blockText)) {
+      currentSnapshot.blockText = await saveSnapshot(identity, current.key, blockText, repo);
+    }
 
-    const snapshots = nextHistory.snapshots.flatMap((snapshot) => {
-      const target = targetByKey.get(snapshot.queueKey);
-      return target ? [{ ...snapshot, target }] : [];
-    });
+    const snapshots = stored.flatMap(({ target, blockText: storedBlock }) =>
+      storedBlock === null ? [] : [{ blockText: storedBlock, target }]
+    );
     return appendSnapshots(stripClientSkillBlocks(body), snapshots, buildBlock);
   });
+}
+
+/** Return the current queue snapshot so callers can skip a repeated BM25 lookup. */
+export async function getCurrentSkillQueueSnapshot(
+  input: unknown,
+  identity: SkillQueueIdentity,
+  repo: HookCacheRepo | undefined,
+): Promise<string | null> {
+  const current = collectUserQueues(input).at(-1);
+  if (!current) return null;
+  return loadSnapshot(identity, current.key, repo);
 }
 
 function collectUserQueues(input: unknown): QueueTarget[] {
@@ -142,28 +113,19 @@ function stripClientSkillBlocks(body: Record<string, unknown>): Record<string, u
 
 function appendSnapshots(
   body: Record<string, unknown>,
-  snapshots: Array<SkillQueueSnapshot & { target: QueueTarget }>,
+  snapshots: Array<{ blockText: string; target: QueueTarget }>,
   buildBlock: (text: string) => unknown,
 ): Record<string, unknown> {
   const input = Array.isArray(body.input) ? [...body.input] : [];
-  const byIndex = new Map<number, string[]>();
   for (const snapshot of snapshots) {
-    const blocks = byIndex.get(snapshot.target.index) ?? [];
-    blocks.push(snapshot.blockText);
-    byIndex.set(snapshot.target.index, blocks);
-  }
-  for (const [index, blocks] of byIndex) {
+    const { index } = snapshot.target;
     const message = input[index] as Record<string, unknown>;
     input[index] = {
       ...message,
-      content: [...(message.content as unknown[]), ...blocks.map(buildBlock)],
+      content: [...(message.content as unknown[]), buildBlock(snapshot.blockText)],
     };
   }
   return { ...body, input };
-}
-
-function makeSnapshot(queueKey: string, blockText: string): SkillQueueSnapshot {
-  return { queueKey, listingHash: hash(blockText), blockText };
 }
 
 function hash(value: string): string {
@@ -171,55 +133,84 @@ function hash(value: string): string {
 }
 
 function identityKey(identity: SkillQueueIdentity): string {
-  return [identity.spaceId, identity.userId, identity.agentSource, identity.sessionId].join(":");
+  return JSON.stringify([identity.spaceId, identity.userId, identity.agentSource, identity.sessionId]);
 }
 
-async function loadHistory(
+async function loadSnapshot(
   identity: SkillQueueIdentity,
+  queueKey: string,
   repo: HookCacheRepo | undefined,
-): Promise<SkillQueueHistory> {
+): Promise<string | null> {
   const key = identityKey(identity);
   const local = memoryHistory.get(key);
+  const localBlock = local?.get(queueKey);
+  if (local && localBlock !== undefined) {
+    touchMemoryHistory(key, local);
+    return localBlock;
+  }
   const persisted = await repo?.get(
     identity.spaceId,
     identity.userId,
     identity.agentSource,
-    identity.sessionId + HISTORY_SESSION_SUFFIX,
-    HISTORY_HOOK,
+    identity.sessionId,
+    historyHookId(queueKey),
   );
   const raw = persisted?.[0]?.content;
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as SkillQueueHistory;
-      if (parsed.version === 1 && Array.isArray(parsed.snapshots)) {
-        const persistedHistory = { ...parsed, revision: parsed.revision ?? 0 };
-        const latest = local && local.revision > persistedHistory.revision
-          ? local
-          : persistedHistory;
-        memoryHistory.set(key, latest);
-        return latest;
-      }
-    } catch {
-      // Corrupt persistence falls back to the in-process copy.
-    }
+  if (typeof raw === "string" && hasSkillQueueMarkers(raw)) {
+    const sessionHistory = memoryHistory.get(key) ?? new Map<string, string>();
+    sessionHistory.set(queueKey, raw);
+    touchMemoryHistory(key, sessionHistory);
+    return raw;
   }
-  return local ?? { version: 1, revision: 0, snapshots: [] };
+  return null;
 }
 
-async function saveHistory(
+async function saveSnapshot(
   identity: SkillQueueIdentity,
+  queueKey: string,
+  blockText: string,
   repo: HookCacheRepo | undefined,
-  history: SkillQueueHistory,
-): Promise<void> {
-  memoryHistory.set(identityKey(identity), history);
-  await repo?.put(
-    identity.spaceId,
-    identity.userId,
-    identity.agentSource,
-    identity.sessionId + HISTORY_SESSION_SUFFIX,
-    HISTORY_HOOK,
-    [{ type: "custom", content: JSON.stringify(history) }],
-  );
+): Promise<string> {
+  const key = identityKey(identity);
+  let storedBlock = blockText;
+  if (repo) {
+    const inserted = await repo.putIfAbsent(
+      identity.spaceId,
+      identity.userId,
+      identity.agentSource,
+      identity.sessionId,
+      historyHookId(queueKey),
+      [{ type: "custom", content: blockText }],
+    );
+    if (!inserted) {
+      const persisted = await repo.get(
+        identity.spaceId,
+        identity.userId,
+        identity.agentSource,
+        identity.sessionId,
+        historyHookId(queueKey),
+      );
+      const winner = persisted?.[0]?.content;
+      if (typeof winner === "string" && hasSkillQueueMarkers(winner)) storedBlock = winner;
+    }
+  }
+  const sessionHistory = memoryHistory.get(key) ?? new Map<string, string>();
+  sessionHistory.set(queueKey, storedBlock);
+  touchMemoryHistory(key, sessionHistory);
+  return storedBlock;
+}
+
+function historyHookId(queueKey: string): string {
+  return `${SKILL_QUEUE_HISTORY_HOOK_PREFIX}${queueKey.replace(":", "-")}`;
+}
+
+function touchMemoryHistory(key: string, history: Map<string, string>): void {
+  memoryHistory.delete(key);
+  memoryHistory.set(key, history);
+  if (memoryHistory.size > MAX_MEMORY_SESSIONS) {
+    const oldest = memoryHistory.keys().next().value as string | undefined;
+    if (oldest) memoryHistory.delete(oldest);
+  }
 }
 
 async function withSessionLock<T>(key: string, operation: () => Promise<T>): Promise<T> {

@@ -41,11 +41,11 @@ import {
 } from "./session/codex/form.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import {
+  getCurrentSkillQueueSnapshot,
   injectDynamicSkillQueue,
-  injectStableAssetBlock,
-  type SkillQueueStrategy,
 } from "./common/skill-queue-history.js";
 import { extractMarkedSkillQueueBlock } from "./common/skill-queue-markers.js";
+import { extractRecentUserQueues } from "./common/recent-user-queues.js";
 import { log } from "./report/log.js";
 import {
   langfuseReportGeneration,
@@ -65,7 +65,6 @@ import {
   resolveUpstreamConfig,
   shouldOverride,
 } from "./instance-upstream-cache.js";
-import { extractRecentUserQueues } from "./common/recent-user-queues.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -212,11 +211,11 @@ export function detectDefaultModeGate(input: unknown): boolean {
 // ── Asset injection (exported for unit tests) ────────────────────────────────
 
 /**
- * Inject stable `<tdai_injections>` into the first Responses message.
+ * Inject `<tdai_injections>` wrapper into codex body.input[0].content[].
  *
- * Dynamic Skill queue blocks use `injectCodexDynamicSkills` separately.
- * Defensive: if no message with an array content exists, returns the body
- * unchanged.
+ * Appends the injection block to the developer message (input[0]) content.
+ * Defensive: if input[0] is not a message with an array content, returns
+ * the body unchanged.
  *
  * Returns a shallow copy — original body is not mutated.
  */
@@ -224,20 +223,23 @@ export function injectCodexAssets(
   body: Record<string, unknown>,
   assets: CodexInjectionInput,
 ): Record<string, unknown> {
-  return injectStableAssetBlock(body, buildCodexInjectionBlock(assets));
-}
+  const input = body.input;
+  if (!Array.isArray(input) || input.length === 0) return body;
 
-export async function injectCodexDynamicSkills(
-  body: Record<string, unknown>,
-  blockText: string,
-  strategy: SkillQueueStrategy,
-  identity: { spaceId: string; userId: string; agentSource: string; sessionId: string },
-  repo?: import("./db/hookCacheRepo.js").HookCacheRepo,
-): Promise<Record<string, unknown>> {
-  return injectDynamicSkillQueue(
-    body, blockText, strategy, identity, repo,
-    (text) => buildCodexInjectionBlock({ raw: text }),
-  );
+  const devMsg = input[0] as Record<string, unknown> | null;
+  if (!devMsg || typeof devMsg !== "object") return body;
+  if (devMsg.type !== "message") return body;
+
+  const content = devMsg.content;
+  if (!Array.isArray(content)) return body;
+
+  const injectionBlock = buildCodexInjectionBlock(assets);
+
+  // Shallow-copy chain: body → input → input[0] → content
+  const newContent = [...content, injectionBlock];
+  const newDevMsg = { ...devMsg, content: newContent };
+  const newInput = [newDevMsg, ...input.slice(1)];
+  return { ...body, input: newInput };
 }
 
 // ── Upstream request helpers ─────────────────────────────────────────────────
@@ -368,10 +370,6 @@ export async function handleCodexEndpoint(
   // 通用 resolveLatestUserQuery 靠 costGuard profile 走 messages[]，这里不合用。
   const turnSeq = countHumanTurnsCodex(body.input);
   const userQuery = codexAdapter.extractUserText(body.input) ?? "";
-  const skillListingQuery = extractRecentUserQueues(
-    body.input,
-    (content) => codexAdapter.extractUserText([{ type: "message", role: "user", content }]),
-  );
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -870,6 +868,25 @@ export async function handleCodexEndpoint(
     try {
       const { getInjectionPipeline, getSkillQueueHistoryRepo } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
+      const skillQueueStrategy = config.injection.skillQueueStrategy ?? "session_init";
+      const skillListingQuery = skillQueueStrategy === "session_init"
+        ? undefined
+        : extractRecentUserQueues(
+            body.input,
+            (content) => codexAdapter.extractUserText([{ type: "message", role: "user", content }]),
+          );
+      const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
+        ? getSkillQueueHistoryRepo(config)
+        : undefined;
+      const skillQueueIdentity = {
+        spaceId,
+        userId: userId || "anonymous",
+        agentSource,
+        sessionId: sessionKey,
+      };
+      const skillQueueSnapshot = skillQueueStrategy === "every_queue"
+        ? await getCurrentSkillQueueSnapshot(body.input, skillQueueIdentity, skillQueueHistoryRepo)
+        : null;
 
       // ── session_context 预填 ────────────────────────────────────────────────
       // handleSessionInit 的 CB init 把 <session_context>（[Agent]+[Task] 描述）
@@ -919,6 +936,7 @@ export async function handleCodexEndpoint(
           userKey: callerUserKey ?? undefined,
           assetCapabilities,
           skillListingQuery,
+          skillQueueSnapshotHit: skillQueueSnapshot !== null,
         },
       });
 
@@ -943,13 +961,14 @@ export async function handleCodexEndpoint(
         // 否则模型看到的会是转义字符（`&lt;user_memory&gt;`）读不出结构。
         body = injectCodexAssets(body, { raw: injectedText });
       }
-      if (dynamicText) {
-        body = await injectCodexDynamicSkills(
+      if (dynamicText || skillQueueStrategy === "every_queue") {
+        body = await injectDynamicSkillQueue(
           body,
-          dynamicText,
-          config.injection.skillQueueStrategy ?? "session_init",
-          { spaceId, userId: userId || "anonymous", agentSource, sessionId: sessionKey },
-          getSkillQueueHistoryRepo(config),
+          dynamicText ?? "",
+          skillQueueStrategy,
+          skillQueueIdentity,
+          skillQueueHistoryRepo,
+          (text) => buildCodexInjectionBlock({ raw: text }),
         );
       }
     } catch (err: unknown) {

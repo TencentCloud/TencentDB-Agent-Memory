@@ -40,6 +40,15 @@ export interface HookCacheRepo {
     sessionId: string,
     entries: HookCacheEntry[],
   ): void | Promise<void>;
+  /** Atomically create a hook entry. False means not created (already exists or storage failed). */
+  putIfAbsent(
+    spaceId: string,
+    userId: string,
+    agentSource: string,
+    sessionId: string,
+    hookId: string,
+    blocks: ContextBlock[],
+  ): Promise<boolean>;
   get(
     spaceId: string,
     userId: string,
@@ -58,6 +67,8 @@ export interface HookCacheRepo {
     userId: string,
     agentSource: string,
     sessionId: string,
+    /** Keep entries whose hook id starts with one of these prefixes. */
+    preserveHookPrefixes?: readonly string[],
   ): void | Promise<void>;
 }
 
@@ -82,12 +93,18 @@ ON CONFLICT(session_id, hook_id) DO UPDATE SET
 
 class SqliteHookCacheRepo implements HookCacheRepo {
   private putStmt: Database.Statement;
+  private putIfAbsentStmt: Database.Statement;
   private getStmt: Database.Statement;
   private getAllStmt: Database.Statement;
   private clearStmt: Database.Statement;
+  private deleteHookStmt: Database.Statement;
 
   constructor(private db: Database.Database) {
     this.putStmt = db.prepare(UPSERT_SQL);
+    this.putIfAbsentStmt = db.prepare(`
+      INSERT OR IGNORE INTO hook_cache (session_id, hook_id, blocks_json, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
     this.getStmt = db.prepare(
       "SELECT blocks_json FROM hook_cache WHERE session_id = ? AND hook_id = ?",
     );
@@ -95,6 +112,9 @@ class SqliteHookCacheRepo implements HookCacheRepo {
       "SELECT hook_id, blocks_json FROM hook_cache WHERE session_id = ?",
     );
     this.clearStmt = db.prepare("DELETE FROM hook_cache WHERE session_id = ?");
+    this.deleteHookStmt = db.prepare(
+      "DELETE FROM hook_cache WHERE session_id = ? AND hook_id = ?",
+    );
   }
 
   put(
@@ -142,6 +162,31 @@ class SqliteHookCacheRepo implements HookCacheRepo {
         `[hook-cache] putMany failed (space=${spaceId} user=${userId} agent=${agentSource} session=${sessionId} count=${entries.length}):`,
         err instanceof Error ? err.message : String(err),
       );
+    }
+  }
+
+  async putIfAbsent(
+    spaceId: string,
+    userId: string,
+    agentSource: string,
+    sessionId: string,
+    hookId: string,
+    blocks: ContextBlock[],
+  ): Promise<boolean> {
+    try {
+      const result = this.putIfAbsentStmt.run(
+        compositeSid(spaceId, userId, agentSource, sessionId),
+        hookId,
+        JSON.stringify(blocks),
+        Date.now(),
+      );
+      return result.changes > 0;
+    } catch (err) {
+      console.warn(
+        `[hook-cache] putIfAbsent failed (session=${sessionId} hook=${hookId}):`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
     }
   }
 
@@ -197,9 +242,22 @@ class SqliteHookCacheRepo implements HookCacheRepo {
     userId: string,
     agentSource: string,
     sessionId: string,
+    preserveHookPrefixes: readonly string[] = [],
   ): void {
     try {
-      this.clearStmt.run(compositeSid(spaceId, userId, agentSource, sessionId));
+      const sid = compositeSid(spaceId, userId, agentSource, sessionId);
+      if (preserveHookPrefixes.length === 0) {
+        this.clearStmt.run(sid);
+        return;
+      }
+      const entries = this.getAllStmt.all(sid) as Array<{ hook_id: string }>;
+      const removable = entries.filter(({ hook_id }) =>
+        !preserveHookPrefixes.some((prefix) => hook_id.startsWith(prefix))
+      );
+      const tx = this.db.transaction((hookIds: string[]) => {
+        for (const hookId of hookIds) this.deleteHookStmt.run(sid, hookId);
+      });
+      tx(removable.map(({ hook_id }) => hook_id));
     } catch {
       /* ignore */
     }
@@ -209,6 +267,7 @@ class SqliteHookCacheRepo implements HookCacheRepo {
 class NullHookCacheRepo implements HookCacheRepo {
   put(): void {}
   putMany(): void {}
+  async putIfAbsent(): Promise<boolean> { return true; }
   async get(): Promise<ContextBlock[] | null> {
     return null;
   }
