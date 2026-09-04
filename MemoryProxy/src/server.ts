@@ -12,7 +12,7 @@ import { createMemoryBridgeHandler } from "./memory/memory-bridge.js";
 import { createInstanceDestroyHandler } from "./routes/instance-destroy.js";
 import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
-import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
+import { tryActivateStorage, tryActivateRedis, ensureBindingRepoPersistent } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
 import type { ProxyConfig } from "./types.js";
 
@@ -26,6 +26,12 @@ export function createApp(config: ProxyConfig): Hono {
   if (!tryActivateStorage(config)) {
     tryActivateRedis(config);
   }
+  // Fs fallback for deployments with neither storage.enabled nor redis.enabled
+  // (the default 3-container install). Without this, the BindingRepo is null
+  // when the first session-init completes, so completeRegistration's L2b
+  // binding write is silently skipped — bridge L2 lookups then always miss.
+  // Idempotent: skips if storage/redis already set a BindingRepo.
+  ensureBindingRepoPersistent(config);
 
   // `/cost-guard` marker 门控 (P0 前置)：
   // markerOptIn=false 时 marker 完全作废——任何路径里带 `/cost-guard/` 段的请求
