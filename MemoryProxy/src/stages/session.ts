@@ -13,6 +13,10 @@ import {
   firstUserMessageFingerprint,
 } from "../session/session-key.js";
 import { resolveOrCreateSessionId } from "../session/auto-session.js";
+import {
+  extractCodexSessionId,
+  extractWorkbuddySessionId,
+} from "../session/client-ids.js";
 
 /** 默认适配器：chat/anthropic 的会话键解析（原 handler 行为）。 */
 export const DEFAULT_SESSION_ADAPTER: SessionAdapter = {
@@ -42,6 +46,63 @@ export const DEFAULT_SESSION_ADAPTER: SessionAdapter = {
       callerUserKey: ctx.apiKey || null,
     };
   },
+};
+
+/** Responses 类客户端（codex / workbuddy）取首条用户消息：body.input。 */
+function responsesUserMessages(body: Record<string, unknown>): unknown {
+  return (body as { input?: unknown }).input;
+}
+
+/**
+ * Responses 类客户端无显式会话 ID、且自动生成未命中时的兜底键：
+ *   keyId : msg-<首问指纹 sha256 前 16> : <UTC 日桶>
+ * 同一首问跨请求稳定（不再逐请求 traceId 碎片化、消除孤儿记忆），跨天自动轮换。
+ * 提取不到首问指纹时退回 `${keyId}:${traceId}` 临时键（每 keyId 只 warn 一次）。
+ */
+const warnedNoFingerprint = new Set<string>();
+function responsesFallbackSessionKey(ctx: ReqCtx, keyId: string): string | null {
+  if (!ctx.traceId) return null;
+  const fp = firstUserMessageFingerprint((ctx.body as { input?: unknown }).input);
+  if (fp) {
+    const dayBucket = Math.floor(Date.now() / 86_400_000);
+    return `${keyId}:msg-${fp.slice(0, 16)}:${dayBucket}`;
+  }
+  if (!warnedNoFingerprint.has(keyId)) {
+    warnedNoFingerprint.add(keyId);
+    console.warn(
+      `[session-fallback] ${keyId}: 提取不到首问指纹，回退临时键 ${keyId}:${ctx.traceId}（仅 warn 一次）`,
+    );
+  }
+  return `${keyId}:${ctx.traceId}`;
+}
+
+/** codex 身份直通：keyId 已由 handler 算好（userId || apiKey hash），不改写。 */
+function responsesIdentity(ctx: ReqCtx, keyId: string) {
+  return {
+    keyId: ctx.keyIdOverride ?? keyId,
+    userId: ctx.earlyUserId || "",
+    callerUserKey: ctx.apiKey || null,
+  };
+}
+
+/** codex 适配器：显式 session-id 优先；缺失时走 auto 分支（受 autoConversationId 门控）。 */
+export const CODEX_SESSION_ADAPTER: SessionAdapter = {
+  extractRawSessionId(_c, lcHeaders, body) {
+    return extractCodexSessionId(lcHeaders, body);
+  },
+  userMessages: responsesUserMessages,
+  fallbackSessionKey: responsesFallbackSessionKey,
+  resolveThreadId: resolveThreadHeader,
+  resolveIdentity: responsesIdentity,
+};
+
+/** workbuddy 适配器：autoGenerate=false（与 workbuddy 原行为一致，不主动生成 auto ID）。 */
+export const WORKBUDDY_SESSION_ADAPTER: SessionAdapter = {
+  ...CODEX_SESSION_ADAPTER,
+  extractRawSessionId(_c, lcHeaders, body) {
+    return extractWorkbuddySessionId(lcHeaders, body);
+  },
+  autoGenerate: false,
 };
 
 export async function sessionStage(

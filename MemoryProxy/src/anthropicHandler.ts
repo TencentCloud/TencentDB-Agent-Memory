@@ -44,6 +44,8 @@ import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
+import { sessionStage } from "./stages/session.js";
+import type { ReqCtx } from "./stages/types.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
@@ -642,10 +644,24 @@ export async function handleAnthropicMessages(
     lcHeaders[k.toLowerCase()] = v;
   }
 
-// ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  // ── Session resolution（sessionStage 统一入口）─────────────────────────────
+  // 显式会话 header 优先；缺失时按 autoConversationId 自动生成/续接（受配置
+  // 门控）；自动生成关闭时回退到 agent profile 兜底键（resolveSessionKey，
+  // 原行为）。auto-* 回传 ID 仍过签名校验。
+  const sessionStageCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource,
+    apiKey,
+    earlySpaceId,
+    earlyUserId: earlyVerify?.userId ?? "",
+    debugForceUserId: config.sessionInit?.debugForceUserId,
+  };
+  await sessionStage(sessionStageCtx);
+  const conversationId = sessionStageCtx.conversationId;
+  const sessionKey =
+    sessionStageCtx.sessionKey ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the

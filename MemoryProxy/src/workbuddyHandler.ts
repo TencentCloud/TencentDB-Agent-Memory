@@ -8,9 +8,10 @@
  *
  * 本轮（分层交付第一步）：**只暴露单测友好的 pure function**
  *   - classifyWorkbuddyRequest：识别 main vs auxiliary 请求
- *   - extractWorkbuddySessionId：从 header / body 中提取 session id
  *   - detectWorkbuddyDefaultModeGate：识别客户端 Default mode gate 信号
  *   - injectWorkbuddyAssets：向 body.input[0].content[] 追加 `<tdai_injections>` wrapper
+ * 会话 ID 提取已收敛到 `session/client-ids.ts`，由 `stages/session.ts` 的
+ * WORKBUDDY_SESSION_ADAPTER 统一接入（本文件不再自带 extractor）。
  *
  * 完整的 `handleWorkbuddyEndpoint(c, config)` 主 handler（含 auth / session-init /
  * mem-command / forward+langfuse tap）留到下一轮 server 路由接入时再补——
@@ -38,6 +39,8 @@ import {
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
 } from "./session/codex/form.js";
+import { sessionStage, WORKBUDDY_SESSION_ADAPTER } from "./stages/session.js";
+import type { ReqCtx } from "./stages/types.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -145,32 +148,6 @@ export function classifyWorkbuddyRequest(
   }
 
   return "main";
-}
-
-// ── Session ID extraction ────────────────────────────────────────────────────
-
-/**
- * 从请求头/请求体中提取 WorkBuddy session id。
- *
- * 优先级（与 codex 相同）：
- *   1. header `session-id`（SDK 默认位置）
- *   2. body.client_metadata.session_id（fallback）
- *
- * 两者都缺 → null（上层负责决定是拒绝还是生成新 session）。
- */
-export function extractWorkbuddySessionId(
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-): string | null {
-  const fromHeader = headers["session-id"] ?? headers["Session-Id"];
-  if (typeof fromHeader === "string" && fromHeader.length > 0) return fromHeader;
-
-  const meta = body.client_metadata as Record<string, unknown> | undefined;
-  if (meta && typeof meta === "object") {
-    const sid = meta.session_id;
-    if (typeof sid === "string" && sid.length > 0) return sid;
-  }
-  return null;
 }
 
 // ── Default mode gate detection ──────────────────────────────────────────────
@@ -870,9 +847,23 @@ export async function handleWorkbuddyEndpoint(
     return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null, null);
   }
 
-  // ── 6. Session ID + langfuse turn ctx ────────────────────────────────────
-  const sessionId = extractWorkbuddySessionId(headers, body);
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
+  // ── 6. Session resolution（sessionStage 统一入口）──────────────────────────
+  // workbuddy 不主动生成 auto ID（autoGenerate=false）；显式 session-id 缺失时
+  // 回退 `${keyId}:${traceId}`（原行为）。客户端回传 auto-* ID 仍过签名校验。
+  const sessionStageCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource: "workbuddy",
+    apiKey,
+    keyIdOverride: keyId,
+    earlySpaceId: spaceId,
+    earlyUserId: userId || "",
+    traceId,
+  };
+  await sessionStage(sessionStageCtx, WORKBUDDY_SESSION_ADAPTER);
+  const sessionId = sessionStageCtx.conversationId;
+  const sessionKey = sessionStageCtx.sessionKey ?? `${keyId}:${traceId}`;
   const agentSource = "workbuddy";
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;

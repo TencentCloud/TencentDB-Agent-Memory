@@ -2,7 +2,7 @@
  * 会话阶段（纯计算）用例：与 handler 原逻辑对齐。
  */
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
-import { sessionStage } from "../stages/session.js";
+import { sessionStage, CODEX_SESSION_ADAPTER, WORKBUDDY_SESSION_ADAPTER } from "../stages/session.js";
 import type { ReqCtx } from "../stages/types.js";
 import type { SessionAdapter } from "../stages/types.js";
 import {
@@ -163,5 +163,76 @@ describe("autoGenerate:false 的 raw auto-* 也要过签名校验", () => {
     await sessionStage(ctx, adapter);
     expect(ctx.conversationId).toBeNull();
     expect(ctx.sessionKey).toBe("fb");
+  });
+});
+
+describe("handler 接线适配器（CODEX / WORKBUDDY）", () => {
+  beforeEach(() => {
+    __resetAutoSessionForTests();
+    __setAutoSessionNow(() => 1_000_000);
+  });
+
+  it("CODEX_SESSION_ADAPTER：显式 client_metadata.session_id 优先；缺失时 auto 生成并续接", async () => {
+    const explicit = makeCtx({
+      body: {
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        client_metadata: { session_id: "meta-session-1" },
+      },
+      traceId: "trace-1",
+    });
+    await sessionStage(explicit, CODEX_SESSION_ADAPTER);
+    expect(explicit.sessionKey).toBe("meta-session-1");
+
+    const body = {
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    };
+    const first = makeCtx({ body, traceId: "trace-2" });
+    const second = makeCtx({ body, traceId: "trace-3" });
+    await sessionStage(first, CODEX_SESSION_ADAPTER);
+    await sessionStage(second, CODEX_SESSION_ADAPTER);
+    expect(first.sessionKey).toMatch(/^auto-[0-9a-f]{16}-/);
+    // 同 key + 同 scope + 同首问 → 第二请求续接同一会话（不再逐请求 traceId 碎片化）
+    expect(second.sessionKey).toBe(first.sessionKey);
+  });
+
+  it("WORKBUDDY_SESSION_ADAPTER：autoGenerate=false，缺失时回退首问指纹稳定键；伪造 auto-* 被拒", async () => {
+    const bare = makeCtx({
+      body: { input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }] },
+      traceId: "trace-wb-1",
+    });
+    await sessionStage(bare, WORKBUDDY_SESSION_ADAPTER);
+    expect(bare.conversationId).toBeNull();
+    expect(bare.sessionKey).toMatch(
+      new RegExp(`^${apiKeyToKeyId("sk-test")}:msg-[0-9a-f]{16}:[0-9]+$`),
+    );
+
+    const forged = makeCtx({
+      c: {
+        req: {
+          raw: {
+            headers: new Headers({
+              "session-id": "auto-0011223344556677-00000000-0000-4000-8000-000000000000",
+              authorization: "Bearer sk-test",
+            }),
+          },
+          header: (n: string) => (n === "session-id" ? "auto-0011223344556677-00000000-0000-4000-8000-000000000000" : null),
+          path: "/workbuddy/default/v1/responses",
+        },
+      } as never,
+      body: { input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }] },
+      traceId: "trace-wb-2",
+    });
+    await sessionStage(forged, WORKBUDDY_SESSION_ADAPTER);
+    expect(forged.conversationId).toBeNull();
+    // 同 key + 同首问 → 稳定兜底键一致（伪造 ID 不回退 raw，也不按 traceId 碎片化）
+    expect(forged.sessionKey).toBe(bare.sessionKey);
+
+    // 提取不到首问指纹 → 回退 traceId 临时键（原行为）
+    const noText = makeCtx({
+      body: { input: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "" }] }] },
+      traceId: "trace-wb-3",
+    });
+    await sessionStage(noText, WORKBUDDY_SESSION_ADAPTER);
+    expect(noText.sessionKey).toBe(`${apiKeyToKeyId("sk-test")}:trace-wb-3`);
   });
 });
