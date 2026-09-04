@@ -2,7 +2,7 @@
  * 会话阶段（纯计算）用例：与 handler 原逻辑对齐。
  */
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
-import { sessionStage, CODEX_SESSION_ADAPTER, WORKBUDDY_SESSION_ADAPTER } from "../stages/session.js";
+import { sessionStage, RESPONSES_SESSION_ADAPTER, WORKBUDDY_SESSION_ADAPTER } from "../stages/session.js";
 import type { ReqCtx } from "../stages/types.js";
 import type { SessionAdapter } from "../stages/types.js";
 import {
@@ -166,13 +166,13 @@ describe("autoGenerate:false 的 raw auto-* 也要过签名校验", () => {
   });
 });
 
-describe("handler 接线适配器（CODEX / WORKBUDDY）", () => {
+describe("handler 接线适配器（RESPONSES 通用 / WORKBUDDY）", () => {
   beforeEach(() => {
     __resetAutoSessionForTests();
     __setAutoSessionNow(() => 1_000_000);
   });
 
-  it("CODEX_SESSION_ADAPTER：显式 client_metadata.session_id 优先；缺失时 auto 生成并续接", async () => {
+  it("RESPONSES_SESSION_ADAPTER（codex 入口）：显式 client_metadata.session_id 优先；缺失时 auto 生成并续接", async () => {
     const explicit = makeCtx({
       body: {
         input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
@@ -180,7 +180,7 @@ describe("handler 接线适配器（CODEX / WORKBUDDY）", () => {
       },
       traceId: "trace-1",
     });
-    await sessionStage(explicit, CODEX_SESSION_ADAPTER);
+    await sessionStage(explicit, RESPONSES_SESSION_ADAPTER);
     expect(explicit.sessionKey).toBe("meta-session-1");
 
     const body = {
@@ -188,8 +188,8 @@ describe("handler 接线适配器（CODEX / WORKBUDDY）", () => {
     };
     const first = makeCtx({ body, traceId: "trace-2" });
     const second = makeCtx({ body, traceId: "trace-3" });
-    await sessionStage(first, CODEX_SESSION_ADAPTER);
-    await sessionStage(second, CODEX_SESSION_ADAPTER);
+    await sessionStage(first, RESPONSES_SESSION_ADAPTER);
+    await sessionStage(second, RESPONSES_SESSION_ADAPTER);
     expect(first.sessionKey).toMatch(/^auto-[0-9a-f]{16}-/);
     // 同 key + 同 scope + 同首问 → 第二请求续接同一会话（不再逐请求 traceId 碎片化）
     expect(second.sessionKey).toBe(first.sessionKey);

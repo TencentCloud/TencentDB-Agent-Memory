@@ -97,10 +97,12 @@ interface SessionAdapter {
 - **chat / anthropic**（`handler.ts` / `anthropicHandler.ts`）：
   `DEFAULT_SESSION_ADAPTER`，`resolveEffectiveConversationId` 统一显式 ID 优先、
   缺失按 `autoConversationId` 生成；
-- **codex**（`codexHandler.ts`）：`CODEX_SESSION_ADAPTER`——显式会话 ID 从
-  `client_metadata.session_id` / headers 提取，autoGenerate 未置 false（走 auto 分支，实际生成仍受 `autoConversationId.enabled` 门控）；
-- **workbuddy**（`workbuddyHandler.ts`）：`WORKBUDDY_SESSION_ADAPTER`——
-  `autoGenerate: false`（与 workbuddy 原行为一致，不主动生成 auto ID）；
+- **codex / workbuddy**（`codexHandler.ts` / `workbuddyHandler.ts`）：共用
+  Responses wire 的通用适配器（`createResponsesSessionAdapter` /
+  `RESPONSES_SESSION_ADAPTER`）——显式会话 ID 从 `session-id` header /
+  `client_metadata.session_id` 提取；codex 走 auto 分支（实际生成仍受
+  `autoConversationId.enabled` 门控），workbuddy 用 `autoGenerate: false`
+  实例（与 workbuddy 原行为一致，不主动生成 auto ID）；
 - `handler.ts` 的 `debugForceUserId` 由 `resolveIdentity` 处理，身份改写策略
   不再散落在各 handler。
 

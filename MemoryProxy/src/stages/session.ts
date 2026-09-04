@@ -13,10 +13,7 @@ import {
   firstUserMessageFingerprint,
 } from "../session/session-key.js";
 import { resolveOrCreateSessionId } from "../session/auto-session.js";
-import {
-  extractCodexSessionId,
-  extractWorkbuddySessionId,
-} from "../session/client-ids.js";
+import { extractResponsesSessionId } from "../session/client-ids.js";
 
 /** 默认适配器：chat/anthropic 的会话键解析（原 handler 行为）。 */
 export const DEFAULT_SESSION_ADAPTER: SessionAdapter = {
@@ -85,25 +82,31 @@ function responsesIdentity(ctx: ReqCtx, keyId: string) {
   };
 }
 
-/** codex 适配器：显式 session-id 优先；缺失时走 auto 分支（受 autoConversationId 门控）。 */
-export const CODEX_SESSION_ADAPTER: SessionAdapter = {
-  extractRawSessionId(_c, lcHeaders, body) {
-    return extractCodexSessionId(lcHeaders, body);
-  },
-  userMessages: responsesUserMessages,
-  fallbackSessionKey: responsesFallbackSessionKey,
-  resolveThreadId: resolveThreadHeader,
-  resolveIdentity: responsesIdentity,
-};
+/**
+ * OpenAI Responses wire 的会话适配器工厂（codex / workbuddy 等共用）。
+ * 同协议客户端的差异收敛为参数：autoGenerate=false 时不主动生成 auto ID
+ * （workbuddy 原行为）；缺省（true）时走 auto 分支，实际生成仍受
+ * autoConversationId.enabled 门控。
+ */
+export function createResponsesSessionAdapter(opts: { autoGenerate?: boolean } = {}): SessionAdapter {
+  const adapter: SessionAdapter = {
+    extractRawSessionId(_c, lcHeaders, body) {
+      return extractResponsesSessionId(lcHeaders, body);
+    },
+    userMessages: responsesUserMessages,
+    fallbackSessionKey: responsesFallbackSessionKey,
+    resolveThreadId: resolveThreadHeader,
+    resolveIdentity: responsesIdentity,
+  };
+  if (opts.autoGenerate === false) adapter.autoGenerate = false;
+  return adapter;
+}
 
-/** workbuddy 适配器：autoGenerate=false（与 workbuddy 原行为一致，不主动生成 auto ID）。 */
-export const WORKBUDDY_SESSION_ADAPTER: SessionAdapter = {
-  ...CODEX_SESSION_ADAPTER,
-  extractRawSessionId(_c, lcHeaders, body) {
-    return extractWorkbuddySessionId(lcHeaders, body);
-  },
-  autoGenerate: false,
-};
+/** Responses 默认实例：显式 session-id 优先，缺失走 auto 分支（codex 等）。 */
+export const RESPONSES_SESSION_ADAPTER: SessionAdapter = createResponsesSessionAdapter();
+
+/** workbuddy 实例：autoGenerate=false（与 workbuddy 原行为一致，不主动生成 auto ID）。 */
+export const WORKBUDDY_SESSION_ADAPTER: SessionAdapter = createResponsesSessionAdapter({ autoGenerate: false });
 
 export async function sessionStage(
   ctx: ReqCtx,

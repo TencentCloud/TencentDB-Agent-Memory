@@ -39,7 +39,7 @@ import {
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
 } from "./session/codex/form.js";
-import { sessionStage, CODEX_SESSION_ADAPTER } from "./stages/session.js";
+import { sessionStage, RESPONSES_SESSION_ADAPTER } from "./stages/session.js";
 import type { ReqCtx } from "./stages/types.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import { log } from "./report/log.js";
@@ -345,7 +345,7 @@ export async function handleCodexEndpoint(
     earlyUserId: userId || "",
     traceId,
   };
-  await sessionStage(sessionStageCtx, CODEX_SESSION_ADAPTER);
+  await sessionStage(sessionStageCtx, RESPONSES_SESSION_ADAPTER);
   const sessionId = sessionStageCtx.conversationId;
   const sessionKey = sessionStageCtx.sessionKey ?? `${keyId}:${traceId}`;
   const threadId = sessionStageCtx.threadId ?? null;

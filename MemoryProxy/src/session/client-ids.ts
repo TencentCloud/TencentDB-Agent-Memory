@@ -1,24 +1,11 @@
 /**
- * 客户端会话 ID 提取（codex / workbuddy 共用）。
+ * OpenAI Responses wire 的会话 ID 提取（codex / workbuddy 等客户端共用）。
  *
- * 两边都走 OpenAI Responses wire：优先 `session-id` header，其次
+ * 优先 `session-id` header（header 已统一小写），其次
  * `body.client_metadata.session_id`。返回 null 表示客户端没有显式会话 ID，
  * 由上层（sessionStage）决定自动生成或使用兜底键。
  */
-
-/** Extract session_id from a codex request. */
-export function extractCodexSessionId(
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-): string | null {
-  if (headers["session-id"]) return headers["session-id"];
-  const meta = body.client_metadata as { session_id?: string } | undefined;
-  if (typeof meta?.session_id === "string") return meta.session_id;
-  return null;
-}
-
-/** Extract session_id from a workbuddy request. */
-export function extractWorkbuddySessionId(
+export function extractResponsesSessionId(
   headers: Record<string, string>,
   body: Record<string, unknown>,
 ): string | null {
@@ -32,3 +19,8 @@ export function extractWorkbuddySessionId(
   }
   return null;
 }
+
+/** 兼容别名：codex 的显式会话 ID 提取。 */
+export const extractCodexSessionId = extractResponsesSessionId;
+/** 兼容别名：workbuddy 的显式会话 ID 提取。 */
+export const extractWorkbuddySessionId = extractResponsesSessionId;
