@@ -1,6 +1,7 @@
 /** Hono app factory — registers all routes. */
 
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { handleChatCompletions } from "./handler.js";
 import { handleAnthropicMessages } from "./anthropicHandler.js";
 import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
@@ -10,6 +11,7 @@ import { apiKeyToKeyId, extractBearerToken } from "./opik.js";
 import { createSkillBridgeHandler } from "./skill/skill-bridge.js";
 import { createMemoryBridgeHandler } from "./memory/memory-bridge.js";
 import { createInstanceDestroyHandler } from "./routes/instance-destroy.js";
+import { registerSessionInitLinkRoutes } from "./routes/session-init-link.js";
 import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
@@ -154,6 +156,16 @@ export function createApp(config: ProxyConfig): Hono {
       createSessionForceArchiveHandler(config)(c),
     );
   });
+
+  // ── Session-init web link（headless 弹链接方案的浏览器端点） ───────────────
+  // 页面托管在 Memory Hub（不同 origin），这两个端点需要 CORS。token 本身即
+  // 能力凭证（无 cookie），放开 CORS 不引入 CSRF 面；token 未知/过期/已消费
+  // 在 handler 内拒绝。未配置 sessionInit.initLink.hubOrigin 时不会产生任何
+  // token，这两个端点自然全部 404——注册无副作用。
+  if (config.sessionInit.initLink?.hubOrigin) {
+    app.use("/v3/session/init-link/*", cors());
+    registerSessionInitLinkRoutes(app, config);
+  }
 
   // ── Whitelisted primary endpoints ────────────────────────────────────────
   // Anthropic Messages API

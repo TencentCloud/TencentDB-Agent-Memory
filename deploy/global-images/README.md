@@ -92,7 +92,7 @@ cd TencentDB-Agent-Memory/deploy/global-images
 |---|---|---|
 | `MEMORY_LLM_BASE_URL` | OpenAI 兼容 base URL | `https://api.deepseek.com/v1` |
 | `MEMORY_LLM_API_KEY` | 上述端点的 API Key | `sk-xxxxxxxx` |
-| `MEMORY_LLM_MODEL` | 模型 ID | `deepseek-chat` |
+| `MEMORY_LLM_MODEL` | 模型 ID | `deepseek-v4-flash`（以 `GET /v1/models` 实际返回为准） |
 | `MEMORY_LLM_PROTOCOL` | `openai` 或 `anthropic`，默认 `openai` | `openai` |
 
 ### proxy 组（proxy 使用）
@@ -103,7 +103,7 @@ proxy 接到用户请求后转发到这组端点。
 |---|---|---|
 | `PROXY_UPSTREAM_URL` | 转发目标 base URL | `https://api.deepseek.com/v1` |
 | `PROXY_UPSTREAM_API_KEY` | 转发用 API Key | `sk-xxxxxxxx` |
-| `PROXY_UPSTREAM_MODEL` | 面向用户的模型 ID | `deepseek-chat` |
+| `PROXY_UPSTREAM_MODEL` | 面向用户的模型 ID | `deepseek-v4-flash`（以 `GET /v1/models` 实际返回为准） |
 
 > 两组可以填相同值（都指向同一个 LLM），也可以完全不同：例如 memory 组用便宜模型做 embedding，proxy 组用强模型做主对话。
 
@@ -216,3 +216,18 @@ gateway_endpoint）就把 `MEMORY_HUB_PROXY_PUBLIC_URL` 显式设为空字符串
 
 **Q: 如何在容器外访问宿主机上其它服务（Ollama、Langfuse 等）？**
 脚本已默认 `--add-host=host.docker.internal:host-gateway`。容器内用 `http://host.docker.internal:<port>` 即可。
+
+## Windows（Git Bash）注意
+
+启动脚本已做 mingw 兼容（`MSYS_NO_PATHCONV`、curl 探测、`ipconfig` 解析），直接在
+Git Bash 里按上述流程跑即可。两个额外注意：
+
+- **含非 ASCII（如中文）的 `curl` 请求体不要走命令行参数**——Git Bash 的 curl 会按系统
+  ANSI 代码页转码 argv，中文落库变乱码。先写 UTF-8 文件再 `curl --data-binary @file`。
+- 修改 `MemoryProxy/src` 源码后，本地验证需重建镜像：
+  `cd MemoryProxy && docker build -t agentmemory/memory-proxy:latest . && ./start-proxy.sh`
+  （官方镜像不含未发版的源码改动）。
+
+Windows 全程实战的踩坑记录（挂载静默失效、凭据与 volume 生命周期、hermes 接入的
+运行时行为差异等）见 [`docs/hermes-integration-deploy-notes.md`](../../docs/hermes-integration-deploy-notes.md)。
+客户端接入（Claude Code / CodeBuddy / Hermes 等）见 [`agents/`](../../agents/) 各子目录。

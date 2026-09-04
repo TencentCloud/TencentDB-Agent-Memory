@@ -53,6 +53,14 @@ import {
   isRateLimitExceededError,
   recordInputTokenUsage,
 } from "./rate-limit/guard.js";
+import {
+  appendInitNoticeToTerminalCompletion,
+  buildInitLinkNotice,
+  buildInitLinkUrl,
+  createInitLinkSseInjector,
+  createOrReusePendingToken,
+  markInitLinkNoticeDelivered,
+} from "./session/init-link.js";
 
 /**
  * Build a per-request TdaiClient. `spaceId` (extracted from the request path
@@ -704,102 +712,103 @@ export async function handleChatCompletions(
     console.log(`[request-classify] session=${sessionKey} agent=${agentSource} → auxiliary (skip session-init/mem/injection/L0/skill)`);
   }
 
-  // ── dsh (deepseek-harness) CLI headless / no-preset bypass ──────────────
-  // dsh 客户端在 headless bundle 或未挂 ask-user preset 时,body.tools 里
-  // 不含 `ask_user_question` 工具。proxy 塞 fake `ask_user_question` tool_call
-  // 会被 dsh agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass
-  // session-init 而非弹 form —— 没 UI 场景强弹表单没意义。
-  //
-  // 判定:agentSource=dsh 且 body.tools 非空且不含 ask_user_question。
-  // (tools 空数组表示纯对话/aux,不用兜底;tools 里就有 ask_user_question 说明
-  // 有 preset 挂 UI 工具,正常走 form。)
-  //
-  // NOTE(opencode): opencode CLI 同样不支持虚拟 ask_followup_question tool,
-  // 但走独立的 header-driven session-init 分支(见下方 opencode 特化块),
-  // 因此不需要走这里的 headless bypass —— opencode 能吃 mem 命令纯文本响应,
-  // 也需要 injection / L0 / skill 提取,只是不能弹 form。
-  const _dshHeadless = agentSource === "dsh" && (() => {
-    const tools = (body as { tools?: unknown }).tools;
-    if (!Array.isArray(tools) || tools.length === 0) return false;
-    return !tools.some((t) => {
-      const fn = (t as { function?: { name?: string }; name?: string })?.function;
-      const n = fn?.name ?? (t as { name?: string })?.name;
-      return n === "ask_user_question";
-    });
-  })();
+  const { resolveSessionInitCapability } = await import("./session/init-capability.js");
+  const sessionInitCapability = resolveSessionInitCapability(
+    agentSource,
+    (body as { tools?: unknown }).tools,
+  );
+  const _dshHeadless =
+    agentSource === "dsh" && !sessionInitCapability.canInteractiveInit;
   if (_dshHeadless) {
-    console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
+    console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → web init fallback`);
+  }
+
+  const _hermesHeadless =
+    agentSource === "hermes" && !sessionInitCapability.canInteractiveInit;
+  if (_hermesHeadless) {
+    console.log(`[request-classify] session=${sessionKey} agent=hermes headless/no-clarify (no clarify tool) → web init fallback`);
   }
 
   // ── mem:session-reset pre-hook ──
-  // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
-  // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
-  // 直接返回"不支持"文案。
-  const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
-  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
-  if (config.memCommand?.enabled && !isAuxiliary && _noFormAgent) {
-    const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
-    if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
-      const { buildMemResponse } = await import("./mem-command/response-builder.js");
-      console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless}`);
-      const msg = _headerOnlyAgents.has(agentSource)
-        ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
-          + `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n`
-          + `请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。`
-        : "⚠️ mem:session-reset 不支持 dsh headless 模式。\n\n"
-          + "dsh 客户端在 headless / no-preset 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
-          + "请在带 ask_user_question preset 的 dsh 环境下使用。";
-      return buildMemResponse(msg, {
-        protocol: "openai",
-        stream: isStream,
-        requestId: `mem-reset-unsupported-${Date.now()}`,
-      });
-    }
-  }
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+  const _headerOnlyAgents = new Set(["openclaw"]);
+  if (config.memCommand?.enabled && !isAuxiliary) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
+      const { buildMemResponse } = await import("./mem-command/response-builder.js");
       const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
-        const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
-        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
-
-        // ── 强制归档旧 agent 的 skill buffer（best-effort）──
-        // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
-        const oldState = store.get(compositeKey);
-        if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
-          if (si.space_id && si.user_id && si.team_id && si.agent_id) {
-            import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
-              const client = getCoreSkillClient(config.coreSkill!);
-              client.forceArchive(
-                {
-                  space_id: si.space_id,
-                  user_id: si.user_id,
-                  team_id: si.team_id,
-                  agent_id: si.agent_id,
-                  session_id: sessionKey,
-                  task_id: si.task_id || undefined,
-                  reason: "session-reset",
-                },
-                { serviceId: si.space_id },
-              ).then((res) => {
-                console.log(`[session-reset] force-archive old buffer: status=${res.status} session=${sessionKey} agent=${si.agent_id}`);
-              }).catch((err) => {
-                console.warn(`[session-reset] force-archive failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
-              });
-            }).catch(() => {});
-          }
+        if (_headerOnlyAgents.has(agentSource)) {
+          const message =
+            `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n` +
+            `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n` +
+            "请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。";
+          return buildMemResponse(message, {
+            protocol: "openai",
+            stream: isStream,
+            requestId: `mem-reset-unsupported-${Date.now()}`,
+          });
         }
 
-        const resetEpoch = Date.now();
-        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
-        const bindingRepo = store.getBindingRepo();
-        if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
-        console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
+        const isHeadless = _dshHeadless || _hermesHeadless;
+        const linkConfig = config.sessionInit.initLink;
+        if (
+          isHeadless &&
+          (!conversationId || !userId || !apiKey || !linkConfig?.hubOrigin)
+        ) {
+          const message =
+            "⚠️ 当前 headless 请求缺少稳定会话标识或网页绑定配置，无法重置绑定。";
+          return buildMemResponse(message, {
+            protocol: "openai",
+            stream: isStream,
+            requestId: `mem-reset-unavailable-${Date.now()}`,
+          });
+        }
+
+        const { resetSessionBinding } = await import(
+          "./mem-command/commands/session-reset.js"
+        );
+        await resetSessionBinding({
+          sessionKey,
+          agentSource,
+          config,
+          spaceId,
+          userId: userId || "anonymous",
+        });
+
+        if (isHeadless && conversationId && userId && apiKey && linkConfig?.hubOrigin) {
+          const compositeKey = `${agentSource}:${sessionKey}`;
+          const { record } = createOrReusePendingToken({
+            compositeKey,
+            sessionId: sessionKey,
+            agentSource,
+            userId,
+            userKey: apiKey,
+            spaceId,
+            purpose: "rebind",
+            ttlMinutes: linkConfig.ttlMinutes,
+          });
+          const proxyOrigin =
+            linkConfig.proxyOrigin?.replace(/\/$/, "") ||
+            new URL(c.req.url).origin;
+          const link = buildInitLinkUrl(linkConfig.hubOrigin, proxyOrigin, record.token);
+          markInitLinkNoticeDelivered(record.token);
+          console.log(
+            `[mem-command:pre] session-reset → web rebind link for session=${compositeKey}`,
+          );
+          return buildMemResponse(
+            buildInitLinkNotice(link, "rebind", linkConfig.ttlMinutes),
+            {
+              protocol: "openai",
+              stream: isStream,
+              requestId: `mem-reset-rebind-${Date.now()}`,
+            },
+          );
+        }
+
+        console.log(
+          `[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`,
+        );
       }
     }
   }
@@ -807,11 +816,16 @@ export async function handleChatCompletions(
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
+  let injectedSkipped = !conversationId || isAuxiliary;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
-  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
+
+  // Headless web-init only records intent here. Token minting is delayed until
+  // a terminal assistant completion is visible to the caller.
+  let needsInitLink = false;
+
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} hermesHeadless=${_hermesHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+  if (config.sessionInit?.enabled && conversationId && !isAuxiliary) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
@@ -893,6 +907,26 @@ export async function handleChatCompletions(
           bypassed: recovered.bypassed,
           justRegistered: needsPrewarm, // 只在 L2b / history-scan recovery 时触发 prewarm
         };
+      } else if (!sessionInitCapability.canInteractiveInit) {
+        injectedSkipped = true;
+        needsInitLink = Boolean(
+          userId &&
+          apiKey &&
+          config.sessionInit.initLink?.hubOrigin,
+        );
+        initResult = {
+          intercepted: false,
+          messages: (body.messages as Record<string, unknown>[]) ?? [],
+          sessionInfo: undefined,
+          agentDetail: undefined,
+          taskDetail: undefined,
+          bypassed: false,
+          justRegistered: false,
+        };
+        console.log(
+          `[session-init] session=${sessionKey} unbound and non-interactive → ` +
+            (needsInitLink ? "defer web-link notice" : "passthrough without link"),
+        );
       } else {
         // opencode 走跟 codebuddy 完全同构的通用 else 分支（复用 handleSessionInit +
         // ask_followup_question form）。验证 opencode 客户端对未知 tool_call 的真实反应。
@@ -984,7 +1018,7 @@ export async function handleChatCompletions(
       // fallback 语义：sessionJustRegistered 在此已定型（见上文 L786），
       // checkFirst 场景可安全复用。
       let memCommandPending = false;
-      if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
+      if (config.memCommand?.enabled && !isAuxiliary) {
         try {
           const { parseMemCommand, isMemCommandAllowed } = await import("./mem-command/index.js");
           let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -1055,12 +1089,11 @@ export async function handleChatCompletions(
 
       // 记录 resetFlow 信息到外层，session-init 块结束后用于返回确认响应
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
+        const si = sessionInfo as Record<string, unknown> | null | undefined;
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          agentIdShort: si?.agent_id ? String(si.agent_id).slice(-8) : "",
+          teamId: si?.team_id ? String(si.team_id).slice(-8) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1109,7 +1142,7 @@ export async function handleChatCompletions(
   //
   // 请求分类：OpenAI 协议不做 CC 的 fork/sidequery 分流（handler.ts 没接 CC
   // routing），所有请求都视为 main —— 与 codebuddy adapter classifyRequest 一致。
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
+  if (config.memCommand?.enabled && !isAuxiliary) {
     const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -1221,8 +1254,10 @@ export async function handleChatCompletions(
     }
   }
 
-  // aux 请求(compaction/title)/ dsh headless(无 UI 无 preset)不写 L0 —— 直接透传
-  const tdaiClient = isAuxiliary || _dshHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
+  // aux 请求(compaction/title)/ dsh·hermes headless(无 UI 无表单工具)不写 L0 —— 直接透传
+  const tdaiClient = injectedSkipped || assetCapabilities?.chat_memory === false
+    ? null
+    : createTdaiClient(config, spaceId);
   const tdaiIdentity = injectedSkipped
     ? null
     : deriveTdaiIdentity({
@@ -1231,6 +1266,46 @@ export async function handleChatCompletions(
         sessionKey,
       });
   const tdaiUserMessage = extractLatestUserMessage(messages);
+  let noticeToken: string | undefined;
+  const initLinkNoticeFactory = (): string | null => {
+    if (!needsInitLink || !userId || !apiKey) return null;
+    const linkConfig = config.sessionInit.initLink;
+    if (!linkConfig?.hubOrigin) return null;
+    try {
+      const { record } = createOrReusePendingToken({
+        compositeKey: `${agentSource}:${sessionKey}`,
+        sessionId: sessionKey,
+        agentSource,
+        userId,
+        userKey: apiKey,
+        spaceId,
+        purpose: "init",
+        ttlMinutes: linkConfig.ttlMinutes,
+      });
+      if (record.noticeDeliveredAt) return null;
+      noticeToken = record.token;
+      const proxyOrigin =
+        linkConfig.proxyOrigin?.replace(/\/$/, "") ||
+        new URL(c.req.url).origin;
+      return buildInitLinkNotice(
+        buildInitLinkUrl(linkConfig.hubOrigin, proxyOrigin, record.token),
+        "init",
+        linkConfig.ttlMinutes,
+      );
+    } catch (err) {
+      console.warn(
+        `[init-link] token mint failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  };
+  const markInitLinkDelivered = (): void => {
+    if (noticeToken && markInitLinkNoticeDelivered(noticeToken)) {
+      console.log(
+        `[init-link] notice delivered for session=${agentSource}:${sessionKey}`,
+      );
+    }
+  };
 
   // ── Context injection (before cost guard) ──────────────────────────────
   if (!injectedSkipped && config.injection?.enabled && config.injection.injectors.length > 0) {
@@ -1578,7 +1653,7 @@ export async function handleChatCompletions(
       sessionKeyForSkill: sessionKey,
       agentSource,
       isAuxiliary,
-      isDshHeadless: _dshHeadless,
+      memoryEnabled: !injectedSkipped,
       sessionInfo,
       lf,
       spaceId,
@@ -1588,7 +1663,19 @@ export async function handleChatCompletions(
       preparedStats,
     };
     const passthrough = createUsageTapTransform(tapCtx);
-    const tappedStream = upstreamResp.body.pipeThrough(passthrough);
+    let tappedStream = upstreamResp.body.pipeThrough(passthrough);
+    if (
+      needsInitLink &&
+      upstreamResp.status >= 200 &&
+      upstreamResp.status < 300
+    ) {
+      tappedStream = tappedStream.pipeThrough(
+        createInitLinkSseInjector(
+          initLinkNoticeFactory,
+          markInitLinkDelivered,
+        ),
+      );
+    }
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
   }
@@ -1598,9 +1685,11 @@ export async function handleChatCompletions(
   const endTime = new Date().toISOString();
 
   let usage: Record<string, unknown> | null = null;
+  let respJsonBody: Record<string, unknown> | null = null;
   let assistantMessage: Record<string, unknown> | null = null;
   try {
     const respJson = JSON.parse(respText) as Record<string, unknown>;
+    respJsonBody = respJson;
     if (respJson.usage && typeof respJson.usage === "object") {
       usage = respJson.usage as Record<string, unknown>;
     }
@@ -1787,8 +1876,8 @@ export async function handleChatCompletions(
 
   // Skill extract trigger — count tool calls + buffer conversation.
   // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-  // aux 请求(compaction/title)/dsh headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
-  if (!isAuxiliary && !_dshHeadless && isExtractionAllowed(config, "skill")) {
+  // aux 请求(compaction/title)/dsh·hermes headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
+  if (!injectedSkipped && isExtractionAllowed(config, "skill")) {
     await triggerSkillExtractIfReady({
       config,
       sessionKey,
@@ -1799,7 +1888,7 @@ export async function handleChatCompletions(
       protocol: "openai",
       assetCapabilities,
     });
-  } else if (!isAuxiliary && !_dshHeadless) {
+  } else if (!injectedSkipped) {
     logExtractionSkipped(config, "skill", sessionKey);
   }
 
@@ -1837,6 +1926,30 @@ export async function handleChatCompletions(
       },
       creditOutcome.errorMessage ?? "unknown",
     );
+  }
+
+  if (
+    needsInitLink &&
+    upstreamResp.status >= 200 &&
+    upstreamResp.status < 300 &&
+    respJsonBody
+  ) {
+    try {
+      if (
+        appendInitNoticeToTerminalCompletion(
+          respJsonBody,
+          initLinkNoticeFactory,
+        )
+      ) {
+        markInitLinkDelivered();
+        return new Response(JSON.stringify(respJsonBody), {
+          status: upstreamResp.status,
+          headers: respHeaders,
+        });
+      }
+    } catch {
+      // JSON re-serialization failed — fall through to the untouched body.
+    }
   }
 
   return new Response(respText, { status: upstreamResp.status, headers: respHeaders });
@@ -1891,9 +2004,8 @@ interface TapContext {
   /** True when this request was classified as auxiliary (compaction/title-gen) —
    * downstream L0/skill extract paths must skip to keep buffer semantics clean. */
   isAuxiliary: boolean;
-  /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
-   * in tools) — behaves like aux for downstream side-effects. */
-  isDshHeadless: boolean;
+  /** Whether the resolved session is allowed to write memory/skill side effects. */
+  memoryEnabled: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
@@ -2209,7 +2321,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // Skill extract trigger — after stream finalization.
     // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
     // aux 请求(compaction/title)/dsh headless 跳过 skill 触发,保持归档 buffer 语义纯净。
-    if (!ctx.isAuxiliary && !ctx.isDshHeadless && isExtractionAllowed(ctx.config, "skill")) {
+    if (ctx.memoryEnabled && isExtractionAllowed(ctx.config, "skill")) {
       await triggerSkillExtractIfReady({
         config: ctx.config,
         sessionKey: ctx.sessionKeyForSkill,
@@ -2221,7 +2333,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         assetCapabilities: ctx.assetCapabilities,
         toolCallCountOverride: toolCallAccumulators.size,
       });
-    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless) {
+    } else if (ctx.memoryEnabled) {
       logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
     }
 

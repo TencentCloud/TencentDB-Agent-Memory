@@ -101,6 +101,8 @@ export const DEFAULT_CONFIG: ProxyConfig = {
       taskHeader: "x-task-id",
       onMismatch: "form",
     },
+    // initLink intentionally omitted — hubOrigin must be explicitly set in yaml
+    // to enable the headless web-link fallback (unset → silent bypass, as before).
     // debugForceIdentity intentionally omitted — must be explicitly set in yaml
     // to activate the bypass path.
   },
@@ -415,6 +417,21 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       taskHeader: (yaml.sessionInit?.headerAutoSelect?.taskHeader ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.taskHeader).toLowerCase(),
       onMismatch: yaml.sessionInit?.headerAutoSelect?.onMismatch ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.onMismatch,
     },
+    initLink:
+      typeof yaml.sessionInit?.initLink?.hubOrigin === "string" && yaml.sessionInit.initLink.hubOrigin.trim()
+        ? {
+            hubOrigin: yaml.sessionInit.initLink.hubOrigin.trim().replace(/\/$/, ""),
+            proxyOrigin:
+              typeof yaml.sessionInit.initLink.proxyOrigin === "string" &&
+              yaml.sessionInit.initLink.proxyOrigin.trim()
+                ? yaml.sessionInit.initLink.proxyOrigin.trim().replace(/\/$/, "")
+                : undefined,
+            ttlMinutes:
+              typeof yaml.sessionInit.initLink.ttlMinutes === "number" && yaml.sessionInit.initLink.ttlMinutes > 0
+                ? yaml.sessionInit.initLink.ttlMinutes
+                : undefined,
+          }
+        : undefined,
     debugForceIdentity: yaml.sessionInit?.debugForceIdentity
       && typeof yaml.sessionInit.debugForceIdentity === "object"
       && typeof (yaml.sessionInit.debugForceIdentity as Record<string, unknown>).team_id === "string"

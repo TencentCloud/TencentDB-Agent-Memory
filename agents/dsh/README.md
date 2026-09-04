@@ -78,15 +78,16 @@ asset_confirm → team_select → agent_task_select → initialized
 
 dsh 的选项列表 **无数量限制**，无需分页。所有选项一次性展示。
 
-### 3.4 Headless Bypass（⚠️ 重点差异）
+### 3.4 Headless Web Init（⚠️ 重点差异）
 
-dsh 有独特的 **headless bypass** 机制：
+dsh 会按本次请求声明的工具判断是否具备交互式初始化能力：
 
-- 检查 `body.tools` 数组
-- 如果 `body.tools` 非空 **但不包含** `ask_user_question` tool → proxy 判定为 headless 模式
-- Headless 模式下 → **完全跳过** session-init，直接透传
+- `body.tools` 缺失、为空或不包含 `ask_user_question` → headless
+- headless 且已有绑定 → 正常恢复 session context、memory、L0 与 skill pipeline
+- headless 且未绑定、有稳定会话 ID、已配置 `sessionInit.initLink` → 在终态响应附网页绑定链接
+- 无稳定会话 ID 或未配置链接 → 静默透传
 
-这允许 dsh 在没有交互能力的场景（如 API 直调、batch 模式）正常工作。
+这允许 API 直调、batch 等无交互场景通过浏览器完成一次绑定，后续继续使用 memory。
 
 ### 3.5 reasoning_content 要求
 
@@ -190,8 +191,8 @@ dsh 共享 CB 的 handler 路径（都是 OpenAI Chat Completions），注入方
 **Q: dsh 和 CB 共享 handler，怎么区分？**  
 A: 路由层面由 `/:agent/` 段区分。进入 handler 后通过 `agentSource` 字段区分行为差异（form tool name、session ID header、content 提取逻辑等）。
 
-**Q: dsh headless bypass 什么时候触发？**  
-A: 当客户端发送的 `body.tools` 非空但不包含 `ask_user_question` 时。典型场景：dsh 在 API 模式直调（有自定义 tools 但没有用户交互 tool）。
+**Q: dsh 什么时候进入 headless 模式？**
+A: 当 `body.tools` 缺失、为空或不包含 `ask_user_question` 时。未绑定且已配置 `sessionInit.initLink` 会返回网页绑定链接；已绑定会恢复完整 memory pipeline。
 
 **Q: dsh 的 `x-deepseek-harness-compact` header 是什么？**  
 A: dsh 客户端在做对话压缩（compaction）时会带此 header。proxy 识别后跳过注入/归档，直接透传到上游做压缩。

@@ -20,6 +20,7 @@
 import type { Context } from "hono";
 import type { Redis } from "ioredis";
 import { getSessionStore } from "../session/store.js";
+import { buildSessionKeyCandidates } from "../session/bridge-lookup.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { RedisBindingRepo } from "../db/binding-repo.js";
@@ -290,11 +291,12 @@ function bindingToIdFields(
  * agentSource 前缀,bare sessionId 命中不到。方案 B 拍平后 L2b binding 直接命中
  * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
  * 恢复而不 401。
+ *
+ * 候选前缀从 KNOWN_AGENT_SOURCES 注册表展开（buildSessionKeyCandidates）——
+ * 手写清单会随新 adapter 上线漏项（hermes 上线时漏过，bridge 全线 40101）。
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+  const candidates = buildSessionKeyCandidates(sessionId);
   for (const k of candidates) {
     const s = getSessionStore().get(k);
     if (s) {

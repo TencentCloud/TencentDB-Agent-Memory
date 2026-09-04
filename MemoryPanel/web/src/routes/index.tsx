@@ -15,8 +15,15 @@ import { MembersPage } from '@/pages/MembersPage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { GuidePage } from '@/pages/GuidePage';
+import SessionInitPage from '@/pages/SessionInitPage';
 
 export const routes: RouteObject[] = [
+  {
+    // 免登录落地页：headless 客户端弹出的 session-init 网页链接指向这里。
+    // token 即凭证，不进 ConsoleLayout（避免登录守卫拦截）。
+    path: '/session-init',
+    element: <SessionInitPage />,
+  },
   {
     path: '/',
     element: <ConsoleLayout />,

@@ -48,7 +48,7 @@ cp -r agents ~/agents
 请阅读 ~/agents/skills/setup-proxy/SKILL.md，帮我配置 Claude Code 接入 Memory Proxy。我的 proxy 地址是 http://localhost:8096，实例 ID 是 default。
 ```
 
-**配置 Hermes/OpenClaw（需要 header 预选）：**
+**配置 Hermes/OpenClaw（OpenClaw 需 header 预选；Hermes 也可走交互表单）：**
 
 ```
 请阅读 ~/agents/skills/setup-proxy/SKILL.md，帮我配置 Hermes 接入 Memory Proxy。面板地址是 http://localhost:8125，帮我从面板拉取 team/agent 列表来选择。
@@ -81,7 +81,7 @@ cp -r agents ~/agents
 | [Codex](./codex/) | OpenAI Responses API | 交互式 Form + Default Gate | `request_user_input` | ✅ | ✅ | ❌ |
 | [WorkBuddy](./workbuddy/) | Responses (Desktop) / Chat (Web) | 交互式 Form | `AskUserQuestion` | ✅ (max 4) | ✅ | ✅ (静默透传) |
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
-| [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
+| [Hermes](./hermes/) | OpenAI Chat Completions | 交互式 Form + Header 预选 | `clarify` | ✅ (max 4) | ❌ | ✅ (无 clarify tool 时) |
 | [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
 
 ---
@@ -120,7 +120,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | Codex | `session-id` | `body.client_metadata.session_id` |
 | WorkBuddy | `session-id` | `body.client_metadata.session_id` |
 | dsh | `x-deepseek-harness-session-id` | `x-session-id` |
-| Hermes | `x-conversation-id` | — (用户静态配置) |
+| Hermes | `x-conversation-id` | — (静态配置或 provider 插件动态注入) |
 | OpenClaw | `x-conversation-id` | — (用户静态配置) |
 
 ---
@@ -154,7 +154,8 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 ## Header 预选（通用，所有 agent 均可使用）
 
 除了交互式 Form 之外，**所有 agent** 都支持通过 HTTP Header 直接完成 session 注册，跳过表单交互。适用于：
-- 无法响应 form（如 Hermes / OpenClaw）
+- 无法响应 form（如 OpenClaw）
+- Hermes 无头形态（api-server / acp，请求里无 clarify 工具时可走网页链接或 Header）
 - 想跳过表单加速首帧（如 CI/CD 自动化场景）
 - 第三方平台 / 自行开发的 Agent
 
@@ -170,6 +171,51 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 
 以上 header 齐全 → Proxy 直接完成 session 注册 + 注入资产，不弹 form。  
 任一缺失 → 走交互式 form（如果客户端支持）或 session bypass（不支持 form 时）。
+
+### 无 tool Agent 的网页链接式初始化（headless web-link fallback）
+
+针对既无法响应交互式 form、又没配 Header 预选的 headless Agent（如 dsh 无 `ask_user_question`，或 Hermes api-server / acp 无 `clarify`），Proxy 支持在终态响应末尾追加一条初始化链接：用户在浏览器打开链接，在免登录页面选 team / agent / task 完成绑定，结果写入 session 与 binding 持久层，后续请求恢复完整 memory injection、L0 和 skill pipeline。
+
+触发条件（同时满足才会弹链接）：
+
+- Proxy 配置了 `sessionInit.initLink.hubOrigin`
+- 请求带会话 ID（无会话 id 的 oneshot 调用维持静默 bypass）
+- 会话尚未绑定（已 initialized 的会话不弹）
+- 客户端为 headless 形态（有会话 id、但工具列表为空或不含交互工具）
+
+链接安全性：
+
+- token 为 32 位随机十六进制，默认 **10 分钟**有效（可配 `ttlMinutes`）；同一 session/purpose 在 TTL 内复用 active token
+- 提交使用 `pending → processing → consumed` 原子 claim；并发提交只有一个进入注册，瞬时失败会释放回 pending
+- token 仅存单个 Proxy 进程内存，重启即全部失效；当前不支持多副本共享 token
+- 提交时校验归属：agent 必须属于调用方所在团队、task 必须属于该团队，否则拒绝
+
+Proxy 配置示例：
+
+```yaml
+sessionInit:
+  enabled: true
+  onMismatch: "form"
+  initLink:
+    hubOrigin: "http://<hub-host>:8125"
+    proxyOrigin: "http://<proxy-host>:8096" # 可选；反向代理/NAT 部署建议显式配置
+    ttlMinutes: 10        # 可选，默认 10
+```
+
+部署变量（docker compose）：`PROXY_SESSION_INIT_HUB_ORIGIN` /
+`PROXY_SESSION_INIT_PROXY_ORIGIN` / `PROXY_SESSION_INIT_LINK_TTL_MINUTES`。
+
+三级路由边界：
+
+| 场景 | 行为 |
+|------|------|
+| 交互式 Agent（工具列表含 ask_user_question / clarify） | 就地弹 form（现状不变） |
+| headless + 有会话 id + 已配 hubOrigin | 响应末尾追加网页初始化链接 |
+| headless + 无会话 id / 未配 hubOrigin | 静默 bypass（不弹任何内容） |
+
+会话重置（mem:session-reset）同样适用：headless 会话重置后会返回一条新的换绑链接。
+
+---
 
 ### 其他平台接入
 
@@ -189,7 +235,7 @@ http://<proxy-host>:<port>/<agent-source>/<spaceId>
 1. **抓包** — 用 mitmproxy 抓 3~5 种典型请求 (main / aux / title-gen)，存入 `docs/<agent>-recon/`
 2. **识别协议** — 确定 wire protocol (Anthropic / Chat / Responses)
 3. **确定 Session ID 来源** — 找 header 或 body 里的唯一会话标识
-4. **选择 Session Init 策略** — 有 tool → 交互式 form；无 tool → header 预选 / headless bypass
+4. **选择 Session Init 策略** — 有 tool → 交互式 form；无 tool → header 预选 / 网页链接 / headless bypass
 5. **分类辅助请求** — 识别 title-gen / compact / fork 等不需要走全链路的请求
 6. **实现 Handler / 复用** — 协议相同的可共享 handler (如 dsh 复用 CB 的 handleChatCompletions)
 7. **注入 Profile** — 按客户端 system prompt 格式定义注入模板

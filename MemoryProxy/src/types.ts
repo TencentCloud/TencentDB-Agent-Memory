@@ -197,6 +197,26 @@ export interface SessionInitConfig {
   /** Max retries before degrading (bypass session init on next request). */
   maxRetries: number;
   /**
+   * Web-link fallback for headless agents (for example dsh without
+   * `ask_user_question` or Hermes without `clarify`, with a stable session id).
+   *
+   * When set, the proxy mints a short-lived one-shot token and appends an init
+   * link (`{hubOrigin}/#/session-init?proxy=...&token=...`) to the passthrough
+   * response; the user completes team/agent/task selection in the browser and
+   * the binding lands in SessionStore via the same registration path as the
+   * interactive form. Unset (default): headless requests keep the current
+   * silent bypass. `mem:session-reset` under headless clears the old binding
+   * and returns a rebind link when this is configured.
+   */
+  initLink?: {
+    /** Memory Hub page origin, e.g. `http://127.0.0.1:8125`. Presence enables the feature. */
+    hubOrigin: string;
+    /** Browser-reachable public MemoryProxy origin. Defaults to the request origin. */
+    proxyOrigin?: string;
+    /** Token TTL in minutes. Default 10. */
+    ttlMinutes?: number;
+  };
+  /**
    * Whether to append the `[Agent]` section of the `<session_context>` block
    * (agent id / name / description / prompt) to the system prompt on every
    * request after session init completes.
@@ -847,6 +867,11 @@ export interface RawYamlConfig {
       agentHeader?: string;
       taskHeader?: string;
       onMismatch?: "form" | "bypass";
+    };
+    initLink?: {
+      hubOrigin?: string;
+      proxyOrigin?: string;
+      ttlMinutes?: number;
     };
   };
   tdai?: {

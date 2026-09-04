@@ -135,6 +135,30 @@ $DOCKER run -d --name "$CONTAINER" \
   "$MEMORY_CORE_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90
+
+# ── 宿主机侧可达性等待 ──────────────────────────────────────────
+# 容器内 healthcheck（127.0.0.1:8420）通过 ≠ 宿主机能连上映射端口：
+# Docker Desktop（尤其 Windows）的端口转发热身可能有数秒延迟，此时宿主机
+# curl 会拿到 HTTP=000。wait_healthy 只保证容器内就绪，这里再从宿主机侧
+# 确认端口真的可达，避免后续 init-admin 首击必败。
+host_wait=0
+host_code="000"
+host_probe_file=./memory-core-health.$$
+capture_http_code host_code host_rc -sS -o "$host_probe_file" -w '%{http_code}' --max-time 3 \
+  "http://localhost:${MEMORY_CORE_PORT}/health"
+until [[ "$host_code" == "200" ]]; do
+  host_wait=$((host_wait + 1))
+  if (( host_wait >= 15 )); then
+    rm -f "$host_probe_file"
+    die "宿主机无法访问 http://localhost:${MEMORY_CORE_PORT}/health（等待 45s 超时）。请检查端口占用 / Docker Desktop 状态。"
+  fi
+  sleep 3
+  capture_http_code host_code host_rc -sS -o "$host_probe_file" -w '%{http_code}' --max-time 3 \
+    "http://localhost:${MEMORY_CORE_PORT}/health"
+done
+rm -f "$host_probe_file"
+ok "宿主机端口 ${MEMORY_CORE_PORT} 可达（等待 ${host_wait} 次探测）"
+
 ok "memory-core 已启动 → http://localhost:${MEMORY_CORE_PORT}/"
 
 # ── Admin user 生命周期 ─────────────────────────────────────────
@@ -162,14 +186,15 @@ generate_user_key() {
 
 verify_user_key() {
   local key="$1"
-  local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+  local code verify_rc verify_file=./verify-user-key.$$
+  capture_http_code code verify_rc -sS -o "$verify_file" -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
     "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify" \
-    -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || echo "000")
-  [[ "$code" == "200" ]]
+    -d "$(printf '{"user_key":"%s"}' "$key")"
+  rm -f "$verify_file"
+  [[ $verify_rc -eq 0 && "$code" == "200" ]]
 }
 
 info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → ${ADMIN_KEY_FILE}）..."
@@ -184,12 +209,20 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
-  -X POST -H "Content-Type: application/json" \
-  ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
-  -H "x-tdai-service-id: default" \
-  "http://localhost:${MEMORY_CORE_PORT}/v3/internal/meta/user/init-admin" \
-  -d "$init_body" 2>/dev/null || echo "000")
+# init-admin 带重试：HTTP=000 = 连接层失败（端口转发偶发热身/瞬断），
+# 与 4xx/5xx 业务错误不同，值得原样重试而非直接判死。
+init_resp="000"
+for _init_try in 1 2 3 4 5; do
+  capture_http_code init_resp _init_rc -sS -o ./init-admin.$$ -w "%{http_code}" \
+    -X POST -H "Content-Type: application/json" \
+    ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
+    -H "x-tdai-service-id: default" \
+    "http://localhost:${MEMORY_CORE_PORT}/v3/internal/meta/user/init-admin" \
+    -d "$init_body"
+  [[ "$init_resp" != "000" ]] && break
+  warn "init-admin 第 ${_init_try}/5 次连接失败（HTTP=000），3s 后重试..."
+  sleep 3
+done
 
 case "$init_resp" in
   200)
@@ -210,10 +243,10 @@ case "$init_resp" in
     ;;
   *)
     warn "init-admin 返回 HTTP=${init_resp}，可能需要手动排查："
-    cat /tmp/init-admin.$$ 2>/dev/null; echo
+    cat ./init-admin.$$ 2>/dev/null; echo
     ;;
 esac
-rm -f /tmp/init-admin.$$
+rm -f ./init-admin.$$
 
 # ── 校验 admin key 可用 ─────────────────────────────────────────
 if [[ -s "$ADMIN_KEY_FILE" ]]; then
