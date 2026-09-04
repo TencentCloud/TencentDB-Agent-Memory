@@ -23,6 +23,9 @@ require_vars \
 
 # 与 memory-core 保持一致的 gateway 内部凭据（默认 local，仅本地体验）
 MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
+# 注入给 Agent 的工具地址必须从 Agent 所在环境可达。默认适用于 Agent 与
+# Docker 同机；跨机部署应在 .env 中显式配置 LAN IP 或域名。
+PROXY_EXTERNAL_GATEWAY_URL="${PROXY_EXTERNAL_GATEWAY_URL:-http://127.0.0.1:${PROXY_PORT}}"
 
 CONTAINER=tdai-proxy
 NETWORK=tdai-memory-stack
@@ -131,6 +134,7 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  externalGatewayUrl: "${PROXY_EXTERNAL_GATEWAY_URL}"
   injectors:
     - skill
     - knowledge
