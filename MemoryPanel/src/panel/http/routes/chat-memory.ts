@@ -30,6 +30,7 @@
  *   POST /chat-memory/layer-delete    L0/L1 列表批量删除（Owner-only）
  *   POST /chat-memory/clear           一键清空内容、保留资产（Owner-only）
  *   POST /chat-memory/import          导入历史对话到 agent 的 L0
+ *   POST /chat-memory/import-memories 导入个人记忆到 L1 atomic（批量创建）
  */
 import type { Hono } from "hono";
 import { validatePanelMetaHeaders } from "../middleware/validate-panel-headers.js";
@@ -583,6 +584,108 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         block_id: `chat_memory-${teamId}-${agentId}`,
         session_id: sessionId,
         accepted_count: acceptedCount,
+      }),
+    );
+  });
+
+  // 4.7b 导入个人记忆到 L1 atomic（批量创建，绕过 L0→L1 蒸馏 pipeline）
+  //
+  // 接受 JSON 数组或文件文本（.md/.json/.txt），解析后调 /v3/atomic/create 批量写入。
+  // 与 /chat-memory/import（L0 对话历史）的区别：这个直接写 L1 原子记忆，供召回。
+  //
+  // body:
+  //   { team_id, agent_id, records?: [{content, type?, scene_name?, priority?}],
+  //     file?: { name, content }, type?, scene_name? }
+  // 返回: { created, ids, truncated }
+  api.post("/chat-memory/import-memories", validatePanelMetaHeaders(deps), async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const teamId = requiredTeamId(body);
+    const agentId = typeof body?.agent_id === "string" ? body.agent_id : "";
+    if (!teamId) return respondControlError(c, 400, "MISSING_TEAM_ID");
+    if (!agentId) return respondControlError(c, 400, "MISSING_AGENT_ID");
+
+    // 权限：agent.owner = me
+    const meUserId = await resolveCallerUserId(deps, ctx);
+    if (!meUserId) return respondControlError(c, 401, "INVALID_USER_KEY");
+    const agentEnv = await deps.metaKernel.invoke(
+      "agent/get",
+      { agent_id: agentId },
+      ctx,
+    );
+    if (agentEnv.code === 404 || (agentEnv.code === 0 && !agentEnv.data)) {
+      return respondControlError(c, 404, "AGENT_NOT_FOUND");
+    }
+    if (agentEnv.code !== 0) return respondEnvelope(c, agentEnv);
+    const agent = agentEnv.data as AgentRaw;
+    if (agent.team_id !== teamId)
+      return respondControlError(c, 400, "AGENT_NOT_IN_TEAM");
+    if (agent.owner_user_id !== meUserId)
+      return respondControlError(c, 403, "NOT_YOUR_AGENT");
+
+    // 解析记忆条目：优先用 body.records，否则从 body.file 解析
+    const { parseMemoryFile } = await import("./chat-memory-import-parser.js");
+    let records;
+    let format = "json";
+    let truncated = 0;
+
+    if (Array.isArray(body?.records)) {
+      // 直接传 JSON 数组
+      records = (body.records as any[]).filter(r => r && typeof r.content === "string" && r.content.trim());
+    } else if (body?.file && typeof body.file === "object") {
+      // 传文件 {name, content}
+      const fileObj = body.file as { name?: string; content?: string };
+      const fileName = typeof fileObj.name === "string" ? fileObj.name : "import.json";
+      const fileText = typeof fileObj.content === "string" ? fileObj.content : "";
+      const result = parseMemoryFile(fileName, fileText);
+      records = result.records;
+      format = result.format;
+      truncated = result.truncated;
+    } else {
+      return respondControlError(c, 400, "MISSING_RECORDS_OR_FILE");
+    }
+
+    if (records.length === 0) {
+      return respondControlError(c, 400, "NO_VALID_RECORDS");
+    }
+    if (records.length > 500) {
+      return respondControlError(c, 400, "TOO_MANY_RECORDS");
+    }
+
+    // 默认 type / scene_name（来自 body 顶层，可被 record 级覆盖）
+    const defaultType = typeof body?.type === "string" ? body.type : "persona";
+    const defaultScene = typeof body?.scene_name === "string" ? body.scene_name : "imported";
+
+    const normalizedRecords = records.map(r => ({
+      content: r.content,
+      type: r.type ?? defaultType,
+      scene_name: r.scene_name ?? defaultScene,
+      priority: r.priority,
+      metadata: r.metadata,
+    }));
+
+    // 走数据面 /v3/atomic/create
+    const cred = toKernelCredentials(ctx, { timeoutMs: 30_000 });
+    const createEnv = await deps.kernelHttp.postEnvelope<{
+      created: number;
+      ids: string[];
+    }>("/v3/atomic/create", {
+      team_id: teamId,
+      user_id: agent.owner_user_id,
+      agent_id: agentId,
+      records: normalizedRecords,
+    }, cred);
+
+    if (createEnv.code !== 0) return respondEnvelope(c, createEnv);
+
+    return respondEnvelope(
+      c,
+      okEnvelope(c, {
+        imported: true,
+        format,
+        created: (createEnv.data as any)?.created ?? 0,
+        ids: (createEnv.data as any)?.ids ?? [],
+        truncated,
       }),
     );
   });

@@ -440,6 +440,76 @@ export type AtomicUpdateData = {
     updated_at: string;
 };
 
+/**
+ * Batch create L1 atomic memories. Each record gets a server-generated
+ * record_id. For user-driven imports bypassing L0→L1 distillation.
+ */
+export type AtomicCreateRequest = (IdFields & {
+    /**
+     * @description 单次最多 500 条记忆。超过请分批调用。
+     */
+    records: Array<{
+        /**
+         * @maxLength 8192
+         * @type string
+         */
+        content: string;
+        /**
+         * @description persona / episodic / instruction / work_fact / work_task / work_method / work_artifact
+         */
+        type?: "persona" | "episodic" | "instruction" | "work_fact" | "work_task" | "work_method" | "work_artifact";
+        /**
+         * @description 软分类命名空间,如 preferences / events / entities。不强制,可空。
+         * @type string | undefined
+         */
+        scene_name?: string;
+        /**
+         * @description 优先级 -1..100,默认 50。-1 表示全局指令。
+         */
+        priority?: number;
+        /**
+         * @description 任意结构化元数据。
+         */
+        metadata?: Record<string, unknown>;
+    }>;
+    /**
+     * @description 去重配置。启用后每条记录写入前先搜索,命中则 skip/update。
+     */
+    dedup?: {
+        enabled: boolean;
+        /**
+         * @description 去重阈值 0-1,score 超过则视为重复。默认 0.85。
+         */
+        threshold?: number;
+        /**
+         * @description 命中重复时的行为:skip=跳过,update=覆盖更新。
+         */
+        mode?: "skip" | "update";
+    };
+});
+
+export type AtomicCreateData = {
+    /**
+     * @description 实际写入条数(含 update)。
+     * @type integer
+     */
+    created: number;
+    /**
+     * @description 每条记忆的 record_id,顺序与请求 records 对齐。skip 的为空字符串。
+     */
+    ids: string[];
+    /**
+     * @description 因重复跳过的条数。
+     * @type integer | undefined
+     */
+    skipped?: number;
+    /**
+     * @description 因重复而更新的条数。
+     * @type integer | undefined
+     */
+    updated?: number;
+};
+
 export type AtomicQueryRequest = (Pagination & IdFields & {
     /**
      * @description `episodic` / `persona` / `instruction`

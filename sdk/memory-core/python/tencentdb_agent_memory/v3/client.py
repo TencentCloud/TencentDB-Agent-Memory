@@ -370,6 +370,31 @@ class MemoryClient:
             }),
         )
 
+    def create_memories(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """``POST /v3/atomic/create`` — batch create L1 atomic memories.
+
+        Each record gets a server-generated record_id. Bypasses L0→L1
+        distillation — for user-driven imports (markdown notes, JSON arrays,
+        file uploads). Single batch ≤ 500 records.
+
+        :param records: list of dicts with keys ``content`` (required),
+            ``type`` (optional), ``scene_name`` (optional), ``priority``
+            (optional), ``metadata`` (optional).
+        """
+        return self._stub.post(
+            f"{_V3}/atomic/create",
+            {
+                **self._iso.base_body(),
+                "session_id": self._iso.resolve_session(session_id),
+                "records": records,
+            },
+        )
+
     def query_atomic(
         self,
         *,
@@ -750,6 +775,26 @@ class AsyncMemoryClient:
                 "session_id": self._iso.resolve_session(session_id),
                 "id": id, "content": content, "background": background,
             }),
+        )
+
+    async def create_memories(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """``POST /v3/atomic/create`` — batch create L1 atomic memories.
+
+        Each record gets a server-generated record_id. Bypasses L0→L1
+        distillation — for user-driven imports. Single batch ≤ 500 records.
+        """
+        return await self._stub.post(
+            f"{_V3}/atomic/create",
+            {
+                **self._iso.base_body(),
+                "session_id": self._iso.resolve_session(session_id),
+                "records": records,
+            },
         )
 
     async def query_atomic(

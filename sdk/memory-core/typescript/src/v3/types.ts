@@ -1,4 +1,5 @@
 import type {
+  AtomicCreateData,
   AtomicDeleteData,
   AtomicDetail,
   AtomicQueryData,
@@ -107,6 +108,30 @@ export interface V3AtomicUpdateRequest {
   session_id?: string;
 }
 export type V3AtomicUpdateData = AtomicUpdateData;
+
+export interface V3AtomicCreateRecord {
+  content: string;
+  type?: "persona" | "episodic" | "instruction" | "work_fact" | "work_task" | "work_method" | "work_artifact";
+  scene_name?: string;
+  priority?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface V3AtomicCreateDedup {
+  /** Enable dedup check before write. Default false. */
+  enabled: boolean;
+  /** Score threshold 0-1; hits above this are considered duplicates. Default 0.85. */
+  threshold?: number;
+  /** Behavior on hit: skip=skip, update=overwrite. Default skip. */
+  mode?: "skip" | "update";
+}
+
+export interface V3AtomicCreateRequest {
+  records: V3AtomicCreateRecord[];
+  dedup?: V3AtomicCreateDedup;
+  session_id?: string;
+}
+export type V3AtomicCreateData = AtomicCreateData;
 
 export interface V3AtomicQueryRequest {
   type?: string;

@@ -5,6 +5,10 @@ export { SkillClient, type SkillClientConfig } from "./skill-client.js";
 export { SkillErrorCode, type SkillErrorCodeValue } from "./skill-types.js";
 export type {
   V3AtomicCountRequest,
+  V3AtomicCreateData,
+  V3AtomicCreateDedup,
+  V3AtomicCreateRecord,
+  V3AtomicCreateRequest,
   V3AtomicDeleteData,
   V3AtomicDeleteRequest,
   V3AtomicDetail,
