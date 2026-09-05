@@ -325,6 +325,7 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
+- 📚 **想查找更多 WorkBuddy 资源？** 可查看 [Awesome WorkBuddy](https://github.com/sandbaseai/awesome-workbuddy)，这是一个独立维护的双语目录，整理经过审阅的 WorkBuddy Skills、MCP 集成、工作流及安全说明。
 <p align="center"><img src="https://github.com/user-attachments/assets/d2fc2872-7672-42e8-96a3-8e85654ab270" width="200" alt="Agent Memory 微信社群二维码" />
 
 ---

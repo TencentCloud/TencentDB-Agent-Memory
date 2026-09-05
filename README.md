@@ -323,6 +323,7 @@ We welcome contributions of all kinds — bug reports, feature suggestions, docu
 - 💡 **Have an idea to share?** Start a thread in [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions).
 - 🛠️ **Want to contribute code?** Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
 - 💬 **Want to chat with us?** Join our [Discord community](https://discord.gg/dJQM6mKMF) and talk to the core developers directly.
+- 📚 **Want a broader WorkBuddy resource index?** See [Awesome WorkBuddy](https://github.com/sandbaseai/awesome-workbuddy), an independent bilingual directory of reviewed WorkBuddy Skills, MCP integrations, workflows, and safety notes.
 
 ---
 
