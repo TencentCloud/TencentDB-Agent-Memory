@@ -400,7 +400,7 @@ export function parseJsonlLines(text: string): ImportMessage[] {
     try {
       const obj = JSON.parse(t) as Record<string, unknown>;
       let rec: Record<string, unknown> = obj;
-      if (obj.type === 'event_msg' || obj.type === 'session_meta' || obj.type === 'turn_context' || obj.type === 'world_state') {
+      if (obj.type === 'event_msg' || obj.type === 'session_meta' || obj.type === 'session' || obj.type === 'turn_context' || obj.type === 'world_state') {
         continue;
       }
       if (obj.type === 'response_item' && obj.payload && typeof obj.payload === 'object') {
@@ -2635,8 +2635,78 @@ function scanSessionsOverride(kind: AgentKind, sessionsDir: string): ScannedSess
   return { kind: KIND, scanSkills, scanSessions, scanSessionsOverride, detect };
 }
 
+function make_piAdapter(): IdeAdapter {
+const KIND = 'pi' as const;
+
+function piHome(): string {
+  const env = process.env.PI_HOME?.trim();
+  return env ? resolve(env) : join(home(), '.pi', 'agent');
+}
+
+function detect(): boolean {
+  return existsSync(join(home(), '.pi', 'agent'));
+}
+
+function scanSkills(opts?: ScanOptions): ScannedSkill[] {
+  const cwd = projectCwd(opts);
+  const h = home();
+  // Pi global skills: ~/.pi/agent/skills/*/SKILL.md
+  // Pi project skills: <cwd>/.pi/skills/*/SKILL.md
+  return collectSkillDirs(KIND, [
+    join(h, '.pi', 'agent', 'skills'),
+    join(cwd, '.pi', 'skills'),
+  ]);
+}
+
+function scanSessions(sessionsDir?: string, _opts?: ScanOptions): ScannedSession[] {
+  if (sessionsDir) return scanSessionsOverride(KIND, sessionsDir);
+  const out: ScannedSession[] = [];
+  // Pi sessions: ~/.pi/agent/sessions/<workspace-slug>/*.jsonl
+  // Each file is JSONL; first line is a {"type":"session"} header, rest are messages.
+  const root = join(piHome(), 'sessions');
+  if (existsSync(root)) {
+    for (const ws of readdirSync(root)) {
+      const dir = join(root, ws);
+      if (!statSync(dir).isDirectory()) continue;
+      for (const f of listJsonlRecursive(dir)) {
+        const msgs = parseJsonlLines(readFileSync(f, 'utf-8'))
+          .map((m) => ({ role: m.role, content: m.content, ts: m.ts, hasToolUse: m.hasToolUse }));
+        if (msgs.length) {
+          out.push({
+            sessionId: `${ws}/${basename(f, '.jsonl')}`,
+            messages: msgs,
+            sourceKey: `session:${KIND}:${f}`,
+            origin: f,
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function scanSessionsOverride(kind: AgentKind, sessionsDir: string): ScannedSession[] {
+  const out: ScannedSession[] = [];
+  for (const f of listJsonlRecursive(sessionsDir)) {
+    const msgs = parseJsonlLines(readFileSync(f, 'utf-8'))
+      .map((m) => ({ role: m.role, content: m.content, ts: m.ts, hasToolUse: m.hasToolUse }));
+    if (msgs.length) {
+      out.push({
+        sessionId: basename(f, '.jsonl'),
+        messages: msgs,
+        sourceKey: `session:${kind}:${f}`,
+        origin: f,
+      });
+    }
+  }
+  return out;
+}
+
+return { kind: KIND, scanSkills, scanSessions, scanSessionsOverride, detect };
+}
+
 export const ADAPTERS: Record<string, IdeAdapter> = {
-  openclaw: make_openclawAdapter(), codebuddy: make_codebuddyAdapter(), codex: make_codexAdapter(), 'claude-code': make_claude_codeAdapter(), dsh: make_dshAdapter(), hermes: make_hermesAdapter(), workbuddy: make_workbuddyAdapter(),
+  openclaw: make_openclawAdapter(), codebuddy: make_codebuddyAdapter(), codex: make_codexAdapter(), 'claude-code': make_claude_codeAdapter(), dsh: make_dshAdapter(), hermes: make_hermesAdapter(), workbuddy: make_workbuddyAdapter(), pi: make_piAdapter(),
 };
 
 /** 各 adapter 在项目目录（cwd）下的专属 marker 目录（用于「项目本地优先」判定）。 */
@@ -2648,6 +2718,7 @@ const CWD_MARKER_DIRS: Record<string, string[]> = {
   dsh: ['.dsh'],
   hermes: ['.hermes'],
   workbuddy: ['.workbuddy', 'workbuddy'],
+  pi: ['.pi'],
 };
 
 /** 第一优先：当前项目目录（cwd，或 --workspace 指定目录）里是否存在某个 adapter 的专属 marker 目录（不看 home）。 */
