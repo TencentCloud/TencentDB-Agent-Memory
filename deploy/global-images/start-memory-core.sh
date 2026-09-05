@@ -127,7 +127,7 @@ $DOCKER run -d --name "$CONTAINER" \
   --network-alias memory-core \
   -p "${MEMORY_CORE_PORT}:8420" \
   -v "${MEMORY_CORE_VOLUME}:/data/tdai-memory" \
-  -v "$CORE_CONFIG_FILE:/data/config/tdai-gateway.yaml:ro" \
+  -v "$(to_host_path "$CORE_CONFIG_FILE"):/data/config/tdai-gateway.yaml:ro" \
   -e TDAI_GATEWAY_PORT=8420 \
   -e TDAI_GATEWAY_HOST=0.0.0.0 \
   -e TDAI_GATEWAY_API_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
@@ -163,7 +163,7 @@ generate_user_key() {
 verify_user_key() {
   local key="$1"
   local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+  code=$(curl_local -sS -o /dev/null -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
@@ -184,7 +184,7 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
+init_resp=$(curl_local -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
   -H "x-tdai-service-id: default" \
@@ -227,3 +227,8 @@ if [[ -s "$ADMIN_KEY_FILE" ]]; then
     warn "admin user_key 校验失败（auth/verify 非 200）。检查 $ADMIN_KEY_FILE 与 volume 是否匹配。"
   fi
 fi
+
+# 上面 admin 相关的问题一律只 warn（真正的致命错误已经 die 了）。
+# 显式 exit 0，避免脚本退出码取自最后一个 if 判断 —— .admin-key 不存在时
+# 那个 if 为假会让脚本以 1 退出，把 start-all.sh 的 set -e 连带打断。
+exit 0
