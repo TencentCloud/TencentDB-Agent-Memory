@@ -285,7 +285,7 @@ The Proxy supports 9 agent clients. **Full setup instructions, adaptation detail
 | **DeepSeek Harness (dsh)** | `~/.dsh/settings.yaml` + `.credentials.yaml` | [`agents/dsh/`](./agents/dsh/) |
 | **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
 | **Hermes** | `~/.hermes/config.yaml` + header preselect | [`agents/hermes/`](./agents/hermes/) |
-| **OpenClaw** | `~/.openclaw/openclaw.json` + header preselect | [`agents/openclaw/`](./agents/openclaw/) |
+| **OpenClaw** | `~/.openclaw/openclaw.json` + Session Bridge / Web Init (header preselect also supported) | [`agents/openclaw/`](./agents/openclaw/) |
 | **Pi** | `pi-plugin` extension (env vars) | [`MemoryCore/pi-plugin/`](./MemoryCore/pi-plugin/) |
 | **Other platforms** | Header preselect (generic) | [`agents/README.md`](./agents/README.md) |
 
@@ -326,10 +326,10 @@ Injected automatically by the `pi-plugin` extension:
 |---|---|
 | `Authorization: Bearer` | `TDAI_USER_KEY` (the user's API key, not the admin/gateway key) |
 | `x-team-id` / `x-agent-id` | env vars (static per host) |
-| `x-task-id` | `TDAI_TASK_ID` — **optional**. Omit for broad recall across the agent's memories; set to narrow recall to a task. A stale/unknown `task_id` is dropped (not a hard mismatch), so it never blocks registration. (See [`Known limitation: x-task-id`](#known-limitation-x-task-id) for the header preselect agents that still require it.) |
+| `x-task-id` | `TDAI_TASK_ID` — **optional**. Omit for broad recall across the agent's memories; set to narrow recall to a task. A stale/unknown `task_id` is dropped (not a hard mismatch), so it never blocks registration. |
 | `x-conversation-id` | dynamic per Pi session (extension `before_provider_headers` hook) |
 
-Unlike the header-preselect agents (Hermes / OpenClaw), Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). If the required identity env vars (`TDAI_USER_KEY`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`) are missing, the plugin warns at load and skips registration so Pi still starts.
+Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). If the required identity env vars (`TDAI_USER_KEY`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`) are missing, the plugin warns at load and skips registration so Pi still starts.
 
 ## Optional: `sessionInit.defaultTaskId` (the "no task binding" option)
 
@@ -489,30 +489,23 @@ when at least one asset injector is on the pipeline.
 > `PROXY_CONFIG_DIR` at a directory holding your own hand-edited
 > `config.yaml` and skip regeneration.
 
-## Known limitation: `x-task-id`
+## OpenClaw session initialization
 
-> ⚠️ **Current version limitation**: `x-task-id` is **required** for Hermes / OpenClaw.
->
-> The Proxy's header auto-select mechanism requires all three of `x-team-id` + `x-agent-id` + `x-task-id` to complete session registration directly. Without `x-task-id`, the Proxy falls back to an interactive form flow — which Hermes / OpenClaw cannot respond to, resulting in session bypass (no memory injection or conversation recording).
->
-> Inconveniences:
->
-> 1. Users must create a Task in the admin panel beforehand and obtain the `task_id`, increasing onboarding friction.
-> 2. Switching tasks requires manually editing the config file.
->
-> In the next version, we will make `x-task-id` optional: when not provided, the Proxy will auto-select the agent's default task or skip task binding entirely.
+OpenClaw recommends [Session Bridge + Web Session Init](./agents/openclaw/README.md).
+The bridge maps the native session ID to `x-conversation-id`; select a Team, Agent,
+and optional Task in the browser. Valid static Team/Agent preselection remains
+supported; omitting Task leaves the session without a task binding.
 
-## Known limitation: `x-conversation-id`
+Hermes and OpenClaw configurations without the bridge still require a new static
+`x-conversation-id` for each conversation; reusing it shares the same session
+binding, memory injection, and conversation recording. See the respective
+[setup guides](./agents/README.md) for other clients.
 
-> ⚠️ **Current version limitation**: Hermes and OpenClaw require `x-conversation-id` to be statically specified in the config file. This differs from Claude Code / CodeBuddy (where the SDK automatically manages the session ID).
->
-> Current limitations:
->
-> 1. **All requests sharing the same conversation ID belong to the same session** — memory injection and conversation recording are bound to this ID.
-> 2. **Starting a new conversation requires manually changing the conversation ID**, otherwise the previous session state continues.
-> 3. **Some clients may not carry extra headers on tool-call follow-up requests**, causing those turns to skip memory injection and conversation recording.
->
-> In the next version, the Proxy will support automatic generation and management of conversation IDs, eliminating the need for clients to specify this field manually.
+The Proxy URL for proactive Memory / Skill tools must be reachable from the
+Agent's actual tool execution environment. Set `PROXY_EXTERNAL_GATEWAY_URL` on
+the deployment side to populate `injection.externalGatewayUrl`; leaving it unset
+preserves the existing fallback. See the [deployment guide](./deploy/global-images/README.md#agent-主动工具地址)
+for topology examples and verification steps.
 
 ## Stop / cleanup
 

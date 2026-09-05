@@ -59,7 +59,7 @@ export type MaybePromise<T> = T | Promise<T>;
  */
 export class DuplicateUserKeyError extends Error {
   constructor(public readonly keyValue: string) {
-    super(`user_key already exists: ${keyValue}`);
+    super("user_key already exists");
     this.name = "DuplicateUserKeyError";
   }
 }

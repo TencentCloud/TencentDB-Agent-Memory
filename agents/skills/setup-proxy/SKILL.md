@@ -25,7 +25,7 @@ Memory Proxy 是一个 LLM 请求代理，在请求转发到上游 LLM 之前注
 | workbuddy | `~/.workbuddy/models.json` | OpenAI Chat / Responses | 顶层数组 |
 | dsh | `~/.dsh/settings.yaml` + `~/.dsh/.credentials.yaml` | OpenAI Chat (无 /v1) | 两个文件 + chmod 700/600 |
 | hermes | `~/.hermes/config.yaml` | OpenAI Chat | 需 header 预选 (x-team-id/agent-id/task-id) |
-| openclaw | `~/.openclaw/openclaw.json` | OpenAI Chat | 需 header 预选 + allowPrivateNetwork |
+| openclaw | `~/.openclaw/openclaw.json` | OpenAI Chat | 推荐 Session Bridge + Web Init；兼容静态 header |
 
 ## 脚本位置
 
@@ -87,6 +87,20 @@ cat ~/.codebuddy/models.json 2>/dev/null | jq -r '.models[]? | select(.url | con
 
 ### Step 5: 健康探测（关键验证步骤）
 
+先获取候选 Proxy 基础地址，从 **Agent 实际执行主动工具的环境**验证：
+
+```bash
+curl --fail --silent --show-error --connect-timeout 5 --max-time 10 "${PROXY_HOST}/health"
+```
+
+确认健康响应来自预期的 MemoryProxy，验证通过后，该地址才是
+`injection.externalGatewayUrl` 的候选。部署机、浏览器与 Agent 工具可能不在同一
+网络环境；不要自动选 Docker 容器 IP，也不要从 Host / X-Forwarded-Host 推导。
+若 Agent 同时管理本地 Proxy 部署，可以协助把已验证值写入部署目录 `.env` 的
+`PROXY_EXTERNAL_GATEWAY_URL`，保留原有能力开关后重启 Proxy；若服务在其他机器且
+无管理权限，只提示部署管理员配置，不修改远端环境。该变量独立于 Panel 展示用的
+`MEMORY_HUB_PROXY_PUBLIC_URL`。健康检查不替代下方模型协议验证和初始化后的主动查询。
+
 **根据选中 agent 的协议**，构造对应的 curl 探测请求：
 
 ```bash
@@ -124,12 +138,17 @@ curl -s -w "\n%{http_code}" -X POST "${PROXY_HOST}/workbuddy/${INSTANCE_ID}/v1/c
 **判断结果**：
 - HTTP 连接失败 (000) → 告诉用户 proxy 不可达，让用户检查地址/端口/服务状态，**不要继续**
 - 2xx → 完全正常，继续
-- 4xx → proxy 可达（可能是 session-init 返回的 form 或 auth 问题），**展示响应体给用户参考**，继续
-- 5xx → proxy 有问题，**展示完整错误响应**，询问用户是否继续
+- 4xx → 网络可达但业务验证未通过，先排查鉴权或参数，只展示脱敏摘要
+- 5xx → 业务验证未通过，只展示状态码和脱敏摘要，修复后重试
 
-### Step 6: Header 预选（仅 Hermes / OpenClaw）
+### Step 6: 会话初始化方式
 
-如果选的是 hermes 或 openclaw，需要额外收集 header 预选信息。这些 agent 不支持交互式 form，必须在配置中预填 team/agent/task ID。
+OpenClaw 推荐按 `agents/openclaw/README.md` 安装和授权 Session Bridge（最低已验证
+版本 2026.8.2），使用 Web Init 选择 Team/Agent，Task 可选。不生成静态 conversation ID，
+不替用户自动安装或授权插件。完成连接后让用户在原会话重发请求。
+
+Hermes 保留静态 header 预选。OpenClaw 仅在用户明确选择兼容/高级路径时收集
+Team/Agent 和可选 Task；旧静态会话模式仍需要自行管理 conversation ID。
 
 **优先方案：通过面板 API 拉取列表让用户选择**
 
@@ -168,9 +187,9 @@ curl -s -X POST "${PANEL_URL}/api/v1/meta/task/list" \
 # 第一个选项始终是"本次不关联任务 (no-task)"
 ```
 
-如果面板不可达或用户不想提供，让用户手动填写 team_id / agent_id / task_id。
+如果面板不可达或用户不想提供，让用户手动填写 team_id / agent_id，task_id 可省略。
 
-另外还需要一个 **x-conversation-id**（可自动生成一个如 `conv-20260820-xxxx`）。
+仅无 Bridge 的静态兼容模式需要 **x-conversation-id**（如 `conv-20260820-xxxx`）。
 
 ### Step 7: 确认配置文件路径
 
@@ -190,7 +209,7 @@ bash agents/skills/setup-proxy/setup-proxy.sh --non-interactive \
   --config-path "${CONFIG_PATH}"
 ```
 
-如果是 Hermes/OpenClaw，追加：
+如果是 Hermes 或明确选择 OpenClaw 静态兼容模式，追加（Task 可省略）：
 ```bash
   --team-id "${TEAM_ID}" \
   --agent-id "${AGENT_ID}" \
@@ -198,16 +217,16 @@ bash agents/skills/setup-proxy/setup-proxy.sh --non-interactive \
   --conv-id "${CONVERSATION_ID}"
 ```
 
+OpenClaw 默认不传 `--conv-id` 或资产 header；脚本生成 `/openclaw/<instance>/v1`
+provider 路径。显式 `--conv-id` 保留旧静态模式，也可用 `--openclaw-static-headers`。
+Bridge 搭配高级静态 Team/Agent 预选时，可传 `--team-id` / `--agent-id`，不传 `--conv-id`。
+
 **检查脚本退出码**：0 = 成功，非 0 = 失败（展示输出给用户）。
 
 ### Step 9: 验证写入结果
 
-写入后读取配置文件确认内容正确：
-```bash
-cat <config_path>
-```
-
-展示关键字段给用户确认。
+写入后只提取非敏感字段确认路径、provider、模型和 header 名称；不要 `cat` 完整
+私有配置，不展示 user key、Authorization 或有效 token。
 
 ### Step 9.5: 提醒用户切换模型
 
@@ -244,7 +263,7 @@ PANEL_URL="${PANEL_URL}" TDAI_SERVICE_ID="${INSTANCE_ID}" TDAI_USER_KEY="${USER_
 ## 错误处理原则
 
 1. **连接失败**：明确告诉用户哪一步失败了，给出排查建议（检查服务状态、端口、网络）
-2. **4xx 响应**：proxy 可达但业务错误，展示完整响应体，帮用户判断是 key 错误、模型不支持还是其他问题
+2. **4xx 响应**：proxy 可达但业务错误，用状态码和脱敏摘要排查 key 或模型问题
 3. **文件权限**：写入前检查目录是否存在/可写，dsh 需要 chmod
 4. **不要猜测**：如果信息不足或状态不明，询问用户而不是假设
 
@@ -255,4 +274,5 @@ PANEL_URL="${PANEL_URL}" TDAI_SERVICE_ID="${INSTANCE_ID}" TDAI_USER_KEY="${USER_
 - CC 的所有模型环境变量（HAIKU/SONNET/OPUS/SUBAGENT）都会统一设置为用户选的模型
 - Codex 首次对话前必须切 Plan 模式（Shift+Tab），这是客户端限制
 - dsh 的 URL 不带 `/v1`，这是客户端硬编码的
-- Hermes/OpenClaw 的 x-conversation-id 每次新对话需要手动更换
+- Hermes 及未使用 Bridge 的 OpenClaw 静态模式，每次新对话需手动更换 x-conversation-id
+- OpenClaw Bridge 动态管理原生会话身份；切换绑定请创建新会话，不使用 mem:session-reset

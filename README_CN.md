@@ -53,7 +53,7 @@ $EDITOR .env       # 填入两组 LLM 参数（memory 组 + proxy 组）
 
 ## 所有 Agent 共享同一个 Memory Server
 
-一套 Proxy，协议不变，零代码接入——把 Agent 的 base URL 指向 Proxy 即可，不需要插件、Hook 或 MCP Server。
+一套 Proxy，协议不变，零代码接入——把 Agent 的 base URL 指向 Proxy。大多数客户端不需要插件、Hook 或 MCP Server；OpenClaw 推荐使用轻量 [Session Bridge + Web Init](./agents/openclaw/README.md) 管理原生会话身份，仍兼容静态 header 配置。
 
 <table>
 <tr>

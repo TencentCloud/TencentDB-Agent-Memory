@@ -109,6 +109,62 @@ proxy 接到用户请求后转发到这组端点。
 
 参数缺失时脚本会**在启动前一次性列出所有缺失项**并 `exit 1`，不会跑到一半才失败。
 
+## Agent 主动工具地址
+
+### 浏览器会话初始化地址
+
+反向代理、公网域名或 TLS termination 场景应显式设置
+`PROXY_SESSION_INIT_PUBLIC_BASE_URL=https://memory.example.com`，部署脚本将其写入
+`sessionInit.webPublicBaseUrl`。该地址供**浏览器打开 Web Init**，与下面供
+**Agent 执行主动工具**的 `PROXY_EXTERNAL_GATEWAY_URL` 独立，可以不同。
+如代理挂载在子路径，可填写 `https://memory.example.com/proxy` 并转发其下的
+`/session-init/**` 到 Proxy。只允许 HTTP(S)，拒绝凭据、查询串和片段，末尾 `/` 会去除。
+
+未配置时保留直接访问的 request origin，便于本地部署；不要将此 fallback 当成
+外部地址自动发现。显式配置不会被 Host、X-Forwarded-Host 或 X-Forwarded-Proto 覆盖。
+
+### Agent 工具地址
+
+`PROXY_EXTERNAL_GATEWAY_URL` 是**从 Agent 实际执行主动工具的环境中可以访问的
+MemoryProxy 基础地址**。非空时，`start-proxy.sh` 将其写入生成配置的
+`injection.externalGatewayUrl`，供主动 Memory / Skill 工具使用；未设置或留空时
+不生成该字段，保留现有 fallback。此变量与 `MEMORY_HUB_PROXY_PUBLIC_URL`
+（仅供 Panel 展示）独立，不从 Host、X-Forwarded-Host 或 Docker 容器 IP 推导。
+
+| Agent 实际工具环境 | 候选值示例 | 验证位置 |
+|---|---|---|
+| Proxy 所在宿主机 | `http://localhost:8096` | 宿主机的 Agent Bash |
+| 同一局域网另一台机器 | `http://192.168.1.100:8096` | 另一台机器的 Agent Bash |
+| 通过域名访问 | `https://memory.example.com` | Agent 实际运行环境 |
+| 与 Proxy 在同一 Docker 网络 | `http://proxy:8096` | 执行工具的容器内部 |
+
+这些只是候选值，不是自动默认值。端口映射变化时使用实际宿主机端口；同 Docker
+网络使用容器监听端口。不要附加 `/openclaw/default/v1` 等客户端路径，也不要
+包含凭据、查询串或片段。反向代理需转发 `/memory-bridge/**` 和 `/skill-bridge/**`。
+
+先从实际工具环境检查候选地址（部署机能访问不代表 Agent 能访问）：
+
+```bash
+PROXY_CANDIDATE=http://localhost:8096  # 按实际拓扑替换
+curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+  "${PROXY_CANDIDATE}/health"
+```
+
+确认是预期 Proxy 的健康响应后，在有管理权限的部署目录 `.env` 中设置
+`PROXY_EXTERNAL_GATEWAY_URL`，再运行 `./start-proxy.sh` 重新生成配置并启动。
+已有完整流水线应保留 `PROXY_FULL_STACK=1` 或原有能力开关。健康检查只证明网络
+连通，还需在已绑定会话中调用主动 Memory 查询，确认身份和业务路径正常。
+远端 Proxy 无管理权限时，只向部署管理员提供已验证的候选值，不擅自修改远端环境。
+
+配置生成与兼容性测试（不需要真实 Docker）：
+
+```bash
+npm --prefix ../../MemoryProxy test -- src/config/__tests__/deployment.test.ts
+```
+
+OpenClaw 推荐安装 [Session Bridge](../../agents/openclaw/README.md)，使用 Web Init
+选择 Team / Agent 和可选 Task；旧静态 header 预选仍可用。
+
 ## 内部凭据（生产环境必看）
 
 三件套之间用 `MEMORY_CORE_GATEWAY_API_KEY` 互相认证，首次启动还会通过

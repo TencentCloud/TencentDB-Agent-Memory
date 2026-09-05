@@ -547,10 +547,16 @@ export class MetadataClient {
       try {
         detail = await resp.text();
       } catch { /* ignore */ }
+      // Kernel 的错误正文不受 Proxy 控制，认证失败或唯一键冲突等响应可能回显
+      // user key、token 或其他 credential。这里只保留长度用于判断“空响应/有响应”，
+      // 诊断依赖 path、status、serviceId 和各 credential 的长度，绝不记录 URL、
+      // credential 前缀或正文（endpoint URL 理论上也可能含部署侧 userinfo）。
       console.log(
-        `[wb-debug] metadata-client req path=${path} status=${resp.status} url=${url} serviceId=${this.serviceId} userKey.len=${this.userKey?.length ?? 0} userKey.prefix=${(this.userKey ?? "").slice(0, 20)} serviceToken.len=${this.serviceToken?.length ?? 0} body.len=${detail.length} body.head=${detail.slice(0, 300)}`,
+        `[wb-debug] metadata-client req path=${path} status=${resp.status} serviceId=${this.serviceId} userKey.len=${this.userKey?.length ?? 0} serviceToken.len=${this.serviceToken?.length ?? 0} body.len=${detail.length}`,
       );
-      throw new Error(`${TAG} ${path} HTTP ${resp.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
+      // Web Init 会把此 Error.message 包装成 metadata_unavailable 返回给浏览器；
+      // 因此异常文本也只能包含固定诊断字段，不能把 raw response detail 带出本层。
+      throw new Error(`${TAG} ${path} HTTP ${resp.status}`);
     }
 
     const env = (await resp.json()) as CoreEnvelope<T>;

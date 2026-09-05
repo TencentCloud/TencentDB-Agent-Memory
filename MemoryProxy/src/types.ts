@@ -194,6 +194,8 @@ export interface LangfuseConfig {
 /** Session initialization configuration. */
 export interface SessionInitConfig {
   enabled: boolean;
+  /** 浏览器可访问的 Web Init 基础地址；与 Agent 主动工具地址独立，未配置时使用直接访问 origin。 */
+  webPublicBaseUrl?: string;
   /** Max retries before degrading (bypass session init on next request). */
   maxRetries: number;
   /**
@@ -577,23 +579,24 @@ export interface InjectionConfig {
   enabled: boolean;
   injectors: string[];  // List of injector names to enable (e.g. ["skill", "knowledge", "tdai-memory"])
   /**
-   * 对外统一 gateway 地址。LLM 生成的 curl 示例（<skill_tools> /
-   * <tdai_memory_tools> 段里嵌的路径）都以这个 URL 为 base。
+   * 从 Agent 实际执行主动工具的环境中可以访问的 MemoryProxy 基础地址。
+   * LLM 生成的 curl 示例（<skill_tools> / <tdai_memory_tools>）以此为 base。
    *
    * ⚠️ 多节点部署必配：未配时每个 pod 会用自身 `http://<hostIp>:<port>`
    * 兜底，pods 互相覆盖 COS 里同一份 hook cache → md5 震荡 → 上游 Anthropic
    * KV cache 每次 miss（费钱 + 首 token 慢）。
    *
-   * 只需填 gateway 对外域名，**不带端口**（gateway 内部路由到 proxy 的端口
-   * 是 gateway ops 侧的事，跟这里无关）。示例：
+   * 可以是带端口的直连地址或反向代理域名，不带客户端 API 路径、凭据、查询串
+   * 或片段。部署脚本通过 PROXY_EXTERNAL_GATEWAY_URL 配置。示例：
    *   externalGatewayUrl: "https://gateway.example.com"
    *
-   * gateway 侧必须把下面两个前缀原样透传到 proxy pod：
+   * 使用反向代理时，必须把下面两个前缀透传到 Proxy：
    *   `/skill-bridge/**`   → proxy /skill-bridge/**
    *   `/memory-bridge/**`  → proxy /memory-bridge/**
    *
    * 未配置时 fallback 到 `http://<local hostIp>:<config.server.port>`（仅
-   * 单节点 / 本地开发场景可用），启动时 warn 一次。
+   * 单节点 / 本地开发的兼容路径），启动时 warn 一次；Docker 私网地址不保证
+   * 能从宿主机或远端 Agent 访问，跨网络环境应显式配置并验证。
    */
   externalGatewayUrl?: string;
   /**
@@ -830,6 +833,7 @@ export interface RawYamlConfig {
   };
   sessionInit?: {
     enabled?: boolean;
+    webPublicBaseUrl?: string;
     maxRetries?: number;
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;

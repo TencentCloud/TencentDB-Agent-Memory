@@ -262,7 +262,7 @@ Proxy 目前支持 8 类 AI Agent 客户端。每个 agent 的**完整接入配�
 | **DeepSeek Harness (dsh)** | `~/.dsh/settings.yaml` + `.credentials.yaml` | [`agents/dsh/`](./agents/dsh/) |
 | **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
 | **Hermes** | `~/.hermes/config.yaml` + Header 预选 | [`agents/hermes/`](./agents/hermes/) |
-| **OpenClaw** | `~/.openclaw/openclaw.json` + Header 预选 | [`agents/openclaw/`](./agents/openclaw/) |
+| **OpenClaw** | Session Bridge + Web Init（兼容 Header 预选） | [`agents/openclaw/`](./agents/openclaw/) |
 | **其他平台** | Header 预选（通用） | [`agents/README.md`](./agents/README.md) |
 
 Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/agent/task
@@ -405,31 +405,19 @@ pipeline 时才有意义。
 > YAML 模板加上 `assetReflection` 段,要么用 `PROXY_CONFIG_DIR` 指向你
 > 自己维护的 `config.yaml` 目录,绕开自动生成。
 
-## 关于 `x-task-id` 的已知限制
+## OpenClaw 会话初始化
 
-> ⚠️ **当前版本限制**：`x-task-id` 在 Hermes / OpenClaw 场景下为**必填项**。
->
-> Proxy 的 header 预选机制要求 `x-team-id` + `x-agent-id` + `x-task-id` 三者齐全才能完成 session 直接注册。缺少 `x-task-id` 时，Proxy 会尝试弹出交互式表单让用户选择 task，但 Hermes / OpenClaw 无法响应交互式表单，最终导致 session bypass（记忆注入和对话回流均不生效）。
->
-> 这带来的不便：
->
-> 1. 用户需要预先在面板上创建 Task 并获取 `task_id`，增加了接入门槛。
-> 2. 切换不同任务时需要手动修改配置文件中的 `x-task-id`。
->
-> 我们将在下一个版本中支持 `x-task-id` 可选：当 header 中未指定 task 时，Proxy 自动选择该 agent 下的默认 task 或跳过 task 绑定，直接完成 session 注册。
+OpenClaw 现在可使用 [Session Bridge + Web Session Init](./agents/openclaw/README.md)：
+原生 session ID 动态映射为 `x-conversation-id`，浏览器选择 Team / Agent，
+Task 可选。合法静态 Team/Agent 预选仍兼容，Task 省略时不关联任务。
 
-## 关于 `x-conversation-id` 的已知限制
+Hermes 和未安装 Bridge 的 OpenClaw 静态配置仍需为每次新对话更换
+`x-conversation-id`；复用时会共享同一 session binding、记忆注入和对话回流。
+其他客户端参见各自的 [接入指南](./agents/README.md)。
 
-> ⚠️ **当前版本限制**：Hermes 和 OpenClaw 需要在配置文件中静态指定 `x-conversation-id`。
-> 这与 Claude Code / CodeBuddy 不同（它们由 SDK 自动管理 session ID）。
->
-> 当前限制：
->
-> 1. **同一个 conversation ID 的所有请求共享同一个 session** —— 记忆注入、对话回流都绑定到这个 ID。
-> 2. **每次开启新对话时需要手动更换 conversation ID**，否则会继续沿用上次的 session 状态。
-> 3. **部分客户端的 tool call 后续请求可能不携带 extra headers**，导致那些轮次跳过记忆注入和对话回流。
->
-> 我们将在下一个版本中优化 conversation ID 的使用体验。
+主动 Memory / Skill 工具地址必须从 Agent 实际工具环境可达。部署端使用
+`PROXY_EXTERNAL_GATEWAY_URL` 写入 `injection.externalGatewayUrl`；未配置保留
+现有 fallback。拓扑示例与验证步骤见 [部署文档](./deploy/global-images/README.md#agent-主动工具地址)。
 
 ## 停止 / 清理
 

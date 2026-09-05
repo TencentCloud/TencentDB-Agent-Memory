@@ -6,6 +6,23 @@ import type { CostGuardConfig, ProxyConfig, RawYamlConfig } from "./types.js";
 
 const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
+/** 校验浏览器公开地址；错误只含配置名，不回显可能携带凭据的输入。 */
+export function normalizeWebPublicBaseUrl(value: unknown): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  const invalid = () => new Error("sessionInit.webPublicBaseUrl 必须是无凭据、查询串或片段的 HTTP(S) 基础地址");
+  if (typeof value !== "string" || !/^https?:\/\/[^/]/i.test(value) || /[\s\\?#]/u.test(value)) {
+    throw invalid();
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw invalid();
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw invalid();
+  return url.href.replace(/\/+$/, "");
+}
+
 export const DEFAULT_CONFIG: ProxyConfig = {
   server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 600_000 },
   upstream: { url: DEFAULT_UPSTREAM, apiKey: "", agents: {} },
@@ -402,6 +419,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     },
   sessionInit: {
     enabled: yaml.sessionInit?.enabled ?? DEFAULT_CONFIG.sessionInit.enabled,
+    webPublicBaseUrl: normalizeWebPublicBaseUrl(yaml.sessionInit?.webPublicBaseUrl),
     maxRetries: yaml.sessionInit?.maxRetries ?? DEFAULT_CONFIG.sessionInit.maxRetries,
     injectAgentContext: yaml.sessionInit?.injectAgentContext ?? DEFAULT_CONFIG.sessionInit.injectAgentContext,
     injectTaskContext: yaml.sessionInit?.injectTaskContext ?? DEFAULT_CONFIG.sessionInit.injectTaskContext,

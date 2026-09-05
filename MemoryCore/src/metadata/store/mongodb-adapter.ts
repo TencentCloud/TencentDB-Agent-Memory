@@ -281,7 +281,7 @@ export class MongoMetadataStore implements IMetadataStore {
         console.warn(`[mongodb-adapter] ensureIndex skipped (index exists with different options) ${specStr}: ${msg}`);
       } else if (code === 11000) {
         // 存量数据违反 unique 约束，索引创建失败，该字段的唯一性校验无法生效
-        console.warn(`[mongodb-adapter] ensureIndex skipped (duplicate data violates unique constraint) ${specStr}: ${msg}`);
+        console.warn(`[mongodb-adapter] ensureIndex skipped (duplicate data violates unique constraint, code=11000) ${specStr}`);
       } else {
         // 非预期错误（网络超时、权限不足等），需要人工排查
         console.warn(`[mongodb-adapter] ensureIndex failed (unexpected error, code=${code}) ${specStr}: ${msg}`);

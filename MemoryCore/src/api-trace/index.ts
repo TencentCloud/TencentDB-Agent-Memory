@@ -28,6 +28,8 @@ export {
   setStdoutWriterForTests,
 } from "./api-trace-stdout.js";
 export {
+  isApiTraceSensitiveKey,
+  summarizeApiError,
   sanitizeApiPayload,
   serializeForApiLog,
   API_TRACE_SENSITIVE_KEYS,

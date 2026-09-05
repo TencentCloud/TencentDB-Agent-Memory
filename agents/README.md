@@ -19,7 +19,9 @@ bash agents/setup-proxy.sh
 5. 写入配置文件（自动备份原文件为 `.bak`）
 6. 可选：导入本地 skill/对话到团队记忆
 
-支持所有 7 个 Agent，每次配一个，多次运行配置不同 Agent。
+支持所有 7 个 Agent，每次配一个，多次运行配置不同 Agent。OpenClaw 默认生成
+Session Bridge + Web Init 的 provider 配置；插件安装和授权按 [OpenClaw 指南](./openclaw/README.md)
+单独完成。需要旧模式时使用 `--openclaw-static-headers`；显式 `--conv-id` 也保留旧行为。
 
 ### 方式二：通过 AI Agent 辅助配置（Skill）
 
@@ -48,7 +50,7 @@ cp -r agents ~/agents
 请阅读 ~/agents/skills/setup-proxy/SKILL.md，帮我配置 Claude Code 接入 Memory Proxy。我的 proxy 地址是 http://localhost:8096，实例 ID 是 default。
 ```
 
-**配置 Hermes/OpenClaw（需要 header 预选）：**
+**配置 Hermes（静态 header 预选）：**
 
 ```
 请阅读 ~/agents/skills/setup-proxy/SKILL.md，帮我配置 Hermes 接入 Memory Proxy。面板地址是 http://localhost:8125，帮我从面板拉取 team/agent 列表来选择。
@@ -82,7 +84,7 @@ cp -r agents ~/agents
 | [WorkBuddy](./workbuddy/) | Responses (Desktop) / Chat (Web) | 交互式 Form | `AskUserQuestion` | ✅ (max 4) | ✅ | ✅ (静默透传) |
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
 | [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
-| [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
+| [OpenClaw](./openclaw/) | OpenAI Chat Completions | Session Bridge + Web Init（兼容 Header 预选） | N/A | N/A | N/A | ❌（符合条件时返回 Web Init） |
 
 ---
 
@@ -121,7 +123,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | WorkBuddy | `session-id` | `body.client_metadata.session_id` |
 | dsh | `x-deepseek-harness-session-id` | `x-session-id` |
 | Hermes | `x-conversation-id` | — (用户静态配置) |
-| OpenClaw | `x-conversation-id` | — (用户静态配置) |
+| OpenClaw | `x-conversation-id` | Session Bridge 从原生 sessionId 动态生成；兼容静态配置 |
 
 ---
 
@@ -154,22 +156,31 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 ## Header 预选（通用，所有 agent 均可使用）
 
 除了交互式 Form 之外，**所有 agent** 都支持通过 HTTP Header 直接完成 session 注册，跳过表单交互。适用于：
-- 无法响应 form（如 Hermes / OpenClaw）
+- 无法响应 form（如 Hermes）；OpenClaw 推荐 Web Init，也兼容静态预选
 - 想跳过表单加速首帧（如 CI/CD 自动化场景）
 - 第三方平台 / 自行开发的 Agent
 
-### 必须携带的 Header
+### 预选 Header
 
 | Header | 说明 |
 |--------|------|
 | `Authorization: Bearer <user_key>` | 业务用户的 API Key（从面板获取） |
 | `x-team-id` | 团队 ID |
 | `x-agent-id` | Agent ID |
-| `x-task-id` | 任务 ID（当前版本必填） |
-| `x-conversation-id` | 会话标识，由客户端自行生成和管理 |
+| `x-task-id` | 任务 ID（可选，省略时不关联 Task） |
+| `x-conversation-id` | 会话标识；OpenClaw 推荐由 Session Bridge 管理 |
 
-以上 header 齐全 → Proxy 直接完成 session 注册 + 注入资产，不弹 form。  
-任一缺失 → 走交互式 form（如果客户端支持）或 session bypass（不支持 form 时）。
+合法 Team/Agent 和会话身份齐全 → Proxy 直接完成 session 注册 + 注入资产，Task 可选。
+预选不完整或无效时，OpenClaw 在符合条件时返回 Web Init；其他客户端保留原有
+交互式 form 或 bypass 行为。
+
+### 主动 Memory / Skill 工具的网络地址
+
+先从 Agent 实际执行 Bash/curl 的环境验证候选 Proxy 地址，验证成功后才将其作为
+`externalGatewayUrl` 候选。不要根据 Docker 容器 IP、浏览器地址或部署机连通性猜测。
+部署端通过 `PROXY_EXTERNAL_GATEWAY_URL` 写入 `injection.externalGatewayUrl`；
+脚本只配置客户端，不改部署环境。没有远端管理权限时提示部署管理员配置。
+拓扑示例和验证命令见 [部署文档](../deploy/global-images/README.md#agent-主动工具地址)。
 
 ### 其他平台接入
 
@@ -189,7 +200,7 @@ http://<proxy-host>:<port>/<agent-source>/<spaceId>
 1. **抓包** — 用 mitmproxy 抓 3~5 种典型请求 (main / aux / title-gen)，存入 `docs/<agent>-recon/`
 2. **识别协议** — 确定 wire protocol (Anthropic / Chat / Responses)
 3. **确定 Session ID 来源** — 找 header 或 body 里的唯一会话标识
-4. **选择 Session Init 策略** — 有 tool → 交互式 form；无 tool → header 预选 / headless bypass
+4. **选择 Session Init 策略** — 有 tool → 交互式 form；无 tool → 按客户端能力选择 Web Init / header 预选 / headless bypass（当前仅 OpenClaw 启用 Web Init）
 5. **分类辅助请求** — 识别 title-gen / compact / fork 等不需要走全链路的请求
 6. **实现 Handler / 复用** — 协议相同的可共享 handler (如 dsh 复用 CB 的 handleChatCompletions)
 7. **注入 Profile** — 按客户端 system prompt 格式定义注入模板

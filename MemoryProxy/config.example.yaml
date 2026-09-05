@@ -488,9 +488,10 @@ creditPricing:
 injection:
   enabled: true             # 是否启用上下文注入（关闭后下方 injectors 列表全部失效）
   injectors: ["skill", "knowledge", "tdai-memory"]   # 要启用的注入器列表
-  # 对外统一 gateway 地址 —— LLM 生成的 <skill_tools> / <tdai_memory_tools>
-  # 段里嵌的 curl URL 都以这个为 base。只填 gateway 域名，**不带端口**
-  # （gateway 内部路由到 proxy pod 的端口由 ops 在 gateway 侧配，跟这里无关）。
+  # 从 Agent 实际执行主动工具的环境中可以访问的 MemoryProxy 基础地址。
+  # <skill_tools> / <tdai_memory_tools> 的 curl URL 以此为 base；可使用带端口的
+  # 直连地址或域名，不带客户端路径、凭据、查询串或片段，先从工具环境验证。
+  # deploy/global-images/start-proxy.sh 用 PROXY_EXTERNAL_GATEWAY_URL 生成此字段。
   #
   # ⚠️ 多节点部署必配。未配时每个 pod 用自己的 host:port 兜底 → COS 里同一份
   # hook cache 被 pods 互相覆盖 → 上游 Anthropic KV cache 每次 miss（费钱+慢）。
@@ -550,6 +551,9 @@ extraction:
 # team/agent/task 列表来自内核 MetadataClient（复用 skill 段配置）。
 # 用户身份由 auth/verify 一跳确定；未通过鉴权/无法识别用户 → 直接 bypass session init。
 sessionInit:
+  # 浏览器打开 Web Init 的公开地址，反向代理/TLS termination 部署应显式配置。
+  # 独立于 injection.externalGatewayUrl；不含凭据、查询串、片段，未配置保留直接访问 origin。
+  # webPublicBaseUrl: "https://memory.example.com"
   enabled: true             # 是否启用会话初始化
   maxRetries: 3             # 表单解析失败最大重试次数，超出后 bypass（跳过 session init）
   # 历史注释: 曾经有 keepInitArtifacts 开关用来在 session_init 完成后剥离

@@ -696,7 +696,7 @@ export async function handleChatCompletions(
   // header,title-gen 靠 body 特征三合一。这类请求**不能**走 session-init form,
   // 也不能触发 mem 拦截 / L0 写入 / skill 提取 —— 应该直接透传上游。
   // codebuddy / claude-code 客户端 adapter classifyRequest 恒返 "main",行为无变。
-  const { resolveAgentAdapter } = await import("./agent-adapters/index.js");
+  const { resolveAgentAdapter, supportsWebSessionInit } = await import("./agent-adapters/index.js");
   const _adapter = resolveAgentAdapter(agentSource);
   const _requestKind = _adapter.classifyRequest(body as Record<string, unknown>, c.req.path, lcHeaders);
   const isAuxiliary = _requestKind === "auxiliary";
@@ -732,9 +732,9 @@ export async function handleChatCompletions(
   }
 
   // ── mem:session-reset pre-hook ──
-  // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
-  // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
-  // 直接返回"不支持"文案。
+  // hermes 只支持 header 预选；OpenClaw 虽可为新 session 使用 Web Init，但 reset
+  // 尚未接入“删除旧 binding → 重新签发 challenge”；dsh headless 则没有提问工具。
+  // 三者都在 pre-hook 明确拒绝，避免执行不完整的 reset 生命周期。
   const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
   const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
   if (config.memCommand?.enabled && !isAuxiliary && _noFormAgent) {
@@ -742,10 +742,15 @@ export async function handleChatCompletions(
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { buildMemResponse } = await import("./mem-command/response-builder.js");
       console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless}`);
-      const msg = _headerOnlyAgents.has(agentSource)
-        ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
-          + `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n`
-          + `请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。`
+      const msg = agentSource === "openclaw"
+        ? "⚠️ mem:session-reset 当前不支持 openclaw 客户端。\n\n"
+          + "该命令不会清除现有 session binding，也不会自动重新进入 Web Session Init。\n"
+          + "如需新的 Team / Agent / Task binding，请创建新的 OpenClaw native session，再通过 Web Session Init 完成连接。\n"
+          + "兼容的 static-header 模式仍可通过 x-team-id / x-agent-id / x-task-id 指定身份。"
+        : agentSource === "hermes"
+          ? "⚠️ mem:session-reset 不支持 hermes 客户端。\n\n"
+            + "hermes 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n"
+            + "请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。"
         : "⚠️ mem:session-reset 不支持 dsh headless 模式。\n\n"
           + "dsh 客户端在 headless / no-preset 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
           + "请在带 ask_user_question preset 的 dsh 环境下使用。";
@@ -869,6 +874,54 @@ export async function handleChatCompletions(
       const needsPrewarm =
         recovered?.__recoverySource === "l2b" ||
         recovered?.__recoverySource === "history-scan";
+
+      // 客户端接入层决定是否支持 Web Init；静态 header 不完整或 session
+      // 仍在表单中间态时，下发浏览器 challenge，不改动 durable session 数据。
+      // BindingRepo 是完成时的持久化前提；包括启动时的文件型 fallback。
+      // 持久化不可用时保持原有 form 流程。
+      const canUseWebInit =
+        supportsWebSessionInit(agentSource) && Boolean(store.getBindingRepo());
+      const issueWebInit = async (): Promise<Response | null> => {
+        if (!canUseWebInit) return null;
+        const { getWebSessionInitService } = await import("./session/web-init.js");
+        const issued = getWebSessionInitService().issue({
+          compositeKey,
+          sessionKey,
+          identity,
+          userKey: kernelUserKey || undefined,
+          metadataClient,
+          store,
+        });
+        if (issued.ok === false) return null;
+        const { buildMemResponse } = await import("./mem-command/response-builder.js");
+        const publicBase = config.sessionInit.webPublicBaseUrl ?? new URL(c.req.url).origin;
+        const url = `${publicBase}/session-init/${issued.value.token}`;
+        console.log(`[session-init:web] session=${compositeKey} challenge issued`);
+        const text = [
+          "需要完成记忆会话初始化。",
+          "请打开以下链接，选择团队、Agent 和可选任务：",
+          url,
+          "连接完成后，请重新发送刚才的请求。",
+        ].join("\n\n");
+        const response = buildMemResponse(text, {
+          protocol: "openai",
+          stream: isStream,
+          requestId: `web-session-init-${Date.now()}`,
+        });
+        response.headers.set("x-memory-session-init-url", url);
+        response.headers.set("cache-control", "no-store");
+        return response;
+      };
+
+      const hasCompletePreset = Boolean(presetIdentity?.teamId && presetIdentity.agentId);
+      if (
+        canUseWebInit &&
+        (!hasCompletePreset || (recovered && !isTerminalState))
+      ) {
+        const webResponse = await issueWebInit();
+        if (webResponse) return webResponse;
+      }
+
       if (recovered && isTerminalState) {
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system message carries agent/task context again.
@@ -912,11 +965,19 @@ export async function handleChatCompletions(
           // 无 tools 定义（极老客户端或 non-CB agent），保守走 string
           questionsAsArray = false;
         }
+        // 符合条件的客户端遇到无效静态预选时应回到 Web Init，
+        // 即使部署配置要求其他客户端在 header 不匹配时 bypass。
+        const effectiveSessionInitConfig = canUseWebInit && config.sessionInit.headerAutoSelect
+          ? {
+              ...config.sessionInit,
+              headerAutoSelect: { ...config.sessionInit.headerAutoSelect, onMismatch: "form" as const },
+            }
+          : config.sessionInit;
         initResult = await handleSessionInit(
           sessionKey,
           userId || null,
           body.messages as Array<Record<string, unknown>> ?? [],
-          config.sessionInit,
+          effectiveSessionInitConfig,
           store,
           { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray },
           agentSource,
@@ -929,6 +990,10 @@ export async function handleChatCompletions(
 
       // Case 1: Fake form returned → must not forward
       if (initResult.intercepted && initResult.response) {
+        if (canUseWebInit) {
+          const webResponse = await issueWebInit();
+          if (webResponse) return webResponse;
+        }
         return initResult.response;
       }
 

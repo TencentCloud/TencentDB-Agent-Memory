@@ -6,12 +6,12 @@
 export const USER_KEY_PREFIX = "sk-mem-";
 
 /**
- * 通用敏感串脱敏：前 8 字符 + 省略号，不暴露完整 secret。
+ * 通用敏感串脱敏：长值保留前 8 字符，短值完全隐藏，不暴露完整 secret。
  * 用于 api-trace 对 password / token / authorization 等泛化密钥的日志脱敏。
  */
 export function maskKeyValue(keyValue: string): string {
   if (!keyValue) return "";
-  if (keyValue.length <= 8) return `${keyValue}…`;
+  if (keyValue.length <= 8) return "[redacted]";
   return `${keyValue.slice(0, 8)}…`;
 }
 

@@ -52,7 +52,7 @@ See [**Data Migration Tool (v2 → v3)**](./MemoryCore/scripts/migrate-v2-to-v3/
 
 ## All Agents Share the Same Memory Server
 
-One Proxy, unchanged protocol, zero-code integration — point the Agent's base URL to the Proxy and it's done. No plugin, hook, or MCP server is required.
+One Proxy, unchanged protocol, zero-code integration — point the Agent's base URL to the Proxy. Most clients need no plugin, hook, or MCP server; OpenClaw recommends a lightweight [Session Bridge + Web Init](./agents/openclaw/README.md) for native session identity, while static-header configuration remains supported.
 
 <table>
 <tr>
