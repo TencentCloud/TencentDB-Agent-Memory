@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "../utils/checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -163,6 +164,18 @@ export class LocalMemoryCleaner {
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
+      }
+
+      // Adjust checkpoint counters after confirmed deletions to prevent
+      // drift where checkpoint totals exceed actual L0/L1 data.
+      // Done under checkpoint lock for safety.
+      if (removedL0 > 0 || removedL1 > 0) {
+        const cpManager = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+        await cpManager.adjustCounters(removedL0, removedL1);
+        this.opts.logger?.info(
+          `${TAG} [cleaner] Adjusted checkpoint counters after deletion: ` +
+          `removedL0=${removedL0}, removedL1=${removedL1}`,
+        );
       }
 
       // ── Post-delete: audit summary ──

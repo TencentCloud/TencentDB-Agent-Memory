@@ -431,6 +431,27 @@ export class CheckpointManager {
     );
   }
 
+  /**
+   * Adjust aggregate counters after confirmed deletions (L0/L1 cleanup).
+   *
+   * Applied under the file lock via mutate() to ensure atomicity and prevent
+   * race with concurrent capture/extraction.
+   *
+   * @param removedL0 number of L0 files/conversations removed
+   * @param removedL1 number of L1 memories removed
+   *
+   * Counters are clamped at 0; never negative. This fixes drift where
+   * checkpoint totals exceed actual persisted L0/L1 data after cleanup.
+   */
+  async adjustCounters(removedL0: number, removedL1: number): Promise<void> {
+    await this.mutate((cp) => {
+      cp.total_processed = Math.max(0, cp.total_processed - removedL0);
+      cp.l0_conversations_count = Math.max(0, cp.l0_conversations_count - removedL0);
+      cp.total_memories_extracted = Math.max(0, cp.total_memories_extracted - removedL1);
+      cp.memories_since_last_persona = Math.max(0, cp.memories_since_last_persona - removedL1);
+    });
+  }
+
   // ============================
   // Atomic capture (race-condition fix)
   // ============================
