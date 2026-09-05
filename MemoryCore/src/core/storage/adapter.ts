@@ -14,7 +14,7 @@
 import type { IStorageBackend, StorageObject, ListEntry, ListObjectsOptions, ListResult, PutObjectOptions } from "./types.js";
 
 class ScopedStorageBackend implements IStorageBackend {
-  readonly type: "local" | "cos";
+  readonly type: "local" | "cos" | "git";
   private readonly prefix: string;
 
   constructor(private readonly base: IStorageBackend, prefix: string) {

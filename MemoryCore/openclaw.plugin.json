@@ -125,6 +125,28 @@
           "caPemPath": { "type": "string", "description": "CA 证书 PEM 文件路径（HTTPS 连接时使用）" }
         }
       },
+      "fileStorageBackend": {
+        "type": "string",
+        "enum": ["auto", "local", "cos", "git"],
+        "default": "auto",
+        "description": "文件存储后端（L2/L3 Markdown、会话/记忆 JSONL 等）：auto（默认，保持现有 deployMode/COS 客户端推断行为不变）、local、cos，或实验性的 git（见 docs/rfc/git-storage-backend.md）"
+      },
+      "git": {
+        "type": "object",
+        "description": "Git 文件存储后端配置（仅 fileStorageBackend=git 时生效，实验特性）",
+        "properties": {
+          "localRootDir": { "type": "string", "default": "./data/git-storage", "description": "本地 clone 根目录，每个记忆空间一个子目录" },
+          "remoteUrl": { "type": "string", "description": "私有远端仓库地址（必填，https:// 或 git@ ssh）" },
+          "credentialRef": { "type": "string", "description": "凭据引用名（必填），由宿主环境解析为实际凭据；绝不接受明文 token" },
+          "authMethod": { "type": "string", "enum": ["http-token", "ssh"], "default": "http-token", "description": "认证方式" },
+          "sshKeyPath": { "type": "string", "description": "SSH 私钥路径（authMethod=ssh 时必填）" },
+          "batchWindowMs": { "type": "number", "default": 2000, "description": "写入合批的防抖窗口（毫秒），0 表示每次调用单独提交" },
+          "maxBatchDelayMs": { "type": "number", "default": 10000, "description": "持续高负载下防抖延迟的硬上限（毫秒）" },
+          "lockTtlMs": { "type": "number", "default": 30000, "description": "单写者分布式锁 TTL（毫秒）" },
+          "maxPushRetries": { "type": "number", "default": 5, "description": "push 被拒后的最大重放重试次数" },
+          "recoveryMode": { "type": "string", "enum": ["manual", "auto-wal-only"], "default": "manual", "description": "崩溃恢复策略：manual（默认，遇到 WAL 之外的未知改动拒绝自动 flush）或 auto-wal-only（丢弃未知改动，仅重放 WAL）" }
+        }
+      },
       "bm25": {
         "type": "object",
         "description": "BM25 稀疏向量编码设置（主要用于 tcvdb 后端）",
