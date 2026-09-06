@@ -138,8 +138,28 @@ export interface SkillConversationIdempotencyReceipt {
   created_at_ms: number;
 }
 
+export interface SkillTaskRegistrationReceipt {
+  version: 1;
+  task: SkillTaskEntry;
+  registered_at_ms: number;
+}
+
+export interface SkillConversationIdempotencyMarker {
+  version: 1;
+  key_hash: string;
+  payload_digest: string;
+  state: "current" | "archive";
+  archive_reason?: "tool_calls" | "bytes" | "compressed" | "oversize";
+  prebuffer_count?: number;
+  prebuffer_digest?: string;
+}
+
 export interface BufferedMessages {
   messages: Array<Record<string, unknown>>;
+  /** Legacy single recovery marker. New writes use idempotency_markers. */
+  idempotency?: SkillConversationIdempotencyMarker;
+  /** Recovery metadata kept outside messages so it never reaches extraction. */
+  idempotency_markers?: SkillConversationIdempotencyMarker[];
 }
 
 export interface SkillBufferStorageOptions {
@@ -193,6 +213,10 @@ export class SkillBufferStorage {
     return `${this.sessionDir(sess)}/idempotency-${keyHash}.json`;
   }
 
+  private taskRegistrationReceiptKey(sess: SessionKey, keyHash: string): string {
+    return `${this.sessionDir(sess)}/task-registration-${keyHash}.json`;
+  }
+
   async readIdempotencyReceipt(sess: SessionKey, keyHash: string): Promise<SkillConversationIdempotencyReceipt | null> {
     const raw = await this.storage.readFile(this.idempotencyReceiptKey(sess, keyHash));
     if (!raw) return null;
@@ -206,30 +230,73 @@ export class SkillBufferStorage {
     await this.storage.writeFile(this.idempotencyReceiptKey(sess, receipt.key_hash), JSON.stringify(receipt));
   }
 
+  async readTaskRegistrationReceipt(
+    sess: SessionKey,
+    keyHash: string,
+  ): Promise<SkillTaskRegistrationReceipt | null> {
+    const raw = await this.storage.readFile(this.taskRegistrationReceiptKey(sess, keyHash));
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as SkillTaskRegistrationReceipt;
+      return parsed?.version === 1 && parsed.task?.task_id ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async writeTaskRegistrationReceipt(
+    sess: SessionKey,
+    keyHash: string,
+    receipt: SkillTaskRegistrationReceipt,
+  ): Promise<void> {
+    await this.storage.writeFile(this.taskRegistrationReceiptKey(sess, keyHash), JSON.stringify(receipt));
+  }
+
   async findIdempotencyMarker(sess: SessionKey, keyHash: string): Promise<{
     kind: "current" | "archive";
     archiveKey?: string;
     archivedAtMs?: number;
     messages: Array<Record<string, unknown>>;
+    idempotency?: SkillConversationIdempotencyMarker;
   } | null> {
+    const exactArchiveKey = this.idempotentArchiveKey(sess, keyHash);
+    const exactArchive = await this.readArchive(exactArchiveKey);
+    const exactArchiveMarker = exactArchive ? findBufferMarker(exactArchive, keyHash) : undefined;
+    if (exactArchive && exactArchiveMarker) {
+      return {
+        kind: "archive",
+        archiveKey: exactArchiveKey,
+        messages: exactArchive.messages,
+        idempotency: exactArchiveMarker,
+      };
+    }
+
     const marker = (messages: Array<Record<string, unknown>>) => messages.some((message) => {
       const metadata = message.metadata;
       return !!metadata && typeof metadata === "object" && (metadata as Record<string, unknown>).tdai_idempotency_key_hash === keyHash;
     });
     const current = await this.readCurrent(sess);
+    const currentMarker = findBufferMarker(current, keyHash);
+    if (currentMarker) {
+      return { kind: "current", messages: current.messages, idempotency: currentMarker };
+    }
+    // Backward-compatible fallback for markers written by the first version of
+    // the idempotency implementation.
     if (marker(current.messages)) return { kind: "current", messages: current.messages };
 
     const entries = await this.storage.readdir(this.sessionDir(sess), ".jsonl");
     for (const entry of entries) {
       if (entry.key.endsWith("data-current.jsonl")) continue;
       const archived = await this.readArchive(entry.key);
-      if (archived && marker(archived.messages)) {
+      const archivedMarker = archived ? findBufferMarker(archived, keyHash) : undefined;
+      if (archived && (archivedMarker || marker(archived.messages))) {
         const match = entry.key.match(/data-(\d+)\.jsonl$/);
         return {
           kind: "archive",
           archiveKey: entry.key,
           archivedAtMs: match ? Number(match[1]) : undefined,
           messages: archived.messages,
+          ...(archivedMarker ? { idempotency: archivedMarker } : {}),
         };
       }
     }
@@ -251,8 +318,14 @@ export class SkillBufferStorage {
     if (!raw) return { messages: [] };
     try {
       const parsed = JSON.parse(raw) as BufferedMessages;
-      if (!parsed.messages) return { messages: [] };
-      return { messages: parsed.messages };
+      if (!Array.isArray(parsed.messages)) return { messages: [] };
+      return {
+        messages: parsed.messages,
+        ...(parsed.idempotency ? { idempotency: parsed.idempotency } : {}),
+        ...(Array.isArray(parsed.idempotency_markers)
+          ? { idempotency_markers: parsed.idempotency_markers }
+          : {}),
+      };
     } catch {
       // 损坏 → 视为空
       return { messages: [] };
@@ -400,4 +473,12 @@ export class SkillBufferStorage {
       tasks: [],
     };
   }
+}
+
+function findBufferMarker(
+  buffer: BufferedMessages,
+  keyHash: string,
+): SkillConversationIdempotencyMarker | undefined {
+  return buffer.idempotency_markers?.find((marker) => marker.key_hash === keyHash)
+    ?? (buffer.idempotency?.key_hash === keyHash ? buffer.idempotency : undefined);
 }

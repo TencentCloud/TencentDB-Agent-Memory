@@ -5,7 +5,7 @@
  * 再登记 task**"：
  *   ① 生成 archive_key / task_id / archived_at_ms
  *   ② 写 archive 文件（已存在 = 视为成功；这一步慢或失败都不会有 orphan task）
- *   ③ 抢 tasks-mutex → 读 `_tasks.json` → 追加 task → 写回 → 在同一临界区内 Redis 入队
+ *   ③ 抢 tasks-mutex → 登记 task + 持久化登记回执 → 在同一临界区内 Redis 入队
  *
  * 顺序变更历史：
  *   2026-07-20 —— 原顺序是 ①→②(tasksMutex 内写 _tasks.json + 入队)→③(写 archive)，
@@ -17,9 +17,8 @@
  * 新顺序下的失败态：
  *   - writeArchive 抛错 → handler 拿到异常，_tasks.json 无残留、Redis 无 agent；
  *     Client 重试完整走一遍即可（archive 幂等：同 archived_at_ms 会 skip 不覆盖）。
- *   - writeArchive 成功 → mutex 内 writeTasks / enqueueAgent 任一失败 → 只留下
- *     "孤儿 archive"（一个 4-数十 KB 的 jsonl，worker 看不到，靠 CoS 生命周期
- *     或后续 GC 清）。这比现状好得多：不再有丢任务风险。
+ *   - task/登记回执/入队任一步失败 → Client 重试时复用已落盘状态；已消费任务
+ *     由登记回执识别，不会被重复创建，仍在 `_tasks.json` 的任务会重新入队。
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -155,6 +154,8 @@ export class SkillTriggerService {
       reason: input.reason,
       max_iterations: input.maxIterations,
     };
+    let effectiveArchivedAtMs = archivedAtMs;
+    let effectiveArchiveKey = archiveKey;
 
     // [obs] 归档段五个关键 IO：writeArchive / mutex acquire / readTasks /
     // writeTasks / enqueueAgent。历史事故里就是 writeArchive 慢 10s 拖崩了
@@ -205,14 +206,26 @@ export class SkillTriggerService {
 
         const t0Read = Date.now();
         const doc = await this.buffer.readTasks(agent);
+        const storedRegistration = input.idempotencyKeyHash
+          ? await this.buffer.readTaskRegistrationReceipt(session, input.idempotencyKeyHash)
+          : null;
+        const registration = storedRegistration?.task.task_id === taskId &&
+          storedRegistration.task.archive_key === archiveKey
+          ? storedRegistration
+          : null;
         obsLogger.info("skill.trigger.read_tasks", {
           req_id: rid, task_id: taskId, instance_id: instanceId,
           dur_ms: Date.now() - t0Read,
           existing_tasks: doc.tasks.length,
         });
 
-        const alreadyRegistered = doc.tasks.some((task) => task.task_id === taskId);
-        if (!alreadyRegistered) {
+        const queuedTask = doc.tasks.find((task) => task.task_id === taskId);
+        const registeredTask = queuedTask ?? registration?.task;
+        if (registeredTask) {
+          effectiveArchivedAtMs = registeredTask.archived_at_ms;
+          effectiveArchiveKey = registeredTask.archive_key;
+        }
+        if (!queuedTask && !registration) {
           doc.tasks.push(entry);
           doc.updated_at_ms = archivedAtMs;
 
@@ -225,13 +238,26 @@ export class SkillTriggerService {
           });
         }
 
-        const t0Enq = Date.now();
-        const enqueued = await this.queue.enqueueAgent(agent);
-        obsLogger.info("skill.trigger.enqueue_agent", {
-          req_id: rid, task_id: taskId, instance_id: instanceId,
-          dur_ms: Date.now() - t0Enq,
-          added: enqueued,
-        });
+        if (input.idempotencyKeyHash && !registration) {
+          await this.buffer.writeTaskRegistrationReceipt(session, input.idempotencyKeyHash, {
+            version: 1,
+            task: queuedTask ?? entry,
+            registered_at_ms: archivedAtMs,
+          });
+        }
+
+        // A durable registration with no queued task means the worker already
+        // consumed or dead-lettered it. Do not recreate completed work while
+        // repairing a later handler receipt/write-back failure.
+        if (queuedTask || !registration) {
+          const t0Enq = Date.now();
+          const enqueued = await this.queue.enqueueAgent(agent);
+          obsLogger.info("skill.trigger.enqueue_agent", {
+            req_id: rid, task_id: taskId, instance_id: instanceId,
+            dur_ms: Date.now() - t0Enq,
+            added: enqueued,
+          });
+        }
       },
     );
     obsLogger.info("skill.trigger.mutex_total", {
@@ -239,6 +265,6 @@ export class SkillTriggerService {
       dur_ms: Date.now() - t0MutexEntry,
     });
 
-    return { taskId, archivedAtMs, archiveKey };
+    return { taskId, archivedAtMs: effectiveArchivedAtMs, archiveKey: effectiveArchiveKey };
   }
 }

@@ -104,6 +104,7 @@ import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
 import { buildProfileIsolationScope, buildProfileStableId, DEFAULT_PROFILE_SCOPE } from "../core/profile/profile-sync.js";
 
 const TAG = "[tdai-gateway][v2]";
+const pipelineOutboxDeliveries = new Map<string, Promise<boolean>>();
 const V2_PREFIX = "/v2";
 
 /**
@@ -875,35 +876,68 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   const ackIdempotencyOutbox = async (): Promise<boolean> => {
     if (!idempotencyOutboxEventId) return true;
     try {
-      return await store.ackConversationOutbox!(idempotencyOutboxEventId);
+      const acknowledged = await store.ackConversationOutbox!(idempotencyOutboxEventId);
+      if (acknowledged || !idempotencyScope) return acknowledged;
+      // Another concurrent delivery may have acknowledged the same event.
+      // Confirm the durable receipt before turning that benign race into 503.
+      const receipt = await store.readConversationAddReceipt!(idempotencyScope);
+      return receipt?.status === "completed";
     } catch (err) {
       deps.logger.warn(`${TAG} Pipeline outbox ack failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
+    }
+  };
+  const deliverIdempotencyOutbox = async (
+    notify: () => Promise<void>,
+  ): Promise<boolean> => {
+    if (!idempotencyOutboxEventId) {
+      try {
+        await notify();
+      } catch (err) {
+        // Preserve the legacy unkeyed contract: L0 stays successful even when
+        // the optional pipeline notification fails.
+        deps.logger.warn(`${TAG} Pipeline notify failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return true;
+    }
+    const existing = pipelineOutboxDeliveries.get(idempotencyOutboxEventId);
+    if (existing) return existing;
+    const delivery = (async () => {
+      try {
+        await notify();
+      } catch (err) {
+        deps.logger.warn(`${TAG} Pipeline notify failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
+        return false;
+      }
+      return ackIdempotencyOutbox();
+    })();
+    pipelineOutboxDeliveries.set(idempotencyOutboxEventId, delivery);
+    try {
+      return await delivery;
+    } finally {
+      if (pipelineOutboxDeliveries.get(idempotencyOutboxEventId) === delivery) {
+        pipelineOutboxDeliveries.delete(idempotencyOutboxEventId);
+      }
     }
   };
   let pipelineDeliveryPending = false;
   if (deps.notifyPipeline) {
     const notifyRounds = idempotencyOutboxEvent?.rounds ?? rounds;
     if (notifyRounds > 0) {
-      let pipelineNotified = false;
-      try {
-        await deps.notifyPipeline(
+      pipelineDeliveryPending = !(await deliverIdempotencyOutbox(() => deps.notifyPipeline!(
           idempotencyOutboxEvent?.serviceId ?? auth.serviceId,
           idempotencyOutboxEvent?.sessionId ?? session_id,
           notifyRounds,
           idempotencyOutboxEvent?.teamId ?? iso?.teamId,
           idempotencyOutboxEvent?.agentId ?? iso?.agentId,
-        );
-        pipelineNotified = true;
-      } catch (err) {
-        // Non-fatal: L0 is already persisted, pipeline will catch up later
-        deps.logger.warn(`${TAG} Pipeline notify failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if (pipelineNotified) pipelineDeliveryPending = !(await ackIdempotencyOutbox());
-      else pipelineDeliveryPending = !!idempotencyOutboxEventId;
+        )));
     }
   } else if (idempotencyOutboxEventId && (idempotencyOutboxEvent?.rounds ?? rounds) > 0) {
-    pipelineDeliveryPending = true;
+    // Standalone historically accepts L0 even without an extraction pipeline.
+    // Complete its durable receipt so keyed requests preserve that behavior.
+    pipelineDeliveryPending = deps.deployMode === "standalone"
+      ? !(await ackIdempotencyOutbox())
+      : true;
   }
   if ((idempotencyOutboxEvent?.rounds ?? rounds) === 0) {
     pipelineDeliveryPending = !(await ackIdempotencyOutbox());

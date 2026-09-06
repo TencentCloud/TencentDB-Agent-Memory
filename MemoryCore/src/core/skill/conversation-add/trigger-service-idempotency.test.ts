@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { StorageAdapter } from "../../storage/adapter.js";
 import { LocalStorageBackend } from "../../storage/local-backend.js";
 import { LocalSkillAgentTaskQueue } from "./agent-task-queue.js";
@@ -21,7 +21,7 @@ function fixture() {
   const buffer = new SkillBufferStorage({ storage });
   const queue = new LocalSkillAgentTaskQueue();
   const trigger = new SkillTriggerService({ buffer, queue, now: () => 1234 });
-  return { buffer, trigger };
+  return { buffer, queue, trigger };
 }
 
 const session: SessionKey = {
@@ -68,5 +68,49 @@ describe("SkillTriggerService idempotent archives", () => {
     });
     expect(tasks.tasks.map((task) => task.task_id)).toEqual([first.taskId, second.taskId]);
     expect(tasks.tasks.map((task) => task.session_id)).toEqual(["session-a", "session-b"]);
+  });
+
+  it("does not recreate an idempotent task after the worker consumed it", async () => {
+    const { buffer, trigger } = fixture();
+    const payload = { messages: [{ role: "user", content: "hello" }] };
+    const idempotencyKeyHash = "c".repeat(64);
+    const agent = {
+      instance_id: session.instance_id,
+      space_id: session.space_id,
+      user_id: session.user_id,
+      team_id: session.team_id,
+      agent_id: session.agent_id,
+    };
+
+    const first = await trigger.archive({ session, bufferAtTrigger: payload, idempotencyKeyHash });
+    const tasks = await buffer.readTasks(agent);
+    await buffer.writeTasks(agent, { ...tasks, tasks: [] });
+
+    const replay = await trigger.archive({ session, bufferAtTrigger: payload, idempotencyKeyHash });
+
+    expect(replay).toEqual(first);
+    expect((await buffer.readTasks(agent)).tasks).toEqual([]);
+  });
+
+  it("retries enqueue when registration succeeded but the first enqueue failed", async () => {
+    const { buffer, queue, trigger } = fixture();
+    const payload = { messages: [{ role: "user", content: "hello" }] };
+    const idempotencyKeyHash = "d".repeat(64);
+    const enqueue = vi.spyOn(queue, "enqueueAgent")
+      .mockRejectedValueOnce(new Error("simulated enqueue failure"));
+
+    await expect(trigger.archive({ session, bufferAtTrigger: payload, idempotencyKeyHash }))
+      .rejects.toThrow("simulated enqueue failure");
+    const replay = await trigger.archive({ session, bufferAtTrigger: payload, idempotencyKeyHash });
+
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect((await buffer.readTasks({
+      instance_id: session.instance_id,
+      space_id: session.space_id,
+      user_id: session.user_id,
+      team_id: session.team_id,
+      agent_id: session.agent_id,
+    })).tasks).toHaveLength(1);
+    expect(replay.archiveKey).toBe(buffer.idempotentArchiveKey(session, idempotencyKeyHash));
   });
 });

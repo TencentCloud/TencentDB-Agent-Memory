@@ -283,6 +283,124 @@ describe("conversation add idempotency router", () => {
     expect(store.upsertL0).not.toHaveBeenCalled();
   });
 
+  it("coalesces concurrent delivery of the same pending outbox event", async () => {
+    let saved: { receipt: ConversationReceipt; outboxEvent: Extract<ConversationAddClaim, { status: "claimed" }>["outboxEvent"] } | undefined;
+    let releaseNotification!: () => void;
+    const notificationGate = new Promise<void>((resolve) => { releaseNotification = resolve; });
+    const notifyPipeline = vi.fn(async () => notificationGate);
+    const ackConversationOutbox = vi.fn(async () => {
+      if (!saved) return false;
+      saved.receipt = { ...saved.receipt, status: "completed" };
+      saved.outboxEvent = { ...saved.outboxEvent, status: "acknowledged" };
+      return true;
+    });
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => saved?.receipt ?? null),
+      claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => {
+        if (saved) return { status: "replay", ...saved };
+        saved = {
+          receipt: receiptFor(input, input.records.map((record) => record.id)),
+          outboxEvent: {
+            eventId: "event-concurrent",
+            receiptId: "receipt-1",
+            serviceId: input.scope.serviceId,
+            sessionId: input.scope.sessionId,
+            rounds: input.pipelineRounds,
+            teamId: input.scope.teamId,
+            agentId: input.scope.agentId,
+            status: "pending",
+            createdAtMs: 1,
+          },
+        };
+        return { status: "claimed", ...saved };
+      }),
+      ackConversationOutbox,
+    };
+
+    const first = handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
+    await vi.waitFor(() => expect(notifyPipeline).toHaveBeenCalledTimes(1));
+    const second = handleConversationAdd(body, auth, "req-2", depsFor(store, { notifyPipeline }));
+    releaseNotification();
+    const responses = await Promise.all([first, second]);
+
+    expect(responses.map((response) => response.code)).toEqual([0, 0]);
+    expect(notifyPipeline).toHaveBeenCalledTimes(1);
+    expect(ackConversationOutbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an already-completed receipt as a successful concurrent acknowledgement", async () => {
+    let completed = false;
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async (scope) => completed ? {
+        receiptId: "receipt-1",
+        scope,
+        payloadDigest: digestConversationAddPayload(body),
+        acceptedIds: ["message-1"],
+        status: "completed",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+      } : null),
+      claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => ({
+        status: "claimed",
+        receipt: receiptFor(input, ["message-1"]),
+        outboxEvent: {
+          eventId: "event-raced-ack",
+          receiptId: "receipt-1",
+          serviceId: input.scope.serviceId,
+          sessionId: input.scope.sessionId,
+          rounds: input.pipelineRounds,
+          teamId: input.scope.teamId,
+          agentId: input.scope.agentId,
+          status: "pending",
+          createdAtMs: 1,
+        },
+      })),
+      ackConversationOutbox: vi.fn(async () => {
+        completed = true;
+        return false;
+      }),
+    };
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store));
+
+    expect(response.code).toBe(0);
+    expect(store.readConversationAddReceipt).toHaveBeenCalledTimes(2);
+  });
+
+  it("completes a standalone keyed receipt when no pipeline is configured", async () => {
+    const ackConversationOutbox = vi.fn().mockResolvedValue(true);
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => null),
+      claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => ({
+        status: "claimed",
+        receipt: receiptFor(input, ["message-1"]),
+        outboxEvent: {
+          eventId: "event-standalone",
+          receiptId: "receipt-1",
+          serviceId: input.scope.serviceId,
+          sessionId: input.scope.sessionId,
+          rounds: input.pipelineRounds,
+          teamId: input.scope.teamId,
+          agentId: input.scope.agentId,
+          status: "pending",
+          createdAtMs: 1,
+        },
+      })),
+      ackConversationOutbox,
+    };
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, {
+      deployMode: "standalone",
+      notifyPipeline: undefined,
+    }));
+
+    expect(response.code).toBe(0);
+    expect(ackConversationOutbox).toHaveBeenCalledWith("event-standalone");
+  });
+
   it("rejects a pending receipt whose durable outbox event is missing", async () => {
     const pendingReceipt: ConversationReceipt = {
       receiptId: "receipt-1",
@@ -396,6 +514,23 @@ describe("conversation add idempotency router", () => {
   it("preserves the legacy unkeyed write path", async () => {
     const upsertL0 = vi.fn().mockResolvedValue(true);
     const notifyPipeline = vi.fn().mockResolvedValue(undefined);
+    const store: Partial<IMemoryStore> = { upsertL0 };
+
+    const response = await handleConversationAdd(
+      { session_id: "session-1", messages: body.messages },
+      auth,
+      "req-1",
+      depsFor(store, { notifyPipeline }),
+    );
+
+    expect(response.code).toBe(0);
+    expect(upsertL0).toHaveBeenCalledTimes(1);
+    expect(notifyPipeline).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an unkeyed write successful when optional pipeline notification fails", async () => {
+    const upsertL0 = vi.fn().mockResolvedValue(true);
+    const notifyPipeline = vi.fn().mockRejectedValue(new Error("pipeline down"));
     const store: Partial<IMemoryStore> = { upsertL0 };
 
     const response = await handleConversationAdd(

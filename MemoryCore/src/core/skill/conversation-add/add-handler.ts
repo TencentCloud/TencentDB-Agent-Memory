@@ -23,7 +23,14 @@ import {
   type OversizeOptions,
 } from "./oversize-strategy.js";
 import { prepareArchivePayload } from "./prepare-archive.js";
-import type { SkillBufferStorage, SessionKey, SessionMeta, SkillConversationIdempotencyResult } from "./buffer-storage.js";
+import type {
+  BufferedMessages,
+  SkillBufferStorage,
+  SessionKey,
+  SessionMeta,
+  SkillConversationIdempotencyMarker,
+  SkillConversationIdempotencyResult,
+} from "./buffer-storage.js";
 import type { SkillTriggerService } from "./trigger-service.js";
 import { obsLogger } from "../../report/obs-logger.js";
 
@@ -194,35 +201,57 @@ export class SkillConversationAddHandler {
       }
       const marker = await this.buffer.findIdempotencyMarker(sess, keyHash);
       if (marker) {
-        const markerDigest = marker.messages
+        const markerDigest = marker.idempotency?.payload_digest ?? marker.messages
           .map((message) => message.metadata)
           .find((metadata) => metadata && typeof metadata === "object" && (metadata as Record<string, unknown>).tdai_idempotency_payload_digest)
           ?.tdai_idempotency_payload_digest;
         if (markerDigest !== payloadDigest) throw new SkillIdempotencyConflictError();
         let recovered: SkillConversationIdempotencyResult = { status: "ok" };
-        if (marker.kind === "archive") {
+        if (marker.kind === "archive" && marker.idempotency?.state !== "current") {
           const archiveRes = await this.trigger.archive({
             session: sess,
-            bufferAtTrigger: { messages: marker.messages },
+            bufferAtTrigger: {
+              messages: marker.messages,
+              ...(marker.idempotency ? { idempotency_markers: [marker.idempotency] } : {}),
+            },
             taskRefId: input.task_id,
             idempotencyKeyHash: keyHash,
           });
+          const current = await this.buffer.readCurrent(sess);
+          const meta = await this.buffer.readMeta(sess);
+          const remainingCurrent = remainingAfterRecoveredArchive(
+            current,
+            marker.idempotency,
+            meta.last_archived_at_ms,
+            archiveRes.archivedAtMs,
+          );
+          const nowMs = this.now();
+          await this.buffer.writeCurrent(sess, remainingCurrent);
+          await this.buffer.writeMeta(sess, metaForMessages(
+            sess,
+            remainingCurrent.messages,
+            nowMs,
+            Math.max(meta.last_archived_at_ms ?? 0, archiveRes.archivedAtMs),
+          ));
+          const reason = marker.idempotency?.archive_reason ?? "bytes";
           recovered = { status: "archived", archived: {
             task_id: archiveRes.taskId,
-            archived_at_ms: marker.archivedAtMs ?? archiveRes.archivedAtMs,
-            archive_key: marker.archiveKey ?? archiveRes.archiveKey,
-            reason: "bytes",
+            archived_at_ms: archiveRes.archivedAtMs,
+            archive_key: archiveRes.archiveKey,
+            reason,
           } };
+        } else if (marker.kind === "current") {
+          const meta = await this.buffer.readMeta(sess);
+          await this.buffer.writeMeta(sess, metaForMessages(
+            sess,
+            marker.messages,
+            this.now(),
+            meta.last_archived_at_ms,
+          ));
         }
         await this.buffer.writeIdempotencyReceipt(sess, { version: 1, key_hash: keyHash, payload_digest: payloadDigest, result: recovered, created_at_ms: Date.now() });
         return recovered;
       }
-      input = {
-        ...input,
-        messages: input.messages.map((message, index) => index === 0
-          ? { ...message, metadata: { ...(message.metadata ?? {}), tdai_idempotency_key_hash: keyHash, tdai_idempotency_payload_digest: payloadDigest } }
-          : message),
-      };
     }
 
     // ② 计算 raw_bytes
@@ -267,6 +296,15 @@ export class SkillConversationAddHandler {
     });
     const combinedMessages: OversizeMessage[] = prepared.messages;
     const usedOversize = prepared.usedOversize;
+    const baseIdempotencyMarker = keyHash && payloadDigest
+      ? {
+        version: 1 as const,
+        key_hash: keyHash,
+        payload_digest: payloadDigest,
+        prebuffer_count: current.messages.length,
+        prebuffer_digest: digestMessages(current.messages),
+      }
+      : undefined;
 
     // ④ 更新 meta 计数
     // 只数 tool_call, 不数 tool_result —— 二者 1:1 配对, 数两遍会让阈值 10
@@ -295,7 +333,14 @@ export class SkillConversationAddHandler {
       const t0Arch = Date.now();
       const archiveRes = await this.trigger.archive({
         session: sess,
-        bufferAtTrigger: { messages: combinedMessages as Array<Record<string, unknown>> },
+        bufferAtTrigger: {
+          messages: combinedMessages as Array<Record<string, unknown>>,
+          ...(baseIdempotencyMarker ? {
+            idempotency_markers: appendIdempotencyMarker(current, {
+              ...baseIdempotencyMarker, state: "archive", archive_reason: reason,
+            }),
+          } : {}),
+        },
         taskRefId: input.task_id,
         // 透传 req_id 给 trigger 内部分段事件（write_archive / mutex_* / enqueue_agent）
         perfRequestId: input.perfRequestId,
@@ -324,10 +369,10 @@ export class SkillConversationAddHandler {
       };
 
       const t0Wb = Date.now();
-      await Promise.all([
-        this.buffer.writeCurrent(sess, { messages: [] }),
-        this.buffer.writeMeta(sess, nextMeta),
-      ]);
+      // Ordered writes make a partial failure recoverable: after current is
+      // cleared, the deterministic archive marker can still repair meta.
+      await this.buffer.writeCurrent(sess, { messages: [] });
+      await this.buffer.writeMeta(sess, nextMeta);
       obsLogger.info("skill.add_handler.write_back", {
         req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Wb,
@@ -358,10 +403,18 @@ export class SkillConversationAddHandler {
         last_archived_at_ms: meta.last_archived_at_ms,
       };
       const t0Wb = Date.now();
-      await Promise.all([
-        this.buffer.writeCurrent(sess, { messages: combinedMessages as Array<Record<string, unknown>> }),
-        this.buffer.writeMeta(sess, nextMeta),
-      ]);
+      // Persist the recovery marker with current before meta. If meta or the
+      // final receipt write fails, a retry can recompute meta without appending
+      // the messages again.
+      await this.buffer.writeCurrent(sess, {
+        messages: combinedMessages as Array<Record<string, unknown>>,
+        ...(baseIdempotencyMarker ? {
+          idempotency_markers: appendIdempotencyMarker(current, {
+            ...baseIdempotencyMarker, state: "current",
+          }),
+        } : {}),
+      });
+      await this.buffer.writeMeta(sess, nextMeta);
       obsLogger.info("skill.add_handler.write_back", {
         req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Wb,
@@ -447,4 +500,76 @@ function countRoles(msgs: CompressibleMessage[], roles: ReadonlySet<Compressible
   let n = 0;
   for (const m of msgs) if (roles.has(m.role as CompressibleRole)) n++;
   return n;
+}
+
+function digestMessages(messages: Array<Record<string, unknown>>): string {
+  return createHash("sha256").update(JSON.stringify(messages)).digest("hex");
+}
+
+function remainingAfterRecoveredArchive(
+  current: BufferedMessages,
+  marker?: SkillConversationIdempotencyMarker,
+  lastArchivedAtMs?: number,
+  recoveredArchivedAtMs?: number,
+): BufferedMessages {
+  if (marker?.prebuffer_count === undefined || !marker.prebuffer_digest) {
+    return { messages: [] };
+  }
+  const prefix = current.messages.slice(0, marker.prebuffer_count);
+  if (prefix.length !== marker.prebuffer_count || digestMessages(prefix) !== marker.prebuffer_digest) {
+    if (current.messages.length === 0 || (
+      recoveredArchivedAtMs !== undefined &&
+      lastArchivedAtMs !== undefined &&
+      lastArchivedAtMs >= recoveredArchivedAtMs
+    )) {
+      return current;
+    }
+    throw new Error("Cannot safely reconcile Skill current buffer after idempotent archive recovery");
+  }
+  const messages = current.messages.slice(marker.prebuffer_count);
+  const markers = bufferIdempotencyMarkers(current).filter((candidate) =>
+    candidate.prebuffer_count !== undefined && candidate.prebuffer_count >= marker.prebuffer_count!,
+  );
+  return {
+    messages,
+    ...(messages.length > 0 && markers.length > 0 ? { idempotency_markers: markers } : {}),
+  };
+}
+
+function bufferIdempotencyMarkers(buffer: BufferedMessages): SkillConversationIdempotencyMarker[] {
+  const markers = [...(buffer.idempotency_markers ?? [])];
+  if (buffer.idempotency && !markers.some((marker) => marker.key_hash === buffer.idempotency!.key_hash)) {
+    markers.push(buffer.idempotency);
+  }
+  return markers;
+}
+
+function appendIdempotencyMarker(
+  buffer: BufferedMessages,
+  marker: SkillConversationIdempotencyMarker,
+): SkillConversationIdempotencyMarker[] {
+  return [
+    ...bufferIdempotencyMarkers(buffer).filter((candidate) => candidate.key_hash !== marker.key_hash),
+    marker,
+  ];
+}
+
+function metaForMessages(
+  sess: SessionKey,
+  messages: Array<Record<string, unknown>>,
+  nowMs: number,
+  lastArchivedAtMs?: number,
+): SessionMeta {
+  const typed = messages as CompressibleMessage[];
+  return {
+    session_id: sess.session_id,
+    space_id: sess.space_id,
+    user_id: sess.user_id,
+    team_id: sess.team_id,
+    agent_id: sess.agent_id,
+    tool_call_count: countRoles(typed, TOOL_CALL_ROLES),
+    byte_count: totalMessagesBytes(typed),
+    last_appended_at_ms: nowMs,
+    ...(lastArchivedAtMs === undefined ? {} : { last_archived_at_ms: lastArchivedAtMs }),
+  };
 }
