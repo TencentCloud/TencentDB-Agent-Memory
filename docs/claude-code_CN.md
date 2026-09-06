@@ -55,7 +55,7 @@ claude mcp add --transport stdio --scope project memory_tencentdb -- \
 /mcp
 ```
 
-`memory_tencentdb` server 提供 `tdai_memory_recall`、`tdai_memory_capture`、`tdai_session_end`、`tdai_memory_search` 和 `tdai_conversation_search`。模型可在需要更多细节时按需调用这些工具；自动 recall/capture 不依赖模型主动调用工具。
+`memory_tencentdb` server 提供 Gateway 工具 `tdai_memory_recall`、`tdai_memory_capture`、`tdai_session_end`、`tdai_memory_search`、`tdai_conversation_search`，以及 Knowledge Service（团队 wiki）工具 `tdai_wiki_list`、`tdai_wiki_search`、`tdai_wiki_pages`、`tdai_wiki_read`、`tdai_wiki_write`。模型可在需要更多细节时按需调用这些工具；自动 recall/capture 不依赖模型主动调用工具。请在项目说明（例如 `CLAUDE.md`）中告诉模型应使用哪个 wiki id；adapter 不会预设任何 wiki。
 
 ## 使用环境变量配置 adapter
 
@@ -64,6 +64,8 @@ claude mcp add --transport stdio --scope project memory_tencentdb -- \
 | `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | 生命周期 Hook 与 MCP adapter 共用的 Gateway 地址。 |
 | `TDAI_GATEWAY_API_KEY` | 未设置 | 发送给 Gateway 的 Bearer token。 |
 | `TDAI_CLAUDE_CODE_STATE_DIR` | `~/.memory-tencentdb/claude-code-adapter` | 在不同 Hook 进程间共享 pending prompt 和 capture 去重标记。 |
+| `TDAI_KNOWLEDGE_URL` | `http://127.0.0.1:8424` | wiki 工具使用的 Knowledge Service 地址（仅 MCP adapter）。 |
+| `TDAI_SERVICE_ID`、`TDAI_TEAM_ID`、`TDAI_USER_ID`、`TDAI_AGENT_ID` | 见 [MCP adapter 指南](mcp_CN.md) | wiki 工具使用的服务与租户身份。 |
 
 当前一个 Gateway 实例对应一个记忆命名空间；这些 adapter 环境变量不提供用户级命名空间隔离。
 

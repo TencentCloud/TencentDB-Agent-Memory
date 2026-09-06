@@ -55,7 +55,7 @@ Check the connection inside Claude Code:
 /mcp
 ```
 
-The `memory_tencentdb` server exposes `tdai_memory_recall`, `tdai_memory_capture`, `tdai_session_end`, `tdai_memory_search`, and `tdai_conversation_search`. Models can use these tools for on-demand detail; lifecycle hooks provide automatic memory behavior without waiting for a model tool call.
+The `memory_tencentdb` server exposes `tdai_memory_recall`, `tdai_memory_capture`, `tdai_session_end`, `tdai_memory_search`, and `tdai_conversation_search` for the Gateway, plus `tdai_wiki_list`, `tdai_wiki_search`, `tdai_wiki_pages`, `tdai_wiki_read`, and `tdai_wiki_write` for the Knowledge Service (team wikis). Models can use these tools for on-demand detail; lifecycle hooks provide automatic memory behavior without waiting for a model tool call. Tell the model which wiki id to use in your project instructions, for example `CLAUDE.md`; the adapter never assumes one.
 
 ## Configure the adapter with environment variables
 
@@ -64,6 +64,8 @@ The `memory_tencentdb` server exposes `tdai_memory_recall`, `tdai_memory_capture
 | `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway base URL used by both lifecycle hooks and the MCP adapter. |
 | `TDAI_GATEWAY_API_KEY` | unset | Bearer token sent to the Gateway. |
 | `TDAI_CLAUDE_CODE_STATE_DIR` | `~/.memory-tencentdb/claude-code-adapter` | Pending prompts and capture-deduplication markers shared by Hook processes. |
+| `TDAI_KNOWLEDGE_URL` | `http://127.0.0.1:8424` | Knowledge Service base URL used by the wiki tools (MCP adapter only). |
+| `TDAI_SERVICE_ID`, `TDAI_TEAM_ID`, `TDAI_USER_ID`, `TDAI_AGENT_ID` | see [the MCP adapter guide](mcp.md) | Service and tenant identity for the wiki tools. |
 
 One Gateway instance currently represents one memory namespace. User-level namespace isolation is not provided by these adapter environment variables.
 
