@@ -1,8 +1,8 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，98/98 通过：protocol-conformance 61、responses-anthropic-compat 13、
-> sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8）。
+> 全量回归：`npm test`（vitest，110/110 通过：protocol-conformance 61、responses-anthropic-compat 13、
+> sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3））。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
 ## 架构
@@ -173,3 +173,6 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 | sse-fuzz.test.ts | 4 | 模糊测试：随机输入不崩、任意切分不吞帧、多块拼接一致、1MB 大帧不截断 |
 | protocol-stats.test.ts | 4 | 性能统计：分位数/环形上限/缓存命中/Prometheus 导出 |
 | responses-anthropic-compat.test.ts | 13 | 组合层两跳 + usage 单次统计 + 并行工具回归 |
+| protocol-stats-streaming.test.ts | 4 | 流式收尾 usage/cache 计入 /metrics（单跳与组合层均只计一次） |
+| protocol-stream-semantics.test.ts | 5 | 请求体转换的 stream:false/true 透传语义 |
+| responses-sse-completion.test.ts | 3 | 仅 output_item.done（无 delta）时兜底补发 arguments/text/summary |
