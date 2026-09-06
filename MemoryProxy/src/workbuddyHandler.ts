@@ -277,6 +277,7 @@ export function countHumanTurnsWorkbuddy(input: unknown): number {
 export interface WorkbuddyArchiveCtx {
   config: ProxyConfig;
   sessionKey: string;
+  traceId: string;
   agentSource: string;
   sessionInfo: Record<string, unknown>;
   userId: string;
@@ -324,6 +325,7 @@ function buildWorkbuddyArchiveCtx(args: {
   injectionSkipped: boolean;
   input: unknown[];
   sessionKey: string;
+  traceId: string;
   userId: string;
   callerUserKey?: string | null;
   assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
@@ -347,6 +349,7 @@ function buildWorkbuddyArchiveCtx(args: {
   return {
     config: args.config,
     sessionKey: args.sessionKey,
+    traceId: args.traceId,
     agentSource: "workbuddy",
     sessionInfo,
     userId: args.userId,
@@ -381,7 +384,13 @@ async function triggerWorkbuddyArchiveHooks(
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurn(
+          ctx.tdaiClient!,
+          ctx.tdaiIdentity,
+          ctx.tdaiUserMessage,
+          assistantText || null,
+          { traceId: ctx.traceId },
+        ),
       ).catch((err: unknown) => {
         console.warn("[workbuddy-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),
@@ -1282,16 +1291,17 @@ export async function handleWorkbuddyEndpoint(
         // assistantText 用 memResult.messageText (proxy 给用户的命令响应), 不是
         // userText (用户输入的命令) —— L0 write 把"用户问了什么 / 系统答了什么"
         // 配对写入, 用 userText 当 assistant 会颠倒语义。
-        const memArchiveCtx = buildWorkbuddyArchiveCtx({
-          config,
-          sessionInfo,
-          injectionSkipped,
-          input,
-          sessionKey,
-          userId: userId || "",
-          callerUserKey,
-          assetCapabilities,
-        });
+  const memArchiveCtx = buildWorkbuddyArchiveCtx({
+    config,
+    sessionInfo,
+    injectionSkipped,
+    input,
+    sessionKey,
+    userId: userId || "",
+    callerUserKey,
+    assetCapabilities,
+    traceId,
+  });
         if (memArchiveCtx) {
           void triggerWorkbuddyArchiveHooks(memArchiveCtx, memResult.messageText ?? "").catch((err: unknown) => {
             pipe.info(
@@ -1414,6 +1424,7 @@ export async function handleWorkbuddyEndpoint(
     userId: userId || "",
     callerUserKey,
     assetCapabilities,
+    traceId,
   });
   return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
 }
