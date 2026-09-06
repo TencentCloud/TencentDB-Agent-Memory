@@ -1,7 +1,7 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，97/97 通过：protocol-conformance 60、responses-anthropic-compat 13、
+> 全量回归：`npm test`（vitest，98/98 通过：protocol-conformance 61、responses-anthropic-compat 13、
 > sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
@@ -53,7 +53,7 @@ Responses ↔ Chat ↔ Anthropic
 | max_tokens / max_completion_tokens | → max_tokens | ✅ |
 | user | → metadata.user_id | ✅ |
 | logprobs / logit_bias / penalty / seed / n / stream_options | 显式丢弃（onDropped 上报） | ✅ |
-| response_format（json_object / json_schema） | → Responses text.format（反向映射见下） | ✅ |
+| response_format（json_object / json_schema） | 显式丢弃（onDropped 上报；Anthropic Messages 无对位顶层字段，不伪造 prompt 注入） | ✅ |
 | reasoning_content / reasoning_signature | → thinking（map + preserveSignature 开） | ✅ |
 
 ## 响应字段矩阵
@@ -84,8 +84,8 @@ Responses ↔ Chat ↔ Anthropic
 | input.reasoning.summary（官方数组或字符串形态） | → assistant.reasoning_content | ✅ |
 | output.reasoning（summary 数组/字符串兼容） | → reasoning_content → reasoning item（`summary: [{type:"summary_text",text}]`） | ✅ |
 | tool_choice（Responses） | → Chat tool_choice | ✅ |
-| text.format（json_object / json_schema，name 缺省补 "response"） | → response_format | ✅ |
-| response_format（Chat） | → text.format（反向） | ✅ |
+| text.format（text / json_object（legacy JSON mode）/ json_schema；json_schema 保留 name/description/schema/strict，name 缺省补 "response"） | → response_format | ✅ |
+| response_format（Chat） | → text.format（反向：json_object → legacy JSON mode；json_schema 保留 description） | ✅ |
 
 ## 流式事件矩阵
 
@@ -157,12 +157,18 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
   超过 32768 的请求会被截断；该常量写在通用转换层，属厂商兼容性取舍，若需通用化应移到 per-upstream 配置。
 - **协议无对位参数**（logprobs / penalty / seed / top_k / thinking 等）：通过 `onDropped`
   显式上报，调用方可记录；默认静默但可观测。
+- **结构化输出到 Anthropic 侧**：Anthropic Messages 无 `response_format` / `text.format`
+  顶层对位字段，Chat→Anthropic 及两跳 Responses→Chat→Anthropic 显式丢弃并 `onDropped`
+  上报，不伪造 prompt 注入；Responses↔Chat 之间 json_object / json_schema 双向完整映射
+  （json_schema 保留 description，name 缺省补 "response"）。若上游为支持 Anthropic 原生
+  JSON Schema 输出字段的服务，可在接线层按 per-upstream 开关启用，避免向不支持的兼容
+  上游发送未知字段触发 400。
 
 ## 测试覆盖
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| protocol-conformance.test.ts | 60 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义/空内容流 message_start/丢参计数/结构化输出（text.format ↔ response_format） |
+| protocol-conformance.test.ts | 61 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义/空内容流 message_start/丢参计数/结构化输出（text.format ↔ response_format，含 legacy json_object 与 description） |
 | sse.test.ts | 8 | 解析器健壮性（LF/CRLF/紧凑/多 data/注释/跨 chunk/[DONE]） |
 | sse-fuzz.test.ts | 4 | 模糊测试：随机输入不崩、任意切分不吞帧、多块拼接一致、1MB 大帧不截断 |
 | protocol-stats.test.ts | 4 | 性能统计：分位数/环形上限/缓存命中/Prometheus 导出 |

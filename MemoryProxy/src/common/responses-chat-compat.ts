@@ -245,9 +245,9 @@ export function responsesBodyToChat(
     }
   }
 
-  // 结构化输出：Responses text.format（text / json_object / json_schema）
-  // → Chat response_format。json_schema 缺 name 时用 "response" 占位
-  //（Chat 上游要求 name 必填）。
+  // 结构化输出：Responses text.format（text / json_object（legacy JSON mode）/
+  // json_schema）→ Chat response_format。json_schema 缺 name 时用 "response"
+  // 占位（Chat 上游要求 name 必填），description / strict 原样保留。
   const textParam = asRecord(body.text);
   const fmt = textParam?.format;
   if (fmt && typeof fmt === "object") {
@@ -261,6 +261,9 @@ export function responsesBodyToChat(
             name: typeof f.name === "string" && f.name ? f.name : "response",
             schema,
             ...(typeof f.strict === "boolean" ? { strict: f.strict } : {}),
+            ...(typeof f.description === "string" && f.description
+              ? { description: f.description }
+              : {}),
           },
         };
       }
@@ -968,7 +971,9 @@ export function chatBodyToResponses(
     }
   }
 
-  // 反向：Chat response_format → Responses text.format（json_object / json_schema）。
+  // 反向：Chat response_format → Responses text.format。
+  // json_object → legacy JSON mode（Responses text.format 官方支持该格式）；
+  // json_schema 保留 name / description / schema / strict。
   const rf = asRecord(body.response_format);
   const rfType = typeof rf?.type === "string" ? rf.type : "";
   if (rfType === "json_object") {
@@ -983,6 +988,9 @@ export function chatBodyToResponses(
           name: typeof js?.name === "string" && js.name ? js.name : "response",
           schema,
           ...(typeof js?.strict === "boolean" ? { strict: js.strict } : {}),
+          ...(typeof js?.description === "string" && js.description
+            ? { description: js.description }
+            : {}),
         },
       };
     }

@@ -971,13 +971,15 @@ describe("结构化输出：Responses text.format ↔ Chat response_format", () 
       {
         model: "m",
         input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
-        text: { format: { type: "json_schema", schema, strict: true } },
+        text: {
+          format: { type: "json_schema", description: "返回城市天气", schema, strict: true },
+        },
       },
       {},
     );
     expect(chat.response_format).toEqual({
       type: "json_schema",
-      json_schema: { name: "response", schema, strict: true },
+      json_schema: { name: "response", description: "返回城市天气", schema, strict: true },
     });
   });
 
@@ -997,17 +999,32 @@ describe("结构化输出：Responses text.format ↔ Chat response_format", () 
       messages: [{ role: "user", content: "hi" }],
       response_format: {
         type: "json_schema",
-        json_schema: { name: "weather", schema: { type: "object" }, strict: false },
+        json_schema: {
+          name: "weather",
+          description: "天气查询",
+          schema: { type: "object" },
+          strict: false,
+        },
       },
     });
     expect(out.text).toEqual({
       format: {
         type: "json_schema",
         name: "weather",
+        description: "天气查询",
         schema: { type: "object" },
         strict: false,
       },
     });
+  });
+
+  it("chatBodyToResponses：json_object → text.format legacy JSON mode 反向保留", () => {
+    const out = chatBodyToResponses({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      response_format: { type: "json_object" },
+    });
+    expect(out.text).toEqual({ format: { type: "json_object" } });
   });
 
   it("无结构化输出时不动 text / response_format", () => {
