@@ -1,8 +1,6 @@
 # Opik 可观测接入（TRACK 06 / PR #1270）
 
-> 状态：已实现并验证（埋点范围：OpenAI Chat（WorkBuddy Web）与 Anthropic
-> （Claude Code）；Responses 主链路（Codex / WorkBuddy Desktop）尚未接入，
-> 见 §6 与 §7，属后续项）
+> 状态：已实现并验证（OpenAI Chat、Anthropic、OpenAI Responses 三条主链路均已接入）
 > 覆盖范围：调用链路 / Token / 记忆注入（粗粒度）/ 工具交互 / memory-access 审计
 
 ## 1. 背景与目标
@@ -21,7 +19,6 @@ Opik 上报链路上补齐：
 
 明确不在本 PR 范围（不会假装已实现）：
 
-- Codex / WorkBuddy Desktop 的 Responses 主链路尚未接入 Opik trace/span；
 - 逐注入钩子的 `hookCount / blockCount / errorCount` 统计尚未接入
   （当前只有粗粒度 `memory_injection.enabled / injector_count / skipped`）；
 - Opik 自托管栈的 compose / 部署脚本不在本仓库（见 §5 手工部署说明）。
@@ -34,7 +31,7 @@ WorkBuddy Web (OpenAI Chat) ──┐
 Claude Code (Anthropic) ──────┘      │
                                      └── memory-access audit (JSONL)
 
-Codex / WorkBuddy Desktop (Responses) → 未接入（后续项）
+Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 ```
 
 打点全部 fire-and-forget：`opik.ts` 内部每个请求单独 `fetch`，失败只打
@@ -51,20 +48,21 @@ Codex / WorkBuddy Desktop (Responses) → 未接入（后续项）
 | `src/config.ts` / `config.example.yaml` | `opik.apiPrefix` / `timeoutMs`；旧 `:5173` 配置自动兼容 `/api/v1/private` |
 | `src/handler.ts` | OpenAI Chat（WorkBuddy Web）：create trace / LLM span 挂 metadata |
 | `src/anthropicHandler.ts` | Anthropic（Claude Code）：同上 |
+| `src/codexHandler.ts` / `src/workbuddyHandler.ts` | OpenAI Responses（Codex / WorkBuddy Desktop）：create trace + 流式 completed LLM span + metadata（2026-09-06 补齐） |
+| `src/opik-metadata.ts` | 新增 Responses input[] 工具交互摘要 |
 | `src/tdai/recorder.ts` + `src/tdai/client.ts` | L0 写入结果可判定：真实成功后记一条审计；HTTP/网络失败抛错可重试；审计事件带 trace_id |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
 | 测试 / 文档 | opik 9 + opik-metadata 6 + audit 3（vitest 26/26）；本设计文档 |
 
-> 说明：本 PR **不含** codexHandler 的 Opik 主链路埋点，也不含
-> `deploy/opik-compose.yml` 或 `start-proxy.sh` 的 `PROXY_OPIK_*` 透传；
-> 历史草稿里对这三项的承诺均已移除（见 §6/§7）。
+> 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
+> 本 PR 仍**不含** `deploy/opik-compose.yml` 或 `start-proxy.sh` 的 `PROXY_OPIK_*` 透传（部署按官方 compose + 手工 YAML）。
 
 ## 4. trace / span 携带的 metadata
 
 | 字段 | 含义 |
 |---|---|
-| `agent_source` | workbuddy / claude-code（codex 接入后补） |
-| `protocol` | openai / anthropic（responses 接入后补） |
+| `agent_source` | workbuddy / claude-code / codex |
+| `protocol` | openai / anthropic / responses |
 | `session_key` / `conversation_id` | 客户端会话标识 |
 | `space_id` / `user_id` / `model` / `stream` / `turn_seq` / `request_path` | 身份、路由与轮次 |
 | `memory_injection` | 粗粒度：`enabled` / `injector_count` / `skipped`（逐钩子统计为后续项） |
@@ -100,6 +98,7 @@ opik:
 cd /c/Users/<用户名>/Documents/ChatGPT/腾讯犀牛鸟
 bash check-token-usage.sh workbuddy wb-persist-0001 "你好"
 bash check-token-usage.sh claude   c4015466-4cda-4eb1-83e4-14dfea1a6762 "你好"
+bash check-token-usage.sh codex    codex-verif "你好"
 ```
 
 ### 6.2 查 trace（REST）
@@ -112,8 +111,8 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 
 ### 6.3 断言要点
 
-1. trace 的 `metadata.protocol` 为 `openai`（WorkBuddy Web）或 `anthropic`
-   （Claude Code）；
+1. trace 的 `metadata.protocol` 为 `openai`（WorkBuddy Web）/ `anthropic`
+   （Claude Code）/ `responses`（Codex / WorkBuddy Desktop）；
 2. `metadata.memory_injection` 存在（`enabled / injector_count / skipped`）；
 3. trace 带真实 `usage`，`span_count >= 1`；
 4. 审计 JSONL 只出现在 **L0 真实写入成功后**，且带完整 `trace_id`；
@@ -126,12 +125,14 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 |---|---|---|---|
 | WorkBuddy Web | openai | 1 | create trace + LLM span + metadata |
 | Claude Code | anthropic | 1 | create trace + LLM span + metadata |
-| Codex / WorkBuddy Desktop | responses | 0（未接入） | 后续项：见 §7 |
+| Codex | responses | 1 | create trace + 流式 completed LLM span + metadata |
+| WorkBuddy Desktop | responses | 1 | 同上 |
 
 ## 7. 已知边界（与实现一致）
 
-- **Responses 主链路未接入**：Codex 与 WorkBuddy Desktop 的 `/responses` 请求
-  目前不产生 Opik trace/span（base 时代行为）。设计上保留接入点，属后续项；
+- **Responses 工具调用摘要**：`summarizeResponsesToolInteraction` 覆盖
+  input[] 的 `function_call` / `function_call_output`；输出侧 additional 类型
+  的工具仍按各协议既有边界处理；
 - **记忆注入为粗粒度**：只有 `enabled / injector_count / skipped`；
   逐钩子 `hookCount / blockCount / errorCount` 需接入
   `StatsInjectionObserver` 后补充（后续项）；
