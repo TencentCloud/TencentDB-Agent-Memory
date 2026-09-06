@@ -113,4 +113,35 @@ describe("SkillTriggerService idempotent archives", () => {
     })).tasks).toHaveLength(1);
     expect(replay.archiveKey).toBe(buffer.idempotentArchiveKey(session, idempotencyKeyHash));
   });
+
+  it("repairs a set-only agent left by a partial Redis-style enqueue", async () => {
+    const { buffer, queue, trigger } = fixture();
+    const payload = { messages: [{ role: "user", content: "hello" }] };
+    const idempotencyKeyHash = "e".repeat(64);
+    const agent = {
+      instance_id: session.instance_id,
+      space_id: session.space_id,
+      user_id: session.user_id,
+      team_id: session.team_id,
+      agent_id: session.agent_id,
+    };
+    const originalEnqueue = queue.enqueueAgent.bind(queue);
+    const enqueue = vi.spyOn(queue, "enqueueAgent")
+      .mockImplementationOnce(async (tuple) => {
+        await originalEnqueue(tuple);
+        await queue.dequeueAgent(0); // Simulate SADD succeeding before LPUSH fails.
+        throw new Error("simulated partial enqueue failure");
+      })
+      .mockImplementation(originalEnqueue);
+
+    await expect(trigger.archive({ session, bufferAtTrigger: payload, idempotencyKeyHash }))
+      .rejects.toThrow("simulated partial enqueue failure");
+    await expect(trigger.archive({ session, bufferAtTrigger: payload, idempotencyKeyHash }))
+      .resolves.toMatchObject({ taskId: expect.stringContaining("skill-extract-task-") });
+
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(await queue.dequeueAgent(0)).toEqual(agent);
+    expect(await queue.dequeueAgent(0)).toBeNull();
+    expect((await buffer.readTasks(agent)).tasks).toHaveLength(1);
+  });
 });

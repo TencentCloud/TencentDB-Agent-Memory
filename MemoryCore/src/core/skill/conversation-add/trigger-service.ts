@@ -27,6 +27,7 @@ import type {
   AgentTuple,
   ISkillAgentTaskQueue,
 } from "./agent-task-queue.js";
+import { serializeAgentTuple } from "./agent-task-queue.js";
 import type {
   BufferedMessages,
   SessionKey,
@@ -252,10 +253,22 @@ export class SkillTriggerService {
         if (queuedTask || !registration) {
           const t0Enq = Date.now();
           const enqueued = await this.queue.enqueueAgent(agent);
+          let repairedMissingList = false;
+          if (!enqueued && doc.tasks.length > 0) {
+            const rawAgent = serializeAgentTuple(agent);
+            if (!(await this.queue.listContains(rawAgent))) {
+              // Redis enqueue is SADD + LPUSH. A failure between those calls
+              // leaves the Set populated but the List empty, so a plain retry
+              // sees SADD=0 and would otherwise strand the durable task.
+              await this.queue.enqueueRawAgent(rawAgent);
+              repairedMissingList = true;
+            }
+          }
           obsLogger.info("skill.trigger.enqueue_agent", {
             req_id: rid, task_id: taskId, instance_id: instanceId,
             dur_ms: Date.now() - t0Enq,
             added: enqueued,
+            repaired_missing_list: repairedMissingList,
           });
         }
       },
