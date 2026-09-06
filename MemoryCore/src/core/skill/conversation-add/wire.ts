@@ -105,6 +105,7 @@ export function wireConversationAddHandler(
   const handler = new SkillConversationAddHandler({
     buffer,
     trigger,
+    queue,
     thresholds: deps.thresholds,
     compressOptions: deps.compressOptions,
     oversizeOptions: deps.oversizeOptions,

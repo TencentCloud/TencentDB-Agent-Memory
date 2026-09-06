@@ -20,7 +20,7 @@
  * - Thread-safe via WAL mode.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -57,6 +57,11 @@ import type {
   MemoryContentClearResult,
   AuditEntry,
   AuditQueryFilter,
+  ClaimConversationAddInput,
+  ConversationAddClaim,
+  ConversationIdempotencyScope,
+  ConversationOutboxEvent,
+  ConversationReceipt,
 } from "./types.js";
 import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "./types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../skill/skill-store-ddl.js";
@@ -130,6 +135,52 @@ export interface L0RecordRow {
   message_text: string;
   recorded_at: string;
   timestamp: number;
+}
+
+interface ConversationReceiptRow {
+  receipt_id: string;
+  scope_hash: string;
+  service_id: string;
+  team_id: string;
+  agent_id: string;
+  user_id: string;
+  session_id: string;
+  idempotency_key: string;
+  payload_digest: string;
+  accepted_ids_json: string;
+  status: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+interface ConversationOutboxRow {
+  event_id: string;
+  receipt_id: string;
+  service_id: string;
+  session_id: string;
+  rounds: number;
+  team_id: string;
+  agent_id: string;
+  status: string;
+  created_at_ms: number;
+  acknowledged_at_ms: number | null;
+}
+
+interface ConversationL0ScopeRow {
+  session_key: string;
+  session_id: string;
+  team_id: string;
+  user_id: string;
+  agent_id: string;
+}
+
+interface ConversationOutboxRecoveryRow {
+  event_id: string;
+  service_id: string;
+  session_id: string;
+  team_id: string;
+  agent_id: string;
+  status: string;
 }
 
 const TAG = "[memory-tdai][sqlite]";
@@ -799,6 +850,46 @@ export class VectorStore implements IMemoryStore {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_agent_session ON l0_conversations(user_id, agent_id, session_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_recorded  ON l0_conversations(user_id, recorded_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_agent_recorded ON l0_conversations(agent_id, recorded_at)");
+
+    // Conversation-add idempotency is co-located with L0 so receipt creation,
+    // raw-message admission, and pipeline delivery intent can share one SQLite
+    // transaction. `processing` exists only for legacy/crash recovery; fresh
+    // claims commit as `pending` until the pipeline acknowledges the outbox.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_add_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        scope_hash TEXT NOT NULL UNIQUE,
+        service_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        payload_digest TEXT NOT NULL,
+        accepted_ids_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_add_outbox (
+        event_id TEXT PRIMARY KEY,
+        receipt_id TEXT NOT NULL UNIQUE,
+        service_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        rounds INTEGER NOT NULL,
+        team_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        acknowledged_at_ms INTEGER
+      )
+    `);
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_conversation_add_outbox_pending " +
+      "ON conversation_add_outbox(status, created_at_ms) WHERE status = 'pending'",
+    );
 
     // L0 vector virtual table (cosine distance, same dimensions as L1) — deferred when dimensions=0
     if (this.dimensions > 0) {
@@ -3465,6 +3556,397 @@ export class VectorStore implements IMemoryStore {
       ftsSearch: this.ftsAvailable,
       nativeHybridSearch: false,
       sparseVectors: false,
+    };
+  }
+
+  // ── Conversation add idempotency ────────────────────────────
+
+  /**
+   * Atomically create a pending conversation receipt, its L0 records, and one
+   * durable pipeline outbox event. A receipt becomes completed only through a
+   * later acknowledgement after the pipeline notification has succeeded.
+   */
+  claimConversationAdd(input: ClaimConversationAddInput): ConversationAddClaim {
+    if (this.degraded) return { status: "unsupported" };
+
+    const scopeHash = this.hashConversationScope(input.scope);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.db.prepare(
+        "SELECT * FROM conversation_add_receipts WHERE scope_hash = ?",
+      ).get(scopeHash) as ConversationReceiptRow | undefined;
+
+      if (existing && existing.payload_digest !== input.payloadDigest) {
+        this.db.exec("COMMIT");
+        return { status: "conflict" };
+      }
+
+      if (existing && existing.status !== "processing") {
+        const receipt = this.toConversationReceipt(existing);
+        const outbox = this.db.prepare(
+          "SELECT * FROM conversation_add_outbox WHERE receipt_id = ?",
+        ).get(receipt.receiptId) as ConversationOutboxRow | undefined;
+        this.db.exec("COMMIT");
+        return {
+          status: "replay",
+          receipt,
+          outboxEvent: outbox ? this.toConversationOutboxEvent(outbox) : undefined,
+        };
+      }
+
+      // A `processing` row can only originate from an older interrupted
+      // implementation. It never represents a committed admission here, but
+      // it may have left recognizable L0/outbox remnants. Reclaim only after
+      // those remnants are cleared in this same transaction.
+      if (existing) {
+        if (!this.clearLegacyProcessingConversationAdmission(existing)) {
+          this.db.exec("COMMIT");
+          return { status: "unsupported" };
+        }
+      }
+
+      const now = Date.now();
+      const receiptId = randomUUID();
+      const eventId = randomUUID();
+      const acceptedIds = input.records.map((record) => record.id);
+      this.db.prepare(`
+        INSERT INTO conversation_add_receipts (
+          receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+          idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?)
+      `).run(
+        receiptId,
+        scopeHash,
+        input.scope.serviceId,
+        input.scope.teamId,
+        input.scope.agentId,
+        input.scope.userId,
+        input.scope.sessionId,
+        input.scope.idempotencyKey,
+        input.payloadDigest,
+        JSON.stringify(acceptedIds),
+        now,
+        now,
+      );
+
+      for (const record of input.records) {
+        this.writeL0ForConversationAdmission(record, input.embeddings?.get(record.id));
+      }
+
+      this.db.prepare(`
+        INSERT INTO conversation_add_outbox (
+          event_id, receipt_id, service_id, session_id, rounds, team_id, agent_id,
+          status, created_at_ms, acknowledged_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+      `).run(
+        eventId,
+        receiptId,
+        input.scope.serviceId,
+        input.scope.sessionId,
+        input.pipelineRounds,
+        input.scope.teamId,
+        input.scope.agentId,
+        now,
+      );
+      this.db.prepare(
+        "UPDATE conversation_add_receipts SET status = 'pending', updated_at_ms = ? WHERE receipt_id = ?",
+      ).run(now, receiptId);
+      this.db.exec("COMMIT");
+
+      return {
+        status: "claimed",
+        receipt: {
+          receiptId,
+          scope: { ...input.scope },
+          payloadDigest: input.payloadDigest,
+          acceptedIds,
+          status: "pending",
+          createdAtMs: now,
+          updatedAtMs: now,
+        },
+        outboxEvent: {
+          eventId,
+          receiptId,
+          serviceId: input.scope.serviceId,
+          sessionId: input.scope.sessionId,
+          rounds: input.pipelineRounds,
+          teamId: input.scope.teamId,
+          agentId: input.scope.agentId,
+          status: "pending",
+          createdAtMs: now,
+        },
+      };
+    } catch (err) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw err;
+    }
+  }
+
+  readConversationAddReceipt(scope: ConversationIdempotencyScope): ConversationReceipt | null {
+    if (this.degraded) return null;
+    const row = this.db.prepare(
+      "SELECT * FROM conversation_add_receipts WHERE scope_hash = ?",
+    ).get(this.hashConversationScope(scope)) as ConversationReceiptRow | undefined;
+    // `processing` is an obsolete, uncommitted state. It is intentionally not
+    // exposed as a valid receipt and will be reclaimed by the next claim.
+    if (!row || row.status === "processing") return null;
+    return this.toConversationReceipt(row);
+  }
+
+  completeConversationAdd(receiptId: string): ConversationReceipt | null {
+    if (this.degraded) return null;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare(
+        "SELECT * FROM conversation_add_receipts WHERE receipt_id = ?",
+      ).get(receiptId) as unknown as ConversationReceiptRow | undefined;
+      if (!row || row.status === "processing") {
+        this.db.exec("COMMIT");
+        return null;
+      }
+      const outbox = this.db.prepare(
+        "SELECT event_id FROM conversation_add_outbox WHERE receipt_id = ?",
+      ).get(receiptId) as { event_id: string } | undefined;
+      if (!outbox) throw new Error(`conversation receipt ${receiptId} has no outbox event to acknowledge`);
+      const now = Date.now();
+      this.ackConversationOutboxInTransaction(outbox.event_id, receiptId, now);
+      const completed = this.db.prepare(
+        "SELECT * FROM conversation_add_receipts WHERE receipt_id = ?",
+      ).get(receiptId) as unknown as ConversationReceiptRow;
+      this.db.exec("COMMIT");
+      return this.toConversationReceipt(completed);
+    } catch (err) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw err;
+    }
+  }
+
+  /** Acknowledgement and receipt completion commit (or roll back) together. */
+  ackConversationOutbox(eventId: string): boolean {
+    if (this.degraded) return false;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const event = this.db.prepare(
+        "SELECT receipt_id, status FROM conversation_add_outbox WHERE event_id = ?",
+      ).get(eventId) as { receipt_id: string; status: string } | undefined;
+      if (!event || event.status !== "pending") {
+        this.db.exec("COMMIT");
+        return false;
+      }
+      const receipt = this.db.prepare(
+        "SELECT receipt_id, status FROM conversation_add_receipts WHERE receipt_id = ?",
+      ).get(event.receipt_id) as { receipt_id: string; status: string } | undefined;
+      if (!receipt) throw new Error(`conversation outbox ${eventId} references a missing receipt`);
+      if (receipt.status !== "pending") {
+        this.db.exec("COMMIT");
+        return false;
+      }
+
+      const now = Date.now();
+      this.ackConversationOutboxInTransaction(eventId, event.receipt_id, now);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (err) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw err;
+    }
+  }
+
+  private completeConversationAddInTransaction(receiptId: string, now: number): void {
+    this.db.prepare(
+      "UPDATE conversation_add_receipts SET status = 'completed', updated_at_ms = ? WHERE receipt_id = ?",
+    ).run(now, receiptId);
+  }
+
+  private ackConversationOutboxInTransaction(eventId: string, receiptId: string, now: number): void {
+    this.db.prepare(
+      "UPDATE conversation_add_outbox SET status = 'acknowledged', acknowledged_at_ms = ? WHERE event_id = ?",
+    ).run(now, eventId);
+    this.completeConversationAddInTransaction(receiptId, now);
+  }
+
+  /**
+   * Clear the only remnants a legacy non-atomic `processing` admission can
+   * identify. A malformed accepted-ID payload cannot be cleaned safely, so
+   * the caller retains the receipt and reports `unsupported` instead.
+   */
+  private clearLegacyProcessingConversationAdmission(receipt: ConversationReceiptRow): boolean {
+    let acceptedIds: unknown;
+    try {
+      acceptedIds = JSON.parse(receipt.accepted_ids_json);
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(acceptedIds) || !acceptedIds.every((id) => typeof id === "string")) {
+      return false;
+    }
+
+    const uniqueIds = [...new Set(acceptedIds)];
+    if (uniqueIds.length > 0 && (
+      (this.hasSqliteTable("l0_fts") && !this.ftsAvailable) ||
+      (this.hasSqliteTable("l0_vec") && !this.vecTablesReady)
+    )) {
+      return false;
+    }
+
+    // The outbox has no user_id, so its receipt_id relationship plus every
+    // scope-bearing event field must agree with the canonical receipt before
+    // it is safe to delete. Acknowledged events may have already notified the
+    // pipeline and are not safe to replay as a fresh claim.
+    const outboxRows = this.db.prepare(`
+      SELECT event_id, service_id, session_id, team_id, agent_id, status
+      FROM conversation_add_outbox WHERE receipt_id = ?
+    `).all(receipt.receipt_id) as unknown as ConversationOutboxRecoveryRow[];
+    if (!outboxRows.every((outbox) =>
+      outbox.service_id === receipt.service_id &&
+      outbox.session_id === receipt.session_id &&
+      outbox.team_id === receipt.team_id &&
+      outbox.agent_id === receipt.agent_id &&
+      outbox.status === "pending",
+    )) {
+      return false;
+    }
+
+    for (const recordId of uniqueIds) {
+      const l0 = this.db.prepare(`
+        SELECT session_key, session_id, team_id, user_id, agent_id
+        FROM l0_conversations WHERE record_id = ?
+      `).get(recordId) as ConversationL0ScopeRow | undefined;
+      // A vec0 row has no isolation fields and an FTS row is only trustworthy
+      // when its canonical L0 counterpart is present. Never remove either
+      // side table without this proof of ownership.
+      if (!l0 || !this.l0MatchesConversationReceipt(l0, receipt)) {
+        return false;
+      }
+      if (this.ftsAvailable) {
+        const ftsRows = this.db.prepare(`
+          SELECT session_key, session_id, team_id, user_id, agent_id
+          FROM l0_fts WHERE record_id = ?
+      `).all(recordId) as unknown as ConversationL0ScopeRow[];
+        if (!ftsRows.every((fts) => this.l0MatchesConversationReceipt(fts, receipt))) return false;
+      }
+    }
+
+    for (const recordId of uniqueIds) {
+      if (this.ftsAvailable) this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?").run(recordId);
+      if (this.vecTablesReady) this.stmtL0DeleteVec!.run(recordId);
+      this.stmtL0DeleteMeta.run(recordId);
+    }
+    this.db.prepare("DELETE FROM conversation_add_outbox WHERE receipt_id = ?").run(receipt.receipt_id);
+    this.db.prepare("DELETE FROM conversation_add_receipts WHERE receipt_id = ?").run(receipt.receipt_id);
+    return true;
+  }
+
+  private l0MatchesConversationReceipt(row: ConversationL0ScopeRow, receipt: ConversationReceiptRow): boolean {
+    return row.session_key === receipt.session_id &&
+      row.session_id === receipt.session_id &&
+      row.team_id === receipt.team_id &&
+      row.user_id === receipt.user_id &&
+      row.agent_id === receipt.agent_id;
+  }
+
+  private hasSqliteTable(name: string): boolean {
+    return this.db.prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+    ).get(name) !== undefined;
+  }
+
+  private writeL0ForConversationAdmission(record: L0Record, embedding?: Float32Array): void {
+    this.stmtL0UpsertMeta.run(
+      record.id,
+      record.sessionKey,
+      record.sessionId || DEFAULT_ISOLATION_ID,
+      record.teamId || DEFAULT_ISOLATION_ID,
+      record.taskId || "",
+      record.role,
+      record.messageText,
+      record.recordedAt,
+      record.timestamp,
+      record.userId || DEFAULT_ISOLATION_ID,
+      record.agentId || DEFAULT_ISOLATION_ID,
+    );
+    if (this.ftsAvailable) {
+      this.stmtL0FtsDelete.run(record.id);
+      this.stmtL0FtsInsert.run(
+        tokenizeForFts(record.messageText),
+        record.messageText,
+        record.id,
+        record.sessionKey,
+        record.sessionId || DEFAULT_ISOLATION_ID,
+        record.teamId || DEFAULT_ISOLATION_ID,
+        record.taskId || "",
+        record.userId || DEFAULT_ISOLATION_ID,
+        record.agentId || DEFAULT_ISOLATION_ID,
+        record.role,
+        record.recordedAt,
+        record.timestamp,
+      );
+    }
+    if (this.vecTablesReady) {
+      this.stmtL0DeleteVec!.run(record.id);
+      if (embedding && !embedding.every((value) => value === 0)) {
+        this.stmtL0InsertVec!.run(
+          record.id,
+          Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
+          record.recordedAt,
+        );
+      }
+    }
+  }
+
+  private hashConversationScope(scope: ConversationIdempotencyScope): string {
+    const serialized = [
+      ["service_id", scope.serviceId],
+      ["team_id", scope.teamId],
+      ["agent_id", scope.agentId],
+      ["user_id", scope.userId],
+      ["session_id", scope.sessionId],
+      ["idempotency_key", scope.idempotencyKey],
+    ].map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join("&");
+    return createHash("sha256").update(serialized).digest("hex");
+  }
+
+  private toConversationReceipt(row: ConversationReceiptRow): ConversationReceipt {
+    const acceptedIds = JSON.parse(row.accepted_ids_json) as unknown;
+    if (!Array.isArray(acceptedIds) || !acceptedIds.every((id) => typeof id === "string")) {
+      throw new Error(`conversation receipt ${row.receipt_id} has invalid accepted IDs`);
+    }
+    if (row.status !== "pending" && row.status !== "completed") {
+      throw new Error(`conversation receipt ${row.receipt_id} has unsupported status ${row.status}`);
+    }
+    return {
+      receiptId: row.receipt_id,
+      scope: {
+        serviceId: row.service_id,
+        teamId: row.team_id,
+        agentId: row.agent_id,
+        userId: row.user_id,
+        sessionId: row.session_id,
+        idempotencyKey: row.idempotency_key,
+      },
+      payloadDigest: row.payload_digest,
+      acceptedIds,
+      status: row.status,
+      createdAtMs: row.created_at_ms,
+      updatedAtMs: row.updated_at_ms,
+    };
+  }
+
+  private toConversationOutboxEvent(row: ConversationOutboxRow): ConversationOutboxEvent {
+    if (row.status !== "pending" && row.status !== "acknowledged") {
+      throw new Error(`conversation outbox ${row.event_id} has unsupported status ${row.status}`);
+    }
+    return {
+      eventId: row.event_id,
+      receiptId: row.receipt_id,
+      serviceId: row.service_id,
+      sessionId: row.session_id,
+      rounds: row.rounds,
+      teamId: row.team_id,
+      agentId: row.agent_id,
+      status: row.status,
+      createdAtMs: row.created_at_ms,
+      ...(row.acknowledged_at_ms === null ? {} : { acknowledgedAtMs: row.acknowledged_at_ms }),
     };
   }
 

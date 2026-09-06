@@ -185,6 +185,27 @@ An adapter generally has three responsibilities:
 
 The v3 memory data plane requires `team_id`, `agent_id`, and `user_id`. Supply them in the request body or the corresponding `x-tdai-*` headers. `session_id` is optional and narrows operations to a session when provided.
 
+### Retrying `/v3/conversation/add`
+
+Clients that may retry a completed turn can pass an optional `idempotency_key` on `POST /v3/conversation/add`. Reuse the same key for the same service, team, agent, user, session, and message payload:
+
+```json
+{
+  "session_id": "session-1",
+  "team_id": "team-1",
+  "agent_id": "agent-1",
+  "user_id": "user-1",
+  "idempotency_key": "opencode-turn-01",
+  "messages": [
+    { "role": "user", "content": "hello", "timestamp": "2026-08-24T00:00:00.000Z" }
+  ]
+}
+```
+
+The key is scoped by `x-tdai-service-id`, `team_id`, `agent_id`, `user_id`, `session_id`, and `idempotency_key`. A completed replay with the same normalized payload returns the original `accepted_ids` without another L0 write or pipeline notification. If the receipt is still pending, the same-key retry reuses the durable outbox and retries pipeline delivery before acknowledging completion. A notification or outbox acknowledgement failure returns retryable `503` for keyed requests. Reusing the same key with a different payload returns `409`. A backend that cannot provide atomic receipt, L0 write, and outbox ACK semantics also returns `503` for keyed requests; unkeyed requests keep the existing behavior.
+
+SQLite provides the public transactional guarantee for the receipt, L0 write, and durable outbox. Pipeline delivery is recoverable at-least-once: a crash after notification but before outbox acknowledgement can cause redelivery, so downstream consumers should deduplicate by the stable task or event identity. Redis and TCVDB deployments must implement equivalent atomic claim and outbox acknowledgement before enabling keyed requests.
+
 ## Configuration
 
 The Gateway resolves configuration in this order:

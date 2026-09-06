@@ -1,0 +1,59 @@
+name: OpenCode Adapter
+
+on:
+  pull_request:
+    paths:
+      - "adapters/opencode/**"
+      - ".github/workflows/opencode-adapter.yml"
+  push:
+    branches: [main, feat/server_team]
+    paths:
+      - "adapters/opencode/**"
+      - ".github/workflows/opencode-adapter.yml"
+
+concurrency:
+  group: opencode-adapter-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: adapters/opencode
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+
+      - name: Install locked development dependencies
+        run: npm ci --legacy-peer-deps --ignore-scripts
+
+      - name: Typecheck and test
+        run: npm run check
+
+      - name: Parse Windows source installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/install-from-source.ps1"),
+            [ref] $tokens,
+            [ref] $errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List
+            exit 1
+          }
+
+      - name: Verify publish contents
+        if: runner.os == 'Linux'
+        run: npm run pack:check

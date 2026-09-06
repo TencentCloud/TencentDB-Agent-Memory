@@ -60,6 +60,10 @@ sdk/python/*.egg-info/
 .env.*
 !.env.example
 
+# OpenCode local Gateway runtime (PID, logs, generated config)
+MemoryCore/.opencode-runtime/
+.e2e-evidence/
+
 # offload_server 真值配置（含 tdai kernel Bearer），按 .example 自建
 __tests__/offload_server/remote-config.json
 

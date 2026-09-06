@@ -281,11 +281,13 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 - Wiki 和 CodeGraph 异步构建，需要等待一定时间处理才能 `ready`。
 - CodeGraph 当前首先支持公开 HTTPS 仓库；私有仓库和 SSH 凭证接入仍在完善。
 - Hub 已支持人工绑定资产；全自动记忆路由仍在迭代。
+- 当前提供 OpenClaw、Hermes、Claude Code、CodeBuddy、OpenCode 和 SDK 接入；更广泛的跨框架迁移仍在 Roadmap 中。
 
 ## 相关文档
 
 - [路线图](./ROADMAP_CN.md)（接下来要做什么）
 - [完整安装指南](./INSTALL_CN.md)（Memory Core + Hub + Proxy 一键部署）
+- [OpenCode 适配器](./adapters/opencode/README_CN.md)（自动召回/采集、原生工具与持久化恢复）
 - [Roadmap](./ROADMAP_CN.md)（我们接下来在做什么；English: [ROADMAP.md](./ROADMAP.md)）
 - [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)（如果在用旧版并想迁移存量数据）
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)

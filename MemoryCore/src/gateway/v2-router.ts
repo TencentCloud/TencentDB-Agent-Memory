@@ -17,7 +17,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
-import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
+import {
+  DEFAULT_ISOLATION_ID,
+  type ConversationOutboxEvent,
+  type ConversationReceipt,
+  type IMemoryStore,
+  type L0Record,
+  type ProfileSyncRecord,
+} from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
@@ -32,6 +39,7 @@ import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 // ── Zod schemas (validated types + defaults) ──
 import {
   conversationAddRequestSchema,
+  digestConversationAddPayload,
   conversationQueryRequestSchema,
   conversationSearchRequestSchema,
   conversationDeleteRequestSchema,
@@ -96,6 +104,7 @@ import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
 import { buildProfileIsolationScope, buildProfileStableId, DEFAULT_PROFILE_SCOPE } from "../core/profile/profile-sync.js";
 
 const TAG = "[tdai-gateway][v2]";
+const pipelineOutboxDeliveries = new Map<string, Promise<boolean>>();
 const V2_PREFIX = "/v2";
 
 /**
@@ -664,7 +673,7 @@ export async function handleV2Route(
 async function handleConversationAdd(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = conversationAddRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-  const { session_id, messages } = parsed.data;
+  const { session_id, messages, idempotency_key } = parsed.data;
 
   // Enforce three-dim isolation. user_id / agent_id come from request body
   // or x-tdai-* headers (resolved in dispatchV2Request).  When the gateway's
@@ -683,8 +692,55 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
 
+  const idempotencyScope = idempotency_key
+    ? {
+      serviceId: auth.serviceId,
+      teamId: iso?.teamId ?? DEFAULT_ISOLATION_ID,
+      agentId: iso?.agentId ?? DEFAULT_ISOLATION_ID,
+      userId: iso?.userId ?? DEFAULT_ISOLATION_ID,
+      sessionId: session_id,
+      idempotencyKey: idempotency_key,
+    }
+    : undefined;
+  const payloadDigest = idempotency_key ? digestConversationAddPayload(parsed.data) : undefined;
+  let pendingReceipt: ConversationReceipt | undefined;
+
+  if (idempotencyScope) {
+    if (!store.claimConversationAdd || !store.readConversationAddReceipt || !store.ackConversationOutbox) {
+      return errorEnvelope(
+        503,
+        "Store does not support transactional conversation idempotency for keyed requests",
+        requestId,
+      );
+    }
+    const receipt = await store.readConversationAddReceipt(idempotencyScope);
+    if (receipt) {
+      if (receipt.payloadDigest !== payloadDigest) {
+        return errorEnvelope(
+          409,
+          "Idempotency key already used with a different conversation payload",
+          requestId,
+        );
+      }
+      if (receipt.status === "completed") {
+        return successEnvelope<ConversationAddData>(
+          {
+            accepted_ids: receipt.acceptedIds,
+            accepted_versions: receipt.acceptedIds.map(() => "v1"),
+            total_count: receipt.acceptedIds.length,
+          },
+          requestId,
+        );
+      }
+      if (receipt.acceptedIds.length !== messages.length) {
+        return errorEnvelope(503, "Pending conversation receipt does not match its original message count", requestId);
+      }
+      pendingReceipt = receipt;
+    }
+  }
+
   // Quota check: memory limit
-  if (deps.quotaManager) {
+  if (!pendingReceipt && deps.quotaManager) {
     const check = await deps.quotaManager.checkMemoryQuota(auth.serviceId, messages.length);
     if (!check.allowed) {
       return errorEnvelope(4291, `Memory limit exceeded (current=${check.current}, limit=${check.limit})`, requestId);
@@ -695,7 +751,7 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   // 会 create asset + append 绑定；后续同 (team, agent) 走进程内 LRU 短路。
   // 失败降级：只打 warn，不阻塞 conversation 写入 —— 记忆数据的可用性优先
   // 于资产登记的一致性（asset 登记失败时下次调用会自动重试）。
-  if (deps.getMetadataService && iso?.teamId && iso?.agentId) {
+  if (!pendingReceipt && deps.getMetadataService && iso?.teamId && iso?.agentId) {
     try {
       const metaSvc = await deps.getMetadataService(auth.serviceId);
       await metaSvc.ensureChatMemoryAsset({
@@ -710,13 +766,13 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
     }
   }
 
-  const embedding = deps.getEmbedding();
   const acceptedIds: string[] = [];
   const acceptedRecords: L0Record[] = [];
   const ingestBaseMs = Date.now();
+  const rounds = messages.filter((m) => m.role === "user").length;
 
   for (const [index, msg] of messages.entries()) {
-    const id = `msg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const id = pendingReceipt?.acceptedIds[index] ?? `msg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
     const ingestRecordedAtMs = ingestBaseMs + index;
     const recordedAtMs = msg.recorded_at
       ? new Date(msg.recorded_at).getTime()
@@ -736,29 +792,155 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
       timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : recordedAtMs,
     };
 
-    let emb: Float32Array | undefined;
-    if (embedding) {
-      try { emb = await embedding.embed(msg.content); } catch (e) { console.warn(`[v2-router] L0 embedding failed:`, e); }
-    }
-
-    await store.upsertL0(record, emb);
-    acceptedIds.push(id);
     acceptedRecords.push(record);
+  }
+
+  let idempotencyOutboxEventId: string | undefined;
+  let idempotencyOutboxEvent: ConversationOutboxEvent | undefined;
+  let replayedPendingAdmission = false;
+  if (idempotencyScope && payloadDigest) {
+    const embeddings = new Map<string, Float32Array>();
+    const embedding = deps.getEmbedding();
+    if (!pendingReceipt && embedding) {
+      for (const record of acceptedRecords) {
+        try {
+          embeddings.set(record.id, await embedding.embed(record.messageText));
+        } catch (e) {
+          console.warn(`[v2-router] L0 embedding failed:`, e);
+        }
+      }
+    }
+    const claim = await store.claimConversationAdd!({
+      scope: idempotencyScope,
+      payloadDigest,
+      records: acceptedRecords,
+      ...(embeddings.size > 0 ? { embeddings } : {}),
+      pipelineRounds: rounds,
+    });
+    if (claim.status === "conflict") {
+      return errorEnvelope(
+        409,
+        "Idempotency key already used with a different conversation payload",
+        requestId,
+      );
+    }
+    if (claim.status === "unsupported") {
+      return errorEnvelope(
+        503,
+        "Store does not support transactional conversation idempotency for keyed requests",
+        requestId,
+      );
+    }
+    if (claim.status === "replay") {
+      if (claim.receipt.status === "completed") {
+        return successEnvelope<ConversationAddData>(
+          {
+            accepted_ids: claim.receipt.acceptedIds,
+            accepted_versions: claim.receipt.acceptedIds.map(() => "v1"),
+            total_count: claim.receipt.acceptedIds.length,
+          },
+          requestId,
+        );
+      }
+      if (!claim.outboxEvent || claim.outboxEvent.status !== "pending") {
+        return errorEnvelope(503, "Pending conversation receipt has no pending pipeline outbox event", requestId);
+      }
+      acceptedIds.push(...claim.receipt.acceptedIds);
+      idempotencyOutboxEventId = claim.outboxEvent.eventId;
+      idempotencyOutboxEvent = claim.outboxEvent;
+      replayedPendingAdmission = true;
+    } else {
+      if (pendingReceipt) {
+        return errorEnvelope(503, "Pending conversation receipt could not be replayed", requestId);
+      }
+      acceptedIds.push(...claim.receipt.acceptedIds);
+      idempotencyOutboxEventId = claim.outboxEvent.eventId;
+      idempotencyOutboxEvent = claim.outboxEvent;
+    }
+  } else {
+    const embedding = deps.getEmbedding();
+    for (const record of acceptedRecords) {
+      let emb: Float32Array | undefined;
+      if (embedding) {
+        try { emb = await embedding.embed(record.messageText); } catch (e) { console.warn(`[v2-router] L0 embedding failed:`, e); }
+      }
+
+      await store.upsertL0(record, emb);
+      acceptedIds.push(record.id);
+    }
   }
 
   // Notify pipeline: trigger async L1 extraction (service mode).
   // Each role=user message counts as one conversation round for threshold/timer logic.
   // teamId/agentId 透传给 captureAtomic 决定 hash slot 与锁粒度。
-  if (deps.notifyPipeline) {
-    const rounds = messages.filter((m) => m.role === "user").length;
-    if (rounds > 0) {
+  const ackIdempotencyOutbox = async (): Promise<boolean> => {
+    if (!idempotencyOutboxEventId) return true;
+    try {
+      const acknowledged = await store.ackConversationOutbox!(idempotencyOutboxEventId);
+      if (acknowledged || !idempotencyScope) return acknowledged;
+      // Another concurrent delivery may have acknowledged the same event.
+      // Confirm the durable receipt before turning that benign race into 503.
+      const receipt = await store.readConversationAddReceipt!(idempotencyScope);
+      return receipt?.status === "completed";
+    } catch (err) {
+      deps.logger.warn(`${TAG} Pipeline outbox ack failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+  const deliverIdempotencyOutbox = async (
+    notify: () => Promise<void>,
+  ): Promise<boolean> => {
+    if (!idempotencyOutboxEventId) {
       try {
-        await deps.notifyPipeline(auth.serviceId, session_id, rounds, iso?.teamId, iso?.agentId);
+        await notify();
       } catch (err) {
-        // Non-fatal: L0 is already persisted, pipeline will catch up later
+        // Preserve the legacy unkeyed contract: L0 stays successful even when
+        // the optional pipeline notification fails.
         deps.logger.warn(`${TAG} Pipeline notify failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
       }
+      return true;
     }
+    const existing = pipelineOutboxDeliveries.get(idempotencyOutboxEventId);
+    if (existing) return existing;
+    const delivery = (async () => {
+      try {
+        await notify();
+      } catch (err) {
+        deps.logger.warn(`${TAG} Pipeline notify failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
+        return false;
+      }
+      return ackIdempotencyOutbox();
+    })();
+    pipelineOutboxDeliveries.set(idempotencyOutboxEventId, delivery);
+    try {
+      return await delivery;
+    } finally {
+      if (pipelineOutboxDeliveries.get(idempotencyOutboxEventId) === delivery) {
+        pipelineOutboxDeliveries.delete(idempotencyOutboxEventId);
+      }
+    }
+  };
+  let pipelineDeliveryPending = false;
+  if (deps.notifyPipeline) {
+    const notifyRounds = idempotencyOutboxEvent?.rounds ?? rounds;
+    if (notifyRounds > 0) {
+      pipelineDeliveryPending = !(await deliverIdempotencyOutbox(() => deps.notifyPipeline!(
+          idempotencyOutboxEvent?.serviceId ?? auth.serviceId,
+          idempotencyOutboxEvent?.sessionId ?? session_id,
+          notifyRounds,
+          idempotencyOutboxEvent?.teamId ?? iso?.teamId,
+          idempotencyOutboxEvent?.agentId ?? iso?.agentId,
+        )));
+    }
+  } else if (idempotencyOutboxEventId && (idempotencyOutboxEvent?.rounds ?? rounds) > 0) {
+    // Standalone historically accepts L0 even without an extraction pipeline.
+    // Complete its durable receipt so keyed requests preserve that behavior.
+    pipelineDeliveryPending = deps.deployMode === "standalone"
+      ? !(await ackIdempotencyOutbox())
+      : true;
+  }
+  if ((idempotencyOutboxEvent?.rounds ?? rounds) === 0) {
+    pipelineDeliveryPending = !(await ackIdempotencyOutbox());
   }
 
   // Standalone-only: mirror L0 to <dataDir>/conversations/<date>.jsonl.
@@ -766,7 +948,7 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   // log alongside SQLite. Service mode skips: COS is the authoritative store,
   // and writing to local FS in a multi-replica pod would be ephemeral + useless.
   // Failure is non-fatal: SQLite is the source of truth.
-  if (deps.deployMode === "standalone") {
+  if (!replayedPendingAdmission && deps.deployMode === "standalone") {
     const storage = deps.getStorage();
     if (storage) {
       try {
@@ -799,8 +981,12 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   }
 
   // Report memory usage (non-fatal)
-  if (deps.quotaManager && acceptedIds.length > 0) {
+  if (!replayedPendingAdmission && deps.quotaManager && acceptedIds.length > 0) {
     deps.quotaManager.reportMemoryAdded(auth.serviceId, acceptedIds.length).catch(() => {});
+  }
+
+  if (pipelineDeliveryPending) {
+    return errorEnvelope(503, "Conversation accepted but pipeline notification is pending", requestId);
   }
 
   return successEnvelope<ConversationAddData>(

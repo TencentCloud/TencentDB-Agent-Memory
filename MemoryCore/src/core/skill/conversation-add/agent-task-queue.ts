@@ -3,10 +3,11 @@
  *
  * 对应设计文档 §5、§9。
  *
- * 抽象接口 `ISkillAgentTaskQueue` 定义三组能力：
+ * 抽象接口 `ISkillAgentTaskQueue` 定义四组能力：
  *   1) agent 队列 (List + Set)：enqueueAgent / dequeueAgent / requeueAgent / removeAgent
  *   2) tasks-mutex（保护 `_tasks.json` 读改写，TTL 秒级）：withTasksMutex
- *   3) extract-lock（Worker 独占 agent 抽取权，TTL 10 min）：acquire/renew/releaseExtractLock
+ *   3) session-mutex（保护 data-current/meta/receipt 跨副本读改写）：withSessionMutex
+ *   4) extract-lock（Worker 独占 agent 抽取权，TTL 10 min）：acquire/renew/releaseExtractLock
  *
  * 生产实现走 Redis（`RedisSkillAgentTaskQueue`，本文件），
  * 测试实现走内存（`LocalSkillAgentTaskQueue`，本文件）。
@@ -41,6 +42,10 @@ export interface AgentTuple {
   agent_id: string;
 }
 
+export interface SessionTuple extends AgentTuple {
+  session_id: string;
+}
+
 /** 老 4 段 tuple 反序列化时的兜底 instance_id 值。见 AgentTuple 注释。 */
 export const LEGACY_INSTANCE_ID = "__legacy__";
 
@@ -64,6 +69,11 @@ export function serializeAgentTuple(a: AgentTuple): string {
   assertTupleField("team_id", a.team_id);
   assertTupleField("agent_id", a.agent_id);
   return `${a.instance_id}|${a.space_id}|${a.user_id}|${a.team_id}|${a.agent_id}`;
+}
+
+export function serializeSessionTuple(s: SessionTuple): string {
+  assertTupleField("session_id", s.session_id);
+  return `${serializeAgentTuple(s)}|${s.session_id}`;
 }
 
 export function parseAgentTuple(raw: string): AgentTuple | null {
@@ -192,6 +202,13 @@ export interface ISkillAgentTaskQueue {
     fn: () => Promise<T>,
   ): Promise<T>;
 
+  /** Serialize the session buffer read-modify-write path across Core replicas. */
+  withSessionMutex<T>(
+    session: SessionTuple,
+    opts: { lockTtlMs: number; waitDeadlineMs: number },
+    fn: () => Promise<T>,
+  ): Promise<T>;
+
   // ── extract-lock（Worker 独占 agent 抽取权） ──
   acquireExtractLock(tuple: AgentTuple, ttlMs: number): Promise<ExtractLockHandle | null>;
   renewExtractLock(handle: ExtractLockHandle, ttlMs: number): Promise<boolean>;
@@ -211,6 +228,7 @@ export class LocalSkillAgentTaskQueue implements ISkillAgentTaskQueue {
   private readonly list: string[] = [];      // 头 = LPUSH, 尾 = RPOP —— 匹配 Redis 语义
   private readonly set = new Set<string>();
   private readonly tasksMutex = new Map<string, { token: string; expireAt: number }>();
+  private readonly sessionMutex = new Map<string, string>();
   private readonly extractLocks = new Map<string, { token: string; expireAt: number }>();
   private readonly waiters: WaitingConsumer[] = [];
 
@@ -335,6 +353,30 @@ export class LocalSkillAgentTaskQueue implements ISkillAgentTaskQueue {
       }
       if (Date.now() > deadline) {
         throw new Error(`[skill-agent-queue] tasks-mutex wait timeout for ${key}`);
+      }
+      await sleep(10);
+    }
+  }
+
+  async withSessionMutex<T>(
+    session: SessionTuple,
+    opts: { lockTtlMs: number; waitDeadlineMs: number },
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const key = `session:${serializeSessionTuple(session)}`;
+    const token = randomUUID();
+    const deadline = Date.now() + opts.waitDeadlineMs;
+    while (true) {
+      if (!this.sessionMutex.has(key)) {
+        this.sessionMutex.set(key, token);
+        try {
+          return await fn();
+        } finally {
+          if (this.sessionMutex.get(key) === token) this.sessionMutex.delete(key);
+        }
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`[skill-agent-queue] session-mutex wait timeout for ${key}`);
       }
       await sleep(10);
     }
@@ -512,6 +554,7 @@ export class RedisSkillAgentTaskQueue implements ISkillAgentTaskQueue {
   private readonly setKey: string;
   private readonly extractLockPrefix: string;
   private readonly tasksMutexPrefix: string;
+  private readonly sessionMutexPrefix: string;
   private readonly pollIntervalMs: number;
 
   constructor(opts: RedisSkillAgentTaskQueueOptions) {
@@ -523,10 +566,12 @@ export class RedisSkillAgentTaskQueue implements ISkillAgentTaskQueue {
     //   {prefix}:pending-agents-set     — Set (SADD/SREM 幂等去重)
     //   {prefix}:extract-lock:{tuple}   — Worker 独占 agent 抽取权 (10min TTL)
     //   {prefix}:tasks-mutex:{tuple}    — 保护 _tasks.json 读改写 (5s TTL)
+    //   {prefix}:session-mutex:{session} — 保护 session buffer/receipt 读改写（自动续约）
     this.listKey = `${prefix}:pending-agents`;
     this.setKey = `${prefix}:pending-agents-set`;
     this.extractLockPrefix = `${prefix}:extract-lock:`;
     this.tasksMutexPrefix = `${prefix}:tasks-mutex:`;
+    this.sessionMutexPrefix = `${prefix}:session-mutex:`;
   }
 
   async enqueueAgent(tuple: AgentTuple): Promise<boolean> {
@@ -742,6 +787,57 @@ export class RedisSkillAgentTaskQueue implements ISkillAgentTaskQueue {
       }
       if (Date.now() > deadline) {
         throw new Error(`[skill-agent-queue] tasks-mutex wait timeout for ${key}`);
+      }
+      await sleep(20 + Math.floor(Math.random() * 30));
+    }
+  }
+
+  async withSessionMutex<T>(
+    session: SessionTuple,
+    opts: { lockTtlMs: number; waitDeadlineMs: number },
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const key = this.sessionMutexPrefix + serializeSessionTuple(session);
+    const token = randomUUID();
+    const deadline = Date.now() + opts.waitDeadlineMs;
+    while (true) {
+      const ok = await this.client.set(key, token, "NX", "PX", opts.lockTtlMs);
+      if (ok === "OK") {
+        let renewal: Promise<void> | undefined;
+        let leaseError: Error | undefined;
+        const renew = () => {
+          if (renewal || leaseError) return;
+          renewal = this.client.eval(LUA_RENEW, 1, key, token, opts.lockTtlMs)
+            .then((result) => {
+              if (result !== 1) leaseError = new Error(`[skill-agent-queue] session-mutex lease lost for ${key}`);
+            })
+            .catch((err: unknown) => {
+              leaseError = new Error(
+                `[skill-agent-queue] session-mutex renew failed for ${key}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            })
+            .finally(() => { renewal = undefined; });
+        };
+        const renewTimer = setInterval(renew, Math.max(10, Math.floor(opts.lockTtlMs / 3)));
+        renewTimer.unref?.();
+        try {
+          const result = await fn();
+          clearInterval(renewTimer);
+          await renewal;
+          if (leaseError) throw leaseError;
+          return result;
+        } finally {
+          clearInterval(renewTimer);
+          await renewal;
+          try {
+            await this.client.eval(LUA_RELEASE, 1, key, token);
+          } catch {
+            /* swallow */
+          }
+        }
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`[skill-agent-queue] session-mutex wait timeout for ${key}`);
       }
       await sleep(20 + Math.floor(Math.random() * 30));
     }

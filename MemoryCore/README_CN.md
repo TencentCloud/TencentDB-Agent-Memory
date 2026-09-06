@@ -189,6 +189,27 @@ TDAI_MEMORY_INSTANCE_ID=default
 
 v3 记忆数据面要求 `team_id`、`agent_id`、`user_id`，可以通过请求体或对应的 `x-tdai-*` Header 传入；`session_id` 可选，用于限定会话范围。
 
+### 重试 `/v3/conversation/add`
+
+如果客户端可能重试一轮已完成对话，可以在 `POST /v3/conversation/add` 里传可选的 `idempotency_key`。同一个 service、team、agent、user、session 和消息正文必须复用同一个 key：
+
+```json
+{
+  "session_id": "session-1",
+  "team_id": "team-1",
+  "agent_id": "agent-1",
+  "user_id": "user-1",
+  "idempotency_key": "opencode-turn-01",
+  "messages": [
+    { "role": "user", "content": "hello", "timestamp": "2026-08-24T00:00:00.000Z" }
+  ]
+}
+```
+
+幂等范围由 `x-tdai-service-id`、`team_id`、`agent_id`、`user_id`、`session_id` 和 `idempotency_key` 共同决定。已完成请求使用相同规范化正文重放时，会返回首次成功的 `accepted_ids`，不会再次写入 L0 或通知 pipeline。如果 receipt 仍为 pending，同 key 重试会复用持久化 outbox，再次尝试 pipeline 投递并在成功后确认完成。通知或 outbox ACK 失败时，带 key 的请求会返回可重试的 `503`。相同 key 搭配不同正文会返回 `409`。无法提供原子 receipt、L0 写入和 outbox ACK 语义的后端，也会对带 key 的请求返回 `503`；不带 key 的请求保持原有行为。
+
+SQLite 已为 receipt、L0 写入和持久化 outbox 提供公开版本的事务性保证。Pipeline 投递属于可恢复的 at-least-once：如果进程在通知成功后、outbox ACK 前退出，可能发生再次投递，因此下游应按稳定的 task 或 event 标识去重。Redis 和 TCVDB 部署需要实现等价的 atomic claim 与 outbox acknowledgement 后，才能启用带 key 的请求。
+
 ## 自定义 Prompt 与生成溯源
 
 每个 Memory Instance 最多创建 500 个自定义 Prompt，单个 Prompt 内容最长 10,000 个 Unicode 字符。Prompt 本体和目标绑定分开存储，更新时保持 `memory_prompt_id` 不变并执行 `version += 1`，已有绑定的新生成任务会使用最新版本。

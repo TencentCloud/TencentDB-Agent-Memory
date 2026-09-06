@@ -56,6 +56,7 @@ import type { CompressibleMessage } from "../core/skill/conversation-add/message
 import { trace } from "../core/report/trace.js";
 import { metricProducer } from "../core/report/kafka-metric-producer.js";
 import { obsLogger } from "../core/report/obs-logger.js";
+import { SkillIdempotencyConflictError } from "../core/skill/conversation-add/add-handler.js";
 
 const TAG = "[skill-handlers]";
 
@@ -976,6 +977,7 @@ export async function handleConversationAdd(
       team_id: input.team_id,
       agent_id: input.agent_id,
       task_id: input.task_id,
+      idempotency_key: input.idempotency_key,
       // schema 保证 role 合法, tool_name/tool_call_id 由 handler 内校验
       messages: input.messages.map((m) => ({
         role: m.role,
@@ -1012,6 +1014,10 @@ export async function handleConversationAdd(
       msg_count: input.messages.length, });
     return successEnvelope(out, requestId);
   } catch (err) {
+    if (err instanceof SkillIdempotencyConflictError) {
+      obsLogger.warn("skill.handleConversationAdd.done", { req_id: requestId, code: 40901, dur_ms: Date.now() - t0, reason: "idempotency_conflict" });
+      return errorEnvelope(40901, err.message, requestId);
+    }
     // HandlerValidationError → 400；其他 → 500
     const isValidation = err instanceof Error && err.name === "HandlerValidationError";
     if (isValidation) {

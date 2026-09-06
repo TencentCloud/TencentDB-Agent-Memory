@@ -5,7 +5,7 @@
  * 再登记 task**"：
  *   ① 生成 archive_key / task_id / archived_at_ms
  *   ② 写 archive 文件（已存在 = 视为成功；这一步慢或失败都不会有 orphan task）
- *   ③ 抢 tasks-mutex → 读 `_tasks.json` → 追加 task → 写回 → 在同一临界区内 Redis 入队
+ *   ③ 抢 tasks-mutex → 登记 task + 持久化登记回执 → 在同一临界区内 Redis 入队
  *
  * 顺序变更历史：
  *   2026-07-20 —— 原顺序是 ①→②(tasksMutex 内写 _tasks.json + 入队)→③(写 archive)，
@@ -17,17 +17,17 @@
  * 新顺序下的失败态：
  *   - writeArchive 抛错 → handler 拿到异常，_tasks.json 无残留、Redis 无 agent；
  *     Client 重试完整走一遍即可（archive 幂等：同 archived_at_ms 会 skip 不覆盖）。
- *   - writeArchive 成功 → mutex 内 writeTasks / enqueueAgent 任一失败 → 只留下
- *     "孤儿 archive"（一个 4-数十 KB 的 jsonl，worker 看不到，靠 CoS 生命周期
- *     或后续 GC 清）。这比现状好得多：不再有丢任务风险。
+ *   - task/登记回执/入队任一步失败 → Client 重试时复用已落盘状态；已消费任务
+ *     由登记回执识别，不会被重复创建，仍在 `_tasks.json` 的任务会重新入队。
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
   AgentTuple,
   ISkillAgentTaskQueue,
 } from "./agent-task-queue.js";
+import { serializeAgentTuple } from "./agent-task-queue.js";
 import type {
   BufferedMessages,
   SessionKey,
@@ -57,6 +57,8 @@ export interface TriggerArchiveInput {
    * 会带上，方便按 req_id 过滤 handler + trigger + worker 全链路。缺省不影响功能。
    */
   perfRequestId?: string;
+  /** Stable request identity for retry-safe archive/task creation. */
+  idempotencyKeyHash?: string;
 }
 
 export interface TriggerArchiveResult {
@@ -107,13 +109,28 @@ export class SkillTriggerService {
 
     // ① 生成标识
     const archivedAtMs = this.now();
-    const archiveKey = this.buffer.archiveKey(session, archivedAtMs);
+    const archiveKey = input.idempotencyKeyHash
+      ? this.buffer.idempotentArchiveKey(session, input.idempotencyKeyHash)
+      : this.buffer.archiveKey(session, archivedAtMs);
     // 前缀 `skill-extract-task-` 是内部 anchor（跟业务侧 task_id 明确区分）。
     // 一次归档 = 一个 SkillTaskEntry.task_id；handler 侧 `[skill-perf] phase=trigger.enqueueAgent
     // task_id=…` 与 worker 侧 `[skill-perf] kind=worker phase=consume.*` 共用同一
     // 值，grep 一次拉全 handler + worker 双段耗时。老数据前缀 `task-` 会被
     // worker 自然消费掉，无迁移风险（filter 按 task_id 值等价比较，不解析前缀）。
-    const taskId = `skill-extract-task-${randomUUID().slice(0, 8)}`;
+    const scopedIdempotencyHash = input.idempotencyKeyHash
+      ? createHash("sha256").update(JSON.stringify([
+        session.instance_id,
+        session.space_id,
+        session.user_id,
+        session.team_id,
+        session.agent_id,
+        session.session_id,
+        input.idempotencyKeyHash,
+      ])).digest("hex")
+      : undefined;
+    const taskId = scopedIdempotencyHash
+      ? `skill-extract-task-${scopedIdempotencyHash.slice(0, 16)}`
+      : `skill-extract-task-${randomUUID().slice(0, 8)}`;
     const agent: AgentTuple = {
       // 2026-07-30 instance_id 塞进 tuple; worker pool 从队列出来后按此路由
       // 到对应 instance 的资源。不给或空会直接抛。
@@ -138,6 +155,8 @@ export class SkillTriggerService {
       reason: input.reason,
       max_iterations: input.maxIterations,
     };
+    let effectiveArchivedAtMs = archivedAtMs;
+    let effectiveArchiveKey = archiveKey;
 
     // [obs] 归档段五个关键 IO：writeArchive / mutex acquire / readTasks /
     // writeTasks / enqueueAgent。历史事故里就是 writeArchive 慢 10s 拖崩了
@@ -158,7 +177,7 @@ export class SkillTriggerService {
     //
     // 失败态：writeArchive 抛错 → 直接向 handler 抛异常，无残留。
     const t0Arch = Date.now();
-    await this.buffer.writeArchive(session, archivedAtMs, bufferAtTrigger);
+    await this.buffer.writeArchiveAtKey(archiveKey, bufferAtTrigger);
     obsLogger.info("skill.trigger.write_archive", {
       req_id: rid, task_id: taskId, instance_id: instanceId,
       dur_ms: Date.now() - t0Arch,
@@ -188,30 +207,70 @@ export class SkillTriggerService {
 
         const t0Read = Date.now();
         const doc = await this.buffer.readTasks(agent);
+        const storedRegistration = input.idempotencyKeyHash
+          ? await this.buffer.readTaskRegistrationReceipt(session, input.idempotencyKeyHash)
+          : null;
+        const registration = storedRegistration?.task.task_id === taskId &&
+          storedRegistration.task.archive_key === archiveKey
+          ? storedRegistration
+          : null;
         obsLogger.info("skill.trigger.read_tasks", {
           req_id: rid, task_id: taskId, instance_id: instanceId,
           dur_ms: Date.now() - t0Read,
           existing_tasks: doc.tasks.length,
         });
 
-        doc.tasks.push(entry);
-        doc.updated_at_ms = archivedAtMs;
+        const queuedTask = doc.tasks.find((task) => task.task_id === taskId);
+        const registeredTask = queuedTask ?? registration?.task;
+        if (registeredTask) {
+          effectiveArchivedAtMs = registeredTask.archived_at_ms;
+          effectiveArchiveKey = registeredTask.archive_key;
+        }
+        if (!queuedTask && !registration) {
+          doc.tasks.push(entry);
+          doc.updated_at_ms = archivedAtMs;
 
-        const t0Write = Date.now();
-        await this.buffer.writeTasks(agent, doc);
-        obsLogger.info("skill.trigger.write_tasks", {
-          req_id: rid, task_id: taskId, instance_id: instanceId,
-          dur_ms: Date.now() - t0Write,
-          total_tasks: doc.tasks.length,
-        });
+          const t0Write = Date.now();
+          await this.buffer.writeTasks(agent, doc);
+          obsLogger.info("skill.trigger.write_tasks", {
+            req_id: rid, task_id: taskId, instance_id: instanceId,
+            dur_ms: Date.now() - t0Write,
+            total_tasks: doc.tasks.length,
+          });
+        }
 
-        const t0Enq = Date.now();
-        const enqueued = await this.queue.enqueueAgent(agent);
-        obsLogger.info("skill.trigger.enqueue_agent", {
-          req_id: rid, task_id: taskId, instance_id: instanceId,
-          dur_ms: Date.now() - t0Enq,
-          added: enqueued,
-        });
+        if (input.idempotencyKeyHash && !registration) {
+          await this.buffer.writeTaskRegistrationReceipt(session, input.idempotencyKeyHash, {
+            version: 1,
+            task: queuedTask ?? entry,
+            registered_at_ms: archivedAtMs,
+          });
+        }
+
+        // A durable registration with no queued task means the worker already
+        // consumed or dead-lettered it. Do not recreate completed work while
+        // repairing a later handler receipt/write-back failure.
+        if (queuedTask || !registration) {
+          const t0Enq = Date.now();
+          const enqueued = await this.queue.enqueueAgent(agent);
+          let repairedMissingList = false;
+          if (!enqueued && doc.tasks.length > 0) {
+            const rawAgent = serializeAgentTuple(agent);
+            if (!(await this.queue.listContains(rawAgent))) {
+              // Redis enqueue is SADD + LPUSH. A failure between those calls
+              // leaves the Set populated but the List empty, so a plain retry
+              // sees SADD=0 and would otherwise strand the durable task.
+              await this.queue.enqueueRawAgent(rawAgent);
+              repairedMissingList = true;
+            }
+          }
+          obsLogger.info("skill.trigger.enqueue_agent", {
+            req_id: rid, task_id: taskId, instance_id: instanceId,
+            dur_ms: Date.now() - t0Enq,
+            added: enqueued,
+            repaired_missing_list: repairedMissingList,
+          });
+        }
       },
     );
     obsLogger.info("skill.trigger.mutex_total", {
@@ -219,6 +278,6 @@ export class SkillTriggerService {
       dur_ms: Date.now() - t0MutexEntry,
     });
 
-    return { taskId, archivedAtMs, archiveKey };
+    return { taskId, archivedAtMs: effectiveArchivedAtMs, archiveKey: effectiveArchiveKey };
   }
 }
