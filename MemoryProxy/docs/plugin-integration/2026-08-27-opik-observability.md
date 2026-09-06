@@ -116,7 +116,9 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 2. `metadata.memory_injection` 存在（`enabled / injector_count / skipped`）；
 3. trace 带真实 `usage`，`span_count >= 1`；
 4. 审计 JSONL 只出现在 **L0 真实写入成功后**，且带完整 `trace_id`；
-5. UI：`http://127.0.0.1:5173` → Projects → `usr-xxxxxxxx` 可看到 trace 与
+5. `stream:false` 的非流式 JSON 同样上报：trace + LLM span（forward 的
+   非 SSE 分支读取 usage/output 后完成 update + span）；
+6. UI：`http://127.0.0.1:5173` → Projects → `usr-xxxxxxxx` 可看到 trace 与
    messages 面板。
 
 ### 6.4 实测结果（本地自测示例，数值随请求变化）
@@ -133,6 +135,9 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 - **Responses 工具调用摘要**：`summarizeResponsesToolInteraction` 覆盖
   input[] 的 `function_call` / `function_call_output`；输出侧 additional 类型
   的工具仍按各协议既有边界处理；
+- **Responses 非流式 JSON**：`stream:false` 时上游返回 JSON，codex/workbuddy
+  在转发层读取 usage/output 并 update trace + 创建 LLM span（流式与 JSON 两条
+  出口均已覆盖）；
 - **记忆注入为粗粒度**：只有 `enabled / injector_count / skipped`；
   逐钩子 `hookCount / blockCount / errorCount` 需接入
   `StatsInjectionObserver` 后补充（后续项）；
