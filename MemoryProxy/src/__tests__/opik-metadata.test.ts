@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildOpikTraceMetadata, summarizeToolInteraction } from "../opik-metadata.js";
+import {
+  buildOpikTraceMetadata,
+  summarizeResponsesToolInteraction,
+  summarizeToolInteraction,
+} from "../opik-metadata.js";
 
 describe("buildOpikTraceMetadata", () => {
   it("只写入明确字段，空值/未定义不落 metadata", () => {
@@ -81,5 +85,22 @@ describe("summarizeToolInteraction", () => {
       { role: "user", content: "no tools" },
     ]);
     expect(summary).toEqual({ toolCalls: ["legacy_fn"], toolResults: 0 });
+  });
+});
+
+describe("summarizeResponsesToolInteraction", () => {
+  it("Responses input[]：function_call 名称去重 + function_call_output 计数", () => {
+    const summary = summarizeResponsesToolInteraction([
+      { type: "function_call", name: "get_weather", arguments: "{}" },
+      { type: "function_call", name: "get_weather", arguments: "{}" },
+      { type: "function_call", name: "search_code" },
+      { type: "function_call_output", call_id: "c1", output: "ok" },
+      { type: "message", role: "user", content: [] },
+      null,
+    ]);
+    expect(summary).toEqual({
+      toolCalls: ["get_weather", "search_code"],
+      toolResults: 1,
+    });
   });
 });
