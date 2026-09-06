@@ -11,6 +11,7 @@ import {
   opikUpdateTrace,
   uuidv7,
 } from "./opik.js";
+import { buildOpikTraceMetadata, summarizeToolInteraction } from "./opik-metadata.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -1375,6 +1376,27 @@ export async function handleChatCompletions(
   });
 
   // ── Opik: create trace ───────────────────────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "openai",
+    sessionKey,
+    conversationId,
+    spaceId,
+    userId,
+    model: target.model,
+    stream: isStream,
+    turnSeq,
+    requestPath: c.req.path,
+    memoryInjection: {
+      enabled: config.injection?.enabled === true,
+      injectorCount: config.injection?.injectors?.length ?? 0,
+      skipped: injectedSkipped,
+    },
+  });
+  const toolSummary = summarizeToolInteraction(messages);
+  if (toolSummary.toolCalls.length > 0 || toolSummary.toolResults > 0) {
+    opikTraceMetadata.tool_interaction = toolSummary;
+  }
   const forkTraceId = opikCreateTrace(config, {
     traceId,
     projectName: keyId,
@@ -1382,6 +1404,7 @@ export async function handleChatCompletions(
     startTime,
     input: { messages: flattenMessagesForOpik(messages) },
     tags: [...traceTags, ...target.tags],
+    metadata: opikTraceMetadata,
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1739,6 +1762,7 @@ export async function handleChatCompletions(
         "non-stream",
         ...(retried ? ["retry"] : []),
       ],
+      metadata: opikTraceMetadata,
       forkProjectName: "request_log",
       forkTraceId,
       forkMetadata: {

@@ -16,6 +16,7 @@ import {
   opikCreateTrace,
   uuidv7,
 } from "./opik.js";
+import { buildOpikTraceMetadata, summarizeToolInteraction } from "./opik-metadata.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -1298,6 +1299,27 @@ export async function handleAnthropicMessages(
   });
 
   // ── Opik: create trace ───────────────────────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "anthropic",
+    sessionKey,
+    conversationId,
+    spaceId,
+    userId,
+    model: target.model,
+    stream: isStream,
+    turnSeq,
+    requestPath: c.req.path,
+    memoryInjection: {
+      enabled: config.injection?.enabled === true,
+      injectorCount: config.injection?.injectors?.length ?? 0,
+      skipped: injectedSkipped,
+    },
+  });
+  const toolSummary = summarizeToolInteraction(messages);
+  if (toolSummary.toolCalls.length > 0 || toolSummary.toolResults > 0) {
+    opikTraceMetadata.tool_interaction = toolSummary;
+  }
   const forkTraceId = opikCreateTrace(config, {
     traceId,
     projectName: keyId,
@@ -1305,6 +1327,7 @@ export async function handleAnthropicMessages(
     startTime,
     input: { messages: flattenAnthropicMessagesForOpik(messages, body.system) },
     tags: [...traceTags, ...target.tags],
+    metadata: opikTraceMetadata,
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1658,6 +1681,7 @@ export async function handleAnthropicMessages(
       model: effectiveModel,
       usage,
       tags: retried ? ["retry"] : undefined,
+      metadata: opikTraceMetadata,
       forkProjectName: "request_log",
       forkTraceId,
       forkMetadata: {
