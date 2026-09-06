@@ -263,6 +263,8 @@ Proxy 目前支持 8 类 AI Agent 客户端。每个 agent 的**完整接入配�
 | **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
 | **Hermes** | `~/.hermes/config.yaml` + Header 预选 | [`agents/hermes/`](./agents/hermes/) |
 | **OpenClaw** | `~/.openclaw/openclaw.json` + Header 预选 | [`agents/openclaw/`](./agents/openclaw/) |
+| **Pi** | `pi-plugin` 扩展（环境变量） | [`MemoryCore/pi-plugin/`](./MemoryCore/pi-plugin/) |
+| **Claude Code（原生，不经代理）** | 生命周期 Hook + stdio MCP server（环境变量）；模型流量仍直连 Anthropic | [`MemoryCore/claude-code-plugin/`](./MemoryCore/claude-code-plugin/) |
 | **其他平台** | Header 预选（通用） | [`agents/README.md`](./agents/README.md) |
 
 Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/agent/task
