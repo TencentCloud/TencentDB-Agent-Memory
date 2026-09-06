@@ -16,7 +16,14 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     backend: "console",
     rotate: { maxSizeBytes: 100 * 1024 * 1024, backupLimit: 10 },
   },
-  opik: { enabled: false, url: "", apiKey: "", stripRequestLogContent: false },
+  opik: {
+    enabled: false,
+    url: "",
+    apiKey: "",
+    apiPrefix: "/v1/private",
+    timeoutMs: 2000,
+    stripRequestLogContent: false,
+  },
   langfuse: { enabled: false, host: "", publicKey: "", secretKey: "", debug: false, maxQueueSize: 8192, flushAt: 256, flushInterval: 2 },
   clickhouse: {
     enabled: false,
@@ -304,6 +311,18 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       url: overrides.opikUrl ?? yaml.opik?.url ?? DEFAULT_CONFIG.opik.url,
       apiKey:
         overrides.opikApiKey ?? yaml.opik?.apiKey ?? DEFAULT_CONFIG.opik.apiKey,
+      apiPrefix:
+        typeof yaml.opik?.apiPrefix === "string" &&
+        yaml.opik.apiPrefix.trim().startsWith("/")
+          ? yaml.opik.apiPrefix.trim().replace(/\/+$/, "") || DEFAULT_CONFIG.opik.apiPrefix
+          : DEFAULT_CONFIG.opik.apiPrefix,
+      timeoutMs:
+        typeof yaml.opik?.timeoutMs === "number" &&
+        Number.isFinite(yaml.opik.timeoutMs) &&
+        yaml.opik.timeoutMs >= 100 &&
+        yaml.opik.timeoutMs <= 30000
+          ? Math.round(yaml.opik.timeoutMs)
+          : DEFAULT_CONFIG.opik.timeoutMs,
       stripRequestLogContent:
         yaml.opik?.stripRequestLogContent ?? DEFAULT_CONFIG.opik.stripRequestLogContent,
     },
