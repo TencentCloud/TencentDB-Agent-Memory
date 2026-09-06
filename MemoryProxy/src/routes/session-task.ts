@@ -45,6 +45,8 @@ export interface CreateTaskFromSessionInput {
   agentSource: string;
   config: ProxyConfig;
   spaceId: string;
+  /** threadIsolation 开启时用于定位带 `:threadId` 后缀的会话状态。 */
+  threadId?: string | null;
   /** 用户提示（mem:create-task 后的自由文本），可空 */
   hint?: string;
   /** 最近对话（用于生成草稿） */
@@ -62,6 +64,8 @@ export interface UpdateTaskFromSessionInput {
   agentSource: string;
   config: ProxyConfig;
   spaceId: string;
+  /** threadIsolation 开启时用于定位带 `:threadId` 后缀的会话状态。 */
+  threadId?: string | null;
   hint?: string;
   recentMessages: MemCommandMessage[];
   /**
@@ -78,6 +82,7 @@ export interface PendingActionInput {
   agentSource: string;
   config: ProxyConfig;
   spaceId: string;
+  threadId?: string | null;
 }
 
 /** create 命令首次调用时的 pending 摘要（给命令层拼预览文案用） */
@@ -141,6 +146,7 @@ interface ResolvedSession {
   sessionInfo: SessionInfo;
   teamId: string;
   userId: string;
+  threadId?: string | null;
   currentTaskId?: string;
 }
 
@@ -148,10 +154,16 @@ function resolveSession(
   sessionKey: string,
   agentSource: string,
   config: ProxyConfig,
+  threadId: string | null = null,
 ): ResolvedSession | { error: string } {
   if (!sessionKey) return { error: "session_key is required" };
 
-  const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
+  const compositeKey = buildStoreSessionKey({
+    agentSource,
+    sessionKey,
+    threadId,
+    threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+  });
   const store = getSessionStore();
   const state = store.get(compositeKey);
 
@@ -162,6 +174,8 @@ function resolveSession(
   const sessionInfo = state.sessionInfo;
   const teamId = sessionInfo.team_id ?? "";
   const userId = sessionInfo.user_id ?? "";
+  const sessionThreadId =
+    config.sessionInit?.threadIsolation?.enabled === true ? threadId : null;
   if (!teamId || !userId) {
     return { error: "session missing team_id/user_id (initialization incomplete)" };
   }
@@ -173,7 +187,14 @@ function resolveSession(
   const isVirtualDefault = !!rawTaskId && !!defaultTaskId && rawTaskId === defaultTaskId;
   const currentTaskId = isVirtualDefault ? undefined : rawTaskId;
 
-  return { state, sessionInfo, teamId, userId, ...(currentTaskId ? { currentTaskId } : {}) };
+  return {
+    state,
+    sessionInfo,
+    teamId,
+    userId,
+    ...(sessionThreadId ? { threadId: sessionThreadId } : {}),
+    ...(currentTaskId ? { currentTaskId } : {}),
+  };
 }
 
 // ── 内部：检查并取 taskDraft 配置 ─────────────────────────────────────────
@@ -204,7 +225,7 @@ function pendingKeyOf(resolved: ResolvedSession, agentSource: string, sessionKey
     team_id: resolved.teamId,
     // pending-store 的 agent 用 sessionInfo.agent_id (kernel 侧概念),缺失就用 agentSource 兜底
     agent_id: resolved.sessionInfo.agent_id ?? agentSource,
-    session_id: sessionKey,
+    session_id: resolved.threadId ? `${sessionKey}:${resolved.threadId}` : sessionKey,
   });
 }
 
@@ -216,7 +237,13 @@ function pendingKeyOf(resolved: ResolvedSession, agentSource: string, sessionKey
  */
 async function doCreateAndBind(
   resolved: ResolvedSession,
-  input: { sessionKey: string; agentSource: string; config: ProxyConfig; spaceId: string },
+  input: {
+    sessionKey: string;
+    agentSource: string;
+    config: ProxyConfig;
+    spaceId: string;
+    threadId?: string | null;
+  },
   title: string,
   description: string,
 ): Promise<{ ok: true; task: TaskEntity; bindWarning?: string } | { ok: false; error: string }> {
@@ -234,7 +261,13 @@ async function doCreateAndBind(
     return { ok: false, error: `metadata createTask failed: ${err instanceof Error ? err.message : String(err)}` };
   }
   try {
-    await bindTaskIdToSession(input.sessionKey, input.agentSource, created.task_id);
+    await bindTaskIdToSession(
+      input.sessionKey,
+      input.agentSource,
+      created.task_id,
+      input.threadId ?? null,
+      input.config.sessionInit?.threadIsolation?.enabled === true,
+    );
   } catch (err) {
     return {
       ok: true,
@@ -254,7 +287,12 @@ async function doCreateAndBind(
 export async function createTaskFromSession(
   input: CreateTaskFromSessionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(
+    input.sessionKey,
+    input.agentSource,
+    input.config,
+    input.threadId ?? null,
+  );
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   const draftCfg = resolveTaskDraftConfig(input.config);
@@ -381,7 +419,12 @@ function buildFallbackTaskTitle(): string {
 export async function updateTaskFromSession(
   input: UpdateTaskFromSessionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(
+    input.sessionKey,
+    input.agentSource,
+    input.config,
+    input.threadId ?? null,
+  );
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   if (!resolved.currentTaskId) {
@@ -500,7 +543,12 @@ export async function updateTaskFromSession(
 export async function confirmPendingTaskAction(
   input: PendingActionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(
+    input.sessionKey,
+    input.agentSource,
+    input.config,
+    input.threadId ?? null,
+  );
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   const key = pendingKeyOf(resolved, input.agentSource, input.sessionKey);
@@ -565,7 +613,12 @@ export async function confirmPendingTaskAction(
 export async function cancelPendingTaskAction(
   input: PendingActionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(
+    input.sessionKey,
+    input.agentSource,
+    input.config,
+    input.threadId ?? null,
+  );
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   const key = pendingKeyOf(resolved, input.agentSource, input.sessionKey);
@@ -579,8 +632,15 @@ async function bindTaskIdToSession(
   sessionKey: string,
   agentSource: string,
   taskId: string,
+  threadId: string | null = null,
+  threadIsolation = false,
 ): Promise<void> {
-  const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
+  const compositeKey = buildStoreSessionKey({
+    agentSource,
+    sessionKey,
+    threadId,
+    threadIsolation,
+  });
   const store = getSessionStore();
   const state = store.get(compositeKey);
   if (!state || !state.sessionInfo) {
@@ -615,7 +675,8 @@ export function createSessionCreateTaskHandler(config: ProxyConfig) {
       return c.json({ code: 40001, message: parsed.error, request_id: `create-task-${Date.now()}` }, 400);
     }
 
-    const result = await createTaskFromSession({ ...parsed, config });
+    const threadId = parsed.threadId ?? c.req.header("x-thread-id") ?? null;
+    const result = await createTaskFromSession({ ...parsed, config, threadId });
     return respond(c, result, "create-task");
   };
 }
@@ -637,7 +698,8 @@ export function createSessionUpdateTaskHandler(config: ProxyConfig) {
       return c.json({ code: 40001, message: parsed.error, request_id: `update-task-${Date.now()}` }, 400);
     }
 
-    const result = await updateTaskFromSession({ ...parsed, config });
+    const threadId = parsed.threadId ?? c.req.header("x-thread-id") ?? null;
+    const result = await updateTaskFromSession({ ...parsed, config, threadId });
     return respond(c, result, "update-task");
   };
 }
@@ -647,13 +709,24 @@ export function createSessionUpdateTaskHandler(config: ProxyConfig) {
 function parseCommonBody(
   body: Record<string, unknown>,
 ):
-  | { sessionKey: string; agentSource: string; spaceId: string; hint?: string; recentMessages: MemCommandMessage[] }
+  | {
+      sessionKey: string;
+      agentSource: string;
+      spaceId: string;
+      threadId?: string;
+      hint?: string;
+      recentMessages: MemCommandMessage[];
+    }
   | { error: string } {
   const sessionKey = typeof body.session_key === "string" ? body.session_key : "";
   if (!sessionKey) return { error: "session_key is required" };
   const agentSource = typeof body.agent_source === "string" ? body.agent_source : "claude-code";
   const spaceId = typeof body.space_id === "string" ? body.space_id : "";
   const hint = typeof body.hint === "string" ? body.hint : undefined;
+  const threadId =
+    typeof body.thread_id === "string" && body.thread_id.length > 0
+      ? body.thread_id
+      : undefined;
 
   const rawMsgs = Array.isArray(body.recent_messages) ? body.recent_messages : [];
   const recentMessages: MemCommandMessage[] = [];
@@ -671,7 +744,14 @@ function parseCommonBody(
     }
   }
 
-  return { sessionKey, agentSource, spaceId, hint, recentMessages };
+  return {
+    sessionKey,
+    agentSource,
+    spaceId,
+    hint,
+    recentMessages,
+    ...(threadId ? { threadId } : {}),
+  };
 }
 
 function parseCreateTaskBody(
@@ -681,6 +761,7 @@ function parseCreateTaskBody(
       sessionKey: string;
       agentSource: string;
       spaceId: string;
+      threadId?: string;
       hint?: string;
       recentMessages: MemCommandMessage[];
       lockedTitle?: string;
@@ -701,6 +782,7 @@ function parseUpdateTaskBody(
       sessionKey: string;
       agentSource: string;
       spaceId: string;
+      threadId?: string;
       hint?: string;
       recentMessages: MemCommandMessage[];
       directDescription?: string;

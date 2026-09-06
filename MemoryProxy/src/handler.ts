@@ -43,7 +43,7 @@ import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
-import { sessionStage } from "./stages/session.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
 import type { ReqCtx } from "./stages/types.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
@@ -674,11 +674,12 @@ export async function handleChatCompletions(
     earlyUserId: earlyVerify?.userId ?? "",
     debugForceUserId: config.sessionInit?.debugForceUserId,
   };
-  await sessionStage(sessionStageCtx);
-  const conversationId = sessionStageCtx.conversationId;
-  const sessionKey =
-    sessionStageCtx.sessionKey ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
-  const threadId = sessionStageCtx.threadId ?? null;
+  const sessionTurn = await prepareSessionTurn(sessionStageCtx, undefined, {
+    fallbackSessionKey: () => resolveSessionKey(config, lcHeaders, c.req.path, body, keyId),
+  });
+  const conversationId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -779,14 +780,9 @@ export async function handleChatCompletions(
       const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
       const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
+        const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = buildStoreSessionKey({
-          agentSource,
-          sessionKey,
-          threadId,
-          threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
-        });
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -836,7 +832,6 @@ export async function handleChatCompletions(
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
-      const { buildStoreSessionKey } = await import("./session/store.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       // kernel /v3/meta/* 走 x-tdai-user-key 鉴权，需要 sk-mem-* 用户 key。
@@ -854,12 +849,7 @@ export async function handleChatCompletions(
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
-      const compositeKey = buildStoreSessionKey({
-        agentSource,
-        sessionKey,
-        threadId,
-        threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
-      });
+      const compositeKey = sessionTurn.compositeKey;
       // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
       // 复合键，保证 key path 分段合法（`u=anonymous` 走独立命名空间，天然与
       // 有 userId 的请求隔离）。参见 §4.4 边界处理。
@@ -901,7 +891,8 @@ export async function handleChatCompletions(
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system message carries agent/task context again.
         // 用户对话永远保留原样，包括 session_init form 交互 — 不做任何删除。
-        const { injectSessionContextWithToggles } = await import("./session/context-injector.js");
+        const { injectSessionContextWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const inMsgs = (body.messages as Array<Record<string, unknown>>) ?? [];
         const outMsgs = recovered.bypassed
           ? inMsgs
@@ -911,6 +902,7 @@ export async function handleChatCompletions(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -946,7 +938,13 @@ export async function handleChatCompletions(
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray },
+          {
+            stream: isStream,
+            modelId: modelId as string,
+            protocol: "openai",
+            questionsAsArray,
+            threadId,
+          },
           agentSource,
           metadataClient,
           kernelUserKey,
@@ -1690,7 +1688,7 @@ export async function handleChatCompletions(
       if (intents.length > 0) {
         emitModelIntentTelemetry({
           // 与 session_init_logs 对齐 compositeKey 形态
-          sessionKey: `${agentSource}:${sessionKey}`,
+          sessionKey: sessionTurn.compositeKey,
           turnSeq: lf.turnSeq,
           spaceId,
           userId: keyId,

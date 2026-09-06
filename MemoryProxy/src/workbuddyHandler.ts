@@ -38,8 +38,10 @@ import {
 import {
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
+  stripCodexFormArtifacts,
 } from "./session/codex/form.js";
-import { sessionStage, WORKBUDDY_SESSION_ADAPTER } from "./stages/session.js";
+import { WORKBUDDY_SESSION_ADAPTER } from "./stages/session.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
 import type { ReqCtx } from "./stages/types.js";
 import {
   langfuseReportGeneration,
@@ -462,6 +464,11 @@ async function forwardToUpstream(
   lf: LangfuseTurnContext | null,
   archiveCtx: WorkbuddyArchiveCtx | null = null,
 ): Promise<Response> {
+  // ── 每轮转发前剥离 Proxy 自产 session-init 假表单（同 codex wire）─────────
+  // WorkBuddy 复用 codex 的 request_user_input 弹窗骨架，客户端同样会全量
+  // 回放历史；转发前统一剥离，避免上游模型模仿生成非法调用。幂等无副作用。
+  body = stripCodexFormArtifacts(body);
+
   // ── Per-agent upstream override ──
   // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
   // 未配置时回退到全局 config.upstream.{url,apiKey}。
@@ -862,10 +869,14 @@ export async function handleWorkbuddyEndpoint(
     earlyUserId: userId || "",
     traceId,
   };
-  await sessionStage(sessionStageCtx, WORKBUDDY_SESSION_ADAPTER);
-  const sessionId = sessionStageCtx.conversationId;
-  const sessionKey = sessionStageCtx.sessionKey ?? `${keyId}:${traceId}`;
-  const threadId = sessionStageCtx.threadId ?? null;
+  const sessionTurn = await prepareSessionTurn(
+    sessionStageCtx,
+    WORKBUDDY_SESSION_ADAPTER,
+    { fallbackSessionKey: () => `${keyId}:${traceId}` },
+  );
+  const sessionId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
   const agentSource = "workbuddy";
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;
@@ -916,14 +927,9 @@ export async function handleWorkbuddyEndpoint(
       const userText = workbuddyAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
+        const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = buildStoreSessionKey({
-          agentSource,
-          sessionKey,
-          threadId,
-          threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
-        });
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -967,7 +973,6 @@ export async function handleWorkbuddyEndpoint(
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import(
         "./session/index.js"
       );
-      const { buildStoreSessionKey } = await import("./session/store.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       // kernel 侧鉴权的 x-tdai-user-key 直接用客户端请求 bearer（与 codexHandler / anthropicHandler 对齐）。
@@ -976,12 +981,7 @@ export async function handleWorkbuddyEndpoint(
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = buildStoreSessionKey({
-        agentSource,
-        sessionKey,
-        threadId,
-        threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
-      });
+      const compositeKey = sessionTurn.compositeKey;
       const identity = {
         userId: userId || "anonymous",
         agentSource: "codex" as const,
@@ -1003,9 +1003,8 @@ export async function handleWorkbuddyEndpoint(
 
       if (recovered && isTerminalState) {
         // Recovered from L2b/L2a — skip form, apply context
-        const { buildSessionContextBlockWithToggles } = await import(
-          "./session/context-injector.js"
-        );
+        const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const systemAppend = recovered.bypassed
           ? null
           : buildSessionContextBlockWithToggles(
@@ -1013,6 +1012,7 @@ export async function handleWorkbuddyEndpoint(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -1052,6 +1052,7 @@ export async function handleWorkbuddyEndpoint(
             stream: isStream,
             modelId: modelId as string,
             protocol: "responses" as any,
+            threadId,
             // 把原始 input[] 交给 CB 状态机识别 Default gate 与 MORE 翻页
             codexAnswerInput: input,
           },
@@ -1353,14 +1354,14 @@ export async function handleWorkbuddyEndpoint(
     try {
       const { getInjectionPipeline } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
-      const { buildSessionContextBlockWithToggles } = await import(
-        "./session/context-injector.js"
-      );
+      const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+        await import("./session/context-injector.js");
       const sessionContextBlock = buildSessionContextBlockWithToggles(
         cachedAgentDetail as import("./session/types.js").AgentDetail | null,
         cachedTaskDetail as import("./session/types.js").TaskDetail | null,
         config.sessionInit,
         sessionKey,
+        resolveTeamCtxInfo(sessionInfo as { team_id?: string } | null | undefined) ?? null,
       );
 
       // 构造 synthetic OpenAI body 供通用 pipeline 处理

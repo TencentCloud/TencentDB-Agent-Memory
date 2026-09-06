@@ -25,6 +25,7 @@ import { buildSessionInfo } from "../registrar.js";
 import {
   injectSessionContextWithToggles,
   buildSessionContextBlockWithToggles,
+  resolveTeamCtxInfo,
 } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
 import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
@@ -391,6 +392,7 @@ function applyArtifactsAndContext(
   sessionKey: string,
   config: SessionInitConfig,
   protocol: "openai" | "anthropic" | undefined,
+  team?: { id?: string; name?: string } | null,
 ): ArtifactsAndContextResult {
   // 转发上游的消息已由 handleSessionInitInner 顶部 stripSessionInitFormArtifacts
   // 净化（剥离 Proxy 假表单，见 cleaner.ts），这里只负责 <session_context> 注入，
@@ -403,10 +405,23 @@ function applyArtifactsAndContext(
   let out: MessageArr;
   let systemAppend: string | null = null;
   if (protocol === "anthropic") {
-    systemAppend = buildSessionContextBlockWithToggles(agentDetail, taskDetail, config, sessionKey);
+    systemAppend = buildSessionContextBlockWithToggles(
+      agentDetail,
+      taskDetail,
+      config,
+      sessionKey,
+      team ?? null,
+    );
     out = messages;
   } else {
-    out = injectSessionContextWithToggles(messages, agentDetail, taskDetail, config, sessionKey) as MessageArr;
+    out = injectSessionContextWithToggles(
+      messages,
+      agentDetail,
+      taskDetail,
+      config,
+      sessionKey,
+      team ?? null,
+    ) as MessageArr;
   }
 
   const injected = out;
@@ -536,7 +551,15 @@ async function completeRegistration(
   };
   await store.set(compositeKey, nextState);
 
-  const out = applyArtifactsAndContext(strippedMsgs, agentDetail, taskDetail, compositeKey, config, reqCtx.protocol);
+  const out = applyArtifactsAndContext(
+    strippedMsgs,
+    agentDetail,
+    taskDetail,
+    compositeKey,
+    config,
+    reqCtx.protocol,
+    resolveTeamCtxInfo({ team_id: regData.team_id }, cachedTeams),
+  );
   return {
     intercepted: false,
     messages: out.messages,
@@ -1122,7 +1145,18 @@ async function handleSessionInitInner(
   const bypassed = (state as any).bypassed === true;
   const agent = bypassed ? null : (state.agentDetail ?? null);
   const task = bypassed ? null : (state.taskDetail ?? null);
-  const out = applyArtifactsAndContext(messages, agent, task, sessionKey, config, reqCtx.protocol);
+  const out = applyArtifactsAndContext(
+    messages,
+    agent,
+    task,
+    sessionKey,
+    config,
+    reqCtx.protocol,
+    resolveTeamCtxInfo(
+      state.sessionInfo ?? null,
+      (state as { cachedTeams?: Array<{ team_id: string; team_name: string }> }).cachedTeams,
+    ),
+  );
   return {
     intercepted: false,
     messages: out.messages,

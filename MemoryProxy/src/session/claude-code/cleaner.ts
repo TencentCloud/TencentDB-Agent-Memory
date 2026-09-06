@@ -18,7 +18,7 @@
 
 import { containsFormTitle, isSessionInitToolCallId } from "./form.js";
 
-interface RawMessage {
+export interface RawMessage {
   role?: string;
   content?: unknown;
   [key: string]: unknown;

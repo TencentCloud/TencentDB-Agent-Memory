@@ -236,3 +236,46 @@ describe("handler 接线适配器（RESPONSES 通用 / WORKBUDDY）", () => {
     expect(noText.sessionKey).toBe(`${apiKeyToKeyId("sk-test")}:trace-wb-3`);
   });
 });
+
+describe("sessionStage：thread 维度解析（threadIsolation 接线前置）", () => {
+  beforeEach(() => {
+    __resetAutoSessionForTests();
+    __setAutoSessionNow(() => 1_000_000);
+  });
+  afterAll(() => {
+    __resetAutoSessionForTests();
+    __setAutoSessionNow(() => Date.now());
+  });
+
+  it("DEFAULT（CC/Chat）带 x-thread-id → ctx.threadId 产出；同 key 不同 thread 会话隔离，同 thread 续接", async () => {
+    const makeThreadCtx = (threadId: string) => {
+      const ctx = makeCtx();
+      ctx.c = {
+        req: {
+          raw: {
+            headers: new Headers({
+              "x-thread-id": threadId,
+              "x-api-key": "sk-test",
+            }),
+          },
+          header: (n: string) =>
+            n === "x-thread-id" ? threadId : n === "x-api-key" ? "sk-test" : null,
+          path: "/claude-code/default/v1/messages",
+        },
+      } as never;
+      return ctx;
+    };
+
+    const a1 = makeThreadCtx("th-1");
+    const a2 = makeThreadCtx("th-1");
+    const b1 = makeThreadCtx("th-2");
+    await sessionStage(a1);
+    await sessionStage(a2);
+    await sessionStage(b1);
+
+    expect(a1.threadId).toBe("th-1");
+    expect(b1.threadId).toBe("th-2");
+    expect(a1.sessionKey).toBe(a2.sessionKey); // 同 thread 续接
+    expect(a1.sessionKey).not.toBe(b1.sessionKey); // 不同 thread 隔离
+  });
+});

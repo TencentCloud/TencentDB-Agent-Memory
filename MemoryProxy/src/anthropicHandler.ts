@@ -44,12 +44,13 @@ import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
-import { sessionStage } from "./stages/session.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
 import type { ReqCtx } from "./stages/types.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
+import { stripSessionInitFormArtifacts, type RawMessage } from "./session/claude-code/cleaner.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
@@ -658,10 +659,12 @@ export async function handleAnthropicMessages(
     earlyUserId: earlyVerify?.userId ?? "",
     debugForceUserId: config.sessionInit?.debugForceUserId,
   };
-  await sessionStage(sessionStageCtx);
-  const conversationId = sessionStageCtx.conversationId;
-  const sessionKey =
-    sessionStageCtx.sessionKey ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  const sessionTurn = await prepareSessionTurn(sessionStageCtx, undefined, {
+    fallbackSessionKey: () => resolveSessionKey(config, lcHeaders, c.req.path, body, keyId),
+  });
+  const conversationId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -694,7 +697,7 @@ export async function handleAnthropicMessages(
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -754,7 +757,7 @@ export async function handleAnthropicMessages(
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
-      const compositeKey = `${agentSource}:${sessionKey}`;
+      const compositeKey = sessionTurn.compositeKey;
       // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
       // 复合键，保证 key path 分段合法（参见 §4.4 边界处理）。
       const identity = {
@@ -798,7 +801,8 @@ export async function handleAnthropicMessages(
         // Anthropic protocol: system lives on body.system (not in messages),
         // so we hand systemAppend back through the initResult and let the
         // shared apply-block below merge it into body.system.
-        const { buildSessionContextBlockWithToggles } = await import("./session/context-injector.js");
+        const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const inMsgs = (body.messages as Array<Record<string, unknown>>) ?? [];
         const systemAppend = recovered.bypassed
           ? null
@@ -807,6 +811,7 @@ export async function handleAnthropicMessages(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -832,7 +837,12 @@ export async function handleAnthropicMessages(
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "anthropic" },
+          {
+            stream: isStream,
+            modelId: modelId as string,
+            protocol: "anthropic",
+            threadId,
+          },
           agentSource,
           metadataClient,
           apiKey,
@@ -1370,6 +1380,20 @@ export async function handleAnthropicMessages(
     lf,
   });
 
+  // ── 每轮转发前剥离 Proxy 自产 session-init 假表单（AskUserQuestion 历史）──
+  // 客户端每轮会全量回放历史，只在该会话“注册轮”剥离不够：已初始化会话的
+  // 后续轮次仍会把 tool_use/tool_result 带给上游模型（GLM 会模仿生成非法
+  // AskUserQuestion）。剥离只针对 `toolu_cc_session_init_*` 与配对 tool_result，
+  // 用户真实消息永远保留；重复执行幂等。
+  if (Array.isArray(body.messages)) {
+    const rawMessages = body.messages as RawMessage[];
+    const strippedMessages = stripSessionInitFormArtifacts(rawMessages);
+    if (strippedMessages !== rawMessages) {
+      body = { ...body, messages: strippedMessages };
+      messages = strippedMessages as unknown[];
+    }
+  }
+
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
   if (sanitizedCount > 0) {
     pipe.info(
@@ -1619,7 +1643,7 @@ export async function handleAnthropicMessages(
         if (intents.length > 0) {
           emitModelIntentTelemetry({
             // 与 session_init_logs 对齐 compositeKey 形态
-            sessionKey: `${agentSource}:${sessionKey}`,
+            sessionKey: sessionTurn.compositeKey,
             turnSeq: lf.turnSeq,
             spaceId,
             userId: keyId,

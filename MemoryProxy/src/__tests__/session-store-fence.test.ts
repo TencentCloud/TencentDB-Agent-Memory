@@ -220,3 +220,40 @@ describe("SessionStore L2b binding 归属隔离（跨用户不删 owner 记录�
     expect(deleted).toEqual(["c1"]);
   });
 });
+
+describe("threadIsolation 接线键一致性（4 handler 与状态机同公式）", () => {
+  it("codex/workbuddy 别名归一，claude-code 独立前缀；开启且带 thread 时统一追加后缀", () => {
+    const threadIsolation = true;
+    const th = "th-1";
+    expect(
+      buildStoreSessionKey({ agentSource: "codex", sessionKey: "sk", threadId: th, threadIsolation }),
+    ).toBe("codex:sk:th-1");
+    expect(
+      buildStoreSessionKey({
+        agentSource: "workbuddy",
+        sessionKey: "sk",
+        threadId: th,
+        threadIsolation,
+      }),
+    ).toBe("codex:sk:th-1");
+    expect(
+      buildStoreSessionKey({
+        agentSource: "claude-code",
+        sessionKey: "sk",
+        threadId: th,
+        threadIsolation,
+      }),
+    ).toBe("claude-code:sk:th-1");
+  });
+
+  it("threadIsolation 关闭时 threadId 不进入复合键（默认配置行为不变）", () => {
+    expect(
+      buildStoreSessionKey({
+        agentSource: "claude-code",
+        sessionKey: "sk",
+        threadId: "th-1",
+        threadIsolation: false,
+      }),
+    ).toBe("claude-code:sk");
+  });
+});

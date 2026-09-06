@@ -21,7 +21,10 @@ import type {
 import { DEFAULT_TASK_LABEL } from "../types.js";
 import { SessionStore, buildStoreSessionKey } from "../store.js";
 import { buildSessionInfo } from "../registrar.js";
-import { injectSessionContextWithToggles } from "../context-injector.js";
+import {
+  injectSessionContextWithToggles,
+  resolveTeamCtxInfo,
+} from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
 import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
 
@@ -494,7 +497,14 @@ export async function completeRegistration(
   };
   await store.set(compositeKey, nextState);
 
-  const out = applyArtifactsAndContext(messages, agentDetail, taskDetail, compositeKey, config);
+  const out = applyArtifactsAndContext(
+    messages,
+    agentDetail,
+    taskDetail,
+    compositeKey,
+    config,
+    resolveTeamCtxInfo({ team_id: regData.team_id }, cachedTeams),
+  );
   return {
     intercepted: false,
     messages: out,
@@ -1495,6 +1505,16 @@ async function handleSessionInitInner(
   const bypassed = (state as any).bypassed === true;
   const agent = bypassed ? null : (state.agentDetail ?? null);
   const task = bypassed ? null : (state.taskDetail ?? null);
-  const out = applyArtifactsAndContext(messages, agent, task, sessionKey, config);
+  const out = applyArtifactsAndContext(
+    messages,
+    agent,
+    task,
+    sessionKey,
+    config,
+    resolveTeamCtxInfo(
+      state.sessionInfo ?? null,
+      (state as { cachedTeams?: Array<{ team_id: string; team_name: string }> }).cachedTeams,
+    ),
+  );
   return { intercepted: false, messages: out, sessionInfo: state.sessionInfo, bypassed };
 }

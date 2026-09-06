@@ -38,8 +38,10 @@ import {
   DEFAULT_GATE_PREFIX,
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
+  stripCodexFormArtifacts,
 } from "./session/codex/form.js";
-import { sessionStage, RESPONSES_SESSION_ADAPTER } from "./stages/session.js";
+import { RESPONSES_SESSION_ADAPTER } from "./stages/session.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
 import type { ReqCtx } from "./stages/types.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import { log } from "./report/log.js";
@@ -345,10 +347,14 @@ export async function handleCodexEndpoint(
     earlyUserId: userId || "",
     traceId,
   };
-  await sessionStage(sessionStageCtx, RESPONSES_SESSION_ADAPTER);
-  const sessionId = sessionStageCtx.conversationId;
-  const sessionKey = sessionStageCtx.sessionKey ?? `${keyId}:${traceId}`;
-  const threadId = sessionStageCtx.threadId ?? null;
+  const sessionTurn = await prepareSessionTurn(
+    sessionStageCtx,
+    RESPONSES_SESSION_ADAPTER,
+    { fallbackSessionKey: () => `${keyId}:${traceId}` },
+  );
+  const sessionId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
   const agentSource = "codex";
   const isStream = body.stream !== false;
 
@@ -403,14 +409,9 @@ export async function handleCodexEndpoint(
       const userText = codexAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
+        const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = buildStoreSessionKey({
-          agentSource,
-          sessionKey,
-          threadId,
-          threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
-        });
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -459,18 +460,12 @@ export async function handleCodexEndpoint(
   if (config.sessionInit?.enabled && sessionId) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
-      const { buildStoreSessionKey } = await import("./session/store.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = buildStoreSessionKey({
-        agentSource,
-        sessionKey,
-        threadId,
-        threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
-      });
+      const compositeKey = sessionTurn.compositeKey;
       const identity = {
         userId: userId || "anonymous",
         agentSource,
@@ -494,7 +489,8 @@ export async function handleCodexEndpoint(
 
       if (recovered && isTerminalState) {
         // Recovered from L2b/L2a — skip form, apply context
-        const { buildSessionContextBlockWithToggles } = await import("./session/context-injector.js");
+        const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const systemAppend = recovered.bypassed
           ? null
           : buildSessionContextBlockWithToggles(
@@ -502,6 +498,7 @@ export async function handleCodexEndpoint(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -540,6 +537,7 @@ export async function handleCodexEndpoint(
             stream: isStream,
             modelId: modelId as string,
             protocol: "responses" as any,
+            threadId,
             // 把原始 input[] 交给 CB 状态机，用于识别 codex 客户端专属的
             // Default gate 字符串和 MORE 翻页标记。
             codexAnswerInput: input,
@@ -868,12 +866,14 @@ export async function handleCodexEndpoint(
       // agentDetail/taskDetail 构造同款 block，预填到合成 body 的 system
       // message；下面 pipeline.process 会继续在同一 system message 后面 append
       // 更多注入内容，最终 raw 模式一起抽出去 → developer 段包含 session_context。
-      const { buildSessionContextBlockWithToggles } = await import("./session/context-injector.js");
+      const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+        await import("./session/context-injector.js");
       const sessionContextBlock = buildSessionContextBlockWithToggles(
         cachedAgentDetail as any,
         cachedTaskDetail as any,
         config.sessionInit,
         sessionKey,
+        resolveTeamCtxInfo(sessionInfo as { team_id?: string } | null | undefined) ?? null,
       );
 
       // Build a synthetic OpenAI body that the pipeline can parse/serialize.
@@ -1089,6 +1089,12 @@ async function forwardToUpstream(
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
 ): Promise<Response> {
+  // ── 每轮转发前剥离 Proxy 自产 codex session-init 假表单 ──────────────────
+  // Codex/WorkBuddy 客户端会全量回放 input[] 历史；只生成/注册轮不处理不够，
+  // 这里在进入协议转换与上游转发前统一剥离 request_user_input 的 function_call/
+  // function_call_output 及工具声明（幂等，无表单时原样返回）。
+  body = stripCodexFormArtifacts(body);
+
   // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
   // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
   // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
