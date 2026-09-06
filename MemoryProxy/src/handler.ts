@@ -1162,7 +1162,13 @@ export async function handleChatCompletions(
       if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
         const userMsg = { role: "user" as const, content: memCmd.rawMessage };
         try {
-          await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
+          await recordTdaiTurn(
+            tdaiClientForMem,
+            tdaiIdentityForMem,
+            userMsg,
+            memResult.messageText,
+            { traceId },
+          );
         } catch (err: unknown) {
           console.error("[mem-command] L0 write error:", err);
         }
@@ -1743,7 +1749,13 @@ export async function handleChatCompletions(
     }
 
     if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-      await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistantContentForTdai(assistantMessage));
+      await recordTdaiTurn(
+        tdaiClient,
+        tdaiIdentity,
+        tdaiUserMessage,
+        assistantContentForTdai(assistantMessage),
+        { traceId },
+      );
     } else if (tdaiClient) {
       logExtractionSkipped(config, "tdai-memory", sessionKey);
     }
@@ -2222,6 +2234,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         withL0Retry(() => recordTdaiTurn(
           ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
           outputMessageContent(outputMessage),
+          { traceId: ctx.traceId },
         )).catch((err: unknown) => pipe.error("TDAI_L0", err))
       );
     } else if (ctx.tdaiClient) {
