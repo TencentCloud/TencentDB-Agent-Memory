@@ -26,7 +26,7 @@
               "/absolute/path/to/TencentDB-Agent-Memory/node_modules/tsx/dist/cli.mjs",
               "/absolute/path/to/TencentDB-Agent-Memory/src/adapters/claude-code/cli.ts"
             ],
-            "timeout": 5,
+            "timeout": 15,
             "statusMessage": "Capturing TencentDB Agent Memory"
           }
         ]
@@ -42,7 +42,7 @@
               "/absolute/path/to/TencentDB-Agent-Memory/node_modules/tsx/dist/cli.mjs",
               "/absolute/path/to/TencentDB-Agent-Memory/src/adapters/claude-code/cli.ts"
             ],
-            "timeout": 5,
+            "timeout": 30,
             "statusMessage": "Flushing TencentDB Agent Memory"
           }
         ]

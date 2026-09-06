@@ -19,6 +19,15 @@ interface ClaudeCodeSessionStateOptions {
 
 const DEFAULT_STATE_TTL_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_CLAIM_TTL_MS = 60_000;
+// A transcript marker must outlive prompt state: a session resumed days later
+// continues the same transcript, and the marker is what keeps the resumed
+// SessionEnd from re-sending everything before it.
+const DEFAULT_TRANSCRIPT_MARKER_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+
+interface TranscriptMarker {
+  lastUuid: string;
+  updatedAt: number;
+}
 
 export function claudeCodeSessionKey(sessionId: string): string {
   return `claude-code:${sessionId}`;
@@ -152,6 +161,34 @@ export class ClaudeCodeSessionState {
     ]);
   }
 
+  /** Last transcript entry uuid sent to the Gateway by a SessionEnd transcript capture. */
+  async getTranscriptMarker(sessionId: string): Promise<string | undefined> {
+    try {
+      const raw = await readFile(this.transcriptMarkerPath(sessionId), "utf-8");
+      const marker = JSON.parse(raw) as Partial<TranscriptMarker>;
+      return typeof marker.lastUuid === "string" && marker.lastUuid ? marker.lastUuid : undefined;
+    } catch (error) {
+      if (isMissingFile(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async setTranscriptMarker(sessionId: string, lastUuid: string): Promise<void> {
+    await mkdir(this.stateDir, { recursive: true });
+    const target = this.transcriptMarkerPath(sessionId);
+    const temp = `${target}.${randomUUID()}.tmp`;
+    await writeFile(temp, JSON.stringify({ lastUuid, updatedAt: Date.now() } satisfies TranscriptMarker), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    try {
+      await rename(temp, target);
+    } catch (error) {
+      await rm(temp, { force: true });
+      throw error;
+    }
+  }
+
   async cleanupExpiredState(): Promise<void> {
     let entries;
     try {
@@ -171,6 +208,8 @@ export class ClaudeCodeSessionState {
           if (metadata.mtimeMs < now - this.claimTtlMs && await this.isClaimStale(file)) {
             await rm(file, { force: true });
           }
+        } else if (entry.name.endsWith(".transcript-marker.json")) {
+          if (metadata.mtimeMs < now - DEFAULT_TRANSCRIPT_MARKER_TTL_MS) await rm(file, { force: true });
         } else if (metadata.mtimeMs < now - this.stateTtlMs) {
           await rm(file, { force: true });
         }
@@ -191,6 +230,10 @@ export class ClaudeCodeSessionState {
 
   private latestPromptPath(sessionId: string): string {
     return path.join(this.stateDir, `${sessionKey(sessionId)}.latest-prompt.json`);
+  }
+
+  private transcriptMarkerPath(sessionId: string): string {
+    return path.join(this.stateDir, `${sessionKey(sessionId)}.transcript-marker.json`);
   }
 
   private async isClaimStale(claimPath: string): Promise<boolean> {
@@ -227,11 +270,12 @@ function isStateFile(name: string): boolean {
     || name.endsWith(".latest-prompt.json")
     || name.endsWith(".capture.claim")
     || name.endsWith(".captured")
+    || name.endsWith(".transcript-marker.json")
     || isPromptTempFile(name);
 }
 
 function isPromptTempFile(name: string): boolean {
-  return /^[a-f0-9]{64}\.(?:prompt|latest-prompt)\.json\.[0-9a-f-]{36}\.tmp$/.test(name);
+  return /^[a-f0-9]{64}\.(?:prompt|latest-prompt|transcript-marker)\.json\.[0-9a-f-]{36}\.tmp$/.test(name);
 }
 
 function isProcessRunning(pid: number): boolean {

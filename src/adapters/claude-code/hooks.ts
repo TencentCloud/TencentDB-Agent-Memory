@@ -20,6 +20,8 @@ export interface ClaudeCodeStopInput {
   last_assistant_message: string | null;
   background_tasks?: unknown[];
   session_crons?: unknown[];
+  /** Path of the session transcript JSONL; Claude Code sends it in every hook payload. */
+  transcript_path?: string;
 }
 
 export interface ClaudeCodeSessionEndInput {
@@ -27,6 +29,8 @@ export interface ClaudeCodeSessionEndInput {
   session_id: string;
   cwd: string;
   reason: string;
+  /** Path of the session transcript JSONL; Claude Code sends it in every hook payload. */
+  transcript_path?: string;
 }
 
 export type ClaudeCodeHookInput =
@@ -40,6 +44,8 @@ export interface ClaudeCodeHookOptions {
   stateDir?: string;
   tools?: MemoryTools;
   log?: (message: string) => void;
+  /** Claude Code config dir used to locate a transcript when the payload lacks `transcript_path`. */
+  claudeConfigDir?: string;
 }
 
 export async function handleClaudeCodeHook(
@@ -57,5 +63,18 @@ export async function handleClaudeCodeHook(
       .replace("[claude-code] capture failed open:", "Gateway capture failed open:")
       .replace("[claude-code] session end failed open:", "Gateway session end failed open:")),
   });
-  return new ClaudeCodePlatformAdapter({ stateDir: options.stateDir }).create(runtime)(input);
+  return new ClaudeCodePlatformAdapter({
+    stateDir: options.stateDir,
+    claudeConfigDir: options.claudeConfigDir,
+    transcriptClient: options.tools ?? createMemoryTools({ timeoutMs: transcriptTimeoutMs() }),
+    log,
+  }).create(runtime)(input);
+}
+
+const DEFAULT_TRANSCRIPT_TIMEOUT_MS = 15_000;
+
+/** Gateway timeout for one transcript batch (`TDAI_CLAUDE_CODE_TRANSCRIPT_TIMEOUT_MS`, default 15000). */
+function transcriptTimeoutMs(): number {
+  const parsed = Number(process.env.TDAI_CLAUDE_CODE_TRANSCRIPT_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TRANSCRIPT_TIMEOUT_MS;
 }

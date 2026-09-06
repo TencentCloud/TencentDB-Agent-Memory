@@ -8,6 +8,7 @@
 
 ### ✨ 新功能
 
+- **Claude Code adapter：转录捕获**：`Stop` 原本只捕获 prompt 与最终回复；现在 `Stop` 与 `SessionEnd` 读取 hook 载荷中的 `transcript_path`（或按 cwd 在 Claude Code projects 目录下定位），把 marker 之后的转录条目（工具调用、工具结果、中间回复）以 L0 消息发送。Stop 发送刚结束的完整回合（一次 capture），SessionEnd 发送剩余部分再 flush。thinking 与图片丢弃；tool_use / tool_result 转为带前缀的文本并截断；凭证形状的片段替换为 `[redacted:<kind>]`；超长消息分块，每批最多 100 条。旧路径已捕获的回合只补发工具流量。状态目录中的 marker 记录已发送位置，失败批次不推进 marker，未完整落库的回合留给 SessionEnd。`TDAI_CLAUDE_CODE_TRANSCRIPT_CAPTURE=off` 关闭；`TDAI_CLAUDE_CODE_STOP_BUDGET_MS`（默认 3500）、`TDAI_CLAUDE_CODE_TRANSCRIPT_BUDGET_MS`（默认 25000）、`TDAI_CLAUDE_CODE_TRANSCRIPT_TIMEOUT_MS`（默认 15000）控制预算与超时。
 - **MCP adapter 新增 Knowledge Service（wiki）工具**：`src/adapters/mcp/` 在原有 5 个 Gateway 工具之外新增 `tdai_wiki_list`、`tdai_wiki_search`、`tdai_wiki_pages`、`tdai_wiki_read`、`tdai_wiki_write`，通过 `TDAI_KNOWLEDGE_URL`（默认 `http://127.0.0.1:8424`）访问团队 wiki；租户身份来自 `TDAI_TEAM_ID` / `TDAI_USER_ID` / `TDAI_AGENT_ID`，服务 id 来自 `TDAI_SERVICE_ID`。wiki id 始终是工具参数，adapter 不预设任何组织信息。新增 `createKnowledgeTools()` 供平台 adapter 复用；`createMemoryMcpServer({ knowledge: false })` 可只注册 Gateway 工具。
 - **统一生命周期 Adapter SDK**：新增公开入口 `@tencentdb-agent-memory/memory-tencentdb/adapter-sdk`。新平台只需实现一个 `PlatformAdapter` 接口，并复用 Gateway-backed `MemoryClient` 与 `AdapterRuntime` 完成 fail-open recall、capture/session-end 去重、按会话串行和关闭等待。Codex、Claude Code 与 OpenCode 已迁移到同一契约；现有 MCP tools、Gateway wire protocol、session namespace、message ID 和状态目录保持兼容。
 
