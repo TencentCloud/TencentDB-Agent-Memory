@@ -27,7 +27,18 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "./types.js";
-import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
+import {
+  apiKeyToKeyId,
+  extractBearerToken,
+  opikCreateLlmSpan,
+  opikCreateTrace,
+  opikUpdateTrace,
+  uuidv7,
+} from "./opik.js";
+import {
+  buildOpikTraceMetadata,
+  summarizeResponsesToolInteraction,
+} from "./opik-metadata.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { joinUrl } from "./guard-adapter.js";
@@ -923,6 +934,55 @@ export async function handleCodexEndpoint(
   // 只在 main dialog + 已初始化 + 未 bypass 的稳态下建 ctx —— injectionSkipped
   // 场景与 CC/CB 的"跳过 L0/skill"分支对齐(sessionInfo 缺 team/user/agent 三件套
   // triggerSkillExtractIfReady 本身也会早退, 但提前判可以省一次 fanout)。
+  // ── Opik: create trace（Responses 主链路）─────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "responses",
+    sessionKey,
+    conversationId: sessionId,
+    spaceId,
+    userId,
+    model: modelId,
+    stream: isStream,
+    turnSeq,
+    requestPath: c.req.path,
+    memoryInjection: {
+      enabled: config.injection?.enabled === true,
+      injectorCount: config.injection?.injectors?.length ?? 0,
+      skipped: injectionSkipped,
+    },
+  });
+  const responsesToolSummary = summarizeResponsesToolInteraction(
+    Array.isArray(body.input) ? (body.input as unknown[]) : [],
+  );
+  if (
+    responsesToolSummary.toolCalls.length > 0 ||
+    responsesToolSummary.toolResults > 0
+  ) {
+    opikTraceMetadata.tool_interaction = responsesToolSummary;
+  }
+  const forkTraceId = opikCreateTrace(config, {
+    traceId,
+    projectName: keyId,
+    name: `${modelId} / ${keyId}`,
+    startTime,
+    input: {
+      input: Array.isArray(body.input) ? body.input : [],
+      ...(typeof body.instructions === "string" && body.instructions.length > 0
+        ? { instructions: body.instructions }
+        : {}),
+    },
+    tags: lf.tags,
+    metadata: opikTraceMetadata,
+    forkProjectName: "request_log",
+    forkMetadata: {
+      keyId,
+      modelId,
+      stream: isStream,
+      agentSource,
+    },
+  });
+
   const archiveCtx = buildArchiveCtx({
     config,
     sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
@@ -938,7 +998,10 @@ export async function handleCodexEndpoint(
   });
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
-  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
+  return forwardToUpstream(
+    c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
+    { forkTraceId, metadata: opikTraceMetadata },
+  );
 }
 
 // ── Archive context (skill/conversation/add + TDAI L0 write) ─────────────────
@@ -1091,6 +1154,7 @@ async function forwardToUpstream(
   pipe: ReturnType<typeof createPipeline>,
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
+  opikTurn: { forkTraceId?: string; metadata?: Record<string, unknown> } = {},
 ): Promise<Response> {
   // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
   // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
@@ -1206,6 +1270,11 @@ async function forwardToUpstream(
     inputBody: body,
     pipe,
     archiveCtx,
+    config,
+    traceId,
+    projectName: keyId,
+    forkTraceId: opikTurn.forkTraceId ?? "",
+    metadata: opikTurn.metadata ?? {},
   });
 
   return new Response(rawClientStream, {
@@ -1254,6 +1323,16 @@ export interface CodexTapContext {
    * 归档 (理论上 aux 不会带 archiveCtx, 两者同时 null 时上游 tap 干脆不启动)。
    */
   lf: LangfuseTurnContext | null;
+  /** Opik 上报配置（fire-and-forget，失败不影响业务）。 */
+  config: ProxyConfig;
+  /** Opik trace id（请求级 uuid，与 langfuse turn trace 相互独立）。 */
+  traceId: string;
+  /** Opik project_name = user keyId。 */
+  projectName: string;
+  /** fork 到 request_log 项目的独立 trace id（可能为空串）。 */
+  forkTraceId?: string;
+  /** create trace 时挂载的 metadata（span 复用同一份）。 */
+  metadata?: Record<string, unknown>;
   modelId: string;
   startTime: string;
   upstreamUrl: string;
@@ -1277,7 +1356,20 @@ export interface CodexTapContext {
  * 失败静默——埋点绝不影响业务链路。
  */
 export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: CodexTapContext): void {
-  const { lf, modelId, startTime, upstreamUrl, inputBody, pipe, archiveCtx } = ctx;
+  const {
+    lf,
+    config,
+    traceId,
+    projectName,
+    forkTraceId,
+    metadata,
+    modelId,
+    startTime,
+    upstreamUrl,
+    inputBody,
+    pipe,
+    archiveCtx,
+  } = ctx;
 
   (async () => {
     const decoder = new TextDecoder();
@@ -1338,6 +1430,55 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
         } catch (lfErr: unknown) {
           pipe.error("LANGFUSE_SPAN", lfErr);
         }
+      }
+
+      // ── Opik: update trace + LLM span（流式完成阶段）───────────────────────
+      try {
+        const outputMessage = outputText
+          ? { role: "assistant", content: outputText }
+          : undefined;
+        const outputMessages = outputMessage ? [outputMessage] : [];
+        const hasUsage = Object.keys(usage).length > 0;
+        const finalUsage = hasUsage ? usage : {};
+        opikUpdateTrace(config, {
+          traceId,
+          projectName,
+          endTime,
+          output: outputMessages,
+          usage: finalUsage,
+        });
+        if (forkTraceId && !config.opik.stripRequestLogContent) {
+          opikUpdateTrace(config, {
+            traceId: forkTraceId,
+            projectName: "request_log",
+            endTime,
+            output: outputMessages,
+            usage: finalUsage,
+          });
+        }
+        opikCreateLlmSpan(config, {
+          traceId,
+          projectName,
+          name: modelId,
+          startTime,
+          endTime,
+          inputMessages: [buildCodexLangfuseInput(inputBody)] as unknown[],
+          outputMessage: outputMessage ?? null,
+          model: modelId,
+          usage: finalUsage,
+          tags: ["stream"],
+          metadata,
+          forkProjectName: "request_log",
+          forkTraceId,
+          forkMetadata: {
+            keyId: projectName,
+            modelId,
+            stream: true,
+            upstreamUrl,
+          },
+        });
+      } catch (opikErr: unknown) {
+        pipe.error("OPIK_SPAN", opikErr instanceof Error ? opikErr : new Error(String(opikErr)));
       }
 
       // ── Skill/conversation/add + TDAI L0 归档 hook ──
