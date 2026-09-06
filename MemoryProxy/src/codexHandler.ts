@@ -775,7 +775,13 @@ export async function handleCodexEndpoint(
         if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
           const userMsg = { role: "user" as const, content: memCmd.rawMessage };
           try {
-            await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
+            await recordTdaiTurn(
+              tdaiClientForMem,
+              tdaiIdentityForMem,
+              userMsg,
+              memResult.messageText,
+              { traceId },
+            );
           } catch (err: unknown) {
             console.error("[codex] mem-command L0 write error:", err);
           }
@@ -928,6 +934,7 @@ export async function handleCodexEndpoint(
     userId,
     callerUserKey,
     assetCapabilities,
+    traceId,
   });
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
@@ -946,6 +953,7 @@ export async function handleCodexEndpoint(
 export interface CodexArchiveCtx {
   config: ProxyConfig;
   sessionKey: string;
+  traceId: string;
   agentSource: string;
   sessionInfo: Record<string, unknown>;
   spaceId: string;
@@ -967,6 +975,7 @@ function buildArchiveCtx(args: {
   injectionSkipped: boolean;
   input: unknown[];
   sessionKey: string;
+  traceId: string;
   agentSource: string;
   spaceId: string;
   userId: string;
@@ -990,6 +999,7 @@ function buildArchiveCtx(args: {
   return {
     config: args.config,
     sessionKey: args.sessionKey,
+    traceId: args.traceId,
     agentSource: args.agentSource,
     sessionInfo,
     spaceId: args.spaceId,
@@ -1024,7 +1034,13 @@ async function triggerCodexArchiveHooks(
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurn(
+          ctx.tdaiClient!,
+          ctx.tdaiIdentity,
+          ctx.tdaiUserMessage,
+          assistantText || null,
+          { traceId: ctx.traceId },
+        ),
       ).catch((err: unknown) => {
         console.warn("[codex-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),
