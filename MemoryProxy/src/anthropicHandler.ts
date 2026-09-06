@@ -1076,7 +1076,13 @@ export async function handleAnthropicMessages(
       if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
         const userMsg = { role: "user" as const, content: memCmd.rawMessage };
         try {
-          await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
+          await recordTdaiTurn(
+            tdaiClientForMem,
+            tdaiIdentityForMem,
+            userMsg,
+            memResult.messageText,
+            { traceId },
+          );
         } catch (err: unknown) {
           console.error("[mem-command] L0 write error:", err);
         }
@@ -1765,7 +1771,13 @@ export async function handleAnthropicMessages(
   // 常用的 stream:false）沉默丢失。缺失该调用意味着 CC non-stream 场景
   // 完全没有 L0 记忆写入。
   if (isMainDialog && tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-    recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, outputContent)
+    recordTdaiTurn(
+      tdaiClient,
+      tdaiIdentity,
+      tdaiUserMessage,
+      outputContent,
+      { traceId },
+    )
       .catch((err: unknown) => pipe.error("TDAI_L0", err));
   } else if (isMainDialog && tdaiClient) {
     logExtractionSkipped(config, "tdai-memory", sessionKey);
@@ -2101,6 +2113,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
           withL0Retry(() => recordTdaiTurn(
             ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
             outputText || null,
+            { traceId: ctx.traceId },
           )).catch((err: unknown) => pipe.error("TDAI_L0", err))
         );
       } else if (isMainDialog && ctx.tdaiClient) {
