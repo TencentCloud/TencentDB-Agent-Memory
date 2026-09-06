@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildOpikTraceMetadata,
+  summarizeResponsesOutput,
   summarizeResponsesToolInteraction,
   summarizeToolInteraction,
 } from "../opik-metadata.js";
@@ -102,5 +103,20 @@ describe("summarizeResponsesToolInteraction", () => {
       toolCalls: ["get_weather", "search_code"],
       toolResults: 1,
     });
+  });
+});
+
+describe("summarizeResponsesOutput", () => {
+  it("非流式 Responses output[]：message 文本 + function_call 名称", () => {
+    const summary = summarizeResponsesOutput([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "答案", annotations: [] }],
+      },
+      { type: "function_call", name: "get_weather", arguments: "{}" },
+      { type: "message", role: "assistant", content: [] },
+    ]);
+    expect(summary).toEqual({ text: "答案", toolCalls: ["get_weather"] });
   });
 });
