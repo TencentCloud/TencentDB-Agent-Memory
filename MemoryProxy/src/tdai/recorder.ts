@@ -30,8 +30,23 @@ export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | nul
   return null;
 }
 
-export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity | null, userMessage: TdaiMessage | null, assistantContent: string | null | undefined): Promise<void> {
+export async function recordTdaiTurn(
+  client: TdaiClient,
+  identity: TdaiIdentity | null,
+  userMessage: TdaiMessage | null,
+  assistantContent: string | null | undefined,
+  options: { traceId?: string } = {},
+): Promise<void> {
   if (!identity || !userMessage) return;
+  const messages: TdaiMessage[] = [userMessage];
+  if (assistantContent?.trim()) {
+    messages.push({ role: "assistant", content: assistantContent });
+  }
+  // 真实写入成功后才记审计：addConversation 在未启用/未开 writeL0/无消息时
+  // 返回 false（不记），网络/HTTP/envelope 失败时抛错由 withL0Retry 重试。
+  // 只有成功的那一次 attempt 会产生一条 l0 审计，避免失败误记与重试重复。
+  const wrote = await client.addConversation(identity, messages);
+  if (!wrote) return;
   auditMemoryAccess({
     actorUser: identity.userId,
     actorAgent: identity.agentId,
@@ -40,12 +55,8 @@ export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity 
     result: "l0",
     sessionKey: identity.sessionId,
     scope: identity.taskId ? "normal" : "no-task",
+    traceId: options.traceId,
   });
-  const messages: TdaiMessage[] = [userMessage];
-  if (assistantContent?.trim()) {
-    messages.push({ role: "assistant", content: assistantContent });
-  }
-  await client.addConversation(identity, messages);
 }
 
 function extractContentText(content: unknown): string {
