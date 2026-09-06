@@ -13,7 +13,7 @@
  *
  * 读写规则：
  *   - data-current: 明文 JSON（不做 append 语义；每次全量覆盖）
- *   - meta:         明文 JSON（session 串行，无 CAS）
+ *   - meta:         明文 JSON（由 Handler 的跨副本 session mutex 串行保护）
  *   - archive:      明文 JSON（写入前 exists() 判定，已存在直接视为成功）
  *   - _tasks.json:  明文 JSON（读改写，由上层 SkillAgentTaskQueue 用 Redis 短锁保护）
  */

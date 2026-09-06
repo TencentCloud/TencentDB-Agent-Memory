@@ -26,6 +26,13 @@
 
 set -euo pipefail
 
+# Always evaluate paths relative to MemoryCore. Git otherwise reports
+# repository-root paths (MemoryCore/src/...), while the guard rules below use
+# module-relative paths (src/...), causing the checks to silently miss files.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+MEMORY_CORE_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
+cd "$MEMORY_CORE_ROOT"
+
 if [[ "${SKIP_SKILL_QUEUE_ISOLATION:-0}" == "1" ]]; then
   echo "[skill-queue-isolation] SKIP_SKILL_QUEUE_ISOLATION=1，跳过红线检查（不推荐）"
   exit 0
@@ -57,18 +64,26 @@ echo "[skill-queue-isolation] BASE_REF=$BASE_REF MODE=$MODE"
 # - auto：CI 环境（GITHUB_ACTIONS=true / CI=true）走 base-diff，否则 working-tree
 case "$MODE" in
   base-diff)
-    CHANGED=$(git diff --name-only --diff-filter=ACMRT "$BASE_REF"...HEAD || true)
+    CHANGED=$(git diff --relative --name-only --diff-filter=ACMRT "$BASE_REF"...HEAD || true)
     ;;
   working-tree)
-    CHANGED=$(git status --porcelain | awk '$1 ~ /^[AM?RC]/ || $1 ~ /^.[AM]/ {print $NF}' | sort -u || true)
+    CHANGED=$( {
+      git diff --relative --name-only --diff-filter=ACMRT 2>/dev/null || true
+      git diff --relative --cached --name-only --diff-filter=ACMRT 2>/dev/null || true
+      git ls-files --others --exclude-standard 2>/dev/null || true
+    } | sort -u)
     ;;
   auto|*)
     if [[ "${GITHUB_ACTIONS:-}" == "true" || "${CI:-}" == "true" ]]; then
-      CHANGED=$(git diff --name-only --diff-filter=ACMRT "$BASE_REF"...HEAD || true)
+      CHANGED=$(git diff --relative --name-only --diff-filter=ACMRT "$BASE_REF"...HEAD || true)
     else
       # 本地：合并 base..HEAD + 工作区改动，最大化覆盖
-      CHANGED=$( { git diff --name-only --diff-filter=ACMRT "$BASE_REF"...HEAD 2>/dev/null || true; \
-                   git status --porcelain | awk '$1 ~ /^[AM?RC]/ || $1 ~ /^.[AM]/ {print $NF}'; } | sort -u)
+      CHANGED=$( {
+        git diff --relative --name-only --diff-filter=ACMRT "$BASE_REF"...HEAD 2>/dev/null || true
+        git diff --relative --name-only --diff-filter=ACMRT 2>/dev/null || true
+        git diff --relative --cached --name-only --diff-filter=ACMRT 2>/dev/null || true
+        git ls-files --others --exclude-standard 2>/dev/null || true
+      } | sort -u)
     fi
     ;;
 esac

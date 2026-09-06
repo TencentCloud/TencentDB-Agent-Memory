@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SkillConversationAddHandler, SkillIdempotencyConflictError } from "./add-handler.js";
+import { LocalSkillAgentTaskQueue } from "./agent-task-queue.js";
 
 function input(answer = "a") {
   return {
@@ -13,6 +14,66 @@ function input(answer = "a") {
 }
 
 describe("Skill conversation idempotency", () => {
+  it("serializes the same session across handler instances before checking idempotency", async () => {
+    let current: any = { messages: [] };
+    let meta: any = {
+      session_id: "session", space_id: "space", user_id: "user", team_id: "team", agent_id: "agent",
+      tool_call_count: 0, byte_count: 0,
+    };
+    const receipts = new Map<string, any>();
+    const buffer = {
+      readCurrent: vi.fn(async () => current),
+      readMeta: vi.fn(async () => meta),
+      writeCurrent: vi.fn(async (_sess: unknown, value: any) => { current = value; }),
+      writeMeta: vi.fn(async (_sess: unknown, value: any) => { meta = value; }),
+      readIdempotencyReceipt: vi.fn(async (_sess: unknown, keyHash: string) => receipts.get(keyHash) ?? null),
+      writeIdempotencyReceipt: vi.fn(async (_sess: unknown, value: any) => { receipts.set(value.key_hash, value); }),
+      findIdempotencyMarker: vi.fn(async () => null),
+    };
+    const queue = new LocalSkillAgentTaskQueue();
+    const first = new SkillConversationAddHandler({ buffer: buffer as never, trigger: {} as never, queue });
+    const second = new SkillConversationAddHandler({ buffer: buffer as never, trigger: {} as never, queue });
+
+    const results = await Promise.allSettled([first.handle(input("a")), second.handle(input("different"))]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    expect(rejected?.reason).toBeInstanceOf(SkillIdempotencyConflictError);
+    expect(current.messages).toHaveLength(2);
+    expect(["a", "different"]).toContain(current.messages[1]?.content);
+  });
+
+  it("does not lose messages when different keys hit separate handlers for one session", async () => {
+    let current: any = { messages: [] };
+    let meta: any = {
+      session_id: "session", space_id: "space", user_id: "user", team_id: "team", agent_id: "agent",
+      tool_call_count: 0, byte_count: 0,
+    };
+    const receipts = new Map<string, any>();
+    const buffer = {
+      readCurrent: vi.fn(async () => current),
+      readMeta: vi.fn(async () => meta),
+      writeCurrent: vi.fn(async (_sess: unknown, value: any) => { current = value; }),
+      writeMeta: vi.fn(async (_sess: unknown, value: any) => { meta = value; }),
+      readIdempotencyReceipt: vi.fn(async (_sess: unknown, keyHash: string) => receipts.get(keyHash) ?? null),
+      writeIdempotencyReceipt: vi.fn(async (_sess: unknown, value: any) => { receipts.set(value.key_hash, value); }),
+      findIdempotencyMarker: vi.fn(async () => null),
+    };
+    const queue = new LocalSkillAgentTaskQueue();
+    const first = new SkillConversationAddHandler({ buffer: buffer as never, trigger: {} as never, queue });
+    const second = new SkillConversationAddHandler({ buffer: buffer as never, trigger: {} as never, queue });
+    const secondInput = {
+      ...input("b"), idempotency_key: "turn-2",
+      messages: [{ role: "user" as const, content: "q2" }, { role: "assistant" as const, content: "b" }],
+    };
+
+    await Promise.all([first.handle(input()), second.handle(secondInput)]);
+
+    expect(current.messages).toHaveLength(4);
+    expect(current.messages.map((message: any) => message.content).sort()).toEqual(["a", "b", "q", "q2"]);
+    expect(receipts.size).toBe(2);
+  });
+
   it("replays the same result without appending the buffered messages twice", async () => {
     let current: { messages: Array<Record<string, unknown>> } = { messages: [] };
     let receipt: any = null;

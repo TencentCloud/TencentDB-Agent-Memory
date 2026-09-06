@@ -32,6 +32,7 @@ import type {
   SkillConversationIdempotencyResult,
 } from "./buffer-storage.js";
 import type { SkillTriggerService } from "./trigger-service.js";
+import type { ISkillAgentTaskQueue, SessionTuple } from "./agent-task-queue.js";
 import { obsLogger } from "../../report/obs-logger.js";
 
 const VALID_ROLES: ReadonlySet<CompressibleRole> = new Set([
@@ -117,10 +118,13 @@ export const DEFAULT_HANDLER_THRESHOLDS: HandlerThresholds = {
 export interface SkillConversationAddHandlerOptions {
   buffer: SkillBufferStorage;
   trigger: SkillTriggerService;
+  queue?: ISkillAgentTaskQueue;
   thresholds?: Partial<HandlerThresholds>;
   compressOptions?: Partial<CompressOptions>;
   oversizeOptions?: Partial<OversizeOptions>;
   now?: () => number;
+  sessionMutexLockTtlMs?: number;
+  sessionMutexWaitDeadlineMs?: number;
 }
 
 export class HandlerValidationError extends Error {
@@ -140,25 +144,33 @@ export class SkillIdempotencyConflictError extends Error {
 export class SkillConversationAddHandler {
   private readonly buffer: SkillBufferStorage;
   private readonly trigger: SkillTriggerService;
+  private readonly queue?: ISkillAgentTaskQueue;
   private readonly thresholds: HandlerThresholds;
   private readonly compressOptions: CompressOptions;
   private readonly oversizeOptions: OversizeOptions;
   private readonly now: () => number;
+  private readonly sessionMutexLockTtlMs: number;
+  private readonly sessionMutexWaitDeadlineMs: number;
   private readonly sessionChains = new Map<string, Promise<unknown>>();
 
   constructor(opts: SkillConversationAddHandlerOptions) {
     this.buffer = opts.buffer;
     this.trigger = opts.trigger;
+    this.queue = opts.queue;
     this.thresholds = { ...DEFAULT_HANDLER_THRESHOLDS, ...opts.thresholds };
     this.compressOptions = { ...DEFAULT_COMPRESS_OPTIONS, ...opts.compressOptions };
     this.oversizeOptions = { ...DEFAULT_OVERSIZE_OPTIONS, ...opts.oversizeOptions };
     this.now = opts.now ?? (() => Date.now());
+    this.sessionMutexLockTtlMs = opts.sessionMutexLockTtlMs ?? 30_000;
+    this.sessionMutexWaitDeadlineMs = opts.sessionMutexWaitDeadlineMs ?? 60_000;
   }
 
   async handle(input: AddConversationInput): Promise<AddConversationResult> {
+    this.validate(input);
     const sessionKey = [input.instance_id, input.space_id, input.user_id, input.team_id, input.agent_id, input.session_id].join("|");
     const previous = this.sessionChains.get(sessionKey) ?? Promise.resolve();
-    const current = previous.then(() => this.handleOnce(input), () => this.handleOnce(input));
+    const operation = () => this.handleWithSessionMutex(input);
+    const current = previous.then(operation, operation);
     const tail = current.then(() => undefined, () => undefined);
     this.sessionChains.set(sessionKey, tail);
     return current.finally(() => {
@@ -168,14 +180,33 @@ export class SkillConversationAddHandler {
     });
   }
 
+  private handleWithSessionMutex(input: AddConversationInput): Promise<AddConversationResult> {
+    if (!this.queue) return this.handleOnce(input);
+    const session: SessionTuple = {
+      instance_id: input.instance_id,
+      space_id: input.space_id,
+      user_id: input.user_id,
+      team_id: input.team_id,
+      agent_id: input.agent_id,
+      session_id: input.session_id,
+    };
+    return this.queue.withSessionMutex(
+      session,
+      {
+        lockTtlMs: this.sessionMutexLockTtlMs,
+        waitDeadlineMs: this.sessionMutexWaitDeadlineMs,
+      },
+      () => this.handleOnce(input),
+    );
+  }
+
   private async handleOnce(input: AddConversationInput): Promise<AddConversationResult> {
     // [obs] handler 内部分段：readBuffer / prepareArchive / trigger.archive / writeBack。
     // 走 obsLogger 底座（结构化事件 + FileLogger + ClickHouse 后端），
     // 通过 req_id 与上游 handleConversationAdd + trigger + worker 关联全链路。
     const rid = input.perfRequestId;
 
-    // ① 校验
-    this.validate(input);
+    // Validation is completed before entering the session serialization path.
     const sess: SessionKey = {
       instance_id: input.instance_id,
       space_id: input.space_id,
