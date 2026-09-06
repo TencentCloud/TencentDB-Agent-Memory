@@ -16,6 +16,7 @@ import {
   responsesJsonToChatJson,
   chatJsonToResponses,
   responsesBodyToChat,
+  chatBodyToResponses,
   createResponsesSseToChatSse,
   createChatSseToResponses,
 } from "../common/responses-chat-compat.js";
@@ -960,5 +961,59 @@ describe("丢参始终计入 /metrics（无需调用方接线 onDropped）", () 
     expect(out).toContain('tdai_conversion_dropped_total{kind="anthropic_to_chat",param="top_k"} 1');
     expect(out).toContain('tdai_conversion_dropped_total{kind="anthropic_to_chat",param="metadata"} 1');
     expect(out).not.toContain('param="metadata.custom"');
+  });
+});
+
+describe("结构化输出：Responses text.format ↔ Chat response_format", () => {
+  it("responsesBodyToChat：json_schema → response_format.json_schema（name 缺省补 response）", () => {
+    const schema = { type: "object", properties: { city: { type: "string" } } };
+    const chat = responsesBodyToChat(
+      {
+        model: "m",
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        text: { format: { type: "json_schema", schema, strict: true } },
+      },
+      {},
+    );
+    expect(chat.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "response", schema, strict: true },
+    });
+  });
+
+  it("responsesBodyToChat：json_object（对象/字符串两种形态）→ response_format.json_object", () => {
+    const a = responsesBodyToChat(
+      { model: "m", input: "hi", text: { format: { type: "json_object" } } },
+      {},
+    );
+    expect(a.response_format).toEqual({ type: "json_object" });
+    const b = responsesBodyToChat({ model: "m", input: "hi", text: { format: "json_object" } }, {});
+    expect(b.response_format).toEqual({ type: "json_object" });
+  });
+
+  it("chatBodyToResponses：response_format → text.format 反向", () => {
+    const out = chatBodyToResponses({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "weather", schema: { type: "object" }, strict: false },
+      },
+    });
+    expect(out.text).toEqual({
+      format: {
+        type: "json_schema",
+        name: "weather",
+        schema: { type: "object" },
+        strict: false,
+      },
+    });
+  });
+
+  it("无结构化输出时不动 text / response_format", () => {
+    const chat = responsesBodyToChat({ model: "m", input: "hi" }, {});
+    expect(chat.response_format).toBeUndefined();
+    const out = chatBodyToResponses({ model: "m", messages: [{ role: "user", content: "hi" }] });
+    expect(out.text).toBeUndefined();
   });
 });

@@ -245,6 +245,32 @@ export function responsesBodyToChat(
     }
   }
 
+  // 结构化输出：Responses text.format（text / json_object / json_schema）
+  // → Chat response_format。json_schema 缺 name 时用 "response" 占位
+  //（Chat 上游要求 name 必填）。
+  const textParam = asRecord(body.text);
+  const fmt = textParam?.format;
+  if (fmt && typeof fmt === "object") {
+    const f = asRecord(fmt);
+    if (f?.type === "json_schema") {
+      const schema = asRecord(f.schema);
+      if (schema) {
+        chat.response_format = {
+          type: "json_schema",
+          json_schema: {
+            name: typeof f.name === "string" && f.name ? f.name : "response",
+            schema,
+            ...(typeof f.strict === "boolean" ? { strict: f.strict } : {}),
+          },
+        };
+      }
+    } else if (f?.type === "json_object") {
+      chat.response_format = { type: "json_object" };
+    }
+  } else if (fmt === "json_object") {
+    chat.response_format = { type: "json_object" };
+  }
+
   // token 上限：Responses 用 max_output_tokens / max_completion_tokens，
   // Chat 用 max_tokens；智谱上限 32768。
   const maxTokens =
@@ -939,6 +965,26 @@ export function chatBodyToResponses(
       const fn = asRecord(tco.function);
       const name = fn && typeof fn.name === "string" ? fn.name : "";
       out.tool_choice = name ? { type: "function", name } : "auto";
+    }
+  }
+
+  // 反向：Chat response_format → Responses text.format（json_object / json_schema）。
+  const rf = asRecord(body.response_format);
+  const rfType = typeof rf?.type === "string" ? rf.type : "";
+  if (rfType === "json_object") {
+    out.text = { format: { type: "json_object" } };
+  } else if (rfType === "json_schema") {
+    const js = asRecord(rf?.json_schema);
+    const schema = asRecord(js?.schema);
+    if (schema) {
+      out.text = {
+        format: {
+          type: "json_schema",
+          name: typeof js?.name === "string" && js.name ? js.name : "response",
+          schema,
+          ...(typeof js?.strict === "boolean" ? { strict: js.strict } : {}),
+        },
+      };
     }
   }
 

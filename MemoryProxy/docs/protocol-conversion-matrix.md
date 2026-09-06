@@ -1,7 +1,7 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，93/93 通过：protocol-conformance 56、responses-anthropic-compat 13、
+> 全量回归：`npm test`（vitest，97/97 通过：protocol-conformance 60、responses-anthropic-compat 13、
 > sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
@@ -52,7 +52,8 @@ Responses ↔ Chat ↔ Anthropic
 | stop（string/array） | → stop_sequences | ✅ |
 | max_tokens / max_completion_tokens | → max_tokens | ✅ |
 | user | → metadata.user_id | ✅ |
-| logprobs / logit_bias / penalty / seed / n / response_format / stream_options | 显式丢弃（onDropped 上报） | ✅ |
+| logprobs / logit_bias / penalty / seed / n / stream_options | 显式丢弃（onDropped 上报） | ✅ |
+| response_format（json_object / json_schema） | → Responses text.format（反向映射见下） | ✅ |
 | reasoning_content / reasoning_signature | → thinking（map + preserveSignature 开） | ✅ |
 
 ## 响应字段矩阵
@@ -83,6 +84,8 @@ Responses ↔ Chat ↔ Anthropic
 | input.reasoning.summary（官方数组或字符串形态） | → assistant.reasoning_content | ✅ |
 | output.reasoning（summary 数组/字符串兼容） | → reasoning_content → reasoning item（`summary: [{type:"summary_text",text}]`） | ✅ |
 | tool_choice（Responses） | → Chat tool_choice | ✅ |
+| text.format（json_object / json_schema，name 缺省补 "response"） | → response_format | ✅ |
+| response_format（Chat） | → text.format（反向） | ✅ |
 
 ## 流式事件矩阵
 
@@ -121,6 +124,9 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 
 - **thinking 默认 strip、map 可选**：无 signature 的 thinking 块会被严格 Anthropic 上游拒绝，故 Chat→Anthropic 默认不产生 thinking；需要时 `opts.thinking:"map"`。
 - **signature 保真默认关**：`preserveSignature` 会在 chat 消息上带 `anthropic_reasoning_signature` 自定义字段，转发严格 OpenAI 上游前需剥离。
+- **reasoning 方向说明**：Anthropic→Chat/Responses 与 Chat↔Responses 的 reasoning 双向完整透传；
+  Chat/Responses 上游的 reasoning 到 Anthropic 客户端默认 strip（无 signature 的 thinking 会破坏严格
+  Anthropic 上游），只有显式开启 map 且带签名时才输出 thinking 块——这是安全默认，不是漏映射。
 - **丢弃参数可观测**：`onDropped` 回调上报所有“协议无对位”的参数（logprobs/penalty/seed/top_k/thinking 等），杜绝静默丢失。
 - **SSE 健壮性**：统一解析器支持 CRLF、`event:xxx`/`data:xxx` 紧凑格式、多 data 行、跨 chunk 缓冲、注释行与 [DONE]。
 - **round-trip 语义保真**：确定性随机属性测试证明 Anthropic→Chat→Anthropic 与 Chat→Anthropic→Chat 的角色序列、tool_call_id 配对、thinking/text/tool 内容不丢失。
@@ -138,6 +144,15 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 - **usage 细分字段**（`cache_creation_input_tokens` / `completion_tokens_details.reasoning_tokens`）：
   对方协议无对位字段，保持聚合计数（output_tokens 已含 reasoning），不伪造细分。
 - **内容块级无对位字段**（Anthropic user 的 `cache_control` / `document`、Responses 的 custom tools、未知 content block 类型）：当前静默跳过；`onDropped` 只覆盖顶层参数，内容块级丢弃未逐块上报（如需要可再下沉到块级）。
+- **多模态仅图片**：Anthropic↔Chat/Responses 的 image 双向映射已覆盖；Anthropic `document`、
+  OpenAI Chat `input_audio` / 文件上传、Responses `input_file` 等对方协议无对位字段，统一按
+  “内容块级无对位字段”显式跳过（不伪造 data URL / base64 语义），如需支持需上游先提供文件输入能力。
+- **辅助端点只同协议透传**：`/v1/messages/count_tokens`、`/v1/embeddings`、`/v1/completions`、
+  `/v1/moderations` 走 whitelist 透传，仅在 upstream 同协议时可用；05A（Claude Code → Chat 上游）
+  下 count_tokens 预检由接线层做本地估算兜底（见协议接线 PR），不走转换器。
+- **Responses 会话状态/compact 端点**：`input/output_conversation_state`、`/responses/compact` 依赖
+  Responses 原生会话状态语义，Responses→Chat/Anthropic 转换路径无法映射，仅支持 Responses 上游
+  直连；转换场景下应在接入层显式报“不支持该端点”而不是透传 404。
 - **Responses→Chat 输出上限钳制**：`responses-chat-compat.ts` 对 `max_output_tokens` 保留智谱 32768 上限（`Math.min`），
   超过 32768 的请求会被截断；该常量写在通用转换层，属厂商兼容性取舍，若需通用化应移到 per-upstream 配置。
 - **协议无对位参数**（logprobs / penalty / seed / top_k / thinking 等）：通过 `onDropped`
@@ -147,9 +162,8 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| protocol-conformance.test.ts | 49 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义/空内容流 message_start/丢参计数 |
+| protocol-conformance.test.ts | 60 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义/空内容流 message_start/丢参计数/结构化输出（text.format ↔ response_format） |
 | sse.test.ts | 8 | 解析器健壮性（LF/CRLF/紧凑/多 data/注释/跨 chunk/[DONE]） |
 | sse-fuzz.test.ts | 4 | 模糊测试：随机输入不崩、任意切分不吞帧、多块拼接一致、1MB 大帧不截断 |
 | protocol-stats.test.ts | 4 | 性能统计：分位数/环形上限/缓存命中/Prometheus 导出 |
-| responses-anthropic-compat.test.ts | 12 | 组合层两跳 + usage 单次统计 |
-| 其余（critical-paths / optimizations / …） | 109 | 回归 |
+| responses-anthropic-compat.test.ts | 13 | 组合层两跳 + usage 单次统计 + 并行工具回归 |
