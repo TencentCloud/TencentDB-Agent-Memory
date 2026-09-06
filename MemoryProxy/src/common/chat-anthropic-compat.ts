@@ -766,11 +766,17 @@ function mapAnthropicStopToChat(s: unknown): string {
 // ── 流式：上游 Anthropic SSE → 客户端 Chat SSE ──────────────────────────────
 
 export function createAnthropicSseToChatSse(
-  opts: { model?: string; preserveSignature?: boolean } = {},
+  opts: {
+    model?: string;
+    preserveSignature?: boolean;
+    /** 组合层第一跳时置 true：usage/cache 只在最终一跳计一次（与 JSON 路径口径一致）。 */
+    suppressUsageStat?: boolean;
+  } = {},
 ): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = opts.model ?? "unknown";
+  const suppressUsageStat = opts.suppressUsageStat === true;
   recordStream("anthropic_to_chat");
   const parser = createSseFrameParser();
   let started = false;
@@ -850,6 +856,15 @@ export function createAnthropicSseToChatSse(
       }),
     );
     if (usage) {
+      if (!suppressUsageStat) {
+        recordCacheUsage({
+          cached:
+            typeof usage.cache_read_input_tokens === "number"
+              ? usage.cache_read_input_tokens
+              : 0,
+          input: typeof usage.input_tokens === "number" ? usage.input_tokens : 0,
+        });
+      }
       emit(sseData({ choices: [], usage: toChatUsage(usage) }));
     }
     emit("data: [DONE]\n\n");
@@ -1028,11 +1043,14 @@ export function createChatSseToAnthropicSse(
     preserveSignature?: boolean;
     /** 与 chatJsonToAnthropicJson 同口径：默认 strip，thinking:"map" 才输出 thinking 块。 */
     thinking?: "map" | "strip";
+    /** 组合层第一跳时置 true：usage/cache 只在最终一跳计一次（与 JSON 路径口径一致）。 */
+    suppressUsageStat?: boolean;
   } = {},
 ): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = opts.model ?? "unknown";
+  const suppressUsageStat = opts.suppressUsageStat === true;
   // preserveSignature 需要 thinking 块承载 signature，因此视为 map。
   const mapThinking = opts.thinking === "map" || opts.preserveSignature === true;
   recordStream("chat_to_anthropic");
@@ -1144,6 +1162,15 @@ export function createChatSseToAnthropicSse(
     closeThinking();
     closeText();
     closeTools();
+    if (!suppressUsageStat && usage && Object.keys(usage).length > 0) {
+      recordCacheUsage({
+        cached:
+          (asRecord(usage.prompt_tokens_details)?.cached_tokens as number | undefined) ??
+          (usage.cached_tokens as number | undefined) ??
+          0,
+        input: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0,
+      });
+    }
     emit(
       anthropicEvent("message_delta", {
         type: "message_delta",
