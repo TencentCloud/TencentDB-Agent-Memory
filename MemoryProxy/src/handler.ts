@@ -771,7 +771,7 @@ export async function handleChatCompletions(
         // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -1057,10 +1057,10 @@ export async function handleChatCompletions(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id).slice(-8) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
