@@ -145,3 +145,41 @@ export function summarizeResponsesToolInteraction(
   }
   return { toolCalls: names, toolResults };
 }
+
+/**
+ * 从 Responses 非流式 JSON 的 output[] 提取上报用摘要：
+ * 文本（message.output_text/text）与工具调用名（function_call）。
+ */
+export function summarizeResponsesOutput(output: unknown[]): {
+  text: string;
+  toolCalls: string[];
+} {
+  const textParts: string[] = [];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of output) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const block of item.content as unknown[]) {
+        const b = block as Record<string, unknown> | null;
+        if (
+          b &&
+          typeof b === "object" &&
+          (b.type === "output_text" || b.type === "text") &&
+          typeof b.text === "string" &&
+          b.text
+        ) {
+          textParts.push(b.text);
+        }
+      }
+    } else if (item.type === "function_call") {
+      const name = typeof item.name === "string" ? item.name.trim() : "";
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        names.push(name);
+      }
+    }
+  }
+  return { text: textParts.join("\n"), toolCalls: names };
+}
