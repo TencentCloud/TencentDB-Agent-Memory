@@ -208,10 +208,13 @@ export function responsesBodyToChat(
     }
   }
 
+  // 流式意图透传：客户端显式 stream:false（Responses 默认也是非流式）时不能
+  // 让上游变成流式，否则代理会把 SSE 流回给期望 JSON 的客户端；缺省按
+  // “body.stream !== false”处理，与 codexHandler 的 isStream 口径保持一致。
   const chat: Record<string, unknown> = {
     model,
     messages: mergeMessages(messages),
-    stream: true,
+    stream: body.stream !== false,
   };
 
   // tools: Responses {type:"function", name, description, parameters} → Chat 标准格式
@@ -430,10 +433,13 @@ function finalItemShape(item: OpenItem): Record<string, unknown> {
  */
 export function createChatSseToResponses(opts: {
   model?: string;
+  /** 组合层第一跳时置 true：usage/cache 只在最终一跳计一次（与 JSON 路径口径一致）。 */
+  suppressUsageStat?: boolean;
 }): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = typeof opts.model === "string" ? opts.model : "unknown";
+  const suppressUsageStat = opts.suppressUsageStat === true;
   recordStream("chat_to_responses");
 
   let state: {
@@ -738,6 +744,12 @@ export function createChatSseToResponses(opts: {
       (asRecord(usage?.prompt_tokens_details)?.cached_tokens as number | undefined) ??
       (usage?.cached_tokens as number | undefined) ??
       0;
+    if (usage && Object.keys(usage).length > 0 && !suppressUsageStat) {
+      recordCacheUsage({
+        cached: cachedTokens,
+        input: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0,
+      });
+    }
     emit(
       sseFrame("response.completed", {
         response: {
@@ -936,10 +948,13 @@ export function chatBodyToResponses(
     });
   }
 
+  // Chat/Anthropic 缺省是非流式：只有输入明确 stream:true 才向上游要 SSE。
+  // 本函数作为 Anthropic→Responses 的第二跳时，第一跳已按客户端意图保留
+  // stream 标志，这里透传即可，不能写死 true。
   const out: Record<string, unknown> = {
     model,
     input,
-    stream: true,
+    stream: body.stream === true,
   };
   if (instructions) out.instructions = instructions;
 
@@ -1017,10 +1032,13 @@ export function chatBodyToResponses(
  */
 export function createResponsesSseToChatSse(opts: {
   model?: string;
+  /** 组合层第一跳时置 true：usage/cache 只在最终一跳计一次（与 JSON 路径口径一致）。 */
+  suppressUsageStat?: boolean;
 }): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = typeof opts.model === "string" ? opts.model : "unknown";
+  const suppressUsageStat = opts.suppressUsageStat === true;
   recordStream("responses_to_chat");
 
   let state: {
@@ -1029,8 +1047,15 @@ export function createResponsesSseToChatSse(opts: {
     finished: boolean;
     chatId: string;
     created: number;
-    toolByOutputIndex: Map<number, { chatIndex: number; callId: string; name: string }>;
+    toolByOutputIndex: Map<
+      number,
+      { chatIndex: number; callId: string; name: string; argsSeen: boolean }
+    >;
     toolCount: number;
+    /** 已发过文本 delta 的 output_index（done 兜底时避免重复）。 */
+    textSeen: Set<number>;
+    /** 已发过 reasoning delta 的 output_index（done 兜底时避免重复）。 */
+    reasoningSeen: Set<number>;
     usage: Record<string, unknown> | undefined;
     controller: TransformStreamDefaultController<Uint8Array>;
   } | null = null;
@@ -1087,6 +1112,12 @@ export function createResponsesSseToChatSse(opts: {
         (asRecord(usage.input_tokens_details)?.cached_tokens as number | undefined) ??
         (usage.cached_tokens as number | undefined) ??
         0;
+      if (!suppressUsageStat) {
+        recordCacheUsage({
+          cached,
+          input: typeof usage.input_tokens === "number" ? usage.input_tokens : 0,
+        });
+      }
       emit(
         sseData({
           choices: [],
@@ -1115,6 +1146,8 @@ export function createResponsesSseToChatSse(opts: {
         created: Math.floor(Date.now() / 1000),
         toolByOutputIndex: new Map(),
         toolCount: 0,
+        textSeen: new Set(),
+        reasoningSeen: new Set(),
         usage: undefined,
         controller,
       };
@@ -1158,7 +1191,7 @@ export function createResponsesSseToChatSse(opts: {
           (typeof item.id === "string" ? item.id : undefined) ??
           `call_${randomId()}`;
         const name = typeof item.name === "string" ? item.name : "";
-        state.toolByOutputIndex.set(outputIndex, { chatIndex, callId, name });
+        state.toolByOutputIndex.set(outputIndex, { chatIndex, callId, name, argsSeen: false });
         state.toolCount += 1;
         ensureStarted();
         emit(
@@ -1187,6 +1220,8 @@ export function createResponsesSseToChatSse(opts: {
     if (type === "response.reasoning_summary_text.delta") {
       const delta = data.delta;
       if (typeof delta === "string" && delta.length > 0) {
+        const outputIndex = typeof data.output_index === "number" ? data.output_index : 0;
+        state.reasoningSeen.add(outputIndex);
         ensureStarted();
         emit(
           sseData({
@@ -1205,6 +1240,8 @@ export function createResponsesSseToChatSse(opts: {
     if (type === "response.output_text.delta") {
       const delta = data.delta;
       if (typeof delta === "string" && delta.length > 0) {
+        const outputIndex = typeof data.output_index === "number" ? data.output_index : 0;
+        state.textSeen.add(outputIndex);
         ensureStarted();
         emit(
           sseData({
@@ -1227,10 +1264,12 @@ export function createResponsesSseToChatSse(opts: {
             chatIndex: state.toolCount,
             callId: `call_${randomId()}`,
             name: "",
+            argsSeen: false,
           };
           state.toolByOutputIndex.set(outputIndex, tool);
           state.toolCount += 1;
         }
+        tool.argsSeen = true;
         emit(
           sseData({
             choices: [
@@ -1249,6 +1288,158 @@ export function createResponsesSseToChatSse(opts: {
             ],
           }),
         );
+      }
+      return;
+    }
+    if (type === "response.output_item.done") {
+      // 兜底：部分精简 Responses 实现只发 output_item.added/done、不发 delta。
+      // 此时从 done 事件里取完整 arguments/text/summary 补发，避免客户端
+      // 只拿到空工具参数或空正文；已收到过 delta 的项不重复补发。
+      const item = asRecord(data.item);
+      const outputIndex = typeof data.output_index === "number" ? data.output_index : 0;
+      if (!item) return;
+      if (item.type === "function_call") {
+        const callId =
+          (typeof item.call_id === "string" ? item.call_id : undefined) ??
+          (typeof item.id === "string" ? item.id : undefined) ??
+          `call_${randomId()}`;
+        const name = typeof item.name === "string" ? item.name : "";
+        const rawArgs = item.arguments;
+        const args =
+          typeof rawArgs === "string"
+            ? rawArgs
+            : rawArgs !== undefined
+              ? JSON.stringify(rawArgs)
+              : "";
+        let tool = state.toolByOutputIndex.get(outputIndex);
+        if (!tool) {
+          tool = {
+            chatIndex: state.toolCount,
+            callId,
+            name,
+            argsSeen: false,
+          };
+          state.toolByOutputIndex.set(outputIndex, tool);
+          state.toolCount += 1;
+          ensureStarted();
+          emit(
+            sseData({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: tool.chatIndex,
+                        id: callId,
+                        type: "function",
+                        function: { name, arguments: "" },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            }),
+          );
+        } else if (name && !tool.name) {
+          // added 事件缺失时补发名称（仍在第一次参数 delta 之前）。
+          tool.name = name;
+          emit(
+            sseData({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: tool.chatIndex,
+                        id: tool.callId,
+                        type: "function",
+                        function: { name, arguments: "" },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            }),
+          );
+        }
+        if (args && !tool.argsSeen) {
+          tool.argsSeen = true;
+          emit(
+            sseData({
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: tool.chatIndex,
+                        function: { name: null, arguments: args },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            }),
+          );
+        }
+        return;
+      }
+      if (item.type === "message") {
+        const content = item.content;
+        const text = Array.isArray(content)
+          ? content
+              .map((b) => {
+                const r = asRecord(b);
+                if (
+                  r &&
+                  (r.type === "output_text" || r.type === "text") &&
+                  typeof r.text === "string"
+                ) {
+                  return r.text;
+                }
+                return "";
+              })
+              .filter((t) => t.length > 0)
+              .join("\n")
+          : typeof content === "string"
+            ? content
+            : "";
+        if (text.length > 0 && !state.textSeen.has(outputIndex)) {
+          state.textSeen.add(outputIndex);
+          ensureStarted();
+          emit(
+            sseData({
+              choices: [
+                { index: 0, delta: { content: text }, finish_reason: null },
+              ],
+            }),
+          );
+        }
+        return;
+      }
+      if (item.type === "reasoning") {
+        const text = reasoningSummaryToText(item.summary);
+        if (text.length > 0 && !state.reasoningSeen.has(outputIndex)) {
+          state.reasoningSeen.add(outputIndex);
+          ensureStarted();
+          emit(
+            sseData({
+              choices: [
+                {
+                  index: 0,
+                  delta: { reasoning_content: text },
+                  finish_reason: null,
+                },
+              ],
+            }),
+          );
+        }
+        return;
       }
       return;
     }
