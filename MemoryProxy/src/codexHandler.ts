@@ -36,10 +36,12 @@ import {
   uuidv7,
 } from "./opik.js";
 import {
+  buildMemoryInjectionContext,
   buildOpikTraceMetadata,
   summarizeResponsesOutput,
   summarizeResponsesToolInteraction,
 } from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { joinUrl } from "./guard-adapter.js";
@@ -857,6 +859,8 @@ export async function handleCodexEndpoint(
   //
   // This reuses 100% of the existing pipeline infrastructure (hook cache,
   // prewarm, all injectors) without writing a third protocol adapter.
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 挂载。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (!injectionSkipped && sessionInfo && config.injection?.enabled && (config.injection.injectors?.length ?? 0) > 0) {
     try {
       const { getInjectionPipeline } = await import("./injection/index.js");
@@ -893,7 +897,7 @@ export async function handleCodexEndpoint(
         model: modelId,
       };
 
-      const injectedBody = await pipeline.process(syntheticBody, {
+      const injectedResult = await pipeline.processWithStats(syntheticBody, {
         protocol: "openai",
         traceId,
         keyId,
@@ -910,9 +914,10 @@ export async function handleCodexEndpoint(
 
       // Extract injected content from the synthetic body's system message.
       // The pipeline appends to `messages[0].content` (system message).
-      const injectedMessages = injectedBody.messages as Array<Record<string, unknown>> | undefined;
+      const injectedMessages = injectedResult.body.messages as Array<Record<string, unknown>> | undefined;
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
+      injectionHookRuns = injectedResult.hookResults;
 
       if (injectedText.length > 0) {
         // Pipeline 产出的 injectedText 已经是**成品 XML 文本**（含
@@ -947,11 +952,12 @@ export async function handleCodexEndpoint(
     stream: isStream,
     turnSeq,
     requestPath: c.req.path,
-    memoryInjection: {
+    memoryInjection: buildMemoryInjectionContext({
       enabled: config.injection?.enabled === true,
-      injectorCount: config.injection?.injectors?.length ?? 0,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
       skipped: injectionSkipped,
-    },
+      hookRuns: injectionHookRuns,
+    }),
   });
   const responsesToolSummary = summarizeResponsesToolInteraction(
     Array.isArray(body.input) ? (body.input as unknown[]) : [],

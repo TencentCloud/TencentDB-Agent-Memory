@@ -1,7 +1,7 @@
 # Opik 可观测接入（TRACK 06 / PR #1270）
 
 > 状态：已实现并验证（OpenAI Chat、Anthropic、OpenAI Responses 三条主链路均已接入）
-> 覆盖范围：调用链路 / Token / 记忆注入（粗粒度）/ 工具交互 / memory-access 审计
+> 覆盖范围：调用链路 / Token / 记忆注入（配置级 + 本轮逐钩子运行统计）/ 工具交互 / memory-access 审计
 
 ## 1. 背景与目标
 
@@ -11,17 +11,17 @@ Opik 上报链路上补齐：
 
 - **上报可靠性**：统一 `sendOpikRequest`（超时 / 熔断 / 限频日志，全程
   fire-and-forget）；
-- **trace metadata**：调用链路 / 记忆注入（粗粒度）/ 工具交互三类结构化字段，
-  字段白名单 + 长度封顶；
+- **trace metadata**：调用链路 / 记忆注入（配置级 + 逐钩子运行统计）/
+  工具交互三类结构化字段，字段白名单 + 长度封顶；
 - **memory-access 审计线**：谁在什么时候写了谁的 L0（JSONL 落盘 + 轮转）；
 - **配置兼容与迁移**：`opik.apiPrefix` / `timeoutMs` 可配置，并为旧
   `url=:5173` 配置做向后兼容。
 
 明确不在本 PR 范围（不会假装已实现）：
 
-- 逐注入钩子的 `hookCount / blockCount / errorCount` 统计尚未接入
-  （当前只有粗粒度 `memory_injection.enabled / injector_count / skipped`）；
-- Opik 自托管栈的 compose / 部署脚本不在本仓库（见 §5 手工部署说明）。
+- Opik 官方完整栈的其它模块（python-backend / guardrails / demo-data / otel
+  等）与生产级高可用不在本仓库；仓库只带 trace 上报必需组件的裁剪版 compose
+  （见 §5）。
 
 ## 2. 架构与数据流
 
@@ -43,7 +43,8 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | 文件 | 改动 |
 |---|---|
 | `src/opik.ts` | 统一上报通道：超时 / 熔断（5 次 → 30s）/ 10s 限频；`apiPrefix`、`timeoutMs` 可配置；fork `request_log` 脱敏 |
-| `src/opik-metadata.ts` | trace metadata 纯函数：字段白名单、长度封顶、工具交互摘要（只留名称与条数） |
+| `src/opik-metadata.ts` | trace metadata 纯函数：字段白名单、长度封顶、工具交互摘要（只留名称与条数）、`buildMemoryInjectionContext`（配置级 + 逐钩子运行统计汇总） |
+| `src/injection/pipeline.ts` | `processWithStats`：把管线本就算好的每钩子 `HookResult[]` 透给调用方；`process()` 保持原签名兼容包装 |
 | `src/audit.ts` | memory-access 审计：`buildAuditPayload` 纯函数、trace_id 完整保留、JSONL 大小轮转 |
 | `src/config.ts` / `config.example.yaml` | `opik.apiPrefix` / `timeoutMs`；旧 `:5173` 配置自动兼容 `/api/v1/private` |
 | `src/handler.ts` | OpenAI Chat（WorkBuddy Web）：create trace / LLM span 挂 metadata |
@@ -51,11 +52,14 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `src/codexHandler.ts` / `src/workbuddyHandler.ts` | OpenAI Responses（Codex / WorkBuddy Desktop）：create trace + 流式 completed LLM span + metadata（2026-09-06 补齐） |
 | `src/opik-metadata.ts` | 新增 Responses input[] 工具交互摘要 |
 | `src/tdai/recorder.ts` + `src/tdai/client.ts` | L0 写入结果可判定：真实成功后记一条审计；HTTP/网络失败抛错可重试；审计事件带 trace_id |
+| `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
+| `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik 9 + opik-metadata 6 + audit 3（vitest 26/26）；本设计文档 |
+| 测试 / 文档 | opik 9 + opik-metadata 11 + audit 3 + user-query-extractor 8（vitest 31/31）；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
-> 本 PR 仍**不含** `deploy/opik-compose.yml` 或 `start-proxy.sh` 的 `PROXY_OPIK_*` 透传（部署按官方 compose + 手工 YAML）。
+> 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
+> 其它模块（python-backend / guardrails / demo-data / otel 等）不在本仓库。
 
 ## 4. trace / span 携带的 metadata
 
@@ -65,7 +69,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `protocol` | openai / anthropic / responses |
 | `session_key` / `conversation_id` | 客户端会话标识 |
 | `space_id` / `user_id` / `model` / `stream` / `turn_seq` / `request_path` | 身份、路由与轮次 |
-| `memory_injection` | 粗粒度：`enabled` / `injector_count` / `skipped`（逐钩子统计为后续项） |
+| `memory_injection` | 配置级：`enabled` / `injector_count` / `skipped`；运行级：`hook_count` / `block_count` / `error_count` / `hooks`（逐钩子明细） |
 | `tool_interaction` | `toolCalls[]`（工具名）+ `toolResults`（结果条数） |
 
 另外每次 Chat / Anthropic trace 会 fork 一份到 `request_log` 项目（独立
@@ -73,8 +77,24 @@ traceId，默认脱敏只留 usage + 标签），供原始请求留痕，不污�
 
 ## 5. 配置与启用
 
-本 PR 不提供自托管 compose（仓库内无 `deploy/opik-compose.yml`）。请在部署侧
-按 Opik 官方文档启动 backend/frontend，然后在 Proxy 的 `config.yaml` 手工配置：
+本 PR 随仓库提供自托管 compose（`deploy/opik-compose.yml` + `deploy/opik-assets/`，
+裁剪自官方 v2.2.49 栈，只保留 trace 上报必需组件）。启动：
+
+```bash
+cd deploy
+docker compose -f opik-compose.yml --profile opik up -d --pull missing
+```
+
+`deploy/global-images` 的容器化部署（start-all / start-proxy）则直接在 `.env`
+打开透传变量，脚本会在生成的 config.yaml 里写入 opik 段：
+
+```dotenv
+PROXY_OPIK_ENABLED=1                          # 1 = 开启 Opik 上报
+PROXY_OPIK_URL=http://host.docker.internal:5173   # opik frontend（nginx 代理 /api/* 到 backend）
+PROXY_OPIK_API_KEY=                           # 自托管无鉴权可留空
+```
+
+也可以绕过脚本、在 Proxy 的 `config.yaml` 手工配置：
 
 ```yaml
 opik:
@@ -113,7 +133,8 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 
 1. trace 的 `metadata.protocol` 为 `openai`（WorkBuddy Web）/ `anthropic`
    （Claude Code）/ `responses`（Codex / WorkBuddy Desktop）；
-2. `metadata.memory_injection` 存在（`enabled / injector_count / skipped`）；
+2. `metadata.memory_injection` 存在，且包含配置级（`enabled / injector_count /
+   skipped`）与运行级（`hook_count / block_count / error_count / hooks`）字段；
 3. trace 带真实 `usage`，`span_count >= 1`；
 4. 审计 JSONL 只出现在 **L0 真实写入成功后**，且带完整 `trace_id`；
 5. `stream:false` 的非流式 JSON 同样上报：trace + LLM span（forward 的
@@ -138,9 +159,16 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 - **Responses 非流式 JSON**：`stream:false` 时上游返回 JSON，codex/workbuddy
   在转发层读取 usage/output 并 update trace + 创建 LLM span（流式与 JSON 两条
   出口均已覆盖）；
-- **记忆注入为粗粒度**：只有 `enabled / injector_count / skipped`；
-  逐钩子 `hookCount / blockCount / errorCount` 需接入
-  `StatsInjectionObserver` 后补充（后续项）；
+- **记忆注入字段语义**：`injector_count` 是配置声明的注入器数量（配置级）；
+  `hook_count / block_count / error_count` 是本轮注入管线真实运行结果
+  （运行级），`hooks` 给出每个 hook 的 `point / block_count /
+  cache_strategy / error` 明细。`skipped=true` 或未启用注入时不执行管线，
+  因此只有配置级字段；
+- **逐钩子错误只落布尔位**：`error: true` 表示该钩子本轮执行抛错，错误原文
+  不写入 Opik metadata（避免内部信息外泄），完整信息在结构化日志
+  `injection.hook.error` 中；钩子失败不阻断管线，业务照常转发；
+- **hooks 上限 20 条**：常规生产配置每轮 ≤ 8 个钩子；超过 20 时只保留前
+  20 条明细，计数不受影响；
 - **审计只在真实写入后记录**：`TdaiClient.addConversation` 现在会返回是否写入、
   在失败时抛错（供 `withL0Retry` 重试），`recordTdaiTurn` 仅在成功的那次写入后
   落一条 `l0` 审计并携带请求 `trace_id`；未启用 / `writeL0=false` / 无消息时不落；
@@ -149,20 +177,31 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   （`:5173` → `/api/v1/private`，其余 → `/v1/private`）；
 - **多模态 document / audio、Responses 会话状态端点**仍按各协议既有边界处理，
   不在本 PR 扩大范围；
-- **Opik 自托管部署**：仓库不包含 compose/启动脚本，按官方文档部署 backend
-  （MySQL + ClickHouse + Redis + MinIO + ZooKeeper）与 frontend。
+- **Opik 自托管部署**：仓库提供 `deploy/opik-compose.yml`（backend 8080 /
+  frontend 5173，数据落 named volume）；首次启动需拉镜像（`pull_policy: missing`，
+  本地有镜像时可离线），compose 内为本地开发凭据（opik/opik 等），上线请自行
+  更换密钥。
 
 ## 8. 可靠性加固与评审修复（2026-09-06）
 
 - **统一上报通道**：create trace / update trace / LLM span（含 fork）收敛到
   `sendOpikRequest`：单次超时（`timeoutMs` 默认 2000ms）、连续失败熔断
   （5 次 → 30s）、同类错误限频（10s 一条 warn）；fire-and-forget；
-- **trace metadata 四类定位信息（粗粒度）**：`opik-metadata.ts` 纯函数组装，
-  字段白名单 + 长度封顶；`handler.ts` / `anthropicHandler.ts` 在 create trace
-  与非流式 LLM span 挂载，流式 span 复用同一 trace；
+- **trace metadata 四类定位信息（粗粒度 + 逐钩子运行统计）**：
+  `opik-metadata.ts` 纯函数组装，字段白名单 + 长度封顶；四个 handler
+  （Chat / Anthropic / Codex / WorkBuddy）统一经 `buildMemoryInjectionContext`
+  把注入管线本轮 `HookResult[]` 汇总进 `memory_injection`（injection
+  `pipeline.processWithStats` 只透出管线本就计算好的结果，不增加任何网络
+  调用与共享状态）；create trace 与非流式 LLM span 挂载，流式 span 复用
+  同一 trace；
 - **audit 审计线加固**：`buildAuditPayload` 纯函数（长度封顶、默认值归一、
   trace_id 完整保留）；JSONL 大小轮转；失败静默不阻塞业务；
-- **评审修复（2026-09-06）**：① 文档收窄为实际埋点范围（移除 Codex/Responses、
-  compose、start-proxy、hookCount=5 等不实声明）；② 审计改为“真实写入成功后
-  记录一次”，失败抛错让 `withL0Retry` 真正生效且不再重复审计；③ 审计事件携带
-  请求 trace_id；④ `apiPrefix` 对旧 `:5173` 配置自动兼容。
+- **评审修复（2026-09-06）**：① 评审质疑的“Responses 主链路无 Opik”以真接入
+  收口（codex/workbuddy create trace + 流式/非流式 LLM span）；② “compose 无法
+  执行 / start-proxy 不透传”以真交付收口——仓库新增 `deploy/opik-compose.yml`
+  与 `deploy/opik-assets/`，`deploy/global-images/start-proxy.sh` 支持
+  `PROXY_OPIK_*` 环境变量透传（.env.example 同步）；③ 审计改为“真实写入成功后
+  记录一次”，失败抛错让 `withL0Retry` 真正生效且不再重复审计；④ 审计事件携带
+  请求 trace_id；⑤ `apiPrefix` 对旧 `:5173` 配置自动兼容；⑥ 评审质疑的
+  `hookCount=5 / 逐钩子统计` 从“删声明”升级为“真实现”——注入管线透出本轮
+  逐钩子 `HookResult[]`，四个 handler 统一写入 `memory_injection` 运行级字段。

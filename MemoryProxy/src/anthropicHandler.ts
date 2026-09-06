@@ -16,7 +16,12 @@ import {
   opikCreateTrace,
   uuidv7,
 } from "./opik.js";
-import { buildOpikTraceMetadata, summarizeToolInteraction } from "./opik-metadata.js";
+import {
+  buildMemoryInjectionContext,
+  buildOpikTraceMetadata,
+  summarizeToolInteraction,
+} from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -1165,13 +1170,15 @@ export async function handleAnthropicMessages(
   //   - FORK: 走 pipeline 但 readOnly=true（miss 时不 self-heal 写 cache，避免破坏主对话 cache）
   //   - MAIN: 走完整 pipeline（含 self-heal）
   const skipInjection = requestKind === "sidequery";
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 挂载。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (!injectedSkipped && !skipInjection && config.injection?.enabled && config.injection.injectors.length > 0) {
     try {
       console.log(`[injection-debug] entering injection pipeline session=${sessionKey} turnSeq=${countHumanTurns(messages, "anthropic")} injectors=${config.injection.injectors} kind=${requestKind}`);
       const injectionTurnSeq = countHumanTurns(messages, "anthropic");
       const { getInjectionPipeline } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
-      const injectedBody = await pipeline.process(body, {
+      const injectedResult = await pipeline.processWithStats(body, {
         protocol: "anthropic",
         traceId,
         keyId,
@@ -1188,9 +1195,12 @@ export async function handleAnthropicMessages(
         custom: sessionInfo ? { session: sessionInfo, userKey: callerUserKey ?? undefined, assetCapabilities } : undefined,
         readOnly: requestKind === "fork",
       });
-      body = injectedBody;
-      messages = Array.isArray(injectedBody.messages) ? injectedBody.messages : messages;
-      hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+      body = injectedResult.body;
+      messages = Array.isArray(injectedResult.body.messages)
+        ? injectedResult.body.messages
+        : messages;
+      hasTools = Array.isArray(injectedResult.body.tools) && injectedResult.body.tools.length > 0;
+      injectionHookRuns = injectedResult.hookResults;
     } catch (err: unknown) {
       console.error("[injection] anthropic pipeline error:", err instanceof Error ? err.message : String(err));
     }
@@ -1316,11 +1326,12 @@ export async function handleAnthropicMessages(
     stream: isStream,
     turnSeq,
     requestPath: c.req.path,
-    memoryInjection: {
+    memoryInjection: buildMemoryInjectionContext({
       enabled: config.injection?.enabled === true,
-      injectorCount: config.injection?.injectors?.length ?? 0,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
       skipped: injectedSkipped,
-    },
+      hookRuns: injectionHookRuns,
+    }),
   });
   const toolSummary = summarizeToolInteraction(messages);
   if (toolSummary.toolCalls.length > 0 || toolSummary.toolResults > 0) {

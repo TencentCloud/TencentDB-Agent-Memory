@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildMemoryInjectionContext,
   buildOpikTraceMetadata,
   summarizeResponsesOutput,
   summarizeResponsesToolInteraction,
@@ -118,5 +119,118 @@ describe("summarizeResponsesOutput", () => {
       { type: "message", role: "assistant", content: [] },
     ]);
     expect(summary).toEqual({ text: "答案", toolCalls: ["get_weather"] });
+  });
+});
+
+describe("buildMemoryInjectionContext", () => {
+  const coarse = {
+    enabled: true,
+    configuredInjectors: 3,
+    skipped: false,
+  };
+
+  it("未跑注入管线（hookRuns 空/null）时只落粗粒度字段", () => {
+    expect(buildMemoryInjectionContext({ ...coarse, hookRuns: null })).toEqual({
+      enabled: true,
+      injectorCount: 3,
+      skipped: false,
+    });
+    expect(buildMemoryInjectionContext({ ...coarse, hookRuns: [] })).toEqual({
+      enabled: true,
+      injectorCount: 3,
+      skipped: false,
+    });
+  });
+
+  it("聚合逐钩子统计：hookCount/blockCount/errorCount 与逐钩子明细", () => {
+    const ctx = buildMemoryInjectionContext({
+      ...coarse,
+      hookRuns: [
+        {
+          hookId: "skill-injector",
+          point: "system.suffix",
+          blockCount: 2,
+          cacheStrategy: "session_init",
+        },
+        {
+          hookId: "knowledge-tools-injector",
+          point: "system.before_tools",
+          blockCount: 0,
+          cacheStrategy: "none",
+        },
+        {
+          hookId: "tdai-memory-tools-injector",
+          point: "system.before_tools",
+          blockCount: 1,
+          cacheStrategy: "none",
+          error: "upstream timeout",
+        },
+      ],
+    });
+    expect(ctx.hookCount).toBe(3);
+    expect(ctx.blockCount).toBe(3);
+    expect(ctx.errorCount).toBe(1);
+    expect(ctx.hooks).toEqual({
+      "skill-injector": {
+        point: "system.suffix",
+        blockCount: 2,
+        cacheStrategy: "session_init",
+      },
+      "knowledge-tools-injector": {
+        point: "system.before_tools",
+        blockCount: 0,
+        cacheStrategy: "none",
+      },
+      "tdai-memory-tools-injector": {
+        point: "system.before_tools",
+        blockCount: 1,
+        cacheStrategy: "none",
+        error: true,
+      },
+    });
+  });
+
+  it("buildOpikTraceMetadata 只序列化白名单字段，错误原文不落 metadata", () => {
+    const ctx = buildMemoryInjectionContext({
+      ...coarse,
+      hookRuns: [
+        {
+          hookId: "skill-injector",
+          point: "system.suffix",
+          blockCount: 2,
+          cacheStrategy: "session_init",
+        },
+        {
+          hookId: "tdai-tools-injector",
+          point: "tools.prepend",
+          blockCount: 0,
+          cacheStrategy: "none",
+          error: "boom: secret detail",
+        },
+      ],
+    });
+    const meta = buildOpikTraceMetadata({ memoryInjection: ctx });
+    expect(meta.memory_injection).toEqual({
+      enabled: true,
+      injector_count: 3,
+      skipped: false,
+      hook_count: 2,
+      block_count: 2,
+      error_count: 1,
+      hooks: {
+        "skill-injector": {
+          point: "system.suffix",
+          block_count: 2,
+          cache_strategy: "session_init",
+        },
+        "tdai-tools-injector": {
+          point: "tools.prepend",
+          block_count: 0,
+          cache_strategy: "none",
+          error: true,
+        },
+      },
+    });
+    expect(JSON.stringify(meta.memory_injection)).not.toContain("secret detail");
   });
 });

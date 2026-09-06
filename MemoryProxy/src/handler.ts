@@ -11,7 +11,12 @@ import {
   opikUpdateTrace,
   uuidv7,
 } from "./opik.js";
-import { buildOpikTraceMetadata, summarizeToolInteraction } from "./opik-metadata.js";
+import {
+  buildMemoryInjectionContext,
+  buildOpikTraceMetadata,
+  summarizeToolInteraction,
+} from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -1240,12 +1245,15 @@ export async function handleChatCompletions(
   const tdaiUserMessage = extractLatestUserMessage(messages);
 
   // ── Context injection (before cost guard) ──────────────────────────────
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 的
+  // memory_injection 挂真实运行统计（hookCount/blockCount/errorCount/hooks）。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (!injectedSkipped && config.injection?.enabled && config.injection.injectors.length > 0) {
     try {
       const injectionTurnSeq = countHumanTurns(messages, "openai");
       const { getInjectionPipeline } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
-      const injectedBody = await pipeline.process(body, {
+      const injectedResult = await pipeline.processWithStats(body, {
         protocol: "openai",
         traceId,
         keyId,
@@ -1267,8 +1275,11 @@ export async function handleChatCompletions(
             }
           : undefined,
       });
-      body = injectedBody;
-      messages = Array.isArray(injectedBody.messages) ? injectedBody.messages : messages;
+      body = injectedResult.body;
+      messages = Array.isArray(injectedResult.body.messages)
+        ? injectedResult.body.messages
+        : messages;
+      injectionHookRuns = injectedResult.hookResults;
     } catch (err: unknown) {
       // Injection failure is non-fatal — fall back to original body
     }
@@ -1393,11 +1404,12 @@ export async function handleChatCompletions(
     stream: isStream,
     turnSeq,
     requestPath: c.req.path,
-    memoryInjection: {
+    memoryInjection: buildMemoryInjectionContext({
       enabled: config.injection?.enabled === true,
-      injectorCount: config.injection?.injectors?.length ?? 0,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
       skipped: injectedSkipped,
-    },
+      hookRuns: injectionHookRuns,
+    }),
   });
   const toolSummary = summarizeToolInteraction(messages);
   if (toolSummary.toolCalls.length > 0 || toolSummary.toolResults > 0) {

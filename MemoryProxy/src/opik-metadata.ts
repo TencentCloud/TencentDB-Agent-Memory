@@ -9,9 +9,35 @@
 
 export interface MemoryInjectionContext {
   enabled?: boolean;
+  /** 配置里声明的注入器数量（配置级，不等于本轮实际执行的钩子数）。 */
   injectorCount?: number;
   /** true = 会话/注入被旁路（无 conversationId、aux 请求或 headless）。 */
   skipped?: boolean;
+  /** 本轮实际执行的钩子数（含缓存命中与产出 0 block 的钩子）。 */
+  hookCount?: number;
+  /** 本轮注入进上下文的 block 总数。 */
+  blockCount?: number;
+  /** 本轮执行失败的钩子数（单钩子失败不阻断管线）。 */
+  errorCount?: number;
+  /** 逐钩子明细：hookId → 落点/block 数/缓存策略/是否出错。 */
+  hooks?: Record<string, MemoryInjectionHookStat>;
+}
+
+/** 注入管线一次执行的单个钩子结果（与 pipeline 的 HookResult 结构兼容）。 */
+export interface MemoryInjectionHookRun {
+  hookId: string;
+  point: string;
+  blockCount: number;
+  cacheStrategy?: string;
+  error?: string;
+}
+
+/** 逐钩子明细的序列化形态（白名单字段，长度封顶）。 */
+export interface MemoryInjectionHookStat {
+  point: string;
+  blockCount: number;
+  cacheStrategy?: string;
+  error?: boolean;
 }
 
 export interface OpikTraceMetadataInput {
@@ -31,6 +57,59 @@ export interface OpikTraceMetadataInput {
 function cap(v: unknown, max: number): string {
   const s = String(v ?? "").trim();
   return s.length > max ? s.slice(0, max) : s;
+}
+
+function toNonNegativeInt(v: unknown): number {
+  const n = typeof v === "number" ? Math.trunc(v) : Number.NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * 组装 memory_injection 上下文：粗粒度（enabled / 配置注入器数 / skipped）
+ * 加上本轮真实的逐钩子执行统计（hookCount / blockCount / errorCount / hooks）。
+ *
+ * hookRuns 为空/未跑管线时只落粗粒度字段；错误只记布尔位，错误原文留在
+ * 结构化日志，避免把内部错误串进 Opik metadata。
+ */
+export function buildMemoryInjectionContext(input: {
+  enabled: boolean;
+  configuredInjectors: number;
+  skipped: boolean;
+  hookRuns?: MemoryInjectionHookRun[] | null;
+}): MemoryInjectionContext {
+  const ctx: MemoryInjectionContext = {
+    enabled: input.enabled,
+    injectorCount: input.configuredInjectors,
+    skipped: input.skipped,
+  };
+  const runs = Array.isArray(input.hookRuns) ? input.hookRuns : [];
+  if (runs.length === 0) return ctx;
+
+  let blockCount = 0;
+  let errorCount = 0;
+  const hooks: Record<string, MemoryInjectionHookStat> = {};
+  // 常规生产配置每轮 ≤ 8 个钩子；20 上限只是防御性护栏。
+  for (const run of runs.slice(0, 20)) {
+    const blocks = toNonNegativeInt(run.blockCount);
+    blockCount += blocks;
+    if (run.error) errorCount += 1;
+    const hookId = cap(run.hookId, 64);
+    if (!hookId) continue;
+    const stat: MemoryInjectionHookStat = {
+      point: cap(run.point, 32),
+      blockCount: blocks,
+    };
+    const cacheStrategy = cap(run.cacheStrategy, 24);
+    if (cacheStrategy) stat.cacheStrategy = cacheStrategy;
+    if (run.error) stat.error = true;
+    hooks[hookId] = stat;
+  }
+
+  ctx.hookCount = runs.length;
+  ctx.blockCount = blockCount;
+  ctx.errorCount = errorCount;
+  if (Object.keys(hooks).length > 0) ctx.hooks = hooks;
+  return ctx;
 }
 
 /** 组装 trace/span 的 metadata：空/未定义字段一律不写入。 */
@@ -54,13 +133,45 @@ export function buildOpikTraceMetadata(input: OpikTraceMetadataInput): Record<st
   setStr("request_path", input.requestPath, 256);
 
   const inj = input.memoryInjection;
-  if (inj && (inj.enabled !== undefined || inj.injectorCount !== undefined || inj.skipped !== undefined)) {
+  if (
+    inj &&
+    (inj.enabled !== undefined ||
+      inj.injectorCount !== undefined ||
+      inj.skipped !== undefined ||
+      inj.hookCount !== undefined ||
+      inj.blockCount !== undefined ||
+      inj.errorCount !== undefined ||
+      inj.hooks !== undefined)
+  ) {
     const m: Record<string, unknown> = {};
     if (typeof inj.enabled === "boolean") m.enabled = inj.enabled;
     if (typeof inj.injectorCount === "number" && inj.injectorCount >= 0) {
       m.injector_count = inj.injectorCount;
     }
     if (typeof inj.skipped === "boolean") m.skipped = inj.skipped;
+    if (typeof inj.hookCount === "number" && inj.hookCount >= 0) {
+      m.hook_count = inj.hookCount;
+    }
+    if (typeof inj.blockCount === "number" && inj.blockCount >= 0) {
+      m.block_count = inj.blockCount;
+    }
+    if (typeof inj.errorCount === "number" && inj.errorCount >= 0) {
+      m.error_count = inj.errorCount;
+    }
+    if (inj.hooks) {
+      const hooksOut: Record<string, unknown> = {};
+      for (const [hookId, stat] of Object.entries(inj.hooks)) {
+        const statOut: Record<string, unknown> = {
+          point: cap(stat.point, 32) || "unknown",
+          block_count: toNonNegativeInt(stat.blockCount),
+        };
+        const cacheStrategy = cap(stat.cacheStrategy, 24);
+        if (cacheStrategy) statOut.cache_strategy = cacheStrategy;
+        if (stat.error === true) statOut.error = true;
+        hooksOut[hookId] = statOut;
+      }
+      m.hooks = hooksOut;
+    }
     out.memory_injection = m;
   }
   return out;

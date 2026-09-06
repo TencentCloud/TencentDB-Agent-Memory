@@ -28,10 +28,12 @@ import {
   uuidv7,
 } from "./opik.js";
 import {
+  buildMemoryInjectionContext,
   buildOpikTraceMetadata,
   summarizeResponsesOutput,
   summarizeResponsesToolInteraction,
 } from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { joinUrl } from "./guard-adapter.js";
@@ -1504,6 +1506,8 @@ export async function handleWorkbuddyEndpoint(
   }
 
   // ── 9. Asset injection (每轮都跑) ────────────────────────────────────────
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 挂载。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (
     !injectionSkipped &&
     sessionInfo &&
@@ -1531,7 +1535,7 @@ export async function handleWorkbuddyEndpoint(
         ],
         model: modelId,
       };
-      const injectedBody = await pipeline.process(syntheticBody, {
+      const injectedResult = await pipeline.processWithStats(syntheticBody, {
         protocol: "openai",
         traceId,
         keyId,
@@ -1550,11 +1554,12 @@ export async function handleWorkbuddyEndpoint(
         },
       });
 
-      const injectedMessages = injectedBody.messages as
+      const injectedMessages = injectedResult.body.messages as
         | Array<Record<string, unknown>>
         | undefined;
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
+      injectionHookRuns = injectedResult.hookResults;
 
       if (injectedText.length > 0) {
         body = injectWorkbuddyAssets(body, { raw: injectedText });
@@ -1581,11 +1586,12 @@ export async function handleWorkbuddyEndpoint(
     stream: isStream,
     turnSeq,
     requestPath: path,
-    memoryInjection: {
+    memoryInjection: buildMemoryInjectionContext({
       enabled: config.injection?.enabled === true,
-      injectorCount: config.injection?.injectors?.length ?? 0,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
       skipped: injectionSkipped,
-    },
+      hookRuns: injectionHookRuns,
+    }),
   });
   const responsesToolSummary = summarizeResponsesToolInteraction(
     Array.isArray(body.input) ? (body.input as unknown[]) : [],
