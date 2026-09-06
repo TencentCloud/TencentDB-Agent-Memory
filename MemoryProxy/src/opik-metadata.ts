@@ -118,3 +118,30 @@ export function summarizeToolInteraction(messages: unknown[]): ToolInteractionSu
   }
   return { toolCalls: names, toolResults };
 }
+
+/**
+ * Responses wire（codex / workbuddy）的工具交互摘要：input[] 里的
+ * `function_call`（工具名）与 `function_call_output`（结果条数）。
+ * 与 Chat 版口径对齐：只保留工具名与条数，不复制消息正文。
+ */
+export function summarizeResponsesToolInteraction(
+  input: unknown[],
+): ToolInteractionSummary {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  let toolResults = 0;
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    if (item.type === "function_call") {
+      const name = typeof item.name === "string" ? item.name.trim() : "";
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        names.push(name);
+      }
+    } else if (item.type === "function_call_output") {
+      toolResults += 1;
+    }
+  }
+  return { toolCalls: names, toolResults };
+}
