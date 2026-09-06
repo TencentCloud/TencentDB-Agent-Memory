@@ -37,6 +37,7 @@ import {
 } from "./opik.js";
 import {
   buildOpikTraceMetadata,
+  summarizeResponsesOutput,
   summarizeResponsesToolInteraction,
 } from "./opik-metadata.js";
 import { createPipeline, writeLog } from "./logger.js";
@@ -1254,6 +1255,80 @@ async function forwardToUpstream(
   // 一份用于 langfuse 上报 + skill/L0 归档 hook (P1-P2 gap 修复)。
   // 只要有 lf 或 archiveCtx 任一非空就必须 tee 一份 tap 流。
   const needTap = Boolean(lf) || Boolean(archiveCtx);
+  const responsesRawContentType = upstreamResp.headers.get("content-type") ?? "";
+  const responsesRawIsSse = responsesRawContentType.includes("text/event-stream");
+  // 兼容 #1253：codex 走 chatCompletions/responsesToAnthropic 转换时，非 SSE
+  // 上游 JSON 由 #1253 接线层转换，本块只负责“直连 Responses JSON”的上报。
+  const agentUpstreamFlags = (
+    config.upstream.agents?.["codex"] ?? {}
+  ) as unknown as Record<string, boolean | undefined>;
+  const codexConvertingUpstream =
+    agentUpstreamFlags.chatCompletions === true ||
+    agentUpstreamFlags.responsesToAnthropic === true;
+  // stream:false 时上游可能返回非 SSE 的 Responses JSON：主对话仍要上报 Opik。
+  if (!responsesRawIsSse && needTap && upstreamResp.body && !codexConvertingUpstream) {
+    const rawJson = await upstreamResp.text();
+    try {
+      const json = JSON.parse(rawJson) as Record<string, unknown>;
+      const output = Array.isArray(json.output) ? (json.output as unknown[]) : [];
+      const { text, toolCalls } = summarizeResponsesOutput(output);
+      const usage =
+        json.usage && typeof json.usage === "object"
+          ? (json.usage as Record<string, unknown>)
+          : {};
+      const endTime = new Date().toISOString();
+      const finalUsage = Object.keys(usage).length > 0 ? usage : {};
+      const outputMessage = text
+        ? { role: "assistant", content: text }
+        : toolCalls.length > 0
+          ? { role: "assistant", content: `[${toolCalls.length} tool call(s)]` }
+          : null;
+      const outputMessages = outputMessage ? [outputMessage] : [];
+      opikUpdateTrace(config, {
+        traceId,
+        projectName: keyId,
+        endTime,
+        output: outputMessages,
+        usage: finalUsage,
+      });
+      if (opikTurn.forkTraceId && !config.opik.stripRequestLogContent) {
+        opikUpdateTrace(config, {
+          traceId: opikTurn.forkTraceId,
+          projectName: "request_log",
+          endTime,
+          output: outputMessages,
+          usage: finalUsage,
+        });
+      }
+      opikCreateLlmSpan(config, {
+        traceId,
+        projectName: keyId,
+        name: modelId,
+        startTime,
+        endTime,
+        inputMessages: [buildCodexLangfuseInput(body)] as unknown[],
+        outputMessage,
+        model: modelId,
+        usage: finalUsage,
+        tags: ["non-stream"],
+        metadata: opikTurn.metadata,
+        forkProjectName: "request_log",
+        forkTraceId: opikTurn.forkTraceId,
+        forkMetadata: {
+          keyId,
+          modelId,
+          stream: false,
+          upstreamUrl,
+        },
+      });
+    } catch (opikErr: unknown) {
+      pipe.error("OPIK_NON_STREAM", opikErr instanceof Error ? opikErr : new Error(String(opikErr)));
+    }
+    return new Response(rawJson, {
+      status: upstreamResp.status,
+      headers: filterResponseHeaders(upstreamResp.headers),
+    });
+  }
   if (!needTap || !upstreamResp.body) {
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
