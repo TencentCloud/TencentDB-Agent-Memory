@@ -29,6 +29,7 @@ import {
 } from "./opik.js";
 import {
   buildOpikTraceMetadata,
+  summarizeResponsesOutput,
   summarizeResponsesToolInteraction,
 } from "./opik-metadata.js";
 import { createPipeline, writeLog } from "./logger.js";
@@ -610,6 +611,81 @@ async function forwardToUpstream(
 
   // Non-SSE or no langfuse ctx → passthrough
   if (!isSSE || !upstreamResp.body || !lf) {
+    if (
+      !isSSE &&
+      upstreamResp.body &&
+      upstreamResp.status >= 200 &&
+      upstreamResp.status < 300
+    ) {
+      // stream:false 时上游返回非 SSE 的 Responses JSON：主对话仍要上报 Opik。
+      const rawJson = await upstreamResp.text();
+      try {
+        const json = JSON.parse(rawJson) as Record<string, unknown>;
+        const output = Array.isArray(json.output) ? (json.output as unknown[]) : [];
+        const { text, toolCalls } = summarizeResponsesOutput(output);
+        const usage =
+          json.usage && typeof json.usage === "object"
+            ? (json.usage as Record<string, unknown>)
+            : {};
+        const endTime = new Date().toISOString();
+        const finalUsage = Object.keys(usage).length > 0 ? usage : {};
+        const outputMessage = text
+          ? {
+              role: "assistant",
+              content: text,
+            }
+          : toolCalls.length > 0
+            ? { role: "assistant", content: `[${toolCalls.length} tool call(s)]` }
+            : null;
+        const outputMessages = outputMessage ? [outputMessage] : [];
+        opikUpdateTrace(config, {
+          traceId,
+          projectName: keyId,
+          endTime,
+          output: outputMessages,
+          usage: finalUsage,
+        });
+        if (opikTurn.forkTraceId && !config.opik.stripRequestLogContent) {
+          opikUpdateTrace(config, {
+            traceId: opikTurn.forkTraceId,
+            projectName: "request_log",
+            endTime,
+            output: outputMessages,
+            usage: finalUsage,
+          });
+        }
+        opikCreateLlmSpan(config, {
+          traceId,
+          projectName: keyId,
+          name: modelId,
+          startTime,
+          endTime,
+          inputMessages: [buildWorkbuddyLangfuseInput(body)] as unknown[],
+          outputMessage,
+          model: modelId,
+          usage: finalUsage,
+          tags: ["non-stream"],
+          metadata: opikTurn.metadata,
+          forkProjectName: "request_log",
+          forkTraceId: opikTurn.forkTraceId,
+          forkMetadata: {
+            keyId,
+            modelId,
+            stream: false,
+            upstreamUrl,
+          },
+        });
+      } catch (opikErr: unknown) {
+        pipe.info(
+          "WORKBUDDY_OPIK_NON_STREAM_ERR",
+          opikErr instanceof Error ? opikErr.message : String(opikErr),
+        );
+      }
+      return new Response(rawJson, {
+        status: upstreamResp.status,
+        headers: respHeaders,
+      });
+    }
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
       headers: respHeaders,
