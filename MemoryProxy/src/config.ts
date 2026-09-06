@@ -311,11 +311,19 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       url: overrides.opikUrl ?? yaml.opik?.url ?? DEFAULT_CONFIG.opik.url,
       apiKey:
         overrides.opikApiKey ?? yaml.opik?.apiKey ?? DEFAULT_CONFIG.opik.apiKey,
-      apiPrefix:
-        typeof yaml.opik?.apiPrefix === "string" &&
-        yaml.opik.apiPrefix.trim().startsWith("/")
-          ? yaml.opik.apiPrefix.trim().replace(/\/+$/, "") || DEFAULT_CONFIG.opik.apiPrefix
-          : DEFAULT_CONFIG.opik.apiPrefix,
+      apiPrefix: (() => {
+        const raw = yaml.opik?.apiPrefix;
+        if (typeof raw === "string" && raw.trim().startsWith("/")) {
+          return raw.trim().replace(/\/+$/, "") || DEFAULT_CONFIG.opik.apiPrefix;
+        }
+        // 旧配置兼容：老示例 url 指向前端 5173 且未配置 apiPrefix 时，
+        // 旧代码固定请求 /api/v1/private；升级后不能悄悄变成 /v1/private。
+        const url = typeof yaml.opik?.url === "string" ? yaml.opik.url : "";
+        if (url.includes(":5173") || url.includes("/api/v1/private")) {
+          return "/api/v1/private";
+        }
+        return DEFAULT_CONFIG.opik.apiPrefix;
+      })(),
       timeoutMs:
         typeof yaml.opik?.timeoutMs === "number" &&
         Number.isFinite(yaml.opik.timeoutMs) &&
