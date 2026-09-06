@@ -1,0 +1,6 @@
+{
+  "session_id": "session-prompt-fixture",
+  "hook_event_name": "UserPromptSubmit",
+  "cwd": "C:/workspace/demo",
+  "prompt": "Summarize the current task."
+}
