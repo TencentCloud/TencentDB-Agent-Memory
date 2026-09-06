@@ -36,6 +36,8 @@ import {
 
 export interface CompatOpts {
   model?: string;
+  /** 组合层第一跳时置 true：usage/cache 只在最终一跳计一次（与 JSON 路径口径一致）。 */
+  suppressUsageStat?: boolean;
 }
 
 // ── 请求体 ─────────────────────────────────────────────────────────────────
@@ -131,7 +133,9 @@ export function createAnthropicSseToResponsesSse(
   opts?: CompatOpts,
 ): TransformStream<Uint8Array, Uint8Array> {
   return composeTransforms(
-    createAnthropicSseToChatSse(opts),
+    // 两跳流式只计一次 usage/cache：第一跳（Anthropic→Chat）抑制，
+    // 最终一跳（Chat→Responses）落统计（与 JSON 组合路径口径一致）。
+    createAnthropicSseToChatSse({ ...(opts ?? {}), suppressUsageStat: true }),
     createChatSseToResponses(opts ?? {}),
   );
 }
@@ -141,7 +145,9 @@ export function createResponsesSseToAnthropicSse(
   opts?: CompatOpts,
 ): TransformStream<Uint8Array, Uint8Array> {
   return composeTransforms(
-    createResponsesSseToChatSse(opts ?? {}),
-    createChatSseToAnthropicSse(opts),
+    // 两跳流式只计一次 usage/cache：第一跳（Responses→Chat）抑制，
+    // 最终一跳（Chat→Anthropic）落统计（与 JSON 组合路径口径一致）。
+    createResponsesSseToChatSse({ ...(opts ?? {}), suppressUsageStat: true }),
+    createChatSseToAnthropicSse(opts ?? {}),
   );
 }
