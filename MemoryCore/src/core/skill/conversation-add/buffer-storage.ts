@@ -311,12 +311,16 @@ export class SkillBufferStorage {
    * 且 archived_at_ms 递增（毫秒时间戳），实际不会撞。
    */
   async writeArchive(sess: SessionKey, archivedAtMs: number, buf: BufferedMessages): Promise<void> {
-    const key = this.archiveKey(sess, archivedAtMs);
-    if (await this.storage.exists(key)) {
+    await this.writeArchiveAtKey(this.archiveKey(sess, archivedAtMs), buf);
+  }
+
+  /** Write an archive at the exact key registered on the extraction task. */
+  async writeArchiveAtKey(archiveKey: string, buf: BufferedMessages): Promise<void> {
+    if (await this.storage.exists(archiveKey)) {
       // 视为成功，跳过写入
       return;
     }
-    await this.storage.writeFile(key, JSON.stringify(buf));
+    await this.storage.writeFile(archiveKey, JSON.stringify(buf));
   }
 
   async readArchive(archiveKey: string): Promise<BufferedMessages | null> {

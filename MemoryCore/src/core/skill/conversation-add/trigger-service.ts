@@ -22,7 +22,7 @@
  *     或后续 GC 清）。这比现状好得多：不再有丢任务风险。
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
   AgentTuple,
@@ -117,8 +117,19 @@ export class SkillTriggerService {
     // task_id=…` 与 worker 侧 `[skill-perf] kind=worker phase=consume.*` 共用同一
     // 值，grep 一次拉全 handler + worker 双段耗时。老数据前缀 `task-` 会被
     // worker 自然消费掉，无迁移风险（filter 按 task_id 值等价比较，不解析前缀）。
-    const taskId = input.idempotencyKeyHash
-      ? `skill-extract-task-${input.idempotencyKeyHash.slice(0, 16)}`
+    const scopedIdempotencyHash = input.idempotencyKeyHash
+      ? createHash("sha256").update(JSON.stringify([
+        session.instance_id,
+        session.space_id,
+        session.user_id,
+        session.team_id,
+        session.agent_id,
+        session.session_id,
+        input.idempotencyKeyHash,
+      ])).digest("hex")
+      : undefined;
+    const taskId = scopedIdempotencyHash
+      ? `skill-extract-task-${scopedIdempotencyHash.slice(0, 16)}`
       : `skill-extract-task-${randomUUID().slice(0, 8)}`;
     const agent: AgentTuple = {
       // 2026-07-30 instance_id 塞进 tuple; worker pool 从队列出来后按此路由
@@ -164,7 +175,7 @@ export class SkillTriggerService {
     //
     // 失败态：writeArchive 抛错 → 直接向 handler 抛异常，无残留。
     const t0Arch = Date.now();
-    await this.buffer.writeArchive(session, archivedAtMs, bufferAtTrigger);
+    await this.buffer.writeArchiveAtKey(archiveKey, bufferAtTrigger);
     obsLogger.info("skill.trigger.write_archive", {
       req_id: rid, task_id: taskId, instance_id: instanceId,
       dur_ms: Date.now() - t0Arch,

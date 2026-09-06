@@ -159,7 +159,7 @@ TDAI_MEMORY_ENDPOINT=http://127.0.0.1:18420 npm run e2e:local
 
 ## Delivery semantics and known boundary
 
-The plugin provides **local durable deduplication** for repeated idle events, concurrent OpenCode processes sharing the same state directory, process restarts, and single-pipeline failures. L0 retries also become crash-safe when the Gateway supports the tenant-scoped `idempotency_key` contract: the stable turn key generated here is replayed without creating another conversation record or pipeline notification. Gateways without that contract remain at-least-once.
+The plugin provides **local durable deduplication** for repeated idle events, concurrent OpenCode processes sharing the same state directory, process restarts, and single-pipeline failures. L0 retries also become crash-safe when the Gateway supports the tenant-scoped `idempotency_key` contract: the stable turn key prevents another conversation record. Completed Gateway receipts return without another pipeline notification; pending receipts reuse the durable outbox and may redeliver the notification until it is acknowledged. If keyed notification or acknowledgement fails, the Gateway returns retryable `503` so the plugin keeps the local record pending. If the Gateway explicitly reports that its store lacks transactional idempotency, the adapter retries once without the key and caches that capability downgrade; those writes retain the legacy at-least-once guarantee.
 
 ## Development
 

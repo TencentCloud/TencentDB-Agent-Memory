@@ -187,7 +187,10 @@ describe("conversation add idempotency router", () => {
     let saved: { receipt: ConversationReceipt; outboxEvent: Extract<ConversationAddClaim, { status: "claimed" }>["outboxEvent"] } | undefined;
     const upsertL0 = vi.fn();
     const notifyPipeline = vi.fn().mockResolvedValue(undefined);
-    const ackConversationOutbox = vi.fn().mockResolvedValue(true);
+    const ackConversationOutbox = vi.fn(async () => {
+      if (saved) saved.receipt = { ...saved.receipt, status: "completed" };
+      return true;
+    });
     const store: Partial<IMemoryStore> = {
       upsertL0,
       claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => {
@@ -208,7 +211,7 @@ describe("conversation add idempotency router", () => {
         };
         return { status: "claimed", ...saved };
       }),
-      readConversationAddReceipt: vi.fn(async () => null),
+      readConversationAddReceipt: vi.fn(async () => saved?.receipt ?? null),
       ackConversationOutbox,
     };
 
@@ -223,11 +226,102 @@ describe("conversation add idempotency router", () => {
     expect(ackConversationOutbox).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a pending outbox notification and acknowledges it without duplicate side effects", async () => {
+    let saved: { receipt: ConversationReceipt; outboxEvent: Extract<ConversationAddClaim, { status: "claimed" }>["outboxEvent"] } | undefined;
+    const notifyPipeline = vi.fn()
+      .mockRejectedValueOnce(new Error("pipeline down"))
+      .mockResolvedValue(undefined);
+    const ensureChatMemoryAsset = vi.fn().mockResolvedValue(undefined);
+    const checkMemoryQuota = vi.fn().mockResolvedValue({ allowed: true, current: 0, limit: 100 });
+    const reportMemoryAdded = vi.fn().mockResolvedValue(undefined);
+    const ackConversationOutbox = vi.fn(async () => {
+      if (!saved) return false;
+      saved.receipt = { ...saved.receipt, status: "completed" };
+      saved.outboxEvent = { ...saved.outboxEvent, status: "acknowledged" };
+      return true;
+    });
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => saved?.receipt ?? null),
+      claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => {
+        if (saved) return { status: "replay", ...saved };
+        saved = {
+          receipt: receiptFor(input, input.records.map((record) => record.id)),
+          outboxEvent: {
+            eventId: "event-1",
+            receiptId: "receipt-1",
+            serviceId: input.scope.serviceId,
+            sessionId: input.scope.sessionId,
+            rounds: input.pipelineRounds,
+            teamId: input.scope.teamId,
+            agentId: input.scope.agentId,
+            status: "pending",
+            createdAtMs: 1,
+          },
+        };
+        return { status: "claimed", ...saved };
+      }),
+      ackConversationOutbox,
+    };
+    const overrides = {
+      notifyPipeline,
+      getMetadataService: vi.fn(async () => ({ ensureChatMemoryAsset } as never)),
+      quotaManager: { checkMemoryQuota, reportMemoryAdded } as never,
+    };
+
+    const first = await handleConversationAdd(body, auth, "req-1", depsFor(store, overrides));
+    const second = await handleConversationAdd(body, auth, "req-2", depsFor(store, overrides));
+
+    expect(first.code).toBe(503);
+    expect(second.code).toBe(0);
+    expect(second.data).toMatchObject({ accepted_ids: saved?.receipt.acceptedIds });
+    expect(notifyPipeline).toHaveBeenCalledTimes(2);
+    expect(ackConversationOutbox).toHaveBeenCalledTimes(1);
+    expect(checkMemoryQuota).toHaveBeenCalledTimes(1);
+    expect(reportMemoryAdded).toHaveBeenCalledTimes(1);
+    expect(ensureChatMemoryAsset).toHaveBeenCalledTimes(1);
+    expect(store.upsertL0).not.toHaveBeenCalled();
+  });
+
+  it("rejects a pending receipt whose durable outbox event is missing", async () => {
+    const pendingReceipt: ConversationReceipt = {
+      receiptId: "receipt-1",
+      scope: {
+        serviceId: "service-1",
+        teamId: "team-1",
+        agentId: "agent-1",
+        userId: "user-1",
+        sessionId: "session-1",
+        idempotencyKey: "turn-1",
+      },
+      payloadDigest: digestConversationAddPayload(body),
+      acceptedIds: ["message-1"],
+      status: "pending",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    const notifyPipeline = vi.fn();
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => pendingReceipt),
+      claimConversationAdd: vi.fn(async () => ({ status: "replay", receipt: pendingReceipt })),
+      ackConversationOutbox: vi.fn(),
+    };
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
+
+    expect(response.code).toBe(503);
+    expect(response.message).toMatch(/outbox/i);
+    expect(notifyPipeline).not.toHaveBeenCalled();
+    expect(store.upsertL0).not.toHaveBeenCalled();
+  });
+
   it("rejects the same key with a different payload", async () => {
     const store: Partial<IMemoryStore> = {
       upsertL0: vi.fn(),
       readConversationAddReceipt: vi.fn(async () => null),
       claimConversationAdd: vi.fn(async () => ({ status: "conflict" })),
+      ackConversationOutbox: vi.fn(),
     };
     const notifyPipeline = vi.fn();
 
@@ -248,6 +342,22 @@ describe("conversation add idempotency router", () => {
     expect(response.code).toBe(503);
     expect(response.message).toMatch(/idempotency/i);
     expect(store.upsertL0).not.toHaveBeenCalled();
+    expect(notifyPipeline).not.toHaveBeenCalled();
+  });
+
+  it("rejects keyed requests when the store cannot acknowledge the durable outbox", async () => {
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => null),
+      claimConversationAdd: vi.fn(),
+    };
+    const notifyPipeline = vi.fn();
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
+
+    expect(response.code).toBe(503);
+    expect(response.message).toMatch(/idempotency/i);
+    expect(store.claimConversationAdd).not.toHaveBeenCalled();
     expect(notifyPipeline).not.toHaveBeenCalled();
   });
 
@@ -277,7 +387,8 @@ describe("conversation add idempotency router", () => {
 
     const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
 
-    expect(response.code).toBe(0);
+    expect(response.code).toBe(503);
+    expect(response.message).toMatch(/pipeline notification is pending/i);
     expect(notifyPipeline).toHaveBeenCalledTimes(1);
     expect(ackConversationOutbox).not.toHaveBeenCalled();
   });

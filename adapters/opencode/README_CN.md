@@ -158,7 +158,7 @@ TDAI_MEMORY_ENDPOINT=http://127.0.0.1:18420 npm run e2e:local
 
 ## 交付语义与已知边界
 
-插件对 OpenCode 重复 idle、共享同一状态目录的并发 OpenCode 进程、进程重启和单通道失败提供**本地持久化去重**。当 Gateway 支持按租户隔离的 `idempotency_key` 契约时，L0 重试会复用本插件生成的稳定 turn key，不会重复创建会话记录或触发 pipeline 通知；不支持该契约的 Gateway 仍是 at-least-once 语义。
+插件对 OpenCode 重复 idle、共享同一状态目录的并发 OpenCode 进程、进程重启和单通道失败提供**本地持久化去重**。当 Gateway 支持按租户隔离的 `idempotency_key` 契约时，L0 重试会复用本插件生成的稳定 turn key，避免重复创建会话记录。Gateway receipt 已完成时不会再次通知 pipeline；receipt 仍为 pending 时会复用持久化 outbox，并可能重投通知直至 ACK。带 key 的通知或 ACK 失败时，Gateway 会返回可重试的 `503`，插件继续保留本地 pending 记录。如果 Gateway 明确返回当前 Store 不支持事务幂等，适配器会去掉 key 重试一次并缓存该能力降级；这类写入仍保持旧版 at-least-once 语义。
 
 ## 开发
 

@@ -4,6 +4,9 @@ import type { CapturedTurn, RecallBundle } from "./types.js";
 
 interface Envelope<T> { code?: number; message?: string; request_id?: string; data?: T }
 
+const UNSUPPORTED_CONVERSATION_IDEMPOTENCY =
+  "Store does not support transactional conversation idempotency for keyed requests";
+
 export class GatewayError extends Error {
   constructor(message: string, readonly code: number, readonly requestId = "") {
     super(message);
@@ -26,6 +29,8 @@ function contentItems<T extends { content: string }>(value: unknown): T[] {
 }
 
 export class MemoryGatewayClient {
+  private conversationIdempotencySupported: boolean | undefined;
+
   constructor(private readonly config: AdapterConfig) {}
 
   private isolation(sessionId?: string): Record<string, unknown> {
@@ -107,17 +112,32 @@ export class MemoryGatewayClient {
     // Bound again at the transport boundary so records persisted by older adapter
     // versions cannot remain permanently pending after a Gateway rejects them.
     const maxChars = Math.min(this.config.maxMessageChars, GATEWAY_MAX_MESSAGE_CHARS);
-    await this.post("/v3/conversation/add", {
+    const body = {
       ...this.isolation(turn.sessionId),
-      // Stable per-turn identity: the Gateway receipt makes an accepted write
-      // safe to retry if the process dies before the local acknowledgement is
-      // persisted.
-      idempotency_key: turn.key,
       messages: [
         { role: "user", content: boundText(turn.user, maxChars), timestamp: new Date(Math.max(0, turn.capturedAtMs - 1)).toISOString() },
         { role: "assistant", content: boundText(turn.assistant, maxChars), timestamp: new Date(turn.capturedAtMs).toISOString() },
       ],
-    });
+    };
+    if (this.conversationIdempotencySupported === false) {
+      await this.post("/v3/conversation/add", body);
+      return;
+    }
+    try {
+      await this.post("/v3/conversation/add", { ...body, idempotency_key: turn.key });
+      this.conversationIdempotencySupported = true;
+    } catch (error) {
+      if (!(error instanceof GatewayError) ||
+          error.code !== 503 ||
+          error.message !== UNSUPPORTED_CONVERSATION_IDEMPOTENCY) {
+        throw error;
+      }
+      // TCVDB/Redis stores may not expose the atomic keyed contract yet.
+      // Retry only this explicit capability error without the key and remember
+      // the downgrade; arbitrary 503 responses must remain retryable failures.
+      this.conversationIdempotencySupported = false;
+      await this.post("/v3/conversation/add", body);
+    }
   }
 
   async captureSkill(turn: CapturedTurn): Promise<void> {

@@ -63,6 +63,51 @@ describe("Gateway contract", () => {
     expect(calls[0].body.idempotency_key).toBe("turn-key");
   });
 
+  it("downgrades only the explicit unsupported-idempotency response and caches it", async () => {
+    const calls: any[] = [];
+    const gateway = await client((path, body) => {
+      calls.push({ path, body });
+      if (body.idempotency_key) {
+        return {
+          status: 503,
+          body: {
+            code: 503,
+            message: "Store does not support transactional conversation idempotency for keyed requests",
+          },
+        };
+      }
+      return { code: 0, data: { accepted_ids: ["m1"] } };
+    });
+    const turn = {
+      key: "turn-key", sessionId: "s", sourceId: "a", user: "q", assistant: "a",
+      capturedAtMs: 1, skillMessages: [],
+    };
+
+    await gateway.captureL0(turn);
+    await gateway.captureL0({ ...turn, key: "turn-key-2" });
+
+    expect(calls).toHaveLength(3);
+    expect(calls.map((call) => call.body.idempotency_key)).toEqual(["turn-key", undefined, undefined]);
+  });
+
+  it("does not downgrade on an unrelated 503 response", async () => {
+    const calls: any[] = [];
+    const gateway = await client((_path, body) => {
+      calls.push(body);
+      return { status: 503, body: { code: 503, message: "pipeline temporarily unavailable" } };
+    });
+    const turn = {
+      key: "turn-key", sessionId: "s", sourceId: "a", user: "q", assistant: "a",
+      capturedAtMs: 1, skillMessages: [],
+    };
+
+    await expect(gateway.captureL0(turn)).rejects.toMatchObject({ code: 503 } satisfies Partial<GatewayError>);
+    await expect(gateway.captureL0(turn)).rejects.toMatchObject({ code: 503 } satisfies Partial<GatewayError>);
+
+    expect(calls).toHaveLength(2);
+    expect(calls.every((body) => body.idempotency_key === "turn-key")).toBe(true);
+  });
+
   it("sends strict isolation and paired Skill messages", async () => {
     const calls: any[] = [];
     const gateway = await client((path, body, headers) => {

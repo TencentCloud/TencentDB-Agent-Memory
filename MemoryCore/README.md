@@ -202,9 +202,9 @@ Clients that may retry a completed turn can pass an optional `idempotency_key` o
 }
 ```
 
-The key is scoped by `x-tdai-service-id`, `team_id`, `agent_id`, `user_id`, `session_id`, and `idempotency_key`. A replay with the same normalized payload returns the original `accepted_ids` and does not write L0 or notify the pipeline again. Reusing the same key with a different payload returns `409`. A backend that cannot provide atomic receipt, L0 write, and outbox ACK semantics returns `503` for keyed requests; unkeyed requests keep the existing behavior.
+The key is scoped by `x-tdai-service-id`, `team_id`, `agent_id`, `user_id`, `session_id`, and `idempotency_key`. A completed replay with the same normalized payload returns the original `accepted_ids` without another L0 write or pipeline notification. If the receipt is still pending, the same-key retry reuses the durable outbox and retries pipeline delivery before acknowledging completion. A notification or outbox acknowledgement failure returns retryable `503` for keyed requests. Reusing the same key with a different payload returns `409`. A backend that cannot provide atomic receipt, L0 write, and outbox ACK semantics also returns `503` for keyed requests; unkeyed requests keep the existing behavior.
 
-SQLite provides the public transactional guarantee. Redis and TCVDB deployments must implement equivalent atomic claim and outbox acknowledgement before they should be advertised as exactly-once across replicas.
+SQLite provides the public transactional guarantee for the receipt, L0 write, and durable outbox. Pipeline delivery is recoverable at-least-once: a crash after notification but before outbox acknowledgement can cause redelivery, so downstream consumers should deduplicate by the stable task or event identity. Redis and TCVDB deployments must implement equivalent atomic claim and outbox acknowledgement before enabling keyed requests.
 
 ## Configuration
 
