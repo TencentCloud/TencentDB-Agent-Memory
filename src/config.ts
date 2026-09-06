@@ -93,6 +93,24 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Where to place dynamic L1 recall relative to the current user prompt.
+   * - "prepend" (default): prependContext — current plugin behaviour
+   * - "append": appendContext — keeps user-prompt prefix byte-stable (host must support appendContext)
+   */
+  injectionMode: "prepend" | "append";
+  /**
+   * When false (default), strip <relevant-memories> before persisting user messages
+   * so dynamic recall does not bloat session history (prompt-cache friendly).
+   * When true, leave injected blocks in the transcript (debugging / legacy).
+   */
+  showInjected: boolean;
+  /**
+   * When true, emit stable persona/scene/tools on BOTH prependSystemContext and
+   * appendSystemContext. Use only on hosts that ignore prependSystemContext.
+   * Default false (avoids double injection on capable hosts).
+   */
+  dualEmitStable: boolean;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +553,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      injectionMode: validateInjectionMode(str(recallGroup, "injectionMode")) ?? "prepend",
+      showInjected: bool(recallGroup, "showInjected") ?? false,
+      dualEmitStable: bool(recallGroup, "dualEmitStable") ?? false,
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -644,6 +665,11 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
     : undefined;
+}
+
+function validateInjectionMode(value: string | undefined): "prepend" | "append" | undefined {
+  if (value === "prepend" || value === "append") return value;
+  return undefined;
 }
 
 /**
