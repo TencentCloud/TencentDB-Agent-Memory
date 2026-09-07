@@ -18,7 +18,7 @@
 
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { generateText, tool, stepCountIs, jsonSchema } from "ai";
+import { generateText, tool, stepCountIs, hasToolCall, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
 import { createNoThinkFetch, type DisableThinkingStrategy } from "../../utils/no-think-fetch.js";
@@ -213,13 +213,35 @@ export class StandaloneLLMRunner implements LLMRunner {
       : undefined;
 
     try {
+      // Optionally force the model to write via the write_to_file tool (L3
+      // persona). toolChoice pins the first step to that tool, and stopWhen
+      // halts as soon as it is called — so there is no risk of a forced-tool
+      // loop. Only applies to tool-enabled runs that expose write_to_file.
+      const forceWrite =
+        this.enableTools && params.forceWriteTool === true && "write_to_file" in tools;
+      if (forceWrite) {
+        this.logger?.debug?.(`${TAG} Forcing write_to_file tool call (toolChoice + hasToolCall stop).`);
+      }
+
       const result = await generateText({
         model: provider.chat(this.model),
         system: params.systemPrompt,
         prompt: params.prompt,
         ...(tools ? { tools } : {}),
-        stopWhen: stepCountIs(this.enableTools ? MAX_TOOL_ITERATIONS : 1),
+        // "required" (force any tool) is honoured far more reliably by Moonshot
+        // for large prompts than a specific {type:"tool"} choice (measured: 3/3
+        // clean tool calls vs intermittent). The persona prompt only offers
+        // write-style tools and instructs write_to_file, so the model picks it;
+        // hasToolCall then stops the loop as soon as the write happens.
+        toolChoice: forceWrite ? "required" : undefined,
+        stopWhen: forceWrite
+          ? [stepCountIs(MAX_TOOL_ITERATIONS), hasToolCall("write_to_file")]
+          : stepCountIs(this.enableTools ? MAX_TOOL_ITERATIONS : 1),
         maxOutputTokens: maxTokens,
+        // Survive transient network blips (e.g. flaky DNS: getaddrinfo ENOTFOUND)
+        // with extra retry headroom. The AI SDK retries with exponential backoff;
+        // the abortSignal below still caps total wall-clock per run.
+        maxRetries: 4,
         abortSignal: AbortSignal.timeout(timeoutMs),
       });
 
@@ -230,9 +252,11 @@ export class StandaloneLLMRunner implements LLMRunner {
         `${TAG} run() completed: ${totalMs}ms, steps=${result.steps.length}, output=${text.length} chars`,
       );
 
-      // Log tool usage if any
-      if (result.steps.length > 1) {
-        const toolCalls = result.steps.flatMap((s) => s.toolCalls ?? []);
+      // Log tool usage if any. Do NOT gate on steps.length > 1: a forced tool
+      // call (forceWrite) stops the loop at step 1 via hasToolCall, so the call
+      // would otherwise go unlogged.
+      const toolCalls = result.steps.flatMap((s) => s.toolCalls ?? []);
+      if (toolCalls.length > 0) {
         this.logger?.debug?.(
           `${TAG} Tool calls: ${toolCalls.map((tc) => tc.toolName).join(", ")}`,
         );
