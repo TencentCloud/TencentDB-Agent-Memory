@@ -81,7 +81,7 @@ const TAG = "[memory-tdai][l0]";
  * @param rawMessages - Raw messages from the agent_end hook context (full session history)
  * @param baseDir - Base data directory (~/.openclaw/memory-tdai/)
  * @param logger - Optional logger
- * @param originalUserText - Clean original user prompt (pre-prependContext)
+ * @param originalUserText - Clean original user prompt captured before prompt hooks
  * @param afterTimestamp - Epoch ms cursor: only messages with timestamp > this are new.
  *                         Pass 0 or omit for the first capture of a session.
  * @returns Filtered messages (for L1 to use directly), or empty array if nothing worth recording
@@ -92,7 +92,7 @@ export async function recordConversation(params: {
   rawMessages: unknown[];
   baseDir: string;
   logger?: Logger;
-  /** Clean original user prompt (pre-prependContext) */
+  /** Clean original user prompt captured before prompt hooks. */
   originalUserText?: string;
   /** Epoch ms cursor: only process messages with timestamp strictly greater than this. */
   afterTimestamp?: number;
@@ -100,7 +100,7 @@ export async function recordConversation(params: {
    * Number of messages in the session at before_prompt_build time.
    * Used to locate the exact user message that originalUserText corresponds to:
    * rawMessages[originalUserMessageCount] is the user message appended by the framework
-   * AFTER before_prompt_build, i.e. the one whose content was polluted by prependContext.
+   * after before_prompt_build. Legacy hosts may expose hook-injected content there.
    */
   originalUserMessageCount?: number;
 }): Promise<ConversationMessage[]> {
@@ -187,22 +187,21 @@ export async function recordConversation(params: {
     return [];
   }
 
-  // Step 2: Replace polluted user messages with cached original prompt.
+  // Step 2: Restore the cached original prompt when locating the current user message.
   //
   // Background:
-  //   The framework appends the user's message to the session after before_prompt_build,
-  //   then injects prependContext into it. So the user message in rawMessages is polluted.
-  //   We cached the clean prompt (originalUserText) and the message count at
-  //   before_prompt_build time (originalUserMessageCount) to identify which raw message
-  //   is the real user input.
+  //   Current OpenClaw keeps hook context model-only, but older hosts and queued
+  //   turns can expose injected content in rawMessages. We cached the clean prompt
+  //   and message count at before_prompt_build time, so replacing the current user
+  //   message remains a safe compatibility fallback.
   //
   // Strategy:
-  //   When position slice is active, the polluted user message is slicedMessages[0].
+  //   When position slice is active, the current user message is slicedMessages[0].
   //   Otherwise, fall back to rawMessages[originalUserMessageCount].
   //   In both cases, find the timestamp and match it in `extracted` for replacement.
   //   If matching fails, skip replacement — sanitizeText() in Step 3 is the safety net.
   if (originalUserText) {
-    // Determine the target raw message that contains the polluted user prompt
+    // Determine the target raw message that corresponds to the current user prompt.
     const targetRaw: Record<string, unknown> | undefined = usePositionSlice
       ? slicedMessages[0] as Record<string, unknown> | undefined
       : (originalUserMessageCount != null && originalUserMessageCount >= 0 && originalUserMessageCount < rawMessages.length)
@@ -565,5 +564,4 @@ function extractUserAssistantMessages(messages: unknown[]): ConversationMessage[
 
   return result;
 }
-
 

@@ -185,8 +185,8 @@ export interface CompletedTurn {
   startedAt?: number;
   /**
    * Number of messages in the session at before_prompt_build time.
-   * Used by l0-recorder to locate the exact user message that was
-   * polluted by prependContext injection.
+   * Used by l0-recorder to locate the current user message and restore the
+   * cached original prompt when a legacy host exposes injected content.
    */
   originalUserMessageCount?: number;
 }
@@ -197,9 +197,11 @@ export interface CompletedTurn {
 
 /** Result from a recall (prefetch) operation. */
 export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
+  /** @deprecated Auto-recall no longer injects dynamic context into user messages. */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
+  /** Stable persona, scene navigation, and tool guidance placed before the cache boundary. */
+  prependSystemContext?: string;
+  /** Query-dependent L1 memories placed after the cache boundary. */
   appendSystemContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
