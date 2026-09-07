@@ -39,6 +39,14 @@ export interface RecallResponse {
   context: string;
   strategy?: string;
   memory_count?: number;
+  // L3 persona block (long-term user profile) returned by the core's
+  // auto-recall pipeline. Surfaced over the wire so memory providers
+  // (notably the Hermes provider) can inject it into the host's
+  // system-prompt builder, not just into the per-turn `context` field.
+  // `null` when no persona has been generated yet for this user/session;
+  // `undefined` on older Gateways that predate this field — clients
+  // must read with `result.get("recalledL3_persona") or ""` style.
+  recalledL3_persona?: string | null;
 }
 
 // ============================
