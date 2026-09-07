@@ -68,6 +68,11 @@ import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import {
+  getInstanceUpstreamConfigs,
+  resolveUpstreamConfig,
+  shouldOverride,
+} from "./instance-upstream-cache.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -395,7 +400,7 @@ export async function handleCodexEndpoint(
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
   let injectionSkipped = false;
   let sessionJustRegistered = false;
-  let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
+  let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   // 存 initResult 的 agent/task detail 供 § 9 注入阶段构造 <session_context>。
   // handleSessionInit 内部本会通过 messages[0] 塞进 session_context，但那份
   // messages 是我们传进去的临时 synthesizedMessages，不会回到 codex body。
@@ -407,14 +412,14 @@ export async function handleCodexEndpoint(
   const input = Array.isArray(body.input) ? body.input : [];
 
   // ── mem:session-reset pre-hook ──
-  if (config.memCommand?.enabled) {
+  {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
-      const { parseCommandFromText, isMemCommandAllowed } = await import("./mem-command/index.js");
+      const { parseCommandFromText } = await import("./mem-command/index.js");
       const { codexAdapter } = await import("./agent-adapters/codex.js");
       const userText = codexAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
-      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+      if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `${agentSource}:${sessionKey}`;
@@ -632,13 +637,13 @@ export async function handleCodexEndpoint(
       // Prewarm 前置短路：mem-command 命中的 turn 不走 forward、不消费 hook-cache，
       // 若照常 prewarm 会白花 2-3s + 3 次网络请求。见 handler.ts 对称位置详注。
       let memCommandPending = false;
-      if (config.memCommand?.enabled) {
+      {
         try {
           const userTextPeek = codexAdapter.extractUserText(input);
           if (userTextPeek) {
-            const { parseCommandFromText, isMemCommandAllowed } = await import("./mem-command/index.js");
+            const { parseCommandFromText } = await import("./mem-command/index.js");
             const peek = parseCommandFromText(userTextPeek);
-            if (peek && isMemCommandAllowed(config.memCommand, peek.command)) {
+            if (peek) {
               memCommandPending = true;
               console.log(`[codex] prewarm skipped: mem-command pending (cmd=${peek.command}) session=${sessionKey}`);
             }
@@ -692,10 +697,14 @@ export async function handleCodexEndpoint(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id).slice(-8) : "",
+          // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
+          // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
+          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          // teamName + 完整 teamId：见 handler.ts 对称注释。
+          teamName: initResult.teamName ?? undefined,
+          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -708,14 +717,19 @@ export async function handleCodexEndpoint(
 
   // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
   if (_resetFlowResult) {
-    const { agentName, agentIdShort, teamId, taskName, bypassed } = _resetFlowResult;
+    const { agentName, agentIdShort, teamName, teamId, taskName, bypassed } = _resetFlowResult;
+    const teamLine = teamName
+      ? `- **Team**: ${teamName}${teamId ? ` (${teamId})` : ""}`
+      : teamId
+        ? `- **Team**: ${teamId}`
+        : null;
     const lines = bypassed
       ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
       : [
           "✅ 已重新绑定团队资产",
           "",
           `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
-          teamId ? `- **Team**: ${teamId}` : null,
+          teamLine,
           taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
           "",
           "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
@@ -723,7 +737,7 @@ export async function handleCodexEndpoint(
     const text = (lines as string[]).join("\n");
 
     const { buildMemResponse } = await import("./mem-command/response-builder.js");
-    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort})`);
+    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort}) team=${teamName ?? "-"} (${teamId || "-"})`);
     return buildMemResponse(text, {
       protocol: "responses",
       stream: isStream,
@@ -738,15 +752,15 @@ export async function handleCodexEndpoint(
   // 形态)，codex body 用 input[]，进去立即返 null → mem 命令全部静默透传给
   // LLM，模型会编造"Memory synced" 之类假回复 (P0-1 QA 报告)。
   // 直接用已提取的 userText 走 parseCommandFromText。
-  if (config.memCommand?.enabled) {
+  {
     const userText = codexAdapter.extractUserText(input);
     if (userText) {
-      const { parseCommandFromText, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } =
+      const { parseCommandFromText, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } =
         await import("./mem-command/index.js");
       let memCmd = parseCommandFromText(userText);
       // session-reset 已由 pre-hook 处理，跳过防止重复执行
       if (memCmd?.command === "session-reset") memCmd = null;
-      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+      if (memCmd) {
         // Session not initialized → command not available
         if (!sessionInfo || injectionSkipped) {
           const errText = `⚠️ 会话未初始化，命令不可用。请先完成 session 初始化（选择 Team/Agent）后重试。`;
@@ -774,6 +788,11 @@ export async function handleCodexEndpoint(
           //   { type:"message", role, content:[{type:"input_text"|"output_text", text}] }
           // extractSimpleMessages 已内置对该形态的识别，转成 {role, content} 极简格式。
           bodyMessages: extractSimpleMessages(input),
+          // 方案 D：taskDraft LLM 跟随主模型 —— codex 固定 agent，上游复用 per-agent url
+          model: modelId,
+          upstreamUrl: config.upstream.agents?.["codex"]?.url || config.upstream.url,
+          // codex 主链路走 OpenAI Responses API
+          upstreamProtocol: "responses",
         });
 
         // ── L0 写入（同步 await，跟 CC/CB mem 命令路径对齐）──
@@ -1168,8 +1187,8 @@ async function forwardToUpstream(
   // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
   // messages/chat_completions，不支持 /responses，此处允许按 agent 覆盖。
   const agentUpstreamEntry = config.upstream.agents?.["codex"];
-  const upstreamBase = agentUpstreamEntry?.url || config.upstream.url;
-  const upstreamUrl = joinUrl(upstreamBase, c.req.path);
+  let upstreamBase = agentUpstreamEntry?.url || config.upstream.url;
+  let upstreamUrl = joinUrl(upstreamBase, c.req.path);
   const upstreamHeaders = buildUpstreamHeaders(c, config);
   upstreamHeaders["content-type"] = "application/json";
   // 覆盖 apiKey 与 per-agent 策略一致：agentUpstreamEntry.apiKey 优先，
@@ -1179,6 +1198,23 @@ async function forwardToUpstream(
       upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
     }
     // else: 保留 c.req.header('authorization') 里的客户端 key 透传
+  }
+
+  // ── Instance upstream config override (codex has no cost-guard routing) ──
+  {
+    const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
+    const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId);
+    const convCfg = resolveUpstreamConfig(instanceConfigs, "codex", "conversation");
+    if (shouldOverride(convCfg)) {
+      upstreamUrl = joinUrl(convCfg.base_url, c.req.path);
+      if (convCfg.mode === "custom_unified" && convCfg.api_key) {
+        upstreamHeaders["authorization"] = `Bearer ${convCfg.api_key}`;
+      }
+      // custom_passthrough: keep client's original Authorization
+      if (convCfg.model_id && typeof body.model === "string") {
+        body.model = convCfg.model_id;
+      }
+    }
   }
 
   pipe.forwardStart(upstreamUrl);

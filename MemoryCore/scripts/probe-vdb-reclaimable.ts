@@ -16,7 +16,7 @@
  *
  * 本脚本只输出清单与统计，**不执行任何删除**。
  */
-import { TcvdbClient } from "../src/core/store/tcvdb-client.js";
+import { TcvdbClient } from "../src/core/store/tcvdb/client.js";
 
 const VDB_URL = process.env.VDB_URL;
 const VDB_API_KEY = process.env.VDB_API_KEY;

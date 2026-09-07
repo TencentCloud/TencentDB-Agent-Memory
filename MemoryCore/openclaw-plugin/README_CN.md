@@ -9,7 +9,7 @@
 | 插件 ID | `memory-tencentdb-client`（历史 ID；本分支实现为 v3） |
 | SDK | [`@tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2`](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-sdk-ts-v2/v/1.0.0-beta.2)（npm；根入口即 v3） |
 | 数据面 | `MemoryClient` → `/v3/*` + isolation（`teamId` / `agentId` / `userId`） |
-| COS 读文件 | 工具 `tdai_read_cos`，`createMemoryFileReader`（`POST /v2/cos/secret` + STS） |
+| COS 读文件 | 工具 `tdai_read_file`，`createMemoryFileReader`（`POST /v2/cos/secret` + STS） |
 | 不含 | Offload / Context Engine |
 
 本地 standalone Gateway 推荐：`http://127.0.0.1:8420`，`apiKey = "local"`，`instanceId = "default"`，isolation 三元组均为 `"default"`（对齐 `DEFAULT_ISOLATION_ID`）。若 Gateway 启用了 `TDAI_GATEWAY_API_KEY`，`server.apiKey` 须一致。
@@ -25,7 +25,7 @@ OpenClaw runtime
        ├─ hooks/recall.ts              before_prompt_build → 搜索 + prompt 注入
        ├─ tools/memory-search.ts       tdai_memory_search → searchAtomic (L1)
        ├─ tools/conversation-search.ts tdai_conversation_search → searchConversation (L0)
-       └─ tools/read-cos.ts            tdai_read_cos → MemoryFileReader（COS STS）
+       └─ tools/read-cos.ts            tdai_read_file → MemoryFileReader（COS STS）
             │
             ▼
        @tencentdb-agent-memory/memory-sdk-ts-v2
@@ -41,7 +41,7 @@ OpenClaw runtime
 |------|------|
 | `tdai_memory_search` | 搜索 L1 结构化记忆 |
 | `tdai_conversation_search` | 搜索 L0 原始对话 |
-| `tdai_read_cos` | 按相对路径读记忆文件（`scene_blocks/…`、`persona.md` 等） |
+| `tdai_read_file` | 按相对路径读记忆文件（`scene_blocks/…`、`persona.md` 等） |
 
 ## 双模式（Gateway 部署形态）
 
@@ -214,5 +214,5 @@ openclaw-plugin/
 ## 注意
 
 - 仅客户端 adapter：不要在插件内启动 Memory Gateway 子进程，也不要在本地实现抽取逻辑。
-- 无 COS/STS 的 standalone：`tdai_read_cos` 应返回可读错误；capture/recall 不得依赖它。
+- 无 COS/STS 的 standalone：`tdai_read_file` 应返回可读错误；capture/recall 不得依赖它。
 - Gateway 启动与更广 SDK 示例见仓库根目录 README。

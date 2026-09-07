@@ -72,7 +72,10 @@ export async function resolveFixedAssetCtxs(
 
   let result: FixedAssetCtx[] = [selfCtx];
   try {
-    const detail = await client.getAgentFixedAssets(identity.agentId);
+    // 只关心 chat_memory 绑定（下方循环 `item.asset_type !== "chat_memory"` 一律跳过），
+    // 让 core 在 SQL 层过滤：无关类型（skill / wiki / code_graph）不再占分页额度，
+    // 避免 skill 特别多的 agent（实际线上 519 skill）把 chat_memory 挤出翻页硬上限。
+    const detail = await client.getAgentFixedAssets(identity.agentId, { assetTypes: ["chat_memory"] });
     const selfAgent = detail.agent as { agent_id?: string; team_id?: string; owner_user_id?: string };
     const selfTeamId = selfAgent?.team_id || identity.teamId;
 

@@ -16,6 +16,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { ProxyConfig } from "./types.js";
 import { log } from "./report/log.js";
+import { archiveTrace, archiveSpan } from "./trace-archive.js";
 
 export const OPIK_DEFAULT_API_PREFIX = "/v1/private";
 export const OPIK_DEFAULT_TIMEOUT_MS = 2000;
@@ -214,6 +215,17 @@ export function opikCreateTrace(
   config: ProxyConfig,
   input: OpikTraceInput,
 ): string {
+  // 本地 JSONL 归档（独立于 Opik 远程上报，由 traceArchive.enabled 控制）
+  archiveTrace({
+    type: "trace",
+    id: input.traceId,
+    name: input.name,
+    projectName: input.projectName,
+    startTime: input.startTime,
+    input: input.input,
+    tags: input.tags,
+  });
+
   if (!config.opik.enabled || !config.opik.url) return "";
 
   const url = opikEndpoint(config, "/traces");
@@ -298,6 +310,22 @@ export function opikCreateLlmSpan(
   config: ProxyConfig,
   span: OpikLlmSpan,
 ): void {
+  // 本地 JSONL 归档（独立于 Opik 远程上报，由 traceArchive.enabled 控制）
+  archiveSpan({
+    type: "span",
+    id: uuidv7(),
+    traceId: span.traceId,
+    name: span.name,
+    projectName: span.projectName,
+    model: span.model,
+    startTime: span.startTime,
+    endTime: span.endTime,
+    input: span.inputMessages,
+    output: span.outputMessage,
+    usage: span.usage,
+    tags: span.tags,
+  });
+
   if (!config.opik.enabled || !config.opik.url) return;
 
   const outputMessages = span.outputMessage ? [span.outputMessage] : [];
