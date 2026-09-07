@@ -158,7 +158,6 @@ async function runLlmJudgment(
         prompt: userPrompt,
         systemPrompt: CONFLICT_DETECTION_SYSTEM_PROMPT,
         taskId: "l1-conflict-detection",
-        timeoutMs: 180_000,
       });
     } else {
       // Fallback: create CleanContextRunner (OpenClaw path)
