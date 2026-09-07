@@ -39,13 +39,30 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
-import type { Logger } from "../core/types.js";
+import type { Logger, RecallResult } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+
+function joinRecallContext(appendSystemContext?: string, prependContext?: string): string {
+  return [appendSystemContext, prependContext]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+}
+
+export function buildRecallResponse(result: RecallResult): RecallResponse {
+  const { appendSystemContext, prependContext } = result;
+  return {
+    context: joinRecallContext(appendSystemContext, prependContext),
+    ...(prependContext !== undefined ? { prependContext } : {}),
+    ...(appendSystemContext !== undefined ? { appendSystemContext } : {}),
+    strategy: result.recallStrategy,
+    memory_count: result.recalledL1Memories?.length ?? 0,
+  };
+}
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
@@ -379,14 +396,14 @@ export class TdaiGateway {
     const startMs = Date.now();
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
+    const response = buildRecallResponse(result);
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
-
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: ` +
+      `appendSystemContext=${response.appendSystemContext?.length ?? 0} chars, ` +
+      `prependContext=${response.prependContext?.length ?? 0} chars, ` +
+      `context=${response.context.length} chars`,
+    );
     sendJson(res, 200, response);
   }
 
