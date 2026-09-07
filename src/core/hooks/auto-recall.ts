@@ -12,6 +12,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { formatForLLM } from "../../utils/time.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
@@ -54,10 +55,31 @@ export interface RecalledMemory {
   type: string;
 }
 
+export interface RecallDisplayItem {
+  recordId: string;
+  type: string;
+  priority: number;
+  sceneName: string;
+  content: string;
+  score: number;
+  activityStartTime?: string;
+  activityEndTime?: string;
+  timestamp?: string;
+}
+
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
+  /**
+   * Stable recall context prepended to the system prompt (persona, scene nav, tools guide).
+   * Placed BEFORE CACHE_BOUNDARY so providers can cache it across turns.
+   * Infrequently-changing content — ideal for prefix-matching prompt caching.
+   */
+  prependSystemContext?: string;
+  /**
+   * Dynamic recall context appended to the system prompt (after CACHE_BOUNDARY).
+   * Currently used by L4 offload for per-turn skill generation results.
+   */
   appendSystemContext?: string;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
@@ -123,21 +145,14 @@ async function performAutoRecallInner(params: {
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
-    memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
-    memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
-
-    // Extract structured RecalledMemory from formatted lines for metric reporting
-    recalledL1Memories = memoryLines.map((line) => {
-      const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-      if (match) {
-        const tag = match[1];
-        const content = match[2].trim();
-        const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-        return { content, score: 0, type: typePart };
-      }
-      return { content: line, score: 0, type: "unknown" };
-    });
+    const displayItems = canonicalSortRecallItems(applyRecallBudgetToItems(searchResult.items, cfg.recall, logger));
+    memoryLines = displayItems.map(formatRecallDisplayItem);
+    recalledL1Memories = displayItems.map((item) => ({
+      content: item.content,
+      score: item.score,
+      type: item.type,
+    }));
   }
   const tSearchEnd = performance.now();
 
@@ -185,22 +200,19 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
-  //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  // prependSystemContext (system prompt prefix — before CACHE_BOUNDARY, cacheable):
+  //   memory tools guide, persona, scene navigation
+  //   These change infrequently (persona/scene pipeline updates); when content is
+  //   identical across turns, providers with prefix-matching caches (OpenAI,
+  //   DeepSeek, Anthropic) can reuse the cached prefix — saving ~4000 chars/turn.
+  //
+  //   Critical: prependSystemContext is placed BEFORE CACHE_BOUNDARY so the stable
+  //   workspace prefix remains consistent for caching. Previously this content was
+  //   in appendSystemContext (AFTER CACHE_BOUNDARY), which busted the cache every turn.
   //
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-  }
-
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
@@ -208,14 +220,11 @@ async function performAutoRecallInner(params: {
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
-
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const prependSystemContext = buildStableRecallContext({
+    personaContent,
+    sceneNavigation,
+    hasDynamicRecall: memoryLines.length > 0,
+  });
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,13 +236,13 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!prependSystemContext && !prependContext) {
     return undefined;
   }
 
   return {
     prependContext,
-    appendSystemContext,
+    prependSystemContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
@@ -258,16 +267,15 @@ interface SearchTiming {
 }
 
 interface SearchResult {
-  lines: string[];
+  items: RecallDisplayItem[];
   timing: SearchTiming;
 }
 
 /**
  * Search memories and return both formatted lines and structured details.
  *
- * This is a thin wrapper around `searchMemories` that also captures
- * the recalled memory metadata for metric reporting (agent_turn event).
- * It parses the returned formatted lines to extract type/content info.
+ * This is a thin wrapper around `searchMemories` that keeps structured
+ * recall items for metric reporting instead of parsing formatted prompt text.
  */
 async function searchMemoriesWithDetails(
   userText: string,
@@ -279,21 +287,16 @@ async function searchMemoriesWithDetails(
   embeddingService?: EmbeddingService,
 ): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
   const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
+  const items = canonicalSortRecallItems(result.items);
+  const lines = items.map(formatRecallDisplayItem);
 
-  // Extract structured data from formatted memory lines.
-  // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
-  const memories: RecalledMemory[] = result.lines.map((line) => {
-    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-    if (match) {
-      const tag = match[1];
-      const content = match[2].trim();
-      const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-      return { content, score: 0, type: typePart };
-    }
-    return { content: line, score: 0, type: "unknown" };
-  });
+  const memories: RecalledMemory[] = items.map((item) => ({
+    content: item.content,
+    score: item.score,
+    type: item.type,
+  }));
 
-  return { lines: result.lines, memories, timing: result.timing };
+  return { lines, memories, timing: result.timing };
 }
 
 /**
@@ -314,7 +317,7 @@ async function searchMemories(
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
 ): Promise<SearchResult> {
-  const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
+  const emptyResult: SearchResult = { items: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
   // base64 image data, etc.) so FTS / embedding queries are based on pure user intent.
   const cleanText = sanitizeText(userText);
@@ -361,14 +364,14 @@ async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
-      return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
+      const items = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
+      return { items, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: items.length, embeddingHits: 0 } };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
-      return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
+      const items = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+      return { items, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: items.length } };
     }
 
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
@@ -379,8 +382,8 @@ async function searchMemories(
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
-      const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
-      return { lines, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
+      const items = results.map(vectorResultToRecallDisplayItem);
+      return { items, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
@@ -402,7 +405,7 @@ async function searchByKeyword(
   threshold: number,
   logger?: Logger,
   vectorStore?: IMemoryStore,
-): Promise<string[]> {
+): Promise<RecallDisplayItem[]> {
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
@@ -420,7 +423,7 @@ async function searchByKeyword(
 
         if (filtered.length > 0) {
           logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
-          return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return filtered.map(ftsResultToRecallDisplayItem);
         }
 
         // BM25 absolute scores are unreliable when the document set is very
@@ -431,7 +434,7 @@ async function searchByKeyword(
             `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
             `but document set is small — returning all matched results`,
           );
-          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return ftsResults.slice(0, maxResults).map(ftsResultToRecallDisplayItem);
         }
         logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
       }
@@ -455,7 +458,7 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
-): Promise<string[]> {
+): Promise<RecallDisplayItem[]> {
   logger?.debug?.(
     `${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`,
   );
@@ -487,7 +490,7 @@ async function searchByEmbedding(
 
   if (filtered.length > 0) {
     logger?.debug?.(`${TAG} [embedding-search] Found ${filtered.length} relevant memories above threshold (from ${vecResults.length} candidates)`);
-    return filtered.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
+    return filtered.map(vectorResultToRecallDisplayItem);
   }
 
   logger?.debug?.(`${TAG} [embedding-search] No results above threshold ${threshold}`);
@@ -593,14 +596,14 @@ async function searchHybrid(
 
   if (keywordResults.length === 0 && embeddingResults.length === 0) {
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
-    return { lines: [], timing };
+    return { items: [], timing };
   }
 
   // RRF merge: k=60 is a standard constant from the RRF paper
   const RRF_K = 60;
 
-  // Map: record_id → { rrfScore, formatable }
-  const mergedMap = new Map<string, { rrfScore: number; formatable: FormatableMemory }>();
+  // Map: record_id → { rrfScore, item }
+  const mergedMap = new Map<string, { rrfScore: number; item: RecallDisplayItem }>();
 
   // Process keyword results
   for (let rank = 0; rank < keywordResults.length; rank++) {
@@ -611,7 +614,7 @@ async function searchHybrid(
     if (existing) {
       existing.rrfScore += rrfScore;
     } else {
-      mergedMap.set(id, { rrfScore, formatable: recordToFormatable(r.record) });
+      mergedMap.set(id, { rrfScore, item: recordToRecallDisplayItem(r.record, r.score) });
     }
   }
 
@@ -624,7 +627,7 @@ async function searchHybrid(
     if (existing) {
       existing.rrfScore += rrfScore;
     } else {
-      mergedMap.set(id, { rrfScore, formatable: vectorResultToFormatable(r) });
+      mergedMap.set(id, { rrfScore, item: vectorResultToRecallDisplayItem(r) });
     }
   }
 
@@ -638,11 +641,11 @@ async function searchHybrid(
       `${TAG} Hybrid search found ${sorted.length} results ` +
       `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
     );
-    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
+    return { items: sorted.map(([, { item, rrfScore }]) => ({ ...item, score: rrfScore })), timing };
   }
 
   logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
-  return { lines: [], timing };
+  return { items: [], timing };
 }
 
 // ============================
@@ -664,15 +667,73 @@ async function searchHybrid(
  *   - [instruction] 用户要求回答时使用中文，保持简洁。
  */
 interface FormatableMemory {
+  recordId?: string;
   type: string;
   content: string;
+  priority?: number;
   scene_name?: string;
+  score?: number;
   /** Activity time range start (段时间 start), may be empty */
   activity_start_time?: string;
   /** Activity time range end (段时间 end), may be empty */
   activity_end_time?: string;
   /** Activity point-in-time (点时间: when it happened), may be empty */
   timestamp?: string;
+}
+
+export function canonicalSortRecallItems(items: RecallDisplayItem[]): RecallDisplayItem[] {
+  return [...items].sort((a, b) => {
+    const typeDiff = getRecallTypeRank(a.type) - getRecallTypeRank(b.type);
+    if (typeDiff !== 0) return typeDiff;
+
+    const priorityDiff = b.priority - a.priority;
+    if (priorityDiff !== 0) return priorityDiff;
+
+    const sceneDiff = a.sceneName.localeCompare(b.sceneName);
+    if (sceneDiff !== 0) return sceneDiff;
+
+    const recordIdDiff = a.recordId.localeCompare(b.recordId);
+    if (recordIdDiff !== 0) return recordIdDiff;
+
+    return hashRecallContent(a.content).localeCompare(hashRecallContent(b.content));
+  });
+}
+
+export function formatRecallDisplayItem(item: RecallDisplayItem): string {
+  return formatMemoryLine({
+    recordId: item.recordId,
+    type: item.type,
+    priority: item.priority,
+    content: item.content,
+    scene_name: item.sceneName,
+    score: item.score,
+    activity_start_time: item.activityStartTime,
+    activity_end_time: item.activityEndTime,
+    timestamp: item.timestamp,
+  });
+}
+
+export function buildStableRecallContext(params: {
+  personaContent?: string;
+  sceneNavigation?: string;
+  hasDynamicRecall: boolean;
+}): string | undefined {
+  const { personaContent, sceneNavigation, hasDynamicRecall } = params;
+  const stableParts: string[] = [];
+
+  // The tools guide is static, so keep it first. If persona or scene navigation
+  // changes later, the static prefix can still participate in prefix matching.
+  if (personaContent || sceneNavigation || hasDynamicRecall) {
+    stableParts.push(MEMORY_TOOLS_GUIDE);
+  }
+  if (personaContent) {
+    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+  }
+  if (sceneNavigation) {
+    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+  }
+
+  return stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 }
 
 function formatMemoryLine(m: FormatableMemory): string {
@@ -705,29 +766,32 @@ function formatMemoryLine(m: FormatableMemory): string {
   return line;
 }
 
-function applyRecallBudget(
-  lines: string[],
+export function applyRecallBudgetToItems(
+  items: RecallDisplayItem[],
   recall: MemoryTdaiConfig["recall"],
   logger?: Logger,
-): string[] {
+): RecallDisplayItem[] {
   const maxCharsPerMemory = normalizeBudgetLimit(recall.maxCharsPerMemory);
   const maxTotalRecallChars = normalizeBudgetLimit(recall.maxTotalRecallChars);
 
   if (!maxCharsPerMemory && !maxTotalRecallChars) {
-    return lines;
+    return canonicalSortRecallItems(items);
   }
 
-  const budgeted: string[] = [];
+  const sortedItems = canonicalSortRecallItems(items);
+  const budgeted: RecallDisplayItem[] = [];
   let usedChars = 0;
   let truncatedCount = 0;
   let droppedCount = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (let i = 0; i < sortedItems.length; i++) {
+    const item = sortedItems[i];
+    const line = formatRecallDisplayItem(item);
     const perMemoryBounded = maxCharsPerMemory
-      ? truncateRecallLine(line, maxCharsPerMemory)
-      : line;
-    let wasTruncated = perMemoryBounded !== line;
+      ? fitRecallItemToFormattedLine(item, maxCharsPerMemory)
+      : item;
+    let boundedLine = formatRecallDisplayItem(perMemoryBounded);
+    let wasTruncated = boundedLine !== line;
 
     if (!maxTotalRecallChars) {
       budgeted.push(perMemoryBounded);
@@ -738,31 +802,32 @@ function applyRecallBudget(
     const separatorChars = budgeted.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
     const remainingChars = maxTotalRecallChars - usedChars - separatorChars;
     if (remainingChars <= 0) {
-      droppedCount += lines.length - i;
+      droppedCount += sortedItems.length - i;
       break;
     }
 
-    if (perMemoryBounded.length > remainingChars) {
+    if (boundedLine.length > remainingChars) {
       const canFit = remainingChars >= MIN_TRUNCATED_RECALL_LINE_CHARS;
       if (canFit) {
-        const totalBounded = truncateRecallLine(perMemoryBounded, remainingChars);
+        const totalBounded = fitRecallItemToFormattedLine(perMemoryBounded, remainingChars);
+        boundedLine = formatRecallDisplayItem(totalBounded);
         budgeted.push(totalBounded);
-        usedChars += separatorChars + totalBounded.length;
-        wasTruncated ||= totalBounded !== perMemoryBounded;
+        usedChars += separatorChars + boundedLine.length;
+        wasTruncated ||= boundedLine !== formatRecallDisplayItem(perMemoryBounded);
         if (wasTruncated) truncatedCount++;
       }
-      droppedCount += lines.length - i - (canFit ? 1 : 0);
+      droppedCount += sortedItems.length - i - (canFit ? 1 : 0);
       break;
     }
 
     budgeted.push(perMemoryBounded);
-    usedChars += separatorChars + perMemoryBounded.length;
+    usedChars += separatorChars + boundedLine.length;
     if (wasTruncated) truncatedCount++;
   }
 
   if (truncatedCount > 0 || droppedCount > 0) {
     logger?.debug?.(
-      `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
+      `${TAG} Recall budget applied: input=${items.length}, output=${budgeted.length}, ` +
       `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
       `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
     );
@@ -771,21 +836,56 @@ function applyRecallBudget(
   return budgeted;
 }
 
+function getRecallTypeRank(type: string): number {
+  switch (type) {
+    case "instruction":
+      return 0;
+    case "persona":
+      return 1;
+    case "episodic":
+      return 2;
+    default:
+      return 9;
+  }
+}
+
+function hashRecallContent(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function fitRecallItemToFormattedLine(item: RecallDisplayItem, maxChars: number): RecallDisplayItem {
+  const line = formatRecallDisplayItem(item);
+  if (Array.from(line).length <= maxChars) return item;
+
+  const contentCodePoints = Array.from(item.content);
+  let low = 0;
+  let high = contentCodePoints.length;
+  let best = "";
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidateContent = buildTruncatedRecallContent(contentCodePoints, mid);
+    const candidate = { ...item, content: candidateContent };
+    if (Array.from(formatRecallDisplayItem(candidate)).length <= maxChars) {
+      best = candidateContent;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return { ...item, content: best };
+}
+
+function buildTruncatedRecallContent(contentCodePoints: string[], contentLength: number): string {
+  const raw = contentCodePoints.slice(0, contentLength).join("").trimEnd();
+  if (!raw) return "";
+  return `${raw}${RECALL_TRUNCATION_SUFFIX}`;
+}
+
 function normalizeBudgetLimit(value: number | undefined): number | undefined {
   if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
   return Math.floor(value);
-}
-
-function truncateRecallLine(line: string, maxChars: number): string {
-  // Count and slice by code point, not UTF-16 code unit, so a cut never lands
-  // between the halves of a surrogate pair (which would corrupt a non-BMP
-  // character to U+FFFD when the line is UTF-8 encoded for the request).
-  const cps = Array.from(line);
-  if (cps.length <= maxChars) return line;
-  if (maxChars <= RECALL_TRUNCATION_SUFFIX.length) {
-    return cps.slice(0, maxChars).join("");
-  }
-  return `${cps.slice(0, maxChars - RECALL_TRUNCATION_SUFFIX.length).join("").trimEnd()}${RECALL_TRUNCATION_SUFFIX}`;
 }
 
 /**
@@ -812,27 +912,22 @@ function formatTimestamp(ts: string | undefined): string | undefined {
   return formatForLLM(ts);
 }
 
-/**
- * Build a FormatableMemory from a full MemoryRecord (keyword search path).
- * Handles empty metadata, empty timestamps array gracefully.
- */
-function recordToFormatable(record: MemoryRecord): FormatableMemory {
+function recordToRecallDisplayItem(record: MemoryRecord, score = 0): RecallDisplayItem {
   const meta = record.metadata as { activity_start_time?: string; activity_end_time?: string } | undefined;
   return {
+    recordId: record.id || hashRecallContent(record.content),
     type: record.type,
+    priority: record.priority ?? 0,
+    sceneName: record.scene_name || "",
     content: record.content,
-    scene_name: record.scene_name || undefined,
-    activity_start_time: meta?.activity_start_time || undefined,
-    activity_end_time: meta?.activity_end_time || undefined,
+    score,
+    activityStartTime: meta?.activity_start_time || undefined,
+    activityEndTime: meta?.activity_end_time || undefined,
     timestamp: (record.timestamps && record.timestamps.length > 0) ? record.timestamps[0] : undefined,
   };
 }
 
-/**
- * Build a FormatableMemory from a VectorSearchResult (embedding search path).
- * Handles empty/invalid metadata_json, empty timestamp_str gracefully.
- */
-function vectorResultToFormatable(r: L1SearchResult): FormatableMemory {
+function vectorResultToRecallDisplayItem(r: L1SearchResult): RecallDisplayItem {
   let activityStart: string | undefined;
   let activityEnd: string | undefined;
   if (r.metadata_json && r.metadata_json !== "{}") {
@@ -843,20 +938,19 @@ function vectorResultToFormatable(r: L1SearchResult): FormatableMemory {
     } catch { /* ignore parse errors — treat as no metadata */ }
   }
   return {
-    type: r.type,
+    recordId: r.record_id || hashRecallContent(r.content),
+    type: r.type || "unknown",
+    priority: r.priority ?? 0,
+    sceneName: r.scene_name || "",
     content: r.content,
-    scene_name: r.scene_name || undefined,
-    activity_start_time: activityStart,
-    activity_end_time: activityEnd,
+    score: r.score ?? 0,
+    activityStartTime: activityStart,
+    activityEndTime: activityEnd,
     timestamp: r.timestamp_str || undefined,
   };
 }
 
-/**
- * Build a FormatableMemory from an FtsSearchResult (FTS5 keyword search path).
- * Handles empty/invalid metadata_json, empty timestamp_str gracefully.
- */
-function ftsResultToFormatable(r: L1FtsResult): FormatableMemory {
+function ftsResultToRecallDisplayItem(r: L1FtsResult): RecallDisplayItem {
   let activityStart: string | undefined;
   let activityEnd: string | undefined;
   if (r.metadata_json && r.metadata_json !== "{}") {
@@ -867,11 +961,14 @@ function ftsResultToFormatable(r: L1FtsResult): FormatableMemory {
     } catch { /* ignore parse errors — treat as no metadata */ }
   }
   return {
-    type: r.type,
+    recordId: r.record_id || hashRecallContent(r.content),
+    type: r.type || "unknown",
+    priority: r.priority ?? 0,
+    sceneName: r.scene_name || "",
     content: r.content,
-    scene_name: r.scene_name || undefined,
-    activity_start_time: activityStart,
-    activity_end_time: activityEnd,
+    score: r.score ?? 0,
+    activityStartTime: activityStart,
+    activityEndTime: activityEnd,
     timestamp: r.timestamp_str || undefined,
   };
 }
