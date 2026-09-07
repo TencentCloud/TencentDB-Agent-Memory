@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -12,6 +13,7 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  checkpoint?: CheckpointManager;
 }
 
 interface CleanupStats {
@@ -33,14 +35,20 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private checkpoint?: CheckpointManager;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.checkpoint = opts.checkpoint;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  setCheckpointManager(checkpoint: CheckpointManager | undefined): void {
+    this.checkpoint = checkpoint;
   }
 
   start(): void {
@@ -180,6 +188,10 @@ export class LocalMemoryCleaner {
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
     }
 
+    if (this.checkpoint && total.changedFiles > 0) {
+      await this.recalculateCheckpoint();
+    }
+
     this.opts.logger?.info(
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
@@ -275,6 +287,29 @@ export class LocalMemoryCleaner {
     }
 
     return stats;
+  }
+
+  private async recalculateCheckpoint(): Promise<void> {
+    let l0ConversationsCount: number | undefined;
+    let totalMemoriesExtracted: number | undefined;
+
+    if (this.vectorStore && !this.vectorStore.isDegraded()) {
+      try { l0ConversationsCount = await this.vectorStore.countL0(); } catch { /* fall back to JSONL */ }
+      try { totalMemoriesExtracted = await this.vectorStore.countL1(); } catch { /* fall back to JSONL */ }
+    }
+
+    try {
+      const result = await this.checkpoint!.recalculate({ l0ConversationsCount, totalMemoriesExtracted });
+      this.opts.logger?.info(
+        `${TAG} [checkpoint] recalculated after cleanup: ` +
+        `L0 ${result.before.l0_conversations_count}→${result.after.l0_conversations_count}, ` +
+        `L1 ${result.before.total_memories_extracted}→${result.after.total_memories_extracted}`,
+      );
+    } catch (err) {
+      this.opts.logger?.warn?.(
+        `${TAG} [checkpoint] recalculation failed after cleanup: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }
 
