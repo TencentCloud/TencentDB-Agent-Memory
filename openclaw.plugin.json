@@ -74,12 +74,14 @@
         "description": "记忆召回设置",
         "properties": {
           "enabled": { "type": "boolean", "default": true, "description": "是否启用自动召回" },
+          "injectionMode": { "type": "string", "enum": ["prepend", "append"], "default": "prepend", "description": "动态 L1 召回注入位置：prepend(默认，用户消息前，旧行为)；append(用户消息后，依赖宿主 appendContext，保持用户消息前缀稳定以利于前缀缓存)" },
           "maxResults": { "type": "number", "default": 5, "description": "召回最大结果数" },
           "maxCharsPerMemory": { "type": "number", "default": 0, "description": "单条 L1 记忆注入的最大字符数；填 0 表示不限制" },
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "showInjected": { "type": "boolean", "default": false, "description": "是否在持久化历史中保留 <relevant-memories> 注入块：false(默认)持久化前剥离，保持历史干净、利于缓存；true 保留以供审计（会膨胀历史）" }
         }
       },
       "embedding": {
