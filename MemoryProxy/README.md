@@ -2,7 +2,7 @@
 
 MemoryProxy is a **transparent LLM request proxy**: instead of having a coding agent (Claude Code / CodeBuddy / ...) talk to the LLM directly, requests are routed through the proxy first. Around each forward it automatically runs session initialization, memory injection, conversation write-back and more, so an agent can tap into the team memory, Skills and Knowledge provided by [MemoryCore](../MemoryCore/README.md) **without changing a single line of code**.
 
-It is "transparent" to both the client and the upstream model — it changes no protocol and forwards OpenAI `/v1/chat/completions` and Anthropic `/v1/messages` verbatim. It just does a few extra things on the way in and out: **session initialization, context injection, conversation write-back, authentication and usage reporting**.
+By default it transparently forwards the client's protocol. When an upstream protocol is configured, it can also convert between OpenAI Chat Completions, OpenAI Responses and Anthropic Messages with explicit compatibility boundaries. Each request still runs **session initialization, context injection, conversation write-back, authentication and usage reporting**.
 
 > In one line: MemoryProxy handles "access & forwarding"; MemoryCore handles "storage & processing" of memory. The proxy itself persists no memory data — all Memory / Skill / Knowledge reads and writes go through the MemoryCore Gateway (default `:8420`). For the overall product positioning, see the repo root [README.md](../README.md).
 
@@ -26,6 +26,7 @@ Coding agent (Claude Code / CodeBuddy / ...)
 
 - **Session initialization**: intercepts the first request and guides the user through an interactive form to pick team → agent → task, then injects the agent/task context into the system prompt. Supports auto pre-selection from request headers (`x-team-id` / `x-agent-id` / `x-task-id`).
 - **Context injection**: injects Skills, Knowledge and Memory L2/L3 into the system prompt on demand; L0/L1 are exposed as read-only tools for the model to query proactively, avoiding upstream KV-cache invalidation.
+- **Protocol conversion**: converts Chat Completions ↔ Anthropic Messages and Responses ↔ Anthropic Messages for JSON and SSE, preserving text, images, function tools, stop reasons and token usage. Conversion errors use the client's error schema.
 - **Conversation write-back (extraction)**: at the end of each human turn, sends the conversation slice to MemoryCore `/v3/skill/conversation/add` (Skill archival) and writes L0 short-term memory for background extraction on the core side.
 - **Auth & identity**: calls MemoryCore `POST /v3/meta/auth/verify` to validate `x-tdai-user-key` and resolve `user_id` as the end-to-end user identity; `spaceId` (memory instance id) is auto-extracted from the `/proxy/<spaceId>/...` path.
 - **System-user passthrough**: internal service accounts (e.g. memory / wiki internal calls) short-circuit session init and injection on match, doing pure passthrough + billing only.
@@ -101,6 +102,24 @@ At minimum confirm:
 
 - `upstream.url` / `upstream.apiKey` — upstream LLM address and credentials
 - `auth.url` / `tdai.endpoint` / `skill.endpoint` — point to your MemoryCore Gateway (default `http://127.0.0.1:8420`)
+
+### Protocol conversion
+
+Set `upstream.protocol` to the actual upstream protocol. Omitting it keeps same-protocol forwarding. The same fields can be set under `upstream.agents.<agent>` for a client-specific override:
+
+```yaml
+upstream:
+  url: https://claude.example.com/v1
+  apiKey: sk-ant-example
+  protocol: anthropic
+  maxTokens: 8192
+  agents:
+    codex:
+      url: https://claude.example.com/v1
+      protocol: anthropic
+```
+
+Conversion applies only to primary inference endpoints; auxiliary endpoints such as `responses/compact` remain native passthroughs. Features without a lossless mapping return `400`, including reasoning/thinking, stateful or background Responses calls, server-hosted tools, strict function schemas and Anthropic `cache_control` unless `allowCacheControlDrop: true` explicitly permits dropping cache breakpoints.
 
 > **Run locally without Redis**: the example config defaults to `redis.enabled: true`, which spams `ECONNREFUSED 127.0.0.1:6379` when no Redis is running locally. For pure local development, set `redis.enabled: false` + `storage.enabled: true` (`storage.backend: sqlite`); session/injection/Skill state then goes to local SQLite and the process starts up cleanly.
 
