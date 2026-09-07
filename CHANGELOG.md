@@ -20,6 +20,10 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🐛 修复
+
+- **记忆注入影响提示词前缀缓存** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：将 persona、scene navigation 与 memory tools guide 移至 `prependSystemContext`；新增兼容回退的 `recall.injectionMode`（动态 L1 可选择 `appendContext`）和默认安全的 `recall.showInjected=false` 历史清理；增加 DeepSeek/MiMo 统一缓存 usage 指标、多轮膨胀回归测试及完整上下文结构文档，Gateway/Hermes 返回内容保持兼容。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：

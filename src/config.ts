@@ -81,6 +81,14 @@ export interface PipelineTriggerConfig {
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
   enabled: boolean;
+  /**
+   * Placement of dynamic L1 recall in the OpenClaw prompt mutation.
+   * "prepend" preserves legacy behavior; "append" requires a host with
+   * appendContext support and keeps the original user prompt at the front.
+   */
+  injectionMode: RecallInjectionMode;
+  /** Preserve injected recall blocks in persisted user history (default: false). */
+  showInjected: boolean;
   /** Max results to return (default: 5) */
   maxResults: number;
   /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
@@ -94,6 +102,8 @@ export interface RecallConfig {
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
 }
+
+export type RecallInjectionMode = "prepend" | "append";
 
 /** Embedding service configuration for vector search. */
 export interface EmbeddingConfig {
@@ -529,6 +539,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
+      injectionMode: validateRecallInjectionMode(str(recallGroup, "injectionMode")) ?? "prepend",
+      showInjected: bool(recallGroup, "showInjected") ?? false,
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
@@ -634,6 +646,7 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_RECALL_INJECTION_MODES: RecallInjectionMode[] = ["prepend", "append"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -643,6 +656,13 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateRecallInjectionMode(value: string | undefined): RecallInjectionMode | undefined {
+  if (!value) return undefined;
+  return VALID_RECALL_INJECTION_MODES.includes(value as RecallInjectionMode)
+    ? (value as RecallInjectionMode)
     : undefined;
 }
 

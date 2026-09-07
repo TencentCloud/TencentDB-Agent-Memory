@@ -57,7 +57,9 @@ export interface RecalledMemory {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
+  /** Stable recall context placed before the host's cache boundary. */
+  prependSystemContext?: string;
+  /** Optional system-prompt suffix for host-specific non-cacheable context. */
   appendSystemContext?: string;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
@@ -185,10 +187,10 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
+  // prependSystemContext (before the host system prompt and CACHE_BOUNDARY):
   //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  //   These change infrequently and form a reusable prefix for providers with
+  //   automatic prefix matching (DeepSeek/MiMo) or explicit cache boundaries.
   //
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
@@ -215,7 +217,7 @@ async function performAutoRecallInner(params: {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const prependSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,13 +229,13 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!prependSystemContext && !prependContext) {
     return undefined;
   }
 
   return {
     prependContext,
-    appendSystemContext,
+    prependSystemContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
