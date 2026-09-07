@@ -5,7 +5,7 @@ import { OpenAIAdapter } from "../../adapters/openai.js";
 import { SkillInjector } from "../skill-injector.js";
 import { SKILL_QUEUE_START, SKILL_QUEUE_END } from "../../../common/skill-queue-markers.js";
 
-function pipeline(strategy: "every_queue" | "latest_only") {
+function pipeline(strategy: "every_queue" | "latest_only" | "every_queue_incremental") {
   const listing = { mode: "full" as const, listing: "<available_skills>\n- demo: current\n</available_skills>", hits: [{ skill_id: "s1", version: 1, name: "demo" }] };
   let calls = 0;
   const client = { listListing: async () => { calls += 1; return listing; } };
@@ -32,8 +32,10 @@ describe("dynamic skill injector", () => {
     expect(messages[0].content).toContain(SKILL_QUEUE_END);
   });
 
-  it("skips BM25 when every_queue already has the current snapshot", async () => {
-    const { pipe, calls } = pipeline("every_queue");
+  it.each(["every_queue", "every_queue_incremental"] as const)(
+    "skips BM25 when %s already processed the current queue",
+    async (strategy) => {
+    const { pipe, calls } = pipeline(strategy);
     const result = await pipe.process(
       { messages: [{ role: "user", content: "tool loop" }] },
       { ...metadata, custom: { ...metadata.custom, skillQueueSnapshotHit: true } },
@@ -42,5 +44,6 @@ describe("dynamic skill injector", () => {
     expect(calls()).toBe(0);
     expect((result.messages as Array<{ content: string }>)[0].content)
       .not.toContain(SKILL_QUEUE_START);
-  });
+    },
+  );
 });
