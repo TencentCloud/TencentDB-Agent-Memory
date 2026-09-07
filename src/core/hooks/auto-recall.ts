@@ -123,6 +123,7 @@ async function performAutoRecallInner(params: {
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    effectiveStrategy = searchResult.strategy;
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
@@ -260,6 +261,7 @@ interface SearchTiming {
 interface SearchResult {
   lines: string[];
   timing: SearchTiming;
+  strategy: "keyword" | "embedding" | "hybrid";
 }
 
 /**
@@ -314,14 +316,18 @@ async function searchMemories(
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
 ): Promise<SearchResult> {
-  const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
+  const emptyResult = (resolvedStrategy: "keyword" | "embedding" | "hybrid" = strategy): SearchResult => ({
+    lines: [],
+    timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 },
+    strategy: resolvedStrategy,
+  });
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
   // base64 image data, etc.) so FTS / embedding queries are based on pure user intent.
   const cleanText = sanitizeText(userText);
 
   if (cleanText.length < 2) {
     logger?.debug?.(`${TAG} Query too short for memory search (raw=${userText.length}, clean=${cleanText.length})`);
-    return emptyResult;
+    return emptyResult();
   }
 
   if (cleanText.length !== userText.length) {
@@ -362,13 +368,13 @@ async function searchMemories(
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
       const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
-      return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
+      return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 }, strategy: effectiveStrategy };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
       const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
-      return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
+      return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length }, strategy: effectiveStrategy };
     }
 
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
@@ -380,14 +386,14 @@ async function searchMemories(
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
       const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
-      return { lines, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
+      return { lines, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length }, strategy: effectiveStrategy };
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
     return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
-    return emptyResult;
+    return emptyResult(effectiveStrategy);
   }
 }
 
@@ -593,7 +599,7 @@ async function searchHybrid(
 
   if (keywordResults.length === 0 && embeddingResults.length === 0) {
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
-    return { lines: [], timing };
+    return { lines: [], timing, strategy: "hybrid" };
   }
 
   // RRF merge: k=60 is a standard constant from the RRF paper
@@ -638,11 +644,11 @@ async function searchHybrid(
       `${TAG} Hybrid search found ${sorted.length} results ` +
       `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
     );
-    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
+    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing, strategy: "hybrid" };
   }
 
   logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
-  return { lines: [], timing };
+  return { lines: [], timing, strategy: "hybrid" };
 }
 
 // ============================
