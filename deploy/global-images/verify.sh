@@ -37,7 +37,7 @@ done
 
 ERRORS=0
 WARNS=0
-CURL=/usr/bin/curl
+# CURL 由 _lib.sh 的 find_curl() 解析（兼容 Git Bash 无 /usr/bin/curl 的情况）
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>
@@ -174,8 +174,8 @@ check_llm_from_container() {
 }
 
 # 1. docker
-if command -v "$DOCKER" >/dev/null 2>&1 || [[ -x "$DOCKER" ]]; then
-  ok "docker 可用: $DOCKER"
+if command -v "$DOCKER_BIN" >/dev/null 2>&1 || [[ -x "$DOCKER_BIN" ]]; then
+  ok "docker 可用: $DOCKER_BIN"
 else
   ERRORS=$((ERRORS+1))
   echo "${C_RED}[error]${C_RST} docker 不可用" >&2
