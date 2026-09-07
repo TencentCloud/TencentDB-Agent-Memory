@@ -67,6 +67,7 @@ import { SessionRegistry } from "./session-registry.js";
 import { reclaimOffloadData } from "./reclaimer.js";
 import { buildL3TriggerReport, reportL3Trigger } from "./state-reporter.js";
 import { resolveUserId, getUserIdSource } from "./user-id.js";
+import { sanitizePathSegment } from "./path-segment.js";
 
 // ─── Module-level state ──────────────────────────────────────────────────────
 // OpenClaw calls registerOffload() multiple times during lifecycle.
@@ -825,11 +826,12 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           // Write skill file locally
           const { mkdir, writeFile } = await import("node:fs/promises");
           const { join } = await import("node:path");
-          const skillsDir = join(stateManager.ctx.dataDir, "skills", resp.skillName);
+          const safeSkillName = sanitizePathSegment(resp.skillName, "skill");
+          const skillsDir = join(stateManager.ctx.dataDir, "skills", safeSkillName);
           await mkdir(skillsDir, { recursive: true });
           await writeFile(join(skillsDir, "SKILL.md"), resp.skillContent, "utf-8");
-          const resultPrompt = `<l4_skill_result>\n【Skill 生成完成】\n\n**Skill 名称:** ${resp.skillName}\n**描述:** ${resp.skillDescription}\n**文件路径:** ${join(skillsDir, "SKILL.md")}\n\n---\n${resp.skillContent}\n---\n</l4_skill_result>`;
-          return { appendSystemContext: resultPrompt, phase: "completed", skillName: resp.skillName };
+          const resultPrompt = `<l4_skill_result>\n【Skill 生成完成】\n\n**Skill 名称:** ${safeSkillName}\n**描述:** ${resp.skillDescription}\n**文件路径:** ${join(skillsDir, "SKILL.md")}\n\n---\n${resp.skillContent}\n---\n</l4_skill_result>`;
+          return { appendSystemContext: resultPrompt, phase: "completed", skillName: safeSkillName };
         }
       }
     } catch (err) {
