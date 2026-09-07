@@ -51,6 +51,8 @@ export interface SeedRuntimeOptions {
   logger: PipelineLogger;
   /** Progress callback (called after each round). */
   onProgress?: (progress: SeedProgress) => void;
+  /** Whether the seed pipeline owns and should close store resources. */
+  ownsStores?: boolean;
 }
 
 // ============================
@@ -103,6 +105,7 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
     openclawConfig,
     logger,
     l1LlmRunner,
+    ownsStores: opts.ownsStores,
   });
 
   // Wire L2 runner via shared factory (same logic as index.ts live runtime)
