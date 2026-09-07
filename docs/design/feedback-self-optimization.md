@@ -92,6 +92,10 @@ Start with a clean checkout of this PR and an activated Python virtual
 environment. Use Node 22.16+ and Python 3.11+ for the complete example. From the
 repository root:
 
+The Python installation needs `venv`/`ensurepip` support (some minimal Linux
+installations omit it). Dependency installation uses the package registries;
+the examples and tests themselves make no provider calls.
+
 ```sh
 python -m pip install ./sdk/memory-core/python
 cd MemoryCore
@@ -123,6 +127,32 @@ for subsequent runs set `E5_F3_TEST_OUTPUT` to a new path. Generated trajectorie
 contain full sources and history; they are not public telemetry. The example
 README describes platform dependencies, output limits and exact expected fields.
 CI runs the real connection on Linux and SDK boundary checks on Python 3.9/3.13.
+
+### Recorded clean-environment check
+
+The runtime source at commit `e56f93b` was exported with `git archive` into a new
+Linux directory, with no research files, prior `node_modules`, installed SDK or
+previous run outputs. On Node 22.23.2 and Python 3.11.16, dependencies were freshly
+installed (npm 11.6.0 for installation), and the wheel was built and installed
+into a new virtual environment. The package manifest and shared source hashes
+remained unchanged after installation.
+
+| Check | Result |
+|---|---:|
+| SQLite transaction, source, receipt, capacity and stream tests | 73 passed |
+| Shadow observer unit/extractor integration tests | 34 passed |
+| Public SDK lifecycle and adoption boundaries | 12 passed |
+| Actual SQLite source/SDK integration and failure tests | 8 passed |
+| Both TypeScript source typechecks; installed-wheel mypy consumer | Passed |
+| Full npm build/pack | Passed; 1,580,284-byte archive, below 2 MiB guard |
+| Documented default-off and paired fixture commands | Passed; zero model calls |
+
+The same component suites also passed on Windows with Node 24.14.0 and Python
+3.13.9. A clean build initially exposed a pre-existing aggregate build command
+that invoked the absent `scripts/seed-v2/tsconfig.json`; a separate prerequisite
+commit removes that unavailable task from `build:scripts`. The feedback imports
+use upstream's current `store/sqlite/memory-store.ts` path, and `.gitattributes`
+keeps the example's hashed source files in LF form on Windows.
 
 The public SDK and adapter contracts, including all capacity and timeout limits:
 
