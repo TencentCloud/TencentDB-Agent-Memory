@@ -492,6 +492,8 @@ injection:
   # skillQueueStrategy: session_init
   # adaptive_queue 每轮 BM25，但只追加首次命中或达到遗忘阈值的 Skill。
   # forgettingThreshold: 3
+  # BM25 query 使用最近多少个真实 user queue。
+  # recentQueueWindow: 3
   # 对外统一 gateway 地址 —— LLM 生成的 <skill_tools> / <tdai_memory_tools>
   # 段里嵌的 curl URL 都以这个为 base。只填 gateway 域名，**不带端口**
   # （gateway 内部路由到 proxy pod 的端口由 ops 在 gateway 侧配，跟这里无关）。

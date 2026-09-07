@@ -875,6 +875,7 @@ export async function handleCodexEndpoint(
         : extractRecentUserQueues(
             body.input,
             (content) => codexAdapter.extractUserText([{ type: "message", role: "user", content }]),
+            config.injection.recentQueueWindow,
           );
       const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
         || skillQueueStrategy === "adaptive_queue"

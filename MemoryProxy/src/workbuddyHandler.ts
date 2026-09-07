@@ -1408,6 +1408,7 @@ export async function handleWorkbuddyEndpoint(
         : extractRecentUserQueues(
             body.input,
             (content) => workbuddyAdapter.extractUserText([{ type: "message", role: "user", content }]),
+            config.injection.recentQueueWindow,
           );
       const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
         || skillQueueStrategy === "adaptive_queue"

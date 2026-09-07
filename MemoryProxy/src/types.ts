@@ -604,6 +604,8 @@ export interface InjectionConfig {
   skillQueueStrategy?: SkillQueueStrategy;
   /** Re-inject a previously seen Skill after this many user queues. */
   forgettingThreshold?: number;
+  /** Number of latest real user queues used to build the BM25 listing query. */
+  recentQueueWindow?: number;
   /**
    * 对外统一 gateway 地址。LLM 生成的 curl 示例（<skill_tools> /
    * <tdai_memory_tools> 段里嵌的路径）都以这个 URL 为 base。
@@ -876,6 +878,7 @@ export interface RawYamlConfig {
     injectors?: string[];
     skillQueueStrategy?: SkillQueueStrategy;
     forgettingThreshold?: number;
+    recentQueueWindow?: number;
     externalGatewayUrl?: string;
     assetReflection?: {
       markerOptIn?: boolean;

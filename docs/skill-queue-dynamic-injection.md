@@ -8,9 +8,9 @@ This change adds three queue-aware strategies while keeping `session_init` as th
 
 | Strategy | Retrieval | Injection | Historical Skill blocks |
 |---|---|---|---|
-| `every_queue` | Recent 3 user queues | Full current listing on each new queue | Restored byte-for-byte |
-| `latest_only` | Recent 3 user queues | Full current listing on the latest queue | Removed from older queues |
-| `adaptive_queue` | Recent 3 user queues | Only new or forgotten Skills | Restored byte-for-byte |
+| `every_queue` | Configurable recent user queues (default 3) | Full current listing on each new queue | Restored byte-for-byte |
+| `latest_only` | Configurable recent user queues (default 3) | Full current listing on the latest queue | Removed from older queues |
+| `adaptive_queue` | Configurable recent user queues (default 3) | Only new or forgotten Skills | Restored byte-for-byte |
 
 All three strategies are implemented in MemoryProxy, require no client protocol change, and work for both WorkBuddy and Codex Responses requests.
 
@@ -50,7 +50,7 @@ queue1, queue2, queue3  +  queue1->Skill1 snapshots  ->  queue1+Skill1,
 ```mermaid
 flowchart LR
     C[WorkBuddy or Codex client] -->|full Responses input| H[MemoryProxy handler]
-    H --> Q[Extract latest 3 real user queues]
+    H --> Q[Extract configurable recent real user queues]
     Q -->|normalized text, max 6000 chars| I[SkillInjector]
     I -->|team_id + agent_id + query| S[MemoryCore /v3/skill/listing]
     S -->|BM25 TOP20 listing| I
@@ -79,7 +79,7 @@ sequenceDiagram
 
     C->>P: Complete client history + current queue
     P->>P: Strip marked Skill text from retrieval input
-    P->>P: Join the latest 3 user queues
+    P->>P: Join recentQueueWindow user queues
     P->>H: Resolve current queue snapshot/state
     alt Current queue already processed
         H-->>P: Reuse immutable snapshot
@@ -99,7 +99,7 @@ sequenceDiagram
 `extractRecentUserQueues()` processes the real Responses `input[]` rather than the synthetic pipeline message:
 
 1. walk backward through `role=user` messages;
-2. collect at most 3 user queues;
+2. collect at most `recentQueueWindow` user queues (default 3);
 3. remove `tdai:skill-queue` marked text;
 4. restore chronological order;
 5. join the text and cap it at 6000 characters.
@@ -223,13 +223,9 @@ Whitespace is normalized and existing dynamic markers are stripped before hashin
 
 ```yaml
 injection:
-  enabled: true
-  injectors:
-    - skill
-    - knowledge
-    - tdai-memory
   skillQueueStrategy: every_queue
   forgettingThreshold: 3
+  recentQueueWindow: 3
 ```
 
 Supported values:
@@ -243,14 +239,22 @@ adaptive_queue
 
 `forgettingThreshold` is a positive integer and is used only by `adaptive_queue`. Invalid values fall back to 3.
 
-The global image launcher exposes the strategy through `PROXY_SKILL_QUEUE_STRATEGY`.
+`recentQueueWindow` is a positive integer controlling how many latest real user queues form the BM25 listing query. Invalid values fall back to 3.
+
+| Option | Purpose | Default |
+|---|---|---:|
+| `skillQueueStrategy` | Select the Skill injection strategy | `session_init` |
+| `forgettingThreshold` | Allow an adaptive Skill to be injected again after this many user queues | `3` |
+| `recentQueueWindow` | Build each dynamic BM25 query from this many latest real user queues | `3` |
+
+The global image launcher exposes all three settings through `PROXY_SKILL_QUEUE_STRATEGY`, `PROXY_SKILL_FORGETTING_THRESHOLD`, and `PROXY_SKILL_RECENT_QUEUE_WINDOW`.
 
 ## Code Map
 
 | Area | File | Responsibility |
 |---|---|---|
-| Configuration | `MemoryProxy/src/config.ts`, `MemoryProxy/src/types.ts` | Strategy and forgetting threshold |
-| Query window | `MemoryProxy/src/common/recent-user-queues.ts` | Latest 3 user queues, marker removal, 6000-char cap |
+| Configuration | `MemoryProxy/src/config.ts`, `MemoryProxy/src/types.ts` | Strategy, forgetting threshold, and recent queue window |
+| Query window | `MemoryProxy/src/common/recent-user-queues.ts` | Configurable recent user queues, marker removal, 6000-char cap |
 | Markers | `MemoryProxy/src/common/skill-queue-markers.ts` | Detect, extract, and strip dynamic blocks |
 | State machine | `MemoryProxy/src/common/skill-queue-history.ts` | Queue keys, snapshots, adaptive state, locks, reconstruction |
 | Retrieval | `MemoryProxy/src/injection/injectors/skill-injector.ts` | BM25 listing, TOP20 fallback, dynamic block rendering |
@@ -347,54 +351,13 @@ sequenceDiagram
 | `latest_only` | 5, 21, 22, 38, 39, 41, 76, 90, 98 |
 | `adaptive_queue` | 7, 16, 18, 19, 22, 29, 38, 39, 49, 59, 64, 72, 76, 79, 98 |
 
-## Post-Rebase End-to-End Acceptance
-
-After rebasing the implementation onto TencentCloud `feat/server_team` at `220af62`, the Proxy image was rebuilt directly from commit `237578e`. Each new strategy ran the same TAU Retail tasks `0,1,2` through the complete WorkBuddy -> MemoryProxy -> MemoryCore -> DeepSeek -> Retail tool chain.
-
-### Aggregate results
-
-| Metric | `every_queue` | `latest_only` | `adaptive_queue` |
-|---|---:|---:|---:|
-| Completed | 3/3 | 3/3 | 3/3 |
-| Official success | 3/3 | 3/3 | 3/3 |
-| DB match | 3/3 | 3/3 | 3/3 |
-| NL assertions met | 1/1 | 1/1 | 1/1 |
-| Actions matched | 19/21 | 19/21 | 19/21 |
-| Proxy HTTP 200 | 36/36 | 48/48 | 33/33 |
-| Input tokens | 574,280 | 742,908 | **488,347** |
-| Cached input tokens | 497,664 | 634,880 | **422,912** |
-| Uncached input tokens | 76,616 | 108,028 | **65,435** |
-| KV cache hit rate | **86.66%** | 85.46% | 86.60% |
-| Output tokens | 15,639 | 20,377 | **13,948** |
-| `skill_view` calls | 18 | 21 | **13** |
-| Retail tool calls | 31 | 26 | 26 |
-| Proxy cumulative time | 184.81 s | 244.44 s | **164.84 s** |
-| Task cumulative time | 209.74 s | 276.65 s | **191.20 s** |
-| Estimated cost | $0.03066 | $0.04166 | **$0.02656** |
-
-### Per-task results
-
-| Strategy | Task | Reward | DB | Actions | `skill_view` | Retail tools |
-|---|---:|---:|---:|---:|---:|---:|
-| `every_queue` | 0 | 1 | pass | 5/5 | 6 | 11 |
-| `every_queue` | 1 | 1 | pass | 5/5 | 6 | 10 |
-| `every_queue` | 2 | 1 | pass | 9/11 | 6 | 10 |
-| `latest_only` | 0 | 1 | pass | 5/5 | 6 | 6 |
-| `latest_only` | 1 | 1 | pass | 5/5 | 7 | 10 |
-| `latest_only` | 2 | 1 | pass | 9/11 | 8 | 10 |
-| `adaptive_queue` | 0 | 1 | pass | 5/5 | 3 | 6 |
-| `adaptive_queue` | 1 | 1 | pass | 5/5 | 6 | 10 |
-| `adaptive_queue` | 2 | 1 | pass | 9/11 | 4 | 10 |
-
-The acceptance run executed 117 Proxy requests, 52 successful `skill_view` calls, and 83 Retail tool calls. All 117 upstream requests returned HTTP 200 and every Skill bridge call returned HTTP 200.
-
 ## Test Coverage
 
 `MemoryProxy` test suite on the rebased branch:
 
 ```text
 Test files: 7 passed
-Tests:      25 passed
+Tests:      26 passed
 ```
 
 Coverage includes:

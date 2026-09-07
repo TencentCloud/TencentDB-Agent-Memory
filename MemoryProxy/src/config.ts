@@ -82,6 +82,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     assetReflection: { markerOptIn: true },
     skillQueueStrategy: "session_init",
     forgettingThreshold: 3,
+    recentQueueWindow: 3,
   },
   // Extraction (write-side) defaults to fully permissive so that a config
   // without the `extraction:` block behaves identically to the pre-gate
@@ -406,6 +407,10 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         && (yaml.injection?.forgettingThreshold as number) > 0
         ? yaml.injection?.forgettingThreshold
         : DEFAULT_CONFIG.injection.forgettingThreshold,
+      recentQueueWindow: Number.isInteger(yaml.injection?.recentQueueWindow)
+        && (yaml.injection?.recentQueueWindow as number) > 0
+        ? yaml.injection?.recentQueueWindow
+        : DEFAULT_CONFIG.injection.recentQueueWindow,
       externalGatewayUrl: typeof yaml.injection?.externalGatewayUrl === "string" && yaml.injection.externalGatewayUrl.trim() !== ""
         ? yaml.injection.externalGatewayUrl.trim().replace(/\/$/, "")
         : undefined,

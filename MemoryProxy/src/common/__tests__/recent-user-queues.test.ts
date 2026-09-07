@@ -15,6 +15,16 @@ describe("extractRecentUserQueues", () => {
     expect(result).toBe("q2\n\nq3\n\nq4");
   });
 
+  it("honors a configured queue window", () => {
+    const result = extractRecentUserQueues([
+      input("q1"),
+      input("q2"),
+      input("q3"),
+      input("q4"),
+    ], (content) => typeof content === "string" ? content : null, 2);
+    expect(result).toBe("q3\n\nq4");
+  });
+
   it("bounds the query size", () => {
     const result = extractRecentUserQueues([input("12345"), input("67890")], (content) => String(content), 3, 6);
     expect(result.length).toBeLessThanOrEqual(6);
