@@ -421,3 +421,156 @@ function fallbackStoreAll(memories: Array<ExtractedMemory & { record_id: string 
     target_ids: [],
   }));
 }
+
+// ============================
+// Same-batch target collision resolution
+// ============================
+
+/**
+ * Merge same-batch update/merge decisions colliding on the same existing
+ * record(s) into ONE merged record (folded decisions become "skip"), so two
+ * new memories derived from the same superseded original never coexist with
+ * divergent copies of a value. LLM failure returns the input unchanged.
+ */
+export async function resolveTargetCollisions(params: {
+  decisions: DedupDecision[];
+  memories: Array<ExtractedMemory & { record_id: string }>;
+  config?: unknown;
+  logger?: Logger;
+  model?: string;
+  llmRunner?: LLMRunner;
+  vectorStore?: IMemoryStore;
+  traceContext?: TraceContext;
+}): Promise<DedupDecision[]> {
+  const { decisions, memories, config, logger, model, llmRunner, vectorStore, traceContext } = params;
+  const active = decisions.filter(
+    (d) => (d.action === "update" || d.action === "merge") && d.target_ids.length > 0,
+  );
+  if (active.length < 2) return decisions;
+
+  const root = new Map<string, string>(active.map((d) => [d.record_id, d.record_id]));
+  const find = (x: string): string => {
+    while (root.get(x) !== x) x = root.get(x)!;
+    return x;
+  };
+  for (let i = 0; i < active.length; i++) {
+    for (let j = i + 1; j < active.length; j++) {
+      if (active[i].target_ids.some((t) => active[j].target_ids.includes(t))) {
+        const ra = find(active[i].record_id);
+        const rb = find(active[j].record_id);
+        if (ra !== rb) root.set(ra, rb);
+      }
+    }
+  }
+
+  const groups = new Map<string, DedupDecision[]>();
+  for (const d of active) {
+    const k = find(d.record_id);
+    const g = groups.get(k);
+    if (g) g.push(d);
+    else groups.set(k, [d]);
+  }
+
+  let changed = false;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const merged = await mergeCollidingGroup(group, memories, vectorStore, config, logger, model, llmRunner, traceContext);
+    if (!merged) continue;
+
+    const keeper = group[0];
+    keeper.action = "merge";
+    keeper.target_ids = [...new Set(group.flatMap((d) => d.target_ids))];
+    if (merged.merged_content) keeper.merged_content = merged.merged_content;
+    if (merged.merged_type) keeper.merged_type = merged.merged_type;
+    if (typeof merged.merged_priority === "number") keeper.merged_priority = merged.merged_priority;
+    if (merged.merged_timestamps?.length) keeper.merged_timestamps = merged.merged_timestamps;
+    for (const d of group.slice(1)) d.action = "skip";
+    changed = true;
+    logger?.debug?.(
+      `${TAG} Target collision: ${group.length} new memories hit the same existing record(s), merged into ${keeper.record_id}`,
+    );
+  }
+
+  return decisions;
+}
+
+async function mergeCollidingGroup(
+  group: DedupDecision[],
+  memories: Array<ExtractedMemory & { record_id: string }>,
+  vectorStore: IMemoryStore | undefined,
+  config: unknown,
+  logger: Logger | undefined,
+  model: string | undefined,
+  llmRunner: LLMRunner | undefined,
+  traceContext: TraceContext | undefined,
+): Promise<Partial<DedupDecision> | null> {
+  try {
+    const byId = new Map(memories.map((m) => [m.record_id, m]));
+    const newItems = group
+      .map((d) => byId.get(d.record_id))
+      .filter((m): m is ExtractedMemory & { record_id: string } => !!m)
+      .map((m) => ({ record_id: m.record_id, content: m.content, type: m.type, priority: m.priority }));
+    if (newItems.length < 2) return null;
+
+    let targetItems: Array<{ record_id: string; content: string }> = [];
+    const targetIds = [...new Set(group.flatMap((d) => d.target_ids))];
+    if (vectorStore && targetIds.length > 0) {
+      const rows = await vectorStore.queryL1Records({ recordIds: targetIds });
+      targetItems = rows.map((r) => ({ record_id: r.record_id, content: r.content }));
+    }
+
+    const userPrompt = [
+      "以下多条新记忆在冲突检测中命中了同一条（或同一组）已有记忆，需要合并为一条最终记忆，避免同批派生出新旧值并存的矛盾记录。",
+      "",
+      "## 被命中的已有记忆",
+      targetItems.length > 0 ? JSON.stringify(targetItems, null, 2) : "（无）",
+      "",
+      "## 相互冲突的新记忆",
+      JSON.stringify(newItems, null, 2),
+      "",
+      "同一事实有多个值时，以对话中出现得更晚的值为准；其余记忆中仍成立的信息保留进合并结果。输出语言与新记忆一致。",
+      '严格输出单个 JSON 对象：{"merged_content": "...", "merged_type": "persona|episodic|instruction|work_fact|work_task|work_method|work_artifact", "merged_priority": 85, "merged_timestamps": ["..."]}',
+    ].join("\n");
+
+    const traceParams = buildTraceParams("memory.l1-collision-merge", traceContext);
+    const runArgs = {
+      prompt: userPrompt,
+      systemPrompt: "你是记忆合并器。把多条相互冲突的新记忆合并为一条，只输出 JSON 对象，不输出任何解释。",
+      taskId: "l1-collision-merge",
+      timeoutMs: 120_000,
+      ...traceParams,
+    };
+    const result = llmRunner
+      ? await llmRunner.run(runArgs)
+      : await new CleanContextRunner({ config, modelRef: model, enableTools: false, logger }).run(runArgs);
+
+    const cleaned = result
+      .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+      .trim()
+      .replace(/^```(?:json)?\s*\n?/, "")
+      .replace(/\n?```\s*$/, "");
+    const obj = cleaned.match(/\{[\s\S]*\}/);
+    if (!obj) {
+      logger?.warn?.(`${TAG} Collision merge: no JSON object in response`);
+      return null;
+    }
+    const parsed = JSON.parse(sanitizeJsonForParse(obj[0])) as Record<string, unknown>;
+    if (typeof parsed.merged_content !== "string" || !parsed.merged_content.trim()) {
+      logger?.warn?.(`${TAG} Collision merge: missing merged_content`);
+      return null;
+    }
+    return {
+      merged_content: parsed.merged_content,
+      merged_type: VALID_TYPES.includes(parsed.merged_type as MemoryType)
+        ? (parsed.merged_type as MemoryType)
+        : undefined,
+      merged_priority: typeof parsed.merged_priority === "number" ? parsed.merged_priority : undefined,
+      merged_timestamps: Array.isArray(parsed.merged_timestamps) ? parsed.merged_timestamps.map(String) : undefined,
+    };
+  } catch (err) {
+    logger?.warn?.(
+      `${TAG} Collision merge failed, keeping original decisions: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}

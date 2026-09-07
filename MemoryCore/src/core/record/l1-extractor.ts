@@ -14,7 +14,7 @@
 
 import type { ConversationMessage } from "../conversation/l0-recorder.js";
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryPromptMode } from "../prompts/l1-extraction.js";
-import { batchDedup } from "./l1-dedup.js";
+import { batchDedup, resolveTargetCollisions } from "./l1-dedup.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
@@ -322,13 +322,25 @@ export async function extractL1Memories(params: {
         traceContext: { teamId, userId, agentId, sessionId },
         ...(teamId || userId || agentId || sessionId || taskId ? { filter: { teamId, userId, agentId, sessionId, taskId } } : {}),
       });
+
+      const resolvedDecisions = await resolveTargetCollisions({
+        decisions,
+        memories: memoriesWithIds,
+        config,
+        logger,
+        model: options.model,
+        llmRunner: options.llmRunner,
+        vectorStore: options.vectorStore,
+        traceContext: { teamId, userId, agentId, sessionId },
+      });
+
       dedupLatencyMs = Date.now() - dedupStartMs;
 
       // ── 评测指标：去重决策分布 ──
       if (metricInstanceId) {
         try {
           const dedupCounts = { store: 0, update: 0, merge: 0, skip: 0 };
-          for (const d of decisions) {
+          for (const d of resolvedDecisions) {
             if (d.action in dedupCounts) {
               dedupCounts[d.action as keyof typeof dedupCounts]++;
             }
@@ -344,7 +356,7 @@ export async function extractL1Memories(params: {
 
       storedRecords = await applyDecisions({
         memoriesWithIds,
-        decisions,
+        decisions: resolvedDecisions,
         baseDir,
         sessionKey,
         sessionId,
