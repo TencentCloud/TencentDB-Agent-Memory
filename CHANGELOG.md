@@ -8,6 +8,14 @@
 
 ### ✨ 新功能
 
+- **Prompt 前缀缓存保护（4 项 `recall.*` 新配置）** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：修复启用插件后 DeepSeek / MiMo 等前缀匹配缓存提供商命中率退化（MiMo 91.1%→63.5%、DeepSeek 95.7%→83.3%）的问题，机制分析与上游建议见新增的 [`PROMPT-CACHE-ANALYSIS.md`](./PROMPT-CACHE-ANALYSIS.md)。
+  - `recall.stableContextPolicy`（默认 `"session-frozen"`）：新增 `StableRecallContextCache`（`src/core/hooks/stable-context.ts`），persona / 场景导航 / 工具指南组成的稳定系统块按 sessionKey **字节级冻结**（60 分钟空闲滑动 TTL + LRU 上限）；L2/L3 会话中途改写 persona、召回超时闪断都不再破坏 prompt 前缀。`"latest"` 恢复旧的每轮重组行为。这也是 session 级稳定系统提示追加内容的去重实现。
+  - `recall.systemInjection`（默认 `"auto"`）：运行时探测宿主的缓存稳定放置 API `prependSystemPromptAdditionAfterCacheBoundary`（依次探测 event / ctx / api / api.runtime，`src/adapters/openclaw/stable-prompt-injector.ts`），命中则每轮以字节相同的冻结块调用之，并从 hook 返回值省略 `appendSystemContext` 防止双重注入；宿主缺失该 API 或调用抛错时自动回退旧路径（老宿主行为完全不变）。`"hook-context"` 强制旧路径。
+  - `recall.injectionMode`（默认 `"ephemeral"` = 旧行为）：新增 `"session-stable"` 模式——首轮召回的记忆折叠进冻结稳定块，后续轮次不再注入 `prependContext` 且跳过 L1 搜索，每轮请求成为上一轮的纯字节扩展（前缀缓存最友好）。
+  - `recall.stripInjectedFromHistory`（默认 `true` = 现行剥离行为，现在可配置）：`false` 恢复修复前「注入内容随 showInjected 冻结进历史」的行为（会重新引入历史膨胀）。
+  - 冻结同样作用于 Gateway `/recall`（按 `session_key` 生效）——同一会话的稳定块响应字节一致，属预期收益。
+  - 新增 `__tests__/prompt-cache-stability.test.ts`：FakeOpenClawHost 驱动真实 `register()` 跑 6 轮对话，逐轮断言序列化请求前缀字节稳定（LCP 下界）、历史零污染、注入器参数字节一致、persona 改写免疫与全部回退路径。
+
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。
@@ -19,6 +27,17 @@
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
+
+### 🐛 修复
+
+- **前缀缓存命中率退化** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：`prependContext` 注入随 `showInjected=true` 冻结进历史导致上下文膨胀 + 截断抖动（主因），`appendSystemContext` 被宿主尾拼在 CACHE_BOUNDARY 之后的动态区下游（次因），稳定块每轮重组导致漂移/闪断（去重缺失）——三条失效链的插件侧修复见上方「Prompt 前缀缓存保护」条目。
+
+### ⚠️ 升级注意（#120 前缀缓存保护，默认开启）
+
+- 默认 `recall.stableContextPolicy="session-frozen"` 下，会话中途更新的 persona / 场景导航将从**下一个会话**（或空闲约 60 分钟后）开始生效；需要旧的每轮刷新行为请设 `"latest"`。
+- `recall.stripInjectedFromHistory` 默认 `true` 与现行代码行为一致（无变化）；显式设 `false` 可恢复更早版本「注入内容冻结进历史」的行为。
+- `recall.systemInjection="auto"` 在宿主不支持稳定放置 API 时回退到与旧版完全相同的 hook 返回值路径，老宿主升级零感。
+- `recall.injectionMode="session-stable"` 为可选进阶模式：记忆只在首轮召回，适合强依赖前缀缓存、会话较短的场景；默认 `"ephemeral"` 行为不变。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 

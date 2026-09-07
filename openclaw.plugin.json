@@ -79,7 +79,11 @@
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "injectionMode": { "type": "string", "enum": ["ephemeral", "session-stable"], "default": "ephemeral", "description": "召回记忆注入方式：ephemeral=每轮注入用户消息前缀并从持久化历史剥离（默认）；session-stable=首轮召回并冻结进稳定系统块，后续轮次零变化（前缀缓存最友好）" },
+          "stableContextPolicy": { "type": "string", "enum": ["session-frozen", "latest"], "default": "session-frozen", "description": "稳定系统块（persona/场景导航/工具指南）刷新策略：session-frozen=同一会话内字节级冻结，保证 prompt 前缀缓存命中（默认）；latest=每轮重新生成（旧行为，L2/L3 中途改写 persona 会破坏缓存）" },
+          "stripInjectedFromHistory": { "type": "boolean", "default": true, "description": "持久化历史前剥离 <relevant-memories> 注入内容，避免对话历史膨胀导致前缀缓存失效；false 恢复旧行为（注入内容冻结进历史）" },
+          "systemInjection": { "type": "string", "enum": ["auto", "hook-context"], "default": "auto", "description": "稳定块的系统提示注入路径：auto=探测宿主 prependSystemPromptAdditionAfterCacheBoundary 并优先使用（缓存友好位置），不可用时自动回退 hook 返回值；hook-context=固定走 hook 返回值（旧行为）" }
         }
       },
       "embedding": {

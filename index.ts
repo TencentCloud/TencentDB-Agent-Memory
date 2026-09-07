@@ -38,6 +38,8 @@ import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";
+import { resolveStablePromptInjector } from "./src/adapters/openclaw/stable-prompt-injector.js";
+import type { ResolvedStablePromptInjector } from "./src/adapters/openclaw/stable-prompt-injector.js";
 import { TdaiCore } from "./src/core/tdai-core.js";
 import {
   ensurePluginHookPolicy,
@@ -88,6 +90,14 @@ const pendingRecallCache = new Map<string, {
  */
 const pendingRecallEndTimestamps = new Map<string, number>();
 
+/**
+ * Sessions for which the stable-injection path was already logged at info
+ * level (issue #120). Value = last-touch epoch ms so sweepStaleCaches can
+ * expire entries with the same TTL as the other per-session caches.
+ * Only controls log verbosity — never behavior.
+ */
+const stableInjectionLoggedSessions = new Map<string, number>();
+
 // 进程级单例，避免同一进程重复启动清理器导致并发清理竞态
 let sharedMemoryCleaner: LocalMemoryCleaner | undefined;
 
@@ -110,6 +120,16 @@ function sweepStaleCaches(): void {
     if (now - entry.ts > PROMPT_CACHE_TTL_MS) {
       pendingRecallCache.delete(key);
     }
+  }
+  // Clean stable-injection log-once markers (issue #120)
+  for (const [key, ts] of stableInjectionLoggedSessions) {
+    if (now - ts > PROMPT_CACHE_TTL_MS) {
+      stableInjectionLoggedSessions.delete(key);
+    }
+  }
+  if (stableInjectionLoggedSessions.size > PROMPT_CACHE_MAX_SIZE) {
+    // Log-verbosity marker only — safe to drop wholesale under pressure.
+    stableInjectionLoggedSessions.clear();
   }
   // Hard limit: evict oldest entries if either Map exceeds cap
   if (pendingOriginalPrompts.size > PROMPT_CACHE_MAX_SIZE) {
@@ -523,6 +543,24 @@ export default function register(api: OpenClawPluginApi) {
   // Lifecycle hooks — delegate to TdaiCore
   // ============================
 
+  /**
+   * Log the active stable-injection path at info level once per session,
+   * then at debug level (the injector is invoked every turn by design —
+   * per-build replace model — so per-turn info logs would be pure noise).
+   */
+  const logStableInjectionOnce = (sessionKey: string, resolved: ResolvedStablePromptInjector): void => {
+    const firstTime = !stableInjectionLoggedSessions.has(sessionKey);
+    stableInjectionLoggedSessions.set(sessionKey, Date.now());
+    const message =
+      `${TAG} [before_prompt_build] Stable block routed via host API ` +
+      `${resolved.apiName} (source=${resolved.source}) — cache-stable placement active`;
+    if (firstTime) {
+      api.logger.info(`${message} (session=${sessionKey})`);
+    } else {
+      api.logger.debug?.(message);
+    }
+  };
+
   // Before prompt build: auto-recall relevant memories
   if (cfg.recall.enabled) {
     api.logger.debug?.(`${TAG} Registering before_prompt_build hook (auto-recall)`);
@@ -584,17 +622,54 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
+        // ── Stable-placement path (issue #120) ──
+        // Hand the (session-frozen) stable block to the host's cache-stable
+        // system-prompt API when available, so it lands immediately after the
+        // CACHE_BOUNDARY, AHEAD of the per-turn dynamic tail, instead of being
+        // tail-appended by composeSystemPromptWithHookContext. The injector is
+        // called every turn with byte-identical frozen content — correct under
+        // the host's per-build compose (replace) model. When the host lacks
+        // the API (or recall.systemInjection="hook-context"), we fall back to
+        // returning appendSystemContext from the hook exactly as before.
+        //
+        // Return ONLY the injection fields — metric fields (recalledL1Memories
+        // etc.) are plugin-internal and must not leak into the host hook result.
+        let hookResult: { prependContext?: string; appendSystemContext?: string } = {
+          prependContext: result?.prependContext,
+          appendSystemContext: result?.appendSystemContext,
+        };
+        let injectionPath = "hook-context";
+        if (cfg.recall.systemInjection === "auto" && hookResult.appendSystemContext) {
+          const resolved = resolveStablePromptInjector(api, event, ctx);
+          if (resolved) {
+            try {
+              resolved.injector(hookResult.appendSystemContext);
+              injectionPath = `stable-api:${resolved.source}`;
+              logStableInjectionOnce(resolvedSessionKey, resolved);
+              // Omit appendSystemContext from the hook result to avoid double injection.
+              hookResult = { prependContext: hookResult.prependContext };
+            } catch (err) {
+              api.logger.warn(
+                `${TAG} [before_prompt_build] Stable injection failed (${resolved.apiName} via ${resolved.source}): ` +
+                `${err instanceof Error ? err.message : String(err)} — falling back to hook context`,
+              );
+            }
+          }
+        }
+
         if (result?.appendSystemContext || result?.prependContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars, ` +
+            `path=${injectionPath}, mode=${result?.injectionModeUsed ?? "ephemeral"}, ` +
+            `stableCacheHit=${result?.stableContextCacheHit ?? false}`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -616,6 +691,13 @@ export default function register(api: OpenClawPluginApi) {
   // the session JSONL.  The current-turn LLM already saw the full prompt
   // (effectivePrompt lives in memory), but we don't want recall artifacts
   // polluting the historical transcript for future replays.
+  //
+  // Config-gated (issue #120): with showInjected-style hosts, unstripped
+  // injections are frozen into conversation history, inflating the context by
+  // ~500–1700 tokens per turn and triggering variable tool-result truncation
+  // that busts prefix-matching prompt caches. Default true; setting
+  // recall.stripInjectedFromHistory=false restores the legacy behavior.
+  if (cfg.recall.stripInjectedFromHistory) {
   api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
@@ -649,6 +731,12 @@ export default function register(api: OpenClawPluginApi) {
       return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
     }
   });
+  } else {
+    api.logger.warn(
+      `${TAG} recall.stripInjectedFromHistory=false — injected <relevant-memories> will be ` +
+      `frozen into conversation history (legacy behavior, prompt-cache hostile)`,
+    );
+  }
 
   // After agent end: auto-capture + L0 record + L1/L2/L3 schedule
   if (cfg.capture.enabled) {
