@@ -2,6 +2,10 @@
 
 Memory Proxy 目前适配了 7 类 AI Agent 客户端，各自协议、会话初始化方式、注入逻辑差异显著。
 
+> 🛠 **想接入一个新的 AI Agent 客户端（未在下表中）？**
+> 阅读 [**新客户端二开适配指南 →**](./adapter-agent-development.md)
+> 里面有从"抓包摸底"到"proxy 侧改路由 / adapter / session-init"到"端到端 e2e 通过"的 20 项 checklist、8 类常见坑速查，以及可以照抄的 dsh 参考实现。
+
 ## 快速开始
 
 ### 方式一：人工运行脚本
@@ -187,7 +191,7 @@ http://<proxy-host>:<port>/<agent-source>/<spaceId>
 
 ## 新 Agent 接入流程概览
 
-1. **抓包** — 用 mitmproxy 抓 3~5 种典型请求 (main / aux / title-gen)，存入 `docs/<agent>-recon/`
+1. **抓包** — 用 mitmproxy 抓 3~5 种典型请求 (main / aux / title-gen)，存入 `MemoryProxy/docs/<agent>-recon/`
 2. **识别协议** — 确定 wire protocol (Anthropic / Chat / Responses)
 3. **确定 Session ID 来源** — 找 header 或 body 里的唯一会话标识
 4. **选择 Session Init 策略** — 有 tool → 交互式 form；无 tool → header 预选 / headless bypass
@@ -196,4 +200,4 @@ http://<proxy-host>:<port>/<agent-source>/<spaceId>
 7. **注入 Profile** — 按客户端 system prompt 格式定义注入模板
 8. **E2E 验证** — 跑完整链路确认 session-init + 注入 + 归档正常
 
-详见各子文档。
+👉 **完整二开步骤（20 项 checklist + 8 类坑速查 + dsh 参考实现）见 [`adapter-agent-development.md`](./adapter-agent-development.md)**。

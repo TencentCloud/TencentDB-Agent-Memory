@@ -31,7 +31,6 @@ export const zhCN = {
   'header.sync.title': '实时同步已连接',
   'header.settings': '设置',
   'header.profile': '我的资料',
-  'header.replayGuide': '回顾引导',
   'header.logout': '退出登录',
   'header.profile.caption': '我的资料',
   'header.profile.username': '用户名',
@@ -77,6 +76,36 @@ export const zhCN = {
   'login.placeholder.userKey': 'user_key，如 sk-mem-xxxxxxxxxxxxxxxx',
   'login.hint.userKey': '请使用管理员为你分配的 user_key；若还没有，请联系团队管理员开号。',
   'login.submit': '登录',
+  // 无独立的"登录方式选择页"：user_key 登录页与 iOA 流程各自内嵌一个跳转链接，
+  // 用户点一下直达另一种方式，不经过中间选择页。
+  // 站在 user_key 页 → 去 iOA 是"使用另一种方式"，用"使用 X 登录"。
+  // 处在 iOA 流程里 → 去 user_key 是"离开当前流程"，用"切换到 X 登录"。
+  'login.useWoa': '使用 iOA 登录',
+  'login.switchUserKey': '切换到 user_key 登录',
+  'login.woa.pendingTitle': '创建登录账号',
+  'login.woa.pendingIdentity': '已通过 WOA 认证：{{name}}。首次登录将为你创建 Memory 账号。',
+  'login.woa.usernameLabel': '用户名',
+  'login.woa.usernamePlaceholder': '仅支持字母、数字、下划线、连字符',
+  'login.woa.usernameHint': '将作为你在 Memory 中的账号名，默认取自 WOA 登录名。',
+  'login.woa.invalidUsername': '用户名仅支持字母、数字、下划线、连字符，不能包含其他符号或空格。',
+  'login.woa.createAccount': '创建账号并登录',
+  'login.woa.userKeyLabel': 'user_key',
+  'login.woa.userKeyPlaceholder': '输入你的 user_key',
+  'login.woa.userKeyHint': '若该 key 在系统内已存在，将绑定到那个已有账号（原有记忆与团队数据完整保留）；不存在则用此 key 新建账号。',
+  'login.woa.userKeyRequired': '请输入 user_key。',
+  'login.woa.previewNext': '下一步',
+  // 预览到 key 已属于某账号：明确告知用户将绑定到它（而非新建），避免误绑。
+  'login.woa.keyExistsHint': '该 user_key 已属于账号「{{name}}」，确认后将绑定此账号，原有数据完整保留。',
+  'login.woa.keyMissingHint': '该 user_key 在系统内不存在，确认后将用它创建新账号。',
+  'login.woa.confirmBind': '确认绑定此账号',
+  'login.woa.confirmCreate': '确认创建账号',
+  'login.woa.keyReadyTitle': '账号已创建',
+  'login.woa.keyReadyHint': '下面是你的 user_key，用于在 CodeBuddy / ClaudeCode 等客户端连接 proxy。',
+  'login.woa.yourUserKey': '你的 user_key',
+  'login.woa.copyKey': '复制',
+  'login.woa.copied': '已复制',
+  'login.woa.keyReadyWarn': '请立即妥善保存：自动生成的 key 仅此一次完整展示，离开后无法再次查看。',
+  'login.woa.savedEnter': '我已保存，进入',
   'login.submitting': '登录中…',
   'login.error.loadInstances': '加载记忆实例列表失败，请刷新页面重试{{detail}}',
   'login.error.selectInstance': '请选择记忆实例。',
@@ -518,6 +547,7 @@ export const zhCN = {
   'skills.detail.versionColTime': '更新时间',
   'skills.detail.versionColActions': '操作',
   'skills.detail.versionCaption': 'v{{version}} · SKILL.md',
+  'skills.versionTag.title': '当前版本：v{{version}}',
   'skills.ownerTag.title': 'owner user: {{name}}（{{id}}）',
   'skills.ownerTag.you': '（你）',
   'skills.agentTag.title': 'owner agent: {{name}}（{{id}}）',
@@ -653,7 +683,8 @@ export const zhCN = {
   'memory.detail.updated': '更新：{{time}}',
   'memory.detail.noL0': '该记忆块未保留 L0 对话原文。',
   'memory.detail.noL0InRange': '当前时间范围内没有 L0 对话原文，可调整右上角的时间筛选范围试试。',
-  'memory.detail.emptyLayerInRange': '当前时间范围内在 {{layer}} 层暂无条目，可调整右上角的时间筛选范围试试。',
+  'memory.detail.emptyLayerInRange':
+    '当前时间范围内在 {{layer}} 层暂无条目，可调整右上角的时间筛选范围试试。',
   'memory.detail.rangeTooLarge': '记忆条数过多，建议缩短筛选的时间范围',
   'memory.detail.loadMore': '加载更早的对话',
   'memory.detail.allLoaded': '已加载全部对话',
@@ -675,8 +706,10 @@ export const zhCN = {
   'memory.detail.searchScore': '相关度 {{score}}',
   'memory.detail.clickToLoad': '点击加载该层内容',
   'memory.detail.modeBrowse': '浏览',
+  'memory.detail.refresh': '刷新',
   'memory.detail.modeSearch': '搜索',
-  'memory.detail.searchPrompt': '输入关键词按语义搜索本记忆，搜索结果按相关度排序（不受时间范围限制）。',
+  'memory.detail.searchPrompt':
+    '输入关键词按语义搜索本记忆，搜索结果按相关度排序（不受时间范围限制）。',
   'memory.detail.emptyLayer': '该记忆块在 {{layer}} 层暂无条目。可由 curator / 高层提炼后写入。',
   'memory.detail.loading': '加载中…',
   'memory.detail.collapseBody': '收起原文',
@@ -788,7 +821,8 @@ export const zhCN = {
   'team.editTeam': '编辑 Team',
   'team.editTeam.tooltip': '修改当前 team 的名称 / 描述（仅 owner / 管理员）',
   'team.deleteTeam': '删除当前 Team',
-  'team.deleteTeam.tooltip': '删除当前 team 及其全部成员 / Agent / 任务 / 资产（仅 owner / 管理员）',
+  'team.deleteTeam.tooltip':
+    '删除当前 team 及其全部成员 / Agent / 任务 / 资产（仅 owner / 管理员）',
   'team.deleteTeam.confirm': '确认删除 team「{{name}}」？',
   'team.deleteTeam.desc':
     '删除后将级联移除 {{members}} 名成员、{{agents}} 个 Agent，以及该 team 下的全部任务与资产，且不可恢复。',
@@ -984,10 +1018,12 @@ export const zhCN = {
   'addMember.error.invalidName': '用户名仅支持英文字母、数字、下划线，不能包含其他符号或空格。',
   'addMember.error.emptyKey': '已开启自定义 User_Key，请填写要下发给用户的 key。',
   'addMember.customKey.label': '自定义 User_Key',
-  'addMember.customKey.hint': '默认关闭时由后端自动生成一次性 key；开启后由你手动指定用户初始 key。',
+  'addMember.customKey.hint':
+    '默认关闭时由后端自动生成一次性 key；开启后由你手动指定用户初始 key。',
   'addMember.customKey.value': 'User_Key',
   'addMember.customKey.placeholder': '例如 sk-mem-xxxxxxxxxxxxxxxx',
-  'addMember.customKey.valueHint': '将作为该用户的默认 User_Key；不可与已有用户的 key 重复，否则创建会被拒绝。',
+  'addMember.customKey.valueHint':
+    '将作为该用户的默认 User_Key；不可与已有用户的 key 重复，否则创建会被拒绝。',
 
   // ===== CreatedUserKeyModal =====
   'createdUserKey.caption': '用户创建成功',
@@ -1177,9 +1213,12 @@ export const zhCN = {
 
   // ===== 接口错误消息（error-message.ts） =====
   'error.UNAUTHORIZED': '登录状态已失效，请重新登录。',
-  'error.INVALID_USER_KEY': '用户密钥无效或已失效，请重新登录。',
+  'error.INVALID_USER_KEY': '该 user_key 无效，请确认已从 https://tencent.sso.codebuddy.cn/profile/keys 复制正确的 key。',
   'error.MISSING_USER_KEY': '缺少用户密钥，请重新登录。',
   'error.MISSING_INSTANCE_ID': '缺少实例信息，请重新选择实例后重试。',
+  'error.WOA_LOGIN_EXPIRED': 'WOA 登录确认已过期，请重新发起 WOA 登录。',
+  'error.WOA_LOGIN_PENDING_REQUIRED': 'WOA 登录确认状态不存在，请重新发起 WOA 登录。',
+  'error.WOA_PROVISION_NOT_CONFIGURED': '服务端未配置自动创建用户所需的管理员密钥，请联系管理员。',
   'error.INVALID_INSTANCE': '实例配置无效，请检查当前选择的实例。',
   'error.NOT_TEAM_MEMBER': '你不是该团队成员，无法执行此操作。',
   'error.PERMISSION_DENIED': '没有权限执行此操作。',
@@ -1212,7 +1251,8 @@ export const zhCN = {
   'error.ALREADY_ALLOCATED': '这条资产已经分配给该 Agent，无需重复分配。',
   'error.IMPORT_LIMIT_EXCEEDED': '该 Agent 最多只能借入 2 条其它 Agent 的记忆。',
   'error.ASSET_PRIVATE_INACCESSIBLE': '该资产已被 owner 设为私密，你无权访问。',
-  'error.ASSET_NOT_BINDABLE': '该资产的可见范围不允许绑定到此 Agent。请让 owner 将它设为团队可见后重试。',
+  'error.ASSET_NOT_BINDABLE':
+    '该资产的可见范围不允许绑定到此 Agent。请让 owner 将它设为团队可见后重试。',
   'error.INVALID_TITLE': '标题不能为空且不能超过长度限制。',
   'error.MISSING_MESSAGES': '缺少对话消息。',
   'error.TOO_MANY_MESSAGES': '一次最多导入 100 条消息。',
@@ -1231,6 +1271,9 @@ export const zhCN = {
   'error.VALIDATION_ERROR': '请求参数不正确，请检查输入后重试。',
   'error.RATE_LIMITED': '请求过于频繁，请稍后重试。',
   'error.INTERNAL_ERROR': '服务内部错误，请稍后重试。',
+  // 自持 user_key 首次登录（key 不存在 → 自动建号）时建号失败。
+  // 与"key 无效"是两回事：这里 key 本身没问题，是服务端建号动作失败了。
+  'error.USER_CREATE_FAILED': '使用该 user_key 创建账号失败，请稍后重试或联系管理员。',
   'error.network': '网络请求失败，请检查服务是否可用后重试。',
   'error.timeout': '请求超时，请稍后重试。',
   'error.emptyResponse': '服务返回为空，请稍后重试。',
@@ -1338,9 +1381,14 @@ export const zhCN = {
   'guide.quick.ide.sub': '配置 Proxy 与模型',
   'guide.quick.history.title': '获取历史数据',
   'guide.quick.history.sub': '让多 Agent 共享记忆和 Skill',
-  'guide.quick.history.desc': '在仓库根目录运行脚本，从本机 IDE 导入历史 Session 和 Skill，让多个 Agent 共享已有记忆与能力。',
-  'guide.quick.history.sources': '{{sources}} 等 source 均可导入；将目标 Team 和 Agent ID 替换后运行。',
+  'guide.quick.history.desc':
+    '在仓库根目录运行脚本，从本机 IDE 导入历史 Session 和 Skill，让多个 Agent 共享已有记忆与能力。',
+  'guide.quick.history.sources':
+    '{{sources}} 等 source 均可导入；将目标 Team 和 Agent ID 替换后运行。',
   'guide.quick.history.dupHint': ' 若已在脚本配置最后选择导入，则无需重复执行。',
+  'guide.verify.title': '配置成功验证：回到 IDE 开始新对话',
+  'guide.verify.desc':
+    '在已接入的 IDE 中发起一次新对话，会话初始化时会出现「是否关联团队资产」选项——看到它并选择「是」，即代表本次接入配置成功，Agent 将能读取你关联的团队资产。',
 
   // 准备信息
   'guide.proxyHint.reading': '正在读取本机 Proxy 地址…',
@@ -1367,11 +1415,13 @@ export const zhCN = {
   'guide.method.skill.sub': '推荐 · 由 Agent 引导配置',
   'guide.method.skill.step1': '在仓库根目录准备 Skill',
   'guide.method.skill.step2': '将下面的提示词发送给 Agent',
-  'guide.method.skill.hint': 'Agent 会探测环境和 Proxy，再调用配套脚本写入配置，并询问是否导入本地 Skill 与历史对话。',
+  'guide.method.skill.hint':
+    'Agent 会探测环境和 Proxy，再调用配套脚本写入配置，并询问是否导入本地 Skill 与历史对话。',
   'guide.method.script.title': '方式二：脚本配置',
   'guide.method.script.sub': '在终端运行交互向导',
   'guide.method.script.step1': '在仓库根目录运行',
-  'guide.method.script.hint': '脚本会扫描现有配置、检查 Proxy 并写入所选 IDE；最后可选择导入本地 Skill 与历史对话。',
+  'guide.method.script.hint':
+    '脚本会扫描现有配置、检查 Proxy 并写入所选 IDE；最后可选择导入本地 Skill 与历史对话。',
 
   // 手动配置
   'guide.manual.expand': '无法启动命令？手动配置',
@@ -1420,6 +1470,68 @@ export const zhCN = {
   'guide.replay.button': '引导回放',
   'guide.replayStarted': '即将重新开始引导，请跟随提示操作。',
 
+  // 记忆指令（mem: 命令）
+  'guide.mem.title': '记忆指令',
+  'guide.mem.sub': '会话中可用的 mem: 命令',
+  'guide.mem.intro.title': '在对话中使用 mem: 命令',
+  'guide.mem.intro.desc':
+    '接入 Memory 后，可在与 Agent 的对话里直接输入以下命令，管理本次会话的资产绑定、归档 Skill 与任务。',
+  'guide.mem.intro.format': '标准格式为 mem:<命令>，冒号后不加空格；命令名大小写不敏感。',
+  'guide.mem.optionsTitle': '可回复以下命令：',
+  'guide.mem.recommended': '推荐',
+
+  // 命令分组
+  'guide.mem.group.session.title': '日常高频',
+  'guide.mem.group.session.sub': '会话绑定 · 资产同步 · 归档',
+  'guide.mem.group.task.title': '任务管理',
+  'guide.mem.group.task.sub': '创建与更新绑定的 Task（含确认流程）',
+
+  // 命令：日常高频
+  'guide.mem.cmd.sessionReset.desc': '重置本次会话的团队 / Agent / 任务绑定，立即弹出重新选择。',
+  'guide.mem.cmd.sync.desc':
+    '刷新本次会话的全部资产注入（Skill / 记忆 / Knowledge / Task & Agent 描述）。',
+  'guide.mem.cmd.createSkill.desc':
+    '把本次对话归档为 Skill，后台异步提取；可在命令后附带提示词聚焦重点。',
+  'guide.mem.cmd.help.desc': '显示全部 mem: 命令的帮助说明。',
+
+  // 命令：任务管理
+  'guide.mem.cmd.createTask.desc': '从当前会话上下文创建 Task 并绑定到本 session。',
+  'guide.mem.cmd.createTask.detail1': '无参数：由 Agent 从最近对话推断标题与描述。',
+  'guide.mem.cmd.createTask.detail2':
+    '有参数：参数作为标题（超过 40 字截断），Agent 只生成描述。若本 session 已绑定真实 Task，会返回新 Task 预览并等待你确认。',
+  'guide.mem.cmd.createTask.opt.confirm': '覆盖绑定，创建新 Task。',
+  'guide.mem.cmd.createTask.opt.update': '继续复用当前 Task，只更新描述（推荐）。',
+  'guide.mem.cmd.createTask.opt.cancel': '取消，不做任何改动。',
+  'guide.mem.cmd.updateTask.desc': '更新已绑定 Task 的描述。',
+  'guide.mem.cmd.updateTask.detail1':
+    '无参数：Agent 对比“当前描述 + 最近对话”生成新描述；判定无实质改动则提示无需更新（幂等，可安全重试）。',
+  'guide.mem.cmd.updateTask.detail2':
+    '有参数：参数直接作为新描述并返回预览。若本 session 未绑定 Task，会提示先执行 mem:create-task；若绑定的 Task 非你创建，则拒绝更新。',
+  'guide.mem.cmd.updateTask.opt.confirm': '确认更新描述。',
+  'guide.mem.cmd.updateTask.opt.cancel': '取消更新。',
+
+  // 命令示例
+  'guide.mem.examples.title': '命令示例',
+  'guide.mem.examples.sub': '一组常用命令，可整体复制',
+  'guide.mem.examples.copyAll': '复制全部',
+  'guide.mem.examples.list': [
+    'mem:sync',
+    'mem:create-skill 重点总结数据库迁移步骤和踩坑',
+    'mem:create-task 重构 SessionRegistrar',
+    'mem:create-task confirm',
+    'mem:create-task cancel',
+    'mem:update-task 补充今天完成的进度与遗留风险',
+    'mem:update-task confirm',
+    'mem:update-task cancel',
+    'mem:session-reset',
+    'mem:help',
+  ].join('\n'),
+
+  // 命令参数占位符
+  'guide.mem.arg.title': '[标题]',
+  'guide.mem.arg.newDesc': '[新描述]',
+  'guide.mem.arg.prompt': '[提示词]',
+
   // 最佳实践分步内容（团队 Coding）
   'guide.practice.team.step1.title': '统一身份',
   'guide.practice.team.step1.short': '不同 IDE 使用同一套团队身份',
@@ -1467,7 +1579,8 @@ export const zhCN = {
   // 手动配置注意事项
   'guide.manual.note.claude': '直接启动 claude 即可从 settings.json 读取环境变量',
   'guide.manual.note.codebuddy': '在 CodeBuddy 对话框中选择模型 proxy-memory-agent',
-  'guide.manual.note.codex': '首次对话前先切到 Plan 模式（Shift+Tab）选 Team→Agent→Task，再切回 Agent 模式',
+  'guide.manual.note.codex':
+    '首次对话前先切到 Plan 模式（Shift+Tab）选 Team→Agent→Task，再切回 Agent 模式',
   'guide.manual.note.workbuddy': '在 WorkBuddy 自定义模型列表中选择该模型',
   'guide.manual.note.dsh.0': '需同时配置两个文件',
   'guide.manual.note.dsh.1': '权限要求：chmod 700 ~/.dsh，chmod 600 ~/.dsh/.credentials.yaml',
@@ -1478,4 +1591,188 @@ export const zhCN = {
   'guide.manual.note.openclaw.0': '需 Header 预选：team-id / agent-id / conversation-id；task-id 可选',
   'guide.manual.note.openclaw.1': 'x-conversation-id 标识当前会话，每次新对话需手动更换',
   'guide.manual.note.openclaw.2': 'x-task-id 现为可选；不带时仅绑定团队与 Agent，记忆召回范围会放宽到整个 Agent',
+
+  // ===== Analytics（可观测） =====
+  'menu.analytics': '线上调用情况',
+  'menu.group.observability': '数据分析',
+  'menu.desc.analytics': '团队记忆使用指标看板（仅管理员）',
+  'analytics.title': '线上调用情况',
+  'analytics.subtitle':
+    '团队记忆使用指标 · Session 渗透 / 工具调用 / bypass（数据源：ClickHouse 埋点）',
+  'analytics.range': '最近 {{days}} 天',
+  'analytics.allSpaces': '全部 Space',
+  'analytics.refresh': '刷新',
+  'analytics.loading': '加载中…',
+  'analytics.notLoaded': '尚未加载',
+  'analytics.updatedAt': '更新于 {{time}}',
+  'analytics.chUnreachable': 'ClickHouse 已配置但当前不可达，数据无法加载。',
+  'analytics.chNotConfigured': 'ClickHouse 未配置，可观测数据暂不可用。',
+  'analytics.featureDisabled.title': '功能未开放',
+  'analytics.featureDisabled.desc':
+    '当前部署未启用可观测功能（未接入 ClickHouse 埋点，或已由管理员关闭入口）。',
+  'analytics.chProbeFailed': 'ClickHouse 状态探测失败，请稍后重试或联系管理员。',
+  'analytics.unit.times': '次',
+  'analytics.trend.max': '峰值 {{value}}',
+  'analytics.trend.singlePoint':
+    '当前时间窗仅覆盖 1 个自然日，暂无法形成趋势对比；可切换到更长时间窗查看走势。',
+  'analytics.noPermission.title': '暂无权限',
+  'analytics.noPermission.desc': '可观测页面仅管理员（system_admin）可访问。',
+  'analytics.kpi.rate': '工具调用渗透率',
+  'analytics.kpi.avg': '平均调用次数',
+  'analytics.kpi.bypass': 'bypass 使用率',
+  'analytics.kpi.sessions': '独立 Session 数',
+  'analytics.kpi.total': '总调用次数',
+  'analytics.vsPrev': '较上一周期',
+  'analytics.perInitSession': '每个 init Session',
+  'analytics.bypassSub': '{{bypass}} bypass / {{normal}} normal',
+  'analytics.initSessionsSub': '当前周期 init 数',
+  'analytics.totalCallsSub': 'bridge_call 累计',
+  'analytics.section.endpointShare': '各接口调用占比',
+  'analytics.section.timeseries': '每日趋势（Session Init / 有调用 / bypass）',
+  'analytics.section.topBodies': '调用内容 TopN',
+  'analytics.section.bypassReasons': 'bypass 原因分布',
+  'analytics.empty.bridge': '没有 bridge_call 数据',
+  'analytics.empty.bypass': '没有 bypass 记录',
+  'analytics.empty.trend': '没有历史数据',
+  'analytics.empty.trace': '没有 trace 记录',
+  'analytics.trend.init': 'Init Sessions',
+  'analytics.trend.called': '有调用 Session',
+  'analytics.trend.bypass': 'bypass Session',
+  'analytics.calls.col.endpoint': '接口',
+  'analytics.calls.col.body': 'Body 摘要（前 200 字符）',
+  'analytics.calls.col.hash': '请求指纹',
+  'analytics.calls.col.count': '次数',
+  'analytics.calls.col.pct': '占比',
+
+  // 四类资产分布
+  'analytics.section.assetCategory': '资产调用分布',
+  'analytics.section.assetCategorySub': '按资产类别归并（全量口径）· 点击卡片可下钻调用明细',
+  'analytics.category.memory': 'Memory',
+  'analytics.category.skill': 'Skill',
+  'analytics.category.wiki': 'Wiki',
+  'analytics.category.codegraph': 'Code Graph',
+  'analytics.category.other': '其他',
+  'analytics.category.memory.desc': '长期记忆与历史经验召回',
+  'analytics.category.skill.desc': '标准流程与专业能力调用',
+  'analytics.category.wiki.desc': '团队知识与设计文档检索',
+  'analytics.category.codegraph.desc': '代码结构与调用关系分析',
+  'analytics.category.other.desc': '未归类端点，需补充归类规则',
+  'analytics.category.calls': '调用次数',
+  'analytics.category.noEndpoint': '暂无调用端点',
+
+  // 成员维度
+  'analytics.section.members': '成员使用情况',
+  'analytics.section.membersSub': '按成员归并调用行为 · 用于识别谁已用起来、谁还没有',
+  'analytics.member.col.user': '成员 / user_id',
+  'analytics.member.col.calls': '调用次数',
+  'analytics.member.col.sessions': '会话数',
+  'analytics.member.col.topCategory': '主要资产',
+  'analytics.member.col.avgElapsed': '平均耗时',
+  'analytics.member.col.errors': '失败数',
+  'analytics.member.col.lastCall': '最近调用',
+  'analytics.member.col.op': '操作',
+  'analytics.member.unassigned': '未归属（上报未带成员）',
+  'analytics.member.unrecognized': '未识别用户',
+  'analytics.member.sampled':
+    '成员统计基于最近 {{sampled}} 条调用（共 {{total}} 条），非全量口径；如需全量请缩小时间窗或按 Space 过滤。',
+  'analytics.empty.member': '暂无成员调用数据',
+
+  // Trace 明细
+  'analytics.section.trace': '调用明细（Trace）',
+  'analytics.section.traceSub': '每行对应一次真实调用 · 点击行展开完整请求体',
+  'analytics.trace.col.time': '时间',
+  'analytics.trace.col.user': '成员',
+  'analytics.trace.col.agent': '客户端',
+  'analytics.trace.col.tool': '发起工具',
+  'analytics.trace.col.endpoint': '实际端点',
+  'analytics.trace.col.status': '状态',
+  'analytics.trace.col.elapsed': '耗时',
+  'analytics.trace.endpointPlaceholder': '按端点搜索（模糊匹配）',
+  'analytics.trace.search': '搜索',
+  'analytics.trace.clearFilters': '清除筛选',
+  'analytics.trace.range': '{{from}}–{{to}} / 共 {{total}} 条',
+  'analytics.trace.prev': '上一页',
+  'analytics.trace.next': '下一页',
+  'analytics.trace.emptyBody': '（无请求体）',
+
+  // 视角切换
+  'analytics.tab.behavior': '使用情况',
+  'analytics.tab.cost': '成本与模型',
+
+  // 成本 KPI
+  'analytics.usage.kpi.requests': '模型请求数',
+  'analytics.usage.kpi.sessions': '会话数',
+  'analytics.usage.kpi.users': '成员数',
+  'analytics.usage.kpi.totalTokens': 'Token 总量',
+  'analytics.usage.kpi.prompt': '输入',
+  'analytics.usage.kpi.completion': '输出',
+  'analytics.usage.kpi.cacheHit': '缓存命中率',
+  'analytics.usage.kpi.cacheTokens': '命中 Token',
+  'analytics.usage.kpi.cacheHitHint': '占输入 Token 比例',
+  'analytics.usage.kpi.credit': 'Credit 消耗',
+  'analytics.usage.kpi.models': '模型数',
+  'analytics.usage.kpi.saved': 'Credit 节省',
+  'analytics.usage.kpi.compressSaved': '压缩省 Token',
+  'analytics.usage.kpi.savedHint': '缓存与压缩带来的节省',
+
+  // 成本趋势
+  'analytics.usage.section.tokenTrend': 'Token 每日趋势',
+  'analytics.usage.section.creditTrend': 'Credit 每日趋势',
+  'analytics.usage.section.creditTrendSub':
+    '与 Token 分图展示 · 两者量级差异大，同图会压平 Credit 曲线',
+  'analytics.usage.trend.prompt': '输入 Token',
+  'analytics.usage.trend.completion': '输出 Token',
+  'analytics.usage.trend.cacheHit': '缓存命中 Token',
+  'analytics.usage.trend.credit': 'Credit 消耗',
+  'analytics.usage.trend.creditSaved': 'Credit 节省',
+
+  // 模型分布
+  'analytics.usage.section.byModel': '模型用量与成本分布',
+  'analytics.usage.section.byModelSub': '按 Credit 消耗降序 · 路由列表示由其他模型转发而来的请求数',
+  'analytics.usage.model.col.model': '模型',
+  'analytics.usage.model.col.requests': '请求数',
+  'analytics.usage.model.col.pctRequests': '请求占比',
+  'analytics.usage.model.col.tokens': 'Token',
+  'analytics.usage.model.col.credit': 'Credit',
+  'analytics.usage.model.col.pctCredit': 'Credit 占比',
+  'analytics.usage.model.col.routed': '路由转入',
+
+  // 用量原始留档（注意：non_tokenhub 是正常通道标记，不是异常）
+  'analytics.usage.section.raw': '用量原始留档',
+  'analytics.usage.section.rawSub':
+    '未走 TokenHub 计费通道或计费解析失败的上报会原样留档 · 点击行查看原始载荷',
+  'analytics.usage.raw.actionable': '需处理（计费缺口）',
+  'analytics.usage.raw.passthrough': '非 TokenHub 通道（正常留档）',
+  'analytics.usage.raw.col.time': '时间',
+  'analytics.usage.raw.col.reason': '留档原因',
+  'analytics.usage.raw.col.model': '模型',
+  'analytics.usage.raw.col.user': '成员',
+  'analytics.usage.raw.col.key': '密钥 ID',
+  'analytics.usage.raw.col.space': 'Space',
+  'analytics.usage.raw.allReasons': '全部原因',
+  'analytics.usage.raw.emptyPayload': '（无原始载荷）',
+  'analytics.usage.reason.non_tokenhub': '非 TokenHub 通道',
+  'analytics.usage.reason.unknown_model': '模型未在定价表',
+  'analytics.usage.reason.invalid_format': '用量格式非法',
+  'analytics.usage.reason.invalid_credit': 'Credit 计算异常',
+  'analytics.usage.reason.report_failed': '上报失败',
+
+  'analytics.usage.empty.model': '暂无模型用量数据',
+  'analytics.usage.empty.raw': '当前筛选下没有留档记录',
+  'analytics.usage.empty.trend': '暂无用量历史数据',
+  'analytics.usage.empty.detail': '暂无用量明细',
+
+  // 用量明细列
+  'analytics.usage.detail.col.flags': '标记',
+  'analytics.usage.detail.stream': '流式',
+  'analytics.usage.detail.routed': '已路由',
+  'analytics.usage.detail.routedFrom': '由 {{model}} 路由而来',
+
+  // 下钻抽屉
+  'analytics.drill.open': '查看明细',
+  'analytics.drill.view.trace': '调用明细',
+  'analytics.drill.view.usage': '用量明细',
+  'analytics.drill.categoryHint': '该类资产的调用',
+  'analytics.drill.knowledgeAmbiguous':
+    'Wiki 与 Code Graph 同属 knowledge-service，内核仅支持按 bridge_source 过滤，因此以下结果包含 knowledge 全部调用，无法只显示单一类别。',
 };

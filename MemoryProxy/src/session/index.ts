@@ -80,6 +80,7 @@ import {
   FormData as WBFormData,
   FormStage as WBFormStage,
 } from "./workbuddy/form.js";
+import { buildWorkBuddyTextFormResponse } from "./workbuddy/text-form.js";
 import {
   buildFormResponse as buildDshFormResponse,
   FormData as DshFormData,
@@ -182,7 +183,21 @@ export async function handleSessionInit(
       stream: reqCtx.stream,
       modelId: reqCtx.modelId,
     };
-    result.response = buildWorkBuddyFormResponse(wbFd);
+    // 能力探测：新版 WorkBuddy 官方 tools 集合里拿掉了 AskUserQuestion，
+    // 继续发 tool_calls SSE 客户端会收下但不渲染 → 卡死在 pending。
+    // 此时降级为**文字模式**（content chunk + markdown 编号列表），
+    // 通过 next / prev / skip 关键字 + 数字/名字/id 完成同一套 4-stage 交互。
+    //
+    // 判定逻辑集中在 detectClientCapabilities（handler.ts 层已计算好透传）：
+    //   - capabilities === undefined  → 视为 true，走原卡片路径（向前兼容）
+    //   - capabilities.askUserQuestion === true  → 走原卡片路径
+    //   - capabilities.askUserQuestion === false → 走文字模式
+    const askCapability = reqCtx.capabilities?.askUserQuestion;
+    if (askCapability === false) {
+      result.response = buildWorkBuddyTextFormResponse(wbFd);
+    } else {
+      result.response = buildWorkBuddyFormResponse(wbFd);
+    }
   }
 
   // dsh (deepseek-harness) 客户端复用 CB 状态机 + 自己的 ask_user_question 载体。

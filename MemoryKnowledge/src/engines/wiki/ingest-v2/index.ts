@@ -25,6 +25,7 @@ import { parseFrontmatter, buildPage } from "./frontmatter.js";
 import { mergePage, type MergeOptions } from "./merge.js";
 import { chunkText } from "./chunker.js";
 import { slugify, dirForType } from "./slug.js";
+import { isInsideRoot } from "./safe-path.js";
 import { rebuildIndexFile } from "./index-builder.js";
 import { appendIngestLog, appendIngestLogBatch } from "./log-writer.js";
 import { createLogger } from "../../../logger.js";
@@ -230,6 +231,19 @@ export async function commitCandidates(
 
   for (const [relPath, entries] of byPage) {
     const fullPath = join(projectPath, relPath);
+    // 最后一道边界卡口：relPath 由 LLM 输出间接推导而来，必须确认它没逃出项目目录。
+    // 必须早于下面的 readFileSync——否则越界文件内容会被读进 merge prompt 而外泄。
+    if (!isInsideRoot(projectPath, fullPath)) {
+      for (const entry of entries) {
+        mergeErrors.push({
+          relPath,
+          source: entry.source,
+          error: `path escapes project root: ${relPath}`,
+        });
+      }
+      log.error("阻断越界落盘路径", { relPath, projectPath });
+      continue;
+    }
     let existing = existsSync(fullPath) ? readFileSync(fullPath, "utf-8") : null;
 
     for (const entry of entries) {

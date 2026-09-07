@@ -40,8 +40,14 @@ export const usersApi = {
    *
    * ⚠️ 权限同 create：须当前用户持有 system_admin 权限；普通用户 → 403。
    */
-  createWithKey: (data: { username: string; user_key: string }) =>
-    metaPost<CreateUserResult>('user/create-with-key', data),
+  createWithKey: (data: {
+    username: string;
+    user_key: string;
+    external_id?: string;
+    auth_provider?: string;
+    display_name?: string;
+    email?: string;
+  }) => metaPost<CreateUserResult>('user/create-with-key', data),
 
   /**
    * 删除用户（透明代理至后端 user/delete）。
