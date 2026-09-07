@@ -917,6 +917,7 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    skipAssetConfirm?: boolean;
     autoConversationId?: {
       enabled?: boolean;
       ttlMinutes?: number;
