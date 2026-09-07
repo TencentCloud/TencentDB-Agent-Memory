@@ -1366,7 +1366,7 @@ export async function handleWorkbuddyEndpoint(
             (content) => workbuddyAdapter.extractUserText([{ type: "message", role: "user", content }]),
           );
       const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
-        || skillQueueStrategy === "every_queue_incremental"
+        || skillQueueStrategy === "adaptive_queue"
         ? getSkillQueueHistoryRepo(config)
         : undefined;
       // Session init persists WorkBuddy state under the Codex namespace.
@@ -1378,7 +1378,7 @@ export async function handleWorkbuddyEndpoint(
       };
       const skillQueueSnapshot = skillQueueStrategy === "every_queue"
         ? await getCurrentSkillQueueSnapshot(body.input, skillQueueIdentity, skillQueueHistoryRepo)
-        : skillQueueStrategy === "every_queue_incremental"
+        : skillQueueStrategy === "adaptive_queue"
           && await hasProcessedCurrentSkillQueue(body.input, skillQueueIdentity, skillQueueHistoryRepo)
           ? "processed"
           : null;
@@ -1435,7 +1435,7 @@ export async function handleWorkbuddyEndpoint(
       if (injectedText.length > 0) {
         body = injectWorkbuddyAssets(body, { raw: injectedText });
       }
-      if (dynamicText || skillQueueStrategy === "every_queue" || skillQueueStrategy === "every_queue_incremental") {
+      if (dynamicText || skillQueueStrategy === "every_queue" || skillQueueStrategy === "adaptive_queue") {
         body = await injectDynamicSkillQueue(
           body,
           dynamicText ?? "",

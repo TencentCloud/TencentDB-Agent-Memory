@@ -858,7 +858,7 @@ export async function handleCodexEndpoint(
             (content) => codexAdapter.extractUserText([{ type: "message", role: "user", content }]),
           );
       const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
-        || skillQueueStrategy === "every_queue_incremental"
+        || skillQueueStrategy === "adaptive_queue"
         ? getSkillQueueHistoryRepo(config)
         : undefined;
       const skillQueueIdentity = {
@@ -869,7 +869,7 @@ export async function handleCodexEndpoint(
       };
       const skillQueueSnapshot = skillQueueStrategy === "every_queue"
         ? await getCurrentSkillQueueSnapshot(body.input, skillQueueIdentity, skillQueueHistoryRepo)
-        : skillQueueStrategy === "every_queue_incremental"
+        : skillQueueStrategy === "adaptive_queue"
           && await hasProcessedCurrentSkillQueue(body.input, skillQueueIdentity, skillQueueHistoryRepo)
           ? "processed"
           : null;
@@ -947,7 +947,7 @@ export async function handleCodexEndpoint(
         // 否则模型看到的会是转义字符（`&lt;user_memory&gt;`）读不出结构。
         body = injectCodexAssets(body, { raw: injectedText });
       }
-      if (dynamicText || skillQueueStrategy === "every_queue" || skillQueueStrategy === "every_queue_incremental") {
+      if (dynamicText || skillQueueStrategy === "every_queue" || skillQueueStrategy === "adaptive_queue") {
         body = await injectDynamicSkillQueue(
           body,
           dynamicText ?? "",

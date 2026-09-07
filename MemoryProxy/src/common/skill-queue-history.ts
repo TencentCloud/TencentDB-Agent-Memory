@@ -61,7 +61,7 @@ export async function injectDynamicSkillQueue(
     })));
     const currentSnapshot = stored.at(-1)!;
 
-    if (strategy === "every_queue_incremental") {
+    if (strategy === "adaptive_queue") {
       const state = await loadSkillState(identity, repo);
       if (state.lastProcessedQueueKey !== current.key) {
         const eligibleNames = getEligibleSkillNames(
@@ -86,7 +86,7 @@ export async function injectDynamicSkillQueue(
 
     // A queue owns exactly one immutable snapshot. Tool loops reuse it byte-for-byte.
     if (
-      strategy !== "every_queue_incremental"
+      strategy !== "adaptive_queue"
       && currentSnapshot.blockText === null
       && hasSkillQueueMarkers(blockText)
     ) {
