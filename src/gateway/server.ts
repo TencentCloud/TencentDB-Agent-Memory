@@ -19,6 +19,7 @@ import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
+import { shapeGatewayRecallResponse } from "../adapters/gateway/recall-response.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
@@ -380,13 +381,16 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
-
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
+    const response: RecallResponse = shapeGatewayRecallResponse(
+      result,
+      this.config.memory.recall.injectionMode,
+    );
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: ` +
+      `stable=${response.stable_context.length} chars, ` +
+      `dynamic=${response.dynamic_context.length} chars, ` +
+      `injectionMode=${response.injection_mode}`,
+    );
     sendJson(res, 200, response);
   }
 

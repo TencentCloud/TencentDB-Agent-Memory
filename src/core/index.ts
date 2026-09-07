@@ -15,6 +15,7 @@ export type {
   LLMRunnerFactory,
   HostAdapter,
   CompletedTurn,
+  RecalledMemory,
   RecallResult,
   CaptureResult,
   MemorySearchParams,

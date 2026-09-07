@@ -81,7 +81,7 @@ const TAG = "[memory-tdai][l0]";
  * @param rawMessages - Raw messages from the agent_end hook context (full session history)
  * @param baseDir - Base data directory (~/.openclaw/memory-tdai/)
  * @param logger - Optional logger
- * @param originalUserText - Clean original user prompt (pre-prependContext)
+ * @param originalUserText - Clean original user prompt (before dynamic recall injection)
  * @param afterTimestamp - Epoch ms cursor: only messages with timestamp > this are new.
  *                         Pass 0 or omit for the first capture of a session.
  * @returns Filtered messages (for L1 to use directly), or empty array if nothing worth recording
@@ -92,7 +92,7 @@ export async function recordConversation(params: {
   rawMessages: unknown[];
   baseDir: string;
   logger?: Logger;
-  /** Clean original user prompt (pre-prependContext) */
+  /** Clean original user prompt (before dynamic recall injection) */
   originalUserText?: string;
   /** Epoch ms cursor: only process messages with timestamp strictly greater than this. */
   afterTimestamp?: number;
@@ -100,7 +100,7 @@ export async function recordConversation(params: {
    * Number of messages in the session at before_prompt_build time.
    * Used to locate the exact user message that originalUserText corresponds to:
    * rawMessages[originalUserMessageCount] is the user message appended by the framework
-   * AFTER before_prompt_build, i.e. the one whose content was polluted by prependContext.
+   * AFTER before_prompt_build, i.e. the one whose content includes dynamic recall.
    */
   originalUserMessageCount?: number;
 }): Promise<ConversationMessage[]> {
@@ -191,7 +191,7 @@ export async function recordConversation(params: {
   //
   // Background:
   //   The framework appends the user's message to the session after before_prompt_build,
-  //   then injects prependContext into it. So the user message in rawMessages is polluted.
+  //   then injects dynamic recall into it. So the user message in rawMessages is polluted.
   //   We cached the clean prompt (originalUserText) and the message count at
   //   before_prompt_build time (originalUserMessageCount) to identify which raw message
   //   is the real user input.

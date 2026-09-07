@@ -377,6 +377,22 @@ CONVERSATION_SEARCH_SCHEMA = {
 # MemoryProvider implementation
 # ---------------------------------------------------------------------------
 
+def _compose_recall_context(result: Dict[str, Any]) -> str:
+    """Prefer structured Gateway recall fields, with legacy context fallback."""
+    stable = result.get("stable_context")
+    dynamic = result.get("dynamic_context")
+    structured = [
+        value.strip()
+        for value in (stable, dynamic)
+        if isinstance(value, str) and value.strip()
+    ]
+    if structured:
+        return "\n\n".join(structured)
+
+    legacy = result.get("context")
+    return legacy.strip() if isinstance(legacy, str) else ""
+
+
 class MemoryTencentdbProvider(MemoryProvider):
     """memory-tencentdb four-layer memory via local Gateway sidecar."""
 
@@ -387,6 +403,7 @@ class MemoryTencentdbProvider(MemoryProvider):
         self._user_id = ""
         self._gateway_available = False
         self._initialized = False  # Track if initialize() has been called
+        self._warned_injection_mode_fallback = False
 
         # Background sync threads.
         # We allow at most _MAX_INFLIGHT_SYNCS in-flight sync threads at any
@@ -838,7 +855,7 @@ class MemoryTencentdbProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Synchronous recall — fetch memories in real-time for the current turn."""
+        """Synchronous recall — Hermes injects the returned block after user input."""
         if not query:
             return ""
         # Lazy probe before the short-circuit guard. If the Gateway died but
@@ -856,7 +873,18 @@ class MemoryTencentdbProvider(MemoryProvider):
                 session_key=effective_session,
                 user_id=self._user_id,
             )
-            context = result.get("context", "")
+            context = _compose_recall_context(result)
+            requested_mode = result.get("injection_mode")
+            if (
+                requested_mode == "prepend"
+                and not self._warned_injection_mode_fallback
+            ):
+                logger.warning(
+                    "memory-tencentdb recall.injectionMode=prepend cannot be "
+                    "applied by Hermes MemoryProvider.prefetch(); using Hermes "
+                    "native append placement"
+                )
+                self._warned_injection_mode_fallback = True
             self._record_success()
             if context:
                 return f"## memory-tencentdb Memory\n{context}"

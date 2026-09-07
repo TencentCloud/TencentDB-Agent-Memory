@@ -44,6 +44,7 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import { shapeOpenClawRecallResult } from "./src/adapters/openclaw/recall-injection.js";
 
 const TAG = "[memory-tdai]";
 
@@ -57,7 +58,7 @@ let pluginStartTimestamp = 0;
 
 /**
  * Cache original user prompts and message counts across hooks.
- * - text: clean user prompt before prependContext injection
+ * - text: clean user prompt before dynamic recall injection
  * - ts: cache creation time (for TTL sweep)
  * - messageCount: session message count at before_prompt_build time,
  *   used as fallback slice offset if timestamp cursor is unreliable
@@ -584,17 +585,30 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
-          const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
+        const hookResult = shapeOpenClawRecallResult(
+          result,
+          cfg.recall.injectionMode,
+        );
+
+        if (
+          hookResult?.appendSystemContext ||
+          hookResult?.prependContext ||
+          hookResult?.appendContext
+        ) {
+          const systemLen = hookResult.appendSystemContext?.length ?? 0;
+          const prependLen = hookResult.prependContext?.length ?? 0;
+          const appendLen = hookResult.appendContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${systemLen} chars, ` +
+            `prependContext=${prependLen} chars, ` +
+            `appendContext=${appendLen} chars, ` +
+            `injectionMode=${cfg.recall.injectionMode}`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
