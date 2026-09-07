@@ -1,0 +1,14 @@
+{
+  "name": "@tdai/plandex-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TencentDB Agent Memory adapter for Plandex: OpenAI-compatible provider config, health check and probe.",
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:coverage": "node --test --experimental-test-coverage \"test/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  }
+}
