@@ -200,19 +200,38 @@ export function useSkillsPanel() {
           setSkills([]);
           setVisibilityMap({});
         } else {
-          const [listRes, accessible] = await Promise.all([
+          // visibility 徽章数据源：只拿**当前用户 owner** 的 skill 资产。
+          //   fixed tab 列表 = selectedAgent 拥有的 skill，而 selectedAgent 只可能
+          //   是当前用户 owner 的 agent（teamAgents 已按 owner_user_id === myUserId
+          //   过滤），故这些 skill 的 owner_user_id 必然是 myUserId。
+          //
+          // 为什么用 asset/list + owner_user_id 而非 asset/list-accessible：
+          //   - list-accessible 会遍历**团队全量** skill 资产并逐条跑
+          //     checkAssetPermission（N+1）；团队合并后资产暴涨 → 明显变慢。
+          //   - asset/list 走纯 SQL WHERE 直查，无逐条权限检查；配合
+          //     owner_user_id 把范围收敛到「我 owner 的 skill」，量级与合并前一致。
+          //   - asset/list 不做 visibility 过滤，返回同时含 team / private，
+          //     徽章语义完整（owner 本就应看到自己全部可见性的 skill）。
+          //
+          // myUserId 缺失（未登录 / session 异常）时**不**降级为无 owner 过滤的
+          // 全量查询：asset/list 无 ACL，不带 owner_user_id 会把整个 team 的
+          // skill 元信息拉回响应体（信息暴露 + 慢），得不偿失。此时徽章留空
+          // （toggle 处对 undefined 已按 private 兜底），列表本身不受影响。
+          const [listRes, ownedAssets] = await Promise.all([
             listSkills({
               team_id: activeTeamId,
               filters: { owner_agent_id: selectedAgent, status: ['active'] },
               pagination: { limit: 200 },
             }),
-            assetsApi
-              .listAccessible(activeTeamId, { asset_type: 'skill', action: 'read' })
-              .catch(() => [] as Asset[]),
+            myUserId
+              ? assetsApi
+                  .list(activeTeamId, { asset_type: 'skill', owner_user_id: myUserId })
+                  .catch(() => [] as Asset[])
+              : Promise.resolve([] as Asset[]),
           ]);
           if (seq !== refreshSeqRef.current) return; // 已被后续请求取代
           const vm: Record<string, Asset['visibility']> = {};
-          for (const a of accessible) vm[a.asset_id] = a.visibility;
+          for (const a of ownedAssets) vm[a.asset_id] = a.visibility;
           setSkills(listRes.items);
           setVisibilityMap(vm);
         }
@@ -225,7 +244,7 @@ export function useSkillsPanel() {
     } finally {
       if (seq === refreshSeqRef.current) setLoading(false);
     }
-  }, [tab, selectedAgent, activeTeamId]);
+  }, [tab, selectedAgent, activeTeamId, myUserId]);
 
   // 同步 selectedAgent 到 teamAgents：
   //   - 切换 team 后，老 selectedAgent 可能已不在新 team 内，需要重置；
@@ -284,12 +303,10 @@ export function useSkillsPanel() {
       if (!activeTeamId) return;
       setDeleteLoading(true);
       try {
-        // 数据面软删除需要 owner_agent_id + expected_version 乐观锁。
-        // 团队 tab 数据源来自 asset/list-accessible，那份数据没有 owner_agent_id
-        // 和 version（asset 表无这两字段），列表里 skill.owner_agent_id 会是 ''。
-        // 这里按需再拉一次 skill/get 补齐。
+        // owner_agent_id 是 delete 的鉴权依据。团队 tab 数据源来自
+        // asset/list-accessible，那份数据没有 owner_agent_id（asset 表无该字段），
+        // 列表里 skill.owner_agent_id 会是 ''。这里按需再拉一次 skill/get 补齐。
         let ownerAgentId = skill.owner_agent_id;
-        let version = skill.version;
         if (!ownerAgentId) {
           const full = await getSkill({
             skill_id: skill.skill_id,
@@ -298,14 +315,12 @@ export function useSkillsPanel() {
             include_manifest: false,
           });
           ownerAgentId = full.owner_agent_id;
-          version = full.version;
         }
         await deleteSkillV3({
           user_id: myUserId,
           team_id: activeTeamId,
           agent_id: ownerAgentId,
           skill_id: skill.skill_id,
-          expected_version: version,
         });
         if (selectedSkillId === skill.skill_id) {
           setSelectedSkillId(null);

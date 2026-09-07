@@ -180,7 +180,7 @@ const WRITE_SUBPATHS = new Set<string>([
  * Write ops: proxy injects `expected_version` for optimistic locking. If head
  *   moved (external update), plugin returns 40901 SKILL_VERSION_STALE.
  * Delete / create / extract / search / listing / list / versions / files-download
- *   do NOT participate (soft-delete doesn't bump version; others are stateless).
+ *   do NOT participate (delete is unconditional; others are stateless).
  */
 const READ_VERSION_OPS = new Set<string>(["get", "files/read"]);
 const WRITE_LOCK_OPS = new Set<string>([

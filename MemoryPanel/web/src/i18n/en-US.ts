@@ -31,7 +31,6 @@ export const enUS = {
   'header.sync.title': 'Real-time sync is connected',
   'header.settings': 'Settings',
   'header.profile': 'My Profile',
-  'header.replayGuide': 'Replay Guide',
   'header.logout': 'Log Out',
   'header.profile.caption': 'My Profile',
   'header.profile.username': 'Username',
@@ -81,6 +80,34 @@ export const enUS = {
   'login.hint.userKey':
     "Use the user_key assigned by your admin. If you don't have one, contact your team admin.",
   'login.submit': 'Log In',
+  // No standalone method-picker page: each login surface embeds one link that jumps
+  // straight to the other method. From the user_key page it's "Log in with X";
+  // inside the iOA flow it's "Switch to ..." (leaving the current flow).
+  'login.useWoa': 'Log in with iOA',
+  'login.switchUserKey': 'Switch to user_key login',
+  'login.woa.pendingTitle': 'Create login account',
+  'login.woa.pendingIdentity': 'WOA authenticated: {{name}}. Your Memory account will be created on first login.',
+  'login.woa.usernameLabel': 'Username',
+  'login.woa.usernamePlaceholder': 'Letters, numbers, underscores and hyphens only',
+  'login.woa.usernameHint': 'Your account name in Memory, defaults to your WOA login name.',
+  'login.woa.invalidUsername': 'Username may contain only letters, numbers, underscores, and hyphens.',
+  'login.woa.createAccount': 'Create account and sign in',
+  'login.woa.userKeyLabel': 'user_key',
+  'login.woa.userKeyPlaceholder': 'Enter your user_key',
+  'login.woa.userKeyHint': 'If this key already exists, it will be bound to that existing account (your memories and teams are preserved); otherwise a new account is created with this key.',
+  'login.woa.userKeyRequired': 'Please enter a user_key.',
+  'login.woa.previewNext': 'Next',
+  'login.woa.keyExistsHint': 'This user_key already belongs to account "{{name}}". Confirming will bind to it and keep all existing data.',
+  'login.woa.keyMissingHint': 'This user_key does not exist yet. Confirming will create a new account with it.',
+  'login.woa.confirmBind': 'Confirm binding this account',
+  'login.woa.confirmCreate': 'Confirm creating account',
+  'login.woa.keyReadyTitle': 'Account created',
+  'login.woa.keyReadyHint': 'Here is your user_key, used to connect the proxy from CodeBuddy / ClaudeCode clients.',
+  'login.woa.yourUserKey': 'Your user_key',
+  'login.woa.copyKey': 'Copy',
+  'login.woa.copied': 'Copied',
+  'login.woa.keyReadyWarn': 'Save it now: an auto-generated key is shown only once and cannot be retrieved later.',
+  'login.woa.savedEnter': 'I have saved it, enter',
   'login.submitting': 'Logging in…',
   'login.error.loadInstances':
     'Failed to load memory instance list. Please refresh and retry.{{detail}}',
@@ -535,6 +562,7 @@ export const enUS = {
   'skills.detail.versionColTime': 'Updated at',
   'skills.detail.versionColActions': 'Actions',
   'skills.detail.versionCaption': 'v{{version}} · SKILL.md',
+  'skills.versionTag.title': 'Current version: v{{version}}',
   'skills.ownerTag.title': 'owner user: {{name}} ({{id}})',
   'skills.ownerTag.you': ' (you)',
   'skills.agentTag.title': 'owner agent: {{name}} ({{id}})',
@@ -672,6 +700,7 @@ export const enUS = {
   'memory.detail.teamPool': 'Team Memory Pool',
   'memory.detail.uploadedBy': 'Uploaded: {{user}}',
   'memory.detail.updated': 'Updated: {{time}}',
+  'memory.detail.refresh': 'Refresh',
   'memory.detail.noL0': 'This memory block has no L0 conversation history.',
   'memory.detail.noL0InRange':
     'No L0 conversation history in the current time range. Try adjusting the time filter in the top-right corner.',
@@ -1215,9 +1244,12 @@ export const enUS = {
 
   // ===== API error messages (error-message.ts) =====
   'error.UNAUTHORIZED': 'Your session has expired. Please log in again.',
-  'error.INVALID_USER_KEY': 'Your API key is invalid or expired. Please log in again.',
+  'error.INVALID_USER_KEY': 'This user_key is invalid. Please copy the correct key from https://tencent.sso.codebuddy.cn/profile/keys.',
   'error.MISSING_USER_KEY': 'Missing API key. Please log in again.',
   'error.MISSING_INSTANCE_ID': 'Missing instance information. Please reselect an instance and try again.',
+  'error.WOA_LOGIN_EXPIRED': 'The WOA login confirmation expired. Please start WOA login again.',
+  'error.WOA_LOGIN_PENDING_REQUIRED': 'The WOA login confirmation is missing. Please start WOA login again.',
+  'error.WOA_PROVISION_NOT_CONFIGURED': 'The server is missing the administrator key required to create a user. Contact an administrator.',
   'error.INVALID_INSTANCE': 'Invalid instance configuration. Please check the currently selected instance.',
   'error.NOT_TEAM_MEMBER': 'You are not a member of this team and cannot perform this operation.',
   'error.PERMISSION_DENIED': 'You do not have permission to perform this operation.',
@@ -1269,6 +1301,10 @@ export const enUS = {
   'error.VALIDATION_ERROR': 'Invalid request parameters. Please check your input and try again.',
   'error.RATE_LIMITED': 'Too many requests. Please try again later.',
   'error.INTERNAL_ERROR': 'Internal server error. Please try again later.',
+  // First login with a self-provided user_key (key not found → auto-create account)
+  // failed while creating the account. Distinct from "invalid key": the key itself is
+  // fine here; the server-side account creation failed.
+  'error.USER_CREATE_FAILED': 'Failed to create an account with this user_key. Please try again later or contact the administrator.',
   'error.network': 'Network request failed. Please check if the service is available and try again.',
   'error.timeout': 'Request timed out. Please try again later.',
   'error.emptyResponse': 'The server returned an empty response. Please try again later.',
@@ -1380,6 +1416,9 @@ export const enUS = {
   'guide.quick.history.desc': 'Run the script from the repo root to import historical Sessions and Skills from local IDEs, so multiple Agents share existing memory and capabilities.',
   'guide.quick.history.sources': 'Sources such as {{sources}} are supported; replace the target Team and Agent IDs before running.',
   'guide.quick.history.dupHint': ' If you already chose to import at the end of the script setup, no need to run again.',
+  'guide.verify.title': 'Verify success: start a new conversation in your IDE',
+  'guide.verify.desc':
+    'Start a new conversation in a connected IDE. During session init you will see a "Link team assets?" option — seeing it and choosing "Yes" means your setup succeeded and your Agent can read the linked team assets.',
 
   // Preparation
   'guide.proxyHint.reading': 'Reading the local Proxy address…',
@@ -1458,6 +1497,71 @@ export const enUS = {
   'guide.replay.desc': 'Replay the step-by-step first-run guide to quickly get familiar with pages and actions.',
   'guide.replay.button': 'Replay Guide',
   'guide.replayStarted': 'The guide will restart — please follow the prompts.',
+
+  // Memory commands (mem: commands)
+  'guide.mem.title': 'Memory Commands',
+  'guide.mem.sub': 'mem: commands available in chat',
+  'guide.mem.intro.title': 'Use mem: commands in the conversation',
+  'guide.mem.intro.desc':
+    'Once Memory is connected, type the commands below directly in the chat with your Agent to manage this session\u2019s asset bindings, archive Skills, and manage Tasks.',
+  'guide.mem.intro.format':
+    'The standard format is mem:<command> with no space after the colon. Command names are case-insensitive.',
+  'guide.mem.optionsTitle': 'You can reply with:',
+  'guide.mem.recommended': 'Recommended',
+
+  // Command groups
+  'guide.mem.group.session.title': 'Everyday',
+  'guide.mem.group.session.sub': 'Session binding \u00b7 asset sync \u00b7 archive',
+  'guide.mem.group.task.title': 'Task Management',
+  'guide.mem.group.task.sub': 'Create and update the bound Task (with confirmation flow)',
+
+  // Commands: everyday
+  'guide.mem.cmd.sessionReset.desc':
+    'Reset this session\u2019s team / Agent / Task binding and immediately re-open the selection.',
+  'guide.mem.cmd.sync.desc':
+    'Refresh all asset injections for this session (Skill / memory / Knowledge / Task & Agent descriptions).',
+  'guide.mem.cmd.createSkill.desc':
+    'Archive this conversation as a Skill, extracted asynchronously; append a prompt to focus the key points.',
+  'guide.mem.cmd.help.desc': 'Show help for all mem: commands.',
+
+  // Commands: task management
+  'guide.mem.cmd.createTask.desc': 'Create a Task from the current conversation context and bind it to this session.',
+  'guide.mem.cmd.createTask.detail1':
+    'No argument: the Agent infers the title and description from the recent conversation.',
+  'guide.mem.cmd.createTask.detail2':
+    'With argument: the argument is used as the title (truncated at 40 chars) and the Agent only generates the description. If this session already has a real Task bound, a preview of the new Task is returned for confirmation.',
+  'guide.mem.cmd.createTask.opt.confirm': 'Override the binding and create the new Task.',
+  'guide.mem.cmd.createTask.opt.update': 'Keep reusing the current Task and only update its description (recommended).',
+  'guide.mem.cmd.createTask.opt.cancel': 'Cancel without any changes.',
+  'guide.mem.cmd.updateTask.desc': 'Update the description of the bound Task.',
+  'guide.mem.cmd.updateTask.detail1':
+    'No argument: the Agent compares the current description with the recent conversation to generate a new one; if there is no substantial change, it reports no update needed (idempotent, safe to retry).',
+  'guide.mem.cmd.updateTask.detail2':
+    'With argument: the argument is used directly as the new description and a preview is returned. If no Task is bound, it asks you to run mem:create-task first; if the bound Task was not created by you, the update is rejected.',
+  'guide.mem.cmd.updateTask.opt.confirm': 'Confirm the description update.',
+  'guide.mem.cmd.updateTask.opt.cancel': 'Cancel the update.',
+
+  // Command examples
+  'guide.mem.examples.title': 'Command Examples',
+  'guide.mem.examples.sub': 'A set of common commands, copy all at once',
+  'guide.mem.examples.copyAll': 'Copy All',
+  'guide.mem.examples.list': [
+    'mem:sync',
+    'mem:create-skill Summarize the DB migration steps and pitfalls',
+    'mem:create-task Refactor SessionRegistrar',
+    'mem:create-task confirm',
+    'mem:create-task cancel',
+    'mem:update-task Add today\u2019s progress and remaining risks',
+    'mem:update-task confirm',
+    'mem:update-task cancel',
+    'mem:session-reset',
+    'mem:help',
+  ].join('\n'),
+
+  // Command argument placeholders
+  'guide.mem.arg.title': '[title]',
+  'guide.mem.arg.newDesc': '[new description]',
+  'guide.mem.arg.prompt': '[prompt]',
 
   // Best practice steps (Team Coding)
   'guide.practice.team.step1.title': 'Unified identity',
@@ -1549,4 +1653,183 @@ export const enUS = {
   'sessionInit.error.agent_not_in_caller_teams': 'The selected agent does not belong to your teams.',
   'sessionInit.error.task_not_in_team': 'The selected task does not belong to that team.',
   'sessionInit.error.registration_failed': 'Registration failed. Please retry (the link is still valid).',
+
+  // ===== Analytics (Observability) =====
+  'menu.analytics': 'Observability',
+  'menu.group.observability': 'Observability',
+  'menu.desc.analytics': 'Team memory usage metrics dashboard (admin only)',
+  'analytics.title': 'Observability',
+  'analytics.subtitle': 'Team memory usage metrics · Session adoption / tool calls / bypass (source: ClickHouse telemetry)',
+  'analytics.range': 'Last {{days}} days',
+  'analytics.allSpaces': 'All Spaces',
+  'analytics.refresh': 'Refresh',
+  'analytics.loading': 'Loading…',
+  'analytics.notLoaded': 'Not loaded',
+  'analytics.updatedAt': 'Updated at {{time}}',
+  'analytics.chUnreachable': 'ClickHouse is configured but unreachable; data cannot be loaded.',
+  'analytics.chNotConfigured': 'ClickHouse is not configured; observability data is unavailable.',
+  'analytics.featureDisabled.title': 'Feature unavailable',
+  'analytics.featureDisabled.desc':
+    'Observability is not enabled for this deployment (ClickHouse telemetry not configured, or disabled by the administrator).',
+  'analytics.chProbeFailed': 'Failed to probe ClickHouse status. Please retry later or contact an admin.',
+  'analytics.unit.times': 'calls',
+  'analytics.trend.max': 'Peak {{value}}',
+  'analytics.trend.singlePoint': 'The current time window covers only one calendar day, so no trend comparison is available. Switch to a longer window to see the trend.',
+  'analytics.noPermission.title': 'No Permission',
+  'analytics.noPermission.desc': 'The observability page is only available to system admins.',
+  'analytics.kpi.rate': 'Tool Call Rate',
+  'analytics.kpi.avg': 'Avg Calls per Session',
+  'analytics.kpi.bypass': 'Bypass Rate',
+  'analytics.kpi.sessions': 'Distinct Sessions',
+  'analytics.kpi.total': 'Total Calls',
+  'analytics.vsPrev': 'vs previous period',
+  'analytics.perInitSession': 'per init Session',
+  'analytics.bypassSub': '{{bypass}} bypass / {{normal}} normal',
+  'analytics.initSessionsSub': 'init sessions in current period',
+  'analytics.totalCallsSub': 'bridge_call total',
+  'analytics.section.endpointShare': 'Endpoint Share',
+  'analytics.section.timeseries': 'Daily Trend (Session Init / Called / Bypass)',
+  'analytics.section.topBodies': 'Top Call Bodies',
+  'analytics.section.bypassReasons': 'Bypass Reasons',
+  'analytics.empty.bridge': 'No bridge_call data',
+  'analytics.empty.bypass': 'No bypass records',
+  'analytics.empty.trend': 'No history data',
+  'analytics.empty.trace': 'No trace records',
+  'analytics.trend.init': 'Init Sessions',
+  'analytics.trend.called': 'Called Sessions',
+  'analytics.trend.bypass': 'Bypass Sessions',
+  'analytics.calls.col.endpoint': 'Endpoint',
+  'analytics.calls.col.body': 'Body preview (first 200 chars)',
+  'analytics.calls.col.hash': 'Request Hash',
+  'analytics.calls.col.count': 'Occurrences',
+  'analytics.calls.col.pct': 'Share',
+
+  // Asset categories
+  'analytics.section.assetCategory': 'Asset Call Distribution',
+  'analytics.section.assetCategorySub': 'Grouped by asset category (full dataset) · click a card to drill into call details',
+  'analytics.category.memory': 'Memory',
+  'analytics.category.skill': 'Skill',
+  'analytics.category.wiki': 'Wiki',
+  'analytics.category.codegraph': 'Code Graph',
+  'analytics.category.other': 'Other',
+  'analytics.category.memory.desc': 'Long-term memory and past experience recall',
+  'analytics.category.skill.desc': 'Standard workflows and specialized capabilities',
+  'analytics.category.wiki.desc': 'Team knowledge and design doc retrieval',
+  'analytics.category.codegraph.desc': 'Code structure and call relationship analysis',
+  'analytics.category.other.desc': 'Unclassified endpoints; classification rules need updating',
+  'analytics.category.calls': 'Calls',
+  'analytics.category.noEndpoint': 'No endpoints yet',
+
+  // Member dimension
+  'analytics.section.members': 'Member Usage',
+  'analytics.section.membersSub': 'Call behavior grouped by member · identifies who has adopted and who has not',
+  'analytics.member.col.user': 'Member / user_id',
+  'analytics.member.col.calls': 'Calls',
+  'analytics.member.col.sessions': 'Sessions',
+  'analytics.member.col.topCategory': 'Top Asset',
+  'analytics.member.col.avgElapsed': 'Avg Latency',
+  'analytics.member.col.errors': 'Errors',
+  'analytics.member.col.lastCall': 'Last Call',
+  'analytics.member.col.op': 'Action',
+  'analytics.member.unassigned': 'Unassigned (no member in report)',
+  'analytics.member.unrecognized': 'Unrecognized user',
+  'analytics.member.sampled': 'Member stats are based on the latest {{sampled}} calls (out of {{total}}), not the full dataset. Narrow the time window or filter by Space for full coverage.',
+  'analytics.empty.member': 'No member call data',
+
+  // Trace details
+  'analytics.section.trace': 'Call Details (Trace)',
+  'analytics.section.traceSub': 'Each row is one real call · click a row to expand the full request body',
+  'analytics.trace.col.time': 'Time',
+  'analytics.trace.col.user': 'Member',
+  'analytics.trace.col.agent': 'Client',
+  'analytics.trace.col.tool': 'Initiated Tool',
+  'analytics.trace.col.endpoint': 'Executed Endpoint',
+  'analytics.trace.col.status': 'Status',
+  'analytics.trace.col.elapsed': 'Latency',
+  'analytics.trace.endpointPlaceholder': 'Search by endpoint (fuzzy)',
+  'analytics.trace.search': 'Search',
+  'analytics.trace.clearFilters': 'Clear filters',
+  'analytics.trace.range': '{{from}}–{{to}} of {{total}}',
+  'analytics.trace.prev': 'Previous',
+  'analytics.trace.next': 'Next',
+  'analytics.trace.emptyBody': '(no request body)',
+
+  // View tabs
+  'analytics.tab.behavior': 'Usage Behavior',
+  'analytics.tab.cost': 'Cost & Models',
+
+  // Cost KPIs
+  'analytics.usage.kpi.requests': 'Model Requests',
+  'analytics.usage.kpi.sessions': 'Sessions',
+  'analytics.usage.kpi.users': 'Members',
+  'analytics.usage.kpi.totalTokens': 'Total Tokens',
+  'analytics.usage.kpi.prompt': 'Prompt',
+  'analytics.usage.kpi.completion': 'Completion',
+  'analytics.usage.kpi.cacheHit': 'Cache Hit Rate',
+  'analytics.usage.kpi.cacheTokens': 'Cached Tokens',
+  'analytics.usage.kpi.cacheHitHint': 'share of prompt tokens',
+  'analytics.usage.kpi.credit': 'Credit Spent',
+  'analytics.usage.kpi.models': 'Models',
+  'analytics.usage.kpi.saved': 'Credit Saved',
+  'analytics.usage.kpi.compressSaved': 'Tokens Saved',
+  'analytics.usage.kpi.savedHint': 'from caching and compression',
+
+  // Cost trends
+  'analytics.usage.section.tokenTrend': 'Daily Token Trend',
+  'analytics.usage.section.creditTrend': 'Daily Credit Trend',
+  'analytics.usage.section.creditTrendSub': 'Charted separately from tokens — combining them would flatten the credit curve',
+  'analytics.usage.trend.prompt': 'Prompt Tokens',
+  'analytics.usage.trend.completion': 'Completion Tokens',
+  'analytics.usage.trend.cacheHit': 'Cached Tokens',
+  'analytics.usage.trend.credit': 'Credit Spent',
+  'analytics.usage.trend.creditSaved': 'Credit Saved',
+
+  // Model distribution
+  'analytics.usage.section.byModel': 'Model Usage & Cost Distribution',
+  'analytics.usage.section.byModelSub': 'Sorted by credit spent · the routed column counts requests forwarded from other models',
+  'analytics.usage.model.col.model': 'Model',
+  'analytics.usage.model.col.requests': 'Requests',
+  'analytics.usage.model.col.pctRequests': 'Req. Share',
+  'analytics.usage.model.col.tokens': 'Tokens',
+  'analytics.usage.model.col.credit': 'Credit',
+  'analytics.usage.model.col.pctCredit': 'Credit Share',
+  'analytics.usage.model.col.routed': 'Routed In',
+
+  // Raw usage records (note: non_tokenhub is a normal passthrough marker, not an anomaly)
+  'analytics.usage.section.raw': 'Raw Usage Records',
+  'analytics.usage.section.rawSub': 'Reports that bypassed the TokenHub billing path or failed billing parsing are archived as-is · click a row for the raw payload',
+  'analytics.usage.raw.actionable': 'Need attention (billing gap)',
+  'analytics.usage.raw.passthrough': 'Non-TokenHub path (normal)',
+  'analytics.usage.raw.col.time': 'Time',
+  'analytics.usage.raw.col.reason': 'Archive Reason',
+  'analytics.usage.raw.col.model': 'Model',
+  'analytics.usage.raw.col.user': 'Member',
+  'analytics.usage.raw.col.key': 'Key ID',
+  'analytics.usage.raw.col.space': 'Space',
+  'analytics.usage.raw.allReasons': 'All reasons',
+  'analytics.usage.raw.emptyPayload': '(no raw payload)',
+  'analytics.usage.reason.non_tokenhub': 'Non-TokenHub path',
+  'analytics.usage.reason.unknown_model': 'Model not in pricing table',
+  'analytics.usage.reason.invalid_format': 'Invalid usage format',
+  'analytics.usage.reason.invalid_credit': 'Credit calculation anomaly',
+  'analytics.usage.reason.report_failed': 'Report failed',
+
+  'analytics.usage.empty.model': 'No model usage data',
+  'analytics.usage.empty.raw': 'No archived records under the current filter',
+  'analytics.usage.empty.trend': 'No usage history data',
+  'analytics.usage.empty.detail': 'No usage records',
+
+  // Usage detail columns
+  'analytics.usage.detail.col.flags': 'Flags',
+  'analytics.usage.detail.stream': 'Stream',
+  'analytics.usage.detail.routed': 'Routed',
+  'analytics.usage.detail.routedFrom': 'Routed from {{model}}',
+
+  // Drill-down drawer
+  'analytics.drill.open': 'View details',
+  'analytics.drill.view.trace': 'Call Details',
+  'analytics.drill.view.usage': 'Usage Details',
+  'analytics.drill.categoryHint': 'calls for this asset type',
+  'analytics.drill.knowledgeAmbiguous':
+    'Wiki and Code Graph share the knowledge-service bridge source, and the kernel only filters by bridge_source — so the results below include all knowledge calls and cannot be narrowed to a single type.',
 };

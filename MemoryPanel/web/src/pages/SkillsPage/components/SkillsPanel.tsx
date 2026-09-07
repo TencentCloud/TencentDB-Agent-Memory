@@ -26,7 +26,7 @@
  *
  */
 import { useTranslation } from 'react-i18next';
-import { Button, Select, Segment } from 'tea-component';
+import { Button, Select, Segment, Tag, Tooltip } from 'tea-component';
 import { DeleteIcon } from 'tea-icons-react';
 import { tea } from '@/lib/tea-bridge';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
@@ -207,6 +207,18 @@ export default function SkillsPanel({
               return (
                 <>
                   <AssetItemHeader>
+                    {/* 版本 Tag 置于名称前，只在 fixed（Agent 资产）tab 展示：
+                        该 tab 数据源为 listSkills（skill 数据面），version 真实可信；
+                        team tab 走 assetsApi.listAccessible，asset 表无 version 字段
+                        （恒为兜底值 1，点开后才被 useSkillDetailCache 回填），
+                        展示会误导且出现跳变，故不显示。 */}
+                    {tab === 'fixed' && (
+                      <Tooltip title={t('skills.versionTag.title', { version: s.version })}>
+                        <Tag theme="primary" className="_memory-skill-item-version">
+                          v{s.version}
+                        </Tag>
+                      </Tooltip>
+                    )}
                     <AssetItemName title={s.name}>{s.name}</AssetItemName>
                     {canManage && (
                       <Button

@@ -175,7 +175,7 @@ export function extractTeamFromOptionText(
   const hay = teamText ?? content;
   const trimmed = hay.trim();
 
-  // 检测"本次不关联" / SKIP_RE → bypass。
+  // 检测"暂时跳过" / SKIP_RE → bypass。
   // (P1-4) 早期只对 XML 解析出的 teamText 判 SKIP_RE, 非 XML content 走不到;
   // 真 codex CLI 里 codexFormAnswersAsMessages 把 JSON 答案抽成裸 content
   // (如 "跳过"), 结果 SKIP_RE 永远不触发 → 走到普通 team 名匹配 → 未命中 →
@@ -311,7 +311,7 @@ export function extractFromOptionText(
   if (!agentId) return null;
 
   // Resolve task。defaultTaskId 兜底通过 fetchTeamsAndAgents 头部注入实现：
-  // 用户选中"本次不关联任务"label 会 matchTaskInTeam 命中虚拟条目返回
+  // 用户选中"暂时跳过"label 会 matchTaskInTeam 命中虚拟条目返回
   // defaultTaskId，无需在此单独处理。SKIP_RE 兜底放到 match 失败之后，避免
   // 虚拟条目的"不关联"文案误伤。
   let taskId: string | undefined;
@@ -362,8 +362,15 @@ export function extractAgentOnly(
   if (opencodeAnswer !== null) content = opencodeAnswer;
   const trimmed = content.trim();
   if (!trimmed) return null;
+  // 先尝试匹配 agent 候选：CB codebuddy form 里 SKIP_HINT_LATER_STAGE 描述文本
+  // 含"跳过"字样，若先判 SKIP_RE 会把 agent_select 阶段用户按钮选择也误 BYPASS
+  // (回归 case: content = "…请选择「X」下要使用的 Agent：（如选择\"跳过\"选项…）AgentLabel")。
+  // 对齐 extractTaskOnly (下方) 姿势: 先 match, 命中即返, 失败再由 SKIP_RE 兜底。
+  // 契约不变: codex 客户端自由文本"跳过" → match 失败 → SKIP_RE 兜底 → BYPASS_MARKER。
+  const matched = matchAgentInTeam(trimmed, team);
+  if (matched) return matched;
   if (SKIP_RE.test(trimmed) || trimmed.includes(SKIP_LABEL)) return BYPASS_MARKER;
-  return matchAgentInTeam(trimmed, team);
+  return null;
 }
 
 /**
@@ -395,7 +402,7 @@ export function extractTaskOnly(
   const trimmed = content.trim();
   if (!trimmed) return null;
   // 先尝试匹配真实/虚拟 task 条目（虚拟条目由 fetchTeamsAndAgents 头部注入,
-  // label="本次不关联任务"命中后返回的是 defaultTaskId，符合"跳过 task 但保
+  // label="暂时跳过"命中后返回的是 defaultTaskId，符合"跳过 task 但保
   // 留 agent"契约，不当作 BYPASS）。
   const matched = matchTaskInTeam(trimmed, team);
   if (matched) return matched;
