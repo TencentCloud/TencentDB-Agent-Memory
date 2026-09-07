@@ -595,7 +595,7 @@ export type SkillQueueStrategy =
   | "session_init"
   | "every_queue"
   | "latest_only"
-  | "every_queue_incremental";
+  | "adaptive_queue";
 
 export interface InjectionConfig {
   enabled: boolean;

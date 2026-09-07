@@ -195,7 +195,7 @@ export class SkillInjector implements InjectionHook {
     if (caps?.skill === false) return [];
     if (
       (this.config.queueStrategy === "every_queue"
-        || this.config.queueStrategy === "every_queue_incremental")
+        || this.config.queueStrategy === "adaptive_queue")
       && custom?.skillQueueSnapshotHit === true
     ) {
       return [];

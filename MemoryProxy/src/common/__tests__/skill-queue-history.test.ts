@@ -158,7 +158,7 @@ describe("dynamic Skill queue", () => {
     const run = (queueCount: number, block: string) => injectDynamicSkillQueue(
       { input: Array.from({ length: queueCount }, (_, i) => message(`q${i + 1}`)) },
       block,
-      "every_queue_incremental",
+      "adaptive_queue",
       scopedIdentity,
       repo,
       buildBlock,
