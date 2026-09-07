@@ -58,6 +58,8 @@ const message = (text: string) => ({
 const buildBlock = (text: string) => ({ type: "input_text", text });
 
 describe("dynamic Skill queue", () => {
+  const listing = (names: string[]) => `${SKILL_QUEUE_START}\n<available_skills>\n${names.map((name) => `- ${name}: description`).join("\n")}\n</available_skills>\n${SKILL_QUEUE_END}`;
+
   it("extracts the dynamic block from synthetic user.after output", () => {
     const marked = `${SKILL_QUEUE_START}\n<available_skills>x</available_skills>\n${SKILL_QUEUE_END}`;
     expect(extractMarkedSkillQueueBlock(`original user\n${marked}`)).toBe(marked);
@@ -147,5 +149,37 @@ describe("dynamic Skill queue", () => {
 
     expect((result.input as any[])[0].content).toHaveLength(1);
     expect((result.input as any[])[1].content[1].text).toBe(latestBlock);
+  });
+
+  it("incremental strategy appends only new or forgotten skills", async () => {
+    const repo = new MemoryRepo();
+    const scopedIdentity = { ...identity, sessionId: "incremental" };
+    const run = (queueCount: number, block: string) => injectDynamicSkillQueue(
+      { input: Array.from({ length: queueCount }, (_, i) => message(`q${i + 1}`)) },
+      block,
+      "every_queue_incremental",
+      scopedIdentity,
+      repo,
+      buildBlock,
+      3,
+    );
+
+    const first = await run(1, listing(["a", "b"]));
+    expect((first.input as any[])[0].content[1].text).toContain("- a:");
+    expect((first.input as any[])[0].content[1].text).toContain("- b:");
+
+    const second = await run(2, listing(["a", "b", "c"]));
+    expect((second.input as any[])[0].content).toHaveLength(2);
+    expect((second.input as any[])[1].content[1].text).toContain("- c:");
+    expect((second.input as any[])[1].content[1].text).not.toContain("- a:");
+
+    const third = await run(3, listing(["a", "b", "c"]));
+    expect((third.input as any[])[2].content).toHaveLength(1);
+
+    const fourth = await run(4, listing(["a", "b", "c"]));
+    expect((fourth.input as any[])[3].content[1].text).toContain("- a:");
+    expect((fourth.input as any[])[3].content[1].text).toContain("- b:");
+    expect((fourth.input as any[])[3].content[1].text).not.toContain("- c:");
+    expect((fourth.input as any[])[0].content[1].text).toContain("- a:");
   });
 });
