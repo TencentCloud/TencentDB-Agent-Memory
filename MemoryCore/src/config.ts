@@ -111,6 +111,12 @@ export interface EmbeddingConfig {
   apiKey: string;
   /** Model name (required for remote provider). */
   model: string;
+  /** Stable vector schema identity, independent of serving alias. */
+  schemaIdentity?: string;
+  /** Immutable model revision used for migration detection. */
+  modelRevision?: string;
+  /** Vector normalization contract (default: l2-v1). */
+  normalization: string;
   /** Vector dimensions (required for remote provider, must match model). */
   dimensions: number;
   /**
@@ -603,6 +609,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       baseUrl: embeddingBaseUrl,
       apiKey: embeddingApiKey,
       model: str(embeddingGroup, "model") ?? defaultModel,
+      schemaIdentity: str(embeddingGroup, "schemaIdentity"),
+      modelRevision: str(embeddingGroup, "modelRevision"),
+      normalization: str(embeddingGroup, "normalization") ?? "l2-v1",
       dimensions: num(embeddingGroup, "dimensions") ?? defaultDimensions,
       sendDimensions: bool(embeddingGroup, "sendDimensions") ?? true,
       conflictRecallTopK: num(embeddingGroup, "conflictRecallTopK") ?? 5,

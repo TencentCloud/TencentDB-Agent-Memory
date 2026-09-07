@@ -239,6 +239,25 @@ export interface StoreInitResult {
   reason?: string;
 }
 
+export interface EmbeddingSchemaIdentity {
+  provider: string;
+  model: string;
+  dimensions: number;
+  schemaIdentity?: string;
+  modelRevision?: string;
+  normalization?: string;
+}
+
+export interface EmbeddingMigrationStatus {
+  state: "none" | "required" | "running" | "failed" | "ready";
+  reason?: string;
+  active?: EmbeddingSchemaIdentity;
+  target?: EmbeddingSchemaIdentity;
+  l0: { sourceRows: number; migratedRows: number; coverage: number };
+  l1: { sourceRows: number; migratedRows: number; coverage: number };
+  lastError?: string;
+}
+
 // ============================
 // Capability Flags
 // ============================
@@ -636,6 +655,12 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
     embedFn: (text: string) => Promise<Float32Array>,
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
   ): Promise<{ l1Count: number; l0Count: number }>;
+  /** Observe an explicit, non-destructive embedding migration. */
+  getEmbeddingMigrationStatus?(): EmbeddingMigrationStatus;
+  /** Atomically cut over only after the requested shadow-index coverage. */
+  commitEmbeddingMigration?(readinessThreshold?: number): EmbeddingMigrationStatus;
+  /** Discard shadow vectors while preserving the active index. */
+  rollbackEmbeddingMigration?(): EmbeddingMigrationStatus;
 
   // ── FTS (always sync — cached flag) ──────────────────────
 

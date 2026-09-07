@@ -57,6 +57,7 @@ import type {
   MemoryContentClearResult,
   AuditEntry,
   AuditQueryFilter,
+  EmbeddingMigrationStatus,
 } from "./types.js";
 import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "./types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../skill/skill-store-ddl.js";
@@ -135,10 +136,13 @@ export interface L0RecordRow {
 const TAG = "[memory-tdai][sqlite]";
 
 /** Persisted metadata about the embedding provider used to generate stored vectors. */
-interface EmbeddingMeta {
+export interface EmbeddingMeta {
   provider: string;
   model: string;
   dimensions: number;
+  schemaIdentity?: string;
+  modelRevision?: string;
+  normalization?: string;
 }
 
 /** Result of VectorStore.init() — indicates whether a re-embed is needed. */
@@ -151,6 +155,8 @@ export interface VectorStoreInitResult {
   needsReindex: boolean;
   /** Human-readable reason (for logging). */
   reason?: string;
+  /** Active vectors were preserved and require explicit shadow migration. */
+  migration?: EmbeddingMigrationStatus;
 }
 
 // Use createRequire to load the experimental node:sqlite module
@@ -388,6 +394,11 @@ export class VectorStore implements IMemoryStore {
    * provider="none"), vec0 tables are deferred and this stays `false`.
    */
   private vecTablesReady = false;
+  /** True while target embeddings differ from the active index contract. */
+  private vectorIoBlocked = false;
+  private activeEmbeddingMeta: EmbeddingMeta | null = null;
+  private targetEmbeddingMeta: EmbeddingMeta | null = null;
+  private migrationReason?: string;
 
   // Prepared statements — L1 (initialized in init())
   private stmtUpsertMeta!: StatementSync;
@@ -561,28 +572,56 @@ export class VectorStore implements IMemoryStore {
     let reindexReason: string | undefined;
 
     const savedMeta = this.readEmbeddingMeta();
+    const currentMeta: EmbeddingMeta | null = providerInfo ? {
+      provider: providerInfo.provider,
+      model: providerInfo.model,
+      dimensions: this.dimensions,
+      schemaIdentity: providerInfo.schemaIdentity,
+      modelRevision: providerInfo.modelRevision,
+      normalization: providerInfo.normalization ?? "l2-v1",
+    } : null;
 
-    if (providerInfo) {
+    if (currentMeta) {
       if (savedMeta) {
-        const providerChanged = savedMeta.provider !== providerInfo.provider;
-        const modelChanged = savedMeta.model !== providerInfo.model;
+        const providerChanged = savedMeta.provider !== currentMeta.provider;
+        const activeSchema = savedMeta.schemaIdentity ?? savedMeta.model;
+        const targetSchema = currentMeta.schemaIdentity ?? currentMeta.model;
+        const schemaChanged = activeSchema !== targetSchema;
+        const revisionChanged = (savedMeta.modelRevision ?? "") !== (currentMeta.modelRevision ?? "");
+        const normalizationChanged = (savedMeta.normalization ?? "l2-v1") !== currentMeta.normalization;
         const dimsChanged = savedMeta.dimensions !== this.dimensions;
 
-        if (providerChanged || modelChanged || dimsChanged) {
+        if (providerChanged || schemaChanged || revisionChanged || normalizationChanged || dimsChanged) {
           const reasons: string[] = [];
-          if (providerChanged) reasons.push(`provider: ${savedMeta.provider} → ${providerInfo.provider}`);
-          if (modelChanged) reasons.push(`model: ${savedMeta.model} → ${providerInfo.model}`);
+          if (providerChanged) reasons.push(`provider: ${savedMeta.provider} → ${currentMeta.provider}`);
+          if (schemaChanged) reasons.push(`schema: ${activeSchema} → ${targetSchema}`);
+          if (revisionChanged) reasons.push(`revision: ${savedMeta.modelRevision ?? "unspecified"} → ${currentMeta.modelRevision ?? "unspecified"}`);
+          if (normalizationChanged) reasons.push(`normalization: ${savedMeta.normalization ?? "l2-v1"} → ${currentMeta.normalization}`);
           if (dimsChanged) reasons.push(`dimensions: ${savedMeta.dimensions} → ${this.dimensions}`);
           reindexReason = reasons.join(", ");
 
-          this.logger?.info(
-            `${TAG} Embedding config changed (${reindexReason}). ` +
-            `Dropping vector tables for rebuild...`,
+          this.logger?.warn(
+            `${TAG} Embedding schema changed (${reindexReason}). Active vector tables are preserved; ` +
+            `explicit shadow migration is required before cutover.`,
           );
-
-          // Drop and re-create vector tables with new dimensions
-          this.dropVectorTables();
           needsReindex = true;
+          this.vectorIoBlocked = true;
+          this.activeEmbeddingMeta = savedMeta;
+          this.migrationReason = reindexReason;
+          const persistedTarget = this.readMigrationTarget();
+          if (persistedTarget && this.embeddingContractKey(persistedTarget) !== this.embeddingContractKey(currentMeta)) {
+            this.targetEmbeddingMeta = persistedTarget;
+            this.migrationReason = `configured target ${this.embeddingContractKey(currentMeta)} differs from pending `
+              + `${this.embeddingContractKey(persistedTarget)}; explicitly roll back the pending migration first`;
+            this.writeMetaValue("embedding_migration_state", "failed");
+            this.writeMetaValue("embedding_migration_error", this.migrationReason);
+          } else {
+            this.targetEmbeddingMeta = currentMeta;
+            if (!persistedTarget) this.writeMigrationMetadata("required");
+          }
+        } else {
+          // Runtime alias/endpoint/timing changes are not vector schema changes.
+          this.activeEmbeddingMeta = { ...savedMeta, model: currentMeta.model };
         }
       } else {
         // No saved meta — first run or legacy DB without meta table.
@@ -596,13 +635,16 @@ export class VectorStore implements IMemoryStore {
         const existingVecDims = this.getVecTableDimensions();
 
         if (l1Count > 0 || l0Count > 0) {
-          this.logger?.info(
+          this.logger?.warn(
             `${TAG} No embedding_meta found but existing data exists ` +
-            `(L1=${l1Count}, L0=${l0Count}). Dropping vector tables for safety...`,
+            `(L1=${l1Count}, L0=${l0Count}). Preserving active vectors and requiring explicit migration.`,
           );
-          this.dropVectorTables();
           needsReindex = true;
           reindexReason = "legacy DB without embedding_meta — cannot verify vector compatibility";
+          this.vectorIoBlocked = true;
+          this.targetEmbeddingMeta = currentMeta;
+          this.migrationReason = reindexReason;
+          this.writeMigrationMetadata("required");
         } else if (existingVecDims !== null && existingVecDims !== this.dimensions) {
           // vec0 tables exist (from a previous provider="none" placeholder or
           // different config) but with mismatched dimensions.  Drop them so they
@@ -1182,12 +1224,9 @@ export class VectorStore implements IMemoryStore {
     }
 
     // Save current embedding meta (write after schema is ready)
-    if (providerInfo) {
-      this.writeEmbeddingMeta({
-        provider: providerInfo.provider,
-        model: providerInfo.model,
-        dimensions: this.dimensions,
-      });
+    if (currentMeta && !needsReindex) {
+      this.writeEmbeddingMeta(currentMeta);
+      this.activeEmbeddingMeta = currentMeta;
     }
 
     // Mark vec0 tables as ready only when they were actually created
@@ -1244,7 +1283,11 @@ export class VectorStore implements IMemoryStore {
 
     this.logger?.debug?.(`${TAG} Initialized (dimensions=${this.dimensions})`);
 
-    return { needsReindex, reason: reindexReason };
+    return {
+      needsReindex,
+      reason: reindexReason,
+      migration: needsReindex ? this.getEmbeddingMigrationStatus() : undefined,
+    };
   }
 
   // ── Embedding meta helpers ──────────────────────────────
@@ -1265,6 +1308,94 @@ export class VectorStore implements IMemoryStore {
     this.db.prepare(
       "INSERT INTO embedding_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
     ).run("embedding_provider_info", JSON.stringify(meta));
+  }
+
+  private writeMetaValue(key: string, value: string): void {
+    this.db.prepare(
+      "INSERT INTO embedding_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    ).run(key, value);
+  }
+
+  private readMetaValue(key: string): string | undefined {
+    const row = this.db.prepare("SELECT value FROM embedding_meta WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  private writeMigrationMetadata(state: EmbeddingMigrationStatus["state"], lastError?: string): void {
+    if (this.targetEmbeddingMeta) {
+      this.writeMetaValue("embedding_migration_target", JSON.stringify(this.targetEmbeddingMeta));
+    }
+    this.writeMetaValue("embedding_migration_state", state);
+    if (this.migrationReason) this.writeMetaValue("embedding_migration_reason", this.migrationReason);
+    if (lastError) this.writeMetaValue("embedding_migration_error", lastError.slice(0, 500));
+    else this.db.prepare("DELETE FROM embedding_meta WHERE key = ?").run("embedding_migration_error");
+  }
+
+  private embeddingContractKey(meta: EmbeddingMeta): string {
+    return [
+      meta.provider,
+      meta.schemaIdentity ?? meta.model,
+      meta.modelRevision ?? "",
+      meta.normalization ?? "l2-v1",
+      meta.dimensions,
+    ].join("|");
+  }
+
+  private readMigrationTarget(): EmbeddingMeta | null {
+    try {
+      const raw = this.readMetaValue("embedding_migration_target");
+      return raw ? JSON.parse(raw) as EmbeddingMeta : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private tableExists(name: string): boolean {
+    return !!this.db.prepare("SELECT 1 AS found FROM sqlite_master WHERE name = ?").get(name);
+  }
+
+  private rawTableCount(name: "l0_conversations" | "l1_records" | "l0_vec_next" | "l1_vec_next"): number {
+    if (!this.tableExists(name)) return 0;
+    return Number((this.db.prepare(`SELECT COUNT(*) AS count FROM ${name}`).get() as { count: number }).count);
+  }
+
+  getEmbeddingMigrationStatus(): EmbeddingMigrationStatus {
+    let target = this.targetEmbeddingMeta;
+    if (!target) {
+      try {
+        const raw = this.readMetaValue("embedding_migration_target");
+        if (raw) target = JSON.parse(raw) as EmbeddingMeta;
+      } catch { /* invalid legacy state is reported as no target */ }
+    }
+    const stateRaw = this.readMetaValue("embedding_migration_state");
+    const state = stateRaw === "required" || stateRaw === "running" || stateRaw === "failed" || stateRaw === "ready"
+      ? stateRaw
+      : target ? "required" : "none";
+    const makeLayer = (sourceRows: number, migratedRows: number) => ({
+      sourceRows,
+      migratedRows,
+      coverage: sourceRows === 0 ? 1 : Math.min(1, migratedRows / sourceRows),
+    });
+    const l0Source = this.rawTableCount("l0_conversations");
+    const l1Source = this.rawTableCount("l1_records");
+    return {
+      state,
+      reason: this.migrationReason ?? this.readMetaValue("embedding_migration_reason"),
+      active: this.activeEmbeddingMeta ?? this.readEmbeddingMeta() ?? undefined,
+      target: target ?? undefined,
+      l0: makeLayer(l0Source, this.rawTableCount("l0_vec_next")),
+      l1: makeLayer(l1Source, this.rawTableCount("l1_vec_next")),
+      lastError: this.readMetaValue("embedding_migration_error"),
+    };
+  }
+
+  rollbackEmbeddingMigration(): EmbeddingMigrationStatus {
+    this.db.exec("DROP TABLE IF EXISTS l1_vec_next; DROP TABLE IF EXISTS l0_vec_next");
+    this.vectorIoBlocked = true;
+    this.db.prepare("DELETE FROM embedding_meta WHERE key LIKE 'embedding_migration_%'").run();
+    this.targetEmbeddingMeta = null;
+    this.migrationReason = undefined;
+    return this.getEmbeddingMigrationStatus();
   }
 
   /** Allowed table names for row counting (whitelist to prevent SQL injection). */
@@ -1359,7 +1490,7 @@ export class VectorStore implements IMemoryStore {
           ? timestamps.reduce((a, b) => (a > b ? a : b))
           : tsStr;
 
-      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady;
+      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady || this.vectorIoBlocked;
 
       this.logger?.debug?.(
         `${TAG} [L1-upsert] START id=${recordId}, type=${record.type}, ` +
@@ -1468,7 +1599,9 @@ export class VectorStore implements IMemoryStore {
    * mismatch, corrupted DB) so callers can fall back to keyword search.
    */
   searchL1Vector(queryEmbedding: Float32Array, topK = 5, _queryText?: string, filter?: IsolationFilter): VectorSearchResult[] {
-    if (this.degraded || !this.vecTablesReady) {
+    const activeQueryAllowed = !this.vectorIoBlocked
+      || queryEmbedding.length === this.activeEmbeddingMeta?.dimensions;
+    if (this.degraded || !this.vecTablesReady || !activeQueryAllowed) {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
       return [];
     }
@@ -1863,7 +1996,7 @@ export class VectorStore implements IMemoryStore {
       return false;
     }
     try {
-      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady;
+      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady || this.vectorIoBlocked;
 
       this.logger?.debug?.(
         `${TAG} [L0-upsert] START id=${record.id}, session=${record.sessionKey}, role=${record.role}, ` +
@@ -1960,7 +2093,7 @@ export class VectorStore implements IMemoryStore {
    * Returns `true` on success, `false` on failure.
    */
   updateL0Embedding(recordId: string, embedding: Float32Array): boolean {
-    if (this.degraded || !this.vecTablesReady) {
+    if (this.degraded || !this.vecTablesReady || this.vectorIoBlocked) {
       return false;
     }
     if (!embedding || embedding.every(v => v === 0)) {
@@ -2000,7 +2133,9 @@ export class VectorStore implements IMemoryStore {
    * **Fault-tolerant**: returns an empty array on any error.
    */
   searchL0Vector(queryEmbedding: Float32Array, topK = 5, _queryText?: string, filter?: IsolationFilter): L0VectorSearchResult[] {
-    if (this.degraded || !this.vecTablesReady) {
+    const activeQueryAllowed = !this.vectorIoBlocked
+      || queryEmbedding.length === this.activeEmbeddingMeta?.dimensions;
+    if (this.degraded || !this.vecTablesReady || !activeQueryAllowed) {
       if (this.degraded) this.logger?.warn(`${TAG} [L0-search] SKIPPED (degraded mode)`);
       return [];
     }
@@ -2306,6 +2441,9 @@ export class VectorStore implements IMemoryStore {
     embedFn: (text: string) => Promise<Float32Array>,
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
   ): Promise<{ l1Count: number; l0Count: number }> {
+    if (this.vectorIoBlocked && this.targetEmbeddingMeta) {
+      return this.buildShadowEmbeddingIndex(embedFn, onProgress);
+    }
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} reindexAll skipped: VectorStore is in degraded mode`);
       return { l1Count: 0, l0Count: 0 };
@@ -2373,6 +2511,152 @@ export class VectorStore implements IMemoryStore {
       );
       return { l1Count: 0, l0Count: 0 };
     }
+  }
+
+  private async buildShadowEmbeddingIndex(
+    embedFn: (text: string) => Promise<Float32Array>,
+    onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
+  ): Promise<{ l1Count: number; l0Count: number }> {
+    const target = this.targetEmbeddingMeta!;
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS l1_vec_next USING vec0(
+        record_id TEXT PRIMARY KEY,
+        embedding float[${target.dimensions}] distance_metric=cosine,
+        updated_time TEXT DEFAULT ''
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS l0_vec_next USING vec0(
+        record_id TEXT PRIMARY KEY,
+        embedding float[${target.dimensions}] distance_metric=cosine,
+        recorded_at TEXT DEFAULT ''
+      );
+    `);
+    this.writeMigrationMetadata("running");
+    const l1Delete = this.db.prepare("DELETE FROM l1_vec_next WHERE record_id = ?");
+    const l1Insert = this.db.prepare("INSERT INTO l1_vec_next (record_id, embedding, updated_time) VALUES (?, ?, ?)");
+    const l0Delete = this.db.prepare("DELETE FROM l0_vec_next WHERE record_id = ?");
+    const l0Insert = this.db.prepare("INSERT INTO l0_vec_next (record_id, embedding, recorded_at) VALUES (?, ?, ?)");
+    let lastError: string | undefined;
+
+    const l1Rows = this.getAllL1Texts();
+    let l1Done = 0;
+    for (const row of l1Rows) {
+      try {
+        const embedding = await embedFn(row.content);
+        this.validateMigrationVector(embedding, target.dimensions);
+        l1Delete.run(row.record_id);
+        l1Insert.run(row.record_id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), row.updated_time);
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        this.logger?.warn?.(`${TAG} shadow migration L1 retained active vector ${row.record_id}: ${lastError}`);
+      }
+      l1Done++;
+      onProgress?.(l1Done, l1Rows.length, "L1");
+    }
+
+    const l0Rows = this.getAllL0Texts();
+    let l0Done = 0;
+    for (const row of l0Rows) {
+      try {
+        const embedding = await embedFn(row.message_text);
+        this.validateMigrationVector(embedding, target.dimensions);
+        l0Delete.run(row.record_id);
+        l0Insert.run(row.record_id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), row.recorded_at);
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        this.logger?.warn?.(`${TAG} shadow migration L0 retained active vector ${row.record_id}: ${lastError}`);
+      }
+      l0Done++;
+      onProgress?.(l0Done, l0Rows.length, "L0");
+    }
+
+    const status = this.getEmbeddingMigrationStatus();
+    const ready = status.l0.coverage === 1 && status.l1.coverage === 1;
+    this.writeMigrationMetadata(ready ? "ready" : "failed", ready ? undefined : lastError ?? "incomplete shadow coverage");
+    return {
+      l1Count: this.rawTableCount("l1_vec_next"),
+      l0Count: this.rawTableCount("l0_vec_next"),
+    };
+  }
+
+  private validateMigrationVector(embedding: Float32Array, dimensions: number): void {
+    if (embedding.length !== dimensions) {
+      throw new Error(`migration vector dimension ${embedding.length}; expected ${dimensions}`);
+    }
+    if (!Array.from(embedding).every(Number.isFinite)) {
+      throw new Error("migration vector contains non-finite values");
+    }
+  }
+
+  commitEmbeddingMigration(readinessThreshold = 1): EmbeddingMigrationStatus {
+    if (!Number.isFinite(readinessThreshold) || readinessThreshold <= 0 || readinessThreshold > 1) {
+      throw new Error("embedding migration readiness threshold must be greater than 0 and at most 1");
+    }
+    const threshold = readinessThreshold;
+    const status = this.getEmbeddingMigrationStatus();
+    if (!status.target || !this.tableExists("l1_vec_next") || !this.tableExists("l0_vec_next")) {
+      throw new Error("embedding migration has no shadow index to commit");
+    }
+    if (status.l0.coverage < threshold || status.l1.coverage < threshold) {
+      throw new Error(
+        `embedding migration coverage below readiness threshold ${threshold}: `
+        + `L0=${status.l0.coverage}, L1=${status.l1.coverage}`,
+      );
+    }
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.exec(`
+        DROP TABLE IF EXISTS l1_vec;
+        DROP TABLE IF EXISTS l0_vec;
+        CREATE VIRTUAL TABLE l1_vec USING vec0(
+          record_id TEXT PRIMARY KEY,
+          embedding float[${status.target.dimensions}] distance_metric=cosine,
+          updated_time TEXT DEFAULT ''
+        );
+        CREATE VIRTUAL TABLE l0_vec USING vec0(
+          record_id TEXT PRIMARY KEY,
+          embedding float[${status.target.dimensions}] distance_metric=cosine,
+          recorded_at TEXT DEFAULT ''
+        );
+        INSERT INTO l1_vec (record_id, embedding, updated_time)
+          SELECT record_id, embedding, updated_time FROM l1_vec_next;
+        INSERT INTO l0_vec (record_id, embedding, recorded_at)
+          SELECT record_id, embedding, recorded_at FROM l0_vec_next;
+        DROP TABLE l1_vec_next;
+        DROP TABLE l0_vec_next;
+      `);
+      this.writeEmbeddingMeta(status.target);
+      this.db.prepare("DELETE FROM embedding_meta WHERE key LIKE 'embedding_migration_%'").run();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* best effort */ }
+      const message = error instanceof Error ? error.message : String(error);
+      this.writeMigrationMetadata("failed", `cutover failed: ${message}`);
+      throw error;
+    }
+
+    this.activeEmbeddingMeta = status.target;
+    this.targetEmbeddingMeta = null;
+    this.migrationReason = undefined;
+    this.vectorIoBlocked = false;
+    this.prepareActiveVectorStatements();
+    return this.getEmbeddingMigrationStatus();
+  }
+
+  private prepareActiveVectorStatements(): void {
+    this.stmtDeleteVec = this.db.prepare("DELETE FROM l1_vec WHERE record_id = ?");
+    this.stmtInsertVec = this.db.prepare("INSERT INTO l1_vec (record_id, embedding, updated_time) VALUES (?, ?, ?)");
+    this.stmtSearchVec = this.db.prepare(`
+      SELECT record_id, distance FROM l1_vec
+      WHERE embedding MATCH ? AND k = ? ORDER BY distance
+    `);
+    this.stmtL0DeleteVec = this.db.prepare("DELETE FROM l0_vec WHERE record_id = ?");
+    this.stmtL0InsertVec = this.db.prepare("INSERT INTO l0_vec (record_id, embedding, recorded_at) VALUES (?, ?, ?)");
+    this.stmtL0SearchVec = this.db.prepare(`
+      SELECT record_id, distance FROM l0_vec
+      WHERE embedding MATCH ? AND k = ? ORDER BY distance
+    `);
+    this.vecTablesReady = true;
   }
 
   // ── L0 query operations (for L1 runner) ──────────────────────────────────
