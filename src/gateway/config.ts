@@ -16,6 +16,7 @@ import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import { normalizeDisableThinking } from "../utils/no-think-fetch.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
+import { RECALL_DEDUP_DEFAULTS } from "./recall-dedup.js";
 
 // ============================
 // Gateway config types
@@ -66,6 +67,28 @@ export interface GatewayConfig {
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
   memory: MemoryTdaiConfig;
+  /**
+   * Session-level recall deduplication for `POST /recall`.
+   *
+   * When enabled, a session whose recalled `appendSystemContext` is
+   * byte-identical to its most recent /recall response gets an empty context
+   * plus `deduplicated: true`, so the consumer does not re-send the same stable
+   * context every turn (see issue #120 / #523).
+   *
+   * **Default: disabled** — dedup only activates when explicitly opted in, so
+   * existing deployments behave exactly as before.
+   *
+   * env: `TDAI_GATEWAY_RECALL_DEDUP_ENABLED` / `TDAI_GATEWAY_RECALL_DEDUP_TTL_MS`
+   *      / `TDAI_GATEWAY_RECALL_DEDUP_MAX_ENTRIES`
+   * yaml: `recallDedup: { enabled, ttlMs, maxEntries }`
+   */
+  recallDedup: {
+    enabled: boolean;
+    /** Entry lifetime without access, in ms. Default 1 hour. */
+    ttlMs: number;
+    /** Max tracked sessions. Oldest entry is evicted on overflow. Default 1000. */
+    maxEntries: number;
+  };
 }
 
 // ============================
@@ -142,11 +165,30 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const memoryRaw = obj(fileConfig, "memory");
   const memory = parseMemoryConfig(memoryRaw as Record<string, unknown> | undefined);
 
+  // Recall dedup config — disabled by default so existing deployments are
+  // unaffected until they explicitly opt in.
+  const recallDedupRaw = obj(fileConfig, "recallDedup");
+  const recallDedup = {
+    enabled:
+      envBool("TDAI_GATEWAY_RECALL_DEDUP_ENABLED")
+        ?? bool(recallDedupRaw, "enabled")
+        ?? RECALL_DEDUP_DEFAULTS.enabled,
+    ttlMs:
+      envInt("TDAI_GATEWAY_RECALL_DEDUP_TTL_MS")
+        ?? num(recallDedupRaw, "ttlMs")
+        ?? RECALL_DEDUP_DEFAULTS.ttlMs,
+    maxEntries:
+      envInt("TDAI_GATEWAY_RECALL_DEDUP_MAX_ENTRIES")
+        ?? num(recallDedupRaw, "maxEntries")
+        ?? RECALL_DEDUP_DEFAULTS.maxEntries,
+  };
+
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
     data: { baseDir },
     llm,
     memory,
+    recallDedup,
   };
 
   // Merge overrides one level deep so partial `server`/`data`/`llm` patches
@@ -159,6 +201,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     server: { ...base.server, ...(overrides.server ?? {}) },
     data: { ...base.data, ...(overrides.data ?? {}) },
     llm: { ...base.llm, ...(overrides.llm ?? {}) },
+    recallDedup: { ...base.recallDedup, ...(overrides.recallDedup ?? {}) },
   };
 }
 
@@ -237,11 +280,7 @@ function envInt(key: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/**
- * Read an env var that may be a boolean ("true"/"false"/"1"/"0")
- * or a plain string (strategy name like "deepseek", "anthropic").
- * Returns the lowercase string for strategy names.
- */
+/** Read an env var that may be a boolean ("true"/"false"/"1"/"0") or a plain string (strategy name like "deepseek", "anthropic"). Returns the lowercase string for strategy names. */
 function envBoolOrStr(key: string): boolean | string | undefined {
   const raw = env(key);
   if (raw === undefined) return undefined;
@@ -251,12 +290,24 @@ function envBoolOrStr(key: string): boolean | string | undefined {
   return v; // lowercase strategy name
 }
 
+/** Read an env var strictly as a boolean; any other value is ignored. */
+function envBool(key: string): boolean | undefined {
+  const v = envBoolOrStr(key);
+  return typeof v === "boolean" ? v : undefined;
+}
+
 /** Read a field that may be boolean or string from a config object. */
 function boolOrStr(src: Record<string, unknown>, key: string): boolean | string | undefined {
   const v = src[key];
   if (typeof v === "boolean") return v;
   if (typeof v === "string" && v.trim()) return v.trim();
   return undefined;
+}
+
+/** Read a field strictly as a boolean from a config object. */
+function bool(src: Record<string, unknown>, key: string): boolean | undefined {
+  const v = src[key];
+  return typeof v === "boolean" ? v : undefined;
 }
 
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {

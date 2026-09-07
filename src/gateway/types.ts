@@ -39,6 +39,13 @@ export interface RecallResponse {
   context: string;
   strategy?: string;
   memory_count?: number;
+  /**
+   * True when session-level recall dedup (recallDedup.enabled) skipped this
+   * response because the context was byte-identical to the session's most
+   * recent /recall response. `context` is then an empty string. Optional —
+   * only present (and only ever `true`) when dedup is active.
+   */
+  deduplicated?: boolean;
 }
 
 // ============================

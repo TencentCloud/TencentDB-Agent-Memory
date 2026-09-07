@@ -23,6 +23,7 @@ import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
+import { SessionRecallDedup } from "./recall-dedup.js";
 import type {
   HealthResponse,
   RecallRequest,
@@ -117,6 +118,7 @@ export class TdaiGateway {
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
+  private recallDedup: SessionRecallDedup;
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -136,6 +138,14 @@ export class TdaiGateway {
       config: this.config.memory,
       sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
     });
+
+    // Session-level recall dedup (opt-in, disabled by default)
+    this.recallDedup = new SessionRecallDedup(this.config.recallDedup);
+    if (this.config.recallDedup.enabled) {
+      this.logger.info(
+        `Recall dedup enabled: ttlMs=${this.config.recallDedup.ttlMs} maxEntries=${this.config.recallDedup.maxEntries}`
+      );
+    }
   }
 
   /**
@@ -380,13 +390,23 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    const fullContext = result.appendSystemContext ?? "";
+    const decision = this.recallDedup.evaluate(body.session_key, fullContext);
+
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: context=${fullContext.length} chars` +
+      (decision.deduplicated ? " (deduplicated, skipped)" : "") +
+      ` [dedup hits=${this.recallDedup.hits} misses=${this.recallDedup.misses}]`
+    );
 
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      context: decision.context,
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
+    if (decision.deduplicated) {
+      response.deduplicated = true;
+    }
     sendJson(res, 200, response);
   }
 
@@ -473,6 +493,7 @@ export class TdaiGateway {
     }
 
     await this.core.handleSessionEnd(body.session_key);
+    this.recallDedup.clearSession(body.session_key);
 
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
