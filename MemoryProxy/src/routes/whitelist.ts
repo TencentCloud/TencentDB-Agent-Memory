@@ -166,6 +166,7 @@ const AGENT_URL_PREFIXES: readonly string[] = [
   ...AGENT_KINDS.filter((kind) => kind !== "unknown"),
   "anthropic",
   "openai",
+  "cursor",
 ];
 
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

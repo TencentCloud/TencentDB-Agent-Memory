@@ -12,4 +12,9 @@ describe("AGENT_PREFIX_RE follows AGENT_KINDS", () => {
       expect(normalizeWhitelistRequestPath(`/${kind}/v1/messages`)).toBe("/v1/messages");
     }
   });
+
+  it("strips /cursor prefix pending #1138 adapter", () => {
+    expect(normalizeWhitelistRequestPath("/cursor/team-abc/v1/embeddings")).toBe("/v1/embeddings");
+    expect(normalizeWhitelistRequestPath("/cursor/v1/completions")).toBe("/v1/completions");
+  });
 });
