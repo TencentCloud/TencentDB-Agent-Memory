@@ -876,6 +876,7 @@ export async function handleCodexEndpoint(
             (content) => codexAdapter.extractUserText([{ type: "message", role: "user", content }]),
           );
       const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
+        || skillQueueStrategy === "every_queue_incremental"
         ? getSkillQueueHistoryRepo(config)
         : undefined;
       const skillQueueIdentity = {
@@ -961,7 +962,7 @@ export async function handleCodexEndpoint(
         // 否则模型看到的会是转义字符（`&lt;user_memory&gt;`）读不出结构。
         body = injectCodexAssets(body, { raw: injectedText });
       }
-      if (dynamicText || skillQueueStrategy === "every_queue") {
+      if (dynamicText || skillQueueStrategy === "every_queue" || skillQueueStrategy === "every_queue_incremental") {
         body = await injectDynamicSkillQueue(
           body,
           dynamicText ?? "",
@@ -969,6 +970,7 @@ export async function handleCodexEndpoint(
           skillQueueIdentity,
           skillQueueHistoryRepo,
           (text) => buildCodexInjectionBlock({ raw: text }),
+          config.injection.forgettingThreshold,
         );
       }
     } catch (err: unknown) {

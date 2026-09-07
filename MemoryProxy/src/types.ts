@@ -591,13 +591,19 @@ export interface MemCommandConfig {
 }
 
 /** Context injection configuration. */
-export type SkillQueueStrategy = "session_init" | "every_queue" | "latest_only";
+export type SkillQueueStrategy =
+  | "session_init"
+  | "every_queue"
+  | "latest_only"
+  | "every_queue_incremental";
 
 export interface InjectionConfig {
   enabled: boolean;
   injectors: string[];  // List of injector names to enable (e.g. ["skill", "knowledge", "tdai-memory"])
   /** Skill list placement experiment. Default keeps the historical session snapshot. */
   skillQueueStrategy?: SkillQueueStrategy;
+  /** Re-inject a previously seen Skill after this many user queues. */
+  forgettingThreshold?: number;
   /**
    * 对外统一 gateway 地址。LLM 生成的 curl 示例（<skill_tools> /
    * <tdai_memory_tools> 段里嵌的路径）都以这个 URL 为 base。
@@ -869,6 +875,7 @@ export interface RawYamlConfig {
     endpoint?: string;
     injectors?: string[];
     skillQueueStrategy?: SkillQueueStrategy;
+    forgettingThreshold?: number;
     externalGatewayUrl?: string;
     assetReflection?: {
       markerOptIn?: boolean;
