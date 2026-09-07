@@ -28,6 +28,7 @@ const MAX_MEMORY_SESSIONS = 1_000;
 interface SkillInjectionState {
   version: 1;
   lastInjectedTurn: Record<string, number>;
+  lastProcessedQueueKey?: string;
 }
 
 /** Reconstruct immutable dynamic snapshots because clients replay only their own history. */
@@ -62,20 +63,23 @@ export async function injectDynamicSkillQueue(
 
     if (strategy === "every_queue_incremental") {
       const state = await loadSkillState(identity, repo);
-      const eligibleNames = getEligibleSkillNames(
-        blockText,
-        state.lastInjectedTurn,
-        current.turn,
-        Math.max(1, Math.floor(forgettingThreshold)),
-      );
-      const delta = compactSkillBlock(blockText, eligibleNames);
-      if (delta) {
-        currentSnapshot.blockText = await saveSnapshot(identity, current.key, delta, repo);
-        // Mark the snapshot that actually won putIfAbsent, not a losing
-        // concurrent candidate from another Proxy node.
-        for (const name of extractSkillNames(currentSnapshot.blockText)) {
-          state.lastInjectedTurn[name] = current.turn;
+      if (state.lastProcessedQueueKey !== current.key) {
+        const eligibleNames = getEligibleSkillNames(
+          blockText,
+          state.lastInjectedTurn,
+          current.turn,
+          Math.max(1, Math.floor(forgettingThreshold)),
+        );
+        const delta = compactSkillBlock(blockText, eligibleNames);
+        if (delta) {
+          currentSnapshot.blockText = await saveSnapshot(identity, current.key, delta, repo);
+          // Mark the snapshot that actually won putIfAbsent, not a losing
+          // concurrent candidate from another Proxy node.
+          for (const name of extractSkillNames(currentSnapshot.blockText)) {
+            state.lastInjectedTurn[name] = current.turn;
+          }
         }
+        state.lastProcessedQueueKey = current.key;
         await saveSkillState(identity, state, repo);
       }
     }
@@ -105,6 +109,18 @@ export async function getCurrentSkillQueueSnapshot(
   const current = collectUserQueues(input).at(-1);
   if (!current) return null;
   return loadSnapshot(identity, current.key, repo);
+}
+
+/** Whether incremental retrieval already ran for the current user queue. */
+export async function hasProcessedCurrentSkillQueue(
+  input: unknown,
+  identity: SkillQueueIdentity,
+  repo: HookCacheRepo | undefined,
+): Promise<boolean> {
+  const current = collectUserQueues(input).at(-1);
+  if (!current) return false;
+  const state = await loadSkillState(identity, repo);
+  return state.lastProcessedQueueKey === current.key;
 }
 
 function collectUserQueues(input: unknown): QueueTarget[] {
@@ -171,7 +187,11 @@ async function loadSkillState(
 ): Promise<SkillInjectionState> {
   const key = identityKey(identity);
   const cached = memorySkillState.get(key);
-  if (cached) return { version: 1, lastInjectedTurn: { ...cached.lastInjectedTurn } };
+  if (cached) return {
+    version: 1,
+    lastInjectedTurn: { ...cached.lastInjectedTurn },
+    lastProcessedQueueKey: cached.lastProcessedQueueKey,
+  };
   const persisted = await repo?.get(
     identity.spaceId,
     identity.userId,
@@ -184,9 +204,13 @@ async function loadSkillState(
     try {
       const parsed = JSON.parse(raw) as Partial<SkillInjectionState>;
       if (parsed.version === 1 && parsed.lastInjectedTurn) {
-        const state = { version: 1 as const, lastInjectedTurn: parsed.lastInjectedTurn };
+        const state = {
+          version: 1 as const,
+          lastInjectedTurn: parsed.lastInjectedTurn,
+          lastProcessedQueueKey: parsed.lastProcessedQueueKey,
+        };
         memorySkillState.set(key, state);
-        return { version: 1, lastInjectedTurn: { ...state.lastInjectedTurn } };
+        return { ...state, lastInjectedTurn: { ...state.lastInjectedTurn } };
       }
     } catch { /* corrupt state is equivalent to an empty state */ }
   }
@@ -201,7 +225,11 @@ async function saveSkillState(
   repo: HookCacheRepo | undefined,
 ): Promise<void> {
   const key = identityKey(identity);
-  memorySkillState.set(key, { version: 1, lastInjectedTurn: { ...state.lastInjectedTurn } });
+  memorySkillState.set(key, {
+    version: 1,
+    lastInjectedTurn: { ...state.lastInjectedTurn },
+    lastProcessedQueueKey: state.lastProcessedQueueKey,
+  });
   await repo?.put(
     identity.spaceId,
     identity.userId,

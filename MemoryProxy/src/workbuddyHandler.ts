@@ -37,6 +37,7 @@ import {
 } from "./common/workbuddy-injection.js";
 import {
   getCurrentSkillQueueSnapshot,
+  hasProcessedCurrentSkillQueue,
   injectDynamicSkillQueue,
 } from "./common/skill-queue-history.js";
 import { extractMarkedSkillQueueBlock } from "./common/skill-queue-markers.js";
@@ -1421,7 +1422,10 @@ export async function handleWorkbuddyEndpoint(
       };
       const skillQueueSnapshot = skillQueueStrategy === "every_queue"
         ? await getCurrentSkillQueueSnapshot(body.input, skillQueueIdentity, skillQueueHistoryRepo)
-        : null;
+        : skillQueueStrategy === "every_queue_incremental"
+          && await hasProcessedCurrentSkillQueue(body.input, skillQueueIdentity, skillQueueHistoryRepo)
+          ? "processed"
+          : null;
       const { buildSessionContextBlockWithToggles } = await import(
         "./session/context-injector.js"
       );

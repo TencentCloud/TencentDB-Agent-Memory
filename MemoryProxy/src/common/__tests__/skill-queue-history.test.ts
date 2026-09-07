@@ -5,6 +5,7 @@ import type { ContextBlock } from "../../injection/types.js";
 import {
   __resetSkillQueueMemoryForTests,
   getCurrentSkillQueueSnapshot,
+  hasProcessedCurrentSkillQueue,
   injectDynamicSkillQueue,
 } from "../skill-queue-history.js";
 import {
@@ -167,6 +168,9 @@ describe("dynamic Skill queue", () => {
     const first = await run(1, listing(["a", "b"]));
     expect((first.input as any[])[0].content[1].text).toContain("- a:");
     expect((first.input as any[])[0].content[1].text).toContain("- b:");
+    await expect(hasProcessedCurrentSkillQueue(
+      [message("q1")], scopedIdentity, repo,
+    )).resolves.toBe(true);
 
     const second = await run(2, listing(["a", "b", "c"]));
     expect((second.input as any[])[0].content).toHaveLength(2);
@@ -175,6 +179,9 @@ describe("dynamic Skill queue", () => {
 
     const third = await run(3, listing(["a", "b", "c"]));
     expect((third.input as any[])[2].content).toHaveLength(1);
+    await expect(hasProcessedCurrentSkillQueue(
+      [message("q1"), message("q2"), message("q3")], scopedIdentity, repo,
+    )).resolves.toBe(true);
 
     const fourth = await run(4, listing(["a", "b", "c"]));
     expect((fourth.input as any[])[3].content[1].text).toContain("- a:");

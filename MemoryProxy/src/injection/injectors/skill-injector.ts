@@ -193,7 +193,11 @@ export class SkillInjector implements InjectionHook {
     const custom = ctx.metadata.custom as Record<string, unknown> | undefined;
     const caps = custom?.assetCapabilities as { skill?: boolean } | undefined;
     if (caps?.skill === false) return [];
-    if (this.config.queueStrategy === "every_queue" && custom?.skillQueueSnapshotHit === true) {
+    if (
+      (this.config.queueStrategy === "every_queue"
+        || this.config.queueStrategy === "every_queue_incremental")
+      && custom?.skillQueueSnapshotHit === true
+    ) {
       return [];
     }
     const session = custom?.session as {

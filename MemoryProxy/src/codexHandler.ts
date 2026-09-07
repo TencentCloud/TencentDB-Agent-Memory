@@ -42,6 +42,7 @@ import {
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import {
   getCurrentSkillQueueSnapshot,
+  hasProcessedCurrentSkillQueue,
   injectDynamicSkillQueue,
 } from "./common/skill-queue-history.js";
 import { extractMarkedSkillQueueBlock } from "./common/skill-queue-markers.js";
@@ -887,7 +888,10 @@ export async function handleCodexEndpoint(
       };
       const skillQueueSnapshot = skillQueueStrategy === "every_queue"
         ? await getCurrentSkillQueueSnapshot(body.input, skillQueueIdentity, skillQueueHistoryRepo)
-        : null;
+        : skillQueueStrategy === "every_queue_incremental"
+          && await hasProcessedCurrentSkillQueue(body.input, skillQueueIdentity, skillQueueHistoryRepo)
+          ? "processed"
+          : null;
 
       // ── session_context 预填 ────────────────────────────────────────────────
       // handleSessionInit 的 CB init 把 <session_context>（[Agent]+[Task] 描述）
