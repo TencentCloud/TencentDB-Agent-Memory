@@ -1,0 +1,562 @@
+{
+  "config": {
+    "turns": 30,
+    "iterations": 1,
+    "model": "",
+    "timestamp": "20260725-170244"
+  },
+  "baseline": [
+    {
+      "iteration": 1,
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好，我叫张伟，是一名全栈工程师。我想用 React 和 FastAPI 搭建一个任务管理应用。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "对，我想先从后端开始。FastAPI 的项目结构应该怎么组织？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "好的，那我用你推荐的分层结构。数据库我打算用 PostgreSQL，ORM 用 SQLAlchemy。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "帮我写一下 Task 模型，需要有标题、描述、状态、优先级、创建时间、截止日期这些字段。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "状态我想用枚举：todo、in_progress、review、done。优先级用 low、medium、high、urgent。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 6,
+          "user_text": "模型建好了，现在帮我设计 Task 的 CRUD API。先写创建任务的端点。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 7,
+          "user_text": "创建端点测试通过了。接下来帮我写获取任务列表的端点，需要支持分页和按状态筛选。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 8,
+          "user_text": "列表端点也好了。现在需要一个获取单个任务详情的端点，如果任务不存在要返回 404。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 9,
+          "user_text": "更新任务的端点怎么写？需要支持部分更新（PATCH），只传需要修改的字段。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 10,
+          "user_text": "删除任务用软删除还是硬删除？我倾向于软删除，加一个 is_deleted 字段。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 11,
+          "user_text": "任务 CRUD 做完了，现在要加用户认证。用 JWT 方案怎么样？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 12,
+          "user_text": "JWT 的 access token 过期时间设置多长合适？refresh token 呢？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 13,
+          "user_text": "帮我写注册端点和登录端点。注册需要邮箱、用户名、密码，密码要 bcrypt 哈希。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 14,
+          "user_text": "现在写一个认证中间件，从 Authorization header 解析 Bearer token 并验证。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 15,
+          "user_text": "中间件写好了。怎么把当前用户信息传递给路由处理函数？用 FastAPI 的 Depends？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 16,
+          "user_text": "后端差不多了，开始写前端。React 项目用 Vite 创建，状态管理用 Zustand。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 17,
+          "user_text": "先写一个登录页面，有邮箱和密码输入框，登录成功后把 token 存到 localStorage。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 18,
+          "user_text": "登录成功了。现在写任务列表页面，用卡片布局展示任务，支持按状态筛选。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 19,
+          "user_text": "任务列表需要分页吗？数据量不大的话我觉得前端分页就够了。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 20,
+          "user_text": "创建任务的表单怎么写？用 React Hook Form 还是直接用受控组件？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 21,
+          "user_text": "创建任务表单写好了，但是提交后列表没有自动刷新。用 Zustand 的 store 该怎么处理？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 22,
+          "user_text": "现在有个问题：用户在任务列表页创建任务后，新任务出现在列表末尾而不是开头。怎么修？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 23,
+          "user_text": "任务编辑页面怎么写？复用创建任务的表单组件，还是单独写一个？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 24,
+          "user_text": "我决定复用表单组件，通过 props 传入初始值来区分创建/编辑模式。帮我改一下。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 25,
+          "user_text": "编辑功能做好了。现在要加删除功能，点删除按钮弹一个确认对话框，确认后调用 API。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 26,
+          "user_text": "应用基本功能完成了。现在要优化性能：任务列表加虚拟滚动，API 响应加缓存。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 27,
+          "user_text": "虚拟滚动用什么库？react-window 还是 react-virtuoso？我有大约 500 条任务。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 28,
+          "user_text": "用 react-window 实现了虚拟滚动，但任务卡片高度不固定，FixedSizeList 不合适。怎么办？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 29,
+          "user_text": "切换到 react-virtuoso 解决了不等高问题。现在部署到哪？Docker Compose 还是直接用 Vercel？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 30,
+          "user_text": "好的，我们用 Docker Compose。帮我写 docker-compose.yml：PostgreSQL + FastAPI + Nginx + Reac",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        }
+      ]
+    }
+  ],
+  "reversed": [
+    {
+      "iteration": 1,
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好，我叫张伟，是一名全栈工程师。我想用 React 和 FastAPI 搭建一个任务管理应用。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "对，我想先从后端开始。FastAPI 的项目结构应该怎么组织？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "好的，那我用你推荐的分层结构。数据库我打算用 PostgreSQL，ORM 用 SQLAlchemy。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "帮我写一下 Task 模型，需要有标题、描述、状态、优先级、创建时间、截止日期这些字段。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "状态我想用枚举：todo、in_progress、review、done。优先级用 low、medium、high、urgent。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 6,
+          "user_text": "模型建好了，现在帮我设计 Task 的 CRUD API。先写创建任务的端点。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 7,
+          "user_text": "创建端点测试通过了。接下来帮我写获取任务列表的端点，需要支持分页和按状态筛选。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 8,
+          "user_text": "列表端点也好了。现在需要一个获取单个任务详情的端点，如果任务不存在要返回 404。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 9,
+          "user_text": "更新任务的端点怎么写？需要支持部分更新（PATCH），只传需要修改的字段。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 10,
+          "user_text": "删除任务用软删除还是硬删除？我倾向于软删除，加一个 is_deleted 字段。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 11,
+          "user_text": "任务 CRUD 做完了，现在要加用户认证。用 JWT 方案怎么样？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 12,
+          "user_text": "JWT 的 access token 过期时间设置多长合适？refresh token 呢？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 13,
+          "user_text": "帮我写注册端点和登录端点。注册需要邮箱、用户名、密码，密码要 bcrypt 哈希。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 14,
+          "user_text": "现在写一个认证中间件，从 Authorization header 解析 Bearer token 并验证。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 15,
+          "user_text": "中间件写好了。怎么把当前用户信息传递给路由处理函数？用 FastAPI 的 Depends？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 16,
+          "user_text": "后端差不多了，开始写前端。React 项目用 Vite 创建，状态管理用 Zustand。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 17,
+          "user_text": "先写一个登录页面，有邮箱和密码输入框，登录成功后把 token 存到 localStorage。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 18,
+          "user_text": "登录成功了。现在写任务列表页面，用卡片布局展示任务，支持按状态筛选。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 19,
+          "user_text": "任务列表需要分页吗？数据量不大的话我觉得前端分页就够了。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 20,
+          "user_text": "创建任务的表单怎么写？用 React Hook Form 还是直接用受控组件？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 21,
+          "user_text": "创建任务表单写好了，但是提交后列表没有自动刷新。用 Zustand 的 store 该怎么处理？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 22,
+          "user_text": "现在有个问题：用户在任务列表页创建任务后，新任务出现在列表末尾而不是开头。怎么修？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 23,
+          "user_text": "任务编辑页面怎么写？复用创建任务的表单组件，还是单独写一个？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 24,
+          "user_text": "我决定复用表单组件，通过 props 传入初始值来区分创建/编辑模式。帮我改一下。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 25,
+          "user_text": "编辑功能做好了。现在要加删除功能，点删除按钮弹一个确认对话框，确认后调用 API。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 26,
+          "user_text": "应用基本功能完成了。现在要优化性能：任务列表加虚拟滚动，API 响应加缓存。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 27,
+          "user_text": "虚拟滚动用什么库？react-window 还是 react-virtuoso？我有大约 500 条任务。",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 28,
+          "user_text": "用 react-window 实现了虚拟滚动，但任务卡片高度不固定，FixedSizeList 不合适。怎么办？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 29,
+          "user_text": "切换到 react-virtuoso 解决了不等高问题。现在部署到哪？Docker Compose 还是直接用 Vercel？",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        },
+        {
+          "turn": 30,
+          "user_text": "好的，我们用 Docker Compose。帮我写 docker-compose.yml：PostgreSQL + FastAPI + Nginx + Reac",
+          "prompt_tokens": 1000,
+          "cache_hit_tokens": 0,
+          "cache_miss_tokens": 1000,
+          "hit_rate": 0.0,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

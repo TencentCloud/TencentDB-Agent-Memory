@@ -1,0 +1,206 @@
+{
+  "condition": "E",
+  "label": "NoInject Turn1 (showInjected=F, stable=before CACHE_BOUNDARY)",
+  "showInjected": false,
+  "stableBeforeCache": true,
+  "model": "(agent default)",
+  "timestamp": "20260724-163821",
+  "summary": {
+    "average_rate": 0.8387409644317084,
+    "median_rate": 0.9039806324870332,
+    "stdev_rate": 0.1846316591815214
+  },
+  "per_turn": {
+    "2": {
+      "mean": 0.9847456605927895,
+      "stdev": 0.007631355936448958,
+      "values": [
+        0.9933917319809435,
+        0.981896287204664,
+        0.9789489625927609
+      ]
+    },
+    "3": {
+      "mean": 0.8403443745400584,
+      "stdev": 0.11037332529883351,
+      "values": [
+        0.9097729516288253,
+        0.7130718586461088,
+        0.8981883133452412
+      ]
+    },
+    "4": {
+      "mean": 0.9319546210952915,
+      "stdev": 0.10339804499638656,
+      "values": [
+        0.9944429457782573,
+        0.8126050521784345,
+        0.9888158653291825
+      ]
+    },
+    "5": {
+      "mean": 0.5979192014986945,
+      "stdev": 0.18041960573314378,
+      "values": [
+        0.6724351050679852,
+        0.3921775139430787,
+        0.7291449854850195
+      ]
+    }
+  },
+  "raw_iterations": [
+    {
+      "iteration": 1,
+      "condition": "E",
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好。",
+          "prompt_tokens": 12932,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 5380,
+          "hit_rate": 0.5839777296628519,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "你还记得我的名字和职业吗？",
+          "prompt_tokens": 13014,
+          "cache_hit_tokens": 12928,
+          "cache_miss_tokens": 86,
+          "hit_rate": 0.9933917319809435,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "我正在开发一个记忆系统插件，用于 OpenClaw。请帮我看看需要什么功能。",
+          "prompt_tokens": 15195,
+          "cache_hit_tokens": 13824,
+          "cache_miss_tokens": 1371,
+          "hit_rate": 0.9097729516288253,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "上周我们讨论过向量检索的性能问题，你当时建议了什么优化方案？",
+          "prompt_tokens": 18535,
+          "cache_hit_tokens": 18432,
+          "cache_miss_tokens": 103,
+          "hit_rate": 0.9944429457782573,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "基于我们之前的讨论，总结一下这个记忆系统的架构设计要点。",
+          "prompt_tokens": 19416,
+          "cache_hit_tokens": 13056,
+          "cache_miss_tokens": 6360,
+          "hit_rate": 0.6724351050679852,
+          "error": null
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "condition": "E",
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好。",
+          "prompt_tokens": 12928,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 5376,
+          "hit_rate": 0.5841584158415841,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "你还记得我的名字和职业吗？",
+          "prompt_tokens": 13036,
+          "cache_hit_tokens": 12800,
+          "cache_miss_tokens": 236,
+          "hit_rate": 0.981896287204664,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "我正在开发一个记忆系统插件，用于 OpenClaw。请帮我看看需要什么功能。",
+          "prompt_tokens": 35542,
+          "cache_hit_tokens": 25344,
+          "cache_miss_tokens": 10198,
+          "hit_rate": 0.7130718586461088,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "上周我们讨论过向量检索的性能问题，你当时建议了什么优化方案？",
+          "prompt_tokens": 82697,
+          "cache_hit_tokens": 67200,
+          "cache_miss_tokens": 15497,
+          "hit_rate": 0.8126050521784345,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "基于我们之前的讨论，总结一下这个记忆系统的架构设计要点。",
+          "prompt_tokens": 83554,
+          "cache_hit_tokens": 32768,
+          "cache_miss_tokens": 50786,
+          "hit_rate": 0.3921775139430787,
+          "error": null
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "condition": "E",
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好。",
+          "prompt_tokens": 12930,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 5378,
+          "hit_rate": 0.5840680587780356,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "你还记得我的名字和职业吗？",
+          "prompt_tokens": 13206,
+          "cache_hit_tokens": 12928,
+          "cache_miss_tokens": 278,
+          "hit_rate": 0.9789489625927609,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "我正在开发一个记忆系统插件，用于 OpenClaw。请帮我看看需要什么功能。",
+          "prompt_tokens": 15676,
+          "cache_hit_tokens": 14080,
+          "cache_miss_tokens": 1596,
+          "hit_rate": 0.8981883133452412,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "上周我们讨论过向量检索的性能问题，你当时建议了什么优化方案？",
+          "prompt_tokens": 17346,
+          "cache_hit_tokens": 17152,
+          "cache_miss_tokens": 194,
+          "hit_rate": 0.9888158653291825,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "基于我们之前的讨论，总结一下这个记忆系统的架构设计要点。",
+          "prompt_tokens": 18257,
+          "cache_hit_tokens": 13312,
+          "cache_miss_tokens": 4945,
+          "hit_rate": 0.7291449854850195,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

@@ -199,8 +199,20 @@ export interface CompletedTurn {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
+  /**
+   * Stable recall context prepended to system prompt BEFORE the cache boundary
+   * (persona, scene nav, tools guide). Placing stable content before CACHE_BOUNDARY
+   * allows prompt caching providers to reuse it across turns.
+   */
+  prependSystemContext?: string;
+  /** Stable recall context appended to system prompt (deprecated — use prependSystemContext). */
   appendSystemContext?: string;
+  /**
+   * Reversed-history block for long conversations. Most recent messages appear
+   * first (stable prefix), older messages are compressed into summaries at the
+   * tail. Injected as part of prependContext.
+   */
+  historyContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
   /** L3 Persona content (for metrics). */

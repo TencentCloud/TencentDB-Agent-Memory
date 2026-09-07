@@ -33,6 +33,8 @@ import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
+import type { StableHistoryManager } from "./history/stable-history-manager.js";
+import type { RecentHistory } from "./history/recent-history.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
@@ -241,7 +243,13 @@ export class TdaiCore {
    * Handle recall (memory retrieval) before an LLM turn.
    * Maps to: OpenClaw `before_prompt_build` / Hermes `prefetch()`.
    */
-  async handleBeforeRecall(userText: string, sessionKey: string): Promise<RecallResult> {
+  async handleBeforeRecall(
+    userText: string,
+    sessionKey: string,
+    messages?: Array<{ role: string; content: string }>,
+    stableHistory?: StableHistoryManager,
+    recentHistory?: RecentHistory,
+  ): Promise<RecallResult> {
     await this.storeReady?.catch(() => {});
 
     const result = await performAutoRecall({
@@ -253,6 +261,9 @@ export class TdaiCore {
       logger: this.logger,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      messages,
+      stableHistory,
+      recentHistory,
     });
 
     return result ?? {};

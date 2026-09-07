@@ -1,0 +1,206 @@
+{
+  "condition": "D",
+  "label": "Combined (showInjected=F, stable=before CACHE_BOUNDARY)",
+  "showInjected": false,
+  "stableBeforeCache": true,
+  "model": "(agent default)",
+  "timestamp": "20260724-170449",
+  "summary": {
+    "average_rate": 0.6615533069415233,
+    "median_rate": 0.677983299541321,
+    "stdev_rate": 0.136719407452028
+  },
+  "per_turn": {
+    "2": {
+      "mean": 0.5461944231010274,
+      "stdev": 0.0016889238921201624,
+      "values": [
+        0.5472860352199435,
+        0.5442490631305852,
+        0.5470481709525534
+      ]
+    },
+    "3": {
+      "mean": 0.8391607735728919,
+      "stdev": 0.01954573758092778,
+      "values": [
+        0.8607986669047194,
+        0.8227842162060715,
+        0.8338994376078847
+      ]
+    },
+    "4": {
+      "mean": 0.5678145507953234,
+      "stdev": 0.14068817399519287,
+      "values": [
+        0.41435711040436163,
+        0.5983775608414684,
+        0.69070898114014
+      ]
+    },
+    "5": {
+      "mean": 0.6930434802968505,
+      "stdev": 0.026134744588440336,
+      "values": [
+        0.7231638418079096,
+        0.6795950506186726,
+        0.6763715484639693
+      ]
+    }
+  },
+  "raw_iterations": [
+    {
+      "iteration": 1,
+      "condition": "D",
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好，我叫王小明，我是一名软件工程师，主要用 TypeScript 和 Python。",
+          "prompt_tokens": 13735,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 6183,
+          "hit_rate": 0.5498361849290134,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "你还记得我的名字和职业吗？",
+          "prompt_tokens": 13799,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 6247,
+          "hit_rate": 0.5472860352199435,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "我正在开发一个记忆系统插件，用于 OpenClaw。请帮我看看需要什么功能。",
+          "prompt_tokens": 16803,
+          "cache_hit_tokens": 14464,
+          "cache_miss_tokens": 2339,
+          "hit_rate": 0.8607986669047194,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "上周我们讨论过向量检索的性能问题，你当时建议了什么优化方案？",
+          "prompt_tokens": 17608,
+          "cache_hit_tokens": 7296,
+          "cache_miss_tokens": 10312,
+          "hit_rate": 0.41435711040436163,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "基于我们之前的讨论，总结一下这个记忆系统的架构设计要点。",
+          "prompt_tokens": 18054,
+          "cache_hit_tokens": 13056,
+          "cache_miss_tokens": 4998,
+          "hit_rate": 0.7231638418079096,
+          "error": null
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "condition": "D",
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好，我叫王小明，我是一名软件工程师，主要用 TypeScript 和 Python。",
+          "prompt_tokens": 13738,
+          "cache_hit_tokens": 1792,
+          "cache_miss_tokens": 11946,
+          "hit_rate": 0.13044111224341243,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "你还记得我的名字和职业吗？",
+          "prompt_tokens": 13876,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 6324,
+          "hit_rate": 0.5442490631305852,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "我正在开发一个记忆系统插件，用于 OpenClaw。请帮我看看需要什么功能。",
+          "prompt_tokens": 21313,
+          "cache_hit_tokens": 17536,
+          "cache_miss_tokens": 3777,
+          "hit_rate": 0.8227842162060715,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "上周我们讨论过向量检索的性能问题，你当时建议了什么优化方案？",
+          "prompt_tokens": 21819,
+          "cache_hit_tokens": 13056,
+          "cache_miss_tokens": 8763,
+          "hit_rate": 0.5983775608414684,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "基于我们之前的讨论，总结一下这个记忆系统的架构设计要点。",
+          "prompt_tokens": 22225,
+          "cache_hit_tokens": 15104,
+          "cache_miss_tokens": 7121,
+          "hit_rate": 0.6795950506186726,
+          "error": null
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "condition": "D",
+      "turns": [
+        {
+          "turn": 1,
+          "user_text": "你好，我叫王小明，我是一名软件工程师，主要用 TypeScript 和 Python。",
+          "prompt_tokens": 13741,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 6189,
+          "hit_rate": 0.5495960992649734,
+          "error": null
+        },
+        {
+          "turn": 2,
+          "user_text": "你还记得我的名字和职业吗？",
+          "prompt_tokens": 13805,
+          "cache_hit_tokens": 7552,
+          "cache_miss_tokens": 6253,
+          "hit_rate": 0.5470481709525534,
+          "error": null
+        },
+        {
+          "turn": 3,
+          "user_text": "我正在开发一个记忆系统插件，用于 OpenClaw。请帮我看看需要什么功能。",
+          "prompt_tokens": 17959,
+          "cache_hit_tokens": 14976,
+          "cache_miss_tokens": 2983,
+          "hit_rate": 0.8338994376078847,
+          "error": null
+        },
+        {
+          "turn": 4,
+          "user_text": "上周我们讨论过向量检索的性能问题，你当时建议了什么优化方案？",
+          "prompt_tokens": 18717,
+          "cache_hit_tokens": 12928,
+          "cache_miss_tokens": 5789,
+          "hit_rate": 0.69070898114014,
+          "error": null
+        },
+        {
+          "turn": 5,
+          "user_text": "基于我们之前的讨论，总结一下这个记忆系统的架构设计要点。",
+          "prompt_tokens": 19303,
+          "cache_hit_tokens": 13056,
+          "cache_miss_tokens": 6247,
+          "hit_rate": 0.6763715484639693,
+          "error": null
+        }
+      ]
+    }
+  ]
+}

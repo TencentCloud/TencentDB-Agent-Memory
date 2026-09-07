@@ -93,6 +93,17 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Whether to show injected <relevant-memories> content in conversation history.
+   * When false (default), injected memories are stripped before messages are persisted,
+   * preventing history inflation and preserving prompt cache hit rate.
+   * Set to true for debugging to see what was injected in the transcript.
+   *
+   * @deprecated With Cache-Aware Context Lifecycle Management, L1 memories are
+   *   always placed at the prompt tail and never written to history. This flag
+   *   is ignored; <relevant-memories> is always stripped from persisted messages.
+   */
+  showInjected: boolean;
 }
 
 /** Embedding service configuration for vector search. */
@@ -219,6 +230,35 @@ export interface StandaloneLLMOverrideConfig {
   disableThinking: DisableThinkingStrategy;
 }
 
+/** History reversal settings — controls reversed-history injection for long conversations. */
+export interface HistoryConfig {
+  /** Enable reversed-history injection (default: false). When enabled, the most
+   *  recent messages are placed at the front of the injected history block to
+   *  stabilise the prompt prefix, and older messages are progressively compressed
+   *  into summaries at the tail. */
+  enabled: boolean;
+  /** Number of recent messages to keep verbatim (default: 15). */
+  keepRecent: number;
+  /** Trigger compression when total message count exceeds this threshold (default: 30). */
+  compressAfter: number;
+  /** Messages per compression chunk (default: 10). */
+  chunkSize: number;
+  /** Maximum token budget per compressed summary chunk (default: 300). */
+  maxSummaryTokens: number;
+  /**
+   * Maximum number of recent turns to keep in the circular buffer (default: 8).
+   * When the buffer is full, the oldest turns are compressed into stable history.
+   * Clamped to 3–15 when adaptiveWindow is enabled.
+   */
+  maxRecentTurns: number;
+  /**
+   * Enable adaptive window calculation (default: true).
+   * When true, N_optimal is calculated dynamically based on context window budget;
+   * when false, maxRecentTurns is used as a fixed value.
+   */
+  adaptiveWindow: boolean;
+}
+
 /** Context Offload settings — controls multi-layer context compression. */
 export interface OffloadConfig {
   /** Enable context offload (default: false) */
@@ -303,6 +343,7 @@ export interface MemoryTdaiConfig {
   persona: PersonaConfig;
   pipeline: PipelineTriggerConfig;
   recall: RecallConfig;
+  history: HistoryConfig;
   embedding: EmbeddingConfig;
   /** Storage backend: "sqlite" (default) or "tcvdb" */
   storeBackend: StoreBackend;
@@ -535,7 +576,20 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
     },
+    history: (() => {
+      const historyGroup = obj(c, "history");
+      return {
+        enabled: bool(historyGroup, "enabled") ?? false,
+        keepRecent: num(historyGroup, "keepRecent") ?? 15,
+        compressAfter: num(historyGroup, "compressAfter") ?? 30,
+        chunkSize: num(historyGroup, "chunkSize") ?? 10,
+        maxSummaryTokens: num(historyGroup, "maxSummaryTokens") ?? 300,
+        maxRecentTurns: num(historyGroup, "maxRecentTurns") ?? 8,
+        adaptiveWindow: bool(historyGroup, "adaptiveWindow") ?? true,
+      };
+    })(),
     embedding: {
       enabled: embeddingEnabled,
       provider: embeddingProvider,
