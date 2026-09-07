@@ -140,6 +140,10 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // 通常是 bare sessionId。先试 bare，再枚举所有以 `:${sessionId}` 结尾的 key，
   // 这样无论 agentSource 是 pi / dsh / codex / workbuddy 还是任何新增值
   // 都能命中——不再维护硬编码前缀列表。
+  // 注：若同时存在多个前缀 key（如 pi:abc 与 dsh:abc），Map 迭代先命中者胜——
+  // 真实流量中一个会话只有一个 agentSource，故可接受。
+  // Note: if multiple prefixed keys match, first Map hit wins — acceptable
+  // since one conversation has exactly one agentSource in practice.
   const store = getSessionStore();
   const bare = store.get(sessionId);
   if (bare) {

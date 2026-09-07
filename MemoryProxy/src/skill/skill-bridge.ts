@@ -298,6 +298,8 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
     if (fields) return fields;
   }
   if (!sessionId.includes(":")) {
+    // If multiple prefixed keys match (e.g. pi:abc + dsh:abc), the first Map
+    // hit wins — acceptable since one conversation has one agentSource.
     for (const k of store.keysWithSuffix(sessionId)) {
       const s = store.get(k);
       if (s) {
