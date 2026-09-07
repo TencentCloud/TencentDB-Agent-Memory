@@ -163,7 +163,7 @@
           "mmdMaxTokenRatio": { "type": "number", "default": 0.2, "description": "MMD 注入 token 预算比例" },
           "backendUrl": { "type": "string", "description": "后端服务 URL（如 https://offload-api.example.com），配置后 L1/L1.5/L2/L4 走后端" },
           "backendApiKey": { "type": "string", "description": "后端 API 认证 token" },
-          "backendTimeoutMs": { "type": "number", "default": 10000, "description": "后端调用超时（毫秒）" }
+          "backendTimeoutMs": { "type": "number", "default": 120000, "description": "后端调用超时（毫秒）" }
         }
       }
     }
