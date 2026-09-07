@@ -104,11 +104,6 @@ export interface SkillPatchRequest extends SkillIdFields {
 // ── /v3/skill/delete ──
 export interface SkillDeleteRequest extends SkillIdFields {
   skill_id: string;
-  /**
-   * Required by the current schema (see `src/gateway/skill-schemas.ts`
-   * `deleteRequestSchema`). Guards against archiving a stale head.
-   */
-  expected_version: number;
 }
 export interface SkillDeleteData {
   skill_id: string;

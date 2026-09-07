@@ -562,6 +562,7 @@ extraction:
 sessionInit:
   enabled: true             # 是否启用会话初始化
   maxRetries: 3             # 表单解析失败最大重试次数，超出后 bypass（跳过 session init）
+  # skipAssetConfirm: true  # 跳过"是否关联团队资产"前置对话框，默认视为选"是"直接进入 team/agent/task 选择
   # 历史注释: 曾经有 keepInitArtifacts 开关用来在 session_init 完成后剥离
   # 假表单对话；已删除。现在**永远保留**用户的所有真实对话（含 session_init
   # form 交互），不做任何删除。
@@ -713,12 +714,17 @@ skillRuntime:
 # 不注入系统提示词（不破坏 KV cache），不转发给上游模型（零 token 消耗）。
 # L0 写入 / skill extract 等记录层照常执行，对话时间线不断层。
 #
-# 关闭时所有 mem: 开头的消息正常发给模型，不做拦截。
-memCommand:
-  enabled: false                   # 是否启用 mem: 命令拦截（默认 false，不影响原有链路）
-  allowedCommands: []              # 命令白名单；空数组 = 全部允许
-                                   # 示例: ["sync", "help"] — 只允许这两个命令
-                                   # 可选值: sync | create-skill | help
+# 该拦截**默认恒定启用**（无 enabled 开关，无命令白名单），未知命令由内置
+# KNOWN_COMMANDS 兜底返回提示。可选子字段 taskDraft 仅用于配置 mem:create-task /
+# mem:update-task 使用的 LLM 草稿生成器（未配置时该两个命令返回 "未配置" 错误，
+# 其它命令不受影响）。
+# memCommand:
+#   taskDraft:
+#     enabled: true
+#     model: "..."
+#     url: "..."
+#     apiKey: "..."   # 也可用 TDAI_TASK_DRAFT_API_KEY 环境变量覆盖
+#     timeoutMs: 20000
 
 # ── CC 请求分流 ────────────────────────────────────────────────────────────
 # 识别 CC 客户端（Claude Code CLI）后台自发的辅助请求，走差异化处理路径：
@@ -742,3 +748,15 @@ ccRequestRouting:
 
 # ── Per-Agent 上游路由 ─────────────────────────────────────────────────────
 # 见文件顶部 `upstream.agents` 一段。
+
+
+# ── 本地 JSONL Trace 归档 ─────────────────────────────────────────────────────
+# 启用后，每个 trace + span 以 JSONL 行追加写入本地文件（按日期分文件），
+# 文件名格式：<hostname>-<YYYY-MM-DD>.jsonl
+# 可配合 crontab 脚本定时压缩上传到 COS/S3 归档存储。
+#
+# 此归档链路独立于 Opik / Langfuse 远程上报：即使远程上报关闭，本地归档仍可独立工作。
+# 默认关闭，对性能无影响。
+traceArchive:
+  enabled: false                   # true = 启用本地 JSONL trace 归档；false = 关闭（默认）
+  dir: "logs/traces"               # 归档目录（相对于项目根目录或绝对路径）

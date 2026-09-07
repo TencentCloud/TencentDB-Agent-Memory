@@ -161,6 +161,13 @@ export async function executeCreateTask(ctx: MemCommandContext): Promise<MemComm
     config: ctx.config,
     spaceId: ctx.spaceId,
     recentMessages,
+    // 方案 D：taskDraft LLM 跟随主模型 —— 透传客户端当次 model / 上游 / apiKey
+    // upstreamProtocol 独立于 ctx.protocol（后者只管响应渲染 SSE 骨架格式,
+    // 前者决定 taskDraft 请求打 /messages | /chat/completions | /responses）。
+    ...(ctx.model ? { model: ctx.model } : {}),
+    ...(ctx.upstreamUrl ? { upstreamUrl: ctx.upstreamUrl } : {}),
+    ...(ctx.upstreamProtocol ? { protocol: ctx.upstreamProtocol } : {}),
+    ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
     ...(lockedTitle ? { lockedTitle, hint: rawArgs } : {}),
   });
 

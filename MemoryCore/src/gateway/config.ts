@@ -36,6 +36,47 @@ import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
  */
 export type DeployMode = "standalone" | "service";
 
+/**
+ * FS-dimension backend selection (dimension ②, symmetric to STORE_MODE for DB).
+ *
+ * - `local` — LocalStorageBackend (filesystem under data.baseDir)
+ * - `cos`   — per-instance CosStorageBackend
+ * - `rowfs` — ProfileRowStorageBackend over a profile-row-capable store
+ *             (requires STORE_MODE whose store serves profile rows; the
+ *             combination is validated at assembly, not here)
+ *
+ * env: `FILE_STORE_MODE`; yaml: `data.fileStore`. Default by deploy mode
+ * (§5.3.1): service → cos, standalone → local.
+ */
+export type FileStoreMode = "local" | "cos" | "rowfs";
+
+/**
+ * Backend for the composite's non-profile key space ("others") when
+ * `fileStore === "rowfs"` (env `FILE_STORE_OTHERS` / yaml
+ * `data.fileStoreOthers`). `mongofs` keeps every byte in the instance's
+ * Mongo database (the TCS zero-disk form) and is only legal with
+ * STORE_MODE=mongodb — validated by the selection layer, not here.
+ */
+export type FileStoreOthersMode = "local" | "cos" | "mongofs";
+
+/**
+ * Resolve the P9 kill switch (`TDAI_BACKEND_RESOLVER` / `features.backendResolver`).
+ *
+ * Default `true`: the assembly layer resolves backends through the
+ * `BackendResolver` selection layer. Set to `off`/`false`/`0` to fall back to
+ * the legacy global-mode branches (R1 缓解：保留旧分支开关). Invalid values
+ * fail fast, consistent with {@link resolveFileStoreMode}.
+ */
+export function resolveBackendResolverFlag(raw: string | undefined): boolean {
+  if (raw === undefined) return true;
+  const v = raw.trim().toLowerCase();
+  if (v === "off" || v === "false" || v === "0") return false;
+  if (v === "on" || v === "true" || v === "1") return true;
+  throw new Error(
+    `invalid TDAI_BACKEND_RESOLVER/features.backendResolver: ${JSON.stringify(raw)} (expected on/off)`,
+  );
+}
+
 export interface RedisConfig {
   host: string;
   port: number;
@@ -62,6 +103,18 @@ export interface WorkerConfig {
   pollMs: number;
   /** 并发消费协程数 (default: 60) */
   concurrency: number;
+  /** 分布式执行锁 TTL。 */
+  lockTtlMs?: number;
+  /** PEL 消息可被接管前的 idle 时间，必须大于 lockTtlMs。 */
+  pendingStaleMs?: number;
+  /** PEL stale 扫描间隔。 */
+  pendingRecoveryIntervalMs?: number;
+  /** parked/lock-free 在途任务的 PEL 心跳间隔。 */
+  parkedClaimHeartbeatMs?: number;
+  /** 同时抢锁重试的 scope 上限。 */
+  lockRetryConcurrency?: number;
+  /** 锁冲突停车上限；未配置时由 PipelineWorker 按并发数计算。 */
+  maxParkedTasks?: number;
 }
 
 export interface CosExtraConfig {
@@ -276,6 +329,27 @@ export interface GatewayConfig {
   data: {
     /** Base directory for TDAI data storage. */
     baseDir: string;
+    /**
+     * FS-dimension backend switch (env `FILE_STORE_MODE` / yaml `data.fileStore`).
+     * Always resolved (default applied by deploy mode, §5.3.1).
+     */
+    fileStore: FileStoreMode;
+    /**
+     * Rowfs "others" switch (env `FILE_STORE_OTHERS` / yaml
+     * `data.fileStoreOthers`). Always resolved; only consumed when
+     * `fileStore === "rowfs"`.
+     */
+    fileStoreOthers: FileStoreOthersMode;
+  };
+  features: {
+    /**
+     * P9: route store/storage assembly through the BackendResolver selection
+     * layer. `false` → legacy global-mode branches (rollback switch).
+     *
+     * env: `TDAI_BACKEND_RESOLVER` (on/off); yaml: `features.backendResolver`.
+     * Default: true.
+     */
+    backendResolver: boolean;
   };
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
@@ -308,6 +382,16 @@ export interface GatewayConfig {
    * env: TDAI_METADATA_*
    */
   metadata: GatewayMetadataConfig;
+  /**
+   * Analytics 查询模块配置（读取 Proxy 侧 ClickHouse 的 usage/session/tool-call 数据）。
+   * 与 observability.clickhouse（OTel 导出到 tdai_eval）完全独立。
+   *
+   * env: ANALYTICS_CLICKHOUSE_*
+   * yaml: analytics.clickhouse.*
+   */
+  analytics?: {
+    clickhouse: ClickHouseConfig;
+  };
   /** Offload server executor 配置 (yaml: offload) */
   offload: {
     forceTriggerThreshold: number;
@@ -383,6 +467,59 @@ export function parseBrokers(brokers: string | string[]): string[] {
 }
 
 /**
+ * Resolve the FS-dimension switch (`FILE_STORE_MODE` / `data.fileStore`).
+ *
+ * Semantics (design doc §5.3.1, 2026-08-31 定稿):
+ * - unset → default by deploy mode: service → `cos`, standalone → `local`;
+ * - set to a valid value → that value wins over the default;
+ * - set to anything else → config parse failure, fail-fast (throw).
+ */
+export function resolveFileStoreMode(
+  raw: string | undefined,
+  deployMode: DeployMode,
+): FileStoreMode {
+  if (raw === undefined) return deployMode === "service" ? "cos" : "local";
+  if (raw === "local" || raw === "cos" || raw === "rowfs") return raw;
+  throw new Error(
+    `invalid FILE_STORE_MODE/data.fileStore: ${JSON.stringify(raw)} (expected "local" | "cos" | "rowfs")`,
+  );
+}
+
+/**
+ * Resolve the rowfs "others" switch (`FILE_STORE_OTHERS` /
+ * `data.fileStoreOthers`). Only meaningful with `fileStore === "rowfs"`;
+ * same semantics as {@link resolveFileStoreMode}: unset → per-mode default,
+ * invalid → fail-fast. The `mongofs × STORE_MODE` legality check happens in
+ * the selection layer (`validateResolution`), not here.
+ */
+export function resolveFileStoreOthersMode(
+  raw: string | undefined,
+  deployMode: DeployMode,
+): FileStoreOthersMode {
+  if (raw === undefined) return deployMode === "service" ? "cos" : "local";
+  if (raw === "local" || raw === "cos" || raw === "mongofs") return raw;
+  throw new Error(
+    `invalid FILE_STORE_OTHERS/data.fileStoreOthers: ${JSON.stringify(raw)} (expected "local" | "cos" | "mongofs")`,
+  );
+}
+
+/**
+ * Overrides accepted by {@link loadGatewayConfig} / the TdaiGateway constructor.
+ *
+ * `server` / `data` / `llm` are merged one level deep onto the parsed base
+ * (see the merge at the end of loadGatewayConfig), so callers may pass partial
+ * nested blocks — e.g. `data: { baseDir }` keeps the resolved `fileStore`
+ * default. Typing them as nested Partial makes the type match the runtime
+ * merge behaviour.
+ */
+export type GatewayConfigOverrides = Omit<Partial<GatewayConfig>, "server" | "data" | "llm" | "features"> & {
+  server?: Partial<GatewayConfig["server"]>;
+  data?: Partial<GatewayConfig["data"]>;
+  features?: Partial<GatewayConfig["features"]>;
+  llm?: Partial<GatewayConfig["llm"]>;
+};
+
+/**
  * Load gateway config from file + environment variables.
  *
  * Resolution order for config file:
@@ -391,7 +528,7 @@ export function parseBrokers(brokers: string | string[]): string[] {
  * 3. `<dataDir>/tdai-gateway.yaml` or `<dataDir>/tdai-gateway.json`
  * 4. Pure environment-variable config (no file)
  */
-export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayConfig {
+export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayConfig {
   let fileConfig: Record<string, unknown> = {};
 
   // Try to load config file
@@ -552,6 +689,25 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const rawMode = env("TDAI_DEPLOY_MODE") ?? str(fileConfig, "deployMode") ?? "standalone";
   const deployMode: DeployMode = rawMode === "service" ? "service" : "standalone";
 
+  // FS-dimension switch (dimension ②). env > yaml > deploy-mode default.
+  // An explicitly-set but invalid value is a config parse failure → fail-fast
+  // (§5.3.1 rule 2); the rowfs × store-mode combination check happens at
+  // assembly time (D8③), not here.
+  const fileStore = resolveFileStoreMode(
+    env("FILE_STORE_MODE") ?? str(dataConfig, "fileStore"),
+    deployMode,
+  );
+  const fileStoreOthers = resolveFileStoreOthersMode(
+    env("FILE_STORE_OTHERS") ?? str(dataConfig, "fileStoreOthers"),
+    deployMode,
+  );
+
+  // P9 kill switch: assembly via BackendResolver (default) vs legacy branches.
+  const featuresConfig = obj(fileConfig, "features");
+  const backendResolver = resolveBackendResolverFlag(
+    env("TDAI_BACKEND_RESOLVER") ?? (bool(featuresConfig, "backendResolver") === false ? "off" : undefined),
+  );
+
   // State backend (env > yaml > auto from deployMode)
   const rawBackend = env("STATE_BACKEND") ?? str(fileConfig, "stateBackend");
   const stateBackend = rawBackend === "redis" || rawBackend === "local" ? rawBackend : undefined;
@@ -598,6 +754,12 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const worker: WorkerConfig = {
     pollMs: envInt("WORKER_POLL_MS") ?? num(workerConfig, "pollMs") ?? 200,
     concurrency: envInt("WORKER_CONCURRENCY") ?? num(workerConfig, "concurrency") ?? 60,
+    lockTtlMs: envInt("WORKER_LOCK_TTL_MS") ?? num(workerConfig, "lockTtlMs"),
+    pendingStaleMs: envInt("WORKER_PENDING_STALE_MS") ?? num(workerConfig, "pendingStaleMs"),
+    pendingRecoveryIntervalMs: envInt("WORKER_PENDING_RECOVERY_INTERVAL_MS") ?? num(workerConfig, "pendingRecoveryIntervalMs"),
+    parkedClaimHeartbeatMs: envInt("WORKER_PARKED_HEARTBEAT_MS") ?? num(workerConfig, "parkedClaimHeartbeatMs"),
+    lockRetryConcurrency: envInt("WORKER_LOCK_RETRY_CONCURRENCY") ?? num(workerConfig, "lockRetryConcurrency"),
+    maxParkedTasks: envInt("WORKER_MAX_PARKED_TASKS") ?? num(workerConfig, "maxParkedTasks"),
   };
 
   // COS extra config
@@ -639,6 +801,22 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     username: str(chConfig, "username") ?? env("CLICKHOUSE_USERNAME") ?? "default",
     password: str(chConfig, "password") ?? env("CLICKHOUSE_PASSWORD") ?? "",
     database: str(chConfig, "database") ?? env("CLICKHOUSE_DATABASE") ?? "tdai_eval",
+  };
+
+  // Analytics ClickHouse config (reads Proxy CH — independent from observability CH)
+  const analyticsYaml = obj(fileConfig, "analytics");
+  const analyticsChYaml = obj(analyticsYaml, "clickhouse");
+  const analyticsChEnabledEnv = env("ANALYTICS_CLICKHOUSE_ENABLED");
+  const analyticsClickhouse: ClickHouseConfig = {
+    enabled: analyticsChEnabledEnv !== undefined
+      ? analyticsChEnabledEnv === "true"
+      : analyticsChYaml.enabled !== undefined
+        ? Boolean(analyticsChYaml.enabled)
+        : false,
+    endpoint: env("ANALYTICS_CLICKHOUSE_ENDPOINT") ?? str(analyticsChYaml, "endpoint") ?? "",
+    username: env("ANALYTICS_CLICKHOUSE_USERNAME") ?? str(analyticsChYaml, "username") ?? "default",
+    password: env("ANALYTICS_CLICKHOUSE_PASSWORD") ?? str(analyticsChYaml, "password") ?? "",
+    database: env("ANALYTICS_CLICKHOUSE_DATABASE") ?? str(analyticsChYaml, "database") ?? "context_proxy",
   };
 
   // Kafka config
@@ -729,7 +907,8 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     stateBackend,
     instanceId,
     server: { port, host, apiKey, corsOrigins },
-    data: { baseDir },
+    data: { baseDir, fileStore, fileStoreOthers },
+    features: { backendResolver },
     llm,
     memory,
     redis,
@@ -738,6 +917,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     worker,
     cos,
     observability,
+    analytics: { clickhouse: analyticsClickhouse },
     metadata,
     offload,
     skill: skillFromAnywhere,
@@ -752,6 +932,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     ...overrides,
     server: { ...base.server, ...(overrides.server ?? {}) },
     data: { ...base.data, ...(overrides.data ?? {}) },
+    features: { ...base.features, ...(overrides.features ?? {}) },
     llm: { ...base.llm, ...(overrides.llm ?? {}) },
   };
 }
