@@ -63,6 +63,51 @@ Default ports:
 
 ---
 
+## Optional: MongoDB storage backend (experimental, off by default)
+
+**What it does.** The default storage backend is sqlite (zero extra
+dependencies; data lives on the container volume). MongoDB is an optional
+data plane for L0/L1/profile/skill documents plus native mongot BM25
+search; metadata follows onto the same Mongo instance by default.
+
+**Off by default.** `./start-all.sh` is unchanged; existing sqlite
+deployments need no action. This remains an **experimental** feature and
+is not recommended as the production default.
+
+### Enabling it
+
+```bash
+./start-all-mongo.sh
+```
+
+The interactive flow is identical to `./start-all.sh`. The script writes
+`MEMORY_CORE_STORE_MODE=mongodb` to `.env`, so later `./start-all.sh`
+runs stay on MongoDB and do not silently fall back to sqlite.
+
+If `MONGODB_ENDPOINT` is unset, the script starts a local
+`mongodb-atlas-local` container (mongod + mongot in one image — **not**
+cloud MongoDB Atlas). Data lands on `mongo-local-*` volumes, which
+`./stop-all.sh --purge` also removes. To use an external Mongo cluster
+(cloud Atlas or a self-hosted replica set with mongot), set
+`MONGODB_ENDPOINT` in `.env`.
+
+### Disabling it
+
+Comment out `MEMORY_CORE_STORE_MODE` in `.env` or set it to `sqlite`,
+then run `./start-all.sh`.
+
+> ⚠️ **Switching storage backends does not migrate existing data.**
+> sqlite and MongoDB use separate data directories / instances: sqlite
+> data lives in `MEMORY_CORE_VOLUME`, MongoDB data in `mongo-local-*`
+> (or your external cluster). Data remains on the backend it was written
+> to. This release requires you to back up and migrate manually; a
+> later release will ship an official migration tool. Back up before
+> switching. See
+> [`deploy/global-images/README.md`](./deploy/global-images/README.md)
+> for operator details.
+
+---
+
 ## After deploy: making it useful
 
 Starting the containers is just half the job. To make coding agents
@@ -189,7 +234,7 @@ tool to walk you through three consecutive picks:
 - Proxy binds this session to that team/agent/task
 - **Every subsequent turn, proxy auto-injects that agent's L2/L3 memory,
   skills, and knowledge into the system prompt**
-- L0 (raw dialogue) is captured into memory-core's SQLite
+- L0 (raw dialogue) is captured into memory-core's sqlite by default; if the experimental MongoDB backend is enabled, it is stored in MongoDB
 - Background workers extract L1 (memory) → L2 (scene) → L3 (persona) as
   thresholds are hit
 

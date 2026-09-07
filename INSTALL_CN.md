@@ -59,6 +59,45 @@ cd TencentDB-Agent-Memory/deploy/global-images
 
 ---
 
+## 可选能力：MongoDB 存储后端（试验特性，默认关闭）
+
+**做什么用。** 默认存储后端是 sqlite（零依赖，数据落容器卷）。MongoDB
+作为可选数据面，提供 L0/L1/profile/skill 文档存储与 mongot 原生 BM25
+检索；元数据默认跟随落入同一个 Mongo 实例。
+
+**默认关闭。** `./start-all.sh` 行为不变，现有 sqlite 部署无需改动。
+本能力仍为**试验特性**，不建议作为生产默认后端。
+
+### 开启方式
+
+```bash
+./start-all-mongo.sh
+```
+
+交互流程与 `./start-all.sh` 完全一致。脚本会将
+`MEMORY_CORE_STORE_MODE=mongodb` 写入 `.env`，此后再执行 `./start-all.sh`
+也会保持 MongoDB 后端，不会静默回退到 sqlite。
+
+未配置 `MONGODB_ENDPOINT` 时，脚本在本机拉起 `mongodb-atlas-local`
+容器（mongod + mongot 一体，**不是**云上的 MongoDB Atlas）。数据卷为
+`mongo-local-*`，`./stop-all.sh --purge` 会一并清理。
+若要对接外部 Mongo（云 Atlas 或自建、且带 mongot 的副本集），在 `.env`
+中设置 `MONGODB_ENDPOINT` 即可。
+
+### 关闭方式
+
+将 `.env` 中的 `MEMORY_CORE_STORE_MODE` 注释掉或改为 `sqlite`，再执行
+`./start-all.sh`。
+
+> ⚠️ **切换存储后端不会迁移已有数据。** sqlite 与 MongoDB 使用相互独立的
+> 数据目录 / 实例：sqlite 数据在 `MEMORY_CORE_VOLUME`，MongoDB 数据在
+> `mongo-local-*`（或你配置的外部实例）。切换后原数据仍留在原后端。
+> 当前版本需自行备份并手工迁移；后续版本将提供官方迁移工具。
+> 切换前请确认数据已备份。更多细节见
+> [`deploy/global-images/README.md`](./deploy/global-images/README.md)。
+
+---
+
 ## 部署完成后：把它跑起来
 
 服务起来只是第一步。要让 coding agent 用上团队记忆，
@@ -173,7 +212,7 @@ claude --model <PROXY_UPSTREAM_MODEL 里配的上游模型>
 - proxy 记住这次会话的 team/agent/task 绑定
 - **后续每一轮请求，proxy 会自动把这个 agent 的 L2/L3 记忆、skill、
   knowledge 注入到 system prompt**
-- L0（原始对话）会自动落到 memory-core 的 SQLite 里
+- L0（原始对话）默认落到 memory-core 的 sqlite；若启用了 MongoDB 试验后端，则落到 MongoDB
 - 满足触发条件时后台跑 L1（抽 memory）→ L2（scene）→ L3（persona）
 
 只有**新 CC 会话**才会弹表单；同一次 `claude` 进程内的多轮不会再问。
