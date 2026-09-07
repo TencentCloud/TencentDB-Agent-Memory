@@ -885,6 +885,7 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    skipAssetConfirm?: boolean;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
