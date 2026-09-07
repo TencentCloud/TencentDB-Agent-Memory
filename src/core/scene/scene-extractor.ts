@@ -87,7 +87,7 @@ export class SceneExtractor {
   private runner: LLMRunner;
   private maxScenes: number;
   private sceneBackupCount: number;
-  private timeoutMs: number;
+  private timeoutMs: number | undefined;
   private logger: ExtractorLogger | undefined;
   private instanceId: string | undefined;
 
@@ -95,7 +95,7 @@ export class SceneExtractor {
     this.dataDir = opts.dataDir;
     this.maxScenes = opts.maxScenes ?? 15;
     this.sceneBackupCount = opts.sceneBackupCount ?? 10;
-    this.timeoutMs = opts.timeoutMs ?? 300_000; // 5 min — LLM may do multiple tool calls
+    this.timeoutMs = opts.timeoutMs ?? (opts.llmRunner ? undefined : 300_000); // 5 min fallback for CleanContextRunner
     this.logger = opts.logger;
     this.instanceId = opts.instanceId;
 
