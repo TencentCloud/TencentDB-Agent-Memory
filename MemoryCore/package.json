@@ -45,7 +45,11 @@
     "smoke:skill:all": "tsx scripts/smoke-skill/smoke-skill-all.ts",
     "e2e:memory-prompt:vdb-cos": "tsx scripts/e2e-memory-prompt-vdb-cos.ts",
     "import:opik": "tsx scripts/import-opik-to-memory-core/index.ts",
-    "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
+    "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true",
+    "test:feedback": "node scripts/test-feedback.mjs",
+    "typecheck:feedback": "tsc --project tsconfig.feedback.json --noEmit",
+    "test:candidate-observer": "vitest run src/core/record/l1-candidate-observer.test.ts src/core/record/l1-candidate-observer.integration.test.ts",
+    "typecheck:candidate-observer": "tsc --project tsconfig.candidate-observer.json --noEmit"
   },
   "files": [
     "dist/",
@@ -176,6 +180,7 @@
     "mongodb-memory-server": "^10.4.3",
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.2",
+    "node-llama-cpp": "3.16.2"
   }
 }
