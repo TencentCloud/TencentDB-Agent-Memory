@@ -30,8 +30,8 @@ const MAX_CACHED_SESSIONS = 20;
 export class SessionRegistry {
   private _sessions = new Map<string, SessionCtx>();
   private _dataRoot: string;
-  readonly _registryId = ++SessionRegistry._registryCounter;
   private static _registryCounter = 0;
+  readonly _registryId = ++SessionRegistry._registryCounter;
 
   constructor(dataRoot: string) {
     this._dataRoot = dataRoot;

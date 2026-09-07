@@ -374,7 +374,10 @@ async function searchMemories(
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
     // server-side dense + sparse + RRF in a single API call), short-circuit
     // to avoid a redundant second HTTP request and a wasted local embed().
-    if (vectorStore?.getCapabilities().nativeHybridSearch) {
+    // `searchL1Hybrid` is optional on IMemoryStore, so trust the method's
+    // presence rather than the capability flag alone — a store that advertises
+    // the capability without implementing it would otherwise crash here.
+    if (vectorStore?.getCapabilities().nativeHybridSearch && vectorStore.searchL1Hybrid) {
       const tNative = performance.now();
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
