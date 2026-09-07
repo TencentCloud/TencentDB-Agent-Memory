@@ -336,16 +336,19 @@ function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number
   const todayStartMs = startOfLocalDay(now);
   const cutoffMs = todayStartMs - (retentionDays - 1) * 24 * 60 * 60 * 1000;
 
-  // Sanity check: cutoff must be strictly in the past
-  if (cutoffMs >= nowMs) {
+  // Sanity check: cutoff must not be in the future. Equality is valid at
+  // local midnight, especially for one-day retention.
+  if (cutoffMs > nowMs) {
     throw new Error(
-      `cutoff sanity failed: cutoff (${cutoffMs}) >= now (${nowMs}), ` +
+      `cutoff sanity failed: cutoff (${cutoffMs}) > now (${nowMs}), ` +
       `possible clock skew or invalid retentionDays=${retentionDays}`,
     );
   }
-  // Sanity check: gap between now and cutoff must be at least 24h
+  // Sanity check: for multi-day retention, the gap between now and cutoff
+  // must be at least 24h. One-day retention intentionally uses today's
+  // local midnight as cutoff, so its gap is less than 24h for most of the day.
   const MIN_GAP_MS = 24 * 60 * 60 * 1000;
-  if (nowMs - cutoffMs < MIN_GAP_MS) {
+  if (retentionDays > 1 && nowMs - cutoffMs < MIN_GAP_MS) {
     throw new Error(
       `cutoff sanity failed: gap ${nowMs - cutoffMs}ms < 24h, ` +
       `retentionDays=${retentionDays}, possible clock skew`,
