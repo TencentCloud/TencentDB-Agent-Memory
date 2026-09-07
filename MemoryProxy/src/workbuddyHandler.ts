@@ -1218,15 +1218,15 @@ export async function handleWorkbuddyEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName 来自 session-init 返回值（从 cachedTeams 里查得）；
           // teamIdShort 字段名沿用历史，但此处**存完整 team_id**（如 team-wyuyb7sion）。
           // 之前 slice(-8) 只留后 8 位会让用户看到 "uyb7sion" 这种截断串，配合
           // teamName 常为空导致的兜底路径显示极不完整。团队 id 本身就短，全量展示无害。
           teamName: initResult.teamName ?? undefined,
-          teamIdShort: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
