@@ -1,0 +1,35 @@
+{
+  "$comment": "Example Claude Code hooks wiring for TencentDB Agent Memory. Merge the 'hooks' block into your .claude/settings.json (project) or ~/.claude/settings.json (global). Replace /ABS/PATH with the absolute path printed by install.sh.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx /ABS/PATH/adapter-sdk/bindings/claude-code/hook-cli.ts recall"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx /ABS/PATH/adapter-sdk/bindings/claude-code/hook-cli.ts capture"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx /ABS/PATH/adapter-sdk/bindings/claude-code/hook-cli.ts session-end"
+          }
+        ]
+      }
+    ]
+  }
+}
