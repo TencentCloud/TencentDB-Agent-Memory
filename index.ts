@@ -302,6 +302,7 @@ export default function register(api: OpenClawPluginApi) {
     if (!sharedMemoryCleaner) {
       sharedMemoryCleaner = new LocalMemoryCleaner({
         baseDir: pluginDataDir,
+        dataDir: pluginDataDir,
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
