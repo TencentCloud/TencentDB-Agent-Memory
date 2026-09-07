@@ -20,6 +20,7 @@
  *   - v3 strict isolation: 强制注入 session_id，满足 L0/L1 必填要求
  */
 
+import { normalizeTaskId } from "../session/task.js";
 import type { Context } from "hono";
 import { getSessionStore } from "../session/store.js";
 import type { BindingRepo } from "../db/binding-repo.js";
@@ -164,11 +165,19 @@ async function loadSessionIdsL2(
   bindingRepo: BindingRepo | null,
   spaceId: string,
   sessionId: string,
+  defaultTaskId: string | undefined,
 ): Promise<SessionIdFields | null> {
   if (!bindingRepo) return null;
   try {
-    const binding = await bindingRepo.getBinding(spaceId, sessionId);
+    let binding = await bindingRepo.getBinding(spaceId, sessionId);
     if (!binding) return null;
+    const taskId = normalizeTaskId(binding.taskId, defaultTaskId);
+    if (taskId !== binding.taskId) {
+      binding = { ...binding, taskId };
+      await bindingRepo.putBinding(spaceId, sessionId, binding).catch((err: unknown) => {
+        console.warn(`${TAG} virtual task migration failed: ${String(err)}`);
+      });
+    }
     return bindingToIdFields(binding, spaceId, sessionId);
   } catch (err) {
     console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
@@ -311,7 +320,7 @@ export function createMemoryBridgeHandler(
     let ids = loadSessionIdsL1(sessionKey);
     if (!ids && bindingRepo && spaceId) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
-      ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey);
+      ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey, config.sessionInit.defaultTaskId);
     }
     if (!ids) {
       emitBridgeRejectTelemetry({
