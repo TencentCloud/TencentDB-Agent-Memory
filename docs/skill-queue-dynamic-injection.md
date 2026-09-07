@@ -249,7 +249,7 @@ Invalid numeric values fall back to `3`.
 
 The global image launcher exposes all three settings through `PROXY_SKILL_QUEUE_STRATEGY`, `PROXY_SKILL_FORGETTING_THRESHOLD`, and `PROXY_SKILL_RECENT_QUEUE_WINDOW`.
 
-## Failure and Operational Behavior
+## Failure Handling and Diagnostics
 
 - Missing `team_id` or `agent_id` skips Skill listing because the catalog cannot be scoped.
 - A MemoryCore listing error or an empty catalog produces no dynamic Skill block for the current queue.
