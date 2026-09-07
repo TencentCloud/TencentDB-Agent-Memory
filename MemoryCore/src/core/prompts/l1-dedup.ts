@@ -21,6 +21,7 @@ export const CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。�
 
 - **跨 type 合并**：不同 type（persona / episodic / instruction / work_fact / work_task / work_method / work_artifact）的记忆如果语义上描述同一事实/事件，**可以合并**。
 - **多对多合并**：一条新记忆可以同时替换/合并候选池中的**多条**已有记忆（通过 target_ids 数组指定）。
+- **旧值全池扫描**：当新记忆修正某个具体值（数字、日期、比例、状态）时，必须检查统一候选池中**所有**包含该旧值的记忆——即使那条记忆的主题看起来与当前新记忆不同——并将它们一并列入 target_ids 作废或更新，避免旧值残留在其它记忆里继续生效。
 - 合并后你必须判断新记忆的最佳 type（merged_type）。
 
 ## 判断逻辑
@@ -77,6 +78,7 @@ export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆�
 
 - **跨 type 合并**：不同 type（work_fact / work_task / work_method / work_artifact）的记忆如果语义上描述同一工作对象、任务、方法或资产，**可以合并**。
 - **多对多合并**：一条新记忆可以同时替换/合并候选池中的**多条**已有记忆（通过 target_ids 数组指定）。
+- **旧值全池扫描**：当新记忆修正某个具体值（数字、日期、状态、版本）时，必须检查统一候选池中**所有**包含该旧值的记忆——即使那条记忆的主题看起来与当前新记忆不同——并将它们一并列入 target_ids 作废或更新，避免旧值残留在其它记忆里继续生效。
 - 合并后你必须判断新记忆的最佳 type（merged_type）。
 - 记忆默认会在项目团队内共享，合并内容应只保留工作相关信息。
 
