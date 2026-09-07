@@ -542,6 +542,18 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 ---
 
+## Community ContextEngine Integrations
+
+> ContextEngine implementations built by the community, extending TencentDB Agent Memory's context offload capabilities to additional agent frameworks.
+
+| Project | Framework | Description |
+|---------|-----------|-------------|
+| [tencentdb-offload](https://github.com/ysun0804/tencentdb-offload) | [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) | Python ContextEngine plugin using Offload V2 API. Features: L1 tool-pair ingestion with conversation context, L1.5 boundary creation for MMD canvas generation, 4-level cascade compression, adaptive body truncation. |
+
+> Want to add your integration? Open a [PR](https://github.com/TencentCloud/TencentDB-Agent-Memory/pulls) or [Issue](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues).
+
+---
+
 ## Community & Contributing
 
 We welcome every kind of contribution — bug reports, feature ideas, doc fixes, benchmark reproductions, ecosystem integrations, or a Pull Request. Agent memory is far from a solved problem, and we'd love to figure it out together.
