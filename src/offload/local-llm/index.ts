@@ -149,7 +149,6 @@ export class LocalLlmClient {
       systemPrompt: L2_SYSTEM_PROMPT,
       userPrompt,
       label: "L2",
-      timeoutMs: 120_000, // L2 may take longer due to complex prompts
       customFetch: this.customFetch,
     }, this.logger);
 
