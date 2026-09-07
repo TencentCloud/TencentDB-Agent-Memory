@@ -93,6 +93,27 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Injection mode for dynamic L1 recall content.
+   * - "prepend": prepend L1 recall to user prompt prefix (current behavior; may break prefix-matching cache)
+   * - "append": emit L1 recall via OpenClaw appendContext so dynamic content avoids prefix churn
+   * Default: "prepend" (backward compatible)
+   */
+  injectionMode: "prepend" | "append";
+  /**
+   * Whether to persist injected recall content (<relevant-memories>) in persisted message history.
+   * When false (default), recall artifacts are stripped before persistence — reduces context bloat
+   * and prevents tool-result truncation variability that further destabilizes prompt prefixes.
+   * Default: false (cache-friendly)
+   */
+  showInjected: boolean;
+  /**
+   * Enable cache-shape diagnostic logging. When true, the plugin logs prefix-stability
+   * diagnostics on every before_prompt_build turn, helping operators verify that their
+   * injectionMode / showInjected config produces cache-friendly prefixes.
+   * Default: false (no overhead)
+   */
+  cacheDiagnostics: boolean;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +556,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      injectionMode: validateInjectionMode(str(recallGroup, "injectionMode")) ?? "prepend",
+      showInjected: bool(recallGroup, "showInjected") ?? false,
+      cacheDiagnostics: bool(recallGroup, "cacheDiagnostics") ?? false,
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -643,6 +667,19 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+const VALID_INJECTION_MODES: RecallConfig["injectionMode"][] = ["prepend", "append"];
+
+/**
+ * Validate recall injectionMode against whitelist.
+ * Returns the mode if valid, undefined otherwise (caller falls back to default "prepend").
+ */
+function validateInjectionMode(value: string | undefined): RecallConfig["injectionMode"] | undefined {
+  if (!value) return undefined;
+  return VALID_INJECTION_MODES.includes(value as RecallConfig["injectionMode"])
+    ? (value as RecallConfig["injectionMode"])
     : undefined;
 }
 
