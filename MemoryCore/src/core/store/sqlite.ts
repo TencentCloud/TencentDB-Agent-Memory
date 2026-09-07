@@ -1827,6 +1827,15 @@ export class VectorStore implements IMemoryStore {
       if (filter?.userId !== undefined) rows = rows.filter((r) => r.user_id === filter.userId);
       if (filter?.agentId !== undefined) rows = rows.filter((r) => r.agent_id === filter.agentId);
       if (taskId !== undefined) rows = rows.filter((r) => r.task_id === taskId);
+      // Primary-key filter — matches the tcvdb backend's documentIds path.
+      // /v3/atomic/update relies on this to load the exact note before the
+      // ownership check; without it, `existing[0]` is an arbitrary row from
+      // the whole table, which can trip the 403 "belongs to a different
+      // agent" guard on a correctly-scoped request.
+      if (filter?.recordIds && filter.recordIds.length > 0) {
+        const want = new Set(filter.recordIds);
+        rows = rows.filter((r) => want.has(r.record_id));
+      }
 
       this.logger?.info(
         `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
