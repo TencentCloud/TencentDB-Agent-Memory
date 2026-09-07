@@ -93,6 +93,7 @@ $DOCKER run -d --name "$CONTAINER" \
   -p "${PANEL_PORT}:8125" \
   -p "${KNOWLEDGE_PORT}:8424" \
   -v "${PANEL_VOLUME}:/data/knowledge" \
+  -v "/home/godkill/code:/workspace/repos" \
   -e PANEL_PORT=8125 \
   -e KNOWLEDGE_PORT=8424 \
   -e KNOWLEDGE_PUBLIC_BASE_URL="$KNOWLEDGE_PUBLIC_BASE_URL" \
