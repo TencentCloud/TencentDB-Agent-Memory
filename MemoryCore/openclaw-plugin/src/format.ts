@@ -29,7 +29,7 @@ const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
 
 - **tdai_memory_search**：搜索结构化记忆（L1），适用于回忆用户偏好、历史事件、规则等。
 - **tdai_conversation_search**：搜索原始对话（L0），适用于查找具体消息原文、时间线、上下文细节。
-- **tdai_read_cos**：读取记忆文件详情（使用下方 Scene Navigation 中的完整相对路径，如 scene_blocks/xxx.md；也可读 persona.md）。
+- **tdai_read_file**：读取记忆文件详情（使用下方 Scene Navigation 中的完整相对路径，如 scene_blocks/xxx.md；也可读 persona.md）。
 
 ### ⚠️ 调用次数限制
 每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 3 次**。
@@ -79,7 +79,7 @@ function formatSystemContext(
   if (scenes.length > 0 && (!persona || !persona.includes("Scene Navigation"))) {
     parts.push("");
     parts.push("## 🗺️ Scene Navigation");
-    parts.push("*以下是当前场景记忆索引，可使用 tdai_read_cos 读取详细内容。*");
+    parts.push("*以下是当前场景记忆索引，可使用 tdai_read_file 读取详细内容。*");
     parts.push("");
     for (const scene of scenes) {
       parts.push(`- \`${scene.path}\``);

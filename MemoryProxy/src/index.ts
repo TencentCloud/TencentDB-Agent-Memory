@@ -27,6 +27,7 @@ import {
 import { initLogger, shutdownLogger, log } from "./report/log.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
+import { initTraceArchive, shutdownTraceArchive } from "./trace-archive.js";
 import { initAuth } from "./auth.js";
 import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
@@ -49,6 +50,12 @@ setExtensionDebug(config.log.level === "debug");
 
 // ── Initialize ClickHouse writer ─────────────────────────────────────────────
 initClickHouse(config.clickhouse);
+
+// ── Initialize local JSONL trace archive (disabled by default) ───────────────
+{
+  const projectRoot = new URL("../", import.meta.url).pathname;
+  initTraceArchive(projectRoot, config.traceArchive);
+}
 
 // ── Initialize Langfuse tracing (official SDK) ───────────────────────────────
 initLangfuse(config).catch((err: unknown) => {
@@ -128,6 +135,7 @@ log.info("server.starting", {
   systemUsers: config.systemUsers.length > 0
     ? config.systemUsers.map((u) => u.name || "unnamed").join(",")
     : "disabled",
+  traceArchive: config.traceArchive.enabled ? config.traceArchive.dir : "disabled",
 });
 
 serve(
@@ -162,6 +170,7 @@ async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   await shutdownGuard();
   await shutdownPrivateControlPlane();
   await shutdownRequestPrepare();
+  await shutdownTraceArchive();
   await shutdownLangfuse();
   await shutdownClickHouse();
   await shutdownLogger();

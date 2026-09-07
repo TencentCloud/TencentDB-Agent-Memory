@@ -71,6 +71,10 @@ export interface TaskPayload {
   priority: number; // 0=high, 1=normal, 2=low
   data?: Record<string, unknown>;
   createdAt: number;
+  /** Internal delivery metadata. Never persisted when a task is enqueued. */
+  _msgId?: string;
+  _stream?: string;
+  _ownerId?: string;
 }
 
 // ============================
@@ -131,6 +135,12 @@ export interface IStateBackend {
   enqueueTask(task: TaskPayload): Promise<void>;
   consumeTask(workerId: string, blockMs?: number): Promise<TaskPayload | null>;
   ackTask(taskId: string): Promise<void>;
+  /** Refresh a pending delivery only when it is still owned by ownerId. */
+  refreshTaskClaim?(taskId: string, ownerId: string, idleMs?: number): Promise<boolean>;
+  /** Acknowledge a pending delivery only when it is still owned by ownerId. */
+  ackTaskIfOwned?(taskId: string, ownerId: string): Promise<boolean>;
+  /** Atomically enqueue a replacement and ACK the owned pending delivery. */
+  replacePendingTask?(taskId: string, ownerId: string, replacement: TaskPayload): Promise<boolean>;
   getQueueDepth(): Promise<{ high: number; low: number }>;
   /**
    * Snapshot of all tasks currently waiting in the queue (not yet consumed).

@@ -22,6 +22,11 @@ import type { ProxyConfig } from "./types.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
+import {
+  getInstanceUpstreamConfigs,
+  resolveUpstreamConfig,
+  shouldOverride,
+} from "./instance-upstream-cache.js";
 import { joinUrl } from "./guard-adapter.js";
 import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
@@ -493,7 +498,7 @@ async function forwardToUpstream(
   }).agents?.workbuddy;
   const upstreamBase = ((perAgent?.url ?? config.upstream.url ?? "") as string).replace(/\/$/, "");
   const upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
-  const upstreamUrl = joinUrl(upstreamBase, upstreamPath);
+  let upstreamUrl = joinUrl(upstreamBase, upstreamPath);
 
   const headers = buildUpstreamHeaders(c, config);
   // 若 per-agent 指定了独立 apiKey，覆盖全局注入的 authorization
@@ -501,6 +506,24 @@ async function forwardToUpstream(
     headers["authorization"] = `Bearer ${perAgent.apiKey}`;
     delete headers["x-api-key"];
   }
+
+  // ── Instance upstream config override ──
+  {
+    const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
+    const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId);
+    const convCfg = resolveUpstreamConfig(instanceConfigs, "workbuddy", "conversation");
+    if (shouldOverride(convCfg)) {
+      upstreamUrl = joinUrl(convCfg.base_url, upstreamPath);
+      if (convCfg.mode === "custom_unified" && convCfg.api_key) {
+        headers["authorization"] = `Bearer ${convCfg.api_key}`;
+        delete headers["x-api-key"];
+      }
+      if (convCfg.model_id && typeof body.model === "string") {
+        body.model = convCfg.model_id;
+      }
+    }
+  }
+
   const bodyStr = JSON.stringify(body);
 
   // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
@@ -910,19 +933,19 @@ export async function handleWorkbuddyEndpoint(
   let injectionSkipped = false;
   let cachedAgentDetail: unknown = null;
   let cachedTaskDetail: unknown = null;
-  let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
+  let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamIdShort: string; taskName?: string | null; bypassed?: boolean } | null = null;
 
   const input = Array.isArray(body.input) ? body.input : [];
 
   // ── mem:session-reset pre-hook ──
-  if (config.memCommand?.enabled) {
+  {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
-      const { parseCommandFromText, isMemCommandAllowed } = await import("./mem-command/index.js");
+      const { parseCommandFromText } = await import("./mem-command/index.js");
       const { workbuddyAdapter } = await import("./agent-adapters/workbuddy.js");
       const userText = workbuddyAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
-      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+      if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `codex:${sessionKey}`;
@@ -1104,7 +1127,7 @@ export async function handleWorkbuddyEndpoint(
           `[workbuddy] session=${sessionKey} bypassed (reason=${(initResult as any).bypassReason ?? "unknown"}) → skipping injection`,
         );
         if (initResult.resetFlow) {
-          _resetFlowResult = { agentName: "", agentIdShort: "", teamId: "", bypassed: true };
+          _resetFlowResult = { agentName: "", agentIdShort: "", teamIdShort: "", bypassed: true };
         }
       }
 
@@ -1130,13 +1153,13 @@ export async function handleWorkbuddyEndpoint(
       // Prewarm 前置短路：mem-command 命中的 turn 不走 forward、不消费 hook-cache，
       // 若照常 prewarm 会白花 2-3s + 3 次网络请求。见 handler.ts 对称位置详注。
       let memCommandPending = false;
-      if (config.memCommand?.enabled) {
+      {
         try {
           const userTextPeek = workbuddyAdapter.extractUserText(input);
           if (userTextPeek) {
-            const { parseCommandFromText, isMemCommandAllowed } = await import("./mem-command/index.js");
+            const { parseCommandFromText } = await import("./mem-command/index.js");
             const peek = parseCommandFromText(userTextPeek);
-            if (peek && isMemCommandAllowed(config.memCommand, peek.command)) {
+            if (peek) {
               memCommandPending = true;
               console.log(`[workbuddy] prewarm skipped: mem-command pending (cmd=${peek.command}) session=${sessionKey}`);
             }
@@ -1188,10 +1211,17 @@ export async function handleWorkbuddyEndpoint(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id).slice(-8) : "",
+          // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
+          // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
+          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          // teamName 来自 session-init 返回值（从 cachedTeams 里查得）；
+          // teamIdShort 字段名沿用历史，但此处**存完整 team_id**（如 team-wyuyb7sion）。
+          // 之前 slice(-8) 只留后 8 位会让用户看到 "uyb7sion" 这种截断串，配合
+          // teamName 常为空导致的兜底路径显示极不完整。团队 id 本身就短，全量展示无害。
+          teamName: initResult.teamName ?? undefined,
+          teamIdShort: (initResult.sessionInfo as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1207,14 +1237,21 @@ export async function handleWorkbuddyEndpoint(
 
   // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
   if (_resetFlowResult) {
-    const { agentName, agentIdShort, teamId, taskName, bypassed } = _resetFlowResult;
+    const { agentName, agentIdShort, teamName, teamIdShort, taskName, bypassed } = _resetFlowResult;
+    // Team 行拼装：优先 team_name (short-id)；没查到 team_name 时至少显示 short-id
+    // 兜底（比全丢更好）；两者都空则整行省略。
+    const teamLine = teamName
+      ? `- **Team**: ${teamName}${teamIdShort ? ` (${teamIdShort})` : ""}`
+      : teamIdShort
+        ? `- **Team**: ${teamIdShort}`
+        : null;
     const lines = bypassed
       ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
       : [
           "✅ 已重新绑定团队资产",
           "",
           `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
-          teamId ? `- **Team**: ${teamId}` : null,
+          teamLine,
           taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
           "",
           "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
@@ -1222,7 +1259,7 @@ export async function handleWorkbuddyEndpoint(
     const text = (lines as string[]).join("\n");
 
     const { buildMemResponse } = await import("./mem-command/response-builder.js");
-    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort})`);
+    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort}) team=${teamName ?? "-"} (${teamIdShort || "-"})`);
     return buildMemResponse(text, {
       protocol: "responses",
       stream: isStream,
@@ -1231,10 +1268,10 @@ export async function handleWorkbuddyEndpoint(
   }
 
   // ── 8. mem-command intercept ────────────────────────────────────────────
-  if (config.memCommand?.enabled) {
+  {
     const userText = workbuddyAdapter.extractUserText(input);
     if (userText) {
-      const { parseCommandFromText, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } =
+      const { parseCommandFromText, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } =
         await import("./mem-command/index.js");
       // ⚠️ 不用 parseMemCommand(body, "workbuddy") —— 它只解 body.messages[] (CC/CB 形态),
       // WorkBuddy 用的是 Responses API (body.input[])，传进去永远返 null → 命令静默透传给 LLM。
@@ -1242,7 +1279,7 @@ export async function handleWorkbuddyEndpoint(
       let memCmd = parseCommandFromText(userText);
       // session-reset 已由 pre-hook 处理，跳过防止重复执行
       if (memCmd?.command === "session-reset") memCmd = null;
-      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+      if (memCmd) {
         if (!sessionInfo || injectionSkipped) {
           const errText = `⚠️ 会话未初始化，命令不可用。请先完成 session 初始化（选择 Team/Agent）后重试。`;
           const errResponse = buildMemResponse(errText, {
@@ -1273,6 +1310,13 @@ export async function handleWorkbuddyEndpoint(
           //   { type:"message", role, content:[{type:"input_text"|"output_text", text}] }
           // extractSimpleMessages 已内置对该形态的识别，转成 {role, content} 极简格式。
           bodyMessages: extractSimpleMessages(input),
+          // 方案 D：taskDraft LLM 跟随主模型 —— workbuddy 固定 agent，上游复用 per-agent url
+          model: modelId,
+          upstreamUrl: config.upstream.agents?.["workbuddy"]?.url || config.upstream.url,
+          // ⚠️ workbuddy 客户端主链路的 upstream 走 OpenAI chat/completions
+          // (path 结尾: /workbuddy/<id>/chat/completions), 与 ctx.protocol="responses"
+          // 无关 (那个只用来渲染响应 SSE 骨架)。
+          upstreamProtocol: "openai",
         });
 
         // ── TDAI L0 write + Skill extraction (fire-and-forget) ──
