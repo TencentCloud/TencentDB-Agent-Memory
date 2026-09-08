@@ -39,6 +39,8 @@ export interface SessionInitState {
   keyId: string;
   startedAt: number;
   attemptCount: number;
+  /** Earliest retry after a Claude Code metadata load failure; never a user opt-out. */
+  metadataRetryAt?: number;
   sessionInfo?: SessionInfo | null;
   /** User ID from auth/verify (not from header). */
   userId?: string;
