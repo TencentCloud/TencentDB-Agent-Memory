@@ -44,3 +44,5 @@ test-offload-sessions.sh
 
 # log files
 *.log
+# Legacy cleanup build output
+scripts/clean-legacy-recall-injection/dist/
