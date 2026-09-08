@@ -55,7 +55,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik 9 + opik-metadata 11 + audit 3 + user-query-extractor 8（vitest 31/31）；本设计文档 |
+| 测试 / 文档 | opik 9 + opik-metadata 11 + audit 3（vitest 23/23；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例，对应旧文档 31/31）；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
 > 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
