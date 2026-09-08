@@ -36,7 +36,7 @@ sessionKey   : 显式会话 ID / auto- 生成 ID / 无 ID 时的稳定兜底键
 threadId     : 仅 threadIsolation.enabled=true 且带 x-thread-id 时追加
 ```
 
-调用点已全部收敛（handler 与 fence 不再各自拼键）：
+调用点已全部收敛（handler、路由与遥测不再各自拼键）：
 
 - 4 个 handler：`anthropicHandler.ts` / `handler.ts` / `codexHandler.ts` /
   `workbuddyHandler.ts`；
@@ -44,7 +44,8 @@ threadId     : 仅 threadIsolation.enabled=true 且带 x-thread-id 时追加
   `session-task.ts`（workbuddy 会话因此也能被 force-archive / refresh 命中）；
 - 遥测：model-intent 埋点与 session-init 日志的 composite 键对齐（threadIsolation
   开启时均带 `:threadId` 后缀）；
-- 归档写侧 fence：`stages/archive.ts::writeL0` 用同一函数构造候选键。
+- 归档写侧 fence（后续项，未随本 PR 落地）：计划同样通过
+  `buildStoreSessionKey` 构造候选键，见 §4.2 / §8。
 
 ### 2.2 隔离判定维度（已实现）
 
@@ -184,9 +185,14 @@ fallback = keyId : msg-<首问指纹sha256-16> : <UTC 日桶>
   `(spaceId, userId, agentSource, sessionId)` 命名空间化（缺省 space = `_default`），
   应用层键漂移不会跨租户命中。
 
-### 4.2 archive 写侧（第二道）
+### 4.2 archive 写侧（第二道，设计蓝图，未随本 PR 落地）
 
-`stages/archive.ts::writeL0` 在真正写 TDAI L0 之前做一次归属 fence：
+> 状态：本节为归档写侧 fence 的**设计目标**。当前 PR 只在
+> `common/session-stats.ts` 预留了 `fenceBlocked / fenceAllowed / fenceMiss`
+> 计数口径，尚未在 L0 写入路径接线，`stages/archive.ts` 也未随本 PR 提供。
+> 落地作为后续课题，见 §8 状态清单。
+
+设计目标：在真正写 TDAI L0 之前做一次归属 fence：
 
 1. 候选键用 `buildStoreSessionKey` 生成：有 threadId 时先查 `:thread` 后缀键，
    再查基础键；workbuddy 额外兼容历史 `workbuddy:` 前缀绑定；
@@ -211,8 +217,8 @@ fallback = keyId : msg-<首问指纹sha256-16> : <UTC 日桶>
 ### 4.3 已知边界（如实记录）
 
 - store 绑定发生在 session-init / getOrRecover；codex / workbuddy 若走共享
-  init 路径则两道 fence 都生效（有 `session-store-fence` / `stages-archive`
-  单测覆盖）；
+  init 路径则两道 fence 都生效（`session-store-fence` 单测覆盖；归档写侧
+  fence 的自动化用例待其落地时补充）；
 - fence 目前只做「拦截 + 计数」，不做自动重绑定——漂移时宁可丢一次 L0 写，
   也不写错归属（fail-closed 取向）。
 - binding 补查只按**写侧 space** 查询命名空间；若绑定落在其它 space 且 L1 为空，
@@ -295,9 +301,10 @@ ghostRejected / scopeRejected / fenceBlocked / fenceAllowed / fenceMiss
 - `resumed`：活跃会话 / 指纹窗口续接；
 - `scopeRejected`：auto ID 在带 scope/指纹绑定上下文被拒（跨线程/窗口复用或伪造）；
 - `ghostRejected`：默认上下文的签名拒绝（换 key/伪造/旧签名密钥）；
-- `fenceBlocked` / `fenceAllowed`：archive 写侧 fence 的拦截与放行。
+- `fenceBlocked` / `fenceAllowed`：archive 写侧 fence 的拦截与放行
+  （当前为预留计数，fence 尚未接线，恒为 0）。
 - `fenceMiss`：L1 与 binding repo 都无记录（fence 无法校验）的写入次数，
-  多副本下常见于新 pod 首次写入。
+  多副本下常见于新 pod 首次写入（当前为预留计数，恒为 0）。
 
 ### 6.2 分解与派生指标
 
@@ -307,13 +314,14 @@ ghostRejected / scopeRejected / fenceBlocked / fenceAllowed / fenceMiss
 - `reuseRate = resumed / (created + resumed)`；
 - `fenceRate = fenceBlocked / (fenceBlocked + fenceAllowed)`；
 - `fenceCoverage = (fenceBlocked + fenceAllowed) / (blocked + allowed + miss)`：
-  第二道防线“有绑定信息可校验”的写入占比；
-- `/session-debug` 与 `/metrics` 同步暴露 `fenceMiss` 与 `fenceCoverage`。
+  第二道防线“有绑定信息可校验”的写入占比（当前恒为 0，待 fence 接线）；
+- `/session-debug` 与 `/session/metrics` 同步暴露 `fenceMiss` 与 `fenceCoverage`
+  （当前为预留口径）。
 - `/session-debug`：输出 `autoSessionSizes()`（activeKeys/windows）、台账长度、
   `reuseRate`、`fenceRate`、`fenceCoverage`、全量 stats 与 breakdown；
   端点与 admin 端点同口径：`config.admin.apiKey` 非空时要求 Bearer；
-- `/metrics`：聚合 `protocolStatsToPrometheus()` +
-  `sessionStatsToPrometheus()` + `injectionStatsToPrometheus()`。
+- `/metrics`（协议转换指标）与 `/session/metrics`（会话决策指标）分路径暴露；
+  会话指标由 `sessionStatsToPrometheus()` 输出。
 - prometheus 新增 `tdai_auto_session_fence_miss_total`（counter）与
   `tdai_auto_session_fence_coverage`（gauge）。
 
@@ -370,15 +378,15 @@ L2a（SQLite/Redis/ProxyStorage 多节点读写）+ L2b binding，
 | 项 | 状态 | 位置 / 说明 |
 |---|---|---|
 | 会话解析统一入口（sessionStage + SessionAdapter，4 handler 接入） | 已实现 | `stages/session.ts`、`stages/types.ts` |
-| 转发/归档/观测阶段化（forwardStage、buildArchiveCtx/writeL0、buildObsInput） | 已实现 | `stages/forward.ts`、`archive.ts`、`obs.ts` |
-| store 键单点约定（workbuddy→codex 别名 + thread 后缀） | 已实现 | `session/store.ts::buildStoreSessionKey`（4 handlers + 3 routes + telemetry + fence） |
+| 转发/归档/观测阶段化（forwardStage、buildArchiveCtx/writeL0、buildObsInput） | 待办（后续课题） | 本 PR 仅落地 `stages/session.ts` / `stages/types.ts`；`forward/archive/obs` 阶段未提供 |
+| store 键单点约定（workbuddy→codex 别名 + thread 后缀） | 已实现 | `session/store.ts::buildStoreSessionKey`（4 handlers + 3 routes + telemetry；fence 落地时复用） |
 | auto ID 签名绑定（keyId+scope+fp）与 ghost 回退修复 | 已实现 | `session/auto-session.ts` |
 | deterministic 派生 + epoch 桶（含配置校验） | 已实现 | `auto-session.ts`、`config.ts`、config.example |
 | per-key / per-key-msg 策略、TTL、窗口容量 | 已实现 | `auto-session.ts` |
 | 稳定兜底键（keyId:msg-<fp>:<日桶>） | 已实现 | codex/workbuddy SessionAdapter |
 | store 恢复层归属校验（跨 user/space 视为新会话） | 已实现 | `store.ts::l1OwnedBy` / `getOrRecover` |
-| archive 写侧 fence（L0 前候选键校验 + 计数） | 已实现 | `stages/archive.ts::writeL0` |
-| archive fence：L1 miss → binding repo 补查 + fenceMiss/fenceCoverage | 已实现 | `stages/archive.ts`、`common/session-stats.ts` |
+| archive 写侧 fence（L0 前候选键校验 + 计数） | 待办（后续课题） | `common/session-stats.ts` 已预留计数；fence 未接线 |
+| archive fence：L1 miss → binding repo 补查 + fenceMiss/fenceCoverage | 待办（后续课题） | 计数口径已预留 |
 | SessionStore L1 有界 LRU + 周期清理 | 已实现 | `session/store.ts::trimL1/cleanup`、`index.ts` |
 | 管理端点鉴权（/session-debug、/v3/session/*） | 已实现 | `routes/admin-auth.ts`、`server.ts` |
 | autoGenerate:false 客户端回传 auto-* 也过签名 | 已实现 | `stages/session.ts` |
@@ -416,14 +424,15 @@ npx tsc --noEmit  # 0 错误
 # 2) deterministic 收敛：TDAI_SESSION_SIGNING_KEY 固定 + deterministic: true，
 #    两个实例同 epoch 内对同 (key, fp) 请求 → 日志出现同一 auto sid
 
-# 3) archive fence：人为让写入 space 与绑定 space 不一致 → 日志
-#    "[archive-fence] L0 skipped"，/metrics 中 fence_blocked +1
+# 3) archive fence（后续项）：当前 fence 未接线，此步待 fence 落地后再验证
+#    （预期：写入 space 与绑定 space 不一致 → 日志
+#    "[archive-fence] L0 skipped"，/session/metrics 中 fence_blocked +1）
 
 # 4) 会话台账：等 TTL/prune 或触发淘汰 → /session-debug 的 expiredLedger 长度增长
 
 # 5) 指标与诊断：
 curl -H "Authorization: Bearer <admin.apiKey>" http://127.0.0.1:<port>/session-debug  # reuseRate / fenceRate / fenceCoverage / stats.fenceMiss
-curl http://127.0.0.1:<port>/metrics         # tdai_auto_session_* 指标
+curl http://127.0.0.1:<port>/session/metrics # tdai_auto_session_* 指标
 
 # 6) 伪造 auto ID（改一个字符）→ scopeRejected/ghostRejected 计数增加，
 #    不会回退到 raw（防幽灵会话）

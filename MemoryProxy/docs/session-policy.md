@@ -1,7 +1,8 @@
 # 会话策略：taskMissingPolicy 与 autoConversationId
 
 > 本文档对应的验收标准与自动化测试：`src/__tests__/session-acceptance.test.ts`（ACC-1..ACC-6），
-> 全量回归：`npm test`（vitest，87/87 通过，10 个测试文件；不含上游已删除的旧基线用例）。
+> 全量回归：`npm test`（vitest，95/95 通过；含上游基线 8 个 + 本 PR 新增 87 个，
+> 10 个测试文件）。
 
 ## 背景
 
@@ -26,24 +27,26 @@ CC / Codex / WorkBuddy 等客户端自带会话 ID 和 task 选择，而 OpenCla
 | team + agent（无 task） | 按策略注册，不绑定 task | 仅 Agent 级记忆/skill |
 | team + agent + 无效 task | 按 onMismatch 处理（默认 bypass），非静默忽略 | — |
 
-### 配置（`deploy/global-images/.env`）
+### 配置（`MemoryProxy/config.example.yaml` → `sessionInit`）
 
-```bash
-PROXY_TASK_MISSING_POLICY=skip            # skip（默认）/ default / reject
-PROXY_DEFAULT_TASK_ID=                    # policy=default 时的占位 task_id
-# 按客户端覆盖（仅列出的客户端生效，未列出的走全局策略）：
-PROXY_TASK_MISSING_POLICY_BY_AGENT_OPENCLAW=skip
-PROXY_TASK_MISSING_POLICY_BY_AGENT_HERMES=skip
+```yaml
+sessionInit:
+  taskMissingPolicy: reject      # reject（全局默认）/ default / skip
+  defaultTaskId: default         # policy=default 时的占位 task_id
+  # 按客户端覆盖（未列出的客户端走全局策略）：
+  taskMissingPolicyByAgent:
+    openclaw: skip
+    hermes: skip
 ```
 
 策略语义：
 
-- `skip`（默认/推荐）：缺 task 不绑定，仅注入 Agent 级记忆；
+- `skip`：缺 task 不绑定，仅注入 Agent 级记忆；
 - `default`：使用 `defaultTaskId` 占位（等效“本次不关联任务”）；
 - `reject`：缺 task 则 mismatch（保持旧行为）。
 
-生产默认：OpenClaw / Hermes 放宽为 `skip`，其余客户端（CC / Codex / WorkBuddy 等）
-保持严格，避免缺 task 时误绑定团队资产。
+生产默认：全局为 `reject`，仅 OpenClaw / Hermes 放宽为 `skip`；其余客户端
+（CC / Codex / WorkBuddy 等）保持严格，避免缺 task 时误绑定团队资产。
 
 ## 2. autoConversationId：会话 ID 自动管理
 
@@ -56,12 +59,19 @@ PROXY_TASK_MISSING_POLICY_BY_AGENT_HERMES=skip
 | 未传 header，非新对话（续轮/tool call） | 按 API key 自动关联当前活跃会话 |
 | 同一 key 超过 TTL（默认 30 分钟）无活跃 | 旧会话过期，自动开启新会话 |
 
-### 配置
+### 配置（`MemoryProxy/config.example.yaml` → `sessionInit`）
 
-```bash
-PROXY_AUTO_CONVERSATION_ENABLED=true      # 默认开
-PROXY_AUTO_CONVERSATION_STRATEGY=per-key  # per-key（默认）或 per-key-msg
-PROXY_AUTO_CONVERSATION_TTL_MINUTES=30
+```yaml
+sessionInit:
+  autoConversationId:
+    enabled: true            # 默认开
+    ttlMinutes: 30
+    strategy: per-key        # per-key（默认）或 per-key-msg
+    deterministic: false
+    # deterministicBucketMinutes: 30
+    # maxEntries: 2048
+    # maxWindowsPerKey: 8
+    # maxWindowsTotal: 4096
 ```
 
 策略对比：
@@ -109,7 +119,7 @@ header 对齐。
 > 已与 `resolveConversationId` 的 header 集合对齐（session-id / x-conversation-id /
 > x-session-id / x-chat-id / x-thread-id），并有 6 个单测覆盖。
 
-## 6. 端到端冒烟脚本
+## 5. 端到端冒烟脚本
 
 `scripts/qa/session-policy-e2e.sh`：对运行中的代理发真实 HTTP 请求，按
 `[session-auto]` 容器日志断言：
@@ -124,7 +134,7 @@ header 对齐。
 用法：`USER_KEY=sk-mem-xxx ./scripts/qa/session-policy-e2e.sh`（前置：代理已起、可读
 `docker logs`、curl 可用）。
 
-## 5. 手动端到端验证步骤（备选，脚本自动化后可不做）
+## 6. 手动端到端验证步骤（备选，脚本自动化后可不做）
 
 1. 起代理：`npm run start:config`（需 Node v22）；
 2. 用 OpenClaw/Hermes 风格请求（仅 `x-team-id + x-agent-id`，无会话头）打
@@ -133,7 +143,7 @@ header 对齐。
 4. 等 TTL 后再请求 → 生成新 ID；
 5. 显式带 `x-conversation-id` 的旧客户端 → 行为不变（日志无 `[session-auto]`）。
 
-## 6. 任意 Agent 接入（隔离层 Agent 无关）
+## 7. 任意 Agent 接入（隔离层 Agent 无关）
 
 会话隔离本身不依赖客户端白名单：任何新的 agent 前缀（URL 第一段，如 `/my-agent/...`）
 都会被当作独立命名空间，隔离由以下机制保证，与客户端是否“已适配”无关：
