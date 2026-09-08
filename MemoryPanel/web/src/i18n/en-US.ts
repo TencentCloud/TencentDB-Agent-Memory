@@ -424,9 +424,9 @@ export const enUS = {
     'Enter a symbol name (function / class / variable) to find its location…',
   'code.detail.explore': 'Code Explore',
   'code.detail.explore.hint':
-    'Returns full source code and call relationships of related files in one request, giving AI direct context without manual grep. Best for "how is this feature implemented".',
+    'Matches English identifiers and returns related source plus call relationships. Chinese questions are rewritten to identifier tokens when Knowledge LLM is configured; otherwise use a class or function name.',
   'code.detail.explore.placeholder':
-    'Describe the feature / flow you want to understand in natural language or symbol names…',
+    'English symbol (e.g. SearchServiceImpl), or a Chinese question if LLM is configured…',
   'code.noAgentPlaceholder': 'No Agent Available',
   'code.allocateToAgent': 'Allocate to Agent',
   'code.allocate.disabled': 'Please select a code asset first',

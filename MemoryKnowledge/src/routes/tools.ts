@@ -16,7 +16,7 @@ import { Hono } from "hono";
 import type { WikiService, CodeGraphService } from "../store/index.js";
 import type { CodeGraphInstancePool } from "../module.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
-import { executeTool as executeCodeTool } from "../engines/code/index.js";
+import { executeCodeToolWithNlRewrite, type ResolveLlm } from "../engines/code/index.js";
 import { wrapOk, wrapError, isValidIdSegment } from "../api-helpers.js";
 import { isWikiId, isCodeGraphId } from "../store/ids.js";
 
@@ -25,6 +25,8 @@ export interface ToolsRouteDeps {
   wikiMgr: WikiSourceManager;
   cgService: CodeGraphService;
   instancePool: CodeGraphInstancePool;
+  /** Optional: rewrite CJK explore/search queries when the first hit is empty. */
+  resolveLlm?: ResolveLlm;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -103,7 +105,7 @@ const CODE_GRAPH_TOOLS: HttpToolDef[] = [
     description:
       "按名称快速搜索符号，只返回位置（不含源码）。想直接拿到源码/理解某块代码，请改用 explore。",
     params: {
-      query: { type: "string", required: true, description: "符号名或部分名称（如 \"auth\"、\"signIn\"、\"UserService\"）" },
+      query: { type: "string", required: true, description: "符号名或部分名称（如 \"auth\"、\"signIn\"、\"UserService\"）。中文问句在已配置 LLM 时会先改写成英文标识符再查。" },
       kind: {
         type: "string",
         required: false,
@@ -116,12 +118,12 @@ const CODE_GRAPH_TOOLS: HttpToolDef[] = [
   {
     name: "explore",
     description:
-      "【首选工具】几乎任何问题都先用它：X 怎么工作、架构、定位 bug、某处在哪。一次调用即按文件分组返回相关符号的完整源码（等价于 Read，返回的文件不要再重复读）。query 可以是自然语言问题，也可以是一组符号/文件名。通常一次就够，无需再 search/get_node/读文件。",
+      "【首选工具】几乎任何问题都先用它：X 怎么工作、架构、定位 bug、某处在哪。一次调用即按文件分组返回相关符号的完整源码（等价于 Read，返回的文件不要再重复读）。query 优先用英文符号/文件名；中文自然语言在已配置 LLM 时会改写成标识符再查。通常一次就够，无需再 search/get_node/读文件。",
     params: {
       query: {
         type: "string",
         required: true,
-        description: "要探索的符号名、文件名或简短代码词（如 \"AuthService loginUser session-manager\"）。可先用 search 找到相关名称。",
+        description: "英文符号/文件名（如 \"AuthService loginUser\"），或中文问题（需配置 Knowledge LLM，否则请改用符号名）。",
       },
       maxFiles: { type: "integer", required: false, default: 12, description: "最多返回源码的文件数（默认 12）" },
     },
@@ -187,7 +189,7 @@ const CODE_GRAPH_TOOL_NAMES = new Set(CODE_GRAPH_TOOLS.map((t) => t.name));
 
 export function createToolsRoutes(deps: ToolsRouteDeps): Hono {
   const app = new Hono();
-  const { wikiService, wikiMgr, cgService, instancePool } = deps;
+  const { wikiService, wikiMgr, cgService, instancePool, resolveLlm } = deps;
 
   // ── POST /tools/list ──
 
@@ -286,7 +288,7 @@ export function createToolsRoutes(deps: ToolsRouteDeps): Hono {
       const row = cgService.getById(serviceId, knowledgeId);
       if (!row) return c.json(wrapError(404, "code graph not found"), 404);
 
-      return executeCodeGraphTool(serviceId, toolName, row, toolParams, cgService, instancePool);
+      return executeCodeGraphTool(serviceId, toolName, row, toolParams, cgService, instancePool, resolveLlm);
     }
 
     return c.json(wrapError(400, `invalid knowledge_id format: ${knowledgeId}`), 400);
@@ -401,6 +403,7 @@ async function executeCodeGraphTool(
   params: Record<string, unknown>,
   cgService: CodeGraphService,
   instancePool: CodeGraphInstancePool,
+  resolveLlm?: ResolveLlm,
 ): Promise<Response> {
   const { code_graph_id, team_id } = row;
 
@@ -437,6 +440,9 @@ async function executeCodeGraphTool(
     return Response.json(wrapError(503, "code graph instance not loaded"), { status: 503 });
   }
 
-  const result = await executeCodeTool(instance, cgToolName, toolParams);
+  const result = await executeCodeToolWithNlRewrite(instance, cgToolName, toolParams, {
+    serviceId,
+    resolveLlm,
+  });
   return Response.json(wrapOk(result), { status: result.isError ? 500 : 200 });
 }

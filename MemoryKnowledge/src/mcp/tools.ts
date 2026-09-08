@@ -51,7 +51,7 @@ export const MCP_TOOLS: McpToolDef[] = [
       type: "object",
       properties: {
         code_graph_id: { type: "string", description: "The code graph ID (cg-...)" },
-        query: { type: "string", description: "Search query" },
+        query: { type: "string", description: "English identifier(s), or a Chinese question rewritten when Knowledge LLM is configured" },
         maxFiles: { type: "integer", minimum: 1, maximum: 200, description: "Max files to return (default: 12)" },
       },
       required: ["code_graph_id", "query"],
