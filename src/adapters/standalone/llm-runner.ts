@@ -1,7 +1,7 @@
 /**
  * StandaloneLLMRunner — powered by Vercel AI SDK (`ai` + `@ai-sdk/openai`).
  *
- * This runner does NOT depend on OpenClaw's `runEmbeddedPiAgent`. It is designed
+ * This runner does NOT depend on OpenClaw's embedded agent runner. It is designed
  * for the Hermes Gateway scenario where TDAI runs as an independent Node.js sidecar
  * without the OpenClaw host.
  *

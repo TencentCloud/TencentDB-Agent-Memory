@@ -1,6 +1,11 @@
 /**
  * CleanContextRunner: executes LLM calls in a fully isolated context
- * using runEmbeddedPiAgent (same mechanism as the llm-task extension).
+ * using the host's embedded agent runner (runEmbeddedAgent / runEmbeddedPiAgent).
+ *
+ * Resolution order (three-level graceful degradation):
+ *   1. runtime.agent.runEmbeddedAgent   — official name (OpenClaw >= 2026.5, including 8.x)
+ *   2. runtime.agent.runEmbeddedPiAgent — legacy alias  (OpenClaw < 2026.8)
+ *   3. dist/extensionAPI.js fallback    — file-based legacy bridge (OpenClaw < 2026.8)
  *
  * Guarantees:
  * 1. Blank conversation history (temporary session file)
@@ -14,9 +19,10 @@ import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getEnv } from "./env.js";
 import { report } from "../core/report/reporter.js";
+import { runDetachedWork } from "./detached-work.js";
+import { parseVersionXYZ, compareVersionXYZ } from "./ensure-hook-policy.js";
 import type { Logger } from "../core/types.js";
 
 /**
@@ -52,12 +58,14 @@ const TAG = "[memory-tdai] [runner]";
 
 type RunnerLogger = Logger;
 
-// Dynamic import type — runEmbeddedPiAgent is an internal API
-// Prefer the public plugin runtime signature so host-injected runtimes stay assignable.
-type RunEmbeddedPiAgentFn = OpenClawPluginApi["runtime"]["agent"]["runEmbeddedPiAgent"];
+// Dynamic import type — the embedded agent runner function signature.
+// Defined locally to avoid depending on a specific OpenClaw version's type index
+// (runEmbeddedPiAgent was removed from the type exports in OpenClaw 8.x).
+type RunEmbeddedAgentFn = (...args: unknown[]) => Promise<unknown>;
 
 export interface EmbeddedAgentRuntimeLike {
-  runEmbeddedPiAgent?: RunEmbeddedPiAgentFn;
+  runEmbeddedAgent?: RunEmbeddedAgentFn;   // official name (OpenClaw >= 2026.5)
+  runEmbeddedPiAgent?: RunEmbeddedAgentFn; // legacy alias  (OpenClaw < 2026.8)
 }
 
 let _preferredAgentRuntime: EmbeddedAgentRuntimeLike | undefined;
@@ -68,28 +76,47 @@ export function setPreferredEmbeddedAgentRuntime(
   _preferredAgentRuntime = agentRuntime;
 }
 
-function resolveInjectedRunEmbeddedPiAgent(
+/**
+ * Three-level graceful degradation for resolving the embedded agent runner:
+ *   1. runtime.agent.runEmbeddedAgent   (8.x+, also available in 7.x)
+ *   2. runtime.agent.runEmbeddedPiAgent (legacy alias, available in <= 7.x)
+ *   3. dist/extensionAPI.js fallback    (file-based legacy bridge)
+ */
+function resolveInjectedRunner(
   agentRuntime?: EmbeddedAgentRuntimeLike,
-): RunEmbeddedPiAgentFn | undefined {
-  const candidate =
-    agentRuntime?.runEmbeddedPiAgent ?? _preferredAgentRuntime?.runEmbeddedPiAgent;
-  return typeof candidate === "function" ? candidate : undefined;
+): { fn: RunEmbeddedAgentFn; source: string } | undefined {
+  // ① runEmbeddedAgent (official name, preferred)
+  if (typeof agentRuntime?.runEmbeddedAgent === "function") {
+    return { fn: agentRuntime.runEmbeddedAgent, source: "injected:runEmbeddedAgent" };
+  }
+  if (typeof _preferredAgentRuntime?.runEmbeddedAgent === "function") {
+    return { fn: _preferredAgentRuntime.runEmbeddedAgent, source: "preferred:runEmbeddedAgent" };
+  }
+  // ② runEmbeddedPiAgent (legacy alias)
+  if (typeof agentRuntime?.runEmbeddedPiAgent === "function") {
+    return { fn: agentRuntime.runEmbeddedPiAgent, source: "injected:runEmbeddedPiAgent" };
+  }
+  if (typeof _preferredAgentRuntime?.runEmbeddedPiAgent === "function") {
+    return { fn: _preferredAgentRuntime.runEmbeddedPiAgent, source: "preferred:runEmbeddedPiAgent" };
+  }
+  return undefined;
 }
 
-async function resolveRunEmbeddedPiAgent(
+async function resolveRunner(
   agentRuntime: EmbeddedAgentRuntimeLike | undefined,
   logger?: RunnerLogger,
-): Promise<RunEmbeddedPiAgentFn> {
-  const injected = resolveInjectedRunEmbeddedPiAgent(agentRuntime);
+): Promise<RunEmbeddedAgentFn> {
+  const injected = resolveInjectedRunner(agentRuntime);
   if (injected) {
     logger?.debug?.(
-      `${TAG} resolveRunEmbeddedPiAgent: using injected runtime.agent.runEmbeddedPiAgent`,
+      `${TAG} resolveRunner: using ${injected.source}`,
     );
-    logger?.debug?.(`${TAG} [l1-debug] RESOLVE source=injected`);
-    return injected;
+    logger?.debug?.(`${TAG} [l1-debug] RESOLVE source=${injected.source}`);
+    return injected.fn;
   }
+  // ③ fallback: load from dist/extensionAPI.js (legacy bridge for very old versions)
   logger?.debug?.(`${TAG} [l1-debug] RESOLVE source=dist-fallback`);
-  return loadRunEmbeddedPiAgent(logger);
+  return loadLegacyDistBridge(logger);
 }
 
 // ── Core import (mirrors voice-call/core-bridge.ts — dist/ only, no jiti) ──
@@ -130,23 +157,30 @@ function resolveOpenClawRoot(): string {
   throw new Error("Unable to resolve OpenClaw root. Set OPENCLAW_ROOT or run `pnpm build`.");
 }
 
-let _loadPromise: Promise<RunEmbeddedPiAgentFn> | null = null;
+let _loadPromise: Promise<RunEmbeddedAgentFn> | null = null;
 
-function loadRunEmbeddedPiAgent(logger?: RunnerLogger): Promise<RunEmbeddedPiAgentFn> {
+/**
+ * Legacy fallback (level 3): dynamically load runEmbeddedPiAgent from
+ * OpenClaw's dist/extensionAPI.js. This file exists in OpenClaw <= 7.x
+ * but was removed in 8.x. Only reached when both injected names fail.
+ */
+function loadLegacyDistBridge(logger?: RunnerLogger): Promise<RunEmbeddedAgentFn> {
   if (_loadPromise) return _loadPromise;
 
   _loadPromise = (async () => {
     const t0 = Date.now();
     const distPath = path.join(resolveOpenClawRoot(), "dist", "extensionAPI.js");
     if (!fsSync.existsSync(distPath)) {
-      throw new Error(`Missing core module at ${distPath}. Run \`pnpm build\` or install the official package.`);
+      throw new Error(`Missing core module at ${distPath}. This file was removed in OpenClaw 8.x. Ensure runtime.agent.runEmbeddedAgent is injected by the host, or downgrade OpenClaw to <= 7.x.`);
     }
     const mod = await import(pathToFileURL(distPath).href);
-    if (typeof mod.runEmbeddedPiAgent !== "function") {
-      throw new Error("runEmbeddedPiAgent not exported from dist/extensionAPI.js");
+    // Try both names: runEmbeddedAgent (if exported) or runEmbeddedPiAgent (legacy)
+    const fn = mod.runEmbeddedAgent ?? mod.runEmbeddedPiAgent;
+    if (typeof fn !== "function") {
+      throw new Error("Neither runEmbeddedAgent nor runEmbeddedPiAgent exported from dist/extensionAPI.js");
     }
-    logger?.info(`${TAG} loadRunEmbeddedPiAgent: dist/ import OK (${Date.now() - t0}ms)`);
-    return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
+    logger?.info(`${TAG} loadLegacyDistBridge: dist/ import OK (${Date.now() - t0}ms)`);
+    return fn as RunEmbeddedAgentFn;
   })();
 
   _loadPromise.catch(() => { _loadPromise = null; });
@@ -162,14 +196,14 @@ export function prewarmEmbeddedAgent(
   logger?: RunnerLogger,
   agentRuntime?: EmbeddedAgentRuntimeLike,
 ): void {
-  if (resolveInjectedRunEmbeddedPiAgent(agentRuntime)) {
+  if (resolveInjectedRunner(agentRuntime)) {
     logger?.debug?.(
       `${TAG} prewarmEmbeddedAgent: runtime capability already available, skipping legacy preload`,
     );
     return;
   }
 
-  loadRunEmbeddedPiAgent(logger).catch((err) => {
+  loadLegacyDistBridge(logger).catch((err) => {
     logger?.warn(`${TAG} prewarmEmbeddedAgent: failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
   });
 }
@@ -283,6 +317,82 @@ export interface CleanContextRunnerOptions {
   enableTools?: boolean;
   /** Logger instance for detailed tracing */
   logger?: RunnerLogger;
+  /**
+   * OpenClaw host version string (e.g. "2026.8.2").
+   * Obtained from `api.runtime.version` at plugin registration time.
+   * Used for version-gated behavior (e.g. sessionKey vs sessionFile).
+   * When undefined, falls back to reading package.json from the OpenClaw root.
+   */
+  hostVersion?: string;
+}
+
+// ── OpenClaw version detection for sessionKey / sessionFile branching ──
+
+/**
+ * Minimum OpenClaw version that supports `sessionKey` (sessionFile is @deprecated).
+ * Before 2026.6.11, `sessionFile: string` is a required parameter.
+ */
+const SESSION_KEY_MIN_XYZ: readonly [number, number, number] = [2026, 6, 11];
+
+/** Cache: undefined = not probed, null = couldn't determine, tuple = resolved. */
+let _openClawVersionXYZ: [number, number, number] | null | undefined;
+
+/**
+ * Resolve the installed OpenClaw version as [x, y, z].
+ *
+ * Dual-path:
+ *   1. `hostVersion` from `api.runtime.version` (fast, available on newer hosts).
+ *   2. Fallback: read `<openclaw-root>/package.json` via fs (works on all versions).
+ *
+ * Result is cached for the process lifetime.
+ */
+function resolveOpenClawVersionXYZ(hostVersion?: string, logger?: RunnerLogger): [number, number, number] | null {
+  if (_openClawVersionXYZ !== undefined) {
+    return _openClawVersionXYZ;
+  }
+
+  // ① api.runtime.version (fast path)
+  const fromRuntime = parseVersionXYZ(hostVersion);
+  if (fromRuntime) {
+    _openClawVersionXYZ = fromRuntime;
+    logger?.debug?.(`${TAG} [version-detect] resolved from api.runtime.version: ${hostVersion} → [${fromRuntime}]`);
+    return fromRuntime;
+  }
+  logger?.debug?.(`${TAG} [version-detect] api.runtime.version unavailable (raw=${JSON.stringify(hostVersion)}), trying package.json fallback`);
+
+  // ② package.json fallback
+  try {
+    const root = resolveOpenClawRoot();
+    const pkgPath = path.join(root, "package.json");
+    const raw = fsSync.readFileSync(pkgPath, "utf8");
+    const pkg = JSON.parse(raw) as { version?: string };
+    const fromPkg = parseVersionXYZ(pkg.version);
+    _openClawVersionXYZ = fromPkg;
+    if (fromPkg) {
+      logger?.debug?.(`${TAG} [version-detect] resolved from package.json (${pkgPath}): ${pkg.version} → [${fromPkg}]`);
+    } else {
+      logger?.warn?.(`${TAG} [version-detect] package.json version unparsable: ${JSON.stringify(pkg.version)}`);
+    }
+    return fromPkg;
+  } catch (err) {
+    _openClawVersionXYZ = null;
+    logger?.warn?.(`${TAG} [version-detect] package.json fallback failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * Should we pass `sessionKey` (>= 6.11) or `sessionFile` (< 6.11)?
+ *
+ * When version cannot be determined: default to `sessionFile` (safest for
+ * old hosts — "cannot read api.runtime.version" is itself a strong signal
+ * of an old host that needs sessionFile).
+ */
+function shouldUseSessionKey(hostVersion?: string, logger?: RunnerLogger): boolean {
+  const xyz = resolveOpenClawVersionXYZ(hostVersion, logger);
+  const use = xyz !== null && compareVersionXYZ(xyz, SESSION_KEY_MIN_XYZ) >= 0;
+  logger?.debug?.(`${TAG} [version-detect] shouldUseSessionKey=${use} (resolved=[${xyz}], min=[${SESSION_KEY_MIN_XYZ}])`);
+  return use;
 }
 
 // Stable empty directory used as default workspaceDir so that:
@@ -352,6 +462,8 @@ export class CleanContextRunner {
     workspaceDir?: string;
     /** Plugin instance ID for llm_call metric (optional) */
     instanceId?: string;
+    /** Agent ID for OpenClaw 8.2+ session ownership check (optional, parsed from sessionKey) */
+    agentId?: string;
   }): Promise<string> {
     const runStartMs = Date.now();
     this.logger?.debug?.(`${TAG} run() start: taskId=${params.taskId}, timeout=${params.timeoutMs ?? 120_000}ms, tools=${this.options.enableTools ? "enabled" : "disabled"}, workspaceDir=${params.workspaceDir ?? "(default)"}`);
@@ -363,11 +475,9 @@ export class CleanContextRunner {
     this.logger?.debug?.(`${TAG} run() tmpDir=${tmpDir}, cleanWorkspace=${cleanWorkspace}`);
 
     try {
-      const sessionFile = path.join(tmpDir, "session.json");
-
-      // Phase 1: Resolve runEmbeddedPiAgent (prefer runtime, fallback to legacy dist bridge)
+      // Phase 1: Resolve embedded agent runner (three-level graceful degradation)
       const importStartMs = Date.now();
-      const runEmbeddedPiAgent = await resolveRunEmbeddedPiAgent(
+      const embeddedAgentRunner = await resolveRunner(
         this.options.agentRuntime,
         this.logger,
       );
@@ -419,7 +529,14 @@ export class CleanContextRunner {
       const ts = Date.now();
       const sessionId = `memory-${params.taskId}-session-${ts}`;
       const runId = `memory-${params.taskId}-run-${ts}`;
-      this.logger?.debug?.(`${TAG} run() starting embedded agent: sessionId=${sessionId}, runId=${runId}, provider=${this.resolvedProvider ?? "(default)"}, model=${this.resolvedModel ?? "(default)"}`);
+
+      // Version-gated session identity: sessionKey (>= 6.11) vs sessionFile (< 6.11).
+      // Cannot pass both — 8.2's ownership checker rejects non-marker sessionFile
+      // when sessionKey is also present. See 8.x版本兼容方案-问题3 for details.
+      const useSessionKey = shouldUseSessionKey(this.options.hostVersion, this.logger);
+      const sessionKey = `agent:${params.agentId ?? "main"}:${sessionId}`;
+      const sessionFile = path.join(tmpDir, "session.json");
+      this.logger?.debug?.(`${TAG} run() session identity: useSessionKey=${useSessionKey}, sessionId=${sessionId}, runId=${runId}, provider=${this.resolvedProvider ?? "(default)"}, model=${this.resolvedModel ?? "(default)"}`);
 
       // [l1-debug] INVOKE — what are we about to send to the embedded agent?
       const sysPromptOverrideLen =
@@ -435,6 +552,11 @@ export class CleanContextRunner {
       );
 
       // Phase 2: Embedded agent run (LLM call + tool calls)
+      // Wrapped in runDetachedWork to acquire an independent gateway root work
+      // admission on OpenClaw >= 7.2. Without this, async L1/L2/L3 calls after
+      // agent_end are rejected with GatewayDrainingError because the parent
+      // rootWork is already released. On <= 7.1-2 (no admission mechanism)
+      // runDetachedWork falls back to direct execution.
       const agentStartMs = Date.now();
       // extraSystemPrompt: fallback for openclaw < 2026.4.7 which does not support
       // config.agents.defaults.systemPromptOverride. On newer versions the
@@ -442,9 +564,11 @@ export class CleanContextRunner {
       const effectiveSystemPrompt =
         params.systemPrompt ||
         "You are a precise data extraction and generation assistant. Follow the user instructions exactly. Respond only with the requested output format.";
-      const result = await runEmbeddedPiAgent({
+      const result = await runDetachedWork(() => embeddedAgentRunner({
         sessionId,
-        sessionFile,
+        // Version-gated: >= 6.11 uses sessionKey; < 6.11 uses sessionFile.
+        // MUST NOT pass both — 8.2 ownership checker rejects non-marker sessionFile.
+        ...(useSessionKey ? { sessionKey } : { sessionFile }),
         workspaceDir: cleanWorkspace,
         config: cleanConfig,
         prompt: effectivePrompt,
@@ -452,6 +576,9 @@ export class CleanContextRunner {
         runId,
         provider: this.resolvedProvider,
         model: this.resolvedModel,
+        // OpenClaw 8.2+ session ownership: agentId identifies the owning agent.
+        // Optional — 7.x ignores it; 8.x requires it for resolveSqliteScope.
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         // When enableTools=false, pass disableTools:true so that no tool
         // definitions are sent to the API. This avoids polluting the LLM
         // context with tool schemas and prevents the model from attempting
@@ -463,7 +590,7 @@ export class CleanContextRunner {
         streamParams: {
           maxTokens: params.maxTokens,
         },
-      });
+      }), this.logger);
       const agentElapsedMs = Date.now() - agentStartMs;
       this.logger?.debug?.(`${TAG} run() embedded agent completed: ${agentElapsedMs}ms`);
 

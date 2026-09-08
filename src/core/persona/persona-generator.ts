@@ -25,6 +25,7 @@ export class PersonaGenerator {
   private backupCount: number;
   private instanceId: string | undefined;
   private storage: StorageAdapter | undefined;
+  private agentId: string | undefined;
 
   constructor(opts: {
     dataDir: string;
@@ -42,12 +43,15 @@ export class PersonaGenerator {
     llmRunner?: LLMRunner;
     /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
     storage?: StorageAdapter;
+    /** Agent ID for OpenClaw 8.2+ session ownership check (optional). */
+    agentId?: string;
   }) {
     this.dataDir = opts.dataDir;
     this.logger = opts.logger;
     this.backupCount = opts.backupCount ?? 3;
     this.instanceId = opts.instanceId;
     this.storage = opts.storage;
+    this.agentId = opts.agentId;
     // Use injected LLMRunner if available, otherwise fall back to CleanContextRunner
     this.runner = opts.llmRunner ?? new CleanContextRunner({
       config: opts.config,
@@ -187,6 +191,7 @@ export class PersonaGenerator {
         // Service mode: LLM tools read/write via StorageAdapter (COS) instead of local FS
         storage: this.storage,
         storagePrefix: this.storage ? "" : undefined,
+        agentId: this.agentId,
       });
       this.logger?.debug?.(`${TAG} LLM runner completed`);
     } catch (err) {

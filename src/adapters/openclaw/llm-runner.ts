@@ -3,7 +3,7 @@
  *
  * This is a compatibility bridge: TDAI Core modules (L1 extractor, L2 scene extractor,
  * L3 persona generator, L1 dedup) can depend on the `LLMRunner` interface, while
- * OpenClaw continues to use its native `runEmbeddedPiAgent` mechanism under the hood.
+ * OpenClaw continues to use its native embedded agent runner (runEmbeddedAgent) under the hood.
  *
  * Usage:
  *   const factory = new OpenClawLLMRunnerFactory({ config, agentRuntime, logger });
@@ -64,6 +64,12 @@ export interface OpenClawLLMRunnerFactoryOptions {
   agentRuntime?: EmbeddedAgentRuntimeLike;
   /** Logger for runner tracing. */
   logger?: Logger;
+  /**
+   * OpenClaw host version string (e.g. "2026.8.2") from `api.runtime.version`.
+   * Passed through to CleanContextRunner for version-gated behavior
+   * (sessionKey vs sessionFile). When undefined, falls back to package.json.
+   */
+  hostVersion?: string;
 }
 
 /**
@@ -76,11 +82,13 @@ export class OpenClawLLMRunnerFactory implements LLMRunnerFactory {
   private config: unknown;
   private agentRuntime?: EmbeddedAgentRuntimeLike;
   private logger?: Logger;
+  private hostVersion?: string;
 
   constructor(opts: OpenClawLLMRunnerFactoryOptions) {
     this.config = opts.config;
     this.agentRuntime = opts.agentRuntime;
     this.logger = opts.logger;
+    this.hostVersion = opts.hostVersion;
   }
 
   createRunner(opts?: LLMRunnerCreateOptions): LLMRunner {
@@ -97,6 +105,7 @@ export class OpenClawLLMRunnerFactory implements LLMRunnerFactory {
       enableTools,
       agentRuntime: this.agentRuntime,
       logger: this.logger,
+      hostVersion: this.hostVersion,
     });
 
     return new OpenClawLLMRunner(cleanRunner);

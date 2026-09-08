@@ -12,6 +12,7 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { OpenClawLLMRunnerFactory } from "./llm-runner.js";
 import type {
   HostAdapter,
@@ -54,6 +55,9 @@ export class OpenClawHostAdapter implements HostAdapter {
       config: opts.openclawConfig,
       agentRuntime: opts.api.runtime.agent,
       logger: opts.api.logger,
+      // Thread host version for version-gated behavior (sessionKey vs sessionFile).
+      // api.runtime.version is available on OpenClaw >= ~4.x; undefined on very old hosts.
+      hostVersion: (opts.api.runtime as Record<string, unknown>)?.version as string | undefined,
     });
   }
 
@@ -96,6 +100,17 @@ export class OpenClawHostAdapter implements HostAdapter {
 
   getLLMRunnerFactory(): LLMRunnerFactory {
     return this.runnerFactory;
+  }
+
+  resolveAgentId(): string {
+    try {
+      // Resolve the configured sole/default agent id instead of hardcoding
+      // "main" (covers renamed single-agent deployments). Falls back to
+      // "main" when the host has multiple agents or no agent configured.
+      return resolveDefaultAgentId(this.openclawConfig as Parameters<typeof resolveDefaultAgentId>[0]);
+    } catch {
+      return "main";
+    }
   }
 
   // -- OpenClaw-specific accessors (for index.ts bridge) --------------------

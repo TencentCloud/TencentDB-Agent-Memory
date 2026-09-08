@@ -38,6 +38,7 @@ import { PersonaGenerator } from "../core/persona/persona-generator.js";
 import { pullProfilesToLocal, syncLocalProfilesToStore } from "../core/profile/profile-sync.js";
 import type { StorageAdapter } from "../core/storage/adapter.js";
 import type { Logger } from "../core/types.js";
+import { extractAgentId } from "./session-key.js";
 
 const TAG = "[memory-tdai] [pipeline-factory]";
 
@@ -630,6 +631,7 @@ export function createL2Runner(opts: {
       instanceId,
       llmRunner,
       storage,
+      agentId: extractAgentId(sessionKey),
     });
 
     const memories = records.map((r) => ({
@@ -713,6 +715,8 @@ export function createL3Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
   /** StorageAdapter for file operations (COS/local). */
   storage?: StorageAdapter;
+  /** Agent ID for OpenClaw 8.2+ session ownership check (optional). */
+  agentId?: string;
 }): L3Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage } = opts;
 
@@ -762,6 +766,7 @@ export function createL3Runner(opts: {
       instanceId,
       llmRunner,
       storage,
+      agentId: opts.agentId,
     });
     const genResult = await generator.generateLocalPersona(reason);
 

@@ -554,6 +554,7 @@ export class TdaiCore {
         instanceId: this.instanceId,
         llmRunner: l2l3LlmRunner,
         storage: this.storage,
+        agentId: this.hostAdapter.resolveAgentId(),
       });
       await l3Runner();
     });
@@ -707,6 +708,7 @@ export class TdaiCore {
       instanceId: this.instanceId,
       llmRunner,
       storage: storage ?? this.getStorage(),
+      agentId: this.hostAdapter.resolveAgentId(),
     });
     await runner();
     const creditUsed: number = (llmRunner as any)?.accumulatedCredit ?? 0;

@@ -94,4 +94,9 @@ export class StandaloneHostAdapter implements HostAdapter {
   getLLMRunnerFactory(): LLMRunnerFactory {
     return this.runnerFactory;
   }
+
+  resolveAgentId(): string {
+    // Standalone (Gateway/Hermes) has no multi-agent concept — always "main".
+    return "main";
+  }
 }

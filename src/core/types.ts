@@ -103,7 +103,7 @@ export interface LLMRunParams {
  * Replaces direct usage of `CleanContextRunner` throughout TDAI Core.
  *
  * Implementations:
- * - `OpenClawLLMRunner`: wraps `CleanContextRunner` / `runEmbeddedPiAgent` (OpenClaw host)
+ * - `OpenClawLLMRunner`: wraps `CleanContextRunner` / `runEmbeddedAgent` (OpenClaw host)
  * - `StandaloneLLMRunner`: direct OpenAI-compatible HTTP calls (Gateway / Hermes host)
  */
 export interface LLMRunner {
@@ -177,6 +177,13 @@ export interface HostAdapter {
 
   /** Get the LLM runner factory configured for this host. */
   getLLMRunnerFactory(): LLMRunnerFactory;
+
+  /**
+   * Resolve the agent ID this plugin instance serves.
+   * OpenClaw resolves the configured sole/default agent id (not hardcoded
+   * "main"); standalone hosts return "main".
+   */
+  resolveAgentId(): string;
 }
 
 // ============================

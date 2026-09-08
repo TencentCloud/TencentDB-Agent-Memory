@@ -447,14 +447,13 @@ async function searchMemories(
     `maxResults=${maxResults}, threshold=${threshold}`,
   );
 
-  // Determine effective strategy — no degradation: if embedding is configured but unavailable, fail
+  // Determine effective strategy (fall back to keyword if embedding not available)
   let effectiveStrategy = strategy;
   if ((strategy === "embedding" || strategy === "hybrid") && !embeddingAvailable) {
-    // H-15: throw structured RecallFailure so the top-level catch in
-    // performAutoRecallInner can translate it into RecallResult.error
-    // (preserves fast-fail semantics + observability while keeping the
-    // hook contract "always resolves, never rejects").
-    throw RecallErrors.configMissingEmbedding(strategy);
+    logger?.warn?.(
+      `${TAG} Strategy "${strategy}" requested but EmbeddingService not available, falling back to keyword`,
+    );
+    effectiveStrategy = "keyword";
   }
 
   logger?.debug?.(`${TAG} Search strategy: ${effectiveStrategy} (configured: ${strategy})`);

@@ -61,6 +61,8 @@ export interface SceneExtractorOptions {
   llmRunner?: LLMRunner;
   /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
   storage?: StorageAdapter;
+  /** Agent ID for OpenClaw 8.2+ session ownership check (optional, parsed from sessionKey). */
+  agentId?: string;
 }
 
 /**
@@ -95,6 +97,7 @@ export class SceneExtractor {
   private logger: ExtractorLogger | undefined;
   private instanceId: string | undefined;
   private storage: StorageAdapter | undefined;
+  private agentId: string | undefined;
 
   constructor(opts: SceneExtractorOptions) {
     this.dataDir = opts.dataDir;
@@ -104,6 +107,7 @@ export class SceneExtractor {
     this.logger = opts.logger;
     this.instanceId = opts.instanceId;
     this.storage = opts.storage;
+    this.agentId = opts.agentId;
 
     // Use injected LLMRunner if available, otherwise fall back to CleanContextRunner
     this.runner = opts.llmRunner ?? new CleanContextRunner({
@@ -243,6 +247,7 @@ export class SceneExtractor {
         // Service mode: LLM tools read/write via StorageAdapter (COS) instead of local FS
         storage: this.storage,
         storagePrefix: this.storage ? StoragePaths.sceneBlocksDir : undefined,
+        agentId: this.agentId,
       }) ?? "";
       llmDurationMs = Date.now() - runnerStartMs;
       this.logger?.debug?.(`${TAG} extract() LLM runner completed: ${llmDurationMs}ms`);

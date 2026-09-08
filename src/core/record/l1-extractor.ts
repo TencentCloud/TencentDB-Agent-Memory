@@ -26,6 +26,7 @@ import { metricProducer } from "../report/kafka-metric-producer.js";
 import { reportL1LatencyMetrics } from "../report/metric-tracking-l1-latency.js";
 import type { LLMRunner, Logger } from "../types.js";
 import type { StorageAdapter } from "../storage/adapter.js";
+import { extractAgentId } from "../../utils/session-key.js";
 
 const TAG = "[memory-tdai][l1-extractor]";
 
@@ -171,6 +172,7 @@ export async function extractL1Memories(params: {
       logger,
       model: options.model,
       llmRunner: options.llmRunner,
+      sessionKey,
     });
     logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
   } catch (err) {
@@ -257,6 +259,7 @@ export async function extractL1Memories(params: {
         conflictRecallTopK: options.conflictRecallTopK,
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
+        sessionKey,
       });
       dedupLatencyMs = Date.now() - dedupStartMs;
 
@@ -377,6 +380,8 @@ async function callLlmExtraction(params: {
   model?: string;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
+  /** Session key — used to extract agentId for OpenClaw 8.2+ ownership check. */
+  sessionKey: string;
 }): Promise<SceneSegment[]> {
   const { newMessages, backgroundMessages, previousSceneName, config, logger, model, llmRunner } = params;
 
@@ -415,6 +420,7 @@ async function callLlmExtraction(params: {
       systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
       taskId: "l1-extraction",
       timeoutMs: 180_000,
+      agentId: extractAgentId(params.sessionKey),
     });
   }
 

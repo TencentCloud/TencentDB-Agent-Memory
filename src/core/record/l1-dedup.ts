@@ -20,6 +20,7 @@ import type { IMemoryStore } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { LLMRunner, Logger } from "../types.js";
+import { extractAgentId } from "../../utils/session-key.js";
 
 const TAG = "[memory-tdai][l1-dedup]";
 
@@ -63,6 +64,8 @@ export async function batchDedup(params: {
   embeddingTimeoutMs?: number;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
+  /** Session key — used to extract agentId for OpenClaw 8.2+ ownership check. */
+  sessionKey?: string;
 }): Promise<DedupDecision[]> {
   const { memories, config, logger, model, vectorStore, embeddingService, llmRunner } = params;
   const topK = params.conflictRecallTopK ?? 5;
@@ -119,7 +122,7 @@ export async function batchDedup(params: {
   }
 
   // Phase 2: Batch LLM judgment
-  return runLlmJudgment(matches, memories, config, logger, model, llmRunner);
+  return runLlmJudgment(matches, memories, config, logger, model, llmRunner, params.sessionKey);
 }
 
 /**
@@ -132,6 +135,7 @@ async function runLlmJudgment(
   logger: Logger | undefined,
   model: string | undefined,
   llmRunner?: LLMRunner,
+  sessionKey?: string,
 ): Promise<DedupDecision[]> {
   logger?.debug?.(`${TAG} Running batch conflict detection for ${memories.length} memories`);
 
@@ -161,6 +165,7 @@ async function runLlmJudgment(
         systemPrompt: CONFLICT_DETECTION_SYSTEM_PROMPT,
         taskId: "l1-conflict-detection",
         timeoutMs: 180_000,
+        agentId: sessionKey ? extractAgentId(sessionKey) : undefined,
       });
     }
 

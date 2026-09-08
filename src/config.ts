@@ -183,7 +183,7 @@ export interface ReportConfig {
 
 /**
  * Standalone LLM configuration — when set, TDAI uses direct API calls
- * instead of the host's built-in LLM runner (e.g. OpenClaw's runEmbeddedPiAgent).
+ * instead of the host's built-in LLM runner (e.g. OpenClaw's runEmbeddedAgent).
  *
  * This allows using a different (often cheaper/faster) model for memory
  * extraction while the main agent uses a premium model.
@@ -303,7 +303,7 @@ export interface MemoryTdaiConfig {
   report: ReportConfig;
   /**
    * Standalone LLM override — when enabled, TDAI bypasses the host's LLM
-   * (e.g. OpenClaw's runEmbeddedPiAgent) and uses direct OpenAI-compatible
+   * (e.g. OpenClaw's runEmbeddedAgent) and uses direct OpenAI-compatible
    * API calls for L1/L2/L3 extraction.
    *
    * Default: disabled (uses host LLM).

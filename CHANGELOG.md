@@ -6,9 +6,20 @@
 
 ## [Unreleased]
 
-### ✨ 新功能
+---
 
-- **Offload V2 `result_ref` 恢复接口**：新增 `POST /v2/offload/read-ref`，复用现有鉴权并将 `result_ref` 绑定到当前 session；支持全文、子串和行范围读取，服务端限制返回 token 数，本地与 COS 存储后端均可使用。
+## [1.0.2] - 2026-09-07
+
+### 🐛 修复
+
+#### OpenClaw 宿主兼容
+
+- **兼容 OpenClaw 8.2**：适配新版宿主 API（`runEmbeddedAgent` 三级降级、标准 `sessionKey`、`agentId` 补传、`runDetachedWebhookWork` 独立 root work），并前向兼容旧版本（`sessionKey` / `sessionFile` 按版本二选一）。
+
+#### 核心稳定性
+
+- **L3 画像 agentId 硬编码问题**：`HostAdapter` 新增 `resolveAgentId` 动态解析默认 `agentId`，替换两处写死的 `main`，覆盖单 agent 改名场景（多 agent / standalone / 异常兜底 `main`）。
+- **召回策略在 embedding 不可用时自动降级 keyword**：对齐 develop 分支，embedding 服务不可用时自动回退到关键字检索，避免召回失效。
 
 ---
 
