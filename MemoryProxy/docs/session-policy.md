@@ -105,7 +105,7 @@ header 对齐。
 
 ## 4. 可观测性
 
-自动生成会话时输出结构化日志（三个 handler 均接入）：
+自动生成会话时输出结构化日志（4 个 handler 经公共 `stages/session-turn.ts` 接入）：
 
 ```text
 [session-auto] action=created|resumed conversationId=auto-<keyId>-<uuid> keyId=<keyId> [strategy=per-key|per-key-msg]

@@ -168,7 +168,7 @@ fallback = keyId : msg-<首问指纹sha256-16> : <UTC 日桶>
   永续会话；
 - 提取不到首问指纹时退回 `keyId:traceId` 临时键，并对每个 keyId 只 warn 一次。
 
-## 4. 归属 fencing：两道防线（已实现）
+## 4. 归属 fencing：两道防线（第一道已实现；第二道为设计蓝图）
 
 ### 4.1 store 恢复层（第一道）
 
@@ -245,7 +245,8 @@ uninitialized → pending_asset_confirm → pending_team_select
 
 ### 5.2 auto 会话 TTL / 淘汰 / 有界台账（已实现）
 
-`index.ts` 定时 `pruneExpiredSessions(ttl)`，会话结束统一进
+`pruneExpiredSessions(ttl)` 为按需清理函数，当前未接周期定时器
+（TTL 过期在 request 路径惰性处理）；被清理的会话统一进
 **有界台账**（上限 512，最早的被挤出）：
 
 ```
@@ -253,14 +254,14 @@ ExpiredSessionEntry { sid, keyId, scope, reason, lastSeen, expiredAt }
 reason ∈ expired | pruned | evicted
 ```
 
-- `pruned`：定时器清理（per-key 表 / per-key-msg 窗口）；
+- `pruned`：`pruneExpiredSessions` 清理（per-key 表 / per-key-msg 窗口；
+  定时触发为后续接线）；
 - `expired`：续接时发现同 key 旧会话已过 TTL；
 - `evicted`：per-key 容量超限 / per-key-msg 窗口超限（`windowEvicted`）/
   全局上限触发 LRU 式淘汰（`capEvicted`）。
 
 SessionStore L1 另有**有界 LRU**（默认 10k）：`set()` 刷新最近使用序，超限淘汰最旧
-（只清内存，L2a/L2b 可恢复）；`index.ts` 每 5 分钟调用 `cleanup()` 清理过期
-pending 的内存与存储行。
+（只清内存，L2a/L2b 可恢复）；`cleanup()` 已提供，周期定时清理为后续接线。
 
 台账只用于诊断（`/session-debug` 暴露**长度**，不暴露具体 ID），
 并可作为「会话结束事件 → 归档钩子」桥接的数据源（§5.5）。
@@ -272,20 +273,22 @@ pending 的内存与存储行。
 - 已知限制：跨桶边界存在「换新 sid」而非严格连续——`deterministic` 解决
   多实例收敛，不承诺跨 epoch 的会话连续性（连续性是 Redis 共享表的收益）。
 
-### 5.4 命名空间归档（已实现，内核侧 gc 除外）
+### 5.4 命名空间归档（部分：路由已实现；拦截接线为后续）
 
-- `storage.archiveNamespaces`：命中命名空间（space/team/agent 规则）→
-  旧会话不恢复、不注入（`isNamespaceArchived`）；
+- `storage.archiveNamespaces`：配置解析与判定函数 `isNamespaceArchived`
+  已提供，但当前**未接入**会话恢复/注入路径（命中规则暂不拦截，
+  接线为后续项）；
 - `routes/session-force-archive.ts`：从 SessionStore 取 sessionInfo →
-  调内核 forceArchive（skill 资产归档）；
+  调内核 forceArchive（skill 资产归档，已实现）；
 - sweeper 按 spaceId 清理会话键；`session-refresh` / `session-task` 路由用
-  `buildStoreSessionKey` 定位会话（含 workbuddy 别名）。
+  `buildStoreSessionKey` 定位会话（含 workbuddy 别名，已实现）。
 
 ### 5.5 待办：TTL 到期「归档」而非「消失」
 
-prune 定时器没有 handler 上下文（tdai client / sessionInfo），当前无法在
-会话到期时直接触发 archive hooks。台账（§5.2）已为「会话结束事件 → 归档层
-桥接」备好数据；把过期事件桥接到归档属于后续课题，不在本分支做半截接线。
+当前没有周期定时器把过期事件桥接到归档（prune 只在 request 路径惰性触发，
+且没有 handler 上下文：tdai client / sessionInfo）。台账（§5.2）已为
+「会话结束事件 → 归档层桥接」备好数据；周期 prune 与过期事件桥接都属于
+后续课题，不在本分支做半截接线。
 
 ## 6. 可观测与告警（已实现）
 
@@ -371,7 +374,7 @@ L2a（SQLite/Redis/ProxyStorage 多节点读写）+ L2b binding，
 - `recentExpiredSessions` 只暴露长度给诊断端点，不暴露具体 sid。
 - `threadIsolation` 只做进程内 L1/状态机键与遥测分组，不承诺持久隔离（§2.2）；
 - initialized 持久行/绑定长期不清理是存储治理课题（§5.5），
-  L1 内存侧已由 LRU + 周期 cleanup 保持有界。
+  L1 内存侧已由 LRU（set/容量路径）保持有界。
 
 ## 8. 落地状态清单
 
@@ -387,31 +390,34 @@ L2a（SQLite/Redis/ProxyStorage 多节点读写）+ L2b binding，
 | store 恢复层归属校验（跨 user/space 视为新会话） | 已实现 | `store.ts::l1OwnedBy` / `getOrRecover` |
 | archive 写侧 fence（L0 前候选键校验 + 计数） | 待办（后续课题） | `common/session-stats.ts` 已预留计数；fence 未接线 |
 | archive fence：L1 miss → binding repo 补查 + fenceMiss/fenceCoverage | 待办（后续课题） | 计数口径已预留 |
-| SessionStore L1 有界 LRU + 周期清理 | 已实现 | `session/store.ts::trimL1/cleanup`、`index.ts` |
+| SessionStore L1 有界 LRU | 已实现 | `session/store.ts::trimL1`（内部 set/容量路径触发）；周期清理为后续接线 |
 | 管理端点鉴权（/session-debug、/v3/session/*） | 已实现 | `routes/admin-auth.ts`、`server.ts` |
 | autoGenerate:false 客户端回传 auto-* 也过签名 | 已实现 | `stages/session.ts` |
-| 会话结束台账（有界 512）+ prune/expire/evict 分类 | 已实现 | `auto-session.ts`、`index.ts` |
+| 会话结束台账（有界 512）+ expire/evict 分类 | 已实现 | `auto-session.ts`（prune 函数已提供，定时触发为后续接线） |
 | 决策计数分解 + prometheus + /session-debug + 高基数治理 | 已实现 | `common/session-stats.ts`、`server.ts` |
 | 遥测键对齐（model-intent/init 日志带 thread 后缀） | 已实现 | handler/anthropic telemetry 调用点 |
 | bypass 自愈（header 预选可解析 → 重绑） | 已实现 | `session/codebuddy/init.ts`（CC 同款 preset 路径） |
-| 命名空间归档拦截 + force-archive/refresh/task 路由 | 已实现 | `archiveNamespaces`、`routes/session-*.ts` |
-| bypass 读写策略 / 审计事件线 / grants 拉取 + TTL | 已实现 | `extraction-gate.ts`、`audit.ts`、`tdai/grants-fetcher.ts` |
+| force-archive / refresh / task 路由 | 已实现 | `routes/session-*.ts` |
+| 命名空间归档拦截（`isNamespaceArchived` 接入恢复/注入路径） | 待办（后续课题） | `archiveNamespaces` 配置与判定函数已就绪，未接线 |
+| bypass 读写策略 / 审计事件线 / grants 拉取 + TTL | 待办（后续课题） | 本 PR 未新增；`audit.ts`（仅 L0 write）随 #1270 提供；`tdai/grants-fetcher.ts` 尚未落地 |
 | 跨客户端续接的归属锁判定（记忆续接、历史隔离） | 部分 | 归属/space 校验已就绪；整体 E2E 与记忆侧迁移待专项验证 |
 | TTL 到期 → 归档事件桥接 | 待办（后续课题） | 台账已备数据（§5.5） |
 | Redis 共享 auto-session（跨 pod 严格连续 + 台账共享） | 待办（独立 PR） | §7.3 |
 | 存储物理隔离（SQLite 按 space 分文件 / Postgres RLS / 向量分 collection） | 待办 | 当前 SQLite 单文件 + 应用层键隔离为过渡态 |
-| 审计扩展（search/read/query 事件、Opik audit_log） | 待办 | `audit.memory-access` 已有 recall/write |
-| grant 撤销即时推送 | 待办 | 当前 60s TTL 轮询拉取 |
-| 内核记忆 gc / 命名空间级删除 | 待办（内核侧） | Proxy 侧 archive 拦截已实现 |
+| 审计扩展（search/read/query 事件、Opik audit_log） | 待办 | `audit.memory-access` 当前仅有 L0 write（#1270）；recall/search/read 未接线 |
+| grant 撤销即时推送 | 待办 | grants 拉取尚未实现（mock-grants-server 为预留 QA 脚本） |
+| 内核记忆 gc / 命名空间级删除 | 待办（内核侧） | Proxy 侧 archive 配置/路由已就绪；拦截接线为后续 |
 
 ## 9. 验证方法
 
 **自动化**（全部在仓库内跑通）：
 
 ```bash
-npm test          # 274/274：stages-session / stages-forward / stages-archive /
-                  # stages-obs / session-isolation / session-store-fence /
-                  # routes-session-force-archive / routes-session-refresh-task 等
+npm test          # vitest：session-acceptance / session-isolation / stages-session /
+                  # session-store-fence / session-turn / session-form-artifacts /
+                  # routes-session-force-archive / routes-session-refresh-task /
+                  # server-session-debug / context-injector-team
+                  # （10 个测试文件；计数口径见 docs/session-policy.md）
 npx tsc --noEmit  # 0 错误
 ```
 

@@ -1,6 +1,7 @@
-// grant 控制面演示端点：验证 Proxy 的 grants-fetcher（TTL 拉取）闭环。
-// 用法：node tools-2026/mock-grants-server.mjs [port=8180]
-// 然后 .env 配 tdai.grantsEndpoint=http://127.0.0.1:8180/grants，重启 proxy，
+// grant 控制面演示端点（预留）：待 tdai/grants-fetcher（TTL 拉取）落地后，
+// 用于本地验证闭环。当前版本尚未实现 grants-fetcher，此脚本仅作 mock 服务端。
+// 用法：node scripts/qa/mock-grants-server.mjs [port=8180]
+// 落地后：.env 配 tdai.grantsEndpoint=http://127.0.0.1:8180/grants，重启 proxy，
 // 观察日志 grants.refreshed（每 60s 拉一次，或首拉立即）。
 import http from "node:http";
 
