@@ -35,11 +35,11 @@ export const ASSET_CONFIRM_NO = "否，本次不关联";
 export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
 
 /**
- * 附在每步 question 文末的通用备注：告诉用户"选择跳过 = 本次 session init 跳过、不注入任何团队资产"。
+ * 附在每步 question 文末的通用备注。
  * AskUserQuestion 会给用户一个 "Other" 输入框，回复"跳过 / skip / 不关联" 就
  * 走 SKIP_RE bypass；文案与 claude-code/codex/codebuddy/dsh 五端统一。
  */
-const SKIP_HINT = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产）';
+const SKIP_HINT = '（请选择最匹配的选项，当前暂不支持自定义输入。若选择跳过，本次 Session 将不注入团队资产）';
 
 const CC_MAX_OPTIONS = CC_MAX_OPTIONS_SHARED;
 
@@ -102,19 +102,33 @@ function buildAskUserQuestionArgs(data: FormData): { questions: WBAskQuestion[] 
   }
 
   if (stage === "team") {
-    const teamOpts = teams.slice(0, CC_MAX_OPTIONS).map((t) => ({
+    // 分页对齐 agent/task —— 老实现 `slice(0, 4)` 硬截断，用户 team 数 ≥5 时
+    // 后续 team 静默消失且没有翻页入口。2026-09-03 修复。
+    const pageIndex = Math.max(0, data.pageIndex ?? 0);
+    const page = computePagination(teams.length, pageIndex);
+    const slice = teams.slice(page.start, page.end);
+    const teamOpts: Array<{ label: string; description: string }> = slice.map((t) => ({
       label: `${t.team_name} (${t.team_id.slice(-8)})`,
       description: "",
     }));
+
+    if (!page.isLastPage) {
+      const remaining = page.total - page.end;
+      teamOpts.push({ label: MORE_LABEL, description: `查看下一批（还剩 ${remaining} 个 Team）` });
+    }
+
     if (teamOpts.length < 2) {
       throw new Error(
-        `[wb form] team stage requires ≥2 teams (got ${teamOpts.length}). ` +
-          `Caller must auto-select when teams.length === 1.`,
+        `[wb form] team page ${pageIndex} has ${teamOpts.length} option(s); ` +
+          `team stage requires ≥2 teams — caller must auto-select when teams.length === 1, ` +
+          `and pagination.ts should have avoided a solo last page.`,
       );
     }
+
+    const pageSuffix = page.totalPages > 1 ? `（第 ${pageIndex + 1}/${page.totalPages} 页）` : "";
     questions.push({
-      question: titlePrefix + "请选择本次会话所属的 Team：" + SKIP_HINT,
-      header: "Team",
+      question: titlePrefix + `请选择本次会话所属的 Team${pageSuffix}：` + SKIP_HINT,
+      header: page.totalPages > 1 ? `Team ${pageIndex + 1}/${page.totalPages}`.slice(0, 12) : "Team",
       options: teamOpts.slice(0, CC_MAX_OPTIONS),
       multiSelect: false,
     });

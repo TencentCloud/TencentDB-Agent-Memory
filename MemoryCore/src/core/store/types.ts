@@ -256,6 +256,12 @@ export interface StoreCapabilities {
   nativeHybridSearch: boolean;
   /** Whether the store supports sparse vectors (BM25 encoding). */
   sparseVectors: boolean;
+  /**
+   * Whether the store serves L2/L3 profile rows, i.e. satisfies
+   * {@link IProfileRowStore}. Required to back a row-view filesystem (`rowfs`).
+   * SQLite reports `false`.
+   */
+  profileRows: boolean;
 }
 
 // ============================
@@ -286,13 +292,46 @@ export interface ProfileSyncRecord extends ProfileRecord {
   baselineVersion?: number;
 }
 
-export interface ProfileCountFilter {
+/**
+ * Filter for profile row queries — shared by `countProfiles` and `queryProfiles`.
+ *
+ * `pathPrefix` matches `filename` by string prefix (Mongo `$regex ^prefix`,
+ * TCVDB `startsWith`), which is what `IStorageBackend.listObjects` needs.
+ */
+export interface ProfileFilter {
   type?: ProfileRecord["type"];
   teamId?: string;
   userId?: string;
   agentId?: string;
   pathPrefix?: string;
 }
+
+/** @deprecated Use {@link ProfileFilter}. Kept so existing call sites keep compiling. */
+export type ProfileCountFilter = ProfileFilter;
+
+/**
+ * The profile-row surface required to back a row-view filesystem
+ * (`ProfileRowStorageBackend`).
+ *
+ * On {@link IMemoryStore} these methods are all optional, because SQLite does not
+ * implement them. This interface restates them as **required**, so that anything
+ * needing a row-view filesystem can demand `IMemoryStore & IProfileRowStore` and
+ * let `tsc` reject a store that cannot serve it.
+ *
+ * Use {@link isProfileRowStore} (store/profile-row-store.ts) to narrow at runtime.
+ */
+export interface IProfileRowStore {
+  pullProfiles(): Promise<ProfileRecord[]>;
+  queryProfilesByIds(ids: string[]): Promise<ProfileRecord[]>;
+  /** Query rows by scope/type/path-prefix. Returns rows rather than a count. */
+  queryProfiles(filter?: ProfileFilter): Promise<ProfileRecord[]>;
+  countProfiles(filter?: ProfileFilter): Promise<number>;
+  syncProfiles(records: ProfileSyncRecord[]): Promise<void>;
+  deleteProfiles(recordIds: string[]): Promise<void>;
+}
+
+/** An {@link IMemoryStore} that is statically known to serve profile rows. */
+export type ProfileRowCapableStore = IMemoryStore & IProfileRowStore;
 
 // ============================
 // v2 API Paginated Query Types
@@ -597,6 +636,16 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   upsertL0(record: L0Record, embedding?: Float32Array): MaybePromise<boolean>;
   /** Update only the vector embedding for an existing L0 record (sqlite background path). */
   updateL0Embedding?(recordId: string, embedding: Float32Array): MaybePromise<boolean>;
+  /**
+   * Insert a whole `/conversation/add` group in one batch (optional capability).
+   *
+   * Callers prefer this over the per-record `upsertL0` loop when present AND no
+   * per-message embedding is required. Records carry freshly-generated ids, so
+   * an `insertMany`-style implementation is correct; a duplicate id must surface
+   * as an error rather than silently overwrite. Returns the number inserted.
+   * See docs/design/mongodb/phases/phase-1-db/2026-08-24-l0-write-batch-and-id.md.
+   */
+  insertL0Batch?(records: L0Record[]): MaybePromise<number>;
   deleteL0(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL0Expired(cutoffIso: string): MaybePromise<number>;
 
@@ -626,7 +675,12 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * 不支持的 store 返回 undefined → 调用方 fallback 到 pullProfiles()。
    */
   queryProfilesByIds?(ids: string[]): Promise<ProfileRecord[]>;
-  countProfiles?(filter?: ProfileCountFilter): Promise<number>;
+  /**
+   * 按 scope / type / filename 前缀查询 profile 行（返回行，而非 count）。
+   * 支持行视图文件系统的 `listObjects`，避免退化成全量 `pullProfiles()`。
+   */
+  queryProfiles?(filter?: ProfileFilter): Promise<ProfileRecord[]>;
+  countProfiles?(filter?: ProfileFilter): Promise<number>;
   syncProfiles?(records: ProfileSyncRecord[]): Promise<void>;
   deleteProfiles?(recordIds: string[]): Promise<void>;
 

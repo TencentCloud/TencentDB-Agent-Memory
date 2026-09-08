@@ -180,7 +180,7 @@ export interface TcvdbConfig {
 }
 
 /** Storage backend type. */
-export type StoreBackend = "sqlite" | "tcvdb";
+export type StoreBackend = "sqlite" | "tcvdb" | "mongodb";
 
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
@@ -496,7 +496,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Store backend ---
   const storeBackendRaw = str(c, "storeBackend") ?? "sqlite";
-  const storeBackend: StoreBackend = storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
+  const storeBackend: StoreBackend =
+    storeBackendRaw === "tcvdb" ? "tcvdb"
+    : storeBackendRaw === "mongodb" ? "mongodb"
+    : "sqlite";
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");

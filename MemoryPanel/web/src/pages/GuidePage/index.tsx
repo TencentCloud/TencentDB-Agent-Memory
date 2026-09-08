@@ -18,9 +18,11 @@ import { resetOnboarding } from '@/layouts/OnboardingGuide';
 import { metaInstancesApi } from '@/lib/teamApi';
 import { getPanelSession } from '@/lib/panelSession';
 import { tea } from '@/lib/tea-bridge';
+import { CopyButton } from './CopyButton';
+import { MemCommands } from './MemCommands';
 import './style.css';
 
-type MainTab = 'quick' | 'practice';
+type MainTab = 'quick' | 'practice' | 'commands';
 type QuickTab = 'download' | 'ide' | 'history';
 type PracticeId = 'team' | 'personal';
 type ManualIdeId = 'claude' | 'codebuddy' | 'codex' | 'workbuddy' | 'dsh' | 'hermes' | 'openclaw';
@@ -260,25 +262,6 @@ const PRACTICE_STEPS: Record<PracticeId, PracticeStep[]> = {
   ],
 };
 
-function CopyButton({ value, label }: { value: string; label?: string }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      tea.notify.error(t('guide.copyFailed'));
-    }
-  };
-  return (
-    <button type="button" className="guide-copy" onClick={copy}>
-      {copied ? t('guide.copied') : (label ?? t('guide.copy'))}
-    </button>
-  );
-}
-
 export function GuidePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -379,6 +362,14 @@ export function GuidePage() {
         >
           <b>{t('guide.practice.title')}</b>
           <small>{t('guide.practice.sub')}</small>
+        </button>
+        <button
+          type="button"
+          className={mainTab === 'commands' ? 'active' : ''}
+          onClick={() => setMainTab('commands')}
+        >
+          <b>{t('guide.mem.title')}</b>
+          <small>{t('guide.mem.sub')}</small>
         </button>
       </nav>
 
@@ -610,6 +601,15 @@ export function GuidePage() {
                 {t('guide.quick.history.sources', { sources: HISTORY_SOURCES })}
                 {t('guide.quick.history.dupHint')}
               </p>
+
+              {/* 配置成功验证：回到 IDE 发新对话，看到「关联团队资产」即代表接入成功 */}
+              <div className="guide-verify">
+                <div className="guide-verify-title">
+                  <span className="guide-verify-badge">✓</span>
+                  {t('guide.verify.title')}
+                </div>
+                <p className="guide-verify-desc">{t('guide.verify.desc')}</p>
+              </div>
             </div>
           )}
 
@@ -649,7 +649,7 @@ export function GuidePage() {
             )}
           </nav>
         </section>
-      ) : (
+      ) : mainTab === 'practice' ? (
         <section className="guide-surface guide-practice">
           <div className="guide-practice-tabs">
             <button
@@ -796,6 +796,8 @@ export function GuidePage() {
             </div>
           </div>
         </section>
+      ) : (
+        <MemCommands />
       )}
 
       {/* 底部：前端引导回放 */}

@@ -28,7 +28,7 @@ import { getSessionStore } from "../session/store.js";
 import type { SessionInitState, SessionInfo } from "../session/types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { TaskEntity } from "../meta/client.js";
-import { generateTaskDraft } from "../mem-command/task-draft-generator.js";
+import { generateTaskDraft, type TaskDraftConfig } from "../mem-command/task-draft-generator.js";
 import {
   clearPending,
   getPending,
@@ -40,7 +40,25 @@ import {
 
 // ── 输入 / 输出类型 ────────────────────────────────────────────────────────
 
-export interface CreateTaskFromSessionInput {
+/**
+ * taskDraft LLM 主模型跟随（方案 D）：客户当次请求实际使用的模型 / 上游 / 密钥。
+ * handler 已按 per-agent 规则解析好，session-task 只做透传给 task-draft-generator。
+ *
+ * 三字段任意一个缺失 → resolveTaskDraftConfig 会返 "not configured"，
+ * 命令层拼错误文案给用户（不做兜底，也不再依赖 config.memCommand.taskDraft）。
+ */
+export interface TaskDraftUpstream {
+  /** 客户端当次请求的模型（body.model 归一化后的真实 model_id）。 */
+  model?: string;
+  /** per-agent 解析后的上游 base url（不含具体 endpoint）。 */
+  upstreamUrl?: string;
+  /** 上游 API 家族，决定 generator 请求形状。 */
+  protocol?: "openai" | "anthropic" | "responses";
+  /** 转发时用的 apiKey（客户端透传的 user key）。 */
+  apiKey?: string;
+}
+
+export interface CreateTaskFromSessionInput extends TaskDraftUpstream {
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -57,7 +75,7 @@ export interface CreateTaskFromSessionInput {
   lockedTitle?: string;
 }
 
-export interface UpdateTaskFromSessionInput {
+export interface UpdateTaskFromSessionInput extends TaskDraftUpstream {
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -166,7 +184,7 @@ function resolveSession(
     return { error: "session missing team_id/user_id (initialization incomplete)" };
   }
 
-  // "本次不关联任务" 走 config.sessionInit.defaultTaskId（虚拟值，kernel 不存在），
+  // "暂时跳过" 走 config.sessionInit.defaultTaskId（虚拟值，kernel 不存在），
   // 视为**未绑真实 task** —— 允许 create-task，禁止 update-task（后者会用 no-task 分支返错）。
   const rawTaskId = sessionInfo.task_id;
   const defaultTaskId = config.sessionInit?.defaultTaskId;
@@ -178,12 +196,34 @@ function resolveSession(
 
 // ── 内部：检查并取 taskDraft 配置 ─────────────────────────────────────────
 
-function resolveTaskDraftConfig(config: ProxyConfig) {
-  const draft = config.memCommand?.taskDraft;
-  if (!draft || !draft.enabled) {
-    return { error: "task_draft is not configured (see config.memCommand.taskDraft)" } as const;
+const DEFAULT_TASK_DRAFT_TIMEOUT_MS = 20000;
+
+/**
+ * 方案 D：taskDraft LLM 完全跟随客户端当次请求。
+ * 只接收 TaskDraftUpstream（model / upstreamUrl / protocol / apiKey），
+ * 任一必需字段缺失 → 返 "not configured"，不再读 config.memCommand.taskDraft。
+ */
+function resolveTaskDraftConfig(
+  upstream: TaskDraftUpstream,
+): { cfg: TaskDraftConfig } | { error: string } {
+  const { model, upstreamUrl, protocol, apiKey } = upstream;
+  if (!model || !upstreamUrl || !apiKey) {
+    return {
+      error:
+        "task_draft is not configured (missing request model / upstream url / apiKey). " +
+        "This should not happen for a normal client turn — please check handler wiring.",
+    };
   }
-  return { cfg: draft } as const;
+  return {
+    cfg: {
+      enabled: true,
+      model,
+      url: upstreamUrl,
+      apiKey,
+      timeoutMs: DEFAULT_TASK_DRAFT_TIMEOUT_MS,
+      ...(protocol ? { protocol } : {}),
+    },
+  };
 }
 
 function getClientFromResolved(resolved: ResolvedSession, config: ProxyConfig, fallbackSpaceId: string) {
@@ -257,7 +297,7 @@ export async function createTaskFromSession(
   const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
   if ("error" in resolved) return { success: false, error: resolved.error };
 
-  const draftCfg = resolveTaskDraftConfig(input.config);
+  const draftCfg = resolveTaskDraftConfig(input);
   if ("error" in draftCfg) return { success: false, error: draftCfg.error };
 
   // Step 1: LLM 生成草稿（lockedTitle 情况下只出 description）
@@ -388,14 +428,14 @@ export async function updateTaskFromSession(
     return {
       success: false,
       error:
-        "no task bound to this session (session is in \"本次不关联任务\" mode or task_id missing); " +
+        "no task bound to this session (session is in \"暂时跳过\" mode or task_id missing); " +
         "use mem:create-task to create and bind a new task first",
     };
   }
 
   // 无参数分支才需要 LLM 配置
   if (!input.directDescription) {
-    const draftCfg = resolveTaskDraftConfig(input.config);
+    const draftCfg = resolveTaskDraftConfig(input);
     if ("error" in draftCfg) return { success: false, error: draftCfg.error };
   }
 
@@ -426,7 +466,7 @@ export async function updateTaskFromSession(
     // 有参数：直接替换，不调 LLM，也不出 status 建议
     newDescription = input.directDescription;
   } else {
-    const draftCfg = resolveTaskDraftConfig(input.config);
+    const draftCfg = resolveTaskDraftConfig(input);
     if ("error" in draftCfg) return { success: false, error: draftCfg.error };
 
     const draft = await generateTaskDraft(draftCfg.cfg, {
