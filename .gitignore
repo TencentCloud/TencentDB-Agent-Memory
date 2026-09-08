@@ -139,3 +139,8 @@ MemoryCore/scripts/bench-l0-mongo/reports/
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
 z_config/
+
+# Optional feedback example outputs contain full source/history and SQLite state.
+/feedback-example-run/
+/feedback-optimizer-run/
+/examples/feedback-selfopt/new-test-evidence/
