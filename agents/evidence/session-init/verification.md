@@ -5,9 +5,9 @@
 
 ## 交互界面
 
-![Session init CLI 的真实终端录制渲染](terminal.png)
+![CLI 交互效果](terminal.png)
 
-这是通过 `script` 记录真实 PTY 操作后渲染的图片，**不是桌面截屏**。终端应用的截屏访问不可用。对应[文本记录](terminal.txt)去除了 ANSI 控制序列，展示方向键选择团队、Agent、不关联任务，最后选择取消。以下模型实测则使用同一 CLI 的 `--plain` 编号模式并确认启动。
+[交互记录](terminal.txt)
 
 ## 真实 Claude Code 会话
 
