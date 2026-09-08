@@ -9,15 +9,30 @@ export type { SubView, ViewMode, StatusFilter, ScopeTab } from '@/lib/asset-comm
 export { formatShortTime } from '@/lib/asset-common';
 
 /**
- * 校验是否为合法的 HTTP(S) Git 仓库地址（正则匹配）。
- * 要求：http/https 协议、host 含点（真实域名）、路径不含空格且以 .git 结尾。
- * 用正则而非 URL 解析 —— new URL() 会接受路径中的空格（如 /a b/repo.git），
- * 且不强制 .git 后缀，均不符合 code graph 注册的严格约束。
- * SSH（git@...）不在此判定为 true —— 由调用方单独提示"暂不支持 SSH"。
+ * Code Graph 注册入口的轻量校验。
+ *
+ * 后端 SourceFetcherRegistry 才是最终校验边界；UI 不再要求 URL 必须以 .git 结尾。
+ * 当前允许：
+ *   - HTTPS Git 地址（是否带 .git 均可）；
+ *   - /workspace/repos 下的容器本地路径；
+ *   - file:///workspace/repos/... 路径。
+ *
+ * 保留非空/无空格检查，SSH 仍由调用方提示当前不支持。
+ * 函数名暂保持不变以避免无意义扩大改动面。
  */
-const GIT_HTTP_URL_RE = /^https?:\/\/[^\s/]+\.[^\s/]+\/[^\s]+\.git$/i;
 export function isValidGitHttpUrl(raw: string): boolean {
-  return GIT_HTTP_URL_RE.test(raw.trim());
+  const value = raw.trim();
+  if (!value || /\s/.test(value)) return false;
+
+  if (value === '/workspace/repos' || value.startsWith('/workspace/repos/')) return true;
+  if (
+    value === 'file:///workspace/repos' ||
+    value.startsWith('file:///workspace/repos/')
+  ) {
+    return true;
+  }
+
+  return /^https:\/\/[^\s]+$/i.test(value);
 }
 
 /**
