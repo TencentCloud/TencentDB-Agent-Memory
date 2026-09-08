@@ -3,6 +3,8 @@
 > agentSource: `claude-code` | 协议: Anthropic Messages API | Handler: `anthropicHandler.ts`
 >
 > 本地历史导入 Memory Hub：见 [资产导入手册](./asset-import.md)。
+>
+> 已配置 Proxy 后，可运行 `node agents/session-init.mjs`，在终端选择团队、Agent 和可选任务并启动新会话。参见 [Session init CLI](../session-init.md)。
 
 ---
 
