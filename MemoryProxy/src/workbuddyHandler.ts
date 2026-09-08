@@ -1491,17 +1491,17 @@ export async function handleWorkbuddyEndpoint(
         // assistantText 用 memResult.messageText (proxy 给用户的命令响应), 不是
         // userText (用户输入的命令) —— L0 write 把"用户问了什么 / 系统答了什么"
         // 配对写入, 用 userText 当 assistant 会颠倒语义。
-  const memArchiveCtx = buildWorkbuddyArchiveCtx({
-    config,
-    sessionInfo,
-    injectionSkipped,
-    input,
-    sessionKey,
-    userId: userId || "",
-    callerUserKey,
-    assetCapabilities,
-    traceId,
-  });
+        const memArchiveCtx = buildWorkbuddyArchiveCtx({
+          config,
+          sessionInfo,
+          injectionSkipped,
+          input,
+          sessionKey,
+          userId: userId || "",
+          callerUserKey,
+          assetCapabilities,
+          traceId,
+        });
         if (memArchiveCtx) {
           void triggerWorkbuddyArchiveHooks(memArchiveCtx, memResult.messageText ?? "").catch((err: unknown) => {
             pipe.info(

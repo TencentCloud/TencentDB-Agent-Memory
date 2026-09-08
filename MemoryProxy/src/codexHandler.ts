@@ -1308,7 +1308,9 @@ async function forwardToUpstream(
     agentUpstreamFlags.chatCompletions === true ||
     agentUpstreamFlags.responsesToAnthropic === true;
   // stream:false 时上游可能返回非 SSE 的 Responses JSON：主对话仍要上报 Opik。
-  if (!responsesRawIsSse && needTap && upstreamResp.body && !codexConvertingUpstream) {
+  // 非 SSE 2xx/非转换直连路径：无论是否有 lf/archiveCtx，都要完成 trace
+  // 上报并原样回传，避免 aux/bypass 等场景只 create trace 却永远不 close。
+  if (!responsesRawIsSse && upstreamResp.body && !codexConvertingUpstream) {
     const rawJson = await upstreamResp.text();
     try {
       const json = JSON.parse(rawJson) as Record<string, unknown>;
