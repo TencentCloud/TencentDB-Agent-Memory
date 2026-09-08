@@ -5,7 +5,58 @@
 
 ## 交互界面
 
-![CLI 交互效果](terminal.png)
+按操作顺序展示各阶段的当前选择区域。方向键切换选项，Enter 确认，Esc 取消。
+
+### 1. 选择团队
+
+```text
+  Agent Memory · 开始会话
+  Claude Code · 127.0.0.1:8097
+  仅影响本次新会话，不修改全局配置。
+
+  选择团队
+  ↑↓ 选择 · Enter 确认 · Esc 取消
+    › default-team  (1/1)
+```
+
+### 2. 选择 Agent
+
+```text
+  选择 Agent
+  ↑↓ 选择 · Enter 确认 · Esc 取消
+    › TencentDB Agent Memory 工程优化调研 Agent  (1/2)
+```
+
+### 3. 关联任务（可选）
+
+默认不关联任务；按 ↓ 可切换到已有任务。
+
+```text
+  关联任务（可选）
+  ↑↓ 选择 · Enter 确认 · Esc 取消
+    › 不关联任务  (1/2)
+```
+
+### 4. 确认并启动
+
+```text
+  团队    default-team
+  Agent   TencentDB Agent Memory 工程优化调研 Agent
+  任务    不关联任务
+  模型    agnes-2.5-flash
+
+  准备就绪，启动后由 Proxy 校验并完成绑定
+  ↑↓ 选择 · Enter 确认 · Esc 取消
+    › 启动 Claude Code  (1/2)
+```
+
+确认后进入 Claude Code；也可以按 ↓ 选择取消。
+
+```text
+  准备就绪，启动后由 Proxy 校验并完成绑定
+  ↑↓ 选择 · Enter 确认 · Esc 取消
+    › 取消  (2/2)
+```
 
 [交互记录](terminal.txt)
 

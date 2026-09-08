@@ -27,4 +27,4 @@ node --test agents/session-init.test.mjs
 
 ## 验证边界
 
-CLI 完成的是预选和启动；实际权限、身份绑定和注入由现有服务负责。模型能回答不等于已使用记忆，请结合会话日志和实际检索结果验证。真实客户端记录及界面图见[验证附件](evidence/session-init/verification.md)。
+CLI 完成的是预选和启动；实际权限、身份绑定和注入由现有服务负责。模型能回答不等于已使用记忆，请结合会话日志和实际检索结果验证。真实客户端记录及分阶段界面见[验证附件](evidence/session-init/verification.md)。
