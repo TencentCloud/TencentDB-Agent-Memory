@@ -5,15 +5,15 @@ import simpleGit from "simple-git";
 import type { FetchResult, ISourceFetcher, SourceType } from "./types.js";
 
 /**
- * LocalSourceFetcher — 从挂载进容器的本地仓库同步源码到 Knowledge 管理的工作目录。
+ * LocalSourceFetcher — 直接使用挂载进容器的本地仓库，不复制源码。
  *
  * 约定：宿主机 /home/godkill/code 挂载到容器 /workspace/repos。
  * sourceUrl 仅允许指向 /workspace/repos 下的目录。
  *
- * 注意：CodeGraph worker 后续始终对传入的 localPath 执行 indexProject/openIndex，
- * 因此这里不能直接把 sourceUrl 作为 FetchResult.localPath 返回；必须把源码准备到
- * localPath。fresh fetch 会清空历史失败残留；sync 则保留 localPath/.codegraph，
- * 避免删除正在复用的 SQLite/WAL 索引。
+ * Knowledge/CodeGraph 的现有 worker 始终使用其托管目录 localPath 进行
+ * indexProject/openIndex/restart recovery。因此本地源模式把这个托管目录本身
+ * 建成指向 sourceUrl 的目录软链：既保持 worker 原有路径契约，又做到零复制。
+ * CodeGraph 的 .codegraph 索引因此会落在用户仓库目录中。
  */
 export class LocalSourceFetcher implements ISourceFetcher {
   readonly supportedType: SourceType = "local";
@@ -40,49 +40,21 @@ export class LocalSourceFetcher implements ISourceFetcher {
   }
 
   async fetch(sourceUrl: string, _branch: string, localPath: string): Promise<FetchResult> {
-    this.validate(sourceUrl);
-    const sourcePath = fs.realpathSync(this.normalizePath(sourceUrl));
-    const targetPath = path.resolve(localPath);
-
-    if (sourcePath === targetPath || targetPath.startsWith(sourcePath + path.sep)) {
-      throw new Error(`managed localPath must not overlap source repo: ${targetPath}`);
-    }
-
-    // fresh build：彻底清掉之前失败任务可能遗留的 .codegraph WAL/SHM/DB，
-    // 避免下一次 indexProject(dir) 继续打开旧索引导致 database is locked。
-    await fs.promises.rm(targetPath, { recursive: true, force: true });
-    await fs.promises.mkdir(targetPath, { recursive: true });
-    await this.copyWorkspace(sourcePath, targetPath);
-
-    return {
-      localPath: targetPath,
-      version: await this.headCommit(sourcePath),
-      sourceType: "local",
-    };
+    return this.prepare(sourceUrl, localPath);
   }
 
   async sync(sourceUrl: string, _branch: string, localPath: string): Promise<FetchResult> {
+    return this.prepare(sourceUrl, localPath);
+  }
+
+  private async prepare(sourceUrl: string, localPath: string): Promise<FetchResult> {
     this.validate(sourceUrl);
+
     const sourcePath = fs.realpathSync(this.normalizePath(sourceUrl));
     const targetPath = path.resolve(localPath);
+    this.assertNoOverlap(sourcePath, targetPath);
 
-    if (sourcePath === targetPath || targetPath.startsWith(sourcePath + path.sep)) {
-      throw new Error(`managed localPath must not overlap source repo: ${targetPath}`);
-    }
-
-    await fs.promises.mkdir(targetPath, { recursive: true });
-
-    // 增量同步：镜像当前本地工作区，但保留 CodeGraph 的索引目录。
-    // worker 随后会 openIndex(dir)/syncIndex(instance)，因此不能删除 .codegraph。
-    for (const entry of await fs.promises.readdir(targetPath, { withFileTypes: true })) {
-      if (entry.name === ".codegraph") continue;
-      await fs.promises.rm(path.join(targetPath, entry.name), {
-        recursive: true,
-        force: true,
-      });
-    }
-
-    await this.copyWorkspace(sourcePath, targetPath);
+    await this.ensureManagedSymlink(sourcePath, targetPath);
 
     return {
       localPath: targetPath,
@@ -91,21 +63,54 @@ export class LocalSourceFetcher implements ISourceFetcher {
     };
   }
 
-  private async copyWorkspace(sourcePath: string, targetPath: string): Promise<void> {
-    await fs.promises.cp(sourcePath, targetPath, {
-      recursive: true,
-      force: true,
-      preserveTimestamps: true,
-      filter: (src) => {
-        const relative = path.relative(sourcePath, src);
-        if (!relative) return true;
+  private assertNoOverlap(sourcePath: string, targetPath: string): void {
+    if (
+      sourcePath === targetPath ||
+      targetPath.startsWith(sourcePath + path.sep) ||
+      sourcePath.startsWith(targetPath + path.sep)
+    ) {
+      throw new Error(`managed localPath must not overlap source repo: ${targetPath}`);
+    }
+  }
 
-        // 保留 .git，确保后续 worker 能识别为 existing repo 并进入 sync 流程。
-        // node_modules 没有索引价值且体积巨大；源仓库的 .codegraph 绝不能复制。
-        const segments = relative.split(path.sep);
-        return !segments.includes("node_modules") && !segments.includes(".codegraph");
-      },
-    });
+  /**
+   * 保证 Knowledge 托管目录是指向本地仓库的软链。
+   *
+   * - 已经是正确软链：直接复用；
+   * - 是旧版本遗留的真实目录（包含复制出的源码/.codegraph）：安全删除后换成软链；
+   * - 是错误/断裂软链：unlink 后重建。
+   *
+   * 删除 targetPath 只作用于托管目录本身；软链场景使用 unlink，绝不会递归删除源仓库。
+   */
+  private async ensureManagedSymlink(sourcePath: string, targetPath: string): Promise<void> {
+    try {
+      const stat = await fs.promises.lstat(targetPath);
+
+      if (stat.isSymbolicLink()) {
+        try {
+          if (fs.realpathSync(targetPath) === sourcePath) return;
+        } catch {
+          // broken/wrong symlink: replace below
+        }
+        await fs.promises.unlink(targetPath);
+      } else {
+        await fs.promises.rm(targetPath, { recursive: true, force: true });
+      }
+    } catch (err: unknown) {
+      if (!this.isNotFoundError(err)) throw err;
+    }
+
+    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.promises.symlink(sourcePath, targetPath, "dir");
+  }
+
+  private isNotFoundError(err: unknown): boolean {
+    return (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "ENOENT"
+    );
   }
 
   private normalizePath(sourceUrl: string): string {
