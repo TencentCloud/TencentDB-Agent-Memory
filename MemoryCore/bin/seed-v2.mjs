@@ -20,7 +20,14 @@ const srcEntry  = path.resolve(thisDir, "../scripts/seed-v2/seed-v2.ts");
 
 if (fs.existsSync(distEntry)) {
   // 预编译产物存在：直接 dynamic import
-  await import(pathToFileURL(distEntry).href);
+  const seedModule = await import(pathToFileURL(distEntry).href);
+  try {
+    await seedModule.runSeedCli(process.argv.slice(2));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`❌ ${message}`);
+    process.exitCode = 1;
+  }
 } else if (fs.existsSync(srcEntry)) {
   // 没编译过：fallback 到 tsx（开发期常见）
   const result = spawnSync(
