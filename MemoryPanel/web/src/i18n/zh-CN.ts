@@ -413,8 +413,8 @@ export const zhCN = {
   'code.detail.search.placeholder': '输入符号名（函数 / 类 / 变量），返回其所在位置…',
   'code.detail.explore': '代码探索',
   'code.detail.explore.hint':
-    '按英文符号名召回相关文件原文与调用关系。中文问题在已配置 Knowledge LLM 时会先改写成标识符再查；未配置时请直接输入类名 / 函数名。',
-  'code.detail.explore.placeholder': '英文符号名（如 SearchServiceImpl），或中文问题（需配置 LLM）…',
+    '一次返回相关文件的完整原文与调用关系，让 AI 直接拿到上下文，无需再逐个 grep / 读文件。适合"这个功能是怎么实现的"。',
+  'code.detail.explore.placeholder': '用自然语言或符号名描述要理解的功能 / 流程，返回相关文件原文…',
   'code.noAgentPlaceholder': '无可选 Agent',
   'code.allocateToAgent': '分配到 Agent',
   'code.allocate.disabled': '请先选中一条代码资产',

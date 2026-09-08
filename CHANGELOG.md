@@ -13,7 +13,7 @@
 
 ### Fixes
 
-- Code-Graph 的 explore / search 遇到中文问题且零命中时，会用已配置的 Knowledge LLM 改写成英文标识符再查一次；未配置或仍为空时给出明确提示，不再只回一句 No relevant code found。
+- Code-Graph 的 explore / search 遇到中文问题且零命中时，会用已配置的 Knowledge LLM 改写成英文标识符再查一次。
 
 ---
 

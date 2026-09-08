@@ -64,10 +64,9 @@ describe("rewriteQueryToIdentifiers", () => {
 });
 
 describe("emptyHitHint", () => {
-  it("mentions the original query and the identifier limitation", () => {
+  it("mentions the original query and the rewrite tokens", () => {
     const hint = emptyHitHint("搜索的逻辑", "Search Query");
     expect(hint).toContain("搜索的逻辑");
     expect(hint).toContain("Search Query");
-    expect(hint).toContain("English identifiers");
   });
 });

@@ -62,13 +62,8 @@ export async function rewriteQueryToIdentifiers(
 }
 
 export function emptyHitHint(original: string, rewritten?: string): string {
-  const rewriteNote = rewritten
-    ? ` Tried rewritten tokens "${rewritten}".`
-    : "";
-  return (
-    `No relevant code found for "${original}".` +
-    rewriteNote +
-    " Code-graph matches English identifiers (class / function / file names)." +
-    " Ask with a symbol name, or configure Knowledge LLM so Chinese questions can be rewritten."
-  );
+  if (rewritten) {
+    return `No relevant code found for "${original}" (tried "${rewritten}").`;
+  }
+  return `No relevant code found for "${original}".`;
 }

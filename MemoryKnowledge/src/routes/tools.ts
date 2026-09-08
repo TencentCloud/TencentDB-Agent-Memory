@@ -105,7 +105,7 @@ const CODE_GRAPH_TOOLS: HttpToolDef[] = [
     description:
       "按名称快速搜索符号，只返回位置（不含源码）。想直接拿到源码/理解某块代码，请改用 explore。",
     params: {
-      query: { type: "string", required: true, description: "符号名或部分名称（如 \"auth\"、\"signIn\"、\"UserService\"）。中文问句在已配置 LLM 时会先改写成英文标识符再查。" },
+      query: { type: "string", required: true, description: "符号名或部分名称（如 \"auth\"、\"signIn\"、\"UserService\"）" },
       kind: {
         type: "string",
         required: false,
@@ -118,12 +118,12 @@ const CODE_GRAPH_TOOLS: HttpToolDef[] = [
   {
     name: "explore",
     description:
-      "【首选工具】几乎任何问题都先用它：X 怎么工作、架构、定位 bug、某处在哪。一次调用即按文件分组返回相关符号的完整源码（等价于 Read，返回的文件不要再重复读）。query 优先用英文符号/文件名；中文自然语言在已配置 LLM 时会改写成标识符再查。通常一次就够，无需再 search/get_node/读文件。",
+      "【首选工具】几乎任何问题都先用它：X 怎么工作、架构、定位 bug、某处在哪。一次调用即按文件分组返回相关符号的完整源码（等价于 Read，返回的文件不要再重复读）。query 可以是自然语言问题，也可以是一组符号/文件名。通常一次就够，无需再 search/get_node/读文件。",
     params: {
       query: {
         type: "string",
         required: true,
-        description: "英文符号/文件名（如 \"AuthService loginUser\"），或中文问题（需配置 Knowledge LLM，否则请改用符号名）。",
+        description: "要探索的符号名、文件名或简短代码词（如 \"AuthService loginUser session-manager\"）。可先用 search 找到相关名称。",
       },
       maxFiles: { type: "integer", required: false, default: 12, description: "最多返回源码的文件数（默认 12）" },
     },
