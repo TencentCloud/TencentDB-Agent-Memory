@@ -1,7 +1,7 @@
 # 会话策略：taskMissingPolicy 与 autoConversationId
 
 > 本文档对应的验收标准与自动化测试：`src/__tests__/session-acceptance.test.ts`（ACC-1..ACC-6），
-> 全量回归：`npm test`（vitest，76/76 通过；含上游基线 8 个用例与本 PR 新增 68 个）。
+> 全量回归：`npm test`（vitest，87/87 通过，10 个测试文件；不含上游已删除的旧基线用例）。
 
 ## 背景
 
