@@ -87,6 +87,13 @@ export const WHITELIST_ENDPOINTS: readonly WhitelistEndpoint[] = [
     supportsStream: false,
     isPrimary: false,
   },
+  {
+    pathSuffix: "/v1/models",
+    upstreamEndpoint: "/models",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
   // ── Codex Responses API 端点（由 codexHandler 处理）──────────────
   // 主端点：见 codexHandler.ts；上游拼接靠这里防止 joinUrl 走 fallback
   // 兜底到 /chat/completions（错误协议）。
@@ -169,10 +176,20 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  * lookahead 允许 `/v1/`、`/responses`、`/responses/`、`/memories/`、`/realtime/`
  * 后紧邻，其中 `/v1/` 必须带尾斜杠避免误伤未来出现的 `/v1foo` 之类；responses
  * 等 codex 端点允许尾斜杠可选（如 `/responses` 是完整路径）。
- * 白名单入口 `/v1/messages`、`/responses` 自身不会被误剥（因为它们不匹配 agent
- * 段——agent 段限定为已知名字）。
+ *
+ * agent 段采用**保留字排除法**（黑名单）而非硬编码白名单：第一段只要不是
+ * `v1` / `proxy` / `skill-bridge` / `memory-bridge` 就当作 agent 段。这与
+ * `handler.ts` / `anthropicHandler.ts` 里 `agentFromPath` 的判定逻辑一致，
+ * 使未来新增 agent（如 hermes / openclaw 等）无需回来改这里的正则——否则
+ * 白名单一旦漏掉某个 agent，其 `/v1/models` 及 auxiliary 端点（embeddings /
+ * completions / moderations / count_tokens）会被 `joinUrl` 错误回落到
+ * `/chat/completions` 或直接 404。
+ *
+ * 白名单入口 `/v1/messages`、`/v1/models`、`/responses` 自身不会被误剥：
+ * 保留字 `v1` 被负向前瞻排除，且 lookahead 要求 agent 后紧跟已知 endpoint
+ * 形态（`/v1/models` 里 `v1` 后是 `/models`，不满足 `\/v1\/` 等 lookahead）。
  */
-const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
+const AGENT_PREFIX_RE = /^\/(?!v1(?:\/|$)|proxy(?:\/|$)|skill-bridge(?:\/|$)|memory-bridge(?:\/|$))([^/]+)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。
