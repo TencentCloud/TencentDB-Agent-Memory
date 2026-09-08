@@ -1,8 +1,9 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，110/110 通过：protocol-conformance 61、responses-anthropic-compat 13、
-> sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3））。
+> 全量回归：`npm test`（vitest，102/102 通过：protocol-conformance 61、responses-anthropic-compat 13、
+> sse 8、sse-fuzz 4、protocol-stats 4、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3））。
+> 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/110）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
 ## 架构
