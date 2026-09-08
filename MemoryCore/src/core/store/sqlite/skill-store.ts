@@ -16,10 +16,11 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-import { randomBase62 } from "../../utils/short-id.js";
-import { SKILLS_DDL, SKILL_FTS_DDL, SKILL_VEC_DDL_TEMPLATE, FTS_CONTENT_MAX } from "./skill-store-ddl.js";
-import { buildFtsQuery, tokenizeForFts } from "../store/sqlite.js";
-import type { ISkillStore, ExpiredVersionMeta, SkillStoreCapabilities, SkillSearchResult } from "./skill-store.interface.js";
+import { randomBase62 } from "../../../utils/short-id.js";
+import { SKILLS_DDL, SKILL_FTS_DDL, SKILL_VEC_DDL_TEMPLATE, FTS_CONTENT_MAX } from "../../skill/skill-store-ddl.js";
+import { buildFtsQuery, tokenizeForFts } from "../tokenize.js";
+import type { ISkillStore, ExpiredVersionMeta, SkillStoreCapabilities, SkillSearchResult } from "../../skill/skill-store.interface.js";
+import { SkillStoreError } from "../../skill/skill-store.interface.js";
 import type {
   AppendVersionInput,
   ListSkillsOptions,
@@ -27,33 +28,7 @@ import type {
   SkillManifestEntry,
   SkillStatus,
   Skill,
-} from "./types.js";
-
-// ═══════════════════════════════════════════════════════════════════════
-//  错误类型
-// ═══════════════════════════════════════════════════════════════════════
-
-export type SkillErrorCode =
-  | "SKILL_NAME_DUPLICATE"
-  | "SKILL_NOT_FOUND";
-
-export class SkillStoreError extends Error {
-  constructor(public readonly code: SkillErrorCode, message?: string) {
-    super(message ? `${code}: ${message}` : code);
-    this.name = "SkillStoreError";
-  }
-}
-
-/**
- * 当 appendVersion 的 content_hash 与当前 head 完全相同时抛出。
- * 由调用方决定如何处理（一般做幂等返回 head）。store 层不静默吞掉。
- */
-export class IdempotentNoOpError extends Error {
-  constructor(public readonly head: Skill) {
-    super("IDEMPOTENT_NO_OP: content_hash unchanged");
-    this.name = "IdempotentNoOpError";
-  }
-}
+} from "../../skill/types.js";
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Logger 接口

@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import { request as undiciRequest, Agent as UndiciAgent } from "undici";
 import type { Dispatcher } from "undici";
-import type { StoreLogger } from "./types.js";
+import type { StoreLogger } from "../types.js";
 
 // ============================
 // Types
@@ -276,6 +276,41 @@ export class TcvdbClient {
       readConsistency: "strongConsistency",
       query: queryParams,
     });
+  }
+
+  /**
+   * 条件更新 —— VDB 服务器侧原子 CAS 语义。
+   *
+   * 定位方式两种(二选一,与 /document/delete 对齐):
+   *   - `filter`: filter-index 字段的等值/AND/数值范围表达式 —— 支持 CAS 语义
+   *     (filter 里带上期望旧值, 只有匹配的行被改, `affectedCount` 精确反映
+   *     真实改动数)。注意 filter 里不能引用 primaryKey 字段 `id` —— 用其他
+   *     filter-index 字段(skill_id + team_id + version + is_head)作等价定位。
+   *   - `documentIds`: 主键 (id) 精确定位 —— auto-heal 挑好 winner 后用
+   *     loser 的 row_ids 精确 demote, 避开 filter 表达式在时间戳并列 / VDB
+   *     filter-index 异步刷新等场景下的模糊性。
+   *
+   * 我们把 filter 分支当"翻旧 head"的 CAS 用: filter 带 `and is_head=1` 作
+   * 期望旧值, winner 拿 affectedCount=1, loser 拿 0 后自己 rollback。
+   */
+  async update(
+    collection: string,
+    params: {
+      filter?: string;
+      documentIds?: string[];
+      update: Record<string, unknown>;
+    },
+  ): Promise<number> {
+    const query: Record<string, unknown> = {};
+    if (params.filter !== undefined) query.filter = params.filter;
+    if (params.documentIds !== undefined) query.documentIds = params.documentIds;
+    const resp = await this.request<{ affectedCount?: number }>("/document/update", {
+      database: this.database,
+      collection,
+      query,
+      update: params.update,
+    });
+    return resp.affectedCount ?? 0;
   }
 
   async deleteDoc(collection: string, params: Record<string, unknown>): Promise<number> {

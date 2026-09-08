@@ -9,17 +9,17 @@
  * 接口:   src/core/skill/skill-store.interface.ts
  */
 
-import { randomBase62 } from "../../utils/short-id.js";
-import { TcvdbClient, TcvdbApiError, type QueryResponse } from "./tcvdb-client.js";
-import type { BM25LocalEncoder } from "./bm25-local.js";
+import { randomBase62 } from "../../../utils/short-id.js";
+import { TcvdbClient, TcvdbApiError, type QueryResponse } from "./client.js";
+import type { BM25LocalEncoder } from "../bm25-local.js";
 import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
-import type { StoreLogger } from "./types.js";
+import type { StoreLogger } from "../types.js";
 import type {
   ISkillStore,
   SkillStoreCapabilities,
   SkillSearchResult,
   ExpiredVersionMeta,
-} from "../skill/skill-store.interface.js";
+} from "../../skill/skill-store.interface.js";
 import type {
   AppendVersionInput,
   ListSkillsOptions,
@@ -27,8 +27,8 @@ import type {
   Skill,
   SkillManifestEntry,
   SkillStatus,
-} from "../skill/types.js";
-import { SkillStoreError } from "../skill/skill-store.js";
+} from "../../skill/types.js";
+import { SkillStoreError } from "../../skill/skill-store.interface.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────
 
@@ -241,13 +241,61 @@ export class TcvdbSkillStore implements ISkillStore {
     // 6. 先 INSERT 新行 (补偿 VDB 无事务：新行先落，旧行后翻)
     await this.client.upsert(this.skillsCollection, [doc]);
 
-    // 7. 再翻旧 head
+    // 7. CAS 翻旧 head —— 修 2026-09-02 的并发写脏事故。
+    //
+    // 原实现是"读→合并→再 upsert"三步, 中间没锁 —— 单个 extract task 内 LLM 通过
+    // Vercel AI SDK 一次 turn 并发 skill_patch(expected_version=N) N 份, 全都读到
+    // head=vN、全都通过内存 assertVersionFresh、全都到达步骤 6 落新行, 结果 5 行
+    // (skill_id, version=N+1, is_head=1) 一起活着, listSkills(is_head=1) 之后返回
+    // 同一 skill_id N 次。
+    //
+    // 现在改成 VDB /document/update 的服务器侧原子 CAS: filter 精确指定"我期望的
+    // 旧 head"(skill_id + team_id + version=old + is_head=1), 只有第一个到达的
+    // writer 拿到 affectedCount=1, 后到的全部拿 affectedCount=0。后者是 loser,
+    // 立刻 DELETE 步骤 6 刚落下的孤儿新行以还原状态, 并抛 SKILL_VERSION_STALE 让
+    // 上层调用方(skill-versioning 会同时清 COS 目录)与 LLM(拿到错误后携新版本号
+    // 重试)按乐观锁语义处理。
     if (head) {
+      let affected = 0;
       try {
-        await this._updateDocAsync(head.row_id, { is_head: 0 } as Record<string, unknown>);
+        affected = await this.client.update(this.skillsCollection, {
+          filter:
+            `skill_id="${this._escape(sid)}" and team_id="${this._escape(tid)}" ` +
+            `and version=${head.version} and is_head=1`,
+          update: { is_head: 0 },
+        });
       } catch (err) {
-        this.logger?.warn(`${TAG} Failed to flip old head is_head for ${sid} v${head.version}: ${err instanceof Error ? err.message : String(err)}`);
-        // 不抛 — 新行已写入，双 head 可通过 version DESC 取最新解决
+        // 网络/VDB 抖动导致 CAS 状态不明 —— 不能贸然当 loser 删自己(万一 CAS 实际
+        // 成功了呢), 也不能贸然当 winner(万一别人先赢了呢)。保留原行为: 记 warn,
+        // 让写路径正常返回, 双 head 由 listSkills 的 version DESC 兜底解决。
+        this.logger?.warn(
+          `${TAG} Head-flip CAS request failed for ${sid} v${head.version}: ` +
+            (err instanceof Error ? err.message : String(err)),
+        );
+        return this._docToSkill(doc);
+      }
+
+      if (affected === 0) {
+        // loser 分支: 我们输了 CAS。步骤 6 刚落下的 v=(head+1) 是"孤儿", 必须清掉
+        // 才能让 listSkills 保持单一 head。DELETE 用 documentIds 走主键定位, 精确
+        // 只删自己那一行, 不会误伤并发 winner 的同版本兄弟行。
+        try {
+          await this.client.deleteDoc(this.skillsCollection, {
+            query: { documentIds: [rowId] },
+          });
+        } catch (delErr) {
+          // 清孤儿失败: 场上会短暂多一行 v=(head+1) 是 is_head=1, 但因为它比 winner
+          // 的时间戳更早, listSkills 按 updated_at_ms DESC 会取到 winner。留 warn,
+          // 供运维/reconciler 兜底真删。
+          this.logger?.warn(
+            `${TAG} Head-flip CAS lost race for ${sid} v${newVersion}, but orphan cleanup failed: ` +
+              (delErr instanceof Error ? delErr.message : String(delErr)),
+          );
+        }
+        throw new SkillStoreError(
+          "SKILL_VERSION_STALE",
+          `head advanced under append(skill_id=${sid}, expected_head_version=${head.version})`,
+        );
       }
     }
 
@@ -342,10 +390,12 @@ export class TcvdbSkillStore implements ISkillStore {
           outputFields: SKILL_OUTPUT_FIELDS,
           sort: [{ fieldName: "updated_at_ms", direction: "desc" }],
         });
-        const all = (resp.documents ?? [])
+        const filtered = (resp.documents ?? [])
           .map((d) => this._docToSkill(d))
           .filter((s) => s.name.startsWith(prefix));
-        return { items: all.slice(offset, offset + limit), total: all.length };
+        // 2026-09-02 auto-heal: 前缀过滤完再 dedup, 保证 UI 只看到 winner
+        const deduped = this._autoHealListSkills(filtered);
+        return { items: deduped.slice(offset, offset + limit), total: deduped.length };
       } catch (err) {
         this.logger?.warn(`${TAG} listSkills(name_prefix) query failed: ${err instanceof Error ? err.message : String(err)}`);
         return { items: [], total: 0 };
@@ -373,7 +423,14 @@ export class TcvdbSkillStore implements ISkillStore {
       this.logger?.warn(`${TAG} listSkills query failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    return { items: rows, total };
+    // 2026-09-02 auto-heal: 应用层 group-by skill_id 挑 winner + fire-and-forget
+    // demote loser。历史脏数据 (同一 skill_id 多行 is_head=1) 在 UI 一次刷新就自愈。
+    // 详见 _autoHealListSkills 注释。
+    const deduped = this._autoHealListSkills(rows);
+    // total 修正: 本页物理行 - 本页去掉的 loser 数。分页跨脏组时略偏, fire-and-forget
+    // 完成 + VDB filter 索引刷新后下次读自动收敛。
+    const adjustedTotal = Math.max(0, total - (rows.length - deduped.length));
+    return { items: deduped, total: adjustedTotal };
   }
 
   async searchSkills(opts: SearchSkillsOptions): Promise<SkillSearchResult[]> {
@@ -590,6 +647,10 @@ export class TcvdbSkillStore implements ISkillStore {
   /**
    * 查 head 行。默认强制 `status="active"`；`includeArchived=true` 时不加 status 过滤，
    * 供 `getHeadIncludingArchived` 使用（archived head 的幂等回读 / 补偿任务）。
+   *
+   * 2026-09-02 read-time auto-heal: 从 limit=1 提升到 100, 侦测同一 skill_id
+   * 多 head 脏数据 (append-race 遗留), 应用层挑 winner + fire-and-forget demote
+   * 其他 loser。参见 _pickHeadAndAutoHeal 注释。
    */
   private async _getHeadAsync(
     skillId: string,
@@ -601,7 +662,100 @@ export class TcvdbSkillStore implements ISkillStore {
       ? `skill_id="${this._escape(skillId)}" and team_id="${this._escape(teamId)}" and is_head=1${statusClause}`
       : `skill_id="${this._escape(skillId)}" and is_head=1${statusClause}`;
 
-    return this._queryOneAsync(filter);
+    try {
+      const resp = await this.client.query(this.skillsCollection, {
+        filter,
+        // clean skill 只有 1 行；脏 skill 生产实际观察最大 5 行，100 是防御性上限。
+        // 顺带保证下面 tiebreaker 在极端脏数据下仍有确定 winner。
+        limit: 100,
+        outputFields: SKILL_OUTPUT_FIELDS,
+      });
+      const rows = (resp.documents ?? []).map((d) => this._docToSkill(d));
+      return this._pickHeadAndAutoHeal(rows);
+    } catch (err) {
+      this.logger?.warn(`${TAG} getHead failed: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+
+  // ─── Read-time auto-heal (2026-09-02) ────────────────────────────────
+  // 处理"同 skill_id 多 head is_head=1"的历史脏数据（append-race 遗留）。
+  // 每次读 head / list 时侦测 + 挑 winner + fire-and-forget demote loser。
+  // - winner 选择完全确定性: version DESC → updated_at_ms DESC → row_id ASC。
+  //   最后一层 row_id 保证并发 reader 挑同一个 winner, 彼此的 demote 集合
+  //   不打架, 收敛无歧义。
+  // - demote 走 documentIds 精确定位, 不受 filter 表达式在时间戳并列 / VDB
+  //   filter-index 异步刷新的影响。
+  // - 失败(网络/VDB 抖动)只 warn, 主流程返回 winner 不受阻; 下次读会再检测
+  //   再尝试, 幂等收敛。
+  //
+  // TTL 兜底: loser 变成 (v=N, is_head=0), 后续版本推进 → v=N 落出
+  // KEEP_RECENT 保护窗 + 时间过 cutoff 时, deleteVersion(sid, N) 一次性删掉
+  // 所有 (skill_id=X, version=N, is_head=0) 行(winner 那时也已 demote), 彻底
+  // 收敛。极端场景 (skill 从此不动) loser 停在磁盘上, 但不进任何读视图。
+
+  /**
+   * 从 is_head=1 候选行里挑 winner, 并 fire-and-forget demote 其他行。
+   * 输入通常来自 filter 为 `is_head=1 and ...` 的 query 结果。
+   * 空输入返回 null; 单行输入直接返回, 不触发 update。
+   */
+  private _pickHeadAndAutoHeal(rows: Skill[]): Skill | null {
+    if (rows.length === 0) return null;
+    if (rows.length === 1) return rows[0];
+
+    const sorted = [...rows].sort((a, b) => {
+      if (a.version !== b.version) return b.version - a.version;
+      if (a.updated_at_ms !== b.updated_at_ms) return b.updated_at_ms - a.updated_at_ms;
+      return a.row_id < b.row_id ? -1 : a.row_id > b.row_id ? 1 : 0;
+    });
+    const winner = sorted[0]!;
+    const loserRowIds = sorted.slice(1).map((r) => r.row_id).filter((id) => !!id);
+
+    this.logger?.warn(
+      `${TAG} dirty-head auto-heal: skill_id=${winner.skill_id} keeps row_id=${winner.row_id} ` +
+        `v${winner.version} ts=${winner.updated_at_ms}, demoting ${loserRowIds.length} loser(s)`,
+    );
+
+    if (loserRowIds.length > 0) {
+      // fire-and-forget: 主读路径不等 demote 完成; 失败只 warn, 下次读再补。
+      this.client
+        .update(this.skillsCollection, {
+          documentIds: loserRowIds,
+          update: { is_head: 0 },
+        })
+        .catch((err) => {
+          this.logger?.warn(
+            `${TAG} auto-heal demote failed for skill_id=${winner.skill_id}: ` +
+              (err instanceof Error ? err.message : String(err)),
+          );
+        });
+    }
+
+    return winner;
+  }
+
+  /**
+   * 对 listSkills 结果做 group-by skill_id + 每组挑 winner。
+   * 供 listSkills 修正返回 items 与 total 用。
+   */
+  private _autoHealListSkills(rows: Skill[]): Skill[] {
+    if (rows.length <= 1) return rows;
+    const grouped = new Map<string, Skill[]>();
+    for (const r of rows) {
+      const arr = grouped.get(r.skill_id);
+      if (arr) arr.push(r);
+      else grouped.set(r.skill_id, [r]);
+    }
+    // 快速路径: 完全 clean 时避免多余循环
+    if (grouped.size === rows.length) return rows;
+
+    const winners: Skill[] = [];
+    for (const group of grouped.values()) {
+      const w = this._pickHeadAndAutoHeal(group);
+      if (w) winners.push(w);
+    }
+    return winners;
   }
 
   /** 按 filter 取一条 */

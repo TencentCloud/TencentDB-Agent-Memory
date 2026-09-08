@@ -10,7 +10,7 @@
  * 级联、extractor 匹配全部走既有 tasks.length 路径，避免"分页真相分散"型 bug
  * （见 docs 里 defaultTaskId 相关记录 & 2026-07-29 issue）。
  */
-export const DEFAULT_TASK_LABEL = "本次不关联任务";
+export const DEFAULT_TASK_LABEL = "暂时跳过";
 
 /**
  * Session-init 状态机：
@@ -63,6 +63,15 @@ export interface SessionInitState {
    * - 默认 0（首页）；每次用户选"更多"，handler 把它 +1 重发 form。
    */
   agentPageIndex?: number;
+  /**
+   * Claude Code 分页模式下的当前 team 页码（0-based）。
+   *
+   * 与 `agentPageIndex` 语义完全对称，只在 team 数量 > 4 时进入分页。
+   * 2026-09-03 新增 —— 修复 team 阶段 `slice(0, 4)` 硬截断导致 ≥5 个 team
+   * 时后续 team 静默丢失、无 "更多 →" 入口的 pre-existing bug。
+   * 仅 CC 使用；CB 状态机（服务 WB/OC/dsh）走 `codexPageIndex.teamPage`。
+   */
+  teamPageIndex?: number;
   /** CC: 用户在 agent_select 阶段选定的 agent_id（用于 pending_task_select 阶段）。 */
   selectedAgentId?: string;
   /** Resolved agent detail (cached after selection), used to inject context every request. */

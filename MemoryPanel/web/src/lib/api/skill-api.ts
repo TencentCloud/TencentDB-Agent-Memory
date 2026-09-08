@@ -186,7 +186,6 @@ export function deleteSkillV3(params: {
   team_id: string;
   agent_id: string;
   skill_id: string;
-  expected_version: number;
 }): Promise<{ skill_id: string; archived: boolean }> {
   return skillCall('delete', params as unknown as Record<string, unknown>);
 }

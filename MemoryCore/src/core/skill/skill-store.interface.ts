@@ -18,6 +18,33 @@ import type {
   SkillStatus,
 } from "./types.js";
 
+// ─── Errors (contract-level, backend-neutral) ──────────────────────────────
+
+export type SkillErrorCode =
+  | "SKILL_NAME_DUPLICATE"
+  | "SKILL_NOT_FOUND"
+  // 并发 appendVersion 抢 head-flip CAS 失败（见 tcvdb/skill-store.ts）；
+  // 对齐 skill-core 层同名码，toCoreError 直接透传。
+  | "SKILL_VERSION_STALE";
+
+export class SkillStoreError extends Error {
+  constructor(public readonly code: SkillErrorCode, message?: string) {
+    super(message ? `${code}: ${message}` : code);
+    this.name = "SkillStoreError";
+  }
+}
+
+/**
+ * 当 appendVersion 的 content_hash 与当前 head 完全相同时抛出。
+ * 由调用方决定如何处理（一般做幂等返回 head）。store 层不静默吞掉。
+ */
+export class IdempotentNoOpError extends Error {
+  constructor(public readonly head: Skill) {
+    super("IDEMPOTENT_NO_OP: content_hash unchanged");
+    this.name = "IdempotentNoOpError";
+  }
+}
+
 // ─── Capabilities ──────────────────────────────────────────────────────────
 
 /** Store 能力声明，用于检索降级判断 */

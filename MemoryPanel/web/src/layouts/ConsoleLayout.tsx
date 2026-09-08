@@ -9,6 +9,7 @@ import { Layout, Menu } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/stores/auth';
 import { useCurrentRole, type TeamRole } from '@/services/useCurrentRole';
+import { usePanelAnalyticsEnabled, useAnalyticsChConfigured } from '@/services/usePanelCapabilities';
 import { GlobalHeader } from '@/layouts/GlobalHeader';
 import { TabBar } from '@/layouts/TabBar';
 import { OnboardingGuide, shouldShowOnboarding, resetOnboarding } from '@/layouts/OnboardingGuide';
@@ -23,6 +24,7 @@ const PATH_TO_PAGE: Record<string, PageId> = {
   '/code': 'code',
   '/skills': 'skills',
   '/memory': 'chat_memory',
+  '/analytics': 'analytics',
   '/team/members': 'team_members',
   '/team/agents': 'team_agents',
   '/team/api-keys': 'api_keys',
@@ -92,10 +94,12 @@ export function ConsoleLayout() {
   }, [currentUserId]);
 
   /**
-   * 回顾引导入口（由 GlobalHeader 的「我的资料 → 回顾引导」菜单项触发）：
-   * 清掉 onboarded 标记 + 把 Guide 重新置为可见。
+   * 回顾引导：清掉 onboarded 标记 + 把 Guide 重新置为可见。
    * 必须先清标记再 setVisible，否则 Guide 内部的 close→markOnboarded 链路里
    * 立刻又会重新标记为已看过（虽然本次不冲突，但下次自动判定仍会按"已看过"处理）。
+   *
+   * 入口仅保留「使用说明」页底部（GuidePage 触发 tdai-replay-onboarding 事件），
+   * 顶栏「我的资料」等处的回顾引导入口已按需求收敛删除。
    */
   const handleReplayOnboarding = useCallback(() => {
     if (!currentUserId) return;
@@ -103,7 +107,7 @@ export function ConsoleLayout() {
     setOnboardingVisible(true);
   }, [currentUserId]);
 
-  // GuidePage 底部「引导回放」通过自定义事件触发与「我的资料 → 回顾引导」一致的链路
+  // GuidePage 底部「引导回放」通过自定义事件触发回顾引导
   useEffect(() => {
     const onReplay = () => handleReplayOnboarding();
     window.addEventListener('tdai-replay-onboarding', onReplay);
@@ -134,11 +138,27 @@ export function ConsoleLayout() {
   // ===== 基于 team role 的菜单过滤 =====
   // admin 可访问所有页面（含资源管理）
   // 「成员管理」项：reviewer 不可见
+  //
+  // 「可观测」（analytics）入口三层收敛（缺一即隐藏）：
+  //   1. 仅 system_admin 可见（useCurrentRole() === 'admin'）
+  //   2. 面板 env 开关 PANEL_FEATURE_ANALYTICS_ENABLED（默认关闭，经
+  //      /meta/instances 的 capabilities 下发；开关关闭时不发起 CH 探测）
+  //   3. 运行时 CH 探测：内核未配置 analytics ClickHouse 时自动隐藏
+  //      （探测中先保持展示，确认未配置后收敛隐藏，避免闪烁）
+  const analyticsSwitchOn = usePanelAnalyticsEnabled();
+  const analyticsChConfigured = useAnalyticsChConfigured(analyticsSwitchOn === true);
+  const analyticsVisible =
+    analyticsSwitchOn === true && analyticsChConfigured !== false;
+
   const menuGroups = useMemo(() => {
     const byGroup = new Map<string, (typeof PAGE_META)[PageId][]>();
 
     for (const meta of Object.values(PAGE_META)) {
       if (userRole === 'reviewer' && meta.id === 'team_members') continue;
+      // 「可观测」仅 system_admin 可见，且需面板开关开启 + 内核已配置 CH
+      if (meta.id === 'analytics') {
+        if (userRole !== 'admin' || !analyticsVisible) continue;
+      }
       const list = byGroup.get(meta.group) ?? [];
       list.push(meta);
       byGroup.set(meta.group, list);
@@ -150,7 +170,7 @@ export function ConsoleLayout() {
         title: g,
         items: byGroup.get(g)!.sort((a, b) => a.order - b.order),
       }));
-  }, [userRole, PAGE_META, t]);
+  }, [userRole, PAGE_META, t, analyticsVisible]);
 
   const workbenchGroupTitle = t('menu.group.workbench');
   const pinnedGroup = menuGroups.find((g) => g.title === workbenchGroupTitle);
@@ -182,7 +202,6 @@ export function ConsoleLayout() {
         currentUser={auth?.user ?? ''}
         currentUserId={auth?.user_id}
         instanceName={auth?.instance_name}
-        onReplayOnboarding={currentUserId ? handleReplayOnboarding : undefined}
         onLogout={logout}
       />
       <Layout>

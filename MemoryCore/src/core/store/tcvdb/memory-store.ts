@@ -11,8 +11,8 @@
  * All methods are fault-tolerant: return empty/false on error, never throw.
  */
 
-import type { MemoryRecord } from "../record/l1-writer.js";
-import type { EmbeddingProviderInfo } from "./embedding.js";
+import type { MemoryRecord } from "../../record/l1-writer.js";
+import type { EmbeddingProviderInfo } from "../embedding.js";
 import type {
   IMemoryStore,
   StoreCapabilities,
@@ -34,7 +34,7 @@ import type {
   L1CountFilter,
   L1PaginatedFilter,
   L1PaginatedResult,
-  ProfileCountFilter,
+  ProfileFilter,
   IsolationFilter,
   L0Record,
   AuditEntry,
@@ -45,10 +45,10 @@ import type {
   BatchDeleteResult,
   MemoryContentClearFilter,
   MemoryContentClearResult,
-} from "./types.js";
-import { DEFAULT_ISOLATION_ID } from "./types.js";
-import { TcvdbClient, TcvdbApiError } from "./tcvdb-client.js";
-import type { BM25LocalEncoder } from "./bm25-local.js";
+} from "../types.js";
+import { DEFAULT_ISOLATION_ID } from "../types.js";
+import { TcvdbClient, TcvdbApiError } from "./client.js";
+import type { BM25LocalEncoder } from "../bm25-local.js";
 import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
 import type {
   MemoryPromptListFilter,
@@ -58,12 +58,12 @@ import type {
   MemoryPromptSettingLogRecord,
   MemoryPromptSettingRecord,
   MemoryPromptTargetType,
-} from "../memory-prompt/types.js";
+} from "../../memory-prompt/types.js";
 import {
   buildMemoryGenerationRefId,
   type MemoryGenerationLayer,
   type MemoryGenerationRefRecord,
-} from "../memory-generation-log/types.js";
+} from "../../memory-generation-log/types.js";
 
 // ============================
 // Config & Constants
@@ -594,6 +594,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       ftsSearch: hasBm25,
       nativeHybridSearch: this.embeddingEnabled && hasBm25,
       sparseVectors: hasBm25,
+      profileRows: true,
     };
   }
 
@@ -1446,6 +1447,39 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
+  /** Map a raw profiles-collection document to a {@link ProfileRecord}. */
+  private _docToProfile(doc: Record<string, unknown>): ProfileRecord {
+    return {
+      id: String(doc.id ?? ""),
+      type: doc.type === "l3" ? "l3" : "l2",
+      filename: String(doc.filename ?? ""),
+      content: String(doc.content ?? ""),
+      contentMd5: String(doc.content_md5 ?? ""),
+      teamId: String(doc.team_id ?? "") || undefined,
+      agentId: String(doc.agent_id ?? "") || undefined,
+      userId: String(doc.user_id ?? "") || undefined,
+      sessionId: undefined,
+      version: Number(doc.version ?? 0),
+      createdAtMs: Number(doc.created_at_ms ?? 0),
+      updatedAtMs: Number(doc.updated_at_ms ?? 0),
+    };
+  }
+
+  /**
+   * Scope conditions for a {@link ProfileFilter} (D10).
+   *
+   * `pathPrefix` is deliberately excluded: TCVDB's filter language has no
+   * prefix operator, so callers post-filter on `filename` in JS.
+   */
+  private _profileFilterExpr(filter?: ProfileFilter): string | undefined {
+    const conditions: string[] = [];
+    if (filter?.type) conditions.push(eqFilter("type", filter.type));
+    if (filter?.teamId !== undefined) conditions.push(eqFilter("team_id", filter.teamId));
+    if (filter?.userId !== undefined) conditions.push(eqFilter("user_id", filter.userId));
+    if (filter?.agentId !== undefined) conditions.push(eqFilter("agent_id", filter.agentId));
+    return joinFilter(conditions);
+  }
+
   async pullProfiles(): Promise<ProfileRecord[]> {
     try {
       await this._ensureInit();
@@ -1457,22 +1491,30 @@ export class TcvdbMemoryStore implements IMemoryStore {
         PROFILE_OUTPUT_FIELDS,
       );
 
-      return docs.map((doc) => ({
-        id: String(doc.id ?? ""),
-        type: doc.type === "l3" ? "l3" : "l2",
-        filename: String(doc.filename ?? ""),
-        content: String(doc.content ?? ""),
-        contentMd5: String(doc.content_md5 ?? ""),
-        teamId: String(doc.team_id ?? "") || undefined,
-        agentId: String(doc.agent_id ?? "") || undefined,
-        userId: String(doc.user_id ?? "") || undefined,
-        sessionId: undefined,
-        version: Number(doc.version ?? 0),
-        createdAtMs: Number(doc.created_at_ms ?? 0),
-        updatedAtMs: Number(doc.updated_at_ms ?? 0),
-      }));
+      return docs.map((doc) => this._docToProfile(doc));
     } catch (err) {
       this.logger?.warn(`${TAG} [profiles-pull] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  }
+
+  async queryProfiles(filter?: ProfileFilter): Promise<ProfileRecord[]> {
+    try {
+      await this._ensureInit();
+      if (this.degraded) return [];
+
+      const docs = await this._queryAllDocs(
+        this.profilesCollection,
+        this._profileFilterExpr(filter),
+        PROFILE_OUTPUT_FIELDS,
+      );
+
+      const rows = docs.map((doc) => this._docToProfile(doc));
+      return filter?.pathPrefix
+        ? rows.filter((r) => r.filename.startsWith(filter.pathPrefix!))
+        : rows;
+    } catch (err) {
+      this.logger?.warn(`${TAG} [profiles-query] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
   }
@@ -1490,36 +1532,18 @@ export class TcvdbMemoryStore implements IMemoryStore {
         limit: ids.length,
       });
       const docs = resp.documents ?? [];
-      return docs.map((doc) => ({
-        id: String(doc.id ?? ""),
-        type: doc.type === "l3" ? "l3" : "l2",
-        filename: String(doc.filename ?? ""),
-        content: String(doc.content ?? ""),
-        contentMd5: String(doc.content_md5 ?? ""),
-        teamId: String(doc.team_id ?? "") || undefined,
-        agentId: String(doc.agent_id ?? "") || undefined,
-        userId: String(doc.user_id ?? "") || undefined,
-        sessionId: undefined,
-        version: Number(doc.version ?? 0),
-        createdAtMs: Number(doc.created_at_ms ?? 0),
-        updatedAtMs: Number(doc.updated_at_ms ?? 0),
-      }));
+      return docs.map((doc) => this._docToProfile(doc));
     } catch (err) {
       this.logger?.warn(`${TAG} [profiles-query-by-ids] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
   }
 
-  async countProfiles(filter?: ProfileCountFilter): Promise<number> {
+  async countProfiles(filter?: ProfileFilter): Promise<number> {
     try {
       await this._ensureInit();
       if (this.degraded) return 0;
-      const conditions: string[] = [];
-      if (filter?.type) conditions.push(eqFilter("type", filter.type));
-      if (filter?.teamId !== undefined) conditions.push(eqFilter("team_id", filter.teamId));
-      if (filter?.userId !== undefined) conditions.push(eqFilter("user_id", filter.userId));
-      if (filter?.agentId !== undefined) conditions.push(eqFilter("agent_id", filter.agentId));
-      const filterExpr = joinFilter(conditions);
+      const filterExpr = this._profileFilterExpr(filter);
 
       if (filter?.pathPrefix) {
         const docs = await this._queryAllDocs(

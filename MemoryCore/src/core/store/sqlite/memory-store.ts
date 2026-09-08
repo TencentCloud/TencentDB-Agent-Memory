@@ -25,8 +25,8 @@ import { createRequire } from "node:module";
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, StatementSync, SQLInputValue } from "node:sqlite";
-import type { MemoryRecord } from "../record/l1-writer.js";
-import type { EmbeddingProviderInfo } from "./embedding.js";
+import type { MemoryRecord } from "../../record/l1-writer.js";
+import type { EmbeddingProviderInfo } from "../embedding.js";
 import type {
   IMemoryStore,
   StoreCapabilities,
@@ -57,10 +57,10 @@ import type {
   MemoryContentClearResult,
   AuditEntry,
   AuditQueryFilter,
-} from "./types.js";
-import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "./types.js";
-import { SKILLS_DDL, SKILL_FTS_DDL } from "../skill/skill-store-ddl.js";
-import type { Logger } from "../types.js";
+} from "../types.js";
+import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
+import { SKILLS_DDL, SKILL_FTS_DDL } from "../../skill/skill-store-ddl.js";
+import type { Logger } from "../../types.js";
 import type {
   MemoryPromptListFilter,
   MemoryPromptRecord,
@@ -69,14 +69,14 @@ import type {
   MemoryPromptSettingLogRecord,
   MemoryPromptSettingRecord,
   MemoryPromptTargetType,
-} from "../memory-prompt/types.js";
+} from "../../memory-prompt/types.js";
 import {
   buildMemoryGenerationRefId,
   type MemoryGenerationLayer,
   type MemoryGenerationRefRecord,
-} from "../memory-generation-log/types.js";
+} from "../../memory-generation-log/types.js";
 
-export type { L1RecordRow } from "./types.js";
+export type { L1RecordRow } from "../types.js";
 
 // ============================
 // Types
@@ -161,165 +161,23 @@ function requireNodeSqlite(): typeof import("node:sqlite") {
 }
 
 // ============================
-// FTS5 helpers (adapted from openclaw core hybrid.ts)
+// FTS5 / keyword helpers
 // ============================
+//
+// Canonical implementations moved to `../tokenize.ts` (store-layer shared, used
+// by sqlite FTS5 / tcvdb sparse / mongo $search alike). Imported here for
+// internal use and re-exported for backward compatibility with existing
+// `import { ... } from "./memory-store.js"` call sites (incl. memory-store.test.ts).
 
-// ── Chinese word segmentation (jieba) ──
-// Lazy-loaded singleton: initialised on first call to `buildFtsQuery`.
-// If @node-rs/jieba is unavailable, falls back to Unicode-regex splitting.
+import {
+  buildFtsQuery,
+  tokenizeForFts,
+  bm25RankToScore,
+  _resetJiebaForTest,
+  _setJiebaForTest,
+} from "../tokenize.js";
 
-interface JiebaInstance {
-  cutForSearch(text: string, hmm: boolean): string[];
-}
-
-let _jieba: JiebaInstance | null | undefined; // undefined = not yet tried
-
-function getJieba(): JiebaInstance | null {
-  if (_jieba !== undefined) return _jieba;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Jieba } = require("@node-rs/jieba");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { dict } = require("@node-rs/jieba/dict");
-    _jieba = Jieba.withDict(dict) as JiebaInstance;
-  } catch {
-    _jieba = null; // mark as unavailable — won't retry
-  }
-  return _jieba;
-}
-
-/**
- * Common Chinese stop-words that add noise to FTS5 queries.
- * Kept small on purpose — only high-frequency function words.
- */
-const ZH_STOP_WORDS = new Set([
-  "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
-  "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
-  "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那",
-  "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
-]);
-
-/**
- * Build an FTS5 MATCH query from raw text.
- *
- * When `@node-rs/jieba` is available, uses jieba's search-engine mode
- * (`cutForSearch`) for accurate Chinese word segmentation, producing
- * much better recall than the previous regex-only approach.
- *
- * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
- * jieba is not installed.
- *
- * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
- * matching *any* token is returned.  BM25 naturally ranks documents that
- * match more tokens higher, so precision is preserved while recall is
- * significantly improved — especially for longer queries and when running
- * in FTS-only fallback mode (no embedding available).
- *
- * Example (with jieba):
- *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
- * Example (fallback):
- *   "旅行计划 API" → '"旅行计划" OR "API"'
- */
-export function buildFtsQuery(raw: string): string | null {
-  const jieba = getJieba();
-
-  let tokens: string[];
-  if (jieba) {
-    // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
-  } else {
-    // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
-  }
-
-  if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" OR ");
-}
-
-/**
- * Tokenize text for FTS5 indexing (write-side).
- *
- * Uses jieba `cutForSearch()` (search-engine mode) to segment Chinese text,
- * then joins tokens with spaces. The resulting string is stored in the FTS5
- * `content` column so that `unicode61` tokenizer can split it into meaningful
- * words — including both full words and their sub-words.
- *
- * Using `cutForSearch` (instead of `cut`) ensures that the index contains
- * the same sub-word tokens that `buildFtsQuery()` produces on the query side.
- * For example, "人工智能" is indexed as "人工 智能 人工智能", so queries for
- * either the full term or sub-words will match.
- *
- * Falls back to the original text if jieba is unavailable.
- *
- * Example (with jieba):
- *   "用户五月去日本旅行" → "用户 五月 去 日本 旅行"
- *   "人工智能的分支"     → "人工 智能 人工智能 的 分支"
- * Example (fallback):
- *   "用户五月去日本旅行" → "用户五月去日本旅行" (unchanged)
- */
-export function tokenizeForFts(raw: string): string {
-  const jieba = getJieba();
-  if (!jieba) return raw;
-
-  // Use `cutForSearch` (search-engine mode) for indexing — it produces both
-  // full words AND their sub-word components. This ensures that query-side
-  // tokens (also produced by `cutForSearch` in `buildFtsQuery`) will always
-  // find a match in the index.
-  const tokens = jieba.cutForSearch(raw, true);
-
-  // Join with spaces so `unicode61` tokenizer can split them.
-  // Punctuation tokens are kept — unicode61 treats them as separators anyway.
-  return tokens.join(" ");
-}
-
-/**
- * Reset jieba state so next call to `buildFtsQuery` re-initialises.
- * Exported for testing only.
- * @internal
- */
-export function _resetJiebaForTest(): void {
-  _jieba = undefined;
-}
-
-/**
- * Override jieba instance (or set to `null` to force fallback).
- * Exported for testing only.
- * @internal
- */
-export function _setJiebaForTest(instance: JiebaInstance | null): void {
-  _jieba = instance;
-}
-
-/**
- * Convert a BM25 rank (negative = more relevant) to a 0–1 score.
- * Mirrors the formula in openclaw core `hybrid.ts`.
- */
-export function bm25RankToScore(rank: number): number {
-  if (!Number.isFinite(rank)) return 1 / (1 + 999);
-  if (rank < 0) {
-    const relevance = -rank;
-    return relevance / (1 + relevance);
-  }
-  return 1 / (1 + rank);
-}
+export { buildFtsQuery, tokenizeForFts, bm25RankToScore, _resetJiebaForTest, _setJiebaForTest };
 
 /** FTS5 search result for L1 records. */
 export interface FtsSearchResult {
@@ -3465,6 +3323,7 @@ export class VectorStore implements IMemoryStore {
       ftsSearch: this.ftsAvailable,
       nativeHybridSearch: false,
       sparseVectors: false,
+      profileRows: false,
     };
   }
 
