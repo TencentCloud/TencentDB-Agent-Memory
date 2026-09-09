@@ -58,6 +58,13 @@ import {
   isRateLimitExceededError,
   recordInputTokenUsage,
 } from "./rate-limit/guard.js";
+import {
+  appendInitNoticeToTerminalCompletion,
+  buildInitLinkNotice,
+  buildInitLinkUrl,
+  createOrReusePendingToken,
+  markInitLinkNoticeDelivered,
+} from "./session/init-link.js";
 
 /**
  * Build a per-request TdaiClient. `spaceId` (extracted from the request path
@@ -780,10 +787,42 @@ export async function handleChatCompletions(
   // hermes 带 clarify 时（CLI/gateway 交互形态）已支持表单，不列入 no-form 集合。
   const _headerOnlyAgents = new Set(["openclaw"]);
   const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless || _hermesHeadless;
+  const _isHeadless = _dshHeadless || _hermesHeadless;
+  const _linkConfig = config.sessionInit.initLink;
   if (!isAuxiliary && _noFormAgent) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { buildMemResponse } = await import("./mem-command/response-builder.js");
+      // headless + initLink 配置 → 签发 rebind 链接（替代"不支持"文案）
+      if (_isHeadless && conversationId && userId && apiKey && _linkConfig?.hubOrigin) {
+        const compositeKey = `${agentSource}:${sessionKey}`;
+        const { record } = createOrReusePendingToken({
+          compositeKey,
+          sessionId: sessionKey,
+          agentSource,
+          userId,
+          userKey: apiKey,
+          spaceId,
+          purpose: "rebind",
+          ttlMinutes: _linkConfig.ttlMinutes,
+        });
+        const proxyOrigin =
+          _linkConfig.proxyOrigin?.replace(/\/$/, "") ||
+          new URL(c.req.url).origin;
+        const link = buildInitLinkUrl(_linkConfig.hubOrigin, proxyOrigin, record.token);
+        markInitLinkNoticeDelivered(record.token);
+        console.log(
+          `[mem-command:pre] session-reset → web rebind link for session=${compositeKey}`,
+        );
+        return buildMemResponse(
+          buildInitLinkNotice(link, "rebind", _linkConfig.ttlMinutes),
+          {
+            protocol: "openai",
+            stream: isStream,
+            requestId: `mem-reset-rebind-${Date.now()}`,
+          },
+        );
+      }
       console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless} hermesHeadless=${_hermesHeadless}`);
       const msg = _headerOnlyAgents.has(agentSource)
         ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
@@ -857,6 +896,10 @@ export async function handleChatCompletions(
   let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless || _hermesHeadless;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
+  // Headless web-init only records intent here. Token minting is delayed until
+  // a terminal assistant completion is visible to the caller (see notice
+  // injection below). Set when: headless + unbound + initLink configured.
+  let needsInitLink = false;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} hermesHeadless=${_hermesHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless && !_hermesHeadless) {
     try {
@@ -1125,6 +1168,18 @@ export async function handleChatCompletions(
     }
   }
 
+  // ── Headless web-link fallback ──────────────────────────────────────────
+  // headless（dsh 无 ask_user_question / hermes 无 clarify）+ 未绑定 + initLink
+  // 配置 → 标记 needsInitLink，等下游 terminal completion 时注入 init 链接。
+  // Token 不在这里 mint，延迟到 notice factory 内（避免无 completion 的请求
+  // 也产生 token）。
+  if (_isHeadless && conversationId && userId && apiKey && _linkConfig?.hubOrigin) {
+    needsInitLink = true;
+    console.log(
+      `[session-init] session=${sessionKey} headless unbound → defer web-link notice`,
+    );
+  }
+
   // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
   if (_resetFlowResult) {
     const { agentName, agentIdShort, teamName, teamId, taskName, bypassed } = _resetFlowResult;
@@ -1299,6 +1354,52 @@ export async function handleChatCompletions(
         sessionKey,
       });
   const tdaiUserMessage = extractLatestUserMessage(messages);
+
+  // ── Init-link notice factory（headless web-link 注入） ───────────────────
+  // needsInitLink=true 时，在 terminal assistant completion 上追加 init 链接。
+  // Token 在 factory 内 mint（延迟到真正有 completion 时），markInitLinkNoticeDelivered
+  // 防止重复注入。non-stream 走 appendInitNoticeToTerminalCompletion；stream 首版
+  // 不注入（简化版，后续可补回 SSE injector）。
+  let noticeToken: string | undefined;
+  const initLinkNoticeFactory = (): string | null => {
+    if (!needsInitLink || !userId || !apiKey) return null;
+    const linkConfig = config.sessionInit.initLink;
+    if (!linkConfig?.hubOrigin) return null;
+    try {
+      const { record } = createOrReusePendingToken({
+        compositeKey: `${agentSource}:${sessionKey}`,
+        sessionId: sessionKey,
+        agentSource,
+        userId,
+        userKey: apiKey,
+        spaceId,
+        purpose: "init",
+        ttlMinutes: linkConfig.ttlMinutes,
+      });
+      if (record.noticeDeliveredAt) return null;
+      noticeToken = record.token;
+      const proxyOrigin =
+        linkConfig.proxyOrigin?.replace(/\/$/, "") ||
+        new URL(c.req.url).origin;
+      return buildInitLinkNotice(
+        buildInitLinkUrl(linkConfig.hubOrigin, proxyOrigin, record.token),
+        "init",
+        linkConfig.ttlMinutes,
+      );
+    } catch (err) {
+      console.warn(
+        `[init-link] token mint failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  };
+  const markInitLinkDelivered = (): void => {
+    if (noticeToken && markInitLinkNoticeDelivered(noticeToken)) {
+      console.log(
+        `[init-link] notice delivered for session=${agentSource}:${sessionKey}`,
+      );
+    }
+  };
 
   // ── Context injection (before cost guard) ──────────────────────────────
   if (!injectedSkipped && config.injection?.enabled && config.injection.injectors.length > 0) {
@@ -1931,6 +2032,31 @@ export async function handleChatCompletions(
       },
       creditOutcome.errorMessage ?? "unknown",
     );
+  }
+
+  // ── Init-link notice injection (non-stream) ──────────────────────────────
+  // needsInitLink=true 且 non-stream → 在 terminal completion 追加 init 链接。
+  // stream 首版不注入（简化版，后续可补回 SSE injector）。
+  if (
+    needsInitLink &&
+    !isStream &&
+    upstreamResp.status >= 200 &&
+    upstreamResp.status < 300
+  ) {
+    try {
+      const respJsonBody = JSON.parse(respText) as Record<string, unknown>;
+      if (appendInitNoticeToTerminalCompletion(respJsonBody, initLinkNoticeFactory)) {
+        markInitLinkDelivered();
+        return new Response(JSON.stringify(respJsonBody), {
+          status: upstreamResp.status,
+          headers: respHeaders,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        `[init-link] non-stream notice injection failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   return new Response(respText, { status: upstreamResp.status, headers: respHeaders });

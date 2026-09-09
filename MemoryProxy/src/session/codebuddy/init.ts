@@ -287,7 +287,7 @@ function isFreshCBConversation(messages: MessageArr): boolean {
   return userCount <= 1;
 }
 
-async function fetchTeamsAndAgents(
+export async function fetchTeamsAndAgents(
   userId: string,
   config: SessionInitConfig,
   metadataClient: MetadataClient,

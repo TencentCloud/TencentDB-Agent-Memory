@@ -447,6 +447,16 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       ? yaml.sessionInit.debugForceUserId.trim()
       : undefined,
     debugVerboseLogging: yaml.sessionInit?.debugVerboseLogging ?? false,
+    initLink: yaml.sessionInit?.initLink?.hubOrigin
+      ? {
+          hubOrigin: yaml.sessionInit.initLink.hubOrigin.replace(/\/$/, ""),
+          proxyOrigin: yaml.sessionInit.initLink.proxyOrigin?.replace(/\/$/, ""),
+          ttlMinutes: typeof yaml.sessionInit.initLink.ttlMinutes === "number"
+            && yaml.sessionInit.initLink.ttlMinutes > 0
+            ? yaml.sessionInit.initLink.ttlMinutes
+            : undefined,
+        }
+      : undefined,
   },
     tdai: {
       enabled: yaml.tdai?.enabled ?? DEFAULT_CONFIG.tdai.enabled,
