@@ -17,11 +17,22 @@ data:
 
 # ── LLM (必填) ──
 llm:
+  # For local servers, set backend to "ollama" or "llama.cpp" to enable
+  # native startup/model probes and effective context reporting in /health.
+  backend: "openai-compatible"
   baseUrl: "https://api.openai.com/v1"
   apiKey: "${TDAI_LLM_API_KEY}"    # 通过环境变量注入
   model: "gpt-4o"
   maxTokens: 4096
   timeoutMs: 120000
+  # contextWindow: 8192
+  # inputBudgetTokens: 6144
+  # reasoning:
+  #   enabled: false
+  # startupProbe:
+  #   enabled: true
+  #   strict: true
+  #   timeoutMs: 5000
 
 # ── Memory 引擎配置 ──
 memory:
