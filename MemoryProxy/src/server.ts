@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { handleChatCompletions } from "./handler.js";
 import { handleAnthropicMessages } from "./anthropicHandler.js";
 import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
+import { handleModelsEndpoint } from "./modelsHandler.js";
 import { handleDirectPassthrough } from "./directHandler.js";
 import { handleCodexEndpoint } from "./codexHandler.js";
 import { handleWorkbuddyEndpoint } from "./workbuddyHandler.js";
@@ -173,6 +174,7 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
+  app.get("/v1/models", (c) => handleModelsEndpoint(c, config));
 
   // Agent-prefixed routes with spaceId — 客户端标准配置格式：
   //   CC:  ANTHROPIC_BASE_URL=http://<proxy>:8096/claude-code/<spaceId>
@@ -334,10 +336,12 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/:agent/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/chat/completions", (c) => handleChatCompletions(c, config));
+  app.get("/:agent/:spaceId/v1/models", (c) => handleModelsEndpoint(c, config));
 
   // Agent-prefixed routes without spaceId (deprecated: no credit reporting)
   app.post("/:agent/v1/messages", (c) => handleAnthropicMessages(c, config));
   app.post("/:agent/v1/chat/completions", (c) => handleChatCompletions(c, config));
+  app.get("/:agent/v1/models", (c) => handleModelsEndpoint(c, config));
 
   // Legacy /proxy/<spaceId>/ prefix — no agent info, defaults to codebuddy.
   // 保留以兼容不带 agent 前缀的客户端。
@@ -346,6 +350,7 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/proxy/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/proxy/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/proxy/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
+  app.get("/proxy/:spaceId/v1/models", (c) => handleModelsEndpoint(c, config));
   app.post("/proxy/:spaceId/*", (c) => handleChatCompletions(c, config));
 
   // OpenAI-compatible chat completions (catch-all for any remaining POST paths)
