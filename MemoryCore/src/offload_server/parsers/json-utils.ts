@@ -2,54 +2,13 @@
  * JSON / Mermaid extraction utilities for LLM response parsing.
  */
 
+import { extractStructuredJson } from "../../utils/structured-output.js";
+
 /**
- * Extract JSON from raw LLM output. Tolerates markdown fences, extra text.
+ * Extract JSON from raw LLM output. Tolerates fences and known wrappers.
  */
 export function extractJson<T>(raw: string): T | null {
-  if (!raw || typeof raw !== "string") return null;
-
-  const trimmed = raw.trim();
-
-  // 1. Direct parse
-  try {
-    return JSON.parse(trimmed) as T;
-  } catch {
-    // continue
-  }
-
-  // 2. Extract from ```json ... ``` fence
-  const jsonFenceMatch = trimmed.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-  if (jsonFenceMatch) {
-    try {
-      return JSON.parse(jsonFenceMatch[1].trim()) as T;
-    } catch {
-      // continue
-    }
-  }
-
-  // 3. Extract first { ... } (greedy last })
-  const objStart = trimmed.indexOf("{");
-  const objEnd = trimmed.lastIndexOf("}");
-  if (objStart !== -1 && objEnd > objStart) {
-    try {
-      return JSON.parse(trimmed.slice(objStart, objEnd + 1)) as T;
-    } catch {
-      // continue
-    }
-  }
-
-  // 4. Extract first [ ... ] (greedy last ])
-  const arrStart = trimmed.indexOf("[");
-  const arrEnd = trimmed.lastIndexOf("]");
-  if (arrStart !== -1 && arrEnd > arrStart) {
-    try {
-      return JSON.parse(trimmed.slice(arrStart, arrEnd + 1)) as T;
-    } catch {
-      // continue
-    }
-  }
-
-  return null;
+  return extractStructuredJson<T>(raw);
 }
 
 /**
