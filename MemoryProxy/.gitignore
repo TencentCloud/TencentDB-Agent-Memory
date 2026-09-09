@@ -41,3 +41,10 @@ docs/e2e-suite/logs/
 
 # Unix sockets
 *.sock
+
+# Keep only curated tool-routing evidence; new run outputs remain local.
+scripts/eval/tool-routing/results/*
+!scripts/eval/tool-routing/results/summary.json
+!scripts/eval/tool-routing/results/per-case.jsonl
+!scripts/eval/tool-routing/results/token-probe.json
+!scripts/eval/tool-routing/results/recoveries.json

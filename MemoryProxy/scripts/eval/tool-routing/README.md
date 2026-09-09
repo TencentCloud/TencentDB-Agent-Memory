@@ -1,102 +1,113 @@
-# Tool-routing benchmark
+# 工具描述路由评测
 
-这是一个工具路由 benchmark，没有接入真实的流量。
+本目录提供可直接运行的 LLM 评测源码、297 条固定样本及已完成的对照结果，用于评估 injector 描述是否让模型正确识别和调用工具，不评价工具返回资产的业务效果。
 
-一条样本由“用户请求 + 固定注入资产 + 期望工具路由”组成。模型只拿到一个 `Bash` schema；runner 解析模型生成的 curl，转发给进程内 mock bridge，而不会执行 shell。评测借鉴了 **BFCL** 的核心方法：用可验证的工具契约评价是否调用、选了哪个工具以及参数是否正确——但数据不是 BFCL 官方数据集。
+## 快速复现
 
-## 数据和冻结规则
-
-- `dataset.jsonl`：120 条已标记为 `approved` 的样本，80 Dev / 40 Test；分类数量与计划一致。
-- `baseline-manifest.json` 固定旧 renderer commit、fixture 和字节哈希。运行时从该 commit 加载旧 renderer，并核对哈希；因此不会把当前分支误当成 Baseline。
-
-## 安装依赖
-
-首次运行前，先从仓库根目录进入 `MemoryProxy` 并安装依赖：
-
-```bash
-cd MemoryProxy
-npm install
-```
-
-如果是严格复现评测，可以使用已提交的 `package-lock.json` 做安装：
+从仓库根目录开始，需要 Node.js 22+：
 
 ```bash
 cd MemoryProxy
 npm ci
-```
-
-## 静态验证
-
-```bash
 npm run eval:tool-routing:dry
 ```
 
-它验证数据规模、Baseline 哈希、重复渲染字节稳定性，并报告每个注入块的字符/字节变化。最终 Token 以 provider 返回的 `usage.prompt_tokens` 为准。
+该命令校验数据和结果的 SHA-256，构造全部 594 个原版／候选版首轮请求，并使用保存的逐调用核查重新计算主要指标。当前版本的预期输出：
 
-## 接入 provider
-
-runner 使用 OpenAI-compatible `chat/completions`。
-
-```bash
-cd ./MemoryProxy
-cp .env.tool-routing.local.example .env.tool-routing.local
+```json
+{
+  "cases": 297,
+  "recorded_runs": 594,
+  "baseline_request_matches": 297,
+  "current_candidate_request_matches": 297,
+  "saved_metrics_verified": true
+}
 ```
 
-然后编辑新文件，把占位符替换为真实配置：
+真正运行模型还需要 macOS 的 `sandbox-exec` 和 Python 3.14。历史运行使用 Python 3.14.7；脚本会记录本机 Python 身份。将以下配置写入已被 Git 忽略的 `.env.tool-routing.local`：
 
 ```dotenv
-TOOL_ROUTING_API_BASE_URL=https://provider.example/v1
+TOOL_ROUTING_API_URL=https://api.deepseek.com/chat/completions
 TOOL_ROUTING_API_KEY=replace-me
 TOOL_ROUTING_MODEL=deepseek-v4-flash
 TOOL_ROUTING_THINKING_MODE=disabled
-TOOL_ROUTING_EXTRA_BODY_JSON={"thinking":{"type":"disabled"}}
 ```
 
-`TOOL_ROUTING_API_BASE_URL` 会自动拼接 `/chat/completions`。如果 Provider 使用非标准路径，可以在本地配置中注释掉 `TOOL_ROUTING_API_BASE_URL`，改为设置完整地址：
-
-```dotenv
-TOOL_ROUTING_API_URL=https://provider.example/custom/chat/completions
-```
-
-`npm run eval:tool-routing` 会自动加载本地配置，无需手工 `source`：
+先运行一个场景的原版／候选版对照，Python 路径按本机安装位置替换：
 
 ```bash
-npm run eval:tool-routing -- --split dev --variant both --repetitions 3
+npm run eval:tool-routing -- --live \
+  --case public300-c6a79c582edee9c0 --variant both \
+  --python /opt/homebrew/bin/python3.14 --budget 0.10 \
+  --out scripts/eval/tool-routing/results/local-one.jsonl
 ```
 
-也可以不创建文件，仅为当前 shell 临时导出环境变量：
+运行全部 297 条样本、两版各一次：
 
 ```bash
-export TOOL_ROUTING_API_BASE_URL='https://provider.example/v1'
-export TOOL_ROUTING_API_KEY='...'
-export TOOL_ROUTING_MODEL='deepseek-v4-flash'
-export TOOL_ROUTING_THINKING_MODE='disabled'
-# 若 provider 需要专属字段：
-export TOOL_ROUTING_EXTRA_BODY_JSON='{"thinking":{"type":"disabled"}}'
-
-npm run eval:tool-routing -- --split dev --variant both --repetitions 3
+npm run eval:tool-routing -- --live --all --variant both \
+  --python /opt/homebrew/bin/python3.14 --budget 10 \
+  --out scripts/eval/tool-routing/results/local-full.jsonl
 ```
 
-可用 `--case <id>` 只跑一条连通性或调试样本。
+`--variant` 支持 `baseline`、`candidate`、`both`，默认 `candidate`。运行串行执行，每个场景每版一次，最多 12 个模型响应，每次输出上限 8192 tokens，关闭思考，temperature=0、top_p=1。`--budget` 是按脚本保守估算的美元预算上限，不是实际账单。输出路径必须不存在；遇到任务错误即停止，已产生的记录保留。再次运行请指定新的输出路径。
 
-长任务会逐条显示进度、百分比和 ETA，并在每条完成后立即追加 JSONL；每 10 条及结束时原子更新报告。默认并发为 2，可按 provider 限流调整：
+输出 JSONL 保存请求指纹、模型响应历史、工具调用、执行进展、usage 和终止原因；相邻的 `<out>.report.json` 给出运行配置、计划／实际记录数及评分。新输出默认被 Git 忽略。
+
+## 目录与执行方式
+
+| 文件 | 用途 |
+| --- | --- |
+| `run.ts` | 模型请求、多轮执行与报告入口 |
+| `prompts.ts` | 构造原版和当前候选请求 |
+| `scorer.ts` | 工具选择、有效调用、误调用及编码活动计分 |
+| `dataset.jsonl` | 297 条场景及预期行为 |
+| `fixtures/text.json` | 样本引用的长文本，包括代码、测试、文档和工具返回 |
+| `fixtures/layout.txt` | 固定评测请求布局 |
+| `fixtures/licenses/` | 公开素材来源、版本及许可证 |
+| `baseline/` | 固定的优化前描述模板 |
+| `manifest.json` | 基线 commit、数据和历史结果哈希 |
+| `results/` | 历史汇总、逐场景记录、恢复关系和 token 探针 |
+
+样本中的 `$fixture` 引用由加载器自动展开，并校验文本哈希。所有必需素材以普通文本存放在仓库内，不需要解压归档或访问作者机器。
+
+原版描述固定于 `97f94654280b2932c35ba4806a491999ed244cc9`；候选描述直接调用工作区中的四个 injector renderer，当前为使用 `<curl_recipe id="…">` 的 C4。两版使用相同的上下文、工具定义和执行环境。评测直接构造请求，不经过生产注入流水线，因此结果范围是描述路由能力。
+
+模型通过原生工具在临时工作区读取、修改文件和执行受 sandbox 限制的 Bash；识别到的云工具 curl 由固定 fixture 返回结果，不访问生产资产。`workspace-host.ts`、`fixtures.ts`、`protocol.ts` 等保留这一执行过程。`npm test` 中包含请求指纹检查，以及在满足 macOS/Python 路径条件时运行的模拟模型工作区读取测试。
+
+以后修改候选描述时，`current_candidate_request_matches` 可以减少，表示输入已不同于历史 C4；原版请求仍必须全部匹配。输入一致也不能保证模型再次输出完全相同。
+
+## 数据和历史结果
+
+共 297 个场景：118 条应调用正例（Memory 38、Skill 40、Knowledge 40），89 条信息已充分的边界负例（29、30、30），90 条 coding 负例。两版共 594 条观察记录。观察窗口结束不代表任务成功完成。
+
+数据来自公开合成记忆、论文问答、基于公开工作流编写的请求和真实 issue 改编。coding 中 60 条为 CPython 修复，30 条为另外 12 个项目的限定代码审查。它们不是线上真实流量，也不是原 SWE-bench 得分；部分工具入口缺少充分独立覆盖。语义核查由助手完成，不是人工双审。
+
+| 指标 | 原版 | C4 |
+| --- | ---: | ---: |
+| 工具描述及包装 tokens | 4,304 | 2,281（减少 47%） |
+| 应调用时有效调用 | 118/118 | 118/118 |
+| 首个云工具选择正确 | 118/118 | 117/118 |
+| 已有充分信息仍误调用 | 71/89 | 24/89 |
+| coding 误调用 | 0/90 | 0/90 |
+| 正例有额外调用，包含重复读取完整资料 | 67/118 | 67/118 |
+
+没有满足全部预设验收条件。既定编码活动检查未满足为 33/90 → 38/90；该检查不是代码正确率。达到响应／输出限制的记录为 69/297 → 64/297。仅按工具及参数规则计分，正例额外调用为 24/118 → 28/118；加入重复读取的语义核查后两版均为 67/118。新运行的报告只自动计算工具及参数规则，不自动进行新的语义核查，不能将其额外调用指标直接与表中的语义核查指标混用。
+
+- [summary.json](./results/summary.json)：历史汇总及验收限制。
+- [per-case.jsonl](./results/per-case.jsonl)：594 条逐场景证据，含调用、进展、终止原因、usage、请求指纹和与调用哈希绑定的语义核查。
+- [recoveries.json](./results/recoveries.json)：历史中断与恢复的关联。
+- [token-probe.json](./results/token-probe.json)：固定探针请求和原始 usage。
+
+逐场景证据省略了长对话正文和最终回答；完整原始对话及中断日志另行归档，不是本目录的复现依赖。复跑会生成新的完整对话记录。已有结果由原始执行、中断延续和补跑合并得到，不能理解成一次不中断的完整运行。再次使用该数据集不构成新的独立测试集。
+
+## 复测 token 差异
+
+以下命令重放保存的六个固定历史探针请求：
 
 ```bash
-npm run eval:tool-routing -- --split dev --variant both --repetitions 3 --concurrency 2
+npm run eval:tool-routing -- --live --probe-tokens --budget 0.10 \
+  --out scripts/eval/tool-routing/results/local-token.json
 ```
 
-中断后使用相同参数并追加 `--resume`。runner 会复用模型名和 prompt hash 均一致的成功记录，失败或提示词已变化的记录会重跑：
-
-```bash
-npm run eval:tool-routing -- --split dev --variant both --repetitions 3 --concurrency 2 --resume
-```
-
-不带 `--resume` 会清空目标 JSONL 并开始一轮新实验。需要保留多组实验时用不同的 `--out` 路径。
-
-固定参数为 `temperature=0`、`top_p=1`；实验组按样本和 repetition 交错运行。结果会记录请求模型、响应中的实际模型版本、参数、endpoint/body、mock 接收事件和 usage。
-
-当前样本已标记为 `approved`，可以直接运行冻结评测：先跑 `120 × 3`；通过筛选后另建至少 300 条唯一冻结样本并跑 5 次。评分报告包含有效调用率、误调用率、family/具体工具/协议正确率、分类明细和按 case 聚类的配对 bootstrap 95% CI。
-
-## 安全边界
-
-runner 不启动 shell。它只接受单条 curl 文本，拒绝 shell 操作符、命令替换和 mock allowlist 之外的 host，再把解析后的请求交给进程内 fixture。模型生成的任意命令都不会执行。
+探针包含原版、C4 和移除工具描述的对照输入；用前两者分别减去对照的 prompt tokens，计算描述及包装的边际开销。47% 是该开销的减少，不是整个请求的 token 减少。此命令使用保存的历史输入，不会随当前 renderer 修改而更新。历史受控缓存观察不能作为当前生产调用链或线上缓存命中率的验收。

@@ -52,10 +52,11 @@ export interface SkillInjectorConfig {
  * view a listed skill, search for an unlisted specialist workflow, or skip.
  */
 const SKILL_LISTING_HEADER = `## Cloud skills
-先判断任务是否需要专项工作流：
-- 列表中的 skill 与任务/工作流明确匹配：调用 skill_view 后遵循其说明。
-- 确实需要专项能力但列表无匹配：调用 skill_search。
-- 普通 coding、当前上下文足够或仅词面相似：不要调用 skill。`;
+按顺序选择一个分支：
+1. 所需完整 skill 说明已在当前或历史 tool 消息中：直接遵循，不重复读取；用户要求更新或已有明确版本变化时例外。
+2. 否则，列表中的 skill 与任务/工作流明确匹配：先用 skill_view 加载再执行；即使任务表现为 coding、测试或 review 也适用。
+3. 否则，确实需要专项工作流但列表无匹配：用 skill_search 搜索。
+4. 不需要专项工作流且当前上下文足够：直接处理；仅词面相似不算匹配。`;
 
 /**
  * Wrap the pre-rendered `<available_skills>` listing from plugin into a

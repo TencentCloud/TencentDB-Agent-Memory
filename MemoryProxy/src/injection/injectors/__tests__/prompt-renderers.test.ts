@@ -56,8 +56,15 @@ describe("prompt renderer contracts", () => {
       expect(output).toContain(`\"${field}\"`);
     expect(output).toContain("x-tdai-service-id: space-1");
     expect(output).toContain("x-conversation-id: session-1");
-    expect(output).toContain("当前上下文");
+    expect(output).toContain("明确缺口");
+    expect(output).toContain("id 不是可调用的原生函数名");
+    expect(output).toContain("<curl_recipe id=");
     expect(output).toContain("普通 coding");
+    expect(output).toContain("用户特定历史、偏好");
+    expect(output).toContain("skill_search 只找工作流，不能替代个性化检索");
+    expect(output).toContain("时间顺序");
+    expect(output).toContain("已知目标 session_id 可直接 query");
+    expect(output).toContain("答案不依赖用户历史");
     expect(output).not.toContain("<memory-tools-guide>");
   });
 
@@ -66,7 +73,7 @@ describe("prompt renderer contracts", () => {
     const writable = renderSkillToolsBlock("https://proxy.test", true, "session-1", "space-1");
 
     for (const tool of ["skill_search", "skill_view", "skill_files_read", "skill_extract"])
-      expect(readOnly).toContain(`name=\"${tool}\"`);
+      expect(readOnly).toContain(`id=\"${tool}\"`);
     for (const tool of [
       "skill_create",
       "skill_update",
@@ -75,8 +82,8 @@ describe("prompt renderer contracts", () => {
       "skill_files_write",
       "skill_files_remove",
     ]) {
-      expect(readOnly).not.toContain(`name=\"${tool}\"`);
-      expect(writable).toContain(`name=\"${tool}\"`);
+      expect(readOnly).not.toContain(`id=\"${tool}\"`);
+      expect(writable).toContain(`id=\"${tool}\"`);
     }
     for (const path of ["/search", "/get-by-name", "/files/read", "/extract"])
       expect(readOnly).toContain(path);
@@ -84,6 +91,11 @@ describe("prompt renderer contracts", () => {
       expect(readOnly).toContain(`\"${field}\"`);
     expect(readOnly).toContain("x-tdai-service-id: space-1");
     expect(readOnly).toContain("x-conversation-id: session-1");
+    expect(readOnly).toContain("列表已有明确匹配时不要搜索");
+    expect(readOnly).toContain("不是原生函数名");
+    expect(readOnly).toContain("<curl_recipe id=");
+    expect(readOnly).toContain("完整说明不在上下文时");
+    expect(readOnly).toContain("不能跳过 skill_view");
   });
 
   it("routes skill loading by clear workflow match instead of partial word overlap", () => {
@@ -93,6 +105,8 @@ describe("prompt renderer contracts", () => {
     expect(output).toContain(listing);
     expect(output).toContain("明确匹配");
     expect(output).toContain("仅词面相似");
+    expect(output).toContain("即使任务表现为 coding、测试或 review");
+    expect(output).toContain("不需要专项工作流且当前上下文足够");
     expect(output).not.toContain("partially relevant");
     expect(output).not.toContain("always better");
   });

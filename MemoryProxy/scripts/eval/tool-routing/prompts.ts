@@ -1,152 +1,61 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { build } from "esbuild";
-
-import { renderKnowledgeToolsBlock } from "../../../src/injection/injectors/knowledge-tools-injector.js";
-import { wrapAvailableSkillsBlock } from "../../../src/injection/injectors/skill-injector.js";
-import { renderSkillToolsBlock } from "../../../src/injection/injectors/skill-tools-injector.js";
-import { renderTdaiProfileMemoryBlock } from "../../../src/injection/injectors/tdai-profile-memory-injector.js";
 import { renderTdaiMemoryToolsBlock } from "../../../src/injection/injectors/tdai-tools-injector.js";
-import { FIXTURE, KNOWLEDGE_FIXTURES } from "./fixtures.js";
+import { renderSkillToolsBlock } from "../../../src/injection/injectors/skill-tools-injector.js";
+import { wrapAvailableSkillsBlock } from "../../../src/injection/injectors/skill-injector.js";
+import { renderKnowledgeToolsBlock } from "../../../src/injection/injectors/knowledge-tools-injector.js";
+import { WORKSPACE_TOOLS } from "./workspace-host.js";
 import type { EvalCase } from "./types.js";
 
-type RendererModule = Record<string, (...args: any[]) => any> & { MEMORY_TOOLS_GUIDE?: string };
-type PromptBlocks = Record<"memory_tools" | "memory_guide" | "skill_ro" | "available" | "knowledge", string>;
+export const promptHash = (value: string) => createHash("sha256").update(value).digest("hex");
+export type PreparedCase = EvalCase & { baseline_resources: string };
+const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+const baseline = read("./baseline/system.txt");
+const baselineKnowledge = read("./baseline/knowledge.txt");
+const candidateLayout = read("./fixtures/layout.txt");
+const fill = (template: string, values: Record<string, string>) => template.replace(/\{\{([A-Z_]+)\}\}/g, (_, key: string) => {
+  if (!(key in values)) throw new Error(`Unknown template slot: ${key}`);
+  return values[key];
+});
 
-const manifest = JSON.parse(
-  readFileSync(new URL("./baseline-manifest.json", import.meta.url), "utf8"),
-) as { git_commit: string; blocks: Record<string, { sha256: string }> };
-
-let baselinePromise: Promise<PromptBlocks> | undefined;
-
-async function loadHistoricalModule(fileName: string): Promise<RendererModule> {
-  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-  const relative = `MemoryProxy/src/injection/injectors/${fileName}`;
-  const source = execFileSync("git", ["show", `${manifest.git_commit}:${relative}`], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  const bundled = await build({
-    stdin: {
-      contents: source,
-      sourcefile: fileName,
-      resolveDir: `${repoRoot}/MemoryProxy/src/injection/injectors`,
-      loader: "ts",
-    },
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    write: false,
-    logLevel: "silent",
-  });
-  const encoded = Buffer.from(bundled.outputFiles[0].text).toString("base64");
-  return import(`data:text/javascript;base64,${encoded}`) as Promise<RendererModule>;
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-async function baselineBlocks(): Promise<PromptBlocks> {
-  baselinePromise ??= (async () => {
-    const [memory, profile, skillTools, skills, knowledge] = await Promise.all([
-      loadHistoricalModule("tdai-tools-injector.ts"),
-      loadHistoricalModule("tdai-profile-memory-injector.ts"),
-      loadHistoricalModule("skill-tools-injector.ts"),
-      loadHistoricalModule("skill-injector.ts"),
-      loadHistoricalModule("knowledge-tools-injector.ts"),
-    ]);
-    const blocks: PromptBlocks = {
-      memory_tools: memory.renderTdaiMemoryToolsBlock(
-        FIXTURE.proxyBaseUrl, FIXTURE.sessionId, FIXTURE.spaceId,
-      ),
-      memory_guide: profile.MEMORY_TOOLS_GUIDE ?? "",
-      skill_ro: skillTools.renderSkillToolsBlock(
-        FIXTURE.proxyBaseUrl, false, FIXTURE.sessionId, FIXTURE.spaceId,
-      ),
-      available: skills.wrapAvailableSkillsBlock(FIXTURE.listing),
-      knowledge: knowledge.renderKnowledgeToolsBlock(KNOWLEDGE_FIXTURES, FIXTURE.spaceId, {
-        sessionKey: FIXTURE.sessionId,
-        userId: FIXTURE.userId,
-        teamId: FIXTURE.teamId,
-        agentId: FIXTURE.agentId,
-      }),
-    };
-    for (const [name, value] of Object.entries(blocks)) {
-      const expected = manifest.blocks[name]?.sha256;
-      if (!expected || sha256(value) !== expected) {
-        throw new Error(`Baseline block ${name} does not match baseline-manifest.json`);
+export function loadCases(path = new URL("./dataset.jsonl", import.meta.url)): PreparedCase[] {
+  const assets = JSON.parse(read("./fixtures/text.json")) as Record<string, string>;
+  for (const [id, text] of Object.entries(assets)) if (promptHash(text) !== id) throw new Error(`Fixture hash mismatch: ${id}`);
+  const hydrate = (value: any): any => {
+    if (Array.isArray(value)) return value.map(hydrate);
+    if (value && typeof value === "object") {
+      if (Object.keys(value).length === 1 && typeof value.$fixture === "string") {
+        if (!(value.$fixture in assets)) throw new Error(`Missing fixture: ${value.$fixture}`);
+        return assets[value.$fixture];
       }
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, hydrate(v)]));
     }
-    return blocks;
-  })();
-  return baselinePromise;
-}
-
-function candidateBlocks(): PromptBlocks {
-  return {
-    memory_tools: renderTdaiMemoryToolsBlock(
-      FIXTURE.proxyBaseUrl, FIXTURE.sessionId, FIXTURE.spaceId,
-    ),
-    memory_guide: "",
-    skill_ro: renderSkillToolsBlock(
-      FIXTURE.proxyBaseUrl, false, FIXTURE.sessionId, FIXTURE.spaceId,
-    ),
-    available: wrapAvailableSkillsBlock(FIXTURE.listing),
-    knowledge: renderKnowledgeToolsBlock(KNOWLEDGE_FIXTURES, FIXTURE.spaceId, {
-      sessionKey: FIXTURE.sessionId,
-      userId: FIXTURE.userId,
-      teamId: FIXTURE.teamId,
-      agentId: FIXTURE.agentId,
-    }) ?? "",
+    return value;
   };
+  return readFileSync(path, "utf8").trim().split(/\r?\n/).map(line => hydrate(JSON.parse(line)));
 }
 
-function caseContext(testCase: EvalCase): string {
-  return [
-    `<evaluation_context>\nworkspace_repo: ${testCase.workspace_repo ?? "acme/proxy"}`,
-    ...(testCase.current_context ? [`current_context: ${testCase.current_context}`] : []),
-    "</evaluation_context>",
-  ].join("\n");
-}
-
-function profileBlock(testCase: EvalCase): string {
-  if (!testCase.profile_memory) return "";
-  return renderTdaiProfileMemoryBlock([{
-    agentName: "Evaluation Agent",
-    agentId: FIXTURE.agentId,
-    isSelf: true,
-    l3Content: testCase.profile_memory,
-    l2Entries: [{ path: "projects/proxy.md", summary: "Proxy project decisions" }],
-  }])?.content ?? "";
-}
-
-export async function renderEvalPrompt(
-  variant: "baseline" | "candidate",
-  testCase: EvalCase,
-): Promise<{ prompt: string; blocks: PromptBlocks }> {
-  const blocks = variant === "baseline" ? await baselineBlocks() : candidateBlocks();
-  const profile = profileBlock(testCase);
-  // Reproduce the original profile behavior: old profile output appended the
-  // guide even when data was empty; Candidate emits data only and can be empty.
-  const profileRegion = variant === "baseline"
-    ? [profile, blocks.memory_guide].filter(Boolean).join("\n\n")
-    : profile;
-  return {
-    prompt: [
-      "You are in a controlled tool-routing evaluation. Follow the injected routing rules. Use Bash only when a cloud tool is required; never execute arbitrary shell commands.",
-      blocks.skill_ro,
-      blocks.available,
-      blocks.knowledge,
-      blocks.memory_tools,
-      profileRegion,
-      caseContext(testCase),
-    ].filter(Boolean).join("\n\n"),
-    blocks,
-  };
-}
-
-export function promptHash(prompt: string): string {
-  return sha256(prompt);
+export async function buildEvalProviderRequest(variant: "baseline" | "candidate", item: EvalCase,
+  options: { messages?: unknown[]; requestParams?: Record<string, unknown> } = {}) {
+  const c = item as PreparedCase;
+  if (c.profile_memory) throw new Error("The frozen layout has no profile-memory slot");
+  const listing = ["<available_skills>", ...(c.skill_menu ?? []).map(s => `- ${s.name}: ${s.description}`), "</available_skills>"].join("\n");
+  const context = ["<evaluation_context>", `workspace_repo: ${c.workspace_repo ?? "acme/proxy"}`,
+    ...(c.current_context ? [`current_context: ${c.current_context}`] : []), "</evaluation_context>"].join("\n");
+  let prompt: string;
+  if (variant === "baseline") {
+    prompt = fill(baseline, { LISTING: listing, KNOWLEDGE: fill(baselineKnowledge, { RESOURCES: c.baseline_resources }), CONTEXT: context });
+  } else {
+    const resources = (c.knowledge_resources ?? []).map(r => ({ summary: null, team_id: "team-1", user_id: "user-1",
+      created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z", ...r }));
+    prompt = fill(candidateLayout, {
+      SKILL_TOOLS: renderSkillToolsBlock("https://proxy.test", false, "session-1", "space-1").trimEnd(),
+      AVAILABLE: wrapAvailableSkillsBlock(listing).trimEnd(),
+      KNOWLEDGE: (renderKnowledgeToolsBlock(resources, "space-1", { sessionKey: "session-1", userId: "user-1", teamId: "team-1", agentId: "agent-1" }) ?? "").trimEnd(),
+      MEMORY: renderTdaiMemoryToolsBlock("https://proxy.test", "session-1", "space-1").trimEnd(), CONTEXT: context,
+    });
+  }
+  return { prompt, request: { ...(options.requestParams ?? { model: "deepseek-v4-flash", temperature: 0, top_p: 1,
+    max_tokens: 8192, thinking: { type: "disabled" } }), messages: [{ role: "system", content: prompt },
+    ...structuredClone(options.messages ?? c.messages)], tools: structuredClone(WORKSPACE_TOOLS) } };
 }

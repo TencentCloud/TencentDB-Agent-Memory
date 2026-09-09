@@ -1,0 +1,1197 @@
+[
+  {
+    "kind": "skill",
+    "name": "cli-creator",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/cli-creator/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "24058eabf0aafce6def3fb937ac93cbe3fa341c653c658dc589edb77f73d6152",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/cli-creator/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "cloudflare-deploy",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/cloudflare-deploy/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "d7632537cf19be17cf33d2c696b9d9c2ea3ee51026030e9b203d5b9255e75b15",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/cloudflare-deploy/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "figma-code-connect-components",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/figma-code-connect-components/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "0f19edad8aed28063a3517c419fbcbef5421d024f189fd02a17fae25093ec69d",
+    "license_blob_sha": "61ff4a8ed958746367201cbedaf4a0d5dc407e42",
+    "license_path": "skills/.curated/figma-code-connect-components/LICENSE.TXT",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "gh-address-comments",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/gh-address-comments/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "77389eefd3fb6584210668ca8e43f4b8de87e7722ddd953474bc9e24cdfaaedd",
+    "license_blob_sha": "7a4a3ea2424c09fbe48d455aed1eaa94d9124835",
+    "license_path": "skills/.curated/gh-address-comments/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "gh-fix-ci",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/gh-fix-ci/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "7b326b4a2f0f5f85122144628ec02077e48841e0e0e82efce88b3415bcfb7c26",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/gh-fix-ci/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "jupyter-notebook",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/jupyter-notebook/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "62f102e8554b25716dccef0ffab4572d4e3eaf05ccc76562d33a065bc9c521fb",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/jupyter-notebook/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "linear",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/linear/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "ce0f39c95b6c9190f8ea33614393cdb556b2684dd8388ded394e9cb915f42601",
+    "license_blob_sha": "7a4a3ea2424c09fbe48d455aed1eaa94d9124835",
+    "license_path": "skills/.curated/linear/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "notion-knowledge-capture",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/notion-knowledge-capture/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "b49383b229bc766190ea22bb58502cfcf7e08449f5fce55a104eef1e54e27f00",
+    "license_blob_sha": "08717083b66cc66a7d45267fd9a6998e79bddf04",
+    "license_path": "skills/.curated/notion-knowledge-capture/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "notion-meeting-intelligence",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/notion-meeting-intelligence/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "bad61faccbbe0f2cab53bcfbc4cb22f847ba8593ef14c2e37fea5b9b03346332",
+    "license_blob_sha": "08717083b66cc66a7d45267fd9a6998e79bddf04",
+    "license_path": "skills/.curated/notion-meeting-intelligence/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "notion-research-documentation",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/notion-research-documentation/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "e88a46da978cf6f088a788fa92ee736df699a355a72f41f14bdc258bf3ef57e7",
+    "license_blob_sha": "08717083b66cc66a7d45267fd9a6998e79bddf04",
+    "license_path": "skills/.curated/notion-research-documentation/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "notion-spec-to-implementation",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/notion-spec-to-implementation/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "6e22c4c6df441e849fa6b4b825371b579c9bb4896f97bedca5f8536020427a81",
+    "license_blob_sha": "08717083b66cc66a7d45267fd9a6998e79bddf04",
+    "license_path": "skills/.curated/notion-spec-to-implementation/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "playwright",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/playwright/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "0ffaabcc8e0990627c4725f18bf1c7955534a796c1c199e872909de2013ce6a8",
+    "license_blob_sha": "cefe596afef12e19a8e5e923f1a04c7da3188760",
+    "license_path": "skills/.curated/playwright/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "screenshot",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/screenshot/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "081935a6a163277537d46365f49d6b4a3cb40b4748347e7e88759c5927fa8cf5",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/screenshot/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "security-best-practices",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/security-best-practices/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "7b3dae1ffc5434d890f3c65c8f552af52d0307fab3b35dec13013c9ca3844c4f",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/security-best-practices/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "security-ownership-map",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/security-ownership-map/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "f06c1a59247569326702c945f397af163ea96cf2ecfdf2dde280605bf89a3ec8",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/security-ownership-map/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "security-threat-model",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/security-threat-model/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "1283c0dd62a8104d9edda4583569b5d8510b4ddaa45120687c999250fd96bad2",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/security-threat-model/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "sentry",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/sentry/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "508c6f5c100586c81a34397d30f00f4b8771b66d698a7ac1836998df925dd007",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/sentry/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "speech",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/speech/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "d6120efc03ea0e80204f687801cfaec8efc4519a3430b68e13e4ebd8e1c69b52",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/speech/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "transcribe",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/transcribe/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "f530021da9f377362ee4214e0bc689cbb5404640d2eb88ee272d51d61f530a09",
+    "license_blob_sha": "13e25df86ce06eb6488e6a6bc5c5847f5dedc352",
+    "license_path": "skills/.curated/transcribe/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "winui-app",
+    "repository": "openai/skills",
+    "source_path": "skills/.curated/winui-app/SKILL.md",
+    "tree_sha": "49f948faa9258a0c61caceaf225e179651397431",
+    "source_sha256": "917341ec9eb688d73e21362910a7178a92b2ae49544b7d8f17ee9e19adfe2ea8",
+    "license_blob_sha": "7a4a3ea2424c09fbe48d455aed1eaa94d9124835",
+    "license_path": "skills/.curated/winui-app/LICENSE.txt",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "hf-cli",
+    "repository": "huggingface/skills",
+    "source_path": "skills/hf-cli/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "22a29c9c00755a3d4a74fd5607f5963215f60e4f2fe925261026f93161af2a9e",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "huggingface-datasets",
+    "repository": "huggingface/skills",
+    "source_path": "skills/huggingface-datasets/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "eeca50adf211ea64a288b852938f85a5183b045c720dc696b62db9aa2ea8deb2",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "huggingface-gradio",
+    "repository": "huggingface/skills",
+    "source_path": "skills/huggingface-gradio/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "ce41c656e364a8027755a520372448036d90811f5a1d377f02bb9d549c0865a9",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "huggingface-llm-trainer",
+    "repository": "huggingface/skills",
+    "source_path": "skills/huggingface-llm-trainer/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "fb5c5e25103e38226e4d8ae28db84a01de42a11da4be1918fa72f833699f9d0d",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "huggingface-local-models",
+    "repository": "huggingface/skills",
+    "source_path": "skills/huggingface-local-models/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "814640db1d5f2f274aec09d66b3589ed5a0fdcfaf536afd508b1d757dcae1534",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "huggingface-paper-publisher",
+    "repository": "huggingface/skills",
+    "source_path": "skills/huggingface-paper-publisher/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "04b59406cf88054ab365f5bbbc57fe2e2fcb369e942dff2841c4f4297318c353",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "huggingface-trackio",
+    "repository": "huggingface/skills",
+    "source_path": "skills/huggingface-trackio/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "540f52974f4f77c2455a7b37ed983da0dbfb0f5af3d2c482e4736f14f1cc8724",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "huggingface-vision-trainer",
+    "repository": "huggingface/skills",
+    "source_path": "skills/huggingface-vision-trainer/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "c7aba4de75fa6595ffdaf5c50136786e8346aba0c9ff0261eaee656af4a3b0d9",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "train-sentence-transformers",
+    "repository": "huggingface/skills",
+    "source_path": "skills/train-sentence-transformers/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "9bd098d81049fc245032ee4f97cf5d9de906d726731ace4a6df0bad6d9dcd182",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "transformers-js",
+    "repository": "huggingface/skills",
+    "source_path": "skills/transformers-js/SKILL.md",
+    "tree_sha": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+    "source_sha256": "241ef15a39acbdf1d610acab683c0f76500d7c021c9c0303e6bb2c751ac3d395",
+    "license_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-contentsafety-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-contentsafety-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "a87b5c2b469ddb77776770d12b7a3a1a481c72af6300b6aac96887825df063fb",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-contentunderstanding-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-contentunderstanding-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "3bb3d811f73db5724d3d64d572819a43467803e3e15ce20024845e9bb0a534a7",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-language-conversations-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-language-conversations-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "4b51c68f15f6155f4621be975bdbb9f41ce79097c9a7cd1784669d8f87cae665",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-ml-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-ml-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "07491b57acea5747c3474bc1401e4813ce292dcf35658b33512aebd73d21609f",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-projects-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-projects-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "a44de7c651217482c7ed9321d24a6d77604869886e0038307eb4ea202178d4b4",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-textanalytics-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-textanalytics-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "6d4a9cbb3889a3dd6beca505dbc6c240454a7432f9460195c68f9b54f0a89396",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-transcription-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-transcription-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "3e2f90f372f71323b46d9f2988f955dc8e3722a9306fcd2f6b29a8bc15babf8a",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-translation-document-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-translation-document-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "6dd015ac34065253ff022f579a3c5af02aed4e495a587895acbe7a33f1c8205d",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-vision-imageanalysis-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-vision-imageanalysis-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "b6bcdb76e29ccc125741a75a07f0f65ee971086749a72a87d0b83c20bf9f6ea5",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-ai-voicelive-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-ai-voicelive-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "8a765d22c122b71f8726aded787a45e248ed3823fdf373cc041d3adc2a5814f5",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-appconfiguration-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-appconfiguration-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "4ac56c42ed0d45adf51f98f4b4150290ab98c22c2f5b7fe367f8746d48e670f3",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-containerregistry-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-containerregistry-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "15bb9f18c67f30940b36edd5a2c050c05153ce2b3626d8ebf55604a9fbe946b2",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-cosmos-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-cosmos-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "7b3c8cbbee11c4900cec94db00927a60f69d002385194df953af665768281925",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-data-tables-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-data-tables-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "e28e8908e2a19511abab4ede57bfb967e75dba99b92b242c97c0eb23d729cc7a",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-eventgrid-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-eventgrid-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "9c216f29155345129844628e6137de6d3593690e9ce6bae80e543aff84fbb933",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-eventhub-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-eventhub-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "fd26cd3d54d9e92d3d8989b0c2be8f54ab140f41837ba1f4a03da40659f64d03",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-identity-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-identity-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "b10709c8cadc23134bfee415010f9f0292e39f06c216df3f3dd6fc826897414c",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-keyvault-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-keyvault-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "5300434b6d8025604bfb4e16514b27d1e380255f0a587c65d000cbdf59248ce1",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-messaging-webpubsubservice-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-messaging-webpubsubservice-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "c44dffb388765c125899343027db5276366a5c11b5993b11b07acb06ce235527",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-search-documents-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-search-documents-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "4a8d46e6e8def539b71987804fdc2d0946948e6e332c98ca831eeaea9e596401",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-servicebus-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-servicebus-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "6d1905fe12c4c84a3e4520ee6c03d21b205111b0c394c14e4a0d5bb322c94435",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-storage-blob-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-storage-blob-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "036cde228f87b9e6aacbd3ec317bd504cb5639e04aec81f1b3ef631a9b240622",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-storage-file-datalake-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-storage-file-datalake-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "a8a7321f17a1097d0c418cf1e57b3c8758f25e986fb4f35f8de408f6d8c43d95",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-storage-file-share-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-storage-file-share-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "428aed569ce9865e7629c565eff62cedbcdb1155533603ed9aa75f888d8c8730",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-storage-queue-py",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-sdk-python/skills/azure-storage-queue-py/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "7a348472e13aaafa5d631b39dc9198d5b90123ea00b4cac4d359cbcaf886bc45",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-cost",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-cost/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "bb338e57ad45c423c7ecd77c1a5a9cf4e2f7bb1d9aaea1aec136f349f2a6ae02",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-compliance",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-compliance/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "7d50dc223fb02fa56108c833e08b8c9045390334cd6b9b0e6132be3968df6fda",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-cloud-migrate",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-cloud-migrate/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "92766b8047f8f31eae9e4168d2bb903515d211146a97d00c795b535f77677ca7",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-diagnostics",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-diagnostics/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "513f4aae9d13460a83edee10c03e56b099532fd905bf7ec0bf825a02ce10fb45",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-enterprise-infra-planner",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-enterprise-infra-planner/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "7e1b932f780b6348745b9d283437b64fc031ba452e8982ed9705849b9c19f50e",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-quotas",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-quotas/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "3bce38d6df08def03e5934469313e5cd532607a6f5087d08f75712e286550ae2",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-reliability",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-reliability/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "a29e054ff1073c263853d137dc9109e100caa1b0b677f4e80652b67d8f6fbdb0",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "azure-resource-visualizer",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/azure-resource-visualizer/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "eb7d6ecae5ba4f8c0da5d1bd506486d3cbd71eff5d7d12b24b42e710b4f47fcb",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "entra-app-registration",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/azure-skills/skills/entra-app-registration/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "8f8e7b7429b04c3150c7393997d6ccd433defd497ad22a7e43979cc43e309c32",
+    "license_blob_sha": "356b112bcc4f07e03b6e57569eedf9d79978d2d5",
+    "license_path": ".github/plugins/azure-skills/LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "wiki-architect",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/deep-wiki/skills/wiki-architect/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "e439354d8a650cf147ef008222b80e28414c1e295381616639890f901a653226",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "wiki-changelog",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/deep-wiki/skills/wiki-changelog/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "c2c5da0e585855d44f831859a163ef1fa931df56ec3fb9d6d86ff6929f0a4e9a",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "wiki-onboarding",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/deep-wiki/skills/wiki-onboarding/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "5dde78db7c75f3265025c1410818d25abbed7a0bb3b5fa33c2c25ae0fbe7df50",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "wiki-qa",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/deep-wiki/skills/wiki-qa/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "e509864c9561b98dc3f6e9d8bf80824f07a1fe78978dea9ed849959c34b6f7b4",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "wiki-vitepress",
+    "repository": "microsoft/skills",
+    "source_path": ".github/plugins/deep-wiki/skills/wiki-vitepress/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "00d9f1678f604787f86026d26a5ebdec4573880e9e4ef44853820788584bbb36",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "skill",
+    "name": "podcast-generation",
+    "repository": "microsoft/skills",
+    "source_path": ".github/skills/podcast-generation/SKILL.md",
+    "tree_sha": "02e0b2f852b39ea00c43283f999b83fc12079273",
+    "source_sha256": "5719cfda0fd19819d52702426992551224060ce1cb4618ed8356785b6bb010fc",
+    "license_blob_sha": "79656060de00aa4659ad2c276d5be8830664d544",
+    "license_path": "LICENSE",
+    "adaptation": "Machine-authored Chinese request; source workflow text retained."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-astropy__astropy-7336",
+    "repository": "astropy/astropy",
+    "base_commit": "732d89c2940156bdc0e200bb36dc38b5e424bcba",
+    "source_paths": [
+      "astropy/units/decorators.py"
+    ],
+    "license_blob_sha": "1110225936f4e04989a86a0dd1c6a484352ec8e0",
+    "license_path": "LICENSE.rst",
+    "license_spdx": "BSD-3-Clause",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-django__django-12155",
+    "repository": "django/django",
+    "base_commit": "e8fcdaad5c428878d0a5d6ba820d957013f75595",
+    "source_paths": [
+      "django/contrib/admindocs/utils.py",
+      "django/contrib/admindocs/views.py"
+    ],
+    "license_blob_sha": "5f4f225dd282aa7e4361ec3c2750bbbaaed8ab1f",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-matplotlib__matplotlib-24627",
+    "repository": "matplotlib/matplotlib",
+    "base_commit": "9d22ab09d52d279b125d8770967569de070913b2",
+    "source_paths": [
+      "lib/matplotlib/axes/_base.py"
+    ],
+    "license_blob_sha": "ec51537db27dd4d9c9ed3cd39fd96485f3cfddea",
+    "license_path": "LICENSE/LICENSE",
+    "license_spdx": null,
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-mwaskom__seaborn-3069",
+    "repository": "mwaskom/seaborn",
+    "base_commit": "54cab15bdacfaa05a88fbc5502a5b322d99f148e",
+    "source_paths": [
+      "seaborn/_core/plot.py"
+    ],
+    "license_blob_sha": "b5ebba626349f543886619b6007dee5430b3f345",
+    "license_path": "LICENSE.md",
+    "license_spdx": "BSD-3-Clause",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pallets__flask-5014",
+    "repository": "pallets/flask",
+    "base_commit": "7ee9ceb71e868944a46e1ff00b506772a53a4f1d",
+    "source_paths": [
+      "src/flask/blueprints.py"
+    ],
+    "license_blob_sha": "9d227a0cc43c3268d15722b763bd94ad298645a1",
+    "license_path": "LICENSE.rst",
+    "license_spdx": "BSD-3-Clause",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-psf__requests-1921",
+    "repository": "psf/requests",
+    "base_commit": "3c88e520da24ae6f736929a750876e7654accc3d",
+    "source_paths": [
+      "requests/sessions.py"
+    ],
+    "license_blob_sha": "8c5e758401020484b74d00c0aa75debfc7b65155",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pydata__xarray-6461",
+    "repository": "pydata/xarray",
+    "base_commit": "851dadeb0338403e5021c3fbe80cbc9127ee672d",
+    "source_paths": [
+      "xarray/core/computation.py"
+    ],
+    "license_blob_sha": "37ec93a14fdcd0d6e525d97c0cfa6b314eaa98d8",
+    "license_path": "LICENSE",
+    "license_spdx": "Apache-2.0",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pylint-dev__pylint-8898",
+    "repository": "pylint-dev/pylint",
+    "base_commit": "1f8c4d9eb185c16a2c1d881c054f015e1c2eb334",
+    "source_paths": [
+      "pylint/config/argument.py",
+      "pylint/utils/__init__.py",
+      "pylint/utils/utils.py"
+    ],
+    "license_blob_sha": "8c4c849e2321672c89cc1a58df54da6043021ca9",
+    "license_path": "LICENSE",
+    "license_spdx": "GPL-2.0",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pytest-dev__pytest-5840",
+    "repository": "pytest-dev/pytest",
+    "base_commit": "73c5b7f4b11a81e971f7d1bb18072e06a87060f4",
+    "source_paths": [
+      "src/_pytest/config/__init__.py",
+      "src/_pytest/pathlib.py"
+    ],
+    "license_blob_sha": "477af2d2e458f6c91c16ccc330222558d85ff182",
+    "license_path": "LICENSE",
+    "license_spdx": "MIT",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-scikit-learn__scikit-learn-14710",
+    "repository": "scikit-learn/scikit-learn",
+    "base_commit": "4b6273b87442a4437d8b3873ea3022ae163f4fdf",
+    "source_paths": [
+      "sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py"
+    ],
+    "license_blob_sha": "0f665f8400d08086355ebb3539fbcaccbdfa26a9",
+    "license_path": "COPYING",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-sphinx-doc__sphinx-9367",
+    "repository": "sphinx-doc/sphinx",
+    "base_commit": "6918e69600810a4664e53653d6ff0290c3c4a788",
+    "source_paths": [
+      "sphinx/pycode/ast.py"
+    ],
+    "license_blob_sha": "2249594da08f934194651b69866c7d33ccf22f0d",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-sympy__sympy-18199",
+    "repository": "sympy/sympy",
+    "base_commit": "ba80d1e493f21431b4bf729b3e0452cd47eb9566",
+    "source_paths": [
+      "sympy/ntheory/residue_ntheory.py"
+    ],
+    "license_blob_sha": "ccbd2d0302071095ba7c8e348043ada292c5f3ae",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-astropy__astropy-13579",
+    "repository": "astropy/astropy",
+    "base_commit": "0df94ff7097961e92fd7812036a24b145bc13ca8",
+    "source_paths": [
+      "astropy/wcs/wcsapi/wrappers/sliced_wcs.py"
+    ],
+    "license_blob_sha": "e417cf74d6dc6a2d986fa64ca1d6d5c896dff216",
+    "license_path": "LICENSE.rst",
+    "license_spdx": "BSD-3-Clause",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-django__django-13449",
+    "repository": "django/django",
+    "base_commit": "2a55431a5678af52f669ffe7dff3dd0bd21727f8",
+    "source_paths": [
+      "django/db/models/expressions.py"
+    ],
+    "license_blob_sha": "5f4f225dd282aa7e4361ec3c2750bbbaaed8ab1f",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-matplotlib__matplotlib-25960",
+    "repository": "matplotlib/matplotlib",
+    "base_commit": "1d0d255b79e84dfc9f2123c5eb85a842d342f72b",
+    "source_paths": [
+      "lib/matplotlib/figure.py"
+    ],
+    "license_blob_sha": "ec51537db27dd4d9c9ed3cd39fd96485f3cfddea",
+    "license_path": "LICENSE/LICENSE",
+    "license_spdx": null,
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-mwaskom__seaborn-3187",
+    "repository": "mwaskom/seaborn",
+    "base_commit": "22cdfb0c93f8ec78492d87edb810f10cb7f57a31",
+    "source_paths": [
+      "seaborn/_core/scales.py",
+      "seaborn/utils.py"
+    ],
+    "license_blob_sha": "b5ebba626349f543886619b6007dee5430b3f345",
+    "license_path": "LICENSE.md",
+    "license_spdx": "BSD-3-Clause",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-psf__requests-6028",
+    "repository": "psf/requests",
+    "base_commit": "0192aac24123735b3eaf9b08df46429bb770c283",
+    "source_paths": [
+      "requests/utils.py"
+    ],
+    "license_blob_sha": "67db8588217f266eb561f75fae738656325deac9",
+    "license_path": "LICENSE",
+    "license_spdx": "Apache-2.0",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pydata__xarray-3993",
+    "repository": "pydata/xarray",
+    "base_commit": "8cc34cb412ba89ebca12fc84f76a9e452628f1bc",
+    "source_paths": [
+      "xarray/core/dataarray.py",
+      "xarray/core/dataset.py"
+    ],
+    "license_blob_sha": "37ec93a14fdcd0d6e525d97c0cfa6b314eaa98d8",
+    "license_path": "LICENSE",
+    "license_spdx": "Apache-2.0",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pylint-dev__pylint-6528",
+    "repository": "pylint-dev/pylint",
+    "base_commit": "273a8b25620467c1e5686aa8d2a1dbb8c02c78d0",
+    "source_paths": [
+      "pylint/lint/expand_modules.py",
+      "pylint/lint/pylinter.py"
+    ],
+    "license_blob_sha": "8c4c849e2321672c89cc1a58df54da6043021ca9",
+    "license_path": "LICENSE",
+    "license_spdx": "GPL-2.0",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pytest-dev__pytest-6202",
+    "repository": "pytest-dev/pytest",
+    "base_commit": "3a668ea6ff24b0c8f00498c3144c63bac561d925",
+    "source_paths": [
+      "src/_pytest/python.py"
+    ],
+    "license_blob_sha": "477af2d2e458f6c91c16ccc330222558d85ff182",
+    "license_path": "LICENSE",
+    "license_spdx": "MIT",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-scikit-learn__scikit-learn-13439",
+    "repository": "scikit-learn/scikit-learn",
+    "base_commit": "a62775e99f2a5ea3d51db7160fad783f6cd8a4c5",
+    "source_paths": [
+      "sklearn/pipeline.py"
+    ],
+    "license_blob_sha": "0f665f8400d08086355ebb3539fbcaccbdfa26a9",
+    "license_path": "COPYING",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-sphinx-doc__sphinx-10323",
+    "repository": "sphinx-doc/sphinx",
+    "base_commit": "31eba1a76dd485dc633cae48227b46879eda5df4",
+    "source_paths": [
+      "sphinx/directives/code.py"
+    ],
+    "license_blob_sha": "05bf4ab2db2ae8cb2bfc63768b8e29746fd887ba",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-sympy__sympy-24661",
+    "repository": "sympy/sympy",
+    "base_commit": "a36caf5c74fe654cedc488e8a8a05fad388f8406",
+    "source_paths": [
+      "sympy/parsing/sympy_parser.py"
+    ],
+    "license_blob_sha": "7ace01f27a0ee76771b73e7b6a6365f0fd8de04d",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-astropy__astropy-13398",
+    "repository": "astropy/astropy",
+    "base_commit": "6500928dc0e57be8f06d1162eacc3ba5e2eff692",
+    "source_paths": [
+      "astropy/coordinates/builtin_frames/__init__.py",
+      "astropy/coordinates/builtin_frames/intermediate_rotation_transforms.py",
+      "astropy/coordinates/builtin_frames/itrs.py"
+    ],
+    "license_blob_sha": "e417cf74d6dc6a2d986fa64ca1d6d5c896dff216",
+    "license_path": "LICENSE.rst",
+    "license_spdx": "BSD-3-Clause",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-django__django-15252",
+    "repository": "django/django",
+    "base_commit": "361bb8f786f112ee275be136795c0b1ecefff928",
+    "source_paths": [
+      "django/db/migrations/executor.py"
+    ],
+    "license_blob_sha": "5f4f225dd282aa7e4361ec3c2750bbbaaed8ab1f",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-matplotlib__matplotlib-26466",
+    "repository": "matplotlib/matplotlib",
+    "base_commit": "3dd06a46750d174f821df5377996f493f1af4ebb",
+    "source_paths": [
+      "lib/matplotlib/text.py"
+    ],
+    "license_blob_sha": "ec51537db27dd4d9c9ed3cd39fd96485f3cfddea",
+    "license_path": "LICENSE/LICENSE",
+    "license_spdx": null,
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-psf__requests-1766",
+    "repository": "psf/requests",
+    "base_commit": "847735553aeda6e6633f2b32e14ba14ba86887a4",
+    "source_paths": [
+      "requests/auth.py"
+    ],
+    "license_blob_sha": "ca97ae0ead74791eed720be61d19497580cb4ad5",
+    "license_path": "LICENSE",
+    "license_spdx": "NOASSERTION",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pydata__xarray-6938",
+    "repository": "pydata/xarray",
+    "base_commit": "c4e40d991c28be51de9ac560ce895ac7f9b14924",
+    "source_paths": [
+      "xarray/core/dataset.py",
+      "xarray/core/variable.py"
+    ],
+    "license_blob_sha": "37ec93a14fdcd0d6e525d97c0cfa6b314eaa98d8",
+    "license_path": "LICENSE",
+    "license_spdx": "Apache-2.0",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pylint-dev__pylint-6903",
+    "repository": "pylint-dev/pylint",
+    "base_commit": "ca80f03a43bc39e4cc2c67dc99817b3c9f13b8a6",
+    "source_paths": [
+      "pylint/lint/run.py"
+    ],
+    "license_blob_sha": "8c4c849e2321672c89cc1a58df54da6043021ca9",
+    "license_path": "LICENSE",
+    "license_spdx": "GPL-2.0",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "coding-review",
+    "case_id": "public300-review-pytest-dev__pytest-5631",
+    "repository": "pytest-dev/pytest",
+    "base_commit": "cb828ebe70b4fa35cd5f9a7ee024272237eab351",
+    "source_paths": [
+      "src/_pytest/compat.py"
+    ],
+    "license_blob_sha": "477af2d2e458f6c91c16ccc330222558d85ff182",
+    "license_path": "LICENSE",
+    "license_spdx": "MIT",
+    "adaptation": "Original issue and source retained; task narrowed to code review."
+  },
+  {
+    "kind": "memory",
+    "dataset": "LongMemEval cleaned oracle",
+    "url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned",
+    "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+    "license_spdx": "MIT",
+    "license_blob_sha": "2e2c8491038bf0383c324a478b66a4663833efea",
+    "adaptation": "Questions machine translated; evidence sessions mapped to fixed tool responses."
+  },
+  {
+    "kind": "knowledge",
+    "dataset": "QASPER",
+    "creators": "Allen Institute for AI; Pradeep Dasigi, Kyle Lo, Iz Beltagy, Arman Cohan, Noah A. Smith, Matt Gardner",
+    "url": "https://huggingface.co/datasets/allenai/qasper",
+    "revision": "fdc9d8214fbab5dd782958601db4d678e6934a54",
+    "license_spdx": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "adaptation": "Questions machine translated; full paper text mapped to wiki assets. Paper titles and arXiv IDs retained in knowledge resources."
+  },
+  {
+    "kind": "coding-repair",
+    "repository": "python/cpython",
+    "license_spdx": "PSF-2.0",
+    "note": "Each case retains the original LICENSE in workspace_files and source/translation provenance."
+  }
+]
