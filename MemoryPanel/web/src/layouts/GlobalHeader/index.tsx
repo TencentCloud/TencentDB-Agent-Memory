@@ -32,7 +32,6 @@ export function GlobalHeader({
   currentUser,
   currentUserId,
   instanceName,
-  onReplayOnboarding,
   onLogout,
 }: {
   userRole: TeamRole | null;
@@ -40,11 +39,6 @@ export function GlobalHeader({
   currentUserId?: string;
   /** 当前登录所在的 memory 实例名（来自 auth.instance_name），用于「我的资料」展示 */
   instanceName?: string;
-  /**
-   * 「回顾引导」入口回调：ConsoleLayout 注入。
-   * 未传则下拉菜单不展示该项，避免在「尚未拿到 auth」等中间态误出。
-   */
-  onReplayOnboarding?: () => void;
   onLogout: () => void;
 }) {
   const { t } = useTranslation();
@@ -112,16 +106,6 @@ export function GlobalHeader({
               >
                 {t('header.profile')}
               </List.Item>
-              {onReplayOnboarding && (
-                <List.Item
-                  onClick={() => {
-                    close();
-                    onReplayOnboarding();
-                  }}
-                >
-                  {t('header.replayGuide')}
-                </List.Item>
-              )}
               <List.Item
                 onClick={() => {
                   close();
@@ -142,7 +126,6 @@ export function GlobalHeader({
           userRole={userRole}
           instanceName={instanceName}
           onClose={() => setProfileOpen(false)}
-          onReplayOnboarding={onReplayOnboarding}
         />
       )}
 
@@ -167,7 +150,6 @@ function roleDisplay(role: TeamRole | null): { label: string; theme: 'primary' |
  *   - 头部 Avatar + 用户名 + 角色 Tag 一行展示（Justify 左右对齐）
  *   - User ID 用 InputAdornment + Copy 一行可复制，避免单独开块
  *   - 所属实例（如有）用 Card.Body 单独分组，与 User ID 区分语义
- *   - Footer 用 Justify 让「回顾引导」左对齐、「关闭」右对齐
  */
 function ProfileModal({
   currentUser,
@@ -175,14 +157,12 @@ function ProfileModal({
   userRole,
   instanceName,
   onClose,
-  onReplayOnboarding,
 }: {
   currentUser: string;
   currentUserId: string;
   userRole: TeamRole | null;
   instanceName?: string;
   onClose: () => void;
-  onReplayOnboarding?: () => void;
 }) {
   const { t } = useTranslation();
   const initial = currentUser.slice(0, 1).toUpperCase();
@@ -256,23 +236,7 @@ function ProfileModal({
         )}
       </Modal.Body>
       <Modal.Footer>
-        {/* Justify：左回顾引导 / 右关闭；onReplayOnboarding 未传时只显示关闭 */}
-        <Justify
-          left={
-            onReplayOnboarding ? (
-              <Button
-                type="link"
-                onClick={() => {
-                  onClose();
-                  onReplayOnboarding();
-                }}
-              >
-                {t('header.replayGuide')}
-              </Button>
-            ) : null
-          }
-          right={<Button onClick={onClose}>{t('header.profile.close')}</Button>}
-        />
+        <Button onClick={onClose}>{t('header.profile.close')}</Button>
       </Modal.Footer>
     </Modal>
   );

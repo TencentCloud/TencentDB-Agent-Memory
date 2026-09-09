@@ -93,6 +93,20 @@ const routeTable: Record<string, Handler> = {
     s.assertCanManageUsers(c);
     return s.createNormalUserWithKey(d);
   }),
+  // 外部认证（如 WOA）登录后判断是否初次：按 (auth_provider, external_id) 查 user。
+  // 查 core 既有的 meta_users.external_id；无匹配=初次。
+  [`${V3_PREFIX}/user/find-by-external`]: bind(S.userFindByExternalSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.findUserByExternalId(d.external_id, d.auth_provider);
+  }),
+  // 外部认证绑定存量账号：把外部 IdP 唯一 id 写入 user 的 external_id。
+  // auth_provider 一并写入外部域，保证与 find-by-external 的读取同域
+  // （只写 external_id 不写域 → 下次反查落空）。
+  // 存量账号绑定后仍可用原 user_key 登录，外部认证只是新增一种入口。
+  [`${V3_PREFIX}/user/bind-external`]: bind(S.userBindExternalSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.bindExternalIdToUser(d.user_id, d.external_id, d.auth_provider, d.display_name);
+  }),
   [`${V3_PREFIX}/user/get`]: bind(S.userGetSchema, async (d, c, s) => {
     const userId = await resolveUserId(s, d);
     return s.getUserForCaller(userId, c);
@@ -309,6 +323,24 @@ const routeTable: Record<string, Handler> = {
     await requireEntity(s, EntityType.User, d.user_id);
     s.assertCallerIsOwner(d.user_id, c.userId!);
     return s.configParams.setUserConfigForCaller(d);
+  }),
+
+  // InstanceUpstreamConfig
+  [`${V3_PREFIX}/instance-upstream/set`]: bind(S.instanceUpstreamSetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.setInstanceUpstreamConfig(d);
+  }),
+  [`${V3_PREFIX}/instance-upstream/get`]: bind(S.instanceUpstreamGetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.getInstanceUpstreamConfig(d.agent_source, d.type);
+  }),
+  [`${V3_PREFIX}/instance-upstream/list`]: bind(S.instanceUpstreamListSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.listInstanceUpstreamConfigs(d);
+  }),
+  [`${V3_PREFIX}/instance-upstream/reset`]: bind(S.instanceUpstreamResetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.resetInstanceUpstreamConfig(d.agent_source, d.type);
   }),
 };
 

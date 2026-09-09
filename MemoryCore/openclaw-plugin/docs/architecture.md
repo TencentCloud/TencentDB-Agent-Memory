@@ -41,7 +41,7 @@
 | **标签清理** | `before_message_write` hook | 剥离 `<relevant-memories>` 标签 |
 | **L1 搜索** | `tdai_memory_search` tool | SDK `client.searchAtomic()` |
 | **L0 搜索** | `tdai_conversation_search` tool | SDK `client.searchConversation()` |
-| **文件读取** | `tdai_read_cos` tool | SDK `MemoryFileReader.read()` (STS 直读对象存储) |
+| **文件读取** | `tdai_read_file` tool | SDK `MemoryFileReader.read()` (STS 直读对象存储) |
 | **Prompt 注入** | recall 内部 | 格式化: Persona + L1 记忆 + Scene Navigation + 工具引导 |
 
 ### 不做的事
@@ -87,7 +87,7 @@ memory-tencentdb-client/
 │   ├── tools/
 │   │   ├── memory-search.ts   # tdai_memory_search → SDK searchAtomic
 │   │   ├── conversation-search.ts  # → SDK searchConversation
-│   │   └── read-cos.ts        # tdai_read_cos → SDK MemoryFileReader.read
+│   │   └── read-cos.ts        # tdai_read_file → SDK MemoryFileReader.read
 │   └── format.ts              # 召回结果格式化 + 工具引导注入
 ├── tests/
 │   └── sdk-cos.ts             # SDK COS 直读手动测试
@@ -122,14 +122,14 @@ SDK 保持独立包，不绑定任何框架，以后出 Dify 插件、Python 版
    ### Path: scene_blocks/职业发展与技术实践.md
    **热度**: 3 | Summary: 后端工程师，Go + TypeScript...
    ```
-   AI 看到路径后主动调 `tdai_read_cos` 读取详情。
+   AI 看到路径后主动调 `tdai_read_file` 读取详情。
 
 2. **工具引导（format.ts 注入）**：
    ```
    <memory-tools-guide>
    - tdai_memory_search: 搜索结构化记忆
    - tdai_conversation_search: 搜索原始对话
-   - tdai_read_cos: 读取场景文件（使用 Scene Navigation 中的路径）
+   - tdai_read_file: 读取场景文件（使用 Scene Navigation 中的路径）
    </memory-tools-guide>
    ```
 

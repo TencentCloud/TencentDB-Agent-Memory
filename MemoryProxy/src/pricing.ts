@@ -10,7 +10,7 @@
  *   未匹配时返回 null，调用方降级为 raw token count。
  */
 
-import type { CreditPricingConfig, CreditPricingEntry } from "./types.js";
+import type { CreditPricingConfig, CreditPricingEntry, PricingTier } from "./types.js";
 
 /**
  * Look up model pricing by case-insensitive full-word match.
@@ -121,4 +121,40 @@ export function isModelInPricing(
   return config.models.some(
     (m) => !!m.modelName && m.modelName.toLowerCase() === lower,
   );
+}
+
+/** Pricing rates used for credit calculation (subset of PricingTier). */
+export interface EffectivePricing {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+}
+
+/**
+ * 按 input token 总量选择生效的定价档位。
+ *
+ * 匹配规则：升序遍历 `entry.tiers`，第一个满足
+ * `totalInputTokens ≤ tier.maxInputTokens`（或 `maxInputTokens == null`）的即命中。
+ * 命中后该请求**所有 token 类型**都按该档单价计费（整体定档，非分段累进）。
+ *
+ * 无 `tiers` 或数组为空时直接返回 entry 顶层单价（向后兼容）。
+ *
+ * @param entry - 命中的模型定价条目。
+ * @param totalInputTokens - 分档判据 = nonCacheInput + cacheRead。
+ */
+export function resolveTierPricing(
+  entry: CreditPricingEntry,
+  totalInputTokens: number,
+): EffectivePricing {
+  if (!entry.tiers?.length) return entry;
+
+  for (const tier of entry.tiers) {
+    if (tier.maxInputTokens == null || totalInputTokens <= tier.maxInputTokens) {
+      return tier;
+    }
+  }
+  // 所有档都没命中（理论上不会，最后一档应是 null）→ 回落顶层
+  return entry;
 }
