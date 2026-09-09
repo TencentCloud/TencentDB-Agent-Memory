@@ -9,6 +9,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikUpdateTrace,
+  opikTurnTag,
   uuidv7,
 } from "./opik.js";
 import {
@@ -1434,6 +1435,7 @@ export async function handleChatCompletions(
   // Prefer the extension's monotonic per-session turnSeq (survives context
   // compaction); fall back to the stateless count when it's not tracked.
   const turnSeq = target.turnSeq > 0 ? target.turnSeq : countHumanTurns(messages, "openai");
+  traceTags.push(opikTurnTag(sessionKey, turnSeq));
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1847,12 +1849,16 @@ export async function handleChatCompletions(
     }
 
     if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-      await recordTdaiTurn(
-        tdaiClient,
-        tdaiIdentity,
-        tdaiUserMessage,
-        assistantContentForTdai(assistantMessage),
-        { traceId },
+      trackWrite(
+        withL0Retry(() =>
+          recordTdaiTurn(
+            tdaiClient!,
+            tdaiIdentity,
+            tdaiUserMessage,
+            assistantContentForTdai(assistantMessage),
+            { traceId },
+          ),
+        ).catch((err: unknown) => pipe.error("TDAI_L0", err)),
       );
     } else if (tdaiClient) {
       logExtractionSkipped(config, "tdai-memory", sessionKey);
@@ -1871,6 +1877,7 @@ export async function handleChatCompletions(
       tags: [
         "non-stream",
         ...(retried ? ["retry"] : []),
+        opikTurnTag(sessionKey, turnSeq),
       ],
       metadata: opikTraceMetadata,
       forkProjectName: "request_log",
@@ -2275,6 +2282,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           tags: [
             "stream",
             ...(retried ? ["retry"] : []),
+            opikTurnTag(ctx.sessionKey, ctx.lf.turnSeq),
           ],
           forkProjectName: "request_log",
           forkTraceId: ctx.forkTraceId,

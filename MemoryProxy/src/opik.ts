@@ -80,6 +80,18 @@ export function extractBearerToken(authHeader: string | null | undefined): strin
   return match ? match[1].trim() : "";
 }
 
+/** 同一轮用户提问（sessionKey + turnSeq）的稳定分组标签。
+ *  工具循环产生的多条 HTTP 请求会算出相同的 (sessionKey, turnSeq)，
+ *  因此该标签一致，可在 Opik 中按 turn:<hash> 过滤同一次提问的全部请求。
+ */
+export function opikTurnTag(sessionKey: string, turnSeq: number): string {
+  const hash = createHash("sha256")
+    .update(`${sessionKey}:${turnSeq}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `turn:${hash}`;
+}
+
 interface OpikTraceInput {
   traceId: string;
   projectName: string;

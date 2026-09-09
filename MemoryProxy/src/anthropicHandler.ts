@@ -14,6 +14,7 @@ import {
   apiKeyToKeyId,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikTurnTag,
   uuidv7,
 } from "./opik.js";
 import {
@@ -1336,6 +1337,7 @@ export async function handleAnthropicMessages(
   // compaction); fall back to the stateless count when it's not tracked
   // (extension disabled/unavailable, or no-tools auxiliary request).
   const turnSeq = target.turnSeq > 0 ? target.turnSeq : countHumanTurns(messages, "anthropic");
+  traceTags.push(opikTurnTag(sessionKey, turnSeq));
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1758,7 +1760,10 @@ export async function handleAnthropicMessages(
       outputMessage: outputContent ? { role: "assistant", content: outputContent } : null,
       model: effectiveModel,
       usage,
-      tags: retried ? ["retry"] : undefined,
+      tags: [
+        opikTurnTag(sessionKey, turnSeq),
+        ...(retried ? ["retry"] : []),
+      ],
       metadata: opikTraceMetadata,
       forkProjectName: "request_log",
       forkTraceId,
@@ -1843,14 +1848,17 @@ export async function handleAnthropicMessages(
   // 常用的 stream:false）沉默丢失。缺失该调用意味着 CC non-stream 场景
   // 完全没有 L0 记忆写入。
   if (isMainDialog && tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-    recordTdaiTurn(
-      tdaiClient,
-      tdaiIdentity,
-      tdaiUserMessage,
-      outputContent,
-      { traceId },
-    )
-      .catch((err: unknown) => pipe.error("TDAI_L0", err));
+    trackWrite(
+      withL0Retry(() =>
+        recordTdaiTurn(
+          tdaiClient!,
+          tdaiIdentity,
+          tdaiUserMessage,
+          outputContent,
+          { traceId },
+        ),
+      ).catch((err: unknown) => pipe.error("TDAI_L0", err)),
+    );
   } else if (isMainDialog && tdaiClient) {
     logExtractionSkipped(config, "tdai-memory", sessionKey);
   } else if (!isMainDialog) {
@@ -2121,7 +2129,10 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
             outputMessage: outputText ? { role: "assistant", content: outputText } : null,
             model: modelId,
             usage,
-            tags: retried ? ["retry"] : undefined,
+            tags: [
+              opikTurnTag(ctx.sessionKey, ctx.lf.turnSeq),
+              ...(retried ? ["retry"] : []),
+            ],
             forkProjectName: "request_log",
             forkTraceId,
             forkMetadata: {

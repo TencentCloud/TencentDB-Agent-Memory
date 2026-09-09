@@ -33,6 +33,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikUpdateTrace,
+  opikTurnTag,
   uuidv7,
 } from "./opik.js";
 import {
@@ -390,6 +391,7 @@ export async function handleCodexEndpoint(
       "protocol:responses",
       isStream ? "stream" : "non-stream",
       `session:${sessionKey}`,
+      opikTurnTag(sessionKey, turnSeq),
     ],
     routeTags: [],
     userQuery,
@@ -1354,7 +1356,10 @@ async function forwardToUpstream(
         outputMessage,
         model: modelId,
         usage: finalUsage,
-        tags: ["non-stream"],
+        tags: [
+          "non-stream",
+          ...(lf ? [opikTurnTag(lf.sessionId, lf.turnSeq)] : []),
+        ],
         metadata: opikTurn.metadata,
         forkProjectName: "request_log",
         forkTraceId: opikTurn.forkTraceId,
@@ -1585,7 +1590,10 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
           outputMessage: outputMessage ?? null,
           model: modelId,
           usage: finalUsage,
-          tags: ["stream"],
+          tags: [
+            "stream",
+            ...(lf ? [opikTurnTag(lf.sessionId, lf.turnSeq)] : []),
+          ],
           metadata,
           forkProjectName: "request_log",
           forkTraceId,

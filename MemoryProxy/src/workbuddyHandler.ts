@@ -25,6 +25,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikUpdateTrace,
+  opikTurnTag,
   uuidv7,
 } from "./opik.js";
 import {
@@ -947,7 +948,10 @@ async function consumeWorkbuddyStream(
       outputMessage: outputMessage ?? null,
       model: ctx.modelId,
       usage: finalUsage,
-      tags: ["stream"],
+      tags: [
+        "stream",
+        opikTurnTag(ctx.lf.sessionId, ctx.lf.turnSeq),
+      ],
       metadata: ctx.metadata,
       forkProjectName: "request_log",
       forkTraceId: ctx.forkTraceId,
@@ -1078,6 +1082,7 @@ export async function handleWorkbuddyEndpoint(
       "protocol:responses",
       isStream ? "stream" : "non-stream",
       `session:${sessionKey}`,
+      opikTurnTag(sessionKey, turnSeq),
     ],
     routeTags: [],
     userQuery,

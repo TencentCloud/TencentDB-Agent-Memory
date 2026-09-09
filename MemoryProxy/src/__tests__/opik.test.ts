@@ -5,6 +5,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikEndpoint,
+  opikTurnTag,
   opikUpdateTrace,
   resetOpikClientForTests,
 } from "../opik.js";
@@ -200,6 +201,14 @@ describe("opik client 可靠性加固", () => {
     await flush();
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.signal).toBeDefined();
+  });
+});
+
+describe("opikTurnTag（同一轮提问稳定分组）", () => {
+  it("同 sessionKey + turnSeq 产生相同 tag，不同 turn 不同", () => {
+    expect(opikTurnTag("wb:user:abc", 2)).toBe(opikTurnTag("wb:user:abc", 2));
+    expect(opikTurnTag("wb:user:abc", 2)).not.toBe(opikTurnTag("wb:user:abc", 3));
+    expect(opikTurnTag("wb:user:abc", 2)).toMatch(/^turn:[0-9a-f]{16}$/);
   });
 });
 

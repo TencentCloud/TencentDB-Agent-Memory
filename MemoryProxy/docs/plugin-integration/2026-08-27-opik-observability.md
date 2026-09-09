@@ -42,7 +42,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 
 | 文件 | 改动 |
 |---|---|
-| `src/opik.ts` | 统一上报通道：超时 / 熔断（5 次 → 30s）/ 10s 限频；`apiPrefix`、`timeoutMs` 可配置；fork `request_log` 脱敏 |
+| `src/opik.ts` | 统一上报通道：超时 / 熔断（5 次 → 30s）/ 10s 限频；`apiPrefix`、`timeoutMs` 可配置；`opikTurnTag` 同轮提问稳定分组标签；fork `request_log` 脱敏 |
 | `src/opik-metadata.ts` | trace metadata 纯函数：字段白名单、长度封顶、工具交互摘要（只留名称与条数）、`buildMemoryInjectionContext`（配置级 + 逐钩子运行统计汇总） |
 | `src/injection/pipeline.ts` | `processWithStats`：把管线本就算好的每钩子 `HookResult[]` 透给调用方；`process()` 保持原签名兼容包装 |
 | `src/audit.ts` | memory-access 审计：`buildAuditPayload` 纯函数、trace_id 完整保留、JSONL 大小轮转 |
@@ -55,7 +55,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik 9 + opik-metadata 11 + audit 3（vitest 23/23；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例，对应旧文档 31/31）；本设计文档 |
+| 测试 / 文档 | opik 10 + opik-metadata 11 + audit 3（vitest 24/24；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例，对应旧文档 31/31）；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
 > 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
@@ -74,6 +74,9 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 
 另外每次 Chat / Anthropic trace 会 fork 一份到 `request_log` 项目（独立
 traceId，默认脱敏只留 usage + 标签），供原始请求留痕，不污染主项目视图。
+主项目 trace / span 还会带 `turn:<hash>` 标签：同一轮用户提问的工具循环请求
+共享同一 (sessionKey, turnSeq)，因此标签一致，可按 `turn:<hash>` 过滤同一次
+提问产生的全部调用。
 
 ## 5. 配置与启用
 
@@ -159,6 +162,10 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 - **Responses 非流式 JSON**：`stream:false` 时上游返回 JSON，codex/workbuddy
   在转发层读取 usage/output 并 update trace + 创建 LLM span（流式与 JSON 两条
   出口均已覆盖）；
+- **同一次提问归组**：Opik 沿用 Langfuse 的 turn 语义（同一 `sessionKey +
+  turnSeq` 属于同一轮用户提问），四个 handler 在 create trace / LLM span 上
+  统一打 `turn:<hash>` 标签。标签用于过滤与归组；Opik 的树形 trace 仍按
+  traceId 组织，不改变现有“每请求一条 trace”模型；
 - **记忆注入字段语义**：`injector_count` 是配置声明的注入器数量（配置级）；
   `hook_count / block_count / error_count` 是本轮注入管线真实运行结果
   （运行级），`hooks` 给出每个 hook 的 `point / block_count /
@@ -205,3 +212,14 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   请求 trace_id；⑤ `apiPrefix` 对旧 `:5173` 配置自动兼容；⑥ 评审质疑的
   `hookCount=5 / 逐钩子统计` 从“删声明”升级为“真实现”——注入管线透出本轮
   逐钩子 `HookResult[]`，四个 handler 统一写入 `memory_injection` 运行级字段。
+
+## 9. 2026-09-09 补充
+
+- **L0 非流式写入不再阻塞回复**：Chat / Anthropic 的 `stream:false` 路径原来
+  直接 `await recordTdaiTurn`，若内存服务失败可能让已成功的模型回复报 500。
+  现改为 `trackWrite(withL0Retry(...).catch(...))`：重试仍发生、失败只记日志，
+  与流式路径行为一致，不影响业务响应；审计仍只在真实写入成功那次产生一条。
+- **同轮提问打稳定 `turn:` 标签**：四个 handler 的 Opik create trace 与
+  LLM span 统一打 `turn:<hash>`（hash = sha256(sessionKey:turnSeq) 前 16 位），
+  工具循环产生的多条请求可在 Opik 按同一标签过滤归组；request_log 主语义与
+  traceId 组织不变。
