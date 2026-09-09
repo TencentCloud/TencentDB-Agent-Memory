@@ -178,7 +178,7 @@ check_llm_openai() {
     if grep -q "\"$model\"" "$body_file" 2>/dev/null; then
       ok "$label OpenAI 协议通路 OK（$model 在 /models 列表内）"
     else
-      ok "$label OpenAI 协议通路 OK（未在 /models 里显式列出 $model，业务侧仍可能可用）"
+      ok "$label OpenAI 协议通路 OK（未在 /models 里显式列出 ${model}，业务侧仍可能可用）"
     fi
   elif [[ "$code" == "401" || "$code" == "403" ]]; then
     warn "$label API key 无效（HTTP ${code}）：$url"
