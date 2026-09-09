@@ -20,7 +20,19 @@
  * 只是**取用户输入的规则**和**分类规则**按 agent 适配。
  */
 
-export type AgentKind = "claude-code" | "codebuddy" | "codex" | "workbuddy" | "dsh" | "opencode" | "pi" | "unknown";
+/** AgentKind 全员名单：type 与下游名单（如 URL 前缀正则）均从此派生。 */
+export const AGENT_KINDS = [
+  "claude-code",
+  "codebuddy",
+  "codex",
+  "workbuddy",
+  "dsh",
+  "opencode",
+  "pi",
+  "unknown",
+] as const;
+
+export type AgentKind = (typeof AGENT_KINDS)[number];
 
 export type RequestKind = "main" | "fork" | "sidequery" | "auxiliary";
 
