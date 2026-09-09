@@ -104,6 +104,7 @@ proxy 接到用户请求后转发到这组端点。
 | `PROXY_UPSTREAM_URL` | 转发目标 base URL | `https://api.deepseek.com/v1` |
 | `PROXY_UPSTREAM_API_KEY` | 转发用 API Key | `sk-xxxxxxxx` |
 | `PROXY_UPSTREAM_MODEL` | 面向用户的模型 ID | `deepseek-chat` |
+| `PROXY_EXTERNAL_GATEWAY_URL` | 注入到 memory/skill bridge 调用模板中的宿主机可达 URL；macOS 本机 agent 使用 loopback | `http://127.0.0.1:8096` |
 
 > 两组可以填相同值（都指向同一个 LLM），也可以完全不同：例如 memory 组用便宜模型做 embedding，proxy 组用强模型做主对话。
 

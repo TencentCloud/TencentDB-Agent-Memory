@@ -64,6 +64,7 @@ fi
 PROXY_ENABLE_AUTH="${PROXY_ENABLE_AUTH:-0}"
 PROXY_ENABLE_TDAI="${PROXY_ENABLE_TDAI:-0}"
 PROXY_ENABLE_SESSION_INIT="${PROXY_ENABLE_SESSION_INIT:-0}"
+PROXY_EXTERNAL_GATEWAY_URL="${PROXY_EXTERNAL_GATEWAY_URL:-http://127.0.0.1:${PROXY_PORT}}"
 
 # sessionInit 依赖 auth 拿 user_id；开 sessionInit 时自动补 auth
 if [[ "$PROXY_ENABLE_SESSION_INIT" == "1" && "$PROXY_ENABLE_AUTH" != "1" ]]; then
@@ -74,6 +75,7 @@ fi
 bool() { [[ "$1" == "1" ]] && echo "true" || echo "false"; }
 
 info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI))"
+info "  injection.externalGatewayUrl=$PROXY_EXTERNAL_GATEWAY_URL"
 cat > "$CONFIG_FILE" <<YAML
 # 由 start-proxy.sh 自动生成 —— 每次启动覆盖，请不要手动改。
 server:
@@ -84,6 +86,25 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+YAML
+
+# ── Per-agent upstream override (opcional) ──────────────────────────────────
+# PROXY_AGENT_OPENCODE_URL: upstream específico para el prefijo /opencode/...
+# Necesario cuando el upstream general habla protocolo Anthropic (ej. Z.AI
+# /api/anthropic/v1) y opencode exige OpenAI-compatible (chat/completions +
+# session-init por tool `question`). Sin la var, la sección no se emite y el
+# comportamiento es idéntico al anterior (backwards-compatible).
+if [[ -n "${PROXY_AGENT_OPENCODE_URL:-}" ]]; then
+  require_vars PROXY_AGENT_OPENCODE_API_KEY
+  cat >> "$CONFIG_FILE" <<YAML
+  agents:
+    opencode:
+      url: "${PROXY_AGENT_OPENCODE_URL}"
+      apiKey: "${PROXY_AGENT_OPENCODE_API_KEY}"
+YAML
+fi
+
+cat >> "$CONFIG_FILE" <<YAML
 
 log:
   file: ""
@@ -110,6 +131,7 @@ skill:
 auth:
   enabled: $(bool $PROXY_ENABLE_AUTH)
   url: "http://memory-core:8420"
+  serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
   timeoutMs: 5000
 
 sessionInit:
@@ -117,6 +139,7 @@ sessionInit:
   maxRetries: 3
   injectAgentContext: true
   injectTaskContext: true
+  defaultTaskId: "no-task"
   headerAutoSelect:
     enabled: true
     teamHeader: "x-team-id"
@@ -131,6 +154,7 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  externalGatewayUrl: "${PROXY_EXTERNAL_GATEWAY_URL}"
   injectors:
     - skill
     - knowledge

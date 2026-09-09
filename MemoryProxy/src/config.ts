@@ -139,6 +139,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   auth: {
     enabled: false,
     url: "",
+    serviceToken: "",
     timeoutMs: 5000,
   },
   systemUsers: [],
@@ -473,6 +474,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     auth: {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
+      serviceToken: expandEnv(yaml.auth?.serviceToken ?? DEFAULT_CONFIG.auth.serviceToken),
       timeoutMs: yaml.auth?.timeoutMs ?? DEFAULT_CONFIG.auth.timeoutMs,
     },
     // Entries without a non-empty userId are silently dropped — matching is
