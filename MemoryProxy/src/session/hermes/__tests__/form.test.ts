@@ -68,15 +68,26 @@ describe("hermes form", () => {
     expect(isSessionInitToolCallId("call_other_123")).toBe(false);
   });
 
-  it("truncates to MAX_CHOICES when too many teams", () => {
+  it("paginates choices without making later teams unreachable", () => {
     const manyTeams: TeamOption[] = Array.from({ length: 10 }, (_, i) => ({
       team_id: `team-${i}`,
       team_name: `Team${i}`,
       agents: [],
       tasks: [],
     }));
-    const data: FormData = { teams: manyTeams, stage: "team" };
-    const result = buildClarifyArgs(data);
-    expect(result.questions[0].choices.length).toBe(4);
+    const first = buildClarifyArgs({ teams: manyTeams, stage: "team" });
+    const last = buildClarifyArgs({ teams: manyTeams, stage: "team", pageIndex: 2 });
+    expect(first.questions[0].choices).toEqual([
+      "Team0 (team-0)",
+      "Team1 (team-1)",
+      "Team2 (team-2)",
+      "更多 →",
+    ]);
+    expect(last.questions[0].choices).toEqual([
+      "Team6 (team-6)",
+      "Team7 (team-7)",
+      "Team8 (team-8)",
+      "Team9 (team-9)",
+    ]);
   });
 });

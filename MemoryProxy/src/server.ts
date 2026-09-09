@@ -166,11 +166,14 @@ export function createApp(config: ProxyConfig): Hono {
 
   // ── Session-init web link（headless 弹链接方案的浏览器端点） ───────────────
   // 页面托管在 Memory Hub（不同 origin），这两个端点需要 CORS。token 本身即
-  // 能力凭证（无 cookie），放开 CORS 不引入 CSRF 面；token 未知/过期/已消费
+  // 能力凭证（无 cookie）；仅允许配置的 Hub origin，未知/过期/已消费 token
   // 在 handler 内拒绝。未配置 sessionInit.initLink.hubOrigin 时不会产生任何
   // token，这两个端点自然全部 404——注册无副作用。
   if (config.sessionInit.initLink?.hubOrigin) {
-    app.use("/v3/session/init-link/*", cors());
+    app.use("/v3/session/init-link/*", cors({
+      origin: new URL(config.sessionInit.initLink.hubOrigin).origin,
+      allowMethods: ["GET", "POST", "OPTIONS"],
+    }));
     registerSessionInitLinkRoutes(app, config);
   }
 

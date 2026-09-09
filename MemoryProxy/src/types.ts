@@ -896,6 +896,7 @@ export interface RawYamlConfig {
   sessionInit?: {
     enabled?: boolean;
     maxRetries?: number;
+    skipAssetConfirm?: boolean;
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;

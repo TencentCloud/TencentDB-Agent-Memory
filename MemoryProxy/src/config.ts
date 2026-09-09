@@ -452,8 +452,9 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
           hubOrigin: yaml.sessionInit.initLink.hubOrigin.replace(/\/$/, ""),
           proxyOrigin: yaml.sessionInit.initLink.proxyOrigin?.replace(/\/$/, ""),
           ttlMinutes: typeof yaml.sessionInit.initLink.ttlMinutes === "number"
+            && Number.isFinite(yaml.sessionInit.initLink.ttlMinutes)
             && yaml.sessionInit.initLink.ttlMinutes > 0
-            ? yaml.sessionInit.initLink.ttlMinutes
+            ? Math.min(yaml.sessionInit.initLink.ttlMinutes, 60)
             : undefined,
         }
       : undefined,

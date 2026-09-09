@@ -10,16 +10,15 @@
  *   extractor), the binding registers via the shared `completeRegistration`
  *   path, and the token is consumed. One-shot: a second POST fails.
  *
- * CORS: these two endpoints are called from the Memory Hub page (different
- * origin), so they are registered with permissive CORS. The token itself is
- * the capability credential — no cookies are involved, so CSRF is not a
- * concern, and both endpoints reject unknown/expired/consumed tokens.
+ * CORS: these two endpoints are called from the configured Memory Hub origin.
+ * The token itself is the capability credential; no cookies are involved, and
+ * both endpoints reject unknown/expired/consumed tokens.
  */
 
 import { Hono } from "hono";
 import type { ProxyConfig } from "../types.js";
 import { MetadataClient } from "../meta/client.js";
-import { getSessionStore } from "../session/store.js";
+import { getSessionStore, type SessionStore } from "../session/store.js";
 import {
   completeRegistration,
   fetchTeamsAndAgents,
@@ -28,6 +27,7 @@ import type { SessionInitState, TeamOption } from "../session/types.js";
 import {
   claimInitLinkToken,
   completeInitLinkToken,
+  invalidateInitLinkTokensForSession,
   releaseInitLinkToken,
   validateInitLinkToken,
 } from "../session/init-link.js";
@@ -44,11 +44,13 @@ export function registerSessionInitLinkRoutes(
   config: ProxyConfig,
   opts?: {
     fetchTeams?: FetchTeamsFn;
+    store?: SessionStore;
     /** Injectable so tests can stub getAgent/getTask without real HTTP. */
     createClient?: (userKey: string, spaceId?: string) => MetadataClient;
   },
 ): void {
   const fetchTeams: FetchTeamsFn = opts?.fetchTeams ?? fetchTeamsAndAgents;
+  const store = opts?.store ?? getSessionStore();
   const createClient: (userKey: string, spaceId?: string) => MetadataClient =
     opts?.createClient ??
     ((userKey, spaceId) =>
@@ -128,7 +130,6 @@ export function registerSessionInitLinkRoutes(
       return c.json({ error: "invalid_token", reason: claim.reason }, status);
     }
     const record = claim.record;
-    const store = getSessionStore();
     store.bind(record.compositeKey, {
       userId: record.userId,
       agentSource: record.agentSource,
@@ -143,7 +144,7 @@ export function registerSessionInitLinkRoutes(
       userId: record.userId,
     };
     try {
-      await completeRegistration(
+      const registration = await completeRegistration(
         { agent_id: agentId, task_id: taskId || undefined },
         state,
         teams,
@@ -157,11 +158,10 @@ export function registerSessionInitLinkRoutes(
         record.userKey,
         record.spaceId,
       );
-      if (!(await store.hasDurableInitializedBinding(record.compositeKey))) {
-        throw new Error("session binding did not persist to both repositories");
+      if (!registration.sessionInfo || registration.bypassed) {
+        throw new Error("session registration did not produce an initialized binding");
       }
     } catch (err) {
-      store.delete(record.compositeKey);
       releaseInitLinkToken(record.token, claim.claimId);
       console.warn(
         `[init-link] registration failed for session=${record.compositeKey}: ${err instanceof Error ? err.message : String(err)}`,
@@ -177,6 +177,7 @@ export function registerSessionInitLinkRoutes(
       return c.json({ error: "token_completion_failed" }, 409);
     }
 
+    invalidateInitLinkTokensForSession(record.compositeKey);
     console.log(
       `[init-link] session=${record.compositeKey} registered via web link: agent=${agentId} task=${taskId || "-"} team=${selectedTeam.team_id}`,
     );

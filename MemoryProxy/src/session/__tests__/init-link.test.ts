@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { Hono } from "hono";
+import type { ProxyConfig } from "../../types.js";
+import type { MetadataClient } from "../../meta/client.js";
+import { registerSessionInitLinkRoutes } from "../../routes/session-init-link.js";
+import { SessionStore } from "../store.js";
+import type { TeamOption } from "../types.js";
 import {
   createOrReusePendingToken,
   validateInitLinkToken,
   claimInitLinkToken,
   completeInitLinkToken,
   releaseInitLinkToken,
-  markInitLinkNoticeDelivered,
-  invalidateInitLinkTokens,
   invalidateInitLinkTokensForSession,
   buildInitLinkUrl,
   buildInitLinkNotice,
-  appendInitNoticeToTerminalCompletion,
   __resetInitLinkStoreForTests,
   __initLinkStoreSizeForTests,
   DEFAULT_TTL_MINUTES,
@@ -37,6 +40,11 @@ describe("init-link token store", () => {
     expect(record.status).toBe("pending");
     expect(record.token).toHaveLength(32);
     expect(record.expiresAt).toBeGreaterThan(record.createdAt);
+  });
+
+  it("rejects non-finite token lifetimes", () => {
+    const { record } = createOrReusePendingToken({ ...baseParams, ttlMinutes: Number.POSITIVE_INFINITY });
+    expect(record.expiresAt - record.createdAt).toBe(DEFAULT_TTL_MINUTES * 60_000);
   });
 
   it("reuses existing pending token for same identity", () => {
@@ -97,19 +105,6 @@ describe("init-link token store", () => {
     if (!v.ok) expect(v.reason).toBe("consumed");
   });
 
-  it("markInitLinkNoticeDelivered sets timestamp once", () => {
-    const { record } = createOrReusePendingToken(baseParams);
-    expect(markInitLinkNoticeDelivered(record.token)).toBe(true);
-    expect(markInitLinkNoticeDelivered(record.token)).toBe(false);
-  });
-
-  it("invalidateInitLinkTokens removes by identity", () => {
-    createOrReusePendingToken(baseParams);
-    expect(__initLinkStoreSizeForTests()).toBe(1);
-    invalidateInitLinkTokens(baseParams);
-    expect(__initLinkStoreSizeForTests()).toBe(0);
-  });
-
   it("invalidateInitLinkTokensForSession removes by compositeKey", () => {
     createOrReusePendingToken(baseParams);
     expect(__initLinkStoreSizeForTests()).toBe(1);
@@ -143,42 +138,74 @@ describe("init-link URL and notice", () => {
   });
 });
 
-describe("appendInitNoticeToTerminalCompletion", () => {
-  it("appends notice to stop completion with string content", () => {
-    const json = {
-      choices: [{
-        index: 0,
-        finish_reason: "stop",
-        message: { role: "assistant", content: "Hello" },
-      }],
-    };
-    const result = appendInitNoticeToTerminalCompletion(json, () => "\n\n[init link]");
-    expect(result).toBe(true);
-    expect((json.choices[0].message as { content: string }).content).toBe("Hello\n\n[init link]");
+const routeTeams: TeamOption[] = [{
+  team_id: "team-1",
+  team_name: "Team One",
+  agents: [{ agent_id: "agent-1", agent_name: "Agent One" }],
+  tasks: [{ task_id: "task-1", task_name: "Task One" }],
+}];
+
+function createRouteApp(store: SessionStore): Hono {
+  const app = new Hono();
+  const config = {
+    sessionInit: {
+      enabled: true,
+      maxRetries: 3,
+      injectAgentContext: true,
+      injectTaskContext: true,
+    },
+    coreSkill: { serviceId: "sp1" },
+  } as unknown as ProxyConfig;
+  const client = {
+    getAgent: async (agentId: string) => ({ agent_id: agentId, name: "Agent One" }),
+    getTask: async (taskId: string) => ({ task_id: taskId, title: "Task One" }),
+  } as unknown as MetadataClient;
+  registerSessionInitLinkRoutes(app, config, {
+    store,
+    fetchTeams: async () => ({ teams: routeTeams }),
+    createClient: () => client,
+  });
+  return app;
+}
+
+describe("init-link routes", () => {
+  beforeEach(() => {
+    __resetInitLinkStoreForTests();
   });
 
-  it("does not append when finish_reason is tool_calls", () => {
-    const json = {
-      choices: [{
-        index: 0,
-        finish_reason: "tool_calls",
-        message: { role: "assistant", content: "Hello", tool_calls: [{ id: "x", type: "function", function: { name: "f", arguments: "{}" } }] },
-      }],
-    };
-    const result = appendInitNoticeToTerminalCompletion(json, () => "\n\n[init link]");
-    expect(result).toBe(false);
+  it("loads candidates without consuming the token", async () => {
+    const app = createRouteApp(new SessionStore());
+    const { record } = createOrReusePendingToken(baseParams);
+    const response = await app.request(`/v3/session/init-link/${record.token}`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).teams).toEqual(routeTeams);
+    expect(validateInitLinkToken(record.token).ok).toBe(true);
   });
 
-  it("does not append when noticeFactory returns null", () => {
-    const json = {
-      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "Hello" } }],
-    };
-    const result = appendInitNoticeToTerminalCompletion(json, () => null);
-    expect(result).toBe(false);
+  it("registers an owned selection and invalidates session tokens", async () => {
+    const store = new SessionStore();
+    const app = createRouteApp(store);
+    const { record } = createOrReusePendingToken(baseParams);
+    createOrReusePendingToken({ ...baseParams, purpose: "rebind" });
+    const response = await app.request(`/v3/session/init-link/${record.token}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "agent-1", task_id: "task-1" }),
+    });
+    expect(response.status).toBe(200);
+    expect(store.get(baseParams.compositeKey)?.sessionInfo?.agent_id).toBe("agent-1");
+    expect(__initLinkStoreSizeForTests()).toBe(0);
   });
 
-  it("returns false for empty choices", () => {
-    const result = appendInitNoticeToTerminalCompletion({ choices: [] }, () => "x");
-    expect(result).toBe(false);
+  it("rejects an agent outside the caller's teams without consuming the token", async () => {
+    const app = createRouteApp(new SessionStore());
+    const { record } = createOrReusePendingToken(baseParams);
+    const response = await app.request(`/v3/session/init-link/${record.token}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: "other-agent" }),
+    });
+    expect(response.status).toBe(403);
+    expect(validateInitLinkToken(record.token).ok).toBe(true);
   });
 });
