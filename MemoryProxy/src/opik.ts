@@ -296,9 +296,11 @@ export function opikCreateTrace(
     event: "opik.create_trace",
   });
 
-  // Fork to a second project if requested — uses a DIFFERENT trace ID because
-  // Opik rejects the same trace_id across different projects (409 conflict).
-  if (input.forkProjectName) {
+  // Fork to a second project if requested AND enabled — uses a DIFFERENT
+  // trace ID because Opik rejects the same trace_id across different projects
+  // (409 conflict). Forking doubles report volume, so it is opt-in via
+  // `config.opik.requestLogEnabled` (default false).
+  if (input.forkProjectName && config.opik.requestLogEnabled === true) {
     const forkTraceId = uuidv7();
     const forkMeta = input.forkMetadata || {};
     const forkBody: Record<string, unknown> = {
@@ -346,6 +348,104 @@ export function opikUpdateTrace(
       usage: update.usage, // raw, unmodified
     },
     event: "opik.update_trace",
+  });
+}
+
+/** request_log fork trace 的收尾：即使 stripRequestLogContent=true 也要写
+ *  end_time，避免 fork trace 永远“进行中”；此时 output 置空数组，不落正文。 */
+export function opikUpdateTraceFork(
+  config: ProxyConfig,
+  update: Omit<OpikTraceUpdate, "projectName">,
+): void {
+  if (!config.opik.enabled || !config.opik.url) return;
+  opikUpdateTrace(config, {
+    traceId: update.traceId,
+    projectName: "request_log",
+    endTime: update.endTime,
+    output: config.opik.stripRequestLogContent ? [] : update.output,
+    usage: update.usage,
+  });
+}
+
+/** 失败请求的 Opik 收尾：关闭 trace（主项目 + request_log fork）并补一条
+ *  error LLM span，保证错误请求在消息面板可见、trace 不会永远“进行中”。
+ *  fire-and-forget，绝不阻塞业务。
+ */
+export interface OpikFailureReport {
+  traceId: string;
+  projectName: string;
+  model: string;
+  startTime: string;
+  endTime?: string;
+  stage: "forward" | "upstream" | "rate-limit" | "stream";
+  status?: number;
+  message: string;
+  inputMessages?: unknown[];
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  /** fork 到 request_log 项目的独立 trace id（requestLogEnabled 开启时才有）。 */
+  forkTraceId?: string;
+  forkMetadata?: Record<string, unknown>;
+}
+
+export function opikReportFailure(
+  config: ProxyConfig,
+  report: OpikFailureReport,
+): void {
+  if (!config.opik.enabled || !config.opik.url) return;
+
+  const endTime = report.endTime ?? new Date().toISOString();
+  const errorInfo: Record<string, unknown> = { stage: report.stage };
+  if (typeof report.status === "number") errorInfo.status = report.status;
+  const safeMessage = String(report.message ?? "unknown error").slice(0, 500);
+  errorInfo.message = safeMessage;
+
+  // 关闭主项目 trace（只写 end_time + error metadata；不覆盖已成功请求写入的 output）
+  void sendOpikRequest(config, {
+    method: "PATCH",
+    url: opikEndpoint(config, `/traces/${report.traceId}`),
+    body: {
+      project_name: report.projectName,
+      workspace_name: "default",
+      end_time: endTime,
+      metadata: { error: errorInfo },
+    },
+    event: "opik.finalize_error",
+  });
+
+  // 关闭 request_log fork trace（若开启且已创建）
+  if (report.forkTraceId) {
+    void sendOpikRequest(config, {
+      method: "PATCH",
+      url: opikEndpoint(config, `/traces/${report.forkTraceId}`),
+      body: {
+        project_name: "request_log",
+        workspace_name: "default",
+        end_time: endTime,
+        metadata: { error: { ...errorInfo, forkTraceId: report.forkTraceId } },
+      },
+      event: "opik.finalize_error",
+    });
+  }
+
+  // 补一条 error LLM span（fork span 由 opikCreateLlmSpan 内部按需创建）
+  const errorOutput =
+    `[${report.stage}${typeof report.status === "number" ? ` ${report.status}` : ""}] ${safeMessage}`;
+  opikCreateLlmSpan(config, {
+    traceId: report.traceId,
+    projectName: report.projectName,
+    name: report.model,
+    startTime: report.startTime,
+    endTime,
+    inputMessages: report.inputMessages ?? [],
+    outputMessage: { role: "assistant", content: errorOutput },
+    model: report.model,
+    usage: {},
+    tags: ["error", ...(report.tags ?? [])],
+    metadata: { ...(report.metadata ?? {}), error: errorInfo },
+    forkProjectName: report.forkTraceId ? "request_log" : undefined,
+    forkTraceId: report.forkTraceId,
+    forkMetadata: report.forkMetadata,
   });
 }
 
@@ -417,9 +517,10 @@ export function opikCreateLlmSpan(
     event: "opik.create_llm_span",
   });
 
-  // Fork to a second project if requested — strip message content, keep only usage + metadata.
-  // Uses forkTraceId (different from main traceId) because Opik rejects cross-project trace reuse.
-  if (span.forkProjectName && span.forkTraceId) {
+  // Fork to a second project if requested AND enabled — strip message content,
+  // keep only usage + metadata. Uses forkTraceId (different from main traceId)
+  // because Opik rejects cross-project trace reuse.
+  if (span.forkProjectName && span.forkTraceId && config.opik.requestLogEnabled === true) {
     const forkMeta = span.forkMetadata || {};
     const forkMetadataFull: Record<string, unknown> = { ...forkMeta };
     // Preserve raw credit in metadata for reference (usage only stores credit_x100 integer)

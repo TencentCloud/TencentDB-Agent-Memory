@@ -340,6 +340,8 @@ opik:
   # 超时/失败只降级日志，绝不阻塞业务；连续失败自动熔断 30s 再恢复。
   timeoutMs: 2000
   # stripRequestLogContent: false  # true = fork 出的 request_log trace 不记录消息内容（节省存储）
+  # requestLogEnabled: false       # true = 额外 fork 一份原始请求到 request_log 项目
+                                  # （默认关闭；开启后 Opik 上报量约翻倍，仅用于留痕排查）
 
 
 # ── Langfuse LLM 可观测（官方 SDK 上报） ──────────────────────────────────────

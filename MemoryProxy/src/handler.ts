@@ -8,11 +8,14 @@ import {
   extractBearerToken,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikReportFailure,
   opikUpdateTrace,
+  opikUpdateTraceFork,
   opikQuestionTag,
   opikTurnTag,
   opikTurnTraceId,
   uuidv7,
+  type OpikFailureReport,
 } from "./opik.js";
 import {
   buildMemoryInjectionContext,
@@ -451,6 +454,46 @@ async function forwardWithRetry(
   }
 
   return { resp: upstreamResp, retried: false };
+}
+
+/** Chat(OpenAI) 错误路径的 Opik 收尾包装：统一补 trace/span/fork 字段。 */
+function reportChatOpikFailure(
+  config: ProxyConfig,
+  args: {
+    traceId: string;
+    forkTraceId: string;
+    projectName: string;
+    model: string;
+    startTime: string;
+    stream: boolean;
+    upstreamUrl: string;
+    messages: unknown[];
+    tags: string[];
+    metadata: Record<string, unknown>;
+    stage: OpikFailureReport["stage"];
+    status?: number;
+    message: string;
+  },
+): void {
+  opikReportFailure(config, {
+    traceId: args.traceId,
+    projectName: args.projectName,
+    model: args.model,
+    startTime: args.startTime,
+    stage: args.stage,
+    status: args.status,
+    message: args.message,
+    inputMessages: flattenMessagesForOpik(args.messages),
+    tags: args.tags,
+    metadata: args.metadata,
+    forkTraceId: args.forkTraceId,
+    forkMetadata: {
+      keyId: args.projectName,
+      modelId: args.model,
+      stream: args.stream,
+      upstreamUrl: args.upstreamUrl,
+    },
+  });
 }
 
 /** Main handler for POST /v1/chat/completions (OpenAI compat). */
@@ -1603,6 +1646,20 @@ export async function handleChatCompletions(
   } catch (err: unknown) {
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
+      reportChatOpikFailure(config, {
+        traceId: opikTraceId,
+        forkTraceId,
+        projectName: keyId,
+        model: target.model,
+        startTime,
+        stream: isStream,
+        upstreamUrl: target.url,
+        messages,
+        tags: traceTags,
+        metadata: opikTraceMetadata,
+        stage: "rate-limit",
+        message: "TPM/QPM exceeded",
+      });
       return err.response;
     }
     langfuseReportFailure({
@@ -1614,6 +1671,20 @@ export async function handleChatCompletions(
       statusMessage: err instanceof Error ? err.message : "Upstream request failed",
       extraTags: ["error"],
       observationMetadata: { stage: "forward", ...debugMetadata },
+    });
+    reportChatOpikFailure(config, {
+      traceId: opikTraceId,
+      forkTraceId,
+      projectName: keyId,
+      model: target.model,
+      startTime,
+      stream: isStream,
+      upstreamUrl: target.url,
+      messages,
+      tags: traceTags,
+      metadata: opikTraceMetadata,
+      stage: "forward",
+      message: err instanceof Error ? err.message : "Upstream request failed",
     });
     return c.json({ error: "Upstream request failed" }, 502);
   }
@@ -1650,11 +1721,28 @@ export async function handleChatCompletions(
   if (isStream) {
     if (!upstreamResp.body) {
       pipe.streamDone(null);
+      if (upstreamResp.status >= 400) {
+        reportChatOpikFailure(config, {
+          traceId: opikTraceId,
+          forkTraceId,
+          projectName: keyId,
+          model: effectiveModel,
+          startTime,
+          stream: true,
+          upstreamUrl: target.url,
+          messages,
+          tags: traceTags,
+          metadata: opikTraceMetadata,
+          stage: "upstream",
+          status: upstreamResp.status,
+          message: "Upstream returned an error without a response body",
+        });
+      }
       return new Response(null, { status: upstreamResp.status, headers: respHeaders });
     }
 
-    // Log upstream error body for 4xx responses
-    if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
+    // Log upstream error body for 4xx/5xx responses
+    if (!retried && upstreamResp.status >= 400) {
       const [errBodyStream, clientPassStream] = upstreamResp.body.tee();
       const errText = await new Response(errBodyStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
@@ -1684,6 +1772,21 @@ export async function handleChatCompletions(
         observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
       });
       pipe.streamDone(null);
+      reportChatOpikFailure(config, {
+        traceId: opikTraceId,
+        forkTraceId,
+        projectName: keyId,
+        model: effectiveModel,
+        startTime,
+        stream: true,
+        upstreamUrl: target.url,
+        messages,
+        tags: traceTags,
+        metadata: opikTraceMetadata,
+        stage: "upstream",
+        status: upstreamResp.status,
+        message: errText.slice(0, 500),
+      });
       return new Response(clientPassStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
@@ -1843,10 +1946,9 @@ export async function handleChatCompletions(
       output: outputMessages,
       usage,
     });
-    if (forkTraceId && !config.opik.stripRequestLogContent) {
-      opikUpdateTrace(config, {
+    if (forkTraceId) {
+      opikUpdateTraceFork(config, {
         traceId: forkTraceId,
-        projectName: "request_log",
         endTime,
         output: outputMessages,
         usage,
@@ -1926,6 +2028,21 @@ export async function handleChatCompletions(
       statusMessage: respText.slice(0, 500),
       extraTags: ["error"],
       observationMetadata: { stage: "upstream", stream: false, ...debugMetadata },
+    });
+    reportChatOpikFailure(config, {
+      traceId: opikTraceId,
+      forkTraceId,
+      projectName: keyId,
+      model: effectiveModel,
+      startTime,
+      stream: false,
+      upstreamUrl: target.url,
+      messages,
+      tags: traceTags,
+      metadata: opikTraceMetadata,
+      stage: "upstream",
+      status: upstreamResp.status,
+      message: respText.slice(0, 500),
     });
   }
 
@@ -2264,10 +2381,9 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           output: outputMessages,
           usage: lastUsage,
         });
-        if (ctx.forkTraceId && !config.opik.stripRequestLogContent) {
-          opikUpdateTrace(config, {
+        if (ctx.forkTraceId) {
+          opikUpdateTraceFork(config, {
             traceId: ctx.forkTraceId,
-            projectName: "request_log",
             endTime,
             output: outputMessages,
             usage: lastUsage,

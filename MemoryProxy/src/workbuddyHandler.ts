@@ -24,11 +24,14 @@ import {
   extractBearerToken,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikReportFailure,
   opikUpdateTrace,
+  opikUpdateTraceFork,
   opikQuestionTag,
   opikTurnTag,
   opikTurnTraceId,
   uuidv7,
+  type OpikFailureReport,
 } from "./opik.js";
 import {
   buildMemoryInjectionContext,
@@ -500,6 +503,41 @@ function filterResponseHeaders(source: Headers): Headers {
   return out;
 }
 
+/** WorkBuddy 转发错误路径的 Opik 收尾包装（trace/span/fork 字段一次补齐）。 */
+function reportWorkbuddyOpikFailure(
+  config: ProxyConfig,
+  args: {
+    traceId: string;
+    forkTraceId?: string;
+    projectName: string;
+    modelId: string;
+    startTime: string;
+    upstreamUrl: string;
+    body: Record<string, unknown>;
+    stage: OpikFailureReport["stage"];
+    status?: number;
+    message: string;
+  },
+): void {
+  opikReportFailure(config, {
+    traceId: args.traceId,
+    projectName: args.projectName,
+    model: args.modelId,
+    startTime: args.startTime,
+    stage: args.stage,
+    status: args.status,
+    message: args.message,
+    inputMessages: [buildWorkbuddyLangfuseInput(args.body)] as unknown[],
+    forkTraceId: args.forkTraceId,
+    forkMetadata: {
+      keyId: args.projectName,
+      modelId: args.modelId,
+      stream: true,
+      upstreamUrl: args.upstreamUrl,
+    },
+  });
+}
+
 /**
  * Forward the request to upstream. On SSE responses with `lf != null`, tees
  * the stream and reports usage/text to langfuse (best-effort).
@@ -603,6 +641,17 @@ async function forwardToUpstream(
         pipe.error("LANGFUSE_SPAN", lfErr);
       }
     }
+    reportWorkbuddyOpikFailure(config, {
+      traceId,
+      forkTraceId: opikTurn.forkTraceId,
+      projectName: keyId,
+      modelId,
+      startTime,
+      upstreamUrl,
+      body,
+      stage: "forward",
+      message: `fetch_failed: ${msg}`,
+    });
     return c.json({ error: `Upstream fetch failed: ${msg}` }, 502);
   }
 
@@ -635,6 +684,21 @@ async function forwardToUpstream(
     } catch (lfErr: unknown) {
       pipe.error("LANGFUSE_SPAN", lfErr);
     }
+  }
+
+  if (upstreamResp.status >= 400) {
+    reportWorkbuddyOpikFailure(config, {
+      traceId,
+      forkTraceId: opikTurn.forkTraceId,
+      projectName: keyId,
+      modelId,
+      startTime,
+      upstreamUrl,
+      body,
+      stage: "upstream",
+      status: upstreamResp.status,
+      message: `upstream_${upstreamResp.status}`,
+    });
   }
 
   // Non-SSE or no langfuse ctx → passthrough
@@ -673,10 +737,9 @@ async function forwardToUpstream(
           output: outputMessages,
           usage: finalUsage,
         });
-        if (opikTurn.forkTraceId && !config.opik.stripRequestLogContent) {
-          opikUpdateTrace(config, {
+        if (opikTurn.forkTraceId) {
+          opikUpdateTraceFork(config, {
             traceId: opikTurn.forkTraceId,
-            projectName: "request_log",
             endTime,
             output: outputMessages,
             usage: finalUsage,
@@ -931,10 +994,9 @@ async function consumeWorkbuddyStream(
       output: outputMessages,
       usage: finalUsage,
     });
-    if (ctx.forkTraceId && !ctx.config.opik.stripRequestLogContent) {
-      opikUpdateTrace(ctx.config, {
+    if (ctx.forkTraceId) {
+      opikUpdateTraceFork(ctx.config, {
         traceId: ctx.forkTraceId,
-        projectName: "request_log",
         endTime,
         output: outputMessages,
         usage: finalUsage,

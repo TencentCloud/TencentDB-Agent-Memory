@@ -6,9 +6,11 @@ import {
   opikCreateTrace,
   opikEndpoint,
   opikQuestionTag,
+  opikReportFailure,
   opikTurnTag,
   opikTurnTraceId,
   opikUpdateTrace,
+  opikUpdateTraceFork,
   resetOpikClientForTests,
 } from "../opik.js";
 
@@ -23,6 +25,7 @@ function mkConfig(overrides: Partial<ProxyConfig["opik"]> = {}): ProxyConfig {
       apiPrefix: "/v1/private",
       timeoutMs: 1,
       stripRequestLogContent: false,
+      requestLogEnabled: false,
       ...overrides,
     },
   } as unknown as ProxyConfig;
@@ -91,7 +94,7 @@ describe("opik client 可靠性加固", () => {
 
   it("fork trace：独立 UUID、request_log 脱敏、tags 只留 keyId/modelId", async () => {
     const forkId = opikCreateTrace(
-      mkConfig({ stripRequestLogContent: true }),
+      mkConfig({ stripRequestLogContent: true, requestLogEnabled: true }),
       traceInput({
         forkProjectName: "request_log",
         forkMetadata: { keyId: "k1", modelId: "glm-4.5", stream: true },
@@ -110,6 +113,24 @@ describe("opik client 可靠性加固", () => {
     expect((forkBody.metadata as Record<string, unknown>).forkTraceId).toBe(forkId);
   });
 
+  it("requestLogEnabled 默认关闭时不 fork，只发主项目一条", async () => {
+    const forkId = opikCreateTrace(
+      mkConfig(),
+      traceInput({
+        forkProjectName: "request_log",
+        forkMetadata: { keyId: "k1", modelId: "glm-4.5", stream: true },
+      }),
+    );
+    await flush();
+    expect(forkId).toBe("");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${BASE}/v1/private/traces`);
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.project_name).toBe("usr-key");
+    expect(body.project_name).not.toBe("request_log");
+  });
+
   it("update trace：PATCH 到 /traces/{id}，usage 原样保留", async () => {
     opikUpdateTrace(mkConfig(), {
       traceId: "trace-9",
@@ -125,6 +146,33 @@ describe("opik client 可靠性加固", () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.workspace_name).toBe("default");
     expect(body.usage).toEqual({ prompt_tokens: 10, total_tokens: 12, credit: 0.43 });
+  });
+
+  it("fork trace 收尾：strip=false 带 output；strip=true 仍写 end_time 但 output 置空", async () => {
+    const output = [{ role: "assistant", content: "secret answer" }];
+    opikUpdateTraceFork(mkConfig(), {
+      traceId: "fork-1",
+      endTime: "2026-09-06T00:00:02Z",
+      output,
+      usage: { total_tokens: 5 },
+    });
+    await flush();
+    const first = JSON.parse(String(fetchMock.mock.calls[0][1].body)) as Record<string, unknown>;
+    expect(first.project_name).toBe("request_log");
+    expect(first.output).toEqual(output);
+
+    fetchMock.mockClear();
+    opikUpdateTraceFork(mkConfig({ stripRequestLogContent: true }), {
+      traceId: "fork-2",
+      endTime: "2026-09-06T00:00:02Z",
+      output,
+      usage: { total_tokens: 5 },
+    });
+    await flush();
+    const second = JSON.parse(String(fetchMock.mock.calls[0][1].body)) as Record<string, unknown>;
+    expect(second.project_name).toBe("request_log");
+    expect(second.end_time).toBeDefined();
+    expect(second.output).toEqual([]);
   });
 
   it("LLM span：usage 扁平化、credit → credit_x100、metadata 透传", async () => {
@@ -152,7 +200,7 @@ describe("opik client 可靠性加固", () => {
 
   it("fork span：strip 时不带 input/output，metadata 保留原始 credit", async () => {
     opikCreateLlmSpan(
-      mkConfig({ stripRequestLogContent: true }),
+      mkConfig({ stripRequestLogContent: true, requestLogEnabled: true }),
       {
         traceId: "trace-1",
         projectName: "usr-key",
@@ -178,6 +226,64 @@ describe("opik client 可靠性加固", () => {
     expect(forkBody.usage).toEqual({ credit_x100: 43 });
     expect((forkBody.metadata as Record<string, unknown>).credit).toBe(0.43);
     expect(forkBody.tags).toEqual(["keyId:k1", "modelId:glm-4.5"]);
+  });
+
+  it("opikReportFailure：关闭 trace + 补 error LLM span（无 fork）", async () => {
+    opikReportFailure(mkConfig(), {
+      traceId: "trace-1",
+      projectName: "usr-key",
+      model: "glm-4.5",
+      startTime: "2026-09-06T00:00:00Z",
+      stage: "upstream",
+      status: 502,
+      message: "boom upstream",
+      inputMessages: [{ role: "user", content: "hi" }],
+    });
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [patchCall, spanCall] = fetchMock.mock.calls as [string, RequestInit][];
+    expect(patchCall[0]).toBe(`${BASE}/v1/private/traces/trace-1`);
+    expect(patchCall[1].method).toBe("PATCH");
+    const patchBody = JSON.parse(String(patchCall[1].body)) as Record<string, unknown>;
+    expect(patchBody.end_time).toBeDefined();
+    expect((patchBody.metadata as Record<string, unknown>).error).toMatchObject({
+      stage: "upstream",
+      status: 502,
+      message: "boom upstream",
+    });
+    expect(spanCall[0]).toBe(`${BASE}/v1/private/spans`);
+    const spanBody = JSON.parse(String(spanCall[1].body)) as Record<string, unknown>;
+    expect(spanBody.type).toBe("llm");
+    expect(spanBody.trace_id).toBe("trace-1");
+    expect(spanBody.tags).toContain("error");
+    const output = spanBody.output as Array<Record<string, unknown>>;
+    expect(String(output[0].content)).toContain("boom upstream");
+  });
+
+  it("opikReportFailure：开启 request_log 时 fork trace/span 一并收尾", async () => {
+    opikReportFailure(
+      mkConfig({ requestLogEnabled: true }),
+      {
+        traceId: "trace-1",
+        projectName: "usr-key",
+        model: "glm-4.5",
+        startTime: "2026-09-06T00:00:00Z",
+        stage: "forward",
+        message: "network down",
+        forkTraceId: "fork-1",
+      },
+    );
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    const patchUrls = calls.filter(([, init]) => init.method === "PATCH").map(([url]) => url);
+    expect(patchUrls).toContain(`${BASE}/v1/private/traces/trace-1`);
+    expect(patchUrls).toContain(`${BASE}/v1/private/traces/fork-1`);
+    const spanBodies = calls
+      .filter(([url]) => url === `${BASE}/v1/private/spans`)
+      .map(([, init]) => JSON.parse(String(init.body)) as Record<string, unknown>);
+    expect(spanBodies.some((b) => b.trace_id === "trace-1")).toBe(true);
+    expect(spanBodies.some((b) => b.trace_id === "fork-1")).toBe(true);
   });
 
   it("HTTP 失败不抛错；连续失败触发熔断，恢复后继续上报", async () => {

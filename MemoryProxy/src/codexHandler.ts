@@ -32,11 +32,14 @@ import {
   extractBearerToken,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikReportFailure,
   opikUpdateTrace,
+  opikUpdateTraceFork,
   opikQuestionTag,
   opikTurnTag,
   opikTurnTraceId,
   uuidv7,
+  type OpikFailureReport,
 } from "./opik.js";
 import {
   buildMemoryInjectionContext,
@@ -1176,6 +1179,41 @@ async function triggerCodexArchiveHooks(
 
 // ── Forward helper ───────────────────────────────────────────────────────────
 
+/** Codex 转发错误路径的 Opik 收尾包装（trace/span/fork 字段一次补齐）。 */
+function reportCodexOpikFailure(
+  config: ProxyConfig,
+  args: {
+    traceId: string;
+    forkTraceId?: string;
+    projectName: string;
+    modelId: string;
+    startTime: string;
+    upstreamUrl: string;
+    body: Record<string, unknown>;
+    stage: OpikFailureReport["stage"];
+    status?: number;
+    message: string;
+  },
+): void {
+  opikReportFailure(config, {
+    traceId: args.traceId,
+    projectName: args.projectName,
+    model: args.modelId,
+    startTime: args.startTime,
+    stage: args.stage,
+    status: args.status,
+    message: args.message,
+    inputMessages: [buildCodexLangfuseInput(args.body)] as unknown[],
+    forkTraceId: args.forkTraceId,
+    forkMetadata: {
+      keyId: args.projectName,
+      modelId: args.modelId,
+      stream: true,
+      upstreamUrl: args.upstreamUrl,
+    },
+  });
+}
+
 async function forwardToUpstream(
   c: Context,
   config: ProxyConfig,
@@ -1252,6 +1290,17 @@ async function forwardToUpstream(
         pipe.error("LANGFUSE_SPAN", lfErr);
       }
     }
+    reportCodexOpikFailure(config, {
+      traceId,
+      forkTraceId: opikTurn.forkTraceId,
+      projectName: keyId,
+      modelId,
+      startTime,
+      upstreamUrl,
+      body,
+      stage: "forward",
+      message: `forward error: ${err instanceof Error ? err.message : String(err)}`,
+    });
     return c.json(
       { error: "Upstream request failed", detail: err instanceof Error ? err.message : String(err) },
       502,
@@ -1294,6 +1343,18 @@ async function forwardToUpstream(
         pipe.error("LANGFUSE_SPAN", lfErr);
       }
     }
+    reportCodexOpikFailure(config, {
+      traceId,
+      forkTraceId: opikTurn.forkTraceId,
+      projectName: keyId,
+      modelId,
+      startTime,
+      upstreamUrl,
+      body,
+      stage: "upstream",
+      status: upstreamResp.status,
+      message: errText.slice(0, 500),
+    });
     return new Response(errText, {
       status: upstreamResp.status,
       headers: filterResponseHeaders(upstreamResp.headers),
@@ -1342,10 +1403,9 @@ async function forwardToUpstream(
         output: outputMessages,
         usage: finalUsage,
       });
-      if (opikTurn.forkTraceId && !config.opik.stripRequestLogContent) {
-        opikUpdateTrace(config, {
+      if (opikTurn.forkTraceId) {
+        opikUpdateTraceFork(config, {
           traceId: opikTurn.forkTraceId,
-          projectName: "request_log",
           endTime,
           output: outputMessages,
           usage: finalUsage,
@@ -1576,10 +1636,9 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
           output: outputMessages,
           usage: finalUsage,
         });
-        if (forkTraceId && !config.opik.stripRequestLogContent) {
-          opikUpdateTrace(config, {
+        if (forkTraceId) {
+          opikUpdateTraceFork(config, {
             traceId: forkTraceId,
-            projectName: "request_log",
             endTime,
             output: outputMessages,
             usage: finalUsage,

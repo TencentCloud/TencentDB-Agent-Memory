@@ -31,6 +31,7 @@ MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 PROXY_OPIK_ENABLED="${PROXY_OPIK_ENABLED:-0}"
 PROXY_OPIK_URL="${PROXY_OPIK_URL:-}"
 PROXY_OPIK_API_KEY="${PROXY_OPIK_API_KEY:-}"
+PROXY_OPIK_REQUEST_LOG_ENABLED="${PROXY_OPIK_REQUEST_LOG_ENABLED:-0}"
 if [[ "$PROXY_OPIK_ENABLED" == "1" && -z "$PROXY_OPIK_URL" ]]; then
   warn "PROXY_OPIK_ENABLED=1 但未设 PROXY_OPIK_URL；默认 http://host.docker.internal:5173"
   PROXY_OPIK_URL="http://host.docker.internal:5173"
@@ -85,7 +86,7 @@ fi
 
 bool() { [[ "$1" == "1" ]] && echo "true" || echo "false"; }
 
-info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI) opik=$(bool $PROXY_OPIK_ENABLED))"
+info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI) opik=$(bool $PROXY_OPIK_ENABLED) request-log=$(bool $PROXY_OPIK_REQUEST_LOG_ENABLED))"
 cat > "$CONFIG_FILE" <<YAML
 # 由 start-proxy.sh 自动生成 —— 每次启动覆盖，请不要手动改。
 server:
@@ -101,6 +102,7 @@ opik:
   enabled: $(bool $PROXY_OPIK_ENABLED)
   url: "${PROXY_OPIK_URL}"
   apiKey: "${PROXY_OPIK_API_KEY}"
+  requestLogEnabled: $(bool $PROXY_OPIK_REQUEST_LOG_ENABLED)
 
 log:
   file: ""

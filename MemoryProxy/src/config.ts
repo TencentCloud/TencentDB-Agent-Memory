@@ -23,6 +23,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     apiPrefix: "/v1/private",
     timeoutMs: 2000,
     stripRequestLogContent: false,
+    requestLogEnabled: false,
   },
   langfuse: { enabled: false, host: "", publicKey: "", secretKey: "", debug: false, maxQueueSize: 8192, flushAt: 256, flushInterval: 2 },
   clickhouse: {
@@ -335,6 +336,8 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
           : DEFAULT_CONFIG.opik.timeoutMs,
       stripRequestLogContent:
         yaml.opik?.stripRequestLogContent ?? DEFAULT_CONFIG.opik.stripRequestLogContent,
+      requestLogEnabled:
+        yaml.opik?.requestLogEnabled ?? DEFAULT_CONFIG.opik.requestLogEnabled,
     },
     langfuse: {
       enabled: yaml.langfuse?.enabled ?? DEFAULT_CONFIG.langfuse.enabled,

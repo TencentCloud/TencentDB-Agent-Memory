@@ -458,6 +458,10 @@ export interface ProxyConfig {
     timeoutMs: number;
     /** When true, forked request_log traces/spans do not store message content. */
     stripRequestLogContent: boolean;
+    /** When false (default), main-project traces/spans are not forked to the
+     *  request_log project. Turning this on increases Opik report volume by
+     *  ~2x and is meant for raw-request retention only. */
+    requestLogEnabled: boolean;
   };
   langfuse: LangfuseConfig;
   clickhouse: {
@@ -798,6 +802,7 @@ export interface RawYamlConfig {
     apiPrefix?: string;
     timeoutMs?: number;
     stripRequestLogContent?: boolean;
+    requestLogEnabled?: boolean;
   };
   redis?: {
     enabled?: boolean;
