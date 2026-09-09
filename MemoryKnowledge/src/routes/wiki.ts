@@ -458,7 +458,14 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     if (!row) return c.json(wrapError(404, "wiki not found"), 404);
 
     if (row.status !== "ready") {
-      return c.json(wrapOk({ nodes: [], edges: [], communities: [] }));
+      return c.json(wrapOk({
+        status: row.status,
+        internal_status: row.internal_status,
+        sync_error: row.sync_error,
+        nodes: [],
+        edges: [],
+        communities: [],
+      }));
     }
     const graphData = wikiMgr.graph(wikiId);
     return c.json(wrapOk(graphData));
@@ -478,7 +485,14 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     if (!row) return c.json(wrapError(404, "wiki not found"), 404);
 
     if (row.status !== "ready") {
-      return c.json(wrapOk({ results: [], links: [], count: 0 }));
+      return c.json(wrapOk({
+        status: row.status,
+        internal_status: row.internal_status,
+        sync_error: row.sync_error,
+        results: [],
+        links: [],
+        count: 0,
+      }));
     }
 
     const limit = typeof body.limit === "number" ? body.limit : 20;
