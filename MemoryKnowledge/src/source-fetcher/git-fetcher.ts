@@ -23,7 +23,7 @@ import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
  * 该黑名单可通过环境变量 KNOWLEDGE_SSRF_CHECK=off 关闭（见 GitSourceFetcher 构造）。
  */
 const PRIVATE_ADDR_RE =
-  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|localhost$|::1$|fe80:)/i;
+  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|localhost$|::1$|::$|fe80:|fc00:|fd00:)/i;
 
 /**
  * 读取 SSRF 私网黑名单开关。默认开启；
@@ -115,6 +115,29 @@ export class GitSourceFetcher implements ISourceFetcher {
   }
 
   private isPrivateAddress(host: string): boolean {
-    return PRIVATE_ADDR_RE.test(host);
+    let h = host.toLowerCase().trim();
+    if (h.startsWith("[") && h.endsWith("]")) {
+      h = h.slice(1, -1);
+    }
+    if (h.startsWith("::ffff:")) {
+      const rest = h.slice(7);
+      if (rest.includes(".")) {
+        h = rest;
+      } else {
+        const parts = rest.split(":");
+        if (parts.length === 2) {
+          const high = parseInt(parts[0], 16);
+          const low = parseInt(parts[1], 16);
+          if (!Number.isNaN(high) && !Number.isNaN(low)) {
+            const b1 = (high >> 8) & 0xff;
+            const b2 = high & 0xff;
+            const b3 = (low >> 8) & 0xff;
+            const b4 = low & 0xff;
+            h = `${b1}.${b2}.${b3}.${b4}`;
+          }
+        }
+      }
+    }
+    return PRIVATE_ADDR_RE.test(h);
   }
 }
