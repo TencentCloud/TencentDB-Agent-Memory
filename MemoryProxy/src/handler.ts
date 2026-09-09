@@ -747,7 +747,8 @@ export async function handleChatCompletions(
       return n === name;
     });
   };
-  const _dshHeadless = agentSource === "dsh" && !_hasTool("ask_user_question");
+  const _dshTools = (body as { tools?: unknown }).tools;
+  const _dshHeadless = agentSource === "dsh" && Array.isArray(_dshTools) && _dshTools.length > 0 && !_hasTool("ask_user_question");
   if (_dshHeadless) {
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
   }
@@ -854,11 +855,11 @@ export async function handleChatCompletions(
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless || _hermesHeadless;
+  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} hermesHeadless=${_hermesHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
-  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless && !_hermesHeadless) {
+  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
@@ -940,6 +941,9 @@ export async function handleChatCompletions(
           bypassed: recovered.bypassed,
           justRegistered: needsPrewarm, // 只在 L2b / history-scan recovery 时触发 prewarm
         };
+      } else if (_hermesHeadless) {
+        initResult = { intercepted: false };
+        injectedSkipped = true;
       } else {
         // opencode 走跟 codebuddy 完全同构的通用 else 分支（复用 handleSessionInit +
         // ask_followup_question form）。验证 opencode 客户端对未知 tool_call 的真实反应。
@@ -1031,7 +1035,7 @@ export async function handleChatCompletions(
       // fallback 语义：sessionJustRegistered 在此已定型（见上文 L786），
       // checkFirst 场景可安全复用。
       let memCommandPending = false;
-      if (!isAuxiliary && !_dshHeadless && !_hermesHeadless) {
+      if (!isAuxiliary && !_dshHeadless) {
         try {
           const { parseMemCommand } = await import("./mem-command/index.js");
           let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -1170,7 +1174,7 @@ export async function handleChatCompletions(
   //
   // 请求分类：OpenAI 协议不做 CC 的 fork/sidequery 分流（handler.ts 没接 CC
   // routing），所有请求都视为 main —— 与 codebuddy adapter classifyRequest 一致。
-  if (!isAuxiliary && !_dshHeadless && !_hermesHeadless) {
+  if (!isAuxiliary && !_dshHeadless) {
     const { parseMemCommand, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -1290,7 +1294,7 @@ export async function handleChatCompletions(
   }
 
   // aux 请求(compaction/title)/ dsh·hermes headless(无 UI 无表单工具)不写 L0 —— 直接透传
-  const tdaiClient = isAuxiliary || _dshHeadless || _hermesHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
+  const tdaiClient = isAuxiliary || _dshHeadless || injectedSkipped || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
   const tdaiIdentity = injectedSkipped
     ? null
     : deriveTdaiIdentity({
@@ -1668,7 +1672,7 @@ export async function handleChatCompletions(
       agentSource,
       isAuxiliary,
       isDshHeadless: _dshHeadless,
-      isHermesHeadless: _hermesHeadless,
+      isHermesHeadless: _hermesHeadless && !sessionInfo,
       sessionInfo,
       lf,
       spaceId,
@@ -1879,7 +1883,7 @@ export async function handleChatCompletions(
   // Skill extract trigger — count tool calls + buffer conversation.
   // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
   // aux 请求(compaction/title)/dsh·hermes headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
-  if (!isAuxiliary && !_dshHeadless && !_hermesHeadless && isExtractionAllowed(config, "skill")) {
+  if (!isAuxiliary && !_dshHeadless && !(_hermesHeadless && !sessionInfo) && isExtractionAllowed(config, "skill")) {
     await triggerSkillExtractIfReady({
       config,
       sessionKey,
@@ -1890,7 +1894,7 @@ export async function handleChatCompletions(
       protocol: "openai",
       assetCapabilities,
     });
-  } else if (!isAuxiliary && !_dshHeadless && !_hermesHeadless) {
+  } else if (!isAuxiliary && !_dshHeadless && !(_hermesHeadless && !sessionInfo)) {
     logExtractionSkipped(config, "skill", sessionKey);
   }
 
@@ -2308,7 +2312,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // Skill extract trigger — after stream finalization.
     // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
     // aux 请求(compaction/title)/dsh headless 跳过 skill 触发,保持归档 buffer 语义纯净。
-    if (!ctx.isAuxiliary && !ctx.isDshHeadless && isExtractionAllowed(ctx.config, "skill")) {
+    if (!ctx.isAuxiliary && !ctx.isDshHeadless && !ctx.isHermesHeadless && isExtractionAllowed(ctx.config, "skill")) {
       await triggerSkillExtractIfReady({
         config: ctx.config,
         sessionKey: ctx.sessionKeyForSkill,
@@ -2320,7 +2324,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         assetCapabilities: ctx.assetCapabilities,
         toolCallCountOverride: toolCallAccumulators.size,
       });
-    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless) {
+    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless && !ctx.isHermesHeadless) {
       logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
     }
 

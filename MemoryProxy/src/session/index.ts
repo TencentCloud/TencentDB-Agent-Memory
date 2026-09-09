@@ -264,6 +264,11 @@ export async function handleSessionInit(
       stage: cbFd.stage as HermesFormStage,
       selectedTeamId: cbFd.selectedTeamId,
       selectedAgentId: cbFd.selectedAgentId,
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
       retry: cbFd.retry,
       stream: reqCtx.stream,
       modelId: reqCtx.modelId,

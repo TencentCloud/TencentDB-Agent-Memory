@@ -25,6 +25,7 @@
  */
 
 import type { TeamOption } from "../types.js";
+import { computePagination } from "../claude-code/pagination.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export const AGENT_TASK_FORM_TITLE = "会话初始化 — 选择 Agent 与任务
 export const RETRY_FORM_TITLE = "未能识别选择，请重新选择";
 
 export const SKIP_LABEL = "本次不关联（跳过注入，直接放行）";
+export const MORE_LABEL = "更多 →";
 
 export const ASSET_CONFIRM_YES = "是，关联团队资产";
 export const ASSET_CONFIRM_NO = "否，本次不关联";
@@ -71,6 +73,7 @@ export interface FormData {
   stage: FormStage;
   selectedTeamId?: string;
   selectedAgentId?: string;
+  pageIndex?: number;
   retry?: boolean;
   stream?: boolean;
   modelId?: string;
@@ -85,7 +88,7 @@ interface HermesClarifyQuestion {
 }
 
 export function buildClarifyArgs(data: FormData): { questions: HermesClarifyQuestion[] } {
-  const { teams, stage, selectedTeamId, retry } = data;
+  const { teams, stage, selectedTeamId, retry, pageIndex = 0 } = data;
   const titlePrefix = retry ? "⚠️ " : "";
   const questions: HermesClarifyQuestion[] = [];
 
@@ -99,9 +102,11 @@ export function buildClarifyArgs(data: FormData): { questions: HermesClarifyQues
   }
 
   if (stage === "team") {
-    const teamOpts = teams.slice(0, MAX_CHOICES).map((t) =>
+    const page = computePagination(teams.length, pageIndex);
+    const teamOpts = teams.slice(page.start, page.end).map((t) =>
       `${t.team_name} (${t.team_id.slice(-8)})`,
     );
+    if (!page.isLastPage) teamOpts.push(MORE_LABEL);
     if (teamOpts.length < 2) {
       throw new Error(
         `[hermes form] team stage requires ≥2 teams. Caller must auto-select when teams.length === 1.`,
@@ -119,9 +124,11 @@ export function buildClarifyArgs(data: FormData): { questions: HermesClarifyQues
   if (!team) return { questions };
 
   if (stage === "agent_select" || stage === "agent_task") {
-    const agentOpts = team.agents.slice(0, MAX_CHOICES).map((a) =>
+    const page = computePagination(team.agents.length, pageIndex);
+    const agentOpts = team.agents.slice(page.start, page.end).map((a) =>
       `${a.agent_name} (${a.agent_id.slice(-8)})`,
     );
+    if (!page.isLastPage) agentOpts.push(MORE_LABEL);
     if (agentOpts.length < 2) {
       throw new Error(`[hermes form] agent stage requires ≥2 options.`);
     }
@@ -134,9 +141,11 @@ export function buildClarifyArgs(data: FormData): { questions: HermesClarifyQues
   }
 
   if (stage === "task_select") {
-    const taskOpts = team.tasks.slice(0, MAX_CHOICES).map((t) =>
+    const page = computePagination(team.tasks.length, pageIndex);
+    const taskOpts = team.tasks.slice(page.start, page.end).map((t) =>
       t.isDefault ? t.task_name : `${t.task_name} (${t.task_id.slice(-8)})`,
     );
+    if (!page.isLastPage) taskOpts.push(MORE_LABEL);
     if (taskOpts.length < 2) {
       throw new Error(`[hermes form] task stage requires ≥2 options.`);
     }
