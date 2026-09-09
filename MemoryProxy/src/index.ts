@@ -33,6 +33,7 @@ import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
 import { initProxyStorage, getEffectiveBackend } from "./storage/factory.js";
 import { flushPendingWrites, pendingWriteCount } from "./tdai/pending-writes.js";
+import { flushOpikBatchQueue } from "./opik.js";
 
 const overrides = parseArgv(process.argv);
 const config = buildConfig(overrides);
@@ -167,6 +168,8 @@ async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     const { drained, remaining } = await flushPendingWrites(10_000);
     log.info("server.shutdown.flush_l0.done", { drained, remaining });
   }
+  // Opik create/update 队列：flush 掉内存里尚未发出的 batch（幂等，空队列秒回）。
+  await flushOpikBatchQueue();
   await shutdownGuard();
   await shutdownPrivateControlPlane();
   await shutdownRequestPrepare();

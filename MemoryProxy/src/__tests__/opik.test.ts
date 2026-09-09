@@ -5,6 +5,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikEndpoint,
+  flushOpikBatchQueue,
   opikQuestionTag,
   opikReportFailure,
   opikTurnTag,
@@ -26,6 +27,11 @@ function mkConfig(overrides: Partial<ProxyConfig["opik"]> = {}): ProxyConfig {
       timeoutMs: 1,
       stripRequestLogContent: false,
       requestLogEnabled: false,
+      batch: {
+        enabled: true,
+        maxBatchSize: 20,
+        flushIntervalMs: 1000,
+      },
       ...overrides,
     },
   } as unknown as ProxyConfig;
@@ -39,7 +45,12 @@ function failResponse(): Response {
   return { ok: false, status: 500, text: async () => "boom" } as unknown as Response;
 }
 
+function httpResponse(status: number): Response {
+  return { ok: status >= 200 && status < 300, status, text: async () => "" } as unknown as Response;
+}
+
 async function flush(): Promise<void> {
+  await flushOpikBatchQueue();
   await new Promise((r) => setTimeout(r, 2));
 }
 
@@ -103,14 +114,100 @@ describe("opik client 可靠性加固", () => {
     await flush();
     expect(forkId).not.toBe("");
     expect(forkId).toMatch(/^[0-9a-f]{8}-/);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, forkCall] = fetchMock.mock.calls as [string, RequestInit][];
-    const forkBody = JSON.parse(String(forkCall[1].body)) as Record<string, unknown>;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${BASE}/v1/private/traces/batch`);
+    const body = JSON.parse(String(init.body)) as { traces: Array<Record<string, unknown>> };
+    expect(body.traces).toHaveLength(2);
+    const forkBody = body.traces.find((t) => t.project_name === "request_log")!;
     expect(forkBody.id).toBe(forkId);
-    expect(forkBody.project_name).toBe("request_log");
     expect(forkBody.input).toEqual({ messages: "[stripped]" });
     expect(forkBody.tags).toEqual(["keyId:k1", "modelId:glm-4.5"]);
     expect((forkBody.metadata as Record<string, unknown>).forkTraceId).toBe(forkId);
+  });
+
+  it("连续 create trace 自动合并成 /traces/batch", async () => {
+    opikCreateTrace(mkConfig(), traceInput({ traceId: "trace-a", metadata: {} }));
+    opikCreateTrace(mkConfig(), traceInput({ traceId: "trace-b", metadata: {} }));
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${BASE}/v1/private/traces/batch`);
+    const body = JSON.parse(String(init.body)) as { traces: Array<Record<string, unknown>> };
+    expect(body.traces.map((t) => t.id)).toEqual(["trace-a", "trace-b"]);
+  });
+
+  it("FIFO：create trace → update trace → span 按顺序发送，避免先改后建", async () => {
+    const cfg = mkConfig();
+    opikCreateTrace(cfg, traceInput());
+    opikUpdateTrace(cfg, {
+      traceId: "trace-1",
+      projectName: "usr-key",
+      endTime: "2026-09-06T00:00:01Z",
+      output: [{ role: "assistant" }],
+      usage: { total_tokens: 3 },
+    });
+    opikCreateLlmSpan(cfg, {
+      traceId: "trace-1",
+      projectName: "usr-key",
+      name: "glm-4.5",
+      startTime: "2026-09-06T00:00:00Z",
+      endTime: "2026-09-06T00:00:01Z",
+      inputMessages: [],
+      outputMessage: null,
+      model: "glm-4.5",
+      usage: {},
+    });
+    await flush();
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls).toHaveLength(3);
+    expect(calls[0][0]).toBe(`${BASE}/v1/private/traces`);
+    expect(calls[0][1].method).toBe("POST");
+    expect(calls[1][0]).toBe(`${BASE}/v1/private/traces/trace-1`);
+    expect(calls[1][1].method).toBe("PATCH");
+    expect(calls[2][0]).toBe(`${BASE}/v1/private/spans`);
+    expect(calls[2][1].method).toBe("POST");
+  });
+
+  it("batch.enabled=false 退化为逐条立即上报（不拼 /batch）", async () => {
+    const cfg = mkConfig({
+      batch: { enabled: false, maxBatchSize: 20, flushIntervalMs: 1000 },
+    });
+    opikCreateTrace(cfg, traceInput({ traceId: "trace-a", metadata: {} }));
+    opikCreateTrace(cfg, traceInput({ traceId: "trace-b", metadata: {} }));
+    await flush();
+    const urls = (fetchMock.mock.calls as [string, RequestInit][]).map(([u]) => u);
+    expect(urls).toEqual([
+      `${BASE}/v1/private/traces`,
+      `${BASE}/v1/private/traces`,
+    ]);
+  });
+
+  it("batch 端点 404（老版本 Opik）时逐条回退，不丢数据", async () => {
+    fetchMock
+      .mockResolvedValueOnce(httpResponse(404))
+      .mockResolvedValue(okResponse());
+    const cfg = mkConfig({ batch: { enabled: true, maxBatchSize: 2, flushIntervalMs: 1000 } });
+    opikCreateTrace(cfg, traceInput({ traceId: "trace-a", metadata: {} }));
+    opikCreateTrace(cfg, traceInput({ traceId: "trace-b", metadata: {} }));
+    await flush();
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls).toHaveLength(3);
+    expect(calls[0][0]).toBe(`${BASE}/v1/private/traces/batch`);
+    expect(calls[1][0]).toBe(`${BASE}/v1/private/traces`);
+    expect(calls[2][0]).toBe(`${BASE}/v1/private/traces`);
+  });
+
+  it("队列满 maxBatchSize 立即刷出", async () => {
+    const cfg = mkConfig({ batch: { enabled: true, maxBatchSize: 2, flushIntervalMs: 1000 } });
+    opikCreateTrace(cfg, traceInput({ traceId: "trace-a", metadata: {} }));
+    opikCreateTrace(cfg, traceInput({ traceId: "trace-b", metadata: {} }));
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${BASE}/v1/private/traces/batch`);
+    const body = JSON.parse(String(init.body)) as { traces: Array<Record<string, unknown>> };
+    expect(body.traces.map((t) => t.id)).toEqual(["trace-a", "trace-b"]);
   });
 
   it("requestLogEnabled 默认关闭时不 fork，只发主项目一条", async () => {
@@ -217,10 +314,12 @@ describe("opik client 可靠性加固", () => {
       },
     );
     await flush();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, forkCall] = fetchMock.mock.calls as [string, RequestInit][];
-    const forkBody = JSON.parse(String(forkCall[1].body)) as Record<string, unknown>;
-    expect(forkBody.trace_id).toBe("fork-1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${BASE}/v1/private/spans/batch`);
+    const body = JSON.parse(String(init.body)) as { spans: Array<Record<string, unknown>> };
+    expect(body.spans).toHaveLength(2);
+    const forkBody = body.spans.find((s) => s.trace_id === "fork-1")!;
     expect(forkBody.input).toBeUndefined();
     expect(forkBody.output).toBeUndefined();
     expect(forkBody.usage).toEqual({ credit_x100: 43 });
@@ -274,14 +373,16 @@ describe("opik client 可靠性加固", () => {
       },
     );
     await flush();
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     const calls = fetchMock.mock.calls as [string, RequestInit][];
     const patchUrls = calls.filter(([, init]) => init.method === "PATCH").map(([url]) => url);
     expect(patchUrls).toContain(`${BASE}/v1/private/traces/trace-1`);
     expect(patchUrls).toContain(`${BASE}/v1/private/traces/fork-1`);
-    const spanBodies = calls
-      .filter(([url]) => url === `${BASE}/v1/private/spans`)
-      .map(([, init]) => JSON.parse(String(init.body)) as Record<string, unknown>);
+    const batchCall = calls.find(([url]) => url === `${BASE}/v1/private/spans/batch`);
+    expect(batchCall).toBeDefined();
+    const spanBodies = (
+      JSON.parse(String(batchCall![1].body)) as { spans: Array<Record<string, unknown>> }
+    ).spans;
     expect(spanBodies.some((b) => b.trace_id === "trace-1")).toBe(true);
     expect(spanBodies.some((b) => b.trace_id === "fork-1")).toBe(true);
   });
@@ -346,6 +447,7 @@ describe("opikQuestionTag（相同内容问题统计标签，不参与 traceId�
 
 function traceInput(
   overrides: Partial<{
+    traceId: string;
     metadata: Record<string, unknown>;
     forkProjectName: string;
     forkMetadata: Record<string, unknown>;

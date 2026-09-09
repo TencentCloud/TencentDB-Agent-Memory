@@ -462,6 +462,14 @@ export interface ProxyConfig {
      *  request_log project. Turning this on increases Opik report volume by
      *  ~2x and is meant for raw-request retention only. */
     requestLogEnabled: boolean;
+    /** Batch create-trace/create-span into one HTTP request.
+     *  PATCH (update trace) has no batch endpoint and is still sent per trace,
+     *  but it shares the same FIFO queue so ordering is preserved. */
+    batch: {
+      enabled: boolean;
+      maxBatchSize: number;
+      flushIntervalMs: number;
+    };
   };
   langfuse: LangfuseConfig;
   clickhouse: {
@@ -803,6 +811,11 @@ export interface RawYamlConfig {
     timeoutMs?: number;
     stripRequestLogContent?: boolean;
     requestLogEnabled?: boolean;
+    batch?: {
+      enabled?: boolean;
+      maxBatchSize?: number;
+      flushIntervalMs?: number;
+    };
   };
   redis?: {
     enabled?: boolean;

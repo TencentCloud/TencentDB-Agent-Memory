@@ -24,6 +24,11 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     timeoutMs: 2000,
     stripRequestLogContent: false,
     requestLogEnabled: false,
+    batch: {
+      enabled: true,
+      maxBatchSize: 20,
+      flushIntervalMs: 1000,
+    },
   },
   langfuse: { enabled: false, host: "", publicKey: "", secretKey: "", debug: false, maxQueueSize: 8192, flushAt: 256, flushInterval: 2 },
   clickhouse: {
@@ -338,6 +343,23 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         yaml.opik?.stripRequestLogContent ?? DEFAULT_CONFIG.opik.stripRequestLogContent,
       requestLogEnabled:
         yaml.opik?.requestLogEnabled ?? DEFAULT_CONFIG.opik.requestLogEnabled,
+      batch: {
+        enabled: yaml.opik?.batch?.enabled ?? DEFAULT_CONFIG.opik.batch.enabled,
+        maxBatchSize:
+          typeof yaml.opik?.batch?.maxBatchSize === "number" &&
+          Number.isFinite(yaml.opik.batch.maxBatchSize) &&
+          yaml.opik.batch.maxBatchSize >= 2 &&
+          yaml.opik.batch.maxBatchSize <= 500
+            ? Math.round(yaml.opik.batch.maxBatchSize)
+            : DEFAULT_CONFIG.opik.batch.maxBatchSize,
+        flushIntervalMs:
+          typeof yaml.opik?.batch?.flushIntervalMs === "number" &&
+          Number.isFinite(yaml.opik.batch.flushIntervalMs) &&
+          yaml.opik.batch.flushIntervalMs >= 50 &&
+          yaml.opik.batch.flushIntervalMs <= 60000
+            ? Math.round(yaml.opik.batch.flushIntervalMs)
+            : DEFAULT_CONFIG.opik.batch.flushIntervalMs,
+      },
     },
     langfuse: {
       enabled: yaml.langfuse?.enabled ?? DEFAULT_CONFIG.langfuse.enabled,

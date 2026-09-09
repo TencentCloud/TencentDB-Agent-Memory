@@ -37,11 +37,40 @@ const clientState: OpikClientState = {
   lastWarnMs: 0,
 };
 
+/** create/update 上报队列（内存 FIFO，模块内单例）。
+ *  - create trace / create span 连续同型条目会合并成 batch POST；
+ *  - update trace（PATCH）没有 batch 端点，仍逐条发送，但排在同一队列里，
+ *    保证“先 create 后 update”的顺序不被打乱。
+ */
+type OpikQueueKind = "traces" | "spans" | "trace-patch";
+
+interface PendingOpikItem {
+  kind: OpikQueueKind;
+  method: "POST" | "PATCH";
+  /** 单条上报 URL（batch 发送时在末尾拼 /batch）。 */
+  url: string;
+  body: Record<string, unknown>;
+  /** 日志事件名。 */
+  event: string;
+  /** 入队时的配置快照引用（单进程单配置；供发送时读取 url/headers/熔断）。 */
+  cfg: ProxyConfig;
+}
+
+const opikQueue: PendingOpikItem[] = [];
+let opikFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let opikFlushPromise: Promise<void> | null = null;
+
 /** 仅供测试：重置熔断/日志限频状态。 */
 export function resetOpikClientForTests(): void {
   clientState.consecutiveFailures = 0;
   clientState.openUntilMs = 0;
   clientState.lastWarnMs = 0;
+  if (opikFlushTimer) {
+    clearTimeout(opikFlushTimer);
+    opikFlushTimer = null;
+  }
+  opikQueue.length = 0;
+  opikFlushPromise = null;
 }
 
 /**
@@ -225,9 +254,17 @@ interface OpikRequest {
   event: string;
 }
 
-/** 统一上报入口：超时 + 熔断 + 限频日志；任何异常都不向外抛。 */
-async function sendOpikRequest(config: ProxyConfig, req: OpikRequest): Promise<void> {
-  if (breakerOpen()) return;
+type OpikSendResult = "ok" | "unsupported" | "failed";
+
+/** 统一单条上报入口：超时 + 熔断 + 限频日志；任何异常都不向外抛。
+ *  - 404/405 视为“端点不支持”（老版本无 batch），不记失败、调用方自行回退；
+ *  - 其余非 2xx / 网络异常记失败并参与熔断。
+ */
+async function sendOpikRequest(
+  config: ProxyConfig,
+  req: OpikRequest,
+): Promise<OpikSendResult> {
+  if (breakerOpen()) return "failed";
   const timeoutMs =
     typeof config.opik.timeoutMs === "number" && config.opik.timeoutMs > 0
       ? config.opik.timeoutMs
@@ -241,16 +278,152 @@ async function sendOpikRequest(config: ProxyConfig, req: OpikRequest): Promise<v
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (res.status === 404 || res.status === 405) {
+        opikWarnThrottled(`${req.event}_unsupported`, {
+          status: res.status,
+          body: text.slice(0, 200),
+        });
+        return "unsupported";
+      }
       recordOpikResult(false);
       opikWarnThrottled(`${req.event}_error`, { status: res.status, body: text.slice(0, 200) });
-      return;
+      return "failed";
     }
     recordOpikResult(true);
+    return "ok";
   } catch (err) {
     recordOpikResult(false);
     const detail = err instanceof Error && err.name === "TimeoutError" ? "timeout" : String(err);
     opikWarnThrottled(`${req.event}_failed`, { error: detail });
+    return "failed";
   }
+}
+
+/** 队列参数（容错读取，未配置时用默认值）。 */
+function opikBatchEnabled(config: ProxyConfig): boolean {
+  return config.opik.batch?.enabled !== false;
+}
+
+function opikBatchMaxSize(config: ProxyConfig): number {
+  const raw = config.opik.batch?.maxBatchSize;
+  return typeof raw === "number" && raw >= 2 && raw <= 500 ? Math.round(raw) : 20;
+}
+
+function opikBatchFlushIntervalMs(config: ProxyConfig): number {
+  const raw = config.opik.batch?.flushIntervalMs;
+  return typeof raw === "number" && raw >= 50 && raw <= 60000 ? Math.round(raw) : 1000;
+}
+
+/** 入队：批量模式开 → 进 FIFO；关 → 立即单条发送（旧行为）。 */
+function enqueueOpikItem(
+  config: ProxyConfig,
+  item: Omit<PendingOpikItem, "cfg">,
+): void {
+  if (!opikBatchEnabled(config)) {
+    void sendOpikRequest(config, {
+      method: item.method,
+      url: item.url,
+      body: item.body,
+      event: item.event,
+    });
+    return;
+  }
+  opikQueue.push({ ...item, cfg: config });
+  const maxSize = opikBatchMaxSize(config);
+  if (opikQueue.length >= maxSize) {
+    if (opikFlushTimer) {
+      clearTimeout(opikFlushTimer);
+      opikFlushTimer = null;
+    }
+    void flushOpikBatchQueue();
+  } else {
+    scheduleOpikFlush(opikBatchFlushIntervalMs(config));
+  }
+}
+
+function scheduleOpikFlush(intervalMs: number): void {
+  if (opikFlushTimer || opikQueue.length === 0) return;
+  opikFlushTimer = setTimeout(() => {
+    opikFlushTimer = null;
+    void flushOpikBatchQueue();
+  }, intervalMs);
+  if (typeof opikFlushTimer.unref === "function") opikFlushTimer.unref();
+}
+
+/** 发送一批：单条 → 走原单条 URL；≥2 条同类 create → 批量端点。
+ *  老版本 Opik 不支持 batch（404/405）时逐条回退，保证不丢数据。 */
+async function sendOpikChunk(items: PendingOpikItem[]): Promise<void> {
+  if (items.length === 0) return;
+  const first = items[0];
+  if (items.length === 1 || first.kind === "trace-patch") {
+    for (const item of items) {
+      await sendOpikRequest(item.cfg, {
+        method: item.method,
+        url: item.url,
+        body: item.body,
+        event: item.event,
+      });
+    }
+    return;
+  }
+
+  const result = await sendOpikRequest(first.cfg, {
+    method: "POST",
+    url: `${first.url}/batch`,
+    body: { [first.kind]: items.map((item) => item.body) } as Record<string, unknown>,
+    event: `opik.batch_${first.kind}`,
+  });
+  if (result === "unsupported") {
+    for (const item of items) {
+      await sendOpikRequest(item.cfg, {
+        method: item.method,
+        url: item.url,
+        body: item.body,
+        event: item.event,
+      });
+    }
+  }
+}
+
+async function drainOpikQueue(): Promise<void> {
+  while (opikQueue.length > 0) {
+    const kind = opikQueue[0].kind;
+    const chunk: PendingOpikItem[] = [];
+    while (opikQueue.length > 0 && opikQueue[0].kind === kind) {
+      const item = opikQueue.shift();
+      if (item) chunk.push(item);
+    }
+    await sendOpikChunk(chunk);
+  }
+}
+
+/** 触发一次队列刷出（幂等：并发调用共享同一个 drain promise）。
+ *  index.ts 的 gracefulShutdown 也会调用它，避免进程退出丢尾部队列。 */
+export async function flushOpikBatchQueue(): Promise<void> {
+  if (opikFlushTimer) {
+    clearTimeout(opikFlushTimer);
+    opikFlushTimer = null;
+  }
+  if (!opikFlushPromise) {
+    opikFlushPromise = (async () => {
+      await drainOpikQueue();
+    })()
+      .catch((err: unknown) => {
+        log.warn("opik.batch_flush_error", { error: String(err) });
+      })
+      .finally(() => {
+        opikFlushPromise = null;
+        if (opikQueue.length > 0) {
+          const next = opikQueue[0];
+          if (opikQueue.length >= opikBatchMaxSize(next.cfg)) {
+            void flushOpikBatchQueue();
+          } else {
+            scheduleOpikFlush(opikBatchFlushIntervalMs(next.cfg));
+          }
+        }
+      });
+  }
+  return opikFlushPromise;
 }
 
 /** POST a new trace to Opik (fire-and-forget).
@@ -289,7 +462,8 @@ export function opikCreateTrace(
     traceBody.metadata = input.metadata;
   }
 
-  void sendOpikRequest(config, {
+  enqueueOpikItem(config, {
+    kind: "traces",
     method: "POST",
     url,
     body: traceBody,
@@ -319,7 +493,8 @@ export function opikCreateTrace(
     } else {
       forkBody.metadata = { forkTraceId };
     }
-    void sendOpikRequest(config, {
+    enqueueOpikItem(config, {
+      kind: "traces",
       method: "POST",
       url,
       body: forkBody,
@@ -337,7 +512,8 @@ export function opikUpdateTrace(
 ): void {
   if (!config.opik.enabled || !config.opik.url) return;
 
-  void sendOpikRequest(config, {
+  enqueueOpikItem(config, {
+    kind: "trace-patch",
     method: "PATCH",
     url: opikEndpoint(config, `/traces/${update.traceId}`),
     body: {
@@ -401,7 +577,8 @@ export function opikReportFailure(
   errorInfo.message = safeMessage;
 
   // 关闭主项目 trace（只写 end_time + error metadata；不覆盖已成功请求写入的 output）
-  void sendOpikRequest(config, {
+  enqueueOpikItem(config, {
+    kind: "trace-patch",
     method: "PATCH",
     url: opikEndpoint(config, `/traces/${report.traceId}`),
     body: {
@@ -415,7 +592,8 @@ export function opikReportFailure(
 
   // 关闭 request_log fork trace（若开启且已创建）
   if (report.forkTraceId) {
-    void sendOpikRequest(config, {
+    enqueueOpikItem(config, {
+      kind: "trace-patch",
       method: "PATCH",
       url: opikEndpoint(config, `/traces/${report.forkTraceId}`),
       body: {
@@ -510,7 +688,8 @@ export function opikCreateLlmSpan(
     body.metadata = span.metadata;
   }
 
-  void sendOpikRequest(config, {
+  enqueueOpikItem(config, {
+    kind: "spans",
     method: "POST",
     url: opikEndpoint(config, "/spans"),
     body,
@@ -550,7 +729,8 @@ export function opikCreateLlmSpan(
       `keyId:${forkMeta.keyId || "unknown"}`,
       `modelId:${forkMeta.modelId || "unknown"}`,
     ];
-    void sendOpikRequest(config, {
+    enqueueOpikItem(config, {
+      kind: "spans",
       method: "POST",
       url: opikEndpoint(config, "/spans"),
       body: forkBody,
