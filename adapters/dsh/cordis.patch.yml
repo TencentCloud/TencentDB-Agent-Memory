@@ -1,0 +1,15 @@
+- insert:
+  - id: tdai-memory
+    name: tdai-memory-dsh
+    inject: [tools, systemPrompt, sessions]
+    config:
+      endpoint: !!js process.env.TDAI_MEMORY_GATEWAY || 'http://127.0.0.1:8420'
+      apiKeyEnv: !!js process.env.TDAI_MEMORY_API_KEY_ENV || 'TDAI_GATEWAY_API_KEY'
+      apiKey: !!js process.env[process.env.TDAI_MEMORY_API_KEY_ENV || 'TDAI_GATEWAY_API_KEY'] || ''
+      appName: !!js process.env.TDAI_APP_NAME || 'dsh'
+      userId: !!js process.env.TDAI_USER_ID || 'dsh-user'
+      recallLimit: !!js Number(process.env.TDAI_RECALL_LIMIT || 5)
+      recallEnabled: !!js process.env.TDAI_RECALL_ENABLED !== '0'
+      memorySearchTool: !!js process.env.TDAI_MEMORY_SEARCH_TOOL !== '0'
+      conversationSearchTool: !!js process.env.TDAI_CONVERSATION_SEARCH_TOOL !== '0'
+      failOpen: !!js process.env.TDAI_FAIL_OPEN !== '0'
