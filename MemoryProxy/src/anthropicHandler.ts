@@ -15,6 +15,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikTurnTag,
+  opikTurnTraceId,
   uuidv7,
 } from "./opik.js";
 import {
@@ -1338,6 +1339,7 @@ export async function handleAnthropicMessages(
   // (extension disabled/unavailable, or no-tools auxiliary request).
   const turnSeq = target.turnSeq > 0 ? target.turnSeq : countHumanTurns(messages, "anthropic");
   traceTags.push(opikTurnTag(sessionKey, turnSeq));
+  const opikTraceId = opikTurnTraceId(sessionKey, turnSeq);
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1402,7 +1404,7 @@ export async function handleAnthropicMessages(
     opikTraceMetadata.tool_interaction = toolSummary;
   }
   const forkTraceId = opikCreateTrace(config, {
-    traceId,
+    traceId: opikTraceId,
     projectName: keyId,
     name: `${target.model} / ${keyId}`,
     startTime,
@@ -1452,7 +1454,7 @@ export async function handleAnthropicMessages(
     userQuery: lf.userQuery,
     spaceId,
     lf,
-    opikTraceId: traceId,
+    opikTraceId,
     opikKeyId: keyId,
   });
 
@@ -1597,7 +1599,7 @@ export async function handleAnthropicMessages(
       sessionKey,
       upstreamUrl: target.url,
       requestPath: c.req.path,
-      traceId,
+      traceId: opikTraceId,
       forkTraceId,
       startTime,
       inputMessages: messages,
@@ -1751,7 +1753,7 @@ export async function handleAnthropicMessages(
     });
 
     opikCreateLlmSpan(config, {
-      traceId,
+      traceId: opikTraceId,
       projectName: keyId,
       name: effectiveModel,
       startTime,
@@ -1855,7 +1857,7 @@ export async function handleAnthropicMessages(
           tdaiIdentity,
           tdaiUserMessage,
           outputContent,
-          { traceId },
+          { traceId: opikTraceId },
         ),
       ).catch((err: unknown) => pipe.error("TDAI_L0", err)),
     );

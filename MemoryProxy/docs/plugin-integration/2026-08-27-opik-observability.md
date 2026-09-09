@@ -74,9 +74,9 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 
 另外每次 Chat / Anthropic trace 会 fork 一份到 `request_log` 项目（独立
 traceId，默认脱敏只留 usage + 标签），供原始请求留痕，不污染主项目视图。
-主项目 trace / span 还会带 `turn:<hash>` 标签：同一轮用户提问的工具循环请求
-共享同一 (sessionKey, turnSeq)，因此标签一致，可按 `turn:<hash>` 过滤同一次
-提问产生的全部调用。
+主项目 trace 还额外带 `turn:<hash>` 标签：同一轮用户提问的工具循环请求共享
+同一 (sessionKey, turnSeq)，因此 traceId 与标签都一致，可按 `turn:<hash>`
+过滤，也可直接在 Opik 树形视图看到同一条 trace 下的全部 span。
 
 ## 5. 配置与启用
 
@@ -176,9 +176,11 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   在转发层读取 usage/output 并 update trace + 创建 LLM span（流式与 JSON 两条
   出口均已覆盖）；
 - **同一次提问归组**：Opik 沿用 Langfuse 的 turn 语义（同一 `sessionKey +
-  turnSeq` 属于同一轮用户提问），四个 handler 在 create trace / LLM span 上
-  统一打 `turn:<hash>` 标签。标签用于过滤与归组；Opik 的树形 trace 仍按
-  traceId 组织，不改变现有“每请求一条 trace”模型；
+  turnSeq` 属于同一轮用户提问），四个 handler 用 `opikTurnTraceId` 生成稳定
+  UUIDv7 traceId，工具循环请求共享同一条 trace；LLM span 仍按每次调用创建，
+  因此 Opik 中呈现“一条 trace + 多个 span”的树。已在本机 Opik 验证：同 ID
+  重复 POST 幂等、多 span 同 trace 正常、并发 PATCH 不损坏数据（最后一次写入
+  生效）。
 - **记忆注入字段语义**：`injector_count` 是配置声明的注入器数量（配置级）；
   `hook_count / block_count / error_count` 是本轮注入管线真实运行结果
   （运行级），`hooks` 给出每个 hook 的 `point / block_count /
@@ -236,3 +238,14 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   LLM span 统一打 `turn:<hash>`（hash = sha256(sessionKey:turnSeq) 前 16 位），
   工具循环产生的多条请求可在 Opik 按同一标签过滤归组；request_log 主语义与
   traceId 组织不变。
+
+## 10. 2026-09-09 补充：traceId 按轮次提问归组
+
+- 在 §9 标签归组之上进一步实现真正的树形归组：`opik.ts` 新增
+  `opikTurnTraceId(sessionKey, turnSeq)`，从同一 seed 派生稳定的 UUIDv7。
+- 四个 handler 的主 trace 不再用请求级随机 `uuidv7()`，而改用该确定性
+  traceId；同一轮提问的工具循环请求自动共享同一条 trace，每次 LLM 调用仍
+  作为独立 span 挂在其下。
+- 本机 Opik 实测结论：同 ID 重复 POST 幂等（项目内仍是 1 条 trace）；多个
+  span 共享同一 trace 正常展示；并发 PATCH 全部成功、数据不损坏（output 为
+  最后写入者）。因此该方案可直接使用，无需 409 特殊处理。

@@ -92,6 +92,22 @@ export function opikTurnTag(sessionKey: string, turnSeq: number): string {
   return `turn:${hash}`;
 }
 
+/** 同一轮用户提问的确定性 Opik traceId（UUID v7 格式）。
+ *  同一 (sessionKey, turnSeq) 在任意请求/实例都得到同一 ID，
+ *  使工具循环产生的多条 HTTP 请求能挂到同一条 trace 下。
+ *  已在本机 Opik 验证：同 ID 重复 POST 幂等（不重复、不报错），
+ *  多 span 同 trace 可正常展示。
+ */
+export function opikTurnTraceId(sessionKey: string, turnSeq: number): string {
+  const digest = createHash("sha256")
+    .update(`${sessionKey}:${turnSeq}`)
+    .digest();
+  digest[6] = (digest[6] & 0x0f) | 0x70; // version 7
+  digest[8] = (digest[8] & 0x3f) | 0x80; // variant 10xx
+  const hex = digest.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 interface OpikTraceInput {
   traceId: string;
   projectName: string;

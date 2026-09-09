@@ -26,6 +26,7 @@ import {
   opikCreateTrace,
   opikUpdateTrace,
   opikTurnTag,
+  opikTurnTraceId,
   uuidv7,
 } from "./opik.js";
 import {
@@ -1071,6 +1072,7 @@ export async function handleWorkbuddyEndpoint(
 
   const turnSeq = countHumanTurnsWorkbuddy(body.input);
   const userQuery = workbuddyAdapter.extractUserText(body.input) ?? "";
+  const opikTraceId = opikTurnTraceId(sessionKey, turnSeq);
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1652,7 +1654,7 @@ export async function handleWorkbuddyEndpoint(
     opikTraceMetadata.tool_interaction = responsesToolSummary;
   }
   const forkTraceId = opikCreateTrace(config, {
-    traceId,
+    traceId: opikTraceId,
     projectName: keyId,
     name: `${modelId} / ${keyId}`,
     startTime,
@@ -1685,7 +1687,7 @@ export async function handleWorkbuddyEndpoint(
     traceId,
   });
   return forwardToUpstream(
-    c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
+    c, config, body, opikTraceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
     { forkTraceId, metadata: opikTraceMetadata },
   );
 }

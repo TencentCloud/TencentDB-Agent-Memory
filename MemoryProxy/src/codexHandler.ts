@@ -34,6 +34,7 @@ import {
   opikCreateTrace,
   opikUpdateTrace,
   opikTurnTag,
+  opikTurnTraceId,
   uuidv7,
 } from "./opik.js";
 import {
@@ -379,6 +380,7 @@ export async function handleCodexEndpoint(
   // 通用 resolveLatestUserQuery 靠 costGuard profile 走 messages[]，这里不合用。
   const turnSeq = countHumanTurnsCodex(body.input);
   const userQuery = codexAdapter.extractUserText(body.input) ?? "";
+  const opikTraceId = opikTurnTraceId(sessionKey, turnSeq);
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -990,7 +992,7 @@ export async function handleCodexEndpoint(
     opikTraceMetadata.tool_interaction = responsesToolSummary;
   }
   const forkTraceId = opikCreateTrace(config, {
-    traceId,
+    traceId: opikTraceId,
     projectName: keyId,
     name: `${modelId} / ${keyId}`,
     startTime,
@@ -1027,7 +1029,7 @@ export async function handleCodexEndpoint(
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
   return forwardToUpstream(
-    c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
+    c, config, body, opikTraceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
     { forkTraceId, metadata: opikTraceMetadata },
   );
 }

@@ -6,6 +6,7 @@ import {
   opikCreateTrace,
   opikEndpoint,
   opikTurnTag,
+  opikTurnTraceId,
   opikUpdateTrace,
   resetOpikClientForTests,
 } from "../opik.js";
@@ -209,6 +210,19 @@ describe("opikTurnTag（同一轮提问稳定分组）", () => {
     expect(opikTurnTag("wb:user:abc", 2)).toBe(opikTurnTag("wb:user:abc", 2));
     expect(opikTurnTag("wb:user:abc", 2)).not.toBe(opikTurnTag("wb:user:abc", 3));
     expect(opikTurnTag("wb:user:abc", 2)).toMatch(/^turn:[0-9a-f]{16}$/);
+  });
+});
+
+describe("opikTurnTraceId（同轮提问确定性 traceId）", () => {
+  it("同 sessionKey + turnSeq 稳定一致，不同 turn / 会话不同，格式为 UUIDv7", () => {
+    const a = opikTurnTraceId("wb:user:abc", 2);
+    const b = opikTurnTraceId("wb:user:abc", 2);
+    expect(a).toBe(b);
+    expect(opikTurnTraceId("wb:user:abc", 2)).not.toBe(opikTurnTraceId("wb:user:abc", 3));
+    expect(opikTurnTraceId("wb:user:abc", 2)).not.toBe(opikTurnTraceId("wb:user:def", 2));
+    expect(a).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 });
 
