@@ -653,7 +653,12 @@ async function searchHybrid(
   embeddingCallOpts?: EmbeddingCallOptions,
 ): Promise<SearchResult> {
   // Run keyword and embedding searches in parallel
-  const candidateK = maxResults * 3; // retrieve more for merging
+  // Over-fetch a deeper candidate pool before RRF merge. With only maxResults*3
+  // (=15 at the default), a specific/rare match (e.g. one memory naming a
+  // particular entity) can fall outside both the FTS and vector candidate lists
+  // for a broad multi-term query and never enter the fusion. A larger pool keeps
+  // such matches eligible without materially changing the top-N output.
+  const candidateK = Math.max(50, maxResults * 10);
 
   const [keywordResult, embeddingResult] = await Promise.all([
     // Keyword search: FTS5 only (no in-memory fallback)
