@@ -35,6 +35,9 @@ export interface BridgeCallTelemetryInput {
    * 非空 = proxy 前置早退，没到 fetcher。见 clickhouse.ts ToolCallLogInput 注释。
    */
   rejectReason?: string;
+  /** Only populated for a resolved Skill content read. */
+  skillId?: string;
+  skillVersion?: number;
 }
 
 /**
@@ -63,6 +66,8 @@ export function emitBridgeToolCallTelemetry(
       upstreamStatus: input.upstreamStatus,
       elapsedMs: input.elapsedMs,
       rejectReason: input.rejectReason,
+      skillId: input.skillId,
+      skillVersion: input.skillVersion,
     };
     try {
       sink(row);
