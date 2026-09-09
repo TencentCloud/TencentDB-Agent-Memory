@@ -42,3 +42,29 @@ export function runWithGeneratedRelationId<T>(
   if (lastErr instanceof Error) throw lastErr;
   throw new Error("relation id collision after max retries");
 }
+
+/**
+ * 异步版本：使用自动生成的 relation id 执行插入；`fixedId` 已指定时不重试。
+ */
+export async function runWithGeneratedRelationIdAsync<T>(
+  fixedId: string | undefined,
+  isCollision: (err: unknown) => boolean,
+  insert: (id: string) => Promise<T>,
+): Promise<T> {
+  if (fixedId) return await insert(fixedId);
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < RELATION_ID_RETRY_LIMIT; attempt++) {
+    try {
+      return await insert(generateRelationId());
+    } catch (err) {
+      if (isCollision(err)) {
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (lastErr instanceof Error) throw lastErr;
+  throw new Error("relation id collision after max retries");
+}
+
