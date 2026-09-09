@@ -9,6 +9,14 @@
 
 ---
 
+## [Unreleased]
+
+### Fixes
+
+- Code-Graph 的 explore / search 遇到中文问题且零命中时，会用已配置的 Knowledge LLM 改写成英文标识符再查一次。
+
+---
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

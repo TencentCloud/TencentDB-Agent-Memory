@@ -16,7 +16,7 @@ import { Hono } from "hono";
 import type { WikiService, CodeGraphService } from "../store/index.js";
 import type { CodeGraphInstancePool } from "../module.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
-import { executeTool as executeCodeTool } from "../engines/code/index.js";
+import { executeCodeToolWithNlRewrite, type ResolveLlm } from "../engines/code/index.js";
 import { wrapOk, wrapError, isValidIdSegment } from "../api-helpers.js";
 import { isWikiId, isCodeGraphId } from "../store/ids.js";
 
@@ -25,6 +25,8 @@ export interface ToolsRouteDeps {
   wikiMgr: WikiSourceManager;
   cgService: CodeGraphService;
   instancePool: CodeGraphInstancePool;
+  /** Optional: rewrite CJK explore/search queries when the first hit is empty. */
+  resolveLlm?: ResolveLlm;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -187,7 +189,7 @@ const CODE_GRAPH_TOOL_NAMES = new Set(CODE_GRAPH_TOOLS.map((t) => t.name));
 
 export function createToolsRoutes(deps: ToolsRouteDeps): Hono {
   const app = new Hono();
-  const { wikiService, wikiMgr, cgService, instancePool } = deps;
+  const { wikiService, wikiMgr, cgService, instancePool, resolveLlm } = deps;
 
   // ── POST /tools/list ──
 
@@ -286,7 +288,7 @@ export function createToolsRoutes(deps: ToolsRouteDeps): Hono {
       const row = cgService.getById(serviceId, knowledgeId);
       if (!row) return c.json(wrapError(404, "code graph not found"), 404);
 
-      return executeCodeGraphTool(serviceId, toolName, row, toolParams, cgService, instancePool);
+      return executeCodeGraphTool(serviceId, toolName, row, toolParams, cgService, instancePool, resolveLlm);
     }
 
     return c.json(wrapError(400, `invalid knowledge_id format: ${knowledgeId}`), 400);
@@ -401,6 +403,7 @@ async function executeCodeGraphTool(
   params: Record<string, unknown>,
   cgService: CodeGraphService,
   instancePool: CodeGraphInstancePool,
+  resolveLlm?: ResolveLlm,
 ): Promise<Response> {
   const { code_graph_id, team_id } = row;
 
@@ -437,6 +440,9 @@ async function executeCodeGraphTool(
     return Response.json(wrapError(503, "code graph instance not loaded"), { status: 503 });
   }
 
-  const result = await executeCodeTool(instance, cgToolName, toolParams);
+  const result = await executeCodeToolWithNlRewrite(instance, cgToolName, toolParams, {
+    serviceId,
+    resolveLlm,
+  });
   return Response.json(wrapOk(result), { status: result.isError ? 500 : 200 });
 }
