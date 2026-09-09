@@ -198,6 +198,8 @@ const option = (name: string, fallback?: string) => {
 };
 const has = (name: string) => process.argv.includes(name);
 async function main() {
+  // Frozen fixtures and historical C4 records use name-based skill lookup.
+  process.env.SKILL_VIEW_MODE ??= "name";
   const cases = loadCases(); validateEvalDataset(cases);
   const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
   for (const [name, expected] of Object.entries(manifest.files)) {

@@ -9,6 +9,7 @@ const saved = readFileSync(new URL("../../scripts/eval/tool-routing/results/per-
 afterEach(() => vi.unstubAllEnvs());
 describe("checked-in tool-routing reproduction", () => {
   it("hydrates 297 self-contained cases and preserves all 594 recorded initial requests", async () => {
+    vi.stubEnv("SKILL_VIEW_MODE", "name");
     vi.stubEnv("TOOL_ROUTING_THINKING_MODE", "disabled");
     vi.stubEnv("TOOL_ROUTING_EXTRA_BODY_JSON", '{"thinking":{"type":"disabled"}}');
     const config = providerConfiguration(12, 8192, 90_000);
@@ -23,6 +24,7 @@ describe("checked-in tool-routing reproduction", () => {
     vi.stubEnv("TOOL_ROUTING_API_URL", "https://invalid.test/chat/completions");
     vi.stubEnv("TOOL_ROUTING_MODEL", "deepseek-v4-flash");
     vi.stubEnv("TOOL_ROUTING_PYTHON_EXECUTABLE", "/opt/homebrew/bin/python3.14");
+    vi.stubEnv("SKILL_VIEW_MODE", "name");
     vi.stubEnv("TOOL_ROUTING_THINKING_MODE", "disabled");
     vi.stubEnv("TOOL_ROUTING_EXTRA_BODY_JSON", '{"thinking":{"type":"disabled"}}');
     const c = cases.find(c => c.category === "coding-negative")!; let requests = 0;

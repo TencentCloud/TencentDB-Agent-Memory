@@ -4,8 +4,8 @@ import { parseArgs } from "node:util";
 import type { MemoryRecord } from "../../src/core/record/l1-writer.js";
 import { listLocalProfiles } from "../../src/core/profile/profile-sync.js";
 import { createBM25Encoder } from "../../src/core/store/bm25-local.js";
-import { VectorStore, type L0RecordRow } from "../../src/core/store/sqlite.js";
-import { TcvdbMemoryStore } from "../../src/core/store/tcvdb.js";
+import { VectorStore, type L0RecordRow } from "../../src/core/store/sqlite/memory-store.js";
+import { TcvdbMemoryStore } from "../../src/core/store/tcvdb/memory-store.js";
 import type { L0Record, L1RecordRow, ProfileRecord, ProfileSyncRecord, StoreInitResult } from "../../src/core/store/types.js";
 import { readManifest } from "../../src/utils/manifest.js";
 import {
@@ -75,7 +75,7 @@ export interface MigrationPreflightSummary {
     l1Count: number;
     profileCount: number;
     manifestExists: boolean;
-    manifestStoreType: "sqlite" | "tcvdb" | null;
+    manifestStoreType: "sqlite" | "tcvdb" | "mongodb" | null;
   };
   target: {
     url: string;

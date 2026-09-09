@@ -98,13 +98,20 @@ export function resolvePresetIdentity(
   if (preset.taskId) {
     const task = team.tasks.find((t) => t.task_id === preset.taskId);
     if (task) res.taskId = task.task_id;
-    else res.hadMismatch = true;
+    // A stale/unknown task_id does NOT flip hadMismatch: task_id is an
+    // optional business dimension in the kernel (isolation.ts: "taskId is
+    // an optional business dimension for L0/L1 filtering"). An absent or
+    // stale task must not block registration — it just means recall is
+    // broadened across all of the agent's memories. Only an unknown team or
+    // unknown agent is a real identity mismatch (they're the mandatory
+    // dimensions); a task mismatch is silently dropped with a caller-side
+    // warning instead. See PR feat/task-optional-memory.
   }
 
-  // team + agent + task 三者齐全（且无 mismatch）→ 才走"直接登记"快捷路径。
-  // 与 CC/CB completeRegistration 的守卫一致：缺 task 直接 bypass，不再"只注入
-  // agent"；header 缺 task_id 时也不走 shortcut，回退到交互式流程（该流程内部
-  // 的 auto-select 级联在 tasks.length===0 时也会 bypass）。
-  res.canRegister = !!res.agentId && !!res.taskId && !res.hadMismatch;
+  // team + agent resolved → register directly. task_id is OPTIONAL: a
+  // missing/stale task yields undefined taskId (broad recall), not a block.
+  // This matches the kernel's own semantics and the interactive "本次不关联
+  // 任务" / defaultTaskId path.
+  res.canRegister = !!res.agentId && !res.hadMismatch;
   return res;
 }

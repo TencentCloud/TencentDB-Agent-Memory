@@ -71,6 +71,28 @@ export function renderSkillToolsBlock(
   const tenantHeader = spaceId ? ` -H 'x-tdai-service-id: ${spaceId}'` : "";
   const authHeader = `${tenantHeader}${sessionHeader}`;
 
+  // ── skill_view 用 skill_id(get) 还是 skill_name(get-by-name) ──
+  // 默认 id → skill_view 打 /get，body 传 skill_id（配合 available_skills 渲染带 id）。
+  // SKILL_VIEW_MODE=name → 回退到 /get-by-name + skill_name（旧行为）。
+  // 依据 skill_eval v9(name) vs v10(id) 对比实验：id 模式有调用时 correct% 更高、unknown 减半。
+  const skillViewMode = (process.env.SKILL_VIEW_MODE ?? "id").toLowerCase() === "name" ? "name" : "id";
+  const skillViewTool =
+    skillViewMode === "id"
+      ? [
+          `  <curl_recipe id="skill_view">`,
+          `    path: ${bridge}/get`,
+          `    body: {"skill_id": "<skill 的 id, 形如 skl-xxx>", "include_content": true, "include_manifest": true}`,
+          `    use: 工作流明确匹配且完整说明不在上下文时，读取 SKILL.md 后执行。skill_id 来自列表 id= 或 skill_search；词面相似不调用。`,
+          `  </curl_recipe>`,
+        ]
+      : [
+          `  <curl_recipe id="skill_view">`,
+          `    path: ${bridge}/get-by-name`,
+          `    body: {"skill_name": "<skill 名字>", "include_content": true, "include_manifest": true}`,
+          `    use: 工作流明确匹配且完整说明不在上下文时，读取 SKILL.md 后执行。skill_name 来自列表或 skill_search；词面相似不调用。`,
+          `  </curl_recipe>`,
+        ];
+
   const readTools = [
     `  <curl_recipe id="skill_search">`,
     `    path: ${bridge}/search`,
@@ -86,11 +108,7 @@ export function renderSkillToolsBlock(
     // `    use:  列出 head + active skill；按 owner / 前缀过滤`,
     // `  </curl_recipe>`,
     // "",
-    `  <curl_recipe id="skill_view">`,
-    `    path: ${bridge}/get-by-name`,
-    `    body: {"skill_name": "<skill 名字>", "include_content": true, "include_manifest": true}`,
-    `    use: 工作流明确匹配且完整说明不在上下文时，读取 SKILL.md 后执行。skill_name 来自列表或 skill_search；词面相似不调用。`,
-    `  </curl_recipe>`,
+    ...skillViewTool,
     "",
     `  <curl_recipe id="skill_files_read">`,
     `    path: ${bridge}/files/read`,
@@ -127,7 +145,7 @@ export function renderSkillToolsBlock(
     `  <curl_recipe id="skill_delete">`,
     `    path: ${bridge}/delete`,
     `    body: {"skill_id": "skl-xxx"}`,
-    `    use:  软删（archived；不递增版本）`,
+    `    use:  物理删除 skill 全部版本`,
     `  </curl_recipe>`,
     "",
     `  <curl_recipe id="skill_files_write">`,
@@ -218,8 +236,9 @@ export class SkillToolsInjector implements InjectionHook {
       content,
       metadata: {
         source: this.id,
-        // Stable cache-dedup key — varies by allowLlmWrite to avoid stale cache
-        cacheKey: `skill-tools-injector:catalog:${allowLlmWrite ? "rw" : "ro"}`,
+        // Stable cache-dedup key — varies by allowLlmWrite + skillViewMode to avoid stale cache
+        // (SKILL_VIEW_MODE=id/name 须区分缓存,否则两模式串同一份 session_init 块)
+        cacheKey: `skill-tools-injector:catalog:${allowLlmWrite ? "rw" : "ro"}:${(process.env.SKILL_VIEW_MODE ?? "id").toLowerCase() === "name" ? "name" : "id"}`,
       },
     }];
   }

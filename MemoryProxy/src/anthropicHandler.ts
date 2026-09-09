@@ -35,6 +35,11 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import {
+  getInstanceUpstreamConfigs,
+  resolveUpstreamConfig,
+  shouldOverride,
+} from "./instance-upstream-cache.js";
 import { resolveModelId, isModelInPricing } from "./pricing.js";
 import { inspectAndRecord } from "./identity.js";
 import { writeFailedReportRaw } from "./clickhouse.js";
@@ -576,7 +581,28 @@ export async function handleAnthropicMessages(
   // `modelName`, ensuring upstream ids and billing/observability keys align
   // across all traffic.
   const requestedModel = typeof body.model === "string" ? body.model : "unknown";
-  if (!isModelInPricing(config.creditPricing, requestedModel)) {
+
+  // ── Early instance config fetch (needed before pricing gate) ──────────
+  // Custom upstream (Option 2/3) may use models not in our pricing table,
+  // and should NOT have their model alias-resolved to our internal IDs.
+  //
+  // The alias-skip gate depends on WHO is calling:
+  //   - external caller → look at `type=conversation` (client's chat traffic)
+  //   - systemUser (memory/knowledge/skill extraction) → look at
+  //     `type=extraction` (client's memory-extraction upstream)
+  // A conversation-typed row is unrelated to internal extraction traffic,
+  // and vice versa. Prior code keyed off `conversation` unconditionally,
+  // which regressed alias resolution for internal callers whenever the
+  // instance carried any Option-2/3 conversation config.
+  const _earlyInstanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, earlySpaceId);
+  const _earlyConvCfg = resolveUpstreamConfig(_earlyInstanceConfigs, _agentFromPathEarly, "conversation");
+  const _earlyExtractCfg = resolveUpstreamConfig(_earlyInstanceConfigs, _agentFromPathEarly, "extraction");
+  const _earlySysMatch = hasSystemUsers() ? matchSystemUserByUserId(earlyVerify.userId) : null;
+  const _isCustomUpstream = _earlySysMatch !== null
+    ? shouldOverride(_earlyExtractCfg)
+    : shouldOverride(_earlyConvCfg);
+
+  if (!_isCustomUpstream && !isModelInPricing(config.creditPricing, requestedModel)) {
     return c.json(
       {
         type: "error",
@@ -590,12 +616,10 @@ export async function handleAnthropicMessages(
   }
 
   // ── Model alias: rewrite client-facing modelName → real model_id ──────────
-  // Clients may put a human-readable name (e.g. "claude-opus-4.7") in `model`;
-  // resolve it back to the real upstream model_id (e.g. "ep-pksklwtb") BEFORE
-  // routing / logging / forwarding, so model_id stays the canonical identity
-  // across the whole pipeline. No-op when `model` is already a real id/unknown.
-  const modelId = resolveModelId(config.creditPricing, requestedModel);
-  const modelAliasApplied = typeof body.model === "string" && modelId !== requestedModel;
+  // Only for official mode (our upstream). Custom upstream keeps the original
+  // model name — "LLM-A1" may be a valid model on the user's own service.
+  let modelId = _isCustomUpstream ? requestedModel : resolveModelId(config.creditPricing, requestedModel);
+  const modelAliasApplied = !_isCustomUpstream && typeof body.model === "string" && modelId !== requestedModel;
   if (modelAliasApplied) body.model = modelId;
 
   // ── System-user short-circuit ────────────────────────────────────────────
@@ -670,12 +694,12 @@ export async function handleAnthropicMessages(
 
   // ── mem:session-reset pre-hook ──
   let _isSessionResetFlow = false;
-  if (config.memCommand?.enabled && requestKind === "main") {
+  if (requestKind === "main") {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
-      const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
+      const { parseMemCommand } = await import("./mem-command/index.js");
       const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
-      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+      if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `${agentSource}:${sessionKey}`;
@@ -723,7 +747,7 @@ export async function handleAnthropicMessages(
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
   let injectedSkipped = !conversationId;
   let sessionJustRegistered = false;
-  let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
+  let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped}`);
   // CC 分流：SIDEQUERY 完全跳过 session-init（独立小请求无对话概念）。
   //          FORK 允许走 L2b recovery 复用 MAIN 已建的 session，但不进 form 交互路径
@@ -750,6 +774,7 @@ export async function handleAnthropicMessages(
       const recovered = await store.getOrRecover(compositeKey, identity, {
         metadataClient,
         messages: body.messages as Array<Record<string, unknown>> ?? [],
+        presetIdentity,
       });
 
       let initResult: Awaited<ReturnType<typeof handleSessionInit>>;
@@ -867,14 +892,14 @@ export async function handleAnthropicMessages(
       // hook-cache，若照常 prewarm 会白白多花 2-3s + 3 次网络请求。见 handler.ts
       // 对称位置详注。fork/sidequery 不做短路（requestKind === "main" 才生效）。
       let memCommandPending = false;
-      if (config.memCommand?.enabled && requestKind === "main") {
+      if (requestKind === "main") {
         try {
-          const { parseMemCommand, isMemCommandAllowed } = await import("./mem-command/index.js");
+          const { parseMemCommand } = await import("./mem-command/index.js");
           let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
           if (!peek && sessionJustRegistered) {
             peek = parseMemCommand(body as Record<string, unknown>, agentSource, { checkFirst: true });
           }
-          if (peek && isMemCommandAllowed(config.memCommand, peek.command)) {
+          if (peek) {
             memCommandPending = true;
             console.log(`[hook-cache] prewarm skipped: mem-command pending (cmd=${peek.command}) session=${sessionKey}`);
           }
@@ -954,10 +979,14 @@ export async function handleAnthropicMessages(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
+          // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
+          // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
           agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
+            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          // teamName + 完整 teamId：见 handler.ts 对称注释。
+          teamName: initResult.teamName ?? undefined,
           teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -974,14 +1003,19 @@ export async function handleAnthropicMessages(
   // 还在 body.messages 里,如果不拦截会被转发到 LLM,产生不可控输出。
   // 命令执行已经完成（新 agent 已绑定、缓存已刷新）→ 返回确认文案,不走 LLM。
   if (_resetFlowResult) {
-    const { agentName, agentIdShort, teamId, taskName, bypassed } = _resetFlowResult;
+    const { agentName, agentIdShort, teamName, teamId, taskName, bypassed } = _resetFlowResult;
+    const teamLine = teamName
+      ? `- **Team**: ${teamName}${teamId ? ` (${teamId})` : ""}`
+      : teamId
+        ? `- **Team**: ${teamId}`
+        : null;
     const lines = bypassed
       ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
       : [
           "✅ 已重新绑定团队资产",
           "",
           `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
-          teamId ? `- **Team**: ${teamId}` : null,
+          teamLine,
           taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
           "",
           "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
@@ -990,7 +1024,7 @@ export async function handleAnthropicMessages(
 
     const { buildMemResponse } = await import("./mem-command/response-builder.js");
     const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
-    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort})`);
+    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort}) team=${teamName ?? "-"} (${teamId || "-"})`);
     return buildMemResponse(text, {
       protocol: "anthropic",
       stream: isStream,
@@ -1003,7 +1037,7 @@ export async function handleAnthropicMessages(
   // 在 session init 完成后、injection pipeline 之前检测。
   // 命中时：执行命令 → 写 L0 → 触发 skill extract → 伪造响应返回。
   // 跳过注入（不破坏 KV cache）和上游转发（零 token 消耗）。
-  // 配置开关 memCommand.enabled 关闭时此段完全不执行，走原有链路。
+  // 命令拦截恒定启用，未知命令由 executeMemCommand 内的 KNOWN_COMMANDS 兜底提示。
   //
   // parseMemCommand 内部通过 agentAdapter.extractUserText 按客户端规则提取用户输入：
   //   - claude-code: 取最后一个 text block（跳过 <system-reminder> 前缀元数据）
@@ -1011,8 +1045,8 @@ export async function handleAnthropicMessages(
   //
   // CC 分流：FORK/SIDEQUERY 是 CC 客户端内部构造的请求，last_user 不会以 `mem:` 开头，
   //          且伪造响应会破坏 fork 请求依赖 MAIN 的 cache 假设。跳过拦截。
-  if (config.memCommand?.enabled && requestKind === "main") {
-    const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
+  if (requestKind === "main") {
+    const { parseMemCommand, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
     // session init 状态机在本 turn 完成终态（初始化 or bypass）时，最后一条
@@ -1027,7 +1061,7 @@ export async function handleAnthropicMessages(
     // checkFirst=true 会匹配到历史里的原始 "mem:session-reset"，若不跳过就会走 executeMemCommand
     // 再执行一次 reset，把刚完成的绑定又打回 uninitialized，形成"reset → form → reset → form"死循环。
     if (memCmd?.command === "session-reset") memCmd = null;
-    if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+    if (memCmd) {
       // bypass 优化：会话未初始化时，命令不可用
       if (!sessionInfo || injectedSkipped) {
         const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
@@ -1058,6 +1092,13 @@ export async function handleAnthropicMessages(
         // task 命令族用最近对话生成草稿。Anthropic 消息 content 可能是数组，
         // extractSimpleMessages 会合并所有 text 段落。
         bodyMessages: extractSimpleMessages((body as Record<string, unknown>).messages),
+        // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
+        model: modelId,
+        upstreamUrl:
+          (agentFromPath ? config.upstream.agents?.[agentFromPath]?.url : undefined) ||
+          config.upstream.url,
+        // Claude Code 主链路走 Anthropic Messages API
+        upstreamProtocol: "anthropic",
       });
 
       // Step 20: L0 写入 — 保证对话时间线完整。
@@ -1196,6 +1237,9 @@ export async function handleAnthropicMessages(
   // no entry, we fall through to the Anthropic-specific global (costGuard
   // .anthropicUpstream) and finally to upstream.url — exactly as before.
   const agentUpstreamEntry = agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined;
+  let effectiveApiKey = agentUpstreamEntry
+    ? (agentUpstreamEntry.apiKey ?? "")
+    : config.upstream.apiKey;
   const defaultUpstreamUrl =
     agentUpstreamEntry?.url ||
     config.costGuard.anthropicUpstream?.url ||
@@ -1227,6 +1271,24 @@ export async function handleAnthropicMessages(
     useGuard: config.costGuard.markerOptIn ? hasCostGuardMarker(c.req.path) : true,
     agentName: agentFromPath,
   });
+
+  // ── Instance upstream config override ──────────────────────────────────
+  let skipCreditReport = false;
+  {
+    const routedToCheapModel = target.routedFrom !== "";
+    const convCfg = _earlyConvCfg;
+    if (!routedToCheapModel && shouldOverride(convCfg)) {
+      target.url = `${convCfg.base_url.replace(/\/+$/, "")}${forwardEndpoint}`;
+      effectiveApiKey = convCfg.mode === "custom_unified"
+        ? convCfg.api_key
+        : apiKey; // custom_passthrough
+      if (convCfg.model_id) {
+        body.model = convCfg.model_id;
+        modelId = convCfg.model_id;
+      }
+      skipCreditReport = true;
+    }
+  }
 
   // ── Create pipeline logger ──────────────────────────────────────────────
   const pipe = createPipeline(config, traceId, target.model);
@@ -1322,11 +1384,7 @@ export async function handleAnthropicMessages(
   //   (b) entry present, apiKey empty      → "" (passthrough, keep client key)
   //   (c) entry present, apiKey non-empty  → agent.apiKey (server-side key)
   // The presence of an entry (case b/c) is what cuts the global fallback —
-  // this is the switch that lets one proxy serve mixed server-key / client-key
-  // agents from a single config.
-  const effectiveApiKey = agentUpstreamEntry
-    ? (agentUpstreamEntry.apiKey ?? "")
-    : config.upstream.apiKey;
+  // effectiveApiKey already resolved above (before instance config override).
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
 
   // Optional private preparation stage. It rewrites `body` / `messages` in
@@ -1351,6 +1409,8 @@ export async function handleAnthropicMessages(
     userQuery: lf.userQuery,
     spaceId,
     lf,
+    opikTraceId: traceId,
+    opikKeyId: keyId,
   });
 
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
@@ -1517,6 +1577,7 @@ export async function handleAnthropicMessages(
       langfuseDebug,
       debugMetadata,
       preparedStats,
+      skipCreditReport,
     });
 
     const clientStream = rawClientStream.pipeThrough(createSseThinkingFixStream(pipe));
@@ -1748,10 +1809,10 @@ export async function handleAnthropicMessages(
     console.log(`[cc-routing] skip L0 write for kind=${requestKind} session=${sessionKey}`);
   }
 
-  // Credit usage reporting (non-streaming). Failures are surfaced to the client
-  // via the `x-credit-report-error` response header but never replace the
-  // upstream LLM response body — the user-facing answer is preserved.
-  const creditOutcome = await tryReportCreditFromPath(
+  // Credit usage reporting (non-streaming).
+  const creditOutcome = skipCreditReport
+    ? { attempted: false, ok: false }
+    : await tryReportCreditFromPath(
     config.creditReport,
     c.req.path,
     usage,
@@ -1931,6 +1992,8 @@ interface AnthropicTapContext {
   debugMetadata: Record<string, unknown>;
   /** Opaque counters from the request-preparation stage; null when it didn't run. */
   preparedStats: Record<string, unknown> | null;
+  /** Instance upstream config: skip credit reporting for custom model. */
+  skipCreditReport?: boolean;
 }
 
 /**
@@ -2149,18 +2212,18 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
         console.log(`[cc-routing] skip skill buffer (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`);
       }
 
-      // Credit usage reporting for streaming responses. The stream has already
-      // been forwarded to the client; failures here are best-effort and can
-      // only be observed via server logs (no way to retro-add response headers).
-      tryReportCreditFromPath(
-        ctx.config.creditReport,
-        ctx.requestPath,
-        usage,
-        ctx.config.creditPricing,
-        ctx.modelId,
-        ctx.upstreamUrl,
-        "usage",
-      )
+      // Credit usage reporting for streaming responses.
+      (ctx.skipCreditReport
+        ? Promise.resolve({ attempted: false, ok: false })
+        : tryReportCreditFromPath(
+            ctx.config.creditReport,
+            ctx.requestPath,
+            usage,
+            ctx.config.creditPricing,
+            ctx.modelId,
+            ctx.upstreamUrl,
+            "usage",
+          ))
         .then((outcome) => {
           if (outcome.attempted && !outcome.ok) {
             pipe.error("CREDIT_REPORT", `[stream] ${outcome.errorMessage ?? "unknown"}`);

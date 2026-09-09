@@ -31,6 +31,7 @@ TOOL_ROUTING_API_URL=https://api.deepseek.com/chat/completions
 TOOL_ROUTING_API_KEY=replace-me
 TOOL_ROUTING_MODEL=deepseek-v4-flash
 TOOL_ROUTING_THINKING_MODE=disabled
+SKILL_VIEW_MODE=name
 ```
 
 先运行一个场景的原版／候选版对照，Python 路径按本机安装位置替换：
@@ -76,6 +77,8 @@ npm run eval:tool-routing -- --live --all --variant both \
 模型通过原生工具在临时工作区读取、修改文件和执行受 sandbox 限制的 Bash；识别到的云工具 curl 由固定 fixture 返回结果，不访问生产资产。`workspace-host.ts`、`fixtures.ts`、`protocol.ts` 等保留这一执行过程。`npm test` 中包含请求指纹检查，以及在满足 macOS/Python 路径条件时运行的模拟模型工作区读取测试。
 
 以后修改候选描述时，`current_candidate_request_matches` 可以减少，表示输入已不同于历史 C4；原版请求仍必须全部匹配。输入一致也不能保证模型再次输出完全相同。
+
+评测入口默认固定 `SKILL_VIEW_MODE=name`，与冻结样本和历史 C4 保持一致。合并目标分支后，生产默认已改为按 `skill_id` 读取（`SKILL_VIEW_MODE=id`）；历史成绩不覆盖这个新默认模式。
 
 ## 数据和历史结果
 

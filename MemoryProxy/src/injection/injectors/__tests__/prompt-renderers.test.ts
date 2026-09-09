@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { KnowledgeItem } from "../../../knowledge/core-client.js";
 import { renderKnowledgeToolsBlock } from "../knowledge-tools-injector.js";
@@ -6,6 +6,8 @@ import { wrapAvailableSkillsBlock } from "../skill-injector.js";
 import { renderSkillToolsBlock } from "../skill-tools-injector.js";
 import { renderTdaiProfileMemoryBlock } from "../tdai-profile-memory-injector.js";
 import { renderTdaiMemoryToolsBlock } from "../tdai-tools-injector.js";
+
+afterEach(() => vi.unstubAllEnvs());
 
 function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -69,6 +71,7 @@ describe("prompt renderer contracts", () => {
   });
 
   it("keeps skill read/write gating, paths, body fields and dynamic headers", () => {
+    vi.stubEnv("SKILL_VIEW_MODE", "name");
     const readOnly = renderSkillToolsBlock("https://proxy.test", false, "session-1", "space-1");
     const writable = renderSkillToolsBlock("https://proxy.test", true, "session-1", "space-1");
 
@@ -96,6 +99,18 @@ describe("prompt renderer contracts", () => {
     expect(readOnly).toContain("<curl_recipe id=");
     expect(readOnly).toContain("完整说明不在上下文时");
     expect(readOnly).toContain("不能跳过 skill_view");
+  });
+
+  it("preserves upstream id lookup and physical deletion semantics", () => {
+    vi.stubEnv("SKILL_VIEW_MODE", "id");
+    const output = renderSkillToolsBlock("https://proxy.test", true);
+    expect(output).toContain('path: https://proxy.test/skill-bridge/v3/skill/get\n');
+    expect(output).not.toContain("/get-by-name");
+    expect(output).toContain('<curl_recipe id="skill_view">');
+    expect(output).toContain("skill_id 来自列表 id=");
+    expect(output).toContain("物理删除 skill 全部版本");
+    expect(output).not.toContain("软删");
+    expect(output).not.toContain("<tool name=");
   });
 
   it("routes skill loading by clear workflow match instead of partial word overlap", () => {
