@@ -5,6 +5,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikEndpoint,
+  opikQuestionTag,
   opikTurnTag,
   opikTurnTraceId,
   opikUpdateTrace,
@@ -223,6 +224,17 @@ describe("opikTurnTraceId（同轮提问确定性 traceId）", () => {
     expect(a).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
+  });
+});
+
+describe("opikQuestionTag（相同内容问题统计标签，不参与 traceId）", () => {
+  it("相同问题同标签、不同问题不同标签、空白无标签", () => {
+    expect(opikQuestionTag("  帮我写首诗  ")).toBe(opikQuestionTag("帮我写首诗"));
+    expect(opikQuestionTag("帮我  写首诗")).toBe(opikQuestionTag("帮我 写首诗"));
+    expect(opikQuestionTag("帮我写首诗")).not.toBe(opikQuestionTag("帮我写散文"));
+    expect(opikQuestionTag("")).toBeNull();
+    expect(opikQuestionTag("   ")).toBeNull();
+    expect(opikQuestionTag("帮我写首诗")).toMatch(/^question:[0-9a-f]{16}$/);
   });
 });
 

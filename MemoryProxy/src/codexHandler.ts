@@ -33,6 +33,7 @@ import {
   opikCreateLlmSpan,
   opikCreateTrace,
   opikUpdateTrace,
+  opikQuestionTag,
   opikTurnTag,
   opikTurnTraceId,
   uuidv7,
@@ -398,6 +399,8 @@ export async function handleCodexEndpoint(
     routeTags: [],
     userQuery,
   };
+  const questionTag = opikQuestionTag(userQuery);
+  if (questionTag) lf.tags.push(questionTag);
 
   // ── 7. Session-init state machine ──────────────────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;

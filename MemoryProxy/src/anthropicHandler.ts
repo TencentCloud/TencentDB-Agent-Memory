@@ -14,6 +14,7 @@ import {
   apiKeyToKeyId,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikQuestionTag,
   opikTurnTag,
   opikTurnTraceId,
   uuidv7,
@@ -1350,6 +1351,8 @@ export async function handleAnthropicMessages(
     routeTags: target.tags,
     userQuery: resolveLatestUserQuery(config, lcHeaders, c.req.path, body, messages),
   };
+  const questionTag = opikQuestionTag(lf.userQuery);
+  if (questionTag) traceTags.push(questionTag);
   if (target.analyzerTrace) {
     reportAnalyzerTrace(config, target.analyzerTrace, {
       traceId,

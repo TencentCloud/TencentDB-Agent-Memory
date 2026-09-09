@@ -249,3 +249,11 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 - 本机 Opik 实测结论：同 ID 重复 POST 幂等（项目内仍是 1 条 trace）；多个
   span 共享同一 trace 正常展示；并发 PATCH 全部成功、数据不损坏（output 为
   最后写入者）。因此该方案可直接使用，无需 409 特殊处理。
+
+## 11. 2026-09-09 补充：问题指纹标签（不参与 traceId）
+
+- 相同内容的提问不会共用 traceId：不同轮次 / 不同会话仍是不同执行 trace。
+- 为支持“同一问题被问过几次”的统计，trace 额外带 `question:<hash>` 标签；
+  hash 来自归一化后的用户提问文本（NFKC + 空白折叠 + 小写）。
+- 该标签只用于过滤 / 统计，绝不参与 traceId 派生，避免不同用户或不同时间
+  的相同问题被错误合并。

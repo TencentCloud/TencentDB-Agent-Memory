@@ -108,6 +108,24 @@ export function opikTurnTraceId(sessionKey: string, turnSeq: number): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+/** 相同内容的用户问题指纹标签。
+ *  只用于统计/过滤，绝不参与 traceId 派生：同一内容在不同会话/轮次仍是
+ *  不同的执行 trace，但都会带同一个 question:<hash>，便于统计重复问题。
+ */
+export function opikQuestionTag(query: string | null | undefined): string | null {
+  const normalized = String(query ?? "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  if (!normalized) return null;
+  const hash = createHash("sha256")
+    .update(normalized)
+    .digest("hex")
+    .slice(0, 16);
+  return `question:${hash}`;
+}
+
 interface OpikTraceInput {
   traceId: string;
   projectName: string;
