@@ -918,6 +918,13 @@ export interface RawYamlConfig {
     injectTaskContext?: boolean;
     defaultTaskId?: string;
     skipAssetConfirm?: boolean;
+    debugForceIdentity?: {
+      team_id?: string;
+      agent_id?: string;
+      task_id?: string;
+    };
+    debugForceUserId?: string;
+    debugVerboseLogging?: boolean;
     autoConversationId?: {
       enabled?: boolean;
       ttlMinutes?: number;
@@ -933,13 +940,6 @@ export interface RawYamlConfig {
     };
     taskMissingPolicy?: "skip" | "default" | "reject";
     taskMissingPolicyByAgent?: Record<string, "skip" | "default" | "reject">;
-    debugForceIdentity?: {
-      team_id?: string;
-      agent_id?: string;
-      task_id?: string;
-    };
-    debugForceUserId?: string;
-    debugVerboseLogging?: boolean;
     headerAutoSelect?: {
       enabled?: boolean;
       teamHeader?: string;
