@@ -241,16 +241,18 @@ export function pruneExpiredSessions(ttlMinutes: number): number {
 function evictWindows(now: number, maxWindowsTotal: number): number {
   let removed = 0;
   const floor = Math.floor(maxWindowsTotal * 0.8);
-  const all: Array<{ key: string; idx: number; lastSeen: number }> = [];
+  const all: Array<{ key: string; sid: string; lastSeen: number }> = [];
   for (const [key, list] of ACTIVE_MSG) {
-    list.forEach((s, idx) => all.push({ key, idx, lastSeen: s.lastSeen }));
+    for (const s of list) all.push({ key, sid: s.sid, lastSeen: s.lastSeen });
   }
   all.sort((a, b) => a.lastSeen - b.lastSeen);
   for (const item of all) {
     if (windowTotal() <= floor) break;
     const list = ACTIVE_MSG.get(item.key);
     if (!list) continue;
-    const removedWindow = list.findIndex((s) => s.lastSeen === item.lastSeen);
+    // 按 sid 定位受害者：同一毫秒内创建的多个窗口 lastSeen 相同，
+    // 用时间戳当身份会删错条目（结果仍是淘汰一个同等旧的窗口，但语义不可靠）。
+    const removedWindow = list.findIndex((s) => s.sid === item.sid);
     if (removedWindow >= 0) {
       const victim = list[removedWindow];
       list.splice(removedWindow, 1);
