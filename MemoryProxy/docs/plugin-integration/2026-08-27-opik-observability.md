@@ -13,7 +13,7 @@ Opik 上报链路上补齐：
   fire-and-forget）；
 - **trace metadata**：调用链路 / 记忆注入（配置级 + 逐钩子运行统计）/
   工具交互三类结构化字段，字段白名单 + 长度封顶；
-- **memory-access 审计线**：谁在什么时候写了谁的 L0（JSONL 落盘 + 轮转）；
+- **memory-access 审计线**：谁在什么时候**读了/写了**谁的记忆（JSONL 落盘 + 轮转）；
 - **配置兼容与迁移**：`opik.apiPrefix` / `timeoutMs` 可配置，并为旧
   `url=:5173` 配置做向后兼容。
 
@@ -52,6 +52,8 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `src/codexHandler.ts` / `src/workbuddyHandler.ts` | OpenAI Responses（Codex / WorkBuddy Desktop）：create trace + 流式 completed LLM span + metadata（2026-09-06 补齐） |
 | `src/opik-metadata.ts` | 新增 Responses input[] 工具交互摘要 |
 | `src/tdai/recorder.ts` + `src/tdai/client.ts` | L0 写入结果可判定：真实成功后记一条审计；HTTP/网络失败抛错可重试；审计事件带 trace_id |
+| `src/injection/injectors/tdai-l1-recall-injector.ts` | 读路径审计：L1 自动召回按命名空间记 `action=recall`（含命中 0；自有 + 借入都记） |
+| `src/memory/memory-bridge.ts` | 读路径审计：只读子路径按语义记 `action=search / query / read`，借入读的 target 指向被借 agent |
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
@@ -188,7 +190,7 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 - **审计只在真实写入后记录**：`TdaiClient.addConversation` 现在会返回是否写入、
   在失败时抛错（供 `withL0Retry` 重试），`recordTdaiTurn` 仅在成功的那次写入后
   落一条 `l0` 审计并携带请求 `trace_id`；未启用 / `writeL0=false` / 无消息时不落；
-- **审计读路径未覆盖**：recall / search 读路径接入为后续项；
+- **审计已覆盖读路径**：写路径（L0）+ 读路径（L1 自动召回、memory-bridge 只读子路径）均已接入，口径见 §14；
 - **API 前缀兼容**：`apiPrefix` 显式优先；未配置时按 url 自动选择
   （`:5173` → `/api/v1/private`，其余 → `/v1/private`）；
 - **多模态 document / audio、Responses 会话状态端点**仍按各协议既有边界处理，
@@ -315,3 +317,53 @@ opik:
 `/traces/batch`""队列满立即刷""`batch.enabled=false` 退化逐条""batch 端点 404 时逐条回退
 不丢数据"。
 
+## 14. 2026-09-10 补充：memory-access 审计覆盖读路径
+
+### 14.1 背景
+
+#1270 落地审计线时只覆盖写路径（`tdai/recorder.ts` 的 `action=write`，对应 L0 写入），
+读路径（recall / search）当时列为后续项。本层把读路径补齐，审计线从"只记写入"
+变成"读 + 写都有台账"。
+
+### 14.2 两个读入口 → 四类 action
+
+| 读入口 | 触发点 | action | target 语义 |
+|---|---|---|---|
+| L1 自动召回 | `tdai-l1-recall-injector`：每轮注入前查 self + 借入 ≤2 个命名空间 | `recall` | 每个被查命名空间各一条 `team:agent[:task]`；借入读指向**被借 agent** |
+| memory-bridge | `atomic/search`、`conversation/search` | `search` | 同上（search 类扇出到 self + 借入，一条请求可能落 1~3 条） |
+| memory-bridge | `atomic/query`、`conversation/query` | `query` | 同上 |
+| memory-bridge | `scenario/ls`、`scenario/read` | `read` | 单目标（可由 `body.agent_id` 指定） |
+
+映射集中在 `memory-bridge.ts::auditActionForSubpath()`（纯函数，单测覆盖）。
+
+### 14.3 字段口径（沿用 #1270 的 payload schema，未新增字段）
+
+| 字段 | 读路径取值 |
+|---|---|
+| `actor_user` / `actor_agent` | 发起读的一方（会话绑定的 `user_id` / `agent_id`） |
+| `target` | 被读命名空间。**借入读时 actor 与 target 前缀不同**，一眼能看出"读了别人的记忆" |
+| `result` | 命中条数；无法计数时回落 `http_<status>`（如 `scenario/read` 返回纯文本） |
+| `session_key` | 逻辑会话 ID（与写路径一致，取 `session_info.session_id`） |
+| `scope` | `normal` / `no-task`，与写路径同口径，不引入新枚举 |
+| `trace_id` | 召回路径用当轮 `traceId`；bridge 优先取调用方透传的 `x-tdai-trace-id`（可与当轮 Opik trace 对齐），否则回落 `memory-bridge:<session_id>` |
+
+### 14.4 行为边界（与实现一致）
+
+- **只记成功**：与写路径一致，上游非 2xx 不记（失败由 bridge 的 reject/telemetry 线负责）。
+  注意聚合 search 路径上游全失败时仍返回 200 envelope，因此同样不记。
+- **命中 0 也记**：'查了但没命中' 与 '压根没查' 是两回事——排查"这轮为什么没召回"需要前者。
+- **fire-and-forget**：审计写盘失败只降级日志（`audit.*`），绝不影响读请求本身。
+- **不做鉴权判定**：审计是"事后台账"，不参与 allowlist / ACL 决策。
+
+### 14.5 验证
+
+```bash
+cd MemoryProxy
+npx vitest run src/__tests__/memory-access-audit.test.ts   # 7/7
+npx tsc --noEmit                                            # 0 错误
+```
+
+真机（需真实内核 + 设 `AUDIT_LOG_FILE`）：一轮对话后 `audit.jsonl` 出现
+`{"action":"recall","target":"<team>:<agent>[:<task>]","result":<命中条数>}`；
+LLM 通过 Bash curl 调 `/memory-bridge/v3/atomic/search` 后出现 `{"action":"search",...}`；
+`scenario/read` 出现 `{"action":"read",...}`。
