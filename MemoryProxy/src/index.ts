@@ -27,13 +27,13 @@ import {
 import { initLogger, shutdownLogger, log } from "./report/log.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
+import { flushOpikBatchQueue } from "./opik.js";
 import { initTraceArchive, shutdownTraceArchive } from "./trace-archive.js";
 import { initAuth } from "./auth.js";
 import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
 import { initProxyStorage, getEffectiveBackend } from "./storage/factory.js";
 import { flushPendingWrites, pendingWriteCount } from "./tdai/pending-writes.js";
-import { flushOpikBatchQueue } from "./opik.js";
 
 const overrides = parseArgv(process.argv);
 const config = buildConfig(overrides);
