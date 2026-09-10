@@ -2131,6 +2131,11 @@ export class MetadataService {
         "base_url is required when mode is custom_unified or custom_passthrough",
       );
     }
+    // Omitted key retains the exact client's credential.
+    if (mode === "custom_unified" && input.api_key === undefined) {
+      const previous = await this.store.getInstanceUpstreamConfig(input.agent_source ?? "default", type);
+      input = { ...input, api_key: previous?.api_key };
+    }
     if (mode === "custom_unified" && !input.api_key?.trim()) {
       throw new MetadataError(
         "invalid_input",
