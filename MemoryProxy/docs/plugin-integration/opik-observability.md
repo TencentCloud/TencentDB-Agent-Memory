@@ -200,7 +200,7 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   本地有镜像时可离线），compose 内为本地开发凭据（opik/opik 等），上线请自行
   更换密钥。
 
-## 8. 可靠性加固与评审修复（2026-09-06）
+## 8. 可靠性加固与评审修复
 
 - **统一上报通道**：create trace / update trace / LLM span（含 fork）收敛到
   `sendOpikRequest`：单次超时（`timeoutMs` 默认 2000ms）、连续失败熔断
@@ -224,7 +224,7 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   `hookCount=5 / 逐钩子统计` 从“删声明”升级为“真实现”——注入管线透出本轮
   逐钩子 `HookResult[]`，四个 handler 统一写入 `memory_injection` 运行级字段。
 
-## 9. 2026-09-09 补充
+## 9. L0 非流式写入非阻塞 + 同轮 turn 标签
 
 - **L0 非流式写入不再阻塞回复**：Chat / Anthropic 的 `stream:false` 路径原来
   直接 `await recordTdaiTurn`，若内存服务失败可能让已成功的模型回复报 500。
@@ -235,7 +235,7 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   工具循环产生的多条请求可在 Opik 按同一标签过滤归组；request_log 主语义与
   traceId 组织不变。
 
-## 10. 2026-09-09 补充：traceId 按轮次提问归组
+## 10. traceId 按轮次提问归组
 
 - 在 §9 标签归组之上进一步实现真正的树形归组：`opik.ts` 新增
   `opikTurnTraceId(sessionKey, turnSeq)`，从同一 seed 派生稳定的 UUIDv7。
@@ -246,7 +246,7 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   span 共享同一 trace 正常展示；并发 PATCH 全部成功、数据不损坏（output 为
   最后写入者）。因此该方案可直接使用，无需 409 特殊处理。
 
-## 11. 2026-09-09 补充：问题指纹标签（不参与 traceId）
+## 11. 问题指纹标签（不参与 traceId）
 
 - 相同内容的提问不会共用 traceId：不同轮次 / 不同会话仍是不同执行 trace。
 - 为支持“同一问题被问过几次”的统计，trace 额外带 `question:<hash>` 标签；
@@ -254,7 +254,7 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
 - 该标签只用于过滤 / 统计，绝不参与 traceId 派生，避免不同用户或不同时间
   的相同问题被错误合并。
 
-## 12. 2026-09-09 补充：request_log 可配置 + 失败 trace 收尾
+## 12. request_log 可配置 + 失败 trace 收尾
 
 ### 12.1 `request_log` 开关（`opik.requestLogEnabled`）
 
@@ -291,7 +291,7 @@ opik:
   开启 `requestLogEnabled` 时 fork trace / span 一并收尾。
 - 上线前自查：失败请求在 `request_log`（如已开启）与主项目里都能看到 `end_time`。
 
-## 13. 2026-09-09 补充：create / span 批量上报队列
+## 13. create / span 批量上报队列
 
 - **批量提交**：create trace / create span 先进内存 FIFO 队列，
   - 同类条目累计到 `opik.batch.maxBatchSize`（默认 20，范围 2–500）立即刷出；
@@ -317,7 +317,7 @@ opik:
 `/traces/batch`""队列满立即刷""`batch.enabled=false` 退化逐条""batch 端点 404 时逐条回退
 不丢数据"。
 
-## 14. 2026-09-10 补充：memory-access 审计覆盖读路径
+## 14. memory-access 审计覆盖读路径
 
 ### 14.1 背景
 
