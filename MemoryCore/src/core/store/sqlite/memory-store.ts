@@ -1699,6 +1699,7 @@ export class VectorStore implements IMemoryStore {
       // shape (notably L2 profile queries use teamId+agentId+updatedAfter
       // without sessionKey). Apply them in memory to keep the statement matrix
       // bounded and to match queryL1Paginated semantics.
+      if (sessionKey !== undefined) rows = rows.filter((r) => r.session_key === sessionKey);
       if (filter?.teamId !== undefined) rows = rows.filter((r) => r.team_id === filter.teamId);
       if (filter?.userId !== undefined) rows = rows.filter((r) => r.user_id === filter.userId);
       if (filter?.agentId !== undefined) rows = rows.filter((r) => r.agent_id === filter.agentId);

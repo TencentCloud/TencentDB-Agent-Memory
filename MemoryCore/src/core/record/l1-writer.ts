@@ -192,7 +192,11 @@ export async function writeMemory(params: {
   let existingSourceMessageIds: string[] = [];
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0 && vectorStore) {
     try {
-      const existing = await vectorStore.queryL1Records({ recordIds: decision.target_ids });
+      // Match the scope used when deleting replacement targets below.
+      const existing = await vectorStore.queryL1Records({
+        recordIds: decision.target_ids, teamId, userId, agentId,
+        sessionId: sessionId || undefined, sessionKey,
+      });
       const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
       nextVersion = maxVersion + 1;
       existingSourceMessageIds = existing.flatMap((row) => parseSourceMessageIds(row.source_message_ids_json));

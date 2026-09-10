@@ -5,7 +5,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VectorStore } from "../store/sqlite/memory-store.js";
 import { TcvdbMemoryStore } from "../store/tcvdb/memory-store.js";
-import { l1RecordToDoc, docToL1RecordRow, docToL1FtsResult } from "../store/mongodb/doc-mappers.js";
 import type { MemoryRecord } from "./l1-writer.js";
 import { writeMemory } from "./l1-writer.js";
 import { recallL1Candidates } from "../tools/l1-candidate-recall.js";
@@ -57,64 +56,36 @@ describe("L1 source message provenance", () => {
     const vectorStore = createStore();
     expect(vectorStore.upsertL1(memoryRecord("l1-roundtrip", ["msg-1", "msg-2", "msg-1"]))).toBe(true);
 
-    const rows = vectorStore.queryL1Records({ recordIds: ["l1-roundtrip"] });
-    expect(rows).toHaveLength(1);
-    expect(rows[0].source_message_ids_json).toBe('["msg-1","msg-2"]');
-
     const records = await queryMemoryRecords(vectorStore, { recordIds: ["l1-roundtrip"] });
     expect(records).toHaveLength(1);
     expect(records[0].source_message_ids).toEqual(["msg-1", "msg-2"]);
 
-    expect(vectorStore.isFtsAvailable()).toBe(true);
-    if (vectorStore.isFtsAvailable()) {
-      const ftsResults = vectorStore.searchL1Fts("provenance", 1);
-      expect(ftsResults[0].source_message_ids_json).toBe('["msg-1","msg-2"]');
-      const recalled = await recallL1Candidates({ query: "provenance", topK: 1, vectorStore });
-      expect(recalled.hits[0].source_message_ids_json).toBe('["msg-1","msg-2"]');
-    }
+    const recalled = await recallL1Candidates({ query: "provenance", topK: 1, vectorStore });
+    expect(recalled.hits[0].source_message_ids_json).toBe('["msg-1","msg-2"]');
   });
 
   it("migrates existing SQLite databases with empty provenance", async () => {
+    // A persisted database without the new column models the previous schema.
+    const initial = createStore();
+    initial.upsertL1(memoryRecord("legacy", []));
+    initial.close();
+    store = undefined;
     const legacyDb = new DatabaseSync(databasePath);
-    legacyDb.exec(`
-      CREATE TABLE l1_records (
-        record_id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        type TEXT DEFAULT '',
-        priority INTEGER DEFAULT 50,
-        scene_name TEXT DEFAULT '',
-        session_key TEXT DEFAULT '',
-        session_id TEXT DEFAULT 'default',
-        team_id TEXT DEFAULT 'default',
-        task_id TEXT DEFAULT '',
-        user_id TEXT NOT NULL DEFAULT 'default',
-        agent_id TEXT NOT NULL DEFAULT 'default',
-        version INTEGER NOT NULL DEFAULT 0,
-        timestamp_str TEXT DEFAULT '',
-        timestamp_start TEXT DEFAULT '',
-        timestamp_end TEXT DEFAULT '',
-        created_time TEXT DEFAULT '',
-        updated_time TEXT DEFAULT '',
-        metadata_json TEXT DEFAULT '{}'
-      )
-    `);
-    legacyDb.prepare("INSERT INTO l1_records (record_id, content) VALUES (?, ?)").run("legacy", "legacy memory");
+    legacyDb.exec("ALTER TABLE l1_records DROP COLUMN source_message_ids_json");
     legacyDb.close();
 
     const vectorStore = createStore();
-    const sourceColumn = vectorStore.getRawDb()
-      .prepare("SELECT source_message_ids_json FROM l1_records WHERE record_id = ?")
-      .get("legacy") as { source_message_ids_json: string };
-    expect(sourceColumn.source_message_ids_json).toBe("[]");
-
     const records = await queryMemoryRecords(vectorStore, { recordIds: ["legacy"] });
     expect(records[0].source_message_ids).toEqual([]);
   });
 
-  it("keeps provenance from only the records replaced by an L1 merge", async () => {
+  it.each(["teamId", "userId", "agentId", "sessionId", "sessionKey"] as const)("keeps merge provenance inside the replacement scope (%s)", async (dimension) => {
     const vectorStore = createStore();
-    expect(vectorStore.upsertL1(memoryRecord("target", ["msg-old"]))).toBe(true);
+    expect(vectorStore.upsertL1({ ...memoryRecord("target", ["msg-old"]), teamId: "team", userId: "user", agentId: "agent" })).toBe(true);
     expect(vectorStore.upsertL1(memoryRecord("unrelated", ["msg-unrelated"]))).toBe(true);
+
+    expect(vectorStore.upsertL1({ ...memoryRecord("outside", ["msg-outside"]),
+      teamId: "team", userId: "user", agentId: "agent", [dimension]: "other" })).toBe(true);
 
     const written = await writeMemory({
       memory: {
@@ -128,30 +99,23 @@ describe("L1 source message provenance", () => {
       decision: {
         record_id: "replacement",
         action: "merge",
-        target_ids: ["target"],
+        target_ids: ["target", "outside"],
         merged_content: "merged memory about provenance",
       },
       baseDir: directory,
       sessionKey: "session-a",
       sessionId: "session-a",
+      teamId: "team", userId: "user", agentId: "agent",
       vectorStore,
     });
 
     expect(written?.source_message_ids).toEqual(["msg-old", "msg-new"]);
+    expect(vectorStore.queryL1Records({ recordIds: ["outside"] })).toHaveLength(1);
     const records = await queryMemoryRecords(vectorStore, { recordIds: ["replacement"] });
     expect(records[0].source_message_ids).toEqual(["msg-old", "msg-new"]);
   });
 
-  it("preserves provenance through the new MongoDB document mappers", () => {
-    const doc = l1RecordToDoc(memoryRecord("mongo", ["msg-1", "msg-1", "msg-2"]));
-    expect(doc.source_message_ids_json).toBe('["msg-1","msg-2"]');
-    expect(docToL1RecordRow(doc).source_message_ids_json).toBe(doc.source_message_ids_json);
-    expect(docToL1FtsResult(doc, 1).source_message_ids_json).toBe(doc.source_message_ids_json);
-    delete doc.source_message_ids_json;
-    expect(docToL1RecordRow(doc).source_message_ids_json).toBe("[]");
-  });
-
-  it("serializes provenance for TCVDB and tolerates legacy documents", async () => {
+  it("serializes provenance for TCVDB", async () => {
     const vectorStore = new TcvdbMemoryStore({
       url: "http://localhost:8080",
       username: "test-user",
@@ -161,14 +125,6 @@ describe("L1 source message provenance", () => {
     });
     const client = {
       upsert: vi.fn().mockResolvedValue(undefined),
-      query: vi.fn().mockResolvedValue({
-        documents: [{
-          id: "legacy",
-          text: "legacy memory",
-          type: "episodic",
-          priority: 50,
-        }],
-      }),
     };
     (vectorStore as unknown as { client: typeof client }).client = client;
 
@@ -178,8 +134,5 @@ describe("L1 source message provenance", () => {
       [expect.objectContaining({ source_message_ids_json: '["msg-1","msg-2"]' })],
     );
 
-    await expect(vectorStore.queryL1Records({ recordIds: ["legacy"] })).resolves.toEqual([
-      expect.objectContaining({ record_id: "legacy", source_message_ids_json: "[]" }),
-    ]);
   });
 });
