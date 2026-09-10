@@ -115,14 +115,27 @@ opik:
 
 ## 6. 验证方法（命令行）
 
-### 6.1 造请求（当前已埋点客户端）
+### 6.1 造请求（三条主链路，均可直接复现）
 
 ```bash
-cd /c/Users/<用户名>/Documents/ChatGPT/腾讯犀牛鸟
-bash check-token-usage.sh workbuddy wb-persist-0001 "你好"
-bash check-token-usage.sh claude   c4015466-4cda-4eb1-83e4-14dfea1a6762 "你好"
-bash check-token-usage.sh codex    codex-verif "你好"
+# 1) OpenAI Chat（WorkBuddy Web 形态）
+curl -sS -X POST "http://127.0.0.1:8096/workbuddy/default/v1/chat/completions" \
+  -H "authorization: Bearer <user_key>" -H "content-type: application/json" \
+  -d '{"model":"<model>","stream":false,"messages":[{"role":"user","content":"你好"}]}'
+
+# 2) Anthropic（Claude Code 形态）
+curl -sS -X POST "http://127.0.0.1:8096/claude-code/default/v1/messages" \
+  -H "x-api-key: <user_key>" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+  -d '{"model":"<model>","max_tokens":64,"messages":[{"role":"user","content":"你好"}]}'
+
+# 3) Responses（Codex 形态）
+curl -sS -X POST "http://127.0.0.1:8096/codex/default/responses" \
+  -H "authorization: Bearer <user_key>" -H "content-type: application/json" \
+  -d '{"model":"<model>","stream":false,"input":[{"role":"user","content":[{"type":"input_text","text":"你好"}]}]}'
 ```
+
+> 三条路径与 `INSTALL.md` 的客户端接入方式一致（`/{agent}/{spaceId}/...`）。把 `<user_key>` 换成面板里的
+> `sk-mem-*`，`<model>` 换成上游支持的模型名；`stream:false` 便于一次性看到 JSON 响应。
 
 ### 6.2 查 trace（REST）
 
