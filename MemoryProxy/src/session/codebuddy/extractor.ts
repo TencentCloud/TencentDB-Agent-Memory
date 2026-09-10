@@ -56,13 +56,29 @@ function extractOpencodeAnswers(content: string): string | null {
 }
 
 /**
+ * WorkBuddy renders AskUserQuestion tool results as one display line:
+ *   · <question including the skip hint> → <selected option>
+ *
+ * Keep only the answer after the spaced delimiter. Otherwise the question's
+ * own "跳过 / 不关联" hint is mistaken for an explicit bypass. A selected
+ * "更多 →" stays intact because its trailing arrow has no answer after it.
+ */
+function extractWorkbuddyAnswer(content: string): string | null {
+  const match = content.match(/(?:^|\s)→\s+([\s\S]+)$/);
+  const answer = match?.[1]?.trim();
+  return answer ? answer : null;
+}
+
+/**
  * 从用户答复中提取 asset_confirm 选择。
  * 返回 true=是（关联资产），false=否（bypass），null=未识别。
  */
 export function extractAssetConfirm(content: string): boolean | null {
   // XML parsing
   const xml = parseQuestionAnswerXml(content);
-  const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? content;
+  let answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? content;
+  const workbuddyAnswer = extractWorkbuddyAnswer(answer);
+  if (workbuddyAnswer !== null) answer = workbuddyAnswer;
 
   if (answer.includes(ASSET_CONFIRM_YES) || /是.*关联|关联.*是|确认.*关联/i.test(answer)) {
     return true;
@@ -148,6 +164,8 @@ export function extractTeamFromOptionText(
   // 见 extractOpencodeAnswers 头部注释。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
+  const workbuddyAnswer = extractWorkbuddyAnswer(content);
+  if (workbuddyAnswer !== null) content = workbuddyAnswer;
 
   let teamText: string | null = null;
 
@@ -270,6 +288,8 @@ export function extractFromOptionText(
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
+  const workbuddyAnswer = extractWorkbuddyAnswer(content);
+  if (workbuddyAnswer !== null) content = workbuddyAnswer;
 
   let agentText: string | null = null;
   let taskText: string | null = null;
@@ -339,6 +359,8 @@ export function extractAgentOnly(
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
+  const workbuddyAnswer = extractWorkbuddyAnswer(content);
+  if (workbuddyAnswer !== null) content = workbuddyAnswer;
   const trimmed = content.trim();
   if (!trimmed) return null;
   // 先尝试匹配 agent 候选：CB codebuddy form 里 SKIP_HINT_LATER_STAGE 描述文本
@@ -375,6 +397,8 @@ export function extractTaskOnly(
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
+  const workbuddyAnswer = extractWorkbuddyAnswer(content);
+  if (workbuddyAnswer !== null) content = workbuddyAnswer;
   const trimmed = content.trim();
   if (!trimmed) return null;
   // 先尝试匹配真实/虚拟 task 条目（虚拟条目由 fetchTeamsAndAgents 头部注入,

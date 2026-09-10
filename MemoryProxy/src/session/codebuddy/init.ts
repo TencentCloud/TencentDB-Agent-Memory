@@ -928,15 +928,14 @@ async function handleSessionInitInner(
             `[session-init:cb] session=${compositeKey} skipAssetConfirm only-team=${onlyTeam.team_id} only-agent=${soloAgent.agent_id} auto-select`,
           );
           if (onlyTeam.tasks.length === 0) {
-            await store.set(compositeKey, {
-              ...nextState,
-              status: "initialized",
-              sessionInfo: null,
-              agentDetail: null,
-              taskDetail: null,
-              bypassed: true,
-            } as SessionInitState);
-            return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+            console.log(
+              `[session-init:cb] session=${compositeKey} team has 0 tasks → register without task`,
+            );
+            return await completeRegistration(
+              { agent_id: soloAgent.agent_id },
+              nextState, teams, compositeKey, sessionKey, userId,
+              config, store, messages, metadataClient, userKey, spaceId,
+            );
           }
           if (onlyTeam.tasks.length === 1) {
             return await completeRegistration(
@@ -1146,20 +1145,17 @@ async function handleSessionInitInner(
           console.log(
             `[session-init:cb] session=${compositeKey} only-team=${onlyTeam.team_id} only-agent=${soloAgent.agent_id} auto-select`,
           );
-          // 0 tasks → bypass；1 task → 直接 completeRegistration；≥2 → 出 task form。
+          // task_id 是可选的记忆维度。0 tasks 仍注册 Agent；
+          // 1 task 直接 completeRegistration；≥2 出 task form。
           if (onlyTeam.tasks.length === 0) {
-            await store.set(compositeKey, {
-              ...nextState,
-              status: "initialized",
-              sessionInfo: null,
-              agentDetail: null,
-              taskDetail: null,
-              bypassed: true,
-            } as SessionInitState);
             console.log(
-              `[session-init:cb] session=${compositeKey} team has 0 tasks → bypass`,
+              `[session-init:cb] session=${compositeKey} team has 0 tasks → register without task`,
             );
-            return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+            return await completeRegistration(
+              { agent_id: soloAgent.agent_id },
+              nextState, teams, compositeKey, sessionKey, userId,
+              config, store, messages, metadataClient, userKey, spaceId,
+            );
           }
           if (onlyTeam.tasks.length === 1) {
             const soleTaskId = onlyTeam.tasks[0].task_id;
@@ -1449,26 +1445,17 @@ async function handleSessionInitInner(
 
     if (picked) {
       const resolvedAgentId = resolveAgent(picked, cachedTeams, selectedTeamId);
-      // 0 tasks → bypass；1 task → auto-select 直接 complete。
+      // task_id is an optional recall dimension. A Team with no tasks still
+      // registers the selected Agent so injection and L0 write-back work.
       if (team.tasks.length === 0) {
         console.log(
-          `[session-init:cb] session=${compositeKey} agent=${resolvedAgentId} team has 0 tasks → bypass`,
+          `[session-init:cb] session=${compositeKey} agent=${resolvedAgentId} team has 0 tasks → register without task`,
         );
-        await store.set(compositeKey, {
-          status: "initialized",
-          keyId: sessionKey,
-          startedAt: state.startedAt,
-          attemptCount: 0,
-          userId: state.userId,
-          cachedTeams,
-          selectedTeamId,
-          selectedAgentId: resolvedAgentId,
-          sessionInfo: null,
-          agentDetail: null,
-          taskDetail: null,
-          bypassed: true,
-        } as SessionInitState);
-        return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+        return await completeRegistration(
+          { agent_id: resolvedAgentId },
+          state, cachedTeams, compositeKey, sessionKey, userId,
+          config, store, messages, metadataClient, userKey, spaceId,
+        );
       }
       if (team.tasks.length === 1) {
         const soleTaskId = team.tasks[0].task_id;
