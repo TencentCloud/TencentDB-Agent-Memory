@@ -99,15 +99,38 @@ class MemoryTencentdbV2Provider(MemoryProvider):
             return
 
         try:
-            self._client = _MemoryClient(
-                endpoint=self._endpoint,
-                api_key=api_key or "local",
-                service_id=service_id or "default",
-            )
+            team_id = os.environ.get("TDAI_MEMORY_TEAM_ID", "default")
+            agent_id = os.environ.get("TDAI_MEMORY_AGENT_ID", "default")
+            # Inject team/agent identity headers so the Gateway auto-registers
+            # the chat_memory asset on every write (visible in the panel).
+            try:
+                import httpx
+                from tencentdb_agent_memory._http import HttpStub
+
+                stub = HttpStub(
+                    endpoint=self._endpoint,
+                    api_key=api_key or "local",
+                    service_id=service_id or "default",
+                    client=httpx.Client(
+                        headers={
+                            "x-tdai-team-id": team_id,
+                            "x-tdai-agent-id": agent_id,
+                        }
+                    ),
+                )
+                self._client = _MemoryClient(stub=stub)
+            except Exception:
+                # Fall back to the plain client if custom headers are unsupported.
+                self._client = _MemoryClient(
+                    endpoint=self._endpoint,
+                    api_key=api_key or "local",
+                    service_id=service_id or "default",
+                )
             self._available = True
             logger.info(
                 f"Initialized: endpoint={self._endpoint}, "
                 f"service_id={service_id or 'default'}, "
+                f"team_id={team_id}, agent_id={agent_id}, "
                 f"session_id={session_id}"
             )
         except Exception as e:
