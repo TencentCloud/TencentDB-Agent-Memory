@@ -5,7 +5,8 @@
  *  - Claude Code（Anthropic 客户端）→ OpenAI 风格上游：anthropicToChat + createChatSseToAnthropicSse
  *  - WorkBuddy（Chat 客户端）→ Anthropic 风格上游：chatToAnthropic + createAnthropicSseToChatSse
  *
- * 覆盖：文本、图片（base64/url）、工具调用、流式 SSE、非流式 JSON、usage 字段映射。
+ * 覆盖：文本、图片（base64/url）、工具调用、流式 SSE、非流式 JSON、usage 字段映射、
+ * 角色交替归一（相邻同角色合并）、悬空 tool_result 降级。
  * 独立性约束：不 import 任何 client handler / adapter，纯函数 + TransformStream，便于单测。
  */
 
@@ -159,6 +160,28 @@ function mergeUserMessagesContent(a: unknown, b: unknown): unknown {
     if (only?.type === "text") return only.text;
   }
   return merged;
+}
+
+/**
+ * 合并相邻 assistant 消息的 content。
+ *
+ * Anthropic 要求 user/assistant **严格交替**（连续两条 assistant 会被上游以
+ * `roles must alternate` 400 拒掉），而 OpenAI Chat 允许同角色连续出现
+ * （历史裁剪、编辑重发、prefill 续写都会产生）。这里把相邻 assistant 顺次拼接。
+ * 拼接后把 thinking 块稳定前移：Anthropic 要求 thinking 位于 assistant 内容首位，
+ * 否则同样 400。
+ */
+function mergeAssistantMessagesContent(a: unknown, b: unknown): unknown {
+  const aBlocks = contentToBlocks(a) ?? [];
+  const bBlocks = contentToBlocks(b) ?? [];
+  const blocks = [...aBlocks, ...bBlocks];
+  if (blocks.length === 1) {
+    const only = asRecord(blocks[0]);
+    if (only?.type === "text") return only.text;
+  }
+  const thinking = blocks.filter((x) => asRecord(x)?.type === "thinking");
+  const rest = blocks.filter((x) => asRecord(x)?.type !== "thinking");
+  return [...thinking, ...rest];
 }
 
 // ── 请求体：Anthropic → Chat ────────────────────────────────────────────────
@@ -347,6 +370,12 @@ export function chatToAnthropic(
   // legacy functions：assistant function_call 转换时记录生成的 tool_use id，
   // 随后的 role="function" 结果消息按 name 配对成 tool_result。
   const legacyToolIds = new Map<string, string>();
+  // Anthropic 要求 tool_result 必须出现在**紧邻**对应 tool_use 之后的 user 消息里。
+  // 记录上一条 assistant 消息发出的 tool_use id；只有命中且仍然相邻的结果才转成
+  // tool_result，否则一律降级为普通 user 文本 —— 悬空 / 错位的 tool_use_id 会被
+  // 上游以 `unexpected tool_use_id` 400 拒掉，整轮请求连记忆注入一起失败。
+  let pendingToolIds = new Set<string>();
+  let pendingValid = false;
 
   for (const raw of Array.isArray(body.messages) ? (body.messages as unknown[]) : []) {
     const m = asRecord(raw);
@@ -364,22 +393,30 @@ export function chatToAnthropic(
       continue;
     }
     if (role === "tool") {
-      messages.push({
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: typeof m.tool_call_id === "string" ? m.tool_call_id : "",
-            content: chatContentToAnthropic(m.content) ?? "",
-          },
-        ],
-      });
+      const toolCallId = typeof m.tool_call_id === "string" ? m.tool_call_id : "";
+      if (pendingValid && toolCallId && pendingToolIds.has(toolCallId)) {
+        pendingToolIds.delete(toolCallId);
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolCallId,
+              content: chatContentToAnthropic(m.content) ?? "",
+            },
+          ],
+        });
+      } else {
+        // 悬空结果（历史被裁剪、客户端只发了半边、或中间插了别的 user 轮次）。
+        recordDrop("chat_to_anthropic", "orphan_tool_result");
+        messages.push({ role: "user", content: chatContentToAnthropic(m.content) ?? "" });
+      }
       continue;
     }
     if (role === "function") {
       const fnName = typeof m.name === "string" ? m.name : "";
       const callId = fnName ? legacyToolIds.get(fnName) : undefined;
-      if (callId) {
+      if (callId && pendingValid) {
         legacyToolIds.delete(fnName);
         messages.push({
           role: "user",
@@ -420,6 +457,8 @@ export function chatToAnthropic(
         name: typeof fc?.name === "string" ? fc.name : "",
         input,
       });
+      pendingToolIds = new Set([toolId]);
+      pendingValid = true;
       messages.push({ role: "assistant", content: blocks });
       continue;
     }
@@ -436,6 +475,7 @@ export function chatToAnthropic(
       }
       const assistantText = chatContentToText(m.content);
       if (assistantText) blocks.push({ type: "text", text: assistantText });
+      const toolUseIds: string[] = [];
       for (const tc of m.tool_calls as unknown[]) {
         const t = asRecord(tc);
         if (!t) continue;
@@ -448,13 +488,17 @@ export function chatToAnthropic(
             input = fn.arguments;
           }
         }
+        const toolUseId = typeof t.id === "string" ? t.id : `toolu_${randomId()}`;
+        toolUseIds.push(toolUseId);
         blocks.push({
           type: "tool_use",
-          id: typeof t.id === "string" ? t.id : `toolu_${randomId()}`,
+          id: toolUseId,
           name: fn?.name ?? "",
           input,
         });
       }
+      pendingToolIds = new Set(toolUseIds);
+      pendingValid = true;
       messages.push({ role: "assistant", content: blocks });
       continue;
     }
@@ -476,22 +520,29 @@ export function chatToAnthropic(
       const converted = chatContentToAnthropic(m.content);
       if (typeof converted === "string" && converted) blocks.push({ type: "text", text: converted });
       else if (Array.isArray(converted)) blocks.push(...converted);
+      pendingToolIds = new Set();
+      pendingValid = false;
       messages.push({ role: "assistant", content: blocks.length > 0 ? blocks : "" });
       continue;
     }
+    pendingToolIds = new Set();
+    pendingValid = false;
     messages.push({
       role: role === "assistant" ? "assistant" : "user",
       content: chatContentToAnthropic(m.content),
     });
   }
 
-  // Anthropic 要求 user/assistant 角色严格交替；把相邻 user 消息合并成一条，
-  // 其中 tool_result 块前置（Anthropic 工具结果语义）。
+  // Anthropic 要求 user/assistant 角色严格交替；把**相邻同角色**消息合并成一条：
+  // user 侧 tool_result 前置（Anthropic 工具结果语义），assistant 侧 thinking 前置。
   const coalesced: Array<Record<string, unknown>> = [];
   for (const m of messages) {
     const last = coalesced[coalesced.length - 1];
-    if (m.role === "user" && last && last.role === "user") {
-      last.content = mergeUserMessagesContent(last.content, m.content);
+    if (last && last.role === m.role) {
+      last.content =
+        m.role === "assistant"
+          ? mergeAssistantMessagesContent(last.content, m.content)
+          : mergeUserMessagesContent(last.content, m.content);
       continue;
     }
     coalesced.push({ ...m });
