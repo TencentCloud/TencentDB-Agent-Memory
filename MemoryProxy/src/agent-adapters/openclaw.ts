@@ -1,8 +1,7 @@
 /**
  * OpenClaw 客户端适配器。
  *
- * 调研依据（2026-08-27，见 MemoryProxy/docs/plugin-integration/
- * 2026-08-27-openclaw-dsh-ov-research.md）：
+ * 调研依据见 MemoryProxy/docs/plugin-integration/openclaw-dsh-ov-research.md：
  *
  *   - OpenClaw（github.com/openclaw/openclaw）是开源 AI coding agent，
  *     分为 Gateway（多渠道接入）与内置 Agent runtime（src/agents + src/llm）
