@@ -325,11 +325,19 @@ opik:
 读路径（recall / search）当时列为后续项。本层把读路径补齐，审计线从"只记写入"
 变成"读 + 写都有台账"。
 
+> ⚠️ **默认部署下真正生效的是 `search` / `query` / `read` 三条**。`recall` 挂在
+> `TdaiL1RecallInjector`（`point="user.before"`）上，而该 injector 在
+> `injection/index.ts` 里**默认不注册**（团队此前为避免破坏 KV cache 主动下线了 L1 注入，
+> 该文件写明"L1 recall injector 已下线，recallL1 配置保留但不再注册"）。
+> 也就是说 `recall` 审计**随该 injector 一起启停**：只有把 L1 注入重新接回去（或新增任何
+> `point="user.before"` 的注入器）之后才会产生 `action=recall` 事件。默认配置下不该期望
+> 在 `audit.jsonl` 里看到它 —— 这不是审计线失效，而是那条读入口本身没开。
+
 ### 14.2 两个读入口 → 四类 action
 
 | 读入口 | 触发点 | action | target 语义 |
 |---|---|---|---|
-| L1 自动召回 | `tdai-l1-recall-injector`：每轮注入前查 self + 借入 ≤2 个命名空间 | `recall` | 每个被查命名空间各一条 `team:agent[:task]`；借入读指向**被借 agent** |
+| L1 自动召回（**默认未注册 → 不产生事件**） | `tdai-l1-recall-injector`：每轮注入前查 self + 借入 ≤2 个命名空间 | `recall` | 每个被查命名空间各一条 `team:agent[:task]`；借入读指向**被借 agent** |
 | memory-bridge | `atomic/search`、`conversation/search` | `search` | 同上（search 类扇出到 self + 借入，一条请求可能落 1~3 条） |
 | memory-bridge | `atomic/query`、`conversation/query` | `query` | 同上 |
 | memory-bridge | `scenario/ls`、`scenario/read` | `read` | 单目标（可由 `body.agent_id` 指定） |
@@ -352,6 +360,8 @@ opik:
 - **只记成功**：与写路径一致，上游非 2xx 不记（失败由 bridge 的 reject/telemetry 线负责）。
   注意聚合 search 路径上游全失败时仍返回 200 envelope，因此同样不记。
 - **命中 0 也记**：'查了但没命中' 与 '压根没查' 是两回事——排查"这轮为什么没召回"需要前者。
+- **`recall` 依赖 L1 注入器**：默认不注册 `TdaiL1RecallInjector`，因此默认部署下没有
+  `action=recall`；此时读路径台账由 memory-bridge 的 `search` / `query` / `read` 承担。
 - **fire-and-forget**：审计写盘失败只降级日志（`audit.*`），绝不影响读请求本身。
 - **不做鉴权判定**：审计是"事后台账"，不参与 allowlist / ACL 决策。
 
@@ -363,7 +373,8 @@ npx vitest run src/__tests__/memory-access-audit.test.ts   # 7/7
 npx tsc --noEmit                                            # 0 错误
 ```
 
-真机（需真实内核 + 设 `AUDIT_LOG_FILE`）：一轮对话后 `audit.jsonl` 出现
-`{"action":"recall","target":"<team>:<agent>[:<task>]","result":<命中条数>}`；
-LLM 通过 Bash curl 调 `/memory-bridge/v3/atomic/search` 后出现 `{"action":"search",...}`；
+真机（需真实内核 + 设 `AUDIT_LOG_FILE`）：LLM 通过 Bash curl 调
+`/memory-bridge/v3/atomic/search` 后 `audit.jsonl` 出现 `{"action":"search",...}`；
 `scenario/read` 出现 `{"action":"read",...}`。
+`{"action":"recall","target":"<team>:<agent>[:<task>]","result":<命中条数>}` 需要先把
+`TdaiL1RecallInjector` 注册回注入管线（默认关闭，见 14.1 的 ⚠️）。
