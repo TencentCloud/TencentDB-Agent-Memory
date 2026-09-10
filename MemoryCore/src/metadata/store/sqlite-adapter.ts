@@ -809,13 +809,22 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   deleteTeams(teamIds: string[]): BatchDeleteResult {
+    // 级联删除 agents（走 deleteAgents 获得完整级联：task_agents, fixed_assets, chat_memory）
+    const ph = teamIds.map(() => "?").join(",");
+    const agentRows = this.all<{ agent_id: string }>(
+      `SELECT agent_id FROM meta_agents WHERE team_id IN (${ph})`,
+      ...teamIds,
+    );
+    const agentIds = agentRows.map((r) => r.agent_id);
+    if (agentIds.length > 0) this.deleteAgents(agentIds);
+
     const result = this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
-      const ph = result.deleted_ids.map(() => "?").join(",");
-      this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_agents WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph})`, ...result.deleted_ids);
+      const ph2 = result.deleted_ids.map(() => "?").join(",");
+      this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph2})`, ...result.deleted_ids);
+      // meta_agents 已由 deleteAgents 处理
+      this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph2})`, ...result.deleted_ids);
+      this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph2})`, ...result.deleted_ids);
     }
     return result;
   }

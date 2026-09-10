@@ -663,10 +663,17 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async deleteTeams(teamIds: string[]): Promise<BatchDeleteResult> {
+    // 级联删除 agents（走 deleteAgents 获得完整级联：task_agents, fixed_assets, chat_memory）
+    const agents = await this.col("meta_agents")
+      .find({ team_id: { $in: teamIds } } as Document, { projection: { agent_id: 1 } })
+      .toArray();
+    const agentIds = agents.map((a) => a.agent_id as string);
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
+
     const result = await this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
       await this.col("meta_team_members").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_agents").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
+      // meta_agents 已由 deleteAgents 处理
       await this.col("meta_tasks").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
       await this.col("meta_assets").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
     }
