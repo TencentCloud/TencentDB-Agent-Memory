@@ -1,0 +1,33 @@
+{
+  "name": "@tencentdb-agent-memory/kiro-memory",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "src/",
+    "scripts/",
+    "templates/",
+    "README.md",
+    "README_CN.md",
+    "UPGRADE.md",
+    "UPGRADE_CN.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "mcp": "node src/mcp/server.js",
+    "install:hooks": "node scripts/install.mjs",
+    "uninstall:hooks": "node scripts/uninstall.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "status": "node scripts/status.mjs",
+    "health": "node scripts/health.mjs --json",
+    "maintenance": "node scripts/maintenance.mjs",
+    "drain": "node scripts/drain.mjs",
+    "migrate": "node scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  }
+}
