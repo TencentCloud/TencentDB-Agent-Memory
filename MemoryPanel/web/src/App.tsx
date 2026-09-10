@@ -25,6 +25,11 @@ function toTeaLocale(lang: string): 'zh' | 'en' {
   return lang.startsWith('zh') ? 'zh' : 'en';
 }
 
+function isPublicSessionInitRoute(): boolean {
+  return window.location.hash === '#/session-init'
+    || window.location.hash.startsWith('#/session-init?');
+}
+
 export default function App() {
   const { t, i18n } = useTranslation();
   const auth = useAuthStore((s) => s.auth);
@@ -32,6 +37,7 @@ export default function App() {
   const checkSession = useAuthStore((s) => s.checkSession);
   // 当前 tea-component locale，跟 react-i18next 同步
   const [teaLocale, setTeaLocale] = useState<'zh' | 'en'>(() => toTeaLocale(i18n.language));
+  const [publicSessionInit, setPublicSessionInit] = useState(isPublicSessionInitRoute);
 
   // 监听 react-i18next 语言切换，同步给 tea-component
   useEffect(() => {
@@ -43,10 +49,20 @@ export default function App() {
 
   // 启动时读取 sessionStorage 缓存的 { instance_id, user_key, user } 是否有效
   useEffect(() => {
-    checkSession();
-  }, [checkSession]);
+    if (!publicSessionInit) checkSession();
+  }, [checkSession, publicSessionInit]);
+
+  useEffect(() => {
+    const handleHashChange = () => setPublicSessionInit(isPublicSessionInitRoute());
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   const content = (() => {
+    if (publicSessionInit) {
+      return <RouterProvider router={router} />;
+    }
+
     if (auth === null) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-[#0f172a]">

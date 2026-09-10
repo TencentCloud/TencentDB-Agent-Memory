@@ -22,78 +22,33 @@ import type { MemCommandContext, MemCommandResult } from "../types.js";
 import { buildMemResponse } from "../response-builder.js";
 import { getSessionStore } from "../../session/store.js";
 import type { SessionInitState } from "../../session/types.js";
+import type { ProxyConfig } from "../../types.js";
+import { getCoreSkillClient } from "../../skill/core-client.js";
+import { invalidateInitLinkTokensForSession } from "../../session/init-link.js";
+
+export interface ResetSessionBindingInput {
+  sessionKey: string;
+  agentSource: string;
+  config: ProxyConfig;
+  spaceId: string;
+  userId: string;
+}
+
+export interface ResetSessionBindingResult {
+  oldStatus: string;
+  oldBypassed: boolean;
+  nextState: SessionInitState;
+}
 
 export async function executeSessionReset(ctx: MemCommandContext): Promise<MemCommandResult> {
   const requestId = `mem-cmd-${Date.now()}`;
-  const store = getSessionStore();
-  const compositeKey = `${ctx.agentSource}:${ctx.sessionKey}`;
-
-  // 记录 old 状态用于观测(埋点在 Commit 4 追加,现在只在返回值 data 里带上)
-  const before = store.get(compositeKey);
-  const oldStatus = before?.status ?? "uninitialized";
-  const oldBypassed = !!before?.bypassed;
-
-  const resetEpoch = Date.now();
-  // 写 uninitialized 而非 pending_asset_confirm:
-  //
-  // pending_asset_confirm 意味着"proxy 已经弹了 form,等用户答复"—— 但 reset
-  // 后的下一轮 body 里不会有 form tool_use/tool_result(因为 form 还没弹过)。
-  // 如果写 pending_asset_confirm,下一轮 handleSessionInit 进入 "pending_asset_confirm
-  // 分支" 试图从 user 消息解析 form 答案 → 解不出 → unrecognized → bypass →
-  // 命令白跑了。
-  //
-  // 写 uninitialized 让下一轮走 Case 1 "第一次进来" 分支:重拉 teams → 弹
-  // asset_confirm form。因为 Commit 2 已经删掉 isFreshCCConversation gate,
-  // 即使 messages 很多也不会被 safety-net 拦截。
-  const nextState: SessionInitState = {
-    status: "uninitialized",
-    keyId: ctx.sessionKey,
-    startedAt: resetEpoch,
-    attemptCount: 0,
-    userId: ctx.userId,
-    resetEpoch,
-    resetFlow: true,
-  };
-
-  // 兜底 bind identity:handler 路径正常会先调 store.getOrRecover(compositeKey, identity, ...)
-  // 完成 bind,但 pre-hook 前置拦截时 store 里未必已经 bind 过 —— 显式补一次
-  // 保证 store.set 的 L2a write-through 能命中正确 namespace。
-  store.bind(compositeKey, {
-    userId: ctx.userId,
+  const { oldStatus, oldBypassed, nextState } = await resetSessionBinding({
+    sessionKey: ctx.sessionKey,
     agentSource: ctx.agentSource,
-    sessionId: ctx.sessionKey,
+    config: ctx.config,
     spaceId: ctx.spaceId,
+    userId: ctx.userId,
   });
-
-  await store.set(compositeKey, nextState);
-
-  // 显式删除 L2b binding —— 否则下一次请求走 getOrRecover 时 step 3 rebuildFromBinding
-  // 会用旧 initialized binding 直接灌回来,resetFlow 空跑。
-  // store.set 内部已经 `deleteBinding` 了 pending 状态(只在 initialized 才 put),
-  // 但为了防御性:这里显式 delete,不依赖 store.set 内部行为的实现细节。
-  const bindingRepo = store.getBindingRepo();
-  if (bindingRepo) {
-    try {
-      await bindingRepo.deleteBinding(ctx.spaceId, ctx.sessionKey);
-    } catch (err) {
-      console.warn(
-        `[mem-command:session-reset] deleteBinding failed for ${compositeKey}: ` +
-          (err instanceof Error ? err.message : String(err)),
-      );
-    }
-  }
-
-  // ── observability ────────────────────────────────────────────────────────
-  // 结构化 audit log — 让运维在 dashboard / grep 时能精确抓到 session-reset
-  // 事件。字段与后续 session_init_logs 的 completion 埋点对齐(same session_key /
-  // agent_source),PM/运维可以 join 看"reset 触发 → 完成 init 的转化率"。
-  // reset_epoch 用于跨节点一致性调试 —— pod A 写、pod B 读,若两侧看到不同的
-  // reset_epoch 就能立刻定位 L2a probeL2a stale 的问题。
-  console.log(
-    `[session-reset] session=${compositeKey} space=${ctx.spaceId} user=${ctx.userId} ` +
-      `agent_source=${ctx.agentSource} old_status=${oldStatus} old_bypassed=${oldBypassed} ` +
-      `new_status=${nextState.status} reset_epoch=${resetEpoch}`,
-  );
 
   const messageText = buildSuccessMessage(oldStatus, oldBypassed);
 
@@ -112,10 +67,97 @@ export async function executeSessionReset(ctx: MemCommandContext): Promise<MemCo
       old_status: oldStatus,
       old_bypassed: oldBypassed,
       new_status: nextState.status,
-      reset_epoch: resetEpoch,
+      reset_epoch: nextState.resetEpoch,
     },
     response,
   };
+}
+
+export async function resetSessionBinding(
+  input: ResetSessionBindingInput,
+): Promise<ResetSessionBindingResult> {
+  const store = getSessionStore();
+  const compositeKey = `${input.agentSource}:${input.sessionKey}`;
+  const before = store.get(compositeKey);
+  const oldStatus = before?.status ?? "uninitialized";
+  const oldBypassed = !!before?.bypassed;
+
+  if (
+    before?.status === "initialized" &&
+    before.sessionInfo &&
+    input.config.coreSkill?.endpoint
+  ) {
+    const sessionInfo = before.sessionInfo;
+    if (
+      sessionInfo.space_id &&
+      sessionInfo.user_id &&
+      sessionInfo.team_id &&
+      sessionInfo.agent_id
+    ) {
+      try {
+        const client = getCoreSkillClient(input.config.coreSkill);
+        const result = await client.forceArchive(
+          {
+            space_id: sessionInfo.space_id,
+            user_id: sessionInfo.user_id,
+            team_id: sessionInfo.team_id,
+            agent_id: sessionInfo.agent_id,
+            session_id: input.sessionKey,
+            task_id: sessionInfo.task_id,
+            reason: "session-reset",
+          },
+          { serviceId: sessionInfo.space_id },
+        );
+        console.log(
+          `[session-reset] force-archive old buffer: status=${result.status} ` +
+            `session=${input.sessionKey} agent=${sessionInfo.agent_id}`,
+        );
+      } catch (err) {
+        console.warn(
+          `[session-reset] force-archive failed (best-effort): ` +
+            (err instanceof Error ? err.message : String(err)),
+        );
+      }
+    }
+  }
+
+  const resetEpoch = Date.now();
+  const nextState: SessionInitState = {
+    status: "uninitialized",
+    keyId: input.sessionKey,
+    startedAt: resetEpoch,
+    attemptCount: 0,
+    userId: input.userId,
+    resetEpoch,
+    resetFlow: true,
+  };
+  store.bind(compositeKey, {
+    userId: input.userId,
+    agentSource: input.agentSource,
+    sessionId: input.sessionKey,
+    spaceId: input.spaceId,
+  });
+  await store.set(compositeKey, nextState);
+
+  const bindingRepo = store.getBindingRepo();
+  if (bindingRepo) {
+    try {
+      await bindingRepo.deleteBinding(input.spaceId, input.sessionKey);
+    } catch (err) {
+      console.warn(
+        `[mem-command:session-reset] deleteBinding failed for ${compositeKey}: ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  }
+  invalidateInitLinkTokensForSession(compositeKey);
+
+  console.log(
+    `[session-reset] session=${compositeKey} space=${input.spaceId} user=${input.userId} ` +
+      `agent_source=${input.agentSource} old_status=${oldStatus} old_bypassed=${oldBypassed} ` +
+      `new_status=${nextState.status} reset_epoch=${resetEpoch}`,
+  );
+  return { oldStatus, oldBypassed, nextState };
 }
 
 /**

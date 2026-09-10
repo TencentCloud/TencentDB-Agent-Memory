@@ -71,12 +71,13 @@ export function getLastUserMessageText(messages: RawMessage[]): string {
     if (!text) continue;
 
     // Tool messages linked to a session-init tool_call are always relevant.
-    // 兼容四种前缀：CB 的 `call_session_init_`、WB 的 `call_wb_session_init_`
+    // 兼容五种前缀：CB 的 `call_session_init_`、WB 的 `call_wb_session_init_`
     // （workbuddy/form.ts 里 TOOLCALL_PREFIX = "call_wb_session_init_"）、
     // dsh 的 `call_dsh_session_init_`（dsh/form.ts TOOLCALL_PREFIX）、
-    // opencode 的 `call_oc_session_init_`（opencode/form.ts TOOLCALL_PREFIX）。
+    // opencode 的 `call_oc_session_init_`（opencode/form.ts TOOLCALL_PREFIX）、
+    // hermes 的 `call_hermes_session_init_`（hermes/form.ts TOOLCALL_PREFIX）。
     const tcid = (messages[i] as any).tool_call_id as string | undefined;
-    if (role === "tool" && tcid && /call_(wb_|dsh_|oc_)?session_init_/.test(tcid)) {
+    if (role === "tool" && tcid && /call_(wb_|dsh_|oc_|hermes_)?session_init_/.test(tcid)) {
       return text;
     }
 

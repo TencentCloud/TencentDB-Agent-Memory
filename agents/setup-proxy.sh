@@ -95,7 +95,7 @@ AGENT_LABELS=(
   "Codex             — OpenAI Responses, ~/.codex/config.toml"
   "WorkBuddy         — OpenAI Responses/Chat, ~/.workbuddy/models.json"
   "dsh (DeepSeek)    — OpenAI Chat, ~/.dsh/settings.yaml + .credentials.yaml"
-  "Hermes            — OpenAI Chat + Header预选, ~/.hermes/config.yaml"
+  "Hermes            — OpenAI Chat + 交互表单(clarify)/Header预选, ~/.hermes/config.yaml"
   "OpenClaw          — OpenAI Chat + Header预选, ~/.openclaw/openclaw.json"
 )
 
@@ -998,7 +998,7 @@ EOF
   echo ""
   warn "⚠️  注意事项:"
   echo -e "  • x-conversation-id 标识当前会话，${BOLD}每次新对话需手动更换${RESET}"
-  echo -e "  • x-task-id 当前版本必填，无 Task 可填 'no-task'"
+  echo -e "  • x-task-id 现为可选；不带时仅绑定 Team 和 Agent，记忆召回范围放宽到整个 Agent"
   echo -e "  • 切换 Team/Agent/Task 需编辑配置文件"
 }
 
@@ -1060,7 +1060,7 @@ write_openclaw() {
   echo ""
   warn "⚠️  注意事项:"
   echo -e "  • x-conversation-id 标识当前会话，${BOLD}每次新对话需手动更换${RESET}"
-  echo -e "  • x-task-id 当前版本必填，无 Task 可填 'no-task'"
+  echo -e "  • x-task-id 现为可选；不带时仅绑定 Team 和 Agent，记忆召回范围放宽到整个 Agent"
   echo -e "  • 在 OpenClaw 中选择 provider 为 ${BOLD}memory-proxy${RESET}，模型选 ${BOLD}${MODEL_ID}${RESET}"
 }
 
