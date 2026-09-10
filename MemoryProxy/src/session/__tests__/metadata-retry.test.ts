@@ -96,6 +96,20 @@ describe("Claude Code metadata timeout recovery", () => {
     expect(restarted.get(key)?.metadataRetryAt).toBeUndefined();
   });
 
+  it("preserves a session reset through a metadata timeout and retry", async () => {
+    const store = new SessionStore();
+    await store.set(key, { status: "uninitialized", keyId: "session", startedAt: Date.now(),
+      attemptCount: 0, resetFlow: true, resetEpoch: 7 });
+    expect((await run(store, null)).resetFlow).toBe(true);
+    expect(store.get(key)?.resetEpoch).toBe(7);
+    expect((await run(store, null)).resetFlow).toBe(true);
+    failing = false;
+    vi.spyOn(Date, "now").mockReturnValue(store.get(key)!.metadataRetryAt!);
+    expect((await run(store, null)).intercepted).toBe(true);
+    expect(store.get(key)?.resetFlow).toBe(true);
+    expect(store.get(key)?.resetEpoch).toBe(7);
+  });
+
   it("spaces repeated failures rather than retrying on every request", async () => {
     const store = new SessionStore();
     await run(store);

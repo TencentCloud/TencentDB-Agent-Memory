@@ -736,6 +736,8 @@ async function handleSessionInitInner(
         startedAt: Date.now(),
         attemptCount: 0,
         metadataRetryAt: Date.now() + 30_000,
+        resetFlow: state?.resetFlow,
+        resetEpoch: state?.resetEpoch,
         userId,
         sessionInfo: null,
         agentDetail: null,
