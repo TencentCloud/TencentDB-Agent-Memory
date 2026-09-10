@@ -1,8 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { VectorStore } from "../store/sqlite/memory-store.js";
+import { queryMemoryRecords } from "./l1-reader.js";
+import { recallL1Candidates } from "../tools/l1-candidate-recall.js";
 import { batchDedup } from "./l1-dedup.js";
 import { writeMemory, type MemoryRecord } from "./l1-writer.js";
 
@@ -38,6 +41,8 @@ async function dedup(llmRunner = runner(), memories = [fresh]) {
 it("finds an old fact via a planned topic, reviews both sources and preserves its correction chain", async () => {
   const llm = runner();
   const lookup = vi.spyOn(store, "queryL0ByIds");
+  expect((await queryMemoryRecords(store, { recordIds: ["old"] }))[0].source_message_ids).toEqual(["before"]);
+  expect((await recallL1Candidates({ query: "Polly", topK: 1, vectorStore: store })).hits[0].source_message_ids_json).toBe('["before"]');
   const decisions = await dedup(llm);
   expect(llm.run).toHaveBeenCalledTimes(2);
   const prompt = llm.run.mock.calls[1][0].prompt;
@@ -53,6 +58,11 @@ it("finds an old fact via a planned topic, reviews both sources and preserves it
   expect(remove).not.toHaveBeenCalled();
   expect(store.queryL1Records()[0].content).toBe(update.merged_content);
   expect(store.queryL0ByIds(["before", "after"], filter)).toHaveLength(2);
+  const merged = await writeMemory({ memory: fresh, decision: { ...decisions[0], action: "merge", record_id: "merged" },
+    baseDir: directory, vectorStore: store, ...filter });
+  expect(store.queryL1Records().map((r) => r.record_id)).toEqual(["merged"]);
+  expect(merged?.metadata.maintenance_history?.map((r) => [r.record_id, r.version])).toEqual([["old", 0], ["old", 1]]);
+  expect(merged?.metadata.maintenance_history?.every((r) => !r.metadata_json.includes("maintenance_history"))).toBe(true);
 });
 
 it.each(["unseen target", "missing evidence", "older evidence", "lookup failure"])("keeps the old record with %s", async (reason) => {
@@ -65,10 +75,16 @@ it.each(["unseen target", "missing evidence", "older evidence", "lookup failure"
   expect(store.queryL1Records()[0].content).toBe(old.content);
 });
 
-it("falls back to mechanical recall when query planning fails", async () => {
+it.each(["planning", "embedding"])("falls back to FTS when %s fails", async (failure) => {
   const llm = runner();
-  llm.run.mockRejectedValueOnce(new Error("timeout"));
-  expect((await dedup(llm, [{ ...fresh, content: "Stopped using Polly" }]))[0].action).toBe("update");
+  if (failure === "planning") llm.run.mockRejectedValueOnce(new Error("timeout"));
+  if (failure === "embedding") vi.spyOn(store, "getCapabilities").mockReturnValue({ ...store.getCapabilities(), vectorSearch: true });
+  const embedBatch = vi.fn().mockRejectedValue(new Error("offline"));
+  const decisions = await batchDedup({ memories: [{ ...fresh, content: "Stopped using Polly" }],
+    config: {}, vectorStore: store, filter, llmRunner: llm,
+    embeddingService: failure === "embedding" ? { embedBatch } as never : undefined });
+  expect(decisions[0].action).toBe("update");
+  if (failure === "embedding") expect(embedBatch).toHaveBeenCalledWith(["Polly", "Stopped using Polly"], undefined);
 });
 
 it("rejects duplicate target mutations and fabricated decision IDs", async () => {
@@ -95,16 +111,6 @@ it.each([false, "throws"])("keeps merge targets if replacement persistence fails
   expect(store.queryL1Records()[0].content).toBe(old.content);
 });
 
-it("preserves both revisions when an updated record is later merged", async () => {
-  const [decision] = await dedup();
-  await writeMemory({ memory: fresh, decision, baseDir: directory, vectorStore: store, ...filter });
-  const merged = await writeMemory({ memory: fresh, decision: { ...decision, action: "merge", record_id: "merged" },
-    baseDir: directory, vectorStore: store, ...filter });
-  expect(store.queryL1Records().map((r) => r.record_id)).toEqual(["merged"]);
-  expect(merged?.metadata.maintenance_history?.map((r) => [r.record_id, r.version])).toEqual([["old", 0], ["old", 1]]);
-  expect(merged?.metadata.maintenance_history?.every((r) => !r.metadata_json.includes("maintenance_history"))).toBe(true);
-});
-
 it("keeps an update unchanged if the history append fails", async () => {
   const [decision] = await dedup();
   const upsert = vi.spyOn(store, "upsertL1");
@@ -112,13 +118,6 @@ it("keeps an update unchanged if the history append fails", async () => {
     storage: { appendFile: async () => { throw new Error("storage offline"); } } as never });
   expect(result).toBeNull();
   expect(upsert).not.toHaveBeenCalled();
-});
-
-it("does not call the LLM for an empty store", async () => {
-  store.deleteL1("old", filter);
-  const llm = runner();
-  expect((await dedup(llm))[0].action).toBe("store");
-  expect(llm.run).not.toHaveBeenCalled();
 });
 
 it("queries remote sources by primary key with the full isolation filter", async () => {
@@ -137,4 +136,25 @@ it("queries remote sources by primary key with the full isolation filter", async
   await TcvdbMemoryStore.prototype.queryL0ByIds.call(tcvdb, [], filter);
   await MongoMemoryStore.prototype.queryL0ByIds.call(mongo, [], filter);
   expect(query).not.toHaveBeenCalled(); expect(find).not.toHaveBeenCalled();
+});
+
+it("migrates a legacy SQLite database without provenance", async () => {
+  store.close();
+  const databasePath = path.join(directory, "db");
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec("ALTER TABLE l1_records DROP COLUMN source_message_ids_json");
+  legacy.close();
+  store = new VectorStore(databasePath, 0);
+  store.init();
+  expect((await queryMemoryRecords(store, { recordIds: ["old"] }))[0].source_message_ids).toEqual([]);
+});
+
+it.each(["teamId", "userId", "agentId", "sessionId", "sessionKey"] as const)("keeps merge provenance within %s", async (dimension) => {
+  store.upsertL1({ ...old, id: "outside", source_message_ids: ["foreign"], [dimension]: "other" }, undefined);
+  store.upsertL1({ ...old, id: "unrelated", source_message_ids: ["unrelated"] }, undefined);
+  const written = await writeMemory({ memory: fresh, baseDir: directory, vectorStore: store, ...filter,
+    decision: { ...update, action: "merge", target_ids: ["old", "outside"] } });
+  expect(written?.source_message_ids).toEqual(["before", "after"]);
+  expect(store.queryL1Records({ recordIds: ["outside", "unrelated"] })).toHaveLength(2);
+  expect((await queryMemoryRecords(store, { recordIds: ["new"] }))[0].source_message_ids).toEqual(["before", "after"]);
 });

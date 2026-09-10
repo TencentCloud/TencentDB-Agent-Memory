@@ -83,13 +83,6 @@ export async function batchDedup(params: {
     return [];
   }
 
-  const storeAll = () =>
-    memories.map((m) => ({
-      record_id: m.record_id,
-      action: "store" as const,
-      target_ids: [],
-    }));
-
   // Determine what recall capabilities are available
   const hasVectorData = !!vectorStore && (await vectorStore.countL1()) > 0;
   const hasFts = vectorStore?.isFtsAvailable() ?? false;
@@ -103,7 +96,7 @@ export async function batchDedup(params: {
   // Fast path: no recall capability at all → skip dedup
   if (!hasVectorData || (!hasFts && !nativeHybrid && !hasClientEmbedding(embeddingService))) {
     logger?.debug?.(`${TAG} No existing records or recall capability, skipping conflict detection for ${memories.length} memories`);
-    return storeAll();
+    return fallbackStoreAll(memories);
   }
 
   // D8: a keyword-only backend (e.g. Mongo/mongot BM25) reports vectorSearch=false
@@ -122,16 +115,18 @@ export async function batchDedup(params: {
   // inside the shared helper; vector failures are non-fatal there.
   logger?.debug?.(`${TAG} Using hybrid candidate recall (topK=${topK})`);
   const runner = llmRunner ?? new CleanContextRunner({ config, modelRef: model, enableTools: false, logger });
-  const queries = await planRecall(memories, runner, logger, traceContext);
-  const matches = await findCandidates(memories, vectorStore!, vectorCapable ? embeddingService : undefined, topK, logger, params.embeddingTimeoutMs, filter, hasVectorData);
-  await addPlannedCandidates(matches, queries, vectorStore!, vectorCapable ? embeddingService : undefined, topK, filter, params.embeddingTimeoutMs, logger);
+  const queries = [...new Set([
+    ...await planRecall(memories, runner, logger, traceContext),
+    ...memories.map((m) => m.content),
+  ])];
+  const matches = await findCandidates(memories, queries, vectorStore!, vectorCapable ? embeddingService : undefined, topK, logger, params.embeddingTimeoutMs, filter, nativeHybrid);
 
   // Check if any memory has candidates
   const hasAnyCandidates = matches.some((m) => m.candidates.length > 0);
 
   if (!hasAnyCandidates) {
     logger?.debug?.(`${TAG} No similar records found for any memory, all will be stored`);
-    return storeAll();
+    return fallbackStoreAll(memories);
   }
 
   // Phase 2: Batch LLM judgment
@@ -170,11 +165,7 @@ async function runLlmJudgment(
     logger?.warn?.(
       `${TAG} Batch conflict detection failed, defaulting all to store: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return memories.map((m) => ({
-      record_id: m.record_id,
-      action: "store" as const,
-      target_ids: [],
-    }));
+    return fallbackStoreAll(memories);
   }
 }
 
@@ -201,35 +192,6 @@ async function planRecall(
     logger?.warn?.(`${TAG} Recall planning failed; using mechanical recall: ${String(err)}`);
     return [];
   }
-}
-
-async function addPlannedCandidates(
-  matches: CandidateMatch[], queries: string[], store: IMemoryStore, embeddingService: EmbeddingService | undefined,
-  topK: number, filter: IsolationFilter | undefined, embeddingTimeoutMs: number | undefined, logger?: Logger,
-): Promise<void> {
-  const newIds = new Set(matches.map((m) => m.newMemory.record_id));
-  const planned = new Map<string, MemoryRecord>();
-  for (const query of queries) {
-    try {
-      const recalled = await recallL1Candidates({ query, topK, vectorStore: store, embeddingService, filter, embeddingTimeoutMs, logger });
-      for (const hit of recalled.hits) {
-        if (!newIds.has(hit.record_id) && rowMatchesIsolation(hit, filter) && planned.size < 20) {
-          planned.set(hit.record_id, hitToMemoryRecord(hit));
-        }
-      }
-    } catch (err) {
-      logger?.warn?.(`${TAG} Planned recall failed; keeping other candidates: ${String(err)}`);
-    }
-  }
-  // Planned topics belong to the whole batch, so every new memory may reconcile them.
-  // Bound the unified pool, including the mechanical backstop, to twenty records.
-  const pool = new Map(planned);
-  for (const match of matches) {
-    for (const candidate of match.candidates) {
-      if (pool.size < 20) pool.set(candidate.id, candidate);
-    }
-  }
-  for (const match of matches) match.candidates = [...pool.values()];
 }
 
 async function loadEvidence(matches: CandidateMatch[], store: IMemoryStore, filter?: IsolationFilter, logger?: Logger): Promise<L0QueryRow[]> {
@@ -299,78 +261,49 @@ function hitToMemoryRecord(r: L1SearchResult): MemoryRecord {
   };
 }
 
-/**
- * Hybrid candidate recall (aligned with memory_search):
- * batch-embed when a client embedder exists, then per-memory recallL1Candidates
- * (native hybrid, else FTS ∥ vector + RRF). Exclude self-batch IDs afterwards.
- */
+/** Planned topics and mechanical queries share one bounded candidate pool. */
 async function findCandidates(
   memories: Array<ExtractedMemory & { record_id: string }>,
+  queries: string[],
   vectorStore: IMemoryStore,
   embeddingService: EmbeddingService | undefined,
   topK: number,
   logger: Logger | undefined,
   embeddingTimeoutMs: number | undefined,
   filter: IsolationFilter | undefined,
-  hasVectorData: boolean,
+  nativeHybrid: boolean,
 ): Promise<CandidateMatch[]> {
   const newRecordIds = new Set(memories.map((m) => m.record_id));
-  const nativeHybrid = !!(
-    typeof vectorStore.getCapabilities === "function" &&
-    vectorStore.getCapabilities().nativeHybridSearch &&
-    typeof vectorStore.searchL1Hybrid === "function"
-  );
-
   let queryEmbeddings: Float32Array[] | undefined;
-  let vectorSvc = embeddingService;
   if (hasClientEmbedding(embeddingService) && !nativeHybrid) {
-    if (hasVectorData) {
-      try {
-        queryEmbeddings = await embeddingService.embedBatch(
-          memories.map((m) => m.content),
-          embeddingTimeoutMs ? { timeoutMs: embeddingTimeoutMs } : undefined,
-        );
-      } catch (err) {
-        logger?.warn?.(
-          `${TAG} embedBatch failed (non-fatal, FTS may still run): ${err instanceof Error ? err.message : String(err)}`,
-        );
-        vectorSvc = undefined;
-      }
-    } else {
-      vectorSvc = undefined;
+    try {
+      queryEmbeddings = await embeddingService.embedBatch(
+        queries, embeddingTimeoutMs ? { timeoutMs: embeddingTimeoutMs } : undefined,
+      );
+    } catch (err) {
+      logger?.warn?.(`${TAG} embedBatch failed; using FTS: ${String(err)}`);
+      embeddingService = undefined;
     }
   }
 
-  const recallTopK = topK;
-  const matches: CandidateMatch[] = [];
-
-  for (let i = 0; i < memories.length; i++) {
-    const mem = memories[i];
-    const recalled = await recallL1Candidates({
-      query: mem.content,
-      topK: recallTopK,
-      vectorStore,
-      embeddingService: vectorSvc,
-      logger,
-      filter,
-      queryEmbedding: queryEmbeddings?.[i],
-      embeddingTimeoutMs,
-      logTag: TAG,
-    });
-
-    const candidates: MemoryRecord[] = recalled.hits
-      .filter((r) => !newRecordIds.has(r.record_id) && rowMatchesIsolation(r, filter))
-      .slice(0, topK)
-      .map(hitToMemoryRecord);
-
-    matches.push({ newMemory: mem, candidates });
+  const pool = new Map<string, MemoryRecord>();
+  for (let i = 0; i < queries.length && pool.size < 20; i++) {
+    try {
+      const recalled = await recallL1Candidates({
+        query: queries[i], topK, vectorStore, embeddingService, logger, filter,
+        queryEmbedding: queryEmbeddings?.[i], embeddingTimeoutMs, logTag: TAG,
+      });
+      for (const hit of recalled.hits) {
+        if (pool.size < 20 && !newRecordIds.has(hit.record_id) && rowMatchesIsolation(hit, filter)) {
+          pool.set(hit.record_id, hitToMemoryRecord(hit));
+        }
+      }
+    } catch (err) {
+      logger?.warn?.(`${TAG} Candidate recall failed; keeping other candidates: ${String(err)}`);
+    }
   }
-
-  logger?.debug?.(
-    `${TAG} Candidate recall: ${matches.map((m) => `${m.newMemory.record_id}→${m.candidates.length}`).join(", ")}`,
-  );
-
-  return matches;
+  const candidates = [...pool.values()];
+  return memories.map((newMemory) => ({ newMemory, candidates }));
 }
 
 // ============================
