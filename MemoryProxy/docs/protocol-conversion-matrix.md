@@ -1,9 +1,10 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，102/102 通过：protocol-conformance 61、responses-anthropic-compat 13、
+> 转换层回归：`npm test`（vitest，102/102 通过：protocol-conformance 61、responses-anthropic-compat 13、
 > sse 8、sse-fuzz 4、protocol-stats 4、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3））。
-> 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/110）。
+> 协议接线分支全量：`npm test` 123/123（转换层 102 + token-estimate 4 + protocol-errors 5 + probe 12）。
+> 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
 ## 架构
@@ -165,6 +166,17 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
   JSON Schema 输出字段的服务，可在接线层按 per-upstream 开关启用，避免向不支持的兼容
   上游发送未知字段触发 400。
 
+## 接线层实现说明（PR #1253）
+
+- **请求/响应头过滤已收敛**：`MemoryProxy/src/upstream/headers.ts` 是唯一实现；
+  Chat / Anthropic / Codex / WorkBuddy 四个 handler 统一从这里引入
+  `SKIP_REQUEST_HEADERS` / `filterResponseHeaders`，不再各写一份。
+- **Per-agent 转换开关 true / false 都显式生效**：`chatCompletions`、
+  `anthropicToChat`、`chatToAnthropic`、`responsesToAnthropic`、
+  `anthropicToResponses` 配置 `true` 表示启用；配置 `false` 表示明确禁用，
+  并且只要某个 agent 显式配置过任一开关，`autoDetect` 就不会再为该 agent
+  自动补其它开关（用户意图优先）。
+
 ## 测试覆盖
 
 | 文件 | 用例数 | 覆盖 |
@@ -177,3 +189,11 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 | protocol-stats-streaming.test.ts | 4 | 流式收尾 usage/cache 计入 /metrics（单跳与组合层均只计一次） |
 | protocol-stream-semantics.test.ts | 5 | 请求体转换的 stream:false/true 透传语义 |
 | responses-sse-completion.test.ts | 3 | 仅 output_item.done（无 delta）时兜底补发 arguments/text/summary |
+
+### 协议接线分支额外测试（计入分支全量 123）
+
+| 文件 | 用例数 | 覆盖 |
+|---|---|---|
+| token-estimate.test.ts | 4 | count_tokens 本地估算（正常/超长/异常输入归一，不抛错） |
+| protocol-errors.test.ts | 5 | 接线层协议错误/非流式路径（HTTP 状态拦截、错误体不进入转换器） |
+| probe.test.ts | 12 | autoDetect：内置客户端原生协议注册表 + 配置出现 agent 泛化 + 显式 true/false 都跳过探测 + agents 缺省 |
