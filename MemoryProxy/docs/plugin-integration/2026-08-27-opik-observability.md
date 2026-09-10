@@ -257,3 +257,41 @@ curl "http://127.0.0.1:8080/v1/private/traces?project_name=request_log&page=1&si
   hash 来自归一化后的用户提问文本（NFKC + 空白折叠 + 小写）。
 - 该标签只用于过滤 / 统计，绝不参与 traceId 派生，避免不同用户或不同时间
   的相同问题被错误合并。
+
+## 12. 2026-09-09 补充：request_log 可配置 + 失败 trace 收尾
+
+### 12.1 `request_log` 开关（`opik.requestLogEnabled`）
+
+- 新增配置 `opik.requestLogEnabled`（默认 `false`）：为 `true` 时，Chat / Anthropic 的
+  trace 会**额外 fork 一份到独立的 `request_log` 项目**，用于留痕排查。
+- 默认关闭的原因：开启后 Opik 上报量约翻倍（每条请求多一份 create trace + span），
+  只有需要排查原始请求时才打开。
+- 与 `opik.stripRequestLogContent` 配合：后者为 `true` 时，fork 出去的 `request_log`
+  trace 不记录消息内容（节省存储）。
+- fork trace 的收尾改用专用 `opikUpdateTraceFork()`（项目名在函数内部处理），
+  不再依赖调用点传入 `projectName`。
+
+```yaml
+opik:
+  enabled: true
+  requestLogEnabled: false        # true = 额外 fork 一份原始请求到 request_log 项目
+  stripRequestLogContent: false   # true = fork 出的 request_log trace 不记录消息内容
+```
+
+### 12.2 失败请求的 trace 收尾（`opikReportFailure`）
+
+- 新增 `opikReportFailure(...)`：请求在上游失败（4xx/5xx、超时、流式中断）时，
+  也把 trace **正常收尾**——写 `end_time` + error metadata，并补一条 error LLM span，
+  保证错误请求在 Opik 的消息面板可见、trace 不会永远停留在"进行中"。
+- 保护已成功写入的内容：只补 `end_time` / error metadata，**不覆盖**此前成功请求
+  写入的 `output`。
+- 开启 `requestLogEnabled` 时，fork 出的 trace / span 会一并收尾，不留"影子 trace"。
+- 上报侧同时保留超时 / 熔断（连续失败 5 次 → 熔断 30s）与限频，失败只降级为日志，
+  **绝不阻塞或改变业务响应**（默认 `opik.timeoutMs: 2000`）。
+
+### 12.3 验证
+
+- `opik.test.ts` 新增用例：`opikReportFailure` 关闭 trace + 补 error LLM span；
+  开启 `requestLogEnabled` 时 fork trace / span 一并收尾。
+- 上线前自查：失败请求在 `request_log`（如已开启）与主项目里都能看到 `end_time`。
+
