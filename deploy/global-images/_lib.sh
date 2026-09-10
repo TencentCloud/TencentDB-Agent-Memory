@@ -4,6 +4,12 @@
 
 set -euo pipefail
 
+# Git Bash / MSYS on Windows rewrites arguments that look like POSIX paths, so
+# `docker run -v /data/...` turns into `-v C:/Program Files/Git/data/...` and the
+# mount silently points at the wrong place. Opt out for every script that sources
+# this library. No-op on Linux/macOS.
+export MSYS_NO_PATHCONV=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 
