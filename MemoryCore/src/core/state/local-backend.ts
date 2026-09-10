@@ -21,13 +21,31 @@ interface InternalTimer {
   handle?: ReturnType<typeof setTimeout>;
 }
 
+interface QueuedTask {
+  msgId: string;
+  task: TaskPayload;
+}
+
+interface PendingTask extends QueuedTask {
+  ownerId: string;
+  claimedAt: number;
+}
+
+interface ConsumeWaiter {
+  workerId: string;
+  resolve: (task: TaskPayload | null) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export class LocalStateBackend implements IStateBackend {
   private sessionStates = new Map<string, PipelineSessionState>();
   private buffers = new Map<string, string[]>();
   private timers = new Map<string, InternalTimer>();
-  private taskQueue: TaskPayload[] = [];
+  private taskQueue: QueuedTask[] = [];
+  private pendingTasks = new Map<string, PendingTask>();
+  private nextTaskMessageId = 1;
   private locks = new Map<string, { ownerId: string; expireAt: number }>();
-  private consumeWaiters: Array<{ resolve: (task: TaskPayload | null) => void; timer: ReturnType<typeof setTimeout> }> = [];
+  private consumeWaiters: ConsumeWaiter[] = [];
   private onTimerExpired?: (entry: TimerEntry) => void;
   private destroyed = false;
 
@@ -146,21 +164,36 @@ export class LocalStateBackend implements IStateBackend {
   // ═══ Task Queue ═══
 
   async enqueueTask(task: TaskPayload): Promise<void> {
+    this.enqueueTaskPayload(task);
+  }
+
+  private enqueueTaskPayload(task: TaskPayload): void {
+    const payload = { ...task };
+    delete payload._msgId;
+    delete payload._stream;
+    delete payload._ownerId;
+    const queued: QueuedTask = {
+      msgId: `local-${this.nextTaskMessageId++}`,
+      task: payload,
+    };
     const idx = this.taskQueue.findIndex(
-      (t) => t.priority > task.priority || (t.priority === task.priority && t.createdAt > task.createdAt),
+      ({ task: current }) => current.priority > payload.priority
+        || (current.priority === payload.priority && current.createdAt > payload.createdAt),
     );
-    if (idx === -1) this.taskQueue.push(task);
-    else this.taskQueue.splice(idx, 0, task);
+    if (idx === -1) this.taskQueue.push(queued);
+    else this.taskQueue.splice(idx, 0, queued);
 
     if (this.consumeWaiters.length > 0) {
       const waiter = this.consumeWaiters.shift()!;
       clearTimeout(waiter.timer);
-      waiter.resolve(this.taskQueue.shift() ?? null);
+      const next = this.taskQueue.shift();
+      waiter.resolve(next ? this.deliverTask(next, waiter.workerId) : null);
     }
   }
 
-  async consumeTask(_workerId: string, blockMs?: number): Promise<TaskPayload | null> {
-    if (this.taskQueue.length > 0) return this.taskQueue.shift()!;
+  async consumeTask(workerId: string, blockMs?: number): Promise<TaskPayload | null> {
+    const next = this.taskQueue.shift();
+    if (next) return this.deliverTask(next, workerId);
     if (!blockMs || blockMs <= 0) return null;
 
     return new Promise<TaskPayload | null>((resolve) => {
@@ -170,15 +203,51 @@ export class LocalStateBackend implements IStateBackend {
         resolve(null);
       }, blockMs);
       timer.unref();
-      this.consumeWaiters.push({ resolve, timer });
+      this.consumeWaiters.push({ workerId, resolve, timer });
     });
   }
 
-  async ackTask(_taskId: string): Promise<void> { /* no-op in local mode */ }
+  async ackTask(taskId: string): Promise<void> {
+    this.pendingTasks.delete(taskId);
+  }
+
+  async refreshTaskClaim(taskId: string, ownerId: string, idleMs: number = 0): Promise<boolean> {
+    const pending = this.pendingTasks.get(taskId);
+    if (!pending || pending.ownerId !== ownerId) return false;
+    pending.claimedAt = Date.now() - Math.max(0, idleMs);
+    return true;
+  }
+
+  async ackTaskIfOwned(taskId: string, ownerId: string): Promise<boolean> {
+    const pending = this.pendingTasks.get(taskId);
+    if (!pending || pending.ownerId !== ownerId) return false;
+    return this.pendingTasks.delete(taskId);
+  }
+
+  async replacePendingTask(taskId: string, ownerId: string, replacement: TaskPayload): Promise<boolean> {
+    const pending = this.pendingTasks.get(taskId);
+    if (!pending || pending.ownerId !== ownerId) return false;
+    this.pendingTasks.delete(taskId);
+    this.enqueueTaskPayload(replacement);
+    return true;
+  }
+
+  async claimStaleTasks(workerId: string, minIdleMs: number, count: number): Promise<TaskPayload[]> {
+    const claimed: TaskPayload[] = [];
+    const now = Date.now();
+    for (const pending of this.pendingTasks.values()) {
+      if (claimed.length >= count) break;
+      if (now - pending.claimedAt < minIdleMs) continue;
+      pending.ownerId = workerId;
+      pending.claimedAt = now;
+      claimed.push(this.deliveryPayload(pending));
+    }
+    return claimed;
+  }
 
   async getQueueDepth(): Promise<{ high: number; low: number }> {
     let high = 0, low = 0;
-    for (const t of this.taskQueue) { if (t.priority === 0) high++; else low++; }
+    for (const { task } of this.taskQueue) { if (task.priority === 0) high++; else low++; }
     return { high, low };
   }
 
@@ -189,7 +258,22 @@ export class LocalStateBackend implements IStateBackend {
    * are NOT included (they live in PipelineWorker.runningTasks instead).
    */
   async listQueuedTasks(): Promise<TaskPayload[]> {
-    return this.taskQueue.slice();
+    return this.taskQueue.map(({ task }) => ({ ...task }));
+  }
+
+  private deliverTask(queued: QueuedTask, ownerId: string): TaskPayload {
+    const pending: PendingTask = { ...queued, ownerId, claimedAt: Date.now() };
+    this.pendingTasks.set(queued.msgId, pending);
+    return this.deliveryPayload(pending);
+  }
+
+  private deliveryPayload(pending: PendingTask): TaskPayload {
+    return {
+      ...pending.task,
+      _msgId: pending.msgId,
+      _stream: "local",
+      _ownerId: pending.ownerId,
+    };
   }
 
   // ═══ Lock ═══
@@ -284,8 +368,11 @@ export class LocalStateBackend implements IStateBackend {
       }
     }
 
-    // Remove tasks belonging to this instance from the queue
-    this.taskQueue = this.taskQueue.filter((t) => t.instanceId !== instanceId);
+    // Remove queued and pending tasks belonging to this instance.
+    this.taskQueue = this.taskQueue.filter(({ task }) => task.instanceId !== instanceId);
+    for (const [msgId, pending] of this.pendingTasks) {
+      if (pending.task.instanceId === instanceId) this.pendingTasks.delete(msgId);
+    }
 
     return { sessions, timers, buffers };
   }
@@ -303,6 +390,7 @@ export class LocalStateBackend implements IStateBackend {
     this.sessionStates.clear();
     this.buffers.clear();
     this.taskQueue = [];
+    this.pendingTasks.clear();
     this.locks.clear();
   }
 

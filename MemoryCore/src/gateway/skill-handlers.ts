@@ -718,10 +718,25 @@ export async function handleListing(body: unknown, _auth: V2AuthContext, request
     }
 
     // 渲染 listing；按 char_budget 截断（保留头部 + 显式截断标记）。
-    const lines = items.map((s) => `- ${s.name}: ${s.description}`);
+    // 默认 id 模式: 每行结构化 `- id=<skill_id>, name=<name>, desc=<description>`,
+    //   并在块内顶部加一行格式说明,让 agent 明确知道哪个字段是 skill_id、调 skill_view 时用它。
+    // SKILL_VIEW_MODE=name 时回退旧格式 `- name: description`(不暴露 id)。
+    // 见 skill_eval v9(name) vs v10(id) 对比实验。
+    const exposeSkillId = (process.env.SKILL_VIEW_MODE ?? "id").toLowerCase() !== "name";
+    // description 里的换行会破坏"每行一个 skill"的结构,折成空格。
+    const flat = (s: string) => (s ?? "").replace(/\s*\n\s*/g, " ").trim();
+    const lines = items.map((s) =>
+      exposeSkillId
+        ? `- id=${s.skill_id}, name=${s.name}, desc=${flat(s.description)}`
+        : `- ${s.name}: ${s.description}`,
+    );
+    const formatHint = exposeSkillId
+      ? "# 每行一个 skill,字段以逗号分隔: id=<skill_id>, name=<名字>, desc=<描述>。\n" +
+        "# 调用 skill_view 时传 id 字段的值(形如 skl-xxxxxx)。\n"
+      : "";
     let listing = lines.length === 0
       ? "<available_skills>\n(none)\n</available_skills>"
-      : `<available_skills>\n${lines.join("\n")}\n</available_skills>`;
+      : `<available_skills>\n${formatHint}${lines.join("\n")}\n</available_skills>`;
 
     if (listing.length > charBudget) {
       const truncated = listing.slice(0, Math.max(0, charBudget - 32));
