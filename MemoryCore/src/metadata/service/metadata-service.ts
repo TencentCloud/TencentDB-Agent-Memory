@@ -1876,16 +1876,21 @@ export class MetadataService {
     return this.updateAgent(agentId, patch);
   }
 
-  // team admin 可代删/代归档成员的 Agent（与 createAgentForCaller 允许 admin 代建对称）
+  // team admin 可代删/代归档成员的 Agent（与 createAgentForCaller 允许 admin 代建对称）；
+  // system_admin 是实例级管理员，无需加入目标 team 即可操作（对齐 Panel delete-cascade 的权限面）
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
     for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+      if (!ctx.isSystemAdmin) {
+        await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+      }
     }
     return this.deleteAgents(agentIds);
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+    if (!ctx.isSystemAdmin) {
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+    }
     return this.archiveAgent(agentId);
   }
 
