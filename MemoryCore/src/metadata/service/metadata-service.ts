@@ -608,6 +608,13 @@ export class MetadataService {
     if (totalAdmins > 0 && totalAdmins - deletingSystemAdmins < 1) {
       throw new MetadataError("last_system_admin", "cannot delete the last system_admin user");
     }
+    // 删除用户前级联硬删除其所有 Agent（owner 即将不存在，归档无意义）
+    const allAgentIds: string[] = [];
+    for (const userId of userIds) {
+      const ids = await this.collectAgentIdsByOwner(userId);
+      allAgentIds.push(...ids);
+    }
+    if (allAgentIds.length > 0) await this.deleteAgents(allAgentIds);
     return this.deleteUsers(userIds);
   }
 
@@ -1820,6 +1827,9 @@ export class MetadataService {
     if (userId === team.owner_user_id) {
       throw new MetadataError("permission_denied", "cannot remove team owner");
     }
+    // 移除成员前级联硬删除其在此 team 的所有 Agent（owner 即将不可达，归档无意义）
+    const agentIds = await this.collectAgentIdsByOwnerInTeam(teamId, userId);
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
     return this.removeTeamMember(teamId, userId);
   }
 
@@ -1866,15 +1876,16 @@ export class MetadataService {
     return this.updateAgent(agentId, patch);
   }
 
+  // team admin 可代删/代归档成员的 Agent（与 createAgentForCaller 允许 admin 代建对称）
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
     for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     }
     return this.deleteAgents(agentIds);
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     return this.archiveAgent(agentId);
   }
 
@@ -2034,6 +2045,42 @@ export class MetadataService {
     const ids: string[] = [];
     for (let offset = 0; offset < MAX_AGENTS; offset += PAGE) {
       const page = await this.store.listAgentsByTeam(teamId, { limit: PAGE, offset });
+      for (const agent of page.items) ids.push(agent.agent_id);
+      if (page.items.length < PAGE) break;
+    }
+    return ids;
+  }
+
+  /**
+   * 收集指定用户在指定 team 下拥有的全部 agent_id（分页遍历）。
+   * 用于成员移除时级联删除其 Agent。
+   */
+  private async collectAgentIdsByOwnerInTeam(teamId: string, userId: string): Promise<string[]> {
+    const PAGE = 100;
+    const MAX_AGENTS = 10_000;
+    const ids: string[] = [];
+    for (let offset = 0; offset < MAX_AGENTS; offset += PAGE) {
+      const page = await this.store.listAgentsByTeam(
+        teamId,
+        { limit: PAGE, offset },
+        { owner_user_id: userId },
+      );
+      for (const agent of page.items) ids.push(agent.agent_id);
+      if (page.items.length < PAGE) break;
+    }
+    return ids;
+  }
+
+  /**
+   * 收集指定用户在所有 team 下拥有的全部 agent_id（分页遍历）。
+   * 用于用户删除时级联删除其所有 Agent。
+   */
+  private async collectAgentIdsByOwner(userId: string): Promise<string[]> {
+    const PAGE = 100;
+    const MAX_AGENTS = 10_000;
+    const ids: string[] = [];
+    for (let offset = 0; offset < MAX_AGENTS; offset += PAGE) {
+      const page = await this.store.listAgentsByOwner(userId, { limit: PAGE, offset });
       for (const agent of page.items) ids.push(agent.agent_id);
       if (page.items.length < PAGE) break;
     }
