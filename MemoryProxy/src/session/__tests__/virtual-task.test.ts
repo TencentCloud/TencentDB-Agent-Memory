@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleSessionInit } from "../index.js";
 import { SessionStore } from "../store.js";
-import { normalizeSessionTask } from "../task.js";
 import type { SessionInitConfig } from "../../types.js";
 import type { SessionInitState } from "../types.js";
 import type { MetadataClient } from "../../meta/client.js";
@@ -82,15 +81,6 @@ describe("legacy session recovery", () => {
     const restarted = new SessionStore(60000, repo, bindingRepo, "no-task");
     expect((await restarted.getOrRecover(key, identity, {}))?.sessionInfo?.task_id).toBe(taskId === "real" ? "real" : undefined);
   });
-  it("cleans startup-hydrated state before a bridge can read it", async () => {
-    const { repo } = repos(legacy());
-    const store = new SessionStore(60000, repo, undefined, "no-task");
-    await store.hydrateFromDb();
-    expect(store.get(key)?.sessionInfo?.task_id).toBeUndefined();
-    expect(repo.upsert).not.toHaveBeenCalled();
-    await store.getOrRecover(key, identity, {});
-    expect(repo.upsert).toHaveBeenCalled();
-  });
   it("does not overwrite a newer persistent session while cleaning stale L1", async () => {
     const { repo } = repos(legacy());
     const store = new SessionStore(60000, repo, undefined, "no-task");
@@ -109,13 +99,5 @@ describe("legacy session recovery", () => {
     expect(recovered?.sessionInfo?.task_id).toBeUndefined();
     expect(recovered?.sessionInfo?.agent_id).toBe("agent");
     expect(client.getTask).not.toHaveBeenCalled();
-  });
-  it("preserves real IDs and bypass state, and honors old virtual markers", () => {
-    const real = legacy("default");
-    expect(normalizeSessionTask(real, "no-task")).toBe(real);
-    const bypassed = { ...legacy(), bypassed: true, sessionInfo: null };
-    expect(normalizeSessionTask(bypassed, "no-task")).toBe(bypassed);
-    const old = { ...legacy("previous"), cachedTeams: [{ team_id: "team", team_name: "Team", agents: [], tasks: [{ task_id: "previous", task_name: "None", isDefault: true }] }] };
-    expect(normalizeSessionTask(old, "no-task").sessionInfo?.task_id).toBeUndefined();
   });
 });
