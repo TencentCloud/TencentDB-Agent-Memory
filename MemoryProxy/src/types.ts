@@ -327,6 +327,14 @@ export interface SessionInitConfig {
   taskMissingPolicy?: "skip" | "default" | "reject";
   /** 按客户端覆盖 taskMissingPolicy（未列出的走全局策略）。 */
   taskMissingPolicyByAgent?: Record<string, "skip" | "default" | "reject">;
+  /**
+   * 显式传入但查不到的 task_id（stale / 跨 team 复用）如何处理：
+   *
+   *   - `"mismatch"`（默认）：视为身份 mismatch，走 `headerAutoSelect.onMismatch`；
+   *   - `"ignore"`：忽略该 task 继续注册（召回放宽到 agent 全域），即上游
+   *     #1131 task-optional-memory 的旧契约 —— 存量部署平滑升级用。
+   */
+  taskInvalidPolicy?: "mismatch" | "ignore";
 }
 
 export interface TdaiConfig {
@@ -940,6 +948,7 @@ export interface RawYamlConfig {
     };
     taskMissingPolicy?: "skip" | "default" | "reject";
     taskMissingPolicyByAgent?: Record<string, "skip" | "default" | "reject">;
+    taskInvalidPolicy?: "mismatch" | "ignore";
     headerAutoSelect?: {
       enabled?: boolean;
       teamHeader?: string;

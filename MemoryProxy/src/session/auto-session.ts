@@ -8,10 +8,16 @@
  * 首问指纹 + uuid，跨线程/跨窗口/换 key 复用一律拒绝。进程重启或换 key 后旧 ID
  * 无法通过校验，直接按缺失处理重新生成，避免“幽灵会话”错绑身份。
  *
- * 单节点实现：进程内 Map + TTL（默认 30 分钟）+ 容量上限；多节点部署时把状态
- * 换成共享存储，签名密钥通过 TDAI_SESSION_SIGNING_KEY 保持一致。开启
- * `deterministic: true` 后 sid 由 (keyId, scope, 指纹, epoch) 派生，任意实例 /
- * 重启在同一 epoch 内收敛到同一 sid（无共享状态的最优近似）。
+ * 单节点实现：进程内 Map + TTL（默认 30 分钟）+ 容量上限。
+ *
+ * ⚠️ 多实例 / 多 pod 部署**必须**给所有实例注入同一个 `TDAI_SESSION_SIGNING_KEY`。
+ * 未设置时密钥在进程内随机生成（单进程安全），此时：
+ *   - 其他实例签发的 auto-* ID 会因签名不符被拒（记 scopeRejected / ghostRejected）；
+ *   - `deterministic: true` **也不能**跨实例收敛 —— `deriveUuid` 与
+ *     `signSessionId` 都以该密钥做 HMAC，密钥不同则 uuid 与签名都不同，
+ *     `verifySessionId` 先失败，根本走不到派生分支。
+ *   即：deterministic 省掉的是"共享状态"，**省不掉"共享密钥"**。
+ *   该约束由 `config.ts::validateAutoConversationConfig` 在启动期告警。
  * 回传的 auto-* ID 同样受 ACTIVE 表生命周期约束：签名校验通过后还必须命中
  * 未过期的活跃条目才续接，避免旧 ID 绕过 TTL/epoch 轮换永久复活。
  * 显式上报的会话 ID 始终优先，本机制只在缺失时触发（完全向后兼容）。

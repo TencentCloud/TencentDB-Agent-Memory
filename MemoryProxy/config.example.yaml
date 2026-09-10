@@ -589,11 +589,19 @@ sessionInit:
     ttlMinutes: 30           # 活跃会话 TTL；空闲超过后自动开新会话
     strategy: per-key        # per-key（默认：一 key 一活跃会话）| per-key-msg（按首问指纹分多窗口）
     deterministic: false     # true = sid 由 (keyId, scope, 指纹, epoch) 确定性派生，
-                             #        多实例/重启在同一 epoch 收敛到同一 sid（无共享状态近似）
+                             #        同一实例内重启可收敛到同一 sid；**跨实例仍要求
+                             #        共享 TDAI_SESSION_SIGNING_KEY**（见下方说明）
     # deterministicBucketMinutes: 30  # deterministic 模式的 epoch 桶宽；必须 ≥ ttlMinutes
     # maxEntries: 2048              # 进程内活跃会话上限（默认 2048）
     # maxWindowsPerKey: 8           # per-key-msg：单 key 最多活跃窗口（默认 8）
     # maxWindowsTotal: 4096         # per-key-msg：全局窗口上限（默认 4096）
+    #
+    # ⚠️ 多实例 / 多 pod 部署必须给所有实例注入同一个环境变量（单实例可忽略）：
+    #      TDAI_SESSION_SIGNING_KEY=<随机长字符串>
+    #    未设置时密钥在**每个进程内随机生成**：其他实例签发的 auto-* 会话 ID 会因
+    #    签名不符被判为伪造（日志出现 scopeRejected/ghostRejected）；deterministic
+    #    也救不了 —— 派生与签名共用同一密钥。proxy 启动时会打印告警。
+    #    生成方式：`openssl rand -hex 32`，经 deploy 的 env / Secret 挂载。
 
   # x-thread-id 进会话复合键（task 下的主题分组，默认关）。开启后
   # agentSource:sessionKey 变为 agentSource:sessionKey:threadId，
@@ -610,6 +618,12 @@ sessionInit:
   taskMissingPolicyByAgent:
     openclaw: skip
     hermes: skip
+
+  # 显式传入但**查不到**的 task_id（stale / 跨 team 复用）如何处理：
+  #   mismatch（默认）: 视为身份 mismatch，走 headerAutoSelect.onMismatch；
+  #   ignore         : 忽略该 task 继续注册（召回放宽到 agent 全域）——
+  #                    即上游 #1131 task-optional-memory 的旧契约，存量部署平滑升级用。
+  taskInvalidPolicy: mismatch
 
   # ── DEBUG：本地开发/e2e 短路 ────────────────────────────────────────────────
   # 打开 debugForceIdentity 后，agentSource=workbuddy 和 agentSource=codebuddy

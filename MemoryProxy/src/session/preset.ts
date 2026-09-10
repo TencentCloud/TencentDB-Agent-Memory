@@ -107,9 +107,19 @@ export function resolvePresetIdentity(
     const task = team.tasks.find((t) => t.task_id === preset.taskId);
     if (task) res.taskId = task.task_id;
     else {
-      // 显式传入的无效 task_id → 视为 mismatch（走 onMismatch），非静默忽略。
-      res.hadMismatch = true;
-      res.mismatchReason = "invalid-task";
+      // 显式传入但查不到的 task_id（stale / 跨 team 复用）。
+      //
+      // ⚠️ 这里与上游 #1131（feat/task-optional-memory）的契约**不一致**，而且是
+      // 有意的：#1131 明确规定 stale task 不得阻断注册 —— kernel 把 taskId 当
+      // 可选业务维度（isolation.ts），缺失只会把召回放宽到 agent 全域，静默忽略
+      // 可以避免存量客户端被表单打断。本方案默认改为报 mismatch 让用户当场重选，
+      // 但把新语义做成**可配置**：`sessionInit.taskInvalidPolicy: "ignore"` 即退回
+      // #1131 的旧契约（taskId 保持 undefined，召回放宽），便于存量部署平滑升级。
+      const policy = config?.taskInvalidPolicy ?? "mismatch";
+      if (policy !== "ignore") {
+        res.hadMismatch = true;
+        res.mismatchReason = "invalid-task";
+      }
     }
   } else {
     // 未提供 task：按 agent 级覆盖 → 全局 taskMissingPolicy 决定注册行为

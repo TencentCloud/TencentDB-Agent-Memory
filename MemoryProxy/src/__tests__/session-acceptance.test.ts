@@ -108,6 +108,26 @@ describe("会话策略验收（ACC-1..ACC-6）", () => {
     expect(r.mismatchReason).toBe("invalid-task");
   });
 
+  it("ACC-5b: taskInvalidPolicy=ignore → 无效 task 退回 #1131 旧契约（忽略并继续注册）", () => {
+    const loose = {
+      enabled: true,
+      taskMissingPolicy: "reject",
+      taskMissingPolicyByAgent: { openclaw: "skip", hermes: "skip" },
+      taskInvalidPolicy: "ignore",
+    } as never;
+    const r = resolvePresetIdentity(
+      teams,
+      { teamId: "team-a", agentId: "agt-1", taskId: "task-404" },
+      loose,
+      "openclaw",
+    );
+    // 与 #1131 一致：stale task 不阻断注册，只是把召回放宽到 agent 全域。
+    expect(r.hadMismatch).toBe(false);
+    expect(r.mismatchReason).toBeUndefined();
+    expect(r.taskId).toBeUndefined();
+    expect(r.canRegister).toBe(true);
+  });
+
   it("ACC-6: per-agent 策略——openclaw/hermes 宽松，claude-code 严格", () => {
     for (const agent of ["openclaw", "hermes"]) {
       const r = resolvePresetIdentity(

@@ -110,6 +110,9 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     // 全局默认严格（缺 task 走 mismatch）；仅无法弹表单的客户端按 agent 放宽。
     taskMissingPolicy: "reject",
     taskMissingPolicyByAgent: { openclaw: "skip", hermes: "skip" },
+    // 显式传入的 stale/unknown task_id：默认报 mismatch 让用户重选；
+    // 配 "ignore" 退回上游 #1131 的旧契约（静默忽略、召回放宽到 agent 全域）。
+    taskInvalidPolicy: "mismatch",
     headerAutoSelect: {
       enabled: true,
       teamHeader: "x-team-id",
@@ -284,6 +287,7 @@ function parseUpstreamAgents(
 export function validateAutoConversationConfig(
   cfg:
     | {
+        enabled?: boolean;
         ttlMinutes?: number;
         deterministicBucketMinutes?: number;
         strategy?: string;
@@ -294,6 +298,17 @@ export function validateAutoConversationConfig(
     | undefined,
 ): void {
   if (!cfg) return;
+  // 多实例 / 多 pod 安全：签名密钥必须由环境变量注入且各实例一致。
+  // 未设置时 auto-session.ts 会退化成"每次启动随机生成"——单进程安全，
+  // 但其他实例签发的 auto-* ID 会因签名不符被判为伪造（deterministic 也救不了：
+  // 派生与签名共用同一密钥）。这里显式告警，而不是静默降级。
+  if (cfg.enabled === true && !process.env.TDAI_SESSION_SIGNING_KEY) {
+    console.warn(
+      "[config] TDAI_SESSION_SIGNING_KEY 未设置：autoConversationId 的 HMAC 签名密钥将在本进程内随机生成。"
+        + "单实例部署可忽略；多实例 / 多 pod 部署必须为所有实例注入同一个密钥，"
+        + "否则其他实例签发的 auto-* 会话 ID 会被判为伪造（scopeRejected/ghostRejected）。",
+    );
+  }
   if (cfg.ttlMinutes !== undefined && (!Number.isInteger(cfg.ttlMinutes) || cfg.ttlMinutes <= 0)) {
     throw new Error(`autoConversationId.ttlMinutes 必须是正整数，当前值: ${cfg.ttlMinutes}`);
   }
@@ -532,6 +547,9 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       ...DEFAULT_CONFIG.sessionInit.taskMissingPolicyByAgent,
       ...(yaml.sessionInit?.taskMissingPolicyByAgent ?? {}),
     },
+    taskInvalidPolicy: yaml.sessionInit?.taskInvalidPolicy === "ignore"
+      ? "ignore"
+      : DEFAULT_CONFIG.sessionInit.taskInvalidPolicy,
     skipAssetConfirm: yaml.sessionInit?.skipAssetConfirm ?? DEFAULT_CONFIG.sessionInit.skipAssetConfirm,
     headerAutoSelect: {
       enabled: yaml.sessionInit?.headerAutoSelect?.enabled ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.enabled,

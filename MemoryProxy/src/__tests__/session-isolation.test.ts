@@ -1,7 +1,7 @@
 /**
  * 会话隔离与容量控制的用例：scope 维度隔离、LRU 淘汰、决策计数。
  */
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import {
   resolveOrCreateSessionId,
   pruneExpiredSessions,
@@ -322,10 +322,12 @@ describe("确定性会话 ID（deterministic）", () => {
     __setAutoSessionNow(() => Date.now());
   });
 
-  it("同 (key, scope, fp, epoch)：Map 清空（模拟重启/另一实例）后仍收敛到同一 sid", () => {
+  it("同 (key, scope, fp, epoch)：同进程清空 Map（模拟重启）后仍收敛到同一 sid", () => {
     const cfg = { enabled: true, ttlMinutes: 30, deterministic: true } as const;
     const a = resolveOrCreateSessionId(null, "k", cfg, "fp-a", "th-1");
     expect(a.sessionId).toMatch(/^auto-[0-9a-f]{16}-/);
+    // 注意：这里只清空进程内 Map，签名密钥仍是同一个进程级常量 —— 跨实例的真实
+    // 行为见下一个 describe（密钥不共享时 deterministic 也收敛不了）。
     __resetAutoSessionForTests(); // 模拟进程重启 / 冷 pod
     const b = resolveOrCreateSessionId(null, "k", cfg, "fp-a", "th-1");
     expect(b.sessionId).toBe(a.sessionId);
@@ -361,6 +363,74 @@ describe("确定性会话 ID（deterministic）", () => {
     const cfgB = { ...cfgA, ttlMinutes: 45 } as const; // ttl 变更但桶宽钉住
     const b = resolveOrCreateSessionId(null, "k", cfgB, "fp-a", "th-1");
     expect(b.sessionId).toBe(a.sessionId);
+  });
+});
+
+/**
+ * 跨实例 / 跨进程：`TDAI_SESSION_SIGNING_KEY` 必须共享。
+ *
+ * 为什么需要这组用例：上面 deterministic 的既有用例只清空进程内 Map，签名密钥始终是
+ * 同一个进程级常量，因此**从未覆盖"两个实例密钥不同"**这条真实的多 pod 路径 ——
+ * 而 `deriveUuid` 与 `signSessionId` 都以该密钥做 HMAC，密钥不同则 uuid 与签名都不同，
+ * `verifySessionId` 先失败，根本走不到派生分支。
+ *
+ * 这里用 `vi.resetModules()` + 动态 import 造出"另一个进程"：模块级常量
+ * `SESSION_SIGNING_KEY` 会在每次 import 时按当时的环境变量重新求值。
+ */
+describe("跨实例签名密钥（TDAI_SESSION_SIGNING_KEY）", () => {
+  const cfg = { enabled: true, ttlMinutes: 30, deterministic: true } as const;
+  const KEY_ENV = "TDAI_SESSION_SIGNING_KEY";
+  let savedKey: string | undefined;
+
+  beforeEach(() => {
+    savedKey = process.env[KEY_ENV];
+    vi.resetModules();
+  });
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env[KEY_ENV];
+    else process.env[KEY_ENV] = savedKey;
+    vi.resetModules();
+  });
+
+  /** 加载一个"全新进程"的 auto-session 模块（密钥在 import 时求值）。 */
+  async function loadInstance(key: string | undefined, nowMs: number) {
+    if (key === undefined) delete process.env[KEY_ENV];
+    else process.env[KEY_ENV] = key;
+    vi.resetModules();
+    const mod = await import("../session/auto-session.js");
+    mod.__resetAutoSessionForTests();
+    mod.__setAutoSessionNow(() => nowMs);
+    return mod;
+  }
+
+  it("密钥相同 → deterministic 跨实例收敛到同一 sid", async () => {
+    const a = await loadInstance("shared-key", 1_000_000);
+    const issued = a.resolveOrCreateSessionId(null, "k", cfg, "fp-a", "th-1");
+    expect(issued.sessionId).toMatch(/^auto-[0-9a-f]{16}-/);
+
+    const b = await loadInstance("shared-key", 1_000_000);
+    const converged = b.resolveOrCreateSessionId(null, "k", cfg, "fp-a", "th-1");
+    expect(converged.sessionId).toBe(issued.sessionId);
+  });
+
+  it("密钥不同 → 另一实例签发的 sid 过不了签名校验（deterministic 也不收敛）", async () => {
+    const a = await loadInstance("key-A", 1_000_000);
+    const issued = a.resolveOrCreateSessionId(null, "k", cfg, "fp-a", "th-1");
+
+    const b = await loadInstance("key-B", 1_000_000);
+    const next = b.resolveOrCreateSessionId(issued.sessionId, "k", cfg, "fp-a", "th-1");
+    // 签名对不上 → 不能续接，按缺失重新生成一个不同的 sid
+    expect(next.sessionId).not.toBe(issued.sessionId);
+    expect(next.sessionId).toMatch(/^auto-/);
+  });
+
+  it("未设置密钥 → 每个实例各自随机（单进程可用，跨实例必失效）", async () => {
+    const a = await loadInstance(undefined, 1_000_000);
+    const issued = a.resolveOrCreateSessionId(null, "k", cfg, "fp-a", "th-1");
+
+    const b = await loadInstance(undefined, 1_000_000);
+    const next = b.resolveOrCreateSessionId(issued.sessionId, "k", cfg, "fp-a", "th-1");
+    expect(next.sessionId).not.toBe(issued.sessionId);
   });
 });
 

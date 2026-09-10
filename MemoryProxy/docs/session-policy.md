@@ -1,8 +1,11 @@
 # 会话策略：taskMissingPolicy 与 autoConversationId
 
 > 本文档对应的验收标准与自动化测试：`src/__tests__/session-acceptance.test.ts`（ACC-1..ACC-6），
-> 全量回归：`npm test`（vitest，95/95 通过；含上游基线 8 个 + 本 PR 新增 87 个，
-> 10 个测试文件）。
+> 全量回归：`npm test`（vitest，本分支 **10 个测试文件 / 91 个用例全过**）。
+>
+> 说明：基线 `feat/server_team` 上**不含任何测试文件**（上游 v2.0.2-beta.1 删掉了自带用例，
+> 基线上 `npm test` 是 `exit 1  No test files found`），因此这 91 个用例**全部**由本 PR 带入，
+> 不存在"上游基线 8 个"。
 
 ## 背景
 
@@ -25,7 +28,7 @@ CC / Codex / WorkBuddy 等客户端自带会话 ID 和 task 选择，而 OpenCla
 |---|---|---|
 | team + agent + task | 绑定 task | Agent 级 + Task 级记忆/skill |
 | team + agent（无 task） | 按策略注册，不绑定 task | 仅 Agent 级记忆/skill |
-| team + agent + 无效 task | 按 onMismatch 处理（默认 bypass），非静默忽略 | — |
+| team + agent + 无效 task | 默认按 onMismatch 处理；配 `taskInvalidPolicy: ignore` 则忽略该 task 继续注册 | — |
 
 ### 配置（`MemoryProxy/config.example.yaml` → `sessionInit`）
 
@@ -33,6 +36,7 @@ CC / Codex / WorkBuddy 等客户端自带会话 ID 和 task 选择，而 OpenCla
 sessionInit:
   taskMissingPolicy: reject      # reject（全局默认）/ default / skip
   defaultTaskId: default         # policy=default 时的占位 task_id
+  taskInvalidPolicy: mismatch    # mismatch（默认）/ ignore（退回上游 #1131 旧契约）
   # 按客户端覆盖（未列出的客户端走全局策略）：
   taskMissingPolicyByAgent:
     openclaw: skip
@@ -47,6 +51,23 @@ sessionInit:
 
 生产默认：全局为 `reject`，仅 OpenClaw / Hermes 放宽为 `skip`；其余客户端
 （CC / Codex / WorkBuddy 等）保持严格，避免缺 task 时误绑定团队资产。
+
+### `taskInvalidPolicy`：与上游 #1131 的差异（有意，且可配）
+
+"无效 task"（显式传了 `x-task-id` 但查不到，典型是 stale 或跨 team 复用）与"缺 task"
+是两件事。上游 #1131（`feat/task-optional-memory`）**明确规定前者不得阻断注册**：
+kernel 把 `taskId` 当可选业务维度（`isolation.ts`），缺失只是把召回放宽到 agent 全域，
+静默忽略可以避免存量客户端被表单打断。
+
+本方案默认改为报 mismatch（让用户当场重选），这是**有意的行为变更**，因此做成可配：
+
+| `taskInvalidPolicy` | 行为 | 适用 |
+|---|---|---|
+| `mismatch`（默认） | `hadMismatch=true`、`mismatchReason="invalid-task"` → 走 `headerAutoSelect.onMismatch` | 希望用户当场纠正 stale task |
+| `ignore` | 丢弃该 task、继续注册（`taskId` 保持 undefined，召回放宽到 agent 全域） | 存量部署平滑升级，等价 #1131 旧契约 |
+
+> 升级提示：如果已有客户端会长期回传历史 task_id，把 `taskInvalidPolicy` 设为 `ignore`
+> 可保持 #1131 的行为不变；否则它们会从"静默放宽召回"变成"被弹表单 / bypass"。
 
 ## 2. autoConversationId：会话 ID 自动管理
 
@@ -85,6 +106,28 @@ sessionInit:
 **多节点部署需换成 Redis**，接口已收敛在 `resolveOrCreateSessionId`。
 
 显式会话 header 始终优先，自动生成只在缺失时触发 → 完全向后兼容。
+
+### 多实例部署：`TDAI_SESSION_SIGNING_KEY` 必须共享
+
+`auto-*` 会话 ID 带 HMAC 签名（`auto-<签名>-<uuid>`），签名密钥取自环境变量
+`TDAI_SESSION_SIGNING_KEY`；**未设置时在每个进程内随机生成**（`randomUUID()`）。
+
+| 部署形态 | 是否必须设置 | 不设置的后果 |
+|---|---|---|
+| 单实例 / 单进程 | 否（重启后旧 auto-* ID 失效，按缺失重新生成，安全） | 仅多一次会话重建 |
+| 多实例 / 多 pod | **必须**，且所有实例同值 | 其他实例签发的 auto-* ID 签名校验失败，被记 `scopeRejected`/`ghostRejected`，会话身份跨实例丢失 |
+
+注意 `deterministic: true` **不能**替代共享密钥：`deriveUuid` 与 `signSessionId` 都以
+该密钥做 HMAC，密钥不同则 uuid 与签名都不同，`verifySessionId` 先失败，根本走不到派生
+分支。也就是说 deterministic 省掉的是"共享**状态**"，省不掉"共享**密钥**"。
+
+proxy 启动时（`validateAutoConversationConfig`）会在 `autoConversationId.enabled=true`
+且未设置该变量时打印告警。生成与挂载方式：
+
+```bash
+openssl rand -hex 32        # 生成一次，所有实例复用
+export TDAI_SESSION_SIGNING_KEY=<上一步输出>
+```
 
 ## 3. 验收标准 ↔ 自动化用例
 
