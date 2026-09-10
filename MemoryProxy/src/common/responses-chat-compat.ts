@@ -20,9 +20,15 @@
  */
 
 import { createSseFrameParser, type SseFrameParser } from "./sse.js";
-import { recordConversion, recordStream, recordCacheUsage } from "./protocol-stats.js";
+import { recordConversion, recordStream, recordCacheUsage, recordDrop } from "./protocol-stats.js";
 
 // ── 工具函数 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 输出 token 上限的默认值。历史行为是硬编码智谱的 32768；现在改为
+ * 「默认值 + 可覆盖」，并且真正触发截断时计入 /metrics（不再静默变小）。
+ */
+export const DEFAULT_MAX_TOKENS_CAP = 32768;
 
 function randomId(): string {
   const hex = Math.random().toString(16).slice(2, 10) + Date.now().toString(16).slice(-4);
@@ -127,7 +133,7 @@ function mergeMessages(messages: ChatMessage[]): ChatMessage[] {
  */
 export function responsesBodyToChat(
   body: Record<string, unknown>,
-  opts?: { model?: string },
+  opts?: { model?: string; maxTokensCap?: number },
 ): Record<string, unknown> {
   const _t0 = performance.now();
   // opts.model 为 Proxy 解析后的上游模型名（使用者自定义）；
@@ -286,8 +292,11 @@ export function responsesBodyToChat(
         ? body.max_completion_tokens
         : undefined;
   if (typeof maxTokens === "number" && maxTokens >= 1) {
-    // 智谱只接受 [1, 32768]；0 / 负数表示"不限制"，直接不传让上游用默认值
-    chat.max_tokens = Math.min(maxTokens, 32768);
+    // 0 / 负数表示"不限制"，直接不传让上游用默认值。
+    // 超上限时截断并**计数**：默认 32768 沿用智谱口径，调用方可用 maxTokensCap 覆盖。
+    const cap = opts?.maxTokensCap ?? DEFAULT_MAX_TOKENS_CAP;
+    if (maxTokens > cap) recordDrop("responses_body_to_chat", "max_tokens_clamped");
+    chat.max_tokens = Math.min(maxTokens, cap);
   }
 
   if (typeof body.temperature === "number") chat.temperature = body.temperature;
@@ -887,7 +896,7 @@ function chatContentParts(content: unknown): { text: string; images: string[] } 
  */
 export function chatBodyToResponses(
   body: Record<string, unknown>,
-  opts?: { model?: string },
+  opts?: { model?: string; maxTokensCap?: number },
 ): Record<string, unknown> {
   const _t0 = performance.now();
   const model = opts?.model ?? (typeof body.model === "string" ? body.model : undefined);
@@ -1011,9 +1020,11 @@ export function chatBodyToResponses(
     }
   }
 
-  // Chat max_tokens → Responses max_output_tokens（保留智谱上限钳制）
+  // Chat max_tokens → Responses max_output_tokens（默认保留智谱上限，可覆盖，截断计数）
   if (typeof body.max_tokens === "number" && body.max_tokens >= 1) {
-    out.max_output_tokens = Math.min(body.max_tokens, 32768);
+    const cap = opts?.maxTokensCap ?? DEFAULT_MAX_TOKENS_CAP;
+    if (body.max_tokens > cap) recordDrop("chat_body_to_responses", "max_tokens_clamped");
+    out.max_output_tokens = Math.min(body.max_tokens, cap);
   }
   if (typeof body.temperature === "number") out.temperature = body.temperature;
   if (typeof body.top_p === "number") out.top_p = body.top_p;

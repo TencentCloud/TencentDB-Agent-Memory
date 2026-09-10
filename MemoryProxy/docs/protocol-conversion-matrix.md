@@ -1,9 +1,10 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 转换层回归：`npm test`（vitest，102/102 通过：protocol-conformance 61、responses-anthropic-compat 13、
-> sse 8、sse-fuzz 4、protocol-stats 4、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3））。
-> 协议接线分支全量：`npm test` 126/126（转换层 102 + token-estimate 7 + protocol-errors 5 + probe 12）。
+> 转换层回归：`npm test`（vitest，109/109 通过：protocol-conformance 61、responses-anthropic-compat 13、
+> sse 8、sse-fuzz 4、protocol-stats 4、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3）、
+> 注入×转换接缝 7（injection-protocol-conversion：注入内容跨协议存活/可缓存前缀位/cache_control 不泄漏/确定性））。
+> 协议接线分支全量：`npm test` 131/131（转换层 109 + token-estimate 7 + protocol-errors 5 + probe 17）。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
@@ -155,8 +156,11 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 - **Responses 会话状态/compact 端点**：`input/output_conversation_state`、`/responses/compact` 依赖
   Responses 原生会话状态语义，Responses→Chat/Anthropic 转换路径无法映射，仅支持 Responses 上游
   直连；转换场景下应在接入层显式报“不支持该端点”而不是透传 404。
-- **Responses→Chat 输出上限钳制**：`responses-chat-compat.ts` 对 `max_output_tokens` 保留智谱 32768 上限（`Math.min`），
-  超过 32768 的请求会被截断；该常量写在通用转换层，属厂商兼容性取舍，若需通用化应移到 per-upstream 配置。
+- **Responses→Chat 输出上限钳制**：`responses-chat-compat.ts` 对 `max_output_tokens` / `max_tokens`
+  默认按智谱口径钳到 32768（`DEFAULT_MAX_TOKENS_CAP`）；调用方可用 `opts.maxTokensCap` 按
+  上游覆盖（不传即沿用历史默认）。**截断不再静默**：真正发生钳制时会计入
+  `/metrics` 的丢弃参数计数（`max_tokens_clamped`），便于发现"请求被悄悄改小"。
+  若后续要做成 per-upstream 配置，只需在 handler 接线处传入 `maxTokensCap`。
 - **协议无对位参数**（logprobs / penalty / seed / top_k / thinking 等）：通过 `onDropped`
   显式上报，调用方可记录；默认静默但可观测。
 - **结构化输出到 Anthropic 侧**：Anthropic Messages 无 `response_format` / `text.format`

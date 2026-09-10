@@ -457,6 +457,11 @@ export interface ProxyConfig {
     autoDetect?: {
       enabled?: boolean;
       timeoutMs?: number;
+      /**
+       * 探测请求使用的模型名。默认占位符 `ping`；建议配成该上游真实模型名，
+       * 否则「未知模型 → 404」会被误判成「端点不存在」（见 capability-probe.ts）。
+       */
+      probeModel?: string;
     };
   };
   log: {
@@ -797,9 +802,10 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
-    autoDetect?: {
+   autoDetect?: {
       enabled?: boolean;
       timeoutMs?: number;
+      probeModel?: string;
     };
     /** Per-agent override map. See `AgentUpstreamEntry`. */
     agents?: Record<

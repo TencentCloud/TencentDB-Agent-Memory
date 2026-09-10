@@ -12,7 +12,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     url: DEFAULT_UPSTREAM,
     apiKey: "",
     agents: {},
-    autoDetect: { enabled: false, timeoutMs: 3000 },
+    autoDetect: { enabled: false, timeoutMs: 3000, probeModel: "ping" },
   },
   log: {
     file: "",
@@ -348,6 +348,10 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         timeoutMs: typeof yaml.upstream?.autoDetect?.timeoutMs === "number"
           ? yaml.upstream.autoDetect.timeoutMs
           : DEFAULT_CONFIG.upstream.autoDetect!.timeoutMs,
+        probeModel: typeof yaml.upstream?.autoDetect?.probeModel === "string"
+          && yaml.upstream.autoDetect.probeModel.trim().length > 0
+          ? yaml.upstream.autoDetect.probeModel.trim()
+          : DEFAULT_CONFIG.upstream.autoDetect!.probeModel,
       },
     },
     log: {

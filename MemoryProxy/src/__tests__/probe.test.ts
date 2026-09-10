@@ -3,6 +3,7 @@ import {
   resolveAgentModes,
   resolveAgentModesFor,
   agentsToAutoDetect,
+  unroutableNativeProtocols,
 } from "../upstream/capability-probe.js";
 import { probeCapabilities } from "../upstream/capability-probe.js";
 
@@ -145,5 +146,80 @@ describe("probeCapabilities（URL 探测形态兼容）", () => {
     expect(calls).toContain("https://up.example.com/v2/chat/completions");
     expect(calls).toContain("https://up.example.com/v2/responses");
     expect(calls).toContain("https://up.example.com/v2/messages");
+  });
+});
+
+describe("probeEndpoint（鉴权头与探测模型）", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const installCaptureMock = (): Array<{
+    url: string;
+    headers: Record<string, string>;
+    body: string;
+  }> => {
+    const reqs: Array<{ url: string; headers: Record<string, string>; body: string }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      reqs.push({
+        url: String(input),
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: String(init?.body ?? ""),
+      });
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    return reqs;
+  };
+
+  it("Anthropic 探测用 x-api-key + anthropic-version，OpenAI 家族用 Bearer", async () => {
+    const reqs = installCaptureMock();
+    await probeCapabilities("https://up.example.com/v1", "sk-test", 50);
+
+    const anthropicReq = reqs.find((r) => r.url.endsWith("/v1/messages"));
+    expect(anthropicReq?.headers["x-api-key"]).toBe("sk-test");
+    expect(anthropicReq?.headers["anthropic-version"]).toBe("2023-06-01");
+    expect(anthropicReq?.headers.authorization).toBeUndefined();
+
+    const chatReq = reqs.find((r) => r.url.endsWith("/chat/completions"));
+    expect(chatReq?.headers.authorization).toBe("Bearer sk-test");
+  });
+
+  it("探测模型名可配置（避开『未知模型 → 404』被误判成端点不存在）", async () => {
+    const reqs = installCaptureMock();
+    await probeCapabilities("https://up.example.com/v1", "sk-test", 50, "glm-4.6");
+    expect(reqs.length).toBeGreaterThan(0);
+    for (const r of reqs) expect(r.body).toContain('"model":"glm-4.6"');
+    expect(reqs.map((r) => r.body).join()).not.toContain('"model":"ping"');
+  });
+});
+
+describe("unroutableNativeProtocols（启动期『无路可走』告警）", () => {
+  it("Responses-only 上游：chat 原生客户端无路可走（无 chat→Responses 实现）", () => {
+    expect(
+      unroutableNativeProtocols("workbuddy", {
+        chat: false,
+        responses: true,
+        anthropic: false,
+      }),
+    ).toEqual(["chat"]);
+  });
+
+  it("三协议全支持 / 有可用转换方向时均不告警", () => {
+    expect(
+      unroutableNativeProtocols("codex", { chat: false, responses: true, anthropic: false }),
+    ).toEqual([]);
+    expect(
+      unroutableNativeProtocols("codex", { chat: false, responses: false, anthropic: true }),
+    ).toEqual([]);
+    expect(
+      unroutableNativeProtocols("claude-code", { chat: true, responses: false, anthropic: false }),
+    ).toEqual([]);
+  });
+
+  it("未知客户端不判定（等显式配置）", () => {
+    expect(
+      unroutableNativeProtocols("mystery", { chat: false, responses: false, anthropic: false }),
+    ).toEqual([]);
   });
 });
