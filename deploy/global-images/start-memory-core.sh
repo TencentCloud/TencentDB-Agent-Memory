@@ -54,8 +54,81 @@ if ! $DOCKER network inspect "$NETWORK" >/dev/null 2>&1; then
   $DOCKER network create "$NETWORK" >/dev/null
 fi
 
-pull_image "$MEMORY_CORE_IMAGE"
-rm_container_if_exists "$CONTAINER"
+# ── 存储后端：sqlite（默认）/ mongodb ─────────────────────────────────────
+# MEMORY_CORE_STORE_MODE=mongodb 时数据面走 MongoDB（L0/L1/profile/skill +
+# mongot 原生 BM25）。要求目标 Mongo 7.0+ 且带 mongot —— core 首次建连会拨测，
+# 无 mongot 直接 init 报错（FTS 是刚需，不静默降级）。
+#   MONGODB_ENDPOINT 已设   → 用外部 Mongo（Atlas 或自建带 mongot 的副本集）
+#   MONGODB_ENDPOINT 未设   → 自动在同网络起一个 mongodb-atlas-local 容器
+#                             （mongod + mongot 一体，数据卷 mongo-local-* 持久化）
+#
+# 元数据后端（meta_* 团队/用户/agent/task/ACL）：
+#   MEMORY_CORE_METADATA_BACKEND=auto（默认，跟随 STORE_MODE）/ sqlite / mongodb
+#   mongodb 时默认复用同一个 Mongo（TDAI_METADATA_MONGO_URI 可另行覆盖）；
+#   元数据用多文档事务，目标必须是副本集（atlas-local 单节点 RS 满足）。
+MEMORY_CORE_STORE_MODE="${MEMORY_CORE_STORE_MODE:-sqlite}"
+MEMORY_CORE_METADATA_BACKEND="${MEMORY_CORE_METADATA_BACKEND:-auto}"
+MONGODB_DATABASE="${MONGODB_DATABASE:-tdai_memory}"
+MONGO_LOCAL_CONTAINER="${MONGO_LOCAL_CONTAINER:-tdai-mongo-local}"
+MONGO_LOCAL_IMAGE="${MONGO_LOCAL_IMAGE:-mongodb/mongodb-atlas-local:8.3}"
+MONGO_ENV_ARGS=()
+
+if [[ "$MEMORY_CORE_METADATA_BACKEND" == "auto" ]]; then
+  if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" ]]; then
+    MEMORY_CORE_METADATA_BACKEND="mongodb"
+  else
+    MEMORY_CORE_METADATA_BACKEND="sqlite"
+  fi
+fi
+
+if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" || "$MEMORY_CORE_METADATA_BACKEND" == "mongodb" ]]; then
+  if [[ -z "${MONGODB_ENDPOINT:-}" ]]; then
+    info "未设 MONGODB_ENDPOINT → 启动本地 atlas-local（$MONGO_LOCAL_IMAGE）"
+    if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "$MONGO_LOCAL_CONTAINER"; then
+      rm_container_if_exists "$MONGO_LOCAL_CONTAINER"
+      # --hostname 必须固定：atlas-local 用容器主机名初始化单节点 RS 成员。
+      # 不固定时容器重建 → 主机名变化 → RS 配置里的旧成员名失配 → 永远无 primary
+      # （not primary / ReplicaSetNoPrimary），只能清卷重来。
+      $DOCKER run -d --name "$MONGO_LOCAL_CONTAINER" \
+        --hostname mongo-search \
+        --network "$NETWORK" \
+        --network-alias mongo-search \
+        -v mongo-local-db:/data/db \
+        -v mongo-local-configdb:/data/configdb \
+        -v mongo-local-mongot:/data/mongot \
+        "$MONGO_LOCAL_IMAGE" >/dev/null
+    fi
+    info "等待 mongo 就绪..."
+    mongo_ready=0
+    for _ in $(seq 1 30); do
+      # ping 在 RS 无 primary 时也会成功 —— 必须等到 isWritablePrimary，
+      # 否则 core 会在 RS 选举完成前启动，启动期 ensureIndex/事务全部报错。
+      if $DOCKER exec "$MONGO_LOCAL_CONTAINER" mongosh --quiet --eval \
+          'if (db.adminCommand("hello").isWritablePrimary === true) quit(0); else quit(1)' >/dev/null 2>&1; then
+        mongo_ready=1; break
+      fi
+      sleep 2
+    done
+    [[ "$mongo_ready" == "1" ]] || die "mongo 容器 60s 内未就绪，docker logs $MONGO_LOCAL_CONTAINER 排查"
+    ok "mongo 就绪（容器 $MONGO_LOCAL_CONTAINER，网络内别名 mongo-search）"
+    MONGODB_ENDPOINT="mongodb://mongo-search:27017/?directConnection=true"
+  fi
+fi
+
+if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" ]]; then
+  MONGO_ENV_ARGS+=( -e "MONGODB_ENDPOINT=$MONGODB_ENDPOINT" -e "MONGODB_DATABASE=$MONGODB_DATABASE" )
+  info "memory-core 数据面后端 = mongodb（endpoint=$MONGODB_ENDPOINT, db=$MONGODB_DATABASE）"
+fi
+
+if [[ "$MEMORY_CORE_METADATA_BACKEND" == "mongodb" ]]; then
+  # 元数据默认与数据面共用同一 Mongo 实例（不同库：{prefix}_{instance_id}，默认前缀 tdai_metadata）。
+  # 注意：元数据 client 自建、不经共享连接池，且不继承数据面的 w:1（事务持久性依赖服务端默认 majority）。
+  TDAI_METADATA_MONGO_URI="${TDAI_METADATA_MONGO_URI:-$MONGODB_ENDPOINT}"
+  MONGO_ENV_ARGS+=( -e "TDAI_METADATA_MONGO_URI=$TDAI_METADATA_MONGO_URI" )
+  info "memory-core 元数据后端 = mongodb（uri=$TDAI_METADATA_MONGO_URI, 库名 tdai_metadata_<instance>）"
+else
+  info "memory-core 元数据后端 = sqlite（容器 volume 内）"
+fi
 
 # ── 准备 gateway config.yaml，挂到容器 /data/config/tdai-gateway.yaml ──
 # 默认镜像里没 config，memory-core 走编译时的默认（skill / knowledge 模块关闭）。
@@ -105,10 +178,11 @@ llm:
   timeoutMs: 300000
 
 memory:
-  # promptMode: chat（默认，通用聊天/教学场景）| code（代码工程场景，
-  # LLM 会重点抽"改了什么/发现什么问题/工具用法"，普通聊天可能抽出 0 条）
+  # promptMode: code（默认，代码工程场景，抽取项目事实/任务/决策/SOP/禁忌等团队共享记忆）
+  #           | chat（通用聊天/教学场景，抽取 persona/episodic/instruction 个人记忆）
   # 通过 .env 里 MEMORY_PROMPT_MODE 覆盖。
-  promptMode: ${MEMORY_PROMPT_MODE:-chat}
+  # 注意：code 模式下，纯闲聊对话可能抽出 0 条记忆（LLM 认为没有可沉淀的工程内容）。
+  promptMode: ${MEMORY_PROMPT_MODE:-code}
   capture: { enabled: true }
   extraction:
     enabled: true
@@ -130,7 +204,9 @@ memory:
     scoreThreshold: 0.3
     strategy: hybrid
     timeoutMs: 5000
-  storeBackend: sqlite
+  # gateway 形态下存储后端实际由 STORE_MODE 环境变量决定（见 docker run -e STORE_MODE），
+  # 此处保持同值仅为可读性；插件/SDK 形态才读这个字段。
+  storeBackend: ${MEMORY_CORE_STORE_MODE}
   embedding:
     provider: none
 
@@ -157,6 +233,9 @@ YAML
   chmod 600 "$CORE_CONFIG_FILE"
 fi
 
+pull_image "$MEMORY_CORE_IMAGE"
+rm_container_if_exists "$CONTAINER"
+
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
@@ -168,6 +247,8 @@ $DOCKER run -d --name "$CONTAINER" \
   -e TDAI_GATEWAY_HOST=0.0.0.0 \
   -e TDAI_GATEWAY_API_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
   -e TDAI_DATA_DIR=/data/tdai-memory \
+  -e STORE_MODE="$MEMORY_CORE_STORE_MODE" \
+  ${MONGO_ENV_ARGS[@]+"${MONGO_ENV_ARGS[@]}"} \
   "$MEMORY_CORE_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90
@@ -208,7 +289,7 @@ verify_user_key() {
   [[ "$code" == "200" ]]
 }
 
-info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → $ADMIN_KEY_FILE）..."
+info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → ${ADMIN_KEY_FILE}）..."
 
 # 生成随机 key（首次 init-admin 用；若之前有 file 就复用）
 if [[ -s "$ADMIN_KEY_FILE" ]]; then

@@ -191,11 +191,17 @@ function extractAgentTaskFromJson(content: string): { agentText: string | null; 
 /**
  * 轮1 提取：从用户答复中识别选定的 team_id。
  * Claude Code: 用户选择在 `role: "tool"` 消息中，走 JSON 解析。
+ *
+ * 返回值（对齐 extractTaskFromOptionText 三档姿势）：
+ *   - team_id string：命中真实 team
+ *   - MORE_MARKER：用户点了 "更多 →"，调用方翻页（team 分页 2026-09-03 新增）
+ *   - BYPASS_MARKER：用户选 SKIP / declined
+ *   - null：未识别
  */
 export function extractTeamFromOptionText(
   content: string,
   cachedTeams: TeamOption[],
-): string | null {
+): string | typeof MORE_MARKER | typeof BYPASS_MARKER | null {
   if (cachedTeams.length === 0) return null;
 
   // 先检查是否是拒绝/跳过（Chat about this / declined）
@@ -208,6 +214,11 @@ export function extractTeamFromOptionText(
   // 检测"本次不关联"→ bypass
   if (teamText && (teamText.includes(SKIP_LABEL) || SKIP_RE.test(teamText.trim()))) {
     return BYPASS_MARKER;
+  }
+
+  // 检测 "更多 →" → 翻页 (与 extractFromOptionText / extractTaskFromOptionText 一致)
+  if (teamText && teamText.includes(MORE_LABEL)) {
+    return MORE_MARKER;
   }
 
   // 匹配策略
@@ -326,7 +337,7 @@ export function extractTaskFromOptionText(
   if (answer.includes(MORE_LABEL)) return MORE_MARKER;
 
   // 兼容旧表单：用户手打 "跳过 / skip / 不关联" → 显式 bypass。注意：defaultTaskId
-  // 虚拟条目的 label 是"本次不关联任务"，SKIP_RE 会命中，所以先尝试正常匹配
+  // 虚拟条目的 label 是"暂时跳过"，SKIP_RE 会命中，所以先尝试正常匹配
   // 再走 bypass。
   const taskId = matchTaskInTeam(answer, team);
   if (taskId) return taskId;

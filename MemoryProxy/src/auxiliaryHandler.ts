@@ -30,6 +30,11 @@ import { log } from "./report/log.js";
 import { verifyUserKey } from "./auth.js";
 import { matchSystemUserByUserId, hasSystemUsers } from "./systemUser.js";
 import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
+import {
+  getInstanceUpstreamConfigs,
+  resolveUpstreamConfig,
+  shouldOverride,
+} from "./instance-upstream-cache.js";
 
 /** Hop-by-hop headers 与 host header：不能透传到 upstream。 */
 const SKIP_REQUEST_HEADERS = new Set([
@@ -211,10 +216,31 @@ export async function handleAuxiliaryEndpoint(
   const modelId = extractModelId(bodyText);
 
   // 3. 拼接 upstream URL（复用 joinUrl，天然消费白名单表）
-  const upstreamUrl = joinUrl(config.upstream.url, c.req.path);
+  let upstreamUrl = joinUrl(config.upstream.url, c.req.path);
 
   // 4. 构造上游请求头（按端点协议注入鉴权）
   const upstreamHeaders = buildAuxUpstreamHeaders(c, config, entry);
+
+  // ── Instance upstream config override (aux requests follow conversation config) ──
+  {
+    const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
+    const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId);
+    const agentFromPath = c.req.path.split("/").filter(Boolean)[0] ?? undefined;
+    const convCfg = resolveUpstreamConfig(instanceConfigs, agentFromPath, "conversation");
+    if (shouldOverride(convCfg)) {
+      upstreamUrl = joinUrl(convCfg.base_url, c.req.path);
+      if (convCfg.mode === "custom_unified" && convCfg.api_key) {
+        if (entry.protocol === "anthropic") {
+          upstreamHeaders["x-api-key"] = convCfg.api_key;
+          delete upstreamHeaders["authorization"];
+        } else {
+          upstreamHeaders["authorization"] = `Bearer ${convCfg.api_key}`;
+          delete upstreamHeaders["x-api-key"];
+        }
+      }
+      // custom_passthrough: keep client's original auth header
+    }
+  }
 
   // 5. Pipeline log（简化：只发关键事件）
   const pipe = createPipeline(config, traceId, modelId);

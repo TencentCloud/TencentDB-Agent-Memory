@@ -21,7 +21,7 @@
     {
       "id": "mem-xxxxxxxx",
       "name": "我的 Memory 实例",
-      "gateway_endpoint": "https://memory.ap-shanghai.tencenttdai.com",
+      "gateway_endpoint": "<your-gateway>.ap-shanghai",
       "api_key": "your-gateway-api-key"
     }
   ]
@@ -44,7 +44,7 @@ KS 的 Wiki ingest / 总结等能力会调用大模型，默认走 Memory 提供
 
 `KNOWLEDGE_LLM_PROXY_BASE_URL` 与上面的 `gateway_endpoint` **是同一个地址**：从 Memory 控制台拿到的 Gateway 地址。例如上海地域：
 
-`https://memory.ap-shanghai.tencenttdai.com`
+`<your-gateway>.ap-shanghai`
 
 （其它地域按控制台实际地址填写。）
 
@@ -60,7 +60,7 @@ docker run -d --name memory-hub \
   -v memory-hub:/data/knowledge \
   -v /path/to/metadata-instances.json:/app/panel/config/metadata-instances.json:ro \
   -e KNOWLEDGE_PUBLIC_BASE_URL=http://10.2.3.4:8424/v3 \
-  -e KNOWLEDGE_LLM_PROXY_BASE_URL=https://memory.ap-shanghai.tencenttdai.com \
+  -e KNOWLEDGE_LLM_PROXY_BASE_URL=<your-gateway>.ap-shanghai \
   agentmemory/memory-hub:latest
 ```
 

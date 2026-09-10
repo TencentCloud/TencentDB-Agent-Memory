@@ -539,3 +539,51 @@ export interface ListConfigParamsFilter {
   userId?: string;
   paramNames?: string[];
 }
+
+// ============================
+// InstanceUpstreamConfig 类型
+// ============================
+
+/** 配置类型：conversation（用户对话模型）或 extraction（记忆/Skill 抽取模型）。 */
+export type UpstreamConfigType = "conversation" | "extraction";
+
+/** 转发模式：official（官方主模型）、custom_unified（自定义+统一Key）、custom_passthrough（自定义+用户自带Key）。 */
+export type UpstreamConfigMode = "official" | "custom_unified" | "custom_passthrough";
+
+/** 实例上游配置行（存储层实体）。 */
+export interface InstanceUpstreamConfigEntity {
+  id: number;
+  /** Agent 标识。当前阶段固定 "default"，预留 per-agent 扩展。 */
+  agent_source: string;
+  /** 配置类型。 */
+  type: UpstreamConfigType;
+  /** 转发模式。extraction 不支持 custom_passthrough。 */
+  mode: UpstreamConfigMode;
+  /** 自定义 LLM 上游 URL。official 模式下为空串。 */
+  base_url: string;
+  /** API Key（明文存储）。仅 custom_unified 模式有意义。 */
+  api_key: string;
+  /** 可选：强制覆盖请求中的 model_id；空串 = 透传。 */
+  model_id: string;
+  /** 管理备注。 */
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 写入/更新输入。 */
+export interface UpsertInstanceUpstreamConfigInput {
+  agent_source?: string;
+  type?: UpstreamConfigType;
+  mode: UpstreamConfigMode;
+  base_url?: string;
+  api_key?: string;
+  model_id?: string;
+  description?: string;
+}
+
+/** 查询过滤。 */
+export interface InstanceUpstreamConfigFilter {
+  agent_source?: string;
+  type?: UpstreamConfigType;
+}

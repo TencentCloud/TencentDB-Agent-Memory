@@ -21,8 +21,10 @@ FAKE_BIN="$TMP_DIR/bin"
 mkdir -p "$FAKE_BIN"
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
+echo "$*" >> "$DOCKER_CALLS"
 case "${1:-}" in
-  network | ps | run) exit 0 ;;
+  network | run) exit 0 ;;
+  ps) echo tdai-memory-core ;;
   inspect)
     if [[ "$*" == *"State.Status"* ]]; then
       echo running
@@ -35,6 +37,7 @@ esac
 EOF
 chmod +x "$FAKE_BIN/docker"
 
+export DOCKER_CALLS="$TMP_DIR/docker-calls"
 ENV_FILE="$TMP_DIR/.env"
 CONFIG_DIR="$TMP_DIR/config"
 cat > "$ENV_FILE" <<EOF
@@ -82,9 +85,17 @@ run_start
 unset MEMORY_CORE_CONFIG_FILE
 grep -Fq 'provider: external' "$EXTERNAL_CONFIG" || fail "external config was modified"
 
-if env PATH="$FAKE_BIN:$PATH" ENV_FILE="$ENV_FILE" \
-  MEMORY_CORE_CONFIG_FILE="$TMP_DIR/missing.yaml" "$SCRIPT" >/dev/null 2>&1; then
-  fail "missing external config did not fail startup"
-fi
+# Invalid configuration must leave the existing container running.
+for external in "$TMP_DIR/missing.yaml" "$EXTERNAL_CONFIG"; do
+  : > "$DOCKER_CALLS"
+  args=()
+  [[ "$external" == "$EXTERNAL_CONFIG" ]] && args=(--force-regenerate-config)
+  if MEMORY_CORE_CONFIG_FILE="$external" run_start "${args[@]+"${args[@]}"}"; then
+    fail "invalid external config options did not fail startup"
+  fi
+  if grep -Eq '^(rm|stop|kill) ' "$DOCKER_CALLS"; then
+    fail "invalid configuration stopped the existing container"
+  fi
+done
 
 echo "[PASS] memory-core config lifecycle"

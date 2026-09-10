@@ -58,11 +58,13 @@ export type {
 // 数据访问层
 export {
   SqliteSkillStore,
+  type SqliteSkillStoreOptions,
+} from "../store/sqlite/skill-store.js";
+export {
   SkillStoreError,
   IdempotentNoOpError,
   type SkillErrorCode as SkillStoreErrorCode,
-  type SqliteSkillStoreOptions,
-} from "./skill-store.js";
+} from "./skill-store.interface.js";
 
 // 资源层
 export {
