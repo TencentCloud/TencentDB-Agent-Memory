@@ -13,6 +13,6 @@ export function isDshMetadataContent(content: unknown): boolean {
   return (
     content.startsWith("<system-reminder>") ||
     isDshRuntimeContextSnapshot(content) ||
-    content.startsWith("<skill_content")
+    /^<skill_content(?:\s[^>]*)?>/.test(content)
   );
 }

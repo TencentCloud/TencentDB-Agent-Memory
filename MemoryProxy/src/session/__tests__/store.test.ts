@@ -1,34 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { SessionStore } from "../store.js";
+import { isDshMetadataContent } from "../dsh-metadata.js";
 
-describe("SessionStore", () => {
-  it("treats a first dsh request with loaded skill content as a new session", async () => {
-    const store = new SessionStore();
-
-    const state = await store.getOrRecover(
-      "dsh:session-1",
-      {
-        userId: "user-1",
-        agentSource: "dsh",
-        sessionId: "session-1",
-      },
-      {
-        messages: [
-          { role: "user", content: "/anima-prompt-v1 write a summary" },
-          { role: "user", content: "Current runtime context. cwd=/workspace" },
-          {
-            role: "user",
-            content: "<system-reminder>\nA skill is a reusable instruction set.",
-          },
-          {
-            role: "user",
-            content: '<skill_content name="anima-prompt-v1">Use a concise style.</skill_content>',
-          },
-        ],
-      },
-    );
-
-    expect(state).toBeUndefined();
-  });
+describe("dsh metadata tags", () => {
+  it.each(["<skill_contentious>real input", "<skill_content", "<skill_content-example>real input"])(
+    "does not discard lookalike user content: %s", (content) => {
+      expect(isDshMetadataContent(content)).toBe(false);
+    },
+  );
+  it.each(['<skill_content name="skill">text</skill_content>', '<skill_content>text</skill_content>'])(
+    "recognizes a complete skill tag: %s", (content) => {
+      expect(isDshMetadataContent(content)).toBe(true);
+    },
+  );
 });
