@@ -175,6 +175,65 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Escape a single token into a safe FTS5 literal phrase.
+ *
+ * FTS5 query syntax reserves characters/keywords that, when fed raw user
+ * input, can change query semantics or trigger a syntax error (injection):
+ * quotes (`"` `'`), prefix wildcard (`*`), grouping (`(` `)`), boolean ops
+ * (`AND` `OR` `NOT`), proximity (`NEAR`), column qualifier (`:`), caret (`^`),
+ * and minus (`-`).
+ *
+ * The recommended defence is to wrap every token in double quotes so it is
+ * parsed as a *literal phrase*: inside a phrase the only character that needs
+ * escaping is the double quote itself, written as two consecutive quotes
+ * (`""`). Once quoted, all reserved characters lose their syntactic meaning
+ * and become ordinary text.
+ *
+ * We *escape* (not strip) the double quote so literal content is preserved —
+ * stripping would silently drop characters and hurt recall.
+ *
+ * @param token  A single already-tokenised term (no surrounding whitespace).
+ * @returns A double-quoted FTS5 phrase literal safe to embed in a MATCH query.
+ * @see https://www.sqlite.org/fts5.html#full_text_query_syntax
+ */
+export function sanitizeFtsToken(token: string): string {
+  // Inside an FTS5 phrase the only special character is `"` — escape it by
+  // doubling. Every other char (`* ( ) : ^ - AND OR NOT NEAR` …) is taken
+  // literally inside the quotes, neutralising injection attempts.
+  return `"${token.replaceAll('"', '""')}"`;
+}
+
+/**
+ * Whitelist-based sanitiser for raw FTS5 query input (defence-in-depth).
+ *
+ * An explicit, character-level whitelist applied to the *raw* user input
+ * *before* tokenisation. It keeps only characters that are both safe and
+ * meaningful for keyword search — letters, digits, underscore, whitespace,
+ * dot, slash and hyphen — and **drops** every FTS5 operator (`" ' * ( ) : ^`
+ * etc.) at the character level, before they can reach the query parser.
+ *
+ * This is intentionally *stricter* than `sanitizeFtsToken` (which neutralises
+ * operators by quoting them): here the operators are simply removed. Use it as
+ * an optional front-end filter for belt-and-braces protection — e.g. when the
+ * downstream tokeniser is untrusted or when policy mandates allow-list input
+ * validation.
+ *
+ * Note: keyword operators made of plain letters (`AND`/`OR`/`NOT`/`NEAR`)
+ * survive the whitelist by design — they are neutralised later by
+ * `sanitizeFtsToken`'s quoting. The two layers are complementary.
+ *
+ * @returns The cleaned string (may be empty). Feed the result into
+ *          `buildFtsQuery()` for tokenisation + phrase escaping.
+ * @see https://www.sqlite.org/fts5.html#full_text_query_syntax
+ */
+export function sanitizeFtsWhitelist(raw: string): string {
+  if (typeof raw !== "string" || raw.length === 0) return "";
+  // Keep letters, digits, underscore, whitespace, dot, slash, hyphen.
+  // Drop quotes, *, (, ), :, ^ and any other FTS5 operator → replaced by space.
+  return raw.replace(/[^\p{L}\p{N}_\s./-]/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -225,7 +284,7 @@ export function buildFtsQuery(raw: string): string | null {
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map(sanitizeFtsToken);
   return quoted.join(" OR ");
 }
 
