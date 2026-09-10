@@ -3,7 +3,7 @@
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
 > 转换层回归：`npm test`（vitest，102/102 通过：protocol-conformance 61、responses-anthropic-compat 13、
 > sse 8、sse-fuzz 4、protocol-stats 4、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3））。
-> 协议接线分支全量：`npm test` 123/123（转换层 102 + token-estimate 4 + protocol-errors 5 + probe 12）。
+> 协议接线分支全量：`npm test` 126/126（转换层 102 + token-estimate 7 + protocol-errors 5 + probe 12）。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
@@ -151,7 +151,7 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
   “内容块级无对位字段”显式跳过（不伪造 data URL / base64 语义），如需支持需上游先提供文件输入能力。
 - **辅助端点只同协议透传**：`/v1/messages/count_tokens`、`/v1/embeddings`、`/v1/completions`、
   `/v1/moderations` 走 whitelist 透传，仅在 upstream 同协议时可用；05A（Claude Code → Chat 上游）
-  下 count_tokens 预检由接线层做本地估算兜底（见协议接线 PR），不走转换器。
+  下 count_tokens 预检由接线层本地计算兜底（口径与实测偏差见下节），不走转换器。
 - **Responses 会话状态/compact 端点**：`input/output_conversation_state`、`/responses/compact` 依赖
   Responses 原生会话状态语义，Responses→Chat/Anthropic 转换路径无法映射，仅支持 Responses 上游
   直连；转换场景下应在接入层显式报“不支持该端点”而不是透传 404。
@@ -167,6 +167,39 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
   上游发送未知字段触发 400。
 
 ## 接线层实现说明（PR #1253）
+
+### count_tokens 兜底口径与实测偏差（05A / 05B：token 计算差异）
+
+Claude Code 每轮先打 `/v1/messages/count_tokens` 预检上下文用量；当上游被转成 Chat /
+Responses 时该端点不存在，由 `src/common/token-estimate.ts` 本地计算后应答
+（只用于客户端上下文条提示，**计费仍以上游 usage 为准**）。
+
+口径取 tiktoken `cl100k_base`，与仓库内既有实现对齐：
+`MemoryCore/src/offload/fast-token-estimate.ts` 声明该编码覆盖 GPT-4 / Claude /
+DeepSeek / GLM / MiniMax，`MemoryCore/src/offload-client/token-estimator.ts` 亦以
+tiktoken 为主路径。tiktoken 不可用时退回 CJK 感知启发式，保证接口不抛错、不返回 0。
+
+原实现为「序列化字符数 / 4 + 每条消息 16 字符」，实测偏差（10 类场景，真值取
+tokenizer + 4 × 消息数）：
+
+| 场景 | 旧 chars/4 | 旧偏差 | 新口径 | 新偏差 |
+|---|---|---|---|---|
+| 中文短提问（99 字符） | 36 | **−58%** | 87 | +2% |
+| 中文长文档（387 字符） | 109 | **−68%** | 343 | +1% |
+| 英文长文档（698 字符） | 186 | +42% | 133 | +2% |
+| Python 代码（775 字符） | 216 | +13% | 194 | +1% |
+| TypeScript 代码（545 字符） | 152 | +5% | 147 | +1% |
+| 工具定义 + system（685 字符） | 183 | +3% | 178 | +0% |
+| 中英混合对话（159 字符） | 97 | −19% | 129 | +8% |
+| 长会话 20 轮（1320 字符） | 558 | −50% | 1150 | +4% |
+| Claude Code 风格（1186 字符） | 322 | −41% | 548 | +0% |
+| 纯 ASCII 日志（3174 字符） | 811 | −17% | 980 | +0% |
+
+复现：`node --import tsx/esm scripts/qa/token-estimate-vs-upstream.mjs --baseline`。
+
+**已知边界**：cl100k 与 o200k 都不是「上游真值」——各厂商 tokenizer 不同，二者之差
+即跨厂商口径差（中文场景 o200k 比 cl100k 少 ~30%，脚本同时输出两个参考供对照）。
+实现取 cl100k，在中文上偏保守：宁可让客户端早提示压缩，也不要让它以为还有空间。
 
 - **请求/响应头过滤已收敛**：`MemoryProxy/src/upstream/headers.ts` 是唯一实现；
   Chat / Anthropic / Codex / WorkBuddy 四个 handler 统一从这里引入
@@ -190,10 +223,10 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 | protocol-stream-semantics.test.ts | 5 | 请求体转换的 stream:false/true 透传语义 |
 | responses-sse-completion.test.ts | 3 | 仅 output_item.done（无 delta）时兜底补发 arguments/text/summary |
 
-### 协议接线分支额外测试（计入分支全量 123）
+### 协议接线分支额外测试（计入分支全量 126）
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| token-estimate.test.ts | 4 | count_tokens 本地估算（正常/超长/异常输入归一，不抛错） |
+| token-estimate.test.ts | 7 | count_tokens 本地口径（正常/超长/异常输入归一，不抛错）+ 3 条口径回归（中文 100 字≈131、同字符数中文/ASCII 比值>8、英文 440 字≈97） |
 | protocol-errors.test.ts | 5 | 接线层协议错误/非流式路径（HTTP 状态拦截、错误体不进入转换器） |
 | probe.test.ts | 12 | autoDetect：内置客户端原生协议注册表 + 配置出现 agent 泛化 + 显式 true/false 都跳过探测 + agents 缺省 |
