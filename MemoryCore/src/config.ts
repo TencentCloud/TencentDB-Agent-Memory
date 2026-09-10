@@ -51,7 +51,7 @@ export interface ExtractionConfig {
 export interface PersonaConfig {
   /** Trigger persona generation every N new memories (default: 50) */
   triggerEveryN: number;
-  /** Max scene blocks (default: 20) */
+  /** Max scene blocks (default: 15) */
   maxScenes: number;
   /** Persona backup count (default: 3) */
   backupCount: number;
