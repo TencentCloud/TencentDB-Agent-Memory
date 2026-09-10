@@ -59,6 +59,7 @@ export interface TaskDraftUpstream {
 }
 
 export interface CreateTaskFromSessionInput extends TaskDraftUpstream {
+  userId?: string;
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -76,6 +77,7 @@ export interface CreateTaskFromSessionInput extends TaskDraftUpstream {
 }
 
 export interface UpdateTaskFromSessionInput extends TaskDraftUpstream {
+  userId?: string;
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -92,6 +94,7 @@ export interface UpdateTaskFromSessionInput extends TaskDraftUpstream {
 
 /** confirm/cancel 入参（不带 recentMessages，因为 draft 已在 pending 里） */
 export interface PendingActionInput {
+  userId?: string;
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -166,12 +169,14 @@ function resolveSession(
   sessionKey: string,
   agentSource: string,
   config: ProxyConfig,
+  spaceId: string,
+  callerUserId?: string,
 ): ResolvedSession | { error: string } {
   if (!sessionKey) return { error: "session_key is required" };
 
   const compositeKey = `${agentSource}:${sessionKey}`;
-  const store = getSessionStore();
-  const state = store.get(compositeKey);
+  const store = getSessionStore().findSession(spaceId, sessionKey, agentSource, callerUserId);
+  const state = store?.get(compositeKey);
 
   if (!state || !state.sessionInfo) {
     return { error: `Session not found: ${sessionKey}` };
@@ -274,7 +279,7 @@ async function doCreateAndBind(
     return { ok: false, error: `metadata createTask failed: ${err instanceof Error ? err.message : String(err)}` };
   }
   try {
-    await bindTaskIdToSession(input.sessionKey, input.agentSource, created.task_id);
+    await bindTaskIdToSession(input.sessionKey, input.agentSource, created.task_id, input.spaceId, resolved.userId);
   } catch (err) {
     return {
       ok: true,
@@ -294,7 +299,7 @@ async function doCreateAndBind(
 export async function createTaskFromSession(
   input: CreateTaskFromSessionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config, input.spaceId, input.userId);
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   const draftCfg = resolveTaskDraftConfig(input);
@@ -421,7 +426,7 @@ function buildFallbackTaskTitle(): string {
 export async function updateTaskFromSession(
   input: UpdateTaskFromSessionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config, input.spaceId, input.userId);
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   if (!resolved.currentTaskId) {
@@ -540,7 +545,7 @@ export async function updateTaskFromSession(
 export async function confirmPendingTaskAction(
   input: PendingActionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config, input.spaceId, input.userId);
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   const key = pendingKeyOf(resolved, input.agentSource, input.sessionKey);
@@ -605,7 +610,7 @@ export async function confirmPendingTaskAction(
 export async function cancelPendingTaskAction(
   input: PendingActionInput,
 ): Promise<TaskFromSessionResult> {
-  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
+  const resolved = resolveSession(input.sessionKey, input.agentSource, input.config, input.spaceId, input.userId);
   if ("error" in resolved) return { success: false, error: resolved.error };
 
   const key = pendingKeyOf(resolved, input.agentSource, input.sessionKey);
@@ -619,9 +624,11 @@ async function bindTaskIdToSession(
   sessionKey: string,
   agentSource: string,
   taskId: string,
+  spaceId: string,
+  userId: string,
 ): Promise<void> {
   const compositeKey = `${agentSource}:${sessionKey}`;
-  const store = getSessionStore();
+  const store = getSessionStore().forIdentity({ spaceId, userId, agentSource, sessionId: sessionKey });
   const state = store.get(compositeKey);
   if (!state || !state.sessionInfo) {
     throw new Error(`session ${sessionKey} vanished during bind`);

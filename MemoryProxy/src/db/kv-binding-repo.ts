@@ -21,8 +21,8 @@ function keyOf(spaceId: string, sessionId: string): string {
 
 /**
  * per-key mutex 的 lock key。原本按 4 段隔离防跨用户共 sessionId 时误串行,
- * 拍平后 (spaceId, sessionId) 就是权威 owner —— 不同 owner 的并发写本来就
- * 应该串行(后写胜出,同现存 4 段方案的最终结果一致)。
+ * 拍平后同一 (spaceId, sessionId) 的更新应串行；owner 校验由 SessionStore
+ * 在读写临界区执行，异主仅能追加歧义标记，不能以最后写入者替换 owner。
  */
 function lockKey(spaceId: string, sessionId: string): string {
   const sp = spaceId || "_default";
@@ -31,6 +31,7 @@ function lockKey(spaceId: string, sessionId: string): string {
 
 interface StoredBinding {
   outcome: "initialized" | "bypassed";
+  identityAmbiguous?: boolean;
   userId?: string;
   teamId?: string;
   agentId?: string;
@@ -50,6 +51,7 @@ export class KvBindingRepo implements BindingRepo {
       if (!raw) return null;
       return {
         outcome: raw.outcome ?? "initialized",
+        ...(raw.identityAmbiguous ? { identityAmbiguous: true } : {}),
         userId: raw.userId,
         teamId: raw.teamId,
         agentId: raw.agentId,
@@ -80,6 +82,7 @@ export class KvBindingRepo implements BindingRepo {
       // Preserve `created_at` on overwrite(与 Redis HSET 语义等价:不会重置 created_at)
       const existing = await this.storage.getJSON<StoredBinding>(key).catch(() => null);
       if (existing?.created_at) record.created_at = existing.created_at;
+      if (existing?.identityAmbiguous || binding.identityAmbiguous) record.identityAmbiguous = true;
       await this.storage.putJSON(key, record).catch((err: any) => {
         // 见 KvSessionRepo.upsert 的日志说明:失败必打日志,成功不打
         console.warn(

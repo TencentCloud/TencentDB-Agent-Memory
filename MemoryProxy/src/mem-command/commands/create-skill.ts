@@ -13,6 +13,7 @@ export async function executeCreateSkill(ctx: MemCommandContext): Promise<MemCom
   const requestId = `mem-cmd-${Date.now()}`;
 
   const result = await forceArchiveSkill({
+    userId: ctx.userId || "anonymous",
     sessionKey: ctx.sessionKey,
     agentSource: ctx.agentSource,
     config: ctx.config,

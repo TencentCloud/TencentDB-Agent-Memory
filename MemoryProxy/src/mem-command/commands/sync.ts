@@ -38,6 +38,7 @@ export async function executeSync(ctx: MemCommandContext): Promise<MemCommandRes
   }
 
   const result = await refreshSessionCache({
+    userId: ctx.userId || "anonymous",
     sessionKey: ctx.sessionKey,
     agentSource: ctx.agentSource,
     config: ctx.config,

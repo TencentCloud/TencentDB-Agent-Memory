@@ -96,7 +96,7 @@ AGENT_LABELS=(
   "WorkBuddy         — OpenAI Responses/Chat, ~/.workbuddy/models.json"
   "dsh (DeepSeek)    — OpenAI Chat, ~/.dsh/settings.yaml + .credentials.yaml"
   "Hermes            — OpenAI Chat + Header预选, ~/.hermes/config.yaml"
-  "OpenClaw          — OpenAI Chat + Header预选, ~/.openclaw/openclaw.json"
+  "OpenClaw          — Session Bridge + Web Init, ~/.openclaw/openclaw.json"
 )
 
 DEFAULT_CONFIG_PATHS=(
@@ -112,14 +112,15 @@ DEFAULT_CONFIG_PATHS=(
 # Expand ~ to $HOME for actual file operations
 expand_path() { echo "${1/#\~/$HOME}"; }
 
-# For agents that need header preselect
-HEADER_AGENTS=("hermes" "openclaw")
+# Hermes 保留静态预选；OpenClaw 默认使用 Session Bridge。
+HEADER_AGENTS=("hermes")
 
 # ─── Parse args ───────────────────────────────────────────────────────────────
 ARG_AGENT="" ; ARG_QUICK=false ; ARG_NONINTERACTIVE=false
 ARG_PROXY="" ; ARG_INSTANCE="" ; ARG_KEY="" ; ARG_MODEL=""
 ARG_TEAM_ID="" ; ARG_AGENT_ID="" ; ARG_TASK_ID="" ; ARG_CONV_ID=""
 ARG_CONFIG_PATH=""
+OPENCLAW_STATIC_HEADERS=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --agent)          ARG_AGENT="$2"; shift 2 ;;
@@ -134,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --task-id)        ARG_TASK_ID="$2"; shift 2 ;;
     --conv-id)        ARG_CONV_ID="$2"; shift 2 ;;
     --config-path)    ARG_CONFIG_PATH="$2"; shift 2 ;;
+    --openclaw-static-headers) OPENCLAW_STATIC_HEADERS=true; shift ;;
     -h|--help)
       echo "Usage: $0 [OPTIONS]"
       echo ""
@@ -155,12 +157,16 @@ while [[ $# -gt 0 ]]; do
       echo "  --agent-id ID      Agent ID (the memory agent, not the client)"
       echo "  --task-id ID       Task ID (or 'no-task')"
       echo "  --conv-id ID       Conversation ID"
+      echo "  --openclaw-static-headers  OpenClaw 兼容模式（不依赖 Bridge，手动管理会话 ID）"
+      echo "  OpenClaw 默认使用 Bridge + Web Init；显式 --conv-id 也保留旧静态模式。"
       echo ""
       echo "Agents: claude-code|codebuddy|codex|workbuddy|dsh|hermes|openclaw"
       exit 0 ;;
     *) error "Unknown arg: $1"; exit 1 ;;
   esac
 done
+
+if [[ -n "$ARG_CONV_ID" ]]; then OPENCLAW_STATIC_HEADERS=true; fi
 
 # ─── Non-interactive fast path ────────────────────────────────────────────────
 if $ARG_NONINTERACTIVE; then
@@ -189,7 +195,10 @@ if $ARG_NONINTERACTIVE; then
   TEAM_ID="$ARG_TEAM_ID"
   AGENT_ID="$ARG_AGENT_ID"
   TASK_ID="$ARG_TASK_ID"
-  CONVERSATION_ID="${ARG_CONV_ID:-conv-$(date +%Y%m%d)-$(head -c 4 /dev/urandom | xxd -p)}"
+  CONVERSATION_ID="$ARG_CONV_ID"
+  if [[ "$CHOSEN_AGENT" != "openclaw" ]] || $OPENCLAW_STATIC_HEADERS; then
+    CONVERSATION_ID="${ARG_CONV_ID:-conv-$(date +%Y%m%d)-$(head -c 4 /dev/urandom | xxd -p)}"
+  fi
 
   # Config path
   if [[ -n "$ARG_CONFIG_PATH" ]]; then
@@ -522,15 +531,23 @@ rm -f "$PROBE_RESPONSE_FILE"
 TEAM_ID="" ; AGENT_ID="" ; TASK_ID="" ; CONVERSATION_ID=""
 
 needs_header_preselect() {
+  if [[ "$1" == "openclaw" ]]; then $OPENCLAW_STATIC_HEADERS; return; fi
   for ha in "${HEADER_AGENTS[@]}"; do
     [[ "$ha" == "$1" ]] && return 0
   done
   return 1
 }
 
+if [[ "$CHOSEN_AGENT" == "openclaw" ]] && ! $OPENCLAW_STATIC_HEADERS; then
+  info "推荐安装 Session Bridge，通过浏览器选择 Team/Agent，Task 可选。"
+  if confirm "是否改用旧的静态 Header 兼容模式（手动管理会话 ID）?" "n"; then
+    OPENCLAW_STATIC_HEADERS=true
+  fi
+fi
+
 if needs_header_preselect "$CHOSEN_AGENT"; then
   header "Header 预选配置 (${CHOSEN_AGENT})"
-  info "${CHOSEN_AGENT} 不支持交互式 Form，需要在配置文件中预填 team/agent/task ID"
+  info "静态预选模式需要 Team/Agent，Task 可选；会话 ID 需自行管理。"
   echo ""
 
   # Ask if user wants to provide Panel address for auto-discovery
@@ -676,7 +693,11 @@ if needs_header_preselect "$CHOSEN_AGENT"; then
   success "Header 预选完成"
 else
   header "Header 预选配置"
-  info "${CHOSEN_AGENT} 支持交互式 Form，无需预填 header (跳过)"
+  if [[ "$CHOSEN_AGENT" == "openclaw" ]]; then
+    info "OpenClaw 使用 Session Bridge + Web Init，无需预填资产或会话 header。"
+  else
+    info "${CHOSEN_AGENT} 支持交互式 Form，无需预填 header (跳过)"
+  fi
 fi
 
 # ━━━ Config File Path & Write ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1007,7 +1028,7 @@ write_openclaw() {
   ensure_dir "$filepath"
   backup_file "$filepath"
 
-  local base_url="${PROXY_HOST}/openclaw/${INSTANCE_ID}"
+  local base_url="${PROXY_HOST}/openclaw/${INSTANCE_ID}/v1"
 
   local provider_block
   provider_block=$(jq -n \
@@ -1022,13 +1043,13 @@ write_openclaw() {
       baseUrl: $url,
       apiKey: $key,
       api: "openai-completions",
+      authHeader: true,
       headers: {
         "x-team-id": $tid,
         "x-agent-id": $aid,
         "x-task-id": $taskid,
         "x-conversation-id": $convid
-      },
-      request: { allowPrivateNetwork: true },
+      } | with_entries(select(.value != "")),
       models: [{
         id: $model,
         name: $model,
@@ -1043,12 +1064,19 @@ write_openclaw() {
   if [[ -f "$filepath" ]]; then
     local tmp
     tmp=$(mktemp)
-    # Merge provider into existing openclaw.json
+    # 保留其他 provider 与未知字段；只替换本向导负责的身份 header。
     jq --argjson provider "$provider_block" \
       '.models = (.models // {}) |
        .models.mode = (.models.mode // "merge") |
        .models.providers = (.models.providers // {}) |
-       .models.providers["memory-proxy"] = $provider' \
+       .models.providers["memory-proxy"] = (
+         (.models.providers["memory-proxy"] // {}) as $existing |
+         ($existing + $provider) |
+         .headers = (($existing.headers // {} | with_entries(
+           select((.key | ascii_downcase) as $name |
+             (["x-team-id", "x-agent-id", "x-task-id", "x-conversation-id"] | index($name)) == null)
+         )) + $provider.headers)
+       )' \
       "$filepath" > "$tmp"
     mv "$tmp" "$filepath"
   else
@@ -1059,8 +1087,13 @@ write_openclaw() {
   success "已写入 ${filepath}"
   echo ""
   warn "⚠️  注意事项:"
-  echo -e "  • x-conversation-id 标识当前会话，${BOLD}每次新对话需手动更换${RESET}"
-  echo -e "  • x-task-id 当前版本必填，无 Task 可填 'no-task'"
+  if $OPENCLAW_STATIC_HEADERS; then
+    echo -e "  • 静态兼容模式：${BOLD}每次新对话需手动更换 x-conversation-id${RESET}"
+  else
+    echo -e "  • 请按 agents/openclaw/README.md 安装并授权 Session Bridge，然后重启 OpenClaw。"
+    echo -e "  • 原生会话身份由 Bridge 注入；打开 Web Init 链接选择资产后，重发原请求。"
+  fi
+  echo -e "  • Task 可选；本脚本不自动安装插件或改变插件授权。"
   echo -e "  • 在 OpenClaw 中选择 provider 为 ${BOLD}memory-proxy${RESET}，模型选 ${BOLD}${MODEL_ID}${RESET}"
 }
 
@@ -1118,6 +1151,8 @@ esac
 echo ""
 info "首次使用时会弹出 Team→Agent→Task 选择 (${CHOSEN_AGENT} 支持交互式 Form 的情况下)"
 info "再次运行此脚本可配置其他 Agent"
+info "主动 Memory/Skill 工具地址须从实际工具环境验证，不能根据 Docker IP 猜测。"
+info "验证成功后，部署端可设置 PROXY_EXTERNAL_GATEWAY_URL；本脚本不会修改部署配置。"
 
 # ━━━ Optional: Asset Import ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 echo ""

@@ -701,7 +701,7 @@ export async function handleAnthropicMessages(
       const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
       if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
-        const store = getSessionStore();
+        const store = getSessionStore().forIdentity({ spaceId, userId: userId || "anonymous", agentSource, sessionId: sessionKey });
         const compositeKey = `${agentSource}:${sessionKey}`;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
@@ -734,8 +734,7 @@ export async function handleAnthropicMessages(
 
         const resetEpoch = Date.now();
         await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
-        const bindingRepo = store.getBindingRepo();
-        if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
+        await store.deleteOwnedBinding().catch(() => {});
         _isSessionResetFlow = true;
         console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
       }
@@ -757,7 +756,7 @@ export async function handleAnthropicMessages(
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
-      const store = getSessionStore();
+      const store = getSessionStore().forIdentity({ spaceId, userId: userId || "anonymous", agentSource, sessionId: sessionKey });
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 

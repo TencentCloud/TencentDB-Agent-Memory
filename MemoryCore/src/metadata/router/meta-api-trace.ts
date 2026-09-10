@@ -10,6 +10,7 @@ import type { ApiResponseEnvelope } from "../../gateway/v2-schemas.js";
 import {
   getApiTraceConfig,
   logApiTrace,
+  summarizeApiError,
   sanitizeApiPayload,
   serializeForApiLog,
 } from "../../api-trace/index.js";
@@ -127,7 +128,7 @@ export function logMetaApiError(
   err: unknown,
   extra?: { envelopeCode?: number; httpStatus?: number },
 ): void {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = summarizeApiError(err);
   const code = extra?.envelopeCode ?? 500;
   const attrs = {
     ...baseAttrs(ctx),
@@ -140,7 +141,7 @@ export function logMetaApiError(
     "error",
     "api.http.error",
     attrs,
-    { requestId: ctx.requestId, err: err instanceof Error ? err : undefined },
+    { requestId: ctx.requestId },
   );
   maybeReportOtel("api.http.error", attrs);
 }
