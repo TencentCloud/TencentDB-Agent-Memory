@@ -1,4 +1,4 @@
-# Opik 可观测接入（TRACK 06 / PR #1270）
+# Opik 可观测接入（TRACK 06 / #1270 → #1310）
 
 > 状态：已实现并验证（OpenAI Chat、Anthropic、OpenAI Responses 三条主链路均已接入）
 > 覆盖范围：调用链路 / Token / 记忆注入（配置级 + 本轮逐钩子运行统计）/ 工具交互 / memory-access 审计
@@ -55,7 +55,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik 10 + opik-metadata 11 + audit 3（vitest 24/24；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例，对应旧文档 31/31）；本设计文档 |
+| 测试 / 文档 | opik / opik-metadata / audit 用例（vitest **35/35**，含 request_log 开关、失败 trace 收尾、批量队列新增用例）；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
 > 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
@@ -72,8 +72,10 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `memory_injection` | 配置级：`enabled` / `injector_count` / `skipped`；运行级：`hook_count` / `block_count` / `error_count` / `hooks`（逐钩子明细） |
 | `tool_interaction` | `toolCalls[]`（工具名）+ `toolResults`（结果条数） |
 
-另外每次 Chat / Anthropic trace 会 fork 一份到 `request_log` 项目（独立
-traceId，默认脱敏只留 usage + 标签），供原始请求留痕，不污染主项目视图。
+另外，当 `opik.requestLogEnabled: true` 时，Chat / Anthropic / Responses 的 trace 会
+额外 fork 一份到 `request_log` 项目（独立 traceId；`opik.stripRequestLogContent: true`
+时只留 usage + 标签），供原始请求留痕，不污染主项目视图。该项**默认关闭**——开启后
+Opik 上报量约翻倍，仅在需要排查原始请求时打开。
 主项目 trace 还额外带 `turn:<hash>` 标签：同一轮用户提问的工具循环请求共享
 同一 (sessionKey, turnSeq)，因此 traceId 与标签都一致，可按 `turn:<hash>`
 过滤，也可直接在 Opik 树形视图看到同一条 trace 下的全部 span。
@@ -107,6 +109,11 @@ opik:
   apiPrefix: "/v1/private"                   # backend(8080)；指向前端(5173) 时改 "/api/v1/private"
   timeoutMs: 2000                            # 单次上报超时（100–30000ms）
   stripRequestLogContent: false              # true = request_log fork 不记录消息内容
+  requestLogEnabled: false                   # true = 额外 fork 原始请求到 request_log（默认关闭）
+  batch:                                     # create trace / span 批量上报队列
+    enabled: true                            # false = 退回逐条立即上报
+    maxBatchSize: 20                         # 队列满 20 条立即刷出（2–500）
+    flushIntervalMs: 1000                    # 队列未满时最长等待（50–60000 ms）
 ```
 
 > 迁移说明：升级前若配置 `url: http://127.0.0.1:5173` 且未写 `apiPrefix`，
