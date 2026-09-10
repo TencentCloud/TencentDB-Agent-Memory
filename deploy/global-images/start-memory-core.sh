@@ -157,7 +157,10 @@ else
   fi
   (
     umask 077
-    cat > "$CORE_CONFIG_FILE" <<YAML
+    # Only publish a complete file; a failed write must preserve the old config.
+    config_tmp=$(mktemp "$CORE_CONFIG_FILE.tmp.XXXXXX")
+    trap 'rm -f "$config_tmp"' EXIT
+    cat > "$config_tmp" <<YAML
 # 由 start-memory-core.sh 在首次启动时生成。
 # 修改后会被后续启动复用；如需从 .env 重新生成，请传 --force-regenerate-config。
 deployMode: standalone
@@ -229,8 +232,8 @@ skill:
   resources:
     maxResourceSizeBytes: 5000000
 YAML
+    mv -f "$config_tmp" "$CORE_CONFIG_FILE"
   )
-  chmod 600 "$CORE_CONFIG_FILE"
 fi
 
 pull_image "$MEMORY_CORE_IMAGE"

@@ -22,20 +22,19 @@ mkdir -p "$FAKE_BIN"
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$DOCKER_CALLS"
-case "${1:-}" in
-  network | run) exit 0 ;;
-  ps) echo tdai-memory-core ;;
-  inspect)
-    if [[ "$*" == *"State.Status"* ]]; then
-      echo running
-    else
-      echo none
-    fi
-    ;;
-  *) exit 0 ;;
-esac
+if [[ "${1:-}" == "ps" ]]; then echo tdai-memory-core; fi
 EOF
 chmod +x "$FAKE_BIN/docker"
+
+cat > "$FAKE_BIN/cat" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${FAIL_CONFIG_WRITE:-}" == "1" && "$#" == "0" ]]; then
+  head -c 16
+  exit 1
+fi
+exec /bin/cat "$@"
+EOF
+chmod +x "$FAKE_BIN/cat"
 
 export DOCKER_CALLS="$TMP_DIR/docker-calls"
 ENV_FILE="$TMP_DIR/.env"
@@ -73,6 +72,16 @@ CONFIG_MODE="$(stat -f '%Lp' "$DEFAULT_CONFIG" 2>/dev/null || stat -c '%a' "$DEF
 printf '    provider: custom\n' >> "$DEFAULT_CONFIG"
 run_start
 grep -Fq 'provider: custom' "$DEFAULT_CONFIG" || fail "existing config was overwritten"
+
+cp "$DEFAULT_CONFIG" "$TMP_DIR/saved.yaml"
+: > "$DOCKER_CALLS"
+if FAIL_CONFIG_WRITE=1 run_start --force-regenerate-config; then
+  fail "partial config write unexpectedly succeeded"
+fi
+cmp -s "$DEFAULT_CONFIG" "$TMP_DIR/saved.yaml" || fail "failed regeneration damaged existing config"
+if grep -Eq '^(rm|stop|kill) ' "$DOCKER_CALLS"; then
+  fail "failed regeneration stopped the existing container"
+fi
 
 run_start --force-regenerate-config
 grep -Fq 'provider: custom' "$DEFAULT_CONFIG" && fail "force regeneration did not replace config"
