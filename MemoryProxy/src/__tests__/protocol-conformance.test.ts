@@ -511,17 +511,33 @@ describe("多模态 tool_result", () => {
   it("chat tool 消息含 image_url → Anthropic tool_result 含 image 块", () => {
     const out = chatToAnthropic({
       model: "m",
-      messages: [{
-        role: "tool",
-        tool_call_id: "t1",
-        content: [
-          { type: "text", text: "ok" },
-          { type: "image_url", image_url: { url: "http://x/y.png" } },
-        ],
-      }],
+      messages: [
+        { role: "user", content: "q" },
+        // tool_result 必须紧跟对应的 tool_use（否则按悬空结果降级，见
+        // chat-anthropic-role-rules.test.ts）。这里显式给出配对的前置 assistant。
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "t1", type: "function", function: { name: "f", arguments: "{}" } }],
+        },
+        {
+          role: "tool",
+          tool_call_id: "t1",
+          content: [
+            { type: "text", text: "ok" },
+            { type: "image_url", image_url: { url: "http://x/y.png" } },
+          ],
+        },
+      ],
     });
-    const userMsg = (out.messages as Array<Record<string, unknown>>).find((m) => m.role === "user");
-    const blocks = (userMsg?.content as Array<Record<string, unknown>>)[0]?.content as Array<Record<string, unknown>>;
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    const toolResultMsg = msgs.find(
+      (m) =>
+        Array.isArray(m.content) &&
+        (m.content as Array<Record<string, unknown>>).some((b) => b.type === "tool_result"),
+    );
+    const blocks = (toolResultMsg?.content as Array<Record<string, unknown>>)[0]
+      ?.content as Array<Record<string, unknown>>;
     expect(blocks.some((b) => b.type === "image")).toBe(true);
   });
 });
