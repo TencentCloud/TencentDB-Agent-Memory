@@ -1,4 +1,4 @@
-# Opik 可观测接入（TRACK 06 / #1270 → #1309）
+# Opik 可观测接入（TRACK 06 / PR #1270）
 
 > 状态：已实现并验证（OpenAI Chat、Anthropic、OpenAI Responses 三条主链路均已接入）
 > 覆盖范围：调用链路 / Token / 记忆注入（配置级 + 本轮逐钩子运行统计）/ 工具交互 / memory-access 审计
@@ -55,7 +55,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik / opik-metadata / audit 用例（vitest **30/30**，含 request_log 开关与失败 trace 收尾新增用例）；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例；本设计文档 |
+| 测试 / 文档 | opik 10 + opik-metadata 11 + audit 3（vitest 24/24；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例，对应旧文档 31/31）；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
 > 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
@@ -72,10 +72,8 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `memory_injection` | 配置级：`enabled` / `injector_count` / `skipped`；运行级：`hook_count` / `block_count` / `error_count` / `hooks`（逐钩子明细） |
 | `tool_interaction` | `toolCalls[]`（工具名）+ `toolResults`（结果条数） |
 
-另外，当 `opik.requestLogEnabled: true` 时，Chat / Anthropic / Responses 的 trace 会
-额外 fork 一份到 `request_log` 项目（独立 traceId；`opik.stripRequestLogContent: true`
-时只留 usage + 标签），供原始请求留痕，不污染主项目视图。该项**默认关闭**——开启后
-Opik 上报量约翻倍，仅在需要排查原始请求时打开。
+另外每次 Chat / Anthropic trace 会 fork 一份到 `request_log` 项目（独立
+traceId，默认脱敏只留 usage + 标签），供原始请求留痕，不污染主项目视图。
 主项目 trace 还额外带 `turn:<hash>` 标签：同一轮用户提问的工具循环请求共享
 同一 (sessionKey, turnSeq)，因此 traceId 与标签都一致，可按 `turn:<hash>`
 过滤，也可直接在 Opik 树形视图看到同一条 trace 下的全部 span。
@@ -109,7 +107,6 @@ opik:
   apiPrefix: "/v1/private"                   # backend(8080)；指向前端(5173) 时改 "/api/v1/private"
   timeoutMs: 2000                            # 单次上报超时（100–30000ms）
   stripRequestLogContent: false              # true = request_log fork 不记录消息内容
-  requestLogEnabled: false                   # true = 额外 fork 原始请求到 request_log（默认关闭）
 ```
 
 > 迁移说明：升级前若配置 `url: http://127.0.0.1:5173` 且未写 `apiPrefix`，
@@ -284,4 +281,30 @@ opik:
 - `opik.test.ts` 新增用例：`opikReportFailure` 关闭 trace + 补 error LLM span；
   开启 `requestLogEnabled` 时 fork trace / span 一并收尾。
 - 上线前自查：失败请求在 `request_log`（如已开启）与主项目里都能看到 `end_time`。
+
+## 13. 2026-09-09 补充：create / span 批量上报队列
+
+- **批量提交**：create trace / create span 先进内存 FIFO 队列，
+  - 同类条目累计到 `opik.batch.maxBatchSize`（默认 20，范围 2–500）立即刷出；
+  - 未满时最长等待 `opik.batch.flushIntervalMs`（默认 1000 ms，范围 50–60000）刷出；
+  - 刷出时走 `POST /v1/private/traces/batch` 或 `POST /v1/private/spans/batch`。
+- **顺序保证**：`update trace`（PATCH）没有批量端点，仍逐条发送，但与 create 共用
+  同一 FIFO —— 先 create、后 PATCH / 挂 span 的顺序不会被打乱，避免"PATCH 早于
+  create 导致 trace 永远打不开"。
+- **兼容降级**：老版本 Opik 无 batch 端点（404 / 405）时自动逐条回退，不丢数据；
+  `opik.batch.enabled: false` 完全退回"逐条立即上报"的旧行为。
+- **退出前 flush**：`index.ts` 的 gracefulShutdown 会先 `flushOpikBatchQueue()`，
+  避免容器滚动重启丢尾部队列。
+
+```yaml
+opik:
+  batch:
+    enabled: true
+    maxBatchSize: 20        # 队列满 20 条立即刷（2–500）
+    flushIntervalMs: 1000   # 队列未满时最长等待（50–60000 ms）
+```
+
+**验证**：vitest 35/35 通过、typecheck 通过；新增用例覆盖"连续 create 合并成
+`/traces/batch`""队列满立即刷""`batch.enabled=false` 退化逐条""batch 端点 404 时逐条回退
+不丢数据"。
 
