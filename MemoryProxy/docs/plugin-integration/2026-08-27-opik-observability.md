@@ -1,4 +1,4 @@
-# Opik 可观测接入（TRACK 06 / PR #1270）
+# Opik 可观测接入（TRACK 06 / #1270 → #1307）
 
 > 状态：已实现并验证（OpenAI Chat、Anthropic、OpenAI Responses 三条主链路均已接入）
 > 覆盖范围：调用链路 / Token / 记忆注入（配置级 + 本轮逐钩子运行统计）/ 工具交互 / memory-access 审计
@@ -38,7 +38,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 `opik.*_error / *_failed` 等限频 warn，**绝不阻塞或改变业务响应**。配置默认关闭，
 不配 Opik 时零网络开销。
 
-## 3. 改动清单（本 PR 实际文件）
+## 3. 改动清单（截至本分支；叠加分支含前序 PR 的累计内容）
 
 | 文件 | 改动 |
 |---|---|
@@ -55,7 +55,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik 10 + opik-metadata 11 + audit 3（vitest 24/24；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例，对应旧文档 31/31）；本设计文档 |
+| 测试 / 文档 | opik / opik-metadata / audit 用例（vitest **26/26**，含 traceId 按轮次归组与 问题指纹标签新增用例）；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
 > 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
