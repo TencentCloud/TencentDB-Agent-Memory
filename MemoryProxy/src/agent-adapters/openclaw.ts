@@ -24,7 +24,7 @@
  *   - `extractUserText`: content 是 string 直接返回（OpenAI SDK 默认形态）；
  *     若未来版本改发 content-block 数组，走 default 兜底拼接。
  *
- * 风险与升级对策见调研文档「风险与对策」节。
+ * 风险与升级对策见调研文档 §6「风险与对策」。
  */
 
 import { defaultAdapter } from "./default.js";

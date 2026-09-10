@@ -8,7 +8,7 @@
 | 客户端 | 形态 | 本仓库接入点 | 结论 |
 |---|---|---|---|
 | OpenClaw | OpenAI Chat Completions + Gateway | `agent-adapters/openclaw.ts` + `MemoryCore/openclaw-plugin`（仓库已有原生插件源码） | 可接入：header 预选身份，无需表单 |
-| DSH（deepseek-harness） | OpenAI Chat Completions + SSE，带 compact/title 信号 | `agent-adapters/dsh.ts` + `session/dsh/form.ts` | 已接入：adapter 负责 aux 判定 |
+| DSH（deepseek-harness） | OpenAI Chat Completions + SSE，带 compact/title 信号 | `agent-adapters/dsh.ts` + `session/dsh/form.ts`（**基线已有，本 PR 未改动**） | 已接入（基线）：adapter 负责 aux 判定 |
 | OV（OpenViking 等开源 agent） | 形态未在仓库源码中出现 | 无 | 暂不写适配器，等接口稳定再评估 |
 
 ## 2. OpenClaw
@@ -75,17 +75,37 @@ DSH 的交互式入口是原生 `ask_user_question` 工具；headless 场景
 
 ## 5. 验证
 
+分两层，避免把"跑过的"和"预期看到的"混在一起：
+
+**5.1 单测（本仓库内可复现，随时可跑）**
+
 ```bash
 cd MemoryProxy
 npm test -- src/__tests__/agent-adapters-openclaw-dsh.test.ts
+# 预期：1 个文件 / 9 例通过（契约级：注册表分发、openclaw 恒 main、dsh compact/title 判定、文本提取）
 ```
 
-真机冒烟（本机已装 openclaw / dsh CLI）：
+**5.2 真机端到端冒烟（步骤可复现；观察结论记录在 PR 描述里，本文档不复述未留存的日志）**
+
+前提：本机已装 openclaw / dsh CLI，且 MemoryProxy 指向真实上游。
 
 ```bash
 openclaw agent --agent main --message "你好" --model memory-proxy/<模型>
 dsh 对话（带 user-agent: deepseek-harness/* 与团队 header）
 ```
 
-预期：日志出现 `agentSource=openclaw|dsh`，Session Init header 预选命中，
-注入管线 hook 正常执行，主对话走 main 链路。
+观察点（用于判断接线是否真的生效）：
+
+- 日志 `agentSource=openclaw|dsh`、`kind=main`；
+- Session Init 走 header 预选（`preset hit … → register directly`），不弹表单；
+- 注入管线 `hookCount>0 / errorCount=0`；
+- L0 写入 + `audit.memory-access` 各一条。
+
+## 6. 风险与对策
+
+| 风险 | 触发条件 | 对策 |
+|---|---|---|
+| OpenClaw 把 compaction / context-pruning 请求也打到同一 provider | 上游出现 aux 类请求 | 当前 `classifyRequest` 恒 `main`，代价是多一次注入（不破坏链路）；拿到真实 aux 指纹后按 dsh 的 `x-deepseek-harness-compact` 模式补判据 |
+| OpenClaw 未来把 `content` 从 string 改成 content-block 数组 | 客户端升级 | `extractUserText` 对非 string 走 `defaultAdapter` 兜底拼接；契约测试会先红 |
+| DSH 的 title-gen 判据（无 tools + thinking.disabled + max_tokens≤128 + title prompt 四合一）随上游改动漂移 | deepseek-harness 改标题生成策略 | 契约测试 9 例覆盖；新增指纹时先补样例再加判据 |
+| OV 形态未知，过早适配反而引入误判 | 拿到 OV 真实请求前 | 不写"看起来像"的 adapter；判定路径见 §4 |
