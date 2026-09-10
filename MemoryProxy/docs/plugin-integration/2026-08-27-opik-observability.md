@@ -1,4 +1,4 @@
-# Opik 可观测接入（TRACK 06 / #1270 → #1307）
+# Opik 可观测接入（TRACK 06 / #1270 → #1309）
 
 > 状态：已实现并验证（OpenAI Chat、Anthropic、OpenAI Responses 三条主链路均已接入）
 > 覆盖范围：调用链路 / Token / 记忆注入（配置级 + 本轮逐钩子运行统计）/ 工具交互 / memory-access 审计
@@ -55,7 +55,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik / opik-metadata / audit 用例（vitest **26/26**，含 traceId 按轮次归组与 问题指纹标签新增用例）；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例；本设计文档 |
+| 测试 / 文档 | opik / opik-metadata / audit 用例（vitest **30/30**，含 request_log 开关与失败 trace 收尾新增用例）；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
 > 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
@@ -72,8 +72,10 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `memory_injection` | 配置级：`enabled` / `injector_count` / `skipped`；运行级：`hook_count` / `block_count` / `error_count` / `hooks`（逐钩子明细） |
 | `tool_interaction` | `toolCalls[]`（工具名）+ `toolResults`（结果条数） |
 
-另外每次 Chat / Anthropic trace 会 fork 一份到 `request_log` 项目（独立
-traceId，默认脱敏只留 usage + 标签），供原始请求留痕，不污染主项目视图。
+另外，当 `opik.requestLogEnabled: true` 时，Chat / Anthropic / Responses 的 trace 会
+额外 fork 一份到 `request_log` 项目（独立 traceId；`opik.stripRequestLogContent: true`
+时只留 usage + 标签），供原始请求留痕，不污染主项目视图。该项**默认关闭**——开启后
+Opik 上报量约翻倍，仅在需要排查原始请求时打开。
 主项目 trace 还额外带 `turn:<hash>` 标签：同一轮用户提问的工具循环请求共享
 同一 (sessionKey, turnSeq)，因此 traceId 与标签都一致，可按 `turn:<hash>`
 过滤，也可直接在 Opik 树形视图看到同一条 trace 下的全部 span。
@@ -107,6 +109,7 @@ opik:
   apiPrefix: "/v1/private"                   # backend(8080)；指向前端(5173) 时改 "/api/v1/private"
   timeoutMs: 2000                            # 单次上报超时（100–30000ms）
   stripRequestLogContent: false              # true = request_log fork 不记录消息内容
+  requestLogEnabled: false                   # true = 额外 fork 原始请求到 request_log（默认关闭）
 ```
 
 > 迁移说明：升级前若配置 `url: http://127.0.0.1:5173` 且未写 `apiPrefix`，
@@ -115,27 +118,14 @@ opik:
 
 ## 6. 验证方法（命令行）
 
-### 6.1 造请求（三条主链路，均可直接复现）
+### 6.1 造请求（当前已埋点客户端）
 
 ```bash
-# 1) OpenAI Chat（WorkBuddy Web 形态）
-curl -sS -X POST "http://127.0.0.1:8096/workbuddy/default/v1/chat/completions" \
-  -H "authorization: Bearer <user_key>" -H "content-type: application/json" \
-  -d '{"model":"<model>","stream":false,"messages":[{"role":"user","content":"你好"}]}'
-
-# 2) Anthropic（Claude Code 形态）
-curl -sS -X POST "http://127.0.0.1:8096/claude-code/default/v1/messages" \
-  -H "x-api-key: <user_key>" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
-  -d '{"model":"<model>","max_tokens":64,"messages":[{"role":"user","content":"你好"}]}'
-
-# 3) Responses（Codex 形态）
-curl -sS -X POST "http://127.0.0.1:8096/codex/default/responses" \
-  -H "authorization: Bearer <user_key>" -H "content-type: application/json" \
-  -d '{"model":"<model>","stream":false,"input":[{"role":"user","content":[{"type":"input_text","text":"你好"}]}]}'
+cd /c/Users/<用户名>/Documents/ChatGPT/腾讯犀牛鸟
+bash check-token-usage.sh workbuddy wb-persist-0001 "你好"
+bash check-token-usage.sh claude   c4015466-4cda-4eb1-83e4-14dfea1a6762 "你好"
+bash check-token-usage.sh codex    codex-verif "你好"
 ```
-
-> 三条路径与 `INSTALL.md` 的客户端接入方式一致（`/{agent}/{spaceId}/...`）。把 `<user_key>` 换成面板里的
-> `sk-mem-*`，`<model>` 换成上游支持的模型名；`stream:false` 便于一次性看到 JSON 响应。
 
 ### 6.2 查 trace（REST）
 
