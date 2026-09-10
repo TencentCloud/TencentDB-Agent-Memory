@@ -284,22 +284,26 @@ function bindingToIdFields(
 
 /**
  * L1: 先按 bare sessionId 试(handler.ts 存的 keyId 是 `${agentSource}:${sessionId}`,
- * bridge curl 拿不到 agentSource,所以按候选前缀顺序探)。
+ * bridge curl 拿不到 agentSource,所以枚举所有以 `:${sessionId}` 结尾的 key)。
  *
- * ⚠️ 候选轮询是过渡期兼容:同 pod 内主对话链路建过 session, L1 Map 里的 key 带
- * agentSource 前缀,bare sessionId 命中不到。方案 B 拍平后 L2b binding 直接命中
- * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
- * 恢复而不 401。
+ * 不再维护硬编码前缀列表——无论 agentSource 是 pi / dsh / codex / workbuddy
+ * 还是任何新增值都能命中。L2b binding 拍平后可直接命中 2 段 key;
+ * L1 保留是为了 L2b 出问题时仍能从内存 L1 恢复而不 401。
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
-  for (const k of candidates) {
-    const s = getSessionStore().get(k);
-    if (s) {
-      const fields = stateToIdFields(s, k);
-      if (fields) return fields;
+  const store = getSessionStore();
+  const bare = store.get(sessionId);
+  if (bare) {
+    const fields = stateToIdFields(bare, sessionId);
+    if (fields) return fields;
+  }
+  if (!sessionId.includes(":")) {
+    for (const k of store.keysWithSuffix(sessionId)) {
+      const s = store.get(k);
+      if (s) {
+        const fields = stateToIdFields(s, k);
+        if (fields) return fields;
+      }
     }
   }
   return null;
