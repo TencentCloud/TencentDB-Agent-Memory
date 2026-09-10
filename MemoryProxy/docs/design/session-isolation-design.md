@@ -328,7 +328,10 @@ ghostRejected / scopeRejected / fenceBlocked / fenceAllowed / fenceMiss
 - prometheus 新增 `tdai_auto_session_fence_miss_total`（counter）与
   `tdai_auto_session_fence_coverage`（gauge）。
 
-### 6.3 建议告警信号（运维文档已写入 README_CN）
+### 6.3 建议告警信号（口径以本文档与 `docs/session-policy.md` §4 为准）
+
+> 说明：本节是告警信号的**唯一**出处，未同步进 `README_CN.md`（该文件未随本 PR
+> 改动）。运维取用请直接引用本节与 `session-policy.md` §4。
 
 - `scopeRejected` / `ghostRejected` 突变：疑似伪造会话 ID 或签名密钥轮换；
 - `fenceRate` 骤升：会话归属漂移增多（检查路由/space 解析）；
