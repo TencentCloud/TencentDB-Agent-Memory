@@ -503,41 +503,6 @@ function filterResponseHeaders(source: Headers): Headers {
   return out;
 }
 
-/** WorkBuddy 转发错误路径的 Opik 收尾包装（trace/span/fork 字段一次补齐）。 */
-function reportWorkbuddyOpikFailure(
-  config: ProxyConfig,
-  args: {
-    traceId: string;
-    forkTraceId?: string;
-    projectName: string;
-    modelId: string;
-    startTime: string;
-    upstreamUrl: string;
-    body: Record<string, unknown>;
-    stage: OpikFailureReport["stage"];
-    status?: number;
-    message: string;
-  },
-): void {
-  opikReportFailure(config, {
-    traceId: args.traceId,
-    projectName: args.projectName,
-    model: args.modelId,
-    startTime: args.startTime,
-    stage: args.stage,
-    status: args.status,
-    message: args.message,
-    inputMessages: [buildWorkbuddyLangfuseInput(args.body)] as unknown[],
-    forkTraceId: args.forkTraceId,
-    forkMetadata: {
-      keyId: args.projectName,
-      modelId: args.modelId,
-      stream: true,
-      upstreamUrl: args.upstreamUrl,
-    },
-  });
-}
-
 /**
  * Forward the request to upstream. On SSE responses with `lf != null`, tees
  * the stream and reports usage/text to langfuse (best-effort).
@@ -1755,4 +1720,40 @@ export async function handleWorkbuddyEndpoint(
     c, config, body, opikTraceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
     { forkTraceId, metadata: opikTraceMetadata },
   );
+}
+
+
+/** WorkBuddy 转发错误路径的 Opik 收尾包装（trace/span/fork 字段一次补齐）。 */
+function reportWorkbuddyOpikFailure(
+  config: ProxyConfig,
+  args: {
+    traceId: string;
+    forkTraceId?: string;
+    projectName: string;
+    modelId: string;
+    startTime: string;
+    upstreamUrl: string;
+    body: Record<string, unknown>;
+    stage: OpikFailureReport["stage"];
+    status?: number;
+    message: string;
+  },
+): void {
+  opikReportFailure(config, {
+    traceId: args.traceId,
+    projectName: args.projectName,
+    model: args.modelId,
+    startTime: args.startTime,
+    stage: args.stage,
+    status: args.status,
+    message: args.message,
+    inputMessages: [buildWorkbuddyLangfuseInput(args.body)] as unknown[],
+    forkTraceId: args.forkTraceId,
+    forkMetadata: {
+      keyId: args.projectName,
+      modelId: args.modelId,
+      stream: true,
+      upstreamUrl: args.upstreamUrl,
+    },
+  });
 }

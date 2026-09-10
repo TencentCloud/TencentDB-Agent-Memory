@@ -1669,18 +1669,6 @@ export async function handleAnthropicMessages(
         spaceId,
         upstreamRequestId,
       });
-      langfuseReportFailure({
-        lf,
-        model: effectiveModel,
-        startTime,
-        endTime: new Date().toISOString(),
-        input: buildLangfuseInput(messages, body.system, langfuseDebug),
-        status: upstreamResp.status,
-        statusMessage: errText.slice(0, 500),
-        extraTags: ["error"],
-        observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
-      });
-      pipe.streamDone(null);
       reportAnthropicOpikFailure(config, {
         traceId: opikTraceId,
         forkTraceId,
@@ -1697,6 +1685,18 @@ export async function handleAnthropicMessages(
         status: upstreamResp.status,
         message: errText.slice(0, 500),
       });
+      langfuseReportFailure({
+        lf,
+        model: effectiveModel,
+        startTime,
+        endTime: new Date().toISOString(),
+        input: buildLangfuseInput(messages, body.system, langfuseDebug),
+        status: upstreamResp.status,
+        statusMessage: errText.slice(0, 500),
+        extraTags: ["error"],
+        observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
+      });
+      pipe.streamDone(null);
       return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
     }
 

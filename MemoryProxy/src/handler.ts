@@ -1760,18 +1760,6 @@ export async function handleChatCompletions(
         spaceId,
         upstreamRequestId,
       });
-      langfuseReportFailure({
-        lf,
-        model: effectiveModel,
-        startTime,
-        endTime: new Date().toISOString(),
-        input: buildLangfuseInputChat(messages, langfuseDebug, flattenMessagesForOpik),
-        status: upstreamResp.status,
-        statusMessage: errText.slice(0, 500),
-        extraTags: ["error"],
-        observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
-      });
-      pipe.streamDone(null);
       reportChatOpikFailure(config, {
         traceId: opikTraceId,
         forkTraceId,
@@ -1787,6 +1775,18 @@ export async function handleChatCompletions(
         status: upstreamResp.status,
         message: errText.slice(0, 500),
       });
+      langfuseReportFailure({
+        lf,
+        model: effectiveModel,
+        startTime,
+        endTime: new Date().toISOString(),
+        input: buildLangfuseInputChat(messages, langfuseDebug, flattenMessagesForOpik),
+        status: upstreamResp.status,
+        statusMessage: errText.slice(0, 500),
+        extraTags: ["error"],
+        observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
+      });
+      pipe.streamDone(null);
       return new Response(clientPassStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
