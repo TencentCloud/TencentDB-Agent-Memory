@@ -35,6 +35,10 @@ import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
 } from "./common/workbuddy-injection.js";
+import {
+  prependToLastUserMessage,
+  splitSyntheticInjection,
+} from "./common/synthetic-injection.js";
 // WorkBuddy 走 Responses API，与 codex wire 完全一致 —— 弹窗骨架直接复用
 // session/codex/form.ts 的 buildFormResponse + codexFormAnswersAsMessages，
 // 状态机复用 CB 的 handleSessionInit(agentSource="codex")。这样 WorkBuddy
@@ -1438,6 +1442,20 @@ export async function handleWorkbuddyEndpoint(
 
       if (injectedText.length > 0) {
         body = injectWorkbuddyAssets(body, { raw: injectedText });
+      }
+
+      // 与 codex 同构：user.* 注入点落在合成体的 user 消息上，只取 messages[0]
+      // 会静默丢弃它；抽出来贴回本轮最后一个 user message（见
+      // common/synthetic-injection.ts 的文件头）。
+      const { userText: injectedUserText } = splitSyntheticInjection(
+        syntheticBody,
+        injectedMessages,
+      );
+      if (injectedUserText.length > 0) {
+        body = prependToLastUserMessage(
+          body,
+          buildWorkbuddyInjectionBlock({ raw: injectedUserText }),
+        );
       }
     } catch (err: unknown) {
       console.error(

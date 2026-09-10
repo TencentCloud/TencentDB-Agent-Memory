@@ -40,6 +40,10 @@ import {
   codexFormAnswersAsMessages,
 } from "./session/codex/form.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
+import {
+  prependToLastUserMessage,
+  splitSyntheticInjection,
+} from "./common/synthetic-injection.js";
 import { log } from "./report/log.js";
 import {
   langfuseReportGeneration,
@@ -924,6 +928,21 @@ export async function handleCodexEndpoint(
         // 内层 <available_skills> tag，也不 escape 内容里的 XML tag，
         // 否则模型看到的会是转义字符（`&lt;user_memory&gt;`）读不出结构。
         body = injectCodexAssets(body, { raw: injectedText });
+      }
+
+      // user.* 注入点（如 L1 召回的 point="user.before"）落在合成体的 user 消息上；
+      // 上面只取 messages[0] 会静默丢弃它 —— 请求照样 200，只是记忆没了。
+      // 这里把 user 段增量抽出来、贴回本轮最后一个 user message
+      // （抽取与贴回规则见 common/synthetic-injection.ts 的文件头）。
+      const { userText: injectedUserText } = splitSyntheticInjection(
+        syntheticBody,
+        injectedMessages,
+      );
+      if (injectedUserText.length > 0) {
+        body = prependToLastUserMessage(
+          body,
+          buildCodexInjectionBlock({ raw: injectedUserText }),
+        );
       }
     } catch (err: unknown) {
       console.error("[codex] injection pipeline error:", err instanceof Error ? err.message : String(err));

@@ -16,6 +16,11 @@ import type {
 import { anthropicToChat, chatToAnthropic } from "../common/chat-anthropic-compat.js";
 import { anthropicToResponses, responsesToAnthropic } from "../common/responses-anthropic-compat.js";
 import { chatBodyToResponses, responsesBodyToChat } from "../common/responses-chat-compat.js";
+import { buildCodexInjectionBlock } from "../common/codex-injection.js";
+import {
+  prependToLastUserMessage,
+  splitSyntheticInjection,
+} from "../common/synthetic-injection.js";
 
 /**
  * 注入 × 协议转换 的接缝回归（TRACK 05A / 05B：记忆注入影响）。
@@ -212,7 +217,8 @@ describe("注入 × 协议转换：注入内容必须活着到达上游", () => 
 describe("Responses 客户端（Codex / WorkBuddy 桌面）的注入装配", () => {
   /**
    * 复刻 codexHandler 的真实装配方式：
-   *   合成 Chat 体 → 跑管线 → 抽 messages[0]（system）→ 贴回真实 Responses 请求。
+   *   合成 Chat 体 → 跑管线 → **按 role 抽出**注入结果 → 贴回真实 Responses 请求
+   *   （system 段 → developer message；user 段 → 本轮最后一个 user message）。
    * 这段"抽取 + 贴回"是 handler 里手写的胶水，最容易在重构中静默失效
    * （抽不到就只是少一段记忆，请求照样 200），所以必须有用例把守。
    */
@@ -225,7 +231,7 @@ describe("Responses 客户端（Codex / WorkBuddy 桌面）的注入装配", () 
       ],
     };
     const injected = await inject(synthetic, "openai", "system.suffix", "codex");
-    const injectedText = String(asArray(injected.messages)[0]?.content ?? "");
+    const { systemText: injectedText } = splitSyntheticInjection(synthetic, asArray(injected.messages));
 
     expect(injectedText).toContain(SESSION_CTX);
     expect(injectedText).toContain(MEMORY);
@@ -245,16 +251,13 @@ describe("Responses 客户端（Codex / WorkBuddy 桌面）的注入装配", () 
   });
 
   /**
-   * ⚠️ 已知缺口（用 it.fails 锁定，不是"期望行为"）：
-   * 上述抽取只看 `messages[0]`（system）。任何注入到 `user.*` 的块都会落在合成体的
-   * 占位 user 消息（"."）上，随后被静默丢弃 —— 请求依然 200，只是记忆没了。
+   * 回归：`user.*` 注入点（如 L1 召回的 `point="user.before"`）**曾经被静默丢弃**。
    *
-   * 目前没有线上影响：唯一使用 `point="user.before"` 的 TdaiL1RecallInjector
-   * 默认**未注册**进管线（见 injection/index.ts 的说明）。一旦把它接回去，
-   * 或新增任何 user.* 注入器，这里就会从"潜在"变成"真故障"。
-   * 修法：抽取时改为遍历全部消息、按 role 贴回对应槽位；修好后本用例应转为普通 it。
+   * 旧实现只抽 `messages[0]`（system），落在合成体占位 user 消息上的块直接消失 ——
+   * 请求依然 200，只是记忆没了。本用例把修好的装配（按 role 抽取 + 贴回本轮 user
+   * message）钉死：再退回"只抽 messages[0]"会立刻变红。
    */
-  it.fails("user.before 注入也应存活到上游（当前被合成体抽取丢弃 —— 已知缺口）", async () => {
+  it("user.before 注入也应存活到上游（按 role 贴回本轮 user message）", async () => {
     const synthetic = {
       model: "gpt-5-codex",
       messages: [
@@ -263,9 +266,50 @@ describe("Responses 客户端（Codex / WorkBuddy 桌面）的注入装配", () 
       ],
     };
     const injected = await inject(synthetic, "openai", "user.before", "codex");
-    const injectedText = String(asArray(injected.messages)[0]?.content ?? "");
+    const { systemText, userText } = splitSyntheticInjection(synthetic, asArray(injected.messages));
 
-    const upstream = responsesToAnthropic(responsesBody(injectedText));
-    expect(JSON.stringify(upstream)).toContain(MEMORY);
+    // 前置断言：注入确实落在 user 段（否则下面会因"压根没注入"而假绿）。
+    expect(userText).toContain(MEMORY);
+    // 占位符本身不得进入上游。
+    expect(userText).not.toBe(".");
+
+    const placed = prependToLastUserMessage(
+      responsesBody(systemText),
+      buildCodexInjectionBlock({ raw: userText }),
+    );
+    const upstream = responsesToAnthropic(placed);
+    const upstreamText = JSON.stringify(upstream);
+
+    expect(countOf(upstreamText, MEMORY)).toBe(1);
+    expect(countOf(upstreamText, SESSION_CTX)).toBe(1);
+    // 落在真正的 user 消息里，而不是被并回 developer / instructions 段。
+    const anthMessages = (upstream.messages as Array<Record<string, unknown>>) ?? [];
+    expect(JSON.stringify(anthMessages.filter((m) => m.role === "user"))).toContain(MEMORY);
+    expect(prefixText.anthropic(upstream)).not.toContain(MEMORY);
+  });
+
+  /**
+   * 贴回位置的直接单测：只认最后一个 user message；没有 user message 时原样返回。
+   */
+  it("贴回位置：取最后一个 user message，形态不符时原样返回", () => {
+    const devOnly = {
+      input: [
+        { type: "message", role: "developer", content: [{ type: "input_text", text: "dev" }] },
+        { type: "function_call_output", call_id: "c1", output: "ok" },
+      ],
+    };
+    expect(prependToLastUserMessage(devOnly, { type: "input_text", text: MEMORY })).toEqual(devOnly);
+
+    const multi = {
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "第一轮" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "回答" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "第二轮" }] },
+      ],
+    };
+    const out = prependToLastUserMessage(multi, { type: "input_text", text: MEMORY });
+    const input = out.input as Array<Record<string, unknown>>;
+    expect(JSON.stringify(input[0])).not.toContain(MEMORY);
+    expect(JSON.stringify(input[2])).toContain(MEMORY);
   });
 });
