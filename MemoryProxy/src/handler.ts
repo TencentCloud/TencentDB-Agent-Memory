@@ -730,11 +730,12 @@ export async function handleChatCompletions(
     console.log(`[request-classify] session=${sessionKey} agent=${agentSource} → auxiliary (skip session-init/mem/injection/L0/skill)`);
   }
 
-  // ── dsh (deepseek-harness) CLI headless / no-preset bypass ──────────────
+  // ── dsh / hermes headless bypass ────────────────────────────────────────
   // dsh 客户端在 headless bundle 或未挂 ask-user preset 时,body.tools 里
-  // 不含 `ask_user_question` 工具。proxy 塞 fake `ask_user_question` tool_call
-  // 会被 dsh agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass
-  // session-init 而非弹 form —— 没 UI 场景强弹表单没意义。
+  // 不含 `ask_user_question` 工具;hermes 在 api-server / acp 等无交互 UI 的
+  // 形态下,body.tools 里不含 `clarify` 工具。proxy 塞 fake tool_call 会被
+  // agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass session-init
+  // 而非弹 form —— 没 UI 场景强弹表单没意义。
   //
   // 判定:agentSource=dsh 且 body.tools 非空且不含 ask_user_question。
   // (tools 空数组表示纯对话/aux,不用兜底;tools 里就有 ask_user_question 说明
@@ -744,17 +745,26 @@ export async function handleChatCompletions(
   // 但走独立的 header-driven session-init 分支(见下方 opencode 特化块),
   // 因此不需要走这里的 headless bypass —— opencode 能吃 mem 命令纯文本响应,
   // 也需要 injection / L0 / skill 提取,只是不能弹 form。
-  const _dshHeadless = agentSource === "dsh" && (() => {
+  const _hasTool = (name: string) => {
     const tools = (body as { tools?: unknown }).tools;
     if (!Array.isArray(tools) || tools.length === 0) return false;
-    return !tools.some((t) => {
+    return tools.some((t) => {
       const fn = (t as { function?: { name?: string }; name?: string })?.function;
       const n = fn?.name ?? (t as { name?: string })?.name;
-      return n === "ask_user_question";
+      return n === name;
     });
-  })();
+  };
+  const _dshTools = (body as { tools?: unknown }).tools;
+  const _dshHeadless =
+    agentSource === "dsh" && Array.isArray(_dshTools) && _dshTools.length > 0 && !_hasTool("ask_user_question");
   if (_dshHeadless) {
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
+  }
+  // hermes：交互形态（CLI / gateway）请求里带 `clarify`,可以正常弹表单;
+  // api-server / acp 等无交互 UI 的形态没有 clarify,只能 bypass。
+  const _hermesHeadless = agentSource === "hermes" && !_hasTool("clarify");
+  if (_hermesHeadless) {
+    console.log(`[request-classify] session=${sessionKey} agent=hermes headless/no-clarify (no clarify tool) → bypass session-init, direct passthrough`);
   }
 
   // ── Client capabilities detection ─────────────────────────────────────────
@@ -775,23 +785,28 @@ export async function handleChatCompletions(
   }
 
   // ── mem:session-reset pre-hook ──
-  // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
-  // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
-  // 直接返回"不支持"文案。
-  const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
-  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
+  // openclaw 走 header 预选身份且没有交互式 form UI;dsh / hermes 在 headless
+  // (请求里没有对应交互工具)时同样没有表单入口 —— reset 后 session 会永远卡在
+  // pending_asset_confirm。直接返回"不支持"文案。
+  // 注意:hermes 带 clarify 的交互形态已支持表单,不列入 no-form 集合。
+  const _headerOnlyAgents = new Set(["openclaw"]);
+  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless || _hermesHeadless;
   if (!isAuxiliary && _noFormAgent) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { buildMemResponse } = await import("./mem-command/response-builder.js");
-      console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless}`);
+      console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless} hermesHeadless=${_hermesHeadless}`);
       const msg = _headerOnlyAgents.has(agentSource)
         ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
           + `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n`
           + `请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。`
-        : "⚠️ mem:session-reset 不支持 dsh headless 模式。\n\n"
-          + "dsh 客户端在 headless / no-preset 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
-          + "请在带 ask_user_question preset 的 dsh 环境下使用。";
+        : agentSource === "hermes"
+          ? "⚠️ mem:session-reset 不支持 hermes headless 模式。\n\n"
+            + "hermes 在 api-server / acp 等无交互 UI 的形态下不挂 clarify tool，无法弹出资产选择表单。\n"
+            + "请在带 clarify 的 hermes CLI / gateway 交互形态下使用。"
+          : "⚠️ mem:session-reset 不支持 dsh headless 模式。\n\n"
+            + "dsh 客户端在 headless / no-preset 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
+            + "请在带 ask_user_question preset 的 dsh 环境下使用。";
       return buildMemResponse(msg, {
         protocol: "openai",
         stream: isStream,
@@ -799,7 +814,7 @@ export async function handleChatCompletions(
       });
     }
   }
-  if (!isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+  if (!isAuxiliary && !_dshHeadless && !_hermesHeadless && !_headerOnlyAgents.has(agentSource)) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { parseMemCommand } = await import("./mem-command/index.js");
@@ -853,7 +868,7 @@ export async function handleChatCompletions(
   let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} hermesHeadless=${_hermesHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
@@ -936,6 +951,11 @@ export async function handleChatCompletions(
           bypassed: recovered.bypassed,
           justRegistered: needsPrewarm, // 只在 L2b / history-scan recovery 时触发 prewarm
         };
+      } else if (_hermesHeadless) {
+        // hermes 无 clarify（api-server / acp 等）→ 没有可交互的表单入口，
+        // 直接 bypass，避免把 fake clarify tool_call 塞给不认识它的 agent-loop。
+        initResult = { intercepted: false };
+        injectedSkipped = true;
       } else {
         // opencode 走跟 codebuddy 完全同构的通用 else 分支（复用 handleSessionInit +
         // ask_followup_question form）。验证 opencode 客户端对未知 tool_call 的真实反应。
@@ -1286,7 +1306,10 @@ export async function handleChatCompletions(
   }
 
   // aux 请求(compaction/title)/ dsh headless(无 UI 无 preset)不写 L0 —— 直接透传
-  const tdaiClient = isAuxiliary || _dshHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
+  // hermes 无 clarify（api-server / acp）**且本轮没有可用会话** → 与 aux 同等处理：
+  // 不注入、不写 L0、不提取 skill。若此前已在交互形态下建过会话，则照常走完整链路。
+  const _hermesHeadlessNoSession = _hermesHeadless && !sessionInfo;
+  const tdaiClient = isAuxiliary || _dshHeadless || _hermesHeadlessNoSession || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
   const tdaiIdentity = injectedSkipped
     ? null
     : deriveTdaiIdentity({
@@ -1664,6 +1687,7 @@ export async function handleChatCompletions(
       agentSource,
       isAuxiliary,
       isDshHeadless: _dshHeadless,
+      isHermesHeadless: _hermesHeadlessNoSession,
       sessionInfo,
       lf,
       spaceId,
@@ -1874,7 +1898,7 @@ export async function handleChatCompletions(
   // Skill extract trigger — count tool calls + buffer conversation.
   // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
   // aux 请求(compaction/title)/dsh headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
-  if (!isAuxiliary && !_dshHeadless && isExtractionAllowed(config, "skill")) {
+  if (!isAuxiliary && !_dshHeadless && !_hermesHeadlessNoSession && isExtractionAllowed(config, "skill")) {
     await triggerSkillExtractIfReady({
       config,
       sessionKey,
@@ -1885,7 +1909,7 @@ export async function handleChatCompletions(
       protocol: "openai",
       assetCapabilities,
     });
-  } else if (!isAuxiliary && !_dshHeadless) {
+  } else if (!isAuxiliary && !_dshHeadless && !_hermesHeadlessNoSession) {
     logExtractionSkipped(config, "skill", sessionKey);
   }
 
@@ -1983,6 +2007,9 @@ interface TapContext {
   /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
    * in tools) — behaves like aux for downstream side-effects. */
   isDshHeadless: boolean;
+  /** True when this hermes request has no `clarify` tool (api-server / acp 等无 UI 形态)
+   * — behaves like aux for downstream side-effects. */
+  isHermesHeadless: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
@@ -2300,7 +2327,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // Skill extract trigger — after stream finalization.
     // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
     // aux 请求(compaction/title)/dsh headless 跳过 skill 触发,保持归档 buffer 语义纯净。
-    if (!ctx.isAuxiliary && !ctx.isDshHeadless && isExtractionAllowed(ctx.config, "skill")) {
+    if (!ctx.isAuxiliary && !ctx.isDshHeadless && !ctx.isHermesHeadless && isExtractionAllowed(ctx.config, "skill")) {
       await triggerSkillExtractIfReady({
         config: ctx.config,
         sessionKey: ctx.sessionKeyForSkill,
@@ -2312,7 +2339,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         assetCapabilities: ctx.assetCapabilities,
         toolCallCountOverride: toolCallAccumulators.size,
       });
-    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless) {
+    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless && !ctx.isHermesHeadless) {
       logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
     }
 
