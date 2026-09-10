@@ -765,6 +765,8 @@ L0/L1 列表批量删除。**仅资产 Owner**。
 | deleted_skill_count | number | 已删 skill 数 |
 | deleted_skill_ids | string[] | 已删 skill ID 列表 |
 
+**权限**：Agent owner、Team Admin、System Admin 均可调用。Owner 走 archive 路径（软删除 + skill 逐条清理）；Admin 走 delete 路径（硬删除，跳过 skill 逐条删除，由内核级联处理）。
+
 **错误**：`MISSING_AGENT_ID`、`INVALID_USER_KEY`、`AGENT_NOT_FOUND`、`NOT_YOUR_AGENT`；任一 skill 删除失败返回 `500 SKILL_DELETE_FAILED`（含 `failed_skill_id`、`deleted_skill_ids`），此时 agent 不会 archive。
 
 **示例**
