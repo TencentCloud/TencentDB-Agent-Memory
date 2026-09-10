@@ -20,7 +20,7 @@ import { classifyError } from "./error-handler.js";
 import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
 import { parseSourceMessageIds } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
-import { createScopedStorageAdapter, type StorageAdapter } from "../core/storage/adapter.js";
+import { createScopedStorageAdapter, scopeProfileStorageView, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
 import type { Logger } from "../core/types.js";
 import type { IStateBackend } from "../core/state/types.js";
@@ -94,7 +94,7 @@ import {
   type TaskData,
 } from "./v2-schemas.js";
 import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
-import { buildProfileIsolationScope, buildProfileStableId, DEFAULT_PROFILE_SCOPE } from "../core/profile/profile-sync.js";
+import { buildProfileIsolationScope, buildProfileStableId, DEFAULT_PROFILE_SCOPE } from "../core/profile/profile-scope.js";
 
 const TAG = "[tdai-gateway][v2]";
 const V2_PREFIX = "/v2";
@@ -717,7 +717,10 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   const ingestBaseMs = Date.now();
 
   for (const [index, msg] of messages.entries()) {
-    const id = `msg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    // Full UUID (hyphens stripped, 32 hex) — do NOT truncate. At ~1e8 messages
+    // a 12-hex (48-bit) id collides ~18 times by the birthday bound, and an
+    // upsert-based write would silently overwrite the colliding message.
+    const id = `msg-${randomUUID().replace(/-/g, "")}`;
     const ingestRecordedAtMs = ingestBaseMs + index;
     const recordedAtMs = msg.recorded_at
       ? new Date(msg.recorded_at).getTime()
@@ -736,15 +739,24 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
       recordedAt: new Date(recordedAtMs).toISOString(),
       timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : recordedAtMs,
     };
-
-    let emb: Float32Array | undefined;
-    if (embedding) {
-      try { emb = await embedding.embed(msg.content); } catch (e) { console.warn(`[v2-router] L0 embedding failed:`, e); }
-    }
-
-    await store.upsertL0(record, emb);
     acceptedIds.push(id);
     acceptedRecords.push(record);
+  }
+
+  // Write path. One `/conversation/add` is one group of messages, so prefer a
+  // single batch insert when the store supports it AND no per-message embedding
+  // is required (keyword-only backends, e.g. Mongo). Otherwise fall back to the
+  // per-record upsert loop (sqlite/tcvdb, incl. vector embedding).
+  if (store.insertL0Batch && !embedding) {
+    await store.insertL0Batch(acceptedRecords);
+  } else {
+    for (const record of acceptedRecords) {
+      let emb: Float32Array | undefined;
+      if (embedding) {
+        try { emb = await embedding.embed(record.messageText); } catch (e) { console.warn(`[v2-router] L0 embedding failed:`, e); }
+      }
+      await store.upsertL0(record, emb);
+    }
   }
 
   // Notify pipeline: trigger async L1 extraction (service mode).
@@ -1551,7 +1563,13 @@ function scopedProfileStorage(storage: StorageAdapter, isolation?: RequestIsolat
   // have requestIsolation attached. Keep that legacy path at root; real HTTP
   // requests always resolve to either explicit ids or the `default` bucket.
   if (!isolation) return storage;
-  return createScopedStorageAdapter(storage, buildIsolationStoragePrefix(isolation));
+  // rowfs 后端（type === "rowfs"）在 scopeProfileStorageView 内改走隔离重绑定，
+  // 不再套 profiles/{scope}/ 键前缀（D12 ③：键里不含 scope，前缀会让行视图全部 404）。
+  return scopeProfileStorageView(storage, buildIsolationStoragePrefix(isolation), {
+    teamId: isolation.teamId,
+    userId: isolation.userId,
+    agentId: isolation.agentId,
+  });
 }
 
 function md5Hex(text: string): string {

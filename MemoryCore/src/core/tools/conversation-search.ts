@@ -11,8 +11,8 @@
  */
 
 import type { IMemoryStore, IsolationFilter, L0SearchResult } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
-import type { EmbeddingService } from "../store/embedding.js";
+import { buildFtsQuery } from "../store/tokenize.js";
+import { hasClientEmbedding, type EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
 
 // ============================
@@ -120,7 +120,7 @@ export async function executeConversationSearch(params: {
   }
 
   // ── Determine available capabilities ──
-  const hasEmbedding = !!embeddingService;
+  const hasEmbedding = hasClientEmbedding(embeddingService);
   const hasFts = vectorStore.isFtsAvailable();
 
   if (!hasEmbedding && !hasFts) {

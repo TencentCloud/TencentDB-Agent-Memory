@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VectorStore } from "../store/sqlite.js";
-import { TcvdbMemoryStore } from "../store/tcvdb.js";
+import { VectorStore } from "../store/sqlite/memory-store.js";
+import { TcvdbMemoryStore } from "../store/tcvdb/memory-store.js";
+import { l1RecordToDoc, docToL1RecordRow, docToL1FtsResult } from "../store/mongodb/doc-mappers.js";
 import type { MemoryRecord } from "./l1-writer.js";
 import { writeMemory } from "./l1-writer.js";
+import { recallL1Candidates } from "../tools/l1-candidate-recall.js";
 import { queryMemoryRecords } from "./l1-reader.js";
 
 const now = "2026-08-17T00:00:00.000Z";
@@ -63,9 +65,12 @@ describe("L1 source message provenance", () => {
     expect(records).toHaveLength(1);
     expect(records[0].source_message_ids).toEqual(["msg-1", "msg-2"]);
 
+    expect(vectorStore.isFtsAvailable()).toBe(true);
     if (vectorStore.isFtsAvailable()) {
       const ftsResults = vectorStore.searchL1Fts("provenance", 1);
       expect(ftsResults[0].source_message_ids_json).toBe('["msg-1","msg-2"]');
+      const recalled = await recallL1Candidates({ query: "provenance", topK: 1, vectorStore });
+      expect(recalled.hits[0].source_message_ids_json).toBe('["msg-1","msg-2"]');
     }
   });
 
@@ -135,6 +140,15 @@ describe("L1 source message provenance", () => {
     expect(written?.source_message_ids).toEqual(["msg-old", "msg-new"]);
     const records = await queryMemoryRecords(vectorStore, { recordIds: ["replacement"] });
     expect(records[0].source_message_ids).toEqual(["msg-old", "msg-new"]);
+  });
+
+  it("preserves provenance through the new MongoDB document mappers", () => {
+    const doc = l1RecordToDoc(memoryRecord("mongo", ["msg-1", "msg-1", "msg-2"]));
+    expect(doc.source_message_ids_json).toBe('["msg-1","msg-2"]');
+    expect(docToL1RecordRow(doc).source_message_ids_json).toBe(doc.source_message_ids_json);
+    expect(docToL1FtsResult(doc, 1).source_message_ids_json).toBe(doc.source_message_ids_json);
+    delete doc.source_message_ids_json;
+    expect(docToL1RecordRow(doc).source_message_ids_json).toBe("[]");
   });
 
   it("serializes provenance for TCVDB and tolerates legacy documents", async () => {

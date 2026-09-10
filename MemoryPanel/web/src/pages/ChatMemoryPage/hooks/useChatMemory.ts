@@ -48,6 +48,8 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
   >({});
   const [layerLoading, setLayerLoading] = useState(false);
   const [layerItemLoadingId, setLayerItemLoadingId] = useState<string | null>(null);
+  // 手动刷新计数：自增即重新触发当前层数据加载与四层计数拉取（effect 依赖驱动）。
+  const [refreshNonce, setRefreshNonce] = useState(0);
   // 详情页时间筛选器（仅 L0 / L1 生效），默认「前一天 ~ 当前」
   const [timeRange, setTimeRange] = useState<TimeRange>(() => defaultTimeRange());
   // 后端探测到筛选范围过大时为 true，BlockDetail 显示提示而非空态
@@ -186,15 +188,20 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
   // 必须对选中的 block 调用 L0/L1/L2/L3 四个 layer 接口才能拿到准确计数。
   // 之前做接口优化时把这里去掉了，导致徽章数量不正确。
   const layerCountSeqRef = useRef(0);
+  // 记录上一次已处理的 refreshNonce，用于区分「选中块变化」与「手动刷新」：
+  // 仅手动刷新（nonce 变化）时才忽略 layerCounts 缓存强制重拉四层计数。
+  const layerCountNonceRef = useRef(refreshNonce);
   useEffect(() => {
     if (!selected?.id) return;
     const blockId = selected.id;
     const seq = ++layerCountSeqRef.current;
+    const forceRefresh = layerCountNonceRef.current !== refreshNonce;
+    layerCountNonceRef.current = refreshNonce;
 
     const layers: MemoryLayer[] = ['L0', 'L1', 'L2', 'L3'];
     layers.forEach((l) => {
-      // 已经有真实计数的层不重复请求
-      if (selected.layerCounts[l] !== undefined) return;
+      // 已经有真实计数的层不重复请求；手动刷新时强制重拉。
+      if (!forceRefresh && selected.layerCounts[l] !== undefined) return;
 
       chatMemoryApi
         .layer(blockId, l, 1, 0)
@@ -210,7 +217,7 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
           // 单层计数失败不阻断其他层，静默忽略
         });
     });
-  }, [selected?.id]);
+  }, [selected?.id, refreshNonce]);
 
   // 切换记忆块时，时间筛选器重置为默认「前一天 ~ 当前」（业务确认：每次打开都重置）
   useEffect(() => {
@@ -296,7 +303,7 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
     return () => {
       cancelled = true;
     };
-  }, [selected?.id, layer, layerPage, pageSize, timeRange.start, timeRange.end, t]);
+  }, [selected?.id, layer, layerPage, pageSize, timeRange.start, timeRange.end, refreshNonce, t]);
 
   const handleLayerPageChange = useCallback(
     (nextPage: number) => {
@@ -577,6 +584,19 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
     }
   }
 
+  // 手动刷新当前选中块的当前层：作废窗口总数缓存并自增 nonce，
+  // 触发主加载 effect 重新拉取当前层数据、四层计数 effect 强制重拉计数。
+  const refreshLayer = useCallback(() => {
+    if (!selected?.id) return;
+    setWindowTotals((prev) => {
+      if (!(selected.id in prev)) return prev;
+      const next = { ...prev };
+      delete next[selected.id];
+      return next;
+    });
+    setRefreshNonce((n) => n + 1);
+  }, [selected?.id]);
+
   return {
     // context
     activeTeam,
@@ -615,6 +635,7 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
     filtered,
     // handlers
     fetchBlocks,
+    refreshLayer,
     handleLayerPageChange,
     handleL0LoadMore,
     handleLayerItemLoad,

@@ -10,24 +10,24 @@
  * - L2 scene navigation (full injection, LLM decides relevance)
  */
 
+import { parseSourceMessageIds } from "../store/types.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import { RecallErrors, toRecallFailure, type RecallError } from "./recall-errors.js";
 import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
-import { parseSourceMessageIds } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
-import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
+import { buildFtsQuery } from "../store/tokenize.js";
+import { hasClientEmbedding, type EmbeddingService, type EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import path from "node:path";
-import { createScopedStorageAdapter, type StorageAdapter } from "../storage/adapter.js";
+import { scopeProfileStorageView, type StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import {
   DEFAULT_PROFILE_SCOPE,
   buildProfileIsolationScope,
   type ProfileIsolation,
-} from "../profile/profile-sync.js";
+} from "../profile/profile-scope.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
@@ -170,8 +170,9 @@ async function performAutoRecallCore(params: {
   const profileDataDir = isScopedProfile
     ? path.join(pluginDataDir, "profiles", encodeURIComponent(profileScope))
     : pluginDataDir;
+  // rowfs 后端在 scopeProfileStorageView 内改走隔离重绑定（D12 ③），不套键前缀。
   const profileStorage = storage && isScopedProfile
-    ? createScopedStorageAdapter(storage, `profiles/${encodeURIComponent(profileScope)}/`)
+    ? scopeProfileStorageView(storage, `profiles/${encodeURIComponent(profileScope)}/`, profileIsolation)
     : storage;
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -459,7 +460,13 @@ async function searchMemories(
   const maxResults = cfg.recall.maxResults ?? 5;
   const threshold = cfg.recall.scoreThreshold ?? 0.3;
 
-  const embeddingAvailable = !!vectorStore && !!embeddingService;
+  const nativeHybrid =
+    strategy === "hybrid" &&
+    !!vectorStore &&
+    typeof vectorStore.getCapabilities === "function" &&
+    !!vectorStore.getCapabilities().nativeHybridSearch;
+  const embeddingAvailable =
+    !!vectorStore && (hasClientEmbedding(embeddingService) || nativeHybrid);
 
   logger?.debug?.(
     `${TAG} [searchMemories] strategy=${strategy}, embeddingAvailable=${embeddingAvailable}, ` +
@@ -468,14 +475,14 @@ async function searchMemories(
     `maxResults=${maxResults}, threshold=${threshold}`,
   );
 
-  // Determine effective strategy — no degradation: if embedding is configured but unavailable, fail
+  // Determine effective strategy (fall back to keyword if embedding not available).
+  // Native hybrid (TCVDB + Noop) is allowed for hybrid; embedding-only still needs a client embedder.
   let effectiveStrategy = strategy;
   if ((strategy === "embedding" || strategy === "hybrid") && !embeddingAvailable) {
-    // H-15: throw structured RecallFailure so the top-level catch in
-    // performAutoRecallInner can translate it into RecallResult.error
-    // (preserves fast-fail semantics + observability while keeping the
-    // hook contract "always resolves, never rejects").
-    throw RecallErrors.configMissingEmbedding(strategy);
+    logger?.warn?.(
+      `${TAG} Strategy "${strategy}" requested but EmbeddingService not available, falling back to keyword`,
+    );
+    effectiveStrategy = "keyword";
   }
 
   logger?.debug?.(`${TAG} Search strategy: ${effectiveStrategy} (configured: ${strategy})`);

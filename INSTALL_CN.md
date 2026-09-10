@@ -59,6 +59,45 @@ cd TencentDB-Agent-Memory/deploy/global-images
 
 ---
 
+## 可选能力：MongoDB 存储后端（试验特性，默认关闭）
+
+**做什么用。** 默认存储后端是 sqlite（零依赖，数据落容器卷）。MongoDB
+作为可选数据面，提供 L0/L1/profile/skill 文档存储与 mongot 原生 BM25
+检索；元数据默认跟随落入同一个 Mongo 实例。
+
+**默认关闭。** `./start-all.sh` 行为不变，现有 sqlite 部署无需改动。
+本能力仍为**试验特性**，不建议作为生产默认后端。
+
+### 开启方式
+
+```bash
+./start-all-mongo.sh
+```
+
+交互流程与 `./start-all.sh` 完全一致。脚本会将
+`MEMORY_CORE_STORE_MODE=mongodb` 写入 `.env`，此后再执行 `./start-all.sh`
+也会保持 MongoDB 后端，不会静默回退到 sqlite。
+
+未配置 `MONGODB_ENDPOINT` 时，脚本在本机拉起 `mongodb-atlas-local`
+容器（mongod + mongot 一体，**不是**云上的 MongoDB Atlas）。数据卷为
+`mongo-local-*`，`./stop-all.sh --purge` 会一并清理。
+若要对接外部 Mongo（云 Atlas 或自建、且带 mongot 的副本集），在 `.env`
+中设置 `MONGODB_ENDPOINT` 即可。
+
+### 关闭方式
+
+将 `.env` 中的 `MEMORY_CORE_STORE_MODE` 注释掉或改为 `sqlite`，再执行
+`./start-all.sh`。
+
+> ⚠️ **切换存储后端不会迁移已有数据。** sqlite 与 MongoDB 使用相互独立的
+> 数据目录 / 实例：sqlite 数据在 `MEMORY_CORE_VOLUME`，MongoDB 数据在
+> `mongo-local-*`（或你配置的外部实例）。切换后原数据仍留在原后端。
+> 当前版本需自行备份并手工迁移；后续版本将提供官方迁移工具。
+> 切换前请确认数据已备份。更多细节见
+> [`deploy/global-images/README.md`](./deploy/global-images/README.md)。
+
+---
+
 ## 部署完成后：把它跑起来
 
 服务起来只是第一步。要让 coding agent 用上团队记忆，
@@ -88,47 +127,106 @@ cd TencentDB-Agent-Memory/deploy/global-images
 - admin 登录后可以直接使用 Wiki、CodeGraph、Skill 等资产管理功能，创建 Team / Agent / Task 等业务资产
 - 如果希望隔离运维与业务（推荐），可创建 `normal` 业务用户 → 复制新用户的 `user_key` → 退出 admin 换新用户登录
 
-> 换句话说：admin 是"运维口"用来管人，业务用户是"应用口"用来管资产。
-> 单机本地体验也推荐遵循这个分层，不要用 admin key 直接跑 CC。
-> 注：2.0.0-beta.1 中 admin 不能拥有业务资产；2.0.0 正式版起 admin 也可以直接操作资产。
+> **权限模型（先理解这一点，后面步骤才不会走错）**：
+> - **admin 是"运维口"**：负责**创建 Team、创建用户、把用户拉进 Team** 这类组织管理操作。
+>   面板上「新建团队」「新建用户」的入口**只有 admin 能看到**。
+> - **业务用户是"应用口"**：在**被 admin 加入的 Team 内**管理资产（Agent / Task / Skill /
+>   Wiki / CodeGraph / 记忆），并用自己的 `user_key` 去跑 Claude Code 等 coding agent。
+> - 单机本地体验也推荐遵循这个分层，不要用 admin key 直接跑 CC。
+> - 注：2.0.0-beta.1 中 admin 不能拥有业务资产；2.0.0 正式版起 admin 也可以直接操作资产。
 
 Knowledge Service Swagger（可选，看接口调试用）：
 <http://localhost:8424/docs>
 
-### 第 1.5 步：admin 建业务用户（可选，推荐隔离运维与业务）
+### 第 1.5 步：admin 建业务用户（推荐隔离运维与业务）
 
-面板左上角「用户管理」（或用 admin 直接调 API）新建一个用户：
+> **重要（当前版本的入口约定）**：面板上**没有独立的「用户管理」菜单**。创建业务用户
+> 的入口挂在**某个 Team 的成员管理**里，因此顺序是**先由 admin 建好一个 Team，再在这个
+> Team 里创建业务用户**。这一步只能由 admin 完成。
+
+用 admin 登录面板后：
+
+1. **先建一个 Team**：点击**左上角的 Team 切换器**（顶栏那个显示当前团队名的下拉）→
+   面板底部「**+ 新建团队**」→ 填团队名 → 创建。（此入口仅 admin 可见。）
+2. **进入该 Team 的成员管理**：左侧「**成员管理**」→ 右上角「**添加成员**」。
+3. 在弹窗里把「方式」切到「**新建用户并加入团队**」→ 填用户名（仅英文字母 / 数字 /
+   下划线）→ 点「**新建并添加**」。
+   - 需要指定初始 key 时，可打开「自定义 User_Key」开关；否则由内核自动生成。
+4. 创建成功后弹窗会**一次性**显示该用户的 `user_key`（`sk-mem-...`），
+   **务必当场复制保存**——面板之后不会再展示完整值。
+
+> 除面板操作外，上述流程也可通过 API 完成。请注意这需要**两个步骤**：`user/create` 仅
+> 创建用户账号，**不会**将其加入任何 Team；如需实现"新建用户并加入团队"，还须再调用
+> `team-member/add`。两个接口均需要 **admin / 团队 admin** 权限，使用普通业务用户的 key 调用将返回 `permission_denied`：
 
 ```bash
-# API 方式，更明确（面板里等价操作在「用户」→「新建」）
 ADMIN_KEY=$(cat ./.admin-key)
+
+# 第 1 步：创建用户（仅建账号，不加入任何团队）。记下返回的 data.user_id 与 data.default_user_key
 curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
   -d '{"username":"you"}' | jq
+
+# 第 2 步：把上一步的 user_id 加入某个已存在的 Team（TEAM_ID 换成目标团队，role 一般填 member）
+curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
+  -H "x-tdai-user-key: $ADMIN_KEY" \
+  -H "x-tdai-service-id: default" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id":"<TEAM_ID>","user_id":"<上一步返回的 user_id>","role":"member"}' | jq
 ```
 
-返回体里 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
+> ⚠️ 只跑第 1 步（`user/create`）**只会建出一个不属于任何团队的用户**——它无法在面板里
+> 被自己管理，也进不了会话表单。务必接着跑第 2 步 `team-member/add` 才等于面板的
+> 「新建用户并加入团队」。`team-member/add` 要求 `team_id` 对应的 Team 已存在，且不能把
+> 自己 add 进去。
+
+第 1 步返回体里的 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
 **保存好**（面板无处再看到全值，只有创建时返回一次）。
 
-之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 用户，
-可以在自己名下建 Team / Agent / Task 了。当然，admin 也可以直接操作，这里只是推荐隔离。
+之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 业务用户，
+可以在 **admin 已经把你加入的 Team 内**管理 Agent / Task / Skill / Wiki / 记忆等资产了。
+
+> **面板上建 Team 只对 admin 开放。** 业务用户登录后**看不到「新建团队」入口**，这是
+> 面板的权限设计（不是 bug）。业务用户需要新 Team 时有两条路：① 让 admin 在面板里建好
+> 并把你加入；② 用自己的 key 调 `team/create` API 自助建（把 `owner_user_id` 填成自己，
+> 建成后自动成为该 Team admin）—— 详见下一步。
 
 ### 第 2 步：在面板里建 Team / Agent / Task
 
 Coding agent 用记忆必须落到具体 `team / agent / task` 三元组上：
 
-1. **Team**（团队）：面板左侧「团队」→ 新建
+1. **Team**（团队）：**左上角的 Team 切换器**（顶栏显示当前团队名的下拉）→ 底部「**+ 新建团队**」
    - 一个 Team 是一组资产的归属容器（memory、skill、knowledge 都归 Team）
-2. **Agent**（智能体）：进入 Team → 「Agent」→ 新建
+   - ⚠️ **面板上只有 admin 能建 Team**；业务用户看不到这个入口属正常，请让 admin 建好并把你加入
+   - 💡 **业务用户想自助建 Team？** 面板没有入口，但可以用**自己的 key** 调 API，把
+     `owner_user_id` 填成自己的 user_id —— 内核会建出 Team 并**自动把你设为该 Team 的
+     admin**（无需再手动加成员）：
+
+     ```bash
+     # 用第 1.5 步创建的那个业务用户自己的 user_key 调用
+     # 其中 name 就是团队名，改成你想要的即可（示例用的是 repro-own-team）
+     curl -sS -X POST http://localhost:8420/v3/meta/team/create \
+       -H "x-tdai-user-key: <该业务用户的 user_key>" \
+       -H "x-tdai-service-id: default" \
+       -H "Content-Type: application/json" \
+       -d '{"name":"repro-own-team","owner_user_id":"<该业务用户的 user_id>"}' | jq
+     ```
+
+     > `name` 是团队显示名，可自定义（同一用户名下不要重名，否则返回 `409`）。
+     > `team/create` 要求 body 里的 `owner_user_id` **必须等于调用 key 对应的 user_id**
+     > （即"只能建自己 own 的 Team"），否则返回 `permission_denied`。建成后你就是 owner
+     > 兼 admin，可直接在这个 Team 内管资产、跑会话。
+2. **Agent**（智能体）：进入 Team → 左侧「**Agents 管理**」→ 新建
    - 给它填一段清晰的 `description` + `system prompt`（就是这个 agent 的角色说明）
    - 例：`bug-fix 工程师`、`前端评审 agent`、`SQL 优化师`
-3. **Task**（任务，可选）：Team → 「任务」→ 新建
+3. **Task**（任务，可选）：左侧「**任务看板**」→「**新建 Task**」
    - Task 是**这一次工作的抓手**，比如「修复登录页 XSS」「上线 v1.4 灰度」
    - 记忆会关联到 Task；不建 Task 也能用，但 L2/L3 会缺 Task 维度
+   - 若想让首次会话有"一键跳过 Task"入口，可给 proxy 配 `defaultTaskId`（见后文）
 
-先建**至少 1 个 Team + 1 个 Agent**，可选建 Task。
+先准备好**至少 1 个 Team**（admin 面板建、或业务用户用上面的 API 自助建），Team 内建**至少 1 个 Agent**，可选建 Task。
 
 ### 第 3 步：把 Claude Code 指向 Proxy
 
@@ -173,7 +271,7 @@ claude --model <PROXY_UPSTREAM_MODEL 里配的上游模型>
 - proxy 记住这次会话的 team/agent/task 绑定
 - **后续每一轮请求，proxy 会自动把这个 agent 的 L2/L3 记忆、skill、
   knowledge 注入到 system prompt**
-- L0（原始对话）会自动落到 memory-core 的 SQLite 里
+- L0（原始对话）默认落到 memory-core 的 sqlite；若启用了 MongoDB 试验后端，则落到 MongoDB
 - 满足触发条件时后台跑 L1（抽 memory）→ L2（scene）→ L3（persona）
 
 只有**新 CC 会话**才会弹表单；同一次 `claude` 进程内的多轮不会再问。
@@ -204,6 +302,12 @@ curl -s http://localhost:8420/health | jq .services.pipelineWorker
 
 **Q: 表单选择项里空空的，或者只有别人的 team？**
 请确认当前使用的账号已在面板中创建过 Team 和 Agent。如果用的是 admin 账号，确保已创建了相关资产；如果用的是业务用户账号，检查是否已在对应 team 下建过 Agent。
+
+**Q: 用业务用户登录后，找不到「新建团队」按钮？**
+这是面板的权限设计，不是 bug：**面板上建 Team 只对 admin 开放**。你有两种办法：
+① 让 admin 登录 → 左上角 Team 切换器 →「+ 新建团队」建好，再到该 Team 的「成员管理」把你加入；
+② 自己用 `team/create` API 建（`owner_user_id` 填自己的 user_id，建成后你就是该 Team 的 admin，
+见第 2 步的说明）。两种方式建好后，重新登录就能在会话表单里看到这个 Team。
 
 
 **Q: 面板显示"Panel API 8125 未启动"？**
@@ -430,6 +534,164 @@ pipeline 时才有意义。
 > 3. **部分客户端的 tool call 后续请求可能不携带 extra headers**，导致那些轮次跳过记忆注入和对话回流。
 >
 > 我们将在下一个版本中优化 conversation ID 的使用体验。
+
+## 可选能力：数据分析与可观测性（默认关闭）
+
+**做什么用。** Panel 里的「数据分析」页会把这套系统的运行情况汇成看板：
+Skill / 记忆 / Knowledge 各类云端资产工具被调用了多少次、命中率如何、
+LLM 侧的 token 与用量分布、按团队 / Agent 的对比等等，用来评估记忆资产
+到底沉淀出了什么效果、哪些接入姿势有问题。
+
+**默认关闭。** 这套能力**不会自动跑起来** —— 它由三个服务分工完成，
+任何一个没配 ClickHouse 都会让对应数据缺失：
+
+| 角色 | 服务 | 干什么 |
+|---|---|---|
+| 采集（Memory / Skill 工具调用） | **Proxy** | 每次调用云端 memory / skill 工具时把埋点写到 ClickHouse `usage_logs` / `tool_call_logs` |
+| 采集（Wiki / Code-Graph 工具调用） | **Knowledge** | 每次调用 wiki / code-graph 工具时写到 ClickHouse `tool_call_logs` |
+| 查询接口 | **Core** | 提供 `/v3/analytics/*` 只读接口，从 Proxy 写入的 ClickHouse 库里聚合出各种维度的图表数据 |
+| 查询接口 | **Knowledge** | 提供 `/v3/analytics/*` 只读接口,读自己写入的 `tool_call_logs` |
+| 展示 | **Panel** | 启动时探测 Core / Knowledge 的 `/v3/analytics/config`，任一端返回 `configured: true` 才显示对应图表；否则显示"未启用" |
+
+也就是说：**Proxy + Knowledge 写数据，Core + Knowledge 提供查询接口，Panel 展示**。
+你可以按需只开一部分（比如只想看 Skill / 记忆的调用统计而不管 Wiki，
+那 Knowledge 侧的埋点可以先不开）。
+
+> ⚠️ 三个服务的 ClickHouse 可以是同一实例，也可以拆开；Core 的
+> `analytics.clickhouse.endpoint` 必须指向 **Proxy 写入的那个 CH**，
+> 否则 Core 查不到 Proxy 的埋点数据。
+
+### 第 1 步：准备一个 ClickHouse 实例
+
+自己起一个 ClickHouse（或者复用现有的），确保 HTTP 端口（默认 8123）
+可达。给 Proxy / Knowledge 用到的库最简单可以都用同一个（比如
+`context_proxy`）；也可以拆库。
+
+```bash
+# 举例：一条命令拉一个本地 ClickHouse
+docker run -d --name tdai-clickhouse \
+  -p 8123:8123 -p 9000:9000 \
+  -e CLICKHOUSE_DB=context_proxy \
+  -e CLICKHOUSE_USER=default \
+  -e CLICKHOUSE_PASSWORD=<your-ch-password> \
+  clickhouse/clickhouse-server:latest
+```
+
+表结构由 Proxy / Knowledge 首次写入时自动 `CREATE TABLE IF NOT EXISTS`
+建好，不用手工建表。
+
+### 第 2 步：Proxy 开启 ClickHouse 上报
+
+编辑 proxy 的 `config.yaml`（`start-proxy.sh` 生成的模板里已经有
+`clickhouse:` 段，默认 `enabled: false`），把它改成：
+
+```yaml
+clickhouse:
+  enabled: true
+  url: "http://<ch-host>:8123"       # ClickHouse HTTP endpoint
+  database: context_proxy            # 库名，跟下面 Core 的 database 保持一致
+  table: usage_logs                  # 用量表名
+  rawTable: usage_raw                # 原始用量追溯表
+  user: default
+  password: "<your-ch-password>"
+  flushIntervalMs: 5000
+  flushThreshold: 50
+  ttlDays: 30
+```
+
+Proxy 会把 memory / skill 相关工具调用与 LLM token 用量按 turn 写进
+`usage_logs` 与 `tool_call_logs` 两张表。写入失败静默降级，不影响
+Proxy 转发主链路。
+
+> 💡 走 `deploy/global-images/start-proxy.sh` 时，生成的 `config.yaml`
+> 每次启动都会被覆盖。要么改脚本里 YAML 模板加上 `clickhouse` 段，
+> 要么用 `PROXY_CONFIG_DIR` 指到你自己维护的 `config.yaml` 目录。
+
+### 第 3 步：Knowledge 开启 ClickHouse 上报 + 查询接口
+
+Knowledge 的 CH 配置走 `.env`，改 `MemoryKnowledge/.env`（或
+`start-memory-hub.sh` 使用的 env 文件）：
+
+```bash
+# ═══ 埋点上报（写入 tool_call_logs）═══
+KNOWLEDGE_CLICKHOUSE_ENABLED=true
+KNOWLEDGE_CLICKHOUSE_URL=http://<ch-host>:8123
+KNOWLEDGE_CLICKHOUSE_DATABASE=context_proxy      # 跟 Proxy 保持一致
+KNOWLEDGE_CLICKHOUSE_TABLE=tool_call_logs
+KNOWLEDGE_CLICKHOUSE_USER=default
+KNOWLEDGE_CLICKHOUSE_PASSWORD=<your-ch-password> # 有密码时必填
+KNOWLEDGE_CLICKHOUSE_FLUSH_INTERVAL_MS=5000
+KNOWLEDGE_CLICKHOUSE_FLUSH_THRESHOLD=50
+KNOWLEDGE_CLICKHOUSE_TTL_DAYS=90
+
+# ═══ 查询接口鉴权（/v3/analytics/*）═══
+# 需要 x-tdai-user-key 匹配这把 key 才能查询；Panel 用 admin user_key 即可
+KNOWLEDGE_ANALYTICS_ADMIN_KEY=<admin sk-mem-... 或自定义字符串>
+```
+
+`KNOWLEDGE_ANALYTICS_ADMIN_KEY` 留空时,`/v3/analytics/*` 数据接口会返回
+`503`（`/config` 仍可用，Panel 会把 Wiki / Code-Graph 图表显示为"未启用"）；
+只有配好后 Panel 才拿得到数据。填 admin 的 `user_key`（即
+`.admin-key` 文件里那串 `sk-mem-...`）最省事，也可以是任意稳定字符串
+（前端向 Knowledge `/v3/analytics/*` 发请求时会带这把 key）。
+
+### 第 4 步：Core 打开 analytics 查询接口
+
+Core 侧要开一个 **只读** 的 CH 查询模块，指向 Proxy 写入的 CH。改
+`MemoryCore/tdai-gateway.yaml`（或 `start-memory-core.sh` 使用的 yaml
+文件）:
+
+```yaml
+analytics:
+  clickhouse:
+    enabled: true
+    endpoint: "http://<ch-host>:8123"   # 必须指向 Proxy 写入的同一个 CH
+    username: "default"
+    password: "<your-ch-password>"      # 通过 Secret / .env 注入
+    database: "context_proxy"           # 跟 Proxy 的 database 一致
+```
+
+这段跟 Core 原有的 `observability.clickhouse`（OTel 导出到 `tdai_eval`）
+**完全独立**：那个是把 Core 自己产生的 trace 往外发的旁路，这个是让
+Core 反向去查 Proxy 已经写好的埋点库。
+
+配好后 Core 会额外暴露 16 个 `/v3/analytics/*` 只读端点，Panel 拿到数据
+后渲染出 session-init / tool-call / usage 各类图表。
+
+### 第 5 步：重启三件套并验证
+
+```bash
+# 重启（如果走一键部署）
+./stop-all.sh
+./start-all.sh
+```
+
+验证顺序：
+
+```bash
+# Core 探针：configured=true 表示 analytics 模块已启用
+curl -s http://localhost:8420/v3/analytics/config \
+  -H "x-tdai-service-id: default" \
+  -H "x-tdai-user-key: <admin sk-mem-...>" | jq
+
+# Knowledge 探针（无需 user_key）
+curl -s http://localhost:8424/v3/analytics/config \
+  -H "x-tdai-service-id: default" | jq
+```
+
+两条都返回 `{"configured": true, ...}` 才算通。之后打开 Panel
+「数据分析」页，就能看到 Proxy / Knowledge 各类工具调用汇总；如果任一端
+返回 `configured: false`，Panel 会把对应图表显示为"未启用",不会报错。
+
+**排查小抄。**
+
+- Panel 显示"未启用"或"暂无数据" → 先 `curl` 两个 `/config`,
+  哪端 `configured: false` 就先修哪端的 CH 配置
+- Proxy 有请求但 Core 查不到 → 十有八九 Core 的
+  `analytics.clickhouse.database` / `endpoint` 跟 Proxy 的
+  `clickhouse.database` / `url` 不一致
+- Knowledge `/v3/analytics/*` 401 → `KNOWLEDGE_ANALYTICS_ADMIN_KEY`
+  没配或者跟 Panel 传的 `x-tdai-user-key` 对不上
 
 ## 停止 / 清理
 

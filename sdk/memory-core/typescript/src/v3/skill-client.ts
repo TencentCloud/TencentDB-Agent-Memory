@@ -229,12 +229,11 @@ export class SkillClient {
     return this.http.post(`${V3}/patch`, body);
   }
 
-  /** `POST /v3/skill/delete` — soft-archive; does not bump version. */
+  /** `POST /v3/skill/delete` — physically remove all versions. */
   delete(params: SkillDeleteRequest): Promise<SkillDeleteData> {
     const body = stripUndefined({
       ...this.ids(params),
       skill_id: params.skill_id,
-      expected_version: params.expected_version,
     });
     return this.http.post(`${V3}/delete`, body);
   }
