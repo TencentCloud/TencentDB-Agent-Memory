@@ -22,6 +22,7 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
+import { timestampsForWrite } from "./l1-timestamps.js";
 
 // ============================
 // Types
@@ -109,6 +110,12 @@ export interface ExtractedMemory {
   metadata: EpisodicMetadata | Record<string, never>;
   /** Scene name this memory was extracted in */
   scene_name: string;
+  /**
+   * ISO timestamps of the source L0 messages (`source_message_ids`).
+   * Empty when none of the source IDs could be resolved. Distinct from
+   * event time in `metadata` and from `createdAt`/`updatedAt`.
+   */
+  timestamps?: string[];
 }
 
 export type DedupAction = "store" | "update" | "merge" | "skip";
@@ -132,7 +139,10 @@ export interface DedupDecision {
   merged_type?: MemoryType;
   /** Priority after merge (for update/merge) */
   merged_priority?: number;
-  /** Union of all related timestamps (for update/merge) */
+  /**
+   * Union of new-memory source timestamps and selected candidate timestamps.
+   * Filled in code after conflict detection — not taken from the model.
+   */
   merged_timestamps?: string[];
 }
 
@@ -209,14 +219,19 @@ export async function writeMemory(params: {
     finalContent = decision.merged_content ?? memory.content;
     finalType = decision.merged_type ?? memory.type;
     finalPriority = decision.merged_priority ?? memory.priority;
-    finalTimestamps = decision.merged_timestamps ?? [now];
   } else {
     // store
     finalContent = memory.content;
     finalType = memory.type;
     finalPriority = memory.priority;
-    finalTimestamps = [now];
   }
+
+  finalTimestamps = timestampsForWrite({
+    action: decision.action,
+    memoryTimestamps: memory.timestamps,
+    mergedTimestamps: decision.merged_timestamps,
+    nowIso: now,
+  });
 
   const record: MemoryRecord = {
     id: decision.record_id || generateMemoryId(),
