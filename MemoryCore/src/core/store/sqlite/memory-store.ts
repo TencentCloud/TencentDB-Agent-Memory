@@ -58,7 +58,7 @@ import type {
   AuditEntry,
   AuditQueryFilter,
 } from "../types.js";
-import { serializeSourceMessageIds, DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
+import { buildIsolationWhere, serializeSourceMessageIds, DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../../skill/skill-store-ddl.js";
 import type { Logger } from "../../types.js";
 import type {
@@ -2433,6 +2433,14 @@ export class VectorStore implements IMemoryStore {
    * L0 paginated query for v2 `/conversation/query`.
    * Uses SQL WHERE + LIMIT + OFFSET, no full-table scan.
    */
+  queryL0ByIds(ids: string[], filter?: IsolationFilter): L0QueryRow[] {
+    if (this.degraded || ids.length === 0) return [];
+    const { clause, params } = buildIsolationWhere(filter);
+    return this.db.prepare(`SELECT * FROM l0_conversations
+      WHERE record_id IN (${ids.map(() => "?").join(",")})${clause ? ` AND ${clause}` : ""}`)
+      .all(...ids, ...params) as unknown as L0QueryRow[];
+  }
+
   queryL0Paginated(filter: L0PaginatedFilter): L0PaginatedResult {
     if (this.degraded) return { rows: [], total: 0 };
 

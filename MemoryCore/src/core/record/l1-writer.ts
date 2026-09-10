@@ -7,8 +7,8 @@
  * Write strategy:
  * - JSONL is the append-only persistent store (source of truth for backup/recovery).
  * - VectorStore (SQLite) is the primary retrieval engine.
- * - On update/merge, old records are deleted from VectorStore in real-time;
- *   JSONL is append-only and cleaned up periodically by memory-cleaner.
+ * - Updates preserve identity; merges consolidate only after a durable replacement.
+ *   Previous revisions and source IDs remain in replacement metadata and JSONL.
  *
  * Supports store (append), update, merge, and skip operations.
  *
@@ -17,7 +17,7 @@
  */
 
 import crypto from "node:crypto";
-import { DEFAULT_ISOLATION_ID, parseSourceMessageIds, type IMemoryStore } from "../store/types.js";
+import { DEFAULT_ISOLATION_ID, parseSourceMessageIds, type L1RecordRow, type IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
@@ -39,6 +39,9 @@ export type MemoryType =
 
 /** Metadata for episodic memories (activity time range) */
 export interface EpisodicMetadata {
+  /** Source-derived effective date and previous revisions retained through consolidation. */
+  as_of?: string;
+  maintenance_history?: L1RecordRow[];
   activity_start_time?: string; // ISO 8601
   activity_end_time?: string; // ISO 8601
 }
@@ -179,8 +182,9 @@ export async function writeMemory(params: {
   /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
   storage?: StorageAdapter;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  const { memory, decision: requestedDecision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
 
+  let decision = requestedDecision;
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
     return null;
@@ -188,14 +192,15 @@ export async function writeMemory(params: {
 
   const now = new Date().toISOString();
 
+  let existing: L1RecordRow[] = [];
   let nextVersion = 0;
   let existingSourceMessageIds: string[] = [];
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0 && vectorStore) {
     try {
       // Match the scope used when deleting replacement targets below.
-      const existing = await vectorStore.queryL1Records({
+      existing = await vectorStore.queryL1Records({
         recordIds: decision.target_ids, teamId, userId, agentId,
-        sessionId: sessionId || undefined, sessionKey,
+        sessionId: sessionId || undefined, sessionKey, taskId,
       });
       const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
       nextVersion = maxVersion + 1;
@@ -203,6 +208,13 @@ export async function writeMemory(params: {
     } catch (err) {
       logger?.warn?.(`${TAG} Failed to read existing memory version, defaulting to v0: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  // A failed/missing target read must never turn into a destructive rewrite.
+  if (decision.action === "update" || decision.action === "merge") {
+    decision = existing.length
+      ? { ...decision, target_ids: existing.map((row) => row.record_id) }
+      : { record_id: decision.record_id, action: "store", target_ids: [] };
   }
 
   // A rewrite replaces the old L1 record. Preserve the evidence chain from all
@@ -229,7 +241,7 @@ export async function writeMemory(params: {
   }
 
   const record: MemoryRecord = {
-    id: decision.record_id || generateMemoryId(),
+    id: decision.action === "update" && existing.length === 1 ? existing[0].record_id : decision.record_id || generateMemoryId(),
     content: finalContent,
     type: finalType,
     priority: finalPriority,
@@ -237,7 +249,7 @@ export async function writeMemory(params: {
     source_message_ids: sourceMessageIds,
     metadata: memory.metadata,
     timestamps: finalTimestamps,
-    createdAt: now,
+    createdAt: decision.action === "update" && existing.length === 1 ? existing[0].created_time : now,
     updatedAt: now,
     version: nextVersion,
     sessionKey,
@@ -282,41 +294,26 @@ export async function writeMemory(params: {
     }
   };
 
-  if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0) {
-    // Remove target records from VectorStore (real-time deletion for retrieval accuracy).
-    // JSONL is append-only — old records remain in files and are cleaned up periodically
-    // by memory-cleaner (which reconciles against VectorStore as source of truth).
-    if (vectorStore) {
-      try {
-        const deleteFilter = teamId || userId || agentId || sessionId
-          ? { teamId, userId, agentId, sessionId: sessionId || undefined, sessionKey }
-          : undefined;
-        if (deleteFilter) {
-          await vectorStore.deleteL1Batch(decision.target_ids, deleteFilter);
-        } else {
-          await vectorStore.deleteL1Batch(decision.target_ids);
-        }
-        logger?.debug?.(`${TAG} VectorStore: deleted ${decision.target_ids.length} target record(s) for ${decision.action}`);
-      } catch (err) {
-        logger?.warn?.(
-          `${TAG} VectorStore delete failed for ${decision.action}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+  if (existing.length) {
+    const history: L1RecordRow[] = [];
+    for (const row of existing) {
+      // Flatten revision history instead of recursively embedding it at every rewrite.
+      const metadata = JSON.parse(row.metadata_json || "{}");
+      const { maintenance_history, ...originalMetadata } = metadata;
+      if (Array.isArray(maintenance_history)) history.push(...maintenance_history);
+      history.push({ ...row, metadata_json: JSON.stringify(originalMetadata) });
     }
-    try {
-      await appendRecord(JSON.stringify(record) + "\n");
-    } catch (err) {
-      logger?.warn?.(`${TAG} JSONL append failed (non-fatal, VDB write continues): ${err instanceof Error ? err.message : String(err)}`);
-    }
-    logger?.debug?.(`${TAG} ${decision.action} memory: removed [${decision.target_ids.join(",")}] from VectorStore → ${record.id}: ${finalContent.slice(0, 80)}...`);
-  } else {
-    // store: append a new line
-    try {
-      await appendRecord(JSON.stringify(record) + "\n");
-    } catch (err) {
-      logger?.warn?.(`${TAG} JSONL append failed (non-fatal, VDB write continues): ${err instanceof Error ? err.message : String(err)}`);
-    }
-    logger?.debug?.(`${TAG} Stored memory ${record.id}: ${finalContent.slice(0, 80)}...`);
+    record.metadata = { ...memory.metadata,
+      as_of: finalTimestamps.at(-1),
+      maintenance_history: [...new Map(history.map((row) => [`${row.record_id}:${row.version}`, row])).values()],
+    };
+  }
+  try {
+    await appendRecord(JSON.stringify(record) + "\n");
+  } catch (err) {
+    logger?.warn?.(`${TAG} JSONL append failed: ${String(err)}`);
+    // Preserve the existing state if its correction history cannot be persisted.
+    if (existing.length) return null;
   }
 
   // === Vector Store dual-write ===
@@ -348,6 +345,14 @@ export async function writeMemory(params: {
 
       const upsertOk = await vectorStore.upsertL1(record, embedding);
       logger?.debug?.(`${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`);
+      // Consolidate only after the replacement (including old revisions) is durable.
+      // A single update keeps its original ID; it never deletes the old record first.
+      const obsoleteIds = decision.target_ids.filter((id) => id !== record.id);
+      if (upsertOk && existing.length && obsoleteIds.length) {
+        await vectorStore.deleteL1Batch(obsoleteIds, {
+          teamId, userId, agentId, sessionId: sessionId || undefined, sessionKey, taskId,
+        });
+      }
     } catch (err) {
       // Vector write failure should NOT block the main JSONL write
       logger?.warn?.(

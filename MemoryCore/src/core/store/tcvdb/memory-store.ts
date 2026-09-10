@@ -1837,6 +1837,23 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── v2 API: Paginated queries ─────────────────────────────
 
+  async queryL0ByIds(ids: string[], filter?: IsolationFilter): Promise<L0QueryRow[]> {
+    if (ids.length === 0) return [];
+    await this._ensureInit();
+    if (this.degraded) return [];
+    const resp = await this.client.query(this.l0Collection, {
+      documentIds: ids, retrieveVector: false, outputFields: L0_OUTPUT_FIELDS,
+      filter: joinFilter(buildIsolationConditions(filter)),
+    });
+    return (resp.documents ?? []).map((d: any) => ({
+      record_id: d.id, session_key: d.session_key ?? "", session_id: d.session_id ?? "",
+      team_id: d.team_id ?? "", user_id: d.user_id ?? "", agent_id: d.agent_id ?? "",
+      task_id: d.task_id ?? "", role: d.role ?? "", message_text: d.message_text ?? "",
+      recorded_at: d.recorded_at_ms ? new Date(d.recorded_at_ms).toISOString() : "",
+      timestamp: d.timestamp ?? d.recorded_at_ms ?? 0,
+    }));
+  }
+
   async queryL0Paginated(filter: L0PaginatedFilter): Promise<L0PaginatedResult> {
     await this._ensureInit();
     if (this.degraded) return { rows: [], total: 0 };
