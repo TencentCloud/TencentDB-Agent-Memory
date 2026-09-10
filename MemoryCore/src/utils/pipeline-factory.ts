@@ -1001,7 +1001,7 @@ export function createL3Runner(opts: {
       // Guard: no scene files → nothing to generate from. Skip without marking
       // checkpoint so cold-start trigger remains available for the next attempt.
       const { readSceneIndex } = await import("../core/scene/scene-index.js");
-      const sceneIndex = await readSceneIndex(scopedDir, scopedStore);
+      const sceneIndex = await readSceneIndex(scopedDir, scopedStore, { strict: true });
       if (sceneIndex.length === 0) {
         logger.info(`${TAG} [L3] No scene files available for scope=${scope}, skipping (checkpoint unchanged)`);
         continue;

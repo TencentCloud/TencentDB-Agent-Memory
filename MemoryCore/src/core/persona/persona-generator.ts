@@ -4,6 +4,10 @@
  */
 
 import type { MemoryPromptMode } from "../../config.js";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
 import { readSceneIndex } from "../scene/scene-index.js";
@@ -21,6 +25,20 @@ import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
 import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
 
 const TAG = "[memory-tdai] [persona]";
+
+async function publishLocalFileAtomically(filePath: string, content: string): Promise<void> {
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await fs.writeFile(tempPath, content, "utf-8");
+    await fs.rename(tempPath, filePath);
+  } finally {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+  }
+}
 
 export class PersonaGenerator {
   private dataDir: string;
@@ -76,6 +94,9 @@ export class PersonaGenerator {
 
   /**
    * Execute local persona generation without advancing checkpoint.
+   * Returns `false` only when the published persona already covers every
+   * scene. Generation, validation, and publication failures reject so the
+   * caller cannot mistake them for a successful no-op and advance checkpoint.
    */
   async generateLocalPersona(triggerReason?: string): Promise<boolean> {
     const startMs = Date.now();
@@ -90,25 +111,32 @@ export class PersonaGenerator {
 
     // 1. Read existing L3 document (strip navigation)
     let existingPersona: string | undefined;
+    let existingPersonaFile: string | undefined;
     try {
       let raw: string | null;
       if (this.storage) {
         raw = await this.storage.readFile(targetFile);
       } else {
-        const fs = await import("node:fs/promises");
-        const path = await import("node:path");
-        raw = await fs.default.readFile(path.default.join(this.dataDir, targetFile), "utf-8");
+        raw = await fs.readFile(path.join(this.dataDir, targetFile), "utf-8");
       }
       if (raw) {
+        existingPersonaFile = raw;
         existingPersona = stripSceneNavigation(raw).trim() || undefined;
       }
       this.logger?.debug?.(`${TAG} Existing ${targetLabel}: ${existingPersona ? `${existingPersona.length} chars` : "empty"}`);
-    } catch {
-      this.logger?.debug?.(`${TAG} No existing ${targetFile} file`);
+    } catch (err) {
+      if (!this.storage && isNotFound(err)) {
+        this.logger?.debug?.(`${TAG} No existing ${targetFile} file`);
+      } else {
+        throw new Error(`Could not read existing ${targetFile}`, { cause: err });
+      }
     }
 
     // 2. Load scene index + identify changed scenes
-    const index = await readSceneIndex(this.dataDir, this.storage);
+    const index = await readSceneIndex(this.dataDir, this.storage, { strict: true })
+      .catch((err: unknown) => {
+        throw new Error("Could not read scene index", { cause: err });
+      });
     const changedScenes = index.filter((e) => {
       if (!cp.last_persona_time) return true;
       const updatedMs = new Date(e.updated).getTime();
@@ -127,16 +155,15 @@ export class PersonaGenerator {
         if (this.storage) {
           raw = await this.storage.readFile(`${StoragePaths.sceneBlocksDir}${entry.filename}`);
         } else {
-          const fs = await import("node:fs/promises");
-          const path = await import("node:path");
-          raw = await fs.default.readFile(path.default.join(this.dataDir, "scene_blocks", entry.filename), "utf-8");
+          raw = await fs.readFile(path.join(this.dataDir, "scene_blocks", entry.filename), "utf-8");
         }
-        if (!raw) continue;
+        if (raw === null) throw new Error(`Scene block is missing: ${entry.filename}`);
         changedSceneContents.push(
           `### [${changedSceneContents.length + 1}] ${entry.filename}\n\n\`\`\`markdown\n${raw}\n\`\`\``,
         );
-      } catch {
+      } catch (err) {
         this.logger?.warn(`${TAG} Could not read scene block: ${entry.filename}`);
+        throw new Error(`Could not read changed scene block: ${entry.filename}`, { cause: err });
       }
     }
 
@@ -163,12 +190,10 @@ export class PersonaGenerator {
     }
 
     // 6. Build prompt
-    const personaFilePath = this.storage
-      ? targetFile
-      : await (async () => { const path = await import("node:path"); return path.default.join(this.dataDir, targetFile); })();
+    const personaFilePath = path.join(this.dataDir, targetFile);
     const checkpointPath = this.storage
       ? StoragePaths.checkpoint
-      : await (async () => { const path = await import("node:path"); return path.default.join(this.dataDir, ".metadata", "recall_checkpoint.json"); })();
+      : path.join(this.dataDir, ".metadata", "recall_checkpoint.json");
 
     const { systemPrompt: baseSystemPrompt, userPrompt } = buildPersonaPrompt({
       mode,
@@ -185,19 +210,19 @@ export class PersonaGenerator {
     });
     const systemPrompt = composeMemorySystemPrompt(baseSystemPrompt, this.memoryPrompt);
 
-    // 7. Backup before LLM run (LLM writes persona.md via tools)
-    const bm = new BackupManager(this.storage
-      ? undefined  // COS mode: BackupManager not used (TODO: adapt BackupManager for StorageAdapter)
-      : await (async () => { const path = await import("node:path"); return path.default.join(this.dataDir, ".backup"); })()
-    );
-    if (!this.storage) {
-      const path = await import("node:path");
-      await bm.backupFile(path.default.join(this.dataDir, targetFile), "persona", `offset${cp.total_processed}`, this.backupCount);
+    // 7. Run the LLM against an isolated draft workspace. Tool calls must not
+    // publish directly to the live profile: a later model/API failure can occur
+    // after one or more successful write/edit calls. Only a fully completed,
+    // validated run is committed below.
+    const draftDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-tdai-persona-"));
+    const draftPath = path.join(draftDir, targetFile);
+    if (existingPersonaFile !== undefined) {
+      await fs.writeFile(draftPath, existingPersonaFile, "utf-8");
     }
 
-    // 8. Run LLM agent (sandboxed to dataDir, tools enabled — LLM writes target L3 file directly)
+    let personaText: string;
     try {
-      this.logger?.debug?.(`${TAG} Calling LLM for ${targetFile} generation (timeout=180s, tools=enabled, workspaceDir=${this.dataDir})...`);
+      this.logger?.debug?.(`${TAG} Calling LLM for ${targetFile} generation (timeout=180s, tools=enabled, workspaceDir=${draftDir})...`);
       // langfuse trace 语义：L3 persona 生成有独立 name / 顶级 user/session 列 / 可筛选 tags。
       const traceParams = buildTraceParams("memory.persona-generate", this.traceContext);
       await this.runner.run({
@@ -206,53 +231,42 @@ export class PersonaGenerator {
         taskId: "persona-generation",
         timeoutMs: 180_000,
         // maxTokens omitted → core uses the resolved model's maxTokens from catalog
-        workspaceDir: this.dataDir,
-        // Service mode: LLM tools read/write via StorageAdapter (COS) instead of local FS
-        storage: this.storage,
-        storagePrefix: this.storage ? "" : undefined,
+        workspaceDir: draftDir,
+        // Deliberately omit storage: both standalone and OpenClaw runners then
+        // expose file tools rooted in the isolated draft directory.
         ...traceParams,
       });
       this.logger?.debug?.(`${TAG} LLM runner completed`);
+
+      const raw = await fs.readFile(draftPath, "utf-8");
+      personaText = raw;
     } catch (err) {
       const elapsedMs = Date.now() - startMs;
       this.logger?.error(`${TAG} Persona generation failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-      return false;
+      throw err;
+    } finally {
+      await fs.rm(draftDir, { recursive: true, force: true }).catch(() => {});
     }
 
-    // 9. Read LLM-written persona.md and apply post-processing
-    let personaText: string;
-    try {
-      let raw: string | null;
-      if (this.storage) {
-        raw = await this.storage.readFile(targetFile);
-      } else {
-        const fs = await import("node:fs/promises");
-        raw = await fs.default.readFile(personaFilePath, "utf-8");
-      }
-      if (!raw) throw new Error(`${targetFile} not found`);
-      personaText = raw;
-    } catch {
-      // LLM failed to write persona.md — treat as failure
-      this.logger?.error(`${TAG} LLM did not write ${targetFile} — file not found after runner completed`);
-      return false;
-    }
-
-    // 10. Strip any navigation the LLM might have added + sanitize for safe injection
+    // 8. Strip any navigation the LLM might have added + sanitize for safe injection
     personaText = escapeXmlTags(stripSceneNavigation(personaText).trim());
 
     if (!personaText) {
       this.logger?.error(`${TAG} LLM wrote empty ${targetFile} — skipping`);
-      return false;
+      throw new Error(`LLM wrote empty ${targetFile}`);
     }
 
-    // 11. Append fresh scene navigation and write final content
+    // 9. Append fresh scene navigation and publish once. Storage backends expose
+    // whole-object replacement; the fs fallback uses tmp+rename so readers see
+    // either the previous persona or the complete new one.
     const nav = generateSceneNavigation(index, undefined, false);
     const finalContent = nav ? `${personaText}\n\n${nav}\n` : personaText;
     if (this.storage) {
       await this.storage.writeFile(targetFile, finalContent);
     } else {
-      const fs = await import("node:fs/promises");
-      await fs.default.writeFile(personaFilePath, finalContent, "utf-8");
+      const bm = new BackupManager(path.join(this.dataDir, ".backup"));
+      await bm.backupFile(personaFilePath, "persona", `offset${cp.total_processed}`, this.backupCount);
+      await publishLocalFileAtomically(personaFilePath, finalContent);
     }
 
     const elapsedMs = Date.now() - startMs;
@@ -301,4 +315,8 @@ export class PersonaGenerator {
     await cpManager.markPersonaGenerated(cp.total_processed);
     return true;
   }
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
