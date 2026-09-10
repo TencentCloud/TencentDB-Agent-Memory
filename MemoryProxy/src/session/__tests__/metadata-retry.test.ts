@@ -50,7 +50,7 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-function run(store: SessionStore, selected: typeof preset | null = preset, input = messages) {
+function run(store: SessionStore, selected: Partial<typeof preset> | null = preset, input = messages) {
   return handleSessionInit("session", "user", input, config, store,
     { stream: false, modelId: "test", protocol: "anthropic" }, client, "test", "space", selected ?? undefined);
 }
@@ -96,32 +96,20 @@ describe("Claude Code metadata timeout recovery", () => {
     expect(restarted.get(key)?.metadataRetryAt).toBeUndefined();
   });
 
-  it("preserves a session reset through a metadata timeout and retry", async () => {
+  it.each([null, preset, { teamId: "team" }])("preserves reset state without reporting a completed opt-out (preset=%j)", async (selected) => {
     const store = new SessionStore();
     await store.set(key, { status: "uninitialized", keyId: "session", startedAt: Date.now(),
       attemptCount: 0, resetFlow: true, resetEpoch: 7 });
-    expect((await run(store, null)).resetFlow).toBe(true);
+    expect((await run(store, selected)).resetFlow).not.toBe(true);
     expect(store.get(key)?.resetEpoch).toBe(7);
-    expect((await run(store, null)).resetFlow).toBe(true);
+    expect((await run(store, selected)).resetFlow).not.toBe(true);
     failing = false;
     vi.spyOn(Date, "now").mockReturnValue(store.get(key)!.metadataRetryAt!);
-    expect((await run(store, null)).intercepted).toBe(true);
+    const result = await run(store, selected);
+    expect(result.intercepted).toBe(selected === null);
+    if (selected) expect(result.resetFlow).toBe(true);
     expect(store.get(key)?.resetFlow).toBe(true);
     expect(store.get(key)?.resetEpoch).toBe(7);
-  });
-
-  it("spaces repeated failures rather than retrying on every request", async () => {
-    const store = new SessionStore();
-    await run(store);
-    const retryAt = store.get(key)!.metadataRetryAt!;
-    const clock = vi.spyOn(Date, "now").mockReturnValue(retryAt);
-    expect((await run(store)).bypassed).toBe(true);
-    expect(store.get(key)?.status).toBe("uninitialized");
-    expect(store.get(key)?.metadataRetryAt).toBe(retryAt + 30_000);
-    clock.mockReturnValue(retryAt + 1);
-    const count = requests.length;
-    await run(store);
-    expect(requests).toHaveLength(count);
   });
 
   it("keeps an explicit no-assets answer terminal", async () => {

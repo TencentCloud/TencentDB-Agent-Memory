@@ -686,7 +686,7 @@ async function handleSessionInitInner(
   if (!state || state.status === "uninitialized") {
     // Keep temporary failures retryable without fetching the directory every turn.
     if (state?.metadataRetryAt && Date.now() < state.metadataRetryAt) {
-      return { intercepted: false, bypassed: true, resetFlow: state.resetFlow ?? false };
+      return { intercepted: false, bypassed: true };
     }
     console.log(`[session-init:cc] session=${compositeKey} state=${state?.status ?? "none"} → uninitialized`);
     if (!userId) {
@@ -743,7 +743,8 @@ async function handleSessionInitInner(
         agentDetail: null,
         taskDetail: null,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
+      // A temporary failure is not a completed reset / explicit opt-out.
+      return { intercepted: false, bypassed: true };
     }
 
     const totalAgents = teams.reduce((acc, t) => acc + t.agents.length, 0);
@@ -810,6 +811,8 @@ async function handleSessionInitInner(
           userId,
           cachedTeams: teams,
           selectedTeamId: pr.teamId,
+          resetFlow: state?.resetFlow,
+          resetEpoch: state?.resetEpoch,
         };
         return completeRegistration(
           { agent_id: pr.agentId!, task_id: pr.taskId },
@@ -833,6 +836,8 @@ async function handleSessionInitInner(
             userId,
             cachedTeams: teams,
             selectedTeamId: pr.teamId,
+            resetFlow: state?.resetFlow,
+            resetEpoch: state?.resetEpoch,
           };
           return advanceFromTeamPicked(
             presetTeam, teams, compositeKey, sessionKey, userId,
