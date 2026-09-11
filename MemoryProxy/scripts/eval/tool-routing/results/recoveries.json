@@ -1,0 +1,919 @@
+{
+  "note": "Original failed attempts and long transcripts are archived separately; these links identify the recovery used in each final record.",
+  "records": [
+    {
+      "case_id": "public300-fefff2a425e8b143",
+      "variant": "baseline",
+      "path": "continuations/baseline.json",
+      "original_record_sha256": "967bd1a91d5485a89ad101c77d0a748b20b703e26244612d85be4a4a62259b42",
+      "continuation_record_sha256": "eebc71b448db1ee78cc8e0fe9e0da4d181359cc75c621f4f3fb2b28ad740de7c",
+      "replayed_responses": 2,
+      "new_requests": 2
+    },
+    {
+      "case_id": "public300-fefff2a425e8b143",
+      "variant": "candidate",
+      "path": "continuations/candidate.json",
+      "original_record_sha256": "6e9c650056f44d1e485ca9859fcc730772b1ecd4053333fbf84f0464c2890100",
+      "continuation_record_sha256": "1af3d749e99d905a7cf4e232ff8649f1eb3ce48705d04bb855d5a4268f9e3a7e",
+      "replayed_responses": 1,
+      "new_requests": 3
+    },
+    {
+      "case_id": "public300-cpython-posixpath-empty-iterator",
+      "variant": "candidate",
+      "mode": "one-fresh-attempt-after-transport-failure",
+      "prior_record_sha256": "645e8cfb44553f956a1db6dfd4d9ff872680c00eab85cbfca86829b3f0f5bca6",
+      "record_sha256": "bfbb7ec38eaf79fe537c52ae271d6167f6f74484abe561cc7408d9a35f9c77e7"
+    },
+    {
+      "case_id": "public300-cpython-ntpath-root-only",
+      "variant": "candidate",
+      "mode": "one-fresh-attempt-after-transport-failure",
+      "prior_record_sha256": "52c2cf63b75cc9ecbdebf306d31aa14c83edabd49460a3ce222702e8c2cddbe8",
+      "record_sha256": "601f466618f4d0724c7a8dfb1bcf2ddacd5fdb82b070871a6357d0cb81b47999"
+    },
+    {
+      "case_id": "public300-cpython-posixpath-loop-then-link",
+      "variant": "candidate",
+      "mode": "one-fresh-attempt-after-transport-failure",
+      "prior_record_sha256": "60aa5487e1f001b8bb15defccde2beec4d0ba2200f6d53878732530b52fae9a9",
+      "record_sha256": "ce16d257bc28bfe634111507693bd63de0a1860cc04d7f9aa6b10b3e1d1d5ae7"
+    },
+    {
+      "case_id": "public300-cpython-posixpath-loop-then-link",
+      "variant": "baseline",
+      "mode": "one-fresh-attempt-after-transport-failure",
+      "prior_record_sha256": "9f519555221b4b36c4efbce3d5f1fb1b85a87e1f231a5ddb4c1a8bd9fecc5cb8",
+      "record_sha256": "5ac1fcb3ae0d6e5f8ea4214971464c43b4d71ee4e06bf7b6ee214b8f610f820d"
+    },
+    {
+      "case_id": "public300-cpython-pprint-bpo28850",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "4a76820d3e70ef1ac67d0ec66203569e1f7a942820428b0bef37f03f53f22373"
+    },
+    {
+      "case_id": "public300-cpython-pprint-bpo28850",
+      "variant": "candidate",
+      "mode": "one-fresh-attempt-after-transport-failure",
+      "prior_record_sha256": "eb7e320517422ab65c12084d877dc920291296f338886c53d4cceb261dba53f0",
+      "record_sha256": "db3663a470c815a4bddde630e9287c0b03499c3c968d7addccc84b3f2e814c4e"
+    },
+    {
+      "case_id": "public300-cpython-pprint-bpo39994",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "ff0ecbc2048aa7d3ab505415319f760a7167c086d6525902438b3843151ae89f"
+    },
+    {
+      "case_id": "public300-cpython-pprint-bpo45557",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "8bc83ac6a77eae056ee25a3c8c7fe6c82a9bc62c8727aa185d62d8b0eb808df7"
+    },
+    {
+      "case_id": "public300-cpython-pprint-bpo39994",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "f3578852087827e46cbaee7958b34a0f15e599744e896e6aa305f3735f7d1b04"
+    },
+    {
+      "case_id": "public300-cpython-pprint-bpo45557",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "ffae790ee86fe0f445744a0eb7395859ba25ce7e471e0f2a6c205e61d0473175"
+    },
+    {
+      "case_id": "public300-cpython-queue-without-accelerator",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "49a4c59e1506c7c0e56eb9fe08a673d6735ba123a81e12441178e506594aa84f"
+    },
+    {
+      "case_id": "public300-cpython-queue-without-accelerator",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "69fa6176c03b42dd5db1b313924ba0651088ea52ffc82eb00f130223aa704c5a"
+    },
+    {
+      "case_id": "public300-cpython-random-seed-mutates-buffer",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "645c3dbbb9a0bad9d837403895d4544bcccea2afc45c00a8d40bb03b729c25eb"
+    },
+    {
+      "case_id": "public300-cpython-random-seed-mutates-buffer",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "ef38c59b409d9ab22c49c82448540637afe7bc2fb19b2bbc9f28b412f824249b"
+    },
+    {
+      "case_id": "public300-cpython-random-zero-count-sample",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "461c40d2173102c5372dd847cb14dbe49cdc44b2dfbed528d9b4faf1d466e792"
+    },
+    {
+      "case_id": "public300-cpython-random-zero-count-sample",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "7deb45c95b0e5342a03e92517533162cabb907a8da27b91c859eab2f76a354da"
+    },
+    {
+      "case_id": "public300-cpython-shlex-whitespace-punctuation",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "19271946482480f37d132265bfaa561889c97493d31addf0f0f9fd476ad46ab4"
+    },
+    {
+      "case_id": "public300-cpython-shlex-whitespace-punctuation",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "3a36df20d711fac0b5d8705bb66be8142f1fa9ea3e945b0c8fa6b79d8455a618"
+    },
+    {
+      "case_id": "public300-cpython-shutil-move-link-into-target",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "b7da1d346674023787f0df1587805b9f3620a14d184f25c0bae663d3147dee30"
+    },
+    {
+      "case_id": "public300-cpython-shutil-move-link-into-target",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "7b4b182a5e585764db4eee48614314f9911fe7c6f304a95fd5cc18a9ac55ac1a"
+    },
+    {
+      "case_id": "public300-cpython-shutil-recursive-ignore",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "764ccdecf729670ba712776b5114b7085669caea2a0e9b0615d8e3af97ef973d"
+    },
+    {
+      "case_id": "public300-cpython-shutil-recursive-ignore",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "aa7d5d45809fb008a0dd4eacca3f1e9850873e68c164871e0d42b8decb226dc6"
+    },
+    {
+      "case_id": "public300-cpython-statistics-geometric-zero",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "8a5c699e55f3ba2b0bdd0219490bc43c32475cba280d62f0942a0f03f2aa71b7"
+    },
+    {
+      "case_id": "public300-cpython-statistics-normal-tail",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "fc10390a99200685647bec7871a0e4e98122a6a400cd1b722184ff0f8ba05581"
+    },
+    {
+      "case_id": "public300-cpython-statistics-geometric-zero",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "599ea723974eaa3469deaabd9b4019d09e655e864feeef4d6723f4f0f27513ee"
+    },
+    {
+      "case_id": "public300-cpython-statistics-normal-tail",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "9208791532b375ed611f73a3d20247634269f44acd99641bdaa0a71205ba0737"
+    },
+    {
+      "case_id": "public300-cpython-tarfile-bpo18819",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "5641feb4e3be388be3ce5ac75add6d6246ceedb318d51c8d7547239b91059af1"
+    },
+    {
+      "case_id": "public300-cpython-tarfile-bpo18819",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "e94e65d1f44edbcf60555b2ab1ba5ae3775246381dcc7b97ee809806ab47984e"
+    },
+    {
+      "case_id": "public300-cpython-tarfile-bpo32713",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "37d37468e6544089cd782a33c96dd94fd304f640daea0f36f08007b2a8e37333"
+    },
+    {
+      "case_id": "public300-cpython-tarfile-bpo32713",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "3ac42405cc1988743f3fd344095920689ee88a1dbcf56a8a3ef1f5c316a356c9"
+    },
+    {
+      "case_id": "public300-cpython-tempfile-pathlike-bytes",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "c552dd7e022d2b3e233bb557505cba10889d04d88e62cbebc1c471fef55514aa"
+    },
+    {
+      "case_id": "public300-cpython-tempfile-seek-return",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "df317dceeddd1c31c72fad9290b57e1dc7e241dde5295ef406bd94bea5e0afa6"
+    },
+    {
+      "case_id": "public300-cpython-tempfile-seek-return",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "eaf934624eec63faf4e96057427b4de450794d884dfa5c722cead8896ab7b9e6"
+    },
+    {
+      "case_id": "public300-cpython-tempfile-pathlike-bytes",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "eec1689774753ec15dff2f9932eb6fa8411644401f80e95866f063a96fd3e56c"
+    },
+    {
+      "case_id": "public300-cpython-tempfile-text-rollover",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "483e3f0436984c2a9d12511866b5588c0979f05189cc4fc197fdc6662a36e2b5"
+    },
+    {
+      "case_id": "public300-cpython-tempfile-text-rollover",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "1311d01f4799f09050e858a47e092b9fdba0920aacd1602fb725cc0726ccefcf"
+    },
+    {
+      "case_id": "public300-cpython-textwrap-common-indent",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "a0e18a7ffdd7eeb4319483548faec42e957328b6032c0bea2b6f20dc93c0167f"
+    },
+    {
+      "case_id": "public300-cpython-textwrap-common-indent",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "fa1a7a5c2df18bfa0a6e6c76a6a431ad7fa7ad5676417d6fe36fb8def91371f7"
+    },
+    {
+      "case_id": "public300-cpython-textwrap-hyphen-break",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "9d6fcf0e406b1b5b3a56412ed2f96e31c1bb80e2fb5943b05c75fc676e2d0256"
+    },
+    {
+      "case_id": "public300-cpython-textwrap-hyphen-break",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "473d77cc07a253421ae6153245615824b4784f3f49d3e6e677aebc3acb87f155"
+    },
+    {
+      "case_id": "public300-cpython-textwrap-zero-space",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "2a967d98733e7ea8f6185d0a10bbc4c2855bb6f2c16f7f0c0d782df4eacb4a8d"
+    },
+    {
+      "case_id": "public300-cpython-textwrap-zero-space",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "b038664648f7aa8e705c5757e666aa3a869f919013cb339a056a51916edef99a"
+    },
+    {
+      "case_id": "public300-cpython-tokenize-comment-eof",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "66da4772221198e4db60036717fd10101f21e7a86d6fbe42445ff10920ccdcd5"
+    },
+    {
+      "case_id": "public300-cpython-tokenize-comment-eof",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "1be0274300582a9971e11e272a91de3aee41e93484f08919f2b324ddab61d1e5"
+    },
+    {
+      "case_id": "public300-cpython-tokenize-encoding-cookie",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "519ac245803ede96da2ba4b3c02c4ba5ed87718a72f2584a84d07dea6df5b4bf"
+    },
+    {
+      "case_id": "public300-cpython-tokenize-encoding-cookie",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "fab70c5bc1db9aeea295721fefd71968b078516811eb79ed3a07c291cae2f488"
+    },
+    {
+      "case_id": "public300-cpython-traceback-current-frame",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "302b78d8bc90bdf7fc96e682590f80fb60608b2ca95bfd0513e24f18f5586971"
+    },
+    {
+      "case_id": "public300-cpython-types-coroutine-suspended",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "cb5de04ba0eeb11810f2098374bec9ece8810e63820f241abf0ae7ef628e4a07"
+    },
+    {
+      "case_id": "public300-cpython-types-coroutine-suspended",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "06cf51a66be2e8e720c50f13060a7057dbec75dafa9208c59dce92c5db8d8a54"
+    },
+    {
+      "case_id": "public300-cpython-traceback-current-frame",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "f5ecef523632f7f8bcc94bdc493fb27efbbf8ab49d4593811a8635ed92118387"
+    },
+    {
+      "case_id": "public300-cpython-urllib-parse-bpo27657",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "1cff3170adaa640e4bb80951c7305f46ea3f893e55bef438fc7bde85e82afa6f"
+    },
+    {
+      "case_id": "public300-cpython-urllib-parse-bpo27657",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "bcb146efe43b5430c036039720b7efb3e6825eb841b9b7cd3d468f3adee92fdf"
+    },
+    {
+      "case_id": "public300-cpython-urllib-parse-bpo32323",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "21205bb20351069d17e5e8f2cdbdf196e40e4020c0f0d873b51b04e301d3c074"
+    },
+    {
+      "case_id": "public300-cpython-urllib-parse-bpo45874",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "70b72bf7a514d554725a61abc30153b00e283d12d765f70045c5d9e1a3448f14"
+    },
+    {
+      "case_id": "public300-cpython-urllib-parse-bpo32323",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "7826ef7c549813c36fa92cb93483b34aba9a3ff06b2663f32604ac7d06dfe9e8"
+    },
+    {
+      "case_id": "public300-cpython-zipfile-bpo37523",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "9899164d10a398f96ec5ca8680005bd111ccc40c71c18def1d30c23b0b9c5041"
+    },
+    {
+      "case_id": "public300-cpython-urllib-parse-bpo45874",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "e139b67d5836040f7c240ed466c0b47390699e7d6bbde5ca5634152460b393ec"
+    },
+    {
+      "case_id": "public300-cpython-zipfile-bpo37523",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "c74730b607c91ec1eb77e5709267d199ff7b7dc3830998960fdd2d201adbe051"
+    },
+    {
+      "case_id": "public300-cpython-zipfile-bpo40105",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "6a9f7bdd4ce8de6d67daae548335b5dfc7ce98af1d9b2e77764fa01db8562551"
+    },
+    {
+      "case_id": "public300-cpython-zipfile-bpo40105",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "a9edeb250a681fa077d2eeb274a49f3e7fa9570eba210f0bae82d2f5beabd490"
+    },
+    {
+      "case_id": "public300-cpython-zipfile-bpo41068",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "ddc7b1dc2c783ea622707d1b17f49fa730e419b036f9c558a2332c1fa3338166"
+    },
+    {
+      "case_id": "public300-review-astropy__astropy-7336",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "37993f3c11a704d39b12fce26fb2e03684ae86a748aff06269b7a3ede3801c0d"
+    },
+    {
+      "case_id": "public300-review-astropy__astropy-7336",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "87303fb522a8780ba6444cde8ef3e17f47a23aad313fce16f9c9b7d677c32bda"
+    },
+    {
+      "case_id": "public300-cpython-zipfile-bpo41068",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "d9144b8aa6931dcd86c9d6b8abdc9cd0f0d409b16a0223a787063d625bce27ea"
+    },
+    {
+      "case_id": "public300-review-django__django-12155",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "ced8f16ca0f3982c4a6e60ef7a96318506962b1fb898f15f80d933aee0c208fc"
+    },
+    {
+      "case_id": "public300-review-django__django-12155",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "2695defaee2544f746f6638225679f395abcfd301cb8b3af6e99db3ebe96a45a"
+    },
+    {
+      "case_id": "public300-review-matplotlib__matplotlib-24627",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "2a8e7def9a4b94b809a1c40f0c605b8164577780b8f3c9b3555bc1ec118b7fca"
+    },
+    {
+      "case_id": "public300-review-matplotlib__matplotlib-24627",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "982339883a1824ddedffc495d3def2b874d67ae8643363b2a30a7b5f70f8620a"
+    },
+    {
+      "case_id": "public300-review-mwaskom__seaborn-3069",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "c6a8f5e81754fd765ee4d759ce7874b52dcee008be15d77213eb5420f8302036"
+    },
+    {
+      "case_id": "public300-review-mwaskom__seaborn-3069",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "3d503af888d0fd3a73b14c9bbdd719330a126c4fe6c77410bfdcd24014b802bf"
+    },
+    {
+      "case_id": "public300-review-pallets__flask-5014",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "880df62063cebf8df5a283688a37343d6048e796a60f9c4ac25e38e763611eef"
+    },
+    {
+      "case_id": "public300-review-pallets__flask-5014",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "0f9b35783d19820626c3b843863454e7d87b506fe801c19af0b352fce7df058a"
+    },
+    {
+      "case_id": "public300-review-psf__requests-1921",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "835e945d354db09f77f01caa1cf4fe6394550892efd7c689041190c094028196"
+    },
+    {
+      "case_id": "public300-review-psf__requests-1921",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "44ea2695291a9623d0fef0eda0dc5d424114d5676f0da716d575560822db21f4"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-6461",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "f01651c2873ca586758074304a96c1d4e66f3e1cbe4b43cc0392208dd1a1fedc"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-6461",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "aa0b2d6f6b16a07834212ce12562ffc7e57f222df84edc903fba34b10e72716c"
+    },
+    {
+      "case_id": "public300-review-pylint-dev__pylint-8898",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "4f7f3c473da298812ca1a569a228dd6f3f94864f1a49cad6deff19676d0a6b02"
+    },
+    {
+      "case_id": "public300-review-pylint-dev__pylint-8898",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "5caaf1b7cefac41d45a51e326d58f49c1625d8afc0af4081111916ad5476bdd8"
+    },
+    {
+      "case_id": "public300-review-pytest-dev__pytest-5840",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "8c4561736f784a25437a8e4edd1587400ab5dcc05b44d6d68f17c376ebcbff4b"
+    },
+    {
+      "case_id": "public300-review-pytest-dev__pytest-5840",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "d3322ec3b317b4c64220ea29535ec0a604959de5376d772e933de7d782544a8f"
+    },
+    {
+      "case_id": "public300-review-scikit-learn__scikit-learn-14710",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "6123b89a61bf049e1b79afaf73aad13fbf052693bc676033e00773dea41a8405"
+    },
+    {
+      "case_id": "public300-review-scikit-learn__scikit-learn-14710",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "7a884827048c1d39da7ddf2d279c3940075224a7e91874f92002fa731a61c7f7"
+    },
+    {
+      "case_id": "public300-review-sphinx-doc__sphinx-9367",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "c19118b29cfd3d7c4622e34fd7551e62528e4c79b8ce5a6e4c03b08b6d6683b7"
+    },
+    {
+      "case_id": "public300-review-sphinx-doc__sphinx-9367",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "268cdb0a7198f5d2886307424284158b493e9982f3a8c50b9ac309118419370d"
+    },
+    {
+      "case_id": "public300-review-sympy__sympy-18199",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "addf5911c376f0ac0626f0683b0cf423e23f4aca43839ced6d4d1b28c13e6118"
+    },
+    {
+      "case_id": "public300-review-sympy__sympy-18199",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "a21a29d4d2a7e93ac73856345574e7da58556b75fcdebe95c88017895b7534ef"
+    },
+    {
+      "case_id": "public300-review-astropy__astropy-13579",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "c44a9796675a1067d40428d81a901904567047f1fe475860b855ae97dd5c4183"
+    },
+    {
+      "case_id": "public300-review-astropy__astropy-13579",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "dbdaaad52706220fcc48d6e94e4602e8c21383e82c566968efa9db9bad709221"
+    },
+    {
+      "case_id": "public300-review-django__django-13449",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "2d2f85745bc58bba40db779297d963664a3090b44199be153ef9338290709003"
+    },
+    {
+      "case_id": "public300-review-django__django-13449",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "d4dede563beb1579f0da120901a59283982b74ba5011bd394676a6f895c3f62d"
+    },
+    {
+      "case_id": "public300-review-matplotlib__matplotlib-25960",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "2a6150c8f32a5b12f35fcba340f4e5bb47d8996cf407ee482064e9c35655b76e"
+    },
+    {
+      "case_id": "public300-review-matplotlib__matplotlib-25960",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "7dd7f31946cfc2d9888e11d796f0de4aa02075591f4d9f12b04d030548d31a76"
+    },
+    {
+      "case_id": "public300-review-mwaskom__seaborn-3187",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "b2e076eb60489ec140e0be81b739e15c4cf5ad6bf99586b3110e4166c4e6782b"
+    },
+    {
+      "case_id": "public300-review-mwaskom__seaborn-3187",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "5a5422bfe03f619536a87c3216ac0f4afe96226cce6b8d980f6896c8ed70c468"
+    },
+    {
+      "case_id": "public300-review-psf__requests-6028",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "6119b763a2f5b1e9f1c783ee825499918a0f3dac94cd469a41d5858204828ae1"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-3993",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "7384ec19101522442b96bbfbe51b5d17c0d779897b601864cd8fb59e247f359c"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-3993",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "aeee9c37b431b73375d32f61c9e95b696daa65a51a7219902a38466d7eec1052"
+    },
+    {
+      "case_id": "public300-review-psf__requests-6028",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "1711579c9f8f5300ce9219604ca58e45ef69db7116033987870408b0085c552e"
+    },
+    {
+      "case_id": "public300-review-pylint-dev__pylint-6528",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "c5b1342adf6a6eb7d7684dc7e08d45576bd97f5ee037dfba5d8f54a6df0a5f1a"
+    },
+    {
+      "case_id": "public300-review-pytest-dev__pytest-6202",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "7ad4d11d88c23385bd332b221e5a2efbc688752bb5916fd81ead9b40954aee70"
+    },
+    {
+      "case_id": "public300-review-pylint-dev__pylint-6528",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "3af50dd3d637a6bfb615194973f0616fe55ca71a4ea4cfbf7ff2c93512974ba8"
+    },
+    {
+      "case_id": "public300-review-scikit-learn__scikit-learn-13439",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "20bfc5f06f5aa4652725edfa9c28cfcd31f04b4a1a08f03d22888a9715566450"
+    },
+    {
+      "case_id": "public300-review-scikit-learn__scikit-learn-13439",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "a5c4a83cc98ee1b899f697d7317b04fcb3761978ae9563a5db2ba9b74e4d4afe"
+    },
+    {
+      "case_id": "public300-review-pytest-dev__pytest-6202",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "90dcc7b0a5bbdb0bb5ae955ddc36a5317bc0aadbcd26c08827f98064a3a38d86"
+    },
+    {
+      "case_id": "public300-review-sphinx-doc__sphinx-10323",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "fb63becc798907689a8d414cc7ad09d914a6305b11560f65df5881cc4adc23ae"
+    },
+    {
+      "case_id": "public300-review-sympy__sympy-24661",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "5c7c2732c4e2e9085adba66df772ea443d3cc2ae8beb6e722c3bd9263693fc7f"
+    },
+    {
+      "case_id": "public300-review-sphinx-doc__sphinx-10323",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "6abbe0749d847de31ddc65a18ac98b2e62bcd37a3c0961cc8c705a65ad17a64a"
+    },
+    {
+      "case_id": "public300-review-sympy__sympy-24661",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "949d8c884e8f63018e19b0989737bf5dd80507f80718f655fb5ecc4a6df7e340"
+    },
+    {
+      "case_id": "public300-review-astropy__astropy-13398",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "425a4fd7d657631b6543c8fdbb10e31bb72c1744ee0b1f1f90e4e4bb7e5876e4"
+    },
+    {
+      "case_id": "public300-review-astropy__astropy-13398",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "dbaadefb436502d0d2fb63afd3cd8d232f445267f5aaaddd21d4942730441a71"
+    },
+    {
+      "case_id": "public300-review-django__django-15252",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "e8c1ff5c31da941a31b2c13df94a6d12f2b09aee124bd4592393371c477b0924"
+    },
+    {
+      "case_id": "public300-review-matplotlib__matplotlib-26466",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "37971b05a416b9ff38c2c417a5cb2a1c2a38ed393759d4f8c2672a1286e45398"
+    },
+    {
+      "case_id": "public300-review-django__django-15252",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "eea8cea97232e0937967a42ca0c617d17160f8a695b991282aa963a8da1c7e06"
+    },
+    {
+      "case_id": "public300-review-matplotlib__matplotlib-26466",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "8308df3a854c30fa700f5135d68530fc6fe38dc5c37dadcb46f3bd510a26ab7c"
+    },
+    {
+      "case_id": "public300-review-psf__requests-1766",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "cc8cc3a2e74ab41619cc78db26d93f394609eafc25920694a34e6e74cfcccc29"
+    },
+    {
+      "case_id": "public300-review-psf__requests-1766",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "e4f500293f2f7e6aa243de2c5f3f82581d72ca699118e5c7f00446f1e25cdd7d"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-6938",
+      "variant": "baseline",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "ea51826c5b4256ecbc85c0d50f958158413d1da0e7e69d03398659d64a340c83"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-6938",
+      "variant": "candidate",
+      "mode": "previously-unexecuted-frozen-job",
+      "prior_record_sha256": null,
+      "record_sha256": "61d4f09d0248ad6de1111bcccdcfa5dcd9628ebde187e75c6b4e2cd523471839"
+    },
+    {
+      "case_id": "public300-cpython-ntpath-partial-unc",
+      "variant": "candidate",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": "c6e2713d38e0f5b2abc00f589569e7e5643c2c5c23dadb0db8727ded9c8c6529",
+      "record_sha256": "8d5cc8c1ec6a70b08a2a14fd872821e9218a1f2f4e2855b30836ba6122782cef"
+    },
+    {
+      "case_id": "public300-cpython-pathlib-bpo27827",
+      "variant": "candidate",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": "abf12b967866bc2bd717aa3426f6aa6b82d714a864ed48ae5612d7fcac1c4cfb",
+      "record_sha256": "7e02cefc67bc101545819e54ee5c2b5c5b3a309b43817146e3957f7ee9c7c923"
+    },
+    {
+      "case_id": "public300-cpython-pathlib-bpo27827",
+      "variant": "baseline",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": "c347c448c9cc1a6481742acf432c9370e29a2e66802aa7556faa73b05a6dd837",
+      "record_sha256": "2651853275393287166969f26637196083253575b469ec4bb20aac2f5b1d0f8d"
+    },
+    {
+      "case_id": "public300-cpython-posixpath-empty-iterator",
+      "variant": "baseline",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": "1464d11074906dceb7b1cfa9308b5f0267f9f090f816e6f40010d68fabd1928f",
+      "record_sha256": "220b91a6ac5dc228d61bfe3bb624a65f54667881e067878b7788df92720810f1"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-6938",
+      "variant": "baseline",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": "ea51826c5b4256ecbc85c0d50f958158413d1da0e7e69d03398659d64a340c83",
+      "record_sha256": "cfe3c0e98b310b0852c342af644e18ee3f69ce9a4cb727ba188cf132ff0ce581"
+    },
+    {
+      "case_id": "public300-review-pydata__xarray-6938",
+      "variant": "candidate",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": "61d4f09d0248ad6de1111bcccdcfa5dcd9628ebde187e75c6b4e2cd523471839",
+      "record_sha256": "f8d709654795cab465062b26b9f23468460981b28623c1cfa282937515f909e2"
+    },
+    {
+      "case_id": "public300-review-pylint-dev__pylint-6903",
+      "variant": "candidate",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": null,
+      "record_sha256": "c75cae68cf63a34ef39c367c194be464b83f6f258bb51241eadd6b0a9072dfea"
+    },
+    {
+      "case_id": "public300-review-pylint-dev__pylint-6903",
+      "variant": "baseline",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": null,
+      "record_sha256": "650054515e58bdf4bfc8b34f45c65f61290ffe219b106d05bac01b907966745f"
+    },
+    {
+      "case_id": "public300-review-pytest-dev__pytest-5631",
+      "variant": "baseline",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": null,
+      "record_sha256": "9ef5e68d9d39163452e91cc7a7eaac5076aa6a3d16229beac4ef7b4c348fdaba"
+    },
+    {
+      "case_id": "public300-review-pytest-dev__pytest-5631",
+      "variant": "candidate",
+      "mode": "final-bounded-infrastructure-supplement",
+      "prior_record_sha256": null,
+      "record_sha256": "09bac10f79a3da2a0de28961de6bcce3943476d6b30443467690ffb4a8c79350"
+    }
+  ]
+}

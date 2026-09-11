@@ -32,9 +32,19 @@ docs/e2e-suite/logs/
 .env
 .env.*
 !.env.example
+!.env.tool-routing.local.example
 
 # JSONL runtime artifacts anywhere in the tree
 *.jsonl
+# The controlled benchmark dataset is a source asset, not a runtime artifact.
+!scripts/eval/tool-routing/dataset.jsonl
 
 # Unix sockets
 *.sock
+
+# Keep only curated tool-routing evidence; new run outputs remain local.
+scripts/eval/tool-routing/results/*
+!scripts/eval/tool-routing/results/summary.json
+!scripts/eval/tool-routing/results/per-case.jsonl
+!scripts/eval/tool-routing/results/token-probe.json
+!scripts/eval/tool-routing/results/recoveries.json
