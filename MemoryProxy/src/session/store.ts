@@ -23,6 +23,7 @@
  * entry point on every turn, so binding-through-that-path is guaranteed.
  */
 
+import { normalizeTaskId, normalizeSessionTask } from "./task.js";
 import type { SessionInitState, SessionInitStatus, SessionInfo, AgentDetail, TaskDetail } from "./types.js";
 import { getSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import type { BindingRepo, SessionBinding } from "../db/binding-repo.js";
@@ -78,10 +79,16 @@ export class SessionStore {
     ttlMs: number = DEFAULT_TTL_MS,
     repo?: SessionRepo,
     bindingRepo?: BindingRepo,
+    private defaultTaskId: string | undefined = "default",
   ) {
     this.ttlMs = ttlMs;
     this.repo = repo;
     this.bindingRepo = bindingRepo;
+  }
+
+  /** Use the configured virtual ID for legacy session recovery, including bridge reads. */
+  setDefaultTaskId(taskId: string | undefined): void {
+    this.defaultTaskId = taskId;
   }
 
   /** Attach BindingRepo late (called after Redis / storage activation). */
@@ -129,7 +136,10 @@ export class SessionStore {
       return undefined;
     }
 
-    return state;
+    const normalized = normalizeSessionTask(state, this.defaultTaskId);
+    // L1 can be stale on another node: never write it over an authoritative L2 row.
+    if (normalized !== state) this.states.set(keyId, normalized);
+    return normalized;
   }
 
   /**
@@ -164,6 +174,7 @@ export class SessionStore {
    * "小纸条"型持久化，用于长睡对话唤醒；写延迟不影响 pending 状态跨节点恢复。
    */
   async set(keyId: string, state: SessionInitState): Promise<void> {
+    state = normalizeSessionTask(state, this.defaultTaskId);
     // `__recoverySource` is a transient hint produced by getOrRecover() only,
     // and must not leak into L1/L2a/L2b persistence. Strip it defensively here
     // so future callers who forward a getOrRecover() result into set() don't
@@ -506,8 +517,14 @@ export class SessionStore {
       return undefined;
     }
 
-    // Promote back to L1 so subsequent turns don't hit the repo at all.
-    this.states.set(keyId, row);
+    // Migrate legacy virtual tasks before exposing recovered state to callers.
+    const normalized = normalizeSessionTask(row, this.defaultTaskId);
+    if (normalized !== row) {
+      row = normalized;
+      await this.set(keyId, row);
+    } else {
+      this.states.set(keyId, row);
+    }
     console.log(
       `[session-recover] ${keyId} L2a hit status=${row.status} (agent=${row.sessionInfo?.agent_id ?? "-"}, task=${row.sessionInfo?.task_id ?? "-"})`,
     );
@@ -550,6 +567,15 @@ export class SessionStore {
         attemptCount: 0, bypassed: true,
         sessionInfo: null, agentDetail: null, taskDetail: null,
       };
+    }
+
+    // Old bindings can outlive the full session snapshot. Never query a virtual task.
+    const taskId = normalizeTaskId(binding.taskId, this.defaultTaskId);
+    if (taskId !== binding.taskId) {
+      binding = { ...binding, taskId };
+      await this.bindingRepo?.putBinding(spaceOf(identity), identity.sessionId, binding).catch((err: unknown) => {
+        console.warn(`[session-recover] ${keyId} virtual task migration failed: ${String(err)}`);
+      });
     }
 
     // Step 4.2: fetch details in parallel

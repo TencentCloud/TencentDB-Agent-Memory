@@ -8,6 +8,7 @@
  *   4. initialized → 每次请求 strip + inject
  */
 
+import { normalizeTaskId } from "../task.js";
 import type { SessionInitConfig } from "../../types.js";
 import type {
   AgentDetail,
@@ -351,6 +352,7 @@ function buildRegistrationData(
   cachedTeams: TeamOption[],
   sessionId: string,
   userId: string,
+  defaultTaskId: string | undefined,
 ): SessionRegistrationData | null {
   const teamId = findTeamIdForAgent(cachedTeams, extracted.agent_id);
   if (!teamId) return null;
@@ -358,7 +360,9 @@ function buildRegistrationData(
     team_id: teamId,
     user_id: userId,
     agent_id: extracted.agent_id,
-    task_id: extracted.task_id,
+    task_id: normalizeTaskId(
+      extracted.task_id, defaultTaskId, cachedTeams.find((t) => t.team_id === teamId)?.tasks,
+    ),
     session_id: sessionId,
   };
 }
@@ -416,7 +420,7 @@ export async function completeRegistration(
   // narrowing to a task. The interactive "暂时跳过" / defaultTaskId path
   // also lands here with task_id = defaultTaskId (a virtual value). Do NOT
   // bypass when task_id is missing/undefined.
-  const regData = buildRegistrationData(resolved, cachedTeams, sessionKey, regUserId);
+  const regData = buildRegistrationData(resolved, cachedTeams, sessionKey, regUserId, config.defaultTaskId);
   if (!regData) {
     console.warn(
       `[session-init:cb] session=${compositeKey} agent=${resolved.agent_id} not bound to any team → bypass`,

@@ -96,8 +96,10 @@ export class RedisBindingRepo implements BindingRepo {
       if (binding.userKey) fields.user_key = binding.userKey;
 
       const key = redisKey(spaceId, sessionId);
-      await this.redis.hset(key, fields);
-      await this.redis.expire(key, ttlSeconds(this.bindingTtlDays));
+      // HSET does not remove omitted fields; clear a dropped task atomically.
+      const update = this.redis.multi().hset(key, fields);
+      if (!binding.taskId) update.hdel(key, "task_id");
+      await update.expire(key, ttlSeconds(this.bindingTtlDays)).exec();
     } catch {
       /* ignore */
     }
