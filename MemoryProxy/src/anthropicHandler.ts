@@ -35,6 +35,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -570,7 +571,7 @@ export async function handleAnthropicMessages(
     ? _pathPartsEarly[0] : undefined;
   const agentAdapter = resolveAgentAdapter(_agentFromPathEarly ?? "claude-code");
   const ccRoutingEnabled = config.ccRequestRouting?.enabled === true;
-  const requestKind: CcRequestKind = ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main";
+  const requestKind: CcRequestKind = ccRoutingEnabled ? (agentAdapter.classifyRequest(body) as CcRequestKind) : "main";
 
   // ── Model gate: reject requests whose `model` is not a registered display name ──
   // 价目表已配置时，客户端 `model` 必须匹配某条 entry 的 `modelName`（展示名，
@@ -708,7 +709,7 @@ export async function handleAnthropicMessages(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -981,12 +982,12 @@ export async function handleAnthropicMessages(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -2214,7 +2215,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
 
       // Credit usage reporting for streaming responses.
       (ctx.skipCreditReport
-        ? Promise.resolve({ attempted: false, ok: false })
+        ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
         : tryReportCreditFromPath(
             ctx.config.creditReport,
             ctx.requestPath,
