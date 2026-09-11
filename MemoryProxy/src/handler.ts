@@ -684,9 +684,19 @@ export async function handleChatCompletions(
   }
 
   // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
+  const { resolveConversationId, resolveDshFallbackConversationId } = await import("./session/session-key.js");
+  let conversationId = resolveConversationId(c);
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  // issue TencentCloud/TencentDB-Agent-Memory#1179: dsh 经 pi-ai / 其它
+  // OpenAI-compatible 通道（sun2/gmi/zp 等）时不携带任何会话头（仅
+  // llm-deepseek 适配器挂 x-deepseek-harness-session-id）——conversationId=null
+  // 导致 session-init 表单 + 注入管线被静默跳过。此处用稳定 sessionKey
+  // （当前为 keyId 派生）兜底作为会话标识走 session-init；aux(title-gen) /
+  // dsh headless(无 ask_user_question tool) 请求仍由下方 isAuxiliary /
+  // _dshHeadless 门短路，行为不变。
+  if (!conversationId) {
+    conversationId = resolveDshFallbackConversationId(agentSource, sessionKey);
+  }
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
