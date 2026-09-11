@@ -27,6 +27,10 @@ fi
 echo "📂 OpenClaw 工作目录: $STATE_DIR"
 echo "📦 导出目录: $EXPORT_DIR"
 
+# Guard against directory traversal in output path
+case "$EXPORT_DIR" in
+  /|/..|../*) echo "❌ Unsafe output path. Aborting."; exit 1 ;;
+esac
 mkdir -p "$EXPORT_DIR"
 
 # ── 1. 收集环境信息 ──
@@ -167,10 +171,19 @@ if [ -f "$CONFIG_FILE" ]; then
     console.log('  ✅ 配置已脱敏导出');
   " 2>&1 || {
     echo "  ⚠️ Node 脱敏失败，使用 grep 粗略脱敏"
-    # 粗略脱敏：删除包含敏感关键字的行
-    grep -v -iE '(api.?key|token|password|secret|credential).*:.*"[^"]{8,}"' "$CONFIG_FILE" \
-      | sed -E 's/"(models|secrets|channels|env)"\s*:\s*\{[^}]*\}/"__REDACTED_SECTION__"/g' \
+    # 写入敏感模式到临时文件（避免 shell injection via grep -E pattern）
+    TEMP_PATTERN=$(mktemp)
+    printf '%s\n' \
+      'api.?key[[:space:]]*:' \
+      'token[[:space:]]*:' \
+      'password[[:space:]]*:' \
+      'secret[[:space:]]*:' \
+      'credential[[:space:]]*:' \
+      > "$TEMP_PATTERN"
+    grep -v -iE -f "$TEMP_PATTERN" "$CONFIG_FILE" \
+      | sed -E 's/"(models|secrets|channels|env)"[[:space:]]*:[[:space:]]*\{[^}]*\}/"__REDACTED_SECTION__"/g' \
       > "$EXPORT_DIR/openclaw-config-redacted.json" 2>/dev/null || true
+    rm -f "$TEMP_PATTERN"
   }
 else
   echo "  ⚠️ 未找到配置文件"
@@ -197,8 +210,14 @@ fi
 
 # ── 6. 打包 ──
 echo "📦 打包中..."
+# Guard: reject archive paths starting with '-' to prevent tar flag injection
+# (tar interprets arguments starting with '-' as flags regardless of position)
+if [[ "$ARCHIVE_PATH" == -* ]]; then
+  echo "❌ Archive path cannot start with '-'. Aborting to prevent tar injection."
+  exit 1
+fi
 cd "$(dirname "$EXPORT_DIR")"
-tar -czf "$ARCHIVE_PATH" "$(basename "$EXPORT_DIR")"
+tar -czfP -- "$ARCHIVE_PATH" "$(basename "$EXPORT_DIR")"
 
 # 计算大小
 ARCHIVE_SIZE=$(du -sh "$ARCHIVE_PATH" | cut -f1)
