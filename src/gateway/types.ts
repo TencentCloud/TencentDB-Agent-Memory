@@ -35,10 +35,30 @@ export interface RecallRequest {
   user_id?: string;
 }
 
+export interface RecallContextPartResponse {
+  content: string;
+  placement: "system" | "user";
+  cache_policy: "cacheable" | "ephemeral";
+  persist: boolean;
+}
+
+export interface RecallContextPartsResponse {
+  stable?: RecallContextPartResponse;
+  dynamic?: RecallContextPartResponse;
+}
+
 export interface RecallResponse {
+  /** Backward-compatible stable context field consumed by existing Gateway clients. */
   context: string;
+  /** Stable memory context intended for cacheable host/system placement. */
+  stable_context?: string;
+  /** Dynamic per-turn recall context intended for user-prompt placement only. */
+  dynamic_context?: string;
+  /** Structured stable/dynamic contract for cache-boundary-aware hosts. */
+  context_parts?: RecallContextPartsResponse;
   strategy?: string;
   memory_count?: number;
+  cache_debug?: Record<string, unknown>;
 }
 
 // ============================

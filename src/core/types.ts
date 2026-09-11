@@ -196,17 +196,32 @@ export interface CompletedTurn {
 // ============================
 
 /** Result from a recall (prefetch) operation. */
+export interface RecallContextPart {
+  content: string;
+  placement: "system" | "user";
+  cachePolicy: "cacheable" | "ephemeral";
+  persist: boolean;
+}
+
+export interface RecallContextParts {
+  stable?: RecallContextPart;
+  dynamic?: RecallContextPart;
+}
+
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
+  /** Structured stable/dynamic context contract for hosts that can place cacheable blocks explicitly. */
+  contextParts?: RecallContextParts;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
   /** L3 Persona content (for metrics). */
   recalledL3Persona?: string | null;
   /** Search strategy used. */
   recallStrategy?: string;
+  cacheDebug?: Record<string, unknown>;
 }
 
 /** Result from a capture (sync_turn) operation. */
