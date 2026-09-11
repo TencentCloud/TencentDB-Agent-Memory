@@ -1,0 +1,10 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "tencentdb-memory",
+  "version": "0.1.0",
+  "description": "TencentDB Agent Memory recall and capture for Claude Code",
+  "author": {
+    "name": "TencentDB Agent Memory Team"
+  },
+  "hooks": "./hooks/hooks.json"
+}
