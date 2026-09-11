@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tdai-memory-mcp"
+version = "0.1.0"
+description = "Python MCP adapter for TencentDB Agent Memory Gateway."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+tdai-memory-mcp = "tdai_memory_mcp.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["tdai_memory_mcp*"]
+exclude = ["tests*", "vibe*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
