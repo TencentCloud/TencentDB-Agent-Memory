@@ -99,9 +99,45 @@ npm run dev
 | `pnpm generate:meta-openapi` | 生成 Meta OpenAPI 文档 |
 | `pnpm test:panel:e2e` | 运行 Panel Meta E2E |
 | `pnpm test:knowledge:e2e` | 运行 Knowledge E2E |
+| `pnpm import:agent-memory` | 预览或导入其他 agent 的生成态记忆 |
 | `cd web && npm run dev` | 启动前端开发服务器 |
 | `cd web && npm run build` | 构建前端到 `web/dist/` |
 | `bash scripts/secret-scan.sh` | 扫描敏感信息 |
+
+### 导入其他 agent 的生成态记忆
+
+CLI 支持以下已经沉淀为 Markdown 的记忆来源，不读取原始会话：
+
+- Codex：`$CODEX_HOME/memories/{memory_summary.md,MEMORY.md}`；
+- WorkBuddy/CodeBuddy：`~/.workbuddy/MEMORY.md`，以及显式 workspace 下的 `.workbuddy/memory/*.md`；
+- Claude Code Auto Memory：`~/.claude/projects/*/memory/*.md`，并支持用户设置中的 `autoMemoryDirectory`。
+  该路径契约来自 Claude Code 官方文档；当前 scanner 通过合成目录测试，尚未用本机真实样本验证。
+
+默认扫描全部来源并只生成 dry-run 计划。WorkBuddy/CodeBuddy 的 workspace 可以重复指定：
+
+```bash
+pnpm import:agent-memory \
+  --workspace /path/to/project-a \
+  --workspace /path/to/project-b \
+  --team-id team-example \
+  --agent-id agt-example
+```
+
+也可用 `--source codex|workbuddy|codebuddy|claude|all` 只扫描指定格式；`workbuddy`
+和 `codebuddy` 是同一 `.workbuddy` adapter 的两个入口。
+
+显式 `--yes` 才会调用现有 Chat Memory Import API。用户密钥只能通过环境变量提供，
+不会接受命令行密钥参数；单次请求自动限制为 100 条，确认完整接收后才记录 checkpoint：
+
+```bash
+TDAI_USER_KEY=sk-mem-example TDAI_SERVICE_ID=default \
+  pnpm import:agent-memory --source all --team-id team-example --agent-id agt-example --yes
+```
+
+可用 `--output plan.json` 导出 ImportPlan v1 供审阅。该文件包含记忆正文；CLI 在
+POSIX 系统上以 `0600` 权限写入，Windows 上则继承所在目录的 ACL，因此应选择用户私有目录。
+无论平台都须按敏感数据保管。完整参数见 `pnpm import:agent-memory --help`。
+使用 `memory-hub` 合并镜像时，另传 `--panel-url http://127.0.0.1:8125`。
 
 ## 公开 API
 
