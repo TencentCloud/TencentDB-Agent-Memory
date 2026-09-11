@@ -260,6 +260,14 @@ export interface OffloadConfig {
   aggressiveCompressRatio: number;
   /** MMD injection token budget ratio (default: 0.2) */
   mmdMaxTokenRatio: number;
+  /** Inline tool-result budget before front offload replaces the prompt payload (default: 1200) */
+  inlineToolResultMaxTokens: number;
+  /** Summary token budget for offloaded tool-result stubs (default: 350) */
+  summaryMaxTokens: number;
+  /** Preview character budget used for deterministic summaries (default: 1200) */
+  previewMaxChars: number;
+  /** Max tokens returned by tdai_offload_read in one call (default: 1600) */
+  readChunkMaxTokens: number;
   /** Backend service URL. When set, L1/L1.5/L2/L4 LLM calls go through the backend. */
   backendUrl?: string;
   /** Backend API authentication token */
@@ -489,6 +497,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     mildOffloadRatio: num(offloadGroup, "mildOffloadRatio") ?? 0.5,
     aggressiveCompressRatio: num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
     mmdMaxTokenRatio: num(offloadGroup, "mmdMaxTokenRatio") ?? 0.2,
+    inlineToolResultMaxTokens: num(offloadGroup, "inlineToolResultMaxTokens") ?? 1200,
+    summaryMaxTokens: num(offloadGroup, "summaryMaxTokens") ?? 350,
+    previewMaxChars: num(offloadGroup, "previewMaxChars") ?? 1200,
+    readChunkMaxTokens: num(offloadGroup, "readChunkMaxTokens") ?? 1600,
     backendUrl: optStr(offloadGroup, "backendUrl"),
     backendApiKey: optStr(offloadGroup, "backendApiKey"),
     backendTimeoutMs: num(offloadGroup, "backendTimeoutMs") ?? 120000,
