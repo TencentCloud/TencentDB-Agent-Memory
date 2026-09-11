@@ -1,0 +1,65 @@
+server:
+  host: "127.0.0.1"
+  port: 8420
+  corsOrigins: []
+
+data:
+  baseDir: "./packages/tdai-memory-mcp/workspace/tdai-gateway-ollama"
+
+llm:
+  baseUrl: "http://127.0.0.1:11434/v1"
+  apiKey: "ollama"
+  model: "gemma4:latest"
+  maxTokens: 4096
+  timeoutMs: 120000
+  disableThinking: false
+
+memory:
+  timezone: "Asia/Shanghai"
+  storeBackend: "sqlite"
+
+  capture:
+    enabled: true
+
+  extraction:
+    enabled: true
+    enableDedup: true
+    maxMemoriesPerSession: 20
+
+  pipeline:
+    everyNConversations: 1
+    enableWarmup: false
+    l1IdleTimeoutSeconds: 3
+    l2DelayAfterL1Seconds: 2
+    l2MinIntervalSeconds: 5
+    l2MaxIntervalSeconds: 30
+    sessionActiveWindowHours: 24
+
+  recall:
+    enabled: true
+    strategy: "hybrid"
+    maxResults: 5
+    scoreThreshold: 0.1
+    timeoutMs: 10000
+
+  embedding:
+    enabled: true
+    provider: "openai"
+    baseUrl: "http://127.0.0.1:11434/v1"
+    apiKey: "ollama"
+    model: "bge-m3:latest"
+    dimensions: 1024
+    sendDimensions: false
+    timeoutMs: 30000
+    recallTimeoutMs: 10000
+    captureTimeoutMs: 30000
+
+  persona:
+    triggerEveryN: 50
+    maxScenes: 15
+
+  report:
+    enabled: false
+
+  offload:
+    enabled: false

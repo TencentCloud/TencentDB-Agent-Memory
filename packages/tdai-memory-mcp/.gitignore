@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+workspace/
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/
+*.pyc

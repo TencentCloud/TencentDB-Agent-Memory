@@ -44,3 +44,7 @@ test-offload-sessions.sh
 
 # log files
 *.log
+
+learning-doc
+.codegraph
+.DS_Store
