@@ -399,6 +399,11 @@ export async function migrateSchema(
     );
   }
 
+  // Add resolved Skill fields to existing tool-call tables; old rows remain unknown.
+  migrations.push(
+    { table: TOOL_CALL_TABLE, column: "skill_id", type: "String DEFAULT ''" },
+    { table: TOOL_CALL_TABLE, column: "skill_version", type: "Nullable(UInt64) DEFAULT NULL" },
+  );
   // tool_call_logs：补 reject_reason 列 (存量表由本次上线时通过 ALTER 加齐)
   migrations.push({
     table: TOOL_CALL_TABLE,
@@ -983,6 +988,9 @@ export interface SessionInitLogRow {
 
 /** 埋点点位传入的 tool_call 行输入。 */
 export interface ToolCallLogInput {
+  /** Resolved Skill content access; absent for other calls or insufficient evidence. */
+  skillId?: string;
+  skillVersion?: number;
   timestamp: string;
   sessionKey: string;
   turnSeq?: number;
@@ -1018,6 +1026,8 @@ export interface ToolCallLogInput {
 
 /** ClickHouse `tool_call_logs` 表一行的最终形态。 */
 export interface ToolCallLogRow {
+  skill_id: string;
+  skill_version: number | null;
   timestamp: string;
   session_key: string;
   turn_seq: number;
@@ -1070,6 +1080,8 @@ export function buildSessionInitLogRow(input: SessionInitLogInput): SessionInitL
 export function buildToolCallLogRow(input: ToolCallLogInput): ToolCallLogRow {
   const body = (input.requestBody ?? "").slice(0, TOOL_CALL_BODY_MAX_BYTES);
   return {
+    skill_id: input.skillId ?? "",
+    skill_version: input.skillVersion ?? null,
     timestamp: toChTimestamp(input.timestamp),
     session_key: input.sessionKey ?? "",
     turn_seq: input.turnSeq ?? 0,
@@ -1329,6 +1341,8 @@ export function toolCallTableDdl(): string {
     "  elapsed_ms UInt32 DEFAULT 0,",
     // proxy 前置校验失败原因; 上游已响应/异常时为空串; 与 session_init.bypass_reason 对称。
     "  reject_reason LowCardinality(String) DEFAULT '',",
+    "  skill_id String DEFAULT '',",
+    "  skill_version Nullable(UInt64) DEFAULT NULL,",
     "  source_tag LowCardinality(String) DEFAULT 'proxy',",
     "  host LowCardinality(String)",
     ") ENGINE = MergeTree()",

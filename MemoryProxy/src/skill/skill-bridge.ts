@@ -34,6 +34,7 @@ import { getMetadataClient } from "../meta/client.js";
 import type { ProxyConfig } from "../types.js";
 import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "../memory/bridge-telemetry.js";
 import { getCoreSkillClient, type CoreSkillClient } from "./core-client.js";
+import { extractResolvedSkillAccess } from "./skill-access-telemetry.js";
 
 /**
  * 二选一的 pin repo（KvVersionPinRepo 或 VersionPinRepo）——
@@ -920,6 +921,7 @@ export function createSkillBridgeHandler(
       requestBody: outboundBody.slice(0, 512),
       upstreamStatus: resp.status,
       elapsedMs: (deps.now ?? Date.now)() - callStart,
+      ...extractResolvedSkillAccess(sub, resp.status, respText),
     });
 
     // 曾经这里会在写操作 / extract 成功时清零 proxy 侧 buffer 计数器,
