@@ -1,10 +1,10 @@
 # 会话策略：taskMissingPolicy 与 autoConversationId
 
 > 本文档对应的验收标准与自动化测试：`src/__tests__/session-acceptance.test.ts`（ACC-1..ACC-6），
-> 全量回归：`npm test`（vitest，本分支 **11 个测试文件 / 99 个用例全过**）。
+> 全量回归：`npm test`（vitest，本分支 **11 个测试文件 / 101 个用例全过**）。
 >
 > 说明：基线 `feat/server_team` 上**不含任何测试文件**（上游 v2.0.2-beta.1 删掉了自带用例，
-> 基线上 `npm test` 是 `exit 1  No test files found`），因此这 99 个用例**全部**由本 PR 带入，
+> 基线上 `npm test` 是 `exit 1  No test files found`），因此这 101 个用例**全部**由本 PR 带入，
 > 不存在"上游基线 8 个"。
 
 ## 背景
@@ -160,12 +160,19 @@ per-key-msg 窗口上限/过期、容量清理、确定性派生与桶宽校验�
 > 原先只认 `session-id` header 与 `client_metadata.session_id`，**忽略 `x-conversation-id`**，
 > 导致这两个客户端的显式会话 header 失效、autoConversationId 错误接管（`session-acceptance.test.ts`
 > 的 ACC-4 只覆盖 `resolveOrCreateSessionId`，未覆盖 wire 侧的提取，因此单测当时未暴露）。
-> 修复后 `session/client-ids.ts::extractResponsesSessionId` 与 chat / anthropic 路径的
-> `session-key.ts::resolveConversationId` 取同一 header 集合、同一优先级：
+> 修复后 `session/client-ids.ts::extractResponsesSessionId` 的取值顺序为
 > `session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` > `x-thread-id`，
 > 全部缺失时退回 `client_metadata.session_id`；header 名大小写不敏感。
-> `session-client-ids.test.ts` 的 8 个用例覆盖上述顺序与回退，`session-policy-e2e.sh` 的
-> ACC-4 步骤在真机上验证"带 `x-conversation-id` 的请求不再产生 `[session-auto]` 日志"。
+> 其中 `x-conversation-id` > `x-session-id` > `x-chat-id` > `x-thread-id` 这一段与
+> chat / anthropic 路径（`session-key.ts::resolveConversationId`）**同集合、同优先级**
+> ——ACC-4 要求对齐的正是这一段，`x-conversation-id` 在两侧都生效。
+> 两条路径**并非完全同集合**：Responses 路径多一个 `session-id`（Codex 历史口径），
+> chat / anthropic 路径多 `x-claude-code-session-id` / `x-deepseek-harness-session-id`
+> 两个客户端专有头；这是刻意的按客户端分族，完整口径见
+> `docs/design/session-isolation-design.md` §3.1 的两路径对照表。
+> `session-client-ids.test.ts` 的 10 个用例覆盖上述顺序、回退与两条路径的集合差异，
+> `session-policy-e2e.sh` 的 ACC-4 步骤在真机上验证"带 `x-conversation-id` 的请求
+> 不再产生 `[session-auto]` 日志"。
 
 ## 5. 端到端冒烟脚本
 

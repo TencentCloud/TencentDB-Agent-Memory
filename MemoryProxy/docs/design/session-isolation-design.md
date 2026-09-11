@@ -54,7 +54,7 @@ threadId     : 仅 threadIsolation.enabled=true 且带 x-thread-id 时追加
 | 身份锁 | `user_id` | 防跨用户串号 | auth/verify；store L1 归属校验 |
 | 归属锁 | `space_id + team_id + agent_id + task_id` | 决定记忆/技能可访问范围 | 控制面注册结果（SessionInit） |
 | 会话锁 | `agentSource:sessionKey` | 对话历史连续性与注入目标 | 客户端上报（仅检索键）+ 签名校验 |
-| 线程 scope | `x-thread-id` | auto ID 签名绑定 + 进程内 L1/状态机键分组与遥测（默认关） | 客户端显式上报 |
+| 线程 scope | `x-thread-id` | auto ID 签名绑定（恒生效）+ 进程内 L1/状态机键分组与遥测（需 `threadIsolation`） | 客户端显式上报 |
 | 首问指纹 | 首条用户消息指纹 | per-key-msg 窗口隔离；auto ID 签名绑定 | Proxy 派生 |
 | 存储层 | `spaceId` 命名空间（缺省 `_default`） | 恢复/绑定的物理命名空间兜底 | 部署声明 |
 
@@ -62,9 +62,13 @@ threadId     : 仅 threadIsolation.enabled=true 且带 x-thread-id 时追加
 （store 恢复层直接拦截，见 §4.1）；会话锁的变化在身份/归属一致时允许
 「续接」而非「新建」。
 
-线程维度当前定位：`threadIsolation` 默认关；开启后 `x-thread-id` 进入
-L1/状态机 store 键与遥测/审计分组（auto ID 签名 scope 也绑定 thread），
-但**持久层（L2a/L2b）键不含 thread**——重启或换副本后按
+线程维度当前定位：`threadIsolation` 默认关，但**默认关只约束 store 键**——
+`x-thread-id` 一旦出现就始终进入 auto ID 的签名 scope
+（`resolveEffectiveConversationId` 无条件把 threadId 作为 scope 传给
+`resolveOrCreateSessionId`），因此同 key 不同 thread 在默认配置下**也会**拿到
+不同的 auto 会话 ID（`stages-session.test.ts` 锁住了这条行为）。显式配置
+`threadIsolation: true` 才会额外把 thread 写进 L1/状态机 store 键与遥测/审计分组；
+且**持久层（L2a/L2b）键一律不含 thread**——重启或换副本后按
 (space, user, agent, sessionId) 收敛，不承诺跨实例的 thread 级隔离（见 §7.4）。
 
 ### 2.3 信任边界（已实现）
@@ -100,14 +104,32 @@ interface SessionAdapter {
   缺失按 `autoConversationId` 生成；
 - **codex / workbuddy**（`codexHandler.ts` / `workbuddyHandler.ts`）：共用
   Responses wire 的通用适配器（`createResponsesSessionAdapter` /
-  `RESPONSES_SESSION_ADAPTER`）——显式会话 ID 的 header 集合与 chat / anthropic
-  路径相同（`session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` >
-  `x-thread-id`，`session/client-ids.ts`），全部缺失时退回
-  `client_metadata.session_id`；codex 走 auto 分支（实际生成仍受
+  `RESPONSES_SESSION_ADAPTER`）——显式会话 ID 由
+  `session/client-ids.ts::extractResponsesSessionId` 提取，取值顺序为
+  `session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` >
+  `x-thread-id`，全部缺失时退回 `client_metadata.session_id`；
+  codex 走 auto 分支（实际生成仍受
   `autoConversationId.enabled` 门控），workbuddy 用 `autoGenerate: false`
   实例（与 workbuddy 原行为一致，不主动生成 auto ID）；
 - `handler.ts` 的 `debugForceUserId` 由 `resolveIdentity` 处理，身份改写策略
   不再散落在各 handler。
+
+两条路径的显式会话 ID 口径**不是**"完全同集合"，实现如下表（改任一列都必须
+同步本表与 `docs/session-policy.md` §4）：
+
+| 路径 | header 集合（从左到右为优先级） | 实现 |
+|---|---|---|
+| chat / anthropic | `x-conversation-id` > `x-session-id` > `x-claude-code-session-id` > `x-deepseek-harness-session-id` > `x-chat-id` > `x-thread-id` | `session-key.ts::resolveConversationId` |
+| codex / workbuddy（Responses） | `session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` > `x-thread-id`，全缺时退回 `body.client_metadata.session_id` | `session/client-ids.ts::extractResponsesSessionId` |
+
+- 公共段 `x-conversation-id` > `x-session-id` > `x-chat-id` > `x-thread-id`
+  两条路径**同集合、同优先级**——ACC-4 要求对齐的就是这一段，`x-conversation-id`
+  在两侧都生效；
+- 差异只在各自的**客户端专属别名**上：Responses 侧多 `session-id`
+  （Codex 历史口径，不能去掉），chat / anthropic 侧多
+  `x-claude-code-session-id` / `x-deepseek-harness-session-id`。这是刻意的
+  按客户端分族，不是遗漏；`session-client-ids.test.ts` 有两个用例把两侧集合
+  分别锁住，避免文档再次漂移。
 
 ### 3.2 显式会话 ID 优先（已实现）
 
