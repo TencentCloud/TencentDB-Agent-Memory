@@ -50,6 +50,9 @@ jobs:
           path: node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
 
+      - name: Install dependencies on cache miss
+        run: test -x node_modules/.bin/tsdown || npm install --ignore-scripts
+
       - name: npm pack (dry-run)
         run: npm pack --dry-run
 
