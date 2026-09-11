@@ -79,7 +79,10 @@
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "promptShapeDiagnostics": { "type": "boolean", "default": false, "description": "Opt-in diagnostics for prefix-cache analysis. Logs segment lengths and hashes for appendSystemContext, history, prependContext, appendContext, current prompt, plus persisted <relevant-memories> counts; never logs memory text." },
+          "showInjected": { "type": "boolean", "default": false, "description": "是否将 <relevant-memories> 保留到持久化对话历史中；默认 false 以避免历史膨胀" },
+          "dynamicContextPlacement": { "type": "string", "enum": ["prepend", "append"], "default": "append", "description": "Where to inject dynamic L1 recall relative to the current user prompt. append keeps the prompt prefix more stable for OpenAI-compatible prefix caches; prepend restores legacy behavior." }
         }
       },
       "embedding": {
