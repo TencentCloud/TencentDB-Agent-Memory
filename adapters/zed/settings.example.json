@@ -1,0 +1,26 @@
+{
+  "language_models": {
+    "openai_compatible": {
+      "tencentdb-agent-memory": {
+        "api_url": "http://127.0.0.1:8096/codebuddy/default",
+        "custom_headers": {
+          "x-tdai-service-id": "default"
+        },
+        "available_models": [
+          {
+            "name": "claude-sonnet-4-20250514",
+            "display_name": "claude-sonnet-4 (via Memory Proxy)",
+            "max_tokens": 200000,
+            "max_output_tokens": 16384,
+            "capabilities": {
+              "tools": true,
+              "images": false,
+              "parallel_tool_calls": false,
+              "chat_completions": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}
