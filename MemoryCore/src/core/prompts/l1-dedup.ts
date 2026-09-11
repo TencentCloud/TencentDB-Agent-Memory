@@ -43,8 +43,8 @@ export const CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。�
    - 跨类型示例：一条 episodic "用户在 2018 年开始做播客" + 一条 persona "用户有播客制作经验" → 可 merge 为一条 persona 或 episodic（取决于信息侧重）
 
 5. **timestamp 处理**：
-   - merge / update 时，merged_timestamps 应包含**所有相关记忆的时间戳并集**（去重排序）
-   - 这样可以保留事件发生的完整时间线
+   - 每条新记忆和候选记忆都已带 \`timestamps\`（来源消息时间，ISO 8601）。
+   - merge / update 时系统会用「新记忆 timestamps + 你选中的 target_ids 对应候选 timestamps」做并集，**不要编造时间戳**。\`merged_timestamps\` 可省略，填写也会被忽略。
 
 ## 输出格式
 
@@ -57,17 +57,15 @@ export const CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。�
     "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
     "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
     "merged_type": "合并后的最佳 type：persona|episodic|instruction|work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
-    "merged_priority": 85,
-    "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
+    "merged_priority": 85
   }
 ]
 
 字段说明：
-- target_ids：要删除替换的旧记忆 ID **数组**（可以 1 条或多条）。store/skip 时省略或为空。
+- target_ids：要删除替换的旧记忆 ID **数组**（可以 1 条或多条）。必须来自统一候选记忆池。store/skip 时省略或为空。
 - merged_content：merge/update 时的最终记忆文本。store/skip 时省略。
 - merged_type：merge/update 后记忆应归属的 type。根据合并后内容本质判断。
-- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority（例如两条 priority 70 的记忆合并后可提升到 80）。参考标准：80-100（核心特质/重要事件），60-79（一般偏好/普通活动），<60（次要信息）。
-- merged_timestamps：合并后的时间戳数组。收集新记忆 + 所有被合并旧记忆的时间戳，去重排序。`;
+- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority（例如两条 priority 70 的记忆合并后可提升到 80）。参考标准：80-100（核心特质/重要事件），60-79（一般偏好/普通活动），<60（次要信息）。`;
 
 export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆冲突检测器。批量比较多条【新记忆】与【统一候选记忆池】中的已有记忆，逐条决定如何处理。
 
@@ -107,8 +105,8 @@ export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆�
    - 跨类型示例：一条 work_fact "团队决定 L1 type 保持少量高层分类" + 一条 work_method "L1 type 不宜过细，否则影响 L2/L3 聚合" → 可 merge 为 work_method。
 
 5. **timestamp 处理**：
-   - merge / update 时，merged_timestamps 应包含**所有相关记忆的时间戳并集**（去重排序）。
-   - 这样可以保留工作事实、任务或方法演化的完整时间线。
+   - 每条新记忆和候选记忆都已带 \`timestamps\`（来源消息时间，ISO 8601）。
+   - merge / update 时系统会用「新记忆 timestamps + 你选中的 target_ids 对应候选 timestamps」做并集，**不要编造时间戳**。\`merged_timestamps\` 可省略，填写也会被忽略。
 
 ## 输出格式
 
@@ -121,17 +119,15 @@ export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆�
     "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
     "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
     "merged_type": "合并后的最佳 type：work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
-    "merged_priority": 85,
-    "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
+    "merged_priority": 85
   }
 ]
 
 字段说明：
-- target_ids：要删除替换的旧记忆 ID **数组**（可以 1 条或多条）。store/skip 时省略或为空。
+- target_ids：要删除替换的旧记忆 ID **数组**（可以 1 条或多条）。必须来自统一候选记忆池。store/skip 时省略或为空。
 - merged_content：merge/update 时的最终记忆文本。store/skip 时省略。
 - merged_type：merge/update 后记忆应归属的 type。根据合并后内容本质判断。
-- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority。参考标准：80-100（关键事实/重要任务/核心方法/重要资产），60-79（一般工作信息），<60（次要信息）。
-- merged_timestamps：合并后的时间戳数组。收集新记忆 + 所有被合并旧记忆的时间戳，去重排序。`;
+- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority。参考标准：80-100（关键事实/重要任务/核心方法/重要资产），60-79（一般工作信息），<60（次要信息）。`;
 
 export function getConflictDetectionSystemPrompt(mode: MemoryPromptMode = "chat"): string {
   return mode === "code" ? WORK_CONFLICT_DETECTION_SYSTEM_PROMPT : CONFLICT_DETECTION_SYSTEM_PROMPT;
@@ -209,6 +205,7 @@ export function formatBatchConflictPrompt(matches: CandidateMatch[]): string {
         type: m.newMemory.type,
         priority: m.newMemory.priority,
         scene_name: m.newMemory.scene_name,
+        timestamps: m.newMemory.timestamps ?? [],
       },
       null,
       2,
