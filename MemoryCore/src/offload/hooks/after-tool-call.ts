@@ -34,11 +34,8 @@ import type { PluginConfig, PluginLogger, ToolPair } from "../types.js";
 import type { BackendClient } from "../backend-client.js";
 import {
   buildL3TriggerReport,
-  classifyPatchEffectiveness,
   reportL3Trigger,
   recordToolCall,
-  REPORT_TYPE_L3,
-  L3_FIXED_PATCH_COST_TOKENS,
 } from "../state-reporter.js";
 
 function isHeartbeatToolCall(event: any, cachedParams: any): boolean {
@@ -97,6 +94,9 @@ export function createAfterToolCallHandler(
   getContextWindow: (() => number) | undefined,
   pluginConfig: Partial<PluginConfig> | undefined,
   backendClient?: BackendClient | null,
+  /** Official OpenClaw API to fetch session messages (issue #851) — used when
+   *  the hook event does not carry messages (no dist-file patch). */
+  getSessionMessages?: (opts: { sessionKey: string; limit?: number }) => Promise<unknown[]>,
 ) {
   return async (event: any, ctx: any) => {
     // Skip internal memory-pipeline sessions
@@ -114,37 +114,18 @@ export function createAfterToolCallHandler(
     const hasMsgs = msgsValue && Array.isArray(msgsValue);
     logger.debug?.(`[context-offload] after_tool_call event keys=[${eventKeys.join(",")}], hasMsgsKey=${hasMsgsKey}, msgsType=${typeof msgsValue}, isArray=${Array.isArray(msgsValue)}, len=${hasMsgs ? msgsValue.length : "N/A"}`);
 
-    // ── Patch-effectiveness detection ──
-    // The upstream runtime patch is expected to populate event.messages with
-    // the current conversation. If it is missing/empty the patch is NOT in
-    // effect and L3 compression cannot run from this hook. Report that
-    // explicitly so operators can detect misconfigurations.
-    const _patchStatus = classifyPatchEffectiveness(event, "after_tool_call");
-    if (_patchStatus.status !== "effective") {
-      logger.warn(
-        `[context-offload] after_tool_call patch check: NOT EFFECTIVE (status=${_patchStatus.status}). ` +
-        `event.messages is ${Array.isArray(msgsValue) ? "empty array" : typeof msgsValue}. ` +
-        `L3 compression will be skipped this turn.`,
-      );
-      if (backendClient) {
-        try {
-          backendClient
-            .storeState({
-              reportType: REPORT_TYPE_L3,
-              reportedAt: new Date().toISOString(),
-              sessionKey: _sk ?? null,
-              stage: "after_tool_call",
-              triggerReason: "patch_not_effective",
-              patch: _patchStatus,
-              pluginState: {
-                l15Settled: stateManager.l15Settled === true,
-                pendingCount: stateManager.getPendingCount(),
-                activeMmdFile: stateManager.getActiveMmdFile?.() ?? null,
-              },
-              fixedPatchCostTokens: L3_FIXED_PATCH_COST_TOKENS,
-            })
-            .catch((err) => logger.warn(`[context-offload] patch-miss report failed: ${err}`));
-        } catch { /* ignore */ }
+    // Issue #851: when the hook event has no messages (OpenClaw no longer
+    // injects them via a dist-file patch), fetch them through the official
+    // getSessionMessages API so L3 compression / MMD logic still has context.
+    if (!hasMsgs && _sk && getSessionMessages) {
+      try {
+        const fetched = await getSessionMessages({ sessionKey: _sk, limit: 50 });
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          event.messages = fetched;
+          logger.debug?.(`[context-offload] after_tool_call: fetched ${fetched.length} messages via getSessionMessages`);
+        }
+      } catch (err) {
+        logger.debug?.(`[context-offload] after_tool_call: getSessionMessages failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
