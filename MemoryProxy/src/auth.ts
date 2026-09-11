@@ -42,7 +42,7 @@ export function initAuth(cfg: AuthConfig): void {
     return;
   }
   config = cfg;
-  log.info("auth.init", { url: cfg.url });
+  log.info("auth.init", { url: cfg.url, bearer: Boolean(cfg.apiKey) });
 }
 
 /** Check if auth verification is enabled. */
@@ -73,11 +73,15 @@ export async function verifyUserKey(userKey: string, serviceId: string): Promise
   if (!userKey) return { userId: "", rejected: true, rejectReason: "missing user_key" };
 
   try {
+    // A gateway-protected kernel (server.apiKey / TDAI_GATEWAY_API_KEY) answers 401 to
+    // an unauthenticated verify call, so send the configured bearer like the sibling
+    // tdai / skill clients do. Without one the request is unchanged.
     const fetchOpts: RequestInit = {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-tdai-service-id": serviceId,
+        ...(config.apiKey ? { "authorization": `Bearer ${config.apiKey}` } : {}),
       },
       body: JSON.stringify({ user_key: userKey }),
     };
