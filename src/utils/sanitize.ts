@@ -45,6 +45,16 @@ export function sanitizeText(text: string): string {
   // Remove injected skill-selection wrappers, e.g. ¥¥[... ]¥¥
   cleaned = cleaned.replace(/¥¥\[[\s\S]*?\]¥¥/g, "");
 
+  // Redact third-party / tool-provided artifacts before they enter L0.
+  //
+  // These blocks are useful input for the current turn, but their contents
+  // are not direct user preferences. Persisting raw webpage/email/tool text
+  // lets an attacker smuggle "remember this user wants..." instructions into
+  // future sessions through the memory layer. We keep a small placeholder so
+  // the conversation remains understandable while removing attacker-controlled
+  // instructions from durable memory and recall search.
+  cleaned = redactUntrustedEmbeddedContent(cleaned);
+
   // Remove line-leading timestamps, e.g. "[Tue 2026-03-24 03:48 UTC]"
   // or "[Tue 2026-03-24 20:21 GMT+8]", "[Thu 2026-03-24 01:51 GMT+5:30]"
   // Matches brackets containing word chars, digits, hyphens, colons, plus signs,
@@ -74,6 +84,24 @@ export function sanitizeText(text: string): string {
   cleaned = cleaned.replace(/\0/g, "").replace(/\n{3,}/g, "\n\n").trim();
 
   return cleaned;
+}
+
+const UNTRUSTED_EMBEDDED_BLOCK_PATTERN =
+  /<\s*(webpage|web-page|document|email|tool_output|tool-output|tool_result|tool-result|search_result|search-result|browser_output|browser-output)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
+
+/**
+ * Remove content from embedded untrusted-source blocks.
+ *
+ * The memory pipeline should remember what the user said about a source, not
+ * treat the source's own instructions as user instructions. This is especially
+ * important for L0, because L0 is searchable and can influence later turns even
+ * when L1 extraction correctly rejects the payload.
+ */
+export function redactUntrustedEmbeddedContent(text: string): string {
+  return text.replace(
+    UNTRUSTED_EMBEDDED_BLOCK_PATTERN,
+    (_match, tag: string) => `(untrusted ${tag.toLowerCase()} content redacted before memory capture)`,
+  );
 }
 
 /**
@@ -136,6 +164,11 @@ export function shouldExtractL1(text: string): boolean {
   // First apply the same structural filters as L0
   if (!shouldCaptureL0(text)) return false;
 
+  // Memory-control requests are actions on the store, not facts to remember.
+  // Capturing "forget my backup email" as a durable instruction can make the
+  // forgotten topic retrievable again through raw-memory search.
+  if (isMemoryDeletionRequest(text)) return false;
+
   // ── Length filters ──
   // const isCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text);
   // if (isCJK && text.length < 2) return false;
@@ -180,6 +213,7 @@ export const shouldCapture = shouldExtractL1;
 const PROMPT_INJECTION_PATTERNS: RegExp[] = [
   // ── Instruction override ──
   /ignore\b.{0,30}\b(instructions|rules|guidelines)/i,
+  /ignore\b.{0,40}\b(preferences|preference|memory|memories)/i,
   /disregard\b.{0,30}\b(instructions|rules|guidelines)/i,
   /forget\b.{0,30}\b(instructions|rules|context)/i,
   /override\b.{0,30}\b(instructions|rules|guidelines|safety)/i,
@@ -197,6 +231,7 @@ const PROMPT_INJECTION_PATTERNS: RegExp[] = [
 
   // ── XML/tag injection (our context boundaries) ──
   /<\s*(system|assistant|developer|tool|function|relevant-memories)\b/i,
+  /<\s*(webpage|web-page|document|email|tool_output|tool-output|tool_result|tool-result|search_result|search-result|browser_output|browser-output)\b/i,
 
   // ── Tool/command invocation tricks ──
   /\b(run|execute|call|invoke)\b.{0,40}\b(tool|command|function|shell)\b/i,
@@ -218,6 +253,23 @@ export function looksLikePromptInjection(text: string): boolean {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) return false;
   return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+/**
+ * Detect explicit requests to remove existing memories.
+ *
+ * These are intentionally separated from prompt-injection "forget previous
+ * instructions" patterns. A real user deletion request should be executed by
+ * the store-maintenance path; it should not be extracted as an L1 memory.
+ */
+export function isMemoryDeletionRequest(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+
+  return (
+    /\b(forget|delete|remove|erase|clear)\s+(?:my|the|this|that|our)?\s*\b.+/i.test(normalized) ||
+    /(?:忘记|删除|移除|清除).{0,30}(?:记忆|偏好|邮箱|邮件|信息)/.test(normalized)
+  );
 }
 
 /**
