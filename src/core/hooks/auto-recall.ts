@@ -21,7 +21,12 @@ import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.j
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
-import type { Logger } from "../types.js";
+import type { Logger, LLMRunner } from "../types.js";
+import {
+  getTaskSelectorCandidateLimit,
+  selectTaskAwareMemories,
+  type TaskAwareMemoryCandidate,
+} from "../recall/task-aware-selector.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -78,6 +83,7 @@ export async function performAutoRecall(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  taskSelectorRunner?: LLMRunner;
 }): Promise<RecallResult | undefined> {
   const { cfg, logger } = params;
   const timeoutMs = cfg.recall.timeoutMs ?? 5000;
@@ -108,8 +114,9 @@ async function performAutoRecallInner(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  taskSelectorRunner?: LLMRunner;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, taskSelectorRunner } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -123,7 +130,17 @@ async function performAutoRecallInner(params: {
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
-    memoryLines = searchResult.lines;
+    const selectedCandidates = cfg.recall.taskSelector.enabled
+      ? await selectTaskAwareMemories({
+        query: sanitizeText(userText),
+        candidates: searchResult.candidates,
+        maxResults: cfg.recall.maxResults,
+        timeoutMs: cfg.recall.taskSelector.timeoutMs,
+        runner: taskSelectorRunner,
+        logger,
+      })
+      : searchResult.candidates.slice(0, cfg.recall.maxResults);
+    memoryLines = selectedCandidates.map((candidate) => candidate.content);
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
@@ -258,7 +275,7 @@ interface SearchTiming {
 }
 
 interface SearchResult {
-  lines: string[];
+  candidates: TaskAwareMemoryCandidate[];
   timing: SearchTiming;
 }
 
@@ -279,10 +296,11 @@ async function searchMemoriesWithDetails(
   embeddingService?: EmbeddingService,
 ): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
   const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
+  const lines = result.candidates.map((candidate) => candidate.content);
 
   // Extract structured data from formatted memory lines.
   // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
-  const memories: RecalledMemory[] = result.lines.map((line) => {
+  const memories: RecalledMemory[] = lines.map((line) => {
     const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
     if (match) {
       const tag = match[1];
@@ -293,7 +311,7 @@ async function searchMemoriesWithDetails(
     return { content: line, score: 0, type: "unknown" };
   });
 
-  return { lines: result.lines, memories, timing: result.timing };
+  return { lines, memories, timing: result.timing };
 }
 
 /**
@@ -314,7 +332,7 @@ async function searchMemories(
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
 ): Promise<SearchResult> {
-  const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
+  const emptyResult: SearchResult = { candidates: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
   // base64 image data, etc.) so FTS / embedding queries are based on pure user intent.
   const cleanText = sanitizeText(userText);
@@ -331,6 +349,9 @@ async function searchMemories(
   }
 
   const maxResults = cfg.recall.maxResults ?? 5;
+  const resultLimit = cfg.recall.taskSelector.enabled
+    ? getTaskSelectorCandidateLimit(maxResults, cfg.recall.taskSelector.candidateMultiplier)
+    : maxResults;
   const threshold = cfg.recall.scoreThreshold ?? 0.3;
 
   const embeddingAvailable = !!vectorStore && !!embeddingService;
@@ -339,7 +360,7 @@ async function searchMemories(
     `${TAG} [searchMemories] strategy=${strategy}, embeddingAvailable=${embeddingAvailable}, ` +
     `vectorStore=${vectorStore ? "available" : "UNAVAILABLE"}, ` +
     `embeddingService=${embeddingService ? "available" : "UNAVAILABLE"}, ` +
-    `maxResults=${maxResults}, threshold=${threshold}`,
+    `maxResults=${maxResults}, resultLimit=${resultLimit}, threshold=${threshold}`,
   );
 
   // Determine effective strategy (fall back to keyword if embedding not available)
@@ -361,14 +382,14 @@ async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
-      return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
+      const candidates = await searchByKeyword(cleanText, pluginDataDir, resultLimit, threshold, logger, vectorStore);
+      return { candidates, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: candidates.length, embeddingHits: 0 } };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
-      return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
+      const candidates = await searchByEmbedding(cleanText, resultLimit, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+      return { candidates, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: candidates.length } };
     }
 
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
@@ -376,15 +397,15 @@ async function searchMemories(
     // to avoid a redundant second HTTP request and a wasted local embed().
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
-      const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
+      const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: resultLimit });
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
-      const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
-      return { lines, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
+      const candidates = results.map((r) => ({ memoryId: r.record_id, content: formatMemoryLine(vectorResultToFormatable(r)) }));
+      return { candidates, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+    return await searchHybrid(cleanText, pluginDataDir, resultLimit, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
@@ -402,7 +423,7 @@ async function searchByKeyword(
   threshold: number,
   logger?: Logger,
   vectorStore?: IMemoryStore,
-): Promise<string[]> {
+): Promise<TaskAwareMemoryCandidate[]> {
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
@@ -420,7 +441,7 @@ async function searchByKeyword(
 
         if (filtered.length > 0) {
           logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
-          return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return filtered.map((r) => ({ memoryId: r.record_id, content: formatMemoryLine(ftsResultToFormatable(r)) }));
         }
 
         // BM25 absolute scores are unreliable when the document set is very
@@ -431,7 +452,7 @@ async function searchByKeyword(
             `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
             `but document set is small — returning all matched results`,
           );
-          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return ftsResults.slice(0, maxResults).map((r) => ({ memoryId: r.record_id, content: formatMemoryLine(ftsResultToFormatable(r)) }));
         }
         logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
       }
@@ -455,7 +476,7 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
-): Promise<string[]> {
+): Promise<TaskAwareMemoryCandidate[]> {
   logger?.debug?.(
     `${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`,
   );
@@ -487,7 +508,7 @@ async function searchByEmbedding(
 
   if (filtered.length > 0) {
     logger?.debug?.(`${TAG} [embedding-search] Found ${filtered.length} relevant memories above threshold (from ${vecResults.length} candidates)`);
-    return filtered.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
+    return filtered.map((r) => ({ memoryId: r.record_id, content: formatMemoryLine(vectorResultToFormatable(r)) }));
   }
 
   logger?.debug?.(`${TAG} [embedding-search] No results above threshold ${threshold}`);
@@ -593,7 +614,7 @@ async function searchHybrid(
 
   if (keywordResults.length === 0 && embeddingResults.length === 0) {
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
-    return { lines: [], timing };
+    return { candidates: [], timing };
   }
 
   // RRF merge: k=60 is a standard constant from the RRF paper
@@ -638,11 +659,17 @@ async function searchHybrid(
       `${TAG} Hybrid search found ${sorted.length} results ` +
       `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
     );
-    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
+    return {
+      candidates: sorted.map(([memoryId, { formatable }]) => ({
+        memoryId,
+        content: formatMemoryLine(formatable),
+      })),
+      timing,
+    };
   }
 
   logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
-  return { lines: [], timing };
+  return { candidates: [], timing };
 }
 
 // ============================
