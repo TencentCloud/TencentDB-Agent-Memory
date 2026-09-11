@@ -283,7 +283,14 @@ export function fastEstimateTokens(text: string): number {
     if (cp >= 0x21 && cp <= 0x7E) { tokens += 0.6; i++; continue; }
 
     // ── Other Unicode (emoji etc.) ──
-    if (cp > 0x7F) { tokens += 2.5; i++; continue; }
+    if (cp > 0x7F) {
+      tokens += 2.5;
+      // Astral-plane characters (U+10000+) are encoded as a surrogate pair;
+      // skip the low surrogate so it isn't counted again as a second token
+      // (previously emoji / CJK extension-B were ~2× over-estimated).
+      i += cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n ? 2 : 1;
+      continue;
+    }
 
     i++;
   }
