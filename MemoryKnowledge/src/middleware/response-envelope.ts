@@ -38,14 +38,14 @@ export function accessLog(): MiddlewareHandler {
     c.set("requestId", requestId);
 
     // 缓存 request body（body 只能读一次，失败时用于日志）
-    // Hono 的 bodyCache 期望 Promise（c.req.json()/text() 会对缓存值调 .then()）
+    // 注意：c.req.text() 内部已把 body 缓存为 Promise（bodyCache），后续 handler 的
+    // c.req.json()/text() 会复用该缓存，手动写入本就是多余的；且 Hono 发布类型中
+    // text 为 string，赋 Promise 会报 TS2322，故不要手动写 bodyCache。
     let reqBody: unknown = undefined;
     if (c.req.method === 'POST' || c.req.method === 'PUT') {
       try {
         const raw = await c.req.text();
         reqBody = raw ? JSON.parse(raw) : undefined;
-        c.req.bodyCache.text = Promise.resolve(raw);
-        if (reqBody) c.req.bodyCache.json = Promise.resolve(reqBody);
       } catch {
         // 非 JSON body，忽略
       }
