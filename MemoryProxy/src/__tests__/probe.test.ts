@@ -139,8 +139,9 @@ describe("probeCapabilities（URL 探测形态兼容）", () => {
     expect(caps).toEqual({ chat: false, responses: false, anthropic: false });
     expect(calls).toContain("https://up.example.com/v1/chat/completions");
     expect(calls).toContain("https://up.example.com/v1/responses");
-    expect(calls).toContain("https://up.example.com/v1/v1/messages");
     expect(calls).toContain("https://up.example.com/v1/messages");
+    // 根地址已带版本段时不再重复拼接（否则会多打一次无效请求 + 多一条 404 歧义告警）
+    expect(calls).not.toContain("https://up.example.com/v1/v1/messages");
   });
 
   it("完整端点地址（…/v2/chat/completions）不再拼出双端点，完整端点自身会被探测", async () => {

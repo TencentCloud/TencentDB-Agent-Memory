@@ -173,11 +173,16 @@ export async function probeCapabilities(
 ): Promise<UpstreamCapabilities> {
   const base = (baseUrl.split("?")[0] ?? baseUrl).replace(/\/+$/, "");
   const root = stripKnownEndpoint(base);
+  // Anthropic 端点有两种常见写法：带版本段（…/v1/messages）与不带（…/messages）。
+  // root 若已经以 /vN 结尾，就不要再拼一次版本段——否则会产生
+  // `…/v1/v1/messages` 这种无效候选，白跑一次请求、并多出一条 404 歧义告警
+  // （真机实测：DeepSeek 上游每次都多打一条 ambiguous_404）。
+  const versionedRoot = /\/v\d+$/.test(root) ? root : `${root}/v1`;
   const [chat, responses, anthropic] = await Promise.all([
     probeAny(unique([`${root}/chat/completions`]), apiKey, "chat", timeoutMs, probeModel),
     probeAny(unique([`${root}/responses`]), apiKey, "responses", timeoutMs, probeModel),
     probeAny(
-      unique([`${root}/v1/messages`, `${root}/messages`]),
+      unique([`${versionedRoot}/messages`, `${root}/messages`]),
       apiKey,
       "anthropic",
       timeoutMs,
