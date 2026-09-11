@@ -76,11 +76,14 @@ MARK=$(date +%Y-%m-%dT%H:%M:%S)
 CODE=$(post -H "x-task-id: $TASK_ID")
 [[ "$CODE" == "200" ]] || fail "ACC-1: HTTP $CODE"
 sleep 1
-N=$(auto_count)
-[[ "$N" == "1" ]] || fail "ACC-1: 期望恰好 1 条自动会话日志，实际 $N"
-  SID=$(docker logs "$CONTAINER" --since "$MARK" 2>&1 | grep '\[session-auto\] action=created' | tail -1 | sed -n 's/.*conversationId=\([^ ]*\).*/\1/p')
+# 这条 key 可能已经跑过（per-key 策略下会复用既有窗口），所以判据是"无 header 的请求
+# 必须落在自动会话里"，而不是"必须新建"：created 与 resumed 都算通过，SID 从两者里取。
+ALL=$(auto_all)
+[[ "$ALL" -ge "1" ]] || fail "ACC-1: 期望至少 1 条 [session-auto] 日志，实际 $ALL"
+  SID=$(docker logs "$CONTAINER" --since "$MARK" 2>&1 | grep '\[session-auto\]' | tail -1 | sed -n 's/.*conversationId=\([^ ]*\).*/\1/p')
 [[ -n "$SID" ]] || fail "ACC-1: 未能提取自动会话 ID"
-pass "ACC-1: 自动生成会话 $SID"
+CREATED=$(auto_count)
+pass "ACC-1: 请求进入自动会话 $SID（created=$CREATED，首次运行为 1、复用既有窗口为 0）"
 
 # ── ACC-2：同 key 再次无 header → 续接同一会话（不新增）────────────────
 step "ACC-2: 同 key 再次无会话 header → 续接同一会话"
