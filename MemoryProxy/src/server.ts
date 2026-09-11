@@ -16,6 +16,7 @@ import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
 import { protocolStatsToPrometheus } from "./common/protocol-stats.js";
+import { probeStatsToPrometheus } from "./upstream/probe-stats.js";
 import { checkAdminAuth, adminAuthError } from "./routes/admin-auth.js";
 import type { ProxyConfig } from "./types.js";
 
@@ -112,7 +113,8 @@ export function createApp(config: ProxyConfig): Hono {
   app.get("/metrics", (c) => {
     const authResult = checkAdminAuth(c, config.admin.apiKey);
     if (authResult !== "ok") return adminAuthError(c, authResult);
-    return c.text(protocolStatsToPrometheus(), 200);
+    // 协议转换指标 + 上游能力探测指标（探测轮次 / 缓存命中 / 能力变更）。
+    return c.text(`${protocolStatsToPrometheus()}${probeStatsToPrometheus()}\n`, 200);
   });
 
   // Whoami: resolve API key → key ID (plain text, easy to use with curl)

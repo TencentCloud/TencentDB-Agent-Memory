@@ -12,7 +12,14 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     url: DEFAULT_UPSTREAM,
     apiKey: "",
     agents: {},
-    autoDetect: { enabled: false, timeoutMs: 3000, probeModel: "ping" },
+    autoDetect: {
+      enabled: false,
+      timeoutMs: 3000,
+      probeModel: "ping",
+      cacheFile: "",
+      cacheTtlMinutes: 720,
+      reprobeIntervalMinutes: 0,
+    },
   },
   log: {
     file: "",
@@ -352,6 +359,20 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
           && yaml.upstream.autoDetect.probeModel.trim().length > 0
           ? yaml.upstream.autoDetect.probeModel.trim()
           : DEFAULT_CONFIG.upstream.autoDetect!.probeModel,
+        // 缓存文件留空表示不落盘（只在进程内保留上一轮结果）。
+        cacheFile: typeof yaml.upstream?.autoDetect?.cacheFile === "string"
+          ? yaml.upstream.autoDetect.cacheFile.trim()
+          : DEFAULT_CONFIG.upstream.autoDetect!.cacheFile,
+        cacheTtlMinutes:
+          typeof yaml.upstream?.autoDetect?.cacheTtlMinutes === "number"
+          && yaml.upstream.autoDetect.cacheTtlMinutes >= 0
+          ? yaml.upstream.autoDetect.cacheTtlMinutes
+          : DEFAULT_CONFIG.upstream.autoDetect!.cacheTtlMinutes,
+        reprobeIntervalMinutes:
+          typeof yaml.upstream?.autoDetect?.reprobeIntervalMinutes === "number"
+          && yaml.upstream.autoDetect.reprobeIntervalMinutes >= 0
+          ? yaml.upstream.autoDetect.reprobeIntervalMinutes
+          : DEFAULT_CONFIG.upstream.autoDetect!.reprobeIntervalMinutes,
       },
     },
     log: {

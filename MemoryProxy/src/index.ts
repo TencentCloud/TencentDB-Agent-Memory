@@ -33,7 +33,11 @@ import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
 import { initProxyStorage, getEffectiveBackend } from "./storage/factory.js";
 import { flushPendingWrites, pendingWriteCount } from "./tdai/pending-writes.js";
-import { applyAutoDetect } from "./upstream/capability-probe.js";
+import {
+  applyAutoDetect,
+  startAutoDetectLoop,
+  type AutoDetectLoop,
+} from "./upstream/capability-probe.js";
 
 const overrides = parseArgv(process.argv);
 const config = buildConfig(overrides);
@@ -71,6 +75,9 @@ initSystemUsers(config.systemUsers);
 
 // ── 上游协议能力自动探测（upstream.autoDetect.enabled=true 时） ───────────────
 // 探测结果写回 per-agent 转换标志；显式配置的开关始终优先（见 capability-probe.ts）。
+// 配置了 reprobeIntervalMinutes 时同时启动定期重探，使上游在运行期发生的能力变化
+// 能被跟随到；每轮都会打 upstream.probe.changed 告警并计入 /metrics。
+let autoDetectLoop: AutoDetectLoop | null = null;
 if (config.upstream.autoDetect?.enabled) {
   try {
     await applyAutoDetect(config);
@@ -78,6 +85,7 @@ if (config.upstream.autoDetect?.enabled) {
   } catch (err: unknown) {
     log.warn("upstream.probe.failed", { error: String(err) });
   }
+  autoDetectLoop = startAutoDetectLoop(config);
 }
 
 // ── Initialize ProxyStorage (dynamic import cost-guard for kernel-sts COS) ──
@@ -173,6 +181,7 @@ serve(
 // k8s 默认 terminationGracePeriodSeconds=30s，10s 留出充足余量。
 async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   log.info("server.shutdown", { signal });
+  autoDetectLoop?.stop();
   const pending = pendingWriteCount();
   if (pending > 0) {
     log.info("server.shutdown.flush_l0", { pending });

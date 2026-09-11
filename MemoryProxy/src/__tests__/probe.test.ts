@@ -5,7 +5,17 @@ import {
   agentsToAutoDetect,
   unroutableNativeProtocols,
 } from "../upstream/capability-probe.js";
-import { probeCapabilities } from "../upstream/capability-probe.js";
+import {
+  applyAutoDetect,
+  probeCapabilities,
+  startAutoDetectLoop,
+  __resetAutoDetectState,
+} from "../upstream/capability-probe.js";
+import { pickCachedCaps, readProbeCache, writeProbeCache } from "../upstream/probe-cache.js";
+import { probeStatsToPrometheus, resetProbeStats } from "../upstream/probe-stats.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("resolveAgentModes（上游协议自动选路）", () => {
   it("上游仅支持 Chat：workbuddy 桌面走 chatCompletions，claude-code 走 anthropicToChat，codex 走 chatCompletions", () => {
@@ -221,5 +231,191 @@ describe("unroutableNativeProtocols（启动期『无路可走』告警）", () 
     expect(
       unroutableNativeProtocols("mystery", { chat: false, responses: false, anthropic: false }),
     ).toEqual([]);
+  });
+});
+
+describe("applyAutoDetect（撤销 / 变更告警 / 缓存）", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    __resetAutoDetectState();
+    resetProbeStats();
+  });
+
+  /** 按 URL 后缀返回状态码，未列出的返回 404；calls 记录实际发出的探测请求。 */
+  const installFetch = (bySuffix: Record<string, number>, calls: string[] = []): string[] => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      for (const [suffix, status] of Object.entries(bySuffix)) {
+        if (url.endsWith(suffix)) return new Response("{}", { status });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    return calls;
+  };
+
+  const makeConfig = (autoDetect: Record<string, unknown>) =>
+    ({
+      upstream: {
+        url: "https://up.example.com/v1",
+        apiKey: "k",
+        agents: {},
+        autoDetect,
+      },
+    }) as never;
+
+  const agentsOf = (config: never) =>
+    (config as { upstream: { agents: Record<string, Record<string, unknown>> } }).upstream.agents;
+
+  it("能力回退时撤销上一轮由探测写入的开关，并计入变更计数", async () => {
+    __resetAutoDetectState();
+    resetProbeStats();
+    const config = makeConfig({ enabled: true, timeoutMs: 50 });
+
+    installFetch({ "/v1/messages": 200 }); // 上游仅支持 Anthropic
+    await applyAutoDetect(config);
+    expect(agentsOf(config).codex.responsesToAnthropic).toBe(true);
+
+    installFetch({ "/chat/completions": 200 }); // 上游改为仅支持 Chat
+    await applyAutoDetect(config, { useCache: false });
+    const codex = agentsOf(config).codex;
+    expect(codex.responsesToAnthropic).toBeUndefined(); // 旧开关被撤销
+    expect(codex.chatCompletions).toBe(true); // 新开关写入
+    expect(probeStatsToPrometheus()).toContain('tdai_upstream_probe_changes_total{agent="codex"}');
+  });
+
+  it("显式配置过开关的 agent 不参与探测，其配置不被覆盖也不被撤销", async () => {
+    __resetAutoDetectState();
+    const config = {
+      upstream: {
+        url: "https://up.example.com/v1",
+        apiKey: "k",
+        agents: { codex: { url: "https://explicit.example.com/v1", responsesToAnthropic: false } },
+        autoDetect: { enabled: true, timeoutMs: 50 },
+      },
+    } as never;
+    const calls = installFetch({ "/v1/messages": 200 });
+    await applyAutoDetect(config);
+    expect(agentsOf(config).codex.responsesToAnthropic).toBe(false);
+    // 显式配置过开关的 agent 不参与探测：它的上游地址一次都没被请求过。
+    expect(calls.some((u) => u.includes("explicit.example.com"))).toBe(false);
+  });
+
+  it("三端点全部探不通时保留上一次结论，并计入 failures", async () => {
+    __resetAutoDetectState();
+    resetProbeStats();
+    const config = makeConfig({ enabled: true, timeoutMs: 50 });
+
+    installFetch({ "/v1/messages": 200 });
+    await applyAutoDetect(config);
+    expect(agentsOf(config).codex.responsesToAnthropic).toBe(true);
+
+    installFetch({}); // 全部 404（更像是上游临时不可用）
+    await applyAutoDetect(config, { useCache: false });
+    expect(agentsOf(config).codex.responsesToAnthropic).toBe(true); // 结论未被改坏
+    expect(probeStatsToPrometheus()).toContain("tdai_upstream_probe_failures_total");
+  });
+
+  it("命中未过期缓存时不再向上游发探测请求", async () => {
+    __resetAutoDetectState();
+    resetProbeStats();
+    const dir = mkdtempSync(join(tmpdir(), "probe-cache-"));
+    const cacheFile = join(dir, "cache.json");
+    try {
+      const first = makeConfig({ enabled: true, timeoutMs: 50, cacheFile, cacheTtlMinutes: 720 });
+      const firstCalls = installFetch({ "/v1/messages": 200 });
+      await applyAutoDetect(first);
+      expect(firstCalls.length).toBeGreaterThan(0);
+
+      // 模拟重启：进程内状态清空、配置换成一份新的（agents 里没有任何开关）
+      __resetAutoDetectState();
+      resetProbeStats();
+      const restarted = makeConfig({
+        enabled: true,
+        timeoutMs: 50,
+        cacheFile,
+        cacheTtlMinutes: 720,
+      });
+      const secondCalls = installFetch({ "/v1/messages": 200 });
+      await applyAutoDetect(restarted);
+      expect(secondCalls).toEqual([]); // 完全走缓存
+      expect(agentsOf(restarted).codex.responsesToAnthropic).toBe(true);
+      expect(probeStatsToPrometheus()).toContain("tdai_upstream_probe_cache_hits_total");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("缓存文件损坏时按未命中处理，不影响真实探测", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "probe-cache-bad-"));
+    const cacheFile = join(dir, "cache.json");
+    try {
+      writeFileSync(cacheFile, "{ 这不是合法 JSON");
+      const config = { upstream: { autoDetect: { cacheFile } } } as never;
+      expect(readProbeCache(config)).toEqual({});
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pickCachedCaps：URL 或模型名不匹配、缓存过期都视为未命中", () => {
+    const entry = {
+      codex: {
+        url: "https://up.example.com/v1",
+        probeModel: "glm-4.6",
+        caps: { chat: false, responses: false, anthropic: true },
+        updatedAt: Date.now() - 2 * 3_600_000,
+      },
+    };
+    expect(
+      pickCachedCaps(entry, "codex", "https://other.example.com/v1", "glm-4.6", 720),
+    ).toBeNull();
+    expect(pickCachedCaps(entry, "codex", "https://up.example.com/v1", "ping", 720)).toBeNull();
+    expect(pickCachedCaps(entry, "codex", "https://up.example.com/v1", "glm-4.6", 60)).toBeNull();
+    expect(pickCachedCaps(entry, "codex", "https://up.example.com/v1", "glm-4.6", 0)).toEqual({
+      chat: false,
+      responses: false,
+      anthropic: true,
+    });
+  });
+
+  it("writeProbeCache / readProbeCache 往返一致", () => {
+    const dir = mkdtempSync(join(tmpdir(), "probe-cache-rt-"));
+    const cacheFile = join(dir, "sub", "cache.json");
+    try {
+      const config = { upstream: { autoDetect: { cacheFile } } } as never;
+      expect(
+        writeProbeCache(config, {
+          codex: {
+            url: "u",
+            probeModel: "m",
+            caps: { chat: true, responses: false, anthropic: false },
+            updatedAt: 1,
+          },
+        }),
+      ).toBe(true);
+      expect(readProbeCache(config).codex.caps).toEqual({
+        chat: true,
+        responses: false,
+        anthropic: false,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("定期重探：仅在启用且间隔大于 0 时启动，句柄可停止", () => {
+    expect(
+      startAutoDetectLoop({ upstream: { autoDetect: { enabled: false, reprobeIntervalMinutes: 5 } } } as never),
+    ).toBeNull();
+    expect(
+      startAutoDetectLoop({ upstream: { autoDetect: { enabled: true, reprobeIntervalMinutes: 0 } } } as never),
+    ).toBeNull();
+    const loop = startAutoDetectLoop(
+      { upstream: { autoDetect: { enabled: true, reprobeIntervalMinutes: 30 } } } as never,
+    );
+    expect(loop).not.toBeNull();
+    loop?.stop();
   });
 });

@@ -19,6 +19,14 @@
  */
 import type { AgentUpstreamEntry, ProxyConfig } from "../types.js";
 import { log } from "../report/log.js";
+import { pickCachedCaps, readProbeCache, writeProbeCache, type ProbeCacheEntries } from "./probe-cache.js";
+import {
+  recordProbeCacheHit,
+  recordProbeCacheMiss,
+  recordProbeChange,
+  recordProbeFailure,
+  recordProbeRun,
+} from "./probe-stats.js";
 
 export interface UpstreamCapabilities {
   chat: boolean;
@@ -34,6 +42,15 @@ export interface AutoDetectConfig {
    * 以避开「未知模型 → 404」被误判成「端点不存在」。
    */
   probeModel?: string;
+  /**
+   * 探测结果缓存文件（JSON）。配置后：启动时命中未过期的缓存就直接复用，
+   * 不再向上游发探测请求；每轮探测结束都会刷新它。留空则只在进程内保留。
+   */
+  cacheFile?: string;
+  /** 缓存有效期（分钟）。0 表示不因过期重探，只由定期重探刷新。 */
+  cacheTtlMinutes?: number;
+  /** 定期重探间隔（分钟）。0 或缺省表示只在启动时探测一次。 */
+  reprobeIntervalMinutes?: number;
 }
 
 /**
@@ -190,6 +207,16 @@ const EXPLICIT_FLAGS = [
   "responsesToAnthropic",
 ] as const;
 
+/**
+ * 记录"哪些转换开关是自动探测写进去的"。
+ * 重探时要先把上一轮写进去的项撤销，否则能力回退后旧开关会一直生效；
+ * 显式配置的开关不在此列，任何时候都不动它。
+ */
+const AUTO_APPLIED = new Map<string, Set<string>>();
+
+/** 上一次探测得到的能力：用于能力变更检测，以及"三端点全不通"时保留旧结论。 */
+const LAST_CAPS = new Map<string, UpstreamCapabilities>();
+
 /** 单个客户端的协议 × 上游能力 → 转换标志（原生协议优先，direct 不设标志）。 */
 export function resolveAgentModesFor(
   agent: string,
@@ -248,6 +275,9 @@ export function unroutableNativeProtocols(
 /**
  * 待探测集合 = 内置客户端 ∪ 配置里出现过的 agent，去掉已显式配置转换开关的项
  * （显式配置优先，也避免多余探测请求）。
+ *
+ * 注意"显式"的口径：上一轮由探测自己写进去的开关不算显式，否则第二轮重探
+ * 会把所有 agent 都判成"已配置"而直接跳过。
  */
 export function agentsToAutoDetect(config: ProxyConfig): string[] {
   const agents = new Set<string>(["workbuddy", "claude-code", "codex"]);
@@ -255,33 +285,116 @@ export function agentsToAutoDetect(config: ProxyConfig): string[] {
   return [...agents].filter((agent) => {
     const entry = config.upstream.agents?.[agent];
     if (!entry) return true;
+    const applied = AUTO_APPLIED.get(agent);
     return !EXPLICIT_FLAGS.some(
-      (f) => entry[f as keyof AgentUpstreamEntry] !== undefined,
+      (f) => entry[f as keyof AgentUpstreamEntry] !== undefined && !applied?.has(f),
     );
   });
 }
 
-/** 对需要探测的 agent 逐个探测并合并转换标志（显式配置优先）。 */
-export async function applyAutoDetect(config: ProxyConfig): Promise<void> {
-  const timeoutMs = config.upstream.autoDetect?.timeoutMs ?? 3000;
-  const probeModel = config.upstream.autoDetect?.probeModel ?? "ping";
+export interface ApplyAutoDetectOpts {
+  /** false 表示忽略缓存、强制真实探测（定期重探使用）。默认 true。 */
+  useCache?: boolean;
+}
+
+function capsChanged(a: UpstreamCapabilities, b: UpstreamCapabilities): boolean {
+  return a.chat !== b.chat || a.responses !== b.responses || a.anthropic !== b.anthropic;
+}
+
+/**
+ * 对需要探测的 agent 逐个探测并合并转换标志（显式配置优先）。
+ *
+ * 与首版相比多做了四件事：复用未过期的缓存结果；应用新结果前先撤销上一轮
+ * 由探测写入的开关（能力回退时旧开关不会残留）；三端点全不通时保留上一次结论；
+ * 能力发生变化时打告警并计数。
+ */
+export async function applyAutoDetect(
+  config: ProxyConfig,
+  opts: ApplyAutoDetectOpts = {},
+): Promise<void> {
+  const useCache = opts.useCache !== false;
+  const cfg = config.upstream.autoDetect;
+  const timeoutMs = cfg?.timeoutMs ?? 3000;
+  const probeModel = cfg?.probeModel ?? "ping";
+  const ttlMinutes = cfg?.cacheTtlMinutes ?? 0;
   const agents = (config.upstream.agents ??= {});
+  const cacheEntries: ProbeCacheEntries = readProbeCache(config);
+
   for (const agent of agentsToAutoDetect(config)) {
+    // 先撤销上一轮由探测写入的开关：只有显式配置的才留下（显式优先），
+    // 否则能力回退后旧开关会一直生效。
+    const appliedBefore = AUTO_APPLIED.get(agent);
+    const existing = agents[agent];
+    if (appliedBefore && appliedBefore.size > 0 && existing) {
+      for (const key of appliedBefore) {
+        delete (existing as unknown as Record<string, unknown>)[key];
+      }
+    }
+    AUTO_APPLIED.delete(agent);
+
     const entry = agents[agent] ?? {};
     const url = entry.url ?? config.upstream.url;
     const apiKey = entry.apiKey ?? config.upstream.apiKey;
-    const caps = await probeCapabilities(url, apiKey, timeoutMs, probeModel);
+
+    const cached = useCache
+      ? pickCachedCaps(cacheEntries, agent, url, probeModel, ttlMinutes)
+      : null;
+    let caps: UpstreamCapabilities;
+    let fromCache = false;
+    if (cached) {
+      caps = cached;
+      fromCache = true;
+      recordProbeCacheHit();
+    } else {
+      recordProbeCacheMiss();
+      caps = await probeCapabilities(url, apiKey, timeoutMs, probeModel);
+      recordProbeRun();
+    }
+
+    const previous = LAST_CAPS.get(agent);
+    const nothingReachable = !caps.chat && !caps.responses && !caps.anthropic;
+    if (nothingReachable && !fromCache && previous) {
+      // 三个端点都没探通，更像是上游临时不可用或凭据失效，而不是"三者都不支持"。
+      // 保留上一次结论，等下一轮重探或人工介入，避免把可用配置临时改坏。
+      recordProbeFailure();
+      log.warn("upstream.probe.all_failed", {
+        agent,
+        url,
+        probeModel,
+        hint: "三协议端点均未探通，已保留上一次探测结果；请检查上游地址、凭据与 probeModel",
+      });
+      caps = previous;
+    }
+
+    if (previous && capsChanged(previous, caps)) {
+      recordProbeChange(agent);
+      log.warn("upstream.probe.changed", {
+        agent,
+        url,
+        before: previous,
+        after: caps,
+        hint: "上游协议能力发生变化，per-agent 转换开关已按新结果调整",
+      });
+    }
+    LAST_CAPS.set(agent, caps);
+    cacheEntries[agent] = { url, probeModel, caps, updatedAt: Date.now() };
+
     const mode = resolveAgentModesFor(agent, caps);
     const merged: AgentUpstreamEntry = { ...entry };
+    const applied = new Set<string>();
     for (const [k, v] of Object.entries(mode)) {
       if (v === true && merged[k as keyof AgentUpstreamEntry] === undefined) {
         (merged as unknown as Record<string, unknown>)[k] = true;
+        applied.add(k);
       }
     }
     agents[agent] = merged;
+    if (applied.size > 0) AUTO_APPLIED.set(agent, applied);
+
     log.info("upstream.probe", {
       agent,
       url,
+      fromCache,
       chat: caps.chat,
       responses: caps.responses,
       anthropic: caps.anthropic,
@@ -300,4 +413,42 @@ export async function applyAutoDetect(config: ProxyConfig): Promise<void> {
       });
     }
   }
+
+  writeProbeCache(config, cacheEntries);
+}
+
+export interface AutoDetectLoop {
+  stop(): void;
+}
+
+/**
+ * 启动定期重探：仅在 `enabled=true` 且 `reprobeIntervalMinutes > 0` 时生效。
+ * 每轮强制真实探测（不走缓存），因此能反映上游在运行期发生的能力变化；
+ * 上一轮未结束时跳过本轮，避免请求叠加。
+ */
+export function startAutoDetectLoop(config: ProxyConfig): AutoDetectLoop | null {
+  const cfg = config.upstream.autoDetect;
+  if (!cfg?.enabled) return null;
+  const minutes = cfg.reprobeIntervalMinutes ?? 0;
+  if (!(minutes > 0)) return null;
+
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void applyAutoDetect(config, { useCache: false })
+      .catch((err: unknown) => log.warn("upstream.probe.failed", { error: String(err) }))
+      .finally(() => {
+        running = false;
+      });
+  }, minutes * 60_000);
+  if (typeof timer.unref === "function") timer.unref();
+  log.info("upstream.probe.schedule", { everyMinutes: minutes });
+  return { stop: () => clearInterval(timer) };
+}
+
+/** 测试用：清空进程内的"探测写入的开关"与"上一次能力"记录。 */
+export function __resetAutoDetectState(): void {
+  AUTO_APPLIED.clear();
+  LAST_CAPS.clear();
 }

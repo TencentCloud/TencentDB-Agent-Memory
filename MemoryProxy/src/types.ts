@@ -462,6 +462,12 @@ export interface ProxyConfig {
        * 否则「未知模型 → 404」会被误判成「端点不存在」（见 capability-probe.ts）。
        */
       probeModel?: string;
+      /** 探测结果缓存文件（JSON）；留空则不落盘，只在进程内保留上一轮结果。 */
+      cacheFile?: string;
+      /** 缓存有效期（分钟）。0 表示不因过期重探，只由定期重探刷新。默认 720（12 小时）。 */
+      cacheTtlMinutes?: number;
+      /** 定期重探间隔（分钟）。0 或缺省表示只在启动时探测一次。 */
+      reprobeIntervalMinutes?: number;
     };
   };
   log: {
@@ -806,6 +812,9 @@ export interface RawYamlConfig {
       enabled?: boolean;
       timeoutMs?: number;
       probeModel?: string;
+      cacheFile?: string;
+      cacheTtlMinutes?: number;
+      reprobeIntervalMinutes?: number;
     };
     /** Per-agent override map. See `AgentUpstreamEntry`. */
     agents?: Record<

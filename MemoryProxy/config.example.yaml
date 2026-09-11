@@ -41,10 +41,22 @@ upstream:
   # 的实际上游并行探测三种端点（Chat / Responses / Anthropic），并自动写入
   # 下面的 per-agent 转换开关。探测用小请求（max_tokens=1），超时/网络错误
   # 一律降级为直连；显式配置的开关始终优先于探测结果。
+  # 三个附加能力（都只影响"探测结果怎么用"，不影响请求路径）：
+  #   cacheFile             探测结果落一个小 JSON；重启时命中未过期缓存就不再探测，
+  #                         省掉启动阶段对上游的请求。留空则不落盘。
+  #   cacheTtlMinutes       缓存有效期；0 表示不因过期重探，只由定期重探刷新。
+  #   reprobeIntervalMinutes 定期重探间隔；>0 时按间隔重新探测，跟随上游能力变化
+  #                         （能力变了会打 upstream.probe.changed 告警，并计入
+  #                         /metrics 的 tdai_upstream_probe_changes_total）。
+  #                         0 表示只在启动时探测一次（与首版行为一致）。
   # 默认关闭：不开探测时，必须手动配置 per-agent 转换开关。
   autoDetect:
     enabled: false          # true 时自动探测；false 时按 agents 显式开关接线
     timeoutMs: 3000         # 单端点探测超时（毫秒）
+    cacheFile: ""           # 例："./.auto-detect-cache.json"；留空 = 不落盘
+    cacheTtlMinutes: 720    # 缓存有效期（分钟），默认 12 小时
+    reprobeIntervalMinutes: 0   # 定期重探间隔（分钟）；0 = 只在启动时探测一次
+    # probeModel: "<真实模型名>"   # 建议配置，避免"未知模型 → 404"被误判成端点不存在
 
   # ── Per-Agent 覆盖 ─────────────────────────────────────────────────────────
   # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url + apiKey。
