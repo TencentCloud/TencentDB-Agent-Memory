@@ -14,8 +14,21 @@ import {
   apiKeyToKeyId,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikReportFailure,
+  opikUpdateTrace,
+  opikUpdateTraceFork,
+  opikQuestionTag,
+  opikTurnTag,
+  opikTurnTraceId,
   uuidv7,
+  type OpikFailureReport,
 } from "./opik.js";
+import {
+  buildMemoryInjectionContext,
+  buildOpikTraceMetadata,
+  summarizeToolInteraction,
+} from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -35,6 +48,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -526,6 +540,47 @@ async function forwardWithRetry(
   return { resp: upstreamResp, retried: false };
 }
 
+/** Anthropic 错误路径的 Opik 收尾包装：统一补 trace/span/fork 字段。 */
+function reportAnthropicOpikFailure(
+  config: ProxyConfig,
+  args: {
+    traceId: string;
+    forkTraceId: string;
+    projectName: string;
+    model: string;
+    startTime: string;
+    stream: boolean;
+    upstreamUrl: string;
+    messages: unknown[];
+    system: unknown;
+    tags: string[];
+    metadata: Record<string, unknown>;
+    stage: OpikFailureReport["stage"];
+    status?: number;
+    message: string;
+  },
+): void {
+  opikReportFailure(config, {
+    traceId: args.traceId,
+    projectName: args.projectName,
+    model: args.model,
+    startTime: args.startTime,
+    stage: args.stage,
+    status: args.status,
+    message: args.message,
+    inputMessages: flattenAnthropicMessagesForOpik(args.messages, args.system),
+    tags: args.tags,
+    metadata: args.metadata,
+    forkTraceId: args.forkTraceId,
+    forkMetadata: {
+      keyId: args.projectName,
+      modelId: args.model,
+      stream: args.stream,
+      upstreamUrl: args.upstreamUrl,
+    },
+  });
+}
+
 /** Main handler for POST /v1/messages (Anthropic Messages API). */
 export async function handleAnthropicMessages(
   c: Context,
@@ -570,7 +625,7 @@ export async function handleAnthropicMessages(
     ? _pathPartsEarly[0] : undefined;
   const agentAdapter = resolveAgentAdapter(_agentFromPathEarly ?? "claude-code");
   const ccRoutingEnabled = config.ccRequestRouting?.enabled === true;
-  const requestKind: CcRequestKind = ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main";
+  const requestKind: CcRequestKind = ccRoutingEnabled ? (agentAdapter.classifyRequest(body) as CcRequestKind) : "main";
 
   // ── Model gate: reject requests whose `model` is not a registered display name ──
   // 价目表已配置时，客户端 `model` 必须匹配某条 entry 的 `modelName`（展示名，
@@ -708,7 +763,7 @@ export async function handleAnthropicMessages(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -981,12 +1036,12 @@ export async function handleAnthropicMessages(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1115,7 +1170,13 @@ export async function handleAnthropicMessages(
       if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
         const userMsg = { role: "user" as const, content: memCmd.rawMessage };
         try {
-          await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
+          await recordTdaiTurn(
+            tdaiClientForMem,
+            tdaiIdentityForMem,
+            userMsg,
+            memResult.messageText,
+            { traceId },
+          );
         } catch (err: unknown) {
           console.error("[mem-command] L0 write error:", err);
         }
@@ -1198,13 +1259,15 @@ export async function handleAnthropicMessages(
   //   - FORK: 走 pipeline 但 readOnly=true（miss 时不 self-heal 写 cache，避免破坏主对话 cache）
   //   - MAIN: 走完整 pipeline（含 self-heal）
   const skipInjection = requestKind === "sidequery";
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 挂载。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (!injectedSkipped && !skipInjection && config.injection?.enabled && config.injection.injectors.length > 0) {
     try {
       console.log(`[injection-debug] entering injection pipeline session=${sessionKey} turnSeq=${countHumanTurns(messages, "anthropic")} injectors=${config.injection.injectors} kind=${requestKind}`);
       const injectionTurnSeq = countHumanTurns(messages, "anthropic");
       const { getInjectionPipeline } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
-      const injectedBody = await pipeline.process(body, {
+      const injectedResult = await pipeline.processWithStats(body, {
         protocol: "anthropic",
         traceId,
         keyId,
@@ -1221,9 +1284,12 @@ export async function handleAnthropicMessages(
         custom: sessionInfo ? { session: sessionInfo, userKey: callerUserKey ?? undefined, assetCapabilities } : undefined,
         readOnly: requestKind === "fork",
       });
-      body = injectedBody;
-      messages = Array.isArray(injectedBody.messages) ? injectedBody.messages : messages;
-      hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+      body = injectedResult.body;
+      messages = Array.isArray(injectedResult.body.messages)
+        ? injectedResult.body.messages
+        : messages;
+      hasTools = Array.isArray(injectedResult.body.tools) && injectedResult.body.tools.length > 0;
+      injectionHookRuns = injectedResult.hookResults;
     } catch (err: unknown) {
       console.error("[injection] anthropic pipeline error:", err instanceof Error ? err.message : String(err));
     }
@@ -1318,6 +1384,8 @@ export async function handleAnthropicMessages(
   // compaction); fall back to the stateless count when it's not tracked
   // (extension disabled/unavailable, or no-tools auxiliary request).
   const turnSeq = target.turnSeq > 0 ? target.turnSeq : countHumanTurns(messages, "anthropic");
+  traceTags.push(opikTurnTag(sessionKey, turnSeq));
+  const opikTraceId = opikTurnTraceId(sessionKey, turnSeq);
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1328,6 +1396,8 @@ export async function handleAnthropicMessages(
     routeTags: target.tags,
     userQuery: resolveLatestUserQuery(config, lcHeaders, c.req.path, body, messages),
   };
+  const questionTag = opikQuestionTag(lf.userQuery);
+  if (questionTag) traceTags.push(questionTag);
   if (target.analyzerTrace) {
     reportAnalyzerTrace(config, target.analyzerTrace, {
       traceId,
@@ -1359,13 +1429,36 @@ export async function handleAnthropicMessages(
   });
 
   // ── Opik: create trace ───────────────────────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "anthropic",
+    sessionKey,
+    conversationId,
+    spaceId,
+    userId,
+    model: target.model,
+    stream: isStream,
+    turnSeq,
+    requestPath: c.req.path,
+    memoryInjection: buildMemoryInjectionContext({
+      enabled: config.injection?.enabled === true,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
+      skipped: injectedSkipped,
+      hookRuns: injectionHookRuns,
+    }),
+  });
+  const toolSummary = summarizeToolInteraction(messages);
+  if (toolSummary.toolCalls.length > 0 || toolSummary.toolResults > 0) {
+    opikTraceMetadata.tool_interaction = toolSummary;
+  }
   const forkTraceId = opikCreateTrace(config, {
-    traceId,
+    traceId: opikTraceId,
     projectName: keyId,
     name: `${target.model} / ${keyId}`,
     startTime,
     input: { messages: flattenAnthropicMessagesForOpik(messages, body.system) },
     tags: [...traceTags, ...target.tags],
+    metadata: opikTraceMetadata,
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1409,7 +1502,7 @@ export async function handleAnthropicMessages(
     userQuery: lf.userQuery,
     spaceId,
     lf,
-    opikTraceId: traceId,
+    opikTraceId,
     opikKeyId: keyId,
   });
 
@@ -1462,6 +1555,21 @@ export async function handleAnthropicMessages(
   } catch (err: unknown) {
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
+      reportAnthropicOpikFailure(config, {
+        traceId: opikTraceId,
+        forkTraceId,
+        projectName: keyId,
+        model: target.model,
+        startTime,
+        stream: isStream,
+        upstreamUrl: target.url,
+        messages,
+        system: body.system,
+        tags: traceTags,
+        metadata: opikTraceMetadata,
+        stage: "rate-limit",
+        message: "TPM/QPM exceeded",
+      });
       return err.response;
     }
     langfuseReportFailure({
@@ -1473,6 +1581,21 @@ export async function handleAnthropicMessages(
       statusMessage: err instanceof Error ? err.message : "Upstream request failed",
       extraTags: ["error"],
       observationMetadata: { stage: "forward", ...debugMetadata },
+    });
+    reportAnthropicOpikFailure(config, {
+      traceId: opikTraceId,
+      forkTraceId,
+      projectName: keyId,
+      model: target.model,
+      startTime,
+      stream: isStream,
+      upstreamUrl: target.url,
+      messages,
+      system: body.system,
+      tags: traceTags,
+      metadata: opikTraceMetadata,
+      stage: "forward",
+      message: err instanceof Error ? err.message : "Upstream request failed",
     });
     return c.json({ error: "Upstream request failed" }, 502);
   }
@@ -1506,11 +1629,29 @@ export async function handleAnthropicMessages(
   if (isStream) {
     if (!upstreamResp.body) {
       pipe.streamDone(null);
+      if (upstreamResp.status >= 400) {
+        reportAnthropicOpikFailure(config, {
+          traceId: opikTraceId,
+          forkTraceId,
+          projectName: keyId,
+          model: effectiveModel,
+          startTime,
+          stream: true,
+          upstreamUrl: target.url,
+          messages,
+          system: body.system,
+          tags: traceTags,
+          metadata: opikTraceMetadata,
+          stage: "upstream",
+          status: upstreamResp.status,
+          message: "Upstream returned an error without a response body",
+        });
+      }
       return new Response(null, { status: upstreamResp.status, headers: respHeaders });
     }
 
-    // Log error body for 4xx
-    if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
+    // Log error body for 4xx/5xx
+    if (!retried && upstreamResp.status >= 400) {
       const [errStream, clientStream] = upstreamResp.body.tee();
       const errText = await new Response(errStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
@@ -1527,6 +1668,22 @@ export async function handleAnthropicMessages(
         routedFrom,
         spaceId,
         upstreamRequestId,
+      });
+      reportAnthropicOpikFailure(config, {
+        traceId: opikTraceId,
+        forkTraceId,
+        projectName: keyId,
+        model: effectiveModel,
+        startTime,
+        stream: true,
+        upstreamUrl: target.url,
+        messages,
+        system: body.system,
+        tags: traceTags,
+        metadata: opikTraceMetadata,
+        stage: "upstream",
+        status: upstreamResp.status,
+        message: errText.slice(0, 500),
       });
       langfuseReportFailure({
         lf,
@@ -1554,7 +1711,7 @@ export async function handleAnthropicMessages(
       sessionKey,
       upstreamUrl: target.url,
       requestPath: c.req.path,
-      traceId,
+      traceId: opikTraceId,
       forkTraceId,
       startTime,
       inputMessages: messages,
@@ -1707,8 +1864,30 @@ export async function handleAnthropicMessages(
       upstreamRequestId,
     });
 
+    // 关闭 trace：Anthropic 主链路此前只 create + span，从未 PATCH end_time，
+    // 导致 trace 在 Opik 里永远显示“进行中”。这里与 Chat/Codex/WorkBuddy
+    // 对齐：每次调用结束时把 output/usage/end_time 写回主 trace（和 fork）。
+    const outputMessages = outputContent
+      ? [{ role: "assistant", content: outputContent }]
+      : [];
+    opikUpdateTrace(config, {
+      traceId: opikTraceId,
+      projectName: keyId,
+      endTime,
+      output: outputMessages,
+      usage,
+    });
+    if (forkTraceId) {
+      opikUpdateTraceFork(config, {
+        traceId: forkTraceId,
+        endTime,
+        output: outputMessages,
+        usage,
+      });
+    }
+
     opikCreateLlmSpan(config, {
-      traceId,
+      traceId: opikTraceId,
       projectName: keyId,
       name: effectiveModel,
       startTime,
@@ -1717,7 +1896,11 @@ export async function handleAnthropicMessages(
       outputMessage: outputContent ? { role: "assistant", content: outputContent } : null,
       model: effectiveModel,
       usage,
-      tags: retried ? ["retry"] : undefined,
+      tags: [
+        opikTurnTag(sessionKey, turnSeq),
+        ...(retried ? ["retry"] : []),
+      ],
+      metadata: opikTraceMetadata,
       forkProjectName: "request_log",
       forkTraceId,
       forkMetadata: {
@@ -1767,6 +1950,22 @@ export async function handleAnthropicMessages(
       extraTags: ["error"],
       observationMetadata: { stage: "upstream", stream: false, ...debugMetadata },
     });
+    reportAnthropicOpikFailure(config, {
+      traceId: opikTraceId,
+      forkTraceId,
+      projectName: keyId,
+      model: effectiveModel,
+      startTime,
+      stream: false,
+      upstreamUrl: target.url,
+      messages,
+      system: body.system,
+      tags: traceTags,
+      metadata: opikTraceMetadata,
+      stage: "upstream",
+      status: upstreamResp.status,
+      message: respText.slice(0, 500),
+    });
   }
 
   pipe.responseDone(usage);
@@ -1801,8 +2000,17 @@ export async function handleAnthropicMessages(
   // 常用的 stream:false）沉默丢失。缺失该调用意味着 CC non-stream 场景
   // 完全没有 L0 记忆写入。
   if (isMainDialog && tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-    recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, outputContent)
-      .catch((err: unknown) => pipe.error("TDAI_L0", err));
+    trackWrite(
+      withL0Retry(() =>
+        recordTdaiTurn(
+          tdaiClient!,
+          tdaiIdentity,
+          tdaiUserMessage,
+          outputContent,
+          { traceId: opikTraceId },
+        ),
+      ).catch((err: unknown) => pipe.error("TDAI_L0", err)),
+    );
   } else if (isMainDialog && tdaiClient) {
     logExtractionSkipped(config, "tdai-memory", sessionKey);
   } else if (!isMainDialog) {
@@ -2009,6 +2217,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
     let outputText = "";
     let toolUseCount = 0;
     let streamCompleted = false;
+    let aborted = false;
     // 内部使用埋点用：按 index 累积每个 tool_use 块。
     // Anthropic SSE 协议：
     //   1. content_block_start(type=tool_use)  → 拿到 index + name（此时 input 是空 {}）
@@ -2020,6 +2229,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
     const timeoutHandle = setTimeout(() => {
       if (!streamCompleted) {
         pipe.error("STREAM_TIMEOUT", "Anthropic stream reading exceeded 5 minutes");
+        aborted = true;
         // completeStream 是 async；这里 fire-and-forget（timeout 里已经无法 await）
         void completeStream().catch((err) => pipe.error("STREAM_TIMEOUT_COMPLETE", err));
       }
@@ -2063,6 +2273,26 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
         }
 
         try {
+          // 与其它 handler 对齐：流结束时也要把 trace（含 fork）真正收尾，
+          // 否则 Anthropic trace 会一直显示“进行中”。
+          const outputMessages = outputText
+            ? [{ role: "assistant", content: outputText }]
+            : [];
+          opikUpdateTrace(config, {
+            traceId,
+            projectName: keyId,
+            endTime,
+            output: outputMessages,
+            usage,
+          });
+          if (forkTraceId) {
+            opikUpdateTraceFork(config, {
+              traceId: forkTraceId,
+              endTime,
+              output: outputMessages,
+              usage,
+            });
+          }
           opikCreateLlmSpan(config, {
             traceId,
             projectName: keyId,
@@ -2073,7 +2303,10 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
             outputMessage: outputText ? { role: "assistant", content: outputText } : null,
             model: modelId,
             usage,
-            tags: retried ? ["retry"] : undefined,
+            tags: [
+              opikTurnTag(ctx.sessionKey, ctx.lf.turnSeq),
+              ...(retried ? ["retry"] : []),
+            ],
             forkProjectName: "request_log",
             forkTraceId,
             forkMetadata: {
@@ -2124,6 +2357,49 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
         } catch (langfuseErr: unknown) {
           pipe.error("LANGFUSE_SPAN", langfuseErr);
         }
+      } else {
+        // 流结束但没拿到 usage：说明流被中断/超时，或上游返回了空流。
+        // 此时也要把 trace 收尾，避免留下永远“进行中”的孤儿 trace。
+        try {
+          if (aborted) {
+            opikReportFailure(config, {
+              traceId,
+              projectName: keyId,
+              model: modelId,
+              startTime,
+              endTime,
+              stage: "stream",
+              message: "stream interrupted or timed out before usage event",
+              inputMessages: flattenAnthropicMessagesForOpik(inputMessages, system),
+              tags: [opikTurnTag(ctx.sessionKey, ctx.lf.turnSeq)],
+              forkTraceId,
+              forkMetadata: {
+                keyId,
+                modelId,
+                stream: true,
+                upstreamUrl,
+              },
+            });
+          } else {
+            opikUpdateTrace(config, {
+              traceId,
+              projectName: keyId,
+              endTime,
+              output: [],
+              usage: {},
+            });
+            if (forkTraceId) {
+              opikUpdateTraceFork(config, {
+                traceId: forkTraceId,
+                endTime,
+                output: [],
+                usage: {},
+              });
+            }
+          }
+        } catch (opikErr: unknown) {
+          pipe.error("OPIK_FINALIZE", opikErr);
+        }
       }
 
       // CC 分流：FORK/SIDEQUERY 不是真实对话轮，跳过 L0/skill。Credit 仍上报。
@@ -2139,6 +2415,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
           withL0Retry(() => recordTdaiTurn(
             ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
             outputText || null,
+            { traceId: ctx.traceId },
           )).catch((err: unknown) => pipe.error("TDAI_L0", err))
         );
       } else if (isMainDialog && ctx.tdaiClient) {
@@ -2214,7 +2491,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
 
       // Credit usage reporting for streaming responses.
       (ctx.skipCreditReport
-        ? Promise.resolve({ attempted: false, ok: false })
+        ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
         : tryReportCreditFromPath(
             ctx.config.creditReport,
             ctx.requestPath,
@@ -2345,6 +2622,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
       }
     } catch (err: unknown) {
       pipe.error("STREAM", err);
+      aborted = true;
     }
 
     await completeStream();

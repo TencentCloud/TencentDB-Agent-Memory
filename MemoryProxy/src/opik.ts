@@ -3,14 +3,46 @@
  * Project name is derived from the request API key:
  *   SHA-256(apiKey) → hex → first 8 chars
  *
- * All network calls are fire-and-forget. Failures are logged via structured logger
- * and never propagate to the hot request path.
+ * 可靠性设计（全部 fire-and-forget，绝不阻塞/改变业务响应）：
+ * - 单次上报超时：config.opik.timeoutMs（默认 2000ms），超时即放弃；
+ * - 熔断：连续失败 OPIK_BREAKER_FAILURE_THRESHOLD 次后暂停上报
+ *   OPIK_BREAKER_OPEN_MS，期间静默跳过，避免后端不可用时拖垮请求侧；
+ * - 日志限频：同类错误最多每 OPIK_WARN_THROTTLE_MS 输出一条 warn，
+ *   防止故障期间逐请求刷日志；
+ * - 端点前缀可配置：backend(8080) 用 /v1/private，前端(5173) 用
+ *   /api/v1/private（config.opik.apiPrefix，默认 /v1/private）。
  */
 
 import { createHash, randomBytes } from "node:crypto";
 import type { ProxyConfig } from "./types.js";
 import { log } from "./report/log.js";
 import { archiveTrace, archiveSpan } from "./trace-archive.js";
+
+export const OPIK_DEFAULT_API_PREFIX = "/v1/private";
+export const OPIK_DEFAULT_TIMEOUT_MS = 2000;
+const OPIK_BREAKER_FAILURE_THRESHOLD = 5;
+const OPIK_BREAKER_OPEN_MS = 30_000;
+const OPIK_WARN_THROTTLE_MS = 10_000;
+
+/** 客户端级上报状态（跨请求共享，模块内单例）。 */
+interface OpikClientState {
+  consecutiveFailures: number;
+  openUntilMs: number;
+  lastWarnMs: number;
+}
+
+const clientState: OpikClientState = {
+  consecutiveFailures: 0,
+  openUntilMs: 0,
+  lastWarnMs: 0,
+};
+
+/** 仅供测试：重置熔断/日志限频状态。 */
+export function resetOpikClientForTests(): void {
+  clientState.consecutiveFailures = 0;
+  clientState.openUntilMs = 0;
+  clientState.lastWarnMs = 0;
+}
 
 /**
  * Generate a UUID v7 (time-ordered), required by Opik API.
@@ -48,6 +80,52 @@ export function extractBearerToken(authHeader: string | null | undefined): strin
   return match ? match[1].trim() : "";
 }
 
+/** 同一轮用户提问（sessionKey + turnSeq）的稳定分组标签。
+ *  工具循环产生的多条 HTTP 请求会算出相同的 (sessionKey, turnSeq)，
+ *  因此该标签一致，可在 Opik 中按 turn:<hash> 过滤同一次提问的全部请求。
+ */
+export function opikTurnTag(sessionKey: string, turnSeq: number): string {
+  const hash = createHash("sha256")
+    .update(`${sessionKey}:${turnSeq}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `turn:${hash}`;
+}
+
+/** 同一轮用户提问的确定性 Opik traceId（UUID v7 格式）。
+ *  同一 (sessionKey, turnSeq) 在任意请求/实例都得到同一 ID，
+ *  使工具循环产生的多条 HTTP 请求能挂到同一条 trace 下。
+ *  已在本机 Opik 验证：同 ID 重复 POST 幂等（不重复、不报错），
+ *  多 span 同 trace 可正常展示。
+ */
+export function opikTurnTraceId(sessionKey: string, turnSeq: number): string {
+  const digest = createHash("sha256")
+    .update(`${sessionKey}:${turnSeq}`)
+    .digest();
+  digest[6] = (digest[6] & 0x0f) | 0x70; // version 7
+  digest[8] = (digest[8] & 0x3f) | 0x80; // variant 10xx
+  const hex = digest.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** 相同内容的用户问题指纹标签。
+ *  只用于统计/过滤，绝不参与 traceId 派生：同一内容在不同会话/轮次仍是
+ *  不同的执行 trace，但都会带同一个 question:<hash>，便于统计重复问题。
+ */
+export function opikQuestionTag(query: string | null | undefined): string | null {
+  const normalized = String(query ?? "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  if (!normalized) return null;
+  const hash = createHash("sha256")
+    .update(normalized)
+    .digest("hex")
+    .slice(0, 16);
+  return `question:${hash}`;
+}
+
 interface OpikTraceInput {
   traceId: string;
   projectName: string;
@@ -55,6 +133,8 @@ interface OpikTraceInput {
   startTime: string; // ISO 8601
   input: Record<string, unknown>;
   tags?: string[];
+  /** 结构化上下文（agent / session / 注入统计 / 工具交互等），原样写入 trace.metadata。 */
+  metadata?: Record<string, unknown>;
   /** Fork to a second project (e.g. "request_log"). Uses a separate trace ID. */
   forkProjectName?: string;
   /** Metadata attached to forked trace. */
@@ -80,6 +160,8 @@ interface OpikLlmSpan {
   model: string;
   usage: Record<string, unknown>;
   tags?: string[];            // optional tags for categorisation
+  /** 结构化上下文，原样写入 span.metadata。 */
+  metadata?: Record<string, unknown>;
   /** Fork to a second project (e.g. "request_log"). Requires forkTraceId. */
   forkProjectName?: string;
   /** Independent trace ID for the forked span (different from main traceId). */
@@ -88,31 +170,93 @@ interface OpikLlmSpan {
   forkMetadata?: Record<string, unknown>;
 }
 
-/**
- * Fire a single POST to create a trace (internal helper, no early-return guard).
- */
-function fireCreateTrace(
-  url: string,
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-): void {
-  fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  }).then(async (res) => {
+/** 归一化 REST API 前缀（必须以 "/" 开头，去尾部斜杠）。 */
+export function opikApiPrefix(config: ProxyConfig): string {
+  const raw = config.opik.apiPrefix?.trim();
+  if (!raw) return OPIK_DEFAULT_API_PREFIX;
+  const normalized = raw.startsWith("/") ? raw : `/${raw}`;
+  const stripped = normalized.replace(/\/+$/, "");
+  return stripped || OPIK_DEFAULT_API_PREFIX;
+}
+
+/** 拼接完整上报 URL：`{base}{prefix}{resource}`，resource 形如 "/traces"、"/spans"。 */
+export function opikEndpoint(config: ProxyConfig, resource: string): string {
+  const base = config.opik.url.replace(/\/+$/, "");
+  const prefix = opikApiPrefix(config);
+  const suffix = resource.startsWith("/") ? resource : `/${resource}`;
+  return `${base}${prefix}${suffix}`;
+}
+
+function opikHeaders(config: ProxyConfig): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (config.opik.apiKey) headers["Authorization"] = `Bearer ${config.opik.apiKey}`;
+  return headers;
+}
+
+function breakerOpen(nowMs = Date.now()): boolean {
+  return nowMs < clientState.openUntilMs;
+}
+
+function recordOpikResult(success: boolean, nowMs = Date.now()): void {
+  if (success) {
+    clientState.consecutiveFailures = 0;
+    return;
+  }
+  clientState.consecutiveFailures += 1;
+  if (clientState.consecutiveFailures >= OPIK_BREAKER_FAILURE_THRESHOLD) {
+    clientState.openUntilMs = nowMs + OPIK_BREAKER_OPEN_MS;
+    clientState.consecutiveFailures = 0;
+  }
+}
+
+/** 同类错误日志限频：默认每 10s 至多一条 warn。 */
+function opikWarnThrottled(event: string, fields: Record<string, unknown>): void {
+  const now = Date.now();
+  if (now - clientState.lastWarnMs < OPIK_WARN_THROTTLE_MS) return;
+  clientState.lastWarnMs = now;
+  log.warn(event, fields);
+}
+
+interface OpikRequest {
+  method: "POST" | "PATCH";
+  url: string;
+  body: Record<string, unknown>;
+  /** 日志事件名（opik.*_error / *_failed）。 */
+  event: string;
+}
+
+/** 统一上报入口：超时 + 熔断 + 限频日志；任何异常都不向外抛。 */
+async function sendOpikRequest(config: ProxyConfig, req: OpikRequest): Promise<void> {
+  if (breakerOpen()) return;
+  const timeoutMs =
+    typeof config.opik.timeoutMs === "number" && config.opik.timeoutMs > 0
+      ? config.opik.timeoutMs
+      : OPIK_DEFAULT_TIMEOUT_MS;
+  try {
+    const res = await fetch(req.url, {
+      method: req.method,
+      headers: opikHeaders(config),
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      log.warn("opik.create_trace_error", { status: res.status, body: body.slice(0, 200) });
+      const text = await res.text().catch(() => "");
+      recordOpikResult(false);
+      opikWarnThrottled(`${req.event}_error`, { status: res.status, body: text.slice(0, 200) });
+      return;
     }
-  }).catch((err: unknown) => {
-    log.warn("opik.create_trace_failed", { error: String(err) });
-  });
+    recordOpikResult(true);
+  } catch (err) {
+    recordOpikResult(false);
+    const detail = err instanceof Error && err.name === "TimeoutError" ? "timeout" : String(err);
+    opikWarnThrottled(`${req.event}_failed`, { error: detail });
+  }
 }
 
 /** POST a new trace to Opik (fire-and-forget).
  *  Returns the forkTraceId if forkProjectName was set (different ID than main trace),
- *  or empty string otherwise. The main trace is always created with input.traceId. */
+ *  or empty string otherwise. The main trace is always created with input.traceId.
+ */
 export function opikCreateTrace(
   config: ProxyConfig,
   input: OpikTraceInput,
@@ -130,11 +274,7 @@ export function opikCreateTrace(
 
   if (!config.opik.enabled || !config.opik.url) return "";
 
-  const baseUrl = config.opik.url.replace(/\/$/, "");
-  const url = `${baseUrl}/api/v1/private/traces`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (config.opik.apiKey) headers["Authorization"] = `Bearer ${config.opik.apiKey}`;
-
+  const url = opikEndpoint(config, "/traces");
   const traceBody: Record<string, unknown> = {
     id: input.traceId,
     project_name: input.projectName,
@@ -145,12 +285,22 @@ export function opikCreateTrace(
   if (input.tags && input.tags.length > 0) {
     traceBody.tags = input.tags;
   }
+  if (input.metadata && Object.keys(input.metadata).length > 0) {
+    traceBody.metadata = input.metadata;
+  }
 
-  fireCreateTrace(url, headers, traceBody);
+  void sendOpikRequest(config, {
+    method: "POST",
+    url,
+    body: traceBody,
+    event: "opik.create_trace",
+  });
 
-  // Fork to a second project if requested — uses a DIFFERENT trace ID because
-  // Opik rejects the same trace_id across different projects (409 conflict).
-  if (input.forkProjectName) {
+  // Fork to a second project if requested AND enabled — uses a DIFFERENT
+  // trace ID because Opik rejects the same trace_id across different projects
+  // (409 conflict). Forking doubles report volume, so it is opt-in via
+  // `config.opik.requestLogEnabled` (default false).
+  if (input.forkProjectName && config.opik.requestLogEnabled === true) {
     const forkTraceId = uuidv7();
     const forkMeta = input.forkMetadata || {};
     const forkBody: Record<string, unknown> = {
@@ -169,7 +319,12 @@ export function opikCreateTrace(
     } else {
       forkBody.metadata = { forkTraceId };
     }
-    fireCreateTrace(url, headers, forkBody);
+    void sendOpikRequest(config, {
+      method: "POST",
+      url,
+      body: forkBody,
+      event: "opik.create_trace",
+    });
     return forkTraceId;
   }
   return "";
@@ -182,54 +337,121 @@ export function opikUpdateTrace(
 ): void {
   if (!config.opik.enabled || !config.opik.url) return;
 
-  const url = `${config.opik.url.replace(/\/$/, "")}/api/v1/private/traces/${update.traceId}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (config.opik.apiKey) headers["Authorization"] = `Bearer ${config.opik.apiKey}`;
-
-  fetch(url, {
+  void sendOpikRequest(config, {
     method: "PATCH",
-    headers,
-    body: JSON.stringify({
+    url: opikEndpoint(config, `/traces/${update.traceId}`),
+    body: {
       project_name: update.projectName,
       workspace_name: "default",
       end_time: update.endTime,
       output: update.output,
       usage: update.usage, // raw, unmodified
-    }),
-  }).then(async (res) => {
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      log.warn("opik.update_trace_error", { status: res.status, body: body.slice(0, 200) });
-    }
-  }).catch((err: unknown) => {
-    log.warn("opik.update_trace_failed", { error: String(err) });
+    },
+    event: "opik.update_trace",
   });
 }
 
-/**
- * Fire a single POST to create an LLM span (internal helper, no early-return guard).
- */
-function fireCreateLlmSpan(
-  url: string,
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
+/** request_log fork trace 的收尾：即使 stripRequestLogContent=true 也要写
+ *  end_time，避免 fork trace 永远“进行中”；此时 output 置空数组，不落正文。 */
+export function opikUpdateTraceFork(
+  config: ProxyConfig,
+  update: Omit<OpikTraceUpdate, "projectName">,
 ): void {
-  fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  }).then(async (res) => {
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      log.warn("opik.create_llm_span_error", { status: res.status, body: body.slice(0, 200) });
-    }
-  }).catch((err: unknown) => {
-    log.warn("opik.create_llm_span_failed", { error: String(err) });
+  if (!config.opik.enabled || !config.opik.url) return;
+  opikUpdateTrace(config, {
+    traceId: update.traceId,
+    projectName: "request_log",
+    endTime: update.endTime,
+    output: config.opik.stripRequestLogContent ? [] : update.output,
+    usage: update.usage,
+  });
+}
+
+/** 失败请求的 Opik 收尾：关闭 trace（主项目 + request_log fork）并补一条
+ *  error LLM span，保证错误请求在消息面板可见、trace 不会永远“进行中”。
+ *  fire-and-forget，绝不阻塞业务。
+ */
+export interface OpikFailureReport {
+  traceId: string;
+  projectName: string;
+  model: string;
+  startTime: string;
+  endTime?: string;
+  stage: "forward" | "upstream" | "rate-limit" | "stream";
+  status?: number;
+  message: string;
+  inputMessages?: unknown[];
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  /** fork 到 request_log 项目的独立 trace id（requestLogEnabled 开启时才有）。 */
+  forkTraceId?: string;
+  forkMetadata?: Record<string, unknown>;
+}
+
+export function opikReportFailure(
+  config: ProxyConfig,
+  report: OpikFailureReport,
+): void {
+  if (!config.opik.enabled || !config.opik.url) return;
+
+  const endTime = report.endTime ?? new Date().toISOString();
+  const errorInfo: Record<string, unknown> = { stage: report.stage };
+  if (typeof report.status === "number") errorInfo.status = report.status;
+  const safeMessage = String(report.message ?? "unknown error").slice(0, 500);
+  errorInfo.message = safeMessage;
+
+  // 关闭主项目 trace（只写 end_time + error metadata；不覆盖已成功请求写入的 output）
+  void sendOpikRequest(config, {
+    method: "PATCH",
+    url: opikEndpoint(config, `/traces/${report.traceId}`),
+    body: {
+      project_name: report.projectName,
+      workspace_name: "default",
+      end_time: endTime,
+      metadata: { error: errorInfo },
+    },
+    event: "opik.finalize_error",
+  });
+
+  // 关闭 request_log fork trace（若开启且已创建）
+  if (report.forkTraceId) {
+    void sendOpikRequest(config, {
+      method: "PATCH",
+      url: opikEndpoint(config, `/traces/${report.forkTraceId}`),
+      body: {
+        project_name: "request_log",
+        workspace_name: "default",
+        end_time: endTime,
+        metadata: { error: { ...errorInfo, forkTraceId: report.forkTraceId } },
+      },
+      event: "opik.finalize_error",
+    });
+  }
+
+  // 补一条 error LLM span（fork span 由 opikCreateLlmSpan 内部按需创建）
+  const errorOutput =
+    `[${report.stage}${typeof report.status === "number" ? ` ${report.status}` : ""}] ${safeMessage}`;
+  opikCreateLlmSpan(config, {
+    traceId: report.traceId,
+    projectName: report.projectName,
+    name: report.model,
+    startTime: report.startTime,
+    endTime,
+    inputMessages: report.inputMessages ?? [],
+    outputMessage: { role: "assistant", content: errorOutput },
+    model: report.model,
+    usage: {},
+    tags: ["error", ...(report.tags ?? [])],
+    metadata: { ...(report.metadata ?? {}), error: errorInfo },
+    forkProjectName: report.forkTraceId ? "request_log" : undefined,
+    forkTraceId: report.forkTraceId,
+    forkMetadata: report.forkMetadata,
   });
 }
 
 /** POST a LLM span under an existing trace (fire-and-forget).
- *  This is what populates the "Messages" panel in Opik UI. */
+ *  This is what populates the "Messages" panel in Opik UI.
+ */
 export function opikCreateLlmSpan(
   config: ProxyConfig,
   span: OpikLlmSpan,
@@ -251,11 +473,6 @@ export function opikCreateLlmSpan(
   });
 
   if (!config.opik.enabled || !config.opik.url) return;
-
-  const baseUrl = config.opik.url.replace(/\/$/, "");
-  const url = `${baseUrl}/api/v1/private/spans`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (config.opik.apiKey) headers["Authorization"] = `Bearer ${config.opik.apiKey}`;
 
   const outputMessages = span.outputMessage ? [span.outputMessage] : [];
 
@@ -289,12 +506,21 @@ export function opikCreateLlmSpan(
   if (span.tags && span.tags.length > 0) {
     body.tags = span.tags;
   }
+  if (span.metadata && Object.keys(span.metadata).length > 0) {
+    body.metadata = span.metadata;
+  }
 
-  fireCreateLlmSpan(url, headers, body);
+  void sendOpikRequest(config, {
+    method: "POST",
+    url: opikEndpoint(config, "/spans"),
+    body,
+    event: "opik.create_llm_span",
+  });
 
-  // Fork to a second project if requested — strip message content, keep only usage + metadata.
-  // Uses forkTraceId (different from main traceId) because Opik rejects cross-project trace reuse.
-  if (span.forkProjectName && span.forkTraceId) {
+  // Fork to a second project if requested AND enabled — strip message content,
+  // keep only usage + metadata. Uses forkTraceId (different from main traceId)
+  // because Opik rejects cross-project trace reuse.
+  if (span.forkProjectName && span.forkTraceId && config.opik.requestLogEnabled === true) {
     const forkMeta = span.forkMetadata || {};
     const forkMetadataFull: Record<string, unknown> = { ...forkMeta };
     // Preserve raw credit in metadata for reference (usage only stores credit_x100 integer)
@@ -324,7 +550,12 @@ export function opikCreateLlmSpan(
       `keyId:${forkMeta.keyId || "unknown"}`,
       `modelId:${forkMeta.modelId || "unknown"}`,
     ];
-    fireCreateLlmSpan(url, headers, forkBody);
+    void sendOpikRequest(config, {
+      method: "POST",
+      url: opikEndpoint(config, "/spans"),
+      body: forkBody,
+      event: "opik.create_llm_span",
+    });
   }
 }
 
