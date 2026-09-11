@@ -139,6 +139,28 @@ class MemoryTencentdbSdkClient:
             body["user_id"] = user_id
         return self._post("/capture", body)
 
+    def write_explicit_memory(
+        self,
+        action: str,
+        target: str,
+        content: str,
+        session_key: str,
+        session_id: str = "",
+        user_id: str = "",
+    ) -> Dict[str, Any]:
+        """Mirror a host-native durable-memory write directly into L1."""
+        body: Dict[str, Any] = {
+            "action": action,
+            "target": target,
+            "content": content,
+            "session_key": session_key,
+        }
+        if session_id:
+            body["session_id"] = session_id
+        if user_id:
+            body["user_id"] = user_id
+        return self._post("/memories/explicit", body)
+
     def search_memories(self, query: str, limit: int = 5, type_filter: str = "", scene: str = "") -> Dict[str, Any]:
         """Search L1 structured memories."""
         body: Dict[str, Any] = {"query": query, "limit": limit}
