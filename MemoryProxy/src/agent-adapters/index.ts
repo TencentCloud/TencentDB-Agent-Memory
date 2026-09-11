@@ -20,6 +20,7 @@ import { dshAdapter } from "./dsh.js";
 import { opencodeAdapter } from "./opencode.js";
 import { piAdapter } from "./pi.js";
 import { hermesAdapter } from "./hermes.js";
+import { openclawAdapter } from "./openclaw.js";
 import { defaultAdapter } from "./default.js";
 
 export type { AgentAdapter, AgentKind, RequestKind } from "./types.js";
@@ -42,6 +43,8 @@ export function resolveAgentAdapter(agentSource: string): AgentAdapter {
       return piAdapter;
     case "hermes":
       return hermesAdapter;
+    case "openclaw":
+      return openclawAdapter;
     default:
       return defaultAdapter;
   }
