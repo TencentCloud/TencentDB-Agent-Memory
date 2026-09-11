@@ -51,6 +51,9 @@ function actualCounts() {
     } catch {
       report = null;
     }
+    // 读完即删：该报告由同一次 `npm test` 生成，删除可避免下一次单独执行时
+    // 读到上一次运行或另一个分支留下的过期结果（曾导致校验假通过）。
+    rmSync(REPORT, { force: true });
   }
   if (!report) {
     // 单独跑本脚本时自己产报告；分支上还没有测试文件时 vitest 不写报告
