@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "tdai-memory": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "tdai_memory_mcp"
+      ],
+      "env": {
+        "TDAI_GATEWAY_URL": "http://127.0.0.1:8420",
+        "TDAI_GATEWAY_API_KEY": "",
+        "TDAI_SESSION_KEY": "agent:mcp-codex",
+        "TDAI_USER_ID": "codex"
+      }
+    }
+  }
+}

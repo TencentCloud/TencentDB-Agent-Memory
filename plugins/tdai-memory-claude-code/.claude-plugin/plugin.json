@@ -1,0 +1,8 @@
+{
+  "name": "tdai-memory-claude-code",
+  "version": "0.1.0",
+  "description": "TencentDB Agent Memory integration for Claude Code.",
+  "author": {
+    "name": "TencentDB Agent Memory"
+  }
+}
