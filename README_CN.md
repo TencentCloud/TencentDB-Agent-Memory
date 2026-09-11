@@ -491,7 +491,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/d2fc2872-7672-42e8-96a3-8e85654ab270" width="200" alt="Agent Memory 微信社群二维码" />
+<p align="center"><img src="https://github.com/user-attachments/assets/9f77b819-c85b-4135-8b91-a612e42580a6" width="200" alt="Agent Memory 微信社群二维码" />
 
 
 ---
