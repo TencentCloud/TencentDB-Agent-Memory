@@ -43,6 +43,14 @@ interface SceneSegment {
   }>;
 }
 
+type L1ExtractionFailureReason = "empty_response" | "content_filter" | "no_json_array" | "parse_error";
+
+interface ParsedExtractionResult {
+  scenes: SceneSegment[];
+  failureReason?: L1ExtractionFailureReason;
+  failureMessage?: string;
+}
+
 export interface L1ExtractionResult {
   /** Whether extraction succeeded */
   success: boolean;
@@ -56,6 +64,10 @@ export interface L1ExtractionResult {
   sceneNames: string[];
   /** Last scene name (for continuity in next extraction) */
   lastSceneName?: string;
+  /** Why the extraction failed, if success=false */
+  failureReason?: L1ExtractionFailureReason;
+  /** Human-readable failure detail, if success=false */
+  error?: string;
 }
 
 // ============================
@@ -151,7 +163,7 @@ export async function extractL1Memories(params: {
   // Step 1: LLM extraction (scene segmentation + memory extraction)
   let scenes: SceneSegment[];
   try {
-    scenes = await callLlmExtraction({
+    const extraction = await callLlmExtraction({
       newMessages,
       backgroundMessages,
       previousSceneName: options.previousSceneName,
@@ -160,10 +172,35 @@ export async function extractL1Memories(params: {
       model: options.model,
       llmRunner: options.llmRunner,
     });
+    if (extraction.failureReason) {
+      logger?.warn?.(
+        `${TAG} LLM extraction output rejected: reason=${extraction.failureReason}, ` +
+        `message=${extraction.failureMessage ?? "(none)"}`,
+      );
+      return {
+        success: false,
+        extractedCount: 0,
+        storedCount: 0,
+        records: [],
+        sceneNames: [],
+        failureReason: extraction.failureReason,
+        error: extraction.failureMessage,
+      };
+    }
+    scenes = extraction.scenes;
     logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
   } catch (err) {
-    logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
-    return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
+    const message = err instanceof Error ? err.message : String(err);
+    logger?.error(`${TAG} LLM extraction failed: ${message}`);
+    return {
+      success: false,
+      extractedCount: 0,
+      storedCount: 0,
+      records: [],
+      sceneNames: [],
+      failureReason: classifyExtractionFailure(message),
+      error: message,
+    };
   }
 
   // Flatten all memories across scenes
@@ -302,7 +339,7 @@ async function callLlmExtraction(params: {
   model?: string;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
-}): Promise<SceneSegment[]> {
+}): Promise<ParsedExtractionResult> {
   const { newMessages, backgroundMessages, previousSceneName, config, logger, model, llmRunner } = params;
 
   const userPrompt = formatExtractionPrompt({
@@ -350,10 +387,16 @@ async function callLlmExtraction(params: {
  * Parse the LLM's JSON response into SceneSegment array.
  * Expected format: [{scene_name, message_ids, memories: [...]}]
  */
-function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
+function parseExtractionResult(raw: string, logger?: Logger): ParsedExtractionResult {
   try {
     // Strip markdown code block wrappers if present
     let cleaned = raw.trim();
+    if (!cleaned) {
+      const message = "LLM returned an empty extraction response";
+      logger?.warn?.(`${TAG} ${message}`);
+      return { scenes: [], failureReason: "empty_response", failureMessage: message };
+    }
+
     if (cleaned.startsWith("```")) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     }
@@ -361,13 +404,15 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
     // Try to extract JSON array
     const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
     if (!arrayMatch) {
-      logger?.warn?.(`${TAG} No JSON array found in extraction response`);
+      const message = "No JSON array found in extraction response";
+      logger?.warn?.(`${TAG} ${message}`);
       // [l1-debug] NO_JSON — dump the full raw so we can see what the LLM actually said
       const rawPreview = raw.slice(0, 2048);
       logger?.warn?.(
         `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
-      return [];
+      const failureReason = classifyExtractionFailure(cleaned);
+      return { scenes: [], failureReason: failureReason === "parse_error" ? "no_json_array" : failureReason, failureMessage: message };
     }
 
     // Sanitize control characters inside JSON string literals that LLM may produce
@@ -375,8 +420,9 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
     const parsed = JSON.parse(sanitized) as unknown[];
 
     if (!Array.isArray(parsed)) {
-      logger?.warn?.(`${TAG} Extraction response is not an array`);
-      return [];
+      const message = "Extraction response is not an array";
+      logger?.warn?.(`${TAG} ${message}`);
+      return { scenes: [], failureReason: "parse_error", failureMessage: message };
     }
 
     const scenes: SceneSegment[] = [];
@@ -401,11 +447,21 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       });
     }
 
-    return scenes;
+    return { scenes };
   } catch (err) {
-    logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    const message = `Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`;
+    logger?.warn?.(`${TAG} ${message}`);
+    return { scenes: [], failureReason: "parse_error", failureMessage: message };
   }
+}
+
+function classifyExtractionFailure(message: string): L1ExtractionFailureReason {
+  const lower = message.toLowerCase();
+  if (lower.includes("content_filter") || lower.includes("finish_reason: content_filter")) {
+    return "content_filter";
+  }
+  if (message.trim().length === 0) return "empty_response";
+  return "parse_error";
 }
 
 // ============================
