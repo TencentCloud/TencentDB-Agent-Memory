@@ -513,6 +513,10 @@ export class VectorStore implements IMemoryStore {
       const sqliteVec = require("sqlite-vec");
       this.db.enableLoadExtension(true);
       sqliteVec.load(this.db);
+      // Re-disable extension loading for the lifetime of the connection — only
+      // sqlite-vec should ever be loaded. Defense-in-depth against any future
+      // SQL path that could otherwise load an arbitrary extension.
+      this.db.enableLoadExtension(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger?.error(
@@ -1105,7 +1109,7 @@ export class VectorStore implements IMemoryStore {
         if (!skipVec) {
           // vec0 does not support ON CONFLICT → delete then insert
           this.stmtDeleteVec!.run(recordId);
-          this.stmtInsertVec!.run(recordId, Buffer.from(embedding!.buffer), record.updatedAt);
+          this.stmtInsertVec!.run(recordId, Buffer.from(embedding!.buffer, embedding!.byteOffset, embedding!.byteLength), record.updatedAt);
         } else {
           this.logger?.debug?.(
             `${TAG} [L1-upsert] Skipping vec write (${embedding ? "zero vector" : "no embedding"}) id=${recordId}`,
@@ -1185,7 +1189,7 @@ export class VectorStore implements IMemoryStore {
       );
 
       const rows = this.stmtSearchVec!.all(
-        Buffer.from(queryEmbedding.buffer),
+        Buffer.from(queryEmbedding.buffer, queryEmbedding.byteOffset, queryEmbedding.byteLength),
         retrieveCount,
       ) as Array<{ record_id: string; distance: number }>;
 
@@ -1516,7 +1520,7 @@ export class VectorStore implements IMemoryStore {
         if (!skipVec) {
           // vec0 does not support ON CONFLICT → delete then insert
           this.stmtL0DeleteVec!.run(record.id);
-          this.stmtL0InsertVec!.run(record.id, Buffer.from(embedding!.buffer), record.recordedAt);
+          this.stmtL0InsertVec!.run(record.id, Buffer.from(embedding!.buffer, embedding!.byteOffset, embedding!.byteLength), record.recordedAt);
         } else {
           this.logger?.debug?.(
             `${TAG} [L0-upsert] Skipping vec write (${embedding ? "zero vector" : "no embedding"}) id=${record.id}`,
@@ -1592,7 +1596,7 @@ export class VectorStore implements IMemoryStore {
       this.db.exec("BEGIN");
       try {
         this.stmtL0DeleteVec!.run(recordId);
-        this.stmtL0InsertVec!.run(recordId, Buffer.from(embedding.buffer), meta.recorded_at);
+        this.stmtL0InsertVec!.run(recordId, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), meta.recorded_at);
         this.db.exec("COMMIT");
       } catch (err) {
         try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
@@ -1635,7 +1639,7 @@ export class VectorStore implements IMemoryStore {
       );
 
       const rows = this.stmtL0SearchVec!.all(
-        Buffer.from(queryEmbedding.buffer),
+        Buffer.from(queryEmbedding.buffer, queryEmbedding.byteOffset, queryEmbedding.byteLength),
         retrieveCount,
       ) as Array<{ record_id: string; distance: number }>;
 
@@ -1886,7 +1890,7 @@ export class VectorStore implements IMemoryStore {
           this.db.exec("BEGIN");
           try {
             this.stmtDeleteVec!.run(record_id);
-            this.stmtInsertVec!.run(record_id, Buffer.from(embedding.buffer), updated_time);
+            this.stmtInsertVec!.run(record_id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), updated_time);
             this.db.exec("COMMIT");
           } catch (txErr) {
             try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
@@ -1911,7 +1915,7 @@ export class VectorStore implements IMemoryStore {
           this.db.exec("BEGIN");
           try {
             this.stmtL0DeleteVec!.run(record_id);
-            this.stmtL0InsertVec!.run(record_id, Buffer.from(embedding.buffer), recorded_at);
+            this.stmtL0InsertVec!.run(record_id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), recorded_at);
             this.db.exec("COMMIT");
           } catch (txErr) {
             try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
