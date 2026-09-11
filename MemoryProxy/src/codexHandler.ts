@@ -58,7 +58,9 @@ import {
   responsesBodyToChat,
   createChatSseToResponses,
   chatJsonToResponses,
+  shouldRetryWithoutResponseFormat,
 } from "./common/responses-chat-compat.js";
+import { recordDrop } from "./common/protocol-stats.js";
 import {
   responsesToAnthropic,
   createAnthropicSseToResponsesSse,
@@ -1175,6 +1177,20 @@ async function forwardToUpstream(
       headers: upstreamHeaders,
       body: JSON.stringify(outboundBody),
     });
+    // 上游对结构化输出的支持并不统一：实测 DeepSeek 对 Responses 侧 text.format 转出来的
+    // response_format 直接 400（"This response_format type is unavailable now"）。
+    // 这种失败会把整轮请求连同记忆注入一起打掉，代价远大于"退化成纯文本"，
+    // 因此这里只针对这一种情况去掉 response_format 重发一次，并计入丢参计数。
+    if (shouldRetryWithoutResponseFormat(upstreamResp.status, outboundBody, await upstreamResp.clone().text().catch(() => ""))) {
+      pipe.info("PROTOCOL", "upstream rejected response_format → retry without it");
+      recordDrop("responses_body_to_chat", "param:text.format#degraded");
+      delete outboundBody.response_format;
+      upstreamResp = await fetch(upstreamUrl, {
+        method: "POST",
+        headers: upstreamHeaders,
+        body: JSON.stringify(outboundBody),
+      });
+    }
   } catch (err: unknown) {
     pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
     // 上报 langfuse 失败（转发异常 —— 上游未回响应体，只有本地 fetch 抛错）

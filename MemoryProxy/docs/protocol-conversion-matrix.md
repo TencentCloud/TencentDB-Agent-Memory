@@ -8,11 +8,12 @@
 >     cache_control 不泄漏 / 确定性）、protocol-stream-semantics.test.ts 5、
 >     protocol-stats.test.ts 4、protocol-stats-streaming.test.ts 4、sse-fuzz.test.ts 4、
 >     responses-sse-completion.test.ts 3；
->   - 协议接线分支：另带 responses-chat-compat.test.ts 6（第一跳 Responses→Chat 的丢参计数）、
+>   - 协议接线分支：另带 responses-chat-compat.test.ts 10（第一跳 Responses→Chat 的丢参计数 +
+>     上游拒收 response_format 时的重试判据）、
 >     probe.test.ts 25（上游能力探测：注册表 / 判定 / 缓存 / 重探 / 变更告警）、
 >     upstream-auth.test.ts 7（上游凭据取值顺序与启动期审计）、
->     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 14 个文件 / 171 用例；
->   - 两支合并：15 个文件 / 179 用例。
+>     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 14 个文件 / 175 用例；
+>   - 两支合并：15 个文件 / 183 用例。
 > 两支的 `npx tsc --noEmit` 均为 0 错误。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 
@@ -245,4 +246,4 @@ tokenizer + 4 × 消息数）：
 | protocol-errors.test.ts | 5 | 接线层协议错误/非流式路径（HTTP 状态拦截、错误体不进入转换器） |
 | upstream-auth.test.ts | 7 | 上游凭据取值顺序（agent.apiKey → upstream.apiKey → 客户端 key）、passthroughClientKey 显式透传、启动期审计的三类提示 |
 | probe.test.ts | 25 | autoDetect：原生协议注册表 + 配置出现 agent 泛化 + 显式 true/false 都跳过探测 + agents 缺省；能力回退时撤销上一轮开关、显式配置不被覆盖、三端点全不通保留旧结论、未过期缓存跳过探测、缓存损坏容错、定期重探启停 |
-| responses-chat-compat.test.ts | 6 | 第一跳丢参计数：可完整映射的请求零丢弃；宿主侧 item（item_reference / local_shell_call / 未知类型归 other）与文件、音频 content part 按类型计数；`store` / `previous_response_id` / `include` / `reasoning` 等 Responses 独有顶层参数逐项计数；非 function 工具计数 |
+| responses-chat-compat.test.ts | 10 | 第一跳丢参计数：可完整映射的请求零丢弃；宿主侧 item（item_reference / local_shell_call / 未知类型归 other）与文件、音频 content part 按类型计数；`store` / `previous_response_id` / `include` / `reasoning` 等 Responses 独有顶层参数逐项计数；非 function 工具计数；上游拒收 `response_format` 时的重试判据（400 + 发过该字段 + 文案点名才重试） |

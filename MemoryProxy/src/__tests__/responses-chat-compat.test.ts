@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { responsesBodyToChat } from "../common/responses-chat-compat.js";
+import {
+  responsesBodyToChat,
+  shouldRetryWithoutResponseFormat,
+} from "../common/responses-chat-compat.js";
 import { protocolStatsToPrometheus, resetProtocolStats } from "../common/protocol-stats.js";
 
 /**
@@ -119,5 +122,49 @@ describe("Responses → Chat：无法映射的部分要计数，而不是静默�
       { maxTokensCap: 4096 },
     );
     expect(drops().join("\n")).toContain('param="max_tokens_clamped"');
+  });
+});
+
+/**
+ * 上游拒收 `response_format` 时的重试判据。
+ *
+ * 实测 DeepSeek：Responses 的 text.format 转出的 json_schema 直接 400
+ * （"This response_format type is unavailable now"）。这种失败会让整轮请求连同记忆注入一起
+ * 失败，所以值得"去掉该字段重发一次"；但判据必须收窄，别把真正的参数错误也重试掉。
+ */
+describe("上游拒收 response_format 的重试判据", () => {
+  it("400 + 发过 response_format + 文案点名 → 值得重试", () => {
+    expect(
+      shouldRetryWithoutResponseFormat(
+        400,
+        { response_format: { type: "json_schema" } },
+        '{"error":{"message":"This response_format type is unavailable now"}}',
+      ),
+    ).toBe(true);
+  });
+
+  it("没发过 response_format → 不重试（与我们无关的参数错误）", () => {
+    expect(
+      shouldRetryWithoutResponseFormat(400, {}, "response_format invalid"),
+    ).toBe(false);
+  });
+
+  it("400 但文案没点名 response_format → 不重试", () => {
+    expect(
+      shouldRetryWithoutResponseFormat(
+        400,
+        { response_format: { type: "json_object" } },
+        '{"error":{"message":"messages[1].content is required"}}',
+      ),
+    ).toBe(false);
+  });
+
+  it("非 400（例如 200 或 500）→ 不重试", () => {
+    expect(
+      shouldRetryWithoutResponseFormat(200, { response_format: {} }, "response_format"),
+    ).toBe(false);
+    expect(
+      shouldRetryWithoutResponseFormat(500, { response_format: {} }, "response_format"),
+    ).toBe(false);
   });
 });

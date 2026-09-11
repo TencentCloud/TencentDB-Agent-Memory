@@ -1669,3 +1669,28 @@ export function responsesJsonToChatJson(
     },
   };
 }
+
+/**
+ * 上游拒收 `response_format` 时，是否值得"去掉它再发一次"。
+ *
+ * 背景：Responses 的 `text.format` 在转换后变成 Chat 的 `response_format`，但**上游对结构化输出的
+ * 支持并不统一**——实测 DeepSeek 对 `json_schema` 直接返回
+ * `400 {"error":{"message":"This response_format type is unavailable now"}}`。
+ * 这类失败会让整轮请求连同记忆注入一起失败，代价远大于"退化成纯文本"。
+ *
+ * 判据刻意收窄，避免把真正的参数错误也重试掉：
+ *   1. 状态码必须是 400；
+ *   2. **必须**是客户端请求里原本就带 `text.format`（即我们确实发过 `response_format`）；
+ *   3. 上游错误文案要点名 `response_format`。
+ *
+ * 重试由调用方执行（handler），本函数只做判定，便于单测覆盖。
+ */
+export function shouldRetryWithoutResponseFormat(
+  status: number,
+  outboundBody: Record<string, unknown>,
+  errorText: string,
+): boolean {
+  if (status !== 400) return false;
+  if (outboundBody.response_format === undefined) return false;
+  return /response_format/i.test(errorText);
+}
