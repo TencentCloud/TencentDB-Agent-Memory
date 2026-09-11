@@ -433,7 +433,7 @@ describe("thinking signature 保真（preserveSignature 开关，默认关）", 
     expect(msg.anthropic_reasoning_signature).toBe("sig-x");
 
     const anth = chatToAnthropic(
-      { model: "m", messages: [msg] },
+      { model: "m", messages: [{ role: "user", content: "q" }, msg] },
       { thinking: "map", preserveSignature: true },
     );
     const content = (anth.messages as Array<Record<string, unknown>>)
@@ -555,11 +555,15 @@ describe("legacy functions / function_call 兼容", () => {
   it("assistant function_call → Anthropic tool_use 块", () => {
     const out = chatToAnthropic({
       model: "m",
-      messages: [{
-        role: "assistant",
-        content: "我先查一下",
-        function_call: { name: "f", arguments: '{"a":1}' },
-      }],
+      messages: [
+        { role: "user", content: "查一下" },
+        {
+          role: "assistant",
+          content: "我先查一下",
+          function_call: { name: "f", arguments: '{"a":1}' },
+        },
+        { role: "function", name: "f", content: '{"ok":true}' },
+      ],
     });
     const msg = (out.messages as Array<Record<string, unknown>>).find((m) => m.role === "assistant")!;
     const blocks = msg.content as Array<Record<string, unknown>>;
@@ -579,6 +583,7 @@ describe("legacy functions / function_call 兼容", () => {
     const out = chatToAnthropic({
       model: "m",
       messages: [
+        { role: "user", content: "查天气" },
         {
           role: "assistant",
           content: "",
@@ -596,8 +601,10 @@ describe("legacy functions / function_call 兼容", () => {
     const userBlocks = msgs.filter((m) => m.role === "user");
     // role=function 结果 + 后续 user 文本必须合并成一条 user 消息，
     // tool_result 前置，避免 Anthropic 连续 user 400。
-    expect(userBlocks).toHaveLength(1);
-    const blocks = userBlocks[0].content as Array<Record<string, unknown>>;
+    const toolResultMsg = msgs[msgs.indexOf(assistant) + 1];
+    expect(toolResultMsg.role).toBe("user");
+    expect(userBlocks).toHaveLength(2); // 首问 + 工具结果（已与后续文本合并）
+    const blocks = toolResultMsg.content as Array<Record<string, unknown>>;
     expect(blocks[0]).toMatchObject({
       type: "tool_result",
       tool_use_id: toolBlock.id,
@@ -673,6 +680,7 @@ describe("developer / system 角色语义", () => {
             { type: "text", text: "规则B" },
           ],
         },
+        { role: "user", content: "查一下" },
         {
           role: "assistant",
           content: [{ type: "text", text: "我来查" }],
@@ -680,6 +688,7 @@ describe("developer / system 角色语义", () => {
             { id: "call_1", type: "function", function: { name: "f", arguments: '{"a":1}' } },
           ],
         },
+        { role: "tool", tool_call_id: "call_1", content: "ok" },
       ],
     });
     expect(anth.system).toBe("规则A\n\n规则B");
