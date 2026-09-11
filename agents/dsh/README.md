@@ -51,8 +51,32 @@ chmod 600 ~/.dsh/.credentials.yaml
 |--------|--------|
 | 1 | `x-deepseek-harness-session-id` |
 | 2 | `x-session-id` |
+| 3 | `x-session-affinity` |
 
 dsh 客户端会自动生成并在 header 中携带 session ID，无需用户手动配置。Proxy 仅从 header 获取，没有 body 兜底。
+
+### 2.1 无会话头通道（pi-ai 等 OpenAI-compatible 适配器）的兜底
+
+dsh 只有 `llm-deepseek` 适配器会挂 `x-deepseek-harness-session-id`；走
+`llm-pi-ai` 适配器（如 sun2 / gmi / zp 等自定义 OpenAI-compatible provider）时，
+请求默认**不携带任何会话头**（issue #1179）。此时 proxy 用 keyId 派生的稳定
+会话标识兜底走 session-init，选 Team/Agent 表单与记忆注入对 pi-ai 通道同样生效。
+
+注意：兜底会话状态按 `dsh:<keyId>` 共享 —— **同一 user key 的所有 dsh pi-ai
+会话共享一次 Team/Agent 选择**（该通道没有更强的 per-conversation 标识）。
+
+若需按会话隔离，可在 pi-ai provider 配置开启会话亲和头（需要 DSH 侧
+`deepseek-ai/deepseek-harness` 将 `sendSessionAffinityHeaders` 开放为可配置，
+PR 见 issue #1179 关联）：
+
+```yaml
+# ~/.dsh/settings.yaml（pi-ai 路由）
+compat:
+  sendSessionAffinityHeaders: true   # 发送 x-session-affinity: session-<uuid>
+```
+
+开启后 proxy 从 `x-session-affinity` 识别会话 ID（与 `llm-deepseek` 通道同一
+sessionId 值，两通道的会话状态互通）。
 
 ---
 
