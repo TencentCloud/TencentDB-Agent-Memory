@@ -1,12 +1,18 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 转换层回归：`npm test`（vitest，109/109 通过：protocol-conformance 61、responses-anthropic-compat 13、
-> sse 8、sse-fuzz 4、protocol-stats 4、review-fix 12（流式语义 5 / 流式 cache 4 / done 兜底 3）、
-> 注入×转换接缝 7（injection-protocol-conversion：注入内容跨协议存活/可缓存前缀位/cache_control 不泄漏/确定性））。
-> 协议接线分支全量：`npm test` 131/131（转换层 109 + token-estimate 7 + protocol-errors 5 + probe 17）。
+> 用例数按分支实测（`npm test`，改代码后请同步这里的数字）：
+>   - 转换层分支：10 个文件 / 129 用例 —— protocol-conformance.test.ts 61、
+>     chat-anthropic-role-rules.test.ts 19、responses-anthropic-compat.test.ts 13、sse.test.ts 8、
+>     injection-protocol-conversion.test.ts 8（注入内容跨协议存活 / 可缓存前缀位 /
+>     cache_control 不泄漏 / 确定性）、protocol-stream-semantics.test.ts 5、
+>     protocol-stats.test.ts 4、protocol-stats-streaming.test.ts 4、sse-fuzz.test.ts 4、
+>     responses-sse-completion.test.ts 3；
+>   - 协议接线分支：另带 token-estimate.test.ts 7、probe.test.ts 17、protocol-errors.test.ts 5，
+>     共 12 个文件 / 150 用例；
+>   - 两支合并：13 个文件 / 158 用例。
+> 两支的 `npx tsc --noEmit` 均为 0 错误。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
-> 分支内全量：`npx tsc --noEmit` 0 错误。
 
 ## 架构
 
@@ -226,11 +232,13 @@ tokenizer + 4 × 消息数）：
 | protocol-stats-streaming.test.ts | 4 | 流式收尾 usage/cache 计入 /metrics（单跳与组合层均只计一次） |
 | protocol-stream-semantics.test.ts | 5 | 请求体转换的 stream:false/true 透传语义 |
 | responses-sse-completion.test.ts | 3 | 仅 output_item.done（无 delta）时兜底补发 arguments/text/summary |
+| chat-anthropic-role-rules.test.ts | 19 | 角色严格交替（相邻同角色合并）+ tool_use/tool_result 相邻配对 + 消息形状兜底（首条 user / 悬空 tool_use / 空 content / 无 user 时兜底） |
+| injection-protocol-conversion.test.ts | 8 | 注入 × 转换接缝：注入恰好存活一次、落在可缓存前缀位、不泄漏 cache_control、转换确定性，含 Responses 合成体装配 |
 
-### 协议接线分支额外测试（计入分支全量 126）
+### 协议接线分支额外测试（该分支合计 12 个文件 / 150 用例）
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
 | token-estimate.test.ts | 7 | count_tokens 本地口径（正常/超长/异常输入归一，不抛错）+ 3 条口径回归（中文 100 字≈131、同字符数中文/ASCII 比值>8、英文 440 字≈97） |
 | protocol-errors.test.ts | 5 | 接线层协议错误/非流式路径（HTTP 状态拦截、错误体不进入转换器） |
-| probe.test.ts | 12 | autoDetect：内置客户端原生协议注册表 + 配置出现 agent 泛化 + 显式 true/false 都跳过探测 + agents 缺省 |
+| probe.test.ts | 17 | autoDetect：内置客户端原生协议注册表 + 配置出现 agent 泛化 + 显式 true/false 都跳过探测 + agents 缺省 |

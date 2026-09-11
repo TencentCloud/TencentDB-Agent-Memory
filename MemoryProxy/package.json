@@ -8,8 +8,10 @@
     "start:config": "node --import tsx/esm src/index.ts --config config.yaml",
     "dev": "node --import tsx/esm --watch src/index.ts",
     "dev:config": "node --import tsx/esm --watch src/index.ts --config config.yaml",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests --reporter=default --reporter=json --outputFile=.vitest-report.json",
     "test:watch": "vitest",
+    "test:doc-claims": "node scripts/qa/check-doc-claims.mjs",
+    "posttest": "node scripts/qa/check-doc-claims.mjs",
     "typecheck": "tsc --noEmit"
   },
   "optionalDependencies": {
