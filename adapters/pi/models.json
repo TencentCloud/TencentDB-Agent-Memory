@@ -1,0 +1,23 @@
+{
+  "providers": {
+    "tencentdb-agent-memory": {
+      "baseUrl": "http://127.0.0.1:8096/codebuddy/default",
+      "api": "openai-completions",
+      "apiKey": "$TDS_AGENT_MEMORY_KEY",
+      "headers": {
+        "x-tdai-service-id": "default"
+      },
+      "models": [
+        {
+          "id": "claude-sonnet-4-20250514",
+          "name": "claude-sonnet-4 (via Memory Proxy)",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 200000,
+          "maxTokens": 16384,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}
