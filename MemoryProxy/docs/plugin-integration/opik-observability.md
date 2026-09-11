@@ -57,7 +57,7 @@ Codex / WorkBuddy Desktop (Responses) ─┘（本 PR 补齐）
 | `deploy/opik-compose.yml` + `deploy/opik-assets/` | 自托管 Opik 栈（裁剪官方 v2.2.49，backend 8080 / frontend 5173，数据落 named volume） |
 | `deploy/global-images/start-proxy.sh` + `.env.example` | `PROXY_OPIK_*` 环境变量透传；生成的 config.yaml 自动带 opik 段 |
 | 上游类型修复 | 与 #1226 / #1251 一致的 base 类型修复（6 文件逐字节相同） |
-| 测试 / 文档 | opik / opik-metadata / audit 用例（vitest **35/35**，含 request_log 开关、失败 trace 收尾、批量队列新增用例）；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例；本设计文档 |
+| 测试 / 文档 | 用例数（`npm test`，改动后请同步）：opik.test.ts 21、opik-metadata.test.ts 11、audit.test.ts 3、memory-access-audit.test.ts 7（本分支合计 42）；上游 v2.0.2-beta.1 已删除 base 自带 user-query-extractor 8 个用例；本设计文档 |
 
 > 说明：Responses（Codex / WorkBuddy Desktop）主链路已在 2026-09-06 评审修复轮补齐；
 > 自托管 compose 与 `PROXY_OPIK_*` 透传随本 PR 提供（见 §5）；官方完整栈的
@@ -124,14 +124,27 @@ opik:
 
 ## 6. 验证方法（命令行）
 
-### 6.1 造请求（当前已埋点客户端）
+### 6.1 造请求（三条主链路，均可直接复现）
 
 ```bash
-cd /c/Users/<用户名>/Documents/ChatGPT/腾讯犀牛鸟
-bash check-token-usage.sh workbuddy wb-persist-0001 "你好"
-bash check-token-usage.sh claude   c4015466-4cda-4eb1-83e4-14dfea1a6762 "你好"
-bash check-token-usage.sh codex    codex-verif "你好"
+# 1) OpenAI Chat（WorkBuddy Web 形态）
+curl -sS -X POST "http://127.0.0.1:8096/workbuddy/default/v1/chat/completions" \
+  -H "authorization: Bearer <user_key>" -H "content-type: application/json" \
+  -d '{"model":"<model>","stream":false,"messages":[{"role":"user","content":"你好"}]}'
+
+# 2) Anthropic（Claude Code 形态）
+curl -sS -X POST "http://127.0.0.1:8096/claude-code/default/v1/messages" \
+  -H "x-api-key: <user_key>" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+  -d '{"model":"<model>","max_tokens":64,"messages":[{"role":"user","content":"你好"}]}'
+
+# 3) Responses（Codex 形态）
+curl -sS -X POST "http://127.0.0.1:8096/codex/default/responses" \
+  -H "authorization: Bearer <user_key>" -H "content-type: application/json" \
+  -d '{"model":"<model>","stream":false,"input":[{"role":"user","content":[{"type":"input_text","text":"你好"}]}]}'
 ```
+
+> 三条路径与 `INSTALL.md` 的客户端接入方式一致（`/{agent}/{spaceId}/...`）。把 `<user_key>` 换成面板里的
+> `sk-mem-*`，`<model>` 换成上游支持的模型名；`stream:false` 便于一次性看到 JSON 响应。
 
 ### 6.2 查 trace（REST）
 
@@ -313,7 +326,7 @@ opik:
     flushIntervalMs: 1000   # 队列未满时最长等待（50–60000 ms）
 ```
 
-**验证**：vitest 35/35 通过、typecheck 通过；新增用例覆盖"连续 create 合并成
+**验证**：`npm test` 全过（opik.test.ts 21、opik-metadata.test.ts 11、audit.test.ts 3）、typecheck 通过；新增用例覆盖"连续 create 合并成
 `/traces/batch`""队列满立即刷""`batch.enabled=false` 退化逐条""batch 端点 404 时逐条回退
 不丢数据"。
 
