@@ -37,7 +37,8 @@ done
 
 ERRORS=0
 WARNS=0
-CURL=/usr/bin/curl
+# CURL is resolved by _lib.sh, which falls back to `command -v curl` when
+# /usr/bin/curl is absent (Git Bash ships it at /mingw64/bin/curl).
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>
