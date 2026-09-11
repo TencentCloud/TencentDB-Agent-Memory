@@ -8,9 +8,10 @@
 >     cache_control 不泄漏 / 确定性）、protocol-stream-semantics.test.ts 5、
 >     protocol-stats.test.ts 4、protocol-stats-streaming.test.ts 4、sse-fuzz.test.ts 4、
 >     responses-sse-completion.test.ts 3；
->   - 协议接线分支：另带 token-estimate.test.ts 7、probe.test.ts 17、protocol-errors.test.ts 5，
->     共 12 个文件 / 150 用例；
->   - 两支合并：13 个文件 / 158 用例。
+>   - 协议接线分支：另带 responses-chat-compat.test.ts 6（第一跳 Responses→Chat 的丢参计数）、
+>     token-estimate.test.ts 7、probe.test.ts 17、protocol-errors.test.ts 5，
+>     共 13 个文件 / 156 用例；
+>   - 两支合并：14 个文件 / 164 用例。
 > 两支的 `npx tsc --noEmit` 均为 0 错误。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 
@@ -235,10 +236,11 @@ tokenizer + 4 × 消息数）：
 | chat-anthropic-role-rules.test.ts | 19 | 角色严格交替（相邻同角色合并）+ tool_use/tool_result 相邻配对 + 消息形状兜底（首条 user / 悬空 tool_use / 空 content / 无 user 时兜底） |
 | injection-protocol-conversion.test.ts | 8 | 注入 × 转换接缝：注入恰好存活一次、落在可缓存前缀位、不泄漏 cache_control、转换确定性，含 Responses 合成体装配 |
 
-### 协议接线分支额外测试（该分支合计 12 个文件 / 150 用例）
+### 协议接线分支额外测试（该分支合计 13 个文件 / 156 用例）
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
 | token-estimate.test.ts | 7 | count_tokens 本地口径（正常/超长/异常输入归一，不抛错）+ 3 条口径回归（中文 100 字≈131、同字符数中文/ASCII 比值>8、英文 440 字≈97） |
 | protocol-errors.test.ts | 5 | 接线层协议错误/非流式路径（HTTP 状态拦截、错误体不进入转换器） |
 | probe.test.ts | 17 | autoDetect：内置客户端原生协议注册表 + 配置出现 agent 泛化 + 显式 true/false 都跳过探测 + agents 缺省 |
+| responses-chat-compat.test.ts | 6 | 第一跳丢参计数：可完整映射的请求零丢弃；宿主侧 item（item_reference / local_shell_call / 未知类型归 other）与文件、音频 content part 按类型计数；`store` / `previous_response_id` / `include` / `reasoning` 等 Responses 独有顶层参数逐项计数；非 function 工具计数 |
