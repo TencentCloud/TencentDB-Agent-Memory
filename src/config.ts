@@ -93,6 +93,16 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Injection mode: "prepend" (default) puts recall before user message, "append" puts it after. */
+  injectionMode: "prepend" | "append";
+  /** Whether to preserve injected recall context in persisted history (default: false). */
+  showInjected: boolean;
+  /** Enable session-level recall deduplication (default: true). */
+  dedupeEnabled: boolean;
+  /** Deduplication mode: "skip" removes duplicates, "reminder" replaces with short reminder (default: "reminder"). */
+  dedupeMode: "skip" | "reminder";
+  /** TTL in turns for deduplication cache (default: 10). */
+  dedupeTtlTurns: number;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +545,11 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      injectionMode: validateInjectionMode(str(recallGroup, "injectionMode")) ?? "prepend",
+      showInjected: bool(recallGroup, "showInjected") ?? false,
+      dedupeEnabled: bool(recallGroup, "dedupeEnabled") ?? true,
+      dedupeMode: validateDedupeMode(str(recallGroup, "dedupeMode")) ?? "reminder",
+      dedupeTtlTurns: num(recallGroup, "dedupeTtlTurns") ?? 10,
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -643,6 +658,30 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+const VALID_INJECTION_MODES: RecallConfig["injectionMode"][] = ["prepend", "append"];
+
+/**
+ * Validate injection mode against whitelist.
+ */
+function validateInjectionMode(value: string | undefined): RecallConfig["injectionMode"] | undefined {
+  if (!value) return undefined;
+  return VALID_INJECTION_MODES.includes(value as RecallConfig["injectionMode"])
+    ? (value as RecallConfig["injectionMode"])
+    : undefined;
+}
+
+const VALID_DEDUPE_MODES: RecallConfig["dedupeMode"][] = ["skip", "reminder"];
+
+/**
+ * Validate deduplication mode against whitelist.
+ */
+function validateDedupeMode(value: string | undefined): RecallConfig["dedupeMode"] | undefined {
+  if (!value) return undefined;
+  return VALID_DEDUPE_MODES.includes(value as RecallConfig["dedupeMode"])
+    ? (value as RecallConfig["dedupeMode"])
     : undefined;
 }
 

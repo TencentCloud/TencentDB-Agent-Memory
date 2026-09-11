@@ -201,6 +201,8 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
+  /** Stable system context prepended before CACHE_BOUNDARY (persona). */
+  prependSystemContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
   /** L3 Persona content (for metrics). */

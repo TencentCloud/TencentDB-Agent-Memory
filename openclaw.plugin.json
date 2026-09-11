@@ -79,7 +79,12 @@
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "injectionMode": { "type": "string", "enum": ["prepend", "append"], "default": "prepend", "description": "注入模式：prepend(默认，放在用户消息前)、append(放在用户消息后，保护前缀缓存)" },
+          "showInjected": { "type": "boolean", "default": false, "description": "是否在持久化历史中保留注入的记忆上下文（默认 false，自动剥离）" },
+          "dedupeEnabled": { "type": "boolean", "default": true, "description": "是否启用 Session 级记忆去重（默认 true）" },
+          "dedupeMode": { "type": "string", "enum": ["skip", "reminder"], "default": "reminder", "description": "去重模式：skip(跳过重复记忆)、reminder(替换为简短提醒，默认)" },
+          "dedupeTtlTurns": { "type": "number", "default": 10, "description": "去重缓存 TTL（轮数），超过此轮数后允许重新注入" }
         }
       },
       "embedding": {
