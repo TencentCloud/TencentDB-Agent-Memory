@@ -17,6 +17,20 @@
 
 单独 `pnpm dev` 可以起服务；产品链路里必须有 Panel 推 `llm_binding`、收 callback、写远端元数据。
 
+### 大仓库稀疏检出
+
+创建 Code-Graph 时可通过 `sparse_paths` 指定需要索引的相对路径，减少大仓库的工作树和索引开销：
+
+```json
+{
+  "repo_url": "https://github.com/example/monorepo.git",
+  "branch": "main",
+  "sparse_paths": ["packages/memory", "packages/shared"]
+}
+```
+
+`sparse_paths` 只接受相对 POSIX 路径；不传或传空数组时保持完整浅克隆。配置会随 Code-Graph 资产保存，并在后续自动同步和手动同步时继续生效。路径不能包含绝对路径、`..`、空路径段或反斜杠。
+
 ## 源码结构
 
 ```text

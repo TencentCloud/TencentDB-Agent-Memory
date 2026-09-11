@@ -95,6 +95,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
             repoName: input.repo_name ?? "",
             repoUrl: input.repo_url,
             branch: input.branch,
+            sparsePaths: input.sparse_paths?.length ? JSON.stringify(input.sparse_paths) : null,
             ownerUserId: input.owner_user_id ?? null,
             userId: input.user_id ?? null,
             agentId: input.agent_id ?? null,
@@ -594,6 +595,17 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
   // ═══════════════════════ Mappers ═══════════════════════
 
   private mapCgRow(r: typeof knowledgeCodeGraph.$inferSelect): CodeGraphRow {
+    let sparsePaths: string[] = [];
+    if (r.sparsePaths) {
+      try {
+        const parsed = JSON.parse(r.sparsePaths);
+        if (Array.isArray(parsed) && parsed.every((path): path is string => typeof path === "string")) {
+          sparsePaths = parsed;
+        }
+      } catch {
+        // malformed legacy metadata falls back to full checkout
+      }
+    }
     return {
       code_graph_id: r.codeGraphId,
       service_id: r.serviceId,
@@ -601,6 +613,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       repo_name: r.repoName,
       repo_url: r.repoUrl,
       branch: r.branch,
+      sparse_paths: sparsePaths,
       commit_hash: r.commitHash,
       owner_user_id: r.ownerUserId,
       user_id: r.userId,
