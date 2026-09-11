@@ -45,6 +45,22 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 
+export {
+  DifyWorkflowMemoryAdapter,
+  createDifyWorkflowMemoryAdapter,
+} from "./src/adapters/index.js";
+export type {
+  DifyCaptureResult,
+  DifyGatewayHttpFetch,
+  DifyGatewayHttpOptions,
+  DifyGatewayHttpRequestInit,
+  DifyGatewayHttpResponse,
+  DifyGatewayMemoryPort,
+  DifyRecallResult,
+  DifyWorkflowInput,
+  DifyWorkflowMemoryAdapterOptions,
+} from "./src/adapters/index.js";
+
 const TAG = "[memory-tdai]";
 
 /**
