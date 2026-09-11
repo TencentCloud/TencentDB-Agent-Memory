@@ -100,8 +100,10 @@ interface SessionAdapter {
   缺失按 `autoConversationId` 生成；
 - **codex / workbuddy**（`codexHandler.ts` / `workbuddyHandler.ts`）：共用
   Responses wire 的通用适配器（`createResponsesSessionAdapter` /
-  `RESPONSES_SESSION_ADAPTER`）——显式会话 ID 从 `session-id` header /
-  `client_metadata.session_id` 提取；codex 走 auto 分支（实际生成仍受
+  `RESPONSES_SESSION_ADAPTER`）——显式会话 ID 的 header 集合与 chat / anthropic
+  路径相同（`session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` >
+  `x-thread-id`，`session/client-ids.ts`），全部缺失时退回
+  `client_metadata.session_id`；codex 走 auto 分支（实际生成仍受
   `autoConversationId.enabled` 门控），workbuddy 用 `autoGenerate: false`
   实例（与 workbuddy 原行为一致，不主动生成 auto ID）；
 - `handler.ts` 的 `debugForceUserId` 由 `resolveIdentity` 处理，身份改写策略
@@ -419,8 +421,8 @@ L2a（SQLite/Redis/ProxyStorage 多节点读写）+ L2b binding，
 npm test          # vitest：session-acceptance / session-isolation / stages-session /
                   # session-store-fence / session-turn / session-form-artifacts /
                   # routes-session-force-archive / routes-session-refresh-task /
-                  # server-session-debug / context-injector-team
-                  # （10 个测试文件；计数口径见 docs/session-policy.md）
+                  # server-session-debug / context-injector-team / session-client-ids
+                  # （11 个测试文件；计数口径见 docs/session-policy.md）
 npx tsc --noEmit  # 0 错误
 ```
 

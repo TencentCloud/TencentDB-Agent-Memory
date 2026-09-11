@@ -35,11 +35,13 @@ fail() { echo -e "❌ $*"; exit 1; }
 BODY="{\"model\":\"$MODEL\",\"instructions\":\"Reply with the single word: ok\",\"input\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}],\"stream\":false,\"max_output_tokens\":64}"
 
 # 发请求：其余参数为 curl 的 -H 片段（如 -H "x-task-id: xxx"），输出 HTTP 状态码
+# 鉴权口径按端点分族：/codex/... 属 OpenAI 形态，只认 `Authorization: Bearer`
+# （`x-api-key` 是 Anthropic 端点的口径，打 codex 路径会直接 401）。
 post() {
   curl -sS -o "/tmp/sp_${RUN_ID}.json" -w "%{http_code}" \
     -X POST "$BASE/codex/$SPACE/v1/responses" \
     -H "content-type: application/json" \
-    -H "x-api-key: $USER_KEY" \
+    -H "authorization: Bearer $USER_KEY" \
     -H "x-team-id: $TEAM_ID" \
     -H "x-agent-id: $AGENT_ID" \
     "$@" \
@@ -111,10 +113,12 @@ cat <<EOF
 --------------------------------------
 问题：无自带会话 ID 的客户端（Hermes/OpenClaw/DSH 类）此前需静态写死 conversation id，
       否则 memory-bridge 无法解析会话（关联 #957）。
-根因：codexHandler / handler / anthropicHandler 在缺会话 header 时未生成稳定会话 ID。
+根因：四个 handler 在缺会话 header 时未生成稳定会话 ID（会话解析现已收敛到
+      stages/session.ts 的会话阶段，由各适配器提供提取口径）。
 修复：autoConversationId（per-key / per-key-msg，TTL 滑动窗口 + 容量上限），显式 header 优先；
       taskMissingPolicy（skip/default/reject + per-agent 覆盖），无效 task 走 onMismatch 非静默。
 验证：本脚本 ACC-1/2/4 通过日志断言自动生成+续接+显式优先；ACC-5/6 验证 HTTP 层非 5xx；
-      绑定/短路语义由 src/__tests__/session-acceptance.test.ts（ACC-1..6）与
-      optimizations.test.ts（TTL/窗口/容量/指纹/显式 header 对齐）覆盖，vitest 全量 116/116。
+      绑定/短路语义由 src/__tests__/session-acceptance.test.ts（ACC-1..6）覆盖，
+      TTL/窗口/容量/指纹与显式 header 对齐由 src/__tests__/session-isolation.test.ts、
+      src/__tests__/session-client-ids.test.ts 覆盖，vitest 全量 99/99（11 个文件）。
 EOF

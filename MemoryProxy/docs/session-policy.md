@@ -1,10 +1,10 @@
 # 会话策略：taskMissingPolicy 与 autoConversationId
 
 > 本文档对应的验收标准与自动化测试：`src/__tests__/session-acceptance.test.ts`（ACC-1..ACC-6），
-> 全量回归：`npm test`（vitest，本分支 **10 个测试文件 / 91 个用例全过**）。
+> 全量回归：`npm test`（vitest，本分支 **11 个测试文件 / 99 个用例全过**）。
 >
 > 说明：基线 `feat/server_team` 上**不含任何测试文件**（上游 v2.0.2-beta.1 删掉了自带用例，
-> 基线上 `npm test` 是 `exit 1  No test files found`），因此这 91 个用例**全部**由本 PR 带入，
+> 基线上 `npm test` 是 `exit 1  No test files found`），因此这 99 个用例**全部**由本 PR 带入，
 > 不存在"上游基线 8 个"。
 
 ## 背景
@@ -141,10 +141,10 @@ export TDAI_SESSION_SIGNING_KEY=<上一步输出>
 | 6 | per-agent 策略（openclaw/hermes 宽松、其余严格） | ACC-6 |
 
 补充单元覆盖（本 PR 内 `session-isolation.test.ts` / `stages-session.test.ts` /
-`session-store-fence.test.ts`）：TTL 滑动窗口、per-key-msg 窗口上限/过期、
-容量清理、确定性派生与桶宽校验、指纹稳定性、跨协议首条用户消息指纹
-（OpenAI/Anthropic/Responses）、created/resumed 语义、codex 路径显式会话
-header 对齐。
+`session-store-fence.test.ts` / `session-client-ids.test.ts`）：TTL 滑动窗口、
+per-key-msg 窗口上限/过期、容量清理、确定性派生与桶宽校验、指纹稳定性、
+跨协议首条用户消息指纹（OpenAI/Anthropic/Responses）、created/resumed 语义，
+以及 Responses 路径的显式会话 header 提取（集合与优先级见 §4）。
 
 ## 4. 可观测性
 
@@ -156,11 +156,16 @@ header 对齐。
 
 可用于排查“这条请求为什么进了这个会话”。
 
-> **E2E 发现的真实缺陷（已修复）**：`codexHandler.extractCodexSessionId` 原先只认
-> `session-id` header / `client_metadata.session_id`，**忽略 `x-conversation-id`**，
-> 导致 codex /responses 路径上显式会话 header 失效、autoConversationId 错误接管。
-> 已与 `resolveConversationId` 的 header 集合对齐（session-id / x-conversation-id /
-> x-session-id / x-chat-id / x-thread-id），并有 6 个单测覆盖。
+> **E2E 发现的真实缺陷（已修复）**：Responses 路径（codex / workbuddy）的会话 ID 提取
+> 原先只认 `session-id` header 与 `client_metadata.session_id`，**忽略 `x-conversation-id`**，
+> 导致这两个客户端的显式会话 header 失效、autoConversationId 错误接管（`session-acceptance.test.ts`
+> 的 ACC-4 只覆盖 `resolveOrCreateSessionId`，未覆盖 wire 侧的提取，因此单测当时未暴露）。
+> 修复后 `session/client-ids.ts::extractResponsesSessionId` 与 chat / anthropic 路径的
+> `session-key.ts::resolveConversationId` 取同一 header 集合、同一优先级：
+> `session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` > `x-thread-id`，
+> 全部缺失时退回 `client_metadata.session_id`；header 名大小写不敏感。
+> `session-client-ids.test.ts` 的 8 个用例覆盖上述顺序与回退，`session-policy-e2e.sh` 的
+> ACC-4 步骤在真机上验证"带 `x-conversation-id` 的请求不再产生 `[session-auto]` 日志"。
 
 ## 5. 端到端冒烟脚本
 
