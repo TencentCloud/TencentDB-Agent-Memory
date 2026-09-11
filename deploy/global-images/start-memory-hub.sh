@@ -47,7 +47,14 @@ detect_host_ip() {
   if command -v ipconfig >/dev/null 2>&1; then
     for iface in en0 en1 en2; do
       ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
-      [[ -n "$ip" ]] && { echo "$ip"; return; }
+      # Only accept a single IPv4 literal. Windows' ipconfig.exe also matches
+      # `command -v ipconfig` in Git Bash but does not support getifaddr and
+      # prints multi-line network-config text, which would be injected as the
+      # host IP and break the generated proxy_endpoint with newlines
+      # (issue #817).
+      if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && [[ "$ip" != 127.* && "$ip" != 169.254.* ]]; then
+        echo "$ip"; return
+      fi
     done
   fi
   # 兜底：ip route（Linux 无 hostname -I 时）
