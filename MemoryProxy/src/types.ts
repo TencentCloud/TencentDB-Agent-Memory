@@ -415,11 +415,16 @@ export interface AgentUpstreamEntry {
    * Per-agent apiKey. When set (non-empty):
    *   - OpenAI: `Authorization: Bearer <apiKey>` is injected
    *   - Anthropic: `x-api-key: <apiKey>` is injected
-   * When absent / empty: the client's own auth header is passed through
-   * upstream untouched. This does NOT fall back to `upstream.apiKey` —
-   * that fallback only applies when this agent has no entry at all.
+   * When absent / empty: falls back to `upstream.apiKey`; if that is empty too,
+   * the client's own auth header is passed through upstream untouched
+   * （详见 upstream/auth.ts 与 config.example.yaml 的兜底表）。
    */
   apiKey?: string;
+  /**
+   * 显式声明"该 agent 透传客户端 key"。默认 false —— 未配置 apiKey 时先回退
+   * `upstream.apiKey`，只有声明 true（或两级 key 都为空）才沿用客户端鉴权头。
+   */
+  passthroughClientKey?: boolean;
   /**
    * 上游兼容开关（协议接线用）。显式配置 true 或 false 都优先于 autoDetect
    * 探测结果：true 启用对应转换，false 明确禁用并阻止 autoDetect 为该 agent

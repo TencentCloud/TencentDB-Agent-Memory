@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
 import type { CostGuardConfig, ProxyConfig, RawYamlConfig } from "./types.js";
+import { auditUpstreamAgentKeys } from "./upstream/auth.js";
 
 const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
@@ -262,6 +263,7 @@ function parseUpstreamAgents(
     {
       url?: string;
       apiKey?: string;
+      passthroughClientKey?: boolean;
       chatCompletions?: boolean;
       anthropicToChat?: boolean;
       chatToAnthropic?: boolean;
@@ -274,6 +276,7 @@ function parseUpstreamAgents(
   {
     url?: string;
     apiKey?: string;
+    passthroughClientKey?: boolean;
     chatCompletions?: boolean;
     anthropicToChat?: boolean;
     chatToAnthropic?: boolean;
@@ -287,6 +290,7 @@ function parseUpstreamAgents(
     {
       url?: string;
       apiKey?: string;
+      passthroughClientKey?: boolean;
       chatCompletions?: boolean;
       anthropicToChat?: boolean;
       chatToAnthropic?: boolean;
@@ -298,9 +302,11 @@ function parseUpstreamAgents(
     if (!entry || typeof entry !== "object") continue;
     const url = (entry as { url?: unknown }).url;
     const apiKey = (entry as { apiKey?: unknown }).apiKey;
+    const passthrough = (entry as { passthroughClientKey?: unknown }).passthroughClientKey;
     const parsed: {
       url?: string;
       apiKey?: string;
+      passthroughClientKey?: boolean;
       chatCompletions?: boolean;
       anthropicToChat?: boolean;
       chatToAnthropic?: boolean;
@@ -309,6 +315,7 @@ function parseUpstreamAgents(
     } = {};
     if (typeof url === "string" && url.length > 0) parsed.url = url;
     if (typeof apiKey === "string" && apiKey.length > 0) parsed.apiKey = apiKey;
+    if (typeof passthrough === "boolean") parsed.passthroughClientKey = passthrough;
     for (const flag of [
       "chatCompletions",
       "anthropicToChat",
@@ -333,7 +340,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
 
-  return {
+  const config: ProxyConfig = {
     server: {
       host: overrides.host ?? yaml.server?.host ?? DEFAULT_CONFIG.server.host,
       port: overrides.port ?? yaml.server?.port ?? DEFAULT_CONFIG.server.port,
@@ -641,6 +648,14 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       dir: yaml.traceArchive?.dir ?? DEFAULT_CONFIG.traceArchive.dir,
     },
   };
+
+  // 上游凭据口径在启动期说明清楚：漏配 apiKey 时"客户端 key 被透传"这件事
+  // 只能在上游 401 时才发现，属于典型的静默失败。
+  for (const note of auditUpstreamAgentKeys(config.upstream.agents, config.upstream.apiKey)) {
+    // eslint-disable-next-line no-console
+    console.warn(`[config] ${note}`);
+  }
+  return config;
 }
 
 /**

@@ -62,19 +62,21 @@ upstream:
   # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url + apiKey。
   # Anthropic 和 OpenAI 协议共用同一张表。
   #
-  # 兜底规则（重要）——只有"没配这个 agent"才会走外层 upstream 兜底：
+  # 兜底规则（重要）——凭据按 agent.apiKey → upstream.apiKey → 客户端 key 逐级取值：
   #
-  #   ┌────────────────────────────────┬────────────┬───────────────────────┐
-  #   │ 该 agent 的配置                │ 用的 url   │ 用的 apiKey           │
-  #   ├────────────────────────────────┼────────────┼───────────────────────┤
-  #   │ 不在 agents 里                 │ upstream.url│ upstream.apiKey (兜底)│
-  #   │ 在 agents 里，只有 url         │ agent.url  │ 透传客户端请求的 key  │
-  #   │ 在 agents 里，url + apiKey     │ agent.url  │ agent.apiKey          │
-  #   └────────────────────────────────┴────────────┴───────────────────────┘
+  #   ┌──────────────────────────────────────────┬─────────────┬──────────────────────────┐
+  #   │ 该 agent 的配置                          │ 用的 url    │ 用的 apiKey              │
+  #   ├──────────────────────────────────────────┼─────────────┼──────────────────────────┤
+  #   │ 不在 agents 里                           │ upstream.url│ upstream.apiKey          │
+  #   │ 在 agents 里，只有 url                   │ agent.url   │ upstream.apiKey（兜底）  │
+  #   │ 在 agents 里，url + apiKey               │ agent.url   │ agent.apiKey             │
+  #   │ 在 agents 里 + passthroughClientKey: true│ agent.url   │ 透传客户端请求的 key     │
+  #   └──────────────────────────────────────────┴─────────────┴──────────────────────────┘
   #
-  # 中间一行是设计上刻意留的口子：一旦 agent 出现在这张表里，外层
-  # upstream.apiKey 的兜底就被切断，允许运营方在同一个 proxy 里让
-  # 一部分 agent 走服务端 key、另一部分透传客户端自己的 key。
+  # 需要"同一个 proxy 里一部分 agent 用服务端 key、另一部分用客户端自己的 key"时，
+  # 给后者显式写 passthroughClientKey: true。未声明、且 agent 与外层都没有 key 时
+  # 仍会透传客户端 key，但启动日志会输出告警——这类配置错误此前只能等上游 401 才暴露。
+  # 实现见 src/upstream/auth.ts。
   #
   # 完整优先级（高→低）：
   #   1. costGuard 内部路由自带的凭据（cheap-model 兜底）
@@ -96,7 +98,8 @@ upstream:
     #   anthropicToChat: true      # Claude Code 请求转 OpenAI Chat 后再转发
     # codex:                                              # 客户端 key 透传模式
     #   url: "https://codex-upstream.example.com/v1"
-    #   # 不写 apiKey → 透传客户端自己带上来的 key，不走外层兜底
+    #   passthroughClientKey: true                         # 显式透传客户端带上来的 key
+    #   # 不写 apiKey 且不写 passthroughClientKey → 回退 upstream.apiKey
     #   responsesToAnthropic: true # Codex /responses → Anthropic 上游
     #   chatCompletions: true      # Codex /responses → Chat 上游（Chat 上游时选这项）
     # workbuddy:

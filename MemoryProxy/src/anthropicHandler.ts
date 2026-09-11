@@ -67,6 +67,7 @@ import {
 } from "./common/responses-anthropic-compat.js";
 import { toAnthropicErrorBody } from "./upstream/protocol-errors.js";
 import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
+import { resolveUpstreamApiKey } from "./upstream/auth.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
 import { resolveAgentAdapter } from "./agent-adapters/index.js";
@@ -1245,9 +1246,11 @@ export async function handleAnthropicMessages(
   // no entry, we fall through to the Anthropic-specific global (costGuard
   // .anthropicUpstream) and finally to upstream.url — exactly as before.
   const agentUpstreamEntry = agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined;
-  let effectiveApiKey = agentUpstreamEntry
-    ? (agentUpstreamEntry.apiKey ?? "")
-    : config.upstream.apiKey;
+  // 取值顺序 agent.apiKey → upstream.apiKey → 客户端 key（后者需 passthroughClientKey）。
+  let effectiveApiKey = resolveUpstreamApiKey({
+    agentEntry: agentUpstreamEntry,
+    globalApiKey: config.upstream.apiKey,
+  }).apiKey;
   const defaultUpstreamUrl =
     agentUpstreamEntry?.url ||
     config.costGuard.anthropicUpstream?.url ||

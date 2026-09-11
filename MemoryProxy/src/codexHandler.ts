@@ -66,6 +66,7 @@ import {
 } from "./common/responses-anthropic-compat.js";
 import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
+import { resolveUpstreamApiKey } from "./upstream/auth.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -1106,22 +1107,28 @@ async function forwardToUpstream(
   let upstreamUrl = joinUrl(upstreamBase, outboundEndpoint);
   const upstreamHeaders = buildUpstreamHeaders(c, config);
   upstreamHeaders["content-type"] = "application/json";
+  // 客户端自带的凭据（形态随协议）——仅在"本条链路最终选择透传"时使用。
+  const clientApiKey =
+    extractBearerToken(c.req.header("authorization") ?? "") ?? c.req.header("x-api-key") ?? "";
+  const upstreamAuth = resolveUpstreamApiKey({
+    agentEntry: agentUpstreamEntry,
+    globalApiKey: config.upstream.apiKey,
+    clientApiKey,
+  });
   if (codexToAnthropic) {
     // Responses → Anthropic：上游要 x-api-key + anthropic-version，不要 Bearer。
-    const configuredKey = agentUpstreamEntry?.apiKey;
-    const clientBearer = (upstreamHeaders["authorization"] ?? "")
-      .replace(/^Bearer\s+/i, "")
-      .trim();
-    const key = configuredKey || clientBearer || "";
+    const key = upstreamAuth.apiKey;
     delete upstreamHeaders["authorization"];
     delete upstreamHeaders["x-api-key"];
     if (key) {
       upstreamHeaders["x-api-key"] = key;
       upstreamHeaders["anthropic-version"] = "2023-06-01";
     }
-  } else if (agentUpstreamEntry?.apiKey) {
-    upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
+  } else if (upstreamAuth.source !== "global") {
+    // global 情形由 buildUpstreamHeaders 写入；这里处理 agent key 与透传两种。
     delete upstreamHeaders["x-api-key"];
+    if (upstreamAuth.apiKey) upstreamHeaders["authorization"] = `Bearer ${upstreamAuth.apiKey}`;
+    else delete upstreamHeaders["authorization"];
   }
 
   // ── Instance upstream config override (codex has no cost-guard routing) ──
