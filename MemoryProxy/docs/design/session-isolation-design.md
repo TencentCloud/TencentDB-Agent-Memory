@@ -451,8 +451,9 @@ curl http://127.0.0.1:<port>/session/metrics # tdai_auto_session_* 指标
 
 ## 10. 参考
 
-- 阶段化重构与隔离优化基线：本分支 `c9152ee`（未推送，工作区干净）；
-- 协议转换层（OpenAI Chat/Responses ↔ Anthropic）见 `docs/protocol-conversion-matrix.md`
-  与 PR #1226（与当前分支源码一致，差异见评审结论）；
-- 验证手册：`docs/design/2026-08-28-verification-handbook.md`；
+- 阶段化重构与隔离优化的基线：本 PR 的分支 `feat/session-isolation-t04`（提交历史见 PR #1251）；
+- 协议转换层（OpenAI Chat / Responses ↔ Anthropic）：见 PR #1226 提供的
+  `docs/protocol-conversion-matrix.md`，该文件随 #1226 引入，本分支不含它；
+- 验证方式：本文 §9 的命令与断言，以及 `docs/session-policy.md` 的 §3
+  （验收标准与用例对应表）与 §5（端到端冒烟脚本）；
 - Redis 共享蓝图：`session/auto-session.ts` 头注释（独立课题引用）。
