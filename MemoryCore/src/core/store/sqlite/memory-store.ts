@@ -58,7 +58,7 @@ import type {
   AuditEntry,
   AuditQueryFilter,
 } from "../types.js";
-import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
+import { buildIsolationWhere, serializeSourceMessageIds, DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../../skill/skill-store-ddl.js";
 import type { Logger } from "../../types.js";
 import type {
@@ -102,6 +102,8 @@ export interface VectorSearchResult {
   agent_id: string;
   /** Raw metadata JSON string (e.g., contains activity_start_time / activity_end_time for episodic) */
   metadata_json: string;
+  /** JSON-encoded L0 message IDs that produced this memory. */
+  source_message_ids_json: string;
 }
 
 /** L0 single-message vector search result. */
@@ -199,6 +201,8 @@ export interface FtsSearchResult {
   user_id: string;
   agent_id: string;
   metadata_json: string;
+  /** JSON-encoded L0 message IDs that produced this memory. */
+  source_message_ids_json: string;
 }
 
 /** FTS5 search result for L0 records. */
@@ -499,7 +503,8 @@ export class VectorStore implements IMemoryStore {
         timestamp_end TEXT DEFAULT '',
         created_time TEXT DEFAULT '',
         updated_time TEXT DEFAULT '',
-        metadata_json TEXT DEFAULT '{}'
+        metadata_json TEXT DEFAULT '{}',
+        source_message_ids_json TEXT NOT NULL DEFAULT '[]'
       )
     `);
 
@@ -510,6 +515,7 @@ export class VectorStore implements IMemoryStore {
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'"); } catch { /* exists */ }
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN task_id TEXT DEFAULT ''"); } catch { /* exists */ }
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN version INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+    try { this.db.exec("ALTER TABLE l1_records ADD COLUMN source_message_ids_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* exists */ }
     this.db.prepare("UPDATE l1_records SET team_id = ? WHERE team_id = '' OR team_id IS NULL").run(DEFAULT_ISOLATION_ID);
     this.db.prepare("UPDATE l1_records SET user_id = ? WHERE user_id = '' OR user_id IS NULL").run(DEFAULT_ISOLATION_ID);
     this.db.prepare("UPDATE l1_records SET agent_id = ? WHERE agent_id = '' OR agent_id IS NULL").run(DEFAULT_ISOLATION_ID);
@@ -555,9 +561,9 @@ export class VectorStore implements IMemoryStore {
       INSERT INTO l1_records (
         record_id, content, type, priority, scene_name, session_key, session_id,
         team_id, task_id, version, timestamp_str, timestamp_start, timestamp_end,
-        created_time, updated_time, metadata_json,
+        created_time, updated_time, metadata_json, source_message_ids_json,
         user_id, agent_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -571,6 +577,7 @@ export class VectorStore implements IMemoryStore {
         timestamp_end=excluded.timestamp_end,
         updated_time=excluded.updated_time,
         metadata_json=excluded.metadata_json,
+        source_message_ids_json=excluded.source_message_ids_json,
         user_id=excluded.user_id,
         agent_id=excluded.agent_id
     `);
@@ -583,7 +590,7 @@ export class VectorStore implements IMemoryStore {
 
     this.stmtGetMeta = this.db.prepare(`
       SELECT content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id,
-             version, timestamp_str, timestamp_start, timestamp_end, metadata_json
+             version, timestamp_str, timestamp_start, timestamp_end, metadata_json, source_message_ids_json
       FROM l1_records WHERE record_id = ?
     `);
 
@@ -993,12 +1000,14 @@ export class VectorStore implements IMemoryStore {
       this.stmtL1FtsDelete = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ?");
 
       this.stmtL1FtsSearch = this.db.prepare(`
-        SELECT record_id, content_original AS content, type, priority, scene_name,
-               session_key, session_id, team_id, task_id, user_id, agent_id, version,
-               timestamp_str, timestamp_start, timestamp_end,
-               metadata_json,
+        SELECT l1_fts.record_id, l1_fts.content_original AS content, l1_fts.type, l1_fts.priority, l1_fts.scene_name,
+               l1_fts.session_key, l1_fts.session_id, l1_fts.team_id, l1_fts.task_id, l1_fts.user_id, l1_fts.agent_id, l1_fts.version,
+               l1_fts.timestamp_str, l1_fts.timestamp_start, l1_fts.timestamp_end,
+               l1_fts.metadata_json,
+               COALESCE(l1_records.source_message_ids_json, '[]') AS source_message_ids_json,
                bm25(l1_fts) AS rank
         FROM l1_fts
+        LEFT JOIN l1_records ON l1_records.record_id = l1_fts.record_id
         WHERE l1_fts MATCH ?
         ORDER BY rank ASC
         LIMIT ?
@@ -1056,7 +1065,7 @@ export class VectorStore implements IMemoryStore {
     const l1QueryCols = `record_id, content, type, priority, scene_name, session_key, session_id,
       team_id, task_id, user_id, agent_id, version,
       timestamp_str, timestamp_start, timestamp_end,
-      created_time, updated_time, metadata_json`;
+      created_time, updated_time, metadata_json, source_message_ids_json`;
 
     this.stmtQueryBySessionId = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
@@ -1254,6 +1263,7 @@ export class VectorStore implements IMemoryStore {
           record.createdAt,
           record.updatedAt,
           JSON.stringify(record.metadata),
+          serializeSourceMessageIds(record.source_message_ids),
           (record as MemoryRecord & { userId?: string }).userId || DEFAULT_ISOLATION_ID,
           (record as MemoryRecord & { agentId?: string }).agentId || DEFAULT_ISOLATION_ID,
         );
@@ -1385,6 +1395,7 @@ export class VectorStore implements IMemoryStore {
               timestamp_start: string;
               timestamp_end: string;
               metadata_json: string;
+              source_message_ids_json: string;
             }
           | undefined;
 
@@ -1420,6 +1431,7 @@ export class VectorStore implements IMemoryStore {
           user_id: meta.user_id ?? "",
           agent_id: meta.agent_id ?? "",
           metadata_json: meta.metadata_json,
+          source_message_ids_json: meta.source_message_ids_json ?? "[]",
         });
       }
 
@@ -1647,7 +1659,9 @@ export class VectorStore implements IMemoryStore {
       return [];
     }
     try {
-      const { sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
+      const { recordIds, sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
+
+      if (recordIds && recordIds.length === 0) return [];
 
       let raw: Record<string, unknown>[];
 
@@ -1676,11 +1690,16 @@ export class VectorStore implements IMemoryStore {
       }
 
       let rows = raw as unknown as L1RecordRow[];
+      if (recordIds) {
+        const wantedIds = new Set(recordIds);
+        rows = rows.filter((r) => wantedIds.has(r.record_id));
+      }
       // Prepared statements above optimize the common session/time predicates.
       // Isolation dimensions are optional and can be combined with any query
       // shape (notably L2 profile queries use teamId+agentId+updatedAfter
       // without sessionKey). Apply them in memory to keep the statement matrix
       // bounded and to match queryL1Paginated semantics.
+      if (sessionKey !== undefined) rows = rows.filter((r) => r.session_key === sessionKey);
       if (filter?.teamId !== undefined) rows = rows.filter((r) => r.team_id === filter.teamId);
       if (filter?.userId !== undefined) rows = rows.filter((r) => r.user_id === filter.userId);
       if (filter?.agentId !== undefined) rows = rows.filter((r) => r.agent_id === filter.agentId);
@@ -2414,6 +2433,14 @@ export class VectorStore implements IMemoryStore {
    * L0 paginated query for v2 `/conversation/query`.
    * Uses SQL WHERE + LIMIT + OFFSET, no full-table scan.
    */
+  queryL0ByIds(ids: string[], filter?: IsolationFilter): L0QueryRow[] {
+    if (this.degraded || ids.length === 0) return [];
+    const { clause, params } = buildIsolationWhere(filter);
+    return this.db.prepare(`SELECT * FROM l0_conversations
+      WHERE record_id IN (${ids.map(() => "?").join(",")})${clause ? ` AND ${clause}` : ""}`)
+      .all(...ids, ...params) as unknown as L0QueryRow[];
+  }
+
   queryL0Paginated(filter: L0PaginatedFilter): L0PaginatedResult {
     if (this.degraded) return { rows: [], total: 0 };
 
@@ -2523,7 +2550,7 @@ export class VectorStore implements IMemoryStore {
 
       // Fetch page — must include user_id / agent_id so callers can enforce
       // isolation in downstream filters / Coordinator candidate pool.
-      const dataSql = `SELECT record_id, content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start, timestamp_end, created_time, updated_time, metadata_json FROM l1_records ${where} ORDER BY updated_time DESC LIMIT ? OFFSET ?`;
+      const dataSql = `SELECT record_id, content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start, timestamp_end, created_time, updated_time, metadata_json, source_message_ids_json FROM l1_records ${where} ORDER BY updated_time DESC LIMIT ? OFFSET ?`;
       const rows = this.db.prepare(dataSql).all(...params, filter.limit, filter.offset) as unknown as L1RecordRow[];
 
       return { rows, total };
@@ -3025,6 +3052,7 @@ export class VectorStore implements IMemoryStore {
         timestamp_start: string;
         timestamp_end: string;
         metadata_json: string;
+        source_message_ids_json: string;
         rank: number;
       }>;
 
@@ -3049,6 +3077,7 @@ export class VectorStore implements IMemoryStore {
           user_id: r.user_id ?? "",
           agent_id: r.agent_id ?? "",
           metadata_json: r.metadata_json,
+          source_message_ids_json: r.source_message_ids_json ?? "[]",
         }));
     } catch (err) {
       this.logger?.warn(

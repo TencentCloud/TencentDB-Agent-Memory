@@ -10,6 +10,7 @@
  * - L2 scene navigation (full injection, LLM decides relevance)
  */
 
+import { parseSourceMessageIds } from "../store/types.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -675,7 +676,7 @@ async function searchHybrid(
                   type: r.type as MemoryRecord["type"],
                   priority: r.priority,
                   scene_name: r.scene_name,
-                  source_message_ids: [],
+                  source_message_ids: parseSourceMessageIds(r.source_message_ids_json),
                   metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
                   timestamps: [r.timestamp_str].filter(Boolean),
                   createdAt: "",

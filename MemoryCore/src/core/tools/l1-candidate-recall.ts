@@ -141,6 +141,7 @@ function toL1Hit(r: L1SearchResult | L1FtsResult): L1SearchResult {
     user_id: r.user_id,
     agent_id: r.agent_id,
     metadata_json: r.metadata_json,
+    source_message_ids_json: r.source_message_ids_json ?? "[]",
   };
 }
 

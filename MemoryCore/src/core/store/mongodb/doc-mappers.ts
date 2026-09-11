@@ -10,6 +10,7 @@
  * dedup without a secondary unique index.
  */
 
+import { serializeSourceMessageIds } from "../types.js";
 import type { MemoryRecord } from "../../record/l1-writer.js";
 import type {
   L0Record,
@@ -118,6 +119,7 @@ export interface L1Doc {
   updated_time: string;
   updated_time_ms: number;
   metadata_json: string;
+  source_message_ids_json?: string;
 }
 
 export function l1RecordToDoc(record: MemoryRecord): L1Doc {
@@ -147,6 +149,7 @@ export function l1RecordToDoc(record: MemoryRecord): L1Doc {
     updated_time: record.updatedAt,
     updated_time_ms: isoToEpochMs(record.updatedAt),
     metadata_json: JSON.stringify(record.metadata ?? {}),
+    source_message_ids_json: serializeSourceMessageIds(record.source_message_ids),
   };
 }
 
@@ -170,6 +173,7 @@ export function docToL1RecordRow(doc: L1Doc): L1RecordRow {
     created_time: doc.created_time ?? "",
     updated_time: doc.updated_time ?? "",
     metadata_json: doc.metadata_json ?? "{}",
+    source_message_ids_json: doc.source_message_ids_json ?? "[]",
   };
 }
 
@@ -193,6 +197,7 @@ export function docToL1SearchResult(doc: L1Doc, score: number): L1SearchResult {
     user_id: row.user_id,
     agent_id: row.agent_id,
     metadata_json: row.metadata_json,
+    source_message_ids_json: row.source_message_ids_json,
   };
 }
 
