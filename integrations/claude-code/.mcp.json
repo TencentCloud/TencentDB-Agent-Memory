@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "memory-tencentdb": {
+      "command": "memory-tencentdb-mcp",
+      "env": {
+        "MEMORY_TENCENTDB_GATEWAY_URL": "http://127.0.0.1:8420"
+      }
+    }
+  }
+}
