@@ -585,7 +585,7 @@ sessionInit:
   # auto-* 会话锁：签名绑定 keyId + scope(thread) + 首问指纹，换 key / 跨线程 /
   # 伪造复用一律拒绝。显式上报的会话 ID 始终优先（不回退、不覆盖）。
   autoConversationId:
-    enabled: true            # 默认开；false = 缺失会话 ID 时走兜底键（不自动生成）
+    enabled: false           # 默认关：不改变现有部署的会话键；置 true 才由服务端签发 auto-*
     ttlMinutes: 30           # 活跃会话 TTL；空闲超过后自动开新会话
     strategy: per-key        # per-key（默认：一 key 一活跃会话）| per-key-msg（按首问指纹分多窗口）
     deterministic: false     # true = sid 由 (keyId, scope, 指纹, epoch) 确定性派生，

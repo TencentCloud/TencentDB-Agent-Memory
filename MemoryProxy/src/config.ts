@@ -95,7 +95,9 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     injectAgentContext: true,
     injectTaskContext: true,
     autoConversationId: {
-      enabled: true,
+      // 默认关闭：合并本 PR 不改变现有部署的会话键——缺失会话 ID 时仍走 agent
+      // profile 兜底键。需要"服务端为无会话头的客户端签发 auto-* 会话"时显式置 true。
+      enabled: false,
       ttlMinutes: 30,
       deterministic: false,
       deterministicBucketMinutes: undefined,

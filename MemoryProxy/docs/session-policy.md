@@ -80,12 +80,15 @@ kernel 把 `taskId` 当可选业务维度（`isolation.ts`），缺失只是把�
 | 未传 header，非新对话（续轮/tool call） | 按 API key 自动关联当前活跃会话 |
 | 同一 key 超过 TTL（默认 30 分钟）无活跃 | 旧会话过期，自动开启新会话 |
 
+> 上表描述的是 `autoConversationId.enabled: true` 时的行为。**默认 `false`**：缺失会话 ID 时
+> 走 agent profile 兜底键，与合入本 PR 前的行为一致；开启后才会由服务端签发 `auto-*`。
+
 ### 配置（`MemoryProxy/config.example.yaml` → `sessionInit`）
 
 ```yaml
 sessionInit:
   autoConversationId:
-    enabled: true            # 默认开
+    enabled: false           # 默认关；置 true 才由服务端签发 auto-*
     ttlMinutes: 30
     strategy: per-key        # per-key（默认）或 per-key-msg
     deterministic: false
