@@ -180,12 +180,18 @@ export function renderSkillToolsBlock(
 
   return [
     "<skill_tools>",
-    "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
+    "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 shell 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
     "proxy 会自动注入身份与鉴权（user_id / team_id / agent_id 由 session 决定），body 里你只需要传业务字段。",
     "",
     "调用模板：",
     `  curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json'${authHeader} -d '{...业务字段...}'`,
     `  其中 <bridge> = ${bridge}`,
+    // Windows 上 `curl` 是 PowerShell `Invoke-WebRequest` 的别名：它不接受 `-H 'k: v'`
+    // 这种写法（报「无法绑定参数 Headers」/「Cannot bind parameter 'Headers'」，类型
+    // System.String → System.Collections.IDictionary），也不认 `-d`。实测 Codex CLI
+    // （Windows）照抄上面的模板会连试两次后放弃，整段 skill 调用失效。
+    "  shell 写法：Linux / macOS 用 `curl`；Windows PowerShell 下 `curl` 是 `Invoke-WebRequest` 的别名，必须写 `curl.exe`（其余参数照抄）。",
+    "  若报错为 `无法绑定参数 Headers` / `Cannot bind parameter 'Headers'` / `System.Collections.IDictionary`，即踩到这个别名，改成 `curl.exe` 重试。",
     "",
     "可用工具：",
     "",
