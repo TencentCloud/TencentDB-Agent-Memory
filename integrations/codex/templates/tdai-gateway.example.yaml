@@ -1,0 +1,12 @@
+server:
+  host: 127.0.0.1
+  port: 8420
+  # apiKey: change-me
+
+data:
+  baseDir: ~/.memory-tencentdb/memory-tdai
+
+llm:
+  baseUrl: https://api.openai.com/v1
+  apiKey: ""
+  model: gpt-4o
