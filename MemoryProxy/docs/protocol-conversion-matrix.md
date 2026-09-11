@@ -183,6 +183,7 @@ Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text"
 
 Claude Code 每轮先打 `/v1/messages/count_tokens` 预检上下文用量；当上游被转成 Chat /
 Responses 时该端点不存在，由 `src/common/token-estimate.ts` 本地计算后应答
+（该文件由协议接线分支 #1253 引入）
 （只用于客户端上下文条提示，**计费仍以上游 usage 为准**）。
 
 口径取 tiktoken `cl100k_base`，与仓库内既有实现对齐：
@@ -206,13 +207,14 @@ tokenizer + 4 × 消息数）：
 | Claude Code 风格（1186 字符） | 322 | −41% | 548 | +0% |
 | 纯 ASCII 日志（3174 字符） | 811 | −17% | 980 | +0% |
 
-复现：`node --import tsx/esm scripts/qa/token-estimate-vs-upstream.mjs --baseline`。
+复现：`node --import tsx/esm scripts/qa/token-estimate-vs-upstream.mjs --baseline`
+（该脚本由 #1253 引入；在 #1226 单独 checkout 时不可用）。
 
 **已知边界**：cl100k 与 o200k 都不是「上游真值」——各厂商 tokenizer 不同，二者之差
 即跨厂商口径差（中文场景 o200k 比 cl100k 少 ~30%，脚本同时输出两个参考供对照）。
 实现取 cl100k，在中文上偏保守：宁可让客户端早提示压缩，也不要让它以为还有空间。
 
-- **请求/响应头过滤已收敛**：`MemoryProxy/src/upstream/headers.ts` 是唯一实现；
+- **请求/响应头过滤已收敛**：`MemoryProxy/src/upstream/headers.ts`（由 #1253 引入）是唯一实现；
   Chat / Anthropic / Codex / WorkBuddy 四个 handler 统一从这里引入
   `SKIP_REQUEST_HEADERS` / `filterResponseHeaders`，不再各写一份。
 - **Per-agent 转换开关 true / false 都显式生效**：`chatCompletions`、
