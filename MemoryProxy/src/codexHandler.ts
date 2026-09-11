@@ -772,6 +772,7 @@ export async function handleCodexEndpoint(
         pipe.info("CODEX_MEM_CMD", `mem command intercepted: ${memCmd.command}`);
         const memResult = await executeMemCommand(memCmd, {
           sessionKey,
+          threadId: sessionTurn.threadId,
           agentSource: "codex",
           config,
           spaceId,

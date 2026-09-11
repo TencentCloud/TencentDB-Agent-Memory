@@ -1220,6 +1220,7 @@ export async function handleChatCompletions(
       }
       const memResult = await executeMemCommand(memCmd, {
         sessionKey,
+        threadId: sessionTurn.threadId,
         agentSource,
         config,
         spaceId,

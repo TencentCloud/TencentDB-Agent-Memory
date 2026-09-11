@@ -1300,6 +1300,7 @@ export async function handleWorkbuddyEndpoint(
         pipe.info("WORKBUDDY_MEM_CMD", `mem command intercepted: ${memCmd.command}`);
         const memResult = await executeMemCommand(memCmd, {
           sessionKey,
+          threadId: sessionTurn.threadId,
           agentSource: "workbuddy",
           config,
           spaceId,

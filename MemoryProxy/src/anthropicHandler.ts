@@ -1106,6 +1106,7 @@ export async function handleAnthropicMessages(
       const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
       const memResult = await executeMemCommand(memCmd, {
         sessionKey,
+        threadId: sessionTurn.threadId,
         agentSource,
         config,
         spaceId,

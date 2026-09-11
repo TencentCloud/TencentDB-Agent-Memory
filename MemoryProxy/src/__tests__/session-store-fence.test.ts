@@ -256,4 +256,43 @@ describe("threadIsolation 接线键一致性（4 handler 与状态机同公式�
       }),
     ).toBe("claude-code:sk");
   });
+
+  it("mem:session-reset 与 handler 同公式：threadIsolation 开启时 reset 到带 :thread 的键", async () => {
+    // 命令层此前手拼 `${agentSource}:${sessionKey}`，threadIsolation 开启时会写到
+    // 一个没有 `:thread` 后缀的"影子键"上——命令回复正常，但真实会话仍是 initialized，
+    // 下一轮不弹表单（静默失效）。本用例把命令层与 buildStoreSessionKey 钉在一起。
+    const { getSessionStore } = await import("../session/store.js");
+    const { executeSessionReset } = await import("../mem-command/commands/session-reset.js");
+
+    const store = getSessionStore();
+    const agentSource = "claude-code";
+    const sessionKey = "reset-key-thread-iso";
+    const threadId = "th-reset-1";
+
+    await executeSessionReset({
+      sessionKey,
+      threadId,
+      agentSource,
+      config: { sessionInit: { threadIsolation: { enabled: true } } } as never,
+      spaceId: "sp1",
+      userId: "u1",
+      apiKey: "",
+      sessionInfo: {},
+      protocol: "openai",
+      stream: false,
+      args: "",
+    });
+
+    const threadKey = buildStoreSessionKey({
+      agentSource,
+      sessionKey,
+      threadId,
+      threadIsolation: true,
+    });
+    const shadowKey = `${agentSource}:${sessionKey}`;
+
+    expect(threadKey).toBe(`${agentSource}:${sessionKey}:${threadId}`);
+    expect(store.get(threadKey)?.status).toBe("uninitialized");
+    expect(store.get(shadowKey)).toBeUndefined();
+  });
 });

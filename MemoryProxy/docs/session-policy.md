@@ -1,10 +1,10 @@
 # 会话策略：taskMissingPolicy 与 autoConversationId
 
 > 本文档对应的验收标准与自动化测试：`src/__tests__/session-acceptance.test.ts`（ACC-1..ACC-6），
-> 全量回归：`npm test`（vitest，本分支 **11 个测试文件 / 101 个用例全过**）。
+> 全量回归：`npm test`（vitest，本分支 **11 个测试文件 / 102 个用例全过**）。
 >
 > 说明：基线 `feat/server_team` 上**不含任何测试文件**（上游 v2.0.2-beta.1 删掉了自带用例，
-> 基线上 `npm test` 是 `exit 1  No test files found`），因此这 101 个用例**全部**由本 PR 带入，
+> 基线上 `npm test` 是 `exit 1  No test files found`），因此这 102 个用例**全部**由本 PR 带入，
 > 不存在"上游基线 8 个"。
 
 ## 背景
