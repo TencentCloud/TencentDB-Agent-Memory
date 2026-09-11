@@ -490,17 +490,24 @@ describe("多模态 tool_result", () => {
   it("Anthropic tool_result 含图片 → chat tool 消息含 image_url", () => {
     const out = anthropicToChat({
       model: "m",
-      messages: [{
-        role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "t1",
-          content: [
-            { type: "text", text: "ok" },
-            { type: "image", source: { type: "url", url: "http://x/y.png" } },
-          ],
-        }],
-      }],
+      messages: [
+        { role: "user", content: "截个图" },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t1", name: "shot", input: {} }],
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "t1",
+            content: [
+              { type: "text", text: "ok" },
+              { type: "image", source: { type: "url", url: "http://x/y.png" } },
+            ],
+          }],
+        },
+      ],
     });
     const toolMsg = (out.messages as Array<Record<string, unknown>>).find((m) => m.role === "tool");
     const content = toolMsg?.content as Array<Record<string, unknown>>;

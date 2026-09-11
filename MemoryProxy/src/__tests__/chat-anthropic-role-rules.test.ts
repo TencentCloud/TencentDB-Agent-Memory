@@ -316,3 +316,129 @@ describe("Chat → Anthropic：消息形状兜底（历史被裁剪 / 只回传�
     expect(out.messages).toEqual([]);
   });
 });
+
+/**
+ * 反方向（Anthropic 客户端 → Chat 上游）的同类硬约束。
+ *
+ * OpenAI 家族同样要求"assistant 带 tool_calls 之后必须紧跟对应的 tool 消息"，
+ * 悬空调用会整轮 400（实测 DeepSeek：An assistant message with 'tool_calls' must be
+ * followed by tool messages responding to each 'tool_call_id'）。客户端裁剪历史时
+ * 两个方向都会撞上，所以两侧都要收敛，不能让问题透传给上游。
+ */
+describe("Anthropic → Chat：tool_use 必须被紧随其后的 tool_result 回应", () => {
+  const toolUse = (id: string): Msg => ({
+    type: "tool_use",
+    id,
+    name: "Bash",
+    input: { command: "date" },
+  });
+  const toolResult = (id: string, text: string): Msg => ({
+    type: "tool_result",
+    tool_use_id: id,
+    content: text,
+  });
+
+  it("悬空 tool_use 被摘掉：assistant 只留正文，不产出 tool_calls", () => {
+    const out = anthropicToChat({
+      model: "m",
+      messages: [
+        { role: "user", content: "看下天气" },
+        { role: "assistant", content: [{ type: "text", text: "我查一下" }, toolUse("tu1")] },
+        { role: "user", content: "继续" },
+      ],
+    });
+    const assistant = messagesOf(out).find((m) => m.role === "assistant");
+    expect(assistant?.tool_calls).toBeUndefined();
+    expect(assistant?.content).toBe("我查一下");
+    expect(protocolStatsToPrometheus()).toContain('param="orphan_tool_use"');
+  });
+
+  it("只回了一半：配上的调用保留并紧跟 tool 消息，没回应的摘掉", () => {
+    const out = anthropicToChat({
+      model: "m",
+      messages: [
+        { role: "user", content: "跑两条命令" },
+        { role: "assistant", content: [toolUse("tu1"), toolUse("tu2")] },
+        { role: "user", content: [toolResult("tu1", "第一条结果")] },
+      ],
+    });
+    const msgs = messagesOf(out);
+    const assistant = msgs.find((m) => m.role === "assistant");
+    expect((assistant?.tool_calls as Msg[]).map((c) => c.id)).toEqual(["tu1"]);
+    const toolMsg = msgs.find((m) => m.role === "tool");
+    expect(toolMsg?.tool_call_id).toBe("tu1");
+    expect(JSON.stringify(msgs)).not.toContain("tu2");
+  });
+
+  it("悬空 tool_result 降级为普通 user 文本，不产出孤立的 tool 消息", () => {
+    const out = anthropicToChat({
+      model: "m",
+      messages: [
+        { role: "user", content: "q" },
+        { role: "assistant", content: [{ type: "text", text: "好" }] },
+        { role: "user", content: [toolResult("tu_missing", "历史残留的结果")] },
+      ],
+    });
+    const msgs = messagesOf(out);
+    expect(msgs.some((m) => m.role === "tool")).toBe(false);
+    expect(JSON.stringify(msgs)).toContain("历史残留的结果");
+    expect(protocolStatsToPrometheus()).toContain('param="orphan_tool_result"');
+  });
+
+  it("调用被摘光且没有正文的 assistant 整条丢掉，不留空消息", () => {
+    const out = anthropicToChat({
+      model: "m",
+      messages: [
+        { role: "user", content: "q" },
+        { role: "assistant", content: [toolUse("tu1")] },
+        { role: "user", content: "继续" },
+      ],
+    });
+    const msgs = messagesOf(out);
+    expect(msgs.some((m) => m.role === "assistant")).toBe(false);
+    expect(msgs.map((m) => m.role)).toEqual(["user", "user"]);
+    expect(protocolStatsToPrometheus()).toContain('param="empty_message"');
+  });
+
+  it("正常配对不被改写（回归护栏）：调用与结果都保留且相邻", () => {
+    const out = anthropicToChat({
+      model: "m",
+      messages: [
+        { role: "user", content: "q" },
+        { role: "assistant", content: [toolUse("tu1")] },
+        { role: "user", content: [toolResult("tu1", "12月1日")] },
+      ],
+    });
+    const msgs = messagesOf(out);
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "tool"]);
+    expect(((msgs[1].tool_calls as Msg[])[0] as Msg).id).toBe("tu1");
+    expect(msgs[2].tool_call_id).toBe("tu1");
+  });
+
+  it("悬空 tool_result 里的图片降级后仍保留（只改角色，不丢内容）", () => {
+    const out = anthropicToChat({
+      model: "m",
+      messages: [
+        { role: "user", content: "q" },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tu_ghost",
+              content: [
+                { type: "text", text: "截图如下" },
+                { type: "image", source: { type: "url", url: "http://x/y.png" } },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const msgs = messagesOf(out);
+    expect(msgs.some((m) => m.role === "tool")).toBe(false);
+    const text = JSON.stringify(msgs);
+    expect(text).toContain("截图如下");
+    expect(text).toContain("http://x/y.png");
+  });
+});

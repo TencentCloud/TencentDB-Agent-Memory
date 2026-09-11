@@ -357,8 +357,27 @@ export function anthropicToChat(
   const sysText = anthropicSystemToText(body.system);
   if (sysText) messages.push({ role: "system", content: sysText });
 
-  for (const raw of Array.isArray(body.messages) ? (body.messages as unknown[]) : []) {
+  // 与 chat_to_anthropic 方向对称的收敛。OpenAI 家族（Chat 上游）要求
+  // "assistant 带 tool_calls 之后必须紧跟对应的 tool 消息"，悬空调用会被直接拒
+  // （实测 DeepSeek：An assistant message with 'tool_calls' must be followed by
+  // tool messages responding to each 'tool_call_id'）。
+  // 因此先扫一遍：只有被"紧随其后的 user 消息里的 tool_result"回应的 tool_use 才算配对，
+  // 其余摘掉；反过来找不到调用方的 tool_result 降级成普通文本，内容不丢。
+  const srcMessages: unknown[] = Array.isArray(body.messages) ? (body.messages as unknown[]) : [];
+  const answeredToolUseIds: Array<Set<string>> = srcMessages.map((raw, i) => {
     const m = asRecord(raw);
+    if (m?.role !== "assistant" || !Array.isArray(m.content)) return new Set<string>();
+    const answered = toolIdsOf(asRecord(srcMessages[i + 1]) ?? undefined, "tool_result");
+    const kept = new Set<string>();
+    for (const block of m.content as unknown[]) {
+      const id = toolUseIdOf(block);
+      if (id && answered.has(id)) kept.add(id);
+    }
+    return kept;
+  });
+
+  for (let i = 0; i < srcMessages.length; i++) {
+    const m = asRecord(srcMessages[i]);
     if (!m) continue;
     const role = m.role;
     const content = m.content;
@@ -379,13 +398,29 @@ export function anthropicToChat(
           const url = anthropicImageToUrl(blk.source);
           if (url) parts.push({ type: "image_url", image_url: { url } });
         } else if (blk.type === "tool_result") {
+          const resultId = typeof blk.tool_use_id === "string" ? blk.tool_use_id : "";
+          const answered = i > 0 ? answeredToolUseIds[i - 1] : undefined;
+          if (resultId === "" || !answered?.has(resultId)) {
+            // 找不到对应调用的结果：降级成普通 user 文本（Chat 上游会因
+            // "tool message 找不到前驱 tool_call_id" 拒绝整轮请求）
+            recordDrop("anthropic_to_chat", "orphan_tool_result");
+            // 退回 user 消息时保留内容形态：文本仍是文本，图片仍是 image_url，
+            // 这样降级只改变"消息角色"，不丢内容。
+            const degraded = anthropicToolResultToChatContent(blk.content);
+            if (typeof degraded === "string") {
+              if (degraded) parts.push({ type: "text", text: degraded });
+            } else if (Array.isArray(degraded)) {
+              parts.push(...degraded);
+            }
+            continue;
+          }
           if (parts.length > 0) {
             messages.push({ role: "user", content: parts });
             parts.length = 0;
           }
           messages.push({
             role: "tool",
-            tool_call_id: typeof blk.tool_use_id === "string" ? blk.tool_use_id : "",
+            tool_call_id: resultId,
             content: anthropicToolResultToChatContent(blk.content),
           });
         }
@@ -405,8 +440,14 @@ export function anthropicToChat(
           if (typeof blk.signature === "string") reasoningSignature = blk.signature;
         }
         else if (blk.type === "tool_use") {
+          const id = typeof blk.id === "string" ? blk.id : "";
+          if (id === "" || !answeredToolUseIds[i].has(id)) {
+            // 没有 tool_result 回应的调用：摘掉，否则 Chat 上游整轮 400
+            recordDrop("anthropic_to_chat", "orphan_tool_use");
+            continue;
+          }
           toolCalls.push({
-            id: typeof blk.id === "string" ? blk.id : `call_${randomId()}`,
+            id,
             type: "function",
             function: {
               name: blk.name ?? "",
@@ -427,6 +468,11 @@ export function anthropicToChat(
         msg.anthropic_reasoning_signature = reasoningSignature;
       }
       if (toolCalls.length > 0) msg.tool_calls = toolCalls;
+      // 调用被摘光、又没有任何正文：这条 assistant 对上游没有意义，整条丢掉。
+      if (toolCalls.length === 0 && isEmptyContent(msg.content)) {
+        recordDrop("anthropic_to_chat", "empty_message");
+        continue;
+      }
       messages.push(msg);
     }
   }

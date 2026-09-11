@@ -2,8 +2,8 @@
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
 > 用例数按分支实测（`npm test`，改代码后请同步这里的数字）：
->   - 转换层分支：10 个文件 / 129 用例 —— protocol-conformance.test.ts 61、
->     chat-anthropic-role-rules.test.ts 19、responses-anthropic-compat.test.ts 13、sse.test.ts 8、
+>   - 转换层分支：10 个文件 / 135 用例 —— protocol-conformance.test.ts 61、
+>     chat-anthropic-role-rules.test.ts 25、responses-anthropic-compat.test.ts 13、sse.test.ts 8、
 >     injection-protocol-conversion.test.ts 8（注入内容跨协议存活 / 可缓存前缀位 /
 >     cache_control 不泄漏 / 确定性）、protocol-stream-semantics.test.ts 5、
 >     protocol-stats.test.ts 4、protocol-stats-streaming.test.ts 4、sse-fuzz.test.ts 4、
@@ -11,7 +11,7 @@
 >   - 协议接线分支：另带 responses-chat-compat.test.ts 6（第一跳 Responses→Chat 的丢参计数）、
 >     probe.test.ts 25（上游能力探测：注册表 / 判定 / 缓存 / 重探 / 变更告警）、
 >     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 13 个文件 / 164 用例；
->   - 两支合并：14 个文件 / 172 用例。
+>   - 两支合并：14 个文件 / 178 用例。
 > 两支的 `npx tsc --noEmit` 均为 0 错误。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 
@@ -233,7 +233,7 @@ tokenizer + 4 × 消息数）：
 | protocol-stats-streaming.test.ts | 4 | 流式收尾 usage/cache 计入 /metrics（单跳与组合层均只计一次） |
 | protocol-stream-semantics.test.ts | 5 | 请求体转换的 stream:false/true 透传语义 |
 | responses-sse-completion.test.ts | 3 | 仅 output_item.done（无 delta）时兜底补发 arguments/text/summary |
-| chat-anthropic-role-rules.test.ts | 19 | 角色严格交替（相邻同角色合并）+ tool_use/tool_result 相邻配对 + 消息形状兜底（首条 user / 悬空 tool_use / 空 content / 无 user 时兜底） |
+| chat-anthropic-role-rules.test.ts | 25 | 两个方向的角色与工具配对：Chat→Anthropic 的严格交替、tool_result 相邻配对；Anthropic→Chat 的悬空 tool_use 摘除、悬空 tool_result 降级（含图片保留）；消息形状兜底（首条 user / 空 content / 无 user 时兜底） |
 | injection-protocol-conversion.test.ts | 8 | 注入 × 转换接缝：注入恰好存活一次、落在可缓存前缀位、不泄漏 cache_control、转换确定性，含 Responses 合成体装配 |
 
 ### 协议接线分支额外测试（该分支合计 13 个文件 / 164 用例）
