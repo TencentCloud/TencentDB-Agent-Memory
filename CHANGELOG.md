@@ -19,6 +19,7 @@
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
+- **Prompt cache 友好的 auto-recall 注入策略** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：新增 `recall.injectionMode`（默认 `prepend`，可选 `append`）与 `recall.showInjected`（默认 `false`）。动态 L1 召回可选择通过宿主 `appendContext` 追加到用户 prompt 后方；生成的 `<relevant-memories>` 默认仅当前轮可见，写入历史前剥离以避免多轮 replay 膨胀。OpenClaw 入口将稳定的 persona / scene / memory-tools 上下文映射到 `prependSystemContext`，让其落在宿主 cache boundary 前方。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 

@@ -81,6 +81,10 @@ export interface PipelineTriggerConfig {
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
   enabled: boolean;
+  /** Dynamic L1 recall placement in the host prompt (default: "prepend" for compatibility). */
+  injectionMode: "prepend" | "append";
+  /** Preserve injected recall blocks in persisted history for debugging (default: false). */
+  showInjected: boolean;
   /** Max results to return (default: 5) */
   maxResults: number;
   /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
@@ -529,6 +533,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
+      injectionMode: validateInjectionMode(str(recallGroup, "injectionMode")) ?? "prepend",
+      showInjected: bool(recallGroup, "showInjected") ?? false,
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
@@ -634,6 +640,7 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_INJECTION_MODES: RecallConfig["injectionMode"][] = ["prepend", "append"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -643,6 +650,13 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateInjectionMode(value: string | undefined): RecallConfig["injectionMode"] | undefined {
+  if (!value) return undefined;
+  return VALID_INJECTION_MODES.includes(value as RecallConfig["injectionMode"])
+    ? (value as RecallConfig["injectionMode"])
     : undefined;
 }
 
