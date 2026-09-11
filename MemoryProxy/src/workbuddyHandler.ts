@@ -19,7 +19,24 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "./types.js";
-import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
+import {
+  apiKeyToKeyId,
+  extractBearerToken,
+  opikCreateLlmSpan,
+  opikCreateTrace,
+  opikUpdateTrace,
+  opikQuestionTag,
+  opikTurnTag,
+  opikTurnTraceId,
+  uuidv7,
+} from "./opik.js";
+import {
+  buildMemoryInjectionContext,
+  buildOpikTraceMetadata,
+  summarizeResponsesOutput,
+  summarizeResponsesToolInteraction,
+} from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import {
@@ -282,6 +299,7 @@ export function countHumanTurnsWorkbuddy(input: unknown): number {
 export interface WorkbuddyArchiveCtx {
   config: ProxyConfig;
   sessionKey: string;
+  traceId: string;
   agentSource: string;
   sessionInfo: Record<string, unknown>;
   userId: string;
@@ -329,6 +347,7 @@ function buildWorkbuddyArchiveCtx(args: {
   injectionSkipped: boolean;
   input: unknown[];
   sessionKey: string;
+  traceId: string;
   userId: string;
   callerUserKey?: string | null;
   assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
@@ -352,6 +371,7 @@ function buildWorkbuddyArchiveCtx(args: {
   return {
     config: args.config,
     sessionKey: args.sessionKey,
+    traceId: args.traceId,
     agentSource: "workbuddy",
     sessionInfo,
     userId: args.userId,
@@ -386,7 +406,13 @@ async function triggerWorkbuddyArchiveHooks(
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurn(
+          ctx.tdaiClient!,
+          ctx.tdaiIdentity,
+          ctx.tdaiUserMessage,
+          assistantText || null,
+          { traceId: ctx.traceId },
+        ),
       ).catch((err: unknown) => {
         console.warn("[workbuddy-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),
@@ -489,6 +515,7 @@ async function forwardToUpstream(
   pipe: ReturnType<typeof createPipeline>,
   lf: LangfuseTurnContext | null,
   archiveCtx: WorkbuddyArchiveCtx | null = null,
+  opikTurn: { forkTraceId?: string; metadata?: Record<string, unknown> } = {},
 ): Promise<Response> {
   // ── Per-agent upstream override ──
   // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
@@ -612,6 +639,81 @@ async function forwardToUpstream(
 
   // Non-SSE or no langfuse ctx → passthrough
   if (!isSSE || !upstreamResp.body || !lf) {
+    if (
+      !isSSE &&
+      upstreamResp.body &&
+      upstreamResp.status >= 200 &&
+      upstreamResp.status < 300
+    ) {
+      // stream:false 时上游返回非 SSE 的 Responses JSON：主对话仍要上报 Opik。
+      const rawJson = await upstreamResp.text();
+      try {
+        const json = JSON.parse(rawJson) as Record<string, unknown>;
+        const output = Array.isArray(json.output) ? (json.output as unknown[]) : [];
+        const { text, toolCalls } = summarizeResponsesOutput(output);
+        const usage =
+          json.usage && typeof json.usage === "object"
+            ? (json.usage as Record<string, unknown>)
+            : {};
+        const endTime = new Date().toISOString();
+        const finalUsage = Object.keys(usage).length > 0 ? usage : {};
+        const outputMessage = text
+          ? {
+              role: "assistant",
+              content: text,
+            }
+          : toolCalls.length > 0
+            ? { role: "assistant", content: `[${toolCalls.length} tool call(s)]` }
+            : null;
+        const outputMessages = outputMessage ? [outputMessage] : [];
+        opikUpdateTrace(config, {
+          traceId,
+          projectName: keyId,
+          endTime,
+          output: outputMessages,
+          usage: finalUsage,
+        });
+        if (opikTurn.forkTraceId && !config.opik.stripRequestLogContent) {
+          opikUpdateTrace(config, {
+            traceId: opikTurn.forkTraceId,
+            projectName: "request_log",
+            endTime,
+            output: outputMessages,
+            usage: finalUsage,
+          });
+        }
+        opikCreateLlmSpan(config, {
+          traceId,
+          projectName: keyId,
+          name: modelId,
+          startTime,
+          endTime,
+          inputMessages: [buildWorkbuddyLangfuseInput(body)] as unknown[],
+          outputMessage,
+          model: modelId,
+          usage: finalUsage,
+          tags: ["non-stream"],
+          metadata: opikTurn.metadata,
+          forkProjectName: "request_log",
+          forkTraceId: opikTurn.forkTraceId,
+          forkMetadata: {
+            keyId,
+            modelId,
+            stream: false,
+            upstreamUrl,
+          },
+        });
+      } catch (opikErr: unknown) {
+        pipe.info(
+          "WORKBUDDY_OPIK_NON_STREAM_ERR",
+          opikErr instanceof Error ? opikErr.message : String(opikErr),
+        );
+      }
+      return new Response(rawJson, {
+        status: upstreamResp.status,
+        headers: respHeaders,
+      });
+    }
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
       headers: respHeaders,
@@ -625,6 +727,9 @@ async function forwardToUpstream(
     modelId,
     keyId,
     traceId,
+    projectName: keyId,
+    forkTraceId: opikTurn.forkTraceId ?? "",
+    metadata: opikTurn.metadata ?? {},
     lf,
     config,
     pipe,
@@ -647,6 +752,12 @@ interface WorkbuddyTapContext {
   modelId: string;
   keyId: string;
   traceId: string;
+  /** Opik project_name = user keyId。 */
+  projectName: string;
+  /** fork 到 request_log 项目的独立 trace id（可能为空串）。 */
+  forkTraceId?: string;
+  /** create trace 时挂载的 metadata（span 复用同一份）。 */
+  metadata?: Record<string, unknown>;
   lf: LangfuseTurnContext | null;
   config: ProxyConfig;
   pipe: ReturnType<typeof createPipeline>;
@@ -800,6 +911,66 @@ async function consumeWorkbuddyStream(
     );
   }
 
+  // ── Opik: update trace + LLM span（流式完成阶段）───────────────────────────
+  try {
+    const outputMessage = assistantText
+      ? {
+          id: `msg_${Date.now().toString(16)}`,
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [{ type: "output_text", text: assistantText, annotations: [] }],
+        }
+      : undefined;
+    const outputMessages = outputMessage ? [outputMessage] : [];
+    const finalUsage = usage && Object.keys(usage).length > 0 ? usage : {};
+    opikUpdateTrace(ctx.config, {
+      traceId: ctx.traceId,
+      projectName: ctx.projectName,
+      endTime,
+      output: outputMessages,
+      usage: finalUsage,
+    });
+    if (ctx.forkTraceId && !ctx.config.opik.stripRequestLogContent) {
+      opikUpdateTrace(ctx.config, {
+        traceId: ctx.forkTraceId,
+        projectName: "request_log",
+        endTime,
+        output: outputMessages,
+        usage: finalUsage,
+      });
+    }
+    opikCreateLlmSpan(ctx.config, {
+      traceId: ctx.traceId,
+      projectName: ctx.projectName,
+      name: ctx.modelId,
+      startTime: ctx.startTime,
+      endTime,
+      inputMessages: [buildWorkbuddyLangfuseInput(ctx.inputBody)] as unknown[],
+      outputMessage: outputMessage ?? null,
+      model: ctx.modelId,
+      usage: finalUsage,
+      tags: [
+        "stream",
+        opikTurnTag(ctx.lf.sessionId, ctx.lf.turnSeq),
+      ],
+      metadata: ctx.metadata,
+      forkProjectName: "request_log",
+      forkTraceId: ctx.forkTraceId,
+      forkMetadata: {
+        keyId: ctx.keyId,
+        modelId: ctx.modelId,
+        stream: true,
+        upstreamUrl: ctx.upstreamUrl,
+      },
+    });
+  } catch (err) {
+    ctx.pipe.info(
+      "WORKBUDDY_OPIK_ERR",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
   // ── TDAI L0 write + Skill extraction ──
   // 对齐 codexHandler triggerCodexArchiveHooks: langfuse 上报后触发归档。
   // archiveCtx=null (aux/未初始化 session/bypass) 直接跳过。
@@ -902,6 +1073,7 @@ export async function handleWorkbuddyEndpoint(
 
   const turnSeq = countHumanTurnsWorkbuddy(body.input);
   const userQuery = workbuddyAdapter.extractUserText(body.input) ?? "";
+  const opikTraceId = opikTurnTraceId(sessionKey, turnSeq);
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -913,10 +1085,13 @@ export async function handleWorkbuddyEndpoint(
       "protocol:responses",
       isStream ? "stream" : "non-stream",
       `session:${sessionKey}`,
+      opikTurnTag(sessionKey, turnSeq),
     ],
     routeTags: [],
     userQuery,
   };
+  const questionTag = opikQuestionTag(userQuery);
+  if (questionTag) lf.tags.push(questionTag);
 
   // ── 7. Session-init state machine (reuses CB with agentSource="codex") ───
   //
@@ -954,7 +1129,7 @@ export async function handleWorkbuddyEndpoint(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -1213,15 +1388,15 @@ export async function handleWorkbuddyEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName 来自 session-init 返回值（从 cachedTeams 里查得）；
           // teamIdShort 字段名沿用历史，但此处**存完整 team_id**（如 team-wyuyb7sion）。
           // 之前 slice(-8) 只留后 8 位会让用户看到 "uyb7sion" 这种截断串，配合
           // teamName 常为空导致的兜底路径显示极不完整。团队 id 本身就短，全量展示无害。
           teamName: initResult.teamName ?? undefined,
-          teamIdShort: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1335,6 +1510,7 @@ export async function handleWorkbuddyEndpoint(
           userId: userId || "",
           callerUserKey,
           assetCapabilities,
+          traceId,
         });
         if (memArchiveCtx) {
           void triggerWorkbuddyArchiveHooks(memArchiveCtx, memResult.messageText ?? "").catch((err: unknown) => {
@@ -1384,6 +1560,8 @@ export async function handleWorkbuddyEndpoint(
   }
 
   // ── 9. Asset injection (每轮都跑) ────────────────────────────────────────
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 挂载。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (
     !injectionSkipped &&
     sessionInfo &&
@@ -1411,7 +1589,7 @@ export async function handleWorkbuddyEndpoint(
         ],
         model: modelId,
       };
-      const injectedBody = await pipeline.process(syntheticBody, {
+      const injectedResult = await pipeline.processWithStats(syntheticBody, {
         protocol: "openai",
         traceId,
         keyId,
@@ -1430,11 +1608,12 @@ export async function handleWorkbuddyEndpoint(
         },
       });
 
-      const injectedMessages = injectedBody.messages as
+      const injectedMessages = injectedResult.body.messages as
         | Array<Record<string, unknown>>
         | undefined;
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
+      injectionHookRuns = injectedResult.hookResults;
 
       if (injectedText.length > 0) {
         body = injectWorkbuddyAssets(body, { raw: injectedText });
@@ -1449,6 +1628,56 @@ export async function handleWorkbuddyEndpoint(
   }
 
   // ── 10. Forward ──────────────────────────────────────────────────────────
+  // ── Opik: create trace（Responses 主链路）─────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "responses",
+    sessionKey,
+    conversationId: sessionId,
+    spaceId,
+    userId,
+    model: modelId,
+    stream: isStream,
+    turnSeq,
+    requestPath: path,
+    memoryInjection: buildMemoryInjectionContext({
+      enabled: config.injection?.enabled === true,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
+      skipped: injectionSkipped,
+      hookRuns: injectionHookRuns,
+    }),
+  });
+  const responsesToolSummary = summarizeResponsesToolInteraction(
+    Array.isArray(body.input) ? (body.input as unknown[]) : [],
+  );
+  if (
+    responsesToolSummary.toolCalls.length > 0 ||
+    responsesToolSummary.toolResults > 0
+  ) {
+    opikTraceMetadata.tool_interaction = responsesToolSummary;
+  }
+  const forkTraceId = opikCreateTrace(config, {
+    traceId: opikTraceId,
+    projectName: keyId,
+    name: `${modelId} / ${keyId}`,
+    startTime,
+    input: {
+      input: Array.isArray(body.input) ? body.input : [],
+      ...(typeof body.instructions === "string" && body.instructions.length > 0
+        ? { instructions: body.instructions }
+        : {}),
+    },
+    tags: lf.tags,
+    metadata: opikTraceMetadata,
+    forkProjectName: "request_log",
+    forkMetadata: {
+      keyId,
+      modelId,
+      stream: isStream,
+      agentSource,
+    },
+  });
+
   const archiveCtx = buildWorkbuddyArchiveCtx({
     config,
     sessionInfo,
@@ -1458,6 +1687,10 @@ export async function handleWorkbuddyEndpoint(
     userId: userId || "",
     callerUserKey,
     assetCapabilities,
+    traceId,
   });
-  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
+  return forwardToUpstream(
+    c, config, body, opikTraceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
+    { forkTraceId, metadata: opikTraceMetadata },
+  );
 }
