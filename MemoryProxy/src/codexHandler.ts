@@ -39,10 +39,10 @@ import {
 import {
   buildMemoryInjectionContext,
   buildOpikTraceMetadata,
-  summarizeResponsesOutput,
   summarizeResponsesToolInteraction,
 } from "./opik-metadata.js";
 import type { MemoryInjectionHookRun } from "./opik-metadata.js";
+import { summarizeUpstreamJson } from "./common/upstream-json-summary.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { joinUrl } from "./guard-adapter.js";
@@ -1302,32 +1302,31 @@ async function forwardToUpstream(
   const responsesRawContentType = upstreamResp.headers.get("content-type") ?? "";
   const responsesRawIsSse = responsesRawContentType.includes("text/event-stream");
   // 兼容 #1253：codex 走 chatCompletions/responsesToAnthropic 转换时，非 SSE
-  // 上游 JSON 由 #1253 接线层转换，本块只负责“直连 Responses JSON”的上报。
+  // 上游 JSON 由接线层转换成 Responses 形态再回给客户端；本块读一份 clone 做上报，
+  // 不必知道转换细节。
   const agentUpstreamFlags = (
     config.upstream.agents?.["codex"] ?? {}
   ) as unknown as Record<string, boolean | undefined>;
   const codexConvertingUpstream =
     agentUpstreamFlags.chatCompletions === true ||
     agentUpstreamFlags.responsesToAnthropic === true;
-  // stream:false 时上游可能返回非 SSE 的 Responses JSON：主对话仍要上报 Opik。
-  // 非 SSE 2xx/非转换直连路径：无论是否有 lf/archiveCtx，都要完成 trace
-  // 上报并原样回传，避免 aux/bypass 等场景只 create trace 却永远不 close。
-  if (!responsesRawIsSse && upstreamResp.body && !codexConvertingUpstream) {
-    const rawJson = await upstreamResp.text();
+  // stream:false 时上游可能返回非 SSE 的 JSON：主对话仍要上报 Opik。
+  // 非 SSE 2xx：无论是否有 lf/archiveCtx、也无论上游是 Responses 还是转换后的
+  // Chat / Anthropic 形态，都要完成 trace 收尾，避免 trace 永远停在“进行中”。
+  if (!responsesRawIsSse && upstreamResp.body) {
+    // 转换路径下响应体要留给下游转换层消费：读 clone，原始 body 保持未读。
+    const rawJson = codexConvertingUpstream
+      ? await upstreamResp.clone().text()
+      : await upstreamResp.text();
     try {
       const json = JSON.parse(rawJson) as Record<string, unknown>;
-      const output = Array.isArray(json.output) ? (json.output as unknown[]) : [];
-      const { text, toolCalls } = summarizeResponsesOutput(output);
-      const usage =
-        json.usage && typeof json.usage === "object"
-          ? (json.usage as Record<string, unknown>)
-          : {};
+      const { text, toolCallCount, usage } = summarizeUpstreamJson(json);
       const endTime = new Date().toISOString();
-      const finalUsage = Object.keys(usage).length > 0 ? usage : {};
+      const finalUsage = usage;
       const outputMessage = text
         ? { role: "assistant", content: text }
-        : toolCalls.length > 0
-          ? { role: "assistant", content: `[${toolCalls.length} tool call(s)]` }
+        : toolCallCount > 0
+          ? { role: "assistant", content: `[${toolCallCount} tool call(s)]` }
           : null;
       const outputMessages = outputMessage ? [outputMessage] : [];
       opikUpdateTrace(config, {
@@ -1373,10 +1372,13 @@ async function forwardToUpstream(
     } catch (opikErr: unknown) {
       pipe.error("OPIK_NON_STREAM", opikErr instanceof Error ? opikErr : new Error(String(opikErr)));
     }
-    return new Response(rawJson, {
-      status: upstreamResp.status,
-      headers: filterResponseHeaders(upstreamResp.headers),
-    });
+    // 直连 Responses 场景原样回传；转换场景继续往下走，由转换层产出客户端报文。
+    if (!codexConvertingUpstream) {
+      return new Response(rawJson, {
+        status: upstreamResp.status,
+        headers: filterResponseHeaders(upstreamResp.headers),
+      });
+    }
   }
   if (!needTap || !upstreamResp.body) {
     return new Response(upstreamResp.body, {
