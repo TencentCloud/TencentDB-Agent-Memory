@@ -42,10 +42,20 @@ threadId     : 仅 threadIsolation.enabled=true 且带 x-thread-id 时追加
   `workbuddyHandler.ts`；
 - 3 个路由：`session-force-archive.ts` / `session-refresh.ts` /
   `session-task.ts`（workbuddy 会话因此也能被 force-archive / refresh 命中）；
+- 命令层：`mem-command/commands/session-reset.ts` 的读写也走同一函数。此前它手拼
+  `${agentSource}:${sessionKey}`，threadIsolation 开启时会 reset 到不带 `:thread`
+  后缀的影子键——命令回复正常、真实会话却没被重置（该缺陷已修，回归用例见 §9）；
 - 遥测：model-intent 埋点与 session-init 日志的 composite 键对齐（threadIsolation
   开启时均带 `:threadId` 后缀）；
 - 归档写侧 fence（后续项，未随本 PR 落地）：计划同样通过
   `buildStoreSessionKey` 构造候选键，见 §4.2 / §8。
+
+> **已知边界（桥接侧不复用该入口）**：`memory-bridge.ts` / `skill-bridge.ts` 的
+> `composite_key` 由 `binding.agentSource` + 请求里的 `session_id` 拼出——curl bridge
+> 的入参**不含 thread**，因此该键天然不含 `:threadId`。它是"按客户端上报的会话 ID
+> 反查"的查找键，不是存储键，无法也不应套用 `buildStoreSessionKey`；代价是
+> `threadIsolation` 开启时桥接侧的 L1 快路径会 miss 并回退 L2a / binding
+> （结果正确，多一次探测）。
 
 ### 2.2 隔离判定维度（已实现）
 
@@ -132,6 +142,12 @@ interface SessionAdapter {
   分别锁住，避免文档再次漂移。
 
 ### 3.2 显式会话 ID 优先（已实现）
+
+> **实现注记（命令层）**：`mem:session-reset` 的存储键同样经 `buildStoreSessionKey`
+> 构造。因此 `threadIsolation` 开启且请求带 `x-thread-id` 时，重置的是该线程作用域的
+> 会话（`agent:session:thread`），不会写到"影子键"上。该行为由
+> `session-store-fence.test.ts` 的回归用例锁定（reset 后线程键为 `uninitialized`，
+> 且不带线程后缀的键**未**被写入）。
 
 任何客户端带了非空显式会话 ID 时，该 ID 直接作为会话锁（不回退、不覆盖），
 保证与客户端本地会话状态一致；`auto-` 前缀的 ID 仍需通过签名校验（§3.3）。
