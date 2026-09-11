@@ -433,3 +433,49 @@ def test_shutdown_is_idempotent(provider_with_fake_supervisor):
     provider = provider_with_fake_supervisor
     provider.shutdown()
     provider.shutdown()  # must not raise
+
+
+def test_on_memory_write_mirrors_explicit_adds(provider_with_fake_supervisor):
+    provider = provider_with_fake_supervisor
+    fake = provider._fake
+    fake.client.write_explicit_memory.return_value = {"stored": True}
+
+    provider.on_memory_write(
+        action="add",
+        target="memory",
+        content="TencentDB retry probe memory: durable memory round-trip verification marker.",
+    )
+
+    fake.client.write_explicit_memory.assert_called_once_with(
+        action="add",
+        target="memory",
+        content="TencentDB retry probe memory: durable memory round-trip verification marker.",
+        session_key="test-session",
+        session_id="test-session",
+        user_id="test-user",
+    )
+
+
+def test_on_memory_write_recovers_when_gateway_does_not_index(provider_with_fake_supervisor):
+    provider = provider_with_fake_supervisor
+    fake = provider._fake
+    fake.client.write_explicit_memory.return_value = {"stored": False}
+    fake.ensure_running_calls = 0
+
+    provider.on_memory_write(
+        action="add",
+        target="memory",
+        content="TencentDB retry probe memory: durable memory round-trip verification marker.",
+    )
+
+    fake.client.write_explicit_memory.assert_called_once()
+    assert fake.ensure_running_calls == 1
+
+
+def test_on_memory_write_ignores_non_add_actions(provider_with_fake_supervisor):
+    provider = provider_with_fake_supervisor
+    fake = provider._fake
+
+    provider.on_memory_write(action="remove", target="memory", content="obsolete")
+
+    fake.client.write_explicit_memory.assert_not_called()
