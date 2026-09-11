@@ -63,6 +63,76 @@ function extractText(content: unknown): string {
   return parts.join("\n");
 }
 
+/**
+ * 无法映射到 Chat 的 Responses input item 类型（宿主侧工具、条目引用等）。
+ * 已知类型用其名字，未知类型统一归到 other —— 指标标签不能由客户端随意撑大。
+ */
+const KNOWN_DROP_ITEM_TYPES = new Set([
+  "item_reference",
+  "computer_call",
+  "computer_call_output",
+  "web_search_call",
+  "file_search_call",
+  "local_shell_call",
+  "local_shell_call_output",
+  "mcp_call",
+  "mcp_list_tools",
+  "mcp_approval_request",
+  "mcp_approval_response",
+  "image_generation_call",
+  "code_interpreter_call",
+  "custom_tool_call",
+  "custom_tool_call_output",
+]);
+
+/** 无法映射到 Chat 的 content part 类型（文件、音频等）。 */
+const KNOWN_DROP_PART_TYPES = new Set([
+  "input_file",
+  "input_audio",
+  "refusal",
+  "computer_screenshot",
+  "file",
+]);
+
+/** Responses 独有、Chat 无对位的顶层参数。 */
+const RESPONSES_ONLY_PARAMS = [
+  "store",
+  "previous_response_id",
+  "conversation",
+  "include",
+  "metadata",
+  "client_metadata",
+  "truncation",
+  "reasoning",
+  "prompt_cache_key",
+  "service_tier",
+  "safety_identifier",
+] as const;
+
+function dropItemLabel(type: unknown): string {
+  const name = typeof type === "string" && type ? type : "unknown";
+  return `input_item:${KNOWN_DROP_ITEM_TYPES.has(name) ? name : "other"}`;
+}
+
+function dropPartLabel(type: unknown): string {
+  const name = typeof type === "string" && type ? type : "unknown";
+  return `content_part:${KNOWN_DROP_PART_TYPES.has(name) ? name : "other"}`;
+}
+
+/**
+ * 统计 content[] 里无法映射到 Chat 的 part（input_file / input_audio / refusal 等）。
+ * 文本与图片由 extractText / extractImages 处理，不在此计数。
+ */
+function countUnmappedParts(content: unknown): void {
+  if (!Array.isArray(content)) return;
+  for (const block of content) {
+    const b = asRecord(block);
+    const type = b?.type;
+    if (type === "input_text" || type === "output_text" || type === "input_image") continue;
+    recordDrop("responses_body_to_chat", dropPartLabel(type));
+  }
+}
+
 /** 从 Responses content[] 提取图片（input_image），返回图片 url 列表。 */
 function extractImages(content: unknown): string[] {
   if (!Array.isArray(content)) return [];
@@ -159,6 +229,7 @@ export function responsesBodyToChat(
 
     if (type === "message") {
       const role = item.role;
+      countUnmappedParts(item.content);
       if (role === "assistant") {
         const text = extractText(item.content);
         if (text.length > 0 || pendingReasoning) {
@@ -211,6 +282,10 @@ export function responsesBodyToChat(
       if (summary) {
         pendingReasoning = pendingReasoning ? `${pendingReasoning}\n${summary}` : summary;
       }
+    } else {
+      // 未映射的 item 类型（宿主侧工具调用、条目引用等）：Chat 无对位，
+      // 这里显式计数而不是静默跳过，用来判断"两跳是否真的丢了东西"。
+      recordDrop("responses_body_to_chat", dropItemLabel(type));
     }
   }
 
@@ -238,6 +313,12 @@ export function responsesBodyToChat(
         tools.push({ type: "function", function: fn });
       }
       // custom 工具无法映射，跳过（避免上游 400）
+      else {
+        recordDrop(
+          "responses_body_to_chat",
+          `tool:${typeof t.type === "string" && t.type ? t.type : "unknown"}`,
+        );
+      }
     }
     if (tools.length > 0) chat.tools = tools;
   }
@@ -302,6 +383,12 @@ export function responsesBodyToChat(
   if (typeof body.temperature === "number") chat.temperature = body.temperature;
   if (typeof body.top_p === "number") chat.top_p = body.top_p;
   if (body.parallel_tool_calls !== undefined) chat.parallel_tool_calls = body.parallel_tool_calls;
+
+  // Responses 独有、Chat 无对位的顶层参数（会话状态、抓取开关、推理配置等）：
+  // 同样显式计数，避免"看起来转换成功、实际丢了一半语义"。
+  for (const key of RESPONSES_ONLY_PARAMS) {
+    if (body[key] !== undefined) recordDrop("responses_body_to_chat", `param:${key}`);
+  }
 
   recordConversion("responses_body_to_chat", performance.now() - _t0);
   return chat;
