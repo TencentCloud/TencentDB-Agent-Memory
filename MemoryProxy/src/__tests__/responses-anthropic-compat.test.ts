@@ -97,6 +97,11 @@ describe("responsesToAnthropic（Responses 请求 → Anthropic 请求）", () =
         input: [
           {
             type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "查一下天气" }],
+          },
+          {
+            type: "message",
             role: "assistant",
             content: [{ type: "output_text", text: "我来查" }],
           },
@@ -117,14 +122,14 @@ describe("responsesToAnthropic（Responses 请求 → Anthropic 请求）", () =
     );
     const msgs = out.messages as Array<Record<string, unknown>>;
     // Anthropic 的 assistant 带 tool_use 时 content 是 blocks 数组
-    expect(msgs[0]).toEqual({
+    expect(msgs[1]).toEqual({
       role: "assistant",
       content: [
         { type: "text", text: "我来查" },
         { type: "tool_use", id: "call_1", name: "get_weather", input: { city: "北京" } },
       ],
     });
-    expect(msgs[1]).toEqual({
+    expect(msgs[2]).toEqual({
       role: "user",
       content: [{ type: "tool_result", tool_use_id: "call_1", content: "晴" }],
     });

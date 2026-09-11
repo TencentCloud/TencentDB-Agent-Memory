@@ -184,6 +184,168 @@ function mergeAssistantMessagesContent(a: unknown, b: unknown): unknown {
   return [...thinking, ...rest];
 }
 
+/** 相邻同角色合并：user 侧 tool_result 前置，assistant 侧 thinking 前置。 */
+function coalesceAnthropicMessages(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const m of messages) {
+    const last = out[out.length - 1];
+    if (last && last.role === m.role) {
+      last.content =
+        m.role === "assistant"
+          ? mergeAssistantMessagesContent(last.content, m.content)
+          : mergeUserMessagesContent(last.content, m.content);
+      continue;
+    }
+    out.push({ ...m });
+  }
+  return out;
+}
+
+/** tool_use 块的 id；不是 tool_use 或没有 id 时返回 null。 */
+function toolUseIdOf(block: unknown): string | null {
+  const b = asRecord(block);
+  return b?.type === "tool_use" && typeof b.id === "string" ? b.id : null;
+}
+
+/** 一条消息里出现的 tool_use / tool_result id（content 不是数组时视为没有）。 */
+function toolIdsOf(
+  msg: Record<string, unknown> | undefined,
+  kind: "tool_use" | "tool_result",
+): Set<string> {
+  const ids = new Set<string>();
+  if (!msg || !Array.isArray(msg.content)) return ids;
+  for (const block of msg.content) {
+    const b = asRecord(block);
+    const id =
+      kind === "tool_use"
+        ? toolUseIdOf(block)
+        : typeof b?.tool_use_id === "string"
+          ? b.tool_use_id
+          : null;
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+/** Anthropic 不接受空 content（最后一条 assistant 除外）。 */
+function isEmptyContent(content: unknown): boolean {
+  if (typeof content === "string") return content.length === 0;
+  if (Array.isArray(content)) return content.length === 0;
+  return content === undefined || content === null;
+}
+
+/** 把指向已不存在 tool_use 的 tool_result 降级成文本，内容不丢。 */
+function degradeOrphanToolResults(
+  msg: Record<string, unknown>,
+  declared: Set<string>,
+): unknown {
+  const content = msg.content;
+  if (!Array.isArray(content) || content.length === 0) return content;
+  const blocks: unknown[] = [];
+  let degraded = 0;
+  for (const block of content) {
+    const b = asRecord(block);
+    if (b?.type === "tool_result") {
+      const id = typeof b.tool_use_id === "string" ? b.tool_use_id : "";
+      if (!declared.has(id)) {
+        recordDrop("chat_to_anthropic", "orphan_tool_result");
+        degraded++;
+        const text = typeof b.content === "string" ? b.content : blockText(b.content);
+        if (text) blocks.push({ type: "text", text });
+        continue;
+      }
+    }
+    blocks.push(block);
+  }
+  return degraded > 0 ? (blocks.length > 0 ? blocks : "") : content;
+}
+
+/**
+ * 把 Chat 允许、Anthropic 不允许的消息形状修回合法。Anthropic 这边有四条硬要求：
+ *
+ *   1. 首条消息必须是 user；
+ *   2. user / assistant 严格交替；
+ *   3. tool_use 与 tool_result 必须相邻成对；
+ *   4. 任何一条消息的 content 不能为空。
+ *
+ * 客户端裁剪历史、只回传半边工具结果、发空 content 时都会破坏它们。
+ * 丢掉的东西一律计入 /metrics 的丢参计数，便于确认是客户端把历史裁坏了。
+ */
+function normalizeAnthropicMessages(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const dropped: Array<Record<string, unknown>> = [];
+
+  // 4) 空 content 的消息先丢掉；丢掉之后同角色会贴在一起，下面统一合并。
+  const nonEmpty: Array<Record<string, unknown>> = [];
+  for (const msg of messages) {
+    if (isEmptyContent(msg.content)) {
+      recordDrop("chat_to_anthropic", "empty_message");
+      continue;
+    }
+    nonEmpty.push(msg);
+  }
+
+  // 2) 相邻同角色合并成一条。
+  let head = coalesceAnthropicMessages(nonEmpty);
+
+  // 1) 首条必须是 user：开头的 assistant 是裁剪后剩下的残段，整段去掉。
+  while (head.length > 0 && head[0].role !== "user") {
+    recordDrop("chat_to_anthropic", "leading_assistant");
+    dropped.push(head[0]);
+    head = head.slice(1);
+  }
+
+  // 3) tool_use 与 tool_result 必须相邻成对：配不上的 tool_use 摘掉，
+  //    配不上的 tool_result 降级成文本。
+  const paired: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < head.length; i++) {
+    const msg = head[i];
+    let content = msg.content;
+    if (Array.isArray(content) && content.length > 0) {
+      if (msg.role === "assistant") {
+        const answered = toolIdsOf(head[i + 1], "tool_result");
+        const kept = content.filter((block) => {
+          const id = toolUseIdOf(block);
+          if (id === null || answered.has(id)) return true;
+          recordDrop("chat_to_anthropic", "orphan_tool_use");
+          return false;
+        });
+        content = kept.length > 0 ? kept : "";
+      } else {
+        content = degradeOrphanToolResults(msg, toolIdsOf(head[i - 1], "tool_use"));
+      }
+    }
+    if (isEmptyContent(content)) {
+      recordDrop("chat_to_anthropic", "empty_message");
+      continue;
+    }
+    paired.push({ ...msg, content });
+  }
+
+  const out = coalesceAnthropicMessages(paired);
+
+  // 上面摘消息时可能把开头的 user 也摘掉（它整条都是悬空 tool_result），再修一次。
+  let from = 0;
+  while (from < out.length && out[from].role !== "user") {
+    recordDrop("chat_to_anthropic", "leading_assistant");
+    dropped.push(out[from]);
+    from++;
+  }
+  if (from < out.length) return out.slice(from);
+
+  // 整段里一条 user 都没有：把最后一段 assistant 文本当作用户提问发出去，
+  // 这种请求没有别的合法写法；连一段文本都没有时保持空数组，由上游报错。
+  const fallback = dropped[dropped.length - 1];
+  if (fallback && !isEmptyContent(fallback.content)) {
+    recordDrop("chat_to_anthropic", "missing_user_message");
+    return [{ role: "user", content: fallback.content }];
+  }
+  return [];
+}
+
 // ── 请求体：Anthropic → Chat ────────────────────────────────────────────────
 
 export function anthropicToChat(
@@ -525,32 +687,26 @@ export function chatToAnthropic(
       messages.push({ role: "assistant", content: blocks.length > 0 ? blocks : "" });
       continue;
     }
-    pendingToolIds = new Set();
-    pendingValid = false;
+    // 只有 user 轮次插进来才算这条工具配对断了；assistant 的纯文本片段会与
+    // 前一条合并成同一个 assistant 消息，工具结果仍然紧跟其后，配对依然成立。
+    if (role !== "assistant") {
+      pendingToolIds = new Set();
+      pendingValid = false;
+    }
     messages.push({
       role: role === "assistant" ? "assistant" : "user",
       content: chatContentToAnthropic(m.content),
     });
   }
 
-  // Anthropic 要求 user/assistant 角色严格交替；把**相邻同角色**消息合并成一条：
-  // user 侧 tool_result 前置（Anthropic 工具结果语义），assistant 侧 thinking 前置。
-  const coalesced: Array<Record<string, unknown>> = [];
-  for (const m of messages) {
-    const last = coalesced[coalesced.length - 1];
-    if (last && last.role === m.role) {
-      last.content =
-        m.role === "assistant"
-          ? mergeAssistantMessagesContent(last.content, m.content)
-          : mergeUserMessagesContent(last.content, m.content);
-      continue;
-    }
-    coalesced.push({ ...m });
-  }
+  // Anthropic 对 messages 的要求比 Chat 严：角色严格交替、tool_use 有结果、
+  // 首条是 user、content 不为空。客户端裁剪历史时这四条都可能被破坏，
+  // 这里统一修回合法形状，避免上游 400 把整轮请求（含记忆注入）打回。
+  const normalized = normalizeAnthropicMessages(coalesceAnthropicMessages(messages));
 
   const out: Record<string, unknown> = {
     model: body.model,
-    messages: coalesced,
+    messages: normalized,
     max_tokens:
       typeof body.max_tokens === "number"
         ? body.max_tokens

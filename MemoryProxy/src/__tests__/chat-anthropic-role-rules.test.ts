@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { anthropicToChat, chatToAnthropic } from "../common/chat-anthropic-compat.js";
+import { responsesToAnthropic } from "../common/responses-anthropic-compat.js";
 import { protocolStatsToPrometheus, resetProtocolStats } from "../common/protocol-stats.js";
 
 /**
@@ -66,18 +67,20 @@ describe("Chat → Anthropic：角色严格交替", () => {
     expect(blocksOf(out, 1).map((b) => b.text)).toEqual(["a", "b", "c"]);
   });
 
-  it("合并时保留 tool_use 及其后续文本的先后关系", () => {
+  it("合并时保留 tool_use 及其后续文本的先后关系（工具结果紧跟在合并后的消息后面）", () => {
     const out = chatToAnthropic({
       model: "claude-x",
       messages: [
         { role: "user", content: "q" },
         { role: "assistant", content: "see", tool_calls: [toolCall("call_1")] },
         { role: "assistant", content: "done" },
+        { role: "tool", tool_call_id: "call_1", content: "out" },
       ],
     });
-    expect(roles(out)).toEqual(["user", "assistant"]);
+    expect(roles(out)).toEqual(["user", "assistant", "user"]);
     expect(typesOf(out, 1)).toEqual(["text", "tool_use", "text"]);
     expect((blocksOf(out, 1)[1] as Msg).id).toBe("call_1");
+    expect(typesOf(out, 2)).toEqual(["tool_result"]);
   });
 
   it("合并时 thinking 稳定前移（Anthropic 要求 thinking 位于内容首位）", () => {
@@ -206,5 +209,110 @@ describe("Chat → Anthropic：tool_result 必须紧邻对应 tool_use", () => {
     expect(roles(back)).toEqual(["user", "assistant", "user"]);
     expect(typesOf(back, 2)).toEqual(["tool_result"]);
     expect((blocksOf(back, 2)[0] as Msg).tool_use_id).toBe("toolu_1");
+  });
+});
+
+describe("Chat → Anthropic：消息形状兜底（历史被裁剪 / 只回传半边）", () => {
+  it("第一条是 assistant 时被去掉，请求仍以 user 开头", () => {
+    const out = chatToAnthropic({
+      model: "claude-x",
+      messages: [
+        { role: "assistant", content: "上一轮被保留的残段" },
+        { role: "user", content: "继续" },
+      ],
+    });
+    expect(roles(out)).toEqual(["user"]);
+    expect(JSON.stringify(out)).not.toContain("上一轮被保留的残段");
+    expect(protocolStatsToPrometheus()).toContain('param="leading_assistant"');
+  });
+
+  it("Responses → Anthropic（codex 主链路）同样以 user 开头", () => {
+    const out = responsesToAnthropic({
+      model: "claude-x",
+      max_output_tokens: 64,
+      input: [
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "残段" }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "继续" }] },
+      ],
+    });
+    expect(roles(out as Record<string, unknown>)).toEqual(["user"]);
+    expect(JSON.stringify(out)).not.toContain("残段");
+  });
+
+  it("tool_use 没有对应的 tool_result 时被摘掉，不产出 unexpected tool_use", () => {
+    const out = chatToAnthropic({
+      model: "claude-x",
+      messages: [
+        { role: "user", content: "跑一下" },
+        { role: "assistant", content: null, tool_calls: [toolCall("c1")] },
+        { role: "user", content: "算了" },
+      ],
+    });
+    expect(JSON.stringify(out)).not.toContain("tool_use");
+    expect(roles(out)).toEqual(["user"]);
+    expect(protocolStatsToPrometheus()).toContain('param="orphan_tool_use"');
+  });
+
+  it("只回传了一半结果：没有结果的那一个被摘掉，配上的那个保留", () => {
+    const out = chatToAnthropic({
+      model: "claude-x",
+      messages: [
+        { role: "user", content: "跑两个" },
+        { role: "assistant", content: null, tool_calls: [toolCall("c1"), toolCall("c2")] },
+        { role: "tool", tool_call_id: "c1", content: "结果一" },
+      ],
+    });
+    const json = JSON.stringify(out);
+    expect((json.match(/"type":"tool_use"/g) ?? []).length).toBe(1);
+    expect(json).toContain('"id":"c1"');
+    expect(json).not.toContain('"id":"c2"');
+    expect((blocksOf(out, 1)[0] as Msg).id).toBe("c1");
+  });
+
+  it("空 tool_calls 的 assistant 消息被丢掉，相邻 user 合并", () => {
+    const out = chatToAnthropic({
+      model: "claude-x",
+      messages: [
+        { role: "user", content: "一" },
+        { role: "assistant", content: null, tool_calls: [] },
+        { role: "user", content: "二" },
+      ],
+    });
+    expect(roles(out)).toEqual(["user"]);
+    expect(protocolStatsToPrometheus()).toContain('param="empty_message"');
+  });
+
+  it("只有 reasoning、且不开 thinking.map 时该消息被丢掉，不产生空 content", () => {
+    const out = chatToAnthropic({
+      model: "claude-x",
+      messages: [
+        { role: "user", content: "一" },
+        { role: "assistant", content: null, reasoning_content: "内部推理" },
+        { role: "user", content: "二" },
+      ],
+    });
+    expect(roles(out)).toEqual(["user"]);
+    expect(JSON.stringify(out)).not.toContain('"content":""');
+  });
+
+  it("整段没有 user 时，用最后一段 assistant 文本作为提问发出", () => {
+    const out = chatToAnthropic({
+      model: "claude-x",
+      messages: [
+        { role: "system", content: "sys" },
+        { role: "assistant", content: "只剩这段了" },
+      ],
+    });
+    expect(roles(out)).toEqual(["user"]);
+    expect(JSON.stringify(out)).toContain("只剩这段了");
+    expect(protocolStatsToPrometheus()).toContain('param="missing_user_message"');
+  });
+
+  it("一条消息都不剩时保持空数组，不凭空造提问", () => {
+    const out = chatToAnthropic({
+      model: "claude-x",
+      messages: [{ role: "system", content: "sys" }],
+    });
+    expect(out.messages).toEqual([]);
   });
 });
