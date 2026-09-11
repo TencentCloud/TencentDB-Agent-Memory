@@ -141,6 +141,8 @@ openclaw plugins install @tencentdb-agent-memory/memory-tencentdb
 openclaw gateway restart
 ```
 
+Plain installation does not patch OpenClaw runtime files. The runtime patch is only needed for optional short-term compression and must be applied explicitly.
+
 > Please use the native OpenClaw command to upgrade the plugin. This approach prevents the plugin from being disabled caused by semantic version ranges.
 > ```bash
 > openclaw plugins update @tencentdb-agent-memory/memory-tencentdb
@@ -191,13 +193,15 @@ Add the `slots` field so OpenClaw routes context-offload requests to this plugin
 
 #### Step 2 — Apply the runtime patch
 
-For the best results, run the patch script below. It hooks `after-tool-call` messages so they can be offloaded and recovered correctly:
+For the best short-term compression results, run the patch script deliberately. It hooks `after-tool-call` messages so they can be offloaded and recovered correctly:
 
 ```bash
 bash scripts/openclaw-after-tool-call-messages.patch.sh
 ```
 
-> 💡 The patch only needs to be applied once per OpenClaw installation. After upgrading OpenClaw, re-run the script to re-apply.
+If you intentionally want npm `postinstall` to run the same patch, set `MEMORY_TENCENTDB_APPLY_OPENCLAW_PATCH=1` for that install.
+
+> 💡 The patch only needs to be applied once per OpenClaw installation. After upgrading OpenClaw, re-run the script to re-apply. Long-term memory capture, extraction, and recall work without this patch.
 
 
 ### 2. Hermes
