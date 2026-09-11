@@ -1,0 +1,62 @@
+identity:
+  name: tdai_recall
+  author: tencentdb-agent-memory
+  label:
+    en_US: Recall Memory Context
+    zh_Hans: 召回记忆上下文
+description:
+  human:
+    en_US: Recall relevant memory context before an LLM node runs.
+    zh_Hans: 在 LLM 节点运行前召回相关记忆上下文。
+  llm: Recall memory for this turn.
+parameters:
+  - name: query
+    type: string
+    required: true
+    label:
+      en_US: Query
+      zh_Hans: 查询内容
+    human_description:
+      en_US: Current user message or search query.
+      zh_Hans: 当前用户消息或搜索查询。
+    llm_description: Message to recall from.
+    form: llm
+  - name: session_key
+    type: string
+    required: true
+    label:
+      en_US: Session Key
+      zh_Hans: 会话 Key
+    human_description:
+      en_US: Stable Dify conversation ID.
+      zh_Hans: 稳定的 Dify conversation_id。
+    llm_description: Stable conversation ID.
+    form: llm
+  - name: user_id
+    type: string
+    required: false
+    label:
+      en_US: User ID
+      zh_Hans: 用户 ID
+    human_description:
+      en_US: Optional end-user identifier.
+      zh_Hans: 可选的终端用户标识。
+    llm_description: Optional user ID.
+    form: llm
+  - name: max_chars
+    type: number
+    required: false
+    min: 0
+    max: 20000
+    default: 2000
+    label:
+      en_US: Max Characters
+      zh_Hans: 最大字符数
+    human_description:
+      en_US: Maximum context characters. 0 means unlimited. Default 2000.
+      zh_Hans: 返回上下文的最大字符数，默认 2000。
+    llm_description: Context char cap.
+    form: llm
+extra:
+  python:
+    source: tools/tdai_recall.py

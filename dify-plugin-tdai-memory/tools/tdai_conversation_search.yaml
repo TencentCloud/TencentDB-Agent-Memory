@@ -1,0 +1,65 @@
+identity:
+  name: tdai_conversation_search
+  author: tencentdb-agent-memory
+  label:
+    en_US: Search Raw Conversations
+    zh_Hans: 搜索原始对话
+description:
+  human:
+    en_US: Search L0 raw conversations.
+    zh_Hans: 搜索 L0 原始对话。
+  llm: Search raw conversations.
+parameters:
+  - name: query
+    type: string
+    required: true
+    label:
+      en_US: Query
+      zh_Hans: 查询内容
+    human_description:
+      en_US: Conversation search query.
+      zh_Hans: 对话搜索查询。
+    llm_description: Conversation query.
+    form: llm
+  - name: limit
+    type: number
+    required: false
+    min: 1
+    max: 50
+    default: 5
+    label:
+      en_US: Limit
+      zh_Hans: 数量限制
+    human_description:
+      en_US: Maximum number of results. Default 5, max 50.
+      zh_Hans: 最大返回数量。默认 5，最大 50。
+    llm_description: Result count.
+    form: llm
+  - name: session_key
+    type: string
+    required: false
+    label:
+      en_US: Session Key
+      zh_Hans: 会话 Key
+    human_description:
+      en_US: Optional stable conversation ID filter.
+      zh_Hans: 可选稳定会话 ID 过滤。
+    llm_description: Optional session filter.
+    form: llm
+  - name: max_chars
+    type: number
+    required: false
+    min: 0
+    max: 20000
+    default: 2000
+    label:
+      en_US: Max Characters
+      zh_Hans: 最大字符数
+    human_description:
+      en_US: Maximum result characters. 0 means unlimited. Default 2000.
+      zh_Hans: 返回结果的最大字符数，默认 2000。
+    llm_description: Result char cap.
+    form: llm
+extra:
+  python:
+    source: tools/tdai_conversation_search.py
