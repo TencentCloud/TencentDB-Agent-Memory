@@ -7,7 +7,7 @@ import { nowChinaISO } from "../time-utils.js";
 import { buildTiktokenContextSnapshot, type ContextSnapshot } from "../context-token-tracker.js";
 import { traceOffloadDecision, traceMessagesSnapshot } from "../opik-tracer.js";
 import { PLUGIN_DEFAULTS } from "../types.js";
-import { readOffloadEntries, markOffloadStatus, readMmd } from "../storage.js";
+import { readOffloadEntries, markOffloadStatus } from "../storage.js";
 import { createL3TokenCounter } from "../l3-token-counter.js";
 import {
   normalizeToolCallIdForLookup,
@@ -28,7 +28,7 @@ import {
   isTokenOverflowError,
   dumpMessagesSnapshot,
 } from "./llm-input-l3.js";
-import { MMD_MESSAGE_MARKER, findActiveMmdInsertionPoint, findHistoryMmdInsertionPoint } from "../mmd-injector.js";
+import { maybeUpdateMmdInMessages, findHistoryMmdInsertionPoint } from "../mmd-injector.js";
 import type { OffloadStateManager } from "../state-manager.js";
 import type { PluginConfig, PluginLogger, ToolPair } from "../types.js";
 import type { BackendClient } from "../backend-client.js";
@@ -191,61 +191,10 @@ export function createAfterToolCallHandler(
       if (turn) stateManager.cachedLatestTurnMessages = turn;
     }
 
-    // In-loop active MMD injection / update.
-    // Only inject after L1.5 has settled (task boundary determined, activeMmdFile set).
-    // This also picks up L2 MMD content updates (L2 runs async and may patch the MMD
-    // file between tool calls).
     if (event.messages && Array.isArray(event.messages)) {
       try {
-        const l15Settled = stateManager.l15Settled;
-        const activeMmdFile = stateManager.getActiveMmdFile();
-        if (!l15Settled) {
-          logger.debug?.(`[context-offload] after_tool_call MMD: SKIP (L1.5 not settled yet)`);
-        } else if (!activeMmdFile) {
-          logger.debug?.(`[context-offload] after_tool_call MMD: SKIP (no active MMD file)`);
-        } else {
-          const mmdContent = await readMmd(stateManager.ctx, activeMmdFile);
-          if (mmdContent) {
-            let taskGoal = "";
-            const metaMatch = mmdContent.match(/^%%\{\s*(.*?)\s*\}%%/);
-            if (metaMatch) {
-              try { const meta = JSON.parse(`{${metaMatch[1]}}`); taskGoal = meta.taskGoal || ""; } catch { /* */ }
-            }
-            const mmdText = [
-              `<current_task_context>`,
-              `【当前活跃任务的mermaid流程图】这是你最近正在执行的任务的阶段性记录（此条下方的tool use未被汇总，进程可能有延迟，仅供参考）。`,
-              taskGoal ? `**任务目标:** ${taskGoal}` : "",
-              `**任务文件:** ${activeMmdFile}`,
-              "```mermaid", mmdContent, "```",
-              `标记为 "doing" 的节点是近期焦点（注：可能有延迟，下方的tool use未被统计，仅供参考），"done" 的已完成。请参考此保持方向感，避免重复已完成的工作。`,
-              `</current_task_context>`,
-            ].filter((line) => line !== "").join("\n");
-
-            const existingIdx = event.messages.findIndex((m: any) => m._mmdContextMessage === "active");
-            const newMsg = { role: "user", content: [{ type: "text", text: mmdText }], _mmdContextMessage: "active" };
-            if (existingIdx >= 0) {
-              // Check if content changed (L1.5 switched file or L2 updated content)
-              const oldContent = Array.isArray(event.messages[existingIdx].content)
-                ? event.messages[existingIdx].content.map((c: any) => c.text ?? "").join("")
-                : (event.messages[existingIdx].content ?? "");
-              const contentChanged = !oldContent.includes(activeMmdFile) || oldContent !== mmdText;
-              if (contentChanged) {
-                event.messages[existingIdx] = newMsg;
-                logger.debug?.(`[context-offload] after_tool_call MMD: UPDATED at [${existingIdx}], file=${activeMmdFile}, contentChanged=true`);
-                _dumpMessagesAfterMmd(event.messages, "UPDATED", logger);
-              } else {
-                logger.debug?.(`[context-offload] after_tool_call MMD: unchanged, skip update`);
-              }
-            } else {
-              const insertIdx = findActiveMmdInsertionPoint(event.messages);
-              event.messages.splice(insertIdx, 0, newMsg);
-              logger.debug?.(`[context-offload] after_tool_call MMD: INJECTED at [${insertIdx}], file=${activeMmdFile}, msgs=${event.messages.length}`);
-              _dumpMessagesAfterMmd(event.messages, "INJECTED", logger);
-            }
-          } else {
-            logger.debug?.(`[context-offload] after_tool_call MMD: file=${activeMmdFile} content is null`);
-          }
-        }
+        const changed = await maybeUpdateMmdInMessages(event.messages, stateManager, logger, getContextWindow, pluginConfig);
+        if (changed) _dumpMessagesAfterMmd(event.messages, "APPENDED", logger);
       } catch (err) {
         logger.warn(`[context-offload] after_tool_call MMD error: ${err}`);
       }

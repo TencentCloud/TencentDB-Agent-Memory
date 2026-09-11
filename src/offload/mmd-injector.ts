@@ -1,10 +1,8 @@
 /**
  * Unified MMD injector.
  *
- * Maintains a single marked message in event.messages containing the active
- * MMD (+ history MMDs). Used by both before_prompt_build (full inject after
- * L1.5 judgment) and after_tool_call (incremental update when L2 refreshes
- * the MMD file during the tool loop).
+ * Maintains one marked message containing the active MMD. It is replaced when
+ * task context changes and cleared as soon as it is no longer valid.
  *
  * The marker property `_mmdContextMessage` is used to locate the message for
  * replacement. L3 compression must skip messages carrying this marker.
@@ -70,26 +68,23 @@ export async function injectMmdIntoMessages(
   logger.debug?.(
     `[context-offload] mmd-injector inject: activeMmdText=${activeMmdText ? `${activeMmdText.length} chars` : "null"}, contextWindow=${contextWindow}`,
   );
+
   removeMmdMessages(messages);
-
   let totalMmdTokens = 0;
-
   if (activeMmdText) {
     const activeMsg: any = {
       role: "user",
       content: [{ type: "text", text: activeMmdText }],
       [MMD_MESSAGE_MARKER]: "active",
     };
-    const insertIdx = findActiveMmdInsertionPoint(messages);
-    messages.splice(insertIdx, 0, activeMsg);
-    totalMmdTokens += countTokens(activeMmdText);
+    messages.splice(findActiveMmdInsertionPoint(messages), 0, activeMsg);
+    totalMmdTokens = countTokens(activeMmdText);
   }
-
   stateManager.lastMmdInjectedTokens = totalMmdTokens;
 
   const activeMmd = stateManager.getActiveMmdFile();
   logger.debug?.(
-    `[context-offload] mmd-injector: injected active MMD into messages (${totalMmdTokens} tokens, file=${activeMmd})`,
+    `[context-offload] mmd-injector: injected active MMD (${totalMmdTokens} tokens, file=${activeMmd})`,
   );
 
   // Summary after active MMD injection (was full dump, now aggregated)
@@ -136,8 +131,12 @@ export async function maybeUpdateMmdInMessages(
   logger.debug?.(
     `[context-offload] mmd-injector maybeUpdate: injectionReady=${injectionReady}, activeMmdFile=${activeMmdFile ?? "null"}, msgs=${messages.length}`,
   );
-  if (!injectionReady) return false;
-  if (!activeMmdFile) return false;
+  if (!injectionReady || !activeMmdFile) {
+    const hadMmd = messages.some((message: any) => message[MMD_MESSAGE_MARKER]);
+    removeMmdMessages(messages);
+    stateManager.lastMmdInjectedTokens = 0;
+    return hadMmd;
+  }
 
   let mmdContent: string | null;
   try {
@@ -147,9 +146,17 @@ export async function maybeUpdateMmdInMessages(
     );
   } catch (e) {
     logger.debug?.(`[context-offload] mmd-injector maybeUpdate: readMmd error=${e}`);
-    return false;
+    const hadMmd = messages.some((message: any) => message[MMD_MESSAGE_MARKER]);
+    removeMmdMessages(messages);
+    stateManager.lastMmdInjectedTokens = 0;
+    return hadMmd;
   }
-  if (!mmdContent) return false;
+  if (!mmdContent) {
+    const hadMmd = messages.some((message: any) => message[MMD_MESSAGE_MARKER]);
+    removeMmdMessages(messages);
+    stateManager.lastMmdInjectedTokens = 0;
+    return hadMmd;
+  }
 
   const newFp = computeFingerprint(mmdContent);
   const lastFp = stateManager.getInjectedMmdVersion(activeMmdFile);
@@ -302,9 +309,7 @@ export function findHistoryMmdInsertionPoint(messages: any[]): number {
 
 function removeMmdMessages(messages: any[]): void {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i][MMD_MESSAGE_MARKER]) {
-      messages.splice(i, 1);
-    }
+    if (messages[i][MMD_MESSAGE_MARKER]) messages.splice(i, 1);
   }
 }
 
@@ -325,10 +330,7 @@ async function buildActiveMmdBlock(
   try {
     const mmdContent = await readMmd(stateManager.ctx, activeMmdFile);
     if (!mmdContent) return null;
-    stateManager.setInjectedMmdVersion(
-      activeMmdFile,
-      computeFingerprint(mmdContent),
-    );
+    const fingerprint = computeFingerprint(mmdContent);
     const metaMatch = mmdContent.match(/^%%\{\s*(.*?)\s*\}%%/);
     let taskGoal = "";
     if (metaMatch) {
@@ -339,6 +341,7 @@ async function buildActiveMmdBlock(
         /* ignore */
       }
     }
+    stateManager.setInjectedMmdVersion(activeMmdFile, fingerprint);
     const nodePattern = /\b(\d+-N\d+|N\d+)\b/g;
     const nodeIds: string[] = [];
     let match: RegExpExecArray | null;
@@ -358,9 +361,7 @@ async function buildActiveMmdBlock(
       "```",
       `标记为 "doing" 的节点是近期焦点（注：可能有延迟，下方的tool use未被统计，仅供参考），"done" 的已完成。请参考此保持方向感，避免重复已完成的工作。`,
       `</current_task_context>`,
-    ]
-      .filter((line) => line !== "")
-      .join("\n");
+    ].filter((line) => line !== "").join("\n");
   } catch (err) {
     logger.error(
       `[context-offload] mmd-injector: Error building active MMD block: ${err}`,
