@@ -46,7 +46,7 @@ tdai-memory-openclaw-plugin/
 最简单的开发闭环是先用 Docker 起一套完整三件套，再本地开发目标模块：
 
 ```bash
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/deploy/global-images
 cp .env.example .env && $EDITOR .env
 ./start-all.sh
@@ -58,9 +58,10 @@ cp .env.example .env && $EDITOR .env
 ## 提交流程
 
 1. Fork 仓库
-2. 从 `master` 或最新的 `develop_*` 分支切出 feature 分支
+2. 从计划提交到的目标分支切出 feature 分支。默认分支是
+   `feat/server_team`；只有维护者明确要求时才使用 `main` 或 `feat/server`
    ```bash
-   git checkout -b fix/xxx-issue
+   git switch -c fix/xxx-issue origin/feat/server_team
    ```
 3. 修改代码，跑相关测试
    ```bash
@@ -68,8 +69,8 @@ cp .env.example .env && $EDITOR .env
    npm test          # 或 pnpm test
    ```
 4. 提交（Conventional Commits + DCO 签名，见下文）
-5. 推到 fork，发起 PR 到 `develop_server_team` 或 `master`（按维护者最新
-   指示）
+5. 推到 fork，向同一基础分支发起 PR，通常是 `feat/server_team`（按维护者
+   最新指示）
 6. 通过 CI + Review 后合并
 
 ## Commit 规范
