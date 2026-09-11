@@ -1674,6 +1674,7 @@ export async function handleChatCompletions(
       modelId: effectiveModel,
       keyId,
       sessionKey,
+      compositeKey: sessionTurn.compositeKey,
       upstreamUrl: target.url,
       requestPath: c.req.path,
       traceId,
@@ -1986,6 +1987,17 @@ interface TapContext {
   modelId: string;
   keyId: string;
   sessionKey: string;
+  /**
+   * 带线程维度的存储键（`buildStoreSessionKey` 产物）。
+   *
+   * ⚠️ 埋点必须用它，不要去拼 `${agentSource}:${sessionKey}`：threadIsolation 开启时
+   * 真实键是 `agent:session:thread`，手拼会漏掉 `:threadId` 后缀，导致 model-intent
+   * 埋点与 session_init_logs / handler 的 composite 键对不上（设计文档 §2.1）。
+   *
+   * 声明为**必填**：新增 tap 上下文时由类型检查拦住，而不是靠人记得——这正是此前
+   * 命令层与埋点各自手拼、漏了也没人报错的根因。
+   */
+  compositeKey: string;
   upstreamUrl: string;
   traceId: string;
   forkTraceId: string;
@@ -2184,7 +2196,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         .map((acc) => ({ name: acc.functionName, arguments: acc.functionArguments }));
       emitModelIntentTelemetry({
         // 与 session_init_logs 对齐 compositeKey 形态
-        sessionKey: `${ctx.agentSource}:${sessionKey}`,
+        sessionKey: ctx.compositeKey,
         turnSeq: lf.turnSeq,
         spaceId: spaceId,
         userId: keyId,

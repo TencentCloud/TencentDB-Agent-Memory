@@ -1594,6 +1594,7 @@ export async function handleAnthropicMessages(
       modelId: effectiveModel,
       keyId,
       sessionKey,
+      compositeKey: sessionTurn.compositeKey,
       upstreamUrl: target.url,
       requestPath: c.req.path,
       traceId,
@@ -1997,6 +1998,11 @@ interface AnthropicTapContext {
   modelId: string;
   keyId: string;
   sessionKey: string;
+  /**
+   * 带线程维度的存储键（`buildStoreSessionKey` 产物）；埋点必须用它，勿手拼。
+   * 见 `handler.ts::TapContext` 的完整说明（为什么设为必填）。
+   */
+  compositeKey: string;
   upstreamUrl: string;
   requestPath: string;
   traceId: string;
@@ -2222,7 +2228,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
           .map(([, v]) => ({ name: v.name, arguments: v.inputJson || "{}" }));
         if (intents.length > 0) {
           emitModelIntentTelemetry({
-            sessionKey: `${ctx.agentSource}:${ctx.sessionKey}`,
+            sessionKey: ctx.compositeKey,
             turnSeq: ctx.lf.turnSeq,
             spaceId: ctx.spaceId,
             userId: ctx.keyId,
