@@ -144,6 +144,28 @@ export const coreCountRequestSchema = z.object({});
 export type CoreCountRequest = z.infer<typeof coreCountRequestSchema>;
 
 // ============================
+// Explicit memory write (host-native durable-memory ingest, #417)
+// ============================
+
+export const explicitMemoryWriteRequestSchema = z.object({
+  action: z.string().min(1),
+  target: z.string().min(1),
+  content: z.string().min(1).max(8192),
+  session_id: z.string().min(1).default(DEFAULT_ISOLATION_ID),
+  team_id: z.string().optional(),
+  user_id: z.string().optional(),
+  agent_id: z.string().optional(),
+  task_id: z.string().optional(),
+});
+export type ExplicitMemoryWriteRequest = z.infer<typeof explicitMemoryWriteRequestSchema>;
+
+export interface ExplicitMemoryWriteData {
+  stored: boolean;
+  memory_id?: string;
+  type?: string;
+}
+
+// ============================
 // Override: atomic response version exposure
 // ============================
 
