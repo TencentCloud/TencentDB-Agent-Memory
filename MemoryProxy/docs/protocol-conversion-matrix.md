@@ -10,10 +10,10 @@
 >     responses-sse-completion.test.ts 3；
 >   - 协议接线分支：另带 responses-chat-compat.test.ts 10（第一跳 Responses→Chat 的丢参计数 +
 >     上游拒收 response_format 时的重试判据）、
->     probe.test.ts 25（上游能力探测：注册表 / 判定 / 缓存 / 重探 / 变更告警）、
+>     probe.test.ts 30（上游能力探测：按协议选路 / 注册表完整性 / 按上游去重 / 缓存 / 重探 / 变更告警）、
 >     upstream-auth.test.ts 7（上游凭据取值顺序与启动期审计）、
->     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 14 个文件 / 175 用例；
->   - 两支合并：15 个文件 / 189 用例。
+>     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 14 个文件 / 180 用例；
+>   - 两支合并：15 个文件 / 194 用例。
 > 两支的 `npx tsc --noEmit` 均为 0 错误。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 
@@ -240,12 +240,12 @@ tokenizer + 4 × 消息数）：
 | chat-anthropic-role-rules.test.ts | 25 | 两个方向的角色与工具配对：Chat→Anthropic 的严格交替、tool_result 相邻配对；Anthropic→Chat 的悬空 tool_use 摘除、悬空 tool_result 降级（含图片保留）；消息形状兜底（首条 user / 空 content / 无 user 时兜底） |
 | injection-protocol-conversion.test.ts | 8 | 注入 × 转换接缝：注入恰好存活一次、落在可缓存前缀位、不泄漏 cache_control、转换确定性，含 Responses 合成体装配 |
 
-### 协议接线分支额外测试（该分支合计 14 个文件 / 175 用例）
+### 协议接线分支额外测试（该分支合计 14 个文件 / 180 用例）
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
 | token-estimate.test.ts | 7 | count_tokens 本地口径（正常/超长/异常输入归一，不抛错）+ 3 条口径回归（中文 100 字≈131、同字符数中文/ASCII 比值>8、英文 440 字≈97） |
 | protocol-errors.test.ts | 5 | 接线层协议错误/非流式路径（HTTP 状态拦截、错误体不进入转换器） |
 | upstream-auth.test.ts | 7 | 上游凭据取值顺序（agent.apiKey → upstream.apiKey → 客户端 key）、passthroughClientKey 显式透传、启动期审计的三类提示 |
-| probe.test.ts | 25 | autoDetect：原生协议注册表 + 配置出现 agent 泛化 + 显式 true/false 都跳过探测 + agents 缺省；能力回退时撤销上一轮开关、显式配置不被覆盖、三端点全不通保留旧结论、未过期缓存跳过探测、缓存损坏容错、定期重探启停 |
+| probe.test.ts | 30 | autoDetect：按协议选路（既有 4 个客户端 8 种能力组合与改造前逐组合一致）+ 注册表完整性（每个 kind 都声明合法原生协议）+ 未声明协议不给开关只告警 + 待探集合由注册表派生 + 显式 true/false 都跳过探测；同一上游多客户端只探一次（按 url 去重）；能力回退时撤销上一轮开关、显式配置不被覆盖、三端点全不通保留旧结论、未过期缓存跳过探测、缓存损坏容错、定期重探启停 |
 | responses-chat-compat.test.ts | 10 | 第一跳丢参计数：可完整映射的请求零丢弃；宿主侧 item（item_reference / local_shell_call / 未知类型归 other）与文件、音频 content part 按类型计数；`store` / `previous_response_id` / `include` / `reasoning` 等 Responses 独有顶层参数逐项计数；非 function 工具计数；上游拒收 `response_format` 时的重试判据 |
