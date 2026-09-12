@@ -6,8 +6,8 @@
  * 会话策略等）。改代码后没人记得同步，文档就会跟代码对不上——历史上已经发生过几次
  * （probe 12→17、接缝用例 7→8、role-rules 整节漏记）。这里把这类数字变成可校验的：
  *
- *   1. 读 `npm test` 留下的 .vitest-report.json，拿到每个测试文件的真实用例数
- *      （没有报告时自己跑一次 vitest，方便单独执行本脚本）；
+ *   1. 读同一次 `npm test`（posttest 阶段）留下的 .vitest-report.json，拿到每个测试文件的
+ *      真实用例数；单独执行本脚本时不信任工作区里的残留报告，自己跑一次 vitest；
  *   2. 扫 docs/**.md，凡「测试文件名 + 紧跟一个数字」的写法都当作一条声明；
  *   3. 文件不在当前分支（例如另一支 PR 才带的用例）→ 跳过；
  *      数字与实测不符 → 报错并逐条列出差异。
@@ -45,12 +45,22 @@ function collectDocFiles(dir) {
 
 function actualCounts() {
   let report = null;
-  if (existsSync(REPORT)) {
+  // 只有 posttest 阶段读到的那份报告才可信：它是同一次 `npm test` 刚写出来的。
+  // 单独执行本脚本（`npm run test:doc-claims` / `node scripts/qa/check-doc-claims.mjs`）时，
+  // 工作区里可能残留别的分支或上一次运行写下的 .vitest-report.json，读了会得到
+  // 「核对 7 条、跳过 30 条」式的假通过（实测：故意改错文档里的数字仍然报通过）。
+  // 所以单独执行时先删掉残留报告，再自己跑一次 vitest。
+  const fromPosttest = process.env.npm_lifecycle_event === "posttest";
+  if (!fromPosttest) rmSync(REPORT, { force: true });
+  if (fromPosttest && existsSync(REPORT)) {
     try {
       report = JSON.parse(readFileSync(REPORT, "utf8"));
     } catch {
       report = null;
     }
+    // 读完即删：该报告由同一次 `npm test` 生成，删除可避免下一次单独执行时
+    // 读到上一次运行或另一个分支留下的过期结果（曾导致校验假通过）。
+    rmSync(REPORT, { force: true });
   }
   if (!report) {
     // 单独跑本脚本时自己产报告；分支上还没有测试文件时 vitest 不写报告
