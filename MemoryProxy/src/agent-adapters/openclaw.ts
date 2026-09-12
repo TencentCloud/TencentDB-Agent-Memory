@@ -30,8 +30,23 @@
 import { defaultAdapter } from "./default.js";
 import type { AgentAdapter } from "./types.js";
 
-export const openclawAdapter: AgentAdapter = {
+/**
+ * 出站原生协议声明。
+ *
+ * `AgentAdapter.nativeProtocols` 由协议接线支（#1253）引入，本支的 base 上还没有这个
+ * 字段，因此这里用交叉类型显式带上；合入 #1253 后它就是 `nativeProtocols` 的一个普通
+ * 取值 —— 两个世界都能编译，上游能力探测（#1253）也都能读到。
+ */
+interface NativeChatProtocol {
+  readonly nativeProtocols: readonly ["chat"];
+}
+
+export const openclawAdapter: AgentAdapter & NativeChatProtocol = {
   agentKind: "openclaw",
+
+  // 出站是标准 OpenAI Chat Completions（见文件头调研结论）。不声明它，探测选路会
+  // 跳过该客户端（只在启动期打 upstream.probe.undeclared_protocol 告警）。
+  nativeProtocols: ["chat"],
 
   classifyRequest(_body?, _path?, _headers?) {
     return "main";
