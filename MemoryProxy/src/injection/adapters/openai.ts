@@ -51,7 +51,7 @@ export class OpenAIAdapter implements ProtocolAdapter {
     };
 
     // Add tools if present
-    if (ctx.tools && ctx.tools.length > 0) {
+    if (ctx.tools) {
       body.tools = ctx.tools.map((t) => this.serializeTool(t));
     }
 
@@ -61,6 +61,12 @@ export class OpenAIAdapter implements ProtocolAdapter {
   // ── Private: parse helpers ──────────────────────────────────────────────────
 
   private parseMessage(raw: unknown): ContextMessage {
+    const result = this.parseMessageInner(raw);
+    result.native = structuredClone(raw as Record<string, unknown>);
+    return result;
+  }
+
+  private parseMessageInner(raw: unknown): ContextMessage {
     const m = raw as Record<string, unknown>;
     const role = m.role as MessageRole;
     const blocks: ContextBlock[] = [];
@@ -97,7 +103,7 @@ export class OpenAIAdapter implements ProtocolAdapter {
               name: fn?.name ?? "unknown",
               arguments: fn?.arguments ?? "{}",
             }),
-            metadata: { tool_id: tc.id as string },
+            metadata: { tool_id: tc.id as string }, native: structuredClone(tc),
           });
         }
       }
@@ -126,6 +132,12 @@ export class OpenAIAdapter implements ProtocolAdapter {
   }
 
   private parseContentPart(part: Record<string, unknown>): ContextBlock {
+    const result = this.parseContentPartInner(part);
+    result.native = structuredClone(part);
+    return result;
+  }
+
+  private parseContentPartInner(part: Record<string, unknown>): ContextBlock {
     const type = part.type as string;
     switch (type) {
       case "text":
@@ -153,12 +165,21 @@ export class OpenAIAdapter implements ProtocolAdapter {
       name: (fn?.name as string) ?? (raw.name as string) ?? "unknown",
       description: (fn?.description as string) ?? (raw.description as string) ?? "",
       parameters: (fn?.parameters as Record<string, unknown>) ?? (raw.parameters as Record<string, unknown>) ?? {},
+      native: structuredClone(raw),
     };
   }
 
   // ── Private: serialize helpers ──────────────────────────────────────────────
 
   private serializeMessage(msg: ContextMessage): Record<string, unknown> {
+    const result = this.serializeMessageInner(msg);
+    const native = { ...msg.native };
+    delete native.content;
+    delete native.tool_calls;
+    return { ...native, ...result };
+  }
+
+  private serializeMessageInner(msg: ContextMessage): Record<string, unknown> {
     if (msg.role === "tool") {
       // Serialize tool role message
       const toolResult = msg.blocks.find((b) => b.type === "tool_result");
@@ -171,14 +192,16 @@ export class OpenAIAdapter implements ProtocolAdapter {
 
     if (msg.role === "assistant") {
       // Assistant can have text + tool_calls
-      const textBlocks = msg.blocks.filter((b) => b.type === "text");
+      const contentBlocks = msg.blocks.filter((b) => b.type !== "tool_use");
       const toolUseBlocks = msg.blocks.filter((b) => b.type === "tool_use");
 
       const result: Record<string, unknown> = { role: "assistant" };
 
       // Content
-      if (textBlocks.length > 0) {
-        result.content = textBlocks.map((b) => b.content).join("");
+      if (Array.isArray(msg.native?.content) || contentBlocks.some(b => b.type !== "text")) {
+        result.content = contentBlocks.map(b => this.serializeContentPart(b));
+      } else if (contentBlocks.length > 0) {
+        result.content = contentBlocks.map((b) => b.content).join("");
       } else {
         result.content = null;
       }
@@ -188,9 +211,11 @@ export class OpenAIAdapter implements ProtocolAdapter {
         result.tool_calls = toolUseBlocks.map((b) => {
           const parsed = JSON.parse(b.content) as { name: string; arguments: string };
           return {
+            ...b.native,
             id: b.metadata?.tool_id ?? "",
             type: "function",
             function: {
+              ...(b.native?.function as Record<string, unknown>),
               name: parsed.name,
               arguments: typeof parsed.arguments === "string"
                 ? parsed.arguments
@@ -213,7 +238,7 @@ export class OpenAIAdapter implements ProtocolAdapter {
     const textBlocks = msg.blocks.filter((b) => b.type === "text");
     const otherBlocks = msg.blocks.filter((b) => b.type !== "text");
 
-    if (otherBlocks.length === 0) {
+    if (otherBlocks.length === 0 && !Array.isArray(msg.native?.content) && !textBlocks.some(b => b.native)) {
       // Simple text-only message
       return {
         role: msg.role,
@@ -222,33 +247,31 @@ export class OpenAIAdapter implements ProtocolAdapter {
     }
 
     // Mixed content: serialize as array
-    const parts: Record<string, unknown>[] = [];
-    for (const block of msg.blocks) {
-      switch (block.type) {
-        case "text":
-          parts.push({ type: "text", text: block.content });
-          break;
-        case "image":
-          parts.push({
-            type: "image_url",
-            image_url: { url: block.content, detail: block.metadata?.detail },
-          });
-          break;
-        default:
-          parts.push({ type: block.type, content: block.content, ...block.metadata });
-          break;
-      }
-    }
+    const parts = msg.blocks.map(block => this.serializeContentPart(block));
 
     return { role: msg.role, content: parts };
   }
 
+  private serializeContentPart(block: ContextBlock): Record<string, unknown> {
+    if (block.type === "text") return { ...block.native, type: "text", text: block.content };
+    if (block.type === "image") return {
+      ...block.native, type: "image_url",
+      image_url: { ...(block.native?.image_url as Record<string, unknown>), url: block.content, ...(block.metadata?.detail !== undefined ? { detail: block.metadata.detail } : {}) },
+    };
+    if (block.type === "custom") return JSON.parse(block.content) as Record<string, unknown>;
+    throw new Error(`Unsupported OpenAI injection content block: ${block.type}`);
+  }
+
   private serializeTool(tool: AgentTool): Record<string, unknown> {
+    if (tool.native && tool.native.type !== "function") return { ...tool.native };
+    const nativeFunction = tool.native?.function as Record<string, unknown> | undefined;
     return {
+      ...tool.native,
       type: "function",
       function: {
+        ...nativeFunction,
         name: tool.name,
-        description: tool.description,
+        ...(!nativeFunction || "description" in nativeFunction || tool.description !== "" ? { description: tool.description } : {}),
         parameters: tool.parameters,
       },
     };
