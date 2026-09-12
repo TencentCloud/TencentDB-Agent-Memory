@@ -1,0 +1,53 @@
+{
+  "description": "Automatic recall and capture through TencentDB Agent Memory",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hook.mjs",
+              "recall"
+            ],
+            "timeout": 20,
+            "statusMessage": "Recalling relevant memory..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hook.mjs",
+              "capture"
+            ],
+            "timeout": 20,
+            "statusMessage": "Saving turn to memory..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hook.mjs",
+              "session-end"
+            ],
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

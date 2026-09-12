@@ -380,10 +380,18 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: stable=${(result.appendSystemContext?.length ?? 0)} chars, ` +
+      `dynamic=${(result.prependContext?.length ?? 0)} chars`
+    );
 
     const response: RecallResponse = {
+      // Keep the legacy field byte-for-byte compatible for Hermes and other
+      // existing Gateway consumers. New adapters can consume both explicit
+      // fields and preserve all recall layers.
       context: result.appendSystemContext ?? "",
+      prepend_context: result.prependContext,
+      append_system_context: result.appendSystemContext,
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
@@ -399,15 +407,37 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
+    const messages = body.messages ?? [
+      { role: "user", content: body.user_content },
+      { role: "assistant", content: body.assistant_content },
+    ];
+    const explicitTimestamps = messages
+      .map((message) =>
+        message && typeof message === "object" && typeof (message as { timestamp?: unknown }).timestamp === "number"
+          ? (message as { timestamp: number }).timestamp
+          : undefined
+      )
+      .filter((timestamp): timestamp is number => Number.isFinite(timestamp));
+    const earliestExplicitTimestamp = explicitTimestamps.reduce(
+      (earliest, timestamp) => Math.min(earliest, timestamp),
+      Number.POSITIVE_INFINITY
+    );
+    const now = Date.now();
+    const earliestTimestamp = Number.isFinite(earliestExplicitTimestamp)
+      ? Math.min(earliestExplicitTimestamp, now)
+      : now;
+
     const result = await this.core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
+      messages,
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      // `TdaiCore` uses startedAt as the cold-start timestamp cursor and keeps
+      // only messages with timestamp > cursor. Start one millisecond before
+      // the earliest explicit timestamp, or before "now" when the recorder
+      // will assign missing timestamps, so cold-start messages are not dropped.
+      startedAt: earliestTimestamp - 1,
     });
     const elapsed = Date.now() - startMs;
 

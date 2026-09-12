@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "tencentdb-agent-memory",
+  "displayName": "TencentDB Agent Memory",
+  "version": "0.3.6",
+  "description": "Persistent, layered memory for Claude Code through the TencentDB Agent Memory Gateway",
+  "author": {
+    "name": "TencentCloud"
+  },
+  "homepage": "https://github.com/TencentCloud/TencentDB-Agent-Memory",
+  "repository": "https://github.com/TencentCloud/TencentDB-Agent-Memory",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "claude-code",
+    "agent-memory",
+    "tencentdb"
+  ]
+}
