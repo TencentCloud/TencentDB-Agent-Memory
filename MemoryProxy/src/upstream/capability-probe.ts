@@ -286,13 +286,14 @@ const EXPLICIT_FLAGS = [
 ] as const;
 
 /**
- * 记录"哪些转换开关是自动探测写进去的"。
- * 重探时要先把上一轮写进去的项撤销，否则能力回退后旧开关会一直生效；
- * 显式配置的开关不在此列，任何时候都不动它。
+ * 上一次探测得到的能力：用于能力变更检测、"三端点全不通"时保留旧结论，
+ * 以及**请求期决策**（`conversionEnabled` 按 url+凭据+模型 查它）。
+ *
+ * 注意（2026-09-12 起）：探测**不再把结论写回 `config.upstream.agents`**。
+ * 早期实现把探测结果写成 per-agent 转换开关，于是"配置对象"同时承担了
+ * 用户意图与运行时状态两件事，重探还要额外做一遍撤销。现在探测只维护这份
+ * 运行时能力表，决策在请求期由 (请求协议, 上游能力) 现算，配置保持只读。
  */
-const AUTO_APPLIED = new Map<string, Set<string>>();
-
-/** 上一次探测得到的能力：用于能力变更检测，以及"三端点全不通"时保留旧结论。 */
 const LAST_CAPS = new Map<string, UpstreamCapabilities>();
 
 /** 单个客户端的协议 × 上游能力 → 转换标志（原生协议优先，direct 不设标志）。 */
@@ -306,6 +307,49 @@ export function resolveAgentModesFor(
     if (route.kind === "convert") out[route.flag] = true;
   }
   return out;
+}
+
+/** 该 agent 的上游最近一次探测到的能力（按 `url + 凭据 + 探测模型` 查），没探过返回 null。 */
+export function probedCapsFor(
+  config: ProxyConfig,
+  entry: unknown,
+): UpstreamCapabilities | null {
+  const e = (entry ?? {}) as { url?: unknown; apiKey?: unknown };
+  const url = typeof e.url === "string" && e.url.length > 0 ? e.url : config.upstream.url;
+  const apiKey =
+    typeof e.apiKey === "string" && e.apiKey.length > 0 ? e.apiKey : config.upstream.apiKey;
+  const probeModel = config.upstream.autoDetect?.probeModel ?? "ping";
+  return LAST_CAPS.get(probeGroupKey(url, probeModel, apiKey)) ?? null;
+}
+
+/**
+ * **请求期**决策入口：这个请求要不要启用 `flag` 对应的转换方向。
+ *
+ * 决策输入只有三样，与"客户端叫什么名字"无关：
+ *   ① `client` —— 请求所属协议（由路由/ handler 决定，见 server.ts 的端点绑定）；
+ *   ② 该 agent 上游探测到的能力（`probedCapsFor`，运行时表，不写配置）；
+ *   ③ 用户的**显式覆盖**：`upstream.agents[agent]` 里手写的转换开关。
+ *
+ * 判定顺序（与改造前的语义逐条对齐）：
+ *   1. 显式写了 `flag: true/false` → 直接照办（显式覆盖优先，false 表示明确禁用）；
+ *   2. 该 agent 显式配过**任一**转换开关 → 完全按配置走，不做自动决策；
+ *   3. 都没配 → 用 ② 的能力表现算：`resolveRoute(client, caps)` 命中这个 flag 才算启用；
+ *   4. 能力表为空（autoDetect 未开、或这台上游没探过）→ false，即保持"不转换"的历史行为。
+ */
+export function conversionEnabled(
+  config: ProxyConfig,
+  entry: unknown,
+  client: NativeProtocol,
+  flag: TransformFlag,
+): boolean {
+  const flags = (entry ?? {}) as Record<string, unknown>;
+  if (flags[flag] === true) return true;
+  if (flags[flag] === false) return false;
+  if (EXPLICIT_FLAGS.some((f) => flags[f] !== undefined)) return false;
+  const caps = probedCapsFor(config, entry);
+  if (!caps) return false;
+  const route = resolveRoute(client, caps);
+  return route.kind === "convert" && route.flag === flag;
 }
 
 /** 兼容旧测试/调用方：按三个内置 agent 返回模式表。 */
@@ -343,8 +387,8 @@ export function unroutableNativeProtocols(
  * nativeProtocols 就自动进入探测范围。多个客户端共用同一上游时，真正的探测请求
  * 由 applyAutoDetect 按 `url + 凭据 + 模型` 去重，客户端数量增长不放大探测成本。
  *
- * 注意"显式"的口径：上一轮由探测自己写进去的开关不算显式，否则第二轮重探
- * 会把所有 agent 都判成"已配置"而直接跳过。
+ * 注意"显式"的口径：只认**用户写在配置里**的开关。探测自 2026-09-12 起不再回写
+ * 配置，所以这里不需要再排除"上一轮探测写进去的项"。
  */
 export function agentsToAutoDetect(config: ProxyConfig): string[] {
   const agents = new Set<string>();
@@ -355,10 +399,7 @@ export function agentsToAutoDetect(config: ProxyConfig): string[] {
   return [...agents].filter((agent) => {
     const entry = config.upstream.agents?.[agent];
     if (!entry) return true;
-    const applied = AUTO_APPLIED.get(agent);
-    return !EXPLICIT_FLAGS.some(
-      (f) => entry[f as keyof AgentUpstreamEntry] !== undefined && !applied?.has(f),
-    );
+    return !EXPLICIT_FLAGS.some((f) => entry[f as keyof AgentUpstreamEntry] !== undefined);
   });
 }
 
@@ -470,24 +511,14 @@ export async function applyAutoDetect(
     }
   }
 
-  // ③ 逐个客户端落开关。
+  // ③ 逐个客户端"算而不写"：按 (客户端协议, 上游能力) 得出本轮本该启用的方向，
+  //    只用于日志；配置对象保持只读，真正的判定发生在请求期（conversionEnabled）。
   for (const [groupKey, group] of groups) {
     const { caps, fromCache } = capsByGroup.get(groupKey) as {
       caps: UpstreamCapabilities;
       fromCache: boolean;
     };
     for (const agent of group.agents) {
-      // 先撤销上一轮由探测写入的开关：只有显式配置的才留下（显式优先），
-      // 否则能力回退后旧开关会一直生效。
-      const appliedBefore = AUTO_APPLIED.get(agent);
-      const existing = agents[agent];
-      if (appliedBefore && appliedBefore.size > 0 && existing) {
-        for (const key of appliedBefore) {
-          delete (existing as unknown as Record<string, unknown>)[key];
-        }
-      }
-      AUTO_APPLIED.delete(agent);
-
       if (nativeProtocolsOf(agent).length === 0) {
         // 没声明协议的客户端不会产生任何开关：明确说出来，别让它看起来"探测过了"。
         log.warn("upstream.probe.undeclared_protocol", {
@@ -497,20 +528,9 @@ export async function applyAutoDetect(
         });
       }
 
-      const mode = resolveAgentModesFor(agent, caps);
-      const merged: AgentUpstreamEntry = { ...(agents[agent] ?? {}) };
-      const applied = new Set<string>();
-      for (const [k, v] of Object.entries(mode)) {
-        if (v === true && merged[k as keyof AgentUpstreamEntry] === undefined) {
-          (merged as unknown as Record<string, unknown>)[k] = true;
-          applied.add(k);
-        }
-      }
-      // 只有真的写了开关、或该客户端本来就有配置条目时才写回：否则"探测覆盖到的
-      // 内置客户端"会以空条目的形式出现在 config.upstream.agents 里，污染启动期
-      // 的凭据审计输出。
-      if (applied.size > 0 || agents[agent]) agents[agent] = merged;
-      if (applied.size > 0) AUTO_APPLIED.set(agent, applied);
+      // 本轮该启用的方向（只算不写）。显式配置过的 agent 不在探测集合里，
+      // 所以这里算出来的就是"自动决策结果"。
+      const wouldApply = Object.keys(resolveAgentModesFor(agent, caps));
 
       log.info("upstream.probe", {
         agent,
@@ -519,7 +539,8 @@ export async function applyAutoDetect(
         chat: caps.chat,
         responses: caps.responses,
         anthropic: caps.anthropic,
-        flags: Object.keys(merged).filter((k) => (merged as unknown as Record<string, unknown>)[k]).join(","),
+        // 语义变更（2026-09-12）：这是"请求期会按协议启用的方向"，不再写进配置。
+        wouldApply: wouldApply.join(","),
       });
       const unroutable = unroutableNativeProtocols(agent, caps);
       if (unroutable.length > 0) {
@@ -571,6 +592,5 @@ export function startAutoDetectLoop(config: ProxyConfig): AutoDetectLoop | null 
 
 /** 测试用：清空进程内的"探测写入的开关"与"上一次能力"记录。 */
 export function __resetAutoDetectState(): void {
-  AUTO_APPLIED.clear();
   LAST_CAPS.clear();
 }

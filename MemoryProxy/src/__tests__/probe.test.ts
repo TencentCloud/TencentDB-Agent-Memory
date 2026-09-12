@@ -5,6 +5,7 @@ import {
   agentsToAutoDetect,
   unroutableNativeProtocols,
   ALL_PROTOCOLS,
+  conversionEnabled,
 } from "../upstream/capability-probe.js";
 import { KNOWN_AGENT_KINDS, resolveAgentAdapter } from "../agent-adapters/index.js";
 import { log } from "../report/log.js";
@@ -377,20 +378,25 @@ describe("applyAutoDetect（撤销 / 变更告警 / 缓存）", () => {
   const agentsOf = (config: never) =>
     (config as { upstream: { agents: Record<string, Record<string, unknown>> } }).upstream.agents;
 
-  it("能力回退时撤销上一轮由探测写入的开关，并计入变更计数", async () => {
+  it("能力回退时请求期决策随之翻转（配置不再被探测写入），并计入变更计数", async () => {
     __resetAutoDetectState();
     resetProbeStats();
     const config = makeConfig({ enabled: true, timeoutMs: 50 });
+    const codexEntry = () => agentsOf(config).codex;
 
     installFetch({ "/v1/messages": 200 }); // 上游仅支持 Anthropic
     await applyAutoDetect(config);
-    expect(agentsOf(config).codex.responsesToAnthropic).toBe(true);
+    expect(conversionEnabled(config, codexEntry(), "responses", "responsesToAnthropic")).toBe(true);
+    expect(conversionEnabled(config, codexEntry(), "responses", "chatCompletions")).toBe(false);
 
     installFetch({ "/chat/completions": 200 }); // 上游改为仅支持 Chat
     await applyAutoDetect(config, { useCache: false });
-    const codex = agentsOf(config).codex;
-    expect(codex.responsesToAnthropic).toBeUndefined(); // 旧开关被撤销
-    expect(codex.chatCompletions).toBe(true); // 新开关写入
+    // 决策翻转：不再走 responsesToAnthropic，改走 chatCompletions
+    expect(conversionEnabled(config, codexEntry(), "responses", "responsesToAnthropic")).toBe(false);
+    expect(conversionEnabled(config, codexEntry(), "responses", "chatCompletions")).toBe(true);
+    // 配置对象保持只读：探测不再往里写开关
+    expect(agentsOf(config).codex?.responsesToAnthropic).toBeUndefined();
+    expect(agentsOf(config).codex?.chatCompletions).toBeUndefined();
     expect(probeStatsToPrometheus()).toContain('tdai_upstream_probe_changes_total{agent="codex"}');
   });
 
@@ -418,11 +424,12 @@ describe("applyAutoDetect（撤销 / 变更告警 / 缓存）", () => {
 
     installFetch({ "/v1/messages": 200 });
     await applyAutoDetect(config);
-    expect(agentsOf(config).codex.responsesToAnthropic).toBe(true);
+    expect(conversionEnabled(config, agentsOf(config).codex, "responses", "responsesToAnthropic")).toBe(true);
 
     installFetch({}); // 全部 404（更像是上游临时不可用）
     await applyAutoDetect(config, { useCache: false });
-    expect(agentsOf(config).codex.responsesToAnthropic).toBe(true); // 结论未被改坏
+    // 结论未被改坏：仍按上一次的能力表决策
+    expect(conversionEnabled(config, agentsOf(config).codex, "responses", "responsesToAnthropic")).toBe(true);
     expect(probeStatsToPrometheus()).toContain("tdai_upstream_probe_failures_total");
   });
 
@@ -449,7 +456,11 @@ describe("applyAutoDetect（撤销 / 变更告警 / 缓存）", () => {
       const secondCalls = installFetch({ "/v1/messages": 200 });
       await applyAutoDetect(restarted);
       expect(secondCalls).toEqual([]); // 完全走缓存
-      expect(agentsOf(restarted).codex.responsesToAnthropic).toBe(true);
+      // 缓存不仅省掉探测请求，也要能支撑请求期决策（能力表从缓存水合）
+      expect(
+        conversionEnabled(restarted, agentsOf(restarted).codex, "responses", "responsesToAnthropic"),
+      ).toBe(true);
+      expect(agentsOf(restarted).codex?.responsesToAnthropic).toBeUndefined(); // 配置仍是只读的
       expect(probeStatsToPrometheus()).toContain("tdai_upstream_probe_cache_hits_total");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -582,6 +593,72 @@ describe("applyAutoDetect（撤销 / 变更告警 / 缓存）", () => {
     expect(warns).toContain("upstream.probe.undeclared_protocol");
     // 未声明协议 ⇒ 不写开关（保持现状），也不做"无路可走"判定
     expect(agentsOf(config)["my-agent"]?.chatToAnthropic).toBeUndefined();
-    expect(warns).not.toContain("upstream.probe.unroutable");
+      expect(warns).not.toContain("upstream.probe.unroutable");
+    });
+  });
+
+describe("conversionEnabled（请求期决策：看协议与上游能力，不看 agent 名字）", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    __resetAutoDetectState();
+    resetProbeStats();
+  });
+
+  /** 造一个"没写任何转换开关"的配置——自动决策只在没有显式配置时生效。 */
+  const bareConfig = (agents: Record<string, Record<string, unknown>> = {}) =>
+    ({
+      upstream: {
+        url: "https://up.example.com/v1",
+        apiKey: "k",
+        agents,
+        autoDetect: { enabled: true, timeoutMs: 50 },
+      },
+    }) as never;
+
+  const stubFetch = (bySuffix: Record<string, number>) => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      for (const [suffix, status] of Object.entries(bySuffix)) {
+        if (url.endsWith(suffix)) return new Response("{}", { status });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+  };
+
+  it("显式 true / false 覆盖自动决策", () => {
+    const on = bareConfig({ codex: { responsesToAnthropic: true } });
+    expect(
+      conversionEnabled(on, (on as any).upstream.agents.codex, "responses", "responsesToAnthropic"),
+    ).toBe(true);
+    const off = bareConfig({ codex: { responsesToAnthropic: false } });
+    expect(
+      conversionEnabled(off, (off as any).upstream.agents.codex, "responses", "responsesToAnthropic"),
+    ).toBe(false);
+  });
+
+  it("该 agent 配过任一开关，就完全按配置走（不再自动补别的方向）", () => {
+    const c = bareConfig({ codex: { chatCompletions: false } });
+    expect(
+      conversionEnabled(c, (c as any).upstream.agents.codex, "responses", "responsesToAnthropic"),
+    ).toBe(false);
+  });
+
+  it("没有显式配置：同一上游、不同请求协议得到不同答案", async () => {
+    __resetAutoDetectState();
+    const c = bareConfig();
+    stubFetch({ "/v1/messages": 200 }); // 上游仅支持 Anthropic
+    await applyAutoDetect(c);
+    const entry = (c as any).upstream.agents?.codex; // 可能是 undefined——决策不依赖配置条目
+    expect(conversionEnabled(c, entry, "responses", "responsesToAnthropic")).toBe(true);
+    expect(conversionEnabled(c, entry, "chat", "chatToAnthropic")).toBe(true);
+    expect(conversionEnabled(c, entry, "responses", "chatCompletions")).toBe(false);
+  });
+
+  it("没探测过（autoDetect 未开或未跑）＝保持历史行为：不转换", () => {
+    __resetAutoDetectState();
+    const c = bareConfig();
+    expect(conversionEnabled(c, undefined, "responses", "responsesToAnthropic")).toBe(false);
+    expect(conversionEnabled(c, undefined, "chat", "chatToAnthropic")).toBe(false);
   });
 });

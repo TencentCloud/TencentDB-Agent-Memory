@@ -59,6 +59,7 @@ import {
 import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
 import { resolveUpstreamApiKey } from "./upstream/auth.js";
+import { conversionEnabled } from "./upstream/capability-probe.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
@@ -276,7 +277,7 @@ function buildUpstreamHeaders(
   // cost-guard's `target.authHeaders` still gets to override everything.
   if (effectiveApiKey && !target.authHeaders) {
     const agent = c.req.path.split("/")[1] ?? "codebuddy";
-    if (config.upstream.agents[agent]?.chatToAnthropic === true) {
+  if (conversionEnabled(config, config.upstream.agents[agent], "chat", "chatToAnthropic")) {
       // TRACK 05A：转成 Anthropic 后上游要 x-api-key + anthropic-version。
       headers["x-api-key"] = effectiveApiKey;
       headers["anthropic-version"] = "2023-06-01";
@@ -1350,7 +1351,14 @@ export async function handleChatCompletions(
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
   let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
-  if (config.upstream.agents[agentFromPath ?? ""]?.chatToAnthropic === true) {
+  if (
+    conversionEnabled(
+      config,
+      config.upstream.agents[agentFromPath ?? ""],
+      "chat",
+      "chatToAnthropic",
+    )
+  ) {
     forwardEndpoint = "/v1/messages";
   }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
@@ -1510,7 +1518,7 @@ export async function handleChatCompletions(
 
   let upstreamBody = buildUpstreamBody(body, target);
   // TRACK 05A：WorkBuddy/Chat 客户端指向 Anthropic 风格上游时，Chat 请求 → Anthropic 后再转发。
-  if (config.upstream.agents[agentSource]?.chatToAnthropic === true) {
+  if (conversionEnabled(config, config.upstream.agents[agentSource], "chat", "chatToAnthropic")) {
     upstreamBody = chatToAnthropicReq(upstreamBody);
     pipe.info("PROTOCOL", "workbuddy chat→anthropic (chatToAnthropic)");
   }
@@ -1588,7 +1596,12 @@ export async function handleChatCompletions(
   const effectiveModel = retried && target.retryTarget
     ? target.retryTarget.model
     : target.model;
-  const chatToAnthropicOn = config.upstream.agents[agentSource]?.chatToAnthropic === true;
+  const chatToAnthropicOn = conversionEnabled(
+    config,
+    config.upstream.agents[agentSource],
+    "chat",
+    "chatToAnthropic",
+  );
 
   // A retry falls back to the model the client asked for, so the request ends
   // up costing what it would have cost unrouted — no saving to attribute.

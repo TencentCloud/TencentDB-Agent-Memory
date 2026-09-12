@@ -69,6 +69,7 @@ import {
 import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
 import { resolveUpstreamApiKey } from "./upstream/auth.js";
+import { conversionEnabled } from "./upstream/capability-probe.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -1090,8 +1091,8 @@ async function forwardToUpstream(
   // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
   // messages/chat_completions，不支持 /responses，此处允许按 agent 覆盖。
   const agentUpstreamEntry = config.upstream.agents?.["codex"];
-  const codexToAnthropic = agentUpstreamEntry?.responsesToAnthropic === true;
-  const codexToChat = agentUpstreamEntry?.chatCompletions === true;
+  const codexToAnthropic = conversionEnabled(config, agentUpstreamEntry, "responses", "responsesToAnthropic");
+  const codexToChat = conversionEnabled(config, agentUpstreamEntry, "responses", "chatCompletions");
   let outboundBody: Record<string, unknown> = body;
   let outboundEndpoint = c.req.path;
   if (codexToAnthropic) {

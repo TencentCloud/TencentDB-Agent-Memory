@@ -68,6 +68,7 @@ import {
 import { toAnthropicErrorBody } from "./upstream/protocol-errors.js";
 import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
 import { resolveUpstreamApiKey } from "./upstream/auth.js";
+import { conversionEnabled } from "./upstream/capability-probe.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
 import { resolveAgentAdapter } from "./agent-adapters/index.js";
@@ -355,8 +356,8 @@ function buildUpstreamHeaders(
   if (effectiveApiKey && !target.authHeaders) {
     const agent = c.req.path.split("/")[1] ?? "claude-code";
     if (
-      config.upstream.agents[agent]?.anthropicToChat === true ||
-      config.upstream.agents[agent]?.anthropicToResponses === true
+      conversionEnabled(config, config.upstream.agents[agent], "anthropic", "anthropicToChat") ||
+      conversionEnabled(config, config.upstream.agents[agent], "anthropic", "anthropicToResponses")
     ) {
       // 转成 Chat / Responses 后上游要 OpenAI 风格鉴权（Bearer，无 anthropic-version）。
       headers["authorization"] = `Bearer ${effectiveApiKey}`;
@@ -1258,9 +1259,9 @@ export async function handleAnthropicMessages(
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
   let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/messages";
-  if (agentUpstreamEntry?.anthropicToChat === true) {
+  if (conversionEnabled(config, agentUpstreamEntry, "anthropic", "anthropicToChat")) {
     forwardEndpoint = "/chat/completions";
-  } else if (agentUpstreamEntry?.anthropicToResponses === true) {
+  } else if (conversionEnabled(config, agentUpstreamEntry, "anthropic", "anthropicToResponses")) {
     forwardEndpoint = "/responses";
   }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
@@ -1439,10 +1440,10 @@ export async function handleAnthropicMessages(
   // ── 协议接线：Claude Code（Anthropic 客户端）→ Chat / Responses 风格上游 ──
   const agentUpstream = config.upstream.agents[agentSource];
   let convertedUpstreamBody = upstreamBody;
-  if (agentUpstream?.anthropicToChat === true) {
+  if (conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat")) {
     convertedUpstreamBody = anthropicToChatReq(upstreamBody);
     pipe.info("PROTOCOL", "claude-code anthropic→chat (anthropicToChat)");
-  } else if (agentUpstream?.anthropicToResponses === true) {
+  } else if (conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses")) {
     convertedUpstreamBody = anthropicToResponsesReq(upstreamBody);
     pipe.info("PROTOCOL", "claude-code anthropic→responses (anthropicToResponses)");
   }
@@ -1468,7 +1469,8 @@ export async function handleAnthropicMessages(
   }
 
   const retryBody = sanitizeThinkingBlocks(
-    agentUpstream?.anthropicToChat === true || agentUpstream?.anthropicToResponses === true
+    conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat") ||
+      conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses")
       ? convertedUpstreamBody
       : body,
   ).body;
@@ -1527,7 +1529,8 @@ export async function handleAnthropicMessages(
     ...(retried ? { retrySuccess: true } : {}),
   };
   const convertedUpstream =
-    agentUpstream?.anthropicToChat === true || agentUpstream?.anthropicToResponses === true;
+    conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat") ||
+    conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses");
 
   // ── Streaming response (Anthropic SSE) ──────────────────────────────────
   if (isStream) {
@@ -1576,9 +1579,9 @@ export async function handleAnthropicMessages(
     }
 
     const upstreamStream =
-      agentUpstream?.anthropicToChat === true
+      conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat")
         ? upstreamResp.body.pipeThrough(createChatSseToAnthropicSse({ model: effectiveModel }))
-        : agentUpstream?.anthropicToResponses === true
+        : conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses")
           ? upstreamResp.body.pipeThrough(createResponsesSseToAnthropicSse({ model: effectiveModel }))
           : upstreamResp.body;
     const [rawClientStream, tapStream] = upstreamStream.tee();
@@ -1632,13 +1635,13 @@ export async function handleAnthropicMessages(
     } else {
       try {
         const upstreamJson = JSON.parse(respText) as Record<string, unknown>;
-        const anthJson = agentUpstream?.anthropicToChat === true
+        const anthJson = conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat")
           ? chatJsonToAnthropicJson(upstreamJson)
           : responsesJsonToAnthropicJson(upstreamJson);
         respText = JSON.stringify(anthJson);
         pipe.info(
           "PROTOCOL",
-          `upstream ${agentUpstream?.anthropicToChat === true ? "chat" : "responses"} → anthropic (non-stream)`,
+          `upstream ${conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat") ? "chat" : "responses"} → anthropic (non-stream)`,
         );
       } catch {
         // 非 JSON / 错误体：原样透传，由上层错误处理。

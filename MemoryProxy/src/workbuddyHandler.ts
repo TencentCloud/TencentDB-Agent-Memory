@@ -69,6 +69,7 @@ import {
 } from "./common/responses-anthropic-compat.js";
 import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
+import { conversionEnabled } from "./upstream/capability-probe.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 
 // ── Handler-level constants ──────────────────────────────────────────────────
@@ -493,8 +494,8 @@ async function forwardToUpstream(
     };
   }).agents?.workbuddy;
   const upstreamBase = ((perAgent?.url ?? config.upstream.url ?? "") as string).replace(/\/$/, "");
-  const wbToAnthropic = perAgent?.responsesToAnthropic === true;
-  const wbToChat = perAgent?.chatCompletions === true;
+  const wbToAnthropic = conversionEnabled(config, perAgent, "responses", "responsesToAnthropic");
+  const wbToChat = conversionEnabled(config, perAgent, "responses", "chatCompletions");
   let outboundBody: Record<string, unknown> = body;
   let upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
   if (wbToAnthropic) {
