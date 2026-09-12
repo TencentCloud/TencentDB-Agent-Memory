@@ -6,7 +6,6 @@
 __tests__/
 
 # 开发文档与辅助
-docs/
 benchmark-runs/
 workspace/
 
