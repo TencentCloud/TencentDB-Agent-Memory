@@ -58,7 +58,11 @@ async function fsReaddir(absDir: string, suffix: string): Promise<string[]> {
  * The index is written exclusively by syncSceneIndex() (engineering side).
  * The LLM is sandboxed to scene_blocks/ and cannot access this file.
  */
-export async function readSceneIndex(dataDir: string, storage?: StorageAdapter): Promise<SceneIndexEntry[]> {
+export async function readSceneIndex(
+  dataDir: string,
+  storage?: StorageAdapter,
+  options: { strict?: boolean } = {},
+): Promise<SceneIndexEntry[]> {
   // P2-D2: rowfs 模式索引实时派生自 L2 行，不读 sidecar 文件。
   const derivable = asSceneIndexDerivable(storage);
   if (derivable) return derivable.deriveSceneIndex();
@@ -68,19 +72,43 @@ export async function readSceneIndex(dataDir: string, storage?: StorageAdapter):
       raw = await storage.readFile(StoragePaths.sceneIndex);
     } else {
       const path = await import("node:path");
-      raw = await fsReadFile(path.default.join(dataDir, ".metadata", "scene_index.json"));
+      const indexPath = path.default.join(dataDir, ".metadata", "scene_index.json");
+      if (options.strict) {
+        const fs = await import("node:fs/promises");
+        try {
+          raw = await fs.default.readFile(indexPath, "utf-8");
+        } catch (error) {
+          if (isNotFound(error)) raw = null;
+          else throw error;
+        }
+      } else {
+        raw = await fsReadFile(indexPath);
+      }
     }
-    if (!raw) return [];
+    if (raw === null) return [];
+    if (raw.length === 0 && !options.strict) return [];
 
     const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) {
+      if (options.strict) throw new Error("Scene index must be a JSON array");
+      return [];
+    }
 
     const entries: SceneIndexEntry[] = [];
     for (const item of parsed) {
-      if (!item || typeof item !== "object") continue;
+      if (!item || typeof item !== "object") {
+        if (options.strict) throw new Error("Scene index contains a malformed entry");
+        continue;
+      }
 
       const filename = typeof item.filename === "string" ? item.filename : "";
-      if (!filename) continue;
+      if (!filename) {
+        if (options.strict) throw new Error("Scene index contains an entry without a filename");
+        continue;
+      }
+      if (options.strict && (filename === "." || filename === ".." || filename.includes("/") || filename.includes("\\"))) {
+        throw new Error("Scene index contains an unsafe filename");
+      }
 
       entries.push({
         filename,
@@ -91,9 +119,14 @@ export async function readSceneIndex(dataDir: string, storage?: StorageAdapter):
       });
     }
     return entries;
-  } catch {
+  } catch (error) {
+    if (options.strict) throw error;
     return [];
   }
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 /**
