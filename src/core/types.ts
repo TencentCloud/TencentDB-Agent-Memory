@@ -46,7 +46,7 @@ export interface RuntimeContext {
   /** Session key (stable across reconnects, used for L0/L1 grouping). */
   sessionKey: string;
   /** Host platform identifier. */
-  platform: "openclaw" | "hermes" | "cli" | "gateway" | string;
+  platform: "openclaw" | "hermes" | "cli" | "gateway" | "claude-code" | "cursor" | "codex" | string;
   /** Agent identity / profile name (optional). */
   agentIdentity?: string;
   /** Agent execution context — primary agent, subagent, cron job, or flush task. */
@@ -153,7 +153,7 @@ export interface LLMRunnerFactory {
  */
 export interface HostAdapter {
   /** Identifies the host type for conditional behavior (should be rare). */
-  readonly hostType: "openclaw" | "hermes" | "standalone";
+  readonly hostType: "openclaw" | "hermes" | "standalone" | "claude-code" | "cursor" | "codex" | string;
 
   /** Get the unified runtime context for the current session. */
   getRuntimeContext(): RuntimeContext;
