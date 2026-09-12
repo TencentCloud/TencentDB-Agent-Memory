@@ -387,6 +387,13 @@ memory:
 ```
 
 
+### 4. PydanticAI
+
+Python 应用可以使用独立的
+[`pydantic-ai-plugin`](./pydantic-ai-plugin/README_CN.md) 适配器。该适配器通过现有
+Gateway 为 PydanticAI Agent 提供异步与同步运行前召回、成功运行后写入、记忆与对话
+搜索工具，以及显式会话结束能力，并附带离线示例和 DeepSeek 示例。
+
 ## 🔒 Gateway 安全配置（可选）
 
 Hermes Gateway 监听 `:8420`，对外提供 capture / search / recall 的 HTTP 接口。新增两个开关，可以把它从“开放的本地 sidecar”切换为“需要鉴权的网络服务”。**两个开关默认都关闭，已有部署的行为不变。**
