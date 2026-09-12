@@ -11,7 +11,11 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: {
+    index: "./index.ts",
+    "model-proxy": "./src/adapters/model-proxy/index.ts",
+    "memory-tencentdb-model-proxy": "./src/adapters/model-proxy/cli.ts",
+  },
   outDir: "./dist",
   format: "esm",
   platform: "node",

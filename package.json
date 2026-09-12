@@ -7,12 +7,17 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-model-proxy": "./dist/memory-tencentdb-model-proxy.mjs"
   },
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./model-proxy": {
+      "import": "./dist/model-proxy.mjs",
+      "default": "./dist/model-proxy.mjs"
     }
   },
   "scripts": {
@@ -49,6 +54,7 @@
     "hermes-plugin/",
     "openclaw.plugin.json",
     "README.md",
+    "docs/model-proxy-adapter.md",
     "CHANGELOG.md",
     "LICENSE",
     "!src/**/*.test.ts",
