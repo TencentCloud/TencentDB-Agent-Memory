@@ -20,7 +20,7 @@ import path from "node:path";
 // ============================
 
 export interface ManifestStoreInfo {
-  type: "sqlite" | "tcvdb" | "mongodb";
+  type: "sqlite" | "tcvdb" | "mongodb" | "postgres";
   sqlite?: {
     /** Relative path to the SQLite DB file (relative to dataDir). */
     path: string;
@@ -34,6 +34,9 @@ export interface ManifestStoreInfo {
   mongodb?: {
     endpoint: string;
     database: string;
+  };
+  postgres?: {
+    connectionString: string;
   };
 }
 
@@ -105,13 +108,14 @@ export function writeManifest(dataDir: string, manifest: Manifest): void {
 // ============================
 
 export interface StoreConfigSnapshot {
-  type: "sqlite" | "tcvdb" | "mongodb";
+  type: "sqlite" | "tcvdb" | "mongodb" | "postgres";
   sqlitePath?: string;
   tcvdbUrl?: string;
   tcvdbDatabase?: string;
   tcvdbAlias?: string;
   mongoEndpoint?: string;
   mongoDatabase?: string;
+  postgresConnection?: string;
 }
 
 /**
@@ -126,6 +130,8 @@ export function buildStoreInfo(snapshot: StoreConfigSnapshot): ManifestStoreInfo
       endpoint: snapshot.mongoEndpoint!,
       database: snapshot.mongoDatabase!,
     };
+  } else if (snapshot.type === "postgres") {
+    info.postgres = { connectionString: snapshot.postgresConnection ?? "" };
   } else {
     info.tcvdb = {
       url: snapshot.tcvdbUrl!,
