@@ -62,9 +62,28 @@ export function writeProbeCache(config: ProxyConfig, entries: ProbeCacheEntries)
 }
 
 /**
- * 取某个 agent 的可用缓存：url 与探测模型名必须一致，且未超过 TTL。
+ * 校验一条缓存是否可用于给定的 url + 探测模型名：不一致或超 TTL 都返回 null。
  * ttlMinutes 为 0 表示不因过期而重探（仅由定期重探刷新）。
  */
+function usableCaps(
+  entry: ProbeCacheEntry | undefined,
+  url: string,
+  probeModel: string,
+  ttlMinutes: number,
+  now: number,
+): UpstreamCapabilities | null {
+  if (!entry) return null;
+  if (entry.url !== url || entry.probeModel !== probeModel) return null;
+  if (ttlMinutes > 0 && now - entry.updatedAt > ttlMinutes * 60_000) return null;
+  const caps = entry.caps;
+  if (!caps || typeof caps.chat !== "boolean" || typeof caps.responses !== "boolean"
+    || typeof caps.anthropic !== "boolean") {
+    return null;
+  }
+  return { chat: caps.chat, responses: caps.responses, anthropic: caps.anthropic };
+}
+
+/** 取某个 agent 的可用缓存：url 与探测模型名必须一致，且未超过 TTL。 */
 export function pickCachedCaps(
   entries: ProbeCacheEntries,
   agent: string,
@@ -73,14 +92,25 @@ export function pickCachedCaps(
   ttlMinutes: number,
   now = Date.now(),
 ): UpstreamCapabilities | null {
-  const hit = entries[agent];
-  if (!hit) return null;
-  if (hit.url !== url || hit.probeModel !== probeModel) return null;
-  if (ttlMinutes > 0 && now - hit.updatedAt > ttlMinutes * 60_000) return null;
-  const caps = hit.caps;
-  if (!caps || typeof caps.chat !== "boolean" || typeof caps.responses !== "boolean"
-    || typeof caps.anthropic !== "boolean") {
-    return null;
+  return usableCaps(entries[agent], url, probeModel, ttlMinutes, now);
+}
+
+/**
+ * 按**上游地址**取缓存：同 url + 探测模型名的任一条目命中即复用。
+ *
+ * 探测结论是上游的性质，多个客户端共用同一上游时不该重复探测；缓存文件仍然
+ * 按 agent 存（向后兼容旧缓存格式），这里按 url 扫描命中。
+ */
+export function pickCachedCapsByUrl(
+  entries: ProbeCacheEntries,
+  url: string,
+  probeModel: string,
+  ttlMinutes: number,
+  now = Date.now(),
+): UpstreamCapabilities | null {
+  for (const entry of Object.values(entries)) {
+    const caps = usableCaps(entry, url, probeModel, ttlMinutes, now);
+    if (caps) return caps;
   }
-  return { chat: caps.chat, responses: caps.responses, anthropic: caps.anthropic };
+  return null;
 }

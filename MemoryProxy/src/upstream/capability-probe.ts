@@ -16,10 +16,26 @@
  * 可用的端点判成「不支持」。因此**不要依赖错误体去猜**，而是把探测模型配成真实
  * 模型名：`upstream.autoDetect.probeModel: <真实模型名>`。未配置时仍用占位符
  * `ping`，并在打到 404 时打一条 warn 提示该歧义。
+ *
+ * 设计口径（"按协议判断，不按客户端名字判断"）：
+ *   - **客户端说哪种协议**：由 `agent-adapters/*.ts` 的 `nativeProtocols` 声明，
+ *     本模块不再维护第二份客户端名单；
+ *   - **上游支持哪些协议**：是上游地址的性质，一轮探测里同一 `url + 凭据 + 模型`
+ *     只探一次，多个客户端共用同一上游时共享结论（文件缓存同样按 url 命中）；
+ *   - **怎么转**：只由 (客户端协议, 上游能力) 决定，见 `FALLBACK_ORDER` /
+ *     `TRANSFORM_FLAGS`；未实现的组合一律判为"无路可走"并告警，不静默直连。
  */
+import { createHash } from "node:crypto";
 import type { AgentUpstreamEntry, ProxyConfig } from "../types.js";
 import { log } from "../report/log.js";
-import { pickCachedCaps, readProbeCache, writeProbeCache, type ProbeCacheEntries } from "./probe-cache.js";
+import { KNOWN_AGENT_KINDS, resolveAgentAdapter } from "../agent-adapters/index.js";
+import type { NativeProtocol } from "../agent-adapters/types.js";
+import {
+  pickCachedCapsByUrl,
+  readProbeCache,
+  writeProbeCache,
+  type ProbeCacheEntries,
+} from "./probe-cache.js";
 import {
   recordProbeCacheHit,
   recordProbeCacheMiss,
@@ -192,16 +208,73 @@ export async function probeCapabilities(
   return { chat, responses, anthropic };
 }
 
-/** 每个客户端的原生协议（决定探测到上游能力后要补哪些转换开关）。 */
-export const NATIVE_PROTOCOLS: Record<
-  string,
-  ReadonlyArray<"chat" | "responses" | "anthropic">
-> = {
-  workbuddy: ["chat", "responses"], // 网页走 Chat、桌面走 Responses
-  "claude-code": ["anthropic"],
-  codex: ["responses"],
-  codebuddy: ["chat"],
+/** 全部协议维度（探测与测试共用）。 */
+export const ALL_PROTOCOLS: readonly NativeProtocol[] = ["chat", "responses", "anthropic"];
+
+/**
+ * 客户端**原生协议**（它自己对上游说哪种协议）。
+ *
+ * ⚠️ 这里刻意不再维护客户端名单：唯一真源是各 adapter 的 `nativeProtocols`
+ * （见 `agent-adapters/types.ts`）。历史上本模块有一份只列了 4 个客户端的
+ * `NATIVE_PROTOCOLS`，新增客户端（dsh / opencode / pi …）漏在里面时既不会写入
+ * 转换开关、也不会触发"无路可走"告警，表现为静默直连 + 上游 400。
+ *
+ * 未声明的客户端返回空数组 ⇒ 不产生任何开关（保持现状不变），但会在启动期
+ * 打 `upstream.probe.undeclared_protocol` 提示补声明。
+ */
+export function nativeProtocolsOf(agent: string): readonly NativeProtocol[] {
+  return resolveAgentAdapter(agent).nativeProtocols ?? [];
+}
+
+export type TransformFlag =
+  | "chatCompletions"
+  | "chatToAnthropic"
+  | "anthropicToChat"
+  | "anthropicToResponses"
+  | "responsesToAnthropic";
+
+/**
+ * 客户端协议 → 上游没有该协议时的**目标协议优先级**。
+ *
+ * 这是「按协议判断」的唯一落点：新增客户端只要在 adapter 里声明 nativeProtocols，
+ * 就自动获得这套选路，不需要改本文件。
+ *   - chat：只能转 Anthropic（chat→Responses 未实现）
+ *   - anthropic：优先 Chat，其次 Responses
+ *   - responses：优先 Anthropic，其次 Chat
+ */
+const FALLBACK_ORDER: Record<NativeProtocol, readonly NativeProtocol[]> = {
+  chat: ["anthropic"],
+  anthropic: ["chat", "responses"],
+  responses: ["anthropic", "chat"],
 };
+
+/** 已实现的转换方向。缺的组合 = 未实现，必须显式告警而不是静默穿透。 */
+const TRANSFORM_FLAGS: Partial<Record<string, TransformFlag>> = {
+  "chat->anthropic": "chatToAnthropic",
+  "anthropic->chat": "anthropicToChat",
+  "anthropic->responses": "anthropicToResponses",
+  "responses->anthropic": "responsesToAnthropic",
+  "responses->chat": "chatCompletions",
+};
+
+export type UpstreamRoute =
+  | { kind: "direct" }
+  | { kind: "convert"; flag: TransformFlag }
+  | { kind: "unimplemented" };
+
+/** 单一决策函数：(客户端协议, 上游能力) → 直连 / 转哪个方向 / 无路可走。 */
+export function resolveRoute(
+  client: NativeProtocol,
+  caps: UpstreamCapabilities,
+): UpstreamRoute {
+  if (caps[client]) return { kind: "direct" };
+  for (const target of FALLBACK_ORDER[client]) {
+    if (!caps[target]) continue;
+    const flag = TRANSFORM_FLAGS[`${client}->${target}`];
+    if (flag) return { kind: "convert", flag };
+  }
+  return { kind: "unimplemented" };
+}
 
 /** 显式配置过的转换开关（true/false 都算）：配置了就不让 autoDetect 覆盖（用户意图优先）。 */
 const EXPLICIT_FLAGS = [
@@ -227,19 +300,10 @@ export function resolveAgentModesFor(
   agent: string,
   caps: UpstreamCapabilities,
 ): Partial<AgentUpstreamEntry> {
-  const native = NATIVE_PROTOCOLS[agent];
-  if (!native) return {};
   const out: Partial<AgentUpstreamEntry> = {};
-  if (native.includes("anthropic")) {
-    if (!caps.anthropic && caps.chat) out.anthropicToChat = true;
-    else if (!caps.anthropic && !caps.chat && caps.responses) out.anthropicToResponses = true;
-  }
-  if (native.includes("responses")) {
-    if (!caps.responses && caps.anthropic) out.responsesToAnthropic = true;
-    else if (!caps.responses && !caps.anthropic && caps.chat) out.chatCompletions = true;
-  }
-  if (native.includes("chat")) {
-    if (!caps.chat && caps.anthropic) out.chatToAnthropic = true;
+  for (const client of nativeProtocolsOf(agent)) {
+    const route = resolveRoute(client, caps);
+    if (route.kind === "convert") out[route.flag] = true;
   }
   return out;
 }
@@ -259,33 +323,34 @@ export function resolveAgentModes(
  * 该客户端的**原生协议**里，哪些在上游既没有原生端点、也没有已实现的转换方向。
  * 纯函数，供启动期告警与单测使用；返回空数组表示都能走通。
  *
- * 注意 chat 原生客户端目前**没有** chat→Responses 的转换实现（见
- * resolveAgentModesFor），所以 Responses-only 上游会让它彻底无路可走 ——
- * 这种情况必须在启动期告警，而不是等请求 404 时才发现。
+ * 判据与 resolveAgentModesFor 同源（同一张 3×3 表），因此不会出现"既不写开关、
+ * 也不告警"的中间态。注意 chat 原生客户端目前**没有** chat→Responses 的实现，
+ * 所以 Responses-only 上游会让它彻底无路可走 —— 这种情况必须在启动期告警，
+ * 而不是等请求打到上游、拿一个 400 才发现。
  */
 export function unroutableNativeProtocols(
   agent: string,
   caps: UpstreamCapabilities,
 ): string[] {
-  const native = NATIVE_PROTOCOLS[agent];
-  if (!native) return [];
-  const servable: Record<"chat" | "responses" | "anthropic", boolean> = {
-    anthropic: caps.anthropic || caps.chat || caps.responses,
-    responses: caps.responses || caps.anthropic || caps.chat,
-    chat: caps.chat || caps.anthropic,
-  };
-  return native.filter((p) => !servable[p]);
+  return nativeProtocolsOf(agent).filter((p) => resolveRoute(p, caps).kind === "unimplemented");
 }
 
 /**
- * 待探测集合 = 内置客户端 ∪ 配置里出现过的 agent，去掉已显式配置转换开关的项
- * （显式配置优先，也避免多余探测请求）。
+ * 待探测集合 = 所有**声明了原生协议**的已知客户端 ∪ 配置里出现过的 agent，
+ * 去掉已显式配置转换开关的项（显式配置优先，也避免多余探测请求）。
+ *
+ * 从客户端注册表派生，而不是硬编码几个名字：新增客户端只要在 adapter 里声明
+ * nativeProtocols 就自动进入探测范围。多个客户端共用同一上游时，真正的探测请求
+ * 由 applyAutoDetect 按 `url + 凭据 + 模型` 去重，客户端数量增长不放大探测成本。
  *
  * 注意"显式"的口径：上一轮由探测自己写进去的开关不算显式，否则第二轮重探
  * 会把所有 agent 都判成"已配置"而直接跳过。
  */
 export function agentsToAutoDetect(config: ProxyConfig): string[] {
-  const agents = new Set<string>(["workbuddy", "claude-code", "codex"]);
+  const agents = new Set<string>();
+  for (const kind of KNOWN_AGENT_KINDS) {
+    if (nativeProtocolsOf(kind).length > 0) agents.add(kind);
+  }
   for (const name of Object.keys(config.upstream.agents ?? {})) agents.add(name);
   return [...agents].filter((agent) => {
     const entry = config.upstream.agents?.[agent];
@@ -307,7 +372,24 @@ function capsChanged(a: UpstreamCapabilities, b: UpstreamCapabilities): boolean 
 }
 
 /**
- * 对需要探测的 agent 逐个探测并合并转换标志（显式配置优先）。
+ * 上游探测的分组键：`url + 模型名 + 凭据指纹`。
+ * 凭据参与分组，避免"同一 url、不同 key"的两个客户端共用一份可能受 401 影响
+ * 的结论；指纹只用于分组，不落日志。
+ */
+function probeGroupKey(url: string, probeModel: string, apiKey: string): string {
+  const keyFp = apiKey ? createHash("sha256").update(apiKey).digest("hex").slice(0, 8) : "";
+  return `${url}\u0000${probeModel}\u0000${keyFp}`;
+}
+
+/**
+ * 探测并应用上游能力（显式配置优先）。
+ *
+ * ① 归组：按 `url + 模型名 + 凭据指纹` 把客户端分组——探测结论是**上游**的性质，
+ *    同一上游被多个客户端共用时只探一次；
+ * ② 每个唯一上游探一次（或命中缓存），并处理"三端点全不通时保留上一次结论"
+ *    与"能力变更告警 / 计数"；
+ * ③ 逐个客户端撤销上一轮写入的开关、按 (客户端协议, 上游能力) 重算开关、打日志
+ *    与"无路可走"告警；未声明协议的客户端在这里提示补声明。
  *
  * 与首版相比多做了四件事：复用未过期的缓存结果；应用新结果前先撤销上一轮
  * 由探测写入的开关（能力回退时旧开关不会残留）；三端点全不通时保留上一次结论；
@@ -325,46 +407,45 @@ export async function applyAutoDetect(
   const agents = (config.upstream.agents ??= {});
   const cacheEntries: ProbeCacheEntries = readProbeCache(config);
 
+  // ① 按上游归组。
+  const groups = new Map<string, { url: string; apiKey: string; agents: string[] }>();
   for (const agent of agentsToAutoDetect(config)) {
-    // 先撤销上一轮由探测写入的开关：只有显式配置的才留下（显式优先），
-    // 否则能力回退后旧开关会一直生效。
-    const appliedBefore = AUTO_APPLIED.get(agent);
-    const existing = agents[agent];
-    if (appliedBefore && appliedBefore.size > 0 && existing) {
-      for (const key of appliedBefore) {
-        delete (existing as unknown as Record<string, unknown>)[key];
-      }
-    }
-    AUTO_APPLIED.delete(agent);
-
     const entry = agents[agent] ?? {};
     const url = entry.url ?? config.upstream.url;
     const apiKey = entry.apiKey ?? config.upstream.apiKey;
+    const groupKey = probeGroupKey(url, probeModel, apiKey);
+    const group = groups.get(groupKey) ?? { url, apiKey, agents: [] };
+    group.agents.push(agent);
+    groups.set(groupKey, group);
+  }
 
-    const cached = useCache
-      ? pickCachedCaps(cacheEntries, agent, url, probeModel, ttlMinutes)
+  // ② 每个唯一上游探一次。
+  const capsByGroup = new Map<string, { caps: UpstreamCapabilities; fromCache: boolean }>();
+  for (const [groupKey, group] of groups) {
+    const fileCached = useCache
+      ? pickCachedCapsByUrl(cacheEntries, group.url, probeModel, ttlMinutes)
       : null;
     let caps: UpstreamCapabilities;
     let fromCache = false;
-    if (cached) {
-      caps = cached;
+    if (fileCached) {
+      caps = fileCached;
       fromCache = true;
       recordProbeCacheHit();
     } else {
       recordProbeCacheMiss();
-      caps = await probeCapabilities(url, apiKey, timeoutMs, probeModel);
+      caps = await probeCapabilities(group.url, group.apiKey, timeoutMs, probeModel);
       recordProbeRun();
     }
 
-    const previous = LAST_CAPS.get(agent);
+    const previous = LAST_CAPS.get(groupKey);
     const nothingReachable = !caps.chat && !caps.responses && !caps.anthropic;
     if (nothingReachable && !fromCache && previous) {
       // 三个端点都没探通，更像是上游临时不可用或凭据失效，而不是"三者都不支持"。
       // 保留上一次结论，等下一轮重探或人工介入，避免把可用配置临时改坏。
       recordProbeFailure();
       log.warn("upstream.probe.all_failed", {
-        agent,
-        url,
+        url: group.url,
+        agents: group.agents.join(","),
         probeModel,
         hint: "三协议端点均未探通，已保留上一次探测结果；请检查上游地址、凭据与 probeModel",
       });
@@ -372,50 +453,86 @@ export async function applyAutoDetect(
     }
 
     if (previous && capsChanged(previous, caps)) {
-      recordProbeChange(agent);
+      for (const agent of group.agents) recordProbeChange(agent);
       log.warn("upstream.probe.changed", {
-        agent,
-        url,
+        url: group.url,
+        agents: group.agents.join(","),
         before: previous,
         after: caps,
-        hint: "上游协议能力发生变化，per-agent 转换开关已按新结果调整",
+        hint: "上游协议能力发生变化，已按各客户端原生协议重算转换开关",
       });
     }
-    LAST_CAPS.set(agent, caps);
-    cacheEntries[agent] = { url, probeModel, caps, updatedAt: Date.now() };
-
-    const mode = resolveAgentModesFor(agent, caps);
-    const merged: AgentUpstreamEntry = { ...entry };
-    const applied = new Set<string>();
-    for (const [k, v] of Object.entries(mode)) {
-      if (v === true && merged[k as keyof AgentUpstreamEntry] === undefined) {
-        (merged as unknown as Record<string, unknown>)[k] = true;
-        applied.add(k);
-      }
+    LAST_CAPS.set(groupKey, caps);
+    capsByGroup.set(groupKey, { caps, fromCache });
+    const now = Date.now();
+    for (const agent of group.agents) {
+      cacheEntries[agent] = { url: group.url, probeModel, caps, updatedAt: now };
     }
-    agents[agent] = merged;
-    if (applied.size > 0) AUTO_APPLIED.set(agent, applied);
+  }
 
-    log.info("upstream.probe", {
-      agent,
-      url,
-      fromCache,
-      chat: caps.chat,
-      responses: caps.responses,
-      anthropic: caps.anthropic,
-      flags: Object.keys(merged).filter((k) => (merged as unknown as Record<string, unknown>)[k]).join(","),
-    });
-    const unroutable = unroutableNativeProtocols(agent, caps);
-    if (unroutable.length > 0) {
-      log.warn("upstream.probe.unroutable", {
+  // ③ 逐个客户端落开关。
+  for (const [groupKey, group] of groups) {
+    const { caps, fromCache } = capsByGroup.get(groupKey) as {
+      caps: UpstreamCapabilities;
+      fromCache: boolean;
+    };
+    for (const agent of group.agents) {
+      // 先撤销上一轮由探测写入的开关：只有显式配置的才留下（显式优先），
+      // 否则能力回退后旧开关会一直生效。
+      const appliedBefore = AUTO_APPLIED.get(agent);
+      const existing = agents[agent];
+      if (appliedBefore && appliedBefore.size > 0 && existing) {
+        for (const key of appliedBefore) {
+          delete (existing as unknown as Record<string, unknown>)[key];
+        }
+      }
+      AUTO_APPLIED.delete(agent);
+
+      if (nativeProtocolsOf(agent).length === 0) {
+        // 没声明协议的客户端不会产生任何开关：明确说出来，别让它看起来"探测过了"。
+        log.warn("upstream.probe.undeclared_protocol", {
+          agent,
+          url: group.url,
+          hint: "该客户端未声明 nativeProtocols（见 src/agent-adapters/*.ts），探测结果不会产生任何转换开关；请补声明，或显式配置 upstream.agents[agent] 的转换开关",
+        });
+      }
+
+      const mode = resolveAgentModesFor(agent, caps);
+      const merged: AgentUpstreamEntry = { ...(agents[agent] ?? {}) };
+      const applied = new Set<string>();
+      for (const [k, v] of Object.entries(mode)) {
+        if (v === true && merged[k as keyof AgentUpstreamEntry] === undefined) {
+          (merged as unknown as Record<string, unknown>)[k] = true;
+          applied.add(k);
+        }
+      }
+      // 只有真的写了开关、或该客户端本来就有配置条目时才写回：否则"探测覆盖到的
+      // 内置客户端"会以空条目的形式出现在 config.upstream.agents 里，污染启动期
+      // 的凭据审计输出。
+      if (applied.size > 0 || agents[agent]) agents[agent] = merged;
+      if (applied.size > 0) AUTO_APPLIED.set(agent, applied);
+
+      log.info("upstream.probe", {
         agent,
-        url,
-        native: unroutable.join(","),
+        url: group.url,
+        fromCache,
         chat: caps.chat,
         responses: caps.responses,
         anthropic: caps.anthropic,
-        hint: "该客户端的原生协议在上游没有可用端点，且没有已实现的转换方向；请求会直连上游并大概率失败。请显式配置 upstream.agents[agent] 的转换开关，或修正 upstream.url / probeModel",
+        flags: Object.keys(merged).filter((k) => (merged as unknown as Record<string, unknown>)[k]).join(","),
       });
+      const unroutable = unroutableNativeProtocols(agent, caps);
+      if (unroutable.length > 0) {
+        log.warn("upstream.probe.unroutable", {
+          agent,
+          url: group.url,
+          native: unroutable.join(","),
+          chat: caps.chat,
+          responses: caps.responses,
+          anthropic: caps.anthropic,
+          hint: "该客户端的原生协议在上游没有可用端点，且没有已实现的转换方向；请求会直连上游并大概率失败。请显式配置 upstream.agents[agent] 的转换开关，或修正 upstream.url / probeModel",
+        });
+      }
     }
   }
 

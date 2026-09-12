@@ -1,10 +1,13 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   resolveAgentModes,
   resolveAgentModesFor,
   agentsToAutoDetect,
   unroutableNativeProtocols,
+  ALL_PROTOCOLS,
 } from "../upstream/capability-probe.js";
+import { KNOWN_AGENT_KINDS, resolveAgentAdapter } from "../agent-adapters/index.js";
+import { log } from "../report/log.js";
 import {
   applyAutoDetect,
   probeCapabilities,
@@ -103,11 +106,82 @@ describe("resolveAgentModesFor / agentsToAutoDetect（泛化探测）", () => {
     expect(list).toContain("workbuddy");
   });
 
-  it("agentsToAutoDetect：upstream.agents 未配置时回落内置三个", () => {
+  it("agentsToAutoDetect：默认集合由客户端注册表派生（不只是三个内置）", () => {
     const list = agentsToAutoDetect({ upstream: {} } as never);
-    expect(list).toContain("workbuddy");
-    expect(list).toContain("claude-code");
-    expect(list).toContain("codex");
+    for (const kind of KNOWN_AGENT_KINDS) expect(list).toContain(kind);
+    // 本次补上的 Chat 原生客户端
+    expect(list).toContain("dsh");
+    expect(list).toContain("opencode");
+    expect(list).toContain("pi");
+  });
+});
+
+describe("按协议选路（不再维护客户端名单）", () => {
+  /**
+   * 改造前的参照实现：4 个客户端的手写字面量 + 分支。
+   * 用它做逐组合回归，保证"换实现"没有改变既有 4 个客户端的任何行为。
+   */
+  const LEGACY_NATIVE: Record<string, ReadonlyArray<"chat" | "responses" | "anthropic">> = {
+    workbuddy: ["chat", "responses"],
+    "claude-code": ["anthropic"],
+    codex: ["responses"],
+    codebuddy: ["chat"],
+  };
+  const legacyModes = (
+    native: ReadonlyArray<"chat" | "responses" | "anthropic">,
+    caps: { chat: boolean; responses: boolean; anthropic: boolean },
+  ): Record<string, boolean> => {
+    const out: Record<string, boolean> = {};
+    if (native.includes("anthropic")) {
+      if (!caps.anthropic && caps.chat) out.anthropicToChat = true;
+      else if (!caps.anthropic && !caps.chat && caps.responses) out.anthropicToResponses = true;
+    }
+    if (native.includes("responses")) {
+      if (!caps.responses && caps.anthropic) out.responsesToAnthropic = true;
+      else if (!caps.responses && !caps.anthropic && caps.chat) out.chatCompletions = true;
+    }
+    if (native.includes("chat")) {
+      if (!caps.chat && caps.anthropic) out.chatToAnthropic = true;
+    }
+    return out;
+  };
+  const CAP_COMBOS = [false, true].flatMap((chat) =>
+    [false, true].flatMap((responses) =>
+      [false, true].map((anthropic) => ({ chat, responses, anthropic })),
+    ),
+  );
+
+  it("既有 4 个客户端：8 种上游能力组合下选路结果与改造前完全一致", () => {
+    for (const [agent, native] of Object.entries(LEGACY_NATIVE)) {
+      for (const caps of CAP_COMBOS) {
+        expect(resolveAgentModesFor(agent, caps)).toEqual(legacyModes(native, caps));
+      }
+    }
+  });
+
+  it("新声明的 Chat 原生客户端（dsh / opencode / pi）现在也参与选路与『无路可走』判定", () => {
+    for (const agent of ["dsh", "opencode", "pi"]) {
+      expect(resolveAgentModesFor(agent, { chat: false, responses: false, anthropic: true }))
+        .toEqual({ chatToAnthropic: true });
+      expect(resolveAgentModesFor(agent, { chat: true, responses: false, anthropic: false }))
+        .toEqual({});
+      expect(unroutableNativeProtocols(agent, { chat: false, responses: true, anthropic: false }))
+        .toEqual(["chat"]);
+    }
+  });
+
+  it("注册表完整性：每个已知 kind 都能解析到自己，且声明了合法的原生协议", () => {
+    for (const kind of KNOWN_AGENT_KINDS) {
+      const adapter = resolveAgentAdapter(kind);
+      expect(adapter.agentKind).toBe(kind);
+      const declared = adapter.nativeProtocols ?? [];
+      expect(declared.length).toBeGreaterThan(0);
+      for (const p of declared) expect(ALL_PROTOCOLS).toContain(p);
+    }
+    // 未注册的客户端不猜协议
+    expect(resolveAgentAdapter("mystery").nativeProtocols ?? []).toEqual([]);
+    expect(resolveAgentModesFor("mystery", { chat: false, responses: false, anthropic: true }))
+      .toEqual({});
   });
 });
 
@@ -418,5 +492,62 @@ describe("applyAutoDetect（撤销 / 变更告警 / 缓存）", () => {
     );
     expect(loop).not.toBeNull();
     loop?.stop();
+  });
+
+  it("多个客户端共用同一上游时只探一次（探测按 url 去重）", async () => {
+    __resetAutoDetectState();
+    /** 只让 keep 里的客户端参与探测：其余 kind 显式关掉一个开关就会被跳过。 */
+    const onlyProbing = (keep: string[], url: string) => {
+      const agents: Record<string, Record<string, unknown>> = {};
+      for (const kind of KNOWN_AGENT_KINDS) {
+        if (!keep.includes(kind)) agents[kind] = { chatCompletions: false };
+      }
+      for (const kind of keep) agents[kind] = { url };
+      return {
+        upstream: { url, apiKey: "k", agents, autoDetect: { enabled: true, timeoutMs: 50 } },
+      } as never;
+    };
+
+    const one = installFetch({ "/chat/completions": 200 });
+    await applyAutoDetect(onlyProbing(["dsh"], "https://shared.example.com/v1"), {
+      useCache: false,
+    });
+
+    __resetAutoDetectState();
+    const three = installFetch({ "/chat/completions": 200 });
+    await applyAutoDetect(
+      onlyProbing(["dsh", "opencode", "pi"], "https://shared.example.com/v1"),
+      { useCache: false },
+    );
+
+    expect(one.length).toBeGreaterThan(0);
+    // 3 个客户端共用 1 个上游 = 同一批探测请求（探测结论是上游的性质）
+    expect(three.length).toBe(one.length);
+  });
+
+  it("未声明原生协议的客户端：不给开关、不判无路可走，但会告警提示补声明", async () => {
+    __resetAutoDetectState();
+    const config = {
+      upstream: {
+        url: "https://up.example.com/v1",
+        apiKey: "k",
+        agents: { "my-agent": {} },
+        autoDetect: { enabled: true, timeoutMs: 50 },
+      },
+    } as never;
+    installFetch({ "/v1/messages": 200 }); // 上游仅支持 Anthropic
+    const warns: string[] = [];
+    const spy = vi.spyOn(log, "warn").mockImplementation((event: string) => {
+      warns.push(event);
+    });
+    try {
+      await applyAutoDetect(config);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warns).toContain("upstream.probe.undeclared_protocol");
+    // 未声明协议 ⇒ 不写开关（保持现状），也不做"无路可走"判定
+    expect(agentsOf(config)["my-agent"]?.chatToAnthropic).toBeUndefined();
+    expect(warns).not.toContain("upstream.probe.unroutable");
   });
 });

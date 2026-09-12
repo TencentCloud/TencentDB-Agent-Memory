@@ -11,7 +11,7 @@
  *   - default.ts —— unknown 兜底
  */
 
-import type { AgentAdapter } from "./types.js";
+import type { AgentAdapter, AgentKind } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import { codebuddyAdapter } from "./codebuddy.js";
 import { codexAdapter } from "./codex.js";
@@ -22,6 +22,26 @@ import { piAdapter } from "./pi.js";
 import { defaultAdapter } from "./default.js";
 
 export type { AgentAdapter, AgentKind, RequestKind } from "./types.js";
+
+/**
+ * 已知客户端 kind（与下面 switch 的 case 一一对应）。
+ *
+ * 用途：上游能力探测的默认待探集合由此派生（`upstream/capability-probe.ts`），
+ * 不再由探测模块自己维护一份客户端名单。
+ *
+ * ⚠️ 新增客户端时同步加进来。漏加的后果**不是编译错误**，而是该客户端默认不参与
+ * 探测；但它只要有 `upstream.agents.<name>` 配置，仍会被探测并在启动期打
+ * `upstream.probe.undeclared_protocol` 提示（见 capability-probe.ts）。
+ */
+export const KNOWN_AGENT_KINDS: readonly AgentKind[] = [
+  "claude-code",
+  "codebuddy",
+  "codex",
+  "workbuddy",
+  "dsh",
+  "opencode",
+  "pi",
+];
 
 export function resolveAgentAdapter(agentSource: string): AgentAdapter {
   switch (agentSource) {

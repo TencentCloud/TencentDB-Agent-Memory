@@ -10,6 +10,7 @@ import type { AgentAdapter } from "./types.js";
 
 export const piAdapter: AgentAdapter = {
   agentKind: "pi",
+  nativeProtocols: ["chat"],
   classifyRequest() {
     return "main";
   },

@@ -37,10 +37,17 @@ upstream:
   apiKey: "<YOUR_TOKENHUB_API_KEY>"
 
   # ── 上游协议能力自动探测（upstream.autoDetect） ──────────────────────────
-  # enabled=true 时启动阶段对每个已知 agent（workbuddy / claude-code / codex）
-  # 的实际上游并行探测三种端点（Chat / Responses / Anthropic），并自动写入
-  # 下面的 per-agent 转换开关。探测用小请求（max_tokens=1），超时/网络错误
-  # 一律降级为直连；显式配置的开关始终优先于探测结果。
+  # enabled=true 时启动阶段对每个**声明了原生协议**的已知客户端探测三种端点
+  # （Chat / Responses / Anthropic），并自动写入下面的 per-agent 转换开关。
+  # 三条口径：
+  #   - 探测按**上游地址**做：同一 url + 凭据 + 探测模型只探一次，多个客户端
+  #     共用同一上游时共享结论，客户端数量不放大启动期的探测请求；
+  #   - 客户端说哪种协议由各自 adapter 的 nativeProtocols 声明（见
+  #     src/agent-adapters/*.ts），探测模块不再维护第二份客户端名单；
+  #   - 上游既没有该协议、也没有已实现的转换方向时打 upstream.probe.unroutable
+  #     告警（例如 Chat 客户端遇上只支持 Responses 的上游），不会静默直连。
+  # 探测用小请求（max_tokens=1），超时/网络错误一律降级为直连；显式配置的开关
+  # 始终优先于探测结果。
   # 三个附加能力（都只影响"探测结果怎么用"，不影响请求路径）：
   #   cacheFile             探测结果落一个小 JSON；重启时命中未过期缓存就不再探测，
   #                         省掉启动阶段对上游的请求。留空则不落盘。
