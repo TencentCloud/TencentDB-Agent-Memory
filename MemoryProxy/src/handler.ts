@@ -8,9 +8,21 @@ import {
   extractBearerToken,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikReportFailure,
   opikUpdateTrace,
+  opikUpdateTraceFork,
+  opikQuestionTag,
+  opikTurnTag,
+  opikTurnTraceId,
   uuidv7,
+  type OpikFailureReport,
 } from "./opik.js";
+import {
+  buildMemoryInjectionContext,
+  buildOpikTraceMetadata,
+  summarizeToolInteraction,
+} from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -34,6 +46,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -443,6 +456,46 @@ async function forwardWithRetry(
   return { resp: upstreamResp, retried: false };
 }
 
+/** Chat(OpenAI) 错误路径的 Opik 收尾包装：统一补 trace/span/fork 字段。 */
+function reportChatOpikFailure(
+  config: ProxyConfig,
+  args: {
+    traceId: string;
+    forkTraceId: string;
+    projectName: string;
+    model: string;
+    startTime: string;
+    stream: boolean;
+    upstreamUrl: string;
+    messages: unknown[];
+    tags: string[];
+    metadata: Record<string, unknown>;
+    stage: OpikFailureReport["stage"];
+    status?: number;
+    message: string;
+  },
+): void {
+  opikReportFailure(config, {
+    traceId: args.traceId,
+    projectName: args.projectName,
+    model: args.model,
+    startTime: args.startTime,
+    stage: args.stage,
+    status: args.status,
+    message: args.message,
+    inputMessages: flattenMessagesForOpik(args.messages),
+    tags: args.tags,
+    metadata: args.metadata,
+    forkTraceId: args.forkTraceId,
+    forkMetadata: {
+      keyId: args.projectName,
+      modelId: args.model,
+      stream: args.stream,
+      upstreamUrl: args.upstreamUrl,
+    },
+  });
+}
+
 /** Main handler for POST /v1/chat/completions (OpenAI compat). */
 export async function handleChatCompletions(
   c: Context,
@@ -813,7 +866,7 @@ export async function handleChatCompletions(
         // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -1102,14 +1155,14 @@ export async function handleChatCompletions(
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 只留后 8 位会显示成 "elthr7yn" 这种截断串，用户完全看不懂，
           // 与 team 截断问题同源。agent id 本身就短，全量展示无害且更可读。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName 来自 session-init（cachedTeams[selected].team_name）；
           // teamId 存**完整** team_id（如 team-wyuyb7sion）—— 之前 slice(-8)
           // 会显示成 "uyb7sion" 用户看不懂，且 teamName 为空时兜底更差。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1224,7 +1277,13 @@ export async function handleChatCompletions(
       if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
         const userMsg = { role: "user" as const, content: memCmd.rawMessage };
         try {
-          await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
+          await recordTdaiTurn(
+            tdaiClientForMem,
+            tdaiIdentityForMem,
+            userMsg,
+            memResult.messageText,
+            { traceId },
+          );
         } catch (err: unknown) {
           console.error("[mem-command] L0 write error:", err);
         }
@@ -1296,12 +1355,15 @@ export async function handleChatCompletions(
   const tdaiUserMessage = extractLatestUserMessage(messages);
 
   // ── Context injection (before cost guard) ──────────────────────────────
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 的
+  // memory_injection 挂真实运行统计（hookCount/blockCount/errorCount/hooks）。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (!injectedSkipped && config.injection?.enabled && config.injection.injectors.length > 0) {
     try {
       const injectionTurnSeq = countHumanTurns(messages, "openai");
       const { getInjectionPipeline } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
-      const injectedBody = await pipeline.process(body, {
+      const injectedResult = await pipeline.processWithStats(body, {
         protocol: "openai",
         traceId,
         keyId,
@@ -1323,8 +1385,11 @@ export async function handleChatCompletions(
             }
           : undefined,
       });
-      body = injectedBody;
-      messages = Array.isArray(injectedBody.messages) ? injectedBody.messages : messages;
+      body = injectedResult.body;
+      messages = Array.isArray(injectedResult.body.messages)
+        ? injectedResult.body.messages
+        : messages;
+      injectionHookRuns = injectedResult.hookResults;
     } catch (err: unknown) {
       // Injection failure is non-fatal — fall back to original body
     }
@@ -1415,6 +1480,8 @@ export async function handleChatCompletions(
   // Prefer the extension's monotonic per-session turnSeq (survives context
   // compaction); fall back to the stateless count when it's not tracked.
   const turnSeq = target.turnSeq > 0 ? target.turnSeq : countHumanTurns(messages, "openai");
+  traceTags.push(opikTurnTag(sessionKey, turnSeq));
+  const opikTraceId = opikTurnTraceId(sessionKey, turnSeq);
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1425,6 +1492,8 @@ export async function handleChatCompletions(
     routeTags: target.tags,
     userQuery: resolveLatestUserQuery(config, lcHeaders, c.req.path, body, messages),
   };
+  const questionTag = opikQuestionTag(lf.userQuery);
+  if (questionTag) traceTags.push(questionTag);
   if (target.analyzerTrace) {
     reportAnalyzerTrace(config, target.analyzerTrace, {
       traceId,
@@ -1457,13 +1526,36 @@ export async function handleChatCompletions(
   });
 
   // ── Opik: create trace ───────────────────────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "openai",
+    sessionKey,
+    conversationId,
+    spaceId,
+    userId,
+    model: target.model,
+    stream: isStream,
+    turnSeq,
+    requestPath: c.req.path,
+    memoryInjection: buildMemoryInjectionContext({
+      enabled: config.injection?.enabled === true,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
+      skipped: injectedSkipped,
+      hookRuns: injectionHookRuns,
+    }),
+  });
+  const toolSummary = summarizeToolInteraction(messages);
+  if (toolSummary.toolCalls.length > 0 || toolSummary.toolResults > 0) {
+    opikTraceMetadata.tool_interaction = toolSummary;
+  }
   const forkTraceId = opikCreateTrace(config, {
-    traceId,
+    traceId: opikTraceId,
     projectName: keyId,
     name: `${target.model} / ${keyId}`,
     startTime,
     input: { messages: flattenMessagesForOpik(messages) },
     tags: [...traceTags, ...target.tags],
+    metadata: opikTraceMetadata,
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1500,7 +1592,7 @@ export async function handleChatCompletions(
     userQuery: lf.userQuery,
     spaceId,
     lf,
-    opikTraceId: traceId,
+    opikTraceId,
     opikKeyId: keyId,
   });
 
@@ -1554,6 +1646,20 @@ export async function handleChatCompletions(
   } catch (err: unknown) {
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
+      reportChatOpikFailure(config, {
+        traceId: opikTraceId,
+        forkTraceId,
+        projectName: keyId,
+        model: target.model,
+        startTime,
+        stream: isStream,
+        upstreamUrl: target.url,
+        messages,
+        tags: traceTags,
+        metadata: opikTraceMetadata,
+        stage: "rate-limit",
+        message: "TPM/QPM exceeded",
+      });
       return err.response;
     }
     langfuseReportFailure({
@@ -1565,6 +1671,20 @@ export async function handleChatCompletions(
       statusMessage: err instanceof Error ? err.message : "Upstream request failed",
       extraTags: ["error"],
       observationMetadata: { stage: "forward", ...debugMetadata },
+    });
+    reportChatOpikFailure(config, {
+      traceId: opikTraceId,
+      forkTraceId,
+      projectName: keyId,
+      model: target.model,
+      startTime,
+      stream: isStream,
+      upstreamUrl: target.url,
+      messages,
+      tags: traceTags,
+      metadata: opikTraceMetadata,
+      stage: "forward",
+      message: err instanceof Error ? err.message : "Upstream request failed",
     });
     return c.json({ error: "Upstream request failed" }, 502);
   }
@@ -1601,11 +1721,28 @@ export async function handleChatCompletions(
   if (isStream) {
     if (!upstreamResp.body) {
       pipe.streamDone(null);
+      if (upstreamResp.status >= 400) {
+        reportChatOpikFailure(config, {
+          traceId: opikTraceId,
+          forkTraceId,
+          projectName: keyId,
+          model: effectiveModel,
+          startTime,
+          stream: true,
+          upstreamUrl: target.url,
+          messages,
+          tags: traceTags,
+          metadata: opikTraceMetadata,
+          stage: "upstream",
+          status: upstreamResp.status,
+          message: "Upstream returned an error without a response body",
+        });
+      }
       return new Response(null, { status: upstreamResp.status, headers: respHeaders });
     }
 
-    // Log upstream error body for 4xx responses
-    if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
+    // Log upstream error body for 4xx/5xx responses
+    if (!retried && upstreamResp.status >= 400) {
       const [errBodyStream, clientPassStream] = upstreamResp.body.tee();
       const errText = await new Response(errBodyStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
@@ -1622,6 +1759,21 @@ export async function handleChatCompletions(
         routedFrom,
         spaceId,
         upstreamRequestId,
+      });
+      reportChatOpikFailure(config, {
+        traceId: opikTraceId,
+        forkTraceId,
+        projectName: keyId,
+        model: effectiveModel,
+        startTime,
+        stream: true,
+        upstreamUrl: target.url,
+        messages,
+        tags: traceTags,
+        metadata: opikTraceMetadata,
+        stage: "upstream",
+        status: upstreamResp.status,
+        message: errText.slice(0, 500),
       });
       langfuseReportFailure({
         lf,
@@ -1647,7 +1799,7 @@ export async function handleChatCompletions(
       sessionKey,
       upstreamUrl: target.url,
       requestPath: c.req.path,
-      traceId,
+      traceId: opikTraceId,
       forkTraceId,
       startTime,
       inputMessages: messages,
@@ -1788,16 +1940,15 @@ export async function handleChatCompletions(
 
     const outputMessages = assistantMessage ? [assistantMessage] : [];
     opikUpdateTrace(config, {
-      traceId,
+      traceId: opikTraceId,
       projectName: keyId,
       endTime,
       output: outputMessages,
       usage,
     });
-    if (forkTraceId && !config.opik.stripRequestLogContent) {
-      opikUpdateTrace(config, {
+    if (forkTraceId) {
+      opikUpdateTraceFork(config, {
         traceId: forkTraceId,
-        projectName: "request_log",
         endTime,
         output: outputMessages,
         usage,
@@ -1805,13 +1956,23 @@ export async function handleChatCompletions(
     }
 
     if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-      await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistantContentForTdai(assistantMessage));
+      trackWrite(
+        withL0Retry(() =>
+          recordTdaiTurn(
+            tdaiClient!,
+            tdaiIdentity,
+            tdaiUserMessage,
+            assistantContentForTdai(assistantMessage),
+            { traceId: opikTraceId },
+          ),
+        ).catch((err: unknown) => pipe.error("TDAI_L0", err)),
+      );
     } else if (tdaiClient) {
       logExtractionSkipped(config, "tdai-memory", sessionKey);
     }
 
     opikCreateLlmSpan(config, {
-      traceId,
+      traceId: opikTraceId,
       projectName: keyId,
       name: effectiveModel,
       startTime,
@@ -1823,7 +1984,9 @@ export async function handleChatCompletions(
       tags: [
         "non-stream",
         ...(retried ? ["retry"] : []),
+        opikTurnTag(sessionKey, turnSeq),
       ],
+      metadata: opikTraceMetadata,
       forkProjectName: "request_log",
       forkTraceId,
       forkMetadata: {
@@ -1865,6 +2028,21 @@ export async function handleChatCompletions(
       statusMessage: respText.slice(0, 500),
       extraTags: ["error"],
       observationMetadata: { stage: "upstream", stream: false, ...debugMetadata },
+    });
+    reportChatOpikFailure(config, {
+      traceId: opikTraceId,
+      forkTraceId,
+      projectName: keyId,
+      model: effectiveModel,
+      startTime,
+      stream: false,
+      upstreamUrl: target.url,
+      messages,
+      tags: traceTags,
+      metadata: opikTraceMetadata,
+      stage: "upstream",
+      status: upstreamResp.status,
+      message: respText.slice(0, 500),
     });
   }
 
@@ -2203,10 +2381,9 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           output: outputMessages,
           usage: lastUsage,
         });
-        if (ctx.forkTraceId && !config.opik.stripRequestLogContent) {
-          opikUpdateTrace(config, {
+        if (ctx.forkTraceId) {
+          opikUpdateTraceFork(config, {
             traceId: ctx.forkTraceId,
-            projectName: "request_log",
             endTime,
             output: outputMessages,
             usage: lastUsage,
@@ -2226,6 +2403,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           tags: [
             "stream",
             ...(retried ? ["retry"] : []),
+            opikTurnTag(ctx.sessionKey, ctx.lf.turnSeq),
           ],
           forkProjectName: "request_log",
           forkTraceId: ctx.forkTraceId,
@@ -2288,6 +2466,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         withL0Retry(() => recordTdaiTurn(
           ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
           outputMessageContent(outputMessage),
+          { traceId: ctx.traceId },
         )).catch((err: unknown) => pipe.error("TDAI_L0", err))
       );
     } else if (ctx.tdaiClient) {
@@ -2320,7 +2499,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // only be observed via server logs (no way to retro-add response headers).
     // skipCreditReport: instance config custom model → user's expense, skip credit.
     (ctx.skipCreditReport
-      ? Promise.resolve({ attempted: false, ok: false })
+      ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
       : tryReportCreditFromPath(
           ctx.config.creditReport,
           ctx.requestPath,

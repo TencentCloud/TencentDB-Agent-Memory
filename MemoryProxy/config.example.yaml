@@ -332,9 +332,22 @@ storage:
 # 请求/响应的 trace 和 span 自动上报到 Opik。
 opik:
   enabled: false           # 是否启用 Opik 上报
-  url: "http://127.0.0.1:5173"   # Opik 服务地址
+  url: "http://127.0.0.1:8080"   # Opik backend 地址（自托管默认 8080）
   apiKey: ""               # Opik API Key（若 Opik 实例需要鉴权）
+  # REST 前缀：backend(8080) 用 /v1/private；指向前端(5173) 时改 "/api/v1/private"
+  apiPrefix: "/v1/private"
+  # 单次上报超时（毫秒，100–30000，默认 2000）。上报 fire-and-forget：
+  # 超时/失败只降级日志，绝不阻塞业务；连续失败自动熔断 30s 再恢复。
+  timeoutMs: 2000
   # stripRequestLogContent: false  # true = fork 出的 request_log trace 不记录消息内容（节省存储）
+  # requestLogEnabled: false       # true = 额外 fork 一份原始请求到 request_log 项目
+                                  # （默认关闭；开启后 Opik 上报量约翻倍，仅用于留痕排查）
+  # 批量上报：create trace / create span 合并成一次 HTTP 请求（update 仍单发，
+  # 但与 create 共用 FIFO 队列，保证先建后改）。关闭则退化为逐条上报。
+  # batch:
+  #   enabled: true          # true = 批量上报（默认开）
+  #   maxBatchSize: 20       # 队列满 20 条立即刷（2–500）
+  #   flushIntervalMs: 1000  # 队列未满时最长等待（50–60000ms）
 
 
 # ── Langfuse LLM 可观测（官方 SDK 上报） ──────────────────────────────────────
