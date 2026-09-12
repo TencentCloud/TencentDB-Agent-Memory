@@ -354,7 +354,7 @@ docker run -d --name tdai-memory-hub \
 
 ## 通过 Proxy 接入各类 Agent
 
-Proxy 目前支持 8 类 AI Agent 客户端。每个 agent 的**完整接入配置、适配细节、常见问题**
+Proxy 目前支持 9 类 AI Agent 客户端。每个 agent 的**完整接入配置、适配细节、常见问题**
 已拆分到独立文档，按需查阅：
 
 | Agent | 配置方式 | 详细文档 |
@@ -367,6 +367,7 @@ Proxy 目前支持 8 类 AI Agent 客户端。每个 agent 的**完整接入配�
 | **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
 | **Hermes** | `~/.hermes/config.yaml` + Header 预选 | [`agents/hermes/`](./agents/hermes/) |
 | **OpenClaw** | `~/.openclaw/openclaw.json` + Header 预选 | [`agents/openclaw/`](./agents/openclaw/) |
+| **ZCode** | 设置内自定义 provider（Anthropic 协议）+ 会话 header | [`agents/zcode/`](./agents/zcode/) |
 | **其他平台** | Header 预选（通用） | [`agents/README.md`](./agents/README.md) |
 
 Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/agent/task

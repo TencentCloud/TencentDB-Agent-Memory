@@ -403,7 +403,7 @@ Open [http://localhost:8125](http://localhost:8125).
 
 ## Using Proxy with Agents
 
-The Proxy supports 9 agent clients. **Full setup instructions, adaptation details, and FAQs** for each agent are in the [`agents/`](./agents/) directory:
+The Proxy supports 10 agent clients. **Full setup instructions, adaptation details, and FAQs** for each agent are in the [`agents/`](./agents/) directory:
 
 | Agent | Config method | Docs |
 |-------|---------------|------|
@@ -416,6 +416,7 @@ The Proxy supports 9 agent clients. **Full setup instructions, adaptation detail
 | **Hermes** | `~/.hermes/config.yaml` + header preselect | [`agents/hermes/`](./agents/hermes/) |
 | **OpenClaw** | `~/.openclaw/openclaw.json` + header preselect | [`agents/openclaw/`](./agents/openclaw/) |
 | **Pi** | `pi-plugin` extension (env vars) | [`MemoryCore/pi-plugin/`](./MemoryCore/pi-plugin/) |
+| **ZCode** | custom provider in settings (Anthropic protocol) + session headers | [`agents/zcode/`](./agents/zcode/) |
 | **Other platforms** | Header preselect (generic) | [`agents/README.md`](./agents/README.md) |
 
 The proxy pipeline in order: `auth` (validates user_key) → `sessionInit`
@@ -459,6 +460,36 @@ Injected automatically by the `pi-plugin` extension:
 | `x-conversation-id` | dynamic per Pi session (extension `before_provider_headers` hook) |
 
 Unlike the header-preselect agents (Hermes / OpenClaw), Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). If the required identity env vars (`TDAI_USER_KEY`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`) are missing, the plugin warns at load and skips registration so Pi still starts.
+
+## Using Proxy with ZCode
+
+[ZCode](https://z.ai) is Zhipu's AI coding agent (CLI / desktop). Its model providers speak the **Anthropic Messages protocol** natively (provider `kind` is `"anthropic"`, base URLs look like `https://open.bigmodel.cn/api/anthropic`), so ZCode reuses the same proxy pipeline as Claude Code — auth, session-init, memory injection, and L0 capture all apply unchanged.
+
+### Connection
+
+Add a custom provider in ZCode's model settings and point it at the Proxy:
+
+```text
+http://<proxy-host>:<port>/zcode/<spaceId>
+```
+
+- Provider kind: **Anthropic** — the client appends `/v1/messages` itself, so the base URL does **not** include `/v1`
+- `<spaceId>`: memory instance ID (`default` for local deployments)
+- API key: the user's `sk-mem-...` user_key (from the panel)
+
+The resulting request path is `POST /zcode/:spaceId/v1/messages` (plus the optional `/cost-guard` and `/analyse` marker variants shared by all agents).
+
+### Session identity (required for memory features)
+
+ZCode does not send session headers on its own. Without them the proxy still authenticates and forwards, but memory injection, L0 capture, and session-init stay dormant. Attach the headers via a wrapper or launcher around the ZCode process:
+
+| Header | Purpose |
+|---|---|
+| `x-session-id` | per-conversation identity — required for the memory pipeline |
+| `x-team-id` / `x-agent-id` | team/agent preselect (skips the interactive form; ZCode has no built-in `ask_followup_question` tool) |
+| `x-task-id` | optional task narrowing |
+
+The full provider config JSON and the verified behavior matrix live in [`agents/zcode/`](./agents/zcode/).
 
 ## Optional: `sessionInit.defaultTaskId` (the "no task binding" option)
 
