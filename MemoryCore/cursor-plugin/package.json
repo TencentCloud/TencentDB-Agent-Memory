@@ -1,0 +1,37 @@
+{
+  "name": "@tencentdb-agent-memory/cursor-plugin",
+  "version": "1.0.0-beta.1",
+  "description": "Cursor IDE adapter for TencentDB Agent Memory v3",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "bin": {
+    "memory-tencentdb-cursor": "./dist/src/entry.js"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.0-beta.2",
+    "proper-lockfile": "4.1.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "4.1.4",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.2"
+  }
+}

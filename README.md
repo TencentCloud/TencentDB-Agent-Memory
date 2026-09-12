@@ -384,6 +384,21 @@ memory:
 ```
 
 
+### 4. Cursor IDE (local, Linux / macOS)
+
+The standalone **Cursor IDE** package uses MemoryCore v3 strict isolation.
+Hooks retain complete turns in pending JSONL, a detached worker calls the v3
+SDK, and three read-only MCP tools expose L1/L0 search and L2 scenario reads.
+
+```bash
+cd MemoryCore/cursor-plugin
+npm install && npm run build
+node dist/src/entry.js install --scope project   # or --scope user
+```
+
+Full guide: [`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md).
+
+
 ## 🔒 Gateway Security (optional)
 
 The Hermes Gateway listens on `:8420` and exposes capture / search / recall HTTP endpoints. Two opt-in switches let you turn it from "open localhost sidecar" into "authenticated network service". **Both default to off so existing deployments keep working unchanged.**
@@ -537,6 +552,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | Document | Contents |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
+| [`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md) | Cursor IDE v3 adapter (Hooks / MCP / install) |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
 
