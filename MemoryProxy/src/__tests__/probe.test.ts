@@ -20,6 +20,22 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/**
+ * 登记在先、适配器随后续 PR 合入的 kind（#1325 openclaw / #1334 hermes）。
+ *
+ * 本支单独 checkout 时这两个 kind 解析到 default adapter，所以注册表用例对它们
+ * 只校验"缺适配器的 kind 必须在这个白名单里"；其余 kind 一律强制解析到自己并声明
+ * `nativeProtocols`。合入 #1325 / #1334 后白名单不再命中，两个客户端与其它客户端
+ * 走同一条强制路径（见下方 FORWARD_DECLARED_NATIVE 那段）。
+ */
+const FORWARD_DECLARED_KINDS = ["openclaw", "hermes"] as const;
+/** 适配器到位后必须声明的原生协议：两者出站都是标准 OpenAI Chat Completions。 */
+const FORWARD_DECLARED_NATIVE: Record<string, ReadonlyArray<"chat">> = {
+  openclaw: ["chat"],
+  hermes: ["chat"],
+};
+const hasOwnAdapter = (kind: string): boolean => resolveAgentAdapter(kind).agentKind === kind;
+
 describe("resolveAgentModes（上游协议自动选路）", () => {
   it("上游仅支持 Chat：workbuddy 桌面走 chatCompletions，claude-code 走 anthropicToChat，codex 走 chatCompletions", () => {
     const m = resolveAgentModes({ chat: true, responses: false, anthropic: false });
@@ -108,7 +124,11 @@ describe("resolveAgentModesFor / agentsToAutoDetect（泛化探测）", () => {
 
   it("agentsToAutoDetect：默认集合由客户端注册表派生（不只是三个内置）", () => {
     const list = agentsToAutoDetect({ upstream: {} } as never);
-    for (const kind of KNOWN_AGENT_KINDS) expect(list).toContain(kind);
+    for (const kind of KNOWN_AGENT_KINDS) {
+      // 适配器还没到的 kind 在本支派生不出来；合入后同样被这条断言覆盖
+      if (!hasOwnAdapter(kind)) continue;
+      expect(list).toContain(kind);
+    }
     // 本次补上的 Chat 原生客户端
     expect(list).toContain("dsh");
     expect(list).toContain("opencode");
@@ -170,13 +190,27 @@ describe("按协议选路（不再维护客户端名单）", () => {
     }
   });
 
-  it("注册表完整性：每个已知 kind 都能解析到自己，且声明了合法的原生协议", () => {
+  it("注册表完整性：每个已到位的 kind 都能解析到自己，且声明了合法的原生协议", () => {
+    const missingAdapters: string[] = [];
     for (const kind of KNOWN_AGENT_KINDS) {
       const adapter = resolveAgentAdapter(kind);
-      expect(adapter.agentKind).toBe(kind);
+      if (adapter.agentKind !== kind) {
+        missingAdapters.push(kind);
+        continue;
+      }
       const declared = adapter.nativeProtocols ?? [];
       expect(declared.length).toBeGreaterThan(0);
       for (const p of declared) expect(ALL_PROTOCOLS).toContain(p);
+    }
+    // 只允许"登记在先、适配器随后续 PR 合入"的 kind 缺适配器
+    for (const kind of missingAdapters) {
+      expect(FORWARD_DECLARED_KINDS as readonly string[]).toContain(kind);
+    }
+    // 这些 kind 一旦到位就必须声明各自的原生协议（合入 #1325 / #1334 后生效）
+    for (const [kind, expected] of Object.entries(FORWARD_DECLARED_NATIVE)) {
+      const adapter = resolveAgentAdapter(kind);
+      if (adapter.agentKind !== kind) continue;
+      expect(adapter.nativeProtocols).toEqual(expected);
     }
     // 未注册的客户端不猜协议
     expect(resolveAgentAdapter("mystery").nativeProtocols ?? []).toEqual([]);
