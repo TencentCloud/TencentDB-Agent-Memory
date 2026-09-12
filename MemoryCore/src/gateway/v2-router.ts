@@ -48,6 +48,7 @@ import {
   scenarioCountRequestSchema,
   coreWriteRequestSchema,
   coreCountRequestSchema,
+  memoryDiffRequestSchema,
   teamCreateRequestSchema,
   teamGetRequestSchema,
   teamUpdateRequestSchema,
@@ -169,6 +170,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/core/read",
   "/core/write",
   "/core/count",
+  "/memory/diff",
 ]);
 
 /**
@@ -429,6 +431,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/core/read": handleCoreRead,
   "/core/write": handleCoreWrite,
   "/core/count": handleCoreCount,
+  "/memory/diff": handleMemoryDiff,
 };
 
 const routeTable: Record<string, RouteHandler> = {
@@ -1199,6 +1202,93 @@ async function handleAtomicCount(body: unknown, _auth: V2AuthContext, requestId:
     taskId: iso?.taskId,
   });
   return successEnvelope<CountData>({ total }, requestId);
+}
+
+/**
+ * POST /memory/diff — 某个 session 的 L1 变更集。
+ *
+ * 返回聚合视图：每次写入操作一组 { op, record, replaced[] }。
+ *   - created          → 新增记忆，replaced 恒空
+ *   - updated / merged → 新记录 + replaced[]（被 superseded 的旧记录快照）
+ *   - superseded 孤儿（其 superseded_by 指向的新记录不在本批事件流中，即追加
+ *     只成功了一半、或新记录事件被分页切到另一页的场景）单独成组，保证不丢信息
+ *
+ * 隔离沿用 requestIsolation 的 team/user/agent/task —— 不能跨租户看别人的 diff；
+ * body.session_id 是要查询的目标 session（不是 requestIsolation.sessionId，
+ * 语义同 conversation/query：session_id 来自 body）。
+ * MemoryEventFilter 在 store 层还支持 op/session_key/时间窗过滤，endpoint 只暴露
+ * session_id + 分页；需要更细查询时再加参数。
+ */
+async function handleMemoryDiff(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = memoryDiffRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+  if (!store.queryMemoryEvents) {
+    return errorEnvelope(501, "Memory events not supported by this store backend", requestId);
+  }
+  const iso = deps.requestIsolation;
+
+  const events = await store.queryMemoryEvents({
+    session_id: parsed.data.session_id,
+    limit: parsed.data.limit,
+    offset: parsed.data.offset,
+    team_id: iso?.teamId,
+    user_id: iso?.userId,
+    agent_id: iso?.agentId,
+    task_id: iso?.taskId,
+  });
+
+  // Join superseded rows onto their replacing record (superseded_by → record_id).
+  const supersededByNew = new Map<string, typeof events>();
+  const newRecordIds = new Set(events.filter((e) => e.op !== "superseded").map((e) => e.record_id));
+  for (const e of events) {
+    if (e.op === "superseded" && e.superseded_by) {
+      const arr = supersededByNew.get(e.superseded_by) ?? [];
+      arr.push(e);
+      supersededByNew.set(e.superseded_by, arr);
+    }
+  }
+
+  const eventShape = (e: (typeof events)[number]) => ({
+    record_id: e.record_id,
+    content: e.content,
+    memory_type: e.memory_type,
+    version: e.version ?? 0,
+    event_ts: e.event_ts,
+    ...(e.op === "superseded" && e.origin_session_id ? { origin_session_id: e.origin_session_id } : {}),
+    ...(e.op === "superseded" && e.origin_session_key ? { origin_session_key: e.origin_session_key } : {}),
+  });
+
+  const changes: Array<{
+    op: string;
+    record_id: string;
+    content: string;
+    memory_type?: string;
+    version: number;
+    event_ts: string;
+    origin_session_id?: string;
+    origin_session_key?: string;
+    replaced: Array<{
+      record_id: string; content: string; memory_type?: string;
+      version: number; event_ts: string; origin_session_id?: string; origin_session_key?: string;
+    }>;
+  }> = [];
+
+  for (const e of events) {
+    if (e.op === "superseded") {
+      // Orphan: the updated/merged event for this superseded row never landed.
+      if (!e.superseded_by || !newRecordIds.has(e.superseded_by)) {
+        changes.push({ op: "superseded", ...eventShape(e), replaced: [] });
+      }
+      continue;
+    }
+    const replaced = (supersededByNew.get(e.record_id) ?? []).map((s) => eventShape(s));
+    changes.push({ op: e.op, ...eventShape(e), replaced });
+  }
+
+  return successEnvelope({ changes, total: changes.length }, requestId);
 }
 
 async function handleAtomicSearch(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {

@@ -587,6 +587,79 @@ export interface AuditQueryFilter {
   offset?: number;
 }
 
+// ============================
+// Memory Events（session 变更集）
+// ============================
+
+/**
+ * L1 记忆变更事件 —— writeMemory 的 dedup 决策落地时追加。
+ *
+ * 与 Memory Audit（AuditEntry）的分工：
+ *   - Audit 面向显式管理 API（atomic/update、atomic/delete、scenario/write 等），
+ *     不存 content、无 session 维度，回答"谁在什么时间改了哪条"。
+ *   - MemoryEvent 面向自动提取写入路径，存 content 快照 + session 维度 +
+ *     supersede 链，回答"这个 session 让记忆发生了什么变化"（session diff）。
+ *
+ * op 语义：
+ *   - created    : store action —— 新增一条记忆
+ *   - updated    : update action —— 新记录，supersedes 列出被替代的旧 record_id
+ *   - merged     : merge action —— 同 updated
+ *   - superseded : 旧记录被替代，content 为旧内容快照，superseded_by 指向新
+ *                  record_id；session_id 记执行淘汰的 session，
+ *                  origin_session_id 保留旧记录原归属（反向可查）。
+ */
+export interface MemoryEvent {
+  /** 事件发生时间（ISO 8601）。 */
+  event_ts: string;
+  /** 执行写入的 session key（conversation channel）。 */
+  session_key: string;
+  /** 执行写入的 session id。superseded 事件记执行淘汰的 session。 */
+  session_id: string;
+  /** 被替代记录原本的归属 session（仅 superseded 事件填充）。 */
+  origin_session_id?: string;
+  /** 被替代记录原本的归属 session key（仅 superseded 事件填充）。 */
+  origin_session_key?: string;
+  /** 租户维度，与 record 的 tenancy 一致。 */
+  team_id?: string;
+  user_id?: string;
+  agent_id?: string;
+  task_id?: string;
+  /** 变更类型。 */
+  op: "created" | "updated" | "merged" | "superseded";
+  /** 本事件对应的 record id（superseded 时为旧 record id）。 */
+  record_id: string;
+  /** 内容快照（superseded 时为被替代的旧内容）。 */
+  content: string;
+  /** 记忆类型（persona / episodic / instruction / work_*）。 */
+  memory_type?: string;
+  /** 本事件对应 record 的 version。 */
+  version?: number;
+  /** updated/merged 事件：被替代的旧 record_id 列表。 */
+  supersedes?: string[];
+  /** superseded 事件：指向新 record_id。 */
+  superseded_by?: string;
+}
+
+/** queryMemoryEvents 过滤条件，全部可选。 */
+export interface MemoryEventFilter {
+  session_id?: string;
+  session_key?: string;
+  origin_session_id?: string;
+  origin_session_key?: string;
+  record_id?: string;
+  op?: MemoryEvent["op"];
+  team_id?: string;
+  agent_id?: string;
+  user_id?: string;
+  task_id?: string;
+  /** 只返 event_ts ≥ since 的事件（ISO 8601）。 */
+  since?: string;
+  /** 只返 event_ts ≤ until 的事件（ISO 8601）。 */
+  until?: string;
+  limit?: number;   // 默认 100，上限 1000
+  offset?: number;
+}
+
 export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStore {
   // ── Capabilities ───────────────────────────────────────────
 
@@ -759,6 +832,10 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── Memory Audit（修改审计；optional 让 store 可以选择不实现）──
   appendAudit?(entry: AuditEntry): MaybePromise<void>;
   queryAudit?(filter: AuditQueryFilter): MaybePromise<AuditEntry[]>;
+
+  // ── Memory Events（session 变更集；optional，同上）─────────────
+  appendMemoryEvent?(event: MemoryEvent): MaybePromise<void>;
+  queryMemoryEvents?(filter: MemoryEventFilter): MaybePromise<MemoryEvent[]>;
 }
 
 // ============================
