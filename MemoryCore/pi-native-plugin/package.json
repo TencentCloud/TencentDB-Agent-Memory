@@ -1,0 +1,43 @@
+{
+  "name": "@tencentdb-agent-memory/pi-native-plugin",
+  "version": "0.4.0",
+  "description": "Native Pi extension for TencentDB Agent Memory v3 — 8 memory/knowledge tools, automatic L0 capture at session shutdown, visible L2/L3 (once per session) and L1 (every turn) injection. No LLM-traffic proxy: Pi keeps its own model provider.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "extension",
+    "tencentdb",
+    "agent-memory",
+    "tdai"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "README_CN.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@types/node": "^22.0.0",
+    "typebox": "^1.3.7",
+    "typescript": "^5.5.0",
+    "vitest": "^3.2.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

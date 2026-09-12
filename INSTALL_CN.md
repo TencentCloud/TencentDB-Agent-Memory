@@ -367,6 +367,8 @@ Proxy 目前支持 8 类 AI Agent 客户端。每个 agent 的**完整接入配�
 | **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
 | **Hermes** | `~/.hermes/config.yaml` + Header 预选 | [`agents/hermes/`](./agents/hermes/) |
 | **OpenClaw** | `~/.openclaw/openclaw.json` + Header 预选 | [`agents/openclaw/`](./agents/openclaw/) |
+| **Pi** | `pi-plugin` 扩展（环境变量） | [`MemoryCore/pi-plugin/`](./MemoryCore/pi-plugin/) |
+| **Pi（原生，不经代理）** | `pi-native-plugin` 扩展（环境变量）；Pi 保留自己的模型提供方 | [`MemoryCore/pi-native-plugin/`](./MemoryCore/pi-native-plugin/) |
 | **其他平台** | Header 预选（通用） | [`agents/README.md`](./agents/README.md) |
 
 Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/agent/task
