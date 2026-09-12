@@ -8,6 +8,11 @@
 
 ### ✨ 新功能
 
+- **跨平台 Gateway 适配器套件 + MiMo Code 插件** ([#235](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/235))：
+  - 新增 `src/adapters/gateway-client/`：无额外运行时依赖的 `GatewayMemoryClient` 与 `createGatewayPlatformAdapter()`，覆盖 `/health` `/recall` `/capture` `/search/*` `/session/end`；默认仅允许 loopback、拒绝重定向、运行时校验响应并导出类型化错误。
+  - 新增 `src/adapters/mimo-code/`：MiMo Code（OpenCode fork）插件适配，使用官方 `chat.message` / `experimental.chat.system.transform` / 主代理 `session.post` / `session.deleted` 生命周期；fail-open；失败 capture/flush 重试；召回内容标记为不可信历史数据。
+  - 文档：`src/adapters/gateway-client/README.md`、`src/adapters/mimo-code/README.md`、`docs/adapters/contribution-guide.md`（PR 车道与 review 清单）；README / README_CN 增加 MiMo Code 入口。
+  - package exports：`./adapters/gateway-client`、`./adapters/mimo-code`，包含生成的 `.d.mts` 类型声明与打包消费测试。
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。

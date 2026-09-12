@@ -383,6 +383,21 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. MiMo Code (Gateway plugin)
+
+MiMo Code (OpenCode fork) can use the same Gateway via a thin plugin adapter.
+This package includes the shared, typed Gateway client used by the adapter.
+See [`src/adapters/mimo-code/README.md`](./src/adapters/mimo-code/README.md).
+
+```ts
+// .mimocode/plugins/memory-tencentdb.ts
+import { createMimoCodeMemoryPlugin } from "@tencentdb-agent-memory/memory-tencentdb/adapters/mimo-code";
+export const MemoryTencentDB = createMimoCodeMemoryPlugin();
+```
+
+Shared Gateway client + contribution lanes:
+[`src/adapters/gateway-client/`](./src/adapters/gateway-client/README.md),
+[`docs/adapters/contribution-guide.md`](./docs/adapters/contribution-guide.md).
 
 ## 🔒 Gateway Security (optional)
 
