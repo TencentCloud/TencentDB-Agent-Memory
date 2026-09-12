@@ -86,12 +86,12 @@ rm_container_if_exists "$CONTAINER"
 # 内部 knowledge 通过 upstream memory 调 LLM 走 custom 模式，直接指向 MEMORY_LLM_*
 # LLM_MODE=custom → 不走 memory 的 LLM proxy，而是 knowledge 直连用户提供的端点
 info "启动 memory-hub (image=$MEMORY_HUB_IMAGE, panel=$PANEL_PORT knowledge=$KNOWLEDGE_PORT)"
-$DOCKER run -d --name "$CONTAINER" \
+$DOCKER run -d --name "$CONTAINER" --restart unless-stopped \
   --network "$NETWORK" \
   --network-alias memory-hub \
   --add-host=host.docker.internal:host-gateway \
-  -p "${PANEL_PORT}:8125" \
-  -p "${KNOWLEDGE_PORT}:8424" \
+  -p "${MEMORY_BIND_ADDRESS:-0.0.0.0}:${PANEL_PORT}:8125" \
+  -p "${MEMORY_BIND_ADDRESS:-0.0.0.0}:${KNOWLEDGE_PORT}:8424" \
   -v "${PANEL_VOLUME}:/data/knowledge" \
   -e PANEL_PORT=8125 \
   -e KNOWLEDGE_PORT=8424 \
