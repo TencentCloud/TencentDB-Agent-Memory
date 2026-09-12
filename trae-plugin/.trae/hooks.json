@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": "node ${TRAE_PLUGIN_DIR}/scripts/memory-hook.mjs",
+        "args": ["SessionStart"]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "command": "node ${TRAE_PLUGIN_DIR}/scripts/memory-hook.mjs",
+        "args": ["UserPromptSubmit"]
+      }
+    ],
+    "Stop": [
+      {
+        "command": "node ${TRAE_PLUGIN_DIR}/scripts/memory-hook.mjs",
+        "args": ["Stop"]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "command": "node ${TRAE_PLUGIN_DIR}/scripts/memory-hook.mjs",
+        "args": ["SessionEnd"]
+      }
+    ]
+  }
+}
