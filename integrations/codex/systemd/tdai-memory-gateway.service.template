@@ -1,0 +1,17 @@
+[Unit]
+Description=TencentDB Agent Memory Gateway
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%HOME%/.local/bin/tdai-memory-gateway
+WorkingDirectory=%TDAI_SRC%
+Restart=on-failure
+RestartSec=3
+Environment=PATH=%HOME%/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=TDAI_HOME=%TDAI_HOME%
+Environment=TDAI_SRC=%TDAI_SRC%
+EnvironmentFile=%TDAI_HOME%/gateway.env
+
+[Install]
+WantedBy=default.target
