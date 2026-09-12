@@ -11,7 +11,11 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: {
+    index: "./index.ts",
+    "adapter-sdk": "./src/adapters/gateway/index.ts",
+    "mcp-server": "./src/adapters/mcp/cli.ts",
+  },
   outDir: "./dist",
   format: "esm",
   platform: "node",
@@ -20,6 +24,17 @@ export default defineConfig({
   dts: false,
   sourcemap: false,
   deps: {
+    // The MCP SDK is a dev dependency bundled into the stdio binary so
+    // consumers do not install its unused HTTP server dependencies.
+    onlyBundle: [
+      "@modelcontextprotocol/sdk",
+      "zod-to-json-schema",
+      "ajv",
+      "ajv-formats",
+      "fast-deep-equal",
+      "json-schema-traverse",
+      "fast-uri",
+    ],
     neverBundle: (id) => {
       // openclaw SDK — always external
       if (id === "openclaw" || id.startsWith("openclaw/")) return true;
