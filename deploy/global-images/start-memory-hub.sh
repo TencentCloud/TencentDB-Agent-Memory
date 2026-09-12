@@ -38,6 +38,18 @@ MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 # Panel 后端 → Kernel 的转发地址始终走 REMOTE_INSTANCE_URL，不受此变量影响。
 detect_host_ip() {
   local ip=""
+  # Windows（Git Bash / MSYS）：`command -v ipconfig` 会命中 Windows 自带的
+  # ipconfig.exe，它不认识 macOS 的 `getifaddr <iface>` 语法，且把用法帮助
+  # 文本打到 **stdout** —— 多行文本会被下面的 `[[ -n "$ip" ]]` 当成有效值
+  # 捕获，最终拼进 http://<多行文本>:<port> 炸掉容器内配置生成。
+  # 因此 Windows 必须在最前面单独解析 ipconfig 的 IPv4 行。
+  if uname -s 2>/dev/null | grep -qi mingw; then
+    # 优先取 "IPv4 地址 / IPv4 Address" 行（中英文系统都含 "IPv4" 字样）
+    ip=$(ipconfig 2>/dev/null | tr -d '\r' | grep "IPv4" \
+      | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+      | awk '$0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
+    [[ -n "$ip" ]] && { echo "$ip"; return; }
+  fi
   # Linux
   if command -v hostname >/dev/null 2>&1; then
     ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)

@@ -31,7 +31,7 @@ npm install
 # 2. 配置 LLM
 export TDAI_LLM_API_KEY="your-api-key"
 export TDAI_LLM_BASE_URL="https://api.deepseek.com/v1"
-export TDAI_LLM_MODEL="deepseek-chat"
+export TDAI_LLM_MODEL="deepseek-v4-flash"
 
 # 3. 启动 Gateway
 npx tsx src/gateway/server.ts
@@ -56,7 +56,7 @@ Gateway 默认监听 `http://127.0.0.1:8420`，数据存储在 `~/.memory-tencen
 # 必须 — LLM 配置
 export TDAI_LLM_API_KEY="sk-xxx"
 export TDAI_LLM_BASE_URL="https://api.deepseek.com/v1"   # 默认 https://api.openai.com/v1
-export TDAI_LLM_MODEL="deepseek-chat"                     # 默认 gpt-4o
+export TDAI_LLM_MODEL="deepseek-v4-flash"                     # 默认 gpt-4o
 export TDAI_LLM_MAX_TOKENS=4096
 export TDAI_LLM_TIMEOUT_MS=120000
 
@@ -82,7 +82,7 @@ data:
 llm:
   baseUrl: "https://api.deepseek.com/v1"
   apiKey: "${TDAI_LLM_API_KEY}"
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
   maxTokens: 4096
   timeoutMs: 120000
 
@@ -121,7 +121,7 @@ memory:
 docker run -d \
   -e TDAI_LLM_API_KEY="sk-xxx" \
   -e TDAI_LLM_BASE_URL="https://api.deepseek.com/v1" \
-  -e TDAI_LLM_MODEL="deepseek-chat" \
+  -e TDAI_LLM_MODEL="deepseek-v4-flash" \
   -e TDAI_GATEWAY_HOST="0.0.0.0" \
   -p 8420:8420 \
   -v tdai-data:/root/.memory-tencentdb/memory-tdai \
@@ -159,7 +159,7 @@ export TDAI_DEPLOY_MODE="service"           # 关键：启用 service 模式
 # ── LLM（同 standalone） ──
 export TDAI_LLM_API_KEY="sk-xxx"
 export TDAI_LLM_BASE_URL="https://api.deepseek.com/v1"
-export TDAI_LLM_MODEL="deepseek-chat"
+export TDAI_LLM_MODEL="deepseek-v4-flash"
 
 # ── 服务端口 ──
 export TDAI_GATEWAY_PORT=3100
@@ -213,7 +213,7 @@ data:
 llm:
   baseUrl: "${TDAI_LLM_BASE_URL}"
   apiKey: "${TDAI_LLM_API_KEY}"
-  model: "deepseek-chat"
+  model: "deepseek-v4-flash"
 
 memory:
   storeBackend: "tcvdb"
@@ -493,7 +493,7 @@ memory:
 ```bash
 export TDAI_LLM_API_KEY="sk-xxx"
 export TDAI_LLM_BASE_URL="https://api.deepseek.com/v1"
-export TDAI_LLM_MODEL="deepseek-chat"
+export TDAI_LLM_MODEL="deepseek-v4-flash"
 npx tsx src/gateway/server.ts
 ```
 
@@ -503,7 +503,7 @@ npx tsx src/gateway/server.ts
 docker run -d \
   -e MODEL_API_KEY="sk-xxx" \
   -e MODEL_BASE_URL="https://api.deepseek.com/v1" \
-  -e MODEL_NAME="deepseek-chat" \
+  -e MODEL_NAME="deepseek-v4-flash" \
   -p 8420:8420 \
   -v hermes-data:/home/agentuser \
   agentmemory/hermes-memory:latest

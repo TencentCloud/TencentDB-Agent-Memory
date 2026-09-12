@@ -50,10 +50,12 @@ check_llm_openai() {
   base="${base%/messages}"
   base="${base%/chat/completions}"
   local url="${base}/models"
-  local code body_file=/tmp/llm-check.$$
+  local code rc body_file=./llm-check.$$
   code=$("$CURL" -sS --max-time 10 -o "$body_file" -w "%{http_code}" \
     -H "Authorization: Bearer $key" \
-    "$url" 2>/dev/null || echo "000")
+    "$url" 2>/dev/null)
+  rc=$?
+  [[ $rc -ne 0 || ! "$code" =~ ^[0-9]{3}$ ]] && code="000"
   if [[ "$code" == "200" ]]; then
     # 尝试解析 model 是否在列表里（宽松匹配，不匹配也只 warn）
     if grep -q "\"$model\"" "$body_file" 2>/dev/null; then
@@ -95,14 +97,16 @@ check_llm_anthropic() {
   else
     url="${base}/v1/messages"
   fi
-  local code body_file=/tmp/llm-check.$$
+  local code rc body_file=./llm-check.$$
   code=$("$CURL" -sS --max-time 15 -o "$body_file" -w "%{http_code}" \
     -X POST -H "Content-Type: application/json" \
     -H "x-api-key: $key" \
     -H "Authorization: Bearer $key" \
     -H "anthropic-version: 2023-06-01" \
     -d "{\"model\":\"$model\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
-    "$url" 2>/dev/null || echo "000")
+    "$url" 2>/dev/null)
+  rc=$?
+  [[ $rc -ne 0 || ! "$code" =~ ^[0-9]{3}$ ]] && code="000"
   case "$code" in
     200)
       ok "$label Anthropic 协议通路 OK（模型 $model 已应答）"
