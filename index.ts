@@ -45,6 +45,27 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 
+export {
+  GatewayMemoryClient,
+  GatewayMemoryClientError,
+  createGatewayPlatformAdapter,
+} from "./src/adapters/gateway-client/index.js";
+export type {
+  GatewayMemoryClientOptions,
+  GatewayPlatformAdapter,
+  GatewayPlatformAdapterOptions,
+  GatewayPlatformContext,
+} from "./src/adapters/gateway-client/index.js";
+export { createTdaiLangChainMiddleware } from "./src/adapters/langchain/index.js";
+export type {
+  LangChainAgentState,
+  LangChainCreateMiddleware,
+  LangChainMemoryMiddlewareDefinition,
+  LangChainMemoryMiddlewareOptions,
+  LangChainMessageLike,
+  LangChainRuntimeLike,
+} from "./src/adapters/langchain/index.js";
+
 const TAG = "[memory-tdai]";
 
 /**
