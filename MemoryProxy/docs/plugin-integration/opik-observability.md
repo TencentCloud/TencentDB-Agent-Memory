@@ -146,6 +146,13 @@ curl -sS -X POST "http://127.0.0.1:8096/codex/default/responses" \
 > 三条路径与 `INSTALL.md` 的客户端接入方式一致（`/{agent}/{spaceId}/...`）。把 `<user_key>` 换成面板里的
 > `sk-mem-*`，`<model>` 换成上游支持的模型名；`stream:false` 便于一次性看到 JSON 响应。
 
+> **Windows / PowerShell 注意（与 #1347 同一口径）**：上面三条写的是 `curl`。PowerShell 5.1 里
+> `curl` 是 `Invoke-WebRequest` 的别名，它不接受 `-H "k: v"` 与 `-d` 这种写法，会报
+> `无法绑定参数 Headers` / `Cannot bind parameter 'Headers'`（`System.String` →
+> `System.Collections.IDictionary`）。Windows 下把命令里的 `curl` 改成 `curl.exe`
+> （其余参数照抄）即可；Git Bash / WSL 里 `curl` 可直接用。
+> §6.2 的 GET 形式（`curl "<url>"`）在 PowerShell 下不受影响。
+
 ### 6.2 查 trace（REST）
 
 ```bash
