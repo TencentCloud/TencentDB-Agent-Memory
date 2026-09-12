@@ -300,14 +300,14 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     // RAG-driven `<cloud_skills>` block. Calls /v3/skill/search at prewarm time.
     // When coreSkill is unconfigured (no serviceToken), the searchSkills call
     // will fail and the injector silently degrades to no <cloud_skills> block.
+    const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
     registry.register(
-      new SkillInjector({ coreSkill: config.coreSkill }),
+      new SkillInjector({ coreSkill: config.coreSkill, allowLlmWrite }),
     );
 
     // Always inject the curl-recipe `<skill_tools>` block alongside the
     // dynamic `<cloud_skills>` block. Even when there are no skills to
     // recommend, the LLM still needs to know how to create / search them.
-    const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
     registry.register(new SkillToolsInjector({ proxyBaseUrl: proxyBaseUrl!, allowLlmWrite }));
   }
 
