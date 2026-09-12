@@ -14,7 +14,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[效果亮点](#-效果亮点) · [项目简介](#项目简介) · [核心技术](#核心技术拒绝平铺走向分层与符号化) · [方案特点](#-方案特点) · [快速开始](#快速开始)
+[效果亮点](#-效果亮点) · [项目简介](#项目简介) · [核心技术](#核心技术拒绝平铺走向分层与符号化) · [方案特点](#-方案特点) · [快速开始](#快速开始) · [MCP 适配](./docs/MCP_ADAPTER_CN.md)
 
 <div align="center">
 
@@ -205,16 +205,35 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 > 💡 patch 每次 OpenClaw 安装只需执行一次。升级 OpenClaw 后建议重新执行以确保钩子生效。
 
 
-### 2. Hermes
+### 2. MCP 适配（Claude Code / Codex / Cursor 等）
+
+本项目新增 MCP stdio 适配入口，可将 `TdaiCore` 的召回、捕获、搜索和 session flush 能力暴露为 MCP tools，供支持 MCP 的 Agent 客户端使用。
+
+构建后运行：
+
+```bash
+cd TencentDB-Agent-Memory
+npm run build
+TDAI_DATA_DIR="$HOME/.openclaw/memory-tdai" \
+TDAI_LLM_BASE_URL="https://api.deepseek.com" \
+TDAI_LLM_API_KEY="<redacted>" \
+TDAI_LLM_MODEL="deepseek-v4-flash" \
+node dist/mcp-server.mjs
+```
+
+详细架构、工具清单、客户端配置和验证方式见：[MCP 适配层方案](./docs/MCP_ADAPTER_CN.md)。
+
+
+### 3. Hermes
 
 除 OpenClaw 外，本插件同样支持 [Hermes](https://github.com/NousResearch/hermes-agent) Agent。根据部署场景选择安装路径：
 
 | 你的场景 | 走哪条路 |
 |---|---|
-| 想从零启动一个带记忆能力的 Hermes（一条命令搞定） | 2.A Docker（下文） |
-| 已经装好了Hermes，只想加上记忆能力 | 2.B 挂到已有 Hermes 上（再下文） |
+| 想从零启动一个带记忆能力的 Hermes（一条命令搞定） | 3.A Docker（下文） |
+| 已经装好了Hermes，只想加上记忆能力 | 3.B 挂到已有 Hermes 上（再下文） |
 
-#### 2.A Docker（全新部署，需版本号 ≥ 0.3.4）
+#### 3.A Docker（全新部署，需版本号 ≥ 0.3.4）
 
 Docker 镜像把 `hermes-agent` 和 `memory_tencentdb` provider 聚合在一起，Gateway 监听 `:8420`：
 
@@ -265,7 +284,7 @@ docker exec -it hermes-memory hermes
 
 > 镜像内置了腾讯云 DeepSeek-V3.2 的默认值，如果你使用该模型，`MODEL_BASE_URL`/`MODEL_NAME`/`MODEL_PROVIDER` 可以省略，只传 `MODEL_API_KEY` 即可。
 
-#### 2.B 挂到已有 Hermes 上（无 Docker）
+#### 3.B 挂到已有 Hermes 上（无 Docker）
 
 如果宿主机上已经装好了 `hermes-agent`，只想加上记忆能力，**不需要** Docker 镜像。
 
@@ -312,7 +331,7 @@ memory:
 编辑 `~/.hermes/.env`，添加：
 
 ```bash
-MEMORY_TENCENTDB_GATEWAY_CMD="sh -c 'cd ~/.memory-tencentdb/tdai-memory-openclaw-plugin && exec npx tsx src/gateway/server.ts'"
+MEMORY_TENCENTDB_GATEWAY_CMD="sh -c 'cd ~/.memory-tencentdb/tdai-memory-openclaw-plugin && exec node --import tsx/esm src/gateway/server.ts'"
 MEMORY_TENCENTDB_GATEWAY_HOST="127.0.0.1"
 MEMORY_TENCENTDB_GATEWAY_PORT="8420"
 ```
@@ -320,7 +339,7 @@ MEMORY_TENCENTDB_GATEWAY_PORT="8420"
 LLM 凭证请按需添加（Gateway 实际读取的是 `TDAI_LLM_*` 系列变量）：
 
 ```bash
-TDAI_LLM_API_KEY="sk-your-api-key-here"
+TDAI_LLM_API_KEY="<your-api-key>"
 TDAI_LLM_BASE_URL="https://api.openai.com/v1"
 TDAI_LLM_MODEL="gpt-4o"
 ```
@@ -343,7 +362,7 @@ TDAI_LLM_MODEL="gpt-4o"
 - **手动运行**：提前启动一个独立的 Gateway 进程：
   ```bash
   cd ~/.memory-tencentdb/tdai-memory-openclaw-plugin
-  npx tsx src/gateway/server.ts
+  node --import tsx/esm src/gateway/server.ts
   ```
 
 **7. 验证**：
@@ -357,7 +376,7 @@ curl http://127.0.0.1:8420/health
 
 ---
 
-### 3. Hermes（Windows 原生安装）
+#### 3.C Hermes（Windows 原生安装）
 
 Windows 原生 Hermes 环境下，在仓库根目录用 Command Prompt 或 PowerShell
 运行内置批处理脚本：

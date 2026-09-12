@@ -205,7 +205,7 @@ source_user_envs() {
 #
 # 优先级：
 #   1. MEMORY_TENCENTDB_GATEWAY_CMD（install 脚本写入的环境变量）
-#   2. 本地 tsx:  cd $TDAI_INSTALL_DIR && npx tsx src/gateway/server.ts
+#   2. 本地 tsx:  cd $TDAI_INSTALL_DIR && node --import tsx/esm src/gateway/server.ts
 # ============================================================
 
 resolve_gateway_cmd() {
@@ -215,8 +215,8 @@ resolve_gateway_cmd() {
     fi
     local entry="$TDAI_INSTALL_DIR/src/gateway/server.ts"
     [[ -f "$entry" ]] || die "Gateway entry not found: $entry (是否已执行 install_hermes_tdai_gateway.sh？)"
-    # 与 install 脚本相同风格：sh -c 'cd ... && exec npx tsx ...'
-    printf "sh -c 'cd %s && exec npx tsx src/gateway/server.ts'" "$TDAI_INSTALL_DIR"
+    # 使用 Node 原生 --import 加载本地 tsx，避免依赖全局 npx。
+    printf "sh -c 'cd %s && exec node --import tsx/esm src/gateway/server.ts'" "$TDAI_INSTALL_DIR"
 }
 
 # ============================================================
@@ -234,7 +234,6 @@ cmd_start() {
     fi
 
     need_cmd node
-    need_cmd npx
 
     local gw_cmd; gw_cmd="$(resolve_gateway_cmd)"
     log "starting gateway: $gw_cmd"
