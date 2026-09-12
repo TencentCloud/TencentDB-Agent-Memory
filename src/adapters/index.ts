@@ -17,3 +17,7 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// STDIO MCP bridge for Codex and other MCP-capable hosts.
+export { TdaiGatewayClient, TdaiMcpServer } from "./mcp/index.js";
+export type { GatewayClientOptions } from "./mcp/index.js";
