@@ -301,7 +301,10 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     // When coreSkill is unconfigured (no serviceToken), the searchSkills call
     // will fail and the injector silently degrades to no <cloud_skills> block.
     registry.register(
-      new SkillInjector({ coreSkill: config.coreSkill }),
+      new SkillInjector({
+        coreSkill: config.coreSkill,
+        queueStrategy: config.injection.skillQueueStrategy,
+      }),
     );
 
     // Always inject the curl-recipe `<skill_tools>` block alongside the
@@ -457,6 +460,11 @@ function getOrBuildBundle(config: ProxyConfig): PipelineBundle {
  */
 export function getInjectionPipeline(config: ProxyConfig): InjectionPipeline {
   return getOrBuildBundle(config).pipeline;
+}
+
+/** Shared persistence used to reconstruct Proxy-owned dynamic Skill history. */
+export function getSkillQueueHistoryRepo(config: ProxyConfig): HookCacheRepo | undefined {
+  return getOrBuildBundle(config).hookCacheRepo;
 }
 
 /**

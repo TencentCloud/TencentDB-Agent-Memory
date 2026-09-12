@@ -35,13 +35,19 @@ import {
   getCoreSkillClient,
   type ListingResult,
 } from "../../skill/core-client.js";
-import type { CoreSkillConfig } from "../../types.js";
+import type { CoreSkillConfig, SkillQueueStrategy } from "../../types.js";
+import {
+  SKILL_QUEUE_END,
+  SKILL_QUEUE_START,
+} from "../../common/skill-queue-markers.js";
 
 const TAG = "[skill-injector]";
 
 export interface SkillInjectorConfig {
   /** Core skill client config; passed to `getCoreSkillClient(config)`. */
   coreSkill: CoreSkillConfig;
+  /** Where the dynamic listing is placed for queue-level experiments. */
+  queueStrategy?: SkillQueueStrategy;
 }
 
 /**
@@ -144,25 +150,25 @@ function buildListingQuery(input: PrewarmInput): string | undefined {
   return combined;
 }
 
-/**
- * Skill injector hook.
- * Targets: system.before_tools injection point (→ before <agent_skills>).
- */
+/** Inject the scoped Skill listing at session init or after the current queue. */
 export class SkillInjector implements InjectionHook {
   id = "skill-injector";
-  point = "system.before_tools" as const;
+  point: "system.before_tools" | "user.after";
   /** Lands before the "skills" region (CodeBuddy: `<agent_skills>`). */
-  anchor: AnchorTarget = { slot: "skills", relation: "before" };
+  anchor?: AnchorTarget;
   priority: HookPriority = HOOK_PRIORITY.SKILL;
-  description = "Inject agent-owned cloud skills via /v3/skill/listing before <agent_skills>.";
-  /** Listing result is stable for the session. */
-  cacheStrategy: CacheStrategy = "session_init";
+  description = "Inject agent-owned cloud skills via /v3/skill/listing.";
+  cacheStrategy: CacheStrategy;
 
   constructor(
     private config: SkillInjectorConfig,
-    /** Optional override (tests). */
     private clientOverride?: CoreSkillClient,
-  ) {}
+  ) {
+    const queue = config.queueStrategy ?? "session_init";
+    this.point = queue === "session_init" ? "system.before_tools" : "user.after";
+    this.anchor = queue === "session_init" ? { slot: "skills", relation: "before" } : undefined;
+    this.cacheStrategy = queue === "session_init" ? "session_init" : "none";
+  }
 
   /**
    * Live-path execute (cache-miss self-heal).
@@ -175,10 +181,9 @@ export class SkillInjector implements InjectionHook {
    * and *re-populates* the cache with whatever we return. So this method must
    * be able to reproduce the same block the prewarm path would have produced.
    *
-   * The only degradation vs. prewarm is the search `query`: on the live path
-   * we don't have `agentDetail`/`taskDetail`, so core routes to `mode=full`
-   * (head of the listing). That is an accepted trade-off, documented in
-   * `BUG-skill-injection-multinode.md` §Solution 1.
+   * For session-init cache recovery the query remains empty, so core returns
+   * the full scoped head. Dynamic strategies receive their recent-queue query
+   * through handler metadata.
    *
    * Historically this returned `[]` unconditionally, which meant a miss on
    * any node other than the one that ran prewarm silently dropped
@@ -188,19 +193,34 @@ export class SkillInjector implements InjectionHook {
     const custom = ctx.metadata.custom as Record<string, unknown> | undefined;
     const caps = custom?.assetCapabilities as { skill?: boolean } | undefined;
     if (caps?.skill === false) return [];
+    if (
+      (this.config.queueStrategy === "every_queue"
+        || this.config.queueStrategy === "adaptive_queue")
+      && custom?.skillQueueSnapshotHit === true
+    ) {
+      return [];
+    }
     const session = custom?.session as {
       team_id?: string;
       agent_id?: string;
       space_id?: string;
     } | undefined;
-    // No search query on the live path — core will route to mode=full.
-    return this.renderListingBlocks({
+    // Handlers pass the latest real user queue as a bounded BM25 query. Keep
+    // the fallback query-less for non-handler callers and degraded sessions.
+    const listingQuery = typeof custom?.skillListingQuery === "string"
+      ? custom.skillListingQuery
+      : undefined;
+    const blocks = await this.renderListingBlocks({
       team_id: session?.team_id,
       agent_id: session?.agent_id,
       space_id: session?.space_id,
-      query: undefined,
+      query: listingQuery,
       trigger: "execute",
     });
+    if (this.config.queueStrategy === "session_init") return blocks;
+    return blocks.map((block) => block.type === "text"
+      ? { ...block, content: `${SKILL_QUEUE_START}\n${block.content}\n${SKILL_QUEUE_END}` }
+      : block);
   }
 
   /**
@@ -271,6 +291,16 @@ export class SkillInjector implements InjectionHook {
         agent_id,
         query,
       }, { serviceId });
+      // A valid queue can still have no lexical match (short text, language
+      // mismatch, or a catalog with sparse descriptions). Keep dynamic
+      // injection useful by falling back to the scoped TOP20 instead of
+      // silently removing the Skill block.
+      if (this.config.queueStrategy !== "session_init" && query && result.hits.length === 0) {
+        result = await client.listListing({
+          team_id,
+          agent_id,
+        }, { serviceId });
+      }
       console.log(
         `${TAG} ${trigger} result mode=${result.mode}`
           + ` hits=${result.hits?.length ?? 0} listingLen=${(result.listing ?? "").length}`,

@@ -40,6 +40,13 @@ import {
   codexFormAnswersAsMessages,
 } from "./session/codex/form.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
+import {
+  getCurrentSkillQueueSnapshot,
+  hasProcessedCurrentSkillQueue,
+  injectDynamicSkillQueue,
+} from "./common/skill-queue-history.js";
+import { extractMarkedSkillQueueBlock } from "./common/skill-queue-markers.js";
+import { extractRecentUserQueues } from "./common/recent-user-queues.js";
 import { log } from "./report/log.js";
 import {
   langfuseReportGeneration,
@@ -860,8 +867,32 @@ export async function handleCodexEndpoint(
   // prewarm, all injectors) without writing a third protocol adapter.
   if (!injectionSkipped && sessionInfo && config.injection?.enabled && (config.injection.injectors?.length ?? 0) > 0) {
     try {
-      const { getInjectionPipeline } = await import("./injection/index.js");
+      const { getInjectionPipeline, getSkillQueueHistoryRepo } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
+      const skillQueueStrategy = config.injection.skillQueueStrategy ?? "session_init";
+      const skillListingQuery = skillQueueStrategy === "session_init"
+        ? undefined
+        : extractRecentUserQueues(
+            body.input,
+            (content) => codexAdapter.extractUserText([{ type: "message", role: "user", content }]),
+            config.injection.recentQueueWindow,
+          );
+      const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
+        || skillQueueStrategy === "adaptive_queue"
+        ? getSkillQueueHistoryRepo(config)
+        : undefined;
+      const skillQueueIdentity = {
+        spaceId,
+        userId: userId || "anonymous",
+        agentSource,
+        sessionId: sessionKey,
+      };
+      const skillQueueSnapshot = skillQueueStrategy === "every_queue"
+        ? await getCurrentSkillQueueSnapshot(body.input, skillQueueIdentity, skillQueueHistoryRepo)
+        : skillQueueStrategy === "adaptive_queue"
+          && await hasProcessedCurrentSkillQueue(body.input, skillQueueIdentity, skillQueueHistoryRepo)
+          ? "processed"
+          : null;
 
       // ── session_context 预填 ────────────────────────────────────────────────
       // handleSessionInit 的 CB init 把 <session_context>（[Agent]+[Task] 描述）
@@ -906,7 +937,13 @@ export async function handleCodexEndpoint(
         sessionKey,
         turnSeq: 0,
         requestPath: c.req.path,
-        custom: { session: sessionInfo, userKey: callerUserKey ?? undefined, assetCapabilities },
+        custom: {
+          session: sessionInfo,
+          userKey: callerUserKey ?? undefined,
+          assetCapabilities,
+          skillListingQuery,
+          skillQueueSnapshotHit: skillQueueSnapshot !== null,
+        },
       });
 
       // Extract injected content from the synthetic body's system message.
@@ -914,6 +951,11 @@ export async function handleCodexEndpoint(
       const injectedMessages = injectedBody.messages as Array<Record<string, unknown>> | undefined;
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
+
+      const userMsg = injectedMessages?.[1];
+      const dynamicText = typeof userMsg?.content === "string"
+        ? extractMarkedSkillQueueBlock(userMsg.content)
+        : null;
 
       if (injectedText.length > 0) {
         // Pipeline 产出的 injectedText 已经是**成品 XML 文本**（含
@@ -924,6 +966,17 @@ export async function handleCodexEndpoint(
         // 内层 <available_skills> tag，也不 escape 内容里的 XML tag，
         // 否则模型看到的会是转义字符（`&lt;user_memory&gt;`）读不出结构。
         body = injectCodexAssets(body, { raw: injectedText });
+      }
+      if (dynamicText || skillQueueStrategy === "every_queue" || skillQueueStrategy === "adaptive_queue") {
+        body = await injectDynamicSkillQueue(
+          body,
+          dynamicText ?? "",
+          skillQueueStrategy,
+          skillQueueIdentity,
+          skillQueueHistoryRepo,
+          (text) => buildCodexInjectionBlock({ raw: text }),
+          config.injection.forgettingThreshold,
+        );
       }
     } catch (err: unknown) {
       console.error("[codex] injection pipeline error:", err instanceof Error ? err.message : String(err));
