@@ -406,17 +406,40 @@ export interface SkillRuntimeConfig {
  * itself is protocol-agnostic.
  */
 export interface AgentUpstreamEntry {
-  /** Target upstream base URL. Required. */
-  url: string;
+  /**
+   * Target upstream base URL. 可省略：省略时回退到全局 `upstream.url`，
+   * 但该 agent 仍可单独声明下面的协议转换开关。
+   */
+  url?: string;
   /**
    * Per-agent apiKey. When set (non-empty):
    *   - OpenAI: `Authorization: Bearer <apiKey>` is injected
    *   - Anthropic: `x-api-key: <apiKey>` is injected
-   * When absent / empty: the client's own auth header is passed through
-   * upstream untouched. This does NOT fall back to `upstream.apiKey` —
-   * that fallback only applies when this agent has no entry at all.
+   * When absent / empty: falls back to `upstream.apiKey`; if that is empty too,
+   * the client's own auth header is passed through upstream untouched
+   * （详见 upstream/auth.ts 与 config.example.yaml 的兜底表）。
    */
   apiKey?: string;
+  /**
+   * 显式声明"该 agent 透传客户端 key"。默认 false —— 未配置 apiKey 时先回退
+   * `upstream.apiKey`，只有声明 true（或两级 key 都为空）才沿用客户端鉴权头。
+   */
+  passthroughClientKey?: boolean;
+  /**
+   * 上游兼容开关（协议接线用）。显式配置 true 或 false 都优先于 autoDetect
+   * 探测结果：true 启用对应转换，false 明确禁用并阻止 autoDetect 为该 agent
+   * 自动补开关。
+   *  - chatCompletions       : Responses 客户端（codex/workbuddy）→ Chat 上游
+   *  - anthropicToChat       : Anthropic 客户端（claude-code）→ Chat 上游
+   *  - chatToAnthropic       : Chat 客户端（workbuddy）→ Anthropic 上游
+   *  - responsesToAnthropic  : Responses 客户端（codex）→ Anthropic 上游
+   *  - anthropicToResponses  : Anthropic 客户端（claude-code）→ Responses 上游
+   */
+  chatCompletions?: boolean;
+  anthropicToChat?: boolean;
+  chatToAnthropic?: boolean;
+  responsesToAnthropic?: boolean;
+  anthropicToResponses?: boolean;
 }
 
 /** Top-level proxy configuration (merged from config file + CLI args). */
@@ -435,6 +458,22 @@ export interface ProxyConfig {
      * Empty / missing entry → agent falls back to `url` + `apiKey`.
      */
     agents: Record<string, AgentUpstreamEntry>;
+    /** 启动时自动探测上游协议能力并生成转换标志（默认关，显式开关优先）。 */
+    autoDetect?: {
+      enabled?: boolean;
+      timeoutMs?: number;
+      /**
+       * 探测请求使用的模型名。默认占位符 `ping`；建议配成该上游真实模型名，
+       * 否则「未知模型 → 404」会被误判成「端点不存在」（见 capability-probe.ts）。
+       */
+      probeModel?: string;
+      /** 探测结果缓存文件（JSON）；留空则不落盘，只在进程内保留上一轮结果。 */
+      cacheFile?: string;
+      /** 缓存有效期（分钟）。0 表示不因过期重探，只由定期重探刷新。默认 720（12 小时）。 */
+      cacheTtlMinutes?: number;
+      /** 定期重探间隔（分钟）。0 或缺省表示只在启动时探测一次。 */
+      reprobeIntervalMinutes?: number;
+    };
   };
   log: {
     file: string;    // JSONL path; empty string disables file logging
@@ -774,8 +813,27 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
+   autoDetect?: {
+      enabled?: boolean;
+      timeoutMs?: number;
+      probeModel?: string;
+      cacheFile?: string;
+      cacheTtlMinutes?: number;
+      reprobeIntervalMinutes?: number;
+    };
     /** Per-agent override map. See `AgentUpstreamEntry`. */
-    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    agents?: Record<
+      string,
+      {
+        url?: string;
+        apiKey?: string;
+        chatCompletions?: boolean;
+        anthropicToChat?: boolean;
+        chatToAnthropic?: boolean;
+        responsesToAnthropic?: boolean;
+        anthropicToResponses?: boolean;
+      } | null | undefined
+    >;
   };
   log?: {
     file?: string;
@@ -879,6 +937,7 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    skipAssetConfirm?: boolean;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
@@ -950,6 +1009,7 @@ export interface RequestLogEntry {
   sessionKey?: string; // conversationId || keyId — per-conversation isolation key
   upstreamUrl: string;
   stream: boolean;
+  traceId?: string;
   temperature?: number;
   maxTokens?: number;
   routedFrom?: string;     // original model if routing was applied

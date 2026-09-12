@@ -22,11 +22,32 @@
 
 export type AgentKind = "claude-code" | "codebuddy" | "codex" | "workbuddy" | "dsh" | "opencode" | "pi" | "unknown";
 
+/** 客户端**出站**说的协议（它自己往上打时用的那种）。 */
+export type NativeProtocol = "chat" | "responses" | "anthropic";
+
 export type RequestKind = "main" | "fork" | "sidequery" | "auxiliary";
 
 export interface AgentAdapter {
   /** 客户端类型标识，从 URL 前缀映射来。 */
   readonly agentKind: AgentKind;
+
+  /**
+   * 该客户端对上游使用的原生协议。**这是"客户端说哪种协议"的唯一声明点。**
+   *
+   * 上游能力探测（`upstream/capability-probe.ts`）靠它把「客户端说 A、上游只会说 B」
+   * 映射成具体的转换开关；探测模块因此不再维护第二份客户端名单（曾经那份名单
+   * 只覆盖 4 个客户端，新客户端漏在里面既不会被探测、也不会告警）。
+   *
+   * - claude-code → ["anthropic"]
+   * - codex → ["responses"]
+   * - codebuddy / dsh / opencode / pi → ["chat"]（均为标准 OpenAI Chat 出站）
+   * - workbuddy → ["chat", "responses"]（网页走 Chat、桌面走 Responses）
+   *
+   * 声明为可选是刻意的：这个改动先落在协议接线支上，而后续 PR 新增的适配器
+   * 文件此前不可能预置该字段；漏声明不会让构建失败，而是在启动期打一条
+   * `upstream.probe.undeclared_protocol` 提示补齐（**不会**再静默什么都不做）。
+   */
+  readonly nativeProtocols?: ReadonlyArray<NativeProtocol>;
 
   /**
    * 分类请求类别。用于 handler 决定后续 stage 是否绕过 injection / mem 拦截 /

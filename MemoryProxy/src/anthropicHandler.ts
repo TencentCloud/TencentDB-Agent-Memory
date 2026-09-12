@@ -35,6 +35,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -54,6 +55,20 @@ import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import {
+  anthropicToChat as anthropicToChatReq,
+  chatJsonToAnthropicJson,
+  createChatSseToAnthropicSse,
+} from "./common/chat-anthropic-compat.js";
+import {
+  anthropicToResponses as anthropicToResponsesReq,
+  responsesJsonToAnthropicJson,
+  createResponsesSseToAnthropicSse,
+} from "./common/responses-anthropic-compat.js";
+import { toAnthropicErrorBody } from "./upstream/protocol-errors.js";
+import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
+import { resolveUpstreamApiKey } from "./upstream/auth.js";
+import { conversionEnabled } from "./upstream/capability-probe.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
 import { resolveAgentAdapter } from "./agent-adapters/index.js";
@@ -62,22 +77,6 @@ import {
   isRateLimitExceededError,
   recordInputTokenUsage,
 } from "./rate-limit/guard.js";
-
-const SKIP_REQUEST_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-  // 内部身份头只给 proxy/session-init 使用，不能透传给上游模型服务。
-  "x-tdai-user-key",
-]);
-
-const SKIP_RESPONSE_HEADERS = new Set([
-  "content-encoding",
-  "transfer-encoding",
-  "content-length",
-  "connection",
-]);
 
 /**
  * Build a per-request TdaiClient. `spaceId` (extracted from the request path
@@ -336,7 +335,7 @@ function buildUpstreamBody(
  */
 function buildUpstreamHeaders(
   c: Context,
-  _config: ProxyConfig,
+  config: ProxyConfig,
   target: ForwardTarget,
   sessionKey?: string,
   effectiveApiKey?: string,
@@ -355,8 +354,19 @@ function buildUpstreamHeaders(
   //   - empty/undefined  → passthrough: keep whatever the client sent
   // The cost-guard extension can still fully override via target.authHeaders.
   if (effectiveApiKey && !target.authHeaders) {
-    headers["x-api-key"] = effectiveApiKey;
-    delete headers["authorization"];
+    const agent = c.req.path.split("/")[1] ?? "claude-code";
+    if (
+      conversionEnabled(config, config.upstream.agents[agent], "anthropic", "anthropicToChat") ||
+      conversionEnabled(config, config.upstream.agents[agent], "anthropic", "anthropicToResponses")
+    ) {
+      // 转成 Chat / Responses 后上游要 OpenAI 风格鉴权（Bearer，无 anthropic-version）。
+      headers["authorization"] = `Bearer ${effectiveApiKey}`;
+      delete headers["x-api-key"];
+      delete headers["anthropic-version"];
+    } else {
+      headers["x-api-key"] = effectiveApiKey;
+      delete headers["authorization"];
+    }
   }
 
   if (target.authHeaders) {
@@ -570,7 +580,7 @@ export async function handleAnthropicMessages(
     ? _pathPartsEarly[0] : undefined;
   const agentAdapter = resolveAgentAdapter(_agentFromPathEarly ?? "claude-code");
   const ccRoutingEnabled = config.ccRequestRouting?.enabled === true;
-  const requestKind: CcRequestKind = ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main";
+  const requestKind: CcRequestKind = ccRoutingEnabled ? (agentAdapter.classifyRequest(body) as CcRequestKind) : "main";
 
   // ── Model gate: reject requests whose `model` is not a registered display name ──
   // 价目表已配置时，客户端 `model` 必须匹配某条 entry 的 `modelName`（展示名，
@@ -708,7 +718,7 @@ export async function handleAnthropicMessages(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -981,12 +991,12 @@ export async function handleAnthropicMessages(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1237,16 +1247,23 @@ export async function handleAnthropicMessages(
   // no entry, we fall through to the Anthropic-specific global (costGuard
   // .anthropicUpstream) and finally to upstream.url — exactly as before.
   const agentUpstreamEntry = agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined;
-  let effectiveApiKey = agentUpstreamEntry
-    ? (agentUpstreamEntry.apiKey ?? "")
-    : config.upstream.apiKey;
+  // 取值顺序 agent.apiKey → upstream.apiKey → 客户端 key（后者需 passthroughClientKey）。
+  let effectiveApiKey = resolveUpstreamApiKey({
+    agentEntry: agentUpstreamEntry,
+    globalApiKey: config.upstream.apiKey,
+  }).apiKey;
   const defaultUpstreamUrl =
     agentUpstreamEntry?.url ||
     config.costGuard.anthropicUpstream?.url ||
     config.upstream.url;
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
-  const forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/messages";
+  let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/messages";
+  if (conversionEnabled(config, agentUpstreamEntry, "anthropic", "anthropicToChat")) {
+    forwardEndpoint = "/chat/completions";
+  } else if (conversionEnabled(config, agentUpstreamEntry, "anthropic", "anthropicToResponses")) {
+    forwardEndpoint = "/responses";
+  }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
   // share the same client session id can't contaminate each other's state /
   // turn counting. ClickHouse keeps the raw session_key (it has its own
@@ -1420,6 +1437,16 @@ export async function handleAnthropicMessages(
       `stripped ${sanitizedCount} invalid thinking block(s) from history`,
     );
   }
+  // ── 协议接线：Claude Code（Anthropic 客户端）→ Chat / Responses 风格上游 ──
+  const agentUpstream = config.upstream.agents[agentSource];
+  let convertedUpstreamBody = upstreamBody;
+  if (conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat")) {
+    convertedUpstreamBody = anthropicToChatReq(upstreamBody);
+    pipe.info("PROTOCOL", "claude-code anthropic→chat (anthropicToChat)");
+  } else if (conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses")) {
+    convertedUpstreamBody = anthropicToResponsesReq(upstreamBody);
+    pipe.info("PROTOCOL", "claude-code anthropic→responses (anthropicToResponses)");
+  }
 
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
@@ -1441,7 +1468,12 @@ export async function handleAnthropicMessages(
     delete originalHeaders["authorization"];
   }
 
-  const retryBody = sanitizeThinkingBlocks(body).body;
+  const retryBody = sanitizeThinkingBlocks(
+    conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat") ||
+      conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses")
+      ? convertedUpstreamBody
+      : body,
+  ).body;
 
   // ── Forward to upstream (with automatic retry if configured) ──────────────
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
@@ -1451,7 +1483,7 @@ export async function handleAnthropicMessages(
 
   try {
     const result = await forwardWithRetry(
-      target, upstreamHeaders, upstreamBody,
+      target, upstreamHeaders, convertedUpstreamBody,
       retryBody, originalHeaders,
       pipe, forwardTimeoutMs,
       sessionKey,
@@ -1478,12 +1510,7 @@ export async function handleAnthropicMessages(
   }
 
   // Build response headers
-  const respHeaders = new Headers();
-  for (const [k, v] of upstreamResp.headers.entries()) {
-    if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) {
-      respHeaders.set(k, v);
-    }
-  }
+  const respHeaders = filterResponseHeaders(upstreamResp.headers);
 
   // Upstream request id from response header (tokenhub / Anthropic set
   // `x-request-id`). Used for cross-system tracing/audit.
@@ -1501,6 +1528,9 @@ export async function handleAnthropicMessages(
     ...routeLogMeta,
     ...(retried ? { retrySuccess: true } : {}),
   };
+  const convertedUpstream =
+    conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat") ||
+    conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses");
 
   // ── Streaming response (Anthropic SSE) ──────────────────────────────────
   if (isStream) {
@@ -1512,7 +1542,7 @@ export async function handleAnthropicMessages(
     // Log error body for 4xx
     if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
       const [errStream, clientStream] = upstreamResp.body.tee();
-      const errText = await new Response(errStream).text();
+      let errText = await new Response(errStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
       writeLog(config, {
         timestamp: new Date().toISOString(),
@@ -1540,10 +1570,21 @@ export async function handleAnthropicMessages(
         observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
       });
       pipe.streamDone(null);
+      if (convertedUpstream) {
+        // 上游是 Chat / Responses 风格错误体，客户端（Claude Code）需要 Anthropic 错误 schema。
+        errText = toAnthropicErrorBody(errText);
+        return new Response(errText, { status: upstreamResp.status, headers: respHeaders });
+      }
       return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
-    const [rawClientStream, tapStream] = upstreamResp.body.tee();
+    const upstreamStream =
+      conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat")
+        ? upstreamResp.body.pipeThrough(createChatSseToAnthropicSse({ model: effectiveModel }))
+        : conversionEnabled(config, agentUpstream, "anthropic", "anthropicToResponses")
+          ? upstreamResp.body.pipeThrough(createResponsesSseToAnthropicSse({ model: effectiveModel }))
+          : upstreamResp.body;
+    const [rawClientStream, tapStream] = upstreamStream.tee();
     pipe.streamStart();
 
     // Background: consume tap stream for Anthropic SSE → extract usage
@@ -1587,6 +1628,26 @@ export async function handleAnthropicMessages(
 
   // ── Non-streaming response ───────────────────────────────────────────────
   let respText = await upstreamResp.text();
+  if (convertedUpstream) {
+    if (upstreamResp.status >= 400) {
+      // 错误体不套成功转换，只做 schema 映射；无法识别时原样透传。
+      respText = toAnthropicErrorBody(respText);
+    } else {
+      try {
+        const upstreamJson = JSON.parse(respText) as Record<string, unknown>;
+        const anthJson = conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat")
+          ? chatJsonToAnthropicJson(upstreamJson)
+          : responsesJsonToAnthropicJson(upstreamJson);
+        respText = JSON.stringify(anthJson);
+        pipe.info(
+          "PROTOCOL",
+          `upstream ${conversionEnabled(config, agentUpstream, "anthropic", "anthropicToChat") ? "chat" : "responses"} → anthropic (non-stream)`,
+        );
+      } catch {
+        // 非 JSON / 错误体：原样透传，由上层错误处理。
+      }
+    }
+  }
   const endTime = new Date().toISOString();
 
   let usage: Record<string, unknown> | null = null;
@@ -2214,7 +2275,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
 
       // Credit usage reporting for streaming responses.
       (ctx.skipCreditReport
-        ? Promise.resolve({ attempted: false, ok: false })
+        ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
         : tryReportCreditFromPath(
             ctx.config.creditReport,
             ctx.requestPath,

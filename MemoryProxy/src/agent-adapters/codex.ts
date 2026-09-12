@@ -108,6 +108,7 @@ function extractCodexUserText(input: unknown): string | null {
 
 export const codexAdapter: AgentAdapter = {
   agentKind: "codex",
+  nativeProtocols: ["responses"],
 
   classifyRequest(
     body: Record<string, unknown>,

@@ -3,12 +3,25 @@
 import { readFileSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
 import type { CostGuardConfig, ProxyConfig, RawYamlConfig } from "./types.js";
+import { auditUpstreamAgentKeys } from "./upstream/auth.js";
 
 const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
 export const DEFAULT_CONFIG: ProxyConfig = {
   server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 600_000 },
-  upstream: { url: DEFAULT_UPSTREAM, apiKey: "", agents: {} },
+  upstream: {
+    url: DEFAULT_UPSTREAM,
+    apiKey: "",
+    agents: {},
+    autoDetect: {
+      enabled: false,
+      timeoutMs: 3000,
+      probeModel: "ping",
+      cacheFile: "",
+      cacheTtlMinutes: 720,
+      reprobeIntervalMinutes: 0,
+    },
+  },
   log: {
     file: "",
     verbose: false,
@@ -245,18 +258,76 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
  * a glance).
  */
 function parseUpstreamAgents(
-  raw: Record<string, { url?: string; apiKey?: string } | null | undefined> | undefined,
-): Record<string, { url: string; apiKey?: string }> {
+  raw: Record<
+    string,
+    {
+      url?: string;
+      apiKey?: string;
+      passthroughClientKey?: boolean;
+      chatCompletions?: boolean;
+      anthropicToChat?: boolean;
+      chatToAnthropic?: boolean;
+      responsesToAnthropic?: boolean;
+      anthropicToResponses?: boolean;
+    } | null | undefined
+  > | undefined,
+): Record<
+  string,
+  {
+    url?: string;
+    apiKey?: string;
+    passthroughClientKey?: boolean;
+    chatCompletions?: boolean;
+    anthropicToChat?: boolean;
+    chatToAnthropic?: boolean;
+    responsesToAnthropic?: boolean;
+    anthropicToResponses?: boolean;
+  }
+> {
   if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, { url: string; apiKey?: string }> = {};
+  const out: Record<
+    string,
+    {
+      url?: string;
+      apiKey?: string;
+      passthroughClientKey?: boolean;
+      chatCompletions?: boolean;
+      anthropicToChat?: boolean;
+      chatToAnthropic?: boolean;
+      responsesToAnthropic?: boolean;
+      anthropicToResponses?: boolean;
+    }
+  > = {};
   for (const [name, entry] of Object.entries(raw)) {
     if (!entry || typeof entry !== "object") continue;
     const url = (entry as { url?: unknown }).url;
-    if (typeof url !== "string" || url.length === 0) continue;
     const apiKey = (entry as { apiKey?: unknown }).apiKey;
-    out[name] = typeof apiKey === "string" && apiKey.length > 0
-      ? { url, apiKey }
-      : { url };
+    const passthrough = (entry as { passthroughClientKey?: unknown }).passthroughClientKey;
+    const parsed: {
+      url?: string;
+      apiKey?: string;
+      passthroughClientKey?: boolean;
+      chatCompletions?: boolean;
+      anthropicToChat?: boolean;
+      chatToAnthropic?: boolean;
+      responsesToAnthropic?: boolean;
+      anthropicToResponses?: boolean;
+    } = {};
+    if (typeof url === "string" && url.length > 0) parsed.url = url;
+    if (typeof apiKey === "string" && apiKey.length > 0) parsed.apiKey = apiKey;
+    if (typeof passthrough === "boolean") parsed.passthroughClientKey = passthrough;
+    for (const flag of [
+      "chatCompletions",
+      "anthropicToChat",
+      "chatToAnthropic",
+      "responsesToAnthropic",
+      "anthropicToResponses",
+    ] as const) {
+      const rawFlag = (entry as Record<string, unknown>)[flag];
+      if (typeof rawFlag === "boolean") parsed[flag] = rawFlag;
+    }
+    // 允许“只配转换开关、不配 url”的 agent：url 回退到全局 upstream.url。
+    if (Object.keys(parsed).length > 0) out[name] = parsed;
   }
   return out;
 }
@@ -269,7 +340,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
 
-  return {
+  const config: ProxyConfig = {
     server: {
       host: overrides.host ?? yaml.server?.host ?? DEFAULT_CONFIG.server.host,
       port: overrides.port ?? yaml.server?.port ?? DEFAULT_CONFIG.server.port,
@@ -284,6 +355,32 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         DEFAULT_CONFIG.upstream.url,
       apiKey: yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey,
       agents: parseUpstreamAgents(yaml.upstream?.agents),
+      autoDetect: {
+        enabled: typeof yaml.upstream?.autoDetect?.enabled === "boolean"
+          ? yaml.upstream.autoDetect.enabled
+          : DEFAULT_CONFIG.upstream.autoDetect!.enabled,
+        timeoutMs: typeof yaml.upstream?.autoDetect?.timeoutMs === "number"
+          ? yaml.upstream.autoDetect.timeoutMs
+          : DEFAULT_CONFIG.upstream.autoDetect!.timeoutMs,
+        probeModel: typeof yaml.upstream?.autoDetect?.probeModel === "string"
+          && yaml.upstream.autoDetect.probeModel.trim().length > 0
+          ? yaml.upstream.autoDetect.probeModel.trim()
+          : DEFAULT_CONFIG.upstream.autoDetect!.probeModel,
+        // 缓存文件留空表示不落盘（只在进程内保留上一轮结果）。
+        cacheFile: typeof yaml.upstream?.autoDetect?.cacheFile === "string"
+          ? yaml.upstream.autoDetect.cacheFile.trim()
+          : DEFAULT_CONFIG.upstream.autoDetect!.cacheFile,
+        cacheTtlMinutes:
+          typeof yaml.upstream?.autoDetect?.cacheTtlMinutes === "number"
+          && yaml.upstream.autoDetect.cacheTtlMinutes >= 0
+          ? yaml.upstream.autoDetect.cacheTtlMinutes
+          : DEFAULT_CONFIG.upstream.autoDetect!.cacheTtlMinutes,
+        reprobeIntervalMinutes:
+          typeof yaml.upstream?.autoDetect?.reprobeIntervalMinutes === "number"
+          && yaml.upstream.autoDetect.reprobeIntervalMinutes >= 0
+          ? yaml.upstream.autoDetect.reprobeIntervalMinutes
+          : DEFAULT_CONFIG.upstream.autoDetect!.reprobeIntervalMinutes,
+      },
     },
     log: {
       file: overrides.logFile ?? yaml.log?.file ?? DEFAULT_CONFIG.log.file,
@@ -551,6 +648,14 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       dir: yaml.traceArchive?.dir ?? DEFAULT_CONFIG.traceArchive.dir,
     },
   };
+
+  // 上游凭据口径在启动期说明清楚：漏配 apiKey 时"客户端 key 被透传"这件事
+  // 只能在上游 401 时才发现，属于典型的静默失败。
+  for (const note of auditUpstreamAgentKeys(config.upstream.agents, config.upstream.apiKey)) {
+    // eslint-disable-next-line no-console
+    console.warn(`[config] ${note}`);
+  }
+  return config;
 }
 
 /**

@@ -55,27 +55,28 @@ import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import {
+  responsesBodyToChat,
+  createChatSseToResponses,
+  chatJsonToResponses,
+  shouldRetryWithoutResponseFormat,
+} from "./common/responses-chat-compat.js";
+import { recordDrop } from "./common/protocol-stats.js";
+import {
+  responsesToAnthropic,
+  createAnthropicSseToResponsesSse,
+  anthropicJsonToResponsesJson,
+} from "./common/responses-anthropic-compat.js";
+import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
+import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
+import { resolveUpstreamApiKey } from "./upstream/auth.js";
+import { conversionEnabled } from "./upstream/capability-probe.js";
+import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
   shouldOverride,
 } from "./instance-upstream-cache.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
-
-const SKIP_REQUEST_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-  "x-tdai-user-key",
-]);
-
-const SKIP_RESPONSE_HEADERS = new Set([
-  "content-encoding",
-  "transfer-encoding",
-  "content-length",
-  "connection",
-]);
 
 // ── TDAI L0 helpers (对齐 anthropicHandler / handler 姿势) ───────────────────
 
@@ -256,16 +257,6 @@ function buildUpstreamHeaders(
   return headers;
 }
 
-function filterResponseHeaders(source: Headers): Headers {
-  const out = new Headers();
-  source.forEach((value, key) => {
-    if (!SKIP_RESPONSE_HEADERS.has(key.toLowerCase())) {
-      out.set(key, value);
-    }
-  });
-  return out;
-}
-
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 /**
@@ -414,7 +405,7 @@ export async function handleCodexEndpoint(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -685,12 +676,12 @@ export async function handleCodexEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1100,17 +1091,65 @@ async function forwardToUpstream(
   // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
   // messages/chat_completions，不支持 /responses，此处允许按 agent 覆盖。
   const agentUpstreamEntry = config.upstream.agents?.["codex"];
+  const codexToAnthropic = conversionEnabled(config, agentUpstreamEntry, "responses", "responsesToAnthropic");
+  const codexToChat = conversionEnabled(config, agentUpstreamEntry, "responses", "chatCompletions");
+  let outboundBody: Record<string, unknown> = body;
+  let outboundEndpoint = c.req.path;
+  if (codexToAnthropic) {
+    // Responses 客户端（codex）→ Anthropic 风格上游：请求转 Anthropic，走 /v1/messages。
+    outboundBody = responsesToAnthropic(body, { model: modelId });
+    outboundEndpoint = "/v1/messages";
+    pipe.info("PROTOCOL", "codex responses→anthropic (responsesToAnthropic)");
+  } else if (codexToChat) {
+    // Responses 客户端（codex）→ Chat 风格上游：请求转 Chat，走 /chat/completions。
+    outboundBody = responsesBodyToChat(body, { model: modelId });
+    outboundEndpoint = "/chat/completions";
+    pipe.info("PROTOCOL", "codex responses→chat (chatCompletions)");
+  }
   let upstreamBase = agentUpstreamEntry?.url || config.upstream.url;
-  let upstreamUrl = joinUrl(upstreamBase, c.req.path);
+  let upstreamUrl = joinUrl(upstreamBase, outboundEndpoint);
   const upstreamHeaders = buildUpstreamHeaders(c, config);
   upstreamHeaders["content-type"] = "application/json";
-  // 覆盖 apiKey 与 per-agent 策略一致：agentUpstreamEntry.apiKey 优先，
-  // 否则透传客户端 Bearer。
-  if (agentUpstreamEntry) {
-    if (agentUpstreamEntry.apiKey) {
-      upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
+  // 客户端自带的凭据（形态随协议）——仅在"本条链路最终选择透传"时使用。
+  const clientApiKey =
+    extractBearerToken(c.req.header("authorization") ?? "") ?? c.req.header("x-api-key") ?? "";
+  const upstreamAuth = resolveUpstreamApiKey({
+    agentEntry: agentUpstreamEntry,
+    globalApiKey: config.upstream.apiKey,
+    clientApiKey,
+  });
+  if (codexToAnthropic) {
+    // Responses → Anthropic：上游要 x-api-key + anthropic-version，不要 Bearer。
+    const key = upstreamAuth.apiKey;
+    delete upstreamHeaders["authorization"];
+    delete upstreamHeaders["x-api-key"];
+    if (key) {
+      upstreamHeaders["x-api-key"] = key;
+      upstreamHeaders["anthropic-version"] = "2023-06-01";
     }
-    // else: 保留 c.req.header('authorization') 里的客户端 key 透传
+  } else if (upstreamAuth.source !== "global") {
+    // global 情形由 buildUpstreamHeaders 写入；这里处理 agent key 与透传两种。
+    delete upstreamHeaders["x-api-key"];
+    if (upstreamAuth.apiKey) upstreamHeaders["authorization"] = `Bearer ${upstreamAuth.apiKey}`;
+    else delete upstreamHeaders["authorization"];
+  }
+
+  // ── Instance upstream config override (codex has no cost-guard routing) ──
+  {
+    const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
+    const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId);
+    const convCfg = resolveUpstreamConfig(instanceConfigs, "codex", "conversation");
+    if (shouldOverride(convCfg)) {
+      upstreamUrl = joinUrl(convCfg.base_url, outboundEndpoint);
+      if (convCfg.mode === "custom_unified" && convCfg.api_key) {
+        upstreamHeaders["authorization"] = `Bearer ${convCfg.api_key}`;
+      }
+      // custom_passthrough: keep client's original Authorization
+      if (convCfg.model_id && typeof body.model === "string") {
+        body.model = convCfg.model_id;
+        if (outboundBody !== body) outboundBody.model = convCfg.model_id;
+      }
+    }
   }
 
   // ── Instance upstream config override (codex has no cost-guard routing) ──
@@ -1137,8 +1176,22 @@ async function forwardToUpstream(
     upstreamResp = await fetch(upstreamUrl, {
       method: "POST",
       headers: upstreamHeaders,
-      body: JSON.stringify(body),
+      body: JSON.stringify(outboundBody),
     });
+    // 上游对结构化输出的支持并不统一：实测 DeepSeek 对 Responses 侧 text.format 转出来的
+    // response_format 直接 400（"This response_format type is unavailable now"）。
+    // 这种失败会把整轮请求连同记忆注入一起打掉，代价远大于"退化成纯文本"，
+    // 因此这里只针对这一种情况去掉 response_format 重发一次，并计入丢参计数。
+    if (shouldRetryWithoutResponseFormat(upstreamResp.status, outboundBody, await upstreamResp.clone().text().catch(() => ""))) {
+      pipe.info("PROTOCOL", "upstream rejected response_format → retry without it");
+      recordDrop("responses_body_to_chat", "param:text.format#degraded");
+      delete outboundBody.response_format;
+      upstreamResp = await fetch(upstreamUrl, {
+        method: "POST",
+        headers: upstreamHeaders,
+        body: JSON.stringify(outboundBody),
+      });
+    }
   } catch (err: unknown) {
     pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
     // 上报 langfuse 失败（转发异常 —— 上游未回响应体，只有本地 fetch 抛错）
@@ -1182,7 +1235,11 @@ async function forwardToUpstream(
   // codex Responses API 只有 SSE 流式响应，不区分 stream / non-stream 处理。
   if (upstreamResp.status >= 400) {
     // 4xx/5xx 通常返 JSON error（很小），完整读出来带进 langfuse 便于排查
-    const errText = await upstreamResp.text();
+    let errText = await upstreamResp.text();
+    if (codexToAnthropic || codexToChat) {
+      // 上游错误体是 Anthropic / Chat schema，回给 Responses 客户端前统一转 OpenAI 错误。
+      errText = toOpenAiErrorBody(errText);
+    }
     if (lf) {
       try {
         langfuseReportFailure({
@@ -1217,7 +1274,36 @@ async function forwardToUpstream(
     });
   }
 
-  const [rawClientStream, tapStream] = upstreamResp.body.tee();
+  // 非 SSE（stream:false 的 JSON 响应）：转换后直接回给客户端，避免把 JSON
+  // 当 SSE 帧消费导致内容被吞或挂起。
+  const upstreamContentType = upstreamResp.headers.get("content-type") ?? "";
+  if (!upstreamContentType.includes("text/event-stream") && (codexToAnthropic || codexToChat)) {
+    const raw = await upstreamResp.text();
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const converted = codexToAnthropic
+        ? anthropicJsonToResponsesJson(parsed, { model: modelId })
+        : chatJsonToResponses(parsed, { model: modelId });
+      return new Response(JSON.stringify(converted), {
+        status: upstreamResp.status,
+        headers: filterResponseHeaders(upstreamResp.headers),
+      });
+    } catch {
+      // 非 JSON：原样透传。
+      return new Response(raw, {
+        status: upstreamResp.status,
+        headers: filterResponseHeaders(upstreamResp.headers),
+      });
+    }
+  }
+
+  const upstreamStream =
+    codexToAnthropic && upstreamResp.body
+      ? upstreamResp.body.pipeThrough(createAnthropicSseToResponsesSse({ model: modelId }))
+      : codexToChat && upstreamResp.body
+        ? upstreamResp.body.pipeThrough(createChatSseToResponses({ model: modelId }))
+        : upstreamResp.body;
+  const [rawClientStream, tapStream] = upstreamStream.tee();
   consumeCodexStream(tapStream, {
     lf,
     modelId,
