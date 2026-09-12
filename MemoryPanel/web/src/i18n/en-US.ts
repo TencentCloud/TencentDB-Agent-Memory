@@ -1800,4 +1800,24 @@ export const enUS = {
   'analytics.drill.categoryHint': 'calls for this asset type',
   'analytics.drill.knowledgeAmbiguous':
     'Wiki and Code Graph share the knowledge-service bridge source, and the kernel only filters by bridge_source — so the results below include all knowledge calls and cannot be narrowed to a single type.',
+
+  // ===== Memory Review =====
+  'menu.memory_review': 'Memory Review',
+  'menu.desc.memory_review': 'Session memory changes · approve / revert',
+  'memoryReview.title': 'Memory Review',
+  'memoryReview.subtitle': 'Inspect the L1 memory changes a session produced (created / updated / merged) and revert ones that took effect.',
+  'memoryReview.team': 'Team',
+  'memoryReview.agent': 'Agent',
+  'memoryReview.userId': 'User ID',
+  'memoryReview.sessionId': 'Session ID',
+  'memoryReview.query': 'Load changes',
+  'memoryReview.empty': 'No memory changes for this session',
+  'memoryReview.revert': 'Revert',
+  'memoryReview.revertConfirm': 'Revert this change? updated/merged will also restore the superseded records.',
+  'memoryReview.revertOk': 'Reverted',
+  'memoryReview.revertFailed': 'Revert failed',
+  'memoryReview.loadFailed': 'Failed to load changes',
+  'memoryReview.revertedBadge': 'Reverted',
+  'memoryReview.replacedTitle': 'Replaced records',
+  'memoryReview.fromSession': 'from session',
 };

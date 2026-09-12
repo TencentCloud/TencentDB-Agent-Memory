@@ -57,6 +57,8 @@ import type {
   MemoryContentClearResult,
   AuditEntry,
   AuditQueryFilter,
+  MemoryEvent,
+  MemoryEventFilter,
 } from "../types.js";
 import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../../skill/skill-store-ddl.js";
@@ -855,6 +857,39 @@ export class VectorStore implements IMemoryStore {
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_record    ON memory_audit(record_id, updated_at_ms)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_isolation ON memory_audit(team_id, agent_id, user_id, task_id)");
+
+    // ── Memory Events（session 变更集）──
+    //   - 只由 writeMemory 的 dedup 落地路径追加（created/updated/merged/superseded）
+    //   - superseded 事件的 content 是旧记录快照；session_id 记执行淘汰的 session，
+    //     origin_session_id 保留旧记录原归属
+    //   - 不取代 memory_audit：audit 管显式 mutation API，本表管自动提取写入
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_events (
+        seq                INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_ts           TEXT NOT NULL,
+        session_key        TEXT NOT NULL DEFAULT '',
+        session_id         TEXT NOT NULL DEFAULT '',
+        origin_session_id  TEXT NOT NULL DEFAULT '',
+        origin_session_key TEXT NOT NULL DEFAULT '',
+        team_id            TEXT NOT NULL DEFAULT '',
+        user_id            TEXT NOT NULL DEFAULT '',
+        agent_id           TEXT NOT NULL DEFAULT '',
+        task_id            TEXT NOT NULL DEFAULT '',
+        op                 TEXT NOT NULL CHECK (op IN ('created','updated','merged','superseded','reverted')),
+        record_id          TEXT NOT NULL,
+        content            TEXT NOT NULL,
+        memory_type        TEXT NOT NULL DEFAULT '',
+        version            INTEGER NOT NULL DEFAULT 0,
+        supersedes         TEXT NOT NULL DEFAULT '[]',
+        superseded_by      TEXT NOT NULL DEFAULT '',
+        snapshot_json      TEXT NOT NULL DEFAULT ''
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_session ON memory_events(session_id, seq)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_sessionkey ON memory_events(session_key, seq)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_record ON memory_events(record_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_origin ON memory_events(origin_session_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_isolation ON memory_events(team_id, agent_id, user_id, seq)");
 
     // ── Custom Memory Prompt ──
     this.db.exec(`
@@ -3407,6 +3442,112 @@ export class VectorStore implements IMemoryStore {
       updated_at_ms: r.updated_at_ms,
       request_id: r.request_id ?? undefined,
     }));
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Memory Events (session 变更集)
+  // ─────────────────────────────────────────────────────────
+
+  appendMemoryEvent(event: MemoryEvent): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO memory_events
+        (event_ts, session_key, session_id, origin_session_id, origin_session_key,
+         team_id, user_id, agent_id, task_id,
+         op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      event.event_ts,
+      event.session_key,
+      event.session_id,
+      event.origin_session_id ?? "",
+      event.origin_session_key ?? "",
+      event.team_id ?? "",
+      event.user_id ?? "",
+      event.agent_id ?? "",
+      event.task_id ?? "",
+      event.op,
+      event.record_id,
+      event.content,
+      event.memory_type ?? "",
+      event.version ?? 0,
+      JSON.stringify(event.supersedes ?? []),
+      event.superseded_by ?? "",
+      event.snapshot_json ?? "",
+    );
+  }
+
+  queryMemoryEvents(filter: MemoryEventFilter): MemoryEvent[] {
+    const conds: string[] = [];
+    const args: SQLInputValue[] = [];
+    if (filter.session_id !== undefined)        { conds.push("session_id = ?");        args.push(filter.session_id); }
+    if (filter.session_key !== undefined)       { conds.push("session_key = ?");       args.push(filter.session_key); }
+    if (filter.origin_session_id !== undefined)  { conds.push("origin_session_id = ?");  args.push(filter.origin_session_id); }
+    if (filter.origin_session_key !== undefined) { conds.push("origin_session_key = ?"); args.push(filter.origin_session_key); }
+    if (filter.record_id !== undefined)         { conds.push("record_id = ?");         args.push(filter.record_id); }
+    if (filter.op !== undefined)                { conds.push("op = ?");                args.push(filter.op); }
+    if (filter.team_id !== undefined)           { conds.push("team_id = ?");           args.push(filter.team_id); }
+    if (filter.agent_id !== undefined)          { conds.push("agent_id = ?");          args.push(filter.agent_id); }
+    if (filter.user_id !== undefined)           { conds.push("user_id = ?");           args.push(filter.user_id); }
+    if (filter.task_id !== undefined)           { conds.push("task_id = ?");           args.push(filter.task_id); }
+    if (filter.since !== undefined)             { conds.push("event_ts >= ?");         args.push(filter.since); }
+    if (filter.until !== undefined)             { conds.push("event_ts <= ?");         args.push(filter.until); }
+
+    const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
+    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 1000);
+    const offset = Math.max(filter.offset ?? 0, 0);
+
+    const sql = `
+      SELECT event_ts, session_key, session_id, origin_session_id, origin_session_key,
+             team_id, user_id, agent_id, task_id,
+             op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json
+      FROM memory_events
+      ${where}
+      ORDER BY seq ASC
+      LIMIT ? OFFSET ?
+    `;
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...args, limit, offset) as Array<{
+      event_ts: string;
+      session_key: string;
+      session_id: string;
+      origin_session_id: string;
+      origin_session_key: string;
+      team_id: string;
+      user_id: string;
+      agent_id: string;
+      task_id: string;
+      op: "created" | "updated" | "merged" | "superseded" | "reverted";
+      record_id: string;
+      content: string;
+      memory_type: string;
+      version: number;
+      supersedes: string;
+      superseded_by: string;
+      snapshot_json: string;
+    }>;
+    return rows.map((r) => {
+      const supersedes = JSON.parse(r.supersedes) as string[];
+      return {
+        event_ts: r.event_ts,
+        session_key: r.session_key,
+        session_id: r.session_id,
+        origin_session_id: r.origin_session_id || undefined,
+        origin_session_key: r.origin_session_key || undefined,
+        team_id: r.team_id || undefined,
+        user_id: r.user_id || undefined,
+        agent_id: r.agent_id || undefined,
+        task_id: r.task_id || undefined,
+        op: r.op,
+        record_id: r.record_id,
+        content: r.content,
+        memory_type: r.memory_type || undefined,
+        version: r.version,
+        supersedes: supersedes.length ? supersedes : undefined,
+        superseded_by: r.superseded_by || undefined,
+        snapshot_json: r.snapshot_json || undefined,
+      };
+    });
   }
 
   // ─────────────────────────────────────────────────────────
