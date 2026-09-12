@@ -8,6 +8,7 @@
 
 ### ✨ 新功能
 
+- **Codex MCP 适配器** ([#235](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/235))：新增本地 stdio MCP 服务与 `CodexHostAdapter`，向 Codex 暴露 L1/L2/L3 召回、结构化记忆搜索、L0 原始对话搜索、对话采集和会话刷新五个工具。基础 L0 读写无需 LLM Key；后台提取继续复用 Standalone OpenAI-compatible Runner。读取/写入工具带对应 MCP annotations，stdout 保持纯 JSON-RPC，使用与安全边界见 `docs/codex-adapter.md`。
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。
