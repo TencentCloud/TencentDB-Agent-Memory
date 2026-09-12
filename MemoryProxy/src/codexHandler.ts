@@ -115,6 +115,18 @@ function extractLatestCodexUserMessage(input: unknown): TdaiMessage | null {
   return { role: "user", content: trimmed };
 }
 
+/**
+ * Codex tool-loop continuation: every /v1/responses round after the first
+ * carries function_call_output in input[] — its user message is historical,
+ * not new (writing it per-round duplicated L0 rows, upstream issue #1245).
+ */
+export function isToolLoopContinuation(input: unknown): boolean {
+  if (!Array.isArray(input)) return false;
+  return input.some(
+    (item) => (item as Record<string, unknown> | null | undefined)?.type === "function_call_output",
+  );
+}
+
 // ── Codex session state (exported for unit tests) ────────────────────────────
 
 export interface CodexSessionState {
@@ -1041,9 +1053,10 @@ async function triggerCodexArchiveHooks(
   //   - withL0Retry 3 次退避挡 tdai kernel 瞬断
   //   - stream 场景不 await, 让归档 hook 提前返回
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
+    const continuation = isToolLoopContinuation(ctx.input);
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, continuation ? null : ctx.tdaiUserMessage, assistantText || null),
       ).catch((err: unknown) => {
         console.warn("[codex-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),
