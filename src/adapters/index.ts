@@ -7,7 +7,8 @@
  * Directory structure:
  *   adapters/
  *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   └── gateway-client — HTTP client for external platform adapters
  */
 
 // OpenClaw adapter
@@ -17,3 +18,7 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Gateway HTTP client for out-of-process platform adapters
+export { GatewayMemoryClient, GatewayMemoryClientError } from "./gateway-client.js";
+export type { GatewayMemoryClientOptions } from "./gateway-client.js";
