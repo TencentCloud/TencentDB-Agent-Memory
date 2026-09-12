@@ -1,0 +1,43 @@
+<clickhouse>
+    <!-- Permits SQL_-prefixed custom settings (SQL_workspace_id / SQL_project_id) used by the Agent Insights
+         read-only user's settings profile and row policies. Inert unless that user/profile is provisioned
+         (dev-runner with TOGGLE_OLLIE_ENABLED=true, or prod via OPIK-6846). No effect otherwise. -->
+    <custom_settings_prefixes>SQL_</custom_settings_prefixes>
+
+    <macros>
+        <shard>1</shard>
+        <replica>clickhouse</replica>
+        <cluster>cluster</cluster>
+    </macros>
+    
+    <zookeeper>
+        <node>
+            <host>zookeeper</host>
+            <port>2181</port>
+        </node>
+    </zookeeper>
+    
+    <zookeeper_path>/clickhouse</zookeeper_path>
+    <zookeeper_session_timeout_ms>30000</zookeeper_session_timeout_ms>
+    
+    <distributed_ddl>
+        <path>/clickhouse/task_queue/ddl</path>
+    </distributed_ddl>
+
+    <!-- Mirrors the Helm cluster definition (clickhouse.shardsCount / replicasCount): one shard, one
+         replica, internal_replication on. Compose runs a single replica, so internal_replication has
+         nothing to fan out to and is a no-op here — it is set to keep the single-node cluster
+         definition identical to the Kubernetes one, where Distributed inserts must hit one live
+         replica and let ReplicatedMergeTree replicate the parts. -->
+    <remote_servers>
+        <cluster>
+        <shard>
+            <internal_replication>true</internal_replication>
+            <replica>
+            <host>clickhouse</host>
+            <port>9000</port>
+            </replica>
+        </shard>
+        </cluster>
+    </remote_servers>
+</clickhouse>
