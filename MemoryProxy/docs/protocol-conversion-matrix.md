@@ -13,7 +13,7 @@
 >     probe.test.ts 25（上游能力探测：注册表 / 判定 / 缓存 / 重探 / 变更告警）、
 >     upstream-auth.test.ts 7（上游凭据取值顺序与启动期审计）、
 >     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 14 个文件 / 175 用例；
->   - 两支合并：15 个文件 / 183 用例。
+>   - 两支合并：15 个文件 / 189 用例。
 > 两支的 `npx tsc --noEmit` 均为 0 错误。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 
@@ -238,7 +238,7 @@ tokenizer + 4 × 消息数）：
 | chat-anthropic-role-rules.test.ts | 19 | 角色严格交替（相邻同角色合并）+ tool_use/tool_result 相邻配对 + 消息形状兜底（首条 user / 悬空 tool_use / 空 content / 无 user 时兜底） |
 | injection-protocol-conversion.test.ts | 8 | 注入 × 转换接缝：注入恰好存活一次、落在可缓存前缀位、不泄漏 cache_control、转换确定性，含 Responses 合成体装配 |
 
-### 协议接线分支额外测试（该分支合计 14 个文件 / 171 用例）
+### 协议接线分支额外测试（该分支合计 14 个文件 / 175 用例）
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
