@@ -1,0 +1,41 @@
+name: MemoryProxy CI
+
+on:
+  pull_request:
+    paths:
+      - "MemoryProxy/**"
+      - ".github/workflows/memory-proxy-ci.yml"
+  push:
+    paths:
+      - "MemoryProxy/**"
+      - ".github/workflows/memory-proxy-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: mp-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-and-test:
+    name: Typecheck + Vitest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MemoryProxy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: MemoryProxy/package-lock.json
+
+      - name: Install dependencies (skip native builds)
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
