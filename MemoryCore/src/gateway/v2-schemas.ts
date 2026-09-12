@@ -425,3 +425,26 @@ export const v2AuthContextSchema = z.object({
   serviceId: z.string().min(1),
 });
 export type V2AuthContext = z.infer<typeof v2AuthContextSchema>;
+
+// ============================
+// Memory diff（session 变更集）
+// ============================
+//
+// POST /v2|v3/memory/diff — 聚合查询某个 session 的 L1 变更：
+// 每次写入操作一组 { op, record, replaced[] }，replaced 是被 superseded 的
+// 旧记录快照。原始事件行由 store.queryMemoryEvents 返回，聚合在 handler 完成。
+
+export const memoryDiffRequestSchema = z.object({
+  /** 必填：查询哪个 session 的变更集。 */
+  session_id: z.string().min(1),
+  /** 可选：按 session_key 窄化。 */
+  session_key: z.string().min(1).optional(),
+  /** 可选：只返某类操作。 */
+  op: z.enum(["created", "updated", "merged", "superseded"]).optional(),
+  /** 可选：时间窗（ISO 8601）。 */
+  since: z.string().optional(),
+  until: z.string().optional(),
+  limit: z.number().int().min(1).max(1000).default(500),
+  offset: z.number().int().min(0).default(0),
+});
+export type MemoryDiffRequest = z.infer<typeof memoryDiffRequestSchema>;
