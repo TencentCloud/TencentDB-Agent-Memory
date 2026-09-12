@@ -12,6 +12,7 @@ import { registerChatMemoryRoutes } from './routes/chat-memory.js';
 import { registerTaskRoutes } from './routes/task.js';
 import { registerAgentOverviewRoutes } from './routes/agent-overview.js';
 import { registerAgentLifecycleRoutes } from './routes/agent-lifecycle.js';
+import { registerMemoryReviewRoutes } from './routes/memory-review.js';
 import { registerKnowledgeRoutes } from './routes/knowledge/index.js';
 import { registerAuthRoutes, registerWoaIngressRoutes } from './routes/auth.js';
 
@@ -42,6 +43,8 @@ export function buildPanelApp(deps: PanelDeps): Hono {
   registerAgentOverviewRoutes(api, deps);
   // Agent 生命周期业务路由：/agent/delete-cascade 在 control 层级联清 skill 再 archive
   registerAgentLifecycleRoutes(api, deps);
+  // Memory Review：session 变更集查询 + 撤销（透明代理到内核 /v3/memory/*）
+  registerMemoryReviewRoutes(api, deps);
   registerKnowledgeRoutes(api, deps);
   app.route(API_PREFIX, api);
   // 仅当至少一个 header-injected Provider 已注册时才挂 ingress 中间件：

@@ -400,6 +400,8 @@ export async function writeMemory(params: {
             memory_type: old.type,
             version: old.version,
             superseded_by: record.id,
+            // 完整旧记录快照：revert 时按它重建（content/type/version 不够恢复）。
+            snapshot_json: JSON.stringify(old),
           });
         }
         await vectorStore.appendMemoryEvent({

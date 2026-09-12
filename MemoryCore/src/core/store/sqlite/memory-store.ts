@@ -875,13 +875,14 @@ export class VectorStore implements IMemoryStore {
         user_id            TEXT NOT NULL DEFAULT '',
         agent_id           TEXT NOT NULL DEFAULT '',
         task_id            TEXT NOT NULL DEFAULT '',
-        op                 TEXT NOT NULL CHECK (op IN ('created','updated','merged','superseded')),
+        op                 TEXT NOT NULL CHECK (op IN ('created','updated','merged','superseded','reverted')),
         record_id          TEXT NOT NULL,
         content            TEXT NOT NULL,
         memory_type        TEXT NOT NULL DEFAULT '',
         version            INTEGER NOT NULL DEFAULT 0,
         supersedes         TEXT NOT NULL DEFAULT '[]',
-        superseded_by      TEXT NOT NULL DEFAULT ''
+        superseded_by      TEXT NOT NULL DEFAULT '',
+        snapshot_json      TEXT NOT NULL DEFAULT ''
       )
     `);
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_session ON memory_events(session_id, seq)");
@@ -3452,8 +3453,8 @@ export class VectorStore implements IMemoryStore {
       INSERT INTO memory_events
         (event_ts, session_key, session_id, origin_session_id, origin_session_key,
          team_id, user_id, agent_id, task_id,
-         op, record_id, content, memory_type, version, supersedes, superseded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       event.event_ts,
@@ -3472,6 +3473,7 @@ export class VectorStore implements IMemoryStore {
       event.version ?? 0,
       JSON.stringify(event.supersedes ?? []),
       event.superseded_by ?? "",
+      event.snapshot_json ?? "",
     );
   }
 
@@ -3498,7 +3500,7 @@ export class VectorStore implements IMemoryStore {
     const sql = `
       SELECT event_ts, session_key, session_id, origin_session_id, origin_session_key,
              team_id, user_id, agent_id, task_id,
-             op, record_id, content, memory_type, version, supersedes, superseded_by
+             op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json
       FROM memory_events
       ${where}
       ORDER BY seq ASC
@@ -3515,13 +3517,14 @@ export class VectorStore implements IMemoryStore {
       user_id: string;
       agent_id: string;
       task_id: string;
-      op: "created" | "updated" | "merged" | "superseded";
+      op: "created" | "updated" | "merged" | "superseded" | "reverted";
       record_id: string;
       content: string;
       memory_type: string;
       version: number;
       supersedes: string;
       superseded_by: string;
+      snapshot_json: string;
     }>;
     return rows.map((r) => {
       const supersedes = JSON.parse(r.supersedes) as string[];
@@ -3542,6 +3545,7 @@ export class VectorStore implements IMemoryStore {
         version: r.version,
         supersedes: supersedes.length ? supersedes : undefined,
         superseded_by: r.superseded_by || undefined,
+        snapshot_json: r.snapshot_json || undefined,
       };
     });
   }

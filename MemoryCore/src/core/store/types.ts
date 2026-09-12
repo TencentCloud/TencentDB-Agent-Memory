@@ -606,7 +606,10 @@ export interface AuditQueryFilter {
  *   - merged     : merge action —— 同 updated
  *   - superseded : 旧记录被替代，content 为旧内容快照，superseded_by 指向新
  *                  record_id；session_id 记执行淘汰的 session，
- *                  origin_session_id 保留旧记录原归属（反向可查）。
+ *                  origin_session_id 保留旧记录原归属（反向可查）；
+ *                  snapshot_json 存旧记录完整 JSON（revert 恢复用）。
+ *   - reverted   : 已生效变更被撤销（review 驳回）。record_id 是被撤销的
+ *                  新记录；supersedes 列出本次恢复的旧 record_id。
  */
 export interface MemoryEvent {
   /** 事件发生时间（ISO 8601）。 */
@@ -625,7 +628,7 @@ export interface MemoryEvent {
   agent_id?: string;
   task_id?: string;
   /** 变更类型。 */
-  op: "created" | "updated" | "merged" | "superseded";
+  op: "created" | "updated" | "merged" | "superseded" | "reverted";
   /** 本事件对应的 record id（superseded 时为旧 record id）。 */
   record_id: string;
   /** 内容快照（superseded 时为被替代的旧内容）。 */
@@ -634,10 +637,12 @@ export interface MemoryEvent {
   memory_type?: string;
   /** 本事件对应 record 的 version。 */
   version?: number;
-  /** updated/merged 事件：被替代的旧 record_id 列表。 */
+  /** updated/merged/reverted 事件：被替代/被恢复的旧 record_id 列表。 */
   supersedes?: string[];
   /** superseded 事件：指向新 record_id。 */
   superseded_by?: string;
+  /** superseded 事件：旧记录完整 JSON 序列化（revert 恢复用）。 */
+  snapshot_json?: string;
 }
 
 /** queryMemoryEvents 过滤条件，全部可选。 */

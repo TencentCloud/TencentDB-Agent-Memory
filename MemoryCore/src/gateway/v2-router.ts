@@ -17,7 +17,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
-import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
+import type { IMemoryStore, L0Record, L1RecordRow, ProfileSyncRecord } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, scopeProfileStorageView, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
@@ -49,6 +49,7 @@ import {
   coreWriteRequestSchema,
   coreCountRequestSchema,
   memoryDiffRequestSchema,
+  memoryDiffRevertRequestSchema,
   teamCreateRequestSchema,
   teamGetRequestSchema,
   teamUpdateRequestSchema,
@@ -171,6 +172,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/core/write",
   "/core/count",
   "/memory/diff",
+  "/memory/diff/revert",
 ]);
 
 /**
@@ -432,6 +434,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/core/write": handleCoreWrite,
   "/core/count": handleCoreCount,
   "/memory/diff": handleMemoryDiff,
+  "/memory/diff/revert": handleMemoryDiffRevert,
 };
 
 const routeTable: Record<string, RouteHandler> = {
@@ -1243,6 +1246,8 @@ async function handleMemoryDiff(body: unknown, _auth: V2AuthContext, requestId: 
   // Join superseded rows onto their replacing record (superseded_by → record_id).
   const supersededByNew = new Map<string, typeof events>();
   const newRecordIds = new Set(events.filter((e) => e.op !== "superseded").map((e) => e.record_id));
+  // reverted 事件的 record_id 是被撤销的新 record —— 给对应 change 打标记。
+  const revertedIds = new Set(events.filter((e) => e.op === "reverted").map((e) => e.record_id));
   for (const e of events) {
     if (e.op === "superseded" && e.superseded_by) {
       const arr = supersededByNew.get(e.superseded_by) ?? [];
@@ -1270,6 +1275,8 @@ async function handleMemoryDiff(body: unknown, _auth: V2AuthContext, requestId: 
     event_ts: string;
     origin_session_id?: string;
     origin_session_key?: string;
+    /** 该 change 已被 revert 撤销（reverted 事件 record_id 命中）。 */
+    reverted?: boolean;
     replaced: Array<{
       record_id: string; content: string; memory_type?: string;
       version: number; event_ts: string; origin_session_id?: string; origin_session_key?: string;
@@ -1285,10 +1292,138 @@ async function handleMemoryDiff(body: unknown, _auth: V2AuthContext, requestId: 
       continue;
     }
     const replaced = (supersededByNew.get(e.record_id) ?? []).map((s) => eventShape(s));
-    changes.push({ op: e.op, ...eventShape(e), replaced });
+    changes.push({
+      op: e.op,
+      ...eventShape(e),
+      replaced,
+      ...(revertedIds.has(e.record_id) ? { reverted: true } : {}),
+    });
   }
 
   return successEnvelope({ changes, total: changes.length }, requestId);
+}
+
+/**
+ * POST /memory/diff/revert — 撤销一条已生效的 L1 变更（review 驳回）。
+ *
+ * 定位方式：按 record_id 查该记录的写入事件（created/updated/merged），
+ * 再找到它 supersede 掉的旧记录快照。
+ *   - created        → deleteL1 删新记录
+ *   - updated/merged → deleteL1 删新记录 + 逐条按 snapshot_json 重建旧记录
+ *                      （embedding 尽力而为，缺省时只恢复 metadata+FTS）
+ * 幂等：同一 record_id 已存在 reverted 事件 → 409。
+ * 撤销动作本身追加一条 reverted 事件（record_id=被撤销的新 record，
+ * supersedes=本次恢复的旧 record_id 列表），保持事件流 append-only。
+ */
+async function handleMemoryDiffRevert(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = memoryDiffRevertRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+  const { record_id, reason } = parsed.data;
+
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+  if (!store.queryMemoryEvents || !store.appendMemoryEvent) {
+    return errorEnvelope(501, "Memory events not supported by this store backend", requestId);
+  }
+  const iso = deps.requestIsolation;
+  const isoScope = iso
+    ? { team_id: iso.teamId, user_id: iso.userId, agent_id: iso.agentId, task_id: iso.taskId }
+    : {};
+
+  // 该 record 的全部事件：写入（created/updated/merged）+ reverted 标记。
+  const recordEvents = await store.queryMemoryEvents({ record_id, ...isoScope, limit: 100 });
+  const lastWrite = recordEvents.filter((e) => e.op === "created" || e.op === "updated" || e.op === "merged").pop();
+  if (!lastWrite) {
+    return errorEnvelope(404, `No memory write event found for record ${record_id}`, requestId);
+  }
+  if (recordEvents.some((e) => e.op === "reverted")) {
+    return errorEnvelope(409, `Record ${record_id} has already been reverted`, requestId);
+  }
+
+  // 撤销新记录（无论 created 还是 updated/merged 都要删）。
+  // filter 只用 team/user/agent/task 做租户隔离——不含 session 维度：revert
+  // 是 review 操作，record_id 已唯一定位，目标 record 可能属于别的 session
+  //（跨 session supersede 是正常场景）。
+  const deleteFilter = iso
+    ? { teamId: iso.teamId, userId: iso.userId, agentId: iso.agentId, taskId: iso.taskId }
+    : undefined;
+  try {
+    await store.deleteL1(record_id, deleteFilter);
+  } catch (err) {
+    return errorEnvelope(500, `Failed to delete record ${record_id}: ${err instanceof Error ? err.message : String(err)}`, requestId);
+  }
+
+  // updated/merged：恢复被 superseded 的旧记录。superseded 事件的 record_id
+  // 是旧记录 id，用 lastWrite.supersedes（写入时存的 target_ids）定位，再按
+  // superseded_by === record_id 确认归属（同一旧 record 可能被多次替代）。
+  const restoredIds: string[] = [];
+  if (lastWrite.op !== "created") {
+    const embedding = deps.getEmbedding();
+    for (const targetId of lastWrite.supersedes ?? []) {
+      const targetEvents = await store.queryMemoryEvents({ record_id: targetId, ...isoScope, limit: 100 });
+      const snap = targetEvents.filter((e) => e.op === "superseded" && e.superseded_by === record_id).pop();
+      if (!snap?.snapshot_json) continue;
+      try {
+        const row = JSON.parse(snap.snapshot_json) as L1RecordRow;
+        const restored: MemoryRecord = {
+          id: row.record_id,
+          content: row.content,
+          type: row.type as MemoryRecord["type"],
+          priority: row.priority,
+          scene_name: row.scene_name,
+          source_message_ids: [], // L1RecordRow 无此列；仅影响溯源展示，不影响召回
+          metadata: parseMetadataJson(row.metadata_json),
+          timestamps: row.timestamp_str ? [row.timestamp_str] : [],
+          createdAt: row.created_time,
+          updatedAt: new Date().toISOString(),
+          version: row.version,
+          sessionKey: row.session_key,
+          sessionId: row.session_id,
+          taskId: row.task_id || undefined,
+          teamId: row.team_id || undefined,
+          userId: row.user_id || undefined,
+          agentId: row.agent_id || undefined,
+        };
+        let emb: Float32Array | undefined;
+        try {
+          emb = await embedding?.embed(restored.content);
+        } catch {
+          emb = undefined; // metadata+FTS only
+        }
+        await store.upsertL1(restored, emb);
+        restoredIds.push(row.record_id);
+      } catch (err) {
+        deps.logger.warn(
+          `${TAG} revert restore failed for ${targetId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  // 追加 reverted 事件：record_id=被撤销的新 record，supersedes=恢复的旧 id 列表。
+  // session 归属用 lastWrite 的原 session——撤销是"对那次变更的驳回"，
+  // 必须出现在被变更 session 的 diff 里；审核者的 session 不是这条事件的归属。
+  try {
+    await store.appendMemoryEvent({
+      event_ts: new Date().toISOString(),
+      session_key: lastWrite.session_key,
+      session_id: lastWrite.session_id,
+      team_id: iso?.teamId ?? lastWrite.team_id ?? "",
+      user_id: iso?.userId ?? lastWrite.user_id ?? "",
+      agent_id: iso?.agentId ?? lastWrite.agent_id ?? "",
+      task_id: iso?.taskId ?? lastWrite.task_id ?? "",
+      op: "reverted",
+      record_id,
+      content: reason ?? lastWrite.content,
+      memory_type: lastWrite.memory_type,
+      version: lastWrite.version,
+      supersedes: restoredIds,
+    });
+  } catch (err) {
+    deps.logger.warn(`${TAG} reverted event append failed (non-fatal) for ${record_id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return successEnvelope({ record_id, reverted: true, restored: restoredIds }, requestId);
 }
 
 async function handleAtomicSearch(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {

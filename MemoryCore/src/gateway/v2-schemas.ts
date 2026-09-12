@@ -441,3 +441,14 @@ export const memoryDiffRequestSchema = z.object({
   offset: z.number().int().min(0).default(0),
 });
 export type MemoryDiffRequest = z.infer<typeof memoryDiffRequestSchema>;
+
+// POST /v2|v3/memory/diff/revert — 撤销某条已生效的 L1 变更（review 驳回）。
+// created → 删除该记录；updated/merged → 删除新记录并按 superseded
+// 快照恢复旧记录。撤销本身追加一条 reverted 事件，审计链完整。
+export const memoryDiffRevertRequestSchema = z.object({
+  /** 要撤销的 record id（diff 响应里 change.record_id）。 */
+  record_id: z.string().min(1),
+  /** 可选：撤销理由，记入 reverted 事件的 content。 */
+  reason: z.string().optional(),
+});
+export type MemoryDiffRevertRequest = z.infer<typeof memoryDiffRevertRequestSchema>;
