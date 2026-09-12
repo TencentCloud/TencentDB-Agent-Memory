@@ -45,6 +45,21 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 
+export { CodexMemoryAdapter, CodexMemoryBridge, createCodexMemoryAdapter } from "./src/adapters/codex/index.js";
+export type { CodexMemoryAdapterOptions, CodexPromptContext } from "./src/adapters/codex/index.js";
+export { DifyMemoryAdapter, DifyMemoryBridge, createDifyMemoryAdapter } from "./src/adapters/dify/index.js";
+export type { DifyMemoryAdapterOptions, DifyPromptContext, DifyRequestContext, DifyTurnPayload } from "./src/adapters/dify/index.js";
+export { MemoryGatewayClient, MemoryPlatformAdapter, createMemoryPlatformAdapter } from "./src/adapters/index.js";
+export type {
+  MemoryGatewayClientOptions,
+  MemoryRecallContext,
+  MemoryAdapterOptions,
+  MemoryAdapterRuntime,
+  MemoryPlatformBridge,
+  MemoryPromptContext,
+  MemoryTurnPayload,
+} from "./src/adapters/index.js";
+
 const TAG = "[memory-tdai]";
 
 /**

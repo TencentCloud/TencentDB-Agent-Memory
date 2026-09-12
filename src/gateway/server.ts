@@ -384,6 +384,8 @@ export class TdaiGateway {
 
     const response: RecallResponse = {
       context: result.appendSystemContext ?? "",
+      prepend_context: result.prependContext ?? "",
+      append_system_context: result.appendSystemContext ?? "",
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
