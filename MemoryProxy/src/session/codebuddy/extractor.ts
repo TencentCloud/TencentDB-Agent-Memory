@@ -15,6 +15,7 @@
  */
 
 import type { SessionInitData, TeamOption } from "../types.js";
+import { extractHermesAnswers } from "../hermes/extractor.js";
 import { SKIP_LABEL, PATH_SEP, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./form.js";
 
 // ── Markers ────────────────────────────────────────────────────────────────────
@@ -60,6 +61,7 @@ function extractOpencodeAnswers(content: string): string | null {
  * 返回 true=是（关联资产），false=否（bypass），null=未识别。
  */
 export function extractAssetConfirm(content: string): boolean | null {
+  content = extractHermesAnswers(content) ?? content;
   // XML parsing
   const xml = parseQuestionAnswerXml(content);
   const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? content;
@@ -144,6 +146,7 @@ export function extractTeamFromOptionText(
 ): string | null {
   if (cachedTeams.length === 0) return null;
 
+  content = extractHermesAnswers(content) ?? content;
   // opencode: 剥壳 tool-result 包裹，避免问题描述里的"跳过"字样触发误 SKIP。
   // 见 extractOpencodeAnswers 头部注释。
   const opencodeAnswer = extractOpencodeAnswers(content);
@@ -267,6 +270,7 @@ export function extractFromOptionText(
       : null;
   if (!team) return null;
 
+  content = extractHermesAnswers(content) ?? content;
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
@@ -336,6 +340,7 @@ export function extractAgentOnly(
       ? cachedTeams[0]
       : null;
   if (!team) return null;
+  content = extractHermesAnswers(content) ?? content;
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
@@ -372,6 +377,7 @@ export function extractTaskOnly(
       ? cachedTeams[0]
       : null;
   if (!team) return null;
+  content = extractHermesAnswers(content) ?? content;
   // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
