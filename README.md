@@ -526,6 +526,8 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | OpenClaw plugin | Automatically captures, extracts, and recalls memory once installed |
 | Hermes Gateway adapter | `TdaiCore + HostAdapter`, decoupled from the host framework |
+| Cross-platform adapter kit | [`GatewayMemoryClient`](./src/adapters/gateway-client/README.md) helps Codex, Claude Code, Dify, LangGraph, and custom agents integrate through the Gateway API |
+| LangGraph StateGraph adapter | [`createLangGraphMemoryAdapter`](./src/adapters/langgraph/README.md) provides recall, capture, search, and session-flush nodes without adding a LangGraph runtime dependency |
 | Local backend | `SQLite + sqlite-vec`, ready to use out of the box |
 | Hybrid retrieval | BM25 + vector + RRF — supports both keyword and semantic recall |
 | Agent tools | `tdai_memory_search` / `tdai_conversation_search` |
@@ -539,6 +541,8 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
+| [`src/adapters/gateway-client/README.md`](./src/adapters/gateway-client/README.md) | Gateway-based adapter guide for Codex, Claude Code, Dify, LangGraph, and custom agents |
+| [`src/adapters/langgraph/README.md`](./src/adapters/langgraph/README.md) | LangGraph StateGraph node integration, identity mapping, and failure behavior |
 
 ---
 
