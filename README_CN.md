@@ -386,6 +386,22 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. 小米 MiMo Code
+
+MiMo Code 可通过 [`mimo-adapter`](./mimo-adapter) 中的零依赖本地插件连接
+Gateway。插件会在每轮模型运行前自动召回、捕获成功完成的主 Agent 对话，并在
+Gateway 不可用时 fail-open，不阻断 MiMo Code。
+
+安装到当前项目：
+
+```bash
+mkdir -p .mimocode/plugins
+cp mimo-adapter/tdai-memory.ts .mimocode/plugins/tdai-memory.ts
+```
+
+生命周期映射、全局安装、配置、与 MiMo 原生记忆的边界及故障行为见
+[MiMo Code 适配器说明](./mimo-adapter/README.md)。
+
 
 ## 🔒 Gateway 安全配置（可选）
 
