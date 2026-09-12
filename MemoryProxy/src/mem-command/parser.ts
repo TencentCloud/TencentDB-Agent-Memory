@@ -14,6 +14,23 @@
 
 import { resolveAgentAdapter } from "../agent-adapters/index.js";
 
+/**
+ * content 里是否含工具回执块：Anthropic 的 `tool_result`（`role:"user"` + content 数组）
+ * 与 Responses 的 `function_call_output`。这类消息没有用户键入的文本，
+ * 与 pre-intercept.ts::hasToolResult 同一口径。
+ */
+function hasToolResultBlock(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((block) => {
+    const b = block as Record<string, unknown> | null | undefined;
+    return (
+      !!b &&
+      typeof b === "object" &&
+      (b.type === "tool_result" || b.type === "function_call_output")
+    );
+  });
+}
+
 export interface ParsedMemCommand {
   /** 命令名（小写），如 "sync"、"create-skill"、"help" */
   command: string;
@@ -86,6 +103,11 @@ export function parseMemCommand(
       if (m.role !== "user") continue;
       const probe = adapterForPick.extractUserText(m.content);
       if (typeof probe === "string" && probe.trim().length > 0) { targetMsg = m; break; }
+      // Anthropic 形态的工具回执（`role:"user"` + content[{type:"tool_result"}]）同样表示
+      // 本 turn 是工具 / Session Init 表单的续接：它没有 text block，extractUserText 返回
+      // null，若继续回看就会命中历史里那条已经执行过的 `mem:` 命令并重放。
+      // 真机：Claude Code 提交表单后 mem:session-reset 被重放，同一张表单反复弹出。
+      if (hasToolResultBlock(m.content)) return null;
     }
     if (!targetMsg) targetMsg = messages[messages.length - 1];
   }

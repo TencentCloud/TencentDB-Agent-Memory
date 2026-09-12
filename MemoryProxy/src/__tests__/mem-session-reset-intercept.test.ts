@@ -264,8 +264,9 @@ describe("mem 命令解析对首行的容错", () => {
     });
   });
 
-  it("OpenAI 形态的工具回执在场时 parseMemCommand 不再回放历史命令", () => {
-    const body = {
+  it("工具回执在场时 parseMemCommand 不再回放历史命令（OpenAI / Anthropic 两种形态）", () => {
+    // OpenAI Chat 形态：独立角色 `role:"tool"`
+    const openaiBody = {
       messages: [
         { role: "user", content: "mem:session-reset" },
         {
@@ -282,6 +283,47 @@ describe("mem 命令解析对首行的容错", () => {
         { role: "tool", tool_call_id: "call_hermes_session_init_1", content: '{"answer":"否"}' },
       ],
     };
-    expect(parseMemCommand(body as Record<string, unknown>, "hermes")).toBeNull();
+    expect(parseMemCommand(openaiBody as Record<string, unknown>, "hermes")).toBeNull();
+
+    // Anthropic 形态（Claude Code）：`role:"user"` + content[{type:"tool_result"}]，
+    // 真机上后面还会再挂一条 `role:"system"` 的 token 提示。
+    const anthropicBody = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "mem:session-reset" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_session_init_1", name: "clarify", input: {} },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_session_init_1", content: "否" }],
+        },
+        {
+          role: "system",
+          content: [{ type: "text", text: "<total_tokens>15000000 tokens left</total_tokens>" }],
+        },
+      ],
+    };
+    expect(parseMemCommand(anthropicBody as Record<string, unknown>, "claude-code")).toBeNull();
+
+    // 工具回执与用户键入的文本在同一条消息里 → 仍按文本判定（先看文本，再看回执），
+    // 否则会把"用户自己回答了表单又敲了命令"这种情况误判否。
+    const mixedBody = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "你好" }] },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_session_init_1", content: "否" },
+            { type: "text", text: "mem:session-reset" },
+          ],
+        },
+      ],
+    };
+    expect(parseMemCommand(mixedBody as Record<string, unknown>, "claude-code")).toMatchObject({
+      command: "session-reset",
+    });
   });
 });
