@@ -383,6 +383,26 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Claude Code
+
+Build the package, start the existing TDAI Gateway, and load the bundled
+Claude Code plugin:
+
+```bash
+npm install
+npm run build:plugin
+# Terminal 1
+npx tsx src/gateway/server.ts
+# Terminal 2
+claude --plugin-dir ./claude-code-plugin
+```
+
+The plugin automatically recalls memory on `UserPromptSubmit`, captures the
+completed turn on `Stop`, and flushes the session on `SessionEnd`. See the
+[`Claude Code adapter guide`](./docs/claude-code-adapter.md) for Gateway
+configuration, authentication, Windows commands, retry behavior, and
+verification.
+
 
 ## 🔒 Gateway Security (optional)
 
@@ -526,6 +546,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | OpenClaw plugin | Automatically captures, extracts, and recalls memory once installed |
 | Hermes Gateway adapter | `TdaiCore + HostAdapter`, decoupled from the host framework |
+| Claude Code plugin | Native lifecycle hooks for automatic recall, capture, and session flush |
 | Local backend | `SQLite + sqlite-vec`, ready to use out of the box |
 | Hybrid retrieval | BM25 + vector + RRF — supports both keyword and semantic recall |
 | Agent tools | `tdai_memory_search` / `tdai_conversation_search` |
@@ -539,6 +560,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
+| [`docs/claude-code-adapter.md`](./docs/claude-code-adapter.md) | Claude Code plugin setup, lifecycle mapping, and troubleshooting |
 
 ---
 

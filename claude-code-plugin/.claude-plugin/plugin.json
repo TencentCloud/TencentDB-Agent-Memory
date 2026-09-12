@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "tencentdb-agent-memory",
+  "version": "0.3.6",
+  "description": "Automatic long-term memory recall and capture for Claude Code",
+  "author": {
+    "name": "TencentDB Agent Memory Team"
+  },
+  "repository": "https://github.com/TencentCloud/TencentDB-Agent-Memory",
+  "license": "MIT",
+  "keywords": ["memory", "claude-code", "tencentdb", "agent"]
+}
