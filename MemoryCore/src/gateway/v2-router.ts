@@ -1213,10 +1213,11 @@ async function handleAtomicCount(body: unknown, _auth: V2AuthContext, requestId:
  *   - superseded 孤儿（其 superseded_by 指向的新记录不在本批事件流中，即追加
  *     只成功了一半、或新记录事件被分页切到另一页的场景）单独成组，保证不丢信息
  *
- * op 过滤发生在事件层：例如 op=superseded 只看被淘汰的记录。
  * 隔离沿用 requestIsolation 的 team/user/agent/task —— 不能跨租户看别人的 diff；
  * body.session_id 是要查询的目标 session（不是 requestIsolation.sessionId，
  * 语义同 conversation/query：session_id 来自 body）。
+ * MemoryEventFilter 在 store 层还支持 op/session_key/时间窗过滤，endpoint 只暴露
+ * session_id + 分页；需要更细查询时再加参数。
  */
 async function handleMemoryDiff(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = memoryDiffRequestSchema.safeParse(body);
@@ -1231,10 +1232,6 @@ async function handleMemoryDiff(body: unknown, _auth: V2AuthContext, requestId: 
 
   const events = await store.queryMemoryEvents({
     session_id: parsed.data.session_id,
-    session_key: parsed.data.session_key,
-    op: parsed.data.op,
-    since: parsed.data.since,
-    until: parsed.data.until,
     limit: parsed.data.limit,
     offset: parsed.data.offset,
     team_id: iso?.teamId,
