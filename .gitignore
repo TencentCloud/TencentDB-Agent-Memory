@@ -15,6 +15,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+.venv*/
+crewai-plugin/build/
+llamaindex-plugin/build/
+python-gateway-sdk/build/
 
 # Migration build output
 scripts/export-tencent-vdb/dist/

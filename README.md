@@ -204,6 +204,10 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 
 In addition to OpenClaw, this plugin also supports [Hermes](https://github.com/NousResearch/hermes-agent) Agent. Choose the installation path based on your deployment scenario:
 
+> Building with CrewAI? Use the native [`TencentDBMemory` adapter](./crewai-plugin/README.md) to connect CrewAI's recall and persistence lifecycle to the same Gateway.
+
+> Building with LlamaIndex? Use the native [`TencentDBMemoryBlock` adapter](./llamaindex-plugin/README.md). See the [framework comparison](./docs/adapters/python-framework-comparison.md) for lifecycle and safety tradeoffs.
+
 | You want to … | Use |
 |---|---|
 | Spin up a memory-enabled Hermes from scratch in one command | 2.A Docker (below) |
