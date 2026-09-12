@@ -8,7 +8,7 @@
     "start:config": "node --import tsx/esm src/index.ts --config config.yaml",
     "dev": "node --import tsx/esm --watch src/index.ts",
     "dev:config": "node --import tsx/esm --watch src/index.ts --config config.yaml",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
