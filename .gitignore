@@ -3,6 +3,14 @@ node_modules/
 
 # Runtime workspace
 workspace/
+docs/
+.deer-flow/
+.deerflow-runtime/
+.deerflow-venv/
+.uv-cache/
+.real-tdai-*/
+tmp-npm-cache/
+.langgraph-runtime/
 
 # Environment variables
 .env

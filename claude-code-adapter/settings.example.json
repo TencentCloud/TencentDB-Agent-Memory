@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/TencentDB-Agent-Memory/claude-code-adapter/tdai-memory-hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/TencentDB-Agent-Memory/claude-code-adapter/tdai-memory-hook.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/TencentDB-Agent-Memory/claude-code-adapter/tdai-memory-hook.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
