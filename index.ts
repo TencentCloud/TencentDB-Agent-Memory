@@ -35,6 +35,28 @@ import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
+export {
+  QwenCodeGatewayClient,
+  QwenCodeGatewayError,
+  qwenCodeGatewayClientFromEnv,
+  createQwenCodeSessionKey,
+  getProjectIdForQwenCode,
+  extractCompletedTurnsFromQwenTranscript,
+  getLatestCompletedQwenTurn,
+  hashQwenCodeTurn,
+  handleQwenCodeHook,
+  runQwenCodeHookCli,
+} from "./src/adapters/index.js";
+export type {
+  QwenCodeGatewayClientOptions,
+  QwenCodeHookHandlerOptions,
+  QwenCodeAdapterEnv,
+  QwenCodeAdapterLogger,
+  QwenCodeCompletedTurn,
+  QwenCodeHookEventName,
+  QwenCodeHookInput,
+  QwenCodeHookOutput,
+} from "./src/adapters/index.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";

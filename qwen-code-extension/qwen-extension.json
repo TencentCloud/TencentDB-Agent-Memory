@@ -1,0 +1,8 @@
+{
+  "name": "tencentdb-agent-memory-qwen-code",
+  "version": "0.1.0",
+  "displayName": "TencentDB Agent Memory for Qwen Code",
+  "description": "Connects Qwen Code lifecycle hooks to TencentDB Agent Memory Gateway for recall, capture, and session flush.",
+  "hooks": "hooks/hooks.json"
+}
+
