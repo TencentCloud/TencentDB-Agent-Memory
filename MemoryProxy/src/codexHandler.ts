@@ -1304,12 +1304,13 @@ async function forwardToUpstream(
   // 兼容 #1253：codex 走 chatCompletions/responsesToAnthropic 转换时，非 SSE
   // 上游 JSON 由接线层转换成 Responses 形态再回给客户端；本块读一份 clone 做上报，
   // 不必知道转换细节。
-  const agentUpstreamFlags = (
-    config.upstream.agents?.["codex"] ?? {}
-  ) as unknown as Record<string, boolean | undefined>;
-  const codexConvertingUpstream =
-    agentUpstreamFlags.chatCompletions === true ||
-    agentUpstreamFlags.responsesToAnthropic === true;
+  //
+  // 判断"这个 body 还要不要交给下游"不读转换开关，而看**这次请求实际打到的上游端点**：
+  // 打到 /responses 家族的是直连（可原样回传）；打到 /chat/completions 或 /v1/messages
+  // 说明接线层做了协议转换，body 必须留给转换层消费。这样即使探测不再回写配置
+  // （#1253 起改为请求期决策），这里也依然正确。
+  const codexUpstreamIsResponses = /\/responses(\/|$)/.test(upstreamUrl.split("?")[0]);
+  const codexConvertingUpstream = !codexUpstreamIsResponses;
   // stream:false 时上游可能返回非 SSE 的 JSON：主对话仍要上报 Opik。
   // 非 SSE 2xx：无论是否有 lf/archiveCtx、也无论上游是 Responses 还是转换后的
   // Chat / Anthropic 形态，都要完成 trace 收尾，避免 trace 永远停在“进行中”。
