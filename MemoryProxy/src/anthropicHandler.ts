@@ -836,7 +836,9 @@ export async function handleAnthropicMessages(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
-              resolveTeamCtxInfo(recovered.sessionInfo ?? null) ?? null,
+              // 必须带上会话状态里的 cachedTeams：恢复路径若只传 sessionInfo，团队名会丢失，
+              // 导致第 2 轮起注入的 <session_context> 与第 1 轮不一致（前缀缓存失效）。
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null, recovered.cachedTeams ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
