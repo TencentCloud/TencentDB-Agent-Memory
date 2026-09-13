@@ -267,6 +267,7 @@ function parseUpstreamAgents(
       chatCompletions?: boolean;
       anthropicToChat?: boolean;
       chatToAnthropic?: boolean;
+      chatToResponses?: boolean;
       responsesToAnthropic?: boolean;
       anthropicToResponses?: boolean;
     } | null | undefined
@@ -280,6 +281,7 @@ function parseUpstreamAgents(
     chatCompletions?: boolean;
     anthropicToChat?: boolean;
     chatToAnthropic?: boolean;
+    chatToResponses?: boolean;
     responsesToAnthropic?: boolean;
     anthropicToResponses?: boolean;
   }
@@ -294,6 +296,7 @@ function parseUpstreamAgents(
       chatCompletions?: boolean;
       anthropicToChat?: boolean;
       chatToAnthropic?: boolean;
+      chatToResponses?: boolean;
       responsesToAnthropic?: boolean;
       anthropicToResponses?: boolean;
     }
@@ -310,6 +313,7 @@ function parseUpstreamAgents(
       chatCompletions?: boolean;
       anthropicToChat?: boolean;
       chatToAnthropic?: boolean;
+      chatToResponses?: boolean;
       responsesToAnthropic?: boolean;
       anthropicToResponses?: boolean;
     } = {};
@@ -320,6 +324,7 @@ function parseUpstreamAgents(
       "chatCompletions",
       "anthropicToChat",
       "chatToAnthropic",
+      "chatToResponses",
       "responsesToAnthropic",
       "anthropicToResponses",
     ] as const) {

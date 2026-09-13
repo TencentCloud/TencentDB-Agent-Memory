@@ -432,12 +432,15 @@ export interface AgentUpstreamEntry {
    *  - chatCompletions       : Responses 客户端（codex/workbuddy）→ Chat 上游
    *  - anthropicToChat       : Anthropic 客户端（claude-code）→ Chat 上游
    *  - chatToAnthropic       : Chat 客户端（workbuddy）→ Anthropic 上游
+   *  - chatToResponses       : Chat 客户端（workbuddy / codebuddy / dsh / opencode / pi /
+   *                            hermes / openclaw）→ Responses 上游
    *  - responsesToAnthropic  : Responses 客户端（codex）→ Anthropic 上游
    *  - anthropicToResponses  : Anthropic 客户端（claude-code）→ Responses 上游
    */
   chatCompletions?: boolean;
   anthropicToChat?: boolean;
   chatToAnthropic?: boolean;
+  chatToResponses?: boolean;
   responsesToAnthropic?: boolean;
   anthropicToResponses?: boolean;
 }
@@ -830,6 +833,7 @@ export interface RawYamlConfig {
         chatCompletions?: boolean;
         anthropicToChat?: boolean;
         chatToAnthropic?: boolean;
+        chatToResponses?: boolean;
         responsesToAnthropic?: boolean;
         anthropicToResponses?: boolean;
       } | null | undefined

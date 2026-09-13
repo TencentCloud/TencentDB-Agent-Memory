@@ -229,6 +229,7 @@ export function nativeProtocolsOf(agent: string): readonly NativeProtocol[] {
 export type TransformFlag =
   | "chatCompletions"
   | "chatToAnthropic"
+  | "chatToResponses"
   | "anthropicToChat"
   | "anthropicToResponses"
   | "responsesToAnthropic";
@@ -238,12 +239,12 @@ export type TransformFlag =
  *
  * 这是「按协议判断」的唯一落点：新增客户端只要在 adapter 里声明 nativeProtocols，
  * 就自动获得这套选路，不需要改本文件。
- *   - chat：只能转 Anthropic（chat→Responses 未实现）
+ *   - chat：优先 Anthropic（这条链路最成熟），其次 Responses
  *   - anthropic：优先 Chat，其次 Responses
  *   - responses：优先 Anthropic，其次 Chat
  */
 const FALLBACK_ORDER: Record<NativeProtocol, readonly NativeProtocol[]> = {
-  chat: ["anthropic"],
+  chat: ["anthropic", "responses"],
   anthropic: ["chat", "responses"],
   responses: ["anthropic", "chat"],
 };
@@ -251,6 +252,7 @@ const FALLBACK_ORDER: Record<NativeProtocol, readonly NativeProtocol[]> = {
 /** 已实现的转换方向。缺的组合 = 未实现，必须显式告警而不是静默穿透。 */
 const TRANSFORM_FLAGS: Partial<Record<string, TransformFlag>> = {
   "chat->anthropic": "chatToAnthropic",
+  "chat->responses": "chatToResponses",
   "anthropic->chat": "anthropicToChat",
   "anthropic->responses": "anthropicToResponses",
   "responses->anthropic": "responsesToAnthropic",
@@ -280,6 +282,7 @@ export function resolveRoute(
 const EXPLICIT_FLAGS = [
   "chatCompletions",
   "chatToAnthropic",
+  "chatToResponses",
   "anthropicToChat",
   "anthropicToResponses",
   "responsesToAnthropic",
@@ -368,9 +371,9 @@ export function resolveAgentModes(
  * 纯函数，供启动期告警与单测使用；返回空数组表示都能走通。
  *
  * 判据与 resolveAgentModesFor 同源（同一张 3×3 表），因此不会出现"既不写开关、
- * 也不告警"的中间态。注意 chat 原生客户端目前**没有** chat→Responses 的实现，
- * 所以 Responses-only 上游会让它彻底无路可走 —— 这种情况必须在启动期告警，
- * 而不是等请求打到上游、拿一个 400 才发现。
+ * 也不告警"的中间态。Chat 原生客户端现在有两个可转方向（Anthropic、Responses），
+ * 只有两者都不可用时才判为无路可走 —— 这种情况必须在启动期告警，而不是等请求
+ * 打到上游、拿一个 400 才发现。
  */
 export function unroutableNativeProtocols(
   agent: string,

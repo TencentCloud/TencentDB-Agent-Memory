@@ -10,10 +10,11 @@
 >     responses-sse-completion.test.ts 3；
 >   - 协议接线分支：另带 responses-chat-compat.test.ts 10（第一跳 Responses→Chat 的丢参计数 +
 >     上游拒收 response_format 时的重试判据）、
->     probe.test.ts 34（上游能力探测：按协议选路 / 请求期决策 conversionEnabled / 注册表完整性 / 按上游去重 / 缓存 / 重探 / 变更告警）、
+>     probe.test.ts 36（上游能力探测：按协议选路 / 请求期决策 conversionEnabled / 注册表完整性 /
+>     按上游去重 / 缓存 / 重探 / 变更告警；含 chat→Responses 补齐后 chat 客户端不再"无路可走"）、
 >     upstream-auth.test.ts 7（上游凭据取值顺序与启动期审计）、
->     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 14 个文件 / 184 用例；
->   - 两支合并：15 个文件 / 198 用例。
+>     token-estimate.test.ts 7、protocol-errors.test.ts 5，共 14 个文件 / 186 用例；
+>   - 两支合并：15 个文件 / 200 用例。
 > 两支的 `npx tsc --noEmit` 均为 0 错误。
 > 注：上游 v2.0.2-beta.1 删除了 base 自带 user-query-extractor 8 个用例（对应旧文档 110/130）。
 
@@ -67,6 +68,31 @@ Responses ↔ Chat ↔ Anthropic
 | logprobs / logit_bias / penalty / seed / n / stream_options | 显式丢弃（onDropped 上报） | ✅ |
 | response_format（json_object / json_schema） | 显式丢弃（onDropped 上报；Anthropic Messages 无对位顶层字段，不伪造 prompt 注入） | ✅ |
 | reasoning_content / reasoning_signature | → thinking（map + preserveSignature 开） | ✅ |
+
+### OpenAI Chat → Responses（`chatToResponses`）
+
+Chat 原生客户端（workbuddy / codebuddy / dsh / opencode / pi / hermes / openclaw）遇到只提供
+Responses 端点的上游时走这一条：请求体由 `chatBodyToResponses` 重建，响应侧由
+`responsesJsonToChatJson`（非流式）与 `createResponsesSseToChatSse`（流式）翻回 Chat。
+
+| 字段 | 映射 | 状态 |
+|---|---|---|
+| messages[system / developer] | → instructions（多条按空行拼接） | ✅ |
+| messages[user]（string / parts / 图片） | → input[].content（input_text / input_image） | ✅ |
+| messages[assistant].text / tool_calls | → message(output_text) + function_call 序列 | ✅ |
+| messages[tool] | → function_call_output（call_id + output） | ✅ |
+| tools[].function | → tools[]（type=function，parameters 直传） | ✅ |
+| tool_choice auto/required/function:{name} | → tool_choice（function 形态收敛为 {type,name}） | ✅ |
+| max_tokens | → max_output_tokens（默认上限 32768，触发截断计入丢参） | ✅ |
+| temperature / top_p / parallel_tool_calls | 直传 | ✅ |
+| response_format（json_object / json_schema） | → text.format（含 name / description / strict） | ✅ |
+| stream | 透传（客户端要流式才要流式，不写死） | ✅ |
+| 响应（非流式） | output[].message → choices[].message，usage 归一（`responses_json_to_chat_json`） | ✅ |
+| 响应（流式） | output_text.delta → content delta；function_call → tool_calls delta；response.completed 的 usage → 末尾 usage chunk + `[DONE]`（`responses_to_chat`） | ✅ |
+| 错误体 | Responses 与 Chat 同为 OpenAI schema，非 2xx 原样透传 | ✅ |
+
+> 选路口径：Chat 客户端缺 Chat 端点时优先转 Anthropic（该链路最成熟），其次 Responses；
+> 两个方向都不可用才判为"无路可走"并在启动期输出 `upstream.probe.unroutable`。
 
 ## 响应字段矩阵
 
@@ -218,7 +244,7 @@ tokenizer + 4 × 消息数）：
   Chat / Anthropic / Codex / WorkBuddy 四个 handler 统一从这里引入
   `SKIP_REQUEST_HEADERS` / `filterResponseHeaders`，不再各写一份。
 - **Per-agent 转换开关 true / false 都显式生效**：`chatCompletions`、
-  `anthropicToChat`、`chatToAnthropic`、`responsesToAnthropic`、
+  `anthropicToChat`、`chatToAnthropic`、`chatToResponses`、`responsesToAnthropic`、
   `anthropicToResponses` 配置 `true` 表示启用；配置 `false` 表示明确禁用，
   并且只要某个 agent 显式配置过任一开关，`autoDetect` 就不会再为该 agent
   自动补其它开关（用户意图优先）。
@@ -238,12 +264,12 @@ tokenizer + 4 × 消息数）：
 | chat-anthropic-role-rules.test.ts | 19 | 角色严格交替（相邻同角色合并）+ tool_use/tool_result 相邻配对 + 消息形状兜底（首条 user / 悬空 tool_use / 空 content / 无 user 时兜底） |
 | injection-protocol-conversion.test.ts | 8 | 注入 × 转换接缝：注入恰好存活一次、落在可缓存前缀位、不泄漏 cache_control、转换确定性，含 Responses 合成体装配 |
 
-### 协议接线分支额外测试（该分支合计 14 个文件 / 184 用例）
+### 协议接线分支额外测试（该分支合计 14 个文件 / 186 用例）
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
 | token-estimate.test.ts | 7 | count_tokens 本地口径（正常/超长/异常输入归一，不抛错）+ 3 条口径回归（中文 100 字≈131、同字符数中文/ASCII 比值>8、英文 440 字≈97） |
 | protocol-errors.test.ts | 5 | 接线层协议错误/非流式路径（HTTP 状态拦截、错误体不进入转换器） |
 | upstream-auth.test.ts | 7 | 上游凭据取值顺序（agent.apiKey → upstream.apiKey → 客户端 key）、passthroughClientKey 显式透传、启动期审计的三类提示 |
-| probe.test.ts | 34 | autoDetect：按协议选路（既有 4 个客户端 8 种能力组合与改造前逐组合一致）+ 请求期决策 conversionEnabled（显式 true/false 覆盖、配过任一开关即完全按配置、按协议现算、未探测过则退回历史行为）+ 注册表完整性（每个 kind 都声明合法原生协议）+ 未声明协议不给开关只告警 + 待探集合由注册表派生 + 显式 true/false 都跳过探测；同一上游多客户端只探一次（按 url 去重）；能力回退时决策随之翻转（配置不再被写回）、显式配置不被覆盖、三端点全不通保留旧结论、未过期缓存跳过探测（能力表从缓存水合）、缓存损坏容错、定期重探启停 |
+| probe.test.ts | 36 | autoDetect：按协议选路（既有 4 个客户端 8 种能力组合与改造前逐组合一致，唯一有意改动是补齐 chat→Responses）+ 请求期决策 conversionEnabled（显式 true/false 覆盖、配过任一开关即完全按配置、按协议现算、未探测过则退回历史行为）+ 上游只有 Responses 时 chat 客户端命中 chatToResponses + 注册表完整性（每个 kind 都声明合法原生协议）+ 未声明协议不给开关只告警 + 待探集合由注册表派生 + 显式 true/false 都跳过探测；同一上游多客户端只探一次（按 url 去重）；能力回退时决策随之翻转（配置不再被写回）、显式配置不被覆盖、三端点全不通保留旧结论、未过期缓存跳过探测（能力表从缓存水合）、缓存损坏容错、定期重探启停 |
 | responses-chat-compat.test.ts | 10 | 第一跳丢参计数：可完整映射的请求零丢弃；宿主侧 item（item_reference / local_shell_call / 未知类型归 other）与文件、音频 content part 按类型计数；`store` / `previous_response_id` / `include` / `reasoning` 等 Responses 独有顶层参数逐项计数；非 function 工具计数；上游拒收 `response_format` 时的重试判据（400 + 发过该字段 + 文案点名才重试） |

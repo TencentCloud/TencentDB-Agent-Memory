@@ -96,6 +96,8 @@ upstream:
   #   chatCompletions       Responses 客户端（codex / workbuddy 桌面）→ Chat 上游
   #   anthropicToChat       Anthropic 客户端（claude-code）→ Chat 上游
   #   chatToAnthropic       Chat 客户端（workbuddy 网页）→ Anthropic 上游
+  #   chatToResponses       Chat 客户端（workbuddy 网页 / codebuddy / dsh / opencode /
+  #                         pi / hermes / openclaw）→ Responses 上游
   #   responsesToAnthropic  Responses 客户端（codex / workbuddy 桌面）→ Anthropic 上游
   #   anthropicToResponses  Anthropic 客户端（claude-code）→ Responses 上游
   agents: {}
@@ -109,8 +111,9 @@ upstream:
     #   # 不写 apiKey 且不写 passthroughClientKey → 回退 upstream.apiKey
     #   responsesToAnthropic: true # Codex /responses → Anthropic 上游
     #   chatCompletions: true      # Codex /responses → Chat 上游（Chat 上游时选这项）
-    # workbuddy:
-    #   chatToAnthropic: true      # workbuddy 网页 /chat/completions → Anthropic 上游
+  # workbuddy:
+  #   chatToAnthropic: true      # workbuddy 网页 /chat/completions → Anthropic 上游
+  #   chatToResponses: true      # workbuddy 网页 /chat/completions → Responses 上游
     #   responsesToAnthropic: true # workbuddy 桌面 /v1/responses → Anthropic 上游
     #   chatCompletions: true      # workbuddy 桌面 /v1/responses → Chat 上游
     # 注意：workbuddy / codebuddy / claude-code 等客户端不需要单独配 per-agent override，

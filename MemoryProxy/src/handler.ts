@@ -56,6 +56,11 @@ import {
   anthropicJsonToChatJson,
   createAnthropicSseToChatSse,
 } from "./common/chat-anthropic-compat.js";
+import {
+  chatBodyToResponses,
+  createResponsesSseToChatSse,
+  responsesJsonToChatJson,
+} from "./common/responses-chat-compat.js";
 import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { filterResponseHeaders, SKIP_REQUEST_HEADERS } from "./upstream/headers.js";
 import { resolveUpstreamApiKey } from "./upstream/auth.js";
@@ -1351,15 +1356,27 @@ export async function handleChatCompletions(
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
   let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
-  if (
+  // 协议接线：Chat 客户端指向 Anthropic / Responses 风格上游时，端点与请求体都要换。
+  // 两个方向互斥（同一台上游只会缺其中一种协议）；若两者都被打开，按 Anthropic 优先，
+  // 与 capability-probe 的 FALLBACK_ORDER.chat 一致。
+  const chatToAnthropicEndpoint = conversionEnabled(
+    config,
+    config.upstream.agents[agentFromPath ?? ""],
+    "chat",
+    "chatToAnthropic",
+  );
+  const chatToResponsesEndpoint =
+    !chatToAnthropicEndpoint &&
     conversionEnabled(
       config,
       config.upstream.agents[agentFromPath ?? ""],
       "chat",
-      "chatToAnthropic",
-    )
-  ) {
+      "chatToResponses",
+    );
+  if (chatToAnthropicEndpoint) {
     forwardEndpoint = "/v1/messages";
+  } else if (chatToResponsesEndpoint) {
+    forwardEndpoint = "/responses";
   }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
   // share the same client session id can't contaminate each other's state /
@@ -1550,6 +1567,14 @@ export async function handleChatCompletions(
     };
   }
 
+  // 协议接线：Chat 客户端指向 Responses 风格上游时，Chat 请求 → Responses 后再转发。
+  // 放在 stream_options 注入之后：chatBodyToResponses 会重建报文，只搬运有对位的字段，
+  // stream_options 这类 Chat 独有参数不会漏进 Responses 请求体。
+  if (chatToResponsesEndpoint) {
+    upstreamBody = chatBodyToResponses(upstreamBody, { model: modelId });
+    pipe.info("PROTOCOL", "chat→responses (chatToResponses)");
+  }
+
   // ── Forward to upstream (with automatic retry if configured) ──────────────
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
   // Pass target.url so the FORWARD log reflects the actual per-agent upstream
@@ -1602,6 +1627,9 @@ export async function handleChatCompletions(
     "chat",
     "chatToAnthropic",
   );
+  const chatToResponsesOn =
+    !chatToAnthropicOn &&
+    conversionEnabled(config, config.upstream.agents[agentSource], "chat", "chatToResponses");
 
   // A retry falls back to the model the client asked for, so the request ends
   // up costing what it would have cost unrouted — no saving to attribute.
@@ -1698,7 +1726,9 @@ export async function handleChatCompletions(
     const passthrough = createUsageTapTransform(tapCtx);
     const convertedStream = chatToAnthropicOn
       ? upstreamResp.body.pipeThrough(createAnthropicSseToChatSse({ model: effectiveModel }))
-      : upstreamResp.body;
+      : chatToResponsesOn
+        ? upstreamResp.body.pipeThrough(createResponsesSseToChatSse({ model: effectiveModel }))
+        : upstreamResp.body;
     const tappedStream = convertedStream.pipeThrough(passthrough);
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
@@ -1718,6 +1748,17 @@ export async function handleChatCompletions(
       try {
         const respJson = JSON.parse(respText) as Record<string, unknown>;
         respText = JSON.stringify(anthropicJsonToChatJson(respJson));
+      } catch {
+        // 非 JSON / 空响应体：原样透传。
+      }
+    }
+  } else if (chatToResponsesOn) {
+    if (upstreamResp.status >= 400) {
+      // Responses 与 Chat 共用 OpenAI 错误 schema，错误体原样透传。
+    } else {
+      try {
+        const respJson = JSON.parse(respText) as Record<string, unknown>;
+        respText = JSON.stringify(responsesJsonToChatJson(respJson, { model: effectiveModel }));
       } catch {
         // 非 JSON / 空响应体：原样透传。
       }

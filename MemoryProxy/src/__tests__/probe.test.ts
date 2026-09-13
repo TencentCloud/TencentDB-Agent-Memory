@@ -60,11 +60,11 @@ describe("resolveAgentModes（上游协议自动选路）", () => {
     expect(m.codex).toEqual({ chatCompletions: true });
   });
 
-  it("上游仅支持 Responses：claude-code 走 anthropicToResponses，codex 直连，workbuddy 无路（chat 不支持且非 anthropic）", () => {
+  it("上游仅支持 Responses：claude-code 走 anthropicToResponses，codex 直连，chat 原生客户端走 chatToResponses", () => {
     const m = resolveAgentModes({ chat: false, responses: true, anthropic: false });
     expect(m["claude-code"]).toEqual({ anthropicToResponses: true });
     expect(m.codex).toEqual({});
-    expect(m.workbuddy).toEqual({});
+    expect(m.workbuddy).toEqual({ chatToResponses: true });
   });
 
   it("上游全支持：三个客户端都直连（客户端原生协议优先）", () => {
@@ -172,10 +172,16 @@ describe("按协议选路（不再维护客户端名单）", () => {
     ),
   );
 
-  it("既有 4 个客户端：8 种上游能力组合下选路结果与改造前完全一致", () => {
+  it("既有 4 个客户端：8 种上游能力组合下选路与改造前一致，唯一有意改动是补齐 chat→Responses", () => {
     for (const [agent, native] of Object.entries(LEGACY_NATIVE)) {
       for (const caps of CAP_COMBOS) {
-        expect(resolveAgentModesFor(agent, caps)).toEqual(legacyModes(native, caps));
+        const expected = legacyModes(native, caps);
+        // 改造前 chat 只能转 Anthropic，因此"上游只有 Responses"这一组合被判为无路可走；
+        // 本轮补上 chat→Responses 后，只有这一格发生变化，其余 7 格逐组合保持原样。
+        if (native.includes("chat") && !caps.chat && !caps.anthropic && caps.responses) {
+          expected.chatToResponses = true;
+        }
+        expect(resolveAgentModesFor(agent, caps)).toEqual(expected);
       }
     }
   });
@@ -186,7 +192,12 @@ describe("按协议选路（不再维护客户端名单）", () => {
         .toEqual({ chatToAnthropic: true });
       expect(resolveAgentModesFor(agent, { chat: true, responses: false, anthropic: false }))
         .toEqual({});
+      expect(resolveAgentModesFor(agent, { chat: false, responses: true, anthropic: false }))
+        .toEqual({ chatToResponses: true });
       expect(unroutableNativeProtocols(agent, { chat: false, responses: true, anthropic: false }))
+        .toEqual([]);
+      // 三端点全无的上游才是真的无路可走
+      expect(unroutableNativeProtocols(agent, { chat: false, responses: false, anthropic: false }))
         .toEqual(["chat"]);
     }
   });
@@ -315,14 +326,24 @@ describe("probeEndpoint（鉴权头与探测模型）", () => {
 });
 
 describe("unroutableNativeProtocols（启动期『无路可走』告警）", () => {
-  it("Responses-only 上游：chat 原生客户端无路可走（无 chat→Responses 实现）", () => {
+  it("Responses-only 上游：chat 原生客户端不再无路可走（chat→Responses 已实现）", () => {
     expect(
       unroutableNativeProtocols("workbuddy", {
         chat: false,
         responses: true,
         anthropic: false,
       }),
-    ).toEqual(["chat"]);
+    ).toEqual([]);
+  });
+
+  it("三端点全无的上游：chat 原生客户端才判为无路可走", () => {
+    expect(
+      unroutableNativeProtocols("workbuddy", {
+        chat: false,
+        responses: false,
+        anthropic: false,
+      }),
+    ).toEqual(["chat", "responses"]);
   });
 
   it("三协议全支持 / 有可用转换方向时均不告警", () => {
@@ -415,6 +436,18 @@ describe("applyAutoDetect（撤销 / 变更告警 / 缓存）", () => {
     expect(agentsOf(config).codex.responsesToAnthropic).toBe(false);
     // 显式配置过开关的 agent 不参与探测：它的上游地址一次都没被请求过。
     expect(calls.some((u) => u.includes("explicit.example.com"))).toBe(false);
+  });
+
+  it("上游只有 Responses 端点：chat 原生客户端的请求期决策命中 chatToResponses", async () => {
+    __resetAutoDetectState();
+    resetProbeStats();
+    const config = makeConfig({ enabled: true, timeoutMs: 50 });
+    installFetch({ "/responses": 200 });
+    await applyAutoDetect(config);
+    const entry = agentsOf(config).workbuddy;
+    expect(conversionEnabled(config, entry, "chat", "chatToResponses")).toBe(true);
+    // 上游没有 Anthropic 端点，优先级更高的 chat→anthropic 不应被启用
+    expect(conversionEnabled(config, entry, "chat", "chatToAnthropic")).toBe(false);
   });
 
   it("三端点全部探不通时保留上一次结论，并计入 failures", async () => {
