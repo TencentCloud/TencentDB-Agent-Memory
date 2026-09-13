@@ -659,3 +659,72 @@ function buildStreamingResponse(
     },
   });
 }
+
+/**
+ * 转发上游前剥离 Proxy 生成的 codex session-init 假表单：
+ *   - `input[]` 里的 `function_call`（call_id 前缀 `call_codex_session_init_`）
+ *     及其匹配的 `function_call_output`；
+ *   - `tools[]` 里的 `request_user_input` 声明。
+ *
+ * 原因同 Claude Code AskUserQuestion：`request_user_input` 是 Codex 客户端
+ * 内部工具，上游模型（如 GLM）拿不到客户端 schema，会模仿历史里的
+ * function_call 再生成一次非法调用。表单交互只属于 session-init 内部管线，
+ * 上游模型不需要看到它（关联结果已由 `<session_context>` 注入）。
+ *
+ * 纯函数：返回新对象，原 body 不修改。
+ */
+export function stripCodexFormArtifacts(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  let changed = false;
+  let nextInput = body.input;
+  let nextTools = body.tools;
+
+  const input = body.input;
+  if (Array.isArray(input)) {
+    const formCallIds = new Set<string>();
+    for (const item of input) {
+      const it = item as Record<string, unknown> | null;
+      if (
+        it &&
+        typeof it === "object" &&
+        it.type === "function_call" &&
+        typeof it.call_id === "string" &&
+        isSessionInitToolCallId(it.call_id)
+      ) {
+        formCallIds.add(it.call_id);
+      }
+    }
+    if (formCallIds.size > 0) {
+      nextInput = input.filter((item) => {
+        const it = item as Record<string, unknown> | null;
+        if (!it || typeof it !== "object") return true;
+        if (
+          (it.type === "function_call" || it.type === "function_call_output") &&
+          typeof it.call_id === "string" &&
+          formCallIds.has(it.call_id)
+        ) {
+          return false;
+        }
+        return true;
+      });
+      changed = true;
+    }
+  }
+
+  const tools = body.tools;
+  if (
+    Array.isArray(tools) &&
+    tools.some((t) => (t as { name?: unknown } | null)?.name === TOOL_NAME)
+  ) {
+    nextTools = tools.filter((t) => (t as { name?: unknown } | null)?.name !== TOOL_NAME);
+    changed = true;
+  }
+
+  if (!changed) return body;
+  return {
+    ...body,
+    ...(nextInput !== input ? { input: nextInput } : {}),
+    ...(nextTools !== tools ? { tools: nextTools } : {}),
+  };
+}

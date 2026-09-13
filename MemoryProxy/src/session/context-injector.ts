@@ -38,17 +38,45 @@ interface TextBlock {
 const CTX_OPEN = "<session_context>";
 const CTX_CLOSE = "</session_context>";
 
+/** Team context info injected into `<session_context>` — id 必有, name 尽力而为。 */
+export interface TeamCtxInfo {
+  id?: string;
+  name?: string;
+}
+
+/**
+ * 从 session store 的 sessionInfo + cachedTeams 解析要注入的团队信息。
+ * 只有 team_id 时也能回答"我的团队 ID 是什么"；有 name 时顺带回答团队名。
+ */
+export function resolveTeamCtxInfo(
+  sessionInfo: { team_id?: string } | null | undefined,
+  cachedTeams?: Array<{ team_id: string; team_name: string }> | null,
+): TeamCtxInfo | null {
+  const id = sessionInfo?.team_id;
+  if (!id) return null;
+  const name = cachedTeams?.find((t) => t.team_id === id)?.team_name;
+  return name ? { id, name } : { id };
+}
+
 // ── Block builder ──────────────────────────────────────────────────────────────
 
 function buildContextBlock(
   agent: AgentDetail | null | undefined,
   task: TaskDetail | null | undefined,
+  team?: TeamCtxInfo | null,
 ): string | null {
-  if (!agent && !task) return null;
+  if (!agent && !task && !team) return null;
 
   const lines: string[] = [CTX_OPEN];
 
+  if (team) {
+    lines.push("[Team]");
+    if (team.id) lines.push(`id: ${team.id}`);
+    if (team.name) lines.push(`name: ${team.name}`);
+  }
+
   if (agent) {
+    if (lines.length > 1) lines.push("");
     lines.push("[Agent]");
     lines.push(`id: ${agent.id}`);
     if (agent.name) lines.push(`name: ${agent.name}`);
@@ -69,6 +97,17 @@ function buildContextBlock(
       lines.push("goal:");
       lines.push(task.goal);
     }
+  }
+
+  // 身份绑定说明：避免模型在 Session Init 已完成后再次向用户询问
+  // 团队 / Agent / Task 选择（实测 GLM 会自行生成占位选项的 AskUserQuestion）。
+  if (team || agent) {
+    if (lines.length > 1) lines.push("");
+    lines.push("[Binding]");
+    lines.push(
+      "本会话的 Team / Agent / Task 已由系统自动关联完成，请勿再次向用户询问团队资产、" +
+        "团队、Agent 或 Task 的选择，直接继续当前任务。",
+    );
   }
 
   lines.push(CTX_CLOSE);
@@ -107,8 +146,9 @@ export function injectSessionContext(
   messages: RawMessage[],
   agent: AgentDetail | null | undefined,
   task: TaskDetail | null | undefined,
+  team?: TeamCtxInfo | null,
 ): RawMessage[] {
-  const block = buildContextBlock(agent ?? null, task ?? null);
+  const block = buildContextBlock(agent ?? null, task ?? null, team ?? null);
   if (!block) return messages;
 
   const sysIdx = messages.findIndex((m) => m.role === "system");
@@ -167,6 +207,7 @@ export function injectSessionContextWithToggles(
   task: TaskDetail | null | undefined,
   config: Pick<SessionInitConfig, "injectAgentContext" | "injectTaskContext"> | null | undefined,
   sessionKey: string,
+  team?: TeamCtxInfo | null,
 ): RawMessage[] {
   const injectAgent = config?.injectAgentContext !== false;
   const injectTask = config?.injectTaskContext !== false;
@@ -176,7 +217,7 @@ export function injectSessionContextWithToggles(
 
   const agentForCtx = injectAgent ? (agent ?? null) : null;
   const taskForCtx = injectTask ? (task ?? null) : null;
-  return injectSessionContext(messages, agentForCtx, taskForCtx);
+  return injectSessionContext(messages, agentForCtx, taskForCtx, team ?? null);
 }
 
 /** Reset the warn-once dedup set. Test-only. */
@@ -201,6 +242,7 @@ export function buildSessionContextBlockWithToggles(
   task: TaskDetail | null | undefined,
   config: Pick<SessionInitConfig, "injectAgentContext" | "injectTaskContext"> | null | undefined,
   sessionKey: string,
+  team?: TeamCtxInfo | null,
 ): string | null {
   const injectAgent = config?.injectAgentContext !== false;
   const injectTask = config?.injectTaskContext !== false;
@@ -210,7 +252,7 @@ export function buildSessionContextBlockWithToggles(
 
   const agentForCtx = injectAgent ? (agent ?? null) : null;
   const taskForCtx = injectTask ? (task ?? null) : null;
-  return buildContextBlock(agentForCtx, taskForCtx);
+  return buildContextBlock(agentForCtx, taskForCtx, team ?? null);
 }
 
 // ── Anthropic system-field variant ────────────────────────────────────────────

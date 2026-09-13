@@ -35,6 +35,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -49,10 +50,13 @@ import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
+import type { ReqCtx } from "./stages/types.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
+import { stripSessionInitFormArtifacts, type RawMessage } from "./session/claude-code/cleaner.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
@@ -570,7 +574,7 @@ export async function handleAnthropicMessages(
     ? _pathPartsEarly[0] : undefined;
   const agentAdapter = resolveAgentAdapter(_agentFromPathEarly ?? "claude-code");
   const ccRoutingEnabled = config.ccRequestRouting?.enabled === true;
-  const requestKind: CcRequestKind = ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main";
+  const requestKind: CcRequestKind = ccRoutingEnabled ? (agentAdapter.classifyRequest(body) as CcRequestKind) : "main";
 
   // ── Model gate: reject requests whose `model` is not a registered display name ──
   // 价目表已配置时，客户端 `model` 必须匹配某条 entry 的 `modelName`（展示名，
@@ -666,10 +670,26 @@ export async function handleAnthropicMessages(
     lcHeaders[k.toLowerCase()] = v;
   }
 
-// ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  // ── Session resolution（sessionStage 统一入口）─────────────────────────────
+  // 显式会话 header 优先；缺失时按 autoConversationId 自动生成/续接（受配置
+  // 门控）；自动生成关闭时回退到 agent profile 兜底键（resolveSessionKey，
+  // 原行为）。auto-* 回传 ID 仍过签名校验。
+  const sessionStageCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource,
+    apiKey,
+    earlySpaceId,
+    earlyUserId: earlyVerify?.userId ?? "",
+    debugForceUserId: config.sessionInit?.debugForceUserId,
+  };
+  const sessionTurn = await prepareSessionTurn(sessionStageCtx, undefined, {
+    fallbackSessionKey: () => resolveSessionKey(config, lcHeaders, c.req.path, body, keyId),
+  });
+  const conversationId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -702,13 +722,13 @@ export async function handleAnthropicMessages(
       if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -762,7 +782,7 @@ export async function handleAnthropicMessages(
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
-      const compositeKey = `${agentSource}:${sessionKey}`;
+      const compositeKey = sessionTurn.compositeKey;
       // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
       // 复合键，保证 key path 分段合法（参见 §4.4 边界处理）。
       const identity = {
@@ -806,7 +826,8 @@ export async function handleAnthropicMessages(
         // Anthropic protocol: system lives on body.system (not in messages),
         // so we hand systemAppend back through the initResult and let the
         // shared apply-block below merge it into body.system.
-        const { buildSessionContextBlockWithToggles } = await import("./session/context-injector.js");
+        const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const inMsgs = (body.messages as Array<Record<string, unknown>>) ?? [];
         const systemAppend = recovered.bypassed
           ? null
@@ -815,6 +836,9 @@ export async function handleAnthropicMessages(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              // 必须带上会话状态里的 cachedTeams：恢复路径若只传 sessionInfo，团队名会丢失，
+              // 导致第 2 轮起注入的 <session_context> 与第 1 轮不一致（前缀缓存失效）。
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null, recovered.cachedTeams ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -840,7 +864,12 @@ export async function handleAnthropicMessages(
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "anthropic" },
+          {
+            stream: isStream,
+            modelId: modelId as string,
+            protocol: "anthropic",
+            threadId,
+          },
           agentSource,
           metadataClient,
           apiKey,
@@ -981,12 +1010,12 @@ export async function handleAnthropicMessages(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1079,6 +1108,7 @@ export async function handleAnthropicMessages(
       const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
       const memResult = await executeMemCommand(memCmd, {
         sessionKey,
+        threadId: sessionTurn.threadId,
         agentSource,
         config,
         spaceId,
@@ -1413,6 +1443,20 @@ export async function handleAnthropicMessages(
     opikKeyId: keyId,
   });
 
+  // ── 每轮转发前剥离 Proxy 自产 session-init 假表单（AskUserQuestion 历史）──
+  // 客户端每轮会全量回放历史，只在该会话“注册轮”剥离不够：已初始化会话的
+  // 后续轮次仍会把 tool_use/tool_result 带给上游模型（GLM 会模仿生成非法
+  // AskUserQuestion）。剥离只针对 `toolu_cc_session_init_*` 与配对 tool_result，
+  // 用户真实消息永远保留；重复执行幂等。
+  if (Array.isArray(body.messages)) {
+    const rawMessages = body.messages as RawMessage[];
+    const strippedMessages = stripSessionInitFormArtifacts(rawMessages);
+    if (strippedMessages !== rawMessages) {
+      body = { ...body, messages: strippedMessages };
+      messages = strippedMessages as unknown[];
+    }
+  }
+
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
   if (sanitizedCount > 0) {
     pipe.info(
@@ -1552,6 +1596,7 @@ export async function handleAnthropicMessages(
       modelId: effectiveModel,
       keyId,
       sessionKey,
+      compositeKey: sessionTurn.compositeKey,
       upstreamUrl: target.url,
       requestPath: c.req.path,
       traceId,
@@ -1663,7 +1708,7 @@ export async function handleAnthropicMessages(
         if (intents.length > 0) {
           emitModelIntentTelemetry({
             // 与 session_init_logs 对齐 compositeKey 形态
-            sessionKey: `${agentSource}:${sessionKey}`,
+            sessionKey: sessionTurn.compositeKey,
             turnSeq: lf.turnSeq,
             spaceId,
             userId: keyId,
@@ -1955,6 +2000,11 @@ interface AnthropicTapContext {
   modelId: string;
   keyId: string;
   sessionKey: string;
+  /**
+   * 带线程维度的存储键（`buildStoreSessionKey` 产物）；埋点必须用它，勿手拼。
+   * 见 `handler.ts::TapContext` 的完整说明（为什么设为必填）。
+   */
+  compositeKey: string;
   upstreamUrl: string;
   requestPath: string;
   traceId: string;
@@ -2180,7 +2230,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
           .map(([, v]) => ({ name: v.name, arguments: v.inputJson || "{}" }));
         if (intents.length > 0) {
           emitModelIntentTelemetry({
-            sessionKey: `${ctx.agentSource}:${ctx.sessionKey}`,
+            sessionKey: ctx.compositeKey,
             turnSeq: ctx.lf.turnSeq,
             spaceId: ctx.spaceId,
             userId: ctx.keyId,
@@ -2214,7 +2264,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
 
       // Credit usage reporting for streaming responses.
       (ctx.skipCreditReport
-        ? Promise.resolve({ attempted: false, ok: false })
+        ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
         : tryReportCreditFromPath(
             ctx.config.creditReport,
             ctx.requestPath,

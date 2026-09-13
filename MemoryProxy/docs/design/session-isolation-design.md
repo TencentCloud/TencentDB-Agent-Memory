@@ -1,0 +1,499 @@
+# Session 隔离新方案设计（TRACK 04）
+
+## 1. 目标与非目标
+
+**目标**
+
+1. 回答「会话的边界到底是什么、记忆归谁」：任何两个请求都可判定
+   「是否同属一个逻辑会话」；
+2. 覆盖跨客户端续接、重启恢复、无会话 ID 客户端（Hermes / OpenClaw /
+   DSH / Codex / WorkBuddy）、跳过（bypass）状态自愈、多实例部署五类真实场景；
+3. 隔离是**纵深防御**而不是单点检查：解析层、会话恢复层、记忆写侧
+   各有一道可观测的防线；
+4. 提供可验证的落地路径与命令行验证方法。
+
+**非目标**
+
+- 不改变现有 Session Init 表单交互；
+- 不重复实现控制面的授权管理：grant 的权威来源仍在 Memory Hub / 控制面，
+  Proxy 消费「可访问命名空间集」；
+- 不把 Redis 共享会话表设为硬依赖：单机/多副本先用「确定性派生 + 共享签名
+  密钥」逼近跨实例收敛，Redis 共享表作为独立后续课题（见 §7.3），
+  避免把隔离正确性押在存储中间件上。
+
+## 2. 会话键与归属模型（v3 现状）
+
+### 2.1 复合键单点约定（已实现）
+
+会话状态的 store 键统一由 `session/store.ts::buildStoreSessionKey` 生成，
+改约定只动这一处：
+
+```
+storeSessionKey = agentSource : sessionKey [ : threadId ]
+
+agentSource : 客户端族前缀（workbuddy 状态机历史复用 codex → 自动别名 codex）
+sessionKey   : 显式会话 ID / auto- 生成 ID / 无 ID 时的稳定兜底键
+threadId     : 仅 threadIsolation.enabled=true 且带 x-thread-id 时追加
+```
+
+调用点已全部收敛（handler、路由与遥测不再各自拼键）：
+
+- 4 个 handler：`anthropicHandler.ts` / `handler.ts` / `codexHandler.ts` /
+  `workbuddyHandler.ts`；
+- 3 个路由：`session-force-archive.ts` / `session-refresh.ts` /
+  `session-task.ts`（workbuddy 会话因此也能被 force-archive / refresh 命中）；
+- 命令层：`mem-command/commands/session-reset.ts` 的读写也走同一函数。此前它手拼
+  `${agentSource}:${sessionKey}`，threadIsolation 开启时会 reset 到不带 `:thread`
+  后缀的影子键——命令回复正常、真实会话却没被重置（该缺陷已修，回归用例见 §9）；
+- 遥测：model-intent 埋点与 session-init 日志的 composite 键对齐（threadIsolation
+  开启时均带 `:threadId` 后缀）；
+- 归档写侧 fence（后续项，未随本 PR 落地）：计划同样通过
+  `buildStoreSessionKey` 构造候选键，见 §4.2 / §8。
+
+> **已知边界（桥接侧不复用该入口）**：`memory-bridge.ts` / `skill-bridge.ts` 的
+> `composite_key` 由 `binding.agentSource` + 请求里的 `session_id` 拼出——curl bridge
+> 的入参**不含 thread**，因此该键天然不含 `:threadId`。它是"按客户端上报的会话 ID
+> 反查"的查找键，不是存储键，无法也不应套用 `buildStoreSessionKey`；代价是
+> `threadIsolation` 开启时桥接侧的 L1 快路径会 miss 并回退 L2a / binding
+> （结果正确，多一次探测）。
+
+### 2.2 隔离判定维度（已实现）
+
+| 维度 | 键 / 输入 | 作用 | 权威来源 |
+|---|---|---|---|
+| 身份锁 | `user_id` | 防跨用户串号 | auth/verify；store L1 归属校验 |
+| 归属锁 | `space_id + team_id + agent_id + task_id` | 决定记忆/技能可访问范围 | 控制面注册结果（SessionInit） |
+| 会话锁 | `agentSource:sessionKey` | 对话历史连续性与注入目标 | 客户端上报（仅检索键）+ 签名校验 |
+| 线程 scope | `x-thread-id` | auto ID 签名绑定（恒生效）+ 进程内 L1/状态机键分组与遥测（需 `threadIsolation`） | 客户端显式上报 |
+| 首问指纹 | 首条用户消息指纹 | per-key-msg 窗口隔离；auto ID 签名绑定 | Proxy 派生 |
+| 存储层 | `spaceId` 命名空间（缺省 `_default`） | 恢复/绑定的物理命名空间兜底 | 部署声明 |
+
+判定规则：身份锁不一致、或归属锁中的 space 不一致 → 一律视为**新会话**
+（store 恢复层直接拦截，见 §4.1）；会话锁的变化在身份/归属一致时允许
+「续接」而非「新建」。
+
+线程维度当前定位：`threadIsolation` 默认关，但**默认关只约束 store 键**——
+`x-thread-id` 一旦出现就始终进入 auto ID 的签名 scope
+（`resolveEffectiveConversationId` 无条件把 threadId 作为 scope 传给
+`resolveOrCreateSessionId`），因此同 key 不同 thread 在默认配置下**也会**拿到
+不同的 auto 会话 ID（`stages-session.test.ts` 锁住了这条行为）。显式配置
+`threadIsolation: true` 才会额外把 thread 写进 L1/状态机 store 键与遥测/审计分组；
+且**持久层（L2a/L2b）键一律不含 thread**——重启或换副本后按
+(space, user, agent, sessionId) 收敛，不承诺跨实例的 thread 级隔离（见 §7.4）。
+
+### 2.3 信任边界（已实现）
+
+- 客户端上报的 `x-conversation-id` / `session-id` / `client_metadata.session_id`
+  只是**检索键**，会话注册后的权威身份来自 auth/verify + 控制面；
+- Proxy 自签的 `auto-` ID 带 HMAC 签名，无法伪造、无法跨线程/跨窗口/换 key
+  复用（§3.3）；
+- 兜底键（无任何会话 ID）由 Proxy 按 keyId + 首问指纹派生，客户端不可控。
+
+## 3. 会话解析：统一入口（阶段化，已实现）
+
+### 3.1 sessionStage + SessionAdapter
+
+`stages/session.ts::sessionStage` 是 4 个 handler 的会话解析唯一入口，
+客户端差异收敛到 `SessionAdapter`（`stages/types.ts`）：
+
+```ts
+interface SessionAdapter {
+  extractRawSessionId(c, lcHeaders, body): string | null;  // 显式 ID
+  userMessages(body): unknown;            // chat 取 body.messages，responses 取 body.input
+  fallbackSessionKey(ctx, keyId, lcHeaders): string | null; // 无 ID 兜底
+  resolveThreadId(c): string | null;
+  autoGenerate?: boolean;                 // workbuddy = false（原行为不生成）
+  resolveIdentity(ctx, keyId): { keyId, userId, callerUserKey };
+}
+```
+
+接入差异：
+
+- **chat / anthropic**（`handler.ts` / `anthropicHandler.ts`）：
+  `DEFAULT_SESSION_ADAPTER`，`resolveEffectiveConversationId` 统一显式 ID 优先、
+  缺失按 `autoConversationId` 生成；
+- **codex / workbuddy**（`codexHandler.ts` / `workbuddyHandler.ts`）：共用
+  Responses wire 的通用适配器（`createResponsesSessionAdapter` /
+  `RESPONSES_SESSION_ADAPTER`）——显式会话 ID 由
+  `session/client-ids.ts::extractResponsesSessionId` 提取，取值顺序为
+  `session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` >
+  `x-thread-id`，全部缺失时退回 `client_metadata.session_id`；
+  codex 走 auto 分支（实际生成仍受
+  `autoConversationId.enabled` 门控），workbuddy 用 `autoGenerate: false`
+  实例（与 workbuddy 原行为一致，不主动生成 auto ID）；
+- `handler.ts` 的 `debugForceUserId` 由 `resolveIdentity` 处理，身份改写策略
+  不再散落在各 handler。
+
+两条路径的显式会话 ID 口径**不是**"完全同集合"，实现如下表（改任一列都必须
+同步本表与 `docs/session-policy.md` §4）：
+
+| 路径 | header 集合（从左到右为优先级） | 实现 |
+|---|---|---|
+| chat / anthropic | `x-conversation-id` > `x-session-id` > `x-claude-code-session-id` > `x-deepseek-harness-session-id` > `x-chat-id` > `x-thread-id` | `session-key.ts::resolveConversationId` |
+| codex / workbuddy（Responses） | `session-id` > `x-conversation-id` > `x-session-id` > `x-chat-id` > `x-thread-id`，全缺时退回 `body.client_metadata.session_id` | `session/client-ids.ts::extractResponsesSessionId` |
+
+- 公共段 `x-conversation-id` > `x-session-id` > `x-chat-id` > `x-thread-id`
+  两条路径**同集合、同优先级**——ACC-4 要求对齐的就是这一段，`x-conversation-id`
+  在两侧都生效；
+- 差异只在各自的**客户端专属别名**上：Responses 侧多 `session-id`
+  （Codex 历史口径，不能去掉），chat / anthropic 侧多
+  `x-claude-code-session-id` / `x-deepseek-harness-session-id`。这是刻意的
+  按客户端分族，不是遗漏；`session-client-ids.test.ts` 有两个用例把两侧集合
+  分别锁住，避免文档再次漂移。
+
+### 3.2 显式会话 ID 优先（已实现）
+
+> **实现注记（命令层）**：`mem:session-reset` 的存储键同样经 `buildStoreSessionKey`
+> 构造。因此 `threadIsolation` 开启且请求带 `x-thread-id` 时，重置的是该线程作用域的
+> 会话（`agent:session:thread`），不会写到"影子键"上。该行为由
+> `session-store-fence.test.ts` 的回归用例锁定（reset 后线程键为 `uninitialized`，
+> 且不带线程后缀的键**未**被写入）。
+
+任何客户端带了非空显式会话 ID 时，该 ID 直接作为会话锁（不回退、不覆盖），
+保证与客户端本地会话状态一致；`auto-` 前缀的 ID 仍需通过签名校验（§3.3）。
+即使 `autoGenerate:false` 的客户端（workbuddy）回传 `auto-*` ID，也会先做
+签名校验：拒绝后置空并回退兜底键，防止绕过签名把幽灵会话键塞进 store。
+
+### 3.3 auto 会话 ID：签名绑定 + 确定性派生（已实现）
+
+`session/auto-session.ts` 为无显式会话 ID 的客户端生成会话锁，格式：
+
+```
+auto-<hmac16>-<uuid>
+```
+
+**签名绑定**：HMAC 输入为 `keyId \0 scope \0 首问指纹 \0 uuid`，即 ID 只能由
+「同一 key + 同一 scope（thread）+ 同一首问指纹」校验通过。跨线程、跨窗口、
+换 key、伪造一律拒绝：
+
+- 拒绝发生在带 scope/指纹的绑定上下文 → 计 `scopeRejected`；
+- 默认上下文（无 scope/fp，纯签名失败/换 key/伪造）→ 计 `ghostRejected`；
+- **ghost 回退修复**：`auto-` 未开启（配置关闭）时签名不符的 auto ID 置
+  `rejected: true`，调用方**不得回退到 raw**——避免「幽灵会话」把历史记忆
+  错绑到新身份。
+
+**策略**（`strategy`）：
+
+- `per-key`（默认）：一个 key（有 scope 时按 `keyId\0scope`）一个活跃会话；
+- `per-key-msg`：同一 key 按「首问指纹 + scope」分多个窗口（每 key 上限 8、
+  全局上限 4096），指纹相同的跨请求续接同一会话；
+
+TTL 默认 30 分钟（`ttlMinutes` 可调），进程内 Map 有界（`maxEntries=2048`）。
+
+**确定性派生**（`deterministic: true`）：
+
+```
+uuid = HMAC(keyId, scope, 首问指纹|"", epoch)[:36]
+epoch = floor(now / max(ttlMs, deterministicBucketMinutes * 60_000))
+```
+
+- 同一 (keyId, scope, fp, epoch) 在任意实例 / 重启后收敛到同一 sid——
+  多副本无共享状态下的最优近似；
+- 活跃会话仍由进程内 Map 续接；空闲跨桶的会话随 epoch 滚动自然轮换；
+- `deterministicBucketMinutes`（可选）把桶宽钉在 ≥ ttlMinutes 的值，
+  只调 ttl 不触发全量轮换；配置校验：`deterministicBucketMinutes ≥ ttlMinutes`
+  （见 `config.ts`，防空闲跨桶未过期时确定性碰撞）；
+- 默认 `deterministic: false` = 随机 uuid（向后兼容）。
+
+### 3.4 无 ID 兜底键：从 traceId 改为稳定键（已实现）
+
+codex / workbuddy 无显式会话、且 auto 未生成时：
+
+```
+fallback = keyId : msg-<首问指纹sha256-16> : <UTC 日桶>
+```
+
+- 同首问跨请求稳定（不再是逐请求 `keyId:traceId`，消除孤儿记忆）；
+- 跨天自动轮换（`day = floor(now/86400s)`），避免不同日期的请求被合并成
+  永续会话；
+- 提取不到首问指纹时退回 `keyId:traceId` 临时键，并对每个 keyId 只 warn 一次。
+
+## 4. 归属 fencing：两道防线（第一道已实现；第二道为设计蓝图）
+
+### 4.1 store 恢复层（第一道）
+
+`session/store.ts`：
+
+- `bind(keyId, identity)`：keyId → (userId, agentSource, sessionId, spaceId)
+  一次性绑定；检测到同 keyId 被另一 userId / space 接管时输出
+  `ownership takeover` 告警日志；
+- `getOrRecover` 的 L1 命中与 L2a-miss 的 L1 兜底都过 `l1OwnedBy(state, identity)`：
+  校验 state 自带 `userId` / `sessionInfo.user_id` 与
+  `sessionInfo.space_id`——跨用户、跨 space 同 keyId → 视为新会话
+  （记 `L1 owner mismatch → treat as new session`），**不短路**正常会话；
+- 持久化（L2a SessionRepo / L2b BindingRepo）本身按
+  `(spaceId, userId, agentSource, sessionId)` 命名空间化（缺省 space = `_default`），
+  应用层键漂移不会跨租户命中。
+
+### 4.2 archive 写侧（第二道，设计蓝图，未随本 PR 落地）
+
+> 状态：本节为归档写侧 fence 的**设计目标**。当前 PR 只在
+> `common/session-stats.ts` 预留了 `fenceBlocked / fenceAllowed / fenceMiss`
+> 计数口径，尚未在 L0 写入路径接线，`stages/archive.ts` 也未随本 PR 提供。
+> 落地作为后续课题，见 §8 状态清单。
+
+设计目标：在真正写 TDAI L0 之前做一次归属 fence：
+
+1. 候选键用 `buildStoreSessionKey` 生成：有 threadId 时先查 `:thread` 后缀键，
+   再查基础键；workbuddy 额外兼容历史 `workbuddy:` 前缀绑定；
+2. 命中候选键后读绑定身份（`getBoundIdentity`）或 L1 态的
+   `sessionInfo.space_id`；
+3. 写入会话的 space 与已绑定 space **不一致** → 跳过 L0 +
+   `[archive-fence] L0 skipped: session ownership drift` + 计 `fenceBlocked`；
+4. 命中且一致 → 正常写入并计 `fenceAllowed`（放行计数是衡量防线有效性的分母）；
+5. L1（进程内）未命中时，用 **binding repo** 按 `(spaceId, sessionKey)` 补查
+   （多节点共享层）；命中视为与写侧 space 同域 → 放行；
+6. 仍查不到绑定信息 → 计 `fenceMiss`（不拦截，fail-open on unknown），
+   并进入 `fenceCoverage` 的分母（§6.2）。
+
+设计取舍（代码注释已写明）：
+
+- fence **只比 space**，不比 userId / agentSource——auth userId 与 kernel
+  user_id 语义不同；workbuddy 会话的 store agent 标签是 codex，比 agent 会误杀；
+- 无绑定但 L1 有态时用 state 自带 space 兜底（不依赖 bind 时序）；
+- 它拦的是「store 已绑定/有态，但归档写入上下文归属漂移」的纵深场景；
+  store 恢复层拦截跨用户会话态恢复是主要隔离面。
+
+### 4.3 已知边界（如实记录）
+
+- store 绑定发生在 session-init / getOrRecover；codex / workbuddy 若走共享
+  init 路径则两道 fence 都生效（`session-store-fence` 单测覆盖；归档写侧
+  fence 的自动化用例待其落地时补充）；
+- fence 目前只做「拦截 + 计数」，不做自动重绑定——漂移时宁可丢一次 L0 写，
+  也不写错归属（fail-closed 取向）。
+- binding 补查只按**写侧 space** 查询命名空间；若绑定落在其它 space 且 L1 为空，
+  跨 space 漂移仍可能被计为 fenceMiss 而非 fenceBlocked（纵深防御的已知边界）。
+
+## 5. 生命周期
+
+### 5.1 SessionInit 状态机与持久化（已实现，语义不变）
+
+```
+uninitialized → pending_asset_confirm → pending_team_select
+             → pending_agent_select / pending_task_select → initialized
+             → bypassed（用户选"否" / 无可用资产 / gate 截断等）
+```
+
+- 状态持久化到存储层（SessionRepo L2a，按 space/user 命名空间）；
+- `headerAutoSelect`：带 `x-team-id / x-agent-id / x-task-id` 且命中用户自己
+  的 team 列表 → 直接注册（preset hit）；伪造他人 team → mismatch → form/bypass；
+- **跳过状态自愈**（已实现）：`bypassed` 会话若新一轮请求带完整
+  team/agent header 且 `headerAutoSelect.enabled` → 清掉 bypass 状态重新走
+  preset 注册（`session/codebuddy/init.ts` 的 bypass self-heal 段），
+  避免「被动跳过」长期锁死记忆能力；
+- `auth.failPolicy` 默认 fail-closed：auth 服务不可达时拒绝，不放行。
+
+### 5.2 auto 会话 TTL / 淘汰 / 有界台账（已实现）
+
+`pruneExpiredSessions(ttl)` 为按需清理函数，当前未接周期定时器
+（TTL 过期在 request 路径惰性处理）；被清理的会话统一进
+**有界台账**（上限 512，最早的被挤出）：
+
+```
+ExpiredSessionEntry { sid, keyId, scope, reason, lastSeen, expiredAt }
+reason ∈ expired | pruned | evicted
+```
+
+- `pruned`：`pruneExpiredSessions` 清理（per-key 表 / per-key-msg 窗口；
+  定时触发为后续接线）；
+- `expired`：续接时发现同 key 旧会话已过 TTL；
+- `evicted`：per-key 容量超限 / per-key-msg 窗口超限（`windowEvicted`）/
+  全局上限触发 LRU 式淘汰（`capEvicted`）。
+
+SessionStore L1 另有**有界 LRU**（默认 10k）：`set()` 刷新最近使用序，超限淘汰最旧
+（只清内存，L2a/L2b 可恢复）；`cleanup()` 已提供，周期定时清理为后续接线。
+
+台账只用于诊断（`/session-debug` 暴露**长度**，不暴露具体 ID），
+并可作为「会话结束事件 → 归档钩子」桥接的数据源（§5.5）。
+
+### 5.3 deterministic 的轮换语义（已实现）
+
+- epoch 桶宽 = `max(ttlMinutes, deterministicBucketMinutes)`（默认 = ttlMinutes）；
+- 同一 epoch 内同 (key, scope, fp) 确定性收敛；跨桶空闲会话自然轮换为新 sid；
+- 已知限制：跨桶边界存在「换新 sid」而非严格连续——`deterministic` 解决
+  多实例收敛，不承诺跨 epoch 的会话连续性（连续性是 Redis 共享表的收益）。
+
+### 5.4 命名空间归档（部分：路由已实现；拦截接线为后续）
+
+- `storage.archiveNamespaces`：配置解析与判定函数 `isNamespaceArchived`
+  已提供，但当前**未接入**会话恢复/注入路径（命中规则暂不拦截，
+  接线为后续项）；
+- `routes/session-force-archive.ts`：从 SessionStore 取 sessionInfo →
+  调内核 forceArchive（skill 资产归档，已实现）；
+- sweeper 按 spaceId 清理会话键；`session-refresh` / `session-task` 路由用
+  `buildStoreSessionKey` 定位会话（含 workbuddy 别名，已实现）。
+
+### 5.5 待办：TTL 到期「归档」而非「消失」
+
+当前没有周期定时器把过期事件桥接到归档（prune 只在 request 路径惰性触发，
+且没有 handler 上下文：tdai client / sessionInfo）。台账（§5.2）已为
+「会话结束事件 → 归档层桥接」备好数据；周期 prune 与过期事件桥接都属于
+后续课题，不在本分支做半截接线。
+
+## 6. 可观测与告警（已实现）
+
+### 6.1 会话决策计数
+
+`common/session-stats.ts`（进程内）：
+
+```
+created / resumed / expired / windowEvicted / capEvicted /
+ghostRejected / scopeRejected / fenceBlocked / fenceAllowed / fenceMiss
+```
+
+- `resumed`：活跃会话 / 指纹窗口续接；
+- `scopeRejected`：auto ID 在带 scope/指纹绑定上下文被拒（跨线程/窗口复用或伪造）；
+- `ghostRejected`：默认上下文的签名拒绝（换 key/伪造/旧签名密钥）；
+- `fenceBlocked` / `fenceAllowed`：archive 写侧 fence 的拦截与放行
+  （当前为预留计数，fence 尚未接线，恒为 0）。
+- `fenceMiss`：L1 与 binding repo 都无记录（fence 无法校验）的写入次数，
+  多副本下常见于新 pod 首次写入（当前为预留计数，恒为 0）。
+
+### 6.2 分解与派生指标
+
+- 按 `agentSource` / `spaceId` 分解（每类决策都带 meta 打点）；
+- **高基数治理**：per-space prometheus label 只导出 created 最多的前 32 个，
+  其余计 `tdai_auto_session_spaces_exceeded_total`；
+- `reuseRate = resumed / (created + resumed)`；
+- `fenceRate = fenceBlocked / (fenceBlocked + fenceAllowed)`；
+- `fenceCoverage = (fenceBlocked + fenceAllowed) / (blocked + allowed + miss)`：
+  第二道防线“有绑定信息可校验”的写入占比（当前恒为 0，待 fence 接线）；
+- `/session-debug` 与 `/session/metrics` 同步暴露 `fenceMiss` 与 `fenceCoverage`
+  （当前为预留口径）。
+- `/session-debug`：输出 `autoSessionSizes()`（activeKeys/windows）、台账长度、
+  `reuseRate`、`fenceRate`、`fenceCoverage`、全量 stats 与 breakdown；
+  端点与 admin 端点同口径：`config.admin.apiKey` 非空时要求 Bearer；
+- `/metrics`（协议转换指标）与 `/session/metrics`（会话决策指标）分路径暴露；
+  会话指标由 `sessionStatsToPrometheus()` 输出。
+- prometheus 新增 `tdai_auto_session_fence_miss_total`（counter）与
+  `tdai_auto_session_fence_coverage`（gauge）。
+
+### 6.3 建议告警信号（口径以本文档与 `docs/session-policy.md` §4 为准）
+
+> 说明：本节是告警信号的**唯一**出处，未同步进 `README_CN.md`（该文件未随本 PR
+> 改动）。运维取用请直接引用本节与 `session-policy.md` §4。
+
+- `scopeRejected` / `ghostRejected` 突变：疑似伪造会话 ID 或签名密钥轮换；
+- `fenceRate` 骤升：会话归属漂移增多（检查路由/space 解析）；
+- `fence_miss_total` 突增：多副本下大量写入查不到绑定，检查 binding 落库；
+- `fence_coverage` 骤降：越来越多的 L0 写入在“无绑定信息”下放行；
+- `reuseRate` 骤降：auto 会话大量新建（TTL/epoch 配置变动或客户端行为变化）。
+
+### 6.4 遥测键对齐（已实现）
+
+model-intent 埋点与 session-init 日志的会话键统一走 `buildStoreSessionKey`，
+threadIsolation 部署下都带 `:threadId` 后缀，查询语义按话题可对齐。
+
+## 7. 多副本 / K8s 结论
+
+### 7.1 自带会话 ID 的客户端（Claude Code / CodeBuddy / 显式 header）
+
+跨 pod 无影响：会话 ID 在请求头自带，状态恢复走 SessionStore
+L2a（SQLite/Redis/ProxyStorage 多节点读写）+ L2b binding，
+不依赖进程内 Map。
+
+### 7.2 无会话 ID 客户端（codex / workbuddy / Hermes / OpenClaw / DSH）
+
+生产多副本部署需满足：
+
+1. `autoConversationId.deterministic: true`；
+2. `TDAI_SESSION_SIGNING_KEY` 通过 K8s Secret **全副本共享**（默认随机 =
+   重启后旧 auto ID 全失效，从源头杜绝幽灵会话，但多副本会各自签发不同 ID）；
+3. 接受 epoch 边界限制（空闲跨桶会话轮换，见 §5.3）。
+
+### 7.3 后续独立课题：Redis 共享 auto-session
+
+跨 pod **严格连续 + 台账共享**的真正解法：把 `ACTIVE` / `ACTIVE_MSG` 换到
+`config.redis` 已接的存储层（SessionStore 已有 Redis 通路可复用），
+`resolveOrCreateSessionId` 需要异步化（当前热路径为同步）。
+
+该课题与当前 PR **解耦**：当前 `deterministic + 共享签名键` 是无共享状态的
+最优近似，可独立合入、独立评审；Redis 共享表单独成 PR，避免把存储中间件
+依赖塞进本课题。设计蓝图书写在 `session/auto-session.ts` 头注释与本 §7.3。
+
+### 7.4 已知边界（如实记录）
+
+- 台账/计数是**进程内**、有界审计，跨实例不共享，不承诺全局一致；
+- `recentExpiredSessions` 只暴露长度给诊断端点，不暴露具体 sid。
+- `threadIsolation` 只做进程内 L1/状态机键与遥测分组，不承诺持久隔离（§2.2）；
+- initialized 持久行/绑定长期不清理是存储治理课题（§5.5），
+  L1 内存侧已由 LRU（set/容量路径）保持有界。
+
+## 8. 落地状态清单
+
+| 项 | 状态 | 位置 / 说明 |
+|---|---|---|
+| 会话解析统一入口（sessionStage + SessionAdapter，4 handler 接入） | 已实现 | `stages/session.ts`、`stages/types.ts` |
+| 转发/归档/观测阶段化（forwardStage、buildArchiveCtx/writeL0、buildObsInput） | 待办（后续课题） | 本 PR 仅落地 `stages/session.ts` / `stages/types.ts`；`forward/archive/obs` 阶段未提供 |
+| store 键单点约定（workbuddy→codex 别名 + thread 后缀） | 已实现 | `session/store.ts::buildStoreSessionKey`（4 handlers + 3 routes + telemetry；fence 落地时复用） |
+| auto ID 签名绑定（keyId+scope+fp）与 ghost 回退修复 | 已实现 | `session/auto-session.ts` |
+| deterministic 派生 + epoch 桶（含配置校验） | 已实现 | `auto-session.ts`、`config.ts`、config.example |
+| per-key / per-key-msg 策略、TTL、窗口容量 | 已实现 | `auto-session.ts` |
+| 稳定兜底键（keyId:msg-<fp>:<日桶>） | 已实现 | codex/workbuddy SessionAdapter |
+| store 恢复层归属校验（跨 user/space 视为新会话） | 已实现 | `store.ts::l1OwnedBy` / `getOrRecover` |
+| archive 写侧 fence（L0 前候选键校验 + 计数） | 待办（后续课题） | `common/session-stats.ts` 已预留计数；fence 未接线 |
+| archive fence：L1 miss → binding repo 补查 + fenceMiss/fenceCoverage | 待办（后续课题） | 计数口径已预留 |
+| SessionStore L1 有界 LRU | 已实现 | `session/store.ts::trimL1`（内部 set/容量路径触发）；周期清理为后续接线 |
+| 管理端点鉴权（/session-debug、/v3/session/*） | 已实现 | `routes/admin-auth.ts`、`server.ts` |
+| autoGenerate:false 客户端回传 auto-* 也过签名 | 已实现 | `stages/session.ts` |
+| 会话结束台账（有界 512）+ expire/evict 分类 | 已实现 | `auto-session.ts`（prune 函数已提供，定时触发为后续接线） |
+| 决策计数分解 + prometheus + /session-debug + 高基数治理 | 已实现 | `common/session-stats.ts`、`server.ts` |
+| 遥测键对齐（model-intent/init 日志带 thread 后缀） | 已实现 | handler/anthropic telemetry 调用点 |
+| bypass 自愈（header 预选可解析 → 重绑） | 已实现 | `session/codebuddy/init.ts`（CC 同款 preset 路径） |
+| force-archive / refresh / task 路由 | 已实现 | `routes/session-*.ts` |
+| 命名空间归档拦截（`isNamespaceArchived` 接入恢复/注入路径） | 待办（后续课题） | `archiveNamespaces` 配置与判定函数已就绪，未接线 |
+| bypass 读写策略 / 审计事件线 / grants 拉取 + TTL | 待办（后续课题） | 本 PR 未新增；`audit.ts`（仅 L0 write）随 #1270 提供；`tdai/grants-fetcher.ts` 尚未落地 |
+| 跨客户端续接的归属锁判定（记忆续接、历史隔离） | 部分 | 归属/space 校验已就绪；整体 E2E 与记忆侧迁移待专项验证 |
+| TTL 到期 → 归档事件桥接 | 待办（后续课题） | 台账已备数据（§5.5） |
+| Redis 共享 auto-session（跨 pod 严格连续 + 台账共享） | 待办（独立 PR） | §7.3 |
+| 存储物理隔离（SQLite 按 space 分文件 / Postgres RLS / 向量分 collection） | 待办 | 当前 SQLite 单文件 + 应用层键隔离为过渡态 |
+| 审计扩展（search/read/query 事件、Opik audit_log） | 待办 | `audit.memory-access` 当前仅有 L0 write（#1270）；recall/search/read 未接线 |
+| grant 撤销即时推送 | 待办 | grants 拉取尚未实现（mock-grants-server 为预留 QA 脚本） |
+| 内核记忆 gc / 命名空间级删除 | 待办（内核侧） | Proxy 侧 archive 配置/路由已就绪；拦截接线为后续 |
+
+## 9. 验证方法
+
+**自动化**（全部在仓库内跑通）：
+
+```bash
+npm test          # vitest：session-acceptance / session-isolation / stages-session /
+                  # session-store-fence / session-turn / session-form-artifacts /
+                  # routes-session-force-archive / routes-session-refresh-task /
+                  # server-session-debug / context-injector-team / session-client-ids
+                  # （11 个测试文件；计数口径见 docs/session-policy.md）
+npx tsc --noEmit  # 0 错误
+```
+
+**手工验证**：
+
+```bash
+# 1) 串号防护：同 sessionId 换 key 请求 → 重新走 Session Init
+#    （日志 owner mismatch / treat as new session）
+
+# 2) deterministic 收敛：TDAI_SESSION_SIGNING_KEY 固定 + deterministic: true，
+#    两个实例同 epoch 内对同 (key, fp) 请求 → 日志出现同一 auto sid
+
+# 3) archive fence（后续项）：当前 fence 未接线，此步待 fence 落地后再验证
+#    （预期：写入 space 与绑定 space 不一致 → 日志
+#    "[archive-fence] L0 skipped"，/session/metrics 中 fence_blocked +1）
+
+# 4) 会话台账：等 TTL/prune 或触发淘汰 → /session-debug 的 expiredLedger 长度增长
+
+# 5) 指标与诊断：
+curl -H "Authorization: Bearer <admin.apiKey>" http://127.0.0.1:<port>/session-debug  # reuseRate / fenceRate / fenceCoverage / stats.fenceMiss
+curl http://127.0.0.1:<port>/session/metrics # tdai_auto_session_* 指标
+
+# 6) 伪造 auto ID（改一个字符）→ scopeRejected/ghostRejected 计数增加，
+#    不会回退到 raw（防幽灵会话）
+# 7) L1 有界/清理：压入超过 10k 会话后最旧被淘汰；cleanup 定时清过期 pending
+#    （只清内存，L2a/L2b 可恢复）
+```
+
+## 10. 参考
+
+- 阶段化重构与隔离优化的基线：本 PR 的分支 `feat/session-isolation-t04`（提交历史见 PR #1251）；
+- 协议转换层（OpenAI Chat / Responses ↔ Anthropic）：见 PR #1226 提供的
+  `docs/protocol-conversion-matrix.md`，该文件随 #1226 引入，本分支不含它；
+- 验证方式：本文 §9 的命令与断言，以及 `docs/session-policy.md` 的 §3
+  （验收标准与用例对应表）与 §5（端到端冒烟脚本）；
+- Redis 共享蓝图：`session/auto-session.ts` 头注释（独立课题引用）。

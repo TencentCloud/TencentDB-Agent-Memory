@@ -31,6 +31,8 @@ import { isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
 import type { PresetIdentity } from "./preset.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
+/** L1 状态缓存上限（仅内存；超限淘汰最旧，淘汰后由 L2a/L2b 恢复，不动持久层）。 */
+const MAX_L1_ENTRIES = 10_000;
 
 /**
  * Identity tuple used by every Repo call (SessionRepo / BindingRepo).
@@ -48,6 +50,24 @@ export interface SessionIdentity {
 /** Extract spaceId from identity, defaulting to `""` for repo helpers. */
 function spaceOf(id: SessionIdentity): string {
   return id.spaceId ?? "";
+}
+
+/**
+ * 会话状态在 store 里的复合键（单点约定）：
+ *   `${agentSource}:${sessionKey}`，threadIsolation 开启且有 thread 时加 `:${threadId}`。
+ * WorkBuddy 的会话状态机复用 codex（历史上恒用 `codex:` 前缀），此处统一收敛别名，
+ * handler 与 archive fence 都调本函数，改约定只动这一处。
+ */
+export function buildStoreSessionKey(opts: {
+  agentSource: string;
+  sessionKey: string;
+  threadId?: string | null;
+  threadIsolation?: boolean;
+}): string {
+  const agent = opts.agentSource === "workbuddy" ? "codex" : opts.agentSource;
+  let key = `${agent}:${opts.sessionKey}`;
+  if (opts.threadIsolation && opts.threadId) key += `:${opts.threadId}`;
+  return key;
 }
 
 /** Context passed to getOrRecover for recovery. */
@@ -70,6 +90,7 @@ export class SessionStore {
   /** keyId → identity map — populated via {@link bind} to keep repo/binding writes user-namespaced. */
   private identities = new Map<string, SessionIdentity>();
   private ttlMs: number;
+  private readonly maxL1Entries: number;
   private repo?: SessionRepo;
   private bindingRepo?: BindingRepo;
   private recoveryInFlight = new Map<string, Promise<SessionInitState | undefined>>();
@@ -78,10 +99,12 @@ export class SessionStore {
     ttlMs: number = DEFAULT_TTL_MS,
     repo?: SessionRepo,
     bindingRepo?: BindingRepo,
+    maxL1Entries: number = MAX_L1_ENTRIES,
   ) {
     this.ttlMs = ttlMs;
     this.repo = repo;
     this.bindingRepo = bindingRepo;
+    this.maxL1Entries = maxL1Entries;
   }
 
   /** Attach BindingRepo late (called after Redis / storage activation). */
@@ -110,12 +133,32 @@ export class SessionStore {
    * silently degrades to memory-only for such keys.
    */
   bind(keyId: string, identity: SessionIdentity): void {
+    const prev = this.identities.get(keyId);
+    if (
+      prev &&
+      (prev.userId !== identity.userId || (prev.spaceId ?? "") !== (identity.spaceId ?? ""))
+    ) {
+      console.log(
+        `[session-store] key=${keyId} ownership takeover (prevUser=${prev.userId} newUser=${identity.userId}) — cross-user keyId reuse`,
+      );
+    }
     this.identities.set(keyId, identity);
   }
 
   /** Test-only helper: expose the identity map for assertions. */
   getBoundIdentity(keyId: string): SessionIdentity | undefined {
     return this.identities.get(keyId);
+  }
+
+  /** L1 state 自身携带的 user/space 归属校验（不依赖 bind 时序）。 */
+  private l1OwnedBy(state: SessionInitState, identity: SessionIdentity): boolean {
+    const info = (
+      state as { sessionInfo?: { user_id?: string; space_id?: string } | null }
+    ).sessionInfo;
+    const storedUserId = state.userId ?? info?.user_id;
+    if (storedUserId && identity.userId && storedUserId !== identity.userId) return false;
+    if (identity.spaceId && info?.space_id && info.space_id !== identity.spaceId) return false;
+    return true;
   }
 
   get(keyId: string): SessionInitState | undefined {
@@ -190,7 +233,10 @@ export class SessionStore {
         state = { ...state, resetEpoch: prev.resetEpoch };
       }
     }
+    // 刷新最近使用序（Map 更新不改变插入序），配合 trimL1 的“淘汰最旧”策略。
+    if (prev) this.states.delete(keyId);
     this.states.set(keyId, state);
+    this.trimL1();
     const id = this.identities.get(keyId);
     if (!id) {
       // No identity bound → this keyId is L1-only (anonymous session, tests
@@ -251,6 +297,19 @@ export class SessionStore {
     }
   }
 
+  /**
+   * L1 有界：超限按最近使用序淘汰最旧条目。只清内存，不动 L2a/L2b；
+   * initialized 终态淘汰后仍可由持久层恢复，pending 也已在 set() 内写过 L2a。
+   */
+  private trimL1(): void {
+    while (this.states.size > this.maxL1Entries) {
+      const oldest = this.states.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.states.delete(oldest);
+      this.identities.delete(oldest);
+    }
+  }
+
   delete(keyId: string): void {
     this.states.delete(keyId);
     const id = this.identities.get(keyId);
@@ -284,9 +343,14 @@ export class SessionStore {
       for (const row of rows) {
         // L1 key convention matches handler.ts / init.ts entry sites:
         //   `${agentSource}:${sessionId}`
+        // 统一走 buildStoreSessionKey（workbuddy → codex 别名归一），
+        // 避免历史 workbuddy 行恢复成查不到的重复 key。
         // Also bind full identity so subsequent set() persists back through
         // the correct (userId, agentSource, sessionId) key path.
-        const keyId = `${row.agentSource}:${row.sessionId}`;
+        const keyId = buildStoreSessionKey({
+          agentSource: row.agentSource,
+          sessionKey: row.sessionId,
+        });
         if (!this.states.has(keyId)) {
           this.states.set(keyId, row.state);
           this.identities.set(keyId, {
@@ -301,6 +365,7 @@ export class SessionStore {
       if (loaded > 0) {
         console.log(`[session-db] hydrated ${loaded} initialized session(s) from disk`);
       }
+      this.trimL1();
       return loaded;
     } catch (err) {
       console.warn(
@@ -354,6 +419,16 @@ export class SessionStore {
     // 不作为权威源。session-reset 可能在任意 pod 执行，L1 initialized 不可信。
     const l1 = this.get(keyId);
     // 不对 initialized 做 L1 短路 —— 一律走 L2a 拿权威状态。
+    // 空间隔离（评审意见 9 落地）：恢复出的会话若属于不同 spaceId → 视为新会话，
+    // 避免跨内核实例/项目误共享身份与记忆。只做"跨空间拦截"，不短路正常会话
+    // （L1 是否权威由上游的"一律走 L2a"决定，此处不恢复旧短路行为）。
+    if (l1 && l1.status === "initialized" && !this.l1OwnedBy(l1, identity)) {
+      const info = (l1 as { sessionInfo?: { user_id?: string; space_id?: string } | null }).sessionInfo;
+      console.log(
+        `[cache] session=${keyId} L1 owner mismatch (storedUser=${l1.userId ?? info?.user_id ?? "-"} storedSpace=${info?.space_id ?? "-"} reqUser=${identity.userId} reqSpace=${identity.spaceId ?? ""}) → treat as new session`,
+      );
+      return undefined;
+    }
 
     // Step 2: L2a SessionRepo (Redis / SQLite / ProxyStorage) — full SessionInitState.
     // Startup `hydrateFromDb()` covers the single-node case, but in multi-node
@@ -383,9 +458,12 @@ export class SessionStore {
     //
     // zombie / user-mismatch 已在 `this.get()` 与 `probeL2a` 内部各自 invalidate，
     // 走到这里的 l1 一定是 fresh + user 匹配的。
-    if (l1) {
+    if (l1 && this.l1OwnedBy(l1, identity)) {
       console.log(`[cache] session=${keyId} L1 fallback (L2a miss, status=${l1.status})`);
       return this.tagRecoverySource(l1, "l1");
+    }
+    if (l1) {
+      console.log(`[cache] session=${keyId} L1 fallback skipped (owner mismatch, L2a miss)`);
     }
 
     // Step 3: L2b Binding
@@ -537,8 +615,13 @@ export class SessionStore {
   ): Promise<SessionInitState | undefined> {
     // Step 4.1: user mismatch → invalidate binding
     if (binding.userId && identity.userId && binding.userId !== identity.userId) {
-      console.log(`[session-recover] ${keyId} user mismatch (bound=${binding.userId}, current=${identity.userId}), invalidating`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
+      // binding 的存储键只有 (spaceId, sessionId)，跨用户直接 delete 会清掉
+      // owner 的绑定（他人持同一会话 ID 即可对 owner 造成 DoS）。这里只拒绝
+      // 恢复、不删除对方记录；owner 的会话由其后续请求自己恢复。
+      console.log(
+        `[session-recover] ${keyId} user mismatch (bound=${binding.userId}, current=${identity.userId}), ` +
+          `skip restore without deleting owner binding`,
+      );
       return undefined;
     }
 
@@ -595,8 +678,16 @@ export class SessionStore {
 
     // Step 4.3: dispatch
     if (agentNotFound) {
-      console.log(`[session-recover] ${keyId} agent ${binding.agentId} not found, deleting binding`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
+      // 只有 owner（或无 userId 的旧记录）才清理失效 binding；
+      // 跨用户命中他人 binding 时保持只读拒绝，避免误删。
+      if (!binding.userId || binding.userId === identity.userId) {
+        console.log(`[session-recover] ${keyId} agent ${binding.agentId} not found, deleting binding`);
+        await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
+      } else {
+        console.log(
+          `[session-recover] ${keyId} agent ${binding.agentId} not found (bound to other user), keep binding`,
+        );
+      }
       return undefined;
     }
     if (anyKernelError) {

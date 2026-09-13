@@ -15,6 +15,15 @@ export interface MemCommandMessage {
 
 export interface MemCommandContext {
   sessionKey: string;
+  /**
+   * 线程维度（`x-thread-id`）。口径与 handler 侧一致：只有
+   * `sessionInit.threadIsolation.enabled === true` 时才进入 store 复合键，
+   * 见 `session/store.ts::buildStoreSessionKey`。
+   *
+   * 命令层必须把它带进来，否则 `mem:session-reset` 会写到不带 `:thread` 后缀的键上，
+   * 命中不到真实会话状态——表现为"命令回复说已重置，但下一轮不再弹表单"。
+   */
+  threadId?: string | null;
   agentSource: string;
   config: ProxyConfig;
   spaceId: string;
