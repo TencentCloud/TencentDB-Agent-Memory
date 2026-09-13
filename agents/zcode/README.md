@@ -50,8 +50,22 @@ Messages 协议**（provider `kind` 为 `anthropic`，baseURL 形如
 
 **OpenAI 协议（可选）**：provider `kind` 改为 `openai-compatible` 即走
 `POST /zcode/<spaceId>/chat/completions`（客户端不拼 `/v1`）。此路径需要部署
-侧给 zcode 配 OpenAI 协议上游（`upstream.agents.zcode.url`，与 codebuddy/dsh
-同族），否则 proxy 会把 OpenAI body 转发到 Anthropic 上游 404。
+侧在 `upstream.agents.zcode` 里给两种协议分别指上游（协议感知覆盖，其他
+agent 的扁平写法不受影响）：
+
+```yaml
+upstream:
+  agents:
+    zcode:
+      anthropic:
+        url: "https://<anthropic-协议上游>"
+        apiKey: "<key>"
+      openai:
+        url: "https://<openai-协议上游>"
+        apiKey: "<key>"
+```
+
+只配其中一种协议时，另一种协议的请求回落到全局 `upstream.url`。
 
 ---
 

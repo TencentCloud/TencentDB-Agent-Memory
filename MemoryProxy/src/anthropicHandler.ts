@@ -24,6 +24,7 @@ import {
 } from "./langfuse.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
+import { resolveAgentUpstreamForProtocol } from "./types.js";
 import {
   resolveForwardTarget,
   resolveSessionKey,
@@ -1095,8 +1096,12 @@ export async function handleAnthropicMessages(
         // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
         model: modelId,
         upstreamUrl:
-          (agentFromPath ? config.upstream.agents?.[agentFromPath]?.url : undefined) ||
-          config.upstream.url,
+          (agentFromPath
+            ? resolveAgentUpstreamForProtocol(
+                config.upstream.agents?.[agentFromPath],
+                "anthropic",
+              )?.url
+            : undefined) || config.upstream.url,
         // Claude Code 主链路走 Anthropic Messages API
         upstreamProtocol: "anthropic",
       });
@@ -1236,7 +1241,10 @@ export async function handleAnthropicMessages(
   // prefix); both url and apiKey may be overridden per agent. When there's
   // no entry, we fall through to the Anthropic-specific global (costGuard
   // .anthropicUpstream) and finally to upstream.url — exactly as before.
-  const agentUpstreamEntry = agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined;
+  const agentUpstreamEntry = resolveAgentUpstreamForProtocol(
+    agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
+    "anthropic",
+  );
   let effectiveApiKey = agentUpstreamEntry
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;

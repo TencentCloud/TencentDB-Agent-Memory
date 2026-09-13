@@ -23,6 +23,7 @@ import {
 } from "./common/langfuse-debug.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
+import { resolveAgentUpstreamForProtocol } from "./types.js";
 import {
   resolveForwardTarget,
   resolveSessionKey,
@@ -1206,8 +1207,12 @@ export async function handleChatCompletions(
         // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
         model: modelId,
         upstreamUrl:
-          (agentFromPath ? config.upstream.agents?.[agentFromPath]?.url : undefined) ||
-          config.upstream.url,
+          (agentFromPath
+            ? resolveAgentUpstreamForProtocol(
+                config.upstream.agents?.[agentFromPath],
+                "openai",
+              )?.url
+            : undefined) || config.upstream.url,
         // CB/CodeBuddy 主链路走 OpenAI chat/completions
         upstreamProtocol: "openai",
         // OpenAI 协议无 extended thinking 概念，恒 false
@@ -1336,7 +1341,10 @@ export async function handleChatCompletions(
   // upstream.agents[agent] is a single map keyed by agent name — same lookup
   // as anthropicHandler. Empty / missing entry → fall back to upstream.url,
   // preserving legacy behavior for configs that don't declare `agents:` at all.
-  const agentUpstreamEntry = agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined;
+  const agentUpstreamEntry = resolveAgentUpstreamForProtocol(
+    agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
+    "openai",
+  );
   // Per-agent apiKey resolution — three cases:
   //   (a) no entry in agents map           → global upstream.apiKey (兜底)
   //   (b) entry present, apiKey empty      → "" (passthrough, keep client key)

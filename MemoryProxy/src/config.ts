@@ -2,7 +2,12 @@
 
 import { readFileSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
-import type { CostGuardConfig, ProxyConfig, RawYamlConfig } from "./types.js";
+import type {
+  AgentUpstreamEntry,
+  CostGuardConfig,
+  ProxyConfig,
+  RawYamlConfig,
+} from "./types.js";
 
 const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
@@ -239,24 +244,43 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
 
 /**
  * Parse `upstream.agents` from raw YAML into the normalized `AgentUpstreamEntry`
- * map. Entries without a non-empty `url` are silently dropped — an empty url
- * would just fall back to the global upstream, so keeping the entry adds only
- * noise (and would make "did I configure this right?" harder to answer at
- * a glance).
+ * map. Flat entries without a non-empty `url` are silently dropped — an empty
+ * url would just fall back to the global upstream, so keeping the entry adds
+ * only noise (and would make "did I configure this right?" harder to answer at
+ * a glance). Dual-protocol entries (per-protocol sub-entries only, e.g. ZCode)
+ * are kept as long as at least one sub-entry carries a non-empty url.
  */
 function parseUpstreamAgents(
-  raw: Record<string, { url?: string; apiKey?: string } | null | undefined> | undefined,
-): Record<string, { url: string; apiKey?: string }> {
+  raw: NonNullable<RawYamlConfig["upstream"]>["agents"],
+): Record<string, AgentUpstreamEntry> {
   if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, { url: string; apiKey?: string }> = {};
+  const out: Record<string, AgentUpstreamEntry> = {};
+  const pickSub = (
+    v: { url?: string; apiKey?: string } | null | undefined,
+  ): { url: string; apiKey?: string } | undefined => {
+    if (!v || typeof v !== "object") return undefined;
+    if (typeof v.url !== "string" || v.url.length === 0) return undefined;
+    return typeof v.apiKey === "string" && v.apiKey.length > 0
+      ? { url: v.url, apiKey: v.apiKey }
+      : { url: v.url };
+  };
   for (const [name, entry] of Object.entries(raw)) {
     if (!entry || typeof entry !== "object") continue;
-    const url = (entry as { url?: unknown }).url;
-    if (typeof url !== "string" || url.length === 0) continue;
-    const apiKey = (entry as { apiKey?: unknown }).apiKey;
-    out[name] = typeof apiKey === "string" && apiKey.length > 0
-      ? { url, apiKey }
-      : { url };
+    const flatUrl =
+      typeof entry.url === "string" && entry.url.length > 0 ? entry.url : undefined;
+    const anthropic = pickSub(entry.anthropic);
+    const openai = pickSub(entry.openai);
+    if (!flatUrl && !anthropic && !openai) continue;
+    const apiKey =
+      flatUrl && typeof entry.apiKey === "string" && entry.apiKey.length > 0
+        ? { apiKey: entry.apiKey }
+        : {};
+    out[name] = {
+      ...(flatUrl ? { url: flatUrl } : {}),
+      ...apiKey,
+      ...(anthropic ? { anthropic } : {}),
+      ...(openai ? { openai } : {}),
+    };
   }
   return out;
 }

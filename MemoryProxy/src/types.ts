@@ -403,11 +403,19 @@ export interface SkillRuntimeConfig {
  *
  * The same map serves both Anthropic and OpenAI protocols — the agent name
  * alone determines routing, matching how {@link ProxyConfig#upstream.url}
- * itself is protocol-agnostic.
+ * itself is protocol-agnostic. Dual-protocol agents (e.g. ZCode, whose
+ * provider kind can be `anthropic` or `openai-compatible`) override per
+ * protocol via the {@link AgentUpstreamEntry.anthropic} /
+ * {@link AgentUpstreamEntry.openai} sub-entries.
  */
 export interface AgentUpstreamEntry {
-  /** Target upstream base URL. Required. */
-  url: string;
+  /**
+   * Target upstream base URL. Required for flat (protocol-blind) entries;
+   * optional when the entry only carries per-protocol sub-entries — such an
+   * entry resolves to `undefined` for protocols it does not configure, and
+   * the request falls back to `upstream.url`.
+   */
+  url?: string;
   /**
    * Per-agent apiKey. When set (non-empty):
    *   - OpenAI: `Authorization: Bearer <apiKey>` is injected
@@ -417,6 +425,27 @@ export interface AgentUpstreamEntry {
    * that fallback only applies when this agent has no entry at all.
    */
   apiKey?: string;
+  /** Anthropic-protocol upstream; wins entirely over flat `url`/`apiKey` when present. */
+  anthropic?: { url: string; apiKey?: string };
+  /** OpenAI-protocol upstream; wins entirely over flat `url`/`apiKey` when present. */
+  openai?: { url: string; apiKey?: string };
+}
+
+/**
+ * Pick the upstream override for a request protocol. Per-protocol sub-entries
+ * win entirely over the flat `url`/`apiKey`; an entry that only configures the
+ * OTHER protocol resolves to `undefined` so the request falls back to the
+ * global `upstream.url`.
+ */
+export function resolveAgentUpstreamForProtocol(
+  entry: AgentUpstreamEntry | null | undefined,
+  protocol: "anthropic" | "openai",
+): AgentUpstreamEntry | undefined {
+  if (!entry) return undefined;
+  const per = protocol === "anthropic" ? entry.anthropic : entry.openai;
+  if (per?.url) return { url: per.url, apiKey: per.apiKey };
+  if (entry.url) return entry;
+  return undefined;
 }
 
 /** Top-level proxy configuration (merged from config file + CLI args). */
@@ -774,8 +803,19 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
-    /** Per-agent override map. See `AgentUpstreamEntry`. */
-    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    /**
+     * Per-agent override map. See `AgentUpstreamEntry` (supports per-protocol
+     * sub-entries for dual-protocol agents like ZCode).
+     */
+    agents?: Record<
+      string,
+      {
+        url?: string;
+        apiKey?: string;
+        anthropic?: { url?: string; apiKey?: string };
+        openai?: { url?: string; apiKey?: string };
+      } | null | undefined
+    >;
   };
   log?: {
     file?: string;

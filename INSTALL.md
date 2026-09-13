@@ -498,10 +498,20 @@ needed):
 
 **OpenAI protocol variant**: switching the provider `kind` to
 `openai-compatible` routes requests to `POST /zcode/:spaceId/chat/completions`
-(no `/v1` suffix — ZCode appends it itself). This path needs a deployment-side
-OpenAI-protocol upstream override (`upstream.agents.zcode.url`, same as
-CodeBuddy/dsh), otherwise the proxy forwards the OpenAI body to the default
-Anthropic upstream and the request 404s.
+(no `/v1` suffix — ZCode appends it itself). Because one ZCode deployment can
+speak either protocol, the per-agent upstream override supports per-protocol
+sub-entries:
+
+```yaml
+upstream:
+  agents:
+    zcode:
+      anthropic: { url: "https://<anthropic-upstream>", apiKey: "<key>" }
+      openai: { url: "https://<openai-upstream>", apiKey: "<key>" }
+```
+
+An unconfigured protocol falls back to the global `upstream.url`; flat
+(one-URL) entries keep working for single-protocol agents.
 
 The full provider config JSON and the verified behavior matrix live in [`agents/zcode/`](./agents/zcode/).
 
