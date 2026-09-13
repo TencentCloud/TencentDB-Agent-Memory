@@ -1191,13 +1191,21 @@ export async function handleChatCompletions(
         console.log(`[mem-command] cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} blocked: session not initialized`);
         return errResponse;
       }
+      // taskDraft 是 proxy 发起的**服务端** LLM 调用，密钥必须跟上游走：
+      // per-agent 协议覆盖的 apiKey → 全局 upstream.apiKey → 兜底客户端 key
+      // （兼容上游认业务 user_key 的部署）。业务身份（apiKey 变量）与模型上游
+      // 密钥是两个东西，不能混用 —— 见 mem:create-task 草稿鉴权修复。
+      const draftAgentUpstream = resolveAgentUpstreamForProtocol(
+        agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
+        "openai",
+      );
       const memResult = await executeMemCommand(memCmd, {
         sessionKey,
         agentSource,
         config,
         spaceId,
         userId,
-        apiKey: apiKey || "",
+        apiKey: draftAgentUpstream?.apiKey || config.upstream.apiKey || apiKey || "",
         sessionInfo: sessionInfo as Record<string, unknown>,
         protocol: "openai",
         stream: isStream,
@@ -1206,13 +1214,7 @@ export async function handleChatCompletions(
         bodyMessages: extractSimpleMessages(body.messages),
         // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
         model: modelId,
-        upstreamUrl:
-          (agentFromPath
-            ? resolveAgentUpstreamForProtocol(
-                config.upstream.agents?.[agentFromPath],
-                "openai",
-              )?.url
-            : undefined) || config.upstream.url,
+        upstreamUrl: draftAgentUpstream?.url || config.upstream.url,
         // CB/CodeBuddy 主链路走 OpenAI chat/completions
         upstreamProtocol: "openai",
         // OpenAI 协议无 extended thinking 概念，恒 false

@@ -116,7 +116,13 @@ export async function handleSessionInit(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  if (agentSource === "claude-code") {
+  // ZCode（anthropic kind）复用 CC 状态机：ZCode 原生走 Anthropic Messages 且
+  // 工具面与 CC 同构（抓包 2026-09-13：tools 含原生 AskUserQuestion，user
+  // content 是 CC 式 block 数组），表单下发（tool_use AskUserQuestion）与
+  // JSON tool_result 回填两条链路直接对齐。openai kind 不走此分支 —— CC 的
+  // buildFormResponse 只会产出 Anthropic SSE，openai 请求走下方 CB 状态机 +
+  // zcode 外层重渲染。
+  if (agentSource === "claude-code" || (agentSource === "zcode" && reqCtx.protocol === "anthropic")) {
     return ccHandle(
       sessionKey, userId, messages, config, store,
       // 直接透传整个 reqCtx，避免手抠字段时把新加字段（如 codex 的
@@ -193,6 +199,30 @@ export async function handleSessionInit(
     } else {
       result.response = buildWorkBuddyFormResponse(wbFd);
     }
+  }
+
+  // ZCode（openai kind）与 workbuddy 完全对称：CB 状态机产出 formData 后外层
+  // 重渲染成 AskUserQuestion tool_call SSE。ZCode 原生工具面即 AskUserQuestion
+  // （抓包 2026-09-13），CB 的 ask_followup_question 会被客户端拒收。form 复用
+  // workbuddy/form.ts（AskUserQuestion shape + CC 分页，标题/答案匹配文本与
+  // cleaner.getLastUserMessageText 的识别链通用）；答案回填走 CB 状态机既有
+  // 的 tool 消息文本匹配，无需 zcode 专属解析。
+  if (agentSource === "zcode" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    result.response = buildWorkBuddyFormResponse({
+      teams: cbFd.teams,
+      stage: cbFd.stage as WBFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    });
   }
 
   // dsh (deepseek-harness) 客户端复用 CB 状态机 + 自己的 ask_user_question 载体。

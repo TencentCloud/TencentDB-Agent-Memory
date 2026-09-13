@@ -20,6 +20,7 @@ import type { Context } from "hono";
 import { createPipeline, writeLog } from "./logger.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
 import type { ProxyConfig } from "./types.js";
+import { resolveAgentUpstreamForProtocol } from "./types.js";
 import {
   tryReportCreditFromPath,
   extractSpaceIdFromPath,
@@ -220,6 +221,32 @@ export async function handleAuxiliaryEndpoint(
 
   // 4. 构造上游请求头（按端点协议注入鉴权）
   const upstreamHeaders = buildAuxUpstreamHeaders(c, config, entry);
+
+  // ── Config-file per-agent upstream override（与主对话同源：upstream.agents）──
+  // 辅助端点（count_tokens / embeddings / completions 等）必须跟主对话打到
+  // **同一个**上游，否则会与主对话分家（401 / 404 / 模型不存在）。
+  // 双协议 agent（zcode）用 per-protocol 子条目；未配置该协议时回落全局默认
+  // （headers 保持 buildAuxUpstreamHeaders 的全局 key 注入不动）。
+  // 优先级：下方 instance（Panel）覆盖 > 此处 config 文件覆盖 —— 与主对话一致。
+  {
+    const agentFromPath = c.req.path.split("/").filter(Boolean)[0] ?? undefined;
+    const agentEntry = resolveAgentUpstreamForProtocol(
+      agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
+      entry.protocol,
+    );
+    if (agentEntry?.url) {
+      upstreamUrl = joinUrl(agentEntry.url, c.req.path);
+      if (agentEntry.apiKey) {
+        if (entry.protocol === "anthropic") {
+          upstreamHeaders["x-api-key"] = agentEntry.apiKey;
+          delete upstreamHeaders["authorization"];
+        } else {
+          upstreamHeaders["authorization"] = `Bearer ${agentEntry.apiKey}`;
+          delete upstreamHeaders["x-api-key"];
+        }
+      }
+    }
+  }
 
   // ── Instance upstream config override (aux requests follow conversation config) ──
   {

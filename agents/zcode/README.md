@@ -77,7 +77,7 @@ upstream:
 | Skill buffer / `mem:` 命令 | ✅ 用户文本提取：anthropic 格式取最后一个 text block（跳过 `<system-reminder>`），openai 格式裸字符串直返 |
 | 记忆注入 | ✅ 走粗粒度锚点兜底（未注册精确 Profile，结构近 CC，值得后续做） |
 | 请求分类（main / fork / sidequery） | ➖ 恒按 main；私有头 `x-zcode-session-type` 唯一实测值 "main"，未捕获 aux 信号 |
-| 交互式 session-init 表单 | ✅ 状态机激活（共享 CC 机器，`AskUserQuestion` 原生可应答）；预选 header 可跳过 |
+| 交互式 session-init 表单 | ✅ 双协议已适配：anthropic 走 CC 状态机（原生 `AskUserQuestion` tool_use + JSON tool_result 回填）；openai 复用 CB 状态机 + `AskUserQuestion` OpenAI SSE 外层重渲染（同 workbuddy 模式），不再下发 ZCode 没有的 `ask_followup_question` |
 | 双协议 | ✅ anthropic + openai-compatible 均实测通过（openai 需上游覆盖） |
 
 拿到更多真实流量（尤其 `x-zcode-session-type` 的其他取值）后，参考
