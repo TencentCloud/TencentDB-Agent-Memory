@@ -139,6 +139,9 @@ export async function handleSessionInit(
       userKey,
       spaceId,
       presetIdentity,
+      // store 复合键必须用真实 agentSource（zcode:xxx），否则 mem 命令族按
+      // 请求前缀查状态会找不到会话（taskDraft "Session not found"）。
+      agentSource,
     );
   }
   // 同上：整个 reqCtx 透传给 CB 状态机。codexHandler 会把 body.input[] 塞在

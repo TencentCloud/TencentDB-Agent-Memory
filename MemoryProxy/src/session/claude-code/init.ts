@@ -583,13 +583,15 @@ export async function handleSessionInit(
   userKey?: string,
   spaceId?: string,
   presetIdentity?: PresetIdentity,
+  /** 复用方（zcode anthropic kind）传入真实 agentSource，store 键随之区分。 */
+  agentSource: string = "claude-code",
 ): Promise<SessionInitResult> {
-  const compositeKey = `claude-code:${sessionKey}`;
+  const compositeKey = `${agentSource}:${sessionKey}`;
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     return await handleSessionInitInner(
       sessionKey, userId, messages, config, store, reqCtx,
-      metadataClient, userKey, spaceId, presetIdentity,
+      metadataClient, userKey, spaceId, presetIdentity, agentSource,
     );
   } finally {
     // 无论正常/异常返回都尝试发一次埋点；装饰器内部自吞异常。
@@ -597,7 +599,7 @@ export async function handleSessionInit(
       store,
       compositeKey,
       prevStatus,
-      agentSource: "claude-code",
+      agentSource,
     });
   }
 }
@@ -613,8 +615,9 @@ async function handleSessionInitInner(
   userKey?: string,
   spaceId?: string,
   presetIdentity?: PresetIdentity,
+  agentSource: string = "claude-code",
 ): Promise<SessionInitResult> {
-  const compositeKey = `claude-code:${sessionKey}`;
+  const compositeKey = `${agentSource}:${sessionKey}`;
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);
