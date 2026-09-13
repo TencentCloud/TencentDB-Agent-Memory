@@ -907,6 +907,9 @@ export class TdaiCore {
         versioning: skillVersioning,
         onSkillAccessed: assetHooks?.onSkillAccessed,
         onSkillArchived: assetHooks?.onSkillArchived,
+        // patch skill-hybrid-vec：注入 embedding 服务，启用 skill 真实向量检索
+        embeddingService: this.embeddingService,
+        logger: this.logger,
       });
 
       // ── Extraction wiring (queue + worker + optional single-tenant extractor) ──
