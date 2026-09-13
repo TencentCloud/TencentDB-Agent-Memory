@@ -87,7 +87,7 @@ cp -r agents ~/agents
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
 | [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
 | [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
-| [ZCode](./zcode/) | Anthropic Messages | Header 预选（Form 不可应答） | `ask_followup_question`（CC 状态机下发，ZCode 无法应答） | N/A | ❌ | ✅ (无 `x-session-id` 时透传) |
+| [ZCode](./zcode/) | Anthropic Messages（原生）+ OpenAI Chat（可选） | 交互式 Form（原生 `AskUserQuestion`）或 Header 预选 | `AskUserQuestion` | N/A | ❌ | ❌ (原生携带 `x-session-id`) |
 
 ---
 
@@ -127,7 +127,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | dsh | `x-deepseek-harness-session-id` | `x-session-id` |
 | Hermes | `x-conversation-id` | — (用户静态配置) |
 | OpenClaw | `x-conversation-id` | — (用户静态配置) |
-| ZCode | `x-session-id`（接入层注入） | — (ZCode 不内建 session header，必须由 wrapper 提供) |
+| ZCode | `x-session-id`（**客户端原生携带**，每会话 UUID） | — (无需接入层注入) |
 
 ---
 

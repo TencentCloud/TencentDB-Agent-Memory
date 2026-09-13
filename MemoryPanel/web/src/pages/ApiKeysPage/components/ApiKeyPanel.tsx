@@ -329,9 +329,8 @@ export default function ApiKeyPanel() {
                 { label: 'OpenCode', url: `${base}/opencode/${iid}` },
                 // ZCode — 智谱 AI 编码 Agent（CLI/桌面端），provider 原生 Anthropic
                 // Messages 协议，与 Claude Code 同族。base 不带 /v1，客户端自己拼
-                // /v1/messages。ZCode 不内建 session header：记忆链路需接入层
-                // wrapper 附带 x-session-id（可选 x-team-id/x-agent-id 预选），
-                // 见 agents/zcode/README.md。
+                // /v1/messages。ZCode 原生携带 x-session-id（记忆链路直接激活）；
+                // team/agent 预选可在 provider headers 里直配，见 agents/zcode/README.md。
                 { label: 'ZCode', url: `${base}/zcode/${iid}` },
                 { label: 'OpenClaw', url: `${base}/openclaw/default` },
                 { label: 'Hermes', url: `${base}/hermes/default` },

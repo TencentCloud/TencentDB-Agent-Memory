@@ -27,4 +27,25 @@ describe("zcode agent prefix registration", () => {
   it("resolves a dedicated zcode adapter", () => {
     expect(resolveAgentAdapter("zcode").agentKind).toBe("zcode");
   });
+
+  it("extracts last text block from anthropic-style array content", () => {
+    // 抓包实证（2026-09-13）：anthropic kind 的 user content 前面塞
+    // <system-reminder> blocks，最后一个 text block 才是用户键入。
+    const adapter = resolveAgentAdapter("zcode");
+    expect(
+      adapter.extractUserText([
+        { type: "text", text: "<system-reminder>skills 列表</system-reminder>" },
+        { type: "text", text: "<system-reminder>currentDate</system-reminder>" },
+        { type: "text", text: "回复 OK" },
+      ]),
+    ).toBe("回复 OK");
+  });
+
+  it("passes bare string content through (openai-compatible kind)", () => {
+    // 抓包实证：openai-compatible kind 的 content 是裸字符串，最后一条
+    // user message 为用户键入，无 wrapper。
+    const adapter = resolveAgentAdapter("zcode");
+    expect(adapter.extractUserText("回复 OK")).toBe("回复 OK");
+    expect(adapter.extractUserText("")).toBeNull();
+  });
 });

@@ -479,15 +479,29 @@ http://<proxy-host>:<port>/zcode/<spaceId>
 
 The resulting request path is `POST /zcode/:spaceId/v1/messages` (plus the optional `/cost-guard` and `/analyse` marker variants shared by all agents).
 
-### Session identity (required for memory features)
+### Session identity
 
-ZCode does not send session headers on its own. Without them the proxy still authenticates and forwards, but memory injection, L0 capture, and session-init stay dormant. Attach the headers via a wrapper or launcher around the ZCode process:
+Verified against a real ZCode CLI capture (both protocol kinds): **ZCode sends
+`x-session-id` natively** — a fresh UUID per session, mirrored inside
+`metadata.user_id`. The memory pipeline (injection, L0 capture, session-init)
+activates with no wrapper at all. ZCode also ships a native `AskUserQuestion`
+tool, so the interactive session-init form is answerable in stock clients.
+
+Optional preselect headers — the provider schema supports custom `headers`
+natively, so configure them directly on the provider (no launcher wrapper
+needed):
 
 | Header | Purpose |
 |---|---|
-| `x-session-id` | per-conversation identity — required for the memory pipeline |
-| `x-team-id` / `x-agent-id` | team/agent preselect (skips the interactive form; ZCode has no built-in `ask_followup_question` tool) |
+| `x-team-id` / `x-agent-id` | team/agent preselect (skips the interactive form) |
 | `x-task-id` | optional task narrowing |
+
+**OpenAI protocol variant**: switching the provider `kind` to
+`openai-compatible` routes requests to `POST /zcode/:spaceId/chat/completions`
+(no `/v1` suffix — ZCode appends it itself). This path needs a deployment-side
+OpenAI-protocol upstream override (`upstream.agents.zcode.url`, same as
+CodeBuddy/dsh), otherwise the proxy forwards the OpenAI body to the default
+Anthropic upstream and the request 404s.
 
 The full provider config JSON and the verified behavior matrix live in [`agents/zcode/`](./agents/zcode/).
 
