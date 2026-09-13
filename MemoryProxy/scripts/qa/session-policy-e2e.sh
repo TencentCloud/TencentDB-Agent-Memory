@@ -123,5 +123,5 @@ cat <<EOF
 验证：本脚本 ACC-1/2/4 通过日志断言自动生成+续接+显式优先；ACC-5/6 验证 HTTP 层非 5xx；
       绑定/短路语义由 src/__tests__/session-acceptance.test.ts（ACC-1..6）覆盖，
       TTL/窗口/容量/指纹与显式 header 对齐由 src/__tests__/session-isolation.test.ts、
-      src/__tests__/session-client-ids.test.ts 覆盖，vitest 全量 102/102（11 个文件）。
+      src/__tests__/session-client-ids.test.ts 覆盖，vitest 全量 105/105（11 个文件）。
 EOF
