@@ -71,7 +71,7 @@ fi
 
 if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" || "$MEMORY_CORE_METADATA_BACKEND" == "mongodb" ]]; then
   if [[ -z "${MONGODB_ENDPOINT:-}" ]]; then
-    info "未设 MONGODB_ENDPOINT → 启动本地 atlas-local（$MONGO_LOCAL_IMAGE）"
+    info "未设 MONGODB_ENDPOINT → 启动本地 atlas-local（${MONGO_LOCAL_IMAGE}）"
     if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "$MONGO_LOCAL_CONTAINER"; then
       rm_container_if_exists "$MONGO_LOCAL_CONTAINER"
       # --hostname 必须固定：atlas-local 用容器主机名初始化单节点 RS 成员。
@@ -98,14 +98,14 @@ if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" || "$MEMORY_CORE_METADATA_BACKEND" 
       sleep 2
     done
     [[ "$mongo_ready" == "1" ]] || die "mongo 容器 60s 内未就绪，docker logs $MONGO_LOCAL_CONTAINER 排查"
-    ok "mongo 就绪（容器 $MONGO_LOCAL_CONTAINER，网络内别名 mongo-search）"
+    ok "mongo 就绪（容器 ${MONGO_LOCAL_CONTAINER}，网络内别名 mongo-search）"
     MONGODB_ENDPOINT="mongodb://mongo-search:27017/?directConnection=true"
   fi
 fi
 
 if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" ]]; then
   MONGO_ENV_ARGS+=( -e "MONGODB_ENDPOINT=$MONGODB_ENDPOINT" -e "MONGODB_DATABASE=$MONGODB_DATABASE" )
-  info "memory-core 数据面后端 = mongodb（endpoint=$MONGODB_ENDPOINT, db=$MONGODB_DATABASE）"
+  info "memory-core 数据面后端 = mongodb（endpoint=$MONGODB_ENDPOINT, db=${MONGODB_DATABASE}）"
 fi
 
 if [[ "$MEMORY_CORE_METADATA_BACKEND" == "mongodb" ]]; then
