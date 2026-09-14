@@ -1,3 +1,7 @@
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildConfig } from "../config.js";
 import { describe, expect, it } from "vitest";
 import { resolveAgentUpstreamForProtocol } from "../types.js";
 
@@ -36,4 +40,22 @@ describe("resolveAgentUpstreamForProtocol", () => {
     expect(resolveAgentUpstreamForProtocol(undefined, "anthropic")).toBeUndefined();
     expect(resolveAgentUpstreamForProtocol(null, "openai")).toBeUndefined();
   });
+});
+
+it("validates flat and protocol endpoints from config", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-upstream-"));
+  try {
+    const file = join(dir, "config.json");
+    writeFileSync(file, JSON.stringify({ upstream: { agents: {
+      flat: { url: "https://flat.example", apiKey: "key" },
+      zcode: { url: "", anthropic: { url: 42 }, openai: { url: "https://openai.example", apiKey: 42 } },
+      invalid: { url: null },
+    } } }));
+    expect(buildConfig({ configFile: file }).upstream.agents).toEqual({
+      flat: { url: "https://flat.example", apiKey: "key" },
+      zcode: { openai: { url: "https://openai.example" } },
+    });
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
 });

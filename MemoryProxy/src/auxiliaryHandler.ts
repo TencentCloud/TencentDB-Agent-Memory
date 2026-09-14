@@ -57,13 +57,13 @@ const SKIP_RESPONSE_HEADERS = new Set([
  * 构造转发到上游的请求头。
  *
  * 与主 handler 的差异：辅助端点不涉及路由的 auth override，只需按端点
- * 协议注入 `upstream.apiKey`：
+ * 协议注入已解析的上游密钥：
  *  - `anthropic` → `x-api-key`（同时清除 `authorization`）
  *  - `openai`    → `Authorization: Bearer`
  */
 function buildAuxUpstreamHeaders(
   c: Context,
-  config: ProxyConfig,
+  apiKey: string | undefined,
   entry: WhitelistEndpoint,
 ): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -74,12 +74,12 @@ function buildAuxUpstreamHeaders(
   }
   headers["content-type"] = headers["content-type"] ?? "application/json";
 
-  if (config.upstream.apiKey) {
+  if (apiKey) {
     if (entry.protocol === "anthropic") {
-      headers["x-api-key"] = config.upstream.apiKey;
+      headers["x-api-key"] = apiKey;
       delete headers["authorization"];
     } else {
-      headers["authorization"] = `Bearer ${config.upstream.apiKey}`;
+      headers["authorization"] = `Bearer ${apiKey}`;
       delete headers["x-api-key"];
     }
   }
@@ -216,37 +216,13 @@ export async function handleAuxiliaryEndpoint(
   const bodyText = new TextDecoder().decode(rawBody);
   const modelId = extractModelId(bodyText);
 
-  // 3. 拼接 upstream URL（复用 joinUrl，天然消费白名单表）
-  let upstreamUrl = joinUrl(config.upstream.url, c.req.path);
-
-  // 4. 构造上游请求头（按端点协议注入鉴权）
-  const upstreamHeaders = buildAuxUpstreamHeaders(c, config, entry);
-
-  // ── Config-file per-agent upstream override（与主对话同源：upstream.agents）──
-  // 辅助端点（count_tokens / embeddings / completions 等）必须跟主对话打到
-  // **同一个**上游，否则会与主对话分家（401 / 404 / 模型不存在）。
-  // 双协议 agent（zcode）用 per-protocol 子条目；未配置该协议时回落全局默认
-  // （headers 保持 buildAuxUpstreamHeaders 的全局 key 注入不动）。
-  // 优先级：下方 instance（Panel）覆盖 > 此处 config 文件覆盖 —— 与主对话一致。
-  {
-    const agentFromPath = c.req.path.split("/").filter(Boolean)[0] ?? undefined;
-    const agentEntry = resolveAgentUpstreamForProtocol(
-      agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
-      entry.protocol,
-    );
-    if (agentEntry?.url) {
-      upstreamUrl = joinUrl(agentEntry.url, c.req.path);
-      if (agentEntry.apiKey) {
-        if (entry.protocol === "anthropic") {
-          upstreamHeaders["x-api-key"] = agentEntry.apiKey;
-          delete upstreamHeaders["authorization"];
-        } else {
-          upstreamHeaders["authorization"] = `Bearer ${agentEntry.apiKey}`;
-          delete upstreamHeaders["x-api-key"];
-        }
-      }
-    }
-  }
+  const agentFromPath = c.req.path.split("/").filter(Boolean)[0];
+  const agentEntry = resolveAgentUpstreamForProtocol(config.upstream.agents?.[agentFromPath], entry.protocol);
+  let upstreamUrl = joinUrl(agentEntry?.url || config.upstream.url, c.req.path);
+  // An agent entry without a key preserves client auth, never the global key.
+  const upstreamHeaders = buildAuxUpstreamHeaders(
+    c, agentEntry ? agentEntry.apiKey : config.upstream.apiKey, entry,
+  );
 
   // ── Instance upstream config override (aux requests follow conversation config) ──
   {

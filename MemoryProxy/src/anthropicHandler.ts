@@ -649,6 +649,10 @@ export async function handleAnthropicMessages(
   const agentFromPath = pathParts[0] && !["v1", "proxy", "skill-bridge", "memory-bridge"].includes(pathParts[0])
     ? pathParts[0] : undefined;
   const agentSource = agentFromPath ?? "claude-code";
+  const agentUpstreamEntry = resolveAgentUpstreamForProtocol(
+    agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
+    "anthropic",
+  );
 
   // ── Identity inspection ──────────────────────────────────────────────────
   const reqHeaders: Record<string, string> = {};
@@ -1078,21 +1082,16 @@ export async function handleAnthropicMessages(
       }
       // 检测请求是否开启了 extended thinking（Anthropic 协议）
       const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
-      // taskDraft 是 proxy 发起的**服务端** LLM 调用，密钥必须跟上游走：
-      // per-agent 协议覆盖的 apiKey → 全局 upstream.apiKey → 兜底客户端 key
-      // （兼容上游认业务 user_key 的部署）。业务身份（apiKey 变量）与模型上游
-      // 密钥是两个东西，不能混用 —— 见 mem:create-task 草稿鉴权修复。
-      const draftAgentUpstream = resolveAgentUpstreamForProtocol(
-        agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
-        "anthropic",
-      );
       const memResult = await executeMemCommand(memCmd, {
         sessionKey,
         agentSource,
         config,
         spaceId,
         userId,
-        apiKey: draftAgentUpstream?.apiKey || config.upstream.apiKey || apiKey || "",
+        apiKey: apiKey || "",
+        upstreamApiKey: agentUpstreamEntry
+          ? agentUpstreamEntry.apiKey || apiKey || ""
+          : config.upstream.apiKey || apiKey || "",
         sessionInfo: sessionInfo as Record<string, unknown>,
         protocol: "anthropic",
         stream: isStream,
@@ -1103,7 +1102,7 @@ export async function handleAnthropicMessages(
         bodyMessages: extractSimpleMessages((body as Record<string, unknown>).messages),
         // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
         model: modelId,
-        upstreamUrl: draftAgentUpstream?.url || config.upstream.url,
+        upstreamUrl: agentUpstreamEntry?.url || config.upstream.url,
         // Claude Code 主链路走 Anthropic Messages API
         upstreamProtocol: "anthropic",
       });
@@ -1243,10 +1242,6 @@ export async function handleAnthropicMessages(
   // prefix); both url and apiKey may be overridden per agent. When there's
   // no entry, we fall through to the Anthropic-specific global (costGuard
   // .anthropicUpstream) and finally to upstream.url — exactly as before.
-  const agentUpstreamEntry = resolveAgentUpstreamForProtocol(
-    agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
-    "anthropic",
-  );
   let effectiveApiKey = agentUpstreamEntry
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;

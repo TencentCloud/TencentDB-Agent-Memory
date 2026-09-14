@@ -242,20 +242,13 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
   return result;
 }
 
-/**
- * Parse `upstream.agents` from raw YAML into the normalized `AgentUpstreamEntry`
- * map. Flat entries without a non-empty `url` are silently dropped — an empty
- * url would just fall back to the global upstream, so keeping the entry adds
- * only noise (and would make "did I configure this right?" harder to answer at
- * a glance). Dual-protocol entries (per-protocol sub-entries only, e.g. ZCode)
- * are kept as long as at least one sub-entry carries a non-empty url.
- */
+/** Drop invalid endpoints; retain flat and per-protocol overrides. */
 function parseUpstreamAgents(
   raw: NonNullable<RawYamlConfig["upstream"]>["agents"],
 ): Record<string, AgentUpstreamEntry> {
   if (!raw || typeof raw !== "object") return {};
   const out: Record<string, AgentUpstreamEntry> = {};
-  const pickSub = (
+  const pickEndpoint = (
     v: { url?: string; apiKey?: string } | null | undefined,
   ): { url: string; apiKey?: string } | undefined => {
     if (!v || typeof v !== "object") return undefined;
@@ -266,18 +259,12 @@ function parseUpstreamAgents(
   };
   for (const [name, entry] of Object.entries(raw)) {
     if (!entry || typeof entry !== "object") continue;
-    const flatUrl =
-      typeof entry.url === "string" && entry.url.length > 0 ? entry.url : undefined;
-    const anthropic = pickSub(entry.anthropic);
-    const openai = pickSub(entry.openai);
-    if (!flatUrl && !anthropic && !openai) continue;
-    const apiKey =
-      flatUrl && typeof entry.apiKey === "string" && entry.apiKey.length > 0
-        ? { apiKey: entry.apiKey }
-        : {};
+    const flat = pickEndpoint(entry);
+    const anthropic = pickEndpoint(entry.anthropic);
+    const openai = pickEndpoint(entry.openai);
+    if (!flat && !anthropic && !openai) continue;
     out[name] = {
-      ...(flatUrl ? { url: flatUrl } : {}),
-      ...apiKey,
+      ...flat,
       ...(anthropic ? { anthropic } : {}),
       ...(openai ? { openai } : {}),
     };

@@ -327,10 +327,6 @@ export default function ApiKeyPanel() {
                 // OpenAI Chat Completions（POST /v1/chat/completions），与 CB/dsh 同族。
                 // proxy 侧 agent-adapters/opencode.ts 已适配 form 回填 + mem: 命令族全套。
                 { label: 'OpenCode', url: `${base}/opencode/${iid}` },
-                // ZCode — 智谱 AI 编码 Agent（CLI/桌面端），provider 原生 Anthropic
-                // Messages 协议，与 Claude Code 同族。base 不带 /v1，客户端自己拼
-                // /v1/messages。ZCode 原生携带 x-session-id（记忆链路直接激活）；
-                // team/agent 预选可在 provider headers 里直配，见 agents/zcode/README.md。
                 { label: 'ZCode', url: `${base}/zcode/${iid}` },
                 { label: 'OpenClaw', url: `${base}/openclaw/default` },
                 { label: 'Hermes', url: `${base}/hermes/default` },

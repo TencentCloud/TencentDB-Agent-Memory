@@ -461,60 +461,6 @@ Injected automatically by the `pi-plugin` extension:
 
 Unlike the header-preselect agents (Hermes / OpenClaw), Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). If the required identity env vars (`TDAI_USER_KEY`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`) are missing, the plugin warns at load and skips registration so Pi still starts.
 
-## Using Proxy with ZCode
-
-[ZCode](https://z.ai) is Zhipu's AI coding agent (CLI / desktop). Its model providers speak the **Anthropic Messages protocol** natively (provider `kind` is `"anthropic"`, base URLs look like `https://open.bigmodel.cn/api/anthropic`), so ZCode reuses the same proxy pipeline as Claude Code — auth, session-init, memory injection, and L0 capture all apply unchanged.
-
-### Connection
-
-Add a custom provider in ZCode's model settings and point it at the Proxy:
-
-```text
-http://<proxy-host>:<port>/zcode/<spaceId>
-```
-
-- Provider kind: **Anthropic** — the client appends `/v1/messages` itself, so the base URL does **not** include `/v1`
-- `<spaceId>`: memory instance ID (`default` for local deployments)
-- API key: the user's `sk-mem-...` user_key (from the panel)
-
-The resulting request path is `POST /zcode/:spaceId/v1/messages` (plus the optional `/cost-guard` and `/analyse` marker variants shared by all agents).
-
-### Session identity
-
-Verified against a real ZCode CLI capture (both protocol kinds): **ZCode sends
-`x-session-id` natively** — a fresh UUID per session, mirrored inside
-`metadata.user_id`. The memory pipeline (injection, L0 capture, session-init)
-activates with no wrapper at all. ZCode also ships a native `AskUserQuestion`
-tool, so the interactive session-init form is answerable in stock clients.
-
-Optional preselect headers — the provider schema supports custom `headers`
-natively, so configure them directly on the provider (no launcher wrapper
-needed):
-
-| Header | Purpose |
-|---|---|
-| `x-team-id` / `x-agent-id` | team/agent preselect (skips the interactive form) |
-| `x-task-id` | optional task narrowing |
-
-**OpenAI protocol variant**: switching the provider `kind` to
-`openai-compatible` routes requests to `POST /zcode/:spaceId/chat/completions`
-(no `/v1` suffix — ZCode appends it itself). Because one ZCode deployment can
-speak either protocol, the per-agent upstream override supports per-protocol
-sub-entries:
-
-```yaml
-upstream:
-  agents:
-    zcode:
-      anthropic: { url: "https://<anthropic-upstream>", apiKey: "<key>" }
-      openai: { url: "https://<openai-upstream>", apiKey: "<key>" }
-```
-
-An unconfigured protocol falls back to the global `upstream.url`; flat
-(one-URL) entries keep working for single-protocol agents.
-
-The full provider config JSON and the verified behavior matrix live in [`agents/zcode/`](./agents/zcode/).
-
 ## Optional: `sessionInit.defaultTaskId` (the "no task binding" option)
 
 **What it does.** By default, the Task pick in the session-init form
