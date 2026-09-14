@@ -53,8 +53,8 @@ export class OffloadStateManager {
    *  L2 must wait for this to be true before triggering. */
   l15Settled = false;
   /** Unique instance ID for debugging (each new OffloadStateManager gets a new id). */
-  readonly _instanceId = ++OffloadStateManager._instanceCounter;
   private static _instanceCounter = 0;
+  readonly _instanceId = ++OffloadStateManager._instanceCounter;
 
   /** Set of toolCallIds confirmed offloaded in previous rounds. */
   confirmedOffloadIds = new Set<string>();
