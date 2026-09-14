@@ -3,11 +3,11 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { configDefault, expand, privateWrite } from './memory.js';
+import { configDefault, expand, privateWrite, quote } from './memory.js';
 
 type Entry = { type?: string; command?: string; args?: string[]; [key: string]: unknown };
 type Group = { hooks: Entry[]; [key: string]: unknown };
-export const quote = (s: string): string => /^[a-zA-Z0-9_@%+=:,./-]+$/.test(s) ? s : "'" + s.replaceAll("'", "'\"'\"'") + "'";
+export { quote } from './memory.js';
 // Native Windows command-line quoting; reject shell expansions on Windows rather than misexecute paths.
 const windowsQuote = (s: string): string => '"' + s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1') + '"';
 

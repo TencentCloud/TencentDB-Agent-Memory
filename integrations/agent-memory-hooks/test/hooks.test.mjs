@@ -4,8 +4,9 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { exec, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
+import { promisify } from 'node:util';
 import { Memory } from '../dist/memory.js';
 import { install, quote } from '../dist/install.js';
 import * as codex from '../dist/adapters/codex.js';
@@ -204,4 +205,62 @@ test('oversized writes retain the entire reply and sensitive replies discard the
   await memory.handle(event('UserPromptSubmit', { prompt: 'mem:remember private', turn_id: 'private' }));
   await memory.handle(event('Stop', { reply: 'Bearer secret1234567890', turn_id: 'private' }));
   assert.deepEqual(memory.status(), { pending: 1, skipped: 1 });
+});
+
+
+test('ordinary prompts inject a credential-free query guide without fetching; opt-outs suppress it', async t => {
+  for (const client of ['codex', 'zcode', 'standard']) {
+    const { memory, calls } = setup(t, client);
+    const guide = await memory.handle(event('UserPromptSubmit', { prompt: 'What was our previous agreement?' }));
+    assert.match(guide, /--query/);
+    assert.match(guide, /search before answering/);
+    assert.ok(!guide.includes(memory.cfg.user_key));
+    assert.equal(calls.length, 0);
+    assert.equal(memory.status().skipped, 1);
+    for (const prompt of ['mem:off hello', '/nomemory hello', '[不记忆] hello', 'sk-1234567890123456']) {
+      assert.equal(await memory.handle(event('UserPromptSubmit', { prompt, turn_id: prompt })), '');
+    }
+  }
+});
+
+test('the injected shell command executes read-only queries with quoted paths and reports failures', async t => {
+  const { config, dir } = setup(t);
+  const requests = [];
+  let allowed = true;
+  const server = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    requests.push({ url: req.url, body: JSON.parse(raw) });
+    const data = {
+      '/v3/meta/auth/verify': { valid: true, user: { user_id: 'verified-user' } },
+      '/v3/meta/agent/get': { team_id: 'team' },
+      '/v3/meta/acl/check': { allowed },
+      '/v3/atomic/search': { items: [{ content: 'remembered agreement' }] },
+    }[req.url];
+    res.end(JSON.stringify({ code: 0, data }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const cfg = JSON.parse(readFileSync(config, 'utf8'));
+  cfg.endpoint = `http://127.0.0.1:${server.address().port}`;
+  writeFileSync(config, JSON.stringify(cfg));
+  const memory = new Memory(config, 'codex');
+  const guide = await memory.handle(event('UserPromptSubmit', { prompt: 'previous agreement?' }));
+  const command = guide.split('\n').find(line => line.includes(" --query 'search keywords'"));
+  const query = "agreement ' $(echo should-not-execute) `echo neither`";
+  const run = promisify(exec);
+  const actual = command.replace("'search keywords'", quote(query));
+  const output = await run(actual);
+  assert.match(JSON.parse(output.stdout).context, /remembered agreement/);
+  assert.equal(requests.at(-1).body.query, query);
+  assert.equal(requests.at(-1).body.user_id, 'verified-user');
+  assert.ok(requests.every(r => !r.url.endsWith('/conversation/add')));
+  assert.deepEqual(memory.status(), { skipped: 1 });
+  allowed = false;
+  await assert.rejects(run(actual), error => {
+    assert.equal(error.code, 1);
+    assert.ok(!error.stderr.includes(cfg.user_key));
+    return true;
+  });
+  assert.equal(requests.at(-1).url, '/v3/meta/acl/check');
 });

@@ -5,13 +5,16 @@ let diagnostic = false;
 try {
   const { values } = parseArgs({ options: {
     config: { type: 'string', default: configDefault }, adapter: { type: 'string', default: 'standard' },
-    check: { type: 'boolean' }, status: { type: 'boolean' }, 'retry-one': { type: 'boolean' },
+    query: { type: 'string' }, check: { type: 'boolean' }, status: { type: 'boolean' }, 'retry-one': { type: 'boolean' },
   } });
-  diagnostic = !!(values.check || values.status || values['retry-one']);
+  diagnostic = values.query !== undefined || !!(values.check || values.status || values['retry-one']);
   if (!/^[a-z][a-z0-9_]*$/.test(values.adapter)) throw new Error('Invalid adapter');
   const adapter = await import(`./adapters/${values.adapter}.js`);
   const memory = new Memory(values.config, values.adapter);
-  if (values.status) console.log(JSON.stringify(memory.status()));
+  if (values.query !== undefined) {
+    if (!values.query.trim()) throw new Error('Empty query');
+    console.log(JSON.stringify({ context: await memory.recall(values.query.trim()) }));
+  } else if (values.status) console.log(JSON.stringify(memory.status()));
   else if (values.check) {
     const identity = await memory.identity('read');
     await memory.identity('write');

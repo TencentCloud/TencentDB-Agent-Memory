@@ -88,10 +88,26 @@ Backups may contain existing credentials; keep them local.
 | `mem:recall <query>` | Query up to five existing L1 memories across sessions; inject at most 6000 characters of result data. Do not capture this turn. |
 | `mem:remember <fact>` | Save this user message and the final assistant reply when Stop arrives. |
 | Include `mem:off`, `/nomemory`, or `[不记忆]` | Skip memory processing for this turn. |
-| Ordinary message | Skip by default; capture only when `capture: true`. |
+| Ordinary message | Inject memory-query instructions; the model can search when needed. Capture only when `capture: true`. |
 
-These are ordinary messages, not slash commands. There is no automatic recall,
-profile/scene injection, model-callable memory tool, or background retry worker.
+These are ordinary messages, not slash commands. Each eligible prompt receives a
+short, stable query guide: for previous decisions, preferences or agreements,
+the model should run the supplied read-only shell command before answering unless
+the answer is already available. General questions do not require a search. This
+uses the client's existing shell tool, not a new MCP server or a model proxy.
+The guide contains command/config paths, never credential values. The query loads
+credentials itself and reuses the same ACL-checked, bounded L1 search:
+
+```sh
+node dist/hook.js --adapter codex --query 'previous health check agreement'
+```
+
+Ordinary prompt hooks do not call the memory API just to generate this guide.
+Queries produce JSON with a `context` field and exit nonzero on failure; they do
+not capture another turn. Models must honor tool permissions and explicit opt-out
+or no-tool requests. Clients must provide shell access to the installed Node
+runtime and network access to Core. Actual search is model-directed, not guaranteed
+by the prompt. No profile/scene injection or background retry worker is added.
 Only native user/final-answer fields are captured; no transcripts, tools,
 attachments, system prompts or thinking content. Missing stable session/turn IDs
 skip processing. Known credential patterns skip the turn; this is not comprehensive
@@ -155,9 +171,12 @@ Node's built-in test runner covers both native protocols, opt-out and secrets,
 verified identity/ACL denial, final-pair capture, duplicate Stop, durable retry,
 Unicode chunking/oversize retention, original Python state compatibility,
 installer migration/removal and quoting, nonblocking errors, HTTP headers,
-redirect rejection and response limits. No test framework dependency is needed.
+redirect rejection and response limits. Additional checks execute the injected
+query command with quoted paths, verify read-only ACL enforcement, and ensure
+ordinary/opt-out prompts do not trigger implicit network searches. No test
+framework dependency is needed.
 
-TypeScript rewrite verification on 2026-09-14: 10 Node tests passed, compiled with
+TypeScript rewrite verification on 2026-09-14: 12 Node tests passed, compiled with
 strict TypeScript. A real Codex CLI session using the existing ChatGPT login
 recalled `/health/blue-heron-914` and HTTP 200; another returned `TS_HOOK_RECORDED`
 and its server conversation count was exactly two. This unattended test used the
@@ -166,6 +185,16 @@ trust, model credentials or provider settings. Native ZCode JSON events were
 replayed through the compiled process against live Core: recall matched and
 capture stored two messages. This replay is not a new official-plan model run.
 The previous SQLite state was also read successfully by the rewritten core.
+
+Model-directed query verification: a fresh Codex CLI task asked about the previous
+health-check agreement with no `mem:` command and no answer in its prompt. The
+model invoked the injected `--query` command and returned the stored path and HTTP
+200 condition. This run used an isolated workspace-write sandbox with network
+access enabled for MemoryCore, plus the same explicit hook-trust test flag. A
+read-only sandbox run with network unavailable also invoked the command, reported
+the query failure and did not invent an answer. No persistent sandbox settings
+were changed. This verifies existing-memory retrieval, not new-fact extraction;
+ZCode model-directed querying still needs a native model test.
 
 The PR separates this verification from earlier Python verification. Earlier user screenshots show successful ZCode Desktop official
 BigModel GLM-5.3-Flash, Codex CLI ChatGPT-login and Codex Desktop recall/capture,
