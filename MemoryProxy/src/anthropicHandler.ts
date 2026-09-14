@@ -287,6 +287,10 @@ function hasValidThinkingSignature(block: Record<string, unknown>): boolean {
 export function sanitizeThinkingBlocks(
   body: Record<string, unknown>,
 ): { body: Record<string, unknown>; removed: number } {
+  // DeepSeek requires thinking history verbatim and does not use Claude signatures.
+  if (typeof body.model === "string" && /^deepseek-/i.test(body.model)) {
+    return { body, removed: 0 };
+  }
   const messages = body.messages;
   if (!Array.isArray(messages)) return { body, removed: 0 };
 
