@@ -1,0 +1,9 @@
+# Tested with Python 3.14.0 on Windows. Install torch separately first:
+# python -m pip install torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+# This file pins the directly relevant normalization and inference dependencies.
+transformers==5.5.4
+pyarrow==23.0.1
+tokenizers==0.22.2
+safetensors==0.7.0
+numpy==2.4.4
+huggingface-hub==1.10.2
