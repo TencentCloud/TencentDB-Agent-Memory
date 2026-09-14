@@ -23,7 +23,7 @@ This project requires no build step. Node.js 22.16+ natively supports TypeScript
 
 ```bash
 # Clone the repository
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory
 
 # Install dependencies
