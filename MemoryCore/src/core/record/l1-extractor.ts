@@ -15,6 +15,7 @@
 import type { ConversationMessage } from "../conversation/l0-recorder.js";
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryPromptMode } from "../prompts/l1-extraction.js";
 import { batchDedup } from "./l1-dedup.js";
+import { observeExtractionCandidates, observationMessageWindow, type CandidateObserverOptions, type ObservationPath } from "./l1-candidate-observer.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
@@ -107,6 +108,8 @@ export async function extractL1Memories(params: {
     maxBackgroundMessages?: number;
     /** Enable conflict detection */
     enableDedup?: boolean;
+    /** Optional observation only; defaults off and never changes candidate writes. */
+    candidateObserver?: CandidateObserverOptions;
     /** Max memories extracted per call */
     maxMemoriesPerSession?: number;
     /** LLM model override */
@@ -293,6 +296,18 @@ export async function extractL1Memories(params: {
     record_id: generateMemoryId(),
   }));
 
+  // Observe at most once, including when a later existing error enters fallback.
+  // The lazy factory leaves source content untouched when observation is off.
+  let candidateObservationAttempted = false;
+  const observeCandidates = async (path: ObservationPath, decisions?: DedupDecision[]) => {
+    if (candidateObservationAttempted) return;
+    candidateObservationAttempted = true;
+    await observeExtractionCandidates(options.candidateObserver, () => ({
+      path, candidates: memoriesWithIds, decisions,
+      sourceMessages: observationMessageWindow(backgroundMessages, newMessages),
+    }), logger);
+  };
+
   // Step 2: Batch Conflict Detection + Write
   let storedRecords: MemoryRecord[];
   let dedupLatencyMs: number | null = null;
@@ -342,6 +357,7 @@ export async function extractL1Memories(params: {
         }
       }
 
+      await observeCandidates("dedup", decisions);
       storedRecords = await applyDecisions({
         memoriesWithIds,
         decisions,
@@ -360,9 +376,11 @@ export async function extractL1Memories(params: {
 
     } catch (err) {
       logger?.warn?.(`${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
+      await observeCandidates("dedup_fallback");
       storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage);
     }
   } else {
+    await observeCandidates("dedup_disabled");
     storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage);
   }
 

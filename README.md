@@ -365,6 +365,16 @@ We welcome contributions of all kinds — bug reports, feature suggestions, docu
 
 ---
 
+## Optional feedback policy self-optimization
+
+The [design and runnable examples](./docs/design/feedback-self-optimization.md)
+show how to turn reviewed memory mistakes into bounded rule candidates and
+compare them in isolated SQLite stores. The extension is default-off, preserves
+existing extraction behavior, and includes an optional Python SDK API, a shadow
+observer, explicit adoption/rollback gates and zero-provider reproduction tests.
+See the [controlled pilot and limitations](./docs/experiments/feedback-selfopt-pilot.md)
+for the available evidence and documented regressions.
+
 ## Star History
 
 <p align="center">
