@@ -206,10 +206,10 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     // knowledge_id in request body, so the URL is service-level, not
     // resource-scoped). publicBaseUrl already includes the API prefix; proxy
     // appends `/tools/list` | `/tools/call` directly.
-    if (!existed && publicBaseUrl) {
+    if (publicBaseUrl && row.service_url !== publicBaseUrl) {
       const serviceUrl = publicBaseUrl;
       const updated = cgService.updateServiceUrl(idFields.service_id, row.code_graph_id, serviceUrl);
-      if (updated) return c.json(wrapOk(toCodeGraphDetail(updated)), 201);
+      if (updated) return c.json(wrapOk(toCodeGraphDetail(updated)), existed ? 200 : 201);
     }
 
     return c.json(wrapOk(toCodeGraphDetail(row)), existed ? 200 : 201);
