@@ -99,6 +99,7 @@ fi
 
 cd /app/knowledge
 PORT="${KNOWLEDGE_PORT}" LOG_LEVEL="${LOG_LEVEL:-info}" \
+  KNOWLEDGE_SERVICE_KEY="${KNOWLEDGE_SERVICE_KEY:-}" \
   node "$(test -f dist/server.js && echo dist/server.js || echo dist/server.mjs)" 2>&1 \
   | tee -a "$KNOWLEDGE_LOG" &
 KNOWLEDGE_PID=$!
