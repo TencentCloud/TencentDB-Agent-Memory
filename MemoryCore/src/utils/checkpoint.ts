@@ -284,9 +284,19 @@ export class CheckpointManager {
         raw = await this.storage.readFile(this.filePath);
       } else {
         const fs = await import("node:fs/promises");
-        raw = await fs.default.readFile(this.filePath, "utf-8");
+        raw = await fs.default.readFile(this.filePath, "utf-8").catch((error: unknown) => {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "ENOENT"
+          ) {
+            return null;
+          }
+          throw error;
+        });
       }
-      if (!raw) return structuredClone(DEFAULT_CHECKPOINT);
+      if (raw === null) return structuredClone(DEFAULT_CHECKPOINT);
 
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       // Merge with defaults for backward compat (old checkpoints lack new fields).
@@ -331,8 +341,12 @@ export class CheckpointManager {
         }
       }
       return cp;
-    } catch {
-      return structuredClone(DEFAULT_CHECKPOINT);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to read checkpoint at ${this.filePath}: ${detail}`,
+        { cause: error },
+      );
     }
   }
 
