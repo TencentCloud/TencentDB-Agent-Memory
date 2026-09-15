@@ -4,7 +4,12 @@ import path from "node:path";
 import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
-import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import {
+  formatLocalDateTime,
+  getLocalDateTimeParts,
+  localDateTimeToInstant,
+  startOfLocalDay,
+} from "./time.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -360,10 +365,9 @@ function buildTodayRunTime(cleanTime: string, nowMs: number): number {
   const [hRaw, mRaw] = cleanTime.split(":");
   const hour = Number(hRaw);
   const minute = Number(mRaw);
+  const localNow = getLocalDateTimeParts(new Date(nowMs));
 
-  const target = new Date(nowMs);
-  target.setHours(hour, minute, 0, 0);
-  return target.getTime();
+  return localDateTimeToInstant(localNow.year, localNow.month, localNow.day, hour, minute, 0);
 }
 
 function nextRunAt(cleanTime: string, nowMs: number): number {
@@ -372,13 +376,20 @@ function nextRunAt(cleanTime: string, nowMs: number): number {
   const hour = Number(hRaw);
   const minute = Number(mRaw);
 
-  const now = new Date(nowMs);
-  const next = new Date(nowMs);
-  next.setHours(hour, minute, 0, 0);
+  const localNow = getLocalDateTimeParts(new Date(nowMs));
+  let next = localDateTimeToInstant(localNow.year, localNow.month, localNow.day, hour, minute, 0);
 
-  if (next.getTime() <= now.getTime()) {
-    next.setDate(next.getDate() + 1);
+  if (next <= nowMs) {
+    const nextLocalDay = new Date(Date.UTC(localNow.year, localNow.month - 1, localNow.day + 1));
+    next = localDateTimeToInstant(
+      nextLocalDay.getUTCFullYear(),
+      nextLocalDay.getUTCMonth() + 1,
+      nextLocalDay.getUTCDate(),
+      hour,
+      minute,
+      0,
+    );
   }
 
-  return next.getTime();
+  return next;
 }
