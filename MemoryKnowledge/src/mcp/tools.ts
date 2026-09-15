@@ -210,7 +210,7 @@ export const MCP_TOOLS: McpToolDef[] = [
   },
   {
     name: "wiki_graph",
-    description: "Get the wiki knowledge graph (nodes, edges, communities).",
+    description: "Get the wiki knowledge graph (nodes, edges). communities reserved but not implemented (always empty).",
     inputSchema: {
       type: "object",
       properties: {

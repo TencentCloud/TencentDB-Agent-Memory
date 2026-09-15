@@ -74,7 +74,7 @@ const WIKI_TOOLS: HttpToolDef[] = [
   },
   {
     name: "get_graph",
-    description: "获取知识图谱结构（nodes, edges, communities）。",
+    description: "获取知识图谱结构（nodes, edges）。communities 字段保留但未实现（恒为空）。",
     params: {},
   },
   {
