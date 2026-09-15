@@ -29,6 +29,7 @@ import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
 import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
+import { auditMemoryAccess, type MemoryAccessEvent } from "../audit.js";
 
 const TAG = "[memory-bridge]";
 
@@ -56,6 +57,8 @@ interface SessionIdFields {
   user_id: string;
   team_id: string;
   agent_id: string;
+  /** 客户端来源（claude-code / codex / workbuddy 等），供遥测使用。 */
+  agent_source?: string;
   session_id: string;
   task_id?: string;
   user_key?: string;
@@ -237,6 +240,55 @@ function selectTargetCtx(ctxs: FixedAssetCtx[], requestedAgentId: unknown): Fixe
 
 const MULTI_SEARCH_SUBPATHS = new Set(["atomic/search", "conversation/search"]);
 
+/**
+ * 读路径审计：bridge 的 allowlist 全是只读 subpath，按语义映射到 audit action。
+ * 纯函数，便于单测。
+ *
+ *   atomic/search、conversation/search      → search
+ *   atomic/query、conversation/query        → query
+ *   scenario/ls、scenario/read              → read
+ */
+export function auditActionForSubpath(sub: string): MemoryAccessEvent["action"] {
+  if (sub.endsWith("/search")) return "search";
+  if (sub.endsWith("/query")) return "query";
+  return "read";
+}
+
+/**
+ * 记忆读路径审计（memory-bridge）。
+ *
+ * 语义与写路径（tdai/recorder.ts 的 `action=write`）对称：**谁（actor_user /
+ * actor_agent）在什么时候读了谁的记忆（target 命名空间）**。每个被真实读到的
+ * 命名空间各产生一条事件——search 类会扇出到 self + 借入 agent，因此一条请求
+ * 可能落 1~3 条；借入读的 target 指向被借 agent 的命名空间（= 谁的记忆被读）。
+ *
+ * 与写路径一致的两个约束：
+ *   - 只在上游读成功（2xx）后记录，失败由 bridge 的 reject/telemetry 线负责；
+ *   - fire-and-forget，失败只降级日志，绝不影响读请求本身。
+ *
+ * `hits` 解析不出条数（如 scenario/read 返回纯文本）时回落为 `http_<status>`。
+ */
+function auditBridgeRead(input: {
+  action: MemoryAccessEvent["action"];
+  ids: SessionIdFields;
+  targetTeamId: string;
+  targetAgentId: string;
+  traceId: string;
+  hits: number | null;
+  httpStatus: number;
+}): void {
+  auditMemoryAccess({
+    actorUser: input.ids.user_id,
+    actorAgent: input.ids.agent_id,
+    action: input.action,
+    target: `${input.targetTeamId}:${input.targetAgentId}${input.ids.task_id ? `:${input.ids.task_id}` : ""}`,
+    result: input.hits ?? `http_${input.httpStatus}`,
+    sessionKey: input.ids.session_id,
+    scope: input.ids.task_id ? "normal" : "no-task",
+    traceId: input.traceId,
+  });
+}
+
 function limitFromBody(body: Record<string, unknown>, fallback = 5): number {
   const n = typeof body.limit === "number" ? body.limit : fallback;
   return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 50) : fallback;
@@ -321,6 +373,12 @@ export function createMemoryBridgeHandler(
       });
       return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
     }
+
+    // 读路径审计（bridge 的 allowlist 全是只读 subpath）。
+    // traceId：调用方若显式透传 `x-tdai-trace-id`（可与当轮 Opik trace 对齐）就用它，
+    // 否则回落为 `memory-bridge:<session_id>`——同一会话的读事件可归组。
+    const auditAction = auditActionForSubpath(sub);
+    const auditTraceId = c.req.header("x-tdai-trace-id") ?? `memory-bridge:${ids.session_id}`;
 
     let inboundBody: Record<string, unknown> = {};
     try {
@@ -440,11 +498,13 @@ export function createMemoryBridgeHandler(
       for (const r of settled) {
         if (r.status !== "fulfilled" || r.value.status < 200 || r.value.status >= 300) continue;
         okCount++;
+        let hits: number | null = null;
         try {
           const env = JSON.parse(r.value.text) as {
             data?: { items?: unknown[]; messages?: unknown[] };
           };
           const rows = (isConversationSearch ? env.data?.messages : env.data?.items) ?? [];
+          hits = rows.length;
           for (const item of rows) {
             if (!item || typeof item !== "object") continue;
             collected.push({
@@ -456,7 +516,18 @@ export function createMemoryBridgeHandler(
           }
         } catch {
           // ignore malformed upstream response from this target
+          // （2xx 但 body 不可解析：hits 保持 null，审计回落 http_<status>）
         }
+        // 每个被读到的命名空间各记一条（借入读的 target 指向被借 agent）。
+        auditBridgeRead({
+          action: auditAction,
+          ids,
+          targetTeamId: r.value.target.teamId,
+          targetAgentId: r.value.target.agentId,
+          traceId: auditTraceId,
+          hits,
+          httpStatus: r.value.status,
+        });
       }
       collected.sort((a, b) => (typeof b.score === "number" ? b.score : 0) - (typeof a.score === "number" ? a.score : 0));
       const elapsed = (deps.now ?? Date.now)() - t0;
@@ -482,9 +553,10 @@ export function createMemoryBridgeHandler(
       });
     }
 
+    const target = selectTargetCtx(ctxs, inboundBody.agent_id);
     let upstream;
     try {
-      upstream = await callUpstream(selectTargetCtx(ctxs, inboundBody.agent_id));
+      upstream = await callUpstream(target);
     } catch (err) {
       console.warn(
         `${TAG} upstream fetch failed sub=${sub} err=${(err as Error).message}`,
@@ -495,6 +567,27 @@ export function createMemoryBridgeHandler(
     const respText = upstream.text;
     const elapsed = (deps.now ?? Date.now)() - t0;
     console.log(`${TAG} sub=${sub} status=${upstream.status} elapsed=${elapsed}ms`);
+
+    // 读路径审计：单目标读（scenario/ls、scenario/read、*\/query、显式 agent_id 的 search）。
+    if (upstream.status >= 200 && upstream.status < 300) {
+      let hits: number | null = null;
+      try {
+        const env = JSON.parse(respText) as { data?: { items?: unknown[]; messages?: unknown[] } };
+        const rows = env.data?.items ?? env.data?.messages;
+        if (Array.isArray(rows)) hits = rows.length;
+      } catch {
+        // 非 JSON body（如 scenario/read 全文）：无条数可计，回落 http_<status>
+      }
+      auditBridgeRead({
+        action: auditAction,
+        ids,
+        targetTeamId: target.teamId,
+        targetAgentId: target.agentId,
+        traceId: auditTraceId,
+        hits,
+        httpStatus: upstream.status,
+      });
+    }
 
     return new Response(respText, {
       status: upstream.status,
