@@ -27,6 +27,7 @@ import {
 import { initLogger, shutdownLogger, log } from "./report/log.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
+import { flushOpikBatchQueue } from "./opik.js";
 import { initTraceArchive, shutdownTraceArchive } from "./trace-archive.js";
 import { initAuth } from "./auth.js";
 import { initSystemUsers } from "./systemUser.js";
@@ -167,6 +168,8 @@ async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     const { drained, remaining } = await flushPendingWrites(10_000);
     log.info("server.shutdown.flush_l0.done", { drained, remaining });
   }
+  // Opik create/update 队列：flush 掉内存里尚未发出的 batch（幂等，空队列秒回）。
+  await flushOpikBatchQueue();
   await shutdownGuard();
   await shutdownPrivateControlPlane();
   await shutdownRequestPrepare();
