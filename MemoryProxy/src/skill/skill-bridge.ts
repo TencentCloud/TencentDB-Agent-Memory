@@ -292,9 +292,18 @@ function bindingToIdFields(
  * 恢复而不 401。
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+  // ⚠️ 前缀列表必须覆盖 agent-adapters 的全部 agentSource;新增客户端时
+  // 同步更新此处与 memory-bridge.ts 的 loadSessionIdsL1（两处同构）。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [
+        sessionId,
+        `codebuddy:${sessionId}`,
+        `claude-code:${sessionId}`,
+        `codex:${sessionId}`,
+        `workbuddy:${sessionId}`,
+        `dsh:${sessionId}`,
+      ];
   for (const k of candidates) {
     const s = getSessionStore().get(k);
     if (s) {
