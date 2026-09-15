@@ -22,7 +22,8 @@
 
 ---
 
-> **最新：** Team Memory Beta 版本正在快速迭代，简单安装就能玩。
+
+>  **📋 云上版本需求调研：** 我们正在规划 **云上托管版**, 如果你感兴趣，欢迎花 1 分钟告诉我们你的场景和期待：**[填写问卷](https://wj.qq.com/s2/27892273/3h5k/)**
 
 <td>
    <video src="https://github.com/user-attachments/assets/c671134a-0051-42bf-8d1f-d96c37656e63" width="100%" controls autoplay loop muted playsinline></video>
@@ -327,8 +328,7 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/9f77b819-c85b-4135-8b91-a612e42580a6" width="200" alt="Agent Memory 微信社群二维码" />
-
+- 📋 **云上版本需求调研：** 我们正在规划 **云上托管版**——免部署、免运维、开箱即用。如果你感兴趣，欢迎花 1 分钟告诉我们你的场景和期待：**[填写问卷](https://wj.qq.com/s2/27892273/3h5k/)**
 ---
 
 <p align="center">
