@@ -251,14 +251,63 @@ export class SessionStore {
     }
   }
 
+  async hasDurableInitializedBinding(keyId: string): Promise<boolean> {
+    const identity = this.identities.get(keyId);
+    const current = this.states.get(keyId);
+    if (
+      !identity ||
+      current?.status !== "initialized" ||
+      !this.repo ||
+      !this.bindingRepo
+    ) {
+      return false;
+    }
+    try {
+      const persisted = await this.repo.getBySessionId(
+        spaceOf(identity),
+        identity.userId,
+        identity.agentSource,
+        identity.sessionId,
+      );
+      const binding = await this.bindingRepo.getBinding(
+        spaceOf(identity),
+        identity.sessionId,
+      );
+      return (
+        persisted?.status === "initialized" &&
+        persisted.sessionInfo?.user_id === current.sessionInfo?.user_id &&
+        persisted.sessionInfo?.agent_id === current.sessionInfo?.agent_id &&
+        persisted.sessionInfo?.task_id === current.sessionInfo?.task_id &&
+        binding?.outcome === "initialized" &&
+        binding.userId === current.sessionInfo?.user_id &&
+        binding.agentId === current.sessionInfo?.agent_id &&
+        binding.taskId === current.sessionInfo?.task_id &&
+        binding.agentSource === identity.agentSource
+      );
+    } catch (err) {
+      console.warn(
+        `[session] durable binding verification failed for ${keyId}: ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
+      return false;
+    }
+  }
+
   delete(keyId: string): void {
     this.states.delete(keyId);
     const id = this.identities.get(keyId);
     if (!id) return;
-    this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
-    void this.bindingRepo
-      ?.deleteBinding(spaceOf(id), id.sessionId)
-      .catch(() => {});
+    this.repo?.deleteBySessionId(
+      spaceOf(id),
+      id.userId,
+      id.agentSource,
+      id.sessionId,
+    );
+    const bindingDelete = this.bindingRepo?.deleteBinding(
+      spaceOf(id),
+      id.sessionId,
+    );
+    if (bindingDelete) void bindingDelete.catch(() => {});
   }
 
   getStatus(keyId: string): SessionInitStatus {

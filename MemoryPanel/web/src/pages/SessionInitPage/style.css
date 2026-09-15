@@ -1,0 +1,152 @@
+/* SessionInitPage — standalone no-login page (outside ConsoleLayout). */
+
+:root {
+  --sip-bg: #f5f6fa;
+  --sip-card: #ffffff;
+  --sip-border: #d9dde8;
+  --sip-text: #1a1f2e;
+  --sip-dim: #5a6378;
+  --sip-accent: #4264f6;
+  --sip-accent-soft: rgba(66, 100, 246, 0.08);
+  --sip-ok: #059669;
+  --sip-error: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sip-bg: #0a0c13;
+    --sip-card: #12151f;
+    --sip-border: #242a3d;
+    --sip-text: #e8ebf4;
+    --sip-dim: #97a0b8;
+    --sip-accent: #7c9eff;
+    --sip-accent-soft: rgba(124, 158, 255, 0.12);
+    --sip-ok: #68d391;
+    --sip-error: #fc8181;
+  }
+}
+
+.sip-page {
+  min-height: 100vh;
+  background: var(--sip-bg);
+  color: var(--sip-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px;
+  box-sizing: border-box;
+}
+
+.sip-card {
+  width: 100%;
+  max-width: 620px;
+  background: var(--sip-card);
+  border: 1px solid var(--sip-border);
+  border-radius: 16px;
+  padding: 28px 28px 24px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+}
+
+.sip-center {
+  text-align: center;
+}
+
+.sip-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.sip-ok { color: var(--sip-ok); }
+.sip-error { color: var(--sip-error); }
+
+.sip-dim { color: var(--sip-dim); font-size: 13px; }
+.sip-mono,
+code {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--sip-accent-soft);
+  color: var(--sip-accent);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.sip-meta { margin-top: 4px; word-break: break-all; }
+
+.sip-group { margin-top: 20px; }
+
+.sip-group h3 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: var(--sip-accent);
+}
+
+.sip-option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--sip-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.sip-option:hover { border-color: var(--sip-accent); }
+.sip-option.sip-active {
+  border-color: var(--sip-accent);
+  background: var(--sip-accent-soft);
+}
+
+.sip-option input { margin-top: 3px; accent-color: var(--sip-accent); }
+.sip-option .sip-name { font-weight: 600; font-size: 14px; }
+.sip-option .sip-desc { margin: 2px 0; }
+.sip-option code { word-break: break-all; }
+
+.sip-result {
+  border: 1px solid var(--sip-border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  font-size: 13.5px;
+}
+
+.sip-submit {
+  width: 100%;
+  margin-top: 20px;
+  padding: 11px 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--sip-accent);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.sip-submit:hover { opacity: 0.9; }
+.sip-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.sip-home-btn {
+  display: inline-block;
+  margin-top: 18px;
+  padding: 9px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sip-accent);
+  border: 1px solid var(--sip-accent);
+  border-radius: 10px;
+  text-decoration: none;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.sip-home-btn:hover { opacity: 0.85; }
