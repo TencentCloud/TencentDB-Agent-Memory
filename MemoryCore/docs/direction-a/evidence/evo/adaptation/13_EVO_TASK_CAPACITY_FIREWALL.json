@@ -1,0 +1,130 @@
+{
+  "schemaVersion": "direction-a.evo-task-capacity-firewall.v1",
+  "frozenAt": "2026-09-11T00:00:00.000+08:00",
+  "status": "PASS",
+  "totalOfficialTasks": 26,
+  "roleRows": [
+    {
+      "taskId": "theme_d1_w11_code_build_automation_scripting",
+      "role": "Q6_SEALED"
+    },
+    {
+      "taskId": "theme_d1_w1_code_build_greenfield_implementation",
+      "role": "Q6_SEALED"
+    },
+    {
+      "taskId": "theme_d1_w2_code_build_brownfield_modification",
+      "role": "Q6_SEALED"
+    },
+    {
+      "taskId": "theme_d1_w5_code_build_integration_e2e_wiring",
+      "role": "Q6_SEALED"
+    },
+    {
+      "taskId": "theme_d1_w9_code_build_reproducibility_verification",
+      "role": "Q6_SEALED"
+    },
+    {
+      "taskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+      "role": "EVO_TRAIN_EXISTING"
+    },
+    {
+      "taskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+      "role": "EVO_TRAIN_EXISTING"
+    },
+    {
+      "taskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+      "role": "EVO_TRAIN_EXISTING"
+    },
+    {
+      "taskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "role": "EVO_TRAIN_EXISTING"
+    },
+    {
+      "taskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "role": "EVO_TRAIN_EXISTING"
+    },
+    {
+      "taskId": "theme_d9_w11_security_automation_scripting",
+      "role": "EVO_TRAIN_EXISTING"
+    },
+    {
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "role": "EVO_TRAIN_EXPANSION"
+    },
+    {
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "role": "EVO_TRAIN_EXPANSION"
+    },
+    {
+      "taskId": "theme_d5_w1_data_engineering_greenfield_implementation",
+      "role": "FRESH_CAL_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w9_ml_ai_mlops_reproducibility_verification",
+      "role": "FRESH_CAL_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w5_ml_ai_mlops_integration_e2e_wiring",
+      "role": "FRESH_CAL_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w12_ml_ai_mlops_explanation_reporting",
+      "role": "FRESH_CAL_RESERVED"
+    },
+    {
+      "taskId": "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+      "role": "FRESH_CAL_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w11_ml_ai_mlops_automation_scripting",
+      "role": "SEALED_TEST_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w2_ml_ai_mlops_brownfield_modification",
+      "role": "SEALED_TEST_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w10_ml_ai_mlops_forensics_analysis",
+      "role": "SEALED_TEST_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+      "role": "SEALED_TEST_RESERVED"
+    },
+    {
+      "taskId": "theme_d10_w8_ml_ai_mlops_security_patch_hardening",
+      "role": "SEALED_TEST_RESERVED"
+    },
+    {
+      "taskId": "theme_d11_w2_scientific_numerical_brownfield_modification",
+      "role": "UNASSIGNED_RESERVE"
+    },
+    {
+      "taskId": "theme_d12_w1_automation_productivity_greenfield_implementation",
+      "role": "UNASSIGNED_RESERVE"
+    },
+    {
+      "taskId": "theme_d5_w5_data_engineering_integration_e2e_wiring",
+      "role": "UNASSIGNED_RESERVE"
+    }
+  ],
+  "counts": {
+    "q6": 5,
+    "existingTrain": 6,
+    "expansionTrain": 2,
+    "freshCalReserved": 5,
+    "sealedTestReserved": 5,
+    "reserve": 3
+  },
+  "overlapChecks": {
+    "q6Train": 0,
+    "q6Cal": 0,
+    "q6Test": 0,
+    "trainCal": 0,
+    "trainTest": 0,
+    "calTest": 0
+  },
+  "note": "CAL/TEST identities are capacity reservations only; causal Y remains unopened and future acquisition still needs a fresh freeze and authorization.",
+  "contentHash": "c4c4cdf7736bfdb155e783843e85307682fb2e6fb97daf770adeca1f468a2513"
+}

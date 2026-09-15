@@ -1,0 +1,4289 @@
+{
+  "schemaVersion": "direction-a.mem2-cal-a1.fixed4-reference-manifest.v1",
+  "sampleHash": "45206e817ceb52666651cb9108cbeaa4bc0964ecd3f57624cd9154094dd276c7",
+  "mergeRule": "ORIGINAL_VALID_UNION_CERTIFIED_RECOVERY_VALID_BY_ORIGINAL_PAIR_INDEX_FIRST_FOUR_COMPLETE",
+  "references": [
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_4728659df712c801f47c",
+      "statisticalClusterId": "mc_4728659df712c801f47c",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_4728659df712c801f47c:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "attempt-4-5a02fb277e3089bb",
+          "removeAttemptId": "attempt-8-2137c88ff588cc5d"
+        },
+        {
+          "pairId": "mc_4728659df712c801f47c:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "attempt-15-6d4552605684ef20",
+          "removeAttemptId": "attempt-19-0965857dfbfed8c1"
+        },
+        {
+          "pairId": "mc_4728659df712c801f47c:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "attempt-26-1b7eb77b3d3365c3",
+          "removeAttemptId": "attempt-30-caf72aefde8661a1"
+        },
+        {
+          "pairId": "mc_4728659df712c801f47c:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "attempt-41-8482f941cf924f55",
+          "removeAttemptId": "attempt-37-8d57309e09136e15"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "d997154b8f23aa9ade6044225904eb8e07b432c77b01c3c15eba4caf5d0aa8b7"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_89c4794ff09996748672",
+      "statisticalClusterId": "mc_89c4794ff09996748672",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_89c4794ff09996748672:pair-1",
+          "pairIndex": 1,
+          "difference": 0.8,
+          "fullAttemptId": "attempt-4-fa0e89e45a7e0f83",
+          "removeAttemptId": "attempt-8-c9bbb91cc6a24577"
+        },
+        {
+          "pairId": "mc_89c4794ff09996748672:pair-2",
+          "pairIndex": 2,
+          "difference": 0.8,
+          "fullAttemptId": "attempt-19-836c68a5b279752a",
+          "removeAttemptId": "attempt-15-4161ca1d8a61b87d"
+        },
+        {
+          "pairId": "mc_89c4794ff09996748672:pair-3",
+          "pairIndex": 3,
+          "difference": 0.8,
+          "fullAttemptId": "attempt-26-2cbd54d945e21427",
+          "removeAttemptId": "attempt-30-fd8759a0e799c378"
+        },
+        {
+          "pairId": "mc_89c4794ff09996748672:pair-4",
+          "pairIndex": 4,
+          "difference": 0.8,
+          "fullAttemptId": "attempt-37-0f10d66b106dc316",
+          "removeAttemptId": "attempt-41-ec186cb98f13dc9d"
+        }
+      ],
+      "thetaHatFixed4": 0.8,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "7fbf07a998ad6e6ecb877ec78c1fa8362a3112d9760910f68fc7ba856ef9e244"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_42f0ea359aff10381f5a",
+      "statisticalClusterId": "mc_42f0ea359aff10381f5a",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        5
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_42f0ea359aff10381f5a:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "attempt-4-4b4a51100d7f4208",
+          "removeAttemptId": "attempt-8-88c05ccdf0b933ed"
+        },
+        {
+          "pairId": "mc_42f0ea359aff10381f5a:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "attempt-19-c6b231dde8b19faa",
+          "removeAttemptId": "attempt-15-a990b364dd5a0928"
+        },
+        {
+          "pairId": "mc_42f0ea359aff10381f5a:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "attempt-26-e3686e5d7e50add9",
+          "removeAttemptId": "attempt-30-dd72a4e6ba349eb2"
+        },
+        {
+          "pairId": "mc_42f0ea359aff10381f5a:pair-5",
+          "pairIndex": 5,
+          "difference": 1,
+          "fullAttemptId": "recovery-f5ec622efbc1ecaaac2073bc",
+          "removeAttemptId": "recovery-a0ed7b83a86c27639a76ad60"
+        }
+      ],
+      "thetaHatFixed4": 0.75,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 2,
+        "byArm": {
+          "FULL": 1,
+          "REMOVE": 1
+        },
+        "byReason": {
+          "PROVIDER_NETWORK_INFRASTRUCTURE_FAILURE": 2
+        }
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "640937f987c417a016615531f3db9be178f40c138ce4b99255b2eec2880f2a14"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_c50852363c2c055e72c8",
+      "statisticalClusterId": "mc_c50852363c2c055e72c8",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_c50852363c2c055e72c8:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-f177e83a8c04cae18fc0e6dd",
+          "removeAttemptId": "recovery-ece9cc8a5f0bd8aa60ee8fdf"
+        },
+        {
+          "pairId": "mc_c50852363c2c055e72c8:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-8e8784bda4911645829401f8",
+          "removeAttemptId": "recovery-5434b4d466e6526c9a5d927a"
+        },
+        {
+          "pairId": "mc_c50852363c2c055e72c8:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-52d04df6423562293a22f650",
+          "removeAttemptId": "recovery-8c01aaff72e9438c150b1f92"
+        },
+        {
+          "pairId": "mc_c50852363c2c055e72c8:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-e9e407cc2ee30ac2de95c7b2",
+          "removeAttemptId": "recovery-a2918609982dddd6f2c457b4"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "841395fccfa1be622f636d0a8382c6517c6d105aededf134c2b9f1a015afa5ce"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_d89651dbb11056ff368a",
+      "statisticalClusterId": "mc_d89651dbb11056ff368a",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_d89651dbb11056ff368a:pair-1",
+          "pairIndex": 1,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-3f802cae3eb328083d5a9f71",
+          "removeAttemptId": "recovery-0ead6038e88660784333335b"
+        },
+        {
+          "pairId": "mc_d89651dbb11056ff368a:pair-2",
+          "pairIndex": 2,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-a46e9eee83f16d85bfcac572",
+          "removeAttemptId": "recovery-676574572b556067d0a009b8"
+        },
+        {
+          "pairId": "mc_d89651dbb11056ff368a:pair-3",
+          "pairIndex": 3,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-0a33b35ada243a61763e2fbf",
+          "removeAttemptId": "recovery-ee46a6bcfa4a045207e53525"
+        },
+        {
+          "pairId": "mc_d89651dbb11056ff368a:pair-4",
+          "pairIndex": 4,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-015d03a0fc8c8082b13eada0",
+          "removeAttemptId": "recovery-1a42276907f4f3eb54a80588"
+        }
+      ],
+      "thetaHatFixed4": 0.5,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "cbf55d8e057dba0c921b8d14a9c3afd0edaf4d0fc9f9b266b7d1f931fee42d6a"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_d7ed6d6c61de927c7a92",
+      "statisticalClusterId": "mc_d7ed6d6c61de927c7a92",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_d7ed6d6c61de927c7a92:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "attempt-4-9fa28933597ed4e8",
+          "removeAttemptId": "attempt-8-1cbee192629ef159"
+        },
+        {
+          "pairId": "mc_d7ed6d6c61de927c7a92:pair-2",
+          "pairIndex": 2,
+          "difference": 0.6666666666666666,
+          "fullAttemptId": "attempt-15-1257567b9ce8a2e8",
+          "removeAttemptId": "attempt-19-3cc974e0676c3ca6"
+        },
+        {
+          "pairId": "mc_d7ed6d6c61de927c7a92:pair-3",
+          "pairIndex": 3,
+          "difference": 0.6666666666666666,
+          "fullAttemptId": "attempt-30-fb1786b744874291",
+          "removeAttemptId": "attempt-26-52118c80c11a1b9a"
+        },
+        {
+          "pairId": "mc_d7ed6d6c61de927c7a92:pair-4",
+          "pairIndex": 4,
+          "difference": 0.3333333333333333,
+          "fullAttemptId": "attempt-41-3dbd5ea98b3f2c3f",
+          "removeAttemptId": "attempt-37-10571fbcc9b19604"
+        }
+      ],
+      "thetaHatFixed4": 0.6666666666666666,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "746f6017ba4cc87406c740999a85b3ccf0891eadb20709403218da6995999caf"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_8384c4246395c4bedf96",
+      "statisticalClusterId": "mc_8384c4246395c4bedf96",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_8384c4246395c4bedf96:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-e244f788fd42b0b19cfd4a22",
+          "removeAttemptId": "recovery-ce00e24ede50fc6a783a92dc"
+        },
+        {
+          "pairId": "mc_8384c4246395c4bedf96:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-b614d5489da027fb41ece16c",
+          "removeAttemptId": "recovery-574753f60e79795101f9eeea"
+        },
+        {
+          "pairId": "mc_8384c4246395c4bedf96:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-845985d97af33fa50879de1a",
+          "removeAttemptId": "recovery-e714a24b9bb839f1aa09ffb5"
+        },
+        {
+          "pairId": "mc_8384c4246395c4bedf96:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-59c3c27c349b66385a66829e",
+          "removeAttemptId": "recovery-10ec47a6920aa5da3ce71f6d"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "b07d0656221cfa96bc210b5a3380cc3d6e3a76c0ccad1895cf096c46f4ed5f19"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_37774f1a1f804e24a3b8",
+      "statisticalClusterId": "mc_37774f1a1f804e24a3b8",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_37774f1a1f804e24a3b8:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-92514a9d2517822b86a72a13",
+          "removeAttemptId": "recovery-62e3fc48a391643ba6825c83"
+        },
+        {
+          "pairId": "mc_37774f1a1f804e24a3b8:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-1588356c3689a341aec345ac",
+          "removeAttemptId": "recovery-e863870eaf30adcadc1ea7ba"
+        },
+        {
+          "pairId": "mc_37774f1a1f804e24a3b8:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-911d0dd113d9c01fda5002de",
+          "removeAttemptId": "recovery-d560159e372eca47b6b3f21b"
+        },
+        {
+          "pairId": "mc_37774f1a1f804e24a3b8:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-5c18c1cc5c2f38361aa5da94",
+          "removeAttemptId": "recovery-853148e837aea037ea8165d5"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "b7eb1eaf0e048b8d82fdc07d66661a486f9cba4e4ea224d64879c7e119248429"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_aead7a3d186040e6a89b",
+      "statisticalClusterId": "mc_aead7a3d186040e6a89b",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_aead7a3d186040e6a89b:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-0ad9bf88a0e9f0060cd30d42",
+          "removeAttemptId": "recovery-7b5c3d4aab7f31f3863ffb97"
+        },
+        {
+          "pairId": "mc_aead7a3d186040e6a89b:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-d92affaf153142197445f088",
+          "removeAttemptId": "recovery-5f4414808c875a520abdd202"
+        },
+        {
+          "pairId": "mc_aead7a3d186040e6a89b:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-f4038a8bdd409dbb03450c77",
+          "removeAttemptId": "recovery-25792d159ed219ae3682bb8c"
+        },
+        {
+          "pairId": "mc_aead7a3d186040e6a89b:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-56c77b6d867687822f9b37a4",
+          "removeAttemptId": "recovery-ecc46071da33fcadfad5607b"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "e054512bbd678f40cb1127d11a57d1736a5a789d0fc5876460895bfbe5613e63"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_9e144118b283256b93ab",
+      "statisticalClusterId": "mc_9e144118b283256b93ab",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_9e144118b283256b93ab:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-b5590640b242b8ffd63c94ac",
+          "removeAttemptId": "recovery-550155258334e799ff017c22"
+        },
+        {
+          "pairId": "mc_9e144118b283256b93ab:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-d13af5f53f012e10763753a4",
+          "removeAttemptId": "recovery-a731a0b93401097a56284dd8"
+        },
+        {
+          "pairId": "mc_9e144118b283256b93ab:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-5e5eda1c38143038c9ac231f",
+          "removeAttemptId": "recovery-4442de63125e7beff687e1bc"
+        },
+        {
+          "pairId": "mc_9e144118b283256b93ab:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-e26791bf4e8ead1b1aa42558",
+          "removeAttemptId": "recovery-3d2c76c09e404dacd3b95e16"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "4d54eb612f73bdce836ff8aa62aa1e79fab403e54caa220bb981eac4365805cd"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_c8476b694ccf36893959",
+      "statisticalClusterId": "mc_c8476b694ccf36893959",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_c8476b694ccf36893959:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-3a76f8954543ebfb37b2ead7",
+          "removeAttemptId": "recovery-f3d885379951bb748fbdb742"
+        },
+        {
+          "pairId": "mc_c8476b694ccf36893959:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-067f0fbb2e6629048b3e5182",
+          "removeAttemptId": "recovery-e7c11a137019624cb944d6b5"
+        },
+        {
+          "pairId": "mc_c8476b694ccf36893959:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-315251f0f39b08da46b438fa",
+          "removeAttemptId": "recovery-6f4dd427a2359a4248472899"
+        },
+        {
+          "pairId": "mc_c8476b694ccf36893959:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-027f0a2a865f8fcb04656be5",
+          "removeAttemptId": "recovery-4a963861c55707a461d69fff"
+        }
+      ],
+      "thetaHatFixed4": 0.75,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "26dea14b533795c6c585d83825f4909ae34839d652f75b4c149f62616e8e2948"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_234175344d9d27975462",
+      "statisticalClusterId": "mc_234175344d9d27975462",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_234175344d9d27975462:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-a13966695df13c8843347045",
+          "removeAttemptId": "recovery-4b3ca1795c3bab1354c99531"
+        },
+        {
+          "pairId": "mc_234175344d9d27975462:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-d28271bd2d0afe29a75daa00",
+          "removeAttemptId": "recovery-bf99d1fe48f25cc4b6281590"
+        },
+        {
+          "pairId": "mc_234175344d9d27975462:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-0fd14ff5bac40c0fad4db8d2",
+          "removeAttemptId": "recovery-6d08cfc7bb1c9d7447864ae9"
+        },
+        {
+          "pairId": "mc_234175344d9d27975462:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-c64c384a671a9d956bf88a84",
+          "removeAttemptId": "recovery-2a46986eac43d8cd7ba4ce74"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "4e016fff6ab7991d34f1711e7cff357d64ecc741f9901fb40c57353d038296e7"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_a110bdcc62f3e63db93e",
+      "statisticalClusterId": "mc_a110bdcc62f3e63db93e",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_a110bdcc62f3e63db93e:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-613b970a6f03eba035359c15",
+          "removeAttemptId": "recovery-5bcdf8d635840aa9c0b89b83"
+        },
+        {
+          "pairId": "mc_a110bdcc62f3e63db93e:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-b9dc4f497a0522555d507f68",
+          "removeAttemptId": "recovery-8fec8264b11928b207d2d8d4"
+        },
+        {
+          "pairId": "mc_a110bdcc62f3e63db93e:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-2fb02c18458fd13575bb3661",
+          "removeAttemptId": "recovery-0b71ea20750221585edb4b67"
+        },
+        {
+          "pairId": "mc_a110bdcc62f3e63db93e:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-074d8ec57a7809205f4c87b0",
+          "removeAttemptId": "recovery-1eb701a701759370b82c17be"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "afe42e25468dedfbedc5fbeb4871883aa1dc34e16375f2068ecf77c673b70f5c"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_a05d2fca505d1768845c",
+      "statisticalClusterId": "mc_a05d2fca505d1768845c",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_a05d2fca505d1768845c:pair-1",
+          "pairIndex": 1,
+          "difference": -0.3333333333333333,
+          "fullAttemptId": "attempt-4-ad2f6ea657db91c2",
+          "removeAttemptId": "attempt-8-362984f1cfaf8988"
+        },
+        {
+          "pairId": "mc_a05d2fca505d1768845c:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "attempt-19-04b1025d48d86e2c",
+          "removeAttemptId": "attempt-15-7a03870415176015"
+        },
+        {
+          "pairId": "mc_a05d2fca505d1768845c:pair-3",
+          "pairIndex": 3,
+          "difference": 0.3333333333333333,
+          "fullAttemptId": "attempt-30-67e31e87ef914b29",
+          "removeAttemptId": "attempt-26-44d999bac99f882d"
+        },
+        {
+          "pairId": "mc_a05d2fca505d1768845c:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "attempt-37-8edc50f358eb81ef",
+          "removeAttemptId": "attempt-41-a034fa45207cf9cf"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "e2e6a8950304dbb99f486487ad5a9f7e1ad2c1de1ba347e0f040435902d96c2a"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_2194a8f31f470603f533",
+      "statisticalClusterId": "mc_2194a8f31f470603f533",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_2194a8f31f470603f533:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-f4cbeaeb329a305c02fdd5f8",
+          "removeAttemptId": "recovery-9d3fc5abc0c7525915636817"
+        },
+        {
+          "pairId": "mc_2194a8f31f470603f533:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-9f30390f65d34c3bfc807f70",
+          "removeAttemptId": "recovery-5dc2ed34cf1c38fc2243678d"
+        },
+        {
+          "pairId": "mc_2194a8f31f470603f533:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-afdacdd48864a01a3bd5ae11",
+          "removeAttemptId": "recovery-f8422f96f06e4831c5b118e9"
+        },
+        {
+          "pairId": "mc_2194a8f31f470603f533:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-7398277a045ea493616eb368",
+          "removeAttemptId": "recovery-7a9f09a41bda6cf78456b647"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "f788bb17984a912f61503685e560dedc97f463c50853894f37067889a4bdbc33"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_dc27840fe83ac3afa132",
+      "statisticalClusterId": "mc_dc27840fe83ac3afa132",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        3,
+        4,
+        5
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_dc27840fe83ac3afa132:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-0cc71f0cfba3db097683a914",
+          "removeAttemptId": "recovery-1a906410c3ed93985ad8f882"
+        },
+        {
+          "pairId": "mc_dc27840fe83ac3afa132:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "attempt-20-a194c47583d41062",
+          "removeAttemptId": "attempt-16-acdd3dfb6df0c178"
+        },
+        {
+          "pairId": "mc_dc27840fe83ac3afa132:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "attempt-27-7bcdc93a47229f9c",
+          "removeAttemptId": "attempt-31-4368d5893db67225"
+        },
+        {
+          "pairId": "mc_dc27840fe83ac3afa132:pair-5",
+          "pairIndex": 5,
+          "difference": 1,
+          "fullAttemptId": "attempt-42-4c8611fb3d824bef",
+          "removeAttemptId": "attempt-38-fc2d33fa1c7999eb"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 2,
+        "byArm": {
+          "FULL": 1,
+          "REMOVE": 1
+        },
+        "byReason": {
+          "PROVIDER_NETWORK_INFRASTRUCTURE_FAILURE": 2
+        }
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "4bd323b2e90637422d2a9b6f548d2288bf17142d914bc3be000491b595e31faa"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_1f4d1e2cce63c5eefe8c",
+      "statisticalClusterId": "mc_1f4d1e2cce63c5eefe8c",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_1f4d1e2cce63c5eefe8c:pair-1",
+          "pairIndex": 1,
+          "difference": 0.5,
+          "fullAttemptId": "attempt-4-35a2de96a4920d56",
+          "removeAttemptId": "attempt-8-f3703243a2dc8a2d"
+        },
+        {
+          "pairId": "mc_1f4d1e2cce63c5eefe8c:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "attempt-15-be200771a4e5ca37",
+          "removeAttemptId": "attempt-19-db921246412988a5"
+        },
+        {
+          "pairId": "mc_1f4d1e2cce63c5eefe8c:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "attempt-30-6e454e382fb4b1a0",
+          "removeAttemptId": "attempt-26-d6e626df852bf35c"
+        },
+        {
+          "pairId": "mc_1f4d1e2cce63c5eefe8c:pair-4",
+          "pairIndex": 4,
+          "difference": 0.5,
+          "fullAttemptId": "attempt-37-dbf6c409cbe795f1",
+          "removeAttemptId": "attempt-41-40bc7eddd9215ff1"
+        }
+      ],
+      "thetaHatFixed4": 0.25,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "3698104e318c0540323265d9fb7384243d6178e1f351032ae23c305be4854fe2"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_0e052ee5c4db296b0498",
+      "statisticalClusterId": "mc_0e052ee5c4db296b0498",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_0e052ee5c4db296b0498:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "attempt-4-8e11da841b58b5b2",
+          "removeAttemptId": "attempt-8-41c895a6bcc393a3"
+        },
+        {
+          "pairId": "mc_0e052ee5c4db296b0498:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "attempt-19-67cfe05fc4056fe8",
+          "removeAttemptId": "attempt-15-7f4cfb1e699bd4c1"
+        },
+        {
+          "pairId": "mc_0e052ee5c4db296b0498:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "attempt-30-1a95e104c08f03fa",
+          "removeAttemptId": "attempt-26-628f8a66ec44023c"
+        },
+        {
+          "pairId": "mc_0e052ee5c4db296b0498:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "attempt-41-1a8187fe1a391a38",
+          "removeAttemptId": "attempt-37-8c361e18676f6403"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "c0e0024ed0430efc75ad33add5e6a66599f09006134ae1e0a4ed33412cb12aa6"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_1639803464e7544b5fa5",
+      "statisticalClusterId": "mc_1639803464e7544b5fa5",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_1639803464e7544b5fa5:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-2f11fdef2613902edfd6066b",
+          "removeAttemptId": "recovery-915d2ee693b91b84986ca326"
+        },
+        {
+          "pairId": "mc_1639803464e7544b5fa5:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-fb5f875130e13a60a719ebe2",
+          "removeAttemptId": "recovery-806d801b62efc0e5a241b026"
+        },
+        {
+          "pairId": "mc_1639803464e7544b5fa5:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-f95135ff1e4e087776864758",
+          "removeAttemptId": "recovery-a15952e8fc5f9b3f73b0b134"
+        },
+        {
+          "pairId": "mc_1639803464e7544b5fa5:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-bdf0b5b83f78d6141bdbd7ee",
+          "removeAttemptId": "recovery-d281b5fa580df77a1ac92cc3"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 1,
+        "byReason": {
+          "MALFORMED_OR_SCHEMA_INVALID_ACTION": 1
+        }
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "b1722447fc056c8abf3a8122e117513288565babb47d174f6dcffd330de354e4"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_16dd1b55160aef28a0ee",
+      "statisticalClusterId": "mc_16dd1b55160aef28a0ee",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_16dd1b55160aef28a0ee:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-88a2e0b1d1f6fc7dd7ab4881",
+          "removeAttemptId": "recovery-a3abb410ac74e21263e49901"
+        },
+        {
+          "pairId": "mc_16dd1b55160aef28a0ee:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-5f82eb15e23174d85a79ca67",
+          "removeAttemptId": "recovery-e2f8a1f395e8b6a027823d39"
+        },
+        {
+          "pairId": "mc_16dd1b55160aef28a0ee:pair-3",
+          "pairIndex": 3,
+          "difference": -0.5,
+          "fullAttemptId": "recovery-49721801afab1053041c98c5",
+          "removeAttemptId": "recovery-42f7e89c5a8bf1b68edfffeb"
+        },
+        {
+          "pairId": "mc_16dd1b55160aef28a0ee:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-8d65d19cd57ee582a13cbbc7",
+          "removeAttemptId": "recovery-df22a173bc39aff84620db69"
+        }
+      ],
+      "thetaHatFixed4": -0.125,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "a9718907f9781ded477974a5c47fbd734e2169a4b5275229a3b53128e0428c24"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_82cdbb6cf15889dbb273",
+      "statisticalClusterId": "mc_82cdbb6cf15889dbb273",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_82cdbb6cf15889dbb273:pair-1",
+          "pairIndex": 1,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-69797c31486c113f3c836e05",
+          "removeAttemptId": "recovery-37d55739be5c07ad03f10626"
+        },
+        {
+          "pairId": "mc_82cdbb6cf15889dbb273:pair-2",
+          "pairIndex": 2,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-afbdfd941482e441ad4e1c78",
+          "removeAttemptId": "recovery-17a59d5c6a1a8f5af78fb071"
+        },
+        {
+          "pairId": "mc_82cdbb6cf15889dbb273:pair-3",
+          "pairIndex": 3,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-5c1b56cc0a1256f2fb1e2f13",
+          "removeAttemptId": "recovery-a84f8b41248a97ab1fc51538"
+        },
+        {
+          "pairId": "mc_82cdbb6cf15889dbb273:pair-4",
+          "pairIndex": 4,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-059f1f419693f54ff68aaba6",
+          "removeAttemptId": "recovery-934052f74a3f64f502de06a6"
+        }
+      ],
+      "thetaHatFixed4": 0.5,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "d856d8b67f1e18079a52370bba12566144d38cf15ac1059043d79a458067a0e9"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_aee5c4b7baacfa91c617",
+      "statisticalClusterId": "mc_aee5c4b7baacfa91c617",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_aee5c4b7baacfa91c617:pair-1",
+          "pairIndex": 1,
+          "difference": 0.6666666666666666,
+          "fullAttemptId": "attempt-4-c05b90202c031e09",
+          "removeAttemptId": "attempt-8-60c5d28d5d84f122"
+        },
+        {
+          "pairId": "mc_aee5c4b7baacfa91c617:pair-2",
+          "pairIndex": 2,
+          "difference": 0.6666666666666666,
+          "fullAttemptId": "attempt-15-47b90c5c55c77b4f",
+          "removeAttemptId": "attempt-19-5c6146bb5db7bd98"
+        },
+        {
+          "pairId": "mc_aee5c4b7baacfa91c617:pair-3",
+          "pairIndex": 3,
+          "difference": 0.3333333333333333,
+          "fullAttemptId": "attempt-30-50d8a950d7437166",
+          "removeAttemptId": "attempt-26-5cb7a47d8654b55f"
+        },
+        {
+          "pairId": "mc_aee5c4b7baacfa91c617:pair-4",
+          "pairIndex": 4,
+          "difference": 0.6666666666666666,
+          "fullAttemptId": "attempt-37-7fe2c0a6a26b1688",
+          "removeAttemptId": "attempt-41-073e1c5a5b03d91f"
+        }
+      ],
+      "thetaHatFixed4": 0.5833333333333333,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "ac89de8b681098df2d8c1dbb72f063dd734dd471ba27214d45309828bef25118"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_bcded6432072580cf952",
+      "statisticalClusterId": "mc_bcded6432072580cf952",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_bcded6432072580cf952:pair-1",
+          "pairIndex": 1,
+          "difference": 0.5,
+          "fullAttemptId": "recovery-0ac48fa1052436c92c2e64f3",
+          "removeAttemptId": "recovery-b5b224674cb7e0c56521aebc"
+        },
+        {
+          "pairId": "mc_bcded6432072580cf952:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-6cc2afb49471d06f508cba5d",
+          "removeAttemptId": "recovery-8a15110e1517ff6527e31138"
+        },
+        {
+          "pairId": "mc_bcded6432072580cf952:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-1f90278b1445f9d386d9dafd",
+          "removeAttemptId": "recovery-74e771c83a087a31ab880cf3"
+        },
+        {
+          "pairId": "mc_bcded6432072580cf952:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-7367abc200efafcf49303ff7",
+          "removeAttemptId": "recovery-d97c32c9ecbd0c09fa2158a8"
+        }
+      ],
+      "thetaHatFixed4": 0.875,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "7bb7b1f925403acd721627a0ce5f4af2efa0b8e829aeb654f045d52b0d57ed16"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_3e25e619a9bf63aa7cb2",
+      "statisticalClusterId": "mc_3e25e619a9bf63aa7cb2",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_3e25e619a9bf63aa7cb2:pair-1",
+          "pairIndex": 1,
+          "difference": 0.5,
+          "fullAttemptId": "attempt-8-d589d19ae3f742d4",
+          "removeAttemptId": "attempt-4-b46e34bfe285fcc9"
+        },
+        {
+          "pairId": "mc_3e25e619a9bf63aa7cb2:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "attempt-19-dc37e01f56ccbc40",
+          "removeAttemptId": "attempt-15-2d1991d7208ad893"
+        },
+        {
+          "pairId": "mc_3e25e619a9bf63aa7cb2:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "attempt-26-df993551ef634116",
+          "removeAttemptId": "attempt-30-39f39e7fd1654fed"
+        },
+        {
+          "pairId": "mc_3e25e619a9bf63aa7cb2:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "attempt-37-e005a69b44330c69",
+          "removeAttemptId": "attempt-41-63c9e81ef87ae54c"
+        }
+      ],
+      "thetaHatFixed4": 0.875,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "659a53bc8d36f26556198dabf34e1a2a099c7a96c95948d2afcbe23f4c8d1d33"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_1c7cf4ca09acc228263b",
+      "statisticalClusterId": "mc_1c7cf4ca09acc228263b",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_1c7cf4ca09acc228263b:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-4fbb1ad7033ab2a9a24e7d89",
+          "removeAttemptId": "recovery-6b5caf794c674b39a17f18ee"
+        },
+        {
+          "pairId": "mc_1c7cf4ca09acc228263b:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "attempt-12-1b0a8759cf4ef1a0",
+          "removeAttemptId": "recovery-c1b3c4922ce742e589ce1621"
+        },
+        {
+          "pairId": "mc_1c7cf4ca09acc228263b:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "attempt-18-44b8b0bfd49e583f",
+          "removeAttemptId": "attempt-22-80bad98bdefb1f05"
+        },
+        {
+          "pairId": "mc_1c7cf4ca09acc228263b:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "attempt-33-69d34957fdef550b",
+          "removeAttemptId": "attempt-29-103217b6edae30f1"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "e20f7744649ab9cf89a4668c9af51a36f07f8bca059433cbde6e5992c0fd18f3"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_651b331dfaac80a772a6",
+      "statisticalClusterId": "mc_651b331dfaac80a772a6",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_651b331dfaac80a772a6:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "attempt-4-039ab47ab2202286",
+          "removeAttemptId": "attempt-8-d4591f51e8d54b04"
+        },
+        {
+          "pairId": "mc_651b331dfaac80a772a6:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "attempt-19-dc1146b659f6d303",
+          "removeAttemptId": "attempt-15-077e3cd3c4789a8d"
+        },
+        {
+          "pairId": "mc_651b331dfaac80a772a6:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "attempt-30-83446a31152f2e16",
+          "removeAttemptId": "attempt-26-2fd7cdc9e4dd4371"
+        },
+        {
+          "pairId": "mc_651b331dfaac80a772a6:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "attempt-37-cdffe97866be9d2c",
+          "removeAttemptId": "attempt-41-703b5611f5bf0377"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "5e817bdc2d6dc5328802644752bf1cc3a9ae50468b1e900fa62dc9cb144060cc"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_d21ca09035eb4655aa36",
+      "statisticalClusterId": "mc_d21ca09035eb4655aa36",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_d21ca09035eb4655aa36:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "attempt-4-a1e0fd1a95a8043a",
+          "removeAttemptId": "attempt-8-e08638b10ac2dfa6"
+        },
+        {
+          "pairId": "mc_d21ca09035eb4655aa36:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "attempt-19-f21232b1b849a863",
+          "removeAttemptId": "attempt-15-15e52d13b732ede6"
+        },
+        {
+          "pairId": "mc_d21ca09035eb4655aa36:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "attempt-30-9e014df4f1d7b212",
+          "removeAttemptId": "attempt-26-15bbd247d17ad611"
+        },
+        {
+          "pairId": "mc_d21ca09035eb4655aa36:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "attempt-37-d286d008f32c312e",
+          "removeAttemptId": "attempt-41-bc2b11b6dbd43af7"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "a89db6b252fd1c787924c4d45ed7c9409ef992373c286f0a1922fad9a46a68bd"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_e140a8cf8fb0093dc793",
+      "statisticalClusterId": "mc_e140a8cf8fb0093dc793",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_e140a8cf8fb0093dc793:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-fac8ba26ac28b6003587eb1c",
+          "removeAttemptId": "recovery-52d3c844b74f13200e4adb83"
+        },
+        {
+          "pairId": "mc_e140a8cf8fb0093dc793:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-8e401dc40f25f44f78b1335f",
+          "removeAttemptId": "recovery-69c8e63901e4514fef9290f9"
+        },
+        {
+          "pairId": "mc_e140a8cf8fb0093dc793:pair-3",
+          "pairIndex": 3,
+          "difference": 1,
+          "fullAttemptId": "recovery-2c3df38f64bc235a5181cd12",
+          "removeAttemptId": "recovery-3d702aa98f509f445c68c491"
+        },
+        {
+          "pairId": "mc_e140a8cf8fb0093dc793:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-b81254b96ad27ec890a9b03f",
+          "removeAttemptId": "recovery-0b4460bd52e21ef9239579b4"
+        }
+      ],
+      "thetaHatFixed4": 1,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "61ec7c85f90641ed7cd0ea6d6c63ff82046faec8181d91a3a47b6facdf97d09d"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_c687682f4b4a9b67193f",
+      "statisticalClusterId": "mc_c687682f4b4a9b67193f",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_c687682f4b4a9b67193f:pair-1",
+          "pairIndex": 1,
+          "difference": 1,
+          "fullAttemptId": "recovery-6722667098bc340f073c9263",
+          "removeAttemptId": "recovery-323c15275fa4048d4c19ae83"
+        },
+        {
+          "pairId": "mc_c687682f4b4a9b67193f:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-06f5456a25c5f790183c2c8d",
+          "removeAttemptId": "recovery-6a27a9ac66a47b151d2c1bc1"
+        },
+        {
+          "pairId": "mc_c687682f4b4a9b67193f:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-e52c7b1bd61151e9742a281c",
+          "removeAttemptId": "recovery-3b39dbe1cfa1ae2a52067a9f"
+        },
+        {
+          "pairId": "mc_c687682f4b4a9b67193f:pair-4",
+          "pairIndex": 4,
+          "difference": 1,
+          "fullAttemptId": "recovery-4e0780ec7bc01d023f653fd2",
+          "removeAttemptId": "recovery-23fcf0d40a8ed75bba5bedd4"
+        }
+      ],
+      "thetaHatFixed4": 0.5,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "311c25b49ff09f002e293f3d36268a93836f0c8663865cf420047057187774e0"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_15b6cc8223a193540696",
+      "statisticalClusterId": "mc_15b6cc8223a193540696",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_15b6cc8223a193540696:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "attempt-4-51938df7ee5a2f5a",
+          "removeAttemptId": "attempt-8-9530bfe186942e2a"
+        },
+        {
+          "pairId": "mc_15b6cc8223a193540696:pair-2",
+          "pairIndex": 2,
+          "difference": -0.28571428571428575,
+          "fullAttemptId": "attempt-19-3ba1f3f39cd3e01f",
+          "removeAttemptId": "attempt-15-1fbff537317d4a39"
+        },
+        {
+          "pairId": "mc_15b6cc8223a193540696:pair-3",
+          "pairIndex": 3,
+          "difference": 0.21428571428571425,
+          "fullAttemptId": "attempt-26-36cfcd093d78d579",
+          "removeAttemptId": "attempt-30-c252af9c8e3d14dd"
+        },
+        {
+          "pairId": "mc_15b6cc8223a193540696:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "attempt-41-a8c8515a05cd1417",
+          "removeAttemptId": "attempt-37-2a43a844e375c000"
+        }
+      ],
+      "thetaHatFixed4": -0.017857142857142877,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "242af63d680fc325c952a1c3e0048d2f00aa1e4efed619e7af14d7a74944ad13"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_5dd1ef7c54a2c90efd96",
+      "statisticalClusterId": "mc_5dd1ef7c54a2c90efd96",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_5dd1ef7c54a2c90efd96:pair-1",
+          "pairIndex": 1,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-4-f85710b18c9a19dc",
+          "removeAttemptId": "attempt-8-b4f8ec8ebd7a9d87"
+        },
+        {
+          "pairId": "mc_5dd1ef7c54a2c90efd96:pair-2",
+          "pairIndex": 2,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-19-6623f9113618d1e9",
+          "removeAttemptId": "attempt-15-816083be52167d09"
+        },
+        {
+          "pairId": "mc_5dd1ef7c54a2c90efd96:pair-3",
+          "pairIndex": 3,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-26-563b3813e8750dc6",
+          "removeAttemptId": "attempt-30-df3340aac9df8df4"
+        },
+        {
+          "pairId": "mc_5dd1ef7c54a2c90efd96:pair-4",
+          "pairIndex": 4,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-37-7aaadb481eb86b15",
+          "removeAttemptId": "attempt-41-4abbe1aa36a8f5f4"
+        }
+      ],
+      "thetaHatFixed4": 0.33333333333333337,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "ba37dc1aa110915f2f56257b8717feb88ec69d7fd770749f9b025567d61cd1b4"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_a2fae497d95253015f32",
+      "statisticalClusterId": "mc_a2fae497d95253015f32",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_a2fae497d95253015f32:pair-1",
+          "pairIndex": 1,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-4-3292a6a2e19c5359",
+          "removeAttemptId": "attempt-8-531ed9963fecfbd0"
+        },
+        {
+          "pairId": "mc_a2fae497d95253015f32:pair-2",
+          "pairIndex": 2,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-15-c8d41ee67f5453c5",
+          "removeAttemptId": "attempt-19-dd83aec9e60ee999"
+        },
+        {
+          "pairId": "mc_a2fae497d95253015f32:pair-3",
+          "pairIndex": 3,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-30-f68820aa0ae01d9e",
+          "removeAttemptId": "attempt-26-4c68a56a9184287a"
+        },
+        {
+          "pairId": "mc_a2fae497d95253015f32:pair-4",
+          "pairIndex": 4,
+          "difference": 0.33333333333333337,
+          "fullAttemptId": "attempt-41-2eecae54e9965fd5",
+          "removeAttemptId": "attempt-37-58c9b10a94f72353"
+        }
+      ],
+      "thetaHatFixed4": 0.33333333333333337,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "9af6b8c349ab243d487f140190267e6842887dd5eea7e31eb4d7a69ce109114a"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_028b400be81dec9f9cf2",
+      "statisticalClusterId": "mc_028b400be81dec9f9cf2",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_028b400be81dec9f9cf2:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-7150a4c21ba8792957218993",
+          "removeAttemptId": "recovery-fd950bbf1ba7e948776541e1"
+        },
+        {
+          "pairId": "mc_028b400be81dec9f9cf2:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-07bbc1cc02d21765634248bc",
+          "removeAttemptId": "recovery-540ef0ac5faf55b5e67337db"
+        },
+        {
+          "pairId": "mc_028b400be81dec9f9cf2:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-299004d12b07a8d21ca87110",
+          "removeAttemptId": "recovery-6d77178e9b9e3167e472f300"
+        },
+        {
+          "pairId": "mc_028b400be81dec9f9cf2:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-5e6a1d12d4aab82b8c7eea3c",
+          "removeAttemptId": "recovery-2576f6bbdc006af8096a0702"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "ab50435f3064f1f340e1f18a77fdafe3b986cc8b32bcfae8c5c3abe980451aff"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_34f8119a98c297099879",
+      "statisticalClusterId": "mc_34f8119a98c297099879",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_34f8119a98c297099879:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-e442b4fd0da5243d8916515d",
+          "removeAttemptId": "recovery-c299a1c5132af0dc3a5f4ca8"
+        },
+        {
+          "pairId": "mc_34f8119a98c297099879:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-2c8f4956e1a39f25030a4463",
+          "removeAttemptId": "recovery-0d13e1e90c2491249495ea74"
+        },
+        {
+          "pairId": "mc_34f8119a98c297099879:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-d7241d2b7a2fabaa0a9021ba",
+          "removeAttemptId": "recovery-92edc0c28f5e5af1db1d1abb"
+        },
+        {
+          "pairId": "mc_34f8119a98c297099879:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-5f09fe5f670094ab89de1358",
+          "removeAttemptId": "recovery-521a569cb3ae8ddb66e1a041"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "de3a4dd9965fce0b29a16893e3cd4d7dfdef3b31c40d7dc0f9ddfd331eec3271"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_106aed5050b8232d6cd3",
+      "statisticalClusterId": "mc_106aed5050b8232d6cd3",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_106aed5050b8232d6cd3:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-60c697e1e211f58830a0fd00",
+          "removeAttemptId": "recovery-2ff88c0608649f65c8359fd4"
+        },
+        {
+          "pairId": "mc_106aed5050b8232d6cd3:pair-2",
+          "pairIndex": 2,
+          "difference": 0,
+          "fullAttemptId": "recovery-b20641da539a7602c95aa094",
+          "removeAttemptId": "recovery-09a06b28149c3feff6de4f53"
+        },
+        {
+          "pairId": "mc_106aed5050b8232d6cd3:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-f486c98c0e78c89959b90bcd",
+          "removeAttemptId": "recovery-076b04294c3fe5ee232bfe4d"
+        },
+        {
+          "pairId": "mc_106aed5050b8232d6cd3:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-79ed1bd530cc6315eaa17fa2",
+          "removeAttemptId": "recovery-f292236f4d93ae1d453b7229"
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "ddd4f0e2c0deb777a94be8b472dc9a17827710f71795ed15ba7d2ff74f17c49a"
+    },
+    {
+      "schemaVersion": "direction-a.mem2-continuous-reference.v1",
+      "decisionIds": [
+        "CONTINUOUS-CAUSAL-REFERENCE-V1.1-2026-09-09",
+        "MEM2-TECHNICAL-INVALID-ANTI-CENSORING-V1-2026-09-09"
+      ],
+      "causalGroupId": "mc_551840e90c558411745c",
+      "statisticalClusterId": "mc_551840e90c558411745c",
+      "originalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "firstFourValidPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "pairEffects": [
+        {
+          "pairId": "mc_551840e90c558411745c:pair-1",
+          "pairIndex": 1,
+          "difference": 0,
+          "fullAttemptId": "recovery-d75b88415bd5417ef13bbf8d",
+          "removeAttemptId": "recovery-0d2e6334ead0f5f592a94bf0"
+        },
+        {
+          "pairId": "mc_551840e90c558411745c:pair-2",
+          "pairIndex": 2,
+          "difference": 1,
+          "fullAttemptId": "recovery-b03257ac76229ff1ca6cef76",
+          "removeAttemptId": "recovery-defdcc1c2341de4093397b48"
+        },
+        {
+          "pairId": "mc_551840e90c558411745c:pair-3",
+          "pairIndex": 3,
+          "difference": 0,
+          "fullAttemptId": "recovery-35ce7a657f5d51d04e96d10b",
+          "removeAttemptId": "recovery-6b4aebcde9fb7e6d86076e14"
+        },
+        {
+          "pairId": "mc_551840e90c558411745c:pair-4",
+          "pairIndex": 4,
+          "difference": 0,
+          "fullAttemptId": "recovery-90b45085b41262970893978a",
+          "removeAttemptId": "recovery-f6f0c1d20b701be13678c809"
+        }
+      ],
+      "thetaHatFixed4": 0.25,
+      "referenceAvailable": true,
+      "unavailableReason": null,
+      "scientificActionFailures": {
+        "count": 0,
+        "byReason": {}
+      },
+      "trueTechnicalInvalids": {
+        "count": 0,
+        "byArm": {
+          "FULL": 0,
+          "REMOVE": 0
+        },
+        "byReason": {}
+      },
+      "groupTrainingWeight": 1,
+      "technicalRetryLimit": 0,
+      "bindings": {
+        "authorityBindingHash": "81fb36c57868b8fd57160a25f5d0871d02fc83a22a90542262c5fe26c445b90e",
+        "protocolHash": "a97605ee8cf68998ddb189ff74f86607b1463e7ff91a8dfa23b7214b00d2f8b6",
+        "profileHash": "8f052c8e4c7f415a650be89cb624753a33fe3965a74dc7932cd7ab2f036de82f",
+        "snapshotHash": "13b4075ba0703431f1ede4c2a1e1d971cc60defba25acabe8438b07e16d549ce",
+        "parserPolicyId": "MEM2_SAME_RAW_DETERMINISTIC_PARSER",
+        "parserVersion": "1.0.0",
+        "verifierHash": "024bad7afbaa4f4c1228b32fcd9634a285095673d2c630464cd323fcaecab3cf"
+      },
+      "contentHash": "979c9e6eb70856cc3be6736f7f07f8d04259541a2076b1a6a265481fc1833c97"
+    }
+  ],
+  "provenance": [
+    {
+      "causalGroupId": "mc_4728659df712c801f47c",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/97731d185acfee92f9d70313d65ff63a3c5499365d20c91f564b5ce7b9e51d82.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/7f5f86628a2ce53477a92aed258f51505fb77eca56a6801732d550b484e6e9db.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/65cfe402cf5f3205e72f058a2ab46be22cb03b86bf8d25c8fec09f95a86b331b.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/4c97d81ec42ca9a942fcecf23bff0ea3d28d5fbc741ecefad2258fd57a18a07d.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/2c110598bf3d78bcd092dd2c527064720f559bf55e35855ad2d778767e081c4f.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/e3e109055414fe69d05180a871ffe7a2aaec8f1bd22bfcd3d1098449c836bea4.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/39bf4392a83672d968c3666575b97dd4351f44fa96c2560a92a4cf4399214aec.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/24f79f1d652c62d4c069b5f1950a0863afb14f74c3278c4055520c7e7206669d.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_89c4794ff09996748672",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/e080164ffd1982f2dada07e2e5aede5de81b00d88fbdf7511f578ac6228fd79d.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f7f731a4bc1c3ce0da3c4540b5113c59cd5ca2948ded8f9f2298850b06c58ca0.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/a0bf40eab439815021ca0c91a6bd9f9e837f9957b8d571c91246ae1422827956.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/fd7c5b5f8177258b99f2af3be918e70cc3cac8326bfdda0567db95c63a69ebf3.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/831f417ec070e17a8573107ab665eeb750ca96fe75e9097cd5a4a26dd3a1cc4e.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/c70fc41fe1d74848ab7e9380f3a0fc5d472b45972893ab3fca6ff7891845c1e2.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/a9945886e58442ee31539f409630aa5acc2bf160a7da9436432535a1832e0fd6.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/13ee203b0228ecb2facc9b6061f5c7052c659229bf1dcfbcbf622c9d7ec6c941.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_42f0ea359aff10381f5a",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 5,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f59faee5e002853280d7479969e81948a722b99e2f2af1b735ace4b30b12a1cb.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/240d39e908304927da2cdc64bbd133899945bcc35052922c2ce8dfc1eab2b87c.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/8db5173ab3bead0267397c0c3ba9fa4cb510c2ac5183e657363fd17daaa31b70.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/8b67d078bb49b6e7a27b100e51b6d1131988521d6339df6a2c5df31deb19a521.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/7091c8e1235a48bc8ad7ffd95b2a126fdf4f47cbb0a98721a7032ab2b40d37a2.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/d5debe0619dba7a8e6e06ce740413b62adf33b40da7fd12fa91dfff8734e82b0.result.json"
+        },
+        {
+          "pairIndex": 5,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/9bae39b83706f19797fbfdff75f146079f2a12ee4253c7729b84a293d22aa534.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/94c2d5de415d0d58a105b3ee2ba8a4b313d2171c6aebd3892d366a76183a8449.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_c50852363c2c055e72c8",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1ea88387fbe77a57a114ccd3d37c10c85976f7e60e5905405d5f32ec320c4594.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/4f3346269780d479e28ec55686777542d4c6d2b8d71635af2e6e77a8ffcacfdf.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/f6c4ead21672a480cc3e3fada66a556a0b40bbae749d3d9317a7f22983341494.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/d36a5083d30252787b913ac5ae40db694ccc64a7a72b793a367e756857168ebb.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/5eafed60c4d5e425d4431b39a3e9f0d899028b67cc06aa7c199b2cd860129c0d.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/3f393fdc4146cda8e6386829b708b46df85d6fad7bbfdc680576dae2c87492f2.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/3be87021bafec6479ad8032eb54130cbb9539c9167d9102023ab899d5079a4de.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/744de0c99347d4925b55b4314f7363d4e4f920361ea7faa8b6f12932fc5aaefd.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_d89651dbb11056ff368a",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1dbd03af9079a070a431a13c07bf4e4c4249cd5924bbaa37deaa9a991ccfc3e0.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a9bc411cd4c9713308a112846cf93ebea9aa5a7ac0909670d954933bce3f93fa.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/87fc48596b69df80f94ce5ebb2475a8258fb88b5251ff93d4390e697641214cf.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/f3e4be913f5e517d62a9a1d5d985b953c8847c3eaabe882d26d34468a6749bd8.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/0298650a94a26e397b043730d9b5fa1d06b290638ef5799b91da8347b9945a67.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/3d551e772da9d969e4e6137c3490b192e43bb8f75dac0b2ed96651a664a34b53.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/5db07903cf44566dd55572927f2faee4e7d315f98fe3a80546048ded2c8f9bf7.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/dcde0c74b0ff3753148acf7f7f18f2c8f2272b2cf6b28c85a4de0bde3886ed18.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_d7ed6d6c61de927c7a92",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f7bcffb18fd10fc76409e6aebf285c6f83fa61567788a3f9fd871d3050dfc332.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/81fb6c28f75b04eb4615bd8e903d848c292be0cf5ba09bfd1f2b17531294a30f.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/e9df36274e8c6eb89347e13006ee2486dd9c2abecda84b27053a76f3ddabb1b8.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/1943b5d03cae1b5a3024d0dfeeab53f7151280afdbebf5686b45fb80cb1564f4.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/bcec8bd46e27367eaa99918564ed1d543aaba7e0eb65db41836ee9d10de1fc84.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/8f43097d0e074cc268789b9f2ef3f696c8fcbca82547271e17e96e6cd5fefb1c.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/4e9983022a22394a92170158588f9afc82efd6d7d9f5783b5d2e3e12704189c0.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/036e818370d42c854bcbfd51a15554ce2a28f2fa3c44257320b831d2fe1bd0f8.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_8384c4246395c4bedf96",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/9d70ced50524b5c982d2597d620967ce9c32b4015d983217890f191c8567006c.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/6c0542670e4cec2cee9739f4f4da69245aa7fcf54f3f1280579aa71fb71c1c92.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/60cc2f5cef4d2bc6881e03264972c8e858c617e3eb322f9c5f1cc7e02720aa17.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/4b4508c15d8b544712ff1aaada6c8de5d9d0d27efc2e7644f117802e8bb10bcb.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/3afc54296c29dbc365f8ea409d36e00460f0c40b9561dee1cd92abcabaebe41f.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1706a7837fafe5b35833284888bc0631816e2be99d50f69ee6ecbc443d50f012.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/b8f5decbf7ea490419b67d0d54c2b007a100cbbbe1ef110b19015fd249f582b1.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a4f6bdf0e1aeb9ebd343f07a4f70b0c42cfe27f061969f42fb2ce4d632dfc5c3.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_37774f1a1f804e24a3b8",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/2d8cd1130b7667c5af759da92fd20c6e533a87d144f2aa0da337ded147f5d8a8.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/b3f8202259ba32be9f6ffd43df5e54e16fc018cefff0665d04a22f164508029d.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/49c14439545a61e8d8565fac6e359ef6d4fae7f7eb09a662dfa1c2038e34ed66.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/8274c57c960c0350aced9366372063b54d8a0248100b4e7769f6755c07db7510.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a1741e706d680494b735b9d52641cc3392aa1290bd83a5ab0928ac7b4d3e7ded.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/2a502f717370afbf5b447503157aa91d00f60a7fa20a54adf7ba9399b9e139af.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/9aaa2242a7e27abb2350b24227b3b3eb6db50d73024a7be752fc9fc6a38c42c2.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/b79dbd1a0699f7a5090737b3ad2de9b3a65bbbe5a7b56a39aaa3e2d5f8642be4.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_aead7a3d186040e6a89b",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/233715d607ffdd8655620817dfdabc3809612d6a3cf0de901fc9e320210e49c1.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/01b2b642a9cc1f96606684615c1d235ebd0640bdaa5a8c95acb66cc13691e5f2.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/622518dad8cd9c135303ef9098089b1b09ebecc2554908260dc847896b12e1ce.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/90feac91b67457455e97ea8a5132a3cf3157649c9c57889b9ca0be2de40dba36.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/53b985ca3c05a52842bf7ff46bb4cbbd1ecc5c371bcfe00e47321e95278da38b.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/cf26feb930fbe39551bcfddcbe424cc9a9657115db07f8ab30c5f7fae00ee95b.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/3fda18eddbf41a77b55d18b27b6de663b6ce87fd7ff5a7b496e78867643884ca.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/0948200f223af740d1186d12c728686eeb8eee0ffd6f5a10aba2dec929b0908e.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_9e144118b283256b93ab",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/d2fe4a1148f0abec87539694068457ebd08c7e5f1e86b8f3cbaef59a6c0448cb.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/6ad6613ded53c096b4e2a3fc41b4a0e02387c588f41fec54467637fe684cb15e.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/076f1a1d8e2b08e2b926b292c4c0570fe6c70a29b3089a3425c5ed00a1190865.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/353456359b114866f2fb7866bb0591b33f0d8575ff2a247160889e4550a5474e.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/bf454bac54f1a12b20b8437f6d6fb7b5b3933abefae9cde6093d1dd1ff8261af.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/96f44386125eab1b8abbf2244b30eb5396b58887dc333a20a685a2a4e0a8386d.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/e415209bba0ea01eb21e609b76392f1ad281a25e7c0089923c5c2113b519ca20.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/2861e62d8eab8c5ca4701682eaf7717fcdeb87ff38cfa981fa0af3bc88b611ce.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_c8476b694ccf36893959",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/db1e9c6f2c2e8027e1d499850cdb3331c381b9712081f7ac0f5f025c09194eb2.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1316be81e2ea85c37848d396b884ced7ac771bb146fa8bd53d37feba16757525.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/159d1b90721d5d42a539578902ebedf4996e5dd063f511c85a22ff1ac5cba12f.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/4d015794614c275d0e03e55743a3093a0f47cc7f1e98b8f9799ec98e7473ad84.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/41b281113a095b9eea006c433233217f394f37259d7d0d9b3a63e35c029bcea6.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/d6e1120c994eb3a6b84a28be2dd6346424c13bbc0cd0a2fa21de10065354d34a.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/0cdd494967e78ce2485b000fe67bb113baa5bc0cabcf77f838de6a137697b50d.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/961acf928a18e7a52ae09c236170f499b5fb77438b29c284eb1d5003dd212063.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_234175344d9d27975462",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/7865456c23a7be8b76ab3b791467c47cc5c0c98c046c3a13b106dd605d769759.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/3ad5f6b974b4eb70ef57da4aafb1cb62a092f9e0097193916805e659dd14ae8f.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/0c13a208532dfd39a72a82b3806a6df86f1335d0abe6c57dabfc8b5bb66a1880.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/7f5171cc953a13db7f7610589e1a0c68a82826ce9668d03f5f15bd8426034e51.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1f05ca3340b9c3fee3c665157c246cdaa726c314aa417559b6990fb90ef696de.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/4b8cfc0b509e4465e5299f4fdd447f60027e0e9be76a03ba4af07ec0cafb648f.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/9b53e19a65ca3e9c65d30b81f103cbd36e092c6e1cbc21d002da2408b9721891.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/dcd7c4bb690cf323402b32feba14e7a65d2aa7f03e4d0b321cb905e2405248af.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_a110bdcc62f3e63db93e",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1668cd73818a6d0c430dc9cc6e8e436f952006d0348f4de19ba4fec99829ced9.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/0856c468a4045ddd942cd334eee84101f2c1f642b4691d537da123a40a6d9e31.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/74d6a2124095e2d2baecfe7e5e258ae7d4f3ec73bc954af0bcaa424d4a240f01.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/d873fe5c44462d20edab827948dae802d0bd9e85266f59b0a62009c3a734d2fd.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/fb66d01a45bfac6a5fa071f693338e1cbbb80bf424d5f327d50f5989ba3a207c.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/4c5fdc0e4fb1c54b3a08604879384f9b3dd4ae0407471a2aba86c925b8436be4.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/97bbb315cecadd25d8679b72807dc5d8f36ca37c9bfdffa7a4ebccc160fdf627.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/61a07df44ee52e1086d05485c6161affc401d1999d8e2641aab3bb84b14d448c.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_a05d2fca505d1768845c",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/412f60a900edf342342665f991b81f7bfef4f413d62ace4a1beab9f283f0db0b.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/3f5a9061e8b1ba238f736e6f2d6bc45c739772066b81e355be220741648fbd50.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/e81978ffbfb504a4ce3753e71ed00eb58f64f003aa4f037158c4f626ab4260fc.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/37206e9b59ac4b1b4519b165926b7ca19aca4ddf12d43da6e418deeb092ea446.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/1e850026014235a8533b351f26d2f2a56352601b69499ae301582d248388803a.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/93673e8264108a873443212ebc19213098ed70f442c228d97015ab26d08d1c99.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/0f3267dcd86ff9a48cccab28a6089f8fcb60402135d1f9eca5b863eec22f6cfd.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/7c0c44e8a1faf279a565e725bd1ab7fbad3dfbf0591e01d784d6c17cdb88712b.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_2194a8f31f470603f533",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/25cac504caeee8e90f847818202485d8218fe716d435c4b9ef2250b537e5e7e6.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/bd0310eedb6fed9d62b468d642a2b41e0b7bb6d71b35d03fee58b3eafd4af3be.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/4b9e8e7781ecc964542addd8e194dc70f99fdc33cbddf31666d918ff32940faa.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/32a0376b3a3ad0e870a846ef9b5f1496f7b350bf501cc18f471d2b59e26ed5f6.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/f8f91a0fe4348b8c84c57efb9ab4e7a953500e01d4c60789daa5732a663a632f.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/5c87b10792315a1b908b5f6b3394bc98247aef7b60a7dd3d432f774aebff3324.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/052c112ff4be450a97ded2bc828cac44d14158a52cd0c8663afed82b1ca662c2.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/62f19410dddacacc8a69c77588d7058b348589dd778341973d57ec4bffd43b86.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_dc27840fe83ac3afa132",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 5,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/882356e2606addcda171e184904a66e4fe852e595e6abe78f944f9338b9db28a.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1d4d1cd91dad4e8dc18f4b993dbf285ed57ef47b123221515b045e330994c50d.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f3fe1c3d7259961780aa1cbbd13491a3cbaf1703e5649ecab79ef41ca5ef4856.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/405b36243fd9236b49e95bd9ff28935ff5aff9571b9f3b389da93bba13bd9318.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f4139ac22968b7c878d40a5ac88f862681007fd5bd79dfb26a53da74e354a8bd.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/cd947e42cd313d80923164674d0e06e01c86571659b058c1bd7a417ae9a0af49.result.json"
+        },
+        {
+          "pairIndex": 5,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/4615fd32a2719d31fc0d3195d3b3c72060bc78bd7fd7ffb053d81309ab68559c.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/df9a4c5eea5907efc16304cc83e60107777f4eae5f477e7a9a4b5e0238e77761.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_1f4d1e2cce63c5eefe8c",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/96baaf56f8d4f26c9c06ef65416d502ac2e9f9a124da9c16d9f567aeced9dcca.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/d2399e517ed2d8d572a33fe9dc56fc61a69f765bf765fdaacfff3a6da3d4033e.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/6d5feb6f51556355392bd00824318bae74d139d5713946172564718db0c53e26.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/31c99cb60395587585f962618d1fab16ad691d061eb7d5e8bfc5a52d36e4239d.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/ffffc8595d9dc2462d0bf3f16f1f466f9adc89fdb6b6037d7fac1b7fb0866e41.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/64dc91a551e2ea3f2d15a355a7a817df26bd050348b5e3eeb2e7c2e9e25792fe.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/d976461987989bf04477dd65ac80ab8d6621024de1c1cb06d05b39b39c960319.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/1e8dc1daeebef645463e2648e46ff8faa3905720622332ffe1ef9c39490e9146.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_0e052ee5c4db296b0498",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/d83d05f92505a7fd060548e6fa570fad188b3990eb72a5b5e43469a73c6fef20.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/4a3cadc0366138d3ed9ea6ab868aacc511f7f7530ed19d80c3574665f587fc59.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/4d73ea3e64fa9c96b448af7949af0bfb8a317ef1d20ef491e9ebcc1811d2b931.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/778d9534a82368dc6b716b7cb7409411dc9e6a0d83720824ac6c5261babd46fa.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/30f3d76b8a305dd492d44076a7bbc63249c4712a493285caa1836fcfa7142e86.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f446c551a529e620662466e429e452fbdf5d5f8c7e30c64778ca5e59ec33152d.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/3eff0d514a3d068a634bfd897dcb56f9dcdc9fb46989e5017e10a205a4eff481.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/b2793fa18c87d424b43836e1c03b0c18ef996927d8ddfeedeb29ac62d94c6e25.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_1639803464e7544b5fa5",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/58031ca396913f49036b6770dfa3eb4ac1a92918b6c8f735770153148a2524a9.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/7dfdbc68f97c02e6c22f672aa18f93711c9899ca1cebc2d704d09c45ee42a389.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/87a921566b1fbcdebbd6be753c3eff8c702e9851784bd54f157732d2917da653.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1142611972afd571ca4f806e5201e83fa809737bba5854d85b34d5bfa466b6ba.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1a3c0b8338d0ec33637b2c718512df378fc346d268af27e0d9db13df24f25e7e.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/757e337be8896a0d04cb79c3d066c770c13ec3b4595b6e5341a6a78aa1e76d7f.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/f925ebc9f494929e5beba9c115ffe9e196b0fc50ca16989f189a274b6e1dd694.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/bf3a468d4b36ab81e6761faaf622351cc668dcc54c7b9f4f4b9cfe908736c4ed.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_16dd1b55160aef28a0ee",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a3d7ff26160caa43f232c755e3295fcdec72a1d993010ba73da88441c53ba1b4.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/be419c1266cf2e860e06d41891a77cd99f265b8f980dd24403d1935439db649f.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/f770e40e6ee8e27b4407e0775639003a1ad7983a17b691044952b705d0694b12.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/64501f85a90a52a1f185801662c2269de4f2501f8f04c2c25afe22f259322e92.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1962f9ec31bee0ee8e4c3ec9b1cbb7a95860611008f6dfdf64e76a26d0f15ff2.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/5cb0f02afad83bcf51d98e3609e42c0c3fdd69d5ebfc1e9299b15cb68d15efac.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/020b351c64edc90921e01d71d2b3ecce4af8b6706ba96d9c3d108e53dc5a8629.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/eca7a977a27beae44ff1a2bfa77d01aa2022e9dce970f5fd8ff2499d1c28f63a.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_82cdbb6cf15889dbb273",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a5128cfa7e4332a524f39cf1b75de6fbf2a24a56ec22b4bfaf5152acc64268e7.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1e5b274fc66b190908a35021476b1786de3b536decd2149c08f8599cd94d1f1f.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/7b1eb478521ae126f1ffe08a4bb449b3a02fb901d92215e5554efa1ec1acfd90.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/2e0fc62da1a447a87237726aaebdf734e44ca7b44ab65f44a9f2c4c60e75e0cc.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/0f8d29556a3f89de88fab1ebc06213b20f68c9cbe28b2e945e7ef8b4b18a7477.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/b2e8dd55cc8e2d9ce5808781ffa20fec0e0a0528c9230b3066311cc4d27afd90.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/2875ae17d0d6af2c75d969f6f121a0fecf041bde6d2b80634195a57532a0dd9d.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/50f56b29072b51cfd535e553c7b6d83c316e9101d02e585b03159330ea7bdaa6.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_aee5c4b7baacfa91c617",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/c84956f6ff7b519eb0848997587c9ff0f4c4fc35f883427a9ad06160107d4c51.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/1f8bdf5f75018c76f5386cc32dd17ffbff58e8a9fa2b5f10b11c4a08efbb579f.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/e12b40584a37e7b37b54a3a421a39467f83c5e7613cd7772517660fddb7666d1.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/5f8e85ee2865d980a4c3124e9f545c35bef3be4a6ab9fa006d15a4bc64afcbf3.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f647a31f98a1274a61d0efca58cd59f51306d1f6dd373c21f4aacab0700c954b.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/6222d643183524ebf113030d758118b84021e2eba7364264a26a3be7eaa3b957.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/ebef92bebed67bb9b7cf9ef31b56886437af3b74acd8781802d491710e39bc6f.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/a02afe46f2dd6430c0be3f575e95ca7135a85ef9fba479cd457b0b87daca78fe.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_bcded6432072580cf952",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/356d35dec22ba8abe338b3aee6959f542e917ddf1ed1c371783f6fd9dc11d597.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/b65a3ebfeb98c6e11c52ef961be39a663c086bec9b29791217b5c4138644bee1.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1395d52c19efb32194a996e9e16243f7350b25c9ff2f062f49eeb37adfc10fa6.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/d5cf17f6a222ca5cc417a961f26ecaa394755524ec1a0fb8d478b15b6a802b18.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/efe2a9445b6130b450a13c5cdfdc9864cfd481e6dd39c163618a0877d620148c.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/17307aa140e29f22c772b77d28b8ecbfbcf5a40cbfec14b6c820a76691fd05c4.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/bcee8f0adec424a6c796edcb062bc6f40004d4afbf111bc2cd7366346aff7f46.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a017e152ad76f18b6a9751fc02790d4ffdfb3525581b3c3156990a468593e6f6.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_3e25e619a9bf63aa7cb2",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/5ab4a145333d9f0a1397d4408197f38b29285471d4b059c6253ea21c86af5c66.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/55620f5185e9f89f6daeb06527239059856b899b04a2a417dcf904176d965e40.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/0029cd0b93a13df1076ba047c3ab548d5ae0752321e7ee0262df9e484a9d1942.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/b6e5eec1eb980e3b8be22b6daf28e3a6ca7ea8505960c96fc1b8f41675ff46a5.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/abb520782a602d7aebde11940485fe63398633c8a747f74a561e1e577783c588.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/050ba29b0133e3af613c0bbd85b799f9aa90b7977955575642377b914e103434.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/c403bdeefd247965799edf1821346d0154b1d10b083551b83c0c47c5e5eadc26.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/e0ccff699ee66a54d4b1d7c199bc570f48b98f77535651b27ac8a3d0eed3b27f.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_1c7cf4ca09acc228263b",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/38a9c13e6d0ee581df19c7299dec760b717fcd381a11b45c7839878c7d4f0442.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/e6bb768937203f21550dd5eab8b7bab1c7fcd305c253151507da5b72bca1a944.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/1986b84ed3781de32a2b4e5d0bd24cc6f8e2dee801ec689ea98857a5493b0f91.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/dbadce96040debbf7b542e744f5a5b95fed95572947f48303df03b6f7c8cee44.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/5b02f10deae47f33f7371be2af34103c6fd2cdf93f8b8ed83a4459302d5900f5.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/aae8b0832a866d321cbfbceb20ba75ae5f94ba2b7af66824c1cb6d2c245516f5.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/3896a81418f9fa6ca54c09f50368826b0a3a00b48b978aa9c942ecaef83cdecf.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/2e513393443de21183d8aa07941936efb1d3b43a5ab65cdc6e6f2c039d35d1c3.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_651b331dfaac80a772a6",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/4052b92181ca7cf0f763f4abb212c0d8076732aa929e1daeb27d90f2401e73f6.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/ce626f77d6d7e4658ec1d3d432622fa216894da3aa02808c095f578d0eb5c4dd.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/ed0fc06e10055eb53b9bef1d032b9f41ae070bd0007a5fc0201a17b9109e350b.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/3629fde4796cb9acd50396251a7e6b7f3f03f34ca3d8651485d171bfaf374634.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/0b1ad3d35a028d8303eec7c2b2f53c65457a2284719ce32bd1a5202c0a3508b1.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/599e2a4b360e668c5d8e9472b43a222f2627e1175827c255a3eecf9966728ad3.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/5aec5ad554e691b8b076458268b03cc7208b4ae844ffe1af2c5de75ff6619b30.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/37011b7bf54e6727c3161b46ac63e0a3f93fa81f6ba1cdee06c7c0dfc45a9c99.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_d21ca09035eb4655aa36",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/dd26ecb2d18b7eeea2e7b4c5a218b75d010de3b32d9937e12bb46c735f219d45.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/1e2b7aab96d6e4cdd2005fcd3b14bf15693f860e73b3f77440f6ef990489c3d0.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/cffe11c98d987df7d7819915e4e9ce213d6c7e1299b20139899b3d6e6ada97e8.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f576ebb545a5a34e6eb8740ca0bdebd7a23bc93804c7d6876a63fad5e46a6c0b.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/27ec27b0dc1caf6881313b4c6d9ec0fb3c47f44a8f398fc3054a9b58ac619060.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f3387c91aac46245a77f305cb602798a4bde6e7c5c85b9d5942bc755d8b23d8b.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/eb9463d3f7bc05d03e56254e23b7e6383a7db9935133cf8dc79ccd98261d0181.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/b83d2d12f423d89d022294ae40e2ba000991ca6635238996bfab6df63570c820.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_e140a8cf8fb0093dc793",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/2baaf906659e7112451c2bbc91b5da0f100a2a389feb8c477f48f4cb72716a33.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a43b13f7fa5c5afa4ce35926f70d6a76756af51ac91f9d7f9f73bafe781042be.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/7275a000aafb3a187f115151dd5e05280a7468a551543954943c8548051879bd.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/12e288cc05cb580a1f6a477e70626435d0ff0805fb64512a2767ea2f2a07bd4b.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/5b597a5f4181f3a033bf9c05fe524e362ea2ced47f8db3bdfe058204b1dd8aa9.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/8e6fdd85c5156103837944ea15cf19a4b5baafc9b5f6654b299cf1952fc6719d.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/307055a6079b44f19fc917cb793a8bb37701d27299dafee3399a51b959c0c8ae.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/09db3551617a302a3951ff054d2d8b892565abfacd3260268d8cec3c347e62e4.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_c687682f4b4a9b67193f",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/8db76115c69a26b8cc0fe27a3ba300a849ae406ac8ccf8f43e731c5bf05d5ac5.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/fdad78ddf4b6d2d50f9d45340da3cdf9fd6a378132570b93f01b395260113a96.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/5a06bed4e67456e5077bb7877cd3d6ea4285faf8bc595d3265fbe044a25089d9.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/86041832b8b8c1e59c388a1d51e7affc90d96f3e1e3983e7dc6af3fa333b576a.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/d0dbed61244fa642e34fd4acb950b602797860268353f389285e6f37d73f3be6.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a69a79f3e461acf1e5760bd4ecfeb8cbba9efb63fb470c70188ae615849ba3e5.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/665efa6dfda5e3bf7a4308ba82b27bdea543481a0aafd086574fd4f8d1fb26fd.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/cdb1911f656dadbd672decedab6f3b740f45305655223d3c6b19c8964190e255.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_15b6cc8223a193540696",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/39fbbd4b963acdf4220bafd99fc2f6f7d64527895bcd139bb2976a85e82172fd.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/1a8790476c992081dcba2f80f84099f4a50b03ed090ca075faf43b6939d4d809.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/3dfbed8672829709833e3d2a64421dbe6e9d871f98a02598567aaf6e50aaf17b.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/54768ef7d2b526e91fcedeb6e6016e8b012d3655a8a04214479fb01b0c482ea7.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/887f2dc469a565abc5bda37baf4bec40d19a6c3838a193fa6396983ce9877c16.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/81c15f226702a4ede2db97e604b0d424d0737c19b82869269d6e996c2f673a72.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/f68cca61aff64be86fc85f0bab57107baa0c732dca9d2d9585d95c83db8b04ed.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/9d10780f801121a0fa3f19a69276816fc1418563d70e31f9f3ddef3c8fc0653f.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_5dd1ef7c54a2c90efd96",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/413bf7dba65a906f7e37bd0f22d2fd41af73940bf35eb4eb1073b96d370a270a.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/ef487447c5c7817c3fb2141fbcbf450ad856921e9c79f793b55b88fc394de1ce.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/54a8cfb0f2ef94c4a94de6ef1369b6edfde9d18a5bad35fea76533a405c83e54.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/209a924c4caa27e9ac6e2b36b97cc588fcb417d2319ccf3330a253678f550efa.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/b54e4e611e28fa22de32d46a2bcec3d2b981964da36ecad223d0dd0ba82eea6a.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/bed63bfc8b8ef074e7a45881c2bcbb5182bed7f47822db3d9c23585cad661029.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/2d0c126ffa05939d96be1fc6522d4b2914dcecf8ad24d3d95da441c020fed881.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/d74c34a19f0d2c95d8de2d2ccf5d115a39206ae9abe24196281b59251b6f6685.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_a2fae497d95253015f32",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/23c5f6c4dedfdf93fd2e683935dd9a1ed65c560debaad8f7ae7999979ebcd546.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/6fb161a9c0ee738d196be33873f607b6bca05751dad7d7cfcfe5948e77ceca4b.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/2dd5f77ff23df9ed36db82bcd3342aedbef2bbcb7fd17636f3f0c4d60cfd5a26.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/3795b701beab47e0fe3eb2baa67731a70aee2246f0198671f04bbbe36bb309c4.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/c151d15a5ddb632d51c469bd92f2c0434949f82a7c4a56b41c6fc2c346794e10.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/ed1beb9caeb2a4c195f6893dd2a607bc3e706b3c28094703b708d26f0ed7980a.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "ORIGINAL",
+          "remove": "ORIGINAL",
+          "fullResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/3453e254120d7e7a5a90945c9984c24e05c11aa55e254b61e939f33759a11c8c.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_CAL_Causal_Audit_Runtime_v1/calls/4c610c9117881ffc3734e8796d94411e6044d30dbc6b150fde6c8b472e9d0ad9.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_028b400be81dec9f9cf2",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/76b4acbd14d94a7d9a2c2d609d80893a7f0c3219403c003fd4bc894f984642f7.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/10cc695109c3e3807a3f631a1dcb9b2cc5295161c4aa21f2ce7cf4e30ecf6c90.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/620855e34b6f5f399d309b7b037e06bee1d29dd16a72a287e761514e3f6b0c7f.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/c09fea5171c47b2bf1d9fd452cbbf12042ac863adcfab5b3ee65b91bcc2066b3.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/340427fdc86d6f8115dc370f426f6a210d7d1199927421c1cf20b5b60a2af245.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/5ff7db3ceab3b9847ac7d5773efeef6f603c4ae01ed74c82b8eab6939c9bc148.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/1a0bafe472eec538b855b1f3854ec81e6bcc41707688e549d7c31d8470b3664e.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/60a9418412fbf76ff47c9005a5c12c619c67a9383b30c6dfb22a203fd9b91892.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_34f8119a98c297099879",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/154fcfb6d184bb5d29697c80038ca8b3eca410a3a47704a3a96ac4e17e2d1cb1.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/50b58aaeed2658cb658b64768e96f683c4e31a508c55d58331ecc1c9b3680eb4.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/b87dee8f96060bb2bd58a2922571299a1fc5b6cc2dcef51ed047f5489d80c88a.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/533770ff1672bb712103d49556ff266867816d9db6ad810fd21924d73574fc1a.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/a2112cb1b2fd4e578f8c783e5987618b753136b60c3426cd04a7a99b8419d927.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/2ec09a2fe061c2b3f8264e998b4c640ec98cbdfb0765675950f05e1bd0526552.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/96bd59b164caeba02f096e7ac41c450b6453335d3428fa3ffb960040595cf261.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/eac4dc0d5a7681c10b96454937754f25c8fb47d083dced78c313eb48fa5b8262.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_106aed5050b8232d6cd3",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/aef6277016e6bd03b98ed5e496eba465e25927f213dbd188a74a62023a5329a9.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/b972f3e522519e33c27308de3e67d2d0cc6ee9da3f75322acc17c6f09c1bf167.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/0d66ea88c3a8b2ebc63abd57f3d6dd22387f6b8895ef2fd5df91703b08c6636e.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/afd115f803c1cae059c8fdb3646501e3572e95499c5b10b70a4be6458553fd58.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/7d10523de3a8323c6c2022f379ddebf7405a94a8284a6d1d6ba70d297333063c.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/f00634dfb46348716e3c49de1d482c5aa9921064a30148e5348f7b9a170cab4e.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/3c2655c3b619f3aa048019c122704b920c71a1c943552d018ff355012203dc69.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/9c2046e5cd7014edc427284b713890aa825e69a7217c3c72b5c3af9575f99ed1.result.json"
+        }
+      ]
+    },
+    {
+      "causalGroupId": "mc_551840e90c558411745c",
+      "allOriginalPairIndices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "materializedThroughPairIndex": 4,
+      "selectedArmSources": [
+        {
+          "pairIndex": 1,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/7716b2cd10ed23c3c150af42d0ec7be762da80cd6038d4ba503c22e69f492795.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/707399a73ed580447857e0ad40de5cf8373d02e108b48b96210ba1873f341ea6.result.json"
+        },
+        {
+          "pairIndex": 2,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/c92eef5ac147362280713cacef621a6c14e260ab9838d4763f578150d8b10db5.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/45cda33c0279e97d6270063ac2ce9d62a0dd0fb6c6f1eeda9ac30d9c1e95287c.result.json"
+        },
+        {
+          "pairIndex": 3,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/f569c287ad0b454d7d14dd1522de7120e04397e6ee9eee8b460c255a38b6ccbe.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/df9b841c2096d55d0c65838bc3dcd5b2eab6feee6d75e5ca7aeb133bd9ed8a62.result.json"
+        },
+        {
+          "pairIndex": 4,
+          "full": "RECOVERY",
+          "remove": "RECOVERY",
+          "fullResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/07c6a51e30f2f3687e85e3c861fab7b2c78fbc4dd9bc5a72baecf1db535c24bf.result.json",
+          "removeResultFile": "Direction_A_Mem2_A1_DNS_Outage_Recovery_Runtime_v1/calls/6fe5ea3e0a952cdcee30a931073c5b34e3e8805cafbe5e63050f27972e365917.result.json"
+        }
+      ]
+    }
+  ],
+  "contentHash": "46a09cf10c681c3861ad7417ee8888870533b0bc2d61742e69694bdee4299381"
+}

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "direction-a.evo-feature-contract.v1",
+  "frozenAt": "2026-09-11T00:00:00.000+08:00",
+  "sourceModel": {
+    "contentHash": "2f0449629a228baca869a167649bea1aa809040f539d5c82073efa201c1ba139",
+    "rawFileSha256": "5aebbff0be8db3785a6510aaa2e68fabfbf12587ef3a5f0bc3e01f2b0bb797b7",
+    "immutable": true,
+    "retrainedOnMem2Final69": false
+  },
+  "sourceAdapter": {
+    "structural": [
+      "x0_history_turn_count_log",
+      "x0_query_token_count_log"
+    ],
+    "normalOutcome": [
+      "n_utility",
+      "n_strict_pass",
+      "n_completion_tokens_log"
+    ],
+    "incompatibleSemanticFields": [
+      "n_tool_name_matches",
+      "n_required_argument_coverage",
+      "n_query_action_jaccard"
+    ],
+    "incompatibleFieldPolicy": "IMPUTE_FROZEN_SOURCE_MEAN_SO_STANDARDIZED_CONTRIBUTION_IS_ZERO",
+    "queryTokenProxy": "ceil(UTF8_instruction_bytes/4)"
+  },
+  "sharedFeatureIds": [
+    "shared_target_round_log",
+    "shared_instruction_bytes_log",
+    "shared_normal_utility",
+    "shared_normal_strict_pass",
+    "shared_completion_tokens_log"
+  ],
+  "processFeatureIds": [
+    "process_edit_commands_log",
+    "process_test_compile_commands_log",
+    "process_revision_recovery_log"
+  ],
+  "timing": "S0 instruction/round features and NORMAL trajectory/outcome only; all are observed before FULL/REMOVE causal outcomes for the group",
+  "prohibited": [
+    "PAIR_ROW_AS_IID",
+    "FULL_REMOVE_OUTCOME_AS_X",
+    "FUTURE_VERIFIER_DETAIL",
+    "RAW_SOURCE_TARGET_CAUSAL_POOLING",
+    "MEM2_FINAL69_SOURCE_REFIT"
+  ],
+  "processDefinitions": {
+    "edit": "log1p(edit-like shell command count)",
+    "testCompile": "log1p(test/build/compile command count)",
+    "revisionRecovery": "log1p(edit commands after first test plus error-marker count in observed command output)"
+  },
+  "missingness": "FAIL_CLOSED; no imputation except the explicitly incompatible source-only semantic coordinates",
+  "contentHash": "a342570203cc1e83cfc99c04825235b1223b0493933e0acd3b7dcc0f5e112102"
+}

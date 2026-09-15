@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "direction-a.evo-model-selection-rule-freeze.v1",
+  "frozenAt": "2026-09-11T00:00:00.000+08:00",
+  "target": "thetaHatFixed4",
+  "candidates": [
+    "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+    "B_SEPARATE_SCALE_PARTIAL_POOLING",
+    "C_EVO_ONLY_RIDGE"
+  ],
+  "featureBlocks": [
+    "EVO_SHARED_ONLY",
+    "EVO_SHARED_PLUS_PROCESS"
+  ],
+  "lambdas": [
+    10,
+    100,
+    1000
+  ],
+  "splitUnit": "COMPLETE_TASK_REQUIREMENT_CHAIN",
+  "outer": "LEAVE_ONE_TASK_CLUSTER_OUT",
+  "inner": "LEAVE_ONE_TASK_CLUSTER_OUT_ON_OUTER_TRAIN",
+  "weighting": "EACH_TASK_CLUSTER_TOTAL_WEIGHT_ONE_OVER_NUMBER_OF_TASKS; GROUPS_WITHIN_TASK_SHARE_THAT_WEIGHT",
+  "primaryMetric": "CLUSTER_WEIGHTED_RMSE",
+  "tieBreaks": [
+    "CLUSTER_WEIGHTED_MAE",
+    "LARGER_LAMBDA",
+    "EVO_SHARED_ONLY"
+  ],
+  "transferChoice": "Choose A vs B by nested RMSE/MAE; B is separate-scale only and never raw-pools source/target Y",
+  "negativeTransferRule": "C improvement at least 5 percent and C wins at least 4 of 6 outer folds",
+  "freezeRule": "At least the authorized maximum 8 development task clusters, winner in at least 2/3 outer folds, and modal hyperparameter in at least 2/3 folds",
+  "categoricalM0M4CurrentTrainer": false,
+  "contentHash": "73de6680b9754c59e74381227c08f4e0b0609f8b987467701c08a429a4768a80"
+}

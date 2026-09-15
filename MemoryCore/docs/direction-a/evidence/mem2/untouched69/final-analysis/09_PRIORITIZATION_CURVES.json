@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-prioritization-curves.v1",
+  "classification": "DESCRIPTIVE_PROJECT_ADAPTED_PRIORITIZATION_METRICS",
+  "overallMeanTheta": 0.4546564758235238,
+  "kRule": "max(1,round_half_up(q*69))",
+  "rows": [
+    {
+      "model": "Proposed",
+      "targetFraction": 0.2,
+      "acceptedCount": 14,
+      "realizedFraction": 0.2028985507246377,
+      "selectedMeanTheta": 0.931547619047619,
+      "V": 0.1890096618357488,
+      "tocStyleUplift": 0.47689114322409515
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.2,
+      "acceptedCount": 14,
+      "realizedFraction": 0.2028985507246377,
+      "selectedMeanTheta": 0.824404761904762,
+      "V": 0.1672705314009662,
+      "tocStyleUplift": 0.36974828608123816
+    },
+    {
+      "model": "Proposed",
+      "targetFraction": 0.3,
+      "acceptedCount": 21,
+      "realizedFraction": 0.30434782608695654,
+      "selectedMeanTheta": 0.8769841269841269,
+      "V": 0.26690821256038644,
+      "tocStyleUplift": 0.42232765116060306
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.3,
+      "acceptedCount": 21,
+      "realizedFraction": 0.30434782608695654,
+      "selectedMeanTheta": 0.7876984126984128,
+      "V": 0.23973429951690825,
+      "tocStyleUplift": 0.333041936874889
+    },
+    {
+      "model": "Proposed",
+      "targetFraction": 0.4,
+      "acceptedCount": 28,
+      "realizedFraction": 0.4057971014492754,
+      "selectedMeanTheta": 0.8372023809523809,
+      "V": 0.3397342995169082,
+      "tocStyleUplift": 0.38254590512885706
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.4,
+      "acceptedCount": 28,
+      "realizedFraction": 0.4057971014492754,
+      "selectedMeanTheta": 0.7276785714285714,
+      "V": 0.29528985507246375,
+      "tocStyleUplift": 0.2730220956050476
+    },
+    {
+      "model": "Proposed",
+      "targetFraction": 0.5,
+      "acceptedCount": 35,
+      "realizedFraction": 0.5072463768115942,
+      "selectedMeanTheta": 0.7380952380952379,
+      "V": 0.3743961352657004,
+      "tocStyleUplift": 0.2834387622717141
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.5,
+      "acceptedCount": 35,
+      "realizedFraction": 0.5072463768115942,
+      "selectedMeanTheta": 0.65,
+      "V": 0.32971014492753625,
+      "tocStyleUplift": 0.1953435241764762
+    },
+    {
+      "model": "Proposed",
+      "targetFraction": 0.6,
+      "acceptedCount": 41,
+      "realizedFraction": 0.5942028985507246,
+      "selectedMeanTheta": 0.6910569105691056,
+      "V": 0.4106280193236714,
+      "tocStyleUplift": 0.23640043474558176
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.6,
+      "acceptedCount": 41,
+      "realizedFraction": 0.5942028985507246,
+      "selectedMeanTheta": 0.6010162601626016,
+      "V": 0.35712560386473424,
+      "tocStyleUplift": 0.14635978433907776
+    },
+    {
+      "model": "Proposed",
+      "targetFraction": 0.7,
+      "acceptedCount": 48,
+      "realizedFraction": 0.6956521739130435,
+      "selectedMeanTheta": 0.6192956349206348,
+      "V": 0.4308143547273981,
+      "tocStyleUplift": 0.16463915909711097
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.7,
+      "acceptedCount": 48,
+      "realizedFraction": 0.6956521739130435,
+      "selectedMeanTheta": 0.562562003968254,
+      "V": 0.39134748102139405,
+      "tocStyleUplift": 0.10790552814473015
+    },
+    {
+      "model": "Proposed",
+      "targetFraction": 0.8,
+      "acceptedCount": 55,
+      "realizedFraction": 0.7971014492753623,
+      "selectedMeanTheta": 0.559314954051796,
+      "V": 0.44583076047606923,
+      "tocStyleUplift": 0.10465847822827218
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.8,
+      "acceptedCount": 55,
+      "realizedFraction": 0.7971014492753623,
+      "selectedMeanTheta": 0.5045995670995671,
+      "V": 0.40221704623878535,
+      "tocStyleUplift": 0.049943091276043294
+    },
+    {
+      "model": "Proposed",
+      "targetFraction": 0.9,
+      "acceptedCount": 62,
+      "realizedFraction": 0.8985507246376812,
+      "selectedMeanTheta": 0.4979241424487603,
+      "V": 0.4474100990119296,
+      "tocStyleUplift": 0.04326766662523651
+    },
+    {
+      "model": "Baseline",
+      "targetFraction": 0.9,
+      "acceptedCount": 62,
+      "realizedFraction": 0.8985507246376812,
+      "selectedMeanTheta": 0.47907739779556413,
+      "V": 0.4304753429467388,
+      "tocStyleUplift": 0.02442092197204032
+    }
+  ],
+  "contentHash": "dd75b26a090c5e753e7d8461735693fe66076d3710d7c45e5dcd3b4554fcd908"
+}

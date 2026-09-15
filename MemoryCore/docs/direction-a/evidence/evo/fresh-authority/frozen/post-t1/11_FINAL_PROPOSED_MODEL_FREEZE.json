@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.requalified-proposed-model-freeze.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "candidateId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+  "featureBlock": "EVO_SHARED_ONLY",
+  "lambda": 10,
+  "fittedModel": {
+    "schemaVersion": "direction-a.evo-continuous-adaptation.v1",
+    "candidateId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+    "featureBlock": "EVO_SHARED_ONLY",
+    "lambda": 10,
+    "featureOrder": [
+      "shared_target_round_log",
+      "shared_instruction_bytes_log",
+      "shared_normal_utility",
+      "shared_normal_strict_pass",
+      "shared_completion_tokens_log"
+    ],
+    "means": [
+      1.6136626090170607,
+      8.732189586041335,
+      0.7683321812525821,
+      0.1875,
+      9.03412093970843
+    ],
+    "scales": [
+      0.3374865965386388,
+      0.7241632999148631,
+      0.25528064188599775,
+      0.3903123748998999,
+      0.7585897479113201
+    ],
+    "coefficients": [
+      -0.10247455074041703,
+      -0.0038101085371506816,
+      0.004631302375279117,
+      -0.008851068605466856,
+      -0.007493812839219472,
+      -0.000317762341113958
+    ],
+    "sourceOffsetCoefficient": 1,
+    "sourceRepresentationColumn": false,
+    "targetScaleSeparateFromSource": true,
+    "rawSourceTargetPooling": false,
+    "groupRowsTreatedAsIid": false,
+    "fitClusterCount": 8,
+    "fitGroupCount": 10,
+    "trainingHash": "f1426c2f8f241efa74a28a4aa911719a557ba67fd5ccfe2a3b43778e665de157"
+  },
+  "canonicalTrainingHash": "f1426c2f8f241efa74a28a4aa911719a557ba67fd5ccfe2a3b43778e665de157",
+  "canonicalModelHash": "0ceedac0549b366dc6d2f0f30d82a46926c5771ae46baca98b41d34bc882aa22",
+  "trainingBankContentHash": "000c68687b0d103c1ecd07132340c85a44b039c8a148384f67d290e0a0b53428",
+  "modelSelectionContentHash": "f49e8879084133f1e90900730d0cec5777cccba9ee30a42ddf78e2921ba38245",
+  "sourceModel": {
+    "path": "Direction_A_PostCAL_Model_Value_v2_1/11_PROPOSED_V2_FINAL_MODEL.json",
+    "bytes": 2719,
+    "sha256": "5aebbff0be8db3785a6510aaa2e68fabfbf12587ef3a5f0bc3e01f2b0bb797b7",
+    "contentHash": "2f0449629a228baca869a167649bea1aa809040f539d5c82073efa201c1ba139"
+  },
+  "noFreshYUsed": true,
+  "contentHash": "0dba1375904a50262e03d538f3e381e08f89c2332e77743bf577edbd59556a4f"
+}

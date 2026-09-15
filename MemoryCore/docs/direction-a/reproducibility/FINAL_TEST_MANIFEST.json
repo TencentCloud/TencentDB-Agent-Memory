@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "direction-a.final-test-manifest.v1",
+  "count": 9,
+  "runner": "vitest",
+  "workingDirectory": "MemoryCore",
+  "providerPolicy": "zero-provider; provider credentials unset",
+  "tests": [
+    {"path":"src/evaluation/direction-a/formal/evo-build-failure-anti-censoring.test.ts","sha256":"50bc093d9fcc3a36e68c1360acedb1c48e6e222bb5cab85c44114a193c0be296"},
+    {"path":"src/evaluation/direction-a/formal/evo-t1-anti-censoring-continuation.test.ts","sha256":"123c086ac10655005b707d52e013b9748b62124088d10ee1039d407767f0e494"},
+    {"path":"src/evaluation/direction-a/formal/mem2-a1-budget-extension.test.ts","sha256":"f005f94b151e261d76daa01aaaa5774ca9df6fbe49f0c25ee2a78a6f02acfa32"},
+    {"path":"src/evaluation/direction-a/formal/mem2-a1-planner.test.ts","sha256":"73db6c3e5f41b3ef61fe692eda565ffbd4005874e0aed477fa96526f979e829e"},
+    {"path":"src/evaluation/direction-a/formal/mem2-cal-a1-causal-authorization.test.ts","sha256":"ceaa5bd2e37f2ec4c2157d2d8ccc08f4a43b0be5d4701b7386b624239248569c"},
+    {"path":"src/evaluation/direction-a/formal/mem2-git-source-binding.test.ts","sha256":"26c5f2b39bec807cd60a653c93af6924237acd3e20fd946f0033e07d0205c48f"},
+    {"path":"src/evaluation/direction-a/formal/modeling/evo-continuous-adaptation.test.ts","sha256":"adba8cc8410da768e2a6cdfc34df675aa3dc35b45323a368e0f889ee3af68968"},
+    {"path":"src/evaluation/direction-a/formal/modeling/evo-engineering-first.test.ts","sha256":"929ad184587537fcc39491ed2a201cdcd4f274970395aaa6c48c937d06cf4865"},
+    {"path":"src/evaluation/direction-a/formal/production-evidence.test.ts","sha256":"ec5ac01eb9bfc31c1008c72b4272083a0441676521ebe3d5e849a5e100ef8355"}
+  ]
+}

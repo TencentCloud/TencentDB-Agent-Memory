@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.requalified-model-checkpoint.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "decisionId": "EVO_ENGINEERING_FIRST_BUDGET100_V1_2026_09_12",
+  "checkpoint": "STABLE",
+  "exactTerminal": "POST_T1_MODEL_CHECKPOINT = STABLE",
+  "next": "READY_FOR_EVO_FRESH_REAUTHORIZATION",
+  "winnerId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+  "trigger": {
+    "branch": "STABLE_FREEZE_NO_T2",
+    "triggerFired": false,
+    "reasons": [],
+    "winnerId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+    "independentTaskClusters": 8,
+    "winnerJackknifeSupport": 7,
+    "modalFeatureBlockSupport": 8,
+    "modalLambdaSupport": 8,
+    "noT3": true
+  },
+  "stableIffAll": [
+    "ENGINEERING_WINNER_IS_ERROR_GUARDRAIL_ELIGIBLE",
+    "AT_LEAST_2_DISTINCT_TASK_THETA_LEVELS",
+    "AT_LEAST_2_NONZERO_TASK_MEAN_THETAS",
+    "WINNER_SCORE_VARIANCE_GT_1E_12",
+    "WINNER_JACKKNIFE_SUPPORT_GE_6_OF_8",
+    "WINNER_MODAL_FEATURE_BLOCK_SUPPORT_GE_6_OF_8",
+    "WINNER_MODAL_LAMBDA_SUPPORT_GE_6_OF_8"
+  ],
+  "frozenRuleContentHashes": {
+    "selection": "5fd5bb424985eee5c6e2e840a0d4bb7c2077f489859c81e325f2faec65df6690",
+    "stability": "01c2607400395e0204ca1b1b10ef9fb467d9c2f92df9f224df36bcb0e7ebca02"
+  },
+  "evidence": {
+    "integrity": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/01_FINAL_T1_RECOVERY_INTEGRITY_CONSOLIDATION.json",
+      "bytes": 4630,
+      "sha256": "2a8c0e3d83e2fdbffce7619aa898e433e728acf6c0f432a1e54558e7ed01fb47"
+    },
+    "pairOrder": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/02_FINAL_RETRY_AWARE_PAIR_ORDER_ATTESTATIONS.json",
+      "bytes": 16379,
+      "sha256": "465c9619c46443e64baa8963f52c6687f7f56dbeea6c1480a8af0087c59a1b7b"
+    },
+    "budget": "158810e8f868be01a09d73f59778e65c8e5f66f73b2552cff09095376989e9aa",
+    "fixed4": "2eca89e1c3efa197e602578173558cbefcb9ec62d59b2ee58bcf02a71c3a0f93",
+    "bank": "000c68687b0d103c1ecd07132340c85a44b039c8a148384f67d290e0a0b53428",
+    "abc": "6ff7d2033880b6a8bbdd8154ded6e0aa8cf9df15a845fc8e522f0073e96497e0",
+    "processAblation": "3677c0c68c79f787554aa6c14c1a12cf19305ac92a932db0a52fe1166321e78e"
+  },
+  "historicalCheckpointStatusCarriedForward": false,
+  "historicalStableForced": false,
+  "contentHash": "0f42c8dcebd122a80b32225fc0a33eba4db5c0b889354bc6cb7735c3e00fb3df"
+}

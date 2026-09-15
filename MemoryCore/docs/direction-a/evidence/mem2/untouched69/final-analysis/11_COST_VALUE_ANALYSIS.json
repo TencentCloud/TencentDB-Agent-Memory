@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-cost-value.v1",
+  "onlineEvaluator": {
+    "proposed": {
+      "contract": "ONE_PRE_EXISTING_NORMAL_CALL_PLUS_DETERMINISTIC_SCORE",
+      "providerCallsPerGroup": 1,
+      "observedMeanCostCnyPerGroup": 0.010427673913043478,
+      "observedCostN": 69,
+      "sourcePath": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Mem2_A1_CAL_Causal_Audit_Handoff_v2\\evidence\\cal-x\\CAL_CHEAP_X_FREEZE.json",
+      "sourceContentHash": "8a4fcb4d8e6b6580f83f5aaf0a362f6743dbfb25acda2e1fbdf016eaf444a68a"
+    },
+    "baseline": {
+      "contract": "X0_PRETREATMENT_STRUCTURAL_SEMANTIC_ONLY",
+      "marginalProviderCallsPerGroup": 0,
+      "marginalProviderCostCnyPerGroup": 0
+    }
+  },
+  "researchCausalAudit": {
+    "contract": "FIRST_FOUR_VALID_FULL_REMOVE_PAIRS_WITH_TECHNICAL_SLOT5_ONLY",
+    "observedProviderCalls": 556,
+    "providerCallsPerGroup": 8.057971014492754,
+    "observedPaidCostCny": 6.1382385000000035,
+    "observedMeanCostCnyPerGroup": 0.08895997826086961,
+    "unknownUsageCalls": 3,
+    "unknownUsageAccounting": "RESERVE_NOTE_ONLY_NOT_FABRICATED_OBSERVED_SPEND"
+  },
+  "ratios": {
+    "auditToProposedOnlineProviderCalls": 8.057971014492754,
+    "auditToProposedOnlineObservedCost": 8.531143091230906,
+    "proposedOnlineCostReductionVsAuditPct": 88.27824138798127,
+    "baselineRatioUndefinedBecauseZeroMarginalCost": true,
+    "commensurateProductionCostRatioClaimAllowed": false
+  },
+  "historicalResearchCosts": {
+    "originalCausalAuditCostCny": 1.378116,
+    "dnsRecoveryCostCny": 2.0787255,
+    "final69AcquisitionCostCny": 6.1382385000000035
+  },
+  "roleBoundary": "FULL/REMOVE is expensive audit/teacher evidence; the evaluator approximates useful causal prioritization from much cheaper normal-run evidence.",
+  "contentHash": "105f8048c1588b96096fd22a5bfe29bcc30f774be80a852834e5596718281bf3"
+}

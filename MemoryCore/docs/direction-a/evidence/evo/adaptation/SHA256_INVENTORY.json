@@ -1,0 +1,138 @@
+{
+  "schemaVersion": "direction-a.evo-output-sha256-inventory.v1",
+  "generatedAt": "2026-09-11T00:00:00.000+08:00",
+  "files": [
+    {
+      "path": "00_READ_FIRST.md",
+      "sha256": "9b7d4ca80b65f25912ed5f36a94e4548184b2c1c2b398c8ba67f14f32484af33",
+      "bytes": 735
+    },
+    {
+      "path": "01_AUTHORITY_AND_PROVENANCE_AUDIT.md",
+      "sha256": "f8b328a738267d8166258e904944fca1c24bc71cbb15a6d5b52f6360a2353b31",
+      "bytes": 2961
+    },
+    {
+      "path": "02_EVO_BENCHMARK_PROVENANCE.json",
+      "sha256": "bb2f865afa419baed9d93c637c2800f7ea63cfcd9758640f01b9a84a4b045e55",
+      "bytes": 938
+    },
+    {
+      "path": "03_EVO_CONTINUOUS_DEVELOPMENT_BANK.jsonl",
+      "sha256": "cd7c7f3034f730bd2790f7a84ac3e5e2e035442685763d2536c0f96a4a1d50cc",
+      "bytes": 19879
+    },
+    {
+      "path": "04_EVO_CONTINUOUS_DEVELOPMENT_BANK_REPORT.json",
+      "sha256": "2a12a38f56c8cd6510c6535cb23e1dc8455c3ed24a789195e320b123174a48fe",
+      "bytes": 1916
+    },
+    {
+      "path": "05_EVO_FEATURE_CONTRACT.json",
+      "sha256": "5f51bb52471a61c87e56ff66c5827949a3396c2b133e43ce129501fff196994e",
+      "bytes": 2006
+    },
+    {
+      "path": "06_EVO_FEATURE_PROVENANCE_AUDIT.json",
+      "sha256": "0f65f03fb08102ac006106d29ce216e733ecbedfd5fb8bc0c9c9752a86812aef",
+      "bytes": 483
+    },
+    {
+      "path": "07_EVO_MODEL_SELECTION_RULE_FREEZE.json",
+      "sha256": "2f5e51a026bebade13f2a3d0e1da32de9a503be362eb6132ba0b4b6743b1e65a",
+      "bytes": 1303
+    },
+    {
+      "path": "08_EVO_NESTED_SPLIT_MANIFEST.json",
+      "sha256": "b70d37673ec2983657b417ef933d11d305cb2641ace2e07d5e32a2300fc56e7e",
+      "bytes": 16549
+    },
+    {
+      "path": "09_EVO_ABC_OOF_RESULTS.json",
+      "sha256": "3ea08144ae0c6d858b6ee7e3a5c4b699cd36a14c014ba5ce2c41e75290565cae",
+      "bytes": 49030
+    },
+    {
+      "path": "10_EVO_PROCESS_EVIDENCE_ABLATION.json",
+      "sha256": "dc9f47fe39a0d6f2a9ff5185db3dc951d804f00d71286a4a93ed0afd66b168dc",
+      "bytes": 2934
+    },
+    {
+      "path": "11_EVO_NEGATIVE_TRANSFER_REPORT.json",
+      "sha256": "8beabd5cbfc6e9bfabd08e9d7dfeb3ff9fd2a027da09717d415fd05a03147f2b",
+      "bytes": 1137
+    },
+    {
+      "path": "12_EVO_TRAIN_SUFFICIENCY_DECISION.json",
+      "sha256": "cbea072d6586e827852095958782fc267088b68edea271254224fa97e03ceb60",
+      "bytes": 788
+    },
+    {
+      "path": "13_EVO_TASK_CAPACITY_FIREWALL.json",
+      "sha256": "29d71810ab052f047a48e2e509d34403e48a90cbebd430cbb3184a990da1c041",
+      "bytes": 3773
+    },
+    {
+      "path": "14_EVO_SCALE_PLANNER.json",
+      "sha256": "334102d9cedd418b074b20747bd3d1b04d66245e7f86edfb6753fd5df7dd726f",
+      "bytes": 708
+    },
+    {
+      "path": "15_CURRENT_STAGE_PLAN.json",
+      "sha256": "6372a63c02f15109c9b2c88ea7e1d74172ab6c49d78fc85554b531a3c7b3b06b",
+      "bytes": 1505
+    },
+    {
+      "path": "16_CURRENT_STAGE_AUTHORIZATION_REQUEST.json",
+      "sha256": "a1d4ece07e7a8338bb869a971e107fefaabe94f22300d0a178f21403abe9c70e",
+      "bytes": 469
+    },
+    {
+      "path": "17_WORKBUDDY_CURRENT_STAGE_EXECUTION.md",
+      "sha256": "7faf30039f7701d9335f4091bad2478db11e535837675c359815be426af26a39",
+      "bytes": 2622
+    },
+    {
+      "path": "18_REPRODUCIBILITY_REPORT.md",
+      "sha256": "609d82579e0f658fd0e0ebf3cc72a2033971c853e0880df54f555e918c6e7830",
+      "bytes": 636
+    },
+    {
+      "path": "18_REPRODUCIBILITY_REPORT.md.json",
+      "sha256": "4ae27e63638dd1805a4294e1efa0676099c3f336e00e5e88d9732ec5d63ddbcd",
+      "bytes": 1453
+    },
+    {
+      "path": "EVO_TRAIN_EXPANSION_AUTHORIZATION_REQUEST.json",
+      "sha256": "bec173d012e8ff8e67c047df9d4cef80936ed29ac44f3ebaf72a1a692672bed0",
+      "bytes": 1929
+    },
+    {
+      "path": "EVO_TRAIN_EXPANSION_BUDGET.json",
+      "sha256": "b2fdb3536ff0024b099b48783965aae07e739dd7cee43afcd1fc85ea125bba1c",
+      "bytes": 1118
+    },
+    {
+      "path": "EVO_TRAIN_EXPANSION_PLAN.json",
+      "sha256": "eeba35b6b7a8c400c40ca96a2c7e400fdb0f82dfb0e93f11569c4c4e38467460",
+      "bytes": 2376
+    },
+    {
+      "path": "EVO_TRAIN_EXPANSION_SELECTION.json",
+      "sha256": "545676516704c59f13c0116ee4b3b9ec47f399e9f35db31ba7fcda2cfbfb544e",
+      "bytes": 2623
+    },
+    {
+      "path": "TERMINAL_SUMMARY.md",
+      "sha256": "2c07198d3f2df6896d6ef1b891e596e3300a895d82e2e8726efba118f6c5869a",
+      "bytes": 1332
+    },
+    {
+      "path": "WORKBUDDY_EVO_TRAIN_EXPANSION_EXECUTION.md",
+      "sha256": "7faf30039f7701d9335f4091bad2478db11e535837675c359815be426af26a39",
+      "bytes": 2622
+    }
+  ],
+  "inventorySelfExcluded": true,
+  "contentHash": "cca6f19006650508e1c486d7ee4b7d68365c5525fdaa35a7bc6df02e8c2ac1a9"
+}

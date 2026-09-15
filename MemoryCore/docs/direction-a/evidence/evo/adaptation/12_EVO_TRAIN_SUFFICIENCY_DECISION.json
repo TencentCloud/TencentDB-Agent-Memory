@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "direction-a.evo-train-sufficiency-decision.v1",
+  "decidedAt": "2026-09-11T00:00:00.000+08:00",
+  "decision": "NEEDS_MINIMAL_TRAIN_EXPANSION",
+  "currentIndependentTaskClusters": 6,
+  "currentGroups": 8,
+  "provisionalBestCandidateId": "C_EVO_ONLY_RIDGE",
+  "winnerOuterFoldCount": 4,
+  "winnerModalHyperparameterFoldCount": 2,
+  "requiredCheckpointTaskClusters": 8,
+  "additionalTaskClustersRequired": 2,
+  "rationale": "Initial-6 is an underpowered nested-selection checkpoint with only six outer folds and sparse nonzero fixed4 targets. Two new-domain tasks reach the already-authorized Pilot hard maximum while preserving Q6/CAL/TEST capacity.",
+  "targetModelFrozen": false,
+  "contentHash": "a4a4f842bf396eb8f9df05499e77a37cf7446223c7c5f79fd99c1e0291c44cb0"
+}

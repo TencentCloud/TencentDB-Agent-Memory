@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-reference-integrity.v1",
+  "status": "PASS",
+  "acquisitionIntegrity": "PASS",
+  "referenceAvailability": "69/69",
+  "referenceArtifacts": 69,
+  "reconstructedGroups": 69,
+  "reconstructedTechnicalInvalidAttempts": 3,
+  "reconstructedScientificActionFailures": 0,
+  "groupsUsingSlot5": 2,
+  "providerCalls": 556,
+  "fullCalls": 278,
+  "removeCalls": 278,
+  "slot5ArmCalls": 4,
+  "duplicateDispatch": 0,
+  "uncertainDispatch": 0,
+  "unauthorizedGroups": 0,
+  "sampleRedraw": 0,
+  "acquisitionInventory": {
+    "fileCount": 2647,
+    "allHashesVerified": true,
+    "inventoryFileSha256": "16900517e51a5f60f4b992f24e0e95981cb9e6bd1ef07b3d71d7f1aff1a6d89a"
+  },
+  "invariantChecks": [
+    "69_UNIQUE_COMPONENTS",
+    "69_UNIQUE_STATISTICAL_CLUSTERS",
+    "FIRST_FOUR_VALID_COMPLETE_PAIRS_IN_ORIGINAL_ORDER",
+    "SLOT5_ONLY_AFTER_TRUE_TECHNICAL_INVALID",
+    "SCIENTIFIC_FAILURES_RETAINED",
+    "REFERENCE_AND_AVAILABILITY_THETA_EXACT_MATCH",
+    "ACQUISITION_2647_FILE_HASH_INVENTORY_EXACT"
+  ],
+  "contentHash": "1e5e164a163e9cb72887fa6b9052942995a9613defab1277e330dd946111b471"
+}

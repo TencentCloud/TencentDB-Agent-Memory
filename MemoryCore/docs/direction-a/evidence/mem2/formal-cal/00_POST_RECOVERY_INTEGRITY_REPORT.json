@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "direction-a.mem2-cal-a1.post-recovery-integrity.v1",
+  "status": "PASS",
+  "sampleCount": 36,
+  "checks": {
+    "reconciliationBound": true,
+    "sampleOrderAndDrawReplay": true,
+    "authorizationRequestPlanIdentity": true,
+    "certifiedEntitlementsOneForOne": true,
+    "noDuplicateAttempts": true,
+    "noUncertainDispatch": true,
+    "noNormalOrOrdinaryRetry": true,
+    "historicalRuntimeByteInventoryPreserved": true,
+    "deterministicArmPairMerge": true,
+    "frozenPopulationAndAlphaPlansReproduced": true,
+    "noTestEvoOrEBArtifactsEntered": true
+  },
+  "knownNonBlockingReportingDefect": {
+    "groupsCompleteAtFirstFour": 35,
+    "authoritativeRawMergeCompleteGroups": 36
+  },
+  "recoverySecretReadsHistorical": 1,
+  "secretReadsThisGoal": 0,
+  "providerCallsThisGoal": 0,
+  "originalRuntimeInventory": {
+    "fileCount": 1151,
+    "inventoryFileSha256": "4eceeaebd52ebd0148edf94f83258258da4f8bb489f7c045d82a94935d35ae9f"
+  },
+  "recoveryRuntimeInventory": {
+    "fileCount": 538,
+    "inventoryFileSha256": "44eb64fff68538067e4d364d8fbe538a3610fe95d2df9a6da6bae206516b2653"
+  },
+  "reconciliationHash": "5d0ae41d257133cb436debb685ef94e643e127516ddef59c499cc7152535687c",
+  "recoveryHandoffHash": "fd63381214e670a3bf1bc2665a5f270f5b66ac89ebe4c2e3c263cf16845f8a09",
+  "contentHash": "7d15db212dcf281653956689627cc8b0b1b1a830f554a98ffa6c4dde9dba2edf"
+}

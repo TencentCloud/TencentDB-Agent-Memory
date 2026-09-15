@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.requalified-strong-comparator-freeze.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "id": "TARGET_ONLY_SHARED_ONLY_RIDGE",
+  "candidateId": "C_EVO_ONLY_RIDGE",
+  "target": "thetaHatFixed4",
+  "featureContract": [
+    "shared_target_round_log",
+    "shared_instruction_bytes_log",
+    "shared_normal_utility",
+    "shared_normal_strict_pass",
+    "shared_completion_tokens_log"
+  ],
+  "fittedModel": {
+    "schemaVersion": "direction-a.evo-continuous-adaptation.v1",
+    "candidateId": "C_EVO_ONLY_RIDGE",
+    "featureBlock": "EVO_SHARED_ONLY",
+    "lambda": 10,
+    "featureOrder": [
+      "shared_target_round_log",
+      "shared_instruction_bytes_log",
+      "shared_normal_utility",
+      "shared_normal_strict_pass",
+      "shared_completion_tokens_log"
+    ],
+    "means": [
+      1.6136626090170607,
+      8.732189586041335,
+      0.7683321812525821,
+      0.1875,
+      9.03412093970843
+    ],
+    "scales": [
+      0.3374865965386388,
+      0.7241632999148631,
+      0.25528064188599775,
+      0.3903123748998999,
+      0.7585897479113201
+    ],
+    "coefficients": [
+      0.03580121287983427,
+      0.000631399512190327,
+      -0.002751685260593712,
+      0.0021570210371068665,
+      -0.0006796910464167348,
+      -0.0006347756357600948
+    ],
+    "sourceOffsetCoefficient": 0,
+    "sourceRepresentationColumn": false,
+    "targetScaleSeparateFromSource": true,
+    "rawSourceTargetPooling": false,
+    "groupRowsTreatedAsIid": false,
+    "fitClusterCount": 8,
+    "fitGroupCount": 10,
+    "trainingHash": "a58e0d335d135e1e8174e3a0076a3d978fddbb511ddf19c641af6d6eb568d2cf"
+  },
+  "canonicalTrainingHash": "a58e0d335d135e1e8174e3a0076a3d978fddbb511ddf19c641af6d6eb568d2cf",
+  "canonicalModelHash": "0275b6c61cd15a010ea978b014ce6f9db7a66218d9ebf905bcc54b97f6f7d45c",
+  "nestedFoldSelections": [
+    {
+      "taskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d9_w11_security_automation_scripting",
+      "lambda": 10
+    }
+  ],
+  "noFreshYUsed": true,
+  "contentHash": "6590244a94efd8e8d4727b2c05223b8c2ddd4eb3107e41479abd500f2bdd771c"
+}

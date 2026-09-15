@@ -1,0 +1,401 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.final-retry-aware-pair-order-attestations.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "implementation": {
+    "path": "MemoryCore/src/evaluation/direction-a/formal/acquisition/integrity.ts",
+    "bytes": 12288,
+    "sha256": "49cbebacec4d11f27b33cecdda381a6ebbf899f7c0603a982174c93544491312"
+  },
+  "pairScheduleSource": {
+    "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/prepared/T1_PREPARED_EXECUTION_MANIFEST.json",
+    "bytes": 5778,
+    "sha256": "953b8895cb70892ec3ae0e950e83ad97fdbdde039a039338b5ab0771fb43bf78"
+  },
+  "runtimeJournalHeads": {
+    "ORIGINAL_T1": "a9e7060cefe1fa67cffbc312bbb27154f35b974655a14b1c3c649eea00858339",
+    "PAIR_ORDER_RECOVERY": "b8e8cc08d165a9b1a76fbf3fff1b1530d6dc3bf044f35d00f8cfb829f9c0324b",
+    "ANTI_CENSORING_CONTINUATION": "6b9bb5778c02a4ff1e04b13723313b0082f00ac243b6d8fdc2b7b6ae556235a9",
+    "D3_P3_REMOVE_BOUNDED_RETRY": "4a7d8e3f50d989704301fa6c41df92ffa8c38dd4685cdd39dac4c984336e334f",
+    "D3_P3_FULL_BOUNDED_FINAL": "31e296a8e82bb253227d6ed936d69e379bfb6266bc29519a822a8d345b9b9c34"
+  },
+  "attestations": [
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d6",
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+      "pairIndex": 1,
+      "pairScheduleHash": "cfff3c2ca21af4619cb1974b0c56a1231a055c1700544697f60014102e02c2f7",
+      "scheduledArmOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "actualRetryAwareStartOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "starts": [
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 33,
+          "eventHash": "044bb889f95dbff6bc7dbcc62d2fb1d52080f436d3f84c0f01eafd1d2292a8cb",
+          "attemptId": "remaining-t1-1-pair_1_full-try-1",
+          "arm": "FULL"
+        },
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 48,
+          "eventHash": "6c319f4c773dfc70d864b6afab72a4ae8f9385861d7b4635e8bd43d532c1447e",
+          "attemptId": "remaining-t1-1-pair_1_remove-try-1",
+          "arm": "REMOVE"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [],
+      "scientificArmAttemptIds": {
+        "full": "remaining-t1-1-pair_1_full-try-1",
+        "remove": "remaining-t1-1-pair_1_remove-try-1"
+      },
+      "resultHashes": {
+        "full": "531a82915ac60c2a82123ab08c7eb9f942a4eb051667d88c4e025ff8d88cfc3e",
+        "remove": "7f1c8aa1a8c6c9bee0c71f3295503a67129e93f8f7d645fc0f23d2a9d3e16732"
+      },
+      "recovered": false,
+      "status": "PASS",
+      "contentHash": "d5db68198c43189e242c2821028266b5703b377f560a721e15385a5212848c38"
+    },
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d6",
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+      "pairIndex": 2,
+      "pairScheduleHash": "cfff3c2ca21af4619cb1974b0c56a1231a055c1700544697f60014102e02c2f7",
+      "scheduledArmOrder": [
+        "REMOVE",
+        "FULL"
+      ],
+      "actualRetryAwareStartOrder": [
+        "REMOVE",
+        "FULL"
+      ],
+      "starts": [
+        {
+          "runtime": "PAIR_ORDER_RECOVERY",
+          "sourceSequence": 2,
+          "eventHash": "f021577ade9f123790fc4b47e9d08bd417d6bcd297475e6b638608b6730cddc0",
+          "attemptId": "t1-pair-order-recovery-1-p2-remove-try-1",
+          "arm": "REMOVE"
+        },
+        {
+          "runtime": "ANTI_CENSORING_CONTINUATION",
+          "sourceSequence": 2,
+          "eventHash": "a20ab541d9eafa35f36d0cfcf74c325dbf557b003b9791555d8aeed2476dd0e5",
+          "attemptId": "t1-anti-censoring-continuation-1-p2-full-try-1",
+          "arm": "FULL"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [],
+      "scientificArmAttemptIds": {
+        "full": "t1-anti-censoring-continuation-1-p2-full-try-1",
+        "remove": "t1-pair-order-recovery-1-p2-remove-try-1"
+      },
+      "resultHashes": {
+        "full": "3dcb41f064639b46a9967171ee9c608c5f832c3ce77bf3e7aca6bf776c5490ca",
+        "remove": "8f381a6d2725d9af8dac69b28133e51df9b68cdd5cbd4d3ef1bfc7fbe9b76491"
+      },
+      "recovered": true,
+      "status": "PASS",
+      "contentHash": "c27f655d4201aec8309abe732a3e596d8757ecafa57f509ff70e626653c7fd2f"
+    },
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d6",
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+      "pairIndex": 3,
+      "pairScheduleHash": "cfff3c2ca21af4619cb1974b0c56a1231a055c1700544697f60014102e02c2f7",
+      "scheduledArmOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "actualRetryAwareStartOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "starts": [
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 93,
+          "eventHash": "7f375c134919ce099f8d3e118db28962a5e46bb4b4e918021a1fa649df1ac9db",
+          "attemptId": "remaining-t1-1-pair_3_full-try-1",
+          "arm": "FULL"
+        },
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 108,
+          "eventHash": "68b5134e3673492bcfd2533454d4f9cfea2b75b4215880dc47acf115a6e7d201",
+          "attemptId": "remaining-t1-1-pair_3_remove-try-1",
+          "arm": "REMOVE"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [],
+      "scientificArmAttemptIds": {
+        "full": "remaining-t1-1-pair_3_full-try-1",
+        "remove": "remaining-t1-1-pair_3_remove-try-1"
+      },
+      "resultHashes": {
+        "full": "9375c57672e4852ca40048549b729c20c429c6581bf024ee0ac1f4a8be6c1ee0",
+        "remove": "2901f74ec13b36e9d81de325d59e5acaccb4edf58b2a7c0cb8a419d9de048551"
+      },
+      "recovered": false,
+      "status": "PASS",
+      "contentHash": "5685d8bf3fa85d5b3e6ba41fca55105384f801423f0cf781c552c033b9ae2c25"
+    },
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d6",
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+      "pairIndex": 4,
+      "pairScheduleHash": "cfff3c2ca21af4619cb1974b0c56a1231a055c1700544697f60014102e02c2f7",
+      "scheduledArmOrder": [
+        "REMOVE",
+        "FULL"
+      ],
+      "actualRetryAwareStartOrder": [
+        "REMOVE",
+        "FULL"
+      ],
+      "starts": [
+        {
+          "runtime": "ANTI_CENSORING_CONTINUATION",
+          "sourceSequence": 17,
+          "eventHash": "8ddf79a94b394b823cffdf98ea3fd9b5156789d47bc199a12256f89408fb7e70",
+          "attemptId": "t1-anti-censoring-continuation-1-p4-remove-try-1",
+          "arm": "REMOVE"
+        },
+        {
+          "runtime": "ANTI_CENSORING_CONTINUATION",
+          "sourceSequence": 32,
+          "eventHash": "d7498ca62dfb33746cb593c51cf69ffd9e4d7e3d3bbb24f1538f4684dd0cd343",
+          "attemptId": "t1-anti-censoring-continuation-1-p4-full-try-1",
+          "arm": "FULL"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [],
+      "scientificArmAttemptIds": {
+        "full": "t1-anti-censoring-continuation-1-p4-full-try-1",
+        "remove": "t1-anti-censoring-continuation-1-p4-remove-try-1"
+      },
+      "resultHashes": {
+        "full": "04dc1f2ed3374bb8dacdd336bf51dcd21dd6d9ae163f850d2e4dbf19a59f7158",
+        "remove": "33f3667d89fadc3a2e137b4fbaceec080e5ab0e05884a6a3d528b4822298d6ce"
+      },
+      "recovered": true,
+      "status": "PASS",
+      "contentHash": "d844c0c2420a5502db33f37e2d81246a0921a030545258838697c014028db0b3"
+    },
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d3",
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+      "pairIndex": 1,
+      "pairScheduleHash": "24361507bec047227fbd706db96a915d984407f8fa50ae3b767563a35276fe3d",
+      "scheduledArmOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "actualRetryAwareStartOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "starts": [
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 168,
+          "eventHash": "708f1f3b730f618cba6e7ca1c40ba173b5948a92419e0c729b1a06a54561cb52",
+          "attemptId": "remaining-t1-2-pair_1_full-try-1",
+          "arm": "FULL"
+        },
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 183,
+          "eventHash": "7222b9550a9819a2b9a0c9fd35b64eaaf328f922211d2d9303e32f62e044b87a",
+          "attemptId": "remaining-t1-2-pair_1_remove-try-1",
+          "arm": "REMOVE"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [],
+      "scientificArmAttemptIds": {
+        "full": "remaining-t1-2-pair_1_full-try-1",
+        "remove": "remaining-t1-2-pair_1_remove-try-1"
+      },
+      "resultHashes": {
+        "full": "d2fdf972803fd2bed30c7424fd2ee8dfbea63be96849c9167607a8d4b8e00f1b",
+        "remove": "8800af2661dbcefe4b10293cecfb67035d99d61766214bf2a87948b505ed3182"
+      },
+      "recovered": false,
+      "status": "PASS",
+      "contentHash": "e56bb626abc2a42d4b773d0db5dbcf87aa2da889f0e5c8b154c9b87a9089b519"
+    },
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d3",
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+      "pairIndex": 2,
+      "pairScheduleHash": "24361507bec047227fbd706db96a915d984407f8fa50ae3b767563a35276fe3d",
+      "scheduledArmOrder": [
+        "REMOVE",
+        "FULL"
+      ],
+      "actualRetryAwareStartOrder": [
+        "REMOVE",
+        "FULL"
+      ],
+      "starts": [
+        {
+          "runtime": "ANTI_CENSORING_CONTINUATION",
+          "sourceSequence": 47,
+          "eventHash": "fc46556b88ba1669192c8ee62e877fdeb4b4687ce284e5cb7a4527cde7031ce5",
+          "attemptId": "t1-anti-censoring-continuation-2-p2-remove-try-1",
+          "arm": "REMOVE"
+        },
+        {
+          "runtime": "ANTI_CENSORING_CONTINUATION",
+          "sourceSequence": 62,
+          "eventHash": "b300bc263394a83ef8483d913dcf23e4f1f304c14a44d1d080bcac7f75369ca9",
+          "attemptId": "t1-anti-censoring-continuation-2-p2-full-try-1",
+          "arm": "FULL"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [],
+      "scientificArmAttemptIds": {
+        "full": "t1-anti-censoring-continuation-2-p2-full-try-1",
+        "remove": "t1-anti-censoring-continuation-2-p2-remove-try-1"
+      },
+      "resultHashes": {
+        "full": "a58ecbf1464f4245d56f24495436c0878110c8ea7bfae8a9d18a68b67685a57a",
+        "remove": "48e4c4c686bd9ad48a89dc937c629365c816859094c77bac464b444665e75f81"
+      },
+      "recovered": true,
+      "status": "PASS",
+      "contentHash": "d911f80f9267db08a062402d8f8e4852aa0fa02581d7761a7d0ef3b3bbbf7759"
+    },
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d3",
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+      "pairIndex": 3,
+      "pairScheduleHash": "24361507bec047227fbd706db96a915d984407f8fa50ae3b767563a35276fe3d",
+      "scheduledArmOrder": [
+        "REMOVE",
+        "FULL"
+      ],
+      "actualRetryAwareStartOrder": [
+        "REMOVE",
+        "REMOVE",
+        "FULL"
+      ],
+      "starts": [
+        {
+          "runtime": "D3_P3_REMOVE_BOUNDED_RETRY",
+          "sourceSequence": 2,
+          "eventHash": "a1baec267e87456ecd9dc4515642b8f26c0399ee94080130e0603aaf861c3046",
+          "attemptId": "t1-anti-censoring-continuation-2-p3-remove-try-2",
+          "arm": "REMOVE"
+        },
+        {
+          "runtime": "ANTI_CENSORING_CONTINUATION",
+          "sourceSequence": 77,
+          "eventHash": "bddfd66ec087b5258e352cb8aabad059f7db233eb89ccee18c293c004b0e1054",
+          "attemptId": "t1-anti-censoring-continuation-2-p3-remove-try-1",
+          "arm": "REMOVE"
+        },
+        {
+          "runtime": "D3_P3_FULL_BOUNDED_FINAL",
+          "sourceSequence": 2,
+          "eventHash": "8ad11a037e6f95ee584888197235227e091c88cbd1037f435bdaa92a24fbb192",
+          "attemptId": "t1-anti-censoring-continuation-2-p3-full-try-1",
+          "arm": "FULL"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [
+        "t1-anti-censoring-continuation-2-p3-remove-try-1"
+      ],
+      "scientificArmAttemptIds": {
+        "full": "t1-anti-censoring-continuation-2-p3-full-try-1",
+        "remove": "t1-anti-censoring-continuation-2-p3-remove-try-2"
+      },
+      "resultHashes": {
+        "full": "ed7cf587e10ad1120e6039a4c83f679b651ac2136d71f87a20a56961776fed18",
+        "remove": "217b3700f95a0f31cce16ee1ec739ed9745a843cd34dad00fd8a042985da4020"
+      },
+      "recovered": true,
+      "status": "PASS",
+      "contentHash": "b2f74ef1a56c931312448b36994b8c5578cf709e150660262b43008925880043"
+    },
+    {
+      "schemaVersion": "direction-a.evo-post-t1.retry-aware-pair-order-attestation.v1",
+      "domain": "d3",
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+      "pairIndex": 4,
+      "pairScheduleHash": "24361507bec047227fbd706db96a915d984407f8fa50ae3b767563a35276fe3d",
+      "scheduledArmOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "actualRetryAwareStartOrder": [
+        "FULL",
+        "REMOVE"
+      ],
+      "starts": [
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 258,
+          "eventHash": "e52d489bc2f15865e2a7c7946f5bfe305ef3be81eb1ce63e8cb42b646d3e65ed",
+          "attemptId": "remaining-t1-2-pair_4_full-try-1",
+          "arm": "FULL"
+        },
+        {
+          "runtime": "ORIGINAL_T1",
+          "sourceSequence": 273,
+          "eventHash": "699dcd50c1c19cd55ed48da0eb5123e69d218ac5ab56cc1dce47e1f032eb7784",
+          "attemptId": "remaining-t1-2-pair_4_remove-try-1",
+          "arm": "REMOVE"
+        }
+      ],
+      "retrySemantics": "FIRST_ARM_MAY_REPEAT_BEFORE_SECOND_START;FIRST_ARM_FORBIDDEN_AFTER_SECOND_START",
+      "technicalInvalidStartsExcludedFromScientificPair": [],
+      "scientificArmAttemptIds": {
+        "full": "remaining-t1-2-pair_4_full-try-1",
+        "remove": "remaining-t1-2-pair_4_remove-try-1"
+      },
+      "resultHashes": {
+        "full": "b2299ae9aedfb636f54bed38f24a4c4f74bf73627825056c1582710d67ed41c5",
+        "remove": "74e6c51a5adc84a42811036b55e2260c45939801f4d1c50466c61a10296fdab7"
+      },
+      "recovered": false,
+      "status": "PASS",
+      "contentHash": "8f90334789e8eda42e9e2cc6d6ff55f0de79b4f22ec6b94abd658e6cb5b1ddc2"
+    }
+  ],
+  "exactPairCount": 8,
+  "d3P3Chain": [
+    "t1-anti-censoring-continuation-2-p3-remove-try-1",
+    "t1-anti-censoring-continuation-2-p3-remove-try-2",
+    "t1-anti-censoring-continuation-2-p3-full-try-1"
+  ],
+  "contentHash": "dbd529d37ac559f71ec476e7831944f1e398ba875545a162f542b0689974c778"
+}

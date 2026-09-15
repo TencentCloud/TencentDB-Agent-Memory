@@ -1,0 +1,1027 @@
+{
+  "schemaVersion": "direction-a.final-analysis-provenance.v1",
+  "authorityVersion": "Direction_A_Codex_Whole_Project_Final_Report_Revision_GOAL_20260914 + Direction_A_Conversation2_Final_Analysis_and_Report_GOAL_20260914 + Direction_A_Evo_Fresh_FinalRecovery_Closure_v1",
+  "evidenceCutoff": "2026-09-14T09:39:41.649Z",
+  "treatmentFidelityStatus": "PASS_WITH_LIMITATION",
+  "inferenceFamilyStatus": "NO_FINAL_FRESH_ENDPOINT_INFERENCE_WINNER_FROZEN",
+  "analysisScript": {
+    "path": "C:\\Users\\L2503\\Desktop\\Direction_A_Final_Submission\\analysis\\scripts\\rebuild_direction_a_final_analysis.mjs",
+    "sha256": "fb73eafd54c04320aa633107122cd7b96637c1e0ca4a471686593864417f7fba"
+  },
+  "authorityInputs": [
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Codex_Whole_Project_Final_Report_Revision_GOAL_20260914.md",
+      "sha256": "9fe66734dc1e7c23a994bbe41a2238d53800e721784ab9185d51acdb77b56efc"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Conversation2_Final_Analysis_and_Report_GOAL_20260914.md",
+      "sha256": "5c80fd3cff7069e36995ff17d64518ebd880a5067dcd4eae0647afc900250036"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\Direction_A_FINAL_FREEZE_CANDIDATE_MAP_20260914.md",
+      "sha256": "6cce4f73a679bd0a08d48a21ef2efb0d2494e4ee9f3fb507e41746daf10608b8"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_FinalRecovery_Closure_v1\\10_NEW_FRESH_AUTHORIZATION_REQUEST.json",
+      "sha256": "414daa513dee12f133d048cf2e12984146be5cf38aae80091373bcbc9c40e5a5"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_FinalRecovery_Closure_v1\\12_FINAL_TRANSITIVE_BINDING_MANIFEST.json",
+      "sha256": "a47ab7bf1efc6d4a1b24df91ea5bbcfec6c6d71c33f788ec630ce861d4e41453"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_FinalRecovery_Closure_v1\\frozen\\post-t1\\16_FINAL_MODEL_SET_FREEZE.json",
+      "sha256": "98cd07baf5058cf2069fb16631c36682171e32077d75425233a2763c15b808db"
+    }
+  ],
+  "wholeProjectSynthesisInputs": [
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Mem2_A1_CAL_Formal_Inference_v1\\03_A1_INFERENCE_REPORT.json",
+      "sha256": "632af91715d4e2951a064f2a049e05cf39669b7b59d8fc9080ed88357d29c194"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Mem2_A1_CAL_Formal_Inference_v1\\04_CAL_FIXED_SEQUENCE_REPORT.json",
+      "sha256": "c4875d44a0aaeba68cf47d84cf5decf7b7f6258291266cfa4d870c8e657d1757"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_PostCAL_Model_Value_Final_Analysis_v2_1\\04_PRIMARY_MODEL_VALUE_RESULT.json",
+      "sha256": "95b6af1f29650a6681645a84f5e59dd6cb6db9658ad9faba38b4191e0bbafef1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_PostCAL_Model_Value_Final_Analysis_v2_1\\05_PAIRED_BOOTSTRAP_RESULT.json",
+      "sha256": "92180db41ed014a495cbf4e8196d91113ce262b6d8a24777f4d36be4e7fa70bf"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Continuous_Adaptation_v1\\04_EVO_CONTINUOUS_DEVELOPMENT_BANK_REPORT.json",
+      "sha256": "2a12a38f56c8cd6510c6535cb23e1dc8455c3ed24a789195e320b123174a48fe"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_PostT1_Requalification_Closure_v2\\10_POST_T1_MODEL_CHECKPOINT.json",
+      "sha256": "5bcffbdacc4f2682c4efa40205ed8e6677d92d3b9ddfd248fdf11d40879d1dcd"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_PostT1_Requalification_Closure_v2\\11_FINAL_PROPOSED_MODEL_FREEZE.json",
+      "sha256": "c8f758b2cf5009880bd5ecff480b6adcff1188a025440c81968901deb656858b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_PostT1_Requalification_Closure_v2\\16_FINAL_MODEL_SET_FREEZE.json",
+      "sha256": "98cd07baf5058cf2069fb16631c36682171e32077d75425233a2763c15b808db"
+    }
+  ],
+  "runtimeInputs": [
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\FRESH_N9_PREPARED_EXECUTION_MANIFEST.json",
+      "sha256": "7490f2b0c8cef8c24f6b931672db6e397459dd872ffec286795742eb20abf626"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\FRESH_N9_RUN_STATE.json",
+      "sha256": "44c95e1115e4f463347db3e247bc835d61c34ea0799bd856f21abeabfc0b0c80"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\execution-events.jsonl",
+      "sha256": "bd011247c945c629a1dd32f2cd07030c49bef7378d259911fb833e44ddf38dff"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\FRESH_N9_BUDGET_LEDGER.jsonl",
+      "sha256": "96f791baab0caf28acf28808e8b0c9cfcf6ca607ca64464ab6fb7997382bc1f3"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\FRESH_N9_ALL_NORMAL_BARRIER.json",
+      "sha256": "e262b19946a157aa6ff809c6e3f7828ab0479e30ded1f15ca3bf400cb8d9f5e1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\FRESH_N9_NORMAL_FEATURE_ROWS.json",
+      "sha256": "a35181a418eb7350b3467f5d6213db986e632ce43532494a545ceeda2d53633d"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\FRESH_N9_PRE_Y_POLICY_FREEZE.json",
+      "sha256": "ecd66c92b4d46b091ff9a3d53679693ee69533f6799caf4527a6d58f2f54b09a"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Phase3_FINAL_SUMMARY_20260914.json",
+      "sha256": "9ad122b4955ff47b693ae488879f0745d0493d00b1436019448b729ac13c664a"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Phase3_COMPLETE_REPORT_20260914.md",
+      "sha256": "81bfc0e369f7ae9497be45ba5953d0faac4657f7a594ab8c1cade1e9a491a7b8"
+    }
+  ],
+  "rawEvidence": [
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d10_w4_ml_ai_mlops_migration_upgrade-pair-1.json",
+      "sha256": "e58d690d345bca6afc6a67e664974b361c0cf006c878716a54973404da674cd6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d10_w4_ml_ai_mlops_migration_upgrade-pair-2.json",
+      "sha256": "cde59f50f61b1c94c4c1bb81076e213b38e6ffe3b0ebcfd180f22d2a25a96307"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d10_w4_ml_ai_mlops_migration_upgrade-pair-3.json",
+      "sha256": "0c5bce7c511243716c435a9909f1015e42a5f31cfa4b1e2440c0e4191baf4fbe"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d10_w4_ml_ai_mlops_migration_upgrade-pair-4.json",
+      "sha256": "8975c63d2f0bc016a3428f81bba07ac873fde6b291e1662952c7c76aa2bd6fc8"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification__not_1234-pair-1.json",
+      "sha256": "15756ebfd456c914f2e59abfa4bf9bdccc8bff378b45246be6bf3977d00af0f6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification__not_1234-pair-2.json",
+      "sha256": "712ca9150ec0251398397c4ce5a5985a6a4b0a302858cd96eea63d88c57e5e4e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification__not_1234-pair-3.json",
+      "sha256": "0f2716a471798fb19376d20547c91839bdd756090098cbfbd4a8b50ca7c2c2c3"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification__not_1234-pair-4.json",
+      "sha256": "1d3ed3ceeb01d98b63edb49e9c9486c5e69c5c77df3671cb724e8a6fbecd7e9c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification-pair-1.json",
+      "sha256": "6feb865d56ccf367ceba99728b61946901e00491673ef83886b6fb4ef934074a"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification-pair-2.json",
+      "sha256": "36b14d9c392a705d687bbc4cad1dc8c1c6feeab692c547633d3ad32763cbe4df"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification-pair-3.json",
+      "sha256": "f7fda60f78b5f0b1a939fb231ed67102fcebfc5df6633d58fbcc009e9a0e487e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d11_w2_scientific_numerical_brownfield_modification-pair-4.json",
+      "sha256": "22b40b2c4137638756a17f7025815dd6dff9c65496500ff26a89608a0e8c70e5"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d12_w1_automation_productivity_greenfield_implementation-pair-1.json",
+      "sha256": "6469326cb674e5a8a8c7b23ba468bfa8659e8c13f3575a33d0cb251e1138e591"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d12_w1_automation_productivity_greenfield_implementation-pair-2.json",
+      "sha256": "5f518b23b777b5a02340147f5585568c3afa18397a83f2c1f36cbc92ade12f98"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d12_w1_automation_productivity_greenfield_implementation-pair-3.json",
+      "sha256": "bf1064f516e824aeef4713f72cc540656d3e2ef1025ac721f1e91abb619b8509"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d12_w1_automation_productivity_greenfield_implementation-pair-4.json",
+      "sha256": "402c5a828fba543288c45b07aabc2bf068679b6bf5f22de4059ff2128eee221f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d5_w5_data_engineering_integration_e2e_wiring-pair-1.json",
+      "sha256": "cfa11cec6d1dc3dae5251ee4e9c46290a31e941123b436154459956cc81ed331"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d5_w5_data_engineering_integration_e2e_wiring-pair-2.json",
+      "sha256": "461e91a66c6e69ea6b9b38740b76c72f84ab6dfa08b08abc3ec46b328d471e2c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d5_w5_data_engineering_integration_e2e_wiring-pair-3.json",
+      "sha256": "dd37350290ca21126a62fbc1fce6fb37a3986ad4c20b7b681c609987aa6c4c25"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\attempt-integrity-attestations\\theme_d5_w5_data_engineering_integration_e2e_wiring-pair-4.json",
+      "sha256": "2cf8b0b698cebffcc688a8e3fff5950d2fc487e6b8ee075266792f8baaecbca2"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_1_full-try-1.json",
+      "sha256": "16ae35b320ed13792060c4b603563290babc73cbc4dad47d2d4bff405b3b5992"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_1_remove-try-1.json",
+      "sha256": "79c3d44d917038e51a1c1b9752479677023a5c19bba7cae783ba0b3f0b58b192"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_2_full-try-1.json",
+      "sha256": "519450630c1292d4c36c2eb507a12270ca3e0908af1e7e1157539964b03b64ce"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_2_remove-try-1.json",
+      "sha256": "ae4cc1f6cb8c29943eb3b8298a1aef8d346af98b52dde46815ac37c92a5bc2dc"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_3_full-try-1.json",
+      "sha256": "d897122112c095d3a9da0353ff0b540aff74b0946b5d7dda0992e813d33fc420"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_3_remove-try-1.json",
+      "sha256": "2fbd26a86a8f603332fc3cba90983d4cb74809e2368f63f4833174ce9d3e9143"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_4_full-try-1.json",
+      "sha256": "c94508a859a77e002613aa45817088df7463d7af7b73c7c34d41df3b102da476"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-1-pair_4_remove-try-1.json",
+      "sha256": "6a6cefe84813df23f88f517571a3b3558449635ed14424b09ebf567b4b85967d"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_1_full-try-1.json",
+      "sha256": "3f645c49f96e849679b154b6ef3b84196eb32ac478d10f221070928cc2ca1de1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_1_remove-try-1.json",
+      "sha256": "0be15c8140fbd62e83761327f663e13264ccaeb9c9c03081783324dfe3daa26c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_2_full-try-1.json",
+      "sha256": "399a736511fb9609a2ff61c340ded6e6371167307409769c7885ddb2ef0e3a00"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_2_remove-try-1.json",
+      "sha256": "3806552161125340f419d7083cbf82cf82f20e374fe04fca7dd977a23d12c86c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_3_full-try-1.json",
+      "sha256": "47272af124ab9fe540c69c8c10fdc82e5f21f3e67d1cad119e2116f7039bead2"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_3_remove-try-1.json",
+      "sha256": "caf8af8713d4b6cc70178db86c44241608b18d1360872ab3b3088436f140cea1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_4_full-try-1.json",
+      "sha256": "e86466f1461900f82b5cf54ddd738e2617dd6e508f33eec310fbad6c3557423c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-2-pair_4_remove-try-1.json",
+      "sha256": "748bcc0a0a9dfe79f1888098a6b44d9c4c01884f2fb85e0c49cb51bd18b6c19e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_1_full-try-1.json",
+      "sha256": "a98d0f6ff4154858997d950799ff9644581ce1590c0eb4d8722132f632439e23"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_1_remove-try-1.json",
+      "sha256": "62a352d0270dd45b56e1781614040b9c6a0d9b0891b3302e1fbbdcb026ca9385"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_2_full-try-1.json",
+      "sha256": "da73581dbb7d1aff53283eef792656bd7f4c462b5699b502d22e65373dd311f3"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_2_remove-try-1.json",
+      "sha256": "81da741c352e37bffbb1fed62c84b2e9b0c8ebb6d3fc41a596d176eb9aa64a97"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_3_full-try-1.json",
+      "sha256": "bab6a04b9d88f06f85db584b8fdabeea92311d45fbbe9ee39466bd8c1d1d4d79"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_3_remove-hostrecovery-1.json",
+      "sha256": "ac65f3aba6b1c782d5980040268530373962284826a730016a33115bc4e9842b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_4_full-try-1.json",
+      "sha256": "adf0b880af24c55bc686ec4f9a98375c71d7c1cbd3f369021c4f715c66af6ab3"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-3-pair_4_remove-try-1.json",
+      "sha256": "80796d43588d224f8d463c0c0c6e4229a3b77a6948fb9dd724d043c2a23c6527"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_1_full-try-1.json",
+      "sha256": "191518c5b36cc40d29650231957f60d4312897296ac09eb553b4d5ca2801ada6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_1_remove-try-1.json",
+      "sha256": "2856df59a88d43b418632ab7068165bcf84a9456a2699eaaffd0ad33ad39acd7"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_2_full-try-1.json",
+      "sha256": "2ff0c2f9673d0b02144bdb363c63dad697392cb639363a33b28803f262b70b5c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_2_remove-try-1.json",
+      "sha256": "8bb92f0d145272fad79979ca6810c2219a5464f441b2133cd345ad405e51f647"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_3_full-hostrecovery-1.json",
+      "sha256": "b038c5d7a68e1c989d4f19eda88506fc425aca56743b615c5167a18417887048"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_3_remove-try-1.json",
+      "sha256": "fa4b62332dbf6c8712fb61d1010c53ee0119bccb9046dbcc7a681da6f0138a66"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_4_full-try-1.json",
+      "sha256": "4cf0d5788a54cdab0a8ec3dd1f654cb06511d24b5e2a9eab554e6f3b899d8918"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-4-pair_4_remove-try-1.json",
+      "sha256": "f2a8deaaa24a1e97e4e4e5e301ece0175ae387dd41e7eb886ac1498f2af82623"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_1_full-try-1.json",
+      "sha256": "dedb00a3a3df812603771a8a0930e1f71a3324a8e256d8e798ab262752856c99"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_1_remove-try-1.json",
+      "sha256": "43437ba726144ba0c836eda4cdd428172302eb3692ebb59c8ccb652926b21c0e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_2_full-try-1.json",
+      "sha256": "0ae956a17ecbaccfa14e387bf17f532cfe197bac3152174848ff32b9e38d5ae6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_2_remove-try-1.json",
+      "sha256": "c6634ea3a71f2159345d88078cd5d85c7f9972b625b7a3eaf969823e942a4cb4"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_3_full-try-1.json",
+      "sha256": "7e2eb452e25eac34aed49229dfc608ed8a3e2944efa7ed2f316329ca293c1b98"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_3_remove-try-1.json",
+      "sha256": "e07883bb6bf172be6f85c6128013c5761794a1fbd145e986b95d19e9c16d414a"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_4_full-try-1.json",
+      "sha256": "b9ad72262a89a0c96ee0c9b2f67e473765855c51dff105762634006bdcfde2a1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-configs\\fresh-n9-phase3-5-pair_4_remove-try-1.json",
+      "sha256": "8cf80a0f0cafbff781952ca3fef79ce70c76a78e926ecd5d68722e178eb8a049"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_1_full-try-1\\evo-fresh-n9-n1-full__Saieb3N\\result.json",
+      "sha256": "f108193fbff3bdee04be57c35f1bc4133308057ef00ce14776b6684e444f76a5"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_1_full-try-1\\evo-fresh-n9-n1-full__Saieb3N\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "736e000b5c146b74853a97b13b0f92307be4bdebef542ef733f833615c22b14b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_1_full-try-1\\evo-fresh-n9-n1-full__Saieb3N\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_1_remove-try-1\\evo-fresh-n9-n1-remove__Maus45g\\result.json",
+      "sha256": "2cc093035553219239eb39082601278c0d3ca859bcb79d0dc4406374b239efce"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_1_remove-try-1\\evo-fresh-n9-n1-remove__Maus45g\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "6d21a9aad4573a7783955510401a348e0373489a1dfc8edb48e112d0eb07b4ca"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_1_remove-try-1\\evo-fresh-n9-n1-remove__Maus45g\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_2_full-try-1\\evo-fresh-n9-n1-full__UvsFXu9\\result.json",
+      "sha256": "6179aad47bae48f83d30648a0c0cc28ca1a97b2f75eb3e1297cb2f3e99e5f86f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_2_full-try-1\\evo-fresh-n9-n1-full__UvsFXu9\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "04fdd81ca9a3d6a47477067063a598aa5ac7eb08af0b9c484d4965f223926073"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_2_full-try-1\\evo-fresh-n9-n1-full__UvsFXu9\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_2_remove-try-1\\evo-fresh-n9-n1-remove__z6i7sNP\\result.json",
+      "sha256": "eba2cae9db5854f26d572d7f5347374c3922c386a5dc9b3a63429ed89c1ab052"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_2_remove-try-1\\evo-fresh-n9-n1-remove__z6i7sNP\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "40e6ed0f1e9662af3bf13e16d9c4f37f58c15f6610eb969c6d0fc7566eb50d32"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_2_remove-try-1\\evo-fresh-n9-n1-remove__z6i7sNP\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_3_full-try-1\\evo-fresh-n9-n1-full__dVKMSzP\\result.json",
+      "sha256": "e8a4639e0ff3b8e9d1cf0a7e5d94678f52e421c965e1b9d35bcffb1437ccb8b2"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_3_full-try-1\\evo-fresh-n9-n1-full__dVKMSzP\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "caf79cbc036c1568943aac75b4ef4f64f7bc82879a60dacd3f8c6b001e816c78"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_3_full-try-1\\evo-fresh-n9-n1-full__dVKMSzP\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_3_remove-try-1\\evo-fresh-n9-n1-remove__Eb8w6yD\\result.json",
+      "sha256": "563adc9e39f0311685829649594b8d71c0bbe11cbeaca5f8259136a37508e21e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_3_remove-try-1\\evo-fresh-n9-n1-remove__Eb8w6yD\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "3c1f3409d8acdb29832885dfdbf4498205da50331ba83853ed28768d878dc48b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_3_remove-try-1\\evo-fresh-n9-n1-remove__Eb8w6yD\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_4_full-try-1\\evo-fresh-n9-n1-full__RKtSFJ8\\result.json",
+      "sha256": "dca7a29981da26b77c7c4eb43f6fc3e442382f9b609773f338dd27b8cd5d6d83"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_4_full-try-1\\evo-fresh-n9-n1-full__RKtSFJ8\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "10dcf3e6277ada4d5f3af38335d3b0bdbcc84c6562dc1999408177d149a80e90"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_4_full-try-1\\evo-fresh-n9-n1-full__RKtSFJ8\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_4_remove-try-1\\evo-fresh-n9-n1-remove__7bsLXJG\\result.json",
+      "sha256": "5358b7789f6d94b798af96cc2ddc070397a7d9148710181ba1cfc8acedb4898e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_4_remove-try-1\\evo-fresh-n9-n1-remove__7bsLXJG\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "602bf9fc52c808e84411464d594d86e475990f0fb89f23dc46c1ffad726f599d"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-1-pair_4_remove-try-1\\evo-fresh-n9-n1-remove__7bsLXJG\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c88cf1d7e164d81f03152795654c96cde7db5e420d338cfcdf8f822082ab9655"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_1_full-try-1\\evo-fresh-n9-n2-full__oxVBZ4v\\result.json",
+      "sha256": "7a192cf3c807e48fc916890fdf5643ea4f50aa7d72c2d5bfcf742452c85bed07"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_1_full-try-1\\evo-fresh-n9-n2-full__oxVBZ4v\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "76104d38a0e78754f1decd9ee4ef32726e0406db0c4ca26d319fe1e376d59a55"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_1_full-try-1\\evo-fresh-n9-n2-full__oxVBZ4v\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "7c3c296cc3ef66d67136f19897649e33d0e4d0934c8091007aa705813034b95f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_1_remove-try-1\\evo-fresh-n9-n2-remove__CiS7qL5\\result.json",
+      "sha256": "7fff24c6a386c7fb1e96e0ea874f635ea0934f030f37599a7bf59a652497247d"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_1_remove-try-1\\evo-fresh-n9-n2-remove__CiS7qL5\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "3ca4558f1bfdcb7db64ffb595083e563988e0314132d7725a474e3a62d916e1c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_1_remove-try-1\\evo-fresh-n9-n2-remove__CiS7qL5\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "6176007540ba1397ed58d81aa3b87fbb5f219853ea2903252cd63b0ec2f43123"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_2_full-try-1\\evo-fresh-n9-n2-full__4RSnjYt\\result.json",
+      "sha256": "bbc2d180c8b8567e606762b9f76de59b2defcffb1eeac399adbd227ccc6f668f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_2_full-try-1\\evo-fresh-n9-n2-full__4RSnjYt\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "0287437ed4d521e376c735fbbd7f80afb41ea5c94f975f21293764f7d48fd12e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_2_full-try-1\\evo-fresh-n9-n2-full__4RSnjYt\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "fc49c733c3f53c5b1f79cf272f4a9800665edb831b2f4ceda9104e265b40ae94"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_2_remove-try-1\\evo-fresh-n9-n2-remove__tNGpuxU\\result.json",
+      "sha256": "f583831d77b8b83b6feaf737fb91d6b3f9de5a7defb37faf720ee16541217140"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_2_remove-try-1\\evo-fresh-n9-n2-remove__tNGpuxU\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "b1ecc2a08b3b06dcfae3e79553a6dfbc573067cdbf7ee4ae16056c3f5b2cf800"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_2_remove-try-1\\evo-fresh-n9-n2-remove__tNGpuxU\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b8e233aee716ea261d9c3937cbc30300e5367857d909f3edce3572e6e9b237a6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_3_full-try-1\\evo-fresh-n9-n2-full__NPAoN9d\\result.json",
+      "sha256": "2c8142f2ee470c45482bdc3efd64a9d5c6b1742ef703410e9db6f42faf504b1f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_3_full-try-1\\evo-fresh-n9-n2-full__NPAoN9d\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "3146b4658b79f5603565ead27bbbb08612c9e26fa10ead0ae507a22f6691b4e1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_3_full-try-1\\evo-fresh-n9-n2-full__NPAoN9d\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "d23949656e9f7803e369e4e38549fda169c8ddfad5bc609294fefa726d88bb85"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_3_remove-try-1\\evo-fresh-n9-n2-remove__wSjd9CW\\result.json",
+      "sha256": "6d8b5c798d18f4bff77336a0d2c2773e84ff8d87ac9b69791b1e56bda7d9c884"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_3_remove-try-1\\evo-fresh-n9-n2-remove__wSjd9CW\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "a5c7962b9848aab1774473d8ae0259d36b8baf7d32913e9be7ba6b4b0ef67b88"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_3_remove-try-1\\evo-fresh-n9-n2-remove__wSjd9CW\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "1c8741030439a2cae114d430cd7c65866bb81b39833bc48d243ad2a4318ff342"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_4_full-try-1\\evo-fresh-n9-n2-full__DyfVAQC\\result.json",
+      "sha256": "09d001c4622a477f4811e6987630a125b0f82d78a4c96f25d2c3f31efabeefbd"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_4_full-try-1\\evo-fresh-n9-n2-full__DyfVAQC\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "842f410af16e5a88a3fed6abb6e5bac2175d985edacd537b853a270b6585ac1f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_4_full-try-1\\evo-fresh-n9-n2-full__DyfVAQC\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "3db19809545bb0ae2a7da1e2aa0b8a9dc872cf78944dab647999ea67ebb64c95"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_4_remove-try-1\\evo-fresh-n9-n2-remove__b8P5RWw\\result.json",
+      "sha256": "85785fd11dd4f1094a7ffd6eed592aa2366427172b510118ff021f91b14b4b48"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_4_remove-try-1\\evo-fresh-n9-n2-remove__b8P5RWw\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "5b4dd138d813f1f4f44eff78584175e26ccf3b5685370050269e79fd183de9dc"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-2-pair_4_remove-try-1\\evo-fresh-n9-n2-remove__b8P5RWw\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "7b92cc954c5dc1257d55eac45c515159d11a8948ba355046a3c83a7f6bc01e63"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_1_full-try-1\\evo-fresh-n9-n3-full__Khc4ary\\result.json",
+      "sha256": "676b20fb3cb98040b227ae9542e897c58dd6c1a4d5ed09b8266e30d2c49bfa51"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_1_full-try-1\\evo-fresh-n9-n3-full__Khc4ary\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "d9110eb739e5bd2236640382e025d72eceffaad5dc09aafb4c7e83c41b08b715"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_1_full-try-1\\evo-fresh-n9-n3-full__Khc4ary\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_1_remove-try-1\\evo-fresh-n9-n3-remove__bGvJ6VV\\result.json",
+      "sha256": "0c15ec189662e5add7018df538e0aa31daf16e5aa6e4291cf95a75fed41254dc"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_1_remove-try-1\\evo-fresh-n9-n3-remove__bGvJ6VV\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "0836f87b4fe7d2ac2eb5ef8f9def6358d04a48e4f556e641cd6b99d958b65484"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_1_remove-try-1\\evo-fresh-n9-n3-remove__bGvJ6VV\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_2_full-try-1\\evo-fresh-n9-n3-full__rcjSp7c\\result.json",
+      "sha256": "44070e9ddf116f8114c03d7c14cc5ad14ae063fd02793b30e764775909b55bee"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_2_full-try-1\\evo-fresh-n9-n3-full__rcjSp7c\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "185931ad87b803f753f051cd197a5cc5b26d50b867448038300aa839bbdc01d5"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_2_full-try-1\\evo-fresh-n9-n3-full__rcjSp7c\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_2_remove-try-1\\evo-fresh-n9-n3-remove__AzkVQN3\\result.json",
+      "sha256": "9d734ddf30cade51d4e41887cfc7670e005a16ed798cacbbf7dd1ea3874ea538"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_2_remove-try-1\\evo-fresh-n9-n3-remove__AzkVQN3\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "fc89f10e39c7b58191a63f149d014b6efafc01c7189a9c2897f84bdf88f9799e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_2_remove-try-1\\evo-fresh-n9-n3-remove__AzkVQN3\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_3_full-try-1\\evo-fresh-n9-n3-full__9UvHQbF\\result.json",
+      "sha256": "e837adb1b67afb8a2e176fa6c71951007cce20d164c7e5279365ddbf9d02f7fb"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_3_full-try-1\\evo-fresh-n9-n3-full__9UvHQbF\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "cc664b4cf8b72b4b82d53b2a7b8d81fef1674c763f64fc6834eb2992a2b55168"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_3_full-try-1\\evo-fresh-n9-n3-full__9UvHQbF\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_3_remove-hostrecovery-1\\evo-fresh-n9-n3-remove__nCxghfU\\result.json",
+      "sha256": "3f11e5d4fc2105cf83578b09815f28a8b164f5a638be9be5471627c3cdfcffe4"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_3_remove-hostrecovery-1\\evo-fresh-n9-n3-remove__nCxghfU\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "54ebe3192b09376262b8e016181c82953a9bf339f4c4ab0e2d7b13b1f5d99429"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_3_remove-hostrecovery-1\\evo-fresh-n9-n3-remove__nCxghfU\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_4_full-try-1\\evo-fresh-n9-n3-full__tXmRdk6\\result.json",
+      "sha256": "d2c21ed2612bbca8e37eefc9b0581930717a84d3cf0425fba12fb5f78bbfcdfb"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_4_full-try-1\\evo-fresh-n9-n3-full__tXmRdk6\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "d5ffbb9075b1deb5105fef334e5a2b49dc0d6d485105a530f4300725933b735b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_4_full-try-1\\evo-fresh-n9-n3-full__tXmRdk6\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_4_remove-try-1\\evo-fresh-n9-n3-remove__CiXwv2b\\result.json",
+      "sha256": "6a6c481e0abb0a39abdbbcb34ce5db86e6dacf0a6cf34ff29c010b24a01c6167"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_4_remove-try-1\\evo-fresh-n9-n3-remove__CiXwv2b\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "d9041627ac4b5e93c52cdbc61186f7dbca00550b23b4398448a2044fccfeab52"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-3-pair_4_remove-try-1\\evo-fresh-n9-n3-remove__CiXwv2b\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "b270abaa4cb1b9271cf3e3339ffd9dba3ef47049526bdafaa400bbedc9ba8b18"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_1_full-try-1\\evo-fresh-n9-n4-full__y6uDYpw\\result.json",
+      "sha256": "dcea938609e00a10df21a887770eeed1a22111f0b44d80785e73f8d537b97264"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_1_full-try-1\\evo-fresh-n9-n4-full__y6uDYpw\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "d92b292de3e87654df5bff95151bcc3105513df4e99fa93302a51db51c661fb8"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_1_full-try-1\\evo-fresh-n9-n4-full__y6uDYpw\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_1_remove-try-1\\evo-fresh-n9-n4-remove__qbzgq7d\\result.json",
+      "sha256": "c9c74251d02eea603e6397eb7bd0b7866d2692c09f468a68f11fe506b03b46d1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_1_remove-try-1\\evo-fresh-n9-n4-remove__qbzgq7d\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "7acdfb6695a832c05db7ec8998bf7a4716274309b19e5cc8321e982e88a77226"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_1_remove-try-1\\evo-fresh-n9-n4-remove__qbzgq7d\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_2_full-try-1\\evo-fresh-n9-n4-full__TtUgteh\\result.json",
+      "sha256": "bfcdd0cdd40a3103e07f6885d592cace4ff4e94ef5f46b1596b851a6857d7089"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_2_full-try-1\\evo-fresh-n9-n4-full__TtUgteh\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "3ac84ddc31fea3f38b16288ef852ff3dca1cc13a380682e726d619930fb7775e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_2_full-try-1\\evo-fresh-n9-n4-full__TtUgteh\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_2_remove-try-1\\evo-fresh-n9-n4-remove__GLwPkbK\\result.json",
+      "sha256": "1908a3443212efd9584c63882d9aa62722518417da119e250e5ff7fabd5c0222"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_2_remove-try-1\\evo-fresh-n9-n4-remove__GLwPkbK\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "1ad60b8211e60ef71a92eb29388eef1f6ca0660b393cac178f3780e7d632a528"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_2_remove-try-1\\evo-fresh-n9-n4-remove__GLwPkbK\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_3_full-hostrecovery-1\\evo-fresh-n9-n4-full__Unbnm3z\\result.json",
+      "sha256": "7b1e9f0bef52aae0d90133253bbb7bd571a5fc3bf207ae8f3d65a5de5e9c8b8f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_3_full-hostrecovery-1\\evo-fresh-n9-n4-full__Unbnm3z\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "c67f7d6c7ab43c974027591c30810ed04ae5e5e4bd2a8ef1e56669a87e10b315"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_3_full-hostrecovery-1\\evo-fresh-n9-n4-full__Unbnm3z\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_3_remove-try-1\\evo-fresh-n9-n4-remove__u46PJp2\\result.json",
+      "sha256": "6305bdd131b31ea796b53632d629d013114ba25300ba8c51349040ee17dded4c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_3_remove-try-1\\evo-fresh-n9-n4-remove__u46PJp2\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "f29aaef65ace8f192aaddf6a305ffb5ea390de5f639b243362f83445cdf22a5d"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_3_remove-try-1\\evo-fresh-n9-n4-remove__u46PJp2\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_4_full-try-1\\evo-fresh-n9-n4-full__9fS5fjk\\result.json",
+      "sha256": "191a80c485d97459037eded21452eb32492a2e617f587acde27517b87e06ede5"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_4_full-try-1\\evo-fresh-n9-n4-full__9fS5fjk\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "df53ea7529c2859d0697a29f9834d92b3cde1be1396a01107d913667a1a3318b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_4_full-try-1\\evo-fresh-n9-n4-full__9fS5fjk\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_4_remove-try-1\\evo-fresh-n9-n4-remove__Vpq5yTi\\result.json",
+      "sha256": "652bd4f12281b8219f565f2273d5dbd96bb49d61f162938a74b565f127c5db90"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_4_remove-try-1\\evo-fresh-n9-n4-remove__Vpq5yTi\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "87be58fbd6ffd6c41874d1609b70781e0106b7674491935eaf4a6f8f9a33ab71"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-4-pair_4_remove-try-1\\evo-fresh-n9-n4-remove__Vpq5yTi\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "9150b600a5c45251f6bc4bfadd10f780795c3c63f09a80dd31356264f61600ed"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_1_full-try-1\\evo-fresh-n9-n5-full__RNjwKhc\\result.json",
+      "sha256": "c4b0c03c9e90f6f5a0367d5ba3f75ae837048a5c15bb48c71d6a0efa0b8f0c22"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_1_full-try-1\\evo-fresh-n9-n5-full__RNjwKhc\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "b1c67c764bafb5074df6834e96d16c236ecf3ccf80cfa97a30a775bc87467a71"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_1_full-try-1\\evo-fresh-n9-n5-full__RNjwKhc\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "c32545840714e8b1d8907c42f93a0a10cceb5f9c1ccc17b75c8c63e3c5119f23"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_1_remove-try-1\\evo-fresh-n9-n5-remove__gXnrQUH\\result.json",
+      "sha256": "74fb2518190609a697e513ee61f08c0e6032860bf3f54661461f0e217fd27fab"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_1_remove-try-1\\evo-fresh-n9-n5-remove__gXnrQUH\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "73e97b08fcdc9b4c2478029fd8d72017af61a78da3a40f5ed58a710ea6d6736f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_1_remove-try-1\\evo-fresh-n9-n5-remove__gXnrQUH\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "766d9ac70110a39ca82bdde293624446ca20dc4f3579b9eb54d3518a0b39dd66"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_2_full-try-1\\evo-fresh-n9-n5-full__3VgPZhu\\result.json",
+      "sha256": "b76b268180ac2e8b2ae8ecd6c3989cd776dd5e0acf754332e5f4b60a2cf29708"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_2_full-try-1\\evo-fresh-n9-n5-full__3VgPZhu\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "a750837286c0e4dd17a8533d57a448ddbbcfc33e296f61701cfc91ee232a7de7"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_2_full-try-1\\evo-fresh-n9-n5-full__3VgPZhu\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "766d9ac70110a39ca82bdde293624446ca20dc4f3579b9eb54d3518a0b39dd66"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_2_remove-try-1\\evo-fresh-n9-n5-remove__5UEeBWh\\result.json",
+      "sha256": "d4bf33d106be1547995b0e920b3b6f84aba8478971ddb61a953bec8d0b6cfb67"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_2_remove-try-1\\evo-fresh-n9-n5-remove__5UEeBWh\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "8506da77ee6a2ef5bae616fa8d0a92b0db1d17b25cd06a15c7b35332e831567e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_2_remove-try-1\\evo-fresh-n9-n5-remove__5UEeBWh\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "f61672bf48ad8023969121c15d32da5fb5a0c0d096bc0fba7bd5d944617d828f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_3_full-try-1\\evo-fresh-n9-n5-full__udmACf9\\result.json",
+      "sha256": "387cea28b08e1bdc1b6b29ce017a4aadc4c268850c99804d34467947f521d906"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_3_full-try-1\\evo-fresh-n9-n5-full__udmACf9\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "54f584c1cf10593820a6e47c717de896079c88337d666f699c5260fddb65e3cd"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_3_full-try-1\\evo-fresh-n9-n5-full__udmACf9\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "e856702961fd00ddafd3462e8dfd1609e657a60c4426738d318d11f3fffb89ee"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_3_remove-try-1\\evo-fresh-n9-n5-remove__xqJgNEL\\result.json",
+      "sha256": "0fe612b60e166947be6c98965d2678b1f70b7d7124841fe0053f9a6904bf1e49"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_3_remove-try-1\\evo-fresh-n9-n5-remove__xqJgNEL\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "7697c355c26feab5978c264276d37c5df3d12b215fd71c6e0804bd3fab61a4b6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_3_remove-try-1\\evo-fresh-n9-n5-remove__xqJgNEL\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "fd1cd94f20c6cce409df169e68aef4fbcf0080968567cae9ef6e1e528af39712"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_4_full-try-1\\evo-fresh-n9-n5-full__xrzDJY7\\result.json",
+      "sha256": "afcb819fa9c06b212d443656610667a5ae10e14bd615a70516d5d64c94472b82"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_4_full-try-1\\evo-fresh-n9-n5-full__xrzDJY7\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "79b5704da941b843738674da263718e47dab3857d1052186628a05915afb2e93"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_4_full-try-1\\evo-fresh-n9-n5-full__xrzDJY7\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "f61672bf48ad8023969121c15d32da5fb5a0c0d096bc0fba7bd5d944617d828f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_4_remove-try-1\\evo-fresh-n9-n5-remove__bc6sFr6\\result.json",
+      "sha256": "3226d169b6c90dbf3e3f2d078aeb717a7203c54fe392aa45f5d8d40ad092a339"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_4_remove-try-1\\evo-fresh-n9-n5-remove__bc6sFr6\\steps\\target-round\\agent\\trajectory.json",
+      "sha256": "bf42ba2d8b22bd5595a9b2ee69b3212a09520a04cb267a15ba42a8109246d7f5"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\harbor-jobs\\evo-fresh-n9-fresh-n9-phase3-5-pair_4_remove-try-1\\evo-fresh-n9-n5-remove__bc6sFr6\\steps\\target-round\\verifier\\test-stdout.txt",
+      "sha256": "766d9ac70110a39ca82bdde293624446ca20dc4f3579b9eb54d3518a0b39dd66"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-full\\DIRECTION_A_TREATMENT.json",
+      "sha256": "73c01d69e96f3b77130151b9fab4151717c7b0c77ad6d33030fdf83453382250"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-full\\steps\\target-round\\instruction.md",
+      "sha256": "a364ecf99939eedc77aa3da3ceac49d93c0440c7fe4802a2ac7c74af97ca2391"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-normal\\steps\\target-round\\instruction.md",
+      "sha256": "a364ecf99939eedc77aa3da3ceac49d93c0440c7fe4802a2ac7c74af97ca2391"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-remove\\DIRECTION_A_TREATMENT.json",
+      "sha256": "0442040fe089fae6c9d6e1e035828ce3c1ed4e11b6537f131a2cb0e7d056625d"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-remove\\steps\\target-round\\instruction.md",
+      "sha256": "6ef3ac3c5c395274464480013676f0a26df3512b0248b0ab5a724a825ed23061"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-full\\DIRECTION_A_TREATMENT.json",
+      "sha256": "98f15d5f81a3c0683b455248195f671825bf65dcaccc8b8becb1be5866d28d0f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-full\\steps\\target-round\\instruction.md",
+      "sha256": "03d319835fad846d282fb2e0209937cdfade87afa9a2564c2d44523bd46985c6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-normal\\steps\\target-round\\instruction.md",
+      "sha256": "03d319835fad846d282fb2e0209937cdfade87afa9a2564c2d44523bd46985c6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-remove\\DIRECTION_A_TREATMENT.json",
+      "sha256": "f5475b7a5e2352f915768b508084edc11b799086d9ed299156970d2903d57567"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-remove\\steps\\target-round\\instruction.md",
+      "sha256": "d4df94760b98b6d7be347a758af7721561b3a7b9115b240d612066316c6f282a"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-full\\DIRECTION_A_TREATMENT.json",
+      "sha256": "2e90ceb93412ffefd69bfcf29e4b76ef6b108088ba2994489db38394b3d15b76"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-full\\steps\\target-round\\instruction.md",
+      "sha256": "a7623ea4edc96234920224c06f9d6b4dc7814c5f403cf5801a10815b79b6a26f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-normal\\steps\\target-round\\instruction.md",
+      "sha256": "a7623ea4edc96234920224c06f9d6b4dc7814c5f403cf5801a10815b79b6a26f"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-remove\\DIRECTION_A_TREATMENT.json",
+      "sha256": "a4fc6f87d05d92aba817047391d658136b03c8d2b9f4ddd80ef5dcfaafe0735d"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-remove\\steps\\target-round\\instruction.md",
+      "sha256": "b914a81b7fc98da11f3760046acaf3da17ed054f0eccd899d9f126d4aa02b09c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-full\\DIRECTION_A_TREATMENT.json",
+      "sha256": "dd4d58cc4da51627ea990dc0b39d7ddbc46724138bd501958e24789108dcf8f8"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-full\\steps\\target-round\\instruction.md",
+      "sha256": "a145e2caf8b948eae000a39932d6f1ef166488ef95e2f97368cdaeb67ce78158"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-normal\\steps\\target-round\\instruction.md",
+      "sha256": "a145e2caf8b948eae000a39932d6f1ef166488ef95e2f97368cdaeb67ce78158"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-remove\\DIRECTION_A_TREATMENT.json",
+      "sha256": "c330abb6d73028c6cb0e073791e3a0acb17fb74c91317529f17494cb233d7759"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-remove\\steps\\target-round\\instruction.md",
+      "sha256": "beda64544b0a37ba6140de26be5a913dc694306214b450bc87ff91f4c6680ead"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-full\\DIRECTION_A_TREATMENT.json",
+      "sha256": "f7211b678da55174a1061e76440f3040e2f928e9deda86fc5c959e2ebd0ef33b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-full\\steps\\target-round\\instruction.md",
+      "sha256": "bdf0887a996121b0acb7a4f24818b1e1720a6177a06c5f3053e7012de5bdf8da"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-normal\\steps\\target-round\\instruction.md",
+      "sha256": "bdf0887a996121b0acb7a4f24818b1e1720a6177a06c5f3053e7012de5bdf8da"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-remove\\DIRECTION_A_TREATMENT.json",
+      "sha256": "70625732b21de75a72de4dd68eccb74740616ceff10829f8800fc0f3c87414a6"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-remove\\steps\\target-round\\instruction.md",
+      "sha256": "90955071a10190a079e081e46922e8c43491c5659042bebca33e93a8c0773d7d"
+    }
+  ],
+  "directoryEvidence": [
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-full",
+      "sha256Tree": "95a0819c74ea3582dd388df9ce8be62d468397f1d9507f3bbf357067619ff626"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-normal",
+      "sha256Tree": "eacd1f11d0b70fbe1fcef0fe45c44b1d84e2131d0b86ce84124c48ded6f4078b"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n1-remove",
+      "sha256Tree": "84f133c5ae68a93d92d119a0191a514c291c2e31e86f797f0c6efeedb68eac09"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-full",
+      "sha256Tree": "5c9cf1d42acf141ef5918ecf0b915f5d86471d42676562496104e600322a0ea0"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-normal",
+      "sha256Tree": "2d6f2f3e01f414e97b9967a44bc3a4ffcf5cfa05a460379096fb023076deb8ae"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n2-remove",
+      "sha256Tree": "b6b10a865683018e5ab9300494e742239d199f0d15f03809b699d0f0725286b8"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-full",
+      "sha256Tree": "45233b24ee64dc09297f98e0aff0ed3eb331dfe63fae0cd640be4d9f6fb34b52"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-normal",
+      "sha256Tree": "9a4728593bcfaa30fbf89343d0d764488076f7b9022031141d660ca4b50ec86e"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n3-remove",
+      "sha256Tree": "a875b1749da45a271fb858c657f440b1fcd42b1b1b2aa08792dc64243fd6e9e4"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-full",
+      "sha256Tree": "6e3b037792a44176ec199aebccd2979668a96c250a8d4ff43c66753f7bc6db7c"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-normal",
+      "sha256Tree": "4cbfecddf69be528d6b877f736cf9981d0f9437366d8b6ec274a57c33f6b4da8"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n4-remove",
+      "sha256Tree": "7018c40dde344a3719d7f3e8ba9cb8d5a3b4dd73ffaaf2a15531e4ba255f8dca"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-full",
+      "sha256Tree": "54cad7adcc617c58e38fc289b0c46987108109fe3ccbb167f3f015fd996dbd56"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-normal",
+      "sha256Tree": "1449058663bb2dfa7bacb6fad1a2bd612a696ef0d55156b2323f00b4f5b43a8a"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\prepared\\tasks\\evo-fresh-n9-n5-remove",
+      "sha256Tree": "fdca5cb814939f75d161c345d3e8c8de093615aeb169603c8c105304ebf597f8"
+    }
+  ],
+  "generatedArtifacts": [
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\Direction_A_Final_Submission\\analysis\\FINAL_HELDOUT_TASK_PAIR_TABLE.csv",
+      "sha256": "5be20fd8e9fbbd5cd051386c99bc583cde882cc61ed605ff5157f91701d73cb1"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\Direction_A_Final_Submission\\analysis\\FINAL_METHOD_METRICS.csv",
+      "sha256": "483a616636480a945c2a0f659145a889a04cfa8722d84650299c268e7edfe8fe"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\Direction_A_Final_Submission\\analysis\\FINAL_HELDOUT_ANALYSIS.json",
+      "sha256": "617b0fc271f88ff0a697579cb11b0c476de46a0811acd3b829c3b71e200f0026"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\Direction_A_Final_Submission\\analysis\\FINAL_TREATMENT_FIDELITY_AUDIT.md",
+      "sha256": "17e0272d147ace2b06f0d9ce5104850ff72bae7ea65856c483ecb64e31e79101"
+    },
+    {
+      "path": "C:\\Users\\L2503\\Desktop\\Direction_A_Final_Submission\\report\\Direction_A_方案介绍与测试结论报告_李姝瑾.md",
+      "sha256": "1eeddb9fe51d82189912509dfccd42e3799566f562926a3d8e47431d07344d4a"
+    }
+  ],
+  "reconstructionRules": {
+    "outcomes": "Parsed exactly one CASE_SUMMARY from each canonical trial's raw verifier test-stdout.txt; did not use report rewards or summary values as outcome sources.",
+    "canonicalAttempts": "Selected run-state PAIR slots whose terminal status was not TECHNICAL_INVALID, then required one journal start, one VALID_RESULT finish, and one matching attestation.",
+    "policy": "Used the pre-Y frozen accepted task IDs for 40/60/70/80; no scores, ranks, thresholds, or models were changed.",
+    "inference": "No exact final Fresh endpoint inference winner was found in the request, pre-Y seal, model-set freeze, or transitive binding manifest; no post-hoc method was chosen."
+  },
+  "prohibitionsObserved": {
+    "providerCalls": 0,
+    "retraining": false,
+    "thresholdTuning": false,
+    "additionalExperiments": false
+  }
+}

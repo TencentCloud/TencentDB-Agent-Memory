@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "direction-a.mem2-cal-a1.reference-availability.v1",
+  "sampleCount": 36,
+  "availableCount": 36,
+  "unavailableCount": 0,
+  "availabilityRate": 1,
+  "scientificActionFailureCount": 1,
+  "trueTechnicalInvalidCountInMaterializedReferenceSlots": 4,
+  "handling": "NO_COMPLETE_CASE_DELETION; FROZEN_WORST_CASE_WOULD_APPLY_IF_UNAVAILABLE",
+  "referenceManifestHash": "46a09cf10c681c3861ad7417ee8888870533b0bc2d61742e69694bdee4299381",
+  "contentHash": "ae6de292aa57fa78afcb6e60c83c4018f342ea6149320b75a9f5216d4b579f2f"
+}

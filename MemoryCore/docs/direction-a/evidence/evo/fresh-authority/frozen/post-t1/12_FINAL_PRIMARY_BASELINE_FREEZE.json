@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.requalified-primary-baseline-freeze.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "id": "MATCHED_CAPACITY_LEGACY_X0_BASELINE",
+  "target": "thetaHatFixed4",
+  "featureContract": [
+    "shared_target_round_log",
+    "shared_instruction_bytes_log"
+  ],
+  "sourceModel": {
+    "path": "Direction_A_PostCAL_Model_Value_v2_1/12_BASELINE_V2_FINAL_MODEL.json",
+    "bytes": 2698,
+    "sha256": "9e308a80751fb7c27b5bf772ce58e7cacb2ccf2335d599d99f12eaf3cb357fde",
+    "contentHash": "1dc8546e726eedca260905105c90407cf123b68c54477916505214af708d238c"
+  },
+  "baselineRecipe": {
+    "path": "Direction_A_Evo_Engineering_First_Budget100_v1/04_BASELINE_FREEZE_SPEC.json",
+    "bytes": 2040,
+    "sha256": "96e43259ad7f7346bc68145e08ab1b6be4e53c5d15f323dd6d0054eb6f4df926",
+    "contentHash": "31090a41e4693b9a05e038c8b50559561f08c727366cb262b310799f09c2c963"
+  },
+  "fittedModel": {
+    "schemaVersion": "direction-a.evo-continuous-adaptation.v1",
+    "candidateId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+    "featureBlock": "EVO_SHARED_ONLY",
+    "lambda": 10,
+    "featureOrder": [
+      "shared_target_round_log",
+      "shared_instruction_bytes_log"
+    ],
+    "means": [
+      1.6136626090170607,
+      8.732189586041335
+    ],
+    "scales": [
+      0.3374865965386388,
+      0.7241632999148631
+    ],
+    "coefficients": [
+      0.1695237027709593,
+      -0.006057652602712691,
+      0.005997158102988381
+    ],
+    "sourceOffsetCoefficient": 1,
+    "sourceRepresentationColumn": false,
+    "targetScaleSeparateFromSource": true,
+    "rawSourceTargetPooling": false,
+    "groupRowsTreatedAsIid": false,
+    "fitClusterCount": 8,
+    "fitGroupCount": 10,
+    "trainingHash": "3beaa0d6ed58a4b22fe6bbdb2da60a8c95d2f8a3d13823dc4f1531520f309da5"
+  },
+  "canonicalTrainingHash": "3beaa0d6ed58a4b22fe6bbdb2da60a8c95d2f8a3d13823dc4f1531520f309da5",
+  "canonicalModelHash": "81df786179622877b81ae29793194b6b69277007fcd6f983e97a659eac61dbee",
+  "nestedFoldSelections": [
+    {
+      "taskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "lambda": 10
+    },
+    {
+      "taskId": "theme_d9_w11_security_automation_scripting",
+      "lambda": 10
+    }
+  ],
+  "noFreshYUsed": true,
+  "contentHash": "ae1f916be86e5786cc310d947b3d869d79dd02b397748068eb485afaffa98934"
+}

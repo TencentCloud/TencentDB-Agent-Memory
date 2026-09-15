@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "direction-a.evo-process-evidence-ablation.v1",
+  "generatedAt": "2026-09-11T00:00:00.000+08:00",
+  "status": "COMPLETE",
+  "candidates": {
+    "A_FROZEN_SOURCE_RESIDUAL_RIDGE": {
+      "sharedOnly": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.1576308472096591,
+        "mae": 0.14914341834138253,
+        "spearmanClusterMean": 0.15179418517972906,
+        "signAccuracy": 0.25
+      },
+      "sharedPlusProcess": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.16002705528246297,
+        "mae": 0.1519194598027771,
+        "spearmanClusterMean": 0.15179418517972906,
+        "signAccuracy": 0.25
+      },
+      "rmseDeltaProcessMinusShared": 0.002396208072803885,
+      "maeDeltaProcessMinusShared": 0.0027760414613945683,
+      "outerDirectionalStability": {
+        "leftBetterRmseFolds": 2,
+        "rightBetterRmseFolds": 4,
+        "tiedFolds": 0,
+        "comparableFolds": 6
+      }
+    },
+    "B_SEPARATE_SCALE_PARTIAL_POOLING": {
+      "sharedOnly": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.018714317638217032,
+        "mae": 0.01353789131438588,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      },
+      "sharedPlusProcess": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.01876154923733969,
+        "mae": 0.013577954405026354,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      },
+      "rmseDeltaProcessMinusShared": 0.00004723159912265601,
+      "maeDeltaProcessMinusShared": 0.0000400630906404742,
+      "outerDirectionalStability": {
+        "leftBetterRmseFolds": 3,
+        "rightBetterRmseFolds": 3,
+        "tiedFolds": 0,
+        "comparableFolds": 6
+      }
+    },
+    "C_EVO_ONLY_RIDGE": {
+      "sharedOnly": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.018585100543715465,
+        "mae": 0.013379247662874233,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      },
+      "sharedPlusProcess": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.018642529349289574,
+        "mae": 0.013435375950269439,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      },
+      "rmseDeltaProcessMinusShared": 0.00005742880557410915,
+      "maeDeltaProcessMinusShared": 0.00005612828739520563,
+      "outerDirectionalStability": {
+        "leftBetterRmseFolds": 3,
+        "rightBetterRmseFolds": 3,
+        "tiedFolds": 0,
+        "comparableFolds": 6
+      }
+    }
+  },
+  "interpretation": "Development evidence only; process features are retained in the frozen grid but not declared helpful unless the expanded-bank nested result is stable",
+  "contentHash": "12c739f75fe67763655d9e7ab19909d3db9c0a40d4c7738d871fdd9a954c9d43"
+}

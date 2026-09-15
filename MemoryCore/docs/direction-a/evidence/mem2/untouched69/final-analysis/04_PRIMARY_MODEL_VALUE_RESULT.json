@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-primary-model-value.v1",
+  "untouchedN": 69,
+  "referenceAvailability": "69/69",
+  "coverage": 0.6956521739130435,
+  "proposed": {
+    "acceptedCount": 48,
+    "coverage": 0.6956521739130435,
+    "acceptedMeanTheta": 0.6192956349206349,
+    "V": 0.4308143547273982,
+    "G": 0.11453158893712075
+  },
+  "baseline": {
+    "acceptedCount": 48,
+    "coverage": 0.6956521739130435,
+    "acceptedMeanTheta": 0.5625620039682541,
+    "V": 0.3913474810213941,
+    "G": 0.07506471523111657
+  },
+  "DeltaAcceptedMeanTheta": 0.05673363095238082,
+  "relativeAcceptedMeanImprovementPct": 10.084867188361047,
+  "DeltaV": 0.03946687370600414,
+  "relativeVImprovementPct": 10.084867188361068,
+  "DeltaG": 0.03946687370600417,
+  "identities": {
+    "directDeltaV": 0.03946687370600414,
+    "fixedCoverageAcceptedMeanIdentity": 0.039466873706004046,
+    "discordantSetIdentity": 0.03946687370600414,
+    "tolerance": 1e-12,
+    "pass": true
+  },
+  "PRIMARY_COMPARATIVE_PASS": false,
+  "claimClass": "EMPIRICAL_POSITIVE_BUT_INCONCLUSIVE",
+  "contentHash": "af070b4abfcc0e9169c00338a3c264f4994d1b2a0d7785836b9de72bb73aacc0"
+}

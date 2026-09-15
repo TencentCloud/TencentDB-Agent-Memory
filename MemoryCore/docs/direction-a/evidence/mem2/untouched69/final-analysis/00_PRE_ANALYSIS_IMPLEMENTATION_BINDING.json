@@ -1,0 +1,145 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-pre-analysis-implementation-binding.v1",
+  "status": "FROZEN_BEFORE_CAUSAL_Y_READ",
+  "decisionId": "POSTCAL_MODEL_VALUE_V2_1_FINAL_HOLDOUT_ANALYSIS_20260911",
+  "frozenDate": "2026-09-11",
+  "causalYReadAtFreeze": 0,
+  "roots": {
+    "repoRoot": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\MemoryCore",
+    "studyRoot": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_PostCAL_Model_Value_v2_1",
+    "acquisitionRoot": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_PostCAL_Model_Value_Acquisition_Runtime_v2_1",
+    "oldFormalRoot": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Mem2_A1_CAL_Formal_Inference_v1",
+    "reportEvidenceRoot": "C:\\Users\\L2503\\Desktop\\Direction_A_Report_Evidence_20260911",
+    "finalAnalysisRoot": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_PostCAL_Model_Value_Final_Analysis_v2_1"
+  },
+  "frozenInputFileSha256": {
+    "11_PROPOSED_V2_FINAL_MODEL.json": "5aebbff0be8db3785a6510aaa2e68fabfbf12587ef3a5f0bc3e01f2b0bb797b7",
+    "12_BASELINE_V2_FINAL_MODEL.json": "9e308a80751fb7c27b5bf772ce58e7cacb2ccf2335d599d99f12ef3cb357fde",
+    "13_UNTOUCHED69_INTEGRITY.json": "f6eb7065b61b0cd4856e58cecdca07f80f9a1da57b215edbaad85a20f019dbfd",
+    "14_FINAL69_SCORE_FREEZE.json": "a5bc99822a406066052bd4ad4e5039a9254e2b3da1f6796351140dfdfe067f50",
+    "15_FINAL69_POLICY_FREEZE.json": "3795f4aaaa8074de68faa9007e4741abcf15e459af3e92b2454106d120633f44",
+    "16_FINAL69_METRIC_INFERENCE_FREEZE.json": "82a8af5a76dee1a9f1647fa6e2fc92ec2fdb6871b6ddcb1eb21cdaba53b49a1c",
+    "17_FINAL69_POWER_PLAN.json": "71d13cb4fe8ba96a71c34803fe422d1c9e67e3d10b8b5464e210d8db054ca91d",
+    "SHA256_INVENTORY.json": "7abd9934dc1d88784d704d307b186c8def2b8b305867915a8835b2c118e3f857"
+  },
+  "primary": {
+    "estimand": "mean_g((A_proposed_primary-A_baseline_primary)*thetaHatFixed4)",
+    "coverageNumerator": 48,
+    "coverageDenominator": 69,
+    "decisionsSource": "15_FINAL69_POLICY_FREEZE.json acceptedComponentIds",
+    "proposedPolicyHash": "55d013a64b46f9fff9c027488851981271d5dd7e889d4856bf000214bef6eb49",
+    "baselinePolicyHash": "342e568d7e49072c33fd2d3d970ceec195ed751ed98909924d6ac6894d6d9623",
+    "gate": "DeltaV_GT_0_AND_ONE_SIDED_95_PERCENTILE_LCB_GT_0"
+  },
+  "bootstrap": {
+    "unit": "INDEPENDENT_MEM2_SHARED_SESSION_COMPONENT",
+    "rowCountPerReplicate": 69,
+    "replicates": 20000,
+    "seed": "direction-a-postcal-model-value-v2-1-final69-paired-bootstrap-20260911",
+    "pairedWithinRow": true,
+    "prng": {
+      "id": "SHA256_SEEDED_MULBERRY32_UINT32_LE_V1",
+      "initialState": "SHA256(seedLabel).digest().readUInt32LE(0)",
+      "sourcePath": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\MemoryCore\\scripts\\direction-a\\formal\\postcal-model-value-v2-1-freeze.mjs",
+      "sourceSha256": "2879877fbc5265fcbaab769baab99d30a96cdd628658f110d395f467a62f6180",
+      "uniformRange": "[0,1)",
+      "indexRule": "floor(U*n)"
+    },
+    "bootstrapMean": "arithmetic mean of 20000 replicate DeltaV values",
+    "bootstrapSd": "sample standard deviation with denominator R-1",
+    "percentiles": {
+      "method": "EMPIRICAL_NEAREST_RANK_NO_INTERPOLATION",
+      "oneSided95LowerOneIndexedRank": 1000,
+      "twoSided95LowerOneIndexedRank": 500,
+      "twoSided95UpperOneIndexedRank": 19500
+    },
+    "fractionNonPositive": "count(DeltaV_b<=0)/20000"
+  },
+  "measurementSensitivity": {
+    "role": "SENSITIVITY_NOT_CO_PRIMARY_VETO",
+    "replicates": 20000,
+    "seed": "direction-a-postcal-model-value-v2-1-final69-paired-bootstrap-20260911::measurement",
+    "groupResampling": "sample 69 canonical rows with replacement",
+    "withinGroupResampling": "for every selected row sample 4 values with replacement from that row's D1,D2,D3,D4 and average",
+    "policyDecisionsPreserved": true,
+    "percentileMethod": "same empirical nearest-rank no-interpolation ranks as primary bootstrap"
+  },
+  "referenceReconstruction": {
+    "pairOrdering": "original pairIndex ascending",
+    "validPairDefinition": "complete FULL/REMOVE pair passing frozen technical-validity semantics",
+    "fixed4Rule": "first four valid complete pairs",
+    "slot5Rule": "technical-validity replacement only",
+    "thetaRule": "arithmetic mean of D1,D2,D3,D4 where Dj=U_FULL-U_REMOVE",
+    "scientificActionFailures": "retain as observed utility values; never censor"
+  },
+  "join": {
+    "keys": [
+      "componentId",
+      "statisticalCluster"
+    ],
+    "cardinality": "one-to-one across all 69 rows",
+    "canonicalRowOrder": "componentId ascending, UTF-16 JavaScript localeCompare tie behavior not used because IDs are unique"
+  },
+  "predictionMetrics": {
+    "mae": "mean(abs(score-thetaHatFixed4))",
+    "rmse": "sqrt(mean((score-thetaHatFixed4)^2))",
+    "spearman": "Pearson correlation of average-rank vectors; ascending ranks; null if either rank vector has zero variance",
+    "ties": "average ranks",
+    "rmseReductionPct": "(RMSE_baseline-RMSE_proposed)/RMSE_baseline*100",
+    "maeReductionPct": "(MAE_baseline-MAE_proposed)/MAE_baseline*100"
+  },
+  "relativeImprovement": {
+    "safePositiveDenominatorTolerance": 1e-12,
+    "relativeVImprovementPct": "DeltaV/abs(V_baseline)*100 only when V_baseline>1e-12; otherwise null",
+    "relativeAcceptedMeanImprovementPct": "DeltaAcceptedMeanTheta/abs(BaselineAcceptedMeanTheta)*100 only when BaselineAcceptedMeanTheta>1e-12; otherwise null",
+    "absoluteDifferencesAlwaysReported": true
+  },
+  "priorityCurves": {
+    "fractions": [
+      0.2,
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9
+    ],
+    "kRule": "max(1,floor(q*69+0.5))",
+    "ranking": "descending frozen score, componentId ascending tie-break",
+    "metrics": [
+      "selectedMeanTheta",
+      "V",
+      "selectedMeanThetaMinusOverallMeanTheta"
+    ],
+    "rateQiniBoundary": "DESCRIPTIVE_PROJECT_ADAPTED_PRIORITIZATION_METRICS_ONLY"
+  },
+  "deploymentPolicy": {
+    "source": "15_FINAL69_POLICY_FREEZE.json secondaryDeploymentStyle numeric thresholds",
+    "rule": "ACCEPT_IF_SCORE_GT_BOUNDARY_OR_SCORE_EQ_BOUNDARY_AND_COMPONENT_ID_LE_BOUNDARY_COMPONENT_ID",
+    "thresholdReselectionAllowed": false
+  },
+  "numericConventions": {
+    "internalArithmetic": "JavaScript IEEE-754 binary64",
+    "jsonAndCsvStorage": "full finite JavaScript numeric serialization",
+    "reportDisplay": "up to 12 decimal places, trailing zeros optional",
+    "equalityTolerance": 1e-12,
+    "nonFiniteOutput": "forbidden"
+  },
+  "immutability": {
+    "retraining": false,
+    "lambdaChanges": false,
+    "featureChanges": false,
+    "top48Changes": false,
+    "coverageChanges": false,
+    "bootstrapChanges": false,
+    "confidenceLevelChanges": false,
+    "newProviderCalls": 0,
+    "newModelCalls": 0,
+    "secretReads": 0,
+    "sealedTestReads": 0,
+    "evoReads": 0,
+    "ebReads": 0,
+    "originalFormalCal": "FAIL_IMMUTABLE"
+  }
+}

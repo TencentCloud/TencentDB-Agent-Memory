@@ -18,7 +18,7 @@
 
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { generateText, streamText, tool, stepCountIs, jsonSchema } from "ai";
+import { generateText, streamText, tool, stepCountIs, jsonSchema, type ToolSet } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
 import type {
@@ -29,6 +29,11 @@ import type {
   Logger,
 } from "../../core/types.js";
 import type { LLMUsage } from "../../core/report/metric-tracking-runner.js";
+import {
+  emitEvaluationEvent,
+  getEvaluationContext,
+  type EvaluationModelCall,
+} from "../../evaluation/direction-a/context.js";
 
 const TAG = "[memory-tdai] [standalone-runner]";
 
@@ -52,8 +57,8 @@ const MAX_TOOL_ITERATIONS = 20;
  *
  * 未传对应字段时，metadata 里也不出现该键 —— 保持与旧行为完全一致。
  */
-function buildTelemetryMetadata(params: LLMRunParams): Record<string, unknown> {
-  const meta: Record<string, unknown> = {
+function buildTelemetryMetadata(params: LLMRunParams): Record<string, string | boolean | string[]> {
+  const meta: Record<string, string | boolean | string[]> = {
     instanceId: params.instanceId ?? "unknown",
   };
   if (params.traceName) {
@@ -89,6 +94,14 @@ export interface StandaloneLLMConfig {
   /** Request timeout in milliseconds (default: 120_000). */
   timeoutMs?: number;
   /**
+   * AI SDK provider retry count. Omit to preserve the SDK default; formal
+   * Direction-A profiles bind this explicitly so logical and physical call
+   * accounting cannot drift.
+   */
+  sdkMaxRetries?: number;
+  /** OpenAI-compatible reasoning effort forwarded as `reasoning_effort`. */
+  reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  /**
    * LLM 访问模式（gateway 层解释；runner 拿到的是已解析后的 baseUrl/apiKey）：
    *   - "openai": 直连通用 OpenAI 兼容服务（默认，向后兼容）
    *   - "proxy":  走 context_proxy，运行时会自动把 baseUrl 拼成
@@ -101,12 +114,8 @@ export interface StandaloneLLMConfig {
     useMemorySystemUserKey?: boolean;
   };
   /**
-   * 是否用流式请求(streamText)调用上游。默认 false(generateText 非流式)。
-   * 个别 OpenAI 兼容上游只接受流式请求时置 true。
-   *
-   * ⚠️ 仅 StandaloneLLMRunner(含 gateway/local/knowledge-ingest)路径生效;
-   * OpenClaw host runner 不使用此 runner,该开关被忽略。不会把增量 token
-   * 透传给调用方,只是"以流式协议请求上游后等待完整文本"的兼容层。
+   * Whether to use a streaming upstream request. The runner still waits for
+   * the complete result before returning it to its caller.
    */
   stream?: boolean;
 }
@@ -211,10 +220,8 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
             if (!content.includes(edit.oldText)) {
               return JSON.stringify({ error: `oldText not found in file "${args.path}": ${edit.oldText.slice(0, 80)}` });
             }
-            // Pass a replacer function so `$&`, `$'`, "$`", `$1`, `$$` in newText are
-            // inserted literally. A plain string replacement would expand them as
-            // special patterns -- `$'` (matched substring's suffix) duplicates the rest
-            // of the file on every edit, growing scene blocks exponentially.
+            // Use a replacer function so replacement metacharacters such as
+            // `$&` and `$'` are inserted literally.
             content = content.replace(edit.oldText, () => edit.newText);
           }
           await fsPromises.writeFile(resolved, content, "utf-8");
@@ -265,6 +272,16 @@ export class StandaloneLLMRunner implements LLMRunner {
    * 不改变 LLMRunner 接口签名。
    */
   lastUsage?: LLMUsage;
+  /** Evaluation-only side channel used to distinguish output truncation. */
+  lastFinishReason?: string;
+  /** Provider-reported reasoning-token count when available. */
+  lastReasoningTokens?: number;
+  /** UTF-8 byte length of the visible final content. */
+  lastFinalContentBytes = 0;
+  /** Provider-reported visible text-token count when available. */
+  lastFinalContentTokens?: number;
+  /** Number of AI SDK generateText invocations made by the latest run(). */
+  lastSdkGenerateTextInvocationCount = 0;
 
   constructor(opts: {
     config: StandaloneLLMConfig;
@@ -281,9 +298,20 @@ export class StandaloneLLMRunner implements LLMRunner {
   }
 
   async run(params: LLMRunParams): Promise<string> {
-    const runStartMs = Date.now();
+    const productionRunStartMs = Date.now();
     const timeoutMs = params.timeoutMs ?? this.config.timeoutMs ?? 120_000;
     const maxTokens = params.maxTokens ?? this.config.maxTokens ?? 4096;
+    const sdkMaxRetries = this.config.sdkMaxRetries;
+    const reasoningEffort = this.config.reasoningEffort;
+    if (sdkMaxRetries !== undefined && (!Number.isInteger(sdkMaxRetries) || sdkMaxRetries < 0)) {
+      throw new Error("StandaloneLLMConfig.sdkMaxRetries must be a non-negative integer");
+    }
+    this.lastUsage = undefined;
+    this.lastFinishReason = undefined;
+    this.lastReasoningTokens = undefined;
+    this.lastFinalContentBytes = 0;
+    this.lastFinalContentTokens = undefined;
+    this.lastSdkGenerateTextInvocationCount = 0;
     const workspaceDir = params.workspaceDir ?? process.cwd();
     // Per-call overrides — when the caller supplies their own tools (e.g.
     // SkillExtractor's skill_list/skill_view/skill_manage), they trump the
@@ -299,13 +327,16 @@ export class StandaloneLLMRunner implements LLMRunner {
     );
 
     // Create OpenAI-compatible provider via AI SDK
-    // Use "compatible" mode to call /chat/completions (not Responses API),
-    // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
+    // `provider.chat(...)` below explicitly selects /chat/completions (not
+    // Responses API), which works with OpenAI-compatible backends.
     const provider = createOpenAI({
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
+      // Retain the beta.1 provider-construction contract. The current SDK
+      // ignores this legacy key, while compatible providers still receive the
+      // same explicit chat-completions selection through provider.chat().
       compatibility: "compatible",
-    });
+    } as Parameters<typeof createOpenAI>[0]);
 
     // Select tools based on mode + storage
     // Service mode (COS): use storage-backed tools → LLM reads/writes via StorageAdapter
@@ -313,21 +344,33 @@ export class StandaloneLLMRunner implements LLMRunner {
     // enableTools=false: omit tools entirely so the model cannot hallucinate calls.
     // Caller-provided tools (params.tools) override the defaults — used by
     // SkillExtractor to inject domain-specific tools (skill_list, etc.).
-    let tools: Record<string, unknown> | undefined;
+    let tools: ToolSet | undefined;
     if (callerProvidedTools && effectiveEnableTools) {
-      tools = params.tools;
+      tools = params.tools as ToolSet;
       this.logger?.debug?.(`${TAG} Using caller-provided tools: [${Object.keys(tools!).join(", ")}]`);
     } else if (effectiveEnableTools && params.storage) {
       const { createStorageTools } = await import("./storage-tools.js");
-      tools = createStorageTools(params.storage, params.storagePrefix ?? "", this.logger);
+      tools = createStorageTools(params.storage, params.storagePrefix ?? "", this.logger) as ToolSet;
       this.logger?.debug?.(`${TAG} Using storage-backed tools (prefix="${params.storagePrefix ?? ""}")`);
     } else if (effectiveEnableTools) {
-      tools = createSandboxedTools(workspaceDir, this.logger);
+      tools = createSandboxedTools(workspaceDir, this.logger) as ToolSet;
     } else {
       tools = undefined; // pure-text task — never expose any tool to the model
     }
 
-    try {
+    const evalContext = getEvaluationContext();
+    const call: EvaluationModelCall = {
+      taskId: params.taskId,
+      model: this.model,
+      inputCharacters: params.prompt.length + (params.systemPrompt?.length ?? 0),
+      maxOutputTokens: maxTokens,
+    };
+    const maxAttempts = Math.max(1, evalContext?.retry?.maxAttempts ?? 1);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const runStartMs = evalContext ? Date.now() : productionRunStartMs;
+      await evalContext?.beforeModelCall?.(call);
+      try {
       // H-11 Step 2: combine internal timeout with caller-provided abortSignal
       // (e.g. pipeline-worker lost its lock and wants the LLM call to bail out).
       // AbortSignal.any (Node 20+) aborts when ANY of the listed signals abort.
@@ -336,6 +379,7 @@ export class StandaloneLLMRunner implements LLMRunner {
         ? AbortSignal.any([timeoutSignal, params.abortSignal])
         : timeoutSignal;
 
+      this.lastSdkGenerateTextInvocationCount += 1;
       const callParams = {
         model: provider.chat(this.model),
         system: params.systemPrompt,
@@ -347,6 +391,10 @@ export class StandaloneLLMRunner implements LLMRunner {
           ? { tools, stopWhen: stepCountIs(maxIterations) }
           : {}),
         maxOutputTokens: maxTokens,
+        ...(reasoningEffort === undefined
+          ? {}
+          : { providerOptions: { openai: { reasoningEffort } } }),
+        ...(sdkMaxRetries === undefined ? {} : { maxRetries: sdkMaxRetries }),
         abortSignal: combinedSignal,
         experimental_telemetry: {
           isEnabled: true,
@@ -354,52 +402,77 @@ export class StandaloneLLMRunner implements LLMRunner {
           metadata: buildTelemetryMetadata(params),
         },
       };
-
-      // stream=true → streamText(给只吃流式的上游);否则 generateText。
-      // 读 totalUsage 而不是单 step 的 usage —— tool-call 多 step 时后者只报最后一步,
-      // 会漏掉前序工具调用请求的用量,导致 credit 计费偏低。
-      // ai@6.0.164 的字段是 inputTokens/outputTokens/totalTokens。
-      const { text, usage, steps } = this.stream
+      const result = this.stream
         ? await (async () => {
-            const streamResult = streamText(callParams);
+            const streamed = streamText(callParams);
             return {
-              text: ((await streamResult.text) ?? "").trim(),
-              usage: await streamResult.totalUsage,
-              steps: await streamResult.steps,
+              text: ((await streamed.text) ?? "").trim(),
+              usage: await streamed.totalUsage,
+              steps: await streamed.steps,
+              finishReason: await streamed.finishReason,
             };
           })()
         : await (async () => {
-            const genResult = await generateText(callParams);
+            const generated = await generateText(callParams);
             return {
-              text: (genResult.text ?? "").trim(),
-              usage: genResult.totalUsage,
-              steps: genResult.steps,
+              text: (generated.text ?? "").trim(),
+              usage: generated.totalUsage,
+              steps: generated.steps,
+              finishReason: generated.finishReason,
             };
           })();
 
+      const text = result.text;
+      this.lastFinishReason = result.finishReason;
+      this.lastFinalContentBytes = Buffer.byteLength(text, "utf8");
       const totalMs = Date.now() - runStartMs;
 
       // 暴露 token usage 到 side-channel（供 MetricTrackingRunner 读取）
-      // AI SDK 用 inputTokens/outputTokens,我们的内部 LLMUsage 沿用旧命名
-      // promptTokens/completionTokens 以匹配 MetricTrackingRunner。
-      if (usage) {
-        const promptTokens = usage.inputTokens ?? 0;
-        const completionTokens = usage.outputTokens ?? 0;
+      if (result.usage) {
+        const usage = result.usage as unknown as {
+          promptTokens?: number;
+          completionTokens?: number;
+          inputTokens?: number;
+          outputTokens?: number;
+          totalTokens?: number;
+          reasoningTokens?: number;
+          outputTokenDetails?: {
+            reasoningTokens?: number;
+            textTokens?: number;
+          };
+        };
+        // Preserve the production AI SDK v6 interpretation while accepting
+        // legacy aliases in frozen evaluation fixtures.
+        const promptTokens = usage.inputTokens ?? usage.promptTokens ?? 0;
+        const completionTokens = usage.outputTokens ?? usage.completionTokens ?? 0;
         this.lastUsage = {
           promptTokens,
           completionTokens,
           totalTokens: usage.totalTokens ?? promptTokens + completionTokens,
         };
+        this.lastReasoningTokens = usage.reasoningTokens ?? usage.outputTokenDetails?.reasoningTokens;
+        this.lastFinalContentTokens = usage.outputTokenDetails?.textTokens;
       } else {
         this.lastUsage = undefined;
       }
 
+      const evaluationResult = {
+        ...call,
+        attempt,
+        success: true,
+        inputTokens: this.lastUsage?.promptTokens,
+        outputTokens: this.lastUsage?.completionTokens,
+        latencyMs: totalMs,
+      };
+      await evalContext?.afterModelCall?.(evaluationResult);
+      emitEvaluationEvent("direction_a.model_call", evaluationResult);
+
       this.logger?.debug?.(
-        `${TAG} run() completed: ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
+        `${TAG} run() completed: ${totalMs}ms, steps=${result.steps.length}, output=${text.length} chars`,
       );
 
       // Log each step's activity (tool calls + text output)
-      for (const step of steps) {
+      for (const step of result.steps) {
         const calls = step.toolCalls ?? [];
         const textLen = step.text?.length ?? 0;
         if (calls.length > 0) {
@@ -437,9 +510,31 @@ export class StandaloneLLMRunner implements LLMRunner {
       }
 
       return text;
-    } catch (err) {
+      } catch (err) {
+      this.lastFinishReason = undefined;
       const totalMs = Date.now() - runStartMs;
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errorClass = err instanceof Error ? err.name : "UnknownError";
+      const retryable = evalContext?.retry?.shouldRetry(err) ?? false;
+      const willRetry = attempt < maxAttempts && retryable;
+      // Evaluation artifacts/logs never need provider error bodies, which can
+      // contain echoed headers. Production retains its existing diagnostics.
+      const errMsg = evalContext ? errorClass : err instanceof Error ? err.message : String(err);
+      const evaluationResult = {
+        ...call,
+        attempt,
+        success: false,
+        latencyMs: totalMs,
+        errorClass,
+        retryable,
+        willRetry,
+      };
+      await evalContext?.afterModelCall?.(evaluationResult);
+      emitEvaluationEvent("direction_a.model_call", evaluationResult);
+
+      if (willRetry) {
+        this.logger?.warn?.(`${TAG} evaluation retry ${attempt}/${maxAttempts} after ${errorClass}`);
+        continue;
+      }
       this.logger?.error(`${TAG} run() failed after ${totalMs}ms: ${errMsg}`);
 
       if (params.instanceId) {
@@ -456,7 +551,9 @@ export class StandaloneLLMRunner implements LLMRunner {
       }
 
       throw err;
+      }
     }
+    throw new Error("StandaloneLLMRunner exhausted attempts");
   }
 }
 

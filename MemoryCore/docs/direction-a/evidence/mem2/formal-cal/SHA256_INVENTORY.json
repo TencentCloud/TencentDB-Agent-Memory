@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "direction-a.immutable-result-package-sha256-inventory.v1",
+  "rootName": "Direction_A_Mem2_A1_CAL_Formal_Inference_v1",
+  "fileCount": 9,
+  "files": {
+    "00_POST_RECOVERY_INTEGRITY_REPORT.json": "402b1304508361e668b5a4a6c3345fe2437351b1f166ac63ea5edb304573bfbc",
+    "01_FIXED4_REFERENCE_MANIFEST.json": "d51dd9f6364f13564d101590af269ec4b41707aef04d908cf487ba77bcaec2a1",
+    "02_REFERENCE_AVAILABILITY_REPORT.json": "afd49b65039782104b72d7ac7d328660906cf66da93057f04f9a77132550fe5c",
+    "03_A1_INFERENCE_REPORT.json": "632af91715d4e2951a064f2a049e05cf39669b7b59d8fc9080ed88357d29c194",
+    "04_CAL_FIXED_SEQUENCE_REPORT.json": "c4875d44a0aaeba68cf47d84cf5decf7b7f6258291266cfa4d870c8e657d1757",
+    "05_CAL_A1_FORMAL_RESULT.md": "33e2dd228b02cf0e17c1460879d393e936bf71a7c4bb86209247e6f3c7cf2b1a",
+    "06_INPUT_BINDINGS.json": "e335ec33da6a78fdf68cf17fa9fa876d1de956ee0c13809aebb029d8bb21834e",
+    "code/README.md": "71c2bb4c8ad62462780b5233fa21b2ee354821e6e6ec7f2b6ee1fc17134bc5e2",
+    "code/post_recovery_materializer.ts": "5c894e71ba2e4763a5e521f91e8a871ed23f20b41cf860a37d928872c7d0081d"
+  },
+  "contentHash": "7dbba0e02994a6eaee17964b34939ecdd6831fd6b2d517e702819cbcaa70df38"
+}

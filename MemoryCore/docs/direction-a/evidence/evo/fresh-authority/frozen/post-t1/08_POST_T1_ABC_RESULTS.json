@@ -1,0 +1,1331 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.requalified-abc-results.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "COMPLETE",
+  "evidenceClass": "TRAIN_DEV_ONLY_NOT_FRESH",
+  "bankContentHash": "000c68687b0d103c1ecd07132340c85a44b039c8a148384f67d290e0a0b53428",
+  "ruleFreezeContentHash": "71f6f957462ff67aababbb208742ac39ec73b34ccd62429a3cc98695378087ae",
+  "candidates": {
+    "A_FROZEN_SOURCE_RESIDUAL_RIDGE": {
+      "schemaVersion": "direction-a.evo-engineering-first.v1",
+      "candidateId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+      "folds": [
+        {
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.15269746365226586,
+            "mae": 0.14366008393760094,
+            "spearmanClusterMean": 0.2561358820277077,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.14433034248086296,
+            "mae": 0.14433034248086296,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+              "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "thetaHatFixed4": 0.015625,
+              "score": -0.12870534248086296,
+              "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "8f795f41a154b947100fb168d729421a01a6577a0dbb03e25f88d7d9e20a127c"
+        },
+        {
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.14042724555629288,
+            "mae": 0.13419325708883112,
+            "spearmanClusterMean": 0.07881104062391006,
+            "signAccuracy": 0.21428571428571427
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.21355137107215186,
+            "mae": 0.21355137107215186,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "thetaHatFixed4": 0.00390625,
+              "score": 0.21745762107215186,
+              "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "5f718f8ffc04460233a5e4f9852974871ad51bea424ada05b0a77cf406412387"
+        },
+        {
+          "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.158260116429015,
+            "mae": 0.15021691172976784,
+            "spearmanClusterMean": 0.14824986333222023,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.10282908616129004,
+            "mae": 0.10282908616129004,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": 0.10282908616129004,
+              "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "f4c24748233b0bd774485494cc3632ed06eec099434efd5f28d5f40e1a3fd284"
+        },
+        {
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.15901423864609274,
+            "mae": 0.15227595760343177,
+            "spearmanClusterMean": -0.03706246583305506,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.08638809414410978,
+            "mae": 0.08638809414410978,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+              "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": -0.08638809414410978,
+              "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "f9b8c27b2defdb19c28adcf7a7c80979e3db585adf322a4a6c6f7dbfc2d085b4"
+        },
+        {
+          "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.1444867491311,
+            "mae": 0.1347256846722841,
+            "spearmanClusterMean": 0.19702760155977517,
+            "signAccuracy": 0.21428571428571427
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.15190956976256728,
+            "mae": 0.15190956976256728,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+              "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+              "thetaHatFixed4": 0.23687845303867405,
+              "score": 0.08496888327610677,
+              "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "4a43d391ac288b3e054a038f76bbd5ef452e764c33a70f3ae8c6e4d946b078ec"
+        },
+        {
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 8,
+            "rmse": 0.14801454456123428,
+            "mae": 0.13941062316877098,
+            "spearmanClusterMean": 0.29649972666444047,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.16287351194225688,
+            "mae": 0.1610878009450705,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.13703574741349367,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.18513985447664733,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "dba6dbc3067a02e64d524c6f0e28a4418f916a715f49782bbd2abb7744444884"
+        },
+        {
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 8,
+            "rmse": 0.16103562266116028,
+            "mae": 0.15066089589081552,
+            "spearmanClusterMean": 0.019702760155977515,
+            "signAccuracy": 0.2857142857142857
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.10311265949447164,
+            "mae": 0.097451022886264,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0.5
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.0637535647262825,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0.06,
+              "score": 0.1911484810462455,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "4fa5d8b4c04a083a3ad6bd5164b25e512e2de97c98230a42596184fcdfeae186"
+        },
+        {
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.14645570923076195,
+            "mae": 0.1385816573344061,
+            "spearmanClusterMean": -0.14824986333222023,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.18216557641280529,
+            "mae": 0.18216557641280529,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+              "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+              "thetaHatFixed4": 0,
+              "score": -0.18216557641280529,
+              "outerClusterId": "theme_d9_w11_security_automation_scripting",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "6d2341ebbf006d1621d76c47965b317fdffa2d2dac5bd7b2c6f83449ccbde980"
+        }
+      ],
+      "predictions": [
+        {
+          "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+          "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "thetaHatFixed4": 0.015625,
+          "score": -0.12870534248086296,
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "thetaHatFixed4": 0.00390625,
+          "score": 0.21745762107215186,
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": 0.10282908616129004,
+          "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+          "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": -0.08638809414410978,
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+          "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "thetaHatFixed4": 0.23687845303867405,
+          "score": 0.08496888327610677,
+          "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.13703574741349367,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.18513985447664733,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.0637535647262825,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0.06,
+          "score": 0.1911484810462455,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+          "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+          "thetaHatFixed4": 0,
+          "score": -0.18216557641280529,
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        }
+      ],
+      "metrics": {
+        "independentClusters": 8,
+        "groups": 10,
+        "targetCoverage": 0.7,
+        "acceptedN": 6,
+        "acceptedTaskIds": [
+          "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "theme_d3_w9_testing_quality_reproducibility_verification",
+          "theme_d6_w1_database_storage_greenfield_implementation",
+          "theme_d5_w9_data_engineering_reproducibility_verification"
+        ],
+        "policyValue": 0.04513078383977901,
+        "policyLiftOverPopulation": 0.009329570959944751,
+        "populationMeanTheta": 0.03580121287983426,
+        "spearman": 0.10146925788636822,
+        "rmse": 0.14839935802936124,
+        "mae": 0.1424641079831402,
+        "errorGuardrailPass": true,
+        "worstLeaveOneTaskPolicyValue": 0.00678125
+      },
+      "conventionalErrorMetrics": {
+        "independentClusters": 8,
+        "groups": 10,
+        "rmse": 0.1491194888645268,
+        "mae": 0.1424641079831402,
+        "spearmanClusterMean": 0.10146925788636822,
+        "signAccuracy": 0.3125
+      },
+      "contentHash": "66f29648f78064cb812d3c4ecca1dd4d7775c4c7e170c2bcdb7fa44fb42a95e1"
+    },
+    "B_SEPARATE_SCALE_PARTIAL_POOLING": {
+      "schemaVersion": "direction-a.evo-engineering-first.v1",
+      "candidateId": "B_SEPARATE_SCALE_PARTIAL_POOLING",
+      "folds": [
+        {
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09674472990811471,
+            "mae": 0.06992163874631094,
+            "spearmanClusterMean": -0.23643312187173018,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.021026455489799284,
+            "mae": 0.021026455489799284,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+              "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "thetaHatFixed4": 0.015625,
+              "score": 0.036651455489799284,
+              "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "daf40d77637dc9a6c0dcdcc11d24d0b64ee49e848f6b65d41e4a73c538051911"
+        },
+        {
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09495262818084259,
+            "mae": 0.06615118779658359,
+            "spearmanClusterMean": -0.39405520311955033,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.048129855144485506,
+            "mae": 0.048129855144485506,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "thetaHatFixed4": 0.00390625,
+              "score": 0.052036105144485506,
+              "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "6b92f8a2d2b11d0c8c9545a2579567bba0d641c290031a821bd60e64945d42e0"
+        },
+        {
+          "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09614651772300503,
+            "mae": 0.06945402381216391,
+            "spearmanClusterMean": -0.1853123291652753,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.04822983256367565,
+            "mae": 0.04822983256367565,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": 0.04822983256367565,
+              "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "a90e60630b5de29928d2857b4ef7283423e60c1cad8ea52a220a041ec4282428"
+        },
+        {
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09599822364079716,
+            "mae": 0.06886469896680059,
+            "spearmanClusterMean": -0.48181205582971576,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.025769695628108637,
+            "mae": 0.025769695628108637,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+              "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": 0.025769695628108637,
+              "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "85e2867a6828ba91d91854bde3799a91aa459484c480cb4073cab5c0845cfb5f"
+        },
+        {
+          "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.01702516754493414,
+            "mae": 0.011331914393360775,
+            "spearmanClusterMean": -0.23643312187173018,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.23026964416769255,
+            "mae": 0.23026964416769255,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+              "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+              "thetaHatFixed4": 0.23687845303867405,
+              "score": 0.006608808870981505,
+              "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "d1d38b286b29b10e69da8217e1a84e9087a8f175482e9828cbcc5880b90044ed"
+        },
+        {
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 8,
+            "rmse": 0.09579674835337218,
+            "mae": 0.06857415985964185,
+            "spearmanClusterMean": -0.1853123291652753,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.04963002601972185,
+            "mae": 0.049619527971936,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.0506402760116247,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.04859877993224731,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "1a82b6eb72dbfcb9c723680d2bfc119e557a0072993669375d0807e3d47ef1b9"
+        },
+        {
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 8,
+            "rmse": 0.09668602980069482,
+            "mae": 0.06790225441687074,
+            "spearmanClusterMean": -0.23643312187173018,
+            "signAccuracy": 0.42857142857142855
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.036078971883183944,
+            "mae": 0.034990325148792245,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0.5
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.04378631049037703,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            },
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0.06,
+              "score": 0.03380566019279255,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "da7cce939b6c73da570159de64ae0545d13424e4d859c3dd5b87d94343efaa53"
+        },
+        {
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.095629905098832,
+            "mae": 0.0679117108789166,
+            "spearmanClusterMean": -0.48181205582971576,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.029644583726421966,
+            "mae": 0.029644583726421966,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+              "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+              "thetaHatFixed4": 0,
+              "score": 0.029644583726421966,
+              "outerClusterId": "theme_d9_w11_security_automation_scripting",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "6afe623a378ef7186f3d4db8dcd31f7573a5fd0a13cf3a1d52490f43863af86b"
+        }
+      ],
+      "predictions": [
+        {
+          "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+          "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "thetaHatFixed4": 0.015625,
+          "score": 0.036651455489799284,
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "thetaHatFixed4": 0.00390625,
+          "score": 0.052036105144485506,
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": 0.04822983256367565,
+          "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+          "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": 0.025769695628108637,
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+          "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "thetaHatFixed4": 0.23687845303867405,
+          "score": 0.006608808870981505,
+          "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.0506402760116247,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.04859877993224731,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.04378631049037703,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0.06,
+          "score": 0.03380566019279255,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+          "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+          "thetaHatFixed4": 0,
+          "score": 0.029644583726421966,
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        }
+      ],
+      "metrics": {
+        "independentClusters": 8,
+        "groups": 10,
+        "targetCoverage": 0.7,
+        "acceptedN": 6,
+        "acceptedTaskIds": [
+          "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "theme_d3_w9_testing_quality_reproducibility_verification",
+          "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "theme_d9_w11_security_automation_scripting"
+        ],
+        "policyValue": 0.008255208333333333,
+        "policyLiftOverPopulation": -0.027546004546500927,
+        "populationMeanTheta": 0.03580121287983426,
+        "spearman": -0.25367314471592056,
+        "rmse": 0.08816969861600336,
+        "mae": 0.057685697504213054,
+        "errorGuardrailPass": true,
+        "worstLeaveOneTaskPolicyValue": 0.00390625
+      },
+      "conventionalErrorMetrics": {
+        "independentClusters": 8,
+        "groups": 10,
+        "rmse": 0.08903407410429563,
+        "mae": 0.06095998998011399,
+        "spearmanClusterMean": -0.25367314471592056,
+        "signAccuracy": 0.4375
+      },
+      "contentHash": "d930a163067ef4cdcc76499b4079488902c88dc39d2a35b8dfbec4cd67b7fefc"
+    },
+    "C_EVO_ONLY_RIDGE": {
+      "schemaVersion": "direction-a.evo-engineering-first.v1",
+      "candidateId": "C_EVO_ONLY_RIDGE",
+      "folds": [
+        {
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09665737354466913,
+            "mae": 0.06990740161662898,
+            "spearmanClusterMean": -0.23643312187173018,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.02284722240791534,
+            "mae": 0.02284722240791534,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+              "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "thetaHatFixed4": 0.015625,
+              "score": 0.03847222240791534,
+              "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "e1185ecdf4ef0e0dd51f717315add4707849bb71e6e8e28482672599b7584b39"
+        },
+        {
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.0950037788218006,
+            "mae": 0.06683940568508483,
+            "spearmanClusterMean": -0.4334607234315054,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.04501513096507052,
+            "mae": 0.04501513096507052,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "thetaHatFixed4": 0.00390625,
+              "score": 0.04892138096507052,
+              "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "4bca3b007877134aa1a4935c29d57d047efe72391bfdf0e0d511003c9c16d84e"
+        },
+        {
+          "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09549420108249038,
+            "mae": 0.06843095177804566,
+            "spearmanClusterMean": -0.29649972666444047,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.0470557330446312,
+            "mae": 0.0470557330446312,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": 0.0470557330446312,
+              "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "f6e27f8b21573f72b402735bacace5c1ea74cf4611977d149fc193a1b08c5cbb"
+        },
+        {
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09583505071062275,
+            "mae": 0.06877784519356839,
+            "spearmanClusterMean": -0.48181205582971576,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.02684861258000816,
+            "mae": 0.02684861258000816,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+              "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": 0.02684861258000816,
+              "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "686c9049884160f390446ee30e800da8e70c12ef96730232353523bf146ca63b"
+        },
+        {
+          "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.01691165080581821,
+            "mae": 0.011174509287192007,
+            "spearmanClusterMean": -0.23643312187173018,
+            "signAccuracy": 0.35714285714285715
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.2304242413685111,
+            "mae": 0.2304242413685111,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+              "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+              "thetaHatFixed4": 0.23687845303867405,
+              "score": 0.0064542116701629525,
+              "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "38d75f3ad13f5d08f522c30ab5267b307808f76aab5646c4990642c58bdb8dc9"
+        },
+        {
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 8,
+            "rmse": 0.09570832092275054,
+            "mae": 0.06879002556196137,
+            "spearmanClusterMean": -0.29649972666444047,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.047961916375539884,
+            "mae": 0.047941532160425376,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.04933971545498306,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.046543348865867695,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "f37e21369b10fe2ace74582486c09b868f7b39aa87a44bfa8995d8d99cb082f8"
+        },
+        {
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 8,
+            "rmse": 0.09629193433409004,
+            "mae": 0.06749517951618493,
+            "spearmanClusterMean": -0.3349469226516178,
+            "signAccuracy": 0.42857142857142855
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.0366020464410075,
+            "mae": 0.03576717788316098,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0.5
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.04354013034306899,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            },
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0.06,
+              "score": 0.03200577457674703,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "0210e13abcaaec211b6883b2566445eec5ad41f5fdbf48312ce064e8446702a5"
+        },
+        {
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 7,
+            "groups": 9,
+            "rmse": 0.09544332557453794,
+            "mae": 0.06779719710063521,
+            "spearmanClusterMean": -0.5559369874958259,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.031846067243805565,
+            "mae": 0.031846067243805565,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+              "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+              "thetaHatFixed4": 0,
+              "score": 0.031846067243805565,
+              "outerClusterId": "theme_d9_w11_security_automation_scripting",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "f8b535b7612e0fe323238703224ad3ee24896c574f82337c8f840aa125261980"
+        }
+      ],
+      "predictions": [
+        {
+          "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+          "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "thetaHatFixed4": 0.015625,
+          "score": 0.03847222240791534,
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "thetaHatFixed4": 0.00390625,
+          "score": 0.04892138096507052,
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": 0.0470557330446312,
+          "outerClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+          "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": 0.02684861258000816,
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+          "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "thetaHatFixed4": 0.23687845303867405,
+          "score": 0.0064542116701629525,
+          "outerClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.04933971545498306,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.046543348865867695,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.04354013034306899,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0.06,
+          "score": 0.03200577457674703,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+          "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+          "thetaHatFixed4": 0,
+          "score": 0.031846067243805565,
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        }
+      ],
+      "metrics": {
+        "independentClusters": 8,
+        "groups": 10,
+        "targetCoverage": 0.7,
+        "acceptedN": 6,
+        "acceptedTaskIds": [
+          "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "theme_d3_w9_testing_quality_reproducibility_verification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "theme_d9_w11_security_automation_scripting"
+        ],
+        "policyValue": 0.008255208333333333,
+        "policyLiftOverPopulation": -0.027546004546500927,
+        "populationMeanTheta": 0.03580121287983426,
+        "spearman": -0.2790404591875126,
+        "rmse": 0.08799982947595844,
+        "mae": 0.05746893652878441,
+        "errorGuardrailPass": true,
+        "worstLeaveOneTaskPolicyValue": 0.00390625
+      },
+      "conventionalErrorMetrics": {
+        "independentClusters": 8,
+        "groups": 10,
+        "rmse": 0.0889051501830975,
+        "mae": 0.06096821470669103,
+        "spearmanClusterMean": -0.2790404591875126,
+        "signAccuracy": 0.4375
+      },
+      "contentHash": "935bec20c1069e1e0811507787ca8d533359ae6bca2f748a884800238e975ecd"
+    }
+  },
+  "engineeringSelection": {
+    "schemaVersion": "direction-a.evo-engineering-first.v1",
+    "status": "SELECTED",
+    "winnerId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+    "orderedCandidateIds": [
+      "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+      "B_SEPARATE_SCALE_PARTIAL_POOLING",
+      "C_EVO_ONLY_RIDGE"
+    ],
+    "metrics": {
+      "A_FROZEN_SOURCE_RESIDUAL_RIDGE": {
+        "independentClusters": 8,
+        "groups": 10,
+        "targetCoverage": 0.7,
+        "acceptedN": 6,
+        "acceptedTaskIds": [
+          "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "theme_d3_w9_testing_quality_reproducibility_verification",
+          "theme_d6_w1_database_storage_greenfield_implementation",
+          "theme_d5_w9_data_engineering_reproducibility_verification"
+        ],
+        "policyValue": 0.04513078383977901,
+        "policyLiftOverPopulation": 0.009329570959944751,
+        "populationMeanTheta": 0.03580121287983426,
+        "spearman": 0.10146925788636822,
+        "rmse": 0.14839935802936124,
+        "mae": 0.1424641079831402,
+        "errorGuardrailPass": true,
+        "worstLeaveOneTaskPolicyValue": 0.00678125
+      },
+      "B_SEPARATE_SCALE_PARTIAL_POOLING": {
+        "independentClusters": 8,
+        "groups": 10,
+        "targetCoverage": 0.7,
+        "acceptedN": 6,
+        "acceptedTaskIds": [
+          "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "theme_d3_w9_testing_quality_reproducibility_verification",
+          "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "theme_d9_w11_security_automation_scripting"
+        ],
+        "policyValue": 0.008255208333333333,
+        "policyLiftOverPopulation": -0.027546004546500927,
+        "populationMeanTheta": 0.03580121287983426,
+        "spearman": -0.25367314471592056,
+        "rmse": 0.08816969861600336,
+        "mae": 0.057685697504213054,
+        "errorGuardrailPass": true,
+        "worstLeaveOneTaskPolicyValue": 0.00390625
+      },
+      "C_EVO_ONLY_RIDGE": {
+        "independentClusters": 8,
+        "groups": 10,
+        "targetCoverage": 0.7,
+        "acceptedN": 6,
+        "acceptedTaskIds": [
+          "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "theme_d3_w9_testing_quality_reproducibility_verification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "theme_d9_w11_security_automation_scripting"
+        ],
+        "policyValue": 0.008255208333333333,
+        "policyLiftOverPopulation": -0.027546004546500927,
+        "populationMeanTheta": 0.03580121287983426,
+        "spearman": -0.2790404591875126,
+        "rmse": 0.08799982947595844,
+        "mae": 0.05746893652878441,
+        "errorGuardrailPass": true,
+        "worstLeaveOneTaskPolicyValue": 0.00390625
+      }
+    },
+    "rule": [
+      "RMSE<=0.25_AND_MAE<=0.20_IS_A_NON_OPTIMIZING_ELIGIBILITY_GUARDRAIL",
+      "MAXIMIZE_TASK_WEIGHTED_OOF_ACCEPTED_MEAN_THETA_AT_70_PERCENT",
+      "MAXIMIZE_TASK_LEVEL_SPEARMAN",
+      "MAXIMIZE_WORST_LEAVE_ONE_TASK_POLICY_VALUE",
+      "MINIMIZE_COMPLEXITY_THEN_ONLINE_COST",
+      "CANONICAL_ID_FINAL_TIE_BREAK"
+    ],
+    "contentHash": "f49e8879084133f1e90900730d0cec5777cccba9ee30a42ddf78e2921ba38245"
+  },
+  "contentHash": "6ff7d2033880b6a8bbdd8154ded6e0aa8cf9df15a845fc8e522f0073e96497e0"
+}

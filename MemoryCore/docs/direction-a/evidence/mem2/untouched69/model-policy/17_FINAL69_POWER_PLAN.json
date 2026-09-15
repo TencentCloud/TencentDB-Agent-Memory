@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-power-plan.v1",
+  "role": "PLANNING_ONLY_NOT_FINAL_INFERENCE",
+  "source": "60_GROUP_NESTED_OOF_FOLD_LOCAL_TOP7_OF_10",
+  "observedOOF": {
+    "DeltaV": 0.03361111111111112,
+    "sdDV": 0.14441066894697394,
+    "zeroDVFraction": 0.8666666666666667,
+    "discordantCount": 14,
+    "discordantFraction": 0.23333333333333334,
+    "meanDVAmongDiscordant": 0.14404761904761904,
+    "policyOverlapJaccard": 0.7142857142857143
+  },
+  "primary": {
+    "B": 10000,
+    "seed": "direction-a-postcal-model-value-v2-1-power-plan-20260911::primary",
+    "probabilityLcbAboveZero": 0.789,
+    "meanOfMeans": 0.033290398550724645,
+    "replayHash": "cb703706aa89b2d37322c23c849f662b66a13f14402825427b67f9c05d23f03d"
+  },
+  "measurementAware": {
+    "B": 10000,
+    "seed": "direction-a-postcal-model-value-v2-1-power-plan-20260911::measurement",
+    "probabilityLcbAboveZero": 0.6066,
+    "meanOfMeans": 0.033429492753623294,
+    "replayHash": "f38ac1678dd67bb145a6d6b6579daf83fb8f43bfaec534af23c29092c6fec645"
+  },
+  "tCritical95Df68": 1.667572280649,
+  "approximateDeltaVNeededFor80Percent": 0.043622333198907376,
+  "powerCurve": [
+    {
+      "assumedDeltaV": 0,
+      "planningProbability": 0.0096
+    },
+    {
+      "assumedDeltaV": 0.0125,
+      "planningProbability": 0.0643
+    },
+    {
+      "assumedDeltaV": 0.025,
+      "planningProbability": 0.3536
+    },
+    {
+      "assumedDeltaV": 0.0375,
+      "planningProbability": 0.928
+    },
+    {
+      "assumedDeltaV": 0.05,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.0625,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.075,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.0875,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.1,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.1125,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.125,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.1375,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.15,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.1625,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.175,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.1875,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.2,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.2125,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.225,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.2375,
+      "planningProbability": 1
+    },
+    {
+      "assumedDeltaV": 0.25,
+      "planningProbability": 1
+    }
+  ],
+  "classification": "MODERATE_POWER_MAXIMAL_HOLDOUT_STILL_RECOMMENDED",
+  "stableImprovementRule": "POOLED_DIRECTIONAL_IMPROVEMENT_AND_AT_LEAST_4_OF_6_OUTER_FOLDS",
+  "stableImprovements": {
+    "RMSE": true,
+    "MAE": true,
+    "rank": true,
+    "acceptedMeanTheta": true
+  },
+  "futility": false,
+  "untouched69YUsed": 0,
+  "nestedBootstrapUsed": false,
+  "contentHash": "2fe077c4d7c5a8a3072ab994158fa0e3366addad78c146b73db5d814ff66d146"
+}

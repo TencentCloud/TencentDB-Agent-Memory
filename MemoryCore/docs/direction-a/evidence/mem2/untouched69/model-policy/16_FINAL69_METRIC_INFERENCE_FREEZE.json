@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-metric-inference-freeze.v1",
+  "status": "FROZEN_PENDING_UNTOUCHED69_CAUSAL_Y",
+  "primaryEstimand": "DeltaV_69=mean((A_P-A_B)*thetaHatFixed4)",
+  "primaryPolicies": {
+    "proposedPolicyHash": "55d013a64b46f9fff9c027488851981271d5dd7e889d4856bf000214bef6eb49",
+    "baselinePolicyHash": "342e568d7e49072c33fd2d3d970ceec195ed751ed98909924d6ac6894d6d9623"
+  },
+  "primaryGate": "POINT_ESTIMATE_GT_0_AND_PAIRED_CLUSTER_BOOTSTRAP_ONE_SIDED_LCB95_GT_0",
+  "primaryBootstrap": {
+    "unit": "INDEPENDENT_MEM2_SHARED_SESSION_COMPONENT",
+    "R": 20000,
+    "seed": "direction-a-postcal-model-value-v2-1-final69-paired-bootstrap-20260911",
+    "interval": "ONE_SIDED_95_PERCENTILE_LOWER",
+    "pairedDecisionsPreserved": true
+  },
+  "measurementSensitivity": {
+    "role": "SENSITIVITY_NOT_SECOND_CO_PRIMARY_VETO",
+    "method": "TWO_STAGE_GROUP_THEN_WITHIN_GROUP_FOUR_PAIR_EFFECT_RESAMPLING",
+    "R": 20000,
+    "seed": "direction-a-postcal-model-value-v2-1-final69-paired-bootstrap-20260911::measurement",
+    "report": [
+      "point",
+      "one-sided95-lower",
+      "two-sided95"
+    ]
+  },
+  "secondaryMetrics": [
+    "coverage",
+    "accepted_count",
+    "accepted_mean_theta",
+    "V",
+    "G",
+    "MAE",
+    "RMSE",
+    "Spearman",
+    "paired_differences",
+    "prioritization_curves_top20_to90"
+  ],
+  "claimLadder": {
+    "PRIMARY_COMPARATIVE_PASS": "PRIMARY_PAIRED_CLUSTER_LCB_GT_0",
+    "MEASUREMENT_SENSITIVITY_ROBUST": "PRIMARY_PASS_AND_TWO_STAGE_LCB_GT_0",
+    "EMPIRICAL_POSITIVE_BUT_INCONCLUSIVE": "DeltaV_GT_0_AND_PRIMARY_LCB_LE_0"
+  },
+  "causalYRead": 0,
+  "contentHash": "daac5ef7e5150fae6aa44872da3901a0e75c25496325532f52a8ee20f9b37c4e"
+}

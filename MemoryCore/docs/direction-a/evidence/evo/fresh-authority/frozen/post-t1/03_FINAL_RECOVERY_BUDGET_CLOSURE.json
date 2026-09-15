@@ -1,0 +1,125 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.final-recovery-budget-closure.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "derivation": "SUM_AUTHORITATIVE_PROVIDER_CALL_COMPLETED_AMOUNT_CNY_ONCE_ACROSS_FIVE_DISJOINT_JOURNALS",
+  "journals": [
+    {
+      "label": "ORIGINAL_T1",
+      "root": "Direction_A_Evo_Engineering_First_T1_Runtime_v2",
+      "journal": {
+        "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/execution-events.jsonl",
+        "bytes": 180862,
+        "sha256": "ff01713f71086a87d2faa5f73d3dad20656cbd989d253bda6cf74344c19ac872"
+      },
+      "eventCount": 287,
+      "headHash": "a9e7060cefe1fa67cffbc312bbb27154f35b974655a14b1c3c649eea00858339",
+      "starts": 19,
+      "finishes": 19,
+      "providerCalls": 228,
+      "observedSpendCny": 11.138481,
+      "historicalSecretContentReadEvents": 2,
+      "causalYCommittedEvents": 0
+    },
+    {
+      "label": "PAIR_ORDER_RECOVERY",
+      "root": "Direction_A_Evo_T1_PairOrder_Recovery_Runtime_v1",
+      "journal": {
+        "path": "Direction_A_Evo_T1_PairOrder_Recovery_Runtime_v1/execution-events.jsonl",
+        "bytes": 9857,
+        "sha256": "6538e262257b667a49491657315dbe55c307f3c2e4d8e7e460d402b9d0fb749b"
+      },
+      "eventCount": 16,
+      "headHash": "b8e8cc08d165a9b1a76fbf3fff1b1530d6dc3bf044f35d00f8cfb829f9c0324b",
+      "starts": 1,
+      "finishes": 1,
+      "providerCalls": 12,
+      "observedSpendCny": 0.7996275,
+      "historicalSecretContentReadEvents": 1,
+      "causalYCommittedEvents": 0
+    },
+    {
+      "label": "ANTI_CENSORING_CONTINUATION",
+      "root": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1",
+      "journal": {
+        "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/execution-events.jsonl",
+        "bytes": 50279,
+        "sha256": "a1fb76505cad5dd5a11b5d9499a4fc95858806c286da8df49ea325b64e942f78"
+      },
+      "eventCount": 78,
+      "headHash": "6b9bb5778c02a4ff1e04b13723313b0082f00ac243b6d8fdc2b7b6ae556235a9",
+      "starts": 6,
+      "finishes": 6,
+      "providerCalls": 60,
+      "observedSpendCny": 2.840436,
+      "historicalSecretContentReadEvents": 1,
+      "causalYCommittedEvents": 0
+    },
+    {
+      "label": "D3_P3_REMOVE_BOUNDED_RETRY",
+      "root": "Direction_A_Evo_T1_AntiCensoring_BoundedRetry_d3P3REMOVE_Runtime_v1",
+      "journal": {
+        "path": "Direction_A_Evo_T1_AntiCensoring_BoundedRetry_d3P3REMOVE_Runtime_v1/execution-events.jsonl",
+        "bytes": 10023,
+        "sha256": "efbcfcf0da90e4b9e5e752e6cf9b99b8a8c9fed621bbe2aa60c6005d3323bb94"
+      },
+      "eventCount": 16,
+      "headHash": "4a7d8e3f50d989704301fa6c41df92ffa8c38dd4685cdd39dac4c984336e334f",
+      "starts": 1,
+      "finishes": 1,
+      "providerCalls": 12,
+      "observedSpendCny": 0.486441,
+      "historicalSecretContentReadEvents": 1,
+      "causalYCommittedEvents": 0
+    },
+    {
+      "label": "D3_P3_FULL_BOUNDED_FINAL",
+      "root": "Direction_A_Evo_T1_AntiCensoring_BoundedFinal_d3P3FULL_Runtime_v1",
+      "journal": {
+        "path": "Direction_A_Evo_T1_AntiCensoring_BoundedFinal_d3P3FULL_Runtime_v1/execution-events.jsonl",
+        "bytes": 9998,
+        "sha256": "67742342588b734073a75a66d854330b25ed5b49a8dd469b3df4fb257630872b"
+      },
+      "eventCount": 16,
+      "headHash": "31e296a8e82bb253227d6ed936d69e379bfb6266bc29519a822a8d345b9b9c34",
+      "starts": 1,
+      "finishes": 1,
+      "providerCalls": 12,
+      "observedSpendCny": 0.5945445,
+      "historicalSecretContentReadEvents": 1,
+      "causalYCommittedEvents": 0
+    }
+  ],
+  "originalT1SpendCny": 11.138481,
+  "initialPairOrderRecoverySpendCny": 0.7996275,
+  "continuationBoundedRetryAndFinalSpendCny": 3.9214215,
+  "finalObservedSpendCny": 15.85953,
+  "providerCalls": {
+    "originalT1": 228,
+    "initialPairOrderRecovery": 12,
+    "postInitialRecoveryNew": 84,
+    "allFiveJournals": 324,
+    "thisConsolidation": 0
+  },
+  "reservationClosure": {
+    "originalRecoveryReservationsOutstanding": 0,
+    "boundedRetryReservationsOutstanding": 0,
+    "boundedFinalReservationsOutstanding": 0,
+    "activeReservationsCny": 0,
+    "activeReservationCount": 0,
+    "rule": "RESERVATION_RELEASED_OR_CONSUMED_AFTER_EACH TERMINAL FINISH;ACTUAL_COST_PRESERVED_EXACTLY_ONCE"
+  },
+  "globalHardCapCny": 110,
+  "unreservedRemainingCny": 94.14047,
+  "currentRunHardZero": {
+    "providerCalls": 0,
+    "modelApiCalls": 0,
+    "secretReads": 0,
+    "paidDockerLaunches": 0,
+    "t2Calls": 0,
+    "freshCalls": 0,
+    "q6Calls": 0
+  },
+  "historicalSecretReadEventsRetainedAsEvidenceNotReplayed": 6,
+  "contentHash": "158810e8f868be01a09d73f59778e65c8e5f66f73b2552cff09095376989e9aa"
+}

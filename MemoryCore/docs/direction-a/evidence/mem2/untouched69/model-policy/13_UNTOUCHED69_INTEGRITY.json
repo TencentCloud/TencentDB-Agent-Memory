@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.untouched69-integrity.v1",
+  "status": "PASS_Y_UNSEEN",
+  "populationCount": 105,
+  "old36Count": 36,
+  "untouched69Count": 69,
+  "populationHash": "b31e8e73a031f5cc6b1c7ee6d4c7db467e79af564fc72bfb63003e18bdcb8c99",
+  "old36Hash": "45206e817ceb52666651cb9108cbeaa4bc0964ecd3f57624cd9154094dd276c7",
+  "untouched69Hash": "1009a68fd48e47946a922899e5ff27f6b164b36f59219fe36289caf6d0155c39",
+  "old36UntouchedIntersectionCount": 0,
+  "developmentUntouchedIntersectionCount": 0,
+  "knownAuthorizedRuntimeCausalYOutsideOld36Count": 0,
+  "futureV2RuntimeExists": false,
+  "newNormalCalls": 0,
+  "newFullCalls": 0,
+  "newRemoveCalls": 0,
+  "newCausalY": 0,
+  "sealedTestY": 0,
+  "evoY": 0,
+  "ebY": 0,
+  "verificationScope": "EXACT_V1_COMPLEMENT_PLUS_KNOWN_AUTHORIZED_CAL_AND_DNS_RUNTIME_ROOTS_PLUS_ABSENT_V2_RUNTIME",
+  "contentHash": "68f80caaf6e7174503d15f08038d7d1007092e0feb34eee10eac85cd29135069"
+}

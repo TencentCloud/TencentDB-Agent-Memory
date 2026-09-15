@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-paired-bootstrap.v1",
+  "pointDeltaV": 0.03946687370600414,
+  "R": 20000,
+  "seed": "direction-a-postcal-model-value-v2-1-final69-paired-bootstrap-20260911",
+  "prng": {
+    "id": "SHA256_SEEDED_MULBERRY32_UINT32_LE_V1",
+    "initialState": "SHA256(seedLabel).digest().readUInt32LE(0)",
+    "sourcePath": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\MemoryCore\\scripts\\direction-a\\formal\\postcal-model-value-v2-1-freeze.mjs",
+    "sourceSha256": "2879877fbc5265fcbaab769baab99d30a96cdd628658f110d395f467a62f6180",
+    "uniformRange": "[0,1)",
+    "indexRule": "floor(U*n)"
+  },
+  "percentileConvention": {
+    "method": "EMPIRICAL_NEAREST_RANK_NO_INTERPOLATION",
+    "oneSided95LowerOneIndexedRank": 1000,
+    "twoSided95LowerOneIndexedRank": 500,
+    "twoSided95UpperOneIndexedRank": 19500
+  },
+  "bootstrapMean": 0.039407565562456955,
+  "bootstrapSd": 0.02679908771045666,
+  "oneSided95Lower": -0.002156659765355416,
+  "twoSided95": [
+    -0.009748102139406486,
+    0.09528122843340235
+  ],
+  "fractionDeltaVLessThanOrEqualZero": 0.061,
+  "replayHash": "f0a3143289433e73a52964d8d7a425a91fa9d2a623a686399c5041f39de32699",
+  "deterministicReplayTwice": true,
+  "PRIMARY_COMPARATIVE_PASS": false,
+  "contentHash": "854584cdb0f1a54f52e0f8c3c59015cee178bd27b22f6b6ad98199508dc56d1d"
+}

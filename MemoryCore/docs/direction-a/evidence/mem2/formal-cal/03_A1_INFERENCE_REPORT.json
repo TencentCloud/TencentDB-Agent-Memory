@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "CAL_A1_VG_INFERENCE_REPORT.v1",
+  "a1Version": "MEM2-A1-SRSWOR-TWO-LAYER-INFERENCE-V1-2026-09-09",
+  "populationHash": "b31e8e73a031f5cc6b1c7ee6d4c7db467e79af564fc72bfb63003e18bdcb8c99",
+  "sampleHash": "45206e817ceb52666651cb9108cbeaa4bc0964ecd3f57624cd9154094dd276c7",
+  "alphaPlanHashes": [
+    "528a6276529a507224006848f8b7699d92ba1bb651d0372bb5a9b1db820a87d3",
+    "452f610e469aba319b739fd41c08e5f1f0f60e261bab76ea60ad1ad030057005",
+    "9e78dbfe2bceba3a9632793431b759c657a1eebe64e085eb3990f5966c2da28b",
+    "aa357541c6342d7af0ed8b70c023d7af3e80c080915aad9988a307ab0775541f"
+  ],
+  "referenceManifestHash": "dc0127516439d19c0b2b70d0650131a2c7234d7db9e844b0035a5b2de7b67c27",
+  "tests": {
+    "MEM2_COVERAGE_70": {
+      "V": {
+        "estimate": 0.44236111111111115,
+        "lowerConfidenceBound95": -0.09446664147992317,
+        "mM": 0.1844597201625686,
+        "mS": 0.35236803242846576,
+        "availableCount": 36,
+        "unavailableCount": 0,
+        "componentAlpha": 0.05,
+        "pass": false
+      },
+      "G": {
+        "estimate": 0.11700585789871504,
+        "lowerConfidenceBound95": -0.23495546116820554,
+        "mM": 0.12138013976979108,
+        "mS": 0.2305811792971295,
+        "availableCount": 36,
+        "unavailableCount": 0,
+        "componentAlpha": 0.05,
+        "pass": false
+      }
+    }
+  },
+  "actuallyReachedPolicyIds": [
+    "MEM2_COVERAGE_70"
+  ],
+  "formalConfidenceEvidence": true,
+  "metrics": [
+    "V",
+    "G"
+  ],
+  "deltaV": "NOT_BOUND_FOR_THIS_FROZEN_CAL_SEQUENCE",
+  "contentHash": "4abb8ea05bcf1d23d85da8299d0d64affc98944824305ddb79ab4c10fce6661b"
+}

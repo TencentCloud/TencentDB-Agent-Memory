@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-prediction-metrics.v1",
+  "n": 69,
+  "proposed": {
+    "n": 69,
+    "MAE": 0.25703886459448927,
+    "RMSE": 0.33876871277751425,
+    "Spearman": 0.7116847469351201
+  },
+  "baseline": {
+    "n": 69,
+    "MAE": 0.3492786011167776,
+    "RMSE": 0.4049114388043128,
+    "Spearman": 0.4897982274011284
+  },
+  "DeltaMAE": -0.09223973652228834,
+  "DeltaRMSE": -0.06614272602679855,
+  "DeltaSpearman": 0.2218865195339917,
+  "MAEReductionPct": 26.40864233519103,
+  "RMSEReductionPct": 16.335109282690397,
+  "contentHash": "84bd9eaa4dd127c9070679624f3970ba210c52796f52e143cba794ec50450b76"
+}

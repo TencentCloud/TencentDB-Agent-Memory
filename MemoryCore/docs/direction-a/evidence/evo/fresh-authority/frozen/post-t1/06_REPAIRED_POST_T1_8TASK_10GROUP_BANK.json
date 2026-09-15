@@ -1,0 +1,938 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.repaired-8task-10group-bank.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "historicalSource": {
+    "path": "Direction_A_Evo_Continuous_Adaptation_v1/03_EVO_CONTINUOUS_DEVELOPMENT_BANK.jsonl",
+    "bytes": 19879,
+    "sha256": "cd7c7f3034f730bd2790f7a84ac3e5e2e035442685763d2536c0f96a4a1d50cc",
+    "rowsPreservedFromSource": 8,
+    "rowsRewritten": 0
+  },
+  "addedRows": 2,
+  "independentCompleteTasks": 8,
+  "causalGroups": 10,
+  "fixed4Pairs": 40,
+  "taskIds": [
+    "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+    "theme_d11_w9_scientific_numerical_reproducibility_verification",
+    "theme_d3_w9_testing_quality_reproducibility_verification",
+    "theme_d5_w9_data_engineering_reproducibility_verification",
+    "theme_d6_w1_database_storage_greenfield_implementation",
+    "theme_d7_w5_systems_networking_integration_e2e_wiring",
+    "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+    "theme_d9_w11_security_automation_scripting"
+  ],
+  "rows": [
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+      "taskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+      "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+      "officialDomainId": "d10",
+      "targetRound": 4,
+      "fixed4PairIds": [
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4:pair-1",
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4:pair-2",
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4:pair-3",
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0.3125,
+        0.078125,
+        0.359375,
+        -0.6875
+      ],
+      "thetaHatFixed4": 0.015625,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4:pair-5"
+      ],
+      "normalEvidence": {
+        "artifactHash": "04cc364cfaa6f020c4f2cc58a86185abe431e5eff7a3eb46df2045fb863679a0",
+        "resultHash": "ce40be00061772dc457ca09a4f2a8855f2755983ce258f1ad435e5402f307440",
+        "totalCases": 64,
+        "successCount": 43,
+        "utility": 0.671875,
+        "strictPass": false
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 1.3862943611198906,
+        "x0_query_token_count_log": 7.168579897264035,
+        "n_utility": 0.671875,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 10.084725188767045,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": -0.00851640866131781,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.6094379124341003,
+        "shared_instruction_bytes_log": 8.55429627936774,
+        "shared_normal_utility": 0.671875,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 10.084725188767045
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0.6931471805599453,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 4.382026634673881
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 37,
+        "editCommands": 1,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 79,
+        "completionTokens": 23973
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "b6b2de5fe1f6d64a0b2401bffe736dc8f4bb778b3adf050fea38e97fee363f53"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+      "taskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+      "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+      "officialDomainId": "d11",
+      "targetRound": 5,
+      "fixed4PairIds": [
+        "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5:pair-1",
+        "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5:pair-2",
+        "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5:pair-3",
+        "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        -0.109375,
+        0,
+        0.125,
+        0
+      ],
+      "thetaHatFixed4": 0.00390625,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5:pair-5"
+      ],
+      "normalEvidence": {
+        "artifactHash": "9875c1452efabc2a6303b992940106a6598c89656fed821e7a2fb075eae2ff9c",
+        "resultHash": "08dc0b33be7f820e5fa3712cd3e352abc7a207623a1d52bbd93d9f5e83f5367d",
+        "totalCases": 64,
+        "successCount": 64,
+        "utility": 1,
+        "strictPass": true
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 1.6094379124341003,
+        "x0_query_token_count_log": 6.697034247666484,
+        "n_utility": 1,
+        "n_strict_pass": 1,
+        "n_completion_tokens_log": 10.004011390302427,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": 0.313023420112778,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.791759469228055,
+        "shared_instruction_bytes_log": 8.082093278178382,
+        "shared_normal_utility": 1,
+        "shared_normal_strict_pass": 1,
+        "shared_completion_tokens_log": 10.004011390302427
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 1.6094379124341003,
+        "process_revision_recovery_log": 4.382026634673881
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 33,
+        "editCommands": 0,
+        "testCompileCommands": 4,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 79,
+        "completionTokens": 22114
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "ded2fb1039ba9e05fae9272e1f27d800b7a03a14ce3e1aa8d1066bbed4e8ea9e"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+      "taskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+      "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+      "officialDomainId": "d5",
+      "targetRound": 2,
+      "fixed4PairIds": [
+        "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2:pair-1",
+        "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2:pair-2",
+        "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2:pair-3",
+        "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2:pair-5"
+      ],
+      "normalEvidence": {
+        "artifactHash": "e49e30bd92c162c7748fbb144679be78e9d6013790ad6652b59d058983ae5d49",
+        "resultHash": "0bc82ec6666192f9d9e311ca5546a9c880789f25c721fdb36dca65574c3c29af",
+        "totalCases": 481,
+        "successCount": 231,
+        "utility": 0.4802494802494803,
+        "strictPass": false
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 0.6931471805599453,
+        "x0_query_token_count_log": 8.868413284672005,
+        "n_utility": 0.4802494802494803,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 8.76732914779405,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": -0.004562302753883252,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.0986122886681096,
+        "shared_instruction_bytes_log": 10.254531673102404,
+        "shared_normal_utility": 0.4802494802494803,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 8.76732914779405
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 4.418840607796598
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 32,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 82,
+        "completionTokens": 6420
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "09edac1244631ceaddd3dac74af4ce530136e01069a6289446125e45ccb3bb0c"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+      "taskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "officialDomainId": "d7",
+      "targetRound": 8,
+      "fixed4PairIds": [
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-1",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-2",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-3",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0.006802721088435382,
+        0,
+        0,
+        -0.006802721088435382
+      ],
+      "thetaHatFixed4": 0,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-5",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-6",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-7",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8:pair-8"
+      ],
+      "normalEvidence": {
+        "artifactHash": "8d963af8aca4c98cfa56d64a46d8ffad963617b6dfdfcc44ed365c0657d3260d",
+        "resultHash": "d4c9576d1464e1761915814424e15dcefb150c91061f379b4d20a80db9310d1b",
+        "totalCases": 147,
+        "successCount": 140,
+        "utility": 0.9523809523809523,
+        "strictPass": false
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 2.0794415416798357,
+        "x0_query_token_count_log": 7.00850518208228,
+        "n_utility": 0.9523809523809523,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 8.228443883004033,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": 0.22613101424026133,
+      "sharedFeatures": {
+        "shared_target_round_log": 2.1972245773362196,
+        "shared_instruction_bytes_log": 8.393442383980062,
+        "shared_normal_utility": 0.9523809523809523,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 8.228443883004033
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 1.9459101490553132
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 21,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 6,
+        "completionTokens": 3745
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "fb03a713b4e7ac4b0a3e12988e51e73a799d7a2e22d3f6d40f91b326175d00ff"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+      "taskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "officialDomainId": "d8",
+      "targetRound": 8,
+      "fixed4PairIds": [
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8:pair-1",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8:pair-2",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8:pair-3",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8:pair-5"
+      ],
+      "normalEvidence": {
+        "artifactHash": "715b1f197bc9c6405d180f48ce80a121e74d9a8cc21a49ceba254b145285dbad",
+        "resultHash": "e7d19cc6dfc2c5dcddbe60e6d45eaf138e56a5bd28a360c343fa603e02297763",
+        "totalCases": 534,
+        "successCount": 462,
+        "utility": 0.8651685393258427,
+        "strictPass": false
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 2.0794415416798357,
+        "x0_query_token_count_log": 7.662937850461535,
+        "n_utility": 0.8651685393258427,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 8.443977129084978,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": 0.16228238782451265,
+      "sharedFeatures": {
+        "shared_target_round_log": 2.1972245773362196,
+        "shared_instruction_bytes_log": 9.048644632975885,
+        "shared_normal_utility": 0.8651685393258427,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 8.443977129084978
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 4.394449154672439
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 25,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 80,
+        "completionTokens": 4646
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "ba4a56c7fc21835247a59fce6a665bea5998d37ca34c995412119c19b1a29721"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+      "taskId": "theme_d9_w11_security_automation_scripting",
+      "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+      "officialDomainId": "d9",
+      "targetRound": 3,
+      "fixed4PairIds": [
+        "theme_d9_w11_security_automation_scripting:target-round-3:pair-1",
+        "theme_d9_w11_security_automation_scripting:target-round-3:pair-2",
+        "theme_d9_w11_security_automation_scripting:target-round-3:pair-3",
+        "theme_d9_w11_security_automation_scripting:target-round-3:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d9_w11_security_automation_scripting:target-round-3:pair-5"
+      ],
+      "normalEvidence": {
+        "artifactHash": "5474c176e4f0ad2e34b5defe04f15f7ead25f342b4f52f94853963041b349955",
+        "resultHash": "6901446639ebcda4f282f7ba613cf0fec1736e3a9cdfcce15237af3af99112d9",
+        "totalCases": 108,
+        "successCount": 28,
+        "utility": 0.25925925925925924,
+        "strictPass": false
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 1.0986122886681096,
+        "x0_query_token_count_log": 7.96311205897929,
+        "n_utility": 0.25925925925925924,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 8.847934753328465,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": -0.08482539528783051,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.3862943611198906,
+        "shared_instruction_bytes_log": 9.348971240145405,
+        "shared_normal_utility": 0.25925925925925924,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 8.847934753328465
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 2.302585092994046
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 24,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 9,
+        "completionTokens": 6959
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "86dbbc7156c6ad105f59473e36fbe5aef0f84d166fa9a0f8285b890c81bfadf9"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+      "taskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "officialDomainId": "d7",
+      "targetRound": 3,
+      "fixed4PairIds": [
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3:pair-1",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3:pair-2",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3:pair-3",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3:pair-5"
+      ],
+      "normalEvidence": {
+        "artifactHash": "0d5b672b66dc338525f0e1b4700e7984788ba30b0392907fdafd32f4093ad6a6",
+        "resultHash": "cc2d8d9fe0f1d4d24888c88fe845748e55030bd299a5fe1f0641a8be006a079a",
+        "totalCases": 79,
+        "successCount": 71,
+        "utility": 0.8987341772151899,
+        "strictPass": false
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 1.0986122886681096,
+        "x0_query_token_count_log": 7.1891677384203225,
+        "n_utility": 0.8987341772151899,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 7.756195343948118,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": 0.259159508120806,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.3862943611198906,
+        "shared_instruction_bytes_log": 8.574707097616844,
+        "shared_normal_utility": 0.8987341772151899,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 7.756195343948118
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 2.639057329615259
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 19,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 13,
+        "completionTokens": 2335
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "0547808f4dbc5c4c7bb3e4c403b02ecfa31e87157f44e26d018b1fb86816a5db"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+      "taskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "officialDomainId": "d8",
+      "targetRound": 2,
+      "fixed4PairIds": [
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-1",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-2",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-3",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        -0.2333333333333334,
+        0,
+        0.09333333333333338,
+        0.38
+      ],
+      "thetaHatFixed4": 0.06,
+      "technicalStatus": "FOUR_TECHNICALLY_VALID_COMPLETE_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-5",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-6",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-7",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2:pair-8"
+      ],
+      "normalEvidence": {
+        "artifactHash": "793dd3fd3c1a0eaf99471c7ccd9569bef48455349d18396accfa7bde39adac8e",
+        "resultHash": "b5bf58f6bc8d40be0b246f7a6dffab68043a220f2d92921cd1d175212e6f2195",
+        "totalCases": 150,
+        "successCount": 150,
+        "utility": 1,
+        "strictPass": true
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 0.6931471805599453,
+        "x0_query_token_count_log": 7.5443321080536885,
+        "n_utility": 1,
+        "n_strict_pass": 1,
+        "n_completion_tokens_log": 10.278630900757904,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059
+      },
+      "frozenSourceScore": 0.29466536599074467,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.0986122886681096,
+        "shared_instruction_bytes_log": 8.929832503272403,
+        "shared_normal_utility": 1,
+        "shared_normal_strict_pass": 1,
+        "shared_completion_tokens_log": 10.278630900757904
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 4.304065093204169
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 47,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 73,
+        "completionTokens": 29103
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "contentHash": "793c7814db973cf08732d440da1d36613e598bafa707bf2f70f350cdbb785905"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "officialDomainId": "d6",
+      "targetRound": 5,
+      "fixed4PairIds": [
+        "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-1",
+        "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-2",
+        "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-3",
+        "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0,
+        0.9640883977900553,
+        0,
+        -0.016574585635359074
+      ],
+      "thetaHatFixed4": 0.23687845303867405,
+      "technicalStatus": "FOUR_RETRY_AWARE_ORDER_VALID_SCIENTIFIC_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        {
+          "domain": "d6",
+          "pairIndex": 2,
+          "admitted": false,
+          "excludedOriginalAttempts": [
+            "remaining-t1-1-pair_2_full-try-1",
+            "remaining-t1-1-pair_2_remove-try-1"
+          ],
+          "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+        },
+        {
+          "domain": "d6",
+          "pairIndex": 4,
+          "admitted": false,
+          "excludedOriginalAttempts": [
+            "remaining-t1-1-pair_4_full-try-1",
+            "remaining-t1-1-pair_4_remove-try-1"
+          ],
+          "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+        }
+      ],
+      "normalEvidence": {
+        "canonicalAttemptId": "t1-1-normal-try-1",
+        "redundantAttemptIdsExcluded": [
+          "t1-1-normal-try-2"
+        ],
+        "totalCases": 362,
+        "successCount": 349,
+        "failCount": 13,
+        "utility": 0.9640883977900553,
+        "strictPass": false,
+        "result": {
+          "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-t1-1-normal-try-1/evo-t1-g1-normal__ekwFSjv/result.json",
+          "bytes": 8382,
+          "sha256": "6054b3e63199174a129c548d0f177ebfc51e05223e71e8939fd4c8a62e41e6a6"
+        },
+        "verifierStdout": {
+          "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-t1-1-normal-try-1/evo-t1-g1-normal__ekwFSjv/steps/target-round/verifier/test-stdout.txt",
+          "bytes": 119948,
+          "sha256": "121a7ad262a434ced0959e31b32fd06567da18225aa816e928e8dbb6ffcb9438",
+          "caseSummaryPresent": true
+        },
+        "trajectory": {
+          "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-t1-1-normal-try-1/evo-t1-g1-normal__ekwFSjv/steps/target-round/agent/trajectory.json",
+          "bytes": 94251,
+          "sha256": "81ff964545f07b79c19bfb23504a706f5b914bcdfa9fef2c25ea9244d390c100"
+        },
+        "startEvent": {
+          "sequence": 2,
+          "eventHash": "7f6088be3167fa52b8b4a92c5aea11e2489d145ad61a696481983e518c28f4a2"
+        },
+        "finishEvent": {
+          "sequence": 16,
+          "eventHash": "7bfd1022694c40ee66ba3a7568b77640726580e90ce0552bbdcbfa768fec7f23",
+          "terminalStatus": "TECHNICAL_INVALID",
+          "resultHash": "6054b3e63199174a129c548d0f177ebfc51e05223e71e8939fd4c8a62e41e6a6"
+        }
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 1.6094379124341003,
+        "x0_query_token_count_log": 6.559615237493242,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059,
+        "n_utility": 0.9640883977900553,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 8.609590040682205
+      },
+      "frozenSourceScore": 0.2224018091081398,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.791759469228055,
+        "shared_instruction_bytes_log": 7.944846711001996,
+        "shared_normal_utility": 0.9640883977900553,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 8.609590040682205
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 3.970291913552122
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 22,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 52,
+        "completionTokens": 5483
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "t1Overlay": true,
+      "repairedFixed4ContentHash": "46e982319a6856e389d115fd91db9020c69b9692fad9b1b30edcbb6f9383d9c8",
+      "repairedProvenanceMapContentHash": "40c6226b84567136f0006a2063e12d7ecee2372d10fbd55bb3bf81498e0575e6",
+      "contentHash": "324632a4b34ae509136f667f847dab0ae81d73b4f3dfa22a8212c04f5f3a1f90"
+    },
+    {
+      "schemaVersion": "direction-a.evo-continuous-development-row.v1",
+      "permission": "PILOT_TRAIN_DEV",
+      "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "officialDomainId": "d3",
+      "targetRound": 5,
+      "fixed4PairIds": [
+        "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-1",
+        "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-2",
+        "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-3",
+        "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-4"
+      ],
+      "fixed4PairIndices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "fixed4Differences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0,
+      "technicalStatus": "FOUR_RETRY_AWARE_ORDER_VALID_SCIENTIFIC_PAIRS",
+      "historicalExtraPairsExcludedFromPrimaryTarget": [
+        {
+          "domain": "d3",
+          "pairIndex": 2,
+          "admitted": false,
+          "excludedOriginalAttempts": [
+            "remaining-t1-2-pair_2_full-try-1",
+            "remaining-t1-2-pair_2_remove-try-1"
+          ],
+          "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+        },
+        {
+          "domain": "d3",
+          "pairIndex": 3,
+          "admitted": false,
+          "excludedOriginalAttempts": [
+            "remaining-t1-2-pair_3_full-try-1",
+            "remaining-t1-2-pair_3_remove-try-1"
+          ],
+          "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+        },
+        {
+          "domain": "d3",
+          "pairIndex": 3,
+          "admitted": false,
+          "excludedRecoveryAttempt": "t1-anti-censoring-continuation-2-p3-remove-try-1",
+          "reason": "TRUE_TECHNICAL_INVALID_ZERO_PROVIDER_CALL_REPLACED_BEFORE_SECOND_ARM"
+        }
+      ],
+      "normalEvidence": {
+        "canonicalAttemptId": "remaining-t1-2-normal-try-1",
+        "redundantAttemptIdsExcluded": [],
+        "totalCases": 92,
+        "successCount": 84,
+        "failCount": 8,
+        "utility": 0.9130434782608695,
+        "strictPass": false,
+        "result": {
+          "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-normal-try-1/evo-t1-g2-normal__4twvBcE/result.json",
+          "bytes": 6254,
+          "sha256": "7f957d8905b5f116496d1bf5799592f16dff5edf19b0102e02b2856d5679b858"
+        },
+        "verifierStdout": {
+          "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-normal-try-1/evo-t1-g2-normal__4twvBcE/steps/target-round/verifier/test-stdout.txt",
+          "bytes": 32613,
+          "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+          "caseSummaryPresent": true
+        },
+        "trajectory": {
+          "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-normal-try-1/evo-t1-g2-normal__4twvBcE/steps/target-round/agent/trajectory.json",
+          "bytes": 78020,
+          "sha256": "7b5e163a0bac7fbee6b6bd8cbb4351612bf5c82eb9d81959bc4f9b98a6ec9b44"
+        },
+        "startEvent": {
+          "sequence": 153,
+          "eventHash": "68daa37ee30fe6632eea83224f0bd1c360cad8c643d0c074e3aa77eb4405cfee"
+        },
+        "finishEvent": {
+          "sequence": 167,
+          "eventHash": "6d9d90e320430064c7c75d5864d1fe38eb96dca26ae5396e5bdf396eeaeee74d",
+          "terminalStatus": "VALID_RESULT",
+          "resultHash": "7f957d8905b5f116496d1bf5799592f16dff5edf19b0102e02b2856d5679b858"
+        }
+      },
+      "sourceAdapterInputs": {
+        "x0_history_turn_count_log": 1.6094379124341003,
+        "x0_query_token_count_log": 6.814542897259958,
+        "n_tool_name_matches": 0.9833333333333333,
+        "n_required_argument_coverage": 0.9833333333333333,
+        "n_query_action_jaccard": 0.03198622062304059,
+        "n_utility": 0.9130434782608695,
+        "n_strict_pass": 0,
+        "n_completion_tokens_log": 8.605753368395717
+      },
+      "frozenSourceScore": 0.19756584835596158,
+      "sharedFeatures": {
+        "shared_target_round_log": 1.791759469228055,
+        "shared_instruction_bytes_log": 8.19946419761216,
+        "shared_normal_utility": 0.9130434782608695,
+        "shared_normal_strict_pass": 0,
+        "shared_completion_tokens_log": 8.605753368395717
+      },
+      "processFeatures": {
+        "process_edit_commands_log": 0,
+        "process_test_compile_commands_log": 0,
+        "process_revision_recovery_log": 3.295836866004329
+      },
+      "processEvidenceCounts": {
+        "agentSteps": 12,
+        "commandBatches": 45,
+        "editCommands": 0,
+        "testCompileCommands": 0,
+        "revisionsAfterTest": 0,
+        "errorMarkers": 26,
+        "completionTokens": 5462
+      },
+      "timingContract": "ALL_X_FROM_S0_OR_NORMAL_RUN_BEFORE_CAUSAL_FULL_REMOVE_Y",
+      "q6Excluded": true,
+      "calExcluded": true,
+      "sealedTestExcluded": true,
+      "pairRowsTreatedAsIid": false,
+      "targetAvailability": "AVAILABLE",
+      "t1Overlay": true,
+      "repairedFixed4ContentHash": "976856d796b44c6d134d4a3ced6dbafb7eeadd5bd5cfe5fedbf3d52e05de8423",
+      "repairedProvenanceMapContentHash": "40c6226b84567136f0006a2063e12d7ecee2372d10fbd55bb3bf81498e0575e6",
+      "contentHash": "0f7488f2624beeaeab93efca7db379021fe8afa00ed74aef6bd964953ed52ee4"
+    }
+  ],
+  "pairRowsTreatedAsIid": false,
+  "redundantD6NormalModelRows": 0,
+  "q6Rows": 0,
+  "freshRows": 0,
+  "t2Rows": 0,
+  "fixed4ContentHash": "2eca89e1c3efa197e602578173558cbefcb9ec62d59b2ee58bcf02a71c3a0f93",
+  "contentHash": "000c68687b0d103c1ecd07132340c85a44b039c8a148384f67d290e0a0b53428"
+}

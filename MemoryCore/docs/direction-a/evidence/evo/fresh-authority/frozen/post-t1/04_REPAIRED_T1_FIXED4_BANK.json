@@ -1,0 +1,679 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.repaired-t1-fixed4-bank.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "source": "RAW_RESULT_BYTES_PLUS_HASH_CHAINED_JOURNALS_WITH_ONE_NARROW_FROZEN_ANTI_CENSORING_FALLBACK",
+  "groups": [
+    {
+      "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "statisticalClusterId": "theme_d6_w1_database_storage_greenfield_implementation",
+      "officialDomainId": "d6",
+      "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+      "targetRound": 5,
+      "frozenTotalCases": 362,
+      "pairScheduleHash": "cfff3c2ca21af4619cb1974b0c56a1231a055c1700544697f60014102e02c2f7",
+      "pairs": [
+        {
+          "domain": "d6",
+          "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+          "pairIndex": 1,
+          "pairId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-1",
+          "scheduledArmOrder": [
+            "FULL",
+            "REMOVE"
+          ],
+          "full": {
+            "attemptId": "remaining-t1-1-pair_1_full-try-1",
+            "totalCases": 362,
+            "successCount": 349,
+            "failCount": 13,
+            "utility": 0.9640883977900553,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_1_full-try-1/evo-t1-g1-full__QeEeWoq/result.json",
+                "bytes": 6254,
+                "sha256": "531a82915ac60c2a82123ab08c7eb9f942a4eb051667d88c4e025ff8d88cfc3e"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_1_full-try-1/evo-t1-g1-full__QeEeWoq/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 119948,
+                "sha256": "121a7ad262a434ced0959e31b32fd06567da18225aa816e928e8dbb6ffcb9438",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 33,
+                "eventHash": "044bb889f95dbff6bc7dbcc62d2fb1d52080f436d3f84c0f01eafd1d2292a8cb"
+              },
+              "finishEvent": {
+                "sequence": 47,
+                "eventHash": "a69c33a16db076246d0c461a0e9ca0664ead82f7a2d21164d06c53b1bc502499",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "531a82915ac60c2a82123ab08c7eb9f942a4eb051667d88c4e025ff8d88cfc3e"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "remaining-t1-1-pair_1_remove-try-1",
+            "totalCases": 362,
+            "successCount": 349,
+            "failCount": 13,
+            "utility": 0.9640883977900553,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_1_remove-try-1/evo-t1-g1-remove__Jijf3tu/result.json",
+                "bytes": 6259,
+                "sha256": "7f1c8aa1a8c6c9bee0c71f3295503a67129e93f8f7d645fc0f23d2a9d3e16732"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_1_remove-try-1/evo-t1-g1-remove__Jijf3tu/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 119948,
+                "sha256": "121a7ad262a434ced0959e31b32fd06567da18225aa816e928e8dbb6ffcb9438",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 48,
+                "eventHash": "6c319f4c773dfc70d864b6afab72a4ae8f9385861d7b4635e8bd43d532c1447e"
+              },
+              "finishEvent": {
+                "sequence": 62,
+                "eventHash": "ea5430cebd56c723ac4ceb46d7dcc99c106207d08e52d3688fc02a2082cd33a1",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "7f1c8aa1a8c6c9bee0c71f3295503a67129e93f8f7d645fc0f23d2a9d3e16732"
+              }
+            },
+            "antiCensoringFallback": false
+          },
+          "difference": 0,
+          "pairOrderAttestationHash": "d5db68198c43189e242c2821028266b5703b377f560a721e15385a5212848c38",
+          "recovered": false
+        },
+        {
+          "domain": "d6",
+          "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+          "pairIndex": 2,
+          "pairId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-2",
+          "scheduledArmOrder": [
+            "REMOVE",
+            "FULL"
+          ],
+          "full": {
+            "attemptId": "t1-anti-censoring-continuation-1-p2-full-try-1",
+            "totalCases": 362,
+            "successCount": 349,
+            "failCount": 13,
+            "utility": 0.9640883977900553,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-1-p2-full-try-1/evo-t1-g1-full__5kp9QDs/result.json",
+                "bytes": 6299,
+                "sha256": "3dcb41f064639b46a9967171ee9c608c5f832c3ce77bf3e7aca6bf776c5490ca"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-1-p2-full-try-1/evo-t1-g1-full__5kp9QDs/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 119948,
+                "sha256": "121a7ad262a434ced0959e31b32fd06567da18225aa816e928e8dbb6ffcb9438",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 2,
+                "eventHash": "a20ab541d9eafa35f36d0cfcf74c325dbf557b003b9791555d8aeed2476dd0e5"
+              },
+              "finishEvent": {
+                "sequence": 16,
+                "eventHash": "c3b92a5335a701c5a8f93007118ccef520d4e46cfce87ad1e1adc724ae6aa455",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "3dcb41f064639b46a9967171ee9c608c5f832c3ce77bf3e7aca6bf776c5490ca"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "t1-pair-order-recovery-1-p2-remove-try-1",
+            "totalCases": 362,
+            "successCount": 0,
+            "failCount": 362,
+            "utility": 0,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_PairOrder_Recovery_Runtime_v1/harbor-jobs/evo-t1-t1-pair-order-recovery-1-p2-remove-try-1/evo-t1-g1-remove__xATtMZR/result.json",
+                "bytes": 6276,
+                "sha256": "8f381a6d2725d9af8dac69b28133e51df9b68cdd5cbd4d3ef1bfc7fbe9b76491"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_PairOrder_Recovery_Runtime_v1/harbor-jobs/evo-t1-t1-pair-order-recovery-1-p2-remove-try-1/evo-t1-g1-remove__xATtMZR/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 304,
+                "sha256": "8a1ca5bcf42658a9cea7fb18a646471c38d7be56519fb00cd674eb0e42618138",
+                "caseSummaryPresent": false
+              },
+              "startEvent": {
+                "sequence": 2,
+                "eventHash": "f021577ade9f123790fc4b47e9d08bd417d6bcd297475e6b638608b6730cddc0"
+              },
+              "finishEvent": {
+                "sequence": 16,
+                "eventHash": "b8e8cc08d165a9b1a76fbf3fff1b1530d6dc3bf044f35d00f8cfb829f9c0324b",
+                "terminalStatus": "TECHNICAL_INVALID",
+                "resultHash": "8f381a6d2725d9af8dac69b28133e51df9b68cdd5cbd4d3ef1bfc7fbe9b76491"
+              }
+            },
+            "antiCensoringFallback": true
+          },
+          "difference": 0.9640883977900553,
+          "pairOrderAttestationHash": "c27f655d4201aec8309abe732a3e596d8757ecafa57f509ff70e626653c7fd2f",
+          "recovered": true
+        },
+        {
+          "domain": "d6",
+          "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+          "pairIndex": 3,
+          "pairId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-3",
+          "scheduledArmOrder": [
+            "FULL",
+            "REMOVE"
+          ],
+          "full": {
+            "attemptId": "remaining-t1-1-pair_3_full-try-1",
+            "totalCases": 362,
+            "successCount": 349,
+            "failCount": 13,
+            "utility": 0.9640883977900553,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_3_full-try-1/evo-t1-g1-full__Bz8EtDE/result.json",
+                "bytes": 6252,
+                "sha256": "9375c57672e4852ca40048549b729c20c429c6581bf024ee0ac1f4a8be6c1ee0"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_3_full-try-1/evo-t1-g1-full__Bz8EtDE/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 119948,
+                "sha256": "121a7ad262a434ced0959e31b32fd06567da18225aa816e928e8dbb6ffcb9438",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 93,
+                "eventHash": "7f375c134919ce099f8d3e118db28962a5e46bb4b4e918021a1fa649df1ac9db"
+              },
+              "finishEvent": {
+                "sequence": 107,
+                "eventHash": "eb98205025f112dc7ea92c2fd9a3271b0eb59c06fc3f39aae3b4395506106857",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "9375c57672e4852ca40048549b729c20c429c6581bf024ee0ac1f4a8be6c1ee0"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "remaining-t1-1-pair_3_remove-try-1",
+            "totalCases": 362,
+            "successCount": 349,
+            "failCount": 13,
+            "utility": 0.9640883977900553,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_3_remove-try-1/evo-t1-g1-remove__UF9SNdA/result.json",
+                "bytes": 6257,
+                "sha256": "2901f74ec13b36e9d81de325d59e5acaccb4edf58b2a7c0cb8a419d9de048551"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-1-pair_3_remove-try-1/evo-t1-g1-remove__UF9SNdA/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 119948,
+                "sha256": "121a7ad262a434ced0959e31b32fd06567da18225aa816e928e8dbb6ffcb9438",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 108,
+                "eventHash": "68b5134e3673492bcfd2533454d4f9cfea2b75b4215880dc47acf115a6e7d201"
+              },
+              "finishEvent": {
+                "sequence": 122,
+                "eventHash": "82198d0977fa7b88570618108cb7cd944aed153893fc290ebd20c5626d839437",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "2901f74ec13b36e9d81de325d59e5acaccb4edf58b2a7c0cb8a419d9de048551"
+              }
+            },
+            "antiCensoringFallback": false
+          },
+          "difference": 0,
+          "pairOrderAttestationHash": "5685d8bf3fa85d5b3e6ba41fca55105384f801423f0cf781c552c033b9ae2c25",
+          "recovered": false
+        },
+        {
+          "domain": "d6",
+          "taskId": "theme_d6_w1_database_storage_greenfield_implementation",
+          "causalGroupId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5",
+          "pairIndex": 4,
+          "pairId": "theme_d6_w1_database_storage_greenfield_implementation:target-round-5:pair-4",
+          "scheduledArmOrder": [
+            "REMOVE",
+            "FULL"
+          ],
+          "full": {
+            "attemptId": "t1-anti-censoring-continuation-1-p4-full-try-1",
+            "totalCases": 362,
+            "successCount": 349,
+            "failCount": 13,
+            "utility": 0.9640883977900553,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-1-p4-full-try-1/evo-t1-g1-full__hSVUmnT/result.json",
+                "bytes": 6296,
+                "sha256": "04dc1f2ed3374bb8dacdd336bf51dcd21dd6d9ae163f850d2e4dbf19a59f7158"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-1-p4-full-try-1/evo-t1-g1-full__hSVUmnT/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 119948,
+                "sha256": "121a7ad262a434ced0959e31b32fd06567da18225aa816e928e8dbb6ffcb9438",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 32,
+                "eventHash": "d7498ca62dfb33746cb593c51cf69ffd9e4d7e3d3bbb24f1538f4684dd0cd343"
+              },
+              "finishEvent": {
+                "sequence": 46,
+                "eventHash": "8ed565b87cd16c94ca3deeb04d05f160de3e592dc7597a583ed734cb6617d01f",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "04dc1f2ed3374bb8dacdd336bf51dcd21dd6d9ae163f850d2e4dbf19a59f7158"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "t1-anti-censoring-continuation-1-p4-remove-try-1",
+            "totalCases": 362,
+            "successCount": 355,
+            "failCount": 7,
+            "utility": 0.9806629834254144,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-1-p4-remove-try-1/evo-t1-g1-remove__kiXNhWS/result.json",
+                "bytes": 6314,
+                "sha256": "33f3667d89fadc3a2e137b4fbaceec080e5ab0e05884a6a3d528b4822298d6ce"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-1-p4-remove-try-1/evo-t1-g1-remove__kiXNhWS/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 118900,
+                "sha256": "af6338e899078d491e0976065201bd21fcd845f803c580a855f4980d8bf90283",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 17,
+                "eventHash": "8ddf79a94b394b823cffdf98ea3fd9b5156789d47bc199a12256f89408fb7e70"
+              },
+              "finishEvent": {
+                "sequence": 31,
+                "eventHash": "110dbc2029418c5482f9bb5ea1c2834563c30d2ad921c8506ba7955a77a44191",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "33f3667d89fadc3a2e137b4fbaceec080e5ab0e05884a6a3d528b4822298d6ce"
+              }
+            },
+            "antiCensoringFallback": false
+          },
+          "difference": -0.016574585635359074,
+          "pairOrderAttestationHash": "d844c0c2420a5502db33f37e2d81246a0921a030545258838697c014028db0b3",
+          "recovered": true
+        }
+      ],
+      "thetaHatFixed4": 0.23687845303867405,
+      "exactFraction": {
+        "numerator": 343,
+        "denominator": 1448
+      },
+      "expectedSanityOnly": {
+        "value": 0.23687845303867403,
+        "matches": true
+      },
+      "technicalStatus": "FOUR_RETRY_AWARE_ORDER_VALID_SCIENTIFIC_PAIRS",
+      "contentHash": "46e982319a6856e389d115fd91db9020c69b9692fad9b1b30edcbb6f9383d9c8"
+    },
+    {
+      "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "statisticalClusterId": "theme_d3_w9_testing_quality_reproducibility_verification",
+      "officialDomainId": "d3",
+      "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+      "targetRound": 5,
+      "frozenTotalCases": 92,
+      "pairScheduleHash": "24361507bec047227fbd706db96a915d984407f8fa50ae3b767563a35276fe3d",
+      "pairs": [
+        {
+          "domain": "d3",
+          "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+          "pairIndex": 1,
+          "pairId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-1",
+          "scheduledArmOrder": [
+            "FULL",
+            "REMOVE"
+          ],
+          "full": {
+            "attemptId": "remaining-t1-2-pair_1_full-try-1",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_1_full-try-1/evo-t1-g2-full__Gk3NXZU/result.json",
+                "bytes": 6255,
+                "sha256": "d2fdf972803fd2bed30c7424fd2ee8dfbea63be96849c9167607a8d4b8e00f1b"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_1_full-try-1/evo-t1-g2-full__Gk3NXZU/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 168,
+                "eventHash": "708f1f3b730f618cba6e7ca1c40ba173b5948a92419e0c729b1a06a54561cb52"
+              },
+              "finishEvent": {
+                "sequence": 182,
+                "eventHash": "1be641124d5a5f06e53c7480ba288b973dd475f3097a0d9128a2e46ffbe9d9d9",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "d2fdf972803fd2bed30c7424fd2ee8dfbea63be96849c9167607a8d4b8e00f1b"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "remaining-t1-2-pair_1_remove-try-1",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_1_remove-try-1/evo-t1-g2-remove__i9stG9H/result.json",
+                "bytes": 6260,
+                "sha256": "8800af2661dbcefe4b10293cecfb67035d99d61766214bf2a87948b505ed3182"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_1_remove-try-1/evo-t1-g2-remove__i9stG9H/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 183,
+                "eventHash": "7222b9550a9819a2b9a0c9fd35b64eaaf328f922211d2d9303e32f62e044b87a"
+              },
+              "finishEvent": {
+                "sequence": 197,
+                "eventHash": "c40bc6ef6ea7fa6143afa6fdbcde0fe66326456bb607ad5c99b0470898b8c3a2",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "8800af2661dbcefe4b10293cecfb67035d99d61766214bf2a87948b505ed3182"
+              }
+            },
+            "antiCensoringFallback": false
+          },
+          "difference": 0,
+          "pairOrderAttestationHash": "e56bb626abc2a42d4b773d0db5dbcf87aa2da889f0e5c8b154c9b87a9089b519",
+          "recovered": false
+        },
+        {
+          "domain": "d3",
+          "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+          "pairIndex": 2,
+          "pairId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-2",
+          "scheduledArmOrder": [
+            "REMOVE",
+            "FULL"
+          ],
+          "full": {
+            "attemptId": "t1-anti-censoring-continuation-2-p2-full-try-1",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p2-full-try-1/evo-t1-g2-full__gpc2yAt/result.json",
+                "bytes": 6295,
+                "sha256": "a58ecbf1464f4245d56f24495436c0878110c8ea7bfae8a9d18a68b67685a57a"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p2-full-try-1/evo-t1-g2-full__gpc2yAt/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 62,
+                "eventHash": "b300bc263394a83ef8483d913dcf23e4f1f304c14a44d1d080bcac7f75369ca9"
+              },
+              "finishEvent": {
+                "sequence": 76,
+                "eventHash": "1477eeace42e7da8185680b970e3d87dcecd22e27b6dd9a9409cf5522a5a4241",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "a58ecbf1464f4245d56f24495436c0878110c8ea7bfae8a9d18a68b67685a57a"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "t1-anti-censoring-continuation-2-p2-remove-try-1",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p2-remove-try-1/evo-t1-g2-remove__ij2JM9y/result.json",
+                "bytes": 6306,
+                "sha256": "48e4c4c686bd9ad48a89dc937c629365c816859094c77bac464b444665e75f81"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p2-remove-try-1/evo-t1-g2-remove__ij2JM9y/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 47,
+                "eventHash": "fc46556b88ba1669192c8ee62e877fdeb4b4687ce284e5cb7a4527cde7031ce5"
+              },
+              "finishEvent": {
+                "sequence": 61,
+                "eventHash": "77dfa74bb9fc90ee17626bd2d7152d7bce509fc6c98d35ebfca4f3c48df8feef",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "48e4c4c686bd9ad48a89dc937c629365c816859094c77bac464b444665e75f81"
+              }
+            },
+            "antiCensoringFallback": false
+          },
+          "difference": 0,
+          "pairOrderAttestationHash": "d911f80f9267db08a062402d8f8e4852aa0fa02581d7761a7d0ef3b3bbbf7759",
+          "recovered": true
+        },
+        {
+          "domain": "d3",
+          "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+          "pairIndex": 3,
+          "pairId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-3",
+          "scheduledArmOrder": [
+            "REMOVE",
+            "FULL"
+          ],
+          "full": {
+            "attemptId": "t1-anti-censoring-continuation-2-p3-full-try-1",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_BoundedFinal_d3P3FULL_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p3-full-try-1/evo-t1-g2-full__hhZzQz8/result.json",
+                "bytes": 6311,
+                "sha256": "ed7cf587e10ad1120e6039a4c83f679b651ac2136d71f87a20a56961776fed18"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_BoundedFinal_d3P3FULL_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p3-full-try-1/evo-t1-g2-full__hhZzQz8/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 2,
+                "eventHash": "8ad11a037e6f95ee584888197235227e091c88cbd1037f435bdaa92a24fbb192"
+              },
+              "finishEvent": {
+                "sequence": 16,
+                "eventHash": "31e296a8e82bb253227d6ed936d69e379bfb6266bc29519a822a8d345b9b9c34",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "ed7cf587e10ad1120e6039a4c83f679b651ac2136d71f87a20a56961776fed18"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "t1-anti-censoring-continuation-2-p3-remove-try-2",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_BoundedRetry_d3P3REMOVE_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p3-remove-try-2/evo-t1-g2-remove__U95wtgg/result.json",
+                "bytes": 6332,
+                "sha256": "217b3700f95a0f31cce16ee1ec739ed9745a843cd34dad00fd8a042985da4020"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_T1_AntiCensoring_BoundedRetry_d3P3REMOVE_Runtime_v1/harbor-jobs/evo-t1-t1-anti-censoring-continuation-2-p3-remove-try-2/evo-t1-g2-remove__U95wtgg/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 2,
+                "eventHash": "a1baec267e87456ecd9dc4515642b8f26c0399ee94080130e0603aaf861c3046"
+              },
+              "finishEvent": {
+                "sequence": 16,
+                "eventHash": "4a7d8e3f50d989704301fa6c41df92ffa8c38dd4685cdd39dac4c984336e334f",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "217b3700f95a0f31cce16ee1ec739ed9745a843cd34dad00fd8a042985da4020"
+              }
+            },
+            "antiCensoringFallback": false
+          },
+          "difference": 0,
+          "pairOrderAttestationHash": "b2f74ef1a56c931312448b36994b8c5578cf709e150660262b43008925880043",
+          "recovered": true
+        },
+        {
+          "domain": "d3",
+          "taskId": "theme_d3_w9_testing_quality_reproducibility_verification",
+          "causalGroupId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5",
+          "pairIndex": 4,
+          "pairId": "theme_d3_w9_testing_quality_reproducibility_verification:target-round-5:pair-4",
+          "scheduledArmOrder": [
+            "FULL",
+            "REMOVE"
+          ],
+          "full": {
+            "attemptId": "remaining-t1-2-pair_4_full-try-1",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_4_full-try-1/evo-t1-g2-full__RaSbu8h/result.json",
+                "bytes": 6246,
+                "sha256": "b2299ae9aedfb636f54bed38f24a4c4f74bf73627825056c1582710d67ed41c5"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_4_full-try-1/evo-t1-g2-full__RaSbu8h/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 258,
+                "eventHash": "e52d489bc2f15865e2a7c7946f5bfe305ef3be81eb1ce63e8cb42b646d3e65ed"
+              },
+              "finishEvent": {
+                "sequence": 272,
+                "eventHash": "f2d803070de49dc2b3385be60f65baf126da8b8f5bc05c0a6b6d9ea260d63374",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "b2299ae9aedfb636f54bed38f24a4c4f74bf73627825056c1582710d67ed41c5"
+              }
+            }
+          },
+          "remove": {
+            "attemptId": "remaining-t1-2-pair_4_remove-try-1",
+            "totalCases": 92,
+            "successCount": 84,
+            "failCount": 8,
+            "utility": 0.9130434782608695,
+            "strictPass": false,
+            "evidence": {
+              "result": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_4_remove-try-1/evo-t1-g2-remove__rogrrmP/result.json",
+                "bytes": 6263,
+                "sha256": "74e6c51a5adc84a42811036b55e2260c45939801f4d1c50466c61a10296fdab7"
+              },
+              "verifierStdout": {
+                "path": "Direction_A_Evo_Engineering_First_T1_Runtime_v2/harbor-jobs/evo-t1-remaining-t1-2-pair_4_remove-try-1/evo-t1-g2-remove__rogrrmP/steps/target-round/verifier/test-stdout.txt",
+                "bytes": 32613,
+                "sha256": "75733a4540bd33a45dfa5744b305571d5330d8e1c1ec5209b2784e088779eba2",
+                "caseSummaryPresent": true
+              },
+              "startEvent": {
+                "sequence": 273,
+                "eventHash": "699dcd50c1c19cd55ed48da0eb5123e69d218ac5ab56cc1dce47e1f032eb7784"
+              },
+              "finishEvent": {
+                "sequence": 287,
+                "eventHash": "a9e7060cefe1fa67cffbc312bbb27154f35b974655a14b1c3c649eea00858339",
+                "terminalStatus": "VALID_RESULT",
+                "resultHash": "74e6c51a5adc84a42811036b55e2260c45939801f4d1c50466c61a10296fdab7"
+              }
+            },
+            "antiCensoringFallback": false
+          },
+          "difference": 0,
+          "pairOrderAttestationHash": "8f90334789e8eda42e9e2cc6d6ff55f0de79b4f22ec6b94abd658e6cb5b1ddc2",
+          "recovered": false
+        }
+      ],
+      "thetaHatFixed4": 0,
+      "exactFraction": {
+        "numerator": 0,
+        "denominator": 1
+      },
+      "expectedSanityOnly": {
+        "value": 0,
+        "matches": true
+      },
+      "technicalStatus": "FOUR_RETRY_AWARE_ORDER_VALID_SCIENTIFIC_PAIRS",
+      "contentHash": "976856d796b44c6d134d4a3ced6dbafb7eeadd5bd5cfe5fedbf3d52e05de8423"
+    }
+  ],
+  "groupCount": 2,
+  "pairCount": 8,
+  "armOutcomeCount": 16,
+  "pairOrderAttestationsContentHash": "dbd529d37ac559f71ec476e7831944f1e398ba875545a162f542b0689974c778",
+  "antiCensoringReclassification": {
+    "path": "Direction_A_Evo_T1_AntiCensoring_Continuation_Closure_v2/03_HISTORICAL_ATTEMPT_RECLASSIFICATION.json",
+    "bytes": 2810,
+    "sha256": "cf549d27857dc55db802336f84bd24d158f97e8979f723785dc28f4d033f1152",
+    "contentHash": "a0bd4048b9181f0ce28918851f86504618c3acadd2a397c95820e8666e33b6e9"
+  },
+  "contentHash": "2eca89e1c3efa197e602578173558cbefcb9ec62d59b2ee58bcf02a71c3a0f93"
+}

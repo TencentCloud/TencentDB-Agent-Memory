@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1-requalification-rule-freeze.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "decisionId": "EVO_ENGINEERING_FIRST_BUDGET100_V1_2026_09_12",
+  "status": "PASS",
+  "freezeOccurredBeforeRecoveredYConsumption": true,
+  "modelSelectionRule": {
+    "path": "Direction_A_Evo_Engineering_First_Budget100_v1/03_ENGINEERING_MODEL_SELECTION_RULE.json",
+    "bytes": 4849,
+    "sha256": "d432d4f08d02a8eb813aa71d68d9dcf34cf94ac63d417fae8604a1a6d33a3e8f",
+    "contentHash": "5fd5bb424985eee5c6e2e840a0d4bb7c2077f489859c81e325f2faec65df6690",
+    "exactRule": [
+      "RMSE<=0.25_AND_MAE<=0.20_IS_A_NON_OPTIMIZING_ELIGIBILITY_GUARDRAIL",
+      "MAXIMIZE_TASK_WEIGHTED_OOF_ACCEPTED_MEAN_THETA_AT_70_PERCENT",
+      "MAXIMIZE_TASK_LEVEL_SPEARMAN",
+      "MAXIMIZE_WORST_LEAVE_ONE_TASK_POLICY_VALUE",
+      "MINIMIZE_COMPLEXITY_THEN_ONLINE_COST",
+      "CANONICAL_ID_FINAL_TIE_BREAK"
+    ]
+  },
+  "stabilityRule": {
+    "path": "Direction_A_Evo_Engineering_First_Budget100_v1/05_T2_TRIGGER_FREEZE.json",
+    "bytes": 2686,
+    "sha256": "2430ced94a9ae5577d766c31c4b30dbaf6dc0d7580f86caf2178de96b3c1e0ff",
+    "contentHash": "01c2607400395e0204ca1b1b10ef9fb467d9c2f92df9f224df36bcb0e7ebca02",
+    "stableIffAll": [
+      "ENGINEERING_WINNER_IS_ERROR_GUARDRAIL_ELIGIBLE",
+      "AT_LEAST_2_DISTINCT_TASK_THETA_LEVELS",
+      "AT_LEAST_2_NONZERO_TASK_MEAN_THETAS",
+      "WINNER_SCORE_VARIANCE_GT_1E_12",
+      "WINNER_JACKKNIFE_SUPPORT_GE_6_OF_8",
+      "WINNER_MODAL_FEATURE_BLOCK_SUPPORT_GE_6_OF_8",
+      "WINNER_MODAL_LAMBDA_SUPPORT_GE_6_OF_8"
+    ]
+  },
+  "candidates": [
+    "C_EVO_ONLY_RIDGE",
+    "B_SEPARATE_SCALE_PARTIAL_POOLING",
+    "A_FROZEN_SOURCE_RESIDUAL_RIDGE"
+  ],
+  "featureBlocks": [
+    "EVO_SHARED_ONLY",
+    "EVO_SHARED_PLUS_PROCESS"
+  ],
+  "lambdaGrid": [
+    10,
+    100,
+    1000
+  ],
+  "split": {
+    "outer": "LEAVE_ONE_TASK_CLUSTER_OUT",
+    "inner": "LEAVE_ONE_TASK_CLUSTER_OUT_ON_OUTER_TRAIN",
+    "pairRowsTreatedAsIid": false
+  },
+  "guardrail": {
+    "maximumRmse": 0.25,
+    "maximumMae": 0.2
+  },
+  "fallback": [
+    "C_EVO_ONLY_RIDGE",
+    "B_SEPARATE_SCALE_PARTIAL_POOLING",
+    "A_FROZEN_SOURCE_RESIDUAL_RIDGE"
+  ],
+  "prohibitedAfterY": [
+    "RULE_REWRITE",
+    "THRESHOLD_REWRITE",
+    "KEEP_HISTORICAL_STABLE_BY_FORCE",
+    "FRESH_OR_Q6_Y"
+  ],
+  "contentHash": "71f6f957462ff67aababbb208742ac39ec73b34ccd62429a3cc98695378087ae"
+}

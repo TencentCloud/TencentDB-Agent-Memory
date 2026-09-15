@@ -1,0 +1,133 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.repaired-t1-provenance-map.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "rows": [
+    {
+      "domain": "d6",
+      "pairIndex": 1,
+      "admitted": true,
+      "provenance": "ORIGINAL_LAWFUL_PAIR",
+      "fullAttemptId": "remaining-t1-1-pair_1_full-try-1",
+      "removeAttemptId": "remaining-t1-1-pair_1_remove-try-1",
+      "attestationHash": "d5db68198c43189e242c2821028266b5703b377f560a721e15385a5212848c38"
+    },
+    {
+      "domain": "d6",
+      "pairIndex": 2,
+      "admitted": true,
+      "provenance": "RECOVERED_REPLACEMENT",
+      "fullAttemptId": "t1-anti-censoring-continuation-1-p2-full-try-1",
+      "removeAttemptId": "t1-pair-order-recovery-1-p2-remove-try-1",
+      "attestationHash": "c27f655d4201aec8309abe732a3e596d8757ecafa57f509ff70e626653c7fd2f"
+    },
+    {
+      "domain": "d6",
+      "pairIndex": 3,
+      "admitted": true,
+      "provenance": "ORIGINAL_LAWFUL_PAIR",
+      "fullAttemptId": "remaining-t1-1-pair_3_full-try-1",
+      "removeAttemptId": "remaining-t1-1-pair_3_remove-try-1",
+      "attestationHash": "5685d8bf3fa85d5b3e6ba41fca55105384f801423f0cf781c552c033b9ae2c25"
+    },
+    {
+      "domain": "d6",
+      "pairIndex": 4,
+      "admitted": true,
+      "provenance": "RECOVERED_REPLACEMENT",
+      "fullAttemptId": "t1-anti-censoring-continuation-1-p4-full-try-1",
+      "removeAttemptId": "t1-anti-censoring-continuation-1-p4-remove-try-1",
+      "attestationHash": "d844c0c2420a5502db33f37e2d81246a0921a030545258838697c014028db0b3"
+    },
+    {
+      "domain": "d3",
+      "pairIndex": 1,
+      "admitted": true,
+      "provenance": "ORIGINAL_LAWFUL_PAIR",
+      "fullAttemptId": "remaining-t1-2-pair_1_full-try-1",
+      "removeAttemptId": "remaining-t1-2-pair_1_remove-try-1",
+      "attestationHash": "e56bb626abc2a42d4b773d0db5dbcf87aa2da889f0e5c8b154c9b87a9089b519"
+    },
+    {
+      "domain": "d3",
+      "pairIndex": 2,
+      "admitted": true,
+      "provenance": "RECOVERED_REPLACEMENT",
+      "fullAttemptId": "t1-anti-censoring-continuation-2-p2-full-try-1",
+      "removeAttemptId": "t1-anti-censoring-continuation-2-p2-remove-try-1",
+      "attestationHash": "d911f80f9267db08a062402d8f8e4852aa0fa02581d7761a7d0ef3b3bbbf7759"
+    },
+    {
+      "domain": "d3",
+      "pairIndex": 3,
+      "admitted": true,
+      "provenance": "RECOVERED_REPLACEMENT",
+      "fullAttemptId": "t1-anti-censoring-continuation-2-p3-full-try-1",
+      "removeAttemptId": "t1-anti-censoring-continuation-2-p3-remove-try-2",
+      "attestationHash": "b2f74ef1a56c931312448b36994b8c5578cf709e150660262b43008925880043"
+    },
+    {
+      "domain": "d3",
+      "pairIndex": 4,
+      "admitted": true,
+      "provenance": "ORIGINAL_LAWFUL_PAIR",
+      "fullAttemptId": "remaining-t1-2-pair_4_full-try-1",
+      "removeAttemptId": "remaining-t1-2-pair_4_remove-try-1",
+      "attestationHash": "8f90334789e8eda42e9e2cc6d6ff55f0de79b4f22ec6b94abd658e6cb5b1ddc2"
+    },
+    {
+      "domain": "d6",
+      "pairIndex": 2,
+      "admitted": false,
+      "excludedOriginalAttempts": [
+        "remaining-t1-1-pair_2_full-try-1",
+        "remaining-t1-1-pair_2_remove-try-1"
+      ],
+      "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+    },
+    {
+      "domain": "d6",
+      "pairIndex": 4,
+      "admitted": false,
+      "excludedOriginalAttempts": [
+        "remaining-t1-1-pair_4_full-try-1",
+        "remaining-t1-1-pair_4_remove-try-1"
+      ],
+      "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+    },
+    {
+      "domain": "d3",
+      "pairIndex": 2,
+      "admitted": false,
+      "excludedOriginalAttempts": [
+        "remaining-t1-2-pair_2_full-try-1",
+        "remaining-t1-2-pair_2_remove-try-1"
+      ],
+      "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+    },
+    {
+      "domain": "d3",
+      "pairIndex": 3,
+      "admitted": false,
+      "excludedOriginalAttempts": [
+        "remaining-t1-2-pair_3_full-try-1",
+        "remaining-t1-2-pair_3_remove-try-1"
+      ],
+      "reason": "ORIGINAL_ACTUAL_ORDER_FULL_REMOVE_VIOLATED_REMOVE_FIRST"
+    },
+    {
+      "domain": "d3",
+      "pairIndex": 3,
+      "admitted": false,
+      "excludedRecoveryAttempt": "t1-anti-censoring-continuation-2-p3-remove-try-1",
+      "reason": "TRUE_TECHNICAL_INVALID_ZERO_PROVIDER_CALL_REPLACED_BEFORE_SECOND_ARM"
+    }
+  ],
+  "admittedPairCount": 8,
+  "excludedOriginalMismatchedPairCount": 4,
+  "excludedTechnicalInvalidAttemptCount": 1,
+  "rawHistoricalBytesModified": false,
+  "originalWrongOrderPairsReAdmitted": false,
+  "fixed4ContentHash": "2eca89e1c3efa197e602578173558cbefcb9ec62d59b2ee58bcf02a71c3a0f93",
+  "contentHash": "40c6226b84567136f0006a2063e12d7ecee2372d10fbd55bb3bf81498e0575e6"
+}

@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final-model.v1",
+  "decisionId": "POST_CAL_MODEL_VALUE_STUDY_V2_1_2026_09_11",
+  "label": "BASELINE_V2_FINAL",
+  "candidateId": "MATCHED_CAPACITY_X0_RIDGE",
+  "featureFamilies": [
+    "X0_STRUCTURAL",
+    "X0_SEMANTIC"
+  ],
+  "featureOrder": [
+    "x0_history_turn_count_log",
+    "x0_history_char_count_log",
+    "x0_query_token_count_log",
+    "x0_schema_property_count_log",
+    "x0_required_property_fraction",
+    "x0_source_count_log",
+    "x0_query_history_jaccard",
+    "x0_query_schema_jaccard"
+  ],
+  "selectedLambda": 20,
+  "tuningReportHash": "09946cdee297b873aa41728d634df3e71dcde0a0a964e4b781919ed457511ff4",
+  "model": {
+    "schemaVersion": "direction-a.postcal-v2-1.ridge-model.v1",
+    "candidateId": "MATCHED_CAPACITY_X0_RIDGE",
+    "featureFamilies": [
+      "X0_STRUCTURAL",
+      "X0_SEMANTIC"
+    ],
+    "featureOrder": [
+      "x0_history_turn_count_log",
+      "x0_history_char_count_log",
+      "x0_query_token_count_log",
+      "x0_schema_property_count_log",
+      "x0_required_property_fraction",
+      "x0_source_count_log",
+      "x0_query_history_jaccard",
+      "x0_query_schema_jaccard"
+    ],
+    "lambda": 20,
+    "standardization": "POPULATION_SD_ON_FIT_ROWS",
+    "means": [
+      2.0187504384237034,
+      7.435664358745615,
+      2.804688888597048,
+      1.2665930052320513,
+      0.6594108669108671,
+      0.8143497509289099,
+      0.06356769279546133,
+      0.05840902639247019
+    ],
+    "scales": [
+      0.5587330274117398,
+      0.797007956769194,
+      0.23798093343795207,
+      0.5942900586449686,
+      0.3454725726863411,
+      0.35522262723474446,
+      0.030030614198007247,
+      0.038033018194182755
+    ],
+    "coefficients": [
+      0.4419742063492062,
+      0.02976550894534334,
+      -0.017393364316577533,
+      -0.028360508313272297,
+      -0.08775840102153706,
+      0.03598305307458418,
+      -0.10176482854149574,
+      -0.029008254876928378,
+      0.033046816627328
+    ],
+    "clip": [
+      -1,
+      1
+    ],
+    "scoreDirection": "HIGHER_PREDICTED_THETA_ACCEPT"
+  },
+  "fitRowCount": 60,
+  "fitDatasetHash": "76f16f815a1c3c9e7129863e91b1fb18ab3b469132be40297bfabc101acb7d83",
+  "trainingRowsFileSha256": "994ac709e8d65259ae5f87e212b02d8d23ccb6df89a006e2c714e6c0f2d28873",
+  "sourceCodePath": "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\MemoryCore\\scripts\\direction-a\\formal\\postcal-model-value-v2-1-freeze.mjs",
+  "sourceCodeSha256": "2879877fbc5265fcbaab769baab99d30a96cdd628658f110d395f467a62f6180",
+  "untouched69YUsed": 0,
+  "sealedTestYUsed": 0,
+  "evoYUsed": 0,
+  "ebYUsed": 0,
+  "contentHash": "1dc8546e726eedca260905105c90407cf123b68c54477916505214af708d238c"
+}

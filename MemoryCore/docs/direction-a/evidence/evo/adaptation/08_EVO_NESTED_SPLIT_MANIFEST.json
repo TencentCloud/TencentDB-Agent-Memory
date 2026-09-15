@@ -1,0 +1,363 @@
+{
+  "schemaVersion": "direction-a.evo-nested-split-manifest.v1",
+  "frozenAt": "2026-09-11T00:00:00.000+08:00",
+  "statisticalUnit": "COMPLETE_TASK_REQUIREMENT_CHAIN",
+  "taskClusters": [
+    "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+    "theme_d11_w9_scientific_numerical_reproducibility_verification",
+    "theme_d5_w9_data_engineering_reproducibility_verification",
+    "theme_d7_w5_systems_networking_integration_e2e_wiring",
+    "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+    "theme_d9_w11_security_automation_scripting"
+  ],
+  "outerFolds": [
+    {
+      "outerTestTaskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+      "outerTrainTaskIds": [
+        "theme_d11_w9_scientific_numerical_reproducibility_verification",
+        "theme_d5_w9_data_engineering_reproducibility_verification",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+        "theme_d9_w11_security_automation_scripting"
+      ],
+      "innerFolds": [
+        {
+          "innerValidationTaskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d9_w11_security_automation_scripting",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        }
+      ]
+    },
+    {
+      "outerTestTaskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+      "outerTrainTaskIds": [
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+        "theme_d5_w9_data_engineering_reproducibility_verification",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+        "theme_d9_w11_security_automation_scripting"
+      ],
+      "innerFolds": [
+        {
+          "innerValidationTaskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "innerTrainTaskIds": [
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d9_w11_security_automation_scripting",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        }
+      ]
+    },
+    {
+      "outerTestTaskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+      "outerTrainTaskIds": [
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+        "theme_d11_w9_scientific_numerical_reproducibility_verification",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+        "theme_d9_w11_security_automation_scripting"
+      ],
+      "innerFolds": [
+        {
+          "innerValidationTaskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d9_w11_security_automation_scripting",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        }
+      ]
+    },
+    {
+      "outerTestTaskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+      "outerTrainTaskIds": [
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+        "theme_d11_w9_scientific_numerical_reproducibility_verification",
+        "theme_d5_w9_data_engineering_reproducibility_verification",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+        "theme_d9_w11_security_automation_scripting"
+      ],
+      "innerFolds": [
+        {
+          "innerValidationTaskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d9_w11_security_automation_scripting",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        }
+      ]
+    },
+    {
+      "outerTestTaskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+      "outerTrainTaskIds": [
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+        "theme_d11_w9_scientific_numerical_reproducibility_verification",
+        "theme_d5_w9_data_engineering_reproducibility_verification",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring",
+        "theme_d9_w11_security_automation_scripting"
+      ],
+      "innerFolds": [
+        {
+          "innerValidationTaskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d9_w11_security_automation_scripting"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d9_w11_security_automation_scripting",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring"
+          ]
+        }
+      ]
+    },
+    {
+      "outerTestTaskId": "theme_d9_w11_security_automation_scripting",
+      "outerTrainTaskIds": [
+        "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+        "theme_d11_w9_scientific_numerical_reproducibility_verification",
+        "theme_d5_w9_data_engineering_reproducibility_verification",
+        "theme_d7_w5_systems_networking_integration_e2e_wiring",
+        "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+      ],
+      "innerFolds": [
+        {
+          "innerValidationTaskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "innerTrainTaskIds": [
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d8_w5_cloud_devops_integration_e2e_wiring"
+          ]
+        },
+        {
+          "innerValidationTaskId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "innerTrainTaskIds": [
+            "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+            "theme_d11_w9_scientific_numerical_reproducibility_verification",
+            "theme_d5_w9_data_engineering_reproducibility_verification",
+            "theme_d7_w5_systems_networking_integration_e2e_wiring"
+          ]
+        }
+      ]
+    }
+  ],
+  "leakageChecks": {
+    "groupSplitAcrossFolds": false,
+    "pairRowsSplitAcrossFolds": false,
+    "heldTaskYUsedForTuning": false
+  },
+  "contentHash": "cfd42c6a3fe947a04244ced91c9236891103e4a469b3b61ec7a1080d36e5493a"
+}

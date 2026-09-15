@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "direction-a.evo-post-t1.requalified-final-model-set-freeze.v1",
+  "generatedAt": "2026-09-13T00:00:00.000+08:00",
+  "status": "PASS",
+  "proposed": {
+    "id": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+    "artifactContentHash": "0dba1375904a50262e03d538f3e381e08f89c2332e77743bf577edbd59556a4f",
+    "trainingHash": "f1426c2f8f241efa74a28a4aa911719a557ba67fd5ccfe2a3b43778e665de157"
+  },
+  "primaryBaseline": {
+    "id": "MATCHED_CAPACITY_LEGACY_X0_BASELINE",
+    "artifactContentHash": "ae1f916be86e5786cc310d947b3d869d79dd02b397748068eb485afaffa98934",
+    "trainingHash": "3beaa0d6ed58a4b22fe6bbdb2da60a8c95d2f8a3d13823dc4f1531520f309da5"
+  },
+  "strongComparator": {
+    "id": "TARGET_ONLY_SHARED_ONLY_RIDGE",
+    "artifactContentHash": "6590244a94efd8e8d4727b2c05223b8c2ddd4eb3107e41479abd500f2bdd771c",
+    "trainingHash": "a58e0d335d135e1e8174e3a0076a3d978fddbb511ddf19c641af6d6eb568d2cf"
+  },
+  "coverage": 0.7,
+  "acceptedCountContract": "round_half_up(coverage*N)",
+  "priorityCoverages": [
+    0.4,
+    0.6,
+    0.7,
+    0.8
+  ],
+  "rankingRule": "SCORE_DESC_THEN_CANONICAL_TASK_ID_ASC",
+  "refitAfterFreshY": false,
+  "contentHash": "92b1430e4aa2bb2daed85dafe6728481e030f4aa8bb4d30b06617587bf595605"
+}

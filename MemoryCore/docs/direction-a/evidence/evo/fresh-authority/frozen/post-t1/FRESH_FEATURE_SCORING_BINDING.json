@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "direction-a.evo-fresh-feature-scoring-byte-bindings.v1",
+  "bindings": {
+    "proposedModel": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/11_FINAL_PROPOSED_MODEL_FREEZE.json",
+      "bytes": 2268,
+      "sha256": "c8f758b2cf5009880bd5ecff480b6adcff1188a025440c81968901deb656858b"
+    },
+    "primaryBaseline": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/12_FINAL_PRIMARY_BASELINE_FREEZE.json",
+      "bytes": 2980,
+      "sha256": "d1774868a0c06fac9fd702bcf89bd265e09a3a8e70549d8d7a96281539743ec5"
+    },
+    "strongComparator": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/13_FINAL_STRONG_COMPARATOR_FREEZE.json",
+      "bytes": 2833,
+      "sha256": "ebafd2ee1015115729b2a499ef9841cf47a06320d0537c6ab74b1197b1b16372"
+    },
+    "featureContract": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/11_FINAL_PROPOSED_MODEL_FREEZE.json",
+      "bytes": 2268,
+      "sha256": "c8f758b2cf5009880bd5ecff480b6adcff1188a025440c81968901deb656858b"
+    },
+    "preprocessing": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/11_FINAL_PROPOSED_MODEL_FREEZE.json",
+      "bytes": 2268,
+      "sha256": "c8f758b2cf5009880bd5ecff480b6adcff1188a025440c81968901deb656858b"
+    },
+    "sourceScoreImplementation": {
+      "path": "MemoryCore/src/evaluation/direction-a/formal/evo-fresh/fresh-feature-scoring.ts",
+      "bytes": 6666,
+      "sha256": "e2d43fade1fbece3464ec7d446fa0899b1fa80fc157cadc9ec33e2dfbf3f3937"
+    },
+    "predictorImplementation": {
+      "path": "MemoryCore/src/evaluation/direction-a/formal/modeling/evo-continuous-adaptation.ts",
+      "bytes": 20422,
+      "sha256": "12bfc64e94878c969a4054cd5c7a621508bb865b01cb5e2751b3a0164c6641b4"
+    },
+    "trainingBank": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/06_REPAIRED_POST_T1_8TASK_10GROUP_BANK.json",
+      "bytes": 37808,
+      "sha256": "2c33e9722be511ff1e0cbd981b614e84da0f3546d771172097a4404d94d65af0"
+    },
+    "modelSet": {
+      "path": "Direction_A_Evo_PostT1_Requalification_Closure_v2/16_FINAL_MODEL_SET_FREEZE.json",
+      "bytes": 1229,
+      "sha256": "98cd07baf5058cf2069fb16631c36682171e32077d75425233a2763c15b808db"
+    },
+    "proposedSourceModel": {
+      "path": "Direction_A_PostCAL_Model_Value_v2_1/11_PROPOSED_V2_FINAL_MODEL.json",
+      "bytes": 2719,
+      "sha256": "5aebbff0be8db3785a6510aaa2e68fabfbf12587ef3a5f0bc3e01f2b0bb797b7"
+    },
+    "legacySourceModel": {
+      "path": "Direction_A_PostCAL_Model_Value_v2_1/12_BASELINE_V2_FINAL_MODEL.json",
+      "bytes": 2698,
+      "sha256": "9e308a80751fb7c27b5bf772ce58e7cacb2ccf2335d599d99f12eaf3cb357fde"
+    },
+    "currentCheckpointFeatureConsumer": {
+      "path": "MemoryCore/scripts/direction-a/formal/evo-post-t1-requalification.ts",
+      "bytes": 61327,
+      "sha256": "bef0c4777c6828975da8831d72cf26988190f7f6c605473b758bce160f598c47"
+    }
+  },
+  "contentHash": "1580788a1906d885e962a1e016723ffca5151bebb63421c33070be6158cf177a"
+}

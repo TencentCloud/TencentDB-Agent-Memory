@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-policy-discordance.v1",
+  "counts": {
+    "BOTH_ACCEPT": 36,
+    "BOTH_ABSTAIN": 9,
+    "PROPOSED_ONLY": 12,
+    "BASELINE_ONLY": 12
+  },
+  "proposedOnly": {
+    "meanTheta": 0.32787698412698413,
+    "sumTheta": 3.9345238095238093
+  },
+  "baselineOnly": {
+    "meanTheta": 0.10094246031746033,
+    "sumTheta": 1.211309523809524
+  },
+  "discordantUtilityAdvantageMeanContribution": 0.03946687370600414,
+  "identityDeltaV": 0.03946687370600414,
+  "largestAbsoluteDiagnostics": [
+    {
+      "componentId": "mc_00113a820d239ecc22b2",
+      "relation": "PROPOSED_ONLY",
+      "thetaHatFixed4": 1
+    },
+    {
+      "componentId": "mc_ff59f7b4a69d794244b6",
+      "relation": "PROPOSED_ONLY",
+      "thetaHatFixed4": 0.875
+    },
+    {
+      "componentId": "mc_b68f1ef10ad13e868b40",
+      "relation": "PROPOSED_ONLY",
+      "thetaHatFixed4": 0.75
+    },
+    {
+      "componentId": "mc_20851cda50fec4624ec1",
+      "relation": "PROPOSED_ONLY",
+      "thetaHatFixed4": 0.5000000000000001
+    },
+    {
+      "componentId": "mc_43e82ead0d32382cffec",
+      "relation": "BASELINE_ONLY",
+      "thetaHatFixed4": 0.5
+    },
+    {
+      "componentId": "mc_7ec68deb84707f52c490",
+      "relation": "PROPOSED_ONLY",
+      "thetaHatFixed4": 0.5
+    },
+    {
+      "componentId": "mc_9fe6a26949767c49a2cc",
+      "relation": "BASELINE_ONLY",
+      "thetaHatFixed4": 0.5
+    },
+    {
+      "componentId": "mc_14b9aadf98456cacf3cc",
+      "relation": "BASELINE_ONLY",
+      "thetaHatFixed4": 0.25
+    }
+  ],
+  "contentHash": "8779f2bdb65ab52d53162631cbe0ce7de43cfc2dce893ea9f2dd16ea35062be3"
+}

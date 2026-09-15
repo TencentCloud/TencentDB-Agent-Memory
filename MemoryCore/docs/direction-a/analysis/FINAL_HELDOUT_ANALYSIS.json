@@ -1,0 +1,471 @@
+{
+  "schemaVersion": "direction-a.final-heldout-analysis.v1",
+  "evidenceCutoff": "2026-09-14T09:39:41.649Z",
+  "scientificStatus": "PARTIALLY_SUPPORTED",
+  "treatmentFidelityVerdict": "PASS_WITH_LIMITATION",
+  "treatmentFidelity": {
+    "canonicalScientificArmsChecked": 40,
+    "completePairsChecked": 20,
+    "taskGroupsChecked": 5,
+    "checks": [
+      {
+        "taskId": "theme_d11_w2_scientific_numerical_brownfield_modification",
+        "prefixIndex": 1,
+        "fullHasMemoryContext": true,
+        "removeHasMemoryContext": false,
+        "fullExactTargetSuffix": true,
+        "identicalEnvironmentHash": "a6ea8b487174cb78e9183fed6380ca16656b2255ffeb9a2040d2041a0da881ba",
+        "identicalTestsHash": "5ab7acc1fa54768b98abbe662ed3f1322e5e3b9e8cb16b4e5f7ea0faa684efb0",
+        "taskCandidateHash": "298f62b91593637896b22455d22e3467e19fe1b5525017fecc9c67789af2ed88"
+      },
+      {
+        "taskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+        "prefixIndex": 2,
+        "fullHasMemoryContext": true,
+        "removeHasMemoryContext": false,
+        "fullExactTargetSuffix": true,
+        "identicalEnvironmentHash": "69f3523312cd5a85ddcfb57823eb803ef9d955d21584f6daf977daac639fdeb1",
+        "identicalTestsHash": "acfeee40b67752fa5f70ecf6d9701706bbb8c73975cb58fd3b467c812b0fcde6",
+        "taskCandidateHash": "ed35e6344ec1f2a5dd684501ae8d1c588c16e25cc4bfd45b0f08a5800d3892b2"
+      },
+      {
+        "taskId": "theme_d12_w1_automation_productivity_greenfield_implementation",
+        "prefixIndex": 3,
+        "fullHasMemoryContext": true,
+        "removeHasMemoryContext": false,
+        "fullExactTargetSuffix": true,
+        "identicalEnvironmentHash": "28caa0c9a1a157c3139d51449ccc82cfb5996955083234c1ed1386bf5106ed63",
+        "identicalTestsHash": "0cc7507caf9ec1d4ab86daa7845ea2f50d84c37e07d0dc7d99e14c634536ead8",
+        "taskCandidateHash": "edfee50ef4f1797aba624db85d59f183f810657e288e87ee16af4942723bf9ab"
+      },
+      {
+        "taskId": "theme_d5_w5_data_engineering_integration_e2e_wiring",
+        "prefixIndex": 4,
+        "fullHasMemoryContext": true,
+        "removeHasMemoryContext": false,
+        "fullExactTargetSuffix": true,
+        "identicalEnvironmentHash": "9463867adc66f78e3334e595240ff0a35571cbd4f387176149ac428806e3655e",
+        "identicalTestsHash": "6a418cf860a6fb371c5b355801ce0fb43dcbd0da0cf4566c722a2c4c6bc240b7",
+        "taskCandidateHash": "a690bab698637aacd80ba2354bccc4989046abcbdb4f67b63af4f6389af7aaec"
+      },
+      {
+        "taskId": "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+        "prefixIndex": 5,
+        "fullHasMemoryContext": true,
+        "removeHasMemoryContext": false,
+        "fullExactTargetSuffix": true,
+        "identicalEnvironmentHash": "12e3a6c471995df6bf286e2604a38a4d9c2426f9161fb31b82903006850cab48",
+        "identicalTestsHash": "158fa663c135f5dbc3079dfa166045769b43445563a620070ecbeb9a1b56f8c7",
+        "taskCandidateHash": "40d8413b269731b3d2fc56e9ddb27d09654278eea3ac41ebc00cd61ee873ce87"
+      }
+    ],
+    "passedClaims": [
+      "FULL and REMOVE preserve the same target instruction, frozen workspace, native tests, provider/model/scaffold/decoding/horizon, and differ in delivered memory treatment.",
+      "All 40 canonical trajectories contain the exact prepared arm instruction; FULL contains memory_context and REMOVE does not.",
+      "All 40 outcomes were re-extracted from native verifier CASE_SUMMARY lines with frozen denominators.",
+      "All 20 pair attestations bind scheduled/actual order, restored state, task hash, workspace isolation, and journal start event.",
+      "All 81 request-bound files and both journal chains match their cryptographic bindings."
+    ],
+    "limitations": [
+      "The two causal host-recovery driver files were recorded after the request-binding closure and are not among the request/runtime cryptographic bindings; chronology and immutable runtime evidence support the recoveries, but byte-exact executed wrapper provenance cannot be claimed.",
+      "The current phase-3 supervisor is a post-experiment engineering version, not the byte-exact executed wrapper.",
+      "The wider Harbor/runtime toolchain binary environment was not fully content-addressed; conclusions are conditional on the attested frozen task, profile, and observed runtime evidence."
+    ]
+  },
+  "sample": {
+    "taskClusters": 5,
+    "fixedPairsPerTask": 4,
+    "completePairs": 20,
+    "canonicalArms": 40
+  },
+  "estimator": "thetaHat_g = mean_j=1..4(U_FULL_gj - U_REMOVE_gj), with U = native success_count / frozen_total_cases",
+  "tasks": [
+    {
+      "taskId": "theme_d11_w2_scientific_numerical_brownfield_modification",
+      "prefixIndex": 1,
+      "frozenTotalCases": 62,
+      "pairDifferences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0
+    },
+    {
+      "taskId": "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+      "prefixIndex": 2,
+      "frozenTotalCases": 160,
+      "pairDifferences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0
+    },
+    {
+      "taskId": "theme_d12_w1_automation_productivity_greenfield_implementation",
+      "prefixIndex": 3,
+      "frozenTotalCases": 111,
+      "pairDifferences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0
+    },
+    {
+      "taskId": "theme_d5_w5_data_engineering_integration_e2e_wiring",
+      "prefixIndex": 4,
+      "frozenTotalCases": 32,
+      "pairDifferences": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "thetaHatFixed4": 0
+    },
+    {
+      "taskId": "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+      "prefixIndex": 5,
+      "frozenTotalCases": 323,
+      "pairDifferences": [
+        0.12693498452,
+        0.59133126935,
+        0.09907120743,
+        -0.59133126935
+      ],
+      "thetaHatFixed4": 0.056501547988
+    }
+  ],
+  "primaryCoverage": {
+    "labelPercent": 70,
+    "acceptedCountContract": 4,
+    "realizedCoverage": 0.8,
+    "methods": {
+      "proposed": {
+        "methodId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d12_w1_automation_productivity_greenfield_implementation",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "primaryBaseline": {
+        "methodId": "MATCHED_CAPACITY_LEGACY_X0_BASELINE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+          "theme_d5_w5_data_engineering_integration_e2e_wiring"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "strongComparator": {
+        "methodId": "TARGET_ONLY_SHARED_ONLY_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+          "theme_d5_w5_data_engineering_integration_e2e_wiring"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      }
+    },
+    "contrasts": {
+      "proposedMinusPrimaryBaseline": {
+        "deltaV": 0,
+        "deltaG": 0
+      },
+      "proposedMinusStrongComparator": {
+        "deltaV": 0,
+        "deltaG": 0
+      }
+    }
+  },
+  "coverageSensitivity": {
+    "40": {
+      "proposed": {
+        "methodId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234"
+        ],
+        "coverage": 0.4,
+        "acceptedCount": 2,
+        "acceptedMean": 0.028250773993808057,
+        "value": 0.011300309597523223,
+        "gain": 0.006780185758513933,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "primaryBaseline": {
+        "methodId": "MATCHED_CAPACITY_LEGACY_X0_BASELINE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification"
+        ],
+        "coverage": 0.4,
+        "acceptedCount": 2,
+        "acceptedMean": 0.028250773993808057,
+        "value": 0.011300309597523223,
+        "gain": 0.006780185758513933,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "strongComparator": {
+        "methodId": "TARGET_ONLY_SHARED_ONLY_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification"
+        ],
+        "coverage": 0.4,
+        "acceptedCount": 2,
+        "acceptedMean": 0.028250773993808057,
+        "value": 0.011300309597523223,
+        "gain": 0.006780185758513933,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      }
+    },
+    "60": {
+      "proposed": {
+        "methodId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d12_w1_automation_productivity_greenfield_implementation"
+        ],
+        "coverage": 0.6,
+        "acceptedCount": 3,
+        "acceptedMean": 0.018833849329205374,
+        "value": 0.011300309597523223,
+        "gain": 0.004520123839009289,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "primaryBaseline": {
+        "methodId": "MATCHED_CAPACITY_LEGACY_X0_BASELINE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade"
+        ],
+        "coverage": 0.6,
+        "acceptedCount": 3,
+        "acceptedMean": 0.018833849329205374,
+        "value": 0.011300309597523223,
+        "gain": 0.004520123839009289,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "strongComparator": {
+        "methodId": "TARGET_ONLY_SHARED_ONLY_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade"
+        ],
+        "coverage": 0.6,
+        "acceptedCount": 3,
+        "acceptedMean": 0.018833849329205374,
+        "value": 0.011300309597523223,
+        "gain": 0.004520123839009289,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      }
+    },
+    "70": {
+      "proposed": {
+        "methodId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d12_w1_automation_productivity_greenfield_implementation",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "primaryBaseline": {
+        "methodId": "MATCHED_CAPACITY_LEGACY_X0_BASELINE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+          "theme_d5_w5_data_engineering_integration_e2e_wiring"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "strongComparator": {
+        "methodId": "TARGET_ONLY_SHARED_ONLY_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+          "theme_d5_w5_data_engineering_integration_e2e_wiring"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      }
+    },
+    "80": {
+      "proposed": {
+        "methodId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d12_w1_automation_productivity_greenfield_implementation",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "primaryBaseline": {
+        "methodId": "MATCHED_CAPACITY_LEGACY_X0_BASELINE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+          "theme_d5_w5_data_engineering_integration_e2e_wiring"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      },
+      "strongComparator": {
+        "methodId": "TARGET_ONLY_SHARED_ONLY_RIDGE",
+        "acceptedTaskIds": [
+          "theme_d11_w2_scientific_numerical_brownfield_modification__not_1234",
+          "theme_d11_w2_scientific_numerical_brownfield_modification",
+          "theme_d10_w4_ml_ai_mlops_migration_upgrade",
+          "theme_d5_w5_data_engineering_integration_e2e_wiring"
+        ],
+        "coverage": 0.8,
+        "acceptedCount": 4,
+        "acceptedMean": 0.014125386996904028,
+        "value": 0.011300309597523223,
+        "gain": 0.002260061919504644,
+        "overallMean": 0.011300309597523223,
+        "rejectedMean": 0
+      }
+    }
+  },
+  "inference": {
+    "finalFreshEndpointInferenceWinnerFrozenBeforeY": false,
+    "status": "NO_FINAL_FRESH_ENDPOINT_INFERENCE_WINNER_FROZEN",
+    "searchScope": [
+      "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_FinalRecovery_Closure_v1\\10_NEW_FRESH_AUTHORIZATION_REQUEST.json",
+      "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_Engineering_Holdout_N9_Runtime_v1\\FRESH_N9_PRE_Y_POLICY_FREEZE.json",
+      "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_FinalRecovery_Closure_v1\\frozen\\post-t1\\16_FINAL_MODEL_SET_FREEZE.json",
+      "C:\\Users\\L2503\\Desktop\\TencentDB-Agent-Memory\\Direction_A_Evo_Fresh_FinalRecovery_Closure_v1\\12_FINAL_TRANSITIVE_BINDING_MANIFEST.json"
+    ],
+    "consequence": "Report point estimates only; do not attach a formal 95% confidence interval, p-value, or significance claim. No post-hoc inference family was selected."
+  },
+  "costs": {
+    "freshProviderCalls": 576,
+    "freshInternalLedgerCostCny": 87.461325,
+    "phase1NormalProviderCalls": 96,
+    "phase1NormalCostCny": 15.808752,
+    "phase3CausalProviderCalls": 480,
+    "phase3CausalCostCny": 71.652573,
+    "budgetCapCny": 100,
+    "remainingCny": 12.538675,
+    "causalHostRecoveryAttemptIds": [
+      "fresh-n9-phase3-3-pair_3_remove-hostrecovery-1",
+      "fresh-n9-phase3-4-pair_3_full-hostrecovery-1"
+    ],
+    "causalHostRecoveryCalls": 24,
+    "causalHostRecoveryCostCny": 3.901347,
+    "allRecoveryAttemptIds": [
+      "fresh-n9-phase1-3-normal-recovery-1",
+      "fresh-n9-phase3-3-pair_3_remove-hostrecovery-1",
+      "fresh-n9-phase3-4-pair_3_full-hostrecovery-1"
+    ],
+    "allRecoveryCalls": 36,
+    "allRecoveryCostCny": 6.312528,
+    "zeroProviderTechnicalAbortCount": 4,
+    "zeroProviderTechnicalAbortIds": [
+      "fresh-n9-phase3-3-pair_3_remove-try-1",
+      "fresh-n9-phase3-4-pair_3_full-try-1",
+      "fresh-n9-phase3-4-pair_3_full-try-2",
+      "fresh-n9-phase3-4-pair_3_full-try-3"
+    ]
+  },
+  "claimLadder": {
+    "L0": "SUPPORTED_WITH_PROVENANCE_LIMITATIONS: executed artifacts, treatment delivery, frozen native scoring, and request-bound closure were verified; recovery wrapper byte identity and full toolchain lock remain limited.",
+    "L1": "SUPPORTED_AS_POINT_ESTIMATE_ONLY: four task effects are exactly zero; one task has thetaHat=0.056501547988 with high pair dispersion.",
+    "L2": "SUPPORTED_AS_POINT_ESTIMATE_ONLY: at the four-of-five primary acceptance rule, every method has V=0.011300309598 and G=0.00226006192.",
+    "L3": "NOT_DEMONSTRATED: Proposed minus either baseline is DeltaV=0 and DeltaG=0.",
+    "L4": "NOT_DEMONSTRATED: no new task family, Q6 transport, natural online write/retrieval, or deployment-scale generalization was tested."
+  },
+  "interpretation": {
+    "strongestAllowedClaim": "On this frozen five-task Fresh engineering holdout, the memory treatment changed native case success only for one task, while the Proposed, matched-capacity baseline, and target-only comparator tied on the primary value and gain point estimates.",
+    "biggestLimitation": "Only five task clusters were observed and no exact final Fresh endpoint inference procedure was frozen before Y, so superiority, confidence-interval, significance, and broad generalization claims are not licensed."
+  },
+  "crossChecks": {
+    "requestBindingsMatched": 81,
+    "transitiveSourceImportFiles": 44,
+    "duplicateDispatch": 0,
+    "uncertainDispatch": 0,
+    "danglingDispatch": 0,
+    "runtimePhase": "COMPLETE",
+    "journalEvents": 738,
+    "journalHead": "ec973eb401f91f3c89a0e1a47f6b46c99b24a45036b8841ad32d9766bbcd4dc5",
+    "ledgerEvents": 104,
+    "ledgerHead": "f489a88e11cfb55abc4b56106e38824b4f1a7db2c7281048e058924c394c9414",
+    "summaryAgreement": true,
+    "noProviderCallsDuringAnalysis": true,
+    "noRefit": true,
+    "noThresholdTuning": true,
+    "noAdditionalExperiment": true
+  }
+}

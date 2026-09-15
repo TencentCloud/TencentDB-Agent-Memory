@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "direction-a.evo-negative-transfer-report.v1",
+  "generatedAt": "2026-09-11T00:00:00.000+08:00",
+  "bestTransferCandidateId": "B_SEPARATE_SCALE_PARTIAL_POOLING",
+  "transferMetrics": {
+    "independentClusters": 6,
+    "groups": 8,
+    "rmse": 0.018766723168986935,
+    "mae": 0.013588627558823658,
+    "spearmanClusterMean": -0.5768179036829705,
+    "signAccuracy": 0.4166666666666667
+  },
+  "targetOnlyMetrics": {
+    "independentClusters": 6,
+    "groups": 8,
+    "rmse": 0.018647704482618915,
+    "mae": 0.013446036716497098,
+    "spearmanClusterMean": -0.5768179036829705,
+    "signAccuracy": 0.4166666666666667
+  },
+  "targetOnlyRelativeRmseGain": 0.00634200682219819,
+  "transferRelativeRmseGain": -0.006382484582965934,
+  "outerFoldDirection": {
+    "leftBetterRmseFolds": 2,
+    "rightBetterRmseFolds": 4,
+    "tiedFolds": 0,
+    "comparableFolds": 6
+  },
+  "decision": "TRANSFER_EFFECT_INCONCLUSIVE",
+  "modelFreezeEffect": "DIAGNOSTIC_AT_SIX_CLUSTERS; RE-EVALUATE UNDER IDENTICAL FROZEN RULE AFTER TWO-TASK EXPANSION",
+  "contentHash": "c82688e2cfdc75470b1e7a7f87ee0b264c87d7b26c3508a87e1d9c5fdc109d4f"
+}

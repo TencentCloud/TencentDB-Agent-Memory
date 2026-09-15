@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "direction-a.postcal-v2-1.final69-measurement-sensitivity.v1",
+  "role": "SENSITIVITY_NOT_CO_PRIMARY_VETO",
+  "pointDeltaV": 0.03946687370600414,
+  "R": 20000,
+  "seed": "direction-a-postcal-model-value-v2-1-final69-paired-bootstrap-20260911::measurement",
+  "bootstrapMean": 0.0394671609730848,
+  "bootstrapSd": 0.028005954846702284,
+  "oneSided95Lower": -0.00444271911663216,
+  "twoSided95": [
+    -0.012077294685990336,
+    0.09782608695652176
+  ],
+  "replayHash": "d5316cf5fefb7bdf998721610d99264840132e0bc7a07cbbb8514d2639731077",
+  "deterministicReplayTwice": true,
+  "MEASUREMENT_SENSITIVITY_ROBUST": false,
+  "contentHash": "f321245880c04e2bfd8c91ccd78ac45903bce956b0603da8ed3aa12997e67fca"
+}

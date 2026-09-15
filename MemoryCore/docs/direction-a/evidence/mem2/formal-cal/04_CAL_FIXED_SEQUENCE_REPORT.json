@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "MEM2_CAL_FIXED_SEQUENCE_REPORT.v1",
+  "frozenSequenceArtifactHash": "b12ae991f22d0fcf766a42b629260a19651b857f6c131e2319bb0d414d6a96ae",
+  "inferenceReportHash": "4abb8ea05bcf1d23d85da8299d0d64affc98944824305ddb79ab4c10fce6661b",
+  "orderedPolicyIds": [
+    "MEM2_COVERAGE_70",
+    "MEM2_COVERAGE_80"
+  ],
+  "reached": [
+    {
+      "policyId": "MEM2_COVERAGE_70",
+      "populationCoverage": 0.6571428571428571,
+      "acceptedSupport": 69,
+      "minimumCoverage": 0.2,
+      "minimumAcceptedSupport": 3,
+      "V": {
+        "estimate": 0.44236111111111115,
+        "lowerConfidenceBound95": -0.09446664147992317,
+        "mM": 0.1844597201625686,
+        "mS": 0.35236803242846576,
+        "availableCount": 36,
+        "unavailableCount": 0,
+        "componentAlpha": 0.05,
+        "pass": false
+      },
+      "G": {
+        "estimate": 0.11700585789871504,
+        "lowerConfidenceBound95": -0.23495546116820554,
+        "mM": 0.12138013976979108,
+        "mS": 0.2305811792971295,
+        "availableCount": 36,
+        "unavailableCount": 0,
+        "componentAlpha": 0.05,
+        "pass": false
+      },
+      "statisticalPass": false,
+      "coveragePass": true,
+      "supportPass": true,
+      "floorPass": true
+    }
+  ],
+  "fixedSequenceStopPoint": "MEM2_COVERAGE_70",
+  "selectedPolicyId": null,
+  "status": "NO_CERTIFIED_OPERATING_POINT",
+  "contentHash": "cf16ccfb54e54eb95f442592e12e878927d3350030a18d8cb4fe21d62a1142c9"
+}

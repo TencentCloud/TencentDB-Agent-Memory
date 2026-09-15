@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "direction-a.evo-continuous-bank-report.v1",
+  "generatedAt": "2026-09-11T00:00:00.000+08:00",
+  "status": "PASS",
+  "tasks": 6,
+  "groups": 8,
+  "fixed4Pairs": 32,
+  "thetaSummary": {
+    "minimum": 0,
+    "maximum": 0.06,
+    "mean": 0.00994140625,
+    "nonZeroGroups": 3
+  },
+  "oneTaskClusterWeight": true,
+  "pairRowsTreatedAsIid": false,
+  "historicalPair5PlusPrimaryTargetUse": 0,
+  "q6Groups": 0,
+  "calGroups": 0,
+  "sealedTestGroups": 0,
+  "unavailableRows": 0,
+  "immutableInputBindings": {
+    "initial6Manifest": {
+      "path": "MemoryCore/.research/direction-a/current-formal/pilot/manifests/current-formal-initial6-evo-pilot-manifest-v6.json",
+      "contentHash": "59a24bd41147cd3d32425dd7e4b1e9430e010c6894f6e2a890e3dfd1594b1d10",
+      "sha256": "ea1feafe663c783a74b161d36fbda68324219c0119582e1d77c2f3b93afdd5c9"
+    },
+    "fixed4Replay": {
+      "path": "MemoryCore/.research/direction-a/current-formal/post-pilot/teacher-interface-qualification-v2/11_REAL_INITIAL6_PREFIX_REPLAY.json",
+      "contentHash": "1dc888bb9fab816df5184847600ca686c2e338843378c3653bdf6d795b774bf4",
+      "sha256": "de87077398f84ea6ac5490997da1c0f5b937c44a550a15d666055aa237aa04aa"
+    },
+    "candidateInventory": {
+      "path": "MemoryCore/.research/direction-a/current-formal/prepilot/initial6-candidate-selection-freeze-v1.json",
+      "contentHash": "31be251ec37e40ad85dab42445c7007976cf89fc299213054b2b7d6957248a96",
+      "sha256": "320b0755765c935b4d5f487c2ff8e393f77e4c3888f8b799e790cc82e11d7c31"
+    },
+    "q6Seal": {
+      "path": "MemoryCore/.research/direction-a/current-formal/prepilot/q6-holdout-seal-v1.json",
+      "contentHash": "91f7889336a978b3f9970555410db18169a34f8a087852856867b106509541c3",
+      "sha256": "dc707e24e461c7cee664f95fc76c9faa9d679bc21f53b92fef7ebcaa15aa322a"
+    }
+  },
+  "contentHash": "880ef6d60ee00a5b30d290dda1bf9bce2b749bba8de1af7661b7fe553ffdf8b3"
+}

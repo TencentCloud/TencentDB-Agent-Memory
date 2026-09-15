@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "direction-a.mem2-cal-a1.formal-input-bindings.v1",
+  "populationHash": "b31e8e73a031f5cc6b1c7ee6d4c7db467e79af564fc72bfb63003e18bdcb8c99",
+  "sampleHash": "45206e817ceb52666651cb9108cbeaa4bc0964ecd3f57624cd9154094dd276c7",
+  "alphaEnvelopeHash": "268a777c8bef94512cceb87f2d80a38a5d958b9cd3a4720b87463d418965525d",
+  "alphaPlanHashes": [
+    "528a6276529a507224006848f8b7699d92ba1bb651d0372bb5a9b1db820a87d3",
+    "452f610e469aba319b739fd41c08e5f1f0f60e261bab76ea60ad1ad030057005",
+    "9e78dbfe2bceba3a9632793431b759c657a1eebe64e085eb3990f5966c2da28b",
+    "aa357541c6342d7af0ed8b70c023d7af3e80c080915aad9988a307ab0775541f"
+  ],
+  "frozenSequenceHash": "b12ae991f22d0fcf766a42b629260a19651b857f6c131e2319bb0d414d6a96ae",
+  "floorsHash": "1873417aae1c50bd656a7962830dcbcb4b0891bd797b89938abc1d43b68b7cb1",
+  "cheapXFreezeHash": "8a4fcb4d8e6b6580f83f5aaf0a362f6743dbfb25acda2e1fbdf016eaf444a68a",
+  "recoveryRequestHash": "a72e00fef50c3adabd71c2e4805222fd2616a5aace7cd7b58b9c555bd6f1d524",
+  "recoveryAuthorizationHash": "4520d05a3f45cf781b1786c9aa4d001f3ded5872a8f10f4d0e245db27b0e9344",
+  "recoveryPlanArtifactHash": "bdba5cb1682f55f9dd4bc1cce6c999a5aabbf1334db9d85e1b45a27d6049ad4e",
+  "recoveryPlanCertifiedSpecHash": "99f09aabc9765611f5a5d8e5fbe452d187dcfadf7a096e5b4aa5fabf21af5132",
+  "recoveryHandoffHash": "fd63381214e670a3bf1bc2665a5f270f5b66ac89ebe4c2e3c263cf16845f8a09",
+  "reconciliationHash": "5d0ae41d257133cb436debb685ef94e643e127516ddef59c499cc7152535687c",
+  "originalRuntimeInventorySha256": "4eceeaebd52ebd0148edf94f83258258da4f8bb489f7c045d82a94935d35ae9f",
+  "recoveryRuntimeInventorySha256": "44eb64fff68538067e4d364d8fbe538a3610fe95d2df9a6da6bae206516b2653",
+  "frozenSamplerSourceSha256": "ca3e9ecd8b159b301ae2fd2c3a681a159bbcf77933b296d0038946f07b5e5565",
+  "materializerSha256": "5c894e71ba2e4763a5e521f91e8a871ed23f20b41cf860a37d928872c7d0081d",
+  "providerCallsThisGoal": 0,
+  "secretReadsThisGoal": 0,
+  "contentHash": "abcf2ccf695e37795303a9d15538670b6331143743113427bb3fdb82bf645575"
+}

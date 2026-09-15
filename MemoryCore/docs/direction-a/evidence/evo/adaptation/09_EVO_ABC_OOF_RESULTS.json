@@ -1,0 +1,1213 @@
+{
+  "schemaVersion": "direction-a.evo-abc-oof-results.v1",
+  "generatedAt": "2026-09-11T00:00:00.000+08:00",
+  "evidenceClass": "DEVELOPMENT_ONLY_NOT_FRESH_CAL",
+  "candidates": {
+    "A_FROZEN_SOURCE_RESIDUAL_RIDGE": {
+      "schemaVersion": "direction-a.evo-continuous-adaptation.v1",
+      "candidateId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+      "folds": [
+        {
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.158573925829917,
+            "mae": 0.1460123169437885,
+            "spearmanClusterMean": 0.4472135954999579,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.16078262710189845,
+            "mae": 0.16078262710189845,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+              "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "thetaHatFixed4": 0.015625,
+              "score": -0.14515762710189845,
+              "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "d72c5038d000e2557950b3744868a969c03790a552459362a742c0d631f3923c"
+        },
+        {
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.15137916054569803,
+            "mae": 0.1399773705291316,
+            "spearmanClusterMean": 0.11180339887498948,
+            "signAccuracy": 0.1
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.2098260711867873,
+            "mae": 0.2098260711867873,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "thetaHatFixed4": 0.00390625,
+              "score": 0.2137323211867873,
+              "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "9979f606f66b4310a97092964444cf52bbf5068d822119c19859502f91baed1e"
+        },
+        {
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.16940080735656793,
+            "mae": 0.16218372344081447,
+            "spearmanClusterMean": 0.051298917604257706,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.0804455369284882,
+            "mae": 0.0804455369284882,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+              "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": -0.0804455369284882,
+              "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "a128f0f80de51a3f6ca631334fa96f9e547c43c3955edf09b40d462663a9c62b"
+        },
+        {
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 6,
+            "rmse": 0.1603640910575288,
+            "mae": 0.1460973581977822,
+            "spearmanClusterMean": 0.41039134083406165,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.16365938065323518,
+            "mae": 0.16168163502520191,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.13631548097343577,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.18704778907696806,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "96254358f01e75567bde6d85422638229d980a06ef1bb616822dd6348a48bb52"
+        },
+        {
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 6,
+            "rmse": 0.17878426458444235,
+            "mae": 0.16455599776668678,
+            "spearmanClusterMean": 0.11180339887498948,
+            "signAccuracy": 0.2
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.09765745960650209,
+            "mae": 0.09130007660602737,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0.5
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.056640656118530475,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0.06,
+              "score": 0.18595949709352427,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "09231a8cd1859d2bd2fa8761ef95b9307e01de8009e53e85443d69b27447e5d7"
+        },
+        {
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.1499093025060552,
+            "mae": 0.13912474637212277,
+            "spearmanClusterMean": -0.20519567041703082,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.19082456319989194,
+            "mae": 0.19082456319989194,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+              "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+              "thetaHatFixed4": 0,
+              "score": -0.19082456319989194,
+              "outerClusterId": "theme_d9_w11_security_automation_scripting",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "3e93a6c287315d427ee0f6e7d66ef9a838c672ac44feaf1dc3e1a166f3a04c30"
+        }
+      ],
+      "predictions": [
+        {
+          "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+          "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "thetaHatFixed4": 0.015625,
+          "score": -0.14515762710189845,
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "thetaHatFixed4": 0.00390625,
+          "score": 0.2137323211867873,
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+          "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": -0.0804455369284882,
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.13631548097343577,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.18704778907696806,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.056640656118530475,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0.06,
+          "score": 0.18595949709352427,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+          "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+          "thetaHatFixed4": 0,
+          "score": -0.19082456319989194,
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        }
+      ],
+      "metrics": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.1576308472096591,
+        "mae": 0.14914341834138253,
+        "spearmanClusterMean": 0.15179418517972906,
+        "signAccuracy": 0.25
+      },
+      "developmentCurve": [
+        {
+          "targetCoverage": 0.2,
+          "achievedCoverage": 0.25,
+          "acceptedGroups": 2,
+          "acceptedClusters": 2,
+          "V": 0.0006510416666666666,
+          "G": -0.0014127604166666665,
+          "acceptedMeanTheta": 0.0026041666666666665
+        },
+        {
+          "targetCoverage": 0.3,
+          "achievedCoverage": 0.3333333333333333,
+          "acceptedGroups": 3,
+          "acceptedClusters": 3,
+          "V": 0.005651041666666666,
+          "G": 0.002899305555555555,
+          "acceptedMeanTheta": 0.016953125
+        },
+        {
+          "targetCoverage": 0.4,
+          "achievedCoverage": 0.41666666666666663,
+          "acceptedGroups": 4,
+          "acceptedClusters": 3,
+          "V": 0.005651041666666666,
+          "G": 0.0022113715277777774,
+          "acceptedMeanTheta": 0.0135625
+        },
+        {
+          "targetCoverage": 0.5,
+          "achievedCoverage": 0.49999999999999994,
+          "acceptedGroups": 5,
+          "acceptedClusters": 3,
+          "V": 0.005651041666666666,
+          "G": 0.0015234374999999996,
+          "acceptedMeanTheta": 0.011302083333333334
+        },
+        {
+          "targetCoverage": 0.6,
+          "achievedCoverage": 0.6666666666666666,
+          "acceptedGroups": 6,
+          "acceptedClusters": 4,
+          "V": 0.005651041666666666,
+          "G": 0.0001475694444444441,
+          "acceptedMeanTheta": 0.0084765625
+        },
+        {
+          "targetCoverage": 0.7,
+          "achievedCoverage": 0.8333333333333333,
+          "acceptedGroups": 7,
+          "acceptedClusters": 5,
+          "V": 0.008255208333333333,
+          "G": 0.001375868055555555,
+          "acceptedMeanTheta": 0.00990625
+        },
+        {
+          "targetCoverage": 0.8,
+          "achievedCoverage": 0.8333333333333333,
+          "acceptedGroups": 7,
+          "acceptedClusters": 5,
+          "V": 0.008255208333333333,
+          "G": 0.001375868055555555,
+          "acceptedMeanTheta": 0.00990625
+        },
+        {
+          "targetCoverage": 0.9,
+          "achievedCoverage": 0.9999999999999999,
+          "acceptedGroups": 8,
+          "acceptedClusters": 6,
+          "V": 0.008255208333333333,
+          "G": -4.336808689942018e-19,
+          "acceptedMeanTheta": 0.008255208333333335
+        },
+        {
+          "targetCoverage": 1,
+          "achievedCoverage": 0.9999999999999999,
+          "acceptedGroups": 8,
+          "acceptedClusters": 6,
+          "V": 0.008255208333333333,
+          "G": -4.336808689942018e-19,
+          "acceptedMeanTheta": 0.008255208333333335
+        }
+      ],
+      "contentHash": "954aabbda4d34e5535f9b0680915df6b88b3bda479cee2c77a27dc48fa0f7335"
+    },
+    "B_SEPARATE_SCALE_PARTIAL_POOLING": {
+      "schemaVersion": "direction-a.evo-continuous-adaptation.v1",
+      "candidateId": "B_SEPARATE_SCALE_PARTIAL_POOLING",
+      "folds": [
+        {
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 100,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.01982490485519274,
+            "mae": 0.011889890726813799,
+            "spearmanClusterMean": -0.22360679774997896,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.008835978972520649,
+            "mae": 0.008835978972520649,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+              "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "thetaHatFixed4": 0.015625,
+              "score": 0.0067890210274793505,
+              "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "selectedLambda": 100,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "926b262aa6d618b6ddb746b042c9d6f7b5bd990bea65cef6eba57b3e56f0cf3f"
+        },
+        {
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.019414059054401103,
+            "mae": 0.013067941971480593,
+            "spearmanClusterMean": -0.6708203932499369,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.013201846140919085,
+            "mae": 0.013201846140919085,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "thetaHatFixed4": 0.00390625,
+              "score": 0.017108096140919085,
+              "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "1c2ff35ae2d65ea301fc764cf8025ae2258d1ac5aee7ef8e4c34b4989436c269"
+        },
+        {
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.019723878150972936,
+            "mae": 0.01389235647464179,
+            "spearmanClusterMean": -0.9746794344808964,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.009912853738660209,
+            "mae": 0.009912853738660209,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+              "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": 0.009912853738660209,
+              "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "selectedLambda": 1000,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "ca7b15a443982dc37356d5b547aae53cf3b2c325f5cda1d8471fa63ab87f0df1"
+        },
+        {
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 6,
+            "rmse": 0.01972455474648585,
+            "mae": 0.01389837109609009,
+            "spearmanClusterMean": -0.9746794344808964,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.009890614242203881,
+            "mae": 0.009890614010550663,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.009888473359914728,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 1000,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.0098927546611866,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 1000,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "ee04c4b4723d317592a1a0d9694c7f5b62c35510cbc622dfbdd131f53a375d69"
+        },
+        {
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 6,
+            "rmse": 0.007333701122722854,
+            "mae": 0.005721536847093393,
+            "spearmanClusterMean": -0.22360679774997896,
+            "signAccuracy": 0.4
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.0395862828918627,
+            "mae": 0.029810522462569506,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0.5
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.0037642838914586905,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            },
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0.06,
+              "score": 0.004143238966319678,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "6cba229b64736ebe820f6ba1cbae5dcbedb983b1f30d0a36ab1c75f2f460a51c"
+        },
+        {
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.019733341496753837,
+            "mae": 0.01390727164257377,
+            "spearmanClusterMean": -0.9746794344808964,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.009879950027721835,
+            "mae": 0.009879950027721835,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+              "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+              "thetaHatFixed4": 0,
+              "score": 0.009879950027721835,
+              "outerClusterId": "theme_d9_w11_security_automation_scripting",
+              "selectedLambda": 1000,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "08bac32ef482d86fd7ddaaa084752724def41b0e753e29ce443d6a89c26ea0ea"
+        }
+      ],
+      "predictions": [
+        {
+          "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+          "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "thetaHatFixed4": 0.015625,
+          "score": 0.0067890210274793505,
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 100,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "thetaHatFixed4": 0.00390625,
+          "score": 0.017108096140919085,
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+          "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": 0.009912853738660209,
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.009888473359914728,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.0098927546611866,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.0037642838914586905,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0.06,
+          "score": 0.004143238966319678,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+          "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+          "thetaHatFixed4": 0,
+          "score": 0.009879950027721835,
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        }
+      ],
+      "metrics": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.018766723168986935,
+        "mae": 0.013588627558823658,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      },
+      "developmentCurve": [
+        {
+          "targetCoverage": 0.2,
+          "achievedCoverage": 0.3333333333333333,
+          "acceptedGroups": 2,
+          "acceptedClusters": 2,
+          "V": 0.0006510416666666666,
+          "G": -0.002100694444444444,
+          "acceptedMeanTheta": 0.001953125
+        },
+        {
+          "targetCoverage": 0.3,
+          "achievedCoverage": 0.3333333333333333,
+          "acceptedGroups": 2,
+          "acceptedClusters": 2,
+          "V": 0.0006510416666666666,
+          "G": -0.002100694444444444,
+          "acceptedMeanTheta": 0.001953125
+        },
+        {
+          "targetCoverage": 0.4,
+          "achievedCoverage": 0.41666666666666663,
+          "acceptedGroups": 3,
+          "acceptedClusters": 3,
+          "V": 0.0006510416666666666,
+          "G": -0.002788628472222222,
+          "acceptedMeanTheta": 0.0015625
+        },
+        {
+          "targetCoverage": 0.5,
+          "achievedCoverage": 0.49999999999999994,
+          "acceptedGroups": 4,
+          "acceptedClusters": 3,
+          "V": 0.0006510416666666666,
+          "G": -0.0034765624999999996,
+          "acceptedMeanTheta": 0.0013020833333333335
+        },
+        {
+          "targetCoverage": 0.6,
+          "achievedCoverage": 0.6666666666666666,
+          "acceptedGroups": 5,
+          "acceptedClusters": 4,
+          "V": 0.0006510416666666666,
+          "G": -0.004852430555555555,
+          "acceptedMeanTheta": 0.0009765625
+        },
+        {
+          "targetCoverage": 0.7,
+          "achievedCoverage": 0.8333333333333333,
+          "acceptedGroups": 6,
+          "acceptedClusters": 5,
+          "V": 0.003255208333333333,
+          "G": -0.003624131944444444,
+          "acceptedMeanTheta": 0.00390625
+        },
+        {
+          "targetCoverage": 0.8,
+          "achievedCoverage": 0.8333333333333333,
+          "acceptedGroups": 6,
+          "acceptedClusters": 5,
+          "V": 0.003255208333333333,
+          "G": -0.003624131944444444,
+          "acceptedMeanTheta": 0.00390625
+        },
+        {
+          "targetCoverage": 0.9,
+          "achievedCoverage": 0.9166666666666666,
+          "acceptedGroups": 7,
+          "acceptedClusters": 6,
+          "V": 0.008255208333333333,
+          "G": 0.0006879340277777773,
+          "acceptedMeanTheta": 0.009005681818181819
+        },
+        {
+          "targetCoverage": 1,
+          "achievedCoverage": 1,
+          "acceptedGroups": 8,
+          "acceptedClusters": 6,
+          "V": 0.008255208333333333,
+          "G": -4.336808689942018e-19,
+          "acceptedMeanTheta": 0.008255208333333333
+        }
+      ],
+      "contentHash": "a6ca060aa07f9b6ed7c221f67c10a56b7f23e9ff86f6ac97f24fd99393dc3c4f"
+    },
+    "C_EVO_ONLY_RIDGE": {
+      "schemaVersion": "direction-a.evo-continuous-adaptation.v1",
+      "candidateId": "C_EVO_ONLY_RIDGE",
+      "folds": [
+        {
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 100,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.019834092468138543,
+            "mae": 0.011892028143711606,
+            "spearmanClusterMean": -0.4472135954999579,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.008774326599198874,
+            "mae": 0.008774326599198874,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+              "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "thetaHatFixed4": 0.015625,
+              "score": 0.0068506734008011265,
+              "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+              "selectedLambda": 100,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "c1b9a375fdce3f9d37394d676c62e2571d4c77d565cae121ca02788c0da1bd49"
+        },
+        {
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.0192056814559812,
+            "mae": 0.012777042917633324,
+            "spearmanClusterMean": -0.4472135954999579,
+            "signAccuracy": 0.3
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.012349330373278528,
+            "mae": 0.012349330373278528,
+            "spearmanClusterMean": null,
+            "signAccuracy": 1
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+              "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "thetaHatFixed4": 0.00390625,
+              "score": 0.016255580373278528,
+              "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "0719dcafd1c5c9ab31901fc791350aedabb83f53bcb0f948bc535252d5db7f84"
+        },
+        {
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 100,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.019716655681512797,
+            "mae": 0.013931673417842943,
+            "spearmanClusterMean": -0.8207826816681233,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.010009875036707893,
+            "mae": 0.010009875036707893,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+              "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "thetaHatFixed4": 0,
+              "score": 0.010009875036707893,
+              "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+              "selectedLambda": 100,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "6387708aa69b35b409f0eb7243d3fc3f73a46657a698a2eb475b9be7cedfa166"
+        },
+        {
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 6,
+            "rmse": 0.019723120536958946,
+            "mae": 0.0138928831333481,
+            "spearmanClusterMean": -0.9746794344808964,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.009883686296864338,
+            "mae": 0.00988368619882806,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.009882294107024675,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 1000,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            },
+            {
+              "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+              "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.009885078290631448,
+              "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+              "selectedLambda": 1000,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "8914a7819cee27cdf24f3476cd638347ba5b0b4163da929d77de010580727ba0"
+        },
+        {
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 6,
+            "rmse": 0.007285216263679445,
+            "mae": 0.0056994101819849725,
+            "spearmanClusterMean": -0.22360679774997896,
+            "signAccuracy": 0.4
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 2,
+            "rmse": 0.039513476991322245,
+            "mae": 0.0297733149686878,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0.5
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0,
+              "score": 0.003795159150403395,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            },
+            {
+              "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+              "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "thetaHatFixed4": 0.06,
+              "score": 0.0042485292130278,
+              "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+              "selectedLambda": 10,
+              "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+            }
+          ],
+          "modelHash": "d1583a35d31ca462c0f6375e26d4f6e540c7f66bb93a3250f85347ae778134c5"
+        },
+        {
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY",
+          "innerMetrics": {
+            "independentClusters": 5,
+            "groups": 7,
+            "rmse": 0.019730447900976316,
+            "mae": 0.013901910818119478,
+            "spearmanClusterMean": -0.9746794344808964,
+            "signAccuracy": 0.5
+          },
+          "outerMetrics": {
+            "independentClusters": 1,
+            "groups": 1,
+            "rmse": 0.009885687122281423,
+            "mae": 0.009885687122281423,
+            "spearmanClusterMean": null,
+            "signAccuracy": 0
+          },
+          "predictions": [
+            {
+              "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+              "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+              "thetaHatFixed4": 0,
+              "score": 0.009885687122281423,
+              "outerClusterId": "theme_d9_w11_security_automation_scripting",
+              "selectedLambda": 1000,
+              "selectedFeatureBlock": "EVO_SHARED_ONLY"
+            }
+          ],
+          "modelHash": "10fbf99ac992365c9e16f7ea9eee4224b1994a85946acc94ecb86f2707b7a409"
+        }
+      ],
+      "predictions": [
+        {
+          "causalGroupId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234:target-round-4",
+          "statisticalClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "thetaHatFixed4": 0.015625,
+          "score": 0.0068506734008011265,
+          "outerClusterId": "theme_d10_w4_ml_ai_mlops_migration_upgrade__not_1234",
+          "selectedLambda": 100,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d11_w9_scientific_numerical_reproducibility_verification:target-round-5",
+          "statisticalClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "thetaHatFixed4": 0.00390625,
+          "score": 0.016255580373278528,
+          "outerClusterId": "theme_d11_w9_scientific_numerical_reproducibility_verification",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d5_w9_data_engineering_reproducibility_verification:target-round-2",
+          "statisticalClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "thetaHatFixed4": 0,
+          "score": 0.010009875036707893,
+          "outerClusterId": "theme_d5_w9_data_engineering_reproducibility_verification",
+          "selectedLambda": 100,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.009882294107024675,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d7_w5_systems_networking_integration_e2e_wiring:target-round-3",
+          "statisticalClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.009885078290631448,
+          "outerClusterId": "theme_d7_w5_systems_networking_integration_e2e_wiring",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-8",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0,
+          "score": 0.003795159150403395,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d8_w5_cloud_devops_integration_e2e_wiring:target-round-2",
+          "statisticalClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "thetaHatFixed4": 0.06,
+          "score": 0.0042485292130278,
+          "outerClusterId": "theme_d8_w5_cloud_devops_integration_e2e_wiring",
+          "selectedLambda": 10,
+          "selectedFeatureBlock": "EVO_SHARED_PLUS_PROCESS"
+        },
+        {
+          "causalGroupId": "theme_d9_w11_security_automation_scripting:target-round-3",
+          "statisticalClusterId": "theme_d9_w11_security_automation_scripting",
+          "thetaHatFixed4": 0,
+          "score": 0.009885687122281423,
+          "outerClusterId": "theme_d9_w11_security_automation_scripting",
+          "selectedLambda": 1000,
+          "selectedFeatureBlock": "EVO_SHARED_ONLY"
+        }
+      ],
+      "metrics": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.018647704482618915,
+        "mae": 0.013446036716497098,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      },
+      "developmentCurve": [
+        {
+          "targetCoverage": 0.2,
+          "achievedCoverage": 0.3333333333333333,
+          "acceptedGroups": 2,
+          "acceptedClusters": 2,
+          "V": 0.0006510416666666666,
+          "G": -0.002100694444444444,
+          "acceptedMeanTheta": 0.001953125
+        },
+        {
+          "targetCoverage": 0.3,
+          "achievedCoverage": 0.3333333333333333,
+          "acceptedGroups": 2,
+          "acceptedClusters": 2,
+          "V": 0.0006510416666666666,
+          "G": -0.002100694444444444,
+          "acceptedMeanTheta": 0.001953125
+        },
+        {
+          "targetCoverage": 0.4,
+          "achievedCoverage": 0.5,
+          "acceptedGroups": 3,
+          "acceptedClusters": 3,
+          "V": 0.0006510416666666666,
+          "G": -0.0034765624999999996,
+          "acceptedMeanTheta": 0.0013020833333333333
+        },
+        {
+          "targetCoverage": 0.5,
+          "achievedCoverage": 0.5,
+          "acceptedGroups": 3,
+          "acceptedClusters": 3,
+          "V": 0.0006510416666666666,
+          "G": -0.0034765624999999996,
+          "acceptedMeanTheta": 0.0013020833333333333
+        },
+        {
+          "targetCoverage": 0.6,
+          "achievedCoverage": 0.6666666666666667,
+          "acceptedGroups": 5,
+          "acceptedClusters": 4,
+          "V": 0.0006510416666666666,
+          "G": -0.004852430555555555,
+          "acceptedMeanTheta": 0.0009765624999999999
+        },
+        {
+          "targetCoverage": 0.7,
+          "achievedCoverage": 0.8333333333333334,
+          "acceptedGroups": 6,
+          "acceptedClusters": 5,
+          "V": 0.003255208333333333,
+          "G": -0.003624131944444444,
+          "acceptedMeanTheta": 0.0039062499999999996
+        },
+        {
+          "targetCoverage": 0.8,
+          "achievedCoverage": 0.8333333333333334,
+          "acceptedGroups": 6,
+          "acceptedClusters": 5,
+          "V": 0.003255208333333333,
+          "G": -0.003624131944444444,
+          "acceptedMeanTheta": 0.0039062499999999996
+        },
+        {
+          "targetCoverage": 0.9,
+          "achievedCoverage": 0.9166666666666667,
+          "acceptedGroups": 7,
+          "acceptedClusters": 6,
+          "V": 0.008255208333333333,
+          "G": 0.0006879340277777773,
+          "acceptedMeanTheta": 0.009005681818181817
+        },
+        {
+          "targetCoverage": 1,
+          "achievedCoverage": 1,
+          "acceptedGroups": 8,
+          "acceptedClusters": 6,
+          "V": 0.008255208333333333,
+          "G": -4.336808689942018e-19,
+          "acceptedMeanTheta": 0.008255208333333333
+        }
+      ],
+      "contentHash": "640aad54ca05684924844dc841f628fc2d53b19fff5b16209d12a1ac089d527f"
+    }
+  },
+  "preliminaryRank": [
+    {
+      "rank": 1,
+      "candidateId": "C_EVO_ONLY_RIDGE",
+      "metrics": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.018647704482618915,
+        "mae": 0.013446036716497098,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      }
+    },
+    {
+      "rank": 2,
+      "candidateId": "B_SEPARATE_SCALE_PARTIAL_POOLING",
+      "metrics": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.018766723168986935,
+        "mae": 0.013588627558823658,
+        "spearmanClusterMean": -0.5768179036829705,
+        "signAccuracy": 0.4166666666666667
+      }
+    },
+    {
+      "rank": 3,
+      "candidateId": "A_FROZEN_SOURCE_RESIDUAL_RIDGE",
+      "metrics": {
+        "independentClusters": 6,
+        "groups": 8,
+        "rmse": 0.1576308472096591,
+        "mae": 0.14914341834138253,
+        "spearmanClusterMean": 0.15179418517972906,
+        "signAccuracy": 0.25
+      }
+    }
+  ],
+  "provisionalBestCandidateId": "C_EVO_ONLY_RIDGE",
+  "targetModelFrozen": false,
+  "reasonNotFrozen": "Current bank has 6 independent task clusters; frozen stability rule requires the lawful 8-cluster checkpoint",
+  "contentHash": "12f304ae26a76bf44cd731a7d4e3a5848519449b5320732cc329f552f6e3bca9"
+}
