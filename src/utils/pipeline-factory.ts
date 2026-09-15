@@ -70,6 +70,12 @@ export interface PipelineFactoryOptions {
   l1LlmRunner?: import("../core/types.js").LLMRunner;
   /** Host-neutral LLM runner for L2/L3 (tool-call enabled, enableTools=true). */
   l2l3LlmRunner?: import("../core/types.js").LLMRunner;
+  /**
+   * Whether this pipeline owns the cached VectorStore/EmbeddingService and
+   * should close them on destroy. Gateway /seed runs in the same process as
+   * the live core, so it must not close shared stores.
+   */
+  ownsStores?: boolean;
 }
 
 // ============================
@@ -688,6 +694,7 @@ export function createPipelineManager(
  */
 export async function createPipeline(opts: PipelineFactoryOptions): Promise<PipelineInstance> {
   const { pluginDataDir, cfg, openclawConfig, logger, sessionFilter, l1LlmRunner } = opts;
+  const ownsStores = opts.ownsStores ?? true;
 
   // Ensure data directories exist
   initDataDirectories(pluginDataDir);
@@ -717,11 +724,11 @@ export async function createPipeline(opts: PipelineFactoryOptions): Promise<Pipe
   const destroy = async () => {
     logger.info(`${TAG} Destroying pipeline...`);
     await scheduler.destroy();
-    if (vectorStore) {
+    if (ownsStores && vectorStore) {
       logger.info(`${TAG} Closing VectorStore`);
       vectorStore.close();
     }
-    if (embeddingService?.close) {
+    if (ownsStores && embeddingService?.close) {
       try {
         logger.info(`${TAG} Closing EmbeddingService`);
         await embeddingService.close();
@@ -729,7 +736,9 @@ export async function createPipeline(opts: PipelineFactoryOptions): Promise<Pipe
         logger.warn(`${TAG} Error closing EmbeddingService: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    resetStores(pluginDataDir);
+    if (ownsStores) {
+      resetStores(pluginDataDir);
+    }
     logger.info(`${TAG} Pipeline destroyed`);
   };
 
