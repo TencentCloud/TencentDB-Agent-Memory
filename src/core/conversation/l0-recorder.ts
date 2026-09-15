@@ -511,6 +511,86 @@ export async function readConversationMessagesGroupedBySessionId(
   return groups;
 }
 
+/**
+ * Count L0 JSONL capture/line stats across all daily shard files.
+ *
+ * Walks every `<baseDir>/conversations/YYYY-MM-DD.jsonl` file once and returns:
+ *   - `captures`: number of **distinct** `recordedAt` values (one per recording event)
+ *   - `lines`:    total physical non-empty line count (message count)
+ *
+ * No fallback timestamp: a line that is missing `recordedAt`, has a
+ * non-string `recordedAt`, or is otherwise unparseable still counts toward
+ * `lines` (it is a physical message) but is **never** added to the distinct
+ * `recordedAt` Set, so it cannot inflate `captures`. This deliberately differs
+ * from readConversationRecords (which backfills `new Date().toISOString()`);
+ * backfilling would manufacture phantom capture events.
+ *
+ * Files are filtered by the same `dateFilePattern` as readConversationRecords
+ * (`/^\d{4}-\d{2}-\d{2}\.jsonl$/`). Empty lines (whitespace-only after trim)
+ * are skipped — they are neither a message nor a capture.
+ *
+ * Returns `{captures:0, lines:0}` when the conversations directory does not
+ * exist (does not throw — mirrors readConversationRecords' first-run behavior).
+ */
+export async function countL0JsonlStats(
+  baseDir: string,
+): Promise<{ captures: number; lines: number }> {
+  const conversationsDir = path.join(baseDir, "conversations");
+  const dateFilePattern = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+
+  let entries: string[];
+  try {
+    const dirEntries = await fs.readdir(conversationsDir, { withFileTypes: true });
+    entries = dirEntries
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name);
+  } catch {
+    // Directory doesn't exist yet — normal for first conversation
+    return { captures: 0, lines: 0 };
+  }
+
+  const targetFiles = entries
+    .filter((name) => dateFilePattern.test(name))
+    .sort();
+
+  const recordedAtSet = new Set<string>();
+  let lines = 0;
+
+  for (const fileName of targetFiles) {
+    const filePath = path.join(conversationsDir, fileName);
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch {
+      // Unreadable file: skip without aborting the whole scan
+      continue;
+    }
+
+    const fileLines = raw.split("\n");
+    for (const fileLine of fileLines) {
+      // Whitespace-only lines are not physical messages — skip entirely.
+      if (!fileLine.trim()) continue;
+
+      lines++;
+
+      try {
+        const parsed = JSON.parse(fileLine) as Record<string, unknown>;
+        // Only a genuine string recordedAt counts toward distinct captures.
+        // Missing / non-string / unparseable → still counted as a line above,
+        // but never added to the Set (no fallback timestamp).
+        if (typeof parsed.recordedAt === "string" && parsed.recordedAt) {
+          recordedAtSet.add(parsed.recordedAt);
+        }
+      } catch {
+        // Malformed JSON: counted as a physical line, not a capture.
+      }
+    }
+  }
+
+  return { captures: recordedAtSet.size, lines };
+}
+
 // ============================
 // Helpers
 // ============================
