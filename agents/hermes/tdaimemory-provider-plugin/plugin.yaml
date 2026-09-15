@@ -1,0 +1,5 @@
+name: tdaimemory-provider
+kind: model-provider
+version: 1.0.0
+description: TencentDB Agent Memory Proxy provider profile (per-session x-conversation-id)
+author: TencentCloud
