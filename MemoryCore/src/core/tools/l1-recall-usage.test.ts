@@ -47,14 +47,14 @@ describe("L1 usage write-back and recency/frequency boost", () => {
   it("search returns usage fields, write-back bumps them, boost reorders", async () => {
     const store = new VectorStore(join(dir, "usage.db"), 0);
     store.init();
-    // old-but-hot memory vs new-but-cold memory
-    store.upsertL1(makeRecord("hot", "deploys the billing service every Friday", 30 * DAY), undefined);
-    store.upsertL1(makeRecord("cold", "billing service uses postgres for storage", DAY), undefined);
+    // Equal relevance: use history, not write time, must decide the re-rank.
+    store.upsertL1(makeRecord("cold", "billing service deployment notes", DAY), undefined);
+    store.upsertL1(makeRecord("hot", "billing service deployment notes", 30 * DAY), undefined);
 
     const dedupCandidates = await recallL1Candidates({ query: "billing service", topK: 5, vectorStore: store, bypassUsageBoost: true });
-    expect(dedupCandidates.hits.map((r) => r.record_id)).toEqual(["hot", "cold"]);
+    expect(dedupCandidates.hits.map((r) => r.record_id)).toEqual(["cold", "hot"]);
 
-    // Fresh records have no usage data → boost = 1.0, newer ranks first
+    // Fresh records have no usage data → boost = 1.0, pure similarity order.
     const r1 = await executeMemorySearch({ query: "billing service", limit: 5, vectorStore: store });
     expect(r1.strategy).toBe("fts");
     expect(r1.results.map((r) => r.id)).toEqual(["cold", "hot"]);
@@ -67,7 +67,7 @@ describe("L1 usage write-back and recency/frequency boost", () => {
     expect(byId.get("hot")!.use_count).toBe(1);
     expect(byId.get("cold")!.use_count).toBe(1);
 
-    // Simulate "hot" being retrieved often → frequency boost outranks recency
+    // Simulate "hot" being retrieved often → usage boost wins an equal-score tie.
     for (let i = 0; i < 10; i++) expect(store.touchL1Usage(["hot"])).toBe(1);
     const r3 = await executeMemorySearch({ query: "billing service", limit: 5, vectorStore: store });
     expect(r3.results.map((r) => r.id)).toEqual(["hot", "cold"]);

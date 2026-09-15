@@ -21,7 +21,7 @@ const RRF_K = 60;
 
 // ── Usage boost ("use it or lose it") ────────────────────────────────────────
 // Multiplies the similarity score by up to (1 + RECENCY_WEIGHT + FREQUENCY_WEIGHT)
-// based on write recency and retrieval frequency. Memories with no usage data
+// based on retrieval recency and frequency. Memories with no usage data
 // (stores that don't implement touchL1Usage) get exactly 1.0 → pure RRF order.
 // Weights measured on the mechanism bench (l1-usage-boost-bench.test.ts):
 // 0.1/0.05 is net-positive on first-touch AND repeated-access workloads, while
@@ -34,7 +34,7 @@ const FREQUENCY_WEIGHT = 0.05;
 const FREQUENCY_SATURATION = 5;
 
 function usageBoost(hit: L1SearchResult, nowMs = Date.now()): number {
-  const lastMs = Math.max(hit.last_used_ms ?? 0, hit.updated_ms ?? 0);
+  const lastMs = hit.last_used_ms ?? 0;
   const ageMs = Math.max(0, nowMs - lastMs);
   const recency = lastMs > 0 ? Math.exp(-ageMs / RECENCY_HALF_LIFE_MS) : 0;
   const useCount = hit.use_count ?? 0;

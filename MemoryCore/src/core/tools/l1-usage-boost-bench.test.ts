@@ -2,11 +2,13 @@
  * Mechanism-level A/B bench for the usage boost (recency/frequency re-ranking).
  *
  * Corpus: 150 L1 records (45 labeled query scenarios in 5 classes + background).
- * Rankers compared on the SAME store:
- *   old    — raw FTS bm25 order (pre-change behavior)
- *   shipped— shipped boost (recency w=0.3 hl=14d, freq w=0.2 sat=5)
- *   mild   — conservative sweep (0.1 / 0.05)
- *   strong — aggressive sweep (0.5 / 0.4)
+ * Rankers compared on the SAME shipped write-back trace:
+ *   old       — raw FTS bm25 order (pre-change behavior)
+ *   shipped   — deployed last-used recency + frequency, 0.1 / 0.05
+ *   freshness — updated-time recency only, 0.1 / 0
+ *   legacy    — previous combined max(last_used, updated), 0.1 / 0.05
+ *   heavy     — last-used sweep (0.3 / 0.2)
+ *   strong    — last-used sweep (0.5 / 0.4)
  * 3 rounds with the shipped write-back active between rounds (feedback-loop sim).
  *
  * Scenario classes measure WHERE the boost helps vs hurts:
@@ -16,8 +18,8 @@
  *   D matthew-guardrail distractor spuriously used often, weak match → flip = regression
  *   E cold-neutral      no usage anywhere → sanity only
  *
- * Prints a metrics table; asserts only ranker consistency (shipped == recomputed
- * 0.3/0.2 variant) so measurement never fails on threshold noise.
+ * Attribution rankers isolate score signals only; they do not simulate their own
+ * counterfactual write-back policy. Asserts shipped == recomputed usage-only order.
  */
 import { describe, it, expect, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -65,19 +67,32 @@ function touchN(store: VectorStore, id: string, n: number) {
   for (let i = 0; i < n; i++) expect(store.touchL1Usage([id])).toBe(1);
 }
 
+function seedUsage(store: VectorStore) {
+  for (const s of scenarios) {
+    const gold = allRecords.find((r) => r.id === s.gold)!;
+    const dis = allRecords.find((r) => r.id === s.distractor)!;
+    if ((gold as any).__touches) touchN(store, gold.id, (gold as any).__touches);
+    if ((dis as any).__touches) touchN(store, dis.id, (dis as any).__touches);
+  }
+}
+
 // ── sweepable boost math (mirrors shipped applyUsageBoost) ──────────────────
 
+type RecencySource = "freshness" | "usage" | "combined";
+
 function boostOf(hit: { use_count?: number; last_used_ms?: number; updated_ms?: number },
-                 wR: number, wF: number, hlDays = 14, sat = 5): number {
-  const lastMs = Math.max(hit.last_used_ms ?? 0, hit.updated_ms ?? 0);
+                 wR: number, wF: number, source: RecencySource = "combined", hlDays = 14, sat = 5): number {
+  const lastMs = source === "freshness" ? hit.updated_ms ?? 0
+    : source === "usage" ? hit.last_used_ms ?? 0
+      : Math.max(hit.last_used_ms ?? 0, hit.updated_ms ?? 0);
   const recency = lastMs > 0 ? Math.exp(-Math.max(0, Date.now() - lastMs) / (hlDays * DAY)) : 0;
   const n = hit.use_count ?? 0;
   return 1 + wR * recency + wF * (n / (n + sat));
 }
 
-function rankVariant(raw: L1FtsResult[], wR: number, wF: number): string[] {
+function rankVariant(raw: L1FtsResult[], wR: number, wF: number, source?: RecencySource): string[] {
   return [...raw]
-    .map((h) => ({ id: h.record_id, s: h.score * boostOf(h, wR, wF) }))
+    .map((h) => ({ id: h.record_id, s: h.score * boostOf(h, wR, wF, source) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, LIMIT)
     .map((x) => x.id);
@@ -208,16 +223,13 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
     store.init();
     for (const r of allRecords) store.upsertL1(r, undefined);
     // inject spurious usage state
-    for (const s of scenarios) {
-      const gold = allRecords.find((r) => r.id === s.gold)!;
-      const dis = allRecords.find((r) => r.id === s.distractor)!;
-      if ((gold as any).__touches) touchN(store, gold.id, (gold as any).__touches);
-      if ((dis as any).__touches) touchN(store, dis.id, (dis as any).__touches);
-    }
+    seedUsage(store);
 
-    const variants = [
-      ["heavy", 0.3, 0.2],
-      ["strong", 0.5, 0.4],
+    const variants: ReadonlyArray<readonly [string, number, number, RecencySource]> = [
+      ["freshness", 0.1, 0, "freshness"],
+      ["legacy", 0.1, 0.05, "combined"],
+      ["heavy", 0.3, 0.2, "usage"],
+      ["strong", 0.5, 0.4, "usage"],
     ] as const;
     const classes = ["A", "B", "C", "D", "E"];
     type Acc = { top1: number; r5: number; mrr: number; n: number; regressed: number; rescued: number;
@@ -245,9 +257,9 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
         const shippedIds = shippedRes.results.map((r) => r.id);
 
         // consistency: shipped ordering == recomputed deployed weights (0.1/0.05)
-        expect(rankVariant(raw, 0.1, 0.05)).toEqual(shippedIds);
+        expect(rankVariant(raw, 0.1, 0.05, "usage")).toEqual(shippedIds);
 
-        const sweepIds = variants.map(([, wr, wf]) => rankVariant(raw, wr, wf));
+        const sweepIds = variants.map(([, wr, wf, source]) => rankVariant(raw, wr, wf, source));
         const allRankers: Array<[string, string[]]> = [["old", oldIds], ["shipped", shippedIds],
           ...variants.map((v, i) => [v[0], sweepIds[i]] as [string, string[]])];
 
@@ -282,7 +294,7 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
         }
       }
       if (round < ROUNDS) {
-        // feedback loop: shipped write-back already happened during round searches
+        // Attribution rankers share the shipped write-back trajectory by design.
         continue;
       }
     }
@@ -290,14 +302,14 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
     // ── report ──
     const line = (n: unknown, w: number) => String(n).padEnd(w);
     console.log("\n=== usage-boost bench | 45 queries | 3 rounds (write-back evolves usage) ===");
-    console.log("variant  class | n | top1 R1→R3 | MRR R1→R3 | regressed R1→R3 | rescued R1→R3");
-    for (const name of ["old", "shipped", "heavy", "strong"]) {
+    console.log("variant    class | n | top1 R1→R3 | MRR R1→R3 | regressed R1→R3 | rescued R1→R3");
+    for (const name of ["old", "shipped", ...variants.map((v) => v[0])]) {
       for (const c of [...classes, "ALL"]) {
         const a = acc[name][c];
         const t1 = `${a.top1_R1 ?? a.top1}→${a.top1_R3 ?? a.top1}`;
         const mr = `${a.mrr_R1 ?? a.mrr.toFixed(2)}→${a.mrr_R3 ?? a.mrr.toFixed(2)}`;
         console.log(
-          line(name, 8) + line(c, 5) + line(`| ${a.n}`, 5) + "| " +
+          line(name, 10) + line(c, 5) + line(`| ${a.n}`, 5) + "| " +
           line(t1, 11) + "| " + line(mr, 10) + "| " +
           line(`${a.regressed_R1 ?? a.regressed}→${a.regressed_R3 ?? a.regressed}`, 16) + "| " +
           `${a.rescued_R1 ?? a.rescued}→${a.rescued_R3 ?? a.rescued}`,
