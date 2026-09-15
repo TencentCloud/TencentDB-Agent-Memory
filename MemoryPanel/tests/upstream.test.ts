@@ -102,7 +102,7 @@ it('Core retains an omitted key when editing the URL and accepts explicit replac
 
 it('exposes ZCode in the UI catalog and saves its configuration through Panel and Core', async () => {
   expect(UPSTREAM_CLIENTS.find((client) => client.id === 'zcode')).toEqual({
-    id: 'zcode', name: 'ZCode', protocols: ['anthropic', 'chat'],
+    id: 'zcode', name: 'ZCode', protocols: ['anthropic', 'chat', 'responses'],
   });
   const { MetadataService } = await import('../../MemoryCore/src/metadata/service/metadata-service.js');
   const store = {

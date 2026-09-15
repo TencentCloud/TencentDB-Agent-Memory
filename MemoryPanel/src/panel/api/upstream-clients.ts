@@ -9,7 +9,7 @@ export const UPSTREAM_CLIENTS = [
   { id: 'hermes', name: 'Hermes', protocols: ['chat'] },
   { id: 'openclaw', name: 'OpenClaw', protocols: ['chat'] },
   { id: 'pi', name: 'Pi', protocols: ['chat'] },
-  { id: 'zcode', name: 'ZCode', protocols: ['anthropic', 'chat'] },
+  { id: 'zcode', name: 'ZCode', protocols: ['anthropic', 'chat', 'responses'] },
 ] as const;
 
 // Official API prefixes (not full endpoint URLs); no protocol conversion.
