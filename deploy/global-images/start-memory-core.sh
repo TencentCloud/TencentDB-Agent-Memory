@@ -200,7 +200,7 @@ skill:
     maxResourceSizeBytes: 5000000
 YAML
 
-info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
+info "启动 memory-core (image=${MEMORY_CORE_IMAGE}, port=${MEMORY_CORE_PORT})"
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias memory-core \
