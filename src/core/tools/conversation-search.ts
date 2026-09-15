@@ -221,6 +221,18 @@ export async function executeConversationSearch(params: {
   }
 
   // ── Apply session key filter ──
+  // This is a *post-filter* over the topK that the L0 vector/FTS search already
+  // returned — those store methods have no session pushdown. Two regimes:
+  //   - structural multi-tenant: each account's core has its OWN store holding
+  //     only that account's L0, so every row already matches and this is a no-op.
+  //     Isolation there is physical (per-dataDir), NOT this filter.
+  //   - single-tenant shared store: many sessions live in one store, so the
+  //     filter is REQUIRED. Caveat: because it runs AFTER topK, a query whose
+  //     topK is dominated by other sessions can yield few/zero rows post-filter
+  //     (design gap #2). The real fix is to push session_key INTO the L0
+  //     SQL/vector query; deferred because the multi-tenant product gets
+  //     isolation structurally, making the pushdown a single-tenant-only quality
+  //     improvement.
   if (sessionFilter) {
     const preFilterCount = results.length;
     results = results.filter((r) => r.session_key === sessionFilter);
