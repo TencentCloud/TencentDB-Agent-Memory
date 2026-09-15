@@ -46,6 +46,17 @@ import type { SeedProgress } from "../core/seed/types.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+
+class GatewayRequestError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GatewayRequestError";
+  }
+}
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
@@ -66,17 +77,46 @@ function createConsoleLogger(): Logger {
 
 async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
+    const lengthHeader = req.headers["content-length"];
+    const contentLength = typeof lengthHeader === "string" ? Number.parseInt(lengthHeader, 10) : NaN;
+    if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+      req.resume();
+      reject(new GatewayRequestError(413, "Request body too large"));
+      return;
+    }
+
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let totalBytes = 0;
+    let settled = false;
+
+    const rejectOnce = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      req.resume();
+      reject(err);
+    };
+
+    req.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buf.byteLength;
+      if (totalBytes > MAX_JSON_BODY_BYTES) {
+        rejectOnce(new GatewayRequestError(413, "Request body too large"));
+        return;
+      }
+      chunks.push(buf);
+    });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       try {
         const body = Buffer.concat(chunks).toString("utf-8");
         resolve(JSON.parse(body) as T);
       } catch (err) {
-        reject(new Error("Invalid JSON body"));
+        reject(new GatewayRequestError(400, "Invalid JSON body"));
       }
     });
-    req.on("error", reject);
+    req.on("error", (err) => rejectOnce(err));
   });
 }
 
@@ -277,6 +317,10 @@ export class TdaiGateway {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof GatewayRequestError) {
+        sendError(res, err.statusCode, msg);
+        return;
+      }
       this.logger.error(`Request error [${method} ${pathname}]: ${msg}`);
       sendError(res, 500, msg);
     }
