@@ -62,7 +62,9 @@ def _decode_response(resp: httpx.Response) -> dict:
             details=details,
         )
 
-    result = envelope.get("data") or {}
+    result = envelope.get("data")
+    if result is None:
+        result = {}
     if not isinstance(result, dict):
         raise TDAMError(-1, "API response data must be a JSON object", header_request_id)
     trace_id = resp.headers.get("x-trace-id")
