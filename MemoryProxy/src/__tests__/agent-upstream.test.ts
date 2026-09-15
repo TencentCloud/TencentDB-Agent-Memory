@@ -10,6 +10,7 @@ describe("resolveAgentUpstreamForProtocol", () => {
     const flat = { url: "https://up.example/v1", apiKey: "k" };
     expect(resolveAgentUpstreamForProtocol(flat, "anthropic")).toEqual(flat);
     expect(resolveAgentUpstreamForProtocol(flat, "openai")).toEqual(flat);
+    expect(resolveAgentUpstreamForProtocol(flat, "responses")).toEqual(flat);
   });
 
   it("prefers the per-protocol sub-entry when present", () => {
@@ -17,6 +18,7 @@ describe("resolveAgentUpstreamForProtocol", () => {
       url: "https://flat.example",
       anthropic: { url: "https://a.example", apiKey: "ka" },
       openai: { url: "https://o.example" },
+      responses: { url: "https://r.example", apiKey: "kr" },
     };
     expect(resolveAgentUpstreamForProtocol(entry, "anthropic")).toEqual({
       url: "https://a.example",
@@ -25,6 +27,7 @@ describe("resolveAgentUpstreamForProtocol", () => {
     expect(resolveAgentUpstreamForProtocol(entry, "openai")).toEqual({
       url: "https://o.example",
     });
+    expect(resolveAgentUpstreamForProtocol(entry, "responses")).toEqual(entry.responses);
   });
 
   it("returns undefined when only the other protocol is configured", () => {
@@ -49,11 +52,13 @@ it("validates flat and protocol endpoints from config", () => {
     writeFileSync(file, JSON.stringify({ upstream: { agents: {
       flat: { url: "https://flat.example", apiKey: "key" },
       zcode: { url: "", anthropic: { url: 42 }, openai: { url: "https://openai.example", apiKey: 42 } },
+      responses: { responses: { url: "https://responses.example", apiKey: "r-key" } },
       invalid: { url: null },
     } } }));
     expect(buildConfig({ configFile: file }).upstream.agents).toEqual({
       flat: { url: "https://flat.example", apiKey: "key" },
       zcode: { openai: { url: "https://openai.example" } },
+      responses: { responses: { url: "https://responses.example", apiKey: "r-key" } },
     });
   } finally {
     rmSync(dir, { recursive: true });

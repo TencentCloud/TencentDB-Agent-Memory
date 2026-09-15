@@ -262,11 +262,13 @@ function parseUpstreamAgents(
     const flat = pickEndpoint(entry);
     const anthropic = pickEndpoint(entry.anthropic);
     const openai = pickEndpoint(entry.openai);
-    if (!flat && !anthropic && !openai) continue;
+    const responses = pickEndpoint(entry.responses);
+    if (!flat && !anthropic && !openai && !responses) continue;
     out[name] = {
       ...flat,
       ...(anthropic ? { anthropic } : {}),
       ...(openai ? { openai } : {}),
+      ...(responses ? { responses } : {}),
     };
   }
   return out;

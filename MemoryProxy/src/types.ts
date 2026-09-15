@@ -401,7 +401,7 @@ export interface SkillRuntimeConfig {
  *   3. `costGuard.anthropicUpstream.url`（仅 Anthropic 协议）
  *   4. `upstream.url` + `upstream.apiKey`（未命中 agent 时的默认）
  *
- * Dual-protocol agents may override endpoints per protocol.
+ * Agents may override endpoints per wire protocol.
  */
 export interface AgentUpstreamEntry {
   /** Flat fallback URL; optional when protocol endpoints are configured. */
@@ -417,14 +417,16 @@ export interface AgentUpstreamEntry {
   apiKey?: string;
   /** Anthropic-protocol upstream; wins entirely over flat `url`/`apiKey` when present. */
   anthropic?: { url: string; apiKey?: string };
-  /** OpenAI-protocol upstream; wins entirely over flat `url`/`apiKey` when present. */
+  /** OpenAI Chat Completions upstream; overrides flat `url`/`apiKey`. */
   openai?: { url: string; apiKey?: string };
+  /** OpenAI Responses upstream; independent of the Chat Completions endpoint. */
+  responses?: { url: string; apiKey?: string };
 }
 
 /** Protocol endpoint wins; absent protocol falls back to the flat entry. */
 export function resolveAgentUpstreamForProtocol(
   entry: AgentUpstreamEntry | null | undefined,
-  protocol: "anthropic" | "openai",
+  protocol: "anthropic" | "openai" | "responses",
 ): AgentUpstreamEntry | undefined {
   return entry?.[protocol]?.url ? entry[protocol] : entry?.url ? entry : undefined;
 }
@@ -795,6 +797,7 @@ export interface RawYamlConfig {
         apiKey?: string;
         anthropic?: { url?: string; apiKey?: string };
         openai?: { url?: string; apiKey?: string };
+        responses?: { url?: string; apiKey?: string };
       } | null | undefined
     >;
   };

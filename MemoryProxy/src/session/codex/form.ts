@@ -516,7 +516,12 @@ function buildQuestions(data: FormData): CodexQuestion[] {
  */
 export function buildFormResponse(data: FormData): Response {
   const questions = buildQuestions(data);
-  const argsJson = JSON.stringify({ questions });
+  return buildToolResponse({ questions }, data.stream);
+}
+
+/** Responses transport shared by native session-init tools. */
+export function buildToolResponse(args: unknown, stream = false, toolName = TOOL_NAME): Response {
+  const argsJson = JSON.stringify(args);
 
   // `id` 与 `call_id` 是 OpenAI Responses 规范里两个独立字段：
   //   - id     ：function_call item 自身唯一标识，规范要求 `fc` 前缀
@@ -529,10 +534,10 @@ export function buildFormResponse(data: FormData): Response {
   const callId = TOOLCALL_PREFIX + ts;
   const responseId = "resp_codex_session_init_" + ts;
 
-  if (data.stream) {
-    return buildStreamingResponse(responseId, fcId, callId, argsJson);
+  if (stream) {
+    return buildStreamingResponse(responseId, fcId, callId, argsJson, toolName);
   }
-  return buildNonStreamingResponse(responseId, fcId, callId, argsJson);
+  return buildNonStreamingResponse(responseId, fcId, callId, argsJson, toolName);
 }
 
 // ── Non-streaming ────────────────────────────────────────────────────────────
@@ -542,6 +547,7 @@ function buildNonStreamingResponse(
   fcId: string,
   callId: string,
   argsJson: string,
+  toolName: string,
 ): Response {
   const body = {
     id: responseId,
@@ -551,7 +557,7 @@ function buildNonStreamingResponse(
       {
         type: "function_call",
         id: fcId,
-        name: TOOL_NAME,
+        name: toolName,
         arguments: argsJson,
         call_id: callId,
       },
@@ -575,6 +581,7 @@ function buildStreamingResponse(
   fcId: string,
   callId: string,
   argsJson: string,
+  toolName: string,
 ): Response {
   const encoder = new TextEncoder();
   // 关键：Responses API 里每个 event 的 data JSON **必须**带 `type` 字段
@@ -586,7 +593,7 @@ function buildStreamingResponse(
   const functionCallItem = {
     type: "function_call" as const,
     id: fcId,
-    name: TOOL_NAME,
+    name: toolName,
     arguments: argsJson,
     call_id: callId,
   };
