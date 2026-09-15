@@ -137,15 +137,22 @@ function bindingToIdFields(
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
-  // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
-  for (const k of candidates) {
-    const state = getSessionStore().get(k);
-    if (state) {
-      const fields = toIdFields(state, k);
-      if (fields) return fields;
+  // 通常是 bare sessionId。先试 bare，再枚举所有以 `:${sessionId}` 结尾的 key，
+  // 这样无论 agentSource 是 pi / dsh / codex / workbuddy 还是任何新增值
+  // 都能命中——不再维护硬编码前缀列表。
+  const store = getSessionStore();
+  const bare = store.get(sessionId);
+  if (bare) {
+    const fields = toIdFields(bare, sessionId);
+    if (fields) return fields;
+  }
+  if (!sessionId.includes(":")) {
+    for (const k of store.keysWithSuffix(sessionId)) {
+      const state = store.get(k);
+      if (state) {
+        const fields = toIdFields(state, k);
+        if (fields) return fields;
+      }
     }
   }
   return null;
