@@ -83,6 +83,32 @@ _DEFAULT_AGENT_ID = "default"
 _DEFAULT_USER_ID = "default"
 
 
+def _gateway_unavailable_response(*, terminal: bool, failures: int) -> Dict[str, Any]:
+    """Build a tool result that distinguishes startup from a terminal outage.
+
+    Hermes snapshots provider tools into the agent's tool surface at session
+    start, so a permanently unhealthy Gateway cannot be hidden reliably after
+    the fact.  Once the circuit breaker is open, the response must therefore
+    stop teaching the model to retry the same tool and point it at the host's
+    fallback memory capability instead.
+    """
+    if terminal:
+        return {
+            "error": (
+                "memory-tencentdb Gateway has been unavailable for this session "
+                f"after {max(0, failures)} consecutive failures; memory search is disabled."
+            ),
+            "fallback": (
+                "Use the built-in memory tool instead. "
+                "Do not retry memory_tencentdb_* tools in this session."
+            ),
+        }
+    return {
+        "error": "memory-tencentdb Gateway is not connected. Memory search is temporarily unavailable.",
+        "hint": "The Gateway may still be starting up. Try again in a moment.",
+    }
+
+
 def _resolve_gateway_port(default: int = _DEFAULT_GATEWAY_PORT) -> int:
     """Resolve MEMORY_TENCENTDB_GATEWAY_PORT with validation."""
     raw = os.environ.get("MEMORY_TENCENTDB_GATEWAY_PORT")
@@ -829,13 +855,16 @@ class MemoryTencentdbProvider(MemoryProvider):
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         self._ensure_alive_for_request()
-        if not self._client:
-            return json.dumps({
-                "error": "memory-tencentdb Gateway is not connected. Memory search is temporarily unavailable.",
-                "hint": "The Gateway may still be starting up. Try again in a moment.",
-            })
         if self._is_breaker_open():
-            return json.dumps({"error": "memory-tencentdb Gateway temporarily unavailable (circuit breaker open)."})
+            return json.dumps(_gateway_unavailable_response(
+                terminal=True,
+                failures=self._consecutive_failures,
+            ))
+        if not self._client:
+            return json.dumps(_gateway_unavailable_response(
+                terminal=False,
+                failures=self._consecutive_failures,
+            ))
 
         try:
             if tool_name == "memory_tencentdb_memory_search":
