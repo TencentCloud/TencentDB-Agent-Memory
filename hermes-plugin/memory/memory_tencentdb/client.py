@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10  # seconds
 
+# Recall runs on the interactive prefetch path — it must stay snappy and
+# fail open. Bound it tighter than DEFAULT_TIMEOUT so a slow/hung Gateway
+# can never stall a user turn for more than ~5s.
+RECALL_TIMEOUT = 5  # seconds
+
+# Seal (end_session on compaction/session-switch) also runs on an
+# interactive path — context compression. Same budget as recall: a hung
+# Gateway must add at most ~5s to compression, never the full default.
+SEAL_TIMEOUT = RECALL_TIMEOUT
+
 
 class MemoryTencentdbSdkClient:
     """HTTP client for the memory-tencentdb Gateway sidecar."""
@@ -113,11 +123,16 @@ class MemoryTencentdbSdkClient:
         return self._get("/health", timeout=timeout)
 
     def recall(self, query: str, session_key: str, user_id: str = "") -> Dict[str, Any]:
-        """Recall memories for a query (prefetch)."""
+        """Recall memories for a query (prefetch).
+
+        Uses the dedicated ``RECALL_TIMEOUT`` (≤5s) because prefetch runs
+        synchronously on the user-facing turn path; a hung Gateway must
+        degrade to "no memory" rather than stall the turn.
+        """
         body: Dict[str, Any] = {"query": query, "session_key": session_key}
         if user_id:
             body["user_id"] = user_id
-        return self._post("/recall", body)
+        return self._post("/recall", body, timeout=RECALL_TIMEOUT)
 
     def capture(
         self,
@@ -155,12 +170,17 @@ class MemoryTencentdbSdkClient:
             body["session_key"] = session_key
         return self._post("/search/conversations", body)
 
-    def end_session(self, session_key: str, user_id: str = "") -> Dict[str, Any]:
-        """End a session and trigger flush."""
+    def end_session(self, session_key: str, user_id: str = "", timeout: Optional[int] = None) -> Dict[str, Any]:
+        """End a session and trigger flush.
+
+        ``timeout`` bounds this single request; the seal path (compaction /
+        session rotation) passes ``RECALL_TIMEOUT`` so a hung Gateway cannot
+        stall context compression. Default (None) keeps the client timeout.
+        """
         body: Dict[str, Any] = {"session_key": session_key}
         if user_id:
             body["user_id"] = user_id
-        return self._post("/session/end", body)
+        return self._post("/session/end", body, timeout=timeout)
 
     def seed(
         self,
