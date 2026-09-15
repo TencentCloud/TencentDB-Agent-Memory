@@ -289,7 +289,7 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
           for (const c of Object.keys(roundAcc[name])) {
             const s = roundAcc[name][c];
             acc[name][c][`top1_${tag}` as keyof Acc] = s.top1;
-            acc[name][c][`mrr_${tag}` as keyof Acc] = Number(s.mrr.toFixed(2));
+            acc[name][c][`mrr_${tag}` as keyof Acc] = Number((s.mrr / s.n).toFixed(4));
             acc[name][c][`regressed_${tag}` as keyof Acc] = s.regressed;
             acc[name][c][`rescued_${tag}` as keyof Acc] = s.rescued;
             acc[name][c].n = s.n;
