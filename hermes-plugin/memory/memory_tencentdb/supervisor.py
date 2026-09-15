@@ -32,6 +32,14 @@ HEALTH_CHECK_RETRIES = 3     # retries for is_running check
 # Log file rotation parameters
 LOG_TAIL_BYTES_ON_CRASH = 2048  # bytes of stderr log to surface on startup crash
 
+# Fix #583: hard runtime cap on active Gateway stdout/stderr logs.
+# When a log exceeds this, a bounded diagnostic tail is preserved as `.1`
+# and the active file is truncated in place (keeps the child's inherited
+# descriptor valid — renaming alone would keep appending to the old inode).
+LOG_MAX_BYTES = 64 * 1024 * 1024  # 64 MiB per stream
+LOG_TAIL_BYTES_ON_ROTATE = 1024 * 1024  # 1 MiB diagnostic tail preserved as .1
+LOG_ROTATE_CHECK_INTERVAL = 300  # seconds between size checks during health wait
+
 
 class GatewaySupervisor:
     """Manages the memory-tencentdb Gateway sidecar lifecycle."""
@@ -144,6 +152,11 @@ class GatewaySupervisor:
         Returns True if the Gateway is available, False if startup failed.
         """
         if self.is_running():
+            # Fix #583: periodisch Log-Größe prüfen (billig: nur getsize + Threshold).
+            now = time.monotonic()
+            if now - getattr(self, "_last_log_rotate_check", 0.0) >= LOG_ROTATE_CHECK_INTERVAL:
+                self._last_log_rotate_check = now
+                self._rotate_logs_if_needed()
             logger.info("memory-tencentdb Gateway already running at %s", self._base_url)
             return True
 
@@ -279,6 +292,41 @@ class GatewaySupervisor:
                 except Exception:
                     pass
                 setattr(self, attr, None)
+
+    def _rotate_logs_if_needed(self) -> None:
+        """Fix #583: cap active log size with in-place truncation.
+
+        Preserves a bounded diagnostic tail as ``<path>.1``, then truncates
+        the active file in place. In-place truncation keeps the child's
+        inherited file descriptor valid — renaming alone would leave the
+        child appending to the old inode and the cap would never hold.
+        """
+        for attr in ("_stdout_log", "_stderr_log"):
+            path_attr = "_stderr_log_path" if attr == "_stderr_log" else None
+            handle = getattr(self, attr, None)
+            if handle is None:
+                continue
+            try:
+                path = handle.name
+                if os.path.getsize(path) < LOG_MAX_BYTES:
+                    continue
+                # Preserve bounded diagnostic tail as .1
+                tail_path = path + ".1"
+                with open(path, "rb") as src:
+                    src.seek(-LOG_TAIL_BYTES_ON_ROTATE, os.SEEK_END)
+                    tail = src.read()
+                with open(tail_path, "wb") as dst:
+                    dst.write(tail)
+                # Truncate the active file in place (descriptor stays valid).
+                handle.seek(0)
+                handle.truncate(0)
+                logger.info(
+                    "memory-tencentdb Gateway: rotated %s (was %d bytes, tail -> %s)",
+                    path, os.path.getsize(tail_path) + LOG_TAIL_BYTES_ON_ROTATE, tail_path,
+                )
+            except Exception as e:
+                logger.debug("memory-tencentdb Gateway: log rotation skipped for %s: %s",
+                             getattr(handle, "name", "?"), e)
 
     def _tail_stderr_log(self, max_bytes: int = LOG_TAIL_BYTES_ON_CRASH) -> str:
         """Return the last `max_bytes` of the stderr log for crash diagnostics."""
