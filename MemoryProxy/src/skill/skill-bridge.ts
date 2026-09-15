@@ -294,7 +294,7 @@ function bindingToIdFields(
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`, `hermes:${sessionId}`];
   for (const k of candidates) {
     const s = getSessionStore().get(k);
     if (s) {

@@ -56,6 +56,8 @@ interface SessionIdFields {
   user_id: string;
   team_id: string;
   agent_id: string;
+  /** 客户端来源（claude-code / codex / workbuddy 等），供遥测使用。 */
+  agent_source?: string;
   session_id: string;
   task_id?: string;
   user_key?: string;
@@ -140,7 +142,7 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`, `hermes:${sessionId}`];
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {
