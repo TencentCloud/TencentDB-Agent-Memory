@@ -481,8 +481,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           stateManager._l1ChunkFailCounts.delete(chunkKey);
           if (resp.entries && resp.entries.length > 0) {
             for (const entry of resp.entries) {
-              if (!entry.result_ref && refByToolCallId.has(entry.tool_call_id)) {
-                entry.result_ref = refByToolCallId.get(entry.tool_call_id)!;
+              const lookupId = entry.tool_call_id;
+              const refId = lookupId && (refByToolCallId.get(lookupId) ?? refByToolCallId.get(normalizeToolCallIdForLookup(lookupId)));
+              if (!entry.result_ref && refId) {
+                entry.result_ref = refId;
               }
             }
             await appendOffloadEntries(stateManager.ctx, resp.entries, undefined, logger);

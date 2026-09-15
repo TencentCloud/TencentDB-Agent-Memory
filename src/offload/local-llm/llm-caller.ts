@@ -5,7 +5,7 @@
  * to support any OpenAI-compatible backend.
  */
 import { generateText } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAI, type OpenAIProviderSettings } from "@ai-sdk/openai";
 import { createNoThinkFetch, type DisableThinkingStrategy } from "../../utils/no-think-fetch.js";
 import type { PluginLogger } from "../types.js";
 
@@ -63,9 +63,8 @@ export async function callLlm(
   const provider = createOpenAI({
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
-    compatibility: "compatible",
     ...(customFetch ? { fetch: customFetch } : {}),
-  });
+  } satisfies OpenAIProviderSettings);
 
   try {
     const result = await generateText({
