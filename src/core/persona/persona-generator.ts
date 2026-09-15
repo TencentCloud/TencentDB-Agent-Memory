@@ -10,7 +10,7 @@ import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
-import { buildPersonaPrompt } from "../prompts/persona-generation.js";
+import { buildPersonaPrompt, type PersonaToolDialect } from "../prompts/persona-generation.js";
 import { BackupManager } from "../../utils/backup.js";
 import { escapeXmlTags } from "../../utils/sanitize.js";
 import { report } from "../report/reporter.js";
@@ -24,6 +24,8 @@ export class PersonaGenerator {
   private logger: Logger | undefined;
   private backupCount: number;
   private instanceId: string | undefined;
+  /** Tool-name dialect for the persona prompt, derived from the active runner. */
+  private toolDialect: PersonaToolDialect;
 
   constructor(opts: {
     dataDir: string;
@@ -51,7 +53,12 @@ export class PersonaGenerator {
       enableTools: true,
       logger: opts.logger,
     });
-    this.logger?.debug?.(`${TAG} Generator created: model=${opts.model ?? "(default)"}, dataDir=${opts.dataDir}`);
+    // The injected runner is the host-neutral StandaloneLLMRunner (gateway/Hermes),
+    // whose file tools are write_to_file/replace_in_file. The fallback
+    // CleanContextRunner uses OpenClaw's write/edit. Tell the prompt which set to
+    // reference so the model can actually call the write tool (not emit raw text).
+    this.toolDialect = opts.llmRunner ? "standalone" : "openclaw";
+    this.logger?.debug?.(`${TAG} Generator created: model=${opts.model ?? "(default)"}, dataDir=${opts.dataDir}, toolDialect=${this.toolDialect}`);
   }
 
   /**
@@ -137,6 +144,7 @@ export class PersonaGenerator {
       triggerInfo: triggerReason,
       personaFilePath: personaPath,
       checkpointPath: path.join(this.dataDir, ".metadata", "recall_checkpoint.json"),
+      toolDialect: this.toolDialect,
     });
 
     // 7. Backup before LLM run (LLM writes persona.md via tools)
@@ -144,15 +152,19 @@ export class PersonaGenerator {
     await bm.backupFile(personaPath, "persona", `offset${cp.total_processed}`, this.backupCount);
 
     // 8. Run LLM agent (sandboxed to dataDir, tools enabled — LLM writes persona.md directly)
+    let runOutput = "";
     try {
       this.logger?.debug?.(`${TAG} Calling LLM for persona generation (timeout=180s, tools=enabled, workspaceDir=${this.dataDir})...`);
-      await this.runner.run({
+      runOutput = await this.runner.run({
         systemPrompt,
         prompt: userPrompt,
         taskId: "persona-generation",
         timeoutMs: 180_000,
         // maxTokens omitted → core uses the resolved model's maxTokens from catalog
         workspaceDir: this.dataDir,
+        // Standalone runner exposes write_to_file: force the model to write the
+        // file via tool (the OpenClaw runner ignores this flag and uses its own).
+        forceWriteTool: this.toolDialect === "standalone",
       });
       this.logger?.debug?.(`${TAG} LLM runner completed`);
     } catch (err) {
@@ -161,14 +173,24 @@ export class PersonaGenerator {
       return false;
     }
 
-    // 9. Read LLM-written persona.md and apply post-processing
+    // 9. Read the LLM-written persona.md and apply post-processing.
+    //    Fallback: OpenAI-compatible models with weak tool-calling (e.g.
+    //    Moonshot/Kimi) often emit the persona as assistant TEXT instead of
+    //    invoking the write_to_file tool. In that case persona.md is never
+    //    created and an otherwise-successful generation would be silently lost.
+    //    When the file is missing but the runner returned text, persist that
+    //    text as the persona so L3 is robust to tool-calling variance.
     let personaText: string;
     try {
       personaText = await fs.readFile(personaPath, "utf-8");
     } catch {
-      // LLM failed to write persona.md — treat as failure
-      this.logger?.error(`${TAG} LLM did not write persona.md — file not found after runner completed`);
-      return false;
+      if (runOutput && runOutput.trim()) {
+        this.logger?.warn(`${TAG} LLM did not call write_to_file; persisting returned assistant text as persona.md (${runOutput.length} chars)`);
+        personaText = runOutput;
+      } else {
+        this.logger?.error(`${TAG} LLM did not write persona.md and returned no text — treating as failure`);
+        return false;
+      }
     }
 
     // 10. Strip any navigation the LLM might have added + sanitize for safe injection
