@@ -47,6 +47,16 @@ export interface MemorySearchResult {
 
 const TAG = "[memory-tdai][tdai_memory_search]";
 
+/** Record memories the agent selected for its reply, not every search hit. */
+export async function recordMemoryUsage(
+  vectorStore: IMemoryStore | undefined,
+  recordIds: string[],
+): Promise<number> {
+  const ids = [...new Set(recordIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0 || typeof vectorStore?.touchL1Usage !== "function") return 0;
+  return await vectorStore.touchL1Usage(ids);
+}
+
 function toSearchItem(r: L1SearchResult): MemorySearchResultItem {
   return {
     id: r.record_id,
@@ -163,14 +173,6 @@ export async function executeMemorySearch(params: {
 
   const trimmed = results.slice(0, limit);
 
-  // 用进废退 write-back: bump use counters for what the agent actually saw.
-  // Fire-and-forget, best-effort — a write-back failure must never fail the search.
-  if (trimmed.length > 0 && typeof vectorStore.touchL1Usage === "function") {
-    try {
-      Promise.resolve(vectorStore.touchL1Usage(trimmed.map((r) => r.id))).catch(() => {});
-    } catch { /* non-fatal */ }
-  }
-
   logger?.debug?.(
     `${TAG} RESULT (strategy=${recalled.strategy}): returning ${trimmed.length} memories ` +
     `(scores: [${trimmed.map((r) => r.score.toFixed(3)).join(", ")}])`,
@@ -204,7 +206,7 @@ export function formatSearchResponse(result: MemorySearchResult): string {
     const scoreStr = typeof item.score === "number" ? ` (score: ${item.score.toFixed(3)})` : "";
     const sceneStr = item.scene_name ? ` [scene: ${item.scene_name}]` : "";
     const priorityStr = item.priority >= 0 ? ` (priority: ${item.priority})` : " (global instruction)";
-    lines.push(`- **[${item.type}]**${priorityStr}${sceneStr}${scoreStr}`);
+    lines.push(`- **[${item.type}]** [id: ${item.id}]${priorityStr}${sceneStr}${scoreStr}`);
     lines.push(`  ${item.content}`);
     lines.push("");
   }

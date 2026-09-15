@@ -9,7 +9,7 @@
  *   legacy    — previous combined max(last_used, updated), 0.1 / 0.05
  *   heavy     — last-used sweep (0.3 / 0.2)
  *   strong    — last-used sweep (0.5 / 0.4)
- * 3 rounds with the shipped write-back active between rounds (feedback-loop sim).
+ * 3 rounds; after each search, the agent confirms only the labeled useful hit.
  *
  * Scenario classes measure WHERE the boost helps vs hurts:
  *   A recency-tie       gold/distractor same keywords, gold newer → new should win
@@ -278,7 +278,10 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
             if (oldRank !== 1 && rank === 1) roundAcc[name][s.klass].rescued++;
           }
         }
+        // The agent confirms only a result it actually used in the reply.
+        if (shippedIds.includes(s.gold)) store.touchL1Usage([s.gold]);
       }
+
       // record round stats for shipped drift report
       if (round === 1 || round === ROUNDS) {
         const tag = round === 1 ? "R1" : `R${ROUNDS}`;
@@ -294,7 +297,7 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
         }
       }
       if (round < ROUNDS) {
-        // Attribution rankers share the shipped write-back trajectory by design.
+        // Attribution rankers share the shipped feedback trajectory by design.
         continue;
       }
     }

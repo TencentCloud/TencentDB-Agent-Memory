@@ -36,7 +36,7 @@ import type { StorageAdapter } from "./storage/adapter.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
 import { reportRecallMetrics } from "./report/metric-tracking-recall.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
-import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
+import { executeMemorySearch, formatSearchResponse, recordMemoryUsage } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
 import {
   initDataDirectories,
@@ -451,6 +451,15 @@ export class TdaiCore {
       total: result.total,
       strategy: result.strategy,
     };
+  }
+
+  /** Confirm the L1 memories selected to support the agent's reply. */
+  async recordMemoriesUsed(recordIds: string[]): Promise<number> {
+    try {
+      return await recordMemoryUsage(this.vectorStore, recordIds);
+    } catch {
+      return 0;
+    }
   }
 
   /**

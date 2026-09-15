@@ -2,7 +2,7 @@
  * Usage write-back + recency/frequency boost self-check.
  *
  * Covers: FTS-only VectorStore (dimensions=0) → search returns usage fields,
- * executeMemorySearch bumps use_count/last_used_ms, and the usage boost can
+ * explicit selected-memory feedback bumps use_count/last_used_ms, and the usage boost can
  * outrank a newer-but-never-used memory. Also covers the ALTER-TABLE backfill
  * for DBs created before the use_count/last_used_ms columns existed.
  */
@@ -14,7 +14,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { VectorStore } from "../store/sqlite/memory-store.js";
 import { recallL1Candidates } from "./l1-candidate-recall.js";
-import { executeMemorySearch } from "./memory-search.js";
+import { executeMemorySearch, formatSearchResponse, recordMemoryUsage } from "./memory-search.js";
 import type { MemoryRecord } from "../record/l1-writer.js";
 
 const dir = mkdtempSync(join(tmpdir(), "tdai-usage-"));
@@ -44,7 +44,7 @@ function makeRecord(id: string, content: string, ageMs: number): MemoryRecord {
 }
 
 describe("L1 usage write-back and recency/frequency boost", () => {
-  it("search returns usage fields, write-back bumps them, boost reorders", async () => {
+  it("only selected memories receive usage write-back and boost reorders", async () => {
     const store = new VectorStore(join(dir, "usage.db"), 0);
     store.init();
     // Equal relevance: use history, not write time, must decide the re-rank.
@@ -59,18 +59,20 @@ describe("L1 usage write-back and recency/frequency boost", () => {
     expect(r1.strategy).toBe("fts");
     expect(r1.results.map((r) => r.id)).toEqual(["cold", "hot"]);
     expect(r1.results[0].use_count).toBe(0);
+    expect(formatSearchResponse(r1)).toContain("[id: cold]");
 
-    // executeMemorySearch write-back bumps what the agent saw
-    await new Promise((r) => setTimeout(r, 20));
+    // Search alone is neutral; only an explicit selection counts as use.
     const r2 = await executeMemorySearch({ query: "billing service", limit: 5, vectorStore: store });
     const byId = new Map(r2.results.map((r) => [r.id, r]));
-    expect(byId.get("hot")!.use_count).toBe(1);
-    expect(byId.get("cold")!.use_count).toBe(1);
+    expect(byId.get("hot")!.use_count).toBe(0);
+    expect(byId.get("cold")!.use_count).toBe(0);
 
-    // Simulate "hot" being retrieved often → usage boost wins an equal-score tie.
-    for (let i = 0; i < 10; i++) expect(store.touchL1Usage(["hot"])).toBe(1);
+    // Simulate the agent selecting "hot" repeatedly → usage boost wins the tie.
+    for (let i = 0; i < 10; i++) expect(await recordMemoryUsage(store, ["hot"])).toBe(1);
     const r3 = await executeMemorySearch({ query: "billing service", limit: 5, vectorStore: store });
     expect(r3.results.map((r) => r.id)).toEqual(["hot", "cold"]);
+    expect(r3.results[0].use_count).toBe(10);
+    expect(r3.results[1].use_count).toBe(0);
     store.close();
   });
 
