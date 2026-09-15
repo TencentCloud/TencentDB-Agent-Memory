@@ -88,6 +88,16 @@ const pendingRecallCache = new Map<string, {
  */
 const pendingRecallEndTimestamps = new Map<string, number>();
 
+/**
+ * Map toolCallId -> sessionKey to allow tool execute() to identify the session.
+ */
+const toolCallToSessionKey = new Map<string, { sessionKey: string; ts: number }>();
+
+/**
+ * Track the number of memory/conversation search tool calls per session in the current turn.
+ */
+const turnToolCallCounts = new Map<string, { count: number; ts: number }>();
+
 // 进程级单例，避免同一进程重复启动清理器导致并发清理竞态
 let sharedMemoryCleaner: LocalMemoryCleaner | undefined;
 
@@ -111,6 +121,18 @@ function sweepStaleCaches(): void {
       pendingRecallCache.delete(key);
     }
   }
+  // Clean toolCallToSessionKey
+  for (const [key, entry] of toolCallToSessionKey) {
+    if (now - entry.ts > PROMPT_CACHE_TTL_MS) {
+      toolCallToSessionKey.delete(key);
+    }
+  }
+  // Clean turnToolCallCounts
+  for (const [key, entry] of turnToolCallCounts) {
+    if (now - entry.ts > PROMPT_CACHE_TTL_MS) {
+      turnToolCallCounts.delete(key);
+    }
+  }
   // Hard limit: evict oldest entries if either Map exceeds cap
   if (pendingOriginalPrompts.size > PROMPT_CACHE_MAX_SIZE) {
     const entries = [...pendingOriginalPrompts.entries()].sort((a, b) => a[1].ts - b[1].ts);
@@ -125,6 +147,20 @@ function sweepStaleCaches(): void {
     const toEvict = entries.slice(0, entries.length - PROMPT_CACHE_MAX_SIZE);
     for (const [key] of toEvict) {
       pendingRecallCache.delete(key);
+    }
+  }
+  if (toolCallToSessionKey.size > PROMPT_CACHE_MAX_SIZE) {
+    const entries = [...toolCallToSessionKey.entries()].sort((a, b) => a[1].ts - b[1].ts);
+    const toEvict = entries.slice(0, entries.length - PROMPT_CACHE_MAX_SIZE);
+    for (const [key] of toEvict) {
+      toolCallToSessionKey.delete(key);
+    }
+  }
+  if (turnToolCallCounts.size > PROMPT_CACHE_MAX_SIZE) {
+    const entries = [...turnToolCallCounts.entries()].sort((a, b) => a[1].ts - b[1].ts);
+    const toEvict = entries.slice(0, entries.length - PROMPT_CACHE_MAX_SIZE);
+    for (const [key] of toEvict) {
+      turnToolCallCounts.delete(key);
     }
   }
 }
@@ -346,9 +382,18 @@ export default function register(api: OpenClawPluginApi) {
   // Tool registration — delegate to TdaiCore
   // ============================
 
-  // tdai_memory_search — Agent-callable L1 memory search tool
-  // TODO: implement hard per-turn call limit via before_tool_call hook + execute early-return (方案 D)
+  // Register before_tool_call hook to map toolCallId to sessionKey for turn limit check
   if (cfg.recall.enabled || cfg.capture.enabled) {
+  api.on("before_tool_call", (event, ctx) => {
+    const toolCallId = event.toolCallId ?? ctx.toolCallId;
+    const sessionKey = ctx.sessionKey;
+    if (toolCallId && sessionKey) {
+      toolCallToSessionKey.set(toolCallId, { sessionKey, ts: Date.now() });
+      api.logger.debug?.(`${TAG} [before_tool_call] Mapped toolCallId=${toolCallId} to sessionKey=${sessionKey}`);
+    }
+  });
+
+  // tdai_memory_search — Agent-callable L1 memory search tool
   api.registerTool(
     {
       name: "tdai_memory_search",
@@ -385,6 +430,19 @@ export default function register(api: OpenClawPluginApi) {
         const limit = Math.min(Math.max(Number(params.limit) || 5, 1), 20);
         const typeFilter = typeof params.type === "string" ? params.type : undefined;
         const sceneFilter = typeof params.scene === "string" ? params.scene : undefined;
+
+        const sessionKey = _toolCallId ? toolCallToSessionKey.get(_toolCallId)?.sessionKey : undefined;
+        if (sessionKey) {
+          const count = turnToolCallCounts.get(sessionKey)?.count ?? 0;
+          if (count >= 3) {
+            api.logger.warn(`${TAG} [tool] tdai_memory_search limit exceeded (count=${count}) for session ${sessionKey}`);
+            return {
+              content: [{ type: "text" as const, text: "Search limit exceeded. You have already called memory search tools 3 times in this turn. Stop searching and proceed with the information you have." }],
+              details: { count: 0, error: "Limit exceeded" },
+            };
+          }
+          turnToolCallCounts.set(sessionKey, { count: count + 1, ts: Date.now() });
+        }
 
         api.logger.debug?.(
           `${TAG} [tool] tdai_memory_search called: ` +
@@ -435,7 +493,6 @@ export default function register(api: OpenClawPluginApi) {
   );
 
   // tdai_conversation_search — Agent-callable L0 conversation search tool
-  // TODO: implement hard per-turn call limit via before_tool_call hook + execute early-return (方案 D)
   api.registerTool(
     {
       name: "tdai_conversation_search",
@@ -469,6 +526,19 @@ export default function register(api: OpenClawPluginApi) {
         const query = String(params.query ?? "");
         const limit = Math.min(Math.max(Number(params.limit) || 5, 1), 20);
         const sessionKeyFilter = typeof params.session_key === "string" ? params.session_key : undefined;
+
+        const sessionKey = _toolCallId ? toolCallToSessionKey.get(_toolCallId)?.sessionKey : undefined;
+        if (sessionKey) {
+          const count = turnToolCallCounts.get(sessionKey)?.count ?? 0;
+          if (count >= 3) {
+            api.logger.warn(`${TAG} [tool] tdai_conversation_search limit exceeded (count=${count}) for session ${sessionKey}`);
+            return {
+              content: [{ type: "text" as const, text: "Search limit exceeded. You have already called memory search tools 3 times in this turn. Stop searching and proceed with the information you have." }],
+              details: { count: 0, error: "Limit exceeded" },
+            };
+          }
+          turnToolCallCounts.set(sessionKey, { count: count + 1, ts: Date.now() });
+        }
 
         api.logger.debug?.(
           `${TAG} [tool] tdai_conversation_search called: ` +
@@ -538,6 +608,11 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       ensureEmbeddingWarmup();
+
+      // Reset tool call count for the session at the start of a turn
+      if (sessionKey) {
+        turnToolCallCounts.set(sessionKey, { count: 0, ts: Date.now() });
+      }
 
       // Cache original user prompt for agent_end
       const rawPrompt = event.prompt;
