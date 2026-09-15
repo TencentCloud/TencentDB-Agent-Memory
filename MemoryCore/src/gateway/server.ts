@@ -132,6 +132,7 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import type { StatefulPipelineManager } from "../utils/stateful-pipeline-manager.js";
 import type { PipelineLogger } from "../utils/pipeline-factory.js";
 import { parsePipelineTimerMember } from "../core/state/timer-member.js";
+import { extractOpenAiFinalAnswer } from "../utils/structured-output.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -3209,7 +3210,7 @@ export class TdaiGateway {
               `content=${content.length} chars`,
             );
           }
-          return json.choices?.[0]?.message?.content ?? "";
+          return extractOpenAiFinalAnswer(json);
         } catch (err) {
           clearTimeout(timer);
           throw err;
