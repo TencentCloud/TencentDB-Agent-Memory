@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     pool: "forks",
-    include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "__tests__/**/*.test.ts", "adapter-sdk/**/*.test.ts"],
     exclude: ["dist/**", "node_modules/**", "**/*.e2e.test.ts"],
     testTimeout: 120_000,
     hookTimeout: 120_000,
