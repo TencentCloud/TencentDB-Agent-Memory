@@ -24,6 +24,8 @@ WORKDIR /build/panel-web
 COPY panel/web/package*.json ./
 RUN npm install --no-audit --no-fund
 COPY panel/web/ ./
+# Web imports this shared client/provider catalog from the Panel source tree.
+COPY panel/src/panel/api/upstream-clients.ts /build/src/panel/api/upstream-clients.ts
 RUN npm run build
 
 FROM base AS panel-builder

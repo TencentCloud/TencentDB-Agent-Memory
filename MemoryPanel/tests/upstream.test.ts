@@ -99,3 +99,22 @@ it('Core retains an omitted key when editing the URL and accepts explicit replac
   await service.setInstanceUpstreamConfig({ ...draft, mode: 'custom_unified', api_key: 'replacement' });
   expect(store.upsertInstanceUpstreamConfig.mock.calls[2][0].api_key).toBe('replacement');
 });
+
+it('exposes ZCode in the UI catalog and saves its configuration through Panel and Core', async () => {
+  expect(UPSTREAM_CLIENTS.find((client) => client.id === 'zcode')).toEqual({
+    id: 'zcode', name: 'ZCode', protocols: ['anthropic', 'chat'],
+  });
+  const { MetadataService } = await import('../../MemoryCore/src/metadata/service/metadata-service.js');
+  const store = {
+    getInstanceUpstreamConfig: vi.fn().mockResolvedValue(null),
+    upsertInstanceUpstreamConfig: vi.fn(async (value) => value),
+  };
+  const service = new MetadataService(store as any);
+  invoke.mockImplementation(async (action, body) => {
+    expect(action).toBe('instance-upstream/set');
+    return { code: 0, data: await service.setInstanceUpstreamConfig(body) };
+  });
+  const body = { ...draft, agent_source: 'zcode', type: 'conversation', mode: 'custom_unified' };
+  expect((await call(body, 'set')).status).toBe(200);
+  expect(store.upsertInstanceUpstreamConfig).toHaveBeenCalledWith(expect.objectContaining(body));
+});

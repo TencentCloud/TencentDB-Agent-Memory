@@ -44,6 +44,7 @@ FROM base AS ui-builder
 ARG PANEL_UI
 ARG WEB_UI=1
 COPY ${PANEL_UI}/ /ui/
+COPY src/panel/api/upstream-clients.ts /src/panel/api/upstream-clients.ts
 WORKDIR /ui
 RUN --mount=type=cache,id=npm-tmc-ui,target=/root/.npm \
     if [ "$WEB_UI" = "0" ]; then \
