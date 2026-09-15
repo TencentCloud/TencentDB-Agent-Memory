@@ -452,8 +452,16 @@ export interface ProxyConfig {
     enabled: boolean;
     url: string;    // Opik server base URL
     apiKey: string; // Opik server auth key (optional)
+    /** REST API 前缀。backend(8080) 默认 "/v1/private"；指向前端(5173) 时为 "/api/v1/private"。 */
+    apiPrefix: string;
+    /** 单次上报超时（毫秒，100–30000）。0/非法值回落默认 2000。 */
+    timeoutMs: number;
     /** When true, forked request_log traces/spans do not store message content. */
     stripRequestLogContent: boolean;
+    /** When false (default), main-project traces/spans are not forked to the
+     *  request_log project. Turning this on increases Opik report volume by
+     *  ~2x and is meant for raw-request retention only. */
+    requestLogEnabled: boolean;
   };
   langfuse: LangfuseConfig;
   clickhouse: {
@@ -791,7 +799,10 @@ export interface RawYamlConfig {
     enabled?: boolean;
     url?: string;
     apiKey?: string;
+    apiPrefix?: string;
+    timeoutMs?: number;
     stripRequestLogContent?: boolean;
+    requestLogEnabled?: boolean;
   };
   redis?: {
     enabled?: boolean;
@@ -879,6 +890,7 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    skipAssetConfirm?: boolean;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
@@ -950,6 +962,7 @@ export interface RequestLogEntry {
   sessionKey?: string; // conversationId || keyId — per-conversation isolation key
   upstreamUrl: string;
   stream: boolean;
+  traceId?: string;
   temperature?: number;
   maxTokens?: number;
   routedFrom?: string;     // original model if routing was applied

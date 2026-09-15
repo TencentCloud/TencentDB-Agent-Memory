@@ -51,6 +51,7 @@ import {
   opikCreateTrace,
   opikCreateLlmSpan,
   opikUpdateTrace,
+  opikUpdateTraceFork,
   uuidv7,
 } from "./opik.js";
 import {
@@ -305,10 +306,9 @@ async function recordTracesAndUsage(params: {
       output: opikOutput,
       usage: usageForTrace,
     });
-    if (forkTraceId && !config.opik.stripRequestLogContent) {
-      opikUpdateTrace(config, {
+    if (forkTraceId) {
+      opikUpdateTraceFork(config, {
         traceId: forkTraceId,
-        projectName: "request_log",
         endTime,
         output: opikOutput,
         usage: usageForTrace,
