@@ -244,6 +244,13 @@ export interface IMemoryStore {
    */
   readonly supportsDeferredEmbedding?: boolean;
 
+  /**
+   * Whether FTS5 keyword search is available (SQLite). When false, recall
+   * degrades to embedding-only (e.g. Node builds without the fts5 module).
+   * Fix #679.
+   */
+  readonly keywordSearchAvailable?: boolean;
+
   // ── Lifecycle (always sync) ──────────────────────────────
 
   init(providerInfo?: EmbeddingProviderInfo): MaybePromise<StoreInitResult>;

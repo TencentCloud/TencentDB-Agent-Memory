@@ -435,6 +435,15 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `timezone` | `"system"` | Timezone for user/LLM-facing timestamps: `"system"` (follow process tz) / IANA name (`Asia/Shanghai`) / offset string (`+08:00`) |
 | `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
+
+> **FTS5 requirement (keyword/hybrid recall)**: the default SQLite backend uses
+> `node:sqlite` **FTS5** virtual tables for BM25 keyword search. Official Node
+> binaries are not guaranteed to include the FTS5 module (e.g. Node v22.13.1
+> darwin-arm64 ships without it; v22.23.2+ includes it). When FTS5 is absent,
+> keyword search is silently unavailable and recall degrades to
+> `embedding`-only. The gateway logs a startup warning and `GET /health`
+> exposes `keywordSearchAvailable: false` so operators can detect this
+> without reading logs. Fix #679.
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |

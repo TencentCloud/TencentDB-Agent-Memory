@@ -356,14 +356,18 @@ export class TdaiGateway {
   // ============================
 
   private handleHealth(res: http.ServerResponse): void {
+    const vectorStore = this.core.getVectorStore();
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: vectorStore ? "ok" : "degraded",
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: !!this.core.getVectorStore(),
+        vectorStore: !!vectorStore,
         embeddingService: !!this.core.getEmbeddingService(),
       },
+      // Fix #679: FTS5-Verfügbarkeit sichtbar machen (false → Keyword-Search
+      // degradiert zu embedding-only auf Node-Builds ohne fts5-Modul).
+      keywordSearchAvailable: vectorStore?.keywordSearchAvailable ?? false,
     };
     sendJson(res, 200, response);
   }
