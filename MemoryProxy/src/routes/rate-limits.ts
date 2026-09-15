@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
 import { assertKeySegment } from "../storage/key-utils.js";
 import { getRateLimitStore } from "../rate-limit/guard.js";
+import { checkAdminAuth, adminAuthError } from "./admin-auth.js";
 
 interface RateLimitBody {
   instance_id?: unknown;
@@ -11,10 +12,18 @@ interface RateLimitBody {
 }
 
 export function createRateLimitHandlers(config: ProxyConfig) {
+  const enforceAuth = (c: Context) => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") {
+      return adminAuthError(c, authResult);
+    }
+    return null;
+  };
+
   return {
-    get: (c: Context) => handleGet(c, config),
-    put: (c: Context) => handlePut(c, config),
-    delete: (c: Context) => handleDelete(c, config),
+    get: (c: Context) => enforceAuth(c) || handleGet(c, config),
+    put: (c: Context) => enforceAuth(c) || handlePut(c, config),
+    delete: (c: Context) => enforceAuth(c) || handleDelete(c, config),
   };
 }
 
