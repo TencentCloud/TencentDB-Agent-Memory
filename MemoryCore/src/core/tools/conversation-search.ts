@@ -191,6 +191,9 @@ export async function executeConversationSearch(params: {
         return ftsResults.map((r) => ({
           id: r.record_id,
           session_key: r.session_key,
+          session_id: r.session_id,
+          user_id: r.user_id,
+          agent_id: r.agent_id,
           role: r.role,
           content: r.message_text,
           score: r.score,
