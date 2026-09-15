@@ -98,6 +98,10 @@ function epochMsToIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
+function tcvdbStringLiteral(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+}
+
 /**
  * Extract agent ID from a sessionKey like `agent:<agentId>:<channel>`.
  * Returns empty string if the format doesn't match.
@@ -573,8 +577,8 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
       // Build TCVDB filter expression from L1QueryFilter
       const conditions: string[] = [];
-      if (filter?.sessionKey) conditions.push(`session_key = "${filter.sessionKey}"`);
-      if (filter?.sessionId) conditions.push(`session_id = "${filter.sessionId}"`);
+      if (filter?.sessionKey) conditions.push(`session_key = ${tcvdbStringLiteral(filter.sessionKey)}`);
+      if (filter?.sessionId) conditions.push(`session_id = ${tcvdbStringLiteral(filter.sessionId)}`);
       if (filter?.updatedAfter) {
         const afterMs = isoToEpochMs(filter.updatedAfter);
         if (afterMs > 0) conditions.push(`updated_time_ms > ${afterMs}`);
@@ -873,7 +877,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return [];
 
-      const conditions: string[] = [`session_key = "${sessionKey}"`];
+      const conditions: string[] = [`session_key = ${tcvdbStringLiteral(sessionKey)}`];
       if (afterRecordedAtMs && afterRecordedAtMs > 0) {
         conditions.push(`recorded_at_ms > ${afterRecordedAtMs}`);
       }
