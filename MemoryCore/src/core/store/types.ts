@@ -72,6 +72,12 @@ export interface L1SearchResult {
   user_id: string;
   agent_id: string;
   metadata_json: string;
+  /** How many times this memory surfaced in agent-facing search (usage write-back). */
+  use_count?: number;
+  /** Epoch ms of the last agent-facing search hit (usage write-back). */
+  last_used_ms?: number;
+  /** Epoch ms parsed from the record's updated_time (write recency). */
+  updated_ms?: number;
 }
 
 /** Result from an L1 FTS keyword search. */
@@ -94,6 +100,9 @@ export interface L1FtsResult {
   user_id: string;
   agent_id: string;
   metadata_json: string;
+  use_count?: number;
+  last_used_ms?: number;
+  updated_ms?: number;
 }
 
 /** Filter options for querying L1 records. */
@@ -630,6 +639,14 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
     topK?: number;
     filter?: IsolationFilter;
   }): MaybePromise<L1SearchResult[]>;
+
+  /**
+   * Usage write-back ("use it or lose it"): bump use_count + last_used_ms for
+   * records that surfaced in an agent-facing search. Best-effort — callers
+   * fire-and-forget and must not fail the search on write-back errors.
+   * Optional capability; absent → retrieval keeps pure-similarity ranking.
+   */
+  touchL1Usage?(recordIds: string[]): MaybePromise<number>;
 
   // ── L0 Write ─────────────────────────────────────────────
 

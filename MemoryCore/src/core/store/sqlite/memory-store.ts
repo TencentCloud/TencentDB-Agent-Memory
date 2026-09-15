@@ -102,6 +102,9 @@ export interface VectorSearchResult {
   agent_id: string;
   /** Raw metadata JSON string (e.g., contains activity_start_time / activity_end_time for episodic) */
   metadata_json: string;
+  use_count?: number;
+  last_used_ms?: number;
+  updated_ms?: number;
 }
 
 /** L0 single-message vector search result. */
@@ -199,6 +202,9 @@ export interface FtsSearchResult {
   user_id: string;
   agent_id: string;
   metadata_json: string;
+  use_count?: number;
+  last_used_ms?: number;
+  updated_ms?: number;
 }
 
 /** FTS5 search result for L0 records. */
@@ -510,6 +516,10 @@ export class VectorStore implements IMemoryStore {
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'"); } catch { /* exists */ }
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN task_id TEXT DEFAULT ''"); } catch { /* exists */ }
     try { this.db.exec("ALTER TABLE l1_records ADD COLUMN version INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+    // Usage write-back columns (retrieval reinforcement). NOT in the upsert's
+    // ON CONFLICT SET list, so content updates never clobber usage counters.
+    try { this.db.exec("ALTER TABLE l1_records ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
+    try { this.db.exec("ALTER TABLE l1_records ADD COLUMN last_used_ms INTEGER NOT NULL DEFAULT 0"); } catch { /* exists */ }
     this.db.prepare("UPDATE l1_records SET team_id = ? WHERE team_id = '' OR team_id IS NULL").run(DEFAULT_ISOLATION_ID);
     this.db.prepare("UPDATE l1_records SET user_id = ? WHERE user_id = '' OR user_id IS NULL").run(DEFAULT_ISOLATION_ID);
     this.db.prepare("UPDATE l1_records SET agent_id = ? WHERE agent_id = '' OR agent_id IS NULL").run(DEFAULT_ISOLATION_ID);
@@ -583,7 +593,8 @@ export class VectorStore implements IMemoryStore {
 
     this.stmtGetMeta = this.db.prepare(`
       SELECT content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id,
-             version, timestamp_str, timestamp_start, timestamp_end, metadata_json
+             version, timestamp_str, timestamp_start, timestamp_end, metadata_json,
+             use_count, last_used_ms, updated_time
       FROM l1_records WHERE record_id = ?
     `);
 
@@ -993,12 +1004,13 @@ export class VectorStore implements IMemoryStore {
       this.stmtL1FtsDelete = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ?");
 
       this.stmtL1FtsSearch = this.db.prepare(`
-        SELECT record_id, content_original AS content, type, priority, scene_name,
-               session_key, session_id, team_id, task_id, user_id, agent_id, version,
-               timestamp_str, timestamp_start, timestamp_end,
-               metadata_json,
+        SELECT l1_fts.record_id, l1_fts.content_original AS content, l1_fts.type, l1_fts.priority, l1_fts.scene_name,
+               l1_fts.session_key, l1_fts.session_id, l1_fts.team_id, l1_fts.task_id, l1_fts.user_id, l1_fts.agent_id,
+               l1_fts.version, l1_fts.timestamp_str, l1_fts.timestamp_start, l1_fts.timestamp_end,
+               l1_fts.metadata_json,
+               m.use_count, m.last_used_ms, m.updated_time,
                bm25(l1_fts) AS rank
-        FROM l1_fts
+        FROM l1_fts JOIN l1_records m ON m.record_id = l1_fts.record_id
         WHERE l1_fts MATCH ?
         ORDER BY rank ASC
         LIMIT ?
@@ -1385,6 +1397,9 @@ export class VectorStore implements IMemoryStore {
               timestamp_start: string;
               timestamp_end: string;
               metadata_json: string;
+              use_count?: number;
+              last_used_ms?: number;
+              updated_time?: string;
             }
           | undefined;
 
@@ -1402,6 +1417,7 @@ export class VectorStore implements IMemoryStore {
           `type=${meta.type}, content="${meta.content.slice(0, 60)}..."`,
         );
 
+        const updatedMs = Date.parse(meta.updated_time ?? "");
         results.push({
           record_id,
           content: meta.content,
@@ -1420,6 +1436,9 @@ export class VectorStore implements IMemoryStore {
           user_id: meta.user_id ?? "",
           agent_id: meta.agent_id ?? "",
           metadata_json: meta.metadata_json,
+          use_count: meta.use_count ?? 0,
+          last_used_ms: meta.last_used_ms ?? 0,
+          updated_ms: Number.isFinite(updatedMs) ? updatedMs : undefined,
         });
       }
 
@@ -3025,36 +3044,66 @@ export class VectorStore implements IMemoryStore {
         timestamp_start: string;
         timestamp_end: string;
         metadata_json: string;
+        use_count?: number;
+        last_used_ms?: number;
+        updated_time?: string;
         rank: number;
       }>;
 
       return rows
         .filter((r) => rowMatchesIsolation(r, filter))
         .slice(0, limit)
-        .map((r) => ({
-          record_id: r.record_id,
-          content: r.content,
-          type: r.type,
-          priority: r.priority,
-          scene_name: r.scene_name,
-          score: bm25RankToScore(r.rank),
-          timestamp_str: r.timestamp_str,
-          timestamp_start: r.timestamp_start,
-          timestamp_end: r.timestamp_end,
-          version: r.version ?? 0,
-          session_key: r.session_key,
-          session_id: r.session_id,
-          team_id: r.team_id ?? "",
-          task_id: r.task_id ?? "",
-          user_id: r.user_id ?? "",
-          agent_id: r.agent_id ?? "",
-          metadata_json: r.metadata_json,
-        }));
+        .map((r) => {
+          const updatedMs = Date.parse(r.updated_time ?? "");
+          return {
+            record_id: r.record_id,
+            content: r.content,
+            type: r.type,
+            priority: r.priority,
+            scene_name: r.scene_name,
+            score: bm25RankToScore(r.rank),
+            timestamp_str: r.timestamp_str,
+            timestamp_start: r.timestamp_start,
+            timestamp_end: r.timestamp_end,
+            version: r.version ?? 0,
+            session_key: r.session_key,
+            session_id: r.session_id,
+            team_id: r.team_id ?? "",
+            task_id: r.task_id ?? "",
+            user_id: r.user_id ?? "",
+            agent_id: r.agent_id ?? "",
+            metadata_json: r.metadata_json,
+            use_count: r.use_count ?? 0,
+            last_used_ms: r.last_used_ms ?? 0,
+            updated_ms: Number.isFinite(updatedMs) ? updatedMs : undefined,
+          };
+        });
     } catch (err) {
       this.logger?.warn(
         `${TAG} [L1-fts-search] FAILED (non-fatal, returning empty): ${err instanceof Error ? err.message : String(err)}`,
       );
       return [];
+    }
+  }
+
+  /**
+   * Usage write-back: bump `use_count` and refresh `last_used_ms` for records
+   * that surfaced in an agent-facing search (retrieval reinforcement).
+   * Sync, best-effort — returns number of rows touched, 0 on any failure.
+   */
+  touchL1Usage(recordIds: string[]): number {
+    if (this.degraded || recordIds.length === 0) return 0;
+    try {
+      const placeholders = recordIds.map(() => "?").join(", ");
+      const stmt = this.db.prepare(
+        `UPDATE l1_records SET use_count = use_count + 1, last_used_ms = ? WHERE record_id IN (${placeholders})`,
+      );
+      return Number(stmt.run(Date.now(), ...recordIds).changes);
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} [L1-touch] FAILED (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
     }
   }
 

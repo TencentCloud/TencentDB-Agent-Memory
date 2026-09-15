@@ -19,6 +19,37 @@ const DEFAULT_TAG = "[memory-tdai][l1-candidate-recall]";
 /** Standard RRF constant from the original RRF paper. */
 const RRF_K = 60;
 
+// ── Usage boost ("use it or lose it") ────────────────────────────────────────
+// Multiplies the similarity score by up to (1 + RECENCY_WEIGHT + FREQUENCY_WEIGHT)
+// based on write recency and retrieval frequency. Memories with no usage data
+// (stores that don't implement touchL1Usage) get exactly 1.0 → pure RRF order.
+// Weights measured on the mechanism bench (l1-usage-boost-bench.test.ts):
+// 0.1/0.05 is net-positive on first-touch AND repeated-access workloads, while
+// 0.3/0.2 regresses first-touch (old-authoritative memories lose to fresh noise).
+// ponytail: module constants; move into config recall group if deployments need tuning.
+const RECENCY_WEIGHT = 0.1;
+const RECENCY_HALF_LIFE_MS = 14 * 86_400_000;
+const FREQUENCY_WEIGHT = 0.05;
+/** use_count at which half the frequency boost applies (saturating x/(x+N)). */
+const FREQUENCY_SATURATION = 5;
+
+function usageBoost(hit: L1SearchResult, nowMs = Date.now()): number {
+  const lastMs = Math.max(hit.last_used_ms ?? 0, hit.updated_ms ?? 0);
+  const ageMs = Math.max(0, nowMs - lastMs);
+  const recency = lastMs > 0 ? Math.exp(-ageMs / RECENCY_HALF_LIFE_MS) : 0;
+  const useCount = hit.use_count ?? 0;
+  const frequency = useCount / (useCount + FREQUENCY_SATURATION);
+  return 1 + RECENCY_WEIGHT * recency + FREQUENCY_WEIGHT * frequency;
+}
+
+/** Re-score by usage boost and re-sort descending (stable — ties keep order). */
+function applyUsageBoost(hits: L1SearchResult[]): L1SearchResult[] {
+  return hits
+    .map((hit) => ({ hit, boosted: hit.score * usageBoost(hit) }))
+    .sort((a, b) => b.boosted - a.boosted)
+    .map(({ hit, boosted }) => ({ ...hit, score: boosted }));
+}
+
 export type L1RecallStrategy = "hybrid" | "embedding" | "fts" | "none";
 
 export interface RecallL1CandidatesParams {
@@ -33,6 +64,8 @@ export interface RecallL1CandidatesParams {
   embeddingTimeoutMs?: number;
   /** Log prefix so search/dedup keep their existing tag in logs. */
   logTag?: string;
+  /** Keep write-path conflict candidates in pure similarity order. */
+  bypassUsageBoost?: boolean;
 }
 
 export interface RecallL1CandidatesResult {
@@ -52,8 +85,10 @@ export async function recallL1Candidates(
     filter,
     queryEmbedding,
     embeddingTimeoutMs,
+    bypassUsageBoost,
   } = params;
   const tag = params.logTag ?? DEFAULT_TAG;
+  const rank = (hits: L1SearchResult[]) => bypassUsageBoost ? hits : applyUsageBoost(hits);
 
   if (!query || query.trim().length === 0 || topK <= 0) {
     return { hits: [], strategy: "none" };
@@ -64,7 +99,7 @@ export async function recallL1Candidates(
     const results = await vectorStore.searchL1Hybrid!(
       filter ? { query, topK, filter } : { query, topK },
     );
-    return { hits: results, strategy: "hybrid" };
+    return { hits: rank(results), strategy: "hybrid" };
   }
 
   const hasEmbedding = hasClientEmbedding(embeddingService);
@@ -104,14 +139,14 @@ export async function recallL1Candidates(
   }
 
   if (strategy === "hybrid") {
-    const merged = rrfMergeL1Hits(ftsHits, vecHits);
+    const merged = rank(rrfMergeL1Hits(ftsHits, vecHits));
     logger?.debug?.(
       `${tag} [hybrid] RRF merged: fts=${ftsHits.length}, vec=${vecHits.length} → ${merged.length} unique`,
     );
     return { hits: merged, strategy };
   }
 
-  return { hits: ftsOk ? ftsHits : vecHits, strategy };
+  return { hits: rank(ftsOk ? ftsHits : vecHits), strategy };
 }
 
 function hasNativeL1Hybrid(store: IMemoryStore): boolean {
@@ -141,6 +176,9 @@ function toL1Hit(r: L1SearchResult | L1FtsResult): L1SearchResult {
     user_id: r.user_id,
     agent_id: r.agent_id,
     metadata_json: r.metadata_json,
+    use_count: r.use_count,
+    last_used_ms: r.last_used_ms,
+    updated_ms: r.updated_ms,
   };
 }
 

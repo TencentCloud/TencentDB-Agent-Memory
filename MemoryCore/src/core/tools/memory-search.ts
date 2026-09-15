@@ -33,6 +33,8 @@ export interface MemorySearchResultItem {
   version: number;
   created_at: string;
   updated_at: string;
+  use_count?: number;
+  last_used_ms?: number;
 }
 
 export interface MemorySearchResult {
@@ -60,6 +62,8 @@ function toSearchItem(r: L1SearchResult): MemorySearchResultItem {
     version: r.version ?? 0,
     created_at: r.timestamp_start,
     updated_at: r.timestamp_end,
+    use_count: r.use_count,
+    last_used_ms: r.last_used_ms,
   };
 }
 
@@ -158,6 +162,14 @@ export async function executeMemorySearch(params: {
   }
 
   const trimmed = results.slice(0, limit);
+
+  // 用进废退 write-back: bump use counters for what the agent actually saw.
+  // Fire-and-forget, best-effort — a write-back failure must never fail the search.
+  if (trimmed.length > 0 && typeof vectorStore.touchL1Usage === "function") {
+    try {
+      Promise.resolve(vectorStore.touchL1Usage(trimmed.map((r) => r.id))).catch(() => {});
+    } catch { /* non-fatal */ }
+  }
 
   logger?.debug?.(
     `${TAG} RESULT (strategy=${recalled.strategy}): returning ${trimmed.length} memories ` +
