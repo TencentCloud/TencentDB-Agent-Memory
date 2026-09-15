@@ -62,11 +62,15 @@ node dist/install.js --client codex --remove
 ```
 
 `--config /private/memory.json` selects another memory configuration.
-`--settings /absolute/path/settings.json` overrides the native hook file.
+`--settings /absolute/path/settings.json` takes precedence over the default native
+hook file for both installation and removal. Use the same path when removing.
 
-- **ZCode CLI and Desktop 0.16.5:** `~/.zcode/cli/config.json`. Desktop's
-  `~/.zcode/v2/config.json` stores model providers, not these user hooks. Restart
-  Desktop after installation. Explicitly disabled hooks are not silently enabled.
+- **ZCode:** `~/.zcode/cli/config.json` for native Agent hooks. Verified with CLI
+  0.16.5 and the bundled Agent configuration in Desktop 3.11.2: Desktop also uses
+  `.zcode/cli/config.json`; the presence of `.zcode/v2/config.json` does not select
+  a different hook file. For a client version or deployment that explicitly loads
+  hooks elsewhere, pass `--settings` with that path. Restart Desktop after
+  installation. Explicitly disabled hooks are not silently enabled.
   Project hook overrides remain subject to native trust checks.
 - **Codex:** `~/.codex/hooks.json`. Run `/hooks` in CLI and review/trust the exact
   commands; installation does not grant trust. Restart Desktop before testing
@@ -174,7 +178,9 @@ installer migration/removal and quoting, nonblocking errors, HTTP headers,
 redirect rejection and response limits. Additional checks execute the injected
 query command with quoted paths, verify read-only ACL enforcement, and ensure
 ordinary/opt-out prompts do not trigger implicit network searches. No test
-framework dependency is needed.
+framework dependency is needed. Installer commands run in POSIX sh or Windows
+cmd (`commandWindows`); injected Windows query commands run in PowerShell.
+POSIX mode-bit checks are not applied to Windows ACLs.
 
 TypeScript rewrite verification on 2026-09-14: 12 Node tests passed, compiled with
 strict TypeScript. A real Codex CLI session using the existing ChatGPT login

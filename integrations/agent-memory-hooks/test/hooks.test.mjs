@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exec, spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { promisify } from 'node:util';
 import { Memory } from '../dist/memory.js';
@@ -14,7 +14,7 @@ import * as zcode from '../dist/adapters/zcode.js';
 import * as standard from '../dist/adapters/standard.js';
 
 function setup(t, client = 'zcode') {
-  const dir = mkdtempSync(join(tmpdir(), "memory ' test-"));
+  const dir = mkdtempSync(join(tmpdir(), "memory ' $(echo expanded) `echo expanded` test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const config = join(dir, 'memory.json');
   writeFileSync(config, JSON.stringify({ endpoint: 'http://127.0.0.1:8420', user_key: 'test-key', team_id: 'team', agent_id: 'agent' }));
@@ -129,18 +129,22 @@ test('install migrates old hooks, preserves providers, quotes paths and removes 
     const result = client === 'codex' ? data.hooks : data.hooks.events;
     assert.equal(result.Stop.length, 2);
     if (client === 'codex') {
-      const command = result.UserPromptSubmit[0].hooks[0].command;
+      const entry = result.UserPromptSubmit[0].hooks[0];
+      const command = entry.command;
       assert.ok(command.includes(quote(config)));
       // Execute generated shell command with quote-bearing path; no trust settings are edited.
-      const run = spawnSync('/bin/sh', ['-c', command], { input: '{}', encoding: 'utf8' });
-      assert.equal(run.status, 0); assert.deepEqual(JSON.parse(run.stdout), {});
+      assert.equal(typeof entry.commandWindows, 'string');
+      const run = process.platform === 'win32'
+        ? spawnSync(entry.commandWindows, { shell: process.env.ComSpec || 'cmd.exe', input: '{}', encoding: 'utf8' })
+        : spawnSync('/bin/sh', ['-c', command], { input: '{}', encoding: 'utf8' });
+      assert.equal(run.status, 0, run.error?.message || run.stderr); assert.deepEqual(JSON.parse(run.stdout), {});
       assert.ok(command.includes(script));
     }
     assert.equal(install(settings, config, client, true), true);
     const removed = JSON.parse(readFileSync(settings, 'utf8'));
     assert.deepEqual((client === 'codex' ? removed.hooks : removed.hooks.events).Stop, [{ hooks: [other] }]);
     assert.equal(install(settings, config, client, true), false);
-    assert.equal(statSync(settings).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(statSync(settings).mode & 0o777, 0o600);
   }
   assert.equal(readdirSync(dir).filter(x => x.endsWith('.bak')).length, 4);
 });
@@ -248,8 +252,12 @@ test('the injected shell command executes read-only queries with quoted paths an
   const guide = await memory.handle(event('UserPromptSubmit', { prompt: 'previous agreement?' }));
   const command = guide.split('\n').find(line => line.includes(" --query 'search keywords'"));
   const query = "agreement ' $(echo should-not-execute) `echo neither`";
-  const run = promisify(exec);
-  const actual = command.replace("'search keywords'", quote(query));
+  const windows = process.platform === 'win32';
+  const quotedQuery = windows ? "'" + query.replaceAll("'", "''") + "'" : quote(query);
+  const actual = command.replace("'search keywords'", quotedQuery);
+  const run = cmd => promisify(execFile)(windows ? 'powershell.exe' : '/bin/sh', windows
+    ? ['-NoProfile', '-NonInteractive', '-Command', cmd + '; exit $LASTEXITCODE']
+    : ['-c', cmd]);
   const output = await run(actual);
   assert.match(JSON.parse(output.stdout).context, /remembered agreement/);
   assert.equal(requests.at(-1).body.query, query);
@@ -263,4 +271,20 @@ test('the injected shell command executes read-only queries with quoted paths an
     return true;
   });
   assert.equal(requests.at(-1).url, '/v3/meta/acl/check');
+});
+
+test('installer --settings targets the explicit Desktop file and preserves its providers', t => {
+  const { config, dir } = setup(t);
+  const settings = join(dir, 'desktop-config.json');
+  const original = { provider: { existing: { options: { apiKey: 'untouched' } } } };
+  writeFileSync(settings, JSON.stringify(original));
+  const args = [fileURLToPath(new URL('../dist/install.js', import.meta.url)),
+    '--client', 'zcode', '--settings', settings, '--config', config];
+  for (const remove of [false, true]) {
+    const run = spawnSync(process.execPath, [...args, ...(remove ? ['--remove'] : [])], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.error?.message || run.stderr);
+    const result = JSON.parse(readFileSync(settings, 'utf8'));
+    assert.deepEqual(result.provider, original.provider);
+    assert.equal(result.hooks.events.UserPromptSubmit.length, remove ? 0 : 1);
+  }
 });
