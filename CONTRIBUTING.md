@@ -59,7 +59,8 @@ it standalone (usually `cd <module> && npm install && npm run dev`).
 ## Submitting changes
 
 1. Fork the repo
-2. Cut a feature branch off `master` or the latest `develop_*` branch
+2. Cut a feature branch from the repository's current default development
+   branch
    ```bash
    git checkout -b fix/xxx-issue
    ```
@@ -69,8 +70,9 @@ it standalone (usually `cd <module> && npm install && npm run dev`).
    npm test          # or pnpm test
    ```
 4. Commit using Conventional Commits + DCO sign-off (see below)
-5. Push and open a PR against `develop_server_team` or `master` (follow the
-   maintainer's latest guidance)
+5. Push to your fork and open a PR against the same upstream development
+   branch you based your work on, unless maintainers ask you to target a
+   different branch
 6. Get through CI + review, then merge
 
 ## Commit conventions

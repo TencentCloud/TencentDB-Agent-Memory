@@ -59,9 +59,8 @@ export interface L1RunnerResult {
   /**
    * True iff there are still L0 rows past the cursor that this run did not
    * consume. See pipeline-manager.ts L1RunnerResult for the full semantics.
-   * Currently only consumed by the standalone MemoryPipelineManager; the
-   * service-mode worker pipeline (this class) does not yet honor this flag.
-   * TODO: extend pipeline-worker to drain backlog via task re-enqueue.
+   * In service mode, a full backlog is drained immediately, while a small
+   * tail re-arms the L1 idle timer for a later drain.
    */
   hasMore?: boolean;
   /** True iff the over-fetch returned exactly 2N rows — drain via direct enqueue. */
