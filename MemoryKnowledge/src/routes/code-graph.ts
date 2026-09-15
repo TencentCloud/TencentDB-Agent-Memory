@@ -16,7 +16,7 @@ import { Hono } from "hono";
 
 import type { CodeGraphService } from "../store/index.js";
 import type { SyncStatus } from "../store/index.js";
-import { executeTool as executeCodeTool } from "../engines/code/index.js";
+import { executeCodeToolWithNlRewrite, type ResolveLlm } from "../engines/code/index.js";
 import { toCodeGraphToolName, CODEGRAPH_QUERY_TOOL_NAMES } from "./tools.js";
 import {
   extractIdFields,
@@ -33,6 +33,8 @@ export interface CodeGraphRouteDeps {
   instancePool: CodeGraphInstancePool;
   /** Public base URL for service_url; should already include the API prefix (e.g. http://host:8421/v3). */
   publicBaseUrl: string;
+  /** Optional: rewrite CJK explore/search queries when the first hit is empty. */
+  resolveLlm?: ResolveLlm;
 }
 
 // ───────────────────────── Query Specs ─────────────────────────
@@ -175,7 +177,7 @@ function buildToolParams(
 
 export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
   const app = new Hono();
-  const { cgService, instancePool, publicBaseUrl } = deps;
+  const { cgService, instancePool, publicBaseUrl, resolveLlm } = deps;
 
   // ═══════════════════ Management ═══════════════════
 
@@ -353,7 +355,10 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       if (!toolName) {
         return c.json(wrapError(403, `unknown tool: ${action}`), 403);
       }
-      const result = await executeCodeTool(instance, toolName, built.params);
+      const result = await executeCodeToolWithNlRewrite(instance, toolName, built.params, {
+        serviceId,
+        resolveLlm,
+      });
       return c.json(wrapOk(result), result.isError ? 500 : 200);
     });
   }
