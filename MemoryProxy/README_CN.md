@@ -196,6 +196,7 @@ Anthropic Messages 客户端：
 | `POST` | `/v3/instance/proxy-destroy` | 运维口：实例销毁时清 COS 缓存 |
 | `GET/PUT/DELETE` | `/v3/admin/rate-limits` | 查询 / 修改实例 × 模型 TPM/QPM |
 | `GET`  | `/health` | 运行时健康检查（含 `storage.effective`） |
+| `GET`  | `/models`、`/v1/models`、`/<agent>/<spaceId>/models` | 根据 `creditPricing.models` 返回 OpenAI 兼容模型列表 |
 | `GET`  | `/whoami` | API Key → keyId（纯文本，便于 curl） |
 
 ## 配置说明
