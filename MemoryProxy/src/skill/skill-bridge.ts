@@ -637,7 +637,11 @@ export function createSkillBridgeHandler(
       } catch {
         return envelope(50001, `${TAG} files/download: failed to parse core response`, 502);
       }
-      if (parsed.code !== 0 || !parsed.data?.content) {
+      // `content: ""` 是合法的:Core 两种编码都接受零字节资源。原来用 `!content`
+      // 判失败,于是一个真实存在的空文件返回的不是 0 字节,而是整个信封 —— 调用方
+      // 按说明 `curl -o` 存下来,得到一个装着 JSON 的"脚本"。这里只把「字段缺失 /
+      // 类型不对」当异常,空字符串照常走解码。
+      if (parsed.code !== 0 || typeof parsed.data?.content !== "string") {
         return new Response(coreText, {
           status: coreResp.status,
           headers: { "content-type": "application/json" },
