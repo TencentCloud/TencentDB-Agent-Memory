@@ -18,6 +18,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getEnv } from "./env.js";
 import { report } from "../core/report/reporter.js";
 import type { Logger } from "../core/types.js";
+import { compareVersionXYZ, parseVersionXYZ } from "./ensure-hook-policy.js";
 
 /**
  * Resolve a preferred temporary directory for memory-tdai operations.
@@ -61,11 +62,24 @@ export interface EmbeddedAgentRuntimeLike {
 }
 
 let _preferredAgentRuntime: EmbeddedAgentRuntimeLike | undefined;
+let _preferredOpenClawVersion: unknown;
+
+const SYSTEM_PROMPT_OVERRIDE_MIN_VERSION: readonly [number, number, number] = [
+  2026, 4, 7,
+];
 
 export function setPreferredEmbeddedAgentRuntime(
   agentRuntime: EmbeddedAgentRuntimeLike | undefined,
+  openClawVersion?: unknown,
 ): void {
   _preferredAgentRuntime = agentRuntime;
+  _preferredOpenClawVersion = openClawVersion;
+}
+
+export function shouldPassExtraSystemPrompt(openClawVersion: unknown): boolean {
+  const parsed = parseVersionXYZ(openClawVersion);
+  if (!parsed) return true;
+  return compareVersionXYZ(parsed, SYSTEM_PROMPT_OVERRIDE_MIN_VERSION) < 0;
 }
 
 function resolveInjectedRunEmbeddedPiAgent(
@@ -436,12 +450,15 @@ export class CleanContextRunner {
 
       // Phase 2: Embedded agent run (LLM call + tool calls)
       const agentStartMs = Date.now();
-      // extraSystemPrompt: fallback for openclaw < 2026.4.7 which does not support
-      // config.agents.defaults.systemPromptOverride. On newer versions the
-      // override takes precedence and this becomes a no-op append.
+      // extraSystemPrompt is only needed for OpenClaw builds that predate
+      // config.agents.defaults.systemPromptOverride. Newer builds append it
+      // after the override, duplicating the full extraction system prompt.
       const effectiveSystemPrompt =
         params.systemPrompt ||
         "You are a precise data extraction and generation assistant. Follow the user instructions exactly. Respond only with the requested output format.";
+      const extraSystemPrompt = shouldPassExtraSystemPrompt(_preferredOpenClawVersion)
+        ? effectiveSystemPrompt
+        : undefined;
       const result = await runEmbeddedPiAgent({
         sessionId,
         sessionFile,
@@ -459,7 +476,7 @@ export class CleanContextRunner {
         // If a provider (e.g. qwencode) rejects empty tools[], users should
         // switch to StandaloneLLMRunner via LLM configuration instead.
         disableTools: !this.options.enableTools,
-        extraSystemPrompt: effectiveSystemPrompt,
+        ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
         streamParams: {
           maxTokens: params.maxTokens,
         },
