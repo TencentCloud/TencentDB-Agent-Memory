@@ -95,6 +95,11 @@ export class SerialQueue {
       entry.reject(new Error("Queue cleared"));
     }
     this.queue = [];
+    if (!this.running) {
+      const resolvers = this.idleResolvers;
+      this.idleResolvers = [];
+      for (const resolve of resolvers) resolve();
+    }
   }
 
   private drain(): void {
