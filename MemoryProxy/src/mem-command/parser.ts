@@ -14,6 +14,23 @@
 
 import { resolveAgentAdapter } from "../agent-adapters/index.js";
 
+/**
+ * content 里是否含工具回执块：Anthropic 的 `tool_result`（`role:"user"` + content 数组）
+ * 与 Responses 的 `function_call_output`。这类消息没有用户键入的文本，
+ * 与 pre-intercept.ts::hasToolResult 同一口径。
+ */
+function hasToolResultBlock(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((block) => {
+    const b = block as Record<string, unknown> | null | undefined;
+    return (
+      !!b &&
+      typeof b === "object" &&
+      (b.type === "tool_result" || b.type === "function_call_output")
+    );
+  });
+}
+
 export interface ParsedMemCommand {
   /** 命令名（小写），如 "sync"、"create-skill"、"help" */
   command: string;
@@ -71,7 +88,28 @@ export function parseMemCommand(
   if (options?.checkFirst) {
     targetMsg = messages.find((m: any) => m && m.role === "user");
   } else {
-    targetMsg = messages[messages.length - 1];
+    // 真机上 CC 会在用户输入后面再挂一条 `role:"system"` 的提示（形如
+    // `<total_tokens>… tokens left</total_tokens>`），取"最后一条"就会漏掉命令。
+    // 这里从尾部往回找最近一条**带文本的 user 消息**（最多回看 6 条，
+    // 避免把历史里很久以前的命令当成当前输入重放）。
+    const adapterForPick = resolveAgentAdapter(agentSource);
+    for (let i = messages.length - 1; i >= 0 && i >= messages.length - 6; i--) {
+      const m = messages[i];
+      if (!m) continue;
+      // OpenAI Chat 形态的工具回执（`role:"tool"` / 历史 `role:"function"`）表示本 turn 是
+      // 工具或 Session Init 表单的续接，不是新的用户输入。继续回看会把历史里那条命令重放
+      // 一次 —— 真机 Hermes：答复资产确认后 mem:session-reset 被连着重放，同一张表单连问三次。
+      if (m.role === "tool" || m.role === "function") return null;
+      if (m.role !== "user") continue;
+      const probe = adapterForPick.extractUserText(m.content);
+      if (typeof probe === "string" && probe.trim().length > 0) { targetMsg = m; break; }
+      // Anthropic 形态的工具回执（`role:"user"` + content[{type:"tool_result"}]）同样表示
+      // 本 turn 是工具 / Session Init 表单的续接：它没有 text block，extractUserText 返回
+      // null，若继续回看就会命中历史里那条已经执行过的 `mem:` 命令并重放。
+      // 真机：Claude Code 提交表单后 mem:session-reset 被重放，同一张表单反复弹出。
+      if (hasToolResultBlock(m.content)) return null;
+    }
+    if (!targetMsg) targetMsg = messages[messages.length - 1];
   }
   if (!targetMsg || targetMsg.role !== "user") return null;
   const lastMsg = targetMsg;
@@ -81,7 +119,22 @@ export function parseMemCommand(
   const text = adapter.extractUserText(lastMsg.content);
   if (text === null) return null;
 
-  return parseCommandFromText(text);
+  const direct = parseCommandFromText(text);
+  if (direct) return direct;
+
+  // 兜底：客户端会把用户输入与自己的元数据拆成多个 text 块，而 adapter 只取**最后一块**
+  // （Claude Code 2.x 常把 `<system-reminder>` 追加在用户输入之后，于是最后一块反而是 reminder）。
+  // 这种情况下逐块再试一次——只要某一块是合法 mem 命令就认，避免命令被静默当成普通提问。
+  if (Array.isArray((lastMsg as { content?: unknown }).content)) {
+    for (const block of (lastMsg as { content: unknown[] }).content) {
+      const b = block as Record<string, unknown> | null | undefined;
+      if (!b || typeof b !== "object") continue;
+      if ((b.type !== "text" && b.type !== "input_text") || typeof b.text !== "string") continue;
+      const parsed = parseCommandFromText(b.text);
+      if (parsed) return parsed;
+    }
+  }
+  return null;
 }
 
 /**
@@ -99,6 +152,19 @@ export function parseMemCommand(
 export function parseCommandFromText(text: string): ParsedMemCommand | null {
   // trim 后判断
   const trimmed = text.trim();
+
+  // 客户端会把用户输入和自己的内容拼在一条消息里（Claude Code 2.x 追加
+  // `<system-reminder>…`：可能是同一 content 数组的第二个 text 块，也可能在同一块里换行追加）。
+  // 这种拼接会让下面"按整段文本取命令名"得到 `session-reset\n<system-reminder>…`，
+  // 与 `session-reset` 不等，命令于是永远认不出来——真机表现是用户发了 mem:session-reset，
+  // 会话仍停在 bypassed/pending，模型把它当普通提问回答。
+  // 因此先按**首行**再判一次：命令写在第一行就认（同一行后面还有别的内容仍按原规则当普通对话，
+  // 例如 `mem:help 你好` 不受影响）。
+  const firstLine = trimmed.split(/\r?\n/, 1)[0].trim();
+  if (firstLine !== trimmed) {
+    const byFirstLine = parseCommandFromText(firstLine);
+    if (byFirstLine) return byFirstLine;
+  }
 
   // 必须以 mem: 开头（大小写不敏感）
   if (!trimmed.toLowerCase().startsWith("mem:")) return null;
