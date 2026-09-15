@@ -40,24 +40,30 @@ export function createStorageContext(
   agentName: string,
   sessionId: string,
 ): StorageContext {
-  const dataDir = join(dataRoot, agentName);
+  const safeAgentName = sanitizeStoragePath(agentName);
+  const safeSessionId = sanitizeStoragePath(sessionId);
+  const dataDir = join(dataRoot, safeAgentName);
   return Object.freeze({
     dataRoot,
     dataDir,
     refsDir: join(dataDir, "refs"),
     mmdsDir: join(dataDir, "mmds"),
-    offloadJsonl: join(dataDir, `offload-${sessionId}.jsonl`),
+    offloadJsonl: join(dataDir, `offload-${safeSessionId}.jsonl`),
     stateFile: join(dataDir, "state.json"),
-    agentName,
-    sessionId,
+    agentName: safeAgentName,
+    sessionId: safeSessionId,
   });
 }
 
 // ─── SessionKey Parsing ──────────────────────────────────────────────────────
 
-/** Sanitize a string for use as a directory/file name */
-function sanitizePath(s: string): string {
-  return s.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/\.{2,}/g, "_");
+/** Sanitize a string for use as a single directory/file-name segment. */
+export function sanitizeStoragePath(s: string, fallback = "unknown"): string {
+  const safe = String(s ?? "")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+    .replace(/\.{2,}/g, "_");
+  const trimmed = safe.trim();
+  return trimmed.length === 0 || trimmed === "." ? fallback : safe;
 }
 
 /**
@@ -84,8 +90,8 @@ export function parseSessionKey(
     agentName = `${agentName}-w${workerMatch[1]}`;
   }
   return {
-    agentName: sanitizePath(agentName),
-    sessionId: sanitizePath(sessionId),
+    agentName: sanitizeStoragePath(agentName),
+    sessionId: sanitizeStoragePath(sessionId),
   };
 }
 
@@ -117,9 +123,10 @@ export async function registerSession(
   } catch {
     /* corrupt file, start fresh */
   }
+  const safeSessionId = sanitizeStoragePath(realSessionId, ctx.sessionId);
   registry[sessionKey] = {
-    sessionId: realSessionId,
-    offloadFile: `offload-${realSessionId}.jsonl`,
+    sessionId: safeSessionId,
+    offloadFile: `offload-${safeSessionId}.jsonl`,
     updatedAt: new Date().toISOString(),
   };
   await writeFile(registryPath, JSON.stringify(registry, null, 2), "utf-8");

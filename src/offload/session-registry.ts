@@ -6,7 +6,7 @@
  * its own isolated OffloadStateManager + StorageContext.
  */
 import { OffloadStateManager } from "./state-manager.js";
-import { parseSessionKey } from "./storage.js";
+import { parseSessionKey, sanitizeStoragePath } from "./storage.js";
 
 /** Matches internal memory-pipeline sessions (e.g. memory-{taskId}-session-{ts}). */
 const INTERNAL_SESSION_RE = /memory-.*-session-\d+/;
@@ -68,8 +68,8 @@ export class SessionRegistry {
       // sessionKey doesn't match "agent:<name>:<id>" format.
       // Use a sanitized sessionKey as both agentName and sessionId
       // so ctx is always initialized (avoids "ctx not initialized" errors).
-      const fallbackName = sessionKey.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 64) || "unknown";
-      const fallbackSessionId = realSessionId || `fallback-${Date.now()}`;
+      const fallbackName = sanitizeStoragePath(sessionKey).slice(0, 64) || "unknown";
+      const fallbackSessionId = sanitizeStoragePath(realSessionId || `fallback-${Date.now()}`);
       await mgr.init(this._dataRoot, fallbackName, fallbackSessionId);
     }
 
