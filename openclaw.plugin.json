@@ -149,6 +149,7 @@
         "description": "Context Offload 设置 — 多层上下文压缩系统（独立开关，默认关闭）",
         "properties": {
           "enabled": { "type": "boolean", "default": false, "description": "是否启用 Context Offload（默认关闭，不影响 Memory 功能）" },
+          "mode": { "type": "string", "enum": ["local", "backend", "collect"], "description": "Offload 运行模式：local 使用本地模型配置，backend 使用后端服务，collect 仅采集并异步抽取但不接管 Context Engine。未填写时若配置 backendUrl 则自动使用 backend，否则使用 local" },
           "model": { "type": "string", "description": "Offload 使用的 LLM 模型（格式: provider/model），未填写时使用 openclaw 默认模型" },
           "temperature": { "type": "number", "default": 0.2, "description": "LLM 温度参数" },
           "disableThinking": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["vllm", "deepseek", "dashscope", "openai", "anthropic", "kimi", "gemini"] }], "default": false, "description": "禁用推理模型思考过程（仅 local 模式）。可选策略: \"vllm\"/\"deepseek\"/\"dashscope\"/\"openai\"/\"anthropic\"/\"kimi\"/\"gemini\"。" },
@@ -163,6 +164,9 @@
           "mmdMaxTokenRatio": { "type": "number", "default": 0.2, "description": "MMD 注入 token 预算比例" },
           "backendUrl": { "type": "string", "description": "后端服务 URL（如 https://offload-api.example.com），配置后 L1/L1.5/L2/L4 走后端" },
           "backendApiKey": { "type": "string", "description": "后端 API 认证 token" },
+          "offloadRetentionDays": { "type": "number", "default": 0, "description": "Offload 数据保留天数。0 表示不清理；非 0 时最小有效值为 3" },
+          "logMaxSizeMb": { "type": "number", "default": 50, "description": "Offload 调试日志总大小上限（MB）。超过后会截断最大的日志文件；0 表示禁用限制" },
+          "userId": { "type": "string", "description": "后端 /store 上报使用的用户 ID；未设置时自动使用本机非回环 IPv4 或 fallback" },
           "backendTimeoutMs": { "type": "number", "default": 10000, "description": "后端调用超时（毫秒）" }
         }
       }
