@@ -622,6 +622,26 @@ export function createSkillBridgeHandler(
       const elapsed = (deps.now ?? Date.now)() - t0;
       console.log(`${TAG} sub=files/download status=${coreResp.status} elapsed=${elapsed}ms`);
 
+      // 埋点: upstream 已响应(含 4xx/5xx), 与主路径末尾那条"已响应"的 emit 对称
+      // (故意不写行号 —— 上面那条注释里的 `:822` 就是这么烂掉的)。
+      // 上面那个 catch 分支早就补过"未响应也算一次调用", 唯独成功/已响应这条落下了 ——
+      // 于是 curl 视角每下载一次, CH 就少一条。这里发, 是因为下面三个 return
+      // (状态非 2xx 原样透传 / 信封不可解析 / 解出字节) 都算"这次调用完成了"。
+      const dlDoneKey = ids.composite_key ?? sessionKey;
+      emitBridgeToolCallTelemetry({
+        sessionKey: dlDoneKey,
+        spaceId: ids.space_id,
+        userId: ids.user_id,
+        teamId: ids.team_id,
+        agentId: ids.agent_id,
+        agentSource: ids.agent_source || agentSourceFromSessionKey(dlDoneKey),
+        bridgeSource: "skill-bridge",
+        executedEndpoint: "files/download",
+        requestBody: dlOutboundBody.slice(0, 512),
+        upstreamStatus: coreResp.status,
+        elapsedMs: (deps.now ?? Date.now)() - dlCallStart,
+      });
+
       // Core error → pass through as JSON envelope
       if (coreResp.status < 200 || coreResp.status >= 300) {
         return new Response(coreText, {
