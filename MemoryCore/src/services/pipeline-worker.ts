@@ -1034,7 +1034,29 @@ export class PipelineWorker {
     if (task.type === "L2") {
       // If L2 was skipped (no new L1 records), don't cascade to L3 or arm timer
       if ((task as any)._l2Skipped) {
-        this.logger?.debug?.(`${TAG} [${task.instanceId}/${task.sessionId}] L2 skipped (no new data), not arming timer or enqueuing L3`);
+        // L2 made no scene change — common once the scene set is at maxScenes,
+        // so CREATE is blocked and no existing scene is updated. Don't arm the
+        // L2 timer or advance L2 state, but DO still enqueue L3. Otherwise,
+        // once every session's L1 is fully drained, no L2 ever produces a
+        // change, so L3 is never reached and the persona can never
+        // (re)generate — even with request_persona_update set — and the dead
+        // end recurs after every restart (l2LastRunTime is in-memory, so the
+        // first post-restart L2 for each session is a cold-start skip).
+        // PersonaTrigger.shouldGenerate() (checkpoint-only, no LLM) stays the
+        // sole gate, so this is cheap and idempotent: it returns should=false
+        // in the steady state and only generates on request/threshold/recovery.
+        this.logger?.debug?.(`${TAG} [${task.instanceId}/${task.sessionId}] L2 skipped (no new data); enqueuing L3 anyway (PersonaTrigger gates actual generation)`);
+        await this.backend.enqueueTask({
+          id: `L3-${task.id}`,
+          type: "L3",
+          instanceId: task.instanceId,
+          sessionId: task.sessionId,
+          teamId: tid,
+          agentId: aid,
+          priority: 2,
+          data: task.data ? { ...task.data, ...serializeTraceContext() } : { teamId: tid, agentId: aid, ...serializeTraceContext() },
+          createdAt: now,
+        });
         return;
       }
 
