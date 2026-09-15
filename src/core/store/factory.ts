@@ -13,7 +13,7 @@ import type { IMemoryStore, IEmbeddingService, StoreLogger } from "./types.js";
 import { VectorStore } from "./sqlite.js";
 import { TcvdbMemoryStore } from "./tcvdb.js";
 import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
-import type { EmbeddingService } from "./embedding.js";
+import type { EmbeddingService, EmbeddingConfig } from "./embedding.js";
 import { createBM25Encoder } from "./bm25-local.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
 
@@ -91,16 +91,28 @@ export function createStoreBundle(
     default: {
       // ── Embedding service (only when enabled) ──
       let embeddingService: EmbeddingService | undefined;
-      if (config.embedding.enabled && config.embedding.provider !== "local" && config.embedding.apiKey) {
+      // Fix #678: provider="local" (offline) benötigt keinen apiKey.
+      // Remote-Provider (alle außer "none"/"local") erfordern weiterhin apiKey.
+      const emb = config.embedding;
+      if (emb.enabled && emb.provider !== "none" &&
+          (emb.provider === "local" || emb.apiKey)) {
         embeddingService = createEmbeddingService({
-          provider: config.embedding.provider,
-          baseUrl: config.embedding.baseUrl,
-          apiKey: config.embedding.apiKey,
-          model: config.embedding.model,
-          dimensions: config.embedding.dimensions,
-          sendDimensions: config.embedding.sendDimensions,
-          maxInputChars: config.embedding.maxInputChars,
-        }, logger);
+          provider: emb.provider,
+          baseUrl: emb.baseUrl,
+          apiKey: emb.apiKey,
+          model: emb.model,
+          // modelPath ist nicht im Config-Interface — LocalEmbeddingService
+          // nutzt sein Default-Modell (embeddinggemma-300m), wenn unset.
+          modelCacheDir: emb.modelCacheDir,
+          dimensions: emb.dimensions,
+          sendDimensions: emb.sendDimensions,
+          maxInputChars: emb.maxInputChars,
+        } as EmbeddingConfig, logger);
+        // Fix #678: Warmup starten, damit das lokale Modell (GGUF) im
+        // Hintergrund geladen wird. No-op für Remote-Provider.
+        if (embeddingService && typeof embeddingService.startWarmup === "function") {
+          embeddingService.startWarmup();
+        }
       }
 
       // dimensions from config (0 when provider="none" → vec0 deferred)

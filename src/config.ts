@@ -378,7 +378,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   const embeddingProxyUrl = str(embeddingGroup, "proxyUrl");
 
   // provider="none" → embedding disabled (default for zero-config users)
-  // provider="local" → no longer exposed to users; treated as disabled at entry level
+  // provider="local" → fully-offline embedding via node-llama-cpp (no API key)
   // provider="qclaw" → requires proxyUrl for local proxy forwarding
   // Any other value → remote mode (requires apiKey, baseUrl, model, dimensions)
   let embeddingProvider: string;
@@ -389,13 +389,11 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     embeddingProvider = "none";
     embeddingEnabled = false;
   } else if (embeddingProviderRaw === "local") {
-    // Local embedding is not exposed to users; treat as disabled at entry level.
-    // Internal LocalEmbeddingService code is preserved but not reachable from config.
-    embeddingProvider = "none";
-    embeddingEnabled = false;
-    embeddingConfigError =
-      "Local embedding provider is not available in user config. " +
-      "Please configure a remote embedding provider (e.g. openai, deepseek). Embedding has been disabled.";
+    // Fully-offline embedding (node-llama-cpp + embeddinggemma-300m, 768-dim).
+    // No API key, baseUrl or model required — defaults are applied by
+    // LocalEmbeddingService. Fix #678: was previously rewritten to "none".
+    embeddingProvider = "local";
+    embeddingEnabled = true;
   } else if (embeddingProviderRaw === "qclaw") {
     // qclaw provider: requires proxyUrl for local proxy forwarding
     const missingFields: string[] = [];
