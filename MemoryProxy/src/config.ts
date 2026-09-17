@@ -80,6 +80,9 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     // AssetReflectionInjector 被注册。marker 仍是 opt-in（不带 `/analyse/` 段
     // 的请求完全无感），只是把「必须显式开启」的负担从运营侧移除。
     assetReflection: { markerOptIn: true },
+    skillQueueStrategy: "session_init",
+    forgettingThreshold: 3,
+    recentQueueWindow: 3,
   },
   // Extraction (write-side) defaults to fully permissive so that a config
   // without the `extraction:` block behaves identically to the pre-gate
@@ -399,6 +402,15 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     injection: {
       enabled: yaml.injection?.enabled ?? DEFAULT_CONFIG.injection.enabled,
       injectors: yaml.injection?.injectors ?? DEFAULT_CONFIG.injection.injectors,
+      skillQueueStrategy: yaml.injection?.skillQueueStrategy ?? DEFAULT_CONFIG.injection.skillQueueStrategy,
+      forgettingThreshold: Number.isInteger(yaml.injection?.forgettingThreshold)
+        && (yaml.injection?.forgettingThreshold as number) > 0
+        ? yaml.injection?.forgettingThreshold
+        : DEFAULT_CONFIG.injection.forgettingThreshold,
+      recentQueueWindow: Number.isInteger(yaml.injection?.recentQueueWindow)
+        && (yaml.injection?.recentQueueWindow as number) > 0
+        ? yaml.injection?.recentQueueWindow
+        : DEFAULT_CONFIG.injection.recentQueueWindow,
       externalGatewayUrl: typeof yaml.injection?.externalGatewayUrl === "string" && yaml.injection.externalGatewayUrl.trim() !== ""
         ? yaml.injection.externalGatewayUrl.trim().replace(/\/$/, "")
         : undefined,
