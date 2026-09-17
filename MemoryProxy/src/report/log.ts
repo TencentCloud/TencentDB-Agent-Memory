@@ -30,7 +30,6 @@ let fileLogger: FileLogger | null = null;
 let backend: ILogBackend = new NoopLogBackend();
 let minLevel: LogLevel = "info";
 
-const ERROR_CAUSE_MESSAGE_MAX_LENGTH = 500;
 const ERROR_CAUSE_STRING_MAX_LENGTH = 200;
 
 function serializeErrorCause(cause: unknown): LogAttrs {
@@ -38,7 +37,7 @@ function serializeErrorCause(cause: unknown): LogAttrs {
 
   const attrs: LogAttrs = {};
   const source = cause as Record<string, unknown>;
-  const stringFields = ["name", "message", "code", "syscall", "address"] as const;
+  const stringFields = ["name", "code", "syscall", "address"] as const;
 
   for (const field of stringFields) {
     let value: unknown;
@@ -48,10 +47,7 @@ function serializeErrorCause(cause: unknown): LogAttrs {
       continue;
     }
     if (typeof value !== "string") continue;
-    const maxLength = field === "message"
-      ? ERROR_CAUSE_MESSAGE_MAX_LENGTH
-      : ERROR_CAUSE_STRING_MAX_LENGTH;
-    attrs[`error.cause.${field}`] = value.slice(0, maxLength);
+    attrs[`error.cause.${field}`] = value.slice(0, ERROR_CAUSE_STRING_MAX_LENGTH);
   }
 
   for (const field of ["errno", "port"] as const) {

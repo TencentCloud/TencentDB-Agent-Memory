@@ -41,27 +41,31 @@ describe("structured error logging", () => {
     });
   });
 
-  it("records the name and message of a normal Error cause", () => {
+  it("records only the name of a normal Error cause", () => {
     const err = new Error("fetch failed", {
       cause: new Error("connection failed"),
     });
 
     log.error("request.failed", undefined, err);
 
-    expect(backend.errors[0]?.attrs).toMatchObject({
+    expect(backend.errors[0]?.attrs).toEqual({
+      "error.message": "fetch failed",
+      "error.name": "Error",
       "error.cause.name": "Error",
-      "error.cause.message": "connection failed",
     });
   });
 
-  it("bounds the cause message length", () => {
+  it("does not emit credential-like text from a cause message", () => {
     const err = new Error("fetch failed", {
-      cause: new Error("x".repeat(600)),
+      cause: new Error("Authorization: Bearer SUPER_SECRET apiKey=SUPER_SECRET"),
     });
 
     log.error("request.failed", undefined, err);
 
-    expect(backend.errors[0]?.attrs?.["error.cause.message"]).toBe("x".repeat(500));
+    const serialized = JSON.stringify(backend.errors[0]?.attrs);
+    expect(serialized).not.toContain("error.cause.message");
+    expect(serialized).not.toContain("Bearer SUPER_SECRET");
+    expect(serialized).not.toContain("SUPER_SECRET");
   });
 
   it("records allowlisted Node.js network error cause fields", () => {
@@ -81,7 +85,6 @@ describe("structured error logging", () => {
 
     expect(backend.errors[0]?.attrs).toMatchObject({
       "error.cause.name": "Error",
-      "error.cause.message": "connect ECONNREFUSED 127.0.0.1:8888",
       "error.cause.code": "ECONNREFUSED",
       "error.cause.errno": -4078,
       "error.cause.syscall": "connect",
@@ -116,6 +119,18 @@ describe("structured error logging", () => {
       "error.cause.syscall": "getaddrinfo",
     });
     expect(JSON.stringify(backend.errors[0]?.attrs)).not.toContain("response");
+  });
+
+  it("continues safely when an allowlisted cause getter throws", () => {
+    const cause = Object.defineProperty({ errno: -4078 }, "code", {
+      get() {
+        throw new Error("getter failed");
+      },
+    });
+    const err = new Error("fetch failed", { cause });
+
+    expect(() => log.error("request.failed", undefined, err)).not.toThrow();
+    expect(backend.errors[0]?.attrs?.["error.cause.errno"]).toBe(-4078);
   });
 
   it("never logs non-allowlisted credentials from a cause", () => {
