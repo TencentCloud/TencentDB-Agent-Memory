@@ -46,7 +46,7 @@ import type {
   MemoryContentClearFilter,
   MemoryContentClearResult,
 } from "../types.js";
-import { DEFAULT_ISOLATION_ID } from "../types.js";
+import { serializeSourceMessageIds, DEFAULT_ISOLATION_ID } from "../types.js";
 import { TcvdbClient, TcvdbApiError } from "./client.js";
 import type { BM25LocalEncoder } from "../bm25-local.js";
 import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
@@ -134,7 +134,7 @@ const QUERY_PAGE_SIZE = 100;
 const L1_OUTPUT_FIELDS = [
   "id", "text", "type", "priority", "scene_name",
   "team_id", "user_id", "agent_id", "session_key", "session_id", "task_id", "version", "timestamp_str", "timestamp_start",
-  "timestamp_end", "metadata_json", "created_time_ms", "updated_time_ms",
+  "timestamp_end", "metadata_json", "source_message_ids_json", "created_time_ms", "updated_time_ms",
 ];
 
 /** All L0 output fields returned by query/search. */
@@ -687,6 +687,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       created_time_ms: isoToEpochMs(record.createdAt),
       updated_time_ms: isoToEpochMs(record.updatedAt),
       metadata_json: JSON.stringify(record.metadata),
+      source_message_ids_json: serializeSourceMessageIds(record.source_message_ids),
       memory_type: DEFAULT_MEMORY_TYPE,
     };
     if (!this.embeddingEnabled) doc.vector = [1];
@@ -738,6 +739,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
           created_time_ms: isoToEpochMs(record.createdAt),
           updated_time_ms: isoToEpochMs(record.updatedAt),
           metadata_json: JSON.stringify(record.metadata),
+          source_message_ids_json: serializeSourceMessageIds(record.source_message_ids),
           memory_type: DEFAULT_MEMORY_TYPE,
         };
         if (!this.embeddingEnabled) doc.vector = [1];
@@ -895,6 +897,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
           created_time: epochMsToIso(Number(doc.created_time_ms ?? 0)),
           updated_time: epochMsToIso(Number(doc.updated_time_ms ?? 0)),
           metadata_json: String(doc.metadata_json ?? "{}"),
+          source_message_ids_json: String(doc.source_message_ids_json ?? "[]"),
         }));
       }
 
@@ -927,6 +930,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
         created_time: epochMsToIso(Number(doc.created_time_ms ?? 0)),
         updated_time: epochMsToIso(Number(doc.updated_time_ms ?? 0)),
         metadata_json: String(doc.metadata_json ?? "{}"),
+        source_message_ids_json: String(doc.source_message_ids_json ?? "[]"),
       }));
     } catch (err) {
       this.logger?.warn(`${TAG} [L1-query] FAILED: ${err instanceof Error ? err.message : String(err)}`);
@@ -1833,6 +1837,23 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── v2 API: Paginated queries ─────────────────────────────
 
+  async queryL0ByIds(ids: string[], filter?: IsolationFilter): Promise<L0QueryRow[]> {
+    if (ids.length === 0) return [];
+    await this._ensureInit();
+    if (this.degraded) return [];
+    const resp = await this.client.query(this.l0Collection, {
+      documentIds: ids, retrieveVector: false, outputFields: L0_OUTPUT_FIELDS,
+      filter: joinFilter(buildIsolationConditions(filter)),
+    });
+    return (resp.documents ?? []).map((d: any) => ({
+      record_id: d.id, session_key: d.session_key ?? "", session_id: d.session_id ?? "",
+      team_id: d.team_id ?? "", user_id: d.user_id ?? "", agent_id: d.agent_id ?? "",
+      task_id: d.task_id ?? "", role: d.role ?? "", message_text: d.message_text ?? "",
+      recorded_at: d.recorded_at_ms ? new Date(d.recorded_at_ms).toISOString() : "",
+      timestamp: d.timestamp ?? d.recorded_at_ms ?? 0,
+    }));
+  }
+
   async queryL0Paginated(filter: L0PaginatedFilter): Promise<L0PaginatedResult> {
     await this._ensureInit();
     if (this.degraded) return { rows: [], total: 0 };
@@ -1951,6 +1972,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
         created_time: d.created_time_ms ? new Date(d.created_time_ms).toISOString() : "",
         updated_time: d.updated_time_ms ? new Date(d.updated_time_ms).toISOString() : "",
         metadata_json: d.metadata_json ?? "{}",
+        source_message_ids_json: d.source_message_ids_json ?? "[]",
       }));
 
       return { rows, total };
@@ -2059,6 +2081,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
         agent_id: String(doc.agent_id ?? ""),
         version: Number(doc.version ?? 0),
         metadata_json: String(doc.metadata_json ?? "{}"),
+        source_message_ids_json: String(doc.source_message_ids_json ?? "[]"),
       });
     }
     return results;
