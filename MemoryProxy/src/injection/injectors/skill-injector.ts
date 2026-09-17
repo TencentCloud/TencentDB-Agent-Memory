@@ -45,11 +45,54 @@ export interface SkillInjectorConfig {
 }
 
 /**
+ * Prompt boilerplate wrapping the `<available_skills>` listing.
+ *
+ * Mirrored from `MemoryCore/src/core/skill/prompts/skill-listing-prompt.ts`
+ * (SKILL_ENGINEERING_DESIGN appendix C.1). Kept as a physical copy — the
+ * plugin boundary rules forbid cross-plugin deep imports. Wording is adapted
+ * to reference the proxy's skill-bridge tool names (`skill_view`,
+ * `skill_patch`) instead of the design-doc's hypothetical `skill_view(name)` /
+ * `skill_manage(action='patch')` function calls. Read the `<skill_tools>`
+ * block above `<available_skills>` for the exact curl recipes.
+ *
+ * When updating either copy, update the other so the LLM sees consistent
+ * guidance regardless of which host renders the block.
+ */
+const SKILL_LISTING_HEADER =
+  "## Skills (mandatory)\n"
+  + "Before replying, scan the skills below. If a skill matches or is even partially relevant "
+  + "to your task, you MUST load it by calling the `skill_view` skill-bridge tool "
+  + "(see the `<skill_tools>` block above for the exact curl recipe) and follow its instructions. "
+  + "Err on the side of loading — it is always better to have context you don't need "
+  + "than to miss critical steps, pitfalls, or established workflows. "
+  + "Skills contain specialized knowledge — API endpoints, tool-specific commands, "
+  + "and proven workflows that outperform general-purpose approaches. Load the skill "
+  + "even if you think you could handle the task with basic tools like web_search or terminal. "
+  + "Skills also encode the user's preferred approach, conventions, and quality standards "
+  + "for tasks like code review, planning, and testing — load them even for tasks you "
+  + "already know how to do, because the skill defines how it should be done here.\n"
+  + "If a skill has issues, fix it with the `skill_patch` skill-bridge tool.\n"
+  + "After difficult/iterative tasks, offer to save the approach as a new skill "
+  + "(`skill_create`). If a skill you loaded was missing steps, had wrong commands, "
+  + "or needed pitfalls you discovered, update it before finishing.\n";
+
+const SKILL_LISTING_FOOTER =
+  "\nOnly proceed without loading a skill if genuinely none are relevant to the task.";
+
+/**
  * Wrap the pre-rendered `<available_skills>` listing from plugin into a
  * context block, with additional instructions about skill-bridge access.
+ *
+ * Layout (top → bottom, single joined string):
+ *   1. SKILL_LISTING_HEADER — English mandatory-load directive (mirrored
+ *      from MemoryCore).
+ *   2. Chinese fallback + skill-bridge/curl usage reminder.
+ *   3. `<available_skills>` listing (verbatim from core).
+ *   4. SKILL_LISTING_FOOTER — "only skip if genuinely nothing matches".
  */
 export function wrapAvailableSkillsBlock(listing: string): string {
   return [
+    SKILL_LISTING_HEADER,
     "以下是你（当前 agent）自带的云端 skill 列表。这些 skill 存储在你的 agent 名下，",
     "优先使用它们完成任务。如果你觉得自带的 skill 不够，可以用 skill_search 工具",
     "在团队的 skill 库中检索更多（跨 agent 共享）。",
@@ -57,6 +100,7 @@ export function wrapAvailableSkillsBlock(listing: string): string {
     "**重要：这些 skill 存储在云端，不能使用 read_file / tool_use 直接访问，\n必须用 Bash 执行 curl 调用上方 <skill_tools> 块中的 skill-bridge 工具。**",
     "",
     listing,
+    SKILL_LISTING_FOOTER,
   ].join("\n");
 }
 

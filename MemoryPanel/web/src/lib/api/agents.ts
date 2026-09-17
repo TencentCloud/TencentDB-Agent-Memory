@@ -1,9 +1,37 @@
 /**
- * api/agents.ts — Agent 管理（链路 A：meta/agent/* + meta/agent-fixed-asset/*）。
+ * api/agents.ts — Agent 管理（meta/agent/* + meta/agent-fixed-asset/*）。
  */
 import { getPanelSession } from '../panelSession';
 import { metaPost, metaListAll, getCurrentUser, request, ApiError } from './base';
 import type { MetaEnvelope, Agent, AssetType, AssetStatus, FixedAssetBinding } from './types';
+
+// ========================= 默认 Agent 模板 =========================
+
+export interface AgentTemplateAssetIds {
+  /** 团队 skill ID（skl-xxx） */
+  skills?: string[];
+  /** 团队 code graph ID（code-xxx） */
+  code_graphs?: string[];
+  /** 团队 wiki ID（wiki-xxx） */
+  wikis?: string[];
+}
+
+/**
+ * 默认 Agent 模板配置（agent/get-default-template / set-default-template 的 template 结构）。
+ * 注意：
+ *   - asset_ids 为团队资产 ID 快照，只允许选 visibility=team 的公共资产；
+ *   - 覆盖式写入：set 时需一次回传完整 template；
+ *   - metadata_json 为 JSON 字符串，ui.role_prompt / ui.rules_prompt 存拆分 prompt。
+ */
+export interface AgentTemplateConfig {
+  name: string;
+  description?: string | null;
+  prompt?: string | null;
+  /** 'private' | 'team'(默认) | 'restricted' */
+  visibility?: string;
+  metadata_json?: string;
+  asset_ids?: AgentTemplateAssetIds;
+}
 
 export const agentsApi = {
   /**
@@ -11,7 +39,7 @@ export const agentsApi = {
    *
    * @param teamId team ID
    * @param params.owner_user_id 可选：只返该 user owner 的 agent（"agent 私有可见性"场景，
-   *   如 Skill 面板固定资产 tab）；不传则返 team 全量。内核 `agent/list` schema 已支持
+   *   如 Skill 面板固定资产 tab）；不传则返 team 全量。`agent/list` 支持
    *   `team_id + owner_user_id` 组合过滤。
    */
   list: (teamId: string, params?: { owner_user_id?: string }) =>
@@ -59,14 +87,12 @@ export const agentsApi = {
   ) => metaPost<Agent>('agent/update', { agent_id: agentId, ...data }),
 
   /**
-   * 删除 agent：走 control 层业务路由 /api/v1/agent/delete-cascade。
+   * 删除 agent：走业务路由 /api/v1/agent/delete-cascade。
    *
    * 该路由会先把 owner_agent_id = 当前 agent 的所有 active skill 走 skill/delete，
    * 全部成功后才调 meta/agent/archive；任一 skill 删失败即中断，agent 不会被 archive，
    * 抛出 SKILL_DELETE_FAILED 让调用方给用户展示（错误 data 里带上已删的 skill_ids
-   * 和失败的 skill_id）。
-   *
-   * 内核 archiveAgent 会顺手清 chat_memory asset，这部分行为不变。
+   * 和失败的 skill_id）。归档时后端会顺手清 chat_memory asset。
    */
   delete: async (agentId: string) => {
     const session = getPanelSession();
@@ -91,26 +117,29 @@ export const agentsApi = {
     }
   },
 
-  /** 获取 agent 的资产聚合视图（binding + asset 详情） */
-  getAssets: async (agentId: string) => {
-    const detail = await metaPost<{
-      items: Array<{
-        asset_id: string;
-        asset_type: AssetType;
-        name: string;
-        description?: string;
-        status: AssetStatus;
-        visibility: string;
-        injection_mode: FixedAssetBinding['injection_mode'];
-        priority: number;
-        created_at: string;
-      }>;
+  /** 获取 agent 的资产聚合视图（binding + asset 详情）。
+   *  用 metaListAll 翻页拉全量（list-with-detail 默认 limit 20，绑定资产一多会被截断）。
+   *
+   *  applyVisibilityFilter：默认 true（屏蔽已私密的绑定，用于普通展示）。
+   *  owner 视角管理自己的资产时应传 false —— 否则自己 owner 的 private skill
+   *  会被接口过滤掉，导致 fixed tab 拿不到它的 visibility、共享/私密切换按钮消失。 */
+  getAssets: async (agentId: string, applyVisibilityFilter = true) => {
+    const items = await metaListAll<{
+      asset_id: string;
+      asset_type: AssetType;
+      name: string;
+      description?: string;
+      status: AssetStatus;
+      visibility: string;
+      injection_mode: FixedAssetBinding['injection_mode'];
+      priority: number;
+      created_at: string;
     }>('agent-fixed-asset/list-with-detail', {
       agent_id: agentId,
-      apply_visibility_filter: true,
+      apply_visibility_filter: applyVisibilityFilter,
       touch_usage: false,
     });
-    return detail.items.map((item) => ({
+    return items.map((item) => ({
       asset_id: item.asset_id,
       asset_type: item.asset_type,
       name: item.name,
@@ -153,4 +182,18 @@ export const agentsApi = {
       })),
     });
   },
+
+  /**
+   * 读取当前 team 的默认 Agent 模板（按 实例 × 团队 隔离，无权限校验）。
+   * 未配置时后端返回 `{}`，调用方以 `data.name` 是否存在判断「未配置」。
+   */
+  getDefaultTemplate: (teamId: string) =>
+    metaPost<AgentTemplateConfig>('agent/get-default-template', { team_id: teamId }),
+
+  /**
+   * 配置/覆盖当前 team 的默认 Agent 模板（仅 system_admin，否则 403 permission_denied）。
+   * 覆盖式写入：必须一次回传完整 template。
+   */
+  setDefaultTemplate: (teamId: string, template: AgentTemplateConfig) =>
+    metaPost<{ ok: boolean }>('agent/set-default-template', { team_id: teamId, template }),
 };

@@ -1,5 +1,5 @@
 /**
- * v3 元数据路由（/v3/meta/*，54 接口）。
+ * v3 元数据路由（/v3/meta/*，55 接口）。
  *
  * 对应设计文档 §7 + 实施计划 M3.3。镜像 v2-router 的 dispatch 模式：
  *   - 仅 POST，前缀 /v3/meta
@@ -80,12 +80,32 @@ function orNotFound<T>(entity: T | null, code: string, id: string): T {
 
 const OK = { ok: true } as const;
 
-// ── Route table（54 接口）──
+// ── Route table（55 接口）──
 const routeTable: Record<string, Handler> = {
   // User
   [`${V3_PREFIX}/user/create`]: bind(S.userCreateSchema, async (d, c, s) => {
     s.assertCanManageUsers(c);
     return s.createNormalUser(d);
+  }),
+  // 姊妹接口：允许 system_admin 建号时显式指定 user_key。鉴权与 /user/create 完全对称。
+  // Zod 只校验 username + user_key 非空，user_id 若被传入会被 zod strip 忽略。
+  [`${V3_PREFIX}/user/create-with-key`]: bind(S.userCreateWithKeySchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.createNormalUserWithKey(d);
+  }),
+  // 外部认证（如 WOA）登录后判断是否初次：按 (auth_provider, external_id) 查 user。
+  // 查 core 既有的 meta_users.external_id；无匹配=初次。
+  [`${V3_PREFIX}/user/find-by-external`]: bind(S.userFindByExternalSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.findUserByExternalId(d.external_id, d.auth_provider);
+  }),
+  // 外部认证绑定存量账号：把外部 IdP 唯一 id 写入 user 的 external_id。
+  // auth_provider 一并写入外部域，保证与 find-by-external 的读取同域
+  // （只写 external_id 不写域 → 下次反查落空）。
+  // 存量账号绑定后仍可用原 user_key 登录，外部认证只是新增一种入口。
+  [`${V3_PREFIX}/user/bind-external`]: bind(S.userBindExternalSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.bindExternalIdToUser(d.user_id, d.external_id, d.auth_provider, d.display_name);
   }),
   [`${V3_PREFIX}/user/get`]: bind(S.userGetSchema, async (d, c, s) => {
     const userId = await resolveUserId(s, d);
@@ -304,6 +324,24 @@ const routeTable: Record<string, Handler> = {
     s.assertCallerIsOwner(d.user_id, c.userId!);
     return s.configParams.setUserConfigForCaller(d);
   }),
+
+  // InstanceUpstreamConfig
+  [`${V3_PREFIX}/instance-upstream/set`]: bind(S.instanceUpstreamSetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.setInstanceUpstreamConfig(d);
+  }),
+  [`${V3_PREFIX}/instance-upstream/get`]: bind(S.instanceUpstreamGetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.getInstanceUpstreamConfig(d.agent_source, d.type);
+  }),
+  [`${V3_PREFIX}/instance-upstream/list`]: bind(S.instanceUpstreamListSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.listInstanceUpstreamConfigs(d);
+  }),
+  [`${V3_PREFIX}/instance-upstream/reset`]: bind(S.instanceUpstreamResetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.resetInstanceUpstreamConfig(d.agent_source, d.type);
+  }),
 };
 
 /** 已注册的 v3 路由路径（供测试 / 文档）。 */
@@ -319,6 +357,7 @@ function mapErrorCode(code: string): number {
       return 403;
     case "asset_not_bindable":
     case "duplicate_entry":
+    case "duplicate_user_key":
     case "key_limit_exceeded":
     case "user_limit_exceeded":
     case "team_limit_exceeded":

@@ -19,10 +19,10 @@
 
 import type { Context } from "hono";
 import type { Redis } from "ioredis";
-import { extractBearerToken } from "../opik.js";
-import { apiKeyToKeyId } from "../opik.js";
 import { getSessionStore } from "../session/store.js";
-import { verifyUserKey, isAuthEnabled } from "../auth.js";
+import type { BindingRepo } from "../db/binding-repo.js";
+import { KvBindingRepo } from "../db/kv-binding-repo.js";
+import { RedisBindingRepo } from "../db/binding-repo.js";
 // getSkillExtractTrigger / KvExtractStore 已随老链路一起删除。
 // 详见 handler-glue.ts 顶部注释 —— skill_extract 触发路径当前不可用,
 // core 侧后续会出手动归档接口, 到时 agent 工具再重新指向那个接口。
@@ -32,6 +32,8 @@ import { KvVersionPinRepo } from "./kv-version-pin-repo.js";
 import { getProxyStorage } from "../storage/factory.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { ProxyConfig } from "../types.js";
+import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "../memory/bridge-telemetry.js";
+import { getCoreSkillClient, type CoreSkillClient } from "./core-client.js";
 
 /**
  * 二选一的 pin repo（KvVersionPinRepo 或 VersionPinRepo）——
@@ -105,20 +107,29 @@ function adaptRedisPinRepo(inner: VersionPinRepo): PinRepoLike {
 export interface SkillBackingBundle {
   redis: Redis | null;
   pinRepo: PinRepoLike | null;
+  /**
+   * BindingRepo 直接从 SessionStore 拿(injection pipeline 装配时已注入),
+   * 不重新构造,保证 bridge L2 反查用的实例和 handler 写 binding 的实例一致
+   * —— 单元测试注入 SessionStore.setBindingRepo 后,bridge 也读同一个 mock。
+   */
+  bindingRepo: BindingRepo | null;
 }
 
 function resolveBacking(config: ProxyConfig): SkillBackingBundle {
+  const bindingRepo = getSessionStore().getBindingRepo() ?? null;
   if (config.storage?.enabled) {
     const storage = getProxyStorage(config.storage);
     return {
       redis: null,
       pinRepo: new KvVersionPinRepo(storage),
+      bindingRepo: bindingRepo ?? new KvBindingRepo(storage),
     };
   }
   const redis = config.redis?.enabled ? getRedisClient(config.redis) : null;
   return {
     redis,
     pinRepo: redis ? adaptRedisPinRepo(new VersionPinRepo(redis, config.redis?.ttlSeconds)) : null,
+    bindingRepo: bindingRepo ?? (redis ? new RedisBindingRepo(redis) : null),
   };
 }
 
@@ -130,6 +141,7 @@ const ALLOWED_SUBPATHS = new Set<string>([
   "search",
   "list",
   "get",
+  "get-by-name",
   "create",
   "update",
   "patch",
@@ -140,6 +152,8 @@ const ALLOWED_SUBPATHS = new Set<string>([
   "files/write",
   "files/remove",
   "listing",
+  // agent 侧 tool 名叫 skill_extract, bridge 转发到 core force-archive
+  // (不依赖 messages, core 从 conversation buffer 拿)。见下方 sub === "extract" 分支。
   "extract",
 ]);
 
@@ -165,7 +179,7 @@ const WRITE_SUBPATHS = new Set<string>([
  * Write ops: proxy injects `expected_version` for optimistic locking. If head
  *   moved (external update), plugin returns 40901 SKILL_VERSION_STALE.
  * Delete / create / extract / search / listing / list / versions / files-download
- *   do NOT participate (soft-delete doesn't bump version; others are stateless).
+ *   do NOT participate (delete is unconditional; others are stateless).
  */
 const READ_VERSION_OPS = new Set<string>(["get", "files/read"]);
 const WRITE_LOCK_OPS = new Set<string>([
@@ -201,31 +215,41 @@ interface SessionIdFields {
    * runtime state; team-wide search returns 500 rather than silently opening up.
    */
   user_key?: string;
+  /**
+   * Composite key actually used to load state from SessionStore
+   * (`${agentSource}:${sessionId}`). 用于埋点侧对齐 session_init_logs 的
+   * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
+   */
+  composite_key?: string;
 }
 
-function deriveSessionKey(c: Context): { sessionKey: string; userIdForSession: string } {
-  const auth = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const apiKey = extractBearerToken(auth);
-  const keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
-  const conversationId =
+/**
+ * Bridge 只吃 2 个 header:
+ *   - x-conversation-id (或 x-session-id / x-chat-id / x-thread-id) → sessionId
+ *   - x-tdai-service-id → spaceId
+ *
+ * 不再依赖 Authorization 反查 userId —— 见 docs/design/2026-08-03-binding-flatten.md,
+ * L2 fallthrough 走拍平的 (spaceId, sessionId) → binding.json 直接 stamp。
+ */
+function deriveSessionId(c: Context): string | null {
+  return (
     c.req.header("x-conversation-id") ??
     c.req.header("x-session-id") ??
     c.req.header("x-chat-id") ??
     c.req.header("x-thread-id") ??
-    null;
-  return {
-    sessionKey: conversationId ?? keyId,
-    userIdForSession: keyId,
-  };
+    null
+  );
 }
 
 function stateToIdFields(
   state: import("../session/types.js").SessionInitState | undefined,
-  matchedKey: string | undefined,
+  matchedKey: string,
 ): SessionIdFields | null {
-  if (!state || !matchedKey || state.status !== "initialized" || !state.sessionInfo) return null;
+  if (!state || state.status !== "initialized" || !state.sessionInfo) return null;
   const s = state.sessionInfo;
   if (!s.user_id || !s.team_id || !s.agent_id) return null;
+  // agentSource 从 matchedKey 反解(命中的 L1 key 形如 `${agentSource}:${sessionId}`);
+  // L2b 分支直接从 binding.agentSource 拿(见 bindingToIdFields)。
   const colonIdx = matchedKey.indexOf(":");
   const agentSource = colonIdx > 0 ? matchedKey.slice(0, colonIdx) : "claude-code";
   return {
@@ -235,60 +259,75 @@ function stateToIdFields(
     agent_source: agentSource,
     space_id: s.space_id,
     user_key: s.user_key,
+    composite_key: matchedKey,
   };
 }
 
-function loadSessionIdsL1(sessionKey: string): SessionIdFields | null {
-  // 会话 keyId 在 handler 层是 `${agentSource}:${sessionId}`；skill-bridge 拿到
-  // 的通常是 bare sessionKey（外部 curl 不知道 agentSource）。原语义是先按
-  // bare 命中，命中不到再按已知 agentSource 前缀试。
-  const candidates = sessionKey.includes(":")
-    ? [sessionKey]
-    : [sessionKey, `codebuddy:${sessionKey}`, `claude-code:${sessionKey}`];
+function bindingToIdFields(
+  binding: import("../db/binding-repo.js").SessionBinding,
+  spaceId: string,
+  sessionId: string,
+): SessionIdFields | null {
+  if (binding.outcome !== "initialized") return null;
+  if (!binding.userId || !binding.teamId || !binding.agentId) return null;
+  const agentSource = binding.agentSource || "claude-code";
+  return {
+    user_id: binding.userId,
+    team_id: binding.teamId,
+    agent_id: binding.agentId,
+    agent_source: agentSource,
+    space_id: spaceId,
+    user_key: binding.userKey,
+    composite_key: `${agentSource}:${sessionId}`,
+  };
+}
+
+/**
+ * L1: 先按 bare sessionId 试(handler.ts 存的 keyId 是 `${agentSource}:${sessionId}`,
+ * bridge curl 拿不到 agentSource,所以按候选前缀顺序探)。
+ *
+ * ⚠️ 候选轮询是过渡期兼容:同 pod 内主对话链路建过 session, L1 Map 里的 key 带
+ * agentSource 前缀,bare sessionId 命中不到。方案 B 拍平后 L2b binding 直接命中
+ * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
+ * 恢复而不 401。
+ */
+function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+  const candidates = sessionId.includes(":")
+    ? [sessionId]
+    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
   for (const k of candidates) {
     const s = getSessionStore().get(k);
-    if (s) return stateToIdFields(s, k);
+    if (s) {
+      const fields = stateToIdFields(s, k);
+      if (fields) return fields;
+    }
   }
   return null;
 }
 
 /**
- * L2 fallthrough (§6.1 修复) —— L1 miss 时用 apiKey→userId + 从 sessionKey 反解的
- * agentSource/sessionId 通过 SessionStore.getOrRecover 走 L2a→L2b→history-scan。
- * 见 memory-bridge.ts 里同名函数的注释。
+ * L2 fallthrough —— 拍平后只吃 (spaceId, sessionId)。见
+ * docs/design/2026-08-03-binding-flatten.md。
+ *
+ * 不再走 verifyUserKey + getOrRecover 那条 4 段路径。原因:
+ *   1) bridge curl 模板没塞 Authorization: Bearer,verify 拿不到 userId
+ *   2) 拍平后 binding.json 里已经存了 user_id/team_id/agent_id/agent_source/user_key,
+ *      一次 GET 就够,不需要再补 kernel getAgent/getTask
  */
 async function loadSessionIdsL2(
-  apiKey: string,
+  bindingRepo: BindingRepo | null,
   spaceId: string,
-  sessionKey: string,
+  sessionId: string,
 ): Promise<SessionIdFields | null> {
-  if (!isAuthEnabled() || !apiKey) return null;
-  const verifyResult = await verifyUserKey(apiKey, spaceId);
-  if (verifyResult.rejected || !verifyResult.userId) return null;
-  const userId = verifyResult.userId;
-
-  // 与 L1 一样按前缀候选跑一遍
-  const candidates = sessionKey.includes(":")
-    ? [sessionKey]
-    : [sessionKey, `codebuddy:${sessionKey}`, `claude-code:${sessionKey}`];
-  for (const compositeKey of candidates) {
-    const colonIdx = compositeKey.indexOf(":");
-    const agentSource = colonIdx > 0 ? compositeKey.slice(0, colonIdx) : "claude-code";
-    const sessionId = colonIdx > 0 ? compositeKey.slice(colonIdx + 1) : compositeKey;
-    try {
-      // spaceId 必须传 —— 拼 COS key 要用（同 handler / memory-bridge 修复）
-      const recovered = await getSessionStore().getOrRecover(
-        compositeKey,
-        { userId, agentSource, sessionId, spaceId },
-        {},
-      );
-      const fields = stateToIdFields(recovered, compositeKey);
-      if (fields) return fields;
-    } catch (err) {
-      console.warn(`${TAG} L2 fallthrough error key=${compositeKey}: ${(err as Error).message}`);
-    }
+  if (!bindingRepo) return null;
+  try {
+    const binding = await bindingRepo.getBinding(spaceId, sessionId);
+    if (!binding) return null;
+    return bindingToIdFields(binding, spaceId, sessionId);
+  } catch (err) {
+    console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
+    return null;
   }
-  return null;
 }
 
 function envelope(code: number, message: string, httpStatus = 200) {
@@ -333,6 +372,12 @@ export interface SkillBridgeDeps {
    * uses the production resolver that calls kernel /v3/meta/asset/list-accessible.
    */
   resolveVisibleSkillIds?: VisibleSkillIdsResolver;
+  /**
+   * Override the core skill client (tests). When omitted, uses the singleton
+   * built from config. Used by team-search to enumerate agent-owned skills
+   * (B) and already-injected skills (C) — see whitelist composition below.
+   */
+  coreClient?: CoreSkillClient;
 }
 
 /**
@@ -349,6 +394,12 @@ export interface SkillBridgeDeps {
  * match the query AND enough of the top-50 hits are non-whitelisted to leave
  * fewer than N — vanishingly unlikely for the current corpus size. If it ever
  * matters, raise plugin's cap; this stays as-is.
+ *
+ * TODO(upgrade): 长期来看，如果观察到 team search 过滤后剩余条数常 < 用户
+ * top_k（whitelist merged 显著大于 50，或 filter 命中率 P95 < 0.2），说明
+ * 该 team 的 skill 池已把 top-50 撑爆，overfetch 兜不住 → 升级为请求侧
+ * 过滤（proxy 传 `skill_ids: [...]` → core 在 pool 内精确检索）。
+ * 见 `docs/design/2026-08-10-skill-search-scope-fix.md` §3 Plan A。
  */
 const PLUGIN_SEARCH_HARD_TOPK = 50;
 
@@ -401,46 +452,79 @@ export function createSkillBridgeHandler(
 
     const path = new URL(c.req.url).pathname;
     const sub = extractSubpath(path);
+    // 前置校验早退埋点: 每个 return 前都发一条 reject_reason 非空的 bridge_call。
+    // sessionKey 此刻可能还没派生, 允许传 "" (helper 兜底 agentSource='unknown')。
     if (!sub) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "skill-bridge",
+        rejectReason: "unknown_path", httpStatus: 404,
+      });
       return envelope(40401, `${TAG} unknown path ${path}`, 404);
     }
     if (!ALLOWED_SUBPATHS.has(sub)) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "skill-bridge",
+        rejectReason: "subpath_forbidden", httpStatus: 403,
+        executedEndpoint: sub,
+      });
       return envelope(40301, `${TAG} subpath '${sub}' not allowed via bridge`, 403);
     }
     if (c.req.method !== "POST") {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "skill-bridge",
+        rejectReason: "method_not_allowed", httpStatus: 405,
+        executedEndpoint: sub,
+      });
       return envelope(40501, `${TAG} method ${c.req.method} not allowed`, 405);
     }
 
     const ct = c.req.header("content-type") ?? "";
     if (!ct.toLowerCase().includes("application/json")) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "skill-bridge",
+        rejectReason: "content_type_invalid", httpStatus: 415,
+        executedEndpoint: sub,
+      });
       return envelope(41501, `${TAG} content-type must be application/json`, 415);
     }
 
     // Session must be initialized — IdFields come from there.
-    const { sessionKey } = deriveSessionKey(c);
-    let ids = loadSessionIdsL1(sessionKey);
-    if (!ids) {
-      // §6.1 修复：跨 pod L2 fallthrough
-      const auth = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-      const apiKey = extractBearerToken(auth);
-      const spaceId = c.req.header("x-tdai-service-id")
-        ?? config.tdai?.serviceId
-        ?? config.coreSkill?.serviceId
-        ?? "";
-      if (apiKey && spaceId) {
-        console.log(`${TAG} session=${sessionKey} L1 miss → L2 fallthrough (apiKey=${apiKeyToKeyId(apiKey)} spaceId=${spaceId})`);
-        ids = await loadSessionIdsL2(apiKey, spaceId, sessionKey);
-      }
+    // curl 模板只带 (x-conversation-id, x-tdai-service-id) 两个 header;
+    // L1 miss 时用它俩去 nottl/<spaceId>/<sessionId>/binding.json 反查。
+    const sessionKey = deriveSessionId(c);
+    if (!sessionKey) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "skill-bridge",
+        rejectReason: "missing_conversation_id", httpStatus: 401,
+        executedEndpoint: sub,
+      });
+      return envelope(40101, `${TAG} missing x-conversation-id (or x-session-id / x-chat-id / x-thread-id) header`, 401);
     }
-    if (!ids) {
-      return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
-    }
+    const spaceId = c.req.header("x-tdai-service-id")
+      ?? config.tdai?.serviceId
+      ?? config.coreSkill?.serviceId
+      ?? "";
 
     // Backing storage for extract trigger + version pin.
     // When storage.enabled + mode!=off → ProxyStorage (Kv* repos).
     // Otherwise → Redis (or null when disabled).
     const backing = resolveBacking(config);
     const pinRepoInline = backing.pinRepo;
+    const bindingRepoInline = backing.bindingRepo;
+
+    let ids = loadSessionIdsL1(sessionKey);
+    if (!ids && bindingRepoInline && spaceId) {
+      console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
+      ids = await loadSessionIdsL2(bindingRepoInline, spaceId, sessionKey);
+    }
+    if (!ids) {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "skill-bridge",
+        rejectReason: "session_not_initialized", httpStatus: 401,
+        executedEndpoint: sub, spaceId,
+      });
+      return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
+    }
     // backing.redis 之前给老链路 SkillExtractTrigger 用, 老链路已删,
     // 本函数体内不再直接使用 redis; backing 结构上保留是因为 pinRepo
     // 走 redis 的分支还需要它。
@@ -448,6 +532,13 @@ export function createSkillBridgeHandler(
     // 消融实验：allowLlmWrite=false 时拒绝写操作
     const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
     if (!allowLlmWrite && WRITE_SUBPATHS.has(sub)) {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "skill-bridge",
+        rejectReason: "write_ops_disabled", httpStatus: 403,
+        executedEndpoint: sub,
+        spaceId: ids.space_id, userId: ids.user_id, teamId: ids.team_id,
+        agentId: ids.agent_id, agentSource: ids.agent_source,
+      });
       return envelope(40302, `${TAG} LLM write access to skill is disabled (skillRuntime.allowLlmWrite=false)`, 403);
     }
 
@@ -460,10 +551,24 @@ export function createSkillBridgeHandler(
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           inboundBody = parsed as Record<string, unknown>;
         } else {
+          emitBridgeRejectTelemetry({
+            sessionKey, bridgeSource: "skill-bridge",
+            rejectReason: "body_not_object", httpStatus: 400,
+            executedEndpoint: sub, requestBody: raw.slice(0, 512),
+            spaceId: ids.space_id, userId: ids.user_id, teamId: ids.team_id,
+            agentId: ids.agent_id, agentSource: ids.agent_source,
+          });
           return envelope(40001, `${TAG} body must be a JSON object`, 400);
         }
       }
     } catch (err) {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "skill-bridge",
+        rejectReason: "invalid_json_body", httpStatus: 400,
+        executedEndpoint: sub,
+        spaceId: ids.space_id, userId: ids.user_id, teamId: ids.team_id,
+        agentId: ids.agent_id, agentSource: ids.agent_source,
+      });
       return envelope(40001, `${TAG} invalid JSON body: ${(err as Error).message}`, 400);
     }
 
@@ -483,16 +588,34 @@ export function createSkillBridgeHandler(
         "x-tdai-service-id": ids.space_id || config.coreSkill.serviceId,
         "Content-Type": "application/json",
       };
+      const dlOutboundBody = JSON.stringify(outbound);
+      const dlCallStart = (deps.now ?? Date.now)();
       let coreResp: Response;
       try {
         coreResp = await fetcher(upstreamUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify(outbound),
+          body: dlOutboundBody,
           signal: AbortSignal.timeout(Math.max(5000, config.coreSkill.timeoutMs * 4)),
         });
       } catch (err) {
         console.warn(`${TAG} files/download upstream fetch failed: ${(err as Error).message}`);
+        // 埋点补齐: 与主路径 :822 对称, upstream 未响应也算一次调用。
+        // 之前这个 catch 分支静默 return, 导致 curl 视角"打了 N 次" CH 少一条。
+        const dlEmitKey = ids.composite_key ?? sessionKey;
+        emitBridgeToolCallTelemetry({
+          sessionKey: dlEmitKey,
+          spaceId: ids.space_id,
+          userId: ids.user_id,
+          teamId: ids.team_id,
+          agentId: ids.agent_id,
+          agentSource: ids.agent_source || agentSourceFromSessionKey(dlEmitKey),
+          bridgeSource: "skill-bridge",
+          executedEndpoint: "files/download",
+          requestBody: dlOutboundBody.slice(0, 512),
+          upstreamStatus: 0,
+          elapsedMs: (deps.now ?? Date.now)() - dlCallStart,
+        });
         return envelope(50301, `${TAG} upstream unavailable: ${(err as Error).message}`, 502);
       }
       const coreText = await coreResp.text().catch(() => "");
@@ -557,24 +680,35 @@ export function createSkillBridgeHandler(
     let searchVisibleIds: Set<string> | null = null;
     let searchOriginalTopK = 0;
     let outbound: Record<string, unknown>;
+    /**
+     * upstream 路径若与 `/v3/skill/${sub}` 不一致(如 extract → force-archive)
+     * 由分支写这个变量;默认沿用 sub。
+     */
+    let upstreamSubpathOverride: string | null = null;
     if (sub === "extract") {
-      // ── skill_extract 已下线 ──
+      // agent 侧 tool 叫 skill_extract, 语义"立即归档当前对话触发一次 skill 抽取"。
+      // 转发到 core `/v3/skill/conversation/force-archive` —— 该接口不吃 messages,
+      // 从 conversation buffer(proxy 主对话链路每轮推的 /v3/skill/conversation/add)
+      // 拿累积的完整对话。见 core skill-schemas.ts forceArchiveRequestSchema。
       //
-      // agent 通过工具调 `/v3/skill/extract` 触发抽取的入口, 依赖 proxy 侧
-      // 老链路 buffer (SkillExtractTrigger + KvExtractStore) 提供 conversation
-      // snapshot。老链路已删除, 该 buffer 不再存在。
-      //
-      // core 侧规划中会出一个"手动归档" (manual archive) 接口, 语义上会:
-      //   1. 让 agent 通过工具触发一次"把当前 core 侧 buffer 立即归档并进入
-      //      skill 抽取管线", 不用等 40KB / 10 tool_calls 阈值
-      //   2. proxy 只需转发, 不需要维护自己的 buffer
-      //
-      // 等 core 接口上线后, 这里改成透传到新接口即可。当前先返回明确错误。
-      return envelope(
-        40003,
-        `${TAG} extract: skill_extract 触发路径已下线, 请等待 core 侧手动归档接口上线后重试`,
-        400,
-      );
+      // outbound 只需 (space_id, user_id, team_id, agent_id, session_id) + 可选 reason;
+      // agent 传的 messages / task_id 一律不透传(agent 视角无关,session 内隐含)。
+      upstreamSubpathOverride = "conversation/force-archive";
+      const reason = typeof inboundBody.reason === "string" && inboundBody.reason.trim()
+        ? inboundBody.reason.trim().slice(0, 2000)
+        : undefined;
+      outbound = {
+        space_id: ids.space_id || config.coreSkill.serviceId,
+        user_id: ids.user_id,
+        team_id: ids.team_id,
+        agent_id: ids.agent_id,
+        session_id: (() => {
+          const composite = ids.composite_key ?? sessionKey;
+          const colonIdx = composite.indexOf(":");
+          return colonIdx > 0 ? composite.slice(colonIdx + 1) : composite;
+        })(),
+        ...(reason ? { reason } : {}),
+      };
     } else {
       // v3 strict-isolation: ALL /v3 paths need team_id + agent_id + user_id.
       // Core layer strips user_id when team_id is present (team-shared semantics).
@@ -613,26 +747,61 @@ export function createSkillBridgeHandler(
           return envelope(50001, `${TAG} team search misconfigured: session has no user_key`, 500);
         }
 
-        let whitelist: string[];
-        try {
-          const resolver = deps.resolveVisibleSkillIds
-            ?? defaultVisibleSkillIdsResolver(config);
-          const result = await resolver({
-            user_id: ids.user_id,
+        // Whitelist = A ∪ B（见 docs/design/2026-08-10-skill-search-scope-fix.md §4）：
+        //   A = meta list-accessible(visibility='team') — team-shared skill
+        //   B = core /v3/skill/list(agent 自有全量)   — 含 private
+        //
+        // 原来有 C = listing "本会话已注入" 做减法，但 C 是实时 listing 结果，
+        // 会话内新建的 skill 会出现在 C 中被减掉 → 搜不到 (Issue #1006)。
+        // 去掉 C 减法：代价是已注入 skill 可能重复出现在搜索结果中（无害），
+        // 但不会有"永远搜不到"的盲区。
+        //
+        // 失败降级策略：
+        //   A 失败 → fail-closed 返回空（安全兜底：绝不让 LLM 看到未过滤结果）
+        //   B 失败 → 当空集，退化为纯 A（约等于修复前行为）
+        const coreClient = deps.coreClient ?? getCoreSkillClient(config.coreSkill);
+        const resolver = deps.resolveVisibleSkillIds
+          ?? defaultVisibleSkillIdsResolver(config);
+
+        const promiseA = resolver({
+          user_id: ids.user_id,
+          team_id: ids.team_id,
+          user_key: ids.user_key,
+          space_id: ids.space_id,
+        }).then(r => ({ ok: true as const, ids: r.ids }))
+          .catch(err => ({ ok: false as const, err: err as Error }));
+
+        // B limit=1000 是 core listRequestSchema 上限（paginationSchema.limit.max(1000)）。
+        // 单 agent 自有 skill 到不了 1000 量级，一次拿完不分页。
+        const promiseB = coreClient.listSkills(
+          {
             team_id: ids.team_id,
-            user_key: ids.user_key,
-            space_id: ids.space_id,
+            agent_id: ids.agent_id,
+            pagination: { limit: 1000 },
+          },
+          { serviceId: ids.space_id },
+        ).then(r => r.items.map(s => s.skill_id))
+          .catch(err => {
+            console.warn(`${TAG} team search B (list) failed, treating as empty: ${(err as Error).message}`);
+            return [] as string[];
           });
-          whitelist = result.ids;
-          console.log(`${TAG} team search whitelist size=${whitelist.length} user=${ids.user_id} team=${ids.team_id}`);
-        } catch (err) {
-          // Fail-closed: return empty rather than falling back to unfiltered search.
-          console.warn(`${TAG} team search whitelist resolver failed, fail-closed: ${(err as Error).message}`);
+
+        const [aResult, bIds] = await Promise.all([promiseA, promiseB]);
+
+        if (!aResult.ok) {
+          // Fail-closed: A 挂掉不能降级到不过滤搜索。
+          console.warn(`${TAG} team search whitelist resolver (A) failed, fail-closed: ${aResult.err.message}`);
           return new Response(
             JSON.stringify({ code: 0, message: "ok", request_id: `bridge-${(deps.now ?? Date.now)()}`, data: { items: [] } }),
             { status: 200, headers: { "content-type": "application/json" } },
           );
         }
+
+        const whitelist: string[] = Array.from(new Set<string>([...aResult.ids, ...bIds]));
+        console.log(
+          `${TAG} team search whitelist A=${aResult.ids.length} B=${bIds.length}`
+            + ` merged=${whitelist.length} user=${ids.user_id} team=${ids.team_id}`,
+        );
 
         if (whitelist.length === 0) {
           // Short-circuit: no visible skill IDs → 0 matches guaranteed. Skip upstream.
@@ -642,20 +811,30 @@ export function createSkillBridgeHandler(
           );
         }
 
-        // Stash the whitelist Set + caller's original top_k so the response
-        // handler can filter/slice without re-consulting meta.
+        // Stash the whitelist Set + fixed slice size so the response handler
+        // can filter/slice without re-consulting meta.
+        //
+        // 2026-08-10: Hard-whitelist inbound. LLM only supplies `query` —
+        // top_k / mode / scope / any other field is dropped. Rationale:
+        // less LLM-side decision surface, more consistent behavior across
+        // sessions. If results feel thin, the fix is to refine the query,
+        // not to raise top_k. See skill-tools-injector.ts (body: {"query": ...}).
         searchVisibleIds = new Set(whitelist);
-        const rawTopK = typeof inboundBody.top_k === "number" && Number.isFinite(inboundBody.top_k)
-          ? Math.floor(inboundBody.top_k)
-          : DEFAULT_SEARCH_TOPK;
-        searchOriginalTopK = Math.min(Math.max(rawTopK, 1), PLUGIN_SEARCH_HARD_TOPK);
+        searchOriginalTopK = DEFAULT_SEARCH_TOPK;
 
-        outbound.scope = "team";
-        // Overfetch to plugin's hard cap so response-side filtering has room.
-        // Plugin remains unaware of proxy's ACL concerns — it just sees a
-        // large-but-legal top_k. See PLUGIN_SEARCH_HARD_TOPK doc for why this
-        // is safe.
-        outbound.top_k = PLUGIN_SEARCH_HARD_TOPK;
+        const query = typeof inboundBody.query === "string" ? inboundBody.query : "";
+        outbound = {
+          query,
+          team_id: ids.team_id,
+          agent_id: ids.agent_id,
+          user_id: ids.user_id,
+          scope: "team",
+          // Overfetch to plugin's hard cap so response-side filtering has room.
+          // Plugin remains unaware of proxy's ACL concerns — it just sees a
+          // large-but-legal top_k. See PLUGIN_SEARCH_HARD_TOPK doc for why this
+          // is safe.
+          top_k: PLUGIN_SEARCH_HARD_TOPK,
+        };
       }
 
       // ── Version pinning: inject pinned version for read/write ops ──
@@ -679,7 +858,8 @@ export function createSkillBridgeHandler(
       }
     }
 
-    const upstreamUrl = `${config.coreSkill.endpoint.replace(/\/$/, "")}/v3/skill/${sub}`;
+    const upstreamSub = upstreamSubpathOverride ?? sub;
+    const upstreamUrl = `${config.coreSkill.endpoint.replace(/\/$/, "")}/v3/skill/${upstreamSub}`;
     const headers: Record<string, string> = {
       "Authorization": `Bearer ${config.coreSkill.serviceToken}`,
       // Prefer session-derived tenant; fall back to config for legacy sessions.
@@ -687,18 +867,36 @@ export function createSkillBridgeHandler(
       "Content-Type": "application/json",
     };
 
+    const outboundBody = JSON.stringify(outbound);
+    const callStart = (deps.now ?? Date.now)();
     let resp: Response;
     try {
       resp = await fetcher(upstreamUrl, {
         method: "POST",
         headers,
-        body: JSON.stringify(outbound),
+        body: outboundBody,
         signal: AbortSignal.timeout(Math.max(5000, config.coreSkill.timeoutMs * 4)),
       });
     } catch (err) {
       console.warn(
         `${TAG} upstream fetch failed sub=${sub} err=${(err as Error).message}`,
       );
+      // 埋点：upstream 未响应也算一次调用（方案 §5.1"每次都要记录"）
+      // 用 ids.composite_key 保证 session_key 与 session_init_logs 对齐。
+      const emitKey = ids.composite_key ?? sessionKey;
+      emitBridgeToolCallTelemetry({
+        sessionKey: emitKey,
+        spaceId: ids.space_id,
+        userId: ids.user_id,
+        teamId: ids.team_id,
+        agentId: ids.agent_id,
+        agentSource: ids.agent_source || agentSourceFromSessionKey(emitKey),
+        bridgeSource: "skill-bridge",
+        executedEndpoint: sub,
+        requestBody: outboundBody.slice(0, 512),
+        upstreamStatus: 0,
+        elapsedMs: (deps.now ?? Date.now)() - callStart,
+      });
       return envelope(50301, `${TAG} upstream unavailable: ${(err as Error).message}`, 502);
     }
 
@@ -707,6 +905,22 @@ export function createSkillBridgeHandler(
     console.log(
       `${TAG} sub=${sub} status=${resp.status} elapsed=${elapsed}ms`,
     );
+
+    // 埋点：upstream 已响应（含 4xx/5xx），记录实际状态与耗时
+    const emitKey = ids.composite_key ?? sessionKey;
+    emitBridgeToolCallTelemetry({
+      sessionKey: emitKey,
+      spaceId: ids.space_id,
+      userId: ids.user_id,
+      teamId: ids.team_id,
+      agentId: ids.agent_id,
+      agentSource: ids.agent_source || agentSourceFromSessionKey(emitKey),
+      bridgeSource: "skill-bridge",
+      executedEndpoint: sub,
+      requestBody: outboundBody.slice(0, 512),
+      upstreamStatus: resp.status,
+      elapsedMs: (deps.now ?? Date.now)() - callStart,
+    });
 
     // 曾经这里会在写操作 / extract 成功时清零 proxy 侧 buffer 计数器,
     // 避免重复触发自动 extract。老链路 (SkillExtractTrigger + KvExtractStore)

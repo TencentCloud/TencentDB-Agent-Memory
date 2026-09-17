@@ -4,7 +4,7 @@
  * 只放被 2 个以上 API 模块引用的类型；单一模块专属类型就近放在对应模块文件里。
  */
 
-/** 内核 meta / control 信封格式 */
+/** meta / control 信封格式 */
 export interface MetaEnvelope<T> {
   code: number;
   message: string;
@@ -21,7 +21,7 @@ export interface PaginatedResult<T> {
 }
 
 /**
- * 内核 auth/verify、user/get、user/list 均会返回的公共用户结构。
+ * auth/verify、user/get、user/list 均会返回的公共用户结构。
  * `user_type === 'system_admin'` 是判断"当前登录用户是不是 admin"的唯一权威字段。
  */
 export interface PublicUser {
@@ -35,7 +35,7 @@ export interface PublicUser {
   created_at: string;
   updated_at: string;
   /**
-   * 全局用户类型（内核 auth/verify、user/get、user/list 均会返回），
+   * 全局用户类型（auth/verify、user/get、user/list 均会返回），
    * 'system_admin' = 全局唯一的 admin 身份，与 team 无关；其余（如 'user'）都是普通用户。
    * 这是判断"当前登录用户是不是 admin"的唯一权威字段——不要再用 username === 'admin' 兜底猜。
    */
@@ -60,7 +60,7 @@ export interface TeamMember {
   role: 'admin' | 'member' | 'reviewer';
   joined_at: string;
   status: 'active' | 'removed';
-  /** team-member/list · get 响应附带（读时 JOIN，v3.2.2+） */
+  /** team-member/list · get 响应附带（读时 JOIN） */
   username?: string;
 }
 

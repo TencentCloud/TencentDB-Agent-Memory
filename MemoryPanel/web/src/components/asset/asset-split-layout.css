@@ -1,0 +1,83 @@
+/**
+ * AssetSplitLayout — 资产管理页分栏布局样式。
+ * 左栏宽度可拖拽（列宽由内联 style 的 grid-template-columns 控制），
+ * 中间为拖拽手柄，右侧详情自适应剩余宽度并在内部滚动。
+ */
+
+._asset-split {
+  display: grid;
+  /* grid-template-columns 由组件按拖拽宽度内联注入：<sidebar>px 6px minmax(0,1fr) */
+  /* 撑满视口剩余高度：两栏等高填满，内容少也不留空白 */
+  height: calc(100vh - 220px);
+  align-items: stretch;
+  gap: 0;
+}
+
+._asset-split-sidebar,
+._asset-split-detail {
+  min-width: 0;
+}
+
+/* 右侧详情区：撑满高度，内容超出时在详情区内部滚动，不撑开外层页面高度 */
+._asset-split-detail {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 左侧列表同样撑满高度并内部滚动，保证长列表不把整页撑高、短列表也不留空 */
+._asset-split-sidebar {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ===== 拖拽手柄 ===== */
+._asset-split-resizer {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  padding: 0;
+  border: none;
+  background: transparent;
+  /* 手柄本身 6px 宽，左右各留一点热区靠 flex 居中 */
+}
+
+._asset-split-resizer-bar {
+width: 2px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--tea-color-border-primary-default);
+  transition: background-color 0.15s ease-in-out;
+}
+
+._asset-split-resizer:hover ._asset-split-resizer-bar,
+._asset-split--dragging ._asset-split-resizer-bar {
+  background: var(--tea-color-border-brand-default);
+}
+
+._asset-split--dragging {
+  cursor: col-resize;
+}
+
+@media (max-width: 960px) {
+  ._asset-split {
+    grid-template-columns: minmax(0, 1fr) !important;
+    /* 窄屏堆叠，回归文档流高度 */
+    height: auto;
+  }
+
+  /* 窄屏下堆叠显示，隐藏拖拽手柄，取消高度限制回归文档流 */
+  ._asset-split-resizer {
+    display: none;
+  }
+
+  ._asset-split-sidebar,
+  ._asset-split-detail {
+    height: auto;
+    max-height: none;
+    overflow-y: visible;
+  }
+}

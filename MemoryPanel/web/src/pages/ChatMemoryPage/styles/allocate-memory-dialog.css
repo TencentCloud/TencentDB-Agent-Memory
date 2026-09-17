@@ -1,0 +1,28 @@
+/**
+ * 分配记忆块到 Agent 弹窗样式。
+ *
+ * 修复：无可分配 Agent 时的警告文案被压成「每行一个字」的竖排。
+ * 根因是 Alert 作为 Form 的非 Form.Item 子级时未拿到父级宽度，
+ * 内容容器宽度塌陷为 0，长文本被迫逐字换行。
+ * 这里给 Alert 包裹层与内部文本容器显式声明块级+ 100% 宽度，恢复正常横排。
+ */
+
+._alloc-memory-alert {
+  width: 100%;
+}
+
+._alloc-memory-alert .tea-alert {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Tea Alert 采用 flex（图标 __decoration + 内容 __info），
+   内容列需 min-width:0 + flex:1 才不会塌陷成逐字竖排 */
+._alloc-memory-alert .tea-alert__info {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.6;
+}

@@ -45,10 +45,7 @@ WORKDIR /app
 RUN npm install -g npm@11 --no-audit --no-fund
 
 # 先复制包元数据以最大化 Docker layer cache。
-# cost-guard 是 file: 依赖，install 前必须先备好它的 package.json + src。
 COPY package.json package-lock.json ./
-COPY packages/cost-guard/package.json packages/cost-guard/package.json
-COPY packages/cost-guard/src packages/cost-guard/src
 
 # 安装全部依赖（保留 dev：tsx 运行时需要；保留 optional：sqlite/cos/cost-guard）。
 # 使用 BuildKit npm cache mount 大幅加速重复构建。

@@ -1,6 +1,10 @@
 /**
  * TeamSwitcher 样式（顶栏行内 pill 版本）
- * 全部使用 Tea Design Token（--tea-color-*），圆角对齐 Tea 圆角阶梯。
+ *
+ * 列表部分使用原生 ul/li/button 自绘，不依赖 Tea List 的类名与内置样式
+ * （Tea 的 List.Item selected 会自动插入 ✓ 并改内边距，split="divide" 会注入
+ * padding/border-top，与卡片式行样式反复冲突）。
+ * 颜色一律走 Tea Design Token（--tea-color-*）。
  */
 
 ._memory-team-switcher-dropdown.tea-dropdown {
@@ -20,7 +24,6 @@
   background: var(--tea-color-bg-primary-default);
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
-  font: var(--tea-typography-body-sm);
   color: var(--tea-color-text-primary);
   max-width: 220px;
 }
@@ -99,20 +102,22 @@
 }
 
 ._memory-team-switcher-panel-title {
-  font: var(--tea-typography-heading-6);
+  font-size: 14px;
+  font-weight: 600;
   color: var(--tea-color-text-primary);
+  line-height: 20px;
 }
 
 ._memory-team-switcher-panel-desc {
   margin-top: 4px;
-  font: var(--tea-typography-body-sm);
+  font-size: 12px;
   color: var(--tea-color-text-secondary);
   line-height: 18px;
 }
 
 ._memory-team-switcher-panel-label {
   flex-shrink: 0;
-  padding: 8px 16px 4px;
+  padding: 10px 12px 6px;
   font-size: 12px;
   font-weight: 500;
   color: var(--tea-color-text-tertiary);
@@ -122,53 +127,62 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 左右留出 8px，让选中行的描边完整可见（此前描边被容器裁切） */
   padding: 0 8px 8px;
 }
 
 ._memory-team-switcher-empty {
   padding: 12px 8px;
-  font: var(--tea-typography-body-sm);
+  font-size: 12px;
   color: var(--tea-color-text-tertiary);
   line-height: 18px;
 }
 
-._memory-team-switcher-list.tea-list {
+/* ===== 团队列表（原生 ul/li）===== */
+._memory-team-switcher-list {
   margin: 0;
-  padding-top: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-._memory-team-switcher-list.tea-list > li {
-  margin-bottom: 4px;
+/* 行容器：相对定位，用于承载右侧绝对定位的操作按钮浮层。
+   操作按钮不参与行内 flex 布局，因此不会挤压团队名/成员数，也不会造成
+   「显示/隐藏时行内元素跳动」。 */
+._memory-team-switcher-row {
+  position: relative;
 }
 
-._memory-team-switcher-list.tea-list > li:last-child {
-  margin-bottom: 0;
-}
-
+/* 可点击的整行（切换 team）。用 button 而非 li 承载点击，语义与键盘可达性更好。 */
 ._memory-team-switcher-item {
-  display: flex !important;
+  width: 100%;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px !important;
-  border-radius: 4px;
+  gap: 10px;
+  padding: 8px 10px;
   border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
   cursor: pointer;
   transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
 }
 
 ._memory-team-switcher-item:hover {
-  background-color: var(--tea-color-bg-secondary-hover) !important;
+  background: var(--tea-color-bg-secondary-hover);
 }
 
-/* Tea List type="plain" 的 is-selected 无默认视觉样式，这里手动补选中态：
-   浅品牌底色 + 品牌色描边，避免 type="option" 下满铺纯蓝底、白字对比失衡的问题 */
-._memory-team-switcher-item.is-selected {
-  background-color: var(--tea-color-bg-brand-lighten-default) !important;
+._memory-team-switcher-item:focus-visible {
+  outline: 2px solid var(--tea-color-border-brand-default);
+  outline-offset: -1px;
+}
+
+/* 选中态：浅品牌底 + 品牌色描边（不再依赖 Tea 的 is-selected，也不再显示 ✓） */
+._memory-team-switcher-item.is-active {
+  background: var(--tea-color-bg-brand-lighten-default);
   border-color: var(--tea-color-border-brand-default);
-}
-
-._memory-team-switcher-item.is-selected:hover {
-  background-color: var(--tea-color-bg-brand-lighten-default) !important;
 }
 
 ._memory-team-switcher-item-avatar {
@@ -190,18 +204,67 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 18px;
 }
 
 ._memory-team-switcher-item-count {
   display: block;
-  margin-top: 1px;
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
+  line-height: 16px;
 }
 
-._memory-team-switcher-item-check {
-  flex-shrink: 0;
-  color: var(--tea-color-text-brand-default);
+/* ===== 行右侧编辑/删除操作按钮（绝对定位浮层）=====
+   默认隐藏，hover / 键盘聚焦该行时淡入；因为是绝对定位，显示与隐藏都不会
+   改变行内布局，避免文字位移。 */
+._memory-team-switcher-item-ops {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease-in-out;
+}
+
+._memory-team-switcher-row:hover ._memory-team-switcher-item-ops,
+._memory-team-switcher-row:focus-within ._memory-team-switcher-item-ops {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+._memory-team-switcher-item-op {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  color: var(--tea-color-text-secondary);
+  cursor: pointer;
+  transition: background-color 0.12s ease-in-out, color 0.12s ease-in-out;
+}
+
+._memory-team-switcher-item-op:hover {
+  background: var(--tea-color-bg-secondary-hover);
+  color: var(--tea-color-text-primary);
+}
+
+._memory-team-switcher-item-op:focus-visible {
+  outline: 2px solid var(--tea-color-border-brand-default);
+  outline-offset: 1px;
+}
+
+/* 删除按钮：hover 时给出危险色反馈 */
+._memory-team-switcher-item-op-danger:hover {
+  background: rgba(226, 45, 45, 0.1);
+  color: #e22d2d;
 }
 
 /* ===== 新建团队 ===== */

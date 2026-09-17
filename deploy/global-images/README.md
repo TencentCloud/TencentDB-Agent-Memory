@@ -26,21 +26,55 @@
 ## 快速开始
 
 ```bash
-# 1) 准备 .env
-cp .env.example .env
+cd TencentDB-Agent-Memory/deploy/global-images
 
-# 2) 编辑 .env，把两组 LLM 参数填成真值
-#    - MEMORY_LLM_*   → memory-core + memory-hub 内部用
-#    - PROXY_UPSTREAM_* → proxy 转发到的上游 LLM
-$EDITOR .env
-
-# 3) 干跑校验（不启动容器）
-#    默认会同时校验 LLM 通路 —— 提前验证 API key/URL/模型名，避免起服务后才发现配错
-./verify.sh
-# 不希望发外部请求（离线环境等）：./verify.sh --skip-llm
-
-# 4) 一键拉起三件套
+# 一条命令：自动复制 .env → 交互式填 LLM → 自动校验通路 → 拉起三件套
 ./start-all.sh
+```
+
+`start-all.sh` 现在是**交互式**的，运行时会：
+
+1. `.env` 不存在时，自动从 `.env.example` 复制一份（无需手动 `cp`）
+2. 引导你填写两组 LLM（**回车 = 保留当前默认值**）：
+   - `memory 组`：`BASE_URL` / `API_KEY` / `MODEL`（协议默认 `openai`）
+   - `proxy 组`：先问「是否复用 memory 组配置」，复用则跳过
+3. 填完**立即检查 LLM 通路是否通**，不通会提示重新输入，直到通过
+4. 把填写值**写回 `.env`** 持久化（下次启动默认复用）
+5. 通过后一键拉起三件套
+
+> 想跳过交互、直接读 `.env` 也可以：手动 `cp .env.example .env` 并填好 LLM 后，
+> 运行 `./start-all.sh` 一路回车确认即可（默认值就是 `.env` 里的值）。
+
+### MongoDB 存储后端（试验特性，可选）
+
+默认存储仍是 **sqlite**（零依赖，数据落容器卷）。MongoDB 数据面是**试验特性**，
+默认关闭，不建议作为生产默认后端。开启后走 L0/L1/profile/skill 文档 + mongot
+原生 BM25 检索，元数据默认同步落 Mongo：
+
+```bash
+./start-all-mongo.sh    # 与 start-all.sh 流程完全一致；写入 MEMORY_CORE_STORE_MODE=mongodb 到 .env
+```
+
+- 脚本会把 `MEMORY_CORE_STORE_MODE=mongodb` 写入 `.env`，此后 `./start-all.sh`
+  也会保持 MongoDB，不会静默回退到 sqlite。要回 sqlite：注释掉该行或改为
+  `sqlite`，再跑 `./start-all.sh`；
+- 未设 `MONGODB_ENDPOINT` 时，脚本会自动起一个本地 `mongodb-atlas-local` 容器
+  （mongod + mongot 一体，**不是**云上 Atlas；数据卷 `mongo-local-*` 持久化，
+  `stop-all.sh --purge` 一并清理）；
+- 想用外部 Mongo（云 Atlas / 自建带 mongot 的副本集），在 `.env` 填
+  `MONGODB_ENDPOINT` 即可；
+- **切换存储后端不会迁移已有数据。** sqlite 在 `MEMORY_CORE_VOLUME` 卷，mongo
+  在 `mongo-local-*` 卷（或外部实例），切换后原数据仍留在原后端。当前版本需
+  自行备份并手工迁移；后续版本将提供官方迁移工具。L2/L3 文件两种模式都在
+  `MEMORY_CORE_VOLUME` 卷。
+
+### 干跑校验（可选）
+
+`verify.sh` 仍可单独使用，只检查环境不启动容器：
+
+```bash
+./verify.sh              # 默认全检（含 LLM 通路预检）
+./verify.sh --skip-llm   # 跳过 LLM 检查（离线环境）
 ```
 
 ## LLM 通路预检
@@ -97,6 +131,17 @@ proxy 接到用户请求后转发到这组端点。
 > 两组可以填相同值（都指向同一个 LLM），也可以完全不同：例如 memory 组用便宜模型做 embedding，proxy 组用强模型做主对话。
 
 参数缺失时脚本会**在启动前一次性列出所有缺失项**并 `exit 1`，不会跑到一半才失败。
+
+## 记忆提示词模式（chat / code）
+
+memory-core 通过 `MEMORY_PROMPT_MODE` 切换 L1/L2/L3 pipeline 的提示词族：
+
+| 模式 | `.env` 值 | 抽取内容 | L3 产物 | 适用场景 |
+|---|---|---|---|---|
+| **code**（默认） | `MEMORY_PROMPT_MODE=code` | 项目事实 / 任务 / 决策 / SOP / 禁忌 | Team Operating Doctrine | coding agent、团队协作、工程项目 |
+| chat | `MEMORY_PROMPT_MODE=chat` | persona / episodic / instruction | persona.md（个人画像） | 个人助手、闲聊、教学 |
+
+> **注意**：`code` 模式下纯闲聊可能抽出 0 条记忆（LLM 认为没有可沉淀的工程内容）。如果 L1 一直没产出，先检查 `MEMORY_PROMPT_MODE` 是否与实际对话场景匹配。
 
 ## 内部凭据（生产环境必看）
 

@@ -113,7 +113,11 @@ build_image() {
     --push \
     "$ctx"
   ok "已推送 ${image}:${VERSION}"
-  [[ "$ALSO_LATEST" == "1" ]] && ok "已推送 ${image}:latest"
+  # 用 if 而非 `[[ ]] && ok`：后者作为函数最后一条语句时，条件为假会让函数返回 1，
+  # 在 set -e 下会静默中断整个 all 流程。
+  if [[ "$ALSO_LATEST" == "1" ]]; then
+    ok "已推送 ${image}:latest"
+  fi
 }
 
 # 抽查镜像文件系统里有没有混进敏感文件

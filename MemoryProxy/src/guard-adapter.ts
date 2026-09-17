@@ -1,7 +1,11 @@
 /**
  * Guard Adapter — minimal bridge between host project and @context-proxy/cost-guard.
  *
- * This is the ONLY file in the host that imports from the cost-guard package.
+ * This file and its sibling `request-prepare-adapter.ts` are the only two in
+ * the host that import the cost-guard package: this one owns the *routing* half
+ * (where a request goes), the sibling owns the *request-preparation* half (an
+ * optional rewrite of the outgoing body). Keep every other module free of it.
+ *
  * It maps host's ProxyConfig → GuardConfig and injects host's log/opik as GuardDeps.
  *
  * **Graceful degradation**: If the private extension package is not available
@@ -18,14 +22,25 @@ import { RedisSessionStore } from "./redis-session-store.js";
 import { matchWhitelistEndpoint } from "./routes/whitelist.js";
 import { opikCreateTrace, opikCreateLlmSpan, uuidv7 } from "./opik.js";
 import { langfuseReportGeneration } from "./langfuse.js";
-import { writeLog } from "./logger.js";
+import { judgeAgentTurn, judgeUserTurn, readJudgeTransport } from "./judge-client.js";
 
 // Optional Opik/Langfuse hooks — invoked only when the private extension is loaded
 // and produces telemetry. Kept out of the primary bridge flow to avoid coupling
 // the passthrough path with observability wiring.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ExtensionTelemetry = { duration: number; input: string; output: string; model: string; usage: Record<string, unknown>; tags: string[] };
-type ExtensionTelemetryCtx = { traceId: string; keyId: string; sessionKey: string; turnSeq: number; startTime: string; spaceId?: string; triggeredBy?: string };
+type ExtensionTelemetryCtx = {
+  traceId: string;
+  langfuseTraceId?: string;
+  traceName?: string;
+  traceTags?: string[];
+  keyId: string;
+  sessionKey: string;
+  turnSeq: number;
+  startTime: string;
+  spaceId?: string;
+  triggeredBy?: string;
+};
 
 // ─── Transport types (host-side, generic) ───────────────────────────────────
 
@@ -36,11 +51,21 @@ interface RetryTarget {
   authHeaders: Record<string, string> | null;
 }
 
+/** Analyzer trace returned by cost-guard for host observability. */
+export interface AnalyzerTrace {
+  duration: number;
+  input: string;
+  output: string;
+  model: string;
+  usage: Record<string, unknown>;
+  tags: string[];
+}
+
 /**
  * ForwardTarget — the generic forwarding instruction returned by the extension.
  *
- * The host only understands transport-level fields; any routing semantics the
- * extension may attach are ignored and never surfaced.
+ * Routing semantics remain opaque, but observability fields are preserved so
+ * the host can attach route/judge attribution to its own logs and traces.
  */
 export interface ForwardTarget {
   url: string;
@@ -48,6 +73,11 @@ export interface ForwardTarget {
   authHeaders: Record<string, string> | null;
   bodyOverrides: Record<string, unknown> | null;
   retryTarget: RetryTarget | null;
+  logLine: string;
+  logLineExtra: string;
+  tags: string[];
+  analyzerTrace: AnalyzerTrace | null;
+  logMeta: Record<string, unknown>;
   /**
    * Monotonic per-session turn sequence number provided by the extension.
    * 0 = not tracked (extension disabled/unavailable) — the handler falls back
@@ -56,6 +86,16 @@ export interface ForwardTarget {
    * collision-free.
    */
   turnSeq: number;
+  /**
+   * The model the client asked for, when the extension chose to forward to a
+   * different one. "" = forwarded as requested, which is also what every
+   * passthrough returns.
+   *
+   * Carried for cost accounting only: `credit_saved` prices one usage record
+   * twice, once under this model and once under the model actually called. The
+   * host never makes a forwarding decision from it.
+   */
+  routedFrom: string;
 }
 
 /** resolveForwardTarget 的输入参数。 */
@@ -95,6 +135,8 @@ export interface ForwardTargetRequest {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let CostGuardClass: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let extensionModule: any = null;
 let setDebugFn: ((enabled: boolean) => void) | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let resolveAgentProfileFn: ((ctx: any, pinned?: string) => any) | null = null;
@@ -106,6 +148,7 @@ let costGuardAvailable = false;
 const COST_GUARD_MODULE = "@context-proxy/cost-guard";
 try {
   const mod = await import(/* @vite-ignore */ COST_GUARD_MODULE);
+  extensionModule = mod;
   CostGuardClass = mod.CostGuard;
   setDebugFn = mod.setAnalyzerDebug;
   resolveAgentProfileFn = mod.resolveAgentProfile;
@@ -129,6 +172,31 @@ export function setExtensionDebug(enabled: boolean): void {
   }
 }
 
+/**
+ * Start the private management listener using opaque extension options. The
+ * host neither parses MongoDB settings nor owns the control-plane protocol.
+ */
+export async function startPrivateControlPlane(config: ProxyConfig): Promise<boolean> {
+  if (!extensionModule || typeof extensionModule.startManagedControlPlane !== "function") return false;
+  const requestPrepare = config.costGuard.options.requestPrepare;
+  const compressorEnabled = Boolean(
+    requestPrepare &&
+    typeof requestPrepare === "object" &&
+    !Array.isArray(requestPrepare) &&
+    (requestPrepare as Record<string, unknown>).enabled === true,
+  );
+  return extensionModule.startManagedControlPlane(
+    config.costGuard.options,
+    { routerEnabled: config.costGuard.enabled, compressorEnabled },
+  ) as Promise<boolean>;
+}
+
+/** Stop the private management listener during host shutdown. */
+export async function shutdownPrivateControlPlane(): Promise<void> {
+  if (!extensionModule || typeof extensionModule.shutdownManagedControlPlane !== "function") return;
+  await extensionModule.shutdownManagedControlPlane();
+}
+
 // ─── Singleton CostGuard instance ────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -149,6 +217,10 @@ function getCostGuard(config: ProxyConfig): unknown {
     const options: Record<string, unknown> = { ...config.costGuard.options };
     const extraOptions = options.badcaseCollector;
     delete options.badcaseCollector;
+    // Belongs to the request-preparation adapter, not the router. Dropping it
+    // keeps credentials nested inside it out of a component that has no use
+    // for them.
+    delete options.requestPrepare;
     const guardConfig = {
       ...options,
       enabled: config.costGuard.enabled,
@@ -156,18 +228,53 @@ function getCostGuard(config: ProxyConfig): unknown {
       anthropicUpstreamUrl: config.costGuard.anthropicUpstream?.url ?? "",
     };
 
-    // Create session store based on config
-    let sessionStore: undefined | RedisSessionStore;
+    // Create session store based on config. Redis is required for the
+    // extension's task-archive / judge side keys in multi-instance deploys.
+    // When Redis is off, inject the extension's in-memory store so the new
+    // FileSessionStore default does not write ~/.cost-guard on this host.
+    let sessionStore: unknown;
     if (config.redis.enabled) {
       redisSessionStore = new RedisSessionStore(config.redis);
       sessionStore = redisSessionStore;
       log.info("guard_adapter.redis_session_store", { keyPrefix: config.redis.keyPrefix });
+    } else {
+      try {
+        const MemoryStore = extensionModule.MemorySessionStore as (new () => unknown) | undefined;
+        if (typeof MemoryStore === "function") {
+          sessionStore = new MemoryStore();
+          log.info("guard_adapter.memory_session_store", {});
+        }
+      } catch {
+        // Older / mocked extension modules may not export MemorySessionStore.
+      }
     }
+
+    const judgeTransport = readJudgeTransport(options);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     guardInstance = new CostGuardClass(guardConfig, {
       log,
       sessionStore,
+      ...(judgeTransport
+        ? {
+            judgeAgentTurn: async (request: {
+              sessionKey: string;
+              messages: unknown[];
+            }) => judgeAgentTurn(judgeTransport, {
+              sessionId: request.sessionKey,
+              messages: request.messages,
+            }),
+            judgeUserTurn: async (request: {
+              sessionKey: string;
+              userQuery: string;
+              requestId?: string;
+            }) => judgeUserTurn(judgeTransport, {
+              sessionId: request.sessionKey,
+              userQuery: request.userQuery,
+              requestId: request.requestId,
+            }),
+          }
+        : {}),
 
       // ── Badcase reporting: structured event to Opik ──
       reportBadcase: (report: Record<string, unknown>) => {
@@ -193,21 +300,6 @@ function getCostGuard(config: ProxyConfig): unknown {
         });
       },
 
-      // ── Optional telemetry callback (opaque to the host) ──
-      // Invoked by the private extension with an internal step payload; the
-      // exact shape of that payload is owned by the extension. The host just
-      // forwards whatever it receives to the configured observability sinks so
-      // that internal steps appear alongside the primary request trace.
-      reportAnalyzerTrace: (trace: ExtensionTelemetry, ctx: ExtensionTelemetryCtx) =>
-        forwardExtensionTelemetry(config, trace, ctx),
-
-      // ── Structured log events (ClickHouse / JSONL) ──
-      writeLogEvent: (event: Record<string, unknown>) => {
-        // The extension produces events matching the host's LogEntry union shape.
-        // We trust the structure and cast — the logger validates internally.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        writeLog(config, event as any);
-      },
     });
 
     // Forward the optional opaque review options to the extension, if supported.
@@ -263,7 +355,13 @@ function buildPassthroughTarget(req: ForwardTargetRequest): ForwardTarget {
     authHeaders: null,
     bodyOverrides: null,
     retryTarget: null,
+    logLine: "passthrough",
+    logLineExtra: "",
+    tags: [],
+    analyzerTrace: null,
+    logMeta: {},
     turnSeq: 0,
+    routedFrom: "",
   };
 }
 
@@ -357,7 +455,9 @@ export async function resolveForwardTarget(
     log.debug("guard_adapter.passthrough", { reason: "extension_unavailable", requestPath: req.requestPath });
     return buildPassthroughTarget(req);
   }
-  if (!config.costGuard.enabled) {
+  // Preserve the historical master switch unless the private control plane is
+  // configured to make a request-specific activation decision.
+  if (!config.costGuard.enabled && config.costGuard.options.controlPlane === undefined) {
     log.debug("guard_adapter.passthrough", { reason: "extension_disabled", requestPath: req.requestPath });
     return buildPassthroughTarget(req);
   }
@@ -368,8 +468,17 @@ export async function resolveForwardTarget(
     authHeaders: Record<string, string> | null;
     bodyOverrides: Record<string, unknown> | null;
     retryTarget: RetryTarget | null;
+    logLine?: string;
+    logLineExtra?: string;
+    tags?: unknown[];
+    analyzerTrace?: AnalyzerTrace | null;
     turnSeq?: number;
+    logMeta?: Record<string, unknown>;
   };
+
+  // The extension stamps `logMeta.routedFrom` only when it forwarded to a model
+  // other than the requested one; the rest of that blob stays opaque.
+  const routedFrom = raw.logMeta?.routedFrom;
 
   return {
     url: raw.url,
@@ -377,11 +486,28 @@ export async function resolveForwardTarget(
     authHeaders: raw.authHeaders ?? null,
     bodyOverrides: raw.bodyOverrides ?? null,
     retryTarget: raw.retryTarget ?? null,
+    logLine: typeof raw.logLine === "string" ? raw.logLine : "",
+    logLineExtra: typeof raw.logLineExtra === "string" ? raw.logLineExtra : "",
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.filter((tag): tag is string => typeof tag === "string")
+      : [],
+    analyzerTrace: raw.analyzerTrace ?? null,
+    logMeta: raw.logMeta && typeof raw.logMeta === "object" ? raw.logMeta : {},
     turnSeq: raw.turnSeq ?? 0,
+    routedFrom: typeof routedFrom === "string" ? routedFrom : "",
   };
 }
 
 // ─── Extension telemetry forwarding (used only when the private extension is loaded) ───
+
+/** Forward a returned analyzer trace after the host has created its turn trace. */
+export function reportAnalyzerTrace(
+  config: ProxyConfig,
+  trace: AnalyzerTrace,
+  ctx: ExtensionTelemetryCtx,
+): void {
+  forwardExtensionTelemetry(config, trace, ctx);
+}
 
 /**
  * Forward an opaque telemetry payload from the private extension to the
@@ -398,8 +524,11 @@ function forwardExtensionTelemetry(
   ctx: ExtensionTelemetryCtx,
 ): void {
   const endTime = new Date().toISOString();
-  const pureKeyId = ctx.keyId.split(":")[0] ?? ctx.keyId;
-  const sessionId = ctx.keyId.includes(":") ? ctx.keyId.slice(ctx.keyId.indexOf(":") + 1) : ctx.keyId;
+  const sessionId = ctx.sessionKey || ctx.keyId;
+  const sessionSuffix = `:${sessionId}`;
+  const pureKeyId = ctx.keyId.endsWith(sessionSuffix)
+    ? ctx.keyId.slice(0, -sessionSuffix.length)
+    : ctx.keyId;
   const tags = [...(trace.tags || []), `session:${sessionId}`];
 
   opikCreateLlmSpan(config, {
@@ -418,7 +547,7 @@ function forwardExtensionTelemetry(
   if (trace.duration > 0) {
     const end = new Date(Date.parse(ctx.startTime) + trace.duration).toISOString();
     langfuseReportGeneration({
-      traceId: ctx.traceId,
+      traceId: ctx.langfuseTraceId ?? ctx.traceId,
       name: `[internal] ${trace.model}`,
       model: trace.model,
       startTime: ctx.startTime,
@@ -426,10 +555,10 @@ function forwardExtensionTelemetry(
       input: trace.input ? [{ role: "user", content: trace.input }] : undefined,
       output: trace.output ? { role: "assistant", content: trace.output } : undefined,
       usage: trace.usage && Object.keys(trace.usage).length > 0 ? trace.usage : undefined,
-      traceName: `${trace.model} / ${pureKeyId}`,
+      traceName: ctx.traceName ?? `${trace.model} / ${pureKeyId}`,
       userId: pureKeyId,
       sessionId,
-      tags,
+      tags: ctx.traceTags ?? [`session:${sessionId}`],
       observationMetadata: { kind: "internal", tags: trace.tags },
     });
   }

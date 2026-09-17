@@ -51,6 +51,8 @@
   --input-background: var(--tea-color-bg-primary-default);
   --ring: var(--tea-color-border-brand-default);
   --heavy: var(--tea-color-border-secondary-default);
+  /* 等宽字体栈（代码/密钥/ID 展示统一走此 token） */
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   color-scheme: light;
 }
 
@@ -63,8 +65,9 @@
 
 body {
   /* 对齐 Tea Design 官方字体栈（node_modules/tea-component/dist/tea.css） */
-  font-family: Roboto, "San Francisco", "Helvetica Neue", Helvetica, Arial,
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-family:
+    Roboto, 'San Francisco', 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
   font-size: 14px;
   line-height: 1.5;
   background: var(--background-deep);
@@ -76,19 +79,29 @@ body {
 /* ===== 全局交互反馈（0.25s cubic-bezier） ===== */
 
 /* 按钮：hover 色变 + active 缩放 */
-button, [role="button"] {
-  transition: color 0.2s, background-color 0.2s, border-color 0.2s,
-              box-shadow 0.2s, transform 0.15s, opacity 0.2s;
+button,
+[role='button'] {
+  transition:
+    color 0.2s,
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.15s,
+    opacity 0.2s;
 }
 button:not(:disabled):active,
-[role="button"]:not(:disabled):active {
+[role='button']:not(:disabled):active {
   transform: scale(0.97);
   transition-duration: 0.1s;
 }
 
 /* 输入框：聚焦有 ring */
-input, select, textarea {
-  transition: border-color 0.2s, box-shadow 0.2s;
+input,
+select,
+textarea {
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 /* 链接 */
@@ -97,19 +110,23 @@ a {
 }
 
 /* 焦点环 */
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
-[role="button"]:focus-visible {
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
 /* 卡片 / 圆角容器：hover 提升阴影 + 微位移 */
-[class*="rounded-xl"],
-[class*="rounded-lg"] {
-  transition: border-color 0.25s cubic-bezier(.25,.8,.5,1),
-              box-shadow 0.25s cubic-bezier(.25,.8,.5,1),
-              background-color 0.2s,
-              transform 0.25s cubic-bezier(.25,.8,.5,1);
+[class*='rounded-xl'],
+[class*='rounded-lg'] {
+  transition:
+    border-color 0.25s cubic-bezier(0.25, 0.8, 0.5, 1),
+    box-shadow 0.25s cubic-bezier(0.25, 0.8, 0.5, 1),
+    background-color 0.2s,
+    transform 0.25s cubic-bezier(0.25, 0.8, 0.5, 1);
 }
 
 /* 选中列表项左侧高亮条 */
@@ -149,10 +166,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 
 /* ===== 输入框聚焦 ===== */
-input[type="text"]:focus,
-input[type="search"]:focus,
-input[type="email"]:focus,
-input[type="password"]:focus,
+input[type='text']:focus,
+input[type='search']:focus,
+input[type='email']:focus,
+input[type='password']:focus,
 textarea:focus,
 select:focus {
   border-color: var(--primary);
@@ -177,4 +194,67 @@ select:focus {
   height: 1px;
   content: '';
   background: linear-gradient(to right, transparent, var(--border) 50%, transparent);
+}
+
+/* ===== 引导自定义高亮层（替代 tea Guide 内置 mask） =====
+   tea Guide 内置 mask 用 react-popper 定位：在内部滚动容器
+   （.tea-layout__content）下存在固定偏差（约 3~5px）且不随滚动更新，
+   导致高亮框"漏边"。这里隐藏内置 mask，改用 OnboardingGuide 里
+   getBoundingClientRect 实时计算的 _guide-mask 层。 */
+.tea-overlay[style*='z-index: 9999'] {
+  display: none !important;
+}
+
+/* ===== 引导平滑动画（与 scrollIntoView smooth 滚动曲线对齐） =====
+   步骤切换时气泡（popper transform）与高亮框/遮罩块（top/left/width/height）
+   带过渡动画：同页切换随滚动平滑滑到新位置，全程可见、无"无遮罩空窗"。 */
+.tea-guide {
+  transition:
+    transform 0.3s ease-in-out,
+    opacity 0.18s ease-in-out;
+}
+
+._guide-mask-block,
+._guide-mask-ring {
+  transition:
+    top 0.3s ease-in-out,
+    left 0.3s ease-in-out,
+    width 0.3s ease-in-out,
+    height 0.3s ease-in-out,
+    opacity 0.18s ease-in-out;
+}
+
+/* 跨页切换窗口：旧锚点随页面卸载（popper 对 detached 元素会定位到 0,0），
+   先淡出遮住该窗口；新页面锚点就绪后瞬间落位再淡入（见 OnboardingGuide.tsx）。
+   ⚠️ 只淡出「气泡」与「高亮描边(ring)」——它们会随旧锚点卸载跳到 (0,0) 需遮住；
+   深色遮罩块 (_guide-mask-block) 必须全程保留、绝不整体淡出：
+   否则跨页瞬间深色遮罩撤除、底下浅色页面全露，会造成「整屏闪白」。
+   洞的位移由 _guide-no-anim 在新页就绪后瞬间落位完成，全程暗底、无闪白。 */
+body._guide-fading .tea-guide,
+body._guide-fading ._guide-mask-ring {
+  opacity: 0 !important;
+}
+
+/* 首帧定位完成前禁用过渡：避免初始显示 / 跨页落位时从 (0,0) 滑入 */
+body._guide-no-anim .tea-guide,
+body._guide-no-anim ._guide-mask-block,
+body._guide-no-anim ._guide-mask-ring {
+  transition: none !important;
+}
+
+._guide-mask-block {
+  position: fixed;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 9998;
+  pointer-events: none;
+}
+
+._guide-mask-ring {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.9),
+    0 0 16px rgba(0, 0, 0, 0.4);
 }

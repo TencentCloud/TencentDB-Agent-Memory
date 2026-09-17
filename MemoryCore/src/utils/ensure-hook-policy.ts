@@ -182,8 +182,14 @@ export function ensurePluginHookPolicy(params: {
   const { logger } = params;
   const TAG = "[memory-tdai] [hook-policy]";
 
-  if (!isGatewayStart()) return;
-  if (hasPolicyAlready(params.rootConfig)) return;
+  if (!isGatewayStart()) {
+    logger.debug?.(`${TAG} Skipped: current process is not the OpenClaw gateway start command.`);
+    return;
+  }
+  if (hasPolicyAlready(params.rootConfig)) {
+    logger.info(`${TAG} allowConversationAccess is already active; no config patch needed.`);
+    return;
+  }
 
   // Try SDK path first (handles everything + triggers restart)
   if (params.runtimeConfig?.mutateConfigFile) {

@@ -1,17 +1,18 @@
 /**
  * BindingRepo — 长期 session binding 持久化。
  *
- * 在 KV 里存一份"小纸条"，只记 outcome + id 组，永不自动清理（`nottl/` 前缀）。
- * 用于沉睡对话唤醒：热缓存(30min)过期后，从 binding 恢复 agent/task 选择。
+ * 在 KV 里存一份"小纸条",只记 outcome + id 组,永不自动清理(`nottl/` 前缀)。
+ * 用于沉睡对话唤醒 + bridge L2 反查身份。
  *
  * ── Signature note ────────────────────────────────────────────────────────
- * 见 docs/design/2026-07-12-cos-shark-sts-credential-plan.md §3.6：所有方法
- * 第一个参数是 `spaceId`（kernel-sts 模式下 STS 权限按 space 隔离，key 路径
- * 也随之带 spaceId 段）；空 spaceId 上下文的老 caller 传 `""` / `undefined`
- * 时会被 sessionDirOf 内部当作 `_default` 兜底段处理。
- *
- * 原方案 (2026-07-10) 仅有 (userId, agentSource, sessionId) 三段，spaceId
- * 层是 P4 kernel-sts 支持新增。
+ * 见 docs/design/2026-08-03-binding-flatten.md:
+ *   - 原方案 (2026-07-10) 用 `(userId, agentSource, sessionId)` 三段作 key,
+ *     加上 P4 (2026-07-12 kernel-sts) 的 `spaceId` 一共 4 段
+ *   - 但 bridge 侧 curl 只能给 (spaceId, sessionId) —— 拿不到 userId/agentSource,
+ *     跨 pod L1 miss 时永远拼不出老 key,401 到底
+ *   - 拍平后:方法签名减到 `(spaceId, sessionId)`,userId/agentSource 挪到
+ *     `SessionBinding` 结构体里,`userKey` 也一起存进去(memory-bridge L2b
+ *     恢复后 chat_memory 检索不再降级)
  */
 
 import type { Redis } from "ioredis";
@@ -25,48 +26,34 @@ export interface SessionBinding {
   teamId?: string;
   agentId?: string;
   taskId?: string;
+  /**
+   * URL path 侧的 agent 前缀(`claude-code` / `codebuddy` ...)。session init
+   * 落盘时从 identity 里带过来,bridge 反查时用它 stamp 到 outbound。
+   */
+  agentSource?: string;
+  /**
+   * 用户 apiKey。memory-bridge 恢复 chat_memory 检索时要用它去 kernel
+   * 查 imported agents(见 `memory-bridge.ts:resolveMemoryCtxs`),缺失
+   * 会静默降级成 self-only。老 4 段路径不带这个字段,恢复后必降级 ——
+   * 拍平后一起存进来,顺手修好。
+   */
+  userKey?: string;
 }
 
 export interface BindingRepo {
-  getBinding(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-  ): Promise<SessionBinding | null>;
-  putBinding(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-    binding: SessionBinding,
-  ): Promise<void>;
-  deleteBinding(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-  ): Promise<void>;
-  touchLastSeen(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-  ): Promise<void>;
+  getBinding(spaceId: string, sessionId: string): Promise<SessionBinding | null>;
+  putBinding(spaceId: string, sessionId: string, binding: SessionBinding): Promise<void>;
+  deleteBinding(spaceId: string, sessionId: string): Promise<void>;
+  touchLastSeen(spaceId: string, sessionId: string): Promise<void>;
 }
 
 function ttlSeconds(days: number): number {
   return days * 86400;
 }
 
-function redisKey(
-  spaceId: string,
-  userId: string,
-  agentSource: string,
-  sessionId: string,
-): string {
+function redisKey(spaceId: string, sessionId: string): string {
   const sp = spaceId || "_default";
-  return `${REDIS_KEY_PREFIX}${sp}:${userId}:${agentSource}:${sessionId}`;
+  return `${REDIS_KEY_PREFIX}${sp}:${sessionId}`;
 }
 
 export class RedisBindingRepo implements BindingRepo {
@@ -75,14 +62,9 @@ export class RedisBindingRepo implements BindingRepo {
     private bindingTtlDays: number = DEFAULT_BINDING_TTL_DAYS,
   ) {}
 
-  async getBinding(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-  ): Promise<SessionBinding | null> {
+  async getBinding(spaceId: string, sessionId: string): Promise<SessionBinding | null> {
     try {
-      const all = await this.redis.hgetall(redisKey(spaceId, userId, agentSource, sessionId));
+      const all = await this.redis.hgetall(redisKey(spaceId, sessionId));
       if (!all || Object.keys(all).length === 0) return null;
       return {
         outcome: (all.outcome as "initialized" | "bypassed") || "initialized",
@@ -90,19 +72,15 @@ export class RedisBindingRepo implements BindingRepo {
         teamId: all.team_id || undefined,
         agentId: all.agent_id || undefined,
         taskId: all.task_id || undefined,
+        agentSource: all.agent_source || undefined,
+        userKey: all.user_key || undefined,
       };
     } catch {
       return null;
     }
   }
 
-  async putBinding(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-    binding: SessionBinding,
-  ): Promise<void> {
+  async putBinding(spaceId: string, sessionId: string, binding: SessionBinding): Promise<void> {
     const now = Date.now().toString();
     try {
       const fields: Record<string, string> = {
@@ -114,8 +92,10 @@ export class RedisBindingRepo implements BindingRepo {
       if (binding.teamId) fields.team_id = binding.teamId;
       if (binding.agentId) fields.agent_id = binding.agentId;
       if (binding.taskId) fields.task_id = binding.taskId;
+      if (binding.agentSource) fields.agent_source = binding.agentSource;
+      if (binding.userKey) fields.user_key = binding.userKey;
 
-      const key = redisKey(spaceId, userId, agentSource, sessionId);
+      const key = redisKey(spaceId, sessionId);
       await this.redis.hset(key, fields);
       await this.redis.expire(key, ttlSeconds(this.bindingTtlDays));
     } catch {
@@ -123,27 +103,17 @@ export class RedisBindingRepo implements BindingRepo {
     }
   }
 
-  async deleteBinding(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-  ): Promise<void> {
+  async deleteBinding(spaceId: string, sessionId: string): Promise<void> {
     try {
-      await this.redis.del(redisKey(spaceId, userId, agentSource, sessionId));
+      await this.redis.del(redisKey(spaceId, sessionId));
     } catch {
       /* ignore */
     }
   }
 
-  async touchLastSeen(
-    spaceId: string,
-    userId: string,
-    agentSource: string,
-    sessionId: string,
-  ): Promise<void> {
+  async touchLastSeen(spaceId: string, sessionId: string): Promise<void> {
     try {
-      const key = redisKey(spaceId, userId, agentSource, sessionId);
+      const key = redisKey(spaceId, sessionId);
       await this.redis.hset(key, "last_seen", Date.now().toString());
       await this.redis.expire(key, ttlSeconds(this.bindingTtlDays));
     } catch {
@@ -154,29 +124,8 @@ export class RedisBindingRepo implements BindingRepo {
 
 /** Null repo for when Redis is disabled. */
 export class NullBindingRepo implements BindingRepo {
-  async getBinding(
-    _spaceId: string,
-    _userId: string,
-    _agentSource: string,
-    _sessionId: string,
-  ): Promise<SessionBinding | null> { return null; }
-  async putBinding(
-    _spaceId: string,
-    _userId: string,
-    _agentSource: string,
-    _sessionId: string,
-    _binding: SessionBinding,
-  ): Promise<void> {}
-  async deleteBinding(
-    _spaceId: string,
-    _userId: string,
-    _agentSource: string,
-    _sessionId: string,
-  ): Promise<void> {}
-  async touchLastSeen(
-    _spaceId: string,
-    _userId: string,
-    _agentSource: string,
-    _sessionId: string,
-  ): Promise<void> {}
+  async getBinding(_spaceId: string, _sessionId: string): Promise<SessionBinding | null> { return null; }
+  async putBinding(_spaceId: string, _sessionId: string, _binding: SessionBinding): Promise<void> {}
+  async deleteBinding(_spaceId: string, _sessionId: string): Promise<void> {}
+  async touchLastSeen(_spaceId: string, _sessionId: string): Promise<void> {}
 }

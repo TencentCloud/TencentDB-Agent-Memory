@@ -16,7 +16,7 @@ import type { AgentAdapter } from "./types.js";
 
 export const claudeCodeAdapter: AgentAdapter = {
   agentKind: "claude-code",
-  classifyRequest(body) {
+  classifyRequest(body, _path?, _headers?) {
     return classifyCcRequest(body);
   },
   extractUserText(content) {

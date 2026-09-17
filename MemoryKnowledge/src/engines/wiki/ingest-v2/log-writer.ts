@@ -5,8 +5,13 @@
  *   ## YYYY-MM-DD
  *   * **ingest** <源文件名> — 写入 N 页
  *
+ * 批量 ingest 另有：
+ *   * **batch-ingest** N sources (...) — wrote M pages
+ *
  * log.md 是结构性文件（page/write/rm 禁改），但 ingest 可维护它。
  * 无 frontmatter（OKF 约定）。纯文本追加，不调用 LLM。
+ *
+ * 自研实现，未参考任何 GPL 代码。
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -29,6 +34,31 @@ export function renderLogEntry(sourceName: string, pageCount: number): string {
   return `* **ingest** ${sourceName} — wrote ${pageCount} pages`;
 }
 
+/** 渲染批量 ingest 日志行。 */
+export function renderBatchLogEntry(sourcesProcessed: string[], pageCount: number): string {
+  const list = sourcesProcessed.join(", ");
+  return `* **batch-ingest** ${sourcesProcessed.length} sources (${list}) — wrote ${pageCount} pages`;
+}
+
+function readLogBody(logPath: string): string {
+  if (!existsSync(logPath)) return "";
+  try {
+    return readFileSync(logPath, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+function appendEntries(projectPath: string, entries: string[], now: Date): void {
+  const logPath = join(projectPath, "wiki", "log.md");
+  const day = today(now);
+  let body = readLogBody(logPath);
+  for (const entry of entries) {
+    body = mergeEntry(body, day, entry);
+  }
+  writeFileSync(logPath, body, "utf-8");
+}
+
 /**
  * 追加一条摄取日志到 wiki/log.md（最新日期分组在前）。
  *
@@ -43,21 +73,31 @@ export function appendIngestLog(
   pageCount: number,
   now = new Date(),
 ): void {
-  const logPath = join(projectPath, "wiki", "log.md");
-  const day = today(now);
-  const entry = renderLogEntry(sourceName, pageCount);
+  appendEntries(projectPath, [renderLogEntry(sourceName, pageCount)], now);
+}
 
-  let body = "";
-  if (existsSync(logPath)) {
-    try {
-      body = readFileSync(logPath, "utf-8");
-    } catch {
-      body = "";
-    }
+export interface BatchIngestLogInput {
+  sourcesProcessed: string[];
+  pagesWritten: string[];
+  mergeErrors: string[];
+}
+
+/**
+ * 批量聚合日志（一次 ingest 一条 batch 记录，可选 merge-errors）。
+ * 与 appendIngestLog 共存，写入同一个 wiki/log.md。
+ */
+export function appendIngestLogBatch(
+  projectPath: string,
+  input: BatchIngestLogInput,
+  now = new Date(),
+): void {
+  const entries = [
+    renderBatchLogEntry(input.sourcesProcessed, input.pagesWritten.length),
+  ];
+  for (const err of input.mergeErrors) {
+    entries.push(`* **merge-errors** ${err}`);
   }
-
-  const next = mergeEntry(body, day, entry);
-  writeFileSync(logPath, next, "utf-8");
+  appendEntries(projectPath, entries, now);
 }
 
 /**

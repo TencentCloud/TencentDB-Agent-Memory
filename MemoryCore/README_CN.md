@@ -17,6 +17,8 @@ MemoryCore 独立运行，通过 HTTP Gateway 对外提供这些能力。OpenCla
 - **Knowledge 元信息登记**：登记知识源并维护其标识、类型、状态、关联关系和服务地址。
 - **资产元信息管理**：管理 User、Team、Agent、Task、Skill、Knowledge Asset，以及成员、归属和访问关系。
 - **Skill Memory**：支持 Skill 创建、版本、资源、搜索、路由和对话抽取。
+- **自定义 Memory Prompt**：支持 L1/L2/L3 Prompt CRUD 和 Agent、Team、Instance 绑定，按 `Agent > Team > Instance > 系统内置` 解析生效策略；自定义内容只能调整记忆关注点和归纳策略，不能修改固定输出协议。
+- **生成溯源**：记录 L1/L2/L3 实际使用的 Prompt ID、版本、来源、内容哈希以及输入输出引用，支持按 Memory ID 精确定位生成日志；不保存 Prompt 正文快照。
 - **统一访问接口**：通过 HTTP API 和 TypeScript/Python SDK 为 Adapter 与应用提供能力。
 
 ## 架构
@@ -181,9 +183,75 @@ TDAI_MEMORY_INSTANCE_ID=default
 | `/v3/skill/*` | Skill 管理、检索、版本、资源和抽取 | 稳定 |
 | `/v3/meta/*` | User、Team、Agent、Task、Asset 和权限关系 | 管理面 |
 | `/v3/knowledge/*` | 知识资产元数据登记 | 管理面 |
+| `/v3/memory-prompt/*` | 自定义 Prompt CRUD、绑定、生效查询和设置日志 | 管理面 |
+| `/v3/memory-generation-log/list`、`/get` | L1-L3 生成日志列表、详情和按 Memory ID 溯源 | 管理面 |
 | `/health` | 健康检查 | 公共 |
 
 v3 记忆数据面要求 `team_id`、`agent_id`、`user_id`，可以通过请求体或对应的 `x-tdai-*` Header 传入；`session_id` 可选，用于限定会话范围。
+
+## 自定义 Prompt 与生成溯源
+
+每个 Memory Instance 最多创建 500 个自定义 Prompt，单个 Prompt 内容最长 10,000 个 Unicode 字符。Prompt 本体和目标绑定分开存储，更新时保持 `memory_prompt_id` 不变并执行 `version += 1`，已有绑定的新生成任务会使用最新版本。
+
+目标优先级：
+
+```text
+Agent > Team > Instance > 系统内置
+```
+
+- Agent 由 `team_id + agent_id` 唯一确定。
+- 未命中自定义 Prompt 时，L1/L2/L3 完全使用当前系统默认 Prompt。
+- 命中时只追加客户记忆策略；L1 JSON、L2 Scene Markdown 和 L3 Persona/Doctrine 的固定输出协议不可修改。
+- 删除 Prompt 会清理相关绑定，运行时自动回退到下一级。
+
+主要接口：
+
+```text
+POST /v3/memory-prompt/create
+GET  /v3/memory-prompt/get
+POST /v3/memory-prompt/update
+POST /v3/memory-prompt/delete
+POST /v3/memory-prompt/set
+GET  /v3/memory-prompt/log
+GET  /v3/memory-generation-log/list
+GET  /v3/memory-generation-log/get
+```
+
+创建 Prompt 示例：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8420/v3/memory-prompt/create \
+  -H "Authorization: Bearer ${TDAI_GATEWAY_API_KEY}" \
+  -H "x-tdai-service-id: local-memory" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "architecture-decisions",
+    "layer": "l1",
+    "prompt": "重点提取架构决策、兼容性约束、风险和可复用方法。"
+  }'
+```
+
+本地未配置 `TDAI_GATEWAY_API_KEY` 且只监听回环地址时，可以省略 `Authorization`；`x-tdai-service-id` 始终必填。
+
+生成日志不保存自定义 Prompt 正文，只记录 Prompt ID、版本、来源和 SHA-256。按 Memory ID 查询：
+
+```bash
+curl -sS -G http://127.0.0.1:8420/v3/memory-generation-log/get \
+  -H "Authorization: Bearer ${TDAI_GATEWAY_API_KEY}" \
+  -H "x-tdai-service-id: local-memory" \
+  --data-urlencode "memory_id=<memory-id>" \
+  --data-urlencode "layer=l1"
+```
+
+TypeScript SDK 导出 `MemoryPromptClient`、`MemoryGenerationLogClient`；Python SDK同时提供同步和异步客户端。
+
+真实 VDB、COS 和 OpenAI-compatible 模型的分层生成 E2E：
+
+```bash
+npm run e2e:memory-prompt:vdb-cos
+```
+
+该测试验证 Agent L1、Team L2、Instance L3 Prompt 的实际模型请求、Memory/Profile 持久化、Generation Ref 和 COS 日志，并使用唯一测试 ID 清理本次数据。
 
 ## 配置
 

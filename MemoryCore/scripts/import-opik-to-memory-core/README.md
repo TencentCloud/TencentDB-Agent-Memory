@@ -8,6 +8,7 @@
 - 支持按 Project 名称或 UUID 选择项目
 - 识别 `messages`、`conversation`、`history`、`prompt/response`、OpenAI `choices` 等常见 Trace 结构
 - 自动合并 input/output 消息、消除重叠并限制单条消息和单批大小
+- 写入前按 Session 预检；预计超过 4 万条 L0 时，跨 Trace 去重并优先导入最新尾部快照
 - 支持 Dry Run、断点续传、网络重试和 Pipeline 节流
 - 密钥只从环境变量读取
 
@@ -139,6 +140,48 @@ POST <MEMORY_CORE_URL>/v3/conversation/add
 - `task_id`: `MEMORY_CORE_TASK_ID`，可选
 - `session_id`: 根据 Opik Project ID 和 `thread_id`/Trace ID 稳定生成
 
+每条消息会把 Opik 原始时间同时写入：
+
+- `timestamp`：消息实际发生时间
+- `recorded_at`：L0 入库排序时间，对应 TCVDB 的 `recorded_at_ms`
+
+因此面板按 `recorded_at_ms desc` 排序时，会按 Opik 历史时间展示，而不是按本次导入执行时间展示。未显式传入 `recorded_at` 的普通 Memory Core 写入仍使用服务端接收时间。
+
+## 超大 Session 保护
+
+默认 `--max-session-messages 40000`。这里统计的是 L0 消息条数，不是 user/assistant 配对后的“轮数”；4 万条消息约等于 2 万轮标准问答，低于已知的单 Session 5 万条风险边界。
+
+工具会先按目标 `session_id` 汇总本次将处理的 Trace。若同一 Session 预计写入超过上限：
+
+1. 按 Trace 时间顺序合并累计对话，消除前一个 Trace 历史在后一个 Trace 中重复出现的问题；
+2. 只保留去重后最新的 N 条消息；
+3. 优先写入一个独立的尾部快照 Session，ID 形如 `原session:t40000:<快照哈希>`；
+4. 不再把该源 Session 的旧 Trace 逐条写入，因此单个新 Session 不会超过配置上限。
+
+独立快照 ID 会随尾部内容变化。数据源后续新增消息时会生成新的快照 Session，避免继续向旧 Session 追加并重新突破上限。
+
+Dry Run 检查超大 Session：
+
+```bash
+npm run import:opik -- \
+  --project '5d0fd72d' \
+  --max-session-messages 40000 \
+  --large-session-strategy tail \
+  --dry-run
+```
+
+如果不允许截断，希望发现超限就停止：
+
+```bash
+npm run import:opik -- \
+  --project '5d0fd72d' \
+  --max-session-messages 40000 \
+  --large-session-strategy error \
+  --dry-run
+```
+
+使用 `--max-session-messages 0` 可以关闭保护，但对于可能超过 5 万条 L0 的 Session 不建议这样做。
+
 ## 断点续传
 
 默认启用断点续传。每个成功批次会立即写入 `--state-file`，重新执行相同命令时自动跳过已完成批次：
@@ -213,6 +256,8 @@ export OPIK_AUTH_SCHEME='Bearer'
 | `--project` | 全部项目 | Project 名称或 UUID，可重复或逗号分隔 |
 | `--page-size` | `100` | Opik API 每页数量 |
 | `--max-traces` | `0` | 本次最多处理的 Trace 数，`0` 表示不限 |
+| `--max-session-messages` | `40000` | 单个目标 Session 最多写入的 L0 消息数，`0` 禁用保护 |
+| `--large-session-strategy` | `tail` | 超限时保留最新尾部；`error` 表示直接停止 |
 | `--state-file` | `.opik-memory-import-state.json` | 断点文件 |
 | `--dry-run` | 关闭 | 只拉取和转换，不写入 |
 | `--no-resume` | 关闭 | 忽略断点，可能重复导入 |

@@ -14,6 +14,7 @@ import {
   canManageAssetScope,
   useAssetConfigScopes
 } from '@/services';
+import { useUserDisplayName } from '@/services/user-profile-store';
 import './asset-scope-manager.css';
 
 export interface AssetScopeItem {
@@ -21,6 +22,21 @@ export interface AssetScopeItem {
   name: string;
   owner_user_id?: string;
   meta?: string;
+}
+
+/** Owner 标签：显示 display_name（未命中回退 id），title 保留 user_id。抽子组件因 .map 内不能调 hook。 */
+function ScopeOwnerLabel({ ownerId, isMe }: { ownerId: string; isMe: boolean }) {
+  const { t } = useTranslation();
+  const name = useUserDisplayName(ownerId);
+  return (
+    <Text theme="weak" className="_memory-asset-scope-item-owner">
+      {t('assetScope.owner')}{' '}
+      <span className="_memory-asset-scope-item-owner-id" title={ownerId}>
+        @{name || ownerId}
+      </span>
+      {isMe && <Text theme="primary">{t('assetScope.you')}</Text>}
+    </Text>
+  );
 }
 
 export default function AssetScopeManager({
@@ -81,10 +97,7 @@ export default function AssetScopeManager({
                       {item.name}
                     </span>
                     {effectiveOwner ? (
-                      <Text theme="weak" className="_memory-asset-scope-item-owner">
-                        {t('assetScope.owner')} <span className="_memory-asset-scope-item-owner-id">@{effectiveOwner}</span>
-                        {ownerIsMe && <Text theme="primary">{t('assetScope.you')}</Text>}
-                      </Text>
+                      <ScopeOwnerLabel ownerId={effectiveOwner} isMe={ownerIsMe} />
                     ) : (
                       <Text theme="weak" className="_memory-asset-scope-item-owner">{t('assetScope.noOwner')}</Text>
                     )}

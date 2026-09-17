@@ -1,5 +1,5 @@
 /**
- * v3 元数据 API 请求体 Zod schema（54 公开接口）。
+ * v3 元数据 API 请求体 Zod schema（55 公开接口）。
  *
  * 对应设计文档 §7.1。每个 schema 校验对应路由的请求体；
  * 路由 handler 用 `schema.safeParse(body)` 校验后再调用 MetadataService。
@@ -37,12 +37,59 @@ const userIdOrKeyRefine = { message: "user_id or user_key is required" } as cons
 export const userIdOrKeySchema = userIdOrKeyFields.refine(requireUserIdOrKey, userIdOrKeyRefine);
 
 // ── User（v3.1）──
+/**
+ * 外部认证关联标识：外部 IdP（如 WOA 工号体系）下该用户的唯一 id。
+ * 直接复用 core 既有的 meta_users.external_id 字段（origin 引入，原为太湖 OAuth2
+ * 的 sub/工号而设），不新建关联表。
+ */
+const externalIdField = z.string().min(1);
+
+/** 按外部认证标识查用户：外部认证登录后判断是否初次（无绑定=初次）。 */
+export const userFindByExternalSchema = z.object({
+  external_id: externalIdField,
+  auth_provider: z.string().min(1).optional(),
+});
+
+/** 把外部认证标识绑定到已有账号（存量账号接入外部认证）。 */
+export const userBindExternalSchema = z.object({
+  user_id: z.string().min(1),
+  external_id: externalIdField,
+  auth_provider: z.string().min(1).optional(),
+  // 可选：IdP 侧展示名（如 WOA 中文名）。仅在目标账号 display_name 为空时补写，
+  // 不覆盖已有名字。
+  display_name: z.string().min(1).optional(),
+});
+
 export const userCreateSchema = z.object({
   username: nonEmpty,
   // 可选：管控/内部侧建"服务账号"时指定确定性 user_id（如 knowledge-service），
   // 便于 proxy systemUsers 白名单按稳定 user_id 命中；不传则内核随机生成 usr-xxx。
   // 仅 system_admin 可调用本接口（见 v3-meta-router assertCanManageUsers）。
   user_id: z.string().min(1).optional(),
+  // 可选：外部认证体系（如 WOA）的唯一标识（工号）。外部认证建号时必须传，
+  // 否则下次登录无法通过该 id 反查到账号，会被误判为"初次登录"。
+  external_id: z.string().min(1).optional(),
+  // 可选：外部认证体系标识（如 woa）。省略则回落 local，与 external_id 一起
+  // 构成 (auth_provider, external_id) 查询域——传 external_id 时**必须**同时传，
+  // 否则绑定与反查会落在不同域里（写入 local、查询 woa）而互不可见。
+  auth_provider: z.string().min(1).optional(),
+  // 可选：展示名（如 WOA 中文名）。列表/成员展示优先取它，缺省回落到 username。
+  display_name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+});
+
+// /v3/meta/user/create 的姊妹接口：允许 system_admin 在建号时显式指定 user_key。
+// user_id 不接受入参（zod 默认 strip），由内核生成后返回；user_key 格式由调用方负责，
+// 内核只做非空校验 + DB 层 UNIQUE 兜底（重复抛 duplicate_user_key）。
+export const userCreateWithKeySchema = z.object({
+  username: nonEmpty,
+  user_key: nonEmpty,
+  // 可选：外部认证体系（如 WOA）的唯一标识（工号），语义同 userCreateSchema.external_id。
+  external_id: z.string().min(1).optional(),
+  // 可选：外部认证体系标识（如 woa）/ 展示名 / 邮箱，语义同 userCreateSchema 同名可选字段。
+  auth_provider: z.string().min(1).optional(),
+  display_name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
 });
 export const initAdminSchema = z.object({
   username: nonEmpty,
@@ -286,6 +333,13 @@ export const fixedAssetListWithDetailSchema = z.object({
   agent_id: nonEmpty,
   apply_visibility_filter: z.boolean().optional(),
   touch_usage: z.boolean().optional(),
+  /**
+   * 可选类型过滤：只返回 asset_type 在该列表中的绑定。
+   * 传空数组或省略 = 不过滤（返回全部类型）。
+   * 用于 caller 明确只需要某几类资产（如 proxy knowledge-tools-injector
+   * 只需 llm_wiki + code_graph），避免在混合列表分页外的类型被截断。
+   */
+  asset_types: z.array(assetType).optional(),
 }).merge(paginationInputSchema);
 
 /** agent_ids 去重；1–100。 */
@@ -362,7 +416,7 @@ export const internalListUsersByInstanceSchema = z.object({
   user_ids: optionalUserIdsFilter,
 }).merge(paginationInputSchema);
 
-/** 路由 → schema 映射（54 公开接口）。 */
+/** 路由 → schema 映射（55 公开接口）。 */
 // ── ConfigParam（v3.2）──
 export const instanceQuotaGetSchema = z.object({});
 
@@ -378,8 +432,38 @@ export const configUserSetSchema = z.object({
   params: z.record(z.string().min(1), z.string()),
 });
 
+// ── InstanceUpstreamConfig ──
+const upstreamConfigType = z.enum(["conversation", "extraction"]);
+const upstreamConfigMode = z.enum(["official", "custom_unified", "custom_passthrough"]);
+
+export const instanceUpstreamSetSchema = z.object({
+  agent_source: z.string().min(1).default("default"),
+  type: upstreamConfigType.default("conversation"),
+  mode: upstreamConfigMode,
+  base_url: z.string().optional(),
+  api_key: z.string().optional(),
+  model_id: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export const instanceUpstreamGetSchema = z.object({
+  agent_source: z.string().min(1).default("default"),
+  type: upstreamConfigType.default("conversation"),
+});
+
+export const instanceUpstreamListSchema = z.object({
+  agent_source: z.string().min(1).optional(),
+  type: upstreamConfigType.optional(),
+});
+
+export const instanceUpstreamResetSchema = z.object({
+  agent_source: z.string().min(1).default("default"),
+  type: upstreamConfigType.default("conversation"),
+});
+
 export const V3_SCHEMAS = {
   "/v3/meta/user/create": userCreateSchema,
+  "/v3/meta/user/create-with-key": userCreateWithKeySchema,
   "/v3/meta/user/get": userGetSchema,
   "/v3/meta/user/delete": userDeleteSchema,
   "/v3/meta/user/list": userListSchema,
@@ -433,6 +517,10 @@ export const V3_SCHEMAS = {
   "/v3/meta/instance-quota/get": instanceQuotaGetSchema,
   "/v3/meta/config/user/get": configUserGetSchema,
   "/v3/meta/config/user/set": configUserSetSchema,
+  "/v3/meta/instance-upstream/set": instanceUpstreamSetSchema,
+  "/v3/meta/instance-upstream/get": instanceUpstreamGetSchema,
+  "/v3/meta/instance-upstream/list": instanceUpstreamListSchema,
+  "/v3/meta/instance-upstream/reset": instanceUpstreamResetSchema,
 } as const;
 
 export type V3Route = keyof typeof V3_SCHEMAS;

@@ -1,0 +1,24 @@
+{
+  "name": "@tencentdb-agent-memory/pi-tdai-client",
+  "version": "0.1.0",
+  "description": "Pi client for TencentDB Agent Memory v2 — routes Pi through the TDAI Memory Proxy for team memory (L3 persona, L2 scene index, L0 capture, on-demand L0/L1/L2 search).",
+  "type": "module",
+  "main": "index.ts",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["index.ts"]
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tgz"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0",
+    "vitest": "^3.2.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

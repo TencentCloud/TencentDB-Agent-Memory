@@ -27,7 +27,13 @@ const CODEBUDDY_SLOT_MAP: Record<string, string | null> = {
   tools: "mcp_protocol",
   skills: "agent_skills",
   memory: "memories",
-  knowledge: null, // no native knowledge region → fallback
+  // knowledge → co-locate with <memories>: knowledge_tools is a "cloud
+  // reference" (wiki / code-graph tools), semantically closest to the memory
+  // region. The injector pairs this key with relation="after", so the block
+  // lands just after </memories>. We deliberately do NOT reuse the skills
+  // slot — knowledge is not an executable-skill catalog and shouldn't crowd
+  // the <skill_tools> / <available_skills> stack.
+  knowledge: "memories",
   rules: "rules",
   task_context: "project_context",
 };

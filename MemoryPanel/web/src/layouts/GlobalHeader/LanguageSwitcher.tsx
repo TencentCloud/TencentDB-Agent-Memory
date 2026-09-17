@@ -3,12 +3,10 @@
  */
 import { Dropdown, List } from 'tea-component';
 import { InternetIcon } from 'tea-icons-react';
-import { useTranslation } from 'react-i18next';
 import { changeLanguage, getCurrentLanguage } from '@/i18n';
 import './language-switcher.css';
 
 export function LanguageSwitcher() {
-  const { t: _t } = useTranslation();
   const current = getCurrentLanguage();
 
   return (

@@ -27,6 +27,8 @@ export const SKILL_ACTIONS = [
   'files/read',
   'listing',
   'extract',
+  'export',
+  'conversation/add',
 ] as const;
 
 export type SkillAction = (typeof SKILL_ACTIONS)[number];

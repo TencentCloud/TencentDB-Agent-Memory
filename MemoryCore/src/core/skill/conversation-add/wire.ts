@@ -1,15 +1,10 @@
 /**
- * wire.ts — one-shot wiring for a single (space/user/team/agent) or single-instance
- * conversation-add subsystem.
+ * wire.ts — skill conversation-add 的 handler wiring 入口。
  *
- * 使用场景：
- *   - standalone 模式：gateway server 启动时调一次, 拿到 { handler, worker }
- *     的单例，挂到 SkillRouterDeps.resolveConversationAddHandler + Worker 常驻。
- *   - service 模式：resolveConversationAddHandler 内部按 instanceId cache
- *     其中每个 instance 各调一次 wire。
- *
- * wire 层不关心 Redis / storage 的具体来源（由 gateway 侧传入），只负责把 A1-A7
- * 和 SkillCoreSink 组装起来。
+ * 2026-07-30 池化重构后:
+ *   - 老 wireConversationAdd (per-instance handler + per-instance worker) 已删除。
+ *   - gateway 每 instance 调 wireConversationAddHandler 只造 handler/trigger/sink/buffer,
+ *     worker 由全进程唯一的 SkillWorkerPool 管理。
  */
 
 import type { StorageAdapter } from "../../storage/adapter.js";
@@ -26,10 +21,7 @@ import { SkillTriggerService } from "./trigger-service.js";
 import { SkillConversationAddHandler, type HandlerThresholds } from "./add-handler.js";
 import type { CompressOptions } from "./message-compressor.js";
 import type { OversizeOptions } from "./oversize-strategy.js";
-import {
-  SkillConversationExtractWorker,
-  type SkillCandidatesSink,
-} from "./extract-worker.js";
+import type { SkillCandidatesSink } from "./extract-worker.js";
 import { SkillCoreSink, type MetadataServiceLike } from "./skill-core-sink.js";
 
 export interface WireConversationAddDeps {
@@ -48,7 +40,11 @@ export interface WireConversationAddDeps {
    */
   metadataService?: MetadataServiceLike;
 
-  /** Worker 用的 extractor，跟老 handleExtract 用同一个 */
+  /**
+   * 保留字段用于跟老签名兼容 (wireConversationAddHandler 内部不使用 extractor,
+   * 真正的抽取由 SkillWorkerPool 的 resolveExtractor 现取)。gateway 侧当前
+   * 塞了一个 noop 占位。
+   */
   extractor: ISkillExtractor;
 
   logger: ExtractorLogger;
@@ -62,35 +58,28 @@ export interface WireConversationAddDeps {
   /** 兜底切分参数覆盖 (对应 SkillConfig.extraction 派生的 chunkMaxBytes / headKeepBytes / tailKeepBytes)。 */
   oversizeOptions?: Partial<OversizeOptions>;
 
-  /** Worker 参数覆盖 */
-  workerId?: string;
-  extractLockTtlMs?: number;
-  brpopBlockMs?: number;
-
   /** COS 子路径（默认 "skill_buffer"） */
   bufferSubPath?: string;
-
-  /** 单元测试专用：跳过 Worker 启动（只想拿 handler / sink 时用） */
-  skipWorker?: boolean;
 }
 
-export interface WiredConversationAdd {
+/**
+ * 只造 handler 需要的 4 件套 (handler / trigger / sink / buffer) +
+ * queue (如果没注入则按 redis/内存分派)。**不启 worker**。
+ *
+ * 全进程 worker 由 SkillWorkerPool 统一管理; gateway 每 instance 首次访问
+ * 时调本函数拿到 handler bundle 塞入 in-flight cache, 后续复用。
+ */
+export interface WiredConversationAddHandler {
   handler: SkillConversationAddHandler;
-  worker?: SkillConversationExtractWorker;
-  /**
-   * 归档段服务。conversation/add 由 handler 内部持有一份直接调；
-   * `/v3/skill/extract` (direct-trigger) 从这里拿来跳过 handler 的 buffer/meta 逻辑，
-   * 直接归档一次 archive + 追加 `_tasks.json` + 入 agent 队列。
-   */
   trigger: SkillTriggerService;
   sink: SkillCandidatesSink;
   queue: ISkillAgentTaskQueue;
   buffer: SkillBufferStorage;
-  /** 结束时调 —— 关 worker */
-  stop(): Promise<void>;
 }
 
-export function wireConversationAdd(deps: WireConversationAddDeps): WiredConversationAdd {
+export function wireConversationAddHandler(
+  deps: WireConversationAddDeps,
+): WiredConversationAddHandler {
   const buffer = new SkillBufferStorage({
     storage: deps.storage,
     subPath: deps.bufferSubPath,
@@ -112,8 +101,6 @@ export function wireConversationAdd(deps: WireConversationAddDeps): WiredConvers
     );
   }
 
-  // [obs] SkillTriggerService / SkillConversationAddHandler 内部走 obsLogger 底座，
-  // 不再需要注入 logger —— obsLogger 自带 FileLogger + 后端 + try/catch 降级。
   const trigger = new SkillTriggerService({ buffer, queue });
   const handler = new SkillConversationAddHandler({
     buffer,
@@ -128,30 +115,5 @@ export function wireConversationAdd(deps: WireConversationAddDeps): WiredConvers
     logger: deps.logger,
   });
 
-  let worker: SkillConversationExtractWorker | undefined;
-  if (!deps.skipWorker) {
-    worker = new SkillConversationExtractWorker({
-      workerId: deps.workerId ?? `skill-conv-worker-${process.pid}`,
-      buffer,
-      queue,
-      extractor: deps.extractor,
-      sink,
-      logger: deps.logger,
-      extractLockTtlMs: deps.extractLockTtlMs,
-      brpopBlockMs: deps.brpopBlockMs,
-    });
-    worker.start();
-  }
-
-  return {
-    handler,
-    worker,
-    trigger,
-    sink,
-    queue,
-    buffer,
-    stop: async () => {
-      if (worker) await worker.stop();
-    },
-  };
+  return { handler, trigger, sink, queue, buffer };
 }

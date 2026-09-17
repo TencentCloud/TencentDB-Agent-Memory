@@ -8,9 +8,12 @@
  *   4. Retry once on failure; never block the main async task
  *
  * When TMC_CALLBACK_URL is empty, all callbacks are skipped (no-op).
+ *
+ * Also supports fire-and-forget ingest_progress callbacks during wiki ingest.
  */
 
 import type { LlmConfig } from "./config.js";
+import type { IngestProgress, ProgressFn } from "./engines/wiki/manager.js";
 
 const TAG = "[callback]";
 const RETRY_DELAY_MS = 1000;
@@ -24,6 +27,18 @@ export interface StatusCallbackPayload {
   summary: string | null;
   sync_error: string | null;
   timestamp: string;
+  /** 与本次 ingest 进度回调同一代际；Panel 用以拒绝 clear 后的迟到 progress */
+  run_id?: string;
+}
+
+export interface IngestProgressCallback {
+  wiki_id: string;
+  service_id: string;
+  team_id: string;
+  event: "ingest_progress";
+  progress: IngestProgress;
+  /** 单次 ingest 代际 id；与终态 callback 的 run_id 一致 */
+  run_id?: string;
 }
 
 export interface CallbackConfig {
@@ -66,6 +81,43 @@ export async function callbackTMC(
     }
   }
   console.error(`${TAG} TMC callback gave up after 2 attempts for ${payload.knowledge_id} (type=${payload.type}, status=${payload.status})`);
+}
+
+/**
+ * Fire-and-forget progress callback during wiki ingest.
+ * Failures are logged as warn only — never block the ingest pipeline.
+ */
+export function sendProgressCallback(tmcCallbackUrl: string, payload: IngestProgressCallback): void {
+  if (!tmcCallbackUrl) return;
+  const url = `${tmcCallbackUrl.replace(/\/$/, "")}/api/v1/knowledge/status-callback`;
+  void fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(5000),
+  }).catch((err) => {
+    console.warn(`${TAG} progress callback failed for ${payload.wiki_id}:`, err);
+  });
+}
+
+/** Build an onProgress fn that POSTs ingest_progress to TMC/Panel. */
+export function buildProgressFn(
+  tmcCallbackUrl: string,
+  wikiId: string,
+  serviceId: string,
+  teamId: string,
+  runId?: string,
+): ProgressFn {
+  return (progress) => {
+    sendProgressCallback(tmcCallbackUrl, {
+      wiki_id: wikiId,
+      service_id: serviceId,
+      team_id: teamId,
+      event: "ingest_progress",
+      progress,
+      ...(runId ? { run_id: runId } : {}),
+    });
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════

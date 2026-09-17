@@ -28,6 +28,20 @@ interface CallbackBody {
   summary?: string | null;
   sync_error?: string | null;
   timestamp?: string;
+  /** 细粒度 ingest 进度（与终态 status 回调共用 endpoint） */
+  event?: 'ingest_progress';
+  wiki_id?: string;
+  team_id?: string;
+  /** 单次 ingest 代际；与 progress / 终态共用，防 clear 后迟到包 */
+  run_id?: string;
+  progress?: {
+    phase?: string;
+    total?: number;
+    completed?: number;
+    failed?: number;
+    skipped?: number;
+    percent?: number;
+  };
 }
 
 async function safeJson(c: { req: { text: () => Promise<string> } }): Promise<CallbackBody> {
@@ -38,6 +52,10 @@ async function safeJson(c: { req: { text: () => Promise<string> } }): Promise<Ca
   } catch {
     return {};
   }
+}
+
+function isProgressPhase(p: unknown): p is 'extracting' | 'merging' | 'indexing' {
+  return p === 'extracting' || p === 'merging' || p === 'indexing';
 }
 
 /**
@@ -98,6 +116,40 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
 
   api.post('/knowledge/status-callback', async (c) => {
     const body = await safeJson(c);
+
+    // ── ingest 细粒度进度（非终态）──
+    if (body.event === 'ingest_progress') {
+      const wikiId = body.wiki_id?.trim();
+      const p = body.progress;
+      if (
+        !wikiId ||
+        !p ||
+        !isProgressPhase(p.phase) ||
+        typeof p.total !== 'number' ||
+        typeof p.completed !== 'number' ||
+        typeof p.failed !== 'number' ||
+        typeof p.skipped !== 'number' ||
+        typeof p.percent !== 'number'
+      ) {
+        log.warn('[knowledge-callback] ingest_progress rejected: bad payload', {
+          wiki_id: body.wiki_id, has_progress: !!body.progress,
+        });
+        return c.json({ code: 400, message: 'wiki_id and progress fields are required', request_id: '', data: null }, 400);
+      }
+      deps.ingestProgressStore.update(wikiId, {
+        phase: p.phase,
+        total: p.total,
+        completed: p.completed,
+        failed: p.failed,
+        skipped: p.skipped,
+        percent: p.percent,
+      }, body.run_id);
+      log.info('[knowledge-callback] ingest_progress stored', {
+        wiki_id: wikiId, phase: p.phase, percent: p.percent, run_id: body.run_id,
+      });
+      return c.json({ code: 0, message: 'ok', request_id: '', data: null });
+    }
+
     if (!body.knowledge_id || !body.type || !body.status) {
       log.warn('[knowledge-callback] rejected: missing fields', {
         knowledge_id: body.knowledge_id, type: body.type, status: body.status,
@@ -110,7 +162,13 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
       status: body.status,
       service_id: body.service_id,
       has_summary: !!body.summary,
+      run_id: body.run_id,
     });
+
+    // 终态：清掉细粒度进度，并记录 run_id 以拒绝该代际迟到包
+    if (body.type === 'wiki' && (body.status === 'ready' || body.status === 'failed')) {
+      deps.ingestProgressStore.clear(body.knowledge_id, body.run_id);
+    }
 
     // ready 即写明细（即使无 summary 也推——用户觉得有问题可自行删除）
     if (body.status === 'ready') {

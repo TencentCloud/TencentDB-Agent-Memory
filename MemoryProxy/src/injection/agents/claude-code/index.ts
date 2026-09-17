@@ -40,7 +40,13 @@ const CLAUDE_CODE_SLOT_MAP: Record<string, string | null> = {
   tools: null,                       // no tools section in system prompt (tools are in request body)
   skills: "Session-specific guidance", // # Session-specific guidance mentions skill invocation
   memory: "Memory",                  // # Memory — persistent file-based memory
-  knowledge: null,                   // no knowledge section
+  // knowledge → co-locate with # Memory: knowledge_tools is a "cloud
+  // reference" (wiki / code-graph tools), semantically closest to the memory
+  // region. The injector pairs this key with relation="after", so the block
+  // lands right after the # Memory section, before # Environment. Kept
+  // separate from `skills` (Session-specific guidance) to avoid crowding the
+  // skill_tools / available_skills stack with an unrelated reference block.
+  knowledge: "Memory",
   rules: "Harness",                  // # Harness — contains behavioral rules and safety guidelines
   task_context: "Environment",       // # Environment — working dir, OS, model, project context
 };

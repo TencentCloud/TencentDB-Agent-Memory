@@ -202,7 +202,13 @@ export async function refreshSessionCache(input: RefreshInput): Promise<RefreshR
         taskDetail,
         callerUserKey,
       },
-      undefined,
+      // 刷新场景必须 clearBefore=true —— 首次 session_init 复用同一入口时不带
+      // 这个选项,保留 "cache miss 由 pipeline 走 execute() self-heal" 的语义;
+      // 刷新时开启后,任何 hook 拿到 []/超时/异常都会连带旧缓存一起清掉,防止
+      // "资产已解绑但注入还带着老快照" 的场景(尤其 knowledge 的 wiki/code-graph
+      // 全解绑 → prewarm 返回空 → 默认逻辑不写 → COS 上老 <knowledge_tools>
+      // 无限续命)。详见 `injection/prewarm.ts` 的 PrewarmOptions.clearBefore 注释。
+      { clearBefore: true },
     );
     const tookMs = Date.now() - t0;
     return {

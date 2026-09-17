@@ -16,7 +16,7 @@
     "prepack": "npm run clean && npm install --no-save --no-audit --no-fund && npm run build"
   },
   "dependencies": {
-    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.0-beta.2"
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

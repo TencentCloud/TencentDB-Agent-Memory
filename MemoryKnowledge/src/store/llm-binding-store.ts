@@ -167,6 +167,7 @@ export function resolveLlmConfig(
       baseUrl: `${trimTrailingSlash(binding.proxy_base_url)}/proxy/${serviceId}/v1`,
       maxTokens: fallback.maxTokens,
       timeoutMs: fallback.timeoutMs,
+      stream: fallback.stream,
     };
   }
 
@@ -181,5 +182,6 @@ export function resolveLlmConfig(
     baseUrl: binding.base_url,
     maxTokens: fallback.maxTokens,
     timeoutMs: fallback.timeoutMs,
+    stream: fallback.stream,
   };
 }

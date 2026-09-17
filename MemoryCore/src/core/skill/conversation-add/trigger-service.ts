@@ -115,6 +115,9 @@ export class SkillTriggerService {
     // worker 自然消费掉，无迁移风险（filter 按 task_id 值等价比较，不解析前缀）。
     const taskId = `skill-extract-task-${randomUUID().slice(0, 8)}`;
     const agent: AgentTuple = {
+      // 2026-07-30 instance_id 塞进 tuple; worker pool 从队列出来后按此路由
+      // 到对应 instance 的资源。不给或空会直接抛。
+      instance_id: session.instance_id,
       space_id: session.space_id,
       user_id: session.user_id,
       team_id: session.team_id,
@@ -141,6 +144,7 @@ export class SkillTriggerService {
     // worker 侧的判空逻辑；这里逐段结构化事件，字段按 req_id / task_id 关联。
     // obsLogger 内部 try/catch + 后端降级，不需要额外防御。
     const rid = input.perfRequestId;
+    const instanceId = session.instance_id;
 
     // ② 先写 archive（已存在视为成功）
     //
@@ -156,7 +160,7 @@ export class SkillTriggerService {
     const t0Arch = Date.now();
     await this.buffer.writeArchive(session, archivedAtMs, bufferAtTrigger);
     obsLogger.info("skill.trigger.write_archive", {
-      req_id: rid, task_id: taskId,
+      req_id: rid, task_id: taskId, instance_id: instanceId,
       dur_ms: Date.now() - t0Arch,
       archive_key: archiveKey,
     });
@@ -178,14 +182,14 @@ export class SkillTriggerService {
       async () => {
         const mutexAcquiredAt = Date.now();
         obsLogger.info("skill.trigger.mutex_acquire", {
-          req_id: rid, task_id: taskId,
+          req_id: rid, task_id: taskId, instance_id: instanceId,
           dur_ms: mutexAcquiredAt - t0MutexEntry,
         });
 
         const t0Read = Date.now();
         const doc = await this.buffer.readTasks(agent);
         obsLogger.info("skill.trigger.read_tasks", {
-          req_id: rid, task_id: taskId,
+          req_id: rid, task_id: taskId, instance_id: instanceId,
           dur_ms: Date.now() - t0Read,
           existing_tasks: doc.tasks.length,
         });
@@ -196,7 +200,7 @@ export class SkillTriggerService {
         const t0Write = Date.now();
         await this.buffer.writeTasks(agent, doc);
         obsLogger.info("skill.trigger.write_tasks", {
-          req_id: rid, task_id: taskId,
+          req_id: rid, task_id: taskId, instance_id: instanceId,
           dur_ms: Date.now() - t0Write,
           total_tasks: doc.tasks.length,
         });
@@ -204,14 +208,14 @@ export class SkillTriggerService {
         const t0Enq = Date.now();
         const enqueued = await this.queue.enqueueAgent(agent);
         obsLogger.info("skill.trigger.enqueue_agent", {
-          req_id: rid, task_id: taskId,
+          req_id: rid, task_id: taskId, instance_id: instanceId,
           dur_ms: Date.now() - t0Enq,
           added: enqueued,
         });
       },
     );
     obsLogger.info("skill.trigger.mutex_total", {
-      req_id: rid, task_id: taskId,
+      req_id: rid, task_id: taskId, instance_id: instanceId,
       dur_ms: Date.now() - t0MutexEntry,
     });
 

@@ -1,13 +1,13 @@
 /**
- * api/teams.ts — Team + TeamMember（链路 A：meta/team/* + meta/team-member/*）。
+ * api/teams.ts — Team + TeamMember（meta/team/* + meta/team-member/*）。
  */
 import { metaPost, metaListAll, getCurrentUser } from './base';
 import type { Team, TeamMember } from './types';
 
 export const teamsApi = {
   /**
-   * 列出当前用户作为 active 成员的 team（内核 listTeamsByUser）。
-   * 内核 /v3/meta/team/list 要求 body 带 user_id 或 user_key；身份只在 header 不够。
+   * 列出当前用户作为 active 成员的 team。
+   * meta/team/list 要求 body 带 user_id 或 user_key；身份只在 header 不够。
    * admin 也传自己的 user_id（后端暂无 user/list 式「实例级列举全部 team」）。
    */
   list: async () => {
@@ -32,8 +32,13 @@ export const teamsApi = {
   update: (teamId: string, data: { name?: string; description?: string }) =>
     metaPost<Team>('team/update', { team_id: teamId, ...data }),
 
-  /** 删除 team（meta team/delete） */
-  delete: (teamId: string) => metaPost<{ ok: boolean }>('team/delete', { team_id: teamId }),
+  /**
+   * 删除 team（meta team/delete）。
+   * 注意：后端 schema 要求 `team_ids` 数组（一次可删多个），传单数 `team_id`
+   * 会被 zod 静默 strip 后因缺 `team_ids` 校验失败 → 400。删除为级联操作，
+   * 会一并删除该 team 的成员、agent、task 与全部资产。
+   */
+  delete: (teamId: string) => metaPost<{ ok: boolean }>('team/delete', { team_ids: [teamId] }),
 };
 
 export const membersApi = {
@@ -43,11 +48,11 @@ export const membersApi = {
   /**
    * 添加成员（按已知 user_id 加入 team）。
    *
-   * 新面板下"开号"（拿到 user_key）与"加入 team"是两件独立的事：用户自行持有
+   * "开号"（拿到 user_key）与"加入 team"是两件独立的事：用户自行持有
    * user_key 登录后即可从 auth/verify 拿到自己的 user_id；team 管理员只需要
-   * 已知这个 user_id 就能调 team-member/add（标准 meta action，非阻断）。
+   * 已知这个 user_id 就能调 team-member/add（标准 meta action）。
    * 没有"按用户名建户"的等价能力——若要按用户名查找 user_id，可用 `usersApi.list`
-   * 传入 `{ username }` 做精确匹配（与内核 user/list 一致）。
+   * 传入 `{ username }` 做精确匹配。
    */
   add: (teamId: string, data: { user_id: string; role: 'admin' | 'member' | 'reviewer' }) =>
     metaPost<TeamMember>('team-member/add', { team_id: teamId, user_id: data.user_id, role: data.role }),

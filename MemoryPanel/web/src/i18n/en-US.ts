@@ -26,6 +26,7 @@ export const enUS = {
   'menu.desc.api_keys': 'Manage your API keys for external clients',
 
   // ===== GlobalHeader =====
+  'header.guide': 'Guide',
   'header.sync': 'Live Sync',
   'header.sync.title': 'Real-time sync is connected',
   'header.settings': 'Settings',
@@ -33,7 +34,13 @@ export const enUS = {
   'header.logout': 'Log Out',
   'header.profile.caption': 'My Profile',
   'header.profile.username': 'Username',
+  'header.profile.usernameHint': 'How teammates identify you',
+  'header.profile.userId': 'User ID',
   'header.profile.userIdHint': 'Share with your team admin to get invited to a Team',
+  'header.profile.instance': 'Instance',
+  'header.profile.role.admin': 'Administrator',
+  'header.profile.role.member': 'Member',
+  'header.profile.role.reviewer': 'Reviewer',
   'header.profile.close': 'Close',
   'header.brand': 'Memory Hub',
 
@@ -53,17 +60,54 @@ export const enUS = {
   'teamSwitcher.cancel': 'Cancel',
   'teamSwitcher.create': 'Create',
   'teamSwitcher.newTeam': 'New Team',
+  'teamSwitcher.edit.tooltip': 'Edit the current team name / description (owner / admin only)',
+  'teamSwitcher.delete.tooltip':
+    'Delete the current team (owner / admin only; cascades to members/agents/tasks/assets)',
+  'teamSwitcher.delete.confirm': 'Delete team "{{name}}"?',
+  'teamSwitcher.delete.desc':
+    'This cascades to {{members}} members, {{agents}} agents, and all tasks and assets under the team. This cannot be undone.',
 
   // ===== LoginGate =====
-  'login.welcome': 'Welcome Back',
+  'login.welcome': 'Memory Hub',
   'login.subtitle': 'Please select a memory instance and enter your user_key to log in.',
   'login.tagline': 'Centrally manage Agent memory, skills, and knowledge assets',
+  'login.field.instance': 'Memory Instance',
+  'login.field.userKey': 'User Key',
+  'login.footer': 'TencentDB · AI Memory Hub',
   'login.placeholder.instance': 'Loading memory instances…',
   'login.placeholder.instanceError': 'Load failed, please refresh and retry',
   'login.placeholder.userKey': 'user_key, e.g. sk-mem-xxxxxxxxxxxxxxxx',
   'login.hint.userKey':
     "Use the user_key assigned by your admin. If you don't have one, contact your team admin.",
   'login.submit': 'Log In',
+  // No standalone method-picker page: each login surface embeds one link that jumps
+  // straight to the other method. From the user_key page it's "Log in with X";
+  // inside the iOA flow it's "Switch to ..." (leaving the current flow).
+  'login.useWoa': 'Log in with iOA',
+  'login.switchUserKey': 'Switch to user_key login',
+  'login.woa.pendingTitle': 'Create login account',
+  'login.woa.pendingIdentity': 'WOA authenticated: {{name}}. Your Memory account will be created on first login.',
+  'login.woa.usernameLabel': 'Username',
+  'login.woa.usernamePlaceholder': 'Letters, numbers, underscores and hyphens only',
+  'login.woa.usernameHint': 'Your account name in Memory, defaults to your WOA login name.',
+  'login.woa.invalidUsername': 'Username may contain only letters, numbers, underscores, and hyphens.',
+  'login.woa.createAccount': 'Create account and sign in',
+  'login.woa.userKeyLabel': 'user_key',
+  'login.woa.userKeyPlaceholder': 'Enter your user_key',
+  'login.woa.userKeyHint': 'If this key already exists, it will be bound to that existing account (your memories and teams are preserved); otherwise a new account is created with this key.',
+  'login.woa.userKeyRequired': 'Please enter a user_key.',
+  'login.woa.previewNext': 'Next',
+  'login.woa.keyExistsHint': 'This user_key already belongs to account "{{name}}". Confirming will bind to it and keep all existing data.',
+  'login.woa.keyMissingHint': 'This user_key does not exist yet. Confirming will create a new account with it.',
+  'login.woa.confirmBind': 'Confirm binding this account',
+  'login.woa.confirmCreate': 'Confirm creating account',
+  'login.woa.keyReadyTitle': 'Account created',
+  'login.woa.keyReadyHint': 'Here is your user_key, used to connect the proxy from CodeBuddy / ClaudeCode clients.',
+  'login.woa.yourUserKey': 'Your user_key',
+  'login.woa.copyKey': 'Copy',
+  'login.woa.copied': 'Copied',
+  'login.woa.keyReadyWarn': 'Save it now: an auto-generated key is shown only once and cannot be retrieved later.',
+  'login.woa.savedEnter': 'I have saved it, enter',
   'login.submitting': 'Logging in…',
   'login.error.loadInstances':
     'Failed to load memory instance list. Please refresh and retry.{{detail}}',
@@ -291,6 +335,7 @@ export const enUS = {
   'wiki.detail.overview.emptyPageList': 'No pages',
   'wiki.detail.graph.clickToView': 'Click a node to view content',
   'wiki.detail.graph.loading': 'Loading graph component…',
+  'wiki.detail.notFound': 'This Wiki no longer exists. It may have been removed.',
   'wiki.detail.pages.all': 'All {{count}}',
   'wiki.detail.pages.selectPage': 'Select a page on the left to view content',
   'wiki.detail.pages.delete': 'Delete',
@@ -364,7 +409,7 @@ export const enUS = {
   'code.noAgent': 'No Agent Selected',
   'code.card.id': 'ID: {{id}}',
   'code.card.branch': 'Branch {{branch}}',
-  'code.detail.breadcrumb': 'Code_Graph',
+  'code.detail.breadcrumb': 'Code Graph',
   'code.detail.branch': 'Branch {{branch}}',
   'code.detail.sync': 'Sync',
   'code.detail.files': 'Files',
@@ -442,6 +487,10 @@ export const enUS = {
   'skills.fork.tooltip.personal.empty': 'Please select a skill first',
   'skills.import': 'Import Skill',
   'skills.import.tooltip.noAgent': 'No agent in the current team. Please create an agent first.',
+  'skills.export': 'Export Skill',
+  'skills.export.tooltip.empty': 'Please select a skill first',
+  'skills.export.partial': 'Some files failed to export: {warnings}',
+  'skills.export.timeout': 'Export timed out, please try again later',
   'skills.tag.private': 'Private',
   'skills.tag.shared': 'Shared',
   'skills.delete.own': 'Permanently delete my Skill (irreversible)',
@@ -479,6 +528,41 @@ export const enUS = {
   'skills.detail.noFiles': 'No attached files.',
   'skills.detail.readFailed': 'Read failed: {{msg}}',
   'skills.detail.binaryFile': 'Binary file ({{size}} bytes), base64 omitted.',
+  // —— Edit content (updateSkill) ——
+  'skills.detail.edit': 'Edit',
+  'skills.detail.save': 'Save',
+  'skills.detail.cancel': 'Cancel',
+  'skills.detail.saving': 'Saving…',
+  'skills.detail.editBodyHint': 'Edit the full SKILL.md (including frontmatter). Saving bumps the version by 1.',
+  'skills.detail.saveSuccess': 'Skill updated',
+  'skills.detail.emptyContent': 'Content cannot be empty',
+  // —— File management (writeSkillFiles / removeSkillFiles) ——
+  'skills.detail.addFile': 'Add file',
+  'skills.detail.deleteFile': 'Delete',
+  'skills.detail.editFile': 'Edit',
+  'skills.detail.newFileTitle': 'Add resource file',
+  'skills.detail.filePathLabel': 'File path',
+  'skills.detail.filePathPlaceholder': 'e.g. scripts/run.sh',
+  'skills.detail.fileContentLabel': 'File content',
+  'skills.detail.fileSaved': 'File saved',
+  'skills.detail.fileDeleted': 'File deleted',
+  'skills.detail.deleteFileConfirm': 'Delete file "{{path}}"?',
+  'skills.detail.deleteFileDesc': 'This cannot be undone and bumps the skill version by 1.',
+  'skills.detail.deleteFileOk': 'Delete',
+  'skills.detail.deleteFileCancel': 'Cancel',
+  'skills.detail.binaryEditHint': 'Binary files cannot be edited online.',
+  'skills.detail.filePathRequired': 'Please enter a file path',
+  // —— Version history (listSkillVersions) ——
+  'skills.detail.versions': 'Version history',
+  'skills.detail.versionsLoad': 'View version history',
+  'skills.detail.versionsEmpty': 'No version history.',
+  'skills.detail.versionCurrent': 'Current',
+  'skills.detail.versionView': 'View',
+  'skills.detail.versionColVersion': 'Version',
+  'skills.detail.versionColTime': 'Updated at',
+  'skills.detail.versionColActions': 'Actions',
+  'skills.detail.versionCaption': 'v{{version}} · SKILL.md',
+  'skills.versionTag.title': 'Current version: v{{version}}',
   'skills.ownerTag.title': 'owner user: {{name}} ({{id}})',
   'skills.ownerTag.you': ' (you)',
   'skills.agentTag.title': 'owner agent: {{name}} ({{id}})',
@@ -574,6 +658,7 @@ export const enUS = {
   'memory.allocate.privateDisabled':
     'This memory has been set to private by its owner and cannot be allocated to other Agents',
   'memory.import': 'Import Memory',
+  'memory.import.tooltip.noAgent': 'No agent in the current team. Please create an agent first.',
   'memory.blockList': 'Memory Blocks',
   'memory.blockCount': '{{filtered}} items',
   'memory.empty.filtered': 'No matching memory blocks.',
@@ -605,6 +690,8 @@ export const enUS = {
   'memory.notify.loadFailed': 'Failed to load memory blocks',
   'memory.notify.layerFailed': 'Failed to load layer data',
   'memory.notify.l2Failed': 'Failed to load L2 content',
+  'memory.notify.copied': 'Copied',
+  'memory.notify.copyFailed': 'Copy failed',
   'memory.confirm.private':
     'After setting to private, other Agents will no longer be able to use this memory',
   'memory.confirm.private.desc': 'You can switch back to team-visible at any time.',
@@ -613,7 +700,13 @@ export const enUS = {
   'memory.detail.teamPool': 'Team Memory Pool',
   'memory.detail.uploadedBy': 'Uploaded: {{user}}',
   'memory.detail.updated': 'Updated: {{time}}',
+  'memory.detail.refresh': 'Refresh',
   'memory.detail.noL0': 'This memory block has no L0 conversation history.',
+  'memory.detail.noL0InRange':
+    'No L0 conversation history in the current time range. Try adjusting the time filter in the top-right corner.',
+  'memory.detail.emptyLayerInRange':
+    'No items in the {{layer}} layer for the current time range. Try adjusting the time filter in the top-right corner.',
+  'memory.detail.rangeTooLarge': 'Too many memories. Narrow the time range.',
   'memory.detail.loadMore': 'Load earlier messages',
   'memory.detail.allLoaded': 'All messages loaded',
   'memory.detail.pageInfo': 'Page {{page}} / {{total}} · {{current}} of {{total2}} items',
@@ -626,6 +719,8 @@ export const enUS = {
   'memory.detail.collapseBody': 'Collapse',
   'memory.detail.expandBody': 'Expand',
   'memory.detail.noBody': 'No content.',
+  'memory.detail.edit': 'Edit',
+  'memory.detail.moreActions': 'More actions',
   'memory.layer.L0.label': 'L0 · Raw Conversation',
   'memory.layer.L0.short': 'Raw Conversation',
   'memory.layer.L0.desc': 'Original conversation / tool call flow, no compression',
@@ -733,10 +828,14 @@ export const enUS = {
   'team.loading': 'Loading…',
   'team.empty.hint': 'Please select a team in the top right, or create a new team to get started.',
   'team.createTeam': 'New Team',
+  'team.editTeam': 'Edit Team',
+  'team.editTeam.tooltip': 'Edit the current team name / description (owner or admin only)',
   'team.deleteTeam': 'Delete Current Team',
-  'team.deleteTeam.tooltip': 'Team deletion is not yet stably supported on the backend',
-  'team.deleteTeam.notify':
-    'Team deletion is not yet stably supported on the backend. Please contact your admin.',
+  'team.deleteTeam.tooltip':
+    'Delete the current team and all its members / agents / tasks / assets (owner or admin only)',
+  'team.deleteTeam.confirm': 'Delete team "{{name}}"?',
+  'team.deleteTeam.desc':
+    'This cascades to {{members}} members, {{agents}} agents, and all tasks and assets under the team. This cannot be undone.',
   'team.memberCount': '{{count}} members',
   'team.emptyTeam.title': "You Don't Belong to Any Team Yet",
   'team.emptyTeam.desc':
@@ -761,6 +860,15 @@ export const enUS = {
   'createTeam.desc.placeholder': 'Briefly describe the team scope and goals',
   'createTeam.submit': 'Create',
   'createTeam.cancel': 'Cancel',
+
+  // ===== EditTeamDialog =====
+  'editTeam.caption': 'Edit Team · {{name}}',
+  'editTeam.name': 'Name',
+  'editTeam.name.placeholder': 'e.g. tdai-memory · backend team',
+  'editTeam.desc': 'Description',
+  'editTeam.desc.placeholder': 'Briefly describe the team scope and goals',
+  'editTeam.submit': 'Save',
+  'editTeam.cancel': 'Cancel',
 
   // ===== CreateAgentDialog =====
   'createAgent.caption': 'Create Agent',
@@ -825,6 +933,10 @@ export const enUS = {
   'agentEdit.assets.label': 'Capabilities',
   'agentEdit.assets.hint':
     'Read-only · Configure resource bindings during creation or from the corresponding resource management page',
+  'agentEdit.assets.editHint':
+    'Check or uncheck to bind/unbind assets directly, then click "Save" to apply',
+  'agentEdit.assets.skillReadonly':
+  'Skill bindings are independent copies. Adjust them when creating an Agent or on the Skill management page',
   'agentEdit.cancel': 'Cancel',
   'agentEdit.save': 'Save Changes',
   'agentEdit.notify.nameRequired': 'Agent name cannot be empty.',
@@ -862,6 +974,29 @@ export const enUS = {
   'agentGrid.table.actions': 'Actions',
   'agentGrid.table.delete': 'Delete',
   'agentGrid.owner.you': ' (you)',
+
+  // ===== DefaultAgentTemplate (admin only) =====
+  'defaultAgent.title': 'Default Agent Template',
+  'defaultAgent.desc':
+    'When a new member joins the team, their dedicated default Agent is auto-created from this template. Only team-public assets (visibility=team) can be selected; changes apply to members joining later.',
+  'defaultAgent.empty': 'Not configured yet · Configure to auto-create a default Agent for new members',
+  'defaultAgent.create': 'New Default Agent',
+  'defaultAgent.create.tooltip': 'Configure the default Agent template for the current team',
+  'defaultAgent.create.caption': 'New Default Agent Template',
+  'defaultAgent.create.desc':
+    'Configure the default Agent template for the current team: new members get a dedicated Agent auto-created from this template when they join.',
+  'defaultAgent.create.submit': 'Create',
+  'defaultAgent.edit': 'Edit Config',
+  'defaultAgent.edit.tooltip': 'Edit the default Agent template for the current team',
+  'defaultAgent.edit.caption': 'Edit Default Agent Template',
+  'defaultAgent.edit.desc':
+    'Overwrite the current team\u2019s default Agent template. Only affects members joining later; existing Agents are unaffected.',
+  'defaultAgent.save': 'Save Config',
+  'defaultAgent.name': 'Default Agent name *',
+  'defaultAgent.name.hint': 'New members get their dedicated default Agent created with this name.',
+  'defaultAgent.assets.label': 'Team-public assets: ',
+  'defaultAgent.assets.hint': 'Only team-public assets (visibility=team) are selectable',
+  'defaultAgent.notify.saved': 'Default Agent template saved.',
 
   // ===== MemberSection =====
   'member.title': 'Members ({{count}})',
@@ -904,6 +1039,15 @@ export const enUS = {
   'addMember.error.emptyName': 'Please enter a username.',
   'addMember.error.invalidName':
     'Username only supports letters, numbers, and underscores. No other symbols or spaces.',
+  'addMember.error.emptyKey':
+    'Custom User_Key is enabled — please enter the key you want to assign to the user.',
+  'addMember.customKey.label': 'Custom User_Key',
+  'addMember.customKey.hint':
+    'Off (default): the backend auto-generates a one-time key. On: you supply the initial key manually.',
+  'addMember.customKey.value': 'User_Key',
+  'addMember.customKey.placeholder': 'e.g. sk-mem-xxxxxxxxxxxxxxxx',
+  'addMember.customKey.valueHint':
+    "Will become the user's default User_Key. Must not collide with an existing user's key, otherwise creation is rejected.",
 
   // ===== CreatedUserKeyModal =====
   'createdUserKey.caption': 'User Created Successfully',
@@ -990,6 +1134,7 @@ export const enUS = {
   'graph.colorMode.community': 'Community',
   'graph.hideStructural': 'Hide Structural',
   'graph.hideStructural.title': 'Hide structural nodes',
+  'graph.clearSearch': 'Clear search',
   'graph.stats': '{{nodes}} nodes · {{edges}} edges',
 
   // ===== ImportBlockDialog (sample JSON) =====
@@ -1099,9 +1244,12 @@ export const enUS = {
 
   // ===== API error messages (error-message.ts) =====
   'error.UNAUTHORIZED': 'Your session has expired. Please log in again.',
-  'error.INVALID_USER_KEY': 'Your API key is invalid or expired. Please log in again.',
+  'error.INVALID_USER_KEY': 'This user_key is invalid. Please copy the correct key from https://tencent.sso.codebuddy.cn/profile/keys.',
   'error.MISSING_USER_KEY': 'Missing API key. Please log in again.',
   'error.MISSING_INSTANCE_ID': 'Missing instance information. Please reselect an instance and try again.',
+  'error.WOA_LOGIN_EXPIRED': 'The WOA login confirmation expired. Please start WOA login again.',
+  'error.WOA_LOGIN_PENDING_REQUIRED': 'The WOA login confirmation is missing. Please start WOA login again.',
+  'error.WOA_PROVISION_NOT_CONFIGURED': 'The server is missing the administrator key required to create a user. Contact an administrator.',
   'error.INVALID_INSTANCE': 'Invalid instance configuration. Please check the currently selected instance.',
   'error.NOT_TEAM_MEMBER': 'You are not a member of this team and cannot perform this operation.',
   'error.PERMISSION_DENIED': 'You do not have permission to perform this operation.',
@@ -1153,8 +1301,503 @@ export const enUS = {
   'error.VALIDATION_ERROR': 'Invalid request parameters. Please check your input and try again.',
   'error.RATE_LIMITED': 'Too many requests. Please try again later.',
   'error.INTERNAL_ERROR': 'Internal server error. Please try again later.',
+  // First login with a self-provided user_key (key not found → auto-create account)
+  // failed while creating the account. Distinct from "invalid key": the key itself is
+  // fine here; the server-side account creation failed.
+  'error.USER_CREATE_FAILED': 'Failed to create an account with this user_key. Please try again later or contact the administrator.',
   'error.network': 'Network request failed. Please check if the service is available and try again.',
   'error.timeout': 'Request timed out. Please try again later.',
   'error.emptyResponse': 'The server returned an empty response. Please try again later.',
   'error.fallback': 'Operation failed. Please try again later.',
+
+  // ===== Asset split layout =====
+  'assetSplit.resizer.label': 'Drag to resize the sidebar and detail panels',
+
+  // ===== Onboarding =====
+  'onboarding.skip': 'Skip',
+  'onboarding.prev': 'Back',
+  'onboarding.next': 'Next',
+  'onboarding.start': 'Get started',
+  'onboarding.finish': 'Finish',
+  // Welcome (startContent, role-specific)
+  'onboarding.guide.start.admin.title': 'Welcome to TDAI Panel',
+  'onboarding.guide.start.admin.desc':
+    'You are an administrator: you manage teams and members. Let\'s walk through the core features — click "Next" to begin.',
+  'onboarding.guide.start.member.title': 'Welcome to TDAI Panel',
+  'onboarding.guide.start.member.desc':
+    'You are a team member: you can manage Agents and assets within the team. Let\'s walk through the core features — click "Next" to begin.',
+  // Login identity (shared by Admin / Member)
+  'onboarding.guide.login.title': 'Your login identity',
+  'onboarding.guide.login.desc':
+    'You are signed in with a user_key. Use the top-right menu to view your profile, switch language, or log out; ownership and permissions are based on your current identity.',
+  // Admin: create / switch team
+  'onboarding.guide.team.title': 'Create / switch team',
+  'onboarding.guide.team.desc':
+    'Click the top-left corner to switch the active team. A team is the primary boundary of assets, Agents and Tasks; as an administrator you can create new teams here.',
+  // Admin: create members and issue user_key (not available to member)
+  'onboarding.guide.memberAdmin.title': 'Create members and issue user_key',
+  'onboarding.guide.memberAdmin.desc':
+    'As an administrator you can create new user accounts in "Members" and issue a one-time user_key (shown only once), or invite existing users into the team. Regular members cannot create users — they can only invite existing ones.',
+  // Member: invite teammates (cannot create users)
+  'onboarding.guide.member.title': 'Invite team members',
+  'onboarding.guide.member.desc':
+    'In "Members" you can invite existing users into the current team by user_id (you cannot create new user accounts — that requires an administrator). Ask them to copy their user_id from "My Profile".',
+  // Agent management (same for Admin and Member, both can edit)
+  'onboarding.guide.agent.title': 'Create and edit Agents',
+  'onboarding.guide.agent.desc':
+    'Click "Create Agent" to create an Agent. You can edit your own Agents and bind Wiki / Code / Skill / Chat Memory assets; Agents created by others are read-only. Admin and Member have the same capabilities.',
+  // Click an Agent card to open the edit dialog and bind assets
+  // (falls back to the "Create Agent" button when the user has none — copy covers both cases)
+  'onboarding.guide.agentBind.title': 'Click an Agent card to bind team assets',
+  'onboarding.guide.agentBind.desc':
+    'Click an Agent card you own (or its name) to open the edit dialog: tick Wiki / CodeGraph / Chat Memory team assets in the "Capabilities" section and save — bindings take effect immediately. No Agent yet? Click "Create Agent" first, then come back and click it. Skills are bound by choosing the owning Agent when importing on the Skill page.',
+  // Member: key management
+  'onboarding.guide.apikey.title': 'Manage your User_Keys',
+  'onboarding.guide.apikey.desc':
+    'Create keys in "User_Key management" for external clients (e.g. CodeBuddy / ClaudeCode CLI). The plaintext key is shown only once — copy and store it safely.',
+  // Create and allocate assets (same for Admin and Member; each asset page is visited.
+  // Each description follows "what it is → how to import → how to use" for first-time users)
+  'onboarding.guide.asset.wiki.title': 'Wiki: team document assets',
+  'onboarding.guide.asset.wiki.desc':
+    'What: a knowledge base for shared team documents. Import: click "Create Wiki" → open it and upload Markdown files (.md/.txt, multi-select & drag-drop supported) → trigger "Extract" to build searchable knowledge pages. Use: click "Allocate to Agent" on a Wiki card, or tick it in the Agent edit dialog — bound Agents can then retrieve and cite these documents in chat.',
+  'onboarding.guide.asset.code.title': 'CodeGraph: team code assets',
+  'onboarding.guide.asset.code.desc':
+    'What: an index and call graph built over team code repositories. Import: click "Register repo" and paste a Git HTTPS URL — indexing runs automatically. Use: once allocated to an Agent, the Agent can search code and explore call chains in chat to answer repo-related questions.',
+  'onboarding.guide.asset.skill.title': 'Skill: tell apart "Team assets" vs "Agent assets"',
+  'onboarding.guide.asset.skill.desc':
+    'Ownership: this page has two tabs — "Team assets" (a shared pool every member can use and configure) and "Agent assets" (skills bound to a specific Agent, usable by that Agent). Import: click "Import Skill" (create an Agent first) — the skill is bound to the chosen Agent. Use: once bound, the Agent follows the SKILL.md playbook when a matching scenario arises; in "Agent assets" you can toggle "Shared / Private" for skills you own.',
+  'onboarding.guide.asset.memory.title': 'Chat Memory: tell apart "Team assets" vs "Agent assets"',
+  'onboarding.guide.asset.memory.desc':
+    'Ownership: this page has two tabs — "Team assets" (a shared memory pool) and "Agent assets" (memory bound to a specific Agent, including each Agent\'s built-in private memory). Import: click "Import memory" to bring history in as L0; the system distills L1~L3 layers and attaches them to the chosen Agent. Use: bound Agents remember your preferences and conclusions across sessions; in "Agent assets" you can toggle "Shared / Private" for memory you imported.',
+
+  // ===== GuidePage =====
+  'guide.back': 'Back',
+  'guide.brand': 'Memory Hub · Getting Started',
+  'guide.title': 'Getting Started',
+  'guide.subtitle': 'Complete the quick setup first, then use best practices to turn team experience into reusable engineering assets.',
+  'guide.tabs.aria': 'Guide categories',
+  'guide.copy': 'Copy',
+  'guide.copied': 'Copied',
+  'guide.copyFailed': 'Copy failed, please select and copy manually',
+  'guide.copyCmd': 'Copy command',
+  'guide.copyPrompt': 'Copy prompt',
+  'guide.copyScript': 'Copy script',
+  'guide.copyConfig': 'Copy config',
+
+  // Main tabs
+  'guide.quick.title': 'Quick Setup',
+  'guide.quick.sub': 'Configure IDEs & import history',
+  'guide.practice.title': 'Best Practices',
+  'guide.practice.sub': 'Team Coding & personal multi-Agent',
+
+  // Three-step stepper
+  'guide.step.download.title': 'Download config pack',
+  'guide.step.download.sub': 'Get the agents scripts & Skill',
+  'guide.step.ide.title': 'Connect your IDE',
+  'guide.step.ide.sub': 'Configure Proxy & model',
+  'guide.step.history.title': 'Import history',
+  'guide.step.history.sub': 'Share memory & Skills',
+  'guide.step.prev': 'Back',
+  'guide.step.next': 'Next',
+  'guide.step.done': '✓ Quick setup complete',
+  'guide.step.navAria': 'Quick setup step navigation',
+
+  // Package download
+  'guide.download.title': 'Download the config pack first',
+  'guide.download.desc': 'After downloading and extracting, run the commands below from a location containing the agents directory.',
+  'guide.download.button': 'Download config pack (ZIP)',
+
+  // Quick setup sub tabs
+  'guide.quick.tabs.aria': 'Quick setup content',
+  'guide.quick.ide.title': 'IDE Setup',
+  'guide.quick.ide.sub': 'Configure Proxy & model',
+  'guide.quick.history.title': 'Import History',
+  'guide.quick.history.sub': 'Share memory and Skills across Agents',
+  'guide.quick.history.desc': 'Run the script from the repo root to import historical Sessions and Skills from local IDEs, so multiple Agents share existing memory and capabilities.',
+  'guide.quick.history.sources': 'Sources such as {{sources}} are supported; replace the target Team and Agent IDs before running.',
+  'guide.quick.history.dupHint': ' If you already chose to import at the end of the script setup, no need to run again.',
+  'guide.verify.title': 'Verify success: start a new conversation in your IDE',
+  'guide.verify.desc':
+    'Start a new conversation in a connected IDE. During session init you will see a "Link team assets?" option — seeing it and choosing "Yes" means your setup succeeded and your Agent can read the linked team assets.',
+
+  // Preparation
+  'guide.proxyHint.reading': 'Reading the local Proxy address…',
+  'guide.proxyHint.fromInstance': 'Read from local instance "{{name}}"',
+  'guide.proxyHint.defaultHost': 'Instance has no address configured; using current host and default port 8096',
+  'guide.proxyHint.noInstance': 'No instance found; using current host and default port 8096',
+  'guide.proxyHint.readFailed': 'Failed to read; using current host and default port 8096',
+  'guide.prepare.reading': 'Reading…',
+  'guide.proxyFallback': '<Proxy address>',
+  'guide.modelFallback': '<model ID>',
+  'guide.prepare.proxy': '1. Proxy',
+  'guide.prepare.mode': '2. Mode',
+  'guide.prepare.key': '3. API Key',
+  'guide.prepare.keyLink': 'Same Key as the login panel — get it from the API Key page',
+  'guide.mode.default': 'Default',
+  'guide.mode.analyse': 'Analyse',
+  'guide.mode.analyseHint': 'Analyse mode forwards requests normally while also analyzing how recalled assets contributed, and returns the result in the reply',
+  'guide.mode.analyseNotice':
+    'Note: the script / Skill method only writes the Default address. For Analyse, copy the /analyse endpoint from the manual config below and paste it into your IDE config file.',
+
+  // Setup methods
+  'guide.method.aria': 'Quick setup method',
+  'guide.method.skill.title': 'Option 1: Skill-based',
+  'guide.method.skill.sub': 'Recommended · guided by your Agent',
+  'guide.method.skill.step1': 'Prepare the Skill at the repo root',
+  'guide.method.skill.step2': 'Send the prompt below to your Agent',
+  'guide.method.skill.hint': 'The Agent probes the environment and Proxy, then writes the config via the bundled script, and asks whether to import local Skills and chat history.',
+  'guide.method.script.title': 'Option 2: Script-based',
+  'guide.method.script.sub': 'Run the interactive wizard in your terminal',
+  'guide.method.script.step1': 'Run at the repo root',
+  'guide.method.script.hint': 'The script scans existing configs, checks the Proxy and writes the selected IDE; finally you may import local Skills and chat history.',
+
+  // Manual config
+  'guide.manual.expand': 'Can\'t run commands? Configure manually',
+  'guide.manual.collapse': 'Collapse manual config',
+  'guide.manual.title': 'Manual Configuration',
+  'guide.manual.model': 'Model ID',
+  'guide.manual.modelHint': 'Must be lowercase',
+  'guide.manual.fileHint': 'Write to',
+
+  // Best practices
+  'guide.practice.team.title': 'Team Coding',
+  'guide.practice.team.sub': 'Collaborate and share experience',
+  'guide.practice.personal.title': 'Personal OPC',
+  'guide.practice.personal.sub': 'One person, multiple Agents',
+  'guide.practice.linksAria': 'related pages',
+  'guide.practice.related': 'Related',
+  'guide.diagram.multiIde': 'Multiple IDEs',
+  'guide.diagram.sessionSkill': 'Session + Skill',
+  'guide.diagram.members': 'Team members',
+  'guide.diagram.userAgent': 'User + Agent',
+  'guide.diagram.assets': 'Shared asset library',
+  'guide.diagram.assetSet': 'Memory · Skill · Wiki',
+  'guide.diagram.memorySkill': 'Memory + Skills',
+  'guide.diagram.reuse': 'Cross-end reuse',
+  'guide.diagram.reuseSub': 'Keep updating',
+  'guide.diagram.uniAccess': 'Unified access',
+  'guide.diagram.agents': 'Dedicated Agents',
+  'guide.diagram.agentsSub': 'Research · Dev · Review',
+  'guide.diagram.relay': 'Relay anywhere',
+  'guide.diagram.relaySub': 'No need to re-explain context',
+  'guide.rules.multi': 'Multi-end',
+  'guide.rules.share': 'Share',
+  'guide.rules.govern': 'Govern',
+  'guide.rules.multiTeamDesc': 'Same identity across IDEs',
+  'guide.rules.shareDesc': 'Open to team after validation',
+  'guide.rules.governDesc': 'Update the original asset, avoid duplicates',
+  'guide.rules.multiPersonalDesc': 'Share one history of memory',
+  'guide.rules.agents': 'Multi-Agent',
+  'guide.rules.agentsDesc': 'Each role reads its needed assets',
+  'guide.rules.reuse': 'Keep reusing',
+  'guide.rules.reuseDesc': 'Write experience back to Memory and Skills',
+
+  // Guide replay
+  'guide.replay.title': 'Frontend Guide Replay',
+  'guide.replay.desc': 'Replay the step-by-step first-run guide to quickly get familiar with pages and actions.',
+  'guide.replay.button': 'Replay Guide',
+  'guide.replayStarted': 'The guide will restart — please follow the prompts.',
+
+  // Memory commands (mem: commands)
+  'guide.mem.title': 'Memory Commands',
+  'guide.mem.sub': 'mem: commands available in chat',
+  'guide.mem.intro.title': 'Use mem: commands in the conversation',
+  'guide.mem.intro.desc':
+    'Once Memory is connected, type the commands below directly in the chat with your Agent to manage this session\u2019s asset bindings, archive Skills, and manage Tasks.',
+  'guide.mem.intro.format':
+    'The standard format is mem:<command> with no space after the colon. Command names are case-insensitive.',
+  'guide.mem.optionsTitle': 'You can reply with:',
+  'guide.mem.recommended': 'Recommended',
+
+  // Command groups
+  'guide.mem.group.session.title': 'Everyday',
+  'guide.mem.group.session.sub': 'Session binding \u00b7 asset sync \u00b7 archive',
+  'guide.mem.group.task.title': 'Task Management',
+  'guide.mem.group.task.sub': 'Create and update the bound Task (with confirmation flow)',
+
+  // Commands: everyday
+  'guide.mem.cmd.sessionReset.desc':
+    'Reset this session\u2019s team / Agent / Task binding and immediately re-open the selection.',
+  'guide.mem.cmd.sync.desc':
+    'Refresh all asset injections for this session (Skill / memory / Knowledge / Task & Agent descriptions).',
+  'guide.mem.cmd.createSkill.desc':
+    'Archive this conversation as a Skill, extracted asynchronously; append a prompt to focus the key points.',
+  'guide.mem.cmd.help.desc': 'Show help for all mem: commands.',
+
+  // Commands: task management
+  'guide.mem.cmd.createTask.desc': 'Create a Task from the current conversation context and bind it to this session.',
+  'guide.mem.cmd.createTask.detail1':
+    'No argument: the Agent infers the title and description from the recent conversation.',
+  'guide.mem.cmd.createTask.detail2':
+    'With argument: the argument is used as the title (truncated at 40 chars) and the Agent only generates the description. If this session already has a real Task bound, a preview of the new Task is returned for confirmation.',
+  'guide.mem.cmd.createTask.opt.confirm': 'Override the binding and create the new Task.',
+  'guide.mem.cmd.createTask.opt.update': 'Keep reusing the current Task and only update its description (recommended).',
+  'guide.mem.cmd.createTask.opt.cancel': 'Cancel without any changes.',
+  'guide.mem.cmd.updateTask.desc': 'Update the description of the bound Task.',
+  'guide.mem.cmd.updateTask.detail1':
+    'No argument: the Agent compares the current description with the recent conversation to generate a new one; if there is no substantial change, it reports no update needed (idempotent, safe to retry).',
+  'guide.mem.cmd.updateTask.detail2':
+    'With argument: the argument is used directly as the new description and a preview is returned. If no Task is bound, it asks you to run mem:create-task first; if the bound Task was not created by you, the update is rejected.',
+  'guide.mem.cmd.updateTask.opt.confirm': 'Confirm the description update.',
+  'guide.mem.cmd.updateTask.opt.cancel': 'Cancel the update.',
+
+  // Command examples
+  'guide.mem.examples.title': 'Command Examples',
+  'guide.mem.examples.sub': 'A set of common commands, copy all at once',
+  'guide.mem.examples.copyAll': 'Copy All',
+  'guide.mem.examples.list': [
+    'mem:sync',
+    'mem:create-skill Summarize the DB migration steps and pitfalls',
+    'mem:create-task Refactor SessionRegistrar',
+    'mem:create-task confirm',
+    'mem:create-task cancel',
+    'mem:update-task Add today\u2019s progress and remaining risks',
+    'mem:update-task confirm',
+    'mem:update-task cancel',
+    'mem:session-reset',
+    'mem:help',
+  ].join('\n'),
+
+  // Command argument placeholders
+  'guide.mem.arg.title': '[title]',
+  'guide.mem.arg.newDesc': '[new description]',
+  'guide.mem.arg.prompt': '[prompt]',
+
+  // Best practice steps (Team Coding)
+  'guide.practice.team.step1.title': 'Unified identity',
+  'guide.practice.team.step1.short': 'One team identity across all IDEs',
+  'guide.practice.team.step1.point1': 'Admin creates a dedicated User and Key for each member',
+  'guide.practice.team.step1.point2': 'Members use their own Key in Claude Code, CodeBuddy, etc.',
+  'guide.practice.team.step1.point3': 'Don\'t create a User per IDE — that splits memory and permissions',
+  'guide.practice.team.step2.title': 'Import history',
+  'guide.practice.team.step2.short': 'Merge experience from all IDEs into one place',
+  'guide.practice.team.step2.point1': 'Import existing Sessions and Skills from different IDEs',
+  'guide.practice.team.step2.point2': 'Recall past decisions, preferences, and lessons after switching IDEs',
+  'guide.practice.team.step2.point3': 'Exclude keys, private info, and unrelated chats before import',
+  'guide.practice.team.step3.title': 'Share assets',
+  'guide.practice.team.step3.short': 'Let the team reuse validated experience',
+  'guide.practice.team.step3.point1': 'Write project facts, decisions, and pitfalls to Memory',
+  'guide.practice.team.step3.point2': 'Turn stable, repeatable processes into Skills',
+  'guide.practice.team.step3.point3': 'Put general docs and long-term knowledge in Wiki, then make them team-visible once correct',
+  'guide.practice.team.step4.title': 'Keep governing',
+  'guide.practice.team.step4.short': 'Use, validate, update',
+  'guide.practice.team.step4.point1': 'Members and Agents recall the same team assets from any IDE',
+  'guide.practice.team.step4.point2': 'Update the original asset when stale or wrong — don\'t create duplicate versions',
+  'guide.practice.team.step4.point3': 'Use Analyse to see whether recalled assets actually helped the reply',
+
+  // Best practice steps (Personal OPC)
+  'guide.practice.personal.step1.title': 'Connect multiple IDEs',
+  'guide.practice.personal.step1.short': 'Switch tools without losing context',
+  'guide.practice.personal.step1.point1': 'Use the same Proxy and personal Key across your common IDEs',
+  'guide.practice.personal.step1.point2': 'Import historical Sessions and Skills to keep your workflow',
+  'guide.practice.personal.step1.point3': 'Experience gained in any IDE enters the same memory system',
+  'guide.practice.personal.step2.title': 'Divide Agents',
+  'guide.practice.personal.step2.short': 'Independent roles, share assets on demand',
+  'guide.practice.personal.step2.point1': 'Create Agents by duty: research, dev, test, review',
+  'guide.practice.personal.step2.point2': 'Give each Agent only the assets its role needs',
+  'guide.practice.personal.step2.point3': 'General Memory and Skills can be shared by multiple Agents',
+  'guide.practice.personal.step3.title': 'Relay across ends',
+  'guide.practice.personal.step3.short': 'Continue smoothly between IDEs and Agents',
+  'guide.practice.personal.step3.point1': 'Write research conclusions to Memory so a dev Agent can recall them in another IDE',
+  'guide.practice.personal.step3.point2': 'Turn test methods into Skills that later Agents follow',
+  'guide.practice.personal.step3.point3': 'Handoffs rely on shared assets, not copying full chats',
+  'guide.practice.personal.step4.title': 'Maintain assets',
+  'guide.practice.personal.step4.short': 'Keep reusable content, clean the noise',
+  'guide.practice.personal.step4.point1': 'Keep rationale, working solutions, failure causes, and acceptance methods',
+  'guide.practice.personal.step4.point2': 'Update stale facts in Memory, mature processes in Skills',
+  'guide.practice.personal.step4.point3': 'Don\'t save small talk, guesses, keys, or personal sensitive info',
+
+  // Manual config notes
+  'guide.manual.note.claude': 'Start claude directly — it reads env from settings.json',
+  'guide.manual.note.codebuddy': 'Select the proxy-memory-agent model in the CodeBuddy dialog',
+  'guide.manual.note.codex': 'Switch to Plan mode (Shift+Tab) to pick Team→Agent→Task before the first chat, then switch back to Agent mode',
+  'guide.manual.note.workbuddy': 'Select this model in the WorkBuddy custom model list',
+  'guide.manual.note.dsh.0': 'Two files must both be configured',
+  'guide.manual.note.dsh.1': 'Permissions required: chmod 700 ~/.dsh, chmod 600 ~/.dsh/.credentials.yaml',
+  'guide.manual.note.dsh.2': 'Launch: dsh (CLI) or dsh web --port 3080 (Web UI)',
+  'guide.manual.note.hermes.0': 'Header preselect required: team-id / agent-id / task-id / conversation-id',
+  'guide.manual.note.hermes.1': 'x-conversation-id identifies the current session — change it for each new conversation',
+  'guide.manual.note.hermes.2': 'x-task-id is required in the current version; use "no-task" when there is none',
+  'guide.manual.note.openclaw.0': 'Header preselect required: team-id / agent-id / task-id / conversation-id',
+  'guide.manual.note.openclaw.1': 'x-conversation-id identifies the current session — change it for each new conversation',
+  'guide.manual.note.openclaw.2': 'x-task-id is required in the current version; use "no-task" when there is none',
+
+  // ===== Analytics (Observability) =====
+  'menu.analytics': 'Observability',
+  'menu.group.observability': 'Observability',
+  'menu.desc.analytics': 'Team memory usage metrics dashboard (admin only)',
+  'analytics.title': 'Observability',
+  'analytics.subtitle': 'Team memory usage metrics · Session adoption / tool calls / bypass (source: ClickHouse telemetry)',
+  'analytics.range': 'Last {{days}} days',
+  'analytics.allSpaces': 'All Spaces',
+  'analytics.refresh': 'Refresh',
+  'analytics.loading': 'Loading…',
+  'analytics.notLoaded': 'Not loaded',
+  'analytics.updatedAt': 'Updated at {{time}}',
+  'analytics.chUnreachable': 'ClickHouse is configured but unreachable; data cannot be loaded.',
+  'analytics.chNotConfigured': 'ClickHouse is not configured; observability data is unavailable.',
+  'analytics.featureDisabled.title': 'Feature unavailable',
+  'analytics.featureDisabled.desc':
+    'Observability is not enabled for this deployment (ClickHouse telemetry not configured, or disabled by the administrator).',
+  'analytics.chProbeFailed': 'Failed to probe ClickHouse status. Please retry later or contact an admin.',
+  'analytics.unit.times': 'calls',
+  'analytics.trend.max': 'Peak {{value}}',
+  'analytics.trend.singlePoint': 'The current time window covers only one calendar day, so no trend comparison is available. Switch to a longer window to see the trend.',
+  'analytics.noPermission.title': 'No Permission',
+  'analytics.noPermission.desc': 'The observability page is only available to system admins.',
+  'analytics.kpi.rate': 'Tool Call Rate',
+  'analytics.kpi.avg': 'Avg Calls per Session',
+  'analytics.kpi.bypass': 'Bypass Rate',
+  'analytics.kpi.sessions': 'Distinct Sessions',
+  'analytics.kpi.total': 'Total Calls',
+  'analytics.vsPrev': 'vs previous period',
+  'analytics.perInitSession': 'per init Session',
+  'analytics.bypassSub': '{{bypass}} bypass / {{normal}} normal',
+  'analytics.initSessionsSub': 'init sessions in current period',
+  'analytics.totalCallsSub': 'bridge_call total',
+  'analytics.section.endpointShare': 'Endpoint Share',
+  'analytics.section.timeseries': 'Daily Trend (Session Init / Called / Bypass)',
+  'analytics.section.topBodies': 'Top Call Bodies',
+  'analytics.section.bypassReasons': 'Bypass Reasons',
+  'analytics.empty.bridge': 'No bridge_call data',
+  'analytics.empty.bypass': 'No bypass records',
+  'analytics.empty.trend': 'No history data',
+  'analytics.empty.trace': 'No trace records',
+  'analytics.trend.init': 'Init Sessions',
+  'analytics.trend.called': 'Called Sessions',
+  'analytics.trend.bypass': 'Bypass Sessions',
+  'analytics.calls.col.endpoint': 'Endpoint',
+  'analytics.calls.col.body': 'Body preview (first 200 chars)',
+  'analytics.calls.col.hash': 'Request Hash',
+  'analytics.calls.col.count': 'Occurrences',
+  'analytics.calls.col.pct': 'Share',
+
+  // Asset categories
+  'analytics.section.assetCategory': 'Asset Call Distribution',
+  'analytics.section.assetCategorySub': 'Grouped by asset category (full dataset) · click a card to drill into call details',
+  'analytics.category.memory': 'Memory',
+  'analytics.category.skill': 'Skill',
+  'analytics.category.wiki': 'Wiki',
+  'analytics.category.codegraph': 'Code Graph',
+  'analytics.category.other': 'Other',
+  'analytics.category.memory.desc': 'Long-term memory and past experience recall',
+  'analytics.category.skill.desc': 'Standard workflows and specialized capabilities',
+  'analytics.category.wiki.desc': 'Team knowledge and design doc retrieval',
+  'analytics.category.codegraph.desc': 'Code structure and call relationship analysis',
+  'analytics.category.other.desc': 'Unclassified endpoints; classification rules need updating',
+  'analytics.category.calls': 'Calls',
+  'analytics.category.noEndpoint': 'No endpoints yet',
+
+  // Member dimension
+  'analytics.section.members': 'Member Usage',
+  'analytics.section.membersSub': 'Call behavior grouped by member · identifies who has adopted and who has not',
+  'analytics.member.col.user': 'Member / user_id',
+  'analytics.member.col.calls': 'Calls',
+  'analytics.member.col.sessions': 'Sessions',
+  'analytics.member.col.topCategory': 'Top Asset',
+  'analytics.member.col.avgElapsed': 'Avg Latency',
+  'analytics.member.col.errors': 'Errors',
+  'analytics.member.col.lastCall': 'Last Call',
+  'analytics.member.col.op': 'Action',
+  'analytics.member.unassigned': 'Unassigned (no member in report)',
+  'analytics.member.unrecognized': 'Unrecognized user',
+  'analytics.member.sampled': 'Member stats are based on the latest {{sampled}} calls (out of {{total}}), not the full dataset. Narrow the time window or filter by Space for full coverage.',
+  'analytics.empty.member': 'No member call data',
+
+  // Trace details
+  'analytics.section.trace': 'Call Details (Trace)',
+  'analytics.section.traceSub': 'Each row is one real call · click a row to expand the full request body',
+  'analytics.trace.col.time': 'Time',
+  'analytics.trace.col.user': 'Member',
+  'analytics.trace.col.agent': 'Client',
+  'analytics.trace.col.tool': 'Initiated Tool',
+  'analytics.trace.col.endpoint': 'Executed Endpoint',
+  'analytics.trace.col.status': 'Status',
+  'analytics.trace.col.elapsed': 'Latency',
+  'analytics.trace.endpointPlaceholder': 'Search by endpoint (fuzzy)',
+  'analytics.trace.search': 'Search',
+  'analytics.trace.clearFilters': 'Clear filters',
+  'analytics.trace.range': '{{from}}–{{to}} of {{total}}',
+  'analytics.trace.prev': 'Previous',
+  'analytics.trace.next': 'Next',
+  'analytics.trace.emptyBody': '(no request body)',
+
+  // View tabs
+  'analytics.tab.behavior': 'Usage Behavior',
+  'analytics.tab.cost': 'Cost & Models',
+
+  // Cost KPIs
+  'analytics.usage.kpi.requests': 'Model Requests',
+  'analytics.usage.kpi.sessions': 'Sessions',
+  'analytics.usage.kpi.users': 'Members',
+  'analytics.usage.kpi.totalTokens': 'Total Tokens',
+  'analytics.usage.kpi.prompt': 'Prompt',
+  'analytics.usage.kpi.completion': 'Completion',
+  'analytics.usage.kpi.cacheHit': 'Cache Hit Rate',
+  'analytics.usage.kpi.cacheTokens': 'Cached Tokens',
+  'analytics.usage.kpi.cacheHitHint': 'share of prompt tokens',
+  'analytics.usage.kpi.credit': 'Credit Spent',
+  'analytics.usage.kpi.models': 'Models',
+  'analytics.usage.kpi.saved': 'Credit Saved',
+  'analytics.usage.kpi.compressSaved': 'Tokens Saved',
+  'analytics.usage.kpi.savedHint': 'from caching and compression',
+
+  // Cost trends
+  'analytics.usage.section.tokenTrend': 'Daily Token Trend',
+  'analytics.usage.section.creditTrend': 'Daily Credit Trend',
+  'analytics.usage.section.creditTrendSub': 'Charted separately from tokens — combining them would flatten the credit curve',
+  'analytics.usage.trend.prompt': 'Prompt Tokens',
+  'analytics.usage.trend.completion': 'Completion Tokens',
+  'analytics.usage.trend.cacheHit': 'Cached Tokens',
+  'analytics.usage.trend.credit': 'Credit Spent',
+  'analytics.usage.trend.creditSaved': 'Credit Saved',
+
+  // Model distribution
+  'analytics.usage.section.byModel': 'Model Usage & Cost Distribution',
+  'analytics.usage.section.byModelSub': 'Sorted by credit spent · the routed column counts requests forwarded from other models',
+  'analytics.usage.model.col.model': 'Model',
+  'analytics.usage.model.col.requests': 'Requests',
+  'analytics.usage.model.col.pctRequests': 'Req. Share',
+  'analytics.usage.model.col.tokens': 'Tokens',
+  'analytics.usage.model.col.credit': 'Credit',
+  'analytics.usage.model.col.pctCredit': 'Credit Share',
+  'analytics.usage.model.col.routed': 'Routed In',
+
+  // Raw usage records (note: non_tokenhub is a normal passthrough marker, not an anomaly)
+  'analytics.usage.section.raw': 'Raw Usage Records',
+  'analytics.usage.section.rawSub': 'Reports that bypassed the TokenHub billing path or failed billing parsing are archived as-is · click a row for the raw payload',
+  'analytics.usage.raw.actionable': 'Need attention (billing gap)',
+  'analytics.usage.raw.passthrough': 'Non-TokenHub path (normal)',
+  'analytics.usage.raw.col.time': 'Time',
+  'analytics.usage.raw.col.reason': 'Archive Reason',
+  'analytics.usage.raw.col.model': 'Model',
+  'analytics.usage.raw.col.user': 'Member',
+  'analytics.usage.raw.col.key': 'Key ID',
+  'analytics.usage.raw.col.space': 'Space',
+  'analytics.usage.raw.allReasons': 'All reasons',
+  'analytics.usage.raw.emptyPayload': '(no raw payload)',
+  'analytics.usage.reason.non_tokenhub': 'Non-TokenHub path',
+  'analytics.usage.reason.unknown_model': 'Model not in pricing table',
+  'analytics.usage.reason.invalid_format': 'Invalid usage format',
+  'analytics.usage.reason.invalid_credit': 'Credit calculation anomaly',
+  'analytics.usage.reason.report_failed': 'Report failed',
+
+  'analytics.usage.empty.model': 'No model usage data',
+  'analytics.usage.empty.raw': 'No archived records under the current filter',
+  'analytics.usage.empty.trend': 'No usage history data',
+  'analytics.usage.empty.detail': 'No usage records',
+
+  // Usage detail columns
+  'analytics.usage.detail.col.flags': 'Flags',
+  'analytics.usage.detail.stream': 'Stream',
+  'analytics.usage.detail.routed': 'Routed',
+  'analytics.usage.detail.routedFrom': 'Routed from {{model}}',
+
+  // Drill-down drawer
+  'analytics.drill.open': 'View details',
+  'analytics.drill.view.trace': 'Call Details',
+  'analytics.drill.view.usage': 'Usage Details',
+  'analytics.drill.categoryHint': 'calls for this asset type',
+  'analytics.drill.knowledgeAmbiguous':
+    'Wiki and Code Graph share the knowledge-service bridge source, and the kernel only filters by bridge_source — so the results below include all knowledge calls and cannot be narrowed to a single type.',
 };

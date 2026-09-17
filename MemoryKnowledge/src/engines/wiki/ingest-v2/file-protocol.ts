@@ -29,8 +29,16 @@ export interface ParseResult {
   warnings: string[];
 }
 
-const OPEN_RE = /<<<FILE\s+path\s*=\s*"([^"]*)"\s*>>>/g;
-const CLOSE_TOKEN = "<<<END>>>";
+/**
+ * 开标签：标准为 >>>；模型偶发漏写一个 > 变成 >>。
+ * 接受 ≥2 个收尾 >，避免「长输出但 files=0」。
+ */
+const OPEN_RE = /<<<FILE\s+path\s*=\s*"([^"]*)"\s*>>+/g;
+/**
+ * 闭标签：标准为 <<<END>>>；模型偶发拆成 <<<\nEND>>>。
+ * 仅放宽 END 两侧空白（含换行），仍要求字面 END。
+ */
+const CLOSE_RE = /<<<\s*END\s*>>>/g;
 
 /**
  * 校验并规范化 FILE 块声明的 path。
@@ -80,17 +88,19 @@ export function parseFileBlocks(text: string): ParseResult {
   while ((match = OPEN_RE.exec(text)) !== null) {
     const rawPath = match[1];
     const bodyStart = OPEN_RE.lastIndex;
-    const closeIdx = text.indexOf(CLOSE_TOKEN, bodyStart);
+    CLOSE_RE.lastIndex = bodyStart;
+    const closeMatch = CLOSE_RE.exec(text);
 
-    if (closeIdx === -1) {
+    if (!closeMatch) {
       // 未闭合块 → 丢弃（通常是输出被截断）
       warnings.push(`未闭合的 FILE 块，已丢弃: path="${rawPath}"`);
       break;
     }
 
     // 防止下一次匹配跨过本块的 END
+    const closeIdx = closeMatch.index;
     const rawContent = text.slice(bodyStart, closeIdx);
-    OPEN_RE.lastIndex = closeIdx + CLOSE_TOKEN.length;
+    OPEN_RE.lastIndex = closeIdx + closeMatch[0].length;
 
     const normPath = normalizeWikiPath(rawPath);
     if (!normPath) {

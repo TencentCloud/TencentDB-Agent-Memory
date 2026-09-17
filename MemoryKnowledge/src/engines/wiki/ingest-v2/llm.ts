@@ -9,7 +9,7 @@
  * 这里做归一化以兼容 INTERFACE 文档里写的 { baseUrl, maxTokens, timeoutMs } 别名。
  */
 
-import { generateText } from "ai";
+import { generateText, streamText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createLogger } from "../../../logger.js";
@@ -29,6 +29,15 @@ export interface RawLlmConfig {
   baseUrl?: string;
   maxTokens?: number;
   timeoutMs?: number;
+  /**
+   * 是否用流式请求(streamText)调用上游。默认 false(非流式)。
+   * 个别只接受流式请求的兼容上游需置 true。openai/anthropic 协议均生效。
+   *
+   * ⚠️ 仅 wiki-ingest 这条 AI SDK 直连路径生效;不影响 MemoryCore/OpenClaw host
+   * runner。也不会把增量 token 透传给调用方,只是"以流式协议请求上游后等待
+   * 完整文本"的兼容层。
+   */
+  stream?: boolean;
 }
 
 /** 归一化后的配置。 */
@@ -39,6 +48,7 @@ export interface NormalizedLlmConfig {
   model: string;
   maxTokens: number;
   timeoutMs: number;
+  stream: boolean;
 }
 
 const DEFAULT_MODEL = "Memory-Model";
@@ -60,7 +70,8 @@ export function normalizeLlmConfig(raw: RawLlmConfig | undefined): NormalizedLlm
   const model = cfg.model || DEFAULT_MODEL;
   const maxTokens = cfg.maxTokens ?? cfg.maxContextSize ?? DEFAULT_MAX_TOKENS;
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  return { protocol, baseUrl, apiKey, model, maxTokens, timeoutMs };
+  const stream = cfg.stream ?? false;
+  return { protocol, baseUrl, apiKey, model, maxTokens, timeoutMs, stream };
 }
 
 export interface ChatParams {
@@ -127,7 +138,7 @@ export function createLlmClient(raw: RawLlmConfig | undefined): LlmClient {
       log.debug(`LLM user prompt [${label}] (model=${config.model})`, { text: params.prompt.slice(0, 500) });
 
       try {
-        const result = await generateText({
+        const callParams = {
           model: provider.chat(config.model),
           system: params.system,
           prompt: params.prompt,
@@ -138,19 +149,39 @@ export function createLlmClient(raw: RawLlmConfig | undefined): LlmClient {
             isEnabled: true,
             functionId: params.label ?? "chat",
           },
-        });
-        const text = (result.text ?? "").trim();
-        const u = result.usage ?? ({} as Record<string, number>);
+        };
+
+        // stream=true → streamText(给只吃流式的上游);否则 generateText。
+        // streamText 的 text/usage/finishReason 是 Promise,await 后形状与 generateText 一致。
+        const { text, usage, finishReason } = config.stream
+          ? await (async () => {
+              const r = streamText(callParams);
+              return {
+                text: ((await r.text) ?? "").trim(),
+                usage: await r.usage,
+                finishReason: await r.finishReason,
+              };
+            })()
+          : await (async () => {
+              const r = await generateText(callParams);
+              return {
+                text: (r.text ?? "").trim(),
+                usage: r.usage,
+                finishReason: r.finishReason,
+              };
+            })();
+
+        const u = usage ?? ({} as Record<string, number>);
         log.info(`LLM 调用完成 [${label}]`, {
           ms: Date.now() - startMs,
           promptTokens: u.inputTokens ?? null,
           completionTokens: u.outputTokens ?? null,
           totalTokens: u.totalTokens ?? null,
-          finishReason: result.finishReason ?? null,
+          finishReason: finishReason ?? null,
           outputChars: text.length,
         });
         if (!text) {
-          log.warn(`LLM 返回空文本 [${label}]`, { finishReason: result.finishReason ?? null });
+          log.warn(`LLM 返回空文本 [${label}]`, { finishReason: finishReason ?? null });
         }
         return text;
       } catch (err) {

@@ -1,5 +1,5 @@
 /**
- * api/tasks.ts — Task + ParticipationLog（链路 A：meta/task/* + meta/task-agent/* + meta/participation-log/*）。
+ * api/tasks.ts — Task + ParticipationLog（meta/task/* + meta/task-agent/* + meta/participation-log/*）。
  */
 import { getPanelSession } from '../panelSession';
 import { metaPost, metaListAll, getCurrentUser, request, ApiError } from './base';
@@ -141,12 +141,12 @@ export const tasksApi = {
 
 // ========================= Participation Logs（meta/participation-log/*）=========================
 //
-// Session init 完成时由 proxy 侧 append 一条 (team, task, agent, user) 事件；看板据此
+// Session 启动时会 append 一条 (team, task, agent, user) 事件；看板据此
 // 展示"实际参与 User / Agent"。语义与 `task-agent/link`（人工声明关系）互补：
 //   - `linked_agents` = 意图（谁应该干这个 task）
 //   - participation_log = 观测（谁实际起过 session）
 //
-// 内核 `dedupe:true` 只对 user_id 生效，agent 维度需前端自行 dedupe。
+// 后端 `dedupe:true` 只对 user_id 生效，agent 维度需前端自行 dedupe。
 
 export interface ParticipationLogEntity {
   id?: string;

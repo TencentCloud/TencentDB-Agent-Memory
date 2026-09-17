@@ -23,4 +23,6 @@ export interface MemoryClientConfig {
  */
 export interface Transport {
   post<T>(path: string, body?: Record<string, unknown>): Promise<T>;
+  /** Optional for backward-compatible custom transports; management clients fall back to POST when absent. */
+  get?<T>(path: string, query?: Record<string, unknown>): Promise<T>;
 }

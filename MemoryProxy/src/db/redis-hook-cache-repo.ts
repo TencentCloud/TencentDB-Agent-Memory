@@ -37,33 +37,33 @@ export class RedisHookCacheRepo implements HookCacheRepo {
     this.ttl = ttlSeconds ?? DEFAULT_TTL;
   }
 
-  put(
+  async put(
     spaceId: string,
     userId: string,
     agentSource: string,
     sessionId: string,
     hookId: string,
     blocks: ContextBlock[],
-  ): void {
+  ): Promise<void> {
     const key = keyOf(spaceId, userId, agentSource, sessionId);
-    this.redis.hset(key, hookId, JSON.stringify(blocks)).catch(() => {});
+    await this.redis.hset(key, hookId, JSON.stringify(blocks)).catch(() => {});
     this.redis.expire(key, this.ttl).catch(() => {});
   }
 
-  putMany(
+  async putMany(
     spaceId: string,
     userId: string,
     agentSource: string,
     sessionId: string,
     entries: HookCacheEntry[],
-  ): void {
+  ): Promise<void> {
     if (entries.length === 0) return;
     const key = keyOf(spaceId, userId, agentSource, sessionId);
     const args: string[] = [];
     for (const e of entries) {
       args.push(e.hookId, JSON.stringify(e.blocks));
     }
-    this.redis.hset(key, ...args).catch(() => {});
+    await this.redis.hset(key, ...args).catch(() => {});
     this.redis.expire(key, this.ttl).catch(() => {});
   }
 
@@ -112,12 +112,12 @@ export class RedisHookCacheRepo implements HookCacheRepo {
     }
   }
 
-  clearBySession(
+  async clearBySession(
     spaceId: string,
     userId: string,
     agentSource: string,
     sessionId: string,
-  ): void {
-    this.redis.del(keyOf(spaceId, userId, agentSource, sessionId)).catch(() => {});
+  ): Promise<void> {
+    await this.redis.del(keyOf(spaceId, userId, agentSource, sessionId)).catch(() => {});
   }
 }

@@ -48,9 +48,25 @@ import type {
   ConfigParamEntity,
   UpsertConfigParamInput,
   ListConfigParamsFilter,
+  InstanceUpstreamConfigEntity,
+  UpsertInstanceUpstreamConfigInput,
+  InstanceUpstreamConfigFilter,
+  UpstreamConfigType,
 } from "../types.js";
 
 export type MaybePromise<T> = T | Promise<T>;
+
+/**
+ * 调用方指定 default_key_value / key_value 时，命中 meta_user_keys.key_value UNIQUE 约束。
+ * Service 层 catch 后翻译为 MetadataError("duplicate_user_key")；HTTP 层映射为 409。
+ * Store 层直接抛此错，独立于业务层 MetadataError（避免存储层反向依赖 service）。
+ */
+export class DuplicateUserKeyError extends Error {
+  constructor(public readonly keyValue: string) {
+    super(`user_key already exists: ${keyValue}`);
+    this.name = "DuplicateUserKeyError";
+  }
+}
 
 export interface IMetadataStore {
   /** 初始化存储（建表/建索引/建连接）。幂等。 */
@@ -156,7 +172,15 @@ export interface IMetadataStore {
    * 是全量替换会覆盖那些绑定，因此需要一个 append 语义的操作。
    */
   addAgentFixedAsset(agentId: string, binding: FixedAssetBindingInput): MaybePromise<void>;
-  listAgentFixedAssets(agentId: string, pagination?: PaginationParams | null): MaybePromise<ListPage<FixedAssetBindingEntity>>;
+  listAgentFixedAssets(
+    agentId: string,
+    pagination?: PaginationParams | null,
+    /**
+     * 可选过滤：仅返回 asset 类型在列表中的绑定。空/省略 = 不过滤。
+     * store 内部 JOIN meta_assets 做 SQL 层过滤，避免"分页在前、类型过滤在后"截断。
+     */
+    filter?: { assetTypes?: readonly string[] },
+  ): MaybePromise<ListPage<FixedAssetBindingEntity>>;
   getAgentFixedAsset(agentId: string, assetId: string): MaybePromise<FixedAssetBindingEntity | null>;
   /**
    * 按 agent_id + asset_type 聚合 COUNT(DISTINCT asset_id)。
@@ -183,6 +207,22 @@ export interface IMetadataStore {
   ): MaybePromise<ConfigParamEntity | null>;
   upsertConfigParam(input: UpsertConfigParamInput): MaybePromise<ConfigParamEntity>;
   listConfigParams(filter: ListConfigParamsFilter): MaybePromise<ConfigParamEntity[]>;
+
+  // ── InstanceUpstreamConfig ──
+  getInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): MaybePromise<InstanceUpstreamConfigEntity | null>;
+  upsertInstanceUpstreamConfig(
+    input: UpsertInstanceUpstreamConfigInput,
+  ): MaybePromise<InstanceUpstreamConfigEntity>;
+  listInstanceUpstreamConfigs(
+    filter?: InstanceUpstreamConfigFilter,
+  ): MaybePromise<InstanceUpstreamConfigEntity[]>;
+  deleteInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): MaybePromise<boolean>;
 }
 
 /** 后端类型。 */

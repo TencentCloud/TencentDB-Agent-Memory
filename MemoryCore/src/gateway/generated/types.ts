@@ -211,9 +211,15 @@ export type ConversationItem = {
     */
     content: string;
     /**
+     * @description 消息实际发生时间；不传时使用服务端接收时间。
      * @type string | undefined, date-time
     */
     timestamp?: string;
+    /**
+     * @description 历史导入时指定原始入库时间；不传时使用服务端接收时间。
+     * @type string | undefined, date-time
+    */
+    recorded_at?: string;
 };
 
 export type ConversationAddRequest = (IdFields & {
@@ -327,10 +333,20 @@ export type ConversationSearchData = {
 
 export type ConversationDeleteRequest = {
     /**
-     * @description 待删除的对话消息 id 列表。
+     * @description 待删除的对话消息 id 列表。单次至多 5000 条。
      * @type array
     */
-    message_ids: string[];
+    message_ids?: string[];
+    /**
+     * @description 待清空的会话 id 列表，删除选中 session 下的所有 message。单次至多 100 条。
+     * @type array
+    */
+    session_ids?: string[];
+    /**
+     * @deprecated 改用 `session_ids`。
+     * @type string
+    */
+    session_id?: string;
 };
 
 export type ConversationDeleteData = {
@@ -498,7 +514,7 @@ export type AtomicSearchData = {
  */
 export type AtomicDeleteRequest = {
     /**
-     * @description 笔记主键列表，单次至多 100 条。
+     * @description 笔记主键列表，单次至多 5000 条。
      * @type array
     */
     ids: string[];

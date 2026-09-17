@@ -1,5 +1,5 @@
 /**
- * tdai_read_cos tool — reads memory pipeline artifacts (persona.md,
+ * tdai_read_file tool — reads memory pipeline artifacts (persona.md,
  * scene_blocks/*.md, ...) by relative path via SDK MemoryFileReader
  * (POST /v2/cos/secret + STS GET). COS STS bypass; independent of MemoryClient.
  */

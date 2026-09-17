@@ -94,7 +94,10 @@ export class TdaiClient {
     const chunkedMessages = chunkConversationMessages(messages);
     log.info("tdai-recorder:write-l0", {
       team: identity.teamId,
+      agent: identity.agentId,
+      user: identity.userId,
       session: identity.sessionId,
+      task: identity.taskId,
       msgs: messages.length,
       chunks: chunkedMessages.length,
       userLen: (messages[0]?.content ?? "").length,

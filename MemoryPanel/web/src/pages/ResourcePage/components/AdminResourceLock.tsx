@@ -1,8 +1,6 @@
 /**
- * AdminResourceLock — Admin 账号访问资源管理时的锁定提示
- *
- * 从 App.tsx PageContent 中抽出。Tea 组件重构版：使用 Tea `Card` + `Icon`
- * 承载空态提示，不再使用 emoji 图标。
+ * AdminResourceLock — Admin 账号访问资源管理时的锁定提示。
+ * 用 Tea `Card` + `Icon` 承载空态提示。
  */
 import { useTranslation } from 'react-i18next';
 import { Card } from 'tea-component';

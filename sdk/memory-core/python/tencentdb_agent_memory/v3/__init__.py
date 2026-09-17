@@ -14,6 +14,8 @@ Skill 客户端 :class:`SkillClient` / :class:`AsyncSkillClient` 封装 14 条
 
 from .client import AsyncMemoryClient, MemoryClient
 from .metadata_client import AsyncMetadataClient, MetadataClient
+from .memory_prompt import AsyncMemoryPromptClient, MemoryPromptClient
+from .memory_generation_log import AsyncMemoryGenerationLogClient, MemoryGenerationLogClient
 from .skill_client import (
     SKILL_ERROR_CODE,
     AsyncSkillClient,
@@ -27,6 +29,10 @@ __all__ = [
     "AsyncMemoryClient",
     "MetadataClient",
     "AsyncMetadataClient",
+    "MemoryPromptClient",
+    "AsyncMemoryPromptClient",
+    "MemoryGenerationLogClient",
+    "AsyncMemoryGenerationLogClient",
     "SkillClient",
     "AsyncSkillClient",
     "SKILL_ERROR_CODE",

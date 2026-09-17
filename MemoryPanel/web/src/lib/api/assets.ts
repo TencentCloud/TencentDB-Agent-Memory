@@ -1,5 +1,5 @@
 /**
- * api/assets.ts — 资产管理（链路 A：meta/asset/*）。
+ * api/assets.ts — 资产管理（meta/asset/*）。
  */
 import { metaPost, metaListAll, getCurrentUser } from './base';
 import type { Asset, AssetType, AssetStatus } from './types';
@@ -26,7 +26,7 @@ export const assetsApi = {
   /** 资产详情 */
   get: (assetId: string) => metaPost<Asset>('asset/get', { asset_id: assetId }),
 
-  /** 创建/登记资产（两段式：内核主表 + Control 本地详情表） */
+  /** 创建/登记资产（两段式：主表 + 详情表） */
   create: async (
     teamId: string,
     data: {
@@ -68,7 +68,7 @@ export const assetsApi = {
   },
 
   /**
-   * 列出当前用户在指定 team 内**可访问**的资产（走内核 permission-checker，
+   * 列出当前用户在指定 team 内**可访问**的资产（走后端 permission-checker，
    * 严格执行 visibility × ACL 过滤）。
    *
    * 与 asset/list 的区别：

@@ -60,9 +60,14 @@ import type {
   ConfigParamEntity,
   UpsertConfigParamInput,
   ListConfigParamsFilter,
+  InstanceUpstreamConfigEntity,
+  UpsertInstanceUpstreamConfigInput,
+  InstanceUpstreamConfigFilter,
+  UpstreamConfigType,
 } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
+import { DuplicateUserKeyError } from "./interface.js";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -81,6 +86,13 @@ function isPkCollision(err: unknown): boolean {
 
 function isStorePkCollision(err: unknown): boolean {
   return isPkCollision(err) || isMongoRelationIdCollision(err);
+}
+
+/** E11000 on meta_user_keys.key_value (调用方显式指定 default_key_value 时并发命中)。 */
+function isUserKeyValueCollision(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+  return e.code === 11000 && !!e.keyPattern && "key_value" in e.keyPattern;
 }
 
 const PROJECT_NO_ID = { projection: { _id: 0 } } as const;
@@ -250,6 +262,12 @@ export class MongoMetadataStore implements IMetadataStore {
       { partialFilterExpression: { scope: "user" } },
     );
 
+    // ── meta_instance_upstream_config ──
+    await this.ensureIndex("meta_instance_upstream_config",
+      { agent_source: 1, type: 1 },
+      { unique: true },
+    );
+
     await this.migrateLegacyUserKeys();
   }
 
@@ -386,6 +404,10 @@ export class MongoMetadataStore implements IMetadataStore {
         });
         return doc;
       } catch (err) {
+        // 调用方显式指定 default_key_value 命中 UNIQUE:翻译业务错(HTTP 409),不 retry。
+        if (isUserKeyValueCollision(err)) {
+          throw new DuplicateUserKeyError(defaultKeyValue);
+        }
         if (isPkCollision(err) && !input.user_id) continue;
         throw err;
       }
@@ -433,7 +455,10 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async updateUser(userId: string, patch: Partial<UserEntity>): Promise<UserEntity | null> {
-    const allowed = ["password", "display_name", "email", "raw_profile_json", "status", "metadata_json", "username"];
+    // external_id / auth_provider：外部认证（如 WOA）绑定存量账号时写入，
+    // 用于下次登录判断是否初次。白名单漏掉 auth_provider 会导致绑定"看似成功、
+    // 实际没写域"，下次按域反查落空 → 401，属静默失效，务必保留。
+    const allowed = ["password", "display_name", "email", "raw_profile_json", "status", "metadata_json", "username", "external_id", "auth_provider"];
     await this.patchOne("meta_users", { user_id: userId }, patch, allowed, true);
     return this.getUserById(userId);
   }
@@ -1130,10 +1155,32 @@ export class MongoMetadataStore implements IMetadataStore {
     }
   }
 
-  async listAgentFixedAssets(agentId: string, pagination?: PaginationParams | null): Promise<ListPage<FixedAssetBindingEntity>> {
+  async listAgentFixedAssets(
+    agentId: string,
+    pagination?: PaginationParams | null,
+    filter?: { assetTypes?: readonly string[] },
+  ): Promise<ListPage<FixedAssetBindingEntity>> {
+    const types = filter?.assetTypes ?? [];
+    if (types.length === 0) {
+      return this.paginatedFind(
+        "meta_agent_fixed_assets",
+        { agent_id: agentId },
+        pagination,
+        { priority: -1, created_at: -1 },
+        (d) => d as FixedAssetBindingEntity,
+      );
+    }
+    // 类型过滤：先按 asset_type 拿 asset_id 集合，再用它过滤 binding。
+    const assetIds = await this.col("meta_assets")
+      .find({ asset_type: { $in: [...types] } } as Document, { projection: { asset_id: 1 } })
+      .map((d) => (d as { asset_id: string }).asset_id)
+      .toArray();
+    if (assetIds.length === 0) {
+      return { items: [], total: 0 };
+    }
     return this.paginatedFind(
       "meta_agent_fixed_assets",
-      { agent_id: agentId },
+      { agent_id: agentId, asset_id: { $in: assetIds } },
       pagination,
       { priority: -1, created_at: -1 },
       (d) => d as FixedAssetBindingEntity,
@@ -1342,5 +1389,81 @@ export class MongoMetadataStore implements IMetadataStore {
       .sort({ scope: 1, param_name: 1 })
       .toArray();
     return docs as unknown as ConfigParamEntity[];
+  }
+
+  // ── InstanceUpstreamConfig ──────────────────────────────────────────────
+
+  private async nextInstanceUpstreamConfigId(): Promise<number> {
+    const result = await this.col("meta_counters").findOneAndUpdate(
+      { _id: "meta_instance_upstream_config" } as any,
+      { $inc: { seq: 1 } },
+      { upsert: true, returnDocument: "after" },
+    );
+    return (result as any).seq as number;
+  }
+
+  async getInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): Promise<InstanceUpstreamConfigEntity | null> {
+    return this.col<InstanceUpstreamConfigEntity>("meta_instance_upstream_config").findOne(
+      { agent_source: agentSource, type } as Document,
+      PROJECT_NO_ID,
+    ) as Promise<InstanceUpstreamConfigEntity | null>;
+  }
+
+  async upsertInstanceUpstreamConfig(
+    input: UpsertInstanceUpstreamConfigInput,
+  ): Promise<InstanceUpstreamConfigEntity> {
+    const now = nowIso();
+    const agentSource = input.agent_source ?? "default";
+    const type = input.type ?? "conversation";
+    const id = await this.nextInstanceUpstreamConfigId();
+
+    await this.col("meta_instance_upstream_config").findOneAndUpdate(
+      { agent_source: agentSource, type } as Document,
+      {
+        $set: {
+          mode: input.mode,
+          base_url: input.base_url ?? "",
+          api_key: input.api_key ?? "",
+          model_id: input.model_id ?? "",
+          description: input.description ?? "",
+          updated_at: now,
+        },
+        $setOnInsert: {
+          id,
+          agent_source: agentSource,
+          type,
+          created_at: now,
+        },
+      },
+      { upsert: true },
+    );
+
+    return (await this.getInstanceUpstreamConfig(agentSource, type))!;
+  }
+
+  async listInstanceUpstreamConfigs(
+    filter?: InstanceUpstreamConfigFilter,
+  ): Promise<InstanceUpstreamConfigEntity[]> {
+    const query: Document = {};
+    if (filter?.agent_source) query.agent_source = filter.agent_source;
+    if (filter?.type) query.type = filter.type;
+    const docs = await this.col("meta_instance_upstream_config")
+      .find(query, PROJECT_NO_ID)
+      .sort({ agent_source: 1, type: 1 })
+      .toArray();
+    return docs as unknown as InstanceUpstreamConfigEntity[];
+  }
+
+  async deleteInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): Promise<boolean> {
+    const result = await this.col("meta_instance_upstream_config").deleteOne(
+      { agent_source: agentSource, type } as Document,
+    );
+    return (result.deletedCount ?? 0) > 0;
   }
 }

@@ -4,7 +4,7 @@
  * Uses Vercel AI SDK (`ai` + `@ai-sdk/openai`) with "compatible" mode
  * to support any OpenAI-compatible backend.
  */
-import { generateText } from "ai";
+import { generateText, streamText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { PluginLogger } from "../types.js";
 
@@ -16,6 +16,11 @@ export interface LlmCallerConfig {
   model: string;
   temperature: number;
   timeoutMs: number;
+  /**
+   * 是否用流式请求(streamText)调用上游。默认 false(generateText 非流式)。
+   * 个别 OpenAI 兼容上游只接受流式请求时置 true。
+   */
+  stream?: boolean;
 }
 
 export interface CallLlmOpts {
@@ -57,7 +62,7 @@ export async function callLlm(
   });
 
   try {
-    const result = await generateText({
+    const callParams = {
       model: provider.chat(config.model),
       system: opts.systemPrompt,
       prompt: opts.userPrompt,
@@ -68,9 +73,13 @@ export async function callLlm(
         functionId: opts.label ?? "offload-llm",
         metadata: { instanceId: opts.instanceId ?? "unknown" },
       },
-    });
+    };
 
-    const text = result.text.trim();
+    // stream=true → streamText(给只吃流式的上游);否则 generateText。
+    // streamText 的 text 是 Promise,await 后与 generateText 用法对齐。
+    const text = config.stream
+      ? ((await streamText(callParams).text) ?? "").trim()
+      : (await generateText(callParams)).text.trim();
     const elapsedMs = Date.now() - startMs;
 
     logger?.info?.(

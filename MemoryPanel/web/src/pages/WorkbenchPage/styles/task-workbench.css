@@ -1,0 +1,324 @@
+/**
+ * TaskWorkbench — 全宽卡片网格 + Drawer 详情。
+ *
+ * 设计原则：
+ *   - 进入页面展示全部 task 卡片（风格对齐 Agents / Wiki 卡片），不再左右分栏
+ *   - 状态用简洁 pill（浅色底 + 同色文字），不用亮色 Tag / 圆点
+ *   - 详情与设置收进 Drawer：标题/ID 在抽屉头部，状态切换、编辑、删除在抽屉内
+ *   - 所有颜色走 Tea Token，不硬编码
+ */
+
+._memory-workbench-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 通用等宽字体（task_id / agent_id 等唯一标识） */
+._memory-mono {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+}
+
+/* ===== 空 team 态 ===== */
+._memory-workbench-empty-card {
+  padding: 48px 0;
+  text-align: center;
+}
+
+._memory-workbench-empty-title {
+  display: block;
+}
+
+._memory-workbench-empty-desc {
+  display: block;
+  margin-top: 8px;
+}
+
+/* ===== 全宽看板（卡片网格，风格对齐 Agents / Wiki 卡片） ===== */
+/* 外壳与 Section 头部复用 team 页共享类（全局 CSS，路由非懒加载）：
+   ._memory-panel-card / ._memory-section-header / ._memory-section-header-info
+   / ._memory-section-header-title-row / ._memory-section-title / ._memory-section-subtitle
+   定义见 pages/team/components/team-management-panel.css */
+
+._memory-workbench-list-empty {
+  border: 1px dashed var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+/* ===== Task 卡片网格 ===== */
+._memory-workbench-task-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+._memory-workbench-task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease-in-out, background-color 0.15s ease-in-out;
+}
+
+._memory-workbench-task-card:hover {
+  border-color: var(--tea-color-border-brand-default);
+}
+
+._memory-workbench-task-card:hover ._memory-workbench-task-card-chevron {
+  color: var(--tea-color-text-brand-default);
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+/* 标题行：状态 pill + 标题 + 箭头 */
+._memory-workbench-task-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 状态 pill — 简洁浅色徽章，与 Memory 详情徽章同一风格 */
+._memory-workbench-status-pill {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+._memory-workbench-status-pill--running {
+  color: var(--tea-color-text-brand-default);
+  background-color: var(--tea-color-bg-brand-lighten-default);
+}
+
+._memory-workbench-status-pill--completed {
+  color: var(--tea-color-text-success-default);
+  background-color: var(--tea-color-bg-success-lighten-default);
+}
+
+._memory-workbench-task-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-workbench-task-card-chevron {
+  flex-shrink: 0;
+  color: var(--tea-color-text-tertiary);
+  opacity: 0.6;
+  transition: color 0.15s ease-in-out, opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
+}
+
+/* 描述：2 行截断 */
+._memory-workbench-task-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--tea-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 元信息行：参与者 · Agent · 时间 */
+._memory-workbench-task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-workbench-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* "含你" — 纯文本，不用 Tag */
+._memory-workbench-meta-you {
+  color: var(--tea-color-text-brand-default);
+  font-weight: 500;
+}
+
+._memory-workbench-task-card-time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+._memory-workbench-meta-sep {
+  color: var(--tea-color-text-tertiary);
+  margin: 0 4px;
+}
+
+/* ===== 详情抽屉 ===== */
+._memory-workbench-drawer-subtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+._memory-workbench-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* 工具行：编辑 + 状态切换 */
+._memory-workbench-detail-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+._memory-workbench-title-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 危险操作区 */
+._memory-workbench-danger {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid var(--tea-color-border-secondary-default);
+}
+
+/* ===== 参与者 — 无边框，纯背景分区 ===== */
+._memory-workbench-people {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--tea-color-bg-secondary-default);
+  border-radius: 6px;
+}
+
+._memory-workbench-people-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+
+._memory-workbench-people-label {
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
+/* 人员 chip — 无边框，圆角药丸，干净 */
+._memory-workbench-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  background: var(--tea-color-bg-primary-default);
+  border-radius: 9999px;
+  font-size: 12px;
+}
+
+/* "你" 标识 — 纯文本 */
+._memory-workbench-chip-you {
+  color: var(--tea-color-text-brand-default);
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/* ===== 内容分区 ===== */
+._memory-workbench-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+._memory-workbench-block-label.tea-text {
+  font-weight: 600;
+}
+
+/* 描述 — 无边框，纯背景，更多内边距 */
+._memory-workbench-desc-view {
+  margin: 0;
+  padding: 16px;
+  background: var(--tea-color-bg-secondary-default);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--tea-color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+}
+
+._memory-workbench-footer.tea-text {
+  font-size: 12px;
+}
+
+/* Task 卡片骨架屏（首屏加载时展示占位卡片）
+   风格与 AgentGrid 的 _memory-agents-skeleton 一致 */
+._memory-workbench-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+._memory-workbench-skeleton-card {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--tea-color-bg-container-default);
+}
+
+._memory-workbench-skeleton-line {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-tertiary-default) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-workbench-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+._memory-workbench-skeleton-line--title { width: 50%; height: 16px; }
+._memory-workbench-skeleton-line--desc { width: 80%; }
+._memory-workbench-skeleton-line--meta { width: 60%; }
+
+@keyframes _memory-workbench-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+._memory-workbench-pagination {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 8px;
+}

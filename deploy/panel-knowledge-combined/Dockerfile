@@ -63,6 +63,7 @@ ENV NODE_ENV=production \
     LLM_TIMEOUT_MS=1200000 \
     KNOWLEDGE_DATA_DIR=/data/knowledge \
     KNOWLEDGE_DB_PATH=/data/knowledge/knowledge.db \
+    TDAI_AGENT_TEMPLATE_DIR=/data/knowledge/agent-templates \
     LOG_LEVEL=info \
     LOG_FORMAT=json
 

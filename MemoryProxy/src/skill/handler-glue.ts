@@ -56,11 +56,14 @@ export interface TriggerInput {
    *                 tool_result 藏在 role=user 里, tool_use 藏在 role=assistant 里
    *   "openai"    → handler.ts (/v1/chat/completions), content 一般是字符串,
    *                 tool_result 是独立 role=tool 消息, tool_calls 是 assistant 独立字段
+   *   "responses" → codexHandler.ts (/responses), 顶层是 input[] 而非 messages[],
+   *                 item 按 type 判别: message / function_call / function_call_output /
+   *                 reasoning (详见 normalize-conversation.ts 顶部)
    *
    * proxy 已经通过路由 whitelist 明确知道每条请求走哪个协议（见 routes/whitelist.ts）,
-   * 所以由调用方 (handler.ts / anthropicHandler.ts) 显式传入, 不做推断。
+   * 所以由调用方 (handler.ts / anthropicHandler.ts / codexHandler.ts) 显式传入, 不做推断。
    */
-  protocol: "anthropic" | "openai";
+  protocol: "anthropic" | "openai" | "responses";
   /** Per-user asset capability flags; skill=false disables extraction collection. */
   assetCapabilities?: AssetCapabilityFlags;
   /** Optional override (e.g. SSE accumulators contain the truth in streaming mode). */

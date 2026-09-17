@@ -38,11 +38,20 @@ const MEM_COMMANDS_ARGS: Record<string, boolean> = {
   help: false,
   sync: false,
   "create-skill": true,
+  // task 命令族：args 语义与 create-skill 对齐 —— 作为 LLM 生成 title/description
+  // 的额外提示（reason）；空 args 表示纯从近 30 条上下文自动生成。
+  "create-task": true,
+  "update-task": true,
+  "session-reset": false,
 };
 
 /**
  * 从 request body 中检测是否为 mem: 命令。
  * 返回 null 表示非 mem: 命令，继续走正常链路。
+ *
+ * ⚠️ 只支持 body.messages[] 形态 (CC/CB)。Codex 走 body.input[]，
+ * 调用方（codexHandler）应先用 `codexAdapter.extractUserText(input)` 拿
+ * 到 text，再直接调 `parseCommandFromText(text)`（跳过 body 解析这一步）。
  *
  * @param body - 请求 body（含 messages 数组）
  * @param agentSource - 客户端类型（URL 前缀），用于选择 agentAdapter
@@ -72,6 +81,22 @@ export function parseMemCommand(
   const text = adapter.extractUserText(lastMsg.content);
   if (text === null) return null;
 
+  return parseCommandFromText(text);
+}
+
+/**
+ * 从已提取的用户文本判定是否为 mem: 命令。
+ *
+ * 抽出这一层是为了让 codex handler 能复用同一套 mem 命令语义：
+ * codex body 用 `input[]` 而非 `messages[]`，parseMemCommand 从 body
+ * 起步的路径认不出 codex，早期直接返 null，导致所有 mem:xxx 静默透传给
+ * LLM，模型编造"Memory synced"之类假回复（P0-1 QA 报告）。codex handler
+ * 现在拿 `codexAdapter.extractUserText(input)` 得到 text 后直接调本函数。
+ *
+ * CC/CB 的 `parseMemCommand(body, agentSource)` 内部也走这条路径，行为
+ * 完全不变。
+ */
+export function parseCommandFromText(text: string): ParsedMemCommand | null {
   // trim 后判断
   const trimmed = text.trim();
 

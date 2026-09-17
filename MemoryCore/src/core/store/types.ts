@@ -19,6 +19,8 @@ import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
 import type { Logger } from "../types.js";
 import type { IsolationFilter } from "./isolation.js";
+import type { MemoryPromptStore } from "../memory-prompt/types.js";
+import type { MemoryGenerationRefStore } from "../memory-generation-log/types.js";
 
 // Re-export so consumers can import everything from types.ts
 export type { MemoryRecord, EmbeddingProviderInfo };
@@ -254,6 +256,12 @@ export interface StoreCapabilities {
   nativeHybridSearch: boolean;
   /** Whether the store supports sparse vectors (BM25 encoding). */
   sparseVectors: boolean;
+  /**
+   * Whether the store serves L2/L3 profile rows, i.e. satisfies
+   * {@link IProfileRowStore}. Required to back a row-view filesystem (`rowfs`).
+   * SQLite reports `false`.
+   */
+  profileRows: boolean;
 }
 
 // ============================
@@ -284,13 +292,46 @@ export interface ProfileSyncRecord extends ProfileRecord {
   baselineVersion?: number;
 }
 
-export interface ProfileCountFilter {
+/**
+ * Filter for profile row queries — shared by `countProfiles` and `queryProfiles`.
+ *
+ * `pathPrefix` matches `filename` by string prefix (Mongo `$regex ^prefix`,
+ * TCVDB `startsWith`), which is what `IStorageBackend.listObjects` needs.
+ */
+export interface ProfileFilter {
   type?: ProfileRecord["type"];
   teamId?: string;
   userId?: string;
   agentId?: string;
   pathPrefix?: string;
 }
+
+/** @deprecated Use {@link ProfileFilter}. Kept so existing call sites keep compiling. */
+export type ProfileCountFilter = ProfileFilter;
+
+/**
+ * The profile-row surface required to back a row-view filesystem
+ * (`ProfileRowStorageBackend`).
+ *
+ * On {@link IMemoryStore} these methods are all optional, because SQLite does not
+ * implement them. This interface restates them as **required**, so that anything
+ * needing a row-view filesystem can demand `IMemoryStore & IProfileRowStore` and
+ * let `tsc` reject a store that cannot serve it.
+ *
+ * Use {@link isProfileRowStore} (store/profile-row-store.ts) to narrow at runtime.
+ */
+export interface IProfileRowStore {
+  pullProfiles(): Promise<ProfileRecord[]>;
+  queryProfilesByIds(ids: string[]): Promise<ProfileRecord[]>;
+  /** Query rows by scope/type/path-prefix. Returns rows rather than a count. */
+  queryProfiles(filter?: ProfileFilter): Promise<ProfileRecord[]>;
+  countProfiles(filter?: ProfileFilter): Promise<number>;
+  syncProfiles(records: ProfileSyncRecord[]): Promise<void>;
+  deleteProfiles(recordIds: string[]): Promise<void>;
+}
+
+/** An {@link IMemoryStore} that is statically known to serve profile rows. */
+export type ProfileRowCapableStore = IMemoryStore & IProfileRowStore;
 
 // ============================
 // v2 API Paginated Query Types
@@ -425,6 +466,29 @@ export interface BatchDeleteResult {
   failed: Array<{ id: string; reason: string }>;
 }
 
+/**
+ * 按隔离维度清空某个 memory 下的全部内容（不删除资产本身）。
+ *
+ * 语义约定（见 `/v3/chat-memory/clear`）：
+ *   - 至少要给 teamId + agentId，否则实现必须直接拒绝（避免误删全库）；
+ *   - 不带 sessionId：清空该 (team, agent) 下所有 session 的数据；
+ *   - 只删内容行（L0/L1 + 向量 / FTS 附属行），不动 meta_* 资产表。
+ */
+export interface MemoryContentClearFilter {
+  teamId: string;
+  agentId: string;
+  /** 可选：进一步收窄到单个 user。缺省表示该 agent 下所有 user。 */
+  userId?: string;
+}
+
+/** 清空结果：各层实际删除行数。 */
+export interface MemoryContentClearResult {
+  l0Deleted: number;
+  l1Deleted: number;
+  /** L2/L3 profile 行数（VDB / sqlite profiles 表）。 */
+  profilesDeleted: number;
+}
+
 export type KnowledgeType = "wiki" | "code-graph";
 
 export interface KnowledgeEntity {
@@ -523,7 +587,7 @@ export interface AuditQueryFilter {
   offset?: number;
 }
 
-export interface IMemoryStore {
+export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStore {
   // ── Capabilities ───────────────────────────────────────────
 
   /**
@@ -572,6 +636,16 @@ export interface IMemoryStore {
   upsertL0(record: L0Record, embedding?: Float32Array): MaybePromise<boolean>;
   /** Update only the vector embedding for an existing L0 record (sqlite background path). */
   updateL0Embedding?(recordId: string, embedding: Float32Array): MaybePromise<boolean>;
+  /**
+   * Insert a whole `/conversation/add` group in one batch (optional capability).
+   *
+   * Callers prefer this over the per-record `upsertL0` loop when present AND no
+   * per-message embedding is required. Records carry freshly-generated ids, so
+   * an `insertMany`-style implementation is correct; a duplicate id must surface
+   * as an error rather than silently overwrite. Returns the number inserted.
+   * See docs/design/mongodb/phases/phase-1-db/2026-08-24-l0-write-batch-and-id.md.
+   */
+  insertL0Batch?(records: L0Record[]): MaybePromise<number>;
   deleteL0(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL0Expired(cutoffIso: string): MaybePromise<number>;
 
@@ -601,7 +675,12 @@ export interface IMemoryStore {
    * 不支持的 store 返回 undefined → 调用方 fallback 到 pullProfiles()。
    */
   queryProfilesByIds?(ids: string[]): Promise<ProfileRecord[]>;
-  countProfiles?(filter?: ProfileCountFilter): Promise<number>;
+  /**
+   * 按 scope / type / filename 前缀查询 profile 行（返回行，而非 count）。
+   * 支持行视图文件系统的 `listObjects`，避免退化成全量 `pullProfiles()`。
+   */
+  queryProfiles?(filter?: ProfileFilter): Promise<ProfileRecord[]>;
+  countProfiles?(filter?: ProfileFilter): Promise<number>;
   syncProfiles?(records: ProfileSyncRecord[]): Promise<void>;
   deleteProfiles?(recordIds: string[]): Promise<void>;
 
@@ -638,6 +717,16 @@ export interface IMemoryStore {
    * Used by v2 API `/conversation/delete` (session mode).
    */
   deleteL0BySession?(sessionId: string, filter?: IsolationFilter): MaybePromise<number>;
+
+  /**
+   * 清空某个 (team, agent) 下的全部记忆内容：L0 + L1 + L2/L3 profile 行，
+   * 连同它们的向量 / FTS 附属数据。**不触碰** meta_* 资产表 —— 资产 ID、
+   * 归属、绑定、ACL、可见性、名称全部保留。
+   *
+   * 用于 `/v3/chat-memory/clear`。幂等：已清空的 memory 再次调用返回全 0。
+   * 实现必须校验 filter.teamId / filter.agentId 非空，否则抛错拒绝执行。
+   */
+  clearMemoryContent?(filter: MemoryContentClearFilter): MaybePromise<MemoryContentClearResult>;
 
   // ── Entity metadata (Team / User / Agent / Task) ───────────
   createTeam?(input: Omit<TeamEntity, "created_at" | "updated_at" | "status" | "user_ids" | "agent_ids" | "task_ids"> & { team_id?: string; status?: TeamStatus }): MaybePromise<TeamEntity>;

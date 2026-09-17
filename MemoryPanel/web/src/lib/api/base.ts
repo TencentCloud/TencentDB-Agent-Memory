@@ -1,23 +1,13 @@
 /**
- * api/base.ts — Control API 基础设施。
+ * api/base.ts — API 基础设施。
  *
- * 对接文档（唯一权威）：
- *   - docs/architecture/09-new-panel-control-backend-design.md  新面板设计（Header 鉴权、登录流程）
- *   - docs/api/meta-api.openapi.yaml                            前端对接契约（机器可读）
- *
- * 规则（新面板 · 无 Cookie · 无状态）：
+ * 规则（无 Cookie · 无状态）：
  *   - 元数据 CRUD 统一走 POST /api/v1/meta/{action}；
  *   - 鉴权由前端 sessionStorage 缓存 instance_id + user_key（见 lib/panelSession.ts），
  *     每次请求注入 Header X-Tdai-Service-Id + X-Tdai-User-Key（auth/verify 除外，
  *     该接口 user_key 只放 body，不放 Header）；
- *     ⚠️ Header 名以 meta-api.openapi.yaml v1.1.0 为准：instance 的 Header 名是
- *     `X-Tdai-Service-Id`（不是早期版本用过的 `X-Metadata-Instance-Id`），改名后未同步
- *     会导致 Control 报 400 MISSING_INSTANCE_ID。
- *   - asset/* 域已放开（skill「分配到 Agent」走授权接口：先 asset/create 登记
- *     再 acl/grant）；agent-fixed-asset/*（运行时固定注入）仍 501 NOT_IN_SCOPE。
- *     注：PANEL_CAPABILITIES.assets 仍为 false —— 它只控制通用「资产」UI 是否展示
- *     占位，skill 挂载走 v3 数据面 fork（skillApi.forkToAgent），不受该开关影响；
- *   - 一期不注册 /api/v1/auth/*、/users/*（OAuth、Cookie 会话、environment-bindings 等）；
+ *   - agent-fixed-asset/* 不适用通用「资产」UI（PANEL_CAPABILITIES.assets 为 false），
+ *     skill 挂载走 v3 数据面 fork（skillApi.forkToAgent）；
  *   - 所有函数返回 Promise<T>，失败抛 ApiError。
  */
 import { getPanelSession, clearPanelSession } from '../panelSession';
@@ -25,7 +15,7 @@ import { formatApiErrorMessage } from '../error-message';
 import type { MetaEnvelope, PaginatedResult, PublicUser } from './types';
 
 /**
- * 新面板一期能力开关（对齐 09 设计文档 §4.6、§9 N6）。
+ * 通用「资产」能力开关。
  * UI 消费 assetsApi / agentsApi.getAssets|getFixedAssets|setFixedAssets 前应先判断
  * `PANEL_CAPABILITIES.assets`，为 false 时展示"暂未开放"占位，不要发起注定 501 的请求。
  */
@@ -105,15 +95,18 @@ export async function request<T>(
   extraHeaders?: Record<string, string>
 ): Promise<T> {
   const headers: Record<string, string> = { ...extraHeaders };
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers, credentials: 'include' };
   if (body !== undefined) {
     headers['content-type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
   const res = await fetch(path, init);
   if (res.status === 401) {
-    emitUnauthorized();
-    throw new ApiError(res.status, res.statusText, 'Unauthorized');
+    const text = await res.text().catch(() => '');
+    const env = parseMetaErrorEnvelope(text);
+    // WOA 登录确认尚未建立业务会话，失败时不能清空整个登录页状态。
+    if (!path.endsWith('/auth/idp/woa/complete')) emitUnauthorized();
+    throw new ApiError(res.status, res.statusText, text || 'Unauthorized', env);
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -131,7 +124,7 @@ export const META_PAGE_SIZE = 100;
 
 /**
  * 登出 / 401 时清空前端会话（instance_id + user_key + user 缓存）。
- * 新面板无 Cookie，"清会话"就是清 sessionStorage，不涉及后端调用。
+ * 无 Cookie，"清会话"就是清 sessionStorage，不涉及后端调用。
  */
 export function clearSessionCache(): void {
   clearPanelSession();
@@ -147,16 +140,12 @@ export async function getCurrentUser(): Promise<PublicUser> {
 }
 
 /**
- * 内核 meta 透明代理的公共调用：注入指定 Header，POST body，解析信封。
- * `auth/verify` 走此函数但只传 X-Tdai-Service-Id（不带 user-key），
- * 其余 action 走 `metaPost`（自动从 session 注入双 Header）。
+ * 解包内核统一信封：`code !== 0` 或 `data` 为空时抛 ApiError。
+ *
+ * meta（/api/v1/meta/*）与 analytics（/api/v1/analytics/*）等透明代理的信封结构
+ * 完全一致，解包逻辑由本函数统一承载，避免各 client 重复实现导致行为漂移。
  */
-export async function metaCall<T>(
-  action: string,
-  body: Record<string, unknown>,
-  headers: Record<string, string>
-): Promise<T> {
-  const envelope = await request<MetaEnvelope<T>>('POST', `${META_PREFIX}/${action}`, body, headers);
+export function unwrapEnvelope<T>(envelope: MetaEnvelope<T>, emptyMessage: string): T {
   if (envelope.code !== 0) {
     throw new ApiError(200, envelope.message, '', {
       code: envelope.code,
@@ -165,13 +154,26 @@ export async function metaCall<T>(
     });
   }
   if (envelope.data === null || envelope.data === undefined) {
-    throw new ApiError(200, envelope.message || 'empty meta response', '', {
+    throw new ApiError(200, envelope.message || emptyMessage, '', {
       code: envelope.code,
       requestId: envelope.request_id,
-      rawMessage: envelope.message || 'empty meta response',
+      rawMessage: envelope.message || emptyMessage,
     });
   }
   return envelope.data;
+}
+
+/**
+ * meta 透明代理的公共调用：注入指定 Header，POST body，解析信封。
+ * `auth/verify` 走此函数但只传 X-Tdai-Service-Id（不带 user-key），
+ * 其余 action 走 `metaPost`（自动从 session 注入双 Header）。
+ */export async function metaCall<T>(
+  action: string,
+  body: Record<string, unknown>,
+  headers: Record<string, string>
+): Promise<T> {
+  const envelope = await request<MetaEnvelope<T>>('POST', `${META_PREFIX}/${action}`, body, headers);
+  return unwrapEnvelope(envelope, 'empty meta response');
 }
 
 export async function metaPost<T>(action: string, body: Record<string, unknown> = {}): Promise<T> {
@@ -179,12 +181,21 @@ export async function metaPost<T>(action: string, body: Record<string, unknown> 
   if (!session) {
     throw new ApiError(401, 'Unauthorized', 'no active panel session');
   }
-  return metaCall<T>(action, body, {
-    'X-Tdai-Service-Id': session.instanceId,
-    'X-Tdai-User-Key': session.userKey,
-  });
+  const headers: Record<string, string> = { 'X-Tdai-Service-Id': session.instanceId };
+  // IdP Session 用 HttpOnly Cookie 认证，user_key 不下发到浏览器。
+  if (session.userKey) headers['X-Tdai-User-Key'] = session.userKey;
+  return metaCall<T>(action, body, headers);
 }
 
+/**
+ * 分页拉取 meta list 全部 items（内核 DEFAULT_PAGINATION = {limit: 20}，
+ * 不传 limit 只会拿到前 20 条，列表类读取必须用本工具拿全量）。
+ *
+ * offset 必须按 limit 步进，**不能**按 `items.length` 步进：带过滤语义的接口
+ * （如 agent-fixed-asset/list-with-detail，total 是过滤前总数、items 是过滤后集合）
+ * 的 `items.length < limit`，按 items.length 推进会让下一页从错误位置重新开始，
+ * 造成条目重复；整页被过滤时更会提前 break 漏掉尾部数据。
+ */
 export async function metaListAll<T>(action: string, body: Record<string, unknown>): Promise<T[]> {
   const items: T[] = [];
   let offset = 0;
@@ -194,9 +205,20 @@ export async function metaListAll<T>(action: string, body: Record<string, unknow
       limit: META_PAGE_SIZE,
       offset,
     });
-    items.push(...page.items);
-    offset += page.items.length;
-    if (page.items.length === 0 || offset >= page.total) break;
+    const batch = page.items ?? [];
+    items.push(...batch);
+    const total = typeof page.total === 'number' ? page.total : undefined;
+    if (batch.length === 0) {
+      // 空页：通常代表已到末尾。但带过滤语义的接口中间页可能整页为空
+      // （total 仍是过滤前总数），此时继续推进以免漏拉后续有效数据。
+      if (total !== undefined && offset + META_PAGE_SIZE < total) {
+        offset += META_PAGE_SIZE;
+        continue;
+      }
+      break;
+    }
+    offset += META_PAGE_SIZE;
+    if (total !== undefined && offset >= total) break;
   }
   return items;
 }

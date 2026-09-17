@@ -42,9 +42,12 @@ tdai-gateway.*.yaml
 .coding-ci.yaml
 .gitlab-ci.yml
 
-# 私有 submodule：不入镜像。运行时 dynamic import 失败会走 fallback，
-# 因此内外部镜像行为一致（开源分支上该目录本就不存在）。
-src/integrations
+# src/integrations 是私有 submodule 挂载点。开源分支上该目录不存在(git 会
+# 把它当成空的 submodule pointer),内部构建 checkout 出来后携带 Redis /
+# COS / Shark / Observability 后端实现。之前这里 dockerignore 把整个目录
+# 屏蔽,导致内部部署时 state_backend=redis 找不到 index.js 直接启动失败
+# ("Cannot find module '/app/src/integrations/redis/index.js'")。
+# 现在放行:开源构建复制空目录不影响,内部构建里能真正加载后端。
 
 # e2e / 压测 / 冒烟脚本非 runtime 必需，且含调试用途的 SSH host / 内网 IP 引用
 scripts/e2e-*

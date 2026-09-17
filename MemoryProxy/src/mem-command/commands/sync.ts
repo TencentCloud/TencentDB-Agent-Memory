@@ -27,6 +27,16 @@ function buildSuccessMessage(result: RefreshResult): string {
 export async function executeSync(ctx: MemCommandContext): Promise<MemCommandResult> {
   const requestId = `mem-cmd-${Date.now()}`;
 
+  // 未绑定时不走 refreshSessionCache(它会暴露 session key 给用户)
+  if (!ctx.sessionInfo || Object.keys(ctx.sessionInfo).length === 0) {
+    const messageText = "⚠️ 当前会话未绑定团队资产，无法同步。请先用 `mem:session-reset` 选择 Team/Agent 后再试。";
+    return {
+      success: false,
+      messageText,
+      response: buildMemResponse(messageText, { protocol: ctx.protocol, stream: ctx.stream, requestId, thinking: ctx.thinking }),
+    };
+  }
+
   const result = await refreshSessionCache({
     sessionKey: ctx.sessionKey,
     agentSource: ctx.agentSource,
