@@ -684,6 +684,10 @@ async function handleSessionInitInner(
 
   // ── Case 1: Uninitialized → 先弹 asset_confirm 对话框 ───────────────────
   if (!state || state.status === "uninitialized") {
+    // Keep temporary failures retryable without fetching the directory every turn.
+    if (state?.metadataRetryAt && Date.now() < state.metadataRetryAt) {
+      return { intercepted: false, bypassed: true };
+    }
     console.log(`[session-init:cc] session=${compositeKey} state=${state?.status ?? "none"} → uninitialized`);
     if (!userId) {
       console.warn(
@@ -724,20 +728,23 @@ async function handleSessionInitInner(
       teams = cfg.teams;
     } catch (err) {
       console.warn(
-        `[session-init:cc] session=${compositeKey} kernel unavailable for user=${userId}, bypassing: ${err instanceof Error ? err.message : String(err)}`,
+        `[session-init:cc] session=${compositeKey} kernel unavailable for user=${userId}, bypassing this request; retry eligible in 30s: ${err instanceof Error ? err.message : String(err)}`,
       );
       await store.set(compositeKey, {
-        status: "initialized",
+        status: "uninitialized",
         keyId: sessionKey,
         startedAt: Date.now(),
         attemptCount: 0,
+        metadataRetryAt: Date.now() + 30_000,
+        resetFlow: state?.resetFlow,
+        resetEpoch: state?.resetEpoch,
         userId,
         sessionInfo: null,
         agentDetail: null,
         taskDetail: null,
-        bypassed: true,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
+      // A temporary failure is not a completed reset / explicit opt-out.
+      return { intercepted: false, bypassed: true };
     }
 
     const totalAgents = teams.reduce((acc, t) => acc + t.agents.length, 0);
@@ -804,6 +811,8 @@ async function handleSessionInitInner(
           userId,
           cachedTeams: teams,
           selectedTeamId: pr.teamId,
+          resetFlow: state?.resetFlow,
+          resetEpoch: state?.resetEpoch,
         };
         return completeRegistration(
           { agent_id: pr.agentId!, task_id: pr.taskId },
@@ -827,6 +836,8 @@ async function handleSessionInitInner(
             userId,
             cachedTeams: teams,
             selectedTeamId: pr.teamId,
+            resetFlow: state?.resetFlow,
+            resetEpoch: state?.resetEpoch,
           };
           return advanceFromTeamPicked(
             presetTeam, teams, compositeKey, sessionKey, userId,
