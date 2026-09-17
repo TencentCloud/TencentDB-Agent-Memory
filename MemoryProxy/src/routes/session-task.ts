@@ -202,26 +202,49 @@ const DEFAULT_TASK_DRAFT_TIMEOUT_MS = 20000;
  * 方案 D：taskDraft LLM 完全跟随客户端当次请求。
  * 只接收 TaskDraftUpstream（model / upstreamUrl / protocol / apiKey），
  * 任一必需字段缺失 → 返 "not configured"，不再读 config.memCommand.taskDraft。
+ *
+ * 2026-09-16 修复：环境变量覆盖机制（运维层面覆盖，不需要改代码）：
+ *   - MEMORY_LLM_PROTOCOL：覆盖 handler 传递的 protocol（anthropic → openai）
+ *   - MEMORY_LLM_API_KEY：覆盖 handler 传递的 apiKey（客户端 key → rcaaitoken key）
+ *   - MEMORY_LLM_BASE_URL：覆盖 handler 传递的 upstreamUrl
+ *   - MEMORY_LLM_MODEL：覆盖 handler 传递的 model
+ *
+ * 场景：客户端是 Claude Code（anthropicHandler 传 protocol=anthropic + 用户 apiKey），
+ * 但上游 rcaaitoken 实际是 OpenAI 兼容层（需要用 openai 协议 + rcaaitoken 专属 key）。
  */
 function resolveTaskDraftConfig(
   upstream: TaskDraftUpstream,
 ): { cfg: TaskDraftConfig } | { error: string } {
   const { model, upstreamUrl, protocol, apiKey } = upstream;
-  if (!model || !upstreamUrl || !apiKey) {
+
+  // 环境变量优先覆盖：允许运维层面完全接管 task-draft 的 LLM 配置
+  const envProtocol = process.env.MEMORY_LLM_PROTOCOL as "openai" | "anthropic" | "responses" | undefined;
+  const envApiKey = process.env.MEMORY_LLM_API_KEY;
+  const envBaseUrl = process.env.MEMORY_LLM_BASE_URL;
+  const envModel = process.env.MEMORY_LLM_MODEL;
+
+  const effectiveModel = envModel || model;
+  const effectiveUrl = envBaseUrl || upstreamUrl;
+  const effectiveApiKey = envApiKey || apiKey;
+  const effectiveProtocol = envProtocol || protocol;
+
+  if (!effectiveModel || !effectiveUrl || !effectiveApiKey) {
     return {
       error:
-        "task_draft is not configured (missing request model / upstream url / apiKey). " +
-        "This should not happen for a normal client turn — please check handler wiring.",
+        "task_draft is not configured (missing model / upstream url / apiKey). " +
+        "Set MEMORY_LLM_MODEL, MEMORY_LLM_BASE_URL, MEMORY_LLM_API_KEY env vars, " +
+        "or ensure handler passes them in the request.",
     };
   }
+
   return {
     cfg: {
       enabled: true,
-      model,
-      url: upstreamUrl,
-      apiKey,
+      model: effectiveModel,
+      url: effectiveUrl,
+      apiKey: effectiveApiKey,
       timeoutMs: DEFAULT_TASK_DRAFT_TIMEOUT_MS,
-      ...(protocol ? { protocol } : {}),
+      ...(effectiveProtocol ? { protocol: effectiveProtocol } : {}),
     },
   };
 }
