@@ -199,20 +199,34 @@ function resolveSession(
 const DEFAULT_TASK_DRAFT_TIMEOUT_MS = 20000;
 
 /**
- * 方案 D：taskDraft LLM 完全跟随客户端当次请求。
- * 只接收 TaskDraftUpstream（model / upstreamUrl / protocol / apiKey），
- * 任一必需字段缺失 → 返 "not configured"，不再读 config.memCommand.taskDraft。
+ * 方案 D（含环境变量覆盖扩展）：taskDraft LLM 配置解析。
  *
- * 2026-09-16 修复：环境变量覆盖机制（运维层面覆盖，不需要改代码）：
- *   - MEMORY_LLM_PROTOCOL：覆盖 handler 传递的 protocol（anthropic → openai）
- *   - MEMORY_LLM_API_KEY：覆盖 handler 传递的 apiKey（客户端 key → rcaaitoken key）
- *   - MEMORY_LLM_BASE_URL：覆盖 handler 传递的 upstreamUrl
- *   - MEMORY_LLM_MODEL：覆盖 handler 传递的 model
+ * ## 优先级（从高到低）
  *
- * 场景：客户端是 Claude Code（anthropicHandler 传 protocol=anthropic + 用户 apiKey），
- * 但上游 rcaaitoken 实际是 OpenAI 兼容层（需要用 openai 协议 + rcaaitoken 专属 key）。
+ *   1. **环境变量覆盖**（ops escape hatch）
+ *      - MEMORY_LLM_PROTOCOL → 覆盖 protocol
+ *      - MEMORY_LLM_API_KEY  → 覆盖 apiKey
+ *      - MEMORY_LLM_BASE_URL → 覆盖 upstreamUrl
+ *      - MEMORY_LLM_MODEL    → 覆盖 model
+ *
+ *   2. **客户端请求**（原 Plan D "follow-the-client" 行为）
+ *      - upstream.protocol / upstream.apiKey / upstream.upstreamUrl / upstream.model
+ *
+ *   3. **缺失即报错**
+ *      - model / upstreamUrl / apiKey 三者任一缺失 → 返回 { error: "..." }
+ *      - protocol 缺失时不报错，由 task-draft-generator 使用默认协议
+ *
+ * ## 使用场景
+ *
+ * 部署在 OpenAI 兼容网关（如 rcaaitoken）后面时，客户端（如 Claude Code）
+ * 传递的 protocol=anthropic 与上游实际协议不匹配，导致 401。
+ * 通过环境变量覆盖，运维可在部署时修正，无需改代码。
+ *
+ * ## 测试
+ *
+ * 见 src/routes/__tests__/session-task.test.ts
  */
-function resolveTaskDraftConfig(
+export function resolveTaskDraftConfig(
   upstream: TaskDraftUpstream,
 ): { cfg: TaskDraftConfig } | { error: string } {
   const { model, upstreamUrl, protocol, apiKey } = upstream;
