@@ -1011,6 +1011,61 @@ export class WikiService {
     this.queue.enqueue(row.wiki_id, () => this.runBuild(row.service_id, row.wiki_id, row.team_id, row.name));
   }
 
+  /**
+   * Commit terminal ready metadata to knowledge.db.
+   * This is the ingest → API discoverability seam: list/get/rawLs all read this row.
+   */
+  private commitWikiReady(serviceId: string, wikiId: string, pageCount: number | null): void {
+    this.store.updateWikiStatus(serviceId, wikiId, {
+      status: "ready",
+      internal_status: null,
+      sync_error: null,
+      page_count: pageCount,
+      last_sync_at: new Date().toISOString(),
+    });
+  }
+
+  /** Scan wiki/ pages on disk without requiring status=ready (recovery / fallback). */
+  private countPagesOnDisk(serviceId: string, teamId: string, wikiId: string): number | null {
+    const projectPath = this.dirFor(serviceId, teamId, wikiId);
+    const wikiDir = join(projectPath, "wiki");
+    if (!existsSync(wikiDir)) return null;
+    const items: { id: string; title: string; type: string; path: string; description?: string; locked?: boolean }[] = [];
+    this.scanPagesRecursive(wikiDir, wikiDir, items);
+    return items.length;
+  }
+
+  /** True when index.db already recorded at least one ingested source (disk artifacts survived a crash). */
+  private hasIngestedSourcesOnDisk(serviceId: string, teamId: string, wikiId: string): boolean {
+    const dir = this.dirFor(serviceId, teamId, wikiId);
+    try {
+      const db = getReadDb(wikiId, dir);
+      return listSources(db).some((s) => s.status === "ingested");
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Restart / crash recovery: if ingest already wrote source metadata to index.db
+   * but knowledge.db never got the ready commit, promote the wiki so APIs can find it.
+   * Returns the number of wikis recovered.
+   */
+  recoverInterruptedFromDisk(): number {
+    const candidates = this.store.listWikisNeedingRecovery();
+    let recovered = 0;
+    for (const ref of candidates) {
+      if (!this.hasIngestedSourcesOnDisk(ref.service_id, ref.team_id, ref.wiki_id)) continue;
+      const pageCount = this.countPagesOnDisk(ref.service_id, ref.team_id, ref.wiki_id);
+      this.commitWikiReady(ref.service_id, ref.wiki_id, pageCount);
+      this.logger?.info?.(
+        `[wiki] recovered ${ref.wiki_id} from disk ingest artifacts (pages: ${pageCount ?? "?"})`,
+      );
+      recovered++;
+    }
+    return recovered;
+  }
+
   private async runBuild(serviceId: string, wikiId: string, teamId: string, name: string): Promise<void> {
     // 入口检查点：pending 期间被删 → 跳过，不置 processing、不 ingest。
     if (this.isDeleted(serviceId, wikiId)) {
@@ -1024,6 +1079,7 @@ export class WikiService {
     });
     // 进度/终态 callback 共用同一代际，Panel 可拒绝 clear 后的迟到 progress
     const ingestRunId = randomUUID();
+    let readyCommitted = false;
     try {
       const result = await this.worker({
         wikiId,
@@ -1040,18 +1096,16 @@ export class WikiService {
         this.finishCancelled(serviceId, teamId, wikiId);
         return;
       }
-      this.store.updateWikiStatus(serviceId, wikiId, {
-        status: "ready",
-        internal_status: null,
-        sync_error: null,
-        page_count: result?.pageCount ?? null,
-        last_sync_at: new Date().toISOString(),
-      });
+      // Commit knowledge.db BEFORE post-hooks. A throwing TMC/summary callback
+      // must not revert a successful ingest (that left files on disk but 404s).
+      const pageCount = result?.pageCount ?? this.countPagesOnDisk(serviceId, teamId, wikiId);
+      this.commitWikiReady(serviceId, wikiId, pageCount);
+      readyCommitted = true;
       const synced = this.store.getWikiById(serviceId, wikiId);
       if (synced) {
-        this.audit(synced, "ready", result?.pageCount != null ? `pages: ${result.pageCount}` : null);
+        this.audit(synced, "ready", pageCount != null ? `pages: ${pageCount}` : null);
       }
-      this.logger?.info?.(`[wiki] ${wikiId} ready (pages: ${result?.pageCount ?? '?'})`);
+      this.logger?.info?.(`[wiki] ${wikiId} ready (pages: ${pageCount ?? '?'})`);
 
       // Auto-generate summary + callback TMC
       await this.onBuildComplete(synced, "ready", null, ingestRunId);
@@ -1060,6 +1114,10 @@ export class WikiService {
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
       if (this.isDeleted(serviceId, wikiId)) {
         this.finishCancelled(serviceId, teamId, wikiId);
+        return;
+      }
+      if (readyCommitted) {
+        this.logger?.warn?.(`[wiki] ${wikiId} post-ready hook failed; asset metadata already committed: ${msg}`);
         return;
       }
       this.store.updateWikiStatus(serviceId, wikiId, {
@@ -1088,44 +1146,48 @@ export class WikiService {
   ): Promise<void> {
     if (!row || !this.callbackConfig) return;
 
-    let summary: string | null = null;
+    try {
+      let summary: string | null = null;
 
-    if (status === "ready") {
-      // Generate summary via LLM (即使部分源失败也尝试生成——只要有页面就生成)
-      try {
-        const pages = this.pageLs(row.service_id, row.team_id, row.wiki_id) ?? [];
-        this.logger?.info?.(`[wiki] summary generation start (wikiId=${row.wiki_id}, pages=${pages.length}, status=${status})`);
-        const { generateWikiSummary } = await import("../callback.js");
-        summary = await generateWikiSummary(
-          row.wiki_id,
-          row.name,
-          pages.map((p) => ({ title: p.title, description: p.description })),
-          this.callbackConfig.resolveLlm(row.service_id),
-        );
-        this.logger?.info?.(`[wiki] summary generation done (wikiId=${row.wiki_id}, len=${summary?.length ?? 0}, empty=${!summary})`);
-        if (summary) {
-          this.store.updateWikiStatus(row.service_id, row.wiki_id, { summary });
+      if (status === "ready") {
+        // Generate summary via LLM (即使部分源失败也尝试生成——只要有页面就生成)
+        try {
+          const pages = this.pageLs(row.service_id, row.team_id, row.wiki_id) ?? [];
+          this.logger?.info?.(`[wiki] summary generation start (wikiId=${row.wiki_id}, pages=${pages.length}, status=${status})`);
+          const { generateWikiSummary } = await import("../callback.js");
+          summary = await generateWikiSummary(
+            row.wiki_id,
+            row.name,
+            pages.map((p) => ({ title: p.title, description: p.description })),
+            this.callbackConfig.resolveLlm(row.service_id),
+          );
+          this.logger?.info?.(`[wiki] summary generation done (wikiId=${row.wiki_id}, len=${summary?.length ?? 0}, empty=${!summary})`);
+          if (summary) {
+            this.store.updateWikiStatus(row.service_id, row.wiki_id, { summary });
+          }
+        } catch (err) {
+          this.logger?.warn?.(`[wiki] summary generation failed: ${String(err)}`);
         }
-      } catch (err) {
-        this.logger?.warn?.(`[wiki] summary generation failed: ${String(err)}`);
       }
-    }
 
-    // Callback TMC
-    const { callbackTMC } = await import("../callback.js");
-    await callbackTMC(
-      {
-        knowledge_id: row.wiki_id,
-        service_id: row.service_id,
-        type: "wiki",
-        status,
-        summary,
-        sync_error: errorMsg?.slice(0, 500) ?? null,
-        timestamp: new Date().toISOString(),
-        ...(ingestRunId ? { run_id: ingestRunId } : {}),
-      },
-      this.callbackConfig,
-    );
+      // Callback TMC
+      const { callbackTMC } = await import("../callback.js");
+      await callbackTMC(
+        {
+          knowledge_id: row.wiki_id,
+          service_id: row.service_id,
+          type: "wiki",
+          status,
+          summary,
+          sync_error: errorMsg?.slice(0, 500) ?? null,
+          timestamp: new Date().toISOString(),
+          ...(ingestRunId ? { run_id: ingestRunId } : {}),
+        },
+        this.callbackConfig,
+      );
+    } catch (err) {
+      this.logger?.warn?.(`[wiki] onBuildComplete failed for ${row.wiki_id}: ${String(err)}`);
+    }
   }
 
   async onIdle(wikiId?: string): Promise<void> {

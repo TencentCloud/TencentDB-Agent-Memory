@@ -16,7 +16,7 @@
  * 细粒度 ingest progress 不在 KS 暴露：由 Panel 收 ingest_progress 回调并在 wiki/get 聚合。
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import type { WikiService } from "../store/index.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
@@ -201,7 +201,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
 
   // ── id-only ──
 
-  app.post("/raw/ls", async (c) => {
+  const rawLsHandler = async (c: Context) => {
     const body = await c.req.json<Record<string, unknown>>();
     const serviceId = c.req.header("x-tdai-service-id");
     if (!isValidIdSegment(serviceId)) return c.json(wrapError(400, "x-tdai-service-id header is required"), 400);
@@ -214,7 +214,11 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     const items = wikiService.rawLs(serviceId, row.team_id, wikiId);
     if (items === null) return c.json(wrapError(404, "wiki not found"), 404);
     return c.json(wrapOk({ items }));
-  });
+  };
+
+  app.post("/raw/ls", rawLsHandler);
+  // Alias used by some clients / issue repros (`/v3/wiki/raw/list`).
+  app.post("/raw/list", rawLsHandler);
 
   app.post("/raw/read", async (c) => {
     const body = await c.req.json<Record<string, unknown>>();

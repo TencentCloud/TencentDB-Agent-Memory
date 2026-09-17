@@ -236,6 +236,13 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   if (interrupted > 0) {
     log.info(`marked ${interrupted} interrupted tasks as failed`);
   }
+  // If ingest already wrote index.db source rows but knowledge.db never
+  // committed ready (crash after LLM / checkpoint), restore the wiki row
+  // so /v3/wiki/list and raw/ls can find the asset.
+  const recovered = wikiService.recoverInterruptedFromDisk();
+  if (recovered > 0) {
+    log.info(`recovered ${recovered} wiki(s) from on-disk ingest artifacts`);
+  }
 
   // Background restore of synced instances (non-blocking)
   void (async () => {
