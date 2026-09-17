@@ -30,11 +30,24 @@ import { log } from "./report/log.js";
 import { verifyUserKey } from "./auth.js";
 import { matchSystemUserByUserId, hasSystemUsers } from "./systemUser.js";
 import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
+import { estimateAnthropicInputTokens } from "./common/token-estimate.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
   shouldOverride,
 } from "./instance-upstream-cache.js";
+
+/**
+ * 从辅助端点路径提取 agent 前缀。
+ * 标准形态 `/<agent>/<spaceId>/v1/...`；`/proxy/<spaceId>/v1/...` 为 legacy
+ * 无 agent 形态（主链路默认 codebuddy，Chat 客户端不会调用 count_tokens），
+ * 不参与 05A 本地估算，返回空串让上层走原透传路径。
+ */
+function agentFromAuxPath(path: string): string {
+  const seg = path.split("/");
+  if (seg[1] === "proxy") return "";
+  return seg[1] ?? "";
+}
 
 /** Hop-by-hop headers 与 host header：不能透传到 upstream。 */
 const SKIP_REQUEST_HEADERS = new Set([
@@ -214,6 +227,27 @@ export async function handleAuxiliaryEndpoint(
   const rawBody = await c.req.arrayBuffer();
   const bodyText = new TextDecoder().decode(rawBody);
   const modelId = extractModelId(bodyText);
+
+  // ── 05A 兜底：Claude Code → Chat/Responses 上游时，count_tokens 无对位端点，
+  // 本地估算后直接应答（只用于客户端上下文条提示，不做计费依据）。
+  if (entry.pathSuffix === "/v1/messages/count_tokens") {
+    const agent = agentFromAuxPath(c.req.path);
+    const ag = config.upstream.agents?.[agent];
+    if (ag?.anthropicToChat === true || ag?.anthropicToResponses === true) {
+      try {
+        const parsed = JSON.parse(bodyText || "{}");
+        const inputTokens = estimateAnthropicInputTokens(parsed);
+        log.info("aux.count_tokens.estimated", {
+          agent,
+          inputTokens,
+          reason: "converted_upstream",
+        });
+        return c.json({ input_tokens: inputTokens }, 200);
+      } catch {
+        // body 不是 JSON：继续走透传，由上游决定报错形态。
+      }
+    }
+  }
 
   // 3. 拼接 upstream URL（复用 joinUrl，天然消费白名单表）
   let upstreamUrl = joinUrl(config.upstream.url, c.req.path);

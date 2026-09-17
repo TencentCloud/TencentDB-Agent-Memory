@@ -200,6 +200,8 @@ function extractWorkbuddyUserText(input: unknown): string | null {
  */
 export const workbuddyAdapter: AgentAdapter = {
   agentKind: "workbuddy",
+  // 网页走 Chat、桌面走 Responses：两个方向都要参与"上游没有我这种协议时怎么转"的判断。
+  nativeProtocols: ["chat", "responses"],
 
   classifyRequest(
     body: Record<string, unknown>,

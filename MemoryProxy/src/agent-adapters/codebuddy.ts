@@ -34,6 +34,7 @@ import type { AgentAdapter } from "./types.js";
 
 export const codebuddyAdapter: AgentAdapter = {
   agentKind: "codebuddy",
+  nativeProtocols: ["chat"],
 
   classifyRequest(_body?, _path?, _headers?) {
     // 抓包实证：CB 请求无 cache_control marker、tools 稳定 26 个，没有 CC 的
