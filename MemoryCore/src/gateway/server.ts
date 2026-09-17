@@ -1869,8 +1869,8 @@ export class TdaiGateway {
     // VDB is available — set STORE_MODE=sqlite to keep the VDB-dependent
     // pieces local while exercising the rest of the service-mode wiring.
     const storeModeOverride =
-      process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb" || process.env.STORE_MODE === "mongodb"
-        ? (process.env.STORE_MODE as "sqlite" | "tcvdb" | "mongodb")
+      process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb" || process.env.STORE_MODE === "mongodb" || process.env.STORE_MODE === "postgres"
+        ? (process.env.STORE_MODE as "sqlite" | "tcvdb" | "mongodb" | "postgres")
         : undefined;
     const effectiveStoreMode = storeModeOverride ?? (this.config.deployMode === "service" ? "tcvdb" : "sqlite");
     // T12 fail-fast: mongodb backend hard-requires MONGODB_ENDPOINT/DATABASE
