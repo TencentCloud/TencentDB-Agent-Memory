@@ -35,6 +35,10 @@ import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
 } from "./common/workbuddy-injection.js";
+import {
+  prependToLastUserMessage,
+  splitSyntheticInjection,
+} from "./common/synthetic-injection.js";
 // WorkBuddy 走 Responses API，与 codex wire 完全一致 —— 弹窗骨架直接复用
 // session/codex/form.ts 的 buildFormResponse + codexFormAnswersAsMessages，
 // 状态机复用 CB 的 handleSessionInit(agentSource="codex")。这样 WorkBuddy
@@ -954,7 +958,7 @@ export async function handleWorkbuddyEndpoint(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -1213,15 +1217,15 @@ export async function handleWorkbuddyEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName 来自 session-init 返回值（从 cachedTeams 里查得）；
           // teamIdShort 字段名沿用历史，但此处**存完整 team_id**（如 team-wyuyb7sion）。
           // 之前 slice(-8) 只留后 8 位会让用户看到 "uyb7sion" 这种截断串，配合
           // teamName 常为空导致的兜底路径显示极不完整。团队 id 本身就短，全量展示无害。
           teamName: initResult.teamName ?? undefined,
-          teamIdShort: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1438,6 +1442,20 @@ export async function handleWorkbuddyEndpoint(
 
       if (injectedText.length > 0) {
         body = injectWorkbuddyAssets(body, { raw: injectedText });
+      }
+
+      // 与 codex 同构：user.* 注入点落在合成体的 user 消息上，只取 messages[0]
+      // 会静默丢弃它；抽出来贴回本轮最后一个 user message（见
+      // common/synthetic-injection.ts 的文件头）。
+      const { userText: injectedUserText } = splitSyntheticInjection(
+        syntheticBody,
+        injectedMessages,
+      );
+      if (injectedUserText.length > 0) {
+        body = prependToLastUserMessage(
+          body,
+          buildWorkbuddyInjectionBlock({ raw: injectedUserText }),
+        );
       }
     } catch (err: unknown) {
       console.error(
