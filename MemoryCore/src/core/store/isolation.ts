@@ -169,3 +169,32 @@ export function rowMatchesIsolation(
   if (filter.sessionKey !== undefined && row.session_key !== filter.sessionKey) return false;
   return true;
 }
+
+/**
+ * Build the scope-only isolation filter for L1 dedup — used by both the recall
+ * path (l1-extractor → batchDedup) and the update/merge delete path (l1-writer).
+ *
+ * Dedup operates across sessions within the same scope (team/user/agent), so the
+ * filter intentionally omits sessionId / sessionKey / taskId — carrying the
+ * current sessionId would cause `rowMatchesIsolation` to filter out cross-session
+ * records, breaking correction/dedup across conversations.
+ *
+ * userId / agentId are normalised to `DEFAULT_ISOLATION_ID`, matching the write
+ * side (l1-writer fills missing values with "default"). This keeps the filter
+ * always non-empty: a caller that passes no scope fields still gets
+ * default-bucket isolation instead of an unfiltered cross-tenant scan. teamId is
+ * spread conditionally so an empty string is never emitted — "" would participate
+ * in strict-equality and silently match nothing, since rows store "default" or a
+ * real id.
+ */
+export function buildDedupScopeFilter(
+  teamId?: string,
+  userId?: string,
+  agentId?: string,
+): IsolationFilter {
+  return {
+    ...(teamId ? { teamId } : {}),
+    userId: userId || DEFAULT_ISOLATION_ID,
+    agentId: agentId || DEFAULT_ISOLATION_ID,
+  };
+}
