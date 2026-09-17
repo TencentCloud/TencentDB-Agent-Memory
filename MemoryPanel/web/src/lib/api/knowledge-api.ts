@@ -312,6 +312,9 @@ export const knowledgeApi = {
     },
 
     /** 获取详情（含 status，用于 ingest 后轮询） */
+    rename: (wikiId: string, name: string): Promise<WikiDetail> =>
+      panelPost('/wiki/update-meta', { wiki_id: wikiId, name }),
+
     get: (wikiId: string): Promise<WikiDetail> =>
       panelPost('/wiki/get', { wiki_id: wikiId }),
 
