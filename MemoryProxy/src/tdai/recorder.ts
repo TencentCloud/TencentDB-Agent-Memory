@@ -1,6 +1,7 @@
 import type { TdaiClient } from "./client.js";
 import type { TdaiIdentity, TdaiMessage } from "./types.js";
 import { extractUserQueryText } from "../common/user-query-extractor.js";
+import { isFinalAnswer } from "../skill/normalize-conversation.js";
 
 /**
  * 从最后一条 user 消息中抽取「真正的用户提问」，写入 L0。
@@ -27,6 +28,18 @@ export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | nul
     if (content.trim()) return { role: "user", content };
   }
   return null;
+}
+
+export function shouldRecordTdaiTurn(
+  finalAnswerOnly: boolean,
+  assistantMessage: Record<string, unknown> | null,
+  toolCallCountOverride?: number,
+): boolean {
+  if (!finalAnswerOnly) return true;
+  if (!assistantMessage) return false;
+  if (!isFinalAnswer(assistantMessage, toolCallCountOverride)) return false;
+  return typeof assistantMessage.content === "string"
+    && assistantMessage.content.trim().length > 0;
 }
 
 export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity | null, userMessage: TdaiMessage | null, assistantContent: string | null | undefined): Promise<void> {
