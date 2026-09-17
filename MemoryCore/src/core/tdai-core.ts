@@ -73,8 +73,10 @@ import type {
   ResolvedSkillConfig,
   SkillEnvProbe,
   ExtractorLLMRunner,
+  ISkillStore,
 } from "./skill/index.js";
 import type { Skill } from "./skill/types.js";
+import { PgSkillStore } from "./store/postgres/skill-store.js";
 
 const TAG = "[memory-tdai] [core]";
 
@@ -859,31 +861,53 @@ export class TdaiCore {
       const resolved = resolveSkillConfig(this.cfg.skill, probe, resolverLogger);
       this.resolvedSkillConfig = resolved;
 
-      // Open the underlying DatabaseSync (raw handle escape hatch — see
-      // VectorStore.getRawDb() docstring). Skill tables (skill_meta /
-      // skill_fts / skill_vec / task_*) live in the SAME connection.
+      // Open the underlying storage handle (raw handle escape hatch — see
+      // VectorStore.getRawDb() / PgMemoryStore.getPgPool() docstrings).
+      // Skill tables live in the SAME connection as the memory store:
+      //   - SQLite    → getRawDb() → SqliteSkillStore
+      //   - Postgres  → getPgPool() → PgSkillStore (shared pg.Pool)
       const rawDbCarrier = this.vectorStore as unknown as {
         getRawDb?: () => unknown;
         getEmbeddingDimensions?: () => number;
       };
-      if (typeof rawDbCarrier.getRawDb !== "function") {
+      const pgCarrier = this.vectorStore as unknown as {
+        getPgPool?: () => { pool: unknown; dimensions: number };
+      };
+      let skillStore: ISkillStore;
+      if (typeof rawDbCarrier.getRawDb === "function") {
+        const db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
+        const dimensions =
+          typeof rawDbCarrier.getEmbeddingDimensions === "function"
+            ? rawDbCarrier.getEmbeddingDimensions()
+            : (this.cfg.embedding.dimensions ?? 0);
+
+        const sqliteSkillStore = new SqliteSkillStore({
+          db,
+          dimensions,
+          logger: this.logger,
+        });
+        sqliteSkillStore.init();
+        skillStore = sqliteSkillStore;
+      } else if (typeof pgCarrier.getPgPool === "function") {
+        // [pg-align] PostgreSQL backend: PgMemoryStore exposes its pg.Pool so
+        // the Skill tables (skills / skill_vec) share the same pool.
+        const { pool, dimensions } = pgCarrier.getPgPool()!;
+        const pgSkillStore = new PgSkillStore({
+          pool: pool as import("pg").Pool,
+          dimensions,
+          logger: this.logger,
+        });
+        pgSkillStore.init();
+        skillStore = pgSkillStore;
+        this.logger.info(
+          `${TAG} [pg-align] Skill store backend: PgSkillStore (dimensions=${dimensions})`,
+        );
+      } else {
         this.logger.warn(
-          `${TAG} Skill wiring skipped: vectorStore does not expose getRawDb() (only SQLite-backed VectorStore is supported in MVP)`,
+          `${TAG} Skill wiring skipped: vectorStore exposes neither getRawDb() nor getPgPool() (supported: SQLite / PostgreSQL backends)`,
         );
         return;
       }
-      const db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
-      const dimensions =
-        typeof rawDbCarrier.getEmbeddingDimensions === "function"
-          ? rawDbCarrier.getEmbeddingDimensions()
-          : (this.cfg.embedding.dimensions ?? 0);
-
-      const skillStore = new SqliteSkillStore({
-        db,
-        dimensions,
-        logger: this.logger,
-      });
-      skillStore.init();
 
       const skillResources = new SkillResourceStore({
         storage: this.storage,
