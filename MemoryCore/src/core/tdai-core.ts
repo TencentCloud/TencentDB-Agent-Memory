@@ -29,7 +29,7 @@ import type {
   MemorySearchParams,
   ConversationSearchParams,
 } from "./types.js";
-import type { MemoryTdaiConfig } from "../config.js";
+import type { MemoryTdaiConfig, LlmLayerName } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { StorageAdapter } from "./storage/adapter.js";
@@ -52,7 +52,7 @@ import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
-import { resolveStandaloneLlmForRuntime } from "../adapters/standalone/llm-provider-resolver.js";
+import { resolveStandaloneLlmForRuntime, applyLlmLayerOverride } from "../adapters/standalone/llm-provider-resolver.js";
 import { MetricTrackingRunnerFactory } from "./report/metric-tracking-runner.js";
 
 // ── Skill module (v2 redesign 2026-06-17) ──
@@ -625,7 +625,7 @@ export class TdaiCore {
    * provider=openai 时透传；provider=proxy 时替换 baseUrl 为 `${baseUrl}/proxy/<iid>/v1`，
    * apiKey 用 env.TDAI_MEMORY_SYSTEM_USER_KEY。四个 runner factory 构造点共用。
    */
-  private resolveRuntimeLlm(): {
+  private resolveRuntimeLlm(layer?: LlmLayerName): {
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -634,7 +634,7 @@ export class TdaiCore {
     stream: boolean;
   } {
     const resolved = resolveStandaloneLlmForRuntime(this.cfg.llm, this.instanceId);
-    return {
+    const base = {
       baseUrl: resolved.baseUrl,
       apiKey: resolved.apiKey,
       model: resolved.model,
@@ -642,6 +642,9 @@ export class TdaiCore {
       timeoutMs: resolved.timeoutMs ?? 120_000,
       stream: resolved.stream ?? false,
     };
+    // Per-layer overrides (llm.layers.<layer>: model / maxTokens / timeoutMs).
+    // Absent section or layer → unchanged, so existing deployments are unaffected.
+    return applyLlmLayerOverride(base, layer, this.cfg.llm.layers ?? undefined);
   }
 
   /**
@@ -662,8 +665,18 @@ export class TdaiCore {
    * actually be enabled (otherwise `resolveRuntimeLlm` has nothing to
    * work with).
    */
-  private shouldOverrideRunnerFactory(useStandaloneRunner: boolean): boolean {
+  /**
+   * @param layer Pipeline layer being resolved. A layer that carries an explicit
+   *   `llm.layers.<layer>` override must be built from that layer's config even
+   *   when the host factory would otherwise be reused (standalone +
+   *   provider=openai) — otherwise the override would be silently ignored, which
+   *   is exactly the failure mode this feature exists to prevent.
+   *   `llm.enabled` is still required, so an OpenClaw in-process deployment (host
+   *   LLM, no standalone endpoint) is unaffected.
+   */
+  private shouldOverrideRunnerFactory(useStandaloneRunner: boolean, layer?: LlmLayerName): boolean {
     if (!useStandaloneRunner || !this.cfg.llm.enabled) return false;
+    if (layer && this.cfg.llm.layers?.[layer]) return true;
     if (this.hostAdapter.hostType === "openclaw") return true;
     return this.cfg.llm.provider === "proxy";
   }
@@ -719,12 +732,36 @@ export class TdaiCore {
     // Kafka 未配置时 metricProducer.send() 是 no-op，零开销
     const trackingFactory = new MetricTrackingRunnerFactory(runnerFactory, () => this.instanceId);
 
-    const l1LlmRunner = useStandaloneRunner
-      ? trackingFactory.createRunner({ enableTools: false })
-      : undefined;
-    const l2l3LlmRunner = useStandaloneRunner
-      ? trackingFactory.createRunner({ enableTools: true })
-      : undefined;
+    // 分层覆盖（llm.layers.<layer>）：配置了 layers 时，每个阶段用自己的
+    // model / maxTokens / timeoutMs 构造 runner；未配置时走共享 factory，
+    // 行为与改造前完全一致。
+    const layerRunner = (layer: LlmLayerName, enableTools: boolean) => {
+      if (!this.shouldOverrideRunnerFactory(useStandaloneRunner, layer)) {
+        return trackingFactory.createRunner({ enableTools });
+      }
+      try {
+        const layerFactory = new StandaloneLLMRunnerFactory({
+          config: this.resolveRuntimeLlm(layer),
+          logger: this.logger,
+        });
+        return new MetricTrackingRunnerFactory(layerFactory, () => this.instanceId)
+          .createRunner({ enableTools });
+      } catch (err) {
+        // 与上方 override 块同因：service 模式构造期 instanceId 可能仍是 __unset__，
+        // proxy 解析会拒绝。退回共享 runner —— per-call 站点会用真实 instanceId 重建。
+        this.logger.debug?.(
+          `${TAG} [${layer}] layer override deferred: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return trackingFactory.createRunner({ enableTools });
+      }
+    };
+
+    const l1LlmRunner = useStandaloneRunner ? layerRunner("l1", false) : undefined;
+    const l2l3LlmRunner = useStandaloneRunner ? layerRunner("l2", true) : undefined;
+    // L3 只在配置了 layers.l3 时才单独构造；否则继续复用 L2/L3 共享 runner
+    const l3LlmRunner = (useStandaloneRunner && this.cfg.llm.layers)
+      ? layerRunner("l3", true)
+      : l2l3LlmRunner;
 
     // L1 runner
     this.scheduler.setL1Runner(createL1Runner({
@@ -766,7 +803,7 @@ export class TdaiCore {
         vectorStore: this.vectorStore,
         logger: this.logger,
         instanceId: this.instanceId,
-        llmRunner: l2l3LlmRunner,
+        llmRunner: l3LlmRunner,
         storage: this.storage,
       });
       await l3Runner();
@@ -1058,8 +1095,8 @@ export class TdaiCore {
       : undefined;
 
     let runnerFactory = this.runnerFactory;
-    if (this.shouldOverrideRunnerFactory(useStandaloneRunner)) {
-      const runtimeLlm = this.resolveRuntimeLlm();
+    if (this.shouldOverrideRunnerFactory(useStandaloneRunner, "l1")) {
+      const runtimeLlm = this.resolveRuntimeLlm("l1");
       runnerFactory = new StandaloneLLMRunnerFactory({
         config: runtimeLlm,
         logger: this.logger,
@@ -1108,8 +1145,8 @@ export class TdaiCore {
       : undefined;
 
     let runnerFactory = this.runnerFactory;
-    if (this.shouldOverrideRunnerFactory(useStandaloneRunner)) {
-      const runtimeLlm = this.resolveRuntimeLlm();
+    if (this.shouldOverrideRunnerFactory(useStandaloneRunner, "l2")) {
+      const runtimeLlm = this.resolveRuntimeLlm("l2");
       runnerFactory = new StandaloneLLMRunnerFactory({
         config: runtimeLlm,
         logger: this.logger,
@@ -1152,8 +1189,8 @@ export class TdaiCore {
       : undefined;
 
     let runnerFactory = this.runnerFactory;
-    if (this.shouldOverrideRunnerFactory(useStandaloneRunner)) {
-      const runtimeLlm = this.resolveRuntimeLlm();
+    if (this.shouldOverrideRunnerFactory(useStandaloneRunner, "l3")) {
+      const runtimeLlm = this.resolveRuntimeLlm("l3");
       runnerFactory = new StandaloneLLMRunnerFactory({
         config: runtimeLlm,
         logger: this.logger,

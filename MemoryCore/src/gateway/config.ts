@@ -13,7 +13,20 @@ import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
-import type { MemoryTdaiConfig } from "../config.js";
+import { parseLlmLayers } from "../config.js";
+import type { MemoryTdaiConfig, LlmLayerName, LlmLayerOverride } from "../config.js";
+
+/**
+ * Gateway-side LLM config: the runner-facing shape plus the optional per-layer
+ * overrides (`llm.layers.<layer>`, see {@link LlmLayerOverride}).
+ *
+ * The gateway owns the runtime `llm` object (it applies the `TDAI_LLM_*` env
+ * overrides) and merges it over the parsed memory config, so the layers section
+ * has to be carried here explicitly — otherwise the core would never see it.
+ */
+export type GatewayLlmConfig = StandaloneLLMConfig & {
+  layers?: Partial<Record<LlmLayerName, LlmLayerOverride>>;
+};
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
 
 // ============================
@@ -351,7 +364,7 @@ export interface GatewayConfig {
      */
     backendResolver: boolean;
   };
-  llm: StandaloneLLMConfig;
+  llm: GatewayLlmConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
   memory: MemoryTdaiConfig;
 
@@ -584,12 +597,14 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
   const rawLlmProvider = env("TDAI_LLM_PROVIDER") ?? str(llmConfig, "provider");
   const llmProvider: "openai" | "proxy" =
     rawLlmProvider === "proxy" ? "proxy" : "openai";
-  const llm: StandaloneLLMConfig = {
+  const llm: GatewayLlmConfig = {
     baseUrl: env("TDAI_LLM_BASE_URL") ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
     apiKey: env("TDAI_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
     model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
     maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
     timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    // 分层覆盖原样透传（解析期已 fail-fast 校验层名）；env 覆盖链不涉及分层字段。
+    layers: parseLlmLayers(llmConfig),
     provider: llmProvider,
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
@@ -635,6 +650,9 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
       proxy: {
         useMemorySystemUserKey: llm.proxy?.useMemorySystemUserKey ?? true,
       },
+      // 分层覆盖必须一起带过来：splice 是逐字段重建，漏掉即等于用户配了
+      // llm.layers 却静默不生效（本文件上方 parseLlmLayers 已 fail-fast 校验层名）。
+      layers: llm.layers,
     };
   }
 
