@@ -266,8 +266,13 @@ const routeTable: Record<string, Handler> = {
     const { team_id, limit, offset, ...filter } = d;
     return s.listAssetsByTeam(team_id, resolvePagination({ limit, offset }), filter);
   }),
-  [`${V3_PREFIX}/asset/list-accessible`]: bind(S.assetListAccessibleSchema, (d, _c, s) =>
-    s.listAccessibleAssets(d)),
+  [`${V3_PREFIX}/asset/list-accessible`]: bind(S.assetListAccessibleSchema, (d, c, s) => {
+    // The authenticated user is the only valid subject.  Do not let a caller
+    // substitute user_id/user_key from the request body to enumerate another
+    // user's private or ACL-restricted assets.
+    if (!c.userId) throw new MetadataError("permission_denied", "authentication required");
+    return s.listAccessibleAssets({ ...d, user_id: c.userId, user_key: undefined });
+  }),
 
   [`${V3_PREFIX}/asset/touch-usage`]: bind(S.assetTouchUsageSchema, async (d, c, s) => {
     await s.touchAssetUsageForCaller(d.asset_id, c);
@@ -302,9 +307,13 @@ const routeTable: Record<string, Handler> = {
   [`${V3_PREFIX}/acl/list`]: bind(S.aclListSchema, (d, c, s) =>
     s.listAclByAssetForCaller(d.asset_id, c, resolvePagination(d)),
   ),
-  [`${V3_PREFIX}/acl/check`]: bind(S.aclCheckSchema, async (d, _c, s) => {
+  [`${V3_PREFIX}/acl/check`]: bind(S.aclCheckSchema, async (d, c, s) => {
+    // Permission checks must be evaluated for the authenticated principal.
+    // Trusting body.user_id/user_key lets any valid user probe ACLs as another
+    // user and discover access to private or restricted assets.
+    if (!c.userId) throw new MetadataError("permission_denied", "authentication required");
     if (d.agent_id) await requireEntity(s, EntityType.Agent, d.agent_id);
-    return s.checkAssetPermission(d);
+    return s.checkAssetPermission({ ...d, user_id: c.userId, user_key: undefined });
   }),
 
   // Auth
