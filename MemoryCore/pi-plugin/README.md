@@ -63,6 +63,33 @@ Expect `agentSource=pi`, `register directly`, and a `write-l0` line. If you see
 `agentSource=codebuddy` (or the default) or no `write-l0`, the base URL or
 identity headers are wrong.
 
+## Sync mined skills into Pi
+
+The proxy sends each completed Pi interaction to the existing Skill pipeline.
+The pipeline records the useful conversation roles in this order: `user`,
+`tool_call`, `tool_result`, then the final `assistant` answer. The server also
+supports `system`, but Pi deliberately does not send its large, static system
+prompt into skill mining. Incomplete tool calls are not promoted to skills.
+
+Once MemoryCore has reviewed enough useful tool-heavy conversation and mined a
+skill, run:
+
+```text
+/tdai-memory-sync-skills
+```
+
+The command gets candidates through the current session's Skill Bridge, so the
+Proxy derives the current user/team/agent scope from the session binding. It
+cannot use a caller-supplied team or agent id. After confirmation, it installs
+each validated package under `~/.pi/agent/skills/<skill-name>/`; Pi discovers
+these as normal native skills.
+
+A directory without `tdai-remote.json` is treated as hand-written and is never
+overwritten. If a server skill has the same name, sync reports it as skipped.
+Directories with that marker are adapter-owned and may be atomically updated.
+Running sync again with the same remote version does not duplicate or rewrite
+the skill.
+
 ## Troubleshooting
 
 - **Use the user's API key, not the admin key.** The proxy validates the
