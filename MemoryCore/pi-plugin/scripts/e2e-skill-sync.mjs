@@ -10,16 +10,29 @@ const skill = {
   name: "deploy-check",
   version: 1,
   content: "---\nname: deploy-check\ndescription: Check a deployment safely\n---\n\nRun the health check first.\n",
-  script_paths: ["scripts/check.sh"],
+  manifest: [{ path: "scripts/check.sh", size_bytes: 13 }],
 };
 
 function resolvePiCli() {
   if (process.env.PI_CLI_PATH && existsSync(process.env.PI_CLI_PATH)) return process.env.PI_CLI_PATH;
-  const npmCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  const globalRoot = execFileSync(process.execPath, [npmCli, "root", "-g"], { encoding: "utf8" }).trim();
-  const cli = join(globalRoot, "@earendil-works", "pi-coding-agent", "dist", "cli.js");
-  if (!existsSync(cli)) throw new Error(`Pi CLI was not found at ${cli}; set PI_CLI_PATH to its cli.js`);
-  return cli;
+
+  try {
+    const globalRoot = process.platform === "win32"
+      ? execFileSync(
+          process.execPath,
+          [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "root", "-g"],
+          { encoding: "utf8" },
+        ).trim()
+      : execFileSync("npm", ["root", "-g"], { encoding: "utf8" }).trim();
+    const globalCli = join(globalRoot, "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+    if (existsSync(globalCli)) return globalCli;
+  } catch {
+    // A project-local Pi remains useful for contributors without a global install.
+  }
+
+  const localCli = join(process.cwd(), "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
+  if (existsSync(localCli)) return localCli;
+  throw new Error("Pi CLI was not found; install Pi or set PI_CLI_PATH to its cli.js");
 }
 
 function reply(response, data) {
@@ -148,6 +161,10 @@ try {
 
   if (requests.length !== 3 || requests.some((entry) => Object.keys(entry.body).some((key) => key.endsWith("_id") && key !== "skill_id"))) {
     throw new Error("sync made an unexpected Skill Bridge request or supplied caller-controlled identity");
+  }
+  const getRequest = requests.find((entry) => entry.path.endsWith("/get"));
+  if (getRequest?.body.include_content !== true || getRequest.body.include_manifest !== true) {
+    throw new Error("sync did not request the complete Core skill package");
   }
   if (requests.some((entry) => entry.headers["x-tdai-service-id"] !== "space-e2e" || entry.headers["authorization"] !== "Bearer user-key-e2e")) {
     throw new Error("sync did not carry the expected session credentials");
