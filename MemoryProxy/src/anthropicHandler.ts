@@ -676,15 +676,24 @@ export async function handleAnthropicMessages(
   // system-user short-circuit; running verify again here would double the
   // network round-trip for every request.
   const spaceId = earlySpaceId;
-  const userId = earlyVerify.userId
-    || c.req.header("x-user-id")
-    || c.req.header("x-cb-user-id")
-    || c.req.header("x-tdai-user-token")
-    || "";
+  const userId = earlyVerify.userId;
   if (userId) keyId = userId;
 
   // sk-mem key（用于 TDAI ACL / MetadataClient 的 x-tdai-user-key）就是入口的 apiKey。
   const callerUserKey = apiKey || null;
+
+  const skipSessionInit = requestKind === "sidequery";
+  let memoryUserId: string | null = userId || null;
+  let metadataClient: import("./meta/client.js").MetadataClient | undefined;
+  if (config.sessionInit?.enabled && conversationId && !skipSessionInit) {
+    const { getMetadataClient, resolveMemoryUserId } = await import("./meta/client.js");
+    metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
+    memoryUserId = await resolveMemoryUserId({
+      verifiedUserId: memoryUserId,
+      callerUserKey,
+      metadataClient,
+    });
+  }
 
   // Activate Redis storage early — must run BEFORE session init.
   if (config.redis?.enabled) {
@@ -694,7 +703,7 @@ export async function handleAnthropicMessages(
 
   // ── mem:session-reset pre-hook ──
   let _isSessionResetFlow = false;
-  if (requestKind === "main") {
+  if (memoryUserId && requestKind === "main") {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { parseMemCommand } = await import("./mem-command/index.js");
@@ -703,7 +712,7 @@ export async function handleAnthropicMessages(
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `${agentSource}:${sessionKey}`;
-        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+        store.bind(compositeKey, { userId: memoryUserId, agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
@@ -733,7 +742,7 @@ export async function handleAnthropicMessages(
         }
 
         const resetEpoch = Date.now();
-        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
+        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: memoryUserId, resetEpoch, resetFlow: true });
         const bindingRepo = store.getBindingRepo();
         if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
         _isSessionResetFlow = true;
@@ -745,28 +754,23 @@ export async function handleAnthropicMessages(
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId;
+  let injectedSkipped = !conversationId || !memoryUserId;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped}`);
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${memoryUserId ?? "<unavailable>"} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped}`);
   // CC 分流：SIDEQUERY 完全跳过 session-init（独立小请求无对话概念）。
   //          FORK 允许走 L2b recovery 复用 MAIN 已建的 session，但不进 form 交互路径
   //          （借用 MAIN 的 sessionInfo，见下方的 kind === 'fork' 分支保护）。
-  const skipSessionInit = requestKind === "sidequery";
-  if (config.sessionInit?.enabled && conversationId && !skipSessionInit) {
+  if (config.sessionInit?.enabled && conversationId && !skipSessionInit && memoryUserId && metadataClient) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
-      const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
-      const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
       const compositeKey = `${agentSource}:${sessionKey}`;
-      // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
-      // 复合键，保证 key path 分段合法（参见 §4.4 边界处理）。
       const identity = {
-        userId: userId || "anonymous",
+        userId: memoryUserId,
         agentSource,
         sessionId: sessionKey,
         spaceId,
@@ -836,7 +840,7 @@ export async function handleAnthropicMessages(
         wentThroughSessionInitStateMachine = true;
         initResult = await handleSessionInit(
           sessionKey,
-          userId || null,
+          memoryUserId,
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
@@ -932,7 +936,7 @@ export async function handleAnthropicMessages(
           // reset-flow 时清旧 agent 缓存是必要的。统一语义更安全。
           await mod.prewarmFromConfig(config, {
             keyId: sessionKey,
-            userId: userId || "anonymous",
+            userId: memoryUserId,
             agentSource,
             spaceId,
             sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
@@ -1082,7 +1086,7 @@ export async function handleAnthropicMessages(
         agentSource,
         config,
         spaceId,
-        userId,
+        userId: memoryUserId ?? "",
         apiKey: apiKey || "",
         sessionInfo: sessionInfo as Record<string, unknown>,
         protocol: "anthropic",
@@ -1108,7 +1112,7 @@ export async function handleAnthropicMessages(
       const tdaiClientForMem = createTdaiClient(config, spaceId);
       const tdaiIdentityForMem = deriveTdaiIdentity({
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
-        userId: userId || null,
+        userId: memoryUserId,
         sessionKey,
         userKey: callerUserKey,
       });
@@ -1186,7 +1190,7 @@ export async function handleAnthropicMessages(
     ? null
     : deriveTdaiIdentity({
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
-        userId: userId || null,
+        userId: memoryUserId,
         sessionKey,
         userKey: callerUserKey,
       });
@@ -1211,7 +1215,7 @@ export async function handleAnthropicMessages(
         modelId: modelId as string,
         stream: isStream,
         agentSource,
-        userId: userId || "anonymous",
+        userId: memoryUserId ?? "",
         spaceId,
         sessionKey,
         turnSeq: injectionTurnSeq,

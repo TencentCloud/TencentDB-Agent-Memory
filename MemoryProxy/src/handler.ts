@@ -693,13 +693,8 @@ export async function handleChatCompletions(
   // system-user short-circuit; running verify again here would double the
   // network round-trip for every request.
   const spaceId = earlySpaceId;
-  let userId = earlyVerify.userId
-    || c.req.header("x-user-id")
-    || c.req.header("x-cb-user-id")
-    || c.req.header("x-tdai-user-token")
-    || "";
-  // DEBUG override：客户端传的 tokenhub-uid 与 kernel-uid 不一致（本地联调
-  // 常见），配置 sessionInit.debugForceUserId 后用真实 kernel user_id 替换，
+  let userId = earlyVerify.userId;
+  // DEBUG override：本地联调可显式指定真实 kernel user_id，
   // 让 CB 状态机能通过 kernel /team/list 拉到资产、正常弹表单。
   const debugForceUserId = config.sessionInit?.debugForceUserId;
   if (debugForceUserId) {
@@ -773,6 +768,22 @@ export async function handleChatCompletions(
     console.log(`[request-classify] session=${sessionKey} agent=workbuddy no-AskUserQuestion tool → text-mode session-init`);
   }
 
+  // Proxy authentication and memory identity are separate concerns. When
+  // proxy auth is disabled, ask the kernel to resolve the caller key before
+  // that identity is used by SessionStore/recovery/cache namespaces.
+  let memoryUserId: string | null = userId || null;
+  let metadataClient: import("./meta/client.js").MetadataClient | undefined;
+  const kernelUserKey = apiKey || config.tdai?.apiKey || "";
+  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
+    const { getMetadataClient, resolveMemoryUserId } = await import("./meta/client.js");
+    metadataClient = getMetadataClient(config.coreSkill, spaceId, kernelUserKey);
+    memoryUserId = await resolveMemoryUserId({
+      verifiedUserId: memoryUserId,
+      callerUserKey: apiKey,
+      metadataClient,
+    });
+  }
+
   // ── mem:session-reset pre-hook ──
   // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
   // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
@@ -798,7 +809,7 @@ export async function handleChatCompletions(
       });
     }
   }
-  if (!isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+  if (memoryUserId && !isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { parseMemCommand } = await import("./mem-command/index.js");
@@ -807,7 +818,7 @@ export async function handleChatCompletions(
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `${agentSource}:${sessionKey}`;
-        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+        store.bind(compositeKey, { userId: memoryUserId, agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
@@ -838,7 +849,7 @@ export async function handleChatCompletions(
         }
 
         const resetEpoch = Date.now();
-        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
+        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: memoryUserId, resetEpoch, resetFlow: true });
         const bindingRepo = store.getBindingRepo();
         if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
         console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
@@ -849,36 +860,20 @@ export async function handleChatCompletions(
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
+  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless || !memoryUserId;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
-  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${memoryUserId ?? "<unavailable>"} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless && memoryUserId && metadataClient) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
-      const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
-      // kernel /v3/meta/* 走 x-tdai-user-key 鉴权，需要 sk-mem-* 用户 key。
-      // 优先级：客户端 Authorization bearer > config.tdai.apiKey。
-      // 说明：
-      //   - workbuddy / codebuddy 等真实客户端会在 Authorization 里传合法的
-      //     sk-mem-* 用户 key（形如 ck_ft1xxx.yyy），verifyUserKey 能解出 userId。
-      //   - config.tdai.apiKey 常被本地/测试环境设成占位符（如 "local"），
-      //     若用它覆盖客户端真实 key，会导致 kernel 401 invalid_user_key，
-      //     session-init 直接 bypass，前端表单永不弹出。
-      //   - 只有客户端未提供 apiKey 时（例如某些内部脚本），才回退到 config。
-      // 与 workbuddyHandler.ts 里的 kernelUserKey 逻辑对齐（那里也是客户端优先）。
-      const kernelUserKey = apiKey || config.tdai?.apiKey || "";
-      const metadataClient = getMetadataClient(config.coreSkill, spaceId, kernelUserKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
       const compositeKey = `${agentSource}:${sessionKey}`;
-      // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
-      // 复合键，保证 key path 分段合法（`u=anonymous` 走独立命名空间，天然与
-      // 有 userId 的请求隔离）。参见 §4.4 边界处理。
       const identity = {
-        userId: userId || "anonymous",
+        userId: memoryUserId,
         agentSource,
         sessionId: sessionKey,
         spaceId,
@@ -956,7 +951,7 @@ export async function handleChatCompletions(
         }
         initResult = await handleSessionInit(
           sessionKey,
-          userId || null,
+          memoryUserId,
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
@@ -1062,7 +1057,7 @@ export async function handleChatCompletions(
           const mod = await import("./injection/index.js");
           await mod.prewarmFromConfig(config, {
             keyId: sessionKey,
-            userId: userId || "anonymous",
+            userId: memoryUserId,
             agentSource,
             spaceId,
             sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
@@ -1195,7 +1190,7 @@ export async function handleChatCompletions(
         agentSource,
         config,
         spaceId,
-        userId,
+        userId: memoryUserId ?? "",
         apiKey: apiKey || "",
         sessionInfo: sessionInfo as Record<string, unknown>,
         protocol: "openai",
@@ -1218,7 +1213,7 @@ export async function handleChatCompletions(
       const tdaiClientForMem = createTdaiClient(config, spaceId);
       const tdaiIdentityForMem = deriveTdaiIdentity({
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
-        userId: userId || null,
+        userId: memoryUserId,
         sessionKey,
       });
       if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
@@ -1290,7 +1285,7 @@ export async function handleChatCompletions(
     ? null
     : deriveTdaiIdentity({
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
-        userId: userId || null,
+        userId: memoryUserId,
         sessionKey,
       });
   const tdaiUserMessage = extractLatestUserMessage(messages);
@@ -1308,7 +1303,7 @@ export async function handleChatCompletions(
         modelId: modelId as string,
         stream: isStream,
         agentSource,
-        userId: userId || "anonymous",
+        userId: memoryUserId ?? "",
         spaceId,
         sessionKey,
         turnSeq: injectionTurnSeq,

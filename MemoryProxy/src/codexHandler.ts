@@ -357,6 +357,18 @@ export async function handleCodexEndpoint(
 
   const callerUserKey = apiKey || null;
 
+  let memoryUserId: string | null = userId || null;
+  let metadataClient: import("./meta/client.js").MetadataClient | undefined;
+  if (config.sessionInit?.enabled && sessionId) {
+    const { getMetadataClient, resolveMemoryUserId } = await import("./meta/client.js");
+    metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
+    memoryUserId = await resolveMemoryUserId({
+      verifiedUserId: memoryUserId,
+      callerUserKey,
+      metadataClient,
+    });
+  }
+
   // ── 6b. Langfuse turn context (one trace = one turn) ────────────────────────
   // codex 的 turn 序号从 body.input[] 里"人类输入"数量推导（同 CC/CB 惯例；
   // 同 turn 内的工具循环请求会算出相同的 turnSeq → 同一 trace）。用户问题
@@ -384,7 +396,7 @@ export async function handleCodexEndpoint(
   // ── 7. Session-init state machine ──────────────────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectionSkipped = false;
+  let injectionSkipped = !memoryUserId;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   // 存 initResult 的 agent/task detail 供 § 9 注入阶段构造 <session_context>。
@@ -398,7 +410,7 @@ export async function handleCodexEndpoint(
   const input = Array.isArray(body.input) ? body.input : [];
 
   // ── mem:session-reset pre-hook ──
-  {
+  if (memoryUserId) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { parseCommandFromText } = await import("./mem-command/index.js");
@@ -409,7 +421,7 @@ export async function handleCodexEndpoint(
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `${agentSource}:${sessionKey}`;
-        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+        store.bind(compositeKey, { userId: memoryUserId, agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
@@ -439,7 +451,7 @@ export async function handleCodexEndpoint(
         }
 
         const resetEpoch = Date.now();
-        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
+        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: memoryUserId, resetEpoch, resetFlow: true });
         const bindingRepo = store.getBindingRepo();
         if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
         console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
@@ -454,17 +466,15 @@ export async function handleCodexEndpoint(
   // 负责把 body.input[] 透传给 reqCtx.codexAnswerInput 让状态机自己识别 gate/MORE。
   // 首次 Default gate 命中会拿到 initResult.bypassReason === "default-gate", 由
   // 本 handler 返一次 Plan 模式提示；后续同 session 请求 bypass 稳态透传。
-  if (config.sessionInit?.enabled && sessionId) {
+  if (config.sessionInit?.enabled && sessionId && memoryUserId && metadataClient) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
-      const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
-      const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
       const compositeKey = `${agentSource}:${sessionKey}`;
       const identity = {
-        userId: userId || "anonymous",
+        userId: memoryUserId,
         agentSource,
         sessionId: sessionKey,
         spaceId,
@@ -524,7 +534,7 @@ export async function handleCodexEndpoint(
         }
         initResult = await handleSessionInit(
           sessionKey,
-          userId || null,
+          memoryUserId,
           synthesizedMessages,
           config.sessionInit,
           store,
@@ -655,7 +665,7 @@ export async function handleCodexEndpoint(
           const mod = await import("./injection/index.js");
           await mod.prewarmFromConfig(config, {
             keyId: sessionKey,
-            userId: userId || "anonymous",
+            userId: memoryUserId,
             agentSource,
             spaceId,
             sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
@@ -764,7 +774,7 @@ export async function handleCodexEndpoint(
           agentSource: "codex",
           config,
           spaceId,
-          userId: userId || "",
+          userId: memoryUserId ?? "",
           apiKey: apiKey || "",
           sessionInfo: sessionInfo as Record<string, unknown>,
           protocol: "responses",
@@ -787,7 +797,7 @@ export async function handleCodexEndpoint(
         const tdaiClientForMem = createCodexTdaiClient(config, spaceId);
         const tdaiIdentityForMem = deriveTdaiIdentity({
           sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
-          userId: userId || null,
+          userId: memoryUserId,
           sessionKey,
           userKey: callerUserKey,
         });
@@ -901,7 +911,7 @@ export async function handleCodexEndpoint(
         modelId: modelId as string,
         stream: isStream,
         agentSource,
-        userId: userId || "anonymous",
+        userId: memoryUserId ?? "",
         spaceId,
         sessionKey,
         turnSeq: 0,
