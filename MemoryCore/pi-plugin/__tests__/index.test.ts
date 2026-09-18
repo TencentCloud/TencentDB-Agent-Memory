@@ -29,7 +29,9 @@ describe("Pi TDAI extension", () => {
     vi.stubEnv("TDAI_TEAM_ID", "team-a");
     vi.stubEnv("TDAI_AGENT_ID", "agent-a");
     vi.stubEnv("TDAI_SPACE_ID", "space-a");
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ code: 0, data: { items: [] } })));
+    const fetcher = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(JSON.stringify({ code: 0, data: { items: [] } })),
+    );
     vi.stubGlobal("fetch", fetcher);
     const pi = makePi();
 
@@ -45,14 +47,15 @@ describe("Pi TDAI extension", () => {
     });
 
     expect(fetcher).toHaveBeenCalledOnce();
-    const [url, init] = fetcher.mock.calls[0];
+    const [url, init] = fetcher.mock.calls[0]!;
     expect(url).toBe("http://127.0.0.1:8096/skill-bridge/v3/skill/list");
-    expect(init.headers).toMatchObject({
+    const requestInit = init as RequestInit;
+    expect(requestInit.headers).toMatchObject({
       Authorization: "Bearer user-key",
       "x-tdai-service-id": "space-a",
       "x-conversation-id": "pi-session-123",
     });
-    expect(init.body).toBe("{}");
+    expect(requestInit.body).toBe("{}");
     expect(notify).toHaveBeenCalledWith("No mined skills are available for this TDAI agent yet.", "info");
   });
 });

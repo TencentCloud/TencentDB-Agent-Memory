@@ -187,6 +187,20 @@ async function writeFileWithin(root: string, relativePath: string, content: stri
   await writeFile(destination, content, { mode: 0o644 });
 }
 
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const retries = process.platform === "win32" ? 4 : 0;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= retries || (code !== "EPERM" && code !== "EBUSY")) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+}
+
 function markerFor(detail: RemoteSkillDetail, source: SkillSyncSource): SyncMarker {
   return {
     adapter: "tdai-memory",
@@ -263,12 +277,12 @@ export async function syncOneSkill(
         throw new Error(loaded.diagnostics[0]?.message ?? "staged skill is not valid for Pi");
       }
 
-      if (await isDirectory(target)) await rename(target, backup);
+      if (await isDirectory(target)) await renameWithRetry(target, backup);
       try {
-        await rename(staged, target);
+        await renameWithRetry(staged, target);
       } catch (error) {
         await rm(target, { recursive: true, force: true });
-        if (await isDirectory(backup)) await rename(backup, target);
+        if (await isDirectory(backup)) await renameWithRetry(backup, target);
         throw error;
       }
       await rm(backup, { recursive: true, force: true });
