@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import extension from "../index.js";
 
@@ -18,9 +21,12 @@ function makePi() {
   };
 }
 
-afterEach(() => {
+const directories: string[] = [];
+
+afterEach(async () => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe("Pi TDAI extension", () => {
@@ -57,5 +63,44 @@ describe("Pi TDAI extension", () => {
     });
     expect(requestInit.body).toBe("{}");
     expect(notify).toHaveBeenCalledWith("No mined skills are available for this TDAI agent yet.", "info");
+  });
+
+  it("reloads Pi after installing a mined skill", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "tdai-pi-command-"));
+    directories.push(agentDir);
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    vi.stubEnv("TDAI_USER_KEY", "user-key");
+    vi.stubEnv("TDAI_TEAM_ID", "team-a");
+    vi.stubEnv("TDAI_AGENT_ID", "agent-a");
+    vi.stubEnv("TDAI_SPACE_ID", "space-a");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/list")) {
+        return new Response(JSON.stringify({ code: 0, data: { items: [{ skill_id: "skl-1", name: "deploy-check", version: 1 }] } }));
+      }
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          skill_id: "skl-1",
+          name: "deploy-check",
+          version: 1,
+          content: "---\nname: deploy-check\ndescription: Check a deployment safely\n---\n\nRun the health check first.\n",
+          manifest: [],
+        },
+      }));
+    }));
+    const pi = makePi();
+    extension(pi as any);
+    const command = pi.commands.find((entry) => entry.name === "tdai-memory-sync-skills");
+    const reload = vi.fn(async () => undefined);
+
+    await command!.handler("", {
+      hasUI: false,
+      sessionManager: { getSessionId: () => "session-123" },
+      ui: { notify: vi.fn(), setStatus: vi.fn() },
+      reload,
+    });
+
+    expect(reload).toHaveBeenCalledOnce();
   });
 });

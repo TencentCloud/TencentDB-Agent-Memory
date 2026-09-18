@@ -16,12 +16,15 @@ const detail: RemoteSkillDetail = {
   name: "deploy-check",
   version: 3,
   content: "---\nname: deploy-check\ndescription: Check a deployment safely\n---\n\nRun the health check first.\n",
-  script_paths: ["scripts/check.sh"],
+  manifest: [{ path: "scripts/check.sh", size_bytes: 13 }],
 };
 
 class FakeClient implements SkillSyncClient {
   calls: Array<{ method: string; skillId?: string; path?: string }> = [];
-  constructor(private readonly current: RemoteSkillDetail = detail) {}
+  constructor(
+    private readonly current: RemoteSkillDetail = detail,
+    private readonly resourceContent = "echo healthy\n",
+  ) {}
 
   async list(): Promise<RemoteSkillSummary[]> {
     this.calls.push({ method: "list" });
@@ -35,7 +38,7 @@ class FakeClient implements SkillSyncClient {
 
   async readFile(skillId: string, path: string): Promise<RemoteSkillFile> {
     this.calls.push({ method: "readFile", skillId, path });
-    return { path, content: "echo healthy\n", encoding: "utf-8" };
+    return { path, content: this.resourceContent, encoding: "utf-8" };
   }
 }
 
@@ -94,12 +97,34 @@ describe("syncAllSkills", () => {
 
   it("rejects an unsafe remote resource before it writes a skill", async () => {
     const directory = await skillDir();
-    const client = new FakeClient({ ...detail, script_paths: ["../outside.txt"] });
+    const client = new FakeClient({ ...detail, manifest: [{ path: "../outside.txt" }] });
 
     const results = await syncAllSkills(client, directory, source);
 
     expect(results[0].status).toBe("failed");
     expect(results[0].error).toContain("unsafe resource path");
     await expect(readFile(join(directory, "deploy-check", "SKILL.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("updates a previously synced package, including its manifest resources", async () => {
+    const directory = await skillDir();
+    await syncAllSkills(new FakeClient(detail, "echo old\n"), directory, source);
+
+    const newer = { ...detail, version: 4 };
+    const results = await syncAllSkills(new FakeClient(newer, "echo current\n"), directory, source);
+
+    expect(results[0].status).toBe("synced");
+    await expect(readFile(join(directory, "deploy-check", "scripts", "check.sh"), "utf8")).resolves.toBe("echo current\n");
+  });
+
+  it("does not replace a managed skill with a different remote skill sharing its name", async () => {
+    const directory = await skillDir();
+    await syncAllSkills(new FakeClient(), directory, source);
+
+    const competing = { ...detail, skill_id: "skl-2", version: 1 };
+    const results = await syncAllSkills(new FakeClient(competing), directory, source);
+
+    expect(results[0].status).toBe("skipped-remote-conflict");
+    await expect(readFile(join(directory, "deploy-check", "tdai-remote.json"), "utf8")).resolves.toContain("skl-1");
   });
 });

@@ -8,6 +8,7 @@
  * recipes) arrives server-side from the proxy. (Scope C.)
  */
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 import { SkillBridgeClient, syncListedSkills } from "./skill-sync.js";
 
 export default function (pi: ExtensionAPI) {
@@ -85,6 +86,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("tdai-memory-sync-skills", {
     description: "Install mined TencentDB skills into Pi's native skills directory",
     handler: async (_args, ctx) => {
+      let shouldReload = false;
       const client = new SkillBridgeClient({
         proxyBase,
         spaceId,
@@ -109,7 +111,7 @@ export default function (pi: ExtensionAPI) {
 
         const results = await syncListedSkills(
           client,
-          `${getAgentDir()}/skills`,
+          join(getAgentDir(), "skills"),
           { proxyBase, spaceId },
           candidates,
         );
@@ -125,6 +127,7 @@ export default function (pi: ExtensionAPI) {
           counts.failed ? `${counts.failed} failed` : "",
         ].filter(Boolean).join(", ");
         ctx.ui.notify(`TDAI skill sync: ${summary}.`, counts.failed ? "warning" : "info");
+        shouldReload = Boolean(counts.synced);
       } catch (error) {
         ctx.ui.notify(
           `TDAI skill sync failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -132,6 +135,11 @@ export default function (pi: ExtensionAPI) {
         );
       } finally {
         ctx.ui.setStatus("tdai-memory", undefined);
+      }
+      // Reload is terminal: Pi invalidates this command context after it reloads.
+      if (shouldReload) {
+        await ctx.reload();
+        return;
       }
     },
   });

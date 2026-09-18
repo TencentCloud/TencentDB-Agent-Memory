@@ -17,7 +17,14 @@ export interface RemoteSkillSummary {
 
 export interface RemoteSkillDetail extends RemoteSkillSummary {
   content: string;
-  script_paths: string[];
+  /**
+   * Core's `get` response lists package resources separately from SKILL.md.
+   * `content` is SKILL.md; every manifest entry is fetched through files/read.
+   */
+  manifest?: Array<{
+    path: string;
+    size_bytes?: number;
+  }>;
 }
 
 export interface RemoteSkillFile {
@@ -74,7 +81,11 @@ export class SkillBridgeClient implements SkillSyncClient {
   }
 
   get(skillId: string): Promise<RemoteSkillDetail> {
-    return this.post<RemoteSkillDetail>("get", { skill_id: skillId });
+    return this.post<RemoteSkillDetail>("get", {
+      skill_id: skillId,
+      include_content: true,
+      include_manifest: true,
+    });
   }
 
   readFile(skillId: string, path: string): Promise<RemoteSkillFile> {
@@ -249,9 +260,12 @@ export async function syncOneSkill(
 
     const resources: RemoteSkillFile[] = [];
     let totalBytes = Buffer.byteLength(detail.content, "utf8");
-    for (const rawPath of detail.script_paths ?? []) {
-      const path = safeResourcePath(rawPath);
-      if (!path) throw new Error(`remote skill has unsafe resource path: ${rawPath}`);
+    for (const entry of detail.manifest ?? []) {
+      const path = safeResourcePath(entry.path);
+      if (!path) throw new Error(`remote skill has unsafe resource path: ${entry.path}`);
+      if (typeof entry.size_bytes === "number" && entry.size_bytes > MAX_RESOURCE_BYTES) {
+        throw new Error(`resource ${path} exceeds ${MAX_RESOURCE_BYTES} bytes`);
+      }
       const file = await client.readFile(detail.skill_id, path);
       const bytes = byteLength(file.content, file.encoding);
       if (bytes > MAX_RESOURCE_BYTES) throw new Error(`resource ${path} exceeds ${MAX_RESOURCE_BYTES} bytes`);

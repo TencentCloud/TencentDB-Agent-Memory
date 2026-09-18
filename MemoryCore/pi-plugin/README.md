@@ -65,11 +65,15 @@ identity headers are wrong.
 
 ## Sync mined skills into Pi
 
-The proxy sends each completed Pi interaction to the existing Skill pipeline.
-The pipeline records the useful conversation roles in this order: `user`,
-`tool_call`, `tool_result`, then the final `assistant` answer. The server also
-supports `system`, but Pi deliberately does not send its large, static system
-prompt into skill mining. Incomplete tool calls are not promoted to skills.
+The proxy sends each completed Pi interaction to the existing five-role Skill
+pipeline. `system`, `user`, `tool_call`, `tool_result`, and `assistant` are the
+protocol roles. Pi deliberately excludes its large, static `system` prompt,
+reasoning, and binary blocks from mining. The semantic priority is: the user's
+intent and final `assistant` answer are the anchors; `tool_call` and
+`tool_result` are ordered supporting evidence and retain `tool_call_id` for
+pairing. This gives the mining service the task, the verified tool evidence,
+and the resulting procedure without treating injected instructions as training
+data.
 
 Once MemoryCore has reviewed enough useful tool-heavy conversation and mined a
 skill, run:
@@ -81,8 +85,8 @@ skill, run:
 The command gets candidates through the current session's Skill Bridge, so the
 Proxy derives the current user/team/agent scope from the session binding. It
 cannot use a caller-supplied team or agent id. After confirmation, it installs
-each validated package under `~/.pi/agent/skills/<skill-name>/`; Pi discovers
-these as normal native skills.
+each validated package under `~/.pi/agent/skills/<skill-name>/`, then reloads
+Pi so the skills are immediately discovered as normal native skills.
 
 A directory without `tdai-remote.json` is treated as hand-written and is never
 overwritten. If a server skill has the same name, sync reports it as skipped.
