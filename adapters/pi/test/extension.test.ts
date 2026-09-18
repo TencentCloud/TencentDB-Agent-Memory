@@ -1,0 +1,433 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+
+import type {
+  AtomicMemory,
+  CaptureTurn,
+  ConversationMemory,
+  MemoryClientLike,
+  RecallBundle,
+} from "../src/client.js";
+import { turnKey } from "../src/client.js";
+import { createTencentDbMemoryExtension } from "../src/extension.js";
+
+type Handler = (event: any, context: any) => any;
+
+class FakePi {
+  readonly handlers = new Map<string, Handler>();
+  readonly tools = new Map<string, Record<string, any>>();
+  readonly commands = new Map<string, Record<string, any>>();
+  readonly entries: Array<{ customType: string; data: unknown }> = [];
+
+  on(name: string, handler: Handler): void {
+    this.handlers.set(name, handler);
+  }
+
+  registerTool(tool: Record<string, any>): void {
+    this.tools.set(String(tool.name), tool);
+  }
+
+  registerCommand(name: string, command: Record<string, any>): void {
+    this.commands.set(name, command);
+  }
+
+  appendEntry(customType: string, data: unknown): void {
+    this.entries.push({ customType, data });
+  }
+}
+
+const validEnv = {
+  TDAI_MEMORY_ENDPOINT: "https://memory.example.com",
+  TDAI_MEMORY_API_KEY: "secret",
+  TDAI_MEMORY_SERVICE_ID: "service-1",
+  TDAI_MEMORY_TEAM_ID: "team-1",
+  TDAI_MEMORY_AGENT_ID: "agent-1",
+  TDAI_MEMORY_USER_ID: "user-1",
+};
+
+const context = {
+  hasUI: false,
+  signal: undefined,
+  ui: {
+    setStatus: vi.fn(),
+    notify: vi.fn(),
+  },
+  sessionManager: {
+    getSessionId: () => "session-1",
+    getEntries: () => [],
+  },
+};
+
+function client(overrides: Partial<MemoryClientLike> = {}): MemoryClientLike {
+  return {
+    recall: async (): Promise<RecallBundle> => ({
+      atomic: [],
+      scenarios: [],
+      core: null,
+      warnings: [],
+    }),
+    captureConversation: async () => undefined,
+    captureSkill: async () => undefined,
+    searchAtomic: async (): Promise<AtomicMemory[]> => [],
+    searchConversation: async (): Promise<ConversationMemory[]> => [],
+    check: async () => 0,
+    ...overrides,
+  };
+}
+
+function install(memoryClient: MemoryClientLike): FakePi {
+  const pi = new FakePi();
+  createTencentDbMemoryExtension({
+    env: validEnv,
+    clientFactory: () => memoryClient,
+    logger: { warn: vi.fn() },
+  })(pi as unknown as ExtensionAPI);
+  return pi;
+}
+
+describe("Pi extension lifecycle", () => {
+  it("injects bounded recall and captures the completed turn after settlement", async () => {
+    const captureConversation = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const captureSkill = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const pi = install(
+      client({
+        recall: async () => ({
+          atomic: [{ id: "m1", type: "preference", content: "Keep answers concise" }],
+          scenarios: [],
+          core: null,
+          warnings: [],
+        }),
+        captureConversation,
+        captureSkill,
+      }),
+    );
+
+    const before = await pi.handlers.get("before_agent_start")?.(
+      { prompt: "What style should I use?", systemPrompt: "base" },
+      context,
+    );
+    expect(before.systemPrompt).toContain("Keep answers concise");
+
+    await pi.handlers.get("agent_end")?.(
+      {
+        messages: [
+          {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Use a concise style." }],
+          },
+        ],
+      },
+      context,
+    );
+    await pi.handlers.get("agent_settled")?.({}, context);
+
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureSkill).toHaveBeenCalledTimes(1);
+    expect(pi.entries).toHaveLength(3);
+    expect(captureConversation.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: "pi:session-1",
+      user: "What style should I use?",
+      assistant: "Use a concise style.",
+    });
+  });
+
+  it("deduplicates repeated delivery of the same completed turn", async () => {
+    const captureConversation = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const captureSkill = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+    const run = async () => {
+      await pi.handlers.get("before_agent_start")?.(
+        { prompt: "same", systemPrompt: "base" },
+        context,
+      );
+      await pi.handlers.get("agent_end")?.(
+        {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "same answer" }],
+            },
+          ],
+        },
+        context,
+      );
+      await pi.handlers.get("agent_settled")?.({}, context);
+    };
+
+    await run();
+    await run();
+
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for settlement and captures only the final retry result", async () => {
+    const captureConversation = vi.fn(async (_turn: CaptureTurn) => undefined);
+    const pi = install(client({ captureConversation }));
+
+    await pi.handlers.get("before_agent_start")?.({ prompt: "fix it", systemPrompt: "base" }, context);
+    await pi.handlers.get("agent_end")?.(
+      { messages: [{ role: "assistant", stopReason: "error", content: [{ type: "text", text: "overflow" }] }] },
+      context,
+    );
+    await pi.handlers.get("agent_end")?.(
+      { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "fixed" }] }] },
+      context,
+    );
+    expect(captureConversation).not.toHaveBeenCalled();
+    await pi.handlers.get("agent_settled")?.({}, context);
+
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureConversation.mock.calls[0]?.[0].assistant).toBe("fixed");
+  });
+
+  it("drops an entire failed low-level tool run before capturing its retry", async () => {
+    const captureSkill = vi.fn(async (_turn: CaptureTurn) => undefined);
+    const pi = install(client({ captureSkill }));
+
+    await pi.handlers.get("before_agent_start")?.({ prompt: "retry tools", systemPrompt: "base" }, context);
+    await pi.handlers.get("agent_end")?.({ messages: [
+      { role: "assistant", stopReason: "toolUse", content: [
+        { type: "text", text: "failed intermediate" },
+        { type: "toolCall", id: "failed-call", name: "bash", arguments: { command: "false" } },
+      ] },
+      { role: "toolResult", toolCallId: "failed-call", toolName: "bash", content: "failed result" },
+      { role: "assistant", stopReason: "error", content: [{ type: "text", text: "retryable error" }] },
+    ] }, context);
+    await pi.handlers.get("agent_end")?.({ messages: [
+      { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "successful retry" }] },
+    ] }, context);
+    await pi.handlers.get("agent_settled")?.({}, context);
+
+    const serialized = JSON.stringify(captureSkill.mock.calls[0]?.[0]);
+    expect(serialized).toContain("successful retry");
+    expect(serialized).not.toContain("failed-call");
+    expect(serialized).not.toContain("failed intermediate");
+  });
+
+  it("captures identical content as distinct turns when Pi entry ids differ", async () => {
+    const captureConversation = vi.fn(async () => undefined);
+    const captureSkill = vi.fn(async () => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+    let assistantId = "assistant-1";
+    const branchContext = {
+      ...context,
+      sessionManager: {
+        ...context.sessionManager,
+        getBranch: () => [{
+          id: assistantId,
+          type: "message",
+          message: { role: "assistant", stopReason: "stop" },
+        }],
+      },
+    };
+    const run = async () => {
+      await pi.handlers.get("before_agent_start")?.({ prompt: "same", systemPrompt: "base" }, branchContext);
+      await pi.handlers.get("agent_end")?.({ messages: [
+        { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "same answer" }] },
+      ] }, branchContext);
+      await pi.handlers.get("agent_settled")?.({}, branchContext);
+    };
+
+    await run();
+    assistantId = "assistant-2";
+    await run();
+    expect(captureConversation).toHaveBeenCalledTimes(2);
+    expect(captureSkill).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries only the failed capture pipeline", async () => {
+    const captureConversation = vi.fn(async () => undefined);
+    const captureSkill = vi
+      .fn<MemoryClientLike["captureSkill"]>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+
+    await pi.handlers.get("before_agent_start")?.({ prompt: "remember", systemPrompt: "base" }, context);
+    await pi.handlers.get("agent_end")?.(
+      { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] }] },
+      context,
+    );
+    await pi.handlers.get("agent_settled")?.({}, context);
+    await pi.handlers.get("agent_settled")?.({}, context);
+
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureSkill).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores successful capture markers from the Pi session", async () => {
+    const captureConversation = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const captureSkill = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+    const restoredContext = {
+      ...context,
+      sessionManager: {
+        getSessionId: () => "session-1",
+        getEntries: () => [
+          {
+            type: "custom",
+            customType: "tdai-memory-captured",
+            data: {
+              version: 2,
+              key: turnKey({
+                sessionId: "pi:session-1",
+                user: "same",
+                assistant: "same answer",
+              }),
+              l0: true,
+              skill: true,
+            },
+          },
+        ],
+      },
+    };
+
+    await pi.handlers.get("session_start")?.({}, restoredContext);
+    await pi.handlers.get("before_agent_start")?.(
+      { prompt: "same", systemPrompt: "base" },
+      restoredContext,
+    );
+    await pi.handlers.get("agent_end")?.(
+      {
+        messages: [
+          {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "same answer" }],
+          },
+        ],
+      },
+      restoredContext,
+    );
+    await pi.handlers.get("agent_settled")?.({}, restoredContext);
+
+    expect(captureConversation).not.toHaveBeenCalled();
+    expect(captureSkill).not.toHaveBeenCalled();
+  });
+
+  it("restores an incomplete marker and compensates only its failed pipeline", async () => {
+    const captureConversation = vi.fn(async () => undefined);
+    const captureSkill = vi.fn(async () => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+    const turn: CaptureTurn = {
+      sessionId: "pi:session-1",
+      user: "same",
+      assistant: "same answer",
+      skillMessages: [
+        { role: "user", content: "same" },
+        { role: "assistant", content: "same answer" },
+      ],
+      capturedAtMs: 1,
+    };
+    const restoredContext = {
+      ...context,
+      sessionManager: {
+        getSessionId: () => "session-1",
+        getEntries: () => [{
+          type: "custom",
+          customType: "tdai-memory-captured",
+          data: { version: 2, key: turnKey(turn), l0: true, skill: false, turn },
+        }],
+      },
+    };
+
+    await pi.handlers.get("session_start")?.({}, restoredContext);
+
+    expect(captureConversation).not.toHaveBeenCalled();
+    expect(captureSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores markers only from the active Pi branch", async () => {
+    const captureSkill = vi.fn(async () => undefined);
+    const pi = install(client({ captureSkill }));
+    const turn: CaptureTurn = {
+      sessionId: "pi:session-1",
+      user: "abandoned",
+      assistant: "branch",
+      skillMessages: [{ role: "user", content: "abandoned" }, { role: "assistant", content: "branch" }],
+      capturedAtMs: 1,
+    };
+    const branchContext = {
+      ...context,
+      sessionManager: {
+        getSessionId: () => "session-1",
+        getEntries: () => [{ type: "custom", customType: "tdai-memory-captured", data: { version: 3, key: "abandoned", l0: true, skill: false, turn } }],
+        getBranch: () => [],
+      },
+    };
+    await pi.handlers.get("session_start")?.({}, branchContext);
+    expect(captureSkill).not.toHaveBeenCalled();
+  });
+
+  it("fails open when recall and capture are unavailable", async () => {
+    const pi = install(
+      client({
+        recall: async () => {
+          throw new Error("offline");
+        },
+        captureConversation: async () => {
+          throw new Error("offline");
+        },
+        captureSkill: async () => {
+          throw new Error("offline");
+        },
+      }),
+    );
+
+    await expect(
+      pi.handlers.get("before_agent_start")?.(
+        { prompt: "continue working", systemPrompt: "base" },
+        context,
+      ),
+    ).resolves.toBeUndefined();
+    await pi.handlers.get("agent_end")?.(
+      {
+        messages: [
+          {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "work still completed" }],
+          },
+        ],
+      },
+      context,
+    );
+    await expect(pi.handlers.get("agent_settled")?.({}, context)).resolves.toBeUndefined();
+  });
+
+  it("registers native memory and conversation search tools", async () => {
+    const searchAtomic = vi.fn(async () => [
+      { id: "m1", type: "fact", content: "A remembered fact" },
+    ]);
+    const searchConversation = vi.fn(async () => [
+      { role: "user" as const, content: "Earlier evidence" },
+    ]);
+    const pi = install(client({ searchAtomic, searchConversation }));
+
+    const memoryTool = pi.tools.get("tdai_memory_search")!;
+    const memoryResult = await memoryTool.execute("call-1", { query: "fact" }, undefined);
+    expect(memoryResult.content[0].text).toContain("A remembered fact");
+
+    const conversationTool = pi.tools.get("tdai_conversation_search")!;
+    const conversationResult = await conversationTool.execute(
+      "call-2",
+      { query: "evidence", sessionOnly: true },
+      undefined,
+      undefined,
+      context,
+    );
+    expect(conversationResult.content[0].text).toContain("Earlier evidence");
+    expect(searchConversation).toHaveBeenCalledWith("evidence", 5, "pi:session-1", undefined);
+  });
+
+  it("loads only the status command when required configuration is missing", () => {
+    const pi = new FakePi();
+    createTencentDbMemoryExtension({ env: {} })(pi as unknown as ExtensionAPI);
+    expect(pi.commands.has("tdai-memory-status")).toBe(true);
+    expect(pi.handlers.size).toBe(0);
+    expect(pi.tools.size).toBe(0);
+  });
+});
