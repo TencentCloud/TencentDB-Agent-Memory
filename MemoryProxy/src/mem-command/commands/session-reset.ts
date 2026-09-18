@@ -20,13 +20,22 @@
 
 import type { MemCommandContext, MemCommandResult } from "../types.js";
 import { buildMemResponse } from "../response-builder.js";
-import { getSessionStore } from "../../session/store.js";
+import { buildStoreSessionKey, getSessionStore } from "../../session/store.js";
 import type { SessionInitState } from "../../session/types.js";
 
 export async function executeSessionReset(ctx: MemCommandContext): Promise<MemCommandResult> {
   const requestId = `mem-cmd-${Date.now()}`;
   const store = getSessionStore();
-  const compositeKey = `${ctx.agentSource}:${ctx.sessionKey}`;
+  // 必须走 buildStoreSessionKey：`threadIsolation` 开启且请求带 `x-thread-id` 时，
+  // 真实会话状态存在 `${agentSource}:${sessionKey}:${threadId}` 上；此前这里手拼
+  // `${agentSource}:${sessionKey}`，reset 会写到一个不存在线程后缀的"影子键"上，
+  // 命令回复正常但真实会话仍是 initialized，下一轮不弹表单（静默失效）。
+  const compositeKey = buildStoreSessionKey({
+    agentSource: ctx.agentSource,
+    sessionKey: ctx.sessionKey,
+    threadId: ctx.threadId ?? undefined,
+    threadIsolation: ctx.config.sessionInit?.threadIsolation?.enabled === true,
+  });
 
   // 记录 old 状态用于观测(埋点在 Commit 4 追加,现在只在返回值 data 里带上)
   const before = store.get(compositeKey);

@@ -38,7 +38,11 @@ import {
   DEFAULT_GATE_PREFIX,
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
+  stripCodexFormArtifacts,
 } from "./session/codex/form.js";
+import { RESPONSES_SESSION_ADAPTER } from "./stages/session.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
+import type { ReqCtx } from "./stages/types.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import { log } from "./report/log.js";
 import {
@@ -161,22 +165,6 @@ export function classifyCodexRequest(
   if (typeof ts === "string" && CODEX_AUX_THREAD_SOURCES.has(ts)) return "auxiliary";
 
   return "main";
-}
-
-// ── Session ID extraction (exported for unit tests) ──────────────────────────
-
-/**
- * Extract session_id from codex request.
- * Primary: `session-id` header. Fallback: `body.client_metadata.session_id`.
- */
-export function extractCodexSessionId(
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-): string | null {
-  if (headers["session-id"]) return headers["session-id"];
-  const meta = body.client_metadata as { session_id?: string } | undefined;
-  if (typeof meta?.session_id === "string") return meta.session_id;
-  return null;
 }
 
 // ── Default mode gate detection (exported for unit tests) ────────────────────
@@ -349,9 +337,29 @@ export async function handleCodexEndpoint(
     return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null);
   }
 
-  // ── 6. Session ID extraction ───────────────────────────────────────────────
-  const sessionId = extractCodexSessionId(headers, body);
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
+  // ── 6. Session resolution（sessionStage 统一入口）──────────────────────────
+  // 显式 session-id 优先；缺失时按 autoConversationId 自动生成/续接；自动生成
+  // 关闭时回退到首问指纹稳定键（无指纹再退回 `${keyId}:${traceId}`）。
+  // auto-* 回传 ID 仍过签名校验。
+  const sessionStageCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource: "codex",
+    apiKey,
+    keyIdOverride: keyId,
+    earlySpaceId: spaceId,
+    earlyUserId: userId || "",
+    traceId,
+  };
+  const sessionTurn = await prepareSessionTurn(
+    sessionStageCtx,
+    RESPONSES_SESSION_ADAPTER,
+    { fallbackSessionKey: () => `${keyId}:${traceId}` },
+  );
+  const sessionId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
   const agentSource = "codex";
   const isStream = body.stream !== false;
 
@@ -408,13 +416,13 @@ export async function handleCodexEndpoint(
       if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -462,7 +470,7 @@ export async function handleCodexEndpoint(
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = `${agentSource}:${sessionKey}`;
+      const compositeKey = sessionTurn.compositeKey;
       const identity = {
         userId: userId || "anonymous",
         agentSource,
@@ -486,7 +494,8 @@ export async function handleCodexEndpoint(
 
       if (recovered && isTerminalState) {
         // Recovered from L2b/L2a — skip form, apply context
-        const { buildSessionContextBlockWithToggles } = await import("./session/context-injector.js");
+        const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const systemAppend = recovered.bypassed
           ? null
           : buildSessionContextBlockWithToggles(
@@ -494,6 +503,9 @@ export async function handleCodexEndpoint(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              // 必须带上会话状态里的 cachedTeams：恢复路径若只传 sessionInfo，团队名会丢失，
+              // 导致第 2 轮起注入的 <session_context> 与第 1 轮不一致（前缀缓存失效）。
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null, recovered.cachedTeams ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -532,6 +544,7 @@ export async function handleCodexEndpoint(
             stream: isStream,
             modelId: modelId as string,
             protocol: "responses" as any,
+            threadId,
             // 把原始 input[] 交给 CB 状态机，用于识别 codex 客户端专属的
             // Default gate 字符串和 MORE 翻页标记。
             codexAnswerInput: input,
@@ -685,12 +698,12 @@ export async function handleCodexEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -761,6 +774,7 @@ export async function handleCodexEndpoint(
         pipe.info("CODEX_MEM_CMD", `mem command intercepted: ${memCmd.command}`);
         const memResult = await executeMemCommand(memCmd, {
           sessionKey,
+          threadId: sessionTurn.threadId,
           agentSource: "codex",
           config,
           spaceId,
@@ -874,12 +888,14 @@ export async function handleCodexEndpoint(
       // agentDetail/taskDetail 构造同款 block，预填到合成 body 的 system
       // message；下面 pipeline.process 会继续在同一 system message 后面 append
       // 更多注入内容，最终 raw 模式一起抽出去 → developer 段包含 session_context。
-      const { buildSessionContextBlockWithToggles } = await import("./session/context-injector.js");
+      const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+        await import("./session/context-injector.js");
       const sessionContextBlock = buildSessionContextBlockWithToggles(
         cachedAgentDetail as any,
         cachedTaskDetail as any,
         config.sessionInit,
         sessionKey,
+        resolveTeamCtxInfo(sessionInfo as { team_id?: string } | null | undefined) ?? null,
       );
 
       // Build a synthetic OpenAI body that the pipeline can parse/serialize.
@@ -1095,6 +1111,12 @@ async function forwardToUpstream(
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
 ): Promise<Response> {
+  // ── 每轮转发前剥离 Proxy 自产 codex session-init 假表单 ──────────────────
+  // Codex/WorkBuddy 客户端会全量回放 input[] 历史；只生成/注册轮不处理不够，
+  // 这里在进入协议转换与上游转发前统一剥离 request_user_input 的 function_call/
+  // function_call_output 及工具声明（幂等，无表单时原样返回）。
+  body = stripCodexFormArtifacts(body);
+
   // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
   // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
   // Responses API 的兼容层——部分 OpenAI 兼容上游只实现

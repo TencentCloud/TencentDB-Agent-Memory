@@ -12,10 +12,11 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
-import { getSessionStore } from "../session/store.js";
+import { getSessionStore, buildStoreSessionKey } from "../session/store.js";
 import { prewarmFromConfig } from "../injection/index.js";
 import type { SessionInitState, AgentDetail, TaskDetail } from "../session/types.js";
 import { getMetadataClient } from "../meta/client.js";
+import { checkAdminAuth, adminAuthError } from "./admin-auth.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,8 @@ export interface RefreshInput {
   agentSource: string;
   config: ProxyConfig;
   spaceId: string;
+  /** threadIsolation 开启时用于定位带 `:threadId` 后缀的会话状态。 */
+  threadId?: string | null;
   callerUserKey?: string;
 }
 
@@ -143,7 +146,7 @@ async function refreshAgentTaskDetail(
  * 构建 PrewarmInput → 调用 prewarmFromConfig()
  */
 export async function refreshSessionCache(input: RefreshInput): Promise<RefreshResult> {
-  const { sessionKey, agentSource, config, spaceId, callerUserKey } = input;
+  const { sessionKey, agentSource, config, spaceId, threadId, callerUserKey } = input;
 
   // 参数校验
   if (!sessionKey) {
@@ -155,7 +158,12 @@ export async function refreshSessionCache(input: RefreshInput): Promise<RefreshR
   }
 
   // 从 SessionStore 取 session 状态
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  const compositeKey = buildStoreSessionKey({
+    agentSource,
+    sessionKey,
+    threadId: threadId ?? null,
+    threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+  });
   const store = getSessionStore();
   const state: SessionInitState | undefined = store.get(compositeKey);
 
@@ -234,10 +242,13 @@ export async function refreshSessionCache(input: RefreshInput): Promise<RefreshR
 
 /**
  * 创建 HTTP handler，注册到 server.ts。
- * 走 admin auth 鉴权（复用 admin-auth.ts 的模式）。
+ * 鉴权：config.admin.apiKey 非空时要求 Bearer 匹配（复用 admin-auth.ts），
+ * apiKey 为空则公开（与 instance-destroy 语义一致）。
  */
 export function createSessionRefreshHandler(config: ProxyConfig) {
   return async (c: Context): Promise<Response> => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
     let body: Record<string, unknown>;
     try {
       body = await c.req.json<Record<string, unknown>>();
@@ -249,12 +260,17 @@ export function createSessionRefreshHandler(config: ProxyConfig) {
     const agentSource = typeof body.agent_source === "string" ? body.agent_source : "claude-code";
     const callerUserKey = typeof body.user_key === "string" ? body.user_key : undefined;
     const spaceId = typeof body.space_id === "string" ? body.space_id : "";
+    const threadId =
+      typeof body.thread_id === "string" && body.thread_id.length > 0
+        ? body.thread_id
+        : c.req.header("x-thread-id") ?? null;
 
     const result = await refreshSessionCache({
       sessionKey,
       agentSource,
       config,
       spaceId,
+      threadId,
       callerUserKey,
     });
 

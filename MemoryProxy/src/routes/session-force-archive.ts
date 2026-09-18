@@ -10,8 +10,9 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
-import { getSessionStore } from "../session/store.js";
+import { getSessionStore, buildStoreSessionKey } from "../session/store.js";
 import { getCoreSkillClient } from "../skill/core-client.js";
+import { checkAdminAuth, adminAuthError } from "./admin-auth.js";
 import type { SessionInitState } from "../session/types.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -21,6 +22,8 @@ export interface ForceArchiveInput {
   agentSource: string;
   config: ProxyConfig;
   spaceId: string;
+  /** threadIsolation 开启时用于定位带 `:threadId` 后缀的会话状态。 */
+  threadId?: string | null;
   reason?: string;
 }
 
@@ -50,7 +53,7 @@ interface CoreForceArchiveResponse {
  * 从 SessionStore 取 sessionInfo → 调 CoreSkillClient.forceArchive() → 返回结果
  */
 export async function forceArchiveSkill(input: ForceArchiveInput): Promise<ForceArchiveResult> {
-  const { sessionKey, agentSource, config, spaceId, reason } = input;
+  const { sessionKey, agentSource, config, spaceId, threadId, reason } = input;
 
   // 参数校验
   if (!sessionKey) {
@@ -58,7 +61,12 @@ export async function forceArchiveSkill(input: ForceArchiveInput): Promise<Force
   }
 
   // 从 SessionStore 取 session 状态
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  const compositeKey = buildStoreSessionKey({
+    agentSource,
+    sessionKey,
+    threadId: threadId ?? null,
+    threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+  });
   const store = getSessionStore();
   const state: SessionInitState | undefined = store.get(compositeKey);
 
@@ -112,6 +120,9 @@ export async function forceArchiveSkill(input: ForceArchiveInput): Promise<Force
  */
 export function createSessionForceArchiveHandler(config: ProxyConfig) {
   return async (c: Context): Promise<Response> => {
+    // admin auth：config.admin.apiKey 为空时公开，否则必须 Bearer 匹配。
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
     let body: Record<string, unknown>;
     try {
       body = await c.req.json<Record<string, unknown>>();
@@ -123,12 +134,17 @@ export function createSessionForceArchiveHandler(config: ProxyConfig) {
     const agentSource = typeof body.agent_source === "string" ? body.agent_source : "claude-code";
     const reason = typeof body.reason === "string" ? body.reason : undefined;
     const spaceId = typeof body.space_id === "string" ? body.space_id : "";
+    const threadId =
+      typeof body.thread_id === "string" && body.thread_id.length > 0
+        ? body.thread_id
+        : c.req.header("x-thread-id") ?? null;
 
     const result = await forceArchiveSkill({
       sessionKey,
       agentSource,
       config,
       spaceId,
+      threadId,
       reason,
     });
 

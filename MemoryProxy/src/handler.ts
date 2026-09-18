@@ -34,6 +34,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -48,6 +49,8 @@ import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
+import type { ReqCtx } from "./stages/types.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
@@ -683,10 +686,26 @@ export async function handleChatCompletions(
     lcHeaders[k.toLowerCase()] = v;
   }
 
-  // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  // ── Session resolution（sessionStage 统一入口）─────────────────────────────
+  // 显式会话 header 优先；缺失时按 autoConversationId 自动生成/续接（受配置
+  // 门控）；自动生成关闭时回退到 agent profile 兜底键（resolveSessionKey，
+  // 原行为）。auto-* 回传 ID 仍过签名校验。
+  const sessionStageCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource,
+    apiKey,
+    earlySpaceId,
+    earlyUserId: earlyVerify?.userId ?? "",
+    debugForceUserId: config.sessionInit?.debugForceUserId,
+  };
+  const sessionTurn = await prepareSessionTurn(sessionStageCtx, undefined, {
+    fallbackSessionKey: () => resolveSessionKey(config, lcHeaders, c.req.path, body, keyId),
+  });
+  const conversationId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -806,14 +825,14 @@ export async function handleChatCompletions(
       if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -873,7 +892,7 @@ export async function handleChatCompletions(
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
-      const compositeKey = `${agentSource}:${sessionKey}`;
+      const compositeKey = sessionTurn.compositeKey;
       // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
       // 复合键，保证 key path 分段合法（`u=anonymous` 走独立命名空间，天然与
       // 有 userId 的请求隔离）。参见 §4.4 边界处理。
@@ -915,7 +934,8 @@ export async function handleChatCompletions(
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system message carries agent/task context again.
         // 用户对话永远保留原样，包括 session_init form 交互 — 不做任何删除。
-        const { injectSessionContextWithToggles } = await import("./session/context-injector.js");
+        const { injectSessionContextWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const inMsgs = (body.messages as Array<Record<string, unknown>>) ?? [];
         const outMsgs = recovered.bypassed
           ? inMsgs
@@ -925,6 +945,9 @@ export async function handleChatCompletions(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              // 必须带上会话状态里的 cachedTeams：恢复路径若只传 sessionInfo，团队名会丢失，
+              // 导致第 2 轮起注入的 <session_context> 与第 1 轮不一致（前缀缓存失效）。
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null, recovered.cachedTeams ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -960,7 +983,14 @@ export async function handleChatCompletions(
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray, capabilities: _capabilities },
+          {
+            stream: isStream,
+            modelId: modelId as string,
+            protocol: "openai",
+            questionsAsArray,
+            capabilities: _capabilities,
+            threadId,
+          },
           agentSource,
           metadataClient,
           kernelUserKey,
@@ -1102,14 +1132,14 @@ export async function handleChatCompletions(
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 只留后 8 位会显示成 "elthr7yn" 这种截断串，用户完全看不懂，
           // 与 team 截断问题同源。agent id 本身就短，全量展示无害且更可读。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName 来自 session-init（cachedTeams[selected].team_name）；
           // teamId 存**完整** team_id（如 team-wyuyb7sion）—— 之前 slice(-8)
           // 会显示成 "uyb7sion" 用户看不懂，且 teamName 为空时兜底更差。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1192,6 +1222,7 @@ export async function handleChatCompletions(
       }
       const memResult = await executeMemCommand(memCmd, {
         sessionKey,
+        threadId: sessionTurn.threadId,
         agentSource,
         config,
         spaceId,
@@ -1645,6 +1676,7 @@ export async function handleChatCompletions(
       modelId: effectiveModel,
       keyId,
       sessionKey,
+      compositeKey: sessionTurn.compositeKey,
       upstreamUrl: target.url,
       requestPath: c.req.path,
       traceId,
@@ -1747,7 +1779,7 @@ export async function handleChatCompletions(
       if (intents.length > 0) {
         emitModelIntentTelemetry({
           // 与 session_init_logs 对齐 compositeKey 形态
-          sessionKey: `${agentSource}:${sessionKey}`,
+          sessionKey: sessionTurn.compositeKey,
           turnSeq: lf.turnSeq,
           spaceId,
           userId: keyId,
@@ -1957,6 +1989,17 @@ interface TapContext {
   modelId: string;
   keyId: string;
   sessionKey: string;
+  /**
+   * 带线程维度的存储键（`buildStoreSessionKey` 产物）。
+   *
+   * ⚠️ 埋点必须用它，不要去拼 `${agentSource}:${sessionKey}`：threadIsolation 开启时
+   * 真实键是 `agent:session:thread`，手拼会漏掉 `:threadId` 后缀，导致 model-intent
+   * 埋点与 session_init_logs / handler 的 composite 键对不上（设计文档 §2.1）。
+   *
+   * 声明为**必填**：新增 tap 上下文时由类型检查拦住，而不是靠人记得——这正是此前
+   * 命令层与埋点各自手拼、漏了也没人报错的根因。
+   */
+  compositeKey: string;
   upstreamUrl: string;
   traceId: string;
   forkTraceId: string;
@@ -2155,7 +2198,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         .map((acc) => ({ name: acc.functionName, arguments: acc.functionArguments }));
       emitModelIntentTelemetry({
         // 与 session_init_logs 对齐 compositeKey 形态
-        sessionKey: `${ctx.agentSource}:${sessionKey}`,
+        sessionKey: ctx.compositeKey,
         turnSeq: lf.turnSeq,
         spaceId: spaceId,
         userId: keyId,
@@ -2320,7 +2363,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // only be observed via server logs (no way to retro-add response headers).
     // skipCreditReport: instance config custom model → user's expense, skip credit.
     (ctx.skipCreditReport
-      ? Promise.resolve({ attempted: false, ok: false })
+      ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
       : tryReportCreditFromPath(
           ctx.config.creditReport,
           ctx.requestPath,

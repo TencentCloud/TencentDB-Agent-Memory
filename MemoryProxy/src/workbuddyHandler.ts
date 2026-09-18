@@ -8,9 +8,10 @@
  *
  * 本轮（分层交付第一步）：**只暴露单测友好的 pure function**
  *   - classifyWorkbuddyRequest：识别 main vs auxiliary 请求
- *   - extractWorkbuddySessionId：从 header / body 中提取 session id
  *   - detectWorkbuddyDefaultModeGate：识别客户端 Default mode gate 信号
  *   - injectWorkbuddyAssets：向 body.input[0].content[] 追加 `<tdai_injections>` wrapper
+ * 会话 ID 提取已收敛到 `session/client-ids.ts`，由 `stages/session.ts` 的
+ * WORKBUDDY_SESSION_ADAPTER 统一接入（本文件不再自带 extractor）。
  *
  * 完整的 `handleWorkbuddyEndpoint(c, config)` 主 handler（含 auth / session-init /
  * mem-command / forward+langfuse tap）留到下一轮 server 路由接入时再补——
@@ -42,7 +43,11 @@ import {
 import {
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
+  stripCodexFormArtifacts,
 } from "./session/codex/form.js";
+import { WORKBUDDY_SESSION_ADAPTER } from "./stages/session.js";
+import { prepareSessionTurn } from "./stages/session-turn.js";
+import type { ReqCtx } from "./stages/types.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -150,32 +155,6 @@ export function classifyWorkbuddyRequest(
   }
 
   return "main";
-}
-
-// ── Session ID extraction ────────────────────────────────────────────────────
-
-/**
- * 从请求头/请求体中提取 WorkBuddy session id。
- *
- * 优先级（与 codex 相同）：
- *   1. header `session-id`（SDK 默认位置）
- *   2. body.client_metadata.session_id（fallback）
- *
- * 两者都缺 → null（上层负责决定是拒绝还是生成新 session）。
- */
-export function extractWorkbuddySessionId(
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
-): string | null {
-  const fromHeader = headers["session-id"] ?? headers["Session-Id"];
-  if (typeof fromHeader === "string" && fromHeader.length > 0) return fromHeader;
-
-  const meta = body.client_metadata as Record<string, unknown> | undefined;
-  if (meta && typeof meta === "object") {
-    const sid = meta.session_id;
-    if (typeof sid === "string" && sid.length > 0) return sid;
-  }
-  return null;
 }
 
 // ── Default mode gate detection ──────────────────────────────────────────────
@@ -490,6 +469,11 @@ async function forwardToUpstream(
   lf: LangfuseTurnContext | null,
   archiveCtx: WorkbuddyArchiveCtx | null = null,
 ): Promise<Response> {
+  // ── 每轮转发前剥离 Proxy 自产 session-init 假表单（同 codex wire）─────────
+  // WorkBuddy 复用 codex 的 request_user_input 弹窗骨架，客户端同样会全量
+  // 回放历史；转发前统一剥离，避免上游模型模仿生成非法调用。幂等无副作用。
+  body = stripCodexFormArtifacts(body);
+
   // ── Per-agent upstream override ──
   // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
   // 未配置时回退到全局 config.upstream.{url,apiKey}。
@@ -893,9 +877,29 @@ export async function handleWorkbuddyEndpoint(
     return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null, null);
   }
 
-  // ── 6. Session ID + langfuse turn ctx ────────────────────────────────────
-  const sessionId = extractWorkbuddySessionId(headers, body);
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
+  // ── 6. Session resolution（sessionStage 统一入口）──────────────────────────
+  // workbuddy 不主动生成 auto ID（autoGenerate=false）；显式 session-id 缺失时
+  // 回退到首问指纹稳定键（无指纹再退回 `${keyId}:${traceId}`）。
+  // 客户端回传 auto-* ID 仍过签名校验。
+  const sessionStageCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource: "workbuddy",
+    apiKey,
+    keyIdOverride: keyId,
+    earlySpaceId: spaceId,
+    earlyUserId: userId || "",
+    traceId,
+  };
+  const sessionTurn = await prepareSessionTurn(
+    sessionStageCtx,
+    WORKBUDDY_SESSION_ADAPTER,
+    { fallbackSessionKey: () => `${keyId}:${traceId}` },
+  );
+  const sessionId = sessionTurn.conversationId;
+  const sessionKey = sessionTurn.sessionKey;
+  const threadId = sessionTurn.threadId;
   const agentSource = "workbuddy";
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;
@@ -948,13 +952,13 @@ export async function handleWorkbuddyEndpoint(
       if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `codex:${sessionKey}`;
+        const compositeKey = sessionTurn.compositeKey;
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -1000,7 +1004,7 @@ export async function handleWorkbuddyEndpoint(
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = `codex:${sessionKey}`;
+      const compositeKey = sessionTurn.compositeKey;
       const identity = {
         userId: userId || "anonymous",
         agentSource: "codex" as const,
@@ -1022,9 +1026,8 @@ export async function handleWorkbuddyEndpoint(
 
       if (recovered && isTerminalState) {
         // Recovered from L2b/L2a — skip form, apply context
-        const { buildSessionContextBlockWithToggles } = await import(
-          "./session/context-injector.js"
-        );
+        const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+          await import("./session/context-injector.js");
         const systemAppend = recovered.bypassed
           ? null
           : buildSessionContextBlockWithToggles(
@@ -1032,6 +1035,9 @@ export async function handleWorkbuddyEndpoint(
               recovered.taskDetail ?? null,
               config.sessionInit,
               sessionKey,
+              // 必须带上会话状态里的 cachedTeams：恢复路径若只传 sessionInfo，团队名会丢失，
+              // 导致第 2 轮起注入的 <session_context> 与第 1 轮不一致（前缀缓存失效）。
+              resolveTeamCtxInfo(recovered.sessionInfo ?? null, recovered.cachedTeams ?? null) ?? null,
             );
         initResult = {
           intercepted: false,
@@ -1071,6 +1077,7 @@ export async function handleWorkbuddyEndpoint(
             stream: isStream,
             modelId: modelId as string,
             protocol: "responses" as any,
+            threadId,
             // 把原始 input[] 交给 CB 状态机识别 Default gate 与 MORE 翻页
             codexAnswerInput: input,
           },
@@ -1213,15 +1220,15 @@ export async function handleWorkbuddyEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName 来自 session-init 返回值（从 cachedTeams 里查得）；
           // teamIdShort 字段名沿用历史，但此处**存完整 team_id**（如 team-wyuyb7sion）。
           // 之前 slice(-8) 只留后 8 位会让用户看到 "uyb7sion" 这种截断串，配合
           // teamName 常为空导致的兜底路径显示极不完整。团队 id 本身就短，全量展示无害。
           teamName: initResult.teamName ?? undefined,
-          teamIdShort: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1295,6 +1302,7 @@ export async function handleWorkbuddyEndpoint(
         pipe.info("WORKBUDDY_MEM_CMD", `mem command intercepted: ${memCmd.command}`);
         const memResult = await executeMemCommand(memCmd, {
           sessionKey,
+          threadId: sessionTurn.threadId,
           agentSource: "workbuddy",
           config,
           spaceId,
@@ -1393,14 +1401,14 @@ export async function handleWorkbuddyEndpoint(
     try {
       const { getInjectionPipeline } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
-      const { buildSessionContextBlockWithToggles } = await import(
-        "./session/context-injector.js"
-      );
+      const { buildSessionContextBlockWithToggles, resolveTeamCtxInfo } =
+        await import("./session/context-injector.js");
       const sessionContextBlock = buildSessionContextBlockWithToggles(
         cachedAgentDetail as import("./session/types.js").AgentDetail | null,
         cachedTaskDetail as import("./session/types.js").TaskDetail | null,
         config.sessionInit,
         sessionKey,
+        resolveTeamCtxInfo(sessionInfo as { team_id?: string } | null | undefined) ?? null,
       );
 
       // 构造 synthetic OpenAI body 供通用 pipeline 处理
