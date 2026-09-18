@@ -7,7 +7,7 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": ["tdai_memory_search", "tdai_memory_use", "tdai_conversation_search", "tdai_read_file"]
+    "tools": ["tdai_memory_search", "tdai_conversation_search", "tdai_read_file"]
   },
   "configSchema": {
     "type": "object",
