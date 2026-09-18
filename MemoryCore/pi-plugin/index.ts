@@ -65,6 +65,9 @@ export default function (pi: ExtensionAPI) {
         name: model,
         input: ["text", "image"],
         reasoning: true,
+        // The proxy URL hides the actual upstream from Pi's compatibility
+        // detection. Use the portable system role for strict upstreams.
+        compat: { supportsDeveloperRole: false },
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 524288,
         maxTokens: 16384,
