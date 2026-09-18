@@ -206,6 +206,9 @@ Codex appears only as an agent-name routing boundary on an already-running proxy
 | `POST` | `/proxy/<spaceId>/v1/chat/completions` | OpenAI-compatible main-model call (with memory instance id) |
 | `POST` | `/proxy/<spaceId>/v1/messages` | Anthropic Messages main-model call |
 | `POST` | `/v1/messages` | Anthropic Messages API (fallback without spaceId) |
+| `GET`  | `/v1/models` | OpenAI-compatible model list (native, transparent passthrough) |
+| `GET`  | `/proxy/<spaceId>/v1/models` | model list with memory instance id |
+| `GET`  | `/{agent}/{spaceId}/v1/models` | model list via the standard agent-prefixed route |
 | `POST` | `/*` | OpenAI-compatible chat endpoint (catch-all) |
 | `ALL`  | `/skill-bridge/**` | reverse-proxy for MemoryCore skill HTTP tools |
 | `ALL`  | `/memory-bridge/**` | reverse-proxy for MemoryCore memory HTTP tools |
