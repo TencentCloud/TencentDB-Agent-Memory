@@ -37,6 +37,7 @@ import type {
   PrewarmInput,
 } from "../types.js";
 import { HOOK_PRIORITY } from "../types.js";
+import { buildHookCacheVariant } from "../hook-cache-key.js";
 
 export interface SkillToolsInjectorConfig {
   /**
@@ -217,8 +218,17 @@ export class SkillToolsInjector implements InjectionHook {
   description = "Inject the static <skill_tools> curl-recipe block.";
   /** Block content depends only on proxy base URL — fully session-static. */
   cacheStrategy: CacheStrategy = "session_init";
+  cacheVariant: string;
 
-  constructor(private config: SkillToolsInjectorConfig) {}
+  constructor(private config: SkillToolsInjectorConfig) {
+    const allowLlmWrite = config.allowLlmWrite ?? false;
+    const skillViewMode = (process.env.SKILL_VIEW_MODE ?? "id").toLowerCase() === "name" ? "name" : "id";
+    this.cacheVariant = buildHookCacheVariant({
+      allowLlmWrite,
+      proxyBaseUrl: config.proxyBaseUrl.replace(/\/$/, ""),
+      skillViewMode,
+    });
+  }
 
   async execute(ctx: AgentContext): Promise<ContextBlock[]> {
     const caps = ctx.metadata.custom?.assetCapabilities as { skill?: boolean } | undefined;
