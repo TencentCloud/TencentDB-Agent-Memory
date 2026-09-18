@@ -19,12 +19,13 @@ import { extractUserQueryText } from "../common/user-query-extractor.js";
 export { extractUserQueryText };
 
 export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | null {
+  const turnAt = Date.now();
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i] as Record<string, unknown>;
     if (msg?.role !== "user") continue;
     // 只取真实 user_query，避免把 harness 上下文写进 L0
     const content = extractUserQueryText(extractContentText(msg.content));
-    if (content.trim()) return { role: "user", content };
+    if (content.trim()) return { role: "user", content, timestamp: turnAt };
   }
   return null;
 }
@@ -33,7 +34,7 @@ export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity 
   if (!identity || !userMessage) return;
   const messages: TdaiMessage[] = [userMessage];
   if (assistantContent?.trim()) {
-    messages.push({ role: "assistant", content: assistantContent });
+    messages.push({ role: "assistant", content: assistantContent, timestamp: Date.now() });
   }
   await client.addConversation(identity, messages);
 }

@@ -39,7 +39,7 @@ function chunkConversationMessages(messages: TdaiMessage[]): TdaiMessage[] {
       ) {
         end -= 1;
       }
-      chunks.push({ role: message.role, content: message.content.slice(start, end) });
+      chunks.push({ role: message.role, content: message.content.slice(start, end), timestamp: message.timestamp });
       start = end;
     }
     return chunks;
