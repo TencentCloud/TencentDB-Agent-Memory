@@ -16,6 +16,29 @@ interface TdaiEnvelope<T = unknown> {
   data?: T;
 }
 
+/**
+ * Typed error for tdai data-plane calls that must NOT be silently swallowed.
+ *
+ * 背景（issue #1089）：postForCtx 原本对 网络/HTTP/envelope 错一律 `return {} as T`，
+ * 这对"注入路径静默降级"是对的，但对 L0 写入是灾难 —— `withL0Retry` 依赖
+ * rejection 触发重试，吞错 = 重试永不发生 = 失败的 write 看起来像成功的一轮。
+ *
+ * `message` 形如 `tdai POST /v3/conversation/add HTTP 503: <body切片>` 或
+ * `tdai POST ... failed: <原因>` —— withL0Retry 的 isRetryable 用正则从
+ * message 里捞状态码（/HTTP (\d{3})/），所以必须保留这个格式。
+ */
+export class TdaiWriteError extends Error {
+  constructor(
+    path: string,
+    public readonly status?: number,
+    detail?: string,
+  ) {
+    const what = status !== undefined ? `HTTP ${status}${detail ? `: ${detail}` : ""}` : `failed: ${detail ?? "unknown"}`;
+    super(`tdai POST ${path} ${what}`);
+    this.name = "TdaiWriteError";
+  }
+}
+
 const TDAI_MESSAGE_CONTENT_MAX_CHARS = 8192;
 const TDAI_CONVERSATION_MAX_MESSAGES = 100;
 
@@ -105,6 +128,9 @@ export class TdaiClient {
 
     for (let offset = 0; offset < chunkedMessages.length; offset += TDAI_CONVERSATION_MAX_MESSAGES) {
       const batch = chunkedMessages.slice(offset, offset + TDAI_CONVERSATION_MAX_MESSAGES);
+      // strict=true: los fallos del write L0 se lanzan (TdaiWriteError) en vez de
+      // tragarse —— conL0Retry del caller puede así reintentar y, agotadas las
+      // tentativas, el fallo queda observable (pipe.error / log). Ver issue #1089.
       await this.postForCtx(
         "/v3/conversation/add",
         { teamId: identity.teamId, userId: identity.userId, agentId: identity.agentId },
@@ -118,7 +144,7 @@ export class TdaiClient {
         },
         identity.sessionId,
         identity.taskId,
-        { includeSession: true, includeTask: true },
+        { includeSession: true, includeTask: true, strict: true },
       );
     }
   }
@@ -267,7 +293,7 @@ export class TdaiClient {
     body: Record<string, unknown>,
     sessionId: string,
     taskId: string | undefined,
-    options: { includeSession: boolean; includeTask: boolean } = { includeSession: true, includeTask: true },
+    options: { includeSession: boolean; includeTask: boolean; strict?: boolean } = { includeSession: true, includeTask: true },
   ): Promise<T> {
     const base = this.config.endpoint.replace(/\/$/, "");
     const controller = new AbortController();
@@ -290,11 +316,27 @@ export class TdaiClient {
         headers,
         body: JSON.stringify(stripUndefined(body)),
       });
-      if (!res.ok) return {} as T;
+      if (!res.ok) {
+        if (options.strict) {
+          const detail = await res.text().catch(() => "");
+          throw new TdaiWriteError(path, res.status, detail.slice(0, 300));
+        }
+        return {} as T;
+      }
       const envelope = await res.json() as TdaiEnvelope<T>;
-      if (typeof envelope.code === "number" && envelope.code !== 0) return {} as T;
+      if (typeof envelope.code === "number" && envelope.code !== 0) {
+        if (options.strict) throw new TdaiWriteError(path, res.status, `envelope code=${envelope.code} ${envelope.message ?? ""}`.trim());
+        return {} as T;
+      }
       return (envelope.data ?? {}) as T;
-    } catch {
+    } catch (err) {
+      if (options.strict) {
+        // fetch network / abort errors: rethrow as-is (already retryable-looking),
+        // TdaiWriteError passes through untouched.
+        if (err instanceof TdaiWriteError) throw err;
+        if (err instanceof Error) throw err;
+        throw new TdaiWriteError(path, undefined, String(err));
+      }
       return {} as T;
     } finally {
       clearTimeout(timer);
