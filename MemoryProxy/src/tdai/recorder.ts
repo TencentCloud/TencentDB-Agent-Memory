@@ -19,7 +19,7 @@ import { extractUserQueryText } from "../common/user-query-extractor.js";
 export { extractUserQueryText };
 
 export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | null {
-  const turnAt = Date.now();
+  const turnAt = new Date().toISOString();
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i] as Record<string, unknown>;
     if (msg?.role !== "user") continue;
@@ -34,7 +34,7 @@ export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity 
   if (!identity || !userMessage) return;
   const messages: TdaiMessage[] = [userMessage];
   if (assistantContent?.trim()) {
-    messages.push({ role: "assistant", content: assistantContent, timestamp: Date.now() });
+    messages.push({ role: "assistant", content: assistantContent, timestamp: new Date().toISOString() });
   }
   await client.addConversation(identity, messages);
 }

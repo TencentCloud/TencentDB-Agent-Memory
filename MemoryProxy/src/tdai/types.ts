@@ -61,8 +61,8 @@ export interface TdaiL1Hit extends TdaiL1Memory {
 export interface TdaiMessage {
   role: "user" | "assistant";
   content: string;
-  /** 消息真实时间(epoch ms)。未提供时由内核用服务器时钟兜底。 */
-  timestamp?: number;
+  /** 消息真实时间(ISO 8601 string)。内核 v3 add schema 只收 z.iso.datetime()。 */
+  timestamp?: string;
 }
 
 export interface TdaiL1Memory {
