@@ -20,7 +20,22 @@
  * 只是**取用户输入的规则**和**分类规则**按 agent 适配。
  */
 
-export type AgentKind = "claude-code" | "codebuddy" | "codex" | "workbuddy" | "dsh" | "opencode" | "pi" | "unknown";
+/**
+ * Runtime registry for agent sources that have a first-class adapter.
+ * Keep consumers that need to enumerate sources tied to this list instead of
+ * duplicating their own prefix lists.
+ */
+export const AGENT_KINDS = [
+  "claude-code",
+  "codebuddy",
+  "codex",
+  "workbuddy",
+  "dsh",
+  "opencode",
+  "pi",
+] as const;
+
+export type AgentKind = (typeof AGENT_KINDS)[number] | "unknown";
 
 export type RequestKind = "main" | "fork" | "sidequery" | "auxiliary";
 
