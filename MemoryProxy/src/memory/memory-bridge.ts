@@ -22,7 +22,6 @@
 
 import type { Context } from "hono";
 import { getSessionStore } from "../session/store.js";
-import type { BindingRepo } from "../db/binding-repo.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { AgentContext } from "../injection/types.js";
@@ -129,51 +128,6 @@ function bindingToIdFields(
     space_id: spaceId,
     composite_key: `${agentSource}:${sessionId}`,
   };
-}
-
-/**
- * L1 fast path — try in-memory Map with prefix fallback.
- * Returns null on miss (caller decides whether to probe L2).
- */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
-  // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
-  for (const k of candidates) {
-    const state = getSessionStore().get(k);
-    if (state) {
-      const fields = toIdFields(state, k);
-      if (fields) return fields;
-    }
-  }
-  return null;
-}
-
-/**
- * L2 fallthrough —— 拍平后只吃 (spaceId, sessionId)。见
- * docs/design/2026-08-03-binding-flatten.md。
- *
- * 不再走 verifyUserKey + getOrRecover 4 段路径:
- *   1) bridge curl 模板没塞 bearer,verify 拿不到 userId
- *   2) 拍平后 binding.json 里已经存了 user_id/team_id/agent_id/agent_source/user_key,
- *      单次 GET 直接凑齐 IdFields
- */
-async function loadSessionIdsL2(
-  bindingRepo: BindingRepo | null,
-  spaceId: string,
-  sessionId: string,
-): Promise<SessionIdFields | null> {
-  if (!bindingRepo) return null;
-  try {
-    const binding = await bindingRepo.getBinding(spaceId, sessionId);
-    if (!binding) return null;
-    return bindingToIdFields(binding, spaceId, sessionId);
-  } catch (err) {
-    console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
-    return null;
-  }
 }
 
 function envelope(code: number, message: string, httpStatus = 200): Response {
@@ -308,10 +262,14 @@ export function createMemoryBridgeHandler(
       ?? "";
     const bindingRepo = getSessionStore().getBindingRepo() ?? null;
 
-    let ids = loadSessionIdsL1(sessionKey);
-    if (!ids && bindingRepo && spaceId) {
+    const resolved = await getSessionStore().findBridgeSession(spaceId, sessionKey, bindingRepo ?? undefined);
+    if (!resolved) {
+      return envelope(40101, `${TAG} ambiguous session identity`, 401);
+    }
+    let ids = resolved.l1 ? toIdFields(resolved.l1.state, resolved.l1.keyId) : null;
+    if (!ids && resolved.binding) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
-      ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey);
+      ids = bindingToIdFields(resolved.binding, spaceId, resolved.sessionId);
     }
     if (!ids) {
       emitBridgeRejectTelemetry({

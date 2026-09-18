@@ -161,6 +161,7 @@ export async function handleWorkbuddySessionInit(
     sessionId: sessionKey,
     spaceId: spaceId || "",
   };
+  store = store.forIdentity(identity);
 
   // ── 2. 复用已有 state（recovered 快通道）─────────────────────────────────
   // getOrRecover 内部自动 bind 身份，无需另外调store.bind

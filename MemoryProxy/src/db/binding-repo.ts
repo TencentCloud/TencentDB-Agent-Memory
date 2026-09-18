@@ -22,6 +22,8 @@ const DEFAULT_BINDING_TTL_DAYS = 30;
 
 export interface SessionBinding {
   outcome: "initialized" | "bypassed";
+  /** 单槽曾出现不同 owner；缺少完整身份的 Bridge 必须拒绝，普通更新不清除此标记。 */
+  identityAmbiguous?: boolean;
   userId?: string;
   teamId?: string;
   agentId?: string;
@@ -68,6 +70,7 @@ export class RedisBindingRepo implements BindingRepo {
       if (!all || Object.keys(all).length === 0) return null;
       return {
         outcome: (all.outcome as "initialized" | "bypassed") || "initialized",
+        ...(all.identity_ambiguous === "1" ? { identityAmbiguous: true } : {}),
         userId: all.user_id || undefined,
         teamId: all.team_id || undefined,
         agentId: all.agent_id || undefined,
@@ -87,13 +90,16 @@ export class RedisBindingRepo implements BindingRepo {
         outcome: binding.outcome,
         created_at: now,
         last_seen: now,
+        // 空值显式覆盖，确保 owner reset 的 tombstone 不遗留旧资产或 userKey。
+        user_id: binding.userId ?? "",
+        team_id: binding.teamId ?? "",
+        agent_id: binding.agentId ?? "",
+        task_id: binding.taskId ?? "",
+        agent_source: binding.agentSource ?? "",
+        user_key: binding.userKey ?? "",
       };
-      if (binding.userId) fields.user_id = binding.userId;
-      if (binding.teamId) fields.team_id = binding.teamId;
-      if (binding.agentId) fields.agent_id = binding.agentId;
-      if (binding.taskId) fields.task_id = binding.taskId;
-      if (binding.agentSource) fields.agent_source = binding.agentSource;
-      if (binding.userKey) fields.user_key = binding.userKey;
+      // HSET 不携带 false/空标记，因此已有歧义不会被旧 caller 的普通写入清掉。
+      if (binding.identityAmbiguous) fields.identity_ambiguous = "1";
 
       const key = redisKey(spaceId, sessionId);
       await this.redis.hset(key, fields);

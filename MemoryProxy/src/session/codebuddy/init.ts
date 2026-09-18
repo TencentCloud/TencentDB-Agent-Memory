@@ -542,6 +542,7 @@ export async function handleSessionInit(
   agentSource: string = "codebuddy",
 ): Promise<SessionInitResult> {
   const compositeKey = `${agentSource}:${sessionKey}`;
+  store = store.forIdentity({ spaceId, userId: userId || "anonymous", agentSource, sessionId: sessionKey });
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     const result = await handleSessionInitInner(
