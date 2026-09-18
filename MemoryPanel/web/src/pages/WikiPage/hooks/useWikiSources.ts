@@ -29,6 +29,40 @@ export function useWikiSources() {
   const [submitting, setSubmitting] = useState(false);
   const uploadInFlightRef = useRef(false);
 
+  const [renameTarget, setRenameTarget] = useState<{ wiki_id: string; name: string } | null>(null);
+  const [renameName, setRenameName] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+  const renameInFlight = useRef(false);
+  const renameRevision = useRef(0);
+  const renamedNames = useRef(new Map<string, { revision: number; name: string }>());
+  const preserveRenamedName = useCallback((item: WikiDetail, revision: number): WikiDetail => {
+    const renamed = renamedNames.current.get(item.wiki_id);
+    return renamed && renamed.revision > revision ? { ...item, name: renamed.name } : item;
+  }, []);
+
+  const handleRename = async () => {
+    const name = renameName.trim();
+    if (!renameTarget || !name || renameInFlight.current) return;
+    const wikiId = renameTarget.wiki_id;
+    renameInFlight.current = true;
+    setRenameBusy(true);
+    try {
+      const updated = await knowledgeApi.wiki.rename(wikiId, name);
+      // Preserve the saved name if an older list/status request arrives later.
+      renamedNames.current.set(wikiId, { revision: ++renameRevision.current, name: updated.name });
+      setSources((items) => items.map((item) => item.wiki_id === wikiId ? { ...item, name: updated.name } : item));
+      setIngestState((state) => state.wikiId === wikiId ? { ...state, wiki: updated.name } : state);
+      setAllocateTarget((target) => target?.wiki_id === wikiId ? { ...target, name: updated.name } : target);
+      setRenameTarget(null);
+      tea.notify.success(t('wiki.rename.success'));
+    } catch (error) {
+      tea.notify.error(error instanceof Error ? error.message : t('wiki.rename.failed'));
+    } finally {
+      renameInFlight.current = false;
+      setRenameBusy(false);
+    }
+  };
+
   // Allocate-to-agent
   const [allocateTarget, setAllocateTarget] = useState<{ wiki_id: string; name: string } | null>(
     null,
@@ -178,6 +212,7 @@ export function useWikiSources() {
       return;
     }
     const seq = ++fetchSeqRef.current;
+    const revision = renameRevision.current;
     // 切 team 时静默刷新（保留旧列表直到新数据到达），不闪空不骨架屏；
     // 切 tab 仍清空 + loading（避免看到上一个 tab 的列表）。
     const teamChanged = prevTeamIdRef.current !== activeTeamId;
@@ -192,7 +227,7 @@ export function useWikiSources() {
       // fixed tab 也是拿全量 team 资产，再按 fixedBoundIds 过滤。
       const d = await knowledgeApi.wiki.teamAssets(activeTeamId);
       if (seq !== fetchSeqRef.current) return; // 已被后续请求取代
-      setSources(Array.isArray(d) ? d : []);
+      setSources(Array.isArray(d) ? d.map((item) => preserveRenamedName(item, revision)) : []);
     } catch (e: unknown) {
       if (seq !== fetchSeqRef.current) return;
       tea.notify.error(e);
@@ -269,6 +304,7 @@ export function useWikiSources() {
     if (running.length === 0) return;
     let cancelled = false;
     const poll = async () => {
+      const revision = renameRevision.current;
       const items = await Promise.all(
         running.map(async (s) => {
           try {
@@ -281,7 +317,7 @@ export function useWikiSources() {
       if (cancelled) return;
       const map = new Map(items.filter(Boolean).map((w) => [w!.wiki_id, w!]));
       setSources((prev) =>
-        prev.map((s) => (map.get(s.wiki_id) ? { ...s, ...map.get(s.wiki_id)! } : s)),
+        prev.map((s) => (map.get(s.wiki_id) ? preserveRenamedName({ ...s, ...map.get(s.wiki_id)! }, revision) : s)),
       );
       if (selectedWikiId && map.has(selectedWikiId)) {
         const d = map.get(selectedWikiId)!;
@@ -781,6 +817,12 @@ export function useWikiSources() {
     setSubView,
     selectedWikiId,
     setSelectedWikiId,
+    renameTarget,
+    setRenameTarget,
+    renameName,
+    setRenameName,
+    renameBusy,
+    handleRename,
     // create
     showCreate,
     setShowCreate,

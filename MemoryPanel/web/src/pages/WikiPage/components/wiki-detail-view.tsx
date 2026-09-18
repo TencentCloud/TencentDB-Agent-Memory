@@ -110,6 +110,14 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
               {source && <WikiStatusBadge status={source.status} />}
             </div>
             <div className="_wiki-detail-header-actions">
+              {source.owner_user_id === store.currentUser && (
+                <Button type="text" onClick={() => {
+                  store.setRenameName(wikiName);
+                  store.setRenameTarget({ wiki_id: source.wiki_id, name: wikiName });
+                }}>
+                  {t('wiki.rename.title')}
+                </Button>
+              )}
               <Button
                 type="text"
                 onClick={() => {
@@ -442,6 +450,31 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
           </div>
         </TabPanel>
       </Tabs>
+
+      {store.renameTarget && (
+        <Modal visible caption={t('wiki.rename.title')} size="s"
+          disableEscape={store.renameBusy}
+          onClose={() => { if (!store.renameBusy) store.setRenameTarget(null); }}>
+          <Modal.Body>
+            <label htmlFor="wiki-rename-name">{t('wiki.rename.name')}</label>
+            <Input id="wiki-rename-name" autoFocus size="full"
+              value={store.renameName} onChange={store.setRenameName}
+              disabled={store.renameBusy}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing) void store.handleRename();
+              }} />
+            {!store.renameName.trim() && <Text theme="danger">{t('wiki.rename.required')}</Text>}
+          </Modal.Body>
+          <Modal.Footer>
+            <Button type="primary" loading={store.renameBusy}
+              disabled={store.renameBusy || !store.renameName.trim()}
+              onClick={() => void store.handleRename()}>{t('common.save')}</Button>
+            <Button disabled={store.renameBusy} onClick={() => store.setRenameTarget(null)}>
+              {t('common.cancel')}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+      )}
 
       {/* Add Doc Modal */}
       {store.showAddDoc && (
