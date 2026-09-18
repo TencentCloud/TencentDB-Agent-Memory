@@ -1,6 +1,37 @@
 /** 中文翻译 — zh-CN */
 
 export const zhCN = {
+  "menu.group.models": "模型与接入",
+  "upstream.provider.tencent": "腾讯 TokenHub（官方）",
+  "upstream.provider.hunyuan": "腾讯混元（官方）",
+  "upstream.provider.deepseek": "DeepSeek（官方）",
+  "upstream.provider.zhipu": "智谱（官方）",
+  "upstream.provider.custom": "自定义",
+  "upstream.keepKey": "留空保留原密钥",
+  "upstream.adminOnly": "仅系统管理员可管理上游模型配置。",
+  "upstream.title": "模型配置",
+  "upstream.client": "客户端",
+  "upstream.current": "当前配置",
+  "upstream.loading": "正在读取…",
+  "upstream.clientModel": "使用客户端模型名",
+  "upstream.deployment": "使用部署配置（YAML）",
+  "upstream.provider": "供应商",
+  "upstream.key": "供应商 API Key",
+  "upstream.model": "上游模型 ID",
+  "upstream.test": "测试连接",
+  "upstream.save": "保存配置",
+  "upstream.reset": "恢复部署配置",
+  "upstream.resetConfirm": "将清除该客户端的实例上游配置，恢复使用部署配置，是否继续？",
+  "upstream.saved": "已保存，Proxy 通常在 5 分钟内加载新配置。",
+  "upstream.loadError": "读取失败，请确认内核支持实例上游配置，且你有管理员权限。",
+  "upstream.saveError": "保存失败，未确认配置已更新，请重新打开本页核对。",
+  "upstream.testError": "测试失败，请检查配置和服务状态。",
+  "upstream.result.ready": "返回有效文本",
+  "upstream.result.http_error": "供应商返回错误",
+  "upstream.result.output_limited": "输出额度耗尽，尚未验证成功",
+  "upstream.result.invalid_response": "响应不符合所需协议",
+  "upstream.result.unreachable": "请求失败或超时",
+
   // ===== App =====
   'app.checkingSession': '正在检测登录态…',
 

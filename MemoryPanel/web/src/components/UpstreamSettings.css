@@ -1,0 +1,20 @@
+.upstream-settings { width: 100%; max-width: 440px; }
+.upstream-settings .tea-form,
+.upstream-settings .tea-form-control,
+.upstream-settings .tea-input { width: 100%; max-width: 100%; }
+.upstream-settings .tea-select,
+.upstream-settings .tea-dropdown { width: 200px; max-width: 100%; }
+.upstream-current {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #f7f9fc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.upstream-current dt { color: #64748b; }
+.upstream-current dd { margin: 0; overflow-wrap: anywhere; color: #1f2937; }

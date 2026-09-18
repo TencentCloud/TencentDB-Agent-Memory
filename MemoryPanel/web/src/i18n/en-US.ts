@@ -1,6 +1,37 @@
 /** English translation — en-US */
 
 export const enUS = {
+  "menu.group.models": "Models & access",
+  "upstream.provider.tencent": "Tencent TokenHub (official)",
+  "upstream.provider.hunyuan": "Tencent Hunyuan (official)",
+  "upstream.provider.deepseek": "DeepSeek (official)",
+  "upstream.provider.zhipu": "Zhipu (official)",
+  "upstream.provider.custom": "Custom",
+  "upstream.keepKey": "Leave blank to keep the current key",
+  "upstream.adminOnly": "Only system administrators can manage upstream models.",
+  "upstream.title": "Model configuration",
+  "upstream.client": "Client",
+  "upstream.current": "Current configuration",
+  "upstream.loading": "Loading…",
+  "upstream.clientModel": "Client model ID",
+  "upstream.deployment": "Use deployment configuration (YAML)",
+  "upstream.provider": "Provider",
+  "upstream.key": "Provider API key",
+  "upstream.model": "Upstream model ID",
+  "upstream.test": "Test connection",
+  "upstream.save": "Save configuration",
+  "upstream.reset": "Use deployment configuration",
+  "upstream.resetConfirm": "Clear this client’s instance override and restore deployment configuration?",
+  "upstream.saved": "Saved. Proxy normally loads the new configuration within 5 minutes.",
+  "upstream.loadError": "Could not load configuration. Check Core support and administrator permissions.",
+  "upstream.saveError": "Could not confirm the update. Reopen this page to check stored configuration.",
+  "upstream.testError": "Test failed. Check configuration and service availability.",
+  "upstream.result.ready": "Valid text received",
+  "upstream.result.http_error": "Provider returned an error",
+  "upstream.result.output_limited": "Output limit reached; not verified",
+  "upstream.result.invalid_response": "Unexpected protocol response",
+  "upstream.result.unreachable": "Request failed or timed out",
+
   // ===== App =====
   'app.checkingSession': 'Checking session…',
 
