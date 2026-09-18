@@ -1,0 +1,18 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {
+    "tdb-agent-memory": {
+      "name": "TencentDB Agent Memory",
+      "type": "openai-compat",
+      "base_url": "http://127.0.0.1:8096/codebuddy/default",
+      "api_key": "$TDB_MEM_USER_KEY",
+      "models": [
+        {
+          "id": "claude-sonnet-4-20250514",
+          "name": "TencentDB Memory (proxy upstream)",
+          "context_window": 200000
+        }
+      ]
+    }
+  }
+}
