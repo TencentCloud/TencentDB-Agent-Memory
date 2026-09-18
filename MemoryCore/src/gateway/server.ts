@@ -3069,9 +3069,12 @@ export class TdaiGateway {
           }
         }
       },
-      async executeFlush(task: TaskPayload) {
-        await core.handleSessionEnd(task.sessionId);
-      },
+      // NOTE: intentionally no `executeFlush`. The pipeline worker falls back
+      // to executeL1 for "flush" tasks (`executeFlush?.(...) ?? executeL1(...)`),
+      // which is what makes `/session/end` actually run extraction. Overriding
+      // it with core.handleSessionEnd() only re-enqueued another flush task
+      // (or no-opped once conversation_count hit 0), so no code path in the
+      // flush flow ever reached runL1WithStore.
 
       // ── Offload executors (L1 summary, L1.5 task judgment, L2 MMD update) ──
       async executeOffloadL1(task: TaskPayload, signal?: AbortSignal) {
