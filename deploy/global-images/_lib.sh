@@ -406,13 +406,18 @@ interactive_llm_setup() {
 #   检测宿主机某端口是否处于 LISTEN 状态。返回 0=被占 / 1=空闲。
 port_in_use() {
   local port="$1"
-  if command -v lsof >/dev/null 2>&1; then
-    lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
-  elif command -v ss >/dev/null 2>&1; then
-    ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
-  else
-    return 1  # 无检测工具时当作空闲，不阻塞启动
+  # ss 优先：读 /proc/net/tcp，能看到 root / 其他用户持有的 LISTEN 端口。
+  # lsof 在非特权用户下看不到别人的 socket，会返回 1（误报“空闲”），
+  # 所以两个工具取并集，不能用 elif 只跑一个。
+  if command -v ss >/dev/null 2>&1 &&
+     ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"; then
+    return 0
   fi
+  if command -v lsof >/dev/null 2>&1 &&
+     lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1  # 两者都没看到（或均不可用）时当作空闲，不阻塞启动
 }
 
 # tdai_self_ports

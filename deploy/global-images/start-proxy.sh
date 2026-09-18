@@ -73,6 +73,26 @@ fi
 
 bool() { [[ "$1" == "1" ]] && echo "true" || echo "false"; }
 
+# ── 按 agent 族群分设上游 ────────────────────────────────────────────────────
+# proxy 不做协议转换，只把协议对应的 path 拼到上游 URL 后面：
+#   claude-code → ${url}/messages      (Anthropic Messages, anthropicHandler.ts)
+#   codex       → ${url}/responses     (OpenAI Responses,   codexHandler.ts)
+#   其他        → ${url}/chat/completions (OpenAI Chat,      handler.ts)
+# 所以同一个 URL 无法同时服务 CC 和 Codex，需要 upstream.agents 逐个覆盖。
+# 未设置的 agent 回落到全局 upstream.url / apiKey。
+AGENTS_YAML=""
+add_agent_upstream() {  # <agent> <url> <apiKey>
+  [[ -n "$2" && "$2" != "REPLACE_ME" ]] || return 0
+  AGENTS_YAML+="
+    $1:
+      url: \"$2\"
+      apiKey: \"$3\""
+  info "  upstream.agents.$1 → $2"
+}
+add_agent_upstream "codex" "${PROXY_UPSTREAM_CODEX_URL:-}" "${PROXY_UPSTREAM_CODEX_API_KEY:-}"
+[[ -n "$AGENTS_YAML" ]] && AGENTS_YAML="
+  agents:${AGENTS_YAML}"
+
 info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI))"
 cat > "$CONFIG_FILE" <<YAML
 # 由 start-proxy.sh 自动生成 —— 每次启动覆盖，请不要手动改。
@@ -83,7 +103,7 @@ server:
 
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
-  apiKey: "${PROXY_UPSTREAM_API_KEY}"
+  apiKey: "${PROXY_UPSTREAM_API_KEY}"${AGENTS_YAML}
 
 log:
   file: ""
