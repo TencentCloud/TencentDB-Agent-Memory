@@ -612,6 +612,14 @@ export class MetadataService {
   }
 
   async deleteUsers(userIds: string[]): Promise<BatchDeleteResult> {
+    // Cascade delete all agents owned by these users before deleting users
+    for (const userId of userIds) {
+      const userAgents = await this.listAgentsByOwner(userId, { limit: 1000, offset: 0 });
+      if (userAgents.items.length > 0) {
+        const agentIds = userAgents.items.map((a) => a.agent_id);
+        await this.deleteAgents(agentIds);
+      }
+    }
     return this.store.deleteUsers(userIds);
   }
 
@@ -1820,6 +1828,14 @@ export class MetadataService {
     if (userId === team.owner_user_id) {
       throw new MetadataError("permission_denied", "cannot remove team owner");
     }
+
+    // Cascade delete member's agents to prevent orphaned agents
+    const memberAgents = await this.listAgentsByOwner(userId, { limit: 1000, offset: 0 }, { team_id: teamId });
+    if (memberAgents.items.length > 0) {
+      const agentIds = memberAgents.items.map((a) => a.agent_id);
+      await this.deleteAgents(agentIds);
+    }
+
     return this.removeTeamMember(teamId, userId);
   }
 
@@ -1868,13 +1884,20 @@ export class MetadataService {
 
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
     for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
+      // Allow deletion by owner, team admin, or system admin
+      if (ctx.isSystemAdmin) {
+        continue; // System admin can delete any agent
+      }
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     }
     return this.deleteAgents(agentIds);
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    // Allow archiving by owner, team admin, or system admin
+    if (!ctx.isSystemAdmin) {
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+    }
     return this.archiveAgent(agentId);
   }
 
