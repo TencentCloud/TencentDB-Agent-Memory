@@ -216,7 +216,10 @@ export class SkillToolsInjector implements InjectionHook {
   /** Slightly higher priority than SkillInjector so this block precedes it. */
   priority: HookPriority = HOOK_PRIORITY.SKILL - 1;
   description = "Inject the static <skill_tools> curl-recipe block.";
-  /** Block content depends only on proxy base URL — fully session-static. */
+  /**
+   * Block content is session-static but depends on content-producing
+   * configuration such as proxyBaseUrl, allowLlmWrite, and SKILL_VIEW_MODE.
+   */
   cacheStrategy: CacheStrategy = "session_init";
   cacheVariant: string;
 
