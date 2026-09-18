@@ -1,0 +1,7 @@
+node_modules/
+dist/
+__pycache__/
+*.local.json
+*-state/
+*.bak
+!package-lock.json
