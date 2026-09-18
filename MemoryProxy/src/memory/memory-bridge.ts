@@ -22,6 +22,7 @@
 
 import type { Context } from "hono";
 import { getSessionStore } from "../session/store.js";
+import { AGENT_SOURCE_PREFIXES } from "../routes/whitelist.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
@@ -133,22 +134,37 @@ function bindingToIdFields(
 
 /**
  * L1 fast path — try in-memory Map with prefix fallback.
- * Returns null on miss (caller decides whether to probe L2).
+ * Returns null on miss, "ambiguous" when a bare id matches several distinct
+ * identities (ronda 2026-09-09 HIGH: colisión silenciosa resolvía siempre
+ * claude-code; el llamador debe rechazar, nunca elegir arbitrariamente).
  */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+function loadSessionIdsL1(
+  sessionId: string,
+): SessionIdFields | null | "ambiguous" {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
-  // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
+  // 通常是 bare sessionId。候选前缀来自 AGENT_SOURCE_PREFIXES (whitelist.ts,
+  // 单一事实来源; opencode 曾缺席 → 40101 en lectura viva, fix 2026-09-09)。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [sessionId, ...AGENT_SOURCE_PREFIXES.map((p) => `${p}:${sessionId}`)];
+  let first: SessionIdFields | null = null;
   for (const k of candidates) {
     const state = getSessionStore().get(k);
-    if (state) {
-      const fields = toIdFields(state, k);
-      if (fields) return fields;
+    if (!state) continue;
+    const fields = toIdFields(state, k);
+    if (!fields) continue;
+    if (!first) {
+      first = fields;
+      continue;
     }
+    const distinct =
+      first.user_id !== fields.user_id ||
+      first.team_id !== fields.team_id ||
+      first.agent_id !== fields.agent_id ||
+      first.space_id !== fields.space_id;
+    if (distinct) return "ambiguous";
   }
-  return null;
+  return first;
 }
 
 /**
@@ -309,6 +325,14 @@ export function createMemoryBridgeHandler(
     const bindingRepo = getSessionStore().getBindingRepo() ?? null;
 
     let ids = loadSessionIdsL1(sessionKey);
+    if (ids === "ambiguous") {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "memory-bridge",
+        rejectReason: "ambiguous_session_id", httpStatus: 409,
+        executedEndpoint: sub, spaceId,
+      });
+      return envelope(40901, `${TAG} bare session id matches multiple agent sources; pass composite x-conversation-id (agentSource:sessionId)`, 409);
+    }
     if (!ids && bindingRepo && spaceId) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
       ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey);
