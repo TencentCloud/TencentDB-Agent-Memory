@@ -35,6 +35,7 @@ import type { L1FtsResult } from "../store/types.js";
 const DAY = 86_400_000;
 const TOPK = 15;
 const LIMIT = 5;
+const BENCH_SCOPE = { teamId: "t", userId: "u", agentId: "a" };
 
 const dir = mkdtempSync(join(tmpdir(), "tdai-boost-bench-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -64,7 +65,7 @@ function rec(content: string, ageDays: number, tags: string[] = []): MemoryRecor
 }
 
 function touchN(store: VectorStore, id: string, n: number) {
-  for (let i = 0; i < n; i++) expect(store.touchL1Usage([id])).toBe(1);
+  for (let i = 0; i < n; i++) expect(store.touchL1Usage([id], BENCH_SCOPE)).toBe(1);
 }
 
 function seedUsage(store: VectorStore) {
@@ -279,7 +280,7 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
           }
         }
         // The agent confirms only a result it actually used in the reply.
-        if (shippedIds.includes(s.gold)) store.touchL1Usage([s.gold]);
+        if (shippedIds.includes(s.gold)) store.touchL1Usage([s.gold], BENCH_SCOPE);
       }
 
       // record round stats for shipped drift report

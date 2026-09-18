@@ -30,7 +30,7 @@ import type {
   ConversationSearchParams,
 } from "./types.js";
 import type { MemoryTdaiConfig } from "../config.js";
-import type { IMemoryStore } from "./store/types.js";
+import type { IMemoryStore, IsolationFilter } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { StorageAdapter } from "./storage/adapter.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
@@ -122,6 +122,8 @@ export interface TdaiCoreOptions {
   config: MemoryTdaiConfig;
   /** Session filter for excluding internal/benchmark sessions. */
   sessionFilter?: SessionFilter;
+  /** Isolation scope used by agent-facing L1 search and usage write-back. */
+  usageIsolationFilter?: IsolationFilter;
   /** Plugin instance ID for metric reporting. */
   instanceId?: string;
   /** StorageAdapter for file operations (COS/local). When absent, modules fall back to fs. */
@@ -150,6 +152,7 @@ export class TdaiCore {
   private dataDir: string;
   private runnerFactory: LLMRunnerFactory;
   private sessionFilter: SessionFilter;
+  private usageIsolationFilter?: IsolationFilter;
   private instanceId?: string;
   private storage?: StorageAdapter;
 
@@ -228,6 +231,7 @@ export class TdaiCore {
     this.dataDir = opts.hostAdapter.getRuntimeContext().dataDir;
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
+    this.usageIsolationFilter = opts.usageIsolationFilter;
     this.instanceId = opts.instanceId;
     this.storage = opts.storage;
     this.skillAssetHooks = opts.skillAssetHooks;
@@ -441,6 +445,7 @@ export class TdaiCore {
       limit: params.limit ?? 5,
       type: params.type,
       scene: params.scene,
+      filter: params.filter,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
       logger: this.logger,
@@ -454,9 +459,9 @@ export class TdaiCore {
   }
 
   /** Confirm the L1 memories selected to support the agent's reply. */
-  async recordMemoriesUsed(recordIds: string[]): Promise<number> {
+  async recordMemoriesUsed(recordIds: string[], filter = this.usageIsolationFilter): Promise<number> {
     try {
-      return await recordMemoryUsage(this.vectorStore, recordIds);
+      return await recordMemoryUsage(this.vectorStore, recordIds, filter);
     } catch {
       return 0;
     }

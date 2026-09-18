@@ -51,10 +51,16 @@ const TAG = "[memory-tdai][tdai_memory_search]";
 export async function recordMemoryUsage(
   vectorStore: IMemoryStore | undefined,
   recordIds: string[],
+  filter: IsolationFilter | undefined,
 ): Promise<number> {
   const ids = [...new Set(recordIds.map((id) => id.trim()).filter(Boolean))];
-  if (ids.length === 0 || typeof vectorStore?.touchL1Usage !== "function") return 0;
-  return await vectorStore.touchL1Usage(ids);
+  if (
+    ids.length === 0 ||
+    typeof vectorStore?.touchL1Usage !== "function" ||
+    !filter ||
+    !Object.values(filter).some((value) => value !== undefined)
+  ) return 0;
+  return await vectorStore.touchL1Usage(ids, filter);
 }
 
 function toSearchItem(r: L1SearchResult): MemorySearchResultItem {

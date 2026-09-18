@@ -58,7 +58,7 @@ import type {
   AuditEntry,
   AuditQueryFilter,
 } from "../types.js";
-import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
+import { DEFAULT_ISOLATION_ID, buildIsolationWhere, rowMatchesIsolation } from "../types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../../skill/skill-store-ddl.js";
 import type { Logger } from "../../types.js";
 import type {
@@ -3091,14 +3091,22 @@ export class VectorStore implements IMemoryStore {
    * that surfaced in an agent-facing search (retrieval reinforcement).
    * Sync, best-effort — returns number of rows touched, 0 on any failure.
    */
-  touchL1Usage(recordIds: string[]): number {
-    if (this.degraded || recordIds.length === 0) return 0;
+  touchL1Usage(recordIds: string[], filter: IsolationFilter): number {
+    if (
+      this.degraded ||
+      recordIds.length === 0 ||
+      !filter ||
+      !Object.values(filter).some((value) => value !== undefined)
+    ) return 0;
     try {
       const placeholders = recordIds.map(() => "?").join(", ");
+      const isolation = buildIsolationWhere(filter);
+      if (!isolation.clause) return 0;
       const stmt = this.db.prepare(
-        `UPDATE l1_records SET use_count = use_count + 1, last_used_ms = ? WHERE record_id IN (${placeholders})`,
+        `UPDATE l1_records SET use_count = use_count + 1, last_used_ms = ? ` +
+        `WHERE record_id IN (${placeholders}) AND ${isolation.clause}`,
       );
-      return Number(stmt.run(Date.now(), ...recordIds).changes);
+      return Number(stmt.run(Date.now(), ...recordIds, ...isolation.params).changes);
     } catch (err) {
       this.logger?.warn(
         `${TAG} [L1-touch] FAILED (non-fatal): ${err instanceof Error ? err.message : String(err)}`,

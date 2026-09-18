@@ -7,7 +7,7 @@
     "onStartup": true
   },
   "contracts": {
-    "tools": ["tdai_memory_search", "tdai_conversation_search", "tdai_read_file"]
+    "tools": ["tdai_memory_search", "tdai_memory_use", "tdai_conversation_search", "tdai_read_file"]
   },
   "configSchema": {
     "type": "object",
@@ -24,6 +24,15 @@
         "enum": ["sqlite", "tcvdb"],
         "default": "sqlite",
         "description": "存储后端：sqlite（本地 SQLite + sqlite-vec）或 tcvdb（腾讯云向量数据库）。仅 local/function 模式生效"
+      },
+      "isolation": {
+        "type": "object",
+        "description": "local/function 模式下 agent-facing L1 搜索与 usage 写回使用的隔离范围",
+        "properties": {
+          "teamId": { "type": "string", "default": "default", "description": "隔离 team_id" },
+          "userId": { "type": "string", "default": "default", "description": "隔离 user_id" },
+          "agentId": { "type": "string", "default": "default", "description": "隔离 agent_id" }
+        }
       },
       "server": {
         "type": "object",

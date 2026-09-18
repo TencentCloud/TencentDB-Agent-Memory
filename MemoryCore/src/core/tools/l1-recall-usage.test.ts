@@ -21,8 +21,10 @@ const dir = mkdtempSync(join(tmpdir(), "tdai-usage-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const DAY = 86_400_000;
+const SCOPE = { teamId: "t", userId: "u", agentId: "a" };
+const LEGACY_SCOPE = { teamId: "default", userId: "default", agentId: "default" };
 
-function makeRecord(id: string, content: string, ageMs: number): MemoryRecord {
+function makeRecord(id: string, content: string, ageMs: number, scope = SCOPE): MemoryRecord {
   const ts = new Date(Date.now() - ageMs).toISOString();
   return {
     id,
@@ -37,9 +39,9 @@ function makeRecord(id: string, content: string, ageMs: number): MemoryRecord {
     updatedAt: ts,
     sessionKey: "sk-test",
     sessionId: "sid-test",
-    teamId: "t",
-    userId: "u",
-    agentId: "a",
+    teamId: scope.teamId,
+    userId: scope.userId,
+    agentId: scope.agentId,
   };
 }
 
@@ -68,7 +70,7 @@ describe("L1 usage write-back and recency/frequency boost", () => {
     expect(byId.get("cold")!.use_count).toBe(0);
 
     // Simulate the agent selecting "hot" repeatedly → usage boost wins the tie.
-    for (let i = 0; i < 10; i++) expect(await recordMemoryUsage(store, ["hot"])).toBe(1);
+    for (let i = 0; i < 10; i++) expect(await recordMemoryUsage(store, ["hot"], SCOPE)).toBe(1);
     const r3 = await executeMemorySearch({ query: "billing service", limit: 5, vectorStore: store });
     expect(r3.results.map((r) => r.id)).toEqual(["hot", "cold"]);
     expect(r3.results[0].use_count).toBe(10);
@@ -76,11 +78,25 @@ describe("L1 usage write-back and recency/frequency boost", () => {
     store.close();
   });
 
+  it("does not write usage outside the supplied isolation filter", async () => {
+    const store = new VectorStore(join(dir, "scope.db"), 0);
+    store.init();
+    store.upsertL1(makeRecord("own", "isolated billing note", 0, SCOPE), undefined);
+    store.upsertL1(makeRecord("foreign", "isolated billing note", 0, { ...SCOPE, teamId: "other" }), undefined);
+
+    expect(await recordMemoryUsage(store, ["foreign"], SCOPE)).toBe(0);
+    expect(await recordMemoryUsage(store, ["own"], SCOPE)).toBe(1);
+    const rows = store.searchL1Fts('"isolated" AND "billing"', 5);
+    expect(rows.find((row) => row.record_id === "foreign")?.use_count).toBe(0);
+    expect(rows.find((row) => row.record_id === "own")?.use_count).toBe(1);
+    store.close();
+  });
+
   it("touchL1Usage with unknown ids returns 0 and never throws", () => {
     const store = new VectorStore(join(dir, "touch.db"), 0);
     store.init();
-    expect(store.touchL1Usage([])).toBe(0);
-    expect(store.touchL1Usage(["nope"])).toBe(0);
+    expect(store.touchL1Usage([], SCOPE)).toBe(0);
+    expect(store.touchL1Usage(["nope"], SCOPE)).toBe(0);
     store.close();
   });
 
@@ -106,7 +122,7 @@ describe("L1 usage write-back and recency/frequency boost", () => {
 
     const store = new VectorStore(dbPath, 0);
     expect(() => store.init()).not.toThrow();
-    expect(store.touchL1Usage(["legacy-1"])).toBe(1);
+    expect(store.touchL1Usage(["legacy-1"], LEGACY_SCOPE)).toBe(1);
     store.close();
   });
 });

@@ -644,9 +644,10 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * Usage write-back ("use it or lose it"): bump use_count + last_used_ms for
    * records that surfaced in an agent-facing search. Best-effort — callers
    * fire-and-forget and must not fail the search on write-back errors.
+   * The isolation filter is required; unscoped usage writes are rejected.
    * Optional capability; absent → retrieval keeps pure-similarity ranking.
    */
-  touchL1Usage?(recordIds: string[]): MaybePromise<number>;
+  touchL1Usage?(recordIds: string[], filter: IsolationFilter): MaybePromise<number>;
 
   // ── L0 Write ─────────────────────────────────────────────
 
