@@ -18,6 +18,7 @@ import type { MemoryPromptMode } from "../../config.js";
 import type { ExtractedMemory, MemoryRecord, DedupDecision, MemoryType } from "./l1-writer.js";
 import { formatBatchConflictPrompt, getConflictDetectionSystemPrompt } from "../prompts/l1-dedup.js";
 import type { CandidateMatch } from "../prompts/l1-dedup.js";
+import { timestampsFromSearchHit, uniqueSortedTimestamps } from "./l1-timestamps.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse } from "../../utils/sanitize.js";
 import type { IMemoryStore, IsolationFilter, L1SearchResult } from "../store/types.js";
@@ -186,7 +187,7 @@ async function runLlmJudgment(
     }
 
     const decisions = parseBatchResult(result, memories, logger);
-    return decisions;
+    return applyDedupProvenance(decisions, matches, logger);
   } catch (err) {
     logger?.warn?.(
       `${TAG} Batch conflict detection failed, defaulting all to store: ${err instanceof Error ? err.message : String(err)}`,
@@ -214,7 +215,7 @@ function hitToMemoryRecord(r: L1SearchResult): MemoryRecord {
     metadata: r.metadata_json
       ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })()
       : {},
-    timestamps: [r.timestamp_str].filter(Boolean),
+    timestamps: timestampsFromSearchHit(r),
     createdAt: "",
     updatedAt: "",
     sessionKey: r.session_key,
@@ -305,7 +306,8 @@ const VALID_TYPES: MemoryType[] = ["persona", "episodic", "instruction", "work_f
 /**
  * Parse the LLM's batch conflict detection JSON response.
  *
- * Expected format: [{record_id, action, target_ids, merged_content, merged_type, merged_priority, merged_timestamps}]
+ * Expected format: [{record_id, action, target_ids, merged_content, merged_type, merged_priority}]
+ * `merged_timestamps` from the model is ignored; applyDedupProvenance fills it.
  */
 function parseBatchResult(
   raw: string,
@@ -387,7 +389,7 @@ function parseBatchResult(
         merged_content: typeof d.merged_content === "string" ? d.merged_content : undefined,
         merged_type: VALID_TYPES.includes(d.merged_type as MemoryType) ? (d.merged_type as MemoryType) : undefined,
         merged_priority: typeof d.merged_priority === "number" ? d.merged_priority : undefined,
-        merged_timestamps: Array.isArray(d.merged_timestamps) ? d.merged_timestamps.map(String) : undefined,
+        // merged_timestamps is computed in applyDedupProvenance — ignore model output.
       });
     }
 
@@ -409,6 +411,82 @@ function parseBatchResult(
     logger?.warn?.(`${TAG} Failed to parse conflict detection result: ${err instanceof Error ? err.message : String(err)}`);
     return fallbackStoreAll(memories);
   }
+}
+
+/**
+ * Fill `merged_timestamps` from code (new-memory source times ∪ selected
+ * candidate times). Model-invented timestamps are ignored.
+ *
+ * Merge/update is kept only when the new memory has source timestamps AND every
+ * non-blank listed target is in this batch's unified candidate pool. Otherwise
+ * fall back to `store` with the original memory (no merged_content, no target
+ * deletes): missing provenance, empty targets, all-invalid IDs, and mixed
+ * valid/invalid targets must not replace existing records. Hallucinated IDs are
+ * not silently dropped from a merge/update. Blank ids are ignored, not mixed.
+ */
+export function applyDedupProvenance(
+  decisions: DedupDecision[],
+  matches: CandidateMatch[],
+  logger?: Logger,
+): DedupDecision[] {
+  const pool = new Map<string, MemoryRecord>();
+  const memoryById = new Map<string, ExtractedMemory & { record_id: string }>();
+  for (const m of matches) {
+    memoryById.set(m.newMemory.record_id, m.newMemory);
+    for (const candidate of m.candidates) {
+      if (!pool.has(candidate.id)) pool.set(candidate.id, candidate);
+    }
+  }
+
+  return decisions.map((decision) => {
+    const listedTargets = decision.target_ids.filter((id) => id.trim() !== "");
+    const allowedTargets = listedTargets.filter((id) => pool.has(id));
+    const mem = memoryById.get(decision.record_id);
+    const sourceTimestamps = uniqueSortedTimestamps(mem?.timestamps ?? []);
+
+    if (decision.action === "merge" || decision.action === "update") {
+      const reason = mergeUpdateStoreReason(
+        sourceTimestamps.length,
+        allowedTargets.length,
+        listedTargets.length,
+      );
+      if (reason) {
+        logger?.warn?.(
+          `${TAG} Falling back to store for ${decision.record_id} (${decision.action} → store, reason=${reason})`,
+        );
+        return storeOriginalMemory(decision);
+      }
+    }
+
+    const union = uniqueSortedTimestamps([
+      ...sourceTimestamps,
+      ...allowedTargets.flatMap((id) => pool.get(id)?.timestamps ?? []),
+    ]);
+    return {
+      ...decision,
+      target_ids: allowedTargets,
+      merged_timestamps: union.length > 0 ? union : undefined,
+    };
+  });
+}
+
+function mergeUpdateStoreReason(
+  sourceTimestampCount: number,
+  allowedTargetCount: number,
+  listedTargetCount: number,
+): "empty_source_timestamps" | "no_valid_targets" | "mixed_targets" | undefined {
+  if (sourceTimestampCount === 0) return "empty_source_timestamps";
+  if (allowedTargetCount === 0) return "no_valid_targets";
+  if (allowedTargetCount !== listedTargetCount) return "mixed_targets";
+  return undefined;
+}
+
+function storeOriginalMemory(decision: DedupDecision): DedupDecision {
+  return {
+    record_id: decision.record_id,
+    action: "store",
+    target_ids: [],
+  };
 }
 
 /**
