@@ -54,11 +54,19 @@ export class GitSourceFetcher implements ISourceFetcher {
     this.ssrfCheck = opts?.ssrfCheck ?? ssrfCheckEnabledFromEnv();
   }
 
-  validate(sourceUrl: string): void {
+  async validate(sourceUrl: string): Promise<void> {
     // 第一版：仅支持 public HTTPS 仓库（SSH / 私有仓库鉴权见文档 005）。
     if (!sourceUrl.startsWith("https://")) {
       throw new Error(
         "first version only supports public HTTPS repos; SSH/private repo support coming soon",
+      );
+    }
+    // 防 git 参数注入：sourceUrl 必须是纯 https URL，不允许空白/控制字符/CLI 参数
+    // （如 "--upload-pack=..."、"-c ..." 会被 simple-git 当作 git 选项，issue #672 CWE-88）。
+    const PLAIN_URL_RE = /^https:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$/;
+    if (!PLAIN_URL_RE.test(sourceUrl)) {
+      throw new Error(
+        `invalid repo_url: must be a plain https URL without spaces or CLI args: ${sourceUrl}`,
       );
     }
     const host = this.extractHost(sourceUrl);
@@ -66,13 +74,20 @@ export class GitSourceFetcher implements ISourceFetcher {
       throw new Error(`invalid repo_url: cannot parse host from ${sourceUrl}`);
     }
     // R2: SSRF 防护 —— 禁止指向内网 / 环回地址（可经 KNOWLEDGE_SSRF_CHECK=off 关闭）。
-    if (this.ssrfCheck && this.isPrivateAddress(host)) {
-      throw new Error(`repo_url must not point to private/loopback address: ${host}`);
+    // 同时把 hostname 解析成实际 IP 再校验，防止 DNS rebinding / 通配符 DNS 绕过
+    // 字面量正则（issue #672 CWE-918）。
+    if (this.ssrfCheck) {
+      const privateIps = await this.resolvePrivateIps(host);
+      if (privateIps.length > 0) {
+        throw new Error(
+          `repo_url must not point to private/loopback address: ${host} (resolved to ${privateIps.join(", ")})`,
+        );
+      }
     }
   }
 
   async fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
-    this.validate(sourceUrl);
+    await this.validate(sourceUrl);
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
     // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
     // （加固版 git 会拒绝该配置：需 allowUnsafeHooksPath）。
@@ -85,7 +100,7 @@ export class GitSourceFetcher implements ISourceFetcher {
   }
 
   async sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
-    this.validate(sourceUrl);
+    await this.validate(sourceUrl);
     const git = simpleGit(localPath);
     await git.fetch("origin", branch, { "--depth": 1 });
     await git.reset(ResetMode.HARD, [`origin/${branch}`]);
@@ -116,5 +131,26 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   private isPrivateAddress(host: string): boolean {
     return PRIVATE_ADDR_RE.test(host);
+  }
+
+  /**
+   * Resolve a hostname to its IPs and return any that fall in private /
+   * loopback / link-local ranges. Guards against DNS rebinding where a domain
+   * resolves to internal or cloud-metadata addresses (169.254.169.254 etc.)
+   * that the literal-hostname regex would miss (issue #672, CWE-918).
+   */
+  private async resolvePrivateIps(host: string): Promise<string[]> {
+    const { lookup } = await import("node:dns/promises");
+    const privateIps: string[] = [];
+    try {
+      const entries = await lookup(host, { all: true });
+      for (const entry of entries) {
+        if (this.isPrivateAddress(entry.address)) privateIps.push(entry.address);
+      }
+    } catch {
+      // DNS resolution failure — the URL-level checks already passed; let git
+      // attempt the fetch and surface its own error.
+    }
+    return privateIps;
   }
 }
