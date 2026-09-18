@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
-import type { CostGuardConfig, ProxyConfig, RawYamlConfig } from "./types.js";
+import type { AgentUpstreamEntry, CostGuardConfig, ProxyConfig, RawYamlConfig, UpstreamProtocolOptions } from "./types.js";
 
 const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
@@ -244,19 +244,29 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
  * noise (and would make "did I configure this right?" harder to answer at
  * a glance).
  */
+function parseUpstreamProtocol(raw: UpstreamProtocolOptions | undefined): UpstreamProtocolOptions {
+  if (!raw) return {};
+  if (raw.protocol !== undefined && !["chat", "anthropic", "responses"].includes(raw.protocol)) throw new Error("upstream.protocol must be chat, anthropic, or responses");
+  if (raw.maxTokens !== undefined && (!Number.isSafeInteger(raw.maxTokens) || raw.maxTokens < 1)) throw new Error("upstream.maxTokens must be a positive integer");
+  if (raw.allowCacheControlDrop !== undefined && typeof raw.allowCacheControlDrop !== "boolean") throw new Error("upstream.allowCacheControlDrop must be boolean");
+  return {
+    ...(raw.protocol !== undefined ? { protocol: raw.protocol } : {}),
+    ...(raw.maxTokens !== undefined ? { maxTokens: raw.maxTokens } : {}),
+    ...(raw.allowCacheControlDrop !== undefined ? { allowCacheControlDrop: raw.allowCacheControlDrop } : {}),
+  };
+}
+
 function parseUpstreamAgents(
-  raw: Record<string, { url?: string; apiKey?: string } | null | undefined> | undefined,
-): Record<string, { url: string; apiKey?: string }> {
+  raw: NonNullable<RawYamlConfig["upstream"]>["agents"],
+): Record<string, AgentUpstreamEntry> {
   if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, { url: string; apiKey?: string }> = {};
+  const out: Record<string, AgentUpstreamEntry> = {};
   for (const [name, entry] of Object.entries(raw)) {
     if (!entry || typeof entry !== "object") continue;
     const url = (entry as { url?: unknown }).url;
     if (typeof url !== "string" || url.length === 0) continue;
     const apiKey = (entry as { apiKey?: unknown }).apiKey;
-    out[name] = typeof apiKey === "string" && apiKey.length > 0
-      ? { url, apiKey }
-      : { url };
+    out[name] = { url, ...(typeof apiKey === "string" && apiKey.length > 0 ? { apiKey } : {}), ...parseUpstreamProtocol(entry) };
   }
   return out;
 }
@@ -278,6 +288,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         DEFAULT_CONFIG.server.forwardTimeoutMs,
     },
     upstream: {
+      ...parseUpstreamProtocol(yaml.upstream),
       url:
         overrides.upstreamUrl ??
         yaml.upstream?.url ??

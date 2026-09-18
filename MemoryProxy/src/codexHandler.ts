@@ -30,6 +30,8 @@ import type { ProxyConfig } from "./types.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
+import { fetchProtocolAttempt, protocolErrorResponse, type ForwardProtocolContext } from "./protocol/forward.js";
+import { ProtocolError } from "./protocol/common.js";
 import { joinUrl } from "./guard-adapter.js";
 import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
@@ -1133,13 +1135,23 @@ async function forwardToUpstream(
   pipe.forwardStart(upstreamUrl);
 
   let upstreamResp: Response;
+  const isInference = /\/responses\/?$/.test(c.req.path);
+  const protocolContext: ForwardProtocolContext | undefined = isInference ? {
+    source: "responses",
+    settings: { ...config.upstream, ...agentUpstreamEntry },
+    defaultUrl: upstreamUrl,
+    request: body,
+    signal: c.req.raw.signal,
+    warn: message => pipe.info("PROTOCOL", message),
+  } : undefined;
   try {
-    upstreamResp = await fetch(upstreamUrl, {
+    upstreamResp = await fetchProtocolAttempt({ url: upstreamUrl, model: modelId }, {
       method: "POST",
       headers: upstreamHeaders,
       body: JSON.stringify(body),
-    });
+    }, protocolContext);
   } catch (err: unknown) {
+    if (err instanceof ProtocolError) return protocolErrorResponse(err, "responses", err.status);
     pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
     // 上报 langfuse 失败（转发异常 —— 上游未回响应体，只有本地 fetch 抛错）
     if (lf) {

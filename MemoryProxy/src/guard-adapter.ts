@@ -49,6 +49,7 @@ interface RetryTarget {
   url: string;
   model: string;
   authHeaders: Record<string, string> | null;
+  wireProtocol?: import("./protocol/common.js").WireProtocol;
 }
 
 /** Analyzer trace returned by cost-guard for host observability. */
@@ -73,6 +74,7 @@ export interface ForwardTarget {
   authHeaders: Record<string, string> | null;
   bodyOverrides: Record<string, unknown> | null;
   retryTarget: RetryTarget | null;
+  wireProtocol?: import("./protocol/common.js").WireProtocol;
   logLine: string;
   logLineExtra: string;
   tags: string[];
@@ -330,6 +332,7 @@ export function joinUrl(base: string, requestPath: string): string {
   // agentUpstreams 或完整 endpoint base 已含路径时勿再拼接。
   if (
     baseWithoutQuery.endsWith("/messages") ||
+    baseWithoutQuery.endsWith("/responses") ||
     baseWithoutQuery.endsWith("/chat/completions")
   ) {
     return normalizedBase;
@@ -468,6 +471,7 @@ export async function resolveForwardTarget(
     authHeaders: Record<string, string> | null;
     bodyOverrides: Record<string, unknown> | null;
     retryTarget: RetryTarget | null;
+    wireProtocol?: import("./protocol/common.js").WireProtocol;
     logLine?: string;
     logLineExtra?: string;
     tags?: unknown[];
@@ -486,6 +490,7 @@ export async function resolveForwardTarget(
     authHeaders: raw.authHeaders ?? null,
     bodyOverrides: raw.bodyOverrides ?? null,
     retryTarget: raw.retryTarget ?? null,
+    wireProtocol: raw.wireProtocol,
     logLine: typeof raw.logLine === "string" ? raw.logLine : "",
     logLineExtra: typeof raw.logLineExtra === "string" ? raw.logLineExtra : "",
     tags: Array.isArray(raw.tags)

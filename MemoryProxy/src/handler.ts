@@ -23,8 +23,11 @@ import {
 } from "./common/langfuse-debug.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
+import { fetchProtocolAttempt, protocolErrorResponse, upstreamAccounting, type ForwardProtocolContext } from "./protocol/forward.js";
+import { ProtocolError } from "./protocol/common.js";
 import {
   resolveForwardTarget,
+  joinUrl,
   resolveSessionKey,
   resolveLatestUserQuery,
   reportAnalyzerTrace,
@@ -308,6 +311,7 @@ async function forwardWithRetry(
   forwardTimeoutMs: number,
   sessionKeyForDebug?: string,
   rateLimitContext?: { config: ProxyConfig; instanceId?: string },
+  protocolContext?: ForwardProtocolContext,
 ): Promise<{ resp: Response; retried: boolean }> {
   let upstreamResp: Response | undefined;
   let forwardFailed = false;
@@ -369,8 +373,9 @@ async function forwardWithRetry(
     });
   }
   try {
-    upstreamResp = await fetch(target.url, fetchOpts);
+    upstreamResp = await fetchProtocolAttempt(target, fetchOpts, protocolContext);
   } catch (err: unknown) {
+    if (err instanceof ProtocolError) throw err;
     if (err instanceof DOMException && err.name === "TimeoutError") {
       pipe.error("FORWARD", `Timeout after ${forwardTimeoutMs / 1000}s`);
     } else {
@@ -387,6 +392,7 @@ async function forwardWithRetry(
     (forwardFailed || (upstreamResp && upstreamResp.status >= 400 && upstreamResp.status < 500));
 
   if (shouldRetry && target.retryTarget) {
+    await upstreamResp?.body?.cancel();
     const reason = forwardFailed ? "timeout/error" : `${upstreamResp!.status}`;
     pipe.info("RETRY", `Routed model failed (${reason}), retryUrl=${target.retryTarget.url} model=${target.retryTarget.model}`);
 
@@ -414,7 +420,7 @@ async function forwardWithRetry(
       if (forwardTimeoutMs > 0) {
         retryFetchOpts.signal = AbortSignal.timeout(forwardTimeoutMs);
       }
-      upstreamResp = await fetch(target.retryTarget.url, retryFetchOpts);
+      upstreamResp = await fetchProtocolAttempt(target.retryTarget, retryFetchOpts, protocolContext);
       if (upstreamResp.ok) {
         pipe.info("RETRY_SUCCESS", `Retry returned ${upstreamResp.status}`);
       } else {
@@ -422,6 +428,7 @@ async function forwardWithRetry(
       }
       return { resp: upstreamResp, retried: true };
     } catch (retryErr: unknown) {
+      if (retryErr instanceof ProtocolError) throw retryErr;
       if (isRateLimitExceededError(retryErr)) throw retryErr;
       if (retryErr instanceof DOMException && retryErr.name === "TimeoutError") {
         pipe.error("RETRY_FORWARD", `Timeout after ${forwardTimeoutMs / 1000}s`);
@@ -1540,6 +1547,11 @@ export async function handleChatCompletions(
   pipe.forwardStart(target.url);
   let upstreamResp: Response;
   let retried = false;
+  const protocolContext: ForwardProtocolContext = {
+    source: "chat", settings: { ...config.upstream, ...agentUpstreamEntry },
+    defaultUrl: joinUrl(agentUpstreamEntry?.url ?? config.upstream.url, forwardEndpoint),
+    request: body, signal: c.req.raw.signal, warn: message => pipe.info("PROTOCOL", message),
+  };
 
   try {
     const result = await forwardWithRetry(
@@ -1548,10 +1560,12 @@ export async function handleChatCompletions(
       pipe, forwardTimeoutMs,
       sessionKey,
       { config, instanceId: spaceId || undefined },
+      protocolContext,
     );
     upstreamResp = result.resp;
     retried = result.retried;
   } catch (err: unknown) {
+    if (err instanceof ProtocolError) return protocolErrorResponse(err, "chat", err.status);
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
       return err.response;
@@ -1605,7 +1619,7 @@ export async function handleChatCompletions(
     }
 
     // Log upstream error body for 4xx responses
-    if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
+    if (upstreamResp.status >= 400) {
       const [errBodyStream, clientPassStream] = upstreamResp.body.tee();
       const errText = await new Response(errBodyStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
@@ -1641,6 +1655,7 @@ export async function handleChatCompletions(
     pipe.streamStart();
 
     const tapCtx: TapContext = {
+      protocolContext,
       config,
       modelId: effectiveModel,
       keyId,
@@ -1892,16 +1907,18 @@ export async function handleChatCompletions(
   // via the `x-credit-report-error` response header but never replace the
   // upstream LLM response body — the user-facing answer is preserved.
   // skipCreditReport: instance config custom model → user's expense, skip credit.
+  const accounting = upstreamAccounting(protocolContext, usage, effectiveModel, target.url, "chat");
   const creditOutcome = skipCreditReport
     ? { attempted: false, ok: false }
     : await tryReportCreditFromPath(
     config.creditReport,
     c.req.path,
-    usage,
+    accounting.usage,
     config.creditPricing,
-    effectiveModel,
-    target.url,
+    accounting.model,
+    accounting.url,
     "usage",
+    accounting.protocol,
   );
   if (creditOutcome.attempted && !creditOutcome.ok) {
     pipe.error("CREDIT_REPORT", creditOutcome.errorMessage ?? "unknown");
@@ -1953,6 +1970,7 @@ function outputMessageContent(message: Record<string, unknown> | null): string |
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 interface TapContext {
+  protocolContext?: ForwardProtocolContext;
   config: ProxyConfig;
   modelId: string;
   keyId: string;
@@ -2319,16 +2337,18 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // been forwarded to the client; failures here are best-effort and can
     // only be observed via server logs (no way to retro-add response headers).
     // skipCreditReport: instance config custom model → user's expense, skip credit.
+    const accounting = upstreamAccounting(ctx.protocolContext, lastUsage, ctx.modelId, ctx.upstreamUrl, "chat");
     (ctx.skipCreditReport
-      ? Promise.resolve({ attempted: false, ok: false })
+      ? Promise.resolve({ attempted: false, ok: false, errorMessage: undefined })
       : tryReportCreditFromPath(
           ctx.config.creditReport,
           ctx.requestPath,
-          lastUsage,
+          accounting.usage,
           ctx.config.creditPricing,
-          ctx.modelId,
-          ctx.upstreamUrl,
+          accounting.model,
+          accounting.url,
           "usage",
+          accounting.protocol,
         ))
       .then((outcome) => {
         if (outcome.attempted && !outcome.ok) {

@@ -2,7 +2,7 @@
 
 MemoryProxy 是一个**透明的 LLM 请求代理**：把编码 Agent（Claude Code / CodeBuddy 等）原本直连大模型的请求，改为先经过它中转。它在转发前后自动完成会话初始化、记忆注入、对话回流等动作，让 Agent **无需改动一行代码**就能用上 [MemoryCore](../MemoryCore/README_CN.md) 提供的团队记忆、Skill 和 Knowledge。
 
-对客户端和上游模型来说，它是“透明”的——不改变任何协议，原样转发 OpenAI `/v1/chat/completions` 和 Anthropic `/v1/messages`，只是在中转的这一进一出里，顺手做了这些事：**会话初始化、上下文注入、对话回流、鉴权与用量上报**。
+默认情况下它按客户端协议透明转发；配置上游协议后，也可以在 OpenAI Chat Completions、OpenAI Responses 与 Anthropic Messages 之间做有边界的双向转换。中转过程同时完成：**会话初始化、上下文注入、对话回流、鉴权与用量上报**。
 
 > 一句话分工：MemoryProxy 管“接入与转发”，MemoryCore 管“记忆的存储与处理”。Proxy 自身不落记忆数据，所有 Memory / Skill / Knowledge 读写都经 MemoryCore Gateway（默认 `:8420`）完成。整体产品定位见仓库根 [README_CN.md](../README_CN.md)。
 
@@ -26,6 +26,7 @@ MemoryProxy 是一个**透明的 LLM 请求代理**：把编码 Agent（Claude C
 
 - **会话初始化**：首次对话时拦截请求，通过交互式表单引导用户选择 team → agent → task，完成后把 agent/task 上下文注入 system prompt。支持从请求头（`x-team-id` / `x-agent-id` / `x-task-id`）自动预选。
 - **上下文注入**：把 Skill、Knowledge、Memory L2/L3 等按需注入 system prompt；L0/L1 通过只读工具接口暴露给模型主动查询，避免破坏上游 KV cache。
+- **协议转换**：支持 Chat Completions ↔ Anthropic Messages、Responses ↔ Anthropic Messages 的 JSON 与 SSE 双向转换；保留文本、图片、函数工具、停止原因与 token 用量，转换失败按客户端协议返回明确错误。
 - **对话回流（提取）**：每轮真人对话结束时，把对话切片同步发到 MemoryCore `/v3/skill/conversation/add`（Skill 归档）并写入 L0 短期记忆，供 core 侧后台抽取。
 - **鉴权与身份**：调用 MemoryCore `POST /v3/meta/auth/verify` 校验 `x-tdai-user-key`，解析出 `user_id` 作为全链路用户标识；`spaceId`（memory 实例 id）从 `/proxy/<spaceId>/...` 路径自动提取。
 - **系统用户短路透传**：内部服务账号（如 memory / wiki 内部调用）命中后跳过 session init 和注入，只做透明转发 + 计费。
@@ -101,6 +102,24 @@ cp config.example.yaml config.yaml
 
 - `upstream.url` / `upstream.apiKey` —— 上游 LLM 地址与凭据
 - `auth.url` / `tdai.endpoint` / `skill.endpoint` —— 指向你的 MemoryCore Gateway（默认 `http://127.0.0.1:8420`）
+
+### 协议转换
+
+`upstream.protocol` 声明上游实际协议；省略时继续按客户端协议转发。它也可写在 `upstream.agents.<agent>` 下，覆盖指定客户端：
+
+```yaml
+upstream:
+  url: https://claude.example.com/v1
+  apiKey: sk-ant-example
+  protocol: anthropic
+  maxTokens: 8192
+  agents:
+    codex:
+      url: https://claude.example.com/v1
+      protocol: anthropic
+```
+
+转换只作用于主推理端点，`responses/compact` 等辅助端点仍按原协议透传。不能无损表达的能力会返回 `400`，包括 reasoning/thinking、Responses 的有状态或后台执行、服务端内置工具、严格函数 schema，以及未获允许的 Anthropic `cache_control`。确实接受丢失缓存断点时才设置 `allowCacheControlDrop: true`。
 
 > **本地无 Redis 快速跑通**：示例配置默认 `redis.enabled: true`，本机没起 Redis 时会持续刷 `ECONNREFUSED 127.0.0.1:6379`。纯本地开发建议改为 `redis.enabled: false` + `storage.enabled: true`（`storage.backend: sqlite`），会话/注入/Skill 状态改走本地 SQLite，启动即干净。
 

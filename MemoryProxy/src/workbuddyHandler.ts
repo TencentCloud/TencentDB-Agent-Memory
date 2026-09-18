@@ -19,6 +19,8 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "./types.js";
+import { fetchProtocolAttempt, protocolErrorResponse, type ForwardProtocolContext } from "./protocol/forward.js";
+import { ProtocolError } from "./protocol/common.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
@@ -545,13 +547,23 @@ async function forwardToUpstream(
   }
 
   let upstreamResp: Response;
+  const isInference = /\/responses\/?$/.test(c.req.path);
+  const protocolContext: ForwardProtocolContext | undefined = isInference ? {
+    source: "responses",
+    settings: { ...config.upstream, ...perAgent },
+    defaultUrl: upstreamUrl,
+    request: body,
+    signal: c.req.raw.signal,
+    warn: message => pipe.info("PROTOCOL", message),
+  } : undefined;
   try {
-    upstreamResp = await fetch(upstreamUrl, {
+    upstreamResp = await fetchProtocolAttempt({ url: upstreamUrl, model: modelId }, {
       method: "POST",
       headers,
       body: bodyStr,
-    });
+    }, protocolContext);
   } catch (err) {
+    if (err instanceof ProtocolError) return protocolErrorResponse(err, "responses", err.status);
     const msg = err instanceof Error ? err.message : String(err);
     pipe.info("WORKBUDDY_FORWARD_ERR", msg);
     // 网络层失败 → langfuse failure 上报，让线上可视化能看到

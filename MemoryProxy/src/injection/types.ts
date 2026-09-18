@@ -30,6 +30,8 @@ export interface ContextBlock {
   type: ContextBlockType;
   content: string;
   metadata?: Record<string, unknown>;
+  /** Native fields retained by same-protocol adapters; never an interchange format. */
+  native?: Record<string, unknown>;
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────────
@@ -46,6 +48,7 @@ export interface ContextMessage {
   role: MessageRole;
   blocks: ContextBlock[];
   metadata?: Record<string, unknown>;
+  native?: Record<string, unknown>;
 }
 
 // ── Tools ─────────────────────────────────────────────────────────────────────
@@ -63,6 +66,8 @@ export interface AgentTool {
    * Sits at the same level as `input_schema` in the wire format.
    */
   cacheControl?: unknown;
+  /** Original provider fields (server-tool type, strict, etc.) for native forwarding. */
+  native?: Record<string, unknown>;
 }
 
 // ── Context Metadata ──────────────────────────────────────────────────────────

@@ -117,6 +117,7 @@ export function computeCreditDelta(
   pricingConfig: CreditPricingConfig | null | undefined,
   modelId?: string,
   upstreamUrl?: string,
+  wireProtocol?: import("./protocol/common.js").WireProtocol,
 ): number {
   if (!usage) return 0;
 
@@ -124,7 +125,7 @@ export function computeCreditDelta(
   const isTokenHub = upstreamUrl ? /tokenhub/i.test(upstreamUrl) : false;
   if (!isTokenHub) return 0;
 
-  const protocol = detectUsageProtocol(upstreamUrl ?? "");
+  const protocol = wireProtocol ?? detectUsageProtocol(upstreamUrl ?? "");
 
   // 通用字段
   const output = numField(usage.completion_tokens) || numField(usage.output_tokens);
@@ -146,8 +147,8 @@ export function computeCreditDelta(
     cacheWrite1h = Math.max(0, totalCacheWrite - ephemeral5m);
   } else {
     // OpenAI: prompt_tokens 含缓存，需减去 cached_tokens
-    const promptDetails = usage.prompt_tokens_details as Record<string, unknown> | undefined;
-    const promptTokens = numField(usage.prompt_tokens);
+    const promptDetails = (protocol === "responses" ? usage.input_tokens_details : usage.prompt_tokens_details) as Record<string, unknown> | undefined;
+    const promptTokens = numField(protocol === "responses" ? usage.input_tokens : usage.prompt_tokens);
     cacheRead =
       numField(usage.cache_read_tokens) ||
       numField(promptDetails?.cached_tokens);
@@ -302,6 +303,7 @@ export async function tryReportCreditFromPath(
    * Defaults to `"usage"` semantically when omitted (backward compatible).
    */
   event?: "usage" | "analyzer_usage",
+  wireProtocol?: import("./protocol/common.js").WireProtocol,
 ): Promise<CreditReportOutcome> {
   // Defense-in-depth: extension telemetry events must never trigger a credit report.
   // Today the extension telemetry path (writeLog with event="analyzer_usage") does not
@@ -319,7 +321,7 @@ export async function tryReportCreditFromPath(
     SpaceId: spaceId,
     MemoryLevel: PROXY_MEMORY_LEVEL,
     MemoryDelta: 0,
-    CreditDelta: computeCreditDelta(usage, pricingConfig, modelId, upstreamUrl),
+    CreditDelta: computeCreditDelta(usage, pricingConfig, modelId, upstreamUrl, wireProtocol),
   });
   if (result.ok) {
     return { attempted: true, ok: true, result };

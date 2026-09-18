@@ -1,4 +1,14 @@
 /** Shared type definitions for context-proxy. */
+import type { WireProtocol } from "./protocol/common.js";
+
+export interface UpstreamProtocolOptions {
+  /** Omitted preserves the existing same-protocol forwarding behavior. */
+  protocol?: WireProtocol;
+  /** Fallback output budget when converting a request without a limit to Messages. */
+  maxTokens?: number;
+  /** Explicitly allow dropping provider-specific cache breakpoints, with a warning. */
+  allowCacheControlDrop?: boolean;
+}
 
 /**
  * Optional private forwarding extension config.
@@ -405,7 +415,7 @@ export interface SkillRuntimeConfig {
  * alone determines routing, matching how {@link ProxyConfig#upstream.url}
  * itself is protocol-agnostic.
  */
-export interface AgentUpstreamEntry {
+export interface AgentUpstreamEntry extends UpstreamProtocolOptions {
   /** Target upstream base URL. Required. */
   url: string;
   /**
@@ -427,7 +437,7 @@ export interface ProxyConfig {
     /** Upstream forward timeout in ms. 0 = no timeout. Default: 600_000 (10 min). */
     forwardTimeoutMs?: number;
   };
-  upstream: {
+  upstream: UpstreamProtocolOptions & {
     url: string; // OpenAI-compatible upstream URL
     apiKey: string; // 若非空则替换请求中的 API Key
     /**
@@ -771,11 +781,11 @@ export interface RawYamlConfig {
     port?: number;
     forwardTimeoutMs?: number;
   };
-  upstream?: {
+  upstream?: UpstreamProtocolOptions & {
     url?: string;
     apiKey?: string;
     /** Per-agent override map. See `AgentUpstreamEntry`. */
-    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    agents?: Record<string, (UpstreamProtocolOptions & { url?: string; apiKey?: string }) | null | undefined>;
   };
   log?: {
     file?: string;

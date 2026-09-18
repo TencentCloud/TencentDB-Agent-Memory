@@ -26,7 +26,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
     // Anthropic has a top-level "system" field
     if (body.system != null) {
       const systemBlocks = this.parseSystemField(body.system);
-      messages.push({ role: "system", blocks: systemBlocks });
+      messages.push({ role: "system", blocks: systemBlocks, metadata: { arrayContent: Array.isArray(body.system) } });
     }
 
     // Parse conversation messages
@@ -69,7 +69,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
     body.messages = conversationMsgs.map((m) => this.serializeMessage(m));
 
     // Serialize tools
-    if (ctx.tools && ctx.tools.length > 0) {
+    if (ctx.tools) {
       body.tools = ctx.tools.map((t) => this.serializeTool(t));
     }
 
@@ -101,12 +101,13 @@ export class AnthropicAdapter implements ProtocolAdapter {
       }
     }
 
-    return { role, blocks };
+    return { role, blocks, native: structuredClone(m) };
   }
 
   private parseContentBlock(block: Record<string, unknown>): ContextBlock {
     const type = block.type as string;
     const parsed = this.parseContentBlockInner(block, type);
+    parsed.native = structuredClone(block);
     // Preserve prompt-cache breakpoint marker across the round-trip.
     if (block.cache_control !== undefined && parsed.type !== "custom") {
       parsed.metadata = { ...parsed.metadata, cache_control: block.cache_control };
@@ -149,6 +150,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
           metadata: {
             tool_use_id: block.tool_use_id as string,
             is_error: block.is_error as boolean | undefined,
+            originalText: contentStr,
           },
         };
       }
@@ -164,7 +166,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
         const source = block.source as Record<string, unknown> | undefined;
         return {
           type: "image",
-          content: (source?.data as string) ?? "",
+          content: (source?.type === "url" ? source.url as string : source?.data as string) ?? "",
           metadata: {
             media_type: source?.media_type,
             source_type: source?.type,
@@ -186,6 +188,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
       name: (raw.name as string) ?? "unknown",
       description: (raw.description as string) ?? "",
       parameters: (raw.input_schema as Record<string, unknown>) ?? {},
+      native: structuredClone(raw),
     };
     if (raw.cache_control !== undefined) {
       tool.cacheControl = raw.cache_control;
@@ -197,7 +200,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
 
   private serializeSystemMessage(msg: ContextMessage): unknown {
     const textBlocks = msg.blocks.filter((b) => b.type === "text");
-    if (textBlocks.length === 1) {
+    if (msg.blocks.length === 1 && textBlocks.length === 1 && !msg.metadata?.arrayContent && textBlocks[0].metadata?.cache_control === undefined && !textBlocks[0].native) {
       return textBlocks[0].content;
     }
     // Multiple blocks → use array format
@@ -206,11 +209,12 @@ export class AnthropicAdapter implements ProtocolAdapter {
 
   private serializeMessage(msg: ContextMessage): Record<string, unknown> {
     const content = msg.blocks.map((b) => this.serializeContentBlock(b));
-    return { role: msg.role, content };
+    const plainText = typeof msg.native?.content === "string" && msg.blocks.every(b => b.type === "text" && !b.native && !b.metadata?.cache_control);
+    return { ...msg.native, role: msg.role, content: plainText ? msg.blocks.map(b => b.content).join("\n") : content };
   }
 
   private serializeContentBlock(block: ContextBlock): Record<string, unknown> {
-    const out = this.serializeContentBlockInner(block);
+    const out = { ...block.native, ...this.serializeContentBlockInner(block) };
     // Restore prompt-cache breakpoint marker (skip custom: already fully rebuilt from JSON).
     if (block.type !== "custom" && block.metadata?.cache_control !== undefined) {
       out.cache_control = block.metadata.cache_control;
@@ -237,13 +241,29 @@ export class AnthropicAdapter implements ProtocolAdapter {
       }
 
       case "tool_result": {
+        const nativeContent = block.native?.content;
+        let content: unknown = block.content;
+        if (Array.isArray(nativeContent)) {
+          if (block.content === block.metadata?.originalText) content = nativeContent;
+          else {
+            // Keep non-text results even when a hook replaces the textual projection.
+            let replaced = false;
+            content = nativeContent.flatMap((part: Record<string, unknown>) => {
+              if (part.type !== "text") return [part];
+              if (replaced) return [];
+              replaced = true;
+              return [{ ...part, text: block.content }];
+            });
+            if (!replaced) (content as unknown[]).push({ type: "text", text: block.content });
+          }
+        }
         const result: Record<string, unknown> = {
           type: "tool_result",
           tool_use_id: block.metadata?.tool_use_id ?? "",
-          content: block.content,
+          content,
         };
-        if (block.metadata?.is_error) {
-          result.is_error = true;
+        if (block.metadata?.is_error !== undefined) {
+          result.is_error = block.metadata.is_error;
         }
         return result;
       }
@@ -258,7 +278,10 @@ export class AnthropicAdapter implements ProtocolAdapter {
       case "image":
         return {
           type: "image",
-          source: {
+          source: block.metadata?.source_type === "url" ? {
+            ...(block.native?.source as Record<string, unknown>), type: "url", url: block.content,
+          } : {
+            ...(block.native?.source as Record<string, unknown>),
             type: block.metadata?.source_type ?? "base64",
             media_type: block.metadata?.media_type ?? "image/png",
             data: block.content,
@@ -277,10 +300,11 @@ export class AnthropicAdapter implements ProtocolAdapter {
 
   private serializeTool(tool: AgentTool): Record<string, unknown> {
     const out: Record<string, unknown> = {
+      ...tool.native,
       name: tool.name,
-      description: tool.description,
-      input_schema: tool.parameters,
     };
+    if (!tool.native || "description" in tool.native || tool.description !== "") out.description = tool.description;
+    if (!tool.native || "input_schema" in tool.native || Object.keys(tool.parameters).length) out.input_schema = tool.parameters;
     if (tool.cacheControl !== undefined) {
       out.cache_control = tool.cacheControl;
     }

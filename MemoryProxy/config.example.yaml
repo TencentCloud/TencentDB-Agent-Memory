@@ -29,16 +29,20 @@ server:
 
 # ── 上游 LLM 服务（默认兜底） ──────────────────────────────────────────────────
 upstream:
-  # 上游 OpenAI-compatible API 地址（/v1/chat/completions 会由 proxy 自动拼接）
-  # 也支持完整路径如 https://llm-upstream.example.com/v2/
+  # 上游 API 地址；推理端点会由 proxy 按协议自动拼接。
   url: https://tokenhub.example.com/v1
   # 若非空，则替换所有转发请求中的 Authorization: Bearer <apiKey>。
   # 留空则透传客户端原始 API Key。
   apiKey: "<YOUR_TOKENHUB_API_KEY>"
+  # 上游实际使用的协议。省略时保持历史行为：按客户端协议原样转发。
+  # protocol: anthropic       # chat | responses | anthropic
+  # 转为 Anthropic Messages 时，若客户端没给输出上限则使用此值；不猜测或截断。
+  # maxTokens: 8192
+  # Anthropic cache_control 无法无损映射到 OpenAI；默认拒绝，可显式允许丢弃并记录告警。
+  # allowCacheControlDrop: false
 
   # ── Per-Agent 覆盖 ─────────────────────────────────────────────────────────
-  # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url + apiKey。
-  # Anthropic 和 OpenAI 协议共用同一张表。
+  # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url、apiKey 和协议转换选项。
   #
   # 兜底规则（重要）——只有"没配这个 agent"才会走外层 upstream 兜底：
   #
@@ -65,6 +69,8 @@ upstream:
     #   apiKey: "sk-ant-agent-key"
     # codex:                                              # 客户端 key 透传模式
     #   url: "https://codex-upstream.example.com/v1"
+    #   protocol: anthropic                               # Responses 客户端转 Anthropic 上游
+    #   maxTokens: 8192
     #   # 不写 apiKey → 透传客户端自己带上来的 key，不走外层兜底
     # 注意：workbuddy / codebuddy / claude-code 等客户端不需要单独配 per-agent override，
     # 它们的请求会自然落到外层 upstream.url + 鉴权走的 user_key，proxy 自动按 user_id
@@ -707,8 +713,6 @@ ccRequestRouting:
 
 # ── Per-Agent 上游路由 ─────────────────────────────────────────────────────
 # 见文件顶部 `upstream.agents` 一段。
-
-
 # ── 本地 JSONL Trace 归档 ─────────────────────────────────────────────────────
 # 启用后，每个 trace + span 以 JSONL 行追加写入本地文件（按日期分文件），
 # 文件名格式：<hostname>-<YYYY-MM-DD>.jsonl

@@ -24,8 +24,11 @@ import {
 } from "./langfuse.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
+import { fetchProtocolAttempt, protocolErrorResponse, upstreamAccounting, type ForwardProtocolContext } from "./protocol/forward.js";
+import { ProtocolError } from "./protocol/common.js";
 import {
   resolveForwardTarget,
+  joinUrl,
   resolveSessionKey,
   resolveLatestUserQuery,
   reportAnalyzerTrace,
@@ -386,6 +389,7 @@ async function forwardWithRetry(
   forwardTimeoutMs: number,
   sessionKeyForDebug?: string,
   rateLimitContext?: { config: ProxyConfig; instanceId?: string },
+  protocolContext?: ForwardProtocolContext,
 ): Promise<{ resp: Response; retried: boolean }> {
   let upstreamResp: Response | undefined;
   let forwardFailed = false;
@@ -451,13 +455,14 @@ async function forwardWithRetry(
     });
   }
   try {
-    upstreamResp = await fetch(target.url, {
+    upstreamResp = await fetchProtocolAttempt(target, {
       method: "POST",
       headers: upstreamHeaders,
       body: JSON.stringify(upstreamBody),
-      signal: AbortSignal.timeout(forwardTimeoutMs),
-    });
+      ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
+    }, protocolContext);
   } catch (err: unknown) {
+    if (err instanceof ProtocolError) throw err;
     if (err instanceof DOMException && err.name === "TimeoutError") {
       pipe.error("FORWARD", `Timeout after ${forwardTimeoutMs / 1000}s`);
     } else {
@@ -474,6 +479,7 @@ async function forwardWithRetry(
     (forwardFailed || (upstreamResp && upstreamResp.status >= 400 && upstreamResp.status < 500));
 
   if (shouldRetry && target.retryTarget) {
+    await upstreamResp?.body?.cancel();
     const reason = forwardFailed ? "timeout/error" : `${upstreamResp!.status}`;
     pipe.info("RETRY", `Routed model failed (${reason}), retrying with ${target.retryTarget.model}`);
 
@@ -492,12 +498,12 @@ async function forwardWithRetry(
           protocol: "anthropic",
         });
       }
-      upstreamResp = await fetch(target.retryTarget.url, {
+      upstreamResp = await fetchProtocolAttempt(target.retryTarget, {
         method: "POST",
         headers: retryHeaders,
-        body: JSON.stringify(originalBody),
-        signal: AbortSignal.timeout(forwardTimeoutMs),
-      });
+        body: JSON.stringify({ ...originalBody, model: target.retryTarget.model }),
+        ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
+      }, protocolContext);
       if (upstreamResp.ok) {
         pipe.info("RETRY_SUCCESS", `Retry returned ${upstreamResp.status}`);
       } else {
@@ -505,6 +511,7 @@ async function forwardWithRetry(
       }
       return { resp: upstreamResp, retried: true };
     } catch (retryErr: unknown) {
+      if (retryErr instanceof ProtocolError) throw retryErr;
       if (isRateLimitExceededError(retryErr)) throw retryErr;
       if (retryErr instanceof DOMException && retryErr.name === "TimeoutError") {
         pipe.error("RETRY_FORWARD", `Timeout after ${forwardTimeoutMs / 1000}s`);
@@ -1448,6 +1455,11 @@ export async function handleAnthropicMessages(
   pipe.forwardStart();
   let upstreamResp: Response;
   let retried = false;
+  const protocolContext: ForwardProtocolContext = {
+    source: "anthropic", settings: { ...config.upstream, ...agentUpstreamEntry },
+    defaultUrl: joinUrl(defaultUpstreamUrl, forwardEndpoint),
+    request: body, signal: c.req.raw.signal, warn: message => pipe.info("PROTOCOL", message),
+  };
 
   try {
     const result = await forwardWithRetry(
@@ -1456,10 +1468,12 @@ export async function handleAnthropicMessages(
       pipe, forwardTimeoutMs,
       sessionKey,
       { config, instanceId: spaceId || undefined },
+      protocolContext,
     );
     upstreamResp = result.resp;
     retried = result.retried;
   } catch (err: unknown) {
+    if (err instanceof ProtocolError) return protocolErrorResponse(err, "anthropic", err.status);
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
       return err.response;
@@ -1510,7 +1524,7 @@ export async function handleAnthropicMessages(
     }
 
     // Log error body for 4xx
-    if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
+    if (upstreamResp.status >= 400) {
       const [errStream, clientStream] = upstreamResp.body.tee();
       const errText = await new Response(errStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
@@ -1548,6 +1562,7 @@ export async function handleAnthropicMessages(
 
     // Background: consume tap stream for Anthropic SSE → extract usage
     consumeAnthropicStream(tapStream, {
+      protocolContext,
       config,
       modelId: effectiveModel,
       keyId,
@@ -1809,17 +1824,21 @@ export async function handleAnthropicMessages(
     console.log(`[cc-routing] skip L0 write for kind=${requestKind} session=${sessionKey}`);
   }
 
-  // Credit usage reporting (non-streaming).
+  // Credit usage reporting (non-streaming). Failures are surfaced to the client
+  // via the `x-credit-report-error` response header but never replace the
+  // upstream LLM response body — the user-facing answer is preserved.
+  const accounting = upstreamAccounting(protocolContext, usage, effectiveModel, target.url, "anthropic");
   const creditOutcome = skipCreditReport
     ? { attempted: false, ok: false }
     : await tryReportCreditFromPath(
     config.creditReport,
     c.req.path,
-    usage,
+    accounting.usage,
     config.creditPricing,
-    effectiveModel,
-    target.url,
+    accounting.model,
+    accounting.url,
     "usage",
+    accounting.protocol,
   );
   if (creditOutcome.attempted && !creditOutcome.ok) {
     pipe.error("CREDIT_REPORT", creditOutcome.errorMessage ?? "unknown");
@@ -1951,6 +1970,7 @@ function createSseThinkingFixStream(
 // ── Stream processing helpers ────────────────────────────────────────────────
 
 interface AnthropicTapContext {
+  protocolContext?: ForwardProtocolContext;
   config: ProxyConfig;
   modelId: string;
   keyId: string;
@@ -2212,17 +2232,21 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
         console.log(`[cc-routing] skip skill buffer (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`);
       }
 
-      // Credit usage reporting for streaming responses.
+      // Credit usage reporting for streaming responses. The stream has already
+      // been forwarded to the client; failures here are best-effort and can
+      // only be observed via server logs (no way to retro-add response headers).
+      const accounting = upstreamAccounting(ctx.protocolContext, usage, ctx.modelId, ctx.upstreamUrl, "anthropic");
       (ctx.skipCreditReport
-        ? Promise.resolve({ attempted: false, ok: false })
+        ? Promise.resolve({ attempted: false, ok: false, errorMessage: undefined })
         : tryReportCreditFromPath(
             ctx.config.creditReport,
             ctx.requestPath,
-            usage,
+            accounting.usage,
             ctx.config.creditPricing,
-            ctx.modelId,
-            ctx.upstreamUrl,
+            accounting.model,
+            accounting.url,
             "usage",
+            accounting.protocol,
           ))
         .then((outcome) => {
           if (outcome.attempted && !outcome.ok) {
