@@ -23,6 +23,7 @@ import {
 } from "./common/langfuse-debug.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
+import { resolveAgentUpstreamForProtocol } from "./types.js";
 import {
   resolveForwardTarget,
   resolveSessionKey,
@@ -664,6 +665,10 @@ export async function handleChatCompletions(
   const agentFromPath = pathParts[0] && !["v1", "proxy", "skill-bridge", "memory-bridge"].includes(pathParts[0])
     ? pathParts[0] : undefined;
   const agentSource = agentFromPath ?? "claude-code";
+  const agentUpstreamEntry = resolveAgentUpstreamForProtocol(
+    agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
+    "openai",
+  );
 
   // ── Identity inspection ──────────────────────────────────────────────────
   const reqHeaders: Record<string, string> = {};
@@ -1197,6 +1202,9 @@ export async function handleChatCompletions(
         spaceId,
         userId,
         apiKey: apiKey || "",
+        upstreamApiKey: agentUpstreamEntry
+          ? agentUpstreamEntry.apiKey || apiKey || ""
+          : config.upstream.apiKey || apiKey || "",
         sessionInfo: sessionInfo as Record<string, unknown>,
         protocol: "openai",
         stream: isStream,
@@ -1205,9 +1213,7 @@ export async function handleChatCompletions(
         bodyMessages: extractSimpleMessages(body.messages),
         // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
         model: modelId,
-        upstreamUrl:
-          (agentFromPath ? config.upstream.agents?.[agentFromPath]?.url : undefined) ||
-          config.upstream.url,
+        upstreamUrl: agentUpstreamEntry?.url || config.upstream.url,
         // CB/CodeBuddy 主链路走 OpenAI chat/completions
         upstreamProtocol: "openai",
         // OpenAI 协议无 extended thinking 概念，恒 false
@@ -1336,7 +1342,6 @@ export async function handleChatCompletions(
   // upstream.agents[agent] is a single map keyed by agent name — same lookup
   // as anthropicHandler. Empty / missing entry → fall back to upstream.url,
   // preserving legacy behavior for configs that don't declare `agents:` at all.
-  const agentUpstreamEntry = agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined;
   // Per-agent apiKey resolution — three cases:
   //   (a) no entry in agents map           → global upstream.apiKey (兜底)
   //   (b) entry present, apiKey empty      → "" (passthrough, keep client key)

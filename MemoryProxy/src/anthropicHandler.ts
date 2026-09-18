@@ -24,6 +24,7 @@ import {
 } from "./langfuse.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
+import { resolveAgentUpstreamForProtocol } from "./types.js";
 import {
   resolveForwardTarget,
   resolveSessionKey,
@@ -286,6 +287,10 @@ function hasValidThinkingSignature(block: Record<string, unknown>): boolean {
 export function sanitizeThinkingBlocks(
   body: Record<string, unknown>,
 ): { body: Record<string, unknown>; removed: number } {
+  // DeepSeek requires thinking history verbatim and does not use Claude signatures.
+  if (typeof body.model === "string" && /^deepseek-/i.test(body.model)) {
+    return { body, removed: 0 };
+  }
   const messages = body.messages;
   if (!Array.isArray(messages)) return { body, removed: 0 };
 
@@ -648,6 +653,10 @@ export async function handleAnthropicMessages(
   const agentFromPath = pathParts[0] && !["v1", "proxy", "skill-bridge", "memory-bridge"].includes(pathParts[0])
     ? pathParts[0] : undefined;
   const agentSource = agentFromPath ?? "claude-code";
+  const agentUpstreamEntry = resolveAgentUpstreamForProtocol(
+    agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined,
+    "anthropic",
+  );
 
   // ── Identity inspection ──────────────────────────────────────────────────
   const reqHeaders: Record<string, string> = {};
@@ -1084,6 +1093,9 @@ export async function handleAnthropicMessages(
         spaceId,
         userId,
         apiKey: apiKey || "",
+        upstreamApiKey: agentUpstreamEntry
+          ? agentUpstreamEntry.apiKey || apiKey || ""
+          : config.upstream.apiKey || apiKey || "",
         sessionInfo: sessionInfo as Record<string, unknown>,
         protocol: "anthropic",
         stream: isStream,
@@ -1094,9 +1106,7 @@ export async function handleAnthropicMessages(
         bodyMessages: extractSimpleMessages((body as Record<string, unknown>).messages),
         // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
         model: modelId,
-        upstreamUrl:
-          (agentFromPath ? config.upstream.agents?.[agentFromPath]?.url : undefined) ||
-          config.upstream.url,
+        upstreamUrl: agentUpstreamEntry?.url || config.upstream.url,
         // Claude Code 主链路走 Anthropic Messages API
         upstreamProtocol: "anthropic",
       });
@@ -1236,7 +1246,6 @@ export async function handleAnthropicMessages(
   // prefix); both url and apiKey may be overridden per agent. When there's
   // no entry, we fall through to the Anthropic-specific global (costGuard
   // .anthropicUpstream) and finally to upstream.url — exactly as before.
-  const agentUpstreamEntry = agentFromPath ? config.upstream.agents?.[agentFromPath] : undefined;
   let effectiveApiKey = agentUpstreamEntry
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;

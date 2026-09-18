@@ -403,7 +403,7 @@ Open [http://localhost:8125](http://localhost:8125).
 
 ## Using Proxy with Agents
 
-The Proxy supports 9 agent clients. **Full setup instructions, adaptation details, and FAQs** for each agent are in the [`agents/`](./agents/) directory:
+The Proxy supports 10 agent clients. **Full setup instructions, adaptation details, and FAQs** for each agent are in the [`agents/`](./agents/) directory:
 
 | Agent | Config method | Docs |
 |-------|---------------|------|
@@ -416,6 +416,7 @@ The Proxy supports 9 agent clients. **Full setup instructions, adaptation detail
 | **Hermes** | `~/.hermes/config.yaml` + header preselect | [`agents/hermes/`](./agents/hermes/) |
 | **OpenClaw** | `~/.openclaw/openclaw.json` + header preselect | [`agents/openclaw/`](./agents/openclaw/) |
 | **Pi** | `pi-plugin` extension (env vars) | [`MemoryCore/pi-plugin/`](./MemoryCore/pi-plugin/) |
+| **ZCode** | custom provider in settings (Anthropic protocol) + session headers | [`agents/zcode/`](./agents/zcode/) |
 | **Other platforms** | Header preselect (generic) | [`agents/README.md`](./agents/README.md) |
 
 The proxy pipeline in order: `auth` (validates user_key) → `sessionInit`
