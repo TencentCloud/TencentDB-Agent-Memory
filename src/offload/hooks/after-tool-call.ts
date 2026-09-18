@@ -112,7 +112,7 @@ export function createAfterToolCallHandler(
     const hasMsgsKey = "messages" in (event ?? {});
     const msgsValue = event?.messages;
     const hasMsgs = msgsValue && Array.isArray(msgsValue);
-    logger.info(`[context-offload] after_tool_call event keys=[${eventKeys.join(",")}], hasMsgsKey=${hasMsgsKey}, msgsType=${typeof msgsValue}, isArray=${Array.isArray(msgsValue)}, len=${hasMsgs ? msgsValue.length : "N/A"}`);
+    logger.debug?.(`[context-offload] after_tool_call event keys=[${eventKeys.join(",")}], hasMsgsKey=${hasMsgsKey}, msgsType=${typeof msgsValue}, isArray=${Array.isArray(msgsValue)}, len=${hasMsgs ? msgsValue.length : "N/A"}`);
 
     // ── Patch-effectiveness detection ──
     // The upstream runtime patch is expected to populate event.messages with
@@ -168,7 +168,7 @@ export function createAfterToolCallHandler(
     // tool results that happen to contain "Approval required" in their text.
     const isApprovalPending = event.result?.details?.status === "approval-pending";
     if (isApprovalPending) {
-      logger.info(`[context-offload] after_tool_call: SKIP approval-pending tool ${event.toolName} (${toolCallId})`);
+      logger.debug?.(`[context-offload] after_tool_call: SKIP approval-pending tool ${event.toolName} (${toolCallId})`);
       stateManager.processedToolCallIds.add(toolCallId);
       return;
     }
@@ -183,7 +183,7 @@ export function createAfterToolCallHandler(
       durationMs: event.durationMs,
     };
     stateManager.addToolPair(pair);
-    logger.info(`[context-offload] after_tool_call: buffered ${event.toolName} (${toolCallId}), pending=${stateManager.getPendingCount()}, duration=${event.durationMs ?? "N/A"}ms`);
+    logger.debug?.(`[context-offload] after_tool_call: buffered ${event.toolName} (${toolCallId}), pending=${stateManager.getPendingCount()}, duration=${event.durationMs ?? "N/A"}ms`);
 
     // Cache latest user context for L2
     if (event.messages && Array.isArray(event.messages) && event.messages.length > 0 && !stateManager.cachedLatestTurnMessages) {
@@ -200,9 +200,9 @@ export function createAfterToolCallHandler(
         const l15Settled = stateManager.l15Settled;
         const activeMmdFile = stateManager.getActiveMmdFile();
         if (!l15Settled) {
-          logger.info(`[context-offload] after_tool_call MMD: SKIP (L1.5 not settled yet)`);
+          logger.debug?.(`[context-offload] after_tool_call MMD: SKIP (L1.5 not settled yet)`);
         } else if (!activeMmdFile) {
-          logger.info(`[context-offload] after_tool_call MMD: SKIP (no active MMD file)`);
+          logger.debug?.(`[context-offload] after_tool_call MMD: SKIP (no active MMD file)`);
         } else {
           const mmdContent = await readMmd(stateManager.ctx, activeMmdFile);
           if (mmdContent) {
@@ -231,19 +231,19 @@ export function createAfterToolCallHandler(
               const contentChanged = !oldContent.includes(activeMmdFile) || oldContent !== mmdText;
               if (contentChanged) {
                 event.messages[existingIdx] = newMsg;
-                logger.info(`[context-offload] after_tool_call MMD: UPDATED at [${existingIdx}], file=${activeMmdFile}, contentChanged=true`);
+                logger.debug?.(`[context-offload] after_tool_call MMD: UPDATED at [${existingIdx}], file=${activeMmdFile}, contentChanged=true`);
                 _dumpMessagesAfterMmd(event.messages, "UPDATED", logger);
               } else {
-                logger.info(`[context-offload] after_tool_call MMD: unchanged, skip update`);
+                logger.debug?.(`[context-offload] after_tool_call MMD: unchanged, skip update`);
               }
             } else {
               const insertIdx = findActiveMmdInsertionPoint(event.messages);
               event.messages.splice(insertIdx, 0, newMsg);
-              logger.info(`[context-offload] after_tool_call MMD: INJECTED at [${insertIdx}], file=${activeMmdFile}, msgs=${event.messages.length}`);
+              logger.debug?.(`[context-offload] after_tool_call MMD: INJECTED at [${insertIdx}], file=${activeMmdFile}, msgs=${event.messages.length}`);
               _dumpMessagesAfterMmd(event.messages, "INJECTED", logger);
             }
           } else {
-            logger.info(`[context-offload] after_tool_call MMD: file=${activeMmdFile} content is null`);
+            logger.debug?.(`[context-offload] after_tool_call MMD: file=${activeMmdFile} content is null`);
           }
         }
       } catch (err) {
@@ -264,7 +264,7 @@ export function createAfterToolCallHandler(
     const _compResult = await checkAndCompressAfterToolCall(event, stateManager, logger, pluginConfig, getContextWindow);
     const _compDuration = Date.now() - _compStart;
     const _msgsAfter = event.messages?.length ?? 0;
-    logger.info(`[context-offload] after_tool_call L3 check completed: ${_compDuration}ms`);
+    logger.debug?.(`[context-offload] after_tool_call L3 check completed: ${_compDuration}ms`);
 
     // QUICK-SKIP: no snapshots, skip trace
     if (_compResult) {
@@ -419,7 +419,7 @@ async function checkAndCompressAfterToolCall(
     const quickEst = quickTokenEstimate(messages, stateManager);
     if (quickEst < mildThreshold * 0.85 && stateManager.consecutiveQuickSkips < MAX_CONSECUTIVE_QUICK_SKIPS) {
       stateManager.consecutiveQuickSkips++;
-      logger.info(`[context-offload] L3(after_tool_call) QUICK-SKIP: est≈${quickEst} < ${Math.floor(mildThreshold * 0.85)} (85% mild), streak=${stateManager.consecutiveQuickSkips}/${MAX_CONSECUTIVE_QUICK_SKIPS}`);
+      logger.debug?.(`[context-offload] L3(after_tool_call) QUICK-SKIP: est≈${quickEst} < ${Math.floor(mildThreshold * 0.85)} (85% mild), streak=${stateManager.consecutiveQuickSkips}/${MAX_CONSECUTIVE_QUICK_SKIPS}`);
       return null;
     }
 
@@ -435,7 +435,7 @@ async function checkAndCompressAfterToolCall(
     const utilisation = snap.totalTokens / contextWindow;
     const aboveMild = snap.totalTokens >= mildThreshold;
     const aboveAggressive = snap.totalTokens >= aggressiveThreshold;
-    logger.info(
+    logger.debug?.(
       `[context-offload] L3(after_tool_call) token snapshot: tool=${event.toolName} total=${snap.totalTokens} ` +
       `msgCount=${messages.length} utilisation=${(utilisation * 100).toFixed(1)}% ` +
       `${aboveAggressive ? "⚠ ABOVE_AGGRESSIVE" : aboveMild ? "⚠ ABOVE_MILD" : "✓ OK"}`,
@@ -456,14 +456,19 @@ async function checkAndCompressAfterToolCall(
     let _aggDeletedCount = 0;
     // Aggressive
     if (workingTokens >= aggressiveThreshold) {
-      logger.info(`[context-offload] L3(after_tool_call) AGGRESSIVE: tokens≈${workingTokens} >= ${aggressiveThreshold}`);
+      logger.debug?.(`[context-offload] L3(after_tool_call) AGGRESSIVE: tokens≈${workingTokens} >= ${aggressiveThreshold}`);
+      const _atcAggStart = Date.now();
       const result = await aggressiveCompressUntilBelowThreshold(
         messages, offloadMap, currentTaskNodeIds, aggressiveDeleteRatio,
         stateManager, logger, aggressiveThreshold, countTokens, sysPrompt, null,
       );
       workingTokens = result.remainingTokens;
       _aggDeletedCount = result.deletedCount ?? result.allDeletedToolCallIds.length;
-      logger.info(`[context-offload] L3(after_tool_call) AGGRESSIVE done: rounds=${result.rounds ?? "?"}, deleted=${result.allDeletedToolCallIds.length}, remaining≈${workingTokens}, stalledByUserMsg=${result.stalledByUserMsg ?? false}`);
+      const _atcAggDuration = Date.now() - _atcAggStart;
+      logger.debug?.(`[context-offload] L3(after_tool_call) AGGRESSIVE done: rounds=${result.rounds ?? "?"}, deleted=${result.allDeletedToolCallIds.length}, remaining≈${workingTokens}, stalledByUserMsg=${result.stalledByUserMsg ?? false}, duration=${_atcAggDuration}ms`);
+      if (_atcAggDuration > 10_000) {
+        logger.warn(`[context-offload] L3(after_tool_call) AGGRESSIVE SLOW: ${_atcAggDuration}ms (rounds=${result.rounds ?? "?"}, deleted=${result.allDeletedToolCallIds.length}, remaining≈${workingTokens})`);
+      }
       dumpMessagesSnapshot("atc-after-aggressive", messages, logger);
       if (result.allDeletedToolCallIds.length > 0) {
         const statusUpdates = new Map<string, string | boolean>();
@@ -496,10 +501,10 @@ async function checkAndCompressAfterToolCall(
     // Mild
     let _mildResult: { mildReplacedCount: number; mildReplacedDetails: Array<{ toolCallId: string; score: number; summaryPreview: string; originalLength?: number; summaryLength?: number }> } = { mildReplacedCount: 0, mildReplacedDetails: [] };
     if (workingTokens >= mildThreshold) {
-      logger.info(`[context-offload] L3(after_tool_call) MILD: tokens≈${workingTokens} >= ${mildThreshold}`);
+      logger.debug?.(`[context-offload] L3(after_tool_call) MILD: tokens≈${workingTokens} >= ${mildThreshold}`);
       const cascadeResult = compressByScoreCascade(messages, offloadMap, currentTaskNodeIds, mildScanRatio, logger);
       const detailStr = cascadeResult.replacedDetails.map((d) => `${d.toolCallId}(score=${d.score}): "${d.summaryPreview}"`).join(" | ");
-      logger.info(`[context-offload] L3(after_tool_call) MILD done: replaced=${cascadeResult.replacedCount}, threshold=${cascadeResult.finalThreshold}${detailStr ? `, details=[${detailStr}]` : ""}`);
+      logger.debug?.(`[context-offload] L3(after_tool_call) MILD done: replaced=${cascadeResult.replacedCount}, threshold=${cascadeResult.finalThreshold}${detailStr ? `, details=[${detailStr}]` : ""}`);
       _mildResult = { mildReplacedCount: cascadeResult.replacedCount, mildReplacedDetails: cascadeResult.replacedDetails };
       if (cascadeResult.replacedCount > 0) {
         for (const id of cascadeResult.replacedToolCallIds) {
@@ -527,8 +532,13 @@ async function checkAndCompressAfterToolCall(
     let _emergencyDeletedCount = 0;
     if ((workingTokens >= emergencyThreshold || forceEmergency) && messages.length > EMERGENCY_MIN_MESSAGES_TO_KEEP) {
       _emergencyTriggered = true;
+      const _atcEmStart = Date.now();
       const emergencyResult = emergencyCompress(messages, emergencyTarget, countTokens, sysPrompt, null, logger);
+      const _atcEmDuration = Date.now() - _atcEmStart;
       _emergencyDeletedCount = emergencyResult.deletedCount;
+      if (_atcEmDuration > 10_000) {
+        logger.warn(`[context-offload] L3(after_tool_call) EMERGENCY SLOW: ${_atcEmDuration}ms (deleted=${emergencyResult.deletedCount}, remaining≈${emergencyResult.remainingTokens})`);
+      }
       if (emergencyResult.deletedToolCallIds.length > 0) {
         const statusUpdates = new Map<string, string | boolean>();
         for (const id of emergencyResult.deletedToolCallIds) {
@@ -580,5 +590,5 @@ function _extractText(msg: any): string {
 function _dumpMessagesAfterMmd(messages: any[], action: string, logger: PluginLogger): void {
   const mmdCount = messages.filter((m: any) => m._mmdContextMessage || m._mmdInjection).length;
   const offloadedCount = messages.filter((m: any) => m._offloaded).length;
-  logger.info(`[context-offload] POST-MMD-${action} (after_tool_call): ${messages.length} msgs, mmd=${mmdCount}, offloaded=${offloadedCount}`);
+  logger.debug?.(`[context-offload] POST-MMD-${action} (after_tool_call): ${messages.length} msgs, mmd=${mmdCount}, offloaded=${offloadedCount}`);
 }

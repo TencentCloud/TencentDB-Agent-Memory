@@ -51,7 +51,7 @@ export function createBeforePromptBuildHandler(
     const _sk = stateManager.getLastSessionKey() ?? _ctx?.sessionKey;
     if (typeof _sk === "string" && /memory-.*-session-\d+/.test(_sk)) return;
 
-    logger.info(`[context-offload] before_prompt_build CALLED, msgs=${event?.messages?.length ?? "?"}`);
+    logger.debug?.(`[context-offload] before_prompt_build CALLED, msgs=${event?.messages?.length ?? "?"}`);
     try {
       const messages = event.messages;
       if (!messages || !Array.isArray(messages) || messages.length === 0) return;
@@ -158,11 +158,16 @@ export function createBeforePromptBuildHandler(
         const countTokens = createL3TokenCounter(pluginConfig, logger);
         const aggressiveDeleteRatio = (pluginConfig as any)?.aggressiveDeleteRatio ?? PLUGIN_DEFAULTS.aggressiveDeleteRatio;
         const currentTaskNodeIds = await getCurrentTaskNodeIds(stateManager);
+        const _bpbAggStart = Date.now();
         const result = await aggressiveCompressUntilBelowThreshold(
           messages, offloadMap, currentTaskNodeIds, aggressiveDeleteRatio,
           stateManager, logger, aggressiveThreshold, countTokens, null, null,
         );
         workingTokens = result.remainingTokens;
+        const _bpbAggDuration = Date.now() - _bpbAggStart;
+        if (_bpbAggDuration > 10_000) {
+          logger.warn(`[context-offload] L3(before_prompt_build) AGGRESSIVE SLOW: ${_bpbAggDuration}ms (rounds=${result.rounds}, deleted=${result.deletedCount}, remaining≈${workingTokens})`);
+        }
         dumpMessagesSnapshot("bpb-after-aggressive", messages, logger);
         if (result.allDeletedToolCallIds.length > 0) {
           const statusUpdates = new Map<string, string | boolean>();
@@ -221,8 +226,13 @@ export function createBeforePromptBuildHandler(
         if (forceEmergency) stateManager._forceEmergencyNext = false;
         if ((workingTokens >= emergencyThreshold || forceEmergency) && messages.length > EMERGENCY_MIN_MESSAGES_TO_KEEP) {
           const countTokensBpb = createL3TokenCounter(pluginConfig, logger);
+          const _bpbEmStart = Date.now();
           const emergencyResult = emergencyCompress(messages, emergencyTarget, countTokensBpb, null, null, logger);
           workingTokens = emergencyResult.remainingTokens;
+          const _bpbEmDuration = Date.now() - _bpbEmStart;
+          if (_bpbEmDuration > 10_000) {
+            logger.warn(`[context-offload] L3(before_prompt_build) EMERGENCY SLOW: ${_bpbEmDuration}ms (deleted=${emergencyResult.deletedCount}, remaining≈${workingTokens})`);
+          }
           if (emergencyResult.deletedToolCallIds.length > 0) {
             const emergencyStatusUpdates = new Map<string, string | boolean>();
             for (const id of emergencyResult.deletedToolCallIds) {

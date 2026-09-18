@@ -17,6 +17,7 @@
 
 import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
+import type { Logger } from "../types.js";
 
 // Re-export so consumers can import everything from types.ts
 export type { MemoryRecord, EmbeddingProviderInfo };
@@ -26,12 +27,7 @@ export type { MemoryRecord, EmbeddingProviderInfo };
 // ============================
 
 /** Minimal logger interface accepted by store implementations. */
-export interface StoreLogger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+export type StoreLogger = Logger;
 
 // ============================
 // L1 Types (Structured Memories)

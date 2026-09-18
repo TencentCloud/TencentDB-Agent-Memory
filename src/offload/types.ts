@@ -3,6 +3,8 @@
  * Ported from context-offload-plugin with updated runtime defaults.
  */
 
+import type { Logger } from "../core/types.js";
+
 // ============================
 // Data types
 // ============================
@@ -212,12 +214,7 @@ export interface PluginConfig {
 // ============================
 
 /** Logger interface used by offload plugin components */
-export interface PluginLogger {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-  error: (msg: string) => void;
-  debug?: (msg: string) => void;
-}
+export type PluginLogger = Logger;
 
 // ============================
 // Plugin defaults
@@ -247,6 +244,6 @@ export const PLUGIN_DEFAULTS = {
   emergencyTargetRatio: 0.6,
   mmdMaxTokenRatio: 0.2,
   l3TokenCountMode: "tiktoken" as const,
-  l3TiktokenEncoding: "o200k_base" as const,
+  l3TiktokenEncoding: "cl100k_base" as const,
   defaultSystemOverheadRatio: 0.12,
 } as const;

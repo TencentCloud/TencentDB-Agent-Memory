@@ -4,6 +4,7 @@ import path from "node:path";
 import type { IMemoryStore, ProfileRecord, ProfileSyncRecord } from "../store/types.js";
 import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import type { Logger } from "../types.js";
 
 const PROFILE_SCOPE = "global";
 
@@ -11,13 +12,6 @@ const PROFILE_SCOPE = "global";
 function isRenameRaceError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException)?.code;
   return code === "ENOTEMPTY" || code === "EEXIST";
-}
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
 }
 
 export interface ProfileBaseline {

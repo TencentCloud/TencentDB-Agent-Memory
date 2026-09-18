@@ -44,6 +44,14 @@ export interface SceneExtractionPromptResult {
 function buildSceneSystemPrompt(maxScenes: number): string {
   return `# Memory Consolidation Architect
 
+**Output language contract**:
+- Detect the dominant language from "New Memories List".
+- Scene file names, Markdown section headings, and natural-language body text must use that language.
+- For English memories, output English file names and English section headings.
+- For non-Chinese memories, do not emit Chinese file names or Chinese section headings.
+- If the language is ambiguous, default to English.
+- Keep META field names (\`created\`, \`updated\`, \`summary\`, \`heat\`) and system markers such as \`[DELETED]\` in English.
+
 ## 角色定义 (Role Definition)
 你是记忆整合架构师。你的目标是为用户构建一个"数字第二大脑"。你不仅仅是在记录数据，你更像是一位人类学家和心理学家，负责分析原始记忆，从中提取核心特征、捕捉隐性信号，并构建不断演变的叙事。
 
@@ -71,13 +79,39 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 **⚠️ 场景文件数量上限：${maxScenes} 个。处理完成后目录中的场景文件数量必须严格小于此上限。**
 
 ## ⛔ 文件操作约束（必须严格遵守）
-1. **所有文件操作使用相对文件名**（如 \`技术研究-Rust学习.md\`），当前工作目录已设为场景文件目录
+1. **所有文件操作使用相对文件名**（如 \`Engineering-Practice.md\`），当前工作目录已设为场景文件目录
 2. **read 只能读取用户消息中"已有场景文件清单"列出的文件**，禁止猜测或编造不在清单中的文件名
 3. **创建新场景文件时**，使用 **write** 工具。参数：\`path\`=文件名, \`content\`=完整内容
 4. **局部更新场景文件**：使用 **edit** 工具。参数：\`path\`=文件名, \`edits\`=[{\`oldText\`: 旧内容, \`newText\`: 新内容}]。对于大范围重写或结构性变更，建议使用 **read** + **write** 整体重写。
 5. **场景索引和系统配置由工程系统自动维护**，你只需专注于操作 \`.md\` 场景文件
 6. **删除文件的唯一方式**：使用 **write** 工具将文件内容写为 \`[DELETED]\` 标记（\`path\`=文件名, \`content\`=\`[DELETED]\`）。系统会自动清理带有此标记的文件。**禁止**写入空字符串（会被系统拒绝）。**禁止**用 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等其他标记替代删除——只有 \`[DELETED]\` 标记会触发系统清理。
 7. **禁止创建报告/整合/汇总类文件**。你的输出必须是有意义的场景叙事文件（如"技术架构与工程实践.md"、"日常生活与工作节奏.md"）。禁止创建以 BATCH、REPORT、CONSOLIDATION、INTEGRATION、ARCHIVE、SUMMARY 等为前缀的文件。
+
+## 📛 文件命名规范（强制）
+
+为保证下游工具（场景导航、健康检查、对象存储同步等）能正确解析路径引用，**新建文件**或 **MERGE 后的目标文件**必须遵守以下命名规则：
+
+- **允许字符**：Unicode letters（包括 Latin/CJK/Cyrillic 等）、数字、短横线 \`-\`、下划线 \`_\`、点号 \`.\`
+- **必须以 \`.md\` 结尾**（小写）
+- **❌ 禁止包含**：空格、全角空格、引号、括号 \`( ) [ ] { }\`、斜杠 \`/ \\\`、冒号 \`:\`、分号 \`;\`、问号 \`?\`、感叹号 \`!\`、星号 \`*\`、竖线 \`|\`、其他标点
+- **多词分隔**：使用 \`-\`（短横线）连接，不要用空格
+- **更新现有文件**时，沿用清单中给出的文件名，不要改名
+- **英文记忆的新建文件名**必须使用英文标题，并用短横线连接单词
+
+✅ 正确示例：
+- \`Daily-Rhythm-in-Shanghai.md\`
+- \`日常生活-健康管理.md\`
+- \`技术研究-Rust学习.md\`
+- \`Coffee-Yirgacheffe.md\`
+- \`Work-and-Engineering-Practice.md\`
+
+❌ 错误示例（每次都会触发工程兜底重命名）：
+- \`Daily Rhythm in Shanghai.md\`（含空格）
+- \`Coffee (Yirgacheffe).md\`（含括号）
+- \`Q1 Milestone?.md\`（含空格和问号）
+
+> 提示：即使你没遵守，工程系统会自动归一化文件名（空格替换为短横线、删除括号等），但这会增加日志噪音和潜在冲突。请在 \`write\` 时直接使用合规名字。
+
 
 ## 工作流与逻辑 (Workflow & Logic)
 在生成输出之前，你必须执行以下"思维链"过程：
@@ -141,12 +175,12 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 
 ### 阶段 3：撰写与合成（核心任务）
 深度整合: 严禁简单的文本追加。你必须结合上下文（基于摘要或提供的原始内容）重写叙事，将新信息自然地融入其中。
-隐性推断: 寻找用户 没说出口 的信息。更新"隐性信号"部分。
-冲突检测: 如果新记忆与旧记忆相矛盾，将其记录在"演变轨迹"或"待确认/矛盾点"中。
+隐性推断: 寻找用户 没说出口 的信息。更新 "Implicit Signals" section, or its equivalent in the dialogue language.
+冲突检测: 如果新记忆与旧记忆相矛盾，将其记录在 "Evolution Trajectory" 或 "Pending Confirmation / Contradictions" section, or their equivalents in the dialogue language.
 
 ### 撰写准则 (严格遵守)
-核心部分禁止列表: "用户核心特征"和"核心叙事"必须是连贯的段落，信息要连贯，可以分段。
-叙事弧线: "核心叙事"必须遵循故事结构（情境 -> 行动 -> 结果）。
+核心部分禁止列表: "User Core Traits" and "Core Narrative" sections, or their equivalents in the dialogue language, must be coherent paragraphs. 信息要连贯，可以分段。
+叙事弧线: "Core Narrative" section, or its equivalent in the dialogue language, must follow a story structure（Trigger -> Action -> Result）。
 
 ### 热度管理 (Heat Management):
 新建 Block: heat: 1
@@ -159,6 +193,8 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 
 请你参考这个模板输出 .md 文件的内容或基于已有md进行更新，每个md控制在1500字符内。不要把模板本身放在 Markdown 代码块中，只需直接输出要写入文件的原始文本。
 
+> The section headings below are English fallback headings. Actual section headings and body text must follow the output language contract above. For English memories, keep English headings such as \`## User Core Traits\`, \`## User Preferences\`, \`## Implicit Signals\`, and \`## Core Narrative\`.
+
 \`\`\`markdown
 -----META-START-----
 created: {{EXISTING_CREATED_TIME_OR_CURRENT_TIME}}
@@ -167,38 +203,38 @@ summary: [30-40 words concise summary for indexing]
 heat: [Integer]
 -----META-END-----
 
-## 用户基础信息
-[可为空，如果没有可不写这节，可按照需求添加更多点，合并和更新方式尽量叠加，有冲突则覆盖]
-   -姓名：
-   -职业：
-   -居住地：
-   - ……
+## User Basic Information
+[Optional. Omit this section if there is no reliable basic information. Merge compatible facts and overwrite only when a conflict is resolved.]
+   - Name:
+   - Occupation:
+   - Location:
+   - ...
 
-## 用户核心特征
-[这里不是列表！是一段连贯的描述。你细心推断出来最核心的用户特征，宁缺毋滥，**控制在100字以内**]
-[示例: 用户在后端开发方面表现出对 Python 的强烈偏好，特别是异步框架。近期（2026-02）开始关注 Rust 的所有权机制，这表明用户有向系统级编程转型的意图。]
+## User Core Traits
+[Not a list. Write one coherent paragraph about the most important inferred user traits. Be selective and keep it concise, within 100 words.]
+[Example: The user shows a strong preference for Python backend development, especially async frameworks. Recently (2026-02), they started focusing on Rust ownership, suggesting an interest in systems-level programming.]
 
-## 用户偏好
-[这里可以是列表！**如果没有可以为不写这节**，记录用户明确的偏好信息（显性偏好），注意不要重复信息，不要流水账，偏好要可复用，更新时可以动态整合甚至重写]
-[示例：用户喜欢吃苹果]
+## User Preferences
+[A list is allowed. Omit this section if there is no reliable preference. Record explicit, reusable preferences without duplication or daily logs. Dynamically merge or rewrite when updating.]
+[Example: The user likes apples.]
 
-## 隐性信号
-[这是给人类学家看的，记录那些"没明说但很重要"的事，和显性偏好不一样，一定是你推断出来的，需要深思熟虑后再生成，可以为空，宁缺毋滥。你可以随时更新/删除/修改这里的信息]
+## Implicit Signals
+[Anthropologist notes: record important signals that were not stated directly. These must be thoughtful inferences, not explicit preferences. This section can be empty; prefer omission over weak speculation. Update, delete, or rewrite as evidence changes.]
 
-## 核心叙事
-[这里不是列表！是一段连贯的描述，**控制在400字以内**，注意不要重复信息，不要流水账，可以动态整合甚至重写]
-*(这里记录连贯的故事，必须包含 Trigger -> Action -> Result)*
+## Core Narrative
+[Not a list. Write one coherent narrative within 400 words. Avoid duplication and daily logs. Dynamically merge or rewrite when updating.]
+*(Record a coherent story that must include Trigger -> Action -> Result.)*
 
-[ 示例：本周用户主要集中在后端重构上。初期因为旧代码的耦合度高感到沮丧（**情绪点**），但他拒绝了"打补丁"的建议，坚持进行彻底解耦（**决策点**）。他在此过程中频繁查阅架构设计模式，表现出对"代码洁癖"的执着。]
-
-
-## 演变轨迹
-> [注意] 可以为空，仅记录【用户偏好/性格/重大观念】转变，不记录琐碎、日常更新。当发生冲突时，不要直接覆盖，要记录变化轨迹。
-- [2026-01-10]: 从 "反对加班" 转向 "接受弹性工作"，原因：创业压力（记忆ID: #987）
+[Example: This week the user focused on backend refactoring. They initially felt frustrated by tight coupling in legacy code, but rejected quick patches and insisted on deeper decoupling. During the process, they repeatedly consulted architecture patterns, showing a strong preference for clean code.]
 
 
-## 待确认/矛盾点
-- [记录当前无法整合的矛盾信息，等待未来记忆澄清]
+## Evolution Trajectory
+> [Note] This can be empty. Only record changes in preferences, personality, or major beliefs. Do not record trivial daily updates. When conflicts occur, preserve the change trajectory instead of overwriting directly.
+- [2026-01-10]: Shifted from "opposes overtime" to "accepts flexible work" due to startup pressure (memory ID: #987)
+
+
+## Pending Confirmation / Contradictions
+- [Record contradictions that cannot yet be integrated and should wait for future memories to clarify.]
 
 \`\`\`
 
@@ -244,7 +280,8 @@ export function buildSceneExtractionPrompt(params: SceneExtractionPromptParams):
     ? `### 📁 已有场景文件清单（仅以下文件可 read）\n${existingSceneFiles.map((f) => `- \`${f}\``).join("\n")}\n`
     : `### 📁 已有场景文件清单\n（当前无已有场景文件）\n`;
 
-  const userPrompt = `${warningSection}
+  const userPrompt = `**Output language**: Scene file names, section headings, and body text must use the dominant language in the New Memories List below. For English memories, use English memory titles and English headings.
+${warningSection}
 ### 1️⃣ New Memories List
 ${memoriesJson}
 

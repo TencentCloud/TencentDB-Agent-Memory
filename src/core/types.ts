@@ -15,10 +15,10 @@
 // ============================
 
 /**
- * Minimal logger interface used throughout TDAI Core.
+ * Canonical logger interface used across all TDAI modules.
  *
- * Matches the existing `StoreLogger` and `RunnerLogger` interfaces
- * already used in the codebase — no migration needed for existing callers.
+ * Named variants (StoreLogger, PluginLogger, etc.) are type aliases
+ * of this interface, kept for backward compatibility.
  */
 export interface Logger {
   debug?: (message: string) => void;

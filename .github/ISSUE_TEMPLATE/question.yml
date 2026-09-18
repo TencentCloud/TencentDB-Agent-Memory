@@ -1,0 +1,37 @@
+name: ❓ Question / Consultation
+description: Ask a question about usage or community | 使用咨询或社区相关问题
+title: "[Question] "
+labels: ["question"]
+assignees: []
+
+body:
+  - type: dropdown
+    id: question-type
+    attributes:
+      label: Question Category | 问题类别
+      description: Select the category that best describes your question | 选择最符合你问题的类别
+      options:
+        - Usage / How-to | 使用方式咨询
+        - Compatibility / Integration | 兼容性 / 集成确认
+        - Community / Group | 社区 / 群组相关
+        - Other | 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: question-description
+    attributes:
+      label: Your Question | 你的问题
+      description: Describe your question clearly | 请清晰描述你的问题
+      placeholder: e.g. Does the memory plugin work with OpenClaw? | 例如：记忆插件是否支持 OpenClaw？
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / Background | 背景信息
+      description: Any context that helps us understand your question better | 有助于我们理解你问题的背景信息
+      placeholder: e.g. your use case, environment, what you've tried | 例如：你的使用场景、环境、已尝试的方案等
+    validations:
+      required: false

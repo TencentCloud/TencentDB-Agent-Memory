@@ -73,12 +73,12 @@ export async function reclaimOffloadData(
   };
 
   if (config.retentionDays < 3) {
-    logger.info(`${TAG} Skipped: retentionDays=${config.retentionDays} (min effective: 3)`);
+    logger.debug?.(`${TAG} Skipped: retentionDays=${config.retentionDays} (min effective: 3)`);
     return stats;
   }
 
   if (!existsSync(dataRoot)) {
-    logger.info(`${TAG} Skipped: dataRoot does not exist: ${dataRoot}`);
+    logger.debug?.(`${TAG} Skipped: dataRoot does not exist: ${dataRoot}`);
     return stats;
   }
 
@@ -180,7 +180,7 @@ async function deleteExpiredJsonlInDir(
       if (s.mtimeMs < cutoffMs) {
         await unlink(filePath);
         deleted++;
-        logger.info(`${TAG} Step 1: deleted expired JSONL: ${filePath} (mtime=${new Date(s.mtimeMs).toISOString()})`);
+        logger.debug?.(`${TAG} Step 1: deleted expired JSONL: ${filePath} (mtime=${new Date(s.mtimeMs).toISOString()})`);
       }
     } catch (err) {
       logger.warn(`${TAG} Step 1: failed to process ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -258,7 +258,7 @@ async function reclaimOrphanRefs(
         if (s.mtimeMs < cutoffMs) {
           await unlink(filePath);
           deleted++;
-          logger.info(`${TAG} Step 2: deleted orphan ref: ${filePath}`);
+          logger.debug?.(`${TAG} Step 2: deleted orphan ref: ${filePath}`);
         }
       } catch {
         /* skip individual file errors */
@@ -362,7 +362,7 @@ async function reclaimExpiredMmds(
         await unlink(filePath);
         deleted++;
         remaining--;
-        logger.info(`${TAG} Step 3: deleted expired MMD: ${filePath}`);
+        logger.debug?.(`${TAG} Step 3: deleted expired MMD: ${filePath}`);
       } catch {
         /* skip */
       }
@@ -422,7 +422,7 @@ async function rotateDebugLogs(
       await truncate(file.path, 0);
       totalSize -= file.size;
       truncated++;
-      logger.info(`${TAG} Step 4: truncated log: ${file.path} (was ${file.size} bytes)`);
+      logger.debug?.(`${TAG} Step 4: truncated log: ${file.path} (was ${file.size} bytes)`);
     } catch (err) {
       logger.warn(`${TAG} Step 4: failed to truncate ${file.path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -465,7 +465,7 @@ async function pruneRegistries(
         const removedCount = originalCount - Object.keys(registry).length;
         pruned += removedCount;
         await atomicWriteJson(registryPath, registry);
-        logger.info(`${TAG} Step 5: pruned ${removedCount} expired entries from ${registryPath}`);
+        logger.debug?.(`${TAG} Step 5: pruned ${removedCount} expired entries from ${registryPath}`);
       }
     } catch (err) {
       logger.warn(`${TAG} Step 5: failed to prune ${registryPath}: ${err instanceof Error ? err.message : String(err)}`);

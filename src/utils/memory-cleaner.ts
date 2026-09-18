@@ -3,13 +3,8 @@ import path from "node:path";
 
 import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+import type { Logger } from "../core/types.js";
+import { formatLocalDateTime, startOfLocalDay } from "./time.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -29,6 +24,10 @@ interface CleanupStats {
 const TAG = "[memory-tdai][cleaner]";
 const L0_DIR_NAME = "conversations";
 const L1_DIR_NAME = "records";
+
+/** Minimum records to retain — skip deletion if total is at or below this threshold. */
+const MIN_RETAIN_L0 = 50;
+const MIN_RETAIN_L1 = 20;
 
 export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
@@ -77,9 +76,15 @@ export class LocalMemoryCleaner {
       return;
     }
 
-    // 按“本地自然日”保留策略计算截止时间。
+    // 按"本地自然日"保留策略计算截止时间。
     // 例如 retentionDays=2，今天是 03-15，则保留 03-14/03-15，删除早于 03-14 00:00:00.000 的记录。
-    const cutoffMs = computeCutoffMsByLocalDay(nowMs, retentionDays);
+    let cutoffMs: number;
+    try {
+      cutoffMs = computeCutoffMsByLocalDay(nowMs, retentionDays);
+    } catch (err) {
+      this.opts.logger?.error(`${TAG} ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     const targetDirs = [
       path.join(this.opts.baseDir, L0_DIR_NAME),
       path.join(this.opts.baseDir, L1_DIR_NAME),
@@ -103,37 +108,76 @@ export class LocalMemoryCleaner {
     if (this.vectorStore) {
       const vectorStore = this.vectorStore;
       const cutoffIso = new Date(cutoffMs).toISOString();
+      const startMs = Date.now();
+
+      // ── Pre-delete: count totals and decide whether to proceed ──
+      let totalL0 = 0;
+      let totalL1 = 0;
+      try { totalL0 = await vectorStore.countL0(); } catch { /* non-fatal */ }
+      try { totalL1 = await vectorStore.countL1(); } catch { /* non-fatal */ }
+
+      this.opts.logger?.info(
+        `${TAG} [Pre-delete] cutoffIso=${cutoffIso}, retentionDays=${retentionDays}, totalL0=${totalL0}, totalL1=${totalL1}`,
+      );
 
       let removedL0 = 0;
       let removedL1 = 0;
+      let skippedL0 = false;
+      let skippedL1 = false;
       let failedL0DbCleanup = 0;
       let failedL1DbCleanup = 0;
 
-      try {
-        removedL0 = await vectorStore.deleteL0Expired(cutoffIso);
-      } catch (err) {
-        failedL0DbCleanup = 1;
-        this.opts.logger?.warn(
-          `${TAG} SQLite cleanup L0 failed: ${err instanceof Error ? err.message : String(err)}`,
+      // ── L0 cleanup with minimum-retention guard ──
+      if (totalL0 <= MIN_RETAIN_L0) {
+        skippedL0 = true;
+        this.opts.logger?.info(
+          `${TAG} [L0-delete] SKIPPED: totalL0=${totalL0} <= minRetain=${MIN_RETAIN_L0}`,
         );
+      } else {
+        try {
+          removedL0 = await vectorStore.deleteL0Expired(cutoffIso);
+        } catch (err) {
+          failedL0DbCleanup = 1;
+          this.opts.logger?.warn(
+            `${TAG} [L0-delete] FAILED: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
 
-      try {
-        removedL1 = await vectorStore.deleteL1Expired(cutoffIso);
-      } catch (err) {
-        failedL1DbCleanup = 1;
-        this.opts.logger?.warn(
-          `${TAG} SQLite cleanup L1 failed: ${err instanceof Error ? err.message : String(err)}`,
+      // ── L1 cleanup with minimum-retention guard ──
+      if (totalL1 <= MIN_RETAIN_L1) {
+        skippedL1 = true;
+        this.opts.logger?.info(
+          `${TAG} [L1-delete] SKIPPED: totalL1=${totalL1} <= minRetain=${MIN_RETAIN_L1}`,
         );
+      } else {
+        try {
+          removedL1 = await vectorStore.deleteL1Expired(cutoffIso);
+        } catch (err) {
+          failedL1DbCleanup = 1;
+          this.opts.logger?.warn(
+            `${TAG} [L1-delete] FAILED: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
       }
 
-      this.opts.logger?.info(
-        `${TAG} SQLite cleanup done: removedL1Records=${removedL1}, removedL0Records=${removedL0}, failedL1DbCleanup=${failedL1DbCleanup}, failedL0DbCleanup=${failedL0DbCleanup}, cutoffIso=${cutoffIso}`,
-      );
+      // ── Post-delete: audit summary ──
+      const durationMs = Date.now() - startMs;
+      const remainingL0 = totalL0 - removedL0;
+      const remainingL1 = totalL1 - removedL1;
+      const summary = {
+        event: "cleaner_summary",
+        cutoffIso,
+        retentionDays,
+        l0: { total: totalL0, expired: removedL0, remaining: remainingL0, skipped: skippedL0, failed: failedL0DbCleanup > 0 },
+        l1: { total: totalL1, expired: removedL1, remaining: remainingL1, skipped: skippedL1, failed: failedL1DbCleanup > 0 },
+        durationMs,
+      };
+      this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
     }
 
     this.opts.logger?.info(
@@ -271,18 +315,10 @@ function extractShardDateFromFileName(
 }
 
 function localDayEndMs(year: number, month: number, day: number): number {
-  const end = new Date(year, month - 1, day, 23, 59, 59, 999);
-  return end.getTime();
-}
-
-function formatLocalDateTime(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
-  return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
+  // End of day = start of next day minus 1ms (in configured timezone)
+  const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+  const nextDayStartMs = startOfLocalDay(nextDay);
+  return nextDayStartMs - 1;
 }
 
 function formatUtcOffset(offsetMinutes: number): string {
@@ -294,12 +330,29 @@ function formatUtcOffset(offsetMinutes: number): string {
 }
 
 function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number {
-  // 自然日策略，保留“今天 + 往前 retentionDays-1 天”
-  // 删除阈值为 keepStart 当天 00:00:00.000（本地时区）
+  // 自然日策略，保留"今天 + 往前 retentionDays-1 天"
+  // 删除阈值为 keepStart 当天 00:00:00.000（配置时区）
   const now = new Date(nowMs);
-  const keepStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  keepStart.setDate(keepStart.getDate() - (retentionDays - 1));
-  return keepStart.getTime();
+  const todayStartMs = startOfLocalDay(now);
+  const cutoffMs = todayStartMs - (retentionDays - 1) * 24 * 60 * 60 * 1000;
+
+  // Sanity check: cutoff must be strictly in the past
+  if (cutoffMs >= nowMs) {
+    throw new Error(
+      `cutoff sanity failed: cutoff (${cutoffMs}) >= now (${nowMs}), ` +
+      `possible clock skew or invalid retentionDays=${retentionDays}`,
+    );
+  }
+  // Sanity check: gap between now and cutoff must be at least 24h
+  const MIN_GAP_MS = 24 * 60 * 60 * 1000;
+  if (nowMs - cutoffMs < MIN_GAP_MS) {
+    throw new Error(
+      `cutoff sanity failed: gap ${nowMs - cutoffMs}ms < 24h, ` +
+      `retentionDays=${retentionDays}, possible clock skew`,
+    );
+  }
+
+  return cutoffMs;
 }
 
 function buildTodayRunTime(cleanTime: string, nowMs: number): number {

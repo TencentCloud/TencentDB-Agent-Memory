@@ -20,9 +20,51 @@ DEFAULT_TIMEOUT = 10  # seconds
 class MemoryTencentdbSdkClient:
     """HTTP client for the memory-tencentdb Gateway sidecar."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8420", timeout: int = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8420",
+        timeout: int = DEFAULT_TIMEOUT,
+        api_key: Optional[str] = None,
+    ):
+        """Construct the client.
+
+        Args:
+            base_url: Gateway base URL.
+            timeout: Default request timeout in seconds.
+            api_key: Optional Bearer token. When non-empty, every request
+                attaches ``Authorization: Bearer <api_key>``. When ``None``
+                or empty, no auth header is sent — this preserves the
+                pre-existing open-Gateway behaviour and is the right default
+                for any deployment where the Gateway has not opted into
+                ``TDAI_GATEWAY_API_KEY`` yet.
+
+                The provider sources this value from
+                ``MEMORY_TENCENTDB_GATEWAY_API_KEY`` (with
+                ``TDAI_GATEWAY_API_KEY`` as a fallback). The Gateway must
+                be configured with the matching secret independently —
+                this client does not (and should not) propagate the value
+                across to the Gateway process.
+        """
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        # Strip whitespace defensively — env vars often pick up trailing
+        # newlines from `echo` or YAML quoting; an exact-match Bearer
+        # comparison would otherwise reject a key that "looks right".
+        self._api_key = (api_key or "").strip() or None
+
+    def _build_headers(self, *, content_type: bool) -> Dict[str, str]:
+        """Build request headers, conditionally adding Authorization.
+
+        Centralised so the auth header logic is stated once: every method
+        below goes through ``_post`` / ``_get`` which call this helper. If
+        you ever add a new HTTP verb, route it here.
+        """
+        headers: Dict[str, str] = {}
+        if content_type:
+            headers["Content-Type"] = "application/json"
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
 
     def _post(self, path: str, body: Dict[str, Any], timeout: Optional[int] = None) -> Dict[str, Any]:
         """Make a POST request to the Gateway."""
@@ -31,7 +73,7 @@ class MemoryTencentdbSdkClient:
         req = urllib.request.Request(
             url,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers=self._build_headers(content_type=True),
             method="POST",
         )
         try:
@@ -52,7 +94,11 @@ class MemoryTencentdbSdkClient:
     def _get(self, path: str, timeout: Optional[int] = None) -> Dict[str, Any]:
         """Make a GET request to the Gateway."""
         url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(
+            url,
+            headers=self._build_headers(content_type=False),
+            method="GET",
+        )
         try:
             with urllib.request.urlopen(req, timeout=timeout or self._timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))

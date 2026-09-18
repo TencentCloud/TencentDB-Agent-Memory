@@ -440,6 +440,7 @@ export class TdaiCore {
           model: this.cfg.llm.model,
           maxTokens: this.cfg.llm.maxTokens,
           timeoutMs: this.cfg.llm.timeoutMs,
+          disableThinking: this.cfg.llm.disableThinking,
         },
         logger: this.logger,
       });

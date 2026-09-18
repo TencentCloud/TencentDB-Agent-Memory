@@ -116,7 +116,7 @@ export function initOffloadOpikTracer(
   } catch (err) {
     tracerEnabled = false;
     client = null;
-    logger.warn(`[context-offload] Opik tracer init failed: ${String(err)}`);
+    logger.debug?.(`[context-offload] Opik tracer init failed: ${String(err)}`);
   }
 }
 

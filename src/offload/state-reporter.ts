@@ -333,7 +333,7 @@ export function reportL3Trigger(
     backendClient
       .storeState(report as unknown as StoreStatePayload)
       .then(() => {
-        logger.info(
+        logger.debug?.(
           `[context-offload] state-report OK: stage=${report.stage} reason=${report.triggerReason} ` +
           `recentSaved=${report.recent.tokensSaved} cumSaved=${report.cumulative.totalTokensSaved} ` +
           `toolCalls=${report.cumulative.totalToolCalls} patch=${report.patch.status}`,

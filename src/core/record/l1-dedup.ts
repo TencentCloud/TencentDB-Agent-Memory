@@ -19,14 +19,7 @@ import { sanitizeJsonForParse } from "../../utils/sanitize.js";
 import type { IMemoryStore } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
-import type { LLMRunner } from "../types.js";
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+import type { LLMRunner, Logger } from "../types.js";
 
 const TAG = "[memory-tdai][l1-dedup]";
 

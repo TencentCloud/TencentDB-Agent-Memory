@@ -19,13 +19,7 @@ import type { IMemoryStore, L1RecordRow, L1QueryFilter } from "../store/types.js
 // Re-export types that readers need
 export type { MemoryRecord, MemoryType, EpisodicMetadata } from "./l1-writer.js";
 export type { L1QueryFilter } from "../store/types.js";
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [l1-reader]";
 

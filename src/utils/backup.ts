@@ -99,6 +99,68 @@ export class BackupManager {
       await pruneOldEntries(parentDir, maxKeep, "directory");
     }
   }
+
+  /**
+   * Find the latest backup directory for a category.
+   *
+   * Backup directory names are `<category>_<timestamp>_<tag>` where the
+   * timestamp is `YYYYMMDD_HHmmss` (lexicographic order = chronological order),
+   * so the lexicographically largest entry is the most recent one.
+   *
+   * @param category - Logical grouping (e.g. "scene_blocks")
+   * @returns Absolute path to the latest backup directory, or undefined if none.
+   */
+  async findLatestBackup(category: string): Promise<string | undefined> {
+    const parentDir = path.join(this.backupRoot, category);
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(parentDir, { withFileTypes: true });
+    } catch {
+      return undefined; // No backup directory yet
+    }
+    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    if (dirs.length === 0) return undefined;
+    dirs.sort(); // ascending — oldest first; last = newest
+    return path.join(parentDir, dirs[dirs.length - 1]);
+  }
+
+  /**
+   * Restore the latest backup of `category` into `destDir`.
+   *
+   * Strategy:
+   *   1. Find the latest backup directory; if none exists, do nothing
+   *      (fail-soft: never clobber the destination when there is no
+   *      ground truth to restore from).
+   *   2. Wipe `destDir` and recreate it.
+   *   3. Copy every regular file from the backup directory into `destDir`.
+   *
+   * @param category - Logical grouping (e.g. "scene_blocks")
+   * @param destDir  - Absolute path to the directory to restore into
+   * @returns `{ restored: true, from }` when a backup was applied,
+   *          `{ restored: false }` when no backup was found.
+   * @throws  Lets fs errors during wipe/copy propagate so callers can decide
+   *          whether to fail-soft (log) or fail-hard.
+   */
+  async restoreLatestDirectory(
+    category: string,
+    destDir: string,
+  ): Promise<{ restored: boolean; from?: string }> {
+    const from = await this.findLatestBackup(category);
+    if (!from) return { restored: false };
+
+    // Wipe the destination first so any partial LLM writes are removed,
+    // then recreate the directory and copy regular files back.
+    await fs.rm(destDir, { recursive: true, force: true });
+    await fs.mkdir(destDir, { recursive: true });
+
+    const entries = await fs.readdir(from, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      await fs.copyFile(path.join(from, entry.name), path.join(destDir, entry.name));
+    }
+
+    return { restored: true, from };
+  }
 }
 
 // ============================

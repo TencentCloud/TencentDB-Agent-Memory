@@ -1,16 +1,18 @@
+
 <div align="center">
 
 <img src="./assets/images/logo.png" alt="TencentDB Agent Memory" width="880" />
 
 ### 让 Agent 沉淀经验，让人专注创造。
 
+<a href="https://trendshift.io/repositories/29310?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-29310" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/29310" alt="TencentCloud%2FTencentDB-Agent-Memory | Trendshift" width="250" height="55"/></a>
 
 [![npm](https://img.shields.io/npm/v/@tencentdb-agent-memory/memory-tencentdb?color=blue)](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-tencentdb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E=2026.3.13-orange)](https://github.com/openclaw/openclaw)
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/kDtHb5RW2)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
 [效果亮点](#-效果亮点) · [项目简介](#项目简介) · [核心技术](#核心技术拒绝平铺走向分层与符号化) · [方案特点](#-方案特点) · [快速开始](#快速开始)
 
@@ -54,13 +56,12 @@ TencentDB Agent Memory 帮助 Agent 学会你的流程、保留任务上下文�
 
 > **让 Agent 记住该记的，让人把注意力留给判断、创造和真正有价值的工作。**
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/a43322e4-d2e1-4be7-a94d-0e9748e1131b" width="360" alt="Agent Memory 微信社群二维码" />
+<img src="https://github.com/user-attachments/assets/3d762dc0-3e51-4a63-8ded-1ad60c4fe612" width="360" alt="Agent Memory 微信社群二维码" />
+
+
   <br/>
   <sub>📱 扫码加入 <b>Agent Memory 微信社群</b>，与早期开发者直接对话</sub>
 </p>
-
-
-
 
 
 ## 核心技术：拒绝平铺，走向分层与符号化
@@ -144,6 +145,11 @@ openclaw plugins install @tencentdb-agent-memory/memory-tencentdb
 openclaw gateway restart
 ```
 
+> 升级插件请优先使用 OpenClaw 原生更新命令，该方式可以避免因语义化版本范围导致插件禁用：
+> ```bash
+> openclaw plugins update @tencentdb-agent-memory/memory-tencentdb
+> ```
+
 ### 1.2 零配置启用
 
 默认使用本地 `SQLite + sqlite-vec` 后端。
@@ -182,7 +188,7 @@ openclaw gateway restart
 {
   "plugins": {
     "slots": {
-      "contextEngine": "openclaw-context-offload"
+      "contextEngine": "memory-tencentdb"
     }
   }
 }
@@ -199,9 +205,18 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 > 💡 patch 每次 OpenClaw 安装只需执行一次。升级 OpenClaw 后建议重新执行以确保钩子生效。
 
 
-### 2. Hermes（Docker，需版本号 ≥ 0.3.4）
+### 2. Hermes
 
-除 OpenClaw 外，本插件同样支持 [Hermes](https://github.com/NousResearch/hermes-agent) Agent。通过一条命令即可启动一个带记忆能力的 Hermes：
+除 OpenClaw 外，本插件同样支持 [Hermes](https://github.com/NousResearch/hermes-agent) Agent。根据部署场景选择安装路径：
+
+| 你的场景 | 走哪条路 |
+|---|---|
+| 想从零启动一个带记忆能力的 Hermes（一条命令搞定） | 2.A Docker（下文） |
+| 已经装好了Hermes，只想加上记忆能力 | 2.B 挂到已有 Hermes 上（再下文） |
+
+#### 2.A Docker（全新部署，需版本号 ≥ 0.3.4）
+
+Docker 镜像把 `hermes-agent` 和 `memory_tencentdb` provider 聚合在一起，Gateway 监听 `:8420`：
 
 ```bash
 # ============ 配置参数说明 ============
@@ -222,6 +237,9 @@ MODEL_PROVIDER="custom"
 # -p 8420:8420                宿主机端口 ↔ 容器端口（Hermes Gateway）
 # -e MODEL_*                  将上方配置参数注入容器环境变量
 # -v hermes_data:/opt/data    记忆数据持久化到命名卷（容器重启后数据不丢）
+
+# 进入 Docker 构建目录（已 clone 仓库并位于仓库根目录）
+cd docker/opensource
 
 # 构建
 docker build -f Dockerfile.hermes -t hermes-memory .
@@ -247,6 +265,163 @@ docker exec -it hermes-memory hermes
 
 > 镜像内置了腾讯云 DeepSeek-V3.2 的默认值，如果你使用该模型，`MODEL_BASE_URL`/`MODEL_NAME`/`MODEL_PROVIDER` 可以省略，只传 `MODEL_API_KEY` 即可。
 
+#### 2.B 挂到已有 Hermes 上（无 Docker）
+
+如果宿主机上已经装好了 `hermes-agent`，只想加上记忆能力，**不需要** Docker 镜像。
+
+**1. 下载插件包到统一目录**：
+
+```bash
+mkdir -p ~/.memory-tencentdb
+TEMP_DIR=$(mktemp -d)
+cd "$TEMP_DIR"
+npm init -y --silent
+npm install @tencentdb-agent-memory/memory-tencentdb@latest --omit=dev
+cp -r node_modules/@tencentdb-agent-memory/memory-tencentdb \
+      ~/.memory-tencentdb/tdai-memory-openclaw-plugin
+rm -rf "$TEMP_DIR"
+```
+
+**2. 安装 Gateway 依赖**：
+
+```bash
+cd ~/.memory-tencentdb/tdai-memory-openclaw-plugin
+npm install --omit=dev
+npm install tsx
+```
+
+**3. 链接到 Hermes 插件目录**：
+
+```bash
+rm -rf ~/.hermes/hermes-agent/plugins/memory/memory_tencentdb
+ln -sf ~/.memory-tencentdb/tdai-memory-openclaw-plugin/hermes-plugin/memory/memory_tencentdb \
+       ~/.hermes/hermes-agent/plugins/memory/memory_tencentdb
+```
+
+> 此处目录名必须是 **`memory_tencentdb`**（下划线）—— Hermes 用它作为 provider key。`memory-tencentdb`（连字符）只是配置层面的别名，**不**能作为目录名。
+
+**4. 在 `~/.hermes/config.yaml` 中声明 provider**：
+
+```yaml
+memory:
+  provider: memory_tencentdb
+```
+
+**5. 配置 Gateway 环境变量**
+
+编辑 `~/.hermes/.env`，添加：
+
+```bash
+MEMORY_TENCENTDB_GATEWAY_CMD="sh -c 'cd ~/.memory-tencentdb/tdai-memory-openclaw-plugin && exec npx tsx src/gateway/server.ts'"
+MEMORY_TENCENTDB_GATEWAY_HOST="127.0.0.1"
+MEMORY_TENCENTDB_GATEWAY_PORT="8420"
+```
+
+LLM 凭证请按需添加（Gateway 实际读取的是 `TDAI_LLM_*` 系列变量）：
+
+```bash
+TDAI_LLM_API_KEY="sk-your-api-key-here"
+TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+TDAI_LLM_MODEL="gpt-4o"
+```
+
+也可改用 Gateway 配置文件 `~/.memory-tencentdb/memory-tdai/tdai-gateway.json`：
+
+```json
+{
+  "llm": {
+    "baseUrl": "https://your-api-endpoint/v1",
+    "apiKey": "your-api-key",
+    "model": "your-model-name"
+  }
+}
+```
+
+**6. 启动 Gateway**（两种方式任选其一）：
+
+- **对话时自动发现（推荐，零配置）**：不启动 Gateway，直接开始和 Hermes 对话。provider 会在第一条对话时自动检测到 `~/.memory-tencentdb/tdai-memory-openclaw-plugin/src/gateway/server.ts` 并以 `Popen()` 拉起。首次对话会略有延迟。
+- **手动运行**：提前启动一个独立的 Gateway 进程：
+  ```bash
+  cd ~/.memory-tencentdb/tdai-memory-openclaw-plugin
+  npx tsx src/gateway/server.ts
+  ```
+
+**7. 验证**：
+
+```bash
+curl http://127.0.0.1:8420/health
+# 应返回 {"status":"ok"} 或 {"status":"degraded"}
+```
+
+> Provider 的完整参考（环境变量、故障排查、LLM 工具 schema、supervisor 行为）见 [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md)，调整 supervisor / circuit-breaker 默认值之前请先读它。
+
+---
+
+### 3. Hermes（Windows 原生安装）
+
+Windows 原生 Hermes 环境下，在仓库根目录用 Command Prompt 或 PowerShell
+运行内置批处理脚本：
+
+```powershell
+$env:TDAI_LLM_API_KEY="your-api-key"
+$env:TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+$env:TDAI_LLM_MODEL="gpt-4o"
+.\scripts\setup-hermes-memory-tencentdb.bat
+```
+
+脚本会检查 `node`、`npm`、Python 和 Hermes，要求 Node.js `>=22.16.0`；
+当 Gateway 依赖缺失时执行 `npm install --omit=dev`，创建
+`%USERPROFILE%\.memory-tencentdb\memory-tdai`，复制插件到
+`%USERPROFILE%\.hermes\plugins\memory_tencentdb`，把 Gateway 环境变量写入
+`%USERPROFILE%\.hermes\.env`，随后启动 Gateway 并轮询：
+
+```powershell
+curl.exe http://127.0.0.1:8420/health
+```
+
+如果 `%USERPROFILE%\.hermes\config.yaml` 已存在，请确认包含：
+
+```yaml
+memory:
+  provider: memory_tencentdb
+```
+
+
+## 🔒 Gateway 安全配置（可选）
+
+Hermes Gateway 监听 `:8420`，对外提供 capture / search / recall 的 HTTP 接口。新增两个开关，可以把它从“开放的本地 sidecar”切换为“需要鉴权的网络服务”。**两个开关默认都关闭，已有部署的行为不变。**
+
+| 字段 | env | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `server.apiKey` | `TDAI_GATEWAY_API_KEY` | _(未设置)_ | 设置后，除 `GET /health` 外的所有接口都要求 `Authorization: Bearer <apiKey>`；缺失或错误的 token 返回 HTTP 401。Token 比较使用常量时间算法，避免时序侧信道。 |
+| `server.corsOrigins` | `TDAI_CORS_ORIGINS`（逗号分隔） | `[]` | CORS 白名单。空列表表示**不发送**任何 `Access-Control-Allow-*` 响应头，浏览器同源策略会自动阻止跨域请求。`["*"]` 仅供本地开发，不要用于生产。 |
+
+当 `apiKey` 未设置时，Gateway 启动时会打印一条 `WARN`；如果同时还绑定在非 loopback 地址（例如 `0.0.0.0`），还会再打印一条更醒目的告警。
+
+客户端在启用鉴权后用 Bearer token 调用：
+
+```bash
+curl -H "Authorization: Bearer $TDAI_GATEWAY_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"query":"...","session_key":"..."}' \
+     http://127.0.0.1:8420/recall
+```
+
+`GET /health` 永远无需 token，方便 `docker healthcheck` / `kubectl liveness` 等编排探针继续工作。
+
+### Hermes 插件侧的配置
+
+Hermes `memory_tencentdb` 插件本身是 Gateway 的**客户端**。当 Gateway 开启了鉴权后，在 Hermes 进程上设置：
+
+```bash
+export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
+```
+
+插件随后会在每一次发往 Gateway 的请求上附带 `Authorization: Bearer <key>`。该变量未设置时，插件不发送任何鉴权头，与 Gateway 维持开放模式的旧行为完全匹配——已有部署 0 影响。
+
+需要明确的边界：**插件只负责 client 一侧**。Gateway 是否真的强制鉴权由 Gateway 端自己的 `TDAI_GATEWAY_API_KEY` / `server.apiKey` 决定。两端要使用相同的密钥才能匹配；插件不会把这个值传递给 Gateway——因为 Gateway 可能由 Docker、systemd 或其它独立机制拉起，插件没有也不应该去管这个。
+
+若 `MEMORY_TENCENTDB_GATEWAY_API_KEY` 没设置，插件还会回退读取 `TDAI_GATEWAY_API_KEY`，方便两个进程共享同一个 env 文件、只设一个变量名的场景。Gateway 永远不会读 `MEMORY_TENCENTDB_GATEWAY_API_KEY`，那是插件侧专用名字。
 
 ---
 
@@ -259,9 +434,12 @@ docker exec -it hermes-memory hermes
 
 | 字段 | 默认 | 说明 |
 | :--- | :--- | :--- |
+| `timezone` | `"system"` | 时区：`"system"`（跟随系统）/ IANA 名（`Asia/Shanghai`）/ offset 串（`+08:00`） |
 | `storeBackend` | `"sqlite"` | 存储后端：`sqlite` |
 | `recall.strategy` | `"hybrid"` | 召回策略：`keyword` / `embedding` / `hybrid`（RRF 融合，推荐） |
 | `recall.maxResults` | `5` | 每次召回条数 |
+| `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
+| `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
 | `pipeline.everyNConversations` | `5` | 每 N 轮对话触发一次 L1 记忆提取 |
 | `extraction.maxMemoriesPerSession` | `20` | 单次 L1 最多提取多少条 |
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
@@ -294,6 +472,20 @@ docker exec -it hermes-memory hermes
 完整字段、类型、约束见 [`openclaw.plugin.json`](./openclaw.plugin.json) 。
 
 - `embedding.*` — 远程 embedding 服务（OpenAI 兼容 API）
+  - `embedding.sendDimensions`（默认 `true`）：是否在请求体中携带 `dimensions` 字段。OpenAI `text-embedding-3-*` 系列依赖该字段做 Matryoshka 维度截断；但部分自托管 / 开源模型（如 **BGE-M3**）不支持自定义维度，会以 HTTP 400 报 `does not support matryoshka representation` 拒绝请求。此时请显式设为 `false`，例如：
+    ```json
+    {
+      "embedding": {
+        "enabled": true,
+        "provider": "openai",
+        "baseUrl": "http://your-host:your-port/v1",
+        "apiKey": "<KEY>",
+        "model": "bge-m3",
+        "dimensions": 1024,
+        "sendDimensions": false
+      }
+    }
+    ```
 - `llm.*` — 独立 LLM 模式（绕过 OpenClaw 内置模型，用指定 API 跑 L1/L2/L3）
 - `offload.backendUrl / backendApiKey` — 将 L1/L1.5/L2/L4 offload 流程卸载到后端服务
 - `report.*` — 指标上报
@@ -359,8 +551,7 @@ docker exec -it hermes-memory hermes
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
- <p align="center"><img src="https://github.com/user-attachments/assets/7382b50e-f98c-4643-bf68-0015859575d0" width="200" alt="Agent Memory 微信社群二维码" />
- 
+<p align="center"><img src="https://github.com/user-attachments/assets/3d762dc0-3e51-4a63-8ded-1ad60c4fe612" width="200" alt="Agent Memory 微信社群二维码" />
 
 ---
 
@@ -387,5 +578,17 @@ docker exec -it hermes-memory hermes
     </td>
   </tr>
 </table>
+
+---
+
+## Star 趋势
+
+<p align="center">
+  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
+    <img src="https://github.com/user-attachments/assets/16753a90-8bc9-471b-819e-311947ed94f7" alt="Star History Chart" width="600" />
+  </a>
+</p>
+
+---
 
 [MIT](./LICENSE) © TencentDB Agent Memory Team

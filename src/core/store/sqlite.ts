@@ -33,6 +33,7 @@ import type {
   L0SearchResult,
   L0FtsResult,
 } from "./types.js";
+import type { Logger } from "../types.js";
 
 // ============================
 // Types
@@ -104,13 +105,6 @@ export interface L1QueryFilter {
   sessionId?: string;
   /** If provided, only return records with updated_time strictly after this ISO 8601 UTC timestamp. */
   updatedAfter?: string;
-}
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
 }
 
 const TAG = "[memory-tdai][sqlite]";
@@ -1295,6 +1289,20 @@ export class VectorStore implements IMemoryStore {
       const expiredCount = row?.cnt ?? 0;
       if (expiredCount <= 0) return 0;
 
+      // Ratio protection: refuse to delete > 80% in one pass
+      const totalRow = this.db.prepare(
+        "SELECT COUNT(*) AS cnt FROM l1_records",
+      ).get() as { cnt: number };
+      const total = totalRow.cnt;
+      const ratio = total > 0 ? expiredCount / total : 0;
+      if (ratio > 0.8) {
+        this.logger?.warn(
+          `${TAG} [L1-deleteExpired] BLOCKED: would delete ${expiredCount}/${total} ` +
+          `(${(ratio * 100).toFixed(1)}%) — exceeds 80% safety threshold, cutoff=${cutoffIso}`,
+        );
+        return 0;
+      }
+
       this.db.exec("BEGIN");
       try {
         if (this.vecTablesReady) {
@@ -1306,6 +1314,9 @@ export class VectorStore implements IMemoryStore {
           "DELETE FROM l1_records WHERE updated_time != '' AND updated_time < ?",
         ).run(cutoffIso);
         this.db.exec("COMMIT");
+        this.logger?.info?.(
+          `${TAG} [L1-deleteExpired] Deleted ${expiredCount}/${total} records (cutoff=${cutoffIso})`,
+        );
         return expiredCount;
       } catch (err) {
         try {
@@ -1683,6 +1694,20 @@ export class VectorStore implements IMemoryStore {
       const expiredCount = row?.cnt ?? 0;
       if (expiredCount <= 0) return 0;
 
+      // Ratio protection: refuse to delete > 80% in one pass
+      const totalRow = this.db.prepare(
+        "SELECT COUNT(*) AS cnt FROM l0_conversations",
+      ).get() as { cnt: number };
+      const total = totalRow.cnt;
+      const ratio = total > 0 ? expiredCount / total : 0;
+      if (ratio > 0.8) {
+        this.logger?.warn(
+          `${TAG} [L0-deleteExpired] BLOCKED: would delete ${expiredCount}/${total} ` +
+          `(${(ratio * 100).toFixed(1)}%) — exceeds 80% safety threshold, cutoff=${cutoffIso}`,
+        );
+        return 0;
+      }
+
       this.db.exec("BEGIN");
       try {
         if (this.vecTablesReady) {
@@ -1694,6 +1719,9 @@ export class VectorStore implements IMemoryStore {
           "DELETE FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?",
         ).run(cutoffIso);
         this.db.exec("COMMIT");
+        this.logger?.info?.(
+          `${TAG} [L0-deleteExpired] Deleted ${expiredCount}/${total} records (cutoff=${cutoffIso})`,
+        );
         return expiredCount;
       } catch (err) {
         try {

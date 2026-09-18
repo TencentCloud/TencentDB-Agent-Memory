@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+import signal
 import subprocess
 import time
 from typing import IO, Optional
@@ -40,11 +41,35 @@ class GatewaySupervisor:
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         gateway_cmd: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
+        """Construct the supervisor.
+
+        Args:
+            host: Gateway bind host.
+            port: Gateway bind port.
+            gateway_cmd: Shell command to spawn the Gateway. Falls back to
+                ``MEMORY_TENCENTDB_GATEWAY_CMD`` env var when None.
+            api_key: Optional Gateway Bearer token used by the **client**
+                (every outbound request adds ``Authorization: Bearer <key>``).
+                The supervisor does NOT propagate this value to the spawned
+                Gateway's environment — turning auth on at the Gateway is the
+                operator's responsibility (set ``TDAI_GATEWAY_API_KEY`` /
+                ``server.apiKey`` on the Gateway side directly, in the same
+                place you'd configure its port and data dir). Both ends must
+                see the same secret; the plugin only handles the client half.
+                ``None`` / empty means "do not attach an Authorization
+                header", which preserves the legacy default.
+        """
         self._host = host
         self._port = port
         self._base_url = f"http://{host}:{port}"
-        self._client = MemoryTencentdbSdkClient(base_url=self._base_url, timeout=5)
+        self._api_key = (api_key or "").strip() or None
+        self._client = MemoryTencentdbSdkClient(
+            base_url=self._base_url,
+            timeout=5,
+            api_key=self._api_key,
+        )
         self._process: Optional[subprocess.Popen] = None
         # File handles for child's stdout/stderr. Kept open for the lifetime of
         # the process so the kernel pipe buffer never fills up (otherwise the
@@ -144,6 +169,27 @@ class GatewaySupervisor:
             env = os.environ.copy()
             env["MEMORY_TENCENTDB_GATEWAY_PORT"] = str(self._port)
             env["MEMORY_TENCENTDB_GATEWAY_HOST"] = self._host
+            # The Node Gateway reads TDAI_GATEWAY_{HOST,PORT}. Keep the
+            # MEMORY_TENCENTDB_* names for the Python provider contract, but
+            # also populate the Gateway-native names unless the operator set
+            # them explicitly.
+            env.setdefault("TDAI_GATEWAY_PORT", str(self._port))
+            env.setdefault("TDAI_GATEWAY_HOST", self._host)
+            # Hermes-facing LLM env names predate the Gateway's TDAI_LLM_*
+            # names. Mirror them into the child process so Windows-native
+            # Hermes installs do not have to set both sets by hand.
+            if not env.get("TDAI_LLM_API_KEY") and env.get("MEMORY_TENCENTDB_LLM_API_KEY"):
+                env["TDAI_LLM_API_KEY"] = env["MEMORY_TENCENTDB_LLM_API_KEY"]
+            if not env.get("TDAI_LLM_BASE_URL") and env.get("MEMORY_TENCENTDB_LLM_BASE_URL"):
+                env["TDAI_LLM_BASE_URL"] = env["MEMORY_TENCENTDB_LLM_BASE_URL"]
+            if not env.get("TDAI_LLM_MODEL") and env.get("MEMORY_TENCENTDB_LLM_MODEL"):
+                env["TDAI_LLM_MODEL"] = env["MEMORY_TENCENTDB_LLM_MODEL"]
+            # Note: we deliberately do NOT inject TDAI_GATEWAY_API_KEY into
+            # the child's env from here. Whether the Gateway enforces auth is
+            # the operator's call — they configure it on the Gateway side
+            # (env, yaml, docker run, systemd unit) just like any other
+            # Gateway setting. The supervisor's ``api_key`` is purely the
+            # client-side Bearer token used for outbound requests.
 
             # Redirect child stdout/stderr to log files instead of PIPE.
             # Using PIPE without an active reader will deadlock the child once
@@ -173,13 +219,26 @@ class GatewaySupervisor:
                 stdout_target = subprocess.DEVNULL
                 stderr_target = subprocess.DEVNULL
 
-            self._process = subprocess.Popen(
-                shlex.split(self._gateway_cmd),
-                env=env,
-                stdout=stdout_target,
-                stderr=stderr_target,
-                start_new_session=True,  # Detach from parent process group
-            )
+            if os.name == "nt":
+                creationflags = 0
+                if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                    creationflags |= subprocess.CREATE_NEW_PROCESS_GROUP
+                self._process = subprocess.Popen(
+                    self._gateway_cmd,
+                    shell=True,
+                    env=env,
+                    stdout=stdout_target,
+                    stderr=stderr_target,
+                    creationflags=creationflags,
+                )
+            else:
+                self._process = subprocess.Popen(
+                    shlex.split(self._gateway_cmd),
+                    env=env,
+                    stdout=stdout_target,
+                    stderr=stderr_target,
+                    start_new_session=True,  # Detach from parent process group
+                )
         except Exception as e:
             logger.error("Failed to start memory-tencentdb Gateway: %s", e)
             self._close_log_handles()
@@ -279,19 +338,47 @@ class GatewaySupervisor:
         logger.info("Shutting down memory-tencentdb Gateway...")
 
         try:
-            # Send SIGTERM for graceful shutdown
-            self._process.terminate()
+            if os.name == "nt":
+                self._terminate_windows_process_tree(self._process.pid)
+            else:
+                # Send SIGTERM for graceful shutdown.
+                self._process.terminate()
             try:
                 self._process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 logger.warning("memory-tencentdb Gateway did not exit in 10s, sending SIGKILL")
-                self._process.kill()
+                if os.name == "nt":
+                    self._kill_windows_process_tree(self._process.pid)
+                else:
+                    self._process.kill()
                 self._process.wait(timeout=5)
         except Exception as e:
             logger.warning("Error shutting down memory-tencentdb Gateway: %s", e)
         finally:
             self._process = None
             self._close_log_handles()
+
+    def _terminate_windows_process_tree(self, pid: int) -> None:
+        """Terminate the shell-owned Windows process tree for the Gateway."""
+        try:
+            self._process.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[union-attr]
+        except Exception:
+            pass
+        subprocess.run(
+            ["taskkill", "/T", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    def _kill_windows_process_tree(self, pid: int) -> None:
+        """Force-kill the shell-owned Windows process tree for the Gateway."""
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
 
     @property
     def client(self) -> MemoryTencentdbSdkClient:

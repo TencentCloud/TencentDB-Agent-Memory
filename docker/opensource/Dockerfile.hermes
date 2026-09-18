@@ -96,7 +96,7 @@ CMD ["bash", "-c", "\
   export TDAI_LLM_MODEL=\"${MODEL_NAME}\" && \
   export TDAI_LLM_BASE_URL=\"${MODEL_BASE_URL}\" && \
   export TDAI_LLM_API_KEY=\"${MODEL_API_KEY}\" && \
-  printf \"model:\\n  default: \\\"${MODEL_NAME}\\\"\\n  provider: \\\"${MODEL_PROVIDER}\\\"\\n  base_url: \\\"${MODEL_BASE_URL}\\\"\\n\\nmemory:\\n  provider: memory_tencentdb\\n\" > \"$CFG\" && \
+  printf \"model:\\n  default: \\\"${MODEL_NAME}\\\"\\n  provider: \\\"${MODEL_PROVIDER}\\\"\\n  base_url: \\\"${MODEL_BASE_URL}\\\"\\n  api_key: \\\"${MODEL_API_KEY}\\\"\\n\\nmemory:\\n  provider: memory_tencentdb\\n\" > \"$CFG\" && \
   printf \"OPENAI_API_KEY=${MODEL_API_KEY}\\n\" > \"$ENVFILE\" && \
   echo \"=== Config: model=${MODEL_NAME}, provider=${MODEL_PROVIDER}, url=${MODEL_BASE_URL} ===\" && \
   echo \"=== Gateway starting... ===\" && \
