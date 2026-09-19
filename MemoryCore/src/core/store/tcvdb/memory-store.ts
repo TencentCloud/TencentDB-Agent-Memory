@@ -760,17 +760,13 @@ export class TcvdbMemoryStore implements IMemoryStore {
   }
 
   async deleteL1(recordId: string): Promise<boolean> {
-    try {
-      await this._ensureInit();
-      if (this.degraded) return false;
-      const affected = await this.client.deleteDoc(this.l1Collection, {
-        query: { documentIds: [recordId] },
-      });
-      return affected > 0;
-    } catch (err) {
-      this.logger?.warn(`${TAG} [L1-delete] FAILED id=${recordId}: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
-    }
+    await this._ensureInit();
+    if (this.degraded) return false;
+    const affected = await this.client.deleteDoc(this.l1Collection, {
+      query: { documentIds: [recordId] },
+    });
+    return affected > 0;
+    // Note: No catch — exceptions propagate to caller (gateway) for proper error handling
   }
 
   async deleteL1Batch(recordIds: string[]): Promise<boolean> {
