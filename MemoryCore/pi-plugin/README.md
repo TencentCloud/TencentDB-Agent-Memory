@@ -63,6 +63,45 @@ Expect `agentSource=pi`, `register directly`, and a `write-l0` line. If you see
 `agentSource=codebuddy` (or the default) or no `write-l0`, the base URL or
 identity headers are wrong.
 
+## Selectively forget a Memory Prompt or Skill
+
+Use the interactive command with a search keyword:
+
+```text
+/tdai-memory-forget deploy-check
+```
+
+Pi lists only deletable items owned by the current agent. The proxy redacts and
+limits every preview before it reaches Pi. Selecting an item does not delete it:
+the command always shows one final irreversible-action confirmation. Cancelling
+that dialog leaves the item untouched, and the command refuses to delete in
+headless mode because an explicit confirmation cannot be collected there.
+
+Example transcript:
+
+```text
+> /tdai-memory-forget deploy-check
+
+Select one memory item to forget:
+  1. Skill: deploy-check (version 3)
+
+Delete deploy-check?
+Skill: deploy-check
+version 3
+
+Preview: Uses token [REDACTED] to verify the deployment...
+
+Impact: Deletes this Skill and all of its versions.
+
+This action cannot be undone.
+
+Confirm? Yes
+Deleted Skill: deploy-check (version 3).
+```
+
+Memory Prompts shared with another agent, team, or the whole instance are not
+offered by this command. Manage those shared prompts from the administrative UI.
+
 ## Troubleshooting
 
 - **Use the user's API key, not the admin key.** The proxy validates the
