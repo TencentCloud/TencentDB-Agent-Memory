@@ -1775,4 +1775,24 @@ export const zhCN = {
   'analytics.drill.categoryHint': '该类资产的调用',
   'analytics.drill.knowledgeAmbiguous':
     'Wiki 与 Code Graph 同属 knowledge-service，内核仅支持按 bridge_source 过滤，因此以下结果包含 knowledge 全部调用，无法只显示单一类别。',
+
+  // ===== Memory Review（记忆变更审阅） =====
+  'menu.memory_review': '记忆审阅',
+  'menu.desc.memory_review': 'Session 记忆变更集 · 审批 / 撤销',
+  'memoryReview.title': '记忆变更审阅',
+  'memoryReview.subtitle': '查看某个 session 产生的 L1 记忆变更（新增 / 覆盖 / 合并），可撤销已生效的变更。',
+  'memoryReview.team': '团队',
+  'memoryReview.agent': 'Agent',
+  'memoryReview.userId': 'User ID',
+  'memoryReview.sessionId': 'Session ID',
+  'memoryReview.query': '查询变更',
+  'memoryReview.empty': '该 session 暂无记忆变更',
+  'memoryReview.revert': '驳回',
+  'memoryReview.revertConfirm': '确认撤销该变更？updated/merged 会连带恢复被替代的旧记录。',
+  'memoryReview.revertOk': '已撤销',
+  'memoryReview.revertFailed': '撤销失败',
+  'memoryReview.loadFailed': '加载变更集失败',
+  'memoryReview.revertedBadge': '已撤销',
+  'memoryReview.replacedTitle': '替代了以下记录',
+  'memoryReview.fromSession': '来自会话',
 };
