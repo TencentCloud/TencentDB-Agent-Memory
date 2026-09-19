@@ -464,6 +464,18 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async deleteUsers(userIds: string[]): Promise<BatchDeleteResult> {
+    // 级联删除名下 Agent（含 task_agents / fixed_assets / 自记忆资产，#1321），
+    // 与 sqlite-adapter 对齐；否则用户删除后 Agent 变成孤儿。
+    const agentIds =
+      userIds.length > 0
+        ? (
+            await this.col<{ agent_id: string }>("meta_agents")
+              .find({ owner_user_id: { $in: userIds } } as Document, { projection: { agent_id: 1, _id: 0 } })
+              .toArray()
+          ).map((r) => r.agent_id)
+        : [];
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
+
     const result = await this.batchDelete("meta_users", "user_id", userIds);
     if (result.deleted_ids.length > 0) {
       await this.col("meta_user_keys").deleteMany({ user_id: { $in: result.deleted_ids } } as Document);
@@ -663,9 +675,23 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async deleteTeams(teamIds: string[]): Promise<BatchDeleteResult> {
+    // 先收集团队内 Agent 并走 deleteAgents() 完整级联（#1321），不再绕过级联
+    // 直删 meta_agents。
+    const agentIds =
+      teamIds.length > 0
+        ? (
+            await this.col<{ agent_id: string }>("meta_agents")
+              .find({ team_id: { $in: teamIds } } as Document, { projection: { agent_id: 1, _id: 0 } })
+              .toArray()
+          ).map((r) => r.agent_id)
+        : [];
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
+
     const result = await this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
       await this.col("meta_team_members").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
+      // 兜底清理（正常应已被上面 deleteAgents 级联删除）：防止收集窗口之后
+      // 并发落库的 Agent 漏删。
       await this.col("meta_agents").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
       await this.col("meta_tasks").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
       await this.col("meta_assets").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
@@ -707,6 +733,14 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async removeTeamMember(teamId: string, userId: string): Promise<void> {
+    // 级联删除该成员在本团队名下的 Agent（#1321），与 sqlite-adapter 对齐；
+    // 其它团队的 Agent 不受影响。
+    const memberAgents = await this.col<{ agent_id: string }>("meta_agents")
+      .find({ team_id: teamId, owner_user_id: userId } as Document, { projection: { agent_id: 1, _id: 0 } })
+      .toArray();
+    const agentIds = memberAgents.map((r) => r.agent_id);
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
+
     await this.col("meta_team_members").deleteOne({ team_id: teamId, user_id: userId });
   }
 

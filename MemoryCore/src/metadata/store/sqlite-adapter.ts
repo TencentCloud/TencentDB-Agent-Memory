@@ -575,6 +575,17 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   deleteUsers(userIds: string[]): BatchDeleteResult {
+    // 级联删除名下 Agent（含 task_agents / fixed_assets / 自记忆资产，#1321）：
+    // 否则用户 key 删除后 owner 悬空，Agent 变成任何角色都删不掉的孤儿。
+    const agentIds =
+      userIds.length > 0
+        ? this.all<{ agent_id: string }>(
+            `SELECT agent_id FROM meta_agents WHERE owner_user_id IN (${userIds.map(() => "?").join(",")})`,
+            ...userIds,
+          ).map((r) => r.agent_id)
+        : [];
+    if (agentIds.length > 0) this.deleteAgents(agentIds);
+
     const result = this.batchDelete("meta_users", "user_id", userIds);
     if (result.deleted_ids.length > 0) {
       const ph = result.deleted_ids.map(() => "?").join(",");
@@ -809,10 +820,23 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   deleteTeams(teamIds: string[]): BatchDeleteResult {
+    // 先收集团队内 Agent 并走 deleteAgents() 完整级联（task_agents /
+    // fixed_assets / 自记忆资产，#1321），不再绕过级联直删 meta_agents。
+    const agentIds =
+      teamIds.length > 0
+        ? this.all<{ agent_id: string }>(
+            `SELECT agent_id FROM meta_agents WHERE team_id IN (${teamIds.map(() => "?").join(",")})`,
+            ...teamIds,
+          ).map((r) => r.agent_id)
+        : [];
+    if (agentIds.length > 0) this.deleteAgents(agentIds);
+
     const result = this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
       const ph = result.deleted_ids.map(() => "?").join(",");
       this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph})`, ...result.deleted_ids);
+      // 兜底清理（正常应已被上面 deleteAgents 级联删除）：防止并发建出的
+      // Agent 在收集窗口之后落库而漏删。
       this.run(`DELETE FROM meta_agents WHERE team_id IN (${ph})`, ...result.deleted_ids);
       this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph})`, ...result.deleted_ids);
       this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph})`, ...result.deleted_ids);
@@ -860,6 +884,16 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   removeTeamMember(teamId: string, userId: string): void {
+    // 级联删除该成员在「本团队」名下的 Agent（#1321）：与 add 成员后异步克隆
+    // 默认 Agent 对称，移除成员时其在本团队的 Agent 一并清理；其它团队的
+    // Agent 不受影响。仅删成员行会留下 owner 悬空的孤儿 Agent。
+    const agentIds = this.all<{ agent_id: string }>(
+      "SELECT agent_id FROM meta_agents WHERE team_id = ? AND owner_user_id = ?",
+      teamId,
+      userId,
+    ).map((r) => r.agent_id);
+    if (agentIds.length > 0) this.deleteAgents(agentIds);
+
     this.run("DELETE FROM meta_team_members WHERE team_id = ? AND user_id = ?", teamId, userId);
   }
 
