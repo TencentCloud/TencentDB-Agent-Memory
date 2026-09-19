@@ -1492,6 +1492,31 @@ export class MetadataService {
     return asset;
   }
 
+  /**
+   * skill 读命中审计：`onSkillAccessed` 钩子的统一落地点。
+   *
+   * 两步：
+   *   1. `ensureSkillAsset` —— 孤儿 skill 读时自愈补登记（LRU 短路，命中时零 DB 写）
+   *   2. `store.touchAssetUsage` —— `usage_count += 1` / `last_used_at = now`
+   *
+   * 触发时机由 SkillCore 决定：仅 `get` / `readFile` 单条读命中；`list` /
+   * `search` / `listing` 不触发，避免写放大（与 `memory_audit` 只在
+   * L1/L2/L3 update/delete 落行的思路一致——只记"真实使用"事件）。
+   *
+   * 直接走 store 而非 `touchAssetUsage()`（公有方法会先 getAssetById 校验存在），
+   * 因为第 1 步已保证 asset 存在。调用方负责 try/catch（fire-and-forget）。
+   */
+  async recordSkillAccess(params: {
+    skill_id: string;
+    team_id: string;
+    agent_id: string;
+    name: string;
+  }): Promise<AssetEntity> {
+    const asset = await this.ensureSkillAsset(params);
+    await this.store.touchAssetUsage(asset.asset_id);
+    return asset;
+  }
+
   /** LRU-ish 记录：达到上限时淘汰最早写入的条目。 */
   private rememberEnsuredSkillAsset(assetId: string): void {
     if (this.ensuredSkillAssets.has(assetId)) return;
