@@ -168,7 +168,7 @@ export default function TeamManagementPanel({
         { owner_user_id: agent.owner_user_id, team_id: agent.team_id },
         activeTeam,
         currentUser,
-        false,
+        _isAdmin,
       )
     ) {
       tea.notify.error(

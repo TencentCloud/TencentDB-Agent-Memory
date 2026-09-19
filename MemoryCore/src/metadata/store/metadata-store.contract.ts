@@ -672,6 +672,55 @@ export function runMetadataStoreContract(
         await store.deleteTasks([task.task_id]);
         expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
       });
+
+      it("deleteTeams 走完整 Agent 级联，不残留 task_agents / fixed_assets / chat_memory", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: owner.user_id, name: "A" });
+        const task = await store.createTask({ team_id: team.team_id, creator_user_id: owner.user_id, title: "T" });
+        const skill = await store.createAsset({ asset_id: newAssetId(), team_id: team.team_id, asset_type: "skill", name: "S", owner_user_id: owner.user_id, source_type: "manual" });
+        const selfMemory = buildChatMemoryAssetId(team.team_id, agent.agent_id);
+        await store.createAsset({
+          asset_id: selfMemory,
+          team_id: team.team_id,
+          asset_type: "chat_memory",
+          name: "Memory of A",
+          owner_user_id: owner.user_id,
+          source_type: "auto",
+          visibility: "team",
+          status: "active",
+        });
+        await store.linkTaskAgent(task.task_id, agent.agent_id);
+        await store.setAgentFixedAssets(agent.agent_id, [
+          { asset_id: skill.asset_id, asset_type: "skill", created_by: owner.user_id },
+          { asset_id: selfMemory, asset_type: "chat_memory", created_by: owner.user_id },
+        ]);
+
+        await store.deleteTeams([team.team_id]);
+
+        // 团队与队内 Agent 本体都清掉
+        expect(await store.getTeamById(team.team_id)).toBeNull();
+        expect(await store.getAgentById(agent.agent_id)).toBeNull();
+        // 这三项是「直删 meta_agents」会漏掉的残留（级联必须走 deleteAgents）
+        expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
+        expect((await store.listAgentFixedAssets(agent.agent_id, P)).items).toHaveLength(0);
+        expect(await store.getAssetById(selfMemory)).toBeNull();
+      });
+
+      it("deleteUsers 不级联 meta_agents —— Agent 级联由 service 层负责", async () => {
+        // 设计边界：用户删除时其 Agent 的权限校验依赖 caller 上下文
+        // （canManageUsers），store 层拿不到 V3AuthContext，因此级联收口在
+        // MetadataService.deleteUsersForCaller（先收集再 purgeAgentsCascade）。
+        // 这里固化边界，避免后续误以为 store 已处理而重复/漏做级联。
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: owner.user_id, name: "A" });
+
+        await store.deleteUsers([owner.user_id]);
+
+        expect(await store.getUserById(owner.user_id)).toBeNull();
+        expect(await store.getAgentById(agent.agent_id)).not.toBeNull();
+      });
     });
 
     // ── v3.1：username / external_id 无唯一约束 ──

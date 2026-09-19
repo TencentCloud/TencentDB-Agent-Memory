@@ -110,12 +110,13 @@ export default function AgentGrid({
   }, [agents, keyword, ownerFilter]);
 
   function canEdit(agent: StoreAgent): boolean {
-    // admin 与 member 一致：只能操作自己 owner 的 agent（不再有全局 admin 特权）。
+    // owner / 本团队 team admin / system_admin 可管理 —— 与内核 delete、archive 的
+    // 放行面一致（issue #1321）。
     return canManageAsset(
       { owner_user_id: agent.owner_user_id, team_id: agent.team_id },
       activeTeam,
       currentUser,
-      false,
+      _isAdmin,
     );
   }
 

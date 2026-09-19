@@ -813,7 +813,14 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (result.deleted_ids.length > 0) {
       const ph = result.deleted_ids.map(() => "?").join(",");
       this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_agents WHERE team_id IN (${ph})`, ...result.deleted_ids);
+      // Agent 必须先收集 id 再走 deleteAgents()，不能直接 DELETE FROM meta_agents：
+      // 后者绕过 deleteAgents 的级联，会把 meta_task_agents / meta_agent_fixed_assets /
+      // chat_memory 资产记录残留成孤儿数据。
+      const agentIds = this.all<{ agent_id: string }>(
+        `SELECT agent_id FROM meta_agents WHERE team_id IN (${ph})`,
+        ...result.deleted_ids,
+      ).map((r) => r.agent_id);
+      if (agentIds.length > 0) this.deleteAgents(agentIds);
       this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph})`, ...result.deleted_ids);
       this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph})`, ...result.deleted_ids);
     }

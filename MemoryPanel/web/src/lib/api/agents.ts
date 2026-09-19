@@ -89,10 +89,14 @@ export const agentsApi = {
   /**
    * 删除 agent：走业务路由 /api/v1/agent/delete-cascade。
    *
-   * 该路由会先把 owner_agent_id = 当前 agent 的所有 active skill 走 skill/delete，
-   * 全部成功后才调 meta/agent/archive；任一 skill 删失败即中断，agent 不会被 archive，
-   * 抛出 SKILL_DELETE_FAILED 让调用方给用户展示（错误 data 里带上已删的 skill_ids
-   * 和失败的 skill_id）。归档时后端会顺手清 chat_memory asset。
+   * 两条路径（issue #1321 起放通 admin）：
+   *   - owner：先把 owner_agent_id = 当前 agent 的所有 active skill 走 skill/delete，
+   *     全部成功后才调 meta/agent/archive；任一 skill 删失败即中断，agent 不会被
+   *     archive，抛出 SKILL_DELETE_FAILED 让调用方给用户展示（错误 data 里带上已删的
+   *     skill_ids 和失败的 skill_id）。归档时后端会顺手清 chat_memory asset。
+   *     响应：archived=true、deleted=false、deleted_skill_ids 为实际清理的 skill。
+   *   - team admin / system_admin：跳过 skill 逐条删除，直接内核 agent/delete 硬删除。
+   *     响应：deleted=true、archived=false、deleted_skill_count=0。
    */
   delete: async (agentId: string) => {
     const session = getPanelSession();
@@ -101,6 +105,8 @@ export const agentsApi = {
     }
     const envelope = await request<MetaEnvelope<{
       archived: boolean;
+      /** true 表示走了 admin 硬删除路径（未逐条清 skill）。 */
+      deleted?: boolean;
       agent_id: string;
       deleted_skill_count: number;
       deleted_skill_ids: string[];

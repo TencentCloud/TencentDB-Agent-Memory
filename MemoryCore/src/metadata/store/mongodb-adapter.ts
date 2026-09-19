@@ -666,7 +666,12 @@ export class MongoMetadataStore implements IMetadataStore {
     const result = await this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
       await this.col("meta_team_members").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_agents").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
+      // 与 sqlite adapter 保持一致：先收集 agent_id 再走 deleteAgents() 的完整级联，
+      // 避免 meta_task_agents / meta_agent_fixed_assets / chat_memory 残留。
+      const agents = await this.col<AgentEntity>("meta_agents")
+        .find({ team_id: { $in: result.deleted_ids } } as Document, { projection: PROJECT_NO_ID })
+        .toArray();
+      if (agents.length > 0) await this.deleteAgents(agents.map((a) => a.agent_id));
       await this.col("meta_tasks").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
       await this.col("meta_assets").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
     }
