@@ -66,6 +66,9 @@ upstream:
     # codex:                                              # 客户端 key 透传模式
     #   url: "https://codex-upstream.example.com/v1"
     #   # 不写 apiKey → 透传客户端自己带上来的 key，不走外层兜底
+    #   # Codex 需要支持 OpenAI Responses API 的上游（/v1/responses）。
+    #   # proxy 原样转发该路径，不会翻译成 /v1/chat/completions；
+    #   # 只实现 chat/completions 的网关不能服务 Codex，失败通常是上游 404/400。
     # 注意：workbuddy / codebuddy / claude-code 等客户端不需要单独配 per-agent override，
     # 它们的请求会自然落到外层 upstream.url + 鉴权走的 user_key，proxy 自动按 user_id
     # 在内核拉取对应的 team/agent/task 上下文（不需要手动创建资源）。
