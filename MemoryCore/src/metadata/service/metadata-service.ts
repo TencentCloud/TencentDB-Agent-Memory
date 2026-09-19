@@ -225,6 +225,13 @@ export interface ListAccessibleAssetsParams {
 
 const FILTERED_STATUSES: AssetStatus[] = ["archived", "deprecated", "failed"];
 
+/**
+ * 级联清理 Agent 时的翻页步长。
+ * 与 Panel 侧 META_LIST_PAGE / schema 的 limit 上限（100）对齐，
+ * 保证「成员移除 / 用户删除」场景下一次性尽量少往返又不会越界。
+ */
+const AGENT_CASCADE_PAGE = 100;
+
 export interface MetadataQuotaLimits {
   maxUsersPerInstance: number;
   maxTeamsPerInstance: number;
@@ -608,6 +615,16 @@ export class MetadataService {
     if (totalAdmins > 0 && totalAdmins - deletingSystemAdmins < 1) {
       throw new MetadataError("last_system_admin", "cannot delete the last system_admin user");
     }
+    // 级联：用户删除会连带删掉 meta_user_keys，owner 之后再也无法认证 ——
+    // 唯一的删除主体就此消失。因此必须先把其名下**所有 team** 的 Agent 硬删除
+    // （store.deleteAgents 会级联 task_agents / fixed_assets / chat_memory 资产），
+    // 否则这些 Agent 的 owner_user_id 悬空，任何角色都无法删除。
+    // 权限已由上面 canManageUsers（system admin）建立，无需再逐个 agent 校验。
+    const agentIds: string[] = [];
+    for (const id of userIds) {
+      agentIds.push(...(await this.collectAgentIdsOfOwner(id)));
+    }
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
     return this.deleteUsers(userIds);
   }
 
@@ -968,6 +985,29 @@ export class MetadataService {
 
   async deleteAgents(agentIds: string[]): Promise<BatchDeleteResult> {
     return this.store.deleteAgents(agentIds);
+  }
+
+  /**
+   * 分页收集某用户名下的全部 Agent id，用于成员移除 / 用户删除前的级联清理。
+   *
+   * store 的 list 接口默认只给一页（DEFAULT_PAGINATION = 20），必须翻页遍历，
+   * 否则 Agent 多时会静默漏删、继续留下孤儿。
+   *
+   * @param teamId 传入时只收集该 team 内的（成员移除场景）；省略时跨 team 全量（用户删除场景）。
+   */
+  private async collectAgentIdsOfOwner(userId: string, teamId?: string): Promise<string[]> {
+    const ids: string[] = [];
+    let offset = 0;
+    for (;;) {
+      const page = teamId
+        ? await this.store.listAgentsByTeam(teamId, { limit: AGENT_CASCADE_PAGE, offset }, { owner_user_id: userId })
+        : await this.store.listAgentsByOwner(userId, { limit: AGENT_CASCADE_PAGE, offset });
+      ids.push(...page.items.map((agent) => agent.agent_id));
+      // 空页直接结束；否则按 total 判断是否已到末尾。
+      if (page.items.length === 0 || offset + page.items.length >= page.total) break;
+      offset += AGENT_CASCADE_PAGE;
+    }
+    return ids;
   }
 
   async listAgentsByTeam(
@@ -1743,15 +1783,22 @@ export class MetadataService {
   }
 
   /**
-   * agent 固定资产写操作的权限：owner 本人，或该 agent 所属团队的 team admin。
-   * 用于冷启动「admin 代新用户挂载默认 Agent 资产」等场景（参照 asset 的
-   * assertCallerIsAssetOwnerOrTeamAdmin 先例，放通 team admin）。
+   * agent 写 / 生命周期操作的权限：owner 本人，或该 agent 所属团队的 team admin，
+   * 或 system_admin。
+   *
+   * - team admin 放通：用于冷启动「admin 代新用户挂载默认 Agent 资产」等场景
+   *   （参照 asset 的 assertCallerIsAssetOwnerOrTeamAdmin 先例）。
+   * - system_admin 放通：authenticateV3 已把 user_type === system_admin 解析进
+   *   V3AuthContext.isSystemAdmin，但 delete / archive 从未参考它。若不放通，
+   *   Panel delete-cascade 在控制层放行 system_admin 后，最终一跳到内核仍会
+   *   403（system_admin 通常并不在目标 team 里），控制层的放行形同虚设。
    */
   private async assertCallerIsAgentOwnerOrTeamAdmin(ctx: V3AuthContext, agentId: string): Promise<AgentEntity> {
     const agent = await this.getAgentById(agentId);
     if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
     const callerId = this.requireCallerId(ctx);
     if (agent.owner_user_id === callerId) return agent;
+    if (ctx.isSystemAdmin) return agent;
     await this.assertCallerIsTeamAdmin(ctx, agent.team_id);
     return agent;
   }
@@ -1820,6 +1867,14 @@ export class MetadataService {
     if (userId === team.owner_user_id) {
       throw new MetadataError("permission_denied", "cannot remove team owner");
     }
+    // 级联：与 team-member/add 成功后 Panel 异步为新成员克隆默认 Agent
+    // （cloneDefaultAgentForNewMember）对称。先硬删除该成员在本 team 名下的 Agent
+    // （store.deleteAgents 级联 task_agents / fixed_assets / chat_memory 资产），
+    // 再删成员关系 —— 否则成员关系一没、owner 又不再是 team 成员，
+    // 这些 Agent 的 owner_user_id 悬空，形成任何角色都删不掉的孤儿。
+    // 权限已由上面 assertCallerIsTeamAdmin 建立，无需再逐个 agent 校验。
+    const agentIds = await this.collectAgentIdsOfOwner(userId, teamId);
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
     return this.removeTeamMember(teamId, userId);
   }
 
@@ -1866,15 +1921,23 @@ export class MetadataService {
     return this.updateAgent(agentId, patch);
   }
 
+  /**
+   * 硬删除 Agent（级联 task_agents / agent_fixed_assets / 自身 chat_memory 资产）。
+   *
+   * 权限放宽为 owner / team admin / system_admin：与 createAgentForCaller 已允许
+   * 「admin 代新用户创建默认 Agent」形成对称 —— 成员被移出团队、或用户被删除后，
+   * 其 Agent 仍有可执行删除的主体，不再出现 owner_user_id 悬空的孤儿。
+   */
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
     for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     }
     return this.deleteAgents(agentIds);
   }
 
+  /** 归档（软关闭）Agent。权限同 deleteAgentsForCaller（owner / team admin / system_admin）。 */
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     return this.archiveAgent(agentId);
   }
 

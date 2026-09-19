@@ -809,15 +809,37 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   deleteTeams(teamIds: string[]): BatchDeleteResult {
+    // 先收集待删 team 下的 agent_id，交给 deleteAgents() 走完整级联
+    // （meta_task_agents / meta_agent_fixed_assets / 各 agent 自身 chat_memory 资产）。
+    // 早期实现用 raw SQL 直删 meta_agents，绕过了 deleteAgents()，导致上述关联行残留在库里。
+    //
+    // 顺序上必须「先删 agent 再删 team 资产」：deleteAgents → deleteAssets 依赖
+    // meta_assets 行仍存在才能定位并清理其它 agent 的借入绑定；
+    // 若先 raw 删 meta_assets，deleteAssets 会按「已不存在 = 幂等成功」直接返回，
+    // 借入绑定就再也清不掉了。
+    const agentIds = this.listAgentIdsByTeams(teamIds);
+    if (agentIds.length > 0) {
+      this.deleteAgents(agentIds);
+    }
+
     const result = this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
       const ph = result.deleted_ids.map(() => "?").join(",");
       this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_agents WHERE team_id IN (${ph})`, ...result.deleted_ids);
       this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph})`, ...result.deleted_ids);
       this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph})`, ...result.deleted_ids);
     }
     return result;
+  }
+
+  /** 收集给定 team 下的全部 agent_id（空入参返回空数组，避免 `IN ()` 语法错误）。 */
+  private listAgentIdsByTeams(teamIds: string[]): string[] {
+    if (teamIds.length === 0) return [];
+    const ph = teamIds.map(() => "?").join(",");
+    return this.all<{ agent_id: string }>(
+      `SELECT agent_id FROM meta_agents WHERE team_id IN (${ph})`,
+      ...teamIds,
+    ).map((row) => row.agent_id);
   }
 
   listTeamsByUser(userId: string, pagination?: PaginationParams | null, filter?: { name?: string }): ListPage<TeamEntity> {
