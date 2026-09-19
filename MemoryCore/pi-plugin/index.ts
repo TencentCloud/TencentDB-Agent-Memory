@@ -8,6 +8,7 @@
  * recipes) arrives server-side from the proxy. (Scope C.)
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerMemoryForgetCommand } from "./forget-command.js";
 
 export default function (pi: ExtensionAPI) {
   const proxyBase = process.env.TDAI_PROXY_URL ?? "http://127.0.0.1:8096";
@@ -80,6 +81,8 @@ export default function (pi: ExtensionAPI) {
       },
     ],
   });
+
+  registerMemoryForgetCommand(pi, { proxyBase, spaceId, userKey });
 
   pi.on("before_provider_headers", (event: any, ctx: any) => {
     if (ctx.model?.provider !== "tdai") return;

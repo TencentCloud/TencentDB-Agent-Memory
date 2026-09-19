@@ -12,6 +12,7 @@ import { createSkillBridgeHandler } from "./skill/skill-bridge.js";
 import { createMemoryBridgeHandler } from "./memory/memory-bridge.js";
 import { createInstanceDestroyHandler } from "./routes/instance-destroy.js";
 import { createRateLimitHandlers } from "./routes/rate-limits.js";
+import { createPiMemoryForgetHandlers } from "./routes/pi-memory-forget.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
@@ -149,6 +150,11 @@ export function createApp(config: ProxyConfig): Hono {
   app.get("/v3/admin/rate-limits", rateLimitHandlers.get);
   app.put("/v3/admin/rate-limits", rateLimitHandlers.put);
   app.delete("/v3/admin/rate-limits", rateLimitHandlers.delete);
+
+  const piMemoryForget = createPiMemoryForgetHandlers(config);
+  app.post("/v3/pi/memory-forget/preview", piMemoryForget.preview);
+  app.post("/v3/pi/memory-forget/confirm", piMemoryForget.confirm);
+  app.post("/v3/pi/memory-forget/cancel", piMemoryForget.cancel);
 
   // ── Session management endpoints (mem: command 底层接口, 面板前端可复用) ──
   app.post("/v3/session/refresh-cache", (c) => {
