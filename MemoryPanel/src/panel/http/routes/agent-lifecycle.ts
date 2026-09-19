@@ -40,6 +40,14 @@ import {
 /** skill/list 一页 100 条 —— 与 knowledge fetchAllMetaListItems 分页步长对齐。 */
 const SKILL_LIST_PAGE = 100;
 
+/** 内核 SkillCore 未启用时 skill/list 返回 404 + 该 message（见 skill-handlers precheck）。 */
+const SKILL_MODULE_NOT_ENABLED = 'Skill module not enabled';
+
+/** 判断 skill/list 是否因「SkillCore 未启用」而失败（区别于普通 404/5xx）。 */
+function isSkillModuleDisabled(env: MetaEnvelope<unknown>): boolean {
+  return env.code === 404 && env.message === SKILL_MODULE_NOT_ENABLED;
+}
+
 interface AgentRaw {
   agent_id: string;
   team_id: string;
@@ -76,7 +84,16 @@ async function listAgentSkills(
       },
       ctx,
     );
-    if (env.code !== 0) return { ok: false, envelope: env };
+    if (env.code !== 0) {
+      // SkillCore 未启用 → 只有「还没开始分页（offset===0）且一页都没拉到」时才能
+      // 安全地当作「名下无 skill」跳过级联；一旦分页已经开始（已观察到部分 skill），
+      // 把能力缺失误判为空集合会让这些 skill 被静默漏删、agent 被直接归档，
+      // 必须 fail-closed 原样透传。
+      if (isSkillModuleDisabled(env) && offset === 0 && all.length === 0) {
+        return { ok: true, items: [] };
+      }
+      return { ok: false, envelope: env };
+    }
     const batch = extractListItems<SkillRow>(env);
     all.push(...batch);
     const total = (env.data as { total?: number } | null)?.total ?? all.length;
