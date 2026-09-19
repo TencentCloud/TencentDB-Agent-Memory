@@ -507,6 +507,14 @@ export async function handleGet(body: unknown, _auth: V2AuthContext, requestId: 
   if (!pre.ok) { obsLogger.warn("skill.handleGet.done", { req_id: requestId, code: pre.envelope.code, dur_ms: Date.now() - t0, reason: "precheck" }); return pre.envelope; }
   try {
     const row = await pre.core.get(pre.data);
+    if (deps.getMetadataService) {
+      try {
+        const metaSvc = await deps.getMetadataService(_auth.serviceId);
+        await metaSvc.touchAssetUsage(row.skill_id);
+      } catch (err) {
+        deps.logger.error(`touchAssetUsage failed for ${row.skill_id}: ` + (err instanceof Error ? err.message : String(err)));
+      }
+    }
     const includeContent = pre.data.include_content ?? true;
     const includeManifest = pre.data.include_manifest ?? true;
     // Detail view 额外附上 content_hash / storage_dir（summary 没输出这些）。
