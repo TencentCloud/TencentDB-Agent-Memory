@@ -672,6 +672,73 @@ export function runMetadataStoreContract(
         await store.deleteTasks([task.task_id]);
         expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
       });
+
+      // ── M3 (#1321)：成员 / 用户 / 团队删除的 Agent 级联 ──
+      it("removeTeamMember 级联删除该成员在本团队的 Agent，其它团队不受影响", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const teamA = await store.createTeam(teamInput(owner.user_id));
+        const member = await store.createUser(uniqueUserInput());
+        await store.addTeamMember({ team_id: teamA.team_id, user_id: member.user_id, role: "member" });
+        const agentInA = await store.createAgent({ team_id: teamA.team_id, owner_user_id: member.user_id, name: "A-in-A" });
+        const task = await store.createTask({ team_id: teamA.team_id, creator_user_id: owner.user_id, title: "T" });
+        const skill = await store.createAsset({ asset_id: newAssetId(), team_id: teamA.team_id, asset_type: "skill", name: "S", owner_user_id: member.user_id, source_type: "manual" });
+        await store.linkTaskAgent(task.task_id, agentInA.agent_id);
+        await store.setAgentFixedAssets(agentInA.agent_id, [{ asset_id: skill.asset_id, asset_type: "skill", created_by: member.user_id }]);
+        const selfMemoryA = buildChatMemoryAssetId(teamA.team_id, agentInA.agent_id);
+        await store.createAsset({ asset_id: selfMemoryA, team_id: teamA.team_id, asset_type: "chat_memory", name: "M-A", owner_user_id: member.user_id, source_type: "auto", visibility: "team", status: "active" });
+
+        // 成员在其它团队还有自己的 Agent —— 不得被误删。
+        const teamB = await store.createTeam({ name: "TeamB", owner_user_id: member.user_id });
+        const agentInB = await store.createAgent({ team_id: teamB.team_id, owner_user_id: member.user_id, name: "A-in-B" });
+
+        await store.removeTeamMember(teamA.team_id, member.user_id);
+
+        expect(await store.getAgentById(agentInA.agent_id)).toBeNull();
+        expect(await store.getAgentById(agentInB.agent_id)).not.toBeNull();
+        expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
+        expect((await store.listAgentFixedAssets(agentInA.agent_id, P)).items).toHaveLength(0);
+        expect(await store.getAssetById(selfMemoryA)).toBeNull();
+      });
+
+      it("deleteUsers 级联删除名下 Agent（含 task_agents / fixed_assets / 自记忆）", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const doomed = await store.createUser(uniqueUserInput());
+        await store.addTeamMember({ team_id: team.team_id, user_id: doomed.user_id, role: "member" });
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: doomed.user_id, name: "A" });
+        const task = await store.createTask({ team_id: team.team_id, creator_user_id: owner.user_id, title: "T" });
+        const skill = await store.createAsset({ asset_id: newAssetId(), team_id: team.team_id, asset_type: "skill", name: "S", owner_user_id: doomed.user_id, source_type: "manual" });
+        await store.linkTaskAgent(task.task_id, agent.agent_id);
+        await store.setAgentFixedAssets(agent.agent_id, [{ asset_id: skill.asset_id, asset_type: "skill", created_by: doomed.user_id }]);
+        const selfMemory = buildChatMemoryAssetId(team.team_id, agent.agent_id);
+        await store.createAsset({ asset_id: selfMemory, team_id: team.team_id, asset_type: "chat_memory", name: "M", owner_user_id: doomed.user_id, source_type: "auto", visibility: "team", status: "active" });
+
+        await store.deleteUsers([doomed.user_id]);
+
+        expect(await store.getAgentById(agent.agent_id)).toBeNull();
+        expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
+        expect((await store.listAgentFixedAssets(agent.agent_id, P)).items).toHaveLength(0);
+        expect(await store.getAssetById(selfMemory)).toBeNull();
+      });
+
+      it("deleteTeams 走 deleteAgents 完整级联，无 task_agents / fixed_assets / chat_memory 残留", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: owner.user_id, name: "A" });
+        const task = await store.createTask({ team_id: team.team_id, creator_user_id: owner.user_id, title: "T" });
+        const skill = await store.createAsset({ asset_id: newAssetId(), team_id: team.team_id, asset_type: "skill", name: "S", owner_user_id: owner.user_id, source_type: "manual" });
+        await store.linkTaskAgent(task.task_id, agent.agent_id);
+        await store.setAgentFixedAssets(agent.agent_id, [{ asset_id: skill.asset_id, asset_type: "skill", created_by: owner.user_id }]);
+        const selfMemory = buildChatMemoryAssetId(team.team_id, agent.agent_id);
+        await store.createAsset({ asset_id: selfMemory, team_id: team.team_id, asset_type: "chat_memory", name: "M", owner_user_id: owner.user_id, source_type: "auto", visibility: "team", status: "active" });
+
+        await store.deleteTeams([team.team_id]);
+
+        expect(await store.getAgentById(agent.agent_id)).toBeNull();
+        expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
+        expect((await store.listAgentFixedAssets(agent.agent_id, P)).items).toHaveLength(0);
+        expect(await store.getAssetById(selfMemory)).toBeNull();
+      });
     });
 
     // ── v3.1：username / external_id 无唯一约束 ──

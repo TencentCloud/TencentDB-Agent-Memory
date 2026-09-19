@@ -1750,6 +1750,9 @@ export class MetadataService {
   private async assertCallerIsAgentOwnerOrTeamAdmin(ctx: V3AuthContext, agentId: string): Promise<AgentEntity> {
     const agent = await this.getAgentById(agentId);
     if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+    // system_admin 旁路：孤儿 Agent（owner 已删）没有任何在册 owner 能通过成员
+    // 校验，system admin 必须能不依赖 team 成员身份直接处置（#1321）。
+    if (ctx.isSystemAdmin) return agent;
     const callerId = this.requireCallerId(ctx);
     if (agent.owner_user_id === callerId) return agent;
     await this.assertCallerIsTeamAdmin(ctx, agent.team_id);
@@ -1868,13 +1871,15 @@ export class MetadataService {
 
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
     for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
+      // delete/archive 放通 team admin 与 system admin（#1321）：孤儿 Agent 的
+      // owner 已不存在，严格 owner-only 会让任何角色都删不掉。
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     }
     return this.deleteAgents(agentIds);
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     return this.archiveAgent(agentId);
   }
 
