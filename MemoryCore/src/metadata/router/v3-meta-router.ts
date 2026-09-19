@@ -29,7 +29,7 @@ import {
 import { extractInstanceId } from "./instance.js";
 import { resolvePagination } from "./pagination.js";
 import { resolveUserId } from "../service/resolve-user-id.js";
-import type { AgentFilter, TaskFilter, ParticipationLogFilter } from "../types.js";
+import type { TaskFilter, ParticipationLogFilter } from "../types.js";
 import * as S from "./v3-meta-schemas.js";
 import {
   createMetaApiTraceContext,
@@ -178,30 +178,19 @@ const routeTable: Record<string, Handler> = {
 
   // Agent
   [`${V3_PREFIX}/agent/create`]: bind(S.agentCreateSchema, (d, c, s) => s.createAgentForCaller(d, c)),
-  [`${V3_PREFIX}/agent/get`]: bind(S.agentGetSchema, async (d, _c, s) => orNotFound(await s.getAgentById(d.agent_id), "agent_not_found", d.agent_id)),
+  [`${V3_PREFIX}/agent/get`]: bind(S.agentGetSchema, (d, c, s) => s.getAgentForCaller(d.agent_id, c)),
   [`${V3_PREFIX}/agent/update`]: bind(S.agentUpdateSchema, async (d, c, s) => {
     const { agent_id, ...patch } = d;
     return s.updateAgentForCaller(agent_id, patch, c);
   }),
   [`${V3_PREFIX}/agent/delete`]: bind(S.agentDeleteSchema, (d, c, s) => s.deleteAgentsForCaller(d.agent_ids, c)),
-  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, _c, s) => {
-    const pagination = resolvePagination(d);
-    if (d.team_id) {
-      // team_id 分支：owner_user_id 若同传则叠加过滤（"团队内我 owner 的 agent"），
-      // 用于面板"私有 agent 可见性"场景。不传时行为不变（团队全量）。
-      const filter: AgentFilter = {};
-      if (d.status) filter.status = d.status;
-      if (d.owner_user_id) filter.owner_user_id = d.owner_user_id;
-      if (d.name) filter.name = d.name;
-      return s.listAgentsByTeam(d.team_id, pagination, filter);
-    }
-    const ownerId = d.owner_user_id ?? await resolveUserId(s, { user_key: d.owner_user_key });
-    const filter2: AgentFilter = {};
-    if (d.status) filter2.status = d.status;
-    if (d.name) filter2.name = d.name;
-    return s.listAgentsByOwner(ownerId, pagination, Object.keys(filter2).length ? filter2 : undefined);
+  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, c, s) => {
+    const ownerId = d.owner_user_id ?? (!d.team_id ? await resolveUserId(s, { user_key: d.owner_user_key }) : undefined);
+    return s.listAgentsForCaller(d.team_id, ownerId, { status: d.status, name: d.name }, resolvePagination(d), c);
   }),
   [`${V3_PREFIX}/agent/archive`]: bind(S.agentArchiveSchema, (d, c, s) => s.archiveAgentForCaller(d.agent_id, c)),
+  [`${V3_PREFIX}/agent/transfer`]: bind(S.agentTransferSchema, (d, c, s) => s.transferAgentForCaller(d.agent_id, d.new_owner_user_id, d.expected_owner_user_id, c)),
+  [`${V3_PREFIX}/agent/gc`]: bind(S.agentGcSchema, (d, c, s) => s.gcAgentsForCaller(d, c)),
 
   // Task
   [`${V3_PREFIX}/task/create`]: bind(S.taskCreateSchema, (d, c, s) => s.createTaskForCaller(d, c)),
@@ -364,6 +353,7 @@ function mapErrorCode(code: string): number {
     case "last_key_cannot_revoke":
     case "already_initialized":
     case "last_system_admin":
+    case "ownership_conflict":
     case "member_already_exists":
       return 409;
     case "invalid_credentials":
@@ -373,6 +363,7 @@ function mapErrorCode(code: string): number {
     case "invalid_instance_id":
     case "missing_team_id":
     case "filter_not_allowed":
+    case "invalid_input":
     case "invalid_user_ids":
       return 400;
     case "user_inactive":

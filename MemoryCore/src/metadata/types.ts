@@ -435,6 +435,8 @@ export interface GrantAclInput {
 // ============================
 
 export interface AgentFilter {
+  /** Internal visibility predicate; applied before pagination, never accepted from request bodies. */
+  visible_to_user_id?: string;
   status?: AgentStatus;
   /**
    * 组合过滤：与 team_id 一起使用时表示"团队内某用户 owner 的 agent"。

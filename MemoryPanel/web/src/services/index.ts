@@ -97,3 +97,5 @@ export { isGlobalAdmin } from './permissions';
 // ===== Role hook =====
 export { useCurrentRole } from './useCurrentRole';
 export type { TeamRole } from './useCurrentRole';
+
+export { canManageAgentLifecycle } from './agent-permissions';

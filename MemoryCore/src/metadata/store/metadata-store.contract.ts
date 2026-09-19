@@ -54,6 +54,52 @@ export function runMetadataStoreContract(
       await teardown(store);
     });
 
+    describe("Agent lifecycle invariants", () => {
+      async function fixture() {
+        const user = await store.createUser(uniqueUserInput());
+        const target = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(user.user_id));
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: user.user_id, name: "owned" });
+        const memoryId = buildChatMemoryAssetId(team.team_id, agent.agent_id);
+        await store.createAsset({ asset_id: memoryId, team_id: team.team_id, asset_type: "chat_memory", name: "memory", owner_user_id: user.user_id, source_type: "auto" });
+        const borrowerTeam = await store.createTeam(teamInput(target.user_id));
+        const borrower = await store.createAgent({ team_id: borrowerTeam.team_id, owner_user_id: target.user_id, name: "borrower" });
+        await store.setAgentFixedAssets(borrower.agent_id, [{ asset_id: memoryId, asset_type: "chat_memory", created_by: target.user_id }]);
+        const task = await store.createTask({ team_id: team.team_id, creator_user_id: user.user_id, title: "task" });
+        await store.linkTaskAgent(task.task_id, agent.agent_id);
+        return { user, target, team, agent, memoryId, borrower, task };
+      }
+      for (const operation of ["agent", "team"] as const) {
+        it(`${operation} delete removes memory, ACL/bindings and task links without deleting borrower`, async () => {
+          const f = await fixture();
+          if (operation === "agent") await store.deleteAgents([f.agent.agent_id]);
+          else await store.deleteTeams([f.team.team_id]);
+          expect(await store.getAgentById(f.agent.agent_id)).toBeNull();
+          expect(await store.getAssetById(f.memoryId)).toBeNull();
+          expect((await store.listAgentFixedAssets(f.borrower.agent_id, P)).total).toBe(0);
+          expect((await store.listTaskAgents(f.task.task_id, P)).total).toBe(0);
+          expect(await store.getAgentById(f.borrower.agent_id)).not.toBeNull();
+        });
+      }
+      it("transfer updates agent and memory owners while preserving shared bindings", async () => {
+        const f = await fixture();
+        await store.transferAgentOwnership(f.agent.agent_id, f.user.user_id, f.target.user_id);
+        expect((await store.getAgentById(f.agent.agent_id))?.owner_user_id).toBe(f.target.user_id);
+        expect((await store.getAssetById(f.memoryId))?.owner_user_id).toBe(f.target.user_id);
+        expect((await store.listAgentFixedAssets(f.borrower.agent_id, P)).total).toBe(1);
+        expect((await store.listTaskAgents(f.task.task_id, P)).total).toBe(1);
+      });
+      it("stale transfer is a no-op", async () => {
+        const f = await fixture();
+        expect(await store.transferAgentOwnership(f.agent.agent_id, "stale", f.target.user_id)).toBeNull();
+        expect((await store.getAssetById(f.memoryId))?.owner_user_id).toBe(f.user.user_id);
+      });
+      it("empty deletion batches have no side effects", async () => {
+        expect(await store.deleteTeams([])).toEqual({ deleted_ids: [], failed: [] });
+        expect(await store.deleteAgents([])).toEqual({ deleted_ids: [], failed: [] });
+      });
+    });
+
     // ── User ──
     describe("User", () => {
       it("createUser 自动生成 user_id / 默认 key 并可按 id/key 查回", async () => {

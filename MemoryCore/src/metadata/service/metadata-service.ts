@@ -12,6 +12,7 @@
  * 不感知具体后端（SQLite / MongoDB），保证存储可切换。
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DuplicateUserKeyError, type IMetadataStore } from "../store/interface.js";
 import {
   checkPermission,
@@ -143,6 +144,23 @@ export type ChatMemoryContentCleaner = (params: {
   agentId: string;
 }) => Promise<void>;
 
+export interface AgentGcInput {
+  team_id: string;
+  dry_run?: boolean;
+  agent_ids?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface AgentGcResult {
+  dry_run: boolean;
+  candidates: Array<{ agent_id: string; owner_user_id: string; reason: string }>;
+  deleted_ids: string[];
+  skipped_ids: string[];
+  failed: Array<{ id: string; reason: string }>;
+  next_offset: number | null;
+}
+
 /** Detect unique constraint violation (SQLite UNIQUE or MongoDB E11000) on a specific column. */
 function isUniqueViolation(err: unknown, column?: string): boolean {
   if (!(err instanceof Error)) return false;
@@ -264,6 +282,110 @@ export class MetadataService {
 
   /** 由 gateway 注入的 chat_memory 内容清理器；未注入时归档只删资产不清内容。 */
   private _chatMemoryContentCleaner?: ChatMemoryContentCleaner;
+  private _agentSkillCleaner?: (params: { teamId: string; agentId: string }) => Promise<string[] | void>;
+  private _agentSkillAssetResolver?: (params: { teamId: string; agentId: string }) => Promise<string[]>;
+  // Serialize lifecycle mutations within this instance, including asynchronous default-agent creation.
+  // This is not a distributed lock; metadata CAS/transactions provide the storage boundary.
+  private lifecycleTail: Promise<void> = Promise.resolve();
+  private readonly lifecycleContext = new AsyncLocalStorage<{ active: boolean }>();
+
+  private async withLifecycleLock<T>(action: () => Promise<T>): Promise<T> {
+    if (this.lifecycleContext.getStore()?.active) return action();
+    const previous = this.lifecycleTail;
+    let release!: () => void;
+    this.lifecycleTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    const scope = { active: true };
+    try { return await this.lifecycleContext.run(scope, action); }
+    finally { scope.active = false; release(); }
+  }
+
+  setAgentSkillCleaner(cleaner: (params: { teamId: string; agentId: string }) => Promise<string[] | void>): void {
+    this._agentSkillCleaner = cleaner;
+  }
+
+  setAgentSkillAssetResolver(resolver: (params: { teamId: string; agentId: string }) => Promise<string[]>): void {
+    this._agentSkillAssetResolver = resolver;
+  }
+
+  private assertCascadeComplete(result: BatchDeleteResult): void {
+    if (result.failed.length) throw new MetadataError("cascade_failed", JSON.stringify(result.failed));
+  }
+
+  /** Repeatedly consume the first page: deleting while incrementing offset skips rows. */
+  private async drainAgents(ownerId?: string, teamId?: string): Promise<void> {
+    for (;;) {
+      const page = teamId
+        ? await this.store.listAgentsByTeam(teamId, { limit: 100, offset: 0 }, ownerId ? { owner_user_id: ownerId } : undefined)
+        : await this.store.listAgentsByOwner(ownerId!, { limit: 100, offset: 0 });
+      if (!page.items.length) return;
+      this.assertCascadeComplete(await this.deleteAgents(page.items.map((a) => a.agent_id)));
+    }
+  }
+
+  private async assertValidAgentOwner(teamId: string, userId: string): Promise<void> {
+    const user = await this.store.getUserById(userId);
+    const member = await this.store.getTeamMember(teamId, userId);
+    if (!user || user.status !== "active" || !member || member.status !== "active") {
+      throw new MetadataError("permission_denied", "agent owner must be an active user and team member");
+    }
+  }
+
+  /** CAS transfer preserves Agent/Skill identity and memory content; never impersonates the old owner. */
+  async transferAgentForCaller(agentId: string, newOwnerId: string, expectedOwnerId: string, ctx: V3AuthContext): Promise<AgentEntity> {
+    return this.withLifecycleLock(async () => {
+      const agent = await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+      if (agent.owner_user_id !== expectedOwnerId) throw new MetadataError("ownership_conflict", "owner changed; refresh before transferring");
+      await this.assertValidAgentOwner(agent.team_id, newOwnerId);
+      const skillAssetIds = this._agentSkillAssetResolver
+        ? await this._agentSkillAssetResolver({ teamId: agent.team_id, agentId }) : [];
+      const updated = await this.store.transferAgentOwnership(agentId, expectedOwnerId, newOwnerId, skillAssetIds);
+      if (!updated) throw new MetadataError("ownership_conflict", "owner changed; refresh before transferring");
+      this.logger.debug(`[agent-lifecycle] transfer agent=${agentId} caller=${ctx.userId} from=${expectedOwnerId} to=${newOwnerId}`);
+      return updated;
+    });
+  }
+
+  /** Team-scoped repair. Preview is read-only; apply accepts a bounded explicit selection and rechecks it. */
+  async gcAgentsForCaller(input: AgentGcInput, ctx: V3AuthContext): Promise<AgentGcResult> {
+    return this.withLifecycleLock(async () => {
+      this.requireCallerId(ctx);
+      if (!ctx.isSystemAdmin) await this.assertCallerIsTeamAdmin(ctx, input.team_id);
+      const dryRun = input.dry_run !== false;
+      if (!dryRun && (!input.agent_ids?.length || input.agent_ids.length > 100)) {
+        throw new MetadataError("invalid_input", "apply requires 1..100 explicit agent_ids from a preview");
+      }
+      const pagination = resolvePagination({ limit: input.limit ?? 100, offset: input.offset ?? 0 });
+      const page = input.agent_ids
+        ? { items: (await Promise.all([...new Set(input.agent_ids)].map((id) => this.store.getAgentById(id)))).filter((a): a is AgentEntity => !!a), total: 0 }
+        : await this.store.listAgentsByTeam(input.team_id, pagination);
+      // Validate the entire selection before any destructive operation.
+      if (page.items.some((a) => a.team_id !== input.team_id)) throw new MetadataError("permission_denied", "GC selection contains another team's agent");
+      const result: AgentGcResult = {
+        dry_run: dryRun, candidates: [], deleted_ids: [], skipped_ids: [], failed: [],
+        next_offset: !input.agent_ids && pagination.offset + page.items.length < page.total
+          ? pagination.offset + page.items.length : null,
+      };
+      for (const candidate of page.items) {
+        const agent = await this.store.getAgentById(candidate.agent_id);
+        if (!agent) { result.skipped_ids.push(candidate.agent_id); continue; }
+        const team = await this.store.getTeamById(agent.team_id);
+        const user = await this.store.getUserById(agent.owner_user_id);
+        const member = await this.store.getTeamMember(agent.team_id, agent.owner_user_id);
+        const reason = !team ? "team_missing" : !user ? "owner_missing" : user.status !== "active" ? "owner_inactive" : !member || member.status !== "active" ? "membership_missing" : null;
+        if (!reason) { result.skipped_ids.push(agent.agent_id); continue; }
+        result.candidates.push({ agent_id: agent.agent_id, owner_user_id: agent.owner_user_id, reason });
+        if (!dryRun) {
+          try {
+            this.assertCascadeComplete(await this.deleteAgents([agent.agent_id]));
+            result.deleted_ids.push(agent.agent_id);
+          } catch (err) { result.failed.push({ id: agent.agent_id, reason: err instanceof Error ? err.message : String(err) }); }
+        }
+      }
+      if (!dryRun) this.logger.debug(`[agent-lifecycle] gc caller=${ctx.userId} team=${input.team_id} deleted=${result.deleted_ids.length} failed=${result.failed.length}`);
+      return result;
+    });
+  }
 
   constructor(
     private readonly store: IMetadataStore,
@@ -596,23 +718,28 @@ export class MetadataService {
   }
 
   async deleteUsersForCaller(userIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
-    if (!canManageUsers(ctx)) {
-      throw new MetadataError("permission_denied", "user management requires system admin");
-    }
-    let deletingSystemAdmins = 0;
-    for (const id of userIds) {
-      const u = await this.getUserById(id);
-      if (u && isSystemAdminUser(u)) deletingSystemAdmins++;
-    }
-    const totalAdmins = await this.store.countSystemAdmins();
-    if (totalAdmins > 0 && totalAdmins - deletingSystemAdmins < 1) {
-      throw new MetadataError("last_system_admin", "cannot delete the last system_admin user");
-    }
-    return this.deleteUsers(userIds);
+    return this.withLifecycleLock(async () => {
+      if (!canManageUsers(ctx)) {
+        throw new MetadataError("permission_denied", "user management requires system admin");
+      }
+      let deletingSystemAdmins = 0;
+      for (const id of userIds) {
+        const u = await this.getUserById(id);
+        if (u && isSystemAdminUser(u)) deletingSystemAdmins++;
+      }
+      const totalAdmins = await this.store.countSystemAdmins();
+      if (totalAdmins > 0 && totalAdmins - deletingSystemAdmins < 1) {
+        throw new MetadataError("last_system_admin", "cannot delete the last system_admin user");
+      }
+      return this.deleteUsers(userIds);
+    });
   }
 
   async deleteUsers(userIds: string[]): Promise<BatchDeleteResult> {
-    return this.store.deleteUsers(userIds);
+    return this.withLifecycleLock(async () => {
+      for (const userId of new Set(userIds)) await this.drainAgents(userId);
+      return this.store.deleteUsers([...new Set(userIds)]);
+    });
   }
 
   async listUsersForCaller(
@@ -877,7 +1004,10 @@ export class MetadataService {
   }
 
   async deleteTeams(teamIds: string[]): Promise<BatchDeleteResult> {
-    return this.store.deleteTeams(teamIds);
+    return this.withLifecycleLock(async () => {
+      for (const teamId of new Set(teamIds)) await this.drainAgents(undefined, teamId);
+      return this.store.deleteTeams([...new Set(teamIds)]);
+    });
   }
 
   async listTeamsByUser(userId: string, pagination: PaginationParams = DEFAULT_PAGINATION, filter?: { name?: string }): Promise<PaginatedResult<TeamEntity>> {
@@ -890,30 +1020,37 @@ export class MetadataService {
   // TeamMember
   // ============================================================
   async addTeamMember(input: AddTeamMemberInput): Promise<TeamMemberEntity> {
-    const team = await this.getTeamById(input.team_id);
-    if (!team) throw new MetadataError("team_not_found", `team not found: ${input.team_id}`);
-    const reqRole = input.role ?? "member";
-    // owner 由 createTeam 固定为 admin；禁止经 add upsert 降级，否则会出现
-    // 「仍是 owner 但 role≠admin」——面板当 admin、team-member/add 却 403。
-    if (input.user_id === team.owner_user_id && reqRole !== "admin") {
-      throw new MetadataError("permission_denied", "cannot demote team owner");
-    }
-    const existing = await this.store.getTeamMember(input.team_id, input.user_id);
-    if (existing?.status === "active" && existing.role === reqRole) {
-      throw new MetadataError(
-        "member_already_exists",
-        `member already exists: ${input.team_id}/${input.user_id}`,
-      );
-    }
+    return this.withLifecycleLock(async () => {
+      const user = await this.store.getUserById(input.user_id);
+      if (!user || user.status !== "active") throw new MetadataError("permission_denied", "member must be an active user");
+      const team = await this.getTeamById(input.team_id);
+      if (!team) throw new MetadataError("team_not_found", `team not found: ${input.team_id}`);
+      const reqRole = input.role ?? "member";
+      // owner 由 createTeam 固定为 admin；禁止经 add upsert 降级，否则会出现
+      // 「仍是 owner 但 role≠admin」——面板当 admin、team-member/add 却 403。
+      if (input.user_id === team.owner_user_id && reqRole !== "admin") {
+        throw new MetadataError("permission_denied", "cannot demote team owner");
+      }
+      const existing = await this.store.getTeamMember(input.team_id, input.user_id);
+      if (existing?.status === "active" && existing.role === reqRole) {
+        throw new MetadataError(
+          "member_already_exists",
+          `member already exists: ${input.team_id}/${input.user_id}`,
+        );
+      }
 
-    // 核心操作：将用户加入 Team
-    const result = await this.store.addTeamMember({ ...input, role: reqRole });
+      // 核心操作：将用户加入 Team
+      const result = await this.store.addTeamMember({ ...input, role: reqRole });
 
-    return result;
+      return result;
+    });
   }
 
   async removeTeamMember(teamId: string, userId: string): Promise<void> {
-    await this.store.removeTeamMember(teamId, userId);
+    return this.withLifecycleLock(async () => {
+      await this.drainAgents(userId, teamId);
+      await this.store.removeTeamMember(teamId, userId);
+    });
   }
 
   async listTeamMembers(teamId: string, pagination: PaginationParams = DEFAULT_PAGINATION): Promise<PaginatedResult<TeamMemberEntity>> {
@@ -929,30 +1066,33 @@ export class MetadataService {
   // Agent（校验 team 存在）
   // ============================================================
   async createAgent(input: CreateAgentInput): Promise<AgentEntity> {
-    await this.assertTeamExists(input.team_id);
-    const agent = await this.store.createAgent(input);
-    // 建 agent 的同一事务边界外，立即 mint 该 agent 的 chat_memory 资产 +
-    // 绑定到 fixed_assets。avoids Bug 2：首次对话触发时 asset 还不存在 →
-    // profile-memory-injector 首个 session prewarm 走 fallback 到 tools-only、
-    // 且 session_init 缓存策略下当 session 内永远读不到 L3。
-    //
-    // 幂等：ensureChatMemoryAsset 内部对已存在 asset / 已存在 binding 走 no-op。
-    // 失败非致命：agent 已建成功，chat_memory 只是"更早准备好"，
-    // 即便这里失败，/conversation/add 那条链路依然会重试 ensure，故此处仅 log warn。
-    try {
-      await this.ensureChatMemoryAsset({
-        team_id: agent.team_id,
-        agent_id: agent.agent_id,
-      });
-    } catch (err) {
-      // 这里没有专用 warn logger（service 层只有 PermCheckLogger.debug），
-      // 用 console.warn 与 v2-router.handleConversationAdd 里同类 catch 保持一致。
-      console.warn(
-        `[META] createAgent: ensureChatMemoryAsset failed (agent=${agent.agent_id} team=${agent.team_id}): ` +
-        (err instanceof Error ? err.message : String(err)),
-      );
-    }
-    return agent;
+    return this.withLifecycleLock(async () => {
+      await this.assertTeamExists(input.team_id);
+      await this.assertValidAgentOwner(input.team_id, input.owner_user_id);
+      const agent = await this.store.createAgent(input);
+      // 建 agent 的同一事务边界外，立即 mint 该 agent 的 chat_memory 资产 +
+      // 绑定到 fixed_assets。avoids Bug 2：首次对话触发时 asset 还不存在 →
+      // profile-memory-injector 首个 session prewarm 走 fallback 到 tools-only、
+      // 且 session_init 缓存策略下当 session 内永远读不到 L3。
+      //
+      // 幂等：ensureChatMemoryAsset 内部对已存在 asset / 已存在 binding 走 no-op。
+      // 失败非致命：agent 已建成功，chat_memory 只是"更早准备好"，
+      // 即便这里失败，/conversation/add 那条链路依然会重试 ensure，故此处仅 log warn。
+      try {
+        await this.ensureChatMemoryAsset({
+          team_id: agent.team_id,
+          agent_id: agent.agent_id,
+        });
+      } catch (err) {
+        // 这里没有专用 warn logger（service 层只有 PermCheckLogger.debug），
+        // 用 console.warn 与 v2-router.handleConversationAdd 里同类 catch 保持一致。
+        console.warn(
+          `[META] createAgent: ensureChatMemoryAsset failed (agent=${agent.agent_id} team=${agent.team_id}): ` +
+          (err instanceof Error ? err.message : String(err)),
+        );
+      }
+      return agent;
+    });
   }
 
   async getAgentById(agentId: string): Promise<AgentEntity | null> {
@@ -967,7 +1107,41 @@ export class MetadataService {
   }
 
   async deleteAgents(agentIds: string[]): Promise<BatchDeleteResult> {
-    return this.store.deleteAgents(agentIds);
+    return this.withLifecycleLock(async () => {
+      const ids = [...new Set(agentIds)];
+      // Keep root metadata until all external cleanup succeeds; retries can still locate the content.
+      for (const id of ids) {
+        const agent = await this.store.getAgentById(id);
+        if (!agent) continue;
+        await this._agentSkillCleaner?.({ teamId: agent.team_id, agentId: id });
+        await this._chatMemoryContentCleaner?.({ teamId: agent.team_id, agentId: id });
+      }
+      const result = await this.store.deleteAgents(ids);
+      if (result.deleted_ids.length) this.ensuredChatMemoryAssets.clear();
+      return result;
+    });
+  }
+
+  async getAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
+    const agent = await this.getAgentById(agentId);
+    if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+    const callerId = this.requireCallerId(ctx);
+    if (ctx.isSystemAdmin || agent.owner_user_id === callerId) return agent;
+    const member = await this.requireActiveTeamMember(ctx, agent.team_id);
+    if (member.role !== "admin" && agent.visibility !== "team") throw new MetadataError("permission_denied", "agent is private");
+    return agent;
+  }
+
+  async listAgentsForCaller(teamId: string | undefined, ownerId: string | undefined, filter: AgentFilter, pagination: PaginationParams, ctx: V3AuthContext): Promise<PaginatedResult<AgentEntity>> {
+    const callerId = this.requireCallerId(ctx);
+    if (teamId) {
+      const member = ctx.isSystemAdmin ? null : await this.requireActiveTeamMember(ctx, teamId);
+      const effective = { ...filter, ...(ownerId ? { owner_user_id: ownerId } : {}) };
+      if (!ctx.isSystemAdmin && member?.role !== "admin") effective.visible_to_user_id = callerId;
+      return this.listAgentsByTeam(teamId, pagination, effective);
+    }
+    if (!ownerId || (ownerId !== callerId && !ctx.isSystemAdmin)) throw new MetadataError("permission_denied", "owner-scoped listing requires owner or system admin");
+    return this.listAgentsByOwner(ownerId, pagination, filter);
   }
 
   async listAgentsByTeam(
@@ -994,9 +1168,10 @@ export class MetadataService {
    * 归档（软关闭）agent。
    *
    * 顺序很关键 —— **先清内容，再删资产**：
-   *   1. status → inactive
-   *   2.清空该 agent 的 chat_memory 内容（L0/L1/L2/L3 + 向量 + 文件）
-   *   3. 删除自身 chat_memory 资产记录（并级联清掉其它 agent 的借入绑定）
+   *   1. 清理该 Agent 拥有的 Skill（不删借入资产）
+   *   2. 清空 chat_memory 内容（L0/L1/L2/L3 + 向量 + 文件）
+   *   3. 删除自身 chat_memory 资产记录（并清理其它 Agent 的借入绑定）
+   *   4. status → inactive；此前失败保留根记录和原状态供重试
    *
    * 若把顺序颠倒（先删资产再清内容），资产记录一没，就再也无法从
    * asset_id 定位到 (team, agent)，内容会变成**永久不可达的孤儿数据**
@@ -1007,20 +1182,22 @@ export class MetadataService {
    * 脚本）跳过第 2 步，退化为原行为。
    */
   async archiveAgent(agentId: string): Promise<AgentEntity> {
-    const existing = await this.getAgentById(agentId);
-    if (!existing) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
-    const archived = await this.updateAgent(agentId, { status: "inactive" });
+    return this.withLifecycleLock(async () => {
+      const existing = await this.getAgentById(agentId);
+      if (!existing) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+      const deletedSkillIds = await this._agentSkillCleaner?.({ teamId: existing.team_id, agentId });
+      if (this._chatMemoryContentCleaner) {
+        await this._chatMemoryContentCleaner({
+          teamId: existing.team_id,
+          agentId: existing.agent_id,
+        });
+      }
 
-    if (this._chatMemoryContentCleaner) {
-      await this._chatMemoryContentCleaner({
-        teamId: existing.team_id,
-        agentId: existing.agent_id,
-      });
-    }
-
-    const selfMemoryAssetId = buildChatMemoryAssetId(existing.team_id, existing.agent_id);
-    await this.store.deleteAssets([selfMemoryAssetId]);
-    return archived;
+      const selfMemoryAssetId = buildChatMemoryAssetId(existing.team_id, existing.agent_id);
+      this.assertCascadeComplete(await this.store.deleteAssets([selfMemoryAssetId]));
+      this.ensuredChatMemoryAssets.delete(selfMemoryAssetId);
+      return { ...(await this.updateAgent(agentId, { status: "inactive" })), deleted_skill_ids: deletedSkillIds ?? [] };
+    });
   }
 
   // ============================================================
@@ -1743,15 +1920,14 @@ export class MetadataService {
   }
 
   /**
-   * agent 固定资产写操作的权限：owner 本人，或该 agent 所属团队的 team admin。
-   * 用于冷启动「admin 代新用户挂载默认 Agent 资产」等场景（参照 asset 的
-   * assertCallerIsAssetOwnerOrTeamAdmin 先例，放通 team admin）。
+   * Agent lifecycle/fixed-asset permissions: owner, active team admin, or authenticated system admin.
+   * Reused by delete/archive/transfer so Panel and kernel have a single policy.
    */
   private async assertCallerIsAgentOwnerOrTeamAdmin(ctx: V3AuthContext, agentId: string): Promise<AgentEntity> {
     const agent = await this.getAgentById(agentId);
     if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
     const callerId = this.requireCallerId(ctx);
-    if (agent.owner_user_id === callerId) return agent;
+    if (agent.owner_user_id === callerId || ctx.isSystemAdmin) return agent;
     await this.assertCallerIsTeamAdmin(ctx, agent.team_id);
     return agent;
   }
@@ -1797,30 +1973,39 @@ export class MetadataService {
   }
 
   async deleteTeamsForCaller(teamIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
-    for (const teamId of teamIds) {
-      await this.assertCallerIsTeamOwnerOrAdmin(ctx, teamId);
-    }
-    return this.deleteTeams(teamIds);
+    return this.withLifecycleLock(async () => {
+      this.requireCallerId(ctx);
+      for (const teamId of teamIds) {
+        if (ctx.isSystemAdmin) await this.assertTeamExists(teamId);
+        else await this.assertCallerIsTeamOwnerOrAdmin(ctx, teamId);
+      }
+      return this.deleteTeams(teamIds);
+    });
   }
 
   async addTeamMemberForCaller(input: AddTeamMemberInput, ctx: V3AuthContext): Promise<TeamMemberEntity> {
-    await this.assertCallerIsTeamAdmin(ctx, input.team_id);
-    const callerId = this.requireCallerId(ctx);
-    // 「添加成员」不应用来改自己的角色；选自己 + role=member 会把 admin 降级。
-    if (input.user_id === callerId) {
-      throw new MetadataError("permission_denied", "cannot add yourself as a team member");
-    }
-    return this.addTeamMember(input);
+    return this.withLifecycleLock(async () => {
+      await this.assertCallerIsTeamAdmin(ctx, input.team_id);
+      const callerId = this.requireCallerId(ctx);
+      // 「添加成员」不应用来改自己的角色；选自己 + role=member 会把 admin 降级。
+      if (input.user_id === callerId) {
+        throw new MetadataError("permission_denied", "cannot add yourself as a team member");
+      }
+      return this.addTeamMember(input);
+    });
   }
 
   async removeTeamMemberForCaller(teamId: string, userId: string, ctx: V3AuthContext): Promise<void> {
-    await this.assertCallerIsTeamAdmin(ctx, teamId);
-    const team = await this.getTeamById(teamId);
-    if (!team) throw new MetadataError("team_not_found", `team not found: ${teamId}`);
-    if (userId === team.owner_user_id) {
-      throw new MetadataError("permission_denied", "cannot remove team owner");
-    }
-    return this.removeTeamMember(teamId, userId);
+    return this.withLifecycleLock(async () => {
+      this.requireCallerId(ctx);
+      if (!ctx.isSystemAdmin) await this.assertCallerIsTeamAdmin(ctx, teamId);
+      const team = await this.getTeamById(teamId);
+      if (!team) throw new MetadataError("team_not_found", `team not found: ${teamId}`);
+      if (userId === team.owner_user_id) {
+        throw new MetadataError("permission_denied", "cannot remove team owner");
+      }
+      return this.removeTeamMember(teamId, userId);
+    });
   }
 
   async listTeamMembersForCaller(
@@ -1847,14 +2032,17 @@ export class MetadataService {
   }
 
   async createAgentForCaller(input: CreateAgentInput, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertTeamExists(input.team_id);
-    await this.requireActiveTeamMember(ctx, input.team_id);
-    // owner 本人，或该 team 的 team admin（admin 代新用户创建默认 Agent）
-    const callerId = this.requireCallerId(ctx);
-    if (input.owner_user_id !== callerId) {
-      await this.assertCallerIsTeamAdmin(ctx, input.team_id);
-    }
-    return this.createAgent(input);
+    return this.withLifecycleLock(async () => {
+      await this.assertTeamExists(input.team_id);
+      await this.requireActiveTeamMember(ctx, input.team_id);
+      // owner 本人，或该 team 的 team admin（admin 代新用户创建默认 Agent）
+      const callerId = this.requireCallerId(ctx);
+      if (input.owner_user_id !== callerId) {
+        await this.assertCallerIsTeamAdmin(ctx, input.team_id);
+      }
+      await this.assertValidAgentOwner(input.team_id, input.owner_user_id);
+      return this.createAgent(input);
+    });
   }
 
   async updateAgentForCaller(
@@ -1862,20 +2050,27 @@ export class MetadataService {
     patch: Partial<AgentEntity>,
     ctx: V3AuthContext,
   ): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
-    return this.updateAgent(agentId, patch);
+    return this.withLifecycleLock(async () => {
+      await this.assertCallerIsAgentOwner(ctx, agentId);
+      if (patch.owner_user_id !== undefined || patch.team_id !== undefined) throw new MetadataError("permission_denied", "use agent/transfer for ownership changes");
+      return this.updateAgent(agentId, patch);
+    });
   }
 
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
-    for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
-    }
-    return this.deleteAgents(agentIds);
+    return this.withLifecycleLock(async () => {
+      for (const agentId of agentIds) {
+        await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+      }
+      return this.deleteAgents(agentIds);
+    });
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
-    return this.archiveAgent(agentId);
+    return this.withLifecycleLock(async () => {
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+      return this.archiveAgent(agentId);
+    });
   }
 
   async createTaskForCaller(input: CreateTaskInput, ctx: V3AuthContext): Promise<TaskEntity> {

@@ -129,6 +129,7 @@ export interface IMetadataStore {
   createAgent(input: CreateAgentInput): MaybePromise<AgentEntity>;
   getAgentById(agentId: string): MaybePromise<AgentEntity | null>;
   updateAgent(agentId: string, patch: Partial<AgentEntity>): MaybePromise<AgentEntity | null>;
+  transferAgentOwnership(agentId: string, expectedOwnerId: string, newOwnerId: string, ownedAssetIds?: string[]): MaybePromise<AgentEntity | null>;
   deleteAgents(agentIds: string[]): MaybePromise<BatchDeleteResult>;
   listAgentsByTeam(teamId: string, pagination?: PaginationParams | null, filter?: AgentFilter): MaybePromise<ListPage<AgentEntity>>;
   listAgentsByOwner(userId: string, pagination?: PaginationParams | null, filter?: AgentFilter): MaybePromise<ListPage<AgentEntity>>;

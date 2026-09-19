@@ -86,14 +86,22 @@ export const agentsApi = {
     }
   ) => metaPost<Agent>('agent/update', { agent_id: agentId, ...data }),
 
-  /**
-   * 删除 agent：走业务路由 /api/v1/agent/delete-cascade。
-   *
-   * 该路由会先把 owner_agent_id = 当前 agent 的所有 active skill 走 skill/delete，
-   * 全部成功后才调 meta/agent/archive；任一 skill 删失败即中断，agent 不会被 archive，
-   * 抛出 SKILL_DELETE_FAILED 让调用方给用户展示（错误 data 里带上已删的 skill_ids
-   * 和失败的 skill_id）。归档时后端会顺手清 chat_memory asset。
-   */
+  /** CAS ownership transfer; pass the owner shown by the latest agent/get response. */
+  transfer: (agentId: string, newOwnerUserId: string, expectedOwnerUserId: string) =>
+    metaPost<Agent>('agent/transfer', {
+      agent_id: agentId, new_owner_user_id: newOwnerUserId, expected_owner_user_id: expectedOwnerUserId,
+    }),
+
+  /** Preview by default. Applying GC requires an explicit selection of at most 100 IDs. */
+  gc: (teamId: string, options: { dry_run?: boolean; agent_ids?: string[]; limit?: number; offset?: number } = {}) =>
+    metaPost<{
+      dry_run: boolean;
+      candidates: Array<{ agent_id: string; owner_user_id: string; reason: string }>;
+      deleted_ids: string[]; skipped_ids: string[];
+      failed: Array<{ id: string; reason: string }>; next_offset: number | null;
+    }>('agent/gc', { team_id: teamId, ...options }),
+
+  /** Owner/team admin/system admin share kernel cleanup, then archive. Errors remain retryable. */
   delete: async (agentId: string) => {
     const session = getPanelSession();
     if (!session) {

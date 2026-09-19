@@ -341,6 +341,8 @@ export class SkillVersioning {
        * shark 记账出现负偏差。
        */
       reportVdbDelta?: boolean;
+      /** Agent retirement must retain version roots when resource cleanup fails. */
+      requireStorageCleanup?: boolean;
     },
   ): Promise<number> {
     const reportDelta = opts?.reportVdbDelta ?? true;
@@ -348,6 +350,19 @@ export class SkillVersioning {
     // 1. 先拉全量版本元信息（拿 storage_dir）。listVersions 上限 1000,
     //    单 skill 版本数在 TTL 保护 + 业务上限下远小于此值。
     const versions = await this.store.listVersions(skillId, teamId, { limit: 1000, offset: 0 });
+    if (opts?.requireStorageCleanup) {
+      for (let offset = versions.length; offset > 0 && offset % 1000 === 0;) {
+        const page = await this.store.listVersions(skillId, teamId, { limit: 1000, offset });
+        versions.push(...page);
+        if (page.length < 1000) break;
+        offset += page.length;
+      }
+      // Roots retain storage_dir until ALL resource removals succeed. Retrying an
+      // already removed directory is idempotent; do not swallow storage errors.
+      for (const version of versions) {
+        if (version.storage_dir) await this.storage.rmdir(version.storage_dir);
+      }
+    }
 
     // 2. 物理删 DB 行
     const deleted = await this.store.deleteAllVersions(skillId, teamId);
@@ -358,7 +373,7 @@ export class SkillVersioning {
 
     // 3. 清 storage 目录（失败仅 warn）—— 用 listVersions 拿到的 dir，
     //    而不是拼路径，容忍历史版本 storage_dir 命名不一致的情况。
-    for (const v of versions) {
+    for (const v of opts?.requireStorageCleanup ? [] : versions) {
       if (!v.storage_dir) continue;
       try {
         await this.storage.rmdir(v.storage_dir);
