@@ -1,0 +1,4 @@
+# Publication uses canonical LF; original research byte hashes are recorded separately.
+* text eol=lf
+evidence/** linguist-generated=true
+repro/** linguist-generated=true

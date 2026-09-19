@@ -1,0 +1,1 @@
+{"model":"qwen3.5:9b","digest":"6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7","server_version":"0.34.0","think":false,"options":{"temperature":0,"seed":20260914,"num_ctx":32768,"num_predict":2048,"presence_penalty":0}}
