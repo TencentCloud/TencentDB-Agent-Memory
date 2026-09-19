@@ -32,6 +32,7 @@ benchmark-runs/
 # Dev-only scripts & lockfile (not shipped in MR)
 install-plugin.sh
 package-lock.json
+!adapters/kiro-memory/package-lock.json
 pnpm-lock.yaml
 yarn.lock
 test-offload.sh
