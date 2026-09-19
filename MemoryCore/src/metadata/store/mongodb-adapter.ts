@@ -663,10 +663,24 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async deleteTeams(teamIds: string[]): Promise<BatchDeleteResult> {
+    // 先收集待删 team 下的 agent_id 交给 deleteAgents() 走完整级联
+    // （meta_task_agents / meta_agent_fixed_assets / 各 agent 自身 chat_memory 资产），
+    // 不再用 deleteMany 直删 meta_agents 而绕过级联。
+    //
+    // 顺序上必须「先删 agent 再删 team 资产」：deleteAgents → deleteAssets 依赖
+    // meta_assets 行仍存在才能定位并清理其它 agent 的借入绑定。
+    const agentIds = teamIds.length === 0
+      ? []
+      : (await this.col<AgentEntity>("meta_agents")
+        .find({ team_id: { $in: teamIds } } as Document, { projection: { agent_id: 1, _id: 0 } })
+        .toArray()).map((row) => row.agent_id);
+    if (agentIds.length > 0) {
+      await this.deleteAgents(agentIds);
+    }
+
     const result = await this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
       await this.col("meta_team_members").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_agents").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
       await this.col("meta_tasks").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
       await this.col("meta_assets").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
     }

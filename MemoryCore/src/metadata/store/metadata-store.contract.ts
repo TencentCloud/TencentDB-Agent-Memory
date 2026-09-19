@@ -672,6 +672,82 @@ export function runMetadataStoreContract(
         await store.deleteTasks([task.task_id]);
         expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
       });
+
+      // ── Bug #1321：团队删除必须走完整 Agent 级联 ──
+      // 早期实现用 raw SQL 直删 meta_agents，绕过 deleteAgents()，
+      // 导致 meta_task_agents / meta_agent_fixed_assets / chat_memory 资产记录残留。
+      it("deleteTeams 级联清理名下 Agent 及 task_agents / fixed_assets / chat_memory 资产", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: owner.user_id, name: "A" });
+        const task = await store.createTask({ team_id: team.team_id, creator_user_id: owner.user_id, title: "T" });
+        const skillAsset = await store.createAsset({
+          asset_id: newAssetId(),
+          team_id: team.team_id,
+          asset_type: "skill",
+          name: "S",
+          owner_user_id: owner.user_id,
+          source_type: "manual",
+        });
+        const selfMemoryId = buildChatMemoryAssetId(team.team_id, agent.agent_id);
+        await store.createAsset({
+          asset_id: selfMemoryId,
+          team_id: team.team_id,
+          asset_type: "chat_memory",
+          name: "Memory of A",
+          owner_user_id: owner.user_id,
+          source_type: "auto",
+          visibility: "team",
+        });
+        await store.linkTaskAgent(task.task_id, agent.agent_id);
+        await store.setAgentFixedAssets(agent.agent_id, [
+          { asset_id: skillAsset.asset_id, asset_type: "skill", created_by: owner.user_id },
+        ]);
+
+        await store.deleteTeams([team.team_id]);
+
+        expect(await store.getTeamById(team.team_id)).toBeNull();
+        // Agent 本体不能残留为 owner_user_id 悬空的孤儿
+        expect(await store.getAgentById(agent.agent_id)).toBeNull();
+        expect((await store.listAgentsByTeam(team.team_id, P)).items).toHaveLength(0);
+        // 级联关联表
+        expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
+        expect((await store.listAgentFixedAssets(agent.agent_id, P)).items).toHaveLength(0);
+        // 自身 chat_memory 资产记录必须一起删，否则内容再也无法按 asset_id 定位
+        expect(await store.getAssetById(selfMemoryId)).toBeNull();
+      });
+
+      it("deleteTeams 先删 Agent 再删资产：其它 agent 的借入绑定也一并清理", async () => {
+        const ownerA = await store.createUser(uniqueUserInput());
+        const ownerB = await store.createUser(uniqueUserInput());
+        const teamA = await store.createTeam(teamInput(ownerA.user_id, { name: "TA" }));
+        const teamB = await store.createTeam(teamInput(ownerB.user_id, { name: "TB" }));
+        const agentA = await store.createAgent({ team_id: teamA.team_id, owner_user_id: ownerA.user_id, name: "A" });
+        const agentB = await store.createAgent({ team_id: teamB.team_id, owner_user_id: ownerB.user_id, name: "B" });
+        const memoryA = buildChatMemoryAssetId(teamA.team_id, agentA.agent_id);
+        await store.createAsset({
+          asset_id: memoryA,
+          team_id: teamA.team_id,
+          asset_type: "chat_memory",
+          name: "Memory of A",
+          owner_user_id: ownerA.user_id,
+          source_type: "auto",
+          visibility: "team",
+        });
+        // agentB 借入 teamA 的 memory 资产
+        await store.setAgentFixedAssets(agentB.agent_id, [
+          { asset_id: memoryA, asset_type: "chat_memory", created_by: ownerB.user_id },
+        ]);
+
+        await store.deleteTeams([teamA.team_id]);
+
+        expect(await store.getAssetById(memoryA)).toBeNull();
+        // 资产记录已删 → 借入绑定不能悬挂（listAgentFixedAssets 不带 assetTypes 时不过滤 JOIN，
+        // 残留的 binding 行会被断言捕获）
+        expect((await store.listAgentFixedAssets(agentB.agent_id, P)).items).toHaveLength(0);
+        // teamB 不受影响
+        expect(await store.getAgentById(agentB.agent_id)).not.toBeNull();
+      });
     });
 
     // ── v3.1：username / external_id 无唯一约束 ──
