@@ -490,28 +490,15 @@ export class WikiService {
     content: string,
     userId?: string,
   ): WriteOutcome<RawWriteResult> {
-    const row = this.store.getWiki(serviceId, teamId, wikiId);
-    if (!row) return null;
-    if (row.status === "processing") return "processing";
-
-    const size = Buffer.byteLength(content, "utf-8");
-    if (size > RAW_WRITE_MAX_BYTES) return "too_large";
-
-    const sourcesDir = join(this.dirFor(serviceId, teamId, wikiId), "raw", "sources");
-    const safe = this.resolveRawPath(sourcesDir, filename);
-    if (!safe) return "invalid_path";
-
-    mkdirSync(sourcesDir, { recursive: true });
-    writeFileSync(safe, content, "utf-8");
-    this.registerSources(serviceId, teamId, wikiId, [{ filename, content, size }], userId);
-    return { filename, size };
+    const result = this.rawWriteMany(serviceId, teamId, wikiId, [{ filename, content }], userId);
+    return Array.isArray(result) ? result[0] : result;
   }
 
   /**
    * 批量写入 raw 文件（整批原子）。
    * - 先全部校验：路径穿越 → "invalid_path"；任一项超 5MB → "too_large"
-   * - 全部通过后逐文件落盘；任一落盘失败回滚之前已写文件（删原有的不在请求里
-   *   的文件），保证整批要么都成功要么都没生效。
+   * - 全部通过后逐文件落盘，再事务提交 source 元数据；任一步失败时恢复已有文件、
+   *   删除本批新增文件。只有文件和元数据都写入成功才返回成功。
    * 错误码同 rawWrite。
    */
   rawWriteMany(
@@ -559,6 +546,8 @@ export class WikiService {
         writeFileSync(p.safePath, p.content, "utf-8");
         written.push(p);
       }
+      // 元数据也是上传成功的必要条件；登记失败必须触发文件回滚。
+      this.registerSources(serviceId, teamId, wikiId, plans, userId);
     } catch (err) {
       // 回滚：恢复每个已写文件的旧内容（不存在则删）
       for (const p of written) {
@@ -575,14 +564,6 @@ export class WikiService {
       throw err;
     }
 
-    // 全部落盘成功后登记 source 表（先查再更新，sha 未变幂等）。
-    this.registerSources(
-      serviceId,
-      teamId,
-      wikiId,
-      plans.map((p) => ({ filename: p.filename, content: p.content, size: p.size })),
-      userId,
-    );
     return plans.map(({ filename, size }) => ({ filename, size }));
   }
 
@@ -874,7 +855,7 @@ export class WikiService {
    * 登记一批源文件到 source 表（rawWrite/rawWriteMany 用）。
    * 保证 index.db 存在（幂等 initIndexDb），在一个写事务里对每个文件 upsertSource
    * （先查再更新：新建 uploaded / sha 变则重置 uploaded / sha 未变幂等）。
-   * 登记失败不阻断写盘主流程（文件已落盘）——记 warn，交由后续 ingest/rawLs 兜底。
+   * 登记失败向上传播，调用方回滚文件，避免文件已落盘但 API 不可见的假成功。
    */
   private registerSources(
     serviceId: string,
@@ -898,6 +879,7 @@ export class WikiService {
       });
     } catch (err) {
       this.logger?.warn?.(`[wiki] source register failed for ${wikiId}: ${String(err)}`);
+      throw err;
     }
   }
 
@@ -1024,6 +1006,8 @@ export class WikiService {
     });
     // 进度/终态 callback 共用同一代际，Panel 可拒绝 clear 后的迟到 progress
     const ingestRunId = randomUUID();
+    let terminalStatus: "ready" | "failed" = "ready";
+    let errorMsg: string | null = null;
     try {
       const result = await this.worker({
         wikiId,
@@ -1052,9 +1036,6 @@ export class WikiService {
         this.audit(synced, "ready", result?.pageCount != null ? `pages: ${result.pageCount}` : null);
       }
       this.logger?.info?.(`[wiki] ${wikiId} ready (pages: ${result?.pageCount ?? '?'})`);
-
-      // Auto-generate summary + callback TMC
-      await this.onBuildComplete(synced, "ready", null, ingestRunId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
@@ -1070,15 +1051,22 @@ export class WikiService {
       const failed = this.store.getWikiById(serviceId, wikiId);
       if (failed) this.audit(failed, "failed", msg.slice(0, 500));
       this.logger?.warn?.(`[wiki] ${wikiId} failed: ${msg}`);
+      terminalStatus = "failed";
+      errorMsg = msg;
+    }
 
-      // Callback TMC about failure
-      await this.onBuildComplete(failed, "failed", msg, ingestRunId);
+    // The terminal metadata is committed. Notification/summary failures must not
+    // change its outcome or replace the original ingest error.
+    try {
+      await this.onBuildComplete(this.store.getWikiById(serviceId, wikiId), terminalStatus, errorMsg, ingestRunId);
+    } catch (err) {
+      this.logger?.warn?.(`[wiki] ${wikiId} post-build notification failed: ${String(err)}`);
     }
   }
 
   /**
    * Post-build hook: generate summary (if synced) and callback TMC.
-   * Never throws — runs after the main build is already committed.
+   * Runs after the main build is committed; runBuild isolates hook failures.
    */
   private async onBuildComplete(
     row: WikiRow | null,

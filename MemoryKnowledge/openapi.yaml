@@ -231,6 +231,25 @@ paths:
         default:
           $ref: '#/components/responses/ErrorResponse'
 
+  /wiki/raw/list:
+    post:
+      tags: [LLM-Wiki]
+      summary: List raw source files (alias of /wiki/raw/ls)
+      operationId: rawListWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiRawLsRequest'
+      responses:
+        '200':
+          description: Success
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
   /wiki/raw/read:
     post:
       tags: [LLM-Wiki]

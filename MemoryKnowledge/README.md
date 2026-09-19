@@ -17,6 +17,15 @@
 
 单独 `pnpm dev` 可以起服务；产品链路里必须有 Panel 推 `llm_binding`、收 callback、写远端元数据。
 
+Wiki 上传只有在文件和 `index.db` 的 source 元数据均写入成功后才返回成功；
+元数据写入失败会报错并尝试恢复本批文件，可重试原请求。
+摄入的终态与 `page_count` 写入 `knowledge.db` 后，摘要或通知失败不会将已完成的摄入改为失败。
+源文件可通过 `/v3/wiki/raw/ls` 或兼容别名 `/v3/wiki/raw/list` 查询。
+
+直接调用 KS `/v3/wiki/create` 只创建本地 Wiki 记录；Panel 使用的远端
+`/v3/meta/asset/get` 查询的是另一层权限资产，需要通过 Panel 的
+`/api/v1/knowledge/wiki/create` 创建并登记，不能仅凭 KS 摄入成功推断该资产已注册。
+
 ## 源码结构
 
 ```text

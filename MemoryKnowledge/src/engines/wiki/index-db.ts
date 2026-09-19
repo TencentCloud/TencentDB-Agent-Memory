@@ -168,7 +168,13 @@ export function withWriteDb<T>(wikiDir: string, fn: (db: Database.Database) => T
   applyPragmas(db);
   try {
     const out = db.transaction(fn)(db);
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    // The transaction is already committed to WAL. A checkpoint failure must
+    // not make callers report failure or roll back files whose metadata exists.
+    try {
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch (err) {
+      console.warn(`[wiki-index] checkpoint deferred for ${wikiDir}: ${String(err)}`);
+    }
     return out;
   } finally {
     db.close();
