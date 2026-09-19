@@ -240,4 +240,6 @@ export interface IKnowledgeStore {
   /** All ready code-graphs (with service_id) so module.ts can rebuild per-tenant dirs. */
   listSyncedCodeGraphs(): SyncedCodeGraphRef[];
   listSyncedWikis(): SyncedWikiRef[];
+  /** Wikis whose durable row may need promotion from on-disk ingest artifacts. */
+  listWikisNeedingRecovery(): SyncedWikiRef[];
 }

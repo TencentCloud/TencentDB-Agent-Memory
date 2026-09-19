@@ -55,6 +55,7 @@ const READONLY_POST_PATHS: ReadonlySet<string> = new Set([
   "/wiki/get",
   "/wiki/list",
   "/wiki/raw/ls",
+  "/wiki/raw/list",
   "/wiki/raw/read",
   "/wiki/page/ls",
   "/wiki/page/read",

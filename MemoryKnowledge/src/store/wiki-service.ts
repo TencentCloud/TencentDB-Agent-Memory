@@ -12,7 +12,7 @@
  *   lib 层 cascadeDeleteWikiPagesWithRefs 做引用级联。
  */
 
-import { join, resolve, normalize } from "node:path";
+import { join, resolve, normalize, sep } from "node:path";
 import {
   rmSync,
   mkdirSync,
@@ -909,7 +909,7 @@ export class WikiService {
     // （如 KNOWLEDGE_DATA_DIR=./data）与 resolve 出来的绝对路径比较失败。
     const base = resolve(sourcesDir);
     const safe = resolve(base, normalized);
-    const dirWithSep = base.endsWith("/") ? base : base + "/";
+    const dirWithSep = base.endsWith(sep) ? base : base + sep;
     if (safe !== base && !safe.startsWith(dirWithSep)) return null;
     return safe;
   }
@@ -1011,20 +1011,72 @@ export class WikiService {
     this.queue.enqueue(row.wiki_id, () => this.runBuild(row.service_id, row.wiki_id, row.team_id, row.name));
   }
 
+  /** Commit terminal metadata before any optional summary/callback work. */
+  private commitWikiReady(serviceId: string, wikiId: string, pageCount: number | null): void {
+    this.store.updateWikiStatus(serviceId, wikiId, {
+      status: "ready",
+      internal_status: null,
+      sync_error: null,
+      page_count: pageCount,
+      last_sync_at: new Date().toISOString(),
+    });
+  }
+
+  /** Count generated wiki pages for recovery when the worker result is lost. */
+  private countPagesOnDisk(serviceId: string, teamId: string, wikiId: string): number | null {
+    const projectPath = this.dirFor(serviceId, teamId, wikiId);
+    const wikiDir = join(projectPath, "wiki");
+    if (!existsSync(wikiDir)) return null;
+    const pages: { id: string; title: string; type: string; path: string }[] = [];
+    this.scanPagesRecursive(wikiDir, wikiDir, pages);
+    return pages.length;
+  }
+
+  private hasIngestedSourcesOnDisk(serviceId: string, teamId: string, wikiId: string): boolean {
+    try {
+      const db = getReadDb(wikiId, this.dirFor(serviceId, teamId, wikiId));
+      return listSources(db).some((source) => source.status === "ingested");
+    } catch {
+      return false;
+    } finally {
+      // Recovery runs during startup and must not retain pooled handles while
+      // later cleanup or the engine manager opens the same index.
+      evictWikiDb(wikiId);
+    }
+  }
+
+  /** Promote a row when index.db was committed before knowledge.db during a crash. */
+  recoverInterruptedFromDisk(): number {
+    let recovered = 0;
+    for (const ref of this.store.listWikisNeedingRecovery()) {
+      if (!this.hasIngestedSourcesOnDisk(ref.service_id, ref.team_id, ref.wiki_id)) continue;
+      this.commitWikiReady(
+        ref.service_id,
+        ref.wiki_id,
+        this.countPagesOnDisk(ref.service_id, ref.team_id, ref.wiki_id),
+      );
+      recovered++;
+    }
+    return recovered;
+  }
+
   private async runBuild(serviceId: string, wikiId: string, teamId: string, name: string): Promise<void> {
     // 入口检查点：pending 期间被删 → 跳过，不置 processing、不 ingest。
     if (this.isDeleted(serviceId, wikiId)) {
       this.finishCancelled(serviceId, teamId, wikiId);
       return;
     }
-    this.store.updateWikiStatus(serviceId, wikiId, {
-      status: "processing",
-      internal_status: "scanning",
-      sync_error: null,
-    });
     // 进度/终态 callback 共用同一代际，Panel 可拒绝 clear 后的迟到 progress
     const ingestRunId = randomUUID();
+    let completionStatus: "ready" | "failed" = "ready";
+    let completionError: string | null = null;
+    let readyCommitted = false;
     try {
+      this.store.updateWikiStatus(serviceId, wikiId, {
+        status: "processing",
+        internal_status: "scanning",
+        sync_error: null,
+      });
       const result = await this.worker({
         wikiId,
         serviceId,
@@ -1040,21 +1092,14 @@ export class WikiService {
         this.finishCancelled(serviceId, teamId, wikiId);
         return;
       }
-      this.store.updateWikiStatus(serviceId, wikiId, {
-        status: "ready",
-        internal_status: null,
-        sync_error: null,
-        page_count: result?.pageCount ?? null,
-        last_sync_at: new Date().toISOString(),
-      });
+      const pageCount = result?.pageCount ?? this.countPagesOnDisk(serviceId, teamId, wikiId);
+      this.commitWikiReady(serviceId, wikiId, pageCount);
+      readyCommitted = true;
       const synced = this.store.getWikiById(serviceId, wikiId);
       if (synced) {
-        this.audit(synced, "ready", result?.pageCount != null ? `pages: ${result.pageCount}` : null);
+        this.audit(synced, "ready", pageCount != null ? `pages: ${pageCount}` : null);
       }
-      this.logger?.info?.(`[wiki] ${wikiId} ready (pages: ${result?.pageCount ?? '?'})`);
-
-      // Auto-generate summary + callback TMC
-      await this.onBuildComplete(synced, "ready", null, ingestRunId);
+      this.logger?.info?.(`[wiki] ${wikiId} ready (pages: ${pageCount ?? '?'})`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
@@ -1062,23 +1107,40 @@ export class WikiService {
         this.finishCancelled(serviceId, teamId, wikiId);
         return;
       }
-      this.store.updateWikiStatus(serviceId, wikiId, {
-        status: "failed",
-        internal_status: null,
-        sync_error: msg.slice(0, 500),
-      });
-      const failed = this.store.getWikiById(serviceId, wikiId);
-      if (failed) this.audit(failed, "failed", msg.slice(0, 500));
-      this.logger?.warn?.(`[wiki] ${wikiId} failed: ${msg}`);
+      if (readyCommitted) {
+        this.logger?.warn?.(`[wiki] ${wikiId} post-ready hook failed; metadata is already committed: ${msg}`);
+        // Keep the durable success state and still send the normal ready
+        // callback. Optional audit/logging must not hide a successful ingest.
+        completionStatus = "ready";
+        completionError = null;
+      } else {
+        this.store.updateWikiStatus(serviceId, wikiId, {
+          status: "failed",
+          internal_status: null,
+          sync_error: msg.slice(0, 500),
+        });
+        const failed = this.store.getWikiById(serviceId, wikiId);
+        if (failed) this.audit(failed, "failed", msg.slice(0, 500));
+        this.logger?.warn?.(`[wiki] ${wikiId} failed: ${msg}`);
+        completionStatus = "failed";
+        completionError = msg;
+      }
+    }
 
-      // Callback TMC about failure
-      await this.onBuildComplete(failed, "failed", msg, ingestRunId);
+    // The terminal metadata is already committed. Optional post-build work must
+    // not turn a successful ingest into a failure or emit a second failed callback.
+    try {
+      await this.onBuildComplete(
+        this.store.getWikiById(serviceId, wikiId), completionStatus, completionError, ingestRunId,
+      );
+    } catch (err) {
+      this.logger?.warn?.(`[wiki] ${wikiId} post-build hook failed: ${String(err)}`);
     }
   }
 
   /**
    * Post-build hook: generate summary (if synced) and callback TMC.
-   * Never throws — runs after the main build is already committed.
+   * Runs after the main build is committed; the caller isolates hook failures.
    */
   private async onBuildComplete(
     row: WikiRow | null,
