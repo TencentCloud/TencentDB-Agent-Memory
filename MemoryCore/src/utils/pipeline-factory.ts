@@ -587,6 +587,7 @@ export function createL1Runner(opts: {
 
       let totalExtracted = 0;
       let totalStored = 0;
+      let anyExtractionFailed = false;
       let lastSceneName: string | undefined;
       const profileScopes = new Set<string>();
       const l1PromptTargets = groups.map((group) => ({
@@ -633,6 +634,11 @@ export function createL1Runner(opts: {
           storage,
         });
 
+        // Track extraction failures (e.g. LLM 429/error). extractL1Memories returns
+        // success:false on failure (it does not throw), so without this the batch's
+        // cursor would still advance below and silently skip the un-extracted L0.
+        if (!l1Result.success) anyExtractionFailed = true;
+
         totalExtracted += l1Result.extractedCount;
         totalStored += l1Result.storedCount;
         if (l1Result.storedCount > 0) {
@@ -650,6 +656,19 @@ export function createL1Runner(opts: {
         if (l1Result.lastSceneName) {
           lastSceneName = l1Result.lastSceneName;
         }
+      }
+
+      // If any group's L1 extraction failed (e.g. LLM 429/error), do NOT advance
+      // the cursor: doing so would move it past L0 rows that were never distilled,
+      // permanently skipping them. Instead leave the cursor untouched and signal
+      // retry (hasMore), so the batch is reprocessed once the LLM recovers. Dedup
+      // (enableDedup) makes reprocessing idempotent for any records already stored.
+      if (anyExtractionFailed) {
+        logger.warn(
+          `${TAG} [l1] extraction failed for ≥1 group; cursor NOT advanced (will retry). ` +
+          `session=${sessionKey}, stored=${totalStored}`,
+        );
+        return { processedCount: totalMessages, storedCount: totalStored, hasMore: true, hasFullBacklog: false, profileScopes: Array.from(profileScopes) };
       }
 
       // Use maxRecordedAtMs (write time) of the **processed** slice as cursor —
