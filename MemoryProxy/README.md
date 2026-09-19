@@ -197,7 +197,7 @@ Starting the proxy itself needs **no** API key. A user key (`x-tdai-user-key` / 
 
 No. MemoryProxy is a standalone Node.js process — start it with `npm run start:config` (or `./proxy.sh start` / Docker). There is no Codex-CLI-based startup path: the proxy never shells out to any agent CLI, and startup is identical regardless of which coding agent connects later.
 
-Codex appears only as an agent-name routing boundary on an already-running proxy: the commented `codex` entry under `upstream.agents` in [config.example.yaml](./config.example.yaml) routes requests whose URL starts with the `/codex` prefix to a dedicated upstream, and because it declares no `apiKey`, the client's own key is forwarded (client-key passthrough instead of the global `upstream.apiKey` fallback). Configuring the Codex CLI itself — base URL, provider, key — happens on the Codex side and is outside this repository.
+Codex appears only as an agent-name routing boundary on an already-running proxy: the commented `codex` entry under `upstream.agents` in [config.example.yaml](./config.example.yaml) routes requests whose URL starts with the `/codex` prefix to a dedicated upstream, and because it declares no `apiKey`, the client's own key is forwarded (client-key passthrough instead of the global `upstream.apiKey` fallback). That dedicated upstream must implement the OpenAI Responses API (`/v1/responses`); MemoryProxy forwards `/v1/responses` (and `/responses`) verbatim and does not translate them to `/v1/chat/completions`. Configuring the Codex CLI itself — base URL, provider, key — happens on the Codex side and is outside this repository; see [agents/codex/README.md](../agents/codex/README.md) §1.
 
 ## Main HTTP endpoints
 
