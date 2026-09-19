@@ -117,17 +117,20 @@ export interface SkillCoreOptions {
    */
   onSkillArchived?: (params: { skill_id: string; team_id?: string }) => void;
   /**
-   * 读路径自愈补登记钩子。
+   * 读命中钩子：自愈补登记 + 资产使用审计。
    *
-   * 触发时机：`get` / `readFile` 成功返回单个 skill 之后。
+   * 触发时机：`get` / `readFile` 成功返回单个 skill 之后（读命中一次 = 一次使用）。
    * 不触发：`list` / `search` / `listing` / `listVersions`（浏览类，一次 N 条，
-   * 走 LRU 也偏贵；且这些接口不必然代表"使用"）。
+   * 计数会写放大；且这些接口不必然代表"使用"）。
    *
    * 契约：
    *  - fire-and-forget：抛异常吞掉，不影响 read 的返回
-   *  - 上层实现须幂等且带 LRU（同一 skill_id 只有首次真正查 store）
-   *  - 用途：兜底修复 asset 缺失（历史数据 / 迁移遗漏 / 人工误删），
-   *    保证下次前端管控页能看到这个 skill
+   *  - 上层实现须幂等（asset 登记走 LRU，同一 skill_id 只有首次真正查 store）
+   *  - 用途：
+   *    1. 兜底修复 asset 缺失（历史数据 / 迁移遗漏 / 人工误删），
+   *       保证下次前端管控页能看到这个 skill
+   *    2. 落库 `meta_assets.usage_count` / `last_used_at`（见
+   *       `MetadataService.recordSkillAccess`）
    */
   onSkillAccessed?: (skill: Skill) => void;
 }

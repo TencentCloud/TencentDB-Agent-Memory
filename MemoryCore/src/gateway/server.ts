@@ -389,12 +389,13 @@ export class TdaiGateway {
           const metaSvc = await gatewayRef.ensureMetadataService(skillAssetInstanceId);
           await metaSvc.ensureSkillAsset({ skill_id, team_id, agent_id, name });
         },
-        // 读时自愈：fire-and-forget，异常吞掉。补历史 / 迁移 / 误删产生的孤儿 skill。
+        // 读命中审计：fire-and-forget，异常吞掉。孤儿 skill 自愈补登记 +
+        // meta_assets.usage_count / last_used_at 落库。
         onSkillAccessed: (skill) => {
           if (!skill.team_id || !skill.owner_agent_id) return;
           gatewayRef
             .ensureMetadataService(skillAssetInstanceId)
-            .then((svc) => svc.ensureSkillAsset({
+            .then((svc) => svc.recordSkillAccess({
               skill_id: skill.skill_id,
               team_id: skill.team_id!,
               agent_id: skill.owner_agent_id!,
@@ -402,7 +403,7 @@ export class TdaiGateway {
             }))
             .catch((err: unknown) => {
               gatewayRef.logger.warn(
-                `[skill-asset-sync] ensureSkillAsset(access) failed for ${skill.skill_id}: `
+                `[skill-asset-sync] recordSkillAccess failed for ${skill.skill_id}: `
                   + (err instanceof Error ? err.message : String(err)),
               );
             });
@@ -2068,7 +2069,7 @@ export class TdaiGateway {
       onSkillAccessed: (skill) => {
         if (!skill.team_id || !skill.owner_agent_id) return;
         resolveMetaSvc()
-          .then((svc) => svc.ensureSkillAsset({
+          .then((svc) => svc.recordSkillAccess({
             skill_id: skill.skill_id,
             team_id: skill.team_id,
             agent_id: skill.owner_agent_id,
@@ -2076,7 +2077,7 @@ export class TdaiGateway {
           }))
           .catch((err: unknown) => {
             logger.warn(
-              `[skill-asset-sync] ensureSkillAsset(access) failed for ${skill.skill_id}: `
+              `[skill-asset-sync] recordSkillAccess failed for ${skill.skill_id}: `
                 + (err instanceof Error ? err.message : String(err)),
             );
           });
