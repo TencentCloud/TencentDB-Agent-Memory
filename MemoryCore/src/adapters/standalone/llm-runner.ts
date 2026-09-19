@@ -109,6 +109,65 @@ export interface StandaloneLLMConfig {
    * 透传给调用方,只是"以流式协议请求上游后等待完整文本"的兼容层。
    */
   stream?: boolean;
+  /**
+   * 关闭该厂商的思考模式(可选,默认不注入)。置 true 时向 chat/completions
+   * JSON 请求体注入 `thinking: {"type": "disabled"}`。
+   *
+   * 背景:推理型模型(如 GLM 系)默认开启思考,会把 max_tokens 烧在思考上,
+   * content 为空/截断(finishReason=length),上层 JSON 解析拿到空输出却
+   * 无从干预;部分 OpenAI 兼容上游没有独立的思考开关字段。该字段为
+   * opt-in —— `thinking` 并非 OpenAI 标准参数,仅对接受该字段的上游
+   * (如智谱 GLM 兼容端点)启用。
+   *
+   * 与 env TDAI_DISABLE_THINKING=true 双轨:显式配置优先于 env。
+   * 实现注意:AI SDK 的 openai-compatible provider 不会把
+   * providerOptions.openai.thinking 序列化进请求体,因此改在 fetch 层
+   * 直接改写 JSON body —— 见 disabledThinkingFetch()。
+   */
+  disableThinking?: boolean;
+}
+
+// ============================
+// disableThinking 请求体改写（纯函数,可直接单测）
+// ============================
+
+/**
+ * 三态判定:config 显式值优先(显式 false 压过 env),未设置时回落
+ * env TDAI_DISABLE_THINKING === "true"(严格匹配,避免 "1"/"yes" 误开)。
+ */
+export function resolveDisableThinking(
+  config: Pick<StandaloneLLMConfig, "disableThinking">,
+  envValue?: string,
+): boolean {
+  if (config.disableThinking !== undefined) return config.disableThinking;
+  return envValue === "true";
+}
+
+/**
+ * 把请求体 JSON 改写为注入 `thinking: {"type": "disabled"}`。
+ * body 非 JSON 字符串时原样返回(不抛错,让上游给出真实错误)。
+ */
+export function injectDisabledThinkingBody(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    parsed.thinking = { type: "disabled" };
+    return JSON.stringify(parsed);
+  } catch {
+    return body;
+  }
+}
+
+/**
+ * 包装一个 fetch 实现:对 JSON 字符串 body 注入 disable-thinking 后透传。
+ * 默认包全局 fetch;测试可注入 stub。
+ */
+export function disabledThinkingFetch(inner: typeof fetch = fetch): typeof fetch {
+  return (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const nextInit = (init && typeof init.body === "string")
+      ? { ...init, body: injectDisabledThinkingBody(init.body) }
+      : init;
+    return inner(url, nextInit);
+  };
 }
 
 // ============================
@@ -293,9 +352,13 @@ export class StandaloneLLMRunner implements LLMRunner {
     const effectiveEnableTools = params.enableTools ?? this.enableTools;
     const maxIterations = params.maxIterations ?? MAX_TOOL_ITERATIONS;
 
+    // 关思考三态判定只算一次,日志与 provider 构造共用同一结果。
+    const wantsDisableThinking = resolveDisableThinking(this.config, process.env.TDAI_DISABLE_THINKING);
+
     this.logger?.debug?.(
       `${TAG} run() start: taskId=${params.taskId}, model=${this.model}, ` +
-      `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
+      `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms, ` +
+      `maxTokens=${maxTokens}, disableThinking=${wantsDisableThinking}`,
     );
 
     // Create OpenAI-compatible provider via AI SDK
@@ -305,6 +368,9 @@ export class StandaloneLLMRunner implements LLMRunner {
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
       compatibility: "compatible",
+      // 关思考开关(config 或 env 命中):在 fetch 层改写 JSON body。
+      // 未命中时不传 fetch —— 行为与改动前逐字节一致。
+      ...(wantsDisableThinking ? { fetch: disabledThinkingFetch() } : {}),
     });
 
     // Select tools based on mode + storage
