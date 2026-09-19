@@ -11,8 +11,14 @@
  *   1. auth/verify 反查 caller
  *   2. agent/get 拿到 agent，强校验 owner_user_id === caller（本期不允许 admin 代删）
  *   3. skill/list 按 owner_agent_id + active 分页拉全
+ *      —— SkillCore 未部署时内核回「能力缺失」信封（404 + "Skill module not enabled"），
+ *      这不是错误：此时该 agent 必然没有 skill，按空集合继续（见
+ *      isSkillCapabilityAbsent）。但**只认首页命中**：分页中途才回能力缺失属于自相矛盾
+ *      响应，必须 fail-closed，否则已列出的 skill 被删、未列出的变成孤儿 active skill。
+ *      其余任何 404 / 非 0 code 一律原样透传，保持 fail-closed
  *   4. 逐条 skill/delete —— 任一失败立即中断，返回 500 + 已删列表 + 失败 skill_id
  *      + 内核错误 message；此时 agent/archive 不会被调用，caller 需要修复后重试
+ *      （SkillCore 可用但 delete 失败属于真错误，不适用上面的能力缺失降级）
  *   5. 全部 skill 成功归档后调 meta/agent/archive
  *      —— 内核在同一次 archive 里顺手清 chat_memory（这部分保持原样）
  *
@@ -39,6 +45,33 @@ import {
 
 /** skill/list 一页 100 条 —— 与 knowledge fetchAllMetaListItems 分页步长对齐。 */
 const SKILL_LIST_PAGE = 100;
+
+/**
+ * SkillCore 未启用时内核返回的「能力缺失」信封。
+ *
+ * 来源：MemoryCore/src/gateway/skill-handlers.ts 里 `getSkillCore()` 为空时统一
+ * `errorEnvelope(404, "Skill module not enabled", requestId)`。这是一个**模块级**
+ * 能力开关，不是单次调用的业务错误——语义上等价于「该 agent 名下没有任何 skill」。
+ *
+ * 因此在 delete-cascade 里它可以降级为空 Skill 集合：没有 skill 要删，直接进入
+ * meta/agent/archive 即可（issue #1218 之前这里被原样透传，导致 skill 为空的 agent
+ * 也永远删不掉）。
+ *
+ * 必须精确匹配 (code, message) 两个字段，不能只判 code===404 —— 内核的 404 也用来
+ * 表达「agent 不存在」等真实业务失败，宽泛匹配会把这类错误静默吞成「无 skill」并
+ * 继续 archive，留下孤儿 active skill。message 做 trim 后全等比较，不做包含匹配。
+ *
+ * 本函数只回答「这是不是能力缺失信封」，**不**回答「能不能降级」——后者还要看调用点
+ * 的分页位置（见 listAgentSkills：仅首页命中才降级）。
+ */
+const SKILL_MODULE_DISABLED_CODE = 404;
+const SKILL_MODULE_DISABLED_MESSAGE = 'Skill module not enabled';
+
+function isSkillCapabilityAbsent(env: MetaEnvelope<unknown>): boolean {
+  return env.code === SKILL_MODULE_DISABLED_CODE
+    && typeof env.message === 'string'
+    && env.message.trim() === SKILL_MODULE_DISABLED_MESSAGE;
+}
 
 interface AgentRaw {
   agent_id: string;
@@ -76,7 +109,15 @@ async function listAgentSkills(
       },
       ctx,
     );
-    if (env.code !== 0) return { ok: false, envelope: env };
+    if (env.code !== 0) {
+      // SkillCore 未部署 → 能力缺失，视为「该 agent 无 skill」继续归档。
+      // 但只认**首页**（offset=0 且尚未取到任何 skill）：能力缺失是模块级属性，
+      // 不可能在分页中途出现；分页已经开始还回这个信封说明响应自相矛盾，此时若
+      // 当空集合处理，会「已列出的 skill 被删 + 未列出的变成孤儿 active skill」，
+      // 因此保持 fail-closed，原样透传。
+      if (isSkillCapabilityAbsent(env) && offset === 0 && all.length === 0) break;
+      return { ok: false, envelope: env };
+    }
     const batch = extractListItems<SkillRow>(env);
     all.push(...batch);
     const total = (env.data as { total?: number } | null)?.total ?? all.length;
