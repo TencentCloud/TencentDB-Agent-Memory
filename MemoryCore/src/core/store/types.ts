@@ -609,7 +609,14 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── L1 Write ─────────────────────────────────────────────
 
   upsertL1(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
-  deleteL1(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
+  /**
+   * `opts.throwOnError` — implementations that swallow delete failures into
+   * `false` (sqlite/tcvdb keep other callers non-fatal) must rethrow instead.
+   * Callers that must distinguish "not found" from "store error" (the gateway
+   * delete endpoint) MUST set this: a swallowed failure would be reported as
+   * success with a lower deleted_count.
+   */
+  deleteL1(recordId: string, filter?: IsolationFilter, opts?: { throwOnError?: boolean }): MaybePromise<boolean>;
   deleteL1Batch(recordIds: string[], filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Expired(cutoffIso: string): MaybePromise<number>;
 

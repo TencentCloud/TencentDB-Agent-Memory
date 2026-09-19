@@ -1440,10 +1440,18 @@ export class VectorStore implements IMemoryStore {
   /**
    * Delete a single record (metadata + vector).
    *
-   * **Fault-tolerant**: logs a warning on failure, never throws.
+   * **Fault-tolerant**: logs a warning on failure, never throws — unless
+   * `opts.throwOnError` is set, in which case failures (degraded mode, DB
+   * errors) reject so callers that must distinguish "not found" from "store
+   * error" (the gateway delete endpoint) can map them to 5xx.
    */
-  deleteL1(recordId: string, filter?: IsolationFilter): boolean {
-    if (this.degraded) return false;
+  deleteL1(recordId: string, filter?: IsolationFilter, opts?: { throwOnError?: boolean }): boolean {
+    if (this.degraded) {
+      if (opts?.throwOnError) {
+        throw new Error(`deleteL1: store in degraded mode (throwOnError)`);
+      }
+      return false;
+    }
     try {
       if (filter) {
         const meta = this.stmtGetMeta.get(recordId) as { user_id?: string; agent_id?: string; session_id?: string; session_key?: string } | undefined;
@@ -1466,6 +1474,11 @@ export class VectorStore implements IMemoryStore {
         throw err;
       }
     } catch (err) {
+      if (opts?.throwOnError) {
+        // A swallowed failure reads as "not found" downstream and the delete
+        // endpoint would report success with a lower count — surface it.
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       this.logger?.warn(
         `${TAG} delete failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
