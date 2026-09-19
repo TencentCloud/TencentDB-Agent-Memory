@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactForgetPreview, truncateForgetPreview } from "../forget-redaction.js";
+import { redactForgetPreview, renderForgetPreview, truncateForgetPreview } from "../forget-redaction.js";
 
 describe("forget preview redaction", () => {
   it("removes common secrets before returning preview text", () => {
@@ -9,6 +9,15 @@ describe("forget preview redaction", () => {
     expect(result).not.toContain("abc.def_123");
     expect(result).not.toContain("sk-abcdefghijklmnop");
     expect(result.match(/\[REDACTED\]/g)).toHaveLength(2);
+  });
+
+  it("redacts secrets from highlighted Core search snippets", () => {
+    const source = "<mark>forget</mark> token sk - abcdefghijklmnop";
+    const result = renderForgetPreview(source);
+
+    expect(result).toBe("forget token [REDACTED]");
+    expect(result).not.toContain("abcdefghijklmnop");
+    expect(result).not.toContain("<mark>");
   });
 
   it("stays valid UTF-8 and within budget at multibyte boundaries", () => {

@@ -1,6 +1,6 @@
 const SECRET_PATTERNS: RegExp[] = [
   /\bsk-mem-[A-Za-z0-9_-]+\b/g,
-  /\bsk-[A-Za-z0-9_-]{12,}\b/g,
+  /\bsk\s*-\s*[A-Za-z0-9_-]{12,}\b/g,
   /\bsk_live_[0-9A-Za-z]{16,}\b/g,
   /\bBearer\s+[A-Za-z0-9._~-]+/gi,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
@@ -50,5 +50,6 @@ function truncatePrefix(bytes: Buffer, maxBytes: number): string {
 }
 
 export function renderForgetPreview(value: string, maxBytes = 320): string {
-  return truncateForgetPreview(redactForgetPreview(value).trim(), maxBytes);
+  const plainText = value.replace(/<\/?mark>/gi, "");
+  return truncateForgetPreview(redactForgetPreview(plainText).trim(), maxBytes);
 }
