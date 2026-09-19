@@ -12,7 +12,7 @@
  * 不感知具体后端（SQLite / MongoDB），保证存储可切换。
  */
 
-import { DuplicateUserKeyError, type IMetadataStore } from "../store/interface.js";
+import { DuplicateUserKeyError, type IMetadataStore, type MaybePromise } from "../store/interface.js";
 import {
   checkPermission,
   canBindAsset,
@@ -84,6 +84,7 @@ import type {
   UserType,
   PaginatedResult,
   PaginationParams,
+  ListPage,
   InstanceUserListFilter,
   UserListFilter,
   InstanceUpstreamConfigEntity,
@@ -326,6 +327,63 @@ export class MetadataService {
       offset += limit;
     }
     return out;
+  }
+
+  /**
+   * 分页遍历出满足条件的**全部** Agent。
+   *
+   * store 层 list 带默认分页（20 条），级联清理必须拿到全量 agent_id 才不会漏 ——
+   * 否则一页之外的孤儿 Agent 会被静默跳过，问题依旧。遍历方式与 allAclRecords 一致。
+   */
+  private async collectAllAgents(
+    list: (pagination: PaginationParams) => MaybePromise<ListPage<AgentEntity>>,
+  ): Promise<AgentEntity[]> {
+    const out: AgentEntity[] = [];
+    const limit = 100;
+    let offset = 0;
+    for (;;) {
+      const page = await list({ limit, offset });
+      out.push(...page.items);
+      if (page.items.length === 0 || out.length >= page.total) break;
+      offset += page.items.length;
+    }
+    return out;
+  }
+
+  /** 某用户在某团队名下的全部 Agent（成员被移出团队时的级联收集）。 */
+  private async collectAgentsOfUserInTeam(teamId: string, userId: string): Promise<AgentEntity[]> {
+    return this.collectAllAgents((pagination) =>
+      this.store.listAgentsByTeam(teamId, pagination, { owner_user_id: userId }),
+    );
+  }
+
+  /** 某用户名下的全部 Agent（用户被删除时的级联收集）。 */
+  private async collectAgentsOfUser(userId: string): Promise<AgentEntity[]> {
+    return this.collectAllAgents((pagination) => this.store.listAgentsByOwner(userId, pagination));
+  }
+
+  /**
+   * 级联清理一批 Agent：**先清 chat_memory 内容，再硬删元数据**。
+   *
+   * 顺序与 archiveAgent 一致，理由也相同（见 archiveAgent 的注释）：deleteAgents
+   * 会把 chat_memory 资产记录一并删掉，而资产记录一旦消失，就无法再从
+   * (team_id, agent_id) 反推 buildChatMemoryAssetId 去定位 L0–L3 内容 —— 内容会变成
+   * 永久不可达的孤儿数据留在库里。
+   *
+   * 内容清理失败时向上抛（不吞异常）：宁可让调用方重试，也不留下
+   * 「资产已删、内容还在」的不一致状态。未注入 cleaner 时（单测 / 迁移脚本）
+   * 退化为只删元数据，与 archiveAgent 的行为保持一致。
+   *
+   * 权限由调用方先行建立：成员移除走 assertCallerIsTeamAdmin，用户删除走 canManageUsers。
+   */
+  private async purgeAgentsCascade(agents: AgentEntity[]): Promise<void> {
+    if (agents.length === 0) return;
+    if (this._chatMemoryContentCleaner) {
+      for (const agent of agents) {
+        await this._chatMemoryContentCleaner({ teamId: agent.team_id, agentId: agent.agent_id });
+      }
+    }
+    await this.deleteAgents(agents.map((a) => a.agent_id));
   }
 
   /** internal：按实例分页列出用户（含 system_admin，不脱敏）。 */
@@ -607,6 +665,16 @@ export class MetadataService {
     const totalAdmins = await this.store.countSystemAdmins();
     if (totalAdmins > 0 && totalAdmins - deletingSystemAdmins < 1) {
       throw new MetadataError("last_system_admin", "cannot delete the last system_admin user");
+    }
+    // 用户被删除时其 user_key / team_members 一并清理，owner 再无主体可认证 ——
+    // 必须**在删除前**先清掉他名下的所有 Agent（含 task_agents / fixed_assets /
+    // chat_memory），否则这些 Agent 会因为严格的 owner-only 删除校验而永远无法清理。
+    // 权限已由上面的 canManageUsers 建立。只清理确实存在的用户，不存在的用户
+    // 由 store 记入 failed，不留副作用。
+    for (const id of userIds) {
+      if (await this.getUserById(id)) {
+        await this.purgeAgentsCascade(await this.collectAgentsOfUser(id));
+      }
     }
     return this.deleteUsers(userIds);
   }
@@ -1743,9 +1811,15 @@ export class MetadataService {
   }
 
   /**
-   * agent 固定资产写操作的权限：owner 本人，或该 agent 所属团队的 team admin。
+   * agent 写/删除/归档的权限：owner 本人，或该 agent 所属团队的 team admin。
    * 用于冷启动「admin 代新用户挂载默认 Agent 资产」等场景（参照 asset 的
    * assertCallerIsAssetOwnerOrTeamAdmin 先例，放通 team admin）。
+   *
+   * 也用于 deleteAgentsForCaller / archiveAgentForCaller —— 成员被移出团队或用户被
+   * 删除后，该 Agent 的 owner_user_id 已无主体可认证，裸 owner-only 校验会让这些
+   * Agent 永远无法清理（孤儿 Agent）。system_admin 的旁路在调用点单独短路，
+   * 因为 team admin 校验要求 caller 是**该团队的 active 成员**，未加入目标 team 的
+   * system_admin 过不去。
    */
   private async assertCallerIsAgentOwnerOrTeamAdmin(ctx: V3AuthContext, agentId: string): Promise<AgentEntity> {
     const agent = await this.getAgentById(agentId);
@@ -1800,6 +1874,19 @@ export class MetadataService {
     for (const teamId of teamIds) {
       await this.assertCallerIsTeamOwnerOrAdmin(ctx, teamId);
     }
+    // 删除团队会连带删掉队内所有 Agent 的 chat_memory 资产记录，而资产记录一旦
+    // 消失就无法再定位到内容。store 层拿不到 IMemoryStore，内容清理只能在 service
+    // 层先做 —— 与 archiveAgent / purgeAgentsCascade 同一顺序约定。
+    if (this._chatMemoryContentCleaner) {
+      for (const teamId of teamIds) {
+        const agents = await this.collectAllAgents((pagination) =>
+          this.store.listAgentsByTeam(teamId, pagination),
+        );
+        for (const agent of agents) {
+          await this._chatMemoryContentCleaner({ teamId: agent.team_id, agentId: agent.agent_id });
+        }
+      }
+    }
     return this.deleteTeams(teamIds);
   }
 
@@ -1820,6 +1907,11 @@ export class MetadataService {
     if (userId === team.owner_user_id) {
       throw new MetadataError("permission_denied", "cannot remove team owner");
     }
+    // 与 team-member/add 侧「为新成员克隆默认 Agent」对称：移除成员前先清掉他在
+    // **本团队**名下的 Agent。只删成员关系行会让 owner_user_id 悬空 —— 而 Agent
+    // 删除是严格 owner-only 的，owner 已不在团队/无法认证，之后连 admin 都删不掉。
+    // 权限已由上面的 assertCallerIsTeamAdmin 建立。
+    await this.purgeAgentsCascade(await this.collectAgentsOfUserInTeam(teamId, userId));
     return this.removeTeamMember(teamId, userId);
   }
 
@@ -1867,14 +1959,25 @@ export class MetadataService {
   }
 
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
-    for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
+    // 权限面：owner 本人 / 该 agent 所属团队的 team admin / system_admin。
+    // 用已有的 assertCallerIsAgentOwnerOrTeamAdmin（与 agent 固定资产写操作同源），
+    // 替代原先裸等值的 assertCallerIsAgentOwner —— 成员被移出团队或用户被删除后，
+    // owner_user_id 已无主体可认证，owner-only 会让 Agent 永远删不掉。
+    // system_admin 无需加入目标 team：与 Panel 控制层 delete-cascade 的放行面、
+    // 以及 createAgentForCaller 已放通的「admin 代新用户建 Agent」形成对称。
+    if (!ctx.isSystemAdmin) {
+      for (const agentId of agentIds) {
+        await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+      }
     }
     return this.deleteAgents(agentIds);
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    // 同 deleteAgentsForCaller：owner / team admin / system_admin。
+    if (!ctx.isSystemAdmin) {
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+    }
     return this.archiveAgent(agentId);
   }
 

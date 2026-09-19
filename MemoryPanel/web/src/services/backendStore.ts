@@ -328,10 +328,14 @@ export function canManageAsset(
   asset: { owner_user_id: string; team_id: string },
   team: Team | null | undefined,
   userId: string,
-  _isGlobalAdminFlag?: boolean
+  isGlobalAdminFlag?: boolean
 ): boolean {
   if (!userId) return false;
-  // admin 不再拥有全局特权，与 member 一致：只能操作自己 owner 的资产。
+  // system_admin：内核 agent/delete、agent/archive 已放行（无需加入目标 team），
+  // 面板 delete-cascade 也走 admin 路径 —— 这里返回 true 才与后端一致，
+  // 不再出现「按钮可点 / 点了必 403」的错位。这也是清理孤儿 Agent 的入口：
+  // 成员被移出团队或用户被删除后，其 Agent 的 owner 已无法认证。
+  if (isGlobalAdminFlag === true) return true;
   if (asset.owner_user_id === userId) return true;
   if (team && team.team_id === asset.team_id && isTeamAdmin(team, userId)) return true;
   return false;
