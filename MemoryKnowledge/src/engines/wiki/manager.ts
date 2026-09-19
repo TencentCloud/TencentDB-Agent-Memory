@@ -989,6 +989,9 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     } catch {
       /* 库刚建 / 无 source 行 → 全部视为新增 */
     }
+    // Drop the pooled reader before the long LLM pass + write txn so
+    // wal_checkpoint(TRUNCATE) is not blocked by our own connection.
+    evictWikiDb(name);
 
     const outcome = await withSpan("wiki-ingest", async (span) => {
       span.setAttribute("wiki.name", name);
@@ -1006,6 +1009,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     const t0 = Date.now();
     try {
       const pages = scanWikiDir(projectPath);
+      evictWikiDb(name);
       withWriteDb(projectPath, (db) => {
         writeIndex(db, pages);
         for (const p of outcome.processed) recordSourceIngestResult(db, p);

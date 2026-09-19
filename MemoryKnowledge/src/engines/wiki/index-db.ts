@@ -168,7 +168,13 @@ export function withWriteDb<T>(wikiDir: string, fn: (db: Database.Database) => T
   applyPragmas(db);
   try {
     const out = db.transaction(fn)(db);
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    // Checkpoint is durability-only. The transaction is already committed;
+    // SQLITE_BUSY (lingering readers) must not fail ingest after LLM work.
+    try {
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch {
+      /* WAL remains; next open recovers. */
+    }
     return out;
   } finally {
     db.close();

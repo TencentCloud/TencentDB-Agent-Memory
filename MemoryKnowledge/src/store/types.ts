@@ -240,4 +240,10 @@ export interface IKnowledgeStore {
   /** All ready code-graphs (with service_id) so module.ts can rebuild per-tenant dirs. */
   listSyncedCodeGraphs(): SyncedCodeGraphRef[];
   listSyncedWikis(): SyncedWikiRef[];
+  /**
+   * Wikis whose knowledge.db row is not ready (pending/processing/failed).
+   * Used to recover metadata when ingest already wrote index.db / pages to disk
+   * but the process died before the terminal status commit.
+   */
+  listWikisNeedingRecovery(): SyncedWikiRef[];
 }

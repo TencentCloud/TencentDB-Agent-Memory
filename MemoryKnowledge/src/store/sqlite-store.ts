@@ -548,12 +548,12 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
     const ts = nowIso();
     const a = this.db
       .update(knowledgeCodeGraph)
-      .set({ status: "failed", syncError: reason, updatedAt: ts })
+      .set({ status: "failed", internalStatus: null, syncError: reason, updatedAt: ts })
       .where(sql`status IN ('pending','processing')`)
       .run();
     const b = this.db
       .update(knowledgeWiki)
-      .set({ status: "failed", syncError: reason, updatedAt: ts })
+      .set({ status: "failed", internalStatus: null, syncError: reason, updatedAt: ts })
       .where(sql`status IN ('pending','processing')`)
       .run();
     return a.changes + b.changes;
@@ -587,6 +587,23 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       .from(knowledgeWiki)
       .where(
         and(eq(knowledgeWiki.status, "ready"), isNull(knowledgeWiki.deletedAt)),
+      )
+      .all();
+  }
+
+  listWikisNeedingRecovery(): SyncedWikiRef[] {
+    return this.db
+      .select({
+        wiki_id: knowledgeWiki.wikiId,
+        service_id: knowledgeWiki.serviceId,
+        team_id: knowledgeWiki.teamId,
+      })
+      .from(knowledgeWiki)
+      .where(
+        and(
+          sql`status IN ('pending','processing','failed')`,
+          isNull(knowledgeWiki.deletedAt),
+        ),
       )
       .all();
   }
