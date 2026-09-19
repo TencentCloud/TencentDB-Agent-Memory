@@ -1,3 +1,4 @@
+import { createAgentSkillLifecycle } from "../metadata/service/agent-skill-lifecycle.js";
 /**
  * TDAI Gateway — HTTP server for the Hermes sidecar.
  *
@@ -510,6 +511,18 @@ export class TdaiGateway {
           store: memoryStore, storage, teamId, agentId, logger: this.logger,
         });
       });
+
+      const skillLifecycle = createAgentSkillLifecycle(async () => {
+        if (this.storePool && this.configProvider && (this.storePool.mode === "tcvdb" || this.storePool.mode === "mongodb")) {
+          return this.resolveSkillCoreForInstance(instanceId);
+        }
+        return this.core.getSkillCore() ?? null;
+      }, async (ids) => {
+        const result = await rawSvc.deleteAssets(ids);
+        if (result.failed.length) throw new Error(`skill metadata cleanup failed: ${JSON.stringify(result.failed)}`);
+      });
+      rawSvc.setAgentSkillCleaner(skillLifecycle.clean);
+      rawSvc.setAgentSkillAssetResolver(skillLifecycle.ownedAssetIds);
 
       svc = wrapApiServiceForTrace(rawSvc);
       this.metadataServiceByInstance.set(instanceId, svc);

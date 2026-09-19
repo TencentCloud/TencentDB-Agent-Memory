@@ -424,18 +424,17 @@ export class SqliteMetadataStore implements IMetadataStore {
     };
   }
 
+  private savepointSequence = 0;
   private tx<T>(fn: () => T): T {
-    this.db.exec("BEGIN");
+    const name = `metadata_${++this.savepointSequence}`;
+    this.db.exec(`SAVEPOINT ${name}`);
     try {
       const result = fn();
-      this.db.exec("COMMIT");
+      this.db.exec(`RELEASE SAVEPOINT ${name}`);
       return result;
     } catch (e) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        /* ignore */
-      }
+      this.db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+      this.db.exec(`RELEASE SAVEPOINT ${name}`);
       throw e;
     }
   }
@@ -809,15 +808,19 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   deleteTeams(teamIds: string[]): BatchDeleteResult {
-    const result = this.batchDelete("meta_teams", "team_id", teamIds);
-    if (result.deleted_ids.length > 0) {
-      const ph = result.deleted_ids.map(() => "?").join(",");
-      this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_agents WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph})`, ...result.deleted_ids);
-    }
-    return result;
+    return this.tx(() => {
+      for (const teamId of new Set(teamIds)) {
+        const ids = this.all<{ agent_id: string }>("SELECT agent_id FROM meta_agents WHERE team_id = ?", teamId).map((a) => a.agent_id);
+        this.deleteAgents(ids);
+        // Delete assets through their cascade before deleting the parent rows.
+        const assets = this.all<{ asset_id: string }>("SELECT asset_id FROM meta_assets WHERE team_id = ?", teamId);
+        this.deleteAssets(assets.map((a) => a.asset_id));
+        const tasks = this.all<{ task_id: string }>("SELECT task_id FROM meta_tasks WHERE team_id = ?", teamId);
+        this.deleteTasks(tasks.map((t) => t.task_id));
+        this.run("DELETE FROM meta_team_members WHERE team_id = ?", teamId);
+      }
+      return this.batchDelete("meta_teams", "team_id", [...new Set(teamIds)]);
+    });
   }
 
   listTeamsByUser(userId: string, pagination?: PaginationParams | null, filter?: { name?: string }): ListPage<TeamEntity> {
@@ -951,32 +954,39 @@ export class SqliteMetadataStore implements IMetadataStore {
     return this.getAgentById(agentId);
   }
 
-  deleteAgents(agentIds: string[]): BatchDeleteResult {
-    const existingAgents = agentIds
-      .map((agentId) => this.getAgentById(agentId))
-      .filter((agent): agent is AgentEntity => !!agent);
-    const selfMemoryByAgent = new Map(
-      existingAgents.map((agent) => [agent.agent_id, buildChatMemoryAssetId(agent.team_id, agent.agent_id)]),
-    );
-
-    const result = this.batchDelete("meta_agents", "agent_id", agentIds);
-    if (result.deleted_ids.length > 0) {
-      const ph = result.deleted_ids.map(() => "?").join(",");
-      this.run(`DELETE FROM meta_task_agents WHERE agent_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_agent_fixed_assets WHERE agent_id IN (${ph})`, ...result.deleted_ids);
-      const selfMemoryAssetIds = result.deleted_ids
-        .map((agentId) => selfMemoryByAgent.get(agentId))
-        .filter((assetId): assetId is string => !!assetId);
-      if (selfMemoryAssetIds.length > 0) {
-        this.deleteAssets(selfMemoryAssetIds);
+  transferAgentOwnership(agentId: string, expectedOwnerId: string, newOwnerId: string, ownedAssetIds: string[] = []): AgentEntity | null {
+    return this.tx(() => {
+      const agent = this.getAgentById(agentId);
+      if (!agent || agent.owner_user_id !== expectedOwnerId) return null;
+      this.run("UPDATE meta_agents SET owner_user_id = ?, updated_at = ? WHERE agent_id = ? AND owner_user_id = ?", newOwnerId, nowIso(), agentId, expectedOwnerId);
+      for (const assetId of new Set([buildChatMemoryAssetId(agent.team_id, agentId), ...ownedAssetIds])) {
+        this.run("UPDATE meta_assets SET owner_user_id = ?, updated_at = ? WHERE asset_id = ? AND team_id = ? AND owner_user_id = ?", newOwnerId, nowIso(), assetId, agent.team_id, expectedOwnerId);
       }
-    }
-    return result;
+      return this.getAgentById(agentId);
+    });
+  }
+
+  deleteAgents(agentIds: string[]): BatchDeleteResult {
+    return this.tx(() => {
+      for (const id of new Set(agentIds)) {
+        const agent = this.getAgentById(id);
+        if (!agent) continue;
+        this.deleteAssets([buildChatMemoryAssetId(agent.team_id, id)]);
+        this.run("DELETE FROM meta_task_agents WHERE agent_id = ?", id);
+        this.run("DELETE FROM meta_agent_fixed_assets WHERE agent_id = ?", id);
+      }
+      // Parent last: with savepoints, any failure rolls back the entire metadata cascade.
+      return this.batchDelete("meta_agents", "agent_id", [...new Set(agentIds)]);
+    });
   }
 
   listAgentsByTeam(teamId: string, pagination?: PaginationParams | null, filter?: AgentFilter): ListPage<AgentEntity> {
     let where = "WHERE team_id = ?";
     const params: SQLInputValue[] = [teamId];
+    if (filter?.visible_to_user_id) {
+      where += " AND (owner_user_id = ? OR visibility = 'team')";
+      params.push(filter.visible_to_user_id);
+    }
     if (filter?.status) {
       where += " AND status = ?";
       params.push(filter.status);

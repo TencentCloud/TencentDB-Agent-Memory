@@ -750,9 +750,9 @@ L0/L1 列表批量删除。**仅资产 Owner**。
 
 ### POST /agent/delete-cascade
 
-删除 Agent：先级联删除其名下所有 active skill，再调内核 `agent/archive`（archive 内部会顺手清 chat_memory）。
+删除 Agent：由内核统一鉴权并清理该 Agent 拥有的 Skill（active / archived）、chat_memory 内容与绑定，再将 Agent 归档。owner、active team admin、system admin 使用同一路径。
 
-**上游**：`skill/list`、`skill/delete`、`meta/agent/archive`。
+**上游**：仅调用 `meta/agent/archive`；Skill 与内容清理由内核统一编排。
 
 **请求体**：`{ agent_id: string }`
 
@@ -765,7 +765,7 @@ L0/L1 列表批量删除。**仅资产 Owner**。
 | deleted_skill_count | number | 已删 skill 数 |
 | deleted_skill_ids | string[] | 已删 skill ID 列表 |
 
-**错误**：`MISSING_AGENT_ID`、`INVALID_USER_KEY`、`AGENT_NOT_FOUND`、`NOT_YOUR_AGENT`；任一 skill 删除失败返回 `500 SKILL_DELETE_FAILED`（含 `failed_skill_id`、`deleted_skill_ids`），此时 agent 不会 archive。
+**错误**：缺少 `agent_id` 返回 400；内核鉴权失败 401 / 403，Agent 不存在 404；清理失败透传内核错误，Agent 根记录保留供重试。跨存储操作不提供全量撤销，已完成的清理可能已经生效。
 
 **示例**
 
@@ -1303,3 +1303,23 @@ KS → Panel 的 S2S 状态回调（ingest/sync 完成或进度更新）。**无
 | 403 | NOT_YOUR_AGENT | 非 agent owner |
 | 404 | AGENT_NOT_FOUND | agent 不存在 |
 | 500 | SKILL_DELETE_FAILED | 级联删除 skill 失败 |
+
+
+### Agent lifecycle update (#1321)
+
+`POST /api/v1/agent/delete-cascade` now delegates authorization and cleanup to
+kernel `agent/archive`. Owner, active team admin and system admin use the same
+Skill + chat-content cleanup path; there is no admin hard-delete shortcut.
+`deleted_skill_ids` and `deleted_skill_count` describe this successful invocation.
+Cleanup failures preserve the Agent root for retry and propagate the kernel error.
+
+New metadata proxy actions:
+- `POST /api/v1/meta/agent/transfer`: `agent_id`, `new_owner_user_id`,
+  `expected_owner_user_id`; active same-team recipient; stale owner returns 409.
+- `POST /api/v1/meta/agent/gc`: `team_id`, optional `limit`/`offset`,
+  `dry_run` defaults to true. Apply (`false`) requires 1–100 explicit `agent_ids`.
+  Requires team admin or system admin; returns candidates/deleted/skipped/failed.
+
+See [lifecycle design](../docs/issue-1321-agent-lifecycle.md) for the permission
+matrix, retry semantics, cross-store limits and verification commands. Deploy
+kernel and Panel together because cleanup is now kernel-owned.

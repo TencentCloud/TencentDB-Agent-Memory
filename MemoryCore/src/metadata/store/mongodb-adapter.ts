@@ -663,14 +663,27 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async deleteTeams(teamIds: string[]): Promise<BatchDeleteResult> {
-    const result = await this.batchDelete("meta_teams", "team_id", teamIds);
-    if (result.deleted_ids.length > 0) {
-      await this.col("meta_team_members").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_agents").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_tasks").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_assets").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-    }
-    return result;
+    return this.withTx(async (session) => {
+      const result: BatchDeleteResult = { deleted_ids: [], failed: [] };
+      for (const id of new Set(teamIds)) {
+        const team = await this.col("meta_teams").findOne({ team_id: id }, { session });
+        if (!team) { result.failed.push({ id, reason: "not_found" }); continue; }
+        const agents = await this.col("meta_agents").find({ team_id: id }, { session }).toArray();
+        await this.deleteAgentMetadata(agents.map((a) => a.agent_id as string), session);
+        const assets = await this.col("meta_assets").find({ team_id: id }, { session }).toArray();
+        const assetIds = assets.map((a) => a.asset_id);
+        await this.col("meta_agent_fixed_assets").deleteMany({ asset_id: { $in: assetIds } }, { session });
+        await this.col("meta_asset_acl").deleteMany({ asset_id: { $in: assetIds } }, { session });
+        await this.col("meta_assets").deleteMany({ team_id: id }, { session });
+        const tasks = await this.col("meta_tasks").find({ team_id: id }, { session }).toArray();
+        await this.col("meta_task_agents").deleteMany({ task_id: { $in: tasks.map((t) => t.task_id) } }, { session });
+        await this.col("meta_tasks").deleteMany({ team_id: id }, { session });
+        await this.col("meta_team_members").deleteMany({ team_id: id }, { session });
+        await this.col("meta_teams").deleteOne({ team_id: id }, { session });
+        result.deleted_ids.push(id);
+      }
+      return result;
+    });
   }
 
   async listTeamsByUser(userId: string, pagination?: PaginationParams | null, filter?: { name?: string }): Promise<ListPage<TeamEntity>> {
@@ -800,30 +813,48 @@ export class MongoMetadataStore implements IMetadataStore {
     return this.getAgentById(agentId);
   }
 
-  async deleteAgents(agentIds: string[]): Promise<BatchDeleteResult> {
-    const agents = await this.col<AgentEntity>("meta_agents")
-      .find({ agent_id: { $in: agentIds } } as Document, { projection: PROJECT_NO_ID })
-      .toArray();
-    const selfMemoryByAgent = new Map(
-      agents.map((agent) => [agent.agent_id, buildChatMemoryAssetId(agent.team_id, agent.agent_id)]),
-    );
+  async transferAgentOwnership(agentId: string, expectedOwnerId: string, newOwnerId: string, ownedAssetIds: string[] = []): Promise<AgentEntity | null> {
+    // A multi-document ownership change must not run with partially updated permissions.
+    if (!this.useTransactions) throw new Error("ownership transfer requires MongoDB transactions");
+    return this.withTx(async (session) => {
+      const agent = await this.col<AgentEntity>("meta_agents").findOneAndUpdate(
+        { agent_id: agentId, owner_user_id: expectedOwnerId } as Document,
+        { $set: { owner_user_id: newOwnerId, updated_at: nowIso() } },
+        { session, returnDocument: "after", projection: { _id: 0 } },
+      );
+      if (!agent) return null;
+      await this.col("meta_assets").updateMany({
+        asset_id: { $in: [buildChatMemoryAssetId(agent.team_id, agentId), ...ownedAssetIds] },
+        team_id: agent.team_id, owner_user_id: expectedOwnerId,
+      }, { $set: { owner_user_id: newOwnerId, updated_at: nowIso() } }, { session });
+      return agent as AgentEntity;
+    });
+  }
 
-    const result = await this.batchDelete("meta_agents", "agent_id", agentIds);
-    if (result.deleted_ids.length > 0) {
-      await this.col("meta_task_agents").deleteMany({ agent_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_agent_fixed_assets").deleteMany({ agent_id: { $in: result.deleted_ids } } as Document);
-      const selfMemoryAssetIds = result.deleted_ids
-        .map((agentId) => selfMemoryByAgent.get(agentId))
-        .filter((assetId): assetId is string => !!assetId);
-      if (selfMemoryAssetIds.length > 0) {
-        await this.deleteAssets(selfMemoryAssetIds);
-      }
+  private async deleteAgentMetadata(agentIds: string[], session?: ClientSession): Promise<BatchDeleteResult> {
+    const result: BatchDeleteResult = { deleted_ids: [], failed: [] };
+    for (const id of new Set(agentIds)) {
+      const agent = await this.col<AgentEntity>("meta_agents").findOne({ agent_id: id } as Document, { session });
+      if (!agent) { result.failed.push({ id, reason: "not_found" }); continue; }
+      const memoryId = buildChatMemoryAssetId(agent.team_id, id);
+      await this.col("meta_agent_fixed_assets").deleteMany({ $or: [{ agent_id: id }, { asset_id: memoryId }] }, { session });
+      await this.col("meta_asset_acl").deleteMany({ asset_id: memoryId }, { session });
+      await this.col("meta_assets").deleteOne({ asset_id: memoryId }, { session });
+      await this.col("meta_task_agents").deleteMany({ agent_id: id }, { session });
+      // Keep the root until dependants are cleaned even in explicitly non-transactional dev mode.
+      await this.col("meta_agents").deleteOne({ agent_id: id }, { session });
+      result.deleted_ids.push(id);
     }
     return result;
   }
 
+  async deleteAgents(agentIds: string[]): Promise<BatchDeleteResult> {
+    return this.withTx((session) => this.deleteAgentMetadata(agentIds, session));
+  }
+
   async listAgentsByTeam(teamId: string, pagination?: PaginationParams | null, filter?: AgentFilter): Promise<ListPage<AgentEntity>> {
     const q: Document = { team_id: teamId };
+    if (filter?.visible_to_user_id) q.$or = [{ owner_user_id: filter.visible_to_user_id }, { visibility: "team" }];
     if (filter?.status) q.status = filter.status;
     if (filter?.owner_user_id) q.owner_user_id = filter.owner_user_id;
     if (filter?.name) q.name = filter.name;

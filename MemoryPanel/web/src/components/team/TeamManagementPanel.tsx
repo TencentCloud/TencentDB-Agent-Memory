@@ -32,7 +32,7 @@ import {
   useTeams,
   useAgents,
   isTeamAdmin,
-  canManageAsset,
+  canManageAgentLifecycle,
   invalidateBackendCache,
   writeAgentUiMeta,
   type Agent as StoreAgent,
@@ -164,11 +164,11 @@ export default function TeamManagementPanel({
   async function handleDeleteAgent(agent: StoreAgent) {
     if (!activeTeamId || !activeTeam) return;
     if (
-      !canManageAsset(
+      !canManageAgentLifecycle(
         { owner_user_id: agent.owner_user_id, team_id: agent.team_id },
         activeTeam,
         currentUser,
-        false,
+        _isAdmin,
       )
     ) {
       tea.notify.error(

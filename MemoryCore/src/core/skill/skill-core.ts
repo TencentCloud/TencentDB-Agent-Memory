@@ -370,7 +370,7 @@ export class SkillCore {
     }
   }
 
-  async delete(input: DeleteInput): Promise<{ skill_id: string; archived: boolean }> {
+  async delete(input: DeleteInput, options?: { requireStorageCleanup?: boolean }): Promise<{ skill_id: string; archived: boolean }> {
     // 语义：物理真删除（2026-07 变更，原为软删）。
     // - head 不存在（skill 不存在 / 已被删）→ SKILL_NOT_FOUND
     // - 用 getHeadIncludingArchived 兼容历史遗留 archived 行：老数据里可能还有
@@ -382,7 +382,7 @@ export class SkillCore {
     if (input.agent_id) assertOwnerWrap(head, input.agent_id, input.team_id);
 
     // 物理删除所有版本 + 清 storage + 汇总上报 shark(-N)
-    const deleted = await this.versioning.deleteSkill(input.skill_id, input.team_id);
+    const deleted = await this.versioning.deleteSkill(input.skill_id, input.team_id, options);
 
     // fire-and-forget：asset 状态同步失败不回滚 delete
     // deleted > 0 才触发 —— 与 store.deleteAllVersions 语义对齐

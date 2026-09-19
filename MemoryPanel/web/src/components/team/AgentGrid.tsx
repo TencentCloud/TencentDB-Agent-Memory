@@ -13,7 +13,7 @@ import {
   ViewListIcon,
   ViewModuleIcon,
 } from 'tea-icons-react';
-import { canManageAsset, type Team, type Agent as StoreAgent } from '@/services';
+import { canManageAgentLifecycle, type Team, type Agent as StoreAgent } from '@/services';
 import { useDisplayNameResolver, useUserDisplayName } from '@/services/user-profile-store';
 import { emptyMountedCounts, type AgentMountedCounts } from './types';
 import { Mounted } from './shared';
@@ -110,13 +110,12 @@ export default function AgentGrid({
   }, [agents, keyword, ownerFilter]);
 
   function canEdit(agent: StoreAgent): boolean {
-    // admin 与 member 一致：只能操作自己 owner 的 agent（不再有全局 admin 特权）。
-    return canManageAsset(
-      { owner_user_id: agent.owner_user_id, team_id: agent.team_id },
-      activeTeam,
-      currentUser,
-      false,
-    );
+    // Editing stays owner-only; lifecycle operations have a separate admin policy.
+    return !!currentUser && agent.owner_user_id === currentUser;
+  }
+
+  function canDelete(agent: StoreAgent): boolean {
+    return canManageAgentLifecycle(agent, activeTeam, currentUser, _isAdmin);
   }
 
   function renderName(agent: StoreAgent, compact = false) {
@@ -295,9 +294,9 @@ export default function AgentGrid({
                 <div className="_memory-agents-card-actions">
                   <Button
                     type="text"
-                    disabled={!editable}
+                    disabled={!canDelete(agent)}
                     onClick={() => onDeleteAgent(agent)}
-                    title={editable ? t('agentGrid.card.delete.tooltip.can') : t('agentGrid.card.delete.tooltip.cannot')}
+                    title={canDelete(agent) ? t('agentGrid.card.delete.tooltip.can') : t('agentGrid.card.delete.tooltip.cannot')}
                   >
                     <DeleteIcon size={12} /> {t('agentGrid.card.delete')}
                   </Button>
@@ -351,9 +350,9 @@ export default function AgentGrid({
               width: 90,
               fixed: 'right',
               render: (agent: StoreAgent) => {
-                const editable = canEdit(agent);
+                const deletable = canDelete(agent);
                 return (
-                  <Button type="link" disabled={!editable} onClick={() => onDeleteAgent(agent)}>
+                  <Button type="link" disabled={!deletable} onClick={() => onDeleteAgent(agent)}>
                     {t('agentGrid.table.delete')}
                   </Button>
                 );

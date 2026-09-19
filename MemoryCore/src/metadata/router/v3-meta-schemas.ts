@@ -197,6 +197,11 @@ export const agentListSchema = agentListFields
     message: "either team_id, owner_user_id, or owner_user_key is required",
   });
 export const agentArchiveSchema = z.object({ agent_id: nonEmpty });
+export const agentTransferSchema = z.object({ agent_id: nonEmpty, new_owner_user_id: nonEmpty, expected_owner_user_id: nonEmpty });
+export const agentGcSchema = z.object({
+  team_id: nonEmpty, dry_run: z.boolean().default(true),
+  agent_ids: z.array(nonEmpty).min(1).max(100).optional(),
+}).merge(paginationInputSchema).refine((v) => v.dry_run || !!v.agent_ids?.length, { message: "apply requires explicit agent_ids" });
 
 // ── Task ──
 const linkedAgent = z.object({ agent_id: nonEmpty, role_in_task: z.string().optional() });
@@ -487,6 +492,8 @@ export const V3_SCHEMAS = {
   "/v3/meta/agent/delete": agentDeleteSchema,
   "/v3/meta/agent/list": agentListSchema,
   "/v3/meta/agent/archive": agentArchiveSchema,
+  "/v3/meta/agent/transfer": agentTransferSchema,
+  "/v3/meta/agent/gc": agentGcSchema,
   "/v3/meta/task/create": taskCreateSchema,
   "/v3/meta/task/get": taskGetSchema,
   "/v3/meta/task/update": taskUpdateSchema,
