@@ -499,7 +499,7 @@ direct-trigger 手动归档一次会话切片（等价一次独立 skill 抽取�
 | space_id | string | 否 | 缺省回落 auth.serviceId |
 | task_id / reason / options | — | 否 | `options.max_iterations`(1–64) |
 
-**响应** `data`：`{ ok: true, task_id, archived_at_ms, archive_key }`。
+**响应** `data`：`{ ok: true, task_id, archived_at_ms, archive_key, extraction_enabled }`。
 
 ### POST /v3/skill/conversation/add
 
@@ -513,7 +513,7 @@ direct-trigger 手动归档一次会话切片（等价一次独立 skill 抽取�
 | messages | object[] | 是 | 1–500 条（role 同 extract，`tool_call`/`tool_result` 必须带 tool_name+tool_call_id） |
 | space_id / task_id | string | 否 | — |
 
-**响应** `data`：`{ status: "ok"\|"archived", archived?: { task_id, archived_at_ms, archive_key, reason } }`，`archived.reason ∈ tool_calls\|bytes\|compressed\|oversize`。
+**响应** `data`：`{ status: "ok"\|"archived", archived?: { task_id, archived_at_ms, archive_key, reason }, extraction_enabled }`，`archived.reason ∈ tool_calls\|bytes\|compressed\|oversize`。
 
 **错误**：`40001`(schema/校验)、`404`(模块未启用)、`50001`。
 
@@ -523,7 +523,20 @@ direct-trigger 手动归档一次会话切片（等价一次独立 skill 抽取�
 
 **请求体**：`space_id`、`user_id`、`team_id`、`agent_id`、`session_id`（均必填）、`reason?`(≤2000)、`task_id?`。
 
-**响应** `data`：`{ status: "empty" \| "archived", task_id?, archived_at_ms?, archive_key?, message? }`。
+**响应** `data`：`{ status: "empty" \| "archived", task_id?, archived_at_ms?, archive_key?, message?, extraction_enabled }`。
+
+**`extraction_enabled`（以上三个归档入口共有）**：服务端解析出的 `skill.extraction.enabled`。
+
+归档成功本身表示「切片已归档、任务已登记并入队」（`SkillTriggerService.archive()` 在
+tasks mutex 内依次写归档、追加 `SkillTaskEntry`、`enqueueAgent`），它从来不表示「已产出
+Skill」。该字段只回报**配置开关**：
+
+- `true` 只是开关开着,不代表 worker 就绪,也不代表抽取已完成;
+- `false` 表示当前配置下抽取不会执行 —— 任务仍然被接收和登记,调用方据此不必再等;
+- `null` 表示服务端读不到已解析的 skill 配置 —— 是「未知」,不是「关闭」。
+
+extractor 按存储模式分别构造（service 每实例一个、standalone 用进程单例）,所以该字段不声称
+各部署模式都遵守这个开关;它也不改变已入队任务的重试行为。
 
 ---
 
