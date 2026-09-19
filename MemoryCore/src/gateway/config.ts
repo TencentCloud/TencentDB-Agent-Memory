@@ -581,15 +581,83 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
   //             见 src/gateway/llm-resolver.ts 的 resolveEffectiveLlmConfig。
   const llmConfig = obj(fileConfig, "llm");
   const llmProxyConfig = obj(llmConfig, "proxy");
+
+  // ── 多厂商解析（activeProvider + providers[]，解析边界折叠）──
+  // llm.providers[] 声明多个候选厂商（name/baseUrl/apiKeyEnv/model/maxTokens/
+  // timeoutMs/models），llm.activeProvider（或 env TDAI_ACTIVE_PROVIDER）选中
+  // 一个，在此把该条目折叠进下方单对象形状 —— 下游 resolver / runner 构造点
+  // 零改动，未配置 providers[] 时行为与原来逐字段一致。
+  // 注意 provider（openai|proxy，传输模式）≠ activeProvider（厂商选择），勿混用。
+  // apiKey 优先级：TDAI_LLM_API_KEY（全局应急覆盖）> env[<entry>.apiKeyEnv] >
+  // 启动报错 —— 选定厂商后不允许静默回落到可能属于其他厂商的顶层 llm.apiKey。
+  // fail-fast：activeProvider 未命中、对应 env 缺失时直接抛错，不静默回落。
+  const providersRaw = llmConfig.providers;
+  const activeProviderName = env("TDAI_ACTIVE_PROVIDER") ?? str(llmConfig, "activeProvider");
+  let entryBaseUrl: string | undefined;
+  let entryApiKey: string | undefined;
+  let entryModel: string | undefined;
+  let entryMaxTokens: number | undefined;
+  let entryTimeoutMs: number | undefined;
+  const hasProvidersArray = Array.isArray(providersRaw) && providersRaw.length > 0;
+  if (providersRaw !== undefined && !Array.isArray(providersRaw)) {
+    // providers 写错形态（如误写成映射）时明确告警，避免静默走空配置导致运行期 401。
+    console.warn(
+      "[config] llm.providers 存在但不是数组,已忽略 —— 多厂商折叠未生效,请检查 yaml 格式",
+    );
+  }
+  if (activeProviderName && !hasProvidersArray) {
+    throw new Error(
+      `[config] llm.activeProvider="${activeProviderName}" 已设置,但 llm.providers 不是非空数组 —— 无厂商可选中`,
+    );
+  }
+  if (hasProvidersArray) {
+    const providers = providersRaw as Record<string, unknown>[];
+    const activeEntry = providers.find((p) => str(p, "name") === activeProviderName);
+    if (!activeEntry) {
+      const names = providers.map((p) => str(p, "name")).filter(Boolean).join(", ");
+      throw new Error(
+        `[config] llm.activeProvider="${activeProviderName ?? "(未设置)"}" 未命中 providers 中任何 name（可用: ${names || "(空)"}）`,
+      );
+    }
+    const apiKeyEnvName = str(activeEntry, "apiKeyEnv");
+    const keyFromEnv = apiKeyEnvName ? env(apiKeyEnvName) : undefined;
+    // TDAI_LLM_API_KEY 是全局应急覆盖,优先级高于厂商条目:存在时允许条目的
+    // apiKeyEnv 暂缺。若先对条目缺钥 fail-fast,覆盖读取(下方 apiKey 折叠链)
+    // 就永远不可达 —— 全局覆盖恰恰是条目缺钥时的逃生通道。
+    if (!keyFromEnv && !env("TDAI_LLM_API_KEY")) {
+      throw new Error(
+        `[config] providers[name=${String(activeProviderName)}].apiKeyEnv="${apiKeyEnvName ?? "(未设置)"}" 对应环境变量未设置或为空,且未设置 TDAI_LLM_API_KEY 应急覆盖`,
+      );
+    }
+    entryBaseUrl = str(activeEntry, "baseUrl");
+    entryApiKey = keyFromEnv;
+    entryModel = str(activeEntry, "model");
+    entryMaxTokens = num(activeEntry, "maxTokens");
+    entryTimeoutMs = num(activeEntry, "timeoutMs");
+    // model 不在 models 清单:告警不阻断(厂商新增模型的场景,清单允许滞后)。
+    // 校验最终生效值(含 TDAI_LLM_MODEL env 覆盖后),而非条目原值。
+    const effectiveModel = env("TDAI_LLM_MODEL") ?? entryModel;
+    const declaredModels = Array.isArray(activeEntry.models)
+      ? (activeEntry.models as unknown[]).map(String)
+      : [];
+    if (effectiveModel && declaredModels.length > 0 && !declaredModels.includes(effectiveModel)) {
+      console.warn(
+        `[config] providers[name=${String(activeProviderName)}].model="${effectiveModel}" 不在 models 清单 [${declaredModels.join(", ")}] 中,请核对或更新清单`,
+      );
+    }
+  }
+
   const rawLlmProvider = env("TDAI_LLM_PROVIDER") ?? str(llmConfig, "provider");
   const llmProvider: "openai" | "proxy" =
     rawLlmProvider === "proxy" ? "proxy" : "openai";
   const llm: StandaloneLLMConfig = {
-    baseUrl: env("TDAI_LLM_BASE_URL") ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
-    apiKey: env("TDAI_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
-    model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
-    maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
-    timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    // 折叠优先级:env 覆盖 > 选中厂商条目 > 顶层 llm.* 标量 > 内置默认。
+    // 未配置 providers[] 时 entry* 全为 undefined,链条退化为原行为。
+    baseUrl: env("TDAI_LLM_BASE_URL") ?? entryBaseUrl ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
+    apiKey: env("TDAI_LLM_API_KEY") ?? entryApiKey ?? str(llmConfig, "apiKey") ?? "",
+    model: env("TDAI_LLM_MODEL") ?? entryModel ?? str(llmConfig, "model") ?? "gpt-4o",
+    maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? entryMaxTokens ?? num(llmConfig, "maxTokens") ?? 4096,
+    timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? entryTimeoutMs ?? num(llmConfig, "timeoutMs") ?? 120_000,
     provider: llmProvider,
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
