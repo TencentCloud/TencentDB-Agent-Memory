@@ -683,19 +683,33 @@ export async function handleChatCompletions(
     lcHeaders[k.toLowerCase()] = v;
   }
 
-  // ── Session key: prefer conversation header, fallback to agent profile ───────────
+  // ── Session key: prefer conversation header, then dsh per-conversation
+  //    body derivation, fallback to agent profile ─────────────────────────
   const { resolveConversationId, resolveDshFallbackConversationId } = await import("./session/session-key.js");
   let conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
   // issue TencentCloud/TencentDB-Agent-Memory#1179: dsh 经 pi-ai / 其它
   // OpenAI-compatible 通道（sun2/gmi/zp 等）时不携带任何会话头（仅
   // llm-deepseek 适配器挂 x-deepseek-harness-session-id）——conversationId=null
-  // 导致 session-init 表单 + 注入管线被静默跳过。此处用稳定 sessionKey
-  // （当前为 keyId 派生）兜底作为会话标识走 session-init；aux(title-gen) /
-  // dsh headless(无 ask_user_question tool) 请求仍由下方 isAuxiliary /
-  // _dshHeadless 门短路，行为不变。
+  // 导致 session-init 表单 + 注入管线被静默跳过。
+  //
+  // review P1: 旧兜底用 keyId 派生 sessionKey 当会话标识 → 同一 user key 的
+  // 并发 dsh 会话共享同一个 session id（Team/Agent 选择 / session identity /
+  // L0 记忆分组串线）。现改为从请求 body 派生**稳定的 per-conversation**
+  // 标识（首条 user 消息哈希，同一会话内不变、不同会话间不同），并在
+  // sessionKey 解析之前应用 —— 下游所有按 sessionKey 分组的存储/绑定/trace/
+  // L0 写入随之按会话隔离。
+  //
+  // fail-closed: body 里派生不出 per-conversation 标识（无 user 消息）时
+  // conversationId 保持 null → 下方 injectedSkipped / session-init 门显式跳过
+  // 该请求的 session-init 与记忆注入，而不是静默合并进 dsh:<keyId>。
+  // aux(title-gen) / dsh headless(无 ask_user_question tool) 请求仍由下方
+  // isAuxiliary / _dshHeadless 门短路，行为不变。
   if (!conversationId) {
-    conversationId = resolveDshFallbackConversationId(agentSource, sessionKey);
+    conversationId = resolveDshFallbackConversationId(agentSource, body.messages);
+  }
+  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  if (!conversationId && agentSource === "dsh") {
+    console.log(`[session-fallback] agent=dsh no session header and no derivable per-conversation id (no user message) → fail-closed: session-init/memory skipped for this request (NOT merged into dsh:<keyId>)`);
   }
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
