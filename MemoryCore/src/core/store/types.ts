@@ -652,8 +652,14 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── L0 Read ──────────────────────────────────────────────
 
   countL0(filter?: L0CountFilter): MaybePromise<number>;
-  queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0QueryRow[]>;
-  queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0SessionGroup[]>;
+  queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number, opts?: { throwOnError?: boolean }): MaybePromise<L0QueryRow[]>;
+  /**
+   * `opts.throwOnError` — implementations that swallow query errors into `[]`
+   * (sqlite/tcvdb keep other callers non-fatal) must rethrow instead. Callers
+   * that act on a "zero rows" verdict (the L1 dedup guard) MUST set this:
+   * an error silently read as empty would strand the backlog it is checking.
+   */
+  queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number, opts?: { throwOnError?: boolean }): MaybePromise<L0SessionGroup[]>;
   getAllL0Texts(): MaybePromise<Array<{ record_id: string; message_text: string; recorded_at: string }>>;
 
   // ── L0 Search ────────────────────────────────────────────

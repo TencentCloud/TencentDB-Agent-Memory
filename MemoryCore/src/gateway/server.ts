@@ -180,6 +180,7 @@ function createConsoleLogger(): Logger {
  * comments above.
  */
 import { resolveMaxBodyBytes } from "../utils/env-config.js";
+import { countPendingL0Rows } from "./l1-pending.js";
 
 const MAX_BODY_BYTES = resolveMaxBodyBytes();
 
@@ -992,6 +993,9 @@ export class TdaiGateway {
         // the handler returns 503 in that case.
         stateBackend: this.stateBackend ?? undefined,
         pipelineWorker: this.pipelineWorker ?? undefined,
+        // Manual L1 drain (/v2/pipeline/l1/trigger, standalone-only). Thunk:
+        // the manager is assigned after startup builds this deps object.
+        getStatefulPipelineManager: () => this.statefulPipelineManager,
         logger: this.logger,
         // `V3_STRICT_ISOLATION` controls only /v3 L0–L3 memory data-plane
         // strictness. Default OFF for local/integration; production should set it.
@@ -2896,13 +2900,18 @@ export class TdaiGateway {
         // before we even started, bail out without doing any work.
         if (signal?.aborted) throw signal.reason ?? new Error("executeL1: aborted before start");
 
-        // Dedup: if triggered by timer but session already processed (count=0), skip
+        // Dedup fast-path: a timer-fired L1 for a session with nothing pending is
+        // a no-op. But `conversation_count === 0` alone is NOT proof — a completing
+        // L1 resets the counter while a fresh capture lands concurrently, wiping
+        // that round's increment (observed 2026-09-17: a 2-row batch was stranded
+        // for a day, then the timer-fired task was skipped and the backlog could
+        // never drain because no new capture re-arms the idle timer). So a "0"
+        // here only sets a flag; the skip is finalized below, AFTER the L0 store
+        // confirms there are truly no rows past the session's cursor.
+        let counterSaysIdle = false;
         if (task.data?.triggeredBy === "timer_scanner" && gateway.stateBackend) {
           const state = await gateway.stateBackend.getSessionState(instanceId, task.sessionId, teamId, agentId);
-          if (state && state.conversation_count === 0) {
-            gateway.logger.debug?.(`[executor] L1 skipped: session ${task.sessionId} already processed (count=0)`);
-            return;
-          }
+          counterSaysIdle = !!state && state.conversation_count === 0;
         }
 
         // Credit quota check before LLM call
@@ -2919,6 +2928,26 @@ export class TdaiGateway {
 
         core.setInstanceId(instanceId);
         const { store, embedding } = await resolveStore(task);
+
+        // Stranded-backlog guard (see the dedup fast-path comment above): only
+        // trust `conversation_count === 0` when the L0 source of truth agrees.
+        if (counterSaysIdle) {
+          const l1Cursor = await core.getL1Cursor(task.sessionId);
+          const pendingRows = await countPendingL0Rows(
+            store,
+            task.sessionId,
+            l1Cursor > 0 ? l1Cursor : undefined,
+          );
+          if (pendingRows === 0) {
+            gateway.logger.debug?.(`[executor] L1 skipped: session ${task.sessionId} has no pending L0 rows past cursor`);
+            return;
+          }
+          gateway.logger.warn?.(
+            `[executor] L1 proceeding despite conversation_count=0: ${pendingRows} pending L0 row(s) for ` +
+            `${task.sessionId} past cursor (counter race guard; without this the backlog would strand)`,
+          );
+        }
+
         const storage = await resolveStorage(task);
         const result = await core.runL1WithStore(
           task.sessionId,
