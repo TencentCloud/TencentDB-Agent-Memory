@@ -989,6 +989,9 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     } catch {
       /* 库刚建 / 无 source 行 → 全部视为新增 */
     }
+    // Do not keep the pooled reader from the classification step alive while
+    // the long LLM pass and the write transaction are running.
+    evictWikiDb(name);
 
     const outcome = await withSpan("wiki-ingest", async (span) => {
       span.setAttribute("wiki.name", name);
@@ -1006,6 +1009,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     const t0 = Date.now();
     try {
       const pages = scanWikiDir(projectPath);
+      evictWikiDb(name);
       withWriteDb(projectPath, (db) => {
         writeIndex(db, pages);
         for (const p of outcome.processed) recordSourceIngestResult(db, p);

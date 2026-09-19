@@ -212,7 +212,7 @@ id-only 单查。
 
 ### POST /v3/wiki/raw/ls
 
-列出原始源文件（id-only）。
+列出原始源文件（id-only）。兼容旧客户端的 `POST /v3/wiki/raw/list`，请求、响应及鉴权规则相同。
 
 **请求体**：`wiki_id`。
 

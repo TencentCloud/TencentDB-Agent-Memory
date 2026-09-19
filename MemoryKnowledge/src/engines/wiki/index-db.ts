@@ -131,7 +131,14 @@ export function initIndexDb(wikiDir: string): void {
   applyPragmas(db);
   try {
     initSchema(db);
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    // The transaction is committed before checkpointing. A pooled reader can
+    // temporarily make TRUNCATE busy; that must not turn a successful ingest
+    // into a failed task. SQLite will recover the WAL on the next open.
+    try {
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch {
+      /* best effort only */
+    }
   } finally {
     db.close();
   }
@@ -168,7 +175,14 @@ export function withWriteDb<T>(wikiDir: string, fn: (db: Database.Database) => T
   applyPragmas(db);
   try {
     const out = db.transaction(fn)(db);
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    // The transaction is committed before checkpointing. A pooled reader can
+    // temporarily make TRUNCATE busy; that must not turn a successful ingest
+    // into a failed task. SQLite will recover the WAL on the next open.
+    try {
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch {
+      /* best effort only */
+    }
     return out;
   } finally {
     db.close();
