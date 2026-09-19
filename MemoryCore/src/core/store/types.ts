@@ -603,6 +603,8 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
 
   init(providerInfo?: EmbeddingProviderInfo): MaybePromise<StoreInitResult>;
   isDegraded(): boolean;
+  /** Safe diagnostic reason when the store is in degraded mode, if known. */
+  getDegradedReason?(): string | undefined;
   getCapabilities(): StoreCapabilities;
   close(): void;
 
