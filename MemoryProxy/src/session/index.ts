@@ -91,6 +91,11 @@ import {
   FormData as OCFormData,
   FormStage as OCFormStage,
 } from "./opencode/form.js";
+import {
+  buildFormResponse as buildHermesFormResponse,
+  FormData as HermesFormData,
+  FormStage as HermesFormStage,
+} from "./hermes/form.js";
 
 // Re-export the types under their old names for backward compat
 export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
@@ -248,6 +253,27 @@ export async function handleSessionInit(
       modelId: reqCtx.modelId,
     };
     result.response = buildOpencodeFormResponse(ocFd);
+  }
+
+  // hermes 客户端复用 CB 状态机 + 自己的 `clarify` 载体。
+  // 与 workbuddy/dsh/opencode 完全对称：CB 状态机产出 formData 后外层重渲染 response。
+  if (agentSource === "hermes" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    const hFd: HermesFormData = {
+      teams: cbFd.teams,
+      stage: cbFd.stage as HermesFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    };
+    result.response = buildHermesFormResponse(hFd);
   }
 
   return result;
