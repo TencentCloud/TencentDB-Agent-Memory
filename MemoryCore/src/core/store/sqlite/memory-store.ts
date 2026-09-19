@@ -1463,14 +1463,11 @@ export class VectorStore implements IMemoryStore {
         try {
           this.db.exec("ROLLBACK");
         } catch { /* ignore rollback errors */ }
+        // Re-throw to let gateway distinguish "not found" from "store failure"
         throw err;
       }
-    } catch (err) {
-      this.logger?.warn(
-        `${TAG} delete failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return false;
     }
+    // Note: No outer catch — exceptions propagate to caller (gateway) for proper error handling
   }
 
   /**
