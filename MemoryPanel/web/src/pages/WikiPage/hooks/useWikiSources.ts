@@ -3,6 +3,7 @@
  * 组件层只保留 JSX 渲染，状态 / 数据逻辑集中在此。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type WikiDetail, type WikiPage } from '@/lib/api/knowledge-api';
 import { useTeams, useAgents } from '@/services';
@@ -10,9 +11,12 @@ import { readAuth } from '@/components/LoginGate';
 import { tea, confirmThenRun } from '@/lib/tea-bridge';
 import { findExistingRawFilenames, formatOverwriteFilenames } from '../utils/wiki-upload-utils';
 import { type DetailTab, type SearchResult, type StatusFilter, type SubView, type ViewMode, type WikiScopeTab } from '../constants/wiki-constants';
+import { canonicalWikiRef, pageRef } from '../components/wiki-navigation';
 
 export function useWikiSources() {
   const { t } = useTranslation();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [sources, setSources] = useState<WikiDetail[]>([]);
   const [loading, setLoading] = useState(false);
   // 默认展示 Agent 资产（fixed），避免用户误以为自己的资产在「团队资产」里
@@ -151,6 +155,11 @@ export function useWikiSources() {
   const [selectedPage, setSelectedPage] = useState<WikiPage | null>(null);
   const [readContent, setReadContent] = useState('');
   const [readLoading, setReadLoading] = useState(false);
+  const [missingPageRef, setMissingPageRef] = useState('');
+  const [readError, setReadError] = useState('');
+  const [pagesError, setPagesError] = useState('');
+  const [loadedWikiId, setLoadedWikiId] = useState('');
+  const [navigationRevision, setNavigationRevision] = useState(0);
   const [pageTypeFilter, setPageTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -170,6 +179,9 @@ export function useWikiSources() {
   // 旧 tab 的数据会覆盖新 tab 的数据。每次 fetch 递增序号，
   // 响应回来时校验序号是否仍是最新，不是就丢弃。
   const fetchSeqRef = useRef(0);
+  const readSeqRef = useRef(0);
+  const detailSeqRef = useRef(0);
+  const restoredPageRef = useRef('');
 
   const fetchSources = useCallback(async () => {
     if (!activeTeamId) {
@@ -215,7 +227,19 @@ export function useWikiSources() {
   const prevTeamIdRef = useRef(activeTeamId);
   useEffect(() => {
     if (prevTeamIdRef.current === activeTeamId) return;
+    const previousTeamId = prevTeamIdRef.current;
     prevTeamIdRef.current = activeTeamId;
+    // Resolving the initial team after login must preserve a bookmarked page.
+    if (!previousTeamId) return;
+    ++readSeqRef.current;
+    ++detailSeqRef.current;
+    setLoadedWikiId('');
+    restoredPageRef.current = '';
+    const params = new URLSearchParams(location.search);
+    params.delete('wiki');
+    params.delete('page');
+    params.delete('raw');
+    navigate({ search: params.toString(), hash: '' }, { replace: true });
     setSubView('list');
     setSelectedWikiId('');
     setActiveTab('overview');
@@ -227,31 +251,32 @@ export function useWikiSources() {
     setGraphData(null);
     setReadContent('');
     setShowAddDoc(false);
-  }, [activeTeamId]);
+  }, [activeTeamId, location.search, navigate]);
 
   const fetchDetail = useCallback(async (wikiId: string) => {
+    const seq = ++detailSeqRef.current;
     setGraphLoading(true);
-    // 两个子请求各自兜底，外层 catch 抓不到；用标志位感知任一失败后统一提示，
-    // 避免加载失败时详情页静默空白、用户无从判断。
-    let hadError = false;
+    setPagesError('');
+    let graphFailed = false;
     try {
       const [g, p] = await Promise.all([
-        knowledgeApi.wiki.graph(wikiId).catch(() => {
-          hadError = true;
-          return null;
-        }),
-        knowledgeApi.wiki.pages(wikiId).catch(() => {
-          hadError = true;
-          return [];
-        }),
+        knowledgeApi.wiki.graph(wikiId).catch(() => { graphFailed = true; return null; }),
+        knowledgeApi.wiki.pages(wikiId),
       ]);
+      if (seq !== detailSeqRef.current) return;
       setGraphData(g);
       setPages(Array.isArray(p) ? p : (p as { pages?: WikiPage[] } | null)?.pages || []);
+      setLoadedWikiId(wikiId);
+      if (graphFailed) tea.notify.error(t('wiki.notify.loadDetailFailed'));
+    } catch (error: any) {
+      if (seq !== detailSeqRef.current) return;
+      setPages([]);
+      setLoadedWikiId(wikiId);
+      setPagesError(error?.message || t('wiki.notify.loadDetailFailed'));
     } finally {
-      setGraphLoading(false);
+      if (seq === detailSeqRef.current) setGraphLoading(false);
     }
-    if (hadError) tea.notify.error(t('wiki.notify.loadDetailFailed'));
-  }, []);
+  }, [t]);
 
   const runningWikiKey = useMemo(
     () =>
@@ -468,42 +493,135 @@ export function useWikiSources() {
     );
   };
 
+  // Navigation actions change the URL; the effects below alone hydrate its selection.
   const openDetail = (wikiId: string) => {
-    setSelectedWikiId(wikiId);
-    setActiveTab('overview');
+    const params = new URLSearchParams(location.search);
+    params.set('wiki', wikiId);
+    params.delete('page');
+    params.delete('raw');
+    navigate({ search: params.toString(), hash: '' });
+  };
+
+  const handleReadPage = (page: WikiPage, _syncUrl = true, fragment = '') => {
+    if (!selectedWikiId) return;
+    const params = new URLSearchParams(location.search);
+    params.set('wiki', selectedWikiId);
+    params.set('page', pageRef(page));
+    params.delete('raw');
+    restoredPageRef.current = '';
+    setNavigationRevision(value => value + 1);
+    navigate({ search: params.toString(), hash: fragment });
+  };
+
+  const handleMissingPage = (ref: string) => {
+    handleReadPage({ path: ref, title: ref, type: 'other' });
+  };
+
+  const handleReadRaw = (filename: string) => {
+    const params = new URLSearchParams(location.search);
+    params.set('wiki', selectedWikiId);
+    params.delete('page');
+    params.set('raw', filename);
+    navigate({ search: params.toString(), hash: '' });
+  };
+
+  const returnToList = () => {
+    const params = new URLSearchParams(location.search);
+    params.delete('wiki');
+    params.delete('page');
+    params.delete('raw');
+    navigate({ search: params.toString(), hash: '' });
+  };
+
+  // A wiki switch invalidates both list and content requests before loading new data.
+  useEffect(() => {
+    const targetWiki = new URLSearchParams(location.search).get('wiki') || '';
+    if (loading) return;
+    if (targetWiki === selectedWikiId) {
+      if (targetWiki && loadedWikiId !== targetWiki && !graphLoading && sources.some(source => source.wiki_id === targetWiki)) {
+        void fetchDetail(targetWiki);
+      }
+      return;
+    }
+    ++readSeqRef.current;
+    ++detailSeqRef.current;
+    restoredPageRef.current = '';
+    setSelectedWikiId(targetWiki);
     setSelectedPage(null);
+    setReadContent('');
+    setReadLoading(false);
+    setReadError('');
+    setMissingPageRef('');
+    setPages([]);
+    setPagesError('');
+    setLoadedWikiId('');
+    setGraphData(null);
+    setGraphLoading(false);
     setSearchQuery('');
     setSearchResults([]);
     setPageTypeFilter('all');
-    // 切换到另一个 wiki 详情时，必须清空上一个 wiki 的详情级数据（页面列表 / 图谱 / 已读正文）。
-    // 否则新 wiki 的 fetchDetail 返回前，概览/图谱/页面 tab 会一闪而过上一个 wiki 的内容。
-    setPages([]);
-    setGraphData(null);
-    setReadContent('');
-    setSubView('detail');
-    fetchDetail(wikiId);
-  };
-
-  const handleReadPage = async (page: WikiPage) => {
-    if (!selectedWikiId) return;
-    // 切换页面时先清空旧内容再进入 loading —— 否则派生的 metadata（来自 readContent）
-    // 会在新内容返回前残留上一个文档的标签，视觉上就是"闪一下旧文档"。
-    setSelectedPage(page);
-    setReadContent('');
-    setReadLoading(true);
-    try {
-      const r = await knowledgeApi.wiki.read(
-        selectedWikiId,
-        (page as { id?: string }).id || page.path,
-      );
-      setReadContent(r?.content || '');
-    } catch (e: unknown) {
-      setReadContent('');
-      tea.notify.error((e instanceof Error ? e.message : String(e)) || t('wiki.notify.readPageFailed'));
-    } finally {
-      setReadLoading(false);
+    setActiveTab('overview');
+    setSubView(targetWiki ? 'detail' : 'list');
+    if (targetWiki && sources.some(source => source.wiki_id === targetWiki)) {
+      void fetchDetail(targetWiki);
     }
-  };
+  }, [loading, location.search, selectedWikiId, sources, fetchDetail, loadedWikiId, graphLoading]);
+
+  useEffect(() => {
+    if (loading || !selectedWikiId || loadedWikiId !== selectedWikiId || graphLoading || pagesError) return;
+    const params = new URLSearchParams(location.search);
+    if (params.get('wiki') !== selectedWikiId) return;
+    const target = params.get('page');
+    const raw = params.get('raw');
+    const key = JSON.stringify([selectedWikiId, target, raw, location.hash]);
+    if (restoredPageRef.current === key) return;
+    restoredPageRef.current = key;
+    const seq = ++readSeqRef.current;
+    setSelectedPage(null);
+    setReadContent('');
+    setReadLoading(false);
+    setReadError('');
+    setMissingPageRef('');
+    if (!target && !raw) return;
+    setActiveTab('pages');
+    const page = raw
+      ? { path: `raw/${raw}`, title: raw, type: 'raw' }
+      : pages.find(item => pageRef(item) === canonicalWikiRef(target!));
+    if (!page) {
+      setMissingPageRef(canonicalWikiRef(target!));
+      return;
+    }
+    setPageTypeFilter(current => current === 'all' || current === page.type ? current : 'all');
+    setSelectedPage(page);
+    setReadLoading(true);
+    const read = raw
+      ? knowledgeApi.wiki.rawRead(selectedWikiId, [raw]).then(result => {
+          const item = result.items?.[0];
+          if (!item || item.not_found) throw new Error(t('wiki.detail.pages.missing', { ref: raw }));
+          return { content: item.content || '' };
+        })
+      : knowledgeApi.wiki.read(selectedWikiId, page.path);
+    void read.then(result => {
+      if (seq === readSeqRef.current) setReadContent(result.content);
+    }).catch((error: any) => {
+      if (seq === readSeqRef.current) setReadError(error?.message || t('wiki.notify.readPageFailed'));
+    }).finally(() => {
+      if (seq === readSeqRef.current) setReadLoading(false);
+    });
+  }, [loading, selectedWikiId, loadedWikiId, graphLoading, pagesError, pages, location.search, location.hash, navigationRevision, t]);
+
+  useEffect(() => {
+    if (readLoading || !readContent || !location.hash) return;
+    let id: string;
+    try { id = decodeURIComponent(location.hash.slice(1)); } catch { return; }
+    const frame = requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: 'start' }));
+    return () => cancelAnimationFrame(frame);
+  }, [readLoading, readContent, location.hash]);
+
+  useEffect(() => () => {
+    ++readSeqRef.current;
+    ++detailSeqRef.current;
+  }, []);
 
   const handleDeletePage = async (page: WikiPage) => {
     if (!selectedWikiId) return;
@@ -518,6 +636,11 @@ export function useWikiSources() {
         await knowledgeApi.wiki.pageDelete(selectedWikiId, [ref]);
         tea.notify.success(t('wiki.notify.pageDeleted'));
         if (selectedPage && ((selectedPage as { id?: string }).id || selectedPage.path) === ref) {
+          ++readSeqRef.current;
+          restoredPageRef.current = '';
+          const params = new URLSearchParams(location.search);
+          params.delete('page');
+          navigate({ search: params.toString(), hash: '' }, { replace: true });
           setSelectedPage(null);
           setReadContent('');
         }
@@ -539,6 +662,11 @@ export function useWikiSources() {
         await knowledgeApi.wiki.rawDelete(selectedWikiId, [filename]);
         tea.notify.success(t('wiki.notify.rawDeleted'));
         if (selectedPage?.path === `raw/${filename}`) {
+          ++readSeqRef.current;
+          restoredPageRef.current = '';
+          const params = new URLSearchParams(location.search);
+          params.delete('raw');
+          navigate({ search: params.toString(), hash: '' }, { replace: true });
           setSelectedPage(null);
           setReadContent('');
         }
@@ -811,6 +939,9 @@ export function useWikiSources() {
     setReadContent,
     readLoading,
     setReadLoading,
+    missingPageRef,
+    readError,
+    pagesError,
     pageTypeFilter,
     setPageTypeFilter,
     searchQuery,
@@ -843,6 +974,9 @@ export function useWikiSources() {
     handleDelete,
     openDetail,
     handleReadPage,
+    handleMissingPage,
+    handleReadRaw,
+    returnToList,
     handleDeletePage,
     handleDeleteRaw,
     handleSearch,

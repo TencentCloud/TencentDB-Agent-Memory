@@ -11,6 +11,18 @@
  */
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useTranslation } from 'react-i18next';
+import { remarkWikiLinks } from '@/pages/WikiPage/components/wiki-markdown';
+import { resolveWikiLink, wikiHref } from '@/pages/WikiPage/components/wiki-navigation';
+import type { WikiPage } from '@/lib/api/knowledge-api';
+
+export interface WikiMarkdownContext {
+  wikiId: string;
+  currentPageRef: string;
+  pages: readonly WikiPage[];
+  onNavigate: (page: WikiPage, fragment?: string) => void;
+  onMissing?: (ref: string) => void;
+}
 
 /** Wiki 详情正文密度（默认） */
 export const mdComponents: Components = {
@@ -189,9 +201,58 @@ const mdComponentsCompact: Components = {
 };
 
 /** 渲染一段 Markdown 正文（统一 gfm 插件 + 共享样式；compact 用于 Code 详情小字号场景） */
-export function AssetMarkdown({ content, compact = false }: { content: string; compact?: boolean }) {
+export function AssetMarkdown({
+  content,
+  compact = false,
+  wiki,
+}: {
+  content: string;
+  compact?: boolean;
+  wiki?: WikiMarkdownContext;
+}) {
+  const { t } = useTranslation();
+  const baseComponents = compact ? mdComponentsCompact : mdComponents;
+  const components = wiki
+    ? {
+        ...baseComponents,
+        a: ({ children, href, ...p }: any) => {
+          const resolved = href?.startsWith('#')
+            ? { ref: wiki.currentPageRef, fragment: href, page: wiki.pages.find(page => resolveWikiLink(page.path, wiki.currentPageRef, wiki.pages)?.ref === wiki.currentPageRef) }
+            : href
+              ? resolveWikiLink(href, wiki.currentPageRef, wiki.pages)
+              : null;
+          if (!resolved) {
+            return (
+              <a className="text-primary underline underline-offset-2 hover:text-primary/80" href={href} {...p}>
+                {children}
+              </a>
+            );
+          }
+          const destination = wikiHref(wiki.wikiId, resolved.ref, resolved.fragment);
+          return (
+            <a
+              className="text-primary underline underline-offset-2 hover:text-primary/80"
+              href={destination}
+              title={!resolved.page ? t('wiki.detail.pages.missing', { ref: resolved.ref }) : undefined}
+              onClick={(event) => {
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                if (resolved.page) wiki.onNavigate(resolved.page, resolved.fragment);
+                else wiki.onMissing?.(resolved.ref);
+              }}
+              {...p}
+            >
+              {children}
+            </a>
+          );
+        },
+      }
+    : baseComponents;
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={compact ? mdComponentsCompact : mdComponents}>
+    <ReactMarkdown
+      remarkPlugins={wiki ? [remarkGfm, remarkWikiLinks as any] : [remarkGfm]}
+      components={components}
+    >
       {content}
     </ReactMarkdown>
   );
