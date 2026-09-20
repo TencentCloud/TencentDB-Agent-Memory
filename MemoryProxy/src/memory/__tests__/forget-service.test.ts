@@ -49,6 +49,26 @@ describe("ForgetService", () => {
     expect(candidates.map((candidate) => candidate.preview).join(" ")).toContain("[REDACTED]");
   });
 
+  it("redacts candidate names before they leave the service", async () => {
+    const secret = `ghp_${"A".repeat(36)}`;
+    const post = vi.fn(async (path: string, body: any) => {
+      const response = responseFor(path, body);
+      if (path === "/v3/skill/search") {
+        return { items: [{ ...(response as any).items[0], name: `deploy ${secret}` }] };
+      }
+      if (path === "/v3/memory-prompt/get" && !body.layer) {
+        return { ...response as any, name: `deploy ${secret}` };
+      }
+      return response;
+    });
+    const service = new ForgetService({ post } as any);
+
+    const candidates = await service.discover(identity, "deploy");
+
+    expect(candidates.map((candidate) => candidate.name).join(" ")).not.toContain(secret);
+    expect(candidates.every((candidate) => candidate.name.includes("[REDACTED]"))).toBe(true);
+  });
+
   it("does not offer a prompt shared with another agent", async () => {
     const post = vi.fn(async (path: string, body: any) => {
       const response = responseFor(path, body);

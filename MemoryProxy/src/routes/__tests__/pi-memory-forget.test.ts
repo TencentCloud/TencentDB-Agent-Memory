@@ -59,6 +59,33 @@ describe("Pi memory forget routes", () => {
     expect(service.execute).not.toHaveBeenCalled();
   });
 
+  it("redacts candidate names in preview and confirmation responses", async () => {
+    const secret = `ghp_${"A".repeat(36)}`;
+    const unsafeTarget = { ...target, name: `deploy ${secret}` };
+    const service = {
+      discover: vi.fn(async () => [unsafeTarget]),
+      execute: vi.fn(async () => ({ kind: unsafeTarget.kind, name: unsafeTarget.name })),
+    };
+    const handlers = createPiMemoryForgetHandlers({} as any, {
+      service,
+      pending: new ForgetPendingStore({ createId: () => "action-a" }),
+      resolveSession: () => ({ sessionKey: "pi:session-a", identity }),
+    });
+    const app = new Hono();
+    app.post("/preview", handlers.preview);
+    app.post("/confirm", handlers.confirm);
+
+    const discovery = await post(app, "/preview", { keyword: "deploy" });
+    const discoveryJson = await discovery.json() as any;
+    expect(discoveryJson.data.candidates[0].name).toBe("deploy [REDACTED]");
+
+    await post(app, "/preview", { keyword: "deploy", candidate_key: unsafeTarget.key });
+    const confirmation = await post(app, "/confirm", { action_id: "action-a" });
+    const confirmationJson = await confirmation.json() as any;
+    expect(confirmationJson.data.candidate.name).toBe("deploy [REDACTED]");
+    expect(JSON.stringify(confirmationJson)).not.toContain(secret);
+  });
+
   it("rejects candidate substitution", async () => {
     const { app, service } = setup();
     await post(app, "/preview", { keyword: "deploy" });
