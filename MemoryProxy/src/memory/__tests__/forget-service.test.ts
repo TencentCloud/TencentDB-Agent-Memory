@@ -44,6 +44,11 @@ describe("ForgetService", () => {
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["skill", "memory-prompt"]);
     expect(candidates.map((candidate) => candidate.preview).join(" ")).not.toContain("sk-abcdefghijklmnop");
     expect(candidates.map((candidate) => candidate.preview).join(" ")).toContain("[REDACTED]");
+    expect(post).toHaveBeenCalledWith(
+      "/v3/memory-prompt/setting/list",
+      { memory_prompt_id: "prompt-1", limit: 2, offset: 0 },
+      { serviceId: "space-a" },
+    );
   });
 
   it("redacts candidate names before they leave the service", async () => {

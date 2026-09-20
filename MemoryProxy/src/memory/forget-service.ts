@@ -45,7 +45,6 @@ interface MemoryPromptSetting {
 }
 
 const PROMPT_LAYERS = ["l1", "l2", "l3"] as const;
-const SETTINGS_PAGE_SIZE = 100;
 
 export class ForgetService {
   constructor(private readonly core: CoreClient) {}
@@ -75,7 +74,7 @@ export class ForgetService {
         { serviceId: identity.serviceId },
       );
     } else {
-      const settings = await this.listAllPromptSettings(identity, target.id);
+      const settings = await this.listPromptSettings(identity, target.id);
       if (!this.isAgentPrivate(settings, identity)) {
         throw new Error("memory prompt is shared or no longer assigned to this agent");
       }
@@ -136,7 +135,7 @@ export class ForgetService {
           { memory_prompt_id: id },
           { serviceId: identity.serviceId },
         ),
-        this.listAllPromptSettings(identity, id),
+        this.listPromptSettings(identity, id),
       ]);
       if (record.status !== "active" || !this.isAgentPrivate(settings, identity)) continue;
       if (!`${record.name}\n${record.prompt}`.toLowerCase().includes(normalizedKeyword)) continue;
@@ -154,27 +153,23 @@ export class ForgetService {
     return candidates;
   }
 
-  private async listAllPromptSettings(
+  private async listPromptSettings(
     identity: ForgetIdentity,
     memoryPromptId: string,
   ): Promise<MemoryPromptSetting[]> {
-    const all: MemoryPromptSetting[] = [];
-    for (let offset = 0; ; offset += SETTINGS_PAGE_SIZE) {
-      const page = await this.core.post<{ items: MemoryPromptSetting[] }>(
-        "/v3/memory-prompt/setting/list",
-        { memory_prompt_id: memoryPromptId, limit: SETTINGS_PAGE_SIZE, offset },
-        { serviceId: identity.serviceId },
-      );
-      all.push(...page.items);
-      if (page.items.length < SETTINGS_PAGE_SIZE) return all;
-    }
+    const result = await this.core.post<{ items: MemoryPromptSetting[] }>(
+      "/v3/memory-prompt/setting/list",
+      { memory_prompt_id: memoryPromptId, limit: 2, offset: 0 },
+      { serviceId: identity.serviceId },
+    );
+    return result.items;
   }
 
   private isAgentPrivate(settings: MemoryPromptSetting[], identity: ForgetIdentity): boolean {
-    return settings.length > 0 && settings.every((setting) =>
-      setting.target_type === "agent"
+    const [setting] = settings;
+    return settings.length === 1
+      && setting?.target_type === "agent"
       && setting.team_id === identity.teamId
-      && setting.agent_id === identity.agentId,
-    );
+      && setting.agent_id === identity.agentId;
   }
 }
