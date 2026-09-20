@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["/absolute/path/to/TencentDB-Agent-Memory/MemoryCore/claude-code-plugin/dist/hooks/cli.js"],
+            "timeout": 5,
+            "statusMessage": "Recalling TencentDB Agent Memory"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["/absolute/path/to/TencentDB-Agent-Memory/MemoryCore/claude-code-plugin/dist/hooks/cli.js"],
+            "timeout": 15,
+            "statusMessage": "Capturing TencentDB Agent Memory"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["/absolute/path/to/TencentDB-Agent-Memory/MemoryCore/claude-code-plugin/dist/hooks/cli.js"],
+            "timeout": 30,
+            "statusMessage": "Capturing TencentDB Agent Memory"
+          }
+        ]
+      }
+    ]
+  }
+}
