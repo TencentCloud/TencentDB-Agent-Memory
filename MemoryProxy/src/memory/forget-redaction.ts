@@ -14,9 +14,19 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
 ];
 
+const SENSITIVE_FIELD = String.raw`(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|client[_-]?secret|auth(?:orization)?|credential|private[_-]?key)`;
+const SENSITIVE_FIELD_PATTERNS: Array<[RegExp, string]> = [
+  [new RegExp(`(\\b${SENSITIVE_FIELD}\\b\\s*["']?\\s*[:=]\\s*)"(?:\\\\.|[^"\\\\])*"`, "gi"), "$1\"[REDACTED]\""],
+  [new RegExp(`(\\b${SENSITIVE_FIELD}\\b\\s*["']?\\s*[:=]\\s*)'(?:\\\\.|[^'\\\\])*'`, "gi"), "$1'[REDACTED]'"],
+  [new RegExp(`(\\b${SENSITIVE_FIELD}\\b\\s*["']?\\s*[:=]\\s*)(?!["'])[^\\s,;}\\]]+`, "gi"), "$1[REDACTED]"],
+];
+
 export function redactForgetPreview(value: string): string {
   let result = value;
   for (const pattern of SECRET_PATTERNS) result = result.replace(pattern, "[REDACTED]");
+  for (const [pattern, replacement] of SENSITIVE_FIELD_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
   return result;
 }
 

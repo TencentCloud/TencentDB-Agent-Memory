@@ -6,6 +6,7 @@ import { resolveConversationId } from "../session/session-key.js";
 import { getCoreSkillClient } from "../skill/core-client.js";
 import type { ProxyConfig } from "../types.js";
 import { ForgetPendingStore } from "../memory/forget-pending-store.js";
+import { renderForgetPreview } from "../memory/forget-redaction.js";
 import { ForgetService, type ForgetIdentity } from "../memory/forget-service.js";
 
 interface ResolvedForgetSession {
@@ -70,7 +71,7 @@ function publicCandidate(candidate: Awaited<ReturnType<ForgetRouteService["disco
   return {
     key: candidate.key,
     kind: candidate.kind,
-    name: candidate.name,
+    name: renderForgetPreview(candidate.name),
     preview: candidate.preview,
     detail: candidate.detail,
     impact: candidate.impact,
@@ -157,7 +158,10 @@ export function createPiMemoryForgetHandlers(config: ProxyConfig, deps: ForgetRo
         return ok(c, {
           state: "completed",
           alreadyCompleted: outcome.alreadyCompleted,
-          candidate: outcome.result,
+          candidate: {
+            ...outcome.result,
+            name: renderForgetPreview(outcome.result.name),
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "memory deletion failed";

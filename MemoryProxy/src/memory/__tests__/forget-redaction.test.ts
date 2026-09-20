@@ -20,6 +20,20 @@ describe("forget preview redaction", () => {
     expect(result).not.toContain("<mark>");
   });
 
+  it("redacts values associated with sensitive field names", () => {
+    const source = [
+      '"password":"example-password-123"',
+      "api_key='example-custom-key-456'",
+      "client-secret=example-client-secret-789",
+    ].join(" ");
+    const result = redactForgetPreview(source);
+
+    expect(result).not.toContain("example-password-123");
+    expect(result).not.toContain("example-custom-key-456");
+    expect(result).not.toContain("example-client-secret-789");
+    expect(result.match(/\[REDACTED\]/g)).toHaveLength(3);
+  });
+
   it("stays valid UTF-8 and within budget at multibyte boundaries", () => {
     for (let budget = 0; budget <= 30; budget += 1) {
       const result = truncateForgetPreview("ß文😀€ß文ß🌍a", budget);
