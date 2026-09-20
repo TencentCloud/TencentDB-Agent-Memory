@@ -28,6 +28,12 @@ function candidateLabel(candidate: ForgetCandidate): string {
   return `${kind}: ${candidate.name} (${candidate.detail})`;
 }
 
+function impactText(candidate: ForgetCandidate): string {
+  return candidate.kind === "skill"
+    ? "Deletes this Skill and all of its versions."
+    : "Deletes this Memory Prompt and clears its agent setting.";
+}
+
 function confirmationMessage(candidate: ForgetCandidate): string {
   const kind = candidate.kind === "skill" ? "Skill" : "Memory Prompt";
   return [
@@ -36,7 +42,7 @@ function confirmationMessage(candidate: ForgetCandidate): string {
     "",
     `Preview: ${candidate.preview}`,
     "",
-    `Impact: ${candidate.impact}`,
+    `Impact: ${impactText(candidate)}`,
     "",
     "This action cannot be undone.",
   ].join("\n");

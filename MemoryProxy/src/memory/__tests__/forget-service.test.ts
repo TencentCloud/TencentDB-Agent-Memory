@@ -126,7 +126,6 @@ describe("ForgetService", () => {
       agentId: "agent-a",
       preview: "preview",
       detail: "L1, version 2",
-      impact: "impact",
     })).rejects.toThrow("shared or no longer assigned");
     expect(post).not.toHaveBeenCalledWith("/v3/memory-prompt/delete", expect.anything(), expect.anything());
   });
@@ -143,7 +142,6 @@ describe("ForgetService", () => {
       agentId: "agent-a",
       preview: "preview",
       detail: "version 3",
-      impact: "impact",
     });
 
     expect(post).toHaveBeenCalledWith(

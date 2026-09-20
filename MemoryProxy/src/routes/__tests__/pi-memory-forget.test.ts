@@ -13,7 +13,6 @@ const target: ForgetTarget = {
   agentId: "agent-a",
   preview: "token [REDACTED]",
   detail: "version 3",
-  impact: "Deletes every version.",
 };
 
 function setup() {

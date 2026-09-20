@@ -70,7 +70,6 @@ function publicCandidate(
     name: renderForgetPreview(candidate.name),
     preview: candidate.preview,
     detail: candidate.detail,
-    impact: candidate.impact,
   };
 }
 

@@ -9,7 +9,6 @@ const target: ForgetTarget = {
   agentId: "agent-a",
   preview: "redacted preview",
   detail: "version 3",
-  impact: "Deletes all versions.",
 };
 
 describe("ForgetPendingStore", () => {
