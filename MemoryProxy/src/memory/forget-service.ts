@@ -111,7 +111,6 @@ export class ForgetService {
         agentId: identity.agentId,
         preview: renderForgetPreview(skill.description || skill.name),
         detail: `version ${skill.version}`,
-        impact: "Deletes this Skill and all of its versions.",
       }));
   }
 
@@ -150,7 +149,6 @@ export class ForgetService {
         agentId: identity.agentId,
         preview: renderForgetPreview(record.prompt),
         detail: `${record.layer.toUpperCase()}, version ${record.version}`,
-        impact: "Deletes this Memory Prompt and clears its agent setting.",
       });
     }
     return candidates;

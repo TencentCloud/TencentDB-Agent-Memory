@@ -8,7 +8,6 @@ const candidate: ForgetCandidate = {
   name: "deploy-check",
   detail: "version 3",
   preview: "Uses token [REDACTED] to check deployment health.",
-  impact: "Deletes this Skill and all of its versions.",
 };
 
 function makeClient(): ForgetClient {
@@ -81,6 +80,7 @@ describe("/tdai-memory-forget", () => {
       "Delete deploy-check?",
       expect.stringContaining("[REDACTED]"),
     );
+    expect(ui.confirm.mock.calls[0][1]).toContain("Impact: Deletes this Skill and all of its versions.");
     expect(client.confirm).not.toHaveBeenCalled();
   });
 

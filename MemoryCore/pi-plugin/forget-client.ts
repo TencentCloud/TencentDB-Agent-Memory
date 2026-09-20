@@ -6,7 +6,6 @@ export interface ForgetCandidate {
   name: string;
   preview: string;
   detail: string;
-  impact: string;
 }
 
 export interface ForgetDiscovery {

@@ -10,7 +10,6 @@ export interface ForgetTarget {
   agentId: string;
   preview: string;
   detail: string;
-  impact: string;
 }
 
 type ReadyEntry = {
