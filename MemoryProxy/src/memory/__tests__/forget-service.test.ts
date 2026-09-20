@@ -36,10 +36,7 @@ function responseFor(path: string, body: any) {
 describe("ForgetService", () => {
   it("discovers only agent-owned items and redacts previews", async () => {
     const post = vi.fn(async (path: string, body: unknown) => responseFor(path, body));
-    const service = new ForgetService({ post } as any, (() => {
-      let id = 0;
-      return () => `key-${++id}`;
-    })());
+    const service = new ForgetService({ post } as any);
 
     const candidates = await service.discover(identity, "deploy");
 
@@ -105,7 +102,7 @@ describe("ForgetService", () => {
       }
       return response;
     });
-    const service = new ForgetService({ post } as any, () => "key");
+    const service = new ForgetService({ post } as any);
 
     const candidates = await service.discover(identity, "deploy");
 
@@ -122,7 +119,6 @@ describe("ForgetService", () => {
     const service = new ForgetService({ post } as any);
 
     await expect(service.execute(identity, {
-      key: "key",
       kind: "memory-prompt",
       id: "prompt-1",
       name: "deploy style",
@@ -140,7 +136,6 @@ describe("ForgetService", () => {
     const service = new ForgetService({ post } as any);
 
     await service.execute(identity, {
-      key: "key",
       kind: "skill",
       id: "skill-1",
       name: "deploy-check",

@@ -3,7 +3,7 @@ import { registerMemoryForgetCommand } from "../forget-command.js";
 import type { ForgetCandidate, ForgetClient } from "../forget-client.js";
 
 const candidate: ForgetCandidate = {
-  key: "opaque-skill-key",
+  actionId: "action-1",
   kind: "skill",
   name: "deploy-check",
   detail: "version 3",
@@ -13,15 +13,8 @@ const candidate: ForgetCandidate = {
 
 function makeClient(): ForgetClient {
   return {
-    preview: vi.fn(async (_keyword: string, candidateKey?: string) => candidateKey
-      ? { state: "pending" as const, actionId: "action-1", candidate }
-      : { state: "select" as const, candidates: [candidate] }),
-    confirm: vi.fn(async () => ({
-      state: "completed" as const,
-      alreadyCompleted: false,
-      candidate: { kind: candidate.kind, name: candidate.name },
-    })),
-    cancel: vi.fn(async () => ({ state: "cancelled" as const })),
+    preview: vi.fn(async () => ({ state: "select" as const, candidates: [candidate] })),
+    confirm: vi.fn(async () => undefined),
   };
 }
 
@@ -40,7 +33,7 @@ function setup(client = makeClient()) {
   });
   const ui = {
     select: vi.fn(async (_title: string, options: string[]) => options[0]),
-    confirm: vi.fn(async () => true),
+    confirm: vi.fn(async (_title: string, _message: string) => true),
     notify: vi.fn(),
     setStatus: vi.fn(),
   };
@@ -82,13 +75,12 @@ describe("/tdai-memory-forget", () => {
 
     await handler("deploy", ctx);
 
-    expect(client.preview).toHaveBeenNthCalledWith(1, "deploy");
-    expect(client.preview).toHaveBeenNthCalledWith(2, "deploy", candidate.key);
+    expect(client.preview).toHaveBeenCalledOnce();
+    expect(client.preview).toHaveBeenCalledWith("deploy");
     expect(ui.confirm).toHaveBeenCalledWith(
       "Delete deploy-check?",
       expect.stringContaining("[REDACTED]"),
     );
-    expect(client.cancel).toHaveBeenCalledWith("action-1");
     expect(client.confirm).not.toHaveBeenCalled();
   });
 
@@ -108,18 +100,17 @@ describe("/tdai-memory-forget", () => {
   });
 
   it("lets the user select one of multiple redacted candidates", async () => {
-    const second = { ...candidate, key: "opaque-prompt-key", kind: "memory-prompt" as const, name: "agent-style" };
+    const second = { ...candidate, actionId: "action-2", kind: "memory-prompt" as const, name: "agent-style" };
     const client = makeClient();
     vi.mocked(client.preview)
-      .mockResolvedValueOnce({ state: "select", candidates: [candidate, second] })
-      .mockResolvedValueOnce({ state: "pending", actionId: "action-2", candidate: second });
+      .mockResolvedValueOnce({ state: "select", candidates: [candidate, second] });
     const { handler, ctx, ui } = setup(client);
     ui.select.mockImplementation(async (_title, options) => options[1]);
 
     await handler("style", ctx);
 
     expect(ui.select).toHaveBeenCalledOnce();
-    expect(client.preview).toHaveBeenNthCalledWith(2, "style", second.key);
+    expect(client.preview).toHaveBeenCalledOnce();
     expect(client.confirm).toHaveBeenCalledWith("action-2");
   });
 });

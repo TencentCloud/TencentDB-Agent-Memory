@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ProxyForgetClient } from "../forget-client.js";
 
 describe("ProxyForgetClient", () => {
-  it("sends only routing identity and opaque candidate keys", async () => {
+  it("sends only routing identity and the search keyword", async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       code: 0,
       data: { state: "select", candidates: [] },
@@ -15,7 +15,7 @@ describe("ProxyForgetClient", () => {
       fetcher,
     });
 
-    await client.preview("deploy", "opaque-key");
+    await client.preview("deploy");
 
     expect(fetcher).toHaveBeenCalledWith(
       "http://proxy.test/v3/pi/memory-forget/preview",
@@ -27,7 +27,7 @@ describe("ProxyForgetClient", () => {
           "x-tdai-service-id": "space-a",
           "x-conversation-id": "pi-session-a",
         },
-        body: JSON.stringify({ keyword: "deploy", candidate_key: "opaque-key" }),
+        body: JSON.stringify({ keyword: "deploy" }),
       }),
     );
   });
@@ -42,7 +42,9 @@ describe("ProxyForgetClient", () => {
       fetcher,
     });
 
-    await expect(client.confirm("action-a")).rejects.toThrow("memory forget request failed (500)");
+    await expect(client.confirm("action-a")).rejects.toThrow(
+      "memory deletion could not be confirmed; run a fresh preview",
+    );
     await expect(client.confirm("action-a")).rejects.not.toThrow("secret server details");
   });
 });

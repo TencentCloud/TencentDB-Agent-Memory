@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { ForgetPendingStore, type ForgetTarget } from "../forget-pending-store.js";
 
 const target: ForgetTarget = {
-  key: "opaque-key",
   kind: "skill",
   id: "skill-1",
   name: "deploy-check",
@@ -14,26 +13,14 @@ const target: ForgetTarget = {
 };
 
 describe("ForgetPendingStore", () => {
-  it("cancel consumes a pending action without executing it", async () => {
-    const store = new ForgetPendingStore({ createId: () => "action-1" });
-    const execute = vi.fn(async () => ({ kind: target.kind, name: target.name }));
-    const actionId = store.prepare("session-a", target);
-
-    expect(store.cancel(actionId, "session-a")).toBe("cancelled");
-    await expect(store.confirm(actionId, "session-a", execute)).rejects.toThrow("cancelled");
-    expect(execute).not.toHaveBeenCalled();
-  });
-
   it("sequential double-confirm executes deletion once", async () => {
     const store = new ForgetPendingStore({ createId: () => "action-1" });
-    const execute = vi.fn(async () => ({ kind: target.kind, name: target.name }));
+    const execute = vi.fn(async () => undefined);
     const actionId = store.prepare("session-a", target);
 
-    const first = await store.confirm(actionId, "session-a", execute);
-    const second = await store.confirm(actionId, "session-a", execute);
+    await store.confirm(actionId, "session-a", execute);
+    await store.confirm(actionId, "session-a", execute);
 
-    expect(first.alreadyCompleted).toBe(false);
-    expect(second.alreadyCompleted).toBe(true);
     expect(execute).toHaveBeenCalledOnce();
   });
 
@@ -43,7 +30,6 @@ describe("ForgetPendingStore", () => {
     const store = new ForgetPendingStore({ createId: () => "action-1" });
     const execute = vi.fn(async () => {
       await gate;
-      return { kind: target.kind, name: target.name };
     });
     const actionId = store.prepare("session-a", target);
 
@@ -58,7 +44,7 @@ describe("ForgetPendingStore", () => {
   it("expires unconfirmed actions", async () => {
     let now = 1_000;
     const store = new ForgetPendingStore({ ttlMs: 50, now: () => now, createId: () => "action-1" });
-    const execute = vi.fn(async () => ({ kind: target.kind, name: target.name }));
+    const execute = vi.fn(async () => undefined);
     const actionId = store.prepare("session-a", target);
     now += 51;
 
@@ -66,22 +52,38 @@ describe("ForgetPendingStore", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("does not blindly retry an ambiguous failed deletion", async () => {
+  it("deletes a failed action and requires a fresh preview", async () => {
     const store = new ForgetPendingStore({ createId: () => "action-1" });
     const execute = vi.fn(async () => { throw new Error("socket closed"); });
     const actionId = store.prepare("session-a", target);
 
-    await expect(store.confirm(actionId, "session-a", execute)).rejects.toThrow("outcome is uncertain");
-    await expect(store.confirm(actionId, "session-a", execute)).rejects.toThrow("outcome is uncertain");
+    await expect(store.confirm(actionId, "session-a", execute)).rejects.toThrow("run a fresh preview");
+    await expect(store.confirm(actionId, "session-a", execute)).rejects.toThrow("missing or expired");
     expect(execute).toHaveBeenCalledOnce();
   });
 
   it("does not allow another session to use an action id", async () => {
     const store = new ForgetPendingStore({ createId: () => "action-1" });
-    const execute = vi.fn(async () => ({ kind: target.kind, name: target.name }));
+    const execute = vi.fn(async () => undefined);
     const actionId = store.prepare("session-a", target);
 
     await expect(store.confirm(actionId, "session-b", execute)).rejects.toThrow("missing or expired");
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps multiple actions from the same session independent", async () => {
+    let id = 0;
+    const store = new ForgetPendingStore({ createId: () => `action-${++id}` });
+    const execute = vi.fn(async (_item: ForgetTarget) => undefined);
+    const first = store.prepare("session-a", target);
+    const secondTarget = { ...target, id: "skill-2", name: "release-check" };
+    const second = store.prepare("session-a", secondTarget);
+
+    await store.confirm(first, "session-a", execute);
+    await store.confirm(second, "session-a", execute);
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenNthCalledWith(1, target);
+    expect(execute).toHaveBeenNthCalledWith(2, secondTarget);
   });
 });
