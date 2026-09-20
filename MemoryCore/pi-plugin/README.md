@@ -119,3 +119,35 @@ offered by this command. Manage those shared prompts from the administrative UI.
   `TDAI_AGENT_SOURCE=codebuddy` to route through the existing, battle-tested
   CodeBuddy profile (injection still works; anchoring is coarser). Useful to
   isolate whether an issue is Pi-specific or a proxy/config problem.
+
+## Forget E2E test
+
+This script drives the real stack: a running Memory Core, a running Proxy, and a
+local Pi source checkout whose extension loader loads this plugin. It creates an
+isolated user, team, agent, and skills, then removes them again. Credentials come
+from the environment and are never printed.
+
+Covered behaviour:
+
+- cancel keeps the skill; a redacted confirmation deletes it; a repeated
+  confirmation returns 200 without a second delete;
+- every candidate carries its own action id, and tampered or cross-session
+  action ids are rejected;
+- auth fails closed; one confirmation deletes only its own target;
+- two concurrent confirmations delete once.
+
+Two environment notes:
+
+- **Restart the Proxy container first.** It mounts `MemoryProxy/src`, but loads
+  it once at process start, so a long-running container keeps executing the code
+  it booted with.
+- **The first Pi start takes roughly 40s** (extension load plus session restore);
+  the script's internal wait is set to 120s accordingly.
+
+```powershell
+$env:PI_SOURCE_ROOT = "<path to a built Pi source checkout>"
+$env:TDAI_ADMIN_KEY_FILE = "<path to the Core admin key>"
+$env:TDAI_CORE_GATEWAY_KEY = "<gateway key from the Core config>"
+& "$env:PI_SOURCE_ROOT\node_modules\.bin\tsx.cmd" `
+  .\MemoryCore\pi-plugin\scripts\forget-e2e.ts
+```
