@@ -35,6 +35,10 @@ data:
 # provider 默认 "openai" 即直连；若要走 context_proxy（统一鉴权/账务/观测），
 # 见 tdai-gateway.proxy.yaml 或 docs/llm-via-proxy.md
 llm:
+  # Enable only for endpoints rejecting array/null message content (e.g. #1313).
+  # Converts text-only content; preserves tool calls and multimodal parts.
+  # Environment override: TDAI_LLM_STRICT_OPENAI_COMPAT=true (default false).
+  # strictOpenAICompat: true
   baseUrl: "https://api.lkeap.cloud.tencent.com/v1"
   apiKey: "${TDAI_LLM_API_KEY}"
   model: "deepseek-v3.2"
