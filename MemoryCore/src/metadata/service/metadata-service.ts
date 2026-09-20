@@ -1185,6 +1185,66 @@ export class MetadataService {
     return formatListResult({ items, total: page.total }, pagination);
   }
 
+  /**
+   * asset/get 的调用者视角读（水平越权修复）：
+   *   - system_admin 豁免（管理面排障通道，与 user/list 的 isSystemAdmin 特判同风格）；
+   *   - owner 恒可读（含 archived，保持原管理视角行为）；
+   *   - 其余调用者走 checkAssetPermission（visibility → ACL）；
+   *   - 无权返回 null（路由层映射 404，不泄露资产存在性）。
+   */
+  async getAssetForCaller(assetId: string, ctx: V3AuthContext): Promise<AssetEntity | null> {
+    const asset = await this.getAssetById(assetId);
+    if (!asset) return null;
+    if (ctx.isSystemAdmin) return asset;
+    if (!ctx.userId) return null;
+    if (asset.owner_user_id === ctx.userId) return asset;
+    const perm = await this.checkAssetPermission({ user_id: ctx.userId, asset_id: assetId, action: "read" });
+    return perm.allowed ? asset : null;
+  }
+
+  /**
+   * asset/list 的调用者视角读（水平越权修复）：
+   *   - system_admin：管理面全量（原 listAssetsByTeam 语义保留）；
+   *   - 团队成员：owner 资产恒可见，其余逐条 checkAssetPermission（与 list-accessible 同源判定）；
+   *   - 非团队成员 / 未解析调用者：空页（不报错，避免泄露 team 信息）。
+   * 权限过滤在分页前完成，保证 total 准确。
+   */
+  async listAssetsForCaller(
+    params: { team_id: string } & AssetFilter & PaginationParams,
+    ctx: V3AuthContext,
+  ): Promise<PaginatedResult<AssetEntity>> {
+    const pagination = this.pag(params);
+    const { team_id, limit: _limit, offset: _offset, ...filter } = params;
+    if (ctx.isSystemAdmin) {
+      return this.listAssetsByTeam(team_id, pagination, filter);
+    }
+    if (!ctx.userId) return paginateArray([], pagination);
+    const member = await this.store.getTeamMember(team_id, ctx.userId);
+    if (!member || member.status !== "active") return paginateArray([], pagination);
+
+    const result: AssetEntity[] = [];
+    let offset = 0;
+    const limit = 100;
+    while (true) {
+      const page = await this.store.listAssetsByTeam(team_id, { limit, offset }, filter);
+      for (const asset of page.items) {
+        if (asset.owner_user_id === ctx.userId) {
+          result.push(asset);
+          continue;
+        }
+        const perm = await this.checkAssetPermission({
+          user_id: ctx.userId,
+          asset_id: asset.asset_id,
+          action: "read",
+        });
+        if (perm.allowed) result.push(asset);
+      }
+      if (offset + page.items.length >= page.total) break;
+      offset += limit;
+    }
+    return paginateArray(result, pagination);
+  }
+
   async touchAssetUsage(assetId: string): Promise<void> {
     if (!(await this.getAssetById(assetId))) throw new MetadataError("asset_not_found", `asset not found: ${assetId}`);
     await this.store.touchAssetUsage(assetId);
