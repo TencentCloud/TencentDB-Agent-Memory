@@ -69,6 +69,31 @@ describe("ForgetService", () => {
     expect(candidates.every((candidate) => candidate.name.includes("[REDACTED]"))).toBe(true);
   });
 
+  it("redacts the full skill description instead of an already truncated search snippet", async () => {
+    const secret = `ghp_${"A".repeat(36)}`;
+    const truncatedSecret = secret.slice(0, 20);
+    const post = vi.fn(async (path: string, body: any) => {
+      const response = responseFor(path, body);
+      if (path === "/v3/skill/search") {
+        return {
+          items: [{
+            ...(response as any).items[0],
+            description: `deploy token ${secret}`,
+            snippet: `deploy token ${truncatedSecret}`,
+          }],
+        };
+      }
+      return response;
+    });
+    const service = new ForgetService({ post } as any);
+
+    const candidates = await service.discover(identity, "deploy");
+    const skill = candidates.find((candidate) => candidate.kind === "skill")!;
+
+    expect(skill.preview).toBe("deploy token [REDACTED]");
+    expect(skill.preview).not.toContain(truncatedSecret);
+  });
+
   it("does not offer a prompt shared with another agent", async () => {
     const post = vi.fn(async (path: string, body: any) => {
       const response = responseFor(path, body);

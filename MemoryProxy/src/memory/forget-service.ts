@@ -16,7 +16,6 @@ interface SkillSearchHit {
   skill_id: string;
   name: string;
   description?: string;
-  snippet?: string;
   version: number;
   owner_agent_id?: string;
   team_id?: string;
@@ -117,7 +116,7 @@ export class ForgetService {
         name: renderForgetPreview(skill.name),
         teamId: identity.teamId,
         agentId: identity.agentId,
-        preview: renderForgetPreview(skill.snippet || skill.description || skill.name),
+        preview: renderForgetPreview(skill.description || skill.name),
         detail: `version ${skill.version}`,
         impact: "Deletes this Skill and all of its versions.",
       }));
