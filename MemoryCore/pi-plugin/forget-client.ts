@@ -1,7 +1,7 @@
 export type ForgetCandidateKind = "memory-prompt" | "skill";
 
 export interface ForgetCandidate {
-  key: string;
+  actionId: string;
   kind: ForgetCandidateKind;
   name: string;
   preview: string;
@@ -14,28 +14,9 @@ export interface ForgetDiscovery {
   candidates: ForgetCandidate[];
 }
 
-export interface ForgetPrepared {
-  state: "pending";
-  actionId: string;
-  candidate: ForgetCandidate;
-}
-
-export type ForgetPreviewResult = ForgetDiscovery | ForgetPrepared;
-
-export interface ForgetConfirmResult {
-  state: "completed";
-  alreadyCompleted: boolean;
-  candidate: Pick<ForgetCandidate, "kind" | "name">;
-}
-
-export interface ForgetCancelResult {
-  state: "cancelled" | "already-completed" | "missing";
-}
-
 export interface ForgetClient {
-  preview(keyword: string, candidateKey?: string): Promise<ForgetPreviewResult>;
-  confirm(actionId: string): Promise<ForgetConfirmResult>;
-  cancel(actionId: string): Promise<ForgetCancelResult>;
+  preview(keyword: string): Promise<ForgetDiscovery>;
+  confirm(actionId: string): Promise<void>;
 }
 
 interface ForgetClientOptions {
@@ -62,19 +43,16 @@ export class ProxyForgetClient implements ForgetClient {
     this.fetcher = options.fetcher ?? fetch;
   }
 
-  preview(keyword: string, candidateKey?: string): Promise<ForgetPreviewResult> {
-    return this.post<ForgetPreviewResult>("preview", {
-      keyword,
-      ...(candidateKey ? { candidate_key: candidateKey } : {}),
-    });
+  preview(keyword: string): Promise<ForgetDiscovery> {
+    return this.post<ForgetDiscovery>("preview", { keyword });
   }
 
-  confirm(actionId: string): Promise<ForgetConfirmResult> {
-    return this.post<ForgetConfirmResult>("confirm", { action_id: actionId });
-  }
-
-  cancel(actionId: string): Promise<ForgetCancelResult> {
-    return this.post<ForgetCancelResult>("cancel", { action_id: actionId });
+  async confirm(actionId: string): Promise<void> {
+    try {
+      await this.post("confirm", { action_id: actionId });
+    } catch {
+      throw new Error("memory deletion could not be confirmed; run a fresh preview");
+    }
   }
 
   private async post<T>(path: string, body: Record<string, string>): Promise<T> {

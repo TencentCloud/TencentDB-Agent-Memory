@@ -6,7 +6,6 @@ import { createPiMemoryForgetHandlers } from "../pi-memory-forget.js";
 
 const identity = { userId: "user-a", teamId: "team-a", agentId: "agent-a", serviceId: "space-a" };
 const target: ForgetTarget = {
-  key: "candidate-a",
   kind: "skill",
   id: "skill-a",
   name: "deploy-check",
@@ -20,7 +19,7 @@ const target: ForgetTarget = {
 function setup() {
   const service = {
     discover: vi.fn(async () => [target]),
-    execute: vi.fn(async () => ({ kind: target.kind, name: target.name })),
+    execute: vi.fn(async () => undefined),
   };
   const handlers = createPiMemoryForgetHandlers({} as any, {
     service,
@@ -30,7 +29,6 @@ function setup() {
   const app = new Hono();
   app.post("/preview", handlers.preview);
   app.post("/confirm", handlers.confirm);
-  app.post("/cancel", handlers.cancel);
   return { app, service };
 }
 
@@ -45,81 +43,36 @@ async function post(app: Hono, path: string, body: unknown) {
 afterEach(() => __resetSessionStoreForTests());
 
 describe("Pi memory forget routes", () => {
-  it("does not delete during discovery or selection preparation", async () => {
+  it("prepares selectable actions without deleting during discovery", async () => {
     const { app, service } = setup();
     const discovery = await post(app, "/preview", { keyword: "deploy" });
     expect(discovery.status).toBe(200);
     expect(await discovery.json()).toMatchObject({
       code: 0,
-      data: { state: "select", candidates: [{ key: "candidate-a", preview: "token [REDACTED]" }] },
+      data: { state: "select", candidates: [{ actionId: "action-a", preview: "token [REDACTED]" }] },
     });
-    const prepared = await post(app, "/preview", { keyword: "deploy", candidate_key: "candidate-a" });
-    expect(prepared.status).toBe(200);
-    expect(await prepared.json()).toMatchObject({ code: 0, data: { state: "pending", actionId: "action-a" } });
     expect(service.execute).not.toHaveBeenCalled();
   });
 
-  it("redacts candidate names in preview and confirmation responses", async () => {
-    const secret = `ghp_${"A".repeat(36)}`;
-    const unsafeTarget = { ...target, name: `deploy ${secret}` };
-    const service = {
-      discover: vi.fn(async () => [unsafeTarget]),
-      execute: vi.fn(async () => ({ kind: unsafeTarget.kind, name: unsafeTarget.name })),
-    };
-    const handlers = createPiMemoryForgetHandlers({} as any, {
-      service,
-      pending: new ForgetPendingStore({ createId: () => "action-a" }),
-      resolveSession: () => ({ sessionKey: "pi:session-a", identity }),
-    });
-    const app = new Hono();
-    app.post("/preview", handlers.preview);
-    app.post("/confirm", handlers.confirm);
-
-    const discovery = await post(app, "/preview", { keyword: "deploy" });
-    const discoveryJson = await discovery.json() as any;
-    expect(discoveryJson.data.candidates[0].name).toBe("deploy [REDACTED]");
-
-    await post(app, "/preview", { keyword: "deploy", candidate_key: unsafeTarget.key });
-    const confirmation = await post(app, "/confirm", { action_id: "action-a" });
-    const confirmationJson = await confirmation.json() as any;
-    expect(confirmationJson.data.candidate.name).toBe("deploy [REDACTED]");
-    expect(JSON.stringify(confirmationJson)).not.toContain(secret);
-  });
-
-  it("rejects candidate substitution", async () => {
+  it("rejects an unknown action id", async () => {
     const { app, service } = setup();
     await post(app, "/preview", { keyword: "deploy" });
 
-    const response = await post(app, "/preview", { keyword: "deploy", candidate_key: "attacker-choice" });
+    const response = await post(app, "/confirm", { action_id: "attacker-choice" });
 
     expect(response.status).toBe(404);
-    expect(service.execute).not.toHaveBeenCalled();
-  });
-
-  it("cancel leaves the target untouched", async () => {
-    const { app, service } = setup();
-    await post(app, "/preview", { keyword: "deploy" });
-    await post(app, "/preview", { keyword: "deploy", candidate_key: "candidate-a" });
-
-    const cancel = await post(app, "/cancel", { action_id: "action-a" });
-    const confirm = await post(app, "/confirm", { action_id: "action-a" });
-
-    expect(cancel.status).toBe(200);
-    expect(confirm.status).toBe(409);
     expect(service.execute).not.toHaveBeenCalled();
   });
 
   it("double confirm executes one delete and replays the result", async () => {
     const { app, service } = setup();
     await post(app, "/preview", { keyword: "deploy" });
-    await post(app, "/preview", { keyword: "deploy", candidate_key: "candidate-a" });
 
     const first = await post(app, "/confirm", { action_id: "action-a" });
     const second = await post(app, "/confirm", { action_id: "action-a" });
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
-    expect(await second.json()).toMatchObject({ code: 0, data: { alreadyCompleted: true } });
     expect(service.execute).toHaveBeenCalledOnce();
     expect(service.execute).toHaveBeenCalledWith(identity, target);
   });
@@ -143,7 +96,7 @@ describe("Pi memory forget route identity", () => {
     });
     const service = {
       discover: vi.fn(async () => []),
-      execute: vi.fn(async () => ({ kind: target.kind, name: target.name })),
+      execute: vi.fn(async () => undefined),
     };
     const handlers = createPiMemoryForgetHandlers({ coreSkill: { serviceId: "fallback" } } as any, { service });
     const app = new Hono();

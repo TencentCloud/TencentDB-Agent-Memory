@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto";
 import type { CoreSkillClient } from "../skill/core-client.js";
 import { renderForgetPreview } from "./forget-redaction.js";
-import type { ForgetExecutionResult, ForgetTarget } from "./forget-pending-store.js";
+import type { ForgetTarget } from "./forget-pending-store.js";
 
 export interface ForgetIdentity {
   userId: string;
@@ -49,10 +48,7 @@ const PROMPT_LAYERS = ["l1", "l2", "l3"] as const;
 const SETTINGS_PAGE_SIZE = 100;
 
 export class ForgetService {
-  constructor(
-    private readonly core: CoreClient,
-    private readonly createKey: () => string = randomUUID,
-  ) {}
+  constructor(private readonly core: CoreClient) {}
 
   async discover(identity: ForgetIdentity, keyword: string): Promise<ForgetTarget[]> {
     const [skills, prompts] = await Promise.all([
@@ -62,7 +58,7 @@ export class ForgetService {
     return [...skills, ...prompts];
   }
 
-  async execute(identity: ForgetIdentity, target: ForgetTarget): Promise<ForgetExecutionResult> {
+  async execute(identity: ForgetIdentity, target: ForgetTarget): Promise<void> {
     if (target.teamId !== identity.teamId || target.agentId !== identity.agentId) {
       throw new Error("forget target no longer belongs to this session");
     }
@@ -89,8 +85,6 @@ export class ForgetService {
         { serviceId: identity.serviceId },
       );
     }
-
-    return { kind: target.kind, name: target.name };
   }
 
   private async discoverSkills(identity: ForgetIdentity, keyword: string): Promise<ForgetTarget[]> {
@@ -110,7 +104,6 @@ export class ForgetService {
       .filter((skill) => !skill.owner_agent_id || skill.owner_agent_id === identity.agentId)
       .filter((skill) => !skill.team_id || skill.team_id === identity.teamId)
       .map((skill) => ({
-        key: this.createKey(),
         kind: "skill" as const,
         id: skill.skill_id,
         name: renderForgetPreview(skill.name),
@@ -150,7 +143,6 @@ export class ForgetService {
       if (!`${record.name}\n${record.prompt}`.toLowerCase().includes(normalizedKeyword)) continue;
 
       candidates.push({
-        key: this.createKey(),
         kind: "memory-prompt",
         id: record.memory_prompt_id,
         name: renderForgetPreview(record.name),

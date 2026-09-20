@@ -26,13 +26,6 @@ interface ForgetRouteDeps {
   now?: () => number;
 }
 
-interface DiscoveryEntry {
-  candidates: Awaited<ReturnType<ForgetRouteService["discover"]>>;
-  expiresAt: number;
-}
-
-const DISCOVERY_TTL_MS = 5 * 60 * 1000;
-
 function constantTimeEqual(left: string, right: string): boolean {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
@@ -67,9 +60,12 @@ function defaultSessionResolver(config: ProxyConfig): (c: Context) => ResolvedFo
   };
 }
 
-function publicCandidate(candidate: Awaited<ReturnType<ForgetRouteService["discover"]>>[number]) {
+function publicCandidate(
+  candidate: Awaited<ReturnType<ForgetRouteService["discover"]>>[number],
+  actionId: string,
+) {
   return {
-    key: candidate.key,
+    actionId,
     kind: candidate.kind,
     name: renderForgetPreview(candidate.name),
     preview: candidate.preview,
@@ -91,17 +87,6 @@ export function createPiMemoryForgetHandlers(config: ProxyConfig, deps: ForgetRo
   const service = deps.service ?? new ForgetService(getCoreSkillClient(config.coreSkill));
   const pending = deps.pending ?? new ForgetPendingStore({ now });
   const resolveSession = deps.resolveSession ?? defaultSessionResolver(config);
-  const discoveries = new Map<string, DiscoveryEntry>();
-
-  const getDiscovery = (sessionKey: string): DiscoveryEntry | null => {
-    const entry = discoveries.get(sessionKey);
-    if (!entry) return null;
-    if (now() >= entry.expiresAt) {
-      discoveries.delete(sessionKey);
-      return null;
-    }
-    return entry;
-  };
 
   return {
     preview: async (c: Context) => {
@@ -115,26 +100,17 @@ export function createPiMemoryForgetHandlers(config: ProxyConfig, deps: ForgetRo
         return fail(c, 400, "JSON body required");
       }
       const keyword = typeof body.keyword === "string" ? body.keyword.trim() : "";
-      const candidateKey = typeof body.candidate_key === "string" ? body.candidate_key : "";
       if (!keyword || keyword.length > 256) return fail(c, 400, "keyword must be 1-256 characters");
 
       try {
-        if (!candidateKey) {
-          for (const [key, entry] of discoveries) {
-            if (now() >= entry.expiresAt) discoveries.delete(key);
-          }
-          const candidates = await service.discover(session.identity, keyword);
-          discoveries.set(session.sessionKey, { candidates, expiresAt: now() + DISCOVERY_TTL_MS });
-          return ok(c, { state: "select", candidates: candidates.map(publicCandidate) });
-        }
-
-        const discovery = getDiscovery(session.sessionKey);
-        const selected = discovery?.candidates.find((candidate) => candidate.key === candidateKey);
-        if (!selected) return fail(c, 404, "candidate is missing, expired, or not part of this preview");
-
-        discoveries.delete(session.sessionKey);
-        const actionId = pending.prepare(session.sessionKey, selected);
-        return ok(c, { state: "pending", actionId, candidate: publicCandidate(selected) });
+        const candidates = await service.discover(session.identity, keyword);
+        return ok(c, {
+          state: "select",
+          candidates: candidates.map((candidate) => {
+            const actionId = pending.prepare(session.sessionKey, candidate);
+            return publicCandidate(candidate, actionId);
+          }),
+        });
       } catch {
         return fail(c, 503, "memory forget preview is temporarily unavailable");
       }
@@ -153,35 +129,14 @@ export function createPiMemoryForgetHandlers(config: ProxyConfig, deps: ForgetRo
       if (!actionId) return fail(c, 400, "action_id is required");
 
       try {
-        const outcome = await pending.confirm(actionId, session.sessionKey, (target) =>
+        await pending.confirm(actionId, session.sessionKey, (target) =>
           service.execute(session.identity, target));
-        return ok(c, {
-          state: "completed",
-          alreadyCompleted: outcome.alreadyCompleted,
-          candidate: {
-            ...outcome.result,
-            name: renderForgetPreview(outcome.result.name),
-          },
-        });
+        return ok(c, {});
       } catch (error) {
         const message = error instanceof Error ? error.message : "memory deletion failed";
-        const status = message.includes("missing or expired") ? 404 : message.includes("cancelled") ? 409 : 503;
+        const status = message.includes("missing or expired") ? 404 : 503;
         return fail(c, status, message);
       }
-    },
-
-    cancel: async (c: Context) => {
-      const session = resolveSession(c);
-      if (!session) return fail(c, 401, "initialized Pi session and matching user key required");
-      let body: Record<string, unknown>;
-      try {
-        body = await c.req.json<Record<string, unknown>>();
-      } catch {
-        return fail(c, 400, "JSON body required");
-      }
-      const actionId = typeof body.action_id === "string" ? body.action_id : "";
-      if (!actionId) return fail(c, 400, "action_id is required");
-      return ok(c, { state: pending.cancel(actionId, session.sessionKey) });
     },
   };
 }

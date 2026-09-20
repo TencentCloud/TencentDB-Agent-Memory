@@ -154,7 +154,6 @@ export function createApp(config: ProxyConfig): Hono {
   const piMemoryForget = createPiMemoryForgetHandlers(config);
   app.post("/v3/pi/memory-forget/preview", piMemoryForget.preview);
   app.post("/v3/pi/memory-forget/confirm", piMemoryForget.confirm);
-  app.post("/v3/pi/memory-forget/cancel", piMemoryForget.cancel);
 
   // ── Session management endpoints (mem: command 底层接口, 面板前端可复用) ──
   app.post("/v3/session/refresh-cache", (c) => {

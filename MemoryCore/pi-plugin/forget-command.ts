@@ -3,7 +3,6 @@ import {
   ProxyForgetClient,
   type ForgetCandidate,
   type ForgetClient,
-  type ForgetPrepared,
 } from "./forget-client.js";
 
 interface ForgetCommandOptions {
@@ -55,15 +54,6 @@ async function chooseCandidate(
   return candidates[labels.indexOf(selected)];
 }
 
-function assertPrepared(value: unknown): ForgetPrepared {
-  if (!value || typeof value !== "object") throw new Error("memory forget response was malformed");
-  const result = value as Partial<ForgetPrepared>;
-  if (result.state !== "pending" || !result.actionId || !result.candidate) {
-    throw new Error("memory forget action could not be prepared");
-  }
-  return result as ForgetPrepared;
-}
-
 export function registerMemoryForgetCommand(pi: ExtensionAPI, options: ForgetCommandOptions): void {
   pi.registerCommand("tdai-memory-forget", {
     description: "Preview and selectively delete a TencentDB Memory Prompt or Skill",
@@ -104,21 +94,18 @@ export function registerMemoryForgetCommand(pi: ExtensionAPI, options: ForgetCom
           return;
         }
 
-        const prepared = assertPrepared(await client.preview(keyword, selected.key));
         const confirmed = await ctx.ui.confirm(
-          `Delete ${prepared.candidate.name}?`,
-          confirmationMessage(prepared.candidate),
+          `Delete ${selected.name}?`,
+          confirmationMessage(selected),
         );
         if (!confirmed) {
-          await client.cancel(prepared.actionId);
           ctx.ui.notify("Memory deletion cancelled. Nothing was changed.", "info");
           return;
         }
 
         ctx.ui.setStatus("tdai-memory", "deleting selected item");
-        const result = await client.confirm(prepared.actionId);
-        const prefix = result.alreadyCompleted ? "Already deleted" : "Deleted";
-        ctx.ui.notify(`${prefix} ${candidateLabel({ ...prepared.candidate, ...result.candidate })}.`, "info");
+        await client.confirm(selected.actionId);
+        ctx.ui.notify(`Deleted ${candidateLabel(selected)}.`, "info");
       } catch (error) {
         ctx.ui.notify(
           `Memory deletion failed: ${error instanceof Error ? error.message : String(error)}`,
