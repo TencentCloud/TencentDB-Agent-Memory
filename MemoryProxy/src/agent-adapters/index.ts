@@ -21,7 +21,8 @@ import { opencodeAdapter } from "./opencode.js";
 import { piAdapter } from "./pi.js";
 import { defaultAdapter } from "./default.js";
 
-export type { AgentAdapter, AgentKind, RequestKind } from "./types.js";
+export type { AgentAdapter, AgentKind, KnownAgentKind, RequestKind } from "./types.js";
+export { KNOWN_AGENT_KINDS } from "./types.js";
 
 export function resolveAgentAdapter(agentSource: string): AgentAdapter {
   switch (agentSource) {

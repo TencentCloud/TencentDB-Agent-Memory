@@ -20,7 +20,31 @@
  * 只是**取用户输入的规则**和**分类规则**按 agent 适配。
  */
 
-export type AgentKind = "claude-code" | "codebuddy" | "codex" | "workbuddy" | "dsh" | "opencode" | "pi" | "unknown";
+/**
+ * Runtime list of concrete agent kinds (excludes the `"unknown"` fallback).
+ *
+ * Single source of truth: both the `AgentKind` type and the session-key prefix
+ * probes in the bridges (`memory-bridge` / `skill-bridge`) derive from this, so
+ * adding a new client only touches one place. Keep `resolveAgentAdapter` in
+ * `index.ts` in sync (it maps each kind to its adapter).
+ */
+export const KNOWN_AGENT_KINDS = [
+  // Order matters: the bridges probe these as `${kind}:${sessionId}` and the
+  // first hit wins. `codebuddy` / `claude-code` were the original hard-coded
+  // probes and must stay first, in their original relative order, so existing
+  // sessions keep resolving to the same key. New kinds are appended.
+  "codebuddy",
+  "claude-code",
+  "codex",
+  "workbuddy",
+  "dsh",
+  "opencode",
+  "pi",
+] as const;
+
+export type KnownAgentKind = (typeof KNOWN_AGENT_KINDS)[number];
+
+export type AgentKind = KnownAgentKind | "unknown";
 
 export type RequestKind = "main" | "fork" | "sidequery" | "auxiliary";
 
