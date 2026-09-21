@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/server_team]
 
 # Cancel previous runs for the same PR / branch
 concurrency:
@@ -25,16 +25,91 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Use npm 11.6.0
+        run: npm install --global npm@11.6.0
+
       - name: Cache node_modules
         uses: actions/cache@v4
         id: cache-deps
         with:
           path: MemoryCore/node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+          key: deps-${{ runner.os }}-npm11.6.0-${{ hashFiles('MemoryCore/package.json') }}
 
       - name: npm install
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: npm install --ignore-scripts
+
+  feedback:
+    name: Feedback and Candidate Observer
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Use npm 11.6.0
+        run: npm install --global npm@11.6.0
+
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        with:
+          path: MemoryCore/node_modules
+          key: deps-${{ runner.os }}-npm11.6.0-${{ hashFiles('MemoryCore/package.json') }}
+
+      - name: SQLite feedback tests
+        run: npm run test:feedback
+
+      - name: SQLite feedback typecheck
+        run: npm run typecheck:feedback
+
+      - name: Candidate observer unit and extractor integration tests
+        run: npm run test:candidate-observer
+
+      - name: Candidate observer typecheck
+        run: npm run typecheck:candidate-observer
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install local Python SDK
+        working-directory: sdk/memory-core/python
+        run: python -m pip install .
+
+      - name: Real SQLite connection and optimizer fixtures (no provider)
+        working-directory: examples/feedback-selfopt
+        run: python -B -m unittest -v test_example test_optimize
+
+  feedback-python:
+    name: Feedback Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    defaults:
+      run:
+        working-directory: sdk/memory-core/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and install SDK wheel
+        run: |
+          python -m pip install build mypy
+          python -m build --wheel
+          python -m pip install dist/*.whl
+      - name: Public API and adoption boundaries
+        run: python -B -m unittest discover -s tests -p 'test_feedback*.py' -v
+      - name: Installed wheel, default off and explicit scripted lifecycle
+        working-directory: sdk/memory-core/python/examples
+        run: |
+          python -B feedback_optimizer.py
+          python -B feedback_optimizer.py --fixture
+          python -m mypy --strict --follow-imports=silent feedback_types.py
 
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
@@ -48,11 +123,14 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Use npm 11.6.0
+        run: npm install --global npm@11.6.0
+
       - name: Restore node_modules
         uses: actions/cache@v4
         with:
           path: MemoryCore/node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+          key: deps-${{ runner.os }}-npm11.6.0-${{ hashFiles('MemoryCore/package.json') }}
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
