@@ -53,13 +53,14 @@ export function stripScenarioMeta(content: string): string {
 // 由列表接口的 layer_counts 构造初始 layerCounts：只保留 >0 的真实计数，
 // 其余留 undefined＝「未知」。徽章据此显示占位，避免把「未加载」误显示成「0」，
 // 也不再为拿计数而预请求。后端 layer_counts 落地真实值后此处会自动直接采用。
-export function buildInitialLayerCounts(lc: {
+export function buildInitialLayerCounts(lc?: {
   L0_messages: number;
   L1: number;
   L2: number;
   L3: number;
 }): MemoryBlock['layerCounts'] {
   const out: MemoryBlock['layerCounts'] = {};
+  if (!lc) return out;
   if (lc.L0_messages > 0) out.L0 = lc.L0_messages;
   if (lc.L1 > 0) out.L1 = lc.L1;
   if (lc.L2 > 0) out.L2 = lc.L2;
