@@ -77,12 +77,17 @@ WORKDIR /app
 # 非 root 运行（安全基线）
 RUN groupadd -r app && useradd -r -g app -u 10001 -m app
 
-# 从 builder 拷贝整个 /app（含 node_modules 里指向 packages/cost-guard 的 file: 软链）
-COPY --from=deps-builder /app /app
+# 从 builder 拷贝整个 /app（含 node_modules 里指向 packages/cost-guard 的 file: 软链）。
+# 用 COPY --chown 在解包时一次定好所有权，替代原来的「先 COPY 再 chown -R /app」：
+# 后者会在 overlayfs 上对 node_modules 里每个文件触发 copy-up，实测让 runtime 阶段
+# 多花 ~510s（构建日志 `chown -R app:app /app /data` DONE 513.4s）。
+COPY --chown=app:app --from=deps-builder /app /app
 
-# 数据 / 日志目录（可作为 K8s PVC 挂载）
+# 数据 / 日志目录（可作为 K8s PVC 挂载）。/app 自身由 WORKDIR 创建、归 root，这里
+# 补一次非递归 chown 保持与原来 `chown -R app:app /app` 等价；只对新建的空目录递归。
 RUN mkdir -p /data/tdai-memory-proxy /data/config /app/logs && \
-    chown -R app:app /app /data
+    chown app:app /app && \
+    chown -R app:app /data /app/logs
 
 USER app
 
