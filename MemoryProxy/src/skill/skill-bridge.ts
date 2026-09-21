@@ -20,6 +20,7 @@
 import type { Context } from "hono";
 import type { Redis } from "ioredis";
 import { getSessionStore } from "../session/store.js";
+import { AGENT_SOURCE_PREFIXES } from "../routes/whitelist.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { RedisBindingRepo } from "../db/binding-repo.js";
@@ -284,25 +285,38 @@ function bindingToIdFields(
 
 /**
  * L1: 先按 bare sessionId 试(handler.ts 存的 keyId 是 `${agentSource}:${sessionId}`,
- * bridge curl 拿不到 agentSource,所以按候选前缀顺序探)。
+ * bridge curl 拿不到 agentSource,所以按候选前缀顺序探;前缀清单来自
+ * AGENT_SOURCE_PREFIXES,单一事实来源 en whitelist.ts)。
  *
  * ⚠️ 候选轮询是过渡期兼容:同 pod 内主对话链路建过 session, L1 Map 里的 key 带
  * agentSource 前缀,bare sessionId 命中不到。方案 B 拍平后 L2b binding 直接命中
  * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
  * 恢复而不 401。
  */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+function loadSessionIdsL1(
+  sessionId: string,
+): SessionIdFields | null | "ambiguous" {
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [sessionId, ...AGENT_SOURCE_PREFIXES.map((p) => `${p}:${sessionId}`)];
+  let first: SessionIdFields | null = null;
   for (const k of candidates) {
     const s = getSessionStore().get(k);
-    if (s) {
-      const fields = stateToIdFields(s, k);
-      if (fields) return fields;
+    if (!s) continue;
+    const fields = stateToIdFields(s, k);
+    if (!fields) continue;
+    if (!first) {
+      first = fields;
+      continue;
     }
+    const distinct =
+      first.user_id !== fields.user_id ||
+      first.team_id !== fields.team_id ||
+      first.agent_id !== fields.agent_id ||
+      first.space_id !== fields.space_id;
+    if (distinct) return "ambiguous";
   }
-  return null;
+  return first;
 }
 
 /**
@@ -513,6 +527,14 @@ export function createSkillBridgeHandler(
     const bindingRepoInline = backing.bindingRepo;
 
     let ids = loadSessionIdsL1(sessionKey);
+    if (ids === "ambiguous") {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "skill-bridge",
+        rejectReason: "ambiguous_session_id", httpStatus: 409,
+        executedEndpoint: sub, spaceId,
+      });
+      return envelope(40901, `${TAG} bare session id matches multiple agent sources; pass composite x-conversation-id (agentSource:sessionId)`, 409);
+    }
     if (!ids && bindingRepoInline && spaceId) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
       ids = await loadSessionIdsL2(bindingRepoInline, spaceId, sessionKey);
