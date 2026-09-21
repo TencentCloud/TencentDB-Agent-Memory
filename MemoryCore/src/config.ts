@@ -180,7 +180,15 @@ export interface TcvdbConfig {
 }
 
 /** Storage backend type. */
-export type StoreBackend = "sqlite" | "tcvdb" | "mongodb";
+export type StoreBackend = "sqlite" | "tcvdb" | "mongodb" | "postgres";
+
+/** PostgreSQL backend configuration (required when storeBackend = "postgres"). */
+export interface PostgresConfig {
+  /** Connection string, e.g. "postgres://user:pass@host:5432/tdai_memory". */
+  connectionString: string;
+  /** Optional schema override (defaults to the connection's search_path). */
+  schema?: string;
+}
 
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
@@ -338,6 +346,8 @@ export interface MemoryTdaiConfig {
   embedding: EmbeddingConfig;
   /** Storage backend: "sqlite" (default) or "tcvdb" */
   storeBackend: StoreBackend;
+  /** PostgreSQL configuration (required when storeBackend = "postgres") */
+  postgres: PostgresConfig;
   /** Tencent Cloud VectorDB configuration (required when storeBackend = "tcvdb") */
   tcvdb: TcvdbConfig;
   /** BM25 sparse vector encoding (local @tencentdb-agent-memory/tcvdb-text) */
@@ -499,10 +509,12 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   const storeBackend: StoreBackend =
     storeBackendRaw === "tcvdb" ? "tcvdb"
     : storeBackendRaw === "mongodb" ? "mongodb"
+    : storeBackendRaw === "postgres" ? "postgres"
     : "sqlite";
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
+  const postgresGroup = obj(c, "postgres");
 
   const memoryCleanup: MemoryCleanupConfig = {
     retentionDays,
@@ -628,6 +640,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       embeddingModel: str(tcvdbGroup, "embeddingModel") ?? "bge-large-zh",
       timeout: num(tcvdbGroup, "timeout") ?? 10000,
       caPemPath: str(tcvdbGroup, "caPemPath") || undefined,
+    },
+    postgres: {
+      connectionString: str(postgresGroup, "connectionString") ?? "",
+      schema: str(postgresGroup, "schema") || undefined,
     },
     bm25: {
       enabled: bool(bm25Group, "enabled") ?? true,
