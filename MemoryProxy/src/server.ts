@@ -15,6 +15,9 @@ import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
+import { protocolStatsToPrometheus } from "./common/protocol-stats.js";
+import { probeStatsToPrometheus } from "./upstream/probe-stats.js";
+import { checkAdminAuth, adminAuthError } from "./routes/admin-auth.js";
 import type { ProxyConfig } from "./types.js";
 
 export function createApp(config: ProxyConfig): Hono {
@@ -102,6 +105,16 @@ export function createApp(config: ProxyConfig): Hono {
       },
     };
     return c.json(body, degraded ? 503 : 200);
+  });
+
+  // Prometheus 文本格式的协议转换性能指标（延迟分位数 + 上游缓存命中率）。
+  // 鉴权与 proxy-destroy 等 admin 端点一致：config.admin.apiKey 非空时要求 Bearer，
+  // 为空则公开（建议仅内网暴露）。
+  app.get("/metrics", (c) => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
+    // 协议转换指标 + 上游能力探测指标（探测轮次 / 缓存命中 / 能力变更）。
+    return c.text(`${protocolStatsToPrometheus()}${probeStatsToPrometheus()}\n`, 200);
   });
 
   // Whoami: resolve API key → key ID (plain text, easy to use with curl)
