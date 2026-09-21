@@ -236,6 +236,8 @@ export class VectorStore implements IMemoryStore {
    * become safe no-ops so the plugin never blocks the main OpenClaw flow.
    */
   private degraded = false;
+  /** Set only for init failures; safe to expose through the health endpoint. */
+  private degradedReason?: string;
 
   /** Tracks whether close() has been called to prevent double-close errors. */
   private closed = false;
@@ -353,6 +355,10 @@ export class VectorStore implements IMemoryStore {
     return this.degraded;
   }
 
+  getDegradedReason(): string | undefined {
+    return this.degradedReason;
+  }
+
 
   /**
    * Load sqlite-vec extension and initialize database schema.
@@ -381,7 +387,8 @@ export class VectorStore implements IMemoryStore {
           `VectorStore entering degraded mode — all operations will be no-ops.`,
         );
         this.degraded = true;
-        return { needsReindex: false, reason: `sqlite-vec load failed: ${message}` };
+        this.degradedReason = `sqlite-vec load failed: ${message}`;
+        return { needsReindex: false, reason: this.degradedReason };
       }
     }
 
@@ -397,7 +404,8 @@ export class VectorStore implements IMemoryStore {
         `VectorStore entering degraded mode.`,
       );
       this.degraded = true;
-      return { needsReindex: false, reason: `schema init failed: ${message}` };
+      this.degradedReason = `schema init failed: ${message}`;
+      return { needsReindex: false, reason: this.degradedReason };
     }
   }
 
