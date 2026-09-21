@@ -58,11 +58,11 @@ export function graphMultiHopSearch(
   }
 
   if (maxHop > 0) {
-    let frontier: GraphSearchHit[] = [...best.values()];
+    let frontier = new Map(best);
     let capped = best.size >= maxNodes;
-    for (let h = 1; h <= maxHop && frontier.length > 0 && !capped; h++) {
-      const nextFrontier: GraphSearchHit[] = [];
-      outer: for (const cur of frontier) {
+    for (let h = 1; h <= maxHop && frontier.size > 0 && !capped; h++) {
+      const nextFrontier = new Map<string, GraphSearchHit>();
+      outer: for (const cur of frontier.values()) {
         const viaLabel = (graph.getNodeAttribute(cur.id, "label") as string | undefined) ?? cur.id;
         for (const nb of graph.neighbors(cur.id)) {
           // Seeds are frozen at hop=0 with BM25 score (PRD AC-1).
@@ -73,8 +73,11 @@ export function graphMultiHopSearch(
           if (existing && existing.score >= nbScore) continue;
           const hit: GraphSearchHit = { id: nb, score: nbScore, hop: existing?.hop ?? h, via: viaLabel };
           best.set(nb, hit);
-          // Only push to frontier if first time visited; later upgrades reuse the same hop layer.
-          if (!existing) nextFrontier.push(hit);
+          // Propagate every score improvement, retaining only the strongest
+          // arrival per node in this layer. Keep the current frontier unchanged:
+          // a better, longer path must spend another hop before propagating,
+          // even though the result's hop still records the shortest arrival.
+          nextFrontier.set(nb, hit);
           if (best.size >= maxNodes) { capped = true; break outer; }
         }
       }
