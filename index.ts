@@ -258,6 +258,7 @@ export default function register(api: OpenClawPluginApi) {
         ensurePluginHookPolicy({
           rootConfig: api.config,
           runtimeConfig: (api.runtime as any)?.config,
+          hostVersion: rawVersion,
           logger: api.logger,
         });
       } catch (err) {

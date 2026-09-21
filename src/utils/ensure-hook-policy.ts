@@ -14,6 +14,27 @@ import JSON5 from "json5";
 const PLUGIN_ID = "memory-tencentdb";
 
 /**
+ * Hook auto-patch scheduling (openclaw 9.5 gateway-ized install compat).
+ *
+ * openclaw 9.5 executes `plugins install` inside the gateway process, so the
+ * plugin's register runs while install is still about to write `enabled` to the
+ * config. Patching hooks there is unsafe for two reasons:
+ *   1. Synchronous write races install's own config write (optimistic locking
+ *      on the config hash) → "config changed since last load".
+ *   2. `mutateConfigFile` is bound to the plugin's temporary runtime (a
+ *      `runWithPluginScope` guard), which install's kind-inspection releases
+ *      right after register. Any deferred call then throws
+ *      "Plugin runtime is no longer active".
+ *
+ * For 9.5+ hosts we therefore defer the patch and write the file directly via
+ * `manualPatch` (which only uses `fs`, never the runtime-bound SDK). Older hosts
+ * (8.2/9.4) never had the gateway-ized install race, so they keep the original
+ * immediate + restart behavior for zero behavior change.
+ */
+const GATEWAYIZED_INSTALL_MIN: [number, number, number] = [2026, 9, 5];
+const MANUAL_PATCH_DELAY_MS = 60000;
+
+/**
  * Minimum host version at which `hooks.allowConversationAccess` is both
  * recognised by the schema and enforced. See header comment.
  */
@@ -117,6 +138,19 @@ export function shouldApplyHookPolicy(rawVersion: unknown): boolean {
   return decideHookPolicy(rawVersion).apply;
 }
 
+/**
+ * Whether the host runs openclaw's gateway-ized plugin install (>= 2026.9.5).
+ *
+ * Only these hosts execute `plugins install` inside the gateway process, which
+ * is what makes the register-time hook patch unsafe (config-write race +
+ * `afterWrite: restart` self-kill). Older hosts keep the original synchronous
+ * patch path.
+ */
+export function isGatewayizedInstall(rawVersion: unknown): boolean {
+  const parsedXYZ = parseVersionXYZ(rawVersion);
+  return parsedXYZ !== null && compareVersionXYZ(parsedXYZ, GATEWAYIZED_INSTALL_MIN) >= 0;
+}
+
 interface Logger {
   info: (msg: string) => void;
   warn: (msg: string) => void;
@@ -165,6 +199,63 @@ function hasPolicyAlready(root: unknown): boolean {
 }
 
 /**
+ * Schedule the manual file patch with a long delay (9.5+ gateway-ized install).
+ *
+ * Uses `manualPatch` (direct fs read/write, not the runtime-bound SDK) so the
+ * deferred call works even after install's kind-inspection releases the plugin
+ * runtime. The delay gives install time to finish writing `enabled` first.
+ */
+function scheduleManualPatch(params: {
+  logger: Logger;
+}): void {
+  const { logger } = params;
+  const TAG = "[memory-tdai] [hook-policy]";
+
+  logger.info(
+    `${TAG} Missing allowConversationAccess, scheduling manual patch (delay=${MANUAL_PATCH_DELAY_MS}ms)`,
+  );
+  setTimeout(() => {
+    manualPatch(logger);
+  }, MANUAL_PATCH_DELAY_MS);
+}
+
+/**
+ * Original synchronous patch path for hosts without gateway-ized install.
+ *
+ * Writes hooks immediately and requests a gateway restart so the change takes
+ * effect right away. This is safe on 8.2/9.4 because their `plugins install`
+ * runs in the CLI process (`isGatewayStart()` is false there), so this path only
+ * ever runs during a real gateway startup.
+ */
+function patchImmediatelyWithRestart(params: {
+  runtimeConfig?: { mutateConfigFile?: (p: any) => Promise<any> };
+  logger: Logger;
+}): void {
+  const { logger } = params;
+  const TAG = "[memory-tdai] [hook-policy]";
+  const mutateConfigFile = params.runtimeConfig?.mutateConfigFile;
+
+  logger.info(`${TAG} Missing allowConversationAccess, patching via SDK...`);
+  mutateConfigFile?.({
+    afterWrite: { mode: "restart", reason: "memory-tencentdb hook policy auto-patch" },
+    mutate: (draft: any) => {
+      if (!draft.plugins) draft.plugins = {};
+      if (!draft.plugins.entries) draft.plugins.entries = {};
+      if (!draft.plugins.entries[PLUGIN_ID]) draft.plugins.entries[PLUGIN_ID] = {};
+      if (!draft.plugins.entries[PLUGIN_ID].hooks) draft.plugins.entries[PLUGIN_ID].hooks = {};
+      draft.plugins.entries[PLUGIN_ID].hooks.allowConversationAccess = true;
+    },
+  }).then(() => {
+    logger.info(`${TAG} ✅ Patched via SDK — gateway will restart automatically.`);
+  }).catch((err: unknown) => {
+    logger.warn(
+      `${TAG} SDK mutateConfigFile failed: ${err instanceof Error ? err.message : String(err)}, trying manual fallback...`,
+    );
+    manualPatch(logger);
+  });
+}
+
+/**
  * Call early in register(). Patches config if missing, triggers restart.
  *
  * Strategy:
@@ -177,36 +268,32 @@ export function ensurePluginHookPolicy(params: {
   runtimeConfig?: {
     mutateConfigFile?: (p: any) => Promise<any>;
   };
+  hostVersion?: unknown;
   logger: Logger;
 }): void {
   const { logger } = params;
-  const TAG = "[memory-tdai] [hook-policy]";
 
   if (!isGatewayStart()) return;
   if (hasPolicyAlready(params.rootConfig)) return;
 
-  // Try SDK path first (handles everything + triggers restart)
+  if (isGatewayizedInstall(params.hostVersion)) {
+    // 9.5+ gateway-ized install: defer + direct file write. `manualPatch` uses
+    // only fs (not the runtime-bound SDK), so it survives install's temporary
+    // runtime teardown.
+    scheduleManualPatch({ logger });
+    return;
+  }
+
   if (params.runtimeConfig?.mutateConfigFile) {
-    logger.info(`${TAG} Missing allowConversationAccess, patching via SDK...`);
-    params.runtimeConfig.mutateConfigFile({
-      afterWrite: { mode: "restart", reason: "memory-tencentdb hook policy auto-patch" },
-      mutate: (draft: any) => {
-        if (!draft.plugins) draft.plugins = {};
-        if (!draft.plugins.entries) draft.plugins.entries = {};
-        if (!draft.plugins.entries[PLUGIN_ID]) draft.plugins.entries[PLUGIN_ID] = {};
-        if (!draft.plugins.entries[PLUGIN_ID].hooks) draft.plugins.entries[PLUGIN_ID].hooks = {};
-        draft.plugins.entries[PLUGIN_ID].hooks.allowConversationAccess = true;
-      },
-    }).then(() => {
-      logger.info(`${TAG} ✅ Patched via SDK — gateway will restart automatically.`);
-    }).catch((err: unknown) => {
-      logger.warn(`${TAG} SDK mutateConfigFile failed: ${err instanceof Error ? err.message : String(err)}, trying manual fallback...`);
-      manualPatch(logger);
+    // Older hosts (8.2/9.4): original immediate + restart behavior.
+    patchImmediatelyWithRestart({
+      runtimeConfig: params.runtimeConfig,
+      logger,
     });
     return;
   }
 
-  // Fallback: manual file write
+  // Fallback: manual file write (very old hosts without the SDK)
   manualPatch(logger);
 }
 

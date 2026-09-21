@@ -23,6 +23,7 @@
 import { createRequire } from "node:module";
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
+import { arch } from "node:process";
 import type { DatabaseSync, StatementSync, SQLInputValue } from "node:sqlite";
 import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
@@ -117,6 +118,35 @@ const require = createRequire(import.meta.url);
 
 function requireNodeSqlite(): typeof import("node:sqlite") {
   return require("node:sqlite") as typeof import("node:sqlite");
+}
+
+/**
+ * Resolve the sqlite-vec native extension path (vec0.so) for Linux.
+ *
+ * openclaw 9.5 stages plugin dependencies into isolated `package-N` directories,
+ * where the platform package `sqlite-vec-linux-x64` is nested under
+ * `sqlite-vec/node_modules/` instead of being hoisted as a sibling. The
+ * `sqlite-vec` package itself hardcodes a `../sqlite-vec-linux-x64` sibling
+ * lookup that fails in that layout. We locate the nested `vec0.so` directly via
+ * the filesystem and let the caller `db.loadExtension()` it.
+ *
+ * Returns the absolute path to `vec0.so`, or `undefined` if not found.
+ */
+function resolveVec0So(): string | undefined {
+  try {
+    // require.resolve returns the real path (symlinks already resolved).
+    const sqliteVecEntry = require.resolve("sqlite-vec");
+    const sqliteVecDir = path.dirname(sqliteVecEntry);
+    const soPath = path.join(
+      sqliteVecDir,
+      "node_modules",
+      `sqlite-vec-linux-${arch}`,
+      "vec0.so",
+    );
+    return existsSync(soPath) ? soPath : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ============================
@@ -428,6 +458,51 @@ export class VectorStore implements IMemoryStore {
 
 
   /**
+   * Try to load the sqlite-vec native extension (vec0.so).
+   *
+   * Strategy (new-then-old fallback):
+   * 1. New: resolve the nested vec0.so in openclaw 9.5's staging dir and load
+   *    it directly.
+   * 2. Fallback: if not found or load fails, fall back to sqlite-vec's own
+   *    loader — which works under the classic npm sibling layout used by older
+   *    openclaw (e.g. 8.2 / 7.2).
+   *
+   * Returns true if the extension was loaded successfully, false otherwise.
+   */
+  private tryLoadVecExtension(): boolean {
+    // 1. New strategy: nested vec0.so in openclaw 9.5's staging dir.
+    const soPath = resolveVec0So();
+    if (soPath) {
+      try {
+        this.db.enableLoadExtension(true);
+        this.db.loadExtension(soPath);
+        return true;
+      } catch (err) {
+        this.logger?.warn(
+          `${TAG} loadExtension(${soPath}) failed; falling back to sqlite-vec loader: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } else {
+      this.logger?.warn(
+        `${TAG} nested vec0.so not found under sqlite-vec/node_modules/sqlite-vec-linux-${arch}; ` +
+        `falling back to sqlite-vec loader`,
+      );
+    }
+
+    // 2. Fallback: original sqlite-vec loader (classic npm sibling layout).
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const sqliteVec = require("sqlite-vec");
+      this.db.enableLoadExtension(true);
+      sqliteVec.load(this.db);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Load sqlite-vec extension and initialize database schema.
    * Must be called once after construction.
    *
@@ -438,20 +513,17 @@ export class VectorStore implements IMemoryStore {
    *   so the caller can schedule a full re-embed.
    */
   init(providerInfo?: EmbeddingProviderInfo): VectorStoreInitResult {
-    // Load sqlite-vec extension (same approach as root project's sqlite-vec.ts)
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const sqliteVec = require("sqlite-vec");
-      this.db.enableLoadExtension(true);
-      sqliteVec.load(this.db);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    // Always attempt to load the vector extension, regardless of whether
+    // embedding is enabled. On failure, degrade the whole store (same as the
+    // original behavior) so the problem stays visible instead of being masked
+    // when embedding is off.
+    if (!this.tryLoadVecExtension()) {
       this.logger?.error(
-        `${TAG} Failed to load sqlite-vec extension: ${message}. ` +
+        `${TAG} Failed to load sqlite-vec extension. ` +
         `VectorStore entering degraded mode — all operations will be no-ops.`,
       );
       this.degraded = true;
-      return { needsReindex: false, reason: `sqlite-vec load failed: ${message}` };
+      return { needsReindex: false, reason: `sqlite-vec load failed` };
     }
 
     // ── Schema creation & prepared statements ──────────────────────────────
