@@ -612,6 +612,12 @@ export class MetadataService {
   }
 
   async deleteUsers(userIds: string[]): Promise<BatchDeleteResult> {
+    // 先级联清掉这些用户名下的 Agent（全团队），再删用户本身。
+    // 顺序不能反：用户一旦删掉，其 Agent 的 owner_user_id 就悬空了，
+    // 之后任何角色都定位不到也删不掉这些孤儿。
+    for (const userId of userIds) {
+      await this.deleteAllAgentsOf((pagination) => this.listAgentsByOwner(userId, pagination));
+    }
     return this.store.deleteUsers(userIds);
   }
 
@@ -968,6 +974,44 @@ export class MetadataService {
 
   async deleteAgents(agentIds: string[]): Promise<BatchDeleteResult> {
     return this.store.deleteAgents(agentIds);
+  }
+
+  /** 级联删除 agent 时每轮取页大小：兼顾 IN 子句长度与内存占用。 */
+  private static readonly AGENT_CASCADE_PAGE_SIZE = 200;
+
+  /**
+   * 取尽某 owner 名下的 agent 并删除，返回实际删除条数。
+   *
+   * 为什么不用「固定 limit 取一页」：listAgentsByOwner / listAgentsByTeam 都是
+   * 分页接口，写死 limit=1000 时第 1001 条之后的 agent 会漏删 —— 它们会在
+   * 用户被删后变成 owner_user_id 悬空的孤儿，正是本次要修的问题。
+   *
+   * 为什么不用「翻页取完再批量删」：删除会让后续 offset 错位，边删边翻页会漏项。
+   * 这里改成每轮只取第一页、删干净再重查，直到查不出为止，天然规避该问题。
+   *
+   * 收敛性：每轮要么 items 减少（有进展），要么 deleteAgents 一条都没删掉 ——
+   * 后者立即退出并告警，避免 store 异常时死循环把请求挂住。
+   */
+  private async deleteAllAgentsOf(
+    listPage: (pagination: PaginationParams) => Promise<PaginatedResult<AgentEntity>>,
+  ): Promise<number> {
+    let deleted = 0;
+    for (;;) {
+      const page = await listPage({ limit: MetadataService.AGENT_CASCADE_PAGE_SIZE, offset: 0 });
+      if (page.items.length === 0) break;
+
+      const result = await this.deleteAgents(page.items.map((a) => a.agent_id));
+      deleted += result.deleted_ids.length;
+
+      if (result.deleted_ids.length === 0) {
+        console.warn(
+          `[META] agent cascade delete stalled: ${page.items.length} agent(s) remain undeleted ` +
+            `(failed: ${result.failed.map((f) => `${f.id}:${f.reason}`).join(", ") || "none reported"})`,
+        );
+        break;
+      }
+    }
+    return deleted;
   }
 
   async listAgentsByTeam(
@@ -1820,6 +1864,17 @@ export class MetadataService {
     if (userId === team.owner_user_id) {
       throw new MetadataError("permission_denied", "cannot remove team owner");
     }
+
+    // 级联清理：连同该成员在本团队的 Agent 一起删除，否则 owner_user_id
+    // 悬空后任何角色（含 system_admin）都无法再删除这些孤儿 Agent。
+    //
+    // 用 listAgentsByTeam + owner_user_id 精确限定在「本团队 ∩ 该成员」，
+    // 不能按 owner 直查 —— 该成员可能同时属于其它团队，那些 Agent 不归本次
+    // 退群处理，误删会造成跨团队数据丢失。
+    await this.deleteAllAgentsOf((pagination) =>
+      this.listAgentsByTeam(teamId, pagination, { owner_user_id: userId }),
+    );
+
     return this.removeTeamMember(teamId, userId);
   }
 
@@ -1868,13 +1923,20 @@ export class MetadataService {
 
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
     for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
+      // Allow deletion by owner, team admin, or system admin
+      if (ctx.isSystemAdmin) {
+        continue; // System admin can delete any agent
+      }
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     }
     return this.deleteAgents(agentIds);
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    // Allow archiving by owner, team admin, or system admin
+    if (!ctx.isSystemAdmin) {
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+    }
     return this.archiveAgent(agentId);
   }
 
