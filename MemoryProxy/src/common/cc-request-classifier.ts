@@ -41,8 +41,12 @@ export function classifyCcRequest(body: Record<string, unknown>): CcRequestKind 
 
   // 主判定：cache_control marker 位置
   if (markerIdx >= 0) {
-    // messages[n-2] → FORK（skipCacheWrite=true 强制）
-    if (markerIdx === n - 2) return "fork";
+    // messages[n-2] + marker 落在 USER 消息上 → FORK（skipCacheWrite=true 强制）。
+    // CC 的 fork/sidechain 请求以 user message 收尾（title/recap/compact 等
+    // 内部 prompt 都是单条 role:user）。marker 在 n-2 且 messages[n-2] 是
+    // assistant → 真实主对话的 agentic loop（tool_use assistant + tool_result
+    // user，marker 随前缀增量前移落在 n-2 的 assistant 上），必须判 MAIN。
+    if (markerIdx === n - 2 && roleAt(msgs, markerIdx) === "user") return "fork";
     // 其它位置（含 last=n-1）→ MAIN
     return "main";
   }
@@ -56,6 +60,12 @@ export function classifyCcRequest(body: Record<string, unknown>): CcRequestKind 
   if (toolsEmpty && thinkingOff) return "sidequery";
 
   return "main";
+}
+
+/** marker 所在消息的 role（防御性读取；缺 role 视为 user —— 保守判 fork）。 */
+function roleAt(msgs: unknown[], idx: number): string {
+  const role = (msgs[idx] as { role?: string } | undefined)?.role;
+  return role === "assistant" ? "assistant" : "user";
 }
 
 /**
