@@ -540,6 +540,19 @@ export class TdaiCore {
     return this.storage;
   }
 
+  /**
+   * Read the session's current L1 cursor (checkpoint runner state,
+   * `recorded_at` epoch-ms semantics). Returns 0 when the session has never
+   * been distilled. Used by the gateway executor's stranded-backlog guard:
+   * a timer-fired L1 must not be skipped on a stale `conversation_count`
+   * while rows after this cursor still exist.
+   */
+  async getL1Cursor(sessionKey: string): Promise<number> {
+    const checkpoint = new CheckpointManager(this.dataDir, this.logger, this.storage);
+    const cp = await checkpoint.read();
+    return checkpoint.getRunnerState(cp, sessionKey).last_l1_cursor ?? 0;
+  }
+
   /** Skill module facade (may be undefined when skill.enabled=false or wiring failed). */
   getSkillCore(): SkillCore | undefined {
     return this.skillCore;
