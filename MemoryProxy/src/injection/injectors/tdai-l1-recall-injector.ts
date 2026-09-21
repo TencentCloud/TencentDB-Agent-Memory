@@ -7,6 +7,7 @@ import { extractUserQueryText } from "../../tdai/recorder.js";
 import type { CoreSkillConfig } from "../../types.js";
 import { getMetadataClient } from "../../meta/client.js";
 import { resolveFixedAssetCtxs } from "./tdai-fixed-asset.js";
+import { auditMemoryAccess } from "../../audit.js";
 
 /**
  * L1 召回（"自有 + 借入"跨 agent 合并 top-K）：
@@ -75,6 +76,20 @@ export class TdaiL1RecallInjector implements InjectionHook {
           identity.taskId,
           this.perAgentLimit,
         );
+        // 读路径审计（与写路径 action=write 对称）：每个被查询的命名空间各记一条，
+        // 自有与「借入」都记——借入读的 target 指向被借 agent 的命名空间。
+        // 命中 0 也记录：排查"这轮为什么没召回"时，'查了但没命中'与'压根没查'是两回事。
+        // fire-and-forget，失败只降级日志，不阻塞注入。
+        auditMemoryAccess({
+          actorUser: identity.userId,
+          actorAgent: identity.agentId,
+          action: "recall",
+          target: `${c.teamId}:${c.agentId}${identity.taskId ? `:${identity.taskId}` : ""}`,
+          result: items.length,
+          sessionKey: identity.sessionId,
+          scope: identity.taskId ? "normal" : "no-task",
+          traceId: ctx.metadata.traceId,
+        });
         return items.map((m) => ({
           ...m,
           fromAgentId: c.agentId,
