@@ -1,7 +1,7 @@
 /**
  * IMetadataStore — 元数据存储抽象接口。
  *
- * 对应设计文档 §6.1。所有后端实现（SQLite / MongoDB / MySQL 预留）必须满足此契约，
+ * 对应设计文档 §6.1。所有后端实现（SQLite / MongoDB / PostgreSQL / MySQL 预留）必须满足此契约，
  * 由 metadata-store.contract.ts 中的共用测试套件统一验证，保证后端行为一致。
  *
  * 约定：
@@ -226,6 +226,6 @@ export interface IMetadataStore {
 }
 
 /** 后端类型。 */
-export type MetadataBackend = "sqlite" | "mongodb" | "mysql";
+export type MetadataBackend = "sqlite" | "mongodb" | "postgres" | "mysql";
 
 export type { TeamRole };

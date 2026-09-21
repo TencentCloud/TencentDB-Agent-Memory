@@ -18,6 +18,16 @@ export function isMongoRelationIdCollision(err: unknown): boolean {
   return e.code === 11000 && Boolean(e.keyPattern?.id);
 }
 
+/** PostgreSQL：关联表主键 `id` 唯一冲突（SQLSTATE 23505，constraint = {table}_pkey）。 */
+export function isPgRelationIdCollision(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: string; constraint?: string };
+  if (e.code !== "23505" || typeof e.constraint !== "string") return false;
+  return /^meta_(team_members|task_agents|participation_logs|agent_fixed_assets|asset_acl)_pkey$/.test(
+    e.constraint,
+  );
+}
+
 /**
  * 使用自动生成的 relation id 执行插入；`fixedId` 已指定时不重试。
  */
