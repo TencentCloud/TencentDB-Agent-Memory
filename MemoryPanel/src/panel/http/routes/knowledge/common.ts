@@ -78,6 +78,29 @@ export async function isCallerSystemAdmin(
   return data?.valid === true && data.user?.user_type === 'system_admin';
 }
 
+/**
+ * 校验 caller 是否为该 team 的 admin（team-member/get 的 role=admin）。
+ *
+ * 与前端 canManageAsset（owner 或 team admin）对齐，供控制层放行"admin 代管
+ * 成员资产"的场景；异常一律保守返 false，避免上游抖动放大成越权。
+ */
+export async function isCallerTeamAdmin(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+  teamId: string,
+  userId: string,
+): Promise<boolean> {
+  if (!teamId || !userId) return false;
+  try {
+    const env = await deps.metaKernel.invoke('team-member/get', { team_id: teamId, user_id: userId }, ctx);
+    if (env.code !== 0 || !env.data) return false;
+    const member = env.data as { role?: string; status?: string };
+    return member.role === 'admin' && member.status === 'active';
+  } catch {
+    return false;
+  }
+}
+
 /** 校验 user 是否是 team 成员（team-member/get 存在→成员）。异常保守返 false。 */
 export async function isTeamMember(
   deps: PanelDeps,

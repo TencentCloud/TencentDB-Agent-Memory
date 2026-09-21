@@ -9,15 +9,19 @@
  *
  * 本路由的做法（业务级联收口在 control 层，不改内核）：
  *   1. auth/verify 反查 caller
- *   2. agent/get 拿到 agent，强校验 owner_user_id === caller（本期不允许 admin 代删）
+ *   2. agent/get 拿到 agent，校验 caller 是 owner，或该 agent 所属 team 的
+ *      team admin / system admin（与前端 canManageAsset 对齐，打通 issue #1321
+ *      的 admin 代删）
  *   3. skill/list 按 owner_agent_id + active 分页拉全
  *   4. 逐条 skill/delete —— 任一失败立即中断，返回 500 + 已删列表 + 失败 skill_id
  *      + 内核错误 message；此时 agent/archive 不会被调用，caller 需要修复后重试
  *   5. 全部 skill 成功归档后调 meta/agent/archive
  *      —— 内核在同一次 archive 里顺手清 chat_memory（这部分保持原样）
  *
- * 为什么不做 admin 代删：内核 skill/delete 要求 caller 是 owner_agent 的 owner；
- * admin 代删需要 impersonation 或 control 层拿到 owner 的 user_key，本期先不做。
+ * 关于 admin 代删：内核 skill/delete 并不校验 caller，只校验传入 agent_id 是否为
+ * 该 skill 的 owner_agent_id（skill-permission.assertOwner），而这里回传的正是被删
+ * agent 的 id，所以控制层放行 admin 之后，skill 清理链路不需要 impersonation 也能
+ * 走通 —— 原先"必须先拿到 owner 的 user_key"的判断与实现不符，已按实际行为放开。
  *
  * 前端配套：agentsApi.delete 需从 meta/agent/archive 切到本路由；如果要跳过级联走
  * 老逻辑（例如迁移工具），可继续直接调 /api/v1/meta/agent/archive（保留逃生舱）。
@@ -31,6 +35,8 @@ import type { MetaCallContext } from '../../kernel/types.js';
 import {
   buildCtx,
   extractListItems,
+  isCallerSystemAdmin,
+  isCallerTeamAdmin,
   okEnvelope,
   readJson,
   resolveCallerUserId,
@@ -107,7 +113,17 @@ export function registerAgentLifecycleRoutes(api: Hono, deps: PanelDeps): void {
     if (agentEnv.code !== 0) return respondEnvelope(c, agentEnv);
     const agent = agentEnv.data as AgentRaw;
     if (agent.owner_user_id !== callerId) {
-      return respondControlError(c, 403, 'NOT_YOUR_AGENT');
+      // owner 之外放行 team admin / system admin，与前端 canManageAsset 的判定
+      // 保持一致。收紧这一层会复现 issue #1321 的 UI/kernel 不一致：列表里
+      // 显示删除按钮，点下去固定 403。
+      //
+      // 级联的 skill/delete 不校验 caller，只校验传入的 agent_id 是否为 skill
+      // 的 owner_agent_id（见 skill-permission.assertOwner），而这里传的正是被
+      // 删 agent 的 id，故放行后 skill 清理链路依然走得通。
+      const byAdmin =
+        (await isCallerTeamAdmin(deps, ctx, agent.team_id, callerId)) ||
+        (await isCallerSystemAdmin(deps, ctx));
+      if (!byAdmin) return respondControlError(c, 403, 'NOT_YOUR_AGENT');
     }
 
     // 3. skill list
