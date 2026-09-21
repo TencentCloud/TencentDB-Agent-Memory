@@ -24,6 +24,7 @@ export interface RemoteSkillDetail extends RemoteSkillSummary {
   manifest?: Array<{
     path: string;
     size_bytes?: number;
+    is_executable?: boolean;
   }>;
 }
 
@@ -76,8 +77,20 @@ export class SkillBridgeClient implements SkillSyncClient {
   }
 
   async list(): Promise<RemoteSkillSummary[]> {
-    const data = await this.post<{ items?: RemoteSkillSummary[] }>("list", {});
-    return Array.isArray(data.items) ? data.items : [];
+    const limit = 50;
+    const skills = new Map<string, RemoteSkillSummary>();
+    let offset = 0;
+    for (;;) {
+      const data = await this.post<{ items?: RemoteSkillSummary[]; total?: number }>("list", {
+        pagination: { limit, offset },
+      });
+      const items = Array.isArray(data.items) ? data.items : [];
+      for (const skill of items) skills.set(skill.skill_id, skill);
+      offset += items.length;
+      if (items.length === 0 || (typeof data.total === "number" ? offset >= data.total : items.length < limit)) {
+        return [...skills.values()];
+      }
+    }
   }
 
   get(skillId: string): Promise<RemoteSkillDetail> {
@@ -89,7 +102,7 @@ export class SkillBridgeClient implements SkillSyncClient {
   }
 
   readFile(skillId: string, path: string): Promise<RemoteSkillFile> {
-    return this.post<RemoteSkillFile>("files/read", { skill_id: skillId, path });
+    return this.post<RemoteSkillFile>("files/read", { skill_id: skillId, path, encoding: "base64" });
   }
 
   private async post<T>(subpath: string, body: Record<string, unknown>): Promise<T> {
@@ -191,11 +204,11 @@ async function readMarker(path: string): Promise<SyncMarker | undefined> {
   return undefined;
 }
 
-async function writeFileWithin(root: string, relativePath: string, content: string | Buffer): Promise<void> {
+async function writeFileWithin(root: string, relativePath: string, content: string | Buffer, mode = 0o644): Promise<void> {
   const destination = resolve(root, relativePath);
   if (relative(root, destination).startsWith("..")) throw new Error(`unsafe staging path: ${relativePath}`);
   await mkdir(dirname(destination), { recursive: true });
-  await writeFile(destination, content, { mode: 0o644 });
+  await writeFile(destination, content, { mode });
 }
 
 async function renameWithRetry(from: string, to: string): Promise<void> {
@@ -258,7 +271,7 @@ export async function syncOneSkill(
       return { skillId: detail.skill_id, name, version: detail.version, status: "up-to-date" };
     }
 
-    const resources: RemoteSkillFile[] = [];
+    const resources: Array<RemoteSkillFile & { is_executable?: boolean }> = [];
     let totalBytes = Buffer.byteLength(detail.content, "utf8");
     for (const entry of detail.manifest ?? []) {
       const path = safeResourcePath(entry.path);
@@ -271,7 +284,7 @@ export async function syncOneSkill(
       if (bytes > MAX_RESOURCE_BYTES) throw new Error(`resource ${path} exceeds ${MAX_RESOURCE_BYTES} bytes`);
       totalBytes += bytes;
       if (totalBytes > MAX_PACKAGE_BYTES) throw new Error(`skill package exceeds ${MAX_PACKAGE_BYTES} bytes`);
-      resources.push({ ...file, path });
+      resources.push({ ...file, path, is_executable: entry.is_executable });
     }
 
     await mkdir(skillsDirectory, { recursive: true });
@@ -282,7 +295,7 @@ export async function syncOneSkill(
       await writeFileWithin(staged, "SKILL.md", detail.content);
       for (const resource of resources) {
         const body = resource.encoding === "base64" ? Buffer.from(resource.content, "base64") : resource.content;
-        await writeFileWithin(staged, resource.path, body);
+        await writeFileWithin(staged, resource.path, body, resource.is_executable === true ? 0o755 : 0o644);
       }
       await writeFileWithin(staged, MARKER_FILE, `${JSON.stringify(expectedMarker, null, 2)}\n`);
 
@@ -291,11 +304,22 @@ export async function syncOneSkill(
         throw new Error(loaded.diagnostics[0]?.message ?? "staged skill is not valid for Pi");
       }
 
-      if (await isDirectory(target)) await renameWithRetry(target, backup);
+      // Downloads may take time: recheck ownership before replacing the target.
+      if (await isDirectory(target)) {
+        const currentMarker = await readMarker(join(target, MARKER_FILE));
+        if (!currentMarker) {
+          return { skillId: detail.skill_id, name, version: detail.version, status: "skipped-user-owned" };
+        }
+        if (currentMarker.skillId !== detail.skill_id) {
+          return { skillId: detail.skill_id, name, version: detail.version, status: "skipped-remote-conflict" };
+        }
+        await renameWithRetry(target, backup);
+      }
       try {
         await renameWithRetry(staged, target);
       } catch (error) {
-        await rm(target, { recursive: true, force: true });
+        // A failed rename does not install our directory. Do not delete a
+        // target that another writer may have created in the meantime.
         if (await isDirectory(backup)) await renameWithRetry(backup, target);
         throw error;
       }

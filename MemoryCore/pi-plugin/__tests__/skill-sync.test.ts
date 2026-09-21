@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
   type RemoteSkillFile,
   type RemoteSkillSummary,
   type SkillSyncClient,
+  SkillBridgeClient,
   syncAllSkills,
 } from "../skill-sync.js";
 
@@ -54,6 +55,44 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+describe("SkillBridgeClient.list", () => {
+  it.each([0, 50, 51, 101])("lists all %i skills using Core pagination", async (count) => {
+    const skills = Array.from({ length: count }, (_, i) => ({ skill_id: `skl-${i}`, name: `skill-${i}`, version: 1 }));
+    const offsets: number[] = [];
+    const client = new SkillBridgeClient({
+      ...source, userKey: "user-key", conversationId: "pi-session",
+      fetcher: async (_input, init) => {
+        const { pagination } = JSON.parse(String(init?.body));
+        offsets.push(pagination.offset);
+        return new Response(JSON.stringify({ code: 0, data: {
+          items: skills.slice(pagination.offset, pagination.offset + pagination.limit), total: count,
+        } }));
+      },
+    });
+
+    expect(await client.list()).toEqual(skills);
+    expect(offsets).toEqual(Array.from({ length: Math.max(1, Math.ceil(count / 50)) }, (_, i) => i * 50));
+  });
+
+  it("rejects a later page failure instead of returning a partial list", async () => {
+    const client = new SkillBridgeClient({
+      ...source, userKey: "user-key", conversationId: "pi-session",
+      fetcher: async (_input, init) => {
+        const { pagination } = JSON.parse(String(init?.body));
+        if (pagination.offset > 0) {
+          return new Response(JSON.stringify({ code: 50001, message: "list unavailable" }), { status: 500 });
+        }
+        return new Response(JSON.stringify({ code: 0, data: {
+          items: Array.from({ length: 50 }, (_, i) => ({ skill_id: `skl-${i}`, name: `skill-${i}`, version: 1 })),
+          total: 51,
+        } }));
+      },
+    });
+
+    await expect(client.list()).rejects.toThrow("list unavailable");
+  });
+});
+
 describe("syncAllSkills", () => {
   it("installs the current session's remote skill as a Pi-native skill", async () => {
     const directory = await skillDir();
@@ -93,6 +132,76 @@ describe("syncAllSkills", () => {
 
     expect(results[0].status).toBe("up-to-date");
     expect(client.calls.filter((call) => call.method === "readFile")).toHaveLength(1);
+  });
+
+  it.each([false, true])("preserves a skill made user-owned during download (update=%s)", async (update) => {
+    const directory = await skillDir();
+    const local = join(directory, detail.name);
+    if (update) await syncAllSkills(new FakeClient(), directory, source);
+    const client = new FakeClient({ ...detail, version: detail.version + 1 });
+    client.readFile = async (_skillId, path) => {
+      await mkdir(local, { recursive: true });
+      await rm(join(local, "tdai-remote.json"), { force: true });
+      await writeFile(join(local, "SKILL.md"), "My hand-written skill.\n");
+      return { path, content: "echo remote\n", encoding: "utf-8" };
+    };
+
+    const results = await syncAllSkills(client, directory, source);
+
+    expect(results[0].status).toBe("skipped-user-owned");
+    expect(await readFile(join(local, "SKILL.md"), "utf8")).toBe("My hand-written skill.\n");
+    await expect(readFile(join(local, "tdai-remote.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(directory)).toEqual([detail.name]);
+  });
+
+  it("requests base64 and preserves binary resource bytes through the Bridge client", async () => {
+    const directory = await skillDir();
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00]);
+    const binaryDetail = { ...detail, manifest: [{ path: "assets/image.png", size_bytes: bytes.length }] };
+    const requests: Record<string, unknown>[] = [];
+    const client = new SkillBridgeClient({
+      ...source, userKey: "user-key", conversationId: "pi-session",
+      fetcher: async (input, init) => {
+        const url = String(input);
+        let data: unknown = binaryDetail;
+        if (url.endsWith("/list")) data = { items: [binaryDetail] };
+        if (url.endsWith("/files/read")) {
+          const body = JSON.parse(String(init?.body));
+          requests.push(body);
+          // Match Core's default UTF-8 response unless base64 is requested.
+          const encoding = body.encoding === "base64" ? "base64" : "utf-8";
+          data = { path: body.path, content: bytes.toString(encoding), encoding };
+        }
+        return new Response(JSON.stringify({ code: 0, data }));
+      },
+    });
+
+    const results = await syncAllSkills(client, directory, source);
+
+    expect(results[0].status).toBe("synced");
+    expect(requests).toEqual([{ skill_id: detail.skill_id, path: "assets/image.png", encoding: "base64" }]);
+    expect(await readFile(join(directory, detail.name, "assets/image.png"))).toEqual(bytes);
+  });
+
+  it.skipIf(process.platform === "win32")("preserves executable flags without making other files executable", async () => {
+    const directory = await skillDir();
+    const client = new FakeClient({
+      ...detail,
+      manifest: [
+        { path: "scripts/check.sh", is_executable: true },
+        { path: "templates/config.txt", is_executable: false },
+        { path: "references/notes.txt" },
+      ],
+    });
+
+    const results = await syncAllSkills(client, directory, source);
+
+    expect(results[0].status).toBe("synced");
+    const local = join(directory, detail.name);
+    expect((await stat(join(local, "scripts/check.sh"))).mode & 0o100).toBe(0o100);
+    for (const path of ["templates/config.txt", "references/notes.txt", "SKILL.md", "tdai-remote.json"]) {
+      expect((await stat(join(local, path))).mode & 0o111).toBe(0);
+    }
   });
 
   it("rejects an unsafe remote resource before it writes a skill", async () => {

@@ -10,8 +10,9 @@ const skill = {
   name: "deploy-check",
   version: 1,
   content: "---\nname: deploy-check\ndescription: Check a deployment safely\n---\n\nRun the health check first.\n",
-  manifest: [{ path: "scripts/check.sh", size_bytes: 13 }],
+  manifest: [{ path: "scripts/check.sh", size_bytes: 12 }],
 };
+const scriptBytes = Buffer.from([0x23, 0x21, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x0a, 0xff, 0x00]);
 
 function resolvePiCli() {
   if (process.env.PI_CLI_PATH && existsSync(process.env.PI_CLI_PATH)) return process.env.PI_CLI_PATH;
@@ -50,6 +51,8 @@ function readRequest(request) {
   });
 }
 
+let piStderr = "";
+
 function waitFor(predicate, timeoutMs = 20_000) {
   return new Promise((resolve, reject) => {
     const remove = () => {
@@ -58,7 +61,8 @@ function waitFor(predicate, timeoutMs = 20_000) {
     };
     const timer = setTimeout(() => {
       remove();
-      reject(new Error("timed out waiting for Pi RPC output"));
+      const details = piStderr.trim();
+      reject(new Error(`timed out waiting for Pi RPC output${details ? `\nPi stderr:\n${details}` : ""}`));
     }, timeoutMs);
     const check = (message) => {
       if (predicate(message)) {
@@ -83,10 +87,10 @@ const server = createServer(async (request, response) => {
   const body = await readRequest(request);
   const url = new URL(request.url, "http://127.0.0.1");
   requests.push({ path: url.pathname, body: JSON.parse(body), headers: request.headers });
-  if (url.pathname.endsWith("/list")) return reply(response, { items: [skill] });
+  if (url.pathname.endsWith("/list")) return reply(response, { items: [skill], total: 1 });
   if (url.pathname.endsWith("/get")) return reply(response, skill);
   if (url.pathname.endsWith("/files/read")) {
-    return reply(response, { path: "scripts/check.sh", content: "echo healthy\n", encoding: "utf-8" });
+    return reply(response, { path: "scripts/check.sh", content: scriptBytes.toString("base64"), encoding: "base64" });
   }
   response.writeHead(404).end();
 });
@@ -118,7 +122,6 @@ try {
   });
 
   let stdout = "";
-  let stderr = "";
   pi.stdout.setEncoding("utf8");
   pi.stdout.on("data", (chunk) => {
     stdout += chunk;
@@ -140,7 +143,7 @@ try {
     }
   });
   pi.stderr.setEncoding("utf8");
-  pi.stderr.on("data", (chunk) => { stderr += chunk; });
+  pi.stderr.on("data", (chunk) => { piStderr += chunk; });
 
   pi.stdin.write(`${JSON.stringify({ id: "commands", type: "get_commands" })}\n`);
   const commands = await waitFor((message) => message.type === "response" && message.id === "commands");
@@ -153,9 +156,9 @@ try {
   if (!synced.success) throw new Error(`Pi rejected skill sync command: ${JSON.stringify(synced)}`);
 
   const skillMd = await readFile(join(agentDir, "skills", "deploy-check", "SKILL.md"), "utf8");
-  const script = await readFile(join(agentDir, "skills", "deploy-check", "scripts", "check.sh"), "utf8");
+  const script = await readFile(join(agentDir, "skills", "deploy-check", "scripts", "check.sh"));
   const marker = await readFile(join(agentDir, "skills", "deploy-check", "tdai-remote.json"), "utf8");
-  if (!skillMd.includes("name: deploy-check") || script !== "echo healthy\n" || !marker.includes("skl-e2e")) {
+  if (!skillMd.includes("name: deploy-check") || !script.equals(scriptBytes) || !marker.includes("skl-e2e")) {
     throw new Error("Pi sync did not install the expected native skill package");
   }
 
@@ -165,6 +168,14 @@ try {
   const getRequest = requests.find((entry) => entry.path.endsWith("/get"));
   if (getRequest?.body.include_content !== true || getRequest.body.include_manifest !== true) {
     throw new Error("sync did not request the complete Core skill package");
+  }
+  const listRequest = requests.find((entry) => entry.path.endsWith("/list"));
+  if (JSON.stringify(listRequest?.body.pagination) !== JSON.stringify({ limit: 50, offset: 0 })) {
+    throw new Error("sync did not request the first complete skill-list page");
+  }
+  const fileRequest = requests.find((entry) => entry.path.endsWith("/files/read"));
+  if (fileRequest?.body.encoding !== "base64") {
+    throw new Error("sync did not request resource bytes as base64");
   }
   if (requests.some((entry) => entry.headers["x-tdai-service-id"] !== "space-e2e" || entry.headers["authorization"] !== "Bearer user-key-e2e")) {
     throw new Error("sync did not carry the expected session credentials");

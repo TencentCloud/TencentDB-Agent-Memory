@@ -61,7 +61,7 @@ describe("Pi TDAI extension", () => {
       "x-tdai-service-id": "space-a",
       "x-conversation-id": "pi-session-123",
     });
-    expect(requestInit.body).toBe("{}");
+    expect(JSON.parse(String(requestInit.body))).toEqual({ pagination: { limit: 50, offset: 0 } });
     expect(notify).toHaveBeenCalledWith("No mined skills are available for this TDAI agent yet.", "info");
   });
 
