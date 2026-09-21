@@ -759,15 +759,25 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  async deleteL1(recordId: string): Promise<boolean> {
+  async deleteL1(recordId: string, opts?: { throwOnError?: boolean }): Promise<boolean> {
     try {
       await this._ensureInit();
-      if (this.degraded) return false;
+      if (this.degraded) {
+        if (opts?.throwOnError) {
+          throw new Error(`[L1-delete] store in degraded mode (throwOnError)`);
+        }
+        return false;
+      }
       const affected = await this.client.deleteDoc(this.l1Collection, {
         query: { documentIds: [recordId] },
       });
       return affected > 0;
     } catch (err) {
+      if (opts?.throwOnError) {
+        // A swallowed failure reads as "not found" downstream and the delete
+        // endpoint would report success with a lower count — surface it.
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       this.logger?.warn(`${TAG} [L1-delete] FAILED id=${recordId}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
