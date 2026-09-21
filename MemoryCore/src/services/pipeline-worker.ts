@@ -18,6 +18,7 @@ import type { IStateBackend, TaskPayload } from "../core/state/types.js";
 import { buildPipelineTimerMember } from "../core/state/timer-member.js";
 import { serializeTraceContext } from "../core/report/trace-propagation.js";
 import { obsLogger } from "../core/report/obs-logger.js";
+import { isLlmWindowOpen, nextLlmWindowOpenMs, deferredTimerType } from "../utils/llm-window.js";
 
 // ============================
 // Types
@@ -418,6 +419,41 @@ export class PipelineWorker {
     const claimedTask = task as ClaimedTask;
     const lockKey = resumed?.lockKey ?? this.getLockKey(task);
     const retryCount = (task.data?.retryCount as number) ?? 0;
+
+    // LLM window gate (see utils/llm-window.ts; off unless TDAI_LLM_WINDOW=on).
+    // Outside the window we neither run the task nor fail it: a hard failure
+    // spends the retry budget and ends in moveToDeadLetter(), whose cleanup
+    // deletes the session's L1_idle/L2_schedule timers for good — that session
+    // then stops being extracted permanently. Re-arm for the next opening and
+    // ack instead: L1 extracts against a cursor, so an un-run task leaves the
+    // L0 backlog intact and it still lands when the window opens.
+    //
+    // Kept ahead of the permitPool acquire on purpose — a deferred task does no
+    // work, so it must not hold a pipeline permit while it waits.
+    if (!isLlmWindowOpen()) {
+      const timerType = deferredTimerType(task.type);
+      if (timerType) {
+        const tid = task.teamId ?? (task.data as any)?.teamId;
+        const aid = task.agentId ?? (task.data as any)?.agentId;
+        try {
+          await this.backend.setTimer(
+            task.instanceId,
+            buildPipelineTimerMember(task.sessionId, timerType, { teamId: tid, agentId: aid }),
+            nextLlmWindowOpenMs(),
+          );
+        } catch (err) {
+          this.logger.warn(
+            `${TAG} Failed to defer ${task.type} [${task.instanceId}/${task.sessionId}] outside LLM window: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+          );
+          return; // leave unconsumed: stale recovery retries this task later
+        }
+        if (!(await this.ackTaskIfOwned(claimedTask))) {
+          this.noteOwnershipLost(claimedTask, "window deferral");
+        }
+        return;
+      }
+    }
 
     // permitPool acquire：memory pipeline 内部并发限流。parked 重试在调度器中
     // acquire 后传入 permitAcquired，避免重复获取。两条路径都由 releasePermitOnce 归还。
