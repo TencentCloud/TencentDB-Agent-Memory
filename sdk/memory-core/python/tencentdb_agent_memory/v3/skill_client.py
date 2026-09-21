@@ -554,6 +554,13 @@ class SkillClient:
         header (``auth.serviceId``). Set only when explicitly overriding
         the instance the transport is scoped to; body value wins over
         header, and a mismatch is logged server-side.
+
+        The response also carries ``extraction_enabled`` — ``skill.extraction
+        .enabled`` as the server resolved it — so an accepted task that will be
+        extracted is distinguishable from one that cannot be in this
+        configuration. It reports the configuration switch only, not worker
+        readiness and not completion; ``None`` means the server could not read
+        its resolved skill config ("unknown", not "off").
         """
         body = _strip_none({
             **self._defaults.merge(team_id, agent_id, user_id, task_id),
@@ -596,6 +603,13 @@ class SkillClient:
         ``{tool_calls, bytes, compressed, oversize}``. See
         ``docs/design/2026-07-15-skill-trigger-in-core-design.md`` §11.1
         for the trigger semantics.
+
+        The response also carries ``extraction_enabled`` — ``skill.extraction
+        .enabled`` as the server resolved it — so an accepted task that will be
+        extracted is distinguishable from one that cannot be in this
+        configuration. It reports the configuration switch only, not worker
+        readiness and not completion; ``None`` means the server could not read
+        its resolved skill config ("unknown", not "off").
         """
         body = _strip_none({
             "session_id": session_id,
@@ -642,6 +656,13 @@ class SkillClient:
           ..., "archive_key": "..."}`` — archive was written. Note the
           coordinates are at the top level (not nested under
           ``archived``), unlike :meth:`conversation_add`.
+
+        The response also carries ``extraction_enabled`` — ``skill.extraction
+        .enabled`` as the server resolved it — so an accepted task that will be
+        extracted is distinguishable from one that cannot be in this
+        configuration. It reports the configuration switch only, not worker
+        readiness and not completion; ``None`` means the server could not read
+        its resolved skill config ("unknown", not "off").
         """
         body = _strip_none({
             "session_id": session_id,

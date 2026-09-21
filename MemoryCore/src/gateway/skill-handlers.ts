@@ -756,6 +756,28 @@ export async function handleListing(body: unknown, _auth: V2AuthContext, request
 }
 
 /**
+ * 归档类接口的响应里回报「提取开关」。
+ *
+ * 归档成功的响应本来就是准确的:`SkillTriggerService.archive()` 写归档、追加
+ * SkillTaskEntry、入队,三件事都做了。它从来不代表「已经产出 Skill」——
+ * `skill.extraction.enabled=false` 时任务照样被接收,随后在当前配置下无法执行,
+ * 而响应里没有任何字段提示这一点,调用方只能等。
+ *
+ * 该字段只表示**配置开关**,不表示 worker 就绪,也不表示任务一定完成:
+ *   - extractor 按存储模式分别构造(service 每实例一个、standalone 用进程单例),
+ *     所以这里不声称各部署模式都遵守这个开关;
+ *   - `true` 只是「开关开着」,不是「抽取已完成」。
+ *
+ * 配置不可得时(该 dep 可选,skill 未构造时 `getResolvedSkillConfig()` 返回
+ * undefined)值为 `null` —— 「看不出来」和「关着」是两个不同的答案,不能默认成
+ * false。
+ */
+function extractionFlag(deps: SkillRouterDeps): { extraction_enabled: boolean | null } {
+  const cfg = deps.getResolvedSkillConfig?.();
+  return { extraction_enabled: cfg ? cfg.extraction.enabled : null };
+}
+
+/**
  * `POST /v3/skill/extract` — direct-trigger 归档一次会话切片。
  *
  * 改造前是"入 Redis job 队列 + 轮询 /result"; 改造后走跟 conversation/add
@@ -911,6 +933,7 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
       task_id: res.taskId,
       archived_at_ms: res.archivedAtMs,
       archive_key: res.archiveKey,
+      ...extractionFlag(deps),
     }, requestId);
   } catch (e) {
     deps.logger.warn(`${TAG} /v3/skill/extract archive failed: ${(e as Error).message} req_id=${requestId}`);
@@ -1025,7 +1048,7 @@ export async function handleConversationAdd(
       reason: out.archived?.reason,
       task_id: out.archived?.task_id,
       msg_count: input.messages.length, });
-    return successEnvelope(out, requestId);
+    return successEnvelope({ ...out, ...extractionFlag(deps) }, requestId);
   } catch (err) {
     // HandlerValidationError → 400；其他 → 500
     const isValidation = err instanceof Error && err.name === "HandlerValidationError";
@@ -1093,7 +1116,7 @@ export async function handleForceArchive(
     // Buffer 为空：无需归档
     if (!current.messages || current.messages.length === 0) {
       obsLogger.info("skill.handleForceArchive.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0, status: "empty" });
-      return successEnvelope({ status: "empty", message: "No messages in buffer to archive" }, requestId);
+      return successEnvelope({ status: "empty", message: "No messages in buffer to archive", ...extractionFlag(deps) }, requestId);
     }
 
     // 无条件调 trigger.archive（跳过阈值判断）
@@ -1131,6 +1154,7 @@ export async function handleForceArchive(
       task_id: archiveRes.taskId,
       archived_at_ms: archiveRes.archivedAtMs,
       archive_key: archiveRes.archiveKey,
+      ...extractionFlag(deps),
     }, requestId);
   } catch (err) {
     deps.logger.warn(`${TAG} /v3/skill/conversation/force-archive failed: ${(err as Error).message} req_id=${requestId}`);
