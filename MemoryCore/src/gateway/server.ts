@@ -1944,6 +1944,46 @@ export class TdaiGateway {
       this.logger.info(`Core switched to StatefulPipelineManager (instance=${instanceId})`);
     }
 
+    // 1.6. Restore on-disk checkpoint into the StatefulPipelineManager so sessions with
+    // pending backlog get their L1 idle timer re-armed on boot (see start() in
+    // stateful-pipeline-manager.ts) instead of staying stalled until they happen to
+    // receive new traffic. Unlike tdai-core.ts's in-process ensureSchedulerStarted()
+    // path, createStatefulPipelineManager() above never calls .start() — the Gateway
+    // constructs the manager directly against a fresh, empty stateBackend and expects
+    // per-request paths to carry state. That's correct for true multi-instance service
+    // mode (each task supplies its own instanceId; there's no single "the" checkpoint to
+    // preload at boot), so this restore is scoped to standalone mode only, where there's
+    // exactly one well-defined instanceId and a single-process checkpoint file.
+    if (this.config.deployMode === "standalone") {
+      try {
+        const { CheckpointManager } = await import("../utils/checkpoint.js");
+        const storageForCheckpoint = await this.resolveStorageForInstance(instanceId);
+        const checkpointManager = new CheckpointManager(this.config.data.baseDir, this.logger, storageForCheckpoint);
+        const cp = await checkpointManager.read();
+        await statefulManager.start(checkpointManager.getAllPipelineStates(cp));
+
+        // start()'s own re-arm (conversation_count > 0 from pipeline_states) is a no-op
+        // in practice here: pipeline_states is never actually persisted in this deployment
+        // (mergePipelineStates() isn't wired up to a periodic flush for the standalone/
+        // local-backend path) — confirmed empty on disk while runner_states (L1 cursor
+        // tracking, updated by markL1ExtractionComplete on every real batch) is populated
+        // for every known session. So re-arm off runner_states instead: it's the one
+        // per-session record we can actually rely on having survived the restart. Sessions
+        // that are already fully drained just no-op cheaply once their timer fires.
+        const sessionKeys = Object.keys(cp.runner_states ?? {});
+        for (const sessionKey of sessionKeys) {
+          await statefulManager.armL1IdleAfterDrain(sessionKey, instanceId);
+        }
+        this.logger.info(
+          `[gateway] Re-armed L1 idle drain for ${sessionKeys.length} known session(s) on boot`,
+        );
+      } catch (err) {
+        this.logger.error(
+          `Failed to restore StatefulPipelineManager checkpoint on boot: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     // 2. Start Timer Scanner (Scheme D: leaderless, scans sharded global ZSETs)
     const { TimerScanner } = await import("../services/timer-scanner.js");
     const defaultInstances = this.config.scanner.instances.split(",").filter(Boolean);
