@@ -708,13 +708,13 @@ export async function handleAnthropicMessages(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
               client.forceArchive(
                 {
-                  space_id: si.space_id,
+                  space_id: si.space_id ?? "",
                   user_id: si.user_id,
                   team_id: si.team_id,
                   agent_id: si.agent_id,
@@ -981,12 +981,12 @@ export async function handleAnthropicMessages(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: initResult.sessionInfo?.agent_id
+            ? String(initResult.sessionInfo.agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: initResult.sessionInfo?.team_id
+            ? String(initResult.sessionInfo.team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1023,7 +1023,7 @@ export async function handleAnthropicMessages(
     const text = (lines as string[]).join("\n");
 
     const { buildMemResponse } = await import("./mem-command/response-builder.js");
-    const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
+    const thinkingEnabled = !!body.thinking;
     console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort}) team=${teamName ?? "-"} (${teamId || "-"})`);
     return buildMemResponse(text, {
       protocol: "anthropic",
@@ -1064,7 +1064,7 @@ export async function handleAnthropicMessages(
     if (memCmd) {
       // bypass 优化：会话未初始化时，命令不可用
       if (!sessionInfo || injectedSkipped) {
-        const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
+        const thinkingEnabled = !!body.thinking;
         const errText = `⚠️ 会话未初始化，命令不可用。请先完成 session 初始化（选择 Team/Agent）后重试。`;
         const errResponse = buildMemResponse(errText, {
           protocol: "anthropic",
@@ -1076,7 +1076,7 @@ export async function handleAnthropicMessages(
         return errResponse;
       }
       // 检测请求是否开启了 extended thinking（Anthropic 协议）
-      const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
+      const thinkingEnabled = !!body.thinking;
       const memResult = await executeMemCommand(memCmd, {
         sessionKey,
         agentSource,
@@ -1091,7 +1091,7 @@ export async function handleAnthropicMessages(
         thinking: thinkingEnabled,
         // task 命令族用最近对话生成草稿。Anthropic 消息 content 可能是数组，
         // extractSimpleMessages 会合并所有 text 段落。
-        bodyMessages: extractSimpleMessages((body as Record<string, unknown>).messages),
+        bodyMessages: extractSimpleMessages(body.messages),
         // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
         model: modelId,
         upstreamUrl:
