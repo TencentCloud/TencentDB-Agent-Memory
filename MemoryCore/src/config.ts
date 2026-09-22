@@ -91,7 +91,12 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
-  /** Minimum score threshold (default: 0.3) */
+  /**
+   * Minimum 0–1 score for keyword BM25 and embedding cosine (default: 0.3).
+   * Hybrid recall applies it to those source scores and then keeps RRF order.
+   * Native server hybrid stays top-N: its score is server RRF, not 0–1.
+   * tdai_memory_search does not use this setting.
+   */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
   strategy: "embedding" | "keyword" | "hybrid";

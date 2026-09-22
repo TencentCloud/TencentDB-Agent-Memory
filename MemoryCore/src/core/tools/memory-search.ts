@@ -13,7 +13,7 @@
 import type { IMemoryStore, IsolationFilter, L1SearchResult } from "../store/types.js";
 import { hasClientEmbedding, type EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
-import { recallL1Candidates } from "./l1-candidate-recall.js";
+import { L1_RECALL_CANDIDATE_FACTOR, recallL1Candidates } from "./l1-candidate-recall.js";
 
 // ============================
 // Types
@@ -131,7 +131,8 @@ export async function executeMemorySearch(params: {
     };
   }
 
-  const candidateK = limit * 3;
+  // Top-N only. recall.scoreThreshold is applied by /recall, not here.
+  const candidateK = limit * L1_RECALL_CANDIDATE_FACTOR;
   const recalled = await recallL1Candidates({
     query,
     topK: candidateK,
