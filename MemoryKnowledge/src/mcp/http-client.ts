@@ -6,6 +6,7 @@
  * ApiResponseEnvelope data field (or error).
  */
 
+import { SERVICE_ID_HEADER } from "../api-helpers.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("mcp-http");
@@ -14,6 +15,12 @@ export interface HttpClientOptions {
   baseUrl: string;
   /** Optional bearer token for auth. */
   token?: string;
+  /**
+   * Tenant identity (kernel routing key). Sent as `x-tdai-service-id` on every
+   * request — the wiki routes reject a request without it (400), so any caller
+   * that is not behind a header-injecting proxy must pass it here.
+   */
+  serviceId?: string;
 }
 
 export interface ApiResponse {
@@ -36,6 +43,7 @@ export async function callApi(
   const url = `${opts.baseUrl.replace(/\/$/, "")}/v3${endpoint}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+  if (opts.serviceId) headers[SERVICE_ID_HEADER] = opts.serviceId;
 
   log.debug(`POST ${url}`);
 
