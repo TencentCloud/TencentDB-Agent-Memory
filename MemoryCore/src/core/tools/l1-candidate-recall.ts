@@ -1,9 +1,21 @@
 /**
  * Shared L1 candidate recall: text → top-K L1 hits.
  *
- * Used by memory_search (cross-session filter) and l1_dedup (session-scoped
- * filter). Callers own isolation / topK / query; this module only decides
- * native-hybrid vs FTS ∥ client-vector, then RRF-merges dual-path results.
+ * Used by memory_search, l1_dedup, and /recall hybrid. Callers own isolation,
+ * topK, and query. This module picks native hybrid vs FTS ∥ client-vector,
+ * then RRF-merges dual-path results.
+ *
+ * Optional `scoreThreshold` runs after RRF and drops client-side hits whose
+ * FTS (BM25) or vector (cosine) source score is below the cutoff. Both of
+ * those scores are 0–1, same as keyword and embedding recall. Survivors keep
+ * the unfiltered RRF order so /recall and tdai_memory_search agree on rank.
+ * A tiny FTS list that is entirely below the cutoff is kept (`ftsSmallSetLimit`),
+ * matching keyword search — BM25 magnitudes are unreliable on a handful of hits.
+ * Vector hits have no such exception.
+ *
+ * Native hybrid ignores `scoreThreshold`. Those hits carry the backend's RRF
+ * score (~1/60), and the recall default 0.3 would discard every one. That path
+ * is top-N, same as the tool.
  *
  * Native hybrid (TCVDB dense+sparse) is attempted before any client-embed
  * gate so NoopEmbeddingService does not block server-side search.
@@ -19,6 +31,13 @@ const DEFAULT_TAG = "[memory-tdai][l1-candidate-recall]";
 /** Standard RRF constant from the original RRF paper. */
 const RRF_K = 60;
 
+/**
+ * Candidate over-fetch shared by tdai_memory_search and /recall hybrid.
+ * Native backends fuse ANN and sparse legs at this depth; a smaller topK
+ * changes who wins RRF, so both entry points must pass the same multiple.
+ */
+export const L1_RECALL_CANDIDATE_FACTOR = 3;
+
 export type L1RecallStrategy = "hybrid" | "embedding" | "fts" | "none";
 
 export interface RecallL1CandidatesParams {
@@ -33,11 +52,33 @@ export interface RecallL1CandidatesParams {
   embeddingTimeoutMs?: number;
   /** Log prefix so search/dedup keep their existing tag in logs. */
   logTag?: string;
+  /**
+   * Drop client-side hits below this 0–1 source score after RRF.
+   * Omit for top-N only (memory_search, dedup). Ignored on native hybrid.
+   */
+  scoreThreshold?: number;
+  /**
+   * When every FTS hit is below `scoreThreshold` and the FTS list is no longer
+   * than this, keep those FTS hits. /recall passes `maxResults`.
+   */
+  ftsSmallSetLimit?: number;
+}
+
+export interface RecallL1Timing {
+  ftsMs: number;
+  embeddingMs: number;
+  ftsHits: number;
+  embeddingHits: number;
 }
 
 export interface RecallL1CandidatesResult {
   hits: L1SearchResult[];
   strategy: L1RecallStrategy;
+  timing: RecallL1Timing;
+}
+
+function emptyTiming(): RecallL1Timing {
+  return { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
 }
 
 export async function recallL1Candidates(
@@ -52,30 +93,48 @@ export async function recallL1Candidates(
     filter,
     queryEmbedding,
     embeddingTimeoutMs,
+    scoreThreshold,
+    ftsSmallSetLimit,
   } = params;
   const tag = params.logTag ?? DEFAULT_TAG;
 
   if (!query || query.trim().length === 0 || topK <= 0) {
-    return { hits: [], strategy: "none" };
+    return { hits: [], strategy: "none", timing: emptyTiming() };
   }
 
   if (hasNativeL1Hybrid(vectorStore)) {
     logger?.debug?.(`${tag} [native-hybrid] Single-call hybrid search...`);
+    const tNative = performance.now();
     const results = await vectorStore.searchL1Hybrid!(
       filter ? { query, topK, filter } : { query, topK },
     );
-    return { hits: results, strategy: "hybrid" };
+    return {
+      hits: results,
+      strategy: "hybrid",
+      timing: {
+        ftsMs: 0,
+        embeddingMs: performance.now() - tNative,
+        ftsHits: 0,
+        embeddingHits: results.length,
+      },
+    };
   }
 
   const hasEmbedding = hasClientEmbedding(embeddingService);
   const hasFts = vectorStore.isFtsAvailable();
 
   if (!hasEmbedding && !hasFts) {
-    return { hits: [], strategy: "none" };
+    return { hits: [], strategy: "none", timing: emptyTiming() };
   }
 
+  const tLegs = performance.now();
+  let ftsMs = 0;
+  let embeddingMs = 0;
   const [ftsHits, vecHits] = await Promise.all([
-    recallFts(query, topK, vectorStore, hasFts, filter, logger, tag),
+    recallFts(query, topK, vectorStore, hasFts, filter, logger, tag).then((hits) => {
+      ftsMs = performance.now() - tLegs;
+      return hits;
+    }),
     recallVector(
       query,
       topK,
@@ -86,8 +145,17 @@ export async function recallL1Candidates(
       embeddingTimeoutMs,
       logger,
       tag,
-    ),
+    ).then((hits) => {
+      embeddingMs = performance.now() - tLegs;
+      return hits;
+    }),
   ]);
+  const timing: RecallL1Timing = {
+    ftsMs,
+    embeddingMs,
+    ftsHits: ftsHits.length,
+    embeddingHits: vecHits.length,
+  };
 
   const ftsOk = ftsHits.length > 0;
   const vecOk = vecHits.length > 0;
@@ -100,18 +168,64 @@ export async function recallL1Candidates(
     strategy = "fts";
   } else {
     logger?.debug?.(`${tag} Both search paths returned 0 results`);
-    return { hits: [], strategy: hasEmbedding ? "embedding" : "fts" };
+    return { hits: [], strategy: hasEmbedding ? "embedding" : "fts", timing };
   }
 
+  const ranked = strategy === "hybrid"
+    ? rrfMergeL1Hits(ftsHits, vecHits)
+    : (ftsOk ? ftsHits : vecHits);
   if (strategy === "hybrid") {
-    const merged = rrfMergeL1Hits(ftsHits, vecHits);
     logger?.debug?.(
-      `${tag} [hybrid] RRF merged: fts=${ftsHits.length}, vec=${vecHits.length} → ${merged.length} unique`,
+      `${tag} [hybrid] RRF merged: fts=${ftsHits.length}, vec=${vecHits.length} → ${ranked.length} unique`,
     );
-    return { hits: merged, strategy };
   }
 
-  return { hits: ftsOk ? ftsHits : vecHits, strategy };
+  const hits = applyClientScoreThreshold(ranked, ftsHits, vecHits, scoreThreshold, ftsSmallSetLimit);
+  if (hits.length !== ranked.length) {
+    logger?.debug?.(
+      `${tag} scoreThreshold=${scoreThreshold} kept ${hits.length}/${ranked.length}`,
+    );
+  }
+  return { hits, strategy, timing };
+}
+
+/**
+ * Filter by FTS / vector source scores. RRF scores are ~0.02 and must not be
+ * compared to `scoreThreshold`. Order of `ranked` is preserved.
+ */
+function applyClientScoreThreshold(
+  ranked: L1SearchResult[],
+  ftsHits: L1SearchResult[],
+  vecHits: L1SearchResult[],
+  scoreThreshold: number | undefined,
+  ftsSmallSetLimit: number | undefined,
+): L1SearchResult[] {
+  if (scoreThreshold == null || !Number.isFinite(scoreThreshold)) return ranked;
+
+  const ftsScore = new Map<string, number>();
+  for (const hit of ftsHits) {
+    if (!ftsScore.has(hit.record_id)) ftsScore.set(hit.record_id, hit.score);
+  }
+  const vecScore = new Map<string, number>();
+  for (const hit of vecHits) {
+    if (!vecScore.has(hit.record_id)) vecScore.set(hit.record_id, hit.score);
+  }
+
+  const anyFtsPasses = ftsHits.some((hit) => hit.score >= scoreThreshold);
+  const keepWeakFts =
+    !anyFtsPasses &&
+    ftsHits.length > 0 &&
+    ftsSmallSetLimit != null &&
+    Number.isFinite(ftsSmallSetLimit) &&
+    ftsHits.length <= ftsSmallSetLimit;
+
+  return ranked.filter((hit) => {
+    const fts = ftsScore.get(hit.record_id);
+    const vec = vecScore.get(hit.record_id);
+    if (fts != null && fts >= scoreThreshold) return true;
+    if (vec != null && vec >= scoreThreshold) return true;
+    return keepWeakFts && fts != null;
+  });
 }
 
 function hasNativeL1Hybrid(store: IMemoryStore): boolean {
