@@ -10,7 +10,7 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./src/server.ts", "./src/mcp/server.ts"],
+  entry: ["./src/server.ts", "./src/mcp/server.ts", "./src/wiki-sync.ts"],
   outDir: "./dist",
   format: "esm",
   platform: "node",

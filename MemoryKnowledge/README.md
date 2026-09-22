@@ -94,7 +94,31 @@ pnpm dev:mcp      # MCP stdio（另开终端；需 HTTP 已起）
 pnpm typecheck
 pnpm test
 pnpm build        # tsdown → dist/
+pnpm wiki-sync    # 把 Wiki 投影到本地 Git 仓库（见下节）
 ```
+
+## Wiki → 本地 Git 仓库（`knowledge-wiki-sync`）
+
+一个**单向投影**：TDAI 仍是活 Wiki，本命令只把它**已处理的页面**落到本地 checkout 的 `wiki/` 下，用于备份、diff、离线阅读。它不写回 Wiki —— 写入路径仍然只有 `page/write`（Agent 工具）。服务端不持有 git 远端与凭据，投影失败也碰不到活 Wiki。
+
+```bash
+# 需先 build（命令读 dist/）
+pnpm build
+export KNOWLEDGE_API_URL=http://127.0.0.1:8421
+export KNOWLEDGE_SERVICE_ID=<service_id>        # 即 x-tdai-service-id
+export KNOWLEDGE_API_TOKEN=<bearer>             # 可选
+pnpm wiki-sync -- --wiki-id wiki-xxxxxxxx --repo /path/to/checkout [--push]
+```
+
+| 行为 | 说明 |
+| --- | --- |
+| 路径 | 与 API ref 命名空间 1:1 —— `wiki/products/x/x.md` 原样落到仓库 |
+| 内容 | 逐字节等于 `page/read` 返回的原文（含 frontmatter），无重写 |
+| 删除 | 仅 `wiki/` 下、Wiki 已不存在的 `.md`；`media/` 与结构性文件（`schema.md`/`purpose.md`）从不删 |
+| 提交 | 有 diff 才 commit；`--push` 用 checkout 自己的远端与凭据 |
+| 安全 | 任一页读不到即整体中止、不落盘；页面列表为空则拒绝执行（除非 `--allow-empty`） |
+
+常用开关：`--dry-run`（只报计划）、`--no-commit`（只写树）、`--api-url` / `--service-id` / `--token`（等价环境变量见上）。幂等：同一份 Wiki 再跑一次不会产生提交。定时（cron）跑即可。
 
 ## 可选：ClickHouse 工具调用埋点
 

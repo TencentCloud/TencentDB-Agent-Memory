@@ -6,12 +6,14 @@
   "main": "./dist/server.js",
   "bin": {
     "knowledge-server": "./bin/server.mjs",
-    "knowledge-mcp": "./bin/mcp.mjs"
+    "knowledge-mcp": "./bin/mcp.mjs",
+    "knowledge-wiki-sync": "./bin/wiki-sync.mjs"
   },
   "scripts": {
     "dev": "tsx src/server.ts",
     "dev:mcp": "tsx src/mcp/server.ts",
     "build": "tsdown",
+    "wiki-sync": "node ./bin/wiki-sync.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
