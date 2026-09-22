@@ -297,6 +297,17 @@ function saveState(gitDir: string, state: State): void {
 
 // ─────────────────────────────── run ───────────────────────────────
 
+/**
+ * Uncommitted wiki changes are never imported, so say so — those edits sit in
+ * the checkout doing nothing until someone commits them.
+ */
+async function reportDrift(git: SimpleGit): Promise<void> {
+  const drift = await git.raw(["status", "--porcelain", "--", "wiki"]);
+  if (drift.trim()) {
+    log.warn(`uncommitted wiki changes are not imported until committed:\n${drift.trim()}`);
+  }
+}
+
 function applyToGit(repoDir: string, plan: ReconcilePlan, tdai: Map<string, string>): string[] {
   const touched = new Set<string>();
   for (const path of plan.toGit.write) {
@@ -455,14 +466,8 @@ export async function runSync(opts: Options): Promise<number> {
 
   const touched = applyToGit(repoDir, plan, tdai);
 
-  const drift = await git.raw(["status", "--porcelain", "--", "wiki"]);
-  if (drift.trim()) {
-    log.warn(
-      `checkout has uncommitted wiki changes — not imported until committed:\n${drift.trim()}`,
-    );
-  }
-
   if (opts.noCommit) {
+    await reportDrift(git);
     log.warn("--no-commit: state not saved, so the next run re-derives from the last saved state");
     return 0;
   }
@@ -475,6 +480,10 @@ export async function runSync(opts: Options): Promise<number> {
     opts.push,
   );
   if (!committed) log.info("nothing to commit");
+
+  // Reported after the commit, so what is left is genuine leftover work and not
+  // the files this run just wrote.
+  await reportDrift(git);
 
   saveState(gitDir, {
     version: 1,
