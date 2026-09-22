@@ -31,7 +31,7 @@ import type {
 } from "./types.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
-import type { EmbeddingService } from "./store/embedding.js";
+import { hasClientEmbedding, type EmbeddingService } from "./store/embedding.js";
 import type { StorageAdapter } from "./storage/adapter.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
 import { reportRecallMetrics } from "./report/metric-tracking-recall.js";
@@ -892,15 +892,27 @@ export class TdaiCore {
         // [pg-align] PostgreSQL backend: PgMemoryStore exposes its pg.Pool so
         // the Skill tables (skills / skill_vec) share the same pool.
         const { pool, dimensions } = pgCarrier.getPgPool()!;
+        // 注入文本嵌入函数（对齐 TCVDB 后端的服务端 embedding 语义）：
+        // 复用核心记忆面（L0/L1）的 EmbeddingService；hasClientEmbedding
+        // 排除 Noop 占位（服务端 embedding 场景），维度一致才注入；未配置
+        // embedding provider 时不注入 —— skill 向量检索降级 bm25。
+        const embedService = this.embeddingService;
+        const embedFn =
+          hasClientEmbedding(embedService) && embedService.getDimensions() === dimensions
+            ? (text: string) => embedService.embed(text)
+            : undefined;
         const pgSkillStore = new PgSkillStore({
           pool: pool as import("pg").Pool,
           dimensions,
           logger: this.logger,
+          embed: embedFn,
         });
         pgSkillStore.init();
+        // 存量回填：老部署的 head skill 异步补向量（有界、幂等、失败仅 warn）
+        void pgSkillStore.backfillEmbeddings().catch(() => {});
         skillStore = pgSkillStore;
         this.logger.info(
-          `${TAG} [pg-align] Skill store backend: PgSkillStore (dimensions=${dimensions})`,
+          `${TAG} [pg-align] Skill store backend: PgSkillStore (dimensions=${dimensions}, embedding=${embedFn ? "on" : "off"})`,
         );
       } else {
         this.logger.warn(

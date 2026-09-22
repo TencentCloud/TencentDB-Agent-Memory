@@ -56,6 +56,13 @@ export interface PgSkillStoreOptions {
   /** Embedding 维度。0 = 不创建 skill_vec 表。 */
   dimensions: number;
   logger?: StoreLogger;
+  /**
+   * 可选文本嵌入函数（由 skill wiring 注入，对齐 TCVDB 后端的服务端
+   * embedding 语义）。未注入（provider 未配置）时检索降级 bm25，与
+   * SQLite/MongoDB 后端行为一致。写入侧：appendVersion 后 fire-and-forget
+   * 重算 head 向量；查询侧：embedding/hybrid 模式就地计算 queryEmbedding。
+   */
+  embed?: (text: string) => Promise<Float32Array>;
   /** 注入的 now（毫秒）。默认 Date.now。便于测试。 */
   now?: () => number;
   /** 注入的 row_id 生成器。默认见 defaultUlid()。便于测试。 */
@@ -146,6 +153,7 @@ export class PgSkillStore implements ISkillStore {
   private readonly pool: Pool;
   private readonly dimensions: number;
   private readonly logger?: StoreLogger;
+  private readonly embedFn?: (text: string) => Promise<Float32Array>;
   private readonly now: () => number;
   private readonly ulid: () => string;
   private vecAvailable = false;
@@ -156,6 +164,7 @@ export class PgSkillStore implements ISkillStore {
     this.pool = opts.pool;
     this.dimensions = Math.max(0, Math.floor(opts.dimensions ?? 0));
     this.logger = opts.logger;
+    this.embedFn = opts.embed;
     this.now = opts.now ?? (() => Date.now());
     this.ulid = opts.ulid ?? defaultUlid;
     this.initPromise = this.runDdl();
@@ -394,6 +403,11 @@ export class PgSkillStore implements ISkillStore {
     const inserted = await this.pool.query("SELECT * FROM skills WHERE row_id=$1", [newRowId]);
     const raw = inserted.rows[0] as SkillRowRaw | undefined;
     if (!raw) throw new SkillStoreError("SKILL_NOT_FOUND", "inserted row vanished");
+    // 写入侧接线：head 内容已提交，异步重算向量（fire-and-forget，失败只 warn
+    // 不影响写入结果）。旧向量已在事务内清除（见上 DELETE FROM skill_vec）。
+    if (this.vecAvailable && this.embedFn) {
+      void this.reembedHead(input.skill_id, input.name, input.description, input.content);
+    }
     return toSkill(raw);
   }
 
@@ -537,22 +551,32 @@ export class PgSkillStore implements ISkillStore {
     if (!query) return [];
 
     const mode = opts.mode ?? "bm25";
-    if ((mode === "embedding" || mode === "hybrid") && (!this.vecAvailable || !opts.queryEmbedding)) {
+    // 查询侧接线：embedding/hybrid 且未显式传 queryEmbedding 时，用注入的
+    // embed 函数就地计算（调用方 SkillCore 不感知）。失败仅 warn 并降级 bm25。
+    let queryEmbedding = opts.queryEmbedding;
+    if ((mode === "embedding" || mode === "hybrid") && !queryEmbedding && this.vecAvailable && this.embedFn) {
+      try {
+        queryEmbedding = await this.embedFn(query);
+      } catch (e) {
+        this.logger?.warn(`[pg-skill-store] query embed failed, falling back to bm25: ${(e as Error).message}`);
+      }
+    }
+    if ((mode === "embedding" || mode === "hybrid") && (!this.vecAvailable || !queryEmbedding)) {
       this.logger?.warn(
         `[pg-skill-store] search mode='${mode}' downgraded to 'bm25' ` +
-          `(vec_available=${this.vecAvailable}, has_embedding=${!!opts.queryEmbedding})`,
+          `(vec_available=${this.vecAvailable}, has_embedding=${!!queryEmbedding})`,
       );
     }
     const useVec =
-      (mode === "embedding" || mode === "hybrid") && this.vecAvailable && !!opts.queryEmbedding;
+      (mode === "embedding" || mode === "hybrid") && this.vecAvailable && !!queryEmbedding;
 
     if (mode === "embedding" && useVec) {
-      return this.vectorSearch(opts, query, topK);
+      return this.vectorSearch(opts, queryEmbedding!, topK);
     }
     if (mode === "hybrid" && useVec) {
       const [bm25Hits, vecHits] = await Promise.all([
         this.bm25Search(opts, query, topK),
-        this.vectorSearch(opts, query, topK),
+        this.vectorSearch(opts, queryEmbedding!, topK),
       ]);
       // RRF 融合：score = Σ 1/(60+rank)
       const fused = new Map<string, { skill: Skill; score: number; snippet?: string }>();
@@ -633,12 +657,15 @@ export class PgSkillStore implements ISkillStore {
 
   private async vectorSearch(
     opts: SearchSkillsOptions,
-    _query: string,
+    queryEmbedding: Float32Array,
     topK: number,
   ): Promise<SkillSearchResult[]> {
     try {
-      const flt = this.buildSearchFilters(opts, 2);
-      const vecStr = float32ToPgVector(opts.queryEmbedding!);
+      // 注意：过滤器编号必须从 $2 起（与紧凑 params 数组对齐）——历史上这里
+      // 传 2 导致 $3/$4 与 LIMIT $4 撞号（PG 把 $4 解析为 text），向量路径
+      // 从未跑通过；本次接线时修复。
+      const flt = this.buildSearchFilters(opts, 1);
+      const vecStr = float32ToPgVector(queryEmbedding);
       const params: unknown[] = [vecStr, ...flt.params, topK];
       const r = await this.pool.query(
         `SELECT s.*, 1 - (v.embedding <=> $1::vector) AS sim
@@ -712,9 +739,58 @@ export class PgSkillStore implements ISkillStore {
   }
 
   // ────────────────────────────────────────────────────────────────────
-  //  Embedding 维护（与 SqliteSkillStore 的非接口方法对齐；当前无调用方，
-  //  保留以便上层后续接入 embedding 路由）
+  //  Embedding 维护（部署侧接线：skill wiring 注入 embed 函数后，
+  //  写入侧 appendVersion → reembedHead，查询侧 searchSkills 就地计算，
+  //  存量数据由 backfillEmbeddings 兜底 —— 对齐 TCVDB 后端的服务端
+  //  embedding 语义；未注入时本组方法全部 no-op，检索降级 bm25。）
   // ────────────────────────────────────────────────────────────────────
+
+  /** 重算某 skill head 版本的向量（文本组成与 ftsSegmented 一致）。失败仅 warn。 */
+  private async reembedHead(
+    skillId: string,
+    name: string,
+    description: string | undefined,
+    content: string,
+  ): Promise<void> {
+    if (!this.embedFn) return;
+    try {
+      // 截断由 EmbeddingService 内部处理（local 512 字符 / remote maxInputChars）
+      const text = `${name}\n${description ?? ""}\n${content}`;
+      const vec = await this.embedFn(text);
+      await this.upsertEmbedding(skillId, vec);
+    } catch (e) {
+      this.logger?.warn(`[pg-skill-store] reembedHead(${skillId}) failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 存量回填：为没有向量的 active head skill 补算 embedding（升级部署时，
+   * 老数据在启动后异步获得向量检索能力）。串行、有界、幂等。
+   */
+  async backfillEmbeddings(limit = 100): Promise<number> {
+    if (!this.embedFn || !(await this.ready()) || !this.vecAvailable) return 0;
+    try {
+      const r = await this.pool.query(
+        `SELECT s.skill_id, s.name, s.description, s.content
+         FROM skills s LEFT JOIN skill_vec v ON v.skill_id = s.skill_id
+         WHERE s.is_head=1 AND s.status='active' AND v.skill_id IS NULL
+         LIMIT $1`,
+        [Math.max(1, Math.floor(limit))],
+      );
+      const rows = r.rows as Array<{ skill_id: string; name: string; description: string | null; content: string }>;
+      for (const row of rows) {
+        await this.reembedHead(row.skill_id, row.name, row.description ?? undefined, row.content);
+      }
+      if (rows.length > 0) {
+        this.logger?.info(`[pg-skill-store] backfilled embeddings for ${rows.length} skill(s)`);
+      }
+      return rows.length;
+    } catch (e) {
+      this.logger?.warn(`[pg-skill-store] backfillEmbeddings failed: ${(e as Error).message}`);
+      return 0;
+    }
+  }
+
   async upsertEmbedding(skillId: string, embedding: Float32Array): Promise<void> {
     if (!(await this.ready()) || !this.vecAvailable) return;
     if (embedding.length !== this.dimensions) {
