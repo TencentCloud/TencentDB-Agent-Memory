@@ -52,7 +52,7 @@ const ALLOWED_SUBPATHS = new Set<string>([
   "scenario/read",        // L2 按 path 读全文
 ]);
 
-interface SessionIdFields {
+export interface SessionIdFields {
   user_id: string;
   team_id: string;
   agent_id: string;
@@ -72,6 +72,18 @@ interface SessionIdFields {
    * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
    */
   composite_key?: string;
+  /**
+   * 客户端族群（codebuddy / claude-code / codex / dsh / …），用于 bridge
+   * reject 埋点的 `agentSource` 维度。
+   *
+   * 可选：`toIdFields` / `bindingToIdFields` 目前不产出它，而
+   * `emitBridgeRejectTelemetry` 内部已有
+   * `agentSource ?? agentSourceFromSessionKey(sessionKey)` 兜底（composite_key
+   * 前缀即 agentSource），所以缺失不等于埋点缺维度。此前 memory-bridge 的
+   * 两处 reject 路径直接读 `ids.agent_source`，而这里没声明该字段，
+   * 报 TS2339 —— 运行时无感（读未声明属性是编译期错误），纯类型层断链。
+   */
+  agent_source?: string;
 }
 
 /**
