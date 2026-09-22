@@ -96,7 +96,6 @@ rsync -a --delete \
   --exclude .claude \
   --exclude .env \
   --exclude .env.* \
-  --exclude bin/ \
   --exclude docs/ \
   --exclude __tests__/ \
   --exclude docker/ \

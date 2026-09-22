@@ -134,6 +134,17 @@ pnpm wiki-sync -- --wiki-id wiki-xxxxxxxx --repo /path/to/checkout [--push]
 
 其他开关：`--dry-run`（只报计划）、`--no-commit`（只写树，不保存状态）、`--api-url` / `--service-id` / `--token`。定时（cron）跑即可；两边都不变时不会产生提交。
 
+部署两点（两者都是实测踩到的）：
+
+- **服务启用了鉴权时**（`KNOWLEDGE_SERVICE_KEY` 非空），写端点 `/wiki/page/write`、`/wiki/page/rm` 需要 `Bearer` —— 把该 key 用 `--token`（或 `KNOWLEDGE_API_TOKEN`）传入；只读端点（`page/ls`、`page/read`、`wiki/get`）仍在白名单里，无需鉴权。
+- **git 提交需要身份**：目标 checkout 必须有 `user.name` / `user.email`（用仓库级或全局配置），否则第一次提交会失败。
+
+合并镜像（`deploy/panel-knowledge-combined`）会把 `knowledge/bin/` 一并打进 runtime，因此也可在容器内直接跑：
+
+```bash
+docker exec tdai-memory-hub node /app/knowledge/bin/wiki-sync.mjs --help
+```
+
 ## 可选：ClickHouse 工具调用埋点
 
 默认关闭。设置以下环境变量后，Knowledge Service 会把 `POST /v3/tools/call` 写入与 Memory/Skill 兼容的 `tool_call_logs`；启动时会幂等建表，批写或建表失败均不阻断业务请求。
