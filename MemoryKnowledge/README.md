@@ -97,28 +97,42 @@ pnpm build        # tsdown → dist/
 pnpm wiki-sync    # 把 Wiki 投影到本地 Git 仓库（见下节）
 ```
 
-## Wiki → 本地 Git 仓库（`knowledge-wiki-sync`）
+## Wiki ⇄ 本地 Git 仓库（`knowledge-wiki-sync`）
 
-一个**单向投影**：TDAI 仍是活 Wiki，本命令只把它**已处理的页面**落到本地 checkout 的 `wiki/` 下，用于备份、diff、离线阅读。它不写回 Wiki —— 写入路径仍然只有 `page/write`（Agent 工具）。服务端不持有 git 远端与凭据，投影失败也碰不到活 Wiki。
+Wiki 是活的那一份，checkout 是它的工作副本。每次运行把**两边都与上次同步的状态**比较，谁变了就应用谁（`page/write` / `page/rm` 反向写回 Wiki）：
+
+| 变化 | 结果 |
+| --- | --- |
+| 只有 Wiki 变了 | 写入 checkout |
+| 只有（已提交的）git 变了 | 写入 Wiki |
+| 两边都变了、内容不同 | **冲突**：两边都不写，退出码 2 |
+| 两边都变了、内容相同 | 已收敛，无事发生 |
+| 两边都没变 | 无事发生 |
 
 ```bash
-# 需先 build（命令读 dist/）
-pnpm build
+pnpm build                                       # 命令读 dist/
 export KNOWLEDGE_API_URL=http://127.0.0.1:8421
 export KNOWLEDGE_SERVICE_ID=<service_id>        # 即 x-tdai-service-id
 export KNOWLEDGE_API_TOKEN=<bearer>             # 可选
 pnpm wiki-sync -- --wiki-id wiki-xxxxxxxx --repo /path/to/checkout [--push]
 ```
 
+三条底线：
+
+- **只认提交。** git 侧取的是**已提交的树**，不取工作区。未提交的改动只作为 drift 报告，不进 Wiki —— 半成品编辑进不去，未提交的删除也删不掉页面。
+- **冲突即整体中止。** 半个合并比不前进更糟；不静默丢弃任何一边，是唯一安全的结论。要强制选边用 `--on-conflict=prefer-git|prefer-wiki`。
+- **删除是对称的**，且逐条按名打日志 —— 这是唯一无法靠重读恢复的操作。
+
 | 行为 | 说明 |
 | --- | --- |
 | 路径 | 与 API ref 命名空间 1:1 —— `wiki/products/x/x.md` 原样落到仓库 |
-| 内容 | 逐字节等于 `page/read` 返回的原文（含 frontmatter），无重写 |
-| 删除 | 仅 `wiki/` 下、Wiki 已不存在的 `.md`；`media/` 与结构性文件（`schema.md`/`purpose.md`）从不删 |
-| 提交 | 有 diff 才 commit；`--push` 用 checkout 自己的远端与凭据 |
+| 内容 | 每次运行结束后两边逐字节相同（服务写入会注入 `locked: true`，所以写回后重新读取再落盘） |
+| 边界 | `media/` 与结构性文件 `schema.md`/`purpose.md` 永不写入、永不删除 |
+| 首次运行 | 以 Wiki 为准重建 checkout；checkout 里的既有内容**不作为输入** |
 | 安全 | 任一页读不到即整体中止、不落盘；页面列表为空则拒绝执行（除非 `--allow-empty`） |
+| 状态 | 存于 `<git-dir>/wiki-sync-state.json`（每 checkout 一份，从不入库）：上次同步的 commit + 每页内容哈希 |
 
-常用开关：`--dry-run`（只报计划）、`--no-commit`（只写树）、`--api-url` / `--service-id` / `--token`（等价环境变量见上）。幂等：同一份 Wiki 再跑一次不会产生提交。定时（cron）跑即可。
+其他开关：`--dry-run`（只报计划）、`--no-commit`（只写树，不保存状态）、`--api-url` / `--service-id` / `--token`。定时（cron）跑即可；两边都不变时不会产生提交。
 
 ## 可选：ClickHouse 工具调用埋点
 

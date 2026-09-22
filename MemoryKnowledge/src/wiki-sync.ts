@@ -1,49 +1,72 @@
 #!/usr/bin/env node
 /**
- * knowledge-wiki-sync — project a TDAI wiki onto a local git checkout.
+ * knowledge-wiki-sync — sync a TDAI wiki with a local git checkout, both ways.
  *
- * TDAI is the live wiki; this bin is a one-way **projection** (v1). It reads the
- * processed pages over the Knowledge Service HTTP API (`page/ls` + `page/read`)
- * and materialises them 1:1 under `<repo>/wiki/`, deletes the files whose pages
- * have vanished from the wiki, and commits the result. It never writes back to
- * the wiki — `page/write` remains the only write path, reached through the
- * agent tools.
+ * The wiki is the live wiki; the checkout is a working copy of it. Each run
+ * compares both sides against the last reconciled state and applies whichever
+ * side moved:
  *
- * Why a client and not a service-side job: the service holds no git remotes or
- * credentials, and a projection failure must not be able to touch the live
- * wiki. The checkout is the caller's, so git identity and auth stay with the
- * caller (`--push` uses the checkout's own remote + credentials).
+ *   wiki-only change   → written to the checkout
+ *   commit-only change → written to the wiki
+ *   both, differing    → CONFLICT: nothing is written, the run stops
  *
- * The repo tree mirrors the API ref namespace exactly (`wiki/products/x/x.md`),
- * so a file path maps to a ref by identity — no rewriting, no second taxonomy.
+ * Three rules keep this out of the data-loss business:
+ *
+ *  - **Commits only.** The git side is the committed tree, never the working
+ *    tree. Uncommitted edits are reported as drift and not imported, so a
+ *    half-finished edit cannot reach the live wiki, and a deletion that is not
+ *    committed cannot delete a page.
+ *  - **A conflict blocks the whole run.** Partial application of a half-merged
+ *    pair is worse than no progress; refusing is the only outcome that cannot
+ *    silently discard one side's work.
+ *  - **Deletions are symmetric** — a page deleted in the wiki deletes the file,
+ *    a file deleted in a commit deletes the page — and each one is logged by
+ *    name, because that is the operation that cannot be undone by re-reading.
+ *
+ * The service holds no git remote or credential: the checkout, its remote, its
+ * identity and its push auth all belong to the caller.
  *
  * Usage:
  *   knowledge-wiki-sync --wiki-id <id> --repo <path> [--push]
  *
- * Exit codes: 0 ok · 1 error (nothing is written when a read fails).
+ * Exit codes: 0 ok · 1 error · 2 conflicts (nothing written)
  */
 
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
-import simpleGit from "simple-git";
+import simpleGit, { type SimpleGit } from "simple-git";
 
 import { callApi, type HttpClientOptions } from "./mcp/http-client.js";
 import { createLogger } from "./logger.js";
+import {
+  bootstrapPlan,
+  buildManifest,
+  isPageFile,
+  reconcile,
+  wantedPages,
+  wikiMoved,
+  type GitStatus,
+  type ReconcilePlan,
+} from "./wiki-sync-reconcile.js";
 
 const log = createLogger("wiki-sync");
 
-/** Page tree root — same namespace in API refs and in the checkout. */
-const WIKI_ROOT = "wiki";
+/** Server-side caps: refs per `page/read`, pages per `page/write` / `page/rm`. */
+const BATCH = 20;
 
-/** Server-side cap on refs per `page/read` call (store/wiki-service PAGE_READ_MAX). */
-const PAGE_READ_BATCH = 20;
+/** State filename, kept inside the git dir: per checkout, never tracked. */
+const STATE_FILE = "wiki-sync-state.json";
 
-/**
- * Service-generated structural files: they are the service's own artefact, not
- * wiki content, and `page/write` refuses to author them. Never projected.
- */
-const STRUCTURAL_PAGES = new Set([`${WIKI_ROOT}/schema.md`, `${WIKI_ROOT}/purpose.md`]);
+export class ConflictError extends Error {
+  constructor(readonly paths: string[]) {
+    super(
+      `${paths.length} page(s) changed in both the wiki and git: ${paths.join(", ")} — ` +
+        "resolve them, or pass --on-conflict=prefer-git|prefer-wiki",
+    );
+    this.name = "ConflictError";
+  }
+}
 
 export interface Options {
   repo: string;
@@ -51,62 +74,27 @@ export interface Options {
   apiUrl: string;
   serviceId?: string;
   token?: string;
+  onConflict: "abort" | "prefer-git" | "prefer-wiki";
   push: boolean;
   noCommit: boolean;
   dryRun: boolean;
   allowEmpty: boolean;
 }
 
-export interface SyncPlan {
-  /** Refs to write, relative to the repo root. */
-  write: string[];
-  /** Existing page files with no counterpart in the wiki. */
-  delete: string[];
+interface State {
+  version: 1;
+  wikiId: string;
+  serviceId: string | null;
+  /** Commit holding the last reconciled content. */
+  commit: string;
+  /** Page path → content hash at that commit. */
+  pages: Record<string, string>;
 }
 
 /**
- * True if `p` is a page file this bin owns: markdown, under `wiki/`, not in the
- * `media/` subtree (assets are not pages, and `page/ls` does not list them —
- * deleting from a listing that cannot contain them would be data loss).
+ * Page files currently in the checkout's working tree, as repo-relative posix
+ * paths. Used only to report drift — never as an input to the plan.
  */
-export function isPageFile(p: string): boolean {
-  if (!p.startsWith(`${WIKI_ROOT}/`)) return false;
-  if (!p.endsWith(".md")) return false;
-  if (p.includes("..") || p.includes("//")) return false;
-  if (p.startsWith(`${WIKI_ROOT}/media/`)) return false;
-  return true;
-}
-
-export function isStructuralPage(p: string): boolean {
-  return STRUCTURAL_PAGES.has(p);
-}
-
-/** Page files the wiki says exist, de-duplicated and sorted. */
-export function wantedPages(pagePaths: string[]): string[] {
-  const wanted = new Set<string>();
-  for (const p of pagePaths) {
-    if (isPageFile(p) && !isStructuralPage(p)) wanted.add(p);
-  }
-  return [...wanted].sort();
-}
-
-/**
- * Diff the wiki's page set against the checkout's. Pure: the whole decision is
- * `wanted` minus `existing` in each direction, so it is testable without a
- * service or a repo.
- */
-export function planSync(pagePaths: string[], existingPaths: string[]): SyncPlan {
-  const write = wantedPages(pagePaths);
-  const kept = new Set(write);
-  // Structural files are neither written nor deleted — this bin does not own
-  // them, so a checkout that has them keeps them.
-  const remove = existingPaths.filter(
-    (p) => isPageFile(p) && !isStructuralPage(p) && !kept.has(p),
-  );
-  return { write, delete: [...new Set(remove)].sort() };
-}
-
-/** Page files currently in the checkout, as repo-relative posix paths. */
 export function walkPageFiles(repoDir: string): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
@@ -114,7 +102,7 @@ export function walkPageFiles(repoDir: string): string[] {
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
-      return; // missing/unreadable subtree = nothing to delete
+      return; // missing/unreadable subtree = nothing to consider
     }
     for (const entry of entries) {
       const full = join(dir, entry.name);
@@ -127,8 +115,16 @@ export function walkPageFiles(repoDir: string): string[] {
       out.push(relative(repoDir, full).split(sep).join("/"));
     }
   };
-  walk(join(repoDir, WIKI_ROOT));
+  walk(join(repoDir, "wiki"));
   return out;
+}
+
+// ───────────────────────────── wiki (HTTP) ─────────────────────────────
+
+async function getTeamId(http: HttpClientOptions, wikiId: string): Promise<string> {
+  const data = (await callApi(http, "/wiki/get", { wiki_id: wikiId })) as { team_id?: string };
+  if (!data?.team_id) throw new Error(`wiki ${wikiId} has no team_id`);
+  return data.team_id;
 }
 
 async function listPages(http: HttpClientOptions, wikiId: string): Promise<string[]> {
@@ -139,11 +135,11 @@ async function listPages(http: HttpClientOptions, wikiId: string): Promise<strin
 }
 
 /**
- * Read every ref, in server-sized batches. Content is the page verbatim —
- * including its frontmatter — so the projection is byte-for-byte the wiki.
+ * Read every ref, in server-sized batches. Content is the page verbatim,
+ * frontmatter included.
  *
- * A ref the service reports as missing aborts the whole run: a silent drop
- * here is a page deleted from every clone of the projection.
+ * A ref the service reports as missing aborts the run: a silent drop here would
+ * read as "the wiki deleted this page" and delete it from every checkout.
  */
 async function readPages(
   http: HttpClientOptions,
@@ -151,8 +147,8 @@ async function readPages(
   refs: string[],
 ): Promise<Map<string, string>> {
   const contents = new Map<string, string>();
-  for (let i = 0; i < refs.length; i += PAGE_READ_BATCH) {
-    const batch = refs.slice(i, i + PAGE_READ_BATCH);
+  for (let i = 0; i < refs.length; i += BATCH) {
+    const batch = refs.slice(i, i + BATCH);
     const data = (await callApi(http, "/wiki/page/read", { wiki_id: wikiId, refs: batch })) as {
       items?: { ref?: string; content?: string; not_found?: boolean }[];
     };
@@ -169,53 +165,356 @@ async function readPages(
   return contents;
 }
 
-function applyPlan(repoDir: string, plan: SyncPlan, contents: Map<string, string>): void {
-  for (const ref of plan.write) {
-    const abs = join(repoDir, ref);
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, contents.get(ref) ?? "", "utf-8");
-  }
-  for (const ref of plan.delete) {
-    rmSync(join(repoDir, ref), { force: true });
+async function writePages(
+  http: HttpClientOptions,
+  wikiId: string,
+  teamId: string,
+  contents: Map<string, string>,
+): Promise<void> {
+  const refs = [...contents.keys()];
+  for (let i = 0; i < refs.length; i += BATCH) {
+    const pages = refs.slice(i, i + BATCH).map((ref) => ({ ref, content: contents.get(ref) ?? "" }));
+    await callApi(http, "/wiki/page/write", { wiki_id: wikiId, team_id: teamId, pages });
   }
 }
 
-/** Stage `wiki/`, commit if that changed anything, optionally push. */
-async function commitProjection(repoDir: string, message: string, push: boolean): Promise<boolean> {
-  const git = simpleGit(repoDir);
-  await git.raw(["add", "-A", "--", WIKI_ROOT]);
-  const status = await git.status();
-  if (status.files.length === 0) {
-    log.info("no changes to commit");
-    return false;
+async function removePages(
+  http: HttpClientOptions,
+  wikiId: string,
+  teamId: string,
+  refs: string[],
+): Promise<void> {
+  for (let i = 0; i < refs.length; i += BATCH) {
+    await callApi(http, "/wiki/page/rm", {
+      wiki_id: wikiId,
+      team_id: teamId,
+      refs: refs.slice(i, i + BATCH),
+    });
   }
+}
+
+// ─────────────────────────────── git ───────────────────────────────
+
+async function gitDirOf(git: SimpleGit): Promise<string> {
+  return (await git.raw(["rev-parse", "--absolute-git-dir"])).trim();
+}
+
+/**
+ * The current commit, or null on an unborn branch (a freshly `git init`'d
+ * checkout has no HEAD to read a tree from).
+ */
+async function headCommit(git: SimpleGit): Promise<string | null> {
+  try {
+    return (await git.raw(["rev-parse", "--verify", "HEAD"])).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function treePageFiles(git: SimpleGit, ref: string): Promise<string[]> {
+  const out = await git.raw(["ls-tree", "-r", "--name-only", ref, "--", "wiki"]);
+  return out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && isPageFile(line));
+}
+
+/**
+ * What changed under `wiki/` between two commits. Empty when the refs are
+ * equal, so callers need not special-case it.
+ */
+async function diffPageFiles(
+  git: SimpleGit,
+  from: string,
+  to: string,
+): Promise<Map<string, GitStatus>> {
+  const changed = new Map<string, GitStatus>();
+  if (from === to) return changed;
+  const out = await git.raw(["diff", "--name-status", from, to, "--", "wiki"]);
+  for (const line of out.split("\n")) {
+    if (!line.trim()) continue;
+    const parts = line.split("\t");
+    const code = parts[0]?.[0];
+    if (code === "A" && parts[1]) changed.set(parts[1], "added");
+    else if ((code === "M" || code === "T") && parts[1]) changed.set(parts[1], "modified");
+    else if (code === "D" && parts[1]) changed.set(parts[1], "deleted");
+    else if ((code === "R" || code === "C") && parts[1] && parts[2]) {
+      // A rename is a delete plus an add; a copy is just an add.
+      if (code === "R") changed.set(parts[1], "deleted");
+      changed.set(parts[2], "added");
+    }
+  }
+  return changed;
+}
+
+/** Content of a path at a revision, or null if it is absent there. */
+async function contentAt(git: SimpleGit, rev: string, path: string): Promise<string | null> {
+  try {
+    return await git.raw(["show", `${rev}:${path}`]);
+  } catch {
+    return null;
+  }
+}
+
+/** Stage exactly the paths this run touched, then commit if that changed anything. */
+async function commitPaths(
+  git: SimpleGit,
+  paths: string[],
+  message: string,
+  push: boolean,
+): Promise<boolean> {
+  if (paths.length === 0) return false;
+  await git.raw(["add", "-A", "--", ...paths]);
+  const staged = await git.raw(["diff", "--cached", "--name-only"]);
+  if (!staged.trim()) return false;
   await git.commit(message);
   if (push) await git.push();
   return true;
 }
 
+// ────────────────────────────── state ──────────────────────────────
+
+function statePath(gitDir: string): string {
+  return join(gitDir, STATE_FILE);
+}
+
+function loadState(gitDir: string, wikiId: string): State | null {
+  const file = statePath(gitDir);
+  if (!existsSync(file)) return null;
+  const state = JSON.parse(readFileSync(file, "utf-8")) as State;
+  if (state.wikiId !== wikiId) {
+    throw new Error(
+      `state file belongs to ${state.wikiId}, not ${wikiId} — pointing a checkout at two wikis would ` +
+        `merge them; delete ${file} to re-baseline`,
+    );
+  }
+  return state;
+}
+
+function saveState(gitDir: string, state: State): void {
+  writeFileSync(statePath(gitDir), `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+}
+
+// ─────────────────────────────── run ───────────────────────────────
+
+function applyToGit(repoDir: string, plan: ReconcilePlan, tdai: Map<string, string>): string[] {
+  const touched = new Set<string>();
+  for (const path of plan.toGit.write) {
+    const content = tdai.get(path);
+    if (content === undefined) continue;
+    const abs = join(repoDir, path);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content, "utf-8");
+    touched.add(path);
+  }
+  for (const path of plan.toGit.delete) {
+    rmSync(join(repoDir, path), { force: true });
+    touched.add(path);
+  }
+  return [...touched];
+}
+
+/**
+ * Build the plan: bootstrap on the first run, three-way afterwards, then apply
+ * the conflict policy.
+ *
+ * `gitContents` is pre-read for the paths that moved on both sides — the only
+ * place a byte comparison is needed, since reading a page the wiki did not
+ * change would be a wasted subprocess.
+ */
+async function buildPlan(
+  git: SimpleGit,
+  opts: Options,
+  tdai: Map<string, string>,
+  state: State | null,
+): Promise<ReconcilePlan> {
+  if (state === null) {
+    log.info("first run: the wiki becomes the baseline; checkout edits are not imported this run");
+    const head = await headCommit(git);
+    return bootstrapPlan(tdai, head === null ? [] : await treePageFiles(git, head));
+  }
+
+  const head = await headCommit(git);
+  if (head === null) {
+    throw new Error("state exists but the checkout has no commit — delete the state file to re-baseline");
+  }
+
+  try {
+    await git.raw(["cat-file", "-e", `${state.commit}^{commit}`]);
+  } catch {
+    throw new Error(
+      `recorded commit ${state.commit} is gone from this checkout (rewritten history?) — delete the ` +
+        "state file to re-baseline",
+    );
+  }
+
+  const manifest = new Map(Object.entries(state.pages));
+  const gitChanged = await diffPageFiles(git, state.commit, head);
+  const movedOnWiki = wikiMoved(tdai, manifest);
+  const bothMoved = [...gitChanged.keys()].filter((p) => isPageFile(p) && movedOnWiki.has(p));
+
+  const gitContents = new Map<string, string | null>();
+  for (const path of bothMoved) {
+    gitContents.set(path, await contentAt(git, "HEAD", path));
+  }
+
+  const plan = reconcile({
+    tdai,
+    gitChanged,
+    manifest,
+    gitContent: (path) => gitContents.get(path) ?? null,
+  });
+
+  if (plan.conflicts.length === 0) return plan;
+
+  for (const path of plan.conflicts) {
+    log.error(`conflict (changed in both): ${path}`);
+  }
+  if (opts.onConflict === "abort") throw new ConflictError(plan.conflicts);
+
+  // The chosen side wins, so its content is applied to the other — including
+  // when the winning side is the one that deleted the page.
+  for (const path of plan.conflicts) {
+    if (opts.onConflict === "prefer-wiki") {
+      if (tdai.has(path)) plan.toGit.write.push(path);
+      else plan.toGit.delete.push(path);
+    } else if (gitContents.get(path) === null) {
+      plan.toWiki.delete.push(path);
+    } else {
+      plan.toWiki.write.push(path);
+    }
+  }
+  plan.conflicts = [];
+  return plan;
+}
+
+export async function runSync(opts: Options): Promise<number> {
+  const repoDir = resolve(opts.repo);
+  if (!existsSync(repoDir)) throw new Error(`repo directory not found: ${repoDir}`);
+  const git = simpleGit(repoDir);
+  try {
+    await git.revparse(["--git-dir"]);
+  } catch {
+    throw new Error(`not a git checkout: ${repoDir}`);
+  }
+  const gitDir = await gitDirOf(git);
+
+  const http: HttpClientOptions = {
+    baseUrl: opts.apiUrl,
+    token: opts.token,
+    serviceId: opts.serviceId,
+  };
+  const teamId = await getTeamId(http, opts.wikiId);
+  const tdai = await readPages(http, opts.wikiId, await listPages(http, opts.wikiId));
+
+  // An empty wiki is almost always a wrong --service-id or a wiki that is not
+  // `ready` (page/ls returns []), not a wiki someone emptied. Acting on it would
+  // delete every page file in the checkout.
+  if (wantedPages([...tdai.keys()]).length === 0 && !opts.allowEmpty) {
+    throw new Error(
+      "wiki returned no pages — refusing to act (check --service-id / wiki status, or pass --allow-empty)",
+    );
+  }
+
+  const state = loadState(gitDir, opts.wikiId);
+  const plan = await buildPlan(git, opts, tdai, state);
+
+  log.info(
+    `wiki ${opts.wikiId}: to git ${plan.toGit.write.length} written / ${plan.toGit.delete.length} deleted; ` +
+      `to wiki ${plan.toWiki.write.length} written / ${plan.toWiki.delete.length} deleted`,
+  );
+  for (const path of plan.toGit.delete) log.warn(`page gone from wiki, removing file: ${path}`);
+  for (const path of plan.toWiki.delete) log.warn(`file gone from git, deleting page: ${path}`);
+  for (const path of plan.unmanaged) log.warn(`changed in git but outside wiki/: ignored (${path})`);
+
+  if (opts.dryRun) return 0;
+
+  // Wiki writes go first: the service normalises what it stores (it injects
+  // `locked: true`), so the checkout is written from the re-read wiki afterwards
+  // and both sides end the run identical.
+  if (plan.toWiki.write.length > 0 || plan.toWiki.delete.length > 0) {
+    const fromGit = new Map<string, string>();
+    for (const path of plan.toWiki.write) {
+      const content = await contentAt(git, "HEAD", path);
+      if (content !== null) fromGit.set(path, content);
+    }
+    await writePages(http, opts.wikiId, teamId, fromGit);
+    plan.toWiki.write = [...fromGit.keys()];
+    if (plan.toWiki.delete.length > 0) {
+      await removePages(http, opts.wikiId, teamId, plan.toWiki.delete);
+    }
+    if (plan.toWiki.write.length > 0) {
+      const canonical = await readPages(http, opts.wikiId, plan.toWiki.write);
+      for (const [ref, content] of canonical) tdai.set(ref, content);
+      for (const ref of canonical.keys()) {
+        if (!plan.toGit.write.includes(ref)) plan.toGit.write.push(ref);
+      }
+    }
+    for (const ref of plan.toWiki.delete) tdai.delete(ref);
+  }
+
+  const touched = applyToGit(repoDir, plan, tdai);
+
+  const drift = await git.raw(["status", "--porcelain", "--", "wiki"]);
+  if (drift.trim()) {
+    log.warn(
+      `checkout has uncommitted wiki changes — not imported until committed:\n${drift.trim()}`,
+    );
+  }
+
+  if (opts.noCommit) {
+    log.warn("--no-commit: state not saved, so the next run re-derives from the last saved state");
+    return 0;
+  }
+
+  const committed = await commitPaths(
+    git,
+    touched,
+    `sync wiki ${opts.wikiId}: ${plan.toGit.write.length} written, ` +
+      `${plan.toGit.delete.length} deleted, ${plan.toWiki.write.length} imported from git`,
+    opts.push,
+  );
+  if (!committed) log.info("nothing to commit");
+
+  saveState(gitDir, {
+    version: 1,
+    wikiId: opts.wikiId,
+    serviceId: opts.serviceId ?? null,
+    commit: (await headCommit(git)) ?? "",
+    pages: Object.fromEntries(buildManifest(tdai)),
+  });
+  return 0;
+}
+
+// ────────────────────────────── CLI ──────────────────────────────
+
 function usage(): string {
   return [
-    "Project a TDAI wiki onto a local git checkout.",
+    "Sync a TDAI wiki with a local git checkout, both ways.",
     "",
     "Usage:",
     "  knowledge-wiki-sync --wiki-id <id> --repo <path> [options]",
     "",
     "Required:",
-    "  --wiki-id <id>        Wiki to project (e.g. wiki-g8lwpmlz)",
-    "  --repo <path>         Existing git checkout to write <repo>/wiki/ into",
+    "  --wiki-id <id>        Wiki to sync (e.g. wiki-g8lwpmlz)",
+    "  --repo <path>         Git checkout whose <repo>/wiki/ mirrors the wiki",
     "",
     "Options:",
     "  --api-url <url>       Knowledge Service base URL (env KNOWLEDGE_API_URL, default http://localhost:8421)",
     "  --service-id <id>     Tenant id, sent as x-tdai-service-id (env KNOWLEDGE_SERVICE_ID)",
     "  --token <token>       Bearer token (env KNOWLEDGE_API_TOKEN)",
+    "  --on-conflict <p>     abort (default) | prefer-git | prefer-wiki",
     "  --push                Push the commit to the checkout's remote",
-    "  --no-commit           Write the tree, leave staging/committing to you",
+    "  --no-commit           Write the tree, leave staging/committing to you (state is not saved)",
     "  --dry-run             Report the plan, write nothing",
-    "  --allow-empty         Permit an empty page listing (can wipe the checkout)",
+    "  --allow-empty         Permit an empty page listing (can act on the whole checkout)",
     "  -h, --help            Show this help",
     "",
-    "Exit codes: 0 ok · 1 error (a failed read writes nothing)",
+    "Notes:",
+    "  Only committed git changes are imported; uncommitted edits are reported as drift.",
+    "  The first run adopts the wiki as the baseline and rewrites the checkout to match.",
+    "",
+    "Exit codes: 0 ok · 1 error · 2 conflicts (nothing written)",
     "",
   ].join("\n");
 }
@@ -223,6 +522,7 @@ function usage(): string {
 export function parseArgs(argv: string[]): Options | "help" {
   const flags = new Map<string, string>();
   const bools = new Set<string>();
+  const inlineBools = new Set(["push", "no-commit", "dry-run", "allow-empty"]);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "-h" || arg === "--help") return "help";
@@ -232,14 +532,14 @@ export function parseArgs(argv: string[]): Options | "help" {
       flags.set(arg.slice(2, eq), arg.slice(eq + 1));
       continue;
     }
-    const inlineBools = new Set(["push", "no-commit", "dry-run", "allow-empty"]);
-    if (inlineBools.has(arg.slice(2))) {
-      bools.add(arg.slice(2));
+    const name = arg.slice(2);
+    if (inlineBools.has(name)) {
+      bools.add(name);
       continue;
     }
     const value = argv[++i];
     if (value === undefined || value.startsWith("--")) throw new Error(`${arg} requires a value`);
-    flags.set(arg.slice(2), value);
+    flags.set(name, value);
   }
 
   const repo = flags.get("repo");
@@ -247,12 +547,18 @@ export function parseArgs(argv: string[]): Options | "help" {
   if (!repo) throw new Error("--repo is required");
   if (!wikiId) throw new Error("--wiki-id is required");
 
+  const onConflict = flags.get("on-conflict") ?? "abort";
+  if (onConflict !== "abort" && onConflict !== "prefer-git" && onConflict !== "prefer-wiki") {
+    throw new Error(`--on-conflict must be abort, prefer-git or prefer-wiki (got ${onConflict})`);
+  }
+
   return {
     repo,
     wikiId,
     apiUrl: flags.get("api-url") ?? process.env.KNOWLEDGE_API_URL ?? "http://localhost:8421",
     serviceId: flags.get("service-id") ?? process.env.KNOWLEDGE_SERVICE_ID,
     token: flags.get("token") ?? process.env.KNOWLEDGE_API_TOKEN,
+    onConflict,
     push: bools.has("push"),
     noCommit: bools.has("no-commit"),
     dryRun: bools.has("dry-run"),
@@ -260,47 +566,6 @@ export function parseArgs(argv: string[]): Options | "help" {
   };
 }
 
-export async function runSync(opts: Options): Promise<SyncPlan> {
-  const repoDir = resolve(opts.repo);
-  if (!existsSync(repoDir)) throw new Error(`repo directory not found: ${repoDir}`);
-
-  const http: HttpClientOptions = { baseUrl: opts.apiUrl, token: opts.token, serviceId: opts.serviceId };
-  const pagePaths = await listPages(http, opts.wikiId);
-  const wanted = wantedPages(pagePaths);
-
-  // An empty listing is almost always a wrong --service-id or a wiki that is
-  // not `ready` (page/ls returns []), not a wiki someone emptied. Writing that
-  // plan would delete every page file in the checkout.
-  if (wanted.length === 0 && !opts.allowEmpty) {
-    throw new Error(
-      "wiki returned no pages — refusing to delete the checkout's page files " +
-        "(check --service-id / wiki status, or pass --allow-empty)",
-    );
-  }
-
-  const plan = planSync(pagePaths, walkPageFiles(repoDir));
-  log.info(`wiki ${opts.wikiId}: ${plan.write.length} pages, ${plan.delete.length} to delete`);
-
-  if (opts.dryRun) {
-    for (const p of plan.delete) log.info(`would delete ${p}`);
-    return plan;
-  }
-
-  const contents = await readPages(http, opts.wikiId, plan.write);
-  applyPlan(repoDir, plan, contents);
-  for (const p of plan.delete) log.info(`deleted ${p}`);
-
-  if (!opts.noCommit) {
-    const message = `sync wiki ${opts.wikiId}: ${plan.write.length} written, ${plan.delete.length} deleted`;
-    await commitProjection(repoDir, message, opts.push);
-  }
-  return plan;
-}
-
-/**
- * Entry point. Catches everything so a launcher can `void main()` — a rejection
- * escaping here would surface as an unhandled rejection, not a clean exit.
- */
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   try {
     const parsed = parseArgs(argv);
@@ -308,8 +573,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       process.stdout.write(usage());
       return;
     }
-    await runSync(parsed);
+    process.exitCode = await runSync(parsed);
   } catch (err: unknown) {
+    if (err instanceof ConflictError) {
+      process.stderr.write(`knowledge-wiki-sync: ${err.message}\n`);
+      process.exitCode = 2;
+      return;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`knowledge-wiki-sync: ${msg}\n`);
     process.exitCode = 1;
