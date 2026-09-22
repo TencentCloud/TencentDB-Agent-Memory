@@ -17,6 +17,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
+import { redactSensitiveText } from "../utils/sanitize.js";
 import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, scopeProfileStorageView, type StorageAdapter } from "../core/storage/adapter.js";
@@ -734,7 +735,10 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
       userId: iso?.userId,
       agentId: iso?.agentId,
       role: msg.role,
-      messageText: msg.content,
+      // Redact high-confidence secret values before this reaches L0 — content here
+      // is tool_use/tool_result output captured verbatim, so a debugging session
+      // that prints a real key/password would otherwise sit in L0 as plaintext.
+      messageText: redactSensitiveText(msg.content),
       recordedAt: new Date(recordedAtMs).toISOString(),
       timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : recordedAtMs,
     };

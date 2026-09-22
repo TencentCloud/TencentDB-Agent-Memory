@@ -403,3 +403,72 @@ function escapeControlCharsInJsonStrings(text: string): string {
 
   return out.join("");
 }
+
+// ============================================================
+// Sensitive-value redaction (pre-write, L0 capture only)
+// ============================================================
+//
+// L0 captures raw tool_use/tool_result content verbatim (shell commands,
+// command output, file contents, etc.) — anything an agent's tools happen to
+// touch flows through here unfiltered before this was added. That includes
+// real credentials when a debugging session prints an API key, DB password,
+// or private key to stdout/stderr (e.g. `env`, `cat some.env`, an error
+// message echoing a connection string). Once written, a secret sits in L0
+// (and its FTS/vector shadow copies) as plaintext until someone notices and
+// manually redacts it — pure luck whether that happens before it's read back
+// out through recall.
+//
+// This redacts high-confidence secret *values* in place (keeping surrounding
+// text intact, so the record stays useful for recall/summarization) right
+// before an L0 record is persisted. It intentionally only targets patterns
+// specific enough to rarely false-positive on ordinary debugging text —
+// hashes, UUIDs and the like are not in scope, only things that are
+// structurally almost certainly live credentials.
+const REDACTED = "***REDACTED***";
+
+const SENSITIVE_VALUE_PATTERNS: RegExp[] = [
+  // Cloud/vendor API key formats — specific enough prefix+length to rarely
+  // collide with non-secret text.
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+  /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google API key
+  /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, // GitHub token
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack token
+  /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, // Anthropic API key
+  /\bsk-[A-Za-z0-9]{20,}\b/g, // OpenAI-style API key
+  /\bgsk_[A-Za-z0-9]{20,}\b/g, // Groq API key
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, // JWT
+  // PEM private key blocks — redact the whole block, not just a substring.
+  /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g,
+];
+
+// `field: value` / `field=value` for common secret field names — this is
+// what catches things like `PGPASSWORD=...`, `apiKey: "..."`, `Authorization:
+// Bearer ...` in shell output or config dumps. Keeps the field name (useful
+// context for recall) and redacts only the value.
+//
+// No leading `\b`: real-world secret env vars are routinely prefixed
+// (`PGPASSWORD`, `DB_PASSWORD`, `MYSQL_PASSWORD`, `PGPASSWORD`...) — a `PG` +
+// `PASSWORD` boundary doesn't exist between two word characters, so anchoring
+// there would silently miss exactly the common case this exists to catch.
+const SENSITIVE_FIELD_PATTERN =
+  /((?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|bearer)\s*[:=]\s*['"]?)([A-Za-z0-9/+_.=-]{8,})/gi;
+
+/**
+ * Redact high-confidence secret values in `text` in place, keeping
+ * surrounding content intact. Idempotent and side-effect free — safe to call
+ * on already-redacted text.
+ *
+ * Call this on any content about to be written to L0 (or anywhere else it
+ * gets persisted/embedded). Not applied to the recall/query-cleaning path —
+ * a search query being transiently redacted before matching has no benefit
+ * and only risks mangling a legitimate query.
+ */
+export function redactSensitiveText(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const pattern of SENSITIVE_VALUE_PATTERNS) {
+    out = out.replace(pattern, REDACTED);
+  }
+  out = out.replace(SENSITIVE_FIELD_PATTERN, (_match, prefix: string) => `${prefix}${REDACTED}`);
+  return out;
+}

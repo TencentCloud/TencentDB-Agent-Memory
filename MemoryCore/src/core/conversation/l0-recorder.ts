@@ -15,7 +15,7 @@
  */
 
 import crypto from "node:crypto";
-import { sanitizeText, stripCodeBlocks, shouldCaptureL0 } from "../../utils/sanitize.js";
+import { sanitizeText, redactSensitiveText, stripCodeBlocks, shouldCaptureL0 } from "../../utils/sanitize.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
@@ -256,6 +256,11 @@ export async function recordConversation(params: {
   const filtered = extracted
     .map((m) => {
       let content = sanitizeText(m.content);
+      // Redact high-confidence secret values (API keys, PEM blocks, `field=value`
+      // credentials) before this ever reaches disk — tool_use/tool_result content
+      // is captured verbatim, so a debugging session that prints a real key/password
+      // would otherwise sit in L0 as plaintext indefinitely.
+      content = redactSensitiveText(content);
       // Strip fenced code blocks from assistant replies to reduce embedding noise
       if (m.role === "assistant") {
         content = stripCodeBlocks(content);
