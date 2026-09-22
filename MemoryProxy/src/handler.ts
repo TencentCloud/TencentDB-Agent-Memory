@@ -34,6 +34,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -2320,7 +2321,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // only be observed via server logs (no way to retro-add response headers).
     // skipCreditReport: instance config custom model → user's expense, skip credit.
     (ctx.skipCreditReport
-      ? Promise.resolve({ attempted: false, ok: false })
+      ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
       : tryReportCreditFromPath(
           ctx.config.creditReport,
           ctx.requestPath,
