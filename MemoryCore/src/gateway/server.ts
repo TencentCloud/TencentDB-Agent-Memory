@@ -1944,6 +1944,30 @@ export class TdaiGateway {
       this.logger.info(`Core switched to StatefulPipelineManager (instance=${instanceId})`);
     }
 
+    // 1.6. Restore on-disk checkpoint into the StatefulPipelineManager so sessions with
+    // pending backlog get their L1 idle timer re-armed on boot (see start() in
+    // stateful-pipeline-manager.ts) instead of staying stalled until they happen to
+    // receive new traffic. Unlike tdai-core.ts's in-process ensureSchedulerStarted()
+    // path, createStatefulPipelineManager() above never calls .start() — the Gateway
+    // constructs the manager directly against a fresh, empty stateBackend and expects
+    // per-request paths to carry state. That's correct for true multi-instance service
+    // mode (each task supplies its own instanceId; there's no single "the" checkpoint to
+    // preload at boot), so this restore is scoped to standalone mode only, where there's
+    // exactly one well-defined instanceId and a single-process checkpoint file.
+    if (this.config.deployMode === "standalone") {
+      try {
+        const { CheckpointManager } = await import("../utils/checkpoint.js");
+        const storageForCheckpoint = await this.resolveStorageForInstance(instanceId);
+        const checkpointManager = new CheckpointManager(this.config.data.baseDir, this.logger, storageForCheckpoint);
+        const cp = await checkpointManager.read();
+        await statefulManager.start(checkpointManager.getAllPipelineStates(cp));
+      } catch (err) {
+        this.logger.error(
+          `Failed to restore StatefulPipelineManager checkpoint on boot: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     // 2. Start Timer Scanner (Scheme D: leaderless, scans sharded global ZSETs)
     const { TimerScanner } = await import("../services/timer-scanner.js");
     const defaultInstances = this.config.scanner.instances.split(",").filter(Boolean);
