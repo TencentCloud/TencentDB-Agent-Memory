@@ -93,7 +93,13 @@ import {
 } from "./opencode/form.js";
 
 // Re-export the types under their old names for backward compat
-export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
+export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext> & {
+  /**
+   * dsh PTC: `body.tools` 只有 `run_code`。session-init 表单必须包进
+   * `run_code`,不能直接发 `ask_user_question` tool_call。
+   */
+  dshPtc?: boolean;
+};
 export type SessionInitResult = CBSessionInitResult;
 
 /**
@@ -215,6 +221,7 @@ export async function handleSessionInit(
       retry: cbFd.retry,
       stream: reqCtx.stream,
       modelId: reqCtx.modelId,
+      transport: reqCtx.dshPtc ? "run_code" : "native",
     };
     result.response = buildDshFormResponse(dshFd);
   }

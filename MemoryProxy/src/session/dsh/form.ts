@@ -11,6 +11,8 @@
  *
  * # 与 workbuddy form 的差异(3 处 shape 差异 + tool name)
  *   - tool_name: `AskUserQuestion` → `ask_user_question`
+ *     PTC wire 上只有 `run_code` 时,同一次 questions 改由 `run_code` 承载
+ *     (`transport: "run_code"`),否则 agent-loop 会拒 unknown tool
  *   - multiSelect (camelCase) → multi_select (snake_case)
  *   - 每题必填 `id`(dsh schema 硬约束,echoed in answer)
  *   - 顶层 `questions[]` 一次可发多题(workbuddy/CC 通常单题;这里为对齐 dsh
@@ -119,6 +121,14 @@ export interface FormData {
   retry?: boolean;
   stream?: boolean;
   modelId?: string;
+  /**
+   * PTC (`mode: ptc`) 的 wire tools 只有 `run_code`。直接发
+   * `ask_user_question` tool_call 会被 agent-loop 拒成
+   * `unknown tool "ask_user_question": only run_code is callable directly`。
+   * `run_code` 把同一份 questions 放进 `tools.ask_user_question(...)`。
+   * 缺省仍走原生 `ask_user_question`(standard / both preset)。
+   */
+  transport?: "native" | "run_code";
 }
 
 // ── ask_user_question input schema (dsh snake_case + 必填 id) ──────────────────
@@ -240,23 +250,54 @@ function buildAskUserQuestionArgs(data: FormData): { questions: DshAskQuestion[]
 // ── Form Builder ───────────────────────────────────────────────────────────────
 
 /**
- * Build a dsh `ask_user_question` fake form response.
+ * PTC 下 `run_code` 卡片上的短说明。schema 要求 description 与 code 一起出现,
+ * 缺 description 时客户端直接 INVALID_ARGS,问题到不了 UI。
+ */
+const PTC_RUN_CODE_DESCRIPTION = "Ask the user to bind this session";
+
+interface SessionInitToolCall {
+  name: string;
+  arguments: string;
+}
+
+/**
+ * Native preset: tool name `ask_user_question`, arguments 是 questions 本体。
+ * PTC: tool name `run_code`,code 是 async 函数体,内部调用同一个 questions。
+ * tool_call id 仍用 `call_dsh_session_init_`,cleaner 靠前缀认回包,不看 tool 名。
+ */
+function buildSessionInitToolCall(data: FormData): SessionInitToolCall {
+  const input = buildAskUserQuestionArgs(data);
+  if (data.transport === "run_code") {
+    const code = `return await tools.ask_user_question(${JSON.stringify(input)});`;
+    return {
+      name: "run_code",
+      arguments: JSON.stringify({
+        code,
+        description: PTC_RUN_CODE_DESCRIPTION,
+      }),
+    };
+  }
+  return { name: TOOL_NAME, arguments: JSON.stringify(input) };
+}
+
+/**
+ * Build a dsh session-init fake form response.
  *
  * 传输:**OpenAI chat/completions**(stream 或 non-stream)。
- * arguments shape:dsh 原生 `{questions: [{id, question, header, options, multi_select}]}`。
+ * 默认 arguments shape:dsh 原生 `{questions: [{id, question, header, options, multi_select}]}`。
+ * `transport: "run_code"` 时改成 PTC 唯一可直接调用的工具。
  */
 export function buildFormResponse(data: FormData): Response {
   const model = data.modelId ?? "unknown";
   const created = Math.floor(Date.now() / 1000);
   const id = "dsh-session-init-" + Date.now();
   const toolCallId = TOOLCALL_PREFIX + Date.now();
-  const input = buildAskUserQuestionArgs(data);
-  const argsStr = JSON.stringify(input);
+  const call = buildSessionInitToolCall(data);
 
   if (data.stream) {
-    return buildOpenAIStreamingResponse(id, created, model, toolCallId, argsStr);
+    return buildOpenAIStreamingResponse(id, created, model, toolCallId, call.name, call.arguments);
   }
-  return buildOpenAINonStreamingResponse(id, created, model, toolCallId, argsStr);
+  return buildOpenAINonStreamingResponse(id, created, model, toolCallId, call.name, call.arguments);
 }
 
 // ── OpenAI Non-streaming ───────────────────────────────────────────────────────
@@ -266,6 +307,7 @@ function buildOpenAINonStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
+  toolName: string,
   argsStr: string,
 ): Response {
   return new Response(JSON.stringify({
@@ -286,7 +328,7 @@ function buildOpenAINonStreamingResponse(
           id: toolCallId,
           type: "function",
           function: {
-            name: TOOL_NAME,
+            name: toolName,
             arguments: argsStr,
           },
         }],
@@ -304,6 +346,7 @@ function buildOpenAIStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
+  toolName: string,
   argsStr: string,
 ): Response {
   const encoder = new TextEncoder();
@@ -325,7 +368,7 @@ function buildOpenAIStreamingResponse(
               index: 0,
               id: toolCallId,
               type: "function",
-              function: { name: TOOL_NAME, arguments: "" },
+              function: { name: toolName, arguments: "" },
             }],
           },
           finish_reason: null,
