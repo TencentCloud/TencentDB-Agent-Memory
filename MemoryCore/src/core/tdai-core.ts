@@ -31,7 +31,7 @@ import type {
 } from "./types.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
-import type { EmbeddingService } from "./store/embedding.js";
+import { hasClientEmbedding, type EmbeddingService } from "./store/embedding.js";
 import type { StorageAdapter } from "./storage/adapter.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
 import { reportRecallMetrics } from "./report/metric-tracking-recall.js";
@@ -73,8 +73,10 @@ import type {
   ResolvedSkillConfig,
   SkillEnvProbe,
   ExtractorLLMRunner,
+  ISkillStore,
 } from "./skill/index.js";
 import type { Skill } from "./skill/types.js";
+import { PgSkillStore } from "./store/postgres/skill-store.js";
 
 const TAG = "[memory-tdai] [core]";
 
@@ -859,31 +861,65 @@ export class TdaiCore {
       const resolved = resolveSkillConfig(this.cfg.skill, probe, resolverLogger);
       this.resolvedSkillConfig = resolved;
 
-      // Open the underlying DatabaseSync (raw handle escape hatch — see
-      // VectorStore.getRawDb() docstring). Skill tables (skill_meta /
-      // skill_fts / skill_vec / task_*) live in the SAME connection.
+      // Open the underlying storage handle (raw handle escape hatch — see
+      // VectorStore.getRawDb() / PgMemoryStore.getPgPool() docstrings).
+      // Skill tables live in the SAME connection as the memory store:
+      //   - SQLite    → getRawDb() → SqliteSkillStore
+      //   - Postgres  → getPgPool() → PgSkillStore (shared pg.Pool)
       const rawDbCarrier = this.vectorStore as unknown as {
         getRawDb?: () => unknown;
         getEmbeddingDimensions?: () => number;
       };
-      if (typeof rawDbCarrier.getRawDb !== "function") {
+      const pgCarrier = this.vectorStore as unknown as {
+        getPgPool?: () => { pool: unknown; dimensions: number };
+      };
+      let skillStore: ISkillStore;
+      if (typeof rawDbCarrier.getRawDb === "function") {
+        const db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
+        const dimensions =
+          typeof rawDbCarrier.getEmbeddingDimensions === "function"
+            ? rawDbCarrier.getEmbeddingDimensions()
+            : (this.cfg.embedding.dimensions ?? 0);
+
+        const sqliteSkillStore = new SqliteSkillStore({
+          db,
+          dimensions,
+          logger: this.logger,
+        });
+        sqliteSkillStore.init();
+        skillStore = sqliteSkillStore;
+      } else if (typeof pgCarrier.getPgPool === "function") {
+        // [pg-align] PostgreSQL backend: PgMemoryStore exposes its pg.Pool so
+        // the Skill tables (skills / skill_vec) share the same pool.
+        const { pool, dimensions } = pgCarrier.getPgPool()!;
+        // 注入文本嵌入函数（对齐 TCVDB 后端的服务端 embedding 语义）：
+        // 复用核心记忆面（L0/L1）的 EmbeddingService；hasClientEmbedding
+        // 排除 Noop 占位（服务端 embedding 场景），维度一致才注入；未配置
+        // embedding provider 时不注入 —— skill 向量检索降级 bm25。
+        const embedService = this.embeddingService;
+        const embedFn =
+          hasClientEmbedding(embedService) && embedService.getDimensions() === dimensions
+            ? (text: string) => embedService.embed(text)
+            : undefined;
+        const pgSkillStore = new PgSkillStore({
+          pool: pool as import("pg").Pool,
+          dimensions,
+          logger: this.logger,
+          embed: embedFn,
+        });
+        pgSkillStore.init();
+        // 存量回填：老部署的 head skill 异步补向量（有界、幂等、失败仅 warn）
+        void pgSkillStore.backfillEmbeddings().catch(() => {});
+        skillStore = pgSkillStore;
+        this.logger.info(
+          `${TAG} [pg-align] Skill store backend: PgSkillStore (dimensions=${dimensions}, embedding=${embedFn ? "on" : "off"})`,
+        );
+      } else {
         this.logger.warn(
-          `${TAG} Skill wiring skipped: vectorStore does not expose getRawDb() (only SQLite-backed VectorStore is supported in MVP)`,
+          `${TAG} Skill wiring skipped: vectorStore exposes neither getRawDb() nor getPgPool() (supported: SQLite / PostgreSQL backends)`,
         );
         return;
       }
-      const db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
-      const dimensions =
-        typeof rawDbCarrier.getEmbeddingDimensions === "function"
-          ? rawDbCarrier.getEmbeddingDimensions()
-          : (this.cfg.embedding.dimensions ?? 0);
-
-      const skillStore = new SqliteSkillStore({
-        db,
-        dimensions,
-        logger: this.logger,
-      });
-      skillStore.init();
 
       const skillResources = new SkillResourceStore({
         storage: this.storage,
