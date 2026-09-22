@@ -21,6 +21,7 @@ import {
   buildLangfuseInputChat,
   buildRequestDebugMetadata,
 } from "./common/langfuse-debug.js";
+import { isDshHeadlessNoPreset, isDshPtcPresentation } from "./common/dsh-headless.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
 import {
@@ -735,25 +736,24 @@ export async function handleChatCompletions(
   // 会被 dsh agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass
   // session-init 而非弹 form —— 没 UI 场景强弹表单没意义。
   //
-  // 判定:agentSource=dsh 且 body.tools 非空且不含 ask_user_question。
-  // (tools 空数组表示纯对话/aux,不用兜底;tools 里就有 ask_user_question 说明
-  // 有 preset 挂 UI 工具,正常走 form。)
+  // 判定见 common/dsh-headless.ts:
+  //   - tools 空数组 = 纯对话/aux,不 bypass
+  //   - tools 含 ask_user_question = standard / both preset,正常走 form
+  //   - tools 只有 run_code = PTC。工具定义在 system prompt 里,会话仍是
+  //     交互式的,不能当 headless,否则记忆注入被永久跳过(issue 1377)。
+  //     session-init 改由 run_code 承载 ask_user_question。
+  //   - 其余非空且无 ask_user_question = 真 headless / API 直调,bypass
   //
   // NOTE(opencode): opencode CLI 同样不支持虚拟 ask_followup_question tool,
   // 但走独立的 header-driven session-init 分支(见下方 opencode 特化块),
   // 因此不需要走这里的 headless bypass —— opencode 能吃 mem 命令纯文本响应,
   // 也需要 injection / L0 / skill 提取,只是不能弹 form。
-  const _dshHeadless = agentSource === "dsh" && (() => {
-    const tools = (body as { tools?: unknown }).tools;
-    if (!Array.isArray(tools) || tools.length === 0) return false;
-    return !tools.some((t) => {
-      const fn = (t as { function?: { name?: string }; name?: string })?.function;
-      const n = fn?.name ?? (t as { name?: string })?.name;
-      return n === "ask_user_question";
-    });
-  })();
+  const _dshPtc = isDshPtcPresentation(agentSource, body);
+  const _dshHeadless = isDshHeadlessNoPreset(agentSource, body);
   if (_dshHeadless) {
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
+  } else if (_dshPtc && !isAuxiliary) {
+    console.log(`[request-classify] session=${sessionKey} agent=dsh PTC (wire tools are run_code only) → session-init + memory injection`);
   }
 
   // ── Client capabilities detection ─────────────────────────────────────────
@@ -960,7 +960,7 @@ export async function handleChatCompletions(
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray, capabilities: _capabilities },
+          { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray, capabilities: _capabilities, dshPtc: _dshPtc },
           agentSource,
           metadataClient,
           kernelUserKey,
@@ -1979,8 +1979,8 @@ interface TapContext {
   /** True when this request was classified as auxiliary (compaction/title-gen) —
    * downstream L0/skill extract paths must skip to keep buffer semantics clean. */
   isAuxiliary: boolean;
-  /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
-   * in tools) — behaves like aux for downstream side-effects. */
+  /** True when this dsh request came from CLI headless / no-preset.
+   * PTC (wire tools are only `run_code`) is not headless. */
   isDshHeadless: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
