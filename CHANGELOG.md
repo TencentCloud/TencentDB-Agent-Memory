@@ -8,6 +8,16 @@
 
 ---
 
+## [1.0.3] - 2026-09-22
+
+### 🐛 修复
+
+#### OpenClaw 宿主兼容
+
+- **兼容 OpenClaw 9.5**：适配新版宿主的 gateway-ized 插件安装流程与 sqlite-vec 加载方式，并前向兼容旧版本（8.2 / 9.4）。
+  - **修复首次 install 缺少 `enabled` 字段**：OpenClaw 9.5 在 gateway 进程内执行 `plugins install`，存在竞态导致插件首次安装缺少 `enabled` 配置。采用版本分流：`>= 9.5` 延迟 60s + `manualPatch` 直写文件，`< 9.5` 保持立即写入 + restart 原行为。
+  - **修复 sqlite-vec native 扩展加载失败**：OpenClaw 9.5 将插件依赖 staged 到隔离的 `package-N` 目录，原有 `sqliteVec.load` 路径失效。新增「先新后旧」回退：优先定位 `package-N` 嵌套的 `vec0.so` 直连 `loadExtension`，失败回退原 `sqliteVec.load`；无条件加载失败即降级（degraded）保持原行为。
+
 ## [1.0.2] - 2026-09-07
 
 ### 🐛 修复
