@@ -115,6 +115,30 @@ function extractLatestCodexUserMessage(input: unknown): TdaiMessage | null {
   return { role: "user", content: trimmed };
 }
 
+/**
+ * Codex tool-loop continuation: the newest input of this round is a tool
+ * result, not a user message.
+ *
+ * codex re-sends the FULL conversation history in input[] on every round
+ * (see countHumanTurnsCodex below), so "any function_call_output present"
+ * would also swallow genuinely new user turns after the first tool loop.
+ * The round is a continuation only while the last function_call_output
+ * appears AFTER the last user message — its user message is historical,
+ * not new (writing it per-round duplicated L0 rows, upstream issue #1245).
+ */
+export function isToolLoopContinuation(input: unknown): boolean {
+  if (!Array.isArray(input)) return false;
+  let lastUserIdx = -1;
+  let lastOutputIdx = -1;
+  for (let i = 0; i < input.length; i++) {
+    const it = input[i] as Record<string, unknown> | null | undefined;
+    if (!it || typeof it !== "object") continue;
+    if (it.type === "function_call_output") lastOutputIdx = i;
+    else if (it.type === "message" && it.role === "user") lastUserIdx = i;
+  }
+  return lastOutputIdx > lastUserIdx;
+}
+
 // ── Codex session state (exported for unit tests) ────────────────────────────
 
 export interface CodexSessionState {
@@ -1041,9 +1065,10 @@ async function triggerCodexArchiveHooks(
   //   - withL0Retry 3 次退避挡 tdai kernel 瞬断
   //   - stream 场景不 await, 让归档 hook 提前返回
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
+    const continuation = isToolLoopContinuation(ctx.input);
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, continuation ? null : ctx.tdaiUserMessage, assistantText || null),
       ).catch((err: unknown) => {
         console.warn("[codex-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),
