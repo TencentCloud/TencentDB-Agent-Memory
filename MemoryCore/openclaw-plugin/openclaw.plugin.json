@@ -11,7 +11,7 @@
     "tools": [
       "tdai_memory_search",
       "tdai_conversation_search",
-      "tdai_read_cos"
+      "tdai_read_file"
     ]
   },
   "configSchema": {

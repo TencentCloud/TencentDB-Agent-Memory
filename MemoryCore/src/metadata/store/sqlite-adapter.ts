@@ -56,6 +56,10 @@ import type {
   ConfigParamEntity,
   UpsertConfigParamInput,
   ListConfigParamsFilter,
+  InstanceUpstreamConfigEntity,
+  UpsertInstanceUpstreamConfigInput,
+  InstanceUpstreamConfigFilter,
+  UpstreamConfigType,
 } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
@@ -309,6 +313,21 @@ export class SqliteMetadataStore implements IMetadataStore {
         ON meta_config_params(user_id, module, param_name) WHERE scope = 'user';
       CREATE INDEX IF NOT EXISTS idx_meta_config_params_module
         ON meta_config_params(module);
+
+      CREATE TABLE IF NOT EXISTS meta_instance_upstream_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_source TEXT NOT NULL DEFAULT 'default',
+        type TEXT NOT NULL DEFAULT 'conversation' CHECK (type IN ('conversation', 'extraction')),
+        mode TEXT NOT NULL DEFAULT 'official' CHECK (mode IN ('official', 'custom_unified', 'custom_passthrough')),
+        base_url TEXT NOT NULL DEFAULT '',
+        api_key TEXT NOT NULL DEFAULT '',
+        model_id TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_meta_iuc_agent_type
+        ON meta_instance_upstream_config(agent_source, type);
     `);
     this.migrateUserTypeColumn();
     this.migrateLegacyUserKeys();
@@ -547,7 +566,10 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   updateUser(userId: string, patch: Partial<UserEntity>): UserEntity | null {
-    const allowed = ["password", "display_name", "email", "raw_profile_json", "status", "metadata_json", "username"] as const;
+    // external_id / auth_provider：外部认证（如 WOA）绑定存量账号时写入，
+    // 用于下次登录判断是否初次。白名单漏掉 auth_provider 会导致绑定"看似成功、
+    // 实际没写域"，下次按域反查落空 → 401，属静默失效，务必保留。
+    const allowed = ["password", "display_name", "email", "raw_profile_json", "status", "metadata_json", "username", "external_id", "auth_provider"] as const;
     this.applyUpdate("meta_users", "user_id", userId, allowed, patch);
     return this.getUserById(userId);
   }
@@ -1831,6 +1853,101 @@ export class SqliteMetadataStore implements IMetadataStore {
       module: String(r.module),
       param_name: String(r.param_name),
       param_value: String(r.param_value),
+      description: String(r.description),
+      created_at: String(r.created_at),
+      updated_at: String(r.updated_at),
+    };
+  }
+
+  // ── InstanceUpstreamConfig ──────────────────────────────────────────────
+
+  getInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): InstanceUpstreamConfigEntity | null {
+    return this.mapInstanceUpstreamConfig(
+      this.get(
+        "SELECT * FROM meta_instance_upstream_config WHERE agent_source = ? AND type = ?",
+        agentSource, type,
+      ),
+    );
+  }
+
+  upsertInstanceUpstreamConfig(
+    input: UpsertInstanceUpstreamConfigInput,
+  ): InstanceUpstreamConfigEntity {
+    const now = nowIso();
+    const agentSource = input.agent_source ?? "default";
+    const type = input.type ?? "conversation";
+    this.run(
+      `INSERT INTO meta_instance_upstream_config
+        (agent_source, type, mode, base_url, api_key, model_id, description, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(agent_source, type) DO UPDATE SET
+        mode = excluded.mode,
+        base_url = excluded.base_url,
+        api_key = excluded.api_key,
+        model_id = excluded.model_id,
+        description = excluded.description,
+        updated_at = excluded.updated_at`,
+      agentSource,
+      type,
+      input.mode,
+      input.base_url ?? "",
+      input.api_key ?? "",
+      input.model_id ?? "",
+      input.description ?? "",
+      now,
+      now,
+    );
+    return this.getInstanceUpstreamConfig(agentSource, type)!;
+  }
+
+  listInstanceUpstreamConfigs(
+    filter?: InstanceUpstreamConfigFilter,
+  ): InstanceUpstreamConfigEntity[] {
+    const conditions: string[] = [];
+    const params: SQLInputValue[] = [];
+    if (filter?.agent_source) {
+      conditions.push("agent_source = ?");
+      params.push(filter.agent_source);
+    }
+    if (filter?.type) {
+      conditions.push("type = ?");
+      params.push(filter.type);
+    }
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+    const rows = this.all(`SELECT * FROM meta_instance_upstream_config${where} ORDER BY agent_source, type`, ...params);
+    return rows.map((r) => this.mapInstanceUpstreamConfig(r)!);
+  }
+
+  deleteInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): boolean {
+    const existing = this.get(
+      "SELECT id FROM meta_instance_upstream_config WHERE agent_source = ? AND type = ?",
+      agentSource, type,
+    );
+    if (!existing) return false;
+    this.run(
+      "DELETE FROM meta_instance_upstream_config WHERE agent_source = ? AND type = ?",
+      agentSource, type,
+    );
+    return true;
+  }
+
+  private mapInstanceUpstreamConfig(row: Row | null): InstanceUpstreamConfigEntity | null {
+    if (!row) return null;
+    const r = row as Record<string, unknown>;
+    return {
+      id: Number(r.id),
+      agent_source: String(r.agent_source),
+      type: String(r.type) as UpstreamConfigType,
+      mode: String(r.mode) as InstanceUpstreamConfigEntity["mode"],
+      base_url: String(r.base_url),
+      api_key: String(r.api_key),
+      model_id: String(r.model_id),
       description: String(r.description),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),

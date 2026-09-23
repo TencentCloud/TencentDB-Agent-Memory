@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>L0 Mongo Bench — Report Viewer</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --line: #262b38; --fg: #e6e8ee;
+    --muted: #9aa3b2; --accent: #5b8cff; --accent2: #37c98a; --warn: #e0a458;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif; }
+  header { padding: 20px 28px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  .drop { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+  input[type=file] { color: var(--muted); }
+  main { padding: 24px 28px; max-width: 1100px; margin: 0 auto; }
+  section { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 22px; }
+  section h2 { margin: 0 0 4px; font-size: 15px; }
+  section .sub { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .bar-wrap { display: flex; align-items: center; gap: 10px; }
+  .bar { height: 10px; border-radius: 5px; background: var(--accent); min-width: 2px; }
+  .bar.lat { background: var(--warn); }
+  .bar.q { background: var(--accent2); }
+  .kv { display: flex; gap: 22px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .kv b { color: var(--fg); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  code { background: #0b0d13; padding: 1px 6px; border-radius: 5px; color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>L0 Mongo Bench</h1>
+  <span class="meta" id="hdrMeta">load a <code>reports/*.json</code> file →</span>
+  <div class="drop">
+    <select id="picker" title="reports served over HTTP"><option value="">— pick a report —</option></select>
+    <span class="meta">or</span>
+    <input type="file" id="file" accept="application/json,.json" />
+  </div>
+</header>
+<main id="root">
+  <div class="empty">Pick a report JSON produced by <code>bench.ts</code> to visualize write throughput and query latency.</div>
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const fmt = (n) => (n === undefined || n === null) ? "—" : (typeof n === "number" ? n.toLocaleString() : n);
+
+function bar(value, max, cls) {
+  const pct = max > 0 ? Math.max(2, (value / max) * 100) : 2;
+  return `<div class="bar-wrap"><div class="bar ${cls || ""}" style="width:${pct}%"></div><span>${fmt(value)}</span></div>`;
+}
+
+function latencyCols(l) {
+  return `<td>${fmt(l.p50Ms)}</td><td>${fmt(l.p90Ms)}</td><td>${fmt(l.p95Ms)}</td><td>${fmt(l.p99Ms)}</td><td>${fmt(l.maxMs)}</td>`;
+}
+
+function renderWrite1m(w) {
+  const rows = Object.entries(w.byBatch);
+  const maxQps = Math.max(...rows.map(([, r]) => r.docsPerSec), 1);
+  const body = rows.map(([batch, r]) => `
+    <tr>
+      <td>batch=${batch}</td>
+      <td>${fmt(r.docs)}</td>
+      <td>${bar(r.docsPerSec, maxQps)}</td>
+      <td>${fmt(r.batchesPerSec)}</td>
+      ${latencyCols(r.batchLatency)}
+      <td>${fmt(r.errors)}</td>
+    </tr>`).join("");
+  return `
+  <section>
+    <h2>Phase A — write-1m (batch scan) <span class="pill">${w.dropped ? "dropped" : "kept"}</span></h2>
+    <div class="sub">db <code>${w.dbName}</code> · per-batch insert latency (docs/s = green bar)</div>
+    <table>
+      <thead><tr><th>tier</th><th>docs</th><th>docs/s</th><th>batches/s</th><th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>max</th><th>errors</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  </section>`;
+}
+
+function renderWrite100m(w) {
+  const r = w.insert;
+  const ftsPill = w.ftsUsable === undefined ? ""
+    : `<span class="pill" ${w.ftsUsable ? "" : 'style="color:var(--warn);border-color:var(--warn)"'}>${w.ftsUsable ? "FTS usable" : "FTS UNUSABLE"}</span>`;
+  const canaryReadyKv = (w.canary && w.canary.indexReadySinceInitMs !== undefined)
+    ? `<span>index ready: <b>${fmt(w.canary.indexReadySinceInitMs)}ms</b> since create</span>`
+    : "";
+  const canaryKv = w.canary
+    ? `<span>canary: <b>${fmt(w.canary.hits)} hits / ${fmt(w.canary.docs)} docs</b> (${w.canary.ftsVisibilityMs < 0 ? "never" : fmt(w.canary.ftsVisibilityMs) + "ms"})</span>${canaryReadyKv}`
+    : "";
+  return `
+  <section>
+    <h2>Phase B — write-100m <span class="pill">${w.kept ? "kept" : "dropped"}</span> ${ftsPill}</h2>
+    <div class="sub">db <code>${w.dbName}</code> · batch=${fmt(w.batch)}</div>
+    <div class="kv">
+      <span>docs: <b>${fmt(w.docs)}</b></span>
+      <span>docs/s: <b>${fmt(r.docsPerSec)}</b></span>
+      <span>batches/s: <b>${fmt(r.batchesPerSec)}</b></span>
+      <span>errors: <b>${fmt(r.errors)}</b></span>
+      <span>wall: <b>${fmt(r.wallMs)}ms</b></span>
+      <span>$search visible: <b>${w.ftsVisibilityMs < 0 ? "never" : fmt(w.ftsVisibilityMs) + "ms"}</b></span>
+      ${canaryKv}
+    </div>
+    <table>
+      <thead><tr><th>metric</th><th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>max</th></tr></thead>
+      <tbody><tr><td>batch insert latency</td>${latencyCols(r.batchLatency)}</tr></tbody>
+    </table>
+  </section>`;
+}
+
+// Dependency-free inline-SVG throughput-over-time chart. x = minutes since the
+// (remaining) write started; y = instantaneous docs/s (area) + cumulative avg (dashed).
+function renderThroughput(w) {
+  const samples = (w.insert && w.insert.samples) || [];
+  if (samples.length < 2) return ""; // nothing meaningful to plot (old reports / short runs)
+  const W = 1040, H = 260, m = { l: 64, r: 16, t: 16, b: 34 };
+  const innerW = W - m.l - m.r, innerH = H - m.t - m.b;
+  const xMax = Math.max(...samples.map((s) => s.tMs), 1);
+  const rawYMax = Math.max(...samples.map((s) => Math.max(s.intervalDocsPerSec, s.cumulativeDocsPerSec)), 1);
+  const niceMax = (v) => {
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    const n = v / p;
+    const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+    return step * p;
+  };
+  const yMax = niceMax(rawYMax);
+  const sx = (t) => m.l + (t / xMax) * innerW;
+  const sy = (v) => m.t + innerH - (v / yMax) * innerH;
+  const ptsInterval = samples.map((s) => `${sx(s.tMs).toFixed(1)},${sy(s.intervalDocsPerSec).toFixed(1)}`).join(" ");
+  const ptsCumulative = samples.map((s) => `${sx(s.tMs).toFixed(1)},${sy(s.cumulativeDocsPerSec).toFixed(1)}`).join(" ");
+  const areaPath =
+    `M ${sx(samples[0].tMs).toFixed(1)},${sy(0).toFixed(1)} L ` +
+    samples.map((s) => `${sx(s.tMs).toFixed(1)},${sy(s.intervalDocsPerSec).toFixed(1)}`).join(" L ") +
+    ` L ${sx(samples[samples.length - 1].tMs).toFixed(1)},${sy(0).toFixed(1)} Z`;
+  let grid = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (yMax / 4) * i;
+    const y = sy(v);
+    grid += `<line x1="${m.l}" y1="${y.toFixed(1)}" x2="${W - m.r}" y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
+    grid += `<text x="${m.l - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="var(--muted)" font-size="11">${Math.round(v).toLocaleString()}</text>`;
+  }
+  let xlabels = "";
+  const ticks = 6;
+  for (let i = 0; i <= ticks; i++) {
+    const t = (xMax / ticks) * i;
+    const min = t / 60000;
+    const label = min >= 60 ? (min / 60).toFixed(1) + "h" : min.toFixed(min < 10 ? 1 : 0) + "m";
+    xlabels += `<text x="${sx(t).toFixed(1)}" y="${H - 10}" text-anchor="middle" fill="var(--muted)" font-size="11">${label}</text>`;
+  }
+  const peak = Math.max(...samples.map((s) => s.intervalDocsPerSec));
+  const finalAvg = samples[samples.length - 1].cumulativeDocsPerSec;
+  return `
+  <section>
+    <h2>Throughput over time <span class="pill">${samples.length} pts</span></h2>
+    <div class="sub">db <code>${w.dbName}</code> · instantaneous docs/s (area) vs cumulative avg (dashed) · x = minutes since write start</div>
+    <div class="kv">
+      <span>peak inst: <b>${fmt(Math.round(peak))}/s</b></span>
+      <span>final avg: <b>${fmt(Math.round(finalAvg))}/s</b></span>
+      <span>duration: <b>${(xMax / 60000).toFixed(1)}m</b></span>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block">
+      ${grid}
+      <path d="${areaPath}" fill="var(--accent)" fill-opacity="0.15" stroke="none"/>
+      <polyline points="${ptsInterval}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+      <polyline points="${ptsCumulative}" fill="none" stroke="var(--accent2)" stroke-width="1.5" stroke-dasharray="4 3"/>
+      ${xlabels}
+    </svg>
+  </section>`;
+}
+
+function renderQuery(q) {
+  const rows = Object.entries(q);
+  const maxQps = Math.max(...rows.map(([, s]) => s.qps), 1);
+  const body = rows.map(([name, s]) => `
+    <tr>
+      <td>${name}</td>
+      <td>${bar(s.qps, maxQps, "q")}</td>
+      <td>${fmt(s.n)}</td>
+      ${latencyCols(s.latency)}
+      <td>${fmt(s.lastHits)}</td>
+    </tr>`).join("");
+  return `
+  <section>
+    <h2>Query — business-shaped reads</h2>
+    <div class="sub">QPS (green) + latency percentiles per query type</div>
+    <table>
+      <thead><tr><th>query</th><th>qps</th><th>n</th><th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>max</th><th>hits</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  </section>`;
+}
+
+function render(report) {
+  $("#hdrMeta").innerHTML = `mode <b>${report.mode}</b> · host <code>${report.uriHost}</code> · conc ${report.concurrency} · ${report.startedAt}`;
+  let html = "";
+  if (report.write1m) html += renderWrite1m(report.write1m);
+  if (report.write100m) html += renderWrite100m(report.write100m);
+  if (report.write100m) html += renderThroughput(report.write100m);
+  if (report.query) html += renderQuery(report.query);
+  $("#root").innerHTML = html || `<div class="empty">Report had no phases.</div>`;
+}
+
+function tryRender(text) {
+  try {
+    const report = JSON.parse(text);
+    if (!String(report.schema || "").startsWith("l0-mongo-bench/")) console.warn("unexpected schema:", report.schema);
+    render(report);
+  } catch (err) {
+    $("#root").innerHTML = `<div class="empty">Failed to parse JSON: ${err.message}</div>`;
+  }
+}
+
+// Local file fallback (works when the JSON is on the same machine as the browser).
+$("#file").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => tryRender(reader.result);
+  reader.readAsText(f);
+});
+
+// HTTP mode: when served over a port, list reports/index.json and fetch them.
+// This is what lets you view reports that live on the remote box.
+const picker = $("#picker");
+picker.addEventListener("change", async () => {
+  const name = picker.value;
+  if (!name) return;
+  try {
+    const res = await fetch(`reports/${name}`, { cache: "no-store" });
+    tryRender(await res.text());
+  } catch (err) {
+    $("#root").innerHTML = `<div class="empty">Failed to load ${name}: ${err.message}</div>`;
+  }
+});
+
+async function loadIndex() {
+  try {
+    const res = await fetch("reports/index.json", { cache: "no-store" });
+    if (!res.ok) return; // opened as file:// or no index — file picker still works
+    const files = await res.json();
+    for (const name of files) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      picker.appendChild(opt);
+    }
+    // Auto-load the newest report so the page isn't empty.
+    if (files.length) {
+      picker.value = files[0];
+      picker.dispatchEvent(new Event("change"));
+    }
+  } catch {
+    /* file:// or offline — ignore, file picker remains */
+  }
+}
+loadIndex();
+</script>
+</body>
+</html>

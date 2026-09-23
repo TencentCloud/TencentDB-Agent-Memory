@@ -22,7 +22,7 @@
 
 ---
 
-> **最新：** Team Memory Beta 版本正在快速迭代，简单安装就能玩。
+> ☁️ **云上托管版**已正式上线，诚邀体验，如有使用意向，请填写问卷，我们后续会尽快联系您：**[填写问卷](https://wj.qq.com/s2/27892273/3h5k/)**
 
 <td>
    <video src="https://github.com/user-attachments/assets/c671134a-0051-42bf-8d1f-d96c37656e63" width="100%" controls autoplay loop muted playsinline></video>
@@ -45,6 +45,8 @@ $EDITOR .env       # 填入两组 LLM 参数（memory 组 + proxy 组）
 
 完整安装文档（Memory Hub 单独部署 / Proxy + Claude Code / CodeBuddy 用法 / 停止清理 / 端口
 说明等）见 [**INSTALL_CN.md**](./INSTALL_CN.md)（English: [INSTALL.md](./INSTALL.md)）。
+MongoDB 存储后端为**试验特性**（默认关闭），见
+[INSTALL_CN.md · MongoDB 存储后端](./INSTALL_CN.md#可选能力mongodb-存储后端试验特性默认关闭)。
 
 ### 从旧版本迁移数据
 
@@ -324,8 +326,9 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 - 🐞 **发现 Bug 或有疑问？** 欢迎到 [GitHub Issues](https://github.com/Tencent/TencentDB-Agent-Memory/issues) 提交，我们会在 24 小时内响应。
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
+- ☁️ **云上托管版**已正式上线，诚邀体验，如有使用意向，请填写问卷，我们后续会尽快联系您：**[填写问卷](https://wj.qq.com/s2/27892273/3h5k/)**
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/d2fc2872-7672-42e8-96a3-8e85654ab270" width="200" alt="Agent Memory 微信社群二维码" />
+<p align="center"><img src="https://github.com/user-attachments/assets/0e612941-a4ad-423b-a536-13dbdebef66e" width="200" alt="Agent Memory 微信社群二维码" />
 
 ---
 
@@ -369,8 +372,8 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 ## Star 趋势
 
 <p align="center">
-  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
-    <img src="https://github.com/user-attachments/assets/9fa25730-d82e-4631-9f4e-1ab6918755e2" alt="Star History Chart" width="600" />
+  <a href="https://star-history.dera.page/#TencentCloud/TencentDB-Agent-Memory&Date">
+    <img src="https://star-history.dera.page/svg?repos=TencentCloud/TencentDB-Agent-Memory&type=Date" alt="Star History Chart" width="600" />
   </a>
 </p>
 

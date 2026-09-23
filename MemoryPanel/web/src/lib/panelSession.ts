@@ -16,11 +16,13 @@
 import type { PublicUser } from './teamApi';
 
 export interface PanelSession {
+  /** 认证来源；缺省值代表旧 user_key 会话。 */
+  authMethod?: 'user_key' | 'idp';
   /** = 注册表 id = 内核 x-tdai-service-id；登录页选择实例时确定 */
   instanceId: string;
   /** 仅展示用（实例列表里的 name），非必需 */
   instanceName?: string;
-  /** 用户自持的 API 密钥 sk-mem-…；经 auth/verify 验活后缓存 */
+  /** 旧 user_key 会话的 API 密钥；IdP Session 使用空字符串占位，不会下发真实 user_key。 */
   userKey: string;
   /** auth/verify 响应 data.user（可选，用于展示 + 作为 owner_user_id/creator_user_id 来源） */
   user?: PublicUser;

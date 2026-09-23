@@ -197,6 +197,25 @@
   flex: 1;
 }
 
+/* 右侧操作区：手动刷新 + 模式切换横向排列，靠右顶部对齐。
+   刷新紧邻模式切换控件左侧；L2 / L3 无模式切换时仅剩刷新按钮。 */
+._memory-detail-header-actions {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* 手动刷新按钮：与右侧模式切换区顶部对齐，图标居中 */
+._memory-detail-refresh {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  color: var(--tea-color-text-secondary);
+}
+
 ._memory-detail-title {
   font-size: 15px;
   font-weight: 600;

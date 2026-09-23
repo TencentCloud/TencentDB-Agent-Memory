@@ -17,6 +17,7 @@ import type {
   ListEntry,
   StorageLogger,
 } from "./types.js";
+import { pageEntries } from "./list-page.js";
 
 const TAG = "[storage][local]";
 
@@ -173,36 +174,35 @@ export class LocalStorageBackend implements IStorageBackend {
     return existsSync(filePath);
   }
 
+  /**
+   * List objects under a key prefix, per the D9.2 contract
+   * (see storage/__contract__/storage-backend.contract.ts).
+   *
+   * The prefix is a *string* prefix rather than a directory, so it is split
+   * into the deepest enclosing directory plus a leading fragment of the entry
+   * name: "scene_blocks/wo" lists "scene_blocks/" and keeps names starting
+   * with "wo".
+   */
   async listObjects(prefix: string, opts?: ListObjectsOptions): Promise<ListResult> {
-    const dirPath = this.resolvePath(prefix);
-    const maxKeys = opts?.maxKeys ?? 100;
     const recursive = opts?.recursive ?? false;
+
+    const lastSlash = prefix.lastIndexOf("/");
+    const dirKey = lastSlash >= 0 ? prefix.slice(0, lastSlash + 1) : "";
+    const namePrefix = lastSlash >= 0 ? prefix.slice(lastSlash + 1) : prefix;
+    const dirPath = this.resolveDir(dirKey);
 
     if (!existsSync(dirPath)) {
       return { entries: [], total: 0 };
     }
 
-    // Collect all matching entries (up to a reasonable ceiling)
     const allEntries: ListEntry[] = [];
-    await this.walkDir(dirPath, prefix, allEntries, recursive, 10_000);
-
-    // Simple marker-based pagination: skip entries until marker is found
-    let startIdx = 0;
-    if (opts?.marker) {
-      const markerIdx = allEntries.findIndex(e => e.key === opts.marker);
-      if (markerIdx >= 0) {
-        startIdx = markerIdx + 1;
-      }
+    if (recursive) {
+      await this.collectFiles(dirPath, dirKey, prefix, allEntries, 10_000);
+    } else {
+      await this.collectFolded(dirPath, dirKey, namePrefix, allEntries);
     }
 
-    const page = allEntries.slice(startIdx, startIdx + maxKeys);
-    const hasMore = startIdx + maxKeys < allEntries.length;
-
-    return {
-      entries: page,
-      nextMarker: hasMore ? page[page.length - 1]?.key : undefined,
-      total: allEntries.length,
-    };
+    return pageEntries(allEntries, opts);
   }
 
   async deleteObject(key: string): Promise<void> {
@@ -233,8 +233,9 @@ export class LocalStorageBackend implements IStorageBackend {
 
     // Count files before deleting
     const entries: ListEntry[] = [];
-    await this.walkDir(dirPath, prefix, entries, true, Number.MAX_SAFE_INTEGER);
-    const fileCount = entries.filter(e => !e.isDirectory).length;
+    const dirKey = prefix.endsWith("/") ? prefix : `${prefix}/`;
+    await this.collectFiles(dirPath, dirKey, dirKey, entries, Number.MAX_SAFE_INTEGER);
+    const fileCount = entries.length;
 
     await rm(dirPath, { recursive: true, force: true });
     this.logger?.debug?.(`${TAG} deleteByPrefix: ${prefix} (${fileCount} files)`);
@@ -244,11 +245,53 @@ export class LocalStorageBackend implements IStorageBackend {
 
   // ── Private helpers ──────────────────────────────────────
 
-  private async walkDir(
+  /** Resolve the directory part of a key prefix; "" means the backend root. */
+  private resolveDir(dirKey: string): string {
+    return dirKey ? this.resolvePath(dirKey) : resolve(this.rootDir);
+  }
+
+  /**
+   * Non-recursive listing (D9.2-2): direct children whose name starts with
+   * `namePrefix`; subdirectories collapse into a single trailing-slash entry
+   * without being descended into.
+   */
+  private async collectFolded(
     dirPath: string,
-    keyPrefix: string,
+    dirKey: string,
+    namePrefix: string,
     entries: ListEntry[],
-    recursive: boolean,
+  ): Promise<void> {
+    let items: string[];
+    try {
+      items = await readdir(dirPath);
+    } catch {
+      return;
+    }
+
+    for (const item of items) {
+      if (item.endsWith(".meta.json")) continue;
+      if (!item.startsWith(namePrefix)) continue;
+
+      try {
+        const stats = await stat(join(dirPath, item));
+        entries.push(stats.isDirectory()
+          ? { key: `${dirKey}${item}/`, size: 0, lastModified: stats.mtime, isDirectory: true }
+          : { key: `${dirKey}${item}`, size: stats.size, lastModified: stats.mtime, isDirectory: false });
+      } catch {
+        // skip inaccessible items
+      }
+    }
+  }
+
+  /**
+   * Recursive listing (D9.2-3): files only. Descends a subdirectory only when
+   * it can still contain keys matching `filterPrefix`.
+   */
+  private async collectFiles(
+    dirPath: string,
+    dirKey: string,
+    filterPrefix: string,
+    entries: ListEntry[],
     limit: number,
   ): Promise<void> {
     if (entries.length >= limit) return;
@@ -262,28 +305,20 @@ export class LocalStorageBackend implements IStorageBackend {
 
     for (const item of items) {
       if (entries.length >= limit) break;
-      // Skip sidecar metadata files
       if (item.endsWith(".meta.json")) continue;
 
       const fullPath = join(dirPath, item);
-      const itemKey = keyPrefix.endsWith("/")
-        ? `${keyPrefix}${item}`
-        : `${keyPrefix}/${item}`;
+      const itemKey = `${dirKey}${item}`;
 
       try {
         const stats = await stat(fullPath);
 
         if (stats.isDirectory()) {
-          entries.push({
-            key: itemKey + "/",
-            size: 0,
-            lastModified: stats.mtime,
-            isDirectory: true,
-          });
-          if (recursive) {
-            await this.walkDir(fullPath, itemKey + "/", entries, true, limit);
+          const subKey = `${itemKey}/`;
+          if (subKey.startsWith(filterPrefix) || filterPrefix.startsWith(subKey)) {
+            await this.collectFiles(fullPath, subKey, filterPrefix, entries, limit);
           }
-        } else {
+        } else if (itemKey.startsWith(filterPrefix)) {
           entries.push({
             key: itemKey,
             size: stats.size,

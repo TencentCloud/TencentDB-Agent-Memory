@@ -461,8 +461,19 @@ const QUERY_GEN_SYSTEM_PROMPT = [
  *   - 保守长度: 上限 120 字符 (5 词 × ~24 char)
  * 输出空串 = 认为 LLM 没抽到; 上游走 recent 降级。
  */
-function sanitizeGeneratedQuery(raw: string): string {
+export function sanitizeGeneratedQuery(raw: string): string {
   if (typeof raw !== "string") return "";
+  // A₂ 派 thinking 模型 (minimax-m3 / GLM-4-thinking / qwq-32b / 部分 vLLM
+  // DeepSeek-R1) 会把 reasoning 内嵌为 `<think>…</think>` 塞在 content 里。
+  // 如果不先剥掉，`raw.split(/\r?\n/)` 的首个非空行会是 `<think>` 或 think 内容,
+  // 后续标点清洗会把 `<` `>` 打成空格 → BM25 拿到脏 query 命中 0 → 上游降级到
+  // recent。业务不断，但预检索静默失效。跟 l1-extractor.ts@ccaa5dc3 同一思路：
+  //   - 非贪婪 `*?` + 强制 </think> 闭合：截断的 think tag (max_tokens 卡住)
+  //     不 match → 保留原样 → sanitize 后续把它当噪声处理 → recent 降级
+  //   - `g` flag：多段 think 全剥
+  //   - A₁ 派 (minimax-m2.7 / deepseek-v4-pro / o1 / o3) content 无 <think>,
+  //     replace 是 no-op → byte-for-byte 等价，backward-compatible。
+  raw = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
   // 只取首个非空行 —— LLM 偶尔会在关键词前后加一行元数据。
   const firstLine = raw.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? "";
   if (!firstLine) return "";

@@ -52,13 +52,15 @@ import {
   DEFAULT_PROFILE_SCOPE,
   buildProfileIsolationScope,
   parseProfileIsolationScope,
+  type ProfileIsolation,
+  type ProfileScopeOptions,
+} from "../core/profile/profile-scope.js";
+import {
   pullProfilesToLocal,
   listLocalProfiles,
   syncLocalProfilesToStore,
-  type ProfileIsolation,
-  type ProfileScopeOptions,
 } from "../core/profile/profile-sync.js";
-import { createScopedStorageAdapter, StorageAdapter } from "../core/storage/adapter.js";
+import { createScopedStorageAdapter, scopeProfileStorageView, StorageAdapter } from "../core/storage/adapter.js";
 import type { Logger } from "../core/types.js";
 
 const TAG = "[memory-tdai] [pipeline-factory]";
@@ -112,11 +114,19 @@ function profileStoragePrefixForScope(scope: string): string {
 }
 
 function scopedStorage(storage: StorageAdapter | undefined, ctx?: ProfileIsolation): StorageAdapter | undefined {
-  return storage ? createScopedStorageAdapter(storage, profileStoragePrefixForScope(buildIsolationScope(ctx))) : undefined;
+  if (!storage) return undefined;
+  // rowfs 后端在 scopeProfileStorageView 内改走隔离重绑定（D12 ③），不套键前缀。
+  return scopeProfileStorageView(storage, profileStoragePrefixForScope(buildIsolationScope(ctx)), ctx);
 }
 
 function scopedStorageForScope(storage: StorageAdapter | undefined, scope: string): StorageAdapter | undefined {
-  if (!storage || scope === DEFAULT_PROFILE_SCOPE) return storage;
+  if (!storage) return undefined;
+  if (storage.type === "rowfs") {
+    // rowfs: 把 scope 绑进行查询；默认 scope ("global") 解不出维度，
+    // undefined = 全集视图（standalone 单租户语义）。
+    return scopeProfileStorageView(storage, "", parseProfileIsolationScope(scope));
+  }
+  if (scope === DEFAULT_PROFILE_SCOPE) return storage;
   return createScopedStorageAdapter(storage, profileStoragePrefixForScope(scope));
 }
 
@@ -870,6 +880,7 @@ export function createL2Runner(opts: {
       if (changedProfiles.length === 0) {
         logger.debug?.(`${TAG} [L2] No changed Scene profiles, skipping generation provenance`);
         await checkpoint.incrementScenesProcessed();
+        await checkpoint.incrementMemoriesSincePersona(extractResult.memoriesProcessed);
         processedTotal += extractResult.memoriesProcessed;
         continue;
       }
@@ -914,6 +925,7 @@ export function createL2Runner(opts: {
           : undefined,
       });
       await checkpoint.incrementScenesProcessed();
+      await checkpoint.incrementMemoriesSincePersona(extractResult.memoriesProcessed);
       processedTotal += extractResult.memoriesProcessed;
     }
 
@@ -955,7 +967,10 @@ export function createL3Runner(opts: {
     const executionScopes = scopes.length > 0 ? scopes : [DEFAULT_PROFILE_SCOPE];
     let generatedAny = false;
     const l3PromptTargets = executionScopes.map((scope) => {
-      const isolation = parseProfileIsolationScope(scope);
+      // The default scope ("global") carries no team/agent, so parsing yields
+      // undefined — a prompt target with both dimensions unset, which is the
+      // right lookup key for it.
+      const isolation = parseProfileIsolationScope(scope) ?? {};
       return { teamId: isolation.teamId, agentId: isolation.agentId, layer: "l3" as const };
     });
     const l3Prompts = await resolveMemoryPrompts(vectorStore, l3PromptTargets);
@@ -1001,8 +1016,9 @@ export function createL3Runner(opts: {
       }
 
       logger.info(`${TAG} [L3] Starting persona generation: ${reason} (scope=${scope})`);
-      // 反解 scope 拿回 teamId/userId/agentId/sessionId 给 langfuse trace 用
-      const scopeIsolation = parseProfileIsolationScope(scope);
+      // 反解 scope 拿回 teamId/userId/agentId/sessionId 给 langfuse trace 用。
+      // 默认 scope ("global") 解不出维度，按空 isolation 处理。
+      const scopeIsolation = parseProfileIsolationScope(scope) ?? {};
       const l3StartMs = Date.now();
       const resolvedL3Prompt = l3Prompts.get(memoryPromptResolveKey({
         teamId: scopeIsolation.teamId,

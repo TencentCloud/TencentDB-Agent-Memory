@@ -127,7 +127,7 @@ async function fetchTeamsAndAgents(
         task_id: tk.task_id,
         task_name: tk.title,
       }));
-      // 源头注入：defaultTaskId 配置了就作为"本次不关联任务"虚拟条目排在真
+      // 源头注入：defaultTaskId 配置了就作为"暂时跳过"虚拟条目排在真
       // task 之前。下游 form/extractor/init 一个字节都不用改 —— 分页 total
       // 和 auto-select 级联唯一真相都是 tasks.length。用户选中虚拟条目 →
       // completeRegistration 用 defaultTaskId 上报 → getTask 会 404 但
@@ -192,6 +192,20 @@ function autoSelectSoloTask(team: TeamOption | undefined, pageIndex: number): st
   const page = computePagination(team.tasks.length, pageIndex);
   if (page.isLastPage && page.count === 1) {
     return team.tasks[page.start].task_id;
+  }
+  return null;
+}
+
+/**
+ * Symmetric to {@link autoSelectSoloAgent} for teams.
+ *
+ * pagination.ts 保证 total ≥ 2 时任何一页 count ≥ 2 → 正常路径下不会命中；
+ * 保留仅为兜底，防止未来分页策略回退到"solo 末页"造成 1-option form。
+ */
+function autoSelectSoloTeam(cachedTeams: TeamOption[], pageIndex: number): string | null {
+  const page = computePagination(cachedTeams.length, pageIndex);
+  if (page.isLastPage && page.count === 1) {
+    return cachedTeams[page.start].team_id;
   }
   return null;
 }
@@ -447,7 +461,7 @@ async function completeRegistration(
   // optional business dimension (isolation.ts), so a header-identity agent
   // with team+agent but no task (or a stale task) still registers and gets
   // memory — recall just broadens across the agent's memories instead of
-  // narrowing to a task. The interactive "本次不关联任务" / defaultTaskId path
+  // narrowing to a task. The interactive "暂时跳过" / defaultTaskId path
   // also lands here with task_id = defaultTaskId (a virtual value). Do NOT
   // bypass when task_id is missing/undefined.
   const regData = buildRegistrationData(resolved, cachedTeams, sessionKey, regUserId);
@@ -496,10 +510,13 @@ async function completeRegistration(
   // Fire-and-forget: 记录一条 (team, task, agent, user) 参与日志，供看板"实际参与"
   // 分区展示。bypass 路径已在上方 return，走不到这里；debug forceIdentity 路径也
   // 走 append —— 用于本地 / e2e 联调验证。失败仅 warn，不阻断 session 注入路径。
+  // ⚠️ task_id === defaultTaskId 是"暂时跳过"虚拟值，不是内核里真实存在的 task；
+  //    此时直接上报会触发 `task_not_found: task not found: default` 404，跳过。
   if (
     metadataClient &&
     typeof metadataClient.appendParticipationLog === "function" &&
-    regData.task_id
+    regData.task_id &&
+    regData.task_id !== config.defaultTaskId
   ) {
     metadataClient
       .appendParticipationLog({
@@ -821,6 +838,45 @@ async function handleSessionInitInner(
       }
     }
 
+    // ── skipAssetConfirm: 跳过 asset_confirm 对话框，视为用户选了"是" ─────────
+    if (config.skipAssetConfirm) {
+      console.log(
+        `[session-init:cc] session=${compositeKey} skipAssetConfirm=true → skip asset_confirm (teams=${teams.length})`,
+      );
+      const seedState: SessionInitState = {
+        status: "uninitialized",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teams,
+        resetFlow: state?.resetFlow,
+        resetEpoch: state?.resetEpoch,
+      };
+      if (teams.length === 1) {
+        return advanceFromTeamPicked(
+          teams[0], teams, compositeKey, sessionKey, userId,
+          seedState, config, store, reqCtx, stripped,
+          metadataClient, userKey, spaceId,
+        );
+      }
+      // ≥2 teams → 弹 team_select 表单
+      await store.set(compositeKey, {
+        ...seedState,
+        status: "pending_team_select",
+      });
+      console.log(
+        `[session-init:cc] session=${compositeKey} → pending_team_select (teams=${teams.length})`,
+      );
+      const fd: FormData = {
+        teams,
+        stage: "team",
+        stream: reqCtx.stream,
+        modelId: reqCtx.modelId,
+      };
+      return { intercepted: true, response: buildFormResponse(fd) };
+    }
+
     await store.set(compositeKey, {
       status: "pending_asset_confirm",
       keyId: sessionKey,
@@ -923,6 +979,45 @@ async function handleSessionInitInner(
     const lastUserText = getLastUserMessageText(messages);
     const cachedTeams = state.cachedTeams ?? [];
     const teamId = extractTeamFromOptionText(lastUserText, cachedTeams);
+
+    // ── MORE 翻页 (teams.length > 4 时) ──
+    // 与 agent/task 阶段 MORE 分支完全对称：bump teamPageIndex 重发同 stage
+    // form。2026-09-03 新增，此前 team 阶段没有分页，第 5+ 个 team 被硬截断。
+    if (teamId === MORE_MARKER) {
+      const currentPage = state.teamPageIndex ?? 0;
+      const nextPage = currentPage + 1;
+      const totalPages = computePagination(cachedTeams.length, 0).totalPages;
+      const safeNextPage = nextPage > totalPages - 1 ? 0 : nextPage;
+
+      // 防御性 solo 兜底：pagination.ts 保证正常路径不出现 solo 末页，但双保险。
+      const soloTeamId = autoSelectSoloTeam(cachedTeams, safeNextPage);
+      if (soloTeamId) {
+        const soloTeam = cachedTeams.find((t) => t.team_id === soloTeamId);
+        if (soloTeam) {
+          console.log(
+            `[session-init:cc] session=${compositeKey} MORE landed on solo team page ${safeNextPage} → auto-select team=${soloTeamId}`,
+          );
+          return advanceFromTeamPicked(
+            soloTeam, cachedTeams, compositeKey, sessionKey, userId,
+            state, config, store, reqCtx, stripped,
+            metadataClient, userKey, spaceId,
+          );
+        }
+      }
+
+      await store.set(compositeKey, { ...state, teamPageIndex: safeNextPage });
+      console.log(
+        `[session-init:cc] session=${compositeKey} team page ${currentPage} → ${safeNextPage}`,
+      );
+      const fd: FormData = {
+        teams: cachedTeams,
+        stage: "team",
+        pageIndex: safeNextPage,
+        stream: reqCtx.stream,
+        modelId: reqCtx.modelId,
+      };
+      return { intercepted: true, response: buildFormResponse(fd) };
+    }
 
     if (teamId && teamId !== BYPASS_MARKER) {
       const team = cachedTeams.find((t) => t.team_id === teamId);

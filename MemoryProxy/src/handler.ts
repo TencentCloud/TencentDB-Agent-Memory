@@ -34,6 +34,11 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import {
+  getInstanceUpstreamConfigs,
+  resolveUpstreamConfig,
+  shouldOverride,
+} from "./instance-upstream-cache.js";
 import { resolveModelId, isModelInPricing } from "./pricing.js";
 import { inspectAndRecord } from "./identity.js";
 import { writeFailedReportRaw } from "./clickhouse.js";
@@ -79,7 +84,7 @@ function createTdaiClient(config: ProxyConfig, spaceId?: string): TdaiClient | n
 /**
  * Flatten messages into Opik-friendly chat messages (no truncation).
  */
-function flattenMessagesForOpik(messages: unknown[]): unknown[] {
+export function flattenMessagesForOpik(messages: unknown[]): unknown[] {
   const result: unknown[] = [];
   for (const msg of messages) {
     const m = msg as Record<string, unknown>;
@@ -576,7 +581,30 @@ export async function handleChatCompletions(
   // `modelName`, ensuring upstream ids and billing/observability keys align
   // across all traffic.
   const requestedModel = typeof body.model === "string" ? body.model : "unknown";
-  if (!isModelInPricing(config.creditPricing, requestedModel)) {
+
+  // ── Early instance config fetch (needed before pricing gate) ──────────
+  // Custom upstream (Option 2/3) may use models not in our pricing table,
+  // and should NOT have their model alias-resolved to our internal IDs.
+  //
+  // The alias-skip gate depends on WHO is calling:
+  //   - external caller → look at `type=conversation` (client's chat traffic)
+  //   - systemUser (memory/knowledge/skill extraction) → look at
+  //     `type=extraction` (client's memory-extraction upstream)
+  // A conversation-typed row is unrelated to internal extraction traffic,
+  // and vice versa. Prior code keyed off `conversation` unconditionally,
+  // which regressed alias resolution for internal callers whenever the
+  // instance carried any Option-2/3 conversation config (fix: 64e989a0 →
+  // this file's next revision).
+  const _earlyAgent = c.req.path.split("/").filter(Boolean)[0] ?? undefined;
+  const _earlyInstanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, earlySpaceId);
+  const _earlyConvCfg = resolveUpstreamConfig(_earlyInstanceConfigs, _earlyAgent, "conversation");
+  const _earlyExtractCfg = resolveUpstreamConfig(_earlyInstanceConfigs, _earlyAgent, "extraction");
+  const _earlySysMatch = hasSystemUsers() ? matchSystemUserByUserId(earlyVerify.userId) : null;
+  const _isCustomUpstream = _earlySysMatch !== null
+    ? shouldOverride(_earlyExtractCfg)
+    : shouldOverride(_earlyConvCfg);
+
+  if (!_isCustomUpstream && !isModelInPricing(config.creditPricing, requestedModel)) {
     return c.json(
       {
         error: {
@@ -590,12 +618,9 @@ export async function handleChatCompletions(
   }
 
   // ── Model alias: rewrite client-facing modelName → real model_id ──────────
-  // Clients may put a human-readable name (e.g. "claude-opus-4.7") in `model`;
-  // resolve it back to the real upstream model_id (e.g. "ep-pksklwtb") BEFORE
-  // routing / logging / forwarding, so model_id stays the canonical identity
-  // across the whole pipeline. No-op when `model` is already a real id/unknown.
-  const modelId = resolveModelId(config.creditPricing, requestedModel);
-  const modelAliasApplied = typeof body.model === "string" && modelId !== requestedModel;
+  // Only for official mode. Custom upstream keeps the original model name.
+  let modelId = _isCustomUpstream ? requestedModel : resolveModelId(config.creditPricing, requestedModel);
+  const modelAliasApplied = !_isCustomUpstream && typeof body.model === "string" && modelId !== requestedModel;
   if (modelAliasApplied) body.model = modelId;
 
   // ── System-user short-circuit ────────────────────────────────────────────
@@ -731,13 +756,30 @@ export async function handleChatCompletions(
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
   }
 
+  // ── Client capabilities detection ─────────────────────────────────────────
+  // 探测客户端"能否响应 proxy 发起的 fake ask tool_call"。
+  //
+  // 当前仅对 workbuddy 做实质判定：新版 workbuddy 官方 tools 集合里拿掉了
+  // AskUserQuestion（现只剩 20 个工具），proxy 侧继续发 tool_calls 会被客户端
+  // 收下但不知道怎么渲染 → 卡死在 pending。此时需要降级走文字模式
+  // （content chunk + markdown + 纯文字解析）。
+  //
+  // 其他客户端（codebuddy / claude-code / dsh / codex / opencode / hermes /
+  // openclaw）一律 askUserQuestion=true，保持既有行为不变。dsh headless 场景走
+  // 上面独立的 _dshHeadless bypass 分支，不受本探测影响。
+  const { detectClientCapabilities } = await import("./session/client-capabilities.js");
+  const _capabilities = detectClientCapabilities(agentSource, body);
+  if (agentSource === "workbuddy" && !_capabilities.askUserQuestion) {
+    console.log(`[request-classify] session=${sessionKey} agent=workbuddy no-AskUserQuestion tool → text-mode session-init`);
+  }
+
   // ── mem:session-reset pre-hook ──
   // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
   // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
   // 直接返回"不支持"文案。
   const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
   const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
-  if (config.memCommand?.enabled && !isAuxiliary && _noFormAgent) {
+  if (!isAuxiliary && _noFormAgent) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { buildMemResponse } = await import("./mem-command/response-builder.js");
@@ -756,12 +798,12 @@ export async function handleChatCompletions(
       });
     }
   }
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+  if (!isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
-      const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
+      const { parseMemCommand } = await import("./mem-command/index.js");
       const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
-      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+      if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `${agentSource}:${sessionKey}`;
@@ -809,7 +851,7 @@ export async function handleChatCompletions(
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
   let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
-  let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
+  let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
@@ -918,7 +960,7 @@ export async function handleChatCompletions(
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray },
+          { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray, capabilities: _capabilities },
           agentSource,
           metadataClient,
           kernelUserKey,
@@ -984,14 +1026,14 @@ export async function handleChatCompletions(
       // fallback 语义：sessionJustRegistered 在此已定型（见上文 L786），
       // checkFirst 场景可安全复用。
       let memCommandPending = false;
-      if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
+      if (!isAuxiliary && !_dshHeadless) {
         try {
-          const { parseMemCommand, isMemCommandAllowed } = await import("./mem-command/index.js");
+          const { parseMemCommand } = await import("./mem-command/index.js");
           let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
           if (!peek && sessionJustRegistered) {
             peek = parseMemCommand(body as Record<string, unknown>, agentSource, { checkFirst: true });
           }
-          if (peek && isMemCommandAllowed(config.memCommand, peek.command)) {
+          if (peek) {
             memCommandPending = true;
             console.log(`[hook-cache] prewarm skipped: mem-command pending (cmd=${peek.command}) session=${sessionKey}`);
           }
@@ -1057,10 +1099,17 @@ export async function handleChatCompletions(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
+          // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
+          // 之前 slice(-8) 只留后 8 位会显示成 "elthr7yn" 这种截断串，用户完全看不懂，
+          // 与 team 截断问题同源。agent id 本身就短，全量展示无害且更可读。
           agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
+            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          // teamName 来自 session-init（cachedTeams[selected].team_name）；
+          // teamId 存**完整** team_id（如 team-wyuyb7sion）—— 之前 slice(-8)
+          // 会显示成 "uyb7sion" 用户看不懂，且 teamName 为空时兜底更差。
+          teamName: initResult.teamName ?? undefined,
           teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1073,14 +1122,21 @@ export async function handleChatCompletions(
 
   // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
   if (_resetFlowResult) {
-    const { agentName, agentIdShort, teamId, taskName, bypassed } = _resetFlowResult;
+    const { agentName, agentIdShort, teamName, teamId, taskName, bypassed } = _resetFlowResult;
+    // Team 行拼装：优先 "team_name (team_id)"；没查到 team_name 时至少完整 team_id 兜底；
+    // 两者都空则整行省略。避免出现 "Team: uyb7sion" 这种截断字符串。
+    const teamLine = teamName
+      ? `- **Team**: ${teamName}${teamId ? ` (${teamId})` : ""}`
+      : teamId
+        ? `- **Team**: ${teamId}`
+        : null;
     const lines = bypassed
       ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
       : [
           "✅ 已重新绑定团队资产",
           "",
           `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
-          teamId ? `- **Team**: ${teamId}` : null,
+          teamLine,
           taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
           "",
           "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
@@ -1088,7 +1144,7 @@ export async function handleChatCompletions(
     const text = (lines as string[]).join("\n");
 
     const { buildMemResponse } = await import("./mem-command/response-builder.js");
-    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort})`);
+    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort}) team=${teamName ?? "-"} (${teamId || "-"})`);
     return buildMemResponse(text, {
       protocol: "openai",
       stream: isStream,
@@ -1099,8 +1155,8 @@ export async function handleChatCompletions(
   // ── mem: command intercept ────────────────────────────────────────────────
   // 位置对齐 anthropicHandler.ts:847 —— session init 完成后、injection 之前。
   // 命中时：执行命令 → 写 L0 → 触发 skill extract → 伪造 OpenAI 响应返回，跳过
-  // injection（不破坏 KV cache）和上游转发（零 token 消耗）。配置开关
-  // memCommand.enabled 关闭时此段完全不执行，走原有链路。
+  // injection（不破坏 KV cache）和上游转发（零 token 消耗）。命令拦截恒定启用，
+  // 未知命令由 executeMemCommand 内的 KNOWN_COMMANDS 兜底提示。
   //
   // 解决的坑：CodeBuddy 走 OpenAI 协议命中本 handler，之前 mem-command intercept
   // 只挂在 anthropicHandler，CB 用户发 `mem:help` 会直接透传到上游 LLM，返回
@@ -1109,8 +1165,8 @@ export async function handleChatCompletions(
   //
   // 请求分类：OpenAI 协议不做 CC 的 fork/sidequery 分流（handler.ts 没接 CC
   // routing），所有请求都视为 main —— 与 codebuddy adapter classifyRequest 一致。
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
-    const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
+  if (!isAuxiliary && !_dshHeadless) {
+    const { parseMemCommand, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
     // Session init 状态机在本 turn 完成终态（初始化 or bypass）时，最后一条
@@ -1122,7 +1178,7 @@ export async function handleChatCompletions(
     }
     // session-reset 已经在 pre-hook 处理过，跳过防止重复执行，详见 anthropicHandler 同名段
     if (memCmd?.command === "session-reset") memCmd = null;
-    if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+    if (memCmd) {
       // 会话未初始化时，命令不可用（同 anthropic 侧提示）
       if (!sessionInfo || injectedSkipped) {
         const errText = `⚠️ 会话未初始化，命令不可用。请先完成 session 初始化（选择 Team/Agent）后重试。`;
@@ -1147,6 +1203,13 @@ export async function handleChatCompletions(
         args: memCmd.args,
         // task 命令族用最近对话生成草稿。OpenAI/CC/CB 协议直接从 body.messages 取。
         bodyMessages: extractSimpleMessages(body.messages),
+        // 方案 D：taskDraft LLM 跟随主模型 —— 复用客户端当次 model + per-agent 上游 + apiKey
+        model: modelId,
+        upstreamUrl:
+          (agentFromPath ? config.upstream.agents?.[agentFromPath]?.url : undefined) ||
+          config.upstream.url,
+        // CB/CodeBuddy 主链路走 OpenAI chat/completions
+        upstreamProtocol: "openai",
         // OpenAI 协议无 extended thinking 概念，恒 false
       });
 
@@ -1280,7 +1343,7 @@ export async function handleChatCompletions(
   //   (c) entry present, apiKey non-empty  → agent.apiKey (server-side key)
   // Presence of an entry (case b/c) cuts the global fallback — that's what
   // lets one proxy serve mixed server-key / client-key agents at once.
-  const effectiveApiKey = agentUpstreamEntry
+  let effectiveApiKey = agentUpstreamEntry
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;
   // Normalize the request path to the canonical upstream endpoint so the
@@ -1310,6 +1373,25 @@ export async function handleChatCompletions(
     useGuard: config.costGuard.markerOptIn ? hasCostGuardMarker(c.req.path) : true,
     agentName: agentFromPath,
   });
+
+  // ── Instance upstream config override ──────────────────────────────────
+  // Reuse the early-fetched config (already cached, no extra RPC).
+  let skipCreditReport = false;
+  {
+    const routedToCheapModel = target.routedFrom !== "";
+    const convCfg = _earlyConvCfg;
+    if (!routedToCheapModel && shouldOverride(convCfg)) {
+      target.url = `${convCfg.base_url.replace(/\/+$/, "")}${forwardEndpoint}`;
+      effectiveApiKey = convCfg.mode === "custom_unified"
+        ? convCfg.api_key
+        : apiKey; // custom_passthrough: use client's original bearer token
+      if (convCfg.model_id) {
+        body.model = convCfg.model_id;
+        modelId = convCfg.model_id;
+      }
+      skipCreditReport = true;
+    }
+  }
 
   // ── Create pipeline logger ──────────────────────────────────────────────
   const pipe = createPipeline(config, traceId, target.model);
@@ -1418,6 +1500,8 @@ export async function handleChatCompletions(
     userQuery: lf.userQuery,
     spaceId,
     lf,
+    opikTraceId: traceId,
+    opikKeyId: keyId,
   });
 
   const upstreamBody = buildUpstreamBody(body, target);
@@ -1586,6 +1670,7 @@ export async function handleChatCompletions(
       langfuseDebug,
       debugMetadata,
       preparedStats,
+      skipCreditReport,
     };
     const passthrough = createUsageTapTransform(tapCtx);
     const tappedStream = upstreamResp.body.pipeThrough(passthrough);
@@ -1806,7 +1891,10 @@ export async function handleChatCompletions(
   // Credit usage reporting (non-streaming). Failures are surfaced to the client
   // via the `x-credit-report-error` response header but never replace the
   // upstream LLM response body — the user-facing answer is preserved.
-  const creditOutcome = await tryReportCreditFromPath(
+  // skipCreditReport: instance config custom model → user's expense, skip credit.
+  const creditOutcome = skipCreditReport
+    ? { attempted: false, ok: false }
+    : await tryReportCreditFromPath(
     config.creditReport,
     c.req.path,
     usage,
@@ -1907,6 +1995,8 @@ interface TapContext {
   debugMetadata: Record<string, unknown>;
   /** Opaque counters from the request-preparation stage; null when it didn't run. */
   preparedStats: Record<string, unknown> | null;
+  /** Instance upstream config: skip credit reporting for custom model. */
+  skipCreditReport?: boolean;
 }
 
 /** Accumulated tool call state during SSE streaming. */
@@ -2228,15 +2318,18 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // Credit usage reporting for streaming responses. The stream has already
     // been forwarded to the client; failures here are best-effort and can
     // only be observed via server logs (no way to retro-add response headers).
-    tryReportCreditFromPath(
-      ctx.config.creditReport,
-      ctx.requestPath,
-      lastUsage,
-      ctx.config.creditPricing,
-      ctx.modelId,
-      ctx.upstreamUrl,
-      "usage",
-    )
+    // skipCreditReport: instance config custom model → user's expense, skip credit.
+    (ctx.skipCreditReport
+      ? Promise.resolve({ attempted: false, ok: false })
+      : tryReportCreditFromPath(
+          ctx.config.creditReport,
+          ctx.requestPath,
+          lastUsage,
+          ctx.config.creditPricing,
+          ctx.modelId,
+          ctx.upstreamUrl,
+          "usage",
+        ))
       .then((outcome) => {
         if (outcome.attempted && !outcome.ok) {
           pipe.error("CREDIT_REPORT", `[stream] ${outcome.errorMessage ?? "unknown"}`);

@@ -25,7 +25,14 @@ export { ApiError, onUnauthorized, clearSessionCache, PANEL_CAPABILITIES } from 
 export { metaInstancesApi, type MetadataInstance } from './api/meta-instances';
 
 // ── Auth + Environment Bindings ──
-export { authVerifyApi, environmentBindingsApi, type EnvironmentBinding } from './api/auth';
+export {
+  authVerifyApi,
+  authMethodsApi,
+  userKeyLoginApi,
+  environmentBindingsApi,
+  type AuthMethod,
+  type EnvironmentBinding,
+} from './api/auth';
 
 // ── Teams + Members ──
 export { teamsApi, membersApi } from './api/teams';

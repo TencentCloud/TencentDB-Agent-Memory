@@ -7,7 +7,7 @@
  *
  * 本脚本不做任何创建/删除，只输出统计，供人工判断清理哪些库。
  */
-import { TcvdbClient } from "../src/core/store/tcvdb-client.js";
+import { TcvdbClient } from "../src/core/store/tcvdb/client.js";
 
 const VDB_URL = process.env.VDB_URL;
 const VDB_API_KEY = process.env.VDB_API_KEY;

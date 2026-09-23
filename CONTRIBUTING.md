@@ -47,7 +47,7 @@ The simplest inner loop: run the full stack in Docker, then patch the target
 module locally.
 
 ```bash
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/deploy/global-images
 cp .env.example .env && $EDITOR .env
 ./start-all.sh
@@ -59,9 +59,11 @@ it standalone (usually `cd <module> && npm install && npm run dev`).
 ## Submitting changes
 
 1. Fork the repo
-2. Cut a feature branch off `master` or the latest `develop_*` branch
+2. Cut a feature branch from the branch you plan to target. The default branch
+   is `feat/server_team`; use `main` or `feat/server` only when maintainers
+   direct the change there.
    ```bash
-   git checkout -b fix/xxx-issue
+   git switch -c fix/xxx-issue origin/feat/server_team
    ```
 3. Make your changes, run the relevant tests
    ```bash
@@ -69,8 +71,8 @@ it standalone (usually `cd <module> && npm install && npm run dev`).
    npm test          # or pnpm test
    ```
 4. Commit using Conventional Commits + DCO sign-off (see below)
-5. Push and open a PR against `develop_server_team` or `master` (follow the
-   maintainer's latest guidance)
+5. Push and open a PR against the same base branch, normally
+   `feat/server_team` (follow the maintainer's latest guidance)
 6. Get through CI + review, then merge
 
 ## Commit conventions

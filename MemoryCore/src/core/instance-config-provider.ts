@@ -18,7 +18,7 @@
  */
 
 import type { IConfigSource } from "./abstractions/index.js";
-import { readVdbEnvConfig, readCosEnvConfig } from "../utils/env-config.js";
+import { readVdbEnvConfig, readCosEnvConfig, readMongoEnvConfig } from "../utils/env-config.js";
 
 // ════════════════════════════════════════════════════════
 // Types
@@ -28,6 +28,20 @@ export interface VdbConfig {
   url: string;
   user: string;
   apiKey: string;
+  database: string;
+}
+
+/**
+ * Per-instance MongoDB connection info (phase-1 data-plane backend).
+ *
+ * Delivered per-instance mirroring {@link VdbConfig}, but with an independent
+ * namespace. `database` is delivered verbatim (never derived from instanceId):
+ * one per-instance database, collections are bare-named inside it.
+ */
+export interface MongoConfig {
+  endpoint: string;
+  user: string;
+  password: string;
   database: string;
 }
 
@@ -82,6 +96,10 @@ export class LocalConfigSource implements IConfigSource {
     return readVdbEnvConfig();
   }
 
+  async fetchMongo(_instanceId: string): Promise<MongoConfig> {
+    return readMongoEnvConfig();
+  }
+
   async fetchCos(): Promise<CosConfig | null> {
     const cfg = readCosEnvConfig();
     if (!cfg) return null;
@@ -102,6 +120,12 @@ export class LocalConfigSource implements IConfigSource {
 
 interface VdbCacheEntry {
   config: VdbConfig;
+  expiresAt: number;
+  lastAccessedAt: number;
+}
+
+interface MongoCacheEntry {
+  config: MongoConfig;
   expiresAt: number;
   lastAccessedAt: number;
 }
@@ -138,6 +162,10 @@ export class InstanceConfigProvider {
    * 避免向 source 同时发出 N 次请求触发限流。
    */
   private vdbFetchPromises = new Map<string, Promise<VdbConfig>>();
+
+  // ── Mongo: per-instance 缓存 (对称 VDB，独立命名空间) ──
+  private mongoPool = new Map<string, MongoCacheEntry>();
+  private mongoFetchPromises = new Map<string, Promise<MongoConfig>>();
 
   // ── COS: 全局单例缓存 (一份凭证，按 PathPrefix 隔离) ──
   private cosCache: CosConfig | null = null;
@@ -238,6 +266,82 @@ export class InstanceConfigProvider {
   }
 
   /**
+   * 获取指定实例的 Mongo 配置 (带缓存)。对称 {@link resolveVdb}：
+   * 复用同一套 TTL / LRU / in-flight 去重语义，只是独立的 pool。
+   *
+   * 若当前 config source 未实现 fetchMongo (例如尚未接 Shark 的服务源)，
+   * 直接抛错——mongodb 后端要求配置源能下发 Mongo 连接信息 (fail-loud, D13)。
+   */
+  async resolveMongo(instanceId: string): Promise<MongoConfig> {
+    const now = Date.now();
+    const cached = this.mongoPool.get(instanceId);
+
+    if (cached && now < cached.expiresAt) {
+      cached.lastAccessedAt = now;
+      this.mongoPool.delete(instanceId);
+      this.mongoPool.set(instanceId, cached);
+      return cached.config;
+    }
+
+    const inflight = this.mongoFetchPromises.get(instanceId);
+    if (inflight) {
+      this.logger.debug?.(`[instance-config] Mongo fetch in-flight for ${instanceId}, awaiting...`);
+      return inflight;
+    }
+
+    this.logger.debug?.(`[instance-config] Mongo cache ${cached ? "expired" : "miss"} for ${instanceId}, fetching...`);
+    const fetchPromise = this.fetchAndStoreMongo(instanceId);
+    this.mongoFetchPromises.set(instanceId, fetchPromise);
+    try {
+      return await fetchPromise;
+    } finally {
+      this.mongoFetchPromises.delete(instanceId);
+    }
+  }
+
+  private async fetchAndStoreMongo(instanceId: string): Promise<MongoConfig> {
+    if (typeof this.source.fetchMongo !== "function") {
+      const msg = `[instance-config] Config source (${this.source.constructor.name}) does not implement fetchMongo — mongodb backend unavailable`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+    const config = await this.source.fetchMongo(instanceId);
+
+    if (!config || !config.endpoint || !config.database) {
+      const msg = `[instance-config] Config source returned incomplete Mongo config for instanceId="${instanceId}" (endpoint=${config?.endpoint}, database=${config?.database})`;
+      this.logger.error(msg);
+      throw new Error(msg);
+    }
+
+    if (this.mongoPool.size >= this.maxInstances && !this.mongoPool.has(instanceId)) {
+      this.evictMongoLru();
+    }
+
+    const now = Date.now();
+    this.mongoPool.set(instanceId, {
+      config,
+      expiresAt: now + this.vdbTtlMs,
+      lastAccessedAt: now,
+    });
+
+    return config;
+  }
+
+  /** 清除指定实例的 Mongo 缓存 (实例下线时调用)。 */
+  evictMongo(instanceId: string): void {
+    this.mongoPool.delete(instanceId);
+    this.logger.debug?.(`[instance-config] Evicted Mongo cache for ${instanceId}`);
+  }
+
+  private evictMongoLru(): void {
+    const firstKey = this.mongoPool.keys().next().value;
+    if (firstKey !== undefined) {
+      this.mongoPool.delete(firstKey);
+      this.logger.debug?.(`[instance-config] LRU evicted Mongo cache for ${firstKey}`);
+    }
+  }
+
+  /**
    * 获取全局 COS 配置 (带缓存, 自动续期临时凭证)
    */
   async resolveCos(): Promise<CosConfig | null> {
@@ -280,6 +384,7 @@ export class InstanceConfigProvider {
    */
   clear(): void {
     this.vdbPool.clear();
+    this.mongoPool.clear();
     this.cosCache = null;
     this.cosExpiresAt = 0;
     this.logger.info(`[instance-config] All caches cleared`);

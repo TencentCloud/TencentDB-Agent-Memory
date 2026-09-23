@@ -4,7 +4,7 @@
 // MemoryLevel is fixed "proxy", MemoryDelta is 0, CreditDelta = computed credit.
 
 import type { CreditPricingConfig, CreditReportConfig } from "./types.js";
-import { getModelPricing } from "./pricing.js";
+import { getModelPricing, resolveTierPricing } from "./pricing.js";
 import { log } from "./report/log.js";
 
 export interface CreditReportRequest {
@@ -165,13 +165,17 @@ export function computeCreditDelta(
   let fallback: string | undefined;
 
   if (pricing) {
-    // 计算 Credit 值
+    // 分档判据：nonCacheInput + cacheRead（即总 input 上下文长度）
+    const totalInput = nonCacheInput + cacheRead;
+    const effectivePricing = resolveTierPricing(pricing, totalInput);
+
+    // 计算 Credit 值（整体定档，全部 token 类型使用同一档单价）
     credit =
-      (nonCacheInput / 1000) * pricing.input +
-      (output / 1000) * pricing.output +
-      (cacheRead / 1000) * pricing.cacheRead +
-      (cacheWrite5m / 1000) * pricing.cacheWrite5m +
-      (cacheWrite1h / 1000) * pricing.cacheWrite1h;
+      (nonCacheInput / 1000) * effectivePricing.input +
+      (output / 1000) * effectivePricing.output +
+      (cacheRead / 1000) * effectivePricing.cacheRead +
+      (cacheWrite5m / 1000) * effectivePricing.cacheWrite5m +
+      (cacheWrite1h / 1000) * effectivePricing.cacheWrite1h;
   } else {
     // 未定价模型：不上报 credit，避免把 token 计数当 credit 计费。
     // 原始 usage 由 clickhouse 侧 `getRawUsageReason → "unknown_model"` 落 raw 表追溯。

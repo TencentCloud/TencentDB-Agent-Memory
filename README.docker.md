@@ -181,7 +181,7 @@ memory:                      # 记忆引擎调参
 
 ## K8s / TKE 部署
 
-参考 `MemoryCore/deploy/k8s/tdai-memory.yaml`，核心做法：
+本仓库当前未提交可直接应用的 Kubernetes manifests；下面列出 K8s/TKE 部署所需的核心配置做法：
 
 1. **ConfigMap** 挂载 `tdai-gateway.yaml` 到 `/app/config/`
 2. **Secret** 通过环境变量注入 `TDAI_LLM_API_KEY` + `REDIS_PASSWORD`
@@ -256,7 +256,6 @@ volumes:
 │   ├── tdai-gateway.standalone.yaml     # Standalone 配置模板
 │   ├── tdai-gateway.service.yaml        # Service 配置模板
 │   ├── tdai-gateway.real.yaml           # 本地测试配置 (连真实服务)
-│   ├── deploy/k8s/tdai-memory.yaml      # K8s/TKE 部署清单
 │   ├── scripts/mock-shark-server.ts     # Mock Shark (本地开发)
 │   └── src/gateway/server.ts            # 服务入口
 ```
