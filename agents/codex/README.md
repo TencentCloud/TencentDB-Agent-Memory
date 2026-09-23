@@ -29,7 +29,7 @@ stream_idle_timeout_ms = 120000
 ```
 
 字段说明：
-- `wire_api = "responses"` — **必填**，Codex 使用 OpenAI Responses API 协议
+- `wire_api = "responses"` — **必填**，Codex 使用 OpenAI Responses API 协议；MemoryProxy 背后的上游也必须实现该协议（见下方说明）
 - `base_url` — Proxy 地址 + `/codex/<spaceId>`；`default` 是 memory 实例 ID
 - `experimental_bearer_token` — 业务用户的 `user_key`（从面板获取）
 - `disable_response_storage = true` — 关闭本地缓存，确保每轮都经过 Proxy 注入
@@ -40,6 +40,10 @@ stream_idle_timeout_ms = 120000
 请求路径：
 - `POST /codex/:spaceId/v1/responses`
 - `POST /codex/:spaceId/responses`（无 v1 前缀，也接受）
+
+> ⚠️ **上游必须实现 OpenAI Responses API（`/v1/responses`）。** MemoryProxy 把 `/v1/responses`（以及无 `/v1` 前缀的 `/responses`）**原样转发**到上游，**不会**把协议翻译成 `/v1/chat/completions`。只实现 Chat Completions 的 OpenAI 兼容网关（大多数网关都是这种）无法在这条路径上服务 Codex；失败通常表现为上游直接返回 404/400，没有更明确的提示。
+>
+> 若全局 `upstream.url` 不支持 Responses，请在 MemoryProxy `config.yaml` 里用 `upstream.agents.codex.url` 把 Codex 单独指到支持 Responses 的兼容层（见 `MemoryProxy/config.example.yaml`，以及 `MemoryProxy/src/codexHandler.ts` 中 per-agent override 的注释）。
 
 辅助路径：
 - `/codex/:spaceId/responses/compact` — compact 请求
@@ -185,6 +189,9 @@ A: 类似 CC 的 conversation compaction（对话压缩），是客户端自动�
 
 **Q: Codex 和 CB 的代码复用关系？**  
 A: Codex 有独立的 `codexHandler.ts`，但 session-init 状态机底层复用 CB 的实现（传入不同 agentSource + protocol 参数）。
+
+**Q: Codex 连上后上游返回 404/400，是什么原因？**  
+A: 最常见的原因是上游只实现了 `/v1/chat/completions`，而 Codex 走的是 Responses API（`/v1/responses`）。MemoryProxy 原样转发、不做协议翻译。把 `upstream.agents.codex.url` 指到支持 Responses 的兼容层即可（见 §1）。
 
 ---
 
