@@ -23,8 +23,14 @@ const PI_SLOT_MAP: Record<string, string | null> = {
 
 // Label lines Pi emits: "Available tools:", "Guidelines:", "Pi documentation ...:"
 const LABEL_RE = /^([A-Z][A-Za-z ]*):\s*$/;
-// XML block sections: <project_context> ... </project_context>
+// XML block sections: <project_context> ... </project_context>. Only a bare
+// opener starts a section — Pi nests attribute-bearing openers (e.g.
+// <project_instructions path="/repo/AGENTS.md">) inside <project_context>, and
+// those are body text, not sections of their own.
 const XML_OPEN_RE = /^<([a-z_]+)>\s*$/;
+// Any XML open/close tag, used only to track nesting depth.
+const XML_TAG_OPEN_RE = /^<([a-z_]+)(?:\s[^>]*)?>\s*$/;
+const XML_TAG_CLOSE_RE = /^<\/([a-z_]+)>\s*$/;
 
 export function splitByPiLabels(systemText: string): PromptSegment[] {
   const lines = systemText.split("\n");
@@ -33,6 +39,25 @@ export function splitByPiLabels(systemText: string): PromptSegment[] {
   let buffer: string[] = [];
   let currentKey: string | null = null;
   let currentKind: "plain" | "markdown_section" = "plain";
+
+  // Pi wraps project instructions inside <project_context> →
+  // <project_instructions path="...">, and those files routinely contain
+  // label-shaped lines of their own ("Guidelines:", "Never:"). Such a line is
+  // body text, not a section: treating it as one truncates the enclosing block
+  // and yields a duplicate key, so the anchor then injects into every match.
+  //
+  // Depth is precomputed rather than tracked inline because an unbalanced
+  // prompt (stray or unclosed tag) would otherwise suppress every later
+  // section. Suppression is therefore applied only when the tags balance;
+  // otherwise the original line-by-line behaviour is kept intact.
+  const depthAtLine = new Array<number>(lines.length);
+  let depth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    depthAtLine[i] = depth;
+    if (XML_TAG_OPEN_RE.test(lines[i])) depth++;
+    else if (XML_TAG_CLOSE_RE.test(lines[i])) depth = Math.max(0, depth - 1);
+  }
+  const nestedBlocksWellFormed = depth === 0;
 
   const flush = () => {
     if (buffer.length === 0) return;
@@ -65,9 +90,11 @@ export function splitByPiLabels(systemText: string): PromptSegment[] {
     buffer = [];
   };
 
-  for (const line of lines) {
-    const labelMatch = LABEL_RE.exec(line);
-    const xmlMatch = XML_OPEN_RE.exec(line);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const nested = nestedBlocksWellFormed && depthAtLine[i] > 0;
+    const labelMatch = nested ? null : LABEL_RE.exec(line);
+    const xmlMatch = nested ? null : XML_OPEN_RE.exec(line);
     if (labelMatch || xmlMatch) {
       flush();
       currentKey = labelMatch ? labelMatch[1].trim() : xmlMatch![1];
