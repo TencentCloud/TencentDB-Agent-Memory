@@ -1676,6 +1676,10 @@ export class VectorStore implements IMemoryStore {
       }
 
       let rows = raw as unknown as L1RecordRow[];
+      if (filter?.recordIds !== undefined) {
+        const recordIds = new Set(filter.recordIds);
+        rows = rows.filter((r) => recordIds.has(r.record_id));
+      }
       // Prepared statements above optimize the common session/time predicates.
       // Isolation dimensions are optional and can be combined with any query
       // shape (notably L2 profile queries use teamId+agentId+updatedAfter
