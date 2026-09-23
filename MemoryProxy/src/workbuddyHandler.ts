@@ -35,6 +35,13 @@ import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
 } from "./common/workbuddy-injection.js";
+import {
+  getCurrentSkillQueueSnapshot,
+  hasProcessedCurrentSkillQueue,
+  injectDynamicSkillQueue,
+} from "./common/skill-queue-history.js";
+import { extractMarkedSkillQueueBlock } from "./common/skill-queue-markers.js";
+import { extractRecentUserQueues } from "./common/recent-user-queues.js";
 // WorkBuddy 走 Responses API，与 codex wire 完全一致 —— 弹窗骨架直接复用
 // session/codex/form.ts 的 buildFormResponse + codexFormAnswersAsMessages，
 // 状态机复用 CB 的 handleSessionInit(agentSource="codex")。这样 WorkBuddy
@@ -60,6 +67,8 @@ import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 
 // ── Handler-level constants ──────────────────────────────────────────────────
+
+const WORKBUDDY_SESSION_AGENT_SOURCE = "codex";
 
 const SKIP_REQUEST_HEADERS = new Set([
   "host",
@@ -831,7 +840,7 @@ async function consumeWorkbuddyStream(
  *   7. Session init- 复用 CB 状态机 (handleSessionInit, agentSource="codex")
  *                   + codex form builder 渲染 Responses API SSE 弹窗
  *   8. Mem command - / 命令拦截（session 已注册时）
- *   9. Injection   - 通用 injection pipeline，注入到 body.input[0].content[]
+ *   9. Injection   - 稳定资产注入首个 message，动态 Skill 注入 user queue
  *   10. Forward    - 转发上游 + tap SSE 上报 langfuse
  */
 export async function handleWorkbuddyEndpoint(
@@ -1074,7 +1083,7 @@ export async function handleWorkbuddyEndpoint(
             // 把原始 input[] 交给 CB 状态机识别 Default gate 与 MORE 翻页
             codexAnswerInput: input,
           },
-          "codex", // ← 状态机 source: 复用 codex 分支
+          "codex", // 状态机 source: 复用 codex 分支
           metadataClient,
           apiKey,
           spaceId,
@@ -1391,8 +1400,33 @@ export async function handleWorkbuddyEndpoint(
     (config.injection.injectors?.length ?? 0) > 0
   ) {
     try {
-      const { getInjectionPipeline } = await import("./injection/index.js");
+      const { getInjectionPipeline, getSkillQueueHistoryRepo } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
+      const skillQueueStrategy = config.injection.skillQueueStrategy ?? "session_init";
+      const skillListingQuery = skillQueueStrategy === "session_init"
+        ? undefined
+        : extractRecentUserQueues(
+            body.input,
+            (content) => workbuddyAdapter.extractUserText([{ type: "message", role: "user", content }]),
+            config.injection.recentQueueWindow,
+          );
+      const skillQueueHistoryRepo = skillQueueStrategy === "every_queue"
+        || skillQueueStrategy === "adaptive_queue"
+        ? getSkillQueueHistoryRepo(config)
+        : undefined;
+      // Session init persists WorkBuddy state under the Codex namespace.
+      const skillQueueIdentity = {
+        spaceId,
+        userId: userId || "anonymous",
+        agentSource: WORKBUDDY_SESSION_AGENT_SOURCE,
+        sessionId: sessionKey,
+      };
+      const skillQueueSnapshot = skillQueueStrategy === "every_queue"
+        ? await getCurrentSkillQueueSnapshot(body.input, skillQueueIdentity, skillQueueHistoryRepo)
+        : skillQueueStrategy === "adaptive_queue"
+          && await hasProcessedCurrentSkillQueue(body.input, skillQueueIdentity, skillQueueHistoryRepo)
+          ? "processed"
+          : null;
       const { buildSessionContextBlockWithToggles } = await import(
         "./session/context-injector.js"
       );
@@ -1427,6 +1461,8 @@ export async function handleWorkbuddyEndpoint(
           session: sessionInfo,
           userKey: callerUserKey ?? undefined,
           assetCapabilities,
+          skillListingQuery,
+          skillQueueSnapshotHit: skillQueueSnapshot !== null,
         },
       });
 
@@ -1436,8 +1472,24 @@ export async function handleWorkbuddyEndpoint(
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
 
+      const userMsg = injectedMessages?.[1];
+      const dynamicText = typeof userMsg?.content === "string"
+        ? extractMarkedSkillQueueBlock(userMsg.content)
+        : null;
+
       if (injectedText.length > 0) {
         body = injectWorkbuddyAssets(body, { raw: injectedText });
+      }
+      if (dynamicText || skillQueueStrategy === "every_queue" || skillQueueStrategy === "adaptive_queue") {
+        body = await injectDynamicSkillQueue(
+          body,
+          dynamicText ?? "",
+          skillQueueStrategy,
+          skillQueueIdentity,
+          skillQueueHistoryRepo,
+          (text) => buildWorkbuddyInjectionBlock({ raw: text }),
+          config.injection.forgettingThreshold,
+        );
       }
     } catch (err: unknown) {
       console.error(
