@@ -900,6 +900,18 @@ export async function handleWorkbuddyEndpoint(
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;
 
+  let memoryUserId: string | null = userId || null;
+  let metadataClient: import("./meta/client.js").MetadataClient | undefined;
+  if (config.sessionInit?.enabled && sessionId) {
+    const { getMetadataClient, resolveMemoryUserId } = await import("./meta/client.js");
+    metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
+    memoryUserId = await resolveMemoryUserId({
+      verifiedUserId: memoryUserId,
+      callerUserKey,
+      metadataClient,
+    });
+  }
+
   const turnSeq = countHumanTurnsWorkbuddy(body.input);
   const userQuery = workbuddyAdapter.extractUserText(body.input) ?? "";
   const lf: LangfuseTurnContext = {
@@ -930,7 +942,7 @@ export async function handleWorkbuddyEndpoint(
   // agent_source 保持 "workbuddy" 不受影响。
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectionSkipped = false;
+  let injectionSkipped = !memoryUserId;
   let cachedAgentDetail: unknown = null;
   let cachedTaskDetail: unknown = null;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamIdShort: string; taskName?: string | null; bypassed?: boolean } | null = null;
@@ -938,7 +950,7 @@ export async function handleWorkbuddyEndpoint(
   const input = Array.isArray(body.input) ? body.input : [];
 
   // ── mem:session-reset pre-hook ──
-  {
+  if (memoryUserId) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { parseCommandFromText } = await import("./mem-command/index.js");
@@ -949,7 +961,7 @@ export async function handleWorkbuddyEndpoint(
         const { getSessionStore } = await import("./session/store.js");
         const store = getSessionStore();
         const compositeKey = `codex:${sessionKey}`;
-        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+        store.bind(compositeKey, { userId: memoryUserId, agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
@@ -979,7 +991,7 @@ export async function handleWorkbuddyEndpoint(
         }
 
         const resetEpoch = Date.now();
-        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
+        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: memoryUserId, resetEpoch, resetFlow: true });
         const bindingRepo = store.getBindingRepo();
         if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
         console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
@@ -987,22 +999,20 @@ export async function handleWorkbuddyEndpoint(
     }
   }
 
-  if (config.sessionInit?.enabled && sessionId) {
+  if (config.sessionInit?.enabled && sessionId && memoryUserId && metadataClient) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import(
         "./session/index.js"
       );
-      const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       // kernel 侧鉴权的 x-tdai-user-key 直接用客户端请求 bearer（与 codexHandler / anthropicHandler 对齐）。
       // WorkBuddy / Codex / Claude Code 桌面客户端携带的 bearer 就是用户 key，kernel 能识别；
       // 无需 config.tdai.apiKey 兜底（否则 config 里的 "local" 会覆盖真实用户 key，导致 401）。
-      const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
       const compositeKey = `codex:${sessionKey}`;
       const identity = {
-        userId: userId || "anonymous",
+        userId: memoryUserId,
         agentSource: "codex" as const,
         sessionId: sessionKey,
         spaceId,
@@ -1063,7 +1073,7 @@ export async function handleWorkbuddyEndpoint(
         }
         initResult = await handleSessionInit(
           sessionKey,
-          userId || null,
+          memoryUserId,
           synthesizedMessages,
           config.sessionInit,
           store,
@@ -1184,7 +1194,7 @@ export async function handleWorkbuddyEndpoint(
           const mod = await import("./injection/index.js");
           await mod.prewarmFromConfig(config, {
             keyId: sessionKey,
-            userId: userId || "anonymous",
+            userId: memoryUserId,
             agentSource,
             spaceId,
             sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
@@ -1298,7 +1308,7 @@ export async function handleWorkbuddyEndpoint(
           agentSource: "workbuddy",
           config,
           spaceId,
-          userId: userId || "",
+          userId: memoryUserId ?? "",
           apiKey: apiKey || "",
           sessionInfo: sessionInfo as Record<string, unknown>,
           // ⚠️ WorkBuddy 走 Responses API，与 codex 同协议。传 "responses"，
@@ -1332,7 +1342,7 @@ export async function handleWorkbuddyEndpoint(
           injectionSkipped,
           input,
           sessionKey,
-          userId: userId || "",
+          userId: memoryUserId ?? "",
           callerUserKey,
           assetCapabilities,
         });
@@ -1418,7 +1428,7 @@ export async function handleWorkbuddyEndpoint(
         modelId: modelId as string,
         stream: isStream,
         agentSource,
-        userId: userId || "anonymous",
+        userId: memoryUserId ?? "",
         spaceId,
         sessionKey,
         turnSeq,
@@ -1455,7 +1465,7 @@ export async function handleWorkbuddyEndpoint(
     injectionSkipped,
     input,
     sessionKey,
-    userId: userId || "",
+    userId: memoryUserId ?? "",
     callerUserKey,
     assetCapabilities,
   });

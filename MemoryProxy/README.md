@@ -189,7 +189,7 @@ Anthropic Messages client:
 
 Starting the proxy itself needs **no** API key. A user key (`x-tdai-user-key` / the client `Authorization` header) only gates individual requests, and only when `auth.enabled=true`:
 
-- The code default is `auth.enabled: false`, while `config.example.yaml` sets it to `true`. For pure local development you may set `auth.enabled: false`: requests then pass without any key and the user identity falls back to `anonymous` (the system-user short-circuit needs a verified `user_id`, so it simply never matches).
+- The code default is `auth.enabled: false`, while `config.example.yaml` sets it to `true`. With proxy auth disabled, requests are not rejected for a missing or invalid key. Requests carrying a valid MemoryCore user key can still use per-user memory/session features because the proxy resolves the real caller identity through MemoryCore's authenticated metadata API. Without a resolvable caller identity, the request is still forwarded but per-user memory/session features are unavailable; the proxy does not place callers into a shared anonymous memory identity. The system-user short-circuit still requires a proxy-verified `user_id`, so it never matches solely from this memory identity resolution.
 - With `auth.enabled=true`, a missing or invalid key is rejected with `401 Authentication failed` before the body is parsed. Keep it on when listening on non-loopback addresses or deploying multi-node.
 - Independently of user auth, an **upstream LLM credential** is still required at forward time: set `upstream.apiKey` (or a per-agent `upstream.agents[<agent>].apiKey`) in `config.yaml`, or leave it empty to pass the client's own key through unchanged.
 
