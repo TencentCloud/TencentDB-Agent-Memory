@@ -148,6 +148,11 @@ export MEMORY_TENCENTDB_LLM_BASE_URL="https://api.openai.com/v1"   # optional
 export MEMORY_TENCENTDB_LLM_MODEL="gpt-4o"                         # optional
 ```
 
+When the provider spawns the Gateway it bridges these to the
+`TDAI_LLM_API_KEY` / `TDAI_LLM_BASE_URL` / `TDAI_LLM_MODEL` names that the
+Gateway actually reads (see the table below). Setting the `TDAI_LLM_*` names
+directly also works and takes precedence.
+
 ### 3. Start the Gateway
 
 You have three options; pick whichever fits your deployment.
@@ -231,16 +236,23 @@ eliminates a silent no-op.
 
 ### Gateway LLM (consumed by the Node sidecar, not by this provider)
 
+The plugin schema advertises the `MEMORY_TENCENTDB_LLM_*` names; the Gateway
+itself reads `TDAI_LLM_*`. The provider bridges one onto the other when it
+spawns the sidecar, so both spellings reach the Gateway:
+
 | Variable                          | Default                      | Description                         |
 |-----------------------------------|------------------------------|-------------------------------------|
-| `MEMORY_TENCENTDB_LLM_API_KEY`    | —                            | LLM API key (required for L1/L2/L3) |
-| `MEMORY_TENCENTDB_LLM_BASE_URL`   | `https://api.openai.com/v1`  | OpenAI-compatible API base URL      |
-| `MEMORY_TENCENTDB_LLM_MODEL`      | `gpt-4o`                     | Model name                          |
+| `MEMORY_TENCENTDB_LLM_API_KEY`    | —                            | LLM API key (required for L1/L2/L3); bridged to `TDAI_LLM_API_KEY` on spawn |
+| `MEMORY_TENCENTDB_LLM_BASE_URL`   | `https://api.openai.com/v1`  | OpenAI-compatible API base URL; bridged to `TDAI_LLM_BASE_URL` |
+| `MEMORY_TENCENTDB_LLM_MODEL`      | `gpt-4o`                     | Model name; bridged to `TDAI_LLM_MODEL` |
+| `TDAI_LLM_API_KEY` / `_BASE_URL` / `_MODEL` | —                  | What the Gateway reads directly (yaml `llm.*` also works); an explicit `TDAI_LLM_*` wins over the bridged `MEMORY_TENCENTDB_LLM_*` |
 
 > ⚠️ Only `MEMORY_TENCENTDB_*` env vars are honored by this provider for the
-> Gateway location and LLM credentials. Data-directory resolution is
-> deliberately delegated to the Gateway via `TDAI_DATA_DIR` (see above) so
-> the provider and the Gateway can never disagree about where L0~L3 live.
+> Gateway location and LLM credentials (the LLM trio is bridged to `TDAI_LLM_*`
+> at spawn time — an explicitly set `TDAI_LLM_*` is passed through untouched).
+> Data-directory resolution is deliberately delegated to the Gateway via
+> `TDAI_DATA_DIR` (see above) so the provider and the Gateway can never
+> disagree about where L0~L3 live.
 
 ## LLM Tools
 
