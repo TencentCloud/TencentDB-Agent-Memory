@@ -199,6 +199,30 @@ export interface ReportConfig {
  *
  * Leave undefined (default) to use the host's native LLM mechanism.
  */
+
+/** Pipeline stage that a per-layer override applies to. */
+export type LlmLayerName = "l1" | "l2" | "l3";
+
+/**
+ * Per-layer override of the standalone LLM settings.
+ *
+ * Motivation: the stages have opposite requirements. L1 extraction must return
+ * strict JSON inside a small budget (a reasoning model can spend the whole
+ * budget on reasoning and the response gets truncated), while L2 scene
+ * synthesis / L3 persona are judgement tasks that benefit from a larger budget.
+ * With only global `llm.*` settings, tuning one stage degrades another.
+ *
+ * Any omitted field falls back to the global `llm.*` value.
+ */
+export interface LlmLayerOverride {
+  /** Model for this layer (defaults to `llm.model`). */
+  model?: string;
+  /** Max output tokens for this layer (defaults to `llm.maxTokens`). */
+  maxTokens?: number;
+  /** Request timeout for this layer, ms (defaults to `llm.timeoutMs`). */
+  timeoutMs?: number;
+}
+
 export interface StandaloneLLMOverrideConfig {
   /** Enable standalone LLM mode (default: false). When false, uses host LLM. */
   enabled: boolean;
@@ -236,6 +260,13 @@ export interface StandaloneLLMOverrideConfig {
    * 等待完整文本",给只接受流式的兼容后端做兼容层用。
    */
   stream?: boolean;
+  /**
+   * Per-layer overrides (L1 extraction / L2 scene / L3 persona). Any field left
+   * out falls back to the global `llm.*` value above, so this is opt-in and
+   * backwards compatible. An unknown layer name is a configuration error and
+   * fails fast at startup — a typo must not be silently ignored.
+   */
+  layers?: Partial<Record<LlmLayerName, LlmLayerOverride>>;
 }
 
 /** Context Offload settings — controls multi-layer context compression. */
@@ -657,6 +688,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
           // 默认 true：走 proxy 时用 memory 系统用户 key 作为 Authorization。
           useMemorySystemUserKey: bool(proxyGroup, "useMemorySystemUserKey") ?? true,
         },
+        layers: parseLlmLayers(llmGroup),
       };
     })(),
     offload,
@@ -697,6 +729,45 @@ function optStr(src: Record<string, unknown>, key: string): string | undefined {
 function num(src: Record<string, unknown>, key: string): number | undefined {
   const v = src[key];
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/** Layer names accepted under `llm.layers`. */
+const LLM_LAYER_NAMES: readonly LlmLayerName[] = ["l1", "l2", "l3"];
+
+/**
+ * Parse `llm.layers` — per-layer overrides (model / maxTokens / timeoutMs).
+ *
+ * Fails fast on an unknown layer name (e.g. `l4`, `l11`, `L1`): silently
+ * ignoring a typo would make the operator believe an override is active while
+ * nothing changes. Returns undefined when the section is absent.
+ */
+export function parseLlmLayers(
+  llmGroup: Record<string, unknown>,
+): Partial<Record<LlmLayerName, LlmLayerOverride>> | undefined {
+  const raw = llmGroup.layers;
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("llm.layers must be an object, e.g. `layers: { l1: { maxTokens: 4096 } }`");
+  }
+  const group = raw as Record<string, unknown>;
+  const out: Partial<Record<LlmLayerName, LlmLayerOverride>> = {};
+  for (const key of Object.keys(group)) {
+    if (!LLM_LAYER_NAMES.includes(key as LlmLayerName)) {
+      throw new Error(
+        `llm.layers.${key} is not a valid layer name — supported: ${LLM_LAYER_NAMES.join(" | ")}`,
+      );
+    }
+    const g = obj(group, key);
+    const override: LlmLayerOverride = {};
+    const model = str(g, "model");
+    if (model) override.model = model;
+    const maxTokens = num(g, "maxTokens");
+    if (maxTokens !== undefined) override.maxTokens = maxTokens;
+    const timeoutMs = num(g, "timeoutMs");
+    if (timeoutMs !== undefined) override.timeoutMs = timeoutMs;
+    out[key as LlmLayerName] = override;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function bool(src: Record<string, unknown>, key: string): boolean | undefined {

@@ -13,6 +13,7 @@
  */
 
 import type { StandaloneLLMConfig } from "./llm-runner.js";
+import type { LlmLayerName, LlmLayerOverride } from "../../config.js";
 
 const MEMORY_USER_KEY_RE = /^sk-mem-[A-Za-z0-9_-]{32}$/;
 
@@ -77,5 +78,31 @@ export function resolveStandaloneLlmForRuntime(
     ...llm,
     baseUrl: `${cleanBase}/proxy/${encodeURIComponent(instanceId)}/v1`,
     apiKey: effectiveApiKey,
+  };
+}
+
+/**
+ * 把 `llm.layers.<layer>` 的覆盖叠加到已解析的 LLM 配置上。
+ *
+ * 为什么要分层：四个阶段的诉求相反——L1 提取必须在很小的预算里返回严格 JSON
+ * （推理模型会把预算烧在思考上，响应被 max_tokens 截断），而 L2 场景合成 / L3
+ * 画像是判断 + 综合任务，需要更大预算。只有全局 `llm.*` 时，调一层必伤另一层。
+ *
+ * 纯函数、无副作用：未配置 layers（或该层无覆盖）时原样返回，既有部署行为不变；
+ * 未填写的字段回落到全局值。层名合法性由 config 解析期 fail-fast 保证。
+ */
+export function applyLlmLayerOverride(
+  base: StandaloneLLMConfig,
+  layer: LlmLayerName | undefined,
+  layers: Partial<Record<LlmLayerName, LlmLayerOverride>> | undefined,
+): StandaloneLLMConfig {
+  if (!layer || !layers) return base;
+  const override = layers[layer];
+  if (!override) return base;
+  return {
+    ...base,
+    ...(override.model ? { model: override.model } : {}),
+    ...(override.maxTokens !== undefined ? { maxTokens: override.maxTokens } : {}),
+    ...(override.timeoutMs !== undefined ? { timeoutMs: override.timeoutMs } : {}),
   };
 }
