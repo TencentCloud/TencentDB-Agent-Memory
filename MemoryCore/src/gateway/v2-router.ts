@@ -912,16 +912,6 @@ async function handleConversationCount(body: unknown, _auth: V2AuthContext, requ
   };
   const total = await store.countL0(countFilter);
   return successEnvelope<CountData>({ total }, requestId);
-
-  const allRows = await store.queryL0ForL1(session_id ?? "", undefined, 10000);
-  let filtered = session_id ? allRows.filter((r) => r.session_key === session_id || r.session_id === session_id) : allRows;
-  if (iso?.teamId) filtered = filtered.filter((r) => r.team_id === iso.teamId);
-  if (iso?.userId) filtered = filtered.filter((r) => r.user_id === iso.userId);
-  if (iso?.agentId) filtered = filtered.filter((r) => r.agent_id === iso.agentId);
-  if (iso?.taskId) filtered = filtered.filter((r) => r.task_id === iso.taskId);
-  if (time_start) { const ms = new Date(time_start).getTime(); filtered = filtered.filter((r) => r.timestamp >= ms); }
-  if (time_end) { const ms = new Date(time_end).getTime(); filtered = filtered.filter((r) => r.timestamp <= ms); }
-  return successEnvelope<CountData>({ total: filtered.length }, requestId);
 }
 
 async function handleConversationSearch(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
