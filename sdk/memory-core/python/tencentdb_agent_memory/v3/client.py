@@ -305,15 +305,18 @@ class MemoryClient:
         ``session_ids``。
         """
         normalized_messages = _normalize_delete_ids("message_ids", message_ids, 5000)
-        normalized_sessions = _normalize_delete_ids("session_ids", session_ids, 100)
 
         if session_id is not None:
             if not isinstance(session_id, str) or not session_id.strip():
                 raise ParamError("session_id must be a non-empty string")
-            merged = list(normalized_sessions or [])
-            if session_id.strip() not in merged:
-                merged.append(session_id.strip())
-            normalized_sessions = merged
+            if session_ids is not None and not isinstance(session_ids, (list, tuple)):
+                raise ParamError("session_ids must be a list of non-empty strings")
+            # 先合并再统一归一化：服务端把单数 session_id 并入 session_ids
+            # 之后才校验 ≤100，客户端若在校验后才合并，"100 个 + 1 个单数"
+            # 会带着 101 条请求绕过护栏、被服务端 400 拒绝。
+            session_ids = list(session_ids or []) + [session_id]
+
+        normalized_sessions = _normalize_delete_ids("session_ids", session_ids, 100)
 
         if not normalized_messages and not normalized_sessions:
             raise ParamError(
@@ -691,15 +694,16 @@ class AsyncMemoryClient:
     ) -> Dict[str, Any]:
         """``POST /v3/conversation/delete``（异步）。语义同同步版本。"""
         normalized_messages = _normalize_delete_ids("message_ids", message_ids, 5000)
-        normalized_sessions = _normalize_delete_ids("session_ids", session_ids, 100)
 
         if session_id is not None:
             if not isinstance(session_id, str) or not session_id.strip():
                 raise ParamError("session_id must be a non-empty string")
-            merged = list(normalized_sessions or [])
-            if session_id.strip() not in merged:
-                merged.append(session_id.strip())
-            normalized_sessions = merged
+            if session_ids is not None and not isinstance(session_ids, (list, tuple)):
+                raise ParamError("session_ids must be a list of non-empty strings")
+            # 同步版本：先合并再统一归一化，避免"100 个 + 1 个单数"绕过 ≤100 护栏。
+            session_ids = list(session_ids or []) + [session_id]
+
+        normalized_sessions = _normalize_delete_ids("session_ids", session_ids, 100)
 
         if not normalized_messages and not normalized_sessions:
             raise ParamError(
