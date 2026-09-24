@@ -245,10 +245,13 @@ export function truncateTailToolResults(
 
     if (maxIdx === -1) break; // nothing left to truncate
 
-    // Truncate
+    // Truncate, counting the notice against the budget so the result stays at
+    // or under truncateChars — otherwise the notice pushes it back over the
+    // threshold and the same message is re-selected forever (issue #832).
     const msg = messages[maxIdx];
     const oldContent = getTextContent(msg);
-    const truncated = oldContent.slice(0, truncateChars) + `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const notice = `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const truncated = oldContent.slice(0, Math.max(0, truncateChars - notice.length)) + notice;
     setTextContent(msg, truncated);
 
     // Recalculate token for this message
@@ -257,6 +260,9 @@ export function truncateTailToolResults(
     tokenArray[maxIdx] = newTokens;
     tokensToFree -= freed;
     totalFreed += freed;
+    // No progress (e.g. a fixed point where slicing yields the same string) —
+    // stop instead of spinning forever at 100% CPU.
+    if (freed <= 0) break;
   }
 
   return totalFreed;
@@ -296,10 +302,11 @@ function truncateRemainingToolResults(
 
     if (maxIdx === -1) break;
 
-    // Truncate
+    // Truncate, counting the notice against the budget so the result stays at
+    // or under truncateChars (issue #832).
     const oldContent = getTextContent(messages[maxIdx]);
-    const truncated = oldContent.slice(0, truncateChars) +
-      `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const notice = `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const truncated = oldContent.slice(0, Math.max(0, truncateChars - notice.length)) + notice;
     setTextContent(messages[maxIdx], truncated);
 
     // Recalculate token
@@ -311,6 +318,8 @@ function truncateRemainingToolResults(
     const freed = oldTokens - newTokens;
     tokensToFree -= freed;
     totalFreed += freed;
+    // No progress — stop instead of spinning forever at 100% CPU.
+    if (freed <= 0) break;
   }
 
   return totalFreed;
