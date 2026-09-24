@@ -48,6 +48,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     enabled: false,
     backend: "sqlite",
     ttlDays: 7,
+    archiveNamespaces: [],
     cos: {
       rootPrefix: "proxy_cache/",
       shark: {
@@ -93,8 +94,27 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     maxRetries: 3,
     injectAgentContext: true,
     injectTaskContext: true,
+    autoConversationId: {
+      // 默认关闭：合并本 PR 不改变现有部署的会话键——缺失会话 ID 时仍走 agent
+      // profile 兜底键。需要"服务端为无会话头的客户端签发 auto-* 会话"时显式置 true。
+      enabled: false,
+      ttlMinutes: 30,
+      deterministic: false,
+      deterministicBucketMinutes: undefined,
+      strategy: "per-key",
+      maxEntries: 2048,
+      maxWindowsPerKey: 8,
+      maxWindowsTotal: 4096,
+    },
+    threadIsolation: { enabled: false },
     defaultTaskId: "default",
     skipAssetConfirm: false,
+    // 全局默认严格（缺 task 走 mismatch）；仅无法弹表单的客户端按 agent 放宽。
+    taskMissingPolicy: "reject",
+    taskMissingPolicyByAgent: { openclaw: "skip", hermes: "skip" },
+    // 显式传入的 stale/unknown task_id：默认报 mismatch 让用户重选；
+    // 配 "ignore" 退回上游 #1131 的旧契约（静默忽略、召回放宽到 agent 全域）。
+    taskInvalidPolicy: "mismatch",
     headerAutoSelect: {
       enabled: true,
       teamHeader: "x-team-id",
@@ -265,6 +285,58 @@ function parseUpstreamAgents(
  * Build the final ProxyConfig.
  * Priority (high → low): CLI overrides > YAML config file > defaults.
  */
+/** 校验 autoConversationId 配置，非法值直接抛错，避免带病启动。 */
+export function validateAutoConversationConfig(
+  cfg:
+    | {
+        enabled?: boolean;
+        ttlMinutes?: number;
+        deterministicBucketMinutes?: number;
+        strategy?: string;
+        maxEntries?: number;
+        maxWindowsPerKey?: number;
+        maxWindowsTotal?: number;
+      }
+    | undefined,
+): void {
+  if (!cfg) return;
+  // 多实例 / 多 pod 安全：签名密钥必须由环境变量注入且各实例一致。
+  // 未设置时 auto-session.ts 会退化成"每次启动随机生成"——单进程安全，
+  // 但其他实例签发的 auto-* ID 会因签名不符被判为伪造（deterministic 也救不了：
+  // 派生与签名共用同一密钥）。这里显式告警，而不是静默降级。
+  if (cfg.enabled === true && !process.env.TDAI_SESSION_SIGNING_KEY) {
+    console.warn(
+      "[config] TDAI_SESSION_SIGNING_KEY 未设置：autoConversationId 的 HMAC 签名密钥将在本进程内随机生成。"
+        + "单实例部署可忽略；多实例 / 多 pod 部署必须为所有实例注入同一个密钥，"
+        + "否则其他实例签发的 auto-* 会话 ID 会被判为伪造（scopeRejected/ghostRejected）。",
+    );
+  }
+  if (cfg.ttlMinutes !== undefined && (!Number.isInteger(cfg.ttlMinutes) || cfg.ttlMinutes <= 0)) {
+    throw new Error(`autoConversationId.ttlMinutes 必须是正整数，当前值: ${cfg.ttlMinutes}`);
+  }
+  if (
+    cfg.deterministicBucketMinutes !== undefined &&
+    (!Number.isInteger(cfg.deterministicBucketMinutes) || cfg.deterministicBucketMinutes <= 0)
+  ) {
+    throw new Error(`autoConversationId.deterministicBucketMinutes 必须是正整数，当前值: ${cfg.deterministicBucketMinutes}`);
+  }
+  if (cfg.deterministicBucketMinutes !== undefined) {
+    const effectiveTtl = cfg.ttlMinutes ?? 30; // 运行时默认 30 分钟
+    if (cfg.deterministicBucketMinutes < effectiveTtl) {
+      throw new Error(`autoConversationId.deterministicBucketMinutes (${cfg.deterministicBucketMinutes}) 必须 ≥ 有效 ttlMinutes (${effectiveTtl})，否则空闲跨桶未过期时会话会确定性碰撞`);
+    }
+  }
+  for (const k of ["maxEntries", "maxWindowsPerKey", "maxWindowsTotal"] as const) {
+    const v = cfg[k];
+    if (v !== undefined && (!Number.isInteger(v) || v <= 0)) {
+      throw new Error(`autoConversationId.${k} 必须是正整数，当前值: ${String(v)}`);
+    }
+  }
+  if (cfg.strategy !== undefined && cfg.strategy !== "per-key" && cfg.strategy !== "per-key-msg") {
+    throw new Error(`autoConversationId.strategy 只支持 per-key / per-key-msg，当前值: ${cfg.strategy}`);
+  }
+}
+
 export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
@@ -350,6 +422,12 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled: yaml.storage?.enabled ?? DEFAULT_CONFIG.storage.enabled,
       backend: yaml.storage?.backend ?? DEFAULT_CONFIG.storage.backend,
       ttlDays: yaml.storage?.ttlDays ?? DEFAULT_CONFIG.storage.ttlDays,
+      archiveNamespaces: Array.isArray(yaml.storage?.archiveNamespaces)
+        ? yaml.storage.archiveNamespaces.filter(
+            (r): r is { spaceId?: string; teamId?: string; agentId?: string } =>
+              !!r && typeof r === "object",
+          )
+        : DEFAULT_CONFIG.storage.archiveNamespaces,
       cos: {
         rootPrefix: yaml.storage?.cos?.rootPrefix ?? DEFAULT_CONFIG.storage.cos.rootPrefix,
         endpointDomain: yaml.storage?.cos?.endpointDomain ?? undefined,
@@ -422,6 +500,58 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     defaultTaskId: typeof yaml.sessionInit?.defaultTaskId === "string"
       ? (yaml.sessionInit.defaultTaskId.trim() || undefined)   // empty string → disabled
       : DEFAULT_CONFIG.sessionInit.defaultTaskId,
+    autoConversationId: (() => {
+      const cfg = {
+        enabled: typeof yaml.sessionInit?.autoConversationId?.enabled === "boolean"
+          ? yaml.sessionInit.autoConversationId.enabled
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.enabled,
+        ttlMinutes: typeof yaml.sessionInit?.autoConversationId?.ttlMinutes === "number"
+          ? yaml.sessionInit.autoConversationId.ttlMinutes
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.ttlMinutes,
+        deterministic: typeof yaml.sessionInit?.autoConversationId?.deterministic === "boolean"
+          ? yaml.sessionInit.autoConversationId.deterministic
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.deterministic,
+        deterministicBucketMinutes:
+          typeof yaml.sessionInit?.autoConversationId?.deterministicBucketMinutes === "number"
+            ? yaml.sessionInit.autoConversationId.deterministicBucketMinutes
+            : DEFAULT_CONFIG.sessionInit.autoConversationId!.deterministicBucketMinutes,
+        strategy: yaml.sessionInit?.autoConversationId?.strategy === "per-key-msg"
+          ? "per-key-msg"
+          : yaml.sessionInit?.autoConversationId?.strategy === "per-key"
+            ? "per-key"
+            : DEFAULT_CONFIG.sessionInit.autoConversationId!.strategy,
+        maxEntries: typeof yaml.sessionInit?.autoConversationId?.maxEntries === "number"
+          ? yaml.sessionInit.autoConversationId.maxEntries
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxEntries,
+        maxWindowsPerKey: typeof yaml.sessionInit?.autoConversationId?.maxWindowsPerKey === "number"
+          ? yaml.sessionInit.autoConversationId.maxWindowsPerKey
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxWindowsPerKey,
+        maxWindowsTotal: typeof yaml.sessionInit?.autoConversationId?.maxWindowsTotal === "number"
+          ? yaml.sessionInit.autoConversationId.maxWindowsTotal
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxWindowsTotal,
+      };
+      validateAutoConversationConfig(cfg);
+      return cfg;
+    })(),
+    threadIsolation: {
+      enabled: typeof yaml.sessionInit?.threadIsolation?.enabled === "boolean"
+        ? yaml.sessionInit.threadIsolation.enabled
+        : DEFAULT_CONFIG.sessionInit.threadIsolation!.enabled,
+    },
+    taskMissingPolicy: yaml.sessionInit?.taskMissingPolicy === "reject"
+      ? "reject"
+      : yaml.sessionInit?.taskMissingPolicy === "default"
+        ? "default"
+        : yaml.sessionInit?.taskMissingPolicy === "skip"
+          ? "skip"
+          : DEFAULT_CONFIG.sessionInit.taskMissingPolicy,
+    taskMissingPolicyByAgent: {
+      ...DEFAULT_CONFIG.sessionInit.taskMissingPolicyByAgent,
+      ...(yaml.sessionInit?.taskMissingPolicyByAgent ?? {}),
+    },
+    taskInvalidPolicy: yaml.sessionInit?.taskInvalidPolicy === "ignore"
+      ? "ignore"
+      : DEFAULT_CONFIG.sessionInit.taskInvalidPolicy,
     skipAssetConfirm: yaml.sessionInit?.skipAssetConfirm ?? DEFAULT_CONFIG.sessionInit.skipAssetConfirm,
     headerAutoSelect: {
       enabled: yaml.sessionInit?.headerAutoSelect?.enabled ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.enabled,
