@@ -1869,8 +1869,8 @@ export class TdaiGateway {
     // VDB is available — set STORE_MODE=sqlite to keep the VDB-dependent
     // pieces local while exercising the rest of the service-mode wiring.
     const storeModeOverride =
-      process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb" || process.env.STORE_MODE === "mongodb"
-        ? (process.env.STORE_MODE as "sqlite" | "tcvdb" | "mongodb")
+      process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb" || process.env.STORE_MODE === "mongodb" || process.env.STORE_MODE === "postgres"
+        ? (process.env.STORE_MODE as "sqlite" | "tcvdb" | "mongodb" | "postgres")
         : undefined;
     const effectiveStoreMode = storeModeOverride ?? (this.config.deployMode === "service" ? "tcvdb" : "sqlite");
     // T12 fail-fast: mongodb backend hard-requires MONGODB_ENDPOINT/DATABASE
@@ -1888,6 +1888,16 @@ export class TdaiGateway {
         );
       }
       this.logger.info(`[gateway] Store backend = mongodb (endpoint=${mongoEnv.endpoint}, database=${mongoEnv.database})`);
+    }
+    // Fail-fast: postgres backend hard-requires memory.postgres.connectionString
+    // in the config. Surface at boot instead of on the first request.
+    if (effectiveStoreMode === "postgres" && !this.config.memory.postgres?.connectionString) {
+      throw new Error(
+        `[gateway] STORE_MODE=postgres requires memory.postgres.connectionString to be set`,
+      );
+    }
+    if (effectiveStoreMode === "postgres") {
+      this.logger.info(`[gateway] Store backend = postgres`);
     }
     this.storePool = new StorePool({
       mode: effectiveStoreMode,
@@ -1907,10 +1917,12 @@ export class TdaiGateway {
     // 改走 resolver。storeMode 传显式覆盖值（未设置时 resolver 按形态兜底，规则与
     // effectiveStoreMode 相同）；fileStore 已是 T3.0 解析后的确定值。
     // TDAI_BACKEND_RESOLVER=off → 不构建 resolver，装配层回退旧全局开关分支。
-    if (this.config.features.backendResolver) {
+    // postgres 是进程级后端（connectionString 来自 memory 配置，非按实例下发），
+    // 不参与 per-instance 解析，跳过 resolver，走 getStore 的 mode 门控。
+    if (this.config.features.backendResolver && effectiveStoreMode !== "postgres") {
       this.backendResolver = new LocalBackendResolver({
         deployMode: this.config.deployMode,
-        storeMode: storeModeOverride,
+        storeMode: storeModeOverride === "postgres" ? undefined : storeModeOverride,
         fileStore: this.config.data.fileStore,
         fileStoreOthers: this.config.data.fileStoreOthers,
         source: this.configProvider,
