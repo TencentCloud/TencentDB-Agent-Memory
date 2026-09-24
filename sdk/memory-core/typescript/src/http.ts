@@ -97,7 +97,20 @@ export class HttpTransport {
         throw new TDAMError(envelope.code, envelope.message, reqId, details);
       }
 
-      const result = (envelope.data ?? {}) as T & { trace_id?: string };
+      const raw = envelope.data ?? {};
+      // Only null/undefined data falls back to an empty object; any other
+      // non-object payload (arrays, primitives) is a malformed envelope and
+      // must fail as a clean TDAMError — not as bogus data, and not as the
+      // raw TypeError the trace-id write below throws on a primitive in
+      // strict mode. Same contract the Python transports enforce.
+      if (typeof raw !== "object" || Array.isArray(raw)) {
+        throw new TDAMError(
+          -1,
+          "API response data must be a JSON object",
+          resp.headers.get("x-qcloud-transaction-id") ?? envelope.request_id ?? "",
+        );
+      }
+      const result = raw as T & { trace_id?: string };
       const traceId = resp.headers.get("x-trace-id");
       if (traceId) {
         (result as Record<string, unknown>).trace_id = traceId;
