@@ -189,10 +189,20 @@ export async function writeMemory(params: {
   const now = new Date().toISOString();
 
   let nextVersion = 0;
+  // Superseded targets snapshot — reused for memory_events `superseded` rows so
+  // the diff can show old content. Empty when the query fails or there are no
+  // targets (store action): superseded events are best-effort, the authoritative
+  // write path (JSONL + vector upsert) is unaffected either way.
+  //
+  // `queryL1Records` honors `recordIds` on all backends (sqlite PK-IN lookup,
+  // MongoDB $in, TCVDB documentIds), so `existing` is already narrowed to the
+  // targeted lineage — the same rows drive both the superseded snapshots and
+  // the next-version computation.
+  let supersededTargets: Awaited<ReturnType<NonNullable<typeof vectorStore>["queryL1Records"]>> = [];
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0 && vectorStore) {
     try {
-      const existing = await vectorStore.queryL1Records({ recordIds: decision.target_ids });
-      const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
+      supersededTargets = await vectorStore.queryL1Records({ recordIds: decision.target_ids });
+      const maxVersion = supersededTargets.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
       nextVersion = maxVersion + 1;
     } catch (err) {
       logger?.warn?.(`${TAG} Failed to read existing memory version, defaulting to v0: ${err instanceof Error ? err.message : String(err)}`);
@@ -348,6 +358,65 @@ export async function writeMemory(params: {
     logger?.debug?.(
       `${TAG} [vec-dual-write] SKIPPED id=${record.id}: vectorStore=${!!vectorStore}`,
     );
+  }
+
+  // === Memory event append (session diff) ===
+  // Best-effort append-only event rows; failures never block the write path.
+  // - store        → 1 × created
+  // - update/merge → 1 × superseded per target (old-content snapshot, when the
+  //                  version query above succeeded) + 1 × updated/merged
+  // - skip         → no event (nothing was written)
+  if (vectorStore?.appendMemoryEvent) {
+    try {
+      const base = {
+        event_ts: now,
+        session_key: sessionKey,
+        session_id: record.sessionId,
+        team_id: record.teamId ?? "",
+        user_id: record.userId ?? "",
+        agent_id: record.agentId ?? "",
+        task_id: record.taskId ?? "",
+      };
+      if (decision.action === "store") {
+        await vectorStore.appendMemoryEvent({
+          ...base,
+          op: "created",
+          record_id: record.id,
+          content: record.content,
+          memory_type: record.type,
+          version: record.version ?? 0,
+        });
+      } else {
+        for (const old of supersededTargets) {
+          await vectorStore.appendMemoryEvent({
+            ...base,
+            origin_session_id: old.session_id || undefined,
+            origin_session_key: old.session_key || undefined,
+            op: "superseded",
+            record_id: old.record_id,
+            content: old.content,
+            memory_type: old.type,
+            version: old.version,
+            superseded_by: record.id,
+            // 完整旧记录快照：revert 时按它重建（content/type/version 不够恢复）。
+            snapshot_json: JSON.stringify(old),
+          });
+        }
+        await vectorStore.appendMemoryEvent({
+          ...base,
+          op: decision.action === "merge" ? "merged" : "updated",
+          record_id: record.id,
+          content: record.content,
+          memory_type: record.type,
+          version: record.version ?? 0,
+          supersedes: decision.target_ids,
+        });
+      }
+    } catch (err) {
+      logger?.warn?.(
+        `${TAG} memory event append failed (non-fatal) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   return record;
