@@ -553,6 +553,14 @@ sessionInit:
   enabled: true             # 是否启用会话初始化
   maxRetries: 3             # 表单解析失败最大重试次数，超出后 bypass（跳过 session init）
   # skipAssetConfirm: true  # 跳过"是否关联团队资产"前置对话框，默认视为选"是"直接进入 team/agent/task 选择
+  # headless 客户端（dsh 无 ask_user_question / hermes 无 clarify）的 web 链接兜底：
+  # 未绑定会话的 headless 请求会被拦截并返回初始化链接（浏览器完成 team/agent/task
+  # 选择后绑定落盘，下一次请求恢复注入）。注意：token 存于 proxy 进程内存，浏览器
+  # 请求必须落在签发 token 的同一个 pod 上（单 pod 或 sticky-session 部署）。
+  # initLink:
+  #   hubOrigin: "http://127.0.0.1:8125"   # Memory Hub 页面 origin；配置后启用该功能
+  #   proxyOrigin: "http://proxy.example.com"  # 浏览器可达的 MemoryProxy 公网 origin，缺省用请求 origin
+  #   ttlMinutes: 10                       # token 有效期（分钟），默认 10，上限 60
   # 历史注释: 曾经有 keepInitArtifacts 开关用来在 session_init 完成后剥离
   # 假表单对话；已删除。现在**永远保留**用户的所有真实对话（含 session_init
   # form 交互），不做任何删除。
