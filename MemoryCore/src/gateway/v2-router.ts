@@ -34,6 +34,7 @@ import {
   conversationAddRequestSchema,
   conversationQueryRequestSchema,
   conversationSearchRequestSchema,
+  conversationSessionsRequestSchema,
   conversationDeleteRequestSchema,
   conversationCountRequestSchema,
   atomicUpdateRequestSchema,
@@ -73,6 +74,7 @@ import {
   type ConversationAddData,
   type ConversationQueryData,
   type ConversationSearchData,
+  type ConversationSessionsData,
   type ConversationDeleteData,
   type CountData,
   type AtomicDetail,
@@ -154,6 +156,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/conversation/add",
   "/conversation/query",
   "/conversation/search",
+  "/conversation/sessions",
   "/conversation/delete",
   "/conversation/count",
   "/atomic/update",
@@ -414,6 +417,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/conversation/add": handleConversationAdd,
   "/conversation/query": handleConversationQuery,
   "/conversation/search": handleConversationSearch,
+  "/conversation/sessions": handleConversationSessions,
   "/conversation/delete": handleConversationDelete,
   "/conversation/count": handleConversationCount,
   "/atomic/update": handleAtomicUpdate,
@@ -992,9 +996,45 @@ async function handleConversationSearch(body: unknown, auth: V2AuthContext, requ
 
   const messages: ConversationSearchHit[] = result.results.map((r) => ({
     id: r.id, role: r.role as ConversationSearchHit["role"], content: r.content, timestamp: r.recorded_at, score: r.score,
+    // session/isolation 维度随 hit 一并返回（此前被丢弃，调用方无法按会话归组/过滤）
+    session_id: r.session_id,
+    session_key: r.session_key,
+    team_id: r.team_id,
+    user_id: r.user_id,
+    agent_id: r.agent_id,
+    task_id: r.task_id,
   }));
 
   return successEnvelope<ConversationSearchData>({ messages }, requestId);
+}
+
+/**
+ * 会话列表（GROUP BY session）：/conversation/sessions。
+ * 解决「没有会话列表端点、调用方只能绕行直读 jsonl」的问题；过滤口径与
+ * /conversation/query 一致（session OR + isolation + 时间窗），按最近活跃倒序。
+ */
+async function handleConversationSessions(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = conversationSessionsRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+  const { session_id, time_start, time_end, limit } = parsed.data;
+
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+  if (!store.listL0Sessions) {
+    return errorEnvelope(501, "Store does not support session listing", requestId);
+  }
+  const iso = deps.requestIsolation;
+  const sessions = await store.listL0Sessions({
+    sessionId: session_id,
+    teamId: iso?.teamId,
+    userId: iso?.userId,
+    agentId: iso?.agentId,
+    taskId: iso?.taskId,
+    timeStartMs: time_start ? new Date(time_start).getTime() : undefined,
+    timeEndMs: time_end ? new Date(time_end).getTime() : undefined,
+    limit,
+  });
+  return successEnvelope<ConversationSessionsData>({ sessions }, requestId);
 }
 
 async function handleConversationDelete(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {

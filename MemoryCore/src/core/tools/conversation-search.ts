@@ -191,6 +191,12 @@ export async function executeConversationSearch(params: {
         return ftsResults.map((r) => ({
           id: r.record_id,
           session_key: r.session_key,
+          // Align with the vec branch: FTS hits carry the same
+          // session/isolation dims, otherwise /conversation/search returns
+          // different fields depending on which strategy won.
+          session_id: r.session_id,
+          user_id: r.user_id,
+          agent_id: r.agent_id,
           role: r.role,
           content: r.message_text,
           score: r.score,
