@@ -746,7 +746,9 @@ upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
 
 - `POST /v3/code-graph/create` 新增可选 `credential_id`：校验凭证存在、同 `service_id`+`team_id`，
   且 **`credential.host === normalizeHost(repo_url)`**，不通过则 `404`。
-  缺省（不传）= 匿名访问公开仓库，行为与本次变更前一致。
+  缺省（不传）= 新建时匿名访问公开仓库；**幂等命中已有行时不传则保留原绑定**（不会抹掉）。
+  若幂等命中且本次传入的 `credential_id` 与库内不同，会写入换绑；当前不在
+  `pending/processing` 时还会重新入队建图（等同一次带凭证的 sync）。
 - `POST /v3/code-graph/update-meta` 新增可选 `credential_id`（`null` 表示解绑），**校验强度与 create 完全一致**
   —— 否则「先建后换绑」会成为绕过 host 绑定的越权通道。
 - `CodeGraphDetail` 新增 `credential_id: string|null`（**仅引用，非密钥**）。
@@ -777,7 +779,7 @@ upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
 | 接口 | 幂等行为 |
 |---|---|
 | `wiki/create` | 同名同 team 返回已存在记录（200，非报错） |
-| `code-graph/create` | 同 repo_url+branch 返回已存在记录（200） |
+| `code-graph/create` | 同 repo_url+branch 返回已存在记录（200）；若本次带了不同的 `credential_id` 则换绑并在非 busy 时重入队建图；不传 `credential_id` 则保留原绑定 |
 | `source-credential/create` | **不幂等**：同 team 重名返回 409（凭证是密钥，静默覆盖会造成「以为换掉了其实没换」） |
 | `source-credential/delete` | 软删；再次删除同一 id 记入 `failed`（reason `not found`） |
 | `llm-binding/set` | 重复 set 覆盖（api_key 不传保留原值） |

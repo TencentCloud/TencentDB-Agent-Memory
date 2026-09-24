@@ -228,8 +228,10 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
 
-    // 凭证绑定（私有仓库）。缺省 = 匿名访问公开仓库，行为与未支持凭证时一致。
-    let credentialId: string | null = null;
+    // 凭证绑定（私有仓库）。缺省（字段未传）= 不改动既有绑定 / 新建则匿名。
+    // 注意：绝不能把「未传」收成 `null` 再交给 create —— 幂等命中时会把已有
+    // credential_id 抹掉。显式解绑走 /update-meta。
+    let credentialId: string | undefined;
     if (body.credential_id !== undefined && body.credential_id !== null) {
       if (!isValidIdSegment(body.credential_id)) {
         return c.json(wrapError(400, "credential_id must be a valid id"), 400);
@@ -253,7 +255,7 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       user_id: idFields.user_id,
       agent_id: idFields.agent_id,
       task_id: idFields.task_id,
-      credential_id: credentialId,
+      ...(credentialId !== undefined ? { credential_id: credentialId } : {}),
     });
 
     // Persist service_url (tools self-discovery base; resource selected via

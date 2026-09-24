@@ -26,7 +26,8 @@
   不写入 URL、不落 `.git/config`、不进 argv；同时清空 `credential.helper`，
   避免 token 被系统钥匙串缓存
 - `POST /v3/code-graph/create` 与 `/update-meta` 新增可选 `credential_id`，
-  响应新增 `credential_id` 字段（仅引用）
+  响应新增 `credential_id` 字段（仅引用）；幂等 create 若带上与库内不同的
+  `credential_id` 会写入换绑（不传则保留原绑定），非 busy 时重新入队建图
 - 新增 `KNOWLEDGE_GIT_ALLOWED_HOSTS`（内网 git host 白名单，锚定匹配、支持 `*.suffix`）、
   `KNOWLEDGE_GIT_STRICT_HOST_KEY`
 - 环境要求：**git ≥ 2.31**（`GIT_CONFIG_COUNT` 注入机制）、**OpenSSH ≥ 7.6**

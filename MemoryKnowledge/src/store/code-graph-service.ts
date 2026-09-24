@@ -135,7 +135,10 @@ export class CodeGraphService {
 
   /**
    * 幂等创建并异步建图。
-   * - 已存在（同 memory+team+repo+branch）→ 直接返回已有行，不重复建图。
+   * - 已存在（同 memory+team+repo+branch）→ 返回已有行；若本次显式传入了
+   *   与库内不同的 `credential_id`，则写入换绑（不传则保留原绑定，避免匿名
+   *   重试把私有仓凭证抹掉）。换绑后若当前不在排队/执行，会重新入队建图，
+   *   否则仅更新元数据——in-flight worker 在 runBuild 入口会重新读库内凭证。
    * - 新建 → 入库 pending + 后台建图。
    */
   create(params: CreateCodeGraphParams): { row: CodeGraphRow; existed: boolean } {
@@ -144,8 +147,49 @@ export class CodeGraphService {
       // repo_url 经 stripUserInfo 兜一层：历史数据里可能存在内嵌凭证写法。
       this.audit(row, "create", sanitizeGitError(`clone ${row.repo_url}@${row.branch}`, undefined, 0), params.user_id);
       this.enqueueBuild(row);
+      return { row, existed };
     }
-    return { row, existed };
+
+    // 幂等命中：只有调用方**显式**带了 credential_id 且与现存不同时才换绑。
+    // `undefined` = 未传（保留）；路由层不得把「未传」收成 `null` 再灌进来。
+    const incoming = params.credential_id;
+    if (incoming === undefined || incoming === row.credential_id) {
+      return { row, existed };
+    }
+
+    const updated = this.store.updateCodeGraphMeta(params.service_id, row.code_graph_id, {
+      credential_id: incoming,
+    });
+    if (!updated) return { row, existed };
+
+    this.audit(
+      updated,
+      "create",
+      sanitizeGitError(
+        `rebind credential ${incoming ?? "null"} for ${updated.repo_url}@${updated.branch}`,
+        undefined,
+        0,
+      ),
+      params.user_id,
+    );
+
+    // 已在排队/执行：只改元数据。runBuild 入口会按最新行上的 credential_id 注入。
+    if (updated.status === "pending" || updated.status === "processing") {
+      return { row: updated, existed: true };
+    }
+
+    // ready / failed：像 sync 一样重新入队，否则换绑后仍用旧匿名产物。
+    this.store.updateCodeGraphStatus(params.service_id, updated.code_graph_id, {
+      status: "pending",
+      internal_status: null,
+      sync_error: null,
+    });
+    const fresh = this.store.getCodeGraphById(params.service_id, updated.code_graph_id);
+    if (fresh) {
+      this.enqueueBuild(fresh);
+      return { row: fresh, existed: true };
+    }
+    return { row: updated, existed: true };
   }
 
   /** Persist service_url for a code-graph. Returns updated row or null. */
@@ -281,8 +325,9 @@ export class CodeGraphService {
   }
 
   private enqueueBuild(row: CodeGraphRow): void {
+    // credential_id 不闭包冻结：runBuild 入口再读库，覆盖「排队期间幂等 create 换绑」。
     this.queue.enqueue(row.code_graph_id, () =>
-      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch, row.credential_id),
+      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch),
     );
   }
 
@@ -292,13 +337,15 @@ export class CodeGraphService {
     teamId: string,
     repoUrl: string,
     branch: string,
-    credentialId: string | null,
   ): Promise<void> {
     // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
     if (this.isDeleted(serviceId, codeGraphId)) {
       this.finishCancelled(serviceId, teamId, codeGraphId);
       return;
     }
+    // 以库内最新绑定为准（幂等 create / update-meta 可能在排队窗口换绑）。
+    const latest = this.store.getCodeGraphById(serviceId, codeGraphId);
+    const credentialId = latest?.credential_id ?? null;
     this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
       status: "processing",
       internal_status: "cloning",
@@ -312,7 +359,7 @@ export class CodeGraphService {
         repoUrl,
         branch,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
-        credentialId: credentialId ?? null,
+        credentialId,
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),
       });
