@@ -146,6 +146,20 @@ export interface CheckpointLogger {
 
 const noopLogger: CheckpointLogger = { info() {} };
 
+/** True when the error is a missing-file (ENOENT) condition. */
+function isEnoentError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
+/** Stable one-line error description for logs / exception messages. */
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 // ============================
 // Per-file async lock
 // ============================
@@ -278,61 +292,116 @@ export class CheckpointManager {
   // ============================
 
   private async readRaw(): Promise<Checkpoint> {
+    let raw: string | null;
     try {
-      let raw: string | null;
-      if (this.storage) {
-        raw = await this.storage.readFile(this.filePath);
-      } else {
-        const fs = await import("node:fs/promises");
-        raw = await fs.default.readFile(this.filePath, "utf-8");
+      raw = await this.readFileContent();
+    } catch (err) {
+      if (isEnoentError(err)) {
+        // First run — no checkpoint written yet.
+        return structuredClone(DEFAULT_CHECKPOINT);
       }
-      if (!raw) return structuredClone(DEFAULT_CHECKPOINT);
+      // Present but unreadable (permissions, storage failure, ...). Fail closed
+      // instead of silently resetting every processing cursor to defaults.
+      throw new Error(
+        `[checkpoint] failed to read checkpoint at ${this.filePath}: ${describeError(err)}`,
+      );
+    }
+    if (!raw) return structuredClone(DEFAULT_CHECKPOINT);
 
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      // Merge with defaults for backward compat (old checkpoints lack new fields).
-      // structuredClone avoids shallow-copy pitfall: without it, the nested
-      // runner_states/pipeline_states objects in DEFAULT_CHECKPOINT would be
-      // shared across all callers and mutated in place — corrupting the default.
-      const cp = { ...structuredClone(DEFAULT_CHECKPOINT), ...parsed } as Checkpoint;
+    try {
+      return this.parseCheckpoint(raw);
+    } catch (err) {
+      // Corrupt/truncated JSON. Never treat this as a first run: recover from
+      // the last-known-good backup when one exists, otherwise fail closed.
+      const recovered = await this.tryRecoverFromBackup();
+      if (recovered) {
+        this.logger.warn?.(
+          `[checkpoint] corrupt checkpoint at ${this.filePath}; ` +
+          `recovered from last-known-good backup ${this.backupPath()}`,
+        );
+        return recovered;
+      }
+      throw new Error(
+        `[checkpoint] corrupt checkpoint at ${this.filePath}: ${describeError(err)}` +
+        (this.storage ? "" : ` (no recoverable backup at ${this.backupPath()})`),
+      );
+    }
+  }
 
-      // Migrate from old session_states format (pre-split)
-      const oldStates = parsed.session_states as Record<string, Record<string, unknown>> | undefined;
-      if (oldStates && !parsed.runner_states && !parsed.pipeline_states) {
-        cp.runner_states = {};
-        cp.pipeline_states = {};
-        for (const [key, state] of Object.entries(oldStates)) {
-          cp.runner_states[key] = {
-            ...DEFAULT_RUNNER_STATE,
-            last_captured_timestamp: (state.last_captured_timestamp as number) ?? 0,
-            last_l1_cursor: (state.last_l1_cursor as number) ?? 0,
-            last_scene_name: (state.last_scene_name as string) ?? "",
-          };
-          cp.pipeline_states[key] = {
-            ...DEFAULT_PIPELINE_STATE,
-            conversation_count: (state.conversation_count as number) ?? 0,
-            last_extraction_time: (state.last_extraction_time as string) ?? "",
-            last_extraction_updated_time: (state.last_extraction_updated_time as string) ?? "",
-            last_active_time: (state.last_active_time as number) ?? 0,
-            l2_pending_l1_count: (state.l2_pending_l1_count as number) ?? 0,
-            l2_last_extraction_time: (state.l2_last_extraction_time as string) ?? "",
-          };
-        }
-      } else {
-        // Ensure per-session states have all fields with defaults
-        if (cp.runner_states) {
-          for (const [key, state] of Object.entries(cp.runner_states)) {
-            cp.runner_states[key] = { ...DEFAULT_RUNNER_STATE, ...state };
-          }
-        }
-        if (cp.pipeline_states) {
-          for (const [key, state] of Object.entries(cp.pipeline_states)) {
-            cp.pipeline_states[key] = { ...DEFAULT_PIPELINE_STATE, ...state };
-          }
+  /** Read the raw checkpoint text. Storage mode: null when missing; fs mode: throws ENOENT when missing. */
+  private async readFileContent(): Promise<string | null> {
+    if (this.storage) {
+      return this.storage.readFile(this.filePath);
+    }
+    const fs = await import("node:fs/promises");
+    return fs.default.readFile(this.filePath, "utf-8");
+  }
+
+  /** Parse + normalize a raw checkpoint JSON payload into a {@link Checkpoint}. Throws on malformed JSON. */
+  private parseCheckpoint(raw: string): Checkpoint {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    // Merge with defaults for backward compat (old checkpoints lack new fields).
+    // structuredClone avoids shallow-copy pitfall: without it, the nested
+    // runner_states/pipeline_states objects in DEFAULT_CHECKPOINT would be
+    // shared across all callers and mutated in place — corrupting the default.
+    const cp = { ...structuredClone(DEFAULT_CHECKPOINT), ...parsed } as Checkpoint;
+
+    // Migrate from old session_states format (pre-split)
+    const oldStates = parsed.session_states as Record<string, Record<string, unknown>> | undefined;
+    if (oldStates && !parsed.runner_states && !parsed.pipeline_states) {
+      cp.runner_states = {};
+      cp.pipeline_states = {};
+      for (const [key, state] of Object.entries(oldStates)) {
+        cp.runner_states[key] = {
+          ...DEFAULT_RUNNER_STATE,
+          last_captured_timestamp: (state.last_captured_timestamp as number) ?? 0,
+          last_l1_cursor: (state.last_l1_cursor as number) ?? 0,
+          last_scene_name: (state.last_scene_name as string) ?? "",
+        };
+        cp.pipeline_states[key] = {
+          ...DEFAULT_PIPELINE_STATE,
+          conversation_count: (state.conversation_count as number) ?? 0,
+          last_extraction_time: (state.last_extraction_time as string) ?? "",
+          last_extraction_updated_time: (state.last_extraction_updated_time as string) ?? "",
+          last_active_time: (state.last_active_time as number) ?? 0,
+          l2_pending_l1_count: (state.l2_pending_l1_count as number) ?? 0,
+          l2_last_extraction_time: (state.l2_last_extraction_time as string) ?? "",
+        };
+      }
+    } else {
+      // Ensure per-session states have all fields with defaults
+      if (cp.runner_states) {
+        for (const [key, state] of Object.entries(cp.runner_states)) {
+          cp.runner_states[key] = { ...DEFAULT_RUNNER_STATE, ...state };
         }
       }
-      return cp;
+      if (cp.pipeline_states) {
+        for (const [key, state] of Object.entries(cp.pipeline_states)) {
+          cp.pipeline_states[key] = { ...DEFAULT_PIPELINE_STATE, ...state };
+        }
+      }
+    }
+    return cp;
+  }
+
+  /** Last-known-good backup path (fs mode only). */
+  private backupPath(): string {
+    return `${this.filePath}.bak`;
+  }
+
+  /**
+   * Attempt recovery from the last-known-good backup written by {@link writeRaw}.
+   * Returns null when no backup exists, it is empty, or it is itself corrupt.
+   */
+  private async tryRecoverFromBackup(): Promise<Checkpoint | null> {
+    if (this.storage) return null; // no backup capability in storage (COS) mode
+    try {
+      const fs = await import("node:fs/promises");
+      const raw = await fs.default.readFile(this.backupPath(), "utf-8");
+      if (!raw) return null;
+      return this.parseCheckpoint(raw);
     } catch {
-      return structuredClone(DEFAULT_CHECKPOINT);
+      return null;
     }
   }
 
@@ -341,14 +410,23 @@ export class CheckpointManager {
     const content = JSON.stringify(checkpoint, null, 2);
     if (this.storage) {
       await this.storage.writeFile(this.filePath, content);
-    } else {
-      const fs = await import("node:fs/promises");
-      const path = await import("node:path");
-      const dir = path.default.dirname(this.filePath);
-      await fs.default.mkdir(dir, { recursive: true });
-      const tmp = `${this.filePath}.tmp.${randomBytes(4).toString("hex")}`;
-      await fs.default.writeFile(tmp, content, "utf-8");
-      await fs.default.rename(tmp, this.filePath);
+      return;
+    }
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const dir = path.default.dirname(this.filePath);
+    await fs.default.mkdir(dir, { recursive: true });
+    const tmp = `${this.filePath}.tmp.${randomBytes(4).toString("hex")}`;
+    await fs.default.writeFile(tmp, content, "utf-8");
+    await fs.default.rename(tmp, this.filePath);
+    // Keep a last-known-good backup so a later corrupt write can be recovered
+    // from. Best-effort: a backup failure must never fail the primary write.
+    try {
+      await fs.default.copyFile(this.filePath, this.backupPath());
+    } catch (err) {
+      this.logger.warn?.(
+        `[checkpoint] failed to update backup at ${this.backupPath()}: ${describeError(err)}`,
+      );
     }
   }
 
