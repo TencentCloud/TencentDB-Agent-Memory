@@ -56,6 +56,9 @@ sdk/python/*.egg-info/
 # Vitest cache
 .vite/
 
+# npm test 产出的 vitest json 报告（文档用例数校验读它，不入库）
+MemoryProxy/.vitest-report.json
+
 # Environment (already covered above, explicit for clarity)
 .env.*
 !.env.example
