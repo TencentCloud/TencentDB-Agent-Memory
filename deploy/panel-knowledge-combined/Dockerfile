@@ -9,7 +9,7 @@ RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
     fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 make g++ git curl ca-certificates \
+      python3 make g++ git openssh-client curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" crash（干净 `npm

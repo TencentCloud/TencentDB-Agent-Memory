@@ -41,6 +41,10 @@ MemoryKnowledge/
 └── docker-compose.yml      # 本地一键跑 KS 容器（可选）
 ```
 
+## 私有 Git 仓库
+
+CodeGraph 支持 HTTPS Token 和 SSH 私钥；凭据按用户和团队隔离，HTTPS 按 hostname 匹配，SSH 密钥可跨服务器复用。配置、使用方法与部署边界见 [私有 Git 仓库](docs/private-git.md)。
+
 ## 本地启动
 
 生产/联调若要用 **Panel + KS 一体镜像**，直接拉 [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)（用法见 [`../deploy/panel-knowledge-combined/README.md`](../deploy/panel-knowledge-combined/README.md)）。下面是只跑本服务源码的方式：
