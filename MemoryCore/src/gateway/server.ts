@@ -162,6 +162,20 @@ function createConsoleLogger(): Logger {
   };
 }
 
+// v3 管理面附加路由表：五个工厂返回的都是纯静态映射（路由串→handler，无 deps、
+// 无闭包），模块加载时构建一次即可。此前每个请求（含 /health 与 v1 路由）都
+// 重建这五张表并做对象展开，属无谓的热路径分配。
+const EXTRA_ROUTE_TABLE: Record<
+  string,
+  (body: unknown, auth: import("./v2-schemas.js").V2AuthContext, requestId: string, deps: unknown) => Promise<import("./v2-schemas.js").ApiResponseEnvelope>
+> = {
+  ...makeSkillRouteTable(),
+  ...makeKnowledgeRouteTable(),
+  ...makeChatMemoryRouteTable(),
+  ...makeMemoryPromptRouteTable(),
+  ...makeMemoryGenerationLogRouteTable(),
+};
+
 // ============================
 // Request body parser
 // ============================
@@ -1093,21 +1107,9 @@ export class TdaiGateway {
       if (offloadHandled) return;
 
       // Compose deps: V2RouterDeps fields + SkillRouterDeps fields. The
-      // route table union of routeTable + makeSkillRouteTable() is what
+      // route table union of routeTable + EXTRA_ROUTE_TABLE is what
       // tells the dispatcher which subset of fields each handler reads.
       const mergedDeps = Object.assign({}, v2Deps, skillDeps);
-
-      // Merge management-plane extra route tables.
-      const extraRoutes = {
-        ...makeSkillRouteTable(),
-        ...makeKnowledgeRouteTable(),
-        ...makeChatMemoryRouteTable(),
-        ...makeMemoryPromptRouteTable(),
-        ...makeMemoryGenerationLogRouteTable(),
-      } as Record<
-        string,
-        (body: unknown, auth: import("./v2-schemas.js").V2AuthContext, requestId: string, deps: unknown) => Promise<import("./v2-schemas.js").ApiResponseEnvelope>
-      >;
 
       const handled = await handleV2Route(
         req,
@@ -1117,7 +1119,7 @@ export class TdaiGateway {
         parseJsonBody,
         sendJson,
         mergedDeps as V2RouterDeps,
-        extraRoutes,
+        EXTRA_ROUTE_TABLE,
       );
       if (handled) return;
 
