@@ -47,11 +47,13 @@ import { matchSystemUserByUserId, hasSystemUsers } from "./systemUser.js";
 import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
-import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
+import { extractLatestUserMessage, recordTdaiTurn, shouldRecordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
+import { isDshHeadlessRequest } from "./agent-adapters/dsh.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
+import { resolveDshHeadlessMemoryIdentity } from "./session/dsh/headless-memory.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import {
   enforceRateLimit,
@@ -693,7 +695,8 @@ export async function handleChatCompletions(
   // system-user short-circuit; running verify again here would double the
   // network round-trip for every request.
   const spaceId = earlySpaceId;
-  let userId = earlyVerify.userId
+  const authenticatedUserId = earlyVerify.userId;
+  let userId = authenticatedUserId
     || c.req.header("x-user-id")
     || c.req.header("x-cb-user-id")
     || c.req.header("x-tdai-user-token")
@@ -735,23 +738,14 @@ export async function handleChatCompletions(
   // 会被 dsh agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass
   // session-init 而非弹 form —— 没 UI 场景强弹表单没意义。
   //
-  // 判定:agentSource=dsh 且 body.tools 非空且不含 ask_user_question。
-  // (tools 空数组表示纯对话/aux,不用兜底;tools 里就有 ask_user_question 说明
-  // 有 preset 挂 UI 工具,正常走 form。)
+  // 判定:agentSource=dsh 且未声明 ask_user_question。tools 缺失、为空或只含
+  // 其他工具都表示客户端没有交互能力；只有明确声明该工具才进入 form 流程。
   //
   // NOTE(opencode): opencode CLI 同样不支持虚拟 ask_followup_question tool,
   // 但走独立的 header-driven session-init 分支(见下方 opencode 特化块),
   // 因此不需要走这里的 headless bypass —— opencode 能吃 mem 命令纯文本响应,
   // 也需要 injection / L0 / skill 提取,只是不能弹 form。
-  const _dshHeadless = agentSource === "dsh" && (() => {
-    const tools = (body as { tools?: unknown }).tools;
-    if (!Array.isArray(tools) || tools.length === 0) return false;
-    return !tools.some((t) => {
-      const fn = (t as { function?: { name?: string }; name?: string })?.function;
-      const n = fn?.name ?? (t as { name?: string })?.name;
-      return n === "ask_user_question";
-    });
-  })();
+  const _dshHeadless = agentSource === "dsh" && isDshHeadlessRequest(body);
   if (_dshHeadless) {
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
   }
@@ -853,6 +847,45 @@ export async function handleChatCompletions(
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+
+  // Headless DSH never enters the interactive state machine. Resolve its
+  // memory identity independently on every request so stale/pending session
+  // state cannot leak a form or bind another user's memory scope.
+  if (_dshHeadless && config.sessionInit?.enabled && conversationId && !isAuxiliary && authenticatedUserId) {
+    try {
+      const { getMetadataClient } = await import("./meta/client.js");
+      const kernelUserKey = apiKey || config.tdai?.apiKey || "";
+      const metadataClient = getMetadataClient(config.coreSkill, spaceId, kernelUserKey);
+      sessionInfo = await resolveDshHeadlessMemoryIdentity({
+        config: config.sessionInit,
+        headers: lcHeaders,
+        metadataClient,
+        userId: authenticatedUserId,
+        userKey: apiKey || undefined,
+        sessionKey,
+        spaceId,
+      }) as unknown as Record<string, unknown> | null;
+      if (sessionInfo) {
+        try {
+          const { fetchAssetCapabilities } = await import("./tdai/capabilities.js");
+          assetCapabilities = await fetchAssetCapabilities({
+            endpoint: config.tdai.endpoint,
+            apiKey: config.tdai.apiKey,
+            serviceId: config.tdai.serviceId,
+            serviceIdOverride: spaceId,
+            userId: authenticatedUserId,
+            userKey: apiKey || null,
+            timeoutMs: config.tdai.memory.timeoutMs,
+          });
+        } catch (err) {
+          console.warn(`[asset-capability] resolve failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[dsh-headless] memory identity validation failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
@@ -1284,15 +1317,19 @@ export async function handleChatCompletions(
     }
   }
 
-  // aux 请求(compaction/title)/ dsh headless(无 UI 无 preset)不写 L0 —— 直接透传
-  const tdaiClient = isAuxiliary || _dshHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
-  const tdaiIdentity = injectedSkipped
+  // Auxiliary requests never write L0. Headless DSH may write when its
+  // team/agent identity was validated above; injection remains disabled.
+  const tdaiIdentity = isAuxiliary
     ? null
     : deriveTdaiIdentity({
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
         userId: userId || null,
         sessionKey,
+        userKey: apiKey || null,
       });
+  const tdaiClient = isAuxiliary || !tdaiIdentity || assetCapabilities?.chat_memory === false
+    ? null
+    : createTdaiClient(config, spaceId);
   const tdaiUserMessage = extractLatestUserMessage(messages);
 
   // ── Context injection (before cost guard) ──────────────────────────────
@@ -1663,6 +1700,7 @@ export async function handleChatCompletions(
       agentSource,
       isAuxiliary,
       isDshHeadless: _dshHeadless,
+      upstreamOk: upstreamResp.ok,
       sessionInfo,
       lf,
       spaceId,
@@ -1804,12 +1842,6 @@ export async function handleChatCompletions(
       });
     }
 
-    if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-      await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistantContentForTdai(assistantMessage));
-    } else if (tdaiClient) {
-      logExtractionSkipped(config, "tdai-memory", sessionKey);
-    }
-
     opikCreateLlmSpan(config, {
       traceId,
       projectName: keyId,
@@ -1866,6 +1898,24 @@ export async function handleChatCompletions(
       extraTags: ["error"],
       observationMetadata: { stage: "upstream", stream: false, ...debugMetadata },
     });
+  }
+
+  const shouldRecordL0 = (!_dshHeadless || upstreamResp.ok)
+    && shouldRecordTdaiTurn(_dshHeadless, assistantMessage);
+  if (shouldRecordL0 && tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
+    const write = recordTdaiTurn(
+      tdaiClient,
+      tdaiIdentity,
+      tdaiUserMessage,
+      assistantContentForTdai(assistantMessage),
+    );
+    if (_dshHeadless) {
+      await write.catch((err: unknown) => pipe.error("TDAI_L0", err));
+    } else {
+      await write;
+    }
+  } else if (shouldRecordL0 && tdaiClient) {
+    logExtractionSkipped(config, "tdai-memory", sessionKey);
   }
 
   pipe.responseDone(usage);
@@ -1979,9 +2029,10 @@ interface TapContext {
   /** True when this request was classified as auxiliary (compaction/title-gen) —
    * downstream L0/skill extract paths must skip to keep buffer semantics clean. */
   isAuxiliary: boolean;
-  /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
-   * in tools) — behaves like aux for downstream side-effects. */
+  /** True when this DSH request cannot handle interactive form tool calls. */
   isDshHeadless: boolean;
+  /** Whether the upstream model request completed with a successful HTTP status. */
+  upstreamOk: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
@@ -2279,7 +2330,12 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       }
     }
 
-    if (ctx.tdaiClient && isExtractionAllowed(ctx.config, "tdai-memory")) {
+    const shouldRecordL0 = (!ctx.isDshHeadless || ctx.upstreamOk) && shouldRecordTdaiTurn(
+      ctx.isDshHeadless,
+      outputMessage,
+      toolCallAccumulators.size,
+    );
+    if (shouldRecordL0 && ctx.tdaiClient && isExtractionAllowed(ctx.config, "tdai-memory")) {
       // Streaming 不 await（会拖慢 SSE 关流体感），改成 trackWrite + 重试：
       //   - trackWrite 注册 in-flight promise 到全局 set；SIGTERM 时 index.ts 会
       //     flushPendingWrites 等待或超时兜底，避免 pod rolling 时丢 L0。
@@ -2290,7 +2346,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           outputMessageContent(outputMessage),
         )).catch((err: unknown) => pipe.error("TDAI_L0", err))
       );
-    } else if (ctx.tdaiClient) {
+    } else if (shouldRecordL0 && ctx.tdaiClient) {
       logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKeyForSkill);
     }
 
