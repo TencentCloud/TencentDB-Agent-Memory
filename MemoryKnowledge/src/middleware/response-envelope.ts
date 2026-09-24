@@ -8,22 +8,32 @@
 
 import type { MiddlewareHandler } from "hono";
 import { createLogger } from "../logger.js";
+import { stripUserInfo } from "../utils/sanitize.js";
 
 const log = createLogger("http");
 
 const MAX_BODY_LOG = 500;
 
+/** 绝不打进日志的请求字段（凭证接口的明文 secret）。 */
+const NEVER_LOG_FIELDS = new Set(["secret", "token", "password", "private_key", "privateKey"]);
+
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max) + `…[+${s.length - max}]`;
 }
 
-/** 提取 request body 的关键字段（避免打全量，只打 ID 类字段便于关联）。 */
+/**
+ * 提取 request body 的关键字段（避免打全量，只打 ID 类字段便于关联）。
+ * 字符串值统一过 stripUserInfo —— `repo_url` 等字段历史上可能内嵌凭证。
+ */
 function pickReqFields(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== 'object') return {};
   const b = body as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const k of ['wiki_id', 'code_graph_id', 'knowledge_id', 'wiki_ids', 'code_graph_ids', 'knowledge_ids', 'team_id', 'repo_url', 'branch', 'filename', 'filenames', 'refs', 'tool_name', 'query', 'path']) {
-    if (k in b) out[k] = b[k];
+  for (const k of ['wiki_id', 'code_graph_id', 'knowledge_id', 'wiki_ids', 'code_graph_ids', 'knowledge_ids', 'team_id', 'repo_url', 'branch', 'credential_id', 'filename', 'filenames', 'refs', 'tool_name', 'query', 'path']) {
+    if (NEVER_LOG_FIELDS.has(k)) continue;
+    if (!(k in b)) continue;
+    const v = b[k];
+    out[k] = typeof v === "string" ? stripUserInfo(v) : v;
   }
   return out;
 }
@@ -64,7 +74,7 @@ export function accessLog(): MiddlewareHandler {
 
       try {
         const respText = await c.res.text();
-        logExtra.responseBody = truncate(respText, MAX_BODY_LOG);
+        logExtra.responseBody = truncate(stripUserInfo(respText), MAX_BODY_LOG);
         // 重建 response（text() 消费了 body）
         c.res = new Response(respText, {
           status: c.res.status,

@@ -45,8 +45,9 @@ KS 走 **内网信任模型**，与 MemoryCore 的 user-key 体系不同：
 | 项 | 说明 |
 |---|---|
 | 唯一必填 Header | `x-tdai-service-id`（租户/service 标识，即内核路由键） |
-| 其他鉴权 | 可选 Bearer：`KNOWLEDGE_SERVICE_KEY` 非空时，除只读白名单外的端点需 `Authorization: Bearer <key>`（含 `internal/llm-binding/*` 全部）；为空则不启用（向后兼容，内网信任） |
+| 其他鉴权 | 可选 Bearer：`KNOWLEDGE_SERVICE_KEY` 非空时，除只读白名单外的端点需 `Authorization: Bearer <key>`（含 `internal/llm-binding/*` 全部与 `source-credential/*` 的管理面）；为空则不启用（向后兼容，内网信任） |
 | 例外 | `POST /v3/internal/llm-binding/list` 不需要 `x-tdai-service-id` 头（返回全部 binding，供 Panel 启动缓存；key 启用时仍需 Bearer） |
+| 只读白名单（GET） | `GET /v3/source-credential/status`、`GET /v3/auto-sync/status`（`source-credential` 其余端点均需 Bearer） |
 
 > `service_id` / `team_id` / 资源 ID 统一做**路径分段白名单校验**（`^[A-Za-z0-9_-]+$`、长度 ≤200），防止路径穿越。
 
@@ -56,7 +57,8 @@ KS 走 **内网信任模型**，与 MemoryCore 的 user-key 体系不同：
 |---|---|
 | Wiki ID | `wiki-` + 8 位 `[0-9a-z]`（如 `wiki-a1b2c3d4`） |
 | Code-Graph ID | `cg-` + 8 位 `[0-9a-z]`（如 `cg-e5f6g7h8`） |
-| 多租户 | 所有接口按 `service_id` 收敛；**id-only 接口用 `getById(service_id, id)`，跨租户资源统一返回 404（不暴露存在性）** |
+| Git Credential ID | `gc-` + 8 位 `[0-9a-z]`（如 `gc-p9q8r7s6`） |
+| 多租户 | 所有接口按 `service_id` 收敛；**id-only 接口用 `getById(service_id, id)`，跨租户资源统一返回 404（不暴露存在性）**。`source-credential` 更进一步：所有读写都同时按 `service_id + team_id` 收敛 |
 
 ### 1.5 错误 message 格式
 
@@ -66,11 +68,14 @@ KS 走 **内网信任模型**，与 MemoryCore 的 user-key 体系不同：
 |---|---|---|
 | 400 | `x-tdai-service-id header is required` / `wiki_id is required` / `query is required` | 参数缺失 |
 | 400 | `invalid path: traversal detected` / `forbidden path (structural file or outside wiki/)` | 路径非法 |
-| 404 | `wiki not found` / `code graph not found` | 资源不存在（含跨租户） |
+| 404 | `wiki not found` / `code graph not found` / `source credential not found` | 资源不存在（含跨租户） |
 | 409 | `wiki is processing; cannot write/delete` | 状态冲突 |
 | 409 | `busy` | 并发拒绝（ingest/sync） |
+| 409 | `git credential name already exists in this team: <name>` | 凭证重名 |
 | 413 | `content exceeds size limit` / `too many files (max 10)` | 超限 |
+| 422 | `invalid SSH private key: …` / `SSH private keys protected by a passphrase are not supported…` | 凭证材料不可用 |
 | 503 | `code graph instance not loaded` | 依赖未就绪 |
+| 503 | `KNOWLEDGE_SECRET_KEY is not configured; managed git credentials are unavailable…` | 凭证子系统未配置 |
 
 ### 1.6 资源状态枚举
 
@@ -89,11 +94,12 @@ KS 走 **内网信任模型**，与 MemoryCore 的 user-key 体系不同：
 |---|---|---|
 | Wiki | 16 | `/v3/wiki/*` |
 | Code-Graph | 14 | `/v3/code-graph/*` |
+| Source-Credential | 7 | `/v3/source-credential/*` |
 | Tools（Agent 自发现） | 2 | `/v3/tools/*` |
 | Internal LLM-Binding | 3 | `/v3/internal/llm-binding/*` |
 | Auto-Sync | 2 | `/v3/auto-sync/*` |
 
-**合计 37 个接口。**
+**合计 44 个接口。**
 
 ---
 
@@ -634,6 +640,119 @@ upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
 
 ---
 
+## 3.6 Source-Credential（7）
+
+> 托管 git 凭证，让 Code-Graph 能索引**私有仓库**。命名沿用 auth 白名单里既有的
+> `/source-credential/status` 占位——凭证是「某个 source 的凭证」（git 今天，local/ftp 以后），
+> 不是 git 专属。
+>
+> **密钥永不回显**：所有响应只含 16 位 HMAC 指纹与元数据。
+> 需要 `KNOWLEDGE_SECRET_KEY`（≥32 字节）才能读写；未配置时 create 返回 503。
+>
+> ⚠️ **授权边界**：KS 没有成员数据、鉴权只有一把全局 service key，因此
+> 「谁有权操作某 team 的凭证」必须由 **Panel 侧按团队成员门控**。KS 不应直接暴露给终端用户。
+
+**SourceCredentialDetail 统一出参**：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| credential_id | string | 资源 ID（`gc-` 前缀） |
+| team_id | string | 团队 ID |
+| name | string | 名称（同 service+team 内唯一） |
+| kind | string | `https_token` / `ssh_key` |
+| host | string | 归一化后的 host（小写、无尾点）；凭证**只对该 host 生效** |
+| username | string\|null | HTTPS 用户名（`ssh_key` 为 null） |
+| fingerprint | string | HMAC(主密钥, 明文) 前 16 位 hex |
+| created_by | string\|null | 创建者（不可信，仅审计） |
+| created_at / updated_at | string | 时间 |
+
+### POST /v3/source-credential/create
+
+托管一份凭证。
+
+**请求体**（with-team）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| team_id | string | 是 | 团队 ID |
+| name | string | 是 | 名称，≤120 字符 |
+| kind | string | 是 | `https_token` / `ssh_key` |
+| host | string | 是 | **必填**。凭证只对该 host 生效（防止拿团队 token 去打任意主机）。写 host 即可，不要带端口 |
+| username | string | 否 | HTTPS 用户名，默认 `oauth2`。GitHub App installation token 必须传 `x-access-token` |
+| secret | string | 是 | token 或 PEM 私钥明文，≤64KB |
+| user_id | string | 否 | 仅记入 `created_by` 与审计 |
+
+**响应** `data`：`SourceCredentialDetail`（HTTP 201）。
+
+**错误**：`400`（缺 team_id/name/kind/host/secret 或 kind 非法）、`409`（同 team 重名）、
+`422`（SSH 私钥非法或带 passphrase）、`503`（`KNOWLEDGE_SECRET_KEY` 未配置）。
+
+### POST /v3/source-credential/list
+
+列出本 team 的凭证（全部掩码）。
+
+**响应** `data`：`{ items: SourceCredentialDetail[], total }`。
+
+### POST /v3/source-credential/get
+
+**请求体**：`{ team_id, credential_id }`。**响应** `data`：`SourceCredentialDetail`。
+
+**错误**：`400`（缺 team_id/credential_id）、`404`（不存在**或跨 team/跨 service**）。
+
+### POST /v3/source-credential/delete
+
+批量删除（软删，留痕）。
+
+**请求体**：`{ team_id, credential_ids: string[] }`（非空，≤100）。
+
+**响应** `data`：`{ deleted_ids, failed: [{ id, reason }] }`。
+
+### POST /v3/source-credential/test
+
+用该凭证探测目标仓库连通性（`git ls-remote --heads`），不落盘。
+
+**请求体**（with-team）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| team_id | string | 是 | 团队 ID |
+| credential_id | string | 是 | 凭证 ID |
+| repo_url | string | 是 | 目标仓库 URL |
+| branch | string | 否 | 给了但远端不存在时 `ok=true` + `note`（凭证本身可用） |
+
+**响应** `data`：`{ ok: boolean, error?: string, note?: string }`（error 已脱敏）。
+
+**错误**：`400`（缺字段 / repo_url 非法 / 未过协议白名单与 SSRF 校验）、
+`404`（凭证不存在、跨 team，**或 `repo_url` 的 host 与该凭证声明的 host 不一致**）。
+
+> 三重门顺序：① 凭证归属（service+team）→ ② **host 严格相等** → ③ `repo_url` 过
+> source-fetcher 的协议白名单 / SSRF / host 白名单校验。任一门不过都不发起探测。
+
+### GET /v3/source-credential/status
+
+凭证子系统状态（**只读白名单，无需 Bearer**）。仅回非租户数据。
+
+**Header**：需要 `x-tdai-service-id`。
+
+**响应** `data`：`{ configured: boolean, count: number, kinds: string[] }`。
+
+### GET /v3/source-credential/providers
+
+支持的凭证类型与其配置要求（静态信息，不含实例数据）。
+
+**响应** `data`：`{ providers: [{ kind, label, default_username?, fields, note }] }`。
+
+### 与 Code-Graph 的联动
+
+- `POST /v3/code-graph/create` 新增可选 `credential_id`：校验凭证存在、同 `service_id`+`team_id`，
+  且 **`credential.host === normalizeHost(repo_url)`**，不通过则 `404`。
+  缺省（不传）= 匿名访问公开仓库，行为与本次变更前一致。
+- `POST /v3/code-graph/update-meta` 新增可选 `credential_id`（`null` 表示解绑），**校验强度与 create 完全一致**
+  —— 否则「先建后换绑」会成为绕过 host 绑定的越权通道。
+- `CodeGraphDetail` 新增 `credential_id: string|null`（**仅引用，非密钥**）。
+
+---
+
 ## 4. 附录
 
 ### 4.1 与 MemoryCore 的关键差异（跨卷对接必读）
@@ -644,7 +763,7 @@ upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
 | 鉴权 | Bearer + service-id + user-key 分层 | 仅 `x-tdai-service-id`（内网信任） |
 | 错误 message | 三类格式（枚举 / 5 位 code / `CODE: detail`） | 小写英文句子（按 HTTP code 分支） |
 | 分页出参 | `{ items, total, limit, offset }` | `{ items, total }`（无 limit/offset 回显） |
-| ID 前缀 | skill `skl-` 等 | wiki `wiki-`、code-graph `cg-` |
+| ID 前缀 | skill `skl-` 等 | wiki `wiki-`、code-graph `cg-`、git credential `gc-` |
 
 ### 4.2 接口计数修正说明
 
@@ -659,5 +778,7 @@ upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
 |---|---|
 | `wiki/create` | 同名同 team 返回已存在记录（200，非报错） |
 | `code-graph/create` | 同 repo_url+branch 返回已存在记录（200） |
+| `source-credential/create` | **不幂等**：同 team 重名返回 409（凭证是密钥，静默覆盖会造成「以为换掉了其实没换」） |
+| `source-credential/delete` | 软删；再次删除同一 id 记入 `failed`（reason `not found`） |
 | `llm-binding/set` | 重复 set 覆盖（api_key 不传保留原值） |
 | `wiki/delete`、`code-graph/delete` | 单个失败不整体报错，写入 `failed` 数组 |

@@ -9,6 +9,47 @@
 
 ---
 
+## [Unreleased]
+
+### 🔑 Code-Graph 支持私有仓库（Git 凭证管理）
+
+公开仓库路径不受影响；私有仓库需先托管一份凭证。见
+[MemoryKnowledge/README.md](./MemoryKnowledge/README.md)「私有仓库接入」。
+
+- 新增凭证托管 API `/v3/source-credential/*`（create / list / get / delete / test / status /
+  providers），支持 **HTTPS token**（GitHub PAT、GitLab PAT、GitHub App installation token 等）
+  与 **SSH 私钥**（`git@host:path`）
+- 密钥以 AES-256-GCM 加密落库（新增 `knowledge_git_credential` 表，密文以
+  `credential_id` 作为 AAD 绑定到行），主密钥来自新增环境变量 `KNOWLEDGE_SECRET_KEY`；
+  接口只返回 16 位 HMAC 指纹，永不回显明文
+- 凭证经**子进程环境变量**注入 git（`http.extraHeader` / `GIT_SSH_COMMAND`），
+  不写入 URL、不落 `.git/config`、不进 argv；同时清空 `credential.helper`，
+  避免 token 被系统钥匙串缓存
+- `POST /v3/code-graph/create` 与 `/update-meta` 新增可选 `credential_id`，
+  响应新增 `credential_id` 字段（仅引用）
+- 新增 `KNOWLEDGE_GIT_ALLOWED_HOSTS`（内网 git host 白名单，锚定匹配、支持 `*.suffix`）、
+  `KNOWLEDGE_GIT_STRICT_HOST_KEY`
+- 环境要求：**git ≥ 2.31**（`GIT_CONFIG_COUNT` 注入机制）、**OpenSSH ≥ 7.6**
+
+### 🔒 安全加固（对现有公开仓库路径同样生效）
+
+- **拒绝 URL 内嵌凭证**：`https://user:token@host/...` 现在会直接报错。
+  该写法会把 token 落到 `.git/config` 与 git 的 stderr。请改用 `credential_id`。
+  ⚠️ 这是**行为变更** —— 如有存量配置依赖此写法，需要迁移。
+- 修复 **IPv6 SSRF 绕过**：`new URL("https://[::1]/x").hostname` 返回带方括号的
+  `[::1]`，历史黑名单正则匹配不到，导致 IPv6 回环 / `::ffff:` IPv4 映射 /
+  `fc00::/7` ULA 地址可绕过内网校验。现已归一化后判定。
+- 错误信息与日志统一脱敏：`code-graph` 的 `sync_error`、审计 detail、TMC 回调
+  payload、access log、500 错误响应体在落库 / 外发前都会抹掉 URL 中的 userinfo
+- 启动时自动从 `DEBUG` 中剥离 `simple-git`（其 debug 日志会打印含
+  `Authorization` 头的 spawn options）
+- 移除 auth 白名单里的 `/source-provider` **前缀放行**——该路由从未实现，
+  前缀放行会让将来挂在该前缀下的端点静默免鉴权
+- 凭证接口默认要求 `KNOWLEDGE_SERVICE_KEY`（只有 `GET /source-credential/status`
+  在只读白名单里）
+
+---
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

@@ -46,6 +46,8 @@ export interface CodeGraphRow {
   stats_json: string | null;
   service_url: string | null;
   summary: string | null;
+  /** 引用的 git 凭证 id（knowledge_git_credential）；null = 匿名访问公开仓库。 */
+  credential_id: string | null;
   version: number;
   last_sync_at: string | null;
   created_at: string;
@@ -65,6 +67,7 @@ export interface CreateCodeGraphInput {
   task_id?: string;
   visibility?: string;
   service_url?: string;
+  credential_id?: string | null;
 }
 
 export interface CodeGraphStatusPatch {
@@ -82,6 +85,61 @@ export interface CodeGraphStatusPatch {
 export interface CodeGraphMetaPatch {
   repo_name?: string;
   summary?: string | null;
+  /** 换绑 git 凭证；null = 清除（回到匿名访问）。校验强度与 create 一致。 */
+  credential_id?: string | null;
+}
+
+// ───────────────────────── Git Credential ─────────────────────────
+
+/** 凭证类型。`https_token` 走 http.extraHeader；`ssh_key` 走 GIT_SSH_COMMAND。 */
+export type GitCredentialKind = "https_token" | "ssh_key";
+
+/**
+ * 托管凭证的**对外可见**形态 —— 永远不含密钥本体。
+ * 密钥只以密文存在于 `secret_enc`，只有 resolveMaterial() 会解密。
+ */
+export interface GitCredentialRow {
+  credential_id: string;
+  service_id: string;
+  team_id: string;
+  name: string;
+  kind: GitCredentialKind;
+  /** 归一化后的 host（小写、无尾点、IPv6 无方括号）。凭证只对该 host 生效。 */
+  host: string;
+  username: string | null;
+  /** HMAC(主密钥, 明文) 前 16 位 hex，用于展示与查重。 */
+  fingerprint: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface CreateGitCredentialInput {
+  credential_id: string;
+  service_id: string;
+  team_id: string;
+  name: string;
+  kind: GitCredentialKind;
+  /** 必须已由 normalizeHost() 归一化。 */
+  host: string;
+  username?: string | null;
+  /** 明文密钥（token 或私钥）；本函数负责加密，调用方用完即弃。 */
+  secret: string;
+  created_by?: string | null;
+}
+
+export type CredentialAuditAction = "create" | "delete" | "test";
+
+export interface CredentialAuditRow {
+  id: number;
+  credential_id: string;
+  service_id: string | null;
+  action: CredentialAuditAction;
+  user_id: string | null;
+  /** 只记 host / 结果摘要，绝不记密钥。 */
+  detail: string | null;
+  created_at: string;
 }
 
 // ───────────────────────── Wiki ─────────────────────────
