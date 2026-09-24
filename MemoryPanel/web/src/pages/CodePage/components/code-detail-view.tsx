@@ -5,6 +5,8 @@
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Card, MetricsBoard, SearchBox, StatusTip, Text } from 'tea-component';
 import { ArrowLeftIcon, CodeIcon, RefreshIcon } from 'tea-icons-react';
+import { GitCredentialBinding } from './GitCredentialBinding';
+import { GitCredentialManager } from './GitCredentialManager';
 import { AssetMarkdown } from '@/components/asset/AssetMarkdown';
 import { formatRepoName } from '../constants/code-constants';
 import { statusLabel } from './code-ui';
@@ -122,9 +124,13 @@ export function CodeDetailView({ store }: { store: CodeSourcesStore }) {
                 {selected.last_sync_at ? new Date(selected.last_sync_at).toLocaleString() : '—'}
               </Text>
             </div>
+            {selected.owner_user_id === store.currentUser && <GitCredentialBinding graph={selected} credentials={store.credentials} error={store.credentialError}
+              onSaved={store.fetchSources} onManage={() => store.setShowCredentials(true)} />}
           </Card.Body>
         </Card>
       )}
+      {store.showCredentials && store.activeTeamId && <GitCredentialManager key={store.activeTeamId} teamId={store.activeTeamId} items={store.credentials} error={store.credentialError}
+        onChanged={store.reloadCredentials} onClose={() => store.setShowCredentials(false)} />}
 
       {/* 代码搜索 */}
       <Card>

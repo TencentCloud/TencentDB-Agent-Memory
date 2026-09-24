@@ -4,11 +4,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { knowledgeApi, type CodeGraphDetail } from '@/lib/api/knowledge-api';
+import { knowledgeApi, type GitCredentialInfo, type CodeGraphDetail } from '@/lib/api/knowledge-api';
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
-import { isValidGitHttpUrl, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
+import { ensureGitHostTrusted } from '../components/git-host-trust';
+import { isValidGitUrl, isSshGitUrl, credentialMatchesRepo, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
 export function useCodeSources() {
   const { t } = useTranslation();
@@ -30,6 +31,12 @@ export function useCodeSources() {
   const [formRepo, setFormRepo] = useState('');
   const [formBranch, setFormBranch] = useState('main');
   const [submitting, setSubmitting] = useState(false);
+  const [credentials, setCredentials] = useState<GitCredentialInfo[]>([]);
+  const [credentialError, setCredentialError] = useState('');
+  const [showCredentials, setShowCredentials] = useState(false);
+  const [formCredential, setFormCredential] = useState('');
+  const [formAuth, setFormAuth] = useState<'none' | 'credential'>('none');
+  const [shareWithTeam, setShareWithTeam] = useState(false);
 
   // Allocate-to-agent dialog state
   const [allocateTarget, setAllocateTarget] = useState<{
@@ -45,6 +52,29 @@ export function useCodeSources() {
   const { activeTeamId, activeTeam } = useTeams();
   const auth = readAuth();
   const currentUser = auth?.user_id ?? '';
+  const currentInstance = auth?.instance_id ?? '';
+  const credentialRequest = useRef(0);
+  const reloadCredentials = useCallback(async () => {
+    const request = ++credentialRequest.current;
+    if (!activeTeamId) { setCredentials([]); return; }
+    try {
+      const items = await knowledgeApi.gitCredentials.list(activeTeamId);
+      if (request === credentialRequest.current) { setCredentials(items); setCredentialError(''); }
+    } catch (e) {
+      if (request === credentialRequest.current) {
+        setCredentials([]); setCredentialError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }, [activeTeamId, currentUser, currentInstance]);
+  useEffect(() => {
+    setCredentials([]); setCredentialError(''); setFormCredential(''); setFormAuth('none'); setShareWithTeam(false); setShowCredentials(false);
+    void reloadCredentials();
+    return () => { credentialRequest.current++; };
+  }, [reloadCredentials]);
+  useEffect(() => { setShareWithTeam(false); }, [formRepo]);
+  const selectedCredential = credentials.find((item) => item.credential_id === formCredential);
+  const credentialMismatch = !!formCredential && isValidGitUrl(formRepo) &&
+    (!selectedCredential || !credentialMatchesRepo(selectedCredential, formRepo));
   // 固定资产 tab 只列自己 owner 的 agent（与 ChatMemory / Skills 面板一致，
   // 也符合文档 §4.2 权限规则：agent-fixed 只允许查看 caller 自己 owner 的 agent）。
   const { agents: allAgents } = useAgents(activeTeamId);
@@ -273,16 +303,24 @@ export function useCodeSources() {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
     // 防御性校验：按钮已按 validUrl 禁用，这里再挡一层防止绕过
-    if (!isValidGitHttpUrl(repo)) {
+    if (!isValidGitUrl(repo)) {
       tea.notify.error(t('code.register.invalidUrl'));
       return;
     }
+    if (formAuth === 'credential' && !formCredential) { tea.notify.error(t('gitCredential.choose')); return; }
+    if (isSshGitUrl(repo) && !formCredential) {
+      tea.notify.error(t('code.register.sshWarning')); return;
+    }
+    if (credentialMismatch) { tea.notify.error(t('gitCredential.serverMismatch')); return; }
+    if (formCredential && !shareWithTeam) return;
     setSubmitting(true);
     try {
-      const detail = await knowledgeApi.code.create({ teamId: activeTeamId, repoUrl: repo, branch: formBranch.trim(), repoName: repo });
+      if (!await ensureGitHostTrusted(activeTeamId, selectedCredential, repo)) return;
+      const detail = await knowledgeApi.code.create({ teamId: activeTeamId, repoUrl: repo, branch: formBranch.trim(), repoName: repo, credentialId: formCredential || undefined, shareWithTeam });
       setShowRegister(false);
       setFormRepo('');
       setFormBranch('main');
+      setFormCredential(''); setFormAuth('none'); setShareWithTeam(false);
       setScopeTab('team');
       setInFlight((prev) => [
         ...prev.filter((x) => x.code_graph_id !== detail.code_graph_id),
@@ -398,6 +436,8 @@ export function useCodeSources() {
     setSubView,
     selectedCgId,
     setSelectedCgId,
+    credentials, credentialError, showCredentials, setShowCredentials, reloadCredentials, credentialMismatch,
+    formCredential, setFormCredential, formAuth, setFormAuth, shareWithTeam, setShareWithTeam,
     // register
     showRegister,
     setShowRegister,
