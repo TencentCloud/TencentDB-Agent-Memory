@@ -313,7 +313,7 @@ class MemoryClient:
             merged = list(normalized_sessions or [])
             if session_id.strip() not in merged:
                 merged.append(session_id.strip())
-            normalized_sessions = merged
+            normalized_sessions = _normalize_delete_ids("session_ids", merged, 100)
 
         if not normalized_messages and not normalized_sessions:
             raise ParamError(
@@ -699,7 +699,7 @@ class AsyncMemoryClient:
             merged = list(normalized_sessions or [])
             if session_id.strip() not in merged:
                 merged.append(session_id.strip())
-            normalized_sessions = merged
+            normalized_sessions = _normalize_delete_ids("session_ids", merged, 100)
 
         if not normalized_messages and not normalized_sessions:
             raise ParamError(
