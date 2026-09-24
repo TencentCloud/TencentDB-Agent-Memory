@@ -45,6 +45,15 @@ const ENV: Record<string, string | undefined> =
 
 export const DEFAULT_MAX_BODY_BYTES = 1 * 1024 * 1024;
 
+export type ConsoleLogLevel = "debug" | "info" | "warn" | "error";
+
+/** Resolve the minimum standalone-gateway console log level. */
+export function resolveConsoleLogLevel(): ConsoleLogLevel {
+  const raw = (ENV.LOG_LEVEL ?? "debug").trim().toLowerCase();
+  if (raw === "info" || raw === "warn" || raw === "error") return raw;
+  return "debug";
+}
+
 /**
  * Resolve the maximum allowed request body size in bytes.
  *

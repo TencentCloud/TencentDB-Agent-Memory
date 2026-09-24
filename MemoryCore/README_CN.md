@@ -276,6 +276,7 @@ Gateway 按以下优先级加载配置：
 | `TDAI_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API 地址 |
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM 模型 |
 | `TDAI_SKILL_ENABLED` | 配置文件值 | 强制启用 Skill 模块 |
+| `LOG_LEVEL` | `debug` | 控制台最低日志级别：`debug`、`info`、`warn` 或 `error` |
 
 配置模板：
 
