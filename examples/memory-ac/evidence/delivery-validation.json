@@ -1,0 +1,119 @@
+{
+  "version": "ac-delivery-validation-v1",
+  "status": "pass",
+  "at": "2026-09-14T10:49:12.384Z",
+  "node": "v24.11.0",
+  "platform": "win32",
+  "package_tests": 14,
+  "numerical": {
+    "status": "pass",
+    "questions": 828,
+    "training_questions": 272,
+    "evaluation_questions": 556,
+    "method_views": 7452,
+    "refitted_models": 4,
+    "recomputed_primary_bootstrap_contrasts": 12,
+    "original_source_files_verified": 36,
+    "new_model_calls": 0,
+    "semantic_labels_rejudged": false,
+    "meaning": "Arithmetic, parameter-refit and frozen-source verification; not a new model benchmark."
+  },
+  "exact_historical_selection_views": 7452,
+  "frozen_research_files_unchanged": 510,
+  "normalization": "LF/trailing-whitespace only; original and published byte hashes recorded",
+  "gateway_wiring": {
+    "status": "pass",
+    "checks": [
+      {
+        "case": "disabled",
+        "pass": true,
+        "k": 5
+      },
+      {
+        "case": "enabled_equals_offline",
+        "pass": true,
+        "k": 3,
+        "tokens": 208,
+        "budget_tokens": 273
+      },
+      {
+        "case": "read_failure",
+        "pass": true,
+        "k": 5,
+        "fallback": true,
+        "reason": "injected_read_failure",
+        "total_ms": 3.6634000000003653
+      },
+      {
+        "case": "metadata_timeout",
+        "pass": true,
+        "k": 5,
+        "fallback": true,
+        "reason": "v10_total_timeout",
+        "total_ms": 59.68040000000019
+      },
+      {
+        "case": "corrupt_model",
+        "pass": true,
+        "k": 5,
+        "fallback": true,
+        "reason": "v10_worker_rejected:v11_model_bundle",
+        "total_ms": 160.85649999999987
+      },
+      {
+        "case": "corrupt_mapping",
+        "pass": true,
+        "k": 5,
+        "fallback": true,
+        "reason": "mapping_missing",
+        "total_ms": 6.780999999999949
+      },
+      {
+        "case": "cpu_hang",
+        "pass": true,
+        "k": 5,
+        "fallback": true,
+        "reason": "v10_worker_timeout",
+        "total_ms": 59.44640000000072
+      },
+      {
+        "case": "score_timeout",
+        "pass": true,
+        "k": 5,
+        "fallback": true,
+        "reason": "v10_total_timeout",
+        "total_ms": 518.0486000000001
+      },
+      {
+        "case": "base_error_propagates",
+        "pass": true
+      }
+    ],
+    "actual_memorycore": true,
+    "actual_qwen": false,
+    "model_calls": 0,
+    "scope": "Synthetic wiring and failure tests only. Historical 72-request public-data Qwen benchmark remains separate."
+  },
+  "public_source_preparation": {
+    "subjects": 168,
+    "questions": 168,
+    "exact_empty_non_gold_skipped": 1
+  },
+  "public_ingest_smoke": {
+    "status": "pass",
+    "subjects": 1,
+    "questions": 1,
+    "written_chunks": 481,
+    "inference_started": false,
+    "old_results_dependency": false,
+    "private_mirror_tested": false
+  },
+  "new_model_calls": 0,
+  "PR_created": false,
+  "initial_failures": [
+    "Tag does not track package-lock.json; supplied historical lock must be installed explicitly.",
+    "Historical lock fails npm ci due to missing @emnapi optional dependency resolution; --legacy-peer-deps also fails.",
+    "Packaged public adapter initially rejected one exact-empty non-gold message. Restored the audited research empty-message adapter and added a regression test; no gold or question removed."
+  ],
+  "reproducibility_limit": "Numerical ledger/refit verification and exact historical-bundle replay do not rejudge semantics. New raw-data runs must regenerate their paired baselines. GPU paths remain historically validated, not newly rerun for packaging."
+}

@@ -1,0 +1,1 @@
+{"model":"gemma3:12b","digest":"f4031aab637d1ffa37b42570452ae0e4fad0314754d17ded67322e4b95836f8a","server_version":"0.34.0","think":false,"options":{"temperature":0,"seed":20260914,"num_ctx":16384,"num_predict":32,"presence_penalty":0}}
