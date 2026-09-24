@@ -302,7 +302,9 @@ export class MemoryFileReader {
       headers["x-cos-security-token"] = cred.token;
     }
 
-    const url = `https://${host}${cosPath}`;
+    // Encode the transport path without changing the object key used for signing.
+    const encodedPath = cosPath.split("/").map(encodeURIComponent).join("/");
+    const url = `https://${host}${encodedPath}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
 
