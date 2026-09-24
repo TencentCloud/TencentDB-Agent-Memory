@@ -52,6 +52,7 @@ MemoryCore is distributed as a standalone runtime for local development, single-
 - Node.js `>= 22.16.0`
 - npm
 - An OpenAI-compatible LLM API. Read-only queries may not invoke an LLM, but memory extraction and aggregation require valid credentials.
+- **SQLite FTS5 module** for BM25 keyword / hybrid recall. The official Node binaries are not guaranteed to include FTS5 (e.g. v22.13.1 lacks it; v22.23.2 has it). When FTS5 is absent, keyword search silently returns nothing and recall degrades to embedding-only — check `GET /health` → `stores.ftsAvailable`.
 
 ## Quick start
 
