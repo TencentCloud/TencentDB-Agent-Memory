@@ -23,6 +23,7 @@ export const knowledgeCodeGraph = sqliteTable(
     teamId: text("team_id").notNull(),
     repoName: text("repo_name").notNull().default(""),
     repoUrl: text("repo_url").notNull(),
+    credentialId: text("credential_id"),
     branch: text("branch").notNull(),
     commitHash: text("commit_hash"),
     ownerUserId: text("owner_user_id"),
@@ -49,6 +50,29 @@ export const knowledgeCodeGraph = sqliteTable(
     index("idx_kcg_team_status").on(table.serviceId, table.teamId, table.status),
   ],
 );
+
+export const gitCredential = sqliteTable("git_credential", {
+  credentialId: text("credential_id").primaryKey(),
+  serviceId: text("service_id").notNull(),
+  teamId: text("team_id").notNull(),
+  ownerUserId: text("owner_user_id").notNull(),
+  name: text("name").notNull(),
+  // Retain legacy AAD. New HTTPS rows store a server; unscoped SSH rows store "".
+  repoUrl: text("repo_url").notNull(),
+  kind: text("kind").notNull(),
+  username: text("username"),
+  encryptedSecret: text("encrypted_secret").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [index("idx_git_credential_owner").on(table.serviceId, table.teamId, table.ownerUserId)]);
+
+export const gitTrustedHost = sqliteTable("git_trusted_host", {
+  serviceId: text("service_id").notNull(),
+  teamId: text("team_id").notNull(),
+  ownerUserId: text("owner_user_id").notNull(),
+  serverUrl: text("server_url").notNull(),
+  knownHosts: text("known_hosts").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, table => [uniqueIndex("idx_git_trusted_host_owner").on(table.serviceId, table.teamId, table.ownerUserId, table.serverUrl)]);
 
 // ───────────────────────── knowledge_wiki ─────────────────────────
 

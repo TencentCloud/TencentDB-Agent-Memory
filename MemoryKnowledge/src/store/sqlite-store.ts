@@ -94,6 +94,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
             teamId: input.team_id,
             repoName: input.repo_name ?? "",
             repoUrl: input.repo_url,
+            credentialId: input.credential_id ?? null,
             branch: input.branch,
             ownerUserId: input.owner_user_id ?? null,
             userId: input.user_id ?? null,
@@ -244,6 +245,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
   /** Update code-graph metadata (repo_name, summary). memory mismatch → null. */
   updateCodeGraphMeta(serviceId: string, codeGraphId: string, patch: CodeGraphMetaPatch): CodeGraphRow | null {
     const set: Record<string, unknown> = { updatedAt: nowIso() };
+    if (patch.credential_id !== undefined) set.credentialId = patch.credential_id;
     if (patch.repo_name !== undefined) set.repoName = patch.repo_name;
     if (patch.summary !== undefined) set.summary = patch.summary;
     this.db
@@ -600,6 +602,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       team_id: r.teamId,
       repo_name: r.repoName,
       repo_url: r.repoUrl,
+      credential_id: r.credentialId ?? null,
       branch: r.branch,
       commit_hash: r.commitHash,
       owner_user_id: r.ownerUserId,

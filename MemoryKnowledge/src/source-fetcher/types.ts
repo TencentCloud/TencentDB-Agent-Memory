@@ -6,6 +6,8 @@
  * 具体实现（如 GitSourceFetcher）依赖 simple-git，但该依赖不泄漏到本接口层。
  */
 
+import type { GitSecret } from "../store/git-credential-store.js";
+
 export type SourceType = "git" | "local" | "ftp";
 
 export interface FetchResult {
@@ -24,15 +26,15 @@ export interface FetchResult {
  *   3. 返回版本标识
  *
  * 实现：
- *   - GitSourceFetcher：simple-git，第一版仅 public HTTPS（SSH/私有仓库鉴权见文档 005）
+ *   - GitSourceFetcher：HTTPS（可选 Token）/ SSH（私钥 + 单独确认的服务器指纹）
  *   - LocalSourceFetcher / FtpSourceFetcher：未来扩展
  */
 export interface ISourceFetcher {
   /** 首次拉取：把源码下载到 localPath。 */
-  fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  fetch(sourceUrl: string, branch: string, localPath: string, secret?: GitSecret): Promise<FetchResult>;
 
   /** 增量同步：更新已存在的 localPath 到最新版本。 */
-  sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  sync(sourceUrl: string, branch: string, localPath: string, secret?: GitSecret): Promise<FetchResult>;
 
   /** 校验 sourceUrl 是否合法（协议白名单 + SSRF 防护）。非法则 throw。 */
   validate(sourceUrl: string): void;
