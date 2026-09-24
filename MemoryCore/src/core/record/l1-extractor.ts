@@ -320,7 +320,13 @@ export async function extractL1Memories(params: {
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
         traceContext: { teamId, userId, agentId, sessionId },
-        ...(teamId || userId || agentId || sessionId || taskId ? { filter: { teamId, userId, agentId, sessionId, taskId } } : {}),
+        // Dedup candidates are recalled at AGENT scope (cross-session), aligned
+        // with memory_search / conversation query (see v2-router atomicSearch):
+        // memories are agent-level assets — a correction in session B must
+        // supersede the record written in session A. Session-scoped recall
+        // (the old behaviour) left the old value recallable alongside the new
+        // one. Tenant isolation is still enforced via team/user/agent/task.
+        ...(teamId || userId || agentId || taskId ? { filter: { teamId, userId, agentId, taskId } } : {}),
       });
       dedupLatencyMs = Date.now() - dedupStartMs;
 

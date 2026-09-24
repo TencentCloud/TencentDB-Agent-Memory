@@ -425,3 +425,64 @@ export const v2AuthContextSchema = z.object({
   serviceId: z.string().min(1),
 });
 export type V2AuthContext = z.infer<typeof v2AuthContextSchema>;
+
+// ============================
+// Memory diff（session 变更集）
+// ============================
+//
+// POST /v2|v3/memory/diff — 聚合查询某个 session 的 L1 变更：
+// 每次写入操作一组 { op, record, replaced[] }，replaced 是被 superseded 的
+// 旧记录快照。原始事件行由 store.queryMemoryEvents 返回，聚合在 handler 完成。
+
+export const memoryDiffRequestSchema = z.object({
+  /** 必填：查询哪个 session 的变更集。 */
+  session_id: z.string().min(1),
+  limit: z.number().int().min(1).max(1000).default(500),
+  offset: z.number().int().min(0).default(0),
+  /** 可选：按 op 过滤事件层（created/updated/merged/superseded/reverted）。 */
+  op: z.enum(["created", "updated", "merged", "superseded", "reverted"]).optional(),
+  /** 可选：只返 event_ts ≥ since 的事件（ISO 8601）。 */
+  since: z.string().optional(),
+  /** 可选：只返 event_ts ≤ until 的事件（ISO 8601）。 */
+  until: z.string().optional(),
+});
+export type MemoryDiffRequest = z.infer<typeof memoryDiffRequestSchema>;
+
+// POST /v2|v3/memory/diff/revert — 撤销某条已生效的 L1 变更（review 驳回）。
+// created → 删除该记录；updated/merged → 删除新记录并按 superseded
+// 快照恢复旧记录。撤销本身追加一条 reverted 事件，审计链完整。
+export const memoryDiffRevertRequestSchema = z.object({
+  /** 要撤销的 record id（diff 响应里 change.record_id）。 */
+  record_id: z.string().min(1).optional(),
+  /** 批量撤销（上限 50/次）。与 record_id 二选一或并用。 */
+  record_ids: z.array(z.string().min(1)).min(1).max(50).optional(),
+  /** 可选：撤销理由，记入 reverted 事件的 content。 */
+  reason: z.string().optional(),
+}).refine((d) => d.record_id || (d.record_ids?.length ?? 0) > 0, {
+  message: "record_id or non-empty record_ids is required",
+});
+export type MemoryDiffRevertRequest = z.infer<typeof memoryDiffRevertRequestSchema>;
+
+// POST /v2|v3/memory/history — 单条 L1 记录的完整事件血统
+//（created → updated/merged → superseded/reverted），审阅者追溯一条记忆
+// 的全部生命周期。
+export const memoryHistoryRequestSchema = z.object({
+  /** 必填：目标 record id。 */
+  record_id: z.string().min(1),
+  limit: z.number().int().min(1).max(1000).default(100),
+  offset: z.number().int().min(0).default(0),
+});
+export type MemoryHistoryRequest = z.infer<typeof memoryHistoryRequestSchema>;
+
+// POST /v2|v3/memory/review/inbox — 审阅收件箱：tenant 维度（team/agent/user）
+// 最近有 L1 变更的 session 列表。解决"审阅者不知道该审哪个 session"的问题。
+// 聚合在 handler 完成：拉时间窗内事件按 session_id 分组。
+export const memoryReviewInboxRequestSchema = z.object({
+  /** 可选：只统计 event_ts ≥ since 的事件（ISO 8601）。 */
+  since: z.string().optional(),
+  /** 可选：只统计 event_ts ≤ until 的事件（ISO 8601）。 */
+  until: z.string().optional(),
+  /** 事件扫描上限（再按 session 聚合）。 */
+  limit: z.number().int().min(1).max(1000).default(500),
+});
+export type MemoryReviewInboxRequest = z.infer<typeof memoryReviewInboxRequestSchema>;
