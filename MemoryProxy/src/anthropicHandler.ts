@@ -14,8 +14,15 @@ import {
   apiKeyToKeyId,
   opikCreateLlmSpan,
   opikCreateTrace,
+  opikTurnTag,
   uuidv7,
 } from "./opik.js";
+import {
+  buildMemoryInjectionContext,
+  buildOpikTraceMetadata,
+  summarizeToolInteraction,
+} from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -35,6 +42,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { CreditReportOutcome } from "./credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
   resolveUpstreamConfig,
@@ -570,7 +578,7 @@ export async function handleAnthropicMessages(
     ? _pathPartsEarly[0] : undefined;
   const agentAdapter = resolveAgentAdapter(_agentFromPathEarly ?? "claude-code");
   const ccRoutingEnabled = config.ccRequestRouting?.enabled === true;
-  const requestKind: CcRequestKind = ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main";
+  const requestKind: CcRequestKind = ccRoutingEnabled ? (agentAdapter.classifyRequest(body) as CcRequestKind) : "main";
 
   // ── Model gate: reject requests whose `model` is not a registered display name ──
   // 价目表已配置时，客户端 `model` 必须匹配某条 entry 的 `modelName`（展示名，
@@ -708,7 +716,7 @@ export async function handleAnthropicMessages(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -981,12 +989,12 @@ export async function handleAnthropicMessages(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1115,7 +1123,13 @@ export async function handleAnthropicMessages(
       if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
         const userMsg = { role: "user" as const, content: memCmd.rawMessage };
         try {
-          await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
+          await recordTdaiTurn(
+            tdaiClientForMem,
+            tdaiIdentityForMem,
+            userMsg,
+            memResult.messageText,
+            { traceId },
+          );
         } catch (err: unknown) {
           console.error("[mem-command] L0 write error:", err);
         }
@@ -1198,13 +1212,15 @@ export async function handleAnthropicMessages(
   //   - FORK: 走 pipeline 但 readOnly=true（miss 时不 self-heal 写 cache，避免破坏主对话 cache）
   //   - MAIN: 走完整 pipeline（含 self-heal）
   const skipInjection = requestKind === "sidequery";
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 挂载。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (!injectedSkipped && !skipInjection && config.injection?.enabled && config.injection.injectors.length > 0) {
     try {
       console.log(`[injection-debug] entering injection pipeline session=${sessionKey} turnSeq=${countHumanTurns(messages, "anthropic")} injectors=${config.injection.injectors} kind=${requestKind}`);
       const injectionTurnSeq = countHumanTurns(messages, "anthropic");
       const { getInjectionPipeline } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
-      const injectedBody = await pipeline.process(body, {
+      const injectedResult = await pipeline.processWithStats(body, {
         protocol: "anthropic",
         traceId,
         keyId,
@@ -1221,9 +1237,12 @@ export async function handleAnthropicMessages(
         custom: sessionInfo ? { session: sessionInfo, userKey: callerUserKey ?? undefined, assetCapabilities } : undefined,
         readOnly: requestKind === "fork",
       });
-      body = injectedBody;
-      messages = Array.isArray(injectedBody.messages) ? injectedBody.messages : messages;
-      hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+      body = injectedResult.body;
+      messages = Array.isArray(injectedResult.body.messages)
+        ? injectedResult.body.messages
+        : messages;
+      hasTools = Array.isArray(injectedResult.body.tools) && injectedResult.body.tools.length > 0;
+      injectionHookRuns = injectedResult.hookResults;
     } catch (err: unknown) {
       console.error("[injection] anthropic pipeline error:", err instanceof Error ? err.message : String(err));
     }
@@ -1318,6 +1337,7 @@ export async function handleAnthropicMessages(
   // compaction); fall back to the stateless count when it's not tracked
   // (extension disabled/unavailable, or no-tools auxiliary request).
   const turnSeq = target.turnSeq > 0 ? target.turnSeq : countHumanTurns(messages, "anthropic");
+  traceTags.push(opikTurnTag(sessionKey, turnSeq));
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1359,6 +1379,28 @@ export async function handleAnthropicMessages(
   });
 
   // ── Opik: create trace ───────────────────────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "anthropic",
+    sessionKey,
+    conversationId,
+    spaceId,
+    userId,
+    model: target.model,
+    stream: isStream,
+    turnSeq,
+    requestPath: c.req.path,
+    memoryInjection: buildMemoryInjectionContext({
+      enabled: config.injection?.enabled === true,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
+      skipped: injectedSkipped,
+      hookRuns: injectionHookRuns,
+    }),
+  });
+  const toolSummary = summarizeToolInteraction(messages);
+  if (toolSummary.toolCalls.length > 0 || toolSummary.toolResults > 0) {
+    opikTraceMetadata.tool_interaction = toolSummary;
+  }
   const forkTraceId = opikCreateTrace(config, {
     traceId,
     projectName: keyId,
@@ -1366,6 +1408,7 @@ export async function handleAnthropicMessages(
     startTime,
     input: { messages: flattenAnthropicMessagesForOpik(messages, body.system) },
     tags: [...traceTags, ...target.tags],
+    metadata: opikTraceMetadata,
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1717,7 +1760,11 @@ export async function handleAnthropicMessages(
       outputMessage: outputContent ? { role: "assistant", content: outputContent } : null,
       model: effectiveModel,
       usage,
-      tags: retried ? ["retry"] : undefined,
+      tags: [
+        opikTurnTag(sessionKey, turnSeq),
+        ...(retried ? ["retry"] : []),
+      ],
+      metadata: opikTraceMetadata,
       forkProjectName: "request_log",
       forkTraceId,
       forkMetadata: {
@@ -1801,8 +1848,17 @@ export async function handleAnthropicMessages(
   // 常用的 stream:false）沉默丢失。缺失该调用意味着 CC non-stream 场景
   // 完全没有 L0 记忆写入。
   if (isMainDialog && tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-    recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, outputContent)
-      .catch((err: unknown) => pipe.error("TDAI_L0", err));
+    trackWrite(
+      withL0Retry(() =>
+        recordTdaiTurn(
+          tdaiClient!,
+          tdaiIdentity,
+          tdaiUserMessage,
+          outputContent,
+          { traceId },
+        ),
+      ).catch((err: unknown) => pipe.error("TDAI_L0", err)),
+    );
   } else if (isMainDialog && tdaiClient) {
     logExtractionSkipped(config, "tdai-memory", sessionKey);
   } else if (!isMainDialog) {
@@ -2073,7 +2129,10 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
             outputMessage: outputText ? { role: "assistant", content: outputText } : null,
             model: modelId,
             usage,
-            tags: retried ? ["retry"] : undefined,
+            tags: [
+              opikTurnTag(ctx.sessionKey, ctx.lf.turnSeq),
+              ...(retried ? ["retry"] : []),
+            ],
             forkProjectName: "request_log",
             forkTraceId,
             forkMetadata: {
@@ -2139,6 +2198,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
           withL0Retry(() => recordTdaiTurn(
             ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
             outputText || null,
+            { traceId: ctx.traceId },
           )).catch((err: unknown) => pipe.error("TDAI_L0", err))
         );
       } else if (isMainDialog && ctx.tdaiClient) {
@@ -2214,7 +2274,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
 
       // Credit usage reporting for streaming responses.
       (ctx.skipCreditReport
-        ? Promise.resolve({ attempted: false, ok: false })
+        ? Promise.resolve<CreditReportOutcome>({ attempted: false, ok: false })
         : tryReportCreditFromPath(
             ctx.config.creditReport,
             ctx.requestPath,

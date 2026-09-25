@@ -1,0 +1,252 @@
+# 自托管 Opik 可观测栈（backend API 8080 / frontend UI 5173）。
+#
+# 启动：
+#   cd deploy
+#   docker compose -f opik-compose.yml --profile opik up -d --pull missing
+#
+# 说明：
+#   - 服务清单裁剪自官方 comet-ml/opik v2.2.49 deployment/docker-compose，
+#     只保留 trace/span 上报链路必需组件：mysql / redis / clickhouse / zookeeper /
+#     minio / backend / frontend（跳过 python-backend、guardrails、demo-data、
+#     otel 等可选模块）。
+#   - 与官方不同：backend 固定发布 8080:8080（官方只随机发布），方便宿主与
+#     proxy 容器直连；frontend 固定 5173:5173。
+#   - 所有服务 pull_policy: missing —— 本地已有镜像时不联网（离线可用）。
+#   - 数据落 named volume，删除容器不丢 trace。
+
+name: opik
+
+services:
+  mysql:
+    image: mysql:8.4.2
+    pull_policy: missing
+    hostname: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: opik
+      MYSQL_DATABASE: opik
+      MYSQL_USER: opik
+      MYSQL_PASSWORD: opik
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      timeout: 1s
+      interval: 1s
+      retries: 300
+    volumes:
+      - mysql:/var/lib/mysql/
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2.4-alpine3.19
+    pull_policy: missing
+    hostname: redis
+    command: redis-server --requirepass opik
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "6379"]
+      interval: 2s
+      timeout: 4s
+      retries: 20
+      start_period: 30s
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  clickhouse-init:
+    image: alpine:latest
+    pull_policy: missing
+    volumes:
+      - ./opik-assets/clickhouse_config:/clickhouse_config_files:ro
+      - clickhouse-config:/config
+    command: |
+      sh -c "
+        cp -r /clickhouse_config_files/* /config/ &&
+        chown -R 1000:1000 /config
+      "
+    restart: "no"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3.16.16-alpine
+    pull_policy: missing
+    hostname: clickhouse
+    environment:
+      CLICKHOUSE_DB: opik
+      CLICKHOUSE_USER: opik
+      CLICKHOUSE_PASSWORD: opik
+      # Enables SQL-driven Access Control and Account Management:
+      # https://clickhouse.com/docs/en/operations/access-rights#enabling-access-control
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse:/var/lib/clickhouse/
+      - clickhouse-server:/var/log/clickhouse-server/
+      - clickhouse-config:/etc/clickhouse-server/config.d
+      - ./opik-assets/clickhouse_config/users.d/enable_time_type.xml:/etc/clickhouse-server/users.d/enable_time_type.xml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
+      interval: 1s
+      timeout: 1s
+      retries: 300
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  zookeeper:
+    image: zookeeper:3.9.4
+    pull_policy: missing
+    hostname: zookeeper
+    user: root
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        # Create data directory if it doesn't exist (for fresh installations)
+        # We use /bitnami/zookeeper/data path for compatibility with upgrades from Bitnami images
+        mkdir -p /bitnami/zookeeper/data
+        chown -R zookeeper:zookeeper /bitnami/zookeeper
+        exec gosu zookeeper /docker-entrypoint.sh zkServer.sh start-foreground
+    environment:
+      JVMFLAGS: "-Xmx512m"
+      ZOO_4LW_COMMANDS_WHITELIST: "srvr,ruok"
+      ZOO_DATA_DIR: /bitnami/zookeeper/data
+      ZOO_DATA_LOG_DIR: /bitnami/zookeeper/data
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep -q imok"]
+      interval: 1s
+      timeout: 1s
+      retries: 300
+    volumes:
+      - zookeeper:/bitnami/zookeeper
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-03-12T18-04-18Z
+    pull_policy: missing
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
+    command: server --console-address ":9090" /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 1s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  mc:
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    pull_policy: missing
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10s;
+      /usr/bin/mc alias set s3 http://minio:9000 ${MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE} ${MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY} --api S3v4 ;
+      /usr/bin/mc mb --ignore-existing s3/public;
+      /usr/bin/mc anonymous set download s3/public/;
+      "
+    restart: "no"
+
+  backend:
+    image: ghcr.io/comet-ml/opik/opik-backend:${OPIK_VERSION:-latest}
+    pull_policy: missing
+    profiles:
+      - opik
+    hostname: backend
+    command: ["bash", "-c", "./run_db_migrations.sh && ./provision_agent_insights_readonly_user.sh && ./entrypoint.sh"]
+    environment:
+      STATE_DB_PROTOCOL: "jdbc:mysql://"
+      STATE_DB_URL: "mysql:3306/opik?createDatabaseIfNotExist=true&rewriteBatchedStatements=true&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true"
+      STATE_DB_DATABASE_NAME: opik
+      STATE_DB_USER: opik
+      STATE_DB_PASS: opik
+      ANALYTICS_DB_MIGRATIONS_URL: "jdbc:clickhouse://clickhouse:8123"
+      ANALYTICS_DB_MIGRATIONS_USER: opik
+      ANALYTICS_DB_MIGRATIONS_PASS: opik
+      ANALYTICS_DB_PROTOCOL: "HTTP"
+      ANALYTICS_DB_HOST: "clickhouse"
+      ANALYTICS_DB_PORT: 8123
+      ANALYTICS_DB_DATABASE_NAME: opik
+      ANALYTICS_DB_USERNAME: opik
+      ANALYTICS_DB_PASS: opik
+      TOGGLE_OLLIE_ENABLED: "false"
+      LLM_PROVIDER_TOKEN_AUTH_DESTINATION_GUARD: "relaxed"
+      ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_USER: ${ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_USER:-comet_readonly_freeform_sql_user}
+      ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_PASS: ${ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_PASS:-opik}
+      JAVA_OPTS: "-Dliquibase.propertySubstitutionEnabled=true -XX:+UseG1GC -XX:MaxRAMPercentage=80.0"
+      REDIS_URL: redis://:opik@redis:6379/
+      OPIK_OTEL_SDK_ENABLED: "false"
+      OPIK_USAGE_REPORT_ENABLED: ${OPIK_USAGE_REPORT_ENABLED:-true}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
+      IS_MINIO: true
+      S3_URL: http://minio:9000
+      TOGGLE_OPIK_AI_ENABLED: "false"
+      TOGGLE_GUARDRAILS_ENABLED: "false"
+      TOGGLE_WELCOME_WIZARD_ENABLED: "true"
+      CORS: "false"
+      ATTACHMENTS_STRIP_MIN_SIZE: 256000
+      JACKSON_MAX_STRING_LENGTH: 104857600
+    ports:
+      - "8080:8080"   # backend API（proxy 上报 / 健康检查）
+      - "3003:3003"   # OpenAPI specification
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health-check"]
+      interval: 1s
+      timeout: 600s
+      retries: 600
+      start_period: 1s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/comet-ml/opik/opik-frontend:${OPIK_VERSION:-latest}
+    pull_policy: missing
+    profiles:
+      - opik
+    hostname: frontend
+    ports:
+      - "${NGINX_PORT:-5173}:${NGINX_PORT:-5173}" # Frontend server port (configurable via NGINX_PORT env var)
+    volumes:
+      - ./opik-assets/nginx_default_local.conf:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --fail-early http://localhost:${NGINX_PORT:-5173}/health"]
+      interval: 1s
+      timeout: 30s
+      retries: 10
+      start_period: 1s
+    environment:
+      OPIK_VERSION: ${OPIK_VERSION:-latest}
+      NGINX_PORT: ${NGINX_PORT:-5173}
+      NGINX_CONF_SUFFIX: ${NGINX_CONF_SUFFIX:-local}
+      OTEL_TRACE: ${OTEL_TRACE:-off}
+    restart: unless-stopped
+
+volumes:
+  clickhouse:
+  clickhouse-server:
+  clickhouse-config:
+  mysql:
+  zookeeper:
+  redis-data:
+  minio-data:
