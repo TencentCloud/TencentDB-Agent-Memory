@@ -401,13 +401,11 @@ export interface SkillRuntimeConfig {
  *   3. `costGuard.anthropicUpstream.url`（仅 Anthropic 协议）
  *   4. `upstream.url` + `upstream.apiKey`（未命中 agent 时的默认）
  *
- * The same map serves both Anthropic and OpenAI protocols — the agent name
- * alone determines routing, matching how {@link ProxyConfig#upstream.url}
- * itself is protocol-agnostic.
+ * Agents may override endpoints per wire protocol.
  */
 export interface AgentUpstreamEntry {
-  /** Target upstream base URL. Required. */
-  url: string;
+  /** Flat fallback URL; optional when protocol endpoints are configured. */
+  url?: string;
   /**
    * Per-agent apiKey. When set (non-empty):
    *   - OpenAI: `Authorization: Bearer <apiKey>` is injected
@@ -417,6 +415,20 @@ export interface AgentUpstreamEntry {
    * that fallback only applies when this agent has no entry at all.
    */
   apiKey?: string;
+  /** Anthropic-protocol upstream; wins entirely over flat `url`/`apiKey` when present. */
+  anthropic?: { url: string; apiKey?: string };
+  /** OpenAI Chat Completions upstream; overrides flat `url`/`apiKey`. */
+  openai?: { url: string; apiKey?: string };
+  /** OpenAI Responses upstream; independent of the Chat Completions endpoint. */
+  responses?: { url: string; apiKey?: string };
+}
+
+/** Protocol endpoint wins; absent protocol falls back to the flat entry. */
+export function resolveAgentUpstreamForProtocol(
+  entry: AgentUpstreamEntry | null | undefined,
+  protocol: "anthropic" | "openai" | "responses",
+): AgentUpstreamEntry | undefined {
+  return entry?.[protocol]?.url ? entry[protocol] : entry?.url ? entry : undefined;
 }
 
 /** Top-level proxy configuration (merged from config file + CLI args). */
@@ -774,8 +786,20 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
-    /** Per-agent override map. See `AgentUpstreamEntry`. */
-    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    /**
+     * Per-agent override map. See `AgentUpstreamEntry` (supports per-protocol
+     * sub-entries for dual-protocol agents like ZCode).
+     */
+    agents?: Record<
+      string,
+      {
+        url?: string;
+        apiKey?: string;
+        anthropic?: { url?: string; apiKey?: string };
+        openai?: { url?: string; apiKey?: string };
+        responses?: { url?: string; apiKey?: string };
+      } | null | undefined
+    >;
   };
   log?: {
     file?: string;

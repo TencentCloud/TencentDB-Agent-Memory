@@ -87,6 +87,7 @@ cp -r agents ~/agents
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
 | [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
 | [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
+| [ZCode](./zcode/) | Anthropic Messages（原生）+ OpenAI Chat（可选） | 交互式 Form（原生 `AskUserQuestion`）或 Header 预选 | `AskUserQuestion` | N/A | ❌ | ❌ (原生携带 `x-session-id`) |
 
 ---
 
@@ -126,6 +127,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | dsh | `x-deepseek-harness-session-id` | `x-session-id` |
 | Hermes | `x-conversation-id` | — (用户静态配置) |
 | OpenClaw | `x-conversation-id` | — (用户静态配置) |
+| ZCode | `x-session-id`（**客户端原生携带**，每会话 UUID） | — (无需接入层注入) |
 
 ---
 
@@ -140,13 +142,14 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | dsh | 配置文件 | `~/.dsh/settings.yaml` + `.credentials.yaml` | YAML 环境变量引用 |
 | Hermes | 配置文件 | `~/.hermes/config.yaml` | YAML `api_key` + headers |
 | OpenClaw | 配置文件 | `~/.openclaw/openclaw.json` | JSON `apiKey` + headers |
+| ZCode | 配置文件（自定义 provider） | ZCode 设置内新增自定义 provider（落盘 `~/.zcode/v2/config.json`） | JSON `options.apiKey` + 接入层 headers |
 
 ---
 
 ## 路由规则
 
 ```
-/:agent/:spaceId/v1/messages          → Anthropic 协议 (CC, CB-Anthropic)
+/:agent/:spaceId/v1/messages          → Anthropic 协议 (CC, ZCode, CB-Anthropic)
 /:agent/:spaceId/v1/chat/completions  → OpenAI Chat (CB, WB-web, dsh, Hermes, OpenClaw)
 /:agent/:spaceId/chat/completions     → OpenAI Chat 无 v1 前缀 (dsh)
 /:agent/:spaceId/v1/responses         → Responses API (Codex, WB-desktop)
