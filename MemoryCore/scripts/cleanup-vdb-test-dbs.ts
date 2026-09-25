@@ -15,7 +15,7 @@
  *   node --import tsx scripts/cleanup-vdb-test-dbs.ts            # dry-run
  *   node --import tsx scripts/cleanup-vdb-test-dbs.ts --confirm   # 真正删除
  */
-import { TcvdbClient } from "../src/core/store/tcvdb-client.js";
+import { TcvdbClient } from "../src/core/store/tcvdb/client.js";
 
 const VDB_URL = process.env.VDB_URL;
 const VDB_API_KEY = process.env.VDB_API_KEY;
