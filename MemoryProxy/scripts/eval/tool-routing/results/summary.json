@@ -1,0 +1,103 @@
+{
+  "status": "comparison-finished-acceptance-not-passed",
+  "model": "deepseek-v4-flash",
+  "thinking": "disabled",
+  "candidate": "C4",
+  "cases": 297,
+  "decision_records": 594,
+  "complete_observation_windows": 594,
+  "all_pending_reservations_usd": 0,
+  "metrics": {
+    "baseline": {
+      "positive_n": 118,
+      "required": 118,
+      "first_tool_correct": 118,
+      "positive_extra": 67,
+      "contract_only_positive_extra": 24,
+      "boundary_n": 89,
+      "boundary_false": 71,
+      "coding_n": 90,
+      "coding_false": 0,
+      "coding_activity_unmet": 33,
+      "response_limit_reached": 69
+    },
+    "candidate": {
+      "positive_n": 118,
+      "required": 118,
+      "first_tool_correct": 117,
+      "positive_extra": 67,
+      "contract_only_positive_extra": 28,
+      "boundary_n": 89,
+      "boundary_false": 24,
+      "coding_n": 90,
+      "coding_false": 0,
+      "coding_activity_unmet": 38,
+      "response_limit_reached": 64
+    }
+  },
+  "gates": [
+    {
+      "id": "required-routing",
+      "status": "pass",
+      "reasons": []
+    },
+    {
+      "id": "clean-routing",
+      "status": "insufficient",
+      "reasons": [
+        "noninferiority_not_established"
+      ]
+    },
+    {
+      "id": "negative-false-calls",
+      "status": "pass",
+      "reasons": []
+    },
+    {
+      "id": "positive-extra-calls",
+      "status": "insufficient",
+      "reasons": [
+        "difference_upper_exceeds_margin"
+      ]
+    },
+    {
+      "id": "coding-false-calls",
+      "status": "pass",
+      "reasons": []
+    },
+    {
+      "id": "context-reuse",
+      "status": "insufficient",
+      "reasons": [
+        "difference_upper_exceeds_margin"
+      ]
+    },
+    {
+      "id": "coding-activity",
+      "status": "fail",
+      "reasons": [
+        "difference_upper_exceeds_margin",
+        "candidate_point_estimate_worse"
+      ]
+    },
+    {
+      "id": "observation-completeness",
+      "status": "fail",
+      "reasons": [
+        "candidate_above_point_ceiling",
+        "difference_upper_exceeds_margin"
+      ]
+    }
+  ],
+  "cost": {
+    "main_accounted_usd": 3.7520486400000017,
+    "recovery_accounted_usd": 1.9311743360000004,
+    "last_supplement_accounted_usd": 0.142340248,
+    "402_continuations_accounted_usd": 0.010229064,
+    "total_current_comparison_conservative_usd": 5.835792288000002,
+    "increment_since_user_resume_conservative_usd": 4.654946600000003,
+    "scope": "Conservative frozen peak-price ledger, includes unknown-usage reservations and replay accounting; not an account invoice. Earlier dataset authoring/review/Dev costs excluded."
+  },
+  "automatic_commit": false,
+  "further_paid_runs_planned": false
+}

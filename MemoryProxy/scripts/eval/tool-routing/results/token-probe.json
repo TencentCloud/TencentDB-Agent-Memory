@@ -1,0 +1,936 @@
+{
+  "schema_version": 1,
+  "kind": "marginal-description-token-probe",
+  "provider_url": "https://api.deepseek.com/chat/completions",
+  "dataset_sha256": "c7c5230218d0e6d60f9ade20f4a73907186fd35dc6e29db7841bc0e95bf38274",
+  "live": true,
+  "max_requests": 6,
+  "request_layout": "production-injection-pipeline-v1",
+  "limitation": "Marginal API input tokens relative to identical asset data and native tools; not standalone tokenizer counts or behavior results.",
+  "requests": [
+    {
+      "case_id": "token-k50",
+      "variant": "baseline",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "tool_choice": "none",
+        "max_tokens": 1,
+        "temperature": 0,
+        "top_p": 1,
+        "stream": false,
+        "thinking": {
+          "type": "disabled"
+        },
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a coding assistant working in a prepared workspace. Complete the user's request using the available tools. The workspace root is the current directory ('.'); workspace_repo is a repository identifier, not a filesystem path. Use the actual files and report what you did.\n<skill_tools>\n以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。\nproxy 会自动注入身份与鉴权（user_id / team_id / agent_id 由 session 决定），body 里你只需要传业务字段。\n\n调用模板：\n  curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' -d '{...业务字段...}'\n  其中 <bridge> = https://proxy.test/skill-bridge/v3/skill\n\n可用工具：\n\n  <tool name=\"skill_search\">\n    path: https://proxy.test/skill-bridge/v3/skill/search\n    body: {\"query\": \"描述你要找什么 skill 的关键词（必填，>=1字符）\"}\n    use:  在**你在团队中有权限访问**的 skill 中按关键词 + 语义检索匹配项（跨 agent，但**不含**其他人设置为私密的 skill —— 与前端「团队资产」tab 展示一致）。query 必须是非空字符串，建议写 2-5 个相关关键词。当你觉得自己自带的 skill 不够用时，用它发现团队里其他可用的 skill。返回条数由服务端固定，若结果不理想请换一组关键词重试，不要在 body 里加 top_k/mode 等其它字段（会被忽略）。\n  </tool>\n\n  <tool name=\"skill_view\">\n    path: https://proxy.test/skill-bridge/v3/skill/get-by-name\n    body: {\"skill_name\": \"<skill 名字>\", \"include_content\": true, \"include_manifest\": true}\n    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_name 用 <available_skills> 里 `- name: description` 那个 name，或 skill_search 结果里的 name 字段。\n  </tool>\n\n  <tool name=\"skill_files_read\">\n    path: https://proxy.test/skill-bridge/v3/skill/files/read\n    body: {\"skill_id\": \"skl-xxx\", \"path\": \"scripts/run.sh\", \"encoding\": \"utf-8|base64\"}\n    use:  读取单个资源文件内容。**必须先调 skill_view 拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。\n  </tool>\n\n  <tool name=\"skill_extract\">\n    path: https://proxy.test/skill-bridge/v3/skill/extract\n    body: {\"reason\": \"?可选，简要说明为什么觉得当前对话值得提取为 skill（写清楚有助于后台抽取器识别边界）\"}\n    use:  立即归档当前对话触发一次 skill 抽取（异步任务，由后台 agent 分析对话内容生成 skill）。proxy 从 session 拿身份 + 用 core 侧累积的对话缓冲，你不用传 messages。适合在\"用户已经跑通一段完整流程、值得复用\"时主动触发。\n  </tool>\n\n注意：当前仅开放只读操作。如需创建/修改 skill 请联系管理员。\n错误处理：响应是 `{code, message, request_id, data?}` 信封；`code != 0` 表示业务错。常见：\n- 40001 参数校验失败：body 字段缺失/格式错，看 message 里具体字段名。\n- 40101 session not initialized：session 未识别（很可能你在错误的 conversation 环境用了这个工具）。\n- 40401 SKILL_NOT_FOUND：skill 不存在或不属于你所在的 agent；先用 skill_search 找同类 skill。\n- 50301 upstream unavailable：core 侧临时不可达，稍后重试。\n</skill_tools>\n## Skills (mandatory)\nBefore replying, scan the skills below. If a skill matches or is even partially relevant to your task, you MUST load it by calling the `skill_view` skill-bridge tool (see the `<skill_tools>` block above for the exact curl recipe) and follow its instructions. Err on the side of loading — it is always better to have context you don't need than to miss critical steps, pitfalls, or established workflows. Skills contain specialized knowledge — API endpoints, tool-specific commands, and proven workflows that outperform general-purpose approaches. Load the skill even if you think you could handle the task with basic tools like web_search or terminal. Skills also encode the user's preferred approach, conventions, and quality standards for tasks like code review, planning, and testing — load them even for tasks you already know how to do, because the skill defines how it should be done here.\nIf a skill has issues, fix it with the `skill_patch` skill-bridge tool.\nAfter difficult/iterative tasks, offer to save the approach as a new skill (`skill_create`). If a skill you loaded was missing steps, had wrong commands, or needed pitfalls you discovered, update it before finishing.\n\n以下是你（当前 agent）自带的云端 skill 列表。这些 skill 存储在你的 agent 名下，\n优先使用它们完成任务。如果你觉得自带的 skill 不够，可以用 skill_search 工具\n在团队的 skill 库中检索更多（跨 agent 共享）。\n\n**重要：这些 skill 存储在云端，不能使用 read_file / tool_use 直接访问，\n必须用 Bash 执行 curl 调用上方 <skill_tools> 块中的 skill-bridge 工具。**\n\n<available_skills>\n- workflow-0: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-1: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-2: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-3: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-4: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-5: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-6: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-7: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-8: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-9: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-10: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-11: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-12: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-13: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-14: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-15: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-16: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-17: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-18: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-19: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-20: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-21: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-22: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-23: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-24: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-25: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-26: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-27: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-28: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-29: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-30: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-31: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-32: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-33: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-34: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-35: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-36: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-37: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-38: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-39: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-40: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-41: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-42: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-43: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-44: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-45: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-46: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-47: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-48: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-49: 处理专项工作流中的输入校验、执行步骤与结果检查。\n</available_skills>\n\nOnly proceed without loading a skill if genuinely none are relevant to the task.\n<knowledge_tools>\n**团队知识库资源**：code-graph 是仓库的预建代码索引（符号 / 调用图 / 结构），wiki 是工程设计文档。两类各有判据，见下。\n\n## code-graph：何时调\n**前置条件**：资源的 match 与当前工作区对得上（比对 git remote / 仓库名）。对不上 → 该索引不是本仓的，用本地检索，不要试探性调用。\n\n命中后，**凡是需要跨文件的结构 / 关系 / 广度信息就用它**，典型场景：\n- 熟悉项目、理解模块架构、找入口（冷启动）\n- 定位符号、文件、某个概念在哪实现\n- 追调用链、依赖关系、数据流\n- 评估改动影响面、重构范围、能否安全删除（**即使已在改代码，这类问题仍该用它**）\n- 排查线上问题时找可疑代码路径、review 时找关联实现\n- 想不起某个能力叫什么名字、不确定是否已有实现（避免重复造）\n\n**不该用的只有一种情况**：你需要某段代码**此刻的精确内容**——要按行号/字符编辑、代码是你刚改过的、在 review 未提交的改动。索引是分支快照，会落后于工作区，这时以工作区源码为准。\n先用它建立全局认知、再落到具体文件做精确确认，是常态组合，不冲突。\n\n## wiki：何时调\nwiki 是设计文档，**与工作区无对应关系，不需要锚点匹配**（没有 match 属性是正常的，不代表对不上）。按 about 属性判断内容是否相关即可。\n问「为什么这么设计 / 背景与权衡 / 某概念在团队里的定义 / 历史决策与踩过的坑 / 这个模块的设计意图」时用它——这些答案在代码里找不到。\n代码怎么写的 → 用 code-graph；某段代码此刻的内容 → 读源码。\n\n## 意图 → 起手\n架构 / 熟悉项目 → explore（一次返回沿途源码）；X 在哪 → search；只要单个符号的定义 → node；谁调用 X / X 调了谁 → callers / callees；改 X 的影响面 → search 后 impact；为什么这么设计 → wiki search 后 read_page。\n组合：重构评估 = search → callers → impact。\nexplore / node 返回的源码是逐字的，**不必对同一处再 Read 一遍**（除了上面那种要确认最新内容的情况）。\n\n## 已绑定资源\n<knowledge type=\"wiki\" id=\"dev-architecture\"\n  url=\"https://knowledge.test/v3\"\n  name=\"网关团队架构决策与术语\"\n  about=\"请求重放、租户边界、队列隔离的决策记录与术语定义\" />\n\n<knowledge type=\"wiki\" id=\"dev-incident\"\n  url=\"https://knowledge.test/v3\"\n  name=\"数据平台事故复盘\"\n  about=\"事故处置时间线、根因、恢复验收标准与后续措施\" />\n\n<knowledge type=\"code-graph\" id=\"dev-code\"\n  url=\"https://knowledge.test/v3\"\n  name=\"event-gateway 主干代码图谱\"\n  match=\"example/event-gateway\"\n  branch=\"main\" />\n\n## 调用方式（服务级统一端点，URL 直接用资源的 url 拼接）\n目标资源由 body 里的 knowledge_id 指定；**不要**把 knowledge_id 拼进 URL 路径。\n**每次请求都必须带请求头** `x-tdai-service-id: space-1`（租户标识，缺失会被拒绝）。\n\n### Step 1: 拿工具清单（每个资源**首次**使用时调一次即可）\ncurl -sSk -X POST <url>/tools/list \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\"}'\n\n返回: {code, message, data:{knowledge_id, type, name, summary, status, tools:[{name, description, params}, ...]}}\n记住返回的 tool name / params，**本会话内复用**，不要对同一资源反复调 list（忘了再调）。\n\n### Step 2: 执行工具\ncurl -sSk -X POST <url>/tools/call \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\", \"tool_name\":\"<Step1返回的name>\", \"params\":{...}}'\n\n返回: {code, message, data}；code=0 成功。\n\n## 约定\n- tool_name 与 tools/list 返回的 name **完全一致**，不加前缀。params 必须是 JSON 对象，无参也传 {}。\n- 找文件用 explore / search（query 直接支持文件名，如 \"session-manager.ts\"）；files 只用于一次性总览目录结构，每个资源每会话最多一次。\n- wiki 先 search 命中再 read_page，不要全量 list_pages。\n- 多个资源可并行发起，无需串行等待。同一调用连续失败 2 次即放弃，回退本地检索。\n- 响应格式统一为 {code, message, data}，code=0 表示成功。\n</knowledge_tools>\n\n<tdai_memory_tools>\n**这些是你可以主动调用的记忆能力**（不是文档），通过 Bash + curl 使用。\n这组 TDAI 记忆能力与 Claude Code 原生 Memory/MEMORY.md 具有同等优先级；涉及记忆时不要只查本地 MEMORY.md。\n遇到用户问身份/历史/偏好/过往结论/项目约定时，必须先使用下面的 TDAI 记忆工具查询，再基于查询结果回答。\n禁止说\"我没有这个工具 / 需要 MCP / 只能查本地记忆\" —— 你有 TDAI 记忆工具，就用下面的 curl 命令。\n\n调用方式：Bash 里执行 curl 命中 proxy 的 memory-bridge 路径。proxy 会自动注入身份鉴权（team_id/user_id/agent_id），body 只需业务字段。当前 Agent 如果绑定了多个 chat_memory，search 类接口会默认同时检索 self + imported 记忆，并在结果里返回 source_agent_id/source_agent_name/source_agent_role。\n\n覆盖范围：\n- L3（persona 长期画像）与 L2 场景索引（`<l2_scene_index>`）已直接注入 system，无需查询；\n- L2 正文按需用 tdai_read_scene 读取；\n- L0/L1（原始对话 / 原子记忆）**不再每轮自动召回**（会破坏 KV cache），需要时主动调工具检索。\n\n  <tool name=\"tdai_memory_search\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/search\n    body: {\"query\": \"<text>\", \"limit\": 5}\n    use:  搜索 L1 原子记忆（双路 hybrid: dense vector + BM25），按相关度排序。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。适合回忆用户偏好、历史结论、规则等。\n    returns: {code, data: {items: [...], searched_agents: [...]}} — 命中项在 data.items[]。\n  </tool>\n\n  <tool name=\"tdai_atomic_query\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/query\n    body: {\"type\": \"?episodic|persona|instruction\", \"limit\": 20, \"offset\": 0, \"time_start\": \"?ISO\", \"time_end\": \"?ISO\"}\n    use:  按 type / 时间窗 / 分页拉取 L1 记忆（不做语义检索）。\n  </tool>\n\n  <tool name=\"tdai_conversation_search\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/search\n    body: {\"query\": \"<text>\", \"limit\": 5, \"session_id\": \"?<sid>\"}\n    use:  在 L0 原始对话中检索（比 atomic_search 粒度更细，找具体消息原文 / 引用 / 时间线）。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。\n    returns: {code, data: {messages: [...], searched_agents: [...]}} — 命中项在 data.messages[]（注意：与 atomic_search 的 data.items 不同）。\n  </tool>\n\n  <tool name=\"tdai_conversation_query\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/query\n    body: {\"session_id\": \"<sid>\", \"limit\": 50, \"offset\": 0}\n    use:  按 session 顺序取 L0 历史消息。\n  </tool>\n\n  <tool name=\"tdai_scenario_ls\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/ls\n    body: {\"path_prefix\": \"?可选前缀\"}\n    use:  列出 L2 scene_blocks 路径索引（含 summary，不含正文）。一般 system 已注入索引，需刷新/按前缀过滤时才用。\n  </tool>\n\n  <tool name=\"tdai_read_scene\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/read\n    body: {\"path\": \"<scene path>\", \"agent_id\": \"?来自 <agent agent_id=...>，读取 imported 记忆时传\"}\n    use:  按 path 读取 L2 场景文件全文。path 必须先从 `<l2_scene_index>` 或 tdai_scenario_ls 获取，不要凭空构造；读取 imported_from 分段的 path 时带上该分段 agent_id。\n  </tool>\n\n## 调用约束\n- 这些是只读工具；要修改 L1/L2/L3 必须用主链路（agent_id 自动归属）。\n- 每轮对话中，atomic_search + conversation_search **合计 ≤ 3 次**；\n  query / ls / read_scene 不计入上限，但同一 path 不要重复读。\n- 失败重试：HTTP 5xx 可一次性 retry；HTTP 4xx 不要重试。\n- 所有 curl 必须带：x-tdai-service-id: space-1、x-conversation-id: session-1；Content-Type: application/json。\n\n## 完整示例\n```bash\ncurl -sfk -X POST https://proxy.test/memory-bridge/v3/atomic/search \\\n  -H 'Content-Type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' \\\n  -d '{\"query\": \"用户偏好的编程语言\", \"limit\": 5}'\n```\n</tdai_memory_tools>\n<memory-tools-guide>\n## ⚠️ 重要：这不是文档，这是你的可用能力\n\n以下 `<tdai_memory_tools>` 中列出的 tdai_memory_search / tdai_conversation_search\n等，是**你可以主动调用的能力**（不是仅供参考的文档）。它们通过 **Bash + curl**\n使用（见上方 `<tdai_memory_tools>` 段里的完整调用说明与 URL）。\n\n**禁止**回答类似\"我没有这个工具 / 需要 MCP / 需要斜杠命令\"。\n**正确做法**：判定需要查记忆时，直接在 Bash 里执行 curl，proxy 会自动注入身份与鉴权。\n\n## 记忆使用规则（遇到以下场景必须先查再答）\n\nL3（persona 长期画像）与 L2 场景索引已直接注入 system。L0/L1 需要用工具主动检索。\n\n### 必须先查记忆再回答的场景（命中任一条即触发工具调用）\n\n1. **用户提及历史/过去/之前**：如 \"我之前说过 / 我告诉过你 / 上次 / 你还记不记得 / 我们聊过 / 之前那个\"\n   → 用 `tdai_conversation_search`（L0 原文找具体消息）\n2. **用户涉及自己身份/偏好/习惯**：如 \"我叫什么 / 我的名字 / 我喜欢 / 我的团队 / 我常用 / 我不喜欢 / 我不允许\"\n   → 用 `tdai_memory_search`（L1 原子记忆查偏好/规则）\n3. **用户要求你回忆/找**：如 \"回忆一下 / 想起 / 找出 / 有没有关于 X 的记录 / 查我们之前\"\n   → 直接触发工具，不要凭空回答\n4. **答案强依赖历史事实**：如 \"那个 bug 我们怎么修的 / 上次方案是啥 / 我们的约定是什么\"\n   → 关键词化后 `tdai_memory_search`\n\n**典型流程**（用户：\"我叫什么\"）：\n```bash\n# Step 1: 先查\ncurl -sfk -X POST <bridge>/atomic/search \\\n  -H 'Content-Type: application/json' -H 'x-conversation-id: <sid>' \\\n  -d '{\"query\": \"用户姓名 name 身份\", \"limit\": 5}'\n# Step 2: 从 items[].content 里提取答案后回复\n# 若为空: 明确告诉用户 \"我在记忆里没找到，你叫什么？\" —— 不要装作知道\n```\n\n### 不需要查的场景\n\n- 用户问 \"你是谁\" / \"帮我改代码\" / \"写个脚本\" / 通用编程问题\n- 当前会话上下文（同轮消息）里已能回答\n- 已经在 `<l3_core_memory>` 段落里直接看到答案\n\n### ⚠️ 调用约束\n\n- 每轮 `tdai_memory_search` + `tdai_conversation_search` **合计 ≤ 3 次**（`tdai_read_scene` / `tdai_scenario_ls` / `tdai_atomic_query` 不计入）\n- 检索无果时**明确说明**\"我在记忆里没找到 X\"，不要幻想\n- 同一 L2 path 不要重复读\n</memory-tools-guide>\n<evaluation_context>\nworkspace_repo: example/local-fixture\n</evaluation_context>"
+          },
+          {
+            "role": "user",
+            "content": "."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "Read",
+              "description": "Read a file in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Grep",
+              "description": "Search workspace file contents with a regular expression.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Write",
+              "description": "Create or replace a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "content"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Edit",
+              "description": "Replace one unique exact occurrence in a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "old_string": {
+                    "type": "string"
+                  },
+                  "new_string": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "old_string",
+                  "new_string"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Bash",
+              "description": "Run a shell command in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "command"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "request_sha256": "e34430862b2d7459545761a5a382e460a817d851d24630fbf4007d2740c5e795"
+    },
+    {
+      "case_id": "token-k50",
+      "variant": "candidate",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "tool_choice": "none",
+        "max_tokens": 1,
+        "temperature": 0,
+        "top_p": 1,
+        "stream": false,
+        "thinking": {
+          "type": "disabled"
+        },
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a coding assistant working in a prepared workspace. Complete the user's request using the available tools. The workspace root is the current directory ('.'); workspace_repo is a repository identifier, not a filesystem path. Use the actual files and report what you did.\n<skill_tools>\n通过原生 Bash 的 command 执行完整 curl；下列 curl_recipe id 仅用于选择请求模板，不是原生函数名。proxy 补充身份与鉴权。\n调用模板：curl -sSk -X POST <path> -H 'content-type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' -d '<body>'\n\ncurl 配方：\n\n  <curl_recipe id=\"skill_search\">\n    path: https://proxy.test/skill-bridge/v3/skill/search\n    body: {\"query\": \"非空的 2-5 个相关关键词\"}\n    use: 需要专项工作流且列表无明确匹配时搜索；列表已有明确匹配时不要搜索。query 写 2-5 个意图词，无其他字段。\n  </curl_recipe>\n\n  <curl_recipe id=\"skill_view\">\n    path: https://proxy.test/skill-bridge/v3/skill/get-by-name\n    body: {\"skill_name\": \"<skill 名字>\", \"include_content\": true, \"include_manifest\": true}\n    use: 工作流明确匹配且完整说明不在上下文时，读取 SKILL.md 后执行。skill_name 来自列表或 skill_search；词面相似不调用。\n  </curl_recipe>\n\n  <curl_recipe id=\"skill_files_read\">\n    path: https://proxy.test/skill-bridge/v3/skill/files/read\n    body: {\"skill_id\": \"skl-xxx\", \"path\": \"scripts/run.sh\", \"encoding\": \"utf-8|base64\"}\n    use: 不能跳过 skill_view；按 manifest 的 skill_id + path 读取单个资源；下载可加 -o <本地路径>。\n  </curl_recipe>\n\n  <curl_recipe id=\"skill_extract\">\n    path: https://proxy.test/skill-bridge/v3/skill/extract\n    body: {\"reason\": \"?为什么该流程可复用\"}\n    use: 完整流程已跑通且可复用时异步抽取；无需传 messages。\n  </curl_recipe>\n\n仅开放只读操作；业务 code 非零按 message 处理；HTTP 4xx 不原样重试，5xx 最多重试一次。\n</skill_tools>\n## Cloud skills\n按顺序选择一个分支：\n1. 所需完整 skill 说明已在当前或历史 tool 消息中：直接遵循，不重复读取；用户要求更新或已有明确版本变化时例外。\n2. 否则，列表中的 skill 与任务/工作流明确匹配：先用 skill_view 加载再执行；即使任务表现为 coding、测试或 review 也适用。\n3. 否则，确实需要专项工作流但列表无匹配：用 skill_search 搜索。\n4. 不需要专项工作流且当前上下文足够：直接处理；仅词面相似不算匹配。\n这些 skill 存储在云端，只能通过上方 <skill_tools> 的 Bash + curl 访问。\n\n<available_skills>\n- workflow-0: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-1: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-2: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-3: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-4: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-5: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-6: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-7: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-8: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-9: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-10: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-11: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-12: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-13: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-14: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-15: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-16: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-17: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-18: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-19: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-20: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-21: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-22: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-23: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-24: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-25: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-26: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-27: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-28: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-29: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-30: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-31: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-32: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-33: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-34: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-35: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-36: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-37: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-38: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-39: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-40: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-41: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-42: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-43: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-44: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-45: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-46: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-47: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-48: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-49: 处理专项工作流中的输入校验、执行步骤与结果检查。\n</available_skills>\n<knowledge_tools>\n团队知识路由（按顺序判断）：\n1. 先读本轮之前的 tool 返回。已有正文/图谱能回答时，查找阶段已完成；直接加工这些结果，不再 list/search/read。新增用户消息不会使历史结果失效。\n例如：已经读到文档，再要求按该文档说明理由或总结结论，应直接使用已有正文；只有明确要求更新、版本变化、资料冲突或新的缺失事实才查询。\n2. 否则，仅当任务确实依赖已绑定资产中的缺失事实时才调用。通用方案、本地文件足够或仅词面相关时不调用；方案中的待确认项不表示已有团队决定可查。\n3. 确定缺口后，按资源内容选择：\n- 跨文件结构、符号位置、调用/依赖或影响面：仅当 code-graph 的 match 与当前仓库一致时使用；不一致则本地检索。\n- 设计背景、权衡、团队定义或历史决策：按 about 选择 wiki，不要求仓库匹配。\n- 当前工作区的精确代码、刚修改或未提交内容：读取本地文件。\n起手：架构 explore；位置 search；定义 node；调用关系 callers/callees；影响面 impact（未知符号先 search）；wiki 用 search 定位、read_page 补正文，已知页面可直接读。\n\n已绑定资源：\n<knowledge type=\"wiki\" id=\"dev-architecture\"\n  url=\"https://knowledge.test/v3\"\n  name=\"网关团队架构决策与术语\"\n  about=\"请求重放、租户边界、队列隔离的决策记录与术语定义\" />\n\n<knowledge type=\"wiki\" id=\"dev-incident\"\n  url=\"https://knowledge.test/v3\"\n  name=\"数据平台事故复盘\"\n  about=\"事故处置时间线、根因、恢复验收标准与后续措施\" />\n\n<knowledge type=\"code-graph\" id=\"dev-code\"\n  url=\"https://knowledge.test/v3\"\n  name=\"event-gateway 主干代码图谱\"\n  match=\"example/event-gateway\"\n  branch=\"main\" />\n\n调用协议（通过 Bash 执行 curl）：\nURL 使用资源的 url；knowledge_id 只放 body，不拼进路径。每次请求必须带鉴权及下列上下文 headers。\n\nStep 1: 确需查询且该资源 schema 未在上下文时，先 tools/list\ncurl -sSk -X POST <url>/tools/list \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\"}'\n\n返回 tools:[{name,description,params}, ...]；本会话复用。\n\nStep 2: tools/call\ncurl -sSk -X POST <url>/tools/call \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\", \"tool_name\":\"<Step1返回的name>\", \"params\":{...}}'\n\n约束：tool_name 必须与 list 返回值一致；params 必须是对象（无参传 {}）；code=0 成功；同一调用失败 2 次后回退本地检索。\n</knowledge_tools>\n\n<tdai_memory_tools>\nTDAI 只读记忆，与本地 MEMORY.md 同等可信。以下是 Bash 中执行的 curl 配方，id 不是可调用的原生函数名。\n默认复用已有资料；每次调用都必须补齐当前任务的一项明确缺口。用户提到过去、原话或规则，本身不代表缺少资料。\n- 先读本轮之前的 tool 返回和 `<l3_core_memory>`。已有正文、原话、时间戳或完整列表能回答时，检索阶段已完成；直接加工这些内容，不再查同一问题。历史 tool 结果不会因为新增一条用户消息而失效。\n- 例如：取回原始记录后，用户再让你引用其中一句或比较先后顺序，应直接使用那份记录；已给 total 且 has_more=false 的列表，再让你列出这些规则也不需重查。明确要求更新或确有缺失时例外。\n- 否则，仅当答案依赖缺失的用户特定历史、偏好、过去决定、时间顺序或原话时，才必须检索，不凭常识猜；skill_search 只找工作流，不能替代个性化检索。\n- 普通 coding、通用方案或仅词面涉及历史，但答案不依赖用户历史：不调用。方案中的待确认参数不等于存在可检索的过去决定。\n确定有缺口后选入口：原始消息用 `tdai_conversation_search`；只有返回消息仍缺所需原文/顺序时再 `tdai_conversation_query`。已知目标 session_id 可直接 query。\n稳定偏好、规则或历史结论用 `tdai_memory_search`；索引中的场景正文用 `tdai_read_scene`；按类型/时间枚举用 `tdai_atomic_query`；刷新/筛选索引用 `tdai_scenario_ls`。检索无结果时如实说明。\n\n调用：curl -sfk -X POST <endpoint> -H 'Content-Type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' -d '<body>'；proxy 补充鉴权。\n\n  <curl_recipe id=\"tdai_memory_search\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/search\n    body: {\"query\": \"<text>\", \"limit\": 5}\n    use: 语义检索稳定偏好、规则与结论；结果在 data.items[]。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_atomic_query\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/query\n    body: {\"type\": \"?episodic|persona|instruction\", \"limit\": 20, \"offset\": 0, \"time_start\": \"?ISO\", \"time_end\": \"?ISO\"}\n    use: 按类型、时间窗或分页枚举 L1。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_conversation_search\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/search\n    body: {\"query\": \"<text>\", \"limit\": 5, \"session_id\": \"?<sid>\"}\n    use: 检索原始消息、引用与时间线；结果在 data.messages[]。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_conversation_query\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/query\n    body: {\"session_id\": \"<sid>\", \"limit\": 50, \"offset\": 0}\n    use: 按 session 顺序分页读取原始历史。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_scenario_ls\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/ls\n    body: {\"path_prefix\": \"?可选前缀\"}\n    use: 刷新或按前缀筛选 L2 路径索引。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_read_scene\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/read\n    body: {\"path\": \"<scene path>\", \"agent_id\": \"?来自 <agent agent_id=...>，读取 imported 记忆时传\"}\n    use: 读取 L2 正文；path 来自索引，导入记忆传对应 agent_id。\n  </curl_recipe>\n\n约束：仅只读；两种 search 每轮合计 ≤3 次；同一路径不重复读。\n</tdai_memory_tools>\n<evaluation_context>\nworkspace_repo: example/local-fixture\n</evaluation_context>"
+          },
+          {
+            "role": "user",
+            "content": "."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "Read",
+              "description": "Read a file in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Grep",
+              "description": "Search workspace file contents with a regular expression.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Write",
+              "description": "Create or replace a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "content"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Edit",
+              "description": "Replace one unique exact occurrence in a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "old_string": {
+                    "type": "string"
+                  },
+                  "new_string": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "old_string",
+                  "new_string"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Bash",
+              "description": "Run a shell command in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "command"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "request_sha256": "be53e5788bbc8ecda4e9a14f4317074d5cfeeb68ed8ef9a288c359f033988e62"
+    },
+    {
+      "case_id": "token-k50",
+      "variant": "asset-only",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "tool_choice": "none",
+        "max_tokens": 1,
+        "temperature": 0,
+        "top_p": 1,
+        "stream": false,
+        "thinking": {
+          "type": "disabled"
+        },
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a coding assistant working in a prepared workspace. Complete the user's request using the available tools. The workspace root is the current directory ('.'); workspace_repo is a repository identifier, not a filesystem path. Use the actual files and report what you did.\n<available_skills>\n- workflow-0: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-1: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-2: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-3: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-4: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-5: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-6: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-7: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-8: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-9: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-10: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-11: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-12: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-13: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-14: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-15: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-16: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-17: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-18: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-19: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-20: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-21: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-22: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-23: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-24: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-25: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-26: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-27: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-28: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-29: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-30: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-31: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-32: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-33: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-34: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-35: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-36: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-37: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-38: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-39: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-40: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-41: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-42: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-43: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-44: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-45: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-46: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-47: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-48: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-49: 处理专项工作流中的输入校验、执行步骤与结果检查。\n</available_skills>\n<knowledge type=\"wiki\" id=\"dev-architecture\"\n  url=\"https://knowledge.test/v3\"\n  name=\"网关团队架构决策与术语\"\n  about=\"请求重放、租户边界、队列隔离的决策记录与术语定义\" />\n\n<knowledge type=\"wiki\" id=\"dev-incident\"\n  url=\"https://knowledge.test/v3\"\n  name=\"数据平台事故复盘\"\n  about=\"事故处置时间线、根因、恢复验收标准与后续措施\" />\n\n<knowledge type=\"code-graph\" id=\"dev-code\"\n  url=\"https://knowledge.test/v3\"\n  name=\"event-gateway 主干代码图谱\"\n  match=\"example/event-gateway\"\n  branch=\"main\" />\n<evaluation_context>\nworkspace_repo: example/local-fixture\n</evaluation_context>"
+          },
+          {
+            "role": "user",
+            "content": "."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "Read",
+              "description": "Read a file in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Grep",
+              "description": "Search workspace file contents with a regular expression.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Write",
+              "description": "Create or replace a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "content"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Edit",
+              "description": "Replace one unique exact occurrence in a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "old_string": {
+                    "type": "string"
+                  },
+                  "new_string": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "old_string",
+                  "new_string"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Bash",
+              "description": "Run a shell command in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "command"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "request_sha256": "fe75691bb1d8ea85d5c1ce286def9eb14791e20b4a6cfd2c1bb16a1ff8a6b059"
+    },
+    {
+      "case_id": "token-k100",
+      "variant": "baseline",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "tool_choice": "none",
+        "max_tokens": 1,
+        "temperature": 0,
+        "top_p": 1,
+        "stream": false,
+        "thinking": {
+          "type": "disabled"
+        },
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a coding assistant working in a prepared workspace. Complete the user's request using the available tools. The workspace root is the current directory ('.'); workspace_repo is a repository identifier, not a filesystem path. Use the actual files and report what you did.\n<skill_tools>\n以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。\nproxy 会自动注入身份与鉴权（user_id / team_id / agent_id 由 session 决定），body 里你只需要传业务字段。\n\n调用模板：\n  curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' -d '{...业务字段...}'\n  其中 <bridge> = https://proxy.test/skill-bridge/v3/skill\n\n可用工具：\n\n  <tool name=\"skill_search\">\n    path: https://proxy.test/skill-bridge/v3/skill/search\n    body: {\"query\": \"描述你要找什么 skill 的关键词（必填，>=1字符）\"}\n    use:  在**你在团队中有权限访问**的 skill 中按关键词 + 语义检索匹配项（跨 agent，但**不含**其他人设置为私密的 skill —— 与前端「团队资产」tab 展示一致）。query 必须是非空字符串，建议写 2-5 个相关关键词。当你觉得自己自带的 skill 不够用时，用它发现团队里其他可用的 skill。返回条数由服务端固定，若结果不理想请换一组关键词重试，不要在 body 里加 top_k/mode 等其它字段（会被忽略）。\n  </tool>\n\n  <tool name=\"skill_view\">\n    path: https://proxy.test/skill-bridge/v3/skill/get-by-name\n    body: {\"skill_name\": \"<skill 名字>\", \"include_content\": true, \"include_manifest\": true}\n    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_name 用 <available_skills> 里 `- name: description` 那个 name，或 skill_search 结果里的 name 字段。\n  </tool>\n\n  <tool name=\"skill_files_read\">\n    path: https://proxy.test/skill-bridge/v3/skill/files/read\n    body: {\"skill_id\": \"skl-xxx\", \"path\": \"scripts/run.sh\", \"encoding\": \"utf-8|base64\"}\n    use:  读取单个资源文件内容。**必须先调 skill_view 拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。\n  </tool>\n\n  <tool name=\"skill_extract\">\n    path: https://proxy.test/skill-bridge/v3/skill/extract\n    body: {\"reason\": \"?可选，简要说明为什么觉得当前对话值得提取为 skill（写清楚有助于后台抽取器识别边界）\"}\n    use:  立即归档当前对话触发一次 skill 抽取（异步任务，由后台 agent 分析对话内容生成 skill）。proxy 从 session 拿身份 + 用 core 侧累积的对话缓冲，你不用传 messages。适合在\"用户已经跑通一段完整流程、值得复用\"时主动触发。\n  </tool>\n\n注意：当前仅开放只读操作。如需创建/修改 skill 请联系管理员。\n错误处理：响应是 `{code, message, request_id, data?}` 信封；`code != 0` 表示业务错。常见：\n- 40001 参数校验失败：body 字段缺失/格式错，看 message 里具体字段名。\n- 40101 session not initialized：session 未识别（很可能你在错误的 conversation 环境用了这个工具）。\n- 40401 SKILL_NOT_FOUND：skill 不存在或不属于你所在的 agent；先用 skill_search 找同类 skill。\n- 50301 upstream unavailable：core 侧临时不可达，稍后重试。\n</skill_tools>\n## Skills (mandatory)\nBefore replying, scan the skills below. If a skill matches or is even partially relevant to your task, you MUST load it by calling the `skill_view` skill-bridge tool (see the `<skill_tools>` block above for the exact curl recipe) and follow its instructions. Err on the side of loading — it is always better to have context you don't need than to miss critical steps, pitfalls, or established workflows. Skills contain specialized knowledge — API endpoints, tool-specific commands, and proven workflows that outperform general-purpose approaches. Load the skill even if you think you could handle the task with basic tools like web_search or terminal. Skills also encode the user's preferred approach, conventions, and quality standards for tasks like code review, planning, and testing — load them even for tasks you already know how to do, because the skill defines how it should be done here.\nIf a skill has issues, fix it with the `skill_patch` skill-bridge tool.\nAfter difficult/iterative tasks, offer to save the approach as a new skill (`skill_create`). If a skill you loaded was missing steps, had wrong commands, or needed pitfalls you discovered, update it before finishing.\n\n以下是你（当前 agent）自带的云端 skill 列表。这些 skill 存储在你的 agent 名下，\n优先使用它们完成任务。如果你觉得自带的 skill 不够，可以用 skill_search 工具\n在团队的 skill 库中检索更多（跨 agent 共享）。\n\n**重要：这些 skill 存储在云端，不能使用 read_file / tool_use 直接访问，\n必须用 Bash 执行 curl 调用上方 <skill_tools> 块中的 skill-bridge 工具。**\n\n<available_skills>\n- workflow-0: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-1: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-2: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-3: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-4: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-5: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-6: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-7: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-8: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-9: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-10: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-11: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-12: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-13: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-14: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-15: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-16: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-17: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-18: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-19: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-20: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-21: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-22: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-23: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-24: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-25: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-26: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-27: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-28: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-29: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-30: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-31: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-32: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-33: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-34: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-35: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-36: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-37: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-38: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-39: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-40: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-41: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-42: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-43: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-44: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-45: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-46: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-47: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-48: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-49: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-50: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-51: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-52: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-53: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-54: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-55: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-56: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-57: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-58: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-59: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-60: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-61: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-62: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-63: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-64: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-65: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-66: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-67: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-68: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-69: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-70: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-71: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-72: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-73: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-74: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-75: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-76: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-77: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-78: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-79: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-80: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-81: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-82: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-83: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-84: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-85: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-86: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-87: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-88: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-89: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-90: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-91: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-92: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-93: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-94: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-95: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-96: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-97: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-98: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-99: 处理专项工作流中的输入校验、执行步骤与结果检查。\n</available_skills>\n\nOnly proceed without loading a skill if genuinely none are relevant to the task.\n<knowledge_tools>\n**团队知识库资源**：code-graph 是仓库的预建代码索引（符号 / 调用图 / 结构），wiki 是工程设计文档。两类各有判据，见下。\n\n## code-graph：何时调\n**前置条件**：资源的 match 与当前工作区对得上（比对 git remote / 仓库名）。对不上 → 该索引不是本仓的，用本地检索，不要试探性调用。\n\n命中后，**凡是需要跨文件的结构 / 关系 / 广度信息就用它**，典型场景：\n- 熟悉项目、理解模块架构、找入口（冷启动）\n- 定位符号、文件、某个概念在哪实现\n- 追调用链、依赖关系、数据流\n- 评估改动影响面、重构范围、能否安全删除（**即使已在改代码，这类问题仍该用它**）\n- 排查线上问题时找可疑代码路径、review 时找关联实现\n- 想不起某个能力叫什么名字、不确定是否已有实现（避免重复造）\n\n**不该用的只有一种情况**：你需要某段代码**此刻的精确内容**——要按行号/字符编辑、代码是你刚改过的、在 review 未提交的改动。索引是分支快照，会落后于工作区，这时以工作区源码为准。\n先用它建立全局认知、再落到具体文件做精确确认，是常态组合，不冲突。\n\n## wiki：何时调\nwiki 是设计文档，**与工作区无对应关系，不需要锚点匹配**（没有 match 属性是正常的，不代表对不上）。按 about 属性判断内容是否相关即可。\n问「为什么这么设计 / 背景与权衡 / 某概念在团队里的定义 / 历史决策与踩过的坑 / 这个模块的设计意图」时用它——这些答案在代码里找不到。\n代码怎么写的 → 用 code-graph；某段代码此刻的内容 → 读源码。\n\n## 意图 → 起手\n架构 / 熟悉项目 → explore（一次返回沿途源码）；X 在哪 → search；只要单个符号的定义 → node；谁调用 X / X 调了谁 → callers / callees；改 X 的影响面 → search 后 impact；为什么这么设计 → wiki search 后 read_page。\n组合：重构评估 = search → callers → impact。\nexplore / node 返回的源码是逐字的，**不必对同一处再 Read 一遍**（除了上面那种要确认最新内容的情况）。\n\n## 已绑定资源\n<knowledge type=\"wiki\" id=\"dev-architecture\"\n  url=\"https://knowledge.test/v3\"\n  name=\"网关团队架构决策与术语\"\n  about=\"请求重放、租户边界、队列隔离的决策记录与术语定义\" />\n\n<knowledge type=\"wiki\" id=\"dev-incident\"\n  url=\"https://knowledge.test/v3\"\n  name=\"数据平台事故复盘\"\n  about=\"事故处置时间线、根因、恢复验收标准与后续措施\" />\n\n<knowledge type=\"code-graph\" id=\"dev-code\"\n  url=\"https://knowledge.test/v3\"\n  name=\"event-gateway 主干代码图谱\"\n  match=\"example/event-gateway\"\n  branch=\"main\" />\n\n## 调用方式（服务级统一端点，URL 直接用资源的 url 拼接）\n目标资源由 body 里的 knowledge_id 指定；**不要**把 knowledge_id 拼进 URL 路径。\n**每次请求都必须带请求头** `x-tdai-service-id: space-1`（租户标识，缺失会被拒绝）。\n\n### Step 1: 拿工具清单（每个资源**首次**使用时调一次即可）\ncurl -sSk -X POST <url>/tools/list \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\"}'\n\n返回: {code, message, data:{knowledge_id, type, name, summary, status, tools:[{name, description, params}, ...]}}\n记住返回的 tool name / params，**本会话内复用**，不要对同一资源反复调 list（忘了再调）。\n\n### Step 2: 执行工具\ncurl -sSk -X POST <url>/tools/call \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\", \"tool_name\":\"<Step1返回的name>\", \"params\":{...}}'\n\n返回: {code, message, data}；code=0 成功。\n\n## 约定\n- tool_name 与 tools/list 返回的 name **完全一致**，不加前缀。params 必须是 JSON 对象，无参也传 {}。\n- 找文件用 explore / search（query 直接支持文件名，如 \"session-manager.ts\"）；files 只用于一次性总览目录结构，每个资源每会话最多一次。\n- wiki 先 search 命中再 read_page，不要全量 list_pages。\n- 多个资源可并行发起，无需串行等待。同一调用连续失败 2 次即放弃，回退本地检索。\n- 响应格式统一为 {code, message, data}，code=0 表示成功。\n</knowledge_tools>\n\n<tdai_memory_tools>\n**这些是你可以主动调用的记忆能力**（不是文档），通过 Bash + curl 使用。\n这组 TDAI 记忆能力与 Claude Code 原生 Memory/MEMORY.md 具有同等优先级；涉及记忆时不要只查本地 MEMORY.md。\n遇到用户问身份/历史/偏好/过往结论/项目约定时，必须先使用下面的 TDAI 记忆工具查询，再基于查询结果回答。\n禁止说\"我没有这个工具 / 需要 MCP / 只能查本地记忆\" —— 你有 TDAI 记忆工具，就用下面的 curl 命令。\n\n调用方式：Bash 里执行 curl 命中 proxy 的 memory-bridge 路径。proxy 会自动注入身份鉴权（team_id/user_id/agent_id），body 只需业务字段。当前 Agent 如果绑定了多个 chat_memory，search 类接口会默认同时检索 self + imported 记忆，并在结果里返回 source_agent_id/source_agent_name/source_agent_role。\n\n覆盖范围：\n- L3（persona 长期画像）与 L2 场景索引（`<l2_scene_index>`）已直接注入 system，无需查询；\n- L2 正文按需用 tdai_read_scene 读取；\n- L0/L1（原始对话 / 原子记忆）**不再每轮自动召回**（会破坏 KV cache），需要时主动调工具检索。\n\n  <tool name=\"tdai_memory_search\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/search\n    body: {\"query\": \"<text>\", \"limit\": 5}\n    use:  搜索 L1 原子记忆（双路 hybrid: dense vector + BM25），按相关度排序。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。适合回忆用户偏好、历史结论、规则等。\n    returns: {code, data: {items: [...], searched_agents: [...]}} — 命中项在 data.items[]。\n  </tool>\n\n  <tool name=\"tdai_atomic_query\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/query\n    body: {\"type\": \"?episodic|persona|instruction\", \"limit\": 20, \"offset\": 0, \"time_start\": \"?ISO\", \"time_end\": \"?ISO\"}\n    use:  按 type / 时间窗 / 分页拉取 L1 记忆（不做语义检索）。\n  </tool>\n\n  <tool name=\"tdai_conversation_search\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/search\n    body: {\"query\": \"<text>\", \"limit\": 5, \"session_id\": \"?<sid>\"}\n    use:  在 L0 原始对话中检索（比 atomic_search 粒度更细，找具体消息原文 / 引用 / 时间线）。默认跨当前 Agent 的 self + imported 记忆检索；返回项里的 source_agent_* 表示来源。\n    returns: {code, data: {messages: [...], searched_agents: [...]}} — 命中项在 data.messages[]（注意：与 atomic_search 的 data.items 不同）。\n  </tool>\n\n  <tool name=\"tdai_conversation_query\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/query\n    body: {\"session_id\": \"<sid>\", \"limit\": 50, \"offset\": 0}\n    use:  按 session 顺序取 L0 历史消息。\n  </tool>\n\n  <tool name=\"tdai_scenario_ls\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/ls\n    body: {\"path_prefix\": \"?可选前缀\"}\n    use:  列出 L2 scene_blocks 路径索引（含 summary，不含正文）。一般 system 已注入索引，需刷新/按前缀过滤时才用。\n  </tool>\n\n  <tool name=\"tdai_read_scene\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/read\n    body: {\"path\": \"<scene path>\", \"agent_id\": \"?来自 <agent agent_id=...>，读取 imported 记忆时传\"}\n    use:  按 path 读取 L2 场景文件全文。path 必须先从 `<l2_scene_index>` 或 tdai_scenario_ls 获取，不要凭空构造；读取 imported_from 分段的 path 时带上该分段 agent_id。\n  </tool>\n\n## 调用约束\n- 这些是只读工具；要修改 L1/L2/L3 必须用主链路（agent_id 自动归属）。\n- 每轮对话中，atomic_search + conversation_search **合计 ≤ 3 次**；\n  query / ls / read_scene 不计入上限，但同一 path 不要重复读。\n- 失败重试：HTTP 5xx 可一次性 retry；HTTP 4xx 不要重试。\n- 所有 curl 必须带：x-tdai-service-id: space-1、x-conversation-id: session-1；Content-Type: application/json。\n\n## 完整示例\n```bash\ncurl -sfk -X POST https://proxy.test/memory-bridge/v3/atomic/search \\\n  -H 'Content-Type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' \\\n  -d '{\"query\": \"用户偏好的编程语言\", \"limit\": 5}'\n```\n</tdai_memory_tools>\n<memory-tools-guide>\n## ⚠️ 重要：这不是文档，这是你的可用能力\n\n以下 `<tdai_memory_tools>` 中列出的 tdai_memory_search / tdai_conversation_search\n等，是**你可以主动调用的能力**（不是仅供参考的文档）。它们通过 **Bash + curl**\n使用（见上方 `<tdai_memory_tools>` 段里的完整调用说明与 URL）。\n\n**禁止**回答类似\"我没有这个工具 / 需要 MCP / 需要斜杠命令\"。\n**正确做法**：判定需要查记忆时，直接在 Bash 里执行 curl，proxy 会自动注入身份与鉴权。\n\n## 记忆使用规则（遇到以下场景必须先查再答）\n\nL3（persona 长期画像）与 L2 场景索引已直接注入 system。L0/L1 需要用工具主动检索。\n\n### 必须先查记忆再回答的场景（命中任一条即触发工具调用）\n\n1. **用户提及历史/过去/之前**：如 \"我之前说过 / 我告诉过你 / 上次 / 你还记不记得 / 我们聊过 / 之前那个\"\n   → 用 `tdai_conversation_search`（L0 原文找具体消息）\n2. **用户涉及自己身份/偏好/习惯**：如 \"我叫什么 / 我的名字 / 我喜欢 / 我的团队 / 我常用 / 我不喜欢 / 我不允许\"\n   → 用 `tdai_memory_search`（L1 原子记忆查偏好/规则）\n3. **用户要求你回忆/找**：如 \"回忆一下 / 想起 / 找出 / 有没有关于 X 的记录 / 查我们之前\"\n   → 直接触发工具，不要凭空回答\n4. **答案强依赖历史事实**：如 \"那个 bug 我们怎么修的 / 上次方案是啥 / 我们的约定是什么\"\n   → 关键词化后 `tdai_memory_search`\n\n**典型流程**（用户：\"我叫什么\"）：\n```bash\n# Step 1: 先查\ncurl -sfk -X POST <bridge>/atomic/search \\\n  -H 'Content-Type: application/json' -H 'x-conversation-id: <sid>' \\\n  -d '{\"query\": \"用户姓名 name 身份\", \"limit\": 5}'\n# Step 2: 从 items[].content 里提取答案后回复\n# 若为空: 明确告诉用户 \"我在记忆里没找到，你叫什么？\" —— 不要装作知道\n```\n\n### 不需要查的场景\n\n- 用户问 \"你是谁\" / \"帮我改代码\" / \"写个脚本\" / 通用编程问题\n- 当前会话上下文（同轮消息）里已能回答\n- 已经在 `<l3_core_memory>` 段落里直接看到答案\n\n### ⚠️ 调用约束\n\n- 每轮 `tdai_memory_search` + `tdai_conversation_search` **合计 ≤ 3 次**（`tdai_read_scene` / `tdai_scenario_ls` / `tdai_atomic_query` 不计入）\n- 检索无果时**明确说明**\"我在记忆里没找到 X\"，不要幻想\n- 同一 L2 path 不要重复读\n</memory-tools-guide>\n<evaluation_context>\nworkspace_repo: example/local-fixture\n</evaluation_context>"
+          },
+          {
+            "role": "user",
+            "content": "."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "Read",
+              "description": "Read a file in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Grep",
+              "description": "Search workspace file contents with a regular expression.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Write",
+              "description": "Create or replace a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "content"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Edit",
+              "description": "Replace one unique exact occurrence in a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "old_string": {
+                    "type": "string"
+                  },
+                  "new_string": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "old_string",
+                  "new_string"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Bash",
+              "description": "Run a shell command in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "command"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "request_sha256": "86773bda54b485aac364acb0607c53fd9f8fe9f1be5f8e8a638f6ea4f7b3fafc"
+    },
+    {
+      "case_id": "token-k100",
+      "variant": "candidate",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "tool_choice": "none",
+        "max_tokens": 1,
+        "temperature": 0,
+        "top_p": 1,
+        "stream": false,
+        "thinking": {
+          "type": "disabled"
+        },
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a coding assistant working in a prepared workspace. Complete the user's request using the available tools. The workspace root is the current directory ('.'); workspace_repo is a repository identifier, not a filesystem path. Use the actual files and report what you did.\n<skill_tools>\n通过原生 Bash 的 command 执行完整 curl；下列 curl_recipe id 仅用于选择请求模板，不是原生函数名。proxy 补充身份与鉴权。\n调用模板：curl -sSk -X POST <path> -H 'content-type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' -d '<body>'\n\ncurl 配方：\n\n  <curl_recipe id=\"skill_search\">\n    path: https://proxy.test/skill-bridge/v3/skill/search\n    body: {\"query\": \"非空的 2-5 个相关关键词\"}\n    use: 需要专项工作流且列表无明确匹配时搜索；列表已有明确匹配时不要搜索。query 写 2-5 个意图词，无其他字段。\n  </curl_recipe>\n\n  <curl_recipe id=\"skill_view\">\n    path: https://proxy.test/skill-bridge/v3/skill/get-by-name\n    body: {\"skill_name\": \"<skill 名字>\", \"include_content\": true, \"include_manifest\": true}\n    use: 工作流明确匹配且完整说明不在上下文时，读取 SKILL.md 后执行。skill_name 来自列表或 skill_search；词面相似不调用。\n  </curl_recipe>\n\n  <curl_recipe id=\"skill_files_read\">\n    path: https://proxy.test/skill-bridge/v3/skill/files/read\n    body: {\"skill_id\": \"skl-xxx\", \"path\": \"scripts/run.sh\", \"encoding\": \"utf-8|base64\"}\n    use: 不能跳过 skill_view；按 manifest 的 skill_id + path 读取单个资源；下载可加 -o <本地路径>。\n  </curl_recipe>\n\n  <curl_recipe id=\"skill_extract\">\n    path: https://proxy.test/skill-bridge/v3/skill/extract\n    body: {\"reason\": \"?为什么该流程可复用\"}\n    use: 完整流程已跑通且可复用时异步抽取；无需传 messages。\n  </curl_recipe>\n\n仅开放只读操作；业务 code 非零按 message 处理；HTTP 4xx 不原样重试，5xx 最多重试一次。\n</skill_tools>\n## Cloud skills\n按顺序选择一个分支：\n1. 所需完整 skill 说明已在当前或历史 tool 消息中：直接遵循，不重复读取；用户要求更新或已有明确版本变化时例外。\n2. 否则，列表中的 skill 与任务/工作流明确匹配：先用 skill_view 加载再执行；即使任务表现为 coding、测试或 review 也适用。\n3. 否则，确实需要专项工作流但列表无匹配：用 skill_search 搜索。\n4. 不需要专项工作流且当前上下文足够：直接处理；仅词面相似不算匹配。\n这些 skill 存储在云端，只能通过上方 <skill_tools> 的 Bash + curl 访问。\n\n<available_skills>\n- workflow-0: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-1: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-2: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-3: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-4: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-5: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-6: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-7: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-8: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-9: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-10: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-11: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-12: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-13: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-14: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-15: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-16: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-17: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-18: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-19: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-20: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-21: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-22: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-23: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-24: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-25: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-26: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-27: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-28: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-29: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-30: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-31: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-32: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-33: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-34: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-35: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-36: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-37: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-38: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-39: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-40: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-41: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-42: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-43: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-44: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-45: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-46: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-47: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-48: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-49: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-50: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-51: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-52: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-53: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-54: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-55: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-56: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-57: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-58: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-59: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-60: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-61: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-62: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-63: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-64: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-65: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-66: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-67: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-68: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-69: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-70: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-71: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-72: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-73: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-74: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-75: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-76: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-77: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-78: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-79: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-80: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-81: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-82: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-83: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-84: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-85: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-86: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-87: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-88: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-89: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-90: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-91: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-92: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-93: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-94: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-95: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-96: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-97: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-98: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-99: 处理专项工作流中的输入校验、执行步骤与结果检查。\n</available_skills>\n<knowledge_tools>\n团队知识路由（按顺序判断）：\n1. 先读本轮之前的 tool 返回。已有正文/图谱能回答时，查找阶段已完成；直接加工这些结果，不再 list/search/read。新增用户消息不会使历史结果失效。\n例如：已经读到文档，再要求按该文档说明理由或总结结论，应直接使用已有正文；只有明确要求更新、版本变化、资料冲突或新的缺失事实才查询。\n2. 否则，仅当任务确实依赖已绑定资产中的缺失事实时才调用。通用方案、本地文件足够或仅词面相关时不调用；方案中的待确认项不表示已有团队决定可查。\n3. 确定缺口后，按资源内容选择：\n- 跨文件结构、符号位置、调用/依赖或影响面：仅当 code-graph 的 match 与当前仓库一致时使用；不一致则本地检索。\n- 设计背景、权衡、团队定义或历史决策：按 about 选择 wiki，不要求仓库匹配。\n- 当前工作区的精确代码、刚修改或未提交内容：读取本地文件。\n起手：架构 explore；位置 search；定义 node；调用关系 callers/callees；影响面 impact（未知符号先 search）；wiki 用 search 定位、read_page 补正文，已知页面可直接读。\n\n已绑定资源：\n<knowledge type=\"wiki\" id=\"dev-architecture\"\n  url=\"https://knowledge.test/v3\"\n  name=\"网关团队架构决策与术语\"\n  about=\"请求重放、租户边界、队列隔离的决策记录与术语定义\" />\n\n<knowledge type=\"wiki\" id=\"dev-incident\"\n  url=\"https://knowledge.test/v3\"\n  name=\"数据平台事故复盘\"\n  about=\"事故处置时间线、根因、恢复验收标准与后续措施\" />\n\n<knowledge type=\"code-graph\" id=\"dev-code\"\n  url=\"https://knowledge.test/v3\"\n  name=\"event-gateway 主干代码图谱\"\n  match=\"example/event-gateway\"\n  branch=\"main\" />\n\n调用协议（通过 Bash 执行 curl）：\nURL 使用资源的 url；knowledge_id 只放 body，不拼进路径。每次请求必须带鉴权及下列上下文 headers。\n\nStep 1: 确需查询且该资源 schema 未在上下文时，先 tools/list\ncurl -sSk -X POST <url>/tools/list \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\"}'\n\n返回 tools:[{name,description,params}, ...]；本会话复用。\n\nStep 2: tools/call\ncurl -sSk -X POST <url>/tools/call \\\n  -H 'content-type: application/json' \\\n  -H 'x-tdai-service-id: space-1' \\\n  -H 'x-conversation-id: session-1' \\\n  -H 'x-tdai-user-id: user-1' \\\n  -H 'x-tdai-team-id: team-1' \\\n  -H 'x-tdai-agent-id: agent-1' \\\n  -d '{\"knowledge_id\":\"<知识id>\", \"tool_name\":\"<Step1返回的name>\", \"params\":{...}}'\n\n约束：tool_name 必须与 list 返回值一致；params 必须是对象（无参传 {}）；code=0 成功；同一调用失败 2 次后回退本地检索。\n</knowledge_tools>\n\n<tdai_memory_tools>\nTDAI 只读记忆，与本地 MEMORY.md 同等可信。以下是 Bash 中执行的 curl 配方，id 不是可调用的原生函数名。\n默认复用已有资料；每次调用都必须补齐当前任务的一项明确缺口。用户提到过去、原话或规则，本身不代表缺少资料。\n- 先读本轮之前的 tool 返回和 `<l3_core_memory>`。已有正文、原话、时间戳或完整列表能回答时，检索阶段已完成；直接加工这些内容，不再查同一问题。历史 tool 结果不会因为新增一条用户消息而失效。\n- 例如：取回原始记录后，用户再让你引用其中一句或比较先后顺序，应直接使用那份记录；已给 total 且 has_more=false 的列表，再让你列出这些规则也不需重查。明确要求更新或确有缺失时例外。\n- 否则，仅当答案依赖缺失的用户特定历史、偏好、过去决定、时间顺序或原话时，才必须检索，不凭常识猜；skill_search 只找工作流，不能替代个性化检索。\n- 普通 coding、通用方案或仅词面涉及历史，但答案不依赖用户历史：不调用。方案中的待确认参数不等于存在可检索的过去决定。\n确定有缺口后选入口：原始消息用 `tdai_conversation_search`；只有返回消息仍缺所需原文/顺序时再 `tdai_conversation_query`。已知目标 session_id 可直接 query。\n稳定偏好、规则或历史结论用 `tdai_memory_search`；索引中的场景正文用 `tdai_read_scene`；按类型/时间枚举用 `tdai_atomic_query`；刷新/筛选索引用 `tdai_scenario_ls`。检索无结果时如实说明。\n\n调用：curl -sfk -X POST <endpoint> -H 'Content-Type: application/json' -H 'x-tdai-service-id: space-1' -H 'x-conversation-id: session-1' -d '<body>'；proxy 补充鉴权。\n\n  <curl_recipe id=\"tdai_memory_search\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/search\n    body: {\"query\": \"<text>\", \"limit\": 5}\n    use: 语义检索稳定偏好、规则与结论；结果在 data.items[]。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_atomic_query\">\n    curl: https://proxy.test/memory-bridge/v3/atomic/query\n    body: {\"type\": \"?episodic|persona|instruction\", \"limit\": 20, \"offset\": 0, \"time_start\": \"?ISO\", \"time_end\": \"?ISO\"}\n    use: 按类型、时间窗或分页枚举 L1。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_conversation_search\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/search\n    body: {\"query\": \"<text>\", \"limit\": 5, \"session_id\": \"?<sid>\"}\n    use: 检索原始消息、引用与时间线；结果在 data.messages[]。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_conversation_query\">\n    curl: https://proxy.test/memory-bridge/v3/conversation/query\n    body: {\"session_id\": \"<sid>\", \"limit\": 50, \"offset\": 0}\n    use: 按 session 顺序分页读取原始历史。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_scenario_ls\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/ls\n    body: {\"path_prefix\": \"?可选前缀\"}\n    use: 刷新或按前缀筛选 L2 路径索引。\n  </curl_recipe>\n\n  <curl_recipe id=\"tdai_read_scene\">\n    curl: https://proxy.test/memory-bridge/v3/scenario/read\n    body: {\"path\": \"<scene path>\", \"agent_id\": \"?来自 <agent agent_id=...>，读取 imported 记忆时传\"}\n    use: 读取 L2 正文；path 来自索引，导入记忆传对应 agent_id。\n  </curl_recipe>\n\n约束：仅只读；两种 search 每轮合计 ≤3 次；同一路径不重复读。\n</tdai_memory_tools>\n<evaluation_context>\nworkspace_repo: example/local-fixture\n</evaluation_context>"
+          },
+          {
+            "role": "user",
+            "content": "."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "Read",
+              "description": "Read a file in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Grep",
+              "description": "Search workspace file contents with a regular expression.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Write",
+              "description": "Create or replace a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "content"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Edit",
+              "description": "Replace one unique exact occurrence in a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "old_string": {
+                    "type": "string"
+                  },
+                  "new_string": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "old_string",
+                  "new_string"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Bash",
+              "description": "Run a shell command in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "command"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "request_sha256": "8d110c360d1d0bd0e96c96b14c0e57c32532de83b1b190bef3682457f600517a"
+    },
+    {
+      "case_id": "token-k100",
+      "variant": "asset-only",
+      "body": {
+        "model": "deepseek-v4-flash",
+        "tool_choice": "none",
+        "max_tokens": 1,
+        "temperature": 0,
+        "top_p": 1,
+        "stream": false,
+        "thinking": {
+          "type": "disabled"
+        },
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a coding assistant working in a prepared workspace. Complete the user's request using the available tools. The workspace root is the current directory ('.'); workspace_repo is a repository identifier, not a filesystem path. Use the actual files and report what you did.\n<available_skills>\n- workflow-0: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-1: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-2: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-3: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-4: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-5: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-6: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-7: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-8: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-9: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-10: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-11: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-12: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-13: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-14: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-15: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-16: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-17: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-18: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-19: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-20: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-21: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-22: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-23: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-24: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-25: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-26: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-27: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-28: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-29: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-30: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-31: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-32: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-33: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-34: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-35: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-36: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-37: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-38: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-39: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-40: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-41: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-42: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-43: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-44: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-45: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-46: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-47: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-48: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-49: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-50: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-51: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-52: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-53: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-54: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-55: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-56: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-57: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-58: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-59: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-60: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-61: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-62: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-63: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-64: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-65: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-66: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-67: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-68: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-69: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-70: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-71: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-72: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-73: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-74: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-75: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-76: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-77: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-78: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-79: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-80: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-81: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-82: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-83: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-84: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-85: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-86: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-87: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-88: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-89: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-90: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-91: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-92: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-93: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-94: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-95: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-96: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-97: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-98: 处理专项工作流中的输入校验、执行步骤与结果检查。\n- workflow-99: 处理专项工作流中的输入校验、执行步骤与结果检查。\n</available_skills>\n<knowledge type=\"wiki\" id=\"dev-architecture\"\n  url=\"https://knowledge.test/v3\"\n  name=\"网关团队架构决策与术语\"\n  about=\"请求重放、租户边界、队列隔离的决策记录与术语定义\" />\n\n<knowledge type=\"wiki\" id=\"dev-incident\"\n  url=\"https://knowledge.test/v3\"\n  name=\"数据平台事故复盘\"\n  about=\"事故处置时间线、根因、恢复验收标准与后续措施\" />\n\n<knowledge type=\"code-graph\" id=\"dev-code\"\n  url=\"https://knowledge.test/v3\"\n  name=\"event-gateway 主干代码图谱\"\n  match=\"example/event-gateway\"\n  branch=\"main\" />\n<evaluation_context>\nworkspace_repo: example/local-fixture\n</evaluation_context>"
+          },
+          {
+            "role": "user",
+            "content": "."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "Read",
+              "description": "Read a file in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Grep",
+              "description": "Search workspace file contents with a regular expression.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Write",
+              "description": "Create or replace a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "content"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Edit",
+              "description": "Replace one unique exact occurrence in a workspace file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "old_string": {
+                    "type": "string"
+                  },
+                  "new_string": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "old_string",
+                  "new_string"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "Bash",
+              "description": "Run a shell command in the current workspace.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "command"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "request_sha256": "4ef4c483b2f77266d75db1c08228f9d2badfc6faebcc2905ae602b60fedc1d77"
+    }
+  ],
+  "observations": [
+    {
+      "case_id": "token-k50",
+      "variant": "baseline",
+      "request_sha256": "e34430862b2d7459545761a5a382e460a817d851d24630fbf4007d2740c5e795",
+      "actual_model": "deepseek-v4-flash",
+      "usage": {
+        "prompt_tokens": 5547,
+        "completion_tokens": 1,
+        "total_tokens": 5548,
+        "prompt_tokens_details": {
+          "cached_tokens": 1280
+        },
+        "prompt_cache_hit_tokens": 1280,
+        "prompt_cache_miss_tokens": 4267
+      }
+    },
+    {
+      "case_id": "token-k50",
+      "variant": "candidate",
+      "request_sha256": "be53e5788bbc8ecda4e9a14f4317074d5cfeeb68ed8ef9a288c359f033988e62",
+      "actual_model": "deepseek-v4-flash",
+      "usage": {
+        "prompt_tokens": 3524,
+        "completion_tokens": 1,
+        "total_tokens": 3525,
+        "prompt_tokens_details": {
+          "cached_tokens": 640
+        },
+        "prompt_cache_hit_tokens": 640,
+        "prompt_cache_miss_tokens": 2884
+      }
+    },
+    {
+      "case_id": "token-k50",
+      "variant": "asset-only",
+      "request_sha256": "fe75691bb1d8ea85d5c1ce286def9eb14791e20b4a6cfd2c1bb16a1ff8a6b059",
+      "actual_model": "deepseek-v4-flash",
+      "usage": {
+        "prompt_tokens": 1243,
+        "completion_tokens": 1,
+        "total_tokens": 1244,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 1243
+      }
+    },
+    {
+      "case_id": "token-k100",
+      "variant": "baseline",
+      "request_sha256": "86773bda54b485aac364acb0607c53fd9f8fe9f1be5f8e8a638f6ea4f7b3fafc",
+      "actual_model": "deepseek-v4-flash",
+      "usage": {
+        "prompt_tokens": 6547,
+        "completion_tokens": 1,
+        "total_tokens": 6548,
+        "prompt_tokens_details": {
+          "cached_tokens": 1280
+        },
+        "prompt_cache_hit_tokens": 1280,
+        "prompt_cache_miss_tokens": 5267
+      }
+    },
+    {
+      "case_id": "token-k100",
+      "variant": "candidate",
+      "request_sha256": "8d110c360d1d0bd0e96c96b14c0e57c32532de83b1b190bef3682457f600517a",
+      "actual_model": "deepseek-v4-flash",
+      "usage": {
+        "prompt_tokens": 4524,
+        "completion_tokens": 1,
+        "total_tokens": 4525,
+        "prompt_tokens_details": {
+          "cached_tokens": 640
+        },
+        "prompt_cache_hit_tokens": 640,
+        "prompt_cache_miss_tokens": 3884
+      }
+    },
+    {
+      "case_id": "token-k100",
+      "variant": "asset-only",
+      "request_sha256": "4ef4c483b2f77266d75db1c08228f9d2badfc6faebcc2905ae602b60fedc1d77",
+      "actual_model": "deepseek-v4-flash",
+      "usage": {
+        "prompt_tokens": 2243,
+        "completion_tokens": 1,
+        "total_tokens": 2244,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 2243
+      }
+    }
+  ],
+  "results": [
+    {
+      "case_id": "token-k50",
+      "baseline_description_tokens": 4304,
+      "candidate_description_tokens": 2281,
+      "saved_tokens": 2023,
+      "reduction": 0.4700278810408922
+    },
+    {
+      "case_id": "token-k100",
+      "baseline_description_tokens": 4304,
+      "candidate_description_tokens": 2281,
+      "saved_tokens": 2023,
+      "reduction": 0.4700278810408922
+    }
+  ]
+}
