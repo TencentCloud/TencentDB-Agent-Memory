@@ -423,12 +423,19 @@ export class MetadataClient {
    * 后 injection / memory-bridge 只会拿到当前仍然可用的绑定。
    *
    * 传 false 只用于需要看到"物理绑定"的场景（e.g. 管理面板 debug）。
+   *
+   * `assetTypes` 可选：交给 core 在 SQL 层按类型过滤（依赖
+   * v3-meta-schemas.ts:fixedAssetListWithDetailSchema `asset_types`）。
+   * caller 只关心某几类时应务必传 —— 否则 skill 一多（实际线上见过单
+   * agent 519 skill）会把 chat_memory / wiki / code_graph 挤出 PAGINATION_HARD_LIMIT
+   * 翻页窗口，导致运行时注入漏掉 imported 记忆或 knowledge 绑定。
    */
   async getAgentFixedAssets(
     agentId: string,
-    opts: { applyVisibilityFilter?: boolean } = {},
+    opts: { applyVisibilityFilter?: boolean; assetTypes?: string[] } = {},
   ): Promise<AgentFixedAssetDetail> {
     const applyVisibilityFilter = opts.applyVisibilityFilter !== false;
+    const assetTypes = opts.assetTypes && opts.assetTypes.length > 0 ? opts.assetTypes : undefined;
     const allItems: FixedAssetItem[] = [];
     let agent: Record<string, unknown> | null = null;
     let offset = 0;
@@ -442,6 +449,7 @@ export class MetadataClient {
           limit: FA_PAGE_SIZE,
           offset,
           apply_visibility_filter: applyVisibilityFilter,
+          ...(assetTypes ? { asset_types: assetTypes } : {}),
         },
       );
       agent = agent ?? resp.agent;

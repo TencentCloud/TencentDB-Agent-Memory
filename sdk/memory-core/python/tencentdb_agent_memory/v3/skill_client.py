@@ -283,7 +283,6 @@ class SkillClient:
         self,
         skill_id: str,
         *,
-        expected_version: int,
         team_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
@@ -293,7 +292,6 @@ class SkillClient:
         body = _strip_none({
             **self._defaults.merge(team_id, agent_id, user_id, task_id),
             "skill_id": skill_id,
-            "expected_version": expected_version,
         })
         return self._stub.post(f"{_V3}/delete", body)
 
@@ -788,7 +786,6 @@ class AsyncSkillClient:
         self,
         skill_id: str,
         *,
-        expected_version: int,
         team_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
@@ -797,7 +794,6 @@ class AsyncSkillClient:
         body = _strip_none({
             **self._defaults.merge(team_id, agent_id, user_id, task_id),
             "skill_id": skill_id,
-            "expected_version": expected_version,
         })
         return await self._stub.post(f"{_V3}/delete", body)
 

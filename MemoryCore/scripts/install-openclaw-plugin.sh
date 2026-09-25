@@ -11,7 +11,7 @@
 #   - SDK     ：npm @tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2
 #               https://www.npmjs.com/package/@tencentdb-agent-memory/memory-sdk-ts-v2/v/1.0.0-beta.2
 #               （插件 npm install 拉取；不以仓库 file: 本地 SDK 为交付路径）
-#   - 数据面  ：v3 MemoryClient → /v3/*；COS 读文件旁路 tdai_read_cos（MemoryFileReader）
+#   - 数据面  ：v3 MemoryClient → /v3/*；COS 读文件旁路 tdai_read_file（MemoryFileReader）
 #   - 不含    ：Offload；E2E harness（scripts/e2e-openclaw-plugin*）由其它同事负责，本脚本不覆盖
 #
 # 本脚本做的事（封装一层）：

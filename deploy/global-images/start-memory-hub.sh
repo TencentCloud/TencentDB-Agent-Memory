@@ -25,6 +25,9 @@ require_vars \
 # 与 memory-core 保持一致的 gateway 内部凭据（默认 local，仅本地体验）
 MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 
+# 确保 Panel ↔ Knowledge 服务间鉴权 key 存在（首次自动生成并回写 .env）
+ensure_knowledge_service_key
+
 # Panel UI "客户端接入地址"卡片显示的 base URL（供 CodeBuddy / ClaudeCode 拷贝使用）。
 # 开源本地部署 core 和 proxy 分开跑，客户端要接的是 proxy，不是 core/gateway。
 #
@@ -96,6 +99,8 @@ $DOCKER run -d --name "$CONTAINER" \
   -e PANEL_PORT=8125 \
   -e KNOWLEDGE_PORT=8424 \
   -e KNOWLEDGE_PUBLIC_BASE_URL="$KNOWLEDGE_PUBLIC_BASE_URL" \
+  -e KNOWLEDGE_SERVICE_KEY="$KNOWLEDGE_SERVICE_KEY" \
+  -e KNOWLEDGE_AUTH_TOKEN="$KNOWLEDGE_SERVICE_KEY" \
   -e REMOTE_INSTANCE_ID=default \
   -e REMOTE_INSTANCE_NAME=default \
   -e REMOTE_INSTANCE_URL="http://memory-core:8420" \

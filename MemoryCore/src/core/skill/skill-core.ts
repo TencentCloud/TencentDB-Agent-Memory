@@ -156,7 +156,6 @@ export interface PatchInput extends IdFields {
 
 export interface DeleteInput extends IdFields {
   skill_id: string;
-  expected_version: number;
 }
 
 export interface GetInput extends IdFields {
@@ -381,7 +380,6 @@ export class SkillCore {
     if (input.team_id) assertTeamMatchWrap(head, input.team_id);
     if (!head) throw new SkillCoreError("SKILL_NOT_FOUND");
     if (input.agent_id) assertOwnerWrap(head, input.agent_id, input.team_id);
-    assertVersionFreshWrap(head, input.expected_version);
 
     // 物理删除所有版本 + 清 storage + 汇总上报 shark(-N)
     const deleted = await this.versioning.deleteSkill(input.skill_id, input.team_id);
