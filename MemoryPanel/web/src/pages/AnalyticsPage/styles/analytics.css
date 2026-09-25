@@ -1,0 +1,417 @@
+/* AnalyticsPage — 可观测使用看板样式
+ *
+ * 约定：颜色全部走 Tea Token（自适应深浅色），不硬编码色值；
+ * 不使用 `tea-` 前缀内置类名（classPrefix 可变，硬写会静默失效），
+ * 需要作用于 Tea 组件时通过组件自身 className 挂自有类名。
+ */
+
+._an-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+._an-toolbar-select {
+  min-width: 140px;
+}
+
+._an-stamp {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* KPI 行：MetricsBoard 自带排版，这里只做等宽自适应布局
+ * （与 WikiSourcesPanel 的 _asset-wiki-stats 同一模式） */
+._an-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+/* 环比徽标 */
+._an-delta {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--tea-color-text-secondary);
+  background: var(--tea-color-bg-secondary-default);
+  white-space: nowrap;
+}
+
+._an-delta--up {
+  color: var(--tea-color-text-success-default);
+  background: var(--tea-color-bg-success-lighten-default);
+}
+
+._an-delta--down {
+  color: var(--tea-color-text-error-default);
+  background: var(--tea-color-bg-error-lighten-default);
+}
+
+._an-delta--flat {
+  color: var(--tea-color-text-tertiary);
+  background: var(--tea-color-bg-secondary-default);
+}
+
+/* 占比横向条 */
+._an-sharebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+._an-sharebar-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 32%) 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+._an-sharebar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+}
+
+._an-sharebar-track {
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--tea-color-bg-secondary-default);
+  overflow: hidden;
+}
+
+._an-sharebar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--tea-color-bg-brand-default);
+}
+
+._an-sharebar-value {
+  color: var(--tea-color-text-primary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+._an-sharebar-value em {
+  color: var(--tea-color-text-tertiary);
+  font-style: normal;
+}
+
+/* 折线趋势 */
+._an-trend-svg {
+  display: block;
+  width: 100%;
+  height: 180px;
+}
+
+._an-trend-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 单点时轴标签跟随居中的数据点 */
+._an-trend-axis--single {
+  justify-content: center;
+}
+
+._an-trend-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+._an-trend-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+._an-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+}
+
+._an-trend-legend-item i {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+._an-trend-max {
+  margin-left: auto;
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+}
+
+/* 请求体 / 指纹等技术字段等宽展示 */
+._an-mono {
+  font-family: SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+/* ── 四类资产分布卡片 ── */
+._an-cat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+._an-cat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+._an-cat-card:hover {
+  border-color: var(--tea-color-border-brand-default);
+  background: var(--tea-color-bg-secondary-default);
+}
+
+._an-cat-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--tea-color-text-on-bg-brand-default);
+}
+
+._an-cat-badge--sm {
+  font-size: 11px;
+  padding: 0 6px;
+}
+
+._an-cat-value {
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--tea-color-text-primary);
+}
+
+._an-cat-track {
+  display: block;
+  width: 100%;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--tea-color-bg-secondary-default);
+  overflow: hidden;
+}
+
+._an-cat-fill {
+  display: block;
+  height: 100%;
+  border-radius: 9999px;
+}
+
+._an-cat-meta {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+._an-cat-desc {
+  font-size: 12px;
+}
+
+/* ── trace 明细 ── */
+._an-trace-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+._an-trace-body {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--tea-color-text-secondary);
+  background: var(--tea-color-bg-secondary-default);
+  border-radius: 4px;
+}
+
+._an-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ── Tab 视角切换 ── */
+._an-tabs {
+  background: transparent;
+}
+
+/* Tab 内各卡片沿用页面级 16px 纵向间距 */
+._an-tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 16px;
+}
+
+/* ── 模型分布表 ── */
+._an-model-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+._an-model-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+._an-model-bar ._an-cat-track {
+  flex: 1;
+  min-width: 40px;
+}
+
+/* ── usage_raw 分级构成 ── */
+._an-raw-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+}
+
+._an-raw-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+._an-raw-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+._an-raw-breakdown {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* ── 下钻抽屉 ── */
+._an-drill-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px 24px;
+}
+
+._an-drill-tab-body {
+  padding-top: 16px;
+}
+
+._an-drill-subtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── 用户名单元格 ── */
+._an-user-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+._an-user-id {
+  font-size: 11px;
+}
+
+/* 成员维度资产使用次数 chips（配合「主要资产」列多类别展示） */
+._an-member-assets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+._an-asset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  white-space: nowrap;
+}
+
+._an-asset-chip i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+._an-asset-chip em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+/* 表格内的用户名下钻链接：去掉 Button 默认内边距，与文本列对齐 */
+._an-user-link.tea-btn {
+  padding: 0;
+  height: auto;
+  line-height: inherit;
+  text-align: left;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._an-flag-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}

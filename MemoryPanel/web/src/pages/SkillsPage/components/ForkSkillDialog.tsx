@@ -152,6 +152,7 @@ export default function ForkSkillDialog(props: {
           <Form.Item label={t('forkSkill.agent')} required>
             <Select
               size="full"
+              matchButtonWidth
               value={agentId}
               onChange={setAgentId}
               placeholder={t('forkSkill.agent.placeholder')}

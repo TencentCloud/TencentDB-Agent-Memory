@@ -73,6 +73,7 @@ export default function ChatMemoryPanel(
     handleLayerItemLoad,
     handleSaveLayerItem,
     searchLayer,
+    refreshLayer,
     handleDeleteBlock,
     handleImport,
     handleToggleScope,
@@ -269,6 +270,7 @@ export default function ChatMemoryPanel(
                 canEdit={selected.uploaded_by_user_id === currentUserId}
                 onSaveLayerItem={handleSaveLayerItem}
                 onSearchLayer={searchLayer}
+                onRefresh={refreshLayer}
               />
             )
           }

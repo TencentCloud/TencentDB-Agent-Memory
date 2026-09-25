@@ -543,7 +543,7 @@ export default function register(api: OpenClawPluginApi) {
     { name: "tdai_conversation_search" },
   );
 
-  // tdai_read_cos — Agent-callable tool for reading files from COS/local storage
+  // tdai_read_file — Agent-callable tool for reading files from COS/local storage
   {
     // Read COS config from {pluginDataDir}/cos.env
     // Format: KEY=VALUE per line (standard .env)
@@ -619,14 +619,14 @@ export default function register(api: OpenClawPluginApi) {
     api.registerTool(
       {
         name: READ_COS_TOOL_NAME,
-        label: "Read COS File",
+        label: "Read Memory File",
         description: READ_COS_TOOL_DESCRIPTION,
         parameters: READ_COS_TOOL_SCHEMA,
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           const startMs = Date.now();
           const filePath = String(params.path ?? "");
 
-          api.logger.debug?.(`${TAG} [tool] tdai_read_cos called: path="${filePath}"`);
+          api.logger.debug?.(`${TAG} [tool] tdai_read_file called: path="${filePath}"`);
 
           const readCosStorage = await resolveReadCosStorage();
           const result = await executeReadCos(
@@ -637,11 +637,11 @@ export default function register(api: OpenClawPluginApi) {
 
           const elapsedMs = Date.now() - startMs;
           api.logger.debug?.(
-            `${TAG} [tool] tdai_read_cos completed (${elapsedMs}ms): ` +
+            `${TAG} [tool] tdai_read_file completed (${elapsedMs}ms): ` +
             `success=${result.success}, size=${result.size}`,
           );
           report("tool_call", {
-            tool: "tdai_read_cos",
+            tool: "tdai_read_file",
             path: filePath,
             durationMs: elapsedMs,
             success: result.success,
@@ -665,7 +665,7 @@ export default function register(api: OpenClawPluginApi) {
       { name: READ_COS_TOOL_NAME },
     );
 
-    api.logger.info(`${TAG} Registered tool: tdai_read_cos (storage backend resolved lazily on first call)`);
+    api.logger.info(`${TAG} Registered tool: tdai_read_file (storage backend resolved lazily on first call)`);
   }
   } else {
     api.logger.debug?.(`${TAG} Memory tools (tdai_memory_search, tdai_conversation_search) not registered — memory features disabled`);

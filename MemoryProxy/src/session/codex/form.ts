@@ -60,11 +60,11 @@ export const CODEX_MORE_LABEL = "更多...";
 export const DEFAULT_GATE_PREFIX = "request_user_input is unavailable in";
 
 /**
- * 附在每步 question 文末的通用备注：告诉用户"选择跳过 = 本次 session init 跳过、不注入任何团队资产"。
+ * 附在每步 question 文末的通用备注。
  * Codex 的 request_user_input 在 Plan 模式下展示 questions + options 给用户；
  * 跳过入口为「否，本次不关联」按钮。文案与 claude-code/workbuddy/codebuddy/dsh 五端统一。
  */
-const SKIP_HINT = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产）';
+const SKIP_HINT = '（请选择最匹配的选项，当前暂不支持自定义输入。若选择跳过，本次 Session 将不注入团队资产）';
 
 /** Returns true if the given string contains any codex form title marker. */
 export function containsFormTitle(s: string): boolean {

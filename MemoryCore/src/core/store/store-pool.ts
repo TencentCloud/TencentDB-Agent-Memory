@@ -21,12 +21,16 @@ import type { MemoryTdaiConfig } from "../../config.js";
 import type { IMemoryStore, StoreLogger } from "./types.js";
 import type { EmbeddingService } from "./embedding.js";
 import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
-import { VectorStore } from "./sqlite.js";
-import { TcvdbMemoryStore } from "./tcvdb.js";
-import { TcvdbSkillStore } from "./tcvdb-skill-store.js";
+import { VectorStore } from "./sqlite/memory-store.js";
+import { TcvdbMemoryStore } from "./tcvdb/memory-store.js";
+import { TcvdbSkillStore } from "./tcvdb/skill-store.js";
+import { MongoMemoryStore } from "./mongodb/memory-store.js";
+import { MongoSkillStore } from "./mongodb/skill-store.js";
+import { getSharedMongoClientPool } from "./mongodb/client-pool.js";
+import type { MongoClientPool } from "./mongodb/client-pool.js";
 import { createBM25Encoder } from "./bm25-local.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
-import type { VdbConfig } from "../instance-config-provider.js";
+import type { VdbConfig, MongoConfig } from "../instance-config-provider.js";
 import type { ISkillStore } from "../skill/skill-store.interface.js";
 import { metricProducer } from "../report/kafka-metric-producer.js";
 
@@ -56,7 +60,7 @@ interface Logger {
   error: (message: string) => void;
 }
 
-export type StoreMode = "sqlite" | "tcvdb";
+export type StoreMode = "sqlite" | "tcvdb" | "mongodb";
 
 export interface KafkaMetricOptions {
   /** Kafka Broker 列表 (逗号分隔或数组) */
@@ -96,6 +100,8 @@ export class StorePool {
   private logger: Logger;
   /** 全局共享的 BM25 编码器 (避免重复加载 jieba 词典导致 OOM) */
   private sharedBm25Encoder: BM25LocalEncoder | undefined;
+  /** 共享 MongoClient 连接池 (mongodb 后端；按 endpoint 复用一个 client)。 */
+  private mongoPool: MongoClientPool | undefined;
 
   /** Skill store 缓存上限 */
   private maxSkillStores: number;
@@ -168,10 +174,22 @@ export class StorePool {
    * - standalone (sqlite): vdbConfig 可以为 null, 创建 SQLite Store
    * - service (tcvdb): 根据 vdbConfig 创建 TCVDB Store
    */
-  async getStore(instanceId: string, vdbConfig: VdbConfig | null): Promise<PooledStore> {
+  async getStore(
+    instanceId: string,
+    vdbConfig: VdbConfig | null,
+    mongoConfig?: MongoConfig | null,
+  ): Promise<PooledStore> {
     const now = Date.now();
-    const fingerprint = this.mode === "tcvdb" && vdbConfig
-      ? this.computeFingerprint(vdbConfig)
+    // D11: backend selected per-instance from the config actually delivered —
+    // mongoConfig present → mongodb; else tcvdb when in tcvdb mode with a vdb;
+    // else sqlite. `mode` is the process default that drives which config the
+    // caller resolves, but the presence check is authoritative here.
+    const backend: StoreMode = mongoConfig
+      ? "mongodb"
+      : (this.mode === "tcvdb" && vdbConfig ? "tcvdb" : "sqlite");
+    const fingerprint =
+      backend === "mongodb" && mongoConfig ? this.computeMongoFingerprint(mongoConfig)
+      : backend === "tcvdb" && vdbConfig ? this.computeFingerprint(vdbConfig)
       : `sqlite:${instanceId}`;
     const cached = this.pool.get(instanceId);
 
@@ -193,8 +211,9 @@ export class StorePool {
     }
 
     // 创建新 Store
-    const pooledStore = this.mode === "tcvdb" && vdbConfig
-      ? this.createTcvdbStore(vdbConfig)
+    const pooledStore =
+      backend === "mongodb" && mongoConfig ? this.createMongoStore(mongoConfig)
+      : backend === "tcvdb" && vdbConfig ? this.createTcvdbStore(vdbConfig)
       : this.createSqliteStore(instanceId);
 
     this.pool.set(instanceId, {
@@ -203,11 +222,12 @@ export class StorePool {
       lastAccessedAt: now,
     });
 
-    const storeDesc = this.mode === "tcvdb" && vdbConfig
-      ? `${vdbConfig.url} / ${vdbConfig.database}`
+    const storeDesc =
+      backend === "mongodb" && mongoConfig ? `mongodb ${mongoConfig.endpoint} / ${mongoConfig.database}`
+      : backend === "tcvdb" && vdbConfig ? `${vdbConfig.url} / ${vdbConfig.database}`
       : `sqlite @ ${this.getSqlitePath(instanceId)}`;
     this.logger.info(
-      `${TAG} Created ${this.mode} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
+      `${TAG} Created ${backend} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
     );
 
     // 初始化 Store (建表/检查连接)
@@ -262,6 +282,18 @@ export class StorePool {
 
     // 等所有 pending close 完成 (含本次 + 之前 evict 留下的)
     await Promise.allSettled([...this.pendingCloses]);
+
+    // 关闭共享 MongoClient 连接池 (所有 store 已释放引用后再断连)
+    if (this.mongoPool) {
+      try {
+        await this.mongoPool.closeAll();
+        this.logger.debug?.(`${TAG} Closed shared MongoClient pool`);
+      } catch (e) {
+        this.logger.warn(`${TAG} Error closing shared MongoClient pool: ${e}`);
+      }
+      this.mongoPool = undefined;
+    }
+
     this.logger.info(`${TAG} All stores closed (${entries.length} memory + skill caches cleared)`);
   }
 
@@ -301,7 +333,11 @@ export class StorePool {
    * 与 getStore() 使用相同的 VDB 实例，只是不同的 Collection ({db}_skills)。
    * Skill store 有独立缓存 (skillStoreCache)，不受 Memory store 池化管理影响。
    */
-  async getSkillStore(instanceId: string, vdbConfig: VdbConfig): Promise<ISkillStore> {
+  async getSkillStore(
+    instanceId: string,
+    vdbConfig?: VdbConfig | null,
+    mongoConfig?: MongoConfig | null,
+  ): Promise<ISkillStore> {
     const key = `skill:${instanceId}`;
     const cached = this.skillStoreCache.get(key);
     if (cached) {
@@ -312,6 +348,23 @@ export class StorePool {
     // LRU 淘汰
     if (this.skillStoreCache.size >= this.maxSkillStores) {
       this.evictSkillStoreLru();
+    }
+
+    if (mongoConfig) {
+      const mongoStore = new MongoSkillStore({
+        pool: this.getMongoPool(),
+        mongoConfig,
+        logger: this.logger as StoreLogger,
+      });
+      mongoStore.init();
+      this.skillStoreCache.set(key, mongoStore);
+      this.skillStoreAccessTimes.set(key, Date.now());
+      this.logger.info(`${TAG} Created mongo skill store for ${instanceId}: ${mongoConfig.endpoint}/${mongoConfig.database} (cached: ${this.skillStoreCache.size})`);
+      return mongoStore;
+    }
+
+    if (!vdbConfig) {
+      throw new Error(`${TAG} getSkillStore(${instanceId}) requires a vdbConfig (tcvdb) or mongoConfig (mongodb)`);
     }
 
     const store = new TcvdbSkillStore({
@@ -363,6 +416,36 @@ export class StorePool {
       embedding: new NoopEmbeddingService() as unknown as EmbeddingService,
       bm25Encoder: this.sharedBm25Encoder,
     };
+  }
+
+  // ════════════════════════════════════════════════════════
+  // Internal — MongoDB Store
+  // ════════════════════════════════════════════════════════
+
+  /** Lazily create the shared MongoClient pool (one client per endpoint). */
+  private getMongoPool(): MongoClientPool {
+    if (!this.mongoPool) {
+      this.mongoPool = getSharedMongoClientPool(this.logger as StoreLogger);
+    }
+    return this.mongoPool;
+  }
+
+  private createMongoStore(mongoConfig: MongoConfig): PooledStore {
+    const store = new MongoMemoryStore({
+      pool: this.getMongoPool(),
+      mongoConfig,
+      logger: this.logger as StoreLogger,
+    });
+    // Mongo uses native mongot/BM25 — no application-layer embedding or bm25 encoder.
+    return {
+      store,
+      embedding: new NoopEmbeddingService() as unknown as EmbeddingService,
+      bm25Encoder: undefined,
+    };
+  }
+
+  private computeMongoFingerprint(mongoConfig: MongoConfig): string {
+    return `mongodb:${mongoConfig.endpoint}|${mongoConfig.database}|${mongoConfig.user}`;
   }
 
   // ════════════════════════════════════════════════════════

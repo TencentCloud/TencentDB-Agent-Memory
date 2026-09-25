@@ -83,12 +83,12 @@ export const ASSET_CONFIRM_NO = "否,本次不关联";
 export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
 
 /**
- * 附在每步 question 文末的通用备注：告诉用户"选择跳过 = 本次 session init 跳过、不注入任何团队资产"。
+ * 附在每步 question 文末的通用备注。
  * dsh 的 ask_user_question UI 也支持 "Other"/自由文本兜底（见 dsh 文档 §3.4
  * `custom` 字段）；回复"跳过 / skip / 不关联"会走 SKIP_RE bypass。
- * 文案与 claude-code/workbuddy/codex/codebuddy 五端统一（此处也一并从半角改为全角标点）。
+ * 文案与 claude-code/workbuddy/codex/codebuddy 五端统一。
  */
-const SKIP_HINT = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产）';
+const SKIP_HINT = '（请选择最匹配的选项，当前暂不支持自定义输入。若选择跳过，本次 Session 将不注入团队资产）';
 
 /** Returns true if the given string contains any dsh form title marker. */
 export function containsFormTitle(s: string): boolean {
@@ -208,7 +208,7 @@ function buildAskUserQuestionArgs(data: FormData): { questions: DshAskQuestion[]
 
   if (stage === "task_select") {
     // dsh 无 options 数量上限,全量渲染,不分页。
-    // team.tasks[0] 是虚拟 default 任务("本次不关联任务"),源头 unshift 一次,
+    // team.tasks[0] 是虚拟 default 任务("暂时跳过"),源头 unshift 一次,
     // 不分页就不会像旧版每页都出现在开头(踩坑文档 §6 坑 #9)。
     const taskOpts: DshAskQuestionOption[] = team.tasks.map((t) => ({
       label: t.isDefault
