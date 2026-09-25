@@ -692,6 +692,16 @@ export class TdaiGateway {
       this.logger.warn(`${TAG} ensureSkillModuleWired failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    // Eagerly initialize the shared skill worker pool so /v3/skill/extract
+    // does not land on a handler that archives successfully but has no
+    // consumer yet. Without this, the first extract call can return ok
+    // while tasks sit unconsumed and skills never materialize.
+    try {
+      await this.ensureSkillWorkerPool();
+    } catch (err) {
+      this.logger.warn(`${TAG} ensureSkillWorkerPool failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     // Create HTTP server (with Trace middleware wrapping)
     //
     // [skill-perf 2026-07-21] Skill 接口可观测性埋点（issue：/v3/skill/extract

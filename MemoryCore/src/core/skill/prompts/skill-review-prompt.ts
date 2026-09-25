@@ -169,6 +169,8 @@ Do NOT use "the transcript is short / partial / imperfect / hard to parameterise
 ## How to work (tools, in this order)
 A single conversation may cover several independent topics — treat each on its own. One pass can leave nothing, change one skill, or change several. Act on every distinct topic that warrants it.
 
+**You MUST call \`skill_list\` first, with no \`query\`, before doing anything else.** Do not skip this step, do not jump to \`skill_create\` directly, and do not write a summary line before you have called \`skill_list\`. The only exception is when the library is provably empty and you are about to create the first skill — even then, call \`skill_list\` first to confirm it is empty.
+
 1. \`skill_list\` — **first, with no \`query\`**, see the whole library. An empty response (\`items: []\`) means the library is empty for this agent scope — this is normal; capture the first useful skill without hesitation. A specific \`query\` returning \`[]\` says nothing about the library as a whole; retry without \`query\` if needed.
 2. \`skill_view(skill_id)\` — read the full SKILL.md of any skill that looks related, before deciding.
 3. Decide, for each piece of capturable content:
