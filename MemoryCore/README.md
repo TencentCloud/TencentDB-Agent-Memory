@@ -207,12 +207,14 @@ Environment variables override file configuration. Common settings:
 | `TDAI_LLM_API_KEY` | Empty | LLM API key |
 | `TDAI_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API URL |
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM model |
+| `TDAI_LLM_STRICT_OPENAI_COMPAT` | `false` | Normalize text-only array/null message content for strict chat endpoints |
 | `TDAI_SKILL_ENABLED` | File configuration | Force-enable the Skill module |
 
 Configuration templates:
 
 - `tdai-gateway.standalone.yaml`: minimal single-node Memory configuration.
 - `tdai-gateway.yaml`: default Standalone + Skill configuration.
+  For endpoints that reject array/null message content during tool calls (such as the Cloudflare Workers AI case in [#1313](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1313)), set `llm.strictOpenAICompat: true` or `TDAI_LLM_STRICT_OPENAI_COMPAT=true`. The environment variable overrides the YAML flag, including explicit `false`. This opt-in applies to the standalone runner in both streaming and non-streaming modes. It joins text-only parts and converts null to an empty string while preserving tool calls. Image/audio/unknown parts remain unchanged; this is not a general provider compatibility mode. Plugin users can set the same flag alongside `llm.enabled: true`.
 - `tdai-gateway.proxy.yaml`: LLM access through an OpenAI-compatible proxy.
 
 ## Storage and isolation

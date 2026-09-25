@@ -20,6 +20,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { generateText, streamText, tool, stepCountIs, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createStrictOpenAICompatFetch } from "./strict-openai-compat.js";
 import { report } from "../../core/report/reporter.js";
 import type {
   LLMRunner,
@@ -78,6 +79,8 @@ function buildTelemetryMetadata(params: LLMRunParams): Record<string, unknown> {
 // ============================
 
 export interface StandaloneLLMConfig {
+  /** Opt in to string-only message content for strict chat endpoints. Default false. */
+  strictOpenAICompat?: boolean;
   /** OpenAI-compatible API base URL (e.g. "https://api.openai.com/v1"). */
   baseUrl: string;
   /** API key for authentication. */
@@ -305,6 +308,7 @@ export class StandaloneLLMRunner implements LLMRunner {
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
       compatibility: "compatible",
+      ...(this.config.strictOpenAICompat ? { fetch: createStrictOpenAICompatFetch() } : {}),
     });
 
     // Select tools based on mode + storage
