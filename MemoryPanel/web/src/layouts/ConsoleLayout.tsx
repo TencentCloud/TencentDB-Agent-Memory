@@ -25,6 +25,7 @@ const PATH_TO_PAGE: Record<string, PageId> = {
   '/skills': 'skills',
   '/memory': 'chat_memory',
   '/analytics': 'analytics',
+  '/models': 'upstream',
   '/team/members': 'team_members',
   '/team/agents': 'team_agents',
   '/team/api-keys': 'api_keys',
@@ -154,6 +155,7 @@ export function ConsoleLayout() {
     const byGroup = new Map<string, (typeof PAGE_META)[PageId][]>();
 
     for (const meta of Object.values(PAGE_META)) {
+      if (meta.id === 'upstream' && userRole !== 'admin') continue;
       if (userRole === 'reviewer' && meta.id === 'team_members') continue;
       // 「可观测」仅 system_admin 可见，且需面板开关开启 + 内核已配置 CH
       if (meta.id === 'analytics') {

@@ -129,4 +129,4 @@ docker build --platform "$PLATFORM" -t "$IMAGE_NAME:$IMAGE_TAG" "$CTX_DIR"
 
 echo ""
 echo "[build-combined] ✅ done: $IMAGE_NAME:$IMAGE_TAG"
-echo "[build-combined] context 保留在 $CTX_DIR（KEEP_CTX=0 时下次会清掉）"
+echo "[build-combined] context 保留在 ${CTX_DIR}（KEEP_CTX=0 时下次会清掉）"
