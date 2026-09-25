@@ -1,5 +1,6 @@
 /** Hono app factory — registers all routes. */
 
+import { getSessionStore } from "./session/store.js";
 import { Hono } from "hono";
 import { handleChatCompletions } from "./handler.js";
 import { handleAnthropicMessages } from "./anthropicHandler.js";
@@ -27,6 +28,7 @@ export function createApp(config: ProxyConfig): Hono {
   if (!tryActivateStorage(config)) {
     tryActivateRedis(config);
   }
+  getSessionStore().setDefaultTaskId(config.sessionInit.defaultTaskId);
 
   // `/cost-guard` marker 门控 (P0 前置)：
   // markerOptIn=false 时 marker 完全作废——任何路径里带 `/cost-guard/` 段的请求
