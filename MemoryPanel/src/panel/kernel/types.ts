@@ -25,11 +25,13 @@ export function toKernelCredentials(
   config: { timeoutMs: number },
   opts?: { omitUserKey?: boolean },
 ): KernelCredentials {
+  const omitUserKey = opts?.omitUserKey;
+  const userKey = omitUserKey ? undefined : ctx.userKey;
   return {
     endpoint: ctx.gatewayEndpoint,
     apiKey: ctx.gatewayApiKey,
     instanceId: ctx.instanceId,
-    userKey: opts?.omitUserKey ? undefined : ctx.userKey,
+    userKey,
     timeoutMs: config.timeoutMs,
     requestId: ctx.reqId,
   };

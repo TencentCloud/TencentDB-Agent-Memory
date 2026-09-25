@@ -60,6 +60,10 @@ import type {
   ConfigParamEntity,
   UpsertConfigParamInput,
   ListConfigParamsFilter,
+  InstanceUpstreamConfigEntity,
+  UpsertInstanceUpstreamConfigInput,
+  InstanceUpstreamConfigFilter,
+  UpstreamConfigType,
 } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
@@ -258,6 +262,12 @@ export class MongoMetadataStore implements IMetadataStore {
       { partialFilterExpression: { scope: "user" } },
     );
 
+    // ── meta_instance_upstream_config ──
+    await this.ensureIndex("meta_instance_upstream_config",
+      { agent_source: 1, type: 1 },
+      { unique: true },
+    );
+
     await this.migrateLegacyUserKeys();
   }
 
@@ -445,7 +455,10 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async updateUser(userId: string, patch: Partial<UserEntity>): Promise<UserEntity | null> {
-    const allowed = ["password", "display_name", "email", "raw_profile_json", "status", "metadata_json", "username"];
+    // external_id / auth_provider：外部认证（如 WOA）绑定存量账号时写入，
+    // 用于下次登录判断是否初次。白名单漏掉 auth_provider 会导致绑定"看似成功、
+    // 实际没写域"，下次按域反查落空 → 401，属静默失效，务必保留。
+    const allowed = ["password", "display_name", "email", "raw_profile_json", "status", "metadata_json", "username", "external_id", "auth_provider"];
     await this.patchOne("meta_users", { user_id: userId }, patch, allowed, true);
     return this.getUserById(userId);
   }
@@ -1376,5 +1389,81 @@ export class MongoMetadataStore implements IMetadataStore {
       .sort({ scope: 1, param_name: 1 })
       .toArray();
     return docs as unknown as ConfigParamEntity[];
+  }
+
+  // ── InstanceUpstreamConfig ──────────────────────────────────────────────
+
+  private async nextInstanceUpstreamConfigId(): Promise<number> {
+    const result = await this.col("meta_counters").findOneAndUpdate(
+      { _id: "meta_instance_upstream_config" } as any,
+      { $inc: { seq: 1 } },
+      { upsert: true, returnDocument: "after" },
+    );
+    return (result as any).seq as number;
+  }
+
+  async getInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): Promise<InstanceUpstreamConfigEntity | null> {
+    return this.col<InstanceUpstreamConfigEntity>("meta_instance_upstream_config").findOne(
+      { agent_source: agentSource, type } as Document,
+      PROJECT_NO_ID,
+    ) as Promise<InstanceUpstreamConfigEntity | null>;
+  }
+
+  async upsertInstanceUpstreamConfig(
+    input: UpsertInstanceUpstreamConfigInput,
+  ): Promise<InstanceUpstreamConfigEntity> {
+    const now = nowIso();
+    const agentSource = input.agent_source ?? "default";
+    const type = input.type ?? "conversation";
+    const id = await this.nextInstanceUpstreamConfigId();
+
+    await this.col("meta_instance_upstream_config").findOneAndUpdate(
+      { agent_source: agentSource, type } as Document,
+      {
+        $set: {
+          mode: input.mode,
+          base_url: input.base_url ?? "",
+          api_key: input.api_key ?? "",
+          model_id: input.model_id ?? "",
+          description: input.description ?? "",
+          updated_at: now,
+        },
+        $setOnInsert: {
+          id,
+          agent_source: agentSource,
+          type,
+          created_at: now,
+        },
+      },
+      { upsert: true },
+    );
+
+    return (await this.getInstanceUpstreamConfig(agentSource, type))!;
+  }
+
+  async listInstanceUpstreamConfigs(
+    filter?: InstanceUpstreamConfigFilter,
+  ): Promise<InstanceUpstreamConfigEntity[]> {
+    const query: Document = {};
+    if (filter?.agent_source) query.agent_source = filter.agent_source;
+    if (filter?.type) query.type = filter.type;
+    const docs = await this.col("meta_instance_upstream_config")
+      .find(query, PROJECT_NO_ID)
+      .sort({ agent_source: 1, type: 1 })
+      .toArray();
+    return docs as unknown as InstanceUpstreamConfigEntity[];
+  }
+
+  async deleteInstanceUpstreamConfig(
+    agentSource: string,
+    type: UpstreamConfigType,
+  ): Promise<boolean> {
+    const result = await this.col("meta_instance_upstream_config").deleteOne(
+      { agent_source: agentSource, type } as Document,
+    );
+    return (result.deletedCount ?? 0) > 0;
   }
 }

@@ -850,5 +850,166 @@ export function runMetadataStoreContract(
         expect(userLevel!.param_value).toBe("0");
       });
     });
+
+    // ── InstanceUpstreamConfig ──────────────────────────────────────────────
+
+    describe("InstanceUpstreamConfig", () => {
+      it("upsert inserts new row, get retrieves it", async () => {
+        const entity = await store.upsertInstanceUpstreamConfig({
+          agent_source: "default",
+          type: "conversation",
+          mode: "custom_unified",
+          base_url: "https://llm.example.com/v1",
+          api_key: "sk-test-key",
+          model_id: "deepseek-chat",
+          description: "test config",
+        });
+        expect(entity.id).toBeGreaterThan(0);
+        expect(entity.agent_source).toBe("default");
+        expect(entity.type).toBe("conversation");
+        expect(entity.mode).toBe("custom_unified");
+        expect(entity.base_url).toBe("https://llm.example.com/v1");
+        expect(entity.api_key).toBe("sk-test-key");
+        expect(entity.model_id).toBe("deepseek-chat");
+        expect(entity.description).toBe("test config");
+        expect(entity.created_at).toBeTruthy();
+        expect(entity.updated_at).toBeTruthy();
+
+        const found = await store.getInstanceUpstreamConfig("default", "conversation");
+        expect(found).not.toBeNull();
+        expect(found!.mode).toBe("custom_unified");
+        expect(found!.base_url).toBe("https://llm.example.com/v1");
+        expect(found!.api_key).toBe("sk-test-key");
+      });
+
+      it("upsert same (agent_source, type) overwrites values, preserves created_at", async () => {
+        const first = await store.upsertInstanceUpstreamConfig({
+          agent_source: "default",
+          type: "conversation",
+          mode: "official",
+          description: "initial",
+        });
+        const createdAt = first.created_at;
+
+        const updated = await store.upsertInstanceUpstreamConfig({
+          agent_source: "default",
+          type: "conversation",
+          mode: "custom_unified",
+          base_url: "https://new.example.com/v1",
+          api_key: "sk-new",
+          description: "updated",
+        });
+
+        expect(updated.id).toBe(first.id);
+        expect(updated.mode).toBe("custom_unified");
+        expect(updated.base_url).toBe("https://new.example.com/v1");
+        expect(updated.api_key).toBe("sk-new");
+        expect(updated.description).toBe("updated");
+        expect(updated.created_at).toBe(createdAt);
+      });
+
+      it("upsert defaults agent_source to 'default' and type to 'conversation'", async () => {
+        const entity = await store.upsertInstanceUpstreamConfig({
+          mode: "official",
+        });
+        expect(entity.agent_source).toBe("default");
+        expect(entity.type).toBe("conversation");
+        expect(entity.mode).toBe("official");
+        expect(entity.base_url).toBe("");
+        expect(entity.api_key).toBe("");
+        expect(entity.model_id).toBe("");
+      });
+
+      it("list without filter returns all rows", async () => {
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "conversation", mode: "official",
+        });
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "extraction", mode: "custom_unified",
+          base_url: "https://extract.example.com", api_key: "sk-ext",
+        });
+
+        const all = await store.listInstanceUpstreamConfigs();
+        expect(all.length).toBe(2);
+      });
+
+      it("list with type filter returns only matching rows", async () => {
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "conversation", mode: "official",
+        });
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "extraction", mode: "custom_unified",
+          base_url: "https://extract.example.com", api_key: "sk-ext",
+        });
+
+        const convOnly = await store.listInstanceUpstreamConfigs({ type: "conversation" });
+        expect(convOnly.length).toBe(1);
+        expect(convOnly[0]!.type).toBe("conversation");
+
+        const extOnly = await store.listInstanceUpstreamConfigs({ type: "extraction" });
+        expect(extOnly.length).toBe(1);
+        expect(extOnly[0]!.type).toBe("extraction");
+      });
+
+      it("list with agent_source filter returns only matching rows", async () => {
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "conversation", mode: "official",
+        });
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "claude-code", type: "conversation", mode: "custom_unified",
+          base_url: "https://cc.example.com", api_key: "sk-cc",
+        });
+
+        const defaultOnly = await store.listInstanceUpstreamConfigs({ agent_source: "default" });
+        expect(defaultOnly.length).toBe(1);
+        expect(defaultOnly[0]!.agent_source).toBe("default");
+      });
+
+      it("delete removes existing row and returns true", async () => {
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "extraction", mode: "custom_unified",
+          base_url: "https://ext.example.com", api_key: "sk-ext",
+        });
+
+        const deleted = await store.deleteInstanceUpstreamConfig("default", "extraction");
+        expect(deleted).toBe(true);
+
+        const found = await store.getInstanceUpstreamConfig("default", "extraction");
+        expect(found).toBeNull();
+      });
+
+      it("delete non-existent row returns false", async () => {
+        const deleted = await store.deleteInstanceUpstreamConfig("nonexistent", "conversation");
+        expect(deleted).toBe(false);
+      });
+
+      it("get non-existent row returns null", async () => {
+        const found = await store.getInstanceUpstreamConfig("default", "conversation");
+        expect(found).toBeNull();
+      });
+
+      it("two rows with same agent_source but different type are independent", async () => {
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "conversation", mode: "custom_passthrough",
+          base_url: "https://conv.example.com",
+        });
+        await store.upsertInstanceUpstreamConfig({
+          agent_source: "default", type: "extraction", mode: "custom_unified",
+          base_url: "https://ext.example.com", api_key: "sk-ext", model_id: "gpt-4o",
+        });
+
+        const conv = await store.getInstanceUpstreamConfig("default", "conversation");
+        const ext = await store.getInstanceUpstreamConfig("default", "extraction");
+
+        expect(conv!.mode).toBe("custom_passthrough");
+        expect(conv!.base_url).toBe("https://conv.example.com");
+        expect(conv!.api_key).toBe("");
+
+        expect(ext!.mode).toBe("custom_unified");
+        expect(ext!.base_url).toBe("https://ext.example.com");
+        expect(ext!.api_key).toBe("sk-ext");
+        expect(ext!.model_id).toBe("gpt-4o");
+      });
+    });
   });
 }

@@ -17,6 +17,9 @@ importers:
       hono:
         specifier: ^4.6.0
         version: 4.12.25
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.12
       ulid:
         specifier: ^2.3.0
         version: 2.4.0
@@ -577,6 +580,9 @@ packages:
     resolution: {integrity: sha512-2NFaIyNVgJmBs/ecmtGzlmluTFs5cHEWGTdu0t1HBwYzoGXOL5nUQBRMXsXWla5i4KkG//QMzVP88m1+I3fdAQ==}
     engines: {node: '>=16.9.0'}
 
+  jose@6.2.12:
+    resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
+
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
 
@@ -1092,6 +1098,8 @@ snapshots:
     optional: true
 
   hono@4.12.25: {}
+
+  jose@6.2.12: {}
 
   loupe@3.2.1: {}
 

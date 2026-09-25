@@ -37,12 +37,45 @@ const userIdOrKeyRefine = { message: "user_id or user_key is required" } as cons
 export const userIdOrKeySchema = userIdOrKeyFields.refine(requireUserIdOrKey, userIdOrKeyRefine);
 
 // ── User（v3.1）──
+/**
+ * 外部认证关联标识：外部 IdP（如 WOA 工号体系）下该用户的唯一 id。
+ * 直接复用 core 既有的 meta_users.external_id 字段（origin 引入，原为太湖 OAuth2
+ * 的 sub/工号而设），不新建关联表。
+ */
+const externalIdField = z.string().min(1);
+
+/** 按外部认证标识查用户：外部认证登录后判断是否初次（无绑定=初次）。 */
+export const userFindByExternalSchema = z.object({
+  external_id: externalIdField,
+  auth_provider: z.string().min(1).optional(),
+});
+
+/** 把外部认证标识绑定到已有账号（存量账号接入外部认证）。 */
+export const userBindExternalSchema = z.object({
+  user_id: z.string().min(1),
+  external_id: externalIdField,
+  auth_provider: z.string().min(1).optional(),
+  // 可选：IdP 侧展示名（如 WOA 中文名）。仅在目标账号 display_name 为空时补写，
+  // 不覆盖已有名字。
+  display_name: z.string().min(1).optional(),
+});
+
 export const userCreateSchema = z.object({
   username: nonEmpty,
   // 可选：管控/内部侧建"服务账号"时指定确定性 user_id（如 knowledge-service），
   // 便于 proxy systemUsers 白名单按稳定 user_id 命中；不传则内核随机生成 usr-xxx。
   // 仅 system_admin 可调用本接口（见 v3-meta-router assertCanManageUsers）。
   user_id: z.string().min(1).optional(),
+  // 可选：外部认证体系（如 WOA）的唯一标识（工号）。外部认证建号时必须传，
+  // 否则下次登录无法通过该 id 反查到账号，会被误判为"初次登录"。
+  external_id: z.string().min(1).optional(),
+  // 可选：外部认证体系标识（如 woa）。省略则回落 local，与 external_id 一起
+  // 构成 (auth_provider, external_id) 查询域——传 external_id 时**必须**同时传，
+  // 否则绑定与反查会落在不同域里（写入 local、查询 woa）而互不可见。
+  auth_provider: z.string().min(1).optional(),
+  // 可选：展示名（如 WOA 中文名）。列表/成员展示优先取它，缺省回落到 username。
+  display_name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
 });
 
 // /v3/meta/user/create 的姊妹接口：允许 system_admin 在建号时显式指定 user_key。
@@ -51,6 +84,12 @@ export const userCreateSchema = z.object({
 export const userCreateWithKeySchema = z.object({
   username: nonEmpty,
   user_key: nonEmpty,
+  // 可选：外部认证体系（如 WOA）的唯一标识（工号），语义同 userCreateSchema.external_id。
+  external_id: z.string().min(1).optional(),
+  // 可选：外部认证体系标识（如 woa）/ 展示名 / 邮箱，语义同 userCreateSchema 同名可选字段。
+  auth_provider: z.string().min(1).optional(),
+  display_name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
 });
 export const initAdminSchema = z.object({
   username: nonEmpty,
@@ -393,6 +432,35 @@ export const configUserSetSchema = z.object({
   params: z.record(z.string().min(1), z.string()),
 });
 
+// ── InstanceUpstreamConfig ──
+const upstreamConfigType = z.enum(["conversation", "extraction"]);
+const upstreamConfigMode = z.enum(["official", "custom_unified", "custom_passthrough"]);
+
+export const instanceUpstreamSetSchema = z.object({
+  agent_source: z.string().min(1).default("default"),
+  type: upstreamConfigType.default("conversation"),
+  mode: upstreamConfigMode,
+  base_url: z.string().optional(),
+  api_key: z.string().optional(),
+  model_id: z.string().optional(),
+  description: z.string().optional(),
+});
+
+export const instanceUpstreamGetSchema = z.object({
+  agent_source: z.string().min(1).default("default"),
+  type: upstreamConfigType.default("conversation"),
+});
+
+export const instanceUpstreamListSchema = z.object({
+  agent_source: z.string().min(1).optional(),
+  type: upstreamConfigType.optional(),
+});
+
+export const instanceUpstreamResetSchema = z.object({
+  agent_source: z.string().min(1).default("default"),
+  type: upstreamConfigType.default("conversation"),
+});
+
 export const V3_SCHEMAS = {
   "/v3/meta/user/create": userCreateSchema,
   "/v3/meta/user/create-with-key": userCreateWithKeySchema,
@@ -449,6 +517,10 @@ export const V3_SCHEMAS = {
   "/v3/meta/instance-quota/get": instanceQuotaGetSchema,
   "/v3/meta/config/user/get": configUserGetSchema,
   "/v3/meta/config/user/set": configUserSetSchema,
+  "/v3/meta/instance-upstream/set": instanceUpstreamSetSchema,
+  "/v3/meta/instance-upstream/get": instanceUpstreamGetSchema,
+  "/v3/meta/instance-upstream/list": instanceUpstreamListSchema,
+  "/v3/meta/instance-upstream/reset": instanceUpstreamResetSchema,
 } as const;
 
 export type V3Route = keyof typeof V3_SCHEMAS;

@@ -21,12 +21,22 @@ export interface TaskDraftConfig {
   enabled: boolean;
   /** 模型名，如 "deepseek-v3-0324"。 */
   model: string;
-  /** API 端点（不含 /chat/completions）。 */
+  /**
+   * API 端点 base（不含具体 endpoint）。按 protocol 拼接：
+   *   openai:    `${url}/chat/completions`
+   *   anthropic: `${url}/v1/messages`
+   *   responses: `${url}/responses`
+   */
   url: string;
-  /** API Key，以 Bearer 头传递。 */
+  /** API Key。openai/responses 用 Bearer，anthropic 用 x-api-key。 */
   apiKey: string;
   /** 单次调用超时（毫秒）。建议 15000-30000（草稿要写完整）。 */
   timeoutMs: number;
+  /**
+   * 上游 API 家族。默认 "openai"（chat/completions）。
+   * 决定 attemptDraftOnce 里请求 URL / headers / body / 响应解析的形状。
+   */
+  protocol?: "openai" | "anthropic" | "responses";
 }
 
 /** 最近对话消息片段（供 LLM 理解上下文）。 */
@@ -132,6 +142,52 @@ function firstAttemptTimeoutMs(configuredTimeoutMs: number): number {
   }
   // 不能超过配置本身（不然改动无效）
   return Math.min(configuredTimeoutMs, cap);
+}
+
+/**
+ * 智能拼接 taskDraft 请求 URL —— 处理 "base 尾巴可能已经带了 endpoint 前缀段" 的坑。
+ *
+ * ## 背景（2026-09-01 修复 Claude Code 404）
+ *
+ * 主链路（guard-adapter.joinUrl）的约定：`upstream.agents[x].url` 里的 `/v1`、`/v2`
+ * 尾巴是 base 的一部分，endpoint 只写路径尾段（如 anthropic 用 `/messages`）。
+ * 例如配置里：
+ *   claude-code.url = "https://copilot.tencent.com/v1"   （base 自带 /v1 尾巴）
+ *   codebuddy.url   = "https://copilot.tencent.com/v2"   （base 自带 /v2 尾巴）
+ *   codex.url       = "https://copilot.tencent.com"      （base 是根，不带前缀）
+ *
+ * 但 taskDraft 生成器为了自包含，写的 endpoint 是"完整路径"：
+ *   anthropic  → "/v1/messages"
+ *   openai     → "/chat/completions"（本来就没歧义）
+ *   responses  → "/responses"
+ *
+ * 直接 `${base}${endpoint}` 会踩：
+ *   base=".../v1" + endpoint="/v1/messages" → ".../v1/v1/messages" ❌ 404
+ *
+ * ## 拼接规则
+ *
+ * 1. base 已经完整以 endpoint 结尾 → 原样返回（幂等，处理 base 直接是完整 URL 的场景）
+ * 2. base 已经以 endpoint **的开头段**结尾（如 base=`.../v1`，endpoint=`/v1/messages`）
+ *    → 去掉 base 已有的那段前缀，只拼剩下的（`.../v1/messages`）
+ * 3. base 与 endpoint 无重合 → 直接拼（`.../responses`）
+ *
+ * 参考主链路 joinUrl 的处理（guard-adapter.ts:326）。
+ */
+export function joinTaskDraftUrl(base: string, endpoint: string): string {
+  const normalized = base.replace(/\/+$/, "");
+  // 规则 1：完全相等
+  if (normalized.endsWith(endpoint)) return normalized;
+  // 规则 2：endpoint 可分段（如 "/v1/messages" → ["v1", "messages"]），从长到短
+  // 检查 base 是否已经带了 endpoint 的开头段。命中即剥离。
+  const segs = endpoint.split("/").filter(Boolean);
+  for (let i = segs.length - 1; i > 0; i--) {
+    const prefix = "/" + segs.slice(0, i).join("/");
+    if (normalized.endsWith(prefix)) {
+      return normalized + "/" + segs.slice(i).join("/");
+    }
+  }
+  // 规则 3：无重合，直接拼
+  return normalized + endpoint;
 }
 
 /**
@@ -410,6 +466,11 @@ export async function generateTaskDraft(
     return { ok: false, error: "no recent messages to draft from" };
   }
 
+  // 入口观测：每次 generateTaskDraft 都记录目标 upstream/model/protocol，方便对齐 handler 传参
+  console.log(
+    `[task-draft] START mode=${input.mode} protocol=${cfg.protocol ?? "openai"} url=${cfg.url} model=${cfg.model} msgs=${input.recentMessages.length}${input.lockedTitle ? ` lockedTitle="${input.lockedTitle}"` : ""}`,
+  );
+
   const systemPrompt =
     input.mode === "create"
       ? (input.lockedTitle ? SYSTEM_PROMPT_CREATE_LOCKED_TITLE : SYSTEM_PROMPT_CREATE)
@@ -420,12 +481,15 @@ export async function generateTaskDraft(
   for (let attempt = 1; attempt <= LLM_RETRY_MAX_ATTEMPTS; attempt++) {
     const result = await attemptDraftOnce(cfg, input, systemPrompt, userMessage, attempt);
     if (result.ok) {
-      if (attempt > 1) {
-        // 打点：让运维知道触发过 retry，但最终成功了
-        console.log(
-          `[task-draft] mode=${input.mode} RETRY_SUCCEEDED attempt=${attempt}/${LLM_RETRY_MAX_ATTEMPTS} prev_error=${JSON.stringify(lastError)}`,
-        );
-      }
+      // 成功日志（每次都打，方便看抖动率和实际 attempt 消耗）
+      // attempt>1 时额外带 RETRY_SUCCEEDED 关键字，便于日志聚合看"抖动最终自愈"的次数。
+      const titlePreview = "title" in result && result.title
+        ? result.title.length > 40 ? `${result.title.slice(0, 40)}...` : result.title
+        : "(no-title)";
+      const retryTag = attempt > 1 ? " RETRY_SUCCEEDED" : "";
+      console.log(
+        `[task-draft] OK${retryTag} mode=${input.mode} attempt=${attempt}/${LLM_RETRY_MAX_ATTEMPTS} title="${titlePreview}"${attempt > 1 ? ` prev_error=${JSON.stringify(lastError)}` : ""}`,
+      );
       return result;
     }
     lastError = result.error;
@@ -464,68 +528,160 @@ async function attemptDraftOnce(
   let resp: Response;
   // 首次用短 timeout（默认 10s），后续用完整 cfg.timeoutMs
   const effectiveTimeoutMs = attempt === 1 ? firstAttemptTimeoutMs(cfg.timeoutMs) : cfg.timeoutMs;
+  const protocol = cfg.protocol ?? "openai";
+  // 记录拼接后的完整 URL，用于观测日志（定位路径拼错，如 /v1/v1/messages）
+  let fetchUrl = cfg.url;
   try {
-    resp = await fetch(`${cfg.url}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
-        temperature: 0.3,
-        max_tokens: LLM_MAX_TOKENS,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(effectiveTimeoutMs),
-    });
+    if (protocol === "anthropic") {
+      // Anthropic Messages API：/v1/messages，system 走顶层字段，x-api-key + anthropic-version
+      // 拼接用 joinTaskDraftUrl：base 可能已经带 /v1 尾巴（主链路约定），避免拼成 /v1/v1/messages
+      // ⚠️ copilot 上游对 /v1/messages **强制返 SSE 流式**（非流式返 200 + event-stream body
+      // 会让 JSON.parse 直接爆 "Unexpected token 'e', event: mes..."）。因此显式设 stream:true
+      // 并走 parseAnthropicStream 累积 content_block_delta。与 openai 分支的策略一致。
+      fetchUrl = joinTaskDraftUrl(cfg.url, "/v1/messages");
+      resp = await fetch(fetchUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": cfg.apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: cfg.model,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userMessage }],
+          temperature: 0.3,
+          max_tokens: LLM_MAX_TOKENS,
+          stream: true,
+        }),
+        signal: AbortSignal.timeout(effectiveTimeoutMs),
+      });
+    } else if (protocol === "responses") {
+      // OpenAI Responses API：/responses，instructions 走顶层字段，input[] 结构化，
+      // token 上限字段名是 max_output_tokens。Bearer auth。
+      // 上游 codex base 是根（不带 /v1/v2 前缀），joinTaskDraftUrl 里规则 3 走"直接拼"分支。
+      // ⚠️ copilot 上游对 /responses 同样**强制返 SSE 流式**（非流式请求会被 200 + event-stream
+      // body 回给你，客户端按 JSON 直接爆 "Unexpected token 'e', event: res..."）。因此
+      // 显式 stream:true，走 parseResponsesStream 累积 response.output_text.delta。
+      // 与 anthropic/openai 分支的策略一致 —— copilot 三协议全强制流式。
+      fetchUrl = joinTaskDraftUrl(cfg.url, "/responses");
+      resp = await fetch(fetchUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cfg.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: cfg.model,
+          instructions: systemPrompt,
+          input: [
+            { type: "message", role: "user", content: [{ type: "input_text", text: userMessage }] },
+          ],
+          temperature: 0.3,
+          max_output_tokens: LLM_MAX_TOKENS,
+          stream: true,
+        }),
+        signal: AbortSignal.timeout(effectiveTimeoutMs),
+      });
+    } else {
+      // OpenAI chat/completions（默认）。
+      // ⚠️ copilot 上游强制要求 stream:true（非流式返 400 "Non-stream chat request
+      // is currently not supported"）。因此去掉 response_format（流式下部分上游不认），
+      // JSON 靠 prompt 约束 + 三级 extractJsonObject 兜底。stream_options.include_usage
+      // 让上游末尾额外回一个 usage chunk 用于观测。
+      // base 通常自带 /v2 尾巴（主链路约定），joinTaskDraftUrl 里规则 3 走"直接拼"分支
+      // 得到 .../v2/chat/completions（endpoint 与 base 无重合）。
+      fetchUrl = joinTaskDraftUrl(cfg.url, "/chat/completions");
+      resp = await fetch(fetchUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cfg.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: cfg.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMessage },
+          ],
+          temperature: 0.3,
+          max_tokens: LLM_MAX_TOKENS,
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+        signal: AbortSignal.timeout(effectiveTimeoutMs),
+      });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.log(
+      `[task-draft] mode=${input.mode} attempt=${attempt} FAIL=fetch_error protocol=${protocol} url=${cfg.url} fullUrl=${fetchUrl} model=${cfg.model} error=${JSON.stringify(msg)}`,
+    );
     return { ok: false, error: `LLM request failed: ${msg}` };
   }
 
+  // 每次上游返回都打 HTTP 状态（成功/失败都记录，便于定位路径拼错 / 401 / 上游 502 等）
+  console.log(
+    `[task-draft] mode=${input.mode} attempt=${attempt} HTTP status=${resp.status} protocol=${protocol} url=${cfg.url} fullUrl=${fetchUrl} model=${cfg.model}`,
+  );
+
   if (!resp.ok) {
+    let errBodyPreview = "";
+    try {
+      const errText = await resp.text();
+      errBodyPreview = errText.length > 500 ? `${errText.slice(0, 500)}...[truncated]` : errText;
+    } catch {
+      errBodyPreview = "[read body failed]";
+    }
     console.log(
-      `[task-draft] mode=${input.mode} attempt=${attempt} FAIL=http_status status=${resp.status}`,
+      `[task-draft] mode=${input.mode} attempt=${attempt} FAIL=http_status status=${resp.status} protocol=${protocol} url=${cfg.url} fullUrl=${fetchUrl} model=${cfg.model} body=${JSON.stringify(errBodyPreview)}`,
     );
     return { ok: false, error: `LLM upstream ${resp.status}` };
   }
 
-  let payload: unknown;
-  try {
-    payload = await resp.json();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `LLM response not JSON: ${msg}` };
+  let finishReason = "unknown";
+  let completionTokens = -1;
+  let content: string | undefined;
+
+  if (protocol === "openai") {
+    // 流式：读 SSE 文本，累积 delta.content + 最后 finish_reason / usage
+    const sse = await parseOpenAiStream(resp);
+    if (sse === null) {
+      return { ok: false, error: "LLM stream response unreadable" };
+    }
+    content = sse.content;
+    finishReason = sse.finishReason;
+    completionTokens = sse.completionTokens;
+  } else if (protocol === "anthropic") {
+    // Anthropic 上游同样只支持 SSE（copilot 尤其如此）。读事件流，累积
+    // content_block_delta.delta.text_delta.text；stop_reason / output_tokens 走
+    // message_delta 事件的 usage 字段。
+    const sse = await parseAnthropicStream(resp);
+    if (sse === null) {
+      return { ok: false, error: "LLM stream response unreadable" };
+    }
+    content = sse.content;
+    finishReason = sse.finishReason;
+    completionTokens = sse.completionTokens;
+  } else {
+    // responses：copilot 上游同样强制 SSE。累积 response.output_text.delta 事件的 delta；
+    // status / usage.output_tokens 走 response.completed 事件。
+    const sse = await parseResponsesStream(resp);
+    if (sse === null) {
+      return { ok: false, error: "LLM stream response unreadable" };
+    }
+    content = sse.content;
+    finishReason = sse.finishReason;
+    completionTokens = sse.completionTokens;
   }
 
-  // 观测：finish_reason + usage.completion_tokens。三种典型值：
-  //   - "stop"          正常完成
-  //   - "length"        触到 max_tokens 被截断 → 需要扩大 max_tokens
-  //   - "content_filter" 触发安全策略 → prompt/context 有问题
-  //   - null            上游没吐（多半是空对象场景）
-  const finishReason =
-    (payload as { choices?: Array<{ finish_reason?: string | null }> }).choices?.[0]
-      ?.finish_reason ?? "unknown";
-  const usage = (payload as { usage?: { completion_tokens?: number; total_tokens?: number } })
-    .usage;
-  const completionTokens = usage?.completion_tokens ?? -1;
-
-  const choices = (payload as { choices?: Array<{ message?: { content?: string } }> }).choices;
-  if (!Array.isArray(choices) || choices.length === 0) {
-    return { ok: false, error: "LLM response has no choices" };
-  }
-  const content = choices[0]?.message?.content;
+  // 三个协议分支 content 为空时都已提前 return，到这里 content 一定非空
   if (typeof content !== "string" || content.length === 0) {
     return { ok: false, error: "LLM response content empty" };
   }
 
-  // 观测公共字段（每条 FAIL 日志都会带这三个，方便一眼看出根因）
-  const obs = `attempt=${attempt} finish_reason=${finishReason} completion_tokens=${completionTokens}`;
+  // 观测公共字段（每条 FAIL 日志都会带这些，方便一眼看出根因）
+  const obs = `attempt=${attempt} protocol=${protocol} finish_reason=${finishReason} completion_tokens=${completionTokens}`;
 
   // 三级兜底：直接 parse → markdown fence → 括号平衡扫描
   const parsed = extractJsonObject(content);
@@ -629,4 +785,279 @@ function previewObj(obj: Record<string, unknown>): string {
   } catch {
     return "[unserializable]";
   }
+}
+
+/**
+ * 解析 OpenAI chat/completions 的 SSE 流式响应。
+ *
+ * copilot 上游只支持 stream:true，返回 `text/event-stream`，每行形如
+ * `data: {...}`，末尾 `data: [DONE]`。这里累积所有 `choices[].delta.content`
+ * 片段拼成完整正文，并记录最后一个非空 finish_reason，以及
+ * stream_options.include_usage=true 时末尾 usage chunk 的 completion_tokens。
+ *
+ * 返回 null 表示流读取失败（body 读不到 / 无有效 content）。
+ */
+async function parseOpenAiStream(resp: Response): Promise<{
+  content: string;
+  finishReason: string;
+  completionTokens: number;
+} | null> {
+  let text: string;
+  try {
+    text = await resp.text();
+  } catch {
+    return null;
+  }
+
+  const parts: string[] = [];
+  let finishReason = "unknown";
+  let completionTokens = -1;
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line.startsWith("data:")) continue;
+    const dataStr = line.slice(5).trim();
+    if (!dataStr || dataStr === "[DONE]") continue;
+
+    let evt: Record<string, unknown>;
+    try {
+      evt = JSON.parse(dataStr) as Record<string, unknown>;
+    } catch {
+      continue; // keep-alive / 半包等，忽略
+    }
+
+    const choices = evt.choices;
+    if (Array.isArray(choices) && choices.length > 0) {
+      const first = choices[0] as Record<string, unknown>;
+      if (first.finish_reason && typeof first.finish_reason === "string") {
+        finishReason = first.finish_reason;
+      }
+      const delta = first.delta as Record<string, unknown> | undefined;
+      const deltaContent = delta?.content;
+      if (typeof deltaContent === "string" && deltaContent.length > 0) {
+        parts.push(deltaContent);
+      }
+    }
+
+    const usage = evt.usage as Record<string, unknown> | undefined;
+    if (usage && typeof usage.completion_tokens === "number") {
+      completionTokens = usage.completion_tokens;
+    }
+  }
+
+  const content = parts.join("");
+  if (content.length === 0) return null;
+  return { content, finishReason, completionTokens };
+}
+
+/**
+ * 解析 Anthropic Messages API 的 SSE 流式响应。
+ *
+ * copilot 上游对 /v1/messages 强制返 SSE（`text/event-stream`），格式：
+ *   event: message_start
+ *   data: {"type":"message_start", "message":{...,"usage":{"input_tokens":N,"output_tokens":M}}}
+ *
+ *   event: content_block_start
+ *   data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+ *
+ *   event: content_block_delta
+ *   data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"..."}}
+ *
+ *   event: message_delta
+ *   data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}
+ *
+ *   event: message_stop
+ *   data: {"type":"message_stop"}
+ *
+ * 提取：
+ *   - content = 所有 content_block_delta.delta.text_delta.text 顺序拼接
+ *   - finishReason = message_delta.delta.stop_reason（若无则 unknown）
+ *   - completionTokens = message_delta.usage.output_tokens
+ *     （若上游把 output_tokens 塞在 message_start.message.usage 里也接住，取最后一次覆盖）
+ *
+ * 与 parseOpenAiStream 一致：忽略 `event:` 行、忽略 keep-alive/半包 JSON、
+ * 忽略非 text_delta 的 delta（如 input_json_delta 用于 tool_use，本场景不需要）。
+ *
+ * 返回 null 表示：body 读不到 / 累积到最后 content 为空（无 text_delta）。
+ */
+async function parseAnthropicStream(resp: Response): Promise<{
+  content: string;
+  finishReason: string;
+  completionTokens: number;
+} | null> {
+  let text: string;
+  try {
+    text = await resp.text();
+  } catch {
+    return null;
+  }
+
+  const parts: string[] = [];
+  let finishReason = "unknown";
+  let completionTokens = -1;
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    // 只关心 `data:` 行；`event:` 行仅用于分隔事件，不含负载
+    if (!line.startsWith("data:")) continue;
+    const dataStr = line.slice(5).trim();
+    if (!dataStr) continue;
+
+    let evt: Record<string, unknown>;
+    try {
+      evt = JSON.parse(dataStr) as Record<string, unknown>;
+    } catch {
+      continue; // keep-alive / 半包等，忽略
+    }
+
+    const evtType = evt.type;
+
+    // 1) content_block_delta：累积文本
+    if (evtType === "content_block_delta") {
+      const delta = evt.delta as Record<string, unknown> | undefined;
+      if (delta && delta.type === "text_delta" && typeof delta.text === "string" && delta.text.length > 0) {
+        parts.push(delta.text);
+      }
+      continue;
+    }
+
+    // 2) message_delta：拿 stop_reason + output_tokens
+    if (evtType === "message_delta") {
+      const delta = evt.delta as Record<string, unknown> | undefined;
+      if (delta && typeof delta.stop_reason === "string") {
+        finishReason = delta.stop_reason;
+      }
+      const usage = evt.usage as Record<string, unknown> | undefined;
+      if (usage && typeof usage.output_tokens === "number") {
+        completionTokens = usage.output_tokens;
+      }
+      continue;
+    }
+
+    // 3) message_start：有些上游会把 output_tokens 塞在这里（可能为 0/1，先接住兜底）
+    if (evtType === "message_start") {
+      const message = evt.message as Record<string, unknown> | undefined;
+      const usage = message?.usage as Record<string, unknown> | undefined;
+      if (usage && typeof usage.output_tokens === "number" && completionTokens < 0) {
+        completionTokens = usage.output_tokens;
+      }
+      continue;
+    }
+    // 其余 event（content_block_start / content_block_stop / message_stop / ping）无需处理
+  }
+
+  const content = parts.join("");
+  if (content.length === 0) return null;
+  return { content, finishReason, completionTokens };
+}
+
+/**
+ * 解析 OpenAI Responses API 的 SSE 流式响应。
+ *
+ * copilot 上游对 /responses 强制返 SSE（`text/event-stream`）。事件流格式（
+ * 见 https://platform.openai.com/docs/api-reference/responses-streaming）：
+ *
+ *   event: response.created
+ *   data: {"type":"response.created","response":{"id":"resp_x","status":"in_progress",...}}
+ *
+ *   event: response.output_item.added
+ *   data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message",...}}
+ *
+ *   event: response.content_part.added
+ *   data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text",...}}
+ *
+ *   event: response.output_text.delta
+ *   data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"..."}
+ *
+ *   event: response.output_text.done
+ *   data: {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"完整文本"}
+ *
+ *   event: response.completed
+ *   data: {"type":"response.completed","response":{"status":"completed","usage":{"output_tokens":42},...}}
+ *
+ * 提取：
+ *   - content = 所有 response.output_text.delta.delta 顺序拼接
+ *     （fallback：若无 delta 事件但有 response.output_text.done，直接用 done.text）
+ *   - finishReason = response.completed.response.status（"completed" / "incomplete" 等）
+ *   - completionTokens = response.completed.response.usage.output_tokens
+ *
+ * 忽略 event: 分隔行 / 半包 JSON / 其它未识别事件（如 response.in_progress、
+ * response.output_item.done、response.reasoning_summary_* 等）。
+ *
+ * 返回 null 表示：body 读不到 / 累积到最后 content 为空。
+ */
+async function parseResponsesStream(resp: Response): Promise<{
+  content: string;
+  finishReason: string;
+  completionTokens: number;
+} | null> {
+  let text: string;
+  try {
+    text = await resp.text();
+  } catch {
+    return null;
+  }
+
+  const parts: string[] = [];
+  // 兜底：若上游不发 delta 而只发一次 output_text.done（罕见但按规范允许），
+  // 保留最后一次 done.text 作为 fallback。
+  let doneText: string | null = null;
+  let finishReason = "unknown";
+  let completionTokens = -1;
+
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line.startsWith("data:")) continue;
+    const dataStr = line.slice(5).trim();
+    if (!dataStr) continue;
+
+    let evt: Record<string, unknown>;
+    try {
+      evt = JSON.parse(dataStr) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    const evtType = evt.type;
+
+    // 1) response.output_text.delta：主路径，累积增量文本
+    if (evtType === "response.output_text.delta") {
+      const delta = evt.delta;
+      if (typeof delta === "string" && delta.length > 0) {
+        parts.push(delta);
+      }
+      continue;
+    }
+
+    // 2) response.output_text.done：fallback，拿完整 text（当无 delta 时兜底用）
+    if (evtType === "response.output_text.done") {
+      const t = evt.text;
+      if (typeof t === "string" && t.length > 0) {
+        doneText = t;
+      }
+      continue;
+    }
+
+    // 3) response.completed：拿最终 status / usage
+    if (evtType === "response.completed") {
+      const response = evt.response as Record<string, unknown> | undefined;
+      if (response) {
+        if (typeof response.status === "string") {
+          finishReason = response.status;
+        }
+        const usage = response.usage as Record<string, unknown> | undefined;
+        if (usage && typeof usage.output_tokens === "number") {
+          completionTokens = usage.output_tokens;
+        }
+      }
+      continue;
+    }
+    // 其余事件（response.created / response.in_progress / response.output_item.* /
+    // response.content_part.* / response.reasoning_summary_* / ping 等）无需处理
+  }
+
+  // 优先用 delta 拼接结果；delta 全无时才回落到 done.text
+  const content = parts.length > 0 ? parts.join("") : (doneText ?? "");
+  if (content.length === 0) return null;
+  return { content, finishReason, completionTokens };
 }

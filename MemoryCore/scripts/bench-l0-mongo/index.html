@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MongoDB L0 一亿条消息压测报告</title>
+<style>
+  :root {
+    --bg: #131313;
+    --panel: #191919;
+    --line: #2a2a2a;
+    --line2: #383838;
+    --fg: #e8e8e8;
+    --fg2: #a8a8a8;
+    --fg3: #767676;
+    --accent: #4a9eff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 36px 28px 96px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0 0 10px; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 18px; font-weight: 600; margin: 0 0 6px;
+    padding-top: 8px; letter-spacing: -0.005em;
+  }
+  h3 { font-size: 14px; font-weight: 600; margin: 22px 0 8px; color: var(--fg); }
+  p { margin: 0 0 10px; }
+  section { margin-top: 44px; }
+  .sub { color: var(--fg2); margin-bottom: 18px; }
+  code {
+    font-family: var(--mono); font-size: 0.9em;
+    background: #232323; border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 5px; color: #d6d6d6;
+  }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 0; }
+  .pill {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--line2); color: var(--fg2);
+  }
+  .pill.on { background: var(--accent); border-color: var(--accent); color: #0b0b0b; font-weight: 600; }
+  .verdict {
+    border-left: 2px solid var(--accent); padding: 2px 0 2px 14px; margin: 22px 0 0;
+  }
+  .verdict b { color: var(--fg); }
+  .stats { display: flex; gap: 34px; flex-wrap: wrap; align-items: flex-end; margin: 4px 0 22px; }
+  .stat .v { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; }
+  .stat .l { font-size: 12px; color: var(--fg3); margin-top: 3px; }
+  .stat .v.ok { color: var(--ok); }
+  .stat .v.bad { color: var(--bad); }
+  .stat .v.info { color: var(--accent); }
+  .arrow { font-size: 20px; color: var(--fg3); padding-bottom: 12px; }
+  figure { margin: 0 0 6px; }
+  figcaption { font-size: 12px; color: var(--fg3); margin-top: 8px; line-height: 1.6; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0 6px; font-size: 13px; }
+  th, td { padding: 7px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+  th { color: var(--fg3); font-weight: 500; font-size: 12px; white-space: nowrap;
+       border-bottom: 1px solid var(--line2); }
+  td.n, th.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  th.n { font-family: inherit; }
+  tbody tr:hover { background: #1c1c1c; }
+  tr.hi td { background: rgba(63,185,80,0.07); }
+  tr.hi td:first-child { box-shadow: inset 2px 0 0 var(--ok); }
+  tr.warn td { background: rgba(210,153,34,0.07); }
+  tr.warn td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
+  tr.bad td { background: rgba(248,81,73,0.07); }
+  tr.bad td:first-child { box-shadow: inset 2px 0 0 var(--bad); }
+  .note {
+    border: 1px solid var(--line2); border-radius: 6px; padding: 13px 15px; margin: 18px 0 0;
+    background: var(--panel);
+  }
+  .note .t { font-weight: 600; margin-bottom: 5px; }
+  .note.info { border-left: 2px solid var(--accent); }
+  .note.ok { border-left: 2px solid var(--ok); }
+  .note.warn { border-left: 2px solid var(--warn); }
+  .note.bad { border-left: 2px solid var(--bad); }
+  .note p:last-child { margin-bottom: 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 20px; }
+  .card { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  .card .hd {
+    font-size: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center; color: var(--fg2);
+  }
+  .card .hd b { color: var(--fg); font-weight: 600; }
+  .card .bd { padding: 13px 14px; font-size: 13px; color: var(--fg2); }
+  .card .bd table { margin: 10px 0 0; font-size: 12px; }
+  .card .bd th, .card .bd td { padding: 5px 8px; }
+  .tag { font-size: 11px; border: 1px solid var(--line2); border-radius: 999px; padding: 1px 8px; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 0; font-size: 12px; color: var(--fg2); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px;
+              vertical-align: -1px; }
+  .meta { color: var(--fg3); font-size: 12px; margin-top: 40px; padding-top: 16px;
+          border-top: 1px solid var(--line); }
+  a { color: var(--accent); }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>MongoDB L0 一亿条消息压测报告</h1>
+<p class="sub">
+  实例 <code>28.79.181.33:7026</code>（跨地域，RTT 39ms）· 集合 <code>l0_bench_prod2_s100m</code>
+  · 写入 2026-08-26 → 08-28
+</p>
+<div class="pills">
+  <span class="pill on">100,000,000 条已写入</span>
+  <span class="pill">0 写入错误</span>
+  <span class="pill">$search 索引 READY</span>
+  <span class="pill">数据 48.79G / 索引 12.20G</span>
+</div>
+
+<div class="verdict">
+  <p><b>结论：串行数字全部被 39ms 的跨地域 RTT 主导，不代表数据库能力。</b></p>
+  <p style="color:var(--fg2)">
+    单条插入串行只有 23.6/s，但服务端实际只花 1.9ms —— 其余 39ms 是网络往返。把并发提上去把 RTT 摊掉之后，
+    单条插入能压到 <b>2,184/s</b>（92 倍），查询能压到 <b>940/s</b>（40 倍）。
+    真正的瓶颈只有两个：一亿量级下的索引维护成本（写），和 mongot 的并发处理能力（BM25 查询）。
+  </p>
+</div>
+
+<!-- ── 一、单条插入并发天花板 ───────────────────────────────────── -->
+<section>
+  <h2>一、单条插入的并发天花板</h2>
+  <p class="sub">
+    每次只插 1 条文档（<code>batch=1</code>），在空集合上把并发从 1 扫到 256。
+    这是「单跳最高能压到多少」的直接答案。
+  </p>
+
+  <div class="stats">
+    <div class="stat"><div class="v">23.62/s</div><div class="l">串行（并发=1）</div></div>
+    <div class="arrow">&rarr;</div>
+    <div class="stat"><div class="v ok">2,184</div><div class="l">并发 256 峰值（docs/s）</div></div>
+    <div class="stat"><div class="v info">92&times;</div><div class="l">并发带来的提升</div></div>
+    <div class="stat"><div class="v">39ms</div><div class="l">固定 RTT / 每次操作</div></div>
+  </div>
+
+  <figure><div id="c-write-sweep"></div>
+    <figcaption>
+      图：单条插入吞吐 vs 客户端并发数。X 轴 = 并发（在途请求数），Y 轴 = 写入吞吐（docs/s）。
+      数据源：probe-ceiling 实测，空集合，每档 8000 条，maxPoolSize=300。
+    </figcaption>
+  </figure>
+
+  <table id="t-write-sweep"></table>
+
+  <div class="note info">
+    <div class="t">为什么并发到 32 之前延迟几乎不变</div>
+    <p>
+      并发 1→32 期间 p50 稳定在 42ms 左右（就是 RTT + 1.9ms 服务端时间），吞吐却线性涨了 28 倍 ——
+      说明这段完全是在填满链路、把空等的 RTT 利用起来，服务端根本没被压到。
+      到 64 以后 p50 才开始爬升（50 → 100ms），才是服务端真正开始排队。
+      换句话说：<b>跨地域只增加了每次操作的固定延迟，并没有限制总吞吐上限。</b>
+    </p>
+  </div>
+</section>
+
+<!-- ── 二、batch 影响 ───────────────────────────────────────────── -->
+<section>
+  <h2>二、批量大小的影响</h2>
+  <p class="sub">
+    并发固定为 8，只改 <code>insertMany</code> 的批大小。这解释了为什么生产代码要走
+    <code>insertL0Batch</code> 而不是逐条 upsert。
+  </p>
+
+  <figure><div id="c-batch"></div>
+    <figcaption>
+      图：写入吞吐 vs 批大小。X 轴 = 每次 insertMany 的文档数，Y 轴 = 写入吞吐（docs/s）。
+      数据源：Phase A 实测（2026-08-25），并发 8，空集合。
+    </figcaption>
+  </figure>
+
+  <table id="t-batch"></table>
+
+  <div class="note warn">
+    <div class="t">batch=1000 吞吐最高，但尾延迟代价很大</div>
+    <p>
+      batch 从 100 提到 1000，吞吐只涨 34%（14.7k → 19.8k），单批 p99 却从 148ms 涨到 889ms。
+      对在线写入路径来说 batch=100 是更好的折中；batch=1000 只适合离线灌数据。
+    </p>
+  </div>
+</section>
+
+<!-- ── 三、100M 曲线 ────────────────────────────────────────────── -->
+<section>
+  <h2>三、一亿条持续写入曲线</h2>
+  <p class="sub">
+    <code>batch=1000</code>、并发 8，连续写满 1 亿条。累计写入时间 21.3 小时，0 错误。
+  </p>
+
+  <div class="stats">
+    <div class="stat"><div class="v">21.3h</div><div class="l">累计写入时长</div></div>
+    <div class="stat"><div class="v ok">24,245</div><div class="l">峰值瞬时（docs/s）</div></div>
+    <div class="stat"><div class="v">1,305</div><div class="l">全程平均（docs/s）</div></div>
+    <div class="stat"><div class="v bad">~930</div><div class="l">末段瞬时（docs/s）</div></div>
+  </div>
+
+  <figure><div id="c-curve"></div>
+    <figcaption>
+      图：一亿条写入过程中的吞吐衰减。X 轴 = 累计写入时长（小时），Y 轴 = 写入吞吐（docs/s）。
+      两条曲线分别为每分钟瞬时速率与自开始起的累计平均。1276 个采样点降采样为 48 点（分桶取均值）。
+      数据源：<a href="reports/l0-bench-100M-FULL-merged.json">l0-bench-100M-FULL-merged.json</a>。
+    </figcaption>
+  </figure>
+
+  <h3>前 20 分钟（逐分钟）</h3>
+  <figure><div id="c-first20"></div>
+    <figcaption>
+      图：起步阶段的吞吐塌陷。X 轴 = 写入开始后的分钟数，Y 轴 = 瞬时写入吞吐（docs/s）。
+      第 1 分钟 24,245/s（空集合），到第 20 分钟（约 840 万条）已降到 4,750/s。
+    </figcaption>
+  </figure>
+
+  <div class="note bad">
+    <div class="t">衰减来自索引维护，不是网络</div>
+    <p>
+      吞吐从 24,245/s 一路掉到 ~930/s，是 25 倍的衰减，而 RTT 全程不变。
+      写到 9,500 万条时单批（1000 条）延迟 p50 已经达到 8,295ms、p99 12,175ms —— 每插一批要等 8 秒多。
+      同一时刻在服务端 <code>currentOp</code> 上能看到 8 个 insertMany 并行执行，说明客户端并发是打满的，
+      慢的是服务端：B 树 + mongot 倒排索引在 1 亿文档规模下的维护开销。
+    </p>
+  </div>
+</section>
+
+<!-- ── 四、查询 ─────────────────────────────────────────────────── -->
+<section>
+  <h2>四、查询性能：串行 vs 并发</h2>
+  <p class="sub">
+    全部跑在写满 1 亿条的集合上，驱动的是生产代码里的同一批 <code>MongoMemoryStore</code> 方法。
+    串行列就是之前报告里的数字，并发列是把并发扫到 1→384 之后的实测峰值。
+  </p>
+
+  <figure><div id="c-query"></div>
+    <figcaption>
+      图：各业务查询的串行 QPS 与并发峰值 QPS 对比。X 轴 = 查询类型，Y 轴 = 吞吐（QPS）。
+      数据源：probe-query-ceiling 实测，1 亿文档集合，每档 300–400 次迭代。
+    </figcaption>
+  </figure>
+
+  <table id="t-query"></table>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="hd"><b>searchL0Fts — BM25 是唯一压不上去的读路径</b><span class="tag">封顶于并发 32</span></div>
+      <div class="bd">
+        并发 16 时已达 207/s，之后再加并发吞吐不再增长，延迟却线性劣化（p50 63 → 399ms）。
+        这是典型的服务端饱和信号：mongot 在 1 亿文档上大约只能吃下 215 QPS。
+        <table id="t-fts"></table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="hd"><b>paginated — 唯一需要改的查询</b><span class="tag">最差</span></div>
+      <div class="bd">
+        <p>
+          并发到 8 就见顶（52 QPS），继续加并发吞吐反而下降、延迟爆炸（并发 128 时 p50 已达 3,093ms）。
+          原因是它在翻页之外还跑了一次 <code>countDocuments</code>，在 1 亿文档的租户维度上是重扫描。
+        </p>
+        <p style="color:var(--fg);font-weight:600;margin-top:12px">建议</p>
+        <p>
+          把总数拆出去：改用估算值、缓存计数，或前端改成「加载更多」不显示总页数。
+          仅这一处就能把翻页从 52 QPS 拉到和 sessionReplay 同一量级（~650 QPS）。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 五、存储 ─────────────────────────────────────────────────── -->
+<section>
+  <h2>五、存储占用</h2>
+  <div class="stats" style="margin-top:14px">
+    <div class="stat"><div class="v">48.79G</div><div class="l">dataSize（逻辑）</div></div>
+    <div class="stat"><div class="v ok">20.20G</div><div class="l">storageSize（压缩后）</div></div>
+    <div class="stat"><div class="v">12.20G</div><div class="l">indexSize</div></div>
+    <div class="stat"><div class="v">523 B</div><div class="l">平均文档大小</div></div>
+    <div class="stat"><div class="v info">2.4&times;</div><div class="l">压缩比</div></div>
+  </div>
+  <p style="color:var(--fg3);font-size:12px">
+    数据源：1 亿条写入完成后的 <code>db.stats()</code>。索引含 B 树索引与 mongot <code>$search</code> 索引。
+  </p>
+  <p style="color:var(--fg2)">
+    按线性外推，5000 万条对话（1 亿条消息）落盘约 <b>32.4G</b>（20.2G 数据 + 12.2G 索引），量级完全可控。
+  </p>
+</section>
+
+<!-- ── 六、结论 ─────────────────────────────────────────────────── -->
+<section>
+  <h2>六、结论与注意事项</h2>
+
+  <div class="note ok">
+    <div class="t">能扛住</div>
+    <p>
+      1 亿条消息写入完成、0 错误，$search 索引可用，业务查询在并发下均达到数百 QPS。存量规模本身不是问题。
+    </p>
+  </div>
+
+  <h3>回答「单跳最高能压到多高」</h3>
+  <p style="color:var(--fg2)">
+    单条插入（batch=1）在空集合上并发 256 时达 <b>2,184 docs/s</b>，是串行 23.6/s 的 92 倍。
+    串行数字之所以那么低，纯粹是因为每次操作要等一个 39ms 的往返，而服务端只用了 1.9ms。
+    只要客户端愿意开并发，跨地域这件事对总吞吐几乎没有影响。
+  </p>
+
+  <h3>真正的两个上限</h3>
+  <p style="color:var(--fg2)">
+    写侧：随集合增长而衰减的索引维护成本（24k/s → 930/s）。灌历史数据时应考虑先建集合、
+    后建 <code>$search</code> 索引，避免边写边维护倒排索引。<br />
+    读侧：mongot 的 BM25 查询在 215 QPS 封顶，是所有读路径里最低的一条，需要按这个数做容量规划。
+  </p>
+
+  <h3>口径说明</h3>
+  <table id="t-caveats"></table>
+</section>
+
+<div class="meta">
+  原始数据：<a href="reports/index.json">reports/index.json</a> ·
+  交互式 JSON 查看器：<a href="view-report.html">view-report.html</a><br />
+  全部数字均为实测，无估算。压测脚本：<code>MemoryCore/scripts/bench-l0-mongo/</code>
+</div>
+
+</div>
+
+<script>
+// ── 数据（与 canvas 报告同源） ────────────────────────────────────
+const WRITE_SWEEP = [
+  { conc: 1, qps: 23.62, p50: 40.9, p99: 51.15 },
+  { conc: 4, qps: 90.75, p50: 42.42, p99: 65.75 },
+  { conc: 8, qps: 179.15, p50: 42.52, p99: 75.91 },
+  { conc: 16, qps: 362.52, p50: 42.13, p99: 72.98 },
+  { conc: 32, qps: 662.37, p50: 43.04, p99: 94.25 },
+  { conc: 64, qps: 1105.5, p50: 50.85, p99: 179.35 },
+  { conc: 128, qps: 1686.18, p50: 65.07, p99: 206.03 },
+  { conc: 256, qps: 2183.58, p50: 100.72, p99: 228.71 },
+];
+const BATCH_SWEEP = [
+  { batch: 1, docs: 100000, qps: 170.23, p50: 44.64, p99: 79.8, wallS: 587.4 },
+  { batch: 100, docs: 1000000, qps: 14738.29, p50: 49.01, p99: 147.96, wallS: 67.8 },
+  { batch: 1000, docs: 1000000, qps: 19759.48, p50: 385.37, p99: 889.09, wallS: 50.6 },
+];
+const CURVE = [[0.45,6511,6511],[0.9,4329,5420],[1.35,2202,4348],[1.8,1362,3601],[2.25,1571,3195],[2.7,1363,2890],[3.15,1462,2686],[3.6,1446,2531],[4.05,1383,2403],[4.5,1257,2289],[4.95,1209,2191],[5.4,1220,2110],[5.85,1212,2041],[6.3,1166,1978],[6.75,1151,1923],[7.2,1156,1875],[7.65,1130,1831],[8.1,1106,1791],[8.55,1096,1754],[9,1096,1721],[9.45,1091,1691],[9.9,1067,1663],[10.35,1048,1636],[10.8,1065,1612],[11.25,1047,1590],[11.7,1029,1568],[12.15,1020,1548],[12.6,1024,1529],[13.05,1032,1512],[13.5,1010,1495],[13.95,998,1479],[14.4,994,1464],[14.85,1005,1450],[15.3,1001,1437],[15.75,981,1424],[16.2,981,1412],[16.65,972,1400],[17.1,980,1389],[17.55,968,1378],[18,971,1368],[18.45,962,1358],[18.9,956,1348],[19.35,953,1340],[19.8,980,1331],[20.25,964,1323],[20.7,951,1315],[21.15,952,1307],[21.27,931,1305]];
+const FIRST20 = [24245,12200,9600,5600,4033,5233,7050,6878,6300,5583,6700,5700,5383,5133,5317,5333,5517,5183,4983,4750];
+const QUERY = [
+  { name: "queryL0ForL1", desc: "L1 抽取：session_key + 时序，limit 50", serial: 23.8, peak: 939.84, conc: 128, p50: 73.94, p99: 214.16 },
+  { name: "searchL0FtsEmpty", desc: "BM25 无命中路径", serial: 21.54, peak: 732.56, conc: 64, p50: 48.15, p99: 71.05 },
+  { name: "sessionReplay", desc: "会话回放：按 session_id 翻页", serial: 10.99, peak: 650.04, conc: 384, p50: 357.11, p99: 480.26 },
+  { name: "countL0", desc: "租户维度计数", serial: 17.91, peak: 291.69, conc: 16, p50: 49.5, p99: 99.98 },
+  { name: "searchL0Fts", desc: "BM25 命中（mongot），limit 5", serial: 15.13, peak: 215.27, conc: 32, p50: 116.21, p99: 340.14 },
+  { name: "paginated", desc: "租户翻页 + countDocuments", serial: 6.62, peak: 52.2, conc: 8, p50: 138.56, p99: 283.83 },
+];
+const FTS_SWEEP = [
+  { conc: 1, qps: 15.13, p50: 62.44, p99: 115.82 },
+  { conc: 4, qps: 63.75, p50: 61.52, p99: 74.29 },
+  { conc: 8, qps: 115.64, p50: 61.63, p99: 221.95 },
+  { conc: 16, qps: 207.32, p50: 63.53, p99: 273.97 },
+  { conc: 32, qps: 215.27, p50: 116.21, p99: 340.14 },
+  { conc: 64, qps: 181.52, p50: 221.13, p99: 593.26 },
+  { conc: 128, qps: 205.46, p50: 398.91, p99: 945.32 },
+];
+const CAVEATS = [
+  ["单条插入扫描的集合状态", "空集合（l0_bench_ceiling），因此 2,184/s 是干净集合上的上限，不含 1 亿量级的索引维护开销"],
+  ["batch 对比的集合状态", "同为空集合，并发固定 8，未做并发扫描，所以 19.8k/s 不是 batch=1000 的绝对上限"],
+  ["100M 曲线的两段拼接", "第一段 0→92.3M 因会话回收被中断，第二段 --resume 续写 92.3M→100M；X 轴为累计写入时间，两段之间的空闲不计入"],
+  ["批延迟 p50/p99", "取自第二段（约 92M–100M 区间），代表满量级下的写入延迟，不代表全程平均"],
+  ["查询并发峰值", "单客户端进程实测；服务端是否还有余量未验证（可用多进程客户端进一步确认）"],
+  ["语料多样性", "消息文本从 100 条模板循环生成，BM25 的词项基数低于真实流量，实际搜索延迟可能更高"],
+];
+
+// ── 图表（手写 SVG，无外部依赖） ──────────────────────────────────
+const C = { accent: "#4a9eff", ok: "#3fb950", warn: "#d29922", bad: "#f85149", mute: "#6e7681" };
+const fmt = (n) => Math.round(n).toLocaleString("en-US");
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+/** 取一个「好看」的轴上限。 */
+function niceMax(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
+}
+function yAxis(m, innerW, innerH, yMax, W) {
+  let s = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (yMax / 4) * i;
+    const y = m.t + innerH - (v / yMax) * innerH;
+    s += `<line x1="${m.l}" y1="${y}" x2="${W - m.r}" y2="${y}" stroke="#2a2a2a"/>`;
+    s += `<text x="${m.l - 9}" y="${y + 4}" text-anchor="end" fill="#767676" font-size="11">${fmt(v)}</text>`;
+  }
+  return s;
+}
+
+/** 分组柱状图。series: [{name, data, color}] */
+function barChart(el, { categories, series, height = 250, suffix = "", showValues = true }) {
+  const W = 1080, H = height, m = { l: 66, r: 18, t: 14, b: series.length > 1 ? 50 : 38 };
+  const innerW = W - m.l - m.r, innerH = H - m.t - m.b;
+  const yMax = niceMax(Math.max(...series.flatMap((s) => s.data)));
+  const groupW = innerW / categories.length;
+  const barW = Math.min(48, (groupW * 0.62) / series.length);
+  let bars = "";
+  categories.forEach((_, ci) => {
+    const cx = m.l + groupW * ci + groupW / 2;
+    const total = barW * series.length;
+    series.forEach((s, si) => {
+      const v = s.data[ci];
+      const h = (v / yMax) * innerH;
+      const x = cx - total / 2 + barW * si;
+      const y = m.t + innerH - h;
+      bars += `<rect x="${x}" y="${y}" width="${barW - 3}" height="${Math.max(h, 1)}" fill="${s.color}" rx="2"><title>${esc(s.name)} · ${esc(categories[ci])}: ${fmt(v)}${suffix}</title></rect>`;
+      if (showValues)
+        bars += `<text x="${x + (barW - 3) / 2}" y="${y - 5}" text-anchor="middle" fill="#a8a8a8" font-size="10.5" font-family="ui-monospace,monospace">${fmt(v)}</text>`;
+    });
+    bars += `<text x="${cx}" y="${H - m.b + 17}" text-anchor="middle" fill="#a8a8a8" font-size="11.5">${esc(categories[ci])}</text>`;
+  });
+  const legend =
+    series.length > 1
+      ? `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>`
+      : "";
+  el.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block">
+       ${yAxis(m, innerW, innerH, yMax, W)}${bars}
+     </svg>` + legend;
+}
+
+/** 折线/面积图。series: [{name, data, color, fill}] */
+function lineChart(el, { categories, series, height = 280, xEvery = 1, xLabel = (s) => s }) {
+  const W = 1080, H = height, m = { l: 66, r: 18, t: 14, b: 48 };
+  const innerW = W - m.l - m.r, innerH = H - m.t - m.b;
+  const yMax = niceMax(Math.max(...series.flatMap((s) => s.data)));
+  const n = categories.length;
+  const sx = (i) => m.l + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
+  const sy = (v) => m.t + innerH - (v / yMax) * innerH;
+  let paths = "";
+  series.forEach((s) => {
+    const pts = s.data.map((v, i) => `${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join(" ");
+    if (s.fill) {
+      paths += `<path d="M ${sx(0)},${sy(0)} L ${s.data.map((v, i) => `${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join(" L ")} L ${sx(n - 1)},${sy(0)} Z" fill="${s.color}" fill-opacity="0.13"/>`;
+    }
+    paths += `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linejoin="round"${s.dash ? ' stroke-dasharray="5 4"' : ""}/>`;
+    s.data.forEach((v, i) => {
+      paths += `<circle cx="${sx(i).toFixed(1)}" cy="${sy(v).toFixed(1)}" r="2.6" fill="${s.color}"><title>${esc(s.name)} · ${esc(categories[i])}: ${fmt(v)}</title></circle>`;
+    });
+  });
+  let xl = "";
+  categories.forEach((c, i) => {
+    if (i % xEvery !== 0 && i !== n - 1) return;
+    xl += `<text x="${sx(i).toFixed(1)}" y="${H - m.b + 18}" text-anchor="middle" fill="#a8a8a8" font-size="11">${esc(xLabel(c))}</text>`;
+  });
+  const legend =
+    series.length > 1
+      ? `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>`
+      : "";
+  el.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block">
+       ${yAxis(m, innerW, innerH, yMax, W)}${paths}${xl}
+     </svg>` + legend;
+}
+
+function table(el, headers, rows, numCols = [], rowCls = []) {
+  el.innerHTML =
+    `<thead><tr>${headers.map((h, i) => `<th class="${numCols.includes(i) ? "n" : ""}">${h}</th>`).join("")}</tr></thead>` +
+    `<tbody>${rows
+      .map(
+        (r, ri) =>
+          `<tr class="${rowCls[ri] || ""}">${r
+            .map((c, i) => `<td class="${numCols.includes(i) ? "n" : ""}">${c}</td>`)
+            .join("")}</tr>`,
+      )
+      .join("")}</tbody>`;
+}
+
+// ── 渲染 ────────────────────────────────────────────────────────
+barChart(document.getElementById("c-write-sweep"), {
+  categories: WRITE_SWEEP.map((s) => String(s.conc)),
+  series: [{ name: "写入吞吐 (docs/s)", data: WRITE_SWEEP.map((s) => s.qps), color: C.ok }],
+  suffix: " /s",
+});
+table(
+  document.getElementById("t-write-sweep"),
+  ["并发", "吞吐 (docs/s)", "p50 (ms)", "p99 (ms)", "相对串行"],
+  WRITE_SWEEP.map((s) => [
+    s.conc, fmt(s.qps), s.p50, s.p99, (s.qps / WRITE_SWEEP[0].qps).toFixed(1) + "×",
+  ]),
+  [0, 1, 2, 3, 4],
+  WRITE_SWEEP.map((s) => (s.conc === 256 ? "hi" : "")),
+);
+
+barChart(document.getElementById("c-batch"), {
+  categories: BATCH_SWEEP.map((b) => "batch=" + b.batch),
+  series: [{ name: "写入吞吐 (docs/s)", data: BATCH_SWEEP.map((b) => b.qps), color: C.accent }],
+  suffix: " /s",
+  height: 230,
+});
+table(
+  document.getElementById("t-batch"),
+  ["批大小", "文档数", "吞吐 (docs/s)", "批延迟 p50", "批延迟 p99", "耗时"],
+  BATCH_SWEEP.map((b) => [
+    b.batch, b.docs.toLocaleString("en-US"), fmt(b.qps), b.p50 + "ms", b.p99 + "ms", b.wallS + "s",
+  ]),
+  [0, 1, 2, 3, 4, 5],
+  ["", "", "hi"],
+);
+
+lineChart(document.getElementById("c-curve"), {
+  categories: CURVE.map((p) => p[0] + "h"),
+  series: [
+    { name: "瞬时吞吐 (docs/s)", data: CURVE.map((p) => p[1]), color: C.accent, fill: true },
+    { name: "累计平均 (docs/s)", data: CURVE.map((p) => p[2]), color: C.mute, dash: true },
+  ],
+  xEvery: 4,
+});
+lineChart(document.getElementById("c-first20"), {
+  categories: FIRST20.map((_, i) => i + 1 + "m"),
+  series: [{ name: "瞬时吞吐 (docs/s)", data: FIRST20, color: C.accent, fill: true }],
+  height: 210,
+  xEvery: 2,
+});
+
+barChart(document.getElementById("c-query"), {
+  categories: QUERY.map((q) => q.name),
+  series: [
+    { name: "串行 QPS（并发=1）", data: QUERY.map((q) => q.serial), color: C.mute },
+    { name: "并发峰值 QPS", data: QUERY.map((q) => q.peak), color: C.ok },
+  ],
+  height: 290,
+  suffix: " /s",
+});
+table(
+  document.getElementById("t-query"),
+  ["查询", "含义", "串行 QPS", "并发峰值 QPS", "最优并发", "提升", "峰值 p50", "峰值 p99"],
+  QUERY.map((q) => [
+    `<code>${q.name}</code>`, q.desc, q.serial, fmt(q.peak), q.conc,
+    (q.peak / q.serial).toFixed(1) + "×", q.p50 + "ms", q.p99 + "ms",
+  ]),
+  [2, 3, 4, 5, 6, 7],
+  QUERY.map((q) => (q.name === "paginated" ? "bad" : q.name === "searchL0Fts" ? "warn" : "")),
+);
+
+table(
+  document.getElementById("t-fts"),
+  ["并发", "QPS", "p50", "p99"],
+  FTS_SWEEP.map((s) => [s.conc, s.qps, s.p50 + "ms", s.p99 + "ms"]),
+  [0, 1, 2, 3],
+  FTS_SWEEP.map((s) => (s.conc === 32 ? "warn" : "")),
+);
+
+table(document.getElementById("t-caveats"), ["项", "说明"], CAVEATS);
+</script>
+</body>
+</html>

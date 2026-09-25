@@ -5,11 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { Logger } from '../infra/logger.js';
 import type { MetaEnvelope } from './envelope.js';
 import { mapHttpStatusFromEnvelopeCode } from './envelope.js';
-import {
-  META_HEADER_REQUEST_ID,
-  META_HEADER_SERVICE_ID,
-  META_HEADER_USER_KEY,
-} from './headers.js';
+import { META_HEADER_REQUEST_ID, META_HEADER_SERVICE_ID, META_HEADER_USER_KEY } from './headers.js';
 
 export { mapHttpStatusFromEnvelopeCode };
 
@@ -118,15 +114,17 @@ function logRemoteMeta(
 }
 
 /**
- * POST 记忆内核元数据路径，返回完整信封。
+ * 请求记忆内核路径，返回完整信封。
  * - mode=envelope：业务 code≠0 不抛错（透明代理用）
  * - mode=data：code≠0 抛 KernelFetchError
+ * - method：默认 POST；GET 用于 /v3/analytics/config、spaces 等只读端点（不携带 body）
  */
 export async function executeMetaFetch<T>(
   cfg: MetaFetchConfig,
   path: string,
   body: unknown,
   mode: 'data' | 'envelope',
+  method: 'POST' | 'GET' = 'POST',
 ): Promise<T> {
   const base = cfg.endpoint.replace(/\/+$/, '');
   const timeoutMs = cfg.timeoutMs ?? 15_000;
@@ -150,9 +148,9 @@ export async function executeMetaFetch<T>(
     if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
     if (cfg.userKey) headers[META_HEADER_USER_KEY] = cfg.userKey;
     const resp = await fetch(`${base}${path}`, {
-      method: 'POST',
+      method,
       headers,
-      body: JSON.stringify(body ?? {}),
+      ...(method === 'POST' ? { body: JSON.stringify(body ?? {}) } : {}),
       signal: ctrl.signal,
     });
     const env = (await resp.json().catch(() => null)) as RawEnvelope<unknown> | null;
