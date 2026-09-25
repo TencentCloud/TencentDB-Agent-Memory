@@ -15,6 +15,7 @@ import { SqliteKnowledgeStore, type IKnowledgeStore } from "./store/index.js";
 import { WikiService, type WikiWorker } from "./store/index.js";
 import { CodeGraphService, type CodeGraphWorker } from "./store/index.js";
 import { BuildQueue } from "./store/index.js";
+import { createGitCredentialStore, type IGitCredentialStore } from "./store/index.js";
 import {
   createLlmBindingStore,
   resolveLlmConfig,
@@ -22,8 +23,14 @@ import {
 } from "./store/llm-binding-store.js";
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
 import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
-import { SourceFetcherRegistry } from "./source-fetcher/index.js";
+import {
+  SourceFetcherRegistry,
+  cleanupStaleGitAuthDirs,
+  stripSimpleGitDebug,
+} from "./source-fetcher/index.js";
 import { createLogger } from "./logger.js";
+import { sanitizeGitError } from "./utils/sanitize.js";
+import { deriveSecretKey, SecretKeyError } from "./crypto/secret-box.js";
 import type { LlmConfig } from "./config.js";
 import { getGlobalLlmConcurrency } from "./config.js";
 import { buildProgressFn } from "./callback.js";
@@ -47,6 +54,14 @@ export interface KnowledgeModuleConfig {
   wikiWorker?: WikiWorker;
   /** Optional: externally injected code worker (for testing). */
   codeWorker?: CodeGraphWorker;
+  /** Git 私有仓库接入的安全配置（来自 loadConfig().git）。 */
+  git?: {
+    allowedHosts?: readonly string[];
+    strictHostKey?: boolean;
+    knownHostsPath?: string;
+  };
+  /** MUST 为 KNOWLEDGE_SECRET_KEY；为空则托管凭证不可用（公开仓库路径不受影响）。 */
+  secretKey?: string;
 }
 
 export interface CodeGraphInstancePool {
@@ -64,6 +79,20 @@ export interface KnowledgeModule {
   instancePool: CodeGraphInstancePool;
   /** Per-instance LLM routing binding (proxy/byo), keyed by service_id. */
   llmBindingStore: ILlmBindingStore;
+  /** 托管 git 凭证（私有仓库接入）。 */
+  credentialStore: IGitCredentialStore;
+  /** 凭证子系统是否可用（KNOWLEDGE_SECRET_KEY 已配置且通过强度校验）。 */
+  credentialsConfigured: boolean;
+  /** 复用 fetcher 的协议 / SSRF / host 白名单校验（/source-credential/test 用）。 */
+  validateRepoUrl: (repoUrl: string) => void;
+  /** 用指定凭证探测远端连通性（/source-credential/test 用）。 */
+  probeRemote: (input: {
+    repoUrl: string;
+    branch?: string;
+    credentialId: string;
+    serviceId: string;
+    teamId: string;
+  }) => Promise<{ ok: boolean; error?: string; note?: string }>;
   /** 定时自动同步调度器（需显式 start/stop）。 */
   autoSyncScheduler: AutoSyncScheduler;
   /** 定时自动同步的解析后配置（挂载 admin 路由时透出）。 */
@@ -81,6 +110,22 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // Store
   const store = new SqliteKnowledgeStore(db);
+
+  // Managed git credentials (private repos). 主密钥不合法 → 只把「凭证能力」
+  // 标记为不可用（凭证接口 503），**不影响**公开仓库路径，所以这里不抛。
+  const credentialStore = createGitCredentialStore({ db, secretKey: config.secretKey ?? "" });
+  const credentialsConfigured = (() => {
+    try {
+      deriveSecretKey(config.secretKey ?? "");
+      return true;
+    } catch (err) {
+      if (err instanceof SecretKeyError) {
+        log.warn(`[source-credential] disabled: ${err.message}`);
+        return false;
+      }
+      throw err;
+    }
+  })();
 
   // Per-instance LLM routing binding + resolver (proxy/byo → effective LlmConfig).
   // No binding → global LLM_MODE decides: 'custom' uses global LLM_* direct,
@@ -113,14 +158,44 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   const wikiMgr = createWikiSourceManager(join(dataDir, "_wiki_engines"));
 
   // Source fetcher registry (git/local/ftp routing + security validation)
-  const fetcherRegistry = new SourceFetcherRegistry();
+  const fetcherRegistry = new SourceFetcherRegistry({
+    allowedHosts: config.git?.allowedHosts ?? [],
+    strictHostKey: config.git?.strictHostKey,
+    knownHostsPath: config.git?.knownHostsPath,
+    onWarn: (msg) => log.warn(`[source-fetcher] ${msg}`),
+  });
+
+  // 兜底清扫上次进程被 SIGKILL 时残留的临时私钥目录（正常路径由 finally 清理）。
+  const staleDirs = cleanupStaleGitAuthDirs();
+  if (staleDirs > 0) {
+    log.info(`[source-fetcher] removed ${staleDirs} stale git auth temp dir(s)`);
+  }
+
+  // simple-git 的 debug 日志会打印 spawn options（含注入的 Authorization 头）→ 主动剥离。
+  if (stripSimpleGitDebug()) {
+    log.warn("[source-fetcher] removed 'simple-git' from DEBUG to avoid leaking git credentials into logs");
+  }
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
+    const { dir, repoUrl, branch, codeGraphId, credentialId, serviceId, teamId, setInternalStatus } = ctx;
 
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
+    // Resolve protocol-specific fetcher (validates url: protocol whitelist + host
+    // whitelist + SSRF blocklist + embedded-credential rejection).
     const fetcher = fetcherRegistry.resolve(repoUrl);
+
+    // 每次 build 现解析凭证材料（不缓存明文）；解析失败必须显式抛出，
+    // 不能静默降级成匿名访问 —— 那样私有仓库会以一个含糊的认证错误失败。
+    const auth = credentialId
+      ? credentialStore.resolveMaterial(serviceId, teamId, repoUrl, credentialId)
+      : null;
+    if (credentialId && !auth) {
+      throw new Error(
+        `git credential ${credentialId} is unavailable for ${repoUrl} ` +
+          `(deleted, or not bound to this host)`,
+      );
+    }
+    const fetchOptions = auth ? { auth } : undefined;
 
     const isExistingRepo = existsSync(join(dir, ".git"));
     let didIncrementalSync = false;
@@ -129,7 +204,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (isExistingRepo) {
       try {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(repoUrl, branch, dir);
+        const res = await fetcher.sync(repoUrl, branch, dir, fetchOptions);
         version = res.version;
 
         setInternalStatus("indexing");
@@ -142,7 +217,10 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
         didIncrementalSync = true;
       } catch (err) {
         log.warn(
-          `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
+          `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${sanitizeGitError(
+            err instanceof Error ? err.message : String(err),
+            auth ? secretsOf(auth) : undefined,
+          )}`,
         );
         try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
       }
@@ -151,7 +229,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (!didIncrementalSync) {
       mkdirSync(dir, { recursive: true });
       setInternalStatus("cloning");
-      const res = await fetcher.fetch(repoUrl, branch, dir);
+      const res = await fetcher.fetch(repoUrl, branch, dir, fetchOptions);
       version = res.version;
 
       setInternalStatus("indexing");
@@ -293,5 +371,41 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   });
   autoSyncScheduler.start();
 
-  return { wikiService, cgService, wikiMgr, store, instancePool, llmBindingStore, autoSyncScheduler, autoSyncConfig };
+  // ── 凭证校验出口（/source-credential/test 用）──
+  // 复用 fetcher 自身的协议 / SSRF / host 白名单判定，避免 KS 与 fetcher 两套规则漂移。
+  const validateRepoUrl = (repoUrl: string): void => {
+    fetcherRegistry.resolve(repoUrl)?.validate(repoUrl);
+  };
+
+  const probeRemote: KnowledgeModule["probeRemote"] = async ({ repoUrl, branch, credentialId, serviceId, teamId }) => {
+    const fetcher = fetcherRegistry.resolve(repoUrl);
+    if (!fetcher.probe) return { ok: false, error: `source type ${fetcher.supportedType} does not support probing` };
+
+    // 解析失败（已删除 / host 不匹配）必须显式失败，不能降级成匿名探测 ——
+    // 否则会把「凭证不可用」报成「仓库可达」。
+    const auth = credentialStore.resolveMaterial(serviceId, teamId, repoUrl, credentialId);
+    if (!auth) return { ok: false, error: `git credential ${credentialId} is not usable for ${repoUrl}` };
+
+    return fetcher.probe(repoUrl, branch, { auth });
+  };
+
+  return {
+    wikiService,
+    cgService,
+    wikiMgr,
+    store,
+    instancePool,
+    llmBindingStore,
+    credentialStore,
+    credentialsConfigured,
+    validateRepoUrl,
+    probeRemote,
+    autoSyncScheduler,
+    autoSyncConfig,
+  };
+}
+
+/** 供日志脱敏使用的明文凭证列表（只为 replaceAll，不做他用）。 */
+function secretsOf(auth: { kind: "https_token" | "ssh_key"; token?: string; privateKey?: string }): string[] {
+  return [auth.token, auth.privateKey].filter((v): v is string => typeof v === "string" && v.length > 0);
 }

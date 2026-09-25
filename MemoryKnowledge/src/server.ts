@@ -25,6 +25,7 @@ import { createCodeGraphRoutes } from "./routes/code-graph.js";
 import { createToolsRoutes } from "./routes/tools.js";
 import { createHealthRoutes } from "./routes/health.js";
 import { createLlmBindingRoutes } from "./routes/llm-binding.js";
+import { createSourceCredentialRoutes } from "./routes/source-credential.js";
 import { createAutoSyncRoutes } from "./routes/auto-sync.js";
 import { accessLog } from "./middleware/response-envelope.js";
 import { errorHandler } from "./middleware/error-handler.js";
@@ -49,6 +50,8 @@ export function createApp() {
     db,
     llmConfig: config.llm,
     tmcCallbackUrl: config.tmcCallbackUrl,
+    git: config.git,
+    secretKey: config.secrets.secretKey,
   });
 
   // Hono app
@@ -78,6 +81,16 @@ export function createApp() {
     cgService: knowledgeModule.cgService,
     instancePool: knowledgeModule.instancePool,
     publicBaseUrl: config.publicBaseUrl,
+    credentialStore: knowledgeModule.credentialStore,
+  }));
+
+  // source-credential — 托管 git 凭证（私有仓库接入）。
+  // 管理面端点需 service key；只有 GET /status 在只读白名单里（见 middleware/auth.ts）。
+  api.route("/source-credential", createSourceCredentialRoutes({
+    credentialStore: knowledgeModule.credentialStore,
+    configured: knowledgeModule.credentialsConfigured,
+    validateRepoUrl: knowledgeModule.validateRepoUrl,
+    probeRemote: knowledgeModule.probeRemote,
   }));
 
   // tools/list + tools/call — Agent self-discovery HTTP endpoints

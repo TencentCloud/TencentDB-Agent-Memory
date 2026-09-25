@@ -16,6 +16,7 @@ import { Hono } from "hono";
 
 import type { CodeGraphService } from "../store/index.js";
 import type { SyncStatus } from "../store/index.js";
+import type { IGitCredentialStore } from "../store/index.js";
 import { executeTool as executeCodeTool } from "../engines/code/index.js";
 import { toCodeGraphToolName, CODEGRAPH_QUERY_TOOL_NAMES } from "./tools.js";
 import {
@@ -26,6 +27,7 @@ import {
   toCodeGraphDetail,
   type BatchDeleteResult,
 } from "../api-helpers.js";
+import { normalizeHost, parseGitUrl } from "../source-fetcher/git-url.js";
 import type { CodeGraphInstancePool } from "../module.js";
 
 export interface CodeGraphRouteDeps {
@@ -33,6 +35,42 @@ export interface CodeGraphRouteDeps {
   instancePool: CodeGraphInstancePool;
   /** Public base URL for service_url; should already include the API prefix (e.g. http://host:8421/v3). */
   publicBaseUrl: string;
+  /**
+   * 托管凭证 store。未装配时携带 credential_id 的请求返回 503 ——
+   * 显式失败好过静默按匿名访问（那样私有仓库会以一个含糊的认证错误失败）。
+   */
+  credentialStore?: IGitCredentialStore;
+}
+
+/** create / update-meta 传入的 credential_id 校验失败。路由层统一映射为 404。 */
+class CredentialBindingError extends Error {}
+
+/**
+ * 校验 create / update-meta 传入的 credential_id（两处校验强度必须完全一致，
+ * 否则「先建再换绑」就是一条绕过 host 绑定的越权通道）。
+ *
+ * 两条必须同时成立（详见 routes/source-credential.ts 的「token 外发原语」说明）：
+ *   1. 凭证存在于同一 service_id + team_id（跨租户一律 404，不泄露存在性）
+ *   2. 凭证的 host 与 repo_url 的 host **严格相等**
+ */
+function assertCredentialBindsRepo(
+  store: IGitCredentialStore,
+  serviceId: string,
+  teamId: string,
+  repoUrl: string,
+  credentialId: string,
+): void {
+  const row = store.get(serviceId, teamId, credentialId);
+  if (!row) throw new CredentialBindingError("source credential not found");
+
+  const parsed = parseGitUrl(repoUrl);
+  if (!parsed) throw new CredentialBindingError("invalid repo_url");
+
+  if (row.host !== normalizeHost(parsed.host)) {
+    throw new CredentialBindingError(
+      `source credential ${credentialId} is bound to ${row.host} and cannot be used for ${parsed.host}`,
+    );
+  }
 }
 
 // ───────────────────────── Query Specs ─────────────────────────
@@ -175,7 +213,7 @@ function buildToolParams(
 
 export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
   const app = new Hono();
-  const { cgService, instancePool, publicBaseUrl } = deps;
+  const { cgService, instancePool, publicBaseUrl, credentialStore } = deps;
 
   // ═══════════════════ Management ═══════════════════
 
@@ -190,6 +228,23 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
 
+    // 凭证绑定（私有仓库）。缺省（字段未传）= 不改动既有绑定 / 新建则匿名。
+    // 注意：绝不能把「未传」收成 `null` 再交给 create —— 幂等命中时会把已有
+    // credential_id 抹掉。显式解绑走 /update-meta。
+    let credentialId: string | undefined;
+    if (body.credential_id !== undefined && body.credential_id !== null) {
+      if (!isValidIdSegment(body.credential_id)) {
+        return c.json(wrapError(400, "credential_id must be a valid id"), 400);
+      }
+      if (!credentialStore) return c.json(wrapError(503, credentialUnavailable()), 503);
+      try {
+        assertCredentialBindsRepo(credentialStore, idFields.service_id, idFields.team_id, repoUrl, body.credential_id);
+      } catch (err) {
+        return c.json(wrapError(404, err instanceof Error ? err.message : String(err)), 404);
+      }
+      credentialId = body.credential_id;
+    }
+
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
@@ -200,6 +255,7 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       user_id: idFields.user_id,
       agent_id: idFields.agent_id,
       task_id: idFields.task_id,
+      ...(credentialId !== undefined ? { credential_id: credentialId } : {}),
     });
 
     // Persist service_url (tools self-discovery base; resource selected via
@@ -248,13 +304,41 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const cgId = body.code_graph_id;
     if (!isValidIdSegment(cgId)) return c.json(wrapError(400, "code_graph_id is required"), 400);
 
-    const patch: { repo_name?: string; summary?: string | null } = {};
+    const patch: { repo_name?: string; summary?: string | null; credential_id?: string | null } = {};
     if (typeof body.repo_name === "string" && body.repo_name) patch.repo_name = body.repo_name;
     if (body.summary !== undefined) {
       patch.summary = typeof body.summary === "string" ? body.summary : null;
     }
-    if (!patch.repo_name && patch.summary === undefined) {
-      return c.json(wrapError(400, "at least one of repo_name/summary must be provided"), 400);
+
+    // 换绑/解绑凭证。校验强度与 create **完全一致** —— 否则「先建再换绑」就是
+    // 一条绕过 host 绑定的越权通道。
+    if (body.credential_id !== undefined) {
+      if (body.credential_id === null || body.credential_id === "") {
+        patch.credential_id = null;
+      } else {
+        if (!isValidIdSegment(body.credential_id)) {
+          return c.json(wrapError(400, "credential_id must be a valid id or null"), 400);
+        }
+        if (!credentialStore) return c.json(wrapError(503, credentialUnavailable()), 503);
+        const existing = cgService.getById(serviceId, cgId);
+        if (!existing) return c.json(wrapError(404, "code graph not found"), 404);
+        try {
+          assertCredentialBindsRepo(
+            credentialStore,
+            serviceId,
+            existing.team_id,
+            existing.repo_url,
+            body.credential_id,
+          );
+        } catch (err) {
+          return c.json(wrapError(404, err instanceof Error ? err.message : String(err)), 404);
+        }
+        patch.credential_id = body.credential_id;
+      }
+    }
+
+    if (patch.repo_name === undefined && patch.summary === undefined && patch.credential_id === undefined) {
+      return c.json(wrapError(400, "at least one of repo_name/summary/credential_id must be provided"), 400);
     }
 
     const updated = cgService.updateMeta(serviceId, cgId, patch);
@@ -359,4 +443,8 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
   }
 
   return app;
+}
+
+function credentialUnavailable(): string {
+  return "managed git credentials are not available on this service (KNOWLEDGE_SECRET_KEY is not configured)";
 }

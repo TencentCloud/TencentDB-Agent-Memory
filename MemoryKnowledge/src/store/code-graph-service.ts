@@ -28,6 +28,7 @@ import type {
   CountOpts,
 } from "./types.js";
 import { BuildQueue } from "./build-queue.js";
+import { sanitizeGitError } from "../utils/sanitize.js";
 
 export interface CodeGraphBuildContext {
   codeGraphId: string;
@@ -37,6 +38,12 @@ export interface CodeGraphBuildContext {
   branch: string;
   /** 该资产的本地工作目录（checkout + 索引落此）。 */
   dir: string;
+  /**
+   * 该资产绑定的 git 凭证 id（null = 匿名访问公开仓库）。
+   * worker 据此从凭证 store 解析材料；凭证的 host 已在上层与 repo_url 绑定校验过，
+   * worker 侧仍会再校验一次（resolveMaterial 内部做）。
+   */
+  credentialId: string | null;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
   setInternalStatus: (s: string) => void;
 }
@@ -93,6 +100,8 @@ export interface CreateCodeGraphParams {
   agent_id?: string;
   task_id?: string;
   visibility?: string;
+  /** 绑定的 git 凭证 id；缺省 = 匿名访问公开仓库。 */
+  credential_id?: string | null;
 }
 
 export class CodeGraphService {
@@ -126,16 +135,61 @@ export class CodeGraphService {
 
   /**
    * 幂等创建并异步建图。
-   * - 已存在（同 memory+team+repo+branch）→ 直接返回已有行，不重复建图。
+   * - 已存在（同 memory+team+repo+branch）→ 返回已有行；若本次显式传入了
+   *   与库内不同的 `credential_id`，则写入换绑（不传则保留原绑定，避免匿名
+   *   重试把私有仓凭证抹掉）。换绑后若当前不在排队/执行，会重新入队建图，
+   *   否则仅更新元数据——in-flight worker 在 runBuild 入口会重新读库内凭证。
    * - 新建 → 入库 pending + 后台建图。
    */
   create(params: CreateCodeGraphParams): { row: CodeGraphRow; existed: boolean } {
     const { row, existed } = this.store.createCodeGraph(params);
     if (!existed) {
-      this.audit(row, "create", `clone ${row.repo_url}@${row.branch}`, params.user_id);
+      // repo_url 经 stripUserInfo 兜一层：历史数据里可能存在内嵌凭证写法。
+      this.audit(row, "create", sanitizeGitError(`clone ${row.repo_url}@${row.branch}`, undefined, 0), params.user_id);
       this.enqueueBuild(row);
+      return { row, existed };
     }
-    return { row, existed };
+
+    // 幂等命中：只有调用方**显式**带了 credential_id 且与现存不同时才换绑。
+    // `undefined` = 未传（保留）；路由层不得把「未传」收成 `null` 再灌进来。
+    const incoming = params.credential_id;
+    if (incoming === undefined || incoming === row.credential_id) {
+      return { row, existed };
+    }
+
+    const updated = this.store.updateCodeGraphMeta(params.service_id, row.code_graph_id, {
+      credential_id: incoming,
+    });
+    if (!updated) return { row, existed };
+
+    this.audit(
+      updated,
+      "create",
+      sanitizeGitError(
+        `rebind credential ${incoming ?? "null"} for ${updated.repo_url}@${updated.branch}`,
+        undefined,
+        0,
+      ),
+      params.user_id,
+    );
+
+    // 已在排队/执行：只改元数据。runBuild 入口会按最新行上的 credential_id 注入。
+    if (updated.status === "pending" || updated.status === "processing") {
+      return { row: updated, existed: true };
+    }
+
+    // ready / failed：像 sync 一样重新入队，否则换绑后仍用旧匿名产物。
+    this.store.updateCodeGraphStatus(params.service_id, updated.code_graph_id, {
+      status: "pending",
+      internal_status: null,
+      sync_error: null,
+    });
+    const fresh = this.store.getCodeGraphById(params.service_id, updated.code_graph_id);
+    if (fresh) {
+      this.enqueueBuild(fresh);
+      return { row: fresh, existed: true };
+    }
+    return { row: updated, existed: true };
   }
 
   /** Persist service_url for a code-graph. Returns updated row or null. */
@@ -144,8 +198,12 @@ export class CodeGraphService {
     return this.store.getCodeGraphById(serviceId, codeGraphId);
   }
 
-  /** Update code-graph metadata (repo_name, summary). Returns updated row or null. */
-  updateMeta(serviceId: string, codeGraphId: string, patch: { repo_name?: string; summary?: string | null }): CodeGraphRow | null {
+  /** Update code-graph metadata (repo_name, summary, credential binding). Returns updated row or null. */
+  updateMeta(
+    serviceId: string,
+    codeGraphId: string,
+    patch: { repo_name?: string; summary?: string | null; credential_id?: string | null },
+  ): CodeGraphRow | null {
     return this.store.updateCodeGraphMeta(serviceId, codeGraphId, patch);
   }
 
@@ -267,6 +325,7 @@ export class CodeGraphService {
   }
 
   private enqueueBuild(row: CodeGraphRow): void {
+    // credential_id 不闭包冻结：runBuild 入口再读库，覆盖「排队期间幂等 create 换绑」。
     this.queue.enqueue(row.code_graph_id, () =>
       this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch),
     );
@@ -284,6 +343,9 @@ export class CodeGraphService {
       this.finishCancelled(serviceId, teamId, codeGraphId);
       return;
     }
+    // 以库内最新绑定为准（幂等 create / update-meta 可能在排队窗口换绑）。
+    const latest = this.store.getCodeGraphById(serviceId, codeGraphId);
+    const credentialId = latest?.credential_id ?? null;
     this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
       status: "processing",
       internal_status: "cloning",
@@ -297,6 +359,7 @@ export class CodeGraphService {
         repoUrl,
         branch,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
+        credentialId,
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),
       });
@@ -322,7 +385,10 @@ export class CodeGraphService {
       // Auto-generate summary + callback TMC
       await this.onBuildComplete(synced, "ready", null, result.stats ?? null);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const raw = err instanceof Error ? err.message : String(err);
+      // 统一脱敏：错误信息会被写进 sync_error（落库）、审计 detail、服务日志，
+      // 并经 TMC 回调外发。git 的 stderr 会原样回显 URL，历史 URL 可能内嵌凭证。
+      const msg = sanitizeGitError(raw);
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
       if (this.isDeleted(serviceId, codeGraphId)) {
         this.finishCancelled(serviceId, teamId, codeGraphId);
@@ -331,10 +397,10 @@ export class CodeGraphService {
       this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
         status: "failed",
         internal_status: null,
-        sync_error: msg.slice(0, 500),
+        sync_error: msg,
       });
       const failed = this.store.getCodeGraphById(serviceId, codeGraphId);
-      if (failed) this.audit(failed, "failed", msg.slice(0, 500));
+      if (failed) this.audit(failed, "failed", msg);
       this.logger?.warn?.(`[code-graph] ${codeGraphId} failed: ${msg}`);
 
       // Callback TMC about failure
