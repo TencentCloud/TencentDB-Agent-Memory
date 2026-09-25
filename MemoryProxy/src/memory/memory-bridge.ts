@@ -72,6 +72,12 @@ interface SessionIdFields {
    * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
    */
   composite_key?: string;
+  /**
+   * Agent source prefix (e.g. `codebuddy`, `claude-code`, `hermes`).
+   * Extracted from `composite_key` or `binding.agentSource` so that
+   * `emitBridgeRejectTelemetry` receives a non-undefined `agentSource`.
+   */
+  agent_source?: string;
 }
 
 /**
@@ -108,6 +114,7 @@ function toIdFields(
     user_key: s.user_key,
     space_id: s.space_id,
     composite_key: compositeKey,
+    agent_source: compositeKey.includes(":") ? compositeKey.split(":")[0] : undefined,
   };
 }
 
@@ -128,6 +135,7 @@ function bindingToIdFields(
     user_key: binding.userKey,
     space_id: spaceId,
     composite_key: `${agentSource}:${sessionId}`,
+    agent_source: agentSource,
   };
 }
 
