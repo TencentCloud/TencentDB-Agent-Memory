@@ -76,6 +76,47 @@ export interface L1ExtractionResult {
   lastSceneName?: string;
 }
 
+/**
+ * Raised when an L1 extraction attempt must be treated as FAILED instead of as
+ * "nothing to remember".
+ *
+ * Why this exists (#1395): a failed extraction used to be returned as
+ * `{ success: false, extractedCount: 0 }`, and the L1 runner did not consume
+ * that flag for L1 — it advanced the per-session cursor anyway. Since the cursor
+ * is the only filter for the next L0 read, the affected conversations were never
+ * re-read: dropped silently, with no retry and no operator-visible signal
+ * (the panel's "pending" is cursor-based and therefore cannot see it).
+ *
+ * Throwing instead travels the path that already exists: the pipeline task
+ * fails, the worker retries with backoff / dead-letters it, and the checkpoint
+ * cursor stays where it is — so L0 accumulates and the batch is distilled later
+ * or after an operator-triggered run.
+ *
+ * `reason` mirrors the `L1EmptyReason` taxonomy so existing dashboards keep
+ * working: `llm_error` (the LLM call failed), `no_json` / `not_array` /
+ * `parse_fail` (the response could not be understood — e.g. truncated by
+ * `max_tokens`). A genuine "nothing to remember" (`empty_scenes`) does NOT
+ * throw: it remains a successful run so the cursor can advance.
+ */
+export class L1ExtractionFailure extends Error {
+  readonly reason: L1EmptyReason;
+
+  constructor(reason: L1EmptyReason, message: string) {
+    super(message);
+    this.name = "L1ExtractionFailure";
+    this.reason = reason;
+  }
+}
+
+/** Reasons that must defer the batch (keep the cursor) instead of advancing it. */
+export const L1_DEFERRING_REASONS: ReadonlySet<L1EmptyReason> = new Set<L1EmptyReason>([
+  "llm_error",
+  "no_json",
+  "not_array",
+  "parse_fail",
+  "normalized_all_dropped",
+]);
+
 // ============================
 // Core function
 // ============================
@@ -213,7 +254,12 @@ export async function extractL1Memories(params: {
     logger?.warn?.(
       `${TAG} l1-empty reason=llm_error sessionKey=${sessionKey} msg=${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`,
     );
-    return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
+    // NOTE: this must NOT be reported as a successful empty run — the batch has
+    // to be retried, so the caller keeps the checkpoint cursor untouched (#1395).
+    throw new L1ExtractionFailure(
+      "llm_error",
+      `L1 extraction failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // Flatten all memories across scenes
@@ -251,7 +297,7 @@ export async function extractL1Memories(params: {
     //   - `earlyEmptyReason` from parseExtractionResult (parse-side signal)
     //   - `normalized_all_dropped` fallback: parse succeeded with scenes, but
     //     the type-normalization loop above rejected every entry.
-    const finalReason: L1EmptyReason | "normalized_all_dropped" =
+    const finalReason: L1EmptyReason =
       earlyEmptyReason ?? (scenes.length > 0 ? "normalized_all_dropped" : "empty_scenes");
     logger?.warn?.(
       `${TAG} l1-empty reason=${finalReason} sessionKey=${sessionKey} scenes=${scenes.length} inputMsgs=${messages.length}`,
@@ -270,6 +316,27 @@ export async function extractL1Memories(params: {
         // 静默忽略，不影响业务逻辑
       }
     }
+
+    // ── Failure vs. genuine empty (#1395) ──
+    // `empty_scenes` means the model answered properly and simply had nothing
+    // worth remembering → success, the cursor may advance.
+    // `normalized_all_dropped` also defers: the LLM DID extract content, only
+    // the type normalization rejected it — advancing here would silently drop
+    // real memories with no retry. A persistently unknown type shows up as a
+    // repeatedly deferred batch on the `l1-deferred` warn line, which ops can
+    // see and act on, instead of data vanishing.
+    // The deferring reasons mean we never got a usable answer → defer the batch
+    // (throw) so the same L0 rows are retried instead of being skipped forever.
+    if (L1_DEFERRING_REASONS.has(finalReason)) {
+      logger?.warn?.(
+        `${TAG} l1-deferred reason=${finalReason} sessionKey=${sessionKey} — batch deferred, checkpoint cursor unchanged`,
+      );
+      throw new L1ExtractionFailure(
+        finalReason,
+        `L1 extraction failed (reason=${finalReason}); batch deferred, checkpoint cursor unchanged`,
+      );
+    }
+
     return {
       success: true,
       extractedCount: 0,
@@ -549,7 +616,8 @@ export type L1EmptyReason =
   | "no_json"        // /\[[\s\S]*\]/ did not match in raw content
   | "parse_fail"     // JSON.parse threw on the extracted substring
   | "not_array"      // parse succeeded but result is not an array
-  | "empty_scenes";  // parse succeeded, array had 0 scenes OR all scenes had 0 memories
+  | "empty_scenes"   // parse succeeded, array had 0 scenes OR all scenes had 0 memories
+  | "normalized_all_dropped"; // parse succeeded with scenes, but every memory was rejected by type normalization
 
 interface ParseExtractionOutcome {
   scenes: SceneSegment[];
