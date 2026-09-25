@@ -15,7 +15,7 @@ import type { Logger } from "../../core/types.js";
 import { MetadataService, MetadataError } from "../service/metadata-service.js";
 import { extractInstanceId, normalizeInstanceIdForRoute } from "./instance.js";
 import { resolvePagination } from "./pagination.js";
-import { internalListUsersByInstanceSchema, initAdminSchema } from "./v3-meta-schemas.js";
+import { internalListUsersByInstanceSchema, initAdminSchema, instanceUpstreamListSchema } from "./v3-meta-schemas.js";
 import {
   createMetaApiTraceContext,
   logMetaApiEntry,
@@ -68,6 +68,10 @@ const routeTable: Record<string, InternalHandler> = {
         user_ids: d.user_ids,
       });
     },
+  ),
+  [`${V3_INTERNAL_PREFIX}/instance-upstream/list`]: bind(
+    instanceUpstreamListSchema,
+    async (d, svc) => svc.listInstanceUpstreamConfigsInternal(d),
   ),
 };
 

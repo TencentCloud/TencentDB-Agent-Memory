@@ -6,6 +6,7 @@ import {
 } from '../../kernel/headers.js';
 import type { PanelDeps } from '../../panel-deps.js';
 import { respondControlError } from '../envelope.js';
+import { readCookie } from '../../auth/cookies.js';
 const AUTH_VERIFY = 'auth/verify';
 
 export interface PanelMetaContext {
@@ -13,6 +14,8 @@ export interface PanelMetaContext {
   gatewayEndpoint: string;
   gatewayApiKey: string;
   userKey?: string;
+  authMethod?: 'user_key' | 'idp';
+  userId?: string;
 }
 
 declare module 'hono' {
@@ -47,7 +50,14 @@ export function validatePanelMetaHeaders(deps: PanelDeps) {
     }
 
     const omitUserKey = action === AUTH_VERIFY;
-    const userKey = c.req.header(META_HEADER_USER_KEY)?.trim();
+    const headerUserKey = c.req.header(META_HEADER_USER_KEY)?.trim();
+    const idpSession = !headerUserKey && !omitUserKey
+      ? deps.auth.resolveSession(
+          entry.instance_id,
+          readCookie(c.req.header('cookie'), deps.config.auth.sessionCookieName),
+        )
+      : null;
+    const userKey = headerUserKey || idpSession?.userKey;
     if (!omitUserKey && !userKey) {
       return respondControlError(c, 400, 'MISSING_USER_KEY');
     }
@@ -57,6 +67,8 @@ export function validatePanelMetaHeaders(deps: PanelDeps) {
       gatewayEndpoint: entry.gateway_endpoint,
       gatewayApiKey: entry.api_key,
       userKey: omitUserKey ? undefined : userKey,
+      authMethod: headerUserKey ? 'user_key' : idpSession ? 'idp' : undefined,
+      userId: idpSession?.coreUserId,
     });
     await next();
   });

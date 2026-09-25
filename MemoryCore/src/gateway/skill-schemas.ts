@@ -114,7 +114,6 @@ export const patchRequestSchema = z.object({
 export const deleteRequestSchema = z.object({
   ...idFieldsShape,
   skill_id: z.string().min(1),
-  expected_version: z.number().int().min(1),
 }).superRefine(refineAgentNeedsTeam);
 
 export const getRequestSchema = z.object({
