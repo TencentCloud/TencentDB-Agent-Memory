@@ -28,9 +28,9 @@ import { ZodError, z } from "zod";
 import { errorEnvelope, successEnvelope } from "./v2-router.js";
 import type { ApiResponseEnvelope, V2AuthContext } from "./v2-schemas.js";
 import type { IMemoryStore, MemoryContentClearResult } from "../core/store/types.js";
-import type { StorageAdapter } from "../core/storage/types.js";
-import { createScopedStorageAdapter } from "../core/storage/adapter.js";
-import { buildProfileIsolationScope } from "../core/profile/profile-sync.js";
+import { StoragePaths } from "../core/storage/types.js";
+import { createScopedStorageAdapter, scopeProfileStorageView, type StorageAdapter } from "../core/storage/adapter.js";
+import { buildProfileIsolationScope } from "../core/profile/profile-scope.js";
 import { MetadataError, type MetadataService } from "../metadata/service/metadata-service.js";
 import type { Logger } from "../core/types.js";
 
@@ -146,6 +146,23 @@ async function clearProfileStorage(
   // 作用域前缀与 v2-router scopedProfileStorage 保持完全一致，
   // 否则会清到错误的目录（或清不到）。
   const scopePrefix = `profiles/${encodeURIComponent(scope)}/`;
+
+  // rowfs：行即文件。空前缀在组合后端只路由到回退文件侧（删不到行，还会
+  // 误删实例级 JSONL），所以这里显式按两类 profile 键删除；行同时也会被
+  // store.clearMemoryContent 删除，两侧都是幂等的。
+  if (baseStorage.getBackend().type === "rowfs") {
+    const storage = scopeProfileStorageView(baseStorage, scopePrefix, { teamId: team, agentId: agent });
+    let removedRows = 0;
+    try {
+      const entries = await storage.readdir(StoragePaths.sceneBlocksDir);
+      removedRows = entries.filter((e) => !e.isDirectory).length;
+      if (await storage.exists(StoragePaths.persona)) removedRows += 1;
+    } catch { /* 作用域尚不存在 → 视为已清空 */ }
+    await storage.rmdir(StoragePaths.sceneBlocksDir);
+    await storage.unlink(StoragePaths.persona);
+    return removedRows;
+  }
+
   const storage = createScopedStorageAdapter(baseStorage, scopePrefix);
 
   // 先数再删：deleteByPrefix 的返回值各 backend 语义不完全统一，

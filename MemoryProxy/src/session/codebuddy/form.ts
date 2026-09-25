@@ -31,13 +31,12 @@ export const ASSET_CONFIRM_NO = "否，本次不关联";
 export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
 
 /**
- * 附在每步 question 文末的通用备注：告诉用户"选择跳过 = 本次 session init 跳过、不注入任何团队资产"。
+ * 附在每步 question 文末的通用备注。
  * CodeBuddy 是按钮式表单，唯一的跳过入口在最初的 asset_confirm 步骤选「否」；
  * 进入 team / agent_task 后没有按钮内跳过，需要下一次会话重新选择。
- * 文案与 claude-code/workbuddy/codex/dsh 五端统一；后续步骤额外提示回退路径。
+ * 文案与 claude-code/workbuddy/codex/dsh 五端统一。
  */
-const SKIP_HINT_ASSET_CONFIRM = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产）';
-const SKIP_HINT_LATER_STAGE = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产；本步骤无跳过按钮，请在最初的「是否关联团队资产」步骤选择「否」）';
+const SKIP_HINT = '（请选择最匹配的选项，当前暂不支持自定义输入。若选择跳过，本次 Session 将不注入团队资产）';
 
 /** Returns true if the given string contains any CodeBuddy form title marker. */
 export function containsFormTitle(s: string): boolean {
@@ -133,7 +132,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
   if (stage === "asset_confirm") {
     questions.push({
       id: "asset_confirm",
-      question: "本次对话是否要关联团队资产？" + SKIP_HINT_ASSET_CONFIRM,
+      question: "本次对话是否要关联团队资产？" + SKIP_HINT,
       options: [ASSET_CONFIRM_YES, ASSET_CONFIRM_NO],
       multiSelect: false,
     });
@@ -143,7 +142,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
   if (stage === "team") {
     questions.push({
       id: "team",
-      question: "请选择本次会话所属的 Team：" + SKIP_HINT_LATER_STAGE,
+      question: "请选择本次会话所属的 Team：" + SKIP_HINT,
       options: [
         ...teams.map((t) => `${t.team_name} (${t.team_id.slice(-8)})`),
       ],
@@ -168,7 +167,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
     ];
     questions.push({
       id: "agent",
-      question: `请选择「${team.team_name}」下要使用的 Agent：` + SKIP_HINT_LATER_STAGE,
+      question: `请选择「${team.team_name}」下要使用的 Agent：` + SKIP_HINT,
       options: agentLabelOptions,
       multiSelect: false,
     });
@@ -187,7 +186,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
     if (taskOptions.length > 0) {
       questions.push({
         id: "task",
-        question: `请选择「${team.team_name}」下关联的任务：` + SKIP_HINT_LATER_STAGE,
+        question: `请选择「${team.team_name}」下关联的任务：` + SKIP_HINT,
         options: taskOptions,
         multiSelect: false,
       });

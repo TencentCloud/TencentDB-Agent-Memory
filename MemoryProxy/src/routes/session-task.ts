@@ -28,7 +28,7 @@ import { getSessionStore } from "../session/store.js";
 import type { SessionInitState, SessionInfo } from "../session/types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { TaskEntity } from "../meta/client.js";
-import { generateTaskDraft } from "../mem-command/task-draft-generator.js";
+import { generateTaskDraft, type TaskDraftConfig } from "../mem-command/task-draft-generator.js";
 import {
   clearPending,
   getPending,
@@ -40,7 +40,25 @@ import {
 
 // ── 输入 / 输出类型 ────────────────────────────────────────────────────────
 
-export interface CreateTaskFromSessionInput {
+/**
+ * taskDraft LLM 主模型跟随（方案 D）：客户当次请求实际使用的模型 / 上游 / 密钥。
+ * handler 已按 per-agent 规则解析好，session-task 只做透传给 task-draft-generator。
+ *
+ * 三字段任意一个缺失 → resolveTaskDraftConfig 会返 "not configured"，
+ * 命令层拼错误文案给用户（不做兜底，也不再依赖 config.memCommand.taskDraft）。
+ */
+export interface TaskDraftUpstream {
+  /** 客户端当次请求的模型（body.model 归一化后的真实 model_id）。 */
+  model?: string;
+  /** per-agent 解析后的上游 base url（不含具体 endpoint）。 */
+  upstreamUrl?: string;
+  /** 上游 API 家族，决定 generator 请求形状。 */
+  protocol?: "openai" | "anthropic" | "responses";
+  /** 转发时用的 apiKey（客户端透传的 user key）。 */
+  apiKey?: string;
+}
+
+export interface CreateTaskFromSessionInput extends TaskDraftUpstream {
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -57,7 +75,7 @@ export interface CreateTaskFromSessionInput {
   lockedTitle?: string;
 }
 
-export interface UpdateTaskFromSessionInput {
+export interface UpdateTaskFromSessionInput extends TaskDraftUpstream {
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -166,7 +184,7 @@ function resolveSession(
     return { error: "session missing team_id/user_id (initialization incomplete)" };
   }
 
-  // "本次不关联任务" 走 config.sessionInit.defaultTaskId（虚拟值，kernel 不存在），
+  // "暂时跳过" 走 config.sessionInit.defaultTaskId（虚拟值，kernel 不存在），
   // 视为**未绑真实 task** —— 允许 create-task，禁止 update-task（后者会用 no-task 分支返错）。
   const rawTaskId = sessionInfo.task_id;
   const defaultTaskId = config.sessionInit?.defaultTaskId;
@@ -178,12 +196,71 @@ function resolveSession(
 
 // ── 内部：检查并取 taskDraft 配置 ─────────────────────────────────────────
 
-function resolveTaskDraftConfig(config: ProxyConfig) {
-  const draft = config.memCommand?.taskDraft;
-  if (!draft || !draft.enabled) {
-    return { error: "task_draft is not configured (see config.memCommand.taskDraft)" } as const;
+const DEFAULT_TASK_DRAFT_TIMEOUT_MS = 20000;
+
+/**
+ * 方案 D（含环境变量覆盖扩展）：taskDraft LLM 配置解析。
+ *
+ * ## 优先级（从高到低）
+ *
+ *   1. **环境变量覆盖**（ops escape hatch）
+ *      - MEMORY_LLM_PROTOCOL → 覆盖 protocol
+ *      - MEMORY_LLM_API_KEY  → 覆盖 apiKey
+ *      - MEMORY_LLM_BASE_URL → 覆盖 upstreamUrl
+ *      - MEMORY_LLM_MODEL    → 覆盖 model
+ *
+ *   2. **客户端请求**（原 Plan D "follow-the-client" 行为）
+ *      - upstream.protocol / upstream.apiKey / upstream.upstreamUrl / upstream.model
+ *
+ *   3. **缺失即报错**
+ *      - model / upstreamUrl / apiKey 三者任一缺失 → 返回 { error: "..." }
+ *      - protocol 缺失时不报错，由 task-draft-generator 使用默认协议
+ *
+ * ## 使用场景
+ *
+ * 部署在 OpenAI 兼容网关（如 rcaaitoken）后面时，客户端（如 Claude Code）
+ * 传递的 protocol=anthropic 与上游实际协议不匹配，导致 401。
+ * 通过环境变量覆盖，运维可在部署时修正，无需改代码。
+ *
+ * ## 测试
+ *
+ * 见 src/routes/__tests__/session-task.test.ts
+ */
+export function resolveTaskDraftConfig(
+  upstream: TaskDraftUpstream,
+): { cfg: TaskDraftConfig } | { error: string } {
+  const { model, upstreamUrl, protocol, apiKey } = upstream;
+
+  // 环境变量优先覆盖：允许运维层面完全接管 task-draft 的 LLM 配置
+  const envProtocol = process.env.MEMORY_LLM_PROTOCOL as "openai" | "anthropic" | "responses" | undefined;
+  const envApiKey = process.env.MEMORY_LLM_API_KEY;
+  const envBaseUrl = process.env.MEMORY_LLM_BASE_URL;
+  const envModel = process.env.MEMORY_LLM_MODEL;
+
+  const effectiveModel = envModel || model;
+  const effectiveUrl = envBaseUrl || upstreamUrl;
+  const effectiveApiKey = envApiKey || apiKey;
+  const effectiveProtocol = envProtocol || protocol;
+
+  if (!effectiveModel || !effectiveUrl || !effectiveApiKey) {
+    return {
+      error:
+        "task_draft is not configured (missing model / upstream url / apiKey). " +
+        "Set MEMORY_LLM_MODEL, MEMORY_LLM_BASE_URL, MEMORY_LLM_API_KEY env vars, " +
+        "or ensure handler passes them in the request.",
+    };
   }
-  return { cfg: draft } as const;
+
+  return {
+    cfg: {
+      enabled: true,
+      model: effectiveModel,
+      url: effectiveUrl,
+      apiKey: effectiveApiKey,
+      timeoutMs: DEFAULT_TASK_DRAFT_TIMEOUT_MS,
+      ...(effectiveProtocol ? { protocol: effectiveProtocol } : {}),
+    },
+  };
 }
 
 function getClientFromResolved(resolved: ResolvedSession, config: ProxyConfig, fallbackSpaceId: string) {
@@ -257,7 +334,7 @@ export async function createTaskFromSession(
   const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
   if ("error" in resolved) return { success: false, error: resolved.error };
 
-  const draftCfg = resolveTaskDraftConfig(input.config);
+  const draftCfg = resolveTaskDraftConfig(input);
   if ("error" in draftCfg) return { success: false, error: draftCfg.error };
 
   // Step 1: LLM 生成草稿（lockedTitle 情况下只出 description）
@@ -388,14 +465,14 @@ export async function updateTaskFromSession(
     return {
       success: false,
       error:
-        "no task bound to this session (session is in \"本次不关联任务\" mode or task_id missing); " +
+        "no task bound to this session (session is in \"暂时跳过\" mode or task_id missing); " +
         "use mem:create-task to create and bind a new task first",
     };
   }
 
   // 无参数分支才需要 LLM 配置
   if (!input.directDescription) {
-    const draftCfg = resolveTaskDraftConfig(input.config);
+    const draftCfg = resolveTaskDraftConfig(input);
     if ("error" in draftCfg) return { success: false, error: draftCfg.error };
   }
 
@@ -426,7 +503,7 @@ export async function updateTaskFromSession(
     // 有参数：直接替换，不调 LLM，也不出 status 建议
     newDescription = input.directDescription;
   } else {
-    const draftCfg = resolveTaskDraftConfig(input.config);
+    const draftCfg = resolveTaskDraftConfig(input);
     if ("error" in draftCfg) return { success: false, error: draftCfg.error };
 
     const draft = await generateTaskDraft(draftCfg.cfg, {

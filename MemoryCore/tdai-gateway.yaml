@@ -150,6 +150,14 @@ observability:
     publicKey: "${LANGFUSE_PUBLIC_KEY:-}"
     secretKey: "${LANGFUSE_SECRET_KEY:-}"
 
+# ── Analytics 查询模块（读取 Proxy 侧 ClickHouse 埋点）──
+# 本地开发默认关闭；需要调试 analytics 接口时打开并配指向 proxy CH 的地址。
+analytics:
+  clickhouse:
+    enabled: false
+    # endpoint: "http://localhost:8123"
+    # database: "context_proxy"
+
 # ── 元数据模块（v3 store + 密码 pepper；敏感项 ${} 由 .env 注入）──
 metadata:
   maxUsersPerInstance: 500

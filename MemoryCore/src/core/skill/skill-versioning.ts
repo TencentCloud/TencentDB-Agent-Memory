@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 
 import type { ISkillStore } from "./skill-store.interface.js";
-import { IdempotentNoOpError, SkillStoreError } from "./skill-store.js";
+import { IdempotentNoOpError, SkillStoreError } from "./skill-store.interface.js";
 import { SkillResourceStore, SkillResourceError, type SkillResourcePayload } from "./skill-resource-store.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import type { SkillManifestEntry, Skill } from "./types.js";

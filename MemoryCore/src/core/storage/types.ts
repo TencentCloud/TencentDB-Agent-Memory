@@ -95,8 +95,16 @@ export interface ListResult {
  * which swallows errors); callers should handle appropriately.
  */
 export interface IStorageBackend {
-  /** Storage backend identifier for logging/diagnostics. */
-  readonly type: "local" | "cos";
+  /**
+   * Storage backend identifier for logging/diagnostics.
+   *
+   * `rowfs` is the row-view filesystem (ProfileRowStorageBackend): a file
+   * surface over L2/L3 profile rows held in an IMemoryStore.
+   * `mongofs` is the general-purpose file backend over MongoDB documents
+   * (MongoFSBackend): arbitrary keys chunked into the instance's own database,
+   * used as the rowfs others leg in the TCS form (zero disk dependency).
+   */
+  readonly type: "local" | "cos" | "rowfs" | "mongofs";
 
   /**
    * Write an object (create or overwrite).

@@ -73,8 +73,9 @@ RUN node -e " \
     "
 
 # Generate lockfile + install production deps.
-# --omit=optional 精简镜像体积，减少 CI push 超时风险（可选依赖如 mongodb、
-# @clickhouse/client、kafkajs 等在网关镜像中不需要）。
+# --omit=optional 精简镜像体积，减少 CI push 超时风险（可选依赖如
+# @clickhouse/client、kafkajs、cos-nodejs-sdk-v5 等在网关镜像中不需要；
+# mongodb 自 2026-09-03 起是正式 dependency —— Mongo 是一等存储后端，不再可裁）。
 # --ignore-scripts skips the openclaw postinstall patch (irrelevant in image).
 # --legacy-peer-deps relaxes strict peer resolution for older transitive deps.
 # 使用 BuildKit cache mount 缓存 npm 下载缓存，大幅加速重复构建
@@ -89,7 +90,7 @@ RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
 
 # tsx 需要 esbuild 二进制（是 tsx 的 optionalDependency），--omit=optional 后会丢失。
 # 单独安装 esbuild (--no-save 不修改 package.json)，esbuild ~10MB 远小于被省略的
-# 可选依赖总大小（mongodb ~100MB+ 等）。
+# 可选依赖总大小。
 #
 # 注意：这里**不能**加 --omit=optional —— esbuild 的平台特定二进制
 # （@esbuild/linux-x64 / @esbuild/linux-arm64）本身就是 optionalDependency，

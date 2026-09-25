@@ -467,8 +467,21 @@ export function parseJsonlLines(text: string): ImportMessage[] {
 
 export function normalizeResponsesJson(path: string): ImportMessage[] {
   const msgs: ImportMessage[] = [];
-  const obj = JSON.parse(readFileSync(path, 'utf-8'));
-  const input = obj?.input ?? obj?.messages ?? obj?.response?.output;
+  // 防御: 会话扫描会把目录下所有 *.json 都传进来, 但同目录可能存在非会话的配置文件
+  // (如 ~/.workbuddy/argv.json —— VS Code 风格 JSONC, 带 // 注释), 标准 JSON.parse
+  // 遇到注释/非法 JSON 会抛异常导致整个导入崩溃。这里解析失败即视为"不是会话文件",
+  // 返回空数组 (调用方均有 `if (!msgs.length) continue` 天然跳过), 不影响正常会话。
+  let obj: unknown;
+  try {
+    obj = JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (e) {
+    console.warn(`[warn] 跳过非会话/非法 JSON 文件: ${path} (${(e as Error).message})`);
+    return msgs;
+  }
+  const input =
+    (obj as Record<string, unknown>)?.input ??
+    (obj as Record<string, unknown>)?.messages ??
+    ((obj as Record<string, unknown>)?.response as Record<string, unknown>)?.output;
   const arr = Array.isArray(input) ? input : [];
   let recIdx = 0;
   for (const item of arr) {

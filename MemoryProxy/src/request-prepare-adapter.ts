@@ -47,6 +47,7 @@ import type { ProxyConfig } from "./types.js";
 import type { Pipeline } from "./logger.js";
 import { log } from "./report/log.js";
 import { langfuseReportGeneration, type LangfuseTurnContext } from "./langfuse.js";
+import { opikCreateLlmSpan } from "./opik.js";
 
 // ─── Dynamic import + no-op fallback ────────────────────────────────────────
 
@@ -195,6 +196,16 @@ export interface PrepareUpstreamRequestArgs {
    * and tests stay valid; without it, observations are skipped.
    */
   lf?: LangfuseTurnContext;
+  /**
+   * Opik trace ID for attaching preparation LLM spans. When provided,
+   * non-cache-hit observations are also reported as Opik spans (in addition
+   * to Langfuse generations). Optional for backward compatibility.
+   */
+  opikTraceId?: string;
+  /**
+   * Key ID for the Opik project name dimension. Required when opikTraceId is set.
+   */
+  opikKeyId?: string;
 }
 
 /**
@@ -260,6 +271,10 @@ export async function prepareUpstreamRequest(
  * generations under the turn trace — same pattern as the router's
  * `[internal] <model>` analyzer spans. The host never interprets the fields;
  * it only copies what the extension hands back.
+ *
+ * Additionally, when `args.opikTraceId` is set, non-cache-hit observations
+ * are also reported as Opik LLM spans under the same turn trace, recording
+ * the full input/output of each compression API call for traceability.
  */
 function reportPrepareObservations(
   args: PrepareUpstreamRequestArgs,
@@ -267,7 +282,7 @@ function reportPrepareObservations(
   result: unknown,
 ): void {
   const lf = args.lf;
-  if (!lf) return;
+  if (!lf && !args.opikTraceId) return;
   if (typeof _mod.listPrepareObservations !== "function") return;
   let observations: unknown;
   try {
@@ -283,35 +298,80 @@ function reportPrepareObservations(
     const obs = raw as Record<string, unknown>;
     if (typeof obs.name !== "string" || typeof obs.model !== "string") continue;
     if (typeof obs.startTime !== "string" || typeof obs.endTime !== "string") continue;
-    try {
-      langfuseReportGeneration({
-        traceId: lf.traceId,
-        name: obs.name,
-        model: obs.model,
-        startTime: obs.startTime,
-        endTime: obs.endTime,
-        input: obs.input,
-        output: obs.output,
-        usage:
-          obs.usage && typeof obs.usage === "object"
-            ? (obs.usage as Record<string, unknown>)
-            : undefined,
-        traceName: lf.traceName,
-        userId: lf.userId,
-        sessionId: lf.sessionId,
-        tags: [
-          ...lf.tags,
-          ...(Array.isArray(obs.tags)
-            ? obs.tags.filter((t): t is string => typeof t === "string")
-            : []),
-        ],
-        observationMetadata:
-          obs.metadata && typeof obs.metadata === "object"
-            ? (obs.metadata as Record<string, unknown>)
-            : { kind: "internal" },
-      });
-    } catch (err: unknown) {
-      args.pipe.error("REQUEST_PREPARE_LANGFUSE", err);
+
+    // ── Langfuse generation (existing) ──────────────────────────────────
+    if (lf) {
+      try {
+        langfuseReportGeneration({
+          traceId: lf.traceId,
+          name: obs.name,
+          model: obs.model,
+          startTime: obs.startTime,
+          endTime: obs.endTime,
+          input: obs.input,
+          output: obs.output,
+          usage:
+            obs.usage && typeof obs.usage === "object"
+              ? (obs.usage as Record<string, unknown>)
+              : undefined,
+          traceName: lf.traceName,
+          userId: lf.userId,
+          sessionId: lf.sessionId,
+          tags: [
+            ...lf.tags,
+            ...(Array.isArray(obs.tags)
+              ? obs.tags.filter((t): t is string => typeof t === "string")
+              : []),
+          ],
+          observationMetadata:
+            obs.metadata && typeof obs.metadata === "object"
+              ? (obs.metadata as Record<string, unknown>)
+              : { kind: "internal" },
+        });
+      } catch (err: unknown) {
+        args.pipe.error("REQUEST_PREPARE_LANGFUSE", err);
+      }
+    }
+
+    // ── Opik span: record each compression API call's input/output ───────
+    // Skip cache-hit observations: they didn't actually call an external API.
+    // The extension signals a cache hit via `obs.cacheHit === true` or the
+    // `metadata.cacheHit` flag — either is treated as a skip condition.
+    if (args.opikTraceId) {
+      const isCacheHit =
+        obs.cacheHit === true ||
+        (obs.metadata &&
+          typeof obs.metadata === "object" &&
+          (obs.metadata as Record<string, unknown>).cacheHit === true);
+      if (!isCacheHit) {
+        try {
+          opikCreateLlmSpan(args.config, {
+            traceId: args.opikTraceId,
+            projectName: args.opikKeyId ?? "unknown",
+            name: `[prepare] ${obs.name}`,
+            startTime: obs.startTime,
+            endTime: obs.endTime,
+            inputMessages: obs.input != null ? [{ role: "system", content: obs.input }] : [],
+            outputMessage: obs.output != null
+              ? { role: "assistant", content: obs.output }
+              : null,
+            model: obs.model,
+            usage:
+              obs.usage && typeof obs.usage === "object"
+                ? (obs.usage as Record<string, unknown>)
+                : {},
+            tags: [
+              "prepare",
+              `stage:${obs.name}`,
+              ...(Array.isArray(obs.tags)
+                ? obs.tags.filter((t): t is string => typeof t === "string")
+                : []),
+            ],
+          });
+        } catch (err: unknown) {
+          args.pipe.error("REQUEST_PREPARE_OPIK", err);
+        }
+      }
     }
   }
 }

@@ -23,6 +23,34 @@ export interface MemCommandContext {
   sessionInfo: Record<string, unknown>;
   protocol: "anthropic" | "openai" | "responses";
   stream: boolean;
+  /**
+   * 客户端当次请求的模型名（body.model 经 resolveModelId 归一化后的真实 model_id）。
+   * 方案 D：taskDraft LLM 跟随主模型，不再依赖 config.memCommand.taskDraft。
+   */
+  model?: string;
+  /**
+   * per-agent 解析后的上游 base url（不含具体 endpoint）。
+   * 方案 D：taskDraft 复用主链路同一上游，规则与主链路转发一致：
+   *   config.upstream.agents?.[agent]?.url ?? config.upstream.url
+   */
+  upstreamUrl?: string;
+  /**
+   * taskDraft LLM 上游 **API 协议家族**（决定请求形状，与本 ctx.protocol 语义不同）。
+   *
+   * ⚠️ 与 `protocol` 字段区分：
+   *   - `protocol`（下方，本 ctx 已有的老字段）: **响应渲染协议** —— 决定
+   *     `buildMemResponse` 用哪种 SSE 骨架把 mem 命令结果吐给客户端（跟客户端
+   *     侧协议一一对应，如 anthropic/openai/responses）。
+   *   - `upstreamProtocol`（本字段）: **taskDraft LLM 请求上游用哪种协议** ——
+   *     决定 attemptDraftOnce 打 /v1/messages、/chat/completions 还是 /responses。
+   *     取决于客户端主链路真正走的上游端点，**不一定等于响应协议**。
+   *
+   * 典型 case: WorkBuddy 客户端拿 Responses SSE 骨架渲染响应 (protocol="responses"),
+   * 但主链路上游其实是 OpenAI chat/completions (upstreamProtocol="openai")。
+   *
+   * 缺省时 task-draft-generator 按 "openai" 处理。
+   */
+  upstreamProtocol?: "openai" | "anthropic" | "responses";
   /** 命令参数（如 create-skill / create-task 的提示词） */
   args: string;
   /** 请求是否开启了 extended thinking（Anthropic 专用） */

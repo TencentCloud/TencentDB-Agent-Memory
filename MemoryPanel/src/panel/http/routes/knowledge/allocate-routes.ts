@@ -194,14 +194,26 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
     }
     const applyVisibility = !isOwner;
 
-    // 同理分页拉全量，否则 UI 看不到排在 20 之外的固定资产记忆块；
+    // 类型过滤下推：core `agent-fixed-asset/list-with-detail` 支持
+    // `asset_types` 参数（v3-meta-schemas.ts:fixedAssetListWithDetailSchema），
+    // 在 SQL 层按类型过滤 —— 无关类型（skill / chat_memory）不会占分页额度。
+    // 之前"拉全量再内存 filter(KNOWLEDGE_ASSET_TYPES.includes(...))"的写法，
+    // 在 skill 特别多的 agent 上（如实际线上 519 skill 场景）会浪费 5+ 次
+    // kernel 调用只为翻过 skill 分页；且如果 wiki/code_graph 绑定按
+    // priority DESC/created_at DESC 排在 500 位之外，同样会被硬上限截断
+    // 让"固定资产"tab 空白。
     // list 出错透传，避免把"查询失败"误显示为"无绑定"。
     let listError: MetaEnvelope<unknown> | null = null;
     const rawItems = await fetchAllMetaListItems<FixedAssetDetailRaw>(
       deps,
       ctx,
       'agent-fixed-asset/list-with-detail',
-      { agent_id: agentId, apply_visibility_filter: applyVisibility, touch_usage: false },
+      {
+        agent_id: agentId,
+        apply_visibility_filter: applyVisibility,
+        touch_usage: false,
+        asset_types: KNOWLEDGE_ASSET_TYPES,
+      },
       (env) => {
         listError = env;
       },
@@ -217,9 +229,9 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
       visibility: string;
       created_at: string;
     }
-    let items = rawItems
-      .filter((it) => KNOWLEDGE_ASSET_TYPES.includes(it.asset_type))
-      .filter((it) => it.status !== 'archived' && it.status !== 'deprecated' && it.status !== 'failed');
+    let items = rawItems.filter(
+      (it) => it.status !== 'archived' && it.status !== 'deprecated' && it.status !== 'failed',
+    );
 
     if (!isOwner) {
       items = items.filter((it) => it.visibility === 'team');
