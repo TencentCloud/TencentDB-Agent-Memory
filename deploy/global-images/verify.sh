@@ -37,7 +37,13 @@ done
 
 ERRORS=0
 WARNS=0
-CURL=/usr/bin/curl
+# 优先用 PATH 里的 curl（Windows Git Bash 的 curl 在 /mingw64/bin/curl，
+# 不是 /usr/bin/curl）；找不到再回退到 /usr/bin/curl（Linux/macOS）。
+if command -v curl >/dev/null 2>&1; then
+  CURL="$(command -v curl)"
+else
+  CURL=/usr/bin/curl
+fi
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>
