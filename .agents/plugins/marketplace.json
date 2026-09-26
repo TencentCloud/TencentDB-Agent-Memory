@@ -1,0 +1,20 @@
+{
+  "name": "tencentdb-agent-memory",
+  "interface": {
+    "displayName": "TencentDB Agent Memory"
+  },
+  "plugins": [
+    {
+      "name": "tdai-memory",
+      "source": {
+        "source": "local",
+        "path": "./plugins/tdai-memory"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
