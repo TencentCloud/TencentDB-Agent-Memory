@@ -7,7 +7,6 @@
  */
 
 import { join } from "node:path";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
 import pLimit from "p-limit";
 
 import type { Db } from "./db/client.js";
@@ -21,8 +20,10 @@ import {
   type ILlmBindingStore,
 } from "./store/llm-binding-store.js";
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
-import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
+import { openIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
+import { createCodeGraphWorker } from "./code-graph-worker.js";
+import { recoverInterruptedCodeGraphs } from "./code-graph-recovery.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
 import { getGlobalLlmConcurrency } from "./config.js";
@@ -115,60 +116,12 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   // Source fetcher registry (git/local/ftp routing + security validation)
   const fetcherRegistry = new SourceFetcherRegistry();
 
-  // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
-  const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
-
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
-    const fetcher = fetcherRegistry.resolve(repoUrl);
-
-    const isExistingRepo = existsSync(join(dir, ".git"));
-    let didIncrementalSync = false;
-    let version: string | null = null;
-
-    if (isExistingRepo) {
-      try {
-        setInternalStatus("fetching");
-        const res = await fetcher.sync(repoUrl, branch, dir);
-        version = res.version;
-
-        setInternalStatus("indexing");
-        let instance = instancePool.get(codeGraphId);
-        if (!instance) {
-          instance = await openIndex(dir);
-        }
-        await syncIndex(instance);
-        instancePool.set(codeGraphId, instance);
-        didIncrementalSync = true;
-      } catch (err) {
-        log.warn(
-          `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
-    }
-
-    if (!didIncrementalSync) {
-      mkdirSync(dir, { recursive: true });
-      setInternalStatus("cloning");
-      const res = await fetcher.fetch(repoUrl, branch, dir);
-      version = res.version;
-
-      setInternalStatus("indexing");
-      const instance = await indexProject(dir);
-      instancePool.set(codeGraphId, instance);
-    }
-
-    // commit hash comes from the fetcher's FetchResult (unified after clone / sync)
-    const commitHash = version ?? undefined;
-
-    const instance = instancePool.get(codeGraphId);
-    const rawStats = instance ? getStats(instance) : undefined;
-    const stats = rawStats
-      ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
-      : undefined;
-    return { commitHash, stats };
-  };
+  // Build refreshes in isolation; promote only a complete replacement index.
+  const realCodeWorker = createCodeGraphWorker({
+    instancePool,
+    resolveFetcher: (url) => fetcherRegistry.resolve(url),
+    logger: { warn: (message) => log.warn(message) },
+  });
 
   // ── Real wiki worker: ingest via wiki engine ──
   const realWikiWorker: WikiWorker = async (ctx) => {
@@ -231,7 +184,11 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     },
   });
 
-  // Restart recovery: mark interrupted tasks as failed
+  // A refresh still has a last-good index; an initial build does not.
+  const restored = recoverInterruptedCodeGraphs(store, dataDir, { warn: (message) => log.warn(message) });
+  if (restored > 0) log.info(`restored ${restored} interrupted code-graph refresh(es)`);
+
+  // Restart recovery: mark remaining interrupted tasks as failed
   const interrupted = store.markInterruptedAsFailed();
   if (interrupted > 0) {
     log.info(`marked ${interrupted} interrupted tasks as failed`);

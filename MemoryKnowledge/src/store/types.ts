@@ -235,6 +235,8 @@ export interface IKnowledgeStore {
   listCodeGraphAudit(serviceId: string, codeGraphId: string, limit?: number, offset?: number): AuditLogRow[];
 
   // ── Restart recovery ──
+  /** Incomplete or failed refreshes with a previously committed index. */
+  listRecoverableCodeGraphs(): CodeGraphRow[];
   /** Sweep all non-terminal (pending/processing) assets to failed, across all tenants. */
   markInterruptedAsFailed(reason?: string): number;
   /** All ready code-graphs (with service_id) so module.ts can rebuild per-tenant dirs. */

@@ -13,7 +13,7 @@
  *   - Status state machine + restart recovery.
  */
 
-import { eq, and, isNull, desc, sql, type SQL } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, desc, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   knowledgeCodeGraph,
@@ -538,6 +538,19 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
   }
 
   // ═══════════════════════ Restart Recovery ═══════════════════════
+
+  listRecoverableCodeGraphs(): CodeGraphRow[] {
+    return this.db
+      .select()
+      .from(knowledgeCodeGraph)
+      .where(and(
+        sql`status IN ('pending','processing','failed')`,
+        isNotNull(knowledgeCodeGraph.lastSyncAt),
+        isNull(knowledgeCodeGraph.deletedAt),
+      ))
+      .all()
+      .map((row) => this.mapCgRow(row));
+  }
 
   /**
    * Sweep all non-terminal (pending/processing) assets to failed, across all tenants.

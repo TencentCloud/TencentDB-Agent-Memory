@@ -44,9 +44,21 @@ export interface CodeGraphBuildContext {
 export interface CodeGraphBuildResult {
   commitHash?: string;
   stats?: { files: number; nodes: number; edges: number };
+  /** Remove the previous snapshot only after the new metadata is committed. */
+  finalize?: () => void | Promise<void>;
+  /** Restore the previous snapshot if metadata could not be committed. */
+  rollback?: () => Promise<void>;
 }
 
 export type CodeGraphWorker = (ctx: CodeGraphBuildContext) => Promise<CodeGraphBuildResult>;
+
+/** A refresh failed, but the previous checkout and index are still usable. */
+export class PreservedCodeGraphError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "PreservedCodeGraphError";
+  }
+}
 
 /**
  * sync 结果（判别联合）：
@@ -157,6 +169,12 @@ export class CodeGraphService {
     if (row.status === "pending" || row.status === "processing") {
       return { kind: "busy", status: row.status, step: row.internal_status };
     }
+    // A committed refresh may have left its retired snapshot behind if cleanup
+    // failed. Remove it while the row is still ready; otherwise restart recovery
+    // could mistake it for an uncommitted promotion after we enter pending.
+    if (row.status === "ready") {
+      rmSync(`${this.dirFor(serviceId, teamId, codeGraphId)}.previous`, { recursive: true, force: true });
+    }
     const nextVersion = row.version + 1;
     this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
       status: "pending",
@@ -237,6 +255,11 @@ export class CodeGraphService {
     } catch (err) {
       this.logger?.warn?.(`[code-graph] rm dir failed ${codeGraphId}: ${String(err)}`);
     }
+    try {
+      rmSync(`${this.dirFor(serviceId, teamId, codeGraphId)}.previous`, { recursive: true, force: true });
+    } catch (err) {
+      this.logger?.warn?.(`[code-graph] rm previous dir failed ${codeGraphId}: ${String(err)}`);
+    }
   }
 
   /**
@@ -284,13 +307,18 @@ export class CodeGraphService {
       this.finishCancelled(serviceId, teamId, codeGraphId);
       return;
     }
+    // sync() has already moved a ready row to pending. A prior successful build
+    // is distinguishable from a first build by its committed last_sync_at.
+    const hadReadyIndex = this.store.getCodeGraphById(serviceId, codeGraphId)?.last_sync_at != null;
     this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
       status: "processing",
       internal_status: "cloning",
       sync_error: null,
     });
+    let result: CodeGraphBuildResult | undefined;
+    let committed = false;
     try {
-      const result = await this.worker({
+      result = await this.worker({
         codeGraphId,
         serviceId,
         teamId,
@@ -313,6 +341,9 @@ export class CodeGraphService {
         stats_json: result.stats ? JSON.stringify(result.stats) : null,
         last_sync_at: new Date().toISOString(),
       });
+      committed = true;
+      try { await result.finalize?.(); }
+      catch (err) { this.logger?.warn?.(`[code-graph] ${codeGraphId} previous snapshot cleanup failed: ${String(err)}`); }
       const synced = this.store.getCodeGraphById(serviceId, codeGraphId);
       if (synced) {
         this.audit(synced, "ready", result.stats ? JSON.stringify(result.stats) : null);
@@ -322,23 +353,38 @@ export class CodeGraphService {
       // Auto-generate summary + callback TMC
       await this.onBuildComplete(synced, "ready", null, result.stats ?? null);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      if (committed) {
+        this.logger?.warn?.(`[code-graph] ${codeGraphId} post-build hook failed after commit: ${String(err)}`);
+        return;
+      }
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
       if (this.isDeleted(serviceId, codeGraphId)) {
         this.finishCancelled(serviceId, teamId, codeGraphId);
         return;
       }
+      let failure: unknown = err;
+      if (result?.rollback) {
+        try {
+          await result.rollback();
+          failure = new PreservedCodeGraphError(err);
+        } catch (rollbackError) {
+          failure = new AggregateError([err, rollbackError], "CodeGraph metadata commit and rollback both failed");
+        }
+      }
+      const msg = failure instanceof Error ? failure.message : String(failure);
+      const preserved = hadReadyIndex && failure instanceof PreservedCodeGraphError;
       this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
-        status: "failed",
+        status: preserved ? "ready" : "failed",
         internal_status: null,
         sync_error: msg.slice(0, 500),
       });
       const failed = this.store.getCodeGraphById(serviceId, codeGraphId);
       if (failed) this.audit(failed, "failed", msg.slice(0, 500));
-      this.logger?.warn?.(`[code-graph] ${codeGraphId} failed: ${msg}`);
+      this.logger?.warn?.(`[code-graph] ${codeGraphId} refresh failed${preserved ? " (previous index retained)" : ""}: ${msg}`);
 
-      // Callback TMC about failure
-      await this.onBuildComplete(failed, "failed", msg, null);
+      // TMC should see the same serving status as the store. Do not replace the
+      // last successful summary with one computed from missing refresh stats.
+      await this.onBuildComplete(failed, preserved ? "ready" : "failed", msg, null, !preserved);
     }
   }
 
@@ -361,18 +407,21 @@ export class CodeGraphService {
     status: "ready" | "failed",
     errorMsg: string | null,
     stats: { files: number; nodes: number; edges: number } | null,
+    generateSummary = true,
   ): Promise<void> {
     if (!row || !this.callbackConfig) return;
 
     let summary: string | null = null;
 
-    if (status === "ready") {
+    if (status === "ready" && generateSummary) {
       // Generate summary via template (no LLM for code-graph)
       const { generateCodeGraphSummary } = await import("../callback.js");
       summary = generateCodeGraphSummary(row.repo_name || row.repo_url, row.branch, stats);
       if (summary) {
         this.store.updateCodeGraphStatus(row.service_id, row.code_graph_id, { summary });
       }
+    } else if (status === "ready") {
+      summary = row.summary;
     }
 
     // Callback TMC
