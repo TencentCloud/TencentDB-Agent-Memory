@@ -48,6 +48,12 @@ class ScopedStorageBackend implements IStorageBackend {
     return this.base.appendObject(this.key(key), content);
   }
 
+  async createObjectAtomic(key: string, content: string | Buffer): Promise<void> {
+    return this.base.createObjectAtomic
+      ? this.base.createObjectAtomic(this.key(key), content)
+      : this.base.putObject(this.key(key), content);
+  }
+
   async getObject(key: string): Promise<StorageObject | null> {
     const obj = await this.base.getObject(this.key(key));
     return obj ? { ...obj, key: this.unkey(obj.key) } : null;
@@ -161,6 +167,16 @@ export class StorageAdapter {
    */
   async appendFile(key: string, content: string): Promise<void> {
     return this.backend.appendObject(key, content);
+  }
+
+  /**
+   * Create a new file whose readers never observe a partial write: the
+   * backend's `createObjectAtomic` (local: temp + rename) or, when absent, one
+   * `putObject` request on a fresh key (COS whole-object upload).
+   */
+  async createFileAtomic(key: string, content: string): Promise<void> {
+    if (this.backend.createObjectAtomic) return this.backend.createObjectAtomic(key, content);
+    return this.backend.putObject(key, content);
   }
 
   // ── fs.readdir replacement ──

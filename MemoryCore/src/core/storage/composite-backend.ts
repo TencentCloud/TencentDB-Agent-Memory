@@ -135,6 +135,11 @@ export class CompositeStorageBackend implements IStorageBackend {
     return this.route(key).appendObject(key, content);
   }
 
+  async createObjectAtomic(key: string, content: string | Buffer): Promise<void> {
+    const backend = this.route(key);
+    return backend.createObjectAtomic ? backend.createObjectAtomic(key, content) : backend.putObject(key, content);
+  }
+
   async exists(key: string): Promise<boolean> {
     return this.route(key).exists(key);
   }

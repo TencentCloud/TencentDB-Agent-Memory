@@ -76,13 +76,14 @@ export function isNamespaceMissing(err: unknown): boolean {
  *   - 59 CommandNotFound / 115 CommandNotSupported (older mongod)
  *   - 40324 Location40324 "Unrecognized pipeline stage" (older mongod)
  *   - 31082 SearchNotEnabled (modern community mongod ≥ 7.0, verified on 8.x)
+ *   - "…only allowed on MongoDB Atlas" (community mongod 7.0.24, wire-verified)
  *   - message-level "mongot"/"not enabled" markers (Atlas-side variants)
  */
 export function isSearchUnsupported(err: unknown): boolean {
   const code = errorCode(err);
   if (code === 59 || code === 115 || code === 40324 || code === 31082) return true;
   if (errorCodeName(err) === "SearchNotEnabled") return true;
-  return /no such command|unrecognized pipeline stage|not supported|search.{0,40}not.{0,10}enabled|mongot/i.test(
+  return /no such command|unrecognized pipeline stage|not supported|search.{0,40}not.{0,10}enabled|only allowed on.{0,20}atlas|mongot/i.test(
     errorMessage(err),
   );
 }

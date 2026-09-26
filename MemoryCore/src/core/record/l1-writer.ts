@@ -21,6 +21,7 @@ import { DEFAULT_ISOLATION_ID, type IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
+import { appendLedgerEvent } from "./event-ledger.js";
 import type { Logger } from "../types.js";
 
 // ============================
@@ -149,6 +150,73 @@ export function generateMemoryId(): string {
   return `m_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
+// ── Revert tombstones (JSONL replay protection) ─────────────────────────────
+//
+// JSONL is the declared source of truth for backup/recovery, but the review
+// revert path only deletes from the vector store — a later replay/recovery
+// from JSONL would silently resurrect reverted records. A tombstone line is
+// appended to the day's shard on revert; readers (l1-reader) collect
+// tombstoned ids first and skip those records. Tombstones are shaped nothing
+// like MemoryRecord (no sessionKey/content fields), so legacy readers that
+// don't know them simply drop the line.
+
+/** Shape of a JSONL tombstone line appended by the review revert path. */
+export interface L1RevertTombstone {
+  /** Marker + layer tag; lets future L0/L3 tombstones reuse the mechanism. */
+  tombstone: "l1";
+  /** The reverted (deleted) record — replay must skip this id. */
+  record_id: string;
+  /** When the revert landed (ISO 8601). */
+  reverted_at: string;
+  /** Who rejected the change (v3 isolation user), when known. */
+  reviewer_id?: string;
+}
+
+export function buildRevertTombstoneLine(
+  recordId: string,
+  reviewerId?: string,
+  at: string = new Date().toISOString(),
+): string {
+  const tombstone: L1RevertTombstone = {
+    tombstone: "l1",
+    record_id: recordId,
+    reverted_at: at,
+    ...(reviewerId ? { reviewer_id: reviewerId } : {}),
+  };
+  return JSON.stringify(tombstone);
+}
+
+/**
+ * Append a revert tombstone to today's JSONL shard (best-effort).
+ *
+ * The gateway has no local baseDir, so no fs fallback is attempted here —
+ * when no StorageAdapter is available the tombstone is skipped with a warn.
+ * The `reverted` event in the store remains the authoritative audit trail;
+ * the JSONL tombstone only protects replay/recovery from resurrection.
+ */
+export async function appendRevertTombstone(params: {
+  recordId: string;
+  reviewerId?: string;
+  storage?: StorageAdapter;
+  logger?: Logger;
+}): Promise<boolean> {
+  const { recordId, reviewerId, storage, logger } = params;
+  if (!storage) {
+    logger?.warn?.(`${TAG} revert tombstone skipped: no storage adapter (replay protection relies on store events only)`);
+    return false;
+  }
+  const shardDate = formatLocalDate(new Date());
+  try {
+    await storage.appendFile(StoragePaths.record(shardDate), buildRevertTombstoneLine(recordId, reviewerId) + "\n");
+    return true;
+  } catch (err) {
+    logger?.warn?.(
+      `${TAG} revert tombstone append failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return false;
+  }
+}
+
 /**
  * Write a memory record according to the dedup decision.
  *
@@ -189,10 +257,29 @@ export async function writeMemory(params: {
   const now = new Date().toISOString();
 
   let nextVersion = 0;
+  // Superseded targets snapshot — reused for memory_events `superseded` rows so
+  // the diff can show old content. Empty when the query fails or there are no
+  // targets (store action): superseded events are best-effort, the authoritative
+  // write path (JSONL + vector upsert) is unaffected either way.
+  //
+  // `queryL1Records` honors `recordIds` on all backends (sqlite PK-IN lookup,
+  // MongoDB $in, TCVDB documentIds), so `existing` is already narrowed to the
+  // targeted lineage — the same rows drive both the superseded snapshots and
+  // the next-version computation.
+  let supersededTargets: Awaited<ReturnType<NonNullable<typeof vectorStore>["queryL1Records"]>> = [];
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0 && vectorStore) {
     try {
-      const existing = await vectorStore.queryL1Records({ recordIds: decision.target_ids });
-      const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
+      // Scope the snapshot read to the same tenant filter used for the delete:
+      // a hallucinated/out-of-scope target_id must not leak a foreign record's
+      // content into a superseded event (which is stored under OUR tenancy and
+      // readable via /memory/diff).
+      supersededTargets = await vectorStore.queryL1Records({
+        recordIds: decision.target_ids,
+        ...(teamId || userId || agentId || taskId
+          ? { teamId, userId, agentId, taskId }
+          : sessionId ? { sessionId } : {}),
+      });
+      const maxVersion = supersededTargets.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
       nextVersion = maxVersion + 1;
     } catch (err) {
       logger?.warn?.(`${TAG} Failed to read existing memory version, defaulting to v0: ${err instanceof Error ? err.message : String(err)}`);
@@ -272,22 +359,33 @@ export async function writeMemory(params: {
     }
   };
 
+  // Outcome flags gate the event ledger below: events must record what the
+  // store actually did, not what the dedup decision intended.
+  let targetsDeleted = true;
+  let upsertOk = false;
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0) {
     // Remove target records from VectorStore (real-time deletion for retrieval accuracy).
-    // JSONL is append-only — old records remain in files and are cleaned up periodically
-    // by memory-cleaner (which reconciles against VectorStore as source of truth).
+    // JSONL is append-only — old records remain in files and age out by whole
+    // shard: memory-cleaner unlinks expired shard files by filename date, and
+    // the vector-store rows expire independently via deleteL1Expired (the two
+    // sides are NOT per-record reconciled).
     if (vectorStore) {
       try {
-        const deleteFilter = teamId || userId || agentId || sessionId
-          ? { teamId, userId, agentId, sessionId: sessionId || undefined, sessionKey }
-          : undefined;
-        if (deleteFilter) {
-          await vectorStore.deleteL1Batch(decision.target_ids, deleteFilter);
-        } else {
-          await vectorStore.deleteL1Batch(decision.target_ids);
-        }
+        // Delete filter mirrors the CANDIDATE RECALL scope (agent-level,
+        // cross-session — see l1-extractor's dedup filter): targets may be
+        // records written by earlier sessions of the same agent, so session
+        // dimensions must NOT narrow the delete. team/user/agent/task keep
+        // tenant isolation on destructive operations. taskId is passed
+        // verbatim ('' stays '') to match the recall filter exactly.
+        // Fail-closed: a caller carrying ONLY sessionId gets a session-scoped
+        // filter rather than an unscoped (all-tenant) delete.
+        const deleteFilter = teamId || userId || agentId || taskId
+          ? { teamId, userId, agentId, taskId }
+          : sessionId ? { sessionId } : undefined;
+        targetsDeleted = await vectorStore.deleteL1Batch(decision.target_ids, deleteFilter);
         logger?.debug?.(`${TAG} VectorStore: deleted ${decision.target_ids.length} target record(s) for ${decision.action}`);
       } catch (err) {
+        targetsDeleted = false;
         logger?.warn?.(
           `${TAG} VectorStore delete failed for ${decision.action}: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -336,7 +434,7 @@ export async function writeMemory(params: {
         }
       }
 
-      const upsertOk = await vectorStore.upsertL1(record, embedding);
+      upsertOk = await vectorStore.upsertL1(record, embedding);
       logger?.debug?.(`${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`);
     } catch (err) {
       // Vector write failure should NOT block the main JSONL write
@@ -348,6 +446,81 @@ export async function writeMemory(params: {
     logger?.debug?.(
       `${TAG} [vec-dual-write] SKIPPED id=${record.id}: vectorStore=${!!vectorStore}`,
     );
+  }
+
+  // === Memory event append (session diff) ===
+  // Best-effort append-only event rows; failures never block the write path.
+  // - store        → 1 × created
+  // - update/merge → 1 × superseded per target (old-content snapshot, when the
+  //                  version query above succeeded) + 1 × updated/merged
+  // - skip         → no event (nothing was written)
+  // Events describe committed outcomes. The JSONL line is already written by
+  // this point, so the creation itself is a fact regardless of whether the
+  // vector upsert succeeded — skipping events on upsertOk would erase a
+  // destructive outcome (deleted targets) from the ledger and destroy the
+  // only restore path (superseded snapshots). Only the supersede-delete
+  // outcome gates the supersession claims: when it failed nothing was
+  // actually replaced, so the write is recorded as `created`.
+  if (vectorStore?.appendMemoryEvent || storage) {
+    try {
+      const base = {
+        event_ts: now,
+        session_key: sessionKey,
+        session_id: record.sessionId,
+        team_id: record.teamId || "default",
+        user_id: record.userId ?? "",
+        agent_id: record.agentId ?? "",
+        task_id: record.taskId ?? "",
+      };
+      if (decision.action === "store" || !targetsDeleted) {
+        if (!targetsDeleted) {
+          logger?.warn?.(
+            `${TAG} supersede delete failed for ${decision.action} id=${record.id}; ` +
+            `recording the write as 'created' (no superseded/supersedes events — nothing was actually replaced)`,
+          );
+        }
+        await appendLedgerEvent({ store: vectorStore, storage, logger, event: {
+          ...base,
+          op: "created",
+          record_id: record.id,
+          content: record.content,
+          memory_type: record.type,
+          version: record.version ?? 0,
+          source: "extraction",
+        } });
+      } else {
+        for (const old of supersededTargets) {
+          await appendLedgerEvent({ store: vectorStore, storage, logger, event: {
+            ...base,
+            origin_session_id: old.session_id || undefined,
+            origin_session_key: old.session_key || undefined,
+            op: "superseded",
+            record_id: old.record_id,
+            content: old.content,
+            memory_type: old.type,
+            version: old.version,
+            superseded_by: record.id,
+            // 完整旧记录快照：revert 时按它重建（content/type/version 不够恢复）。
+            snapshot_json: JSON.stringify(old),
+            source: "extraction",
+          } });
+        }
+        await appendLedgerEvent({ store: vectorStore, storage, logger, event: {
+          ...base,
+          op: decision.action === "merge" ? "merged" : "updated",
+          record_id: record.id,
+          content: record.content,
+          memory_type: record.type,
+          version: record.version ?? 0,
+          supersedes: decision.target_ids,
+          source: "extraction",
+        } });
+      }
+    } catch (err) {
+      logger?.warn?.(
+        `${TAG} memory event append failed (non-fatal) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   return record;

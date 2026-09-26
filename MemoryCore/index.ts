@@ -332,6 +332,8 @@ export default function register(api: OpenClawPluginApi) {
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
+        // events/ 分片必须走账本实际写入的 adapter（rowfs/COS 下不在本地盘）。
+        getOutboxStorage: () => core.getStorage(),
       });
       sharedMemoryCleaner.start();
       api.logger.debug?.(`${TAG} Memory cleaner started (singleton)`);

@@ -47,6 +47,9 @@ import type {
   IsolationFilter,
   AuditEntry,
   AuditQueryFilter,
+  MemoryEvent,
+  MemoryEventFilter,
+  MemoryEventRedactFilter,
   KnowledgeEntity,
   KnowledgeType,
   KnowledgeListResult,
@@ -58,6 +61,12 @@ import type { MemoryRecord } from "../../record/l1-writer.js";
 import { DEFAULT_ISOLATION_ID } from "../isolation.js";
 import { mongoSearchScoreToScore } from "../tokenize.js";
 import { COLLECTIONS } from "./collections.js";
+import { canonEventBound, canonIsoTs, canonRecordTs, healIsoId, isValidRedactFilter, newMemoryEventId } from "../memory-event-id.js";
+import {
+  buildMemoryGenerationRefId,
+  type MemoryGenerationLayer,
+  type MemoryGenerationRefRecord,
+} from "../../memory-generation-log/types.js";
 import {
   MEMORY_SEARCH_INDEX,
   MEMORY_SEARCH_DEFINITION,
@@ -133,6 +142,7 @@ export class MongoMemoryStore implements IMemoryStore {
         );
       }
       await this.ensureSupportingIndexes(db);
+      await this.normalizeLegacyMemoryEvents(db);
       await this.ensureSearchIndexes(db);
       this.db = db;
       this.degraded = false;
@@ -147,6 +157,40 @@ export class MongoMemoryStore implements IMemoryStore {
       throw err;
     });
     return this.initPromise;
+  }
+
+  /**
+   * Same one-shot normalization as the sqlite store: event_ts is compared
+   * lexically, so pre-contract rows (`…ssZ`, `+08:00`) are rewritten to the
+   * canonical instant; unrepresentable ones are left and reported. Isolation
+   * ids converge on "default". Best-effort — filters already match both id
+   * forms, and a failure here must not block init.
+   */
+  private async normalizeLegacyMemoryEvents(db: Db): Promise<void> {
+    const coll = db.collection(COLLECTIONS.MEMORY_EVENTS);
+    try {
+      const legacy = coll.find(
+        { event_ts: { $not: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/ } } as never,
+        { projection: { _id: 1, event_ts: 1 } },
+      );
+      let fixed = 0, bad = 0;
+      for await (const d of legacy) {
+        const canon = typeof d.event_ts === "string" ? canonIsoTs(d.event_ts) : null;
+        if (canon === null) { bad += 1; continue; }
+        await coll.updateOne({ _id: d._id }, { $set: { event_ts: canon } });
+        fixed += 1;
+      }
+      if (fixed > 0) this.logger?.info?.(`${TAG} normalized ${fixed} legacy memory_events.event_ts docs to canonical form`);
+      if (bad > 0) this.logger?.warn?.(`${TAG} ${bad} memory_events docs hold unrepresentable event_ts (left as-is)`);
+      let migrated = 0;
+      for (const col of ["team_id", "user_id", "agent_id"]) {
+        const res = await coll.updateMany({ [col]: "" } as never, { $set: { [col]: DEFAULT_ISOLATION_ID } } as never);
+        migrated += res.modifiedCount;
+      }
+      if (migrated > 0) this.logger?.info?.(`${TAG} normalized ${migrated} legacy memory_events isolation ids to '${DEFAULT_ISOLATION_ID}'`);
+    } catch (err) {
+      this.logger?.warn?.(`${TAG} memory_events normalization failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async ensureSupportingIndexes(db: Db): Promise<void> {
@@ -168,6 +212,20 @@ export class MongoMemoryStore implements IMemoryStore {
       db.collection(COLLECTIONS.AUDIT).createIndexes([
         { key: { record_id: 1 } },
         { key: { updated_at_ms: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_EVENTS).createIndexes([
+        { key: { event_ts: 1, _id: 1 } },
+        {
+          key: { event_id: 1 },
+          unique: true,
+          partialFilterExpression: { event_id: { $type: "string", $gt: "" } },
+        },
+        { key: { record_id: 1 } },
+        { key: { session_id: 1 } },
+        { key: { team_id: 1, agent_id: 1, user_id: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_GENERATION_REFS).createIndexes([
+        { key: { layer: 1, memory_id: 1 } },
       ]),
       db.collection(COLLECTIONS.KNOWLEDGE).createIndexes([
         { key: { team_id: 1, type: 1 } },
@@ -249,8 +307,19 @@ export class MongoMemoryStore implements IMemoryStore {
   // ════════════════════════════════════════════════════════
 
   async upsertL1(record: MemoryRecord, _embedding?: Float32Array): Promise<boolean> {
+    // created_time/updated_time feed the _ms TTL/cursor compares — canonical
+    // instants or the "" sentinel only (same contract as sqlite).
+    const createdAt = canonRecordTs(record.createdAt);
+    const updatedAt = canonRecordTs(record.updatedAt);
+    if (createdAt === null || updatedAt === null) {
+      this.logger?.warn?.(
+        `${TAG} [L1-upsert] REJECTED id=${record.id}: timestamps outside the instant contract ` +
+        `(createdAt="${record.createdAt}" updatedAt="${record.updatedAt}")`,
+      );
+      return false;
+    }
     const coll = await this.coll(COLLECTIONS.L1);
-    const doc = l1RecordToDoc(record);
+    const doc = l1RecordToDoc({ ...record, createdAt, updatedAt });
     // Filter carries the designated shard key prefix (team_id, agent_id) so the
     // upsert stays legal if the collection is ever sharded — on a sharded
     // collection an upsert without the full shard key fails with
@@ -280,7 +349,9 @@ export class MongoMemoryStore implements IMemoryStore {
     const cutoffMs = isoToEpochMs(cutoffIso);
     if (cutoffMs <= 0) return 0;
     const coll = await this.coll(COLLECTIONS.L1);
-    const query = { updated_time_ms: { $lt: cutoffMs } };
+    // `_ms > 0` mirrors sqlite's `updated_time != ''`: an absent timestamp
+    // (stored as 0) is an immortal sentinel, not "expired since epoch".
+    const query = { updated_time_ms: { $gt: 0, $lt: cutoffMs } };
     const toDelete = await coll.countDocuments(query as never);
     if (toDelete === 0) return 0;
     const total = await coll.estimatedDocumentCount();
@@ -381,8 +452,15 @@ export class MongoMemoryStore implements IMemoryStore {
   // ════════════════════════════════════════════════════════
 
   async upsertL0(record: L0Record, _embedding?: Float32Array): Promise<boolean> {
+    const recordedAt = canonRecordTs(record.recordedAt);
+    if (recordedAt === null) {
+      this.logger?.warn?.(
+        `${TAG} [L0-upsert] REJECTED id=${record.id}: recordedAt "${record.recordedAt}" outside the instant contract`,
+      );
+      return false;
+    }
     const coll = await this.coll(COLLECTIONS.L0);
-    const doc = l0RecordToDoc(record);
+    const doc = l0RecordToDoc({ ...record, recordedAt });
     // Shard-key-safe upsert: see upsertL1.
     await coll.replaceOne(
       { _id: doc._id, team_id: doc.team_id, agent_id: doc.agent_id } as never,
@@ -406,7 +484,19 @@ export class MongoMemoryStore implements IMemoryStore {
   async insertL0Batch(records: L0Record[]): Promise<number> {
     if (records.length === 0) return 0;
     const coll = await this.coll(COLLECTIONS.L0);
-    const docs = records.map((r) => l0RecordToDoc(r));
+    const docs = records
+      .map((r) => {
+        const recordedAt = canonRecordTs(r.recordedAt);
+        if (recordedAt === null) {
+          this.logger?.warn?.(
+            `${TAG} [L0-batch] SKIPPED id=${r.id}: recordedAt "${r.recordedAt}" outside the instant contract`,
+          );
+          return null;
+        }
+        return l0RecordToDoc({ ...r, recordedAt });
+      })
+      .filter((d): d is L0Doc => d !== null);
+    if (docs.length === 0) return 0;
     const res = await coll.insertMany(docs as never[], { ordered: true });
     return res.insertedCount;
   }
@@ -421,7 +511,7 @@ export class MongoMemoryStore implements IMemoryStore {
     const cutoffMs = isoToEpochMs(cutoffIso);
     if (cutoffMs <= 0) return 0;
     const coll = await this.coll(COLLECTIONS.L0);
-    const query = { recorded_at_ms: { $lt: cutoffMs } };
+    const query = { recorded_at_ms: { $gt: 0, $lt: cutoffMs } };
     const toDelete = await coll.countDocuments(query as never);
     if (toDelete === 0) return 0;
     const total = await coll.estimatedDocumentCount();
@@ -798,6 +888,184 @@ export class MongoMemoryStore implements IMemoryStore {
   }
 
   // ════════════════════════════════════════════════════════
+  // Memory generation provenance references
+  // ════════════════════════════════════════════════════════
+
+  async upsertMemoryGenerationRefs(records: MemoryGenerationRefRecord[]): Promise<void> {
+    if (records.length === 0) return;
+    const coll = await this.coll(COLLECTIONS.MEMORY_GENERATION_REFS);
+    await coll.bulkWrite(
+      records.map((record) => {
+        const { generation_ref_id, ...fields } = record;
+        return {
+          replaceOne: {
+            filter: { _id: generation_ref_id },
+            replacement: fields,
+            upsert: true,
+          },
+        };
+      }) as never,
+      { ordered: false },
+    );
+  }
+
+  async getMemoryGenerationRef(layer: MemoryGenerationLayer, memoryId: string): Promise<MemoryGenerationRefRecord | null> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_GENERATION_REFS);
+    const id = buildMemoryGenerationRefId(layer, memoryId);
+    const doc = await coll.findOne({ _id: id, layer, memory_id: memoryId } as never);
+    if (!doc) return null;
+    const { _id, ...fields } = doc as unknown as Record<string, unknown>;
+    return { ...(fields as Omit<MemoryGenerationRefRecord, "generation_ref_id">), generation_ref_id: String(_id) };
+  }
+
+  // ════════════════════════════════════════════════════════
+  // Memory events（统一变更账：extraction / api_mutation / review）
+  // ════════════════════════════════════════════════════════
+
+  async appendMemoryEvent(event: MemoryEvent): Promise<void> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_EVENTS);
+    // _id 由 Mongo 自动生成（ObjectId 自带时间序，作同 event_ts 内的稳定次序键）。
+    // Normalize the optional fields to the same defaults sqlite/TCVDB persist:
+    // mongo stores `layer: undefined` as a missing field, which a
+    // `{layer:"l1"}` filter would never match — diverging from the other
+    // backends where the writer-side default lands in the row.
+    // Defense-in-depth (same as sqlite/tcvdb): non-canonical event_ts must
+    // never reach a lexical compare.
+    const eventTs = canonIsoTs(event.event_ts);
+    if (eventTs === null) {
+      throw new Error(`memory_events append rejected: non-canonical event_ts "${event.event_ts}" event_id=${event.event_id}`);
+    }
+    try {
+    await coll.insertOne({
+      ...event,
+      event_ts: eventTs,
+      event_id: event.event_id || newMemoryEventId(),
+      origin_session_id: event.origin_session_id ?? "",
+      origin_session_key: event.origin_session_key ?? "",
+      team_id: event.team_id ?? "",
+      user_id: event.user_id ?? "",
+      agent_id: event.agent_id ?? "",
+      task_id: event.task_id ?? "",
+      memory_type: event.memory_type ?? "",
+      version: event.version ?? 0,
+      supersedes: event.supersedes ?? [],
+      superseded_by: event.superseded_by ?? "",
+      snapshot_json: event.snapshot_json ?? "",
+      reviewer_id: event.reviewer_id ?? "",
+      layer: event.layer ?? "l1",
+      source: event.source ?? "",
+      request_id: event.request_id ?? "",
+      reason: event.reason ?? "",
+      target_event_id: event.target_event_id ?? "",
+      scope: event.scope ?? "",
+      until: event.until ?? "",
+    } as never);
+    } catch (err) {
+      // Duplicate event_id: the event already landed (outbox replay / retry).
+      // Only the event_id unique index means "already written"; any other
+      // duplicate-key violation is a real failure.
+      const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+      if (e.code === 11000 && e.keyPattern !== undefined && "event_id" in e.keyPattern) return;
+      throw err;
+    }
+  }
+
+  async redactMemoryEvents(filter: MemoryEventRedactFilter): Promise<number> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_EVENTS);
+    // event_ts is lexicographically compared — a non-canonical `until` does NOT
+    // safely match nothing; it can wipe broadly (any ISO string < "March 5, 2026").
+    // Shared contract: normalize ms-exact forms to `…ss.sssZ`, reject the rest.
+    // Unknown filter fields are silently ignored by coverage/store code —
+    // refuse them rather than erasing wider than the filter claims.
+    if (!isValidRedactFilter(filter)) return 0;
+    const until = canonIsoTs(filter.until)!;
+    const teamId = isoMatch(filter.team_id);
+    const agentId = isoMatch(filter.agent_id);
+    const userId = isoMatch(filter.user_id);
+    if (teamId === undefined && agentId === undefined && userId === undefined) {
+      // Legal (e.g. full clear), but wipes every tenant — surface it loudly.
+      this.logger?.warn?.(`${TAG} redactMemoryEvents without isolation filter: wipes events across ALL tenants (until=${until})`);
+    }
+    const q: Record<string, unknown> = { event_ts: { $lte: until } };
+    if (teamId !== undefined) q.team_id = teamId;
+    if (agentId !== undefined) q.agent_id = agentId;
+    if (userId !== undefined) q.user_id = userId;
+    const res = await coll.updateMany(q as never, { $set: { content: "", snapshot_json: "" } } as never);
+    return res.modifiedCount;
+  }
+
+  async queryMemoryEvents(filter: MemoryEventFilter): Promise<MemoryEvent[]> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_EVENTS);
+    const q: Record<string, unknown> = {};
+    if (filter.session_id !== undefined) q.session_id = filter.session_id;
+    if (filter.session_key !== undefined) q.session_key = filter.session_key;
+    if (filter.origin_session_id !== undefined) q.origin_session_id = filter.origin_session_id;
+    if (filter.origin_session_key !== undefined) q.origin_session_key = filter.origin_session_key;
+    if (filter.record_id !== undefined) q.record_id = filter.record_id;
+    if (filter.op !== undefined) q.op = filter.op;
+    if (filter.layer !== undefined) q.layer = filter.layer;
+    if (filter.source !== undefined) q.source = filter.source;
+    if (filter.request_id !== undefined) q.request_id = filter.request_id;
+    const teamId = isoMatch(filter.team_id);
+    const agentId = isoMatch(filter.agent_id);
+    const userId = isoMatch(filter.user_id);
+    if (teamId !== undefined) q.team_id = teamId;
+    if (agentId !== undefined) q.agent_id = agentId;
+    if (userId !== undefined) q.user_id = userId;
+    if (filter.task_id !== undefined) q.task_id = filter.task_id;
+    // event_ts 是 ISO 8601 字符串，字典序即时间序（与 sqlite 实现一致）。
+    if (filter.since !== undefined || filter.until !== undefined) {
+      const range: Record<string, string> = {};
+      if (filter.since !== undefined) range.$gte = canonEventBound(filter.since);
+      if (filter.until !== undefined) range.$lte = canonEventBound(filter.until);
+      q.event_ts = range;
+    }
+
+    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 1000);
+    const offset = Math.max(filter.offset ?? 0, 0);
+    const dir = filter.order === "desc" ? -1 : 1;
+    const docs = await coll
+      .find(q as never)
+      .sort({ event_ts: dir, _id: dir })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    return docs.map((d) => this.docToMemoryEvent(d));
+  }
+
+  private docToMemoryEvent(d: Record<string, unknown>): MemoryEvent {
+    const supersedes = Array.isArray(d.supersedes) ? (d.supersedes as string[]) : [];
+    return {
+      event_id: String(d.event_id ?? "") || undefined,
+      event_ts: String(d.event_ts ?? ""),
+      session_key: String(d.session_key ?? ""),
+      session_id: String(d.session_id ?? ""),
+      origin_session_id: String(d.origin_session_id ?? "") || undefined,
+      origin_session_key: String(d.origin_session_key ?? "") || undefined,
+      team_id: String(d.team_id ?? "") || undefined,
+      user_id: String(d.user_id ?? "") || undefined,
+      agent_id: String(d.agent_id ?? "") || undefined,
+      task_id: String(d.task_id ?? "") || undefined,
+      op: d.op as MemoryEvent["op"],
+      record_id: String(d.record_id ?? ""),
+      content: String(d.content ?? ""),
+      memory_type: String(d.memory_type ?? "") || undefined,
+      version: Number(d.version ?? 0),
+      supersedes: supersedes.length ? supersedes : undefined,
+      superseded_by: String(d.superseded_by ?? "") || undefined,
+      snapshot_json: String(d.snapshot_json ?? "") || undefined,
+      reviewer_id: String(d.reviewer_id ?? "") || undefined,
+      layer: (String(d.layer ?? "l1") || "l1") as MemoryEvent["layer"],
+      source: (String(d.source ?? "") || undefined) as MemoryEvent["source"],
+      request_id: String(d.request_id ?? "") || undefined,
+      reason: String(d.reason ?? "") || undefined,
+      target_event_id: String(d.target_event_id ?? "") || undefined,
+      scope: (String(d.scope ?? "") || undefined) as MemoryEvent["scope"],
+      until: String(d.until ?? "") || undefined,
+    };
+  }
+
+  // ════════════════════════════════════════════════════════
   // Knowledge entity (wiki / code-graph metadata)
   // ════════════════════════════════════════════════════════
 
@@ -892,4 +1160,16 @@ export class MongoMemoryStore implements IMemoryStore {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Isolation-id match for memory_events queries/redacts: a defined value
+ * heals "" → "default" (see healIsoId) and "default" matches BOTH stored
+ * forms — legacy/foreign rows may carry "" while contract writes store
+ * "default". Other values compare by plain equality.
+ */
+function isoMatch(v: string | undefined): string | { $in: string[] } | undefined {
+  const healed = healIsoId(v);
+  if (healed === undefined) return undefined;
+  return healed === DEFAULT_ISOLATION_ID ? { $in: ["", DEFAULT_ISOLATION_ID] } : healed;
 }

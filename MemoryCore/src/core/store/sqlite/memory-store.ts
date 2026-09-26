@@ -57,9 +57,13 @@ import type {
   MemoryContentClearResult,
   AuditEntry,
   AuditQueryFilter,
+  MemoryEvent,
+  MemoryEventFilter,
+  MemoryEventRedactFilter,
 } from "../types.js";
 import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "../types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../../skill/skill-store-ddl.js";
+import { canonEventBound, canonIsoTs, canonRecordTs, healIsoId, isValidRedactFilter, newMemoryEventId } from "../memory-event-id.js";
 import type { Logger } from "../../types.js";
 import type {
   MemoryPromptListFilter,
@@ -159,6 +163,29 @@ const require = createRequire(import.meta.url);
 function requireNodeSqlite(): typeof import("node:sqlite") {
   return require("node:sqlite") as typeof import("node:sqlite");
 }
+
+/**
+ * Isolation-id equality for memory_events queries/redacts: a defined value
+ * heals "" → "default" (see healIsoId) and "default" matches BOTH stored
+ * forms — legacy/foreign rows may carry "" while contract writes store
+ * "default". Other values compare by plain equality.
+ */
+function pushIsoCond(conds: string[], args: SQLInputValue[], col: string, v: string | undefined): void {
+  if (v === undefined) return;
+  const healed = v || DEFAULT_ISOLATION_ID;
+  if (healed === DEFAULT_ISOLATION_ID) conds.push(`${col} IN ('','${DEFAULT_ISOLATION_ID}')`);
+  else { conds.push(`${col} = ?`); args.push(healed); }
+}
+
+/**
+ * Column list shared by all `l1_records` SELECT statements — the fixed
+ * prepared-statement matrix and the dynamic record_id-IN path must project
+ * the same row shape for `L1RecordRow` consumers.
+ */
+const L1_QUERY_COLS = `record_id, content, type, priority, scene_name, session_key, session_id,
+  team_id, task_id, user_id, agent_id, version,
+  timestamp_str, timestamp_start, timestamp_end,
+  created_time, updated_time, metadata_json`;
 
 // ============================
 // FTS5 / keyword helpers
@@ -856,6 +883,216 @@ export class VectorStore implements IMemoryStore {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_record    ON memory_audit(record_id, updated_at_ms)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_isolation ON memory_audit(team_id, agent_id, user_id, task_id)");
 
+    // ── Memory Events（session 变更集）──
+    //   - 只由 writeMemory 的 dedup 落地路径追加（created/updated/merged/superseded）
+    //   - superseded 事件的 content 是旧记录快照；session_id 记执行淘汰的 session，
+    //     origin_session_id 保留旧记录原归属
+    //   - 不取代 memory_audit：audit 管显式 mutation API，本表管自动提取写入
+    //   - 统一变更账扩展：op 增加 deleted（管理面显式删除），新增 layer/source/
+    //     request_id 列区分变更来源与所属层（api_mutation 双写，见 v2-router）
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_events (
+        seq                INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_ts           TEXT NOT NULL,
+        session_key        TEXT NOT NULL DEFAULT '',
+        session_id         TEXT NOT NULL DEFAULT '',
+        origin_session_id  TEXT NOT NULL DEFAULT '',
+        origin_session_key TEXT NOT NULL DEFAULT '',
+        team_id            TEXT NOT NULL DEFAULT '',
+        user_id            TEXT NOT NULL DEFAULT '',
+        agent_id           TEXT NOT NULL DEFAULT '',
+        task_id            TEXT NOT NULL DEFAULT '',
+        op                 TEXT NOT NULL CHECK (op IN ('created','updated','merged','superseded','reverted','deleted')),
+        record_id          TEXT NOT NULL,
+        content            TEXT NOT NULL,
+        memory_type        TEXT NOT NULL DEFAULT '',
+        version            INTEGER NOT NULL DEFAULT 0,
+        supersedes         TEXT NOT NULL DEFAULT '[]',
+        superseded_by      TEXT NOT NULL DEFAULT '',
+        snapshot_json      TEXT NOT NULL DEFAULT '',
+        reviewer_id        TEXT NOT NULL DEFAULT '',
+        layer              TEXT NOT NULL DEFAULT 'l1',
+        source             TEXT NOT NULL DEFAULT '',
+        request_id         TEXT NOT NULL DEFAULT '',
+        event_id           TEXT NOT NULL DEFAULT '',
+        reason             TEXT NOT NULL DEFAULT '',
+        target_event_id    TEXT NOT NULL DEFAULT '',
+        scope              TEXT NOT NULL DEFAULT '',
+        until_ts           TEXT NOT NULL DEFAULT ''
+      )
+    `);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_session ON memory_events(session_id, seq)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_sessionkey ON memory_events(session_key, seq)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_record ON memory_events(record_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_origin ON memory_events(origin_session_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_isolation ON memory_events(team_id, agent_id, user_id, seq)");
+    // Existing installs: backfill columns added after the first release
+    // (reviewer_id for review reverts; snapshot_json for revert restore) so
+    // the copy below can reference them regardless of which schema the
+    // pre-existing table was created with.
+    try { this.db.exec("ALTER TABLE memory_events ADD COLUMN reviewer_id TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
+    try { this.db.exec("ALTER TABLE memory_events ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
+    // Unified change ledger migration: pre-existing tables carry an op CHECK
+    // without 'deleted', and SQLite cannot ALTER a CHECK constraint — rebuild
+    // via create-copy-drop-rename. Detection reads sqlite_master.sql; legacy
+    // rows get layer='l1' and source inferred from op (reverted → review).
+    // The rebuild runs in a transaction: a crash between DROP and RENAME would
+    // otherwise orphan all events in memory_events_new while the next init's
+    // CREATE IF NOT EXISTS produces a fresh empty table that already contains
+    // 'deleted' — skipping detection and silently losing the data.
+    try {
+      const evTable = this.db.prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_events'",
+      ).get() as { sql?: string } | undefined;
+      if (evTable?.sql && !evTable.sql.includes("'deleted'")) {
+        this.db.exec("BEGIN");
+        try {
+          // Debris from a previously failed migration must not block retry.
+          this.db.exec("DROP TABLE IF EXISTS memory_events_new");
+          this.db.exec(`
+          CREATE TABLE memory_events_new (
+            seq                INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_ts           TEXT NOT NULL,
+            session_key        TEXT NOT NULL DEFAULT '',
+            session_id         TEXT NOT NULL DEFAULT '',
+            origin_session_id  TEXT NOT NULL DEFAULT '',
+            origin_session_key TEXT NOT NULL DEFAULT '',
+            team_id            TEXT NOT NULL DEFAULT '',
+            user_id            TEXT NOT NULL DEFAULT '',
+            agent_id           TEXT NOT NULL DEFAULT '',
+            task_id            TEXT NOT NULL DEFAULT '',
+            op                 TEXT NOT NULL CHECK (op IN ('created','updated','merged','superseded','reverted','deleted')),
+            record_id          TEXT NOT NULL,
+            content            TEXT NOT NULL,
+            memory_type        TEXT NOT NULL DEFAULT '',
+            version            INTEGER NOT NULL DEFAULT 0,
+            supersedes         TEXT NOT NULL DEFAULT '[]',
+            superseded_by      TEXT NOT NULL DEFAULT '',
+            snapshot_json      TEXT NOT NULL DEFAULT '',
+            reviewer_id        TEXT NOT NULL DEFAULT '',
+            layer              TEXT NOT NULL DEFAULT 'l1',
+            source             TEXT NOT NULL DEFAULT '',
+            request_id         TEXT NOT NULL DEFAULT '',
+            event_id           TEXT NOT NULL DEFAULT '',
+            reason             TEXT NOT NULL DEFAULT '',
+            target_event_id    TEXT NOT NULL DEFAULT '',
+            scope              TEXT NOT NULL DEFAULT '',
+            until_ts           TEXT NOT NULL DEFAULT ''
+          )
+        `);
+        this.db.exec(`
+          INSERT INTO memory_events_new
+            (event_ts, session_key, session_id, origin_session_id, origin_session_key,
+             team_id, user_id, agent_id, task_id,
+             op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json, reviewer_id,
+             layer, source, request_id)
+          SELECT event_ts, session_key, session_id, origin_session_id, origin_session_key,
+                 team_id, user_id, agent_id, task_id,
+                 op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json, reviewer_id,
+                 'l1', CASE WHEN op = 'reverted' THEN 'review' ELSE 'extraction' END, ''
+          FROM memory_events ORDER BY seq
+        `);
+        this.db.exec("DROP TABLE memory_events");
+        this.db.exec("ALTER TABLE memory_events_new RENAME TO memory_events");
+        // Old indexes died with the DROP; recreate them on the rebuilt table.
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_session ON memory_events(session_id, seq)");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_sessionkey ON memory_events(session_key, seq)");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_record ON memory_events(record_id)");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_origin ON memory_events(origin_session_id)");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_isolation ON memory_events(team_id, agent_id, user_id, seq)");
+          this.db.exec("COMMIT");
+        } catch (migErr) {
+          try { this.db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+          throw migErr;
+        }
+      }
+    } catch (err) {
+      this.logger?.warn?.(`[memory-tdai][sqlite] memory_events CHECK migration failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // event_id: stable per-event identity; the partial unique index makes
+    // re-appending the same event (outbox replay) a no-op while legacy rows
+    // (event_id='') stay unconstrained.
+    try { this.db.exec("ALTER TABLE memory_events ADD COLUMN event_id TEXT NOT NULL DEFAULT ''"); } catch { /* exists */ }
+    for (const col of ["reason", "target_event_id", "scope", "until_ts"]) {
+      try { this.db.exec(`ALTER TABLE memory_events ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`); } catch { /* exists */ }
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_events_ts ON memory_events(event_ts, seq)");
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_events_event_id ON memory_events(event_id) WHERE event_id != ''");
+
+    // event_ts 契约：全链路裸字符串比较要求规范形 `…ss.sssZ`。老库可能存着
+    // 无毫秒/带偏移的非规范行（schema 收紧前写入或回放进来），此处一次性
+    // 归一化；连无损归一都做不到的行原样保留并告警。
+    try {
+      const legacy = this.db
+        .prepare("SELECT seq, event_ts FROM memory_events WHERE event_ts NOT GLOB '????-??-??T??:??:??.???Z'")
+        .all() as Array<{ seq: number; event_ts: string }>;
+      const fix = this.db.prepare("UPDATE memory_events SET event_ts = ? WHERE seq = ?");
+      let fixed = 0, bad = 0;
+      this.db.exec("BEGIN");
+      try {
+        for (const r of legacy) {
+          const canon = canonIsoTs(r.event_ts);
+          if (canon === null) { bad += 1; continue; }
+          fix.run(canon, r.seq);
+          fixed += 1;
+        }
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
+      if (fixed > 0) this.logger?.info?.(`[memory-tdai][sqlite] normalized ${fixed} legacy memory_events.event_ts rows to canonical form`);
+      if (bad > 0) this.logger?.warn?.(`[memory-tdai][sqlite] ${bad} memory_events rows hold unrepresentable event_ts (left as-is)`);
+    } catch (err) {
+      this.logger?.warn?.(`[memory-tdai][sqlite] event_ts normalization failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 4-id 契约：team/user/agent 的空形态统一为 "default"（对齐记录存储与
+    // resolveIsolation），历史 '' 行回填；task_id 保持 ''（无 default 约定）。
+    try {
+      let migrated = 0;
+      for (const col of ["team_id", "user_id", "agent_id"]) {
+        const res = this.db.prepare(`UPDATE memory_events SET ${col} = 'default' WHERE ${col} = ''`).run();
+        migrated += Number(res.changes);
+      }
+      if (migrated > 0) this.logger?.info?.(`[memory-tdai][sqlite] normalized ${migrated} legacy memory_events isolation ids to 'default'`);
+    } catch (err) {
+      this.logger?.warn?.(`[memory-tdai][sqlite] memory_events isolation-id normalization failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // l1/l0 的 instant 列与 event_ts 同一契约：'…ss.sssZ' 或 ''（不朽哨兵，
+    // TTL 守卫跳过）。老库可能存着非规范形态，同样一次性归一化。
+    for (const [table, col] of [
+      ["l1_records", "updated_time"],
+      ["l1_records", "created_time"],
+      ["l0_conversations", "recorded_at"],
+    ] as const) {
+      try {
+        const legacy = this.db
+          .prepare(`SELECT record_id, ${col} AS v FROM ${table} WHERE ${col} != '' AND ${col} NOT GLOB '????-??-??T??:??:??.???Z'`)
+          .all() as Array<{ record_id: string; v: string }>;
+        const fix = this.db.prepare(`UPDATE ${table} SET ${col} = ? WHERE record_id = ?`);
+        let fixed = 0, bad = 0;
+        this.db.exec("BEGIN");
+        try {
+          for (const r of legacy) {
+            const canon = canonIsoTs(r.v);
+            if (canon === null) { bad += 1; continue; }
+            fix.run(canon, r.record_id);
+            fixed += 1;
+          }
+          this.db.exec("COMMIT");
+        } catch (err) {
+          this.db.exec("ROLLBACK");
+          throw err;
+        }
+        if (fixed > 0) this.logger?.info?.(`[memory-tdai][sqlite] normalized ${fixed} legacy ${table}.${col} rows to canonical form`);
+        if (bad > 0) this.logger?.warn?.(`[memory-tdai][sqlite] ${bad} ${table}.${col} rows hold unrepresentable instants (left as-is)`);
+      } catch (err) {
+        this.logger?.warn?.(`[memory-tdai][sqlite] ${table}.${col} normalization failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     // ── Custom Memory Prompt ──
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_prompts (
@@ -1053,10 +1290,7 @@ export class VectorStore implements IMemoryStore {
     // L1 query statements (for l1-reader)
     // user_id / agent_id surfaced in every L1 read so callers (router /
     // candidate-pool / l1-reader) can enforce isolation downstream.
-    const l1QueryCols = `record_id, content, type, priority, scene_name, session_key, session_id,
-      team_id, task_id, user_id, agent_id, version,
-      timestamp_str, timestamp_start, timestamp_end,
-      created_time, updated_time, metadata_json`;
+    const l1QueryCols = L1_QUERY_COLS;
 
     this.stmtQueryBySessionId = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
@@ -1205,6 +1439,19 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L1-upsert] SKIPPED (degraded mode) id=${record.id}`);
       return false;
     }
+    // updated_time/created_time are lexically compared (TTL `updated_time < ?`,
+    // incremental cursors, ORDER BY) — only the canonical instant or the ""
+    // sentinel may persist; anything else is rejected rather than written
+    // as an uncomparable value.
+    const createdAt = canonRecordTs(record.createdAt);
+    const updatedAt = canonRecordTs(record.updatedAt);
+    if (createdAt === null || updatedAt === null) {
+      this.logger?.warn(
+        `${TAG} [L1-upsert] REJECTED id=${record.id}: timestamps outside the instant contract ` +
+        `(createdAt="${record.createdAt}" updatedAt="${record.updatedAt}")`,
+      );
+      return false;
+    }
     try {
       const { id: recordId, timestamps } = record;
       const tsStr = timestamps[0] ?? "";
@@ -1251,8 +1498,8 @@ export class VectorStore implements IMemoryStore {
           tsStr,
           tsStart,
           tsEnd,
-          record.createdAt,
-          record.updatedAt,
+          createdAt,
+          updatedAt,
           JSON.stringify(record.metadata),
           (record as MemoryRecord & { userId?: string }).userId || DEFAULT_ISOLATION_ID,
           (record as MemoryRecord & { agentId?: string }).agentId || DEFAULT_ISOLATION_ID,
@@ -1261,7 +1508,7 @@ export class VectorStore implements IMemoryStore {
         if (!skipVec) {
           // vec0 does not support ON CONFLICT → delete then insert
           this.stmtDeleteVec!.run(recordId);
-          this.stmtInsertVec!.run(recordId, Buffer.from(embedding!.buffer), record.updatedAt);
+          this.stmtInsertVec!.run(recordId, Buffer.from(embedding!.buffer), updatedAt);
         } else {
           this.logger?.debug?.(
             `${TAG} [L1-upsert] Skipping vec write (${embedding ? "zero vector" : "no embedding"}) id=${recordId}`,
@@ -1634,25 +1881,52 @@ export class VectorStore implements IMemoryStore {
   }
 
   /**
-   * Query L1 records with optional session and time filters.
+   * Query L1 records with optional record-id, session and time filters.
    *
-   * Uses the composite index `idx_l1_session_updated(session_id, updated_time)`
+   * A non-empty `recordIds` list takes the primary-key IN path; otherwise the
+   * composite index `idx_l1_session_updated(session_id, updated_time)` is used
    * for efficient filtering. All timestamps are compared as UTC ISO 8601 strings.
    *
-   * **Fault-tolerant**: returns an empty array on any error (degraded mode, DB issues).
+   * **Fault-tolerant**: returns an empty array on any error (degraded mode, DB issues)
+   * — unless `opts.strict` is set, which rethrows so revert-style guards can't
+   *   read a failed query as "no live rows".
    */
-  queryL1Records(filter?: L1QueryFilter): L1RecordRow[] {
+  queryL1Records(filter?: L1QueryFilter, opts?: { strict?: boolean }): L1RecordRow[] {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L1-query] SKIPPED (degraded mode)`);
+      if (opts?.strict) throw new Error("L1 query rejected: sqlite store is degraded");
       return [];
     }
     try {
-      const { sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
+      const { sessionKey, sessionId, taskId, updatedAfter, recordIds } = filter ?? {};
 
       let raw: Record<string, unknown>[];
 
-      // Priority: sessionId > sessionKey (sessionId is more specific)
-      if (sessionId && updatedAfter) {
+      // Targeted lookup by primary key. Matches MongoDB ($in on _id) and
+      // TCVDB (documentIds) semantics: an empty/absent list falls through to
+      // the session/time statement matrix; a non-empty list narrows by
+      // record_id while the remaining predicates still apply.
+      if (recordIds && recordIds.length > 0) {
+        const conditions = [`record_id IN (${recordIds.map(() => "?").join(",")})`];
+        const params: SQLInputValue[] = [...recordIds];
+        // Priority: sessionId > sessionKey (sessionId is more specific)
+        if (sessionId) {
+          conditions.push("session_id = ?");
+          params.push(sessionId);
+        } else if (sessionKey) {
+          conditions.push("session_key = ?");
+          params.push(sessionKey);
+        }
+        if (updatedAfter) {
+          conditions.push("updated_time > ?");
+          params.push(updatedAfter);
+        }
+        raw = this.db
+          .prepare(
+            `SELECT ${L1_QUERY_COLS} FROM l1_records WHERE ${conditions.join(" AND ")} ORDER BY updated_time ASC`,
+          )
+          .all(...params) as Record<string, unknown>[];
+      } else if (sessionId && updatedAfter) {
         raw = this.stmtQueryBySessionIdSince.all(sessionId, updatedAfter) as Record<string, unknown>[];
       } else if (sessionId) {
         raw = this.stmtQueryBySessionId.all(sessionId) as Record<string, unknown>[];
@@ -1687,14 +1961,15 @@ export class VectorStore implements IMemoryStore {
       if (taskId !== undefined) rows = rows.filter((r) => r.task_id === taskId);
 
       this.logger?.info(
-        `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
+        `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}, recordIds=${recordIds?.length ?? "(none)"}}, ` +
         `returned ${rows.length} record(s)`,
       );
       return rows;
     } catch (err) {
       this.logger?.warn(
-        `${TAG} [L1-query] FAILED (non-fatal, returning empty): ${err instanceof Error ? err.message : String(err)}`
+        `${TAG} [L1-query] FAILED${opts?.strict ? " (strict, rethrowing)" : " (non-fatal, returning empty)"}: ${err instanceof Error ? err.message : String(err)}`
       );
+      if (opts?.strict) throw err;
       return [];
     }
   }
@@ -1718,6 +1993,14 @@ export class VectorStore implements IMemoryStore {
   upsertL0(record: L0Record, embedding: Float32Array | undefined): boolean {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L0-upsert] SKIPPED (degraded mode) id=${record.id}`);
+      return false;
+    }
+    // recorded_at drives the lexical TTL sweep — same contract as above.
+    const recordedAt = canonRecordTs(record.recordedAt);
+    if (recordedAt === null) {
+      this.logger?.warn(
+        `${TAG} [L0-upsert] REJECTED id=${record.id}: recordedAt "${record.recordedAt}" outside the instant contract`,
+      );
       return false;
     }
     try {
@@ -1745,7 +2028,7 @@ export class VectorStore implements IMemoryStore {
           record.taskId || "",
           record.role,
           record.messageText,
-          record.recordedAt,
+          recordedAt,
           record.timestamp,
           (record as L0Record & { userId?: string }).userId || DEFAULT_ISOLATION_ID,
           (record as L0Record & { agentId?: string }).agentId || DEFAULT_ISOLATION_ID,
@@ -1754,7 +2037,7 @@ export class VectorStore implements IMemoryStore {
         if (!skipVec) {
           // vec0 does not support ON CONFLICT → delete then insert
           this.stmtL0DeleteVec!.run(record.id);
-          this.stmtL0InsertVec!.run(record.id, Buffer.from(embedding!.buffer), record.recordedAt);
+          this.stmtL0InsertVec!.run(record.id, Buffer.from(embedding!.buffer), recordedAt);
         } else {
           this.logger?.debug?.(
             `${TAG} [L0-upsert] Skipping vec write (${embedding ? "zero vector" : "no embedding"}) id=${record.id}`,
@@ -1778,7 +2061,7 @@ export class VectorStore implements IMemoryStore {
               (record as L0Record & { userId?: string }).userId || DEFAULT_ISOLATION_ID,
               (record as L0Record & { agentId?: string }).agentId || DEFAULT_ISOLATION_ID,
               record.role,
-              record.recordedAt,
+              recordedAt,
               record.timestamp,
             );
           } catch (ftsErr) {
@@ -3407,6 +3690,181 @@ export class VectorStore implements IMemoryStore {
       updated_at_ms: r.updated_at_ms,
       request_id: r.request_id ?? undefined,
     }));
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Memory Events (session 变更集)
+  // ─────────────────────────────────────────────────────────
+
+  appendMemoryEvent(event: MemoryEvent): void {
+    if (this.degraded) throw new Error("memory_events append rejected: sqlite store is degraded");
+    // Defense-in-depth: appendLedgerEvent already enforces this, but a row
+    // must never persist a timestamp the store itself cannot safely compare.
+    // (event_id is an opaque equality key — shape rules live at the ledger
+    // append / replay-parse trust boundaries, not the store mechanics layer.)
+    const eventTs = canonIsoTs(event.event_ts);
+    if (eventTs === null) {
+      throw new Error(`memory_events append rejected: non-canonical event_ts "${event.event_ts}" event_id=${event.event_id}`);
+    }
+    const stmt = this.db.prepare(`
+      INSERT INTO memory_events
+        (event_ts, session_key, session_id, origin_session_id, origin_session_key,
+         team_id, user_id, agent_id, task_id,
+         op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json, reviewer_id,
+         layer, source, request_id, event_id, reason, target_event_id, scope, until_ts)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id) WHERE event_id != '' DO NOTHING
+    `);
+    stmt.run(
+      eventTs,
+      event.session_key,
+      event.session_id,
+      event.origin_session_id ?? "",
+      event.origin_session_key ?? "",
+      event.team_id ?? "",
+      event.user_id ?? "",
+      event.agent_id ?? "",
+      event.task_id ?? "",
+      event.op,
+      event.record_id,
+      event.content,
+      event.memory_type ?? "",
+      event.version ?? 0,
+      JSON.stringify(event.supersedes ?? []),
+      event.superseded_by ?? "",
+      event.snapshot_json ?? "",
+      event.reviewer_id ?? "",
+      event.layer ?? "l1",
+      event.source ?? "",
+      event.request_id ?? "",
+      event.event_id || newMemoryEventId(),
+      event.reason ?? "",
+      event.target_event_id ?? "",
+      event.scope ?? "",
+      event.until ?? "",
+    );
+  }
+
+  queryMemoryEvents(filter: MemoryEventFilter): MemoryEvent[] {
+    if (this.degraded) throw new Error("memory_events query rejected: sqlite store is degraded");
+    const conds: string[] = [];
+    const args: SQLInputValue[] = [];
+    if (filter.session_id !== undefined)        { conds.push("session_id = ?");        args.push(filter.session_id); }
+    if (filter.session_key !== undefined)       { conds.push("session_key = ?");       args.push(filter.session_key); }
+    if (filter.origin_session_id !== undefined)  { conds.push("origin_session_id = ?");  args.push(filter.origin_session_id); }
+    if (filter.origin_session_key !== undefined) { conds.push("origin_session_key = ?"); args.push(filter.origin_session_key); }
+    if (filter.record_id !== undefined)         { conds.push("record_id = ?");         args.push(filter.record_id); }
+    if (filter.op !== undefined)                { conds.push("op = ?");                args.push(filter.op); }
+    if (filter.layer !== undefined)             { conds.push("layer = ?");             args.push(filter.layer); }
+    if (filter.source !== undefined)            { conds.push("source = ?");            args.push(filter.source); }
+    if (filter.request_id !== undefined)        { conds.push("request_id = ?");        args.push(filter.request_id); }
+    pushIsoCond(conds, args, "team_id", filter.team_id);
+    pushIsoCond(conds, args, "agent_id", filter.agent_id);
+    pushIsoCond(conds, args, "user_id", filter.user_id);
+    if (filter.task_id !== undefined)           { conds.push("task_id = ?");           args.push(filter.task_id); }
+    if (filter.since !== undefined)             { conds.push("event_ts >= ?");         args.push(canonEventBound(filter.since)); }
+    if (filter.until !== undefined)             { conds.push("event_ts <= ?");         args.push(canonEventBound(filter.until)); }
+
+    const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
+    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 1000);
+    const offset = Math.max(filter.offset ?? 0, 0);
+
+    const sql = `
+      SELECT event_ts, session_key, session_id, origin_session_id, origin_session_key,
+             team_id, user_id, agent_id, task_id,
+             op, record_id, content, memory_type, version, supersedes, superseded_by, snapshot_json, reviewer_id,
+             layer, source, request_id, event_id, reason, target_event_id, scope, until_ts
+      FROM memory_events
+      ${where}
+      ORDER BY event_ts ${filter.order === "desc" ? "DESC" : "ASC"}, seq ${filter.order === "desc" ? "DESC" : "ASC"}
+      LIMIT ? OFFSET ?
+    `;
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...args, limit, offset) as Array<{
+      event_ts: string;
+      session_key: string;
+      session_id: string;
+      origin_session_id: string;
+      origin_session_key: string;
+      team_id: string;
+      user_id: string;
+      agent_id: string;
+      task_id: string;
+      op: "created" | "updated" | "merged" | "superseded" | "reverted" | "deleted";
+      record_id: string;
+      content: string;
+      memory_type: string;
+      version: number;
+      supersedes: string;
+      superseded_by: string;
+      snapshot_json: string;
+      reviewer_id: string;
+      layer: string;
+      source: string;
+      request_id: string;
+      event_id: string;
+      reason: string;
+      target_event_id: string;
+      scope: string;
+      until_ts: string;
+    }>;
+    return rows.map((r) => {
+      let supersedes: string[] = [];
+      try { supersedes = JSON.parse(r.supersedes) as string[]; } catch { /* malformed column → treat as none */ }
+      return {
+        event_id: r.event_id || undefined,
+        event_ts: r.event_ts,
+        session_key: r.session_key,
+        session_id: r.session_id,
+        origin_session_id: r.origin_session_id || undefined,
+        origin_session_key: r.origin_session_key || undefined,
+        team_id: r.team_id || undefined,
+        user_id: r.user_id || undefined,
+        agent_id: r.agent_id || undefined,
+        task_id: r.task_id || undefined,
+        op: r.op,
+        record_id: r.record_id,
+        content: r.content,
+        memory_type: r.memory_type || undefined,
+        version: r.version,
+        supersedes: supersedes.length ? supersedes : undefined,
+        superseded_by: r.superseded_by || undefined,
+        snapshot_json: r.snapshot_json || undefined,
+        reviewer_id: r.reviewer_id || undefined,
+        layer: (r.layer || "l1") as MemoryEvent["layer"],
+        source: (r.source || undefined) as MemoryEvent["source"],
+        request_id: r.request_id || undefined,
+        reason: r.reason || undefined,
+        target_event_id: r.target_event_id || undefined,
+        scope: (r.scope || undefined) as MemoryEvent["scope"],
+        until: r.until_ts || undefined,
+      };
+    });
+  }
+
+  redactMemoryEvents(filter: MemoryEventRedactFilter): number {
+    if (this.degraded) throw new Error("memory_events redact rejected: sqlite store is degraded");
+    // event_ts 是字符串比较：非规范 until 不能安全匹配为空，反而可能按
+    // 字典序大面积误擦（所有 ISO 串 < "March 5, 2026"）。与 mongo/tcvdb
+    // 同一契约：毫秒精确形态归一化为 `…ss.sssZ`，其余拒绝。字段白名单与
+    // marker 读侧共享：未知字段会被静默忽略 → 过宽擦除，整体拒收。
+    if (!isValidRedactFilter(filter)) return 0;
+    const until = canonIsoTs(filter.until)!;
+    const teamId = healIsoId(filter.team_id);
+    const agentId = healIsoId(filter.agent_id);
+    const userId = healIsoId(filter.user_id);
+    if (teamId === undefined && agentId === undefined && userId === undefined) {
+      this.logger?.warn?.(`${TAG} redactMemoryEvents without isolation filter: wipes events across ALL tenants (until=${until})`);
+    }
+    const conds = ["event_ts <= ?", "(content != '' OR snapshot_json != '')"];
+    const args: SQLInputValue[] = [until];
+    pushIsoCond(conds, args, "team_id", teamId);
+    pushIsoCond(conds, args, "agent_id", agentId);
+    pushIsoCond(conds, args, "user_id", userId);
+    const res = this.db.prepare(
+      `UPDATE memory_events SET content = '', snapshot_json = '' WHERE ${conds.join(" AND ")}`,
+    ).run(...args);
+    return Number(res.changes ?? 0);
   }
 
   // ─────────────────────────────────────────────────────────

@@ -17,12 +17,13 @@ import { ITEM_ICON, usePageMeta, GROUP_ORDER_KEYS, type PageId } from '@/constan
 
 const { Body, Sider, Content } = Layout;
 
-/** 路由 path → PageId */
+/** 路由 path → PageId（注意匹配是 startsWith 顺序敏感：/memory/review 必须在 /memory 之前） */
 const PATH_TO_PAGE: Record<string, PageId> = {
   '/': 'workbench_board',
   '/wiki': 'wiki',
   '/code': 'code',
   '/skills': 'skills',
+  '/memory/review': 'memory_review',
   '/memory': 'chat_memory',
   '/analytics': 'analytics',
   '/team/members': 'team_members',

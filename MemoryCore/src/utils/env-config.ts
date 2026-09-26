@@ -184,6 +184,16 @@ export function readApiTraceEnabled(): boolean {
  * `/v3/skill/*` is never subject to this triple regardless of the flag:
  * skill is a team-scoped resource, not per-agent memory.
  */
+/**
+ * Whether `/memory/ledger/backfill` is exposed. Backfill is an operations
+ * action (replays the outbox into the store), so it is off unless the
+ * deployment sets `TDAI_LEDGER_BACKFILL_ENABLED` to "1" / "true" / "on" / "yes".
+ */
+export function resolveLedgerBackfillEnabled(): boolean {
+  const raw = (ENV.TDAI_LEDGER_BACKFILL_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "on" || raw === "yes";
+}
+
 export function resolveV3StrictIsolation(): boolean {
   const raw = (ENV.V3_STRICT_ISOLATION ?? "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "on" || raw === "yes";

@@ -8,7 +8,9 @@
  * - Filter expressions for scalar field queries
  * - Time fields stored as uint64 epoch ms (ISO ↔ epoch conversion internal)
  *
- * All methods are fault-tolerant: return empty/false on error, never throw.
+ * All methods are fault-tolerant: return empty/false on error, never throw —
+ * except appendMemoryEvent, which rethrows after logging so the ledger writer
+ * can count the failure and leave the event for outbox backfill.
  */
 
 import type { MemoryRecord } from "../../record/l1-writer.js";
@@ -39,6 +41,9 @@ import type {
   L0Record,
   AuditEntry,
   AuditQueryFilter,
+  MemoryEvent,
+  MemoryEventFilter,
+  MemoryEventRedactFilter,
   KnowledgeEntity,
   KnowledgeType,
   KnowledgeListResult,
@@ -48,6 +53,7 @@ import type {
 } from "../types.js";
 import { DEFAULT_ISOLATION_ID } from "../types.js";
 import { TcvdbClient, TcvdbApiError } from "./client.js";
+import { canonEventBound, canonIsoTs, canonRecordTs, healIsoId, isValidRedactFilter, newMemoryEventId } from "../memory-event-id.js";
 import type { BM25LocalEncoder } from "../bm25-local.js";
 import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
 import type {
@@ -91,6 +97,7 @@ const L1_COLLECTION_SUFFIX = "l1_memories";
 const L0_COLLECTION_SUFFIX = "l0_conversations";
 const PROFILES_COLLECTION_SUFFIX = "profiles";
 const AUDIT_COLLECTION_SUFFIX = "memory_audit";
+const MEMORY_EVENTS_COLLECTION_SUFFIX = "memory_events";
 /** entity_knowledge 明细注册表（见 docs/design/vdb-knowledge-collection.md）。 */
 const KNOWLEDGE_COLLECTION_SUFFIX = "knowledge";
 const MEMORY_PROMPTS_COLLECTION_SUFFIX = "memory_prompts";
@@ -160,6 +167,16 @@ const AUDIT_OUTPUT_FIELDS = [
   "version", "updated_at_ms", "request_id",
 ];
 
+/** memory_events 字段：统一变更账。content/supersedes/snapshot_json 体积可能大，不建 filter 索引但可输出。 */
+const MEMORY_EVENTS_OUTPUT_FIELDS = [
+  "id", "event_ts", "session_key", "session_id", "origin_session_id", "origin_session_key",
+  "team_id", "agent_id", "user_id", "task_id",
+  "op", "record_id", "content", "memory_type", "version",
+  "supersedes", "superseded_by", "snapshot_json", "reviewer_id",
+  "layer", "source", "request_id", "event_id",
+  "reason", "target_event_id", "scope", "until",
+];
+
 // ============================
 // Helpers
 // ============================
@@ -181,6 +198,20 @@ function escapeFilterString(value: string): string {
 
 function eqFilter(field: string, value: string): string {
   return `${field} = "${escapeFilterString(value)}"`;
+}
+
+/**
+ * Isolation-id match for memory_events queries/redacts: a defined value
+ * heals "" → "default" (see healIsoId) and "default" matches BOTH stored
+ * forms — legacy/foreign rows may carry "" while contract writes store
+ * "default". Other values compare by plain equality.
+ */
+function isoCond(field: string, v: string | undefined): string | undefined {
+  const healed = healIsoId(v);
+  if (healed === undefined) return undefined;
+  return healed === DEFAULT_ISOLATION_ID
+    ? `(${field} = "" or ${field} = "${DEFAULT_ISOLATION_ID}")`
+    : eqFilter(field, healed);
 }
 
 function buildIsolationConditions(filter?: IsolationFilter): string[] {
@@ -245,12 +276,14 @@ export class TcvdbMemoryStore implements IMemoryStore {
   private readonly l0Collection: string;
   private readonly profilesCollection: string;
   private readonly auditCollection: string;
+  private readonly eventsCollection: string;
   private readonly knowledgeCollection: string;
   private readonly memoryPromptsCollection: string;
   private readonly memoryPromptSettingsCollection: string;
   private readonly memoryPromptSettingLogsCollection: string;
   private readonly memoryGenerationRefsCollection: string;
   private degraded = false;
+  private _warnedNoInit = false;
 
   /** Promise that resolves when async init completes. */
   private _initPromise: Promise<void> | undefined;
@@ -275,6 +308,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
     this.l0Collection = `${config.database}_${L0_COLLECTION_SUFFIX}`;
     this.profilesCollection = `${config.database}_${PROFILES_COLLECTION_SUFFIX}`;
     this.auditCollection = `${config.database}_${AUDIT_COLLECTION_SUFFIX}`;
+    this.eventsCollection = `${config.database}_${MEMORY_EVENTS_COLLECTION_SUFFIX}`;
     this.knowledgeCollection = `${config.database}_${KNOWLEDGE_COLLECTION_SUFFIX}`;
     this.memoryPromptsCollection = `${config.database}_${MEMORY_PROMPTS_COLLECTION_SUFFIX}`;
     this.memoryPromptSettingsCollection = `${config.database}_${MEMORY_PROMPT_SETTINGS_COLLECTION_SUFFIX}`;
@@ -304,6 +338,13 @@ export class TcvdbMemoryStore implements IMemoryStore {
   private async _ensureInit(): Promise<void> {
     if (this._initPromise) {
       await this._initPromise;
+      return;
+    }
+    // init() 只能由 store-pool 显式调用；直接 new 的 store 会跳过建表裸写。
+    // 真实例上写路径会 API 报错、吞错读路径会静默空——warn 一次让误用现形。
+    if (!this._warnedNoInit) {
+      this._warnedNoInit = true;
+      this.logger?.warn(`${TAG} store used before init() — collections were never created`);
     }
   }
 
@@ -496,6 +537,36 @@ export class TcvdbMemoryStore implements IMemoryStore {
         ],
       });
 
+      // memory_events collection — 统一变更账（extraction / api_mutation / review）
+      // dim=1 占位（不需向量检索）；过滤字段建 filter 索引。
+      // content/supersedes/snapshot_json 体积可能大，存普通字段不建索引。
+      await this.client.createCollection({
+        collection: this.eventsCollection,
+        shardNum: 1,
+        replicaNum: 2,
+        description: "Memory 统一变更事件流（含 session diff / 审阅驳回 / 管理 mutation）",
+        embedding: { status: "disabled" },
+        indexes: [
+          { fieldName: "id",                 fieldType: "string", indexType: "primaryKey" },
+          { fieldName: "vector",             fieldType: "vector", indexType: "FLAT",
+            dimension: 1, metricType: "COSINE" },
+          { fieldName: "event_ts",           fieldType: "string", indexType: "filter" },
+          { fieldName: "session_id",         fieldType: "string", indexType: "filter" },
+          { fieldName: "session_key",        fieldType: "string", indexType: "filter" },
+          { fieldName: "origin_session_id",  fieldType: "string", indexType: "filter" },
+          { fieldName: "origin_session_key", fieldType: "string", indexType: "filter" },
+          { fieldName: "team_id",            fieldType: "string", indexType: "filter" },
+          { fieldName: "agent_id",           fieldType: "string", indexType: "filter" },
+          { fieldName: "user_id",            fieldType: "string", indexType: "filter" },
+          { fieldName: "task_id",            fieldType: "string", indexType: "filter" },
+          { fieldName: "op",                 fieldType: "string", indexType: "filter" },
+          { fieldName: "record_id",          fieldType: "string", indexType: "filter" },
+          { fieldName: "layer",              fieldType: "string", indexType: "filter" },
+          { fieldName: "source",             fieldType: "string", indexType: "filter" },
+          { fieldName: "request_id",         fieldType: "string", indexType: "filter" },
+        ],
+      });
+
       // knowledge_entities registry — 明细表（dim=1 占位；metadata 用 JSON 类型收类型专属字段）
       // 见 docs/design/vdb-knowledge-collection.md
       await this.client.createCollection({
@@ -617,6 +688,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
     sort?: Array<Record<string, unknown>>,
   ): Promise<Array<Record<string, unknown>>> {
     const allDocs: Array<Record<string, unknown>> = [];
+    // VDB resolves sort ties arbitrarily per request — a tie spanning an
+    // internal page boundary can return the same doc twice. Dedupe by doc id.
+    const seenIds = new Set<string>();
     let offset = 0;
     const pageSize = limit && limit < QUERY_PAGE_SIZE ? limit : QUERY_PAGE_SIZE;
 
@@ -633,7 +707,12 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
       const resp = await this.client.query(collection, queryParams);
       const docs = resp.documents ?? [];
-      allDocs.push(...docs);
+      for (const d of docs) {
+        const id = String(d.id ?? "");
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        allDocs.push(d);
+      }
 
       // Stop if: we got fewer than page size (last page), or we hit caller's limit
       if (docs.length < pageSize) break;
@@ -660,7 +739,14 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   private async _upsertL1Async(record: MemoryRecord): Promise<void> {
     await this._ensureInit();
-    if (this.degraded) return;
+    if (this.degraded) throw new Error("L1 upsert rejected: tcvdb store is degraded");
+    // created_time/updated_time feed the _ms TTL/cursor compares — canonical
+    // instants or the "" sentinel only (same contract as sqlite/mongo).
+    if (canonRecordTs(record.createdAt) === null || canonRecordTs(record.updatedAt) === null) {
+      throw new Error(
+        `timestamps outside the instant contract (createdAt="${record.createdAt}" updatedAt="${record.updatedAt}")`,
+      );
+    }
 
     const tsStr = record.timestamps[0] ?? "";
     const tsStart = record.timestamps.length > 0
@@ -712,7 +798,18 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return 0;
 
-      const docs = records.map((record) => {
+      const ok = records.filter((record) => {
+        if (canonRecordTs(record.createdAt) === null || canonRecordTs(record.updatedAt) === null) {
+          this.logger?.warn?.(
+            `${TAG} [L1-batch] SKIPPED id=${record.id}: timestamps outside the instant contract`,
+          );
+          return false;
+        }
+        return true;
+      });
+      if (ok.length === 0) return 0;
+
+      const docs = ok.map((record) => {
         const tsStr = record.timestamps[0] ?? "";
         const tsStart = record.timestamps.length > 0
           ? record.timestamps.reduce((a, b) => (a < b ? a : b)) : tsStr;
@@ -752,19 +849,24 @@ export class TcvdbMemoryStore implements IMemoryStore {
       });
 
       await this.client.upsert(this.l1Collection, docs);
-      return records.length;
+      return docs.length;
     } catch (err) {
       this.logger?.warn(`${TAG} [L1-upsertBatch] FAILED (${records.length} records): ${err instanceof Error ? err.message : String(err)}`);
       return 0;
     }
   }
 
-  async deleteL1(recordId: string): Promise<boolean> {
+  async deleteL1(recordId: string, filter?: IsolationFilter): Promise<boolean> {
     try {
       await this._ensureInit();
       if (this.degraded) return false;
+      // Same as deleteL0: the isolation filter must reach the backend — a bare
+      // documentIds delete would let one tenant remove another's row.
+      const filterExpr = joinFilter(buildIsolationConditions(filter));
+      const query: Record<string, unknown> = { documentIds: [recordId] };
+      if (filterExpr) query.filter = filterExpr;
       const affected = await this.client.deleteDoc(this.l1Collection, {
-        query: { documentIds: [recordId] },
+        query,
       });
       return affected > 0;
     } catch (err) {
@@ -773,13 +875,16 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  async deleteL1Batch(recordIds: string[]): Promise<boolean> {
+  async deleteL1Batch(recordIds: string[], filter?: IsolationFilter): Promise<boolean> {
     if (recordIds.length === 0) return true;
     try {
       await this._ensureInit();
       if (this.degraded) return false;
+      const filterExpr = joinFilter(buildIsolationConditions(filter));
+      const query: Record<string, unknown> = { documentIds: recordIds };
+      if (filterExpr) query.filter = filterExpr;
       await this.client.deleteDoc(this.l1Collection, {
-        query: { documentIds: recordIds },
+        query,
       });
       return true;
     } catch (err) {
@@ -795,7 +900,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return 0;
 
-      const filter = `updated_time_ms < ${cutoffMs}`;
+      // `_ms > 0` mirrors sqlite's `updated_time != ''`: an absent timestamp
+      // (stored as 0) is an immortal sentinel, not "expired since epoch".
+      const filter = `updated_time_ms > 0 and updated_time_ms < ${cutoffMs}`;
       const toDelete = await this.client.count(this.l1Collection, filter);
       if (toDelete === 0) return 0;
 
@@ -853,10 +960,13 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  async queryL1Records(filter?: L1QueryFilter): Promise<L1RecordRow[]> {
+  async queryL1Records(filter?: L1QueryFilter, opts?: { strict?: boolean }): Promise<L1RecordRow[]> {
     try {
       await this._ensureInit();
-      if (this.degraded) return [];
+      if (this.degraded) {
+        if (opts?.strict) throw new Error("L1 query rejected: tcvdb store is degraded");
+        return [];
+      }
 
       // Build filter expression
       const conditions = buildIsolationConditions(filter);
@@ -929,7 +1039,8 @@ export class TcvdbMemoryStore implements IMemoryStore {
         metadata_json: String(doc.metadata_json ?? "{}"),
       }));
     } catch (err) {
-      this.logger?.warn(`${TAG} [L1-query] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger?.warn(`${TAG} [L1-query] FAILED${opts?.strict ? " (strict, rethrowing)" : ""}: ${err instanceof Error ? err.message : String(err)}`);
+      if (opts?.strict) throw err;
       return [];
     }
   }
@@ -1082,7 +1193,10 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   private async _upsertL0Async(record: L0Record): Promise<void> {
     await this._ensureInit();
-    if (this.degraded) return;
+    if (this.degraded) throw new Error("L0 upsert rejected: tcvdb store is degraded");
+    if (canonRecordTs(record.recordedAt) === null) {
+      throw new Error(`recordedAt "${record.recordedAt}" outside the instant contract`);
+    }
 
     const doc: Record<string, unknown> = {
       id: record.id,
@@ -1119,7 +1233,18 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return 0;
 
-      const docs = records.map((record) => {
+      const ok = records.filter((record) => {
+        if (canonRecordTs(record.recordedAt) === null) {
+          this.logger?.warn?.(
+            `${TAG} [L0-batch] SKIPPED id=${record.id}: recordedAt "${record.recordedAt}" outside the instant contract`,
+          );
+          return false;
+        }
+        return true;
+      });
+      if (ok.length === 0) return 0;
+
+      const docs = ok.map((record) => {
         const doc: Record<string, unknown> = {
           id: record.id,
           message_text: record.messageText,
@@ -1145,7 +1270,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       });
 
       await this.client.upsert(this.l0Collection, docs);
-      return records.length;
+      return docs.length;
     } catch (err) {
       this.logger?.warn(`${TAG} [L0-upsertBatch] FAILED (${records.length} records): ${err instanceof Error ? err.message : String(err)}`);
       return 0;
@@ -1176,7 +1301,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return 0;
 
-      const filter = `recorded_at_ms < ${cutoffMs}`;
+      const filter = `recorded_at_ms > 0 and recorded_at_ms < ${cutoffMs}`;
       const toDelete = await this.client.count(this.l0Collection, filter);
       if (toDelete === 0) return 0;
 
@@ -2523,5 +2648,184 @@ export class TcvdbMemoryStore implements IMemoryStore {
       );
       return [];
     }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Memory events（统一变更账：extraction / api_mutation / review）
+  // ─────────────────────────────────────────────────────────
+
+  async appendMemoryEvent(event: MemoryEvent): Promise<void> {
+    await this._ensureInit();
+    if (this.degraded) throw new Error("memory_events append rejected: tcvdb store is degraded");
+
+    // id = event_id：写入点生成的稳定身份（36 字符，远低于 TCVDB 文档 id
+    // 上限 128）。不能拼 record_id 等业务字段——管理面 asset_id 之类的长
+    // record_id 会把 id 撑过上限、upsert 被拒、事件静默丢失。upsert 对同 id
+    // 整体替换是安全的：回放写进来的一定是已被 marker 骨架化的事件
+    // （replayLedgerEvents 先应用 redact 标记再落库），ledger 侧的
+    // appendLedgerEvent 也对已知 marker 覆盖的事件写骨架 + 补定向擦除，
+    // 不存在"明文事件覆盖已擦骨架"的路径。
+    // Defense-in-depth (same as sqlite/mongo): non-canonical event_ts must
+    // never reach a lexical compare.
+    const eventTs = canonIsoTs(event.event_ts);
+    if (eventTs === null) {
+      throw new Error(`memory_events append rejected: non-canonical event_ts "${event.event_ts}" event_id=${event.event_id}`);
+    }
+    const id = event.event_id || newMemoryEventId();
+    // dim=1 占位向量（events 不需向量检索，仅用 filter 查询）
+    const doc: Record<string, unknown> = {
+      id,
+      vector: [0],
+      event_id: id,
+      event_ts: eventTs,
+      session_key: event.session_key,
+      session_id: event.session_id,
+      origin_session_id: event.origin_session_id ?? "",
+      origin_session_key: event.origin_session_key ?? "",
+      team_id: event.team_id ?? "",
+      agent_id: event.agent_id ?? "",
+      user_id: event.user_id ?? "",
+      task_id: event.task_id ?? "",
+      op: event.op,
+      record_id: event.record_id,
+      content: event.content,
+      memory_type: event.memory_type ?? "",
+      version: event.version ?? 0,
+      supersedes: JSON.stringify(event.supersedes ?? []),
+      superseded_by: event.superseded_by ?? "",
+      snapshot_json: event.snapshot_json ?? "",
+      reviewer_id: event.reviewer_id ?? "",
+      layer: event.layer ?? "l1",
+      source: event.source ?? "",
+      request_id: event.request_id ?? "",
+      reason: event.reason ?? "",
+      target_event_id: event.target_event_id ?? "",
+      scope: event.scope ?? "",
+      until: event.until ?? "",
+    };
+
+    try {
+      await this.client.upsert(this.eventsCollection, [doc]);
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} [events-append] FAILED record_id=${event.record_id} op=${event.op}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // Surface to the ledger writer so the failure is counted (degraded
+      // status) and left for outbox backfill.
+      throw err;
+    }
+  }
+
+  async queryMemoryEvents(filter: MemoryEventFilter): Promise<MemoryEvent[]> {
+    await this._ensureInit();
+    if (this.degraded) throw new Error("memory_events query rejected: tcvdb store is degraded");
+
+    const conds: string[] = [];
+    if (filter.session_id !== undefined) conds.push(eqFilter("session_id", filter.session_id));
+    if (filter.session_key !== undefined) conds.push(eqFilter("session_key", filter.session_key));
+    if (filter.origin_session_id !== undefined) conds.push(eqFilter("origin_session_id", filter.origin_session_id));
+    if (filter.origin_session_key !== undefined) conds.push(eqFilter("origin_session_key", filter.origin_session_key));
+    if (filter.record_id !== undefined) conds.push(eqFilter("record_id", filter.record_id));
+    if (filter.op !== undefined) conds.push(eqFilter("op", filter.op));
+    if (filter.layer !== undefined) conds.push(eqFilter("layer", filter.layer));
+    if (filter.source !== undefined) conds.push(eqFilter("source", filter.source));
+    if (filter.request_id !== undefined) conds.push(eqFilter("request_id", filter.request_id));
+    const teamCond = isoCond("team_id", filter.team_id);
+    const agentCond = isoCond("agent_id", filter.agent_id);
+    const userCond = isoCond("user_id", filter.user_id);
+    if (teamCond !== undefined) conds.push(teamCond);
+    if (agentCond !== undefined) conds.push(agentCond);
+    if (userCond !== undefined) conds.push(userCond);
+    if (filter.task_id !== undefined) conds.push(eqFilter("task_id", filter.task_id));
+    // event_ts 是 ISO 8601 字符串，字典序即时间序（与 sqlite 实现一致）。
+    if (filter.since !== undefined) conds.push(`event_ts >= "${escapeFilterString(canonEventBound(filter.since))}"`);
+    if (filter.until !== undefined) conds.push(`event_ts <= "${escapeFilterString(canonEventBound(filter.until))}"`);
+
+    const filterExpr = joinFilter(conds);
+    const limit = Math.min(Math.max(filter.limit ?? 100, 1), 1000);
+    const offset = Math.max(filter.offset ?? 0, 0);
+
+    try {
+      // _queryAllDocs 只支持从头取 N 条；要 offset 语义就多取 offset+limit 再切片。
+      const docs = await this._queryAllDocs(
+        this.eventsCollection,
+        filterExpr,
+        MEMORY_EVENTS_OUTPUT_FIELDS,
+        offset + limit,
+        [{ fieldName: "event_ts", direction: filter.order === "desc" ? "desc" : "asc" }],
+      );
+      // TCVDB sort has no tiebreaker for equal event_ts; re-sort by the
+      // unique document id so page contents are at least deterministic.
+      docs.sort((a, b) => {
+        const t = String(a.event_ts ?? "").localeCompare(String(b.event_ts ?? ""));
+        if (t !== 0) return filter.order === "desc" ? -t : t;
+        const i = String(a.id ?? "").localeCompare(String(b.id ?? ""));
+        return filter.order === "desc" ? -i : i;
+      });
+      const page = docs.slice(offset, offset + limit);
+
+      return page.map((doc) => {
+        let supersedes: string[] = [];
+        try { supersedes = JSON.parse(String(doc.supersedes ?? "[]")) as string[]; } catch { /* keep [] */ }
+        return {
+          event_id: String(doc.event_id ?? "") || String(doc.id ?? "") || undefined,
+          event_ts: String(doc.event_ts ?? ""),
+          session_key: String(doc.session_key ?? ""),
+          session_id: String(doc.session_id ?? ""),
+          origin_session_id: String(doc.origin_session_id ?? "") || undefined,
+          origin_session_key: String(doc.origin_session_key ?? "") || undefined,
+          team_id: String(doc.team_id ?? "") || undefined,
+          agent_id: String(doc.agent_id ?? "") || undefined,
+          user_id: String(doc.user_id ?? "") || undefined,
+          task_id: String(doc.task_id ?? "") || undefined,
+          op: doc.op as MemoryEvent["op"],
+          record_id: String(doc.record_id ?? ""),
+          content: String(doc.content ?? ""),
+          memory_type: String(doc.memory_type ?? "") || undefined,
+          version: Number(doc.version ?? 0),
+          supersedes: supersedes.length ? supersedes : undefined,
+          superseded_by: String(doc.superseded_by ?? "") || undefined,
+          snapshot_json: String(doc.snapshot_json ?? "") || undefined,
+          reviewer_id: String(doc.reviewer_id ?? "") || undefined,
+          layer: (String(doc.layer ?? "l1") || "l1") as MemoryEvent["layer"],
+          source: (String(doc.source ?? "") || undefined) as MemoryEvent["source"],
+          request_id: String(doc.request_id ?? "") || undefined,
+          reason: String(doc.reason ?? "") || undefined,
+          target_event_id: String(doc.target_event_id ?? "") || undefined,
+          scope: (String(doc.scope ?? "") || undefined) as MemoryEvent["scope"],
+          until: String(doc.until ?? "") || undefined,
+        };
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} [events-query] FAILED: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // An empty list would read as "no changes" to review/revert callers.
+      throw err;
+    }
+  }
+
+  async redactMemoryEvents(filter: MemoryEventRedactFilter): Promise<number> {
+    await this._ensureInit();
+    if (this.degraded) throw new Error("memory_events redact rejected: tcvdb store is degraded");
+    // event_ts 是字符串比较：非规范 until 会按字典序大面积误擦而非安全
+    // 落空。与 sqlite/mongo 同一契约：毫秒精确形态归一化，其余拒绝。
+    // 字段白名单与 marker 读侧共享（未知字段会被静默忽略 → 过宽擦除）。
+    if (!isValidRedactFilter(filter)) return 0;
+    const until = canonIsoTs(filter.until)!;
+    const teamCond = isoCond("team_id", filter.team_id);
+    const agentCond = isoCond("agent_id", filter.agent_id);
+    const userCond = isoCond("user_id", filter.user_id);
+    if (teamCond === undefined && agentCond === undefined && userCond === undefined) {
+      this.logger?.warn?.(`${TAG} redactMemoryEvents without isolation filter: wipes events across ALL tenants (until=${until})`);
+    }
+    const conds = [`event_ts <= "${escapeFilterString(until)}"`];
+    if (teamCond !== undefined) conds.push(teamCond);
+    if (agentCond !== undefined) conds.push(agentCond);
+    if (userCond !== undefined) conds.push(userCond);
+    return this.client.update(this.eventsCollection, {
+      filter: joinFilter(conds),
+      update: { content: "", snapshot_json: "" },
+    });
   }
 }

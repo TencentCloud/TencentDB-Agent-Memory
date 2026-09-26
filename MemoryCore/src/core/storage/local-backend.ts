@@ -5,7 +5,8 @@
  * Maps object keys to local file paths under a configurable root directory.
  */
 
-import { readFile, writeFile, mkdir, readdir, unlink, stat, rm, appendFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, unlink, stat, rm, appendFile, rename } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join, dirname, sep, resolve } from "node:path";
 import type {
@@ -123,6 +124,22 @@ export class LocalStorageBackend implements IStorageBackend {
     await appendFile(filePath, buf);
 
     this.logger?.debug?.(`${TAG} appendObject: ${key} (+${buf.length} bytes)`);
+  }
+
+  /** Write to a sibling temp file, then rename over `key` (atomic on POSIX and NTFS). */
+  async createObjectAtomic(key: string, content: string | Buffer): Promise<void> {
+    const filePath = this.resolvePath(key);
+    await mkdir(dirname(filePath), { recursive: true });
+    const tmpPath = `${filePath}.${randomBytes(6).toString("hex")}.tmp`;
+    const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
+    try {
+      await writeFile(tmpPath, buf);
+      await rename(tmpPath, filePath);
+    } catch (err) {
+      await rm(tmpPath, { force: true }).catch(() => {});
+      throw err;
+    }
+    this.logger?.debug?.(`${TAG} createObjectAtomic: ${key} (${buf.length} bytes)`);
   }
 
   async getObject(key: string): Promise<StorageObject | null> {
