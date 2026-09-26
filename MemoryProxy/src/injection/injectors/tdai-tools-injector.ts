@@ -43,6 +43,7 @@ import type {
 } from "../types.js";
 import { HOOK_PRIORITY } from "../types.js";
 import { getTdaiIdentity } from "../../tdai/identity.js";
+import { buildHookCacheVariant } from "../hook-cache-key.js";
 
 export interface TdaiMemoryToolsInjectorConfig {
   /**
@@ -148,8 +149,13 @@ export class TdaiMemoryToolsInjector implements InjectionHook {
   description = "Inject <tdai_memory_tools> curl recipes block into system prompt";
   /** Static tool instructions are session-stable; render once at session_init. */
   cacheStrategy: CacheStrategy = "session_init";
+  cacheVariant: string;
 
-  constructor(private cfg: TdaiMemoryToolsInjectorConfig) {}
+  constructor(private cfg: TdaiMemoryToolsInjectorConfig) {
+    this.cacheVariant = buildHookCacheVariant({
+      proxyBaseUrl: cfg.proxyBaseUrl.replace(/\/$/, ""),
+    });
+  }
 
   execute(ctx: AgentContext): ContextBlock[] {
     const caps = ctx.metadata.custom?.assetCapabilities as { chat_memory?: boolean } | undefined;
