@@ -201,6 +201,16 @@ function isSystemReminder(msg: Message): boolean {
 export const TOOL_RESULT_TRUNCATE_CHARS = 2000;
 
 /**
+ * Truncate tool_result content so its final length (notice included) never
+ * exceeds `truncateChars`; prevents truncation loops from re-selecting the
+ * same message and spinning forever.
+ */
+function truncateToolResultContent(content: string, truncateChars: number): string {
+  const notice = `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+  return content.slice(0, Math.max(0, truncateChars - notice.length)) + notice;
+}
+
+/**
  * Find index of the last user message (excluding MMD injections).
  * Returns -1 if no user message found.
  */
@@ -248,7 +258,7 @@ export function truncateTailToolResults(
     // Truncate
     const msg = messages[maxIdx];
     const oldContent = getTextContent(msg);
-    const truncated = oldContent.slice(0, truncateChars) + `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const truncated = truncateToolResultContent(oldContent, truncateChars);
     setTextContent(msg, truncated);
 
     // Recalculate token for this message
@@ -298,8 +308,7 @@ function truncateRemainingToolResults(
 
     // Truncate
     const oldContent = getTextContent(messages[maxIdx]);
-    const truncated = oldContent.slice(0, truncateChars) +
-      `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const truncated = truncateToolResultContent(oldContent, truncateChars);
     setTextContent(messages[maxIdx], truncated);
 
     // Recalculate token
@@ -754,8 +763,7 @@ export function aggressiveCompress(
 
     const oldTokens = tokenArray[maxIdx];
     const oldContent = getTextContent(messages[maxIdx]);
-    const truncated = oldContent.slice(0, TOOL_RESULT_TRUNCATE_CHARS) +
-      `\n\n[... content truncated, only first ${TOOL_RESULT_TRUNCATE_CHARS} characters retained ...]`;
+    const truncated = truncateToolResultContent(oldContent, TOOL_RESULT_TRUNCATE_CHARS);
     setTextContent(messages[maxIdx], truncated);
     const newTokens = preciseMessageTokens(messages[maxIdx]);
     tokenArray[maxIdx] = newTokens;
@@ -1079,8 +1087,7 @@ export function emergencyCompress(
 
     const oldTokens = tokenArray[maxIdx];
     const oldContent = getTextContent(messages[maxIdx]);
-    const truncated = oldContent.slice(0, TOOL_RESULT_TRUNCATE_CHARS) +
-      `\n\n[... content truncated, only first ${TOOL_RESULT_TRUNCATE_CHARS} characters retained ...]`;
+    const truncated = truncateToolResultContent(oldContent, TOOL_RESULT_TRUNCATE_CHARS);
     setTextContent(messages[maxIdx], truncated);
     const newTokens = preciseMessageTokens(messages[maxIdx]);
     tokenArray[maxIdx] = newTokens;
