@@ -337,3 +337,7 @@ docker pull agentmemory/memory-hub:beta
 | `PUSH` | `1` | `0` = 本地 `--load` 单架构 |
 | `ALSO_BETA` | `1` | `1` = 额外推浮动 `:beta` |
 | `ALSO_LATEST` | `0` | `1` = 额外推 `:latest` |
+
+### Private Git credentials
+
+Set `KNOWLEDGE_GIT_CREDENTIAL_KEY` to a stable 64-character hex key generated once with `openssl rand -hex 32`. Also configure `KNOWLEDGE_SERVICE_KEY` and the matching Panel `KNOWLEDGE_AUTH_TOKEN`. See [private Git setup and sharing boundaries](../../MemoryKnowledge/docs/private-git.md).

@@ -1,6 +1,43 @@
 /** English translation — en-US */
 
 export const enUS = {
+  "gitCredential.scope": "Scope",
+  "gitCredential.anySshServer": "SSH · Multiple servers",
+  "gitCredential.managedHosts": "No manual known_hosts needed. Confirm the fingerprint on the first connection; it is saved and checked on subsequent connections. Changed keys block access.",
+  "gitCredential.hostConfirm": "Confirm the SSH fingerprint for {{server}}",
+  "gitCredential.hostChanged": "SSH host keys changed for {{server}}",
+  "gitCredential.verifyFingerprint": "Compare with fingerprints published by your Git provider or verified by your administrator. Confirmation saves server trust; cancellation does not authenticate with your private key.",
+  "gitCredential.trustHost": "Fingerprint verified; trust server",
+  "gitCredential.manage": "Manage Git credentials",
+  "gitCredential.ownerHint": "Only credentials you own in this team are shown. Secrets are never returned after saving. Rotated credentials apply to the next sync.",
+  "gitCredential.authMode": "Git authentication",
+  "gitCredential.noAuth": "No authentication",
+  "gitCredential.useSaved": "Use saved credential",
+  "gitCredential.choose": "Select a Git credential",
+  "gitCredential.hostname": "Git hostname",
+  "gitCredential.serverHint": "Enter only the hostname, e.g. cnb.cool, without protocol, port or repository path. Matching uses the repository URL hostname across HTTPS repositories on that host.",
+  "gitCredential.testRepoHint": "Enter a repository on this server to verify access. This URL is used only for this test and is not bound to the credential.",
+  "gitCredential.serverMismatch": "The authentication type does not match the repository URL, or the HTTPS repository hostname differs from the credential.",
+  "gitCredential.keyHint": "Use an unencrypted SSH private key. Git provider key permissions determine repository access. The private key is never sent to agents.",
+  "gitCredential.name": "Credential name",
+  "gitCredential.kind": "Authentication",
+  "gitCredential.actions": "Actions",
+  "gitCredential.rotate": "Rotate credential",
+  "gitCredential.add": "Save credential",
+  "gitCredential.addNew": "New credential",
+  "gitCredential.test": "Test connection",
+  "gitCredential.sshKey": "SSH private key",
+  "gitCredential.username": "Git username",
+  "gitCredential.tokenHint": "Use a token with read access to the repository and the username required by your Git provider.",
+  "gitCredential.select": "Git credential",
+  "gitCredential.none": "No credential (public HTTPS repository)",
+  "gitCredential.shareConsent": "I agree to share this repository’s code index with the current team. I retain ownership of the Git credential.",
+  "gitCredential.saved": "Credential saved. The next sync will use the latest secret.",
+  "gitCredential.bindingSaved": "Repository credential updated. Sync to retry.",
+  "gitCredential.saveBinding": "Update repository credential",
+  "gitCredential.testOk": "Connection succeeded. The repository is accessible.",
+  "gitCredential.deleteConfirm": "Delete credential “{{name}}”? Credentials bound to a code graph must be unbound first.",
+
   // ===== App =====
   'app.checkingSession': 'Checking session…',
 
@@ -443,11 +480,11 @@ export const enUS = {
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
   'code.register.branch': 'Branch',
   'code.register.sshWarning':
-    'SSH format repository URLs are not supported in this version. Please use HTTPS format (e.g. https://gitlab.example.com/namespace/repo.git).',
+    'Create and select an SSH credential before registering an SSH repository.',
   'code.register.urlError':
-    'Please enter a valid HTTP(S) Git repository URL ending with .git (e.g. https://gitlab.example.com/namespace/repo.git). No spaces allowed.',
+    'Enter an HTTPS or SSH repository URL without passwords, tokens, spaces or query parameters.',
   'code.register.invalidUrl':
-    'Please enter a valid HTTPS Git repository URL ending with .git (e.g. https://gitlab.example.com/namespace/repo.git). No spaces allowed.',
+    'Enter an HTTPS or SSH repository URL without passwords, tokens, spaces or query parameters.',
   'code.register.submitting': 'Registering…',
   'code.register.submit': 'Register',
   'code.confirm.delete': 'Are you sure you want to delete repo "{{name}} ({{branch}}"?',

@@ -6,6 +6,7 @@
  * 返回 KS 的 { text, isError } 文本块。
  */
 import type { Hono } from 'hono';
+import { DomainError } from '../../../domain/errors.js';
 import { validatePanelMetaHeaders } from '../../middleware/validate-panel-headers.js';
 import { respondControlError } from '../../envelope.js';
 import type { PanelDeps } from '../../../panel-deps.js';
@@ -58,7 +59,10 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     const repoName = str(body, 'repo_name') ?? undefined;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     try {
-      const detail = await kc.codeGraphCreate(teamId, repoUrl, branch, gate.userId, repoName);
+      const detail = await kc.codeGraphCreate(teamId, repoUrl, branch, gate.userId, repoName, {
+        credential_id: str(body, 'credential_id') ?? undefined,
+        share_with_team: body.share_with_team === true,
+      });
       // stash owner key 供 status-callback ready 时以 owner 身份注册 meta asset
       // （callback 是 S2S、无 user_key；详见 knowledge-task-registry.ts）
       if (ctx.userKey) {
@@ -83,6 +87,22 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     } catch (err) {
       return runKs(c, () => Promise.reject(err));
     }
+  });
+
+  api.post('/knowledge/code-graph/set-credential', mw, async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const id = str(body, 'code_graph_id');
+    if (!id) return respondControlError(c, 400, 'MISSING_CODE_GRAPH_ID');
+    const gate = await requireKnowledgeRead(deps, c, ctx, id, { action: 'write', allowInFlightCodeOwner: true });
+    if ('error' in gate) return gate.error;
+    const kc = deps.knowledgeClientFactory(ctx.instanceId);
+    return runKs(c, async () => {
+      const graph = await kc.codeGraphGet(id);
+      if (graph.owner_user_id !== gate.userId) throw new DomainError('Only the owner may change Git credentials', 'NOT_RESOURCE_OWNER', 403);
+      if (body.credential_id !== null && !str(body, 'credential_id')) throw new DomainError('Credential ID or null is required', 'INVALID_CREDENTIAL', 400);
+      return kc.codeGraphSetCredential(id, gate.userId, str(body, 'credential_id'), body.share_with_team === true);
+    });
   });
 
   // C3b register-meta — code ready 后 owner 登记 meta（create 时不写 meta）

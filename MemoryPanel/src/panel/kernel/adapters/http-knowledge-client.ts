@@ -10,6 +10,10 @@
 import { CoreUpstreamError } from '../../domain/errors.js';
 import type {
   KnowledgeClientPort,
+  GitBindingInput,
+  GitHostKeyInfo,
+  GitCredentialInfo,
+  GitCredentialInput,
   WikiDetail,
   WikiListResult,
   WikiIngestResult,
@@ -152,15 +156,44 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
     return this.post('/v3/wiki/update-meta', { wiki_id: wikiId, ...patch });
   }
 
+  async gitCredentialList(teamId: string, userId: string): Promise<{ items: GitCredentialInfo[] }> {
+    return this.post('/v3/source-credential/list', { team_id: teamId, user_id: userId });
+  }
+
+  async gitCredentialPut(teamId: string, userId: string, input: GitCredentialInput): Promise<GitCredentialInfo> {
+    return this.post('/v3/source-credential/put', { ...input, team_id: teamId, user_id: userId });
+  }
+
+  async gitCredentialDelete(teamId: string, userId: string, id: string): Promise<{ deleted: boolean }> {
+    return this.post('/v3/source-credential/delete', { team_id: teamId, user_id: userId, credential_id: id });
+  }
+
+  async gitCredentialTest(teamId: string, userId: string, id: string, repoUrl: string): Promise<{ accessible: boolean }> {
+    return this.post('/v3/source-credential/test', { team_id: teamId, user_id: userId, credential_id: id, repo_url: repoUrl });
+  }
+
+  async gitCredentialHostKey(teamId: string, userId: string, id: string, repoUrl: string, refresh: boolean): Promise<GitHostKeyInfo> {
+    return this.post('/v3/source-credential/host-key', { team_id: teamId, user_id: userId, credential_id: id, repo_url: repoUrl, refresh });
+  }
+
+  async gitCredentialTrustHost(teamId: string, userId: string, id: string, repoUrl: string, knownHosts: string, previous: string | null): Promise<{ trusted: boolean }> {
+    return this.post('/v3/source-credential/trust-host', { team_id: teamId, user_id: userId, credential_id: id, repo_url: repoUrl, known_hosts: knownHosts, previous_known_hosts: previous });
+  }
+
+  async codeGraphSetCredential(codeGraphId: string, userId: string, credentialId: string | null, shareWithTeam: boolean): Promise<CodeGraphDetail> {
+    return this.post('/v3/code-graph/set-credential', { code_graph_id: codeGraphId, user_id: userId, credential_id: credentialId, share_with_team: shareWithTeam });
+  }
+
   // ═══════════════ Code-Graph ═══════════════
 
-  async codeGraphCreate(teamId: string, repoUrl: string, branch?: string, userId?: string, repoName?: string): Promise<CodeGraphDetail> {
+  async codeGraphCreate(teamId: string, repoUrl: string, branch?: string, userId?: string, repoName?: string, binding?: GitBindingInput): Promise<CodeGraphDetail> {
     return this.post('/v3/code-graph/create', {
       team_id: teamId,
       user_id: userId,
       repo_url: repoUrl,
       branch: branch ?? 'main',
       repo_name: repoName,
+      ...binding,
     });
   }
 

@@ -8,7 +8,7 @@
  *
  * 只读白名单（Agent 直连面）保持开放：
  *   tools/list、tools/call（Agent 自发现与只读工具执行）、wiki/code-graph 查询类、
- *   source-credential/status（元数据不含 secret）、source-provider 列表、
+ *   source-provider 列表、
  *   auto-sync/status。
  * 注意：llm-binding 的 status/list 虽不回显 api_key 明文，但会暴露 binding
  * 存在性与 base_url（侦察价值），故不放行——唯一调用方 Panel 均携带 key。
@@ -69,7 +69,6 @@ const READONLY_POST_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 const READONLY_GET_PATHS: ReadonlySet<string> = new Set([
-  "/source-credential/status", // 元数据，不含 secret
   "/auto-sync/status",
 ]);
 

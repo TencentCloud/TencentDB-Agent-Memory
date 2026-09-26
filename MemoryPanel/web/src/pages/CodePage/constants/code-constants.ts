@@ -8,16 +8,32 @@
 export type { SubView, ViewMode, StatusFilter, ScopeTab } from '@/lib/asset-common';
 export { formatShortTime } from '@/lib/asset-common';
 
-/**
- * 校验是否为合法的 HTTP(S) Git 仓库地址（正则匹配）。
- * 要求：http/https 协议、host 含点（真实域名）、路径不含空格且以 .git 结尾。
- * 用正则而非 URL 解析 —— new URL() 会接受路径中的空格（如 /a b/repo.git），
- * 且不强制 .git 后缀，均不符合 code graph 注册的严格约束。
- * SSH（git@...）不在此判定为 true —— 由调用方单独提示"暂不支持 SSH"。
- */
-const GIT_HTTP_URL_RE = /^https?:\/\/[^\s/]+\.[^\s/]+\/[^\s]+\.git$/i;
-export function isValidGitHttpUrl(raw: string): boolean {
-  return GIT_HTTP_URL_RE.test(raw.trim());
+/** HTTPS and SSH URLs without embedded secrets. Server validates again before use. */
+export function normalizeGitUrl(raw: string): string | null {
+  const value = raw.trim();
+  if (!value || /[\\\s\x00-\x1f\x7f]/.test(value)) return null;
+  const scp = /^([a-zA-Z0-9_-]+)@([a-zA-Z0-9.-]+):([^?#]+)$/.exec(value);
+  try {
+    const url = new URL(scp ? `ssh://${scp[1]}@${scp[2]}/${scp[3]}` : value);
+    if (!['https:', 'ssh:'].includes(url.protocol) || !url.hostname || !url.pathname || url.pathname === '/' || url.search || url.hash || url.password) return null;
+    if (url.protocol === 'https:' && url.username) return null;
+    if (url.protocol === 'ssh:' && !/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(url.username)) return null;
+    return scp ? `${scp[1]}@${url.hostname}:${scp[3]}` : url.toString();
+  } catch { return null; }
+}
+
+export function isValidGitUrl(raw: string): boolean { return normalizeGitUrl(raw) !== null; }
+
+export function isSshGitUrl(raw: string): boolean {
+  const normalized = normalizeGitUrl(raw);
+  return normalized !== null && !normalized.startsWith('https:');
+}
+
+export function credentialMatchesRepo(credential: { kind: 'https' | 'ssh'; hostname: string | null }, repoUrl: string): boolean {
+  const normalized = normalizeGitUrl(repoUrl);
+  if (!normalized) return false;
+  if (credential.kind === 'ssh') return !normalized.startsWith('https:');
+  return normalized.startsWith('https:') && new URL(normalized).hostname.replace(/\.$/, '') === credential.hostname;
 }
 
 /**
