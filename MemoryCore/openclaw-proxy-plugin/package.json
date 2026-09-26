@@ -1,0 +1,41 @@
+{
+  "name": "@tencentdb-agent-memory/openclaw-proxy-session-bridge",
+  "version": "0.1.0",
+  "description": "Maps OpenClaw native session IDs to MemoryProxy conversation headers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tgz",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "openclaw": "2026.8.2",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}

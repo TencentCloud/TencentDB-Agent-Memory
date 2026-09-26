@@ -21,6 +21,37 @@ require_vars \
   PROXY_IMAGE PROXY_PORT \
   PROXY_UPSTREAM_URL PROXY_UPSTREAM_API_KEY PROXY_UPSTREAM_MODEL
 
+valid_decimal_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  local port="${1#${1%%[!0]*}}"
+  [[ -n "$port" ]] || port=0
+  (( port >= 1 && port <= 65535 ))
+}
+if ! valid_decimal_port "$PROXY_PORT"; then
+  die "PROXY_PORT 必须是十进制整数，端口范围为 1–65535。"
+fi
+PROXY_PORT="${PROXY_PORT#${PROXY_PORT%%[!0]*}}"
+
+EXTERNAL_GATEWAY_YAML=""
+SESSION_INIT_PUBLIC_BASE_YAML=""
+valid_proxy_base_url() {
+  [[ "$1" =~ ^https?://(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9][a-zA-Z0-9._-]*)(:[0-9]{1,5})?(/[a-zA-Z0-9._~%/+:-]*)?$ ]] || return 1
+  local port="${BASH_REMATCH[2]#:}"
+  [[ -z "$port" ]] || (( 10#$port >= 1 && 10#$port <= 65535 ))
+}
+if [[ -n "${PROXY_SESSION_INIT_PUBLIC_BASE_URL:-}" ]]; then
+  if ! valid_proxy_base_url "$PROXY_SESSION_INIT_PUBLIC_BASE_URL"; then
+    die "PROXY_SESSION_INIT_PUBLIC_BASE_URL 必须是无凭据、查询串、片段或空白的 HTTP(S) 基础地址，端口范围为 1–65535。"
+  fi
+  SESSION_INIT_PUBLIC_BASE_YAML="  webPublicBaseUrl: '${PROXY_SESSION_INIT_PUBLIC_BASE_URL}'"
+fi
+if [[ -n "${PROXY_EXTERNAL_GATEWAY_URL:-}" ]]; then
+  if ! valid_proxy_base_url "$PROXY_EXTERNAL_GATEWAY_URL"; then
+    die "PROXY_EXTERNAL_GATEWAY_URL 必须是 HTTP(S) 基础地址，不含凭据、查询串、片段、空白或 Shell 特殊字符，端口范围为 1–65535。"
+  fi
+  EXTERNAL_GATEWAY_YAML="  externalGatewayUrl: '${PROXY_EXTERNAL_GATEWAY_URL}'"
+fi
+
 # 与 memory-core 保持一致的 gateway 内部凭据（默认 local，仅本地体验）
 MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 
@@ -123,6 +154,7 @@ auth:
 
 sessionInit:
   enabled: $(bool $PROXY_ENABLE_SESSION_INIT)
+${SESSION_INIT_PUBLIC_BASE_YAML}
   maxRetries: 3
   injectAgentContext: true
   injectTaskContext: true
@@ -140,6 +172,7 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+${EXTERNAL_GATEWAY_YAML}
   injectors:
     - skill
     - knowledge
