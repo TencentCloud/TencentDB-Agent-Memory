@@ -95,7 +95,20 @@ class HttpStub(Stub):
                 request_id=req_id,
                 details=details,
             )
-        result: dict = data.get("data", {})
+        # ``get``'s default never fires for an explicit ``null``, so an empty
+        # data payload must be normalized or the trace-id write below crashes
+        # with TypeError. Normalize only ``None``: other falsy payloads
+        # (``[]``/``""``/``0``/``false``) are malformed and must not silently
+        # pass as an empty success. Non-dict data fails as a clean TDAMError.
+        result = data.get("data")
+        if result is None:
+            result = {}
+        if not isinstance(result, dict):
+            raise TDAMError(
+                code=-1,
+                message="API response data must be a JSON object",
+                request_id=resp.headers.get("x-qcloud-transaction-id", data.get("request_id", "")),
+            )
         trace_id = resp.headers.get("x-trace-id")
         if trace_id:
             result["trace_id"] = trace_id
@@ -155,7 +168,20 @@ class AsyncHttpStub:
                 request_id=req_id,
                 details=details,
             )
-        result: dict = data.get("data", {})
+        # ``get``'s default never fires for an explicit ``null``, so an empty
+        # data payload must be normalized or the trace-id write below crashes
+        # with TypeError. Normalize only ``None``: other falsy payloads
+        # (``[]``/``""``/``0``/``false``) are malformed and must not silently
+        # pass as an empty success. Non-dict data fails as a clean TDAMError.
+        result = data.get("data")
+        if result is None:
+            result = {}
+        if not isinstance(result, dict):
+            raise TDAMError(
+                code=-1,
+                message="API response data must be a JSON object",
+                request_id=resp.headers.get("x-qcloud-transaction-id", data.get("request_id", "")),
+            )
         trace_id = resp.headers.get("x-trace-id")
         if trace_id:
             result["trace_id"] = trace_id
