@@ -332,7 +332,7 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       if (!row) return c.json(wrapError(404, "code graph not found"), 404);
 
       if (row.status !== "ready") {
-        return c.json(wrapOk({ text: "", isError: false }));
+        return c.json(wrapError(503, `code graph is not ready: ${row.status}`), 503);
       }
 
       let instance = instancePool.get(cgId);

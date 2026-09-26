@@ -413,7 +413,7 @@ async function executeCodeGraphTool(
 
   // All other tools require synced status
   if (row.status !== "ready") {
-    return Response.json(wrapOk({ text: "", isError: false }));
+    return Response.json(wrapError(503, `code graph is not ready: ${row.status}`), { status: 503 });
   }
 
   // Map tool name to internal codegraph action
