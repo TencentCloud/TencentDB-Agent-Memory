@@ -278,6 +278,100 @@ def test_healthy_to_failed_window_shows_degraded(provider):
     assert provider.unavailable_reason() != ""
 
 
+def test_tool_call_failure_degrades_diagnostics(provider):
+    """The tool-call path must feed the outage accounting too: a failed
+    memory_search with the availability flag still True is the same
+    healthy→failed window as a failed capture."""
+    provider._stop_watchdog()
+    fake = provider._fake
+    fake.alive = False
+    fake.healthy = False
+    fake.respawn_succeeds = False
+    fake.client.search_memories.side_effect = RuntimeError("gateway exploded")
+
+    assert provider._gateway_available, "precondition: provider still healthy"
+
+    out = provider.handle_tool_call(
+        "memory_tencentdb_memory_search", {"query": "anything"}
+    )
+
+    assert "Tool call failed" in out
+    assert _wait_until(
+        lambda: provider._gateway_down_since is not None, timeout=2.0
+    ), "failed tool call never got accounted"
+    assert provider._gateway_available, "precondition drifted"
+    block = provider.system_prompt_block()
+    assert "DEGRADED" in block and "Active" not in block
+    assert provider.unavailable_reason() != ""
+
+
+def test_tool_call_success_marks_gateway_up(provider):
+    """A successful tool call proves the Gateway is alive, so it should
+    close a tracked outage just like a successful capture does."""
+    provider._stop_watchdog()
+    fake = provider._fake
+    fake.alive = False
+    fake.healthy = False
+    fake.respawn_succeeds = False
+    fake.client.search_memories.side_effect = RuntimeError("gateway exploded")
+
+    provider.handle_tool_call("memory_tencentdb_memory_search", {"query": "x"})
+    assert _wait_until(
+        lambda: provider._gateway_down_since is not None, timeout=2.0
+    )
+
+    # Gateway returns; the next tool call succeeds and must close the outage.
+    fake.alive = True
+    fake.healthy = True
+    fake.respawn_succeeds = True
+    fake.client.search_memories.side_effect = None
+    fake.client.search_memories.return_value = {"results": []}
+
+    provider.handle_tool_call("memory_tencentdb_memory_search", {"query": "x"})
+
+    assert provider._gateway_down_since is None, "outage stayed open after a successful tool call"
+    assert "Active" in provider.system_prompt_block()
+
+
+def test_watchdog_external_revival_closes_outage(provider):
+    """The watchdog's external-restart branch restores availability, so it
+    must close the outage accounting too — otherwise the diagnostics keep
+    reporting DEGRADED while the Gateway is alive again, the mirror image
+    of the healthy→failed window."""
+    fake = provider._fake
+    provider._stop_watchdog()
+    provider._gateway_available = False
+    provider._client = None
+    fake.alive = False
+    fake.healthy = False
+    fake.respawn_succeeds = False
+    fake.client.capture.side_effect = RuntimeError("gateway exploded")
+
+    provider.sync_turn(user_content="u", assistant_content="a")
+    assert _wait_until(
+        lambda: provider._gateway_down_since is not None, timeout=2.0
+    ), "precondition: outage never got accounted"
+    assert provider._lost_turn_count == 1
+
+    # The Gateway comes back on its own (operator restart); the watchdog
+    # picks it up via its health probe without re-spawning.
+    fake.alive = True
+    fake.healthy = True
+    provider._start_watchdog()
+
+    assert _wait_until(
+        lambda: provider._gateway_available, timeout=3.0
+    ), "watchdog never picked up the external restart"
+    assert provider._gateway_down_since is None, (
+        "watchdog restored availability but left the outage accounting open"
+    )
+    block = provider.system_prompt_block()
+    assert "Active" in block and "DEGRADED" not in block
+    assert provider.unavailable_reason() == ""
+    assert provider._last_outage_summary is not None
+    assert "1 conversation turn" in provider._last_outage_summary
+
+
 def test_transient_blip_leaves_no_degraded_block(provider):
     """A single failed request that immediately recovers must not leave the
     provider looking degraded — the outage summary is kept, but the block

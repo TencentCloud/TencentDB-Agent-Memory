@@ -438,8 +438,9 @@ class MemoryTencentdbProvider(MemoryProvider):
         #     request, so the degraded prompt block can say when it began.
         #   * _lost_turn_count    — sync_turn() calls that were NOT captured.
         #   * _last_outage_summary — filled by _mark_gateway_up() on
-        #     recovery and surfaced once in the restored prompt block, so
-        #     the agent can tell the user exactly how much went missing.
+        #     recovery and carried in every subsequent Active prompt block
+        #     until the next outage replaces it, so the agent can tell the
+        #     user exactly how much went missing.
         # _degraded_lock guards all three: _note_lost_turn() runs on
         # background sync threads while _mark_gateway_up() may run on the
         # request thread or inside recovery.
@@ -512,7 +513,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     if self._gateway_down_since is not None
                     else "unknown time"
                 )
-                up_ts = time.strftime("%H:%M")
+                up_ts = time.strftime("%Y-%m-%d %H:%M")
                 if self._lost_turn_count == 1:
                     self._last_outage_summary = (
                         f"1 conversation turn between {down_ts} and {up_ts} "
@@ -741,6 +742,11 @@ class MemoryTencentdbProvider(MemoryProvider):
                         self._gateway_available = True
                         self._consecutive_failures = 0
                         self._breaker_open_until = 0.0
+                        # If this revival ends a tracked outage, close the
+                        # accounting too — otherwise the diagnostics keep
+                        # reporting DEGRADED while the Gateway is alive,
+                        # the mirror image of the healthy→failed window.
+                        self._mark_gateway_up()
                     continue
 
                 # Truly down. Attempt resurrection, bypassing the request-path
@@ -928,6 +934,7 @@ class MemoryTencentdbProvider(MemoryProvider):
         with self._degraded_lock:
             down_since = self._gateway_down_since
             lost = self._lost_turn_count
+            last_summary = self._last_outage_summary
         if not self._gateway_available or down_since is not None:
             # Degraded, not silent: the agent must know memory is down,
             # otherwise it keeps assuming writes are being saved. The
@@ -945,11 +952,16 @@ class MemoryTencentdbProvider(MemoryProvider):
                     + "."
                 )
             if lost:
-                noun = "turn" if lost == 1 else "turns"
-                lines.append(
-                    f"{lost} conversation {noun} have not been saved during "
-                    "this outage."
-                )
+                if lost == 1:
+                    lines.append(
+                        "1 conversation turn has not been saved during "
+                        "this outage."
+                    )
+                else:
+                    lines.append(
+                        f"{lost} conversation turns have not been saved during "
+                        "this outage."
+                    )
             return "\n".join(lines)
 
         block = (
@@ -960,8 +972,8 @@ class MemoryTencentdbProvider(MemoryProvider):
             "Use memory_tencentdb_memory_search to find specific memories, "
             "memory_tencentdb_conversation_search to search raw conversation history."
         )
-        if self._last_outage_summary:
-            block += "\nNote: " + self._last_outage_summary
+        if last_summary:
+            block += "\nNote: " + last_summary
         return block
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -1163,11 +1175,19 @@ class MemoryTencentdbProvider(MemoryProvider):
         # _gateway_available back to True.
         self._ensure_alive_for_request()
         if not self._client:
+            # The lazy probe could not revive the Gateway: account the
+            # outage so the diagnostics agree with what the tool caller
+            # just experienced.
+            self._note_gateway_down()
             return json.dumps({
                 "error": "memory-tencentdb Gateway is not connected. Memory search is temporarily unavailable.",
                 "hint": "The Gateway may still be starting up. Try again in a moment.",
             })
         if self._is_breaker_open():
+            # An open breaker means recent requests failed hard; feed the
+            # accounting here too, in case those failures all came through
+            # this path.
+            self._note_gateway_down()
             return json.dumps({"error": "memory-tencentdb Gateway temporarily unavailable (circuit breaker open)."})
 
         try:
@@ -1181,6 +1201,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     type_filter=args.get("type", ""),
                 )
                 self._record_success()
+                self._mark_gateway_up()
                 return json.dumps(result)
 
             if tool_name == "memory_tencentdb_conversation_search":
@@ -1192,6 +1213,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     limit=_coerce_limit(args.get("limit")),
                 )
                 self._record_success()
+                self._mark_gateway_up()
                 return json.dumps(result)
 
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -1200,6 +1222,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             self._record_failure()
             # Same fire-and-forget recovery as prefetch(); the error
             # returned to the LLM below is unchanged.
+            self._note_gateway_down()
             self._try_recover_gateway()
             return json.dumps({"error": f"Tool call failed: {e}"})
 
