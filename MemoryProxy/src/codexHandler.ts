@@ -205,11 +205,10 @@ export function detectDefaultModeGate(input: unknown): boolean {
 // ── Asset injection (exported for unit tests) ────────────────────────────────
 
 /**
- * Inject `<tdai_injections>` wrapper into codex body.input[0].content[].
+ * Inject `<tdai_injections>` into a developer/system message in body.input.
  *
- * Appends the injection block to the developer message (input[0]) content.
- * Defensive: if input[0] is not a message with an array content, returns
- * the body unchanged.
+ * Preserves leading tool declarations and existing input order. Creates a
+ * developer message when no usable instruction message exists.
  *
  * Returns a shallow copy — original body is not mutated.
  */
@@ -220,19 +219,34 @@ export function injectCodexAssets(
   const input = body.input;
   if (!Array.isArray(input) || input.length === 0) return body;
 
-  const devMsg = input[0] as Record<string, unknown> | null;
-  if (!devMsg || typeof devMsg !== "object") return body;
-  if (devMsg.type !== "message") return body;
-
-  const content = devMsg.content;
-  if (!Array.isArray(content)) return body;
-
+  // Codex 0.154 can put additional_tools before the developer message.
+  // Only append to a real instruction message, never to a user/tool item.
+  const index = input.findIndex((item: unknown) => {
+    if (!item || typeof item !== "object") return false;
+    const msg = item as Record<string, unknown>;
+    return (msg.type === "message" || msg.type === undefined) &&
+      (msg.role === "developer" || msg.role === "system") &&
+      (Array.isArray(msg.content) || typeof msg.content === "string");
+  });
   const injectionBlock = buildCodexInjectionBlock(assets);
-
-  // Shallow-copy chain: body → input → input[0] → content
-  const newContent = [...content, injectionBlock];
-  const newDevMsg = { ...devMsg, content: newContent };
-  const newInput = [newDevMsg, ...input.slice(1)];
+  const newInput = [...input];
+  if (index >= 0) {
+    const msg = input[index] as Record<string, unknown>;
+    const content = Array.isArray(msg.content)
+      ? msg.content
+      : [{ type: "input_text", text: msg.content }];
+    newInput[index] = { ...msg, content: [...content, injectionBlock] };
+  } else {
+    // Keep leading metadata/tool declarations and all existing item ordering.
+    const firstMessage = input.findIndex((item: unknown) => {
+      if (!item || typeof item !== "object") return false;
+      const msg = item as Record<string, unknown>;
+      return msg.type === "message" || (msg.type === undefined && typeof msg.role === "string");
+    });
+    newInput.splice(firstMessage < 0 ? newInput.length : firstMessage, 0, {
+      type: "message", role: "developer", content: [injectionBlock],
+    });
+  }
   return { ...body, input: newInput };
 }
 
@@ -285,6 +299,7 @@ export async function handleCodexEndpoint(
 
   // ── 1. Auth ────────────────────────────────────────────────────────────────
   const apiKey =
+    c.req.header("x-tdai-user-key") ??
     extractBearerToken(c.req.header("authorization") ?? c.req.header("Authorization") ?? "") ??
     c.req.header("x-api-key") ??
     "";
@@ -1109,8 +1124,12 @@ async function forwardToUpstream(
   if (agentUpstreamEntry) {
     if (agentUpstreamEntry.apiKey) {
       upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
+    } else {
+      const clientAuth =
+        c.req.header("authorization") ?? c.req.header("Authorization");
+      if (clientAuth) upstreamHeaders["authorization"] = clientAuth;
+      else delete upstreamHeaders["authorization"];
     }
-    // else: 保留 c.req.header('authorization') 里的客户端 key 透传
   }
 
   // ── Instance upstream config override (codex has no cost-guard routing) ──
