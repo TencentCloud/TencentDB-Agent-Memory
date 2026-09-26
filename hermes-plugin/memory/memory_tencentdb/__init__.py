@@ -905,7 +905,14 @@ class MemoryTencentdbProvider(MemoryProvider):
 
     def unavailable_reason(self) -> str:
         """Short, user-facing hint for "provider unavailable" diagnostics."""
-        if self._gateway_available:
+        # Key off the outage accounting, not just _gateway_available: on the
+        # healthy→failed transition the flag lags behind the first failed
+        # request (it only flips via the breaker or the watchdog), so a
+        # provider whose capture just failed would otherwise still report
+        # "" here.
+        with self._degraded_lock:
+            tracking_outage = self._gateway_down_since is not None
+        if self._gateway_available and not tracking_outage:
             return ""
         if not self._initialized:
             return "not initialized (Gateway never started)"
@@ -918,12 +925,14 @@ class MemoryTencentdbProvider(MemoryProvider):
         return "Gateway unreachable"
 
     def system_prompt_block(self) -> str:
-        if not self._gateway_available:
+        with self._degraded_lock:
+            down_since = self._gateway_down_since
+            lost = self._lost_turn_count
+        if not self._gateway_available or down_since is not None:
             # Degraded, not silent: the agent must know memory is down,
-            # otherwise it keeps assuming writes are being saved.
-            with self._degraded_lock:
-                down_since = self._gateway_down_since
-                lost = self._lost_turn_count
+            # otherwise it keeps assuming writes are being saved. The
+            # down_since check covers the window where a request already
+            # failed but _gateway_available has not flipped yet.
             lines = [
                 "# memory-tencentdb Memory",
                 "STATUS: DEGRADED — the memory Gateway is unreachable, so "

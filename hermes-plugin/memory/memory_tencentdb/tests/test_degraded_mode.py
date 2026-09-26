@@ -240,6 +240,44 @@ def test_capture_failure_counts_as_lost_turn(provider):
     assert "1 conversation turn" in provider._last_outage_summary
 
 
+def test_healthy_to_failed_window_shows_degraded(provider):
+    """Regression for the review finding on the healthy→failed transition.
+
+    After the first failed capture the outage accounting is already set,
+    but _gateway_available only flips later (breaker needs 5 consecutive
+    failures, or the watchdog has to notice). In that window the
+    diagnostics must not advertise Active — the existing tests missed it
+    because _park_in_outage() sets availability to False by hand.
+    """
+    provider._stop_watchdog()
+    fake = provider._fake
+    # The Gateway is down for real and cannot be revived, but the
+    # provider's availability flag has not been touched yet.
+    fake.alive = False
+    fake.healthy = False
+    fake.respawn_succeeds = False
+    fake.client.capture.side_effect = RuntimeError("gateway exploded")
+
+    assert provider._gateway_available, "precondition: provider still healthy"
+
+    provider.sync_turn(user_content="u", assistant_content="a")
+
+    assert _wait_until(
+        lambda: provider._gateway_down_since is not None, timeout=2.0
+    ), "the failed capture never got accounted"
+    assert provider._gateway_available, (
+        "precondition drifted: availability flipped, so this no longer "
+        "tests the healthy→failed window"
+    )
+
+    block = provider.system_prompt_block()
+    assert "DEGRADED" in block, (
+        "prompt block advertised Active after a failed capture: %r" % block
+    )
+    assert "Active" not in block
+    assert provider.unavailable_reason() != ""
+
+
 def test_transient_blip_leaves_no_degraded_block(provider):
     """A single failed request that immediately recovers must not leave the
     provider looking degraded — the outage summary is kept, but the block
