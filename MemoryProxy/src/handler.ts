@@ -514,7 +514,7 @@ export async function handleChatCompletions(
       for (const k of dumpKeys) {
         if (k in body) dump[k] = (body as Record<string, unknown>)[k];
       }
-      const toolsField = (body as Record<string, unknown>).tools;
+      const toolsField = body.tools;
       if (Array.isArray(toolsField)) {
         dump.tools_summary = toolsField.map((t: unknown) => {
           const tt = t as Record<string, unknown>;
@@ -536,7 +536,7 @@ export async function handleChatCompletions(
         });
       }
       // messages[0] 若是 system，一起 dump（可能声明 tool 用法）
-      const msgs = (body as Record<string, unknown>).messages;
+      const msgs = body.messages;
       if (Array.isArray(msgs) && msgs.length > 0) {
         const first = msgs[0] as Record<string, unknown>;
         if (first?.role === "system") {
@@ -813,13 +813,13 @@ export async function handleChatCompletions(
         // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
               client.forceArchive(
                 {
-                  space_id: si.space_id,
+                  space_id: si.space_id ?? "",
                   user_id: si.user_id,
                   team_id: si.team_id,
                   agent_id: si.agent_id,
@@ -1102,14 +1102,14 @@ export async function handleChatCompletions(
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 只留后 8 位会显示成 "elthr7yn" 这种截断串，用户完全看不懂，
           // 与 team 截断问题同源。agent id 本身就短，全量展示无害且更可读。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: initResult.sessionInfo?.agent_id
+            ? String(initResult.sessionInfo.agent_id) : "",
           // teamName 来自 session-init（cachedTeams[selected].team_name）；
           // teamId 存**完整** team_id（如 team-wyuyb7sion）—— 之前 slice(-8)
           // 会显示成 "uyb7sion" 用户看不懂，且 teamName 为空时兜底更差。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: initResult.sessionInfo?.team_id
+            ? String(initResult.sessionInfo.team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
