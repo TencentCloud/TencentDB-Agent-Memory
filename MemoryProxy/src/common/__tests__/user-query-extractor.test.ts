@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractUserQueryText } from "../user-query-extractor.js";
+import { extractUserQueryText, extractUserQueryTextFromBlocks } from "../user-query-extractor.js";
 
 const harnessTags = [
   "task-notification",
@@ -8,8 +8,10 @@ const harnessTags = [
   "bash-input", "bash-stdout", "bash-stderr",
 ];
 
-const continuationMessages = [
-  "This session is being continued from a previous conversation that ran out of context.\nSummary of earlier work.",
+const continuationSummary = "This session is being continued from a previous conversation that ran out of context. " +
+  "The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Earlier work.";
+
+const interruptMarkers = [
   "[Request interrupted by user]",
   "[Request interrupted by user for tool use]",
 ];
@@ -66,15 +68,31 @@ describe("extractUserQueryText: Claude Code harness messages", () => {
     expect(extractUserQueryText(`<user_query>${query}</user_query>`)).toBe(query);
   });
 
-  it.each(continuationMessages)("discards the internal message %s", (message) => {
-    expect(extractUserQueryText(` \n${message}`)).toBe("");
-    expect(extractUserQueryText(`<system-reminder>Environment context</system-reminder>\n${message}`)).toBe("");
+  it.each(interruptMarkers)("discards the interrupt marker %s", (marker) => {
+    expect(extractUserQueryText(` \n${marker}`)).toBe("");
+    expect(extractUserQueryText(`<system-reminder>Environment context</system-reminder>\n${marker}`)).toBe("");
   });
 
-  it("discards continuation summaries even when they quote user_query blocks", () => {
-    const raw = continuationMessages[0] + "\n<user_query>Historical question</user_query>";
-    expect(extractUserQueryText(raw)).toBe("");
-    expect(extractUserQueryText(`<system-reminder>Context</system-reminder>\n${raw}`)).toBe("");
+  // CC merges consecutive user messages before sending, so harness blocks and the
+  // next typed prompt arrive in one message.
+  it.each(interruptMarkers)("keeps the prompt merged after the interrupt marker %s", (marker) => {
+    expect(extractUserQueryTextFromBlocks([
+      marker, "<system-reminder>Todo list changed</system-reminder>", "Use approach B instead.",
+    ])).toBe("Use approach B instead.");
+  });
+
+  it("discards a continuation summary block, even when it quotes user_query blocks", () => {
+    expect(extractUserQueryTextFromBlocks([continuationSummary])).toBe("");
+    expect(extractUserQueryTextFromBlocks(["<system-reminder>Context</system-reminder>", continuationSummary])).toBe("");
+    expect(extractUserQueryTextFromBlocks([
+      `${continuationSummary}\n<user_query>Historical question</user_query>`,
+    ])).toBe("");
+  });
+
+  it("keeps the first prompt merged after a continuation summary", () => {
+    expect(extractUserQueryTextFromBlocks([
+      continuationSummary, "<system-reminder>Read a file</system-reminder>", "Now add tests for the parser.",
+    ])).toBe("Now add tests for the parser.");
   });
 
   it.each([
@@ -84,6 +102,7 @@ describe("extractUserQueryText: Claude Code harness messages", () => {
     "<task-notification-example>Keep this custom XML.</task-notification-example>",
   ])("preserves ordinary text mentioning harness markers: %s", (text) => {
     expect(extractUserQueryText(text)).toBe(text);
+    expect(extractUserQueryTextFromBlocks([text])).toBe(text);
   });
 });
 
@@ -100,6 +119,12 @@ describe("extractUserQueryText: existing input formats", () => {
     const raw = "<system-reminder>Context</system-reminder><persisted-output>Tool output</persisted-output>\n" +
       "<tool_result>Generated text</tool_result>\nReview the changes.";
     expect(extractUserQueryText(raw)).toBe("Review the changes.");
+  });
+
+  it("applies whole-message internal rules to the raw message only", () => {
+    const raw = "<additional_data>current_time: now</additional_data>\n" +
+      "Your questions have been answered: \"Which team?\"=\"A\".\n<user_query>Deploy it</user_query>";
+    expect(extractUserQueryText(raw)).toBe("Deploy it");
   });
 
   it.each([

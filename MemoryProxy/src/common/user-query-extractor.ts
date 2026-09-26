@@ -2,17 +2,19 @@
  * User query extractor —— 从 CC / CodeBuddy / 其他 coding agent 的 user
  * message content 里剥掉一切 harness 上下文，只保留"用户真正键入的文本"。
  *
- * 使用场景（proxy 内三处共用）：
+ * 使用场景（proxy 内共用）：
  *   1. tdai/recorder.ts::extractLatestUserMessage —— L0 写入
- *   2. agent-adapters/codebuddy.ts::extractUserText —— mem 命令 parser +
+ *   2. injection/injectors/tdai-l1-recall-injector.ts —— L1 召回检索词
+ *   3. agent-adapters/codebuddy.ts::extractUserText —— mem 命令 parser +
  *      normalize-conversation 抽 skill buffer 干净文本
- *   3. mem-command 通过 adapter.extractUserText 间接调用
+ *   4. mem-command 通过 adapter.extractUserText 间接调用
  *
  * 抽取语义（按优先级排列）：
  *
  *   0) CC 客户端内部 prompt / tool_result 伪装 / session-init 回执，
  *      以及 DSH 纯文本 `Current runtime context.` 快照 → 整条丢弃，返回 ""，
  *      调用方据此决定本轮不写 L0 / 不进 skill buffer
+ *      （CC 续聊摘要只能按 content block 丢弃，见 extractUserQueryTextFromBlocks）
  *
  *   1) 剥除 harness XML 块，再提取外部显式 `<user_query>...</user_query>`
  *      （CodeBuddy 标准 + CC 部分模板）；harness 内引用的 query 不算用户输入，
@@ -20,6 +22,7 @@
  *
  *   2) 无 user_query 时按顺序剥离：
  *      - 单行 tool 回显（Bash 完成 / Read 的 cat -n 格式 / Write 成功回执）
+ *        以及 CC 中断标记行
  *      - MEMORY.md 风格 yaml frontmatter 块
  *      - 「会话初始化 — ...」标题残留行
  *      → 剥离完剩下什么就是用户键入
@@ -56,9 +59,6 @@ const CC_INTERNAL_PROMPT_PATTERNS: RegExp[] = [
   /^\s*\[(?:SUGGESTION|TITLE|SUMMARY|COMPACT|COMPACTION|ANALYSIS|EVAL|RECAP|MEMORY|SIDECHAIN)\s+MODE[:\s]/i,
   // CC 会话恢复 prompt（在 core prompts/session-resume 里定义）
   /^\s*The user stepped away and is coming back\.\s*Recap/i,
-  // CC 自动续聊摘要和中断提示（同样通过 role=user 传输）
-  /^\s*This session is being continued from a previous conversation\b/i,
-  /^\s*\[Request interrupted by user\b/i,
   // AskUserQuestion 回执（session-init 或运行时问答）
   /^\s*Your questions have been answered:\s*"/i,
   // CC 结构化 promptId 元数据 JSON（首字符是数字 + JSON 或直接 JSON 元信息）
@@ -70,16 +70,26 @@ const CC_INTERNAL_PROMPT_PATTERNS: RegExp[] = [
   //     只应剥除自身、保留用户后续输入。
 ];
 
-/** CC / CodeBuddy 塞进 user role 的非用户输入块。只识别完整标签名。 */
+/** CC / CodeBuddy 塞进 user role 的非用户输入块，整块剥除。只识别完整标签名。 */
 const HARNESS_WRAPPER_TAGS = [
+  // session-init 表单回填
   "question_answer",
+  // system-reminder / system_reminder（两种拼写都覆盖）
   "system-reminder", "system_reminder",
-  "additional_data", "user_info", "open_and_recently_viewed_files", "session",
+  // CB 每条 user 首段的 current_time 等 / 首条 user 的 OS·shell·workspace 元信息
+  "additional_data", "user_info", "open_and_recently_viewed_files",
+  // proxy 自己注入的 session context 包裹
+  "session",
+  // CC "Output too large" 大文件占位
   "persisted-output", "persisted_output",
+  // tool 回执伪 wrapper
   "tool_use_error", "tool-use-error", "tool_result", "tool-result",
+  // CC 后台任务 / 子 agent 完成通知
   "task-notification",
+  // CC 本地 slash 命令的回显与输出
   "local-command-caveat", "local-command-stdout", "local-command-stderr",
   "command-name", "command-message", "command-args",
+  // CC `!` 前缀 shell 命令及其输出
   "bash-input", "bash-stdout", "bash-stderr",
 ];
 
@@ -90,6 +100,15 @@ const USER_QUERY_OR_HARNESS_BLOCK = new RegExp(
   `<(${HARNESS_WRAPPER_TAGS.join("|")})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>`,
   "gi",
 );
+
+/**
+ * CC 自动续聊摘要（/compact 或上下文耗尽后生成）是独立的 text block。CC 发请求前
+ * 会把相邻 user 消息合并成一条，摘要后面常紧跟用户的下一句输入；join 成字符串后
+ * 已无边界可切，所以只能按 block 丢弃，不能放进整条丢弃的 CC_INTERNAL_PROMPT_PATTERNS。
+ */
+const CC_HARNESS_BLOCK_PATTERNS: RegExp[] = [
+  /^\s*This session is being continued from a previous conversation\b/i,
+];
 
 function isClaudeCodeInternalPrompt(text: string): boolean {
   const t = text.trim();
@@ -115,7 +134,8 @@ export function isDshRuntimeContextSnapshot(text: string): boolean {
  * 决定不写 L0 / 不进 skill buffer / 不匹配 mem 命令。
  *
  * 参数 `raw` 必须已是**字符串**（数组 content 由调用方自行 join —— 参见
- * agent-adapters 各自的 extractUserText 实现）。
+ * agent-adapters 各自的 extractUserText 实现）。能拿到 content block 边界时
+ * 优先用 `extractUserQueryTextFromBlocks`。
  */
 export function extractUserQueryText(raw: string): string {
   // 0) CC 内部 prompt / tool_result 伪装 / 表单回执 → 整条丢弃（不写 L0）
@@ -128,8 +148,6 @@ export function extractUserQueryText(raw: string): string {
 
   // 0b) 先剥除通知、命令回显和上下文。换行保留两侧用户文本之间的边界。
   let text = raw.replace(USER_QUERY_OR_HARNESS_BLOCK, (block, tag: string | undefined) => tag ? "\n" : block);
-  // content 数组拼接时，续聊/中断提示前面可能还带 system-reminder 等上下文。
-  if (isClaudeCodeInternalPrompt(text)) return "";
 
   // 1) 优先：显式 <user_query> 块（即便同一条消息里还夹着 session-init 问答，
   //    也只取真实 query，用户输入完整保留）。
@@ -159,6 +177,9 @@ export function extractUserQueryText(raw: string): string {
     /^\s{0,6}\d+\t/,   // cat -n 用 tab 分隔（Read tool 的标准格式）
     // MEMORY.md 相关：CC session_init/memory 命令产生的输出
     /^\s*File .+ has been (updated|created)/i,
+    // CC 中断标记（Esc / 拒绝 tool use 后插入）。线上会与用户下一句合并进同一条
+    // user message，所以只删这一行，不能整条丢弃
+    /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/,
   ];
   text = text
     .split("\n")
@@ -190,4 +211,13 @@ export function extractUserQueryText(raw: string): string {
 
   // 剩余即用户真实输入；若整条本就全是 CC 工件，这里会自然变空 → 不写 L0。
   return text.trim();
+}
+
+/**
+ * 按 content block 抽取用户键入：先整块丢弃 CC 续聊摘要，再 join 后走
+ * extractUserQueryText。其余语义与 extractUserQueryText 完全一致。
+ */
+export function extractUserQueryTextFromBlocks(blocks: string[]): string {
+  const kept = blocks.filter((block) => !CC_HARNESS_BLOCK_PATTERNS.some((re) => re.test(block)));
+  return extractUserQueryText(kept.join("\n"));
 }

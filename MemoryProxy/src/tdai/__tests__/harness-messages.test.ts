@@ -6,6 +6,7 @@ import { extractLatestUserMessage, recordTdaiTurn } from "../recorder.js";
 import type { TdaiIdentity } from "../types.js";
 
 const notification = "<task-notification><task-id>test-task</task-id><summary>Build passed.</summary></task-notification>";
+const summary = "This session is being continued from a previous conversation that ran out of context.\nSummary.";
 const identity: TdaiIdentity = {
   teamId: "test-team", userId: "test-user", agentId: "test-agent", sessionId: "test-session",
 };
@@ -56,6 +57,33 @@ describe("Claude Code harness input at the L0/L1 boundaries", () => {
     ]);
   });
 
+  // CC merges the interrupt marker and the next typed prompt into one user message.
+  it("records the prompt typed after an interrupt, not the interrupted one", async () => {
+    const client = createClient();
+    const write = vi.spyOn(client, "addConversation").mockResolvedValue(undefined);
+    const user = extractLatestUserMessage([
+      { role: "user", content: "Fix the login bug." },
+      { role: "assistant", content: [{ type: "text", text: "Looking into it." }] },
+      { role: "user", content: [
+        { type: "text", text: "[Request interrupted by user]" },
+        { type: "text", text: "Only touch the Safari code path." },
+      ] },
+    ]);
+    await recordTdaiTurn(client, identity, user, "Understood.");
+    expect(write).toHaveBeenCalledWith(identity, [
+      { role: "user", content: "Only touch the Safari code path." },
+      { role: "assistant", content: "Understood." },
+    ]);
+  });
+
+  it("records the first prompt after compaction without the summary", () => {
+    expect(extractLatestUserMessage([{ role: "user", content: summary }])).toBeNull();
+    expect(extractLatestUserMessage([{ role: "user", content: [
+      { type: "text", text: summary },
+      { type: "text", text: "Now add tests for the parser." },
+    ] }])).toEqual({ role: "user", content: "Now add tests for the parser." });
+  });
+
   it("preserves the existing backward scan past a trailing task notification", () => {
     expect(extractLatestUserMessage([
       { role: "user", content: "Run the tests." },
@@ -66,7 +94,7 @@ describe("Claude Code harness input at the L0/L1 boundaries", () => {
 
   it.each([
     notification,
-    "This session is being continued from a previous conversation.\nSummary.",
+    summary,
     "[Request interrupted by user for tool use]",
   ])("does not issue an L1 search for harness-only input: %s", async (text) => {
     const client = createClient();
@@ -75,10 +103,14 @@ describe("Claude Code harness input at the L0/L1 boundaries", () => {
     expect(search).not.toHaveBeenCalled();
   });
 
-  it("uses only the real query for L1 recall from mixed content blocks", async () => {
+  it.each([
+    notification,
+    summary,
+    "[Request interrupted by user for tool use]",
+  ])("uses only the real query for L1 recall when it follows %s", async (harness) => {
     const client = createClient();
     const search = vi.spyOn(client, "searchL1ForCtx").mockResolvedValue([]);
-    await new TdaiL1RecallInjector(client).execute(context([notification, "How do we deploy this project?"]));
+    await new TdaiL1RecallInjector(client).execute(context([harness, "How do we deploy this project?"]));
     expect(search).toHaveBeenCalledExactlyOnceWith(
       { teamId: identity.teamId, userId: identity.userId, agentId: identity.agentId, agentName: identity.agentId },
       "How do we deploy this project?", identity.sessionId, undefined, undefined,
