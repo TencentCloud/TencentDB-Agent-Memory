@@ -88,6 +88,47 @@ export function isDshRuntimeContextSnapshot(text: string): boolean {
 }
 
 /**
+ * Claude Code 的「排队消息」模板前缀。
+ *
+ * 场景：用户在 agent 跑工具期间又敲了一条指令，CC 不会把它发成独立 user
+ * message，而是排进队列，在下一个请求里追加到 tool_result 那条 user message
+ * 的 `<system-reminder>` 中。这段文本是**用户真实指令**，但对下面的 wrapper
+ * 剥离层来说和别的 harness 噪声没有区别 —— 不先解包就会被整段丢掉，于是 L0
+ * 漏记这条指令、L1 拿到空 query 而跳过召回。
+ *
+ * 只认这一个精确模板：CC 在同一位置还会渲染 `[SYSTEM NOTIFICATION - NOT USER
+ * INPUT]`（task-notification）、`A peer session sent a message while you were
+ * working:`（peer，CC 自述为 "not your user"）、coordinator / channel 等来源，
+ * 那些都不是用户输入，必须继续被过滤掉。模板随 CC 版本变化，因此这里精确匹配
+ * 并由回归测试锁定。
+ */
+const CC_QUEUED_USER_MESSAGE_MARKER =
+  "The user sent a new message while you were working:";
+
+/**
+ * 把排队消息从 `<system-reminder>` 里解包，只保留用户正文，
+ * 丢弃 CC 追加的 `IMPORTANT: ...` 引导句（那是给模型的指令，不是用户输入）。
+ *
+ * 其余 `<system-reminder>` 原样返回，交给后续 wrapper 剥离层处理。
+ */
+function unwrapQueuedUserMessage(text: string): string {
+  for (const tag of ["system-reminder", "system_reminder"]) {
+    text = text.replace(
+      new RegExp(`<${tag}[^>]*>\\s*([\\s\\S]*?)<\\/${tag}>`, "gi"),
+      (whole, body: string) => {
+        const inner = body.trim();
+        if (!inner.startsWith(CC_QUEUED_USER_MESSAGE_MARKER)) return whole;
+        return inner
+          .slice(CC_QUEUED_USER_MESSAGE_MARKER.length)
+          .split(/^[ \t]*IMPORTANT:/im)[0]
+          .trim();
+      },
+    );
+  }
+  return text;
+}
+
+/**
  * 从原始 user content 文本抽取用户真实键入。
  *
  * 返回空字符串意味着"这条 user message 全是 harness 噪声"，调用方应据此
@@ -119,7 +160,8 @@ export function extractUserQueryText(raw: string): string {
   // 2) 没有显式 user_query：剥离所有"非用户键入"的内容片段，保留剩余的
   //    用户真实输入。核心原则：只有用户手打的文本值得写 L0；一切 tool 回显
   //    / 系统提醒 / 文件正文 / 表单工件 / CC 本地 memory 内容 —— 全部剥除。
-  let text = raw;
+  //    先解包排队消息：它住在 <system-reminder> 里，晚一步就会被当成噪声剥掉。
+  let text = unwrapQueuedUserMessage(raw);
 
   // 2a) session-init 表单回答 <question_answer>...</question_answer>
   text = text.replace(/<question_answer[^>]*>[\s\S]*?<\/question_answer>/gi, "");
