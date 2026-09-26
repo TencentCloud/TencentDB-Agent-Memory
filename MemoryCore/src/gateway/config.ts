@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
+import { normalizeDisableThinking } from "../utils/no-think-fetch.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
@@ -601,6 +602,11 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
       if (envVal !== undefined) return envVal === "true";
       return bool(llmConfig, "stream") ?? false;
     })(),
+    // 关思考开关(可选):仅透传 yaml 显式值;env TDAI_DISABLE_THINKING 的
+    // 三态回落统一在 runner 侧判定,避免两处逻辑漂移。
+    disableThinking: normalizeDisableThinking(
+      llmConfig.disableThinking === true ? true : llmConfig.disableThinking === false ? false : (llmConfig.disableThinking as string | undefined),
+    ),
   };
 
   // Memory config (reuse the plugin's parseConfig for full compatibility)
@@ -635,6 +641,9 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
       proxy: {
         useMemorySystemUserKey: llm.proxy?.useMemorySystemUserKey ?? true,
       },
+      // splice 逐字段重建对象,disableThinking 必须显式携带,
+      // 否则顶层 llm 配了也会被静默丢弃(undefined=未配置,三态语义)。
+      disableThinking: llm.disableThinking,
     };
   }
 

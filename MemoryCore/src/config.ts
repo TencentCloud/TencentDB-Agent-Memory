@@ -7,6 +7,8 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import { normalizeDisableThinking, type DisableThinkingStrategy } from "./utils/no-think-fetch.js";
+
 // ============================
 // Type definitions
 // ============================
@@ -236,6 +238,14 @@ export interface StandaloneLLMOverrideConfig {
    * 等待完整文本",给只接受流式的兼容后端做兼容层用。
    */
   stream?: boolean;
+  /**
+   * 关闭该厂商的思考模式(可选,默认不注入)。置 true 时向 chat/completions
+   * JSON 请求体注入 thinking:{"type":"disabled"} —— 推理型模型会把 max_tokens
+   * 烧在思考上导致 content 为空/截断。`thinking` 非 OpenAI 标准参数,仅对
+   * 接受该字段的上游(如智谱 GLM 兼容端点)启用;与 env TDAI_DISABLE_THINKING
+   * 双轨,显式配置优先。详见 StandaloneLLMConfig.disableThinking。
+   */
+  disableThinking?: DisableThinkingStrategy;
 }
 
 /** Context Offload settings — controls multi-layer context compression. */
@@ -653,6 +663,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
         provider,
         stream: bool(llmGroup, "stream") ?? false,
+        // 三态:undefined=未配置(回落 env 判定);显式 true/false 压过 env。
+        disableThinking: normalizeDisableThinking(
+          llmGroup.disableThinking === true ? true : llmGroup.disableThinking === false ? false : (llmGroup.disableThinking as string | undefined),
+        ),
         proxy: {
           // 默认 true：走 proxy 时用 memory 系统用户 key 作为 Authorization。
           useMemorySystemUserKey: bool(proxyGroup, "useMemorySystemUserKey") ?? true,
