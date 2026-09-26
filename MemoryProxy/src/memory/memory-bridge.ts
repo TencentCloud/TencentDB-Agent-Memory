@@ -29,6 +29,7 @@ import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
 import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
+import { sessionKeyCandidates } from "../session/key-candidates.js";
 
 const TAG = "[memory-bridge]";
 
@@ -138,9 +139,11 @@ function bindingToIdFields(
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+  //
+  // 前缀值域来自 KNOWN_AGENT_KINDS（见 session/key-candidates.ts）；曾硬编码
+  // [codebuddy, claude-code]，导致 workbuddy/pi/codex/dsh/opencode 客户端的
+  // L1 探测必然 miss → 落到需要 spaceId 的 L2，最终 401。
+  const candidates = sessionKeyCandidates(sessionId);
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {
