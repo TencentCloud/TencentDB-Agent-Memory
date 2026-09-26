@@ -62,7 +62,14 @@ def _decode_response(resp: httpx.Response) -> dict:
             details=details,
         )
 
-    result = envelope.get("data") or {}
+    # ``get``'s default never fires for an explicit ``null``, so only
+    # ``None`` may fall back to an empty object. Other falsy payloads
+    # (``[]``/``""``/``0``/``false``) are malformed non-object data and
+    # must fail as a clean TDAMError instead of silently passing as an
+    # empty success — the same None-only rule the v2 transport applies.
+    result = envelope.get("data")
+    if result is None:
+        result = {}
     if not isinstance(result, dict):
         raise TDAMError(-1, "API response data must be a JSON object", header_request_id)
     trace_id = resp.headers.get("x-trace-id")
