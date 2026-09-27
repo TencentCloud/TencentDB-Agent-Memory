@@ -93,6 +93,22 @@ function isDshTitleGen(body: Record<string, unknown>): boolean {
   return true;
 }
 
+// ── Headless capability detection ────────────────────────────────────────────
+
+/**
+ * A DSH main request is headless when it advertises tools but does not expose
+ * the interactive ask_user_question tool. Such clients must never receive a
+ * synthetic form tool call that their agent loop cannot execute.
+ */
+export function isDshHeadlessRequest(body: Record<string, unknown>): boolean {
+  const tools = body.tools;
+  if (!Array.isArray(tools)) return true;
+  return !tools.some((tool) => {
+    const candidate = tool as { function?: { name?: string }; name?: string };
+    return (candidate.function?.name ?? candidate.name) === "ask_user_question";
+  });
+}
+
 // ── User text extraction ─────────────────────────────────────────────────────
 
 /**

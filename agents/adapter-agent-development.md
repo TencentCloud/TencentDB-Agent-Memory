@@ -159,7 +159,7 @@ Memory Proxy 对一个客户端**至少**做以下 10 件事。别一上来就 d
 
 **根因**：客户端 preset 没挂 `ask_user_question`（或本客户端的 UI tool），proxy 塞的 fake `tool_call` 校验拒。
 
-**修**：加 headless bypass —— `body.tools` 非空但无该 tool 时，直接透传不弹 form。
+**修**：加 headless bypass —— 请求未声明该 tool 时（包括 `body.tools` 缺失或为空），直接透传不弹 form。
 
 ### 坑 D：上游 400 `The reasoning_content in the thinking mode must be passed back to the API`
 
@@ -229,9 +229,9 @@ dsh 是**目前踩坑最多、覆盖最完整**的接入案例。下表按[阶�
 | #7 注入 | 复用 `MemoryProxy/src/injection/adapters/openai.ts`（无独立 profile） | dsh 是标准 OpenAI Chat，注入模板走 CB 那一套 |
 | #8 Wire 兼容 | `MemoryProxy/src/injection/adapters/openai.ts::parseMessage`/`serializeMessage`（`reasoning_content` 用 `ContextMessage.metadata` 保留） | DeepSeek thinking chain 硬校验必须往返带 |
 | #9 Mem 命令 | 通用 mem-command 段自动生效；仅在 dsh headless 时降级（`handler.ts::_dshHeadless` 判据） | headless bypass 客户端 `mem:session-reset` 有专门的降级提示 |
-| #10 L0 & Skill | 通用 handler 尾部自动生效；`_dshHeadless` 时跳过（`handler.ts` 相关 `if !_dshHeadless`） | aux 判据正确后无需 dsh 特殊处理 |
+| #10 L0 & Skill | 通用 handler 尾部自动生效；headless 仅在身份头经 kernel 校验后记录最终回复 L0，仍跳过 Skill | 工具调用中间响应不写 L0，避免同一轮重复记录 |
 | #11 观测 | `agentAdapter.agentKind = "dsh"` 通用注入到 langfuse trace tag | 无需额外埋点代码 |
-| — Headless Bypass（dsh 独有能力） | `MemoryProxy/src/handler.ts::_dshHeadless`（`body.tools` 非空但无 `ask_user_question` → bypass） | dsh CLI 场景无 preset，全流程跳过 form / mem / injection |
+| — Headless Bypass（dsh 独有能力） | `MemoryProxy/src/handler.ts::_dshHeadless`（未声明 `ask_user_question` → bypass） | 始终跳过 form / injection；合法 `x-team-id` + `x-agent-id` 仅启用 L0 |
 | — 单测（39 个，最完整 fixture 集） | `MemoryProxy/src/__tests__/agent-adapters/dsh.test.ts`（19 adapter tests）<br>`MemoryProxy/src/session/dsh/__tests__/form.test.ts`（17 form tests）<br>`MemoryProxy/src/injection/adapters/__tests__/openai.test.ts`（3 openai round-trip tests） | 照抄改客户端名基本能用 |
 
 对外配置文档（用户视角的 baseURL / 配置文件 / session-init 交互流程）见 [`agents/dsh/README.md`](./dsh/README.md)。

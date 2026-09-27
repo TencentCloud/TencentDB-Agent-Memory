@@ -78,15 +78,17 @@ asset_confirm → team_select → agent_task_select → initialized
 
 dsh 的选项列表 **无数量限制**，无需分页。所有选项一次性展示。
 
-### 3.4 Headless Bypass（⚠️ 重点差异）
+### 3.4 Headless Bypass
 
 dsh 有独特的 **headless bypass** 机制：
 
 - 检查 `body.tools` 数组
-- 如果 `body.tools` 非空 **但不包含** `ask_user_question` tool → proxy 判定为 headless 模式
-- Headless 模式下 → **完全跳过** session-init，直接透传
+- 如果请求没有声明 `ask_user_question` tool（包括 `tools` 缺失或为空），proxy 判定为 headless 模式
+- Headless 模式始终跳过交互式表单和上下文注入，直接透传模型请求
+- 如果请求携带完整的 `x-team-id` 和 `x-agent-id`，proxy 会先通过 kernel 校验身份，然后仅启用 Chat Memory L0 记录；`x-task-id` 可选
+- DSH 工具调用的中间响应不写 L0，只有最终回复写入一次
 
-这允许 dsh 在没有交互能力的场景（如 API 直调、batch 模式）正常工作。
+这允许 dsh 在没有交互能力的场景（如 API 直调、batch 模式）正常工作，同时避免要求调用方重复上报最终对话。身份请求头缺失或校验失败时，仍保持无表单透传且不写 L0。
 
 ### 3.5 reasoning_content 要求
 
@@ -191,7 +193,7 @@ dsh 共享 CB 的 handler 路径（都是 OpenAI Chat Completions），注入方
 A: 路由层面由 `/:agent/` 段区分。进入 handler 后通过 `agentSource` 字段区分行为差异（form tool name、session ID header、content 提取逻辑等）。
 
 **Q: dsh headless bypass 什么时候触发？**  
-A: 当客户端发送的 `body.tools` 非空但不包含 `ask_user_question` 时。典型场景：dsh 在 API 模式直调（有自定义 tools 但没有用户交互 tool）。
+A: 当客户端没有声明 `ask_user_question` 时，包括 `body.tools` 缺失、为空或仅包含其他工具。典型场景是 dsh 在 API 或 batch 模式下直调。
 
 **Q: dsh 的 `x-deepseek-harness-compact` header 是什么？**  
 A: dsh 客户端在做对话压缩（compaction）时会带此 header。proxy 识别后跳过注入/归档，直接透传到上游做压缩。
