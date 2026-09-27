@@ -6,6 +6,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 
 
+def assistant_reply(request):
+    user_messages = [
+        message.get("content") for message in request.get("messages", [])
+        if message.get("role") == "user"
+    ]
+    if not user_messages or not isinstance(user_messages[-1], str):
+        raise ValueError("a text user message is required")
+    return f"Onboarding fake model response: {user_messages[-1]}"
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/v1/chat/completions":
@@ -18,6 +28,7 @@ class Handler(BaseHTTPRequestHandler):
             request = json.loads(self.rfile.read(size))
             if request.get("stream") is not False:
                 raise ValueError("only non-streaming requests are supported")
+            reply = assistant_reply(request)
         except (ValueError, json.JSONDecodeError):
             self.send_error(400)
             return
@@ -29,7 +40,7 @@ class Handler(BaseHTTPRequestHandler):
             "model": request.get("model", "onboarding-fake-model"),
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": "Onboarding fake model response."},
+                "message": {"role": "assistant", "content": reply},
                 "finish_reason": "stop",
             }],
             "usage": {"prompt_tokens": 10, "completion_tokens": 6, "total_tokens": 16},

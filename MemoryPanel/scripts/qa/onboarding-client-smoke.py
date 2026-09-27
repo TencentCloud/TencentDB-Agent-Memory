@@ -46,6 +46,11 @@ def panel_action(base, action, headers, body):
     return result["data"]
 
 
+def has_current_turns(items, user_turn, assistant_turn):
+    bodies = {item.get("body") for item in items}
+    return user_turn in bodies and assistant_turn in bodies
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--panel-url", required=True, help="Control API base URL")
@@ -82,6 +87,7 @@ def main():
         raise RuntimeError("Panel cannot see the selected Agent's Chat Memory block")
 
     marker = f"ON05 onboarding smoke {uuid4().hex}"
+    expected_reply = f"Onboarding fake model response: {marker}"
     proxy_headers = {
         "content-type": "application/json",
         "authorization": f"Bearer {key}",
@@ -97,7 +103,7 @@ def main():
         {"model": "onboarding-fake-model", "messages": [{"role": "user", "content": marker}], "stream": False},
     )
     choices = response.get("choices") or []
-    if not choices or choices[0].get("message", {}).get("content") != "Onboarding fake model response.":
+    if not choices or choices[0].get("message", {}).get("content") != expected_reply:
         raise RuntimeError("Proxy did not return the expected local fake-model response")
     print("Proxy response: passed")
 
@@ -106,8 +112,7 @@ def main():
             args.panel_url.rstrip("/"), "layer", panel_headers,
             {"block_id": block_id, "layer": "L0", "limit": 100, "offset": 0},
         )
-        bodies = [item.get("body", "") for item in layer["items"]]
-        if marker in bodies and "Onboarding fake model response." in bodies:
+        if has_current_turns(layer["items"], marker, expected_reply):
             print("Panel L0 readback: passed (user and assistant turns)")
             return
         time.sleep(1)

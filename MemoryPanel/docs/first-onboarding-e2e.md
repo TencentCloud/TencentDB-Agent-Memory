@@ -33,7 +33,7 @@ This is a repeatable manual UI flow with a local, deterministic client smoke che
      --key-file MemoryPanel/.env.onboarding-key
    ```
 
-6. In Panel, open **Chat_Memory → Agent 资产**, select the new Agent and its memory block, then expand **L0 · 对话原文**. Confirm the new test user turn and `Onboarding fake model response.` are visible. Log out and log back in as the business user; confirm the same two L0 turns remain visible.
+6. In Panel, open **Chat_Memory → Agent 资产**, select the new Agent and its memory block, then expand **L0 · 对话原文**. Confirm the new test user turn and the assistant turn `Onboarding fake model response: <same user turn>` are visible. Log out and log back in as the business user; confirm the same two L0 turns remain visible.
 
 ## Record the result
 
