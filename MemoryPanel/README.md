@@ -88,6 +88,8 @@ npm run dev
 
 浏览器访问 `http://127.0.0.1:5173`。开发服务器默认将 `/api/v1` 和 `/health` 转发到本地 Control。
 
+首次使用的隔离端到端验收步骤见 [Panel 到首条 L0 记忆](docs/first-onboarding-e2e.md)。
+
 ## 常用命令
 
 | 命令 | 说明 |
