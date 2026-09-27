@@ -42,10 +42,34 @@ function usageBoost(hit: L1SearchResult, nowMs = Date.now()): number {
   return 1 + RECENCY_WEIGHT * recency + FREQUENCY_WEIGHT * frequency;
 }
 
-/** Re-score by usage boost and re-sort descending (stable — ties keep order). */
-function applyUsageBoost(hits: L1SearchResult[]): L1SearchResult[] {
+// ── Temporal frame gate (v2) ─────────────────────────────────────────────────
+// A memory whose content self-describes as historical ("早期…后来改了",
+// "早年…已废弃") records history, not current policy. Retrieval practice still
+// strengthens it for past-framed queries, but it must not outrank current facts
+// on now-framed ones: in a 100-episode real-model A/B, unguarded reinforcement
+// let recently-used stale memories overtake current conventions (16/228 eval
+// turns; gating with this marker list recovered 16/16 with 0 new regressions —
+// see l1-usage-eval report). Withholding only removes the boost; raw relevance
+// order is untouched. Marker list is zh-first, tune per deployment if needed.
+const PAST_FRAME_MARKERS = [
+  "以前", "过去", "最早", "早期", "曾经", "老方案", "最初", "之前", "原来",
+  "原先", "旧", "早年", "已废弃", "已经废弃", "废弃", "淘汰", "后来改了", "放弃了",
+];
+
+function frameOf(text: string): "past" | "now" {
+  return PAST_FRAME_MARKERS.some((m) => text.includes(m)) ? "past" : "now";
+}
+
+/** Re-score by usage boost and re-sort descending (stable — ties keep order).
+ *  Historical-content memories keep their boost only for past-framed queries. */
+function applyUsageBoost(hits: L1SearchResult[], query?: string): L1SearchResult[] {
+  const queryFrame = query ? frameOf(query) : "now";
   return hits
-    .map((hit) => ({ hit, boosted: hit.score * usageBoost(hit) }))
+    .map((hit) => {
+      let boost = usageBoost(hit);
+      if (queryFrame === "now" && frameOf(hit.content) === "past") boost = 1;
+      return { hit, boosted: hit.score * boost };
+    })
     .sort((a, b) => b.boosted - a.boosted)
     .map(({ hit, boosted }) => ({ ...hit, score: boosted }));
 }
@@ -88,7 +112,7 @@ export async function recallL1Candidates(
     bypassUsageBoost,
   } = params;
   const tag = params.logTag ?? DEFAULT_TAG;
-  const rank = (hits: L1SearchResult[]) => bypassUsageBoost ? hits : applyUsageBoost(hits);
+  const rank = (hits: L1SearchResult[]) => bypassUsageBoost ? hits : applyUsageBoost(hits, query);
 
   if (!query || query.trim().length === 0 || topK <= 0) {
     return { hits: [], strategy: "none" };
