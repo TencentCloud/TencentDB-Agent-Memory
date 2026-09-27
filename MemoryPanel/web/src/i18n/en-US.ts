@@ -59,10 +59,10 @@ export const enUS = {
   'teamSwitcher.cancel': 'Cancel',
   'teamSwitcher.create': 'Create',
   'teamSwitcher.newTeam': 'New Team',
-  'teamSwitcher.createUnconfirmed': 'The create result is unknown. Refresh the Team list to check before creating again.',
+  'teamSwitcher.createUnconfirmed': 'The create result is unknown. Check the Team list before creating again; a matching Team cannot confirm this request succeeded.',
   'teamSwitcher.refreshFailed': 'The Team was created, but the list did not refresh. Retry the refresh without creating another Team.',
   'teamSwitcher.retryRefresh': 'Retry Refresh',
-  'teamSwitcher.checkCreate': 'Check Create Result',
+  'teamSwitcher.checkCreate': 'Refresh Team List',
   'teamSwitcher.edit.tooltip': 'Edit the current team name / description (owner / admin only)',
   'teamSwitcher.delete.tooltip':
     'Delete the current team (owner / admin only; cascades to members/agents/tasks/assets)',
