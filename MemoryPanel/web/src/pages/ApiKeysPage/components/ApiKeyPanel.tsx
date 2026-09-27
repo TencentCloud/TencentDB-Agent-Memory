@@ -8,8 +8,8 @@
  *
  * 后端链路：新面板（stateless）走 meta action `user-key/list|create|revoke`，
  * 由 Control 透明代理到内核 /v3/meta。前端不直接调内核，也不走旧 REST 路径。
- * owner 由登录 user_key 推断，前端不用也不能传别人的 user_id —— 天然满足
- * 「用户只能看到 / 管理自己的 key」。
+ * 普通用户只管理自己的 Key；system_admin 可在自己的账号与 normal 账号间切换。
+ * 跨账号请求传 user_id，内核负责最终授权；Panel 不展示其他 system_admin 账号。
  *
  * 安全设计（内核既有行为，不是本组件的取舍）：
  *   - key 明文只在 `create` 响应里出现这一次，之后 list/get 都不会再回传；
@@ -18,7 +18,7 @@
  *   - 因此列表里已存在的 key 无法「展开显示完整 key」，只能吊销。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Moment } from 'moment';
 import moment from 'moment';
@@ -34,11 +34,12 @@ import {
   H3,
   Form,
   Modal,
+  Select,
 } from 'tea-component';
 import { AddIcon } from 'tea-icons-react';
-import { userKeysApi, metaInstancesApi, type UserKey } from '@/lib/teamApi';
-import { useCurrentRole } from '@/services/useCurrentRole';
+import { userKeysApi, usersApi, metaInstancesApi, type PublicUser, type UserKey } from '@/lib/teamApi';
 import { useAuthStore } from '@/stores/auth';
+import { getPanelSession } from '@/lib/panelSession';
 import { tea } from '@/lib/tea-bridge';
 import '../styles/api-key-panel.css';
 
@@ -46,10 +47,26 @@ const { autotip } = Table.addons;
 
 export default function ApiKeyPanel() {
   const { t } = useTranslation();
-  const role = useCurrentRole();
   const { auth } = useAuthStore();
   const [keys, setKeys] = useState<UserKey[]>([]);
+  const [keysScope, setKeysScope] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState<PublicUser[]>([]);
+  const [usersScopeId, setUsersScopeId] = useState<string | null>(null);
+  const [usersError, setUsersError] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState(auth?.user_id ?? '');
+  const selectedScope = `${auth?.instance_id ?? ''}:${selectedUserId}`;
+  const selectedScopeRef = useRef(selectedScope);
+  const usersRequestId = useRef(0);
+  const mutationInFlight = useRef(false);
+  const [mutating, setMutating] = useState(false);
+  selectedScopeRef.current = selectedScope;
+
+  useEffect(() => {
+    setSelectedUserId(auth?.user_id ?? '');
+    setKeysScope(null);
+    setFreshKey(null);
+  }, [auth?.user_id, auth?.instance_id]);
   // 客户端接入 base 地址（来自当前登录的 instance 元数据；每个实例不同）。
   // 优先取 proxy_endpoint —— 开源本地部署 core+proxy 分开时客户端要接的是 proxy；
   // 未配置时回落 gateway_endpoint，等同老行为（线上 gateway 前置 proxy，两者合一）。
@@ -76,25 +93,73 @@ export default function ApiKeyPanel() {
     };
   }, [auth?.instance_id]);
 
+  const refreshUsers = useCallback(async () => {
+    const requestId = ++usersRequestId.current;
+    setUsersScopeId(null);
+    if (!auth?.isAdmin || !auth.instance_id) {
+      setUsers([]);
+      return;
+    }
+    setUsersError(false);
+    try {
+      const list = await usersApi.list();
+      if (requestId !== usersRequestId.current) return;
+      setUsers(list.filter((user) => user.user_type === 'normal'));
+      setUsersScopeId(auth.instance_id);
+    } catch {
+      if (requestId !== usersRequestId.current) return;
+      setUsersError(true);
+      setUsers([]);
+    }
+  }, [auth?.isAdmin, auth?.instance_id]);
+
+  useEffect(() => {
+    const requestCounter = usersRequestId;
+    void refreshUsers();
+    return () => { requestCounter.current++; };
+  }, [refreshUsers]);
+
   const refresh = useCallback(async () => {
+    const ownerId = selectedUserId;
+    const scope = selectedScope;
+    if (!ownerId || !auth?.instance_id) return;
     setLoading(true);
     try {
-      const list = await userKeysApi.list();
+      const list = await userKeysApi.list(ownerId);
+      if (selectedScopeRef.current !== scope) return;
       // 按创建时间倒序（内核未必保证顺序）
       list.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
       // 已吊销的 key 不再展示
       setKeys(list.filter((k) => !k.revoked_at));
+      setKeysScope(scope);
     } catch (e) {
+      if (selectedScopeRef.current !== scope) return;
       tea.notify.error(e);
       setKeys([]);
+      setKeysScope(scope);
     } finally {
-      setLoading(false);
+      if (selectedScopeRef.current === scope) setLoading(false);
     }
-  }, []);
+  }, [selectedUserId, selectedScope, auth?.instance_id]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const visibleKeys = keysScope === selectedScope ? keys : [];
+  const manageableUsers = usersScopeId === auth?.instance_id ? users : [];
+  const selectedUser = manageableUsers.find((user) => user.user_id === selectedUserId);
+  const isOwnAccount = selectedUserId === auth?.user_id;
+  const canManageSelected = Boolean(selectedUserId && (isOwnAccount ||
+    (auth?.isAdmin && selectedUser?.user_type === 'normal')));
+  const accountLabel = isOwnAccount ? t('apiKey.account.self') :
+    (selectedUser?.username ?? selectedUserId);
+
+  function isCurrentSessionKey(key: UserKey) {
+    const sessionKey = getPanelSession()?.userKey;
+    return isOwnAccount && Boolean(sessionKey && key.key_prefix &&
+      key.key_prefix === `${sessionKey.startsWith('sk-mem-') ? 'sk-mem-' : ''}****${sessionKey.slice(-4)}`);
+  }
 
   // ---- 新建弹窗 ----
   // 不再收集「名称」——列表本身也不展示名称列，创建时无需再让用户填写。
@@ -102,39 +167,51 @@ export default function ApiKeyPanel() {
   const [newExpiresAt, setNewExpiresAt] = useState<Moment | null>(null);
   const [creating, setCreating] = useState(false);
   // 刚创建出来的 key（含完整明文，仅展示一次）
-  const [freshKey, setFreshKey] = useState<{ keyId: string; secret: string } | null>(null);
+  const [freshKey, setFreshKey] = useState<{ keyId: string; secret: string; account: string } | null>(null);
 
   async function handleCreate() {
+    if (mutationInFlight.current || !canManageSelected) return;
+    mutationInFlight.current = true;
+    setMutating(true);
     setCreating(true);
     try {
       const key = await userKeysApi.create({
         expires_at: newExpiresAt ? newExpiresAt.endOf('day').toISOString() : undefined,
+        user_id: selectedUserId,
       });
       setNewExpiresAt(null);
       setShowCreate(false);
       if (key.key_value) {
-        setFreshKey({ keyId: key.key_id, secret: key.key_value });
+        setFreshKey({ keyId: key.key_id, secret: key.key_value, account: accountLabel });
       }
       await refresh();
     } catch (e) {
       tea.notify.error(e);
     } finally {
       setCreating(false);
+      setMutating(false);
+      mutationInFlight.current = false;
     }
   }
 
   async function handleDelete(key: UserKey) {
-    const ok = await tea.confirm({
-      message: t('apiKey.confirm.revoke', { name: key.key_prefix || key.key_id }),
-      description: t('apiKey.confirm.revoke.desc'),
-      okText: t('apiKey.confirm.revoke.ok'),
-    });
-    if (!ok) return;
+    if (mutationInFlight.current || !canManageSelected || isCurrentSessionKey(key)) return;
+    mutationInFlight.current = true;
+    setMutating(true);
     try {
+      const ok = await tea.confirm({
+        message: t('apiKey.confirm.revoke', { name: key.key_prefix || key.key_id }),
+        description: t('apiKey.confirm.revoke.desc.account', { account: accountLabel }),
+        okText: t('apiKey.confirm.revoke.ok'),
+      });
+      if (!ok) return;
       await userKeysApi.revoke(key.key_id);
       await refresh();
     } catch (e) {
       tea.notify.error(e);
+    } finally {
+      setMutating(false);
+      mutationInFlight.current = false;
     }
   }
 
@@ -151,7 +228,7 @@ export default function ApiKeyPanel() {
         <Alert type="success" onClose={() => setFreshKey(null)}>
           <div className="_memory-apikey-fresh">
             <p className="_memory-apikey-fresh-desc">
-              {t('apiKey.fresh.desc', { keyId: freshKey.keyId })}
+              {t('apiKey.fresh.desc', { keyId: freshKey.keyId, account: freshKey.account })}
             </p>
             <div className="_memory-apikey-fresh-code-row">
               <code className="_memory-apikey-fresh-code">{freshKey.secret}</code>
@@ -178,9 +255,10 @@ export default function ApiKeyPanel() {
           </div>
         }
         right={
-          role !== 'admin' ? (
+          canManageSelected ? (
             <Button
               type="primary"
+              disabled={mutating}
               onClick={() => {
                 setShowCreate(true);
                 setNewExpiresAt(null);
@@ -194,11 +272,33 @@ export default function ApiKeyPanel() {
         }
       />
 
+      {auth?.isAdmin && <Card>
+        <Card.Body>
+          <Form.Item label={t('apiKey.account.label')}>
+            <Select size="full" value={selectedUserId} disabled={mutating}
+              onChange={(userId) => {
+                selectedScopeRef.current = `${auth.instance_id}:${userId}`;
+                setSelectedUserId(userId);
+                setFreshKey(null);
+                setShowCreate(false);
+              }}
+              options={[
+                { value: auth.user_id, text: `${t('apiKey.account.self')} (${auth.user_id})` },
+                ...manageableUsers.map((user) => ({ value: user.user_id, text: `${user.username} (${user.user_id})` })),
+              ]} />
+          </Form.Item>
+          {usersError && <Alert type="warning">
+            {t('apiKey.account.loadError')}{' '}
+            <Button type="text" onClick={() => void refreshUsers()}>{t('apiKey.account.retry')}</Button>
+          </Alert>}
+        </Card.Body>
+      </Card>}
+
       {/* ===== Key 列表：key_id / key_prefix / 创建时间 + 操作 ===== */}
       <Card>
         <Table
           verticalTop
-          records={keys}
+          records={visibleKeys}
           recordKey="key_id"
           columns={[
             {
@@ -256,17 +356,17 @@ export default function ApiKeyPanel() {
               render: (key) => (
                 <Button
                   type="text"
-                  disabled={!!key.revoked_at}
+                  disabled={mutating || !canManageSelected || !!key.revoked_at || isCurrentSessionKey(key)}
                   onClick={() => void handleDelete(key)}
                 >
-                  {t('apiKey.revoke')}
+                  {isCurrentSessionKey(key) ? t('apiKey.currentSession') : t('apiKey.revoke')}
                 </Button>
               ),
             },
           ]}
           addons={[
             autotip({
-              isLoading: loading,
+              isLoading: loading || keysScope !== selectedScope,
               emptyText: (
                 <div className="_memory-apikey-empty">
                   <div className="_memory-apikey-empty-title">{t('apiKey.empty.title')}</div>

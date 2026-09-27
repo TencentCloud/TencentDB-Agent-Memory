@@ -23,7 +23,7 @@ export const zhCN = {
   'menu.desc.chat_memory': 'L0–L3 分层记忆资产',
   'menu.desc.team_members': 'Team 成员 / 用户 / 角色',
   'menu.desc.team_agents': 'Agent / 可配置范围 / 固定资产',
-  'menu.desc.api_keys': '管理你的 API Key，用于外部客户端接入',
+  'menu.desc.api_keys': '管理账号 User Key，用于外部客户端接入',
 
   // ===== GlobalHeader =====
   'header.guide': '使用说明',
@@ -1062,10 +1062,15 @@ export const zhCN = {
 
   // ===== ApiKeyPanel =====
   'apiKey.title': 'User_Key 管理',
-  'apiKey.desc': '管理你的 User Key，用于外部客户端接入（如 CodeBuddy / ClaudeCode CLI）。',
+  'apiKey.desc': '管理账号的 User Key，用于外部客户端接入（如 CodeBuddy / ClaudeCode CLI）。',
+  'apiKey.account.label': '管理账号',
+  'apiKey.account.self': '我自己的账号',
+  'apiKey.account.loadError': '无法加载可管理的普通用户，当前仍可管理自己的 Key。',
+  'apiKey.account.retry': '重试',
+  'apiKey.currentSession': '当前会话 Key',
   'apiKey.create': '新建 Key',
   'apiKey.fresh.desc':
-    '以下是 {{keyId}} 的完整 Key（仅展示这一次，请立即复制并安全保存；关闭后将无法再次查看明文）：',
+    '以下是账号「{{account}}」的 {{keyId}} 完整 Key（仅展示这一次，请立即复制并安全保存；关闭后将无法再次查看明文）：',
   'apiKey.table.keyId': 'Key ID',
   'apiKey.table.keyPrefix': 'Key Prefix',
   'apiKey.table.createdAt': '创建时间',
@@ -1076,6 +1081,7 @@ export const zhCN = {
   'apiKey.revoke': '吊销',
   'apiKey.confirm.revoke': '确认吊销 Key「{{name}}」？',
   'apiKey.confirm.revoke.desc': '吊销后对应客户端将立即失效，且不可恢复。',
+  'apiKey.confirm.revoke.desc.account': '将吊销账号「{{account}}」的这把 Key。对应客户端将立即失效，且不可恢复。',
   'apiKey.confirm.revoke.ok': '吊销',
   'apiKey.empty.title': '你还没有任何 User Key',
   'apiKey.empty.desc': '点击右上角「新建 Key」创建你的第一把 Key',
