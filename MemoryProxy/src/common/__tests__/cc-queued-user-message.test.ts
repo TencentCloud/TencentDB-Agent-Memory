@@ -39,6 +39,28 @@ describe("extractUserQueryText: Claude Code queued user message", () => {
     expect(extractUserQueryText(raw)).toBe("Use approach B.\nAnd keep the old endpoint.");
   });
 
+  // 回归：用户正文里出现 "IMPORTANT:" 行不能被当成 harness 指令截断 ——
+  // 只允许剥除 reminder 末尾那一句固定 CC trailer。
+  it("keeps a queued message that starts with an IMPORTANT: line", () => {
+    expect(extractUserQueryText(queuedUserMessage("IMPORTANT: keep backwards compatibility."))).toBe(
+      "IMPORTANT: keep backwards compatibility.",
+    );
+  });
+
+  it("keeps a queued message containing a mid-text IMPORTANT: line", () => {
+    expect(
+      extractUserQueryText(
+        queuedUserMessage("Do the migration first.\nIMPORTANT: do not remove the old endpoint."),
+      ),
+    ).toBe("Do the migration first.\nIMPORTANT: do not remove the old endpoint.");
+  });
+
+  it("keeps a queued message containing a lowercase important: line", () => {
+    expect(
+      extractUserQueryText(queuedUserMessage("Ship it.\nimportant: double-check the diff.")),
+    ).toBe("Ship it.\nimportant: double-check the diff.");
+  });
+
   it("still strips an ordinary system-reminder", () => {
     expect(extractUserQueryText("<system-reminder>Todo list changed</system-reminder>\nUse approach B.")).toBe(
       "Use approach B.",

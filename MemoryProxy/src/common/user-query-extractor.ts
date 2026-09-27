@@ -106,12 +106,29 @@ const CC_QUEUED_USER_MESSAGE_MARKER =
   "The user sent a new message while you were working:";
 
 /**
+ * CC 追加在排队消息 envelope 末尾的固定引导句（与 marker 一样随版本锁定，
+ * 由回归测试覆盖）。剥除时只认这**一整句**并锚定在 reminder 末尾 —— 绝不能
+ * 按通用的 `IMPORTANT:` 行切分：用户自己的指令完全可能以 `IMPORTANT:` 开头
+ * 或包含这样的行，宽泛切分会把真实用户文本当 harness 指令丢掉。
+ */
+const CC_QUEUED_MESSAGE_TRAILER =
+  "IMPORTANT: After completing your current task, you MUST address the user's message above. Do not ignore it.";
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * 把排队消息从 `<system-reminder>` 里解包，只保留用户正文，
- * 丢弃 CC 追加的 `IMPORTANT: ...` 引导句（那是给模型的指令，不是用户输入）。
+ * 丢弃 CC 追加在末尾的固定 `IMPORTANT: ...` 引导句（那是给模型的指令，
+ * 不是用户输入）。用户正文里的 `IMPORTANT:` 行不受影响。
  *
  * 其余 `<system-reminder>` 原样返回，交给后续 wrapper 剥离层处理。
  */
 function unwrapQueuedUserMessage(text: string): string {
+  const trailerRe = new RegExp(
+    `\\s*${escapeRegExp(CC_QUEUED_MESSAGE_TRAILER)}\\s*$`,
+  );
   for (const tag of ["system-reminder", "system_reminder"]) {
     text = text.replace(
       new RegExp(`<${tag}[^>]*>\\s*([\\s\\S]*?)<\\/${tag}>`, "gi"),
@@ -120,7 +137,7 @@ function unwrapQueuedUserMessage(text: string): string {
         if (!inner.startsWith(CC_QUEUED_USER_MESSAGE_MARKER)) return whole;
         return inner
           .slice(CC_QUEUED_USER_MESSAGE_MARKER.length)
-          .split(/^[ \t]*IMPORTANT:/im)[0]
+          .replace(trailerRe, "")
           .trim();
       },
     );
