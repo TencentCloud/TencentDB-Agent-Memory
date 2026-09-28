@@ -633,6 +633,11 @@ export function createL1Runner(opts: {
           storage,
         });
 
+        // 提炼失败时不能把输入标记为已消费；沿用上层已有的失败处理。
+        // 成功但提炼为空仍按原口径正常推进。
+        if (!l1Result.success) {
+          throw new Error(`L1 extraction failed for session ${group.sessionId}; input cursor preserved`);
+        }
         totalExtracted += l1Result.extractedCount;
         totalStored += l1Result.storedCount;
         if (l1Result.storedCount > 0) {
