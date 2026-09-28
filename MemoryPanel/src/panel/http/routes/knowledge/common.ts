@@ -333,14 +333,20 @@ export async function checkAssetReadPermission(
 
 /**
  * 知识资源读门控：meta asset 存在时走 acl/check；
- * code-graph 构建中无 meta 时，仅允许 KS owner 读 get（窄例外）。
+ * 无 meta 时（code-graph 构建中 / wiki 直连 KS 创建，见 #1232），仅允许 KS owner
+ * 操作（窄例外）。fallback 返回的伪 asset 携带 KS 行的 team_id，id-only 的
+ * rm 类路由（需要 team_id 才能调 KS）在无 meta 时也能工作。
  */
 export async function requireKnowledgeRead(
   deps: PanelDeps,
   c: Context,
   ctx: MetaCallContext,
   knowledgeId: string,
-  opts?: { allowInFlightCodeOwner?: boolean; action?: 'read' | 'write' | 'use' },
+  opts?: {
+    allowInFlightCodeOwner?: boolean;
+    allowInFlightWikiOwner?: boolean;
+    action?: 'read' | 'write' | 'use';
+  },
 ): Promise<{ userId: string; asset?: KnowledgeAssetMetaRaw } | { error: Response }> {
   const userId = await resolveCallerUserId(deps, ctx);
   if (!userId) return { error: respondControlError(c, 401, 'INVALID_USER_KEY') };
@@ -356,14 +362,37 @@ export async function requireKnowledgeRead(
     return { userId, asset };
   }
 
-  if (opts?.allowInFlightCodeOwner && (action === 'read' || action === 'write')) {
+  if (action === 'read' || action === 'write') {
     try {
       const kc = deps.knowledgeClientFactory(ctx.instanceId);
-      const detail = await kc.codeGraphGet(knowledgeId);
-      if (detail.owner_user_id === userId) {
-        const member = await isTeamMember(deps, ctx, detail.team_id, userId);
-        if (!member) return { error: respondControlError(c, 403, 'NOT_TEAM_MEMBER') };
-        return { userId };
+      if (opts?.allowInFlightCodeOwner) {
+        const detail = await kc.codeGraphGet(knowledgeId);
+        if (detail.owner_user_id === userId) {
+          const member = await isTeamMember(deps, ctx, detail.team_id, userId);
+          if (!member) return { error: respondControlError(c, 403, 'NOT_TEAM_MEMBER') };
+          return { userId };
+        }
+      }
+      if (opts?.allowInFlightWikiOwner) {
+        const detail = await kc.wikiGet(knowledgeId);
+        if (detail.owner_user_id === userId) {
+          const member = await isTeamMember(deps, ctx, detail.team_id, userId);
+          if (!member) return { error: respondControlError(c, 403, 'NOT_TEAM_MEMBER') };
+          // 伪 asset：rm 路由读 team_id 调 KS；meta 未注册所以 meta_status 语义上
+          // 是 unregistered，与 team-assets 列表的 KS-only 项一致。
+          return {
+            userId,
+            asset: {
+              asset_id: knowledgeId,
+              team_id: detail.team_id,
+              asset_type: 'llm_wiki',
+              name: detail.name,
+              owner_user_id: detail.owner_user_id ?? '',
+              visibility: 'team',
+              status: 'active',
+            },
+          };
+        }
       }
     } catch {
       /* fall through */

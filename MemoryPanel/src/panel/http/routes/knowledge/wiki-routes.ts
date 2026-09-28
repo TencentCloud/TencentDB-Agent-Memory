@@ -87,7 +87,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const body = await readJson(c);
     const wikiId = str(body, 'wiki_id');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write' });
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write', allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     // 空 wiki 禁止 ingest：先查 raw/ls，无源文件则拒绝
@@ -108,7 +108,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const body = await readJson(c);
     const wikiId = str(body, 'wiki_id');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     return runKs(c, async () => {
@@ -130,7 +130,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const wikiIds = strArray(body, 'wiki_ids');
     if (wikiIds.length === 0) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     for (const wikiId of wikiIds) {
-      const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write' });
+      const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write', allowInFlightWikiOwner: true });
       if ('error' in gate) return gate.error;
     }
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
@@ -147,7 +147,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const body = await readJson(c);
     const wikiId = str(body, 'wiki_id');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     return runKs(c, () => kc.wikiGraph(wikiId));
@@ -159,7 +159,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const body = await readJson(c);
     const wikiId = str(body, 'wiki_id');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     return runKs(c, () => kc.wikiPageLs(wikiId));
@@ -173,7 +173,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const refs = strArray(body, 'refs');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     if (refs.length === 0) return respondControlError(c, 400, 'MISSING_REFS');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     return runKs(c, () => kc.wikiPageRead(wikiId, refs));
@@ -187,7 +187,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const refs = strArray(body, 'refs');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     if (refs.length === 0) return respondControlError(c, 400, 'MISSING_REFS');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write' });
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write', allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const teamId = gate.asset?.team_id;
     if (!teamId) return respondControlError(c, 400, 'MISSING_TEAM_ID');
@@ -203,7 +203,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const query = str(body, 'query');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     if (!query) return respondControlError(c, 400, 'MISSING_QUERY');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const limit = typeof body.limit === 'number' ? body.limit : undefined;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
@@ -216,7 +216,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const body = await readJson(c);
     const wikiId = str(body, 'wiki_id');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     return runKs(c, () => kc.wikiRawLs(wikiId));
@@ -230,7 +230,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     const filenames = Array.isArray(body.filenames) ? (body.filenames as string[]) : [];
     if (filenames.length === 0) return respondControlError(c, 400, 'MISSING_FILENAMES');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     return runKs(c, () => kc.wikiRawRead(wikiId, filenames));
@@ -244,7 +244,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     const filenames = Array.isArray(body.filenames) ? (body.filenames as string[]) : [];
     if (filenames.length === 0) return respondControlError(c, 400, 'MISSING_FILENAMES');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write' });
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write', allowInFlightWikiOwner: true });
     if ('error' in gate) return gate.error;
     const teamId = gate.asset?.team_id;
     if (!teamId) return respondControlError(c, 400, 'MISSING_TEAM_ID');
