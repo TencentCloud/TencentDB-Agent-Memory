@@ -147,11 +147,28 @@ export async function writeMemory(params: {
   vectorStore?: IMemoryStore;
   /** Optional embedding service (required when vectorStore is provided) */
   embeddingService?: EmbeddingService;
+  /** Return null unless the VectorStore write succeeds. */
+  requireVectorStoreWrite?: boolean;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, logger, vectorStore, embeddingService } = params;
+  const {
+    memory,
+    decision,
+    baseDir,
+    sessionKey,
+    sessionId,
+    logger,
+    vectorStore,
+    embeddingService,
+    requireVectorStoreWrite = false,
+  } = params;
 
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
+    return null;
+  }
+
+  if (requireVectorStoreWrite && !vectorStore) {
+    logger?.warn?.(`${TAG} VectorStore write required but VectorStore is unavailable; rejecting memory write`);
     return null;
   }
 
@@ -220,6 +237,7 @@ export async function writeMemory(params: {
   }
 
   // === Vector Store dual-write ===
+  let vectorWriteOk = false;
   if (vectorStore) {
     try {
       logger?.debug?.(
@@ -247,17 +265,26 @@ export async function writeMemory(params: {
       }
 
       const upsertOk = await vectorStore.upsertL1(record, embedding);
+      vectorWriteOk = upsertOk === true;
       logger?.debug?.(`${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`);
     } catch (err) {
       // Vector write failure should NOT block the main JSONL write
       logger?.warn?.(
         `${TAG} [vec-dual-write] FAILED (JSONL already written) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      if (requireVectorStoreWrite) {
+        return null;
+      }
     }
   } else {
     logger?.debug?.(
       `${TAG} [vec-dual-write] SKIPPED id=${record.id}: vectorStore=${!!vectorStore}`,
     );
+  }
+
+  if (requireVectorStoreWrite && !vectorWriteOk) {
+    logger?.warn?.(`${TAG} [vec-dual-write] REQUIRED write failed id=${record.id}`);
+    return null;
   }
 
   return record;
