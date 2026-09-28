@@ -67,6 +67,7 @@ import { SessionRegistry } from "./session-registry.js";
 import { reclaimOffloadData } from "./reclaimer.js";
 import { buildL3TriggerReport, reportL3Trigger } from "./state-reporter.js";
 import { resolveUserId, getUserIdSource } from "./user-id.js";
+import { resolveOpenClawDelegateCompactionToRuntime } from "./openclaw-runtime-delegate.js";
 
 // ─── Module-level state ──────────────────────────────────────────────────────
 // OpenClaw calls registerOffload() multiple times during lifecycle.
@@ -2164,37 +2165,39 @@ class OffloadContextEngine {
     }
     try {
       // Try delegating to runtime's built-in compaction first
-      let delegateFn: any;
-      try {
-        const { createRequire } = await import("node:module");
-        const globalRequire = createRequire("/usr/local/lib/node_modules/openclaw/");
-        const sdk = globalRequire("openclaw/plugin-sdk");
-        delegateFn = sdk.delegateCompactionToRuntime;
-        logger.debug?.(`[context-offload] compact: resolved via createRequire (global path)`);
-      } catch (e1) {
-        logger.debug?.(`[context-offload] compact: createRequire failed: ${e1}`);
+      let delegateFn: any = await resolveOpenClawDelegateCompactionToRuntime(logger);
+      if (!delegateFn) {
         try {
-          const paths = [
-            "/usr/local/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
-            "/usr/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
-          ];
-          for (const p of paths) {
-            try {
-              const sdk = await import(p);
-              delegateFn = sdk.delegateCompactionToRuntime;
-              logger.debug?.(`[context-offload] compact: resolved via absolute path: ${p}`);
-              break;
-            } catch (ep) {
-              logger.debug?.(`[context-offload] compact: absolute path failed: ${p} → ${ep}`);
-            }
-          }
-        } catch { /* ignore */ }
-        if (!delegateFn) {
+          const { createRequire } = await import("node:module");
+          const globalRequire = createRequire("/usr/local/lib/node_modules/openclaw/");
+          const sdk = globalRequire("openclaw/plugin-sdk");
+          delegateFn = sdk.delegateCompactionToRuntime;
+          logger.debug?.(`[context-offload] compact: resolved via createRequire (global path)`);
+        } catch (e1) {
+          logger.debug?.(`[context-offload] compact: createRequire failed: ${e1}`);
           try {
-            const sdk = await import("openclaw/plugin-sdk" as any);
-            delegateFn = sdk.delegateCompactionToRuntime;
-            logger.debug?.(`[context-offload] compact: resolved via direct import`);
+            const paths = [
+              "/usr/local/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
+              "/usr/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
+            ];
+            for (const p of paths) {
+              try {
+                const sdk = await import(p);
+                delegateFn = sdk.delegateCompactionToRuntime;
+                logger.debug?.(`[context-offload] compact: resolved via absolute path: ${p}`);
+                break;
+              } catch (ep) {
+                logger.debug?.(`[context-offload] compact: absolute path failed: ${p} → ${ep}`);
+              }
+            }
           } catch { /* ignore */ }
+          if (!delegateFn) {
+            try {
+              const sdk = await import("openclaw/plugin-sdk" as any);
+              delegateFn = sdk.delegateCompactionToRuntime;
+              logger.debug?.(`[context-offload] compact: resolved via direct import`);
+            } catch { /* ignore */ }
+          }
         }
       }
 
