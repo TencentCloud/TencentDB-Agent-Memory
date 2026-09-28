@@ -229,6 +229,18 @@ async function _doInitStores(
       } catch (err) {
         logger.warn(`${TAG} Failed to read/write manifest (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
       }
+
+      const reindexed = await reindexStoreIfNeeded({
+        vectorStore,
+        embeddingService,
+        needsReindex,
+        reindexReason,
+        logger,
+      });
+      if (reindexed) {
+        needsReindex = false;
+        reindexReason = undefined;
+      }
     }
   } catch (err) {
     logger.warn(
@@ -239,6 +251,42 @@ async function _doInitStores(
   }
 
   return { vectorStore, embeddingService, needsReindex, reindexReason };
+}
+
+async function reindexStoreIfNeeded(opts: {
+  vectorStore: IMemoryStore | undefined;
+  embeddingService: EmbeddingService | undefined;
+  needsReindex: boolean;
+  reindexReason?: string;
+  logger: PipelineLogger;
+}): Promise<boolean> {
+  const { vectorStore, embeddingService, needsReindex, reindexReason, logger } = opts;
+  if (!needsReindex) return false;
+
+  const reason = reindexReason ?? "embedding config changed";
+  if (!vectorStore || !embeddingService) {
+    logger.warn(
+      `${TAG} Reindex needed (${reason}) but store or embedding service is unavailable; existing vectors were not refreshed`,
+    );
+    return false;
+  }
+
+  try {
+    logger.info(`${TAG} Reindex triggered: ${reason}. Re-embedding existing records...`);
+    const result = await vectorStore.reindexAll(
+      (text) => embeddingService.embed(text),
+      (done, total, layer) => {
+        if (total > 0 && (done === total || done % 20 === 0)) {
+          logger.debug?.(`${TAG} Reindex progress: ${layer} ${done}/${total}`);
+        }
+      },
+    );
+    logger.info(`${TAG} Reindex complete: L1=${result.l1Count}, L0=${result.l0Count}`);
+    return true;
+  } catch (err) {
+    logger.warn(`${TAG} Reindex failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
 }
 
 // ============================
