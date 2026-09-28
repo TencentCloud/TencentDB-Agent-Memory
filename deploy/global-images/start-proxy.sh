@@ -24,6 +24,18 @@ require_vars \
 # 与 memory-core 保持一致的 gateway 内部凭据（默认 local，仅本地体验）
 MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 
+# Opik 可观测（可选）：enabled=1 时把 opik 段写进 config.yaml，proxy 的
+# handler 会 fire-and-forget 上报 trace/span（失败不影响主请求）。
+# URL 指 opik frontend（默认 http://host.docker.internal:5173），其 nginx 把
+# /api/* 代理到 backend；config.ts 会按 url 自动选 /api/v1/private 前缀。
+PROXY_OPIK_ENABLED="${PROXY_OPIK_ENABLED:-0}"
+PROXY_OPIK_URL="${PROXY_OPIK_URL:-}"
+PROXY_OPIK_API_KEY="${PROXY_OPIK_API_KEY:-}"
+if [[ "$PROXY_OPIK_ENABLED" == "1" && -z "$PROXY_OPIK_URL" ]]; then
+  warn "PROXY_OPIK_ENABLED=1 但未设 PROXY_OPIK_URL；默认 http://host.docker.internal:5173"
+  PROXY_OPIK_URL="http://host.docker.internal:5173"
+fi
+
 CONTAINER=tdai-proxy
 NETWORK=tdai-memory-stack
 
@@ -73,7 +85,7 @@ fi
 
 bool() { [[ "$1" == "1" ]] && echo "true" || echo "false"; }
 
-info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI))"
+info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI) opik=$(bool $PROXY_OPIK_ENABLED))"
 cat > "$CONFIG_FILE" <<YAML
 # 由 start-proxy.sh 自动生成 —— 每次启动覆盖，请不要手动改。
 server:
@@ -84,6 +96,11 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+
+opik:
+  enabled: $(bool $PROXY_OPIK_ENABLED)
+  url: "${PROXY_OPIK_URL}"
+  apiKey: "${PROXY_OPIK_API_KEY}"
 
 log:
   file: ""
