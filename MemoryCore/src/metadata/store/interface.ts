@@ -99,6 +99,8 @@ export interface IMetadataStore {
   // ── UserKey（多 API 密钥）──
   createUserKey(input: CreateUserKeyInput): MaybePromise<UserKeyEntity>;
   getUserKeyById(keyId: string): MaybePromise<UserKeyEntity | null>;
+  /** Exact active, unexpired credential lookup; does not update usage. */
+  getUserKeyByValue(keyValue: string): MaybePromise<UserKeyEntity | null>;
   listUserKeys(userId: string, pagination?: PaginationParams | null): MaybePromise<ListPage<UserKeyEntity>>;
   countActiveUserKeys(userId: string): MaybePromise<number>;
   revokeUserKey(keyId: string, options?: { promoteNextDefault?: boolean }): MaybePromise<UserKeyEntity | null>;

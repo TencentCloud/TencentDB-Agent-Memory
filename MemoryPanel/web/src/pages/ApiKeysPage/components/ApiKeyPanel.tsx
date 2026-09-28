@@ -40,6 +40,7 @@ import { AddIcon } from 'tea-icons-react';
 import { userKeysApi, usersApi, metaInstancesApi, type PublicUser, type UserKey } from '@/lib/teamApi';
 import { useAuthStore } from '@/stores/auth';
 import { getPanelSession } from '@/lib/panelSession';
+import { isCurrentSessionKey } from '@/lib/current-session-key';
 import { tea } from '@/lib/tea-bridge';
 import '../styles/api-key-panel.css';
 
@@ -155,10 +156,8 @@ export default function ApiKeyPanel() {
   const accountLabel = isOwnAccount ? t('apiKey.account.self') :
     (selectedUser?.username ?? selectedUserId);
 
-  function isCurrentSessionKey(key: UserKey) {
-    const sessionKey = getPanelSession()?.userKey;
-    return isOwnAccount && Boolean(sessionKey && key.key_prefix &&
-      key.key_prefix === `${sessionKey.startsWith('sk-mem-') ? 'sk-mem-' : ''}****${sessionKey.slice(-4)}`);
+  function isCurrentKey(key: UserKey) {
+    return isCurrentSessionKey(getPanelSession(), key, isOwnAccount);
   }
 
   // ---- 新建弹窗 ----
@@ -195,7 +194,7 @@ export default function ApiKeyPanel() {
   }
 
   async function handleDelete(key: UserKey) {
-    if (mutationInFlight.current || !canManageSelected || isCurrentSessionKey(key)) return;
+    if (mutationInFlight.current || !canManageSelected || isCurrentKey(key)) return;
     mutationInFlight.current = true;
     setMutating(true);
     try {
@@ -356,10 +355,10 @@ export default function ApiKeyPanel() {
               render: (key) => (
                 <Button
                   type="text"
-                  disabled={mutating || !canManageSelected || !!key.revoked_at || isCurrentSessionKey(key)}
+                  disabled={mutating || !canManageSelected || !!key.revoked_at || isCurrentKey(key)}
                   onClick={() => void handleDelete(key)}
                 >
-                  {isCurrentSessionKey(key) ? t('apiKey.currentSession') : t('apiKey.revoke')}
+                  {isCurrentKey(key) ? t('apiKey.currentSession') : t('apiKey.revoke')}
                 </Button>
               ),
             },
