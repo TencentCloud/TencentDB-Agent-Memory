@@ -24,7 +24,17 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -77,6 +87,37 @@ export const DEFAULT_HTTPS_USERNAME = "oauth2";
 /** 临时私钥目录前缀，同时用于启动时的残留清扫。 */
 export const GIT_AUTH_TMP_PREFIX = "kg-git-";
 
+/** 临时目录内记录创建进程 pid 的文件名。 */
+export const GIT_AUTH_OWNER_PID_FILE = "owner.pid";
+
+/**
+ * 无 owner.pid 的遗留目录：仅当 mtime 超过该阈值才清扫，
+ * 避免滚动发布时新实例删掉旧实例仍在用的密钥。
+ */
+export const GIT_AUTH_STALE_ORPHAN_MS = 60 * 60 * 1000; // 1 hour
+
+/** 在临时认证目录写入 owner.pid，供启动清扫判断进程归属。 */
+function writeOwnerPid(dir: string): void {
+  try {
+    writeFileSync(join(dir, GIT_AUTH_OWNER_PID_FILE), `${process.pid}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  } catch {
+    /* 尽力而为：写失败时清扫会按「无主 + 过期」处理 */
+  }
+}
+
+/** pid 是否仍存活（含本进程）。 */
+export function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 /**
  * 允许继承给 git 子进程的环境变量白名单。
  * 刻意不包含任何 `GIT_*`：git 的行为只由本模块显式注入的变量决定。
@@ -163,6 +204,7 @@ export function buildGitAuthEnv(material: GitAuthMaterial, opts: GitAuthEnvOptio
     } catch {
       /* Windows / 只读挂载：忽略，不影响主流程 */
     }
+    writeOwnerPid(dir);
 
     const keyPath = join(dir, "id_key");
     // ssh 会拒绝权限过宽的私钥（UNPROTECTED PRIVATE KEY FILE），必须是 0600。
@@ -248,6 +290,7 @@ function normalizePrivateKey(privateKey: string): string {
  */
 export function assertUsablePrivateKey(privateKey: string): void {
   const dir = mkdtempSync(join(tmpdir(), GIT_AUTH_TMP_PREFIX));
+  writeOwnerPid(dir);
   const keyPath = join(dir, "probe_key");
   try {
     writeFileSync(keyPath, normalizePrivateKey(privateKey), { encoding: "utf8", mode: 0o600 });
@@ -285,12 +328,14 @@ export function assertUsablePrivateKey(privateKey: string): void {
 }
 
 /**
- * 从 `DEBUG` 里剥掉 `simple-git`。
+ * 从 `DEBUG` 里剥掉会启用 simple-git 日志的命名空间。
  *
  * simple-git 的 debug 输出会打印 spawn options，而 spawn options 里含我们注入的
  * `GIT_CONFIG_VALUE_0`（即 `Authorization: Basic ...`）。也就是说一旦有人为了排查
- * 问题开了 `DEBUG=simple-git`，凭证就会静默写进日志。这里主动剥离而不是只在
- * 文档里提醒。
+ * 问题开了 `DEBUG=simple-git` 或 `DEBUG=*`，凭证就会静默写进日志。
+ *
+ * 必须在 **导入 simple-git 之前** 调用（见 git-debug-guard.ts）；导入后再改 env
+ * 无法关闭已 sticky-enable 的 debug 实例。
  *
  * @returns 是否发生了修改
  */
@@ -299,7 +344,13 @@ export function stripSimpleGitDebug(env: NodeJS.ProcessEnv = process.env): boole
   if (!raw) return false;
 
   const parts = raw.split(/[\s,]+/).filter(Boolean);
-  const kept = parts.filter((part) => !part.toLowerCase().startsWith("simple-git"));
+  const kept = parts.filter((part) => {
+    const p = part.toLowerCase();
+    // 通配启用全部命名空间（含 simple-git）
+    if (p === "*" || p.startsWith("*:") || p === "*%") return false;
+    if (p.startsWith("simple-git")) return false;
+    return true;
+  });
   if (kept.length === parts.length) return false;
 
   if (kept.length === 0) {
@@ -313,8 +364,13 @@ export function stripSimpleGitDebug(env: NodeJS.ProcessEnv = process.env): boole
 /**
  * 清扫历史遗留的临时私钥目录。
  * 正常路径由 `cleanup()` 兜住；进程被 SIGKILL 时会残留，故在启动时补一刀。
+ *
+ * 安全规则（滚动发布）：
+ *   - 有 owner.pid 且进程仍存活 → 跳过（可能是其他实例正在用）
+ *   - 有 owner.pid 且进程已死 → 删除
+ *   - 无 owner.pid（旧目录）→ 仅当 mtime 超过 {@link GIT_AUTH_STALE_ORPHAN_MS} 才删
  */
-export function cleanupStaleGitAuthDirs(): number {
+export function cleanupStaleGitAuthDirs(nowMs: number = Date.now()): number {
   let removed = 0;
   let entries: string[];
   try {
@@ -325,8 +381,10 @@ export function cleanupStaleGitAuthDirs(): number {
 
   for (const entry of entries) {
     if (!entry.startsWith(GIT_AUTH_TMP_PREFIX)) continue;
+    const dir = join(tmpdir(), entry);
+    if (!shouldRemoveGitAuthDir(dir, nowMs)) continue;
     try {
-      rmSync(join(tmpdir(), entry), { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
       removed += 1;
     } catch {
       /* 被其他进程占用等情况，忽略 */
@@ -334,4 +392,29 @@ export function cleanupStaleGitAuthDirs(): number {
   }
 
   return removed;
+}
+
+/** 是否应清扫该临时认证目录（导出供单测）。 */
+export function shouldRemoveGitAuthDir(dir: string, nowMs: number = Date.now()): boolean {
+  const pidPath = join(dir, GIT_AUTH_OWNER_PID_FILE);
+  if (existsSync(pidPath)) {
+    try {
+      const raw = readFileSync(pidPath, "utf8").trim();
+      const pid = Number(raw);
+      if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+        return false;
+      }
+      // pid 非法或进程已死 → 可删
+      return true;
+    } catch {
+      // 读失败：按无主过期处理
+    }
+  }
+
+  try {
+    const age = nowMs - statSync(dir).mtimeMs;
+    return age >= GIT_AUTH_STALE_ORPHAN_MS;
+  } catch {
+    return false;
+  }
 }

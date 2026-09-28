@@ -61,11 +61,41 @@ export function normalizeHost(host: string): string {
   return h;
 }
 
+/**
+ * 是否为规范的四段点分十进制 IPv4（每段 0–255、无前导零）。
+ * OpenSSH / 部分 resolver 会把 `127.1`、`2130706433`、`0177.0.0.1` 解析成环回，
+ * 这些非规范写法必须在字符白名单阶段就拒绝，不能只靠 `isPrivateIpv4`。
+ */
+export function isCanonicalIpv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    if (part.length > 1 && part.startsWith("0")) return false;
+    const n = Number(part);
+    return n >= 0 && n <= 255;
+  });
+}
+
+/**
+ * host 是否「看起来像数字地址」但不是规范 IPv4。
+ * 例如：`2130706433`（纯整数）、`127.1`（缺段）、`0177.0.0.1`（八进制前导零）。
+ */
+export function isNonCanonicalNumericHost(host: string): boolean {
+  if (!host || host.includes(":")) return false;
+  if (/^\d+$/.test(host)) return true;
+  if (/^[\d.]+$/.test(host)) return !isCanonicalIpv4(host);
+  return false;
+}
+
 /** host 是否通过字符白名单（DNS 名或 IPv6 字面量）。 */
 export function isValidHost(host: string): boolean {
   if (!host) return false;
   if (host.includes(":")) return IPV6_HOST_RE.test(host);
-  return DNS_HOST_RE.test(host);
+  if (!DNS_HOST_RE.test(host)) return false;
+  // 非规范数字地址：OpenSSH 会解析到环回 / 私网，但 isPrivateIpv4 认不出 → 直接非法。
+  if (isNonCanonicalNumericHost(host)) return false;
+  return true;
 }
 
 /**

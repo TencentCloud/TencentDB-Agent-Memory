@@ -4,6 +4,8 @@ import {
   hasEmbeddedCredentials,
   hostMatchesPattern,
   isAllowedHost,
+  isCanonicalIpv4,
+  isNonCanonicalNumericHost,
   isPrivateHost,
   isValidHost,
   normalizeHost,
@@ -34,6 +36,15 @@ describe("isValidHost", () => {
     for (const bad of ["evil;curl", "evil$(id)", "evil`id`", "evil host", "evil'x", 'evil"x', "evil|x", "evil&x"]) {
       expect(isValidHost(bad), bad).toBe(false);
     }
+  });
+
+  it("拒绝非规范数字地址（OpenSSH 会解析到环回）", () => {
+    for (const bad of ["127.1", "2130706433", "0177.0.0.1", "10.1", "192.168.1"]) {
+      expect(isValidHost(bad), bad).toBe(false);
+      expect(isNonCanonicalNumericHost(bad), bad).toBe(true);
+    }
+    expect(isCanonicalIpv4("127.0.0.1")).toBe(true);
+    expect(isValidHost("127.0.0.1")).toBe(true);
   });
 });
 
@@ -69,6 +80,12 @@ describe("parseGitUrl", () => {
   it("拒绝 host 非法的 URL（含 scp-like 的注入样本）", () => {
     expect(parseGitUrl("git@evil;curl${IFS}attacker:x")).toBeNull();
     expect(parseGitUrl("git@evil$(id):x")).toBeNull();
+  });
+
+  it("拒绝非规范数字 host（SSH SSRF 绕过样本）", () => {
+    expect(parseGitUrl("ssh://127.1/repo")).toBeNull();
+    expect(parseGitUrl("git@2130706433:repo")).toBeNull();
+    expect(parseGitUrl("ssh://git@0177.0.0.1/repo.git")).toBeNull();
   });
 });
 

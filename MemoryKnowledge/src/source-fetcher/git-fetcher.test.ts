@@ -16,6 +16,7 @@ import type { GitAuthMaterial } from "./git-auth.js";
 const mocks = vi.hoisted(() => {
   const envCalls: Array<Record<string, unknown>> = [];
   const argvCalls: unknown[][] = [];
+  const lookup = vi.fn(async (host: string) => [{ address: "8.8.8.8", family: 4 }]);
 
   function makeInstance(): Record<string, unknown> {
     const inst: Record<string, unknown> = {};
@@ -39,7 +40,7 @@ const mocks = vi.hoisted(() => {
     return inst;
   }
 
-  return { envCalls, argvCalls, makeInstance, simpleGit: vi.fn(() => makeInstance()) };
+  return { envCalls, argvCalls, makeInstance, simpleGit: vi.fn(() => makeInstance()), lookup };
 });
 
 vi.mock("simple-git", () => ({
@@ -48,10 +49,16 @@ vi.mock("simple-git", () => ({
   ResetMode: { HARD: "--hard" },
 }));
 
+vi.mock("node:dns/promises", () => ({
+  lookup: mocks.lookup,
+}));
+
 beforeEach(() => {
   mocks.envCalls.length = 0;
   mocks.argvCalls.length = 0;
   mocks.simpleGit.mockClear();
+  mocks.lookup.mockReset();
+  mocks.lookup.mockImplementation(async () => [{ address: "8.8.8.8", family: 4 }]);
 });
 
 // ───────────────────────── validate() ─────────────────────────
@@ -143,6 +150,32 @@ describe("GitSourceFetcher.validate — SSRF 与 host 白名单", () => {
   it("KNOWLEDGE_SSRF_CHECK 语义不变：显式 ssrfCheck 优先", () => {
     expect(() => new GitSourceFetcher({ ssrfCheck: false }).validate("https://10.0.0.1/o/r.git")).not.toThrow();
     expect(() => new GitSourceFetcher({ ssrfCheck: true }).validate("https://10.0.0.1/o/r.git")).toThrow();
+  });
+
+  it("非规范数字 host 在 validate 阶段即拒（ssh://127.1、git@2130706433）", () => {
+    const fetcher = new GitSourceFetcher({ ssrfCheck: true });
+    expect(() => fetcher.validate("ssh://127.1/repo")).toThrow(/invalid repo_url/);
+    expect(() => fetcher.validate("git@2130706433:repo")).toThrow(/invalid repo_url/);
+  });
+
+  it("DNS 解析到私网地址时 fetch/probe 拒绝", async () => {
+    mocks.lookup.mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }]);
+    const fetcher = new GitSourceFetcher({ ssrfCheck: true });
+    await expect(fetcher.probe("https://evil.example.com/o/r.git", undefined)).rejects.toThrow(
+      /resolve to private\/loopback/,
+    );
+  });
+
+  it("白名单 host 跳过 DNS 私网检查", async () => {
+    mocks.lookup.mockResolvedValueOnce([{ address: "10.0.0.5", family: 4 }]);
+    const fetcher = new GitSourceFetcher({
+      ssrfCheck: true,
+      allowedHosts: ["gitlab.corp.example.com"],
+    });
+    await expect(fetcher.probe("https://gitlab.corp.example.com/o/r.git", undefined)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(mocks.lookup).not.toHaveBeenCalled();
   });
 });
 

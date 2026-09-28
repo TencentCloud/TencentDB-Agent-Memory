@@ -14,7 +14,10 @@
  *   - Bug 修复（方案 A）：增量 sync 的 git clean 排除 .codegraph/，避免删掉 codegraph 索引库。
  */
 
+// MUST run before simple-git: its debug instances sticky-enable from DEBUG at import time.
+import "./git-debug-guard.js";
 import simpleGit, { CleanOptions, ResetMode } from "simple-git";
+import { lookup } from "node:dns/promises";
 
 import { buildGitAuthEnv, type GitAuthEnvOptions } from "./git-auth.js";
 import {
@@ -117,6 +120,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     options?: FetchOptions,
   ): Promise<FetchResult> {
     this.validate(sourceUrl);
+    await this.assertResolvedHostNotPrivate(sourceUrl);
     this.assertHttpsTokenUsesTls(sourceUrl, options);
 
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
@@ -145,6 +149,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     options?: FetchOptions,
   ): Promise<FetchResult> {
     this.validate(sourceUrl);
+    await this.assertResolvedHostNotPrivate(sourceUrl);
     this.assertHttpsTokenUsesTls(sourceUrl, options);
 
     // 每次新建实例：simple-git 的 env 是**实例态**，复用一个实例会把上一次的
@@ -183,6 +188,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     options?: FetchOptions,
   ): Promise<{ ok: boolean; error?: string; note?: string }> {
     this.validate(sourceUrl);
+    await this.assertResolvedHostNotPrivate(sourceUrl);
     this.assertHttpsTokenUsesTls(sourceUrl, options);
 
     const plan = options?.auth ? buildGitAuthEnv(options.auth, this.authOptions) : null;
@@ -213,6 +219,35 @@ export class GitSourceFetcher implements ISourceFetcher {
       throw new Error(
         "https_token credentials require an https:// repo_url (plain http:// would send the token in cleartext)",
       );
+    }
+  }
+
+  /**
+   * DNS 解析后的私网检查：hostname 字面量可能看起来像公网域名，但 A/AAAA 指向环回。
+   * 白名单 host 跳过；解析失败 fail-closed（与 SSRF 默认开启一致）。
+   */
+  private async assertResolvedHostNotPrivate(sourceUrl: string): Promise<void> {
+    if (!this.ssrfCheck) return;
+    const parsed = this.requireParsed(sourceUrl);
+    if (this.isAllowlisted(parsed.host)) return;
+
+    let addresses: Array<{ address: string }>;
+    try {
+      addresses = await lookup(parsed.host, { all: true, verbatim: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `repo_url host could not be resolved for SSRF check: ${parsed.host} (${msg})`,
+      );
+    }
+
+    for (const { address } of addresses) {
+      if (isPrivateHost(address)) {
+        throw new Error(
+          `repo_url must not resolve to private/loopback address: ${parsed.host} → ${address} ` +
+            `(add it to KNOWLEDGE_GIT_ALLOWED_HOSTS if it is a trusted internal git server)`,
+        );
+      }
     }
   }
 

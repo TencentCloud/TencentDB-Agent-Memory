@@ -45,10 +45,14 @@
 - 修复 **IPv6 SSRF 绕过**：`new URL("https://[::1]/x").hostname` 返回带方括号的
   `[::1]`，历史黑名单正则匹配不到，导致 IPv6 回环 / `::ffff:` IPv4 映射 /
   `fc00::/7` ULA 地址可绕过内网校验。现已归一化后判定。
+- 拒绝 **非规范数字 host**（`ssh://127.1`、`git@2130706433:…`、带前导零的八进制
+  IPv4 等）；`fetch`/`sync`/`probe` 在 SSRF 开启时对解析出的 A/AAAA 再做私网检查
+- **simple-git DEBUG 防泄漏**：在导入 `simple-git` 之前剥离 `DEBUG` 中的
+  `simple-git*` 与通配 `*`，避免 spawn options 中的 `Authorization` 头进日志
+- 启动清扫临时 SSH 私钥目录时记录 `owner.pid`：活进程目录跳过；无主目录仅清扫
+  超过 1h 的遗留项，避免滚动发布误删其他实例正在用的密钥
 - 错误信息与日志统一脱敏：`code-graph` 的 `sync_error`、审计 detail、TMC 回调
   payload、access log、500 错误响应体在落库 / 外发前都会抹掉 URL 中的 userinfo
-- 启动时自动从 `DEBUG` 中剥离 `simple-git`（其 debug 日志会打印含
-  `Authorization` 头的 spawn options）
 - 移除 auth 白名单里的 `/source-provider` **前缀放行**——该路由从未实现，
   前缀放行会让将来挂在该前缀下的端点静默免鉴权
 - 凭证接口默认要求 `KNOWLEDGE_SERVICE_KEY`（只有 `GET /source-credential/status`

@@ -1,7 +1,8 @@
-import { existsSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   DEFAULT_HTTPS_USERNAME,
@@ -11,6 +12,9 @@ import {
   shellQuote,
   stripSimpleGitDebug,
   GIT_AUTH_TMP_PREFIX,
+  GIT_AUTH_OWNER_PID_FILE,
+  GIT_AUTH_STALE_ORPHAN_MS,
+  shouldRemoveGitAuthDir,
 } from "./git-auth.js";
 
 /**
@@ -198,6 +202,16 @@ describe("stripSimpleGitDebug", () => {
     expect(env.DEBUG).toBeUndefined();
   });
 
+  it("剥掉通配 *（会启用全部命名空间含 simple-git）", () => {
+    const star = { DEBUG: "*" } as NodeJS.ProcessEnv;
+    expect(stripSimpleGitDebug(star)).toBe(true);
+    expect(star.DEBUG).toBeUndefined();
+
+    const mixed = { DEBUG: "*,foo,simple-git:*" } as NodeJS.ProcessEnv;
+    expect(stripSimpleGitDebug(mixed)).toBe(true);
+    expect(mixed.DEBUG).toBe("foo");
+  });
+
   it("没命中就不动", () => {
     const env = { DEBUG: "foo,bar" } as NodeJS.ProcessEnv;
     expect(stripSimpleGitDebug(env)).toBe(false);
@@ -210,14 +224,52 @@ describe("stripSimpleGitDebug", () => {
 });
 
 describe("cleanupStaleGitAuthDirs", () => {
-  it("能清理遗留的临时目录且不误伤其他目录", () => {
-    const plan = buildGitAuthEnv({ kind: "ssh_key", privateKey: "-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n" });
+  it("活进程目录（含本进程 owner.pid）不被清扫", () => {
+    const plan = buildGitAuthEnv({
+      kind: "ssh_key",
+      privateKey: "-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n",
+    });
+    cleanups.push(plan.cleanup);
     const dir = dirname(/-i '([^']+)'/.exec(plan.env.GIT_SSH_COMMAND!)![1]);
-    expect(existsSync(dir)).toBe(true);
-    expect(dirname(dir).endsWith("kg-git-") || dir.includes(GIT_AUTH_TMP_PREFIX)).toBe(true);
+    expect(existsSync(join(dir, GIT_AUTH_OWNER_PID_FILE))).toBe(true);
+    expect(readFileSync(join(dir, GIT_AUTH_OWNER_PID_FILE), "utf8").trim()).toBe(String(process.pid));
 
+    expect(shouldRemoveGitAuthDir(dir)).toBe(false);
     const removed = cleanupStaleGitAuthDirs();
-    expect(removed).toBeGreaterThan(0);
+    expect(existsSync(dir)).toBe(true);
+    // 可能清掉了其他测试残留，但本目录必须还在
+    expect(removed).toBeGreaterThanOrEqual(0);
+  });
+
+  it("owner.pid 指向已死进程 → 可清扫", () => {
+    const dir = mkdtempSync(join(tmpdir(), GIT_AUTH_TMP_PREFIX));
+    cleanups.push(() => {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    });
+    writeFileSync(join(dir, GIT_AUTH_OWNER_PID_FILE), "999999999\n", { encoding: "utf8" });
+    expect(shouldRemoveGitAuthDir(dir)).toBe(true);
+    expect(cleanupStaleGitAuthDirs()).toBeGreaterThan(0);
     expect(existsSync(dir)).toBe(false);
+  });
+
+  it("无 owner.pid 的旧目录：未过期则保留，过期则清扫", () => {
+    const dir = mkdtempSync(join(tmpdir(), GIT_AUTH_TMP_PREFIX));
+    cleanups.push(() => {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    });
+    const now = Date.now();
+    expect(shouldRemoveGitAuthDir(dir, now)).toBe(false);
+
+    const old = now - GIT_AUTH_STALE_ORPHAN_MS - 1000;
+    utimesSync(dir, new Date(old / 1000), new Date(old / 1000));
+    expect(shouldRemoveGitAuthDir(dir, now)).toBe(true);
   });
 });
