@@ -584,8 +584,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 ## Star 趋势
 
 <p align="center">
-  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
-    <img src="https://github.com/user-attachments/assets/413dc899-9eca-48b6-aff6-9a09c2dea79c" alt="Star History Chart" width="600" />
+  <a href="https://star-history.dera.page/#TencentCloud/TencentDB-Agent-Memory&Date">
+    <img src="https://star-history.dera.page/svg?repos=TencentCloud/TencentDB-Agent-Memory&type=Date" alt="Star History Chart" width="600" />
   </a>
 </p>
 
