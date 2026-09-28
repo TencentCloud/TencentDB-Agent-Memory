@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=SessionStart TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_USER_ID=codex TDAI_HOOK_LOG=<home>/.codex/tdai-memory/logs/hooks.jsonl PYTHONPATH=<repo>/packages/tdai-memory-cli:<repo>/packages/tdai-memory-mcp python3 -m tdai_memory_cli.hook session-start",
+            "timeout": 60,
+            "statusMessage": "Checking TDAI memory Gateway"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=UserPromptSubmit TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_USER_ID=codex TDAI_HOOK_LOG=<home>/.codex/tdai-memory/logs/hooks.jsonl PYTHONPATH=<repo>/packages/tdai-memory-cli:<repo>/packages/tdai-memory-mcp python3 -m tdai_memory_cli.hook prefetch",
+            "timeout": 30,
+            "statusMessage": "Prefetching TDAI memory"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=Stop TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_USER_ID=codex TDAI_HOOK_LOG=<home>/.codex/tdai-memory/logs/hooks.jsonl PYTHONPATH=<repo>/packages/tdai-memory-cli:<repo>/packages/tdai-memory-mcp python3 -m tdai_memory_cli.hook sync-turn",
+            "timeout": 60,
+            "statusMessage": "Capturing TDAI memory turn"
+          }
+        ]
+      }
+    ]
+  }
+}
