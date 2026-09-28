@@ -546,14 +546,16 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
    */
   markInterruptedAsFailed(reason = "interrupted by restart"): number {
     const ts = nowIso();
+    // internalStatus 必须一并清空：终态行的内部阶段已无意义，留着会让 API 报出
+    // `status=failed, internal_status=ingesting` 这类自相矛盾的状态（#1232）。
     const a = this.db
       .update(knowledgeCodeGraph)
-      .set({ status: "failed", syncError: reason, updatedAt: ts })
+      .set({ status: "failed", internalStatus: null, syncError: reason, updatedAt: ts })
       .where(sql`status IN ('pending','processing')`)
       .run();
     const b = this.db
       .update(knowledgeWiki)
-      .set({ status: "failed", syncError: reason, updatedAt: ts })
+      .set({ status: "failed", internalStatus: null, syncError: reason, updatedAt: ts })
       .where(sql`status IN ('pending','processing')`)
       .run();
     return a.changes + b.changes;

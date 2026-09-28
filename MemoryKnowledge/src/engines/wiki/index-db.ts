@@ -123,6 +123,21 @@ function dbPath(wikiDir: string): string {
 }
 
 /**
+ * 事务提交后的 checkpoint 只是整理 WAL（缩短文件/让读者看到截断点），不是持久化
+ * 的一部分——数据在事务返回时已提交进 WAL。TRUNCATE 模式要求 WAL 上没有其他
+ * 连接在读；有池化读连接（ingest 自身 readSourceStates 打开的那种）或平台差异
+ * 导致 SQLITE_BUSY 时，绝不能让已经成功的写调用整体抛错（#1232 中"摄入显示
+ * 完成却标记 failed"的假失败来源之一）。失败留给下一次连接时的 WAL 恢复。
+ */
+function checkpointBestEffort(db: Database.Database): void {
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {
+    /* best-effort：WAL 保留，下次打开自动恢复 */
+  }
+}
+
+/**
  * ★ 显式建库：在 wiki 创建接口里调一次，建好 4 张表。幂等（IF NOT EXISTS）。
  * 此后 getReadDb / withWriteDb 只打开已存在的库、不建表。
  */
@@ -131,7 +146,7 @@ export function initIndexDb(wikiDir: string): void {
   applyPragmas(db);
   try {
     initSchema(db);
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    checkpointBestEffort(db);
   } finally {
     db.close();
   }
@@ -168,7 +183,7 @@ export function withWriteDb<T>(wikiDir: string, fn: (db: Database.Database) => T
   applyPragmas(db);
   try {
     const out = db.transaction(fn)(db);
-    db.pragma("wal_checkpoint(TRUNCATE)");
+    checkpointBestEffort(db);
     return out;
   } finally {
     db.close();
