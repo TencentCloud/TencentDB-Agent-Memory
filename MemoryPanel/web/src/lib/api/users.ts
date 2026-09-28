@@ -2,6 +2,7 @@
  * api/users.ts — User + UserKey + UserConfig（meta/user/* + meta/user-key/* + meta/config/user/*）。
  */
 import { metaPost, metaListAll, getCurrentUser, dedupeInFlight } from './base';
+import { getPanelSession } from '../panelSession';
 import type { PublicUser } from './types';
 
 /** 内核 user/create 响应（CreateUserResult） — 不含 username，含一次性密钥 */
@@ -77,10 +78,16 @@ export interface UserKey {
 
 export const userKeysApi = {
   /** 按账号列出 API Key；跨账号 user_id 仍由内核检查 system_admin 权限。 */
-  list: (userId?: string) => dedupeInFlight(
-    `user-key/list:${userId ?? 'self'}`,
-    () => metaListAll<UserKey>('user-key/list', userId ? { user_id: userId } : {}),
-  ),
+  list: (userId?: string) => {
+    const session = getPanelSession();
+    const load = () => metaListAll<UserKey>('user-key/list', userId ? { user_id: userId } : {});
+    // 旧 Core 和 IdP 会话没有可用的登录 Key ID，不能安全复用进行中的请求。
+    if (!session?.keyId || session.authMethod === 'idp') return load();
+    return dedupeInFlight(
+      `user-key/list:${JSON.stringify([session.instanceId, session.keyId, userId ?? null])}`,
+      load,
+    );
+  },
 
   /** 创建一把新 Key；返回值里的 key_value 明文只展示这一次，调用方需立即展示给用户 */
   create: (data: { name?: string; expires_at?: string; user_id?: string }) => metaPost<UserKey>('user-key/create', data),
