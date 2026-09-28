@@ -1,0 +1,228 @@
+openapi: 3.0.3
+info:
+  title: TDAI Memory Tools
+  description: >-
+    Long-term memory for Dify agents, backed by the TencentDB-Agent-Memory
+    four-layer engine (L0 conversation → L1 memory → L2 scene → L3 persona).
+    Import this schema as a Dify "Custom Tool"; each operation below becomes a
+    tool your agent (or workflow) can call. It targets the TDAI Gateway HTTP API
+    — the same sidecar the OpenClaw and Hermes integrations use.
+  version: "0.1.0"
+
+servers:
+  # Replace with a URL your Dify instance can actually reach.
+  #   • Dify self-hosted on the same host/network → the Gateway's LAN address.
+  #   • Dify Cloud → a public HTTPS endpoint (reverse proxy / tunnel), since it
+  #     cannot reach 127.0.0.1.
+  - url: http://127.0.0.1:8420
+    description: Local TDAI Gateway
+
+# The Gateway accepts an optional Bearer token (TDAI_GATEWAY_API_KEY). If your
+# Gateway enforces it, choose "API Key / Bearer" auth in Dify and paste the key;
+# if the Gateway is open (default), select "None". The security schemes and
+# response schemas live in the single `components` block at the end of the file.
+security:
+  - bearerAuth: []
+  - {} # allow "no auth" for an open Gateway
+
+paths:
+  /search/memories:
+    post:
+      operationId: tdai_memory_search
+      summary: Search long-term memories
+      description: >-
+        Search the user's structured long-term memories (L1). Use this to recall
+        the user's preferences, past events, instructions, or context from earlier
+        conversations. Returns records ranked by relevance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: What you want to recall about the user.
+                limit:
+                  type: integer
+                  description: Max results (default 5, max 20).
+                  default: 5
+                type:
+                  type: string
+                  description: Optional filter by memory type.
+                  enum: [persona, episodic, instruction]
+      responses:
+        "200":
+          description: Formatted search results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResult"
+
+  /search/conversations:
+    post:
+      operationId: tdai_conversation_search
+      summary: Search conversation history
+      description: >-
+        Search past raw conversation history (L0). Use this when memory search
+        does not have what you need, or when you want the exact words the user
+        said before.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: What conversation content to find.
+                limit:
+                  type: integer
+                  description: Max messages (default 5, max 20).
+                  default: 5
+                session_key:
+                  type: string
+                  description: >-
+                    Optional: restrict the search to one session. In a Dify
+                    workflow, wire this to the conversation id.
+      responses:
+        "200":
+          description: Formatted conversation matches.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSearchResult"
+
+  /recall:
+    post:
+      operationId: tdai_recall
+      summary: Recall memory context for a query
+      description: >-
+        Fetch the recall context block (relevant memories + persona) for a query,
+        as the memory engine would inject it before an LLM turn. Best used as a
+        workflow node that primes the model with what is known about the user.
+        Map `session_key` to the Dify conversation id for per-conversation memory.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query, session_key]
+              properties:
+                query:
+                  type: string
+                  description: The user's current query or intent.
+                session_key:
+                  type: string
+                  description: Stable conversation id (e.g. Dify's sys.conversation_id).
+      responses:
+        "200":
+          description: Recall context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecallResult"
+
+  /capture:
+    post:
+      operationId: tdai_capture
+      summary: Capture a conversation turn
+      description: >-
+        Persist a completed user/assistant turn into memory (L0 → pipeline). Use
+        as a workflow node after the model replies so the exchange can be
+        structured and recalled in later conversations. Map `session_key` to the
+        Dify conversation id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_content, assistant_content, session_key]
+              properties:
+                user_content:
+                  type: string
+                  description: The user's message.
+                assistant_content:
+                  type: string
+                  description: The assistant's reply.
+                session_key:
+                  type: string
+                  description: Stable conversation id (e.g. Dify's sys.conversation_id).
+      responses:
+        "200":
+          description: Capture summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureResult"
+
+  /health:
+    get:
+      operationId: tdai_health
+      summary: Gateway health check
+      description: Liveness/readiness probe for the TDAI Gateway. No auth required.
+      security: []
+      responses:
+        "200":
+          description: Health status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResult"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    SearchResult:
+      type: object
+      properties:
+        results:
+          type: string
+          description: Pre-formatted, LLM-readable result text.
+        total:
+          type: integer
+        strategy:
+          type: string
+    ConversationSearchResult:
+      type: object
+      properties:
+        results:
+          type: string
+        total:
+          type: integer
+    RecallResult:
+      type: object
+      properties:
+        context:
+          type: string
+          description: Recall context to inject into the prompt (may be empty).
+        strategy:
+          type: string
+        memory_count:
+          type: integer
+    CaptureResult:
+      type: object
+      properties:
+        l0_recorded:
+          type: integer
+        scheduler_notified:
+          type: boolean
+    HealthResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+        uptime:
+          type: integer
