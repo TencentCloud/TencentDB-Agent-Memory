@@ -1,0 +1,17 @@
+[project]
+name = "dify-plugin-tdai-memory"
+version = "0.0.1"
+description = "Connect Dify workflows to TencentDB Agent Memory through the local HTTP Gateway."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "tencentdb-agent-memory" },
+]
+license = { text = "MIT" }
+dependencies = [
+    "dify_plugin~=0.9.0",
+]
+
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
