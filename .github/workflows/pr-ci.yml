@@ -32,10 +32,40 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: npm install --ignore-scripts
 
-  # ── 2. Pack validation ─────────────────────────────────────
+  # ── 2. Tests ───────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    needs: install
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      - name: npm install
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install --ignore-scripts
+
+      - name: Run tests
+        run: npm test
+
+  # ── 3. Pack validation ─────────────────────────────────────
   pack:
     name: Pack
-    needs: install
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +85,15 @@ jobs:
 
       - name: npm pack
         run: npm pack
+
+      - name: Verify adapter exports from packed package
+        run: node scripts/smoke-packed-adapters.mjs "$(ls *.tgz | head -1)"
+
+      - name: Verify adapter type declarations
+        run: |
+          TGZ=$(ls *.tgz | head -1)
+          tar -tzf "$TGZ" | grep -q 'package/dist/adapters/gateway-client.d.mts'
+          tar -tzf "$TGZ" | grep -q 'package/dist/adapters/mimo-code.d.mts'
 
       - name: Upload .tgz artifact
         uses: actions/upload-artifact@v4

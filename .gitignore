@@ -44,3 +44,8 @@ test-offload-sessions.sh
 
 # log files
 *.log
+
+# Local adapter E2E sandboxes and generated memory data
+.e2e-logs/
+.e2e-mimo-sandbox/
+.e2e-tdai-data/

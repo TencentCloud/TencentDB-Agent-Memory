@@ -4,6 +4,7 @@
   "description": "Four-layer local memory system plugin for OpenClaw — auto-captures, structures, and profiles conversational knowledge using local LLM + SQLite vector search (L0→L1→L2→L3 pipeline)",
   "type": "module",
   "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
@@ -11,8 +12,19 @@
   },
   "exports": {
     ".": {
+      "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./adapters/gateway-client": {
+      "types": "./dist/adapters/gateway-client.d.mts",
+      "import": "./dist/adapters/gateway-client.mjs",
+      "default": "./dist/adapters/gateway-client.mjs"
+    },
+    "./adapters/mimo-code": {
+      "types": "./dist/adapters/mimo-code.d.mts",
+      "import": "./dist/adapters/mimo-code.mjs",
+      "default": "./dist/adapters/mimo-code.mjs"
     }
   },
   "scripts": {
@@ -29,6 +41,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "smoke:packed-adapters": "node scripts/smoke-packed-adapters.mjs",
+    "test:mimo-host": "node scripts/e2e-mimo-host.mjs",
     "postinstall": "node scripts/postinstall.mjs"
   },
   "files": [
@@ -51,6 +65,7 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "docs/adapters/",
     "!src/**/*.test.ts",
     "!src/**/*.spec.ts",
     "!src/**/__tests__/"
@@ -119,6 +134,7 @@
     }
   },
   "devDependencies": {
+    "@mimo-ai/plugin": "0.1.8",
     "@types/node": "^25.5.2",
     "@vitest/coverage-v8": "^4.1.2",
     "tsdown": "^0.21.10",
