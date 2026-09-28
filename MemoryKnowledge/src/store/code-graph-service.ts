@@ -138,7 +138,8 @@ export class CodeGraphService {
    * - 已存在（同 memory+team+repo+branch）→ 返回已有行；若本次显式传入了
    *   与库内不同的 `credential_id`，则写入换绑（不传则保留原绑定，避免匿名
    *   重试把私有仓凭证抹掉）。换绑后若当前不在排队/执行，会重新入队建图，
-   *   否则仅更新元数据——in-flight worker 在 runBuild 入口会重新读库内凭证。
+   *   否则仅更新元数据——pending 时 runBuild 入口会重读；processing 时
+   *   runBuild 结束后若绑定已变会自动再入队。显式同 id 且 status=failed 也会重试。
    * - 新建 → 入库 pending + 后台建图。
    */
   create(params: CreateCodeGraphParams): { row: CodeGraphRow; existed: boolean } {
@@ -150,11 +151,17 @@ export class CodeGraphService {
       return { row, existed };
     }
 
-    // 幂等命中：只有调用方**显式**带了 credential_id 且与现存不同时才换绑。
-    // `undefined` = 未传（保留）；路由层不得把「未传」收成 `null` 再灌进来。
+    // 幂等命中：`undefined` = 未传（保留）；路由层不得把「未传」收成 `null` 再灌进来。
     const incoming = params.credential_id;
-    if (incoming === undefined || incoming === row.credential_id) {
+    if (incoming === undefined) {
       return { row, existed };
+    }
+
+    // 显式传入且与库内相同：failed 时仍应重试（否则 processing 窗口换绑后
+    // 匿名构建失败会把资产永久卡在 failed，再 create 同 id 也不入队）。
+    if (incoming === row.credential_id) {
+      if (row.status !== "failed") return { row, existed };
+      return this.requeueBuild(params.service_id, row.code_graph_id, row, params.user_id, "retry failed build");
     }
 
     const updated = this.store.updateCodeGraphMeta(params.service_id, row.code_graph_id, {
@@ -173,23 +180,38 @@ export class CodeGraphService {
       params.user_id,
     );
 
-    // 已在排队/执行：只改元数据。runBuild 入口会按最新行上的 credential_id 注入。
+    // 已在排队/执行：只改元数据。pending → runBuild 入口重读；processing →
+    // runBuild 结束后比对 used vs 库内绑定，不一致则自动再入队。
     if (updated.status === "pending" || updated.status === "processing") {
       return { row: updated, existed: true };
     }
 
     // ready / failed：像 sync 一样重新入队，否则换绑后仍用旧匿名产物。
-    this.store.updateCodeGraphStatus(params.service_id, updated.code_graph_id, {
+    return this.requeueBuild(params.service_id, updated.code_graph_id, updated, params.user_id);
+  }
+
+  /** 置 pending 并入队建图（幂等 create 换绑 / failed 重试用）。 */
+  private requeueBuild(
+    serviceId: string,
+    codeGraphId: string,
+    fallback: CodeGraphRow,
+    userId?: string,
+    auditDetail?: string,
+  ): { row: CodeGraphRow; existed: boolean } {
+    this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
       status: "pending",
       internal_status: null,
       sync_error: null,
     });
-    const fresh = this.store.getCodeGraphById(params.service_id, updated.code_graph_id);
+    const fresh = this.store.getCodeGraphById(serviceId, codeGraphId);
     if (fresh) {
+      if (auditDetail) {
+        this.audit(fresh, "create", sanitizeGitError(auditDetail, undefined, 0), userId);
+      }
       this.enqueueBuild(fresh);
       return { row: fresh, existed: true };
     }
-    return { row: updated, existed: true };
+    return { row: fallback, existed: true };
   }
 
   /** Persist service_url for a code-graph. Returns updated row or null. */
@@ -368,6 +390,10 @@ export class CodeGraphService {
         this.finishCancelled(serviceId, teamId, codeGraphId);
         return;
       }
+      // 凭证在 processing 窗口已换绑：跳过 ready/审计/TMC 回调，直接再入队，
+      // 避免下游收到与最终状态不一致的回调或短暂暴露旧凭证产物。
+      if (this.requeueIfCredentialChanged(serviceId, codeGraphId, credentialId)) return;
+
       this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
         status: "ready",
         internal_status: null,
@@ -394,6 +420,9 @@ export class CodeGraphService {
         this.finishCancelled(serviceId, teamId, codeGraphId);
         return;
       }
+      // 换绑后的失败同样不应落 failed / 回调；用新凭证再跑一轮。
+      if (this.requeueIfCredentialChanged(serviceId, codeGraphId, credentialId)) return;
+
       this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
         status: "failed",
         internal_status: null,
@@ -406,6 +435,35 @@ export class CodeGraphService {
       // Callback TMC about failure
       await this.onBuildComplete(failed, "failed", msg, null);
     }
+  }
+
+  /**
+   * processing 期间换绑后：本轮 worker 已用旧 credentialId 跑完。
+   * 若库内绑定已变且行仍在，重置 pending 并再入队；返回 true 表示已接管收尾
+   * （调用方不得再写 ready/failed 或发 TMC 回调）。
+   */
+  private requeueIfCredentialChanged(
+    serviceId: string,
+    codeGraphId: string,
+    usedCredentialId: string | null,
+  ): boolean {
+    if (this.isDeleted(serviceId, codeGraphId)) return false;
+    const current = this.store.getCodeGraphById(serviceId, codeGraphId);
+    if (!current) return false;
+    if ((current.credential_id ?? null) === (usedCredentialId ?? null)) return false;
+
+    this.logger?.info?.(
+      `[code-graph] ${codeGraphId} credential changed during build ` +
+        `(used=${usedCredentialId ?? "null"} → now=${current.credential_id ?? "null"}); re-queue`,
+    );
+    this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
+      status: "pending",
+      internal_status: null,
+      sync_error: null,
+    });
+    const fresh = this.store.getCodeGraphById(serviceId, codeGraphId);
+    if (fresh) this.enqueueBuild(fresh);
+    return true;
   }
 
   /**

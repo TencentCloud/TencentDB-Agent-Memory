@@ -78,6 +78,14 @@ describe("GitSourceFetcher.validate — 协议白名单", () => {
     const allowHttp = new GitSourceFetcher({ ssrfCheck: false, allowedHosts: ["git.example.com"] });
     expect(() => allowHttp.validate("http://git.example.com/o/r.git")).not.toThrow();
   });
+
+  it("白名单 http + https_token 被拒（防明文发 token）", async () => {
+    const fetcher = new GitSourceFetcher({ ssrfCheck: false, allowedHosts: ["git.example.com"] });
+    const auth = { kind: "https_token" as const, token: "ghp_SECRET" };
+    await expect(fetcher.probe("http://git.example.com/o/r.git", undefined, { auth })).rejects.toThrow(
+      /https_token.*https:\/\//i,
+    );
+  });
 });
 
 describe("GitSourceFetcher.validate — 拒绝 URL 内嵌凭证", () => {

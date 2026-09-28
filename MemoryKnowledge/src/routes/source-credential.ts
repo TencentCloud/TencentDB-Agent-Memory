@@ -75,7 +75,8 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
 
   /**
    * 凭证子系统状态。已在 auth 白名单中（原设计就是这样），因此只回
-   * 「是否配置 + 数量」这类**非租户数据**，不暴露任何凭证内容。
+   * 「是否配置 + 支持的 kinds」——不回 per-service 数量（可被任意
+   * `x-tdai-service-id` 探测），也不暴露任何凭证内容。
    */
   app.get("/status", (c) => {
     const serviceId = c.req.header("x-tdai-service-id");
@@ -85,7 +86,6 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
     return c.json(
       wrapOk({
         configured: deps.configured,
-        count: deps.configured ? credentialStore.countForService(serviceId) : 0,
         kinds: [...KINDS],
       }),
     );
@@ -311,6 +311,17 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
           `credential ${credentialId} is bound to ${row.host} and cannot be used for ${parsed.host}`,
         ),
         404,
+      );
+    }
+
+    // https_token + http:// = Basic Authorization 明文外发，与 create 绑定校验同强度拒绝。
+    if (row.kind === "https_token" && parsed.protocol === "http") {
+      return c.json(
+        wrapError(
+          400,
+          "https_token credentials require an https:// repo_url (plain http:// would send the token in cleartext)",
+        ),
+        400,
       );
     }
 

@@ -32,17 +32,28 @@ let app: Hono;
 let credentialStore: IGitCredentialStore;
 let cgService: CodeGraphService;
 let workerCalls: Array<{ credentialId: string | null }>;
+/** 可选：阻塞 worker，用于模拟 processing 窗口。 */
+let workerGate: Promise<void> | null;
+/** 可选：按调用次序决定成败（true = 抛错）。 */
+let workerFailOnCall: ((callIndex: number, credentialId: string | null) => boolean) | null;
 
 function buildApp() {
   const { db } = createDb({ path: ":memory:" });
   const store = new SqliteKnowledgeStore(db);
   credentialStore = createGitCredentialStore({ db, secretKey: SECRET_KEY });
   workerCalls = [];
+  workerGate = null;
+  workerFailOnCall = null;
   cgService = new CodeGraphService({
     store,
     dataRoot: mkdtempSync(join(tmpdir(), "kg-cg-")),
     worker: async (ctx) => {
+      const callIndex = workerCalls.length;
       workerCalls.push({ credentialId: ctx.credentialId });
+      if (workerGate) await workerGate;
+      if (workerFailOnCall?.(callIndex, ctx.credentialId)) {
+        throw new Error("clone failed: authentication required");
+      }
       return { commitHash: "abc123", stats: { files: 1, nodes: 1, edges: 0 } };
     },
   });
@@ -201,6 +212,95 @@ describe("POST /code-graph/create + credential_id", () => {
       credential_id: cred.credential_id,
     });
     expect(res.status).toBe(404);
+  });
+
+  it("processing 期间换绑：本轮结束后用新凭证再入队", async () => {
+    let release!: () => void;
+    workerGate = new Promise<void>((r) => {
+      release = r;
+    });
+    // 第一轮匿名失败（模拟私有仓）；第二轮带凭证成功
+    workerFailOnCall = (i, cred) => i === 0 && cred === null;
+
+    const first = await json(
+      await post("/code-graph/create", {
+        team_id: TEAM,
+        repo_url: REPO,
+        branch: "main",
+      }),
+    );
+    const cgId = first.data.code_graph_id as string;
+
+    await vi.waitFor(() => {
+      expect(cgService.getById(SERVICE, cgId)?.status).toBe("processing");
+    });
+
+    const cred = seedCredential();
+    const rebind = await json(
+      await post("/code-graph/create", {
+        team_id: TEAM,
+        repo_url: REPO,
+        branch: "main",
+        credential_id: cred.credential_id,
+      }),
+    );
+    expect(rebind.data.credential_id).toBe(cred.credential_id);
+
+    release();
+
+    await vi.waitFor(() => {
+      expect(workerCalls.some((c) => c.credentialId === cred.credential_id)).toBe(true);
+      expect(cgService.getById(SERVICE, cgId)?.status).toBe("ready");
+    });
+    expect(workerCalls[0]?.credentialId).toBeNull();
+  });
+
+  it("failed 后同 credential_id 再 create 会重试入队", async () => {
+    workerFailOnCall = (i) => i === 0;
+    const cred = seedCredential();
+
+    const first = await json(
+      await post("/code-graph/create", {
+        team_id: TEAM,
+        repo_url: REPO,
+        branch: "main",
+        credential_id: cred.credential_id,
+      }),
+    );
+    const cgId = first.data.code_graph_id as string;
+
+    await vi.waitFor(() => {
+      expect(cgService.getById(SERVICE, cgId)?.status).toBe("failed");
+    });
+    expect(workerCalls).toHaveLength(1);
+
+    const second = await json(
+      await post("/code-graph/create", {
+        team_id: TEAM,
+        repo_url: REPO,
+        branch: "main",
+        credential_id: cred.credential_id,
+      }),
+    );
+    expect(second.data.credential_id).toBe(cred.credential_id);
+
+    await vi.waitFor(() => {
+      expect(workerCalls).toHaveLength(2);
+      expect(cgService.getById(SERVICE, cgId)?.status).toBe("ready");
+    });
+  });
+
+  it("https_token 不可用于 http:// repo_url", async () => {
+    const cred = seedCredential();
+    const res = await post("/code-graph/create", {
+      team_id: TEAM,
+      repo_url: "http://git.example.com/group/repo.git",
+      branch: "main",
+      credential_id: cred.credential_id,
+    });
+    expect(res.status).toBe(404);
+    const body = await json(res);
+    expect(body.message).toMatch(/https/i);
   });
 });
 

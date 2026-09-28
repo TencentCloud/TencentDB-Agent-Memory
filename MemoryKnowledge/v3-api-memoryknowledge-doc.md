@@ -734,7 +734,7 @@ upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
 
 **Header**：需要 `x-tdai-service-id`。
 
-**响应** `data`：`{ configured: boolean, count: number, kinds: string[] }`。
+**响应** `data`：`{ configured: boolean, kinds: string[] }`（不回 per-service `count`，避免免鉴权探测）。
 
 ### GET /v3/source-credential/providers
 
@@ -745,10 +745,13 @@ upsert binding（`proxy`\|`byo`）。**幂等**：重复 set 覆盖。
 ### 与 Code-Graph 的联动
 
 - `POST /v3/code-graph/create` 新增可选 `credential_id`：校验凭证存在、同 `service_id`+`team_id`，
-  且 **`credential.host === normalizeHost(repo_url)`**，不通过则 `404`。
+  且 **`credential.host === normalizeHost(repo_url)`**，不通过则 `404`；
+  `https_token` 不得用于 `http://` repo（防明文发 token）。
   缺省（不传）= 新建时匿名访问公开仓库；**幂等命中已有行时不传则保留原绑定**（不会抹掉）。
   若幂等命中且本次传入的 `credential_id` 与库内不同，会写入换绑；当前不在
-  `pending/processing` 时还会重新入队建图（等同一次带凭证的 sync）。
+  `pending/processing` 时还会重新入队建图。`processing` 期间换绑只改元数据，
+  本轮结束后若绑定已变会自动再入队。显式传入相同 `credential_id` 且状态为
+  `failed` 时也会重新入队（同凭证重试）。
 - `POST /v3/code-graph/update-meta` 新增可选 `credential_id`（`null` 表示解绑），**校验强度与 create 完全一致**
   —— 否则「先建后换绑」会成为绕过 host 绑定的越权通道。
 - `CodeGraphDetail` 新增 `credential_id: string|null`（**仅引用，非密钥**）。

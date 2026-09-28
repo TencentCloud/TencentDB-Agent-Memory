@@ -49,9 +49,10 @@ class CredentialBindingError extends Error {}
  * 校验 create / update-meta 传入的 credential_id（两处校验强度必须完全一致，
  * 否则「先建再换绑」就是一条绕过 host 绑定的越权通道）。
  *
- * 两条必须同时成立（详见 routes/source-credential.ts 的「token 外发原语」说明）：
+ * 必须同时成立（详见 routes/source-credential.ts 的「token 外发原语」说明）：
  *   1. 凭证存在于同一 service_id + team_id（跨租户一律 404，不泄露存在性）
  *   2. 凭证的 host 与 repo_url 的 host **严格相等**
+ *   3. `https_token` 不得用于 `http://`（否则 Basic Authorization 明文外发）
  */
 function assertCredentialBindsRepo(
   store: IGitCredentialStore,
@@ -69,6 +70,12 @@ function assertCredentialBindsRepo(
   if (row.host !== normalizeHost(parsed.host)) {
     throw new CredentialBindingError(
       `source credential ${credentialId} is bound to ${row.host} and cannot be used for ${parsed.host}`,
+    );
+  }
+
+  if (row.kind === "https_token" && parsed.protocol === "http") {
+    throw new CredentialBindingError(
+      "https_token credentials require an https:// repo_url (plain http:// would send the token in cleartext)",
     );
   }
 }

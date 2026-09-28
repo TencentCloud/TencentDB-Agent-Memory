@@ -117,6 +117,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     options?: FetchOptions,
   ): Promise<FetchResult> {
     this.validate(sourceUrl);
+    this.assertHttpsTokenUsesTls(sourceUrl, options);
 
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
     // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
@@ -144,6 +145,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     options?: FetchOptions,
   ): Promise<FetchResult> {
     this.validate(sourceUrl);
+    this.assertHttpsTokenUsesTls(sourceUrl, options);
 
     // 每次新建实例：simple-git 的 env 是**实例态**，复用一个实例会把上一次的
     // 凭证带给下一次调用。
@@ -181,6 +183,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     options?: FetchOptions,
   ): Promise<{ ok: boolean; error?: string; note?: string }> {
     this.validate(sourceUrl);
+    this.assertHttpsTokenUsesTls(sourceUrl, options);
 
     const plan = options?.auth ? buildGitAuthEnv(options.auth, this.authOptions) : null;
     try {
@@ -198,6 +201,20 @@ export class GitSourceFetcher implements ISourceFetcher {
   }
 
   // ── 内部 helper ──
+
+  /**
+   * https_token 会注入 Basic Authorization；配合允许名单的 `http://` 会明文外发 token。
+   * 匿名 http（仅白名单 host）仍可走；有 https_token 时强制 TLS。
+   */
+  private assertHttpsTokenUsesTls(sourceUrl: string, options?: FetchOptions): void {
+    if (options?.auth?.kind !== "https_token") return;
+    const parsed = this.requireParsed(sourceUrl);
+    if (parsed.protocol === "http") {
+      throw new Error(
+        "https_token credentials require an https:// repo_url (plain http:// would send the token in cleartext)",
+      );
+    }
+  }
 
   private requireParsed(sourceUrl: string): ParsedGitUrl {
     const parsed = parseGitUrl(sourceUrl);

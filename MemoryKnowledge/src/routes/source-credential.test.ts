@@ -241,11 +241,12 @@ describe("POST /test —— host 强绑定", () => {
 });
 
 describe("GET /status · /providers", () => {
-  it("status 只回子系统状态与数量，不回凭证内容", async () => {
+  it("status 只回 configured + kinds，不回 count / 凭证内容", async () => {
     await createCredential();
     const res = await app.request("/source-credential/status", { headers: { "x-tdai-service-id": SERVICE } });
     const body = await json(res);
-    expect(body.data).toEqual({ configured: true, count: 1, kinds: ["https_token", "ssh_key"] });
+    expect(body.data).toEqual({ configured: true, kinds: ["https_token", "ssh_key"] });
+    expect(body.data).not.toHaveProperty("count");
     expect(JSON.stringify(body)).not.toContain(TOKEN);
   });
 
@@ -254,10 +255,12 @@ describe("GET /status · /providers", () => {
     expect(res.status).toBe(400);
   });
 
-  it("未配置主密钥时 status 的 count 回落为 0", async () => {
+  it("未配置主密钥时 status.configured 为 false", async () => {
     app = buildApp({ configured: false });
     const res = await app.request("/source-credential/status", { headers: { "x-tdai-service-id": SERVICE } });
-    expect((await json(res)).data.count).toBe(0);
+    const body = await json(res);
+    expect(body.data.configured).toBe(false);
+    expect(body.data).not.toHaveProperty("count");
   });
 
   it("providers 返回支持的凭证类型（静态信息）", async () => {

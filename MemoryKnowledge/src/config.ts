@@ -6,7 +6,7 @@
  * LLM config can also be passed explicitly to createKnowledgeModule.
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import 'dotenv/config';
 
 import { parseAllowedHosts } from "./source-fetcher/git-url.js";
@@ -17,6 +17,15 @@ function expandHome(filepath: string): string {
     return `${homedir()}${filepath.slice(1)}`;
   }
   return filepath;
+}
+
+/**
+ * 路径绝对化：相对路径相对 process.cwd()。
+ * SSH known_hosts / 数据目录若保持相对路径，git 工作目录切到仓库后会找不到文件。
+ */
+function resolveDataPath(filepath: string): string {
+  const expanded = expandHome(filepath);
+  return isAbsolute(expanded) ? expanded : resolve(process.cwd(), expanded);
 }
 
 export interface LlmConfig {
@@ -194,7 +203,8 @@ export function loadConfig(): ServiceConfig {
   };
   validateClickHouseConfig(clickhouse);
 
-  const dataDir = expandHome(env("KNOWLEDGE_DATA_DIR", "./data"));
+  const dataDir = resolveDataPath(env("KNOWLEDGE_DATA_DIR", "./data"));
+  const dbPath = resolveDataPath(env("KNOWLEDGE_DB_PATH", "./data/knowledge.db"));
 
   return {
     port: envInt("PORT", 8421),
@@ -202,7 +212,7 @@ export function loadConfig(): ServiceConfig {
       serviceKey: env("KNOWLEDGE_SERVICE_KEY", ""),
     },
     dataDir,
-    dbPath: expandHome(env("KNOWLEDGE_DB_PATH", "./data/knowledge.db")),
+    dbPath,
     logLevel: env("LOG_LEVEL", "debug"),
     apiPrefix: env("API_PREFIX", "/v3"),
     publicBaseUrl: env("KNOWLEDGE_PUBLIC_BASE_URL", ""),

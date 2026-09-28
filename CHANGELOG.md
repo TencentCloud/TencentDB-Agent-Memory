@@ -27,9 +27,12 @@
   避免 token 被系统钥匙串缓存
 - `POST /v3/code-graph/create` 与 `/update-meta` 新增可选 `credential_id`，
   响应新增 `credential_id` 字段（仅引用）；幂等 create 若带上与库内不同的
-  `credential_id` 会写入换绑（不传则保留原绑定），非 busy 时重新入队建图
+  `credential_id` 会写入换绑（不传则保留原绑定），非 busy 时重新入队建图；
+  `processing` 期间换绑在本轮结束后若绑定已变会自动再入队；显式同 id 且
+  `failed` 时也会重试入队
 - 新增 `KNOWLEDGE_GIT_ALLOWED_HOSTS`（内网 git host 白名单，锚定匹配、支持 `*.suffix`）、
-  `KNOWLEDGE_GIT_STRICT_HOST_KEY`
+  `KNOWLEDGE_GIT_STRICT_HOST_KEY`；`dataDir` / `known_hosts` 路径启动时绝对化，
+  避免 sync 工作目录变化导致 SSH host key 文件找不到
 - 环境要求：**git ≥ 2.31**（`GIT_CONFIG_COUNT` 注入机制）、**OpenSSH ≥ 7.6**
 
 ### 🔒 安全加固（对现有公开仓库路径同样生效）
@@ -37,6 +40,8 @@
 - **拒绝 URL 内嵌凭证**：`https://user:token@host/...` 现在会直接报错。
   该写法会把 token 落到 `.git/config` 与 git 的 stderr。请改用 `credential_id`。
   ⚠️ 这是**行为变更** —— 如有存量配置依赖此写法，需要迁移。
+- **`https_token` 强制 HTTPS**：白名单放行的 `http://` 不得搭配托管 token
+  （否则 Basic Authorization 明文外发）
 - 修复 **IPv6 SSRF 绕过**：`new URL("https://[::1]/x").hostname` 返回带方括号的
   `[::1]`，历史黑名单正则匹配不到，导致 IPv6 回环 / `::ffff:` IPv4 映射 /
   `fc00::/7` ULA 地址可绕过内网校验。现已归一化后判定。
@@ -47,7 +52,7 @@
 - 移除 auth 白名单里的 `/source-provider` **前缀放行**——该路由从未实现，
   前缀放行会让将来挂在该前缀下的端点静默免鉴权
 - 凭证接口默认要求 `KNOWLEDGE_SERVICE_KEY`（只有 `GET /source-credential/status`
-  在只读白名单里）
+  在只读白名单里）；`/status` 不再回 per-service `count`，避免免鉴权探测
 
 ---
 
