@@ -27,7 +27,22 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "./types.js";
-import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
+import {
+  apiKeyToKeyId,
+  extractBearerToken,
+  opikCreateLlmSpan,
+  opikCreateTrace,
+  opikUpdateTrace,
+  opikTurnTag,
+  uuidv7,
+} from "./opik.js";
+import {
+  buildMemoryInjectionContext,
+  buildOpikTraceMetadata,
+  summarizeResponsesToolInteraction,
+} from "./opik-metadata.js";
+import type { MemoryInjectionHookRun } from "./opik-metadata.js";
+import { summarizeUpstreamJson } from "./common/upstream-json-summary.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { joinUrl } from "./guard-adapter.js";
@@ -376,6 +391,7 @@ export async function handleCodexEndpoint(
       "protocol:responses",
       isStream ? "stream" : "non-stream",
       `session:${sessionKey}`,
+      opikTurnTag(sessionKey, turnSeq),
     ],
     routeTags: [],
     userQuery,
@@ -414,7 +430,7 @@ export async function handleCodexEndpoint(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -685,12 +701,12 @@ export async function handleCodexEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id) : "",
           // teamName + 完整 teamId：见 handler.ts 对称注释。
           teamName: initResult.teamName ?? undefined,
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -794,7 +810,13 @@ export async function handleCodexEndpoint(
         if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
           const userMsg = { role: "user" as const, content: memCmd.rawMessage };
           try {
-            await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
+            await recordTdaiTurn(
+              tdaiClientForMem,
+              tdaiIdentityForMem,
+              userMsg,
+              memResult.messageText,
+              { traceId },
+            );
           } catch (err: unknown) {
             console.error("[codex] mem-command L0 write error:", err);
           }
@@ -858,6 +880,8 @@ export async function handleCodexEndpoint(
   //
   // This reuses 100% of the existing pipeline infrastructure (hook cache,
   // prewarm, all injectors) without writing a third protocol adapter.
+  // 本轮注入管线的逐钩子执行结果；未跑/失败时为 null，供 Opik trace 挂载。
+  let injectionHookRuns: MemoryInjectionHookRun[] | null = null;
   if (!injectionSkipped && sessionInfo && config.injection?.enabled && (config.injection.injectors?.length ?? 0) > 0) {
     try {
       const { getInjectionPipeline } = await import("./injection/index.js");
@@ -894,7 +918,7 @@ export async function handleCodexEndpoint(
         model: modelId,
       };
 
-      const injectedBody = await pipeline.process(syntheticBody, {
+      const injectedResult = await pipeline.processWithStats(syntheticBody, {
         protocol: "openai",
         traceId,
         keyId,
@@ -911,9 +935,10 @@ export async function handleCodexEndpoint(
 
       // Extract injected content from the synthetic body's system message.
       // The pipeline appends to `messages[0].content` (system message).
-      const injectedMessages = injectedBody.messages as Array<Record<string, unknown>> | undefined;
+      const injectedMessages = injectedResult.body.messages as Array<Record<string, unknown>> | undefined;
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
+      injectionHookRuns = injectedResult.hookResults;
 
       if (injectedText.length > 0) {
         // Pipeline 产出的 injectedText 已经是**成品 XML 文本**（含
@@ -936,6 +961,56 @@ export async function handleCodexEndpoint(
   // 只在 main dialog + 已初始化 + 未 bypass 的稳态下建 ctx —— injectionSkipped
   // 场景与 CC/CB 的"跳过 L0/skill"分支对齐(sessionInfo 缺 team/user/agent 三件套
   // triggerSkillExtractIfReady 本身也会早退, 但提前判可以省一次 fanout)。
+  // ── Opik: create trace（Responses 主链路）─────────────────────────────────
+  const opikTraceMetadata = buildOpikTraceMetadata({
+    agentSource,
+    protocol: "responses",
+    sessionKey,
+    conversationId: sessionId,
+    spaceId,
+    userId,
+    model: modelId,
+    stream: isStream,
+    turnSeq,
+    requestPath: c.req.path,
+    memoryInjection: buildMemoryInjectionContext({
+      enabled: config.injection?.enabled === true,
+      configuredInjectors: config.injection?.injectors?.length ?? 0,
+      skipped: injectionSkipped,
+      hookRuns: injectionHookRuns,
+    }),
+  });
+  const responsesToolSummary = summarizeResponsesToolInteraction(
+    Array.isArray(body.input) ? (body.input as unknown[]) : [],
+  );
+  if (
+    responsesToolSummary.toolCalls.length > 0 ||
+    responsesToolSummary.toolResults > 0
+  ) {
+    opikTraceMetadata.tool_interaction = responsesToolSummary;
+  }
+  const forkTraceId = opikCreateTrace(config, {
+    traceId,
+    projectName: keyId,
+    name: `${modelId} / ${keyId}`,
+    startTime,
+    input: {
+      input: Array.isArray(body.input) ? body.input : [],
+      ...(typeof body.instructions === "string" && body.instructions.length > 0
+        ? { instructions: body.instructions }
+        : {}),
+    },
+    tags: lf.tags,
+    metadata: opikTraceMetadata,
+    forkProjectName: "request_log",
+    forkMetadata: {
+      keyId,
+      modelId,
+      stream: isStream,
+      agentSource,
+    },
+  });
+
   const archiveCtx = buildArchiveCtx({
     config,
     sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
@@ -947,10 +1022,14 @@ export async function handleCodexEndpoint(
     userId,
     callerUserKey,
     assetCapabilities,
+    traceId,
   });
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
-  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
+  return forwardToUpstream(
+    c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx,
+    { forkTraceId, metadata: opikTraceMetadata },
+  );
 }
 
 // ── Archive context (skill/conversation/add + TDAI L0 write) ─────────────────
@@ -965,6 +1044,7 @@ export async function handleCodexEndpoint(
 export interface CodexArchiveCtx {
   config: ProxyConfig;
   sessionKey: string;
+  traceId: string;
   agentSource: string;
   sessionInfo: Record<string, unknown>;
   spaceId: string;
@@ -986,6 +1066,7 @@ function buildArchiveCtx(args: {
   injectionSkipped: boolean;
   input: unknown[];
   sessionKey: string;
+  traceId: string;
   agentSource: string;
   spaceId: string;
   userId: string;
@@ -1009,6 +1090,7 @@ function buildArchiveCtx(args: {
   return {
     config: args.config,
     sessionKey: args.sessionKey,
+    traceId: args.traceId,
     agentSource: args.agentSource,
     sessionInfo,
     spaceId: args.spaceId,
@@ -1043,7 +1125,13 @@ async function triggerCodexArchiveHooks(
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurn(
+          ctx.tdaiClient!,
+          ctx.tdaiIdentity,
+          ctx.tdaiUserMessage,
+          assistantText || null,
+          { traceId: ctx.traceId },
+        ),
       ).catch((err: unknown) => {
         console.warn("[codex-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),
@@ -1094,6 +1182,7 @@ async function forwardToUpstream(
   pipe: ReturnType<typeof createPipeline>,
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
+  opikTurn: { forkTraceId?: string; metadata?: Record<string, unknown> } = {},
 ): Promise<Response> {
   // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
   // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
@@ -1210,6 +1299,88 @@ async function forwardToUpstream(
   // 一份用于 langfuse 上报 + skill/L0 归档 hook (P1-P2 gap 修复)。
   // 只要有 lf 或 archiveCtx 任一非空就必须 tee 一份 tap 流。
   const needTap = Boolean(lf) || Boolean(archiveCtx);
+  const responsesRawContentType = upstreamResp.headers.get("content-type") ?? "";
+  const responsesRawIsSse = responsesRawContentType.includes("text/event-stream");
+  // 兼容 #1253：codex 走 chatCompletions/responsesToAnthropic 转换时，非 SSE
+  // 上游 JSON 由接线层转换成 Responses 形态再回给客户端；本块读一份 clone 做上报，
+  // 不必知道转换细节。
+  //
+  // 判断"这个 body 还要不要交给下游"不读转换开关，而看**这次请求实际打到的上游端点**：
+  // 打到 /responses 家族的是直连（可原样回传）；打到 /chat/completions 或 /v1/messages
+  // 说明接线层做了协议转换，body 必须留给转换层消费。这样即使探测不再回写配置
+  // （#1253 起改为请求期决策），这里也依然正确。
+  const codexUpstreamIsResponses = /\/responses(\/|$)/.test(upstreamUrl.split("?")[0]);
+  const codexConvertingUpstream = !codexUpstreamIsResponses;
+  // stream:false 时上游可能返回非 SSE 的 JSON：主对话仍要上报 Opik。
+  // 非 SSE 2xx：无论是否有 lf/archiveCtx、也无论上游是 Responses 还是转换后的
+  // Chat / Anthropic 形态，都要完成 trace 收尾，避免 trace 永远停在“进行中”。
+  if (!responsesRawIsSse && upstreamResp.body) {
+    // 转换路径下响应体要留给下游转换层消费：读 clone，原始 body 保持未读。
+    const rawJson = codexConvertingUpstream
+      ? await upstreamResp.clone().text()
+      : await upstreamResp.text();
+    try {
+      const json = JSON.parse(rawJson) as Record<string, unknown>;
+      const { text, toolCallCount, usage } = summarizeUpstreamJson(json);
+      const endTime = new Date().toISOString();
+      const finalUsage = usage;
+      const outputMessage = text
+        ? { role: "assistant", content: text }
+        : toolCallCount > 0
+          ? { role: "assistant", content: `[${toolCallCount} tool call(s)]` }
+          : null;
+      const outputMessages = outputMessage ? [outputMessage] : [];
+      opikUpdateTrace(config, {
+        traceId,
+        projectName: keyId,
+        endTime,
+        output: outputMessages,
+        usage: finalUsage,
+      });
+      if (opikTurn.forkTraceId && !config.opik.stripRequestLogContent) {
+        opikUpdateTrace(config, {
+          traceId: opikTurn.forkTraceId,
+          projectName: "request_log",
+          endTime,
+          output: outputMessages,
+          usage: finalUsage,
+        });
+      }
+      opikCreateLlmSpan(config, {
+        traceId,
+        projectName: keyId,
+        name: modelId,
+        startTime,
+        endTime,
+        inputMessages: [buildCodexLangfuseInput(body)] as unknown[],
+        outputMessage,
+        model: modelId,
+        usage: finalUsage,
+        tags: [
+          "non-stream",
+          ...(lf ? [opikTurnTag(lf.sessionId, lf.turnSeq)] : []),
+        ],
+        metadata: opikTurn.metadata,
+        forkProjectName: "request_log",
+        forkTraceId: opikTurn.forkTraceId,
+        forkMetadata: {
+          keyId,
+          modelId,
+          stream: false,
+          upstreamUrl,
+        },
+      });
+    } catch (opikErr: unknown) {
+      pipe.error("OPIK_NON_STREAM", opikErr instanceof Error ? opikErr : new Error(String(opikErr)));
+    }
+    // 直连 Responses 场景原样回传；转换场景继续往下走，由转换层产出客户端报文。
+    if (!codexConvertingUpstream) {
+      return new Response(rawJson, {
+        status: upstreamResp.status,
+        headers: filterResponseHeaders(upstreamResp.headers),
+      });
+    }
+  }
   if (!needTap || !upstreamResp.body) {
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
@@ -1226,6 +1397,11 @@ async function forwardToUpstream(
     inputBody: body,
     pipe,
     archiveCtx,
+    config,
+    traceId,
+    projectName: keyId,
+    forkTraceId: opikTurn.forkTraceId ?? "",
+    metadata: opikTurn.metadata ?? {},
   });
 
   return new Response(rawClientStream, {
@@ -1274,6 +1450,16 @@ export interface CodexTapContext {
    * 归档 (理论上 aux 不会带 archiveCtx, 两者同时 null 时上游 tap 干脆不启动)。
    */
   lf: LangfuseTurnContext | null;
+  /** Opik 上报配置（fire-and-forget，失败不影响业务）。 */
+  config: ProxyConfig;
+  /** Opik trace id（请求级 uuid，与 langfuse turn trace 相互独立）。 */
+  traceId: string;
+  /** Opik project_name = user keyId。 */
+  projectName: string;
+  /** fork 到 request_log 项目的独立 trace id（可能为空串）。 */
+  forkTraceId?: string;
+  /** create trace 时挂载的 metadata（span 复用同一份）。 */
+  metadata?: Record<string, unknown>;
   modelId: string;
   startTime: string;
   upstreamUrl: string;
@@ -1297,7 +1483,20 @@ export interface CodexTapContext {
  * 失败静默——埋点绝不影响业务链路。
  */
 export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: CodexTapContext): void {
-  const { lf, modelId, startTime, upstreamUrl, inputBody, pipe, archiveCtx } = ctx;
+  const {
+    lf,
+    config,
+    traceId,
+    projectName,
+    forkTraceId,
+    metadata,
+    modelId,
+    startTime,
+    upstreamUrl,
+    inputBody,
+    pipe,
+    archiveCtx,
+  } = ctx;
 
   (async () => {
     const decoder = new TextDecoder();
@@ -1358,6 +1557,58 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
         } catch (lfErr: unknown) {
           pipe.error("LANGFUSE_SPAN", lfErr);
         }
+      }
+
+      // ── Opik: update trace + LLM span（流式完成阶段）───────────────────────
+      try {
+        const outputMessage = outputText
+          ? { role: "assistant", content: outputText }
+          : undefined;
+        const outputMessages = outputMessage ? [outputMessage] : [];
+        const hasUsage = Object.keys(usage).length > 0;
+        const finalUsage = hasUsage ? usage : {};
+        opikUpdateTrace(config, {
+          traceId,
+          projectName,
+          endTime,
+          output: outputMessages,
+          usage: finalUsage,
+        });
+        if (forkTraceId && !config.opik.stripRequestLogContent) {
+          opikUpdateTrace(config, {
+            traceId: forkTraceId,
+            projectName: "request_log",
+            endTime,
+            output: outputMessages,
+            usage: finalUsage,
+          });
+        }
+        opikCreateLlmSpan(config, {
+          traceId,
+          projectName,
+          name: modelId,
+          startTime,
+          endTime,
+          inputMessages: [buildCodexLangfuseInput(inputBody)] as unknown[],
+          outputMessage: outputMessage ?? null,
+          model: modelId,
+          usage: finalUsage,
+          tags: [
+            "stream",
+            ...(lf ? [opikTurnTag(lf.sessionId, lf.turnSeq)] : []),
+          ],
+          metadata,
+          forkProjectName: "request_log",
+          forkTraceId,
+          forkMetadata: {
+            keyId: projectName,
+            modelId,
+            stream: true,
+            upstreamUrl,
+          },
+        });
+      } catch (opikErr: unknown) {
+        pipe.error("OPIK_SPAN", opikErr instanceof Error ? opikErr : new Error(String(opikErr)));
       }
 
       // ── Skill/conversation/add + TDAI L0 归档 hook ──

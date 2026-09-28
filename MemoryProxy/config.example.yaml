@@ -332,8 +332,13 @@ storage:
 # 请求/响应的 trace 和 span 自动上报到 Opik。
 opik:
   enabled: false           # 是否启用 Opik 上报
-  url: "http://127.0.0.1:5173"   # Opik 服务地址
+  url: "http://127.0.0.1:8080"   # Opik backend 地址（自托管默认 8080）
   apiKey: ""               # Opik API Key（若 Opik 实例需要鉴权）
+  # REST 前缀：backend(8080) 用 /v1/private；指向前端(5173) 时改 "/api/v1/private"
+  apiPrefix: "/v1/private"
+  # 单次上报超时（毫秒，100–30000，默认 2000）。上报 fire-and-forget：
+  # 超时/失败只降级日志，绝不阻塞业务；连续失败自动熔断 30s 再恢复。
+  timeoutMs: 2000
   # stripRequestLogContent: false  # true = fork 出的 request_log trace 不记录消息内容（节省存储）
 
 

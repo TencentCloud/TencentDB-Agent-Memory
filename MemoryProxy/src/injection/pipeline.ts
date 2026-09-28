@@ -81,6 +81,27 @@ export class InjectionPipeline {
     body: Record<string, unknown>,
     metadata: AgentContextMetadata,
   ): Promise<Record<string, unknown>> {
+    return (await this.processWithStats(body, metadata)).body;
+  }
+
+  /**
+   * Process a raw request body and also surface per-hook execution stats.
+   *
+   * The pipeline already computes one `HookResult` per executed hook for its
+   * observer; this variant returns those results to the caller so per-turn
+   * observability (Opik trace metadata, audit, …) can attach runtime facts
+   * (how many hooks ran, how many blocks landed, per-hook errors) without
+   * re-running hooks or reading shared mutable state.
+   *
+   * `process()` delegates here and drops the stats, keeping the original API
+   * unchanged for callers that only need the modified body.
+   *
+   * @returns Modified body plus the per-hook execution results for this run.
+   */
+  async processWithStats(
+    body: Record<string, unknown>,
+    metadata: AgentContextMetadata,
+  ): Promise<{ body: Record<string, unknown>; hookResults: HookResult[] }> {
     const pipelineStartMs = Date.now();
 
     // ── Observer: pipeline start ─────────────────────────────────────────
@@ -137,7 +158,7 @@ export class InjectionPipeline {
       const durationMs = Date.now() - pipelineStartMs;
       safeCall(() => this.observer.onPipelineEnd(metadata, durationMs, hookResults));
 
-      return result;
+      return { body: result, hookResults };
     } catch (err) {
       // ── Observer: pipeline error ────────────────────────────────────────
       const error = err instanceof Error ? err : new Error(String(err));

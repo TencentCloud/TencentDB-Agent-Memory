@@ -88,8 +88,13 @@ export class TdaiClient {
     return this.config.enabled && !!this.config.endpoint;
   }
 
-  async addConversation(identity: TdaiIdentity, messages: TdaiMessage[]): Promise<void> {
-    if (!this.isEnabled() || !this.config.writeL0 || messages.length === 0) return;
+  /**
+   * 写入 L0。返回 true 表示至少成功写入一批；false 表示功能未启用/未开
+   * writeL0/无消息（不是失败）；网络、HTTP 非 2xx 或 envelope code≠0 时抛错，
+   * 便于上层 withL0Retry 重试（此前错误被静默吞掉，重试与审计都无法判断结果）。
+   */
+  async addConversation(identity: TdaiIdentity, messages: TdaiMessage[]): Promise<boolean> {
+    if (!this.isEnabled() || !this.config.writeL0 || messages.length === 0) return false;
 
     const chunkedMessages = chunkConversationMessages(messages);
     log.info("tdai-recorder:write-l0", {
@@ -103,9 +108,10 @@ export class TdaiClient {
       userLen: (messages[0]?.content ?? "").length,
     });
 
+    let wroteAny = false;
     for (let offset = 0; offset < chunkedMessages.length; offset += TDAI_CONVERSATION_MAX_MESSAGES) {
       const batch = chunkedMessages.slice(offset, offset + TDAI_CONVERSATION_MAX_MESSAGES);
-      await this.postForCtx(
+      const outcome = await this.postForCtxOutcome(
         "/v3/conversation/add",
         { teamId: identity.teamId, userId: identity.userId, agentId: identity.agentId },
         {
@@ -120,7 +126,14 @@ export class TdaiClient {
         identity.taskId,
         { includeSession: true, includeTask: true },
       );
+      if (!outcome.ok) {
+        throw new Error(
+          outcome.error ?? "tdai /v3/conversation/add failed",
+        );
+      }
+      wroteAny = true;
     }
+    return wroteAny;
   }
 
   async searchL1(identity: TdaiIdentity, query: string): Promise<TdaiL1Memory[]> {
@@ -267,8 +280,30 @@ export class TdaiClient {
     body: Record<string, unknown>,
     sessionId: string,
     taskId: string | undefined,
-    options: { includeSession: boolean; includeTask: boolean } = { includeSession: true, includeTask: true },
+    options: { includeSession: boolean; includeTask: boolean } = {
+      includeSession: true,
+      includeTask: true,
+    },
   ): Promise<T> {
+    const outcome = await this.postForCtxOutcome<T>(
+      path,
+      ctx,
+      body,
+      sessionId,
+      taskId,
+      options,
+    );
+    return outcome.data;
+  }
+
+  private async postForCtxOutcome<T>(
+    path: string,
+    ctx: TdaiAgentCtx,
+    body: Record<string, unknown>,
+    sessionId: string,
+    taskId: string | undefined,
+    options: { includeSession: boolean; includeTask: boolean } = { includeSession: true, includeTask: true },
+  ): Promise<{ ok: boolean; data: T; error?: string }> {
     const base = this.config.endpoint.replace(/\/$/, "");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
@@ -290,12 +325,29 @@ export class TdaiClient {
         headers,
         body: JSON.stringify(stripUndefined(body)),
       });
-      if (!res.ok) return {} as T;
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          ok: false,
+          data: {} as T,
+          error: `tdai POST ${path} HTTP ${res.status}: ${text.slice(0, 200)}`,
+        };
+      }
       const envelope = await res.json() as TdaiEnvelope<T>;
-      if (typeof envelope.code === "number" && envelope.code !== 0) return {} as T;
-      return (envelope.data ?? {}) as T;
-    } catch {
-      return {} as T;
+      if (typeof envelope.code === "number" && envelope.code !== 0) {
+        return {
+          ok: false,
+          data: {} as T,
+          error: `tdai POST ${path} envelope code=${envelope.code}: ${envelope.message ?? ""}`,
+        };
+      }
+      return { ok: true, data: (envelope.data ?? {}) as T };
+    } catch (err) {
+      return {
+        ok: false,
+        data: {} as T,
+        error: err instanceof Error ? err.message : String(err),
+      };
     } finally {
       clearTimeout(timer);
     }
