@@ -11,7 +11,10 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: {
+    index: "./index.ts",
+    "memory-tencentdb-mcp": "./src/adapters/mcp/cli.ts",
+  },
   outDir: "./dist",
   format: "esm",
   platform: "node",
