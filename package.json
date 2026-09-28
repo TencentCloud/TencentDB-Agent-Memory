@@ -13,6 +13,10 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./adapters": {
+      "import": "./dist/src/adapters/index.mjs",
+      "default": "./dist/src/adapters/index.mjs"
     }
   },
   "scripts": {
