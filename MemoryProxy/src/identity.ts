@@ -423,7 +423,7 @@ export function inspectAndRecord(
     `wechatId=${identity.wechatWorkId ?? "none"} ` +
     `user=${identity.userInfo?.usernameFromPath ?? "?"} ` +
     `ws=${identity.userInfo?.workspaceFolder ?? "?"} ` +
-    `proxyToken=${identity.proxyToken ? identity.proxyToken.slice(0, 12) + "***" : "none"}` +
+    `proxyToken=${identity.proxyToken ? "present" : "none"}` +
     (Object.keys(identity.customHeaders).length > 0
       ? ` custom=[${Object.keys(identity.customHeaders).join(",")}]`
       : ""),

@@ -172,9 +172,19 @@ function mapCoreError(e: unknown, requestId: string, deps?: SkillRouterDeps, met
       return errorEnvelope(code, e.message, requestId, { latest_version: latestVersion });
     }
 
-    return errorEnvelope(code, e.message, requestId);
+    return errorEnvelope(code, "Internal server error", requestId);
   }
-  return errorEnvelope(50001, (e as Error).message ?? "internal error", requestId);
+  return errorEnvelope(50001, "Internal server error", requestId);
+}
+
+function rejectMismatchedSpace(body: unknown, auth: V2AuthContext, requestId: string): ApiResponseEnvelope | null {
+  if (body && typeof body === "object" && "space_id" in body) {
+    const spaceId = (body as { space_id?: unknown }).space_id;
+    if (typeof spaceId === "string" && spaceId !== auth.serviceId) {
+      return errorEnvelope(403, "space_id mismatch", requestId);
+    }
+  }
+  return null;
 }
 
 function formatZodErr(err: ZodError): string {
@@ -200,6 +210,8 @@ async function precheck<T>(
   deps: SkillRouterDeps,
   requestId: string,
 ): Promise<{ ok: true; core: SkillCore; data: T } | { ok: false; envelope: ApiResponseEnvelope }> {
+  const mismatch = rejectMismatchedSpace(body, auth, requestId);
+  if (mismatch) return { ok: false, envelope: mismatch };
   let core: SkillCore | undefined;
   if (deps.resolveSkillCore) {
     core = await deps.resolveSkillCore(auth.serviceId);
@@ -224,6 +236,8 @@ async function precheckWrite<T>(
   deps: SkillRouterDeps,
   requestId: string,
 ): Promise<{ ok: true; core: SkillCore; data: T } | { ok: false; envelope: ApiResponseEnvelope }> {
+  const mismatch = rejectMismatchedSpace(body, auth, requestId);
+  if (mismatch) return { ok: false, envelope: mismatch };
   let core: SkillCore | undefined;
   if (deps.resolveSkillCore) {
     core = await deps.resolveSkillCore(auth.serviceId);
@@ -523,7 +537,7 @@ export async function handleGet(body: unknown, _auth: V2AuthContext, requestId: 
       content_len: row.content?.length ?? 0,
       manifest_n: row.manifest?.length ?? 0, });
     return successEnvelope(data, requestId);
-  } catch (e) { obsLogger.error("skill.handleGet.done", { req_id: requestId, dur_ms: Date.now() - t0, skill_id: pre.data.skill_id }, e instanceof Error ? e : undefined); return mapCoreError(e, requestId); }
+  } catch (e) { obsLogger.error("skill.handleGet.done", { req_id: requestId, dur_ms: Date.now() - t0, skill_id: pre.data.skill_id }, new Error("Internal server error")); return mapCoreError(e, requestId); }
 }
 
 export async function handleList(body: unknown, _auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
@@ -766,6 +780,8 @@ export async function handleListing(body: unknown, _auth: V2AuthContext, request
  * 详见 `docs/design/2026-07-17-skill-extract-direct-trigger-plan.md`。
  */
 export async function handleExtract(body: unknown, auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
+  const mismatch = rejectMismatchedSpace(body, auth, requestId);
+  if (mismatch) return mismatch;
   // [obs] handler 内部分段走 obsLogger：每段一次 info 事件，字段结构化
   // (req_id / dur_ms / …)，一路都能按 req_id 关联；obsLogger 内部 try/catch，
   // logger 后端挂了也不影响业务。
@@ -913,9 +929,9 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
       archive_key: res.archiveKey,
     }, requestId);
   } catch (e) {
-    deps.logger.warn(`${TAG} /v3/skill/extract archive failed: ${(e as Error).message} req_id=${requestId}`);
-    obsLogger.error("skill.handleExtract.done", { req_id: requestId, dur_ms: Date.now() - t0, reason: "archive_failed" }, e instanceof Error ? e : undefined);
-    return errorEnvelope(50001, (e as Error).message ?? "internal error", requestId);
+    deps.logger.warn(`${TAG} /v3/skill/extract archive failed req_id=${requestId}`);
+    obsLogger.error("skill.handleExtract.done", { req_id: requestId, dur_ms: Date.now() - t0, reason: "archive_failed" }, new Error("Internal server error"));
+    return errorEnvelope(50001, "Internal server error", requestId);
   }
 }
 
@@ -937,6 +953,8 @@ export async function handleConversationAdd(
   requestId: string,
   deps: SkillRouterDeps,
 ): Promise<ApiResponseEnvelope> {
+  const mismatch = rejectMismatchedSpace(body, auth, requestId);
+  if (mismatch) return mismatch;
   // [obs] proxy 每轮结束都会打，是最高频的 skill 接口。分段事件：
   //   skill.handleConversationAdd.schema_parse / resolve_wired / handler_handle / done
   // handler.handle 内部还会分 read_buffer / prepare_archive / trigger.archive /
@@ -1033,9 +1051,9 @@ export async function handleConversationAdd(
       obsLogger.error("skill.handleConversationAdd.done", { req_id: requestId, dur_ms: Date.now() - t0, field: (err as { field?: string }).field }, err instanceof Error ? err : undefined);
       return errorEnvelope(40001, err.message, requestId);
     }
-    deps.logger.warn(`${TAG} /v3/skill/conversation/add failed: ${(err as Error).message}`);
-    obsLogger.error("skill.handleConversationAdd.done", { req_id: requestId, dur_ms: Date.now() - t0 }, err instanceof Error ? err : undefined);
-    return errorEnvelope(50001, (err as Error).message ?? "internal error", requestId);
+    deps.logger.warn(`${TAG} /v3/skill/conversation/add failed req_id=${requestId}`);
+    obsLogger.error("skill.handleConversationAdd.done", { req_id: requestId, dur_ms: Date.now() - t0 }, new Error("Internal server error"));
+    return errorEnvelope(50001, "Internal server error", requestId);
   }
 }
 
@@ -1050,6 +1068,8 @@ export async function handleForceArchive(
   requestId: string,
   deps: SkillRouterDeps,
 ): Promise<ApiResponseEnvelope> {
+  const mismatch = rejectMismatchedSpace(body, auth, requestId);
+  if (mismatch) return mismatch;
   const t0 = Date.now();
 
   if (!deps.resolveConversationAdd) {
@@ -1133,9 +1153,9 @@ export async function handleForceArchive(
       archive_key: archiveRes.archiveKey,
     }, requestId);
   } catch (err) {
-    deps.logger.warn(`${TAG} /v3/skill/conversation/force-archive failed: ${(err as Error).message} req_id=${requestId}`);
-    obsLogger.error("skill.handleForceArchive.done", { req_id: requestId, dur_ms: Date.now() - t0 }, err instanceof Error ? err : undefined);
-    return errorEnvelope(50001, (err as Error).message ?? "internal error", requestId);
+    deps.logger.warn(`${TAG} /v3/skill/conversation/force-archive failed req_id=${requestId}`);
+    obsLogger.error("skill.handleForceArchive.done", { req_id: requestId, dur_ms: Date.now() - t0 }, new Error("Internal server error"));
+    return errorEnvelope(50001, "Internal server error", requestId);
   }
 }
 

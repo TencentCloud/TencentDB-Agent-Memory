@@ -13,8 +13,10 @@
  * 用 payload.service_id 从注册表解析实例凭证（endpoint + api_key）→ 组 S2S 凭证
  * → 取 KS 详情 → POST /v3/knowledge/create。
  *
- * 不挂 validatePanelMetaHeaders（S2S，无浏览器 session header）。
+ * 不挂 validatePanelMetaHeaders（S2S，无浏览器 session header）；
+ * 用独立的 KNOWLEDGE_CALLBACK_TOKEN 验证 KS 回调来源。
  */
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Hono } from 'hono';
 import type { PanelDeps } from '../../../panel-deps.js';
 import type { KernelCredentials, MetaCallContext } from '../../../kernel/types.js';
@@ -56,6 +58,14 @@ async function safeJson(c: { req: { text: () => Promise<string> } }): Promise<Ca
 
 function isProgressPhase(p: unknown): p is 'extracting' | 'merging' | 'indexing' {
   return p === 'extracting' || p === 'merging' || p === 'indexing';
+}
+
+function validCallbackToken(header: string | undefined, expected: string): boolean {
+  const supplied = /^Bearer ([^\s]+)$/i.exec(header ?? '')?.[1];
+  if (!supplied) return false;
+  const actualHash = createHash('sha256').update(supplied).digest();
+  const expectedHash = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(actualHash, expectedHash);
 }
 
 /**
@@ -115,6 +125,13 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
   const log = deps.logger;
 
   api.post('/knowledge/status-callback', async (c) => {
+    const callbackToken = deps.config.knowledge.callbackToken;
+    if (!callbackToken) {
+      return c.json({ code: 503, message: 'CALLBACK_AUTH_NOT_CONFIGURED', request_id: '', data: null }, 503);
+    }
+    if (!validCallbackToken(c.req.header('authorization'), callbackToken)) {
+      return c.json({ code: 401, message: 'INVALID_CALLBACK_TOKEN', request_id: '', data: null }, 401);
+    }
     const body = await safeJson(c);
 
     // ── ingest 细粒度进度（非终态）──

@@ -38,6 +38,8 @@ import {
 
 /** Hop-by-hop headers 与 host header：不能透传到 upstream。 */
 const SKIP_REQUEST_HEADERS = new Set([
+  "x-tdai-user-key",
+  "x-tdai-user-token",
   "host",
   "content-length",
   "transfer-encoding",

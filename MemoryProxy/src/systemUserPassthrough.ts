@@ -77,6 +77,8 @@ const SKIP_REQUEST_HEADERS = new Set([
   "content-length",
   "transfer-encoding",
   "connection",
+  "x-tdai-user-key",
+  "x-tdai-user-token",
 ]);
 
 /** Response headers that would confuse the client if forwarded verbatim. */

@@ -65,6 +65,7 @@ function envBoolFirst(keys: string[], fallback: boolean): boolean {
  * 重启/多次启动保持稳定（换密钥会导致已存 identity 绑定无法解密）。
  */
 function resolveSessionSecret(identityStorePath: string): string {
+      callbackToken: env('KNOWLEDGE_CALLBACK_TOKEN', ''),
   const secretPath = env('PANEL_AUTH_SESSION_SECRET_FILE', join(dirname(identityStorePath), 'panel-session-secret'));
   try {
     if (existsSync(secretPath)) {
@@ -92,7 +93,7 @@ export interface PanelConfig {
   ui: { distDir: string };
   log: { level: LogLevel; format: 'json' | 'pretty' };
   /** Knowledge Service (KS :8421) 连接配置。serviceId 按请求 instanceId 注入。 */
-  knowledge: { baseUrl: string; authToken: string; timeoutMs: number };
+  knowledge: { baseUrl: string; authToken: string; callbackToken: string; timeoutMs: number };
   /**
    * 启动时为每个实例确保 knowledge-service LLM 绑定（走 proxy 记账）。
    * sync=false 时完全跳过（不改变现有部署行为）。
