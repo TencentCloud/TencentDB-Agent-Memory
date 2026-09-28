@@ -23,6 +23,19 @@ export interface HealthResponse {
     vectorStore: boolean;
     embeddingService: boolean;
   };
+  diagnostics: {
+    process: {
+      pid: number;
+      cwd: string;
+      user?: string;
+      home?: string;
+    };
+    gateway: {
+      host: string;
+      port: number;
+      dataDir: string;
+    };
+  };
 }
 
 // ============================
