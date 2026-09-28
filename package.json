@@ -7,12 +7,26 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-mcp": "./bin/memory-tencentdb-mcp.mjs"
   },
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./opencode": {
+      "import": "./dist/opencode.mjs",
+      "default": "./dist/opencode.mjs"
+    },
+    "./server": {
+      "import": "./dist/opencode.mjs",
+      "default": "./dist/opencode.mjs"
+    },
+    "./adapter-sdk": {
+      "types": "./src/adapters/sdk/index.ts",
+      "import": "./dist/adapter-sdk.mjs",
+      "default": "./dist/adapter-sdk.mjs"
     }
   },
   "scripts": {
@@ -44,6 +58,8 @@
     "scripts/postinstall.mjs",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
+    "docs/",
+    "integrations/",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
@@ -76,6 +92,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@node-rs/jieba": "^2.0.1",
     "@tencentdb-agent-memory/tcvdb-text": "^0.1.1",
     "ai": "^6.0.164",
@@ -119,7 +136,7 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^25.5.2",
+    "@types/node": "^25.9.5",
     "@vitest/coverage-v8": "^4.1.2",
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
