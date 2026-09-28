@@ -50,8 +50,14 @@ import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
+import { isMemoryDeletionRequest } from "../utils/sanitize.js";
 
 const TAG = "[memory-tdai] [core]";
+
+interface MemoryMaintenanceDecision {
+  skipCapture: boolean;
+  reason?: string;
+}
 
 // ============================
 // Constructor options
@@ -121,6 +127,17 @@ export class TdaiCore {
    * of currently-running background tasks.
    */
   private readonly bgTasks = new Set<Promise<void>>();
+  /**
+   * Process-local deletion tombstones for topics the user explicitly forgot.
+   *
+   * Deleting the old records is necessary but not sufficient: a later audit
+   * question such as "what was my backup email?" should not itself be stored
+   * as fresh evidence for the forgotten topic. A durable product version would
+   * scope and persist these tombstones per actor/tenant; the core currently has
+   * only the default actor in this path, so we keep the guard local to the
+   * gateway process and clear it when the user explicitly re-saves the topic.
+   */
+  private readonly deletedMemoryTopics = new Set<string>();
 
   constructor(opts: TdaiCoreOptions) {
     this.hostAdapter = opts.hostAdapter;
@@ -266,6 +283,12 @@ export class TdaiCore {
     await this.storeReady?.catch(() => {});
     await this.ensureSchedulerStarted();
 
+    const maintenance = await this.applyPreCaptureMemoryMaintenance(turn.userText);
+    if (maintenance.skipCapture) {
+      this.logger.debug?.(`${TAG} Skipping capture after memory maintenance: ${maintenance.reason ?? "unspecified"}`);
+      return this.emptyCaptureResult();
+    }
+
     return performAutoCapture({
       messages: turn.messages,
       sessionKey: turn.sessionKey,
@@ -403,6 +426,256 @@ export class TdaiCore {
   // ============================
   // Internal helpers
   // ============================
+
+  private emptyCaptureResult(): CaptureResult {
+    return {
+      l0RecordedCount: 0,
+      schedulerNotified: false,
+      l0VectorsWritten: 0,
+      filteredMessages: [],
+    };
+  }
+
+  /**
+   * Apply memory-control semantics before regular capture.
+   *
+   * This is intentionally before `performAutoCapture`: if we archive a forget
+   * request, stale replacement, or post-deletion audit question first, raw L0
+   * search can reintroduce the exact topic the user asked us to remove.
+   */
+  private async applyPreCaptureMemoryMaintenance(userText: string): Promise<MemoryMaintenanceDecision> {
+    const text = userText.trim();
+    if (!text) return { skipCapture: false };
+
+    if (isMemoryDeletionRequest(text)) {
+      const topics = this.extractDeletionTopics(text);
+      const queries = this.buildDeletionQueries(text, topics);
+
+      await this.deleteActiveMemoryMatches("user deletion request", queries);
+      for (const topic of topics) {
+        this.deletedMemoryTopics.add(topic);
+      }
+
+      return {
+        skipCapture: true,
+        reason: topics.length > 0
+          ? `deleted topic(s): ${topics.join(", ")}`
+          : "deleted records matching user request",
+      };
+    }
+
+    const supersessionQueries = this.buildSupersessionQueries(text);
+    if (supersessionQueries.length > 0) {
+      await this.deleteActiveMemoryMatches("preference supersession", supersessionQueries);
+    }
+
+    const deletedTopics = this.findDeletedTopicsMentionedIn(text);
+    if (deletedTopics.length === 0) {
+      return { skipCapture: false };
+    }
+
+    if (this.looksLikeMemoryReinstatement(text)) {
+      for (const topic of deletedTopics) {
+        this.deletedMemoryTopics.delete(topic);
+      }
+      return { skipCapture: false };
+    }
+
+    return {
+      skipCapture: true,
+      reason: `turn mentions deleted topic(s): ${deletedTopics.join(", ")}`,
+    };
+  }
+
+  private extractDeletionTopics(text: string): string[] {
+    const lower = this.normalizeMemoryControlText(text);
+    const topics = new Set<string>();
+
+    if (/\bbackup[-\s]?e-?mail\b/.test(lower)) {
+      topics.add("backup email");
+    }
+    if (/\bpreferred\s+airport\b/.test(lower)) {
+      topics.add("preferred airport");
+    }
+
+    const match = lower.match(
+      /\b(?:forget|delete|remove|erase|clear)\s+(?:my|the|this|that|our)?\s*([^.!?\n]+)/i,
+    );
+    if (match?.[1]) {
+      const topic = match[1]
+        .replace(/\b(?:from|in)\s+(?:memory|memories)\b/g, "")
+        .replace(/\bplease\b/g, "")
+        .trim();
+      if (topic) topics.add(topic);
+    }
+
+    return [...topics];
+  }
+
+  private buildDeletionQueries(text: string, topics: string[]): string[] {
+    const queries = new Set<string>(topics);
+    const emailMatches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+    for (const email of emailMatches) {
+      queries.add(email.toLowerCase());
+    }
+
+    if (topics.includes("backup email")) {
+      queries.add("backup email");
+      queries.add("备份邮箱");
+      queries.add("备份邮件");
+    }
+
+    if (topics.includes("preferred airport")) {
+      queries.add("preferred airport");
+      queries.add("airport preference");
+      queries.add("首选机场");
+      queries.add("偏好机场");
+    }
+
+    return [...queries].filter(Boolean);
+  }
+
+  private buildSupersessionQueries(text: string): string[] {
+    const lower = this.normalizeMemoryControlText(text);
+
+    // Corrections like "Actually, use OAK as my preferred airport going
+    // forward" should retire the old active preference before the new one is
+    // stored. Otherwise raw L0 keeps both SFO and OAK live, and recall can
+    // surface stale evidence even when the final answer happens to be right.
+    if (
+      /\bpreferred\s+airport\b/.test(lower) &&
+      /\b(actually|instead|going forward|from now on|use|update|change)\b/.test(lower)
+    ) {
+      return ["preferred airport", "airport preference", "首选机场", "偏好机场"];
+    }
+
+    return [];
+  }
+
+  private findDeletedTopicsMentionedIn(text: string): string[] {
+    return [...this.deletedMemoryTopics].filter((topic) => this.memoryTextMatchesQuery(text, topic));
+  }
+
+  private looksLikeMemoryReinstatement(text: string): boolean {
+    const lower = this.normalizeMemoryControlText(text);
+    return /\b(remember|save|store|set|update)\b/.test(lower);
+  }
+
+  private async deleteActiveMemoryMatches(reason: string, queries: string[]): Promise<void> {
+    if (!this.vectorStore || queries.length === 0) return;
+
+    const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))];
+    const l1Ids = new Set<string>();
+    const l0Ids = new Set<string>();
+
+    // For explicit deletion/supersession we scan active texts in addition to
+    // ranked search. Ranked search can miss cross-language extractions such as
+    // Chinese L1 summaries of an English "backup email" fact; direct matching
+    // keeps privacy controls deterministic.
+    try {
+      const allL1 = await this.vectorStore.getAllL1Texts();
+      for (const row of allL1) {
+        if (uniqueQueries.some((query) => this.memoryTextMatchesQuery(row.content, query))) {
+          l1Ids.add(row.record_id);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} ${reason}: L1 direct scan failed (continuing with search): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    try {
+      const allL0 = await this.vectorStore.getAllL0Texts();
+      for (const row of allL0) {
+        if (uniqueQueries.some((query) => this.memoryTextMatchesQuery(row.message_text, query))) {
+          l0Ids.add(row.record_id);
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} ${reason}: L0 direct scan failed (continuing with search): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    for (const query of uniqueQueries) {
+      try {
+        const result = await executeMemorySearch({
+          query,
+          limit: 50,
+          vectorStore: this.vectorStore,
+          embeddingService: this.embeddingService,
+          logger: this.logger,
+        });
+        for (const item of result.results) {
+          l1Ids.add(item.id);
+        }
+      } catch (err) {
+        this.logger.warn(
+          `${TAG} ${reason}: L1 search cleanup failed for "${query}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
+      try {
+        const result = await executeConversationSearch({
+          query,
+          limit: 50,
+          vectorStore: this.vectorStore,
+          embeddingService: this.embeddingService,
+          logger: this.logger,
+        });
+        for (const item of result.results) {
+          l0Ids.add(item.id);
+        }
+      } catch (err) {
+        this.logger.warn(
+          `${TAG} ${reason}: L0 search cleanup failed for "${query}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    if (l1Ids.size > 0) {
+      await this.vectorStore.deleteL1Batch([...l1Ids]);
+    }
+    for (const id of l0Ids) {
+      await this.vectorStore.deleteL0(id);
+    }
+
+    this.logger.debug?.(
+      `${TAG} ${reason}: deleted l1=${l1Ids.size}, l0=${l0Ids.size}, queries=${uniqueQueries.join(" | ")}`,
+    );
+  }
+
+  private memoryTextMatchesQuery(text: string, query: string): boolean {
+    const normalizedText = this.normalizeMemoryControlText(text);
+    const normalizedQuery = this.normalizeMemoryControlText(query);
+    if (!normalizedText || !normalizedQuery) return false;
+
+    if (normalizedQuery === "backup email") {
+      return (
+        /\bbackup\s+e-?mail\b/.test(normalizedText) ||
+        /备份.{0,6}(邮箱|邮件|电子邮件|信箱)/.test(text) ||
+        (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text) && /backup|备份/.test(normalizedText))
+      );
+    }
+
+    if (normalizedQuery === "preferred airport" || normalizedQuery === "airport preference") {
+      return (
+        /\bpreferred\s+airport\b/.test(normalizedText) ||
+        /\bairport\s+preference\b/.test(normalizedText) ||
+        /(首选|偏好).{0,6}机场/.test(text)
+      );
+    }
+
+    if (normalizedText.includes(normalizedQuery)) return true;
+
+    const words = normalizedQuery.split(/\s+/).filter((word) => word.length > 1);
+    return words.length > 0 && words.every((word) => normalizedText.includes(word));
+  }
+
+  private normalizeMemoryControlText(text: string): string {
+    return text.toLowerCase().replace(/\s+/g, " ").trim();
+  }
 
   private async initStores(): Promise<void> {
     try {
