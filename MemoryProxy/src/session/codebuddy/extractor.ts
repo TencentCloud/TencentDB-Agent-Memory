@@ -55,6 +55,38 @@ function extractOpencodeAnswers(content: string): string | null {
   return answers.length > 0 ? answers.join(" | ") : null;
 }
 
+// ── workbuddy tool-result 剥壳 ───────────────────────────────────────────────
+//
+// WorkBuddy 复用 CC 的 `AskUserQuestion` tool，用户选择后回写的 tool_result 是
+// **整段问题文案 + ` → ` + 用户答案**：
+//
+//   · 请选择本次会话所属的 Team：（如选择"跳过"选项，本次 session init 将跳过，
+//     不注入任何团队资产） → global-dev (nnfs4)
+//
+// 问题文案里含 form.ts 的 SKIP_HINT（"…若选择跳过，本次 Session 将不注入团队
+// 资产"），而 `extractTeamFromOptionText` 在匹配 team 之前就无条件测
+// `SKIP_RE = /跳过|不关联|skip/i`，于是用户明明选了 team 也被判 BYPASS →
+// sessionInfo=null、不注入、不写 L0，日志里 bypassed=true。
+//
+// 这与 opencode 的 `User has answered your questions: "..."="answer"` 是同一
+// 类问题（见 extractOpencodeAnswers 头注释），agent/task 两侧早已按"先 match
+// 后 SKIP 兜底"或剥壳处理，team 这一侧是最后一处漏网。
+//
+// 修复：取最后一个 ` → ` 右侧的用户答案。用 lastIndexOf 而非 indexOf，因为
+// 问题文案自身可能含箭头（如 MORE_LABEL="更多 →"出现在分页选项描述里）。
+// 非 workbuddy 场景（CB XML / codex 裸文本 / opencode 包裹）不含此分隔符，
+// helper 返回 null，走原始 content 老路径。
+//
+// 注意：只有"右侧非空"才剥壳。若右侧为空（`... → ` 后无内容），说明这不是
+// 一次完整的问答回写，保留原文让后续 match / SKIP 逻辑自行判定。
+function extractWorkbuddyAnswer(content: string): string | null {
+  const sep = " → ";
+  const idx = content.lastIndexOf(sep);
+  if (idx < 0) return null;
+  const answer = content.slice(idx + sep.length).trim();
+  return answer.length > 0 ? answer : null;
+}
+
 /**
  * 从用户答复中提取 asset_confirm 选择。
  * 返回 true=是（关联资产），false=否（bypass），null=未识别。
@@ -148,6 +180,12 @@ export function extractTeamFromOptionText(
   // 见 extractOpencodeAnswers 头部注释。
   const opencodeAnswer = extractOpencodeAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
+
+  // workbuddy: 同上，但分隔符是 ` → `（问题文案 → 用户答案）。workbuddy form
+  // 的 SKIP_HINT 含"跳过"二字，不剥壳会把用户的有效选择误判成 bypass。
+  // 见 extractWorkbuddyAnswer 头部注释。
+  const wbAnswer = extractWorkbuddyAnswer(content);
+  if (wbAnswer !== null) content = wbAnswer;
 
   let teamText: string | null = null;
 
