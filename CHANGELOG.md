@@ -9,6 +9,16 @@
 
 ---
 
+## [Unreleased]
+
+### Fix SDK STS refresh ownership (#1513)
+
+- **What changed**: Keep cache publication and cleanup with the active refresh; invalidate the credential actually rejected by COS.
+- **Why**: Concurrent or late 403 responses must not detach another refresh or restore stale cache entries.
+- **Impact**: No-argument invalidation remains a full reset; file reads still retry once.
+- **Verification**: Node 26.3.0: 12 tests pass (baseline 8 fail/4 pass), SDK build and focused test typecheck pass. COS is mocked; STS includes loopback HTTP.
+- **Files**: sdk/memory-core/typescript/src/cos.ts and credential-refresh tests.
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

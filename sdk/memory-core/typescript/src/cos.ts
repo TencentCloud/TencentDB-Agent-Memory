@@ -138,14 +138,24 @@ export class StsCredentialManager {
     if (!this.fetchPromise) {
       this.fetchPromise = this.refresh();
     }
+    const pending = this.fetchPromise;
     try {
-      return await this.fetchPromise;
+      const credential = await pending;
+      // Explicit invalidation may have detached this refresh in the meantime.
+      if (this.fetchPromise === pending) this.credential = credential;
+      return credential;
     } finally {
-      this.fetchPromise = null;
+      if (this.fetchPromise === pending) this.fetchPromise = null;
     }
   }
 
-  invalidate(): void {
+  /** Reject only the credential used by a failed read; omit it for a full reset. */
+  invalidate(rejectedCredential?: StsCredential): void {
+    if (rejectedCredential !== undefined) {
+      if (this.credential === rejectedCredential) this.credential = null;
+      // An expiry refresh or another reader may already be replacing it.
+      return;
+    }
     this.credential = null;
     this.fetchPromise = null;
   }
@@ -173,9 +183,7 @@ export class StsCredentialManager {
       }
 
       const data = (await resp.json()) as CosSecretResponse;
-      const cred = new StsCredential(data);
-      this.credential = cred;
-      return cred;
+      return new StsCredential(data);
     } finally {
       clearTimeout(timer);
     }
@@ -259,9 +267,10 @@ export class MemoryFileReader {
 
     // 403 → invalidate and retry once
     if (result.status === 403) {
-      this.stsManager.invalidate();
+      this.stsManager.invalidate(cred);
       cred = await this.stsManager.getCredential();
       result = await this.doGet(cred, path);
+      if (result.status === 403) this.stsManager.invalidate(cred);
     }
 
     if (result.status === 404) {
