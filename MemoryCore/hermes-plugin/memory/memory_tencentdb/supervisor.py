@@ -230,6 +230,19 @@ class GatewaySupervisor:
                 env["MEMORY_TENCENTDB_GATEWAY_HOST"] = self._host
                 env["TDAI_GATEWAY_PORT"] = str(self._port)
                 env["TDAI_GATEWAY_HOST"] = self._host
+                # Same MEMORY_TENCENTDB_* ↔ TDAI_* split applies to the LLM
+                # config: the README and the plugin config schema use
+                # MEMORY_TENCENTDB_LLM_*, but src/gateway/config.ts reads
+                # TDAI_LLM_*. Forward any that are set so the spawned Gateway
+                # actually receives them (otherwise L1 extraction silently
+                # fails while the Gateway reports healthy).
+                for legacy, canonical in (
+                    ("MEMORY_TENCENTDB_LLM_API_KEY", "TDAI_LLM_API_KEY"),
+                    ("MEMORY_TENCENTDB_LLM_BASE_URL", "TDAI_LLM_BASE_URL"),
+                    ("MEMORY_TENCENTDB_LLM_MODEL", "TDAI_LLM_MODEL"),
+                ):
+                    if legacy in os.environ and canonical not in os.environ:
+                        env[canonical] = os.environ[legacy]
                 # Note: we deliberately do NOT inject TDAI_GATEWAY_API_KEY into
                 # the child's env from here. Whether the Gateway enforces auth is
                 # the operator's call — they configure it on the Gateway side
