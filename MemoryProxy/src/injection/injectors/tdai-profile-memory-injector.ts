@@ -12,7 +12,7 @@ import { resolveFixedAssetCtxs, type FixedAssetCtx } from "./tdai-fixed-asset.js
  *   - L3 (persona) → 注入完整内容（稳定且通常较短，作为长期画像）
  *   - L2 (scenarios) → **只注入 Scene Navigation 索引（路径列表 + summary）**，
  *     不预读全文。LLM 需要细节时主动调 `tdai_read_scene` 工具按 path 拉取。
- *   - 同时附 memory-tools-guide 文案，告诉 LLM 怎么用工具 + 调用上限。
+ *   - 工具决策规则由 tdai-tools-injector 统一注入；本 injector 只输出数据。
  *
  * 这样可以：
  *   1. 大幅降低首轮 token 消耗（L2 全文经常上千 chars × N 个）
@@ -79,68 +79,86 @@ export class TdaiProfileMemoryInjector implements InjectionHook {
     // 对每个 agent 独立拉 L3 + L2 索引（不读 L2 全文）
     const groups = await Promise.all(ctxs.map((c) => loadAgentProfile(client, c)));
 
-    // 全部为空 → 仍注入 tools-guide（LLM 可主动 search L1 / 读 L2）
-    const hasAnything = groups.some((g) => g.l3 || g.l2Entries.length > 0);
-    if (!hasAnything) {
-      return [{
-        type: "text",
-        content: MEMORY_TOOLS_GUIDE,
-        metadata: { source: this.id, agentCount: 0, l3Count: 0, l2Count: 0, mode: "tools-only" },
-      }];
-    }
-
-    const lines: string[] = [
-      "<tdai_profile_memory>",
-      "以下是 TDAI 为当前 agent 维护的长期工作记忆（自有 + 借入分段；L2 仅给索引，按需用工具读全文）：",
-    ];
-
-    let l2TotalCount = 0;
-    let l3Count = 0;
-    for (const g of groups) {
-      if (!g.l3 && g.l2Entries.length === 0) continue;
-      const tag = g.ctx.isSelf ? "self" : "imported_from";
-      lines.push(
-        `<agent name=${JSON.stringify(g.ctx.agentName)} role=${JSON.stringify(tag)} agent_id=${JSON.stringify(g.ctx.agentId)}>`,
-      );
-      if (g.l3?.content) {
-        l3Count++;
-        lines.push("<l3_core_memory>", truncate(g.l3.content, 6000), "</l3_core_memory>");
-      }
-      if (g.l2Entries.length > 0) {
-        lines.push("<l2_scene_index>");
-        for (const e of g.l2Entries) {
-          l2TotalCount++;
-          // 索引行：路径 + summary（如果有）；正文用 tool 拉
-          if (e.summary) {
-            lines.push(`- \`${e.path}\` — ${truncate(e.summary, 200)}`);
-          } else {
-            lines.push(`- \`${e.path}\``);
-          }
-        }
-        lines.push("</l2_scene_index>");
-      }
-      lines.push("</agent>");
-    }
-
-    lines.push("</tdai_profile_memory>");
-    // 紧跟一段 memory-tools-guide，告诉 LLM 三个工具的用法 + 调用上限
-    lines.push("");
-    lines.push(MEMORY_TOOLS_GUIDE);
+    const rendered = renderTdaiProfileMemoryBlock(groups.map((g) => ({
+      agentName: g.ctx.agentName,
+      agentId: g.ctx.agentId,
+      isSelf: g.ctx.isSelf,
+      l3Content: g.l3?.content,
+      l2Entries: g.l2Entries,
+    })));
+    if (!rendered) return [];
 
     return [
       {
         type: "text",
-        content: lines.join("\n"),
+        content: rendered.content,
         metadata: {
           source: this.id,
           agentCount: groups.length,
-          l3Count,
-          l2IndexCount: l2TotalCount,
+          l3Count: rendered.l3Count,
+          l2IndexCount: rendered.l2IndexCount,
           mode: "index+tools",
         },
       },
     ];
   }
+}
+
+export interface TdaiProfileMemoryGroup {
+  agentName: string;
+  agentId: string;
+  isSelf: boolean;
+  l3Content?: string;
+  l2Entries: Array<{ path: string; summary?: string }>;
+}
+
+/** Render only L2/L3 data. Empty input returns null so no empty prompt block is injected. */
+export function renderTdaiProfileMemoryBlock(
+  groups: TdaiProfileMemoryGroup[],
+): { content: string; agentCount: number; l3Count: number; l2IndexCount: number } | null {
+  const populated = groups.filter((g) => Boolean(g.l3Content?.trim()) || g.l2Entries.length > 0);
+  if (populated.length === 0) return null;
+
+  const lines: string[] = [
+    "<tdai_profile_memory>",
+    "以下是 TDAI 为当前 agent 维护的长期工作记忆（自有 + 借入分段；L2 仅给索引，按需用工具读全文）：",
+  ];
+
+  let l2TotalCount = 0;
+  let l3Count = 0;
+  for (const g of populated) {
+    const tag = g.isSelf ? "self" : "imported_from";
+    lines.push(
+      `<agent name=${JSON.stringify(g.agentName)} role=${JSON.stringify(tag)} agent_id=${JSON.stringify(g.agentId)}>`,
+    );
+    if (g.l3Content?.trim()) {
+      l3Count++;
+      lines.push("<l3_core_memory>", truncate(g.l3Content, 6000), "</l3_core_memory>");
+    }
+    if (g.l2Entries.length > 0) {
+      lines.push("<l2_scene_index>");
+      for (const e of g.l2Entries) {
+        l2TotalCount++;
+        // 索引行：路径 + summary（如果有）；正文用 tool 拉
+        if (e.summary) {
+          lines.push(`- \`${e.path}\` — ${truncate(e.summary, 200)}`);
+        } else {
+          lines.push(`- \`${e.path}\``);
+        }
+      }
+      lines.push("</l2_scene_index>");
+    }
+    lines.push("</agent>");
+  }
+
+  lines.push("</tdai_profile_memory>");
+
+  return {
+    content: lines.join("\n"),
+    agentCount: populated.length,
+    l3Count,
+    l2IndexCount: l2TotalCount,
+  };
 }
 
 function createPrewarmAgentContext(input: PrewarmInput): AgentContext {
@@ -159,55 +177,6 @@ function createPrewarmAgentContext(input: PrewarmInput): AgentContext {
     },
   };
 }
-
-/** 记忆使用指南：L0/L1 按需用工具检索（不再自动召回），L3 直注、L2 索引直注。 */
-export const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
-## ⚠️ 重要：这不是文档，这是你的可用能力
-
-以下 \`<tdai_memory_tools>\` 中列出的 tdai_memory_search / tdai_conversation_search
-等，是**你可以主动调用的能力**（不是仅供参考的文档）。它们通过 **Bash + curl**
-使用（见上方 \`<tdai_memory_tools>\` 段里的完整调用说明与 URL）。
-
-**禁止**回答类似"我没有这个工具 / 需要 MCP / 需要斜杠命令"。
-**正确做法**：判定需要查记忆时，直接在 Bash 里执行 curl，proxy 会自动注入身份与鉴权。
-
-## 记忆使用规则（遇到以下场景必须先查再答）
-
-L3（persona 长期画像）与 L2 场景索引已直接注入 system。L0/L1 需要用工具主动检索。
-
-### 必须先查记忆再回答的场景（命中任一条即触发工具调用）
-
-1. **用户提及历史/过去/之前**：如 "我之前说过 / 我告诉过你 / 上次 / 你还记不记得 / 我们聊过 / 之前那个"
-   → 用 \`tdai_conversation_search\`（L0 原文找具体消息）
-2. **用户涉及自己身份/偏好/习惯**：如 "我叫什么 / 我的名字 / 我喜欢 / 我的团队 / 我常用 / 我不喜欢 / 我不允许"
-   → 用 \`tdai_memory_search\`（L1 原子记忆查偏好/规则）
-3. **用户要求你回忆/找**：如 "回忆一下 / 想起 / 找出 / 有没有关于 X 的记录 / 查我们之前"
-   → 直接触发工具，不要凭空回答
-4. **答案强依赖历史事实**：如 "那个 bug 我们怎么修的 / 上次方案是啥 / 我们的约定是什么"
-   → 关键词化后 \`tdai_memory_search\`
-
-**典型流程**（用户："我叫什么"）：
-\`\`\`bash
-# Step 1: 先查
-curl -sfk -X POST <bridge>/atomic/search \\
-  -H 'Content-Type: application/json' -H 'x-conversation-id: <sid>' \\
-  -d '{"query": "用户姓名 name 身份", "limit": 5}'
-# Step 2: 从 items[].content 里提取答案后回复
-# 若为空: 明确告诉用户 "我在记忆里没找到，你叫什么？" —— 不要装作知道
-\`\`\`
-
-### 不需要查的场景
-
-- 用户问 "你是谁" / "帮我改代码" / "写个脚本" / 通用编程问题
-- 当前会话上下文（同轮消息）里已能回答
-- 已经在 \`<l3_core_memory>\` 段落里直接看到答案
-
-### ⚠️ 调用约束
-
-- 每轮 \`tdai_memory_search\` + \`tdai_conversation_search\` **合计 ≤ 3 次**（\`tdai_read_scene\` / \`tdai_scenario_ls\` / \`tdai_atomic_query\` 不计入）
-- 检索无果时**明确说明**"我在记忆里没找到 X"，不要幻想
-- 同一 L2 path 不要重复读
-</memory-tools-guide>`;
 
 interface AgentProfileBundle {
   ctx: FixedAssetCtx;

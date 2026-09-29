@@ -10,6 +10,8 @@
     "dev:config": "node --import tsx/esm --watch src/index.ts --config config.yaml",
     "test": "vitest run",
     "test:watch": "vitest",
+    "eval:tool-routing": "node --env-file-if-exists=.env.tool-routing.local --import tsx/esm scripts/eval/tool-routing/run.ts",
+    "eval:tool-routing:dry": "node --import tsx/esm scripts/eval/tool-routing/run.ts --dry-run --split all",
     "typecheck": "tsc --noEmit"
   },
   "optionalDependencies": {

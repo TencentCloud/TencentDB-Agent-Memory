@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "cases": 297,
+  "recorded_runs": 594,
+  "baseline_commit": "97f94654280b2932c35ba4806a491999ed244cc9",
+  "original_dataset_sha256": "90ccdc3a9d2c25eadf31c3cd3446741f93f9b79e89e7988a68b1e90fc9201a6b",
+  "files": {
+    "dataset.jsonl": "08141604883dd8df678b9b2a319448edf6b7665728b09dd431e33f029d340e83",
+    "fixtures/text.json": "66354adf6080191688be46991cc6f2a153e528ad36fa80a35d3697d9463720f4",
+    "fixtures/layout.txt": "cc9f92be4c7d3ccb9cfa01ecc2a466518632e746a847f669cea9509b5b224e62",
+    "baseline/system.txt": "549c12e4ce7ff095a73b20fc621f4d4f6eb683ed1e49de64f4fef659cff21abc",
+    "baseline/knowledge.txt": "321d9b476451a315c02b4ef9277b37fc1ff37108ac1dc6b5ef8911c2a676b985",
+    "results/per-case.jsonl": "ac11327cafd1efa14ae1870ff4c83c35148f8801368ba3767412f7448e35e756",
+    "results/summary.json": "0b737408eff67727969a13f7a3f253d9ca6fc6a6a5d3fe0742c42bed17b8b994",
+    "results/token-probe.json": "51acb8d84e6f57c99b070f8aebea08e773709da69f9f3f3b5726ad4e0bb00462",
+    "results/recoveries.json": "5db12e1fd43a11bebf7a8ac0492e09abccde688eb79668f1e80b801a5625deb9"
+  },
+  "note": "Per-case records retain calls, execution observations and usage, but omit long conversation text. Original interruptions and full traces are archived separately."
+}
