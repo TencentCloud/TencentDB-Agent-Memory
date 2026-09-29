@@ -263,7 +263,8 @@ export class MongoMemoryStore implements IMemoryStore {
     return true;
   }
 
-  async deleteL1(recordId: string, filter?: IsolationFilter): Promise<boolean> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- mongodb errors already propagate; opts accepted for interface parity
+  async deleteL1(recordId: string, filter?: IsolationFilter, opts?: { throwOnError?: boolean }): Promise<boolean> {
     const coll = await this.coll(COLLECTIONS.L1);
     const res = await coll.deleteOne({ _id: recordId, ...isolationToMatch(filter) } as never);
     return res.deletedCount > 0;
