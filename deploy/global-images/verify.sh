@@ -226,7 +226,7 @@ else
   for port_var in MEMORY_CORE_PORT PANEL_PORT KNOWLEDGE_PORT PROXY_PORT; do
     port="${!port_var:-}"
     if [[ -z "$port" ]]; then continue; fi
-    if lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    if port_in_use "$port"; then
       WARNS=$((WARNS+1))
       warn "端口 $port ($port_var) 已被占用，启动前请释放或在 .env 改端口"
     else
