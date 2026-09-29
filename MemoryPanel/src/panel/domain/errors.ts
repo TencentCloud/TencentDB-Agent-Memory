@@ -39,6 +39,8 @@ export class CoreUpstreamError extends DomainError {
     message: string,
     /** core 原始业务码，便于排查；不直接返给前端。 */
     readonly upstreamCode?: number,
+    /** 上游的机器可读错误标识；供调用方区分可重试的查询间隙。 */
+    readonly upstreamErrorCode?: string,
   ) {
     super(message, code, httpStatus);
     this.name = 'CoreUpstreamError';

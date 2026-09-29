@@ -24,7 +24,7 @@
  */
 
 import { createLogger } from "../logger.js";
-import type { CodeGraphService, SyncResult } from "./code-graph-service.js";
+import type { AutoSyncResult, CodeGraphService } from "./code-graph-service.js";
 import type { IKnowledgeStore, CodeGraphRow } from "./types.js";
 
 const log = createLogger("auto-sync-scheduler");
@@ -282,17 +282,26 @@ export class AutoSyncScheduler {
     const startMs = Date.now();
     log.info(`[auto-sync] sync ${row.code_graph_id} (${row.repo_url}@${row.branch})`);
     try {
-      // CodeGraphService.sync 目前是同步返回 SyncResult；await 兼容未来改 async 或测试 mock。
-      const result: SyncResult = await Promise.resolve(
-        this.cgService.sync(row.service_id, row.team_id, row.code_graph_id, undefined),
+      // Admission may await best-effort snapshot cleanup before enqueueing.
+      const result: AutoSyncResult = await Promise.resolve(
+        this.cgService.syncIfChanged(row.service_id, row.team_id, row.code_graph_id),
       );
       const durationMs = Date.now() - startMs;
       switch (result.kind) {
         case "ok":
           log.info(`[auto-sync] sync enqueued for ${row.code_graph_id} (took ${durationMs}ms)`);
           break;
+        case "unchanged":
+          log.debug(`[auto-sync] unchanged ${row.code_graph_id} at ${result.revision} (took ${durationMs}ms)`);
+          break;
+        case "probe_failed":
+          log.warn(`[auto-sync] probe failed for ${row.code_graph_id} (${result.code}, retryable): ${result.message}`);
+          break;
         case "busy":
           log.debug(`[auto-sync] skip ${row.code_graph_id}: already ${result.status} (step: ${result.step})`);
+          break;
+        case "conflict":
+          log.debug(`[auto-sync] skip ${row.code_graph_id}: admission changed concurrently`);
           break;
         case "not_found":
           log.warn(`[auto-sync] skip ${row.code_graph_id}: not found (may have been deleted)`);

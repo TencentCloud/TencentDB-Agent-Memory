@@ -149,6 +149,9 @@ export interface CodeGraphSyncResult {
 export interface CodeGraphToolResult {
   text: string;
   isError: boolean;
+  stale?: boolean;
+  served_commit_hash?: string | null;
+  last_sync_at?: string | null;
 }
 
 // ── Port ──

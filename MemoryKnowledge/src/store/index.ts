@@ -54,6 +54,10 @@ export type {
   CodeGraphServiceOptions,
   CreateCodeGraphParams,
   SyncResult,
+  AutoSyncResult,
+  CodeGraphVersionProbe,
+  CodeGraphVersionProbeResult,
+  CodeGraphProbeFailureCode,
 } from "./code-graph-service.js";
 
 export { WikiService } from "./wiki-service.js";

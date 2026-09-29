@@ -13,7 +13,7 @@
  *   - Status state machine + restart recovery.
  */
 
-import { eq, and, isNull, desc, sql, type SQL } from "drizzle-orm";
+import { eq, and, inArray, isNull, desc, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   knowledgeCodeGraph,
@@ -213,6 +213,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
     if (patch.service_url !== undefined) set.serviceUrl = patch.service_url;
     if (patch.summary !== undefined) set.summary = patch.summary;
     if (patch.version !== undefined) set.version = patch.version;
+    if (patch.has_last_good !== undefined) set.hasLastGood = patch.has_last_good;
 
     this.db
       .update(knowledgeCodeGraph)
@@ -224,6 +225,59 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
         ),
       )
       .run();
+  }
+
+  updateCodeGraphProbeDiagnostic(
+    serviceId: string,
+    teamId: string,
+    codeGraphId: string,
+    expectedVersion: number,
+    error: string | null,
+  ): boolean {
+    const result = this.db
+      .update(knowledgeCodeGraph)
+      .set({
+        autoSyncProbeError: error,
+        autoSyncProbeAt: error === null ? null : nowIso(),
+      })
+      .where(and(
+        eq(knowledgeCodeGraph.codeGraphId, codeGraphId),
+        eq(knowledgeCodeGraph.serviceId, serviceId),
+        eq(knowledgeCodeGraph.teamId, teamId),
+        eq(knowledgeCodeGraph.version, expectedVersion),
+        eq(knowledgeCodeGraph.status, "ready"),
+        eq(knowledgeCodeGraph.hasLastGood, true),
+        isNull(knowledgeCodeGraph.deletedAt),
+      ))
+      .run();
+    return result.changes === 1;
+  }
+
+  /** One SQLite UPDATE is the admission point shared by all service instances. */
+  tryAdmitCodeGraphSync(serviceId: string, teamId: string, codeGraphId: string, expectedVersion: number): boolean {
+    const result = this.db
+      .update(knowledgeCodeGraph)
+      .set({
+        status: "pending",
+        internalStatus: null,
+        syncError: null,
+        // A failed row only proves that a last-good build existed sometime in
+        // the past. Its current canonical directory may be an uncommitted
+        // candidate, so a retry must not expose it to pending-state queries.
+        hasLastGood: sql`CASE WHEN ${knowledgeCodeGraph.status} = 'ready' THEN ${knowledgeCodeGraph.hasLastGood} ELSE 0 END`,
+        version: sql`${knowledgeCodeGraph.version} + 1`,
+        updatedAt: nowIso(),
+      })
+      .where(and(
+        eq(knowledgeCodeGraph.codeGraphId, codeGraphId),
+        eq(knowledgeCodeGraph.serviceId, serviceId),
+        eq(knowledgeCodeGraph.teamId, teamId),
+        isNull(knowledgeCodeGraph.deletedAt),
+        inArray(knowledgeCodeGraph.status, ["ready", "failed"]),
+        eq(knowledgeCodeGraph.version, expectedVersion),
+      ))
+      .run();
+    return result.changes === 1;
   }
 
   /** Hard delete; memory/team mismatch returns false. */
@@ -539,6 +593,18 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
 
   // ═══════════════════════ Restart Recovery ═══════════════════════
 
+  listRecoverableCodeGraphs(): CodeGraphRow[] {
+    return this.db
+      .select()
+      .from(knowledgeCodeGraph)
+      .where(and(
+        sql`status IN ('pending','processing','failed')`,
+        isNull(knowledgeCodeGraph.deletedAt),
+      ))
+      .all()
+      .map((row) => this.mapCgRow(row));
+  }
+
   /**
    * Sweep all non-terminal (pending/processing) assets to failed, across all tenants.
    * After restart, in-memory SerialQueue tasks are lost; this makes them visible to control plane.
@@ -613,7 +679,10 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       stats_json: r.statsJson,
       service_url: r.serviceUrl ?? null,
       summary: r.summary ?? null,
+      auto_sync_probe_error: r.autoSyncProbeError ?? null,
+      auto_sync_probe_at: r.autoSyncProbeAt ?? null,
       version: r.version,
+      has_last_good: r.hasLastGood,
       last_sync_at: r.lastSyncAt,
       created_at: r.createdAt,
       updated_at: r.updatedAt,

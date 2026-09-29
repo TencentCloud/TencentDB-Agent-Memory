@@ -83,6 +83,18 @@ export interface CodeGraphInstance {
   projectRoot: string;
 }
 
+/** Closing a partially opened index failed; callers must retain the handle
+ * and must not unlink its directory until a later close succeeds. */
+export class CodeGraphHandleCloseError extends AggregateError {
+  readonly unclosedInstance: CodeGraphInstance;
+
+  constructor(operation: string, cause: unknown, closeError: unknown, cg: any, projectRoot: string) {
+    super([cause, closeError], `CodeGraph ${operation} and close both failed`);
+    this.name = "CodeGraphHandleCloseError";
+    this.unclosedInstance = { cg, handler: null, projectRoot };
+  }
+}
+
 /**
  * 打开一个已存在的 codegraph 索引。
  */
@@ -90,14 +102,35 @@ export async function openIndex(projectPath: string): Promise<CodeGraphInstance>
   log.info("openIndex", { projectPath });
   const { CodeGraph, ToolHandler } = await loadModules();
   const cg = await CodeGraph.open(projectPath);
-  const stats = cg.getStats();
-  log.info("openIndex complete", { projectPath, stats });
-  const handler = new ToolHandler(cg);
-  // 告诉 ToolHandler 项目根在哪，避免它拿进程 cwd 做 worktree 检测导致误报
-  if (typeof handler.setDefaultProjectHint === "function") {
-    handler.setDefaultProjectHint(projectPath);
+  try {
+    const stats = cg.getStats();
+    log.info("openIndex complete", { projectPath, stats });
+    const handler = new ToolHandler(cg);
+    // 告诉 ToolHandler 项目根在哪，避免它拿进程 cwd 做 worktree 检测导致误报
+    if (typeof handler.setDefaultProjectHint === "function") {
+      handler.setDefaultProjectHint(projectPath);
+    }
+    return { cg, handler, projectRoot: projectPath };
+  } catch (err) {
+    try { cg.close(); }
+    catch (closeError) { throw new CodeGraphHandleCloseError("open", err, closeError, cg, projectPath); }
+    throw err;
   }
-  return { cg, handler, projectRoot: projectPath };
+}
+
+function assertCompleteIndex(result: any): void {
+  const discovered = result?.filesDiscovered;
+  const accounted = (result?.filesIndexed ?? 0) + (result?.filesSkipped ?? 0) + (result?.filesErrored ?? 0);
+  const errors = Array.isArray(result?.errors) ? result.errors : [];
+  if (
+    result?.success === true &&
+    [result.filesIndexed, result.filesSkipped, result.filesErrored].every((count) => Number.isInteger(count) && count >= 0) &&
+    result?.filesErrored === 0 &&
+    (discovered === undefined || (Number.isInteger(discovered) && discovered >= 0 && accounted >= discovered)) &&
+    !errors.some((error: any) => error.severity === "error")
+  ) return;
+  const detail = errors.slice(0, 3).map((error: any) => error.message).filter(Boolean).join("; ");
+  throw new Error(`CodeGraph index incomplete${detail ? `: ${detail}` : ""}`);
 }
 
 /**
@@ -110,27 +143,28 @@ export async function indexProject(projectPath: string): Promise<CodeGraphInstan
   const initialized = isInitialized(projectPath);
   log.debug("isInitialized check", { projectPath, initialized });
 
-  let cg: any;
-  if (initialized) {
-    // 已有索引，打开并重新全量索引
-    log.info("Re-indexing existing project");
-    cg = await CodeGraph.open(projectPath);
-    await cg.indexAll();
-  } else {
-    // 首次初始化：创建目录结构 + DB + 全量索引
-    log.info("First-time init + index");
-    cg = await CodeGraph.init(projectPath, { index: true });
-  }
+  // CodeGraph.init({ index: true }) discards indexAll's IndexResult, including
+  // a non-throwing lock refusal or partial index. Run it explicitly on both paths.
+  const cg = initialized
+    ? await CodeGraph.open(projectPath)
+    : await CodeGraph.init(projectPath, { index: false });
+  try {
+    log.info(initialized ? "Re-indexing existing project" : "First-time init + index");
+    assertCompleteIndex(await cg.indexAll());
+    const stats = cg.getStats();
+    log.info("indexProject complete", { projectPath, stats });
 
-  const stats = cg.getStats();
-  log.info("indexProject complete", { projectPath, stats });
-
-  const handler = new ToolHandler(cg);
-  if (typeof handler.setDefaultProjectHint === "function") {
-    handler.setDefaultProjectHint(projectPath);
+    const handler = new ToolHandler(cg);
+    if (typeof handler.setDefaultProjectHint === "function") {
+      handler.setDefaultProjectHint(projectPath);
+    }
+    log.debug("ToolHandler created", { availableTools: Object.keys(handler.tools || handler._tools || {}) });
+    return { cg, handler, projectRoot: projectPath };
+  } catch (err) {
+    try { cg.close(); }
+    catch (closeError) { throw new CodeGraphHandleCloseError("indexing", err, closeError, cg, projectPath); }
+    throw err;
   }
-  log.debug("ToolHandler created", { availableTools: Object.keys(handler.tools || handler._tools || {}) });
-  return { cg, handler, projectRoot: projectPath };
 }
 
 /**
@@ -138,8 +172,18 @@ export async function indexProject(projectPath: string): Promise<CodeGraphInstan
  */
 export async function syncIndex(instance: CodeGraphInstance): Promise<{ changed: number }> {
   log.info("syncIndex start", { projectRoot: instance.projectRoot });
-  const result = await instance.cg.sync();
-  const changed = result?.filesChanged ?? 0;
+  let started = false;
+  const result = await instance.cg.sync({ onProgress: () => { started = true; } });
+  // CodeGraph 1.6.x returns an all-zero result without throwing when its file
+  // lock cannot be acquired. A legitimate empty-project scan emits progress.
+  if (!result || (result.filesChecked === 0 && result.durationMs === 0 && !started)) {
+    throw new Error("CodeGraph sync did not run (index lock unavailable)");
+  }
+  if (![result.filesChecked, result.filesAdded, result.filesModified, result.filesRemoved, result.durationMs]
+    .every((count) => Number.isInteger(count) && count >= 0)) {
+    throw new Error("CodeGraph sync returned invalid counts");
+  }
+  const changed = result.filesAdded + result.filesModified + result.filesRemoved;
   log.info("syncIndex complete", { changed });
   return { changed };
 }
@@ -187,14 +231,8 @@ export function getStats(instance: CodeGraphInstance) {
   return stats;
 }
 
-/**
- * 关闭索引（释放 SQLite 连接）。
- */
+/** 关闭索引并释放 SQLite 连接；失败必须由调用方处理。 */
 export function closeIndex(instance: CodeGraphInstance): void {
   log.info("closeIndex", { projectRoot: instance.projectRoot });
-  try {
-    instance.cg.close?.();
-  } catch {
-    // best-effort
-  }
+  instance.cg.close?.();
 }

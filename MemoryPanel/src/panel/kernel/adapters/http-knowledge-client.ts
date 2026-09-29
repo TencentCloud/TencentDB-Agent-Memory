@@ -43,6 +43,7 @@ interface CoreEnvelope<T> {
   code: number;
   message?: string;
   request_id?: string;
+  error_code?: string;
   data?: T;
 }
 
@@ -69,10 +70,14 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
           resp.status >= 400 ? resp.status : 502,
           json.message || `core error code ${json.code}`,
           json.code,
+          typeof json.error_code === 'string' ? json.error_code : undefined,
         );
       }
       if (!resp.ok) {
-        throw new CoreUpstreamError('CORE_UPSTREAM_ERROR', resp.status, json.message || `HTTP ${resp.status}`, 0);
+        throw new CoreUpstreamError(
+          'CORE_UPSTREAM_ERROR', resp.status, json.message || `HTTP ${resp.status}`, 0,
+          typeof json.error_code === 'string' ? json.error_code : undefined,
+        );
       }
       return json.data as T;
     } finally {

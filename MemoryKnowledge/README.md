@@ -15,6 +15,25 @@
 | **Tools** | `POST /v3/tools/list`、`/v3/tools/call`，供 Agent / Kernel 自发现调用 |
 | **状态回调** | ingest/sync 完成后回调 Panel（`TMC_CALLBACK_URL`），再写远端 meta / knowledge |
 
+## Code-Graph 查询可用性
+
+`POST /v3/code-graph/{search|explore|callers|callees|impact|node|status|files}` 和 `POST /v3/tools/call` 中的 Code-Graph 查询采用同一规则。`/v3/code-graph/get` 与 `/v3/tools/call` 的 `get_info` 是元信息查询，不依赖索引。
+
+| 资产状态 | 查询结果 |
+| --- | --- |
+| `ready` | HTTP 200，使用最近一次成功索引；若 `sync_error` 非空，结果标记为旧索引 |
+| `pending` / `processing`，已有成功索引且内存中旧实例可用 | HTTP 200，继续使用旧索引；`data` 增加 `stale: true`、`served_commit_hash` 和 `last_sync_at` |
+| `pending` / `processing`，首次建图或旧实例暂不可用 | HTTP 503，`Retry-After: 2`；复制或晋升阶段也短暂返回 503 |
+| `failed`，无可信索引 | HTTP 409，`error_code: "CODE_GRAPH_INDEX_FAILED"` |
+
+503 响应保留原有的数字 `code` 字段，并增加机器可读的 `error_code`：`CODE_GRAPH_INDEX_BUILDING`（首次建图）、`CODE_GRAPH_INDEX_SWITCHING`（复制或晋升）或 `CODE_GRAPH_INDEX_UNAVAILABLE`（旧实例暂不可用）。客户端可按 `Retry-After` 重试。409 是构建失败的终态提示，需排查 `sync_error` 并重新同步。
+
+并发调用 `POST /v3/code-graph/sync` 时，已在构建的资产仍返回 409 `busy`；跨进程同步准入冲突返回 409 和 `CODE_GRAPH_SYNC_CONFLICT`，调用方可重新读取资产状态。
+
+每个 `KNOWLEDGE_DATA_DIR` 和 `KNOWLEDGE_DB_PATH` 只能由一个 MemoryKnowledge 进程使用。服务启动时分别取得数据根和元数据库的进程锁；若另一进程已持有其中任一锁，新进程启动失败。进程退出（包括意外终止）后，操作系统释放锁，下一次启动才会执行中断恢复。锁文件位于数据根的 `.memoryknowledge-owner.sqlite` 和元数据库旁的 `<数据库文件>.memoryknowledge-owner.sqlite`；它们只用于所有权协调。元数据库路径不能是符号链接或硬链接，以免别名绕过所有权锁。同步准入仍使用 SQLite 原子更新，阻止并发请求重复入队。多副本部署需要每个副本拥有独立的数据根和元数据库；共享存储多副本模式尚不支持。
+
+如果启动恢复无法确认哪个索引快照已提交，资产会标记为 `failed` 并保留规范目录及 `.previous`、`.suspect` 目录供排查。此时应先备份这些目录，核对 Git HEAD、索引数据库与元数据中的提交记录，再决定如何恢复；带有未决备份目录的资产会拒绝直接 `sync`，避免覆盖可能是唯一可用的快照。
+
 单独 `pnpm dev` 可以起服务；产品链路里必须有 Panel 推 `llm_binding`、收 callback、写远端元数据。
 
 ## 源码结构

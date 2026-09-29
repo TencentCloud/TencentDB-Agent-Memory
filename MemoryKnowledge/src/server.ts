@@ -20,6 +20,7 @@ import { dirname, join } from "node:path";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { createKnowledgeModule } from "./module.js";
+import { acquireKnowledgeStoreOwnership } from "./data-root-ownership.js";
 import { createWikiRoutes } from "./routes/wiki.js";
 import { createCodeGraphRoutes } from "./routes/code-graph.js";
 import { createToolsRoutes } from "./routes/tools.js";
@@ -42,14 +43,26 @@ export function createApp() {
   const config = loadConfig();
   const knowledgeTelemetry = createKnowledgeTelemetry(config.clickhouse);
 
-  // Initialize DB + knowledge module
-  const { db } = createDb({ path: config.dbPath });
-  const knowledgeModule = createKnowledgeModule({
-    dataDir: config.dataDir,
-    db,
-    llmConfig: config.llm,
-    tmcCallbackUrl: config.tmcCallbackUrl,
-  });
+  // Acquire before metadata migration and especially before startup recovery.
+  // A second process must never classify this process's active build as crashed.
+  const dataRootOwnership = acquireKnowledgeStoreOwnership(config.dataDir, config.dbPath);
+  let connection: ReturnType<typeof createDb> | undefined;
+  let knowledgeModule: ReturnType<typeof createKnowledgeModule>;
+  try {
+    connection = createDb({ path: config.dbPath });
+    knowledgeModule = createKnowledgeModule({
+      dataDir: config.dataDir,
+      dbPath: config.dbPath,
+      db: connection.db,
+      dataRootOwnership,
+      llmConfig: config.llm,
+      tmcCallbackUrl: config.tmcCallbackUrl,
+    });
+  } catch (err) {
+    connection?.raw.close();
+    dataRootOwnership.release();
+    throw err;
+  }
 
   // Hono app
   const app = new Hono();
@@ -125,8 +138,13 @@ export function createApp() {
 }
 
 async function startServer(): Promise<void> {
-  const { app, config, knowledgeTelemetry } = createApp();
-  await knowledgeTelemetry.initialize();
+  const { app, config, knowledgeModule, knowledgeTelemetry } = createApp();
+  try { await knowledgeTelemetry.initialize(); }
+  catch (err) {
+    knowledgeModule.autoSyncScheduler.stop();
+    knowledgeModule.dataRootOwnership.release();
+    throw err;
+  }
 
   log.info(`Starting knowledge service on port ${config.port}`);
   log.info(`Data dir: ${config.dataDir}`);
@@ -143,17 +161,29 @@ async function startServer(): Promise<void> {
     );
   }
 
-  const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
-    log.info(`Knowledge service listening on http://localhost:${info.port}`);
-  });
+  let server: ReturnType<typeof serve>;
+  try {
+    server = serve({ fetch: app.fetch, port: config.port }, (info) => {
+      log.info(`Knowledge service listening on http://localhost:${info.port}`);
+    });
+  } catch (err) {
+    knowledgeModule.autoSyncScheduler.stop();
+    knowledgeModule.dataRootOwnership.release();
+    throw err;
+  }
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info(`Received ${signal}, shutting down`);
-    await knowledgeTelemetry.shutdown();
-    server.close(() => process.exit(0));
+    knowledgeModule.autoSyncScheduler.stop();
+    try { await knowledgeTelemetry.shutdown(); }
+    catch (err) { log.warn(`Telemetry shutdown failed: ${String(err)}`); }
+    server.close(() => {
+      knowledgeModule.dataRootOwnership.release();
+      process.exit(0);
+    });
   };
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
   process.once("SIGINT", () => void shutdown("SIGINT"));

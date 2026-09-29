@@ -11,7 +11,13 @@
  */
 
 import simpleGit, { CleanOptions, ResetMode } from "simple-git";
-import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
+import {
+  SourceVersionProbeError,
+  type ISourceFetcher,
+  type FetchResult,
+  type SourceType,
+  type SourceVersionProbeResult,
+} from "./types.js";
 
 /**
  * 内网 / 环回 / link-local 地址黑名单（标准网段）：
@@ -42,6 +48,8 @@ export interface GitSourceFetcherOptions {
    * 默认读环境变量 KNOWLEDGE_SSRF_CHECK（默认开启）；显式传入时优先于环境变量。
    */
   ssrfCheck?: boolean;
+  /** Maximum time spent in one read-only remote probe. */
+  probeTimeoutMs?: number;
 }
 
 export class GitSourceFetcher implements ISourceFetcher {
@@ -49,9 +57,11 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   /** SSRF 私网黑名单校验开关（https-only 协议校验始终生效，不受此开关影响）。 */
   private readonly ssrfCheck: boolean;
+  private readonly probeTimeoutMs: number;
 
   constructor(opts?: GitSourceFetcherOptions) {
     this.ssrfCheck = opts?.ssrfCheck ?? ssrfCheckEnabledFromEnv();
+    this.probeTimeoutMs = opts?.probeTimeoutMs ?? 10_000;
   }
 
   validate(sourceUrl: string): void {
@@ -96,11 +106,43 @@ export class GitSourceFetcher implements ISourceFetcher {
     return { localPath, version, sourceType: "git" };
   }
 
+  async probeVersion(sourceUrl: string, branch: string, localPath: string): Promise<SourceVersionProbeResult> {
+    this.validate(sourceUrl);
+    validateBranch(branch);
+
+    const localVersion = await this.headCommit(localPath);
+    if (!localVersion) {
+      throw new SourceVersionProbeError("local_unavailable", `local checkout has no verifiable HEAD: ${localPath}`);
+    }
+
+    const ref = `refs/heads/${branch}`;
+    try {
+      const output = await simpleGit({ timeout: { block: this.probeTimeoutMs, stdErr: false, stdOut: false } })
+        .listRemote(["--heads", sourceUrl, ref]);
+      const matching = output
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([oid, remoteRef]) => oid && remoteRef === ref);
+      const remoteVersion = matching[0]?.[0];
+      if (!remoteVersion || !/^[0-9a-f]{40,64}$/i.test(remoteVersion)) {
+        throw new SourceVersionProbeError("ref_not_found", `remote ref not found: ${ref}`);
+      }
+      return { localVersion, remoteVersion };
+    } catch (err) {
+      if (err instanceof SourceVersionProbeError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      const code = /timeout|timed out/i.test(message) ? "timeout" : "network";
+      throw new SourceVersionProbeError(code, `could not probe ${ref}: ${message}`);
+    }
+  }
+
   // ── 内部 helper ──
 
   private async headCommit(localPath: string): Promise<string | null> {
     try {
-      return (await simpleGit(localPath).revparse(["HEAD"])).trim().slice(0, 12);
+      const head = (await simpleGit(localPath).revparse(["--verify", "HEAD^{commit}"])).trim();
+      return /^[0-9a-f]{40,64}$/i.test(head) ? head : null;
     } catch {
       return null;
     }
@@ -116,5 +158,11 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   private isPrivateAddress(host: string): boolean {
     return PRIVATE_ADDR_RE.test(host);
+  }
+}
+
+function validateBranch(branch: string): void {
+  if (!branch || branch.startsWith("-") || branch.includes("\0") || branch.includes("\n")) {
+    throw new SourceVersionProbeError("remote_error", `invalid Git branch: ${branch}`);
   }
 }

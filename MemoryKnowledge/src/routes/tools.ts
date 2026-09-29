@@ -13,7 +13,7 @@
 
 import { Hono } from "hono";
 
-import type { WikiService, CodeGraphService } from "../store/index.js";
+import type { WikiService, CodeGraphService, CodeGraphRow } from "../store/index.js";
 import type { CodeGraphInstancePool } from "../module.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
 import { executeTool as executeCodeTool } from "../engines/code/index.js";
@@ -394,10 +394,98 @@ export function toCodeGraphToolName(externalName: string): string | undefined {
   return CODEGRAPH_QUERY_TOOL_NAMES.includes(externalName) ? `codegraph_${externalName}` : undefined;
 }
 
+type CodeGraphQueryLease = {
+  instance: NonNullable<ReturnType<CodeGraphInstancePool["get"]>>;
+  release: () => void;
+};
+
+type CodeGraphQueryAccess = { lease: CodeGraphQueryLease; row: CodeGraphRow } | { response: Response };
+
+/** Temporary gaps during a refresh are retryable; a failed first build is not. */
+function codeGraphQueryUnavailable(errorCode: string, message: string, retryable: boolean): Response {
+  const status = retryable ? 503 : 409;
+  return Response.json(
+    { ...wrapError(status, message), error_code: errorCode },
+    { status, ...(retryable ? { headers: { "Retry-After": "2" } } : {}) },
+  );
+}
+
+function acquireCodeGraphLease(instancePool: CodeGraphInstancePool, codeGraphId: string): CodeGraphQueryLease | undefined {
+  // Production leases protect an in-flight async query while the worker pauses
+  // the old SQLite handle for a consistent copy or directory promotion.
+  if (instancePool.acquire) return instancePool.acquire(codeGraphId);
+  const instance = instancePool.get(codeGraphId);
+  return instance ? { instance, release: () => {} } : undefined;
+}
+
+/** Shared read gate for direct CodeGraph routes and /tools/call. */
+export async function resolveCodeGraphQueryAccess(
+  serviceId: string,
+  row: CodeGraphRow,
+  cgService: CodeGraphService,
+  instancePool: CodeGraphInstancePool,
+): Promise<CodeGraphQueryAccess> {
+  const { code_graph_id: codeGraphId, team_id: teamId } = row;
+
+  // The route may have read a ready row just before a delete committed. Do
+  // not lazy-open a directory from that stale snapshot, especially when file
+  // cleanup is still running or awaiting retry.
+  const current = cgService.getById(serviceId, codeGraphId);
+  if (!current || cgService.hasPendingCleanup?.(serviceId, codeGraphId)) {
+    return { response: Response.json(wrapError(404, "code graph not found"), { status: 404 }) };
+  }
+  row = current;
+
+  if (row.status === "failed") {
+    // A failed state does not prove the old index survived a rollback.
+    return { response: codeGraphQueryUnavailable("CODE_GRAPH_INDEX_FAILED", "code graph index failed", false) };
+  }
+
+  if (row.status === "pending" || row.status === "processing") {
+    if (!row.has_last_good) {
+      return { response: codeGraphQueryUnavailable("CODE_GRAPH_INDEX_BUILDING", "code graph index is building", true) };
+    }
+    // The worker closes the old handle for a consistent filesystem copy and
+    // again while replacing the canonical directory. Never lazy-load here.
+    if (row.internal_status === "copying" || row.internal_status === "promoting") {
+      return { response: codeGraphQueryUnavailable("CODE_GRAPH_INDEX_SWITCHING", "code graph index is temporarily paused", true) };
+    }
+    const lease = acquireCodeGraphLease(instancePool, codeGraphId);
+    return lease
+      ? { lease, row }
+      : { response: codeGraphQueryUnavailable("CODE_GRAPH_INDEX_UNAVAILABLE", "code graph previous index is not loaded", true) };
+  }
+
+  if (row.status !== "ready") {
+    return { response: codeGraphQueryUnavailable("CODE_GRAPH_INDEX_UNAVAILABLE", "code graph index is unavailable", true) };
+  }
+
+  let lease = acquireCodeGraphLease(instancePool, codeGraphId);
+  if (!lease && instancePool.loadIfMissing) {
+    const dir = cgService.dirFor(serviceId, teamId, codeGraphId);
+    await instancePool.loadIfMissing(codeGraphId, dir);
+    lease = acquireCodeGraphLease(instancePool, codeGraphId);
+  }
+  return lease
+    ? { lease, row }
+    : { response: codeGraphQueryUnavailable("CODE_GRAPH_INDEX_UNAVAILABLE", "code graph instance not loaded", true) };
+}
+
+/** A refresh can serve the previous index; make that staleness visible. */
+export function codeGraphQueryResult(row: CodeGraphRow, result: { text: string; isError: boolean }) {
+  if (row.status === "ready" && !row.sync_error) return result;
+  return {
+    ...result,
+    stale: true,
+    served_commit_hash: row.commit_hash,
+    last_sync_at: row.last_sync_at,
+  };
+}
+
 async function executeCodeGraphTool(
   serviceId: string,
   toolName: string,
-  row: { code_graph_id: string; team_id: string; status: string },
+  row: CodeGraphRow,
   params: Record<string, unknown>,
   cgService: CodeGraphService,
   instancePool: CodeGraphInstancePool,
@@ -409,11 +497,6 @@ async function executeCodeGraphTool(
     const detail = cgService.get(serviceId, team_id, code_graph_id);
     if (!detail) return Response.json(wrapError(404, "code graph not found"), { status: 404 });
     return Response.json(wrapOk(detail));
-  }
-
-  // All other tools require synced status
-  if (row.status !== "ready") {
-    return Response.json(wrapOk({ text: "", isError: false }));
   }
 
   // Map tool name to internal codegraph action
@@ -428,15 +511,12 @@ async function executeCodeGraphTool(
     toolParams[k] = v;
   }
 
-  let instance = instancePool.get(code_graph_id);
-  if (!instance && instancePool.loadIfMissing) {
-    const dir = cgService.dirFor(serviceId, team_id, code_graph_id);
-    instance = await instancePool.loadIfMissing(code_graph_id, dir);
+  const access = await resolveCodeGraphQueryAccess(serviceId, row, cgService, instancePool);
+  if ("response" in access) return access.response;
+  try {
+    const result = await executeCodeTool(access.lease.instance, cgToolName, toolParams);
+    return Response.json(wrapOk(codeGraphQueryResult(access.row, result)), { status: result.isError ? 500 : 200 });
+  } finally {
+    access.lease.release();
   }
-  if (!instance) {
-    return Response.json(wrapError(503, "code graph instance not loaded"), { status: 503 });
-  }
-
-  const result = await executeCodeTool(instance, cgToolName, toolParams);
-  return Response.json(wrapOk(result), { status: result.isError ? 500 : 200 });
 }

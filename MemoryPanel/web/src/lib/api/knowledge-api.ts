@@ -23,6 +23,7 @@ interface Envelope<T = unknown> {
   code: number;
   message: string;
   request_id: string;
+  error_code?: string;
   data: T;
 }
 
@@ -30,13 +31,15 @@ export class KnowledgeApiError extends Error {
   code: number;
   requestId: string;
   rawMessage: string;
+  errorCode?: string;
 
-  constructor(code: number, message: string, requestId: string) {
+  constructor(code: number, message: string, requestId: string, errorCode?: string) {
     super(formatApiErrorMessage({ code, message, requestId }));
     this.name = 'KnowledgeApiError';
     this.code = code;
     this.requestId = requestId;
     this.rawMessage = message;
+    this.errorCode = errorCode;
   }
 }
 
@@ -62,7 +65,10 @@ async function panelPost<T>(path: string, body?: unknown): Promise<T> {
     throw new KnowledgeApiError(res.status || 500, text || res.statusText || 'Knowledge request failed', '');
   }
   if (!res.ok || env.code !== 0) {
-    throw new KnowledgeApiError(env.code ?? res.status, env.message || res.statusText, env.request_id);
+    throw new KnowledgeApiError(
+      env.code ?? res.status, env.message || res.statusText, env.request_id,
+      typeof env.error_code === 'string' ? env.error_code : undefined,
+    );
   }
   return env.data;
 }
@@ -103,6 +109,19 @@ export interface CodeGraphDetail {
   last_sync_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CodeGraphQueryResult {
+  text: string;
+  isError: boolean;
+  stale?: boolean;
+  served_commit_hash?: string | null;
+  last_sync_at?: string | null;
+}
+
+export interface CodeGraphDeleteResult {
+  deleted_ids: string[];
+  failed: Array<{ id: string; reason: string }>;
 }
 
 // ---- 兼容旧类型（平滑过渡） ----
@@ -456,15 +475,15 @@ export const knowledgeApi = {
       panelPost('/code-graph/sync', { code_graph_id: codeGraphId }),
 
     /** 删除 */
-    delete: (codeGraphId: string): Promise<void> =>
+    delete: (codeGraphId: string): Promise<CodeGraphDeleteResult> =>
       panelPost('/code-graph/delete', { code_graph_ids: [codeGraphId] }),
 
-    /** 代码搜索（返回 { text, isError } 文本块） */
-    search: (opts: { codeGraphId: string; query: string; kind?: string; limit?: number }): Promise<{ text: string; isError: boolean }> =>
+    /** 代码搜索；刷新期间可能返回带旧索引标记的文本块。 */
+    search: (opts: { codeGraphId: string; query: string; kind?: string; limit?: number }): Promise<CodeGraphQueryResult> =>
       panelPost('/code-graph/search', { code_graph_id: opts.codeGraphId, query: opts.query, ...(opts.kind && opts.kind !== 'any' ? { kind: opts.kind } : {}), limit: opts.limit ?? 10 }),
 
-    /** 代码探索（返回 { text, isError } 文本块） */
-    explore: (codeGraphId: string, query: string): Promise<{ text: string; isError: boolean }> =>
+    /** 代码探索；刷新期间可能返回带旧索引标记的文本块。 */
+    explore: (codeGraphId: string, query: string): Promise<CodeGraphQueryResult> =>
       panelPost('/code-graph/explore', { code_graph_id: codeGraphId, query }),
 
     /** 详情（用于 sync 后轮询） */

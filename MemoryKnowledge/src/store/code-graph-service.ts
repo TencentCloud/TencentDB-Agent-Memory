@@ -3,22 +3,21 @@
  *
  * 把 IKnowledgeStore（元数据/状态）+ BuildQueue（后台串行）+ 可注入的
  * worker（实际 git clone + codegraph 建图）粘合，实现：
- *   - create/sync 立即返回（fire-and-forget），管控轮询 status；
+ *   - create 入队后立即返回；sync 完成准入和入队后返回，管控轮询 status；
  *   - 状态机 pending → processing(cloning/indexing) → ready / failed(+sync_error)；
  *   - memory + team 隔离、幂等（同 memory+team+repo+branch 返回已存在）、硬删 + 四类资源清理。
  *
  * delete 语义（008 / 007 §5.5）：任何状态（含 pending/processing）均可删。
- * 用内存 cancelled 标记通知 in-flight worker 中止（不落库、不软删）；worker 在
- * 结束前的检查点发现被删则跳过 ready/回调并做幂等清理。清理覆盖四类资源：
- * instance pool（内存）→ 元数据行（硬删）→ 磁盘目录（rmSync），分步 try/catch
- * 保证任一步失败不影响其余（异常安全 + 幂等）。远端元数据上报本阶段不做。
+ * 删除遇到运行中的 build/查询立即返回 busy；空闲时硬删元数据，异步清理目录。
+ * 远端元数据上报本阶段不做。
  *
  * worker 注入便于单测（无需真实 git/codegraph）；生产实现见 router 装配处。
  * 物理目录：{dataRoot}/{service_id}/{team_id}/{code_graph_id}/（001 多租户）。
  */
 
-import { join } from "node:path";
-import { rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { readdir, rm } from "node:fs/promises";
 
 import type {
   AuditAction,
@@ -37,6 +36,10 @@ export interface CodeGraphBuildContext {
   branch: string;
   /** 该资产的本地工作目录（checkout + 索引落此）。 */
   dir: string;
+  /** The admitted row was ready, so a committed last-good index should exist. */
+  hadReadyIndex: boolean;
+  /** Failed-state canonical bytes are preserved during a fresh retry, but never served. */
+  preserveUntrustedCanonical: boolean;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
   setInternalStatus: (s: string) => void;
 }
@@ -44,20 +47,54 @@ export interface CodeGraphBuildContext {
 export interface CodeGraphBuildResult {
   commitHash?: string;
   stats?: { files: number; nodes: number; edges: number };
+  /** Remove the previous snapshot only after the new metadata is committed. */
+  finalize?: () => void | Promise<void>;
+  /** Restore the previous snapshot if metadata could not be committed. */
+  rollback?: () => Promise<void>;
 }
 
 export type CodeGraphWorker = (ctx: CodeGraphBuildContext) => Promise<CodeGraphBuildResult>;
+
+/** A refresh failed, but the previous checkout and index are still usable. */
+export class PreservedCodeGraphError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "PreservedCodeGraphError";
+  }
+}
 
 /**
  * sync 结果（判别联合）：
  *   - ok       已入队重建；
  *   - not_found memory/team/id 不匹配；
  *   - busy     正在 pending/processing（并发拒绝，对应 HTTP 409），step 为内部阶段（可 null）。
+ *   - conflict CAS 未获准但竞争方已完成或修改状态（对应 HTTP 409）。
  */
 export type SyncResult =
   | { kind: "ok"; row: CodeGraphRow }
   | { kind: "not_found" }
-  | { kind: "busy"; status: "pending" | "processing"; step: string | null };
+  | { kind: "busy"; status: "pending" | "processing"; step: string | null }
+  | { kind: "conflict" };
+
+export type CodeGraphProbeFailureCode = "timeout" | "network" | "ref_not_found" | "remote_error";
+
+export type CodeGraphVersionProbeResult =
+  | { kind: "unchanged"; revision: string }
+  | { kind: "changed"; localRevision: string | null; remoteRevision: string }
+  | { kind: "refresh_required"; reason: string }
+  | { kind: "unsupported" }
+  | { kind: "failed"; code: CodeGraphProbeFailureCode; retryable: true; message: string };
+
+export type CodeGraphVersionProbe = (row: CodeGraphRow, dir: string) => Promise<CodeGraphVersionProbeResult>;
+
+export type AutoSyncResult =
+  | SyncResult
+  | { kind: "unchanged"; revision: string }
+  | { kind: "probe_failed"; code: CodeGraphProbeFailureCode; retryable: true; message: string };
+
+function formatProbeDiagnostic(code: CodeGraphProbeFailureCode, message: string): string {
+  return `[${code}] ${message}`;
+}
 
 export interface CodeGraphServiceLogger {
   info?: (msg: string) => void;
@@ -75,11 +112,13 @@ export interface CodeGraphServiceOptions {
   /** Callback config for TMC status notifications. Optional. */
   callbackConfig?: { tmcCallbackUrl: string };
   /**
-   * 释放该 code-graph 占用的内存资源（instance pool + 关闭索引句柄）。
-   * 注入而非直依赖 module，保持 store 层不反向依赖装配层。幂等：重复调用安全。
-   * 由 module.ts 装配时提供（封装 instancePool.delete + closeIndex）。
+   * Try to exclude readers and lazy loads without waiting. Null means busy.
+   * The returned function releases the gate after file removal. The
+   * implementation must release its gate if it throws.
    */
-  releaseInstance?: (codeGraphId: string) => void;
+  releaseInstance?: (codeGraphId: string) => Promise<(() => void) | null>;
+  /** Optional read-only probe used only by automatic sync. */
+  versionProbe?: CodeGraphVersionProbe;
 }
 
 export interface CreateCodeGraphParams {
@@ -102,14 +141,13 @@ export class CodeGraphService {
   private readonly queue: BuildQueue;
   private readonly logger?: CodeGraphServiceLogger;
   private readonly callbackConfig?: { tmcCallbackUrl: string };
-  private readonly releaseInstance?: (codeGraphId: string) => void;
-  /**
-   * In-flight delete 标记：delete 命中一个正在排队/执行的资源时置位，
-   * worker 在检查点读取以决定中止。仅内存态（同 id 由 SerialQueue 串行 +
-   * Node 单线程，读写无并发）。清理收尾后移除。
-   */
-  private readonly cancelled = new Set<string>();
-
+  private readonly releaseInstance?: (codeGraphId: string) => Promise<(() => void) | null>;
+  private readonly versionProbe?: CodeGraphVersionProbe;
+  /** An accepted delete rejects new sync until its metadata commit returns. */
+  private readonly deleting = new Set<string>();
+  /** A failed file removal may be retried only for an asset this service deleted. */
+  private readonly pendingCleanup = new Map<string, string>();
+  private readonly cleanupJobs = new Map<string, Promise<void>>();
   constructor(opts: CodeGraphServiceOptions) {
     this.store = opts.store;
     this.dataRoot = opts.dataRoot;
@@ -118,6 +156,7 @@ export class CodeGraphService {
     this.logger = opts.logger;
     this.callbackConfig = opts.callbackConfig;
     this.releaseInstance = opts.releaseInstance;
+    this.versionProbe = opts.versionProbe;
   }
 
   dirFor(serviceId: string, teamId: string, codeGraphId: string): string {
@@ -150,24 +189,115 @@ export class CodeGraphService {
   }
 
   /** 重新拉取 + 重建（管控显式触发）。memory/team 不匹配返回 not_found；pending/processing 返回 busy。 */
-  sync(serviceId: string, teamId: string, codeGraphId: string, requesterUserId?: string): SyncResult {
+  async sync(serviceId: string, teamId: string, codeGraphId: string, requesterUserId?: string): Promise<SyncResult> {
+    if (this.deleting.has(codeGraphId)) return { kind: "conflict" };
+    const row = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+    if (!row) return { kind: "not_found" };
+    return this.admitSync(row, "manual sync", requesterUserId);
+  }
+
+  /** Automatic refresh: probe a committed ready build before admitting filesystem work. */
+  async syncIfChanged(serviceId: string, teamId: string, codeGraphId: string): Promise<AutoSyncResult> {
+    if (this.deleting.has(codeGraphId)) return { kind: "conflict" };
     const row = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
     if (!row) return { kind: "not_found" };
     // 并发拒绝：正在排队/执行中直接拒绝，不覆盖状态、不重复入队、不写 audit。
     if (row.status === "pending" || row.status === "processing") {
       return { kind: "busy", status: row.status, step: row.internal_status };
     }
-    const nextVersion = row.version + 1;
-    this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
-      status: "pending",
-      internal_status: null,
-      sync_error: null,
-      version: nextVersion,
-    });
-    this.audit({ ...row, version: nextVersion }, "ingest", "manual sync", requesterUserId);
+    if (row.status !== "ready" || !row.has_last_good || !this.versionProbe) {
+      return this.admitSync(row, "automatic sync");
+    }
+
+    const observedVersion = row.version;
+    let probe: CodeGraphVersionProbeResult;
+    try {
+      probe = await this.versionProbe(row, this.dirFor(serviceId, teamId, codeGraphId));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!this.persistProbeDiagnostic(row, formatProbeDiagnostic("remote_error", message))) {
+        return this.classifySyncRace(serviceId, teamId, codeGraphId);
+      }
+      return { kind: "probe_failed", code: "remote_error", retryable: true, message };
+    }
+
+    if (probe.kind === "failed") {
+      if (!this.persistProbeDiagnostic(row, formatProbeDiagnostic(probe.code, probe.message))) {
+        return this.classifySyncRace(serviceId, teamId, codeGraphId);
+      }
+      return { kind: "probe_failed", code: probe.code, retryable: true, message: probe.message };
+    }
+    if (probe.kind !== "unchanged") {
+      return this.admitSync(row, "automatic sync");
+    }
+
+    // The read-only probe does not reserve the asset. Re-read the row so a
+    // concurrent manual sync/delete wins before unchanged is reported.
+    if (this.deleting.has(codeGraphId)) return { kind: "conflict" };
+    const current = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+    if (!current) return { kind: "not_found" };
+    if (current.status === "pending" || current.status === "processing") {
+      return { kind: "busy", status: current.status, step: current.internal_status };
+    }
+    if (current.status !== "ready" || !current.has_last_good || current.version !== observedVersion) {
+      return { kind: "conflict" };
+    }
+    if (current.auto_sync_probe_error !== null && !this.persistProbeDiagnostic(current, null)) {
+      return this.classifySyncRace(serviceId, teamId, codeGraphId);
+    }
+    return { kind: "unchanged", revision: probe.revision };
+  }
+
+  private persistProbeDiagnostic(row: CodeGraphRow, error: string | null): boolean {
+    return this.store.updateCodeGraphProbeDiagnostic(
+      row.service_id, row.team_id, row.code_graph_id, row.version, error,
+    );
+  }
+
+  private classifySyncRace(serviceId: string, teamId: string, codeGraphId: string): SyncResult {
+    const current = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+    if (!current) return { kind: "not_found" };
+    if (current.status === "pending" || current.status === "processing") {
+      return { kind: "busy", status: current.status, step: current.internal_status };
+    }
+    return { kind: "conflict" };
+  }
+
+  private admitSync(row: CodeGraphRow, auditDetail: string, requesterUserId?: string): SyncResult {
+    const { service_id: serviceId, team_id: teamId, code_graph_id: codeGraphId } = row;
+    if (this.deleting.has(codeGraphId)) return { kind: "conflict" };
+    if (row.status === "pending" || row.status === "processing") {
+      return { kind: "busy", status: row.status, step: row.internal_status };
+    }
+    const hadReadyIndex = row.status === "ready" && row.has_last_good;
+    const assetDir = this.dirFor(serviceId, teamId, codeGraphId);
+    if (row.status === "failed" && (existsSync(`${assetDir}.previous`) || existsSync(`${assetDir}.suspect`))) {
+      // A failed promotion still has a backup whose role cannot be inferred
+      // from metadata alone. Startup recovery arbitrates it before retry.
+      return { kind: "conflict" };
+    }
+    const preserveUntrustedCanonical = row.status === "failed" && existsSync(assetDir);
+    const observedVersion = row.version;
+    // The admission must be atomic across separate services sharing this store.
+    // A losing caller never touches .previous, audits, or enqueues a worker.
+    if (!this.store.tryAdmitCodeGraphSync(serviceId, teamId, codeGraphId, observedVersion)) {
+      const current = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+      if (!current) return { kind: "not_found" };
+      if (current.status === "pending" || current.status === "processing") {
+        return { kind: "busy", status: current.status, step: current.internal_status };
+      }
+      return { kind: "conflict" };
+    }
+
+    // Keep admission and enqueue in the same event-loop turn. The worker
+    // removes a retired .previous before copying; an await here would let a
+    // delete queue ahead of this admitted but not-yet-enqueued build.
     const fresh = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
-    if (fresh) this.enqueueBuild(fresh);
-    return fresh ? { kind: "ok", row: fresh } : { kind: "not_found" };
+    if (!fresh) return { kind: "not_found" };
+    if (fresh.status !== "pending" || fresh.version !== observedVersion + 1) return { kind: "conflict" };
+    this.audit(fresh, "ingest", auditDetail, requesterUserId);
+    this.enqueueBuild(fresh, hadReadyIndex, preserveUntrustedCanonical);
+    return { kind: "ok", row: fresh };
   }
 
   get(serviceId: string, teamId: string, codeGraphId: string): CodeGraphRow | null {
@@ -187,65 +317,151 @@ export class CodeGraphService {
     return this.store.countCodeGraphs(serviceId, teamId, opts);
   }
 
-  /**
-   * 删除 code-graph（008 / 007 §5.5）。任何状态均可删（含 pending/processing）。
-   * memory/team 不匹配返回 false；否则硬删 + 四类资源清理，返回 true。
-   *
-   * 若资源正在排队/执行（pending/processing），先置 cancelled 标记通知 worker
-   * 在检查点中止；随后立即硬删 + 清理（不等 worker）。worker 结束前重查发现
-   * 已删则跳过 ready/回调并再做一次幂等清理，无残留。
-   */
-  delete(serviceId: string, teamId: string, codeGraphId: string): boolean {
-    const row = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
-    if (!row) return false;
+  /** Id-only management route entry point, including a safe cleanup retry. */
+  deleteById(serviceId: string, codeGraphId: string): Promise<boolean> {
+    const row = this.store.getCodeGraphById(serviceId, codeGraphId);
+    const teamId = row?.team_id ?? this.pendingCleanup.get(`${serviceId}\0${codeGraphId}`);
+    return teamId ? this.delete(serviceId, teamId, codeGraphId) : Promise.resolve(false);
+  }
 
-    // 通知 in-flight worker 中止（pending 排队 or processing 执行中）。
-    if (row.status === "pending" || row.status === "processing") {
-      this.cancelled.add(codeGraphId);
-    }
+  hasPendingCleanup(serviceId: string, codeGraphId: string): boolean {
+    return this.pendingCleanup.has(`${serviceId}\0${codeGraphId}`);
+  }
 
-    this.audit(row, "delete", null);
-    this.cleanupResources(serviceId, teamId, codeGraphId);
-
-    // worker 若仍在跑，会在检查点看到行已被硬删（getById → null）而中止；
-    // cancelled 标记留到 worker 结束由其自行清理（见 runBuild），此处不删标记，
-    // 以覆盖“delete 先于 worker 检查点完成”的窗口。cleanup 幂等，重复无害。
-    return true;
+  isBuildBusy(codeGraphId: string): boolean {
+    return this.deleting.has(codeGraphId) || this.queue.isBusy(codeGraphId);
   }
 
   /**
-   * 四类资源幂等清理（顺序：先释放内存/连接，再删盘）。
-   * 每步独立 try/catch —— 任一步失败不影响其余，保证异常安全。
-   *   1. instance pool（内存）：releaseInstance（pool.delete + closeIndex）
-   *   2. 元数据行：硬删（命中 0 行也安全，支持 worker + delete 双重清理）
-   *   3. 磁盘目录：rmSync recursive+force（幂等）
-   * BuildQueue 排队任务由 runBuild 入口检查 cancelled/行存在性跳过，无需在此处理。
+   * 删除 code-graph（008 / 007 §5.5）。若该资产正在构建或有在途查询，
+   * 立即返回 false，调用方可重试。成功仅表示元数据已硬删；磁盘目录在持有
+   * 查询 gate 的后台任务中清理。已有硬删记录可安全重试未完成的磁盘清理。
    */
-  private cleanupResources(serviceId: string, teamId: string, codeGraphId: string): void {
+  async delete(serviceId: string, teamId: string, codeGraphId: string): Promise<boolean> {
+    // Panel's KS request times out after 15s. Leave time for SQLite's 5s
+    // busy timeout and the response after a slow handle close.
+    const commitDeadline = Date.now() + 8_000;
+    const row = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+    const key = `${serviceId}\0${codeGraphId}`;
+    const retryPending = !row && this.pendingCleanup.get(key) === teamId;
+    if (!row && !retryPending) return false;
+    // Metadata is already gone; an existing cleanup job needs no second writer.
+    if (retryPending && this.cleanupJobs.has(key)) return true;
+    // A queued delete could run after the caller's HTTP timeout, silently
+    // removing metadata without the Panel/Core cascade. Reject instead.
+    if (this.isBuildBusy(codeGraphId)) return false;
+
+    this.deleting.add(codeGraphId);
     try {
-      this.releaseInstance?.(codeGraphId);
+      // The queue reserves this id against a newly admitted build. It is idle
+      // now, so this job starts immediately and never waits behind a worker.
+      return await this.queue.enqueueAndWait(codeGraphId, async () => {
+        const current = this.store.getCodeGraph(serviceId, teamId, codeGraphId);
+        if (!current && this.pendingCleanup.get(key) !== teamId) return false;
+        const result = await this.cleanupResources(serviceId, teamId, codeGraphId, commitDeadline);
+        if (result.rowDeleted && current) this.audit(current, "delete", null);
+        // A retry after a committed hard delete succeeds even if its async
+        // file cleanup has to wait for a later idle window or restart sweep.
+        return result.rowGone || retryPending;
+      });
+    } finally {
+      this.deleting.delete(codeGraphId);
+    }
+  }
+
+  /**
+   * Commit the metadata deletion while queries are excluded, then remove
+   * files in the background. The query gate stays held until removal ends.
+   * If the database delete fails, the canonical directory remains intact.
+   * BuildQueue 排队任务由 runBuild 入口检查行是否存在，无需在此处理。
+   */
+  private async cleanupResources(serviceId: string, teamId: string, codeGraphId: string, commitDeadline = Number.POSITIVE_INFINITY): Promise<{
+    rowDeleted: boolean; rowGone: boolean;
+  }> {
+    const failed = { rowDeleted: false, rowGone: false };
+    let resume: (() => void) | undefined;
+    try {
+      const acquired = await this.releaseInstance?.(codeGraphId);
+      if (acquired === null) return failed;
+      resume = acquired;
     } catch (err) {
       this.logger?.warn?.(`[code-graph] release instance failed ${codeGraphId}: ${String(err)}`);
+      return failed;
     }
     try {
-      this.store.deleteCodeGraph(serviceId, teamId, codeGraphId);
-    } catch (err) {
-      this.logger?.warn?.(`[code-graph] hard-delete row failed ${codeGraphId}: ${String(err)}`);
-    }
-    try {
-      rmSync(this.dirFor(serviceId, teamId, codeGraphId), { recursive: true, force: true });
-    } catch (err) {
-      this.logger?.warn?.(`[code-graph] rm dir failed ${codeGraphId}: ${String(err)}`);
+      if (Date.now() >= commitDeadline) {
+        this.logger?.warn?.(`[code-graph] delete admission expired before metadata commit ${codeGraphId}`);
+        return failed;
+      }
+      let rowDeleted: boolean;
+      try {
+        rowDeleted = this.store.deleteCodeGraph(serviceId, teamId, codeGraphId);
+        // A second cleanup after a successful delete is idempotent. A false
+        // result with a live row means the database refused this deletion.
+        if (!rowDeleted && this.store.getCodeGraphById(serviceId, codeGraphId)) return failed;
+      } catch (err) {
+        this.logger?.warn?.(`[code-graph] hard-delete row failed ${codeGraphId}: ${String(err)}`);
+        return failed;
+      }
+
+      const key = `${serviceId}\0${codeGraphId}`;
+      this.pendingCleanup.set(key, teamId);
+      const releaseGate = resume;
+      resume = undefined;
+      const cleanup = this.removeFiles(serviceId, teamId, codeGraphId)
+        .then((removed) => {
+          if (removed) this.pendingCleanup.delete(key);
+        })
+        .catch((err) => {
+          this.logger?.warn?.(`[code-graph] file cleanup failed ${codeGraphId}: ${String(err)}`);
+        })
+        .finally(() => {
+          try { releaseGate?.(); }
+          catch (err) { this.logger?.warn?.(`[code-graph] release delete gate failed ${codeGraphId}: ${String(err)}`); }
+          this.cleanupJobs.delete(key);
+        });
+      this.cleanupJobs.set(key, cleanup);
+      return { rowDeleted, rowGone: true };
+    } finally {
+      resume?.();
     }
   }
 
+  private async removeFiles(serviceId: string, teamId: string, codeGraphId: string): Promise<boolean> {
+    let filesRemoved = true;
+    const assetDir = this.dirFor(serviceId, teamId, codeGraphId);
+    for (const target of [assetDir, `${assetDir}.previous`, `${assetDir}.suspect`]) {
+      try { await rm(target, { recursive: true, force: true }); }
+      catch (err) {
+        filesRemoved = false;
+        this.logger?.warn?.(`[code-graph] rm dir failed ${codeGraphId}: ${String(err)}`);
+      }
+    }
+    const parent = dirname(assetDir);
+    const prefix = `.${basename(assetDir)}.candidate-`;
+    try {
+      for (const entry of await readdir(parent, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+        try { await rm(join(parent, entry.name), { recursive: true, force: true }); }
+        catch (err) {
+          filesRemoved = false;
+          this.logger?.warn?.(`[code-graph] rm candidate dir failed ${codeGraphId}: ${String(err)}`);
+        }
+      }
+    } catch (err) {
+      if (!(err instanceof Error && "code" in err && err.code === "ENOENT")) {
+        filesRemoved = false;
+        this.logger?.warn?.(`[code-graph] scan candidate dirs failed ${codeGraphId}: ${String(err)}`);
+      }
+    }
+    return filesRemoved;
+  }
+
   /**
-   * worker 检查点：资源是否已被删除（cancelled 标记命中，或行已不在库）。
-   * 双判据覆盖：①delete 发生在 worker 运行中（cancelled）；②delete 已完成
-   * 且行被硬删（getById → null）。任一即视为已删。
+   * worker 检查点：元数据行不在库即已删除。硬删在删盘之前完成。
    */
   private isDeleted(serviceId: string, codeGraphId: string): boolean {
-    return this.cancelled.has(codeGraphId) || this.store.getCodeGraphById(serviceId, codeGraphId) === null;
+    return this.store.getCodeGraphById(serviceId, codeGraphId) === null;
   }
 
   /** 写一条 code-graph 审计记录。失败不阻断主流程。 */
@@ -266,10 +482,17 @@ export class CodeGraphService {
     }
   }
 
-  private enqueueBuild(row: CodeGraphRow): void {
-    this.queue.enqueue(row.code_graph_id, () =>
-      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch),
-    );
+  private enqueueBuild(row: CodeGraphRow, hadReadyIndex = false, preserveUntrustedCanonical = false): void {
+    this.queue.enqueue(row.code_graph_id, async () => {
+      try {
+        await this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch, hadReadyIndex, preserveUntrustedCanonical);
+      } catch (err) {
+        // The queue intentionally swallows rejected jobs. A persistent store
+        // outage may prevent even the failed status from being written.
+        this.logger?.error?.(`[code-graph] ${row.code_graph_id} build escaped with unrecorded error: ${String(err)}`);
+        throw err;
+      }
+    });
   }
 
   private async runBuild(
@@ -278,31 +501,38 @@ export class CodeGraphService {
     teamId: string,
     repoUrl: string,
     branch: string,
+    hadReadyIndex: boolean,
+    preserveUntrustedCanonical: boolean,
   ): Promise<void> {
-    // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
-    if (this.isDeleted(serviceId, codeGraphId)) {
-      this.finishCancelled(serviceId, teamId, codeGraphId);
-      return;
-    }
-    this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
-      status: "processing",
-      internal_status: "cloning",
-      sync_error: null,
-    });
+    let result: CodeGraphBuildResult | undefined;
+    let committed = false;
     try {
-      const result = await this.worker({
+      // Include the initial status write in the failure path. Otherwise a
+      // transient SQLite error leaves a pending row with no queued worker.
+      if (this.isDeleted(serviceId, codeGraphId)) {
+        await this.finishCancelled(serviceId, teamId, codeGraphId);
+        return;
+      }
+      this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
+        status: "processing",
+        internal_status: "cloning",
+        sync_error: null,
+      });
+      result = await this.worker({
         codeGraphId,
         serviceId,
         teamId,
         repoUrl,
         branch,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
+        hadReadyIndex,
+        preserveUntrustedCanonical,
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),
       });
       // 结束前检查点：processing 期间被删 → 跳过 ready/audit/回调，做幂等收尾清理。
       if (this.isDeleted(serviceId, codeGraphId)) {
-        this.finishCancelled(serviceId, teamId, codeGraphId);
+        await this.finishCancelled(serviceId, teamId, codeGraphId);
         return;
       }
       this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
@@ -311,9 +541,23 @@ export class CodeGraphService {
         sync_error: null,
         commit_hash: result.commitHash ?? null,
         stats_json: result.stats ? JSON.stringify(result.stats) : null,
+        has_last_good: true,
         last_sync_at: new Date().toISOString(),
       });
-      const synced = this.store.getCodeGraphById(serviceId, codeGraphId);
+      committed = true;
+      let synced = this.store.getCodeGraphById(serviceId, codeGraphId);
+      if (synced && synced.auto_sync_probe_error !== null) {
+        const cleared = this.store.updateCodeGraphProbeDiagnostic(
+          serviceId, teamId, codeGraphId, synced.version, null,
+        );
+        if (!cleared) {
+          this.logger?.warn?.(`[code-graph] could not clear stale auto-sync probe diagnostic for ${codeGraphId}`);
+        } else {
+          synced = this.store.getCodeGraphById(serviceId, codeGraphId);
+        }
+      }
+      try { await result.finalize?.(); }
+      catch (err) { this.logger?.warn?.(`[code-graph] ${codeGraphId} previous snapshot cleanup failed: ${String(err)}`); }
       if (synced) {
         this.audit(synced, "ready", result.stats ? JSON.stringify(result.stats) : null);
       }
@@ -322,33 +566,52 @@ export class CodeGraphService {
       // Auto-generate summary + callback TMC
       await this.onBuildComplete(synced, "ready", null, result.stats ?? null);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
-      if (this.isDeleted(serviceId, codeGraphId)) {
-        this.finishCancelled(serviceId, teamId, codeGraphId);
+      if (committed) {
+        this.logger?.warn?.(`[code-graph] ${codeGraphId} post-build hook failed after commit: ${String(err)}`);
         return;
       }
+      // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
+      if (this.isDeleted(serviceId, codeGraphId)) {
+        await this.finishCancelled(serviceId, teamId, codeGraphId);
+        return;
+      }
+      let failure: unknown = err;
+      if (result?.rollback) {
+        try {
+          await result.rollback();
+          failure = new PreservedCodeGraphError(err);
+        } catch (rollbackError) {
+          failure = new AggregateError([err, rollbackError], "CodeGraph metadata commit and rollback both failed");
+        }
+      }
+      const msg = failure instanceof Error ? failure.message : String(failure);
+      const preserved = hadReadyIndex && failure instanceof PreservedCodeGraphError;
+      // The phase is recovery evidence. A failed copy with a stale retired
+      // .previous must not look like an uncommitted promotion after restart.
+      const failedPhase = this.store.getCodeGraphById(serviceId, codeGraphId)?.internal_status ?? null;
       this.store.updateCodeGraphStatus(serviceId, codeGraphId, {
-        status: "failed",
-        internal_status: null,
+        status: preserved ? "ready" : "failed",
+        internal_status: preserved ? null : failedPhase,
         sync_error: msg.slice(0, 500),
       });
-      const failed = this.store.getCodeGraphById(serviceId, codeGraphId);
-      if (failed) this.audit(failed, "failed", msg.slice(0, 500));
-      this.logger?.warn?.(`[code-graph] ${codeGraphId} failed: ${msg}`);
+      const rowAfterRefresh = this.store.getCodeGraphById(serviceId, codeGraphId);
+      if (rowAfterRefresh) this.audit(rowAfterRefresh, preserved ? "refresh_failed" : "failed", msg.slice(0, 500));
+      this.logger?.warn?.(`[code-graph] ${codeGraphId} refresh failed${preserved ? " (previous index retained)" : ""}: ${msg}`);
 
-      // Callback TMC about failure
-      await this.onBuildComplete(failed, "failed", msg, null);
+      // TMC should see the same serving status as the store. Do not replace the
+      // last successful summary with one computed from missing refresh stats.
+      await this.onBuildComplete(rowAfterRefresh, preserved ? "ready" : "failed", msg, null, !preserved, preserved ? "refresh_failed" : undefined);
     }
   }
 
   /**
    * worker 检查点判定“已删”后的收尾：幂等清理 worker 可能刚写下的盘/句柄，
-   * 并移除 cancelled 标记（该 id 的 worker 到此结束，标记使命完成）。
+   * 硬删完成后 worker 仍可能写过磁盘，所以再次清理。
    */
-  private finishCancelled(serviceId: string, teamId: string, codeGraphId: string): void {
-    this.cleanupResources(serviceId, teamId, codeGraphId);
-    this.cancelled.delete(codeGraphId);
+  private async finishCancelled(serviceId: string, teamId: string, codeGraphId: string): Promise<void> {
+    const result = await this.cleanupResources(serviceId, teamId, codeGraphId);
+    if (result.rowGone) await this.cleanupJobs.get(`${serviceId}\0${codeGraphId}`);
+    else this.logger?.warn?.(`[code-graph] ${codeGraphId} deleted build cleanup deferred until restart`);
     this.logger?.info?.(`[code-graph] ${codeGraphId} build aborted (deleted during processing)`);
   }
 
@@ -361,18 +624,22 @@ export class CodeGraphService {
     status: "ready" | "failed",
     errorMsg: string | null,
     stats: { files: number; nodes: number; edges: number } | null,
+    generateSummary = true,
+    event?: "refresh_failed",
   ): Promise<void> {
     if (!row || !this.callbackConfig) return;
 
     let summary: string | null = null;
 
-    if (status === "ready") {
+    if (status === "ready" && generateSummary) {
       // Generate summary via template (no LLM for code-graph)
       const { generateCodeGraphSummary } = await import("../callback.js");
       summary = generateCodeGraphSummary(row.repo_name || row.repo_url, row.branch, stats);
       if (summary) {
         this.store.updateCodeGraphStatus(row.service_id, row.code_graph_id, { summary });
       }
+    } else if (status === "ready") {
+      summary = row.summary;
     }
 
     // Callback TMC
@@ -386,6 +653,7 @@ export class CodeGraphService {
         summary,
         sync_error: errorMsg?.slice(0, 500) ?? null,
         timestamp: new Date().toISOString(),
+        ...(event ? { event } : {}),
       },
       this.callbackConfig,
     );
@@ -394,5 +662,9 @@ export class CodeGraphService {
   /** 等待后台任务完成（测试 / 停机）。 */
   async onIdle(codeGraphId?: string): Promise<void> {
     await this.queue.onIdle(codeGraphId);
+    const jobs = [...this.cleanupJobs]
+      .filter(([key]) => !codeGraphId || key.endsWith(`\0${codeGraphId}`))
+      .map(([, job]) => job);
+    await Promise.all(jobs);
   }
 }

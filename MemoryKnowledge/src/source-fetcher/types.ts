@@ -11,10 +11,34 @@ export type SourceType = "git" | "local" | "ftp";
 export interface FetchResult {
   /** 源码落盘的本地目录（绝对路径）。 */
   localPath: string;
-  /** 当前版本标识（git 为 commit hash 前 12 位；取不到为 null）。 */
+  /** 当前版本标识（git 为完整 commit hash；取不到为 null）。 */
   version: string | null;
   /** 源协议类型。 */
   sourceType: SourceType;
+}
+
+export interface SourceVersionProbeResult {
+  localVersion: string;
+  remoteVersion: string;
+}
+
+export type SourceVersionProbeErrorCode =
+  | "timeout"
+  | "network"
+  | "ref_not_found"
+  | "remote_error"
+  | "local_unavailable";
+
+export class SourceVersionProbeError extends Error {
+  readonly code: SourceVersionProbeErrorCode;
+  readonly retryable: true;
+
+  constructor(code: SourceVersionProbeErrorCode, message: string) {
+    super(message);
+    this.name = "SourceVersionProbeError";
+    this.code = code;
+    this.retryable = true;
+  }
 }
 
 /**
@@ -33,6 +57,12 @@ export interface ISourceFetcher {
 
   /** 增量同步：更新已存在的 localPath 到最新版本。 */
   sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+
+  /**
+   * Optional bounded read-only version probe. Implementations without a reliable
+   * probe intentionally omit this method and retain the full-refresh behavior.
+   */
+  probeVersion?: (sourceUrl: string, branch: string, localPath: string) => Promise<SourceVersionProbeResult>;
 
   /** 校验 sourceUrl 是否合法（协议白名单 + SSRF 防护）。非法则 throw。 */
   validate(sourceUrl: string): void;
