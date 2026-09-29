@@ -971,7 +971,7 @@ upsert 知识明细（幂等）。
 
 **请求体**：`{ user_key: string }`（`authVerifySchema`，缺 user_key 走 Zod 校验 → `400`）。
 
-**响应** `data`：`{ valid: boolean, user: UserPublic | null }`（**嵌套结构，非扁平**）。
+**响应** `data`：`{ valid: boolean, user: UserPublic | null, key_id?: string }`（**嵌套结构，非扁平**）。合法的持久化 User Key 额外返回其非秘密资源 ID `key_id`；静态 memory 系统 Key 没有对应资源 ID。
 
 - 合法 key：`{ valid: true, user: { user_id, user_type, username, created_at } }`
 - 非法 key：`{ valid: false, user: null }`（**HTTP 仍 200，code=0，不返回 401**）
@@ -985,7 +985,7 @@ upsert 知识明细（幂等）。
 { "user_key": "tk_xxx" }
 
 // 响应（合法）
-{ "code": 0, "message": "ok", "request_id": "abc-123", "data": { "valid": true, "user": { "user_id": "usr_1", "user_type": "normal", "username": "zhangsan", "created_at": "2026-08-20T00:00:00Z" } } }
+{ "code": 0, "message": "ok", "request_id": "abc-123", "data": { "valid": true, "key_id": "uky-example", "user": { "user_id": "usr_1", "user_type": "normal", "username": "zhangsan", "created_at": "2026-08-20T00:00:00Z" } } }
 
 // 响应（非法 key，注意 code 仍为 0）
 { "code": 0, "message": "ok", "request_id": "abc-123", "data": { "valid": false, "user": null } }

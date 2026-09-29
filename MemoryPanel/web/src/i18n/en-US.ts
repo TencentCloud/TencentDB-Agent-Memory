@@ -23,7 +23,7 @@ export const enUS = {
   'menu.desc.chat_memory': 'L0–L3 layered memory assets',
   'menu.desc.team_members': 'Team members / users / roles',
   'menu.desc.team_agents': 'Agent / scope / fixed assets',
-  'menu.desc.api_keys': 'Manage your API keys for external clients',
+  'menu.desc.api_keys': 'Manage account User Keys for external clients',
 
   // ===== GlobalHeader =====
   'header.guide': 'Guide',
@@ -1088,10 +1088,15 @@ export const enUS = {
   // ===== ApiKeyPanel =====
   'apiKey.title': 'User_Key Management',
   'apiKey.desc':
-    'Manage your User Keys for external client access (e.g. CodeBuddy / ClaudeCode CLI).',
+    'Manage account User Keys for external client access (e.g. CodeBuddy / ClaudeCode CLI).',
+  'apiKey.account.label': 'Account',
+  'apiKey.account.self': 'My account',
+  'apiKey.account.loadError': 'Could not load manageable normal users. You can still manage your own Keys.',
+  'apiKey.account.retry': 'Retry',
+  'apiKey.currentSession': 'Current session Key',
   'apiKey.create': 'New Key',
   'apiKey.fresh.desc':
-    'Here is the full Key for {{keyId}} (shown only once. Please copy and save it securely immediately. You will not be able to view it again after closing):',
+    'Here is the full Key {{keyId}} for account {{account}} (shown only once. Copy and save it securely now; it cannot be viewed again after closing):',
   'apiKey.table.keyId': 'Key ID',
   'apiKey.table.keyPrefix': 'Key Prefix',
   'apiKey.table.createdAt': 'Created At',
@@ -1103,6 +1108,8 @@ export const enUS = {
   'apiKey.confirm.revoke': 'Revoke Key "{{name}}"?',
   'apiKey.confirm.revoke.desc':
     'After revocation, the corresponding client will immediately lose access. This is irreversible.',
+  'apiKey.confirm.revoke.desc.account':
+    'Revoke this Key for account "{{account}}"? The corresponding client will immediately lose access. This is irreversible.',
   'apiKey.confirm.revoke.ok': 'Revoke',
   'apiKey.empty.title': "You don't have any User Keys yet",
   'apiKey.empty.desc': 'Click "New Key" in the top right to create your first key',

@@ -528,10 +528,8 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   getUserByKey(userKey: string): UserEntity | null {
-    const keyRow = this.mapUserKey(
-      this.get("SELECT * FROM meta_user_keys WHERE key_value = ? AND status = 'active'", userKey),
-    );
-    if (!keyRow || isUserKeyExpired(keyRow.expires_at)) return null;
+    const keyRow = this.getUserKeyByValue(userKey);
+    if (!keyRow) return null;
     this.touchUserKeyUsage(keyRow.key_id);
     return this.getUserById(keyRow.user_id);
   }
@@ -681,6 +679,13 @@ export class SqliteMetadataStore implements IMetadataStore {
 
   getUserKeyById(keyId: string): UserKeyEntity | null {
     return this.mapUserKey(this.get("SELECT * FROM meta_user_keys WHERE key_id = ?", keyId));
+  }
+
+  getUserKeyByValue(keyValue: string): UserKeyEntity | null {
+    const key = this.mapUserKey(
+      this.get("SELECT * FROM meta_user_keys WHERE key_value = ? AND status = 'active'", keyValue),
+    );
+    return key && !isUserKeyExpired(key.expires_at) ? key : null;
   }
 
   listUserKeys(userId: string, pagination?: PaginationParams | null): ListPage<UserKeyEntity> {

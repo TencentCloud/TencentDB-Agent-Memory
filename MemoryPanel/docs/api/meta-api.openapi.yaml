@@ -1581,7 +1581,7 @@ paths:
       tags: ["Meta · Auth"]
       operationId: meta_auth_verify
       summary: auth/verify
-      description: "登录验活：Header 仅 `X-Tdai-Service-Id`；body 须含 `user_key`。成功看 `data.valid`（软校验）。"
+      description: "登录验活：Header 仅 `X-Tdai-Service-Id`；body 须含 `user_key`。成功看 `data.valid`（软校验）；有效的持久化 User Key 在 data.key_id 返回非秘密资源 ID，旧 Core 可不返回。"
       security: []
       parameters:
         - $ref: '#/components/parameters/TdaiServiceId'
