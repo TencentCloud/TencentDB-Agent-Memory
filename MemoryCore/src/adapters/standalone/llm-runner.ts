@@ -395,7 +395,7 @@ export class StandaloneLLMRunner implements LLMRunner {
       }
 
       this.logger?.debug?.(
-        `${TAG} run() completed: ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
+        `${TAG} run() completed: taskId=${params.taskId}, ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
       );
 
       // Log each step's activity (tool calls + text output)
@@ -440,7 +440,7 @@ export class StandaloneLLMRunner implements LLMRunner {
     } catch (err) {
       const totalMs = Date.now() - runStartMs;
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.logger?.error(`${TAG} run() failed after ${totalMs}ms: ${errMsg}`);
+      this.logger?.error(`${TAG} run() failed: taskId=${params.taskId}, after ${totalMs}ms: ${errMsg}`);
 
       if (params.instanceId) {
         report("llm_call", {
