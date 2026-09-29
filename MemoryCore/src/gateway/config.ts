@@ -591,6 +591,9 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
     maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
     timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
     provider: llmProvider,
+    strictOpenAICompat: env("TDAI_LLM_STRICT_OPENAI_COMPAT") !== undefined
+      ? env("TDAI_LLM_STRICT_OPENAI_COMPAT") === "true"
+      : bool(llmConfig, "strictOpenAICompat") ?? false,
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
     },
@@ -632,6 +635,8 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
       maxTokens: llm.maxTokens ?? 4096,
       timeoutMs: llm.timeoutMs ?? 120_000,
       provider: llm.provider,
+      strictOpenAICompat: llm.strictOpenAICompat,
+      stream: llm.stream,
       proxy: {
         useMemorySystemUserKey: llm.proxy?.useMemorySystemUserKey ?? true,
       },

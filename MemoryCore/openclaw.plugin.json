@@ -145,6 +145,7 @@
         "type": "object",
         "description": "独立 LLM 配置 — 开启后 L1/L2/L3 提取绕过 OpenClaw 的内置模型，改用指定的 OpenAI-compatible API 直接调用。默认关闭（使用 OpenClaw 宿主模型）。",
         "properties": {
+          "strictOpenAICompat": { "type": "boolean", "default": false, "description": "Normalize text-only array/null message content for strict OpenAI-compatible endpoints. Only applies to the standalone LLM runner." },
           "enabled": { "type": "boolean", "default": false, "description": "是否启用独立 LLM 模式。关闭时使用 OpenClaw 宿主模型。" },
           "baseUrl": { "type": "string", "default": "https://api.openai.com/v1", "description": "OpenAI-compatible API 地址" },
           "apiKey": { "type": "string", "description": "API Key" },
