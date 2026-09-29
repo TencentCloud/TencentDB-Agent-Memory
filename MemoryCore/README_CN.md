@@ -277,6 +277,11 @@ Gateway 按以下优先级加载配置：
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM 模型 |
 | `TDAI_SKILL_ENABLED` | 配置文件值 | 强制启用 Skill 模块 |
 
+`LOG_PATH` 指定 `core.log` 与 `observability.log` 的目录。未设置时先使用
+`/data/log/`；初始化失败会告警并回退到 `$MEMORY_TENCENTDB_ROOT/logs`
+（默认 `~/.memory-tencentdb/logs`）。显式设置的 `LOG_PATH` 不会被静默替换。
+文件轮转不处理服务管理器收集的 stdout/stderr，后者需单独配置日志保留策略。
+
 配置模板：
 
 - `tdai-gateway.standalone.yaml`：最小单机 Memory 配置。

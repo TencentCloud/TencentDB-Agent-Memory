@@ -15,14 +15,14 @@
  * 公开 API 签名保持不变，调用方无需修改。
  */
 
-import { FileLogger } from "./file-logger.js";
+import { FileLogger, defaultLogPaths } from "./file-logger.js";
 import { getObservabilityBackend } from "./factory.js";
 
 export type LogAttrs = Record<string, string | number | boolean>;
 
 // 初始化文件写入器（降级策略：初始化失败不影响业务）
 const obsFileLogger = new FileLogger({
-  path: process.env.LOG_PATH || "/data/log/",
+  ...defaultLogPaths(),
   filename: "observability.log",
   rotateSizeBytes: 100 * 1024 * 1024, // 100MB
   rotateBackupLimit: 10,

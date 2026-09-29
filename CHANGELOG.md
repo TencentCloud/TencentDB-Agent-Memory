@@ -9,6 +9,16 @@
 
 ---
 
+## [Unreleased]
+
+### Restore file logging when the default directory is unavailable (#1264)
+
+- **What changed**: Fall back from /data/log to the application logs directory on initialization failure; preserve explicit LOG_PATH.
+- **Why**: Standalone users cannot generally create the container default directory.
+- **Impact**: Keeps working container paths and file rotation; does not bound service-manager stdout/stderr logs.
+- **Verification**: Node 26.3.0: 6 file tests pass; comparable baseline file probes 2 fail/1 pass; focused TypeScript check passes.
+- **Files**: MemoryCore/src/core/report/{file-logger,log,obs-logger}.ts, tests and README files.
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

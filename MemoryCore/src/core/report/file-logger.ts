@@ -13,10 +13,22 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
+
+/** Preserve the container path, but allow an unset LOG_PATH to fall back on hosts. */
+export function defaultLogPaths(): { path: string; fallbackPath?: string } {
+  if (process.env.LOG_PATH) return { path: process.env.LOG_PATH };
+  return {
+    path: "/data/log/",
+    fallbackPath: path.join(process.env.MEMORY_TENCENTDB_ROOT || path.join(os.homedir(), ".memory-tencentdb"), "logs"),
+  };
+}
 
 export interface FileLoggerConfig {
   /** 日志文件目录，如 /data/log/。为空时禁用文件写入。 */
   path: string;
+  /** Optional fallback for a deployment default, never for an explicit LOG_PATH. */
+  fallbackPath?: string;
   /** 日志文件名，如 core.log */
   filename: string;
   /** 单文件最大字节数，超出后轮转 */
@@ -56,8 +68,18 @@ export class FileLogger {
     try {
       this.initFile();
     } catch (err) {
+      if (cfg.fallbackPath) {
+        this.cfg = { ...cfg, path: cfg.fallbackPath, fallbackPath: undefined };
+        try {
+          this.initFile();
+          process.stderr.write(`[file-logger] WARN default log directory unavailable (${err}); using ${this.cfg.path}\n`);
+          return;
+        } catch (fallbackError) {
+          process.stderr.write(`[file-logger] WARN fallback log directory unavailable: ${fallbackError}\n`);
+        }
+      }
       this.disabled = true;
-      process.stderr.write(`[file-logger] failed to init log file: ${err}\n`);
+      process.stderr.write(`[file-logger] WARN file logging disabled; set LOG_PATH to a writable directory: ${err}\n`);
     }
   }
 
@@ -129,6 +151,8 @@ export class FileLogger {
     fs.mkdirSync(this.cfg.path, { recursive: true });
 
     this.filePath = path.join(this.cfg.path, this.cfg.filename);
+    // A directory can exist while the log file itself is not writable.
+    fs.appendFileSync(this.filePath, "", "utf-8");
 
     // 获取当前文件大小
     try {
