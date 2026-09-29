@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # agents/setup-proxy.sh — One-shot interactive proxy configuration for AI agents
 #
-# Supports: Claude Code | CodeBuddy | Codex | WorkBuddy | dsh | Hermes | OpenClaw
+# Supports: Claude Code | CodeBuddy | Codex | WorkBuddy | dsh | Hermes | OpenClaw | Pi
 #
 # Usage:
 #   bash agents/setup-proxy.sh            # interactive
@@ -88,7 +88,7 @@ check_jq() {
 }
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-AGENTS=("claude-code" "codebuddy" "codex" "workbuddy" "dsh" "hermes" "openclaw")
+AGENTS=("claude-code" "codebuddy" "codex" "workbuddy" "dsh" "hermes" "openclaw" "pi")
 AGENT_LABELS=(
   "Claude Code       — Anthropic Messages, ~/.claude/settings.json"
   "CodeBuddy         — OpenAI Chat, ~/.codebuddy/models.json"
@@ -97,6 +97,7 @@ AGENT_LABELS=(
   "dsh (DeepSeek)    — OpenAI Chat, ~/.dsh/settings.yaml + .credentials.yaml"
   "Hermes            — OpenAI Chat + Header预选, ~/.hermes/config.yaml"
   "OpenClaw          — OpenAI Chat + Header预选, ~/.openclaw/openclaw.json"
+  "Pi               — OpenAI Chat + Pi extension, env vars (no config file)"
 )
 
 DEFAULT_CONFIG_PATHS=(
@@ -107,6 +108,7 @@ DEFAULT_CONFIG_PATHS=(
   "~/.dsh/settings.yaml"
   "~/.hermes/config.yaml"
   "~/.openclaw/openclaw.json"
+  "~/.pi/agent/settings.json"
 )
 
 # Expand ~ to $HOME for actual file operations
@@ -156,7 +158,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --task-id ID       Task ID (or 'no-task')"
       echo "  --conv-id ID       Conversation ID"
       echo ""
-      echo "Agents: claude-code|codebuddy|codex|workbuddy|dsh|hermes|openclaw"
+      echo "Agents: claude-code|codebuddy|codex|workbuddy|dsh|hermes|openclaw|pi"
       exit 0 ;;
     *) error "Unknown arg: $1"; exit 1 ;;
   esac
@@ -335,6 +337,24 @@ if ! $SCAN_FOUND; then
       SCAN_KEY=$(jq -r '.models.providers[]? | select(.baseUrl and (.baseUrl | contains("/openclaw/"))) | .apiKey' "$_oc_path" 2>/dev/null | head -1)
       SCAN_MODEL=$(jq -r '.models.providers[]? | select(.baseUrl and (.baseUrl | contains("/openclaw/"))) | .models[0].id' "$_oc_path" 2>/dev/null | head -1)
       [[ -n "$SCAN_PROXY" ]] && SCAN_FOUND=true && SCAN_SOURCES+=("openclaw → $_oc_path")
+    fi
+  fi
+fi
+
+# --- Scan Pi (~/.pi/agent/settings.json) ---
+if ! $SCAN_FOUND; then
+  _pi_path="$(expand_path "~/.pi/agent/settings.json")"
+  if [[ -f "$_pi_path" && -s "$_pi_path" ]]; then
+    # Pi stores defaultProvider="tdai" and defaultModel; the proxy URL is in env
+    # (TDAI_PROXY_URL), not in settings.json. We detect by checking if the
+    # @tencentdb-agent-memory/pi-tdai-client package is listed.
+    _pi_pkg=$(jq -r '.packages[]? | select(. | tostring | contains("pi-tdai-client")) | tostring' "$_pi_path" 2>/dev/null | head -1)
+    if [[ -n "$_pi_pkg" ]]; then
+      # Proxy URL comes from env, not the config file — use the default
+      SCAN_PROXY="http://127.0.0.1:8096"
+      SCAN_INSTANCE="default"
+      SCAN_MODEL=$(jq -r '.defaultModel // empty' "$_pi_path" 2>/dev/null)
+      [[ -n "$SCAN_PROXY" ]] && SCAN_FOUND=true && SCAN_SOURCES+=("pi → $_pi_path (package detected)")
     fi
   fi
 fi
@@ -1064,6 +1084,62 @@ write_openclaw() {
   echo -e "  • 在 OpenClaw 中选择 provider 为 ${BOLD}memory-proxy${RESET}，模型选 ${BOLD}${MODEL_ID}${RESET}"
 }
 
+write_pi() {
+  # Pi doesn't use a config file — it uses a Pi extension + env vars.
+  # This function guides the user through the env-var setup and optionally
+  # installs the extension, rather than writing a config file.
+  local _unused="$1"
+
+  echo -e "${BOLD}Pi 通过 Pi 扩展 + 环境变量接入 Proxy（不写配置文件）${RESET}"
+  echo ""
+  echo -e "  ${DIM}扩展注册 tdai provider，自动注入 x-conversation-id，${RESET}"
+  echo -e "  ${DIM}并在首轮渲染 Team/Agent/Task 交互选择器。${RESET}"
+  echo ""
+
+  # Step 1: Install the extension
+  header "Step 1: 安装 Pi 扩展"
+  if command -v pi &>/dev/null; then
+    if confirm "执行 pi install npm:@tencentdb-agent-memory/pi-tdai-client?" "y"; then
+      pi install npm:@tencentdb-agent-memory/pi-tdai-client
+      success "扩展已安装"
+    else
+      warn "跳过安装。手动执行: pi install npm:@tencentdb-agent-memory/pi-tdai-client"
+    fi
+  else
+    warn "pi 未找到，跳过自动安装。请手动执行:"
+    echo -e "  ${BOLD}pi install npm:@tencentdb-agent-memory/pi-tdai-client${RESET}"
+  fi
+
+  # Step 2: Show env vars to set
+  header "Step 2: 环境变量"
+  echo -e "  将以下变量加入 shell 配置（~/.bashrc / ~/.zshrc）或项目 .env："
+  echo ""
+  echo -e "  ${BOLD}export TDAI_USER_KEY=${USER_KEY}${RESET}"
+  echo -e "  export TDAI_PROXY_URL=${PROXY_HOST}"
+  echo -e "  export TDAI_SPACE_ID=${INSTANCE_ID}"
+  if [[ -n "$TEAM_ID" ]]; then
+    echo -e "  export TDAI_TEAM_ID=${TEAM_ID}"
+    echo -e "  export TDAI_AGENT_ID=${AGENT_ID}"
+    if [[ -n "$TASK_ID" && "$TASK_ID" != "no-task" ]]; then
+      echo -e "  export TDAI_TASK_ID=${TASK_ID}"
+    fi
+  else
+    echo -e "  ${DIM}# 不设 TDAI_TEAM_ID / TDAI_AGENT_ID 则首轮弹交互选择器${RESET}"
+  fi
+  echo ""
+
+  # Step 3: How to run
+  header "Step 3: 启动"
+  echo -e "  ${BOLD}pi --provider tdai --model ${MODEL_ID}${RESET}"
+  echo -e "  ${DIM}首轮会弹 Team/Agent/Task 选择器（↑↓ + Enter）${RESET}"
+  echo ""
+  if [[ -n "$TEAM_ID" ]]; then
+    success "已配置固定身份，跳过交互选择器"
+  else
+    warn "交互模式：首轮选择 Team/Agent/Task 后，session 绑定该身份"
+  fi
+}
+
 # ─── Execute Write ────────────────────────────────────────────────────────────
 case "$CHOSEN_AGENT" in
   claude-code) write_claude_code "$CONFIG_PATH" ;;
@@ -1073,6 +1149,7 @@ case "$CHOSEN_AGENT" in
   dsh)         write_dsh "$CONFIG_PATH" ;;
   hermes)      write_hermes "$CONFIG_PATH" ;;
   openclaw)    write_openclaw "$CONFIG_PATH" ;;
+  pi)          write_pi "$CONFIG_PATH" ;;
 esac
 
 # ━━━ Summary ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1113,6 +1190,9 @@ case "$CHOSEN_AGENT" in
     ;;
   hermes|openclaw)
     warn "使用时确保客户端选择的模型/provider 指向 Proxy 配置（${MODEL_ID}）"
+    ;;
+  pi)
+    warn "使用时运行: ${BOLD}pi --provider tdai --model ${MODEL_ID}${RESET}"
     ;;
 esac
 echo ""
