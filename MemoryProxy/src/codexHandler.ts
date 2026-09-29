@@ -205,11 +205,7 @@ export function detectDefaultModeGate(input: unknown): boolean {
 // ── Asset injection (exported for unit tests) ────────────────────────────────
 
 /**
- * Inject `<tdai_injections>` wrapper into codex body.input[0].content[].
- *
- * Appends the injection block to the developer message (input[0]) content.
- * Defensive: if input[0] is not a message with an array content, returns
- * the body unchanged.
+ * Inject `<tdai_injections>` into Responses `body.instructions`.
  *
  * Returns a shallow copy — original body is not mutated.
  */
@@ -217,23 +213,9 @@ export function injectCodexAssets(
   body: Record<string, unknown>,
   assets: CodexInjectionInput,
 ): Record<string, unknown> {
-  const input = body.input;
-  if (!Array.isArray(input) || input.length === 0) return body;
-
-  const devMsg = input[0] as Record<string, unknown> | null;
-  if (!devMsg || typeof devMsg !== "object") return body;
-  if (devMsg.type !== "message") return body;
-
-  const content = devMsg.content;
-  if (!Array.isArray(content)) return body;
-
-  const injectionBlock = buildCodexInjectionBlock(assets);
-
-  // Shallow-copy chain: body → input → input[0] → content
-  const newContent = [...content, injectionBlock];
-  const newDevMsg = { ...devMsg, content: newContent };
-  const newInput = [newDevMsg, ...input.slice(1)];
-  return { ...body, input: newInput };
+  const injectionText = buildCodexInjectionBlock(assets).text;
+  const existing = typeof body.instructions === "string" ? body.instructions : "";
+  return { ...body, instructions: existing ? `${existing}\n\n${injectionText}` : injectionText };
 }
 
 // ── Upstream request helpers ─────────────────────────────────────────────────
