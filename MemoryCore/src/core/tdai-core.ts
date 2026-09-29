@@ -49,6 +49,7 @@ import {
   createL3Runner,
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
+import { loadLedgerWriterId } from "./record/event-ledger.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
@@ -244,6 +245,7 @@ export class TdaiCore {
   async initialize(): Promise<void> {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
+    this.logger.debug?.(`${TAG} Change-ledger outbox writer: ${loadLedgerWriterId(this.dataDir, this.logger)}`);
 
     // Initialize stores (async)
     this.storeReady = this.initStores();

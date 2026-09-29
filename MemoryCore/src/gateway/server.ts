@@ -113,7 +113,8 @@ import { makeMemoryPromptRouteTable } from "./memory-prompt-handlers.js";
 import { makeMemoryGenerationLogRouteTable } from "./memory-generation-log-handlers.js";
 import { handleOffloadV2Route } from "../offload_server/router.js";
 import type { OffloadV2Deps } from "../offload_server/router.js";
-import { resolveV3StrictIsolation } from "../utils/env-config.js";
+import { resolveLedgerBackfillEnabled, resolveLedgerOutboxRetentionDays, resolveV3StrictIsolation } from "../utils/env-config.js";
+import { startLedgerOutboxRetention, type LedgerOutboxRetention } from "../core/record/event-ledger.js";
 import { initServerOpikTracer } from "../offload_server/opik-tracer.js";
 import { classifyError } from "./error-handler.js";
 import { LocalStorageBackend } from "../core/storage/local-backend.js";
@@ -300,6 +301,8 @@ export class TdaiGateway {
   // ── Integrated services (Scanner + Worker) ──
   private stateBackend: IStateBackend | null = null;
   private timerScanner: TimerScanner | null = null;
+  /** Change-ledger outbox ageing (TDAI_LEDGER_OUTBOX_RETENTION_DAYS); null when off. */
+  private ledgerOutboxRetention: LedgerOutboxRetention | null = null;
   private pipelineWorker: PipelineWorker | null = null;
   /**
    * 跨模块共享的并发信号量 —— memory PipelineWorker 用；skill 侧走
@@ -680,6 +683,21 @@ export class TdaiGateway {
       }
     }
 
+    // ── Change-ledger outbox retention ──
+    // Plugin mode ages events/ shards via MemoryCleaner; the gateway has no
+    // cleaner, so without this the outbox grows forever. Opt-in (the outbox
+    // is the backfill source). Service mode is not covered: its per-instance
+    // storages are resolved lazily per request — see docs/change-ledger.md.
+    const outboxRetentionDays = resolveLedgerOutboxRetentionDays();
+    if (outboxRetentionDays !== undefined && this.config.deployMode !== "service") {
+      this.ledgerOutboxRetention = startLedgerOutboxRetention({
+        getStorage: () => this.core.getStorage(),
+        retentionDays: outboxRetentionDays,
+        logger: this.logger,
+      });
+      this.logger.info(`${TAG} change-ledger outbox retention enabled: ${outboxRetentionDays} day(s)`);
+    }
+
     // ── Skill module post-wiring (after storage is set) ──
     // setStorage() above kicks off ensureSkillModuleWired() asynchronously
     // (B1 fix in tdai-core: concurrent triggers coalesce onto one promise);
@@ -844,6 +862,8 @@ export class TdaiGateway {
       this.logger.info("Skill Worker Pool stopped");
     }
     this.conversationAddByInstance.clear();
+    this.ledgerOutboxRetention?.stop();
+    this.ledgerOutboxRetention = null;
     if (this.timerScanner) {
       await this.timerScanner.stop();
       this.logger.info("Timer Scanner stopped");
@@ -996,6 +1016,7 @@ export class TdaiGateway {
         // `V3_STRICT_ISOLATION` controls only /v3 L0–L3 memory data-plane
         // strictness. Default OFF for local/integration; production should set it.
         v3StrictIsolation: resolveV3StrictIsolation(),
+        ledgerBackfillEnabled: resolveLedgerBackfillEnabled(),
         // handleConversationAdd 用它自动登记 chat_memory 资产（team+agent 粒度）
         // 并绑定到 agent。首次写入触发 create + bind；后续同 (team, agent) 走
         // MetadataService 的进程内 LRU 短路。

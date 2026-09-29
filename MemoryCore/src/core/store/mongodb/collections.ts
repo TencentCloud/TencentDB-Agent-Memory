@@ -14,12 +14,15 @@ export const COLLECTIONS = {
   L1: "l1_memories",
   PROFILES: "profiles",
   AUDIT: "memory_audit",
+  MEMORY_EVENTS: "memory_events",
   KNOWLEDGE: "knowledge",
   MEMORY_PROMPTS: "memory_prompts",
   MEMORY_PROMPT_SETTINGS: "memory_prompt_settings",
   MEMORY_PROMPT_SETTING_LOGS: "memory_prompt_setting_logs",
   MEMORY_GENERATION_REFS: "memory_generation_refs",
   SKILLS: "skills",
+  /** One-shot migration markers (one doc per completed migration). */
+  MIGRATIONS: "tdai_migrations",
 } as const;
 
 export type CollectionName = (typeof COLLECTIONS)[keyof typeof COLLECTIONS];

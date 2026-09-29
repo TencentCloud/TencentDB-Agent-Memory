@@ -137,6 +137,10 @@ export async function readMemoryRecords(
   }
 
   const records: MemoryRecord[] = [];
+  // Revert tombstones (see l1-writer appendRevertTombstone) are collected
+  // across ALL shards — a tombstone written today can target a record in an
+  // older shard — and applied only after every file has been scanned.
+  const tombstonedIds = new Set<string>();
 
   for (const fileName of targetFiles) {
     let raw: string | null;
@@ -159,24 +163,33 @@ export async function readMemoryRecords(
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       try {
-        const parsed = JSON.parse(line) as Partial<MemoryRecord>;
-        if (parsed.sessionKey !== sessionKey) {
+        const parsed = JSON.parse(line) as Record<string, unknown>;
+        if (parsed?.tombstone === "l1" && typeof parsed.record_id === "string") {
+          tombstonedIds.add(parsed.record_id);
           continue;
         }
-        records.push(parsed as MemoryRecord);
+        const record = parsed as unknown as Partial<MemoryRecord>;
+        if (record.sessionKey !== sessionKey) {
+          continue;
+        }
+        records.push(record as MemoryRecord);
       } catch {
         logger?.warn?.(`${TAG} Skipping malformed JSONL line in ${fileName}:${i + 1}`);
       }
     }
   }
 
-  records.sort((a, b) => {
+  const visible = tombstonedIds.size > 0
+    ? records.filter((r) => !tombstonedIds.has(r.id))
+    : records;
+
+  visible.sort((a, b) => {
     const ta = a.updatedAt || a.createdAt || "";
     const tb = b.updatedAt || b.createdAt || "";
     return ta.localeCompare(tb);
   });
 
-  return records;
+  return visible;
 }
 
 /**
@@ -199,6 +212,10 @@ export async function readAllMemoryRecords(
     }
 
     const allRecords: MemoryRecord[] = [];
+    // Same tombstone discipline as readMemoryRecords: collect ids across all
+    // shards first, drop tombstoned records (and the tombstone lines
+    // themselves — they are not MemoryRecords) after the full scan.
+    const tombstonedIds = new Set<string>();
 
     for (const file of files) {
       try {
@@ -214,7 +231,12 @@ export async function readAllMemoryRecords(
         const lines = raw.split("\n").filter((line: string) => line.trim());
         for (const line of lines) {
           try {
-            allRecords.push(JSON.parse(line) as MemoryRecord);
+            const parsed = JSON.parse(line) as Record<string, unknown>;
+            if (parsed?.tombstone === "l1" && typeof parsed.record_id === "string") {
+              tombstonedIds.add(parsed.record_id);
+              continue;
+            }
+            allRecords.push(parsed as unknown as MemoryRecord);
           } catch {
             logger?.warn?.(`${TAG} Skipping malformed JSONL line in ${file}`);
           }
@@ -224,13 +246,17 @@ export async function readAllMemoryRecords(
       }
     }
 
-    allRecords.sort((a, b) => {
+    const visible = tombstonedIds.size > 0
+      ? allRecords.filter((r) => !tombstonedIds.has(r.id))
+      : allRecords;
+
+    visible.sort((a, b) => {
       const ta = a.updatedAt || a.createdAt || "";
       const tb = b.updatedAt || b.createdAt || "";
       return ta.localeCompare(tb);
     });
 
-    return allRecords;
+    return visible;
 
   } catch {
     // records/ directory doesn't exist yet

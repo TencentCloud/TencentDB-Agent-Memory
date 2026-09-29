@@ -320,7 +320,17 @@ export async function extractL1Memories(params: {
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
         traceContext: { teamId, userId, agentId, sessionId },
-        ...(teamId || userId || agentId || sessionId || taskId ? { filter: { teamId, userId, agentId, sessionId, taskId } } : {}),
+        // Dedup candidates are recalled at AGENT scope (cross-session), aligned
+        // with memory_search / conversation query (see v2-router atomicSearch):
+        // memories are agent-level assets — a correction in session B must
+        // supersede the record written in session A. Session-scoped recall
+        // (the old behaviour) left the old value recallable alongside the new
+        // one. Tenant isolation is still enforced via team/user/agent/task.
+        // Fail-closed fallback: a caller carrying ONLY sessionId gets a
+        // session-scoped filter rather than an unscoped (all-tenant) recall.
+        ...(teamId || userId || agentId || taskId
+          ? { filter: { teamId, userId, agentId, taskId } }
+          : sessionId ? { filter: { sessionId } } : {}),
       });
       dedupLatencyMs = Date.now() - dedupStartMs;
 
@@ -395,13 +405,15 @@ export async function extractL1Memories(params: {
     logger,
     writeLog: () => generationLogStore.write(generationLog, generationIdentity.key),
     writeRefs: options.vectorStore?.upsertMemoryGenerationRefs && storedRecords.length > 0
-      ? () => options.vectorStore!.upsertMemoryGenerationRefs!(storedRecords.map((record) => ({
-          generation_ref_id: buildMemoryGenerationRefId("l1", record.id),
-          layer: "l1" as const,
-          memory_id: record.id,
-          ...generation,
-          created_at_ms: generationFinishedAt,
-        })))
+      ? async () => {
+          await options.vectorStore!.upsertMemoryGenerationRefs!(storedRecords.map((record) => ({
+            generation_ref_id: buildMemoryGenerationRefId("l1", record.id),
+            layer: "l1" as const,
+            memory_id: record.id,
+            ...generation,
+            created_at_ms: generationFinishedAt,
+          })));
+        }
       : undefined,
   });
 

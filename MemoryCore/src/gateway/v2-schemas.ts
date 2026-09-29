@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import { DEFAULT_ISOLATION_ID } from "../core/store/types.js";
+import { canonIsoTs } from "../core/store/memory-event-id.js";
 
 // ============================
 // Re-export all generated schemas as-is
@@ -53,7 +54,8 @@ export {
 export type {
   ConversationRole,
   Pagination,
-  ConversationAddRequest,
+  // ConversationAddRequest intentionally omitted: overridden below by the
+  // local schema-derived type (session_id default + idempotency_key).
   ConversationAddData,
   ConversationQueryRequest,
   ConversationQueryData,
@@ -110,6 +112,11 @@ import {
 export const conversationAddRequestSchema = z.object({
   session_id: z.string().min(1).default(DEFAULT_ISOLATION_ID),
   messages: z.array(_conversationItemSchema).min(1).max(100),
+  /**
+   * 幂等键（也可经 `Idempotency-Key` 请求头传入，body 优先）。同键重试得到
+   * 相同的 accepted_ids，L0 不重复写入。
+   */
+  idempotency_key: z.string().min(1).max(256).optional(),
 });
 export type ConversationAddRequest = z.infer<typeof conversationAddRequestSchema>;
 
@@ -120,6 +127,17 @@ export type ConversationAddRequest = z.infer<typeof conversationAddRequestSchema
 export interface CountData {
   total: number;
 }
+
+// 时间戳边界契约：store 层全是裸字符串比较，词法序必须等于时间序——所以
+// 只收"能无损表示为毫秒"的 ISO 形态并归一化为规范形 `…ss.sssZ`：
+//   收：…ssZ / …ss.ssZ / …ss.sssZ / ±HH:mm（含省略秒的 …HH:mmZ）
+//   拒：date-only、无时区（本地时区歧义）、空格分隔、>3 位小数（有损舍入
+//   会放宽边界）、任何 Date.parse 不认的值——400 而不是静默错过滤。
+const isoDateString = z.string()
+  .refine((v) => canonIsoTs(v) !== null, {
+    message: "must be an ISO 8601 instant with timezone and ≤ms precision (normalized to YYYY-MM-DDTHH:mm:ss.sssZ)",
+  })
+  .transform((v) => canonIsoTs(v)!);
 
 export const conversationCountRequestSchema = z.object({
   session_id: z.string().min(1).optional(),
@@ -147,7 +165,7 @@ export type CoreCountRequest = z.infer<typeof coreCountRequestSchema>;
 // Override: atomic response version exposure
 // ============================
 
-export interface AtomicDetail extends GeneratedAtomicDetail {
+export interface AtomicDetail extends Omit<GeneratedAtomicDetail, "version"> {
   /** Monotonic L1 memory version, starts from 0 and increments on update/merge. */
   version: number;
   team_id?: string;
@@ -425,3 +443,84 @@ export const v2AuthContextSchema = z.object({
   serviceId: z.string().min(1),
 });
 export type V2AuthContext = z.infer<typeof v2AuthContextSchema>;
+
+// ============================
+// Memory diff（session 变更集）
+// ============================
+//
+// POST /v2|v3/memory/diff — 聚合查询某个 session 的 L1 变更：
+// 每次写入操作一组 { op, record, replaced[] }，replaced 是被 superseded 的
+// 旧记录快照。原始事件行由 store.queryMemoryEvents 返回，聚合在 handler 完成。
+
+export const memoryDiffRequestSchema = z.object({
+  /** 必填：查询哪个 session 的变更集。 */
+  session_id: z.string().min(1),
+  limit: z.number().int().min(1).max(1000).default(500),
+  offset: z.number().int().min(0).default(0),
+  /** 可选：按 op 过滤事件层（created/updated/merged/superseded/reverted/deleted）。 */
+  op: z.enum(["created", "updated", "merged", "superseded", "reverted", "deleted"]).optional(),
+  /** 可选：只返 event_ts ≥ since 的事件（ISO 8601）。 */
+  since: isoDateString.optional(),
+  /** 可选：只返 event_ts ≤ until 的事件（ISO 8601）。 */
+  until: isoDateString.optional(),
+});
+export type MemoryDiffRequest = z.infer<typeof memoryDiffRequestSchema>;
+
+// POST /v2|v3/memory/diff/revert — 撤销某条已生效的 L1 变更（review 驳回）。
+// created → 删除该记录；updated/merged → 删除新记录并按 superseded
+// 快照恢复旧记录。撤销本身追加一条 reverted 事件，审计链完整。
+export const memoryDiffRevertRequestSchema = z.object({
+  /** 要撤销的 record id（diff 响应里 change.record_id）。 */
+  record_id: z.string().min(1).optional(),
+  /** 批量撤销（上限 50/次）。与 record_id 二选一或并用。 */
+  record_ids: z.array(z.string().min(1)).min(1).max(50).optional(),
+  /** 可选：撤销理由，记入 reverted 事件的 reason（兼容：同时写入 content）。 */
+  reason: z.string().max(2000).optional(),
+  /** 可选：记录在提取写入后被人工编辑时，显式丢弃人工编辑继续撤销。默认 false（409）。 */
+  force: z.boolean().optional(),
+  /** 可选：要撤销的写入事件 event_id（逐层回退人工编辑）。仅可与单个 record_id 同用。 */
+  event_id: z.string().min(1).optional(),
+}).refine((d) => d.record_id || (d.record_ids?.length ?? 0) > 0, {
+  message: "record_id or non-empty record_ids is required",
+});
+export type MemoryDiffRevertRequest = z.infer<typeof memoryDiffRevertRequestSchema>;
+
+// POST /v2|v3/memory/history — 单条 L1 记录的完整事件血统
+//（created → updated/merged → superseded/reverted），审阅者追溯一条记忆
+// 的全部生命周期。
+export const memoryHistoryRequestSchema = z.object({
+  /** 必填：目标 record id。 */
+  record_id: z.string().min(1),
+  limit: z.number().int().min(1).max(1000).default(100),
+  offset: z.number().int().min(0).default(0),
+});
+export type MemoryHistoryRequest = z.infer<typeof memoryHistoryRequestSchema>;
+
+// POST /v2|v3/memory/review/inbox — 审阅收件箱：tenant 维度（team/agent/user）
+// 最近有 L1 变更的 session 列表。解决"审阅者不知道该审哪个 session"的问题。
+// 聚合在 handler 完成：拉时间窗内事件按 session_id 分组。
+export const memoryReviewInboxRequestSchema = z.object({
+  /** 可选：只统计 event_ts ≥ since 的事件（ISO 8601）。 */
+  since: isoDateString.optional(),
+  /** 可选：只统计 event_ts ≤ until 的事件（ISO 8601）。 */
+  until: isoDateString.optional(),
+  /** 事件扫描上限（再按 session 聚合）。 */
+  limit: z.number().int().min(1).max(1000).default(500),
+});
+export type MemoryReviewInboxRequest = z.infer<typeof memoryReviewInboxRequestSchema>;
+
+// POST /v2|v3/memory/ledger/status — 变更账健康度（本进程见到的 store/outbox 追加失败）。
+// reset:true 清失败计数；pending 擦除是未落地的工作项，不在 reset 范围内——
+// 只能由 backfill 真正落地或重启清除（需开 backfill flag）。
+export const memoryLedgerStatusRequestSchema = z.object({
+  reset: z.boolean().optional(),
+}).passthrough();
+export type MemoryLedgerStatusRequest = z.infer<typeof memoryLedgerStatusRequestSchema>;
+
+// POST /v2|v3/memory/ledger/backfill — 从 events/*.jsonl outbox 幂等回放缺失事件到 store。
+// 按请求 isolation 的 team/agent 限定回放范围。
+export const memoryLedgerBackfillRequestSchema = z.object({
+  /** 必填：只回放 event_ts ≥ since 的事件（ISO 8601），限制扫描的 outbox 分片数。 */
+  since: isoDateString,
+});
+export type MemoryLedgerBackfillRequest = z.infer<typeof memoryLedgerBackfillRequestSchema>;

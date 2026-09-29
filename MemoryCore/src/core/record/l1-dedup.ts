@@ -3,8 +3,9 @@
  * memories against existing records in a single LLM call.
  *
  * Candidate recall uses the same strategy as memory_search (native hybrid, else
- * FTS ∥ client-vector + RRF). Isolation stays session-scoped via IsolationFilter;
- * search's cross-session filter is not reused.
+ * FTS ∥ client-vector + RRF). Isolation is AGENT-scoped (cross-session, the
+ * caller's filter carries no session dimensions — see batchDedup's docstring);
+ * tenant isolation stays via team/user/agent/task.
  *
  * If neither FTS, client embedding, nor native hybrid is available, conflict
  * detection is skipped — all memories go straight to store.
@@ -41,8 +42,11 @@ const TAG = "[memory-tdai][l1-dedup]";
  * 2. Otherwise FTS ∥ client-vector in parallel, RRF-merged (same as memory_search)
  * 3. Skip conflict detection entirely — all memories go straight to "store"
  *
- * Isolation is the caller's `filter` (production extraction is session-scoped).
- * Do not reuse search's cross-session isolation here.
+ * Isolation is the caller's `filter` (agent-level, cross-session — aligned
+ * with memory_search / conversation query). Memories are agent-scoped
+ * assets: a correction in session B must supersede records written by
+ * session A of the same agent, so the recall filter carries no session
+ * dimensions; tenant isolation stays via team/user/agent/task.
  *
  * @param memories - Newly extracted memories (with record_id)
  * @param config - OpenClaw config (for LLM access)
@@ -90,7 +94,7 @@ export async function batchDedup(params: {
     }));
 
   // Determine what recall capabilities are available
-  const hasVectorData = vectorStore && (await vectorStore.countL1()) > 0;
+  const hasVectorData = !!vectorStore && (await vectorStore.countL1()) > 0;
   const hasFts = vectorStore?.isFtsAvailable() ?? false;
   const nativeHybrid = !!(
     vectorStore &&

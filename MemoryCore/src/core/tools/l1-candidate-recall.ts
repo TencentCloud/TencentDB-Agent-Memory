@@ -1,9 +1,10 @@
 /**
  * Shared L1 candidate recall: text → top-K L1 hits.
  *
- * Used by memory_search (cross-session filter) and l1_dedup (session-scoped
- * filter). Callers own isolation / topK / query; this module only decides
- * native-hybrid vs FTS ∥ client-vector, then RRF-merges dual-path results.
+ * Used by memory_search and l1_dedup — both recall at AGENT scope (cross-session;
+ * the caller's filter carries no session dimensions). Callers own isolation /
+ * topK / query; this module only decides native-hybrid vs FTS ∥ client-vector,
+ * then RRF-merges dual-path results.
  *
  * Native hybrid (TCVDB dense+sparse) is attempted before any client-embed
  * gate so NoopEmbeddingService does not block server-side search.
