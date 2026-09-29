@@ -9,6 +9,16 @@
 
 ---
 
+## [Unreleased]
+
+### Document Wiki creation and asset registration (#1288)
+
+- **What changed**: Explain Panel creation, KS/Core registration boundaries, upload and ingestion order.
+- **Why**: A KS wiki alone is not a registered Core asset for Panel access.
+- **Impact**: Documentation only; does not change ingestion or metadata persistence.
+- **Verification**: Checked routes, headers, response fields and links against source; shell/JSON examples parse. No live service test.
+- **Files**: MemoryKnowledge/README.md.
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）
