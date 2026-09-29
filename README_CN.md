@@ -387,6 +387,21 @@ memory:
 ```
 
 
+### 4. Cursor IDE（本地，Linux / macOS）
+
+独立 **Cursor IDE** 包使用 MemoryCore v3 严格隔离。Hooks 将完整轮次写入
+pending JSONL，detached worker 调用 v3 SDK，并暴露 L1/L0 检索和 L2 场景
+读取三个只读 MCP 工具。
+
+```bash
+cd MemoryCore/cursor-plugin
+npm install && npm run build
+node dist/src/entry.js install --scope project   # 或 --scope user
+```
+
+完整说明：[`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md)。
+
+
 ## 🔒 Gateway 安全配置（可选）
 
 Hermes Gateway 监听 `:8420`，对外提供 capture / search / recall 的 HTTP 接口。新增两个开关，可以把它从“开放的本地 sidecar”切换为“需要鉴权的网络服务”。**两个开关默认都关闭，已有部署的行为不变。**
@@ -539,6 +554,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | 文档 | 内容 |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
+| [`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md) | Cursor IDE v3 适配（Hooks / MCP / 安装） |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 
