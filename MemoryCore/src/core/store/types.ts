@@ -366,6 +366,19 @@ export interface L0PaginatedResult {
   total: number;
 }
 
+/** One session row for the v2 /conversation/sessions listing (GROUP BY session). */
+export interface L0SessionSummary {
+  session_key: string;
+  session_id: string;
+  team_id: string;
+  user_id: string;
+  agent_id: string;
+  /** Messages recorded for this session within the filter window. */
+  message_count: number;
+  first_active: number;
+  last_active: number;
+}
+
 /** Filter for v2 L1 paginated query (`/atomic/query`). */
 export interface L1CountFilter {
   /** Filter by memory type (episodic/persona/instruction). */
@@ -703,6 +716,12 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * plus the total count of matching rows.
    */
   queryL0Paginated?(filter: L0PaginatedFilter): MaybePromise<L0PaginatedResult>;
+
+  /**
+   * Session-level listing (GROUP BY session_key, session_id) for v2 API
+   * `/conversation/sessions` — ops/UI 用，免直读 jsonl 绕行。
+   */
+  listL0Sessions?(filter?: L0CountFilter & { limit?: number }): MaybePromise<L0SessionSummary[]>;
 
   /**
    * L1 paginated query for v2 API `/atomic/query`.
