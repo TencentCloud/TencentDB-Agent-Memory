@@ -18,6 +18,11 @@ import type { IngestProgress, ProgressFn } from "./engines/wiki/manager.js";
 const TAG = "[callback]";
 const RETRY_DELAY_MS = 1000;
 
+/** 与 Panel 现有回调鉴权使用同一配置；不改变模型或知识加工方式。 */
+function callbackHeaders(token: string): Record<string, string> {
+  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+}
+
 export interface StatusCallbackPayload {
   knowledge_id: string;
   /** Owning tenant (001 multi-tenancy) = x-tdai-service-id; lets TMC scope the status update. */
@@ -43,6 +48,15 @@ export interface IngestProgressCallback {
 
 export interface CallbackConfig {
   tmcCallbackUrl: string;
+  callbackToken?: string;
+}
+
+function resolveCallbackConfig(config: CallbackConfig | string): CallbackConfig {
+  return typeof config === "string" ? { tmcCallbackUrl: config } : config;
+}
+
+function callbackToken(config: CallbackConfig): string {
+  return (config.callbackToken ?? process.env.KNOWLEDGE_CALLBACK_TOKEN ?? "").trim();
 }
 
 /**
@@ -52,9 +66,14 @@ export interface CallbackConfig {
 export async function callbackTMC(
   payload: StatusCallbackPayload,
   config: CallbackConfig,
-): Promise<void> {
+): Promise<boolean> {
   if (!config.tmcCallbackUrl) {
-    return; // no-op when unconfigured
+    return false;
+  }
+  const token = callbackToken(config);
+  if (!token) {
+    console.error(`${TAG} callback token is not configured`);
+    return false;
   }
 
   const url = `${config.tmcCallbackUrl.replace(/\/$/, "")}/api/v1/knowledge/status-callback`;
@@ -64,12 +83,12 @@ export async function callbackTMC(
     try {
       const resp = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: callbackHeaders(token),
         body,
         signal: AbortSignal.timeout(5000),
       });
       if (resp.ok) {
-        return;
+        return true;
       }
       const respText = await resp.text().catch(() => "(unreadable)");
       console.warn(`${TAG} TMC callback HTTP ${resp.status} for ${payload.knowledge_id} (attempt ${attempt + 1}): ${respText.slice(0, 500)}`);
@@ -81,23 +100,32 @@ export async function callbackTMC(
     }
   }
   console.error(`${TAG} TMC callback gave up after 2 attempts for ${payload.knowledge_id} (type=${payload.type}, status=${payload.status})`);
+  return false;
 }
 
 /**
  * Fire-and-forget progress callback during wiki ingest.
  * Failures are logged as warn only — never block the ingest pipeline.
  */
-export function sendProgressCallback(tmcCallbackUrl: string, payload: IngestProgressCallback): void {
-  if (!tmcCallbackUrl) return;
+export function sendProgressCallback(configOrUrl: CallbackConfig | string, payload: IngestProgressCallback): boolean {
+  const config = resolveCallbackConfig(configOrUrl);
+  const tmcCallbackUrl = config.tmcCallbackUrl;
+  if (!tmcCallbackUrl) return false;
+  const token = callbackToken(config);
+  if (!token) {
+    console.error(`${TAG} callback token is not configured`);
+    return false;
+  }
   const url = `${tmcCallbackUrl.replace(/\/$/, "")}/api/v1/knowledge/status-callback`;
   void fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: callbackHeaders(token),
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(5000),
   }).catch((err) => {
     console.warn(`${TAG} progress callback failed for ${payload.wiki_id}:`, err);
   });
+  return true;
 }
 
 /** Build an onProgress fn that POSTs ingest_progress to TMC/Panel. */

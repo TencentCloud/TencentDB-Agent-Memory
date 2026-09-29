@@ -23,7 +23,7 @@ import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
  * 该黑名单可通过环境变量 KNOWLEDGE_SSRF_CHECK=off 关闭（见 GitSourceFetcher 构造）。
  */
 const PRIVATE_ADDR_RE =
-  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|localhost$|::1$|fe80:)/i;
+  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|localhost\.?$|(?:.+\.)localhost\.?$|::1$|fe80:|fc[0-9a-f]{2}:|fd[0-9a-f]{2}:)/i;
 
 /**
  * 读取 SSRF 私网黑名单开关。默认开启；
@@ -115,6 +115,13 @@ export class GitSourceFetcher implements ISourceFetcher {
   }
 
   private isPrivateAddress(host: string): boolean {
-    return PRIVATE_ADDR_RE.test(host);
+    const normalized = host.replace(/^\[|\]$/g, "").toLowerCase();
+    if (PRIVATE_ADDR_RE.test(normalized)) return true;
+    const mappedIpv4 = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (!mappedIpv4) return false;
+    const high = parseInt(mappedIpv4[1]!, 16);
+    const low = parseInt(mappedIpv4[2]!, 16);
+    const ipv4 = `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+    return PRIVATE_ADDR_RE.test(ipv4);
   }
 }

@@ -70,6 +70,7 @@ const SKIP_REQUEST_HEADERS = new Set([
   "connection",
   // 内部身份头只给 proxy/session-init 使用，不能透传给上游模型服务。
   "x-tdai-user-key",
+  "x-tdai-user-token",
 ]);
 
 const SKIP_RESPONSE_HEADERS = new Set([
@@ -748,7 +749,7 @@ export async function handleAnthropicMessages(
   let injectedSkipped = !conversationId;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped}`);
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId ? 'present' : 'none'} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped}`);
   // CC 分流：SIDEQUERY 完全跳过 session-init（独立小请求无对话概念）。
   //          FORK 允许走 L2b recovery 复用 MAIN 已建的 session，但不进 form 交互路径
   //          （借用 MAIN 的 sessionInfo，见下方的 kind === 'fork' 分支保护）。

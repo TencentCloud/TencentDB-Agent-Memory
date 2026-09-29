@@ -205,6 +205,8 @@ export function flattenMessagesForOpik(messages: unknown[]): unknown[] {
 }
 
 const SKIP_REQUEST_HEADERS = new Set([
+  "x-tdai-user-key",
+  "x-tdai-user-token",
   "host",
   "content-length",
   "transfer-encoding",
@@ -853,7 +855,7 @@ export async function handleChatCompletions(
   let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId ? 'present' : 'none'} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");

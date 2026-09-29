@@ -64,6 +64,7 @@ import {
 
 const SKIP_REQUEST_HEADERS = new Set([
   "host",
+  "x-tdai-user-token",
   "content-length",
   "transfer-encoding",
   "connection",
