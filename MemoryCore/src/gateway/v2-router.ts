@@ -48,6 +48,7 @@ import {
   scenarioCountRequestSchema,
   coreWriteRequestSchema,
   coreCountRequestSchema,
+  coreDeleteRequestSchema,
   teamCreateRequestSchema,
   teamGetRequestSchema,
   teamUpdateRequestSchema,
@@ -86,6 +87,7 @@ import {
   type ScenarioWriteData,
   type CoreFile,
   type CoreWriteData,
+  type CoreDeleteData,
   type BatchDeleteResult,
   type TeamData,
   type UserData,
@@ -169,6 +171,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/core/read",
   "/core/write",
   "/core/count",
+  "/core/delete",
 ]);
 
 /**
@@ -429,6 +432,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/core/read": handleCoreRead,
   "/core/write": handleCoreWrite,
   "/core/count": handleCoreCount,
+  "/core/delete": handleCoreDelete,
 };
 
 const routeTable: Record<string, RouteHandler> = {
@@ -2137,6 +2141,43 @@ async function handleCoreWrite(body: unknown, _auth: V2AuthContext, requestId: s
   }, requestId);
 }
 
+async function handleCoreDelete(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = coreDeleteRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+
+  const baseStorage = deps.getStorage();
+  if (!baseStorage) return errorEnvelope(503, "Storage not available", requestId);
+  const storage = scopedProfileStorage(baseStorage, deps.requestIsolation);
+
+  // Genuine miss (no persona for this triplet) → 200 { deleted_count: 0 },
+  // matching the sibling delete endpoints. Only the caller-scoped persona is
+  // removed; other triplets are isolated by scopedProfileStorage.
+  const content = await storage.readFile(StoragePaths.persona);
+  if (content === null) {
+    return successEnvelope<CoreDeleteData>({ deleted_count: 0, paths: [] }, requestId);
+  }
+
+  await storage.unlink(StoragePaths.persona);
+
+  // Remove the L3 profile from the VDB (best-effort) using the same stable id
+  // that core/write syncs under.
+  const store = deps.getStore();
+  await deleteProfilesFromVdb(store, "l3", [StoragePaths.persona], deps.logger, deps.requestIsolation);
+
+  // 审计：L3 delete — record_id 与 core/write 一致，用 persona 的 storage path
+  await recordAudit(store, {
+    record_id: StoragePaths.persona,
+    layer: "L3",
+    action: "delete",
+    iso: deps.requestIsolation,
+    version: 0,
+    requestId,
+    logger: deps.logger,
+  });
+
+  return successEnvelope<CoreDeleteData>({ deleted_count: 1, paths: [StoragePaths.persona] }, requestId);
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // /v2/pipeline/status — standalone-only introspection.
 // Returns per-L-type queue/in-flight stats by reading the in-memory task
@@ -2293,6 +2334,7 @@ export {
   handleCoreRead,
   handleCoreWrite,
   handleCoreCount,
+  handleCoreDelete,
   handleTeamCreate,
   handleTeamGet,
   handleTeamUpdate,
