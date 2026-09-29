@@ -16,6 +16,7 @@ import type { ConversationMessage } from "../conversation/l0-recorder.js";
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryPromptMode } from "../prompts/l1-extraction.js";
 import { batchDedup } from "./l1-dedup.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
+import { sanitizeUserAttribution } from "./attribution.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse, shouldExtractL1 } from "../../utils/sanitize.js";
@@ -117,6 +118,11 @@ export async function extractL1Memories(params: {
     promptMode?: MemoryPromptMode;
     /** Resolved custom strategy. Undefined preserves the current system prompt exactly. */
     memoryPrompt?: ResolvedMemoryPrompt;
+    /**
+     * 用户身份白名单：只有这些姓名允许出现在「用户（X）」的括号里。
+     * 其余（第三方姓名/角色标签/路径数字/时间状语…）入库前一律归一为「用户」。
+     */
+    userIdentityNames?: string[];
     /** Vector store for cosine similarity candidate recall */
     vectorStore?: IMemoryStore;
     /** Embedding service for computing query vectors */
@@ -218,6 +224,8 @@ export async function extractL1Memories(params: {
 
   // Flatten all memories across scenes
   const allExtracted: ExtractedMemory[] = [];
+  /** 本轮被归一掉的伪姓名标签（仅日志审计用） */
+  const attributionDrops = new Set<string>();
   const sceneNames: string[] = [];
 
   for (const scene of scenes) {
@@ -228,8 +236,13 @@ export async function extractL1Memories(params: {
         logger?.warn?.(`${TAG} Skipping memory with invalid type "${mem.type}"`);
         continue;
       }
+      // 确定性归属护栏：提示词只约束第三方"姓名"，实测模型仍把角色标签/路径
+      // 数字/时间状语塞进「用户（X）」的姓名括号（如「用户（导师）」「用户（28951）」）。
+      // 入库前统一归一：仅配置白名单内的姓名可保留，其余归一为「用户」。
+      const sanitized = sanitizeUserAttribution(mem.content, options.userIdentityNames);
+      for (const label of sanitized.dropped) attributionDrops.add(label);
       allExtracted.push({
-        content: mem.content,
+        content: sanitized.text,
         type: memType,
         priority: typeof mem.priority === "number" ? mem.priority : 50,
         source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
@@ -237,6 +250,14 @@ export async function extractL1Memories(params: {
         scene_name: scene.scene_name,
       });
     }
+  }
+
+  if (attributionDrops.size > 0) {
+    logger?.warn?.(
+      `${TAG} [attribution] 归一 ${attributionDrops.size} 类伪姓名标签 → 「用户」：` +
+      `${[...attributionDrops].map((l) => `「${l}」`).join("、")}` +
+      `（白名单: ${(options.userIdentityNames ?? []).join("/") || "(空)"}）`,
+    );
   }
 
   logger?.debug?.(`${TAG} Total extracted memories: ${allExtracted.length} across ${scenes.length} scene(s)`);
