@@ -19,7 +19,6 @@ import { join } from "node:path";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import zlib from "node:zlib";
-import dayjs from "dayjs";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig, parseBrokers } from "./config.js";
@@ -132,35 +131,10 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import type { StatefulPipelineManager } from "../utils/stateful-pipeline-manager.js";
 import type { PipelineLogger } from "../utils/pipeline-factory.js";
 import { parsePipelineTimerMember } from "../core/state/timer-member.js";
+import { createConsoleLogger } from "./console-logger.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
-
-// ============================
-// Console logger (for standalone gateway — no OpenClaw logger available)
-// ============================
-
-/**
- * Format current time as ISO 8601 in the system's local timezone.
- *
- * Example: "2026-05-21T14:47:03.512+08:00"
- *
- * dayjs's `Z` token emits the local UTC offset (not a literal 'Z'), so the
- * wall-clock matches what the operator sees in `tmux` / `tail -f` while the
- * line stays ISO 8601 compliant and round-trippable.
- */
-function nowLocalIso(): string {
-  return dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ");
-}
-
-function createConsoleLogger(): Logger {
-  return {
-    debug: (msg: string) => console.debug(`${nowLocalIso()} DEBUG ${TAG} ${msg}`),
-    info: (msg: string) => console.info(`${nowLocalIso()} INFO  ${TAG} ${msg}`),
-    warn: (msg: string) => console.warn(`${nowLocalIso()} WARN  ${TAG} ${msg}`),
-    error: (msg: string) => console.error(`${nowLocalIso()} ERROR ${TAG} ${msg}`),
-  };
-}
 
 // ============================
 // Request body parser
@@ -345,7 +319,7 @@ export class TdaiGateway {
 
   constructor(configOverrides?: GatewayConfigOverrides) {
     this.config = loadGatewayConfig(configOverrides);
-    this.logger = createConsoleLogger();
+    this.logger = createConsoleLogger(TAG);
 
     // Create host adapter
     const adapter = new StandaloneHostAdapter({
