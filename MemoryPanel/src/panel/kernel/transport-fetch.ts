@@ -89,6 +89,8 @@ export interface MetaFetchConfig {
   logger?: Logger;
   /** 透传为 x-request-id；缺省则生成 UUID。 */
   requestId?: string;
+  /** 透传为 x-tdai-reviewer-id（审阅操作者身份）。 */
+  reviewerId?: string;
 }
 
 interface RawEnvelope<T> {
@@ -147,6 +149,7 @@ export async function executeMetaFetch<T>(
     };
     if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
     if (cfg.userKey) headers[META_HEADER_USER_KEY] = cfg.userKey;
+    if (cfg.reviewerId) headers['x-tdai-reviewer-id'] = cfg.reviewerId;
     const resp = await fetch(`${base}${path}`, {
       method,
       headers,

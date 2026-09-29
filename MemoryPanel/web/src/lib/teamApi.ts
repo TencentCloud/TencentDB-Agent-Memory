@@ -90,6 +90,20 @@ export {
   type ChatMemorySearchHit,
 } from './api/chat-memory';
 
+// ── Memory Review（session 变更集 + 撤销 + 收件箱/血统） ──
+export {
+  memoryReviewApi,
+  type MemoryDiffChange,
+  type MemoryDiffData,
+  type MemoryRevertData,
+  type MemoryRevertBatchData,
+  type MemoryRevertResultItem,
+  type MemoryHistoryEvent,
+  type MemoryHistoryData,
+  type MemoryReviewInboxSession,
+  type MemoryReviewInboxData,
+} from './api/memory-review';
+
 // ── 共享类型（从 types.ts 透传） ──
 export type {
   MetaEnvelope,
