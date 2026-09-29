@@ -355,22 +355,13 @@ export class TdaiGateway {
       platform: "gateway",
     });
 
-    // Create core
-    //
-    // ── Skill 资产联动钩子（standalone/OpenClaw 与 service 模式对齐） ──
-    // service 模式下 gateway/server.ts:resolveSkillCore 会为每个 instanceId 单独
-    // 构造 per-instance SkillCore 并挂同名钩子；tdai-core 里的这份 SkillCore 走
-    // standalone / OpenClaw 内嵌 / 未走 resolveSkillCore 的旁路。两者互不干扰
-    // （每个 SkillCore 只调它自己被挂上的钩子），ensureSkillAsset / deleteAssets
-    // 幂等，即使叠加触发也无副作用。详见 SkillAssetHooks doc。
-    //
-    // standalone 模式下 instanceId 固定为 "default"（见 start() 里的
-    // `this.config.instanceId ?? "default"`），闭包这里直接拿 default 即可；
-    // service 模式下这份 SkillCore 事实上不会被 v3/skill/* 走到，闭包的 default
-    // 只是占位（不 fire 就没影响）。
-    const gatewayRef = this;
-    const skillAssetInstanceId = this.config.instanceId
-      ?? (this.config.deployMode === "service" ? "__unset__" : "default");
+    // Create core. Its standalone SkillCore is shared by every HTTP request,
+    // so it cannot safely own asset lifecycle hooks: the hooks do not receive
+    // x-tdai-service-id and would otherwise write every request to one fixed
+    // metadata instance. Skill handlers register and remove assets through
+    // getMetadataService(auth.serviceId), which preserves request isolation.
+    // Service-mode per-instance SkillCores keep their own correctly scoped
+    // hooks in resolveSkillCoreForInstance().
     // Shared permit pool — memory PipelineWorker 用。skill 侧走
     // wireConversationAdd 内的 SkillConversationExtractWorker (agent 级串行 lock),
     // 不再使用信号量做并发上限。
@@ -380,47 +371,6 @@ export class TdaiGateway {
       hostAdapter: adapter,
       config: this.config.memory,
       sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
-      skillAssetHooks: {
-        // v1 首创前置 await：抛异常 = create 失败（避免「skill 已落库但 asset
-        // 缺失」的静默不一致）。standalone 模式下唯一的登记入口除了 handler 层的
-        // handleCreate 兜底之外就是这里 —— 无论谁调 SkillCore.create 都能触发。
-        onSkillCreated: async ({ skill_id, team_id, agent_id, name }) => {
-          if (!team_id || !agent_id) return; // 无租户上下文 → 跳过（OpenClaw local scope 等）
-          const metaSvc = await gatewayRef.ensureMetadataService(skillAssetInstanceId);
-          await metaSvc.ensureSkillAsset({ skill_id, team_id, agent_id, name });
-        },
-        // 读时自愈：fire-and-forget，异常吞掉。补历史 / 迁移 / 误删产生的孤儿 skill。
-        onSkillAccessed: (skill) => {
-          if (!skill.team_id || !skill.owner_agent_id) return;
-          gatewayRef
-            .ensureMetadataService(skillAssetInstanceId)
-            .then((svc) => svc.ensureSkillAsset({
-              skill_id: skill.skill_id,
-              team_id: skill.team_id!,
-              agent_id: skill.owner_agent_id!,
-              name: skill.name,
-            }))
-            .catch((err: unknown) => {
-              gatewayRef.logger.warn(
-                `[skill-asset-sync] ensureSkillAsset(access) failed for ${skill.skill_id}: `
-                  + (err instanceof Error ? err.message : String(err)),
-              );
-            });
-        },
-        // 归档级联：fire-and-forget，异常吞掉。二次 delete 会重触发钩子，最终收敛。
-        onSkillArchived: ({ skill_id, team_id }) => {
-          gatewayRef
-            .ensureMetadataService(skillAssetInstanceId)
-            .then((svc) => svc.deleteAssets([skill_id]))
-            .catch((err: unknown) => {
-              gatewayRef.logger.warn(
-                `[skill-asset-sync] deleteAssets(archive) failed for ${skill_id}`
-                  + ` (team=${team_id ?? "-"}): `
-                  + (err instanceof Error ? err.message : String(err)),
-              );
-            });
-        },
-      },
     });
   }
 
