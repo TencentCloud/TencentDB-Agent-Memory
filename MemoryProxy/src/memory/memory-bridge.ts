@@ -375,9 +375,14 @@ export function createMemoryBridgeHandler(
     };
 
     const ctxs = await resolveMemoryCtxs(config, ids, sessionKey);
-    // task_id 优先级：caller 显式传 > session 注入。session_id 保持"仅 caller 显式传"，
-    // 因为 search 类希望默认跨 session（agent 维度）；task_id 属于身份维度，仍应强制。
-    const effectiveTaskId = modelTaskId ?? ids.task_id;
+    // task_id 优先级：caller 显式传 > session 注入（仅非 search 类）。
+    // search 类（atomic/search, conversation/search）默认不注入 task_id：
+    // Core 在 task_id 缺省时不做任务过滤（tcvdb.ts: taskId !== undefined 才过滤），
+    // 因此缺省 = agent 维度全量检索，跨 no-task/default 等 task bucket。
+    // session_id 保持"仅 caller 显式传"，因为 search 类希望默认跨 session。
+    const effectiveTaskId = MULTI_SEARCH_SUBPATHS.has(sub)
+      ? modelTaskId
+      : (modelTaskId ?? ids.task_id);
     const makeOutbound = (target: FixedAssetCtx): Record<string, unknown> => ({
       ...inboundBody,
       user_id: target.userId,
