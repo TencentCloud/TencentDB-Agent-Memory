@@ -29,6 +29,7 @@ import { RedisBindingRepo } from "../db/binding-repo.js";
 import { getRedisClient } from "../db/redis-client.js";
 import { VersionPinRepo } from "./version-pin-repo.js";
 import { KvVersionPinRepo } from "./kv-version-pin-repo.js";
+import { resolveSessionFromL1 } from "../session/session-key-candidates.js";
 import { getProxyStorage } from "../storage/factory.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { ProxyConfig } from "../types.js";
@@ -292,17 +293,11 @@ function bindingToIdFields(
  * 恢复而不 401。
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
-  for (const k of candidates) {
-    const s = getSessionStore().get(k);
-    if (s) {
-      const fields = stateToIdFields(s, k);
-      if (fields) return fields;
-    }
-  }
-  return null;
+  return resolveSessionFromL1(
+    sessionId,
+    (key) => getSessionStore().get(key),
+    stateToIdFields,
+  );
 }
 
 /**
