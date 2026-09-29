@@ -17,6 +17,7 @@ import { formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryProm
 import { batchDedup } from "./l1-dedup.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
+import { resolveSourceTimestamps } from "./l1-timestamps.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse, shouldExtractL1 } from "../../utils/sanitize.js";
 import type { IMemoryStore } from "../store/types.js";
@@ -235,6 +236,10 @@ export async function extractL1Memories(params: {
         source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
         metadata: mem.metadata ?? {},
         scene_name: scene.scene_name,
+        timestamps: resolveSourceTimestamps(
+          Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
+          messages,
+        ),
       });
     }
   }
