@@ -17,7 +17,7 @@ export interface SkillConfigInput {
   enabled?: boolean;
 
   /** Override for skill metadata + vector store backend. Falls back to outer storeBackend, then 'sqlite'. */
-  storeBackend?: "sqlite" | "tcvdb" | "mongodb";
+  storeBackend?: "sqlite" | "tcvdb" | "mongodb" | "postgres";
 
   /** Override for skill content (SKILL.md + resources) backend. Falls back to env probe → 'local'. */
   contentBackend?: "local" | "cos";
@@ -100,7 +100,7 @@ export interface SkillConfigInput {
 
 export interface ResolvedSkillConfig {
   enabled: true; // when this object exists, skill is enabled
-  storeBackend: "sqlite" | "tcvdb" | "mongodb";
+  storeBackend: "sqlite" | "tcvdb" | "mongodb" | "postgres";
   contentBackend: "local" | "cos";
 
   routing: {
@@ -189,7 +189,7 @@ export interface SkillDegradation {
  */
 export interface SkillEnvProbe {
   /** Outer storeBackend from MemoryTdaiConfig. */
-  outerStoreBackend?: "sqlite" | "tcvdb" | "mongodb";
+  outerStoreBackend?: "sqlite" | "tcvdb" | "mongodb" | "postgres";
 
   /** TCVDB credentials present (url + apiKey + database all set). */
   hasTcvdbCredentials: boolean;

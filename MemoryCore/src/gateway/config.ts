@@ -418,6 +418,7 @@ export interface GatewayMetadataStoreConfig {
   sqliteBaseDir?: string;
   mongoUri?: string;
   mongoTransactions?: boolean;
+  postgresUri?: string;
   storeCacheMaxInstances?: number;
   /** 元数据库名前缀，默认 tdai_metadata；库名 {prefix}_{instance_id} */
   mongoDbPrefix?: string;
@@ -849,12 +850,13 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
   const memorySystemUserYaml = obj(systemUserYaml, "memory");
   const metadataStore: GatewayMetadataStoreConfig | undefined =
     str(storeYaml, "sqliteBaseDir") || str(storeYaml, "mongoUri") ||
-    str(storeYaml, "mongoDbPrefix") ||
+    str(storeYaml, "postgresUri") || str(storeYaml, "mongoDbPrefix") ||
     bool(storeYaml, "mongoTransactions") !== undefined || num(storeYaml, "storeCacheMaxInstances") !== undefined
       ? {
           sqliteBaseDir: str(storeYaml, "sqliteBaseDir"),
           mongoUri: str(storeYaml, "mongoUri"),
           mongoTransactions: bool(storeYaml, "mongoTransactions") ?? true,
+          postgresUri: str(storeYaml, "postgresUri"),
           storeCacheMaxInstances: num(storeYaml, "storeCacheMaxInstances"),
           mongoDbPrefix: str(storeYaml, "mongoDbPrefix"),
         }
