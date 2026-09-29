@@ -23,6 +23,12 @@ import { defaultAdapter } from "./default.js";
 
 export type { AgentAdapter, AgentKind, RequestKind } from "./types.js";
 
+/** Web Init 资格由客户端接入层决定，通用会话流程不解释客户端语义。 */
+export function supportsWebSessionInit(agentSource: string): boolean {
+  // 当前仅验证了 OpenClaw 原生会话桥接路径。
+  return agentSource === "openclaw";
+}
+
 export function resolveAgentAdapter(agentSource: string): AgentAdapter {
   switch (agentSource) {
     case "claude-code":

@@ -947,9 +947,9 @@ export async function handleWorkbuddyEndpoint(
       const memCmd = parseCommandFromText(userText);
       if (memCmd) {
         const { getSessionStore } = await import("./session/store.js");
-        const store = getSessionStore();
+        const store = getSessionStore().forIdentity({ spaceId, userId: userId || "anonymous", agentSource: "codex", sessionId: sessionKey });
         const compositeKey = `codex:${sessionKey}`;
-        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+        store.bind(compositeKey, { userId: userId || "anonymous", agentSource: "codex", sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
@@ -980,8 +980,7 @@ export async function handleWorkbuddyEndpoint(
 
         const resetEpoch = Date.now();
         await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
-        const bindingRepo = store.getBindingRepo();
-        if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
+        await store.deleteOwnedBinding().catch(() => {});
         console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
       }
     }
@@ -993,7 +992,7 @@ export async function handleWorkbuddyEndpoint(
         "./session/index.js"
       );
       const { getMetadataClient } = await import("./meta/client.js");
-      const store = getSessionStore();
+      const store = getSessionStore().forIdentity({ spaceId, userId: userId || "anonymous", agentSource: "codex", sessionId: sessionKey });
       // kernel 侧鉴权的 x-tdai-user-key 直接用客户端请求 bearer（与 codexHandler / anthropicHandler 对齐）。
       // WorkBuddy / Codex / Claude Code 桌面客户端携带的 bearer 就是用户 key，kernel 能识别；
       // 无需 config.tdai.apiKey 兜底（否则 config 里的 "local" 会覆盖真实用户 key，导致 401）。

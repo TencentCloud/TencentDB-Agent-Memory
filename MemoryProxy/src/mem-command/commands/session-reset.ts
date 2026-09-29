@@ -25,7 +25,7 @@ import type { SessionInitState } from "../../session/types.js";
 
 export async function executeSessionReset(ctx: MemCommandContext): Promise<MemCommandResult> {
   const requestId = `mem-cmd-${Date.now()}`;
-  const store = getSessionStore();
+  const store = getSessionStore().forIdentity({ spaceId: ctx.spaceId, userId: ctx.userId || "anonymous", agentSource: ctx.agentSource, sessionId: ctx.sessionKey });
   const compositeKey = `${ctx.agentSource}:${ctx.sessionKey}`;
 
   // 记录 old 状态用于观测(埋点在 Commit 4 追加,现在只在返回值 data 里带上)
@@ -50,7 +50,7 @@ export async function executeSessionReset(ctx: MemCommandContext): Promise<MemCo
     keyId: ctx.sessionKey,
     startedAt: resetEpoch,
     attemptCount: 0,
-    userId: ctx.userId,
+    userId: ctx.userId || "anonymous",
     resetEpoch,
     resetFlow: true,
   };
@@ -59,7 +59,7 @@ export async function executeSessionReset(ctx: MemCommandContext): Promise<MemCo
   // 完成 bind,但 pre-hook 前置拦截时 store 里未必已经 bind 过 —— 显式补一次
   // 保证 store.set 的 L2a write-through 能命中正确 namespace。
   store.bind(compositeKey, {
-    userId: ctx.userId,
+    userId: ctx.userId || "anonymous",
     agentSource: ctx.agentSource,
     sessionId: ctx.sessionKey,
     spaceId: ctx.spaceId,
@@ -74,7 +74,7 @@ export async function executeSessionReset(ctx: MemCommandContext): Promise<MemCo
   const bindingRepo = store.getBindingRepo();
   if (bindingRepo) {
     try {
-      await bindingRepo.deleteBinding(ctx.spaceId, ctx.sessionKey);
+      await store.deleteOwnedBinding();
     } catch (err) {
       console.warn(
         `[mem-command:session-reset] deleteBinding failed for ${compositeKey}: ` +

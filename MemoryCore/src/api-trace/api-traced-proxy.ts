@@ -6,10 +6,21 @@ import type { IMetadataStore } from "../metadata/store/interface.js";
 import { getApiRequestContext } from "./api-request-context.js";
 import { getApiTraceConfig, isApiTraceActive } from "./api-log-config.js";
 import { logApiTrace } from "./api-trace-logger.js";
-import { sanitizeApiPayload } from "./api-sanitize.js";
+import {
+  summarizeApiError,
+  sanitizeApiField,
+  sanitizeApiPayload,
+} from "./api-sanitize.js";
 
 const SERVICE_SKIP = new Set(["constructor", "scopedInstanceId"]);
 const STORE_SKIP = new Set(["constructor", "init", "close"]);
+// 首参为裸 user key 的方法白名单；新增同类方法时必须同步更新此集合及测试。
+const SENSITIVE_POSITIONAL_ARG0_OPS = new Set([
+  "getUserByKey",
+  "isConfiguredMemorySystemUserKey",
+  "verifyAuth",
+  "verifyAuthForCaller",
+]);
 
 function summarizeValue(value: unknown, maxFieldChars: number): string {
   if (value === null || value === undefined) return String(value);
@@ -23,16 +34,22 @@ function summarizeValue(value: unknown, maxFieldChars: number): string {
   }
 }
 
-function summarizeArgs(args: unknown[], maxFieldChars: number): Record<string, string | number | boolean> {
+function summarizeArgs(
+  op: string,
+  args: unknown[],
+  maxFieldChars: number,
+): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
   if (args.length > 0 && typeof args[0] === "object" && args[0] !== null && !Array.isArray(args[0])) {
-    for (const [k, v] of Object.entries(args[0] as Record<string, unknown>).slice(0, 12)) {
+    const sanitized = sanitizeApiPayload(args[0], maxFieldChars) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(sanitized).slice(0, 12)) {
       if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
         out[k] = typeof v === "string" ? summarizeValue(v, maxFieldChars) : v;
       }
     }
   } else if (args.length > 0) {
-    out.arg0 = summarizeValue(args[0], maxFieldChars);
+    const field = SENSITIVE_POSITIONAL_ARG0_OPS.has(op) ? "user_key" : "arg0";
+    out.arg0 = summarizeValue(sanitizeApiField(field, args[0], maxFieldChars), maxFieldChars);
   }
   return out;
 }
@@ -70,7 +87,7 @@ function wrapAsyncMethod(
       logApiTrace("info", `${eventPrefix}.enter`, {
         source_file: sourceFile,
         source_op: op,
-        ...summarizeArgs(args, maxField),
+        ...summarizeArgs(op, args, maxField),
       });
     }
 
@@ -90,7 +107,7 @@ function wrapAsyncMethod(
     };
 
     const onError = (err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = summarizeApiError(err);
       logApiTrace(
         "error",
         `${eventPrefix}.error`,
@@ -100,9 +117,8 @@ function wrapAsyncMethod(
           duration_ms: Date.now() - started,
           success: false,
           error_message: message,
-          ...summarizeArgs(args, maxField),
+          ...summarizeArgs(op, args, maxField),
         },
-        { err: err instanceof Error ? err : undefined },
       );
       throw err;
     };

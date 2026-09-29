@@ -20,6 +20,7 @@ import { getMetadataClient } from "../meta/client.js";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface RefreshInput {
+  userId?: string;
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -54,6 +55,7 @@ async function refreshAgentTaskDetail(
   config: ProxyConfig,
   spaceIdFromCaller: string,
   callerUserKey: string | undefined,
+  store: ReturnType<typeof getSessionStore>,
 ): Promise<{ agentRefreshed: boolean; taskRefreshed: boolean }> {
   const sessionInfo = state.sessionInfo;
   if (!sessionInfo) return { agentRefreshed: false, taskRefreshed: false };
@@ -124,7 +126,7 @@ async function refreshAgentTaskDetail(
       taskDetail: nextTask ?? null,
     };
     try {
-      await getSessionStore().set(compositeKey, nextState);
+      await store.set(compositeKey, nextState);
     } catch (err) {
       console.warn(
         `[session-refresh] store.set failed for ${compositeKey}: ` +
@@ -156,10 +158,10 @@ export async function refreshSessionCache(input: RefreshInput): Promise<RefreshR
 
   // 从 SessionStore 取 session 状态
   const compositeKey = `${agentSource}:${sessionKey}`;
-  const store = getSessionStore();
-  const state: SessionInitState | undefined = store.get(compositeKey);
+  const store = getSessionStore().findSession(spaceId, sessionKey, agentSource, input.userId);
+  const state: SessionInitState | undefined = store?.get(compositeKey);
 
-  if (!state) {
+  if (!state || !store) {
     return {
       success: false, refreshed: [], skipped: [],
       agentRefreshed: false, taskRefreshed: false,
@@ -180,7 +182,7 @@ export async function refreshSessionCache(input: RefreshInput): Promise<RefreshR
   // Step 1: 尝试重拉 agent/task detail 并覆写 SessionStore。
   //         失败不阻断 hook 缓存刷新，只是最终返回值里 agentRefreshed/taskRefreshed 为 false。
   const { agentRefreshed, taskRefreshed } = await refreshAgentTaskDetail(
-    state, compositeKey, config, spaceId, callerUserKey,
+    state, compositeKey, config, spaceId, callerUserKey, store,
   );
 
   // Step 2: 用最新 state 里的 agent/task detail 构造 PrewarmInput。

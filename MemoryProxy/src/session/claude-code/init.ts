@@ -585,6 +585,7 @@ export async function handleSessionInit(
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
   const compositeKey = `claude-code:${sessionKey}`;
+  store = store.forIdentity({ spaceId, userId: userId || "anonymous", agentSource: "claude-code", sessionId: sessionKey });
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     return await handleSessionInitInner(
@@ -633,7 +634,7 @@ async function handleSessionInitInner(
   ) {
     const forced = config.debugForceIdentity;
     // Debug path only — real production sessions never reach here.
-    const forcedUserId = userId || "u_debug";
+    const forcedUserId = userId || store.getIdentity()!.userId;
     console.log(
       `[session-init:cc] session=${compositeKey} DEBUG bypass — force identity ` +
         `team=${forced.team_id} agent=${forced.agent_id} task=${forced.task_id ?? "-"} user=${forcedUserId}`,

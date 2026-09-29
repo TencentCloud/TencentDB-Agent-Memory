@@ -17,6 +17,7 @@ import type { SessionInitState } from "../session/types.js";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface ForceArchiveInput {
+  userId?: string;
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -59,8 +60,8 @@ export async function forceArchiveSkill(input: ForceArchiveInput): Promise<Force
 
   // 从 SessionStore 取 session 状态
   const compositeKey = `${agentSource}:${sessionKey}`;
-  const store = getSessionStore();
-  const state: SessionInitState | undefined = store.get(compositeKey);
+  const store = getSessionStore().findSession(spaceId, sessionKey, agentSource, input.userId);
+  const state: SessionInitState | undefined = store?.get(compositeKey);
 
   if (!state || !state.sessionInfo) {
     return { success: false, error: `Session not found: ${sessionKey}` };

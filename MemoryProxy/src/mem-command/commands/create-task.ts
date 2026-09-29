@@ -83,6 +83,7 @@ export async function executeCreateTask(ctx: MemCommandContext): Promise<MemComm
       agentSource: ctx.agentSource,
       config: ctx.config,
       spaceId: ctx.spaceId,
+      userId: ctx.userId || "anonymous",
     });
 
     if (result.noPending) {
@@ -128,6 +129,7 @@ export async function executeCreateTask(ctx: MemCommandContext): Promise<MemComm
       agentSource: ctx.agentSource,
       config: ctx.config,
       spaceId: ctx.spaceId,
+      userId: ctx.userId || "anonymous",
     });
     if (!result.success) {
       return finalize(
@@ -160,6 +162,7 @@ export async function executeCreateTask(ctx: MemCommandContext): Promise<MemComm
     agentSource: ctx.agentSource,
     config: ctx.config,
     spaceId: ctx.spaceId,
+    userId: ctx.userId || "anonymous",
     recentMessages,
     // 方案 D：taskDraft LLM 跟随主模型 —— 透传客户端当次 model / 上游 / apiKey
     // upstreamProtocol 独立于 ctx.protocol（后者只管响应渲染 SSE 骨架格式,

@@ -282,54 +282,6 @@ function bindingToIdFields(
   };
 }
 
-/**
- * L1: 先按 bare sessionId 试(handler.ts 存的 keyId 是 `${agentSource}:${sessionId}`,
- * bridge curl 拿不到 agentSource,所以按候选前缀顺序探)。
- *
- * ⚠️ 候选轮询是过渡期兼容:同 pod 内主对话链路建过 session, L1 Map 里的 key 带
- * agentSource 前缀,bare sessionId 命中不到。方案 B 拍平后 L2b binding 直接命中
- * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
- * 恢复而不 401。
- */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
-  for (const k of candidates) {
-    const s = getSessionStore().get(k);
-    if (s) {
-      const fields = stateToIdFields(s, k);
-      if (fields) return fields;
-    }
-  }
-  return null;
-}
-
-/**
- * L2 fallthrough —— 拍平后只吃 (spaceId, sessionId)。见
- * docs/design/2026-08-03-binding-flatten.md。
- *
- * 不再走 verifyUserKey + getOrRecover 那条 4 段路径。原因:
- *   1) bridge curl 模板没塞 Authorization: Bearer,verify 拿不到 userId
- *   2) 拍平后 binding.json 里已经存了 user_id/team_id/agent_id/agent_source/user_key,
- *      一次 GET 就够,不需要再补 kernel getAgent/getTask
- */
-async function loadSessionIdsL2(
-  bindingRepo: BindingRepo | null,
-  spaceId: string,
-  sessionId: string,
-): Promise<SessionIdFields | null> {
-  if (!bindingRepo) return null;
-  try {
-    const binding = await bindingRepo.getBinding(spaceId, sessionId);
-    if (!binding) return null;
-    return bindingToIdFields(binding, spaceId, sessionId);
-  } catch (err) {
-    console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
-    return null;
-  }
-}
-
 function envelope(code: number, message: string, httpStatus = 200) {
   return new Response(
     JSON.stringify({ code, message, request_id: `bridge-${Date.now()}` }),
@@ -512,10 +464,14 @@ export function createSkillBridgeHandler(
     const pinRepoInline = backing.pinRepo;
     const bindingRepoInline = backing.bindingRepo;
 
-    let ids = loadSessionIdsL1(sessionKey);
-    if (!ids && bindingRepoInline && spaceId) {
+    const resolved = await getSessionStore().findBridgeSession(spaceId, sessionKey, bindingRepoInline ?? undefined);
+    if (!resolved) {
+      return envelope(40101, `${TAG} ambiguous session identity`, 401);
+    }
+    let ids = resolved.l1 ? stateToIdFields(resolved.l1.state, resolved.l1.keyId) : null;
+    if (!ids && resolved.binding) {
       console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
-      ids = await loadSessionIdsL2(bindingRepoInline, spaceId, sessionKey);
+      ids = bindingToIdFields(resolved.binding, spaceId, resolved.sessionId);
     }
     if (!ids) {
       emitBridgeRejectTelemetry({

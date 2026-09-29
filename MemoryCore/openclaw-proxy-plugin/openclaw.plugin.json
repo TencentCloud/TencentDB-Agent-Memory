@@ -1,0 +1,13 @@
+{
+  "id": "memory-proxy-session-bridge",
+  "name": "MemoryProxy Session Bridge",
+  "version": "0.1.0",
+  "providers": ["memory-proxy"],
+  "description": "会话桥接插件（provider-only）— 将 OpenClaw 原生 session 映射为 MemoryProxy 的对话身份",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object"
+  }
+}

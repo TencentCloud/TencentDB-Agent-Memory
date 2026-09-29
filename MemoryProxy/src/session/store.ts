@@ -8,19 +8,11 @@
  *
  * See docs/design/2026-07-10-cos-ttl-nottl-split-plan.md §4.3.
  *
- * ── Identity binding ──────────────────────────────────────────────────────
- * Public API keeps a single `keyId: string` as the L1 map key
- * (historically `${agentSource}:${sessionKey}` from handler.ts). Repo calls
- * however now require `(userId, agentSource, sessionId)`. To avoid rippling
- * that tuple through every `store.set(...)` call site in the session-init
- * state machine, the store maintains a keyId → identity map (`identities`):
- * callers invoke `bind(keyId, identity)` **once** when they have identity in
- * hand, and subsequent `set` / `delete` / `getOrRecover` pull the identity
- * back out. When no identity has been bound (e.g. anonymous / systemUser
- * requests that never rendezvous with auth), repo writes silently no-op.
- *
- * `getOrRecover` also takes an explicit identity param — it's the primary
- * entry point on every turn, so binding-through-that-path is guaranteed.
+ * 身份边界：入口通过 forIdentity() 获取完整四元组限定的 Store。
+ * 视图只固定 identity；L1 与 recovery promise 由根 Store 按完整身份键持有，
+ * 因此跨 await 不重绑，也不需要缓存或回收视图对象。
+ * 状态机仍使用原 compositeKey，不改变外部会话 ID 或 SessionRepo schema。
+ * 未限定身份的内存读写不回退到任何已绑定身份。
  */
 
 import type { SessionInitState, SessionInitStatus, SessionInfo, AgentDetail, TaskDetail } from "./types.js";
@@ -29,6 +21,7 @@ import type { BindingRepo, SessionBinding } from "../db/binding-repo.js";
 import type { MetadataClient } from "../meta/client.js";
 import { isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
 import type { PresetIdentity } from "./preset.js";
+import { withPerKeyLock } from "../storage/per-key-mutex.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -47,7 +40,22 @@ export interface SessionIdentity {
 
 /** Extract spaceId from identity, defaulting to `""` for repo helpers. */
 function spaceOf(id: SessionIdentity): string {
-  return id.spaceId ?? "";
+  return id.spaceId === "_default" ? "" : id.spaceId ?? "";
+}
+
+export function sessionIdentityKey(identity: SessionIdentity): string {
+  return JSON.stringify([spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId]);
+}
+
+function ownsBinding(identity: SessionIdentity, binding: SessionBinding): boolean {
+  return binding.userId === identity.userId && binding.agentSource === identity.agentSource;
+}
+
+function matchesState(identity: SessionIdentity, state: SessionInitState): boolean {
+  return (!state.userId || state.userId === identity.userId)
+    && (!state.sessionInfo?.user_id || state.sessionInfo.user_id === identity.userId)
+    && (state.sessionInfo?.space_id === undefined
+      || spaceOf({ ...identity, spaceId: state.sessionInfo.space_id }) === spaceOf(identity));
 }
 
 /** Context passed to getOrRecover for recovery. */
@@ -66,12 +74,14 @@ export interface RecoveryContext {
 }
 
 export class SessionStore {
+  /** L1 状态按完整 identity 隔离；视图本身不参与缓存生命周期。 */
   private states = new Map<string, SessionInitState>();
-  /** keyId → identity map — populated via {@link bind} to keep repo/binding writes user-namespaced. */
   private identities = new Map<string, SessionIdentity>();
   private ttlMs: number;
   private repo?: SessionRepo;
-  private bindingRepo?: BindingRepo;
+  private localBindingRepo?: BindingRepo;
+  private root?: SessionStore;
+  private identity?: Readonly<SessionIdentity>;
   private recoveryInFlight = new Map<string, Promise<SessionInitState | undefined>>();
 
   constructor(
@@ -81,12 +91,82 @@ export class SessionStore {
   ) {
     this.ttlMs = ttlMs;
     this.repo = repo;
-    this.bindingRepo = bindingRepo;
+    this.localBindingRepo = bindingRepo;
+  }
+
+  private get bindingRepo(): BindingRepo | undefined {
+    return this.root ? this.root.bindingRepo : this.localBindingRepo;
+  }
+
+  forIdentity(identity: SessionIdentity): SessionStore {
+    const root = this.root ?? this;
+    const view = new SessionStore(root.ttlMs, root.repo);
+    view.root = root;
+    view.identity = Object.freeze({
+      spaceId: spaceOf(identity), userId: identity.userId,
+      agentSource: identity.agentSource, sessionId: identity.sessionId,
+    });
+    return view;
+  }
+
+  getIdentity(): Readonly<SessionIdentity> | undefined {
+    return this.identity;
+  }
+
+  private stateKey(keyId: string): string {
+    if (!this.identity) throw new Error("Use forIdentity before accessing a session");
+    return this.stateKeyFor(this.identity, keyId);
+  }
+
+  private stateKeyFor(identity: SessionIdentity, keyId: string): string {
+    return JSON.stringify([spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId, keyId]);
+  }
+
+  findSession(spaceId: string, sessionId: string, agentSource?: string, userId?: string): SessionStore | null | undefined {
+    const root = this.root ?? this;
+    const matches: SessionStore[] = [];
+    for (const identity of root.identities.values()) {
+      if (spaceOf(identity) !== (spaceId === "_default" ? "" : spaceId)
+        || (identity.sessionId !== sessionId && `${identity.agentSource}:${identity.sessionId}` !== sessionId)
+        || (agentSource && identity.agentSource !== agentSource)
+        || (userId && identity.userId !== userId)) continue;
+      const view = root.forIdentity(identity);
+      if (view.get(`${identity.agentSource}:${identity.sessionId}`)) matches.push(view);
+    }
+    return matches.length > 1 ? null : matches[0];
+  }
+
+  /** Bridge 没有完整身份：即使 L1 唯一，也必须先排除持久化歧义。null 表示拒绝。 */
+  async findBridgeSession(spaceId: string, sessionId: string, repo = this.bindingRepo): Promise<{
+    binding: SessionBinding | null;
+    sessionId: string;
+    l1?: { keyId: string; state: SessionInitState };
+  } | null> {
+    let scoped = this.findSession(spaceId, sessionId);
+    if (scoped === null) return null;
+    const bareSessionId = scoped?.getIdentity()?.sessionId ?? sessionId;
+    let binding: SessionBinding | null;
+    try {
+      binding = await repo?.getBinding(spaceId === "_default" ? "" : spaceId, bareSessionId) ?? null;
+    } catch {
+      return null;
+    }
+    // 读存储期间可能完成另一个 identity 的初始化，必须重查本机候选。
+    scoped = this.findSession(spaceId, sessionId);
+    if (scoped === null || binding?.identityAmbiguous) return null;
+    const identity = scoped?.getIdentity();
+    // composite 别名在 await 期间才进入 L1 时，要改查真正的 bare binding key。
+    if (identity && identity.sessionId !== bareSessionId) return this.findBridgeSession(spaceId, identity.sessionId, repo);
+    if (identity && binding && !ownsBinding(identity, binding)) return null;
+    const keyId = identity ? `${identity.agentSource}:${identity.sessionId}` : "";
+    const state = scoped?.get(keyId);
+    // 返回校验时的快照；Bridge 在 await 后重新任选 L1 可能选中后来出现的 owner。
+    return { binding, sessionId: bareSessionId, l1: state ? { keyId, state } : undefined };
   }
 
   /** Attach BindingRepo late (called after Redis / storage activation). */
   setBindingRepo(repo: BindingRepo): void {
-    this.bindingRepo = repo;
+    (this.root ?? this).localBindingRepo = repo;
   }
 
   /**
@@ -96,36 +176,45 @@ export class SessionStore {
    * 实例、单元测试注入的 mock 都能被 bridge 直接读到,不用重新构造。
    */
   getBindingRepo(): BindingRepo | undefined {
-    return this.bindingRepo;
+    return this.root ? this.root.getBindingRepo() : this.bindingRepo;
   }
 
-  /**
-   * Associate a keyId with a full (userId, agentSource, sessionId) identity so
-   * that later {@link set} / {@link delete} / {@link getOrRecover} calls can
-   * route writes to `SessionRepo` / `BindingRepo` in the correct namespace.
-   *
-   * Callers with identity in hand (handler.ts, session-init entry points,
-   * hydrateFromDb) invoke this once per keyId. Anonymous callers or L1-only
-   * consumers (e.g. skill-bridge's `store.get`) can skip binding — the store
-   * silently degrades to memory-only for such keys.
-   */
+  /** bind 仅校验当前视图的身份；不允许把根 Store 切换为某个用户。 */
   bind(keyId: string, identity: SessionIdentity): void {
-    this.identities.set(keyId, identity);
+    if (!this.identity) {
+      throw new Error("Use forIdentity before binding a session");
+    }
+    if (sessionIdentityKey(this.identity) !== sessionIdentityKey(identity)
+      || keyId !== `${identity.agentSource}:${identity.sessionId}`) {
+      throw new Error("Session identity mismatch");
+    }
+    const root = this.root ?? this;
+    root.identities.set(this.stateKey(keyId), this.identity);
   }
 
   /** Test-only helper: expose the identity map for assertions. */
   getBoundIdentity(keyId: string): SessionIdentity | undefined {
-    return this.identities.get(keyId);
+    if (!this.identity) return undefined;
+    return (this.root ?? this).identities.get(this.stateKey(keyId));
   }
 
   get(keyId: string): SessionInitState | undefined {
-    const state = this.states.get(keyId);
+    if (!this.identity) return undefined;
+    const root = this.root ?? this;
+    const stateKey = this.stateKey(keyId);
+    const state = root.states.get(stateKey);
     if (!state) return undefined;
+    if (this.identity && !matchesState(this.identity, state)) {
+      root.states.delete(stateKey);
+      root.identities.delete(stateKey);
+      return undefined;
+    }
 
     if (state.status !== "initialized" && Date.now() - state.startedAt > this.ttlMs) {
-      this.states.delete(keyId);
-      const id = this.identities.get(keyId);
-      if (id) this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
+      root.states.delete(stateKey);
+      const id = root.identities.get(stateKey);
+      root.identities.delete(stateKey);
+      if (id) root.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
       return undefined;
     }
 
@@ -153,17 +242,22 @@ export class SessionStore {
   }
 
   /**
-   * L1 write + L2a await write-through + L2b fire-and-forget binding。
+   * L1 写入 + L2a await write-through + L2b owner 校验后的更新。
    *
    * ⚠ 契约：`await store.set(...)` 完成时，L2a repo 已被 await（成功或静默失败）。
    * 见 2026-07-13 修复：原来 fire-and-forget 语义在多节点部署下会让 pod A
    * 关流时 COS PUT 还在飞，pod B 的 turn-2 因 L2a miss 直接掉进 tryHistoryScan
    * 兜底 → bypass → 请求透传 LLM。
    *
-   * L2b binding 仍是 fire-and-forget —— 只在 `initialized` 状态写入，属于
-   * "小纸条"型持久化，用于长睡对话唤醒；写延迟不影响 pending 状态跨节点恢复。
+   * L2b 仅在 initialized 时 await 更新：空槽/同主写入 binding，异主保留资产
+   * 并追加歧义标记。L2b 单槽未分配给当前 identity 不影响其 L1/L2a 初始化。
    */
   async set(keyId: string, state: SessionInitState): Promise<void> {
+    if (!this.identity) return;
+    this.bind(keyId, this.identity);
+    if (!matchesState(this.identity, state)) {
+      throw new Error("Session state identity mismatch");
+    }
     // `__recoverySource` is a transient hint produced by getOrRecover() only,
     // and must not leak into L1/L2a/L2b persistence. Strip it defensively here
     // so future callers who forward a getOrRecover() result into set() don't
@@ -181,7 +275,9 @@ export class SessionStore {
     // 请求被透传给 LLM 产生幻觉响应。
     // 保守做法：只在新 state 未显式声明这俩字段（值为 undefined）时,从旧 state
     // 继承一次。显式传 false / 具体值的 caller 不会被覆盖。
-    const prev = this.states.get(keyId);
+    const root = this.root ?? this;
+    const stateKey = this.stateKey(keyId);
+    const prev = root.states.get(stateKey);
     if (prev) {
       if (state.resetFlow === undefined && prev.resetFlow !== undefined) {
         state = { ...state, resetFlow: prev.resetFlow };
@@ -190,8 +286,8 @@ export class SessionStore {
         state = { ...state, resetEpoch: prev.resetEpoch };
       }
     }
-    this.states.set(keyId, state);
-    const id = this.identities.get(keyId);
+    root.states.set(stateKey, state);
+    const id = root.identities.get(stateKey);
     if (!id) {
       // No identity bound → this keyId is L1-only (anonymous session, tests
       // that bypass bind, etc.). Skip repo/binding persistence rather than
@@ -203,9 +299,9 @@ export class SessionStore {
     // SqliteSessionRepo）内部静默降级不抛，但接口层再兜一层，保证任何后来
     // 新增的 repo 或 test-mock 都不会把异常泄给 44 处 `await store.set(...)`
     // caller —— L1 已成功写入，主流程不因 L2a 写失败挂掉。
-    if (this.repo) {
+    if (root.repo) {
       try {
-        await this.repo.upsert(spaceOf(id), id.userId, id.agentSource, id.sessionId, state);
+        await root.repo.upsert(spaceOf(id), id.userId, id.agentSource, id.sessionId, state);
       } catch (err) {
         console.warn(
           `[session] L2a upsert failed for ${keyId}: ` +
@@ -215,7 +311,7 @@ export class SessionStore {
     }
     // L2b: only write binding on terminal states
     // await 而非 fire-and-forget，保持与 L2a 一致的契约：
-    // `await store.set(...)` return 时，L1 / L2a / L2b 三层都已 durable。
+    // 返回前完成 L2a 写入和 L2b owner 检查；存储失败仍遵循既有静默降级契约。
     // 每个 session 只会在初始化终态触发一次，成本可控。
     if (state.status === "initialized" && this.bindingRepo) {
       // agentSource / userKey 现在存进 binding 内部字段(不再在 key 里),
@@ -224,7 +320,7 @@ export class SessionStore {
       const binding: SessionBinding = state.bypassed
         ? {
             outcome: "bypassed",
-            userId: state.userId,
+            userId: id.userId,
             teamId: state.sessionInfo?.team_id,
             agentId: state.sessionInfo?.agent_id,
             taskId: state.sessionInfo?.task_id,
@@ -233,7 +329,7 @@ export class SessionStore {
           }
         : {
             outcome: "initialized",
-            userId: state.sessionInfo?.user_id || state.userId,
+            userId: id.userId,
             teamId: state.sessionInfo?.team_id,
             agentId: state.sessionInfo?.agent_id,
             taskId: state.sessionInfo?.task_id,
@@ -241,7 +337,9 @@ export class SessionStore {
             userKey: state.sessionInfo?.user_key,
           };
       try {
-        await this.bindingRepo.putBinding(spaceOf(id), id.sessionId, binding);
+        await this.updateOwnedBinding(id, current => this.bindingRepo!.putBinding(spaceOf(id), id.sessionId, {
+          ...binding, ...(current?.identityAmbiguous ? { identityAmbiguous: true } : {}),
+        }), true);
       } catch (err) {
         console.warn(
           `[session] L2b binding write failed for ${keyId}: ` +
@@ -252,13 +350,42 @@ export class SessionStore {
   }
 
   delete(keyId: string): void {
-    this.states.delete(keyId);
-    const id = this.identities.get(keyId);
+    if (!this.identity) return;
+    const root = this.root ?? this;
+    const stateKey = this.stateKey(keyId);
+    root.states.delete(stateKey);
+    const id = root.identities.get(stateKey);
+    root.identities.delete(stateKey);
     if (!id) return;
-    this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
-    void this.bindingRepo
-      ?.deleteBinding(spaceOf(id), id.sessionId)
-      .catch(() => {});
+    root.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
+    void this.deleteOwnedBinding().catch(() => {});
+  }
+
+  async deleteOwnedBinding(): Promise<void> {
+    const identity = this.identity;
+    if (identity) await this.updateOwnedBinding(identity, binding => {
+      // 只移除自己的资产，歧义事实仍保留；否则重启后的无身份工具会重新猜 owner。
+      if (binding?.identityAmbiguous) return this.bindingRepo!.putBinding(spaceOf(identity), identity.sessionId, {
+        outcome: "initialized", userId: identity.userId, agentSource: identity.agentSource, identityAmbiguous: true,
+      });
+      return this.bindingRepo!.deleteBinding(spaceOf(identity), identity.sessionId);
+    });
+  }
+
+  private async updateOwnedBinding(identity: SessionIdentity, update: (binding: SessionBinding | null) => Promise<void>, allowMissing = false): Promise<void> {
+    if (!this.bindingRepo) return;
+    await withPerKeyLock(`session-owner:${JSON.stringify([spaceOf(identity), identity.sessionId])}`, async () => {
+      const binding = await this.bindingRepo!.getBinding(spaceOf(identity), identity.sessionId);
+      if (binding && !ownsBinding(identity, binding)) {
+        if (!binding.identityAmbiguous) await this.bindingRepo!.putBinding(spaceOf(identity), identity.sessionId, {
+          ...binding, identityAmbiguous: true,
+        });
+        console.warn("[session] binding owner mismatch; preserving existing binding");
+        return;
+      }
+      if (!binding && !allowMissing) return;
+      await update(binding);
+    });
   }
 
   getStatus(keyId: string): SessionInitStatus {
@@ -266,35 +393,36 @@ export class SessionStore {
   }
 
   cleanup(): void {
+    const root = this.root ?? this;
+    if (root !== this) return root.cleanup();
     const now = Date.now();
-    for (const [keyId, state] of this.states) {
+    for (const [stateKey, state] of root.states) {
       if (state.status !== "initialized" && now - state.startedAt > this.ttlMs) {
-        this.states.delete(keyId);
-        const id = this.identities.get(keyId);
-        if (id) this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
+        root.states.delete(stateKey);
+        const id = root.identities.get(stateKey);
+        root.identities.delete(stateKey);
+        if (id) root.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
       }
     }
   }
 
   async hydrateFromDb(): Promise<number> {
-    if (!this.repo) return 0;
+    const root = this.root ?? this;
+    if (root !== this) return root.hydrateFromDb();
+    if (!root.repo) return 0;
     try {
-      const rows = await this.repo.loadAllInitialized();
+      const rows = await root.repo.loadAllInitialized();
       let loaded = 0;
       for (const row of rows) {
-        // L1 key convention matches handler.ts / init.ts entry sites:
-        //   `${agentSource}:${sessionId}`
-        // Also bind full identity so subsequent set() persists back through
-        // the correct (userId, agentSource, sessionId) key path.
+        if (!matchesState(row, row.state)) continue;
         const keyId = `${row.agentSource}:${row.sessionId}`;
-        if (!this.states.has(keyId)) {
-          this.states.set(keyId, row.state);
-          this.identities.set(keyId, {
-            userId: row.userId,
-            agentSource: row.agentSource,
-            sessionId: row.sessionId,
-            spaceId: row.spaceId || undefined,
+        const stateKey = this.stateKeyFor(row, keyId);
+        if (!root.states.has(stateKey)) {
+          root.identities.set(stateKey, {
+            userId: row.userId, agentSource: row.agentSource,
+            sessionId: row.sessionId, spaceId: spaceOf(row),
           });
+          root.states.set(stateKey, row.state);
           loaded++;
         }
       }
@@ -326,8 +454,15 @@ export class SessionStore {
     identity: SessionIdentity,
     ctx: RecoveryContext,
   ): Promise<SessionInitState | undefined> {
-    // Bind identity for downstream set()/delete()/probeL2a callchain.
-    this.identities.set(keyId, identity);
+    if (!this.identity || sessionIdentityKey(this.identity) !== sessionIdentityKey(identity)) {
+      return this.forIdentity(identity).getOrRecover(keyId, identity, ctx);
+    }
+    this.bind(keyId, identity);
+    identity = this.identity!;
+    return this.recover(keyId, identity, ctx);
+  }
+
+  private async recover(keyId: string, identity: SessionIdentity, ctx: RecoveryContext): Promise<SessionInitState | undefined> {
 
     // Step 1: L1
     //
@@ -365,6 +500,8 @@ export class SessionStore {
     if (this.repo) {
       const l2a = await this.probeL2a(keyId, identity);
       if (l2a) {
+        // 兼容上一版已落盘、尚未记冲突的 Session；不以 L2b 占槽情况阻断 L2a。
+        await this.updateOwnedBinding(identity, async () => {}).catch(() => {});
         // 只有 L1 存在**且**status 不同才算真"override stale L1"。相同 status
         // 只是 L2a 权威读回来复核一遍，属正常路径（pending_* 每轮都会走 L2a
         // probe），日志里没必要拉警报，之前的无条件 "override stale L1" 会误
@@ -381,9 +518,9 @@ export class SessionStore {
     // initialized 写），最终 `tryHistoryScan` 无条件 bypass —— 反而更糟。
     // 这里回退到 L1 是 "宁可用略旧但可用的状态" 的 graceful degradation。
     //
-    // zombie / user-mismatch 已在 `this.get()` 与 `probeL2a` 内部各自 invalidate，
-    // 走到这里的 l1 一定是 fresh + user 匹配的。
+    // L1 属于当前完整 identity，不复用其他用户或空间的 fallback。
     if (l1) {
+      await this.updateOwnedBinding(identity, async () => {}).catch(() => {});
       console.log(`[cache] session=${keyId} L1 fallback (L2a miss, status=${l1.status})`);
       return this.tagRecoverySource(l1, "l1");
     }
@@ -405,12 +542,17 @@ export class SessionStore {
       const scanned = await this.tryHistoryScan(keyId, identity, ctx);
       return scanned ? this.tagRecoverySource(scanned, "history-scan") : undefined;
     }
+    if (!ownsBinding(identity, binding)) {
+      await this.updateOwnedBinding(identity, async () => {}).catch(() => {});
+      console.warn(`[session-recover] ${keyId} L2b owner mismatch; reinitialize`);
+      return undefined;
+    }
+    // owner reset 留下的歧义 tombstone 只用于拒绝无身份工具，不可复活旧 Session。
+    if (binding.identityAmbiguous && binding.outcome === "initialized" && !binding.agentId) return undefined;
     console.log(`[cache] session=${keyId} L2b binding hit outcome=${binding.outcome} → rebuild`);
 
     // Async touch (refresh 30d TTL, don't await)
-    void this.bindingRepo
-      .touchLastSeen(spaceOf(identity), identity.sessionId)
-      .catch(() => {});
+    void this.updateOwnedBinding(identity, () => this.bindingRepo!.touchLastSeen(spaceOf(identity), identity.sessionId)).catch(() => {});
 
     // Step 3.1: bypassed outcome → construct bypass state
     if (binding.outcome === "bypassed") {
@@ -493,11 +635,8 @@ export class SessionStore {
       return undefined;
     }
 
-    const storedUserId = row.userId ?? row.sessionInfo?.user_id;
-    if (storedUserId && identity.userId && storedUserId !== identity.userId) {
-      console.log(
-        `[session-recover] ${keyId} L2a user mismatch (stored=${storedUserId}, current=${identity.userId}), invalidating`,
-      );
+    if (!matchesState(identity, row)) {
+      console.warn(`[session-recover] ${keyId} L2a identity mismatch, invalidating`);
       try {
         this.repo!.deleteBySessionId(spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId);
       } catch {
@@ -507,25 +646,30 @@ export class SessionStore {
     }
 
     // Promote back to L1 so subsequent turns don't hit the repo at all.
-    this.states.set(keyId, row);
+    const root = this.root ?? this;
+    const stateKey = this.stateKey(keyId);
+    root.identities.set(stateKey, identity);
+    root.states.set(stateKey, row);
     console.log(
       `[session-recover] ${keyId} L2a hit status=${row.status} (agent=${row.sessionInfo?.agent_id ?? "-"}, task=${row.sessionInfo?.task_id ?? "-"})`,
     );
     return row;
   }
 
-  /** In-flight promise deduplication: same keyId → same rebuild promise. */
+  /** In-flight promise deduplication: same full identity → same rebuild promise. */
   private rebuildFromBinding(
     keyId: string,
     identity: SessionIdentity,
     binding: SessionBinding,
     ctx: RecoveryContext,
   ): Promise<SessionInitState | undefined> {
-    const inFlight = this.recoveryInFlight.get(keyId);
+    const root = this.root ?? this;
+    const recoveryKey = this.stateKey(keyId);
+    const inFlight = root.recoveryInFlight.get(recoveryKey);
     if (inFlight) return inFlight;
     const p = this.doRebuild(keyId, identity, binding, ctx)
-      .finally(() => this.recoveryInFlight.delete(keyId));
-    this.recoveryInFlight.set(keyId, p);
+      .finally(() => root.recoveryInFlight.delete(recoveryKey));
+    root.recoveryInFlight.set(recoveryKey, p);
     return p;
   }
 
@@ -535,12 +679,7 @@ export class SessionStore {
     binding: SessionBinding,
     ctx: RecoveryContext,
   ): Promise<SessionInitState | undefined> {
-    // Step 4.1: user mismatch → invalidate binding
-    if (binding.userId && identity.userId && binding.userId !== identity.userId) {
-      console.log(`[session-recover] ${keyId} user mismatch (bound=${binding.userId}, current=${identity.userId}), invalidating`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
-      return undefined;
-    }
+    if (!ownsBinding(identity, binding)) return undefined;
 
     if (!ctx.metadataClient) {
       // No client → can't recover, degrade to one-shot bypass
@@ -596,7 +735,7 @@ export class SessionStore {
     // Step 4.3: dispatch
     if (agentNotFound) {
       console.log(`[session-recover] ${keyId} agent ${binding.agentId} not found, deleting binding`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
+      await this.deleteOwnedBinding();
       return undefined;
     }
     if (anyKernelError) {
@@ -611,11 +750,11 @@ export class SessionStore {
     if (taskNotFound) {
       console.log(`[session-recover] ${keyId} task ${binding.taskId} not found, keeping agent`);
       // Update binding to drop taskId
-      await this.bindingRepo?.putBinding(
+      await this.updateOwnedBinding(identity, current => this.bindingRepo!.putBinding(
         spaceOf(identity),
         identity.sessionId,
-        { ...binding, taskId: undefined },
-      );
+        { ...binding, taskId: undefined, ...(current?.identityAmbiguous ? { identityAmbiguous: true } : {}) },
+      ));
       taskDetail = null;
     }
 
@@ -647,14 +786,17 @@ export class SessionStore {
     };
 
     // Step 4.5: write back to L1 + L2a
-    this.states.set(keyId, rebuilt);
+    const root = this.root ?? this;
+    const stateKey = this.stateKey(keyId);
+    root.identities.set(stateKey, identity);
+    root.states.set(stateKey, rebuilt);
     // await write-through 与 SessionStore.set 保持一致契约（见其头注释）：
     // 让恢复出的 rebuilt 状态在返回前已落 L2a，避免同 session 后续轮次
     // 若又打到别的 pod 时再走一次 rebuildFromBinding 的开销。
     // 防御性 catch 见 `set()` 头注释。
-    if (this.repo) {
+    if (root.repo) {
       try {
-        await this.repo.upsert(spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId, rebuilt);
+        await root.repo.upsert(spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId, rebuilt);
       } catch (err) {
         console.warn(
           `[session-recover] L2a upsert failed for ${keyId} during rebuild: ` +
@@ -795,6 +937,7 @@ export class SessionStore {
     const binding: SessionBinding = {
       outcome: "initialized",
       userId: identity.userId,
+      agentSource: identity.agentSource,
       agentId: foundAgentId,
       taskId: foundTaskId,
     };
