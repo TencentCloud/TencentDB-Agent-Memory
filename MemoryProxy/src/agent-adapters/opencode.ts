@@ -47,6 +47,10 @@ import type { AgentAdapter } from "./types.js";
 
 export const opencodeAdapter: AgentAdapter = {
   agentKind: "opencode",
+  // 主流场景是 openai-compatible（Chat）；少数模型走 Responses 的那条路径未纳入
+  // 自动选路，因此这里只声明 chat——上游若只支持 Responses，会被判为"无路可走"
+  // 并在启动期告警，而不是静默直连。
+  nativeProtocols: ["chat"],
 
   classifyRequest(_body?, _path?, _headers?) {
     // opencode 是通用 CLI，未观察到 fork/sidequery 语义信号；主对话 + 可能的

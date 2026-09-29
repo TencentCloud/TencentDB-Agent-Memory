@@ -114,6 +114,7 @@ function extractDshUserText(content: unknown): string | null {
 
 export const dshAdapter: AgentAdapter = {
   agentKind: "dsh",
+  nativeProtocols: ["chat"],
 
   classifyRequest(
     body: Record<string, unknown>,
