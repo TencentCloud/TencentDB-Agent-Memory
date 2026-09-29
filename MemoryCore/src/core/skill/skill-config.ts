@@ -74,7 +74,7 @@ export function resolveSkillConfig(
   // --------------- store ---------------
   const requestedStore =
     input.storeBackend ?? probe.outerStoreBackend ?? "sqlite";
-  let storeBackend: "sqlite" | "tcvdb" | "mongodb" = requestedStore;
+  let storeBackend: "sqlite" | "tcvdb" | "mongodb" | "postgres" = requestedStore;
   if (storeBackend === "tcvdb" && !probe.hasTcvdbCredentials) {
     degradations.push({
       field: "storeBackend",
