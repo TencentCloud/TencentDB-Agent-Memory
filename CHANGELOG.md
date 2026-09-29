@@ -9,6 +9,13 @@
 
 ---
 
+## [Unreleased]
+
+### Code-Graph 刷新与查询
+
+- 刷新在候选目录构建索引；有已完成索引时，`pending` / `processing` 查询继续返回旧索引，并在结果中标记 `stale: true`、`served_commit_hash` 和 `last_sync_at`。复制与晋升时短暂暂停查询。
+- 首次建图尚无索引、复制或晋升中的查询返回 HTTP 503、`Retry-After: 2` 和机器码 `error_code`；构建失败且无可信索引时返回 HTTP 409 和 `CODE_GRAPH_INDEX_FAILED`。直连 Code-Graph 查询与 `/v3/tools/call` 使用相同规则。
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

@@ -9,6 +9,7 @@ import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
 import { isValidGitHttpUrl, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
+import { codeGraphQueryFailureMessage, codeGraphServedIndex, type CodeGraphServedIndex } from './code-query-error';
 
 export function useCodeSources() {
   const { t } = useTranslation();
@@ -145,9 +146,13 @@ export function useCodeSources() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchResult, setSearchResult] = useState('');
+  const [searchServedIndex, setSearchServedIndex] = useState<CodeGraphServedIndex | null>(null);
   const [exploreQuery, setExploreQuery] = useState('');
   const [exploring, setExploring] = useState(false);
   const [exploreResult, setExploreResult] = useState('');
+  const [exploreServedIndex, setExploreServedIndex] = useState<CodeGraphServedIndex | null>(null);
+  const searchRequestRef = useRef(0);
+  const exploreRequestRef = useRef(0);
 
   // 请求序号防竞态：快速切换 tab 时，先发的请求可能后返回，
   // 旧 tab 的数据会覆盖新 tab 的数据。每次 fetch 递增序号，
@@ -318,7 +323,11 @@ export function useCodeSources() {
     });
     if (!ok) return;
     try {
-      await knowledgeApi.code.delete(cgId);
+      const result = await knowledgeApi.code.delete(cgId);
+      if (!result.deleted_ids.includes(cgId)) {
+        const reason = result.failed.find((item) => item.id === cgId)?.reason;
+        throw new Error(reason || t('code.notify.deleteFailed'));
+      }
       // 乐观更新：立即从本地列表移除。后端删除是最终一致的，删除刚成功时再拉 teamAssets
       // 可能仍返回该仓库，导致列表不变、需手动刷新页面才消失。这里先本地摘除，
       // fetchSources 仅作兜底对齐。
@@ -334,41 +343,58 @@ export function useCodeSources() {
   };
 
   const openDetail = (cgId: string) => {
+    // A query for the previously selected graph must not populate this graph's result.
+    searchRequestRef.current++;
+    exploreRequestRef.current++;
     setSelectedCgId(cgId);
+    setSearching(false);
+    setExploring(false);
     setSearchQuery('');
     setSearchResult('');
+    setSearchServedIndex(null);
     setExploreQuery('');
     setExploreResult('');
+    setExploreServedIndex(null);
     setSubView('detail');
   };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
+    const request = ++searchRequestRef.current;
     setSearching(true);
     setSearchResult('');
+    setSearchServedIndex(null);
     try {
       const res = await knowledgeApi.code.search({ codeGraphId: selectedCgId, query: searchQuery, kind: 'any', limit: 20 });
+      if (request !== searchRequestRef.current) return;
       setSearchResult(res?.text || JSON.stringify(res, null, 2));
+      setSearchServedIndex(codeGraphServedIndex(res));
     } catch (e: unknown) {
+      if (request !== searchRequestRef.current) return;
       setSearchResult('');
-      tea.notify.error(e);
+      tea.notify.error(codeGraphQueryFailureMessage(e, t) ?? e);
     } finally {
-      setSearching(false);
+      if (request === searchRequestRef.current) setSearching(false);
     }
   };
 
   const handleExplore = async () => {
     if (!exploreQuery.trim()) return;
+    const request = ++exploreRequestRef.current;
     setExploring(true);
     setExploreResult('');
+    setExploreServedIndex(null);
     try {
       const res = await knowledgeApi.code.explore(selectedCgId, exploreQuery);
+      if (request !== exploreRequestRef.current) return;
       setExploreResult(res?.text || JSON.stringify(res, null, 2));
+      setExploreServedIndex(codeGraphServedIndex(res));
     } catch (e: unknown) {
+      if (request !== exploreRequestRef.current) return;
       setExploreResult('');
-      tea.notify.error(e);
+      tea.notify.error(codeGraphQueryFailureMessage(e, t) ?? e);
     } finally {
-      setExploring(false);
+      if (request === exploreRequestRef.current) setExploring(false);
     }
   };
 
@@ -419,11 +445,13 @@ export function useCodeSources() {
     setSearchQuery,
     searching,
     searchResult,
+    searchServedIndex,
     setSearchResult,
     exploreQuery,
     setExploreQuery,
     exploring,
     exploreResult,
+    exploreServedIndex,
     setExploreResult,
     selected,
     // fetch & handlers

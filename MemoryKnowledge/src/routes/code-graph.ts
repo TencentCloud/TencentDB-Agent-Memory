@@ -17,7 +17,12 @@ import { Hono } from "hono";
 import type { CodeGraphService } from "../store/index.js";
 import type { SyncStatus } from "../store/index.js";
 import { executeTool as executeCodeTool } from "../engines/code/index.js";
-import { toCodeGraphToolName, CODEGRAPH_QUERY_TOOL_NAMES } from "./tools.js";
+import {
+  toCodeGraphToolName,
+  CODEGRAPH_QUERY_TOOL_NAMES,
+  resolveCodeGraphQueryAccess,
+  codeGraphQueryResult,
+} from "./tools.js";
 import {
   extractIdFields,
   isValidIdSegment,
@@ -273,11 +278,14 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const row = cgService.getById(serviceId, cgId);
     if (!row) return c.json(wrapError(404, "code graph not found"), 404);
 
-    const result = cgService.sync(serviceId, row.team_id, cgId, requesterUserId);
+    const result = await cgService.sync(serviceId, row.team_id, cgId, requesterUserId);
     if (result.kind === "not_found") return c.json(wrapError(404, "code graph not found"), 404);
     if (result.kind === "busy") {
       // 并发拒绝：干净最小的 409 响应体（调用方用 code 判断，不 parse message）。
       return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
+    }
+    if (result.kind === "conflict") {
+      return c.json({ ...wrapError(409, "sync admission conflict"), error_code: "CODE_GRAPH_SYNC_CONFLICT" }, 409);
     }
     return c.json(wrapOk({ code_graph_id: result.row.code_graph_id, status: result.row.status }), 202);
   });
@@ -301,11 +309,15 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
         continue;
       }
       const row = cgService.getById(serviceId, id);
-      if (!row) {
+      if (!row && !cgService.hasPendingCleanup(serviceId, id)) {
         result.failed.push({ id, reason: "not found" });
         continue;
       }
-      const ok = cgService.delete(serviceId, row.team_id, id);
+      if (cgService.isBuildBusy(id)) {
+        result.failed.push({ id, reason: "busy" });
+        continue;
+      }
+      const ok = await cgService.deleteById(serviceId, id);
       if (ok) {
         // instance pool 释放已由 service.cleanupResources(releaseInstance) 统一处理。
         result.deleted_ids.push(id);
@@ -331,19 +343,6 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       const row = cgService.getById(serviceId, cgId);
       if (!row) return c.json(wrapError(404, "code graph not found"), 404);
 
-      if (row.status !== "ready") {
-        return c.json(wrapOk({ text: "", isError: false }));
-      }
-
-      let instance = instancePool.get(cgId);
-      if (!instance && instancePool.loadIfMissing) {
-        const dir = cgService.dirFor(serviceId, row.team_id, cgId);
-        instance = await instancePool.loadIfMissing(cgId, dir);
-      }
-      if (!instance) {
-        return c.json(wrapError(503, "code graph instance not loaded"), 503);
-      }
-
       const built = buildToolParams(action, body);
       if ("error" in built) {
         return c.json(wrapError(400, built.error), 400);
@@ -353,8 +352,15 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       if (!toolName) {
         return c.json(wrapError(403, `unknown tool: ${action}`), 403);
       }
-      const result = await executeCodeTool(instance, toolName, built.params);
-      return c.json(wrapOk(result), result.isError ? 500 : 200);
+
+      const access = await resolveCodeGraphQueryAccess(serviceId, row, cgService, instancePool);
+      if ("response" in access) return access.response;
+      try {
+        const result = await executeCodeTool(access.lease.instance, toolName, built.params);
+        return c.json(wrapOk(codeGraphQueryResult(access.row, result)), result.isError ? 500 : 200);
+      } finally {
+        access.lease.release();
+      }
     });
   }
 

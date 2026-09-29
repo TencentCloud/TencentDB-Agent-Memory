@@ -47,6 +47,8 @@ export interface CodeGraphRow {
   service_url: string | null;
   summary: string | null;
   version: number;
+  /** A previously committed CodeGraph index exists, even if last_sync_at is absent. */
+  has_last_good: boolean;
   last_sync_at: string | null;
   created_at: string;
   updated_at: string;
@@ -77,6 +79,7 @@ export interface CodeGraphStatusPatch {
   service_url?: string | null;
   summary?: string | null;
   version?: number;
+  has_last_good?: boolean;
 }
 
 export interface CodeGraphMetaPatch {
@@ -143,7 +146,7 @@ export interface WikiMetaPatch {
 
 // ───────────────────────── Audit ─────────────────────────
 
-export type AuditAction = "ingest" | "ready" | "failed" | "delete" | "create";
+export type AuditAction = "ingest" | "ready" | "failed" | "refresh_failed" | "delete" | "create";
 
 export interface AuditLogInput {
   service_id?: string | null;
@@ -215,6 +218,8 @@ export interface IKnowledgeStore {
   listCodeGraphs(serviceId: string, teamId: string, opts?: ListOpts): CodeGraphRow[];
   countCodeGraphs(serviceId: string, teamId: string, opts?: CountOpts): number;
   updateCodeGraphStatus(serviceId: string, codeGraphId: string, patch: CodeGraphStatusPatch): void;
+  /** Atomically admit one refresh for this tenant, asset, and observed version. */
+  tryAdmitCodeGraphSync(serviceId: string, teamId: string, codeGraphId: string, expectedVersion: number): boolean;
   deleteCodeGraph(serviceId: string, teamId: string, codeGraphId: string): boolean;
   updateCodeGraphMeta(serviceId: string, codeGraphId: string, patch: CodeGraphMetaPatch): CodeGraphRow | null;
 
@@ -235,6 +240,8 @@ export interface IKnowledgeStore {
   listCodeGraphAudit(serviceId: string, codeGraphId: string, limit?: number, offset?: number): AuditLogRow[];
 
   // ── Restart recovery ──
+  /** Non-ready code graphs; recovery decides whether disk snapshots are trustworthy. */
+  listRecoverableCodeGraphs(): CodeGraphRow[];
   /** Sweep all non-terminal (pending/processing) assets to failed, across all tenants. */
   markInterruptedAsFailed(reason?: string): number;
   /** All ready code-graphs (with service_id) so module.ts can rebuild per-tenant dirs. */

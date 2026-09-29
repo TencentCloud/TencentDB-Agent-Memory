@@ -7,6 +7,7 @@
     "dev": "vite",
     "mock": "VITE_ENTRY=mock vite",
     "build": "tsc && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx --fix",
     "lint:check": "eslint src --ext .ts,.tsx",
@@ -49,6 +50,7 @@
     "prettier": "^3.9.4",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^2.1.9"
   }
 }

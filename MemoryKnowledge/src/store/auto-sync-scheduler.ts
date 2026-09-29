@@ -282,7 +282,7 @@ export class AutoSyncScheduler {
     const startMs = Date.now();
     log.info(`[auto-sync] sync ${row.code_graph_id} (${row.repo_url}@${row.branch})`);
     try {
-      // CodeGraphService.sync 目前是同步返回 SyncResult；await 兼容未来改 async 或测试 mock。
+      // Admission may await best-effort snapshot cleanup before enqueueing.
       const result: SyncResult = await Promise.resolve(
         this.cgService.sync(row.service_id, row.team_id, row.code_graph_id, undefined),
       );
@@ -293,6 +293,9 @@ export class AutoSyncScheduler {
           break;
         case "busy":
           log.debug(`[auto-sync] skip ${row.code_graph_id}: already ${result.status} (step: ${result.step})`);
+          break;
+        case "conflict":
+          log.debug(`[auto-sync] skip ${row.code_graph_id}: admission changed concurrently`);
           break;
         case "not_found":
           log.warn(`[auto-sync] skip ${row.code_graph_id}: not found (may have been deleted)`);
