@@ -1060,6 +1060,12 @@ components:
               default: main
             repo_name:
               type: string
+            sparse_paths:
+              type: array
+              description: Optional relative POSIX paths to include in a sparse checkout. Empty or omitted means full checkout.
+              items:
+                type: string
+              example: [src, packages/shared]
 
     CodeGraphListRequest:
       allOf:

@@ -27,6 +27,7 @@ import {
   type BatchDeleteResult,
 } from "../api-helpers.js";
 import type { CodeGraphInstancePool } from "../module.js";
+import { normalizeSparsePaths } from "../source-fetcher/sparse-paths.js";
 
 export interface CodeGraphRouteDeps {
   cgService: CodeGraphService;
@@ -189,12 +190,19 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
 
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
+    let sparsePaths: string[];
+    try {
+      sparsePaths = normalizeSparsePaths(body.sparse_paths ?? []);
+    } catch (err) {
+      return c.json(wrapError(400, err instanceof Error ? err.message : String(err)), 400);
+    }
 
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
       repo_url: repoUrl,
       branch,
+      sparse_paths: sparsePaths,
       repo_name: repoName,
       owner_user_id: idFields.user_id,
       user_id: idFields.user_id,
