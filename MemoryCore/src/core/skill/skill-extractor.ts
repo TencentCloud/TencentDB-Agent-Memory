@@ -209,7 +209,9 @@ export class SkillExtractor {
 
     if (!this.runner) {
       // No runner injected (test environment / disabled) → 返回空候选
-      this.logger?.info(`${TAG} no runner provided; returning empty candidates`);
+      this.logger?.error(
+        `${TAG} EXTRACTOR_NO_RUNNER: returning empty candidates; runner=${typeof this.runner}`,
+      );
       obsLogger.info("skill.extractor.extract", {
         task_id: input.task_id,
         dur_ms: Date.now() - t0,
@@ -230,7 +232,8 @@ export class SkillExtractor {
       logger: this.logger,
     });
 
-    let text: string;
+    let text: string = "";
+    let runnerOutcome: "ok" | "empty" | "error" = "ok";
     try {
       text = await this.runner.run({
         prompt,
@@ -240,8 +243,6 @@ export class SkillExtractor {
         maxIterations: input.options?.max_iterations ?? this.maxIterations,
         maxTokens: this.maxTokens,
         taskId: `skill-extract-${input.task_id ?? "unknown"}`,
-        // Langfuse trace 语义：让此次抽取在 Langfuse UI 有稳定 name / 可筛选 tags。
-        // 详见 core/types.ts LLMRunParams 的 traceName/tags/sessionId/userId 注释。
         traceName: "skill.extract",
         tags: [
           "skill-extract",
@@ -252,9 +253,16 @@ export class SkillExtractor {
         userId: input.user_id,
         instanceId: input.space_id,
       });
+      if (typeof text !== "string" || !text.trim()) {
+        runnerOutcome = "empty";
+      } else if (
+        /(^|\n)<<past-user>>/.test(text) ||
+        /(^|\n)<<past-assistant>>/.test(text)
+      ) {
+        runnerOutcome = "empty";
+      }
     } catch (e) {
-      // 一条 warn 汇总失败，包含 task_id / err_name / dur —— Worker 侧再按分类
-      // (transient / permanent) 决定 requeue 还是 DLQ。这里不吞异常。
+      runnerOutcome = "error";
       const dur = Date.now() - t0;
       obsLogger.warn("skill.extractor.extract", {
         task_id: input.task_id,
@@ -278,6 +286,45 @@ export class SkillExtractor {
         });
       } catch { /* noop */ }
       throw e;
+    }
+
+    if (runnerOutcome !== "ok" || auditSink.length === 0) {
+      const trimmed = typeof text === "string" ? text.trim() : "";
+      const isNothingToSave = trimmed === "Nothing to save." ? true : false;
+      const errMsg =
+        runnerOutcome !== "ok"
+          ? "LLM extractor returned empty/transcript-like output"
+          : isNothingToSave
+            ? "LLM extractor returned no-op (Nothing to save.)"
+            : "LLM extractor returned no tool calls (auditSink empty)";
+      const dur = Date.now() - t0;
+      obsLogger.warn("skill.extractor.extract", {
+        task_id: input.task_id,
+        dur_ms: dur,
+        msg_count: messages.length,
+        candidates: auditSink.length,
+        err_name: "SkillExtractorEmptyOutputError",
+        err_msg: `${errMsg}; runnerOutcome=${runnerOutcome}; nothingToSave=${isNothingToSave}`,
+      });
+      try {
+        trace.report("skill.extractor.extract", {
+          task_id: input.task_id,
+          team_id: input.team_id,
+          agent_id: input.agent_id,
+          session_id: input.session_id,
+          msg_count: messages.length,
+          candidates: auditSink.length,
+          dur_ms: dur,
+          success: false,
+          error: `${errMsg}; runnerOutcome=${runnerOutcome}; nothingToSave=${isNothingToSave}`,
+        });
+      } catch { /* noop */ }
+      if (isNothingToSave) {
+        return { candidates: [], text };
+      }
+      throw new Error(
+        `SkillExtractorEmptyOutputError: ${errMsg}; task_id=${input.task_id}; runnerOutcome=${runnerOutcome}`,
+      );
     }
 
     try { metricProducer.send({ metric: "skill.extract.candidates", instanceId: input.team_id, value: auditSink.length }); } catch { /* noop */ }

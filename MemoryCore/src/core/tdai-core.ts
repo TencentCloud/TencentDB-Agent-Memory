@@ -859,6 +859,29 @@ export class TdaiCore {
       const resolved = resolveSkillConfig(this.cfg.skill, probe, resolverLogger);
       this.resolvedSkillConfig = resolved;
 
+      // Debug: print skill config state to understand why extraction=off
+      this.logger.warn(
+        `${TAG} debug: skill cfg=${JSON.stringify(this.cfg.skill)}, probe.llmRunnerAvailable=${probe.llmRunnerAvailable}, resolved.extraction.enabled=${resolved.extraction.enabled}`,
+      );
+
+      // Standalone fallback: if the YAML did not explicitly enable extraction
+      // but an LLM runner IS available, turn it on instead of silently
+      // leaving extraction=off. This avoids a hidden trap where
+      // /v3/skill/extract returns ok=true but the worker pool has no
+      // extractor to consume the task.
+      if (
+        !resolved.extraction.enabled &&
+        probe.llmRunnerAvailable &&
+        this.cfg.skill?.extraction?.enabled !== false
+      ) {
+        resolverLogger.warn(
+          `${TAG} extraction.defaulted-to-on: YAML omitted skill.extraction.enabled, ` +
+            `but LLM is available (baseUrl=${this.cfg.llm.baseUrl}, model=${this.cfg.llm.model}); ` +
+            `enabling extraction for standalone mode.`,
+        );
+        resolved.extraction.enabled = true;
+      }
+
       // Open the underlying DatabaseSync (raw handle escape hatch — see
       // VectorStore.getRawDb() docstring). Skill tables (skill_meta /
       // skill_fts / skill_vec / task_*) live in the SAME connection.
