@@ -425,13 +425,21 @@ async function searchMemoriesWithDetails(
 /**
  * Search memories using the configured strategy.
  *
- * - "keyword": JSONL keyword-based (Jaccard similarity) — no embedding needed
- * - "embedding": VectorStore cosine similarity — requires vectorStore + embeddingService
- * - "hybrid": merge both keyword and embedding results with RRF (Reciprocal Rank Fusion)
+ * - "keyword": FTS5 BM25 (bm25RankToScore, 0–1) — no embedding needed.
+ *   `scoreThreshold` applies to the mapped score.
+ * - "embedding": VectorStore cosine similarity (0–1) — requires
+ *   vectorStore + embeddingService. `scoreThreshold` applies.
+ * - "hybrid": keyword + embedding in parallel, merged with RRF
+ *   (Reciprocal Rank Fusion). Fused RRF scores (~1/(60+rank)) are a
+ *   ranking signal, NOT a 0–1 relevance probability — `scoreThreshold`
+ *   is deliberately NOT applied to the fused result; hybrid relies on
+ *   top-N (`maxResults`). See #1296.
  *
  * Falls back to keyword if embedding resources are unavailable.
+ *
+ * @internal exported for tests; the recall hooks are the intended callers.
  */
-async function searchMemories(
+export async function searchMemories(
   userText: string,
   pluginDataDir: string,
   cfg: MemoryTdaiConfig,
@@ -507,11 +515,17 @@ async function searchMemories(
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
     // server-side dense + sparse + RRF in a single API call), short-circuit
     // to avoid a redundant second HTTP request and a wasted local embed().
+    // The returned scores are server-side RRF rankings — scoreThreshold is
+    // intentionally NOT applied here (see searchHybrid / #1296).
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
-      logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
+      const topScore = results[0]?.score;
+      logger?.debug?.(
+        `${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms, ` +
+        `topScore=${topScore !== undefined ? topScore.toFixed(4) : "n/a"} (threshold not applied — RRF ranking scale)`,
+      );
       const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
       const scores = results.map((r) => r.score);
       return { lines, scores, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
@@ -641,6 +655,14 @@ async function searchByEmbedding(
  *
  * If FTS5 is unavailable, the keyword side returns empty and RRF uses
  * embedding results only.
+ *
+ * `scoreThreshold` (passed in as `_threshold`) is deliberately NOT applied:
+ *   - fused RRF scores (~0.016–0.05 for k=60) are a ranking signal on a
+ *     different scale from the 0–1 cosine/BM25-mapped scores, so a 0–1
+ *     threshold would either filter everything or be a no-op (#1296);
+ *   - truncating either leg pre-fusion would also degrade the merge — the
+ *     fusion needs the full ranked lists. Hybrid therefore relies on
+ *     top-N (`maxResults`) alone.
  */
 async function searchHybrid(
   userText: string,
@@ -770,7 +792,9 @@ async function searchHybrid(
   if (sorted.length > 0) {
     logger?.debug?.(
       `${TAG} Hybrid search found ${sorted.length} results ` +
-      `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
+      `(keyword=${keywordResults.length}, embedding=${embeddingResults.length}), ` +
+      `topRrfScore=${sorted[0][1].rrfScore.toFixed(4)} ` +
+      `(threshold not applied — RRF scores are rank-based, not 0–1 relevance; relies on top-N)`,
     );
     return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
   }

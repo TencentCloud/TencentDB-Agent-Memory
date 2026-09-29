@@ -91,7 +91,19 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
-  /** Minimum score threshold (default: 0.3) */
+  /**
+   * Minimum score threshold (default: 0.3).
+   *
+   * Semantics depend on `strategy` — the scales are NOT interchangeable:
+   *   - "keyword"  (FTS5 BM25 via bm25RankToScore): 0–1 → threshold applies.
+   *   - "embedding" (cosine 1-distance): 0–1 → threshold applies.
+   *   - "hybrid": applied to each single-source leg? No — the fused result
+   *     is ranked by RRF (scores ≈ 1/(60+rank) ≈ 0.016–0.05), which is a
+   *     RANKING signal, not a relevance probability. The threshold is
+   *     deliberately NOT applied to fused RRF results; hybrid relies on
+   *     top-N (`maxResults`). Setting a larger value here is a no-op for
+   *     hybrid recall (#1296).
+   */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
   strategy: "embedding" | "keyword" | "hybrid";
