@@ -30,6 +30,43 @@ let fileLogger: FileLogger | null = null;
 let backend: ILogBackend = new NoopLogBackend();
 let minLevel: LogLevel = "info";
 
+const ERROR_CAUSE_STRING_MAX_LENGTH = 200;
+
+function serializeErrorCause(cause: unknown): LogAttrs {
+  if (cause === null || typeof cause !== "object") return {};
+
+  const attrs: LogAttrs = {};
+  const source = cause as Record<string, unknown>;
+  const stringFields = ["name", "code", "syscall", "address"] as const;
+
+  for (const field of stringFields) {
+    let value: unknown;
+    try {
+      value = source[field];
+    } catch {
+      continue;
+    }
+    if (typeof value !== "string") continue;
+    attrs[`error.cause.${field}`] = value.slice(0, ERROR_CAUSE_STRING_MAX_LENGTH);
+  }
+
+  for (const field of ["errno", "port"] as const) {
+    let value: unknown;
+    try {
+      value = source[field];
+    } catch {
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      attrs[`error.cause.${field}`] = value;
+    } else if (typeof value === "string") {
+      attrs[`error.cause.${field}`] = value.slice(0, ERROR_CAUSE_STRING_MAX_LENGTH);
+    }
+  }
+
+  return attrs;
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -158,13 +195,19 @@ function emit(
         }
       }
     }
+    let errorAttrs: LogAttrs | undefined;
     if (err) {
-      attrs["error.message"] = err.message;
-      attrs["error.name"] = err.name;
+      errorAttrs = {
+        "error.message": err.message,
+        "error.name": err.name,
+        ...serializeErrorCause(err.cause),
+      };
+      Object.assign(attrs, errorAttrs);
     }
 
     // Dual-write: local file + backend
-    fileLogger?.write(level.toUpperCase(), event, data);
+    const fileData = errorAttrs ? { ...data, ...errorAttrs } : data;
+    fileLogger?.write(level.toUpperCase(), event, fileData);
 
     switch (level) {
       case "debug":

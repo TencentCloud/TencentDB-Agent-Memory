@@ -553,7 +553,7 @@ async function forwardToUpstream(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    pipe.info("WORKBUDDY_FORWARD_ERR", msg);
+    pipe.error("WORKBUDDY_FORWARD", err);
     // 网络层失败 → langfuse failure 上报，让线上可视化能看到
     if (lf) {
       try {
