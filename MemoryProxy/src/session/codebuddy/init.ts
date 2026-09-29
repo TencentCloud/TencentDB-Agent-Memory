@@ -106,6 +106,16 @@ export interface SessionInitResult {
   /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
   bypassed?: boolean;
   /**
+   * 本次注册是 session-reset 触发的（pre-hook 设 resetFlow=true → 保留到
+   * completeRegistration）。
+   *
+   * 与 claude-code/init.ts 的同名字段保持一致：三个 handler（handler.ts /
+   * anthropicHandler.ts / codexHandler.ts）都读 `initResult.resetFlow` 来决定
+   * session-reset 之后是否返回确认响应。缺这个字段时 CB 分支的 reset 流程
+   * 拿不到标记，且 store-pool 路径的 return 字面量会因多余属性报 TS2353。
+   */
+  resetFlow?: boolean;
+  /**
    * bypass 触发原因（仅 `bypassed === true` 时有意义）。codexHandler 用它决定
    * 首次 gate 命中是否要返 "Plan 模式提示" 而非直接透传。
    *
@@ -1332,9 +1342,110 @@ async function handleSessionInitInner(
     }
 
     if (teamId && teamId !== BYPASS_MARKER) {
+      // 用户选中的 team 对象（从 cachedTeams 取，拿得到 agents/tasks 才能做
+      // auto-select 判定）。取不到时退回"直接出 form"的老行为。
+      const pickedTeam = cachedTeamsForMore.find((t) => t.team_id === teamId);
       // codex/WB/dsh/opencode 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
-      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
-      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
+      const splitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode";
+
+      // ── split-stage 客户端：按 agent 数量决定下一步 ──────────────────────
+      //
+      // Issue #1239 Bug 2: workbuddy/form.ts (agent_select) 要求每页 >= 2 个
+      // option（AskUserQuestion 硬约束），team 下只有 1 个 agent 时会抛
+      //   [wb form] agent page 0 has 1 option(s);
+      //   pagination.ts should have avoided a solo last page.
+      // 该异常逃出 handleSessionInit → session 永远到不了 initialized →
+      // hasSessionInfo=false、注入管线跳过、tdai-recorder:write-l0 恒为 0。
+      //
+      // 语义对齐 claude-code/init.ts 的 advanceFromTeamPicked /
+      // advanceFromAgentPicked（CB 自己的 skipAssetConfirm 单 team 递进分支
+      // 亦同此契约）：
+      //   0 agents   → bypass
+      //   1 agent    → auto-select，再按 task 数决定 bypass / complete / task form
+      //   >= 2 agents → 出 agent_select form
+      // CB 老路径（pending_agent_task 一发同时问）不受影响。
+      if (splitStage && pickedTeam) {
+        if (pickedTeam.agents.length === 0) {
+          console.warn(
+            `[session-init:cb] session=${compositeKey} team=${teamId} has no agents → bypass`,
+          );
+          await store.set(compositeKey, {
+            ...state,
+            status: "initialized",
+            selectedTeamId: teamId,
+            cachedTeams: cachedTeamsForMore,
+            sessionInfo: null,
+            agentDetail: null,
+            taskDetail: null,
+            bypassed: true,
+          } as SessionInitState);
+          return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+        }
+
+        if (pickedTeam.agents.length === 1) {
+          const soloAgentId = pickedTeam.agents[0].agent_id;
+          const base: SessionInitState = {
+            ...state,
+            selectedTeamId: teamId,
+            selectedAgentId: soloAgentId,
+            attemptCount: 0,
+          };
+
+          if (pickedTeam.tasks.length === 0) {
+            // 统一契约：team+agent+task 缺一不注入 → bypass。
+            console.log(
+              `[session-init:cb] session=${compositeKey} team=${teamId} solo-agent=${soloAgentId} has 0 tasks → bypass`,
+            );
+            await store.set(compositeKey, {
+              ...base,
+              status: "initialized",
+              sessionInfo: null,
+              agentDetail: null,
+              taskDetail: null,
+              bypassed: true,
+            } as SessionInitState);
+            return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+          }
+
+          if (pickedTeam.tasks.length === 1) {
+            const soleTaskId = pickedTeam.tasks[0].task_id;
+            console.log(
+              `[session-init:cb] session=${compositeKey} team=${teamId} auto-select solo agent=${soloAgentId} + task=${soleTaskId} → completeRegistration`,
+            );
+            return await completeRegistration(
+              { agent_id: soloAgentId, task_id: soleTaskId },
+              { ...base, cachedTeams: cachedTeamsForMore },
+              cachedTeamsForMore, compositeKey, sessionKey, userId,
+              config, store, messages, metadataClient, userKey, spaceId,
+            );
+          }
+
+          // >=2 tasks → 跳过 agent_select，直接出 task_select form。
+          await store.set(compositeKey, {
+            ...base,
+            status: "pending_task_select",
+            cachedTeams: cachedTeamsForMore,
+            codexPageIndex: { teamPage: state.codexPageIndex?.teamPage ?? 0, agentPage: 0, taskPage: 0 },
+          } as SessionInitState);
+          console.log(
+            `[session-init:cb] session=${compositeKey} team=${teamId} auto-select solo agent=${soloAgentId} → pending_task_select (tasks=${pickedTeam.tasks.length})`,
+          );
+          const taskFd: FormData = {
+            teams: cachedTeamsForMore,
+            stage: "task_select",
+            selectedTeamId: teamId,
+            selectedAgentId: soloAgentId,
+            stream: reqCtx.stream,
+            questionsAsArray: reqCtx.questionsAsArray,
+            modelId: reqCtx.modelId,
+            protocol: reqCtx.protocol,
+          };
+          return { intercepted: true, response: buildFormResponse(taskFd), formData: taskFd };
+        }
+      }
+
+      const nextStatus = splitStage ? "pending_agent_select" : "pending_agent_task";
+      const nextStage: FormData["stage"] = splitStage ? "agent_select" : "agent_task";
       const next: SessionInitState = {
         ...state,
         status: nextStatus,
