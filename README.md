@@ -383,6 +383,25 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Codex (MCP)
+
+Build the MCP server from the repository root, then add the generated command
+to Codex using the supplied configuration template:
+
+```powershell
+npm install
+npm run build:codex
+```
+
+Copy and adapt [`integrations/codex/templates/codex-config.example.toml`](./integrations/codex/templates/codex-config.example.toml)
+in your Codex MCP configuration. The adapter exposes health, recall, capture,
+structured-memory search, raw-conversation search, session flush, and seed
+tools. It uses the existing Gateway and can start a local Gateway sidecar when
+`MEMORY_TENCENTDB_CODEX_ENABLE_SUPERVISOR=true`.
+
+See [`integrations/codex/README.md`](./integrations/codex/README.md) for the
+recommended recall/capture workflow, configuration variables, and degraded-mode behavior.
+
 
 ## 🔒 Gateway Security (optional)
 
@@ -526,6 +545,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | OpenClaw plugin | Automatically captures, extracts, and recalls memory once installed |
 | Hermes Gateway adapter | `TdaiCore + HostAdapter`, decoupled from the host framework |
+| Codex MCP adapter | Gateway-first stdio MCP tools with optional sidecar supervision |
 | Local backend | `SQLite + sqlite-vec`, ready to use out of the box |
 | Hybrid retrieval | BM25 + vector + RRF — supports both keyword and semantic recall |
 | Agent tools | `tdai_memory_search` / `tdai_conversation_search` |
@@ -539,6 +559,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
+| [`integrations/codex/README.md`](./integrations/codex/README.md) | Codex MCP installation, configuration, and workflow |
 
 ---
 
@@ -559,6 +580,7 @@ We welcome every kind of contribution — bug reports, feature ideas, doc fixes,
 - [x] Short-term context compression (Context Offload + Mermaid canvas)
 - [x] Local SQLite backend and Tencent Cloud Vector Database (TCVDB) backend
 - [x] OpenClaw plugin and Hermes Gateway integration
+- [x] Codex MCP Gateway integration
 - [ ] Portable memory: cross-Agent / cross-framework / cross-device import, export, and live migration
 - [ ] Automatic Skill generation
 - [ ] Visual debugging and memory observability dashboard

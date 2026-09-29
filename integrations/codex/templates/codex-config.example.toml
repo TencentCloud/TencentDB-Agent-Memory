@@ -1,0 +1,15 @@
+[mcp_servers.memory_tencentdb]
+command = "memory-tencentdb-codex-mcp"
+args = []
+
+[mcp_servers.memory_tencentdb.env]
+MEMORY_TENCENTDB_CODEX_GATEWAY_URL = "http://127.0.0.1:8420"
+MEMORY_TENCENTDB_CODEX_ENABLE_SUPERVISOR = "true"
+MEMORY_TENCENTDB_CODEX_USER_ID = "default_user"
+TDAI_DATA_DIR = "~/.memory-tencentdb/memory-tdai"
+# Set both sides when Gateway auth is enabled.
+TDAI_GATEWAY_API_KEY = "change-me"
+MEMORY_TENCENTDB_CODEX_GATEWAY_API_KEY = "change-me"
+TDAI_LLM_BASE_URL = "https://api.openai.com/v1"
+TDAI_LLM_API_KEY = "sk-..."
+TDAI_LLM_MODEL = "gpt-4o"
