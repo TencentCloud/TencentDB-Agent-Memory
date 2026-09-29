@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "tdai": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/TencentDB-Agent-Memory/MemoryCore/claude-code-plugin/dist/mcp/stdio.js"],
+      "env": {
+        "TDAI_GATEWAY_URL": "http://127.0.0.1:8420",
+        "TDAI_SERVICE_ID": "default",
+        "TDAI_TEAM_ID": "default",
+        "TDAI_AGENT_ID": "default",
+        "TDAI_USER_ID": "default",
+        "TDAI_KNOWLEDGE_URL": "http://127.0.0.1:8421"
+      }
+    }
+  }
+}
