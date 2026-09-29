@@ -960,6 +960,20 @@ export interface RequestLogEntry {
    * upstream did not return one. Used for cross-system tracing/audit.
    */
   upstreamRequestId?: string;
+  /**
+   * Proxy-side correlation id for this request (`uuidv7()`, generated per
+   * request in the handler). This is the same value handed to the pipeline
+   * tracker and to Langfuse, so it joins proxy logs to traces.
+   *
+   * Deliberately distinct from `upstreamRequestId`, which is the id the
+   * *upstream* returns — the two are independent and both may be present.
+   *
+   * Already written at runtime: `writeLog` serialises the whole entry into the
+   * daily JSONL log, so codex turns have been recording it; only the
+   * declaration was missing. JSONL-only — the ClickHouse schema has no
+   * `trace_id` column, so this is not queryable there.
+   */
+  traceId?: string;
 }
 
 /** usage event — written after LLM response is received. */
