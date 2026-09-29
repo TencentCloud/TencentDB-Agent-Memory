@@ -15,14 +15,16 @@
  */
 
 import http from "node:http";
+import path from "node:path";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
-import { initDataDirectories } from "../utils/pipeline-factory.js";
+import { initDataDirectories, resetStores } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
+import { resolveUserIdRouting } from "../utils/user-id.js";
 import type {
   HealthResponse,
   RecallRequest,
@@ -46,6 +48,27 @@ import type { SeedProgress } from "../core/seed/types.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+
+/**
+ * Maximum number of simultaneously-live per-user cores. When exceeded, the
+ * least-recently-used core is evicted (WARN + background destroy). Eviction
+ * only reclaims in-memory handles — the `users/<uid>/` data on disk is kept,
+ * so a later request for the same user transparently re-creates the core.
+ */
+const MAX_USER_CORES = 64;
+
+/** Hard timeout for per-user `core.destroy()` — a stuck destroy (e.g. a hung
+ *  in-flight embed call being drained) must not block eviction or shutdown. */
+const USER_CORE_DESTROY_TIMEOUT_MS = 2000;
+
+/** A lazily-created per-user core. */
+interface UserCoreEntry {
+  core: TdaiCore;
+  /** Shared `initialize()` promise — deduplicates concurrent first requests. */
+  ready: Promise<void>;
+  /** LRU clock, bumped on every `getCoreForUser` hit. */
+  lastAccess: number;
+}
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
@@ -117,6 +140,8 @@ export class TdaiGateway {
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
+  /** Per-user cores (multi-user routing) — keyed by normalized uid. */
+  private userCores = new Map<string, UserCoreEntry>();
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -138,6 +163,176 @@ export class TdaiGateway {
     });
   }
 
+  // ============================
+  // Multi-user core routing
+  // ============================
+
+  /**
+   * Resolve which core instance serves a request, from the raw `user_id`
+   * field. Delegates the decision to {@link resolveUserIdRouting}:
+   *
+   *   1. multi-user disabled / invalid uid / owner / "default" → main core
+   *   2. otherwise (normalized uid)                            → per-user core
+   *
+   * For per-user cores the shared `initialize()` promise is awaited before
+   * the core is handed out: TdaiCore's search methods do NOT wait for store
+   * readiness internally (recall/capture/session-end do), so a user's first
+   * request being a search would otherwise race store initialization and
+   * degrade to empty results. On init failure the core still degrades
+   * gracefully (empty searches, captures fall back to JSONL).
+   *
+   * Invalid-or-missing uids additionally emit a normalization-rejection WARN
+   * (monitored; the gradual-rollout exit criterion is a count of zero).
+   * The raw value is never logged verbatim — only its type/length — to keep
+   * junk input out of the logs.
+   */
+  private async _resolveCore(rawUserId: unknown): Promise<TdaiCore> {
+    const routing = resolveUserIdRouting(
+      {
+        multiUserEnabled: this.config.multiUser.enabled,
+        ownerUserIds: this.config.multiUser.ownerUserIds,
+      },
+      rawUserId,
+    );
+
+    if (routing.warn) {
+      this.logger.warn(
+        `Invalid or missing user_id (type=${typeof rawUserId}, ` +
+        `length=${typeof rawUserId === "string" ? rawUserId.length : 0}) — ` +
+        "routing to main store (fail-closed)",
+      );
+    }
+
+    if (routing.pool === "user" && routing.uid) {
+      const entry = this.getCoreForUser(routing.uid);
+      // Concurrent first requests share one initialization (promise dedup).
+      await entry.ready.catch(() => {});
+      return entry.core;
+    }
+    // The main core is initialized in start() before the HTTP server accepts
+    // requests, so it needs no readiness await here.
+    return this.core;
+  }
+
+  /** Per-user data directory: `<baseDir>/users/<uid>/`. */
+  private userCoreDataDir(uid: string): string {
+    // uid is validated (`^[a-z0-9_-]{1,64}$`), so this path cannot traverse.
+    return path.join(this.config.data.baseDir, "users", uid);
+  }
+
+  /**
+   * Get (lazily creating) the per-user core entry for a normalized uid.
+   * Returns the entry (core + shared `initialize()` promise) rather than the
+   * bare core so callers can await readiness — see {@link _resolveCore}.
+   *
+   * Each user gets its own `StandaloneHostAdapter` + `TdaiCore` rooted at
+   * {@link userCoreDataDir} — `initStores` caches per dataDir, so a distinct
+   * directory yields a fully isolated memory stack (vectors.db, L0 jsonl,
+   * persona, scene blocks, checkpoints). Concurrent first requests for the
+   * same uid share one initialization via the Map entry (promise dedup).
+   */
+  private getCoreForUser(uid: string): UserCoreEntry {
+    const existing = this.userCores.get(uid);
+    if (existing) {
+      existing.lastAccess = Date.now();
+      return existing;
+    }
+
+    const dataDir = this.userCoreDataDir(uid);
+    const adapter = new StandaloneHostAdapter({
+      dataDir,
+      llmConfig: this.config.llm,
+      logger: this.logger,
+      platform: "gateway",
+    });
+    const core = new TdaiCore({
+      hostAdapter: adapter,
+      config: this.config.memory,
+      sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
+    });
+
+    const entry: UserCoreEntry = { core, ready: core.initialize(), lastAccess: Date.now() };
+    this.userCores.set(uid, entry);
+    this.logger.info(`User core created [uid=${uid}] dataDir=${dataDir} (${this.userCores.size}/${MAX_USER_CORES})`);
+
+    // Store-level init failures are swallowed inside TdaiCore (degraded mode:
+    // empty searches, captures fall back to JSONL) and the entry is KEPT —
+    // the promise only rejects on unexpected errors (e.g. unwritable
+    // dataDir), in which case the entry is dropped so the next request
+    // retries cleanly.
+    entry.ready.catch((err) => {
+      this.logger.error(`User core init failed [uid=${uid}]: ${err instanceof Error ? err.message : String(err)}`);
+      if (this.userCores.get(uid) === entry) this.userCores.delete(uid);
+    });
+
+    this.evictUserCoresIfNeeded();
+    return entry;
+  }
+
+  /**
+   * LRU eviction: while more than {@link MAX_USER_CORES} cores are live,
+   * destroy the one with the oldest `lastAccess`. Destroy runs in the
+   * background (raced against {@link USER_CORE_DESTROY_TIMEOUT_MS}) so a
+   * stuck destroy never blocks request handling; eviction persists
+   * checkpoints and keeps the on-disk data.
+   *
+   * Before starting the background destroy, the shared store-init cache
+   * entry for the evicted user's dataDir is dropped **synchronously**
+   * (`resetStores`). `TdaiCore.destroy()` only clears that cache at its
+   * very end — doing it only there would leave a window (the destroy
+   * drain period) in which a same-uid request creates a fresh core whose
+   * `initialize()` hits the cached init promise and silently inherits
+   * store handles the in-flight destroy is about to close.
+   */
+  private evictUserCoresIfNeeded(): void {
+    while (this.userCores.size > MAX_USER_CORES) {
+      let oldestUid: string | undefined;
+      let oldestAccess = Number.POSITIVE_INFINITY;
+      for (const [uid, entry] of this.userCores) {
+        if (entry.lastAccess < oldestAccess) {
+          oldestAccess = entry.lastAccess;
+          oldestUid = uid;
+        }
+      }
+      if (oldestUid === undefined) break;
+
+      const evicted = this.userCores.get(oldestUid)!;
+      this.userCores.delete(oldestUid);
+      // Synchronously close the rebuild window — must happen BEFORE the
+      // background destroy starts (see docstring above).
+      resetStores(this.userCoreDataDir(oldestUid));
+      this.logger.warn(
+        `User core LRU evicted [uid=${oldestUid}] — userCores=${this.userCores.size}/${MAX_USER_CORES}; ` +
+        `destroying in background (${USER_CORE_DESTROY_TIMEOUT_MS}ms timeout); on-disk data kept`,
+      );
+      this.destroyUserCore(oldestUid, evicted);
+    }
+  }
+
+  /**
+   * Destroy a per-user core, racing against a hard timeout. Fire-and-forget
+   * safe: a destroy failure is logged as a WARN (the on-disk data and the
+   * next request's fresh core absorb it) and then swallowed so it can never
+   * produce an unhandled rejection.
+   */
+  private destroyUserCore(uid: string, entry: UserCoreEntry): Promise<void> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timeoutId = setTimeout(resolve, USER_CORE_DESTROY_TIMEOUT_MS);
+      timeoutId.unref?.();
+    });
+    return Promise.race([entry.core.destroy(), timeout])
+      .finally(() => {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `User core destroy failed [uid=${uid}]: ${err instanceof Error ? err.message : String(err)} ` +
+          "(on-disk data kept; a later request re-creates the core)",
+        );
+      });
+  }
+
   /**
    * Start the Gateway HTTP server.
    */
@@ -147,6 +342,13 @@ export class TdaiGateway {
 
     // Initialize core
     await this.core.initialize();
+
+    if (this.config.multiUser.enabled) {
+      this.logger.info(
+        `Multi-user routing ENABLED: owners=${this.config.multiUser.ownerUserIds.length}, ` +
+        `maxUserCores=${MAX_USER_CORES}, layout=<baseDir>/users/<uid>/`,
+      );
+    }
 
     // Create HTTP server
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
@@ -222,6 +424,15 @@ export class TdaiGateway {
       await new Promise<void>((resolve) => {
         this.server!.close(() => resolve());
       });
+    }
+
+    // Tear down per-user cores first (each destroy raced with a hard timeout
+    // so one stuck user store cannot hang the shutdown).
+    if (this.userCores.size > 0) {
+      await Promise.allSettled(
+        [...this.userCores.entries()].map(([uid, entry]) => this.destroyUserCore(uid, entry)),
+      );
+      this.userCores.clear();
     }
 
     await this.core.destroy();
@@ -377,7 +588,8 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleBeforeRecall(body.query, body.session_key);
+    const core = await this._resolveCore(body.user_id);
+    const result = await core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
     this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
@@ -399,7 +611,8 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleTurnCommitted({
+    const core = await this._resolveCore(body.user_id);
+    const result = await core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
       messages: body.messages ?? [
@@ -428,7 +641,8 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchMemories({
+    const core = await this._resolveCore(body.user_id);
+    const result = await core.searchMemories({
       query: body.query,
       limit: body.limit,
       type: body.type,
@@ -451,7 +665,8 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchConversations({
+    const core = await this._resolveCore(body.user_id);
+    const result = await core.searchConversations({
       query: body.query,
       limit: body.limit,
       sessionKey: body.session_key,
@@ -472,7 +687,8 @@ export class TdaiGateway {
       return;
     }
 
-    await this.core.handleSessionEnd(body.session_key);
+    const core = await this._resolveCore(body.user_id);
+    await core.handleSessionEnd(body.session_key);
 
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
@@ -483,6 +699,25 @@ export class TdaiGateway {
 
     if (!body.data) {
       sendError(res, 400, "Missing required field: data");
+      return;
+    }
+
+    // Multi-user guard: /seed ALWAYS writes to the MAIN store. While
+    // multi-user routing is enabled, refuse seeds addressed to a regular
+    // per-user store — history seeded into the shared pool would be readable
+    // by the admin but invisible to the teacher it belongs to. Note: the
+    // gateway has no *per-user* authentication (the shared optional Bearer
+    // key authenticates the client, not which user is calling), so `user_id`
+    // is caller-declared; this 403 guards against misuse, not forgery.
+    const seedRouting = resolveUserIdRouting(
+      {
+        multiUserEnabled: this.config.multiUser.enabled,
+        ownerUserIds: this.config.multiUser.ownerUserIds,
+      },
+      body.user_id,
+    );
+    if (seedRouting.pool === "user" && seedRouting.uid) {
+      sendJson(res, 403, { error: "seed is not allowed for per-user stores" } satisfies GatewayErrorResponse);
       return;
     }
 
