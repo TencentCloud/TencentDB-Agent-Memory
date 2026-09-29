@@ -632,6 +632,7 @@ export class TdaiCore {
     maxTokens: number;
     timeoutMs: number;
     stream: boolean;
+    disableThinking?: boolean;
   } {
     const resolved = resolveStandaloneLlmForRuntime(this.cfg.llm, this.instanceId);
     return {
@@ -641,6 +642,9 @@ export class TdaiCore {
       maxTokens: resolved.maxTokens ?? 4096,
       timeoutMs: resolved.timeoutMs ?? 120_000,
       stream: resolved.stream ?? false,
+      // resolver 对 openai 模式透传原对象、proxy 模式 spread,字段会自然带出;
+      // 这里显式列出以免后续有人改成窄化对象时静默丢失(与 stream 同理)。
+      disableThinking: resolved.disableThinking,
     };
   }
 
