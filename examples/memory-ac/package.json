@@ -1,0 +1,14 @@
+{
+  "name": "memory-ac-controlled-retrieval",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22.16.0"},
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "verify": "node scripts/verify.mjs",
+    "verify:residual": "node scripts/verify-residual.mjs",
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "test:gateway": "node --import ./vendor/TencentDB-Agent-Memory/MemoryCore/node_modules/tsx/dist/loader.mjs scripts/gateway-smoke.mjs"
+  }
+}
