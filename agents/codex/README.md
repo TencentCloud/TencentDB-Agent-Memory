@@ -48,6 +48,35 @@ stream_idle_timeout_ms = 120000
 
 ---
 
+### 1.1 ChatGPT 登录与独立记忆模型
+
+使用 ChatGPT 登录时，客户端保留 OpenAI 认证，记忆库身份放在独立 header：
+
+```toml
+model_provider = "chatgpt-memory"
+model = "<ChatGPT 可用模型>"
+
+[model_providers.chatgpt-memory]
+name = "ChatGPT + Memory"
+base_url = "http://127.0.0.1:8096/codex/default"
+wire_api = "responses"
+requires_openai_auth = true
+env_http_headers = { "x-tdai-user-key" = "TDAI_USER_KEY" }
+
+# 仅使用服务端记忆时，关闭 Codex 原生记忆。
+[features]
+memories = false
+```
+
+保留已有的 team/agent header 绑定。不要将记忆库 key 配成
+`experimental_bearer_token`；代理配置 `upstream.agents.codex.url` 为
+`https://chatgpt.com/backend-api/codex`，该条目不配置 `apiKey`。
+MemoryCore 的 `llm` 配置保持独立。普通推理仍经过代理，记忆自动写回服务端。
+
+容器如需网络代理，使用支持 `--use-env-proxy` 的 Node，并传入已有的
+`HTTP_PROXY` / `HTTPS_PROXY`，通过 `NO_PROXY` 排除内网服务。
+`injection.externalGatewayUrl` 应设置为客户端可访问的代理地址，供记忆查询使用。
+
 ## 2. Session ID
 
 | 优先级 | 来源 |
