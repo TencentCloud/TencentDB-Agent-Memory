@@ -88,6 +88,19 @@ export function isDshRuntimeContextSnapshot(text: string): boolean {
 }
 
 /**
+ * DSH 把权限/审批策略变更作为独立 `role=user` 消息发送（例：
+ * `The approval policy changed from "ask" to "never" (changed by the user).`）。
+ * 固定英文前缀，与 session-init 跳过逻辑同一锚点：全新会话在首次模型输入前
+ * 执行 /permission 时，这条元数据不应被计成真实用户输入，否则会话会被误判
+ * 成已有历史而永久 bypass session-init。真实用户提问不会以这段英文开头。
+ */
+export const DSH_PERMISSION_CHANGE_PREFIX = "The approval policy changed";
+
+export function isDshPermissionChangeNotice(text: string): boolean {
+  return text.trimStart().startsWith(DSH_PERMISSION_CHANGE_PREFIX);
+}
+
+/**
  * 从原始 user content 文本抽取用户真实键入。
  *
  * 返回空字符串意味着"这条 user message 全是 harness 噪声"，调用方应据此

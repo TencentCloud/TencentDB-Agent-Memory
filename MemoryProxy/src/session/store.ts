@@ -27,7 +27,7 @@ import type { SessionInitState, SessionInitStatus, SessionInfo, AgentDetail, Tas
 import { getSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import type { BindingRepo, SessionBinding } from "../db/binding-repo.js";
 import type { MetadataClient } from "../meta/client.js";
-import { isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
+import { isDshPermissionChangeNotice, isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
 import type { PresetIdentity } from "./preset.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -720,6 +720,7 @@ export class SessionStore {
         if (
           c.startsWith("<system-reminder>") ||
           isDshRuntimeContextSnapshot(c) ||
+          isDshPermissionChangeNotice(c) ||
           c.startsWith("<system-reminder>\nA skill is a reusable")
         ) {
           continue;
