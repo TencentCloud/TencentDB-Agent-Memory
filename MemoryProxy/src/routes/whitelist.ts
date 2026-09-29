@@ -46,7 +46,11 @@ export const WHITELIST_ENDPOINTS: readonly WhitelistEndpoint[] = [
   // ── 主端点（由现有 handler 处理，含路由）────────────────────────
   {
     pathSuffix: "/v1/messages",
-    upstreamEndpoint: "/messages",
+    // Anthropic upstream bases do not include the /v1 segment
+    // (e.g. https://api.anthropic.com or a custom base), so the /v1/ must be
+    // kept — dropping it made every forwarded call hit /messages → 404
+    // (issue #825).
+    upstreamEndpoint: "/v1/messages",
     protocol: "anthropic",
     supportsStream: true,
     isPrimary: true,
@@ -61,7 +65,7 @@ export const WHITELIST_ENDPOINTS: readonly WhitelistEndpoint[] = [
   // ── 辅助端点（由 handleAuxiliaryEndpoint 处理，不走路由）─────────
   {
     pathSuffix: "/v1/messages/count_tokens",
-    upstreamEndpoint: "/messages/count_tokens",
+    upstreamEndpoint: "/v1/messages/count_tokens",
     protocol: "anthropic",
     supportsStream: false,
     isPrimary: false,
