@@ -264,10 +264,15 @@ function parseUpstreamAgents(
 /**
  * Build the final ProxyConfig.
  * Priority (high → low): CLI overrides > YAML config file > defaults.
+ * Selected fields also support explicit environment overrides (see below).
  */
 export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
+  const externalGatewayUrl = process.env.INJECTION_EXTERNAL_GATEWAY_URL?.trim()
+    || (typeof yaml.injection?.externalGatewayUrl === "string"
+      ? yaml.injection.externalGatewayUrl.trim()
+      : "");
 
   return {
     server: {
@@ -399,8 +404,8 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     injection: {
       enabled: yaml.injection?.enabled ?? DEFAULT_CONFIG.injection.enabled,
       injectors: yaml.injection?.injectors ?? DEFAULT_CONFIG.injection.injectors,
-      externalGatewayUrl: typeof yaml.injection?.externalGatewayUrl === "string" && yaml.injection.externalGatewayUrl.trim() !== ""
-        ? yaml.injection.externalGatewayUrl.trim().replace(/\/$/, "")
+      externalGatewayUrl: externalGatewayUrl
+        ? externalGatewayUrl.replace(/\/$/, "")
         : undefined,
       // 只接受 boolean；yaml 缺省或类型错走 default（关）。跟 costGuard.markerOptIn
       // 同姿势，保证线上未配 assetReflection: 段的 yaml 完全无感。
