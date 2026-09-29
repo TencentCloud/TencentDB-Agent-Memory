@@ -42,6 +42,8 @@ import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
+import { DEFAULT_ISOLATION_ID } from "./src/core/store/types.js";
+import type { IsolationFilter } from "./src/core/store/types.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";
@@ -68,6 +70,18 @@ function resolveOpenClawAdapterMode(rawPluginConfig: Record<string, unknown> | u
   // Default to local/function mode: OpenClaw calls this plugin in-process and
   // memory processing uses the host LLM runner (no standalone Gateway needed).
   return "local";
+}
+
+function resolveUsageIsolationFilter(rawPluginConfig: Record<string, unknown> | undefined): IsolationFilter {
+  const configured = rawPluginConfig?.isolation;
+  const source = configured && typeof configured === "object"
+    ? configured as Record<string, unknown>
+    : rawPluginConfig ?? {};
+  const read = (key: string): string => {
+    const value = source[key];
+    return typeof value === "string" && value.trim() ? value.trim() : DEFAULT_ISOLATION_ID;
+  };
+  return { teamId: read("teamId"), userId: read("userId"), agentId: read("agentId") };
 }
 
 /**
@@ -183,6 +197,8 @@ export default function register(api: OpenClawPluginApi) {
     return registerClientOpenClawPlugin(api as any);
   }
 
+  const usageIsolationFilter = resolveUsageIsolationFilter(rawPluginConfigForMode);
+
   pluginStartTimestamp = Date.now();
   setPreferredEmbeddedAgentRuntime(api.runtime.agent);
   // Reset reporter singleton so config changes take effect on hot-reload.
@@ -295,6 +311,7 @@ export default function register(api: OpenClawPluginApi) {
     hostAdapter,
     config: cfg,
     sessionFilter,
+    usageIsolationFilter,
   });
 
   // Initialize TdaiCore (async — store init, pipeline wiring)
@@ -420,7 +437,13 @@ export default function register(api: OpenClawPluginApi) {
         );
 
         try {
-          const result = await core.searchMemories({ query, limit, type: typeFilter, scene: sceneFilter });
+          const result = await core.searchMemories({
+            query,
+            limit,
+            type: typeFilter,
+            scene: sceneFilter,
+            filter: usageIsolationFilter,
+          });
 
           const elapsedMs = Date.now() - startMs;
           api.logger.debug?.(
@@ -459,6 +482,44 @@ export default function register(api: OpenClawPluginApi) {
       },
     },
     { name: "tdai_memory_search" },
+  );
+
+  api.registerTool(
+    {
+      name: "tdai_memory_use",
+      label: "Confirm Memory Use",
+      description:
+        "After deciding that one or more tdai_memory_search results substantively support your reply, call this once with their [id] values. Do not call it for memories you merely viewed.",
+      parameters: {
+        type: "object",
+        properties: {
+          memory_ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "IDs from the tdai_memory_search results that you will use in your reply.",
+          },
+        },
+        required: ["memory_ids"],
+      },
+      async execute(_toolCallId: string, params: Record<string, unknown>) {
+        // ponytail: OpenClaw exposes no stable turn id; bind IDs to a turn when it does.
+        const memoryIds = Array.isArray(params.memory_ids)
+          ? params.memory_ids.filter((id): id is string => typeof id === "string").slice(0, 20)
+          : [];
+        if (memoryIds.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "memory_ids must contain at least one search-result id." }],
+            details: { error: "invalid_memory_ids" },
+          };
+        }
+        const used = await core.recordMemoriesUsed(memoryIds, usageIsolationFilter);
+        return {
+          content: [{ type: "text" as const, text: `Confirmed ${used} memory use(s).` }],
+          details: { count: used },
+        };
+      },
+    },
+    { name: "tdai_memory_use" },
   );
 
   // tdai_conversation_search — Agent-callable L0 conversation search tool
