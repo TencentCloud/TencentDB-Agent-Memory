@@ -328,10 +328,12 @@ export function canManageAsset(
   asset: { owner_user_id: string; team_id: string },
   team: Team | null | undefined,
   userId: string,
-  _isGlobalAdminFlag?: boolean
+  isGlobalAdminFlag?: boolean
 ): boolean {
   if (!userId) return false;
-  // admin 不再拥有全局特权，与 member 一致：只能操作自己 owner 的资产。
+  // system_admin 与内核 agent delete/archive 的 admin 旁路对齐：
+  // 无需 owner / team 成员身份即可操作（task 等其它资源内核未放行，调用方继续传 false）。
+  if (isGlobalAdminFlag === true) return true;
   if (asset.owner_user_id === userId) return true;
   if (team && team.team_id === asset.team_id && isTeamAdmin(team, userId)) return true;
   return false;

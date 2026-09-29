@@ -424,8 +424,34 @@ export class SqliteMetadataStore implements IMetadataStore {
     };
   }
 
+  /** 事务嵌套深度：>0 时 tx() 降级为 SAVEPOINT，支持 deleteTeams → deleteAgents → deleteAssets 这类复合调用。 */
+  private txDepth = 0;
+
   private tx<T>(fn: () => T): T {
+    if (this.txDepth > 0) {
+      // 已在事务内：用 SAVEPOINT 参与外层事务。内层失败只回滚到保存点并向上抛，
+      // 由最外层决定整体回滚 —— 直接 BEGIN 会抛 "cannot start a transaction within a transaction"。
+      const sp = `tdai_sp_${this.txDepth}`;
+      this.db.exec(`SAVEPOINT ${sp}`);
+      this.txDepth++;
+      try {
+        const result = fn();
+        this.db.exec(`RELEASE SAVEPOINT ${sp}`);
+        return result;
+      } catch (e) {
+        try {
+          this.db.exec(`ROLLBACK TO SAVEPOINT ${sp}`);
+          this.db.exec(`RELEASE SAVEPOINT ${sp}`);
+        } catch {
+          /* ignore */
+        }
+        throw e;
+      } finally {
+        this.txDepth--;
+      }
+    }
     this.db.exec("BEGIN");
+    this.txDepth++;
     try {
       const result = fn();
       this.db.exec("COMMIT");
@@ -437,6 +463,8 @@ export class SqliteMetadataStore implements IMetadataStore {
         /* ignore */
       }
       throw e;
+    } finally {
+      this.txDepth--;
     }
   }
 
@@ -809,15 +837,29 @@ export class SqliteMetadataStore implements IMetadataStore {
   }
 
   deleteTeams(teamIds: string[]): BatchDeleteResult {
-    const result = this.batchDelete("meta_teams", "team_id", teamIds);
-    if (result.deleted_ids.length > 0) {
-      const ph = result.deleted_ids.map(() => "?").join(",");
-      this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_agents WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph})`, ...result.deleted_ids);
-      this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph})`, ...result.deleted_ids);
-    }
-    return result;
+    // 整体包一个事务：agents 级联（deleteAgents → deleteAssets）与团队/成员/任务/资产
+    // 清理要么全成功要么全回滚。内层 deleteAssets / setAgentFixedAssets 的 tx() 会
+    // 自动降级为 SAVEPOINT，不会触发嵌套 BEGIN。
+    return this.tx(() => {
+      // 级联删除 agents（走 deleteAgents 获得完整级联：task_agents, fixed_assets, chat_memory）
+      const ph = teamIds.map(() => "?").join(",");
+      const agentRows = this.all<{ agent_id: string }>(
+        `SELECT agent_id FROM meta_agents WHERE team_id IN (${ph})`,
+        ...teamIds,
+      );
+      const agentIds = agentRows.map((r) => r.agent_id);
+      if (agentIds.length > 0) this.deleteAgents(agentIds);
+
+      const result = this.batchDelete("meta_teams", "team_id", teamIds);
+      if (result.deleted_ids.length > 0) {
+        const ph2 = result.deleted_ids.map(() => "?").join(",");
+        this.run(`DELETE FROM meta_team_members WHERE team_id IN (${ph2})`, ...result.deleted_ids);
+        // meta_agents 已由 deleteAgents 处理
+        this.run(`DELETE FROM meta_tasks WHERE team_id IN (${ph2})`, ...result.deleted_ids);
+        this.run(`DELETE FROM meta_assets WHERE team_id IN (${ph2})`, ...result.deleted_ids);
+      }
+      return result;
+    });
   }
 
   listTeamsByUser(userId: string, pagination?: PaginationParams | null, filter?: { name?: string }): ListPage<TeamEntity> {
@@ -1761,9 +1803,9 @@ export class SqliteMetadataStore implements IMetadataStore {
 
   upsertConfigParam(input: UpsertConfigParamInput): ConfigParamEntity {
     const now = nowIso();
+    // 原先这里是两段裸 BEGIN/COMMIT；统一收口到 tx()（可重入），避免绕过 txDepth 计数
     if (input.scope === "global") {
-      this.db.exec("BEGIN");
-      try {
+      this.tx(() => {
         const existing = this.get<Row>(
           `SELECT id FROM meta_config_params WHERE scope = 'global' AND module = ? AND param_name = ?`,
           input.module, input.param_name,
@@ -1780,14 +1822,9 @@ export class SqliteMetadataStore implements IMetadataStore {
             input.module, input.param_name, input.param_value, input.description, now, now,
           );
         }
-        this.db.exec("COMMIT");
-      } catch (err) {
-        this.db.exec("ROLLBACK");
-        throw err;
-      }
+      });
     } else {
-      this.db.exec("BEGIN");
-      try {
+      this.tx(() => {
         const existing = this.get<Row>(
           `SELECT id FROM meta_config_params WHERE scope = 'user' AND user_id = ? AND module = ? AND param_name = ?`,
           input.user_id!, input.module, input.param_name,
@@ -1804,11 +1841,7 @@ export class SqliteMetadataStore implements IMetadataStore {
             input.user_id!, input.module, input.param_name, input.param_value, input.description, now, now,
           );
         }
-        this.db.exec("COMMIT");
-      } catch (err) {
-        this.db.exec("ROLLBACK");
-        throw err;
-      }
+      });
     }
 
     const result = this.getConfigParam(

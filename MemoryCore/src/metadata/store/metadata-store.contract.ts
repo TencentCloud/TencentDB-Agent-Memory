@@ -672,6 +672,57 @@ export function runMetadataStoreContract(
         await store.deleteTasks([task.task_id]);
         expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
       });
+
+      it("deleteTeams 级联清理 agents 的 task_agents + fixed_assets + chat_memory", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: owner.user_id, name: "A" });
+        const task = await store.createTask({ team_id: team.team_id, creator_user_id: owner.user_id, title: "T" });
+        await store.linkTaskAgent(task.task_id, agent.agent_id);
+
+        const skillAsset = await store.createAsset({ asset_id: newAssetId(), team_id: team.team_id, asset_type: "skill", name: "S", owner_user_id: owner.user_id, source_type: "manual" });
+        await store.setAgentFixedAssets(agent.agent_id, [{ asset_id: skillAsset.asset_id, asset_type: "skill", created_by: owner.user_id }]);
+
+        const chatMemoryId = buildChatMemoryAssetId(team.team_id, agent.agent_id);
+        await store.createAsset({ asset_id: chatMemoryId, team_id: team.team_id, asset_type: "chat_memory", name: "Memory", owner_user_id: owner.user_id, source_type: "auto", visibility: "private", status: "active" });
+        await store.setAgentFixedAssets(agent.agent_id, [
+          { asset_id: skillAsset.asset_id, asset_type: "skill", created_by: owner.user_id },
+          { asset_id: chatMemoryId, asset_type: "chat_memory", created_by: owner.user_id },
+        ]);
+
+        await store.deleteTeams([team.team_id]);
+
+        // task_agents 应被清理
+        expect((await store.listTaskAgents(task.task_id, P)).items).toHaveLength(0);
+        // agent_fixed_assets 应被清理
+        expect((await store.listAgentFixedAssets(agent.agent_id, P)).items).toHaveLength(0);
+        // chat_memory asset 应被删除
+        expect(await store.getAssetById(chatMemoryId)).toBeNull();
+        // agent 本身应不存在
+        expect(await store.getAgentById(agent.agent_id)).toBeNull();
+      });
+
+      it("removeTeamMember 不级联删除 agents（由 service 层负责）", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const member = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        await store.addTeamMember({ team_id: team.team_id, user_id: member.user_id, role: "member" });
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: member.user_id, name: "A" });
+
+        await store.removeTeamMember(team.team_id, member.user_id);
+        // store 层不级联，agent 仍存在（service 层 removeTeamMemberForCaller 负责级联）
+        expect(await store.getAgentById(agent.agent_id)).not.toBeNull();
+      });
+
+      it("deleteUsers 不级联删除 agents（由 service 层负责）", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const agent = await store.createAgent({ team_id: team.team_id, owner_user_id: owner.user_id, name: "A" });
+
+        await store.deleteUsers([owner.user_id]);
+        // store 层不级联，agent 仍存在（service 层 deleteUsersForCaller 负责级联）
+        expect(await store.getAgentById(agent.agent_id)).not.toBeNull();
+      });
     });
 
     // ── v3.1：username / external_id 无唯一约束 ──
