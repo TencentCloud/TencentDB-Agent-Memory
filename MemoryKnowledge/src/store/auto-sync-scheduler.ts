@@ -290,6 +290,9 @@ export class AutoSyncScheduler {
       switch (result.kind) {
         case "ok":
           log.info(`[auto-sync] sync enqueued for ${row.code_graph_id} (took ${durationMs}ms)`);
+          // sync() only enqueues a per-asset build. Hold this worker slot until
+          // that build completes; enqueue acceptance is not sync completion.
+          await this.cgService.onIdle(row.code_graph_id);
           break;
         case "busy":
           log.debug(`[auto-sync] skip ${row.code_graph_id}: already ${result.status} (step: ${result.step})`);
