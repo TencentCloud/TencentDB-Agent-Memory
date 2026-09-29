@@ -113,10 +113,16 @@ async function fetchTeamsAndAgents(
   userId: string,
   config: SessionInitConfig,
   metadataClient: MetadataClient,
+  presetIdentity?: PresetIdentity,
 ): Promise<{ teams: TeamOption[] }> {
   const teamsRaw = await metadataClient.listTeams(userId);
-  const teamResults = await Promise.all(
-    teamsRaw.map(async (t) => {
+  // Authorize the requested team against the caller's visible teams before
+  // loading its directory. Unrelated teams must not block a valid preset.
+  const presetTeam = config.headerAutoSelect?.enabled && presetIdentity?.teamId
+    ? teamsRaw.find((t) => t.team_id === presetIdentity.teamId)
+    : undefined;
+  const loadTeams = (selected: typeof teamsRaw) => Promise.all(
+    selected.map(async (t) => {
       const [agentsRaw, tasksRaw] = await Promise.all([
         // Agents are scoped to (team, owner) — each user only sees the agents
         // they created within the team. Tasks remain team-wide (unchanged).
@@ -152,6 +158,16 @@ async function fetchTeamsAndAgents(
       };
     }),
   );
+  const teamResults = await loadTeams(presetTeam ? [presetTeam] : teamsRaw);
+  if (presetTeam && presetIdentity &&
+      resolvePresetIdentity(teamResults, presetIdentity).hadMismatch &&
+      config.headerAutoSelect?.onMismatch !== "bypass") {
+    // The interactive fallback still needs every visible choice. Reuse the
+    // target directory and preserve the original team order.
+    const remaining = await loadTeams(teamsRaw.filter((t) => t.team_id !== presetTeam.team_id));
+    const byId = new Map([...teamResults, ...remaining].map((t) => [t.team_id, t]));
+    return { teams: teamsRaw.map((t) => byId.get(t.team_id)!) };
+  }
   return { teams: teamResults };
 }
 
@@ -720,7 +736,7 @@ async function handleSessionInitInner(
 
     let teams: TeamOption[];
     try {
-      const cfg = await fetchTeamsAndAgents(userId, config, metadataClient);
+      const cfg = await fetchTeamsAndAgents(userId, config, metadataClient, presetIdentity);
       teams = cfg.teams;
     } catch (err) {
       console.warn(
