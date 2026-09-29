@@ -102,6 +102,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
             visibility: input.visibility ?? "team",
             status: "pending",
             serviceUrl: input.service_url ?? null,
+            credentialId: input.credential_id ?? null,
             version: CODE_DATA_VERSION,
             createdAt: ts,
             updatedAt: ts,
@@ -241,11 +242,12 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
     return result.changes > 0;
   }
 
-  /** Update code-graph metadata (repo_name, summary). memory mismatch → null. */
+  /** Update code-graph metadata (repo_name, summary, credential_id). memory mismatch → null. */
   updateCodeGraphMeta(serviceId: string, codeGraphId: string, patch: CodeGraphMetaPatch): CodeGraphRow | null {
     const set: Record<string, unknown> = { updatedAt: nowIso() };
     if (patch.repo_name !== undefined) set.repoName = patch.repo_name;
     if (patch.summary !== undefined) set.summary = patch.summary;
+    if (patch.credential_id !== undefined) set.credentialId = patch.credential_id;
     this.db
       .update(knowledgeCodeGraph)
       .set(set)
@@ -613,6 +615,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       stats_json: r.statsJson,
       service_url: r.serviceUrl ?? null,
       summary: r.summary ?? null,
+      credential_id: r.credentialId ?? null,
       version: r.version,
       last_sync_at: r.lastSyncAt,
       created_at: r.createdAt,

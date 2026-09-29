@@ -6,6 +6,7 @@
  *   knowledge_wiki             — wiki knowledge base metadata + status
  *   knowledge_wiki_audit       — wiki state-change audit log (append-only)
  *   knowledge_code_graph_audit — code-graph state-change audit log
+ *   knowledge_git_credential   — managed git credentials for private repos (team-scoped)
  *
  * Soft-delete via `deleted_at` + partial unique index (WHERE deleted_at IS NULL).
  */
@@ -36,6 +37,8 @@ export const knowledgeCodeGraph = sqliteTable(
     statsJson: text("stats_json"),
     serviceUrl: text("service_url"),
     summary: text("summary"),
+    /** 引用的 git 凭证（knowledge_git_credential.credential_id）；NULL = 匿名访问公开仓库。 */
+    credentialId: text("credential_id"),
     version: integer("version").notNull().default(0),
     lastSyncAt: text("last_sync_at"),
     createdAt: text("created_at").notNull(),
@@ -123,6 +126,63 @@ export const knowledgeCodeGraphAudit = sqliteTable(
   (table) => [index("idx_kcga_cg_version").on(table.codeGraphId, table.version)],
 );
 
+// ───────────────────────── knowledge_git_credential ─────────────────────────
+// 托管 git 凭证（team 级共享）。
+//
+// 密钥本体以 `v1.<iv>.<tag>.<ciphertext>` 形式 AES-256-GCM 加密后存于 secret_enc，
+// 主密钥来自 KNOWLEDGE_SECRET_KEY。fingerprint 是 HMAC(key, secret) 的前 16 位 hex，
+// 仅供展示与查重 —— 不持有主密钥就无法反推或离线枚举。
+//
+// host 强制非空：凭证只对其声明的主机生效，杜绝「拿团队 token 去打任意主机」
+
+export const knowledgeGitCredential = sqliteTable(
+  "knowledge_git_credential",
+  {
+    credentialId: text("credential_id").primaryKey(),
+    serviceId: text("service_id").notNull(),
+    teamId: text("team_id").notNull(),
+    name: text("name").notNull(),
+    /** https_token | ssh_key */
+    kind: text("kind").notNull(),
+    /** 归一化后的 host（小写、无尾点、IPv6 无方括号）。 */
+    host: text("host").notNull(),
+    /** HTTPS 用户名，默认 oauth2。 */
+    username: text("username"),
+    /** 加密后的凭证材料：{token} 或 {privateKey}。 */
+    secretEnc: text("secret_enc").notNull(),
+    /** HMAC-SHA256(主密钥, 凭证明文) 前 16 位 hex。 */
+    fingerprint: text("fingerprint").notNull(),
+    createdBy: text("created_by"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    uniqueIndex("idx_kgcred_team_name")
+      .on(table.serviceId, table.teamId, table.name)
+      .where(sql`deleted_at IS NULL`),
+    index("idx_kgcred_team_host").on(table.serviceId, table.teamId, table.host),
+  ],
+);
+
+// ───────────────────────── knowledge_git_credential_audit ─────────────────────────
+// 凭证操作审计（append-only）。只记 actor / action / host，**绝不记密钥**。
+
+export const knowledgeGitCredentialAudit = sqliteTable(
+  "knowledge_git_credential_audit",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    credentialId: text("credential_id").notNull(),
+    serviceId: text("service_id"),
+    /** create | delete | test */
+    action: text("action").notNull(),
+    userId: text("user_id"),
+    detail: text("detail"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("idx_kgca_cred").on(table.credentialId, table.id)],
+);
+
 // ───────────────────────── llm_binding ─────────────────────────
 // Per-instance (service_id) LLM routing for wiki ingest/summary.
 // mode='proxy' → call context_proxy with a dedicated knowledge-service user_key;
@@ -144,8 +204,12 @@ export type KnowledgeCodeGraph = typeof knowledgeCodeGraph.$inferSelect;
 export type KnowledgeWiki = typeof knowledgeWiki.$inferSelect;
 export type KnowledgeWikiAudit = typeof knowledgeWikiAudit.$inferSelect;
 export type KnowledgeCodeGraphAudit = typeof knowledgeCodeGraphAudit.$inferSelect;
+export type KnowledgeGitCredential = typeof knowledgeGitCredential.$inferSelect;
+export type KnowledgeGitCredentialAudit = typeof knowledgeGitCredentialAudit.$inferSelect;
 export type LlmBinding = typeof llmBinding.$inferSelect;
 
 /** Data format version constants (reserved field). */
 export const CODE_DATA_VERSION = 0;
 export const WIKI_DATA_VERSION = 0;
+/** 凭证加密格式版本（secret_enc 的 `v1.` 前缀）。 */
+export const GIT_CREDENTIAL_SECRET_VERSION = "v1";

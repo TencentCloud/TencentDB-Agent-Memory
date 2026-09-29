@@ -122,7 +122,7 @@ MongoDB 存储后端为**试验特性**（默认关闭），见
 
 <img src="./assets/images/wiki.cn.png" alt="image.png" />
 
-- **CodeGraph** 索引代码符号、文件、调用关系和影响路径。
+- **CodeGraph** 索引代码符号、文件、调用关系和影响路径（公开仓库与托管凭证的私有仓库均可）。
 
 <img width="" src="assets/images/codegraph.cn.png" alt="image.png" />
 
@@ -281,7 +281,11 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 ## 注意事项
 
 - Wiki 和 CodeGraph 异步构建，需要等待一定时间处理才能 `ready`。
-- CodeGraph 当前首先支持公开 HTTPS 仓库；私有仓库和 SSH 凭证接入仍在完善。
+- CodeGraph 支持公开 HTTPS 仓库，以及**托管凭证后的私有仓库**（HTTPS Token / SSH 私钥）。
+  私有仓库需先配置 `KNOWLEDGE_SECRET_KEY` 并在 `/v3/source-credential/*` 托管凭证，
+  详见 [MemoryKnowledge/README_CN.md](./MemoryKnowledge/README.md)「私有仓库接入」。
+  环境要求 git ≥ 2.31、OpenSSH ≥ 7.6。
+- 出于安全考虑，仓库 URL 不允许内嵌凭证（`https://user:token@host/...`），请改用 `credential_id`。
 - Hub 已支持人工绑定资产；全自动记忆路由仍在迭代。
 
 ## 相关文档

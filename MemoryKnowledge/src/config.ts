@@ -6,7 +6,10 @@
  * LLM config can also be passed explicitly to createKnowledgeModule.
  */
 import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import 'dotenv/config';
+
+import { parseAllowedHosts } from "./source-fetcher/git-url.js";
 
 /** Expand leading ~/ to the user's home directory. */
 function expandHome(filepath: string): string {
@@ -14,6 +17,15 @@ function expandHome(filepath: string): string {
     return `${homedir()}${filepath.slice(1)}`;
   }
   return filepath;
+}
+
+/**
+ * 路径绝对化：相对路径相对 process.cwd()。
+ * SSH known_hosts / 数据目录若保持相对路径，git 工作目录切到仓库后会找不到文件。
+ */
+function resolveDataPath(filepath: string): string {
+  const expanded = expandHome(filepath);
+  return isAbsolute(expanded) ? expanded : resolve(process.cwd(), expanded);
 }
 
 export interface LlmConfig {
@@ -41,6 +53,34 @@ export interface LlmConfig {
    * 个别只接受流式请求的兼容上游需置 true。per-instance binding 不覆盖此字段(部署级开关)。
    */
   stream?: boolean;
+}
+
+/**
+ * Git 私有仓库相关的安全配置。
+ */
+export interface GitSecurityConfig {
+  /**
+   * 允许访问内网 / 私有地址的 host 白名单（KNOWLEDGE_GIT_ALLOWED_HOSTS，逗号分隔）。
+   * 条目只写 host（不写端口），支持精确 host 与 `*.suffix` 单层通配。
+   * 命中即跳过 SSRF 黑名单 —— 企业内网 Git 服务必须显式声明。
+   */
+  allowedHosts: string[];
+  /** SSH 严格 host key 校验（KNOWLEDGE_GIT_STRICT_HOST_KEY）；默认 false = accept-new（TOFU）。 */
+  strictHostKey: boolean;
+  /** 持久 known_hosts 文件路径（固定在 dataDir 下，绝不按 host 拼接）。 */
+  knownHostsPath: string;
+}
+
+/**
+ * 凭证加密配置。
+ */
+export interface SecretsConfig {
+  /**
+   * KNOWLEDGE_SECRET_KEY：托管 Git 凭证的加密主密钥。
+   * 未配置时凭证接口返回 503；已有凭证无法解密 → 服务拒绝启动（fail-closed）。
+   * 生成方式：openssl rand -base64 32
+   */
+  secretKey: string;
 }
 
 export interface ClickHouseTelemetryConfig {
@@ -83,6 +123,10 @@ export interface ServiceConfig {
   tmcCallbackUrl: string;
   /** Optional ClickHouse request telemetry. Disabled by default. */
   clickhouse: ClickHouseTelemetryConfig;
+  /** Git 私有仓库接入的安全配置。 */
+  git: GitSecurityConfig;
+  /** 凭证加密配置。 */
+  secrets: SecretsConfig;
 }
 
 function env(key: string, fallback: string): string {
@@ -159,18 +203,29 @@ export function loadConfig(): ServiceConfig {
   };
   validateClickHouseConfig(clickhouse);
 
+  const dataDir = resolveDataPath(env("KNOWLEDGE_DATA_DIR", "./data"));
+  const dbPath = resolveDataPath(env("KNOWLEDGE_DB_PATH", "./data/knowledge.db"));
+
   return {
     port: envInt("PORT", 8421),
     auth: {
       serviceKey: env("KNOWLEDGE_SERVICE_KEY", ""),
     },
-    dataDir: expandHome(env("KNOWLEDGE_DATA_DIR", "./data")),
-    dbPath: expandHome(env("KNOWLEDGE_DB_PATH", "./data/knowledge.db")),
+    dataDir,
+    dbPath,
     logLevel: env("LOG_LEVEL", "debug"),
     apiPrefix: env("API_PREFIX", "/v3"),
     publicBaseUrl: env("KNOWLEDGE_PUBLIC_BASE_URL", ""),
     tmcCallbackUrl: env("TMC_CALLBACK_URL", ""),
     clickhouse,
+    git: {
+      allowedHosts: parseAllowedHosts(env("KNOWLEDGE_GIT_ALLOWED_HOSTS", "")),
+      strictHostKey: envBool("KNOWLEDGE_GIT_STRICT_HOST_KEY", false),
+      knownHostsPath: join(dataDir, "_git_known_hosts", "known_hosts"),
+    },
+    secrets: {
+      secretKey: env("KNOWLEDGE_SECRET_KEY", ""),
+    },
     llm: {
       mode: env("LLM_MODE", "proxy") === "custom" ? "custom" : "proxy",
       protocol: env("LLM_PROTOCOL", "openai") === "anthropic" ? "anthropic" : "openai",

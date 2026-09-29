@@ -121,7 +121,7 @@ Existing information → Reusable memory assets → Fewer turns → Less rework 
 
 <img src="./assets/images/wiki.png" alt="image.png" />
 
-- **CodeGraph** indexes code symbols, files, call relationships, and impact paths.
+- **CodeGraph** indexes code symbols, files, call relationships, and impact paths (public repos and private repos with a managed credential).
 <img width="" src="assets/images/codegraph.png" alt="image.png" />
 
 - Agents can search, read, inspect callers/callees, and perform impact analysis before modifying code.
@@ -279,7 +279,8 @@ PersonaMem tests whether an Agent can correctly understand and apply user inform
 ## Notes
 
 - Wiki and CodeGraph are built asynchronously; allow some processing time before they reach `ready` status.
-- CodeGraph currently prioritizes public HTTPS repositories; support for private repositories and SSH credentials is still being refined.
+- CodeGraph supports public HTTPS repositories and, once a credential is managed, **private repositories** (HTTPS token / SSH private key). Private repos require `KNOWLEDGE_SECRET_KEY` plus a credential registered via `/v3/source-credential/*` — see "Private repositories" in [MemoryKnowledge/README.md](./MemoryKnowledge/README.md). Requires git ≥ 2.31 and OpenSSH ≥ 7.6.
+- For security, credentials must not be embedded in the repository URL (`https://user:token@host/...`); use `credential_id` instead.
 - The Hub supports manual asset binding; fully automated memory routing is still under iteration.
 
 ## Related Documentation

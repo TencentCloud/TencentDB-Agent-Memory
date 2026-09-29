@@ -11,6 +11,7 @@
 | --- | --- |
 | **LLM-Wiki** | 上传/拉取文档 → LLM 抽取结构化页面 → FTS5 全文检索 + 知识图谱 |
 | **Code-Graph** | `git clone` 仓库 → CodeGraph 索引（符号、调用、文件树）→ 探索查询 |
+| **Git 凭证管理**（可选） | 托管 HTTPS token / SSH 私钥，让 Code-Graph 能索引**私有仓库**。见下文「私有仓库接入」。 |
 | **Auto-Sync**（可选） | 定时扫描 code-graph，FIFO 队列 + worker pool 自动拉取 git 更新并重建索引。默认关闭，见 `docs/data-flow.md` §9。 |
 | **Tools** | `POST /v3/tools/list`、`/v3/tools/call`，供 Agent / Kernel 自发现调用 |
 | **状态回调** | ingest/sync 完成后回调 Panel（`TMC_CALLBACK_URL`），再写远端 meta / knowledge |
@@ -95,6 +96,81 @@ pnpm typecheck
 pnpm test
 pnpm build        # tsdown → dist/
 ```
+
+## 私有仓库接入（Git 凭证管理）
+
+默认只支持公开 HTTPS 仓库。要索引私有仓库，需要先托管一份凭证，再在注册仓库时引用它。
+
+### 前置要求
+
+| 组件 | 最低版本 | 为什么 |
+| --- | --- | --- |
+| git | **2.31** | 凭证通过 `GIT_CONFIG_COUNT/KEY_n/VALUE_n` 注入子进程环境，该机制需 2.31+ |
+| OpenSSH | **7.6** | SSH 路径使用 `StrictHostKeyChecking=accept-new` |
+| Node.js | 22 | 与项目一致 |
+
+并配置加密主密钥（**不配则凭证接口返回 503**）：
+
+```bash
+export KNOWLEDGE_SECRET_KEY="$(openssl rand -base64 32)"
+```
+
+### 用法
+
+```bash
+# 1) 托管凭证（host 必填 —— 凭证只对它声明的主机生效）
+curl -s -X POST http://127.0.0.1:8421/v3/source-credential/create \
+  -H 'content-type: application/json' -H 'x-tdai-service-id: svc-A' \
+  -d '{"team_id":"team-1","name":"gitlab-pat","kind":"https_token",
+       "host":"gitlab.example.com","secret":"<PAT>"}'
+
+# 2) 校验连通性（会校验 host 一致，再跑一次 git ls-remote）
+curl -s -X POST http://127.0.0.1:8421/v3/source-credential/test \
+  -H 'content-type: application/json' -H 'x-tdai-service-id: svc-A' \
+  -d '{"team_id":"team-1","credential_id":"gc-xxxxxxxx",
+       "repo_url":"https://gitlab.example.com/group/repo.git"}'
+
+# 3) 注册仓库时引用凭证
+curl -s -X POST http://127.0.0.1:8421/v3/code-graph/create \
+  -H 'content-type: application/json' -H 'x-tdai-service-id: svc-A' \
+  -d '{"team_id":"team-1","repo_url":"https://gitlab.example.com/group/repo.git",
+       "branch":"main","credential_id":"gc-xxxxxxxx"}'
+```
+
+凭证类型与用户名对照：
+
+| 平台 | kind | username |
+| --- | --- | --- |
+| GitHub PAT | `https_token` | 任意（默认 `oauth2`） |
+| **GitHub App installation token** | `https_token` | **必须是 `x-access-token`** |
+| GitLab PAT | `https_token` | `oauth2` |
+| Bitbucket app password | `https_token` | `x-token-auth` |
+| SSH deploy key | `ssh_key` | 不适用（用 `git@host:path` 形式的 URL） |
+
+### 内网 Git 服务
+
+企业内网 GitLab / Gitea 的地址会落在 SSRF 黑名单里（`10./172.16-31./192.168./127./` 等）。
+**不要**用 `KNOWLEDGE_SSRF_CHECK=off` 一把关掉，而是显式声明白名单：
+
+```dotenv
+KNOWLEDGE_GIT_ALLOWED_HOSTS=gitlab.corp.example.com,*.internal.example.com
+```
+
+白名单只支持「精确 host」与「`*.suffix` 单层通配」，且是**锚定匹配** ——
+`x.corp.example.com.attacker.com`、`evilcorp.example.com` 都不会命中。端口不参与匹配。
+
+### 安全边界（部署前请确认）
+
+- 密钥以 AES-256-GCM 加密后落库（主密钥派生自 `KNOWLEDGE_SECRET_KEY`，密文绑定行主键作 AAD）；
+  API 只回 16 位 HMAC 指纹，**永不回显明文**。
+- 凭证仅在**服务端子进程的环境变量**里出现，不写进 URL、不写进 `.git/config`、不进 argv。
+  同时会清空 `credential.helper`，避免 token 被 macOS 钥匙串 / git-credential-manager 缓存。
+- URL 内嵌凭证写法（`https://user:token@host/...`）已被**拒绝** —— 它会泄漏到
+  `.git/config`、git stderr 与所有回显错误信息的地方。请改用 `credential_id`。
+- 带 passphrase 的 SSH 私钥**不支持**（无法非交互注入），创建时返回 422。
+- 凭证是 **team 级共享**的。KS 自身没有成员数据、鉴权只有一把全局 `KNOWLEDGE_SERVICE_KEY`，
+  因此「谁有权操作某 team 的凭证」必须由 **Panel 侧按团队成员门控**；**KS 不应直接暴露给终端用户**。
+- 建议同时设置 `KNOWLEDGE_SERVICE_KEY`，否则凭证管理接口在无鉴权下可被任意调用。
 
 ## 可选：ClickHouse 工具调用埋点
 

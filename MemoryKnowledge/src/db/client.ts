@@ -43,7 +43,7 @@ export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Databas
 }
 
 /**
- * Run idempotent CREATE TABLE IF NOT EXISTS for all 4 tables + indexes.
+ * Run idempotent CREATE TABLE IF NOT EXISTS for all tables + indexes.
  * Uses raw SQL for partial unique indexes (Drizzle schema definition generates them
  * via drizzle-kit, but for runtime we ensure tables exist).
  */
@@ -150,12 +150,49 @@ export function migrate(_db: Db, raw: Database.Database): void {
       enabled        INTEGER NOT NULL DEFAULT 1,
       updated_at     TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS knowledge_git_credential (
+      credential_id TEXT PRIMARY KEY,
+      service_id    TEXT NOT NULL,
+      team_id       TEXT NOT NULL,
+      name          TEXT NOT NULL,
+      kind          TEXT NOT NULL,
+      host          TEXT NOT NULL,
+      username      TEXT,
+      secret_enc    TEXT NOT NULL,
+      fingerprint   TEXT NOT NULL,
+      created_by    TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL,
+      deleted_at    TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_kgcred_team_name
+      ON knowledge_git_credential(service_id, team_id, name)
+      WHERE deleted_at IS NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_kgcred_team_host
+      ON knowledge_git_credential(service_id, team_id, host);
+
+    CREATE TABLE IF NOT EXISTS knowledge_git_credential_audit (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      credential_id TEXT NOT NULL,
+      service_id    TEXT,
+      action        TEXT NOT NULL,
+      user_id       TEXT,
+      detail        TEXT,
+      created_at    TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_kgca_cred
+      ON knowledge_git_credential_audit(credential_id, id DESC);
   `);
 
   // Column migrations — SQLite ALTER TABLE ADD COLUMN is not idempotent,
   // so we check PRAGMA table_info first.
   addColumnIfMissing(raw, "knowledge_code_graph", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_code_graph", "summary", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_id", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "summary", "TEXT");
   // service_id on audit tables is nullable → safe to add to existing dev DBs.

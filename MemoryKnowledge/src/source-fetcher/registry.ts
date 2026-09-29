@@ -6,13 +6,13 @@
  */
 
 import type { ISourceFetcher, SourceType } from "./types.js";
-import { GitSourceFetcher } from "./git-fetcher.js";
+import { GitSourceFetcher, type GitSourceFetcherOptions } from "./git-fetcher.js";
 
 export class SourceFetcherRegistry {
   private readonly fetchers = new Map<SourceType, ISourceFetcher>();
 
-  constructor() {
-    this.register(new GitSourceFetcher());
+  constructor(gitOptions?: GitSourceFetcherOptions) {
+    this.register(new GitSourceFetcher(gitOptions));
     // 未来：this.register(new LocalSourceFetcher());
     // 未来：this.register(new FtpSourceFetcher());
   }

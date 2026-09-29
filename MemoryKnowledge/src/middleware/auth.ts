@@ -8,12 +8,17 @@
  *
  * 只读白名单（Agent 直连面）保持开放：
  *   tools/list、tools/call（Agent 自发现与只读工具执行）、wiki/code-graph 查询类、
- *   source-credential/status（元数据不含 secret）、source-provider 列表、
- *   auto-sync/status。
+ *   source-credential/status（子系统状态，不含凭证内容）、auto-sync/status。
  * 注意：llm-binding 的 status/list 虽不回显 api_key 明文，但会暴露 binding
  * 存在性与 base_url（侦察价值），故不放行——唯一调用方 Panel 均携带 key。
- * 写/管理面（wiki ingest、raw/page write、llm-binding/set、source-credential/put、
- * auto-sync/trigger 等）一律需要 key —— 新增端点默认受保护。
+ * 写/管理面（wiki ingest、raw/page write、llm-binding/set、source-credential 的
+ * create/list/get/delete/test、auto-sync/trigger 等）一律需要 key ——
+ * 新增端点默认受保护。
+ *
+ * ⚠️ 历史遗留：原白名单里有一条 `READONLY_GET_PREFIXES = ["/source-provider"]`
+ * 前缀放行，但仓库内**从未有过**该路由的实现。前缀放行意味着将来任何人在
+ * `/source-provider/*` 下挂新端点都会**静默免鉴权**，属于延时炸弹，故本次删除。
+ * 若将来确实要加该前缀，请改为精确路径白名单。
  *
  * /health、/docs、/openapi.json 挂在 api 子 app 之外（server.ts），不受本中间件影响。
  */
@@ -69,18 +74,16 @@ const READONLY_POST_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 const READONLY_GET_PATHS: ReadonlySet<string> = new Set([
-  "/source-credential/status", // 元数据，不含 secret
+  // 凭证子系统状态：只回「是否配置 + 数量 + 支持的类型」，不含任何凭证内容或租户数据。
+  // 其余 /source-credential/*（list/get/create/delete/test）一律需要 key —— 它们会
+  // 暴露凭证元数据（name/host/created_by），或触发对外的连通性探测。
+  "/source-credential/status",
   "/auto-sync/status",
 ]);
 
-/** source-provider 下全是 GET 只读列表端点，前缀放行。 */
-const READONLY_GET_PREFIXES: readonly string[] = ["/source-provider"];
-
 export function isReadonlyPath(method: string, path: string): boolean {
   if (method === "POST") return READONLY_POST_PATHS.has(path);
-  if (method === "GET") {
-    return READONLY_GET_PATHS.has(path) || READONLY_GET_PREFIXES.some((p) => path.startsWith(p));
-  }
+  if (method === "GET") return READONLY_GET_PATHS.has(path);
   return false;
 }
 

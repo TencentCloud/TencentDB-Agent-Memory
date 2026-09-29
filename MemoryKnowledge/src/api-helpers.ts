@@ -4,7 +4,7 @@
  * Shared by all Hono route modules to keep the HTTP layer thin.
  */
 
-import type { CodeGraphRow, WikiRow } from "./store/index.js";
+import type { CodeGraphRow, GitCredentialRow, WikiRow } from "./store/index.js";
 
 // ───────────────────────── IdFields ─────────────────────────
 
@@ -151,6 +151,8 @@ export interface CodeGraphDetail {
   version: string;
   owner_user_id: string | null;
   stats: CodeGraphStats | null;
+  /** 引用的 git 凭证 id（仅引用，非密钥）；null = 匿名访问公开仓库。 */
+  credential_id: string | null;
   last_sync_at: string | null;
   created_at: string;
   updated_at: string;
@@ -179,7 +181,42 @@ export function toCodeGraphDetail(row: CodeGraphRow): CodeGraphDetail {
     version: toExternalVersion(row.version),
     owner_user_id: row.owner_user_id,
     stats,
+    credential_id: row.credential_id ?? null,
     last_sync_at: row.last_sync_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+// ───────────────────────── SourceCredentialDetail ─────────────────────────
+
+/**
+ * 托管凭证的对外形态 —— **永远不含密钥本体**。
+ * 只回指纹（无法反推、无主密钥不可计算）与元数据。
+ */
+export interface SourceCredentialDetail {
+  credential_id: string;
+  team_id: string;
+  name: string;
+  kind: string;
+  host: string;
+  username: string | null;
+  fingerprint: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function toSourceCredentialDetail(row: GitCredentialRow): SourceCredentialDetail {
+  return {
+    credential_id: row.credential_id,
+    team_id: row.team_id,
+    name: row.name,
+    kind: row.kind,
+    host: row.host,
+    username: row.username ?? null,
+    fingerprint: row.fingerprint,
+    created_by: row.created_by ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

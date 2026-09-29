@@ -23,15 +23,23 @@ export type {
   AuditLogRow,
   SyncedCodeGraphRef,
   SyncedWikiRef,
+  GitCredentialKind,
+  GitCredentialRow,
+  CreateGitCredentialInput,
+  CredentialAuditAction,
+  CredentialAuditRow,
 } from "./types.js";
 
 export {
   genWikiId,
   genCodeGraphId,
+  genGitCredentialId,
   isWikiId,
   isCodeGraphId,
+  isGitCredentialId,
   WIKI_ID_PREFIX,
   CODE_GRAPH_ID_PREFIX,
+  GIT_CREDENTIAL_ID_PREFIX,
 } from "./ids.js";
 
 export { BuildQueue } from "./build-queue.js";
@@ -45,6 +53,9 @@ export type {
   LlmBindingStatus,
   LlmBindingMode,
 } from "./llm-binding-store.js";
+
+export { createGitCredentialStore, DuplicateCredentialNameError } from "./git-credential-store.js";
+export type { IGitCredentialStore, GitCredentialStoreOptions } from "./git-credential-store.js";
 
 export { CodeGraphService } from "./code-graph-service.js";
 export type {
