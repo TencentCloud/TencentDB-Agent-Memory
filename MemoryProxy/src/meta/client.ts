@@ -81,6 +81,13 @@ export interface TaskEntity {
   source_type?: string;
 }
 
+export interface UserEntity {
+  user_id: string;
+  username?: string;
+  display_name?: string | null;
+  status?: string;
+}
+
 /**
  * /v3/meta/task/create 请求入参。
  *
@@ -250,6 +257,18 @@ export class MetadataClient {
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
+
+  /** Resolve the authenticated x-tdai-user-key to its kernel user id. */
+  async resolveCallerUserId(): Promise<string> {
+    const user = await this.fetch<UserEntity>(
+      "/v3/meta/user/get",
+      { user_key: this.userKey },
+    );
+    if (!user.user_id?.trim()) {
+      throw new Error(`${TAG} /v3/meta/user/get returned an empty user_id`);
+    }
+    return user.user_id.trim();
+  }
 
   /** List all teams for a user (paginated aggregation). */
   async listTeams(userId: string): Promise<TeamEntity[]> {
@@ -556,7 +575,7 @@ export class MetadataClient {
         detail = await resp.text();
       } catch { /* ignore */ }
       console.log(
-        `[wb-debug] metadata-client req path=${path} status=${resp.status} url=${url} serviceId=${this.serviceId} userKey.len=${this.userKey?.length ?? 0} userKey.prefix=${(this.userKey ?? "").slice(0, 20)} serviceToken.len=${this.serviceToken?.length ?? 0} body.len=${detail.length} body.head=${detail.slice(0, 300)}`,
+        `[wb-debug] metadata-client req path=${path} status=${resp.status} url=${url} serviceId=${this.serviceId} userKey.present=${Boolean(this.userKey)} serviceToken.present=${Boolean(this.serviceToken)} body.len=${detail.length}`,
       );
       throw new Error(`${TAG} ${path} HTTP ${resp.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
     }
@@ -572,6 +591,39 @@ export class MetadataClient {
     }
 
     return env.data as T;
+  }
+}
+
+export interface ResolveMemoryUserIdInput {
+  /** Identity verified by proxy auth (or an explicit debug override). */
+  verifiedUserId?: string | null;
+  /** Raw caller key; used only as a credential for the kernel metadata call. */
+  callerUserKey?: string | null;
+  metadataClient: MetadataClient;
+}
+
+/**
+ * Resolve the identity used by session and memory features without changing
+ * proxy-auth semantics. Failure disables per-user memory for this request but
+ * never rejects forwarding or invents an anonymous/shared identity.
+ */
+export async function resolveMemoryUserId(
+  input: ResolveMemoryUserIdInput,
+): Promise<string | null> {
+  const verifiedUserId = input.verifiedUserId?.trim();
+  if (verifiedUserId) return verifiedUserId;
+
+  if (!input.callerUserKey?.trim()) {
+    console.warn("[memory-identity] no caller key; per-user memory is unavailable");
+    return null;
+  }
+
+  try {
+    return await input.metadataClient.resolveCallerUserId();
+  } catch {
+    // Do not include upstream error text: it may contain caller-supplied data.
+    console.warn("[memory-identity] caller identity resolution failed; per-user memory is unavailable");
+    return null;
   }
 }
 
