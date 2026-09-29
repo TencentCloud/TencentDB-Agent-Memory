@@ -207,6 +207,11 @@ Environment variables override file configuration. Common settings:
 | `TDAI_LLM_API_KEY` | Empty | LLM API key |
 | `TDAI_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API URL |
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM model |
+| `TDAI_LLM_BACKEND` | `openai-compatible` | `openai-compatible`, `ollama`, or `llama.cpp` capability profile |
+| `TDAI_LLM_CONTEXT_WINDOW` | Unset | Configured context window; oversized prompts are refused instead of silently truncated |
+| `TDAI_LLM_INPUT_BUDGET_TOKENS` | Derived | Optional stricter prompt-token budget |
+| `TDAI_LLM_REASONING_ENABLED` | Unset | Explicitly enable/disable local-model thinking |
+| `TDAI_LLM_STARTUP_PROBE_STRICT` | `false` | Fail startup when the configured local model is unavailable/incompatible |
 | `TDAI_SKILL_ENABLED` | File configuration | Force-enable the Skill module |
 
 Configuration templates:
@@ -214,6 +219,30 @@ Configuration templates:
 - `tdai-gateway.standalone.yaml`: minimal single-node Memory configuration.
 - `tdai-gateway.yaml`: default Standalone + Skill configuration.
 - `tdai-gateway.proxy.yaml`: LLM access through an OpenAI-compatible proxy.
+
+Local backends can be selected entirely in YAML; no runner edits are required. The
+gateway probes native Ollama (`/api/show`) or llama.cpp (`/health`, `/props`)
+capabilities at startup and publishes configured/effective limits in `/health`:
+
+```yaml
+llm:
+  backend: "llama.cpp"             # or "ollama"
+  baseUrl: "http://127.0.0.1:8080/v1"
+  apiKey: "local"
+  model: "qwen3.5-27b"
+  contextWindow: 8192              # fallback if the backend cannot report it
+  maxTokens: 2048
+  reasoning:
+    enabled: false                 # llama.cpp: enable_thinking=false; Ollama: effort=none
+    format: "none"                # optional llama.cpp reasoning_format
+  startupProbe:
+    enabled: true
+    strict: true
+    timeoutMs: 5000
+  extraBody:                       # explicit provider-specific chat fields
+    chat_template_kwargs:
+      custom_flag: "configured"
+```
 
 ## Storage and isolation
 
