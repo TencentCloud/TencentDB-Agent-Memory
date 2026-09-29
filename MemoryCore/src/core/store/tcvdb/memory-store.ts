@@ -1234,7 +1234,12 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  async queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0QueryRow[]> {
+  async queryL0ForL1(
+    sessionKey: string,
+    afterRecordedAtMs?: number,
+    limit = 50,
+    opts?: { throwOnError?: boolean },
+  ): Promise<L0QueryRow[]> {
     try {
       await this._ensureInit();
       if (this.degraded) return [];
@@ -1274,14 +1279,24 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
       return rows;
     } catch (err) {
+      if (opts?.throwOnError) {
+        // Layered swallow: the grouped L1 guard (throwOnError) needs the real
+        // error, otherwise a store failure reads as "zero pending" downstream.
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       this.logger?.warn(`${TAG} [L0-queryForL1] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
   }
 
-  async queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0SessionGroup[]> {
+  async queryL0GroupedBySessionId(
+    sessionKey: string,
+    afterRecordedAtMs?: number,
+    limit = 50,
+    opts?: { throwOnError?: boolean },
+  ): Promise<L0SessionGroup[]> {
     try {
-      const rows = await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
+      const rows = await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit, opts);
 
       // Group by full isolation tuple + session_id to avoid cross-tenant merging.
       // 注意：必须把 teamId / taskId 带进 group。L2 scope (team:T|agent:A) 依赖
@@ -1319,6 +1334,11 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
       return groups;
     } catch (err) {
+      if (opts?.throwOnError) {
+        // A "zero rows" verdict gates the L1 timer skip — an error read as
+        // empty would strand the backlog, so guard-path callers get the error.
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       this.logger?.warn(`${TAG} [L0-queryGrouped] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
