@@ -19,7 +19,6 @@ import {
   SearchIcon,
   StarIcon,
 } from 'tea-icons-react';
-import { knowledgeApi } from '@/lib/api/knowledge-api';
 import { tea } from '@/lib/tea-bridge';
 import { WIKI_ALLOWED_FILE_RE, TYPE_COLORS, TYPE_COLOR_FALLBACK, type DetailTab } from '../constants/wiki-constants';
 import { WikiStatusBadge } from './wiki-ui';
@@ -31,7 +30,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
   const {
     sources,
     selectedWikiId,
-    setSubView,
+    returnToList,
     fetchSources,
     setShowAddDoc,
     setAddDocTab,
@@ -57,8 +56,6 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
     handleDeletePage,
     handleDeleteRaw,
     setSelectedPage,
-    setReadContent,
-    setReadLoading,
     searchQuery,
     setSearchQuery,
     handleSearch,
@@ -83,7 +80,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
     return (
       <Card>
         <Card.Body>
-          <Button type="text" onClick={() => { fetchSources(); setSubView('list'); }}>
+          <Button type="text" onClick={() => { fetchSources(); returnToList(); }}>
             <ArrowLeftIcon size={12} /> {t('wiki.breadcrumb')}
           </Button>
           <StatusTip status="empty" emptyText={t('wiki.detail.notFound')} />
@@ -97,7 +94,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
       <Card>
         <Card.Body className="_wiki-detail-header-body">
           <div className="_wiki-detail-breadcrumb">
-            <Button type="link" onClick={() => { fetchSources(); setSubView('list'); }}>
+            <Button type="link" onClick={() => { fetchSources(); returnToList(); }}>
               <ArrowLeftIcon size={12} /> {t('wiki.breadcrumb')}
             </Button>
             <span className="_wiki-detail-breadcrumb-sep">/</span>
@@ -362,27 +359,15 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
             metadata={metadata}
             wikiId={selectedWikiId}
             rawRefreshKey={rawRefreshKey}
+            missingPageRef={store.missingPageRef}
+            readError={store.readError}
+            pagesError={store.pagesError}
+            pagesLoading={store.graphLoading}
             onReadPage={handleReadPage}
+            onMissingPage={store.handleMissingPage}
             onDeletePage={handleDeletePage}
             onDeleteRaw={handleDeleteRaw}
-            onReadRaw={(filename) => {
-              const rawPage = {
-                path: `raw/${filename}`,
-                title: filename,
-                type: 'raw',
-              } as any;
-              setSelectedPage(rawPage);
-              setReadContent('');
-              setReadLoading(true);
-              knowledgeApi.wiki
-                .rawRead(selectedWikiId, [filename])
-                .then((result: any) => setReadContent(result?.items?.[0]?.content || ''))
-                .catch((error: any) => {
-                  setReadContent('');
-                  tea.notify.error(error?.message || t('wiki.notify.readRawFailed'));
-                })
-                .finally(() => setReadLoading(false));
-            }}
+            onReadRaw={store.handleReadRaw}
           />
         </TabPanel>
         <TabPanel id="search">

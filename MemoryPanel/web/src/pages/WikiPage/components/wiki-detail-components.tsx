@@ -4,9 +4,9 @@
  * GraphTabContent / PagesTabContent / RawFilesSection）。
  * 均为纯展示组件，数据与回调由外层注入，不含业务状态。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Card, StatusTip, Tag, Text } from 'tea-component';
+import { Alert, Button, Card, StatusTip, Tag, Text } from 'tea-component';
 import {
   BooksIcon,
   ChevronRightIcon,
@@ -23,6 +23,7 @@ import { tea } from '@/lib/tea-bridge';
 import { AssetMarkdown } from '@/components/asset/AssetMarkdown';
 import { TYPE_COLORS, TYPE_COLOR_FALLBACK, type WikiScopeTab } from '../constants/wiki-constants';
 import { KnowledgeGraphEmbed } from './wiki-ui';
+import { ancestorRefs, buildWikiTree, pageKey, pageRef, wikiHref, type WikiTreeNode } from './wiki-navigation';
 
 export function WikiActions({
   source,
@@ -185,7 +186,12 @@ export function PagesTabContent({
   metadata,
   wikiId,
   rawRefreshKey,
+  missingPageRef,
+  readError,
+  pagesError,
+  pagesLoading,
   onReadPage,
+  onMissingPage,
   onReadRaw,
   onDeletePage,
   onDeleteRaw,
@@ -202,13 +208,129 @@ export function PagesTabContent({
   metadata: Record<string, string> | null;
   wikiId: string;
   rawRefreshKey: number;
-  onReadPage: (p: WikiPage) => void;
+  missingPageRef: string;
+  readError: string;
+  pagesError: string;
+  pagesLoading: boolean;
+  onReadPage: (p: WikiPage, syncUrl?: boolean, fragment?: string) => void;
+  onMissingPage: (ref: string) => void;
   onReadRaw: (filename: string) => void;
   onDeletePage: (p: WikiPage) => Promise<void> | void;
   onDeleteRaw: (filename: string) => Promise<void> | void;
 }) {
   const { t } = useTranslation();
-  const { width: leftW, onMouseDown } = useResizable(260, 180, 400, 'left');
+  const { width: leftW, onMouseDown } = useResizable(320, 220, 480, 'left');
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
+  const visibleRefs = new Set(pages.map(pageRef));
+  const tree = buildWikiTree(allPages, visibleRefs);
+  const selectedRef = selectedPage ? pageRef(selectedPage) : '';
+  const revealedRef = useRef('');
+
+  useEffect(() => {
+    if (!selectedRef || (!readLoading && revealedRef.current === selectedRef)) return;
+    revealedRef.current = selectedRef;
+    const ancestors = ancestorRefs(selectedRef);
+    setOpenFolders((previous) => {
+      const next = new Set(previous);
+      ancestors.forEach((path) => next.add(path));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [selectedRef, readLoading]);
+
+  useEffect(() => {
+    if (readLoading) return;
+    const frame = requestAnimationFrame(() => {
+      const item = document.querySelector('._wiki-detail-page-row.is-active');
+      const nav = item?.closest('nav');
+      if (!item || !nav) return;
+      const row = item.getBoundingClientRect();
+      const viewport = nav.getBoundingClientRect();
+      if (row.bottom > viewport.bottom) nav.scrollTop += row.bottom - viewport.bottom;
+      else if (row.top < viewport.top) nav.scrollTop += row.top - viewport.top;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedRef, readLoading]);
+
+  useEffect(() => {
+    if (pageTypeFilter === 'all') return;
+    const ancestors = pages.flatMap((page) => ancestorRefs(pageRef(page)));
+    setOpenFolders((previous) => {
+      const next = new Set(previous);
+      ancestors.forEach((path) => next.add(path));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [pageTypeFilter, pages]);
+
+  const toggleFolder = (path: string) => {
+    setOpenFolders((previous) => {
+      const next = new Set(previous);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const revealFolder = (path: string) => {
+    setOpenFolders((previous) => {
+      const next = new Set(previous);
+      ancestorRefs(`${path}/page`).forEach((ancestor) => next.add(ancestor));
+      next.add(path);
+      return next;
+    });
+  };
+
+  const renderTree = (nodes: WikiTreeNode[]): React.ReactNode => (
+    <ul className="_wiki-detail-tree-list">
+      {nodes.map((node) => {
+        if (node.kind === 'folder') {
+          const open = openFolders.has(node.path);
+          return (
+            <li key={`folder:${node.path}`} className="_wiki-detail-tree-folder">
+              <button
+                type="button"
+                className="_wiki-detail-tree-folder-toggle"
+                aria-expanded={open}
+                title={node.path}
+                onClick={() => toggleFolder(node.path)}
+              >
+                <ChevronRightIcon size={12} className={open ? 'is-open' : ''} />
+                <FolderIcon size={13} />
+                <span>{node.name}</span>
+              </button>
+              {open && renderTree(node.children)}
+            </li>
+          );
+        }
+        const active = selectedRef === node.ref;
+        return (
+          <li key={`page:${pageKey(node.page)}`} className={`_wiki-detail-page-row${active ? ' is-active' : ''}`}>
+            <a
+              className="_wiki-detail-page-item"
+              href={wikiHref(wikiId, node.ref)}
+              aria-current={active ? "page" : undefined}
+              title={node.page.path}
+              onClick={(event) => {
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                onReadPage(node.page);
+              }}
+            >
+              <FileIcon size={13} />
+              <span className="_wiki-detail-page-item-title">{node.page.title}</span>
+            </a>
+            <Button
+              type="text"
+              className="_wiki-detail-page-delete"
+              onClick={() => onDeletePage(node.page)}
+              tooltip={t('wiki.detail.pages.deletePage')}
+            >
+              {t('wiki.detail.pages.delete')}
+            </Button>
+          </li>
+        );
+      })}
+    </ul>
+  );
 
   return (
     <div
@@ -237,35 +359,9 @@ export function PagesTabContent({
             </button>
           ))}
         </div>
-        <div className="_wiki-detail-page-list">
-          {pages.map((page) => {
-            const active =
-              selectedPage &&
-              ((selectedPage as any).id || selectedPage.path) === ((page as any).id || page.path);
-            return (
-              <div
-                key={(page as any).id || page.path}
-                className={`_wiki-detail-page-row${active ? ' is-active' : ''}`}
-              >
-                <button className="_wiki-detail-page-item" onClick={() => onReadPage(page)}>
-                  <span
-                    className="_wiki-detail-type-dot"
-                    style={{ background: TYPE_COLORS[page.type] || TYPE_COLOR_FALLBACK }}
-                  />
-                  <span className="_wiki-detail-page-item-title">{page.title}</span>
-                </button>
-                <Button
-                  type="text"
-                  className="_wiki-detail-page-delete"
-                  onClick={() => onDeletePage(page)}
-                  tooltip={t('wiki.detail.pages.deletePage')}
-                >
-                  {t('wiki.detail.pages.delete')}
-                </Button>
-              </div>
-            );
-          })}
-        </div>
+        <nav className="_wiki-detail-page-list" aria-label={t('wiki.detail.pages.navigation')}>
+          {pagesLoading ? <StatusTip status="loading" /> : pagesError ? <Alert type="error">{pagesError}</Alert> : tree.length > 0 ? renderTree(tree) : <StatusTip status="empty" emptyText={t('wiki.detail.pages.empty')} />}
+        </nav>
         <RawFilesSection
           wikiId={wikiId}
           refreshKey={rawRefreshKey}
@@ -275,8 +371,21 @@ export function PagesTabContent({
       </div>
       <ResizeHandle onMouseDown={onMouseDown} />
       <div className="_wiki-detail-split-content">
-        {selectedPage ? (
+        {missingPageRef ? (
           <div className="_wiki-detail-content-inner">
+            <StatusTip status="empty" emptyText={t('wiki.detail.pages.missing', { ref: missingPageRef })} />
+          </div>
+        ) : selectedPage ? (
+          <div className="_wiki-detail-content-inner">
+            <nav className="_wiki-detail-page-breadcrumbs" aria-label={t('wiki.detail.pages.breadcrumbs')}>
+              {ancestorRefs(selectedRef).map((folder) => (
+                <span key={folder}>
+                  <button type="button" onClick={() => revealFolder(folder)} title={folder}>{folder.split('/').at(-1)}</button>
+                  <span aria-hidden="true"> / </span>
+                </span>
+              ))}
+              <span>{selectedPage.title}</span>
+            </nav>
             <div className="_wiki-detail-content-head">
               <span
                 className="_wiki-detail-type-dot _wiki-detail-type-dot-lg"
@@ -301,12 +410,23 @@ export function PagesTabContent({
                 {metadata.created && <Text theme="label">{t('wiki.detail.created', { date: metadata.created })}</Text>}
               </div>
             )}
-            {readLoading ? (
+            {readError ? (
+              <Alert type="error">{readError}</Alert>
+            ) : readLoading ? (
               <StatusTip status="loading" />
             ) : (
               <Card className="_wiki-detail-content-card">
                 <Card.Body>
-                  <AssetMarkdown content={displayContent} />
+                  <AssetMarkdown
+                    content={displayContent}
+                    wiki={selectedPage.type === 'raw' ? undefined : {
+                      wikiId,
+                      currentPageRef: selectedRef,
+                      pages: allPages,
+                      onNavigate: (page, fragment) => onReadPage(page, true, fragment),
+                      onMissing: onMissingPage,
+                    }}
+                  />
                 </Card.Body>
               </Card>
             )}
