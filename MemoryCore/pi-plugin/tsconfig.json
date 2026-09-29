@@ -6,7 +6,8 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "noEmit": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "__tests__/**/*.ts"]
+  "include": ["*.ts", "__tests__/**/*.ts"]
 }
