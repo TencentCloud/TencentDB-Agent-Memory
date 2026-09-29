@@ -1,5 +1,5 @@
 /**
- * Codex Responses API handler.
+ * Responses API handler shared by Codex and ZCode.
  *
  * Handles `POST /v1/responses` + 3 aux endpoints (`/responses/compact`,
  * `/memories/trace_summarize`, `/realtime/calls`) for the Codex CLI client.
@@ -27,6 +27,7 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "./types.js";
+import { resolveAgentUpstreamForProtocol } from "./types.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
@@ -167,13 +168,14 @@ export function classifyCodexRequest(
 
 /**
  * Extract session_id from codex request.
- * Primary: `session-id` header. Fallback: `body.client_metadata.session_id`.
+ * Codex uses `session-id`; ZCode uses `x-session-id`. Metadata is a fallback.
  */
 export function extractCodexSessionId(
   headers: Record<string, string>,
   body: Record<string, unknown>,
 ): string | null {
   if (headers["session-id"]) return headers["session-id"];
+  if (headers["x-session-id"]) return headers["x-session-id"];
   const meta = body.client_metadata as { session_id?: string } | undefined;
   if (typeof meta?.session_id === "string") return meta.session_id;
   return null;
@@ -205,42 +207,27 @@ export function detectDefaultModeGate(input: unknown): boolean {
 // ── Asset injection (exported for unit tests) ────────────────────────────────
 
 /**
- * Inject `<tdai_injections>` wrapper into codex body.input[0].content[].
- *
- * Appends the injection block to the developer message (input[0]) content.
- * Defensive: if input[0] is not a message with an array content, returns
- * the body unchanged.
- *
- * Returns a shallow copy — original body is not mutated.
+ * Append assets to a developer message, creating one when input starts with
+ * user/tool items. Preserve the caller's original message objects.
  */
 export function injectCodexAssets(
   body: Record<string, unknown>,
   assets: CodexInjectionInput,
 ): Record<string, unknown> {
-  const input = body.input;
-  if (!Array.isArray(input) || input.length === 0) return body;
-
-  const devMsg = input[0] as Record<string, unknown> | null;
-  if (!devMsg || typeof devMsg !== "object") return body;
-  if (devMsg.type !== "message") return body;
-
-  const content = devMsg.content;
-  if (!Array.isArray(content)) return body;
-
+  const input = Array.isArray(body.input) ? body.input : [];
   const injectionBlock = buildCodexInjectionBlock(assets);
-
-  // Shallow-copy chain: body → input → input[0] → content
-  const newContent = [...content, injectionBlock];
-  const newDevMsg = { ...devMsg, content: newContent };
-  const newInput = [newDevMsg, ...input.slice(1)];
-  return { ...body, input: newInput };
+  const first = input[0];
+  if (first?.type === "message" && first.role === "developer" && Array.isArray(first.content)) {
+    return { ...body, input: [{ ...first, content: [...first.content, injectionBlock] }, ...input.slice(1)] };
+  }
+  return { ...body, input: [{ type: "message", role: "developer", content: [injectionBlock] }, ...input] };
 }
 
 // ── Upstream request helpers ─────────────────────────────────────────────────
 
 function buildUpstreamHeaders(
   c: Context,
-  config: ProxyConfig,
+  apiKey: string | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) {
@@ -249,8 +236,8 @@ function buildUpstreamHeaders(
     }
   }
   // Codex uses OpenAI protocol: inject Bearer token
-  if (config.upstream.apiKey) {
-    headers["authorization"] = `Bearer ${config.upstream.apiKey}`;
+  if (apiKey) {
+    headers["authorization"] = `Bearer ${apiKey}`;
     delete headers["x-api-key"];
   }
   return headers;
@@ -282,6 +269,7 @@ export async function handleCodexEndpoint(
   const traceId = uuidv7();
   const startTime = new Date().toISOString();
   const path = c.req.path;
+  const agentSource = path.split("/")[1] === "zcode" ? "zcode" : "codex";
 
   // ── 1. Auth ────────────────────────────────────────────────────────────────
   const apiKey =
@@ -309,6 +297,15 @@ export async function handleCodexEndpoint(
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
+  if (!body || typeof body !== "object" || Array.isArray(body)) return c.json({ error: "Invalid JSON body" }, 400);
+  // Responses accepts string input and message items with optional type/string content.
+  const rawInput = typeof body.input === "string" ? [{ role: "user", content: body.input }] : body.input;
+  if (Array.isArray(rawInput)) body.input = rawInput.map((item) => {
+    if (!item || typeof item !== "object" || !item.role || (item.type && item.type !== "message")) return item;
+    return { ...item, type: "message", content: typeof item.content === "string"
+      ? [{ type: item.role === "assistant" ? "output_text" : "input_text", text: item.content }] : item.content };
+  });
+
   // ── 3. Extract headers as plain object ─────────────────────────────────────
   const headers: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) {
@@ -329,6 +326,9 @@ export async function handleCodexEndpoint(
     }
   } catch {}
 
+  const upstream = await resolveResponsesUpstream(c, config);
+  if (upstream.model) body.model = upstream.model;
+
   // ── 4. Classify request ────────────────────────────────────────────────────
   const requestKind = classifyCodexRequest(body, path, headers);
   const isAuxiliary = requestKind === "auxiliary";
@@ -346,14 +346,13 @@ export async function handleCodexEndpoint(
   if (isAuxiliary) {
     pipe.info("CODEX_AUX", `auxiliary request → passthrough (path=${path})`);
     // aux 不上报 langfuse（跟 CC/CB 对齐——sidequery/fork 类 aux 不算真对话轮）
-    return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null);
+    return forwardToUpstream(c, config, upstream, body, traceId, startTime, keyId, modelId, pipe, null);
   }
 
   // ── 6. Session ID extraction ───────────────────────────────────────────────
   const sessionId = extractCodexSessionId(headers, body);
   const sessionKey = sessionId ?? `${keyId}:${traceId}`;
-  const agentSource = "codex";
-  const isStream = body.stream !== false;
+  const isStream = agentSource === "zcode" ? body.stream === true : body.stream !== false;
 
   const callerUserKey = apiKey || null;
 
@@ -531,7 +530,7 @@ export async function handleCodexEndpoint(
           {
             stream: isStream,
             modelId: modelId as string,
-            protocol: "responses" as any,
+            protocol: "responses",
             // 把原始 input[] 交给 CB 状态机，用于识别 codex 客户端专属的
             // Default gate 字符串和 MORE 翻页标记。
             codexAnswerInput: input,
@@ -545,6 +544,7 @@ export async function handleCodexEndpoint(
       }
 
       if (initResult.intercepted) {
+        if (agentSource === "zcode" && initResult.response) return initResult.response;
         // CB state machine intercepted → 直接用它已经带上 pageIndex 的
         // formData 通过 codex builder 重渲染成 Responses API SSE。CB 状态机
         // 内部会在 codex source 时把 latest state.codexPageIndex 塞进
@@ -761,7 +761,7 @@ export async function handleCodexEndpoint(
         pipe.info("CODEX_MEM_CMD", `mem command intercepted: ${memCmd.command}`);
         const memResult = await executeMemCommand(memCmd, {
           sessionKey,
-          agentSource: "codex",
+          agentSource,
           config,
           spaceId,
           userId: userId || "",
@@ -774,9 +774,10 @@ export async function handleCodexEndpoint(
           //   { type:"message", role, content:[{type:"input_text"|"output_text", text}] }
           // extractSimpleMessages 已内置对该形态的识别，转成 {role, content} 极简格式。
           bodyMessages: extractSimpleMessages(input),
-          // 方案 D：taskDraft LLM 跟随主模型 —— codex 固定 agent，上游复用 per-agent url
+          // Task drafts follow the resolved conversation endpoint and model.
           model: modelId,
-          upstreamUrl: config.upstream.agents?.["codex"]?.url || config.upstream.url,
+          upstreamUrl: upstream.url,
+          upstreamApiKey: upstream.apiKey || apiKey,
           // codex 主链路走 OpenAI Responses API
           upstreamProtocol: "responses",
         });
@@ -811,7 +812,7 @@ export async function handleCodexEndpoint(
             await triggerSkillExtractIfReady({
               config,
               sessionKey,
-              agentSource: "codex",
+              agentSource,
               sessionInfo: sessionInfo as Record<string, unknown>,
               inputMessages: input,
               assistantMessage,
@@ -950,7 +951,7 @@ export async function handleCodexEndpoint(
   });
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
-  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
+  return forwardToUpstream(c, config, upstream, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
 }
 
 // ── Archive context (skill/conversation/add + TDAI L0 write) ─────────────────
@@ -1083,9 +1084,27 @@ async function triggerCodexArchiveHooks(
 
 // ── Forward helper ───────────────────────────────────────────────────────────
 
+async function resolveResponsesUpstream(c: Context, config: ProxyConfig) {
+  const agentSource = c.req.path.split("/")[1] === "zcode" ? "zcode" : "codex";
+  const agentEntry = resolveAgentUpstreamForProtocol(config.upstream.agents?.[agentSource], "responses");
+  let url = agentEntry?.url || config.upstream.url;
+  let model: string | undefined;
+  let apiKey = agentEntry ? agentEntry.apiKey : config.upstream.apiKey;
+  const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
+  const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId);
+  const convCfg = resolveUpstreamConfig(instanceConfigs, agentSource, "conversation");
+  if (shouldOverride(convCfg)) {
+    url = convCfg.base_url;
+    apiKey = convCfg.mode === "custom_unified" ? convCfg.api_key : undefined;
+    if (convCfg.model_id) model = convCfg.model_id;
+  }
+  return { url, apiKey, model };
+}
+
 async function forwardToUpstream(
   c: Context,
   config: ProxyConfig,
+  upstream: Awaited<ReturnType<typeof resolveResponsesUpstream>>,
   body: Record<string, unknown>,
   traceId: string,
   startTime: string,
@@ -1095,40 +1114,10 @@ async function forwardToUpstream(
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
 ): Promise<Response> {
-  // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
-  // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
-  // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
-  // messages/chat_completions，不支持 /responses，此处允许按 agent 覆盖。
-  const agentUpstreamEntry = config.upstream.agents?.["codex"];
-  let upstreamBase = agentUpstreamEntry?.url || config.upstream.url;
-  let upstreamUrl = joinUrl(upstreamBase, c.req.path);
-  const upstreamHeaders = buildUpstreamHeaders(c, config);
+  const upstreamUrl = joinUrl(upstream.url, c.req.path);
+  // Resolve the destination first so passthrough never inherits a server key.
+  const upstreamHeaders = buildUpstreamHeaders(c, upstream.apiKey);
   upstreamHeaders["content-type"] = "application/json";
-  // 覆盖 apiKey 与 per-agent 策略一致：agentUpstreamEntry.apiKey 优先，
-  // 否则透传客户端 Bearer。
-  if (agentUpstreamEntry) {
-    if (agentUpstreamEntry.apiKey) {
-      upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
-    }
-    // else: 保留 c.req.header('authorization') 里的客户端 key 透传
-  }
-
-  // ── Instance upstream config override (codex has no cost-guard routing) ──
-  {
-    const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
-    const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId);
-    const convCfg = resolveUpstreamConfig(instanceConfigs, "codex", "conversation");
-    if (shouldOverride(convCfg)) {
-      upstreamUrl = joinUrl(convCfg.base_url, c.req.path);
-      if (convCfg.mode === "custom_unified" && convCfg.api_key) {
-        upstreamHeaders["authorization"] = `Bearer ${convCfg.api_key}`;
-      }
-      // custom_passthrough: keep client's original Authorization
-      if (convCfg.model_id && typeof body.model === "string") {
-        body.model = convCfg.model_id;
-      }
-    }
-  }
 
   pipe.forwardStart(upstreamUrl);
 
@@ -1179,7 +1168,7 @@ async function forwardToUpstream(
   });
 
   // ── 上游 4xx/5xx：拷贝一份 body 文本用于 langfuse 错误上报；成功则 tap ──
-  // codex Responses API 只有 SSE 流式响应，不区分 stream / non-stream 处理。
+  // Successful responses can be SSE or non-streaming JSON.
   if (upstreamResp.status >= 400) {
     // 4xx/5xx 通常返 JSON error（很小），完整读出来带进 langfuse 便于排查
     const errText = await upstreamResp.text();
@@ -1226,7 +1215,7 @@ async function forwardToUpstream(
     inputBody: body,
     pipe,
     archiveCtx,
-  });
+  }, !upstreamResp.headers.get("content-type")?.includes("text/event-stream"));
 
   return new Response(rawClientStream, {
     status: upstreamResp.status,
@@ -1296,7 +1285,7 @@ export interface CodexTapContext {
  *
  * 失败静默——埋点绝不影响业务链路。
  */
-export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: CodexTapContext): void {
+export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: CodexTapContext, json = false): void {
   const { lf, modelId, startTime, upstreamUrl, inputBody, pipe, archiveCtx } = ctx;
 
   (async () => {
@@ -1373,14 +1362,28 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
       }
     }
 
+    function readResponse(resp: Record<string, unknown>): void {
+      if (resp.usage) Object.assign(usage, resp.usage);
+      stopReason = typeof resp.status === "string" ? resp.status : "completed";
+      if (Array.isArray(resp.output)) {
+        if (!outputText) outputText = resp.output.flatMap(item => item?.type === "message" && Array.isArray(item.content)
+          ? item.content.filter((block: any) => block?.type === "output_text" && typeof block.text === "string").map((block: any) => block.text) : []).join("");
+        toolUseCount = Math.max(toolUseCount, resp.output.filter(item => item?.type === "function_call").length);
+      }
+    }
+
     try {
+      if (json) {
+        readResponse(await new Response(stream).json() as Record<string, unknown>);
+        return;
+      }
       const reader = stream.getReader();
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         sseBuf += decoder.decode(value, { stream: true });
-        const parts = sseBuf.split("\n\n");
+        const parts = sseBuf.split(/\r?\n\r?\n/);
         sseBuf = parts.pop() ?? "";
 
         for (const part of parts) {
@@ -1404,10 +1407,7 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
               if (item?.type === "function_call") toolUseCount++;
             } else if (evtType === "response.completed") {
               const resp = evt.response as Record<string, unknown> | undefined;
-              if (resp?.usage) {
-                Object.assign(usage, resp.usage as Record<string, unknown>);
-              }
-              stopReason = (resp?.status as string) ?? "completed";
+              if (resp) readResponse(resp);
             } else if (evtType === "response.incomplete") {
               // max_output_tokens / 其它中断（Responses API 标准）
               const resp = evt.response as Record<string, unknown> | undefined;

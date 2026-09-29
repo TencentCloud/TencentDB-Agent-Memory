@@ -83,7 +83,7 @@ interface WBAskQuestion {
   multiSelect: boolean;
 }
 
-function buildAskUserQuestionArgs(data: FormData): { questions: WBAskQuestion[] } {
+export function buildAskUserQuestionArgs(data: FormData): { questions: WBAskQuestion[] } {
   const { teams, stage, selectedTeamId, retry } = data;
   const titlePrefix = retry ? "⚠️ " : "";
   const questions: WBAskQuestion[] = [];

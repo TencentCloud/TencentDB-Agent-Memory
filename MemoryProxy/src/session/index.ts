@@ -75,7 +75,9 @@ import {
   SessionRequestContext as CCSessionRequestContext,
   SessionInitResult as CCSessionInitResult,
 } from "./claude-code/init.js";
+import { buildToolResponse } from "./codex/form.js";
 import {
+  buildAskUserQuestionArgs,
   buildFormResponse as buildWorkBuddyFormResponse,
   FormData as WBFormData,
   FormStage as WBFormStage,
@@ -93,7 +95,9 @@ import {
 } from "./opencode/form.js";
 
 // Re-export the types under their old names for backward compat
-export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
+export type SessionRequestContext = Omit<CBSessionRequestContext & Partial<CCSessionRequestContext>, "protocol"> & {
+  protocol?: "openai" | "anthropic" | "responses";
+};
 export type SessionInitResult = CBSessionInitResult;
 
 /**
@@ -116,7 +120,8 @@ export async function handleSessionInit(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  if (agentSource === "claude-code") {
+  // ZCode uses AskUserQuestion with the request protocol’s transport.
+  if (agentSource === "claude-code" || (agentSource === "zcode" && reqCtx.protocol === "anthropic")) {
     return ccHandle(
       sessionKey, userId, messages, config, store,
       // 直接透传整个 reqCtx，避免手抠字段时把新加字段（如 codex 的
@@ -128,11 +133,12 @@ export async function handleSessionInit(
       // AnthropicAdapter.serialize() hoists role=system back onto body.system
       // as a safety net; forwarding the correct protocol keeps intent and
       // implementation aligned and survives `injection.enabled=false`.
-      reqCtx,
+      { ...reqCtx, protocol: reqCtx.protocol === "responses" ? "openai" : reqCtx.protocol },
       metadataClient,
       userKey,
       spaceId,
       presetIdentity,
+      agentSource,
     );
   }
   // 同上：整个 reqCtx 透传给 CB 状态机。codexHandler 会把 body.input[] 塞在
@@ -141,7 +147,7 @@ export async function handleSessionInit(
   // 识别 Default gate 与 MORE 翻页。手抠字段会把它丢掉 → codex 分页失效。
   const result = await cbHandle(
     sessionKey, userId, messages, config, store,
-    reqCtx,
+    { ...reqCtx, protocol: reqCtx.protocol === "responses" ? "openai" : reqCtx.protocol },
     metadataClient,
     userKey,
     spaceId,
@@ -158,7 +164,7 @@ export async function handleSessionInit(
   // 状态机产出 formData 后**外层重渲染**：丢掉 result.response（CB 的
   // ask_followup_question SSE），改用 workbuddy/form.ts 生成 AskUserQuestion SSE。
   // 好处：CB 状态机代码零改动，10 处 intercepted 站点无需逐个分派。
-  if (agentSource === "workbuddy" && result.intercepted && result.formData) {
+  if ((agentSource === "workbuddy" || agentSource === "zcode") && result.intercepted && result.formData) {
     const cbFd = result.formData;
     const wbFd: WBFormData = {
       teams: cbFd.teams,
@@ -188,7 +194,9 @@ export async function handleSessionInit(
     //   - capabilities.askUserQuestion === true  → 走原卡片路径
     //   - capabilities.askUserQuestion === false → 走文字模式
     const askCapability = reqCtx.capabilities?.askUserQuestion;
-    if (askCapability === false) {
+    if (agentSource === "zcode" && reqCtx.protocol === "responses") {
+      result.response = buildToolResponse(buildAskUserQuestionArgs(wbFd), reqCtx.stream, "AskUserQuestion");
+    } else if (askCapability === false) {
       result.response = buildWorkBuddyTextFormResponse(wbFd);
     } else {
       result.response = buildWorkBuddyFormResponse(wbFd);

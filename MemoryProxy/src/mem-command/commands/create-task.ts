@@ -167,7 +167,7 @@ export async function executeCreateTask(ctx: MemCommandContext): Promise<MemComm
     ...(ctx.model ? { model: ctx.model } : {}),
     ...(ctx.upstreamUrl ? { upstreamUrl: ctx.upstreamUrl } : {}),
     ...(ctx.upstreamProtocol ? { protocol: ctx.upstreamProtocol } : {}),
-    ...(ctx.apiKey ? { apiKey: ctx.apiKey } : {}),
+    apiKey: ctx.upstreamApiKey ?? ctx.apiKey,
     ...(lockedTitle ? { lockedTitle, hint: rawArgs } : {}),
   });
 

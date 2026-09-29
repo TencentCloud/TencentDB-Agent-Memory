@@ -235,6 +235,12 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/codex/:spaceId/realtime/calls", (c) => handleCodexEndpoint(c, config));
   app.post("/codex/:spaceId/responses", (c) => handleCodexEndpoint(c, config));
 
+  // ZCode Responses transport; native AskUserQuestion remains client-specific.
+  for (const prefix of ['/zcode/:spaceId', '/zcode/:spaceId/v1']) {
+    app.post(`${prefix}/responses`, (c) => handleCodexEndpoint(c, config));
+    app.post(`${prefix}/responses/compact`, (c) => handleCodexEndpoint(c, config));
+  }
+
   // ── Workbuddy endpoints (must precede generic /:agent/:spaceId routes) ────
   // WorkBuddy CLI/Desktop 客户端走 OpenAI Responses API（与 Codex 同协议），
   // 但客户端行为与 codex-cli 有差异（sub-path 更多：compact / trace_summarize

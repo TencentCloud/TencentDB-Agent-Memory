@@ -34,6 +34,8 @@ export interface MemCommandContext {
    *   config.upstream.agents?.[agent]?.url ?? config.upstream.url
    */
   upstreamUrl?: string;
+  /** Model credential, separate from the business user apiKey. */
+  upstreamApiKey?: string;
   /**
    * taskDraft LLM 上游 **API 协议家族**（决定请求形状，与本 ctx.protocol 语义不同）。
    *

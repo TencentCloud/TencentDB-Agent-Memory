@@ -3,15 +3,8 @@
  *
  * 解析用户从 `ask_followup_question` form 的回复。
  *
- * ── 为什么看上去像在解析 XML，但跨 team 多轮 form 也能用 ──
- *
- * 当前只解析 `<question_answer>` XML（CodeBuddy 旧格式）。
- * 实测中 CodeBuddy 实际回写格式是 `role: "tool"` 消息中的 `multi_question_result` JSON
- * （详见 cleaner.ts 头部注释中的抓包格式），但 extractor 的 substring 兜底匹配
- * 能在无关 user 消息文本中"碰巧"匹配到 team/agent/task 名，使得 session init 侥幸成功。
- * 这是 fragile 依赖，不是精确解析。如需可靠提取，需增加 JSON 解析路径。
- *
- * 不含任何 Claude Code 逻辑（不解析 JSON tool_result）。
+ * 支持 CodeBuddy XML、AskUserQuestion answers JSON 和 OpenCode 文本回填。
+ * 先剥离问题包装，再匹配答案，避免题干中的“跳过”触发 bypass。
  */
 
 import type { SessionInitData, TeamOption } from "../types.js";
@@ -22,7 +15,7 @@ import { SKIP_LABEL, PATH_SEP, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./for
 const SKIP_RE = /跳过|不关联|skip/i;
 export const BYPASS_MARKER = "__bypass__" as const;
 
-// ── opencode tool-result 剥壳 ───────────────────────────────────────────────
+// ── tool-result 剥壳 ───────────────────────────────────────────────
 //
 // opencode CLI 的原生 `question` tool 收到用户选择后，把答案以纯文本形式回给
 // model 作为 tool-result，格式为：
@@ -44,7 +37,16 @@ export const BYPASS_MARKER = "__bypass__" as const;
 // 内层引号，实测（2026-08-19）opencode 客户端遇到内层引号会输出转义后的
 // `\"` 或直接透传全角引号 `"`，为最大兼容用 `[^"]*` 简易匹配即可（覆盖
 // 我们 form.ts 里所有 label——纯 label 文本没有裸英文引号）。
-function extractOpencodeAnswers(content: string): string | null {
+function extractToolAnswers(content: string): string | null {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed?.answers && typeof parsed.answers === "object") {
+      const answers = Object.values(parsed.answers).filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      );
+      return answers.join(" | ");
+    }
+  } catch { /* Plain text / XML answers continue below. */ }
   if (!content.includes("User has answered your questions:")) return null;
   const answers: string[] = [];
   const re = /"[^"]*"="([^"]*)"/g;
@@ -145,8 +147,8 @@ export function extractTeamFromOptionText(
   if (cachedTeams.length === 0) return null;
 
   // opencode: 剥壳 tool-result 包裹，避免问题描述里的"跳过"字样触发误 SKIP。
-  // 见 extractOpencodeAnswers 头部注释。
-  const opencodeAnswer = extractOpencodeAnswers(content);
+  // 见 extractToolAnswers 头部注释。
+  const opencodeAnswer = extractToolAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
 
   let teamText: string | null = null;
@@ -267,8 +269,8 @@ export function extractFromOptionText(
       : null;
   if (!team) return null;
 
-  // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
-  const opencodeAnswer = extractOpencodeAnswers(content);
+  // opencode: 剥壳 tool-result 包裹（见 extractToolAnswers 头部）。
+  const opencodeAnswer = extractToolAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
 
   let agentText: string | null = null;
@@ -336,8 +338,8 @@ export function extractAgentOnly(
       ? cachedTeams[0]
       : null;
   if (!team) return null;
-  // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
-  const opencodeAnswer = extractOpencodeAnswers(content);
+  // opencode: 剥壳 tool-result 包裹（见 extractToolAnswers 头部）。
+  const opencodeAnswer = extractToolAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
   const trimmed = content.trim();
   if (!trimmed) return null;
@@ -372,8 +374,8 @@ export function extractTaskOnly(
       ? cachedTeams[0]
       : null;
   if (!team) return null;
-  // opencode: 剥壳 tool-result 包裹（见 extractOpencodeAnswers 头部）。
-  const opencodeAnswer = extractOpencodeAnswers(content);
+  // opencode: 剥壳 tool-result 包裹（见 extractToolAnswers 头部）。
+  const opencodeAnswer = extractToolAnswers(content);
   if (opencodeAnswer !== null) content = opencodeAnswer;
   const trimmed = content.trim();
   if (!trimmed) return null;

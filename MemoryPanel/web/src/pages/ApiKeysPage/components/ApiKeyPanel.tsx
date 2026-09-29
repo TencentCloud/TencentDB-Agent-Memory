@@ -327,6 +327,7 @@ export default function ApiKeyPanel() {
                 // OpenAI Chat Completions（POST /v1/chat/completions），与 CB/dsh 同族。
                 // proxy 侧 agent-adapters/opencode.ts 已适配 form 回填 + mem: 命令族全套。
                 { label: 'OpenCode', url: `${base}/opencode/${iid}` },
+                { label: 'ZCode', url: `${base}/zcode/${iid}` },
                 { label: 'OpenClaw', url: `${base}/openclaw/default` },
                 { label: 'Hermes', url: `${base}/hermes/default` },
               ];
