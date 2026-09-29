@@ -9,6 +9,16 @@
 
 ---
 
+## [Unreleased]
+
+### Share L1 hybrid candidate recall (#1295)
+
+- **What changed**: Route auto-recall through the existing memory_search/dedup candidate helper and preserve per-branch timing.
+- **Why**: Duplicate hybrid implementations had drifted, including empty embedding handling.
+- **Impact**: Preserves caller budgets, native scores, local auto-recall score reporting and keyword fallback thresholds; does not redefine scoreThreshold.
+- **Verification**: Node 26.3.0: 10 targeted tests and plugin build pass; includes loopback embedding timeout. No real database/cloud validation.
+- **Files**: MemoryCore/src/core/hooks/auto-recall.ts, tools/l1-candidate-recall.ts and shared-recall tests.
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

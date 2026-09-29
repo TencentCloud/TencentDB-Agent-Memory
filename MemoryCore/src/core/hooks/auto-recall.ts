@@ -14,7 +14,7 @@ import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import { RecallErrors, toRecallFailure, type RecallError } from "./recall-errors.js";
-import type { MemoryRecord } from "../record/l1-reader.js";
+import { recallL1Candidates, type L1RecallTiming } from "../tools/l1-candidate-recall.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/tokenize.js";
 import { hasClientEmbedding, type EmbeddingService, type EmbeddingCallOptions } from "../store/embedding.js";
@@ -368,18 +368,7 @@ async function performAutoRecallInner(params: {
 // Multi-strategy search dispatcher
 // ============================
 
-interface ScoredRecord {
-  record: MemoryRecord;
-  score: number;
-}
-
-/** Timing breakdown from memory search */
-interface SearchTiming {
-  ftsMs: number;
-  embeddingMs: number;
-  ftsHits: number;
-  embeddingHits: number;
-}
+type SearchTiming = L1RecallTiming;
 
 interface SearchResult {
   lines: string[];
@@ -504,21 +493,23 @@ async function searchMemories(
       return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
     }
 
-    // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
-    // server-side dense + sparse + RRF in a single API call), short-circuit
-    // to avoid a redundant second HTTP request and a wasted local embed().
-    if (vectorStore?.getCapabilities().nativeHybridSearch) {
-      const tNative = performance.now();
-      const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
-      const nativeMs = performance.now() - tNative;
-      logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
-      const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
-      const scores = results.map((r) => r.score);
-      return { lines, scores, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
-    }
-
-    // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+    // Keep the caller's candidate budget and score semantics: native hybrid
+    // returns service scores; local hybrid only exposes formatted memories.
+    const { hits, timing } = await recallL1Candidates({
+      query: cleanText,
+      topK: nativeHybrid ? maxResults : maxResults * 3,
+      vectorStore: vectorStore!,
+      embeddingService,
+      embeddingTimeoutMs: recallEmbeddingTimeoutMs,
+      logger,
+      logTag: TAG,
+    });
+    const selected = hits.slice(0, maxResults);
+    return {
+      lines: selected.map((r) => formatMemoryLine(vectorResultToFormatable(r))),
+      ...(nativeHybrid ? { scores: selected.map((r) => r.score) } : {}),
+      timing,
+    };
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
@@ -626,157 +617,6 @@ async function searchByEmbedding(
 
   logger?.debug?.(`${TAG} [embedding-search] No results above threshold ${threshold}`);
   return [];
-}
-
-// ============================
-// Strategy: Hybrid (Keyword + Embedding + RRF)
-// ============================
-
-/**
- * Hybrid search: run keyword (FTS5) and embedding in parallel, merge with
- * Reciprocal Rank Fusion (RRF) to combine rank lists.
- *
- * RRF score for a record at rank r = 1 / (k + r), where k=60 is a constant.
- * If a record appears in both lists, its RRF scores are summed.
- *
- * If FTS5 is unavailable, the keyword side returns empty and RRF uses
- * embedding results only.
- */
-async function searchHybrid(
-  userText: string,
-  _pluginDataDir: string,
-  maxResults: number,
-  _threshold: number,
-  vectorStore: IMemoryStore,
-  embeddingService: EmbeddingService,
-  logger?: Logger,
-  embeddingCallOpts?: EmbeddingCallOptions,
-): Promise<SearchResult> {
-  // Run keyword and embedding searches in parallel
-  const candidateK = maxResults * 3; // retrieve more for merging
-
-  const [keywordResult, embeddingResult] = await Promise.all([
-    // Keyword search: FTS5 only (no in-memory fallback)
-    (async () => {
-      const tStart = performance.now();
-      try {
-        // Try FTS5 first
-        if (vectorStore.isFtsAvailable()) {
-          const ftsQuery = buildFtsQuery(userText);
-          if (ftsQuery) {
-            const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
-            if (ftsResults.length > 0) {
-              logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
-              // Convert FtsSearchResult to ScoredRecord for RRF merge
-              const records = ftsResults.map((r): ScoredRecord => ({
-                record: {
-                  id: r.record_id,
-                  content: r.content,
-                  type: r.type as MemoryRecord["type"],
-                  priority: r.priority,
-                  scene_name: r.scene_name,
-                  source_message_ids: [],
-                  metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
-                  timestamps: [r.timestamp_str].filter(Boolean),
-                  createdAt: "",
-                  updatedAt: "",
-                  sessionKey: r.session_key,
-                  sessionId: r.session_id,
-                },
-                score: r.score,
-              }));
-              return { records, ms: performance.now() - tStart };
-            }
-          }
-        }
-        // FTS5 not available or returned no results — skip in-memory fallback
-        logger?.debug?.(`${TAG} [hybrid-keyword] FTS5 unavailable or no results, skipping keyword part`);
-        return { records: [] as ScoredRecord[], ms: performance.now() - tStart };
-      } catch (err) {
-        logger?.warn?.(`${TAG} Hybrid: keyword part failed: ${err instanceof Error ? err.message : String(err)}`);
-        return { records: [] as ScoredRecord[], ms: performance.now() - tStart };
-      }
-    })(),
-    // Embedding search
-    (async () => {
-      const tStart = performance.now();
-      try {
-        logger?.debug?.(`${TAG} [hybrid-embedding] Generating query embedding...`);
-        const queryEmbedding = await embeddingService.embed(userText, embeddingCallOpts);
-        logger?.debug?.(
-          `${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
-        );
-        const results = await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText);
-        logger?.debug?.(`${TAG} [hybrid-embedding] Got ${results.length} candidates`);
-        return { results, ms: performance.now() - tStart };
-      } catch (err) {
-        logger?.warn?.(`${TAG} Hybrid: embedding part failed: ${err instanceof Error ? err.message : String(err)}`);
-        return { results: [] as L1SearchResult[], ms: performance.now() - tStart };
-      }
-    })(),
-  ]);
-
-  const keywordResults = keywordResult.records;
-  const embeddingResults = embeddingResult.results;
-  const timing: SearchTiming = {
-    ftsMs: keywordResult.ms,
-    embeddingMs: embeddingResult.ms,
-    ftsHits: keywordResults.length,
-    embeddingHits: embeddingResults.length,
-  };
-
-  if (keywordResults.length === 0 && embeddingResults.length === 0) {
-    logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
-    return { lines: [], timing };
-  }
-
-  // RRF merge: k=60 is a standard constant from the RRF paper
-  const RRF_K = 60;
-
-  // Map: record_id → { rrfScore, formatable }
-  const mergedMap = new Map<string, { rrfScore: number; formatable: FormatableMemory }>();
-
-  // Process keyword results
-  for (let rank = 0; rank < keywordResults.length; rank++) {
-    const r = keywordResults[rank];
-    const id = r.record.id;
-    const rrfScore = 1 / (RRF_K + rank + 1);
-    const existing = mergedMap.get(id);
-    if (existing) {
-      existing.rrfScore += rrfScore;
-    } else {
-      mergedMap.set(id, { rrfScore, formatable: recordToFormatable(r.record) });
-    }
-  }
-
-  // Process embedding results
-  for (let rank = 0; rank < embeddingResults.length; rank++) {
-    const r = embeddingResults[rank];
-    const id = r.record_id;
-    const rrfScore = 1 / (RRF_K + rank + 1);
-    const existing = mergedMap.get(id);
-    if (existing) {
-      existing.rrfScore += rrfScore;
-    } else {
-      mergedMap.set(id, { rrfScore, formatable: vectorResultToFormatable(r) });
-    }
-  }
-
-  // Sort by combined RRF score and take top results
-  const sorted = [...mergedMap.entries()]
-    .sort((a, b) => b[1].rrfScore - a[1].rrfScore)
-    .slice(0, maxResults);
-
-  if (sorted.length > 0) {
-    logger?.debug?.(
-      `${TAG} Hybrid search found ${sorted.length} results ` +
-      `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
-    );
-    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
-  }
-
-  logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
-  return { lines: [], timing };
 }
 
 // ============================
@@ -939,22 +779,6 @@ function formatTimestamp(ts: string | undefined): string | undefined {
     return datePart;
   }
   return `${datePart} ${timePart}`;
-}
-
-/**
- * Build a FormatableMemory from a full MemoryRecord (keyword search path).
- * Handles empty metadata, empty timestamps array gracefully.
- */
-function recordToFormatable(record: MemoryRecord): FormatableMemory {
-  const meta = record.metadata as { activity_start_time?: string; activity_end_time?: string } | undefined;
-  return {
-    type: record.type,
-    content: record.content,
-    scene_name: record.scene_name || undefined,
-    activity_start_time: meta?.activity_start_time || undefined,
-    activity_end_time: meta?.activity_end_time || undefined,
-    timestamp: (record.timestamps && record.timestamps.length > 0) ? record.timestamps[0] : undefined,
-  };
 }
 
 /**

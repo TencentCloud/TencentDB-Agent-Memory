@@ -1,7 +1,7 @@
 /**
  * Shared L1 candidate recall: text → top-K L1 hits.
  *
- * Used by memory_search (cross-session filter) and l1_dedup (session-scoped
+ * Used by auto-recall, memory_search (cross-session filter), and l1_dedup (session-scoped
  * filter). Callers own isolation / topK / query; this module only decides
  * native-hybrid vs FTS ∥ client-vector, then RRF-merges dual-path results.
  *
@@ -35,7 +35,15 @@ export interface RecallL1CandidatesParams {
   logTag?: string;
 }
 
+export interface L1RecallTiming {
+  ftsMs: number;
+  embeddingMs: number;
+  ftsHits: number;
+  embeddingHits: number;
+}
+
 export interface RecallL1CandidatesResult {
+  timing: L1RecallTiming;
   hits: L1SearchResult[];
   strategy: L1RecallStrategy;
 }
@@ -54,29 +62,38 @@ export async function recallL1Candidates(
     embeddingTimeoutMs,
   } = params;
   const tag = params.logTag ?? DEFAULT_TAG;
+  const timing: L1RecallTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
 
   if (!query || query.trim().length === 0 || topK <= 0) {
-    return { hits: [], strategy: "none" };
+    return { hits: [], strategy: "none", timing };
   }
 
   if (hasNativeL1Hybrid(vectorStore)) {
     logger?.debug?.(`${tag} [native-hybrid] Single-call hybrid search...`);
+    const started = performance.now();
     const results = await vectorStore.searchL1Hybrid!(
       filter ? { query, topK, filter } : { query, topK },
     );
-    return { hits: results, strategy: "hybrid" };
+    return { hits: results, strategy: "hybrid", timing: { ...timing, embeddingMs: performance.now() - started, embeddingHits: results.length } };
   }
 
   const hasEmbedding = hasClientEmbedding(embeddingService);
   const hasFts = vectorStore.isFtsAvailable();
 
   if (!hasEmbedding && !hasFts) {
-    return { hits: [], strategy: "none" };
+    return { hits: [], strategy: "none", timing };
   }
 
+  const timed = async (operation: () => Promise<L1SearchResult[]>, kind: "fts" | "embedding") => {
+    const started = performance.now();
+    const hits = await operation();
+    timing[`${kind}Ms`] = performance.now() - started;
+    timing[`${kind}Hits`] = hits.length;
+    return hits;
+  };
   const [ftsHits, vecHits] = await Promise.all([
-    recallFts(query, topK, vectorStore, hasFts, filter, logger, tag),
-    recallVector(
+    timed(() => recallFts(query, topK, vectorStore, hasFts, filter, logger, tag), "fts"),
+    timed(() => recallVector(
       query,
       topK,
       vectorStore,
@@ -86,7 +103,7 @@ export async function recallL1Candidates(
       embeddingTimeoutMs,
       logger,
       tag,
-    ),
+    ), "embedding"),
   ]);
 
   const ftsOk = ftsHits.length > 0;
@@ -100,7 +117,7 @@ export async function recallL1Candidates(
     strategy = "fts";
   } else {
     logger?.debug?.(`${tag} Both search paths returned 0 results`);
-    return { hits: [], strategy: hasEmbedding ? "embedding" : "fts" };
+    return { hits: [], strategy: hasEmbedding ? "embedding" : "fts", timing };
   }
 
   if (strategy === "hybrid") {
@@ -108,10 +125,10 @@ export async function recallL1Candidates(
     logger?.debug?.(
       `${tag} [hybrid] RRF merged: fts=${ftsHits.length}, vec=${vecHits.length} → ${merged.length} unique`,
     );
-    return { hits: merged, strategy };
+    return { hits: merged, strategy, timing };
   }
 
-  return { hits: ftsOk ? ftsHits : vecHits, strategy };
+  return { hits: ftsOk ? ftsHits : vecHits, strategy, timing };
 }
 
 function hasNativeL1Hybrid(store: IMemoryStore): boolean {
