@@ -34,6 +34,7 @@ import { getMetadataClient } from "../meta/client.js";
 import type { ProxyConfig } from "../types.js";
 import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "../memory/bridge-telemetry.js";
 import { getCoreSkillClient, type CoreSkillClient } from "./core-client.js";
+import { sessionKeyCandidates } from "../session/key-candidates.js";
 
 /**
  * 二选一的 pin repo（KvVersionPinRepo 或 VersionPinRepo）——
@@ -292,9 +293,10 @@ function bindingToIdFields(
  * 恢复而不 401。
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+  // 前缀值域来自 KNOWN_AGENT_KINDS（见 session/key-candidates.ts）；曾硬编码
+  // [codebuddy, claude-code]，导致 workbuddy/pi/codex/dsh/opencode 客户端的
+  // L1 探测必然 miss。
+  const candidates = sessionKeyCandidates(sessionId);
   for (const k of candidates) {
     const s = getSessionStore().get(k);
     if (s) {
