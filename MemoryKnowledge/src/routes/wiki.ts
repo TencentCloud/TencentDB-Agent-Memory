@@ -174,10 +174,10 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     // knowledge_id in request body, so the URL is service-level, not
     // resource-scoped). publicBaseUrl already includes the API prefix; proxy
     // appends `/tools/list` | `/tools/call` directly.
-    if (!existed && publicBaseUrl) {
+    if (publicBaseUrl && row.service_url !== publicBaseUrl) {
       const serviceUrl = publicBaseUrl;
       const updated = wikiService.updateServiceUrl(ids.service_id, row.wiki_id, serviceUrl);
-      if (updated) return c.json(wrapOk(toWikiDetail(updated)), 201);
+      if (updated) return c.json(wrapOk(toWikiDetail(updated)), existed ? 200 : 201);
     }
 
     return c.json(wrapOk(toWikiDetail(row)), existed ? 200 : 201);
