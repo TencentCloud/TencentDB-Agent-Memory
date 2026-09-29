@@ -872,7 +872,9 @@ class MemoryTencentdbProvider(MemoryProvider):
                     user_id=self._user_id,
                 )
                 self._record_success()
-                items = result.get("data", {}).get("items", [])
+                # Gateway /v3/conversation/search returns data.messages (ConversationSearchData),
+                # not data.items. Reading the wrong key made this tool always report "not found".
+                items = result.get("data", {}).get("messages", [])
                 if not items:
                     return "No conversations found for this query."
                 lines = []
