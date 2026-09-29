@@ -7,7 +7,9 @@
  * capability (L3/L2 injection, L0 capture, L0/L1/L2 search via curl
  * recipes) arrives server-side from the proxy. (Scope C.)
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { SkillBridgeClient, syncListedSkills } from "./skill-sync.js";
 
 export default function (pi: ExtensionAPI) {
   const proxyBase = process.env.TDAI_PROXY_URL ?? "http://127.0.0.1:8096";
@@ -79,6 +81,67 @@ export default function (pi: ExtensionAPI) {
         },
       },
     ],
+  });
+
+  pi.registerCommand("tdai-memory-sync-skills", {
+    description: "Install mined TencentDB skills into Pi's native skills directory",
+    handler: async (_args, ctx) => {
+      let shouldReload = false;
+      const client = new SkillBridgeClient({
+        proxyBase,
+        spaceId,
+        userKey,
+        conversationId: `pi-${ctx.sessionManager.getSessionId()}`,
+      });
+
+      try {
+        ctx.ui.setStatus("tdai-memory", "syncing skills");
+        const candidates = await client.list();
+        if (candidates.length === 0) {
+          ctx.ui.notify("No mined skills are available for this TDAI agent yet.", "info");
+          return;
+        }
+        if (ctx.hasUI) {
+          const confirmed = await ctx.ui.confirm(
+            "Sync TencentDB skills?",
+            `${candidates.length} mined skill(s) will be installed or updated. Hand-written skills are never overwritten.`,
+          );
+          if (!confirmed) return;
+        }
+
+        const results = await syncListedSkills(
+          client,
+          join(getAgentDir(), "skills"),
+          { proxyBase, spaceId },
+          candidates,
+        );
+        const counts = results.reduce<Record<string, number>>((all, result) => {
+          all[result.status] = (all[result.status] ?? 0) + 1;
+          return all;
+        }, {});
+        const summary = [
+          counts.synced ? `${counts.synced} synced` : "",
+          counts["up-to-date"] ? `${counts["up-to-date"]} already current` : "",
+          counts["skipped-user-owned"] ? `${counts["skipped-user-owned"]} user-owned skipped` : "",
+          counts["skipped-remote-conflict"] ? `${counts["skipped-remote-conflict"]} name conflicts skipped` : "",
+          counts.failed ? `${counts.failed} failed` : "",
+        ].filter(Boolean).join(", ");
+        ctx.ui.notify(`TDAI skill sync: ${summary}.`, counts.failed ? "warning" : "info");
+        shouldReload = Boolean(counts.synced);
+      } catch (error) {
+        ctx.ui.notify(
+          `TDAI skill sync failed: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+      } finally {
+        ctx.ui.setStatus("tdai-memory", undefined);
+      }
+      // Reload is terminal: Pi invalidates this command context after it reloads.
+      if (shouldReload) {
+        await ctx.reload();
+        return;
+      }
+    },
   });
 
   pi.on("before_provider_headers", (event: any, ctx: any) => {
