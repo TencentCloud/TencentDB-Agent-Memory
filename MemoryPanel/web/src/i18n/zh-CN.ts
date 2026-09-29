@@ -1,6 +1,43 @@
 /** 中文翻译 — zh-CN */
 
 export const zhCN = {
+  "gitCredential.scope": "适用范围",
+  "gitCredential.anySshServer": "SSH · 多服务器",
+  "gitCredential.managedHosts": "无需手填 known_hosts。首次连接服务器时确认其指纹，系统保存后持续校验；服务器指纹变更时会阻止连接。",
+  "gitCredential.hostConfirm": "确认 SSH 服务器 {{server}} 的指纹",
+  "gitCredential.hostChanged": "SSH 服务器 {{server}} 的指纹已变更",
+  "gitCredential.verifyFingerprint": "请与 Git 平台公布的指纹或服务器管理员核对。确认后将保存此服务器的信任记录；取消不会使用私钥连接。",
+  "gitCredential.trustHost": "指纹已核实，信任此服务器",
+  "gitCredential.manage": "Git 凭据管理",
+  "gitCredential.ownerHint": "仅展示你在当前团队创建的凭据。密钥保存后不再回显；轮换凭据会用于下次同步。",
+  "gitCredential.authMode": "Git 鉴权",
+  "gitCredential.noAuth": "无鉴权",
+  "gitCredential.useSaved": "使用已保存凭据",
+  "gitCredential.choose": "请选择 Git 凭据",
+  "gitCredential.hostname": "Git 主机名（hostname）",
+  "gitCredential.serverHint": "只填写主机名，如 cnb.cool，不含协议、端口或仓库路径。按仓库 URL 的 hostname 匹配，可用于该主机上的多个 HTTPS 仓库。",
+  "gitCredential.testRepoHint": "填写用于验证权限的仓库 URL；该地址仅用于本次测试，不会绑定到凭据。",
+  "gitCredential.serverMismatch": "凭据的认证方式与仓库 URL 不匹配，或 HTTPS 仓库的 hostname 与凭据不同。",
+  "gitCredential.keyHint": "使用无口令的 SSH 私钥。同一密钥可在多个 Git 服务器使用，需在各平台授权对应公钥；私钥不会发送给 Agent。",
+  "gitCredential.name": "凭据名称",
+  "gitCredential.kind": "认证方式",
+  "gitCredential.actions": "操作",
+  "gitCredential.rotate": "轮换凭据",
+  "gitCredential.add": "保存凭据",
+  "gitCredential.addNew": "新建凭据",
+  "gitCredential.test": "测试连接",
+  "gitCredential.sshKey": "SSH 私钥",
+  "gitCredential.username": "Git 用户名",
+  "gitCredential.tokenHint": "使用具有仓库只读权限的访问令牌，用户名按 Git 平台要求填写。",
+  "gitCredential.select": "Git 凭据",
+  "gitCredential.none": "无需凭据（公开 HTTPS 仓库）",
+  "gitCredential.shareConsent": "我确认将此仓库的代码索引共享给当前团队；Git 凭据仍仅由我管理。",
+  "gitCredential.saved": "凭据已保存，下次同步将使用最新密钥",
+  "gitCredential.bindingSaved": "仓库凭据已更新，可点击同步重试",
+  "gitCredential.saveBinding": "更新仓库凭据",
+  "gitCredential.testOk": "连接成功，仓库可访问",
+  "gitCredential.deleteConfirm": "确认删除凭据「{{name}}」？已关联代码仓库的凭据需要先解除关联。",
+
   // ===== App =====
   'app.checkingSession': '正在检测登录态…',
 
@@ -430,11 +467,11 @@ export const zhCN = {
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
   'code.register.branch': '分支',
   'code.register.sshWarning':
-    '当前版本不支持 SSH 格式的仓库地址，请改用 HTTPS 格式（如 https://gitlab.example.com/namespace/repo.git）。',
+    'SSH 仓库需要先创建并选择 SSH 凭据。',
   'code.register.urlError':
-    '请输入合法的 HTTP(S) Git 仓库地址，且必须以 .git 结尾（如 https://gitlab.example.com/namespace/repo.git），不能含空格。',
+    '请输入 HTTPS 或 SSH 仓库地址，不能包含密码、Token、空格或查询参数。',
   'code.register.invalidUrl':
-    '请输入合法的 HTTPS Git 仓库地址，且必须以 .git 结尾（如 https://gitlab.example.com/namespace/repo.git），不能含空格。',
+    '请输入 HTTPS 或 SSH 仓库地址，不能包含密码、Token、空格或查询参数。',
   'code.register.submitting': '注册中…',
   'code.register.submit': '注册',
   'code.confirm.delete': '确定要删除仓库「{{name}} ({{branch}})」吗？',

@@ -3,7 +3,7 @@ info:
   title: Knowledge Service API
   description: |
     Standalone knowledge service for Code-Graph + LLM-Wiki.
-    Provides 28 endpoints for managing and querying code repositories
+    Provides endpoints for managing and querying code repositories
     and wiki knowledge bases.
 
     ## Multi-tenancy (001)
@@ -46,6 +46,211 @@ tags:
     description: Code repository indexing and structured code queries.
 
 paths:
+  /source-credential/list:
+    post:
+      tags: [Code-Graph]
+      summary: List only the caller-owned Git credential metadata.
+      security:
+        - GitServiceBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitCredentialScopeRequest'
+      responses:
+        '200':
+          description: Success envelope; secrets are never returned.
+        '400':
+          description: Invalid request or inaccessible repository.
+        '401':
+          description: Service authentication required.
+        '404':
+          description: Credential not found in the service/team/owner scope.
+        '409':
+          description: Credential is still referenced by a code graph.
+        '503':
+          description: Service authentication or encryption key is not configured.
+
+  /source-credential/put:
+    post:
+      tags: [Code-Graph]
+      summary: Create or rotate an owner-only Git credential. Secret fields are write-only.
+      security:
+        - GitServiceBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitCredentialPutRequest'
+      responses:
+        '200':
+          description: Success envelope; secrets are never returned.
+        '400':
+          description: Invalid request or inaccessible repository.
+        '401':
+          description: Service authentication required.
+        '404':
+          description: Credential not found in the service/team/owner scope.
+        '409':
+          description: Credential is still referenced by a code graph.
+        '503':
+          description: Service authentication or encryption key is not configured.
+
+  /source-credential/test:
+    post:
+      tags: [Code-Graph]
+      summary: Test the saved credential using git ls-remote.
+      security:
+        - GitServiceBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitCredentialTestRequest'
+      responses:
+        '200':
+          description: Success envelope; secrets are never returned.
+        '400':
+          description: Invalid request or inaccessible repository.
+        '401':
+          description: Service authentication required.
+        '404':
+          description: Credential not found in the service/team/owner scope.
+        '409':
+          description: Credential is still referenced by a code graph.
+        '503':
+          description: Service authentication or encryption key is not configured.
+
+  /source-credential/host-key:
+    post:
+      tags: [Code-Graph]
+      summary: Inspect SSH public host keys and fingerprints without authenticating or saving trust.
+      security:
+        - GitServiceBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitHostKeyRequest'
+      responses:
+        '200':
+          description: Success envelope with public host trust metadata; no secret returned.
+        '400':
+          description: Invalid SSH host or host discovery failed.
+        '401':
+          description: Service authentication required.
+        '404':
+          description: Credential not found for this owner.
+        '409':
+          description: Host trust changed since inspection; inspect and verify again.
+
+  /source-credential/trust-host:
+    post:
+      tags: [Code-Graph]
+      summary: Persist host keys after explicit fingerprint verification; reject stale confirmations.
+      security:
+        - GitServiceBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitHostTrustRequest'
+      responses:
+        '200':
+          description: Success envelope with public host trust metadata; no secret returned.
+        '400':
+          description: Invalid SSH host or host discovery failed.
+        '401':
+          description: Service authentication required.
+        '404':
+          description: Credential not found for this owner.
+        '409':
+          description: Host trust changed since inspection; inspect and verify again.
+
+  /source-credential/delete:
+    post:
+      tags: [Code-Graph]
+      summary: Delete an unused Git credential. Returns 409 if a graph still references it.
+      security:
+        - GitServiceBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GitCredentialScopeRequest'
+      responses:
+        '200':
+          description: Success envelope; secrets are never returned.
+        '400':
+          description: Invalid request or inaccessible repository.
+        '401':
+          description: Service authentication required.
+        '404':
+          description: Credential not found in the service/team/owner scope.
+        '409':
+          description: Credential is still referenced by a code graph.
+        '503':
+          description: Service authentication or encryption key is not configured.
+
+  /code-graph/set-credential:
+    post:
+      tags: [Code-Graph]
+      summary: Change a code graph's Git credential (owner only, graph must be idle).
+      security:
+        - GitServiceBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ServiceIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code_graph_id, user_id, credential_id]
+              properties:
+                code_graph_id:
+                  type: string
+                user_id:
+                  type: string
+                  description: Authenticated user identity asserted by Panel.
+                credential_id:
+                  type: string
+                  nullable: true
+                share_with_team:
+                  type: boolean
+                  description: Must be true when attaching a credential.
+      responses:
+        '200':
+          description: Updated CodeGraphDetail in the success envelope.
+        '400':
+          description: Invalid credential or missing sharing confirmation.
+        '401':
+          description: Service authentication required.
+        '403':
+          description: Caller does not own this graph or credential scope does not match.
+        '404':
+          description: Graph or credential not found.
+        '409':
+          description: Code graph is busy.
+
   # ═══════════════════════════════════════════════
   # LLM-Wiki (15 endpoints)
   # ═══════════════════════════════════════════════
@@ -712,6 +917,11 @@ paths:
           $ref: '#/components/responses/ErrorResponse'
 
 components:
+  securitySchemes:
+    GitServiceBearer:
+      type: http
+      scheme: bearer
+      description: Knowledge service key. Required even in legacy open mode for Git credentials.
   parameters:
     ServiceIdHeader:
       name: x-tdai-service-id
@@ -733,6 +943,105 @@ components:
             $ref: '#/components/schemas/ApiResponseEnvelope'
 
   schemas:
+    GitCredentialScopeRequest:
+      type: object
+      required: [team_id, user_id]
+      properties:
+        team_id:
+          type: string
+        user_id:
+          type: string
+          description: Authenticated user identity asserted by Panel, not an end-user authorization token.
+        credential_id:
+          type: string
+          description: Required by test/delete; omit for list.
+    GitCredentialTestRequest:
+      allOf:
+        - $ref: '#/components/schemas/GitCredentialScopeRequest'
+        - type: object
+          required: [credential_id, repo_url]
+          properties:
+            repo_url:
+              type: string
+              description: One-time test target; SSH supports multiple servers. Not stored as a credential binding.
+    GitHostKeyRequest:
+      allOf:
+        - $ref: '#/components/schemas/GitCredentialTestRequest'
+        - type: object
+          properties:
+            refresh:
+              type: boolean
+              default: false
+              description: Rescan even a trusted host to inspect legitimate server key changes.
+    GitHostTrustRequest:
+      allOf:
+        - $ref: '#/components/schemas/GitCredentialTestRequest'
+        - type: object
+          required: [known_hosts, previous_known_hosts]
+          properties:
+            known_hosts:
+              type: string
+              description: Exact-host public key entries whose fingerprints the owner has verified.
+            previous_known_hosts:
+              type: string
+              nullable: true
+              description: Previous keys returned by host-key, or null on first use. Prevents stale updates.
+    GitCredentialInfo:
+      type: object
+      required: [credential_id, name, hostname, kind, updated_at]
+      properties:
+        credential_id:
+          type: string
+        name:
+          type: string
+        hostname:
+          type: string
+          nullable: true
+          description: Canonical hostname for HTTPS matching, independent of repository path and port; null for SSH.
+        kind:
+          type: string
+          enum: [https, ssh]
+        username:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+    GitCredentialPutRequest:
+      allOf:
+        - $ref: '#/components/schemas/GitCredentialScopeRequest'
+        - type: object
+          required: [name, secret]
+          properties:
+            name:
+              type: string
+              maxLength: 128
+            hostname:
+              type: string
+              example: cnb.cool
+              description: Required for HTTPS. Hostname only, without protocol, port, user credentials or path. Omit for SSH.
+            secret:
+              writeOnly: true
+              oneOf:
+                - type: object
+                  required: [kind, username, token]
+                  properties:
+                    kind:
+                      type: string
+                      enum: [https]
+                    username:
+                      type: string
+                    token:
+                      type: string
+                      writeOnly: true
+                - type: object
+                  required: [kind, private_key]
+                  properties:
+                    kind:
+                      type: string
+                      enum: [ssh]
+                    private_key:
+                      type: string
+                      writeOnly: true
     ApiResponseEnvelope:
       type: object
       required: [code, message, data]
@@ -1011,6 +1320,9 @@ components:
           type: string
         repo_url:
           type: string
+        credential_id:
+          type: string
+          nullable: true
         branch:
           type: string
         commit_hash:
@@ -1055,6 +1367,13 @@ components:
           properties:
             repo_url:
               type: string
+              description: HTTPS or SSH URL without embedded HTTPS credentials.
+            credential_id:
+              type: string
+              description: Owner's credential in the same service and team. HTTPS matches the hostname; SSH identities work across servers.
+            share_with_team:
+              type: boolean
+              description: Must be true when binding a credential; the code index is shared with the team.
             branch:
               type: string
               default: main

@@ -59,7 +59,7 @@ RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates tini \
+      git openssh-client curl ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

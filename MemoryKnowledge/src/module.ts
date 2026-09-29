@@ -23,6 +23,7 @@ import {
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
 import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
+import { GitCredentialStore } from "./store/git-credential-store.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
 import { getGlobalLlmConcurrency } from "./config.js";
@@ -57,6 +58,7 @@ export interface CodeGraphInstancePool {
 }
 
 export interface KnowledgeModule {
+  gitCredentialStore: GitCredentialStore;
   wikiService: WikiService;
   cgService: CodeGraphService;
   wikiMgr: WikiSourceManager;
@@ -81,6 +83,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // Store
   const store = new SqliteKnowledgeStore(db);
+  const gitCredentialStore = new GitCredentialStore(db);
 
   // Per-instance LLM routing binding + resolver (proxy/byo → effective LlmConfig).
   // No binding → global LLM_MODE decides: 'custom' uses global LLM_* direct,
@@ -119,8 +122,11 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
     const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
 
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
+    // Resolve the source fetcher (validates HTTPS/SSH URLs and private-network restrictions).
     const fetcher = fetcherRegistry.resolve(repoUrl);
+    const secret = ctx.credentialId
+      ? gitCredentialStore.resolve(ctx.serviceId, ctx.teamId, ctx.ownerUserId ?? "", ctx.credentialId, repoUrl)
+      : undefined;
 
     const isExistingRepo = existsSync(join(dir, ".git"));
     let didIncrementalSync = false;
@@ -129,7 +135,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (isExistingRepo) {
       try {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(repoUrl, branch, dir);
+        const res = await fetcher.sync(repoUrl, branch, dir, secret);
         version = res.version;
 
         setInternalStatus("indexing");
@@ -141,6 +147,9 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
         instancePool.set(codeGraphId, instance);
         didIncrementalSync = true;
       } catch (err) {
+        // Preserve the existing checkout/index when network/authentication fails.
+        // Only an index failure after a successful fetch may need a rebuild.
+        if (version === null) throw err;
         log.warn(
           `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -151,7 +160,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (!didIncrementalSync) {
       mkdirSync(dir, { recursive: true });
       setInternalStatus("cloning");
-      const res = await fetcher.fetch(repoUrl, branch, dir);
+      const res = await fetcher.fetch(repoUrl, branch, dir, secret);
       version = res.version;
 
       setInternalStatus("indexing");
@@ -293,5 +302,5 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   });
   autoSyncScheduler.start();
 
-  return { wikiService, cgService, wikiMgr, store, instancePool, llmBindingStore, autoSyncScheduler, autoSyncConfig };
+  return { wikiService, cgService, wikiMgr, store, instancePool, llmBindingStore, gitCredentialStore, autoSyncScheduler, autoSyncConfig };
 }

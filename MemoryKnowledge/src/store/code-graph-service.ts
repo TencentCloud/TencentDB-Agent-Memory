@@ -23,6 +23,7 @@ import { rmSync } from "node:fs";
 import type {
   AuditAction,
   CodeGraphRow,
+  CodeGraphMetaPatch,
   IKnowledgeStore,
   ListOpts,
   CountOpts,
@@ -35,6 +36,8 @@ export interface CodeGraphBuildContext {
   teamId: string;
   repoUrl: string;
   branch: string;
+  credentialId: string | null;
+  ownerUserId: string | null;
   /** 该资产的本地工作目录（checkout + 索引落此）。 */
   dir: string;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
@@ -86,6 +89,7 @@ export interface CreateCodeGraphParams {
   service_id: string;
   team_id: string;
   repo_url: string;
+  credential_id?: string;
   branch: string;
   repo_name?: string;
   owner_user_id?: string;
@@ -145,7 +149,7 @@ export class CodeGraphService {
   }
 
   /** Update code-graph metadata (repo_name, summary). Returns updated row or null. */
-  updateMeta(serviceId: string, codeGraphId: string, patch: { repo_name?: string; summary?: string | null }): CodeGraphRow | null {
+  updateMeta(serviceId: string, codeGraphId: string, patch: CodeGraphMetaPatch): CodeGraphRow | null {
     return this.store.updateCodeGraphMeta(serviceId, codeGraphId, patch);
   }
 
@@ -290,12 +294,15 @@ export class CodeGraphService {
       sync_error: null,
     });
     try {
+      const current = this.store.getCodeGraphById(serviceId, codeGraphId)!;
       const result = await this.worker({
         codeGraphId,
         serviceId,
         teamId,
         repoUrl,
         branch,
+        credentialId: current.credential_id,
+        ownerUserId: current.owner_user_id,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),

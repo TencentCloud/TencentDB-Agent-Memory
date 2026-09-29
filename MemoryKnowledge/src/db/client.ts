@@ -49,6 +49,32 @@ export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Databas
  */
 export function migrate(_db: Db, raw: Database.Database): void {
   raw.exec(`
+    CREATE TABLE IF NOT EXISTS git_trusted_host (
+      service_id TEXT NOT NULL,
+      team_id TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      server_url TEXT NOT NULL,
+      known_hosts TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_git_trusted_host_owner
+      ON git_trusted_host(service_id, team_id, owner_user_id, server_url);
+
+    CREATE TABLE IF NOT EXISTS git_credential (
+      credential_id TEXT PRIMARY KEY,
+      service_id TEXT NOT NULL,
+      team_id TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      repo_url TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      username TEXT,
+      encrypted_secret TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_git_credential_owner
+      ON git_credential(service_id, team_id, owner_user_id);
+
     CREATE TABLE IF NOT EXISTS knowledge_code_graph (
       code_graph_id   TEXT PRIMARY KEY,
       service_id      TEXT NOT NULL,
@@ -155,6 +181,7 @@ export function migrate(_db: Db, raw: Database.Database): void {
   // Column migrations — SQLite ALTER TABLE ADD COLUMN is not idempotent,
   // so we check PRAGMA table_info first.
   addColumnIfMissing(raw, "knowledge_code_graph", "service_url", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_id", "TEXT");
   addColumnIfMissing(raw, "knowledge_code_graph", "summary", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "summary", "TEXT");

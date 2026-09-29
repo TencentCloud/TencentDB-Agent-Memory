@@ -9,6 +9,7 @@
  *   - /api/v1/knowledge/{type}/team-assets （list-routes）
  */
 import type { Hono } from 'hono';
+import { registerGitCredentialRoutes } from './git-credential-routes.js';
 import type { PanelDeps } from '../../../panel-deps.js';
 import { registerKnowledgeWikiRoutes } from './wiki-routes.js';
 import { registerKnowledgeCodeGraphRoutes } from './code-graph-routes.js';
@@ -17,6 +18,7 @@ import { registerKnowledgeAllocateRoutes } from './allocate-routes.js';
 import { registerKnowledgeListRoutes } from './list-routes.js';
 
 export function registerKnowledgeRoutes(api: Hono, deps: PanelDeps): void {
+  registerGitCredentialRoutes(api, deps);
   registerKnowledgeWikiRoutes(api, deps);
   registerKnowledgeCodeGraphRoutes(api, deps);
   registerKnowledgeCallbackRoutes(api, deps);

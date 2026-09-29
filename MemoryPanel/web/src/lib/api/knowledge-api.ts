@@ -91,6 +91,7 @@ export interface CodeGraphDetail {
   team_id: string;
   repo_name: string;
   repo_url: string;
+  credential_id?: string | null;
   branch: string;
   commit_hash: string | null;
   service_url: string | null;
@@ -124,6 +125,7 @@ export interface CodeSource {
   repo: string;
   branch: string;
   repo_url?: string;
+  credential_id?: string | null;
   repo_name?: string;
   gitUrl?: string;
   status: string;
@@ -181,6 +183,7 @@ export interface KnowledgeAssetItem {
   last_sync_at?: string | null;
   repo_name?: string;
   repo_url?: string;
+  credential_id?: string | null;
   branch?: string;
   commit_hash?: string | null;
   stats?: { files: number; nodes: number; edges: number } | null;
@@ -213,6 +216,7 @@ function assetItemToCode(item: KnowledgeAssetItem): CodeGraphDetail {
     team_id: item.team_id ?? '',
     repo_name: item.repo_name ?? item.name,
     repo_url: item.repo_url ?? '',
+    credential_id: item.credential_id,
     branch: item.branch ?? 'main',
     commit_hash: item.commit_hash ?? null,
     service_url: null,
@@ -286,7 +290,44 @@ export function wikiProgressPercent(status: WikiDetail['status'], internalStatus
   return 0;
 }
 
+export interface GitHostKeyInfo {
+  server_url: string;
+  trusted: boolean;
+  known_hosts: string;
+  previous_known_hosts: string | null;
+  fingerprints: string[];
+}
+
+export interface GitCredentialInfo {
+  credential_id: string;
+  name: string;
+  hostname: string | null;
+  kind: 'https' | 'ssh';
+  username: string | null;
+  updated_at: string;
+}
+
+export type GitSecret =
+  | { kind: 'https'; username: string; token: string }
+  | { kind: 'ssh'; private_key: string };
+
 export const knowledgeApi = {
+  gitCredentials: {
+    list: async (teamId: string): Promise<GitCredentialInfo[]> => {
+      const data = await panelPost<{ items: GitCredentialInfo[] }>('/source-credential/list', { team_id: teamId });
+      return data.items;
+    },
+    put: (teamId: string, input: { credential_id?: string; name: string; hostname?: string; secret: GitSecret }): Promise<GitCredentialInfo> =>
+      panelPost('/source-credential/put', { ...input, team_id: teamId }),
+    delete: (teamId: string, id: string): Promise<void> =>
+      panelPost('/source-credential/delete', { team_id: teamId, credential_id: id }),
+    hostKey: (teamId: string, id: string, repoUrl: string, refresh = false): Promise<GitHostKeyInfo> =>
+      panelPost('/source-credential/host-key', { team_id: teamId, credential_id: id, repo_url: repoUrl, refresh }),
+    trustHost: (teamId: string, id: string, repoUrl: string, host: GitHostKeyInfo): Promise<{ trusted: boolean }> =>
+      panelPost('/source-credential/trust-host', { team_id: teamId, credential_id: id, repo_url: repoUrl, known_hosts: host.known_hosts, previous_known_hosts: host.previous_known_hosts }),
+    test: (teamId: string, id: string, repoUrl: string): Promise<{ accessible: boolean }> =>
+      panelPost('/source-credential/test', { team_id: teamId, credential_id: id, repo_url: repoUrl }),
+  },
   health: () => panelPost<Record<string, unknown>>('/health').catch(() => ({ ok: true })),
 
   /** 读取某个 Agent 已绑定的全部 Knowledge 固定资产（wiki + code_graph）。 */
@@ -431,9 +472,11 @@ export const knowledgeApi = {
   // ---- Code-Graph ----
 
   code: {
+    setCredential: (codeGraphId: string, credentialId: string | null, shareWithTeam: boolean): Promise<CodeGraphDetail> =>
+      panelPost('/code-graph/set-credential', { code_graph_id: codeGraphId, credential_id: credentialId, share_with_team: shareWithTeam }),
     /** 创建（注册仓库） */
-    create: (opts: { teamId: string; repoUrl: string; branch?: string; repoName?: string }): Promise<CodeGraphDetail> =>
-      panelPost('/code-graph/create', { team_id: opts.teamId, repo_url: opts.repoUrl, branch: opts.branch ?? 'main', repo_name: opts.repoName }),
+    create: (opts: { teamId: string; repoUrl: string; branch?: string; repoName?: string; credentialId?: string; shareWithTeam?: boolean }): Promise<CodeGraphDetail> =>
+      panelPost('/code-graph/create', { team_id: opts.teamId, repo_url: opts.repoUrl, branch: opts.branch ?? 'main', repo_name: opts.repoName, credential_id: opts.credentialId, share_with_team: opts.shareWithTeam }),
 
     /** @deprecated 使用 teamAssets */
     list: async (teamId: string): Promise<CodeGraphDetail[]> => {

@@ -27,8 +27,14 @@ import {
   type BatchDeleteResult,
 } from "../api-helpers.js";
 import type { CodeGraphInstancePool } from "../module.js";
+import { GitCredentialStore, GitCredentialError } from "../store/git-credential-store.js";
+import { GitSourceFetcher } from "../source-fetcher/git-fetcher.js";
+import { parseGitSource, validateGitBranch } from "../source-fetcher/git-source.js";
+import { verifyBearer } from "../middleware/auth.js";
 
 export interface CodeGraphRouteDeps {
+  credentialStore: GitCredentialStore;
+  serviceKey: string;
   cgService: CodeGraphService;
   instancePool: CodeGraphInstancePool;
   /** Public base URL for service_url; should already include the API prefix (e.g. http://host:8421/v3). */
@@ -189,11 +195,29 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
 
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
+    const credentialId = body.credential_id;
+    if (credentialId !== undefined && !isValidIdSegment(credentialId)) return c.json(wrapError(400, "Invalid credential ID"), 400);
+    try {
+      new GitSourceFetcher().validate(repoUrl);
+      validateGitBranch(branch);
+      if (parseGitSource(repoUrl).kind === "ssh" && !credentialId) throw new GitCredentialError("SSH repositories require a credential");
+      if (credentialId) {
+        if (!deps.serviceKey || !verifyBearer(c.req.header("authorization"), deps.serviceKey)) {
+          return c.json(wrapError(401, "Private Git requires service authentication"), 401);
+        }
+        if (body.share_with_team !== true) throw new GitCredentialError("Confirm sharing the indexed repository with this team");
+        deps.credentialStore.assertUsable(idFields.service_id, idFields.team_id, idFields.user_id ?? "", credentialId, repoUrl);
+      }
+    } catch (error) {
+      const status = error instanceof GitCredentialError ? error.status : 400;
+      return c.json(wrapError(status, error instanceof Error ? error.message : "Invalid repository"), status);
+    }
 
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
       repo_url: repoUrl,
+      credential_id: credentialId as string | undefined,
       branch,
       repo_name: repoName,
       owner_user_id: idFields.user_id,
@@ -213,6 +237,38 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     }
 
     return c.json(wrapOk(toCodeGraphDetail(row)), existed ? 200 : 201);
+  });
+
+  // Only the resource owner can attach/replace their own repository credential.
+  // This also makes recovery from an expired credential possible without recreating the graph.
+  app.post("/set-credential", async (c) => {
+    if (!deps.serviceKey || !verifyBearer(c.req.header("authorization"), deps.serviceKey)) {
+      return c.json(wrapError(401, "Private Git requires service authentication"), 401);
+    }
+    const body = await c.req.json<Record<string, unknown>>();
+    const serviceId = c.req.header("x-tdai-service-id");
+    if (!isValidIdSegment(serviceId) || !isValidIdSegment(body.code_graph_id) || !isValidIdSegment(body.user_id)) {
+      return c.json(wrapError(400, "service, graph and user identity are required"), 400);
+    }
+    const row = cgService.getById(serviceId, body.code_graph_id);
+    if (!row) return c.json(wrapError(404, "Code graph not found"), 404);
+    if (row.owner_user_id !== body.user_id) return c.json(wrapError(403, "Only the owner may change Git credentials"), 403);
+    if (row.status === "pending" || row.status === "processing") return c.json(wrapError(409, "Code graph is busy"), 409);
+    const id = body.credential_id;
+    if (id !== null && !isValidIdSegment(id)) return c.json(wrapError(400, "credential_id must be an ID or null"), 400);
+    try {
+      if (id) {
+        if (body.share_with_team !== true) throw new GitCredentialError("Confirm sharing the indexed repository with this team");
+        deps.credentialStore.assertUsable(serviceId, row.team_id, body.user_id, id, row.repo_url);
+      } else if (parseGitSource(row.repo_url).kind === "ssh") {
+        throw new GitCredentialError("SSH repositories require a credential");
+      }
+      const updated = cgService.updateMeta(serviceId, row.code_graph_id, { credential_id: id });
+      return c.json(wrapOk(toCodeGraphDetail(updated!)));
+    } catch (error) {
+      const status = error instanceof GitCredentialError ? error.status : 400;
+      return c.json(wrapError(status, error instanceof Error ? error.message : "Invalid credential"), status);
+    }
   });
 
   app.post("/list", async (c) => {
