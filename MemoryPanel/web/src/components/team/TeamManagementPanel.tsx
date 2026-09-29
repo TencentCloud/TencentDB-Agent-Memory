@@ -104,6 +104,7 @@ export default function TeamManagementPanel({
     username: string;
     userId: string;
     keyValue: string;
+    recovered?: boolean;
   } | null>(null);
 
   async function handleCreateAgent(card: Omit<AgentCard, 'id' | 'icon' | 'accent'>) {

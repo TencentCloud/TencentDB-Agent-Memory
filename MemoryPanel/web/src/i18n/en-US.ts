@@ -1033,6 +1033,13 @@ export const enUS = {
   'addMember.role.hint': 'New members default to the member role.',
   'addMember.existing.submit': 'Add',
   'addMember.new.submit': 'Create & Add',
+  'addMember.retryAdd': 'Check & Retry Adding',
+  'addMember.checkCreate': 'Check Account Again',
+  'addMember.accountCreated': 'Account {{username}} ({{userId}}) exists, but team membership is not confirmed. Save the one-time key, then check and retry adding, or switch to Add Existing User.',
+  'addMember.accountFound': 'Account {{username}} ({{userId}}) was found, but it is unclear whether the previous request created it. Verify its identity before selecting Check & Retry Adding. The one-time key cannot be recovered from the lookup.',
+  'addMember.memberPending': 'The account was created, but team membership is not confirmed. Retrying checks and adds only the member; it never creates another account.',
+  'addMember.memberPermissionDenied': 'The account was created, but you cannot add members to this Team. Save the one-time key and ask the Team owner or an admin member to add this user_id; then check the membership here.',
+  'addMember.createUnconfirmed': 'The create request result is unknown. Check the account again, or switch to Add Existing User with a known user_id. No further create request will be sent.',
   'addMember.cancel': 'Cancel',
   'addMember.error.emptyId': 'Please enter the user_id.',
   'addMember.error.self': 'Cannot add yourself. To change your role, ask another team admin.',
@@ -1051,15 +1058,18 @@ export const enUS = {
 
   // ===== CreatedUserKeyModal =====
   'createdUserKey.caption': 'User Created Successfully',
+  'createdUserKey.recoveredCaption': 'User Added to Team',
   'createdUserKey.success':
     'User {{username}} ({{userId}}) has been created and added to the team.',
+  'createdUserKey.recoveredSuccess':
+    'Account {{username}} ({{userId}}) has been added to the team. It is unclear whether the earlier create request established this account.',
   'createdUserKey.warning':
     'The following User_Key is shown only once. Please copy and securely send it to the user immediately. You will not be able to view this key again after closing this dialog.',
   'createdUserKey.keyLabel': 'User_Key',
   'createdUserKey.copy': 'Copy',
   'createdUserKey.copied': 'Copied',
   'createdUserKey.noKey':
-    'Could not auto-generate an initial User_Key. Please have the user log in with the following user_id and create one in "API Key Management":',
+    'The one-time User_Key cannot be recovered from this response. Verify the account and use existing credentials or a separate key-management flow. user_id:',
   'createdUserKey.close': 'Got it',
 
   // ===== Shared (team components) =====
