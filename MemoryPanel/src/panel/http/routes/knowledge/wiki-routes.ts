@@ -81,6 +81,54 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     return respondEnvelope(c, okEnvelope(c, detail));
   });
 
+  // Rename metadata only: preserve IDs, bindings and extracted content.
+  api.post('/knowledge/wiki/update-meta', mw, async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const wikiId = str(body, 'wiki_id');
+    const name = str(body, 'name');
+    if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
+    if (!name) return respondControlError(c, 400, 'MISSING_NAME');
+    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write' });
+    if ('error' in gate) return gate.error;
+    if (gate.asset?.asset_type !== ASSET_TYPE_WIKI) {
+      return respondControlError(c, 400, 'NOT_WIKI');
+    }
+    // asset/update is owner-only, even when an ACL grants content write access.
+    // Check before touching KS so a denied metadata update cannot partly rename it.
+    if (gate.asset.owner_user_id !== gate.userId) {
+      return respondControlError(c, 403, 'FORBIDDEN');
+    }
+    const kc = deps.knowledgeClientFactory(ctx.instanceId);
+    try {
+      const previous = await kc.wikiGet(wikiId);
+      const detail = await kc.wikiUpdateMeta(wikiId, { name });
+      let env;
+      try {
+        env = await deps.metaKernel.invoke('asset/update', { asset_id: wikiId, name }, ctx);
+      } catch (error) {
+        try {
+          await kc.wikiUpdateMeta(wikiId, { name: previous.name });
+        } catch {
+          return respondControlError(c, 502, 'WIKI_RENAME_SYNC_FAILED');
+        }
+        throw error;
+      }
+      if (env.code !== 0) {
+        // The services do not share a transaction. Compensate failed Hub writes.
+        try {
+          await kc.wikiUpdateMeta(wikiId, { name: previous.name });
+        } catch {
+          return respondControlError(c, 502, 'WIKI_RENAME_SYNC_FAILED');
+        }
+        return respondEnvelope(c, env);
+      }
+      return respondEnvelope(c, okEnvelope(c, detail));
+    } catch (error) {
+      return runKs(c, () => Promise.reject(error));
+    }
+  });
+
   // W4 ingest — id-only（需 read 权限）+ 空 wiki 校验
   api.post('/knowledge/wiki/ingest', mw, async (c) => {
     const ctx = buildCtx(c);
