@@ -44,3 +44,5 @@ test-offload-sessions.sh
 
 # log files
 *.log
+# Adapter build output
+scripts/gemini-cli/dist/
