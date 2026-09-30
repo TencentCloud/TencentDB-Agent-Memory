@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 🐛 修复
+
+- **本地嵌入提供方 (`provider=local`) 现在可从配置启用** ([#678](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/678))：`config.ts` 之前将 `provider=local` 改写为 `none`，导致完全离线的嵌入（node-llama-cpp + embeddinggemma-300m, 768-dim）不可用。
+  - `config.ts`：`provider=local` 现在直接通过，`embeddingEnabled=true`（无需 API key）。
+  - `core/store/factory.ts`（sqlite 分支）：为 `provider=local` 创建嵌入服务，无需 `apiKey`，并在启动时调用 `startWarmup()`（对远程提供方是安全的 no-op）。
+  - 新增回归测试：`src/core/store/__tests__/fix-678-local-embedding.test.ts`（4 个测试覆盖配置解析、工厂创建、warmup 可用性和远程无 apiKey 守卫）。
+
 ### ✨ 新功能
 
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
