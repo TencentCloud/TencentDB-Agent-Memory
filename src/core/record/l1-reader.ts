@@ -204,6 +204,144 @@ export async function readAllMemoryRecords(
 }
 
 // ============================
+// JSONL line counters (for checkpoint recalibration)
+// ============================
+
+// Same shard pattern as readMemoryRecords — only YYYY-MM-DD.jsonl, no .json/.bak/.tmp.
+const l1DateFilePattern = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+
+/**
+ * Count the total number of record lines across all daily-shard JSONL files
+ * in `<baseDir>/records/`. Mirrors readMemoryRecords' file selection and
+ * line-parsing style: only `YYYY-MM-DD.jsonl` files are matched, empty lines
+ * are skipped, and malformed (unparseable) lines are skipped (not counted).
+ *
+ * Returns 0 when the records directory does not exist (does not throw),
+ * matching readMemoryRecords' try/catch fallback.
+ */
+export async function countL1JsonlLines(baseDir: string): Promise<number> {
+  const recordsDir = path.join(baseDir, "records");
+
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(recordsDir, { withFileTypes: true });
+  } catch {
+    // Directory doesn't exist yet
+    return 0;
+  }
+
+  const targetFiles = entries
+    .filter((entry) => entry.isFile() && l1DateFilePattern.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+
+  let count = 0;
+  for (const fileName of targetFiles) {
+    const filePath = path.join(recordsDir, fileName);
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    const lines = raw.split("\n").filter((line) => line.trim());
+    for (const line of lines) {
+      try {
+        JSON.parse(line);
+        count++;
+      } catch {
+        // malformed JSON line — skip (not counted)
+      }
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Count record lines whose `updatedAt` field is strictly greater than
+ * `sinceIso` across all daily-shard JSONL files in `<baseDir>/records/`.
+ *
+ * Semantics:
+ * - Only `YYYY-MM-DD.jsonl` shard files are matched (same pattern as
+ *   readMemoryRecords).
+ * - Each non-empty line is JSON.parsed; the `updatedAt` field is compared
+ *   via string ordering against `sinceIso` (both expected to be canonical
+ *   ISO 8601 UTC strings, e.g. `2026-06-01T10:00:00.000Z`).
+ * - Lines with malformed JSON, a missing `updatedAt`, or a non-string
+ *   `updatedAt` are skipped (not counted).
+ * - When `sinceIso === ""`, returns the total line count (equivalent to
+ *   countL1JsonlLines).
+ *
+ * Returns 0 when the records directory does not exist (does not throw).
+ */
+export async function countL1JsonlLinesSince(
+  baseDir: string,
+  sinceIso: string,
+): Promise<number> {
+  if (sinceIso === "") {
+    return countL1JsonlLines(baseDir);
+  }
+
+  const recordsDir = path.join(baseDir, "records");
+
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(recordsDir, { withFileTypes: true });
+  } catch {
+    // Directory doesn't exist yet
+    return 0;
+  }
+
+  const targetFiles = entries
+    .filter((entry) => entry.isFile() && l1DateFilePattern.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+
+  let count = 0;
+  for (const fileName of targetFiles) {
+    const filePath = path.join(recordsDir, fileName);
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    const lines = raw.split("\n").filter((line) => line.trim());
+    for (const line of lines) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        // malformed JSON line — skip
+        continue;
+      }
+
+      const updatedAt = (parsed as Partial<MemoryRecord>)?.updatedAt;
+      if (typeof updatedAt !== "string") {
+        // missing or non-string updatedAt — skip
+        continue;
+      }
+      if (Number.isNaN(new Date(updatedAt).getTime())) {
+        // malformed ISO timestamp (e.g. "zzz", "not-a-time") — skip, do not
+        // participate in the string ordering comparison.
+        continue;
+      }
+
+      if (updatedAt > sinceIso) {
+        count++;
+      }
+    }
+  }
+
+  return count;
+}
+
+// ============================
 // Helpers
 // ============================
 
