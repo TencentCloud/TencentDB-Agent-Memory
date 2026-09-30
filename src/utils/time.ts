@@ -115,10 +115,20 @@ export function formatLocalDateTime(d: Date = new Date()): string {
 export function startOfLocalDay(d: Date = new Date()): number {
   // Get the local date components in the configured timezone
   const dateStr = formatLocalDate(d);
-  // Parse as midnight in the configured timezone
-  // Use a trick: format "YYYY-MM-DDT00:00:00" and find the UTC equivalent
-  const midnightLocal = new Date(`${dateStr}T00:00:00`);
+  return startOfLocalDateString(dateStr);
+}
 
+/** Compute local midnight for an explicit local calendar date. */
+export function startOfLocalDate(year: number, month: number, day: number): number {
+  const dateStr = [
+    String(year).padStart(4, "0"),
+    String(month).padStart(2, "0"),
+    String(day).padStart(2, "0"),
+  ].join("-");
+  return startOfLocalDateString(dateStr);
+}
+
+function startOfLocalDateString(dateStr: string): number {
   // We need to find the UTC instant that corresponds to midnight in _resolvedTz.
   // Approach: binary search isn't needed — we can use the timezone offset.
   const formatter = new Intl.DateTimeFormat("en-US", {
