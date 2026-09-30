@@ -64,6 +64,8 @@ export interface KnowledgeModule {
   instancePool: CodeGraphInstancePool;
   /** Per-instance LLM routing binding (proxy/byo), keyed by service_id. */
   llmBindingStore: ILlmBindingStore;
+  /** Resolve the effective LLM config for a service (wiki ingest + code-graph NL rewrite). */
+  resolveLlm: (serviceId: string) => LlmConfig;
   /** 定时自动同步调度器（需显式 start/stop）。 */
   autoSyncScheduler: AutoSyncScheduler;
   /** 定时自动同步的解析后配置（挂载 admin 路由时透出）。 */
@@ -293,5 +295,15 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   });
   autoSyncScheduler.start();
 
-  return { wikiService, cgService, wikiMgr, store, instancePool, llmBindingStore, autoSyncScheduler, autoSyncConfig };
+  return {
+    wikiService,
+    cgService,
+    wikiMgr,
+    store,
+    instancePool,
+    llmBindingStore,
+    resolveLlm,
+    autoSyncScheduler,
+    autoSyncConfig,
+  };
 }

@@ -78,6 +78,7 @@ export function createApp() {
     cgService: knowledgeModule.cgService,
     instancePool: knowledgeModule.instancePool,
     publicBaseUrl: config.publicBaseUrl,
+    resolveLlm: knowledgeModule.resolveLlm,
   }));
 
   // tools/list + tools/call — Agent self-discovery HTTP endpoints
@@ -86,6 +87,7 @@ export function createApp() {
     wikiMgr: knowledgeModule.wikiMgr,
     cgService: knowledgeModule.cgService,
     instancePool: knowledgeModule.instancePool,
+    resolveLlm: knowledgeModule.resolveLlm,
   }));
 
   // internal/* — control-plane endpoints (TMC / operator). Per-instance LLM routing.
