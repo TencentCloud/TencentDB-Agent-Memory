@@ -585,7 +585,7 @@ export const enUS = {
   'importSkill.mode.directory': 'Directory Import',
   'importSkill.mode.session': 'Conversation Import',
   'importSkill.directory.label':
-    'Select a local directory (should contain SKILL.md and an optional files/ subdirectory)',
+    'Select a local directory (should contain SKILL.md; all other files in it, of any format such as scripts, docs, images or PDFs, are uploaded as resources)',
   'importSkill.directory.selectFile': 'Select Folder',
   'importSkill.directory.picked': '{{count}} files selected',
   'importSkill.directory.mainFile': 'Main file: ',
