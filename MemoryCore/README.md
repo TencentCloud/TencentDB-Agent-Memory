@@ -209,6 +209,12 @@ Environment variables override file configuration. Common settings:
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM model |
 | `TDAI_SKILL_ENABLED` | File configuration | Force-enable the Skill module |
 
+`LOG_PATH` sets the directory for `core.log` and `observability.log`. When unset,
+file logging first uses `/data/log/`; if initialization fails, it warns and falls
+back to `$MEMORY_TENCENTDB_ROOT/logs` (default `~/.memory-tencentdb/logs`). An explicit
+`LOG_PATH` is never replaced silently. File rotation does not rotate stdout/stderr
+captured by a service manager; configure its log retention separately.
+
 Configuration templates:
 
 - `tdai-gateway.standalone.yaml`: minimal single-node Memory configuration.
