@@ -50,25 +50,25 @@ export function AllocateMemoryDialog({
       <Modal.Body>
         <Form>
           <Form.Item label={t('allocMemory.descLabel')}><Form.Text>{description}</Form.Text></Form.Item>
-          {agents.length === 0 ? (
-            <div className="_alloc-memory-alert">
-              <Alert type="warning">
-                {t('allocMemory.noAgents')}
-                <br />
-                {t('allocMemory.noAgents.reason1')}
-                <br />
-                {t('allocMemory.noAgents.reason2')}
-                <br />
-                {t('allocMemory.noAgents.reason3')}
-              </Alert>
-            </div>
-          ) : (
+          {agents.length > 0 && (
             <Form.Item label={t('allocMemory.agent')} required>
               <Select size="full" value={agentId} onChange={setAgentId} placeholder={t('allocMemory.agent.placeholder')}
                 options={agents.map((a) => ({ value: a.agent_id, text: a.name }))} />
             </Form.Item>
           )}
         </Form>
+        {/* Keep the full-width warning outside Form's table layout and label column. */}
+        {agents.length === 0 && (
+          <Alert type="warning" className="_alloc-memory-alert">
+            {t('allocMemory.noAgents')}
+            <br />
+            {t('allocMemory.noAgents.reason1')}
+            <br />
+            {t('allocMemory.noAgents.reason2')}
+            <br />
+            {t('allocMemory.noAgents.reason3')}
+          </Alert>
+        )}
       </Modal.Body>
       <Modal.Footer>
         <Button type="primary" onClick={() => void submit()} disabled={!agentId || submitting} loading={submitting}>{t('allocMemory.submit')}</Button>
