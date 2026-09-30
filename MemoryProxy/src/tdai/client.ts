@@ -16,6 +16,21 @@ interface TdaiEnvelope<T = unknown> {
   data?: T;
 }
 
+export class TdaiRequestError extends Error {
+  readonly status?: number;
+  readonly retryable?: boolean;
+
+  constructor(
+    message: string,
+    options: { status?: number; retryable?: boolean } = {},
+  ) {
+    super(message);
+    this.name = "TdaiRequestError";
+    this.status = options.status;
+    this.retryable = options.retryable;
+  }
+}
+
 const TDAI_MESSAGE_CONTENT_MAX_CHARS = 8192;
 const TDAI_CONVERSATION_MAX_MESSAGES = 100;
 
@@ -118,7 +133,7 @@ export class TdaiClient {
         },
         identity.sessionId,
         identity.taskId,
-        { includeSession: true, includeTask: true },
+        { includeSession: true, includeTask: true, failOnError: true },
       );
     }
   }
@@ -267,7 +282,10 @@ export class TdaiClient {
     body: Record<string, unknown>,
     sessionId: string,
     taskId: string | undefined,
-    options: { includeSession: boolean; includeTask: boolean } = { includeSession: true, includeTask: true },
+    options: { includeSession: boolean; includeTask: boolean; failOnError?: boolean } = {
+      includeSession: true,
+      includeTask: true,
+    },
   ): Promise<T> {
     const base = this.config.endpoint.replace(/\/$/, "");
     const controller = new AbortController();
@@ -290,11 +308,37 @@ export class TdaiClient {
         headers,
         body: JSON.stringify(stripUndefined(body)),
       });
-      if (!res.ok) return {} as T;
-      const envelope = await res.json() as TdaiEnvelope<T>;
-      if (typeof envelope.code === "number" && envelope.code !== 0) return {} as T;
+      if (!res.ok) {
+        if (!options.failOnError) return {} as T;
+        const detail = await res.text().catch(() => "");
+        throw new TdaiRequestError(
+          `tdai POST ${path} failed: HTTP ${res.status}: ${detail.slice(0, 200)}`,
+          { status: res.status },
+        );
+      }
+
+      let envelope: TdaiEnvelope<T>;
+      try {
+        envelope = await res.json() as TdaiEnvelope<T>;
+      } catch (err) {
+        if (!options.failOnError) return {} as T;
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new TdaiRequestError(
+          `tdai POST ${path} returned invalid JSON: ${detail}`,
+          { retryable: false },
+        );
+      }
+
+      if (typeof envelope.code === "number" && envelope.code !== 0) {
+        if (!options.failOnError) return {} as T;
+        throw new TdaiRequestError(
+          `tdai POST ${path} failed: envelope code=${envelope.code} message=${envelope.message ?? ""}`,
+          { retryable: false },
+        );
+      }
       return (envelope.data ?? {}) as T;
-    } catch {
+    } catch (err) {
+      if (options.failOnError) throw err;
       return {} as T;
     } finally {
       clearTimeout(timer);
@@ -305,6 +349,7 @@ export class TdaiClient {
   //
   // 与 memory 数据面调用（postForCtx）**语义相反**：
   //   - postForCtx 网络/HTTP/envelope 错都吞掉返回空 —— 让注入路径静默降级
+  //   - addConversation opts into failOnError so the L0 retry wrapper can observe failures
   //   - checkAcl 网络/HTTP/envelope 错要抛出 —— 让上层 fail-closed 拒绝注入
   //     并打 error 日志（否则 acl 服务挂了会静默变成"全部允许"，越权）
   //
