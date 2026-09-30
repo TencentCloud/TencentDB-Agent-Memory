@@ -447,6 +447,28 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       ? yaml.sessionInit.debugForceUserId.trim()
       : undefined,
     debugVerboseLogging: yaml.sessionInit?.debugVerboseLogging ?? false,
+    initLink: (() => {
+      const raw = yaml.sessionInit?.initLink;
+      if (!raw?.hubOrigin) return undefined;
+      // Fail fast with a clear message — a malformed hubOrigin would otherwise
+      // crash app creation later at `new URL(...)` in server.ts CORS wiring.
+      try {
+        new URL(raw.hubOrigin);
+      } catch {
+        throw new Error(
+          `sessionInit.initLink.hubOrigin is not a valid URL: ${raw.hubOrigin}`,
+        );
+      }
+      return {
+        hubOrigin: raw.hubOrigin.replace(/\/$/, ""),
+        proxyOrigin: raw.proxyOrigin?.replace(/\/$/, ""),
+        ttlMinutes: typeof raw.ttlMinutes === "number"
+          && Number.isFinite(raw.ttlMinutes)
+          && raw.ttlMinutes > 0
+          ? Math.min(raw.ttlMinutes, 60)
+          : undefined,
+      };
+    })(),
   },
     tdai: {
       enabled: yaml.tdai?.enabled ?? DEFAULT_CONFIG.tdai.enabled,
