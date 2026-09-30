@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -12,6 +13,15 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  /** Optional checkpoint manager for recalculating checkpoint after cleanup */
+  checkpointManager?: CheckpointManager;
+  /** Optional callback invoked after cleanup with recalculation results */
+  onRecalculate?: (result: {
+    l0Count: number;
+    l1Count: number;
+    runnerCursorsCorrected: number;
+    pipelineCursorsCorrected: number;
+  }) => void | Promise<void>;
 }
 
 interface CleanupStats {
@@ -33,14 +43,87 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private checkpointManager?: CheckpointManager;
+  private onRecalculate?: (result: {
+    l0Count: number;
+    l1Count: number;
+    runnerCursorsCorrected: number;
+    pipelineCursorsCorrected: number;
+  }) => void | Promise<void>;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.checkpointManager = opts.checkpointManager;
+    this.onRecalculate = opts.onRecalculate;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  setCheckpointManager(checkpointManager: CheckpointManager): void {
+    this.checkpointManager = checkpointManager;
+  }
+
+  setOnRecalculate(callback: (result: {
+    l0Count: number;
+    l1Count: number;
+    runnerCursorsCorrected: number;
+    pipelineCursorsCorrected: number;
+  }) => void | Promise<void>): void {
+    this.onRecalculate = callback;
+  }
+
+  /**
+   * Recalculate checkpoint to fix counter drift after cleanup.
+   * Called automatically after cleanup runOnce() if checkpointManager is set.
+   */
+  private async recalculateCheckpoint(): Promise<void> {
+    if (!this.checkpointManager) {
+      this.opts.logger?.debug?.(`${TAG} [Recalculate] Skipped: no checkpoint manager set`);
+      return;
+    }
+
+    const startMs = Date.now();
+    try {
+      const storeCounts = this.vectorStore
+        ? {
+          l0ConversationsCount: await this.vectorStore.countL0().catch(() => undefined),
+          totalMemoriesExtracted: await this.vectorStore.countL1().catch(() => undefined),
+        }
+        : undefined;
+
+      const result = await this.checkpointManager.recalculate({ storeCounts });
+
+      const durationMs = Date.now() - startMs;
+      this.opts.logger?.info(
+        `${TAG} [Recalculate] Completed: l0=${result.l0_conversations_count}, ` +
+        `l1=${result.total_memories_extracted}, ` +
+        `runner_cursors=${result.runner_cursors_corrected}, ` +
+        `pipeline_cursors=${result.pipeline_cursors_corrected} (${durationMs}ms)`,
+      );
+
+      // Invoke optional callback
+      if (this.onRecalculate) {
+        try {
+          await this.onRecalculate({
+            l0Count: result.l0_conversations_count,
+            l1Count: result.total_memories_extracted,
+            runnerCursorsCorrected: result.runner_cursors_corrected,
+            pipelineCursorsCorrected: result.pipeline_cursors_corrected,
+          });
+        } catch (callbackErr) {
+          this.opts.logger?.warn?.(
+            `${TAG} [Recalculate] Callback error: ${callbackErr instanceof Error ? callbackErr.message : String(callbackErr)}`,
+          );
+        }
+      }
+    } catch (err) {
+      this.opts.logger?.warn?.(
+        `${TAG} [Recalculate] Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   start(): void {
@@ -184,6 +267,9 @@ export class LocalMemoryCleaner {
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
 
+    // ── Post-cleanup: recalculate checkpoint ──
+    // This fixes counter drift after JSONL/DB cleanup
+    await this.recalculateCheckpoint();
   }
 
   private scheduleNext(): void {
