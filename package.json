@@ -5,6 +5,7 @@
   "type": "module",
   "main": "./dist/index.mjs",
   "bin": {
+    "tdai-memory-mcp": "./dist/mcp-server.mjs",
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
     "read-local-memory": "./bin/read-local-memory.mjs"
@@ -13,6 +14,11 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./adapter-sdk": {
+      "types": "./src/adapters/gateway/index.ts",
+      "import": "./dist/adapter-sdk.mjs",
+      "default": "./dist/adapter-sdk.mjs"
     }
   },
   "scripts": {
@@ -47,6 +53,7 @@
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
+    "docs/cross-platform-adapters.md",
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
@@ -60,6 +67,9 @@
     "openclaw-plugin",
     "memory",
     "ai-memory",
+    "mcp",
+    "claude-code",
+    "codex",
     "long-term-memory",
     "vector-search",
     "sqlite-vec",
@@ -119,6 +129,7 @@
     }
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^25.5.2",
     "@vitest/coverage-v8": "^4.1.2",
     "tsdown": "^0.21.10",
