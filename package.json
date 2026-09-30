@@ -26,6 +26,8 @@
     "export-tencent-vdb": "node ./bin/export-tencent-vdb.mjs",
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
     "read-local-memory": "node ./bin/read-local-memory.mjs",
+    "dev-console": "node --env-file-if-exists=.env --import tsx scripts/dev-console/server.ts",
+    "import-psydt": "node --env-file-if-exists=.env --import tsx scripts/import-psydt.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
