@@ -60,10 +60,10 @@ export async function callLlm(
     config.disableThinking ? createNoThinkFetch(config.disableThinking) : undefined
   );
 
+  // `provider.chat()` below targets /chat/completions (not the Responses API).
   const provider = createOpenAI({
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
-    compatibility: "compatible",
     ...(customFetch ? { fetch: customFetch } : {}),
   });
 
