@@ -331,13 +331,27 @@ export class PipelineWorker {
         delay = Math.min(delay * 3, 5000);
       }
       if (!acquired) {
-        this.logger?.warn?.(`${TAG} Lock conflict timeout [${task.type}] (task=${task.id}): ${lockKey}, dropping task`);
-        // CR-1 fix: ACK to prevent stale recovery from re-claiming this message in an
-        // infinite loop. Without it, XPENDING keeps returning this msgId every
-        // pendingRecoveryIntervalMs, exhausting worker slots.
-        const msgId = (task as any)._msgId;
-        if (msgId) {
-          try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
+        // 锁冲突超时：重入队而非丢弃。
+        // 历史行为是直接 drop + ACK（见 CR-1 注释），但 L1 drain 这类"靠上一批
+        // 入队下一批"的接力任务被丢弃后整条链会静默断裂，且没有任何监督者发现。
+        // 改为与执行失败一致的重试策略：ACK 当前消息（防止 XPENDING 重投导致
+        // 同一任务并行执行两次）→ 指数退避 → 重入队（lockRetryCount 递增），
+        // 超限进死信。lockRetryCount 独立于 retryCount，避免与执行失败计数混淆。
+        const lockRetryCount = (task.data?.lockRetryCount as number) ?? 0;
+        if (lockRetryCount < this.config.maxRetries) {
+          const lockDelay = this.config.retryBaseDelayMs * Math.pow(3, lockRetryCount);
+          this.logger?.warn?.(
+            `${TAG} Lock conflict timeout [${task.type}] (task=${task.id}): ${lockKey}, re-enqueue (lockRetry ${lockRetryCount + 1}/${this.config.maxRetries}, delay=${lockDelay}ms)`,
+          );
+          const msgId = (task as any)._msgId;
+          if (msgId) {
+            try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
+          }
+          await this.sleep(lockDelay);
+          await this.reEnqueueLockRetry(task, lockRetryCount + 1);
+          this.metrics.tasksRetried++;
+        } else {
+          await this.moveToDeadLetter(task, "lock conflict timeout", lockRetryCount);
         }
         return;
       }
@@ -649,6 +663,19 @@ export class PipelineWorker {
       ...task,
       id: `${task.type}-${task.sessionId}-retry${newRetryCount}-${Date.now()}`,
       data: { ...task.data, retryCount: newRetryCount },
+      createdAt: Date.now(),
+    });
+  }
+
+  /**
+   * 锁冲突超时后的重入队：与 reEnqueue 相同，但使用独立的 lockRetryCount 计数，
+   * 避免与执行失败的 retryCount 语义混淆。
+   */
+  private async reEnqueueLockRetry(task: TaskPayload, newLockRetryCount: number): Promise<void> {
+    await this.backend.enqueueTask({
+      ...task,
+      id: `${task.type}-${task.sessionId}-lockretry${newLockRetryCount}-${Date.now()}`,
+      data: { ...task.data, lockRetryCount: newLockRetryCount },
       createdAt: Date.now(),
     });
   }
