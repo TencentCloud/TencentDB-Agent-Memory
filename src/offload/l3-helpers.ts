@@ -225,7 +225,7 @@ export function replaceWithSummary(msg: any, entry: OffloadEntry): { originalLen
   const summaryContent = [
     `[Offloaded Tool Result | node: ${entry.node_id ?? "N/A"}]`,
     `Summary: ${entry.summary}`,
-    `result_ref: ${entry.result_ref} (read this file for full tool call and raw result)`,
+    `result_ref: ${entry.result_ref ?? ""} (read this file for full tool call and raw result)`,
   ].join("\n");
 
   // Measure original content length

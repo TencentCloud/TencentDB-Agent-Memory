@@ -34,6 +34,7 @@ export function parseL1Response(raw: string): OffloadEntry[] {
       timestamp: item.timestamp ?? "",
       score: typeof item.score === "number" ? item.score : 5,
       node_id: null,
+      result_ref: "",
     });
   }
 
