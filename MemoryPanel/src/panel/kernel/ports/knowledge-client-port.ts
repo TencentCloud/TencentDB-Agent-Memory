@@ -99,10 +99,35 @@ export interface WikiPageRmResult {
   rewritten_files: number;
 }
 
+/** 图谱节点（与 Knowledge 服务 /graph 返回的 GraphNode 对齐）。 */
+export interface WikiGraphNode {
+  id: string;
+  label: string;
+  type: string;
+  path: string;
+  linkCount: number;
+  community: number;
+}
+
+/** 图谱边（`source`/`target` 为节点 id）。 */
+export interface WikiGraphEdge {
+  source: string;
+  target: string;
+  weight: number;
+}
+
+/** 社区划分结果。 */
+export interface WikiGraphCommunity {
+  id: number;
+  nodeCount: number;
+  cohesion: number;
+  topNodes: string[];
+}
+
 export interface WikiGraphData {
-  nodes: any[];
-  edges: any[];
-  communities?: any[];
+  nodes: WikiGraphNode[];
+  edges: WikiGraphEdge[];
+  communities?: WikiGraphCommunity[];
 }
 
 export interface WikiSearchResult {
