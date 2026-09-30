@@ -71,6 +71,8 @@ Skills and Knowledge follow the same idea:
 - `<knowledge_tools>` — two-step self-discovery tools for team knowledge resources (Wiki / CodeGraph)
 - `<session_context>` — agent/task info appended every turn after session init completes
 
+For queue-aware Skill retrieval, placement, cache behavior, and strategy selection, see [Dynamic Skill Queue Injection](../docs/skill-queue-dynamic-injection.md).
+
 ## Requirements
 
 - Node.js `v22.x` (checked strictly at startup; `>= 22.16.0` recommended)

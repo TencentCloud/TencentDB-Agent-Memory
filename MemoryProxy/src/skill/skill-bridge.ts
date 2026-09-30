@@ -291,11 +291,20 @@ function bindingToIdFields(
  * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
  * 恢复而不 401。
  */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  const candidates = sessionId.includes(":")
+export function skillBridgeSessionCandidates(sessionId: string): string[] {
+  return sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
-  for (const k of candidates) {
+    : [
+        sessionId,
+        `codebuddy:${sessionId}`,
+        `claude-code:${sessionId}`,
+        // WorkBuddy reuses the Codex session-init namespace.
+        `codex:${sessionId}`,
+      ];
+}
+
+function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+  for (const k of skillBridgeSessionCandidates(sessionId)) {
     const s = getSessionStore().get(k);
     if (s) {
       const fields = stateToIdFields(s, k);

@@ -67,6 +67,24 @@ export class RedisHookCacheRepo implements HookCacheRepo {
     this.redis.expire(key, this.ttl).catch(() => {});
   }
 
+  async putIfAbsent(
+    spaceId: string,
+    userId: string,
+    agentSource: string,
+    sessionId: string,
+    hookId: string,
+    blocks: ContextBlock[],
+  ): Promise<boolean> {
+    const key = keyOf(spaceId, userId, agentSource, sessionId);
+    try {
+      const inserted = await this.redis.hsetnx(key, hookId, JSON.stringify(blocks));
+      this.redis.expire(key, this.ttl).catch(() => {});
+      return inserted === 1;
+    } catch {
+      return false;
+    }
+  }
+
   async get(
     spaceId: string,
     userId: string,
@@ -117,7 +135,21 @@ export class RedisHookCacheRepo implements HookCacheRepo {
     userId: string,
     agentSource: string,
     sessionId: string,
+    preserveHookPrefixes: readonly string[] = [],
   ): Promise<void> {
-    await this.redis.del(keyOf(spaceId, userId, agentSource, sessionId)).catch(() => {});
+    const key = keyOf(spaceId, userId, agentSource, sessionId);
+    if (preserveHookPrefixes.length === 0) {
+      await this.redis.del(key).catch(() => {});
+      return;
+    }
+    try {
+      const hookIds = await this.redis.hkeys(key);
+      const removable = hookIds.filter((hookId) =>
+        !preserveHookPrefixes.some((prefix) => hookId.startsWith(prefix))
+      );
+      if (removable.length > 0) await this.redis.hdel(key, ...removable);
+    } catch {
+      // Cache cleanup is best-effort.
+    }
   }
 }

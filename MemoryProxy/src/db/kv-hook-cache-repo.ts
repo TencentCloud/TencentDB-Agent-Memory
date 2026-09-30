@@ -72,6 +72,24 @@ export class KvHookCacheRepo implements HookCacheRepo {
     );
   }
 
+  async putIfAbsent(
+    spaceId: string,
+    userId: string,
+    agentSource: string,
+    sessionId: string,
+    hookId: string,
+    blocks: ContextBlock[],
+  ): Promise<boolean> {
+    try {
+      return await this.storage.putJSONIfAbsent(
+        keyOf(spaceId, userId, agentSource, sessionId, hookId),
+        blocks,
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async get(
     spaceId: string,
     userId: string,
@@ -121,9 +139,22 @@ export class KvHookCacheRepo implements HookCacheRepo {
     userId: string,
     agentSource: string,
     sessionId: string,
+    preserveHookPrefixes: readonly string[] = [],
   ): Promise<void> {
-    await this.storage
-      .delPrefix(hookDir(spaceId, userId, agentSource, sessionId))
-      .catch(() => { /* silent */ });
+    const dir = hookDir(spaceId, userId, agentSource, sessionId);
+    if (preserveHookPrefixes.length === 0) {
+      await this.storage.delPrefix(dir).catch(() => { /* silent */ });
+      return;
+    }
+    try {
+      const names = await this.storage.listNames(dir);
+      const removable = names.filter((name) => {
+        const hookId = name.endsWith(".json") ? name.slice(0, -5) : name;
+        return !preserveHookPrefixes.some((prefix) => hookId.startsWith(prefix));
+      });
+      await Promise.all(removable.map((name) => this.storage.del(dir + name)));
+    } catch {
+      // Cache cleanup is best-effort.
+    }
   }
 }

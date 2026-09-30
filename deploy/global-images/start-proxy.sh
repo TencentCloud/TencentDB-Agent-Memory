@@ -64,6 +64,9 @@ fi
 PROXY_ENABLE_AUTH="${PROXY_ENABLE_AUTH:-0}"
 PROXY_ENABLE_TDAI="${PROXY_ENABLE_TDAI:-0}"
 PROXY_ENABLE_SESSION_INIT="${PROXY_ENABLE_SESSION_INIT:-0}"
+PROXY_SKILL_QUEUE_STRATEGY="${PROXY_SKILL_QUEUE_STRATEGY:-session_init}"
+PROXY_SKILL_FORGETTING_THRESHOLD="${PROXY_SKILL_FORGETTING_THRESHOLD:-3}"
+PROXY_SKILL_RECENT_QUEUE_WINDOW="${PROXY_SKILL_RECENT_QUEUE_WINDOW:-3}"
 
 # sessionInit 依赖 auth 拿 user_id；开 sessionInit 时自动补 auth
 if [[ "$PROXY_ENABLE_SESSION_INIT" == "1" && "$PROXY_ENABLE_AUTH" != "1" ]]; then
@@ -140,6 +143,9 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  skillQueueStrategy: ${PROXY_SKILL_QUEUE_STRATEGY}
+  forgettingThreshold: ${PROXY_SKILL_FORGETTING_THRESHOLD}
+  recentQueueWindow: ${PROXY_SKILL_RECENT_QUEUE_WINDOW}
   injectors:
     - skill
     - knowledge

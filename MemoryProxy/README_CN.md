@@ -71,6 +71,8 @@ Skill 与 Knowledge 沿用同样的思路：
 - `<knowledge_tools>` —— 团队知识资源（Wiki / CodeGraph）两步自发现工具
 - `<session_context>` —— session init 完成后每轮追加的 agent/task 信息
 
+按 queue 动态检索 Skill、注入位置、缓存行为和策略选择详见 [Dynamic Skill Queue Injection](../docs/skill-queue-dynamic-injection.md)。
+
 ## 环境要求
 
 - Node.js `v22.x`（启动时强校验；推荐 `>= 22.16.0`）
