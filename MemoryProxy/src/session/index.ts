@@ -91,6 +91,11 @@ import {
   FormData as OCFormData,
   FormStage as OCFormStage,
 } from "./opencode/form.js";
+import {
+  buildFormResponse as buildHermesFormResponse,
+  FormData as HermesFormData,
+  FormStage as HermesFormStage,
+} from "./hermes/form.js";
 
 // Re-export the types under their old names for backward compat
 export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
@@ -248,6 +253,31 @@ export async function handleSessionInit(
       modelId: reqCtx.modelId,
     };
     result.response = buildOpencodeFormResponse(ocFd);
+  }
+
+  // ── hermes：clarify tool_call 载体 ──────────────────────────────────────────
+  // 与 workbuddy / dsh / opencode 完全对称：CB 状态机产出 formData 后外层重渲染，
+  // 换成 hermes 原生 `clarify` 工具的 tool_call SSE。
+  //
+  // 关键约束（本机 hermes 0.19.0 源码实证）：clarify 的参数是**扁平**的
+  // `{question, choices}`，不是 `{questions:[...]}`；详见 session/hermes/form.ts 头注释。
+  if (agentSource === "hermes" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    const hermesFd: HermesFormData = {
+      teams: cbFd.teams,
+      stage: cbFd.stage as HermesFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    };
+    result.response = buildHermesFormResponse(hermesFd);
   }
 
   return result;
