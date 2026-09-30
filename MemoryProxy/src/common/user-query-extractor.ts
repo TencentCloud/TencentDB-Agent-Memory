@@ -141,6 +141,9 @@ export function extractUserQueryText(raw: string): string {
     "persisted-output", "persisted_output",
     "tool_use_error", "tool-use-error",
     "tool_result", "tool-result",
+    // The proxy may prepend L1 recall inside a user-role message. It is
+    // context for the model, not text typed by the user.
+    "tdai_recalled_l1_memories",
   ]) {
     text = text.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi"), "");
   }

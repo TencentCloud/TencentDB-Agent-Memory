@@ -48,6 +48,7 @@ import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
+import { opencodeAdapter } from "./agent-adapters/opencode.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
@@ -1293,7 +1294,18 @@ export async function handleChatCompletions(
         userId: userId || null,
         sessionKey,
       });
-  const tdaiUserMessage = extractLatestUserMessage(messages);
+  // OpenCode places a fresh human turn at the end of messages. A tool-loop
+  // continuation ends with a tool message and must not be counted as another
+  // human input. Capture this before injection can prepend recalled memories.
+  const lastInboundMessage = messages[messages.length - 1] as Record<string, unknown> | undefined;
+  const opencodeUserQuery = agentSource === "opencode"
+    ? (lastInboundMessage?.role === "user" && !isAuxiliary
+        ? (opencodeAdapter.extractUserText(lastInboundMessage.content) ?? "")
+        : "")
+    : null;
+  const tdaiUserMessage: TdaiMessage | null = agentSource === "opencode"
+    ? (opencodeUserQuery ? { role: "user", content: opencodeUserQuery } : null)
+    : extractLatestUserMessage(messages);
 
   // ── Context injection (before cost guard) ──────────────────────────────
   if (!injectedSkipped && config.injection?.enabled && config.injection.injectors.length > 0) {
@@ -1423,7 +1435,7 @@ export async function handleChatCompletions(
     sessionId: sessionKey,
     tags: traceTags,
     routeTags: target.tags,
-    userQuery: resolveLatestUserQuery(config, lcHeaders, c.req.path, body, messages),
+    userQuery: opencodeUserQuery ?? resolveLatestUserQuery(config, lcHeaders, c.req.path, body, messages),
   };
   if (target.analyzerTrace) {
     reportAnalyzerTrace(config, target.analyzerTrace, {
@@ -1804,12 +1816,6 @@ export async function handleChatCompletions(
       });
     }
 
-    if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-      await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistantContentForTdai(assistantMessage));
-    } else if (tdaiClient) {
-      logExtractionSkipped(config, "tdai-memory", sessionKey);
-    }
-
     opikCreateLlmSpan(config, {
       traceId,
       projectName: keyId,
@@ -1833,8 +1839,19 @@ export async function handleChatCompletions(
         upstreamUrl: target.url,
       },
     });
+  }
 
-    // Langfuse: report this LLM call as a generation under the turn trace
+  // A successful completion still has a conversation and a trace when the
+  // upstream omits usage. Only token accounting requires usage data.
+  if (upstreamResp.ok) {
+    if (!usage) pipe.info("USAGE_MISSING", "non-stream response had no usage object");
+    if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
+      await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistantContentForTdai(assistantMessage));
+    } else if (tdaiClient) {
+      logExtractionSkipped(config, "tdai-memory", sessionKey);
+    }
+
+    // Langfuse: report this LLM call as a generation under the turn trace.
     langfuseReportGeneration({
       traceId: lf.traceId,
       name: effectiveModel,
@@ -1843,7 +1860,7 @@ export async function handleChatCompletions(
       endTime,
       input: buildLangfuseInputChat(messages, langfuseDebug, flattenMessagesForOpik),
       output: assistantMessage,
-      usage,
+      usage: usage ?? undefined,
       traceName: lf.traceName,
       userId: lf.userId,
       sessionId: lf.sessionId,
@@ -2239,44 +2256,45 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       } catch (opikErr: unknown) {
         pipe.error("OPIK_SPAN", opikErr);
       }
+    }
 
-      // Langfuse: report this LLM call as a generation under the turn trace
-      // 流式路径 inputMessages 保持原样（其它下游流水线也用同一份引用）；
-      // debug=true 时把 tool_call 累积计数塞进 metadata 兜底。
-      try {
-        const streamDebugExtra = ctx.langfuseDebug
-          ? {
-              stream_tool_call_count: toolCallAccumulators.size,
-              stream_assistant_content_len: assistantContent.length,
-            }
-          : {};
-        langfuseReportGeneration({
-          traceId: lf.traceId,
-          name: modelId,
-          model: modelId,
-          startTime,
-          endTime,
-          input: buildLangfuseInputChat(inputMessages, ctx.langfuseDebug, flattenMessagesForOpik),
-          output: outputMessage,
-          usage: lastUsage,
-          traceName: lf.traceName,
-          userId: lf.userId,
-          sessionId: lf.sessionId,
-          tags: lf.tags,
-          traceInput: lf.userQuery || undefined,
-          traceOutput: outputMessage ?? undefined,
-          traceMetadata: {
-            stream: true, retried, upstreamUrl, ...logMeta,
-            ...ctx.debugMetadata, ...streamDebugExtra,
-          },
-          observationMetadata: {
-            retried, ...logMeta,
-            ...ctx.debugMetadata, ...streamDebugExtra,
-          },
-        });
-      } catch (langfuseErr: unknown) {
-        pipe.error("LANGFUSE_SPAN", langfuseErr);
-      }
+    if (!lastUsage) pipe.info("USAGE_MISSING", "stream completed without usage chunk");
+    // Langfuse: report the completed turn even if the upstream omitted usage.
+    // 流式路径 inputMessages 保持原样（其它下游流水线也用同一份引用）；
+    // debug=true 时把 tool_call 累积计数塞进 metadata 兜底。
+    try {
+      const streamDebugExtra = ctx.langfuseDebug
+        ? {
+            stream_tool_call_count: toolCallAccumulators.size,
+            stream_assistant_content_len: assistantContent.length,
+          }
+        : {};
+      langfuseReportGeneration({
+        traceId: lf.traceId,
+        name: modelId,
+        model: modelId,
+        startTime,
+        endTime,
+        input: buildLangfuseInputChat(inputMessages, ctx.langfuseDebug, flattenMessagesForOpik),
+        output: outputMessage,
+        usage: lastUsage ?? undefined,
+        traceName: lf.traceName,
+        userId: lf.userId,
+        sessionId: lf.sessionId,
+        tags: lf.tags,
+        traceInput: lf.userQuery || undefined,
+        traceOutput: outputMessage ?? undefined,
+        traceMetadata: {
+          stream: true, retried, upstreamUrl, ...logMeta,
+          ...ctx.debugMetadata, ...streamDebugExtra,
+        },
+        observationMetadata: {
+          retried, ...logMeta,
+          ...ctx.debugMetadata, ...streamDebugExtra,
+        },
+      });
+    } catch (langfuseErr: unknown) {
+      pipe.error("LANGFUSE_SPAN", langfuseErr);
     }
 
     if (ctx.tdaiClient && isExtractionAllowed(ctx.config, "tdai-memory")) {

@@ -328,7 +328,7 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - ☁️ **云上托管版**已正式上线，诚邀体验，如有使用意向，请填写问卷，我们后续会尽快联系您：**[填写问卷](https://wj.qq.com/s2/27892273/3h5k/)**
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/0e612941-a4ad-423b-a536-13dbdebef66e" width="200" alt="Agent Memory 微信社群二维码" />
+<p align="center"><img src="https://github.com/user-attachments/assets/e57ae607-0392-47c4-b10a-fb19296e2332" width="200" alt="Agent Memory 微信社群二维码" />
 
 ---
 
