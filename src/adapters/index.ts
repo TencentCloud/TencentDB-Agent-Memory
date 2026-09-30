@@ -17,3 +17,14 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Vercel AI SDK v6 middleware adapter
+export { createAiSdkMemoryMiddleware } from "./ai-sdk/index.js";
+export type {
+  AiSdkMemoryCaptureRequest,
+  AiSdkMemoryMiddlewareError,
+  AiSdkMemoryMiddlewareOptions,
+  AiSdkMemoryPort,
+  AiSdkMemoryRecallRequest,
+  AiSdkMemoryRecallResult,
+} from "./ai-sdk/index.js";

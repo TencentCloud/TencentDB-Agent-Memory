@@ -13,6 +13,10 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./ai-sdk": {
+      "import": "./dist/ai-sdk.mjs",
+      "default": "./dist/ai-sdk.mjs"
     }
   },
   "scripts": {
@@ -43,6 +47,7 @@
     "scripts/setup-hermes-memory-tencentdb.bat",
     "scripts/postinstall.mjs",
     "scripts/README.memory-tencentdb-ctl.md",
+    "docs/AI-SDK-MIDDLEWARE.md",
     "src",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
