@@ -198,8 +198,9 @@ cd "$TDAI_INSTALL_DIR"
 echo "[memory-tencentdb] Running npm install (this may take a while)..."
 npm install --omit=dev 2>&1 | tail -5
 
-# 安装 tsx（Gateway 启动需要），优先本地安装
-if ! npx tsx --version &>/dev/null; then
+# 安装 tsx（Gateway 启动需要），优先本地安装；使用 Node 原生 --import
+# 检测，避免依赖某些环境中缺失的全局 npx。
+if ! node --import tsx/esm -e "" &>/dev/null; then
     npm install tsx 2>&1 | tail -2
 fi
 

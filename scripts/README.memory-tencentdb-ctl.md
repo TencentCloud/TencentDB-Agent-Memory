@@ -39,7 +39,7 @@
 
 所有路径都能用同名环境变量覆盖（再次列出便于对照）：`MEMORY_TENCENTDB_ROOT`（默认 `~/.memory-tencentdb`）、`TDAI_INSTALL_DIR`（默认 `$MEMORY_TENCENTDB_ROOT/tdai-memory-openclaw-plugin`）、`TDAI_DATA_DIR`（默认 `$MEMORY_TENCENTDB_ROOT/memory-tdai`）、`HERMES_HOME`（默认 `~/.hermes`）、`MEMORY_TENCENTDB_LOG_DIR`、`MEMORY_TENCENTDB_GATEWAY_HOST/PORT`。
 
-依赖：`bash`、`python3`、`node >= 22`、`npx`、`lsof` 或 `ss`。
+依赖：`bash`、`python3`、`node >= 22`、`lsof` 或 `ss`。
 
 ## 3. 安装 & 调用
 
@@ -112,7 +112,7 @@ memory-tencentdb-ctl logs err 500 # 只看 stderr 最近 500 行
 启动命令解析顺序：
 
 1. 环境变量 `MEMORY_TENCENTDB_GATEWAY_CMD`（`install_hermes_memory_tencentdb.sh` 写入 `/etc/profile.d/memory-tencentdb-env.sh` 的那条）。
-2. 回退到 `sh -c 'cd $TDAI_INSTALL_DIR && exec npx tsx src/gateway/server.ts'`。
+2. 回退到 `sh -c 'cd $TDAI_INSTALL_DIR && exec node --import tsx/esm src/gateway/server.ts'`。
 
 启动时会自动 `source` 的环境文件：
 
@@ -320,7 +320,7 @@ memory-tencentdb-ctl config vdb-off --purge-creds --restart
 - 敏感文件权限一律 `0600`；`env.d/memory-tencentdb-llm.sh` 含明文 API key，**不要** commit。
 - 启动失败：`memory-tencentdb-ctl logs err 200` 查看 stderr；手动前台跑一遍更容易看到报错：
   ```bash
-  cd "$TDAI_INSTALL_DIR" && npx tsx src/gateway/server.ts
+  cd "$TDAI_INSTALL_DIR" && node --import tsx/esm src/gateway/server.ts
   ```
 - 端口冲突：`MEMORY_TENCENTDB_GATEWAY_PORT=18420 memory-tencentdb-ctl restart`。
 - 验证 hermes 有没有吃到新 env（hermes 模式）：
@@ -335,7 +335,7 @@ memory-tencentdb-ctl config vdb-off --purge-creds --restart
 | 0 | 成功 |
 | 1 | 参数错误 / 业务校验失败（如 `--base-url` 非 http(s)；在 standalone 下调 hermes 专属命令） |
 | 2 | 写盘失败（磁盘满、权限不足等） |
-| 127 | 依赖缺失（`python3` / `node` / `npx`） |
+| 127 | 依赖缺失（`python3` / `node`） |
 
 ---
 
