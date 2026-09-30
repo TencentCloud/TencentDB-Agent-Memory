@@ -26,6 +26,7 @@
 import { parseSkillFile, validateSkillFile } from "./skill-format.js";
 import { SkillResourceStore, type SkillResourcePayload } from "./skill-resource-store.js";
 import type { ISkillStore, SkillSearchResult } from "./skill-store.interface.js";
+import type { EmbeddingService } from "../store/embedding.js";
 import { SkillVersioning } from "./skill-versioning.js";
 import { randomBase62 } from "../../utils/short-id.js";
 import { strToU8, zipSync } from "fflate";
@@ -107,6 +108,14 @@ export interface SkillCoreOptions {
   now?: () => number;
   /** 旧版本 TTL 秒数。0 = 关闭。 */
   versionTtlSeconds?: number;
+  /**
+   * 可选：embedding 服务（patch skill-hybrid-vec）。
+   * 注入后：search(mode=embedding/hybrid) 计算 query 向量走真实 vec0 KNN / RRF 融合；
+   * create/update/patch 成功后自动 upsert skill_vec（失败仅 warn，不影响主流程）。
+   */
+  embeddingService?: EmbeddingService;
+  /** 可选：日志（仅用于 embedding 相关 warn/debug）。 */
+  logger?: { warn(msg: string): void; debug?(msg: string): void };
   /**
    * `delete` 成功归档 head 后同步触发。fire-and-forget：钩子抛异常
    * 会被吞掉，不影响 delete 返回值（asset 状态漂移可容忍：skill 已经
@@ -223,6 +232,8 @@ export class SkillCore {
   private readonly versionTtlSeconds: number;
   private readonly onSkillArchived?: SkillCoreOptions["onSkillArchived"];
   private readonly onSkillAccessed?: SkillCoreOptions["onSkillAccessed"];
+  private readonly embeddingService?: EmbeddingService;
+  private readonly logger?: SkillCoreOptions["logger"];
 
   constructor(opts: SkillCoreOptions) {
     this.store = opts.store;
@@ -236,6 +247,27 @@ export class SkillCore {
     this.versionTtlSeconds = opts.versionTtlSeconds ?? 0;
     this.onSkillArchived = opts.onSkillArchived;
     this.onSkillAccessed = opts.onSkillAccessed;
+    this.embeddingService = opts.embeddingService;
+    this.logger = opts.logger;
+  }
+
+  /**
+   * create/update/patch 成功后维护 skill_vec（patch skill-hybrid-vec）。
+   * 嵌入文本 = name + description + content（服务内部按 maxInputChars 截断）。
+   * 失败仅 warn —— 向量缺失时 hybrid 退化为纯 BM25 名次参与 RRF，主流程不受影响。
+   */
+  private async refreshSkillEmbedding(skill: Skill): Promise<void> {
+    if (!this.embeddingService || typeof this.store.upsertEmbedding !== "function") return;
+    try {
+      const vec = await this.embeddingService.embed(
+        `${skill.name}\n${skill.description}\n${skill.content}`,
+      );
+      this.store.upsertEmbedding(skill.skill_id, vec);
+    } catch (e) {
+      this.logger?.warn(
+        `[skill-core] skill embedding upsert failed for ${skill.skill_id}: ${(e as Error).message}`,
+      );
+    }
   }
 
   /** 读路径读到具体 skill 后 fire。异常吞掉，不阻塞读。 */
@@ -289,7 +321,7 @@ export class SkillCore {
     }
 
     try {
-      return await this.versioning.createNewSkill(
+      const created = await this.versioning.createNewSkill(
         sid,
         input.agent_id ?? "default",
         { user_id: input.user_id, team_id: input.team_id, agent_id: input.agent_id, task_id: input.task_id },
@@ -301,6 +333,8 @@ export class SkillCore {
           metadata_json: input.metadata ? JSON.stringify(input.metadata) : undefined,
         },
       );
+      await this.refreshSkillEmbedding(created);
+      return created;
     } catch (e) {
       toCoreError(e);
     }
@@ -325,6 +359,7 @@ export class SkillCore {
       void this.versioning.cleanupExpiredVersionsForSkill(
         head.skill_id, this.versionTtlSeconds,
       ).catch(() => { /* fire-and-forget */ });
+      await this.refreshSkillEmbedding(result);
       return result;
     } catch (e) {
       toCoreError(e);
@@ -364,6 +399,7 @@ export class SkillCore {
       void this.versioning.cleanupExpiredVersionsForSkill(
         head.skill_id, this.versionTtlSeconds,
       ).catch(() => { /* fire-and-forget */ });
+      await this.refreshSkillEmbedding(result);
       return result;
     } catch (e) {
       toCoreError(e);
@@ -512,6 +548,17 @@ export class SkillCore {
       // when team-scoped. Skills are team-shared assets.
       user_id: input.team_id ? undefined : input.user_id,
     };
+    // patch skill-hybrid-vec：embedding/hybrid 模式计算 query 向量。
+    // 失败不阻塞——store 层会 warn 并降级 BM25（与无凭证时行为一致）。
+    if ((input.mode === "embedding" || input.mode === "hybrid") && this.embeddingService) {
+      try {
+        opts.queryEmbedding = await this.embeddingService.embed(input.query);
+      } catch (e) {
+        this.logger?.warn(
+          `[skill-core] query embedding failed: ${(e as Error).message}; falling back to bm25`,
+        );
+      }
+    }
     return this.store.searchSkills(opts);
   }
 
