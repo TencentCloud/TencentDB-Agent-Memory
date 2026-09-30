@@ -434,7 +434,14 @@ const SENSITIVE_VALUE_PATTERNS: RegExp[] = [
   /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, // GitHub token
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack token
   /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, // Anthropic API key
-  /\bsk-[A-Za-z0-9]{20,}\b/g, // OpenAI-style API key
+  /\bsk-or-v1-[A-Za-z0-9]{20,}\b/g, // OpenRouter API key
+  // OpenAI-style API key. Allows hyphens/underscores in the body too —
+  // several providers ship "sk-<vendor>-<random>" keys (sk-or-v1-, sk-proj-,
+  // ...) where a purely-alphanumeric class stops matching at the first
+  // separator, e.g. "sk-or-v1-f0c43e..." — "or" is only 2 chars before the
+  // hyphen, well under the 20-char alphanumeric run this pattern requires,
+  // so the whole key sailed through unredacted until this was widened.
+  /\bsk-[A-Za-z0-9_-]{20,}\b/g, // OpenAI-style API key (incl. hyphenated vendor variants)
   /\bgsk_[A-Za-z0-9]{20,}\b/g, // Groq API key
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, // JWT
   // PEM private key blocks — redact the whole block, not just a substring.
