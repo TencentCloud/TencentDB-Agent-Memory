@@ -60,6 +60,17 @@ function createConsoleLogger(): Logger {
   };
 }
 
+function parseEpochMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 // ============================
 // Request body parser
 // ============================
@@ -408,6 +419,7 @@ export class TdaiGateway {
       ],
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: parseEpochMs(body.started_at),
     });
     const elapsed = Date.now() - startMs;
 

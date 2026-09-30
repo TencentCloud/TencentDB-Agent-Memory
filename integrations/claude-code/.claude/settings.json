@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MEMORY_TENCENTDB_HOOK_PLATFORM=claude-code MEMORY_TENCENTDB_HOOK_EVENT=UserPromptSubmit memory-tencentdb-hook",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MEMORY_TENCENTDB_HOOK_PLATFORM=claude-code MEMORY_TENCENTDB_HOOK_EVENT=Stop memory-tencentdb-hook",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
