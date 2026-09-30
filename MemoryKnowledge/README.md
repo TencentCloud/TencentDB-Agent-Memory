@@ -86,6 +86,58 @@ KNOWLEDGE_SERVICE_URL=http://127.0.0.1:8421
 `LLM_MODE=proxy`（默认）：Wiki 用 Panel 按 `x-tdai-service-id` 推送的 `llm_binding`，本地不必起 Proxy。  
 `LLM_MODE=custom`：在 `.env` 设 `LLM_API_KEY` / `LLM_BASE_URL`（及可选 `LLM_PROTOCOL=anthropic`）。
 
+## 通过 API 创建可在 Panel 中使用的 Wiki
+
+Wiki 在 KS 中的内容记录与 MemoryCore 中的 `meta_asset` 是两份不同的记录。直接调用 KS 的 `POST /v3/wiki/create` 只创建前者；成功返回 `wiki_id` 不代表已完成 Panel 所需的资产登记。Panel 的详情、页面和图谱接口会先查询 Core 的资产及访问权限，因此缺少登记时可能返回 `asset_not_found`，即使 KS 中已有 Wiki。
+
+与 Panel 集成的调用方应优先使用 **Panel** 的 `POST /api/v1/knowledge/wiki/create`。该接口先验证用户和 Team 成员身份，再调用 KS 创建 Wiki，并以返回的 `wiki_id` 登记 Core 资产。
+
+下面使用用户 Key 调用；`PANEL_URL` 是 Panel 根地址，端口以实际部署为准。`SERVICE_ID` 必须是 Panel 已配置的实例 ID，`USER_KEY` 必须属于该实例中目标 Team 的有效成员；不要用供应商 LLM Key 代替用户 Key。
+
+```bash
+PANEL_URL='http://127.0.0.1:8123'
+SERVICE_ID='default'
+# 在当前终端设置 USER_KEY 为用户 Key；不要把真实 Key 写进文档或提交到仓库。
+: "${USER_KEY:?请先设置用户 Key}"
+
+curl --fail-with-body -sS "$PANEL_URL/api/v1/knowledge/wiki/create" \
+  -H 'Content-Type: application/json' \
+  -H "x-tdai-service-id: $SERVICE_ID" \
+  -H "x-tdai-user-key: $USER_KEY" \
+  --data '{"team_id":"team-REPLACE-ME","name":"API Wiki"}'
+```
+
+将 `team-REPLACE-ME` 替换为已有 Team 的 ID。检查响应的 `code`：成功为 `0`，Wiki ID 位于 **`data.wiki_id`**，不是顶层字段；非零时先处理错误，不要继续上传或摄入。创建成功也不表示已完成文档抽取。
+
+后续仍向 Panel 发 POST 请求，并携带相同的实例和用户 Key 请求头：
+
+| 步骤 | Panel 路径 | JSON 请求字段 |
+| --- | --- | --- |
+| 上传源文件 | `/api/v1/knowledge/wiki/raw/write` | `team_id`、`wiki_id`、`files: [{"filename":"intro.md","content":"文档内容"}]` |
+| 启动摄入 | `/api/v1/knowledge/wiki/ingest` | `wiki_id` |
+| 查看状态与详情 | `/api/v1/knowledge/wiki/get` | `wiki_id` |
+
+使用创建响应中的 `wiki_id`，并保持 Team 与实例一致。先上传源文件再启动摄入，随后通过详情中的 `data.status` 检查处理结果；摄入请求被接受不等于处理成功。
+
+### 已直接调用 KS 创建 Wiki 的集成
+
+若选择自行编排底层 API，顺序是 **KS `/v3/wiki/create` → Core `/v3/meta/asset/create` → 上传源文件 → 摄入**。这两个服务使用各自的地址和认证配置；不要把 Core 的路径发给 KS，也不要把实例 ID 当成认证凭证。Core 登记仍须通过其用户权限校验。对应同一实例时，登记字段应与 KS 返回记录一致：
+
+| Core `asset/create` 字段 | 值 |
+| --- | --- |
+| `asset_id` | KS 返回的 `data.wiki_id`，不可另造 ID |
+| `asset_type` | `llm_wiki` |
+| `team_id` | 创建 Wiki 时的 Team ID |
+| `name` | KS 返回的 `data.name` |
+| `owner_user_id` | 经过认证的实际创建用户 ID |
+| `source_type` | `manual` |
+| `visibility` | `team`（Panel 创建流程使用的值） |
+| `content_ref` | KS 返回的 `data.service_url`（若有） |
+
+先核对该实例中是否已有同 ID 的资产，避免重复创建或覆盖他人的记录；若 KS 创建成功而 Core 登记失败，应保留 `wiki_id` 并处理登记错误。这是跨服务调用，不是一次原子事务。已有 Wiki 的补登记只解决资产发现与权限记录，不能证明其摄入成功，也不会修复丢失的文件或索引。
+
+具体实现可对照 [Panel Wiki 创建路由](../MemoryPanel/src/panel/http/routes/knowledge/wiki-routes.ts)、[资产登记函数 `ensureKnowledgeAsset`](../MemoryPanel/src/panel/http/routes/knowledge/common.ts) 和 [KS Wiki API 定义](openapi.yaml)。
+
 ## 常用命令
 
 ```bash
