@@ -46,6 +46,19 @@ describe("matchWhitelistEndpoint /v1/models", () => {
     expect(matchWhitelistEndpoint("/future-agent/mem001/v1/models")?.upstreamEndpoint).toBe("/models");
     expect(matchWhitelistEndpoint("/my-custom-agent/v1/models")?.upstreamEndpoint).toBe("/models");
   });
+
+  it("matches the bare /models path (no /v1, dsh-style base URL)", () => {
+    const entry = matchWhitelistEndpoint("/dsh/mem-example001/models");
+    expect(entry?.upstreamEndpoint).toBe("/models");
+  });
+
+  it("matches every supported agent-prefixed /models path (no /v1)", () => {
+    const agents = ["dsh", "codex", "codebuddy", "opencode"];
+    for (const agent of agents) {
+      const entry = matchWhitelistEndpoint(`/${agent}/mem-example001/models`);
+      expect(entry?.upstreamEndpoint, `agent=${agent}`).toBe("/models");
+    }
+  });
 });
 
 describe("normalizeWhitelistRequestPath does not mis-strip reserved paths", () => {
@@ -68,7 +81,13 @@ describe("normalizeWhitelistRequestPath does not mis-strip reserved paths", () =
   it("normalizes agent-prefixed models paths to /v1/models", () => {
     expect(normalizeWhitelistRequestPath("/proxy/mem001/v1/models")).toBe("/v1/models");
     expect(normalizeWhitelistRequestPath("/codebuddy/mem001/v1/models")).toBe("/v1/models");
-    expect(normalizeWhitelistRequestPath("/opencode/v1/models")).toBe("/v1/models");
+  });
+
+  it("normalizes dsh-style /models path (no /v1) to /models", () => {
+    expect(normalizeWhitelistRequestPath("/dsh/default/models")).toBe("/models");
+    expect(normalizeWhitelistRequestPath("/codex/mem001/models")).toBe("/models");
+    // 无 spaceId 且带 /v1 时，v1 会被视为 spaceId 段剥掉，最终仍映射到 /models
+    expect(normalizeWhitelistRequestPath("/opencode/v1/models")).toBe("/models");
   });
 });
 
@@ -93,6 +112,15 @@ describe("joinUrl /v1/models", () => {
 
   it("strips a trailing slash from the base", () => {
     expect(joinUrl("https://upstream.example.com/v1/", "/v1/models")).toBe(
+      "https://upstream.example.com/v1/models",
+    );
+  });
+
+  it("maps dsh-style /models path (no /v1) to upstream /models", () => {
+    expect(joinUrl("https://upstream.example.com/v1", "/dsh/default/models")).toBe(
+      "https://upstream.example.com/v1/models",
+    );
+    expect(joinUrl("https://upstream.example.com/v1", "/codex/mem001/models")).toBe(
       "https://upstream.example.com/v1/models",
     );
   });

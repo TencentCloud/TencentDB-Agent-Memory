@@ -94,6 +94,13 @@ export const WHITELIST_ENDPOINTS: readonly WhitelistEndpoint[] = [
     supportsStream: false,
     isPrimary: false,
   },
+  {
+    pathSuffix: "/models",
+    upstreamEndpoint: "/models",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
   // ── Codex Responses API 端点（由 codexHandler 处理）──────────────
   // 主端点：见 codexHandler.ts；上游拼接靠这里防止 joinUrl 走 fallback
   // 兜底到 /chat/completions（错误协议）。
@@ -173,9 +180,10 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  *   - `/codex/{spaceId}/responses`            → 剥 `/codex/{spaceId}`（codex 客户端
  *     不像 CC/CB 那样自拼 /v1/，源码 endpoint 常量就是 /responses，因此 base_url
  *     不带 /v1 时前缀后紧接的就是 /responses 或 /memories 等）
- * lookahead 允许 `/v1/`、`/responses`、`/responses/`、`/memories/`、`/realtime/`
- * 后紧邻，其中 `/v1/` 必须带尾斜杠避免误伤未来出现的 `/v1foo` 之类；responses
- * 等 codex 端点允许尾斜杠可选（如 `/responses` 是完整路径）。
+ * lookahead 允许 `/v1/`、`/models`、`/responses`、`/responses/`、`/memories/`、
+ * `/realtime/` 后紧邻，其中 `/v1/` 必须带尾斜杠避免误伤未来出现的 `/v1foo` 之类；
+ * `/models`、`/responses` 等不带 /v1 的端点允许尾斜杠可选（如 `/responses`、
+ * `/models` 是完整路径，dsh / codex 等客户端 base_url 不带 /v1 时就是这种形态）。
  *
  * agent 段采用**保留字排除法**（黑名单）而非硬编码白名单：第一段只要不是
  * `v1` / `proxy` / `skill-bridge` / `memory-bridge` 就当作 agent 段。这与
@@ -189,7 +197,7 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  * 保留字 `v1` 被负向前瞻排除，且 lookahead 要求 agent 后紧跟已知 endpoint
  * 形态（`/v1/models` 里 `v1` 后是 `/models`，不满足 `\/v1\/` 等 lookahead）。
  */
-const AGENT_PREFIX_RE = /^\/(?!v1(?:\/|$)|proxy(?:\/|$)|skill-bridge(?:\/|$)|memory-bridge(?:\/|$))([^/]+)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
+const AGENT_PREFIX_RE = /^\/(?!v1(?:\/|$)|proxy(?:\/|$)|skill-bridge(?:\/|$)|memory-bridge(?:\/|$))([^/]+)(?:\/[^/]+)?(?=\/v1\/|\/models(?:\/|$)|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。

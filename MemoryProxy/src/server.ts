@@ -337,11 +337,13 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/:agent/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/chat/completions", (c) => handleChatCompletions(c, config));
   app.get("/:agent/:spaceId/v1/models", (c) => handleModelsEndpoint(c, config));
+  app.get("/:agent/:spaceId/models", (c) => handleModelsEndpoint(c, config));
 
   // Agent-prefixed routes without spaceId (deprecated: no credit reporting)
   app.post("/:agent/v1/messages", (c) => handleAnthropicMessages(c, config));
   app.post("/:agent/v1/chat/completions", (c) => handleChatCompletions(c, config));
   app.get("/:agent/v1/models", (c) => handleModelsEndpoint(c, config));
+  app.get("/:agent/models", (c) => handleModelsEndpoint(c, config));
 
   // Legacy /proxy/<spaceId>/ prefix — no agent info, defaults to codebuddy.
   // 保留以兼容不带 agent 前缀的客户端。
