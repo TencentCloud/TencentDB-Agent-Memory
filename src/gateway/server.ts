@@ -408,6 +408,7 @@ export class TdaiGateway {
       ],
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: body.started_at,
     });
     const elapsed = Date.now() - startMs;
 
