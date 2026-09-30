@@ -295,6 +295,7 @@ export class TdaiCore {
       scene: params.scene,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      embeddingTimeoutMs: this.cfg.embedding.recallTimeoutMs ?? this.cfg.embedding.timeoutMs,
       logger: this.logger,
     });
 
@@ -316,6 +317,7 @@ export class TdaiCore {
       sessionKey: params.sessionKey,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      embeddingTimeoutMs: this.cfg.embedding.recallTimeoutMs ?? this.cfg.embedding.timeoutMs,
       logger: this.logger,
     });
 
