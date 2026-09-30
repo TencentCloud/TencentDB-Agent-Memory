@@ -9,6 +9,16 @@
 
 ---
 
+## [Unreleased]
+
+### Allow an external gateway URL environment override (#1235)
+
+- **What changed**: Read INJECTION_EXTERNAL_GATEWAY_URL before YAML and document client-reachable ports.
+- **Why**: Direct Proxy startup ignored the deployment environment override.
+- **Impact**: Startup-only configuration; no cache invalidation or network-interface selection change.
+- **Verification**: Node 26.3.0: 9 configuration tests pass (baseline 2 fail/7 pass); real YAML and environment loader probe passes. No live service test.
+- **Files**: MemoryProxy/src/config.ts, config.example.yaml, README files and config tests.
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

@@ -489,11 +489,17 @@ injection:
   enabled: true             # 是否启用上下文注入（关闭后下方 injectors 列表全部失效）
   injectors: ["skill", "knowledge", "tdai-memory"]   # 要启用的注入器列表
   # 对外统一 gateway 地址 —— LLM 生成的 <skill_tools> / <tdai_memory_tools>
-  # 段里嵌的 curl URL 都以这个为 base。只填 gateway 域名，**不带端口**
-  # （gateway 内部路由到 proxy pod 的端口由 ops 在 gateway 侧配，跟这里无关）。
+  # 段里嵌的 curl URL 都以这个为 base。填写 Agent 客户端实际可达的
+  # http(s) 地址，使用非默认端口时必须带端口，例如 http://127.0.0.1:8096
+  # （仅 Agent 与 Proxy 运行在同一台主机、且该端口对宿主机开放时适用）。
+  # INJECTION_EXTERNAL_GATEWAY_URL 环境变量非空时优先于此 YAML 配置；
+  # 空字符串或全空白环境变量回落到 YAML。启动时读取，变更后需重启。
   #
   # ⚠️ 多节点部署必配。未配时每个 pod 用自己的 host:port 兜底 → COS 里同一份
   # hook cache 被 pods 互相覆盖 → 上游 Anthropic KV cache 每次 miss（费钱+慢）。
+  # 单节点的容器 / 多网卡部署也应显式配置：未配时 0.0.0.0 / 127.0.0.1
+  # 会取第一块非 internal IPv4 网卡，取不到则用 127.0.0.1，再拼监听端口；
+  # 这个地址不保证从 Agent 客户端可达。
   #
   # gateway 侧需把下面两个前缀原样透传到 proxy pod：
   #   /skill-bridge/**   → proxy /skill-bridge/**

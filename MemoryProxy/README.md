@@ -335,6 +335,10 @@ npm run test:watch
 
 ## Security & release notes
 
+Set `injection.externalGatewayUrl` to the HTTP(S) base URL reachable from the Agent client, including the port when needed (for example, `http://127.0.0.1:8096` for an Agent on the Proxy host with that port exposed). A non-blank `INJECTION_EXTERNAL_GATEWAY_URL` environment variable takes precedence over YAML; an empty or whitespace-only value falls back to YAML. This applies to direct Proxy startup as well as environments that pass the variable to the Proxy process.
+
+Explicit configuration is also recommended for single-node container or multi-interface deployments. Without it, a listener host of `0.0.0.0` or `127.0.0.1` falls back to the first non-internal IPv4 interface (or loopback if none exists), plus the listener port. That address may be unreachable from the Agent. Changes require a restart; this setting does not invalidate existing session hook caches, so existing sessions can continue using cached tool URLs until those caches are refreshed.
+
 - When listening on a non-loopback address or deploying multi-node, enable `auth.enabled=true` and inject `TDAI_PROXY_ADMIN_API_KEY` via env to protect ops endpoints.
 - Inject all secrets via environment variables or a Secret Manager; never commit real `apiKey` / `serviceToken` / STS credentials / billing URLs into the config repo.
 - For multi-node deployments you must use `storage.backend=cos` and explicitly set `injection.externalGatewayUrl`, otherwise each instance caches independently and causes upstream KV-cache misses.

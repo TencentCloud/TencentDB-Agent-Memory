@@ -319,6 +319,10 @@ npm run test:watch
 
 ## 安全与发布注意事项
 
+将 `injection.externalGatewayUrl` 配置为 Agent 客户端实际可达的 HTTP(S) 地址；使用非默认端口时必须带端口。例如，Agent 与 Proxy 同机且端口对宿主机开放时，可用 `http://127.0.0.1:8096`。非空的 `INJECTION_EXTERNAL_GATEWAY_URL` 环境变量优先于 YAML；空字符串或全空白值回落到 YAML。直接启动 Proxy，或向 Proxy 进程传入该变量的部署环境，都支持此覆盖。
+
+单节点的容器、多网卡部署也建议显式配置。未配时，监听地址为 `0.0.0.0` 或 `127.0.0.1` 会取第一块非 internal IPv4 网卡（找不到则用回环地址），再拼监听端口，这个地址不保证从 Agent 可达。配置在启动时读取，修改后需重启；此设置不会使已有会话的 hook cache 失效，旧会话在缓存刷新前仍可能使用旧工具地址。
+
 - 非回环地址监听或多节点部署时，必须启用 `auth.enabled=true`，并通过 env 注入 `TDAI_PROXY_ADMIN_API_KEY` 保护运维口。
 - 所有 Secret 通过环境变量或 Secret Manager 注入；不要把真实 `apiKey` / `serviceToken` / STS 凭证 / 计费 URL 提交进配置仓库。
 - 部署到多节点时必须使用 `storage.backend=cos` 并显式配置 `injection.externalGatewayUrl`，否则每个实例各自缓存会导致上游 KV cache miss。
