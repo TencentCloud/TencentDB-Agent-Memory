@@ -312,6 +312,14 @@ export interface SkillExtractData {
   task_id: string;
   archived_at_ms: number;
   archive_key: string;
+  /**
+   * `skill.extraction.enabled` as the server resolved it, so a caller can tell
+   * an accepted task that will be extracted from one that cannot be in this
+   * configuration. It reports the configuration switch ONLY — not worker
+   * readiness, and not that extraction finished. `null` means the server could
+   * not read its resolved skill config; that is "unknown", not "off".
+   */
+  extraction_enabled?: boolean | null;
 }
 
 // ── /v3/skill/conversation/add ──
@@ -390,6 +398,14 @@ export interface SkillConversationArchivedInfo {
 export interface SkillConversationAddData {
   status: "ok" | "archived";
   archived?: SkillConversationArchivedInfo;
+  /**
+   * `skill.extraction.enabled` as the server resolved it, so a caller can tell
+   * an accepted task that will be extracted from one that cannot be in this
+   * configuration. It reports the configuration switch ONLY — not worker
+   * readiness, and not that extraction finished. `null` means the server could
+   * not read its resolved skill config; that is "unknown", not "off".
+   */
+  extraction_enabled?: boolean | null;
 }
 
 // ── /v3/skill/conversation/force-archive ──
@@ -436,6 +452,14 @@ export interface SkillConversationForceArchiveData {
   task_id?: string;
   archived_at_ms?: number;
   archive_key?: string;
+  /**
+   * `skill.extraction.enabled` as the server resolved it, so a caller can tell
+   * an accepted task that will be extracted from one that cannot be in this
+   * configuration. It reports the configuration switch ONLY — not worker
+   * readiness, and not that extraction finished. `null` means the server could
+   * not read its resolved skill config; that is "unknown", not "off".
+   */
+  extraction_enabled?: boolean | null;
 }
 
 // ── SDK-only convenience ──
