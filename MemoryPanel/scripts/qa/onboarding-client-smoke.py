@@ -46,9 +46,17 @@ def panel_action(base, action, headers, body):
     return result["data"]
 
 
-def has_current_turns(items, user_turn, assistant_turn):
-    bodies = {item.get("body") for item in items}
-    return user_turn in bodies and assistant_turn in bodies
+def has_current_turns(items, user_turn, assistant_turn, session_id):
+    if not session_id:
+        return False
+    # Panel's existing L0 title carries the Core session_id; role and body alone
+    # cannot associate two matching records with this Proxy initialization.
+    return all(any(
+        item.get("role") == role
+        and item.get("body") == body
+        and item.get("title") == f"{role} @ {session_id}"
+        for item in items
+    ) for role, body in (("user", user_turn), ("assistant", assistant_turn)))
 
 
 def main():
@@ -87,6 +95,7 @@ def main():
         raise RuntimeError("Panel cannot see the selected Agent's Chat Memory block")
 
     marker = f"ON05 onboarding smoke {uuid4().hex}"
+    session_id = f"onboarding-{uuid4().hex}"
     expected_reply = f"Onboarding fake model response: {marker}"
     proxy_headers = {
         "content-type": "application/json",
@@ -95,7 +104,7 @@ def main():
         "x-team-id": args.team_id,
         "x-agent-id": args.agent_id,
         "x-task-id": args.task_id,
-        "x-conversation-id": f"onboarding-{uuid4().hex}",
+        "x-conversation-id": session_id,
     }
     response = post(
         f"{args.proxy_url.rstrip('/')}/opencode/{args.instance_id}/v1/chat/completions",
@@ -112,8 +121,8 @@ def main():
             args.panel_url.rstrip("/"), "layer", panel_headers,
             {"block_id": block_id, "layer": "L0", "limit": 100, "offset": 0},
         )
-        if has_current_turns(layer["items"], marker, expected_reply):
-            print("Panel L0 readback: passed (user and assistant turns)")
+        if has_current_turns(layer["items"], marker, expected_reply, session_id):
+            print(f"Panel L0 readback: passed (user and assistant, session={session_id}, marker={marker})")
             return
         time.sleep(1)
     raise RuntimeError("Panel L0 readback missing the new conversation after 20 seconds")
