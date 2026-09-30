@@ -9,6 +9,16 @@
 
 ---
 
+## [Unreleased]
+
+### Preserve OpenAI multimodal content parts (#976)
+
+- **What changed**: Round-trip opaque video, audio, file and provider-specific content without changing their wire type to custom.
+- **Why**: Supported upstream multimodal requests were rejected after Proxy serialization.
+- **Impact**: Same-protocol forwarding only; cross-protocol conversion is unchanged.
+- **Verification**: Node 26.3.0: 19 Proxy tests pass; targeted baseline 9 fail/1 pass. Existing 60 type diagnostics are unchanged.
+- **Files**: MemoryProxy/src/injection/adapters/openai.ts and multimodal round-trip tests.
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

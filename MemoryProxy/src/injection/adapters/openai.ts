@@ -142,7 +142,9 @@ export class OpenAIAdapter implements ProtocolAdapter {
         return {
           type: "custom",
           content: JSON.stringify(part),
-          metadata: { original_type: type },
+          // Keep opaque provider content for the same-protocol return trip.
+          // Video, audio, file and future parts must not become wire "custom".
+          metadata: { original_type: type, original_protocol: "openai", original_part: part },
         };
     }
   }
@@ -235,6 +237,13 @@ export class OpenAIAdapter implements ProtocolAdapter {
           });
           break;
         default:
+          if (block.type === "custom" && block.metadata?.original_protocol === "openai") {
+            const original = block.metadata.original_part;
+            if (original && typeof original === "object" && !Array.isArray(original)) {
+              parts.push({ ...original });
+              break;
+            }
+          }
           parts.push({ type: block.type, content: block.content, ...block.metadata });
           break;
       }
