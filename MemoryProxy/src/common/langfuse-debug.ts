@@ -18,7 +18,7 @@
  * commit message。
  */
 
-import type { CcRequestKind } from "./cc-request-classifier.js";
+import type { RequestKind } from "../agent-adapters/types.js";
 import { findLastCacheControlIndex } from "./cc-request-classifier.js";
 
 // ─── 白名单与截断上限 ────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ export interface RequestDebugMetadataInput {
   body: Record<string, unknown>;
   headers?: Record<string, string>;
   agentSource?: string;
-  requestKind?: CcRequestKind;
+  requestKind?: RequestKind;
   spaceId?: string;
   turnSeq?: number;
   requestPath?: string;
