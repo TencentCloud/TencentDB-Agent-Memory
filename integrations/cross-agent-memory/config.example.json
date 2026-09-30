@@ -1,0 +1,15 @@
+{
+  "endpoint": "http://127.0.0.1:8420",
+  "hubEndpoint": "http://127.0.0.1:8125",
+  "apiKey": "example-only-not-a-real-key",
+  "serviceId": "default",
+  "identity": {
+    "teamId": "team-generated-example",
+    "agentId": "agt-generated-example",
+    "userId": "usr-generated-example",
+    "taskId": "task-generated-example"
+  },
+  "timeouts": { "recallMs": 1200, "captureMs": 3000 },
+  "recall": { "l0Limit": 3, "l1Limit": 5, "maxContextChars": 12000 },
+  "queue": { "retryBatchSize": 3, "retryBudgetMs": 800 }
+}
