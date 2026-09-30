@@ -12,7 +12,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, Text } from 'tea-component';
+import { Button, Card, Modal, Text } from 'tea-component';
 import {
   useTasks,
   useTeams,
@@ -25,6 +25,8 @@ import {
 } from '@/services';
 import { tea } from '@/lib/tea-bridge';
 import { TeamHeaderCard } from '@/components/team/TeamHeaderCard';
+import { CreateOwnTeamForm } from '@/components/team/CreateOwnTeamForm';
+import { useAuthStore } from '@/stores/auth';
 import TaskCreateDialog, { type TaskDraft } from './TaskCreateDialog';
 import BoardView from './BoardView';
 import { useTeamParticipation } from '../hooks/useTeamParticipation';
@@ -33,15 +35,27 @@ import '../styles/task-workbench.css';
 
 function EmptyTeam() {
   const { t } = useTranslation();
+  const canCreateTeam = useAuthStore((s) => Boolean(s.auth?.user_id));
+  const [showCreateTeam, setShowCreateTeam] = useState(false);
   return (
-    <Card>
-      <Card.Body className="_memory-workbench-empty-card">
-        <Text theme="strong" className="_memory-workbench-empty-title">{t('task.emptyTeam.title')}</Text>
-        <Text theme="weak" className="_memory-workbench-empty-desc">
-          {t('task.emptyTeam.desc')}
-        </Text>
-      </Card.Body>
-    </Card>
+    <>
+      <Card>
+        <Card.Body className="_memory-workbench-empty-card">
+          <Text theme="strong" className="_memory-workbench-empty-title">{t('task.emptyTeam.title')}</Text>
+          <Text theme="weak" className="_memory-workbench-empty-desc">{t('task.emptyTeam.desc')}</Text>
+          {canCreateTeam && <Button type="primary" onClick={() => setShowCreateTeam(true)}>
+            {t('teamSwitcher.newTeam')}
+          </Button>}
+        </Card.Body>
+      </Card>
+      {showCreateTeam && <Modal visible caption={t('teamSwitcher.newTeam')} size="m"
+        onClose={() => setShowCreateTeam(false)}>
+        <Modal.Body>
+          <CreateOwnTeamForm onCancel={() => setShowCreateTeam(false)}
+            onCreated={() => setShowCreateTeam(false)} />
+        </Modal.Body>
+      </Modal>}
+    </>
   );
 }
 

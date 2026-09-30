@@ -52,14 +52,17 @@ export const enUS = {
     "Assets are isolated between teams. Switching will show the selected team's data on the current page.",
   'teamSwitcher.teamCount': 'Teams ({{count}})',
   'teamSwitcher.empty.admin': 'No teams yet. Click "New Team" below to create one.',
-  'teamSwitcher.empty.member':
-    'You have not been added to any team. Please contact your admin to be added.',
+  'teamSwitcher.empty.member': 'You do not have a Team yet.',
   'teamSwitcher.memberCount': '{{count}} members',
   'teamSwitcher.teamNamePlaceholder': 'Team name (required)',
   'teamSwitcher.teamDescPlaceholder': 'Team description (optional)',
   'teamSwitcher.cancel': 'Cancel',
   'teamSwitcher.create': 'Create',
   'teamSwitcher.newTeam': 'New Team',
+  'teamSwitcher.createUnconfirmed': 'The create result is unknown. Check the Team list before creating again; a matching Team cannot confirm this request succeeded.',
+  'teamSwitcher.refreshFailed': 'The Team was created, but the list did not refresh. Retry the refresh without creating another Team.',
+  'teamSwitcher.retryRefresh': 'Retry Refresh',
+  'teamSwitcher.checkCreate': 'Refresh Team List',
   'teamSwitcher.edit.tooltip': 'Edit the current team name / description (owner / admin only)',
   'teamSwitcher.delete.tooltip':
     'Delete the current team (owner / admin only; cascades to members/agents/tasks/assets)',
@@ -174,7 +177,7 @@ export const enUS = {
   'task.empty': 'No tasks yet. Click "New Task" above to create one.',
   'task.emptyTeam.title': 'No Team Available',
   'task.emptyTeam.desc':
-    'Please create a team in Team Management first, then come back to create tasks.',
+    'Create a Team you own, then come back to create tasks.',
   'task.detail.empty': 'Select a task on the left, or click "New Task" to start.',
   'task.status.running': 'In Progress',
   'task.status.completed': 'Completed',
