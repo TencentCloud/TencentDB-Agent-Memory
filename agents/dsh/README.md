@@ -51,8 +51,43 @@ chmod 600 ~/.dsh/.credentials.yaml
 |--------|--------|
 | 1 | `x-deepseek-harness-session-id` |
 | 2 | `x-session-id` |
+| 3 | `x-session-affinity` |
 
 dsh 客户端会自动生成并在 header 中携带 session ID，无需用户手动配置。Proxy 仅从 header 获取，没有 body 兜底。
+
+### 2.1 无会话头通道（pi-ai 等 OpenAI-compatible 适配器）的兜底
+
+dsh 只有 `llm-deepseek` 适配器会挂 `x-deepseek-harness-session-id`；走
+`llm-pi-ai` 适配器（如 sun2 / gmi / zp 等自定义 OpenAI-compatible provider）时，
+请求默认**不携带任何会话头**（issue #1179）。此时 proxy 从请求 body 派生
+**稳定的 per-conversation** 会话标识（锚定第一条 `role=user` 消息文本的哈希，
+形如 `dsh-der-<16hex>`）走 session-init：
+
+- **同一会话**的所有轮次（历史只增不改，首条用户消息不变）→ 标识不变，
+  Team/Agent 选择、session identity、记忆分组在会话内连续；
+- **不同会话**（即使同一 user key）→ 首条用户消息不同 → 标识不同，
+  session-init 状态与 L0 记忆分组互不串线；
+- **fail-closed**：body 里派生不出标识（无 user 消息 / 首条 user 消息无文本）
+  时，该请求**跳过** session-init 与记忆注入（proxy 日志
+  `[session-fallback] … fail-closed`），而不是静默合并进 `dsh:<keyId>`
+  共享会话。请求本身照常透传上游。
+
+已知边界：两个会话的**首条用户消息完全相同**时仍会共享同一派生标识
+（残留风险远小于按 keyId 共享）；需要绝对隔离时，优先使用会话头。
+
+若需按会话绝对隔离（或让 pi-ai 通道与 deepseek 通道的会话状态互通），
+可在 pi-ai provider 配置开启会话亲和头（需要 DSH 侧
+`deepseek-ai/deepseek-harness` 将 `sendSessionAffinityHeaders` 开放为可配置，
+PR 见 issue #1179 关联）：
+
+```yaml
+# ~/.dsh/settings.yaml（pi-ai 路由）
+compat:
+  sendSessionAffinityHeaders: true   # 发送 x-session-affinity: session-<uuid>
+```
+
+开启后 proxy 从 `x-session-affinity` 识别会话 ID（与 `llm-deepseek` 通道同一
+sessionId 值，两通道的会话状态互通）。
 
 ---
 
