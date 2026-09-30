@@ -879,6 +879,12 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    /**
+     * 跳过 asset_confirm 前置对话框，默认视为用户选了"是，关联团队资产"。
+     * 开启后首轮直接进入 team → agent → task 选择流程（或 auto-select 级联）。
+     * 默认 false（保持原有行为，弹 asset_confirm 对话框）。
+     */
+    skipAssetConfirm?: boolean;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
