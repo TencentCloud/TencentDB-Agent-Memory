@@ -11,12 +11,18 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: [
+    "./index.ts",
+    "./src/adapters/trae/index.ts",
+    "./src/adapters/trae/hook-handler.ts",
+    "./src/adapters/tdai-bridge/tdai-bridge.ts",
+    "./src/adapters/trae/mcp-server.ts"
+  ],
   outDir: "./dist",
   format: "esm",
   platform: "node",
   clean: true,
-  fixedExtension: true,
+  fixedExtension: false,
   dts: false,
   sourcemap: false,
   deps: {

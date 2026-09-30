@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tdai": {
+      "command": "memory-tencentdb-trae-mcp",
+      "env": {
+        "TDAI_GATEWAY_URL": "${TDAI_GATEWAY_URL}",
+        "TDAI_GATEWAY_API_KEY": "${TDAI_GATEWAY_API_KEY}"
+      }
+    }
+  }
+}
