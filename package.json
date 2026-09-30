@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
+    "gateway": "node --import tsx/esm src/gateway/server.ts",
     "build:plugin": "tsdown",
     "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory",
     "prepack": "npm run build",
@@ -47,6 +48,8 @@
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
+    "claude-code-plugin/",
+    ".claude-plugin/marketplace.json",
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
@@ -58,6 +61,8 @@
   "keywords": [
     "openclaw",
     "openclaw-plugin",
+    "claude-code",
+    "claude-code-plugin",
     "memory",
     "ai-memory",
     "long-term-memory",

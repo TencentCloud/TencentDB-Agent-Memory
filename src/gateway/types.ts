@@ -36,7 +36,17 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /**
+   * Legacy stable system context consumed by the Hermes adapter.
+   *
+   * New adapters should prefer the two explicit fields below so they do not
+   * silently lose the per-turn L1 context.
+   */
   context: string;
+  /** Dynamic, per-turn L1 memories that hosts normally prepend to the prompt. */
+  prepend_context?: string;
+  /** Stable L2/L3 context that hosts normally append to the system prompt. */
+  append_system_context?: string;
   strategy?: string;
   memory_count?: number;
 }
