@@ -5,23 +5,24 @@ import {
 } from "../whitelist.js";
 import { joinUrl } from "../../guard-adapter.js";
 
-describe("matchWhitelistEndpoint /v1/models", () => {
-  it("matches the bare /v1/models path", () => {
-    const entry = matchWhitelistEndpoint("/v1/models");
-    expect(entry).not.toBeNull();
-    expect(entry?.pathSuffix).toBe("/v1/models");
-    expect(entry?.upstreamEndpoint).toBe("/models");
-    expect(entry?.protocol).toBe("openai");
-    expect(entry?.isPrimary).toBe(false);
+describe("AGENT_PREFIX_RE is agent-agnostic (reserved-word exclusion)", () => {
+  it("keeps bare /v1/* endpoints intact", () => {
+    expect(normalizeWhitelistRequestPath("/v1/models")).toBe("/v1/models");
+    expect(normalizeWhitelistRequestPath("/v1/messages")).toBe("/v1/messages");
+    expect(normalizeWhitelistRequestPath("/v1/chat/completions")).toBe("/v1/chat/completions");
+    expect(normalizeWhitelistRequestPath("/v1/embeddings")).toBe("/v1/embeddings");
   });
 
-  it("matches the /proxy/<spaceId>/v1/models path", () => {
-    const entry = matchWhitelistEndpoint("/proxy/mem-example001/v1/models");
-    expect(entry?.pathSuffix).toBe("/v1/models");
-    expect(entry?.upstreamEndpoint).toBe("/models");
+  it("keeps /responses codex bare endpoint intact", () => {
+    expect(normalizeWhitelistRequestPath("/responses")).toBe("/responses");
   });
 
-  it("matches every supported agent-prefixed path", () => {
+  it("keeps non-agent first segments intact (skill-bridge / memory-bridge)", () => {
+    expect(normalizeWhitelistRequestPath("/skill-bridge/v3/skill/search")).toBe("/skill-bridge/v3/skill/search");
+    expect(normalizeWhitelistRequestPath("/memory-bridge/v3/memory/search")).toBe("/memory-bridge/v3/memory/search");
+  });
+
+  it("strips any agent prefix for auxiliary endpoints (no hardcoded agent list)", () => {
     const agents = [
       "claude-code",
       "codebuddy",
@@ -35,93 +36,38 @@ describe("matchWhitelistEndpoint /v1/models", () => {
       "pi",
       "hermes",
       "openclaw",
+      "some-future-agent",
     ];
     for (const agent of agents) {
-      const entry = matchWhitelistEndpoint(`/${agent}/mem-example001/v1/models`);
-      expect(entry?.upstreamEndpoint, `agent=${agent}`).toBe("/models");
-    }
-  });
-
-  it("matches any future/unknown agent-prefixed path (reserved-word exclusion)", () => {
-    expect(matchWhitelistEndpoint("/future-agent/mem001/v1/models")?.upstreamEndpoint).toBe("/models");
-    expect(matchWhitelistEndpoint("/my-custom-agent/v1/models")?.upstreamEndpoint).toBe("/models");
-  });
-
-  it("matches the bare /models path (no /v1, dsh-style base URL)", () => {
-    const entry = matchWhitelistEndpoint("/dsh/mem-example001/models");
-    expect(entry?.upstreamEndpoint).toBe("/models");
-  });
-
-  it("matches every supported agent-prefixed /models path (no /v1)", () => {
-    const agents = ["dsh", "codex", "codebuddy", "opencode"];
-    for (const agent of agents) {
-      const entry = matchWhitelistEndpoint(`/${agent}/mem-example001/models`);
-      expect(entry?.upstreamEndpoint, `agent=${agent}`).toBe("/models");
+      expect(
+        matchWhitelistEndpoint(`/${agent}/mem001/v1/embeddings`)?.upstreamEndpoint,
+        `agent=${agent}`,
+      ).toBe("/embeddings");
+      expect(
+        normalizeWhitelistRequestPath(`/${agent}/mem001/v1/embeddings`),
+        `agent=${agent}`,
+      ).toBe("/v1/embeddings");
     }
   });
 });
 
-describe("normalizeWhitelistRequestPath does not mis-strip reserved paths", () => {
-  it("keeps bare /v1/* endpoints intact", () => {
-    expect(normalizeWhitelistRequestPath("/v1/models")).toBe("/v1/models");
-    expect(normalizeWhitelistRequestPath("/v1/messages")).toBe("/v1/messages");
-    expect(normalizeWhitelistRequestPath("/v1/chat/completions")).toBe("/v1/chat/completions");
-    expect(normalizeWhitelistRequestPath("/v1/embeddings")).toBe("/v1/embeddings");
+describe("models endpoint is not in the whitelist (handled independently)", () => {
+  it("does not claim a whitelist entry for /v1/models or /models", () => {
+    expect(matchWhitelistEndpoint("/v1/models")).toBeNull();
+    expect(matchWhitelistEndpoint("/dsh/default/models")).toBeNull();
   });
 
-  it("keeps /responses codex bare endpoint intact", () => {
-    expect(normalizeWhitelistRequestPath("/responses")).toBe("/responses");
-  });
-
-  it("keeps non-agent first segments intact (skill-bridge / memory-bridge / proxy)", () => {
-    expect(normalizeWhitelistRequestPath("/skill-bridge/v3/skill/search")).toBe("/skill-bridge/v3/skill/search");
-    expect(normalizeWhitelistRequestPath("/memory-bridge/v3/memory/search")).toBe("/memory-bridge/v3/memory/search");
-  });
-
-  it("normalizes agent-prefixed models paths to /v1/models", () => {
-    expect(normalizeWhitelistRequestPath("/proxy/mem001/v1/models")).toBe("/v1/models");
-    expect(normalizeWhitelistRequestPath("/codebuddy/mem001/v1/models")).toBe("/v1/models");
-  });
-
-  it("normalizes dsh-style /models path (no /v1) to /models", () => {
-    expect(normalizeWhitelistRequestPath("/dsh/default/models")).toBe("/models");
-    expect(normalizeWhitelistRequestPath("/codex/mem001/models")).toBe("/models");
-    // 无 spaceId 且带 /v1 时，v1 会被视为 spaceId 段剥掉，最终仍映射到 /models
-    expect(normalizeWhitelistRequestPath("/opencode/v1/models")).toBe("/models");
-  });
-});
-
-describe("joinUrl /v1/models", () => {
-  it("maps /v1/models to upstream /models (not the /chat/completions fallback)", () => {
+  it("joinUrl still falls back to /chat/completions for models (unused by models handler)", () => {
     expect(joinUrl("https://upstream.example.com/v1", "/v1/models")).toBe(
-      "https://upstream.example.com/v1/models",
+      "https://upstream.example.com/v1/chat/completions",
     );
   });
+});
 
-  it("maps the prefixed forms to the same upstream /models endpoint", () => {
-    expect(joinUrl("https://upstream.example.com/v1", "/proxy/mem001/v1/models")).toBe(
-      "https://upstream.example.com/v1/models",
-    );
-    expect(joinUrl("https://upstream.example.com/v1", "/codebuddy/mem001/v1/models")).toBe(
-      "https://upstream.example.com/v1/models",
-    );
-    expect(joinUrl("https://upstream.example.com/v1", "/opencode/mem001/v1/models")).toBe(
-      "https://upstream.example.com/v1/models",
-    );
-  });
-
-  it("strips a trailing slash from the base", () => {
-    expect(joinUrl("https://upstream.example.com/v1/", "/v1/models")).toBe(
-      "https://upstream.example.com/v1/models",
-    );
-  });
-
-  it("maps dsh-style /models path (no /v1) to upstream /models", () => {
-    expect(joinUrl("https://upstream.example.com/v1", "/dsh/default/models")).toBe(
-      "https://upstream.example.com/v1/models",
-    );
-    expect(joinUrl("https://upstream.example.com/v1", "/codex/mem001/models")).toBe(
-      "https://upstream.example.com/v1/models",
+describe("joinUrl for non-models endpoints is unaffected", () => {
+  it("maps /v1/chat/completions correctly", () => {
+    expect(joinUrl("https://upstream.example.com/v1", "/v1/chat/completions")).toBe(
+      "https://upstream.example.com/v1/chat/completions",
     );
   });
 });

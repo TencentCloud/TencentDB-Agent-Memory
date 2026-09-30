@@ -13,7 +13,6 @@
  */
 
 import type { Context } from "hono";
-import { joinUrl } from "./guard-adapter.js";
 import { log } from "./report/log.js";
 import type { ProxyConfig } from "./types.js";
 
@@ -69,7 +68,25 @@ function filterResponseHeaders(source: Headers): Headers {
 }
 
 /**
+ * Resolve the upstream model-list URL from the configured upstream base.
+ *
+ * Agent-agnostic by design: the request path is ignored entirely — the model
+ * list always lives at `{upstream.url}/models`, regardless of any agent /
+ * spaceId segments in the inbound path. Exported for testing.
+ */
+export function resolveModelsUpstreamUrl(upstreamBase: string): string {
+  return `${upstreamBase.replace(/\/+$/, "")}/models`;
+}
+
+/**
  * Handle a `GET /v1/models` (and its prefixed variants) request.
+ *
+ * The model list is agent-agnostic: whatever agent / spaceId segments appear
+ * in the request path, the endpoint always maps to the upstream `/models`.
+ * We therefore build the upstream URL directly from `config.upstream.url`
+ * instead of going through `joinUrl` / `matchWhitelistEndpoint`, which rely on
+ * agent-prefix recognition. This keeps model discovery independent of the
+ * (ever-growing) set of supported agents.
  *
  * Never throws — returns a 502 on upstream failure.
  */
@@ -78,7 +95,7 @@ export async function handleModelsEndpoint(
   config: ProxyConfig,
 ): Promise<Response> {
   const path = c.req.path;
-  const upstreamUrl = joinUrl(config.upstream.url, path);
+  const upstreamUrl = resolveModelsUpstreamUrl(config.upstream.url);
 
   const headers = buildModelsUpstreamHeaders(c, config);
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;

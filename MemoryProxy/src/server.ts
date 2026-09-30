@@ -175,6 +175,7 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
   app.get("/v1/models", (c) => handleModelsEndpoint(c, config));
+  app.get("/models", (c) => handleModelsEndpoint(c, config));
 
   // Agent-prefixed routes with spaceId — 客户端标准配置格式：
   //   CC:  ANTHROPIC_BASE_URL=http://<proxy>:8096/claude-code/<spaceId>
@@ -353,6 +354,7 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/proxy/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/proxy/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
   app.get("/proxy/:spaceId/v1/models", (c) => handleModelsEndpoint(c, config));
+  app.get("/proxy/:spaceId/models", (c) => handleModelsEndpoint(c, config));
   app.post("/proxy/:spaceId/*", (c) => handleChatCompletions(c, config));
 
   // OpenAI-compatible chat completions (catch-all for any remaining POST paths)
