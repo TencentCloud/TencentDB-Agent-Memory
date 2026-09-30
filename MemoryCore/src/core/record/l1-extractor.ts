@@ -320,7 +320,7 @@ export async function extractL1Memories(params: {
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
         traceContext: { teamId, userId, agentId, sessionId },
-        ...(teamId || userId || agentId || sessionId || taskId ? { filter: { teamId, userId, agentId, sessionId, taskId } } : {}),
+        filter: { teamId, userId, agentId, sessionId: sessionId || undefined, sessionKey, taskId },
       });
       dedupLatencyMs = Date.now() - dedupStartMs;
 

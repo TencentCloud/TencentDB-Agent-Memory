@@ -224,6 +224,25 @@ Configuration templates:
 
 Every business request should identify its memory instance through `x-tdai-service-id`. New adapters should use the v3 data plane and always provide Team, Agent, and User isolation dimensions.
 
+### Source-aware L1 maintenance
+
+With extraction `enableDedup` enabled (the default), each new batch plans recall
+queries and reviews existing memories against their original L0 messages. This
+adds at most one planning call before the existing batch judgment. Planning
+failure falls back to mechanical hybrid recall; missing evidence keeps old facts.
+
+The planner emits at most five queries. `conflictRecallTopK` defaults to five
+(clamped to 1–10); the unified pool is capped at twenty records. Source lookup
+uses primary keys only: up to three messages per memory, eighty per batch, and
+1,000 characters per excerpt. SQLite, TCVDB and MongoDB support this path.
+
+Single-target updates retain the original ID. `metadata.as_of` records the
+source-derived date and `maintenance_history` retains previous revisions.
+Merges consolidate old retrieval rows only after the replacement and history
+are persisted; L0 remains unchanged. Reads and writes retain tenant, task and
+session isolation. This implements issue #1025 stages 0–2; its optional periodic
+sweep is not scheduled, and records outside bounded recall are not audited.
+
 ## Project layout
 
 ```text

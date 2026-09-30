@@ -523,6 +523,13 @@ export class MongoMemoryStore implements IMemoryStore {
     }));
   }
 
+  async queryL0ByIds(ids: string[], filter?: IsolationFilter): Promise<L0QueryRow[]> {
+    if (ids.length === 0) return [];
+    const coll = await this.coll(COLLECTIONS.L0);
+    const docs = await coll.find({ ...isolationToMatch(filter), _id: { $in: ids } } as never).toArray();
+    return docs.map((d) => docToL0QueryRow(d as unknown as L0Doc));
+  }
+
   async queryL0Paginated(filter: L0PaginatedFilter): Promise<L0PaginatedResult> {
     const coll = await this.coll(COLLECTIONS.L0);
     const q = this.l0CountQuery(filter);
