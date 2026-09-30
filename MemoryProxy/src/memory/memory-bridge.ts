@@ -138,9 +138,18 @@ function bindingToIdFields(
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
+  // ⚠️ 前缀列表必须覆盖 agent-adapters 的全部 agentSource;新增客户端时
+  // 同步更新此处与 skill-bridge.ts 的 loadSessionIdsL1（两处同构）。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [
+        sessionId,
+        `codebuddy:${sessionId}`,
+        `claude-code:${sessionId}`,
+        `codex:${sessionId}`,
+        `workbuddy:${sessionId}`,
+        `dsh:${sessionId}`,
+      ];
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {
