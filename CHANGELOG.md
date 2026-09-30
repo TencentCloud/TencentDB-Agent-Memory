@@ -9,6 +9,16 @@
 
 ---
 
+## [Unreleased]
+
+### Fix specified-team directory loading (#1285)
+
+- **What changed**: Load Agent/Task directories only for a valid preset Team; retain full-directory mismatch forms.
+- **Why**: Unrelated team timeouts should not prevent a valid preset session.
+- **Impact**: Directory narrowing only; transient-error retry behavior is unchanged.
+- **Verification**: Node 26.3.0: 18 Proxy tests pass; regression baseline 4 fail/5 pass. Existing 60 type diagnostics are unchanged.
+- **Files**: MemoryProxy/src/session/claude-code/init.ts and preset-directory tests.
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）
