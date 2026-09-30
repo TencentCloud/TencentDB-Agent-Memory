@@ -32,6 +32,52 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: npm install --ignore-scripts
 
+  # ── 2. Compatibility Matrix Testing ─────────────────────────
+  compat-test:
+    name: Compatibility Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        openclaw-version: [v2026.7.1-2, v2026.7.2-beta.7]
+        node-version: [22]
+        include:
+          - openclaw-version: v2026.7.1-2
+            node-version: 22
+            label: "OpenClaw Stable"
+          - openclaw-version: v2026.7.2-beta.7
+            node-version: 22
+            label: "OpenClaw Beta"
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      - name: Install OpenClaw ${{ matrix.openclaw-version }}
+        run: npm install -g openclaw@${{ matrix.openclaw-version }} --ignore-scripts
+
+      - name: Verify OpenClaw version
+        run: |
+          echo "Testing with OpenClaw ${{ matrix.openclaw-version }} (${{ matrix.label }})"
+          openclaw --version
+
+      - name: Build plugin
+        run: npm run build:plugin
+
+      - name: Run unit tests
+        run: npx vitest run --reporter=verbose
+        env:
+          OPENCLAW_VERSION: ${{ matrix.openclaw-version }}
+
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
     name: Pack
@@ -63,7 +109,7 @@ jobs:
           path: "*.tgz"
           retention-days: 7
 
-  # ── 5. Plugin manifest validation ──────────────────────────
+  # ── 3. Plugin manifest validation ──────────────────────────
   manifest:
     name: Manifest
     runs-on: ubuntu-latest
@@ -104,7 +150,7 @@ jobs:
             console.log('   openclawVersion:', oc.build.openclawVersion);
           "
 
-  # ── 6. Package size guard ──────────────────────────────────
+  # ── 4. Package size guard ──────────────────────────────────
   size:
     name: Size Guard
     needs: pack
