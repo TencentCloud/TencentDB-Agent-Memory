@@ -109,12 +109,29 @@ function rowToState(row: PersistedSessionRow): SessionInitState | null {
 
 /**
  * 从复合主键反解出 (spaceId, userId, agentSource, sessionId)。
- * 复合主键格式：`{spaceId}:{userId}:{agentSource}:{sessionId}`。
- * spaceId 段为 `_default` 表示老 caller 缺失 spaceId 上下文。
+ *
+ * 当前格式：`{spaceId}:{userId}:{agentSource}:{sessionId}`。
+ * P4 之前的持久化行使用 `{userId}:{agentSource}:{sessionId}`；升级后这些行仍
+ * 必须 hydrate 到 `_default` space。`session_key` 单独存着原始 sessionId，所以
+ * 先用它剥掉尾部可以兼容 sessionId 自身包含 `:` 的旧行，避免把它误判成四段
+ * 新格式。
  */
-function parseSessionRowId(
+export function parseSessionRowId(
   id: string,
+  sessionKey?: string,
 ): { spaceId: string; userId: string; agentSource: string; sessionId: string } | null {
+  if (sessionKey) {
+    const suffix = `:${sessionKey}`;
+    if (id.endsWith(suffix)) {
+      const legacyPrefix = id.slice(0, -suffix.length);
+      const legacyParts = legacyPrefix.split(":");
+      if (legacyParts.length === 2) {
+        const [userId, agentSource] = legacyParts;
+        return { spaceId: "_default", userId, agentSource, sessionId: sessionKey };
+      }
+    }
+  }
+
   const parts = id.split(":");
   if (parts.length < 4) return null;
   const [spaceId, userId, agentSource, ...rest] = parts;
@@ -260,7 +277,7 @@ class SqliteSessionRepo implements SessionRepo {
       for (const r of rows) {
         const s = rowToState(r);
         if (!s) continue;
-        const parsed = parseSessionRowId(r.session_id);
+        const parsed = parseSessionRowId(r.session_id, r.session_key);
         if (!parsed) continue;
         out.push({ ...parsed, state: s });
       }
