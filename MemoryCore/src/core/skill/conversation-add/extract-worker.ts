@@ -34,6 +34,7 @@ import type {
 import { runInRootContext } from "../../report/otel-context.js";
 import { obsLogger } from "../../report/obs-logger.js";
 import { trace } from "../../report/trace.js";
+import { summarizeCandidateOutcomes } from "./candidate-outcome.js";
 
 /**
  * 把 candidates 落到业务侧（例如调 SkillCore.create/patch，或者直接写 SkillStore）。
@@ -398,14 +399,20 @@ export class SkillConversationExtractWorker {
                 : undefined,
             });
             candidates = result.candidates ?? [];
+            const outcome = summarizeCandidateOutcomes(candidates);
             obsLogger.info("skill.worker.extractor", {
               worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
               dur_ms: Date.now() - t0Ext,
-              candidates: candidates.length,
+              candidates: outcome.total,
+              created: outcome.created,
+              updated: outcome.updated,
+              non_create: outcome.nonCreate,
+              actions: outcome.byAction,
               msg_count: conversation.length,
             });
             this.logger.info(
-              `[skill-conv-worker] extract done task_id=${head.task_id} candidates=${candidates.length}`,
+              `[skill-conv-worker] extract done task_id=${head.task_id} ` +
+                `candidates=${outcome.total} created=${outcome.created} updated=${outcome.updated}`,
             );
             const t0Sink = Date.now();
             await this.opts.sink.applyCandidates({
@@ -416,7 +423,11 @@ export class SkillConversationExtractWorker {
             obsLogger.info("skill.worker.apply_candidates", {
               worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
               dur_ms: Date.now() - t0Sink,
-              candidates: candidates.length,
+              candidates: outcome.total,
+              created: outcome.created,
+              updated: outcome.updated,
+              non_create: outcome.nonCreate,
+              actions: outcome.byAction,
             });
           }
         } catch (err) {
@@ -508,6 +519,7 @@ export class SkillConversationExtractWorker {
           worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
           outcome: isGhost ? "ghost" : "ok",
           candidates: candidates?.length ?? 0,
+          ...(candidates ? summarizeCandidateOutcomes(candidates) : {}),
           dur_ms: Date.now() - t0Task,
         });
 
