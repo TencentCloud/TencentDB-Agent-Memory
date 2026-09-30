@@ -1,0 +1,11 @@
+import { readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const directory = join(root, "src/core/feedback");
+const suites = readdirSync(directory).filter(name => name.endsWith(".test.ts")).sort().map(name => join(directory, name));
+if (suites.length === 0) throw new Error("No feedback test suites found");
+const result = spawnSync(process.execPath, ["--import", "tsx", "--test", ...suites], { cwd: root, stdio: "inherit", timeout: 120_000 });
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);

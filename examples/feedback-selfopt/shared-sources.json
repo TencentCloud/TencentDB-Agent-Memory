@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/bugkeep/TencentDB-Agent-Memory",
+  "upstream_license": "MIT",
+  "license_path": "../../LICENSE",
+  "source_root": "research/memory_selfopt",
+  "copy_policy": "Four source files copied byte-for-byte; hermes_memory_host.py is an explicitly documented one-line platform derivative.",
+  "modules": {
+    "receipt_bound_feedback.py": "38a2de8a5ab555a6662977b117ea36bd6a000b3cf0ddddc8a5bc892d1b86d240",
+    "trajectory_intent.py": "fee30f45da71014ece6e0e12a8b35245b303c140252650e5ea039eafb6590755",
+    "segmented_trajectory_intent.py": "4c2daaf46ab7796876bc00917b3daf1a8f4afbde2c1d1ed215833c36a53d111e",
+    "hermes_memory_host.py": "8783017967220316a3aec3b43d63d6b5dbc0625f5a65b2664e423c47ca80d3fa",
+    "trajectory_memory_host.py": "790f05623fa5a1a4136eb2ed07ea7cb30ca5dad287154bdf7b08e0b8816dcea0"
+  },
+  "python_minimum": "3.11",
+  "runtime_dependencies": "Python standard library only",
+  "source_revision_at_copy": "f4706e62ef572e3299cfa0b0068f64b18350ff4a",
+  "upstream_base_modules": {
+    "receipt_bound_feedback.py": "38a2de8a5ab555a6662977b117ea36bd6a000b3cf0ddddc8a5bc892d1b86d240",
+    "trajectory_intent.py": "fee30f45da71014ece6e0e12a8b35245b303c140252650e5ea039eafb6590755",
+    "segmented_trajectory_intent.py": "4c2daaf46ab7796876bc00917b3daf1a8f4afbde2c1d1ed215833c36a53d111e",
+    "hermes_memory_host.py": "8a23ac4bdfe9034d393c146e02186eaafdaa512ecab493803b698249c0373296",
+    "trajectory_memory_host.py": "790f05623fa5a1a4136eb2ed07ea7cb30ca5dad287154bdf7b08e0b8816dcea0"
+  },
+  "platform_derivations": [
+    {
+      "file": "hermes_memory_host.py",
+      "base_sha256": "8a23ac4bdfe9034d393c146e02186eaafdaa512ecab493803b698249c0373296",
+      "derived_sha256": "8783017967220316a3aec3b43d63d6b5dbc0625f5a65b2664e423c47ca80d3fa",
+      "patch_file": "shared-platform.patch",
+      "patch_sha256": "a0871c6678ec89ce7ed94feef0074fe3ef57bd337fd906a10aa3b30896e835c7",
+      "change": "Append only SystemRoot to existing child environment allowlist when present in the trusted parent.",
+      "reason": "Windows Node native CSPRNG initialization failed before JavaScript without SystemRoot, including outside sandbox. No new credentials, provider variables, fallback, model calls, protocol or memory authority."
+    }
+  ]
+}

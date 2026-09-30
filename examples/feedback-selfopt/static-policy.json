@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "static_memory_rules",
+  "generation": 1,
+  "rules": [
+    {
+      "rule_id": "R1",
+      "text": "Treat explicitly lasting user conventions as durable memory intent while preserving source and target authorization guards."
+    }
+  ]
+}

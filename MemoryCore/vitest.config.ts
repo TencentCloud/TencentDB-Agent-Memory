@@ -5,7 +5,7 @@ export default defineConfig({
     environment: "node",
     pool: "forks",
     include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
-    exclude: ["dist/**", "node_modules/**", "**/*.e2e.test.ts"],
+    exclude: ["dist/**", "node_modules/**", "**/*.e2e.test.ts", "src/core/feedback/**/*.test.ts"],
     testTimeout: 120_000,
     hookTimeout: 120_000,
     clearMocks: true,
