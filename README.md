@@ -536,6 +536,8 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/platform-adapter-guide.md`](./docs/platform-adapter-guide.md) | Complete adapter guide: core interfaces, steps, examples, best practices, and pitfalls |
+| [`docs/platform-adapter-comparison.md`](./docs/platform-adapter-comparison.md) | Platform adapter boundary, platform differences, and the bridge contract |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
