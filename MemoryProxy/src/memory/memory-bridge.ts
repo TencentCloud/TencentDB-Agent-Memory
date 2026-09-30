@@ -57,6 +57,8 @@ interface SessionIdFields {
   team_id: string;
   agent_id: string;
   session_id: string;
+  /** Client identity from the matched session key or persisted binding. */
+  agent_source: string;
   task_id?: string;
   user_key?: string;
   /**
@@ -104,6 +106,7 @@ function toIdFields(
     team_id: s.team_id,
     agent_id: s.agent_id,
     session_id: s.session_id,
+    agent_source: compositeKey.indexOf(":") > 0 ? agentSourceFromSessionKey(compositeKey) : "claude-code",
     task_id: s.task_id,
     user_key: s.user_key,
     space_id: s.space_id,
@@ -124,6 +127,7 @@ function bindingToIdFields(
     team_id: binding.teamId,
     agent_id: binding.agentId,
     session_id: sessionId,
+    agent_source: agentSource,
     task_id: binding.taskId,
     user_key: binding.userKey,
     space_id: spaceId,

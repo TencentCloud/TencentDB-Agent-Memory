@@ -105,6 +105,8 @@ export interface SessionInitResult {
   teamName?: string | null;
   /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
   bypassed?: boolean;
+  /** Carries a session-reset request through registration or bypass. */
+  resetFlow?: boolean;
   /**
    * bypass 触发原因（仅 `bypassed === true` 时有意义）。codexHandler 用它决定
    * 首次 gate 命中是否要返 "Plan 模式提示" 而非直接透传。

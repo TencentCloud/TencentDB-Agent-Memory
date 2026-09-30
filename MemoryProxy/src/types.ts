@@ -875,6 +875,7 @@ export interface RawYamlConfig {
   };
   sessionInit?: {
     enabled?: boolean;
+    skipAssetConfirm?: boolean;
     maxRetries?: number;
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
@@ -948,6 +949,8 @@ export interface RequestLogEntry {
   modelId: string;
   keyId: string; // SHA-256(apiKey).slice(0, 8)
   sessionKey?: string; // conversationId || keyId — per-conversation isolation key
+  /** Correlates the request with its tracing span. */
+  traceId?: string;
   upstreamUrl: string;
   stream: boolean;
   temperature?: number;
