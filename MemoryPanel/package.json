@@ -17,6 +17,7 @@
     "test:panel:e2e": "tests/panel/e2e-panel-meta.sh",
     "test:knowledge:e2e": "tsx tests/knowledge/e2e-knowledge-chain.ts",
     "test:knowledge:e2e:full": "E2E_MODE=full tsx tests/knowledge/e2e-knowledge-chain.ts",
+    "import:agent-memory": "tsx scripts/import-agent-memory/cli.ts",
     "mock-kernel": "tsx scripts/mock-memory-server.ts"
   },
   "dependencies": {
