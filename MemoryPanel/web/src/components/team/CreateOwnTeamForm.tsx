@@ -29,8 +29,7 @@ export function CreateOwnTeamForm({ onCancel, onCreated }: {
       let teamId = createdId;
       if (!teamId) {
         if (uncertain) {
-          invalidateBackendCache();
-          await useBackendStore.getState().refreshTeams();
+          await useBackendStore.getState().refreshTeams({ preserveActiveTeam: true });
           setError(t('teamSwitcher.createUnconfirmed'));
           return;
         } else {
@@ -52,13 +51,13 @@ export function CreateOwnTeamForm({ onCancel, onCreated }: {
         setUncertain(false);
       }
 
-      invalidateBackendCache();
-      await useBackendStore.getState().refreshTeams();
+      await useBackendStore.getState().refreshTeams({ preserveActiveTeam: true });
       if (!useBackendStore.getState().teams.some((team) => team.team_id === teamId)) {
         setError(t('teamSwitcher.refreshFailed'));
         return;
       }
       useBackendStore.getState().setActiveTeamId(teamId);
+      invalidateBackendCache();
       onCreated();
     } catch (failure) {
       setError(getErrorMessage(failure));
