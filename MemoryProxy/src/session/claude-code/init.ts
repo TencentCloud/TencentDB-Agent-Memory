@@ -116,43 +116,67 @@ async function fetchTeamsAndAgents(
 ): Promise<{ teams: TeamOption[] }> {
   const teamsRaw = await metadataClient.listTeams(userId);
   const teamResults = await Promise.all(
-    teamsRaw.map(async (t) => {
-      const [agentsRaw, tasksRaw] = await Promise.all([
-        // Agents are scoped to (team, owner) — each user only sees the agents
-        // they created within the team. Tasks remain team-wide (unchanged).
-        metadataClient.listAgents(t.team_id, userId),
-        metadataClient.listTasks(t.team_id),
-      ]);
-      const tasks: TaskInTeam[] = tasksRaw.map((tk) => ({
-        task_id: tk.task_id,
-        task_name: tk.title,
-      }));
-      // 源头注入：defaultTaskId 配置了就作为"暂时跳过"虚拟条目排在真
-      // task 之前。下游 form/extractor/init 一个字节都不用改 —— 分页 total
-      // 和 auto-select 级联唯一真相都是 tasks.length。用户选中虚拟条目 →
-      // completeRegistration 用 defaultTaskId 上报 → getTask 会 404 但
-      // Promise.allSettled 兜掉，taskDetail=null → 不注入 [Task]，正好是
-      // "跳过 task 但保留 agent 关联"的语义。
-      if (config.defaultTaskId) {
-        tasks.unshift({
-          task_id: config.defaultTaskId,
-          task_name: DEFAULT_TASK_LABEL,
-          isDefault: true,
-        });
-      }
-      return {
-        team_id: t.team_id,
-        team_name: t.name,
-        agents: agentsRaw.map((a) => ({
-          agent_id: a.agent_id,
-          agent_name: a.name,
-          description: a.description ?? undefined,
-        })),
-        tasks,
-      };
-    }),
+    teamsRaw.map((t) => fetchTeamAndAgents(t, userId, config, metadataClient)),
   );
   return { teams: teamResults };
+}
+
+type TeamDirectoryEntry = { team_id: string; name: string };
+
+/** Load the agent/task directory for exactly one visible Team. */
+async function fetchTeamAndAgents(
+  team: TeamDirectoryEntry,
+  userId: string,
+  config: SessionInitConfig,
+  metadataClient: MetadataClient,
+): Promise<TeamOption> {
+  const [agentsRaw, tasksRaw] = await Promise.all([
+    // Agents are scoped to (team, owner) — each user only sees the agents
+    // they created within the team. Tasks remain team-wide (unchanged).
+    metadataClient.listAgents(team.team_id, userId),
+    metadataClient.listTasks(team.team_id),
+  ]);
+  const tasks: TaskInTeam[] = tasksRaw.map((tk) => ({
+    task_id: tk.task_id,
+    task_name: tk.title,
+  }));
+  // 源头注入：defaultTaskId 配置了就作为"暂时跳过"虚拟条目排在真
+  // task 之前。下游 form/extractor/init 一个字节都不用改 —— 分页 total
+  // 和 auto-select 级联唯一真相都是 tasks.length。
+  if (config.defaultTaskId) {
+    tasks.unshift({
+      task_id: config.defaultTaskId,
+      task_name: DEFAULT_TASK_LABEL,
+      isDefault: true,
+    });
+  }
+  return {
+    team_id: team.team_id,
+    team_name: team.name,
+    agents: agentsRaw.map((a) => ({
+      agent_id: a.agent_id,
+      agent_name: a.name,
+      description: a.description ?? undefined,
+    })),
+    tasks,
+  };
+}
+
+/**
+ * Validate the requested Team's visibility, then load only that Team's
+ * Agent/Task directory. Header values are still validated by
+ * resolvePresetIdentity after this helper returns.
+ */
+async function fetchPresetTeamAndAgents(
+  userId: string,
+  presetIdentity: PresetIdentity,
+  config: SessionInitConfig,
+  metadataClient: MetadataClient,
+): Promise<TeamOption[]> {
+  const teamsRaw = await metadataClient.listTeams(userId);
+  const target = teamsRaw.find((team) => team.team_id === presetIdentity.teamId);
+  if (!target) return [];
+  return [await fetchTeamAndAgents(target, userId, config, metadataClient)];
 }
 
 function findTeamIdForAgent(teams: TeamOption[], agentId: string): string | undefined {
@@ -718,54 +742,35 @@ async function handleSessionInitInner(
       return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
     }
 
+    const headerAutoSelect = config.headerAutoSelect;
+    const hasPresetIdentity = Boolean(
+      presetIdentity && headerAutoSelect?.enabled,
+    );
     let teams: TeamOption[];
     try {
-      const cfg = await fetchTeamsAndAgents(userId, config, metadataClient);
-      teams = cfg.teams;
+      teams = hasPresetIdentity
+        ? await fetchPresetTeamAndAgents(
+            userId,
+            presetIdentity!,
+            config,
+            metadataClient,
+          )
+        : (await fetchTeamsAndAgents(userId, config, metadataClient)).teams;
     } catch (err) {
       console.warn(
-        `[session-init:cc] session=${compositeKey} kernel unavailable for user=${userId}, bypassing: ${err instanceof Error ? err.message : String(err)}`,
+        `[session-init:cc] session=${compositeKey} kernel unavailable for user=${userId}, passing through; next request will retry: ${err instanceof Error ? err.message : String(err)}`,
       );
-      await store.set(compositeKey, {
-        status: "initialized",
-        keyId: sessionKey,
-        startedAt: Date.now(),
-        attemptCount: 0,
-        userId,
-        sessionInfo: null,
-        agentDetail: null,
-        taskDetail: null,
-        bypassed: true,
-      } as SessionInitState);
-      return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
-    }
-
-    const totalAgents = teams.reduce((acc, t) => acc + t.agents.length, 0);
-    if (totalAgents === 0) {
-      console.warn(
-        `[session-init:cc] session=${compositeKey} user=${userId} has no active agents, bypassing`,
-      );
-      await store.set(compositeKey, {
-        status: "initialized",
-        keyId: sessionKey,
-        startedAt: Date.now(),
-        attemptCount: 0,
-        userId,
-        cachedTeams: teams,
-        sessionInfo: null,
-        agentDetail: null,
-        taskDetail: null,
-        bypassed: true,
-      } as SessionInitState);
-      return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
+      // A metadata timeout is transient, not a user decision to bypass memory.
+      // Leave the session uninitialized so the next request can retry naturally.
+      return { intercepted: false, resetFlow: state?.resetFlow ?? false };
     }
 
     // ── Header-driven pre-selection: skip forms when identity is provided ──
-    if (presetIdentity && config.headerAutoSelect?.enabled) {
-      const pr = resolvePresetIdentity(teams, presetIdentity);
+    if (hasPresetIdentity) {
+      let pr = resolvePresetIdentity(teams, presetIdentity!);
 
       if (pr.hadMismatch) {
-        if (config.headerAutoSelect.onMismatch === "bypass") {
+        if (headerAutoSelect!.onMismatch === "bypass") {
           console.warn(`[session-init:cc] session=${compositeKey} preset mismatch → bypass`);
           await store.set(compositeKey, {
             status: "initialized",
@@ -780,6 +785,21 @@ async function handleSessionInitInner(
             bypassed: true,
           } as SessionInitState);
           return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
+        }
+
+        // A mismatched preset falls back to the original interactive flow.
+        // Reload the full directory so the form still contains every visible
+        // Team, Agent, and Task instead of only the requested Team.
+        try {
+          teams = (await fetchTeamsAndAgents(userId, config, metadataClient)).teams;
+          pr = resolvePresetIdentity(teams, presetIdentity!);
+        } catch (err) {
+          console.warn(
+            `[session-init:cc] session=${compositeKey} kernel unavailable for preset fallback, passing through; next request will retry: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          // Keep the preset mismatch recoverable as well. The next request
+          // will repeat the normal metadata lookup and form fallback.
+          return { intercepted: false, resetFlow: state?.resetFlow ?? false };
         }
         console.warn(`[session-init:cc] session=${compositeKey} preset mismatch → fallback to form`);
         // fall through to the normal asset_confirm flow below
@@ -836,6 +856,26 @@ async function handleSessionInitInner(
         }
         // preset team not in cached list → fall through to normal asset_confirm flow
       }
+    }
+
+    const totalAgents = teams.reduce((acc, t) => acc + t.agents.length, 0);
+    if (totalAgents === 0) {
+      console.warn(
+        `[session-init:cc] session=${compositeKey} user=${userId} has no active agents, bypassing`,
+      );
+      await store.set(compositeKey, {
+        status: "initialized",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teams,
+        sessionInfo: null,
+        agentDetail: null,
+        taskDetail: null,
+        bypassed: true,
+      } as SessionInitState);
+      return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
     }
 
     // ── skipAssetConfirm: 跳过 asset_confirm 对话框，视为用户选了"是" ─────────
