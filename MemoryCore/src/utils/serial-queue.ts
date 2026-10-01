@@ -95,6 +95,16 @@ export class SerialQueue {
       entry.reject(new Error("Queue cleared"));
     }
     this.queue = [];
+    // Discarding the pending work can leave an already-returned onIdle()
+    // promise pending forever: the queue is now empty, but its waiters are
+    // only notified from the task-completion path, which never runs for work
+    // that was thrown away. When a task is still running its existing
+    // `finally` notifies them instead, so only notify when nothing is in flight.
+    if (!this.running) {
+      const resolvers = this.idleResolvers;
+      this.idleResolvers = [];
+      for (const resolve of resolvers) resolve();
+    }
   }
 
   private drain(): void {
