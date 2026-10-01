@@ -2014,7 +2014,9 @@ export class MetadataService {
     patch: Partial<AssetEntity>,
     ctx: V3AuthContext,
   ): Promise<AssetEntity> {
-    await this.assertCallerIsAssetOwner(ctx, assetId);
+    // owner 或 team admin 均可修改（#1578）：自动登记的资产（如 skill）owner_user_id
+    // 取自 agent owner，与 API 调用者常不一致；放通 team admin 才能调整 visibility。
+    await this.assertCallerIsAssetOwnerOrTeamAdmin(ctx, assetId);
     return this.updateAsset(assetId, patch);
   }
 

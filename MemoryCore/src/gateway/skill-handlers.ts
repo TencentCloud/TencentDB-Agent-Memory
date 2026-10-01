@@ -308,6 +308,9 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
     //   - 抛出异常 → create 请求整体返回错误。避免出现"skill 落库但 asset 缺失"
     //     的静默不一致状态（用户会疑惑"我创建成功了但看不到"）。
     //   - 与 v2-router.ts handleConversationAdd 里 ensureChatMemoryAsset 的做法一致。
+    //   - 返回错误前必须补偿删除刚落库的 skill（与 SkillVersioning.createNewSkill 里
+    //     onSkillCreated 失败的反向删对称）。否则会留下"active 幽灵行"：客户端看到
+    //     5xx 重试同名 create → SKILL_NAME_DUPLICATE，skill/list 却又能列出它（#1578）。
     if (deps.getMetadataService && r.team_id && r.owner_agent_id) {
       try {
         const metaSvc = await deps.getMetadataService(auth.serviceId);
@@ -323,6 +326,19 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
             (err instanceof Error ? err.message : String(err)),
         );
         obsLogger.error("skill.handleCreate.done", { req_id: requestId, dur_ms: Date.now() - t0, skill_id: r.skill_id, phase: "ensureSkillAsset" }, err instanceof Error ? err : undefined);
+        // 补偿：物理删除刚创建的 skill（含 storage）。不传 agent_id，跳过 owner 校验 ——
+        // 这是本请求自己刚写入的行。回滚失败只记日志，onSkillAccessed 读时自愈兜底。
+        // 同时清掉 ensureSkillAsset 可能已写入一半的 asset 行（createAsset 成功但 bind 失败）。
+        try {
+          await pre.core.delete({ skill_id: r.skill_id, team_id: r.team_id });
+          const metaSvc = await deps.getMetadataService(auth.serviceId);
+          await metaSvc.deleteAssets([r.skill_id]);
+        } catch (rollbackErr) {
+          deps.logger.error(
+            `${TAG} rollback delete failed for ${r.skill_id} after ensureSkillAsset failure: ` +
+              (rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)),
+          );
+        }
         return mapCoreError(err, requestId, deps, { skill_id: r.skill_id });
       }
     }
