@@ -14,6 +14,12 @@ export interface HttpClientOptions {
   baseUrl: string;
   /** Optional bearer token for auth. */
   token?: string;
+  /**
+   * Tenant identity sent as the `x-tdai-service-id` header. Every `/v3`
+   * endpoint requires it, so the MCP server must forward the service id it is
+   * configured with — see `src/mcp/server.ts`.
+   */
+  serviceId?: string;
 }
 
 export interface ApiResponse {
@@ -36,6 +42,11 @@ export async function callApi(
   const url = `${opts.baseUrl.replace(/\/$/, "")}/v3${endpoint}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+  // The tenant header is mandatory on every /v3 route (routes/code-graph.ts,
+  // routes/wiki.ts) and cannot be supplied in the body — the tool schemas are
+  // strict and reject unknown fields. Omitting it makes every tools/call fail
+  // with "x-tdai-service-id header is required" (issue #766).
+  if (opts.serviceId) headers["x-tdai-service-id"] = opts.serviceId;
 
   log.debug(`POST ${url}`);
 

@@ -5,7 +5,12 @@
  * the server forwards the request to the Hono HTTP API via callApi().
  *
  * Usage:
- *   KNOWLEDGE_API_URL=http://localhost:8421 node dist/mcp/server.js
+ *   KNOWLEDGE_API_URL=http://localhost:8421 KNOWLEDGE_SERVICE_ID=default \
+ *     node dist/mcp/server.js
+ *
+ * `KNOWLEDGE_SERVICE_ID` is required: it is forwarded as the
+ * `x-tdai-service-id` header that every `/v3` endpoint demands, and the tool
+ * schemas do not accept a service id in the request body.
  *
  * The agent connects via stdio; the server translates tool calls to HTTP
  * requests against the knowledge service.
@@ -93,10 +98,21 @@ export function createMcpServer(httpOpts: HttpClientOptions): Server {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const baseUrl = process.env.KNOWLEDGE_API_URL || "http://localhost:8421";
   const token = process.env.KNOWLEDGE_API_TOKEN;
+  const serviceId = process.env.KNOWLEDGE_SERVICE_ID;
 
   log.info(`MCP server starting, API URL: ${baseUrl}`);
 
-  const server = createMcpServer({ baseUrl, token });
+  // Every /v3 endpoint takes the tenant from this header and rejects the
+  // request without it, so an unset service id turns every tools/call into a
+  // 400 that reads like a client-side config problem. Warn up front.
+  if (!serviceId) {
+    log.warn(
+      "KNOWLEDGE_SERVICE_ID is not set — the x-tdai-service-id header will not be sent " +
+      "and every tool call will fail with \"x-tdai-service-id header is required\"",
+    );
+  }
+
+  const server = createMcpServer({ baseUrl, token, serviceId });
   const transport = new StdioServerTransport();
 
   server.connect(transport).then(() => {
