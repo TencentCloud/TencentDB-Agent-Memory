@@ -604,6 +604,15 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   init(providerInfo?: EmbeddingProviderInfo): MaybePromise<StoreInitResult>;
   isDegraded(): boolean;
   getCapabilities(): StoreCapabilities;
+  /**
+   * Whether `close()` has been called. A closed store keeps answering every
+   * method (they are fault-tolerant and return empty/false rather than
+   * throwing), so nothing downstream can tell a closed store from an empty
+   * one — `false` here is the only signal that it must be re-created.
+   *
+   * Optional: backends that cannot detect it simply omit it.
+   */
+  isClosed?(): boolean;
   close(): void;
 
   // ── L1 Write ─────────────────────────────────────────────

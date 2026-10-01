@@ -3712,6 +3712,15 @@ export class VectorStore implements IMemoryStore {
   }
 
   /**
+   * Whether `close()` has been called. Exposed so that caches (notably
+   * `pipeline-factory.ts:initStores`) can drop a torn-down store instead of
+   * serving one whose statements are already finalized.
+   */
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  /**
    * Close the database connection.
    * Should be called on shutdown. Idempotent — safe to call multiple times.
    */
