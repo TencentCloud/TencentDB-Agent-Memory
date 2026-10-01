@@ -76,6 +76,7 @@
     "!src/**/*.test.ts",
     "!src/**/*.spec.ts",
     "!src/**/__tests__/",
+    "!hermes-plugin/**/__tests__/",
     "!hermes-plugin/**/__pycache__/**",
     "!hermes-plugin/**/*.pyc"
   ],
