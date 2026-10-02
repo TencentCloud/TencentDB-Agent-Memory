@@ -14,6 +14,7 @@ import type { Db } from "./db/client.js";
 import { SqliteKnowledgeStore, type IKnowledgeStore } from "./store/index.js";
 import { WikiService, type WikiWorker } from "./store/index.js";
 import { CodeGraphService, type CodeGraphWorker } from "./store/index.js";
+import { createCodeGraphWorker } from "./code-graph-worker.js";
 import { BuildQueue } from "./store/index.js";
 import {
   createLlmBindingStore,
@@ -116,59 +117,16 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   const fetcherRegistry = new SourceFetcherRegistry();
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
-  const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
-
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
-    const fetcher = fetcherRegistry.resolve(repoUrl);
-
-    const isExistingRepo = existsSync(join(dir, ".git"));
-    let didIncrementalSync = false;
-    let version: string | null = null;
-
-    if (isExistingRepo) {
-      try {
-        setInternalStatus("fetching");
-        const res = await fetcher.sync(repoUrl, branch, dir);
-        version = res.version;
-
-        setInternalStatus("indexing");
-        let instance = instancePool.get(codeGraphId);
-        if (!instance) {
-          instance = await openIndex(dir);
-        }
-        await syncIndex(instance);
-        instancePool.set(codeGraphId, instance);
-        didIncrementalSync = true;
-      } catch (err) {
-        log.warn(
-          `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
-    }
-
-    if (!didIncrementalSync) {
-      mkdirSync(dir, { recursive: true });
-      setInternalStatus("cloning");
-      const res = await fetcher.fetch(repoUrl, branch, dir);
-      version = res.version;
-
-      setInternalStatus("indexing");
-      const instance = await indexProject(dir);
-      instancePool.set(codeGraphId, instance);
-    }
-
-    // commit hash comes from the fetcher's FetchResult (unified after clone / sync)
-    const commitHash = version ?? undefined;
-
-    const instance = instancePool.get(codeGraphId);
-    const rawStats = instance ? getStats(instance) : undefined;
-    const stats = rawStats
-      ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
-      : undefined;
-    return { commitHash, stats };
-  };
+  // (implementation in code-graph-worker.ts — unit-testable; see #1516)
+  const realCodeWorker: CodeGraphWorker = createCodeGraphWorker({
+    resolveFetcher: (repoUrl) => fetcherRegistry.resolve(repoUrl),
+    instancePool,
+    openIndex,
+    syncIndex,
+    indexProject,
+    getStats,
+    log,
+  });
 
   // ── Real wiki worker: ingest via wiki engine ──
   const realWikiWorker: WikiWorker = async (ctx) => {
