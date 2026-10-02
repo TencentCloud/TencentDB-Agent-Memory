@@ -22,6 +22,7 @@
  */
 
 import type { MemoryPromptMode } from "../../config.js";
+import { SCENE_BLOCK_CHAR_BUDGET } from "../scene/scene-format.js";
 
 export interface SceneExtractionPromptParams {
   memoriesJson: string;
@@ -188,7 +189,7 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 
 ### 📄 场景文件内容（必须输出）
 
-请你参考这个模板输出 .md 文件的内容或基于已有md进行更新，每个md控制在1500字符内。不要把模板本身放在 Markdown 代码块中，只需直接输出要写入文件的原始文本。
+请你参考这个模板输出 .md 文件的内容或基于已有md进行更新，每个md控制在${SCENE_BLOCK_CHAR_BUDGET}字符内。不要把模板本身放在 Markdown 代码块中，只需直接输出要写入文件的原始文本。
 
 > 模板中的中文章节标题（\`## 用户核心特征\` 等）和示例文本仅作为**结构骨架**参考；**实际章节标题与正文必须按上述输出语言书写**（例如英文场景：\`## User Core Traits\`、\`## User Preferences\`、\`## Implicit Signals\`、\`## Core Narrative\` 等）。
 
@@ -438,7 +439,7 @@ function buildWorkSceneSystemPrompt(maxScenes: number): string {
 3. 每个场景文件应围绕一个清晰的工作方法体系，例如某个 SOP、判断逻辑、禁忌集合或可复用经验。
 4. 不写个人画像，不推断个人性格、偏好或私人状态。
 5. 允许记录工作角色、owner、reviewer、decision maker，但只能服务于说明方法的适用条件。
-6. 每个 md 控制在 1500 字符内，优先保留可复用、可执行的方法论信息。
+6. 每个 md 控制在 ${SCENE_BLOCK_CHAR_BUDGET} 字符内，优先保留可复用、可执行的方法论信息。
 
 ---
 
