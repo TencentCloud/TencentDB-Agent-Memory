@@ -872,7 +872,12 @@ class MemoryTencentdbProvider(MemoryProvider):
                     user_id=self._user_id,
                 )
                 self._record_success()
-                items = result.get("data", {}).get("items", [])
+                # Gateway returns {data:{messages:[...]}} for L0 conversation search;
+                # older envelopes used items. Accept both (#1380).
+                # Gateway returns {data:{messages:[...]}} for L0 conversation search (#1380);
+                # older envelopes used items. Accept both.
+                data = result.get("data", {}) or {}
+                items = data.get("messages") or data.get("items") or []
                 if not items:
                     return "No conversations found for this query."
                 lines = []
