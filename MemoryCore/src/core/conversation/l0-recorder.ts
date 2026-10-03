@@ -64,6 +64,10 @@ export interface L0MessageRecord {
 export interface L0ConversationRecord {
   sessionKey: string;
   sessionId: string;
+  teamId?: string;
+  taskId?: string;
+  userId?: string;
+  agentId?: string;
   recordedAt: string; // ISO timestamp
   messageCount: number;
   messages: ConversationMessage[];
@@ -388,7 +392,9 @@ export async function readConversationRecords(
           // Flat format: { sessionKey, sessionId, recordedAt, id, role, content, timestamp }
           // Wrap into L0ConversationRecord for uniform downstream consumption
           const msg: ConversationMessage = {
-            id: (typeof parsed.id === "string" && parsed.id) ? parsed.id : generateMessageId(),
+            // Older flat records may lack an id. Their identity must stay
+            // stable across reads for the L1 replay guard to work.
+            id: (typeof parsed.id === "string" && parsed.id) ? parsed.id : `legacy_${fileName}_${i + 1}`,
             role: parsed.role as "user" | "assistant",
             content: parsed.content as string,
             timestamp: typeof parsed.timestamp === "number" ? parsed.timestamp : Date.now(),
@@ -396,6 +402,10 @@ export async function readConversationRecords(
           records.push({
             sessionKey: (parsed.sessionKey as string) || sessionKey,
             sessionId: (parsed.sessionId as string) || DEFAULT_ISOLATION_ID,
+            teamId: typeof parsed.teamId === "string" ? parsed.teamId : undefined,
+            taskId: typeof parsed.taskId === "string" ? parsed.taskId : undefined,
+            userId: typeof parsed.userId === "string" ? parsed.userId : undefined,
+            agentId: typeof parsed.agentId === "string" ? parsed.agentId : undefined,
             recordedAt: (parsed.recordedAt as string) || new Date().toISOString(),
             messageCount: 1,
             messages: [msg],
@@ -465,6 +475,10 @@ export async function readConversationMessages(
  */
 export interface SessionIdMessageGroup {
   sessionId: string;
+  teamId?: string;
+  taskId?: string;
+  userId?: string;
+  agentId?: string;
   messages: Array<ConversationMessage & { recordedAtMs: number }>;
 }
 
@@ -490,18 +504,26 @@ export async function readConversationMessagesGroupedBySessionId(
   afterRecordedAtMs?: number,
   logger?: Logger,
   limit?: number,
+  storage?: StorageAdapter,
 ): Promise<SessionIdMessageGroup[]> {
-  const records = await readConversationRecords(sessionKey, baseDir, logger);
+  const records = await readConversationRecords(sessionKey, baseDir, logger, storage);
 
   // Collect all messages with their sessionId, filtering by recorded_at cursor
-  const allMessages: Array<{ sessionId: string; msg: ConversationMessage & { recordedAtMs: number } }> = [];
+  const allMessages: Array<Omit<SessionIdMessageGroup, "messages"> & { msg: ConversationMessage & { recordedAtMs: number } }> = [];
 
   for (const record of records) {
     const sid = record.sessionId || "";
     const recMs = Date.parse(record.recordedAt) || 0;
     if (afterRecordedAtMs && recMs <= afterRecordedAtMs) continue;
     for (const msg of record.messages) {
-      allMessages.push({ sessionId: sid, msg: { ...msg, recordedAtMs: recMs } });
+      allMessages.push({
+        sessionId: sid,
+        teamId: record.teamId,
+        taskId: record.taskId,
+        userId: record.userId,
+        agentId: record.agentId,
+        msg: { ...msg, recordedAtMs: recMs },
+      });
     }
   }
 
@@ -518,22 +540,25 @@ export async function readConversationMessagesGroupedBySessionId(
     selected = allMessages.slice(-limit);
   }
 
-  // Re-group by sessionId
-  const groupMap = new Map<string, Array<ConversationMessage & { recordedAtMs: number }>>();
-  for (const { sessionId, msg } of selected) {
-    let group = groupMap.get(sessionId);
+  // Preserve the ownership tuple recorded by capture / conversation/add.
+  // A degraded read must not merge distinct owners or replace them with the
+  // compatibility bucket when later L1 records are written.
+  const groupMap = new Map<string, SessionIdMessageGroup>();
+  for (const { msg, ...identity } of selected) {
+    const key = JSON.stringify([identity.teamId, identity.userId, identity.agentId, identity.sessionId, identity.taskId]);
+    let group = groupMap.get(key);
     if (!group) {
-      group = [];
-      groupMap.set(sessionId, group);
+      group = { ...identity, messages: [] };
+      groupMap.set(key, group);
     }
-    group.push(msg);
+    group.messages.push(msg);
   }
 
   // Convert to array, sorted by earliest message timestamp in each group
   const groups: SessionIdMessageGroup[] = [];
-  for (const [sessionId, messages] of groupMap) {
-    if (messages.length > 0) {
-      groups.push({ sessionId, messages });
+  for (const group of groupMap.values()) {
+    if (group.messages.length > 0) {
+      groups.push(group);
     }
   }
   groups.sort((a, b) => a.messages[0].timestamp - b.messages[0].timestamp);

@@ -67,38 +67,34 @@ export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分与�
 ---
 
 ### 任务三：输出格式规范（JSON）
-返回且仅返回一个合法的 JSON 数组。数组的每一项是一个情境，包含该情境的消息范围和抽取到的记忆：
+返回且仅返回一个合法的 JSON 对象，顶层只包含 scenes 数组。scenes 的每一项是一个情境，包含该情境的消息范围和抽取到的记忆：
 
-[
-  {
-    "scene_name": "当前生成或继承的情境名称",
-    "message_ids": ["属于该情境的消息ID列表"],
-    "memories": [
-      {
-        "content": "完整、独立的记忆陈述（按对应类型的句式要求）",
-        "type": "persona|episodic|instruction",
-        "priority": 80,
-        "source_message_ids": ["消息ID_1", "消息ID_2"],
-        "metadata": {}
-      }
-    ]
-  }
-]
+{
+  "scenes": [
+    {
+      "scene_name": "当前生成或继承的情境名称",
+      "message_ids": ["属于该情境的消息ID列表"],
+      "memories": [
+        {
+          "content": "完整、独立的记忆陈述（按对应类型的句式要求）",
+          "type": "persona|episodic|instruction",
+          "priority": 80,
+          "source_message_ids": ["消息ID_1", "消息ID_2"],
+          "metadata": {}
+        }
+      ]
+    }
+  ]
+}
 
 metadata 字段说明：
-- episodic 类型：如能确定活动时间，填入 {"activity_start_time": "ISO8601", "activity_end_time": "ISO8601"}
-- 其他类型或无法确定时间：输出空对象 {}
+- 只能使用以下字段（值为字符串，未使用或不确定的字段填 null）：activity_start_time、activity_end_time、owner、deadline、status、scope、method_type、artifact_type、artifact_ref、work_object。
+- episodic 类型如能确定活动时间，填入 activity_start_time / activity_end_time（ISO 8601）。
 
 如果整段对话无有意义的记忆，也要输出情境分割结果，memories 为空数组：
-[
-  {
-    "scene_name": "情境名称",
-    "message_ids": ["id1", "id2"],
-    "memories": []
-  }
-]
+{"scenes": [{"scene_name": "情境名称", "message_ids": ["id1", "id2"], "memories": []}]}
 
-请严格按上述 JSON 数组格式输出，不要输出任何额外的 Markdown 代码块修饰符（如 \`\`\`json）或解释文本。`;
+请严格按上述 JSON 对象格式输出，不要输出任何额外的 Markdown 代码块修饰符（如 \`\`\`json）或解释文本。`;
 
 export type MemoryPromptMode = "chat" | "code";
 
@@ -333,43 +329,36 @@ metadata 建议：
 
 ### 任务三：输出格式规范（JSON）
 
-返回且仅返回一个合法的 JSON 数组。数组的每一项是一个工作情境，包含该情境的消息范围和抽取到的工作记忆：
+返回且仅返回一个合法的 JSON 对象，顶层只包含 scenes 数组。scenes 的每一项是一个工作情境，包含该情境的消息范围和抽取到的工作记忆：
 
-[
-  {
-    "scene_name": "当前生成或继承的工作情境名称",
-    "message_ids": ["属于该情境的消息ID列表"],
-    "memories": [
-      {
-        "content": "完整、独立、适合团队共享的工作记忆陈述",
-        "type": "work_fact|work_task|work_method|work_artifact",
-        "priority": 80,
-        "source_message_ids": ["消息ID_1", "消息ID_2"],
-        "metadata": {}
-      }
-    ]
-  }
-]
+{
+  "scenes": [
+    {
+      "scene_name": "当前生成或继承的工作情境名称",
+      "message_ids": ["属于该情境的消息ID列表"],
+      "memories": [
+        {
+          "content": "完整、独立、适合团队共享的工作记忆陈述",
+          "type": "work_fact|work_task|work_method|work_artifact",
+          "priority": 80,
+          "source_message_ids": ["消息ID_1", "消息ID_2"],
+          "metadata": {}
+        }
+      ]
+    }
+  ]
+}
 
 metadata 字段说明：
-- 所有类型都可以输出空对象 {}。
-- work_task 可补充 owner、deadline、status。
-- work_method 可补充 scope、method_type。
-- work_artifact 可补充 artifact_type、artifact_ref。
-- work_fact 可补充 work_object、status、activity_start_time、activity_end_time。
+- 只能使用以下字段（值为字符串，未使用或不确定的字段填 null）：activity_start_time、activity_end_time、owner、deadline、status、scope、method_type、artifact_type、artifact_ref、work_object。
+- work_task 可补充 owner、deadline、status；work_method 可补充 scope、method_type；work_artifact 可补充 artifact_type、artifact_ref；work_fact 可补充 work_object、status、activity_start_time、activity_end_time。
 - metadata 不要包含无关个人信息。
 
 如果整段新消息无有意义的团队共享工作记忆，也要输出情境分割结果，memories 为空数组：
 
-[
-  {
-    "scene_name": "工作情境名称",
-    "message_ids": ["id1", "id2"],
-    "memories": []
-  }
-]
+{"scenes": [{"scene_name": "工作情境名称", "message_ids": ["id1", "id2"], "memories": []}]}
 
-请严格按上述 JSON 数组格式输出，不要输出任何额外的 Markdown 代码块修饰符（如 \`\`\`json）或解释文本。`;
+请严格按上述 JSON 对象格式输出，不要输出任何额外的 Markdown 代码块修饰符（如 \`\`\`json）或解释文本。`;
 
 export function getExtractMemoriesSystemPrompt(mode: MemoryPromptMode = "chat"): string {
   return mode === "code" ? EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT : EXTRACT_MEMORIES_SYSTEM_PROMPT;

@@ -18,7 +18,7 @@ import { batchDedup } from "./l1-dedup.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
-import { sanitizeJsonForParse, shouldExtractL1 } from "../../utils/sanitize.js";
+import { sanitizeJsonForParse, shouldExtractL1, findClosedThinkSpans, indexOfOutsideThinkSpan, lastIndexOfOutsideThinkSpan } from "../../utils/sanitize.js";
 import type { IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import { report } from "../report/reporter.js";
@@ -30,6 +30,12 @@ import { StorageAdapter } from "../storage/adapter.js";
 import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
 import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
 import { LocalStorageBackend } from "../storage/local-backend.js";
+import {
+  L1_EXTRACTION_JSON_SCHEMA,
+  L1_EXTRACTION_SCHEMA_NAME,
+  validateL1ExtractionOutput,
+  type SceneSegment,
+} from "../schema/l1-extraction.js";
 import {
   buildGenerationLogIdentity,
   buildGenerationProvenance,
@@ -48,22 +54,20 @@ const TAG = "[memory-tdai][l1-extractor]";
 // Types
 // ============================
 
-/** A scene segment with its extracted memories (LLM output) */
-interface SceneSegment {
-  scene_name: string;
-  message_ids: string[];
-  memories: Array<{
-    content: string;
-    type: string;
-    priority: number;
-    source_message_ids: string[];
-    metadata: Record<string, unknown>;
-  }>;
-}
+// SceneSegment is now generated from the canonical zod schema
+// (../schema/l1-extraction.ts) — one source of truth for the LLM output
+// contract, the wire JSON Schema, and the TypeScript type.
 
 export interface L1ExtractionResult {
   /** Whether extraction succeeded */
   success: boolean;
+  /**
+   * Canonical failure reason — populated iff `success === false`.
+   * Consumed by createL1Runner to convert hard failures into a throw so the
+   * checkpoint cursor stays put and the pipeline's existing retry/dead-letter
+   * machinery takes over (issue #1210: no silent L0 batch loss).
+   */
+  errorReason?: L1EmptyReason;
   /** Number of memories extracted */
   extractedCount: number;
   /** Number of memories actually stored (after dedup) */
@@ -213,7 +217,7 @@ export async function extractL1Memories(params: {
     logger?.warn?.(
       `${TAG} l1-empty reason=llm_error sessionKey=${sessionKey} msg=${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`,
     );
-    return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
+    return { success: false, errorReason: "llm_error", extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
   }
 
   // Flatten all memories across scenes
@@ -241,6 +245,24 @@ export async function extractL1Memories(params: {
 
   logger?.debug?.(`${TAG} Total extracted memories: ${allExtracted.length} across ${scenes.length} scene(s)`);
 
+  // ── Post-repair canonical validation (reviews F4) ─────────────────────
+  // Final structural gate on whatever survived parsing / repair /
+  // normalization — on EVERY outcome, empty ones included. A "legitimate
+  // empty" must itself be structurally valid (e.g. a scene with an empty
+  // scene_name fails the domain schema and is an invalid output, not an
+  // empty success). Only then may the checkpoint advance.
+  if (!validateL1ExtractionOutput(scenes)) {
+    logger?.warn?.(`${TAG} Canonical validation failed on normalized scenes — treating as invalid output`);
+    return {
+      success: false,
+      errorReason: "canonical_validation_failed",
+      extractedCount: 0,
+      storedCount: 0,
+      records: [],
+      sceneNames,
+    };
+  }
+
   if (allExtracted.length === 0) {
     // ── Diagnostic warn line: one greppable reason so ops can see WHY ──
     // Emitted only on the 0-count path (never on success), so log volume stays
@@ -251,11 +273,20 @@ export async function extractL1Memories(params: {
     //   - `earlyEmptyReason` from parseExtractionResult (parse-side signal)
     //   - `normalized_all_dropped` fallback: parse succeeded with scenes, but
     //     the type-normalization loop above rejected every entry.
-    const finalReason: L1EmptyReason | "normalized_all_dropped" =
+    const finalReason: L1EmptyReason =
       earlyEmptyReason ?? (scenes.length > 0 ? "normalized_all_dropped" : "empty_scenes");
     logger?.warn?.(
       `${TAG} l1-empty reason=${finalReason} sessionKey=${sessionKey} scenes=${scenes.length} inputMsgs=${messages.length}`,
     );
+
+    // ── Failure semantics (issue #1210) ──
+    // Only a *legit* empty outcome ("the model correctly said there is
+    // nothing to extract") stays a success. Everything else — unusable model
+    // output (no_json / parse_fail / not_array) or memories that were
+    // generated but entirely dropped by normalization — is a hard failure:
+    // success=false + errorReason, so createL1Runner throws instead of
+    // advancing the checkpoint cursor (no silent L0 batch loss).
+    const isHardFailure = finalReason !== "empty_scenes";
 
     // ── 评测指标：L1 提取率（提取为空的情况） ──
     if (metricInstanceId) {
@@ -271,7 +302,8 @@ export async function extractL1Memories(params: {
       }
     }
     return {
-      success: true,
+      success: !isHardFailure,
+      ...(isHardFailure ? { errorReason: finalReason } : {}),
       extractedCount: 0,
       storedCount: 0,
       records: [],
@@ -395,7 +427,7 @@ export async function extractL1Memories(params: {
     logger,
     writeLog: () => generationLogStore.write(generationLog, generationIdentity.key),
     writeRefs: options.vectorStore?.upsertMemoryGenerationRefs && storedRecords.length > 0
-      ? () => options.vectorStore!.upsertMemoryGenerationRefs!(storedRecords.map((record) => ({
+      ? async () => await options.vectorStore!.upsertMemoryGenerationRefs!(storedRecords.map((record) => ({
           generation_ref_id: buildMemoryGenerationRefId("l1", record.id),
           layer: "l1" as const,
           memory_id: record.id,
@@ -510,12 +542,21 @@ async function callLlmExtraction(params: {
   const traceParams = buildTraceParams("memory.l1-extract", traceContext);
 
   if (llmRunner) {
-    // Use the host-neutral LLMRunner interface
+    // Use the host-neutral LLMRunner interface. structuredOutput is a
+    // best-effort capability: StandaloneLLMRunner constrains generation
+    // (json_schema → json_object → legacy text, degrading only on explicit
+    // provider capability errors); runners that don't know the field (OpenClaw
+    // host, mocks) ignore it and run() still resolves with model text.
     result = await llmRunner.run({
       prompt: userPrompt,
       systemPrompt,
       taskId: "l1-extraction",
       timeoutMs: 180_000,
+      structuredOutput: {
+        schema: L1_EXTRACTION_JSON_SCHEMA,
+        schemaName: L1_EXTRACTION_SCHEMA_NAME,
+        validate: validateL1ExtractionOutput,
+      },
       ...traceParams,
     });
   } else {
@@ -543,13 +584,24 @@ async function callLlmExtraction(params: {
  * Coarse classification for a "why did we get zero memories" diagnostic line.
  * Emitted by `extractL1Memories` when the final memory count is 0, so ops can
  * distinguish "LLM returned garbage" from "LLM legitimately said nothing".
+ *
+ * All values except `empty_scenes` are HARD failures: `extractL1Memories`
+ * returns success=false + errorReason, `createL1Runner` throws, the
+ * checkpoint cursor stays put, and the pipeline's existing retry /
+ * dead-letter machinery takes over (issue #1210).
  */
 export type L1EmptyReason =
-  | "llm_error"      // LLM call raised (thrown by callLlmExtraction)
-  | "no_json"        // /\[[\s\S]*\]/ did not match in raw content
-  | "parse_fail"     // JSON.parse threw on the extracted substring
-  | "not_array"      // parse succeeded but result is not an array
-  | "empty_scenes";  // parse succeeded, array had 0 scenes OR all scenes had 0 memories
+  | "llm_error"              // LLM call raised (thrown by callLlmExtraction)
+  | "no_json"                // /\[[\s\S]*\]/ did not match in raw content
+  | "parse_fail"             // JSON.parse threw on the extracted substring
+  | "not_array"              // parse succeeded but result is not an array
+  | "empty_scenes"           // legit empty: 0 scenes OR all scenes had 0 memories (success)
+  | "normalized_all_dropped" // parse OK, memories emitted, but every entry failed type normalization
+  | "invalid_memories_dropped" // memories emitted but every one structurally unusable (missing/empty/non-string content) — review F2
+  | "invalid_scene_structure"  // scene entries malformed (non-object items; memories/message_ids present but not arrays) — review F4
+  | "invalid_output_shape"     // whole response is a JSON object without a scenes array (wrong wrapper, e.g. {"decisions":[]}) — review F4
+  | "unclosed_reasoning"     // <think> opened before the JSON payload but never closed — review F7
+  | "canonical_validation_failed"; // normalized scenes still fail the canonical domain schema — review F4
 
 interface ParseExtractionOutcome {
   scenes: SceneSegment[];
@@ -566,60 +618,92 @@ interface ParseExtractionOutcome {
  *     (unchanged from prior behavior).
  *   - The returned `emptyReason` is the CANONICAL machine-readable label —
  *     `extractL1Memories` uses it to emit a single-line `l1-empty` warn when
- *     the final count is 0. See L1EmptyReason for the closed set.
+ *     the final count is 0, and to decide success=false for hard failures.
+ *     See L1EmptyReason for the closed set.
+ *
+ * Exported for unit tests (parser layers are tested directly).
  */
-function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOutcome {
-  try {
-    // ── Strip inline reasoning wrappers (A₂-style thinking models) ───────
-    // A₁ models (minimax-m2.7 / deepseek-v4-pro / o1 / o3 / Claude thinking)
-    // put reasoning in a separate `reasoning_content` field, so `content`
-    // itself is nothing but pure JSON — the strip below is a no-op.
-    //
-    // A₂ models (minimax-m3 / ep-2cocgw76 / GLM-4-thinking / qwq-32b / some
-    // vLLM-hosted DeepSeek-R1) inline reasoning as `<think>…</think>` inside
-    // the main `content`. Their think prose frequently contains stray `[`
-    // (message-id dumps, priority tags, and sometimes a full JSON template
-    // pre-written for "structure preview"), which fatally derails the greedy
-    // `/\[[\s\S]*\]/` array-match below by anchoring it inside the think
-    // section. So we peel `<think>` blocks BEFORE the array-match fires.
-    //
-    // Safeguards:
-    //   • non-greedy `*?` + explicit `</think>` requirement — a truncated
-    //     (max_tokens cap) think tag falls through as-is instead of eating
-    //     the rest of the response.
-    //   • `g` flag — rare multi-segment thinking is fully stripped.
-    // See docs/design/2026-09-03-l1-thinking-models-compatibility.md.
-    //
-    // NOTE: strip result goes to a new local (`stripped`) — we preserve the
-    // original `raw` so the NO_JSON / PARSE_FAIL dumps below still show
-    // exactly what came off the wire. If a future A₂ variant emits a shape
-    // this regex misses, ops need the pristine raw to diagnose it.
-    const stripped = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+// ============================
+// Payload location helpers live in ../../utils/sanitize.js
+// (findClosedThinkSpans / indexOfOutsideThinkSpan) — shared with the dedup
+// parser so both tolerate reasoning wrappers identically (review R4).
+// ============================
 
-    // Strip markdown code block wrappers if present
-    let cleaned = stripped.trim();
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+export function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOutcome {
+  try {
+    // ── Locate the JSON payload WITHOUT rewriting the text (reviews R4/N1/F7) ──
+    // The old approach stripped `<think>…</think>` from the whole response
+    // before parsing, which corrupted legitimate memory content that happens
+    // to contain a literal think pair (e.g. "<think>reasoning=false</think>"
+    // inside a config-snippet memory). Instead: compute the closed-think
+    // spans, find the payload boundaries among text OUTSIDE those spans, and
+    // slice the ORIGINAL raw text — content literals survive verbatim.
+    const spans = findClosedThinkSpans(raw);
+    const arrayStart = indexOfOutsideThinkSpan("[", raw, spans);
+    const objectStart = indexOfOutsideThinkSpan("{", raw, spans);
+    const unclosedThinkIdx = indexOfOutsideThinkSpan("<think>", raw, spans);
+    const payloadStart =
+      arrayStart === -1 ? objectStart : objectStart === -1 ? arrayStart : Math.min(arrayStart, objectStart);
+
+    // ── Unclosed-think guard (reviews F7 + N1) ─────────────────────────────
+    // An unmatched `<think>` positioned BEFORE the JSON payload means the
+    // model was still reasoning when output was cut: everything after it is
+    // reasoning-in-progress and must never be salvaged for L1. Position
+    // matters: a literal "<think>" INSIDE the payload (memory content) is
+    // legal text and must not be rejected (regression N1).
+    if (unclosedThinkIdx !== -1 && (payloadStart === -1 || unclosedThinkIdx < payloadStart)) {
+      logger?.warn?.(
+        `${TAG} Unclosed <think> wrapper before JSON payload — treating response as reasoning-in-progress`,
+      );
+      return { scenes: [], emptyReason: "unclosed_reasoning" };
     }
 
-    // Try to extract JSON array
-    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
+    // ── Top-level shape adjudication (review F4) ──────────────────────────
+    // The contract (prompts + wire schema) is {"scenes": [...]}, with the
+    // historical bare array still accepted. If the response's payload is a
+    // JSON object, it must carry a `scenes` array — a wrong wrapper (e.g.
+    // {"decisions": []}) is an invalid output, not an empty one.
+    if (objectStart !== -1 && (arrayStart === -1 || objectStart < arrayStart)) {
+      const objectEnd = lastIndexOfOutsideThinkSpan("}", raw, spans);
+      if (objectEnd > objectStart) {
+        const candidate = raw.slice(objectStart, objectEnd + 1);
+        try {
+          const whole = JSON.parse(sanitizeJsonForParse(candidate)) as unknown;
+          if (whole && typeof whole === "object" && !Array.isArray(whole)) {
+            const scenesField = (whole as Record<string, unknown>).scenes;
+            if (!Array.isArray(scenesField)) {
+              logger?.warn?.(`${TAG} Top-level JSON object without scenes array — invalid output shape`);
+              return { scenes: [], emptyReason: "invalid_output_shape" };
+            }
+            return buildSceneOutcome(scenesField, logger);
+          }
+        } catch {
+          // not a clean whole-response object — tolerate via the array path
+        }
+      }
+    }
+
+    if (arrayStart === -1) {
       logger?.warn?.(`${TAG} No JSON array found in extraction response`);
-      // [l1-debug] NO_JSON — dump the full ORIGINAL raw (not the stripped
-      // version), otherwise a broken <think> variant would leave no trace.
+      // [l1-debug] NO_JSON — dump the full ORIGINAL raw so a novel think/model
+      // variant leaves a trace for ops.
       const rawPreview = raw.slice(0, 2048);
       logger?.warn?.(
-        `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, strippedLen=${stripped.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
+        `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, closedThinkSpans=${spans.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
       return { scenes: [], emptyReason: "no_json" };
     }
+    const arrayEnd = lastIndexOfOutsideThinkSpan("]", raw, spans);
+    if (arrayEnd <= arrayStart) {
+      return { scenes: [], emptyReason: "no_json" };
+    }
+    const payload = raw.slice(arrayStart, arrayEnd + 1);
 
     // Sanitize control characters inside JSON string literals that LLM may produce.
     // Some weaker OpenAI-compatible models occasionally emit bare identifiers for
     // numeric fields (e.g. `"priority": sheet`). Repair only known safe fields and
     // retry once so one bad scalar does not drop the whole extraction result.
-    const sanitized = sanitizeJsonForParse(arrayMatch[0]);
+    const sanitized = sanitizeJsonForParse(payload);
     let parsed: unknown[];
     try {
       parsed = JSON.parse(sanitized) as unknown[];
@@ -635,33 +719,7 @@ function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOut
       return { scenes: [], emptyReason: "not_array" };
     }
 
-    const scenes: SceneSegment[] = [];
-    for (const item of parsed) {
-      if (!item || typeof item !== "object") continue;
-      const s = item as Record<string, unknown>;
-
-      scenes.push({
-        scene_name: typeof s.scene_name === "string" ? s.scene_name : "未知情境",
-        message_ids: Array.isArray(s.message_ids) ? s.message_ids.map(String) : [],
-        memories: Array.isArray(s.memories)
-          ? (s.memories as Array<Record<string, unknown>>)
-              .filter((m) => m && typeof m === "object" && typeof m.content === "string" && (m.content as string).length > 0)
-              .map((m) => ({
-                content: String(m.content),
-                type: String(m.type ?? "episodic"),
-                priority: typeof m.priority === "number" ? m.priority : 50,
-                source_message_ids: Array.isArray(m.source_message_ids) ? m.source_message_ids.map(String) : [],
-                metadata: (m.metadata && typeof m.metadata === "object" ? m.metadata : {}) as Record<string, unknown>,
-              }))
-          : [],
-      });
-    }
-
-    const totalMemories = scenes.reduce((acc, sc) => acc + sc.memories.length, 0);
-    return {
-      scenes,
-      emptyReason: totalMemories === 0 ? "empty_scenes" : undefined,
-    };
+    return buildSceneOutcome(parsed, logger);
   } catch (err) {
     logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
     logger?.warn?.(
@@ -669,6 +727,100 @@ function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOut
     );
     return { scenes: [], emptyReason: "parse_fail" };
   }
+}
+
+/**
+ * Build the normalized SceneSegment outcome from a parsed scenes array
+ * (wrapper or bare). Enforces the scene-level structural contract (review
+ * F4): structural errors are preserved as hard failures instead of being
+ * silently erased by defaulting.
+ */
+function buildSceneOutcome(items: unknown[], logger?: Logger): ParseExtractionOutcome {
+  const scenes: SceneSegment[] = [];
+  let offeredMemories = 0;
+  let invalidSceneItems = 0;
+  for (const item of items) {
+    // Review R1: an ARRAY is not a scene object (typeof [] === "object" would
+    // let it slip through) — count it as an invalid scene item, never salvage
+    // it into a defaulted "未知情境" pseudo-scene.
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      invalidSceneItems++;
+      continue;
+    }
+    const s = item as Record<string, unknown>;
+
+    // Review F4: fields present with the wrong shape are structural errors —
+    // defaulting them to empty arrays would convert invalid output into a
+    // bogus "legitimate empty" success.
+    if ((s.memories !== undefined && !Array.isArray(s.memories)) ||
+        (s.message_ids !== undefined && !Array.isArray(s.message_ids))) {
+      logger?.warn?.(
+        `${TAG} Scene "${typeof s.scene_name === "string" ? s.scene_name.slice(0, 40) : "(unnamed)"}" has non-array ${!Array.isArray(s.memories) ? "memories" : "message_ids"} — invalid scene structure`,
+      );
+      return { scenes: [], emptyReason: "invalid_scene_structure" };
+    }
+
+    // Review R1: an entry with NO scene structure at all (neither a non-empty
+    // scene_name nor a memories array) must not be defaulted into a legit
+    // empty scene — `{"scenes":[{}]}` / `{"scenes":[[]]}` are invalid output.
+    const hasSceneName = typeof s.scene_name === "string" && s.scene_name.length > 0;
+    const hasMemoriesField = Array.isArray(s.memories);
+    if (!hasSceneName && !hasMemoriesField) {
+      invalidSceneItems++;
+      continue;
+    }
+
+    scenes.push({
+      scene_name: typeof s.scene_name === "string" ? s.scene_name : "未知情境",
+      message_ids: Array.isArray(s.message_ids) ? s.message_ids.map(String) : [],
+      memories: Array.isArray(s.memories)
+        ? (s.memories as Array<Record<string, unknown>>)
+            .filter((m) => {
+              // Count every emitted candidate BEFORE the structural filter —
+              // review F2: "model offered memories but all were structurally
+              // unusable" must be classifiable as an invalid output.
+              offeredMemories++;
+              return m && typeof m === "object" && typeof m.content === "string" && (m.content as string).length > 0;
+            })
+            .map((m) => ({
+              content: String(m.content),
+              type: String(m.type ?? "episodic"),
+              priority: typeof m.priority === "number" ? m.priority : 50,
+              source_message_ids: Array.isArray(m.source_message_ids) ? m.source_message_ids.map(String) : [],
+              // Wire decode (review F1): the structured wire represents
+              // unused metadata fields as required+nullable — strip null
+              // entries so stored metadata carries only real values.
+              metadata: decodeMetadata(m.metadata),
+            }))
+        : [],
+    });
+  }
+
+  // Review F4: the array had entries but none of them were scene objects.
+  if (scenes.length === 0 && invalidSceneItems > 0) {
+    logger?.warn?.(`${TAG} All ${invalidSceneItems} scene entries were non-object values`);
+    return { scenes: [], emptyReason: "invalid_scene_structure" };
+  }
+
+  const totalMemories = scenes.reduce((acc, sc) => acc + sc.memories.length, 0);
+  // Review F2: candidates were offered but every one was structurally
+  // unusable — an invalid output, NOT a legitimate empty extraction.
+  if (totalMemories === 0 && offeredMemories > 0) {
+    logger?.warn?.(`${TAG} All ${offeredMemories} offered memories failed structural filtering`);
+    return { scenes: [], emptyReason: "invalid_memories_dropped" };
+  }
+  return {
+    scenes,
+    emptyReason: totalMemories === 0 ? "empty_scenes" : undefined,
+  };
+}
+
+/** Wire→domain metadata decode: keep object values, drop null/undefined entries. */
+function decodeMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== null && v !== undefined),
+  );
 }
 
 function repairExtractionJson(json: string): string {
