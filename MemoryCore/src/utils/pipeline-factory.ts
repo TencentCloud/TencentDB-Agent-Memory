@@ -399,6 +399,16 @@ async function _doInitStores(
     logger.warn(
       `${TAG} Store init failed; vector/FTS recall and dedup conflict detection will be unavailable: ${err instanceof Error ? err.message : String(err)}`,
     );
+    try {
+      vectorStore?.close();
+    } catch (closeErr) {
+      logger.warn(`${TAG} Failed to close uninitialized store: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`);
+    }
+    try {
+      await embeddingService?.close?.();
+    } catch (closeErr) {
+      logger.warn(`${TAG} Failed to close uninitialized embedding service: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`);
+    }
     vectorStore = undefined;
     embeddingService = undefined;
   }

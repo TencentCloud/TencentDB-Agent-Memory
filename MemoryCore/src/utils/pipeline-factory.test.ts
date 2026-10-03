@@ -14,7 +14,11 @@
  * initStores() must not cache failed bundles, and must re-initialize when the
  * cached bundle's store has been closed.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VectorStore } from "../core/store/sqlite/memory-store.js";
 import type { IMemoryStore } from "../core/store/types.js";
 
 const createStoreBundleMock = vi.fn();
@@ -69,6 +73,22 @@ function healthyBundle(store: IMemoryStore) {
 }
 
 describe("initStores cache lifecycle", () => {
+  const sqliteStores: VectorStore[] = [];
+  const sqliteDirs: string[] = [];
+
+  function openSqliteStore() {
+    const dir = mkdtempSync(path.join(tmpdir(), "tdai-init-failure-"));
+    const store = new VectorStore(path.join(dir, "test.db"), 0);
+    sqliteDirs.push(dir);
+    sqliteStores.push(store);
+    return store;
+  }
+
+  afterEach(() => {
+    for (const store of sqliteStores.splice(0)) store.close();
+    for (const dir of sqliteDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     createStoreBundleMock.mockReset();
     resetStores();
@@ -85,6 +105,7 @@ describe("initStores cache lifecycle", () => {
     expect(a.vectorStore).toBe(store);
     expect(b.vectorStore).toBe(store);
     expect(createStoreBundleMock).toHaveBeenCalledTimes(1);
+    expect(store.close).not.toHaveBeenCalled();
   });
 
   it("does not cache a failed init bundle — a later call re-initializes", async () => {
@@ -132,5 +153,80 @@ describe("initStores cache lifecycle", () => {
 
     expect(b.vectorStore).toBe(second);
     expect(createStoreBundleMock).toHaveBeenCalledTimes(2);
+    expect(first.close).not.toHaveBeenCalled();
+  });
+
+  it.each(["reject", "degraded"] as const)("closes resources on repeated %s initialization before retrying", async (failure) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const store = openSqliteStore();
+      const close = vi.spyOn(store, "close");
+      if (failure === "reject") {
+        vi.spyOn(store, "init").mockImplementationOnce(() => { throw new Error("SQLITE_BUSY"); });
+      } else {
+        vi.spyOn(store, "isDegraded").mockReturnValue(true);
+      }
+      const embedding = {
+        getProviderInfo: () => ({ provider: "test", model: "test" }),
+        close: vi.fn(async () => {}),
+      };
+      createStoreBundleMock.mockReturnValueOnce({ ...healthyBundle(store), embedding });
+
+      const failed = await initStores(cfg, "/data/retry-cleanup", logger);
+
+      expect(failed.vectorStore).toBeUndefined();
+      expect(failed.embeddingService).toBeUndefined();
+      expect(store.isClosed()).toBe(true);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(embedding.close).toHaveBeenCalledTimes(1);
+    }
+
+    const healthy = openSqliteStore();
+    createStoreBundleMock.mockReturnValueOnce(healthyBundle(healthy));
+    const recovered = await initStores(cfg, "/data/retry-cleanup", logger);
+    expect(recovered.vectorStore).toBe(healthy);
+    expect(healthy.isClosed()).toBe(false);
+    expect((await initStores(cfg, "/data/retry-cleanup", logger)).vectorStore).toBe(healthy);
+    expect(createStoreBundleMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("still evicts the failed bundle when both cleanup hooks fail", async () => {
+    const store = makeStore();
+    vi.mocked(store.init).mockRejectedValueOnce(new Error("init failed"));
+    vi.mocked(store.close).mockImplementationOnce(() => { throw new Error("close failed"); });
+    const embedding = {
+      getProviderInfo: () => ({ provider: "test", model: "test" }),
+      close: vi.fn(async () => { throw new Error("embedding close failed"); }),
+    };
+    createStoreBundleMock.mockReturnValueOnce({ ...healthyBundle(store), embedding });
+
+    const failed = await initStores(cfg, "/data/cleanup-errors", logger);
+    expect(failed.vectorStore).toBeUndefined();
+    expect(failed.embeddingService).toBeUndefined();
+    expect(store.close).toHaveBeenCalledTimes(1);
+    expect(embedding.close).toHaveBeenCalledTimes(1);
+    const healthy = makeStore();
+    createStoreBundleMock.mockReturnValueOnce(healthyBundle(healthy));
+    expect((await initStores(cfg, "/data/cleanup-errors", logger)).vectorStore).toBe(healthy);
+  });
+
+  it("awaits asynchronous embedding cleanup before delivering the failed bundle", async () => {
+    const store = makeStore();
+    vi.mocked(store.init).mockRejectedValueOnce(new Error("init failed"));
+    let finishCleanup!: () => void;
+    const embedding = {
+      getProviderInfo: () => ({ provider: "test", model: "test" }),
+      close: vi.fn(() => new Promise<void>((resolve) => { finishCleanup = resolve; })),
+    };
+    createStoreBundleMock.mockReturnValueOnce({ ...healthyBundle(store), embedding });
+    let settled = false;
+    const pending = initStores(cfg, "/data/async-cleanup", logger).then((bundle) => {
+      settled = true;
+      return bundle;
+    });
+
+    await vi.waitFor(() => expect(embedding.close).toHaveBeenCalledTimes(1));
+    expect(settled).toBe(false);
+    finishCleanup();
+    expect((await pending).vectorStore).toBeUndefined();
   });
 });
