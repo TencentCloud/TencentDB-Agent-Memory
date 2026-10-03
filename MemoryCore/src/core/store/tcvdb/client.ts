@@ -8,6 +8,7 @@
  */
 
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import type { Dispatcher } from "undici";
 import type { StoreLogger } from "../types.js";
 
@@ -22,26 +23,27 @@ import type { StoreLogger } from "../types.js";
 //
 // To avoid that side effect for every consumer of this module (including
 // standalone SQLite mode, where the TCVDB client is imported eagerly but never
-// used), undici is loaded lazily on first request, and the legacy dispatcher
-// slot is snapshotted before the import and restored afterwards.
+// used), load undici lazily on first request. Synchronous CommonJS loading keeps
+// the snapshot and restore in one turn, so another dispatcher update cannot
+// interleave and then be overwritten by a stale snapshot.
 const LEGACY_GLOBAL_DISPATCHER = Symbol.for("undici.globalDispatcher.1");
+const require = createRequire(import.meta.url);
 
 type UndiciModule = typeof import("undici");
 
-let undiciModulePromise: Promise<UndiciModule> | undefined;
+let undiciModule: UndiciModule | undefined;
 
-function loadUndici(): Promise<UndiciModule> {
-  if (!undiciModulePromise) {
+function loadUndici(): UndiciModule {
+  if (!undiciModule) {
     const g = globalThis as Record<symbol, unknown>;
     const previousLegacy = g[LEGACY_GLOBAL_DISPATCHER];
-    undiciModulePromise = import("undici").then((mod) => {
-      if (previousLegacy !== undefined && g[LEGACY_GLOBAL_DISPATCHER] !== previousLegacy) {
-        g[LEGACY_GLOBAL_DISPATCHER] = previousLegacy;
-      }
-      return mod;
-    });
+    const mod = require("undici") as UndiciModule;
+    if (previousLegacy !== undefined && g[LEGACY_GLOBAL_DISPATCHER] !== previousLegacy) {
+      g[LEGACY_GLOBAL_DISPATCHER] = previousLegacy;
+    }
+    undiciModule = mod;
   }
-  return undiciModulePromise;
+  return undiciModule;
 }
 
 // ============================
@@ -170,7 +172,7 @@ export class TcvdbClient {
    * Handles auth, timeout, retries (5xx/timeout), and error unwrapping.
    */
   async request<T = ApiResponse>(path: string, body: Record<string, unknown>): Promise<T> {
-    const { request: undiciRequest, Agent: UndiciAgent } = await loadUndici();
+    const { request: undiciRequest, Agent: UndiciAgent } = loadUndici();
     this.ensureDispatcher(UndiciAgent);
 
     let lastError: Error | undefined;
