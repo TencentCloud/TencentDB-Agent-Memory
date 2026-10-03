@@ -253,6 +253,7 @@ export class VectorStore implements IMemoryStore {
   private stmtInsertVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtDeleteMeta!: StatementSync;
   private stmtGetMeta!: StatementSync;
+  private stmtQueryByRecordId!: StatementSync;
   private stmtSearchVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtQueryBySessionId!: StatementSync;
   private stmtQueryBySessionIdSince!: StatementSync;
@@ -1058,6 +1059,10 @@ export class VectorStore implements IMemoryStore {
       timestamp_str, timestamp_start, timestamp_end,
       created_time, updated_time, metadata_json`;
 
+    this.stmtQueryByRecordId = this.db.prepare(`
+      SELECT ${l1QueryCols} FROM l1_records WHERE record_id = ?
+    `);
+
     this.stmtQueryBySessionId = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
       WHERE session_id = ?
@@ -1647,12 +1652,27 @@ export class VectorStore implements IMemoryStore {
       return [];
     }
     try {
-      const { sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
+      const { recordIds, sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
 
       let raw: Record<string, unknown>[];
 
       // Priority: sessionId > sessionKey (sessionId is more specific)
-      if (sessionId && updatedAfter) {
+      if (recordIds && recordIds.length > 0) {
+        // Resolve primary keys before applying the remaining scan predicates.
+        raw = [];
+        for (const id of new Set(recordIds)) {
+          const row = this.stmtQueryByRecordId.get(id) as Record<string, unknown> | undefined;
+          if (!row) continue;
+          if (sessionId ? row.session_id !== sessionId : sessionKey && row.session_key !== sessionKey) continue;
+          if (updatedAfter && String(row.updated_time) <= updatedAfter) continue;
+          raw.push(row);
+        }
+        raw.sort((a, b) => {
+          const aTime = String(a.updated_time);
+          const bTime = String(b.updated_time);
+          return aTime < bTime ? -1 : aTime > bTime ? 1 : 0;
+        });
+      } else if (sessionId && updatedAfter) {
         raw = this.stmtQueryBySessionIdSince.all(sessionId, updatedAfter) as Record<string, unknown>[];
       } else if (sessionId) {
         raw = this.stmtQueryBySessionId.all(sessionId) as Record<string, unknown>[];
@@ -1685,15 +1705,6 @@ export class VectorStore implements IMemoryStore {
       if (filter?.userId !== undefined) rows = rows.filter((r) => r.user_id === filter.userId);
       if (filter?.agentId !== undefined) rows = rows.filter((r) => r.agent_id === filter.agentId);
       if (taskId !== undefined) rows = rows.filter((r) => r.task_id === taskId);
-      // Primary-key filter — matches the tcvdb backend's documentIds path.
-      // /v3/atomic/update relies on this to load the exact note before the
-      // ownership check; without it, `existing[0]` is an arbitrary row from
-      // the whole table, which can trip the 403 "belongs to a different
-      // agent" guard on a correctly-scoped request.
-      if (filter?.recordIds && filter.recordIds.length > 0) {
-        const want = new Set(filter.recordIds);
-        rows = rows.filter((r) => want.has(r.record_id));
-      }
 
       this.logger?.info(
         `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
