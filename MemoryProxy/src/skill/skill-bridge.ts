@@ -291,10 +291,19 @@ function bindingToIdFields(
  * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
  * 恢复而不 401。
  */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
-  const candidates = sessionId.includes(":")
+/**
+ * Candidate L1 session keys for a bare session id (#1424): Pi registers
+ * sessions as `pi:<sessionId>`, so it is probed alongside the bare id and the
+ * codebuddy / claude-code composite keys.
+ */
+export function sessionIdCandidatesL1(sessionId: string): string[] {
+  return sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`, `pi:${sessionId}`];
+}
+
+function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+  const candidates = sessionIdCandidatesL1(sessionId);
   for (const k of candidates) {
     const s = getSessionStore().get(k);
     if (s) {
