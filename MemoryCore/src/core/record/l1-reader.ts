@@ -11,7 +11,7 @@
  *    `records/YYYY-MM-DD.jsonl` files. Used when VectorStore is unavailable or degraded.
  */
 
-import type { MemoryRecord, MemoryType, EpisodicMetadata } from "./l1-writer.js";
+import type { MemoryRecord, MemoryType } from "./l1-writer.js";
 import type { IMemoryStore, L1RecordRow, L1QueryFilter } from "../store/types.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
@@ -56,9 +56,12 @@ export async function queryMemoryRecords(
  * Convert a raw SQLite L1RecordRow to a MemoryRecord (same shape as JSONL records).
  */
 function rowToMemoryRecord(row: L1RecordRow): MemoryRecord {
-  let metadata: EpisodicMetadata | Record<string, never> = {};
+  let metadata: Record<string, unknown> = {};
   try {
-    metadata = JSON.parse(row.metadata_json) as EpisodicMetadata | Record<string, never>;
+    const parsed: unknown = JSON.parse(row.metadata_json);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      metadata = parsed as Record<string, unknown>;
+    }
   } catch {
     // malformed JSON — use empty object
   }

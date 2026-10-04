@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `MemoryClient.createAtomic()` and exported request/response types for `POST /v3/atomic/create`.
+
 - **`V3SkillClient#conversationForceArchive(params)`** — wrapper for
   `POST /v3/skill/conversation/force-archive`, the manual archive
   trigger added in `MemoryCore@7ed54292` (2026-07-28). Complements the

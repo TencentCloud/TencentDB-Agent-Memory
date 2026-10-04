@@ -9,6 +9,14 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- 新增 `POST /v3/atomic/create`，直接创建调用方已审核的 L1 记忆，不触发抽取流程；SQLite/Mongo standalone/replica set 使用存储层 insert-only 唯一键约束，相同请求重试幂等，同 ID 不同 payload 返回冲突；TCVDB 与 Mongo sharded topology 因缺少全局条件插入保证而明确返回 `501`，不会退化为可能覆盖数据的 upsert。
+- 新增 SQLite audit 表迁移，使既有安装可记录 `create` 事件。
+- L1 创建支持结构化 `metadata`，并从 query/search 返回来源与审批引用。
+
 ## [2.0.2-beta.1] — 2026-09-07
 
 ### 🗄️ MongoDB 存储后端（试验特性，可选，默认关闭）

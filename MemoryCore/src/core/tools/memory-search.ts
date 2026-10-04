@@ -33,6 +33,7 @@ export interface MemorySearchResultItem {
   version: number;
   created_at: string;
   updated_at: string;
+  metadata: Record<string, unknown>;
 }
 
 export interface MemorySearchResult {
@@ -46,6 +47,15 @@ export interface MemorySearchResult {
 const TAG = "[memory-tdai][tdai_memory_search]";
 
 function toSearchItem(r: L1SearchResult): MemorySearchResultItem {
+  let metadata: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(r.metadata_json);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      metadata = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Keep malformed historical metadata non-fatal for recall.
+  }
   return {
     id: r.record_id,
     content: r.content,
@@ -60,6 +70,7 @@ function toSearchItem(r: L1SearchResult): MemorySearchResultItem {
     version: r.version ?? 0,
     created_at: r.timestamp_start,
     updated_at: r.timestamp_end,
+    metadata,
   };
 }
 

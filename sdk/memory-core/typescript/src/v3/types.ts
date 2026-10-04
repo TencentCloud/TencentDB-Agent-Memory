@@ -108,6 +108,33 @@ export interface V3AtomicUpdateRequest {
 }
 export type V3AtomicUpdateData = AtomicUpdateData;
 
+/** Supported L1 memory kinds accepted by the MemoryCore record model. */
+export type V3AtomicMemoryType =
+  | "persona"
+  | "episodic"
+  | "instruction"
+  | "work_fact"
+  | "work_task"
+  | "work_method"
+  | "work_artifact";
+
+export interface V3AtomicCreateRequest {
+  id: string;
+  content: string;
+  type: V3AtomicMemoryType;
+  priority?: number;
+  background?: string;
+  metadata?: Record<string, unknown>;
+  session_id?: string;
+}
+
+export interface V3AtomicCreateData {
+  id: string;
+  version: number;
+  created: boolean;
+  created_at: string;
+}
+
 export interface V3AtomicQueryRequest {
   type?: string;
   limit?: number;

@@ -427,7 +427,6 @@ memory:
 | POST | `/v2/conversation/query` | L0 查询对话 |
 | POST | `/v2/conversation/search` | L0 搜索对话 |
 | POST | `/v2/conversation/delete` | L0 删除对话 |
-| POST | `/v2/atomic/add` | L1 添加记忆 |
 | POST | `/v2/atomic/query` | L1 查询记忆 |
 | POST | `/v2/atomic/search` | L1 搜索记忆 |
 | POST | `/v2/atomic/delete` | L1 删除记忆 |
@@ -437,6 +436,8 @@ memory:
 | POST | `/v2/scenario/rm` | L2 删除场景 |
 | POST | `/v2/persona/read` | L3 读取画像 |
 | POST | `/v2/persona/write` | L3 写入画像 |
+
+L1 新记忆创建仅通过严格隔离的 `POST /v3/atomic/create` 提供；v2 不提供 create/add 路由。该接口要求存储后端提供原子 insert-only 能力：SQLite、Mongo standalone/replica set 可用；Mongo sharded topology 与 TCVDB 目前不支持安全的 create-only 写入，会返回 `501`，不会用覆盖式 upsert 代替。
 
 ---
 
@@ -567,9 +568,11 @@ hermes-agent/.venv/bin/python MemoryCore/__tests__/e2e/test_hermes_standalone_e2
 
 实测结果：**16 / 16 passed**。
 
-### Service E2E：`MemoryCore/__tests__/e2e/test_hermes_service_e2e.py`
+### Service E2E（当前 checkout 中不可复现）
 
-验证云服务化多副本部署链路：
+Older deployment notes described `MemoryCore/__tests__/e2e/test_hermes_service_e2e.py` and reported 23 passing tests. That script is absent from this checkout, so those results are historical claims and are not a runnable validation gate here.
+
+Previously reported coverage (not independently verifiable from this checkout):
 
 ```
 mock-shark (Shark stub: 提供 VDB/COS 配置)
@@ -586,20 +589,11 @@ Side-channel 在 Gateway-2 验证 → 证明 TCVDB 真共享
 - **跨 Gateway 一致性**：GW2 search 能找到 GW1 写入的 marker
 - GW2 `/conversation/query` 拉到主 session 的全部消息
 - 跨 session prefetch：模型在新 session 中通过 v2 plugin 召回 marker
-- L1 add on GW1 → GW2 `/atomic/query` 立即可见（证明 TCVDB 共享读写）
 - 自动备份/还原 `~/.hermes/config.yaml` 的 `memory.provider` 字段
 
-```bash
-# 前置：安装 SDK 到 Hermes venv（一次性）
-hermes-agent/.venv/bin/python -m pip install -e sdk/memory-core/python/
+The current checkout does not contain the test script or a reproducible result for these claims. The `/v3/atomic/create` route has a Gateway unit test, but still requires service-mode E2E validation against a backend that supports atomic create (SQLite or MongoDB); TCVDB currently rejects create with `501`.
 
-# 运行
-hermes-agent/.venv/bin/python __tests__/e2e/test_hermes_service_e2e.py
-```
-
-实测结果：**23 / 23 passed**（跨 Gateway 一致性、跨 session 召回、L1 跨 GW 共享全部通过）。
-
-### 两个脚本的共同前置条件
+### Standalone E2E 前置条件
 
 1. `hermes` CLI 已安装（默认路径 `~/.hermes/bin/hermes`）
 2. `~/.hermes/config.yaml` 中 `model.api_key` / `model.base_url` / `model.default` 配置了可用的 LLM

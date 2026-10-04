@@ -60,6 +60,17 @@ console.log(l0.messages, l0.total);
 const allL0 = await client.withIsolation({ sessionId: null }).queryConversation({ limit: 20 });
 console.log(allL0.total);
 
+// L1: 创建原子记忆；完全相同的重试返回 created: false，相同 ID 的不同请求会冲突
+const created = await client.createAtomic({
+  id: "note-1",
+  content: "User prefers concise answers",
+  type: "persona",
+  priority: 70,
+  metadata: { source: "lifeos", source_ref: "reflection:42", approval_ref: "approval:9" },
+});
+
+// 注意：原子创建要求存储后端提供原生 insert-only 能力。SQLite、Mongo standalone/replica set 支持；TCVDB 与 Mongo sharded 当前返回 501。
+
 // L1: 搜索结构化记忆
 const hits = await client.searchAtomic({ query: "user preferences", limit: 5 });
 console.log(hits.items);
@@ -110,6 +121,7 @@ await client.addConversation({
 | L0 | `searchConversation()` | `POST /v3/conversation/search` |
 | L0 | `deleteConversation()` | `POST /v3/conversation/delete` |
 | L0 | `countConversation()` | `POST /v3/conversation/count` |
+| L1 | `createAtomic()` | `POST /v3/atomic/create` |
 | L1 | `updateAtomic()` | `POST /v3/atomic/update` |
 | L1 | `queryAtomic()` | `POST /v3/atomic/query` |
 | L1 | `searchAtomic()` | `POST /v3/atomic/search` |

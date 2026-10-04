@@ -158,6 +158,30 @@ export function runMemoryStoreContract(harness: MemoryStoreContractHarness): voi
       }
     });
 
+    it("createL1 is insert-only under concurrent ID reuse", async () => {
+      const store = await harness.createStore();
+      try {
+        if (!store.createL1) {
+          // Backends without a native insert-if-absent primitive must not
+          // silently emulate this operation using upsert.
+          expect(store.createL1).toBeUndefined();
+          return;
+        }
+
+        const first = makeL1("l1-create-race", "payload A");
+        const second = makeL1("l1-create-race", "payload B");
+        const results = await Promise.all([store.createL1(first), store.createL1(second)]);
+
+        expect(results.filter(Boolean)).toHaveLength(1);
+        expect(results.filter((created) => created === false)).toHaveLength(1);
+        expect(await store.countL1()).toBe(1);
+        const rows = await store.queryL1Records({ recordIds: [first.id] });
+        expect([first.content, second.content]).toContain(rows[0]?.content);
+      } finally {
+        await harness.disposeStore(store);
+      }
+    });
+
     it("L1 FTS (BM25) recalls by keyword", async () => {
       const store = await harness.createStore();
       try {

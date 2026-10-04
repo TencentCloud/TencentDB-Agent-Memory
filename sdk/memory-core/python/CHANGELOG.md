@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `MemoryClient.create_atomic(...)` and `AsyncMemoryClient.create_atomic(...)` for `POST /v3/atomic/create`, with exported `AtomicMemoryType`.
+
 - **`SkillClient.conversation_force_archive(...)`** and
   **`AsyncSkillClient.conversation_force_archive(...)`** — wrapper for
   ``POST /v3/skill/conversation/force-archive``, the manual archive

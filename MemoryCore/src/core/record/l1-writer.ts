@@ -66,7 +66,7 @@ export interface MemoryRecord {
   /** Source message IDs that contributed to this memory */
   source_message_ids: string[];
   /** Type-specific metadata (e.g., activity_start_time for episodic) */
-  metadata: EpisodicMetadata | Record<string, never>;
+  metadata: Record<string, unknown>;
   /** Timestamp trail: all timestamps related to this memory (for merge history tracking) */
   timestamps: string[];
   /** Creation timestamp (ISO) */

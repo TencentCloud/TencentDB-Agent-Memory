@@ -183,6 +183,35 @@ L0 计数（**仅 v3，无 v2 入口**）。
 
 ---
 
+### POST /v3/atomic/create
+
+Optional `metadata` is preserved as structured L1 metadata (including provenance/approval references) and returned by atomic query/search; it never determines tenant identity.
+
+创建一条 L1 原子记忆。请求必须带有服务端 v3 隔离上下文要求的 team、agent、user 身份字段；`session_id` 可选，缺省时按 `(team, agent, user)` 跨 session 聚合。身份字段参与 payload 相等性判断，并由服务端校验/绑定。
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---:|---|
+| id | string | 是 | 调用方生成的原子记忆 ID |
+| content | string | 是 | 记忆内容，最多 8192 字符 |
+| type | string | 是 | `persona` / `episodic` / `instruction` / `work_fact` / `work_task` / `work_method` / `work_artifact` |
+| priority | number | 否 | 优先级，默认 `50` |
+| background | string | 否 | 场景/背景描述 |
+| metadata | object | 否 | L1 类型元数据及来源/审批引用；query/search 原样返回，不用于推导 tenant 身份 |
+| session_id | string | 否 | 会话隔离字段；也可由 v3 client 的默认 isolation context 提供 |
+| team_id / agent_id / user_id / task_id | string | 按 v3 隔离规则 | SDK 从 isolation context 自动填充；服务端校验并绑定，不应把它们当作可由请求方任意改写的记忆属性 |
+
+**幂等与冲突语义**
+
+- 相同 `id` 且有效 payload 完全相同的重复请求返回成功，`created: false`，不产生新版本。
+- 相同 `id` 但 payload 不同返回冲突；已有记忆不被覆盖。
+- 并发请求由底层唯一键约束仲裁，不依赖 Gateway 租约：胜出的插入返回 `created: true`，败者读取胜出记录并按规范化 payload 返回幂等成功或冲突。
+- SQLite 使用 `record_id` 主键 insert-only；Mongo standalone/replica set 使用 collection 的唯一 `_id` insert。Mongo sharded topology 在完成全局唯一键设计前也会禁用 create；TCVDB 当前只有覆盖式 `/document/upsert`，同样不支持安全 create。这两种不支持的部署调用 endpoint 都返回 `501`，绝不 fallback 到 upsert。
+- MongoDB 分片集合在 `_id` 不属于 shard key 时，只在每个 shard 内强制 `_id` 唯一；本接口当前按 `hello` 拓扑探测结果对 sharded Mongo fail closed。[MongoDB sharded unique index 限制](https://www.mongodb.com/docs/manual/core/sharding-shard-key-indexes/)
+
+**响应** `data`：`{ id, version: number, created: boolean, created_at: ISO-8601 string }`。新建返回 `version: 1, created: true`；完全相同的重试返回已存在记录的版本与创建时间，并置 `created: false`。
+
 ### POST /v3/atomic/update
 
 更新单条 L1 记忆原子（版本自增）。
