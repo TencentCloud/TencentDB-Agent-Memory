@@ -19,7 +19,7 @@
 
 import type { Collection, Db, Document } from "mongodb";
 import type { MongoConfig } from "../../instance-config-provider.js";
-import type { MongoClientPool } from "./client-pool.js";
+import type { MongoClientPool, MongoTopology } from "./client-pool.js";
 import type { EmbeddingProviderInfo } from "../embedding.js";
 import type {
   IMemoryStore,
@@ -97,6 +97,7 @@ export class MongoMemoryStore implements IMemoryStore {
   private db: Db | null = null;
   private initPromise: Promise<void> | null = null;
   private degraded = false;
+  private topology: MongoTopology | undefined;
   /** Whether the `$search` (mongot) indexes are queryable. Drives ftsSearch cap. */
   private searchIndexReady = false;
 
@@ -105,6 +106,15 @@ export class MongoMemoryStore implements IMemoryStore {
     this.mongoConfig = opts.mongoConfig;
     this.logger = opts.logger;
     this.searchIndexWaitMs = opts.searchIndexWaitMs ?? 60_000;
+  }
+
+  /**
+   * `_id` is globally unique on standalone/replica-set collections. MongoDB
+   * only enforces `_id` uniqueness per shard when `_id` is not the shard key,
+   * so create-only writes are disabled for sharded deployments.
+   */
+  get supportsAtomicL1Create(): boolean {
+    return this.db !== null && this.topology !== undefined && this.topology !== "sharded";
   }
 
   // ── Lifecycle ───────────────────────────────────────────
@@ -125,6 +135,7 @@ export class MongoMemoryStore implements IMemoryStore {
       // without mongot is a configuration error surfaced at init — not a
       // silent degradation discovered on the first search query.
       const profile = await this.pool.getClusterProfile(this.mongoConfig);
+      this.topology = profile.topology;
       if (!profile.mongot) {
         throw new Error(
           `${TAG} mongot ($search) unavailable: probed topology=${profile.topology} ` +
@@ -261,6 +272,26 @@ export class MongoMemoryStore implements IMemoryStore {
       { upsert: true },
     );
     return true;
+  }
+
+  /** Insert-only L1 write; MongoDB's unique _id index arbitrates concurrent calls. */
+  async createL1(record: MemoryRecord, _embedding?: Float32Array): Promise<boolean> {
+    if (!this.supportsAtomicL1Create) {
+      throw new Error(`${TAG} atomic L1 create requires an initialized non-sharded MongoDB deployment`);
+    }
+    const coll = await this.coll(COLLECTIONS.L1);
+    const doc = l1RecordToDoc(record);
+    try {
+      await coll.insertOne(doc as never);
+      return true;
+    } catch (err) {
+      // A duplicate _id is a normal create conflict. Do not turn unrelated
+      // database errors into conflicts; the Gateway must surface those.
+      if (typeof err === "object" && err !== null && "code" in err && err.code === 11000) {
+        return false;
+      }
+      throw err;
+    }
   }
 
   async deleteL1(recordId: string, filter?: IsolationFilter): Promise<boolean> {

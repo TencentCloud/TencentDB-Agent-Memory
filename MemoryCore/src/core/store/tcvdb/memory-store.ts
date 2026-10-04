@@ -153,7 +153,7 @@ const PROFILE_METADATA_OUTPUT_FIELDS = [
   "version", "created_at_ms", "updated_at_ms",
 ];
 
-/** memory_audit 字段：每行一条修改事件（L1/L2/L3 的 update/delete）。 */
+/** memory_audit 字段：每行一条 L1/L2/L3 create/update/delete 事件。 */
 const AUDIT_OUTPUT_FIELDS = [
   "id", "record_id", "layer", "action",
   "team_id", "agent_id", "user_id", "task_id",
@@ -472,13 +472,13 @@ export class TcvdbMemoryStore implements IMemoryStore {
         ],
       });
 
-      // memory_audit collection — 修改审计事件流（L1/L2/L3 update/delete）
+      // memory_audit collection — 修改审计事件流（L1/L2/L3 create/update/delete）
       // 不需向量检索，固定 dim=1 占位；所有过滤字段建 filter 索引便于查询
       await this.client.createCollection({
         collection: this.auditCollection,
         shardNum: 1,
         replicaNum: 2,
-        description: "Memory 修改审计：L1/L2/L3 update/delete 事件流",
+        description: "Memory 修改审计：L1/L2/L3 create/update/delete 事件流",
         embedding: { status: "disabled" },
         indexes: [
           { fieldName: "id",            fieldType: "string", indexType: "primaryKey" },
@@ -2508,7 +2508,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
         record_id:     String(doc.record_id ?? ""),
         layer:         (doc.layer === "L1" || doc.layer === "L2" || doc.layer === "L3")
                        ? doc.layer : "L1",
-        action:        (doc.action === "delete" ? "delete" : "update") as "update" | "delete",
+        action:        (doc.action === "create" || doc.action === "delete" ? doc.action : "update") as AuditEntry["action"],
         team_id:       String(doc.team_id ?? "") || undefined,
         agent_id:      String(doc.agent_id ?? "") || undefined,
         user_id:       String(doc.user_id ?? "") || undefined,

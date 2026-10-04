@@ -104,6 +104,30 @@ asyncio.run(main())
 
 ## API 方法
 
+默认导入使用兼容 v2 的客户端。创建 L1 原子记忆时，请使用严格隔离的 v3 客户端：
+
+```python
+from tencentdb_agent_memory.v3 import MemoryClient
+
+client = MemoryClient(
+    endpoint="http://127.0.0.1:8420",
+    api_key="your-api-key",
+    service_id="your-memory-space-id",
+    team_id="team-1",
+    agent_id="agent-1",
+    user_id="user-1",
+)
+result = client.create_atomic(
+    "note-1", "User prefers concise answers", type="persona", priority=70,
+    metadata={"source": "lifeos", "source_ref": "reflection:42", "approval_ref": "approval:9"},
+)
+# result: {"id": "note-1", "version": 1, "created": True, "created_at": "..."}
+```
+
+完全相同的重试返回 `created: false`；相同 ID 携带不同请求内容会产生冲突。
+
+原子创建要求存储后端提供原生 insert-only 能力。SQLite、Mongo standalone/replica set 支持；TCVDB 与 Mongo sharded 当前返回 `501`。
+
 ### v3（推荐）
 
 > v3 与 v2 的主要差异：L0/L1 强制要求 `session_id`（strict session isolation），请求路径从 `/v2/*` 升级为 `/v3/*`，响应包络结构一致。
@@ -114,6 +138,7 @@ asyncio.run(main())
 | L0 | `query_conversation()` | `POST /v3/conversation/query` |
 | L0 | `search_conversation()` | `POST /v3/conversation/search` |
 | L0 | `delete_conversation()` | `POST /v3/conversation/delete` |
+| L1 | `create_atomic()` | `POST /v3/atomic/create` |
 | L1 | `update_atomic()` | `POST /v3/atomic/update` |
 | L1 | `query_atomic()` | `POST /v3/atomic/query` |
 | L1 | `search_atomic()` | `POST /v3/atomic/search` |

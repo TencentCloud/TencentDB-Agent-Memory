@@ -229,6 +229,8 @@ export class VectorStore implements IMemoryStore {
 
   /** @see IMemoryStore.supportsDeferredEmbedding */
   readonly supportsDeferredEmbedding = true;
+  /** SQLite primary-key constraints provide native insert-if-absent arbitration. */
+  readonly supportsAtomicL1Create = true;
 
   /**
    * When `true`, the store is in a degraded state (e.g. sqlite-vec failed to
@@ -249,6 +251,7 @@ export class VectorStore implements IMemoryStore {
 
   // Prepared statements — L1 (initialized in init())
   private stmtUpsertMeta!: StatementSync;
+  private stmtInsertMeta!: StatementSync;
   private stmtDeleteVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtInsertVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtDeleteMeta!: StatementSync;
@@ -837,13 +840,13 @@ export class VectorStore implements IMemoryStore {
     //   - 原始 L0/L1/L2/L3 表完全不动，本表只追加事件
     //   - 不存历史 content / 旧值，只记"什么时间、由谁、改了哪条"
     //   - team/agent/user/task 来自外部请求 IdFields（不是 record 原值）
-    //   - L0 不参与（不可变流水）；L1/L2/L3 update + delete 各记一条
+    //   - L0 不参与（不可变流水）；L1/L2/L3 create/update/delete 各记一条
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_audit (
         audit_id      TEXT PRIMARY KEY,
         record_id     TEXT NOT NULL,
         layer         TEXT NOT NULL CHECK (layer IN ('L1','L2','L3')),
-        action        TEXT NOT NULL CHECK (action IN ('update','delete')),
+        action        TEXT NOT NULL CHECK (action IN ('create','update','delete')),
         team_id       TEXT,
         agent_id      TEXT,
         user_id       TEXT,
@@ -853,6 +856,42 @@ export class VectorStore implements IMemoryStore {
         request_id    TEXT
       )
     `);
+
+    this.stmtInsertMeta = this.db.prepare(`
+      INSERT INTO l1_records (
+        record_id, content, type, priority, scene_name, session_key, session_id,
+        team_id, task_id, version, timestamp_str, timestamp_start, timestamp_end,
+        created_time, updated_time, metadata_json,
+        user_id, agent_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    // Existing databases were created with an update/delete-only CHECK.
+    // Rebuild the append-only audit table so atomic/create can be recorded.
+    const auditSchema = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memory_audit'",
+    ).get() as { sql?: string } | undefined;
+    if (auditSchema?.sql && !auditSchema.sql.includes("'create'")) {
+      this.db.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE memory_audit_new (
+          audit_id      TEXT PRIMARY KEY,
+          record_id     TEXT NOT NULL,
+          layer         TEXT NOT NULL CHECK (layer IN ('L1','L2','L3')),
+          action        TEXT NOT NULL CHECK (action IN ('create','update','delete')),
+          team_id       TEXT,
+          agent_id      TEXT,
+          user_id       TEXT,
+          task_id       TEXT,
+          version       INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          request_id    TEXT
+        );
+        INSERT INTO memory_audit_new SELECT * FROM memory_audit;
+        DROP TABLE memory_audit;
+        ALTER TABLE memory_audit_new RENAME TO memory_audit;
+        COMMIT;
+      `);
+    }
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_record    ON memory_audit(record_id, updated_at_ms)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_memory_audit_isolation ON memory_audit(team_id, agent_id, user_id, task_id)");
 
@@ -1201,8 +1240,17 @@ export class VectorStore implements IMemoryStore {
    * Returns `true` on success, `false` on failure (logged as warning).
    */
   upsertL1(record: MemoryRecord, embedding: Float32Array | undefined): boolean {
+    return this.writeL1(record, embedding, false);
+  }
+
+  /** Insert a new L1 record using SQLite's primary-key constraint as the arbiter. */
+  createL1(record: MemoryRecord, embedding?: Float32Array): boolean {
+    return this.writeL1(record, embedding, true);
+  }
+
+  private writeL1(record: MemoryRecord, embedding: Float32Array | undefined, insertOnly: boolean): boolean {
     if (this.degraded) {
-      this.logger?.warn(`${TAG} [L1-upsert] SKIPPED (degraded mode) id=${record.id}`);
+      this.logger?.warn(`${TAG} [L1-${insertOnly ? "create" : "upsert"}] SKIPPED (degraded mode) id=${record.id}`);
       return false;
     }
     try {
@@ -1231,13 +1279,14 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
-        // Upsert metadata (INSERT OR UPDATE).
+        // The insert-only path intentionally relies on the primary-key
+        // constraint; it must never fall back to the upsert statement.
         // user_id / agent_id appended at the end to match the prepared statement
         // column order added by the isolation migration. We tolerate undefined
         // for legacy callers (e.g. older tests or pre-isolation seed scripts):
         // empty string preserves the historic "no-isolation" semantics until the
         // migration backfills.
-        this.stmtUpsertMeta.run(
+        (insertOnly ? this.stmtInsertMeta : this.stmtUpsertMeta).run(
           recordId,
           record.content,
           record.type,
@@ -1296,7 +1345,7 @@ export class VectorStore implements IMemoryStore {
           } catch (ftsErr) {
             // FTS write failure is non-fatal — log and continue
             this.logger?.warn(
-              `${TAG} [L1-upsert] FTS write failed (non-fatal) id=${recordId}: ${ftsErr instanceof Error ? ftsErr.message : String(ftsErr)}`,
+              `${TAG} [L1-${insertOnly ? "create" : "upsert"}] FTS write failed (non-fatal) id=${recordId}: ${ftsErr instanceof Error ? ftsErr.message : String(ftsErr)}`,
             );
           }
         }
@@ -1308,11 +1357,11 @@ export class VectorStore implements IMemoryStore {
         } catch { /* ignore rollback errors */ }
         throw err;
       }
-      this.logger?.debug?.(`${TAG} [L1-upsert] OK id=${recordId}${skipVec ? " (meta-only)" : ""}`);
+      this.logger?.debug?.(`${TAG} [L1-${insertOnly ? "create" : "upsert"}] OK id=${recordId}${skipVec ? " (meta-only)" : ""}`);
       return true;
     } catch (err) {
       this.logger?.warn(
-        `${TAG} [L1-upsert] FAILED (non-fatal) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
+        `${TAG} [L1-${insertOnly ? "create" : "upsert"}] FAILED (non-fatal) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }
@@ -3385,7 +3434,7 @@ export class VectorStore implements IMemoryStore {
       audit_id: string;
       record_id: string;
       layer: "L1" | "L2" | "L3";
-      action: "update" | "delete";
+      action: "create" | "update" | "delete";
       team_id: string | null;
       agent_id: string | null;
       user_id: string | null;

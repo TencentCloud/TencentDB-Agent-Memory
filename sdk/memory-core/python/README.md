@@ -104,6 +104,34 @@ asyncio.run(main())
 
 ## API Methods
 
+### v3 atomic creation
+
+The default import uses the v2-compatible client. For L1 atomic creation, use the strict-isolation v3 client:
+
+```python
+from tencentdb_agent_memory.v3 import MemoryClient
+
+client = MemoryClient(
+    endpoint="http://127.0.0.1:8420",
+    api_key="your-api-key",
+    service_id="your-memory-space-id",
+    team_id="team-1",
+    agent_id="agent-1",
+    user_id="user-1",
+)
+result = client.create_atomic(
+    "note-1", "User prefers concise answers", type="persona", priority=70,
+    metadata={"source": "lifeos", "source_ref": "reflection:42", "approval_ref": "approval:9"},
+)
+# result: {"id": "note-1", "version": 1, "created": True, "created_at": "..."}
+```
+
+An identical retry returns `created: false`; reusing the ID with a different payload is a conflict.
+
+Atomic create requires a backend-native insert-only operation. SQLite and MongoDB standalone/replica-set deployments support it; TCVDB and MongoDB sharded deployments currently return `501` rather than risk overwriting an existing ID.
+
+### v2-compatible API surface
+
 | Layer | Method | Endpoint |
 |-------|--------|----------|
 | L0 | `add_conversation()` | `POST /v2/conversation/add` |

@@ -2,6 +2,8 @@ import { ParamError } from "../errors.js";
 import { V3HttpTransport } from "./http.js";
 import type { Transport } from "../client.js";
 import type {
+  V3AtomicCreateData,
+  V3AtomicCreateRequest,
   V3AtomicCountRequest,
   V3AtomicDeleteData,
   V3AtomicDeleteRequest,
@@ -265,6 +267,19 @@ export class MemoryClient {
   }
 
   // -- L1 Atomic ---------------------------------------------------------
+
+  createAtomic(params: V3AtomicCreateRequest): Promise<V3AtomicCreateData> {
+    return this.http.post(`${V3}/atomic/create`, stripUndefined({
+      ...this.iso.baseBody(),
+      session_id: this.iso.resolveSession(params.session_id),
+      id: params.id,
+      content: params.content,
+      type: params.type,
+      priority: params.priority,
+      background: params.background,
+      metadata: params.metadata,
+    }));
+  }
 
   updateAtomic(params: V3AtomicUpdateRequest): Promise<V3AtomicUpdateData> {
     return this.http.post(`${V3}/atomic/update`, stripUndefined({

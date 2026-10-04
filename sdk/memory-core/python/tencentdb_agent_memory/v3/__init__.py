@@ -12,7 +12,7 @@ Skill 客户端 :class:`SkillClient` / :class:`AsyncSkillClient` 封装 14 条
 构造时按需传默认值即可，缺失时由 server 返回业务错误码（40001/40301/40302）。
 """
 
-from .client import AsyncMemoryClient, MemoryClient
+from .client import AsyncMemoryClient, AtomicMemoryType, MemoryClient
 from .metadata_client import AsyncMetadataClient, MetadataClient
 from .memory_prompt import AsyncMemoryPromptClient, MemoryPromptClient
 from .memory_generation_log import AsyncMemoryGenerationLogClient, MemoryGenerationLogClient
@@ -27,6 +27,7 @@ from .skill_client import (
 __all__ = [
     "MemoryClient",
     "AsyncMemoryClient",
+    "AtomicMemoryType",
     "MetadataClient",
     "AsyncMetadataClient",
     "MemoryPromptClient",

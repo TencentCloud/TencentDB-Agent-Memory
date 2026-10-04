@@ -4,6 +4,8 @@ export { MemoryGenerationLogClient } from "./memory-generation-log-client.js";
 export { SkillClient, type SkillClientConfig } from "./skill-client.js";
 export { SkillErrorCode, type SkillErrorCodeValue } from "./skill-types.js";
 export type {
+  V3AtomicCreateData,
+  V3AtomicCreateRequest,
   V3AtomicCountRequest,
   V3AtomicDeleteData,
   V3AtomicDeleteRequest,
@@ -14,6 +16,7 @@ export type {
   V3AtomicSearchRequest,
   V3AtomicUpdateData,
   V3AtomicUpdateRequest,
+  V3AtomicMemoryType,
   V3ChatMemoryClearData,
   V3ChatMemoryClearItem,
   V3ChatMemoryClearRequest,

@@ -109,6 +109,7 @@ export interface AtomicDetail {
   background?: string;
   created_at: string;
   updated_at: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AtomicUpdateRequest extends IdFields {

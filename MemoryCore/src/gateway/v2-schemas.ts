@@ -81,6 +81,26 @@ import type {
   CoreWriteData as GeneratedCoreWriteData,
 } from "./generated/types.js";
 
+/** Directly create one already-reviewed L1 atom; this never invokes extraction. */
+export const atomicCreateRequestSchema = z.object({
+  id: z.string().min(1).max(512),
+  type: z.enum(["persona", "episodic", "instruction", "work_fact", "work_task", "work_method", "work_artifact"]),
+  content: z.string().min(1).max(8192),
+  priority: z.number().int().min(-1).max(100).default(50),
+  background: z.string().max(8192).default(""),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  session_id: z.string().min(1).optional(),
+});
+export type AtomicCreateRequest = z.infer<typeof atomicCreateRequestSchema>;
+
+export interface AtomicCreateData {
+  id: string;
+  version: number;
+  /** False when this exact create request was already persisted. */
+  created: boolean;
+  created_at: string;
+}
+
 export interface ConversationItem extends GeneratedConversationItem {
   /** L0 session isolation dimension returned by query/search responses. */
   session_id?: string;
@@ -154,6 +174,8 @@ export interface AtomicDetail extends GeneratedAtomicDetail {
   user_id?: string;
   agent_id?: string;
   task_id?: string;
+  /** Caller-supplied provenance and type-specific metadata. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface AtomicQueryData {

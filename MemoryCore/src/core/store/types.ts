@@ -556,7 +556,7 @@ export interface AuditEntry {
    */
   record_id: string;
   layer: "L1" | "L2" | "L3";
-  action: "update" | "delete";
+  action: "create" | "update" | "delete";
   /** 外部请求 IdFields 副本，来源是调用方传入的 body / header（resolveIsolation 后）。 */
   team_id?: string;
   agent_id?: string;
@@ -574,7 +574,7 @@ export interface AuditEntry {
 export interface AuditQueryFilter {
   record_id?: string;
   layer?: "L1" | "L2" | "L3";
-  action?: "update" | "delete";
+  action?: "create" | "update" | "delete";
   team_id?: string;
   agent_id?: string;
   user_id?: string;
@@ -598,6 +598,8 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * When `false` or absent, embedding is computed inline and passed to `upsertL0()`.
    */
   readonly supportsDeferredEmbedding?: boolean;
+  /** Whether the initialized backend can guarantee create-only L1 insertion. */
+  readonly supportsAtomicL1Create?: boolean;
 
   // ── Lifecycle (always sync) ──────────────────────────────
 
@@ -609,6 +611,14 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── L1 Write ─────────────────────────────────────────────
 
   upsertL1(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
+  /**
+   * Atomically insert a new L1 record without replacing an existing ID.
+   * Returns false when no row was created (duplicate ID or a backend-specific
+   * write failure; callers may read back to distinguish them). Stores that
+   * cannot provide native insert-if-absent must omit this capability (never
+   * emulate it with read-then-upsert).
+   */
+  createL1?(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
   deleteL1(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Batch(recordIds: string[], filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Expired(cutoffIso: string): MaybePromise<number>;

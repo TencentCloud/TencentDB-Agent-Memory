@@ -42,10 +42,20 @@ const l0 = await client.queryConversation({ limit: 20, offset: 0 });
 const allSessions = await client.withIsolation({ sessionId: null }).queryConversation({ limit: 20 });
 
 // L1 / L2 / L3
+const created = await client.createAtomic({
+  id: "note-1",
+  content: "User prefers concise answers",
+  type: "persona",
+  priority: 70,
+  metadata: { source: "lifeos", source_ref: "reflection:42", approval_ref: "approval:9" },
+});
+// Identical retries return created: false; conflicting reuse of the ID is rejected.
 const l1 = await client.searchAtomic({ query: "user preferences", limit: 5 });
 const scene = await client.readScenario({ path: "work.md" });
 const core = await client.readCore();
 ```
+
+Atomic create requires a backend-native insert-only operation. SQLite and MongoDB standalone/replica-set deployments support it; TCVDB and MongoDB sharded deployments currently return `501` rather than risk overwriting an existing ID.
 
 v3 数据面差异要点：
 
@@ -67,6 +77,7 @@ v3 数据面差异要点：
 | L0 | `searchConversation()` | `POST /v3/conversation/search` |
 | L0 | `deleteConversation()` | `POST /v3/conversation/delete` |
 | L0 | `countConversation()` | `POST /v3/conversation/count` |
+| L1 | `createAtomic()` | `POST /v3/atomic/create` |
 | L1 | `updateAtomic()` | `POST /v3/atomic/update` |
 | L1 | `queryAtomic()` | `POST /v3/atomic/query` |
 | L1 | `searchAtomic()` | `POST /v3/atomic/search` |

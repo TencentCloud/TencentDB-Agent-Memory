@@ -17,7 +17,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
-import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
+import type { IMemoryStore, L0Record, L1RecordRow, ProfileSyncRecord } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, scopeProfileStorageView, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
@@ -37,6 +37,7 @@ import {
   conversationDeleteRequestSchema,
   conversationCountRequestSchema,
   atomicUpdateRequestSchema,
+  atomicCreateRequestSchema,
   atomicQueryRequestSchema,
   atomicSearchRequestSchema,
   atomicDeleteRequestSchema,
@@ -77,6 +78,7 @@ import {
   type CountData,
   type AtomicDetail,
   type AtomicUpdateData,
+  type AtomicCreateData,
   type AtomicQueryData,
   type AtomicSearchData,
   type AtomicSearchHit,
@@ -157,6 +159,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/conversation/delete",
   "/conversation/count",
   "/atomic/update",
+  "/atomic/create",
   "/atomic/query",
   "/atomic/search",
   "/atomic/delete",
@@ -178,15 +181,15 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
  *   - 原始 L0/L1/L2/L3 表完全不动，本函数只追加事件
  *   - team/agent/user/task 来自外部请求 IdFields（resolveIsolation 后的 ctx）
  *   - L0 不参与（不可变流水）
- *   - 5 个 mutation handler 各调一次：
- *     atomic/update + atomic/delete + scenario/write + scenario/rm + core/write
+ *   - 6 个 mutation handler 各调一次：
+ *     atomic/create + atomic/update + atomic/delete + scenario/write + scenario/rm + core/write
  */
 async function recordAudit(
   store: IMemoryStore | undefined,
   args: {
     record_id: string;
     layer: "L1" | "L2" | "L3";
-    action: "update" | "delete";
+    action: "create" | "update" | "delete";
     iso?: { teamId?: string; userId?: string; agentId?: string; sessionId?: string; taskId?: string };
     version: number;
     requestId: string;
@@ -407,8 +410,8 @@ type RouteHandler = (
 ) => Promise<ApiResponseEnvelope>;
 
 /**
- * L0–L3 数据面 handler 映射（子路径 → handler）。历史接口同时挂载 /v2/* 与 /v3/*；
- * count 接口按 sdk-v3.yaml 仅挂载 /v3/*。/v3 走严格 isolation 校验；/v2 沿用现有 enforce/legacyCompat 配置。
+ * L0–L3 data-plane handler map (subpath → handler). Existing routes are
+ * mounted on /v2/* and /v3/*; count and create-only are mounted on /v3/* only.
  */
 const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/conversation/add": handleConversationAdd,
@@ -417,6 +420,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/conversation/delete": handleConversationDelete,
   "/conversation/count": handleConversationCount,
   "/atomic/update": handleAtomicUpdate,
+  "/atomic/create": handleAtomicCreate,
   "/atomic/query": handleAtomicQuery,
   "/atomic/search": handleAtomicSearch,
   "/atomic/delete": handleAtomicDelete,
@@ -432,11 +436,13 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
 };
 
 const routeTable: Record<string, RouteHandler> = {
-  // L0–L3 数据面：历史读写接口保留 /v2 与 /v3 双入口；count 仅按 sdk-v3.yaml 暴露 /v3。
+  // L0–L3 data-plane routes: existing routes keep /v2 + /v3; count and create-only stay v3-only.
   ...Object.fromEntries(
     Object.entries(DATAPLANE_HANDLERS).flatMap(([sub, h]) => {
       const v3Route = [`${V3_PREFIX}${sub}`, h] as const;
-      if (sub.endsWith("/count")) return [v3Route];
+      // Create-only writes are v3-only so they cannot inherit v2's relaxed
+      // isolation/legacy compatibility behavior.
+      if (sub.endsWith("/count") || sub === "/atomic/create") return [v3Route];
       return [[`${V2_PREFIX}${sub}`, h] as const, v3Route];
     }),
   ),
@@ -1122,6 +1128,104 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   return successEnvelope<AtomicUpdateData>({ id, version: `v${updatedVersion}`, updated_at: now }, requestId);
 }
 
+/**
+ * Create one caller-approved L1 atom without invoking the extraction pipeline.
+ * The store's native insert-only operation arbitrates races; unsupported
+ * backends fail closed rather than falling back to overwrite-style upsert.
+ */
+async function handleAtomicCreate(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = atomicCreateRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+  const input = parsed.data;
+  const iso = deps.requestIsolation;
+  if (!iso?.teamId || !iso.agentId || !iso.userId) {
+    return errorEnvelope(422, "Atomic create requires team_id, agent_id, and user_id", requestId);
+  }
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+  if (!store.createL1 || store.supportsAtomicL1Create === false) {
+    return errorEnvelope(501, "Atomic create is not supported by the configured storage backend", requestId);
+  }
+
+  const sameExisting = (current: L1RecordRow): ApiResponseEnvelope => {
+    // IDs are globally unique in the L1 store. Return the same not-found
+    // response for records outside this caller's scope to avoid disclosure.
+    if (current.team_id !== iso.teamId || current.agent_id !== iso.agentId || current.user_id !== iso.userId) {
+      return errorEnvelope(404, `Atomic note not found: ${input.id}`, requestId);
+    }
+    const samePayload = current.content === input.content
+      && current.type === input.type
+      && current.priority === input.priority
+      && current.scene_name === input.background
+      && current.session_id === (iso.sessionId ?? "")
+      && current.task_id === (iso.taskId ?? "")
+      && stableJson(parseMetadataJson(current.metadata_json)) === stableJson(input.metadata);
+    if (!samePayload) {
+      return errorEnvelope(409, `Atomic ID already exists with a different payload: ${input.id}`, requestId);
+    }
+    return successEnvelope<AtomicCreateData>({
+      id: input.id,
+      version: current.version ?? 1,
+      created: false,
+      created_at: current.created_time,
+    }, requestId);
+  };
+
+  const existing = await store.queryL1Records({ recordIds: [input.id] });
+  if (existing?.[0]) return sameExisting(existing[0]);
+
+  const now = new Date().toISOString();
+  const record: MemoryRecord = {
+    id: input.id,
+    content: input.content,
+    type: input.type,
+    priority: input.priority,
+    scene_name: input.background,
+    source_message_ids: [],
+    metadata: input.metadata,
+    timestamps: [now],
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    sessionKey: iso.sessionId ?? "",
+    sessionId: iso.sessionId ?? "",
+    teamId: iso.teamId,
+    userId: iso.userId,
+    agentId: iso.agentId,
+    taskId: iso.taskId,
+  };
+  const embeddingService = deps.getEmbedding();
+  let embedding: Float32Array | undefined;
+  if (embeddingService) {
+    try {
+      embedding = await embeddingService.embed(input.content);
+    } catch (err) {
+      deps.logger.warn?.(`${TAG} atomic/create embedding failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // The store's unique-key insert is the arbiter. A false result may mean a
+  // concurrent request won the race or a persistence error; read back to
+  // distinguish those cases without ever replacing the winner.
+  const inserted = await store.createL1(record, embedding);
+  if (!inserted) {
+    const raced = await store.queryL1Records({ recordIds: [input.id] });
+    if (raced?.[0]) return sameExisting(raced[0]);
+    return errorEnvelope(503, "Atomic create could not persist the record", requestId, { retryable: true });
+  }
+
+  await recordAudit(store, {
+    record_id: input.id,
+    layer: "L1",
+    action: "create",
+    iso,
+    version: 1,
+    requestId,
+    logger: deps.logger,
+  });
+  return successEnvelope<AtomicCreateData>({ id: input.id, version: 1, created: true, created_at: now }, requestId);
+}
+
 async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = atomicQueryRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
@@ -1149,6 +1253,7 @@ async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId:
       user_id: r.user_id,
       agent_id: r.agent_id,
       task_id: r.task_id,
+      metadata: parseMetadataJson(r.metadata_json),
       created_at: r.created_time, updated_at: r.updated_time,
     }));
     return successEnvelope<AtomicQueryData>({ items, total: result.total }, requestId);
@@ -1174,6 +1279,7 @@ async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId:
     user_id: r.user_id,
     agent_id: r.agent_id,
     task_id: r.task_id,
+    metadata: parseMetadataJson(r.metadata_json),
     created_at: r.created_time, updated_at: r.updated_time,
   }));
 
@@ -1284,6 +1390,7 @@ async function handleAtomicSearch(body: unknown, auth: V2AuthContext, requestId:
     user_id: r.user_id,
     agent_id: r.agent_id,
     task_id: r.task_id,
+    metadata: r.metadata,
     created_at: r.created_at, updated_at: r.updated_at, score: r.score,
   }));
 
@@ -1583,6 +1690,15 @@ function parseMetadataJson(raw: string | undefined): MemoryRecord["metadata"] {
   } catch {
     return {};
   }
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 async function getProfileVersion(

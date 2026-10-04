@@ -32,7 +32,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from .._http import Stub
 from .._v3_http import AsyncHttpStub, HttpStub
@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 
 _V3 = "/v3"
 _UNSET = object()
+
+AtomicMemoryType = Literal[
+    "persona",
+    "episodic",
+    "instruction",
+    "work_fact",
+    "work_task",
+    "work_method",
+    "work_artifact",
+]
 
 
 def _strip_none(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -349,6 +359,32 @@ class MemoryClient:
         )
 
     # -- L1 Atomic (session_id 可选，缺则跨 session 聚合) -----------------
+
+    def create_atomic(
+        self,
+        id: str,
+        content: str,
+        *,
+        type: AtomicMemoryType,
+        priority: Optional[int] = None,
+        background: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """``POST /v3/atomic/create``; identical retries return ``created=False``."""
+        return self._stub.post(
+            f"{_V3}/atomic/create",
+            _strip_none({
+                **self._iso.base_body(),
+                "session_id": self._iso.resolve_session(session_id),
+                "id": id,
+                "content": content,
+                "type": type,
+                "priority": priority,
+                "background": background,
+                "metadata": metadata,
+            }),
+        )
 
     def update_atomic(
         self,
@@ -734,6 +770,28 @@ class AsyncMemoryClient:
         )
 
     # -- L1 Atomic (session_id 可选，缺则跨 session 聚合) -----------------
+
+    async def create_atomic(
+        self,
+        id: str,
+        content: str,
+        *,
+        type: AtomicMemoryType,
+        priority: Optional[int] = None,
+        background: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """``POST /v3/atomic/create``; identical retries return ``created=False``."""
+        return await self._stub.post(
+            f"{_V3}/atomic/create",
+            _strip_none({
+                **self._iso.base_body(),
+                "session_id": self._iso.resolve_session(session_id),
+                "id": id, "content": content, "type": type,
+                "priority": priority, "background": background, "metadata": metadata,
+            }),
+        )
 
     async def update_atomic(
         self,
