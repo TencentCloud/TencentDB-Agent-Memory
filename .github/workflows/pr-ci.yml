@@ -32,6 +32,12 @@ jobs:
           path: MemoryCore/node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
 
+      # Node 22 bundles npm 10.9.x, whose clean `npm install` crashes with
+      # "Cannot read properties of null (reading 'edgesOut')" (same workaround as the Dockerfiles).
+      - name: Upgrade npm
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install -g npm@11 --no-audit --no-fund
+
       - name: npm install
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: npm install --ignore-scripts
@@ -53,6 +59,9 @@ jobs:
         with:
           path: MemoryCore/node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+
+      - name: Upgrade npm
+        run: npm install -g npm@11 --no-audit --no-fund
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
