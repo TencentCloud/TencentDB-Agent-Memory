@@ -1,9 +1,4 @@
-# PR Body draft — `agents/openhands`: OpenHands SDK adapter + proxy registration
-
-> Copy-paste target for the GitHub PR against `TencentCloud/TencentDB-Agent-Memory`
-> `feat/server_team`. Headings mirror `.github/PULL_REQUEST_TEMPLATE.md`.
-> All `file:line` citations verified against this clone at base commit `8b86874`;
-> live-behavior claims were verified 2026-10-05 on one host against `agentmemory/*`
+# agents/openhands: OpenHands SDK adapter + proxy registration
 > v2.0.x images. Anything not reproducible there is marked **UNVERIFIED**.
 
 ## Description | 描述
