@@ -1,5 +1,5 @@
 name: 🐛 Bug Report
-description: Report an issue with the plugin | 报告插件使用中的问题
+description: Report an issue with the plugin
 title: "[Bug] "
 labels: ["bug"]
 assignees: []
@@ -7,24 +7,24 @@ body:
   - type: input
     id: openclaw-version
     attributes:
-      label: OpenClaw Version | OpenClaw 版本
-      placeholder: e.g. 2026.3.13 | 例如：2026.3.13
+      label: OpenClaw Version
+      placeholder: e.g. 2026.3.13
     validations:
       required: true
 
   - type: input
     id: plugin-version
     attributes:
-      label: Plugin Version | 插件版本
+      label: Plugin Version
       description: TencentDB-Agent-Memory
-      placeholder: e.g. 0.1.0 | 例如：0.1.0
+      placeholder: e.g. 0.1.0
     validations:
       required: true
 
   - type: input
     id: os
     attributes:
-      label: Operating System | 操作系统
+      label: Operating System
       placeholder: e.g. Linux / Ubuntu 22.04 / macOS 14 / Windows 11 / CentOS 7
     validations:
       required: true
@@ -32,53 +32,53 @@ body:
   - type: input
     id: system-spec
     attributes:
-      label: System Specification | 系统配置
-      description: Optional, e.g. CPU model, memory size | 可选，如 CPU、内存大小等，不清楚可略过
-      placeholder: Intel i7 16GB RAM / 8C16G | Intel i7 16GB内存 / 8核16G
+      label: System Specification
+      description: Optional, e.g. CPU model, memory size
+      placeholder: Intel i7 16GB RAM / 8C16G
     validations:
       required: false
 
   - type: textarea
     id: bug-description
     attributes:
-      label: Describe the bug | 问题描述
-      description: A clear and concise description of the problem | 清晰简洁地描述你遇到的问题
-      placeholder: Please describe the issue in detail | 请详细说明问题现象...
+      label: Describe the bug
+      description: A clear and concise description of the problem
+      placeholder: Please describe the issue in detail
     validations:
       required: true
 
   - type: textarea
     id: reproduce
     attributes:
-      label: To Reproduce | 复现步骤
-      description: Steps to reproduce the behavior | 复现该问题的操作步骤
+      label: To Reproduce
+      description: Steps to reproduce the behavior
       placeholder: |
-        1. Go to / Call API | 执行操作/调用接口
-        2. Set parameters | 传入参数/配置
-        3. See error | 出现报错/异常
+        1. Go to / Call API
+        2. Set parameters
+        3. See error
     validations:
       required: true
 
   - type: textarea
     id: expected-behavior
     attributes:
-      label: Expected behavior | 预期行为
-      description: What you expected to happen | 你期望的正确结果
+      label: Expected behavior
+      description: What you expected to happen
     validations:
       required: true
 
   - type: textarea
     id: logs
     attributes:
-      label: Error Logs / Screenshots | 报错日志/截图
-      description: Please attach full logs or screenshots | 请附上完整报错日志或截图
+      label: Error Logs / Screenshots
+      description: Please attach full logs or screenshots
     validations:
       required: false
 
   - type: textarea
     id: additional-context
     attributes:
-      label: Additional context | 补充信息
-      description: Any other relevant information | 其他相关信息
+      label: Additional context
+      description: Any other relevant information
     validations:
       required: false
