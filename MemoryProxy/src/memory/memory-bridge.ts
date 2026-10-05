@@ -138,9 +138,20 @@ function bindingToIdFields(
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
+  // 观测到的行为（OpenHands 接入实测，与 skill-bridge.ts loadSessionIdsL1 同步）:
+  // header 预选类客户端 (hermes / openclaw / openhands) 的 key 不在老候选列表里,
+  // L1 必 miss; 调用方若又没带 x-tdai-service-id, L2b 整段被跳过, 直接 40101。
+  // 补齐已上线的 header 预选前缀, 零新增失败模式（探不到只是继续往下走）。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [
+        sessionId,
+        `codebuddy:${sessionId}`,
+        `claude-code:${sessionId}`,
+        `hermes:${sessionId}`,
+        `openclaw:${sessionId}`,
+        `openhands:${sessionId}`,
+      ];
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {

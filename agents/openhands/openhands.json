@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Sample OpenHands adapter settings, in the shape agents/openhands/validate.js reads.",
+    "OpenHands has no config file of its own: these values are what you pass to LLM(...)",
+    "as base_url + api_key + extra_headers -- see example/openhands_connect.py.",
+    "Copy, fill in real values, and keep your copy out of git (it holds a credential).",
+    "validate.js reads this file by default; TDAM_* env vars override it."
+  ],
+  "baseUrl": "http://127.0.0.1:8096/openhands/default/v1",
+  "model": "openai/<model-id>",
+  "spaceId": "default",
+  "headers": {
+    "x-team-id": "<team_id from the panel>",
+    "x-agent-id": "<agent_id from the panel>",
+    "x-task-id": "<task_id from the panel>",
+    "x-conversation-id": "<per-conversation id; rotate it per conversation>",
+    "x-tdai-service-id": "default"
+  }
+}

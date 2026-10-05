@@ -680,6 +680,13 @@ curl -s http://localhost:8424/v3/analytics/config \
 ./stop-all.sh --purge    # 连 volume、admin key、proxy config 一起清
 ```
 
+> **Proxy session 持久化：** proxy 的 session store（会话、身份 binding、限流桶）
+> 是容器内 SQLite：`PROXY_DB_PATH=/data/tdai-memory-proxy/proxy.db`。
+> `start-proxy.sh` 现在在该路径挂 named volume（`PROXY_VOLUME`，默认
+> `tdai-proxy-data`），重跑脚本不再清空活动 session；`--purge` 会连这个卷一起删。
+> 自行 `docker run` 起 proxy 的话，请给 `/data/tdai-memory-proxy` 挂卷
+> （或把 `PROXY_DB_PATH` 指到挂载路径），效果相同。
+
 ## 更多
 
 其它安装形态（OpenClaw、Hermes、CodeBuddy、WorkBuddy、SDK、源码启动、K8s、平台说明），参见

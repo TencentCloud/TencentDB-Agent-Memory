@@ -10,6 +10,15 @@
 #
 # 需要以下 proxy 组参数（写在 .env）：
 #   PROXY_UPSTREAM_URL / PROXY_UPSTREAM_API_KEY / PROXY_UPSTREAM_MODEL
+#
+# 可选：
+#   PROXY_VOLUME           : proxy sqlite store 的 named volume（默认 tdai-proxy-data）。
+#                            不挂 volume 时 store 落在容器可写层，重建容器即清空所有
+#                            session / binding / 限流桶 / 对话缓冲。
+#   PROXY_ALLOW_LLM_WRITE  : =1 时把 skillRuntime.allowLlmWrite 渲染成 true（默认 0）。
+#                            镜像与代码里都没有这个 env（开关本来是 YAML-only：
+#                            MemoryProxy/src/config.ts:138 / :484-486），这里只是本脚本的
+#                            .env → YAML 糖，方便和上面三个能力开关用同一套习惯。
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,6 +73,19 @@ fi
 PROXY_ENABLE_AUTH="${PROXY_ENABLE_AUTH:-0}"
 PROXY_ENABLE_TDAI="${PROXY_ENABLE_TDAI:-0}"
 PROXY_ENABLE_SESSION_INIT="${PROXY_ENABLE_SESSION_INIT:-0}"
+
+# proxy sqlite store 持久化（session/binding/限流桶/对话缓冲都在这个库里）。
+# 不挂 volume 时数据在容器可写层，而本脚本每次都会 rm + run（见上方
+# rm_container_if_exists），容器一重建 session 全部消失——bridge 调用随即
+# 40101。named volume 与 memory-core / memory-hub 同一套习惯
+# （start-memory-core.sh:208、start-memory-hub.sh:98）。
+# 不覆盖 PROXY_DB_PATH：镜像已把它指向 /data/tdai-memory-proxy/proxy.db
+# （MemoryProxy/Dockerfile:93，目录 Dockerfile:84），mount 同一目录即代码与挂载点天然一致。
+PROXY_VOLUME="${PROXY_VOLUME:-tdai-proxy-data}"
+
+# skill 写权限开关（YAML-only: MemoryProxy/src/config.ts:138 skillRuntime.allowLlmWrite，
+# 执行点 skill-bridge.ts:533-542 → 40302）。这里只是 .env→YAML 糖，默认 0=只读。
+PROXY_ALLOW_LLM_WRITE="${PROXY_ALLOW_LLM_WRITE:-0}"
 
 # sessionInit 依赖 auth 拿 user_id；开 sessionInit 时自动补 auth
 if [[ "$PROXY_ENABLE_SESSION_INIT" == "1" && "$PROXY_ENABLE_AUTH" != "1" ]]; then
@@ -147,15 +169,21 @@ injection:
 
 redis:
   enabled: false
+
+# skill-bridge 写子路径（create/update/delete）默认 40302 拒绝；
+# PROXY_ALLOW_LLM_WRITE=1 才放行（安全含义见 agents/openhands/README.md §7）。
+skillRuntime:
+  allowLlmWrite: $(bool $PROXY_ALLOW_LLM_WRITE)
 YAML
 
-info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
+info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT, volume=$PROXY_VOLUME, llm-write=$(bool $PROXY_ALLOW_LLM_WRITE))"
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias proxy \
   --add-host=host.docker.internal:host-gateway \
   -p "${PROXY_PORT}:8096" \
   -v "$CONFIG_FILE:/data/config.yaml:ro" \
+  -v "${PROXY_VOLUME}:/data/tdai-memory-proxy" \
   "$PROXY_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90
