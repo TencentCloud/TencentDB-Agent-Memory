@@ -1,0 +1,96 @@
+{{- $c := include "am.core" . -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $c }}-data
+  labels: {{- include "am.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep   # uninstall must not delete the data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.storage.className }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.coreSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $c }}
+  labels: {{- include "am.labels" . | nindent 4 }}
+    app.kubernetes.io/component: core
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # SQLite on a RWO volume: one writer at a time
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: core
+  template:
+    metadata:
+      labels: {{- include "am.labels" . | nindent 8 }}
+        app.kubernetes.io/component: core
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      securityContext: {{- include "am.podSecurity" . | nindent 8 }}
+      containers:
+        - name: core
+          image: {{ .Values.images.core }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext: {{- include "am.containerSecurity" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8420
+          env:
+            - name: TDAI_GATEWAY_CONFIG
+              value: /data/config/tdai-gateway.yaml
+            - name: TDAI_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: llm-api-key
+            - name: HOME
+              value: /tmp
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources.core | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/tdai-memory
+            - name: config
+              mountPath: /data/config/tdai-gateway.yaml
+              subPath: tdai-gateway.yaml
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $c }}-data
+        - name: config
+          configMap:
+            name: {{ $c }}-config
+        - name: tmp
+          emptyDir: {}
+---
+# Internal only — memory-core runs without its Bearer gate. No HTTPRoute.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $c }}
+  labels: {{- include "am.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: core
+  ports:
+    - name: http
+      port: 8420
+      targetPort: http

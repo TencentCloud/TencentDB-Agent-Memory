@@ -1,0 +1,20 @@
+# Catalog values for the agent-memory chart. WAIP substitutes $VARS from
+# pipeline.yaml at install time; LLM_API_KEY is a sensitive var, never committed.
+images:
+  core: $IMAGE_CORE
+  hub: $IMAGE_HUB
+  proxy: $IMAGE_PROXY
+  pullPolicy: IfNotPresent
+
+llm:
+  baseUrl: $LLM_BASE_URL
+  model: $LLM_MODEL
+  apiKey: "$LLM_API_KEY"
+
+publicUrls:
+  proxy: https://$PROXY_HOSTNAME
+
+storage:
+  className: $STORAGE_CLASS
+  coreSize: $CORE_STORAGE_SIZE
+  hubSize: $HUB_STORAGE_SIZE

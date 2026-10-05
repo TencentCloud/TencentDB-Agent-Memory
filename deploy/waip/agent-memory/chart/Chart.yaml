@@ -1,0 +1,6 @@
+apiVersion: v2
+name: agent-memory
+description: TencentDB Agent Memory — memory-core (internal), memory-hub (panel + knowledge) and memory-proxy, for the WeaverAI Platform.
+type: application
+version: 0.1.1
+appVersion: "2026.08.25"

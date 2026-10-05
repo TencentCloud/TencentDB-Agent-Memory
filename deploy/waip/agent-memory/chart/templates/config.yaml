@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "am.core" . }}-config
+  labels: {{- include "am.labels" . | nindent 4 }}
+data:
+  # llm.apiKey comes from env TDAI_LLM_API_KEY (Secret), which overrides the file.
+  tdai-gateway.yaml: |
+    deployMode: standalone
+    stateBackend: local
+    server:
+      port: 8420
+      host: 0.0.0.0
+    data:
+      baseDir: /data/tdai-memory
+    llm:
+      baseUrl: {{ .Values.llm.baseUrl | quote }}
+      model: {{ .Values.llm.model | quote }}
+      maxTokens: 32000
+      timeoutMs: 300000
+    memory:
+      promptMode: {{ .Values.memory.promptMode }}
+      capture: { enabled: true }
+      extraction:
+        enabled: true
+        enableDedup: true
+        maxMemoriesPerSession: 20
+      persona:
+        triggerEveryN: 50
+        maxScenes: 15
+      pipeline:
+        everyNConversations: 5
+        enableWarmup: true
+        l1IdleTimeoutSeconds: 600
+        l2DelayAfterL1Seconds: 90
+        l2MinIntervalSeconds: 900
+        l2MaxIntervalSeconds: 3600
+      recall:
+        enabled: true
+        maxResults: 5
+        scoreThreshold: 0.3
+        strategy: hybrid
+        timeoutMs: 5000
+      storeBackend: sqlite
+      embedding:
+        provider: none
+    skill:
+      enabled: true
+      routing:
+        mode: bm25
+        searchTopK: 20
+      extraction:
+        enabled: true
+        maxIterations: 16
+        queue:
+          backend: local
+          keyPrefix: tdai
+          resultTtlSeconds: 86400
+          lockTtlMs: 600000
+          maxRetries: 2
+          retryBackoffsMs: [5000, 15000]
+      resources:
+        maxResourceSizeBytes: 5000000
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-secrets
+  labels: {{- include "am.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  llm-api-key: {{ .Values.llm.apiKey | quote }}
+  # Hub: mounting this file makes start-combined.sh skip writing it into the
+  # (read-only, root-owned) image. The panel requires a non-empty api_key; core's
+  # Bearer gate is off, so the value is a placeholder and is not checked.
+  metadata-instances.json: |
+    {
+      "instances": [{
+        "id": "default",
+        "name": "default",
+        "gateway_endpoint": "{{ include "am.coreUrl" . }}",
+        {{- with .Values.publicUrls.proxy }}
+        "proxy_endpoint": "{{ . }}",
+        {{- end }}
+        "api_key": "local"
+      }]
+    }
+  # Proxy reads upstream credentials only from YAML, so the whole file is a Secret.
+  proxy-config.yaml: |
+    server:
+      host: 0.0.0.0
+      port: 8096
+      forwardTimeoutMs: 600000
+    upstream:
+      url: {{ .Values.llm.baseUrl | quote }}
+      apiKey: {{ .Values.llm.apiKey | quote }}
+    log:
+      file: ""
+      level: info
+      backend: console
+    tdai:
+      enabled: true
+      endpoint: "{{ include "am.coreUrl" . }}"
+      apiKey: ""
+      serviceId: default
+      memory:
+        enabled: true
+        inject: true
+        writeL0: true
+        recallL1: true
+        injectL2L3: true
+    skill:
+      endpoint: "{{ include "am.coreUrl" . }}"
+      # Core's /v3/skill/* routes reject a missing or empty Bearer; with its gate
+      # off the value is not checked, so a placeholder is enough.
+      serviceToken: "local"
+    auth:
+      enabled: true
+      url: "{{ include "am.coreUrl" . }}"
+      timeoutMs: 5000
+    sessionInit:
+      enabled: true
+      maxRetries: 3
+      injectAgentContext: true
+      injectTaskContext: true
+      headerAutoSelect:
+        enabled: true
+        teamHeader: "x-team-id"
+        agentHeader: "x-agent-id"
+        taskHeader: "x-task-id"
+        onMismatch: "form"
+    costGuard:
+      enabled: false
+    injection:
+      enabled: true
+      injectors:
+        - skill
+        - knowledge
+        - tdai-memory
+    redis:
+      enabled: false

@@ -1,0 +1,119 @@
+{{- $h := include "am.hub" . -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $h }}-data
+  labels: {{- include "am.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep   # uninstall must not delete the data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.storage.className }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.hubSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $h }}
+  labels: {{- include "am.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hub
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # SQLite on a RWO volume: one writer at a time
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: hub
+  template:
+    metadata:
+      labels: {{- include "am.labels" . | nindent 8 }}
+        app.kubernetes.io/component: hub
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      securityContext: {{- include "am.podSecurity" . | nindent 8 }}
+      containers:
+        - name: hub
+          image: {{ .Values.images.hub }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext: {{- include "am.containerSecurity" . | nindent 12 }}
+          ports:
+            - name: panel
+              containerPort: 8125
+            - name: knowledge
+              containerPort: 8424
+          env:
+            - name: PANEL_PORT
+              value: "8125"
+            - name: KNOWLEDGE_PORT
+              value: "8424"
+            - name: REMOTE_INSTANCE_ID
+              value: default
+            - name: REMOTE_INSTANCE_NAME
+              value: default
+            # In-cluster address the panel/agents use to reach knowledge tools (must end in /v3).
+            - name: KNOWLEDGE_PUBLIC_BASE_URL
+              value: http://{{ $h }}:8424/v3
+            - name: LLM_MODE
+              value: custom
+            - name: LLM_PROTOCOL
+              value: openai
+            - name: LLM_BASE_URL
+              value: {{ .Values.llm.baseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.llm.model | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: llm-api-key
+            - name: KNOWLEDGE_LLM_BINDING_SYNC
+              value: "0"
+            - name: HOME
+              value: /tmp
+          readinessProbe:
+            httpGet: { path: /health, port: knowledge }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: panel }
+            initialDelaySeconds: 90
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources.hub | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/knowledge
+            - name: secrets
+              mountPath: /app/panel/config/metadata-instances.json
+              subPath: metadata-instances.json
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $h }}-data
+        - name: secrets
+          secret:
+            secretName: {{ .Release.Name }}-secrets
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $h }}
+  labels: {{- include "am.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: hub
+  ports:
+    - name: panel
+      port: 8125
+      targetPort: panel
+    - name: knowledge
+      port: 8424
+      targetPort: knowledge

@@ -1,0 +1,135 @@
+description: "TencentDB Agent Memory — shared long-term memory, skills, wiki and code graph for coding agents. Panel (Memory Hub) plus an OpenAI/Anthropic-compatible proxy that agents point their base URL at; memory-core stays internal. SQLite on two PVCs, LLM via LiteLLM."
+
+app_name: "Agent Memory"
+version: "0.1.1"
+has_ui: true
+
+# WARNING: never use the bash colon-dash or colon-question forms for any var
+# declared below: WAIP substitutes $NAME / ${NAME} itself and leaves the rest
+# of the expression in the script. Shell-local variables pass through untouched.
+
+vars:
+  RELEASE_NAME:
+    description: "Helm release name — Service names (<release>-core/-hub/-proxy) derive from it, so keep it stable"
+    default: "agent-memory"
+    required: true
+  NAMESPACE:
+    description: "Namespace to install into"
+    default: "apps"
+    required: true
+  HTTPROUTE_HOSTNAME:
+    description: "Public hostname of the panel (Memory Hub)"
+    default: "agent-memory.platform.weaversoft.io"
+    required: true
+  PROXY_HOSTNAME:
+    description: "Public hostname of the proxy that coding agents use as their base URL"
+    default: "agent-memory-proxy.platform.weaversoft.io"
+    required: true
+  IMAGE_CORE:
+    description: "memory-core image (immutable tag or digest)"
+    default: "zot.platform.weaversoft.io/apps/agent-memory-core:2026.08.25"
+    required: true
+  IMAGE_HUB:
+    description: "memory-hub image (immutable tag or digest)"
+    default: "zot.platform.weaversoft.io/apps/agent-memory-hub:2026.08.25"
+    required: true
+  IMAGE_PROXY:
+    description: "memory-proxy image (immutable tag or digest)"
+    default: "zot.platform.weaversoft.io/apps/agent-memory-proxy:2026.08.25"
+    required: true
+  LLM_BASE_URL:
+    description: "OpenAI-compatible endpoint for memory extraction, wiki/codegraph and proxied agent traffic"
+    default: "http://litellm.inference.svc.cluster.local:4000/v1"
+    required: true
+  LLM_MODEL:
+    description: "Model name — verify it with a real completion first; it must also answer /v1/responses for Codex"
+    default: "gpt-5.6-luna"
+    required: true
+  LLM_API_KEY:
+    description: "API key for LLM_BASE_URL (a LiteLLM virtual key)"
+    default: ""
+    required: true
+    sensitive: true
+  STORAGE_CLASS:
+    description: "StorageClass for the two data PVCs"
+    default: "mayastor-1rep-wait"
+    required: true
+  CORE_STORAGE_SIZE:
+    description: "memory-core data PVC (memories, users, teams — SQLite)"
+    default: "2Gi"
+    required: true
+  HUB_STORAGE_SIZE:
+    description: "memory-hub data PVC (wiki pages, cloned repos for code graph, logs)"
+    default: "5Gi"
+    required: true
+
+install:
+  - task: ensure_namespace
+    namespace: $NAMESPACE
+
+  - task: apply_chart
+    release_name: $RELEASE_NAME
+    chart: $CHART_PATH
+    namespace: $NAMESPACE
+    values_file: $VALUES_FILE
+    wait: true
+    timeout: 10m
+
+  # Create the admin user once and keep its user_key in Secret <release>-admin-key.
+  # Idempotent: skipped when the Secret already exists (reinstall / upgrade).
+  - task: exec_command
+    script: |
+      set -eu
+      ADMIN_SECRET="$RELEASE_NAME-admin-key"
+
+      if kubectl -n "$NAMESPACE" get secret "$ADMIN_SECRET" >/dev/null 2>&1; then
+        echo "[agent-memory] $ADMIN_SECRET exists - admin already initialised."
+        exit 0
+      fi
+
+      kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE_NAME-core" --timeout=5m
+
+      ADMIN_KEY="sk-mem-$(head -c 512 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 32)"
+
+      # The key goes in on stdin so it never appears in a command line or the install log.
+      CODE=$(printf '%s' "$ADMIN_KEY" | kubectl -n "$NAMESPACE" exec -i "deploy/$RELEASE_NAME-core" -- node -e '
+      let k = ""; process.stdin.on("data", d => k += d).on("end", async () => {
+        const r = await fetch("http://127.0.0.1:8420/v3/internal/meta/user/init-admin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tdai-service-id": "default" },
+          body: JSON.stringify({ username: "admin", user_key: k.trim() }),
+        });
+        console.log(r.status);
+      });')
+
+      case "$CODE" in
+        200)
+          kubectl -n "$NAMESPACE" create secret generic "$ADMIN_SECRET" --from-literal=user-key="$ADMIN_KEY"
+          kubectl -n "$NAMESPACE" annotate secret "$ADMIN_SECRET" \
+            weaverai.io/purpose="agent-memory admin user_key - the panel login, do not delete" >/dev/null
+          echo "[agent-memory] Admin user created. Panel login key:"
+          echo "[agent-memory]   kubectl -n $NAMESPACE get secret $ADMIN_SECRET -o jsonpath='{.data.user-key}' | base64 -d"
+          ;;
+        409)
+          echo "[agent-memory] WARNING: admin user exists but $ADMIN_SECRET is missing; its key cannot be recovered."
+          ;;
+        *)
+          echo "[agent-memory] init-admin failed with HTTP $CODE"
+          exit 1
+          ;;
+      esac
+
+  - task: apply_yaml
+    file: "httproute.yaml"
+    namespace: $NAMESPACE
+
+uninstall:
+  # Both data PVCs carry helm.sh/resource-policy: keep and survive this, as does
+  # the <release>-admin-key Secret. Delete them by hand only to wipe all data.
+  - task: apply_yaml
+    file: "httproute.yaml"
+    namespace: $NAMESPACE
+    delete: true
+  - task: delete_release
+    release_name: $RELEASE_NAME
+    namespace: $NAMESPACE

@@ -37,7 +37,7 @@ done
 
 ERRORS=0
 WARNS=0
-CURL=/usr/bin/curl
+CURL="${CURL:-/usr/bin/curl}"
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>

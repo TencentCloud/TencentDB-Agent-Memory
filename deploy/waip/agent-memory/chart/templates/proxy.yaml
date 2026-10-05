@@ -1,0 +1,71 @@
+{{- $p := include "am.proxy" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $p }}
+  labels: {{- include "am.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: proxy
+  template:
+    metadata:
+      labels: {{- include "am.labels" . | nindent 8 }}
+        app.kubernetes.io/component: proxy
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      securityContext: {{- include "am.podSecurity" . | nindent 8 }}
+      containers:
+        - name: proxy
+          image: {{ .Values.images.proxy }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext: {{- include "am.containerSecurity" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8096
+          env:
+            - name: HOME
+              value: /tmp
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources.proxy | nindent 12 }}
+          volumeMounts:
+            - name: secrets
+              mountPath: /data/config.yaml
+              subPath: proxy-config.yaml
+              readOnly: true
+            - name: state
+              mountPath: /data/tdai-memory-proxy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ .Release.Name }}-secrets
+        - name: state
+          emptyDir: {}   # proxy storage is disabled; scratch only
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $p }}
+  labels: {{- include "am.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: proxy
+  ports:
+    - name: http
+      port: 8096
+      targetPort: http

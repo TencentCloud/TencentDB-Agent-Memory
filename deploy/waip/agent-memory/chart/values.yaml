@@ -1,0 +1,40 @@
+# Defaults. The catalog's values.yaml (deploy/waip/agent-memory/values.yaml)
+# overrides these at install time with $VARS from pipeline.yaml.
+
+images:
+  core: zot.platform.weaversoft.io/apps/agent-memory-core:2026.08.25
+  hub: zot.platform.weaversoft.io/apps/agent-memory-hub:2026.08.25
+  proxy: zot.platform.weaversoft.io/apps/agent-memory-proxy:2026.08.25
+  pullPolicy: IfNotPresent   # tags are immutable per build
+
+# One OpenAI-compatible endpoint for everything: memory extraction (core),
+# wiki/codegraph LLM work (hub) and the upstream the proxy forwards agent traffic to.
+llm:
+  baseUrl: http://litellm.inference.svc.cluster.local:4000/v1
+  model: gpt-5.6-luna
+  apiKey: ""                 # sensitive — supplied by the pipeline, never committed
+
+publicUrls:
+  proxy: ""                  # https://<proxy-host> — shown in the panel's "client connection" card
+
+storage:
+  className: mayastor-1rep-wait
+  coreSize: 2Gi
+  hubSize: 5Gi
+
+memory:
+  promptMode: chat           # chat | code
+
+securityContext:
+  uid: 10001
+
+resources:
+  core:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1536Mi }
+  hub:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi }
+  proxy:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }

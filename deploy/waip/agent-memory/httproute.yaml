@@ -1,0 +1,57 @@
+# Two public routes; memory-core (8420) and the knowledge API (8424) stay internal.
+# parentRefs.namespace is mandatory (route in apps, Gateway in platform); no sectionName.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: $RELEASE_NAME-panel-route
+  labels:
+    app: $RELEASE_NAME
+    component: $RELEASE_NAME
+    managed-by: weaverai-platform
+spec:
+  hostnames:
+  - $HTTPROUTE_HOSTNAME
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: weaverai-gateway-fabric
+    namespace: platform
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: $RELEASE_NAME-hub
+      port: 8125
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: $RELEASE_NAME-proxy-route
+  labels:
+    app: $RELEASE_NAME
+    component: $RELEASE_NAME
+    managed-by: weaverai-platform
+spec:
+  hostnames:
+  - $PROXY_HOSTNAME
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: weaverai-gateway-fabric
+    namespace: platform
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: $RELEASE_NAME-proxy
+      port: 8096
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /

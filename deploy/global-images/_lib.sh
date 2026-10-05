@@ -77,6 +77,17 @@ find_docker() {
 
 DOCKER="$(find_docker)"
 
+# Git Bash / MSYS（Windows）会把 `-v /c/...:/data/...` 改写成 Windows 路径列表，
+# 导致 bind mount 失效（容器读不到生成的 config）。只对 docker 关闭路径转换；
+# curl 等其他命令仍需转换才能识别 /tmp、/dev/null。
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    _DOCKER_BIN="$DOCKER"
+    _docker_nopathconv() { MSYS_NO_PATHCONV=1 "$_DOCKER_BIN" "$@"; }
+    DOCKER=_docker_nopathconv
+    ;;
+esac
+
 # PULL=1 时拉取镜像最新版本。
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。

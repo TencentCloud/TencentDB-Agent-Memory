@@ -105,7 +105,8 @@ tdai:
 
 skill:
   endpoint: "http://memory-core:8420"
-  serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
+  # core 的 /v3/skill/* 要求非空 Bearer；Bearer gate 关闭时不校验值，用占位符兜底
+  serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 
 # knowledge 注入器的注册门槛（shouldRegisterKnowledgeInjector）：
 # injectors 含 knowledge + knowledge.enabled + knowledge.serviceToken 三者同时满足。
