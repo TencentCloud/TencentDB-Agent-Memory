@@ -8,7 +8,7 @@
 > OpenHands 经 LiteLLM 发标准 `chat/completions`，可用 `extra_headers` 挂自定义 header；
 > 它无法响应 proxy 返回的 form tool call，所以身份只能靠 header 传入。
 
-客户端侧只含文档与示例；proxy 侧需要两行改动，把 OpenHands 归入 header 预选类客户端（§6）。
+客户端侧只含文档与示例；proxy 侧另有少量改动，把 OpenHands 归入 header 预选类客户端（§6）。
 
 > 引用约定：`file:line` 锚点基于基线 commit `8b86874`；本 PR 补丁涉及文件内锚点可能漂移，
 > 以锚点旁的符号名为准。
