@@ -292,9 +292,23 @@ function bindingToIdFields(
  * 恢复而不 401。
  */
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+  // 观测到的行为（OpenHands 接入实测）：chat 链路存的 key 是 `${agentSource}:${sessionId}`
+  // (handler.ts:810, :877)，而这里只探 bare + codebuddy: + claude-code:。header 预选类客户端
+  // (hermes / openclaw / openhands) 的 session 因此对 bridge 不可见，L1 必 miss；此时若调用方
+  // 又没带 x-tdai-service-id，`spaceId` 为空会整段跳过 loadSessionIdsL2（本文件 handler 内
+  // `if (!ids && bindingRepoInline && spaceId)` 门），直接落到 40101 ——
+  // 看起来像"session 没初始化"，实际是前缀不对齐。
+  // 补齐已上线的 header 预选前缀，零新增失败模式（命中不到只是继续往下探）。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [
+        sessionId,
+        `codebuddy:${sessionId}`,
+        `claude-code:${sessionId}`,
+        `hermes:${sessionId}`,
+        `openclaw:${sessionId}`,
+        `openhands:${sessionId}`,
+      ];
   for (const k of candidates) {
     const s = getSessionStore().get(k);
     if (s) {
