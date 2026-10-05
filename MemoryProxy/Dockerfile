@@ -47,6 +47,10 @@ RUN npm install -g npm@11 --no-audit --no-fund
 # 先复制包元数据以最大化 Docker layer cache。
 COPY package.json package-lock.json ./
 
+# npm ≥ 11.21 默认不跑依赖的 install 脚本（allowScripts），better-sqlite3 /
+# node-pty 的原生模块就不会编译，运行时 require 失败。显式放行这两个。
+RUN printf 'allow-scripts[]=better-sqlite3\nallow-scripts[]=node-pty\n' > .npmrc
+
 # 安装全部依赖（保留 dev：tsx 运行时需要；保留 optional：sqlite/cos/cost-guard）。
 # 使用 BuildKit npm cache mount 大幅加速重复构建。
 RUN --mount=type=cache,id=proxy-npm-cache,target=/root/.npm \
@@ -78,11 +82,12 @@ WORKDIR /app
 RUN groupadd -r app && useradd -r -g app -u 10001 -m app
 
 # 从 builder 拷贝整个 /app（含 node_modules 里指向 packages/cost-guard 的 file: 软链）
-COPY --from=deps-builder /app /app
+# --chown 在拷贝时设属主，避免对整个 node_modules 再跑一遍 chown -R（很慢且多一层）
+COPY --from=deps-builder --chown=app:app /app /app
 
 # 数据 / 日志目录（可作为 K8s PVC 挂载）
 RUN mkdir -p /data/tdai-memory-proxy /data/config /app/logs && \
-    chown -R app:app /app /data
+    chown -R app:app /data /app/logs
 
 USER app
 
