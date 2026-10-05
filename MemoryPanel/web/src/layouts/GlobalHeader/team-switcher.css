@@ -52,7 +52,7 @@
 ._memory-team-switcher-meta {
   flex: 1;
   min-width: 0;
-  text-align: left;
+  text-align: start;
 }
 
 ._memory-team-switcher-name {
@@ -165,7 +165,7 @@
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
 }
@@ -220,7 +220,7 @@
 ._memory-team-switcher-item-ops {
   position: absolute;
   top: 50%;
-  right: 8px;
+  inset-inline-end: 8px;
   transform: translateY(-50%);
   display: flex;
   align-items: center;

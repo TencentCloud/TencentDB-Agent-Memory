@@ -66,7 +66,7 @@
   background: var(--tea-color-bg-primary-default);
   font: inherit;
   color: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: border-color 0.15s ease-in-out, background-color 0.15s ease-in-out;
 }
@@ -163,7 +163,7 @@
 }
 
 ._memory-workbench-task-card-time {
-  margin-left: auto;
+  margin-inline-start: auto;
   white-space: nowrap;
 }
 
@@ -228,7 +228,7 @@
 
 ._memory-workbench-people-label {
   flex-shrink: 0;
-  margin-right: 2px;
+  margin-inline-end: 2px;
 }
 
 /* 人员 chip — 无边框，圆角药丸，干净 */

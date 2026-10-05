@@ -40,12 +40,12 @@ export const mdComponents: Components = {
     </p>
   ),
   ul: ({ children, ...p }) => (
-    <ul className="text-sm list-disc pl-5 mb-3 space-y-1 text-foreground/70" {...p}>
+    <ul className="text-sm list-disc ps-5 mb-3 space-y-1 text-foreground/70" {...p}>
       {children}
     </ul>
   ),
   ol: ({ children, ...p }) => (
-    <ol className="text-sm list-decimal pl-5 mb-3 space-y-1 text-foreground/70" {...p}>
+    <ol className="text-sm list-decimal ps-5 mb-3 space-y-1 text-foreground/70" {...p}>
       {children}
     </ol>
   ),
@@ -87,7 +87,7 @@ export const mdComponents: Components = {
   ),
   blockquote: ({ children, ...p }) => (
     <blockquote
-      className="border-l-[3px] border-primary/40 pl-4 italic text-muted-foreground my-3"
+      className="border-s-[3px] border-primary/40 ps-4 italic text-muted-foreground my-3"
       {...p}
     >
       {children}
@@ -101,7 +101,7 @@ export const mdComponents: Components = {
     </div>
   ),
   th: ({ children, ...p }) => (
-    <th className="border border-border px-3 py-2 bg-muted text-left text-xs font-semibold" {...p}>
+    <th className="border border-border px-3 py-2 bg-muted text-start text-xs font-semibold" {...p}>
       {children}
     </th>
   ),
@@ -130,12 +130,12 @@ const mdComponentsCompact: Components = {
     </p>
   ),
   ul: ({ children, ...p }) => (
-    <ul className="text-[12px] text-muted-foreground list-disc pl-4 mb-2 space-y-0.5" {...p}>
+    <ul className="text-[12px] text-muted-foreground list-disc ps-4 mb-2 space-y-0.5" {...p}>
       {children}
     </ul>
   ),
   ol: ({ children, ...p }) => (
-    <ol className="text-[12px] text-muted-foreground list-decimal pl-4 mb-2 space-y-0.5" {...p}>
+    <ol className="text-[12px] text-muted-foreground list-decimal ps-4 mb-2 space-y-0.5" {...p}>
       {children}
     </ol>
   ),
@@ -175,7 +175,7 @@ const mdComponentsCompact: Components = {
   ),
   th: ({ children, ...p }) => (
     <th
-      className="border border-border px-2 py-1.5 bg-muted text-left text-[11px] font-semibold"
+      className="border border-border px-2 py-1.5 bg-muted text-start text-[11px] font-semibold"
       {...p}
     >
       {children}

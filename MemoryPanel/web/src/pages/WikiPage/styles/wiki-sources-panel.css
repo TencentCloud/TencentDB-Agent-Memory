@@ -46,7 +46,7 @@
 }
 
 ._wiki-detail-breadcrumb .tea-btn {
-  padding-left: 0;
+  padding-inline-start: 0;
 }
 
 ._wiki-detail-header-row,
@@ -153,13 +153,13 @@
   display: block;
   flex: 0 0 208px;
   height: 48px;
-  margin-right: 0;
+  margin-inline-end: 0;
   border: 1px solid var(--tea-color-border-primary-default);
   border-bottom: 0;
 }
 
 ._wiki-detail-tabs .tea-tabs__tabitem + .tea-tabs__tabitem {
-  border-left: 0;
+  border-inline-start: 0;
 }
 
 ._wiki-detail-tabs .tea-tabs__tab {
@@ -262,7 +262,7 @@
 ._wiki-detail-type-count {
   width: 80px;
   flex-shrink: 0;
-  text-align: right;
+  text-align: end;
 }
 
 ._wiki-detail-overview-grid {
@@ -280,7 +280,7 @@
   border-radius: 4px;
   background: var(--tea-color-bg-primary-default);
   cursor: pointer;
-  text-align: left;
+  text-align: start;
 }
 
 ._wiki-detail-overview-item:hover {
@@ -436,7 +436,7 @@
   color: var(--tea-color-text-secondary);
   cursor: pointer;
   font-size: 12px;
-  text-align: left;
+  text-align: start;
 }
 
 ._wiki-detail-page-row.is-active ._wiki-detail-page-item {
@@ -530,7 +530,7 @@
   color: var(--tea-color-text-secondary);
   cursor: pointer;
   font-size: 12px;
-  text-align: left;
+  text-align: start;
 }
 
 ._wiki-detail-rawfiles-item > button:first-child span {
@@ -561,7 +561,7 @@
   border-radius: 4px;
   background: var(--tea-color-bg-primary-default);
   cursor: pointer;
-  text-align: left;
+  text-align: start;
 }
 
 ._wiki-detail-search-item:hover {
@@ -593,7 +593,7 @@
 ._wiki-detail-search-item-snippet {
   display: -webkit-box;
   overflow: hidden;
-  padding-left: 12px;
+  padding-inline-start: 12px;
   -webkit-box-orient: vertical;
   line-clamp: 2;
   -webkit-line-clamp: 2;

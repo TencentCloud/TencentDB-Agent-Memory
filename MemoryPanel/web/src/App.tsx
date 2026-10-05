@@ -19,10 +19,13 @@ import { ConfigProvider } from 'tea-component';
 import LoginGate from '@/components/LoginGate';
 import { useAuthStore } from '@/stores/auth';
 import { router } from '@/routes';
+import { teaHeIL } from '@/i18n/tea-he-IL';
 
-/** react-i18next 语言 → tea-component locale 映射 */
-function toTeaLocale(lang: string): 'zh' | 'en' {
-  return lang.startsWith('zh') ? 'zh' : 'en';
+type TeaLocale = 'en' | typeof teaHeIL;
+
+/** react-i18next language → tea-component locale (tea ships no Hebrew pack, so we supply one) */
+function toTeaLocale(lang: string): TeaLocale {
+  return lang.startsWith('he') ? teaHeIL : 'en';
 }
 
 export default function App() {
@@ -30,10 +33,10 @@ export default function App() {
   const auth = useAuthStore((s) => s.auth);
   const setAuth = useAuthStore((s) => s.setAuth);
   const checkSession = useAuthStore((s) => s.checkSession);
-  // 当前 tea-component locale，跟 react-i18next 同步
-  const [teaLocale, setTeaLocale] = useState<'zh' | 'en'>(() => toTeaLocale(i18n.language));
+  // Current tea-component locale, kept in sync with react-i18next
+  const [teaLocale, setTeaLocale] = useState<TeaLocale>(() => toTeaLocale(i18n.language));
 
-  // 监听 react-i18next 语言切换，同步给 tea-component
+  // Follow react-i18next language switches and pass them on to tea-component
   useEffect(() => {
     setTeaLocale(toTeaLocale(i18n.language));
     const handler = (lng: string) => setTeaLocale(toTeaLocale(lng));

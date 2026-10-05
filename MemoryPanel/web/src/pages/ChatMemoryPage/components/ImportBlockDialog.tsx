@@ -92,7 +92,7 @@ export function ImportBlockDialog({
             <Alert type="warning">{t('importBlock.agent.noAgent')}</Alert>
           ) : (
             <Select size="full" value={scopeAgentId} onChange={setScopeAgentId}
-              options={agents.map((a) => ({ value: a.agent_id, text: `${a.name}（${a.agent_id}）` }))} />
+              options={agents.map((a) => ({ value: a.agent_id, text: `${a.name} (${a.agent_id})` }))} />
           )}
         </Form.Item>
       </Form>
@@ -100,9 +100,9 @@ export function ImportBlockDialog({
       <Alert type="info" style={{ marginTop: 12 }}>
         <div className="space-y-1">
           <div>{t('importBlock.format.title', { format: '[{role, content}]' })}</div>
-          <ul className="list-disc pl-5 text-[11px] space-y-0.5">
+          <ul className="list-disc ps-5 text-[11px] space-y-0.5">
             <li><code className="text-[11px]">role</code> {t('importBlock.format.role')}<code className="text-[11px]">"user"</code> / <code className="text-[11px]">"assistant"</code></li>
-            <li><code className="text-[11px]">content</code>：{t('importBlock.format.content')}</li>
+            <li><code className="text-[11px]">content</code>: {t('importBlock.format.content')}</li>
             <li>{t('importBlock.format.max')} <strong>{MAX_MESSAGES}</strong> {t('importBlock.format.messages')}</li>
           </ul>
         </div>

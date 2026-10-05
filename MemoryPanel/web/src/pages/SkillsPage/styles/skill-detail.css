@@ -291,7 +291,7 @@
 
 /* 子层级靠嵌套 ul 的固定缩进，避免在 li 上写动态内联 style */
 ._memory-skill-filetree ._memory-skill-filetree {
-  padding-left: 12px;
+  padding-inline-start: 12px;
 }
 
 ._memory-skill-filetree li {

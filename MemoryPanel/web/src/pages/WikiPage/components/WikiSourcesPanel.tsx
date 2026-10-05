@@ -104,7 +104,7 @@ export default function WikiSourcesPanel() {
               placeholder={t('wiki.noAgentPlaceholder')}
               options={teamAgents.map((agent) => ({
                 value: agent.id,
-                text: `${agent.name}（${agent.id}）`,
+                text: `${agent.name} (${agent.id})`,
               }))}
             />
           ) : undefined

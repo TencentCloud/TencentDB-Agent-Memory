@@ -202,7 +202,7 @@
   border: 0;
   background: transparent;
   cursor: pointer;
-  text-align: left;
+  text-align: start;
 }
 
 ._asset-wiki-card-name,
@@ -280,7 +280,7 @@
 }
 
 ._codelist-card-meta-you {
-  margin-left: 4px;
+  margin-inline-start: 4px;
   color: var(--tea-color-text-brand-default);
 }
 

@@ -192,7 +192,7 @@ export function UsageRawTable({
                   { value: ALL_REASONS, text: t('analytics.usage.raw.allReasons') },
                   ...USAGE_RAW_REASONS.map((r) => ({
                     value: r,
-                    text: `${t(`analytics.usage.reason.${r}`, { defaultValue: r })}（${fmtInt(reasonCounts[r] ?? 0)}）`,
+                    text: `${t(`analytics.usage.reason.${r}`, { defaultValue: r })} (${fmtInt(reasonCounts[r] ?? 0)})`,
                   })),
                 ]}
                 listWidth={260}

@@ -61,7 +61,7 @@ const DUP_CHECK_MAP: Record<string, DupCheckConfig> = {
     listBody: () => ({}),
     filterParam: 'username',
     matchValue: (b) => (typeof b.username === 'string' ? b.username : undefined),
-    entityLabel: '用户',
+    entityLabel: 'user',
   },
   // user/create 的姊妹接口：查重口径与 user/create 完全一致（先按 username 精确 list）。
   // user_key 的重复由内核 duplicate_user_key(409) 兜底，Panel 直接透传。
@@ -70,14 +70,14 @@ const DUP_CHECK_MAP: Record<string, DupCheckConfig> = {
     listBody: () => ({}),
     filterParam: 'username',
     matchValue: (b) => (typeof b.username === 'string' ? b.username : undefined),
-    entityLabel: '用户',
+    entityLabel: 'user',
   },
   'team/create': {
     listAction: 'team/list',
     listBody: (b) => ({ user_id: b.owner_user_id }),
     filterParam: 'name',
     matchValue: (b) => (typeof b.name === 'string' ? b.name : undefined),
-    entityLabel: '团队',
+    entityLabel: 'team',
   },
   'agent/create': {
     listAction: 'agent/list',
@@ -133,7 +133,7 @@ async function checkDuplicate(
           return typeof value === 'string' && value === targetValue;
         });
         if (duplicated) {
-          return `已存在同名${config.entityLabel}「${targetValue}」，请更换名称后重试。`;
+          return `A ${config.entityLabel} named "${targetValue}" already exists. Please choose another name and try again.`;
         }
       }
     }
@@ -223,7 +223,7 @@ export function registerMetaProxyRoutes(api: Hono, deps: PanelDeps): void {
 
 // 默认 Agent 预置字段（对齐内核 DEFAULT_AGENT_*，无模板时建 default-agent 用）
 const DEFAULT_AGENT_NAME = 'default-agent';
-const DEFAULT_AGENT_DESCRIPTION = '默认助手，可处理通用开发任务与日常协作。';
+const DEFAULT_AGENT_DESCRIPTION = 'Default assistant for general development tasks and day-to-day collaboration.';
 const DEFAULT_AGENT_PROMPT = '';
 const DEFAULT_AGENT_METADATA_JSON = JSON.stringify({
   ui: { role_prompt: '', rules_prompt: '' },

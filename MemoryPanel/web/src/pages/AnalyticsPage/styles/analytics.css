@@ -18,7 +18,7 @@
 }
 
 ._an-stamp {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: 12px;
 }
 
@@ -158,7 +158,7 @@
 }
 
 ._an-trend-max {
-  margin-left: auto;
+  margin-inline-start: auto;
   color: var(--tea-color-text-tertiary);
   font-size: 12px;
 }
@@ -182,7 +182,7 @@
   align-items: flex-start;
   gap: 6px;
   padding: 12px 14px;
-  text-align: left;
+  text-align: start;
   border: 1px solid var(--tea-color-border-primary-default);
   border-radius: 6px;
   background: var(--tea-color-bg-primary-default);
@@ -333,7 +333,7 @@
 }
 
 ._an-raw-breakdown {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: 12px;
 }
 
@@ -403,7 +403,7 @@
   padding: 0;
   height: auto;
   line-height: inherit;
-  text-align: left;
+  text-align: start;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;

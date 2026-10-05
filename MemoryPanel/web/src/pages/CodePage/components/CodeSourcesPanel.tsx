@@ -97,7 +97,7 @@ export default function CodeSourcesPanel() {
               placeholder={t('code.noAgent')}
               options={teamAgents.map((agent) => ({
                 value: agent.id,
-                text: `${agent.name}（${agent.id}）`,
+                text: `${agent.name} (${agent.id})`,
               }))}
             />
           ) : undefined

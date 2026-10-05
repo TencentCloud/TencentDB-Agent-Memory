@@ -88,7 +88,7 @@
 ._alp-item-btn {
   display: block;
   width: 100%;
-  text-align: left;
+  text-align: start;
   border: none;
   background: none;
   cursor: pointer;
@@ -239,7 +239,7 @@
 }
 
 ._alp-item-time {
-  margin-left: auto;
+  margin-inline-start: auto;
   white-space: nowrap;
   /* 独立声明字号颜色，不再依赖 _alp-item-meta 行继承，保证放哪都统一 */
   font-size: 12px;

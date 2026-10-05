@@ -35,17 +35,17 @@ export function validateImportedAgents(
   ids: string[],
   teamAgents: Array<{ agent_id: string }>,
 ): ValidateResult {
-  if (!Array.isArray(ids)) return { ok: false, reason: 'imported_agent_ids 必须是数组' };
+  if (!Array.isArray(ids)) return { ok: false, reason: 'imported_agent_ids must be an array' };
   if (ids.length > MAX_IMPORTED_AGENTS) {
-    return { ok: false, reason: `最多只能借入 ${MAX_IMPORTED_AGENTS} 个 agent` };
+    return { ok: false, reason: `at most ${MAX_IMPORTED_AGENTS} agents can be borrowed from` };
   }
   const teamSet = new Set(teamAgents.map((a) => a.agent_id));
   const seen = new Set<string>();
   for (const id of ids) {
-    if (!id || typeof id !== 'string') return { ok: false, reason: '存在无效的 agent_id' };
-    if (id === selfId) return { ok: false, reason: '不能借入自己的记忆' };
-    if (!teamSet.has(id)) return { ok: false, reason: `agent_id "${id}" 不在当前 team 中` };
-    if (seen.has(id)) return { ok: false, reason: '借入列表中存在重复 agent' };
+    if (!id || typeof id !== 'string') return { ok: false, reason: 'contains an invalid agent_id' };
+    if (id === selfId) return { ok: false, reason: 'an agent cannot borrow its own memory' };
+    if (!teamSet.has(id)) return { ok: false, reason: `agent_id "${id}" is not in the current team` };
+    if (seen.has(id)) return { ok: false, reason: 'duplicate agent in the borrow list' };
     seen.add(id);
   }
   return { ok: true };

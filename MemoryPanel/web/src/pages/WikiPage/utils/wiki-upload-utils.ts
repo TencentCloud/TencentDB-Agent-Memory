@@ -7,5 +7,5 @@ export function findExistingRawFilenames(
 }
 
 export function formatOverwriteFilenames(filenames: readonly string[]): string {
-  return filenames.map((filename) => `「${filename}」`).join('、 ');
+  return filenames.map((filename) => `"${filename}"`).join(', ');
 }

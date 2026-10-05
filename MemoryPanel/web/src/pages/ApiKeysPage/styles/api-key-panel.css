@@ -17,8 +17,8 @@
  * 这里强制让 ApiKey 页面所有 Card 都撑满父容器，行为与 Table Card 一致。 */
 ._memory-apikey-body > .tea-card {
   width: 100%;
-  margin-left: 0;
-  margin-right: 0;
+  margin-inline-start: 0;
+  margin-inline-end: 0;
 }
 
 /* 刚创建 Key 的提示 */

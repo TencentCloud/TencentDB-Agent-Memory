@@ -711,7 +711,7 @@ export default function SkillDetailPane(props: {
                         v{v.version}
                         {v.version === currentView.version && (
                           <span className="_memory-skill-version-current">
-                            （{t('skills.detail.versionCurrent')}）
+                            ({t('skills.detail.versionCurrent')})
                           </span>
                         )}
                       </span>

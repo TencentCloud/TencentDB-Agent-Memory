@@ -123,7 +123,7 @@ export default function SkillsPanel({
               placeholder={t('skills.noAgent')}
               options={teamAgents.map((agent) => ({
                 value: agent.id,
-                text: `${agent.name}（${agent.id}）`,
+                text: `${agent.name} (${agent.id})`,
               }))}
             />
           ) : undefined

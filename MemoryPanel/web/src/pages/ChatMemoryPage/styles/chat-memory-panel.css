@@ -123,7 +123,7 @@
 
 /* 「解绑」红色链接文字按钮：靠右对齐（对齐 AssetItemTime 的 margin-left:auto） */
 ._memory-card-unbind {
-  margin-left: auto;
+  margin-inline-start: auto;
   padding: 0;
   border: none;
   background: none;
@@ -162,7 +162,7 @@
 ._memory-badge--warning {
   color: var(--tea-color-text-warning-default);
   font-weight: 500;
-  margin-left: 6px;
+  margin-inline-start: 6px;
 }
 
 /* ===== 详情面板容器 ===== */
@@ -277,7 +277,7 @@
 
 ._memory-detail-layer-btn {
   display: block;
-  text-align: left;
+  text-align: start;
   padding: 10px 12px;
   border: 1px solid var(--tea-color-border-primary-default);
   border-radius: 6px;
@@ -912,7 +912,7 @@
   border: none;
   font: inherit;
   color: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 
@@ -1123,7 +1123,7 @@
 ._memory-detail-search-score {
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
-  margin-left: 4px;
+  margin-inline-start: 4px;
   font-variant-numeric: tabular-nums;
 }
 

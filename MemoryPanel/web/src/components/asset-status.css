@@ -26,7 +26,7 @@
 
 /* OwnerLabel 的默认「你」标记（调用方也可注入自己的 class） */
 ._owner-label-you {
-  margin-left: 4px;
+  margin-inline-start: 4px;
   font-size: 12px;
   color: var(--tea-color-text-brand-default);
 }

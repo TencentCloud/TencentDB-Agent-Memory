@@ -328,7 +328,7 @@ export default function ImportSkillDialog(props: {
                 value={selectedAgentId}
                 onChange={setSelectedAgentId}
                 placeholder={t('importSkill.agent.placeholder')}
-                options={props.agents!.map((a) => ({ value: a.id, text: `${a.name}（${a.id}）` }))}
+                options={props.agents!.map((a) => ({ value: a.id, text: `${a.name} (${a.id})` }))}
               />
             )}
           </Form.Item>

@@ -177,7 +177,7 @@ function GraphControls() {
   const sigma = useSigma();
   const cls = "h-7 w-7 bg-card/90 hover:bg-card border border-border text-muted-foreground shadow-md rounded-md flex items-center justify-center transition-colors text-[12px] backdrop-blur";
   return (
-    <div className="absolute bottom-3 right-3 flex flex-col gap-1 z-10">
+    <div className="absolute bottom-3 end-3 flex flex-col gap-1 z-10">
       <button type="button" aria-label="Zoom in" className={cls} onClick={() => sigma.getCamera().animatedZoom({ duration: 200 })}>+</button>
       <button type="button" aria-label="Zoom out" className={cls} onClick={() => sigma.getCamera().animatedUnzoom({ duration: 200 })}>−</button>
       <button type="button" aria-label="Reset view" className={cls} onClick={() => sigma.getCamera().animatedReset({ duration: 300 })}>⊙</button>
@@ -234,15 +234,15 @@ export default function KnowledgeGraph({ data, loading, onNodeClick, highlightNo
       {/* Toolbar */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2 z-10" style={{ background: palette.toolbarBg, backdropFilter: 'blur(8px)' }}>
         <div className="relative flex-1 max-w-[180px]">
-          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 text-xs inline-flex items-center"><SearchIcon size={12} /></span>
+          <span className="absolute start-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 text-xs inline-flex items-center"><SearchIcon size={12} /></span>
           <input
-            className="h-7 w-full pl-7 pr-6 text-xs border rounded-md bg-card/80 border-border text-foreground/70 placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary"
+            className="h-7 w-full ps-7 pe-6 text-xs border rounded-md bg-card/80 border-border text-foreground/70 placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary"
             placeholder={t('graph.searchPlaceholder')}
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
           />
           {searchQuery && (
-            <button type="button" aria-label={t('graph.clearSearch')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-muted-foreground text-xs inline-flex items-center" onClick={() => { setSearchQuery(""); setSearchResults([]); }}><CloseIcon size={12} /></button>
+            <button type="button" aria-label={t('graph.clearSearch')} className="absolute end-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-muted-foreground text-xs inline-flex items-center" onClick={() => { setSearchQuery(""); setSearchResults([]); }}><CloseIcon size={12} /></button>
           )}
         </div>
         <div className="flex gap-0.5">
@@ -256,7 +256,7 @@ export default function KnowledgeGraph({ data, loading, onNodeClick, highlightNo
 
       {/* Search results dropdown */}
       {searchResults.length > 0 && searchQuery && (
-        <div className="absolute top-12 left-3 z-20 w-[190px] rounded-lg border shadow-xl p-1 max-h-[200px] overflow-auto bg-card/95 border-border backdrop-blur">
+        <div className="absolute top-12 start-3 z-20 w-[190px] rounded-lg border shadow-xl p-1 max-h-[200px] overflow-auto bg-card/95 border-border backdrop-blur">
           {searchResults.map((n) => (
             <div key={n.id} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-muted"
               onClick={() => { onNodeClick?.(n); setSearchQuery(""); setSearchResults([]); }}>

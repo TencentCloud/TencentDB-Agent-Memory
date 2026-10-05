@@ -31,7 +31,7 @@ export function WikiOwnerLabel({ userId, currentUserId }: { userId: string; curr
       currentUserId={currentUserId}
       title={t('wiki.detail.owner', { userId })}
       youText={t('wiki.detail.you')}
-      youClassName="ml-1 text-xs text-primary"
+      youClassName="ms-1 text-xs text-primary"
     />
   );
 }

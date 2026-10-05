@@ -113,7 +113,7 @@ export default function ChatMemoryPanel(
               placeholder={t('memory.noAgent')}
               options={ownedTeamAgents.map((agent) => ({
                 value: agent.agent_id,
-                text: `${agent.name}（${agent.agent_id}）`,
+                text: `${agent.name} (${agent.agent_id})`,
               }))}
             />
           ) : undefined

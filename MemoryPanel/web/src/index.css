@@ -136,7 +136,7 @@ textarea:focus-visible,
 .active-bar-left::before {
   content: '';
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   top: 4px;
   bottom: 4px;
   width: 3px;
@@ -188,9 +188,9 @@ select:focus {
 .agent-list-item:not(:last-child)::after,
 .list-item-divider:not(:last-child)::after {
   position: absolute;
-  right: 14px;
+  inset-inline-end: 14px;
   bottom: 0;
-  left: 14px;
+  inset-inline-start: 14px;
   height: 1px;
   content: '';
   background: linear-gradient(to right, transparent, var(--border) 50%, transparent);
@@ -257,4 +257,14 @@ body._guide-no-anim ._guide-mask-ring {
   box-shadow:
     0 0 0 2px rgba(255, 255, 255, 0.9),
     0 0 16px rgba(0, 0, 0, 0.4);
+}
+
+/* RTL (Hebrew): code, commands, keys and IDs stay left-to-right inside right-to-left pages */
+[dir='rtl'] pre,
+[dir='rtl'] code,
+[dir='rtl'] kbd,
+[dir='rtl'] .font-mono {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
 }

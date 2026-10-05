@@ -71,6 +71,6 @@
   flex-shrink: 0;
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
-  text-align: right;
+  text-align: end;
   line-height: 16px;
 }

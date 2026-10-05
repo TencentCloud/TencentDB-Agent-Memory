@@ -71,11 +71,11 @@ export default function AssetScopeManager({
           <span className="_memory-asset-scope-alert-em">
             <UsergroupIcon size={12} /> {t('assetScope.team')}
           </span>
-          （{t('assetScope.team.desc')}）{t('assetScope.or')}
+          ({t('assetScope.team.desc')}) {t('assetScope.or')}
           <span className="_memory-asset-scope-alert-em">
             <LockOnIcon size={12} /> {t('assetScope.private')}
           </span>
-          （{t('assetScope.private.desc')}）。{t('assetScope.manageHint')}
+          ({t('assetScope.private.desc')}). {t('assetScope.manageHint')}
         </div>
       </Alert>
 

@@ -84,7 +84,7 @@
 }
 
 ._memory-team-header-ops {
-  margin-left: auto;
+  margin-inline-start: auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -484,7 +484,7 @@
 
 ._memory-desc-count {
   margin-top: 4px;
-  text-align: right;
+  text-align: end;
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
 }
@@ -603,7 +603,7 @@
   flex-shrink: 0;
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
-  text-align: right;
+  text-align: end;
   line-height: 14px;
 }
 
@@ -814,7 +814,7 @@
   border: none;
   background: transparent;
   cursor: pointer;
-  text-align: left;
+  text-align: start;
 }
 ._memory-collapse-group-header:hover {
   background: var(--tea-color-bg-secondary-hover);
@@ -842,7 +842,7 @@
 }
 
 ._memory-collapse-group-count {
-  margin-left: 4px;
+  margin-inline-start: 4px;
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
 }
@@ -857,7 +857,7 @@
   display: inline-block;
   width: 64px;
   height: 12px;
-  margin-left: 4px;
+  margin-inline-start: 4px;
   border-radius: 3px;
   background: linear-gradient(
     90deg,
@@ -947,7 +947,7 @@
 
 ._memory-asset-check-item-slug {
   flex-shrink: 0;
-  margin-left: auto;
+  margin-inline-start: auto;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
@@ -1048,7 +1048,7 @@
   border: 0;
   background: transparent;
   color: var(--tea-color-text-primary);
-  text-align: left;
+  text-align: start;
 }
 
 ._memory-agents-name-trigger--editable {
@@ -1229,7 +1229,7 @@
 }
 
 ._memory-agents-skeleton-line--chevron {
-  margin-left: auto;
+  margin-inline-start: auto;
   width: 12px;
   height: 12px;
   border-radius: 3px;

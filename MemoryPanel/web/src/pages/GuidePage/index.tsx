@@ -47,7 +47,7 @@ const QUICK_STEPS: Array<{ id: QuickTab; title: string; sub: string }> = [
 const QUICK_SETUP_SCRIPT = 'bash agents/setup-proxy.sh';
 const QUICK_SETUP_SKILL_PREP = 'cp -r agents ~/agents';
 const QUICK_SETUP_SKILL_PROMPT =
-  '请阅读 ~/agents/skills/setup-proxy/SKILL.md，然后按照里面的步骤引导我完成 Agent 接入 Memory Proxy 的配置。';
+  'Read ~/agents/skills/setup-proxy/SKILL.md, then follow its steps to guide me through connecting my Agent to Memory Proxy.';
 const HISTORY_IMPORT_SCRIPT = 'tsx agents/asset-import.ts --source <agent> --agent-id <id> --team-id <tid>';
 const HISTORY_SOURCES = 'claude-code, codebuddy, codex, workbuddy, dsh, hermes, openclaw';
 const KEY_PLACEHOLDER = '<your-team-memory-api-key>';
@@ -114,7 +114,7 @@ const MANUAL_IDES: ManualIde[] = [
     file: '~/.dsh/settings.yaml + ~/.dsh/.credentials.yaml',
     protocol: 'OpenAI Chat',
     config: (base, instanceId, mode, model) =>
-      `# ~/.dsh/settings.yaml\nllm-deepseek:\n  apiKeyEnv: PROXY_USER_KEY\n  # 尾巴不要加 /v1 —— dsh 硬编码 baseURL/chat/completions\n  baseURL: ${proxyEndpoint(base, 'dsh', instanceId, mode)}\n  model: ${model}\n  reasoningEffort: high\n\n# ~/.dsh/.credentials.yaml\nPROXY_USER_KEY: ${KEY_PLACEHOLDER}`,
+      `# ~/.dsh/settings.yaml\nllm-deepseek:\n  apiKeyEnv: PROXY_USER_KEY\n  # no trailing /v1 — dsh hardcodes baseURL/chat/completions\n  baseURL: ${proxyEndpoint(base, 'dsh', instanceId, mode)}\n  model: ${model}\n  reasoningEffort: high\n\n# ~/.dsh/.credentials.yaml\nPROXY_USER_KEY: ${KEY_PLACEHOLDER}`,
     notes: [
       'guide.manual.note.dsh.0',
       'guide.manual.note.dsh.1',
@@ -125,7 +125,7 @@ const MANUAL_IDES: ManualIde[] = [
     id: 'hermes',
     name: 'Hermes',
     file: '~/.hermes/config.yaml',
-    protocol: 'OpenAI Chat + Header 预选',
+    protocol: 'OpenAI Chat + header preselect',
     config: (base, instanceId, mode, model) =>
       `model:\n  default: ${model}\n  provider: custom\n  base_url: ${proxyEndpoint(base, 'hermes', instanceId, mode)}\n  api_key: ${KEY_PLACEHOLDER}\n  extra_headers:\n    x-team-id: "<team-id>"\n    x-agent-id: "<agent-id>"\n    x-task-id: "no-task"\n    x-conversation-id: "<conv-id>"`,
     notes: [
@@ -138,7 +138,7 @@ const MANUAL_IDES: ManualIde[] = [
     id: 'openclaw',
     name: 'OpenClaw',
     file: '~/.openclaw/openclaw.json',
-    protocol: 'OpenAI Chat + Header 预选',
+    protocol: 'OpenAI Chat + header preselect',
     config: (base, instanceId, mode, model) =>
       `{\n  "models": {\n    "mode": "merge",\n    "providers": {\n      "memory-proxy": {\n        "baseUrl": "${proxyEndpoint(base, 'openclaw', instanceId, mode)}",\n        "apiKey": "${KEY_PLACEHOLDER}",\n        "api": "openai-completions",\n        "headers": {\n          "x-team-id": "<team-id>",\n          "x-agent-id": "<agent-id>",\n          "x-task-id": "no-task",\n          "x-conversation-id": "<conv-id>"\n        },\n        "request": { "allowPrivateNetwork": true },\n        "models": [\n          {\n            "id": "${model}",\n            "name": "${model}",\n            "reasoning": false,\n            "input": ["text"],\n            "contextWindow": 128000,\n            "maxTokens": 32000,\n            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }\n          }\n        ]\n      }\n    }\n  }\n}`,
     notes: [

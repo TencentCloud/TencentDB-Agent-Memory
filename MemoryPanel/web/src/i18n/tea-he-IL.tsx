@@ -1,0 +1,70 @@
+/**
+ * Hebrew pack for tea-component's built-in texts (pagination, date picker, empty states…).
+ * tea-component ships no Hebrew locale; shape mirrors tea-component/lib/i18n/locale/en_US.
+ */
+import type { Locale } from 'tea-component/lib/i18n';
+
+export const teaHeIL: Locale = {
+  locale: 'he_IL',
+  okText: 'אישור',
+  cancelText: 'ביטול',
+  loadingText: 'טוען…',
+  loadErrorText: 'הטעינה נכשלה',
+  loadRetryText: 'ניסיון חוזר',
+  closeText: 'סגירה',
+  helpText: 'עזרה',
+  cleanText: 'ניקוי',
+  resetText: 'איפוס',
+  searchText: 'חיפוש',
+  emptyText: 'אין עדיין נתונים',
+  selectAllText: 'בחירת הכול',
+  paginationRecordCount: (count: number) => (
+    <>
+      סה״כ פריטים: <strong>{count}</strong>{' '}
+    </>
+  ),
+  paginationPrevPage: 'הקודם',
+  paginationNextPage: 'הבא',
+  paginationToFirstPage: 'עמוד ראשון',
+  paginationToLastPage: 'עמוד אחרון',
+  paginationAtFirst: 'זה העמוד הראשון',
+  paginationAtLast: 'זה העמוד האחרון',
+  paginationRecordPerPage: '/ עמוד',
+  paginationPageCount: (count: number) => ` / ${count} ${count > 1 ? 'עמודים' : 'עמוד'}`,
+  pleaseSelect: 'נא לבחור',
+  foundText: 'נמצאו התוצאות הבאות',
+  foundManyText: (count: number) => (count > 1 ? `נמצאו ${count} תוצאות` : 'נמצאה תוצאה אחת'),
+  foundManyTextWithKeyword: (keyword: string, count: number) =>
+    count > 1 ? `נמצאו ${count} תוצאות עבור "${keyword}"` : `נמצאה תוצאה אחת עבור "${keyword}"`,
+  foundNothingWithKeyword: (keyword: string) => `לא נמצאו תוצאות עבור "${keyword}"`,
+  clearResultText: 'חזרה לרשימה',
+  tagSearchBoxTips: 'הפרד מילות מפתח באמצעות "|"; הקש Enter כדי להפריד תגיות סינון',
+  tagSearchBoxEditingTips: 'לחץ כדי לשנות. הקש Enter לסיום.',
+  tagSearchBoxSelectTitle: 'בחירת מסנן',
+  today: 'היום',
+  curMonth: 'החודש',
+  prevMonth: 'החודש הקודם',
+  nextMonth: 'החודש הבא',
+  curYear: 'השנה',
+  prevYear: 'השנה הקודמת',
+  nextYear: 'השנה הבאה',
+  curTwentyYears: '20 השנים האחרונות',
+  prevTwentyYears: '20 השנים הקודמות',
+  nextTwentyYears: '20 השנים הבאות',
+  monthBeforeYear: true,
+  yearFormat: ' YYYY',
+  selectTime: 'בחירת שעה',
+  startTime: 'שעת התחלה',
+  endTime: 'שעת סיום',
+  selectDate: 'בחירת תאריך',
+  guideCancel: 'דילוג',
+  guideBack: 'הקודם',
+  guideNext: 'הבא',
+  guideFinish: 'סיום',
+  copy: 'העתקה',
+  copied: 'הועתק',
+  clickToEnlarge: 'לחץ להגדלה',
+  expand: 'הרחבה',
+  collapse: 'כיווץ',
+  recentlyVisited: 'נצפו לאחרונה',
+};
