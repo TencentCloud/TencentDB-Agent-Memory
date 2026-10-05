@@ -13,8 +13,8 @@ export interface StoreHealth {
 
 /**
  * A constructed store can still be unusable: SQLite deliberately keeps such a
- * store alive in degraded no-op mode. Health must distinguish that from a
- * usable store so readiness probes do not accept a write-dropping instance.
+ * store alive in degraded no-op mode. This diagnostic state lets callers
+ * distinguish default-store readiness from the gateway's HTTP liveness.
  */
 export function getStoreHealth(store: HealthCheckedStore | undefined): StoreHealth {
   if (!store) return { status: "unavailable" };

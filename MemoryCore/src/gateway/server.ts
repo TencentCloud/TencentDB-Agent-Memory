@@ -1457,13 +1457,15 @@ export class TdaiGateway {
   }
 
   private handleHealth(res: http.ServerResponse): void {
-    const vectorStoreHealth = getStoreHealth(this.core.getVectorStore());
+    const vectorStore = this.core.getVectorStore();
+    const vectorStoreHealth = getStoreHealth(vectorStore);
     const response: HealthResponse = {
       status: vectorStoreHealth.status === "ok" ? "ok" : "degraded",
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: vectorStoreHealth.status,
+        vectorStore: !!vectorStore,
+        vectorStoreStatus: vectorStoreHealth.status,
         ...(vectorStoreHealth.reason ? { vectorStoreReason: vectorStoreHealth.reason } : {}),
         embeddingService: !!this.core.getEmbeddingService(),
       },
@@ -1474,6 +1476,8 @@ export class TdaiGateway {
         stateBackend: this.stateBackend ? "connected" : "none",
       },
     };
+    // Keep liveness successful even when memory storage is degraded; callers
+    // can inspect vectorStoreStatus for default-store readiness.
     sendJson(res, 200, response);
   }
 
