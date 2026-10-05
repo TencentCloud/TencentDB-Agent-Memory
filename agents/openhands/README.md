@@ -6,11 +6,12 @@
 > OpenHands 通过 LiteLLM 发标准 `chat/completions`，可用 `extra_headers` 挂自定义 header；它无法响应
 > proxy 返回的 form tool call，所以身份必须由 header 传入。
 
-Client side is docs + examples only; two proxy-side lines make OpenHands a header-preselect agent (§6).
+Client side is docs + examples only; a few proxy-side edits make OpenHands a header-preselect agent (§6).
 
 > Citation convention: `file:line` anchors reference base commit `8b86874` (`feat/server_team` tip).
-> In the two files this PR patches (`skill-bridge.ts`, `memory-bridge.ts`, +13/+14 lines around the
-> cited functions) later anchors may drift — the symbolic name next to each anchor is authoritative.
+> Anchors that fall after an insertion in this PR's diff drift by that many lines (`skill-bridge.ts`
+> +15, `memory-bridge.ts` +12); code this PR introduces has no base anchor at all and is cited by
+> symbol name. In both cases the symbolic name next to each anchor is authoritative.
 
 ---
 
@@ -141,9 +142,10 @@ sessions, bindings, rate-limit buckets and conversation buffers.
 This PR adds a named volume using the idiom the sibling services already use
 (`start-memory-core.sh:208`, `start-memory-hub.sh:98`): `PROXY_VOLUME` (default `tdai-proxy-data`)
 mounted at `/data/tdai-memory-proxy`. `PROXY_DB_PATH` is deliberately **not** overridden — the image
-already sets it, so mounting that directory keeps code and mount in agreement in one line. To wipe
-sessions on purpose: `docker volume rm tdai-proxy-data` — or `./stop-all.sh --purge`, whose volume loop
-this PR extends with `PROXY_VOLUME` (`stop-all.sh:39`) so purge stays a true full wipe.
+already sets it, so mounting that directory keeps code and mount in agreement. To wipe sessions on
+purpose: `docker volume rm tdai-proxy-data`, or `./stop-all.sh --purge` — this PR adds
+`PROXY_VOLUME` to that script's purge volume loop (base `stop-all.sh:37`) so `--purge` stays a true
+full wipe.
 
 ---
 
@@ -178,8 +180,9 @@ injection hint is gated at `injection/index.ts:310-311`). Upstream's **only** sw
 `skillRuntime.allowLlmWrite: true` (`config.example.yaml:663`).
 
 This PR also adds an opt-in shim to `deploy/global-images/start-proxy.sh`: `PROXY_ALLOW_LLM_WRITE=1`
-in `.env` renders that YAML key via the script's own `bool()` helper (shim default `:88`, render site
-`:175-176`, effective state logged on every start `:179`). Pilot-verified live 2026-10-05: `=1` →
+in `.env` renders that YAML key via the script's own `bool()` helper (the shim default, the
+`skillRuntime:` render site, and the start-up log line that prints the effective state — all
+code this PR introduces, so anchor by name, not line). Pilot-verified live 2026-10-05: `=1` →
 `allowLlmWrite: true` in the regenerated `config.yaml`, container recreated healthy. (The gate's
 enforcement point itself was proven earlier that day: with the flag unset, a bridge write under an
 initialized session returned exactly `403 {"code":40302,...}` — identity resolved, write refused.)
