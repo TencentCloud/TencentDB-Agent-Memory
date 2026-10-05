@@ -26,7 +26,7 @@
 ## 快速开始
 
 ```bash
-cd TencentDB-Agent-Memory/deploy/global-images
+cd Agent-Memory/deploy/global-images
 
 # 一条命令：自动复制 .env → 交互式填 LLM → 自动校验通路 → 拉起三件套
 ./start-all.sh
