@@ -1,5 +1,5 @@
 name: ✨ Feature Request
-description: Propose a feature or suggestion | 提出一个功能需求或建议
+description: Propose a feature or suggestion
 title: "[Feature] "
 labels: ["enhancement"]
 assignees: []
@@ -8,35 +8,35 @@ body:
   - type: textarea
     id: related-problem
     attributes:
-      label: Is this feature related to a problem? | 该功能需求是否与某个问题相关？请描述
-      description: A clear and concise description of the problem | 清晰简洁地描述问题是什么
-      placeholder: e.g. I'm frustrated when... | 例如：我总是在使用 XX 功能时感到不便...
+      label: Is this feature related to a problem? Please describe
+      description: A clear and concise description of the problem
+      placeholder: e.g. I'm frustrated when...
     validations:
       required: true
 
   - type: textarea
     id: solution
     attributes:
-      label: Describe the solution you'd like | 描述你期望的解决方案
-      description: A clear and concise description of what you want to happen | 清晰简洁地说明你希望实现的效果
-      placeholder: Describe the feature you want to add or improve | 请描述你希望新增或改进的功能...
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen
+      placeholder: Describe the feature you want to add or improve
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: Describe alternatives you've considered | 描述你考虑过的其他方案
-      description: A clear and concise description of any alternative solutions | 清晰简洁地描述你考虑过的其他替代方案或功能
-      placeholder: Optional | 可选
+      label: Describe alternatives you've considered
+      description: A clear and concise description of any alternative solutions
+      placeholder: Optional
     validations:
       required: false
 
   - type: textarea
     id: additional-context
     attributes:
-      label: Additional context | 补充说明
-      description: Add any other context or screenshots about the feature | 在此添加与该功能需求相关的其他背景信息或截图
-      placeholder: Optional | 可选
+      label: Additional context
+      description: Add any other context or screenshots about the feature
+      placeholder: Optional
     validations:
       required: false
