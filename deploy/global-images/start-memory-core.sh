@@ -77,7 +77,7 @@ if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" || "$MEMORY_CORE_METADATA_BACKEND" 
       # --hostname 必须固定：atlas-local 用容器主机名初始化单节点 RS 成员。
       # 不固定时容器重建 → 主机名变化 → RS 配置里的旧成员名失配 → 永远无 primary
       # （not primary / ReplicaSetNoPrimary），只能清卷重来。
-      $DOCKER run -d --name "$MONGO_LOCAL_CONTAINER" \
+      no_pathconv $DOCKER run -d --name "$MONGO_LOCAL_CONTAINER" \
         --hostname mongo-search \
         --network "$NETWORK" \
         --network-alias mongo-search \
@@ -201,12 +201,12 @@ skill:
 YAML
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
-$DOCKER run -d --name "$CONTAINER" \
+no_pathconv $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias memory-core \
   -p "${MEMORY_CORE_PORT}:8420" \
   -v "${MEMORY_CORE_VOLUME}:/data/tdai-memory" \
-  -v "$CORE_CONFIG_FILE:/data/config/tdai-gateway.yaml:ro" \
+  -v "$(host_path "$CORE_CONFIG_FILE"):/data/config/tdai-gateway.yaml:ro" \
   -e TDAI_GATEWAY_PORT=8420 \
   -e TDAI_GATEWAY_HOST=0.0.0.0 \
   -e TDAI_GATEWAY_API_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
@@ -244,7 +244,7 @@ generate_user_key() {
 verify_user_key() {
   local key="$1"
   local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+  code=$("$CURL" -sS -o /dev/null -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
@@ -265,7 +265,7 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
+init_resp=$("$CURL" -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
   -H "x-tdai-service-id: default" \
