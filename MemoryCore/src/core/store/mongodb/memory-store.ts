@@ -17,7 +17,17 @@
  * path) rather than silently mis-scoring.
  */
 
-import type { Collection, Db, Document } from "mongodb";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
+import type { ClientSession, Collection, Db, Document } from "mongodb";
+import { assertClearGuard, resolveReviewRows, setReviewStatus, ReviewCapabilityError, ReviewConflictError, assertReviewEvent, confirmReviewCommit, clearFilter, runAsync } from "../review.js";
+import { MEMORY_EVENT_HISTORY_LIMIT } from "../types.js";
+import {
+  DEFAULT_REVIEW_STATUS,
+  normalizeReviewStatus,
+  resolveVisibilityScope,
+  type ReviewStatus,
+} from "../visibility.js";
 import type { MongoConfig } from "../../instance-config-provider.js";
 import type { MongoClientPool } from "./client-pool.js";
 import type { EmbeddingProviderInfo } from "../embedding.js";
@@ -47,6 +57,9 @@ import type {
   IsolationFilter,
   AuditEntry,
   AuditQueryFilter,
+  MemoryEvent,
+  MemoryEventFilter,
+  MemoryEventRedactFilter,
   KnowledgeEntity,
   KnowledgeType,
   KnowledgeListResult,
@@ -58,6 +71,13 @@ import type { MemoryRecord } from "../../record/l1-writer.js";
 import { DEFAULT_ISOLATION_ID } from "../isolation.js";
 import { mongoSearchScoreToScore } from "../tokenize.js";
 import { COLLECTIONS } from "./collections.js";
+import { decodeMemoryEvent } from "../event-codec.js";
+import { canonEventBound, canonIsoTs, canonRecordInstants, healIsoId, isValidRedactFilter, newMemoryEventId } from "../memory-event-id.js";
+import {
+  buildMemoryGenerationRefId,
+  type MemoryGenerationLayer,
+  type MemoryGenerationRefRecord,
+} from "../../memory-generation-log/types.js";
 import {
   MEMORY_SEARCH_INDEX,
   MEMORY_SEARCH_DEFINITION,
@@ -97,6 +117,7 @@ export class MongoMemoryStore implements IMemoryStore {
   private db: Db | null = null;
   private initPromise: Promise<void> | null = null;
   private degraded = false;
+  private readonly memorySession = new AsyncLocalStorage<ClientSession>();
   /** Whether the `$search` (mongot) indexes are queryable. Drives ftsSearch cap. */
   private searchIndexReady = false;
 
@@ -168,6 +189,22 @@ export class MongoMemoryStore implements IMemoryStore {
       db.collection(COLLECTIONS.AUDIT).createIndexes([
         { key: { record_id: 1 } },
         { key: { updated_at_ms: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_EVENTS).createIndexes([
+        { key: { event_ts: 1, _id: 1 } },
+        {
+          key: { event_id: 1 },
+          unique: true,
+          partialFilterExpression: { event_id: { $type: "string", $gt: "" } },
+        },
+        { key: { record_id: 1 } },
+        { key: { "review.operation_id": 1, record_id: 1, team_id: 1, agent_id: 1, user_id: 1 } },
+        { key: { team_id: 1, agent_id: 1, scope: 1, source: 1, layer: 1, "review.guard_epoch": -1 } },
+        { key: { session_id: 1 } },
+        { key: { team_id: 1, agent_id: 1, user_id: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_GENERATION_REFS).createIndexes([
+        { key: { layer: 1, memory_id: 1 } },
       ]),
       db.collection(COLLECTIONS.KNOWLEDGE).createIndexes([
         { key: { team_id: 1, type: 1 } },
@@ -248,31 +285,54 @@ export class MongoMemoryStore implements IMemoryStore {
   // L1 write
   // ════════════════════════════════════════════════════════
 
-  async upsertL1(record: MemoryRecord, _embedding?: Float32Array): Promise<boolean> {
+  async upsertL1(record: MemoryRecord, _embedding?: Float32Array, options?: { import?: boolean }): Promise<boolean> {
+    // created_time/updated_time feed the _ms TTL/cursor compares — canonical
+    // instants or the "" sentinel only (same contract as sqlite).
+    const ts = canonRecordInstants(record, ["createdAt", "updatedAt"]);
+    if (ts === null) {
+      this.logger?.warn?.(
+        `${TAG} [L1-upsert] REJECTED id=${record.id}: timestamps outside the instant contract ` +
+        `(createdAt="${record.createdAt}" updatedAt="${record.updatedAt}")`,
+      );
+      return false;
+    }
     const coll = await this.coll(COLLECTIONS.L1);
-    const doc = l1RecordToDoc(record);
+    if (!options?.import) await assertClearGuard(this, record);
+    const doc = l1RecordToDoc({ ...record, ...ts });
     // Filter carries the designated shard key prefix (team_id, agent_id) so the
     // upsert stays legal if the collection is ever sharded — on a sharded
     // collection an upsert without the full shard key fails with
     // ShardKeyNotFound. Harmless on non-sharded collections (extra equality).
-    await coll.replaceOne(
-      { _id: doc._id, team_id: doc.team_id, agent_id: doc.agent_id } as never,
-      doc as never,
-      { upsert: true },
+    // DP-14 后门（mongo 特有）：原本是 replaceOne —— 整文档替换会把 review_status
+    // 一起抹掉，于是任何一次合并更新都让被撤回的记忆复活。sqlite 靠 ON CONFLICT
+    // 的显式列清单天然躲过，mongo 必须显式处理：业务字段走 $set，
+    // 审核态只在**插入时**赋默认值。
+    const { _id: docId, review_sources_json: _sources, review_guard_at: guard, review_epoch: epoch, created_time: created, ...rest } = doc as unknown as Record<string, unknown> & { _id: unknown };
+    const result = await coll.updateOne(
+      { _id: docId, team_id: doc.team_id, user_id: doc.user_id, agent_id: doc.agent_id, review_epoch: (epoch ?? 0) === 0 ? { $in: [null, 0] } : epoch } as never,
+      { $set: rest, $setOnInsert: { review_status: record.review_status ?? DEFAULT_REVIEW_STATUS, review_sources_json: "[]", review_guard_at: guard ?? "", review_epoch: epoch ?? null, created_time: created },
+        $addToSet: { review_sources: { $each: record.review_sources ?? [] } } } as never,
+      { upsert: !record.expected_existing, session: this.memorySession.getStore() },
     );
-    return true;
+    try {
+      if (!options?.import) await assertClearGuard(this, record);
+    } catch (err) {
+      if (err instanceof ReviewConflictError && record.review_guard_at && !this.memorySession.getStore()) await coll.deleteOne({ _id: docId, team_id: doc.team_id, user_id: doc.user_id, agent_id: doc.agent_id, review_guard_at: record.review_guard_at } as never);
+      throw err;
+    }
+    return result.matchedCount > 0 || result.upsertedCount > 0;
   }
 
   async deleteL1(recordId: string, filter?: IsolationFilter): Promise<boolean> {
     const coll = await this.coll(COLLECTIONS.L1);
-    const res = await coll.deleteOne({ _id: recordId, ...isolationToMatch(filter) } as never);
+    const res = await coll.deleteOne({ _id: recordId, ...isolationToMatch(filter) } as never, { session: this.memorySession.getStore() });
     return res.deletedCount > 0;
   }
 
   async deleteL1Batch(recordIds: string[], filter?: IsolationFilter): Promise<boolean> {
     if (recordIds.length === 0) return true;
     const coll = await this.coll(COLLECTIONS.L1);
-    await coll.deleteMany({ _id: { $in: recordIds }, ...isolationToMatch(filter) } as never);
+    await coll.deleteMany({ _id: { $in: recordIds }, ...isolationToMatch(filter) } as never, { session: this.memorySession.getStore() });
     return true;
   }
 
@@ -280,7 +340,9 @@ export class MongoMemoryStore implements IMemoryStore {
     const cutoffMs = isoToEpochMs(cutoffIso);
     if (cutoffMs <= 0) return 0;
     const coll = await this.coll(COLLECTIONS.L1);
-    const query = { updated_time_ms: { $lt: cutoffMs } };
+    // `_ms > 0` mirrors sqlite's `updated_time != ''`: an absent timestamp
+    // (stored as 0) is an immortal sentinel, not "expired since epoch".
+    const query = { updated_time_ms: { $gt: 0, $lt: cutoffMs } };
     const toDelete = await coll.countDocuments(query as never);
     if (toDelete === 0) return 0;
     const total = await coll.estimatedDocumentCount();
@@ -301,17 +363,18 @@ export class MongoMemoryStore implements IMemoryStore {
 
   async countL1(filter?: L1CountFilter): Promise<number> {
     const coll = await this.coll(COLLECTIONS.L1);
+    if (resolveVisibilityScope(filter) !== "all") return (await this.queryL1Paginated({ ...filter, limit: 1, offset: 0 })).total;
     return coll.countDocuments(this.l1CountQuery(filter) as never);
   }
 
   private l1CountQuery(filter?: L1CountFilter): Record<string, unknown> {
     const q: Record<string, unknown> = {};
+    // 可见性先于 early-return：filter 为 undefined 时也必须抑制（fail-safe）。
+
     if (!filter) return q;
     if (filter.type !== undefined) q.type = filter.type;
     if (filter.sessionId !== undefined) q.session_id = filter.sessionId;
-    if (filter.teamId !== undefined) q.team_id = filter.teamId;
-    if (filter.userId !== undefined) q.user_id = filter.userId;
-    if (filter.agentId !== undefined) q.agent_id = filter.agentId;
+    Object.assign(q, isolationToMatch({ teamId: filter.teamId, userId: filter.userId, agentId: filter.agentId }));
     if (filter.taskId !== undefined) q.task_id = filter.taskId;
     const range: Record<string, string> = {};
     if (filter.timeStart !== undefined) range.$gte = filter.timeStart;
@@ -320,42 +383,51 @@ export class MongoMemoryStore implements IMemoryStore {
     return q;
   }
 
-  async queryL1Records(filter?: L1QueryFilter): Promise<L1RecordRow[]> {
+  async queryL1Records(filter?: L1QueryFilter, opts?: { review?: boolean; metadataOnly?: boolean }): Promise<L1RecordRow[]> {
     const coll = await this.coll(COLLECTIONS.L1);
+    if (filter?.recordIds?.length === 0) return [];
     const q: Record<string, unknown> = {};
+
     if (filter?.recordIds && filter.recordIds.length > 0) q._id = { $in: filter.recordIds };
     if (filter?.sessionKey !== undefined) q.session_key = filter.sessionKey;
     if (filter?.sessionId !== undefined) q.session_id = filter.sessionId;
     if (filter?.taskId !== undefined) q.task_id = filter.taskId;
-    if (filter?.teamId !== undefined) q.team_id = filter.teamId;
-    if (filter?.userId !== undefined) q.user_id = filter.userId;
-    if (filter?.agentId !== undefined) q.agent_id = filter.agentId;
+    Object.assign(q, isolationToMatch({ teamId: filter?.teamId, userId: filter?.userId, agentId: filter?.agentId }));
     if (filter?.updatedAfter !== undefined) q.updated_time = { $gt: filter.updatedAfter };
-    const docs = await coll.find(q as never).toArray();
-    return docs.map((d) => docToL1RecordRow(d as unknown as L1Doc));
+    if (opts?.review === false && filter?.visibility === "quarantined") q.review_status = { $nin: [null, "", "active"] };
+    const docs = await coll.find(q as never, { session: this.memorySession.getStore(), ...(opts?.metadataOnly ? { projection: { content: 0, metadata_json: 0, tokens: 0 } } : {}) }).limit(50001).toArray();
+    if (docs.length > 50_000) throw new Error("Review row budget exceeded; narrow scope");
+    let rows = docs.map((d) => docToL1RecordRow(d as unknown as L1Doc));
+    const scope = resolveVisibilityScope(filter);
+    if (opts?.review !== false && (scope !== "all" || filter?.visibility !== undefined)) rows = await resolveReviewRows(this, rows);
+    return rows.filter((r) => scope === "all" || normalizeReviewStatus(r.review_status) === scope);
   }
 
   async getAllL1Texts(): Promise<Array<{ record_id: string; content: string; updated_time: string }>> {
-    const coll = await this.coll(COLLECTIONS.L1);
-    const docs = await coll.find({}, { projection: { content: 1, updated_time: 1 } }).toArray();
-    return docs.map((d) => ({
-      record_id: String((d as { _id: unknown })._id),
-      content: String((d as { content?: string }).content ?? ""),
-      updated_time: String((d as { updated_time?: string }).updated_time ?? ""),
-    }));
+    const rows = await this.queryL1Records();
+    return rows.map(({ record_id, content, updated_time }) => ({ record_id, content, updated_time }));
   }
 
   async queryL1Paginated(filter: L1PaginatedFilter): Promise<L1PaginatedResult> {
     const coll = await this.coll(COLLECTIONS.L1);
     const q = this.l1CountQuery(filter);
     const total = await coll.countDocuments(q as never);
-    const docs = await coll
-      .find(q as never)
-      .sort({ updated_time_ms: -1 })
-      .skip(filter.offset)
-      .limit(filter.limit)
-      .toArray();
-    return { rows: docs.map((d) => docToL1RecordRow(d as unknown as L1Doc)), total };
+    const scope = resolveVisibilityScope(filter);
+    const reviewing = scope !== "all" || filter.visibility !== undefined;
+    if (reviewing && total > 50_000) throw new Error("Review pagination row budget exceeded; narrow tenant/time scope");
+    const docs = await coll.find(q as never).sort({ updated_time_ms: -1, _id: 1 })
+      .skip(reviewing ? 0 : filter.offset).limit(reviewing ? Math.max(total, 1) : filter.limit).toArray();
+    let rows = docs.map((d) => docToL1RecordRow(d as unknown as L1Doc));
+    if (reviewing) {
+      rows = (await resolveReviewRows(this, rows)).filter((r) => scope === "all" || r.review_status === scope);
+      return { rows: rows.slice(filter.offset, filter.offset + filter.limit), total: rows.length };
+    }
+    return { rows, total };
+  }
+
+  /** 事后审核：改一条 L1 的可见性状态（DP-01）。幂等语义与 sqlite 一致。 */
+  async setL1ReviewStatus(recordId: string, status: ReviewStatus, filter?: IsolationFilter, operation?: Parameters<NonNullable<IMemoryStore["setL1ReviewStatus"]>>[3]) {
+    return setReviewStatus(this, recordId, status, filter, operation);
   }
 
   // ════════════════════════════════════════════════════════
@@ -372,8 +444,18 @@ export class MongoMemoryStore implements IMemoryStore {
     const searchText = ftsQueryToSearchText(ftsQuery);
     if (!searchText) return [];
     const coll = await this.coll(COLLECTIONS.L1);
-    const docs = await this.runSearch(coll, searchText, limit, filter);
-    return docs.map(({ doc, score }) => docToL1FtsResult(doc as unknown as L1Doc, score));
+    const scope = resolveVisibilityScope(filter);
+    const budget = scope === "all" ? limit : Math.max(limit, Math.min(limit * 15, 500));
+    const docs = await this.runSearch(coll, searchText, budget, filter);
+    if (!docs.length) return [];
+    const current = await this.queryL1Records({ ...filter, recordIds: docs.map(({ doc }) => String(doc._id)), visibility: scope });
+    const byId = new Map(current.map((r) => [r.record_id, r]));
+    const kept = docs.filter(({ doc }) => byId.has(String(doc._id))).map(({ doc, score }) => {
+      const row = byId.get(String(doc._id))!;
+      return docToL1FtsResult({ ...doc, ...row, _id: row.record_id, content: row.content } as unknown as L1Doc, score);
+    });
+    if (kept.length < limit && docs.length >= budget) this.logger?.warn?.(`[memory-review] recall_truncated at mongo search: requested=${limit} kept=${kept.length}`);
+    return kept.slice(0, limit);
   }
 
   // ════════════════════════════════════════════════════════
@@ -381,8 +463,15 @@ export class MongoMemoryStore implements IMemoryStore {
   // ════════════════════════════════════════════════════════
 
   async upsertL0(record: L0Record, _embedding?: Float32Array): Promise<boolean> {
+    const ts = canonRecordInstants(record, ["recordedAt"]);
+    if (ts === null) {
+      this.logger?.warn?.(
+        `${TAG} [L0-upsert] REJECTED id=${record.id}: recordedAt "${record.recordedAt}" outside the instant contract`,
+      );
+      return false;
+    }
     const coll = await this.coll(COLLECTIONS.L0);
-    const doc = l0RecordToDoc(record);
+    const doc = l0RecordToDoc({ ...record, ...ts });
     // Shard-key-safe upsert: see upsertL1.
     await coll.replaceOne(
       { _id: doc._id, team_id: doc.team_id, agent_id: doc.agent_id } as never,
@@ -406,7 +495,19 @@ export class MongoMemoryStore implements IMemoryStore {
   async insertL0Batch(records: L0Record[]): Promise<number> {
     if (records.length === 0) return 0;
     const coll = await this.coll(COLLECTIONS.L0);
-    const docs = records.map((r) => l0RecordToDoc(r));
+    const docs = records
+      .map((r) => {
+        const ts = canonRecordInstants(r, ["recordedAt"]);
+        if (ts === null) {
+          this.logger?.warn?.(
+            `${TAG} [L0-batch] SKIPPED id=${r.id}: recordedAt "${r.recordedAt}" outside the instant contract`,
+          );
+          return null;
+        }
+        return l0RecordToDoc({ ...r, ...ts });
+      })
+      .filter((d): d is L0Doc => d !== null);
+    if (docs.length === 0) return 0;
     const res = await coll.insertMany(docs as never[], { ordered: true });
     return res.insertedCount;
   }
@@ -421,7 +522,7 @@ export class MongoMemoryStore implements IMemoryStore {
     const cutoffMs = isoToEpochMs(cutoffIso);
     if (cutoffMs <= 0) return 0;
     const coll = await this.coll(COLLECTIONS.L0);
-    const query = { recorded_at_ms: { $lt: cutoffMs } };
+    const query = { recorded_at_ms: { $gt: 0, $lt: cutoffMs } };
     const toDelete = await coll.countDocuments(query as never);
     if (toDelete === 0) return 0;
     const total = await coll.estimatedDocumentCount();
@@ -455,9 +556,7 @@ export class MongoMemoryStore implements IMemoryStore {
     const q: Record<string, unknown> = {};
     if (!filter) return q;
     if (filter.sessionId !== undefined) q.session_id = filter.sessionId;
-    if (filter.teamId !== undefined) q.team_id = filter.teamId;
-    if (filter.userId !== undefined) q.user_id = filter.userId;
-    if (filter.agentId !== undefined) q.agent_id = filter.agentId;
+    Object.assign(q, isolationToMatch({ teamId: filter.teamId, userId: filter.userId, agentId: filter.agentId }));
     if (filter.taskId !== undefined) q.task_id = filter.taskId;
     const range: Record<string, number> = {};
     if (filter.timeStartMs !== undefined) range.$gte = filter.timeStartMs;
@@ -571,7 +670,7 @@ export class MongoMemoryStore implements IMemoryStore {
       { $limit: Math.max(1, limit) },
       { $addFields: { __searchScore: { $meta: "searchScore" } } },
     ];
-    const raw = await coll.aggregate(pipeline).toArray();
+    const raw = await coll.aggregate(pipeline, { readConcern: { level: "local" } }).toArray();
     return raw.map((d) => ({
       doc: d,
       score: mongoSearchScoreToScore(Number((d as { __searchScore?: number }).__searchScore ?? 0)),
@@ -798,6 +897,211 @@ export class MongoMemoryStore implements IMemoryStore {
   }
 
   // ════════════════════════════════════════════════════════
+  // Memory generation provenance references
+  // ════════════════════════════════════════════════════════
+
+  async upsertMemoryGenerationRefs(records: MemoryGenerationRefRecord[]): Promise<void> {
+    if (records.length === 0) return;
+    const coll = await this.coll(COLLECTIONS.MEMORY_GENERATION_REFS);
+    await coll.bulkWrite(
+      records.map((record) => {
+        const { generation_ref_id, ...fields } = record;
+        return {
+          replaceOne: {
+            filter: { _id: generation_ref_id },
+            replacement: fields,
+            upsert: true,
+          },
+        };
+      }) as never,
+      { ordered: false },
+    );
+  }
+
+  async getMemoryGenerationRef(layer: MemoryGenerationLayer, memoryId: string): Promise<MemoryGenerationRefRecord | null> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_GENERATION_REFS);
+    const id = buildMemoryGenerationRefId(layer, memoryId);
+    const doc = await coll.findOne({ _id: id, layer, memory_id: memoryId } as never);
+    if (!doc) return null;
+    const { _id, ...fields } = doc as unknown as Record<string, unknown>;
+    return { ...(fields as Omit<MemoryGenerationRefRecord, "generation_ref_id">), generation_ref_id: String(_id) };
+  }
+
+  // ════════════════════════════════════════════════════════
+  // Memory events（统一变更账：extraction / api_mutation / review）
+  // ════════════════════════════════════════════════════════
+
+  async getClearEpoch(scope: { teamId?: string; agentId?: string }): Promise<number> {
+    return (await this.queryMemoryEvents(clearFilter({ team_id: scope.teamId || "default", agent_id: scope.agentId || "default" })))[0]?.review?.guard_epoch ?? 0;
+  }
+
+  async commitClearFence(event: MemoryEvent): Promise<MemoryEvent> {
+    if (event.op !== "deleted" || event.source !== "api_mutation" || event.scope !== "agent" || event.layer !== "l1" || !event.team_id || !event.agent_id || !event.event_id) throw new Error("Invalid agent clear fence");
+    const store = this;
+    return this.executeMemoryTransaction(function* () {
+      const existing = ((yield store.queryMemoryEvents({ event_id: event.event_id, limit: 1 })) as MemoryEvent[])[0];
+      if (existing) return existing;
+      const floor = (yield store.getClearEpoch({ teamId: event.team_id, agentId: event.agent_id })) as number;
+      const scopes = (yield store.coll(COLLECTIONS.MEMORY_CLEAR_SCOPES)) as Collection;
+      const id = createHash("sha256").update(JSON.stringify([healIsoId(event.team_id), healIsoId(event.agent_id)])).digest("hex");
+      const scope = (yield scopes.findOneAndUpdate({ _id: id } as never,
+        [{ $set: { epoch: { $add: [{ $max: ["$epoch", floor] }, 1] }, team_id: { $literal: event.team_id }, agent_id: { $literal: event.agent_id } } }],
+        { upsert: true, returnDocument: "after", session: store.memorySession.getStore() })) as Document | null;
+      const epoch = scope?.epoch as number;
+      if (!Number.isSafeInteger(epoch) || epoch <= 0) throw new Error("Generation epoch exhausted");
+      yield store.appendMemoryEvent({ ...event, review: { protocol: 2, guard_epoch: epoch } });
+      return ((yield store.queryMemoryEvents({ event_id: event.event_id, limit: 1 })) as MemoryEvent[])[0]!;
+    });
+  }
+
+  async executeMemoryTransaction<T>(program: () => Generator<unknown, T, unknown>): Promise<T> {
+    await this._ensureInit();
+    if (this.memorySession.getStore()) return runAsync(program());
+    if ((await this.pool.getClusterProfile(this.mongoConfig)).topology === "standalone") throw new ReviewCapabilityError("Atomic memory workflows require a MongoDB replica set or sharded cluster");
+    const client = await this.pool.getClient(this.mongoConfig);
+    const session = client.startSession();
+    try {
+      return await session.withTransaction(() => this.memorySession.run(session, () => runAsync(program())), { readConcern: { level: "snapshot" }, writeConcern: { w: "majority", j: true }, readPreference: "primary" });
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  async commitMemoryEvent(event: MemoryEvent): Promise<MemoryEvent> {
+    await this.appendMemoryEvent(event);
+    return confirmReviewCommit(event, (await this.queryMemoryEvents({ event_id: event.event_id, limit: 1 }))[0]);
+  }
+
+  async appendMemoryEvent(event: MemoryEvent): Promise<void> {
+    assertReviewEvent(event);
+    const coll = await this.coll(COLLECTIONS.MEMORY_EVENTS);
+    // _id 由 Mongo 自动生成（ObjectId 自带时间序，作同 event_ts 内的稳定次序键）。
+    // Normalize the optional fields to the same defaults sqlite/TCVDB persist:
+    // mongo stores `layer: undefined` as a missing field, which a
+    // `{layer:"l1"}` filter would never match — diverging from the other
+    // backends where the writer-side default lands in the row.
+    // Defense-in-depth (same as sqlite/tcvdb): non-canonical event_ts must
+    // never reach a lexical compare.
+    const eventTs = canonIsoTs(event.event_ts);
+    if (eventTs === null) {
+      throw new Error(`memory_events append rejected: non-canonical event_ts "${event.event_ts}" event_id=${event.event_id}`);
+    }
+    try {
+      await coll.insertOne({
+        ...event,
+        ...(event.review ? { review: Object.fromEntries(Object.entries(event.review).filter(([, value]) => value !== undefined)) } : {}),
+        event_ts: eventTs,
+        event_id: event.event_id || newMemoryEventId(),
+        origin_session_id: event.origin_session_id ?? "",
+        origin_session_key: event.origin_session_key ?? "",
+        team_id: event.team_id ?? "",
+        user_id: event.user_id ?? "",
+        agent_id: event.agent_id ?? "",
+        task_id: event.task_id ?? "",
+        memory_type: event.memory_type ?? "",
+        version: event.version ?? 0,
+        supersedes: event.supersedes ?? [],
+        superseded_by: event.superseded_by ?? "",
+        snapshot_json: event.snapshot_json ?? "",
+        reviewer_id: event.reviewer_id ?? "",
+        layer: event.layer ?? "l1",
+        source: event.source ?? "",
+        request_id: event.request_id ?? "",
+        reason: event.reason ?? "",
+        target_event_id: event.target_event_id ?? "",
+        scope: event.scope ?? "",
+        until: event.until ?? "",
+      } as never, { session: this.memorySession.getStore() });
+    } catch (err) {
+      // Duplicate event_id: the event already landed (outbox replay / retry).
+      // Only the event_id unique index means "already written"; any other
+      // duplicate-key violation is a real failure.
+      const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+      if (e.code === 11000 && e.keyPattern !== undefined && "event_id" in e.keyPattern) return;
+      throw err;
+    }
+  }
+
+  async redactMemoryEvents(filter: MemoryEventRedactFilter): Promise<number> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_EVENTS);
+    // event_ts is lexicographically compared — a non-canonical `until` does NOT
+    // safely match nothing; it can wipe broadly (any ISO string < "March 5, 2026").
+    // Shared contract: normalize ms-exact forms to `…ss.sssZ`, reject the rest.
+    // Unknown filter fields are silently ignored by coverage/store code —
+    // refuse them rather than erasing wider than the filter claims.
+    if (!isValidRedactFilter(filter)) return 0;
+    const until = canonIsoTs(filter.until)!;
+    const teamId = isoMatch(filter.team_id);
+    const agentId = isoMatch(filter.agent_id);
+    const userId = isoMatch(filter.user_id);
+    if (teamId === undefined && agentId === undefined && userId === undefined) {
+      // Legal (e.g. full clear), but wipes every tenant — surface it loudly.
+      this.logger?.warn?.(`${TAG} redactMemoryEvents without isolation filter: wipes events across ALL tenants (until=${until})`);
+    }
+    const q: Record<string, unknown> = { event_ts: { $lte: until } };
+    if (teamId !== undefined) q.team_id = teamId;
+    if (agentId !== undefined) q.agent_id = agentId;
+    if (userId !== undefined) q.user_id = userId;
+    if (filter.layer !== undefined) q.layer = filter.layer;
+    const res = await coll.updateMany(q as never, { $set: { content: "", snapshot_json: "", reason: "" } } as never);
+    return res.modifiedCount;
+  }
+
+  async queryMemoryEvents(filter: MemoryEventFilter, options?: { complete?: boolean }): Promise<MemoryEvent[]> {
+    if (filter.record_ids?.length === 0) return [];
+    const coll = await this.coll(COLLECTIONS.MEMORY_EVENTS);
+    const q: Record<string, unknown> = {};
+    if (filter.session_id !== undefined) q.session_id = filter.session_id;
+    if (filter.session_key !== undefined) q.session_key = filter.session_key;
+    if (filter.origin_session_id !== undefined) q.origin_session_id = filter.origin_session_id;
+    if (filter.origin_session_key !== undefined) q.origin_session_key = filter.origin_session_key;
+    if (filter.record_id !== undefined) q.record_id = filter.record_id;
+    if (filter.record_ids !== undefined) {
+      q.record_id = filter.record_id !== undefined
+        ? { $eq: filter.record_id, $in: filter.record_ids }
+        : { $in: filter.record_ids };
+    }
+    if (filter.op !== undefined) q.op = filter.op;
+    if (filter.scope !== undefined) q.scope = filter.scope;
+    if (filter.layer !== undefined) q.layer = filter.layer;
+    if (filter.source !== undefined) q.source = filter.source;
+    if (filter.request_id !== undefined) q.request_id = filter.request_id;
+    if (filter.event_id !== undefined) q.event_id = filter.event_id;
+    if (filter.operation_id !== undefined) q["review.operation_id"] = filter.operation_id;
+    const teamId = isoMatch(filter.team_id);
+    const agentId = isoMatch(filter.agent_id);
+    const userId = isoMatch(filter.user_id);
+    if (teamId !== undefined) q.team_id = teamId;
+    if (agentId !== undefined) q.agent_id = agentId;
+    if (userId !== undefined) q.user_id = userId;
+    if (filter.task_id !== undefined) q.task_id = filter.task_id;
+    // event_ts 是 ISO 8601 字符串，字典序即时间序（与 sqlite 实现一致）。
+    if (filter.since !== undefined || filter.until !== undefined) {
+      const range: Record<string, string> = {};
+      if (filter.since !== undefined) range.$gte = canonEventBound(filter.since);
+      if (filter.until !== undefined) range.$lte = canonEventBound(filter.until);
+      q.event_ts = range;
+    }
+
+    const limit = options?.complete ? MEMORY_EVENT_HISTORY_LIMIT + 1 : Math.min(Math.max(filter.limit ?? 100, 1), 1000);
+    const offset = options?.complete ? 0 : Math.max(filter.offset ?? 0, 0);
+    const dir = filter.order === "desc" ? -1 : 1;
+    const docs = await coll
+      .find(q as never, { session: this.memorySession.getStore(), ...(filter.metadata_only ? { projection: { content: 0, snapshot_json: 0, reason: 0 } } : {}) })
+      .sort(filter.order_by === "clear_epoch" ? { "review.guard_epoch": dir, event_ts: dir, _id: dir } : { event_ts: dir, _id: dir })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    if (options?.complete && docs.length > MEMORY_EVENT_HISTORY_LIMIT) throw new Error("Complete review history budget exceeded; narrow scope");
+    return docs.map((d) => this.docToMemoryEvent(d));
+  }
+
+  private docToMemoryEvent(d: Record<string, unknown>): MemoryEvent {
+    if (d.supersedes !== undefined && (!Array.isArray(d.supersedes) || !d.supersedes.every((id) => typeof id === "string" && id.length > 0 && id.length <= 1024))) throw new Error("Invalid supersession lineage");
+    return decodeMemoryEvent(d, (d.supersedes ?? []) as string[]);
+  }
+
+  // ════════════════════════════════════════════════════════
   // Knowledge entity (wiki / code-graph metadata)
   // ════════════════════════════════════════════════════════
 
@@ -892,4 +1196,16 @@ export class MongoMemoryStore implements IMemoryStore {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Isolation-id match for memory_events queries/redacts: a defined value
+ * heals "" → "default" (see healIsoId) and "default" matches BOTH stored
+ * forms — legacy/foreign rows may carry "" while contract writes store
+ * "default". Other values compare by plain equality.
+ */
+function isoMatch(v: string | undefined): string | { $in: string[] } | undefined {
+  const healed = healIsoId(v);
+  if (healed === undefined) return undefined;
+  return healed === DEFAULT_ISOLATION_ID ? { $in: ["", DEFAULT_ISOLATION_ID] } : healed;
 }

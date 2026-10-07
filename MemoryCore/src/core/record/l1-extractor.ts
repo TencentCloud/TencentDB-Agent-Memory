@@ -135,12 +135,9 @@ export async function extractL1Memories(params: {
   /** Plugin instance ID for metric reporting (optional — metrics skipped if absent) */
   instanceId?: string;
   /**
-   * StorageAdapter for L1 JSONL writes.
-   * - service mode: must be provided (CosStorageBackend) — JSONL is the source of
-   *   truth for backup/recovery; without storage, writes silently fall back to local
-   *   pod fs and are lost on pod restart (CR-2 root cause, fixed 2026-05-19).
-   * - standalone mode: caller usually provides LocalStorageBackend; if absent,
-   *   writeMemory falls back to fs at `{baseDir}/records/{date}.jsonl`.
+   * StorageAdapter for post-commit L1/ledger mirrors.
+   * Service callers provide their durable adapter; standalone callers use
+   * LocalStorageBackend at baseDir. The authoritative store is required.
    */
   storage?: StorageAdapter;
 }): Promise<L1ExtractionResult> {
@@ -157,6 +154,7 @@ export async function extractL1Memories(params: {
   }
 
   const l1StartMs = Date.now();
+  const reviewEpoch = options.vectorStore?.getClearEpoch ? await options.vectorStore.getClearEpoch({ teamId, agentId }) : undefined;
 
   // Quality gate: filter messages through L1 extraction rules (length, symbols,
   // prompt injection, etc.) before sending to the LLM. L0 deliberately captures
@@ -320,7 +318,17 @@ export async function extractL1Memories(params: {
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
         traceContext: { teamId, userId, agentId, sessionId },
-        ...(teamId || userId || agentId || sessionId || taskId ? { filter: { teamId, userId, agentId, sessionId, taskId } } : {}),
+        // Dedup candidates are recalled at AGENT scope (cross-session), aligned
+        // with memory_search / conversation query (see v2-router atomicSearch):
+        // memories are agent-level assets — a correction in session B must
+        // supersede the record written in session A. Session-scoped recall
+        // (the old behaviour) left the old value recallable alongside the new
+        // one. Tenant isolation is still enforced via team/user/agent/task.
+        // Fail-closed fallback: a caller carrying ONLY sessionId gets a
+        // session-scoped filter rather than an unscoped (all-tenant) recall.
+        ...(teamId || userId || agentId || taskId
+          ? { filter: { teamId, userId, agentId, taskId } }
+          : sessionId ? { filter: { sessionId } } : {}),
       });
       dedupLatencyMs = Date.now() - dedupStartMs;
 
@@ -356,14 +364,16 @@ export async function extractL1Memories(params: {
         vectorStore: options.vectorStore,
         embeddingService: options.embeddingService,
         storage,
+        startedAt: new Date(l1StartMs).toISOString(),
+        reviewEpoch,
       });
 
     } catch (err) {
-      logger?.warn?.(`${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
-      storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage);
+      logger?.warn?.(`${TAG} Batch dedup could not be verified; refusing blind new writes: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
     }
   } else {
-    storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage);
+    storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage, new Date(l1StartMs).toISOString(), reviewEpoch);
   }
 
   const logStorage = storage ?? new StorageAdapter(new LocalStorageBackend(baseDir));
@@ -395,13 +405,15 @@ export async function extractL1Memories(params: {
     logger,
     writeLog: () => generationLogStore.write(generationLog, generationIdentity.key),
     writeRefs: options.vectorStore?.upsertMemoryGenerationRefs && storedRecords.length > 0
-      ? () => options.vectorStore!.upsertMemoryGenerationRefs!(storedRecords.map((record) => ({
-          generation_ref_id: buildMemoryGenerationRefId("l1", record.id),
-          layer: "l1" as const,
-          memory_id: record.id,
-          ...generation,
-          created_at_ms: generationFinishedAt,
-        })))
+      ? async () => {
+          await options.vectorStore!.upsertMemoryGenerationRefs!(storedRecords.map((record) => ({
+            generation_ref_id: buildMemoryGenerationRefId("l1", record.id),
+            layer: "l1" as const,
+            memory_id: record.id,
+            ...generation,
+            created_at_ms: generationFinishedAt,
+          })));
+        }
       : undefined,
   });
 
@@ -701,6 +713,8 @@ async function applyDecisions(params: {
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
   storage?: StorageAdapter;
+  startedAt?: string;
+  reviewEpoch?: number;
 }): Promise<MemoryRecord[]> {
   const { memoriesWithIds, decisions, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
   const storedRecords: MemoryRecord[] = [];
@@ -722,6 +736,8 @@ async function applyDecisions(params: {
       const record = await writeMemory({
         memory: memoryWithId,
         decision,
+        startedAt: params.startedAt,
+        reviewEpoch: params.reviewEpoch,
         baseDir,
         sessionKey,
         sessionId,
@@ -764,6 +780,8 @@ async function storeAllDirectly(
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
   storage?: StorageAdapter,
+  startedAt?: string,
+  reviewEpoch?: number,
 ): Promise<MemoryRecord[]> {
   const storedRecords: MemoryRecord[] = [];
 
@@ -771,6 +789,8 @@ async function storeAllDirectly(
     try {
       const record = await writeMemory({
         memory: memoryWithId,
+        startedAt,
+        reviewEpoch,
         decision: {
           record_id: memoryWithId.record_id,
           action: "store",

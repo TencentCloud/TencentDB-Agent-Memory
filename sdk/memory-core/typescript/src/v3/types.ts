@@ -38,6 +38,7 @@ export interface V3MemoryClientConfig extends MemoryClientConfig {
    * 用户身份的网关/面板时，可以让请求带上调用方身份。
    */
   userKey?: string;
+  reviewerId?: string;
 }
 
 export type V3MemoryClientInput = V3MemoryClientConfig | Transport;
@@ -148,6 +149,9 @@ export interface V3ChatMemoryClearItem {
   memory_id: string;
   /** 是否清空成功。false 时内容可能残留。 */
   cleared: boolean;
+  fence_committed?: true;
+  fence_commit_unknown?: true;
+  counts_verified?: false;
   l0_deleted: number;
   l1_deleted: number;
   /** L2/L3 profile 记录数（VDB 行 + 存储文件）。 */
@@ -207,3 +211,102 @@ export interface V3CoreWriteRequest {
 }
 export type V3CoreWriteData = CoreWriteData;
 export type V3CountData = CountData;
+
+export interface V3MemoryRevertRequest {
+  record_id?: string;
+  record_ids?: string[];
+  event_id?: string;
+  operation_id?: string;
+  reason?: string;
+  force?: boolean;
+}
+
+export interface V3MemoryRevertResult {
+  record_id: string;
+  reverted: boolean;
+  restored?: string[];
+  missing?: string[];
+  target_event_id?: string;
+  operation_id?: string;
+  outbox_pending?: boolean;
+  status?: number;
+  error?: string;
+  commit_unknown?: boolean;
+}
+
+export type V3MemoryRevertData = V3MemoryRevertResult | { results: V3MemoryRevertResult[]; succeeded: number; failed: number };
+
+export interface V3MemoryReviewRequest {
+  record_id?: string;
+  record_ids?: string[];
+  reason?: string;
+  operation_id?: string;
+}
+
+export interface V3MemoryReviewData {
+  ok: true;
+  mode: "retract" | "restore";
+  changed: string[];
+  no_op: string[];
+  not_found: string[];
+  event_ids: Record<string, string>;
+  operation_id?: string;
+  outbox_pending?: true;
+  reviewer_attribution: "asserted" | "unattributed";
+  downstream?: {
+    auto_cleaned: false;
+    scan: "complete" | "failed" | "unavailable";
+    scope_conservative: true;
+    lineage_analyzed: false;
+    note: string;
+    artifacts: Array<{ layer: "L2" | "L3"; path: string }>;
+    truncated?: true;
+  };
+}
+
+export interface V3MemoryReviewListRequest {
+  visibility?: "active" | "quarantined" | "all";
+  type?: string;
+  time_start?: string;
+  time_end?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface V3MemoryReviewListData {
+  visibility: "active" | "quarantined" | "all";
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_offset?: number;
+  items: Array<{
+    record_id: string; type: string; content: string; review_status: "active" | "quarantined";
+    exists: boolean; invalid_status?: true; invalidated_by_clear?: true; invalidated_by_revert?: true; lineage_incomplete?: true;
+    session_id: string; version: number; created_at: string; updated_at: string;
+  }>;
+}
+
+export interface V3DerivedReviewRequest {
+  path: string;
+  acknowledge?: boolean;
+  expected_hash?: string;
+  expected_fence?: string;
+  reason?: string;
+  operation_id?: string;
+}
+
+export interface V3DerivedReviewData {
+  path: string;
+  content_hash: string;
+  fence_hash?: string;
+  content?: string;
+  blocked?: boolean;
+  scope_conservative?: true;
+  operation_id?: string;
+  event_id?: string;
+  acknowledged?: true;
+  still_blocked?: boolean;
+  outbox_pending?: true;
+  reviewer_attribution?: "asserted" | "unattributed";
+}

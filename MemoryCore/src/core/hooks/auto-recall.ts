@@ -14,13 +14,13 @@ import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import { RecallErrors, toRecallFailure, type RecallError } from "./recall-errors.js";
-import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/tokenize.js";
 import { hasClientEmbedding, type EmbeddingService, type EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import path from "node:path";
-import { scopeProfileStorageView, type StorageAdapter } from "../storage/adapter.js";
+import { scopeProfileStorageView, StorageAdapter } from "../storage/adapter.js";
+import { createLocalStorageBackend } from "../storage/factory.js";
 import { StoragePaths } from "../storage/types.js";
 import {
   DEFAULT_PROFILE_SCOPE,
@@ -159,6 +159,7 @@ async function performAutoRecallCore(params: {
 }): Promise<RecallResult | undefined> {
   const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, storage } = params;
   const tRecallStart = performance.now();
+  if (!vectorStore || vectorStore.isDegraded() || !vectorStore.queryMemoryEvents) throw RecallErrors.dependencyUnavailable("review ledger");
 
   // L2/L3 writers scope profile files by team+agent. Recall resolves the same
   // scope and never falls back to the unscoped data root, preventing cross-scope
@@ -170,9 +171,11 @@ async function performAutoRecallCore(params: {
     ? path.join(pluginDataDir, "profiles", encodeURIComponent(profileScope))
     : pluginDataDir;
   // rowfs 后端在 scopeProfileStorageView 内改走隔离重绑定（D12 ③），不套键前缀。
-  const profileStorage = storage && isScopedProfile
+  let profileStorage = storage && isScopedProfile
     ? scopeProfileStorageView(storage, `profiles/${encodeURIComponent(profileScope)}/`, profileIsolation)
     : storage;
+  profileStorage ??= new StorageAdapter(createLocalStorageBackend(profileDataDir));
+  profileStorage = profileStorage.withReviewStore(() => vectorStore).withBackend(profileStorage.getBackend(), profileIsolation, true);
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
   const tSearchStart = performance.now();
@@ -184,7 +187,7 @@ async function performAutoRecallCore(params: {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
-    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    const searchResult = await searchMemories(userText, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
@@ -207,20 +210,14 @@ async function performAutoRecallCore(params: {
   const tPersonaStart = performance.now();
   let personaContent: string | undefined;
   try {
-    let raw: string | null = null;
-    if (profileStorage) {
-      raw = await profileStorage.readFile(StoragePaths.persona);
-    } else {
-      const fs = await import("node:fs/promises");
-      raw = await fs.default.readFile(path.join(profileDataDir, "persona.md"), "utf-8");
-    }
+    const raw = await profileStorage.readFile(StoragePaths.persona);
     if (raw) {
       personaContent = stripSceneNavigation(raw).trim();
       if (!personaContent) personaContent = undefined;
     }
     logger?.debug?.(`${TAG} Persona loaded: ${personaContent ? `${personaContent.length} chars` : "empty"}`);
-  } catch {
-    logger?.debug?.(`${TAG} No persona file found (expected for new users)`);
+  } catch (err) {
+    throw RecallErrors.storageError("profile review", err);
   }
   const tPersonaEnd = performance.now();
 
@@ -368,11 +365,6 @@ async function performAutoRecallInner(params: {
 // Multi-strategy search dispatcher
 // ============================
 
-interface ScoredRecord {
-  record: MemoryRecord;
-  score: number;
-}
-
 /** Timing breakdown from memory search */
 interface SearchTiming {
   ftsMs: number;
@@ -389,43 +381,9 @@ interface SearchResult {
 }
 
 /**
- * Search memories and return both formatted lines and structured details.
- *
- * This is a thin wrapper around `searchMemories` that also captures
- * the recalled memory metadata for metric reporting (agent_turn event).
- * It parses the returned formatted lines to extract type/content info.
- */
-async function searchMemoriesWithDetails(
-  userText: string,
-  pluginDataDir: string,
-  cfg: MemoryTdaiConfig,
-  logger: Logger | undefined,
-  strategy: "keyword" | "embedding" | "hybrid",
-  vectorStore?: IMemoryStore,
-  embeddingService?: EmbeddingService,
-): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
-  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
-
-  // Extract structured data from formatted memory lines.
-  // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
-  const memories: RecalledMemory[] = result.lines.map((line, i) => {
-    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-    if (match) {
-      const tag = match[1];
-      const content = match[2].trim();
-      const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-      return { content, score: result.scores?.[i] ?? 0, type: typePart };
-    }
-    return { content: line, score: result.scores?.[i] ?? 0, type: "unknown" };
-  });
-
-  return { lines: result.lines, memories, timing: result.timing };
-}
-
-/**
  * Search memories using the configured strategy.
  *
- * - "keyword": JSONL keyword-based (Jaccard similarity) — no embedding needed
+ * - "keyword": store FTS — no embedding needed
  * - "embedding": VectorStore cosine similarity — requires vectorStore + embeddingService
  * - "hybrid": merge both keyword and embedding results with RRF (Reciprocal Rank Fusion)
  *
@@ -433,7 +391,6 @@ async function searchMemoriesWithDetails(
  */
 async function searchMemories(
   userText: string,
-  pluginDataDir: string,
   cfg: MemoryTdaiConfig,
   logger: Logger | undefined,
   strategy: "keyword" | "embedding" | "hybrid",
@@ -459,13 +416,16 @@ async function searchMemories(
   const maxResults = cfg.recall.maxResults ?? 5;
   const threshold = cfg.recall.scoreThreshold ?? 0.3;
 
-  const nativeHybrid =
+  const nativeHybridSearch =
     strategy === "hybrid" &&
-    !!vectorStore &&
+    vectorStore &&
     typeof vectorStore.getCapabilities === "function" &&
-    !!vectorStore.getCapabilities().nativeHybridSearch;
+    vectorStore.getCapabilities().nativeHybridSearch &&
+    typeof vectorStore.searchL1Hybrid === "function"
+      ? vectorStore.searchL1Hybrid.bind(vectorStore)
+      : undefined;
   const embeddingAvailable =
-    !!vectorStore && (hasClientEmbedding(embeddingService) || nativeHybrid);
+    !!vectorStore && (hasClientEmbedding(embeddingService) || !!nativeHybridSearch);
 
   logger?.debug?.(
     `${TAG} [searchMemories] strategy=${strategy}, embeddingAvailable=${embeddingAvailable}, ` +
@@ -494,7 +454,7 @@ async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
+      const lines = await searchByKeyword(cleanText, maxResults, threshold, logger, vectorStore);
       return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
     }
 
@@ -507,18 +467,18 @@ async function searchMemories(
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
     // server-side dense + sparse + RRF in a single API call), short-circuit
     // to avoid a redundant second HTTP request and a wasted local embed().
-    if (vectorStore?.getCapabilities().nativeHybridSearch) {
+    if (nativeHybridSearch) {
       const tNative = performance.now();
-      const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
+      const results = await nativeHybridSearch({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
-      const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
+      const lines = results.map((r) => formatMemoryLine(searchResultToFormatable(r)));
       const scores = results.map((r) => r.score);
       return { lines, scores, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+    return await searchHybrid(cleanText, maxResults, vectorStore!, embeddingService!, logger, embeddingCallOpts);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
@@ -531,7 +491,6 @@ async function searchMemories(
 
 async function searchByKeyword(
   userText: string,
-  _pluginDataDir: string,
   maxResults: number,
   threshold: number,
   logger?: Logger,
@@ -554,7 +513,7 @@ async function searchByKeyword(
 
         if (filtered.length > 0) {
           logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
-          return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return filtered.map((r) => formatMemoryLine(searchResultToFormatable(r)));
         }
 
         // BM25 absolute scores are unreliable when the document set is very
@@ -565,7 +524,7 @@ async function searchByKeyword(
             `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
             `but document set is small — returning all matched results`,
           );
-          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(searchResultToFormatable(r)));
         }
         logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
       }
@@ -621,7 +580,7 @@ async function searchByEmbedding(
 
   if (filtered.length > 0) {
     logger?.debug?.(`${TAG} [embedding-search] Found ${filtered.length} relevant memories above threshold (from ${vecResults.length} candidates)`);
-    return filtered.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
+    return filtered.map((r) => formatMemoryLine(searchResultToFormatable(r)));
   }
 
   logger?.debug?.(`${TAG} [embedding-search] No results above threshold ${threshold}`);
@@ -644,9 +603,7 @@ async function searchByEmbedding(
  */
 async function searchHybrid(
   userText: string,
-  _pluginDataDir: string,
   maxResults: number,
-  _threshold: number,
   vectorStore: IMemoryStore,
   embeddingService: EmbeddingService,
   logger?: Logger,
@@ -667,34 +624,16 @@ async function searchHybrid(
             const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
             if (ftsResults.length > 0) {
               logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
-              // Convert FtsSearchResult to ScoredRecord for RRF merge
-              const records = ftsResults.map((r): ScoredRecord => ({
-                record: {
-                  id: r.record_id,
-                  content: r.content,
-                  type: r.type as MemoryRecord["type"],
-                  priority: r.priority,
-                  scene_name: r.scene_name,
-                  source_message_ids: [],
-                  metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
-                  timestamps: [r.timestamp_str].filter(Boolean),
-                  createdAt: "",
-                  updatedAt: "",
-                  sessionKey: r.session_key,
-                  sessionId: r.session_id,
-                },
-                score: r.score,
-              }));
-              return { records, ms: performance.now() - tStart };
+              return { records: ftsResults, ms: performance.now() - tStart };
             }
           }
         }
         // FTS5 not available or returned no results — skip in-memory fallback
         logger?.debug?.(`${TAG} [hybrid-keyword] FTS5 unavailable or no results, skipping keyword part`);
-        return { records: [] as ScoredRecord[], ms: performance.now() - tStart };
+        return { records: [] as L1FtsResult[], ms: performance.now() - tStart };
       } catch (err) {
         logger?.warn?.(`${TAG} Hybrid: keyword part failed: ${err instanceof Error ? err.message : String(err)}`);
-        return { records: [] as ScoredRecord[], ms: performance.now() - tStart };
+        return { records: [] as L1FtsResult[], ms: performance.now() - tStart };
       }
     })(),
     // Embedding search
@@ -739,13 +678,13 @@ async function searchHybrid(
   // Process keyword results
   for (let rank = 0; rank < keywordResults.length; rank++) {
     const r = keywordResults[rank];
-    const id = r.record.id;
+    const id = r.record_id;
     const rrfScore = 1 / (RRF_K + rank + 1);
     const existing = mergedMap.get(id);
     if (existing) {
       existing.rrfScore += rrfScore;
     } else {
-      mergedMap.set(id, { rrfScore, formatable: recordToFormatable(r.record) });
+      mergedMap.set(id, { rrfScore, formatable: searchResultToFormatable(r) });
     }
   }
 
@@ -758,7 +697,7 @@ async function searchHybrid(
     if (existing) {
       existing.rrfScore += rrfScore;
     } else {
-      mergedMap.set(id, { rrfScore, formatable: vectorResultToFormatable(r) });
+      mergedMap.set(id, { rrfScore, formatable: searchResultToFormatable(r) });
     }
   }
 
@@ -942,50 +881,10 @@ function formatTimestamp(ts: string | undefined): string | undefined {
 }
 
 /**
- * Build a FormatableMemory from a full MemoryRecord (keyword search path).
- * Handles empty metadata, empty timestamps array gracefully.
- */
-function recordToFormatable(record: MemoryRecord): FormatableMemory {
-  const meta = record.metadata as { activity_start_time?: string; activity_end_time?: string } | undefined;
-  return {
-    type: record.type,
-    content: record.content,
-    scene_name: record.scene_name || undefined,
-    activity_start_time: meta?.activity_start_time || undefined,
-    activity_end_time: meta?.activity_end_time || undefined,
-    timestamp: (record.timestamps && record.timestamps.length > 0) ? record.timestamps[0] : undefined,
-  };
-}
-
-/**
- * Build a FormatableMemory from a VectorSearchResult (embedding search path).
+ * Build a FormatableMemory from a store search result (FTS or embedding).
  * Handles empty/invalid metadata_json, empty timestamp_str gracefully.
  */
-function vectorResultToFormatable(r: L1SearchResult): FormatableMemory {
-  let activityStart: string | undefined;
-  let activityEnd: string | undefined;
-  if (r.metadata_json && r.metadata_json !== "{}") {
-    try {
-      const meta = typeof r.metadata_json === "string" ? JSON.parse(r.metadata_json) : r.metadata_json;
-      activityStart = meta?.activity_start_time || undefined;
-      activityEnd = meta?.activity_end_time || undefined;
-    } catch { /* ignore parse errors — treat as no metadata */ }
-  }
-  return {
-    type: r.type,
-    content: r.content,
-    scene_name: r.scene_name || undefined,
-    activity_start_time: activityStart,
-    activity_end_time: activityEnd,
-    timestamp: r.timestamp_str || undefined,
-  };
-}
-
-/**
- * Build a FormatableMemory from an FtsSearchResult (FTS5 keyword search path).
- * Handles empty/invalid metadata_json, empty timestamp_str gracefully.
- */
-function ftsResultToFormatable(r: L1FtsResult): FormatableMemory {
+function searchResultToFormatable(r: L1SearchResult): FormatableMemory {
   let activityStart: string | undefined;
   let activityEnd: string | undefined;
   if (r.metadata_json && r.metadata_json !== "{}") {

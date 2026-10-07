@@ -425,8 +425,13 @@ async function exportCollection(
       console.error(
         `\n     ❌ 查询失败 (offset=${currentOffset}): ${err instanceof Error ? err.message : String(err)}`,
       );
-      hasMore = false;
+      writeStream.destroy();
+      throw err;
     }
+  }
+  if (!isRangeMode && options.expectedTotal !== undefined && totalExported !== options.expectedTotal) {
+    writeStream.destroy();
+    throw new Error(`Export count mismatch for ${collection}: expected ${options.expectedTotal}, got ${totalExported}`);
   }
 
   writeStream.end();
@@ -581,11 +586,7 @@ async function main(): Promise<void> {
       console.error(
         `❌ 导出 ${col.collection} 失败: ${err instanceof Error ? err.message : String(err)}`,
       );
-      exportResults.push({
-        collection: col.collection,
-        docCount: 0,
-        filePath: "",
-      });
+      throw err;
     }
     console.log();
   }

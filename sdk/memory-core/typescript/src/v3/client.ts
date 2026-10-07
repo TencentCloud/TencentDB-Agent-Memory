@@ -30,6 +30,14 @@ import type {
   V3IsolationContext,
   V3IsolationOverrides,
   V3MemoryClientConfig,
+  V3MemoryReviewRequest,
+  V3MemoryReviewData,
+  V3MemoryRevertRequest,
+  V3MemoryRevertData,
+  V3MemoryReviewListRequest,
+  V3MemoryReviewListData,
+  V3DerivedReviewRequest,
+  V3DerivedReviewData,
   V3ScenarioFile,
   V3ScenarioListData,
   V3ScenarioListRequest,
@@ -171,6 +179,7 @@ export class MemoryClient {
       serviceId: cfg.serviceId,
       // 可选：透传调用方身份。内核不校验，但前置网关/面板可能需要。
       userKey: cfg.userKey,
+      reviewerId: cfg.reviewerId,
       timeout: cfg.timeout,
       rejectUnauthorized: cfg.rejectUnauthorized,
     });
@@ -321,6 +330,26 @@ export class MemoryClient {
       time_start: params.time_start,
       time_end: params.time_end,
     }));
+  }
+
+  revertMemory(params: V3MemoryRevertRequest): Promise<V3MemoryRevertData> {
+    return this.http.post(`${V3}/memory/diff/revert`, stripUndefined({ ...params, ...this.iso.baseBody() }));
+  }
+
+  retractMemory(params: V3MemoryReviewRequest & { reason: string }): Promise<V3MemoryReviewData> {
+    return this.http.post(`${V3}/memory/review/retract`, stripUndefined({ ...params, ...this.iso.baseBody() }));
+  }
+
+  restoreMemory(params: V3MemoryReviewRequest): Promise<V3MemoryReviewData> {
+    return this.http.post(`${V3}/memory/review/restore`, stripUndefined({ ...params, ...this.iso.baseBody() }));
+  }
+
+  listMemoryReviews(params: V3MemoryReviewListRequest = {}): Promise<V3MemoryReviewListData> {
+    return this.http.post(`${V3}/memory/review/list`, stripUndefined({ ...params, ...this.iso.baseBody() }));
+  }
+
+  reviewDerivedArtifact(params: V3DerivedReviewRequest): Promise<V3DerivedReviewData> {
+    return this.http.post(`${V3}/memory/review/derived`, stripUndefined({ ...params, ...this.iso.baseBody() }));
   }
 
   // -- L2 Scenario -------------------------------------------------------

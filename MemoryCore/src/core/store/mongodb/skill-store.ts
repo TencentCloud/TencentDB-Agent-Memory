@@ -304,7 +304,7 @@ export class MongoSkillStore implements ISkillStore {
       { $addFields: { __searchScore: { $meta: "searchScore" } } },
     ];
 
-    const docs = await coll.aggregate(pipeline).toArray();
+    const docs = await coll.aggregate(pipeline, { readConcern: { level: "local" } }).toArray();
     return docs.map((d) => {
       const skill = this._docToSkill(d);
       const score = mongoSearchScoreToScore(Number((d as { __searchScore?: number }).__searchScore ?? 0));

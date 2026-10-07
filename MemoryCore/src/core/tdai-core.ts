@@ -49,6 +49,7 @@ import {
   createL3Runner,
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
+import { loadLedgerWriterId } from "./record/event-ledger.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
@@ -244,6 +245,7 @@ export class TdaiCore {
   async initialize(): Promise<void> {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
+    this.logger.debug?.(`${TAG} Change-ledger outbox writer: ${loadLedgerWriterId(this.dataDir, this.logger)}`);
 
     // Initialize stores (async)
     this.storeReady = this.initStores();
@@ -557,7 +559,7 @@ export class TdaiCore {
 
   /** Set the StorageAdapter (for service mode, injected by Gateway after config resolution). */
   setStorage(adapter: StorageAdapter): void {
-    this.storage = adapter;
+    this.storage = adapter.withReviewStore(() => this.vectorStore);
     this.logger.info(`${TAG} StorageAdapter set: type=${adapter.type}`);
     // Re-trigger skill wiring — the gateway path sets storage AFTER
     // initialize() finishes, so the eager promise chain in initialize()
@@ -608,6 +610,7 @@ export class TdaiCore {
   // ============================
 
   private async initStores(): Promise<void> {
+    if (this.storage) this.storage = this.storage.withReviewStore(() => this.vectorStore);
     try {
       const stores = await initStores(this.cfg, this.dataDir, this.logger);
       this.vectorStore = stores.vectorStore;

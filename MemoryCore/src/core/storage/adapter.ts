@@ -14,6 +14,10 @@
 import type { IStorageBackend, StorageObject, ListEntry, ListObjectsOptions, ListResult, PutObjectOptions } from "./types.js";
 import type { ProfileIsolation } from "../profile/profile-scope.js";
 import { isProfileIsolationRebindable } from "./composite-backend.js";
+import type { IMemoryStore } from "../store/types.js";
+import { isMemoryReviewEnabled } from "../store/visibility.js";
+import { derivedProfileAllowed, isDerivedReviewPath, profileReviewFence } from "../store/derived-review.js";
+import { parseProfileIsolationScope } from "../profile/profile-scope.js";
 
 class ScopedStorageBackend implements IStorageBackend {
   readonly type: IStorageBackend["type"];
@@ -80,7 +84,7 @@ class ScopedStorageBackend implements IStorageBackend {
 
 export function createScopedStorageAdapter(base: StorageAdapter, prefix: string): StorageAdapter {
   if (!prefix) return base;
-  return new StorageAdapter(new ScopedStorageBackend(base.getBackend(), prefix));
+  return base.withBackend(new ScopedStorageBackend(base.getBackend(), prefix), undefined, prefix.startsWith("profiles/"));
 }
 
 /**
@@ -111,22 +115,43 @@ export function scopeProfileStorageView(
           `refusing to serve a scoped request through an unbound row view`,
       );
     }
-    return new StorageAdapter(backend.withProfileIsolation(isolation));
+    return storage.withBackend(backend.withProfileIsolation(isolation), isolation, true);
   }
-  return createScopedStorageAdapter(storage, prefix);
+  const scoped = createScopedStorageAdapter(storage, prefix);
+  return scoped.withBackend(scoped.getBackend(), isolation, true);
 }
 
 export class StorageAdapter {
-  constructor(private backend: IStorageBackend) {}
+  constructor(private backend: IStorageBackend, private reviewOptions: { store?: () => IMemoryStore | undefined; isolation?: ProfileIsolation; profileView?: boolean } = {}) {}
+
+  withReviewStore(store: () => IMemoryStore | undefined): StorageAdapter {
+    return new StorageAdapter(this.backend, { ...this.reviewOptions, store });
+  }
+
+  withBackend(backend: IStorageBackend, isolation = this.reviewOptions.isolation, profileView = this.reviewOptions.profileView): StorageAdapter {
+    return new StorageAdapter(backend, { store: this.reviewOptions.store, isolation, profileView });
+  }
 
   get type() { return this.backend.type; }
 
   // ── fs.readFile replacement ──
 
-  async readFile(key: string): Promise<string | null> {
+  async readFile(key: string, options?: { review?: boolean }): Promise<string | null> {
     const obj = await this.backend.getObject(key);
     if (!obj) return null;
-    return obj.content.toString("utf-8");
+    const content = obj.content.toString("utf-8");
+    let path = key;
+    let isolation = this.reviewOptions.isolation;
+    const scoped = /^profiles\/([^/]+)\/(.+)$/.exec(key);
+    if (scoped) { isolation = parseProfileIsolationScope(decodeURIComponent(scoped[1]!)); path = scoped[2]!; }
+    if (options?.review !== false && this.reviewOptions.profileView !== false && (isMemoryReviewEnabled() || this.reviewOptions.store !== undefined) && isDerivedReviewPath(path)) {
+      const store = this.reviewOptions.store?.();
+      if (!store) throw new Error("Profile review requires an initialized store");
+      const fence = await profileReviewFence(store, isolation);
+      if (!isolation && fence.length) return null;
+      if (!(await derivedProfileAllowed(store, path, content, fence, isolation))) return null;
+    }
+    return content;
   }
 
   async readFileOrThrow(key: string): Promise<string> {
@@ -136,9 +161,13 @@ export class StorageAdapter {
   }
 
   async readFileBuffer(key: string): Promise<Buffer | null> {
+    const path = /^profiles\/[^/]+\/(.+)$/.exec(key)?.[1] ?? key;
+    if ((isMemoryReviewEnabled() || this.reviewOptions.store !== undefined) && this.reviewOptions.profileView !== false && isDerivedReviewPath(path)) {
+      const content = await this.readFile(key);
+      return content === null ? null : Buffer.from(content, "utf-8");
+    }
     const obj = await this.backend.getObject(key);
-    if (!obj) return null;
-    return obj.content;
+    return obj?.content ?? null;
   }
 
   // ── fs.writeFile replacement ──

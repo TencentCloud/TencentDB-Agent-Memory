@@ -132,7 +132,7 @@ export class TcvdbClient {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const tAttempt = performance.now();
       try {
-        this.logger?.debug?.(`${TAG} → ${path} attempt=${attempt} body=${JSON.stringify(body).slice(0, 500)}`);
+        this.logger?.debug?.(`${TAG} → ${path} attempt=${attempt} fields=${Object.keys(body).join(",")}`);
         const { statusCode, body: respBody } = await undiciRequest(`${this.baseUrl}${path}`, {
           method: "POST",
           headers: {
@@ -240,6 +240,22 @@ export class TcvdbClient {
     return resp.collection;
   }
 
+  async ensureFilterIndexes(collection: string, indexes: Array<{ fieldName: string; fieldType: string; indexType: "filter" }>): Promise<void> {
+    let info = await this.describeCollection(collection);
+    const missing = indexes.filter((required) => {
+      const existing = info.indexes?.find((i) => i.fieldName === required.fieldName);
+      if (existing && (existing.fieldType !== required.fieldType || existing.indexType !== required.indexType)) throw new Error(`Incompatible ledger index: ${required.fieldName}`);
+      return !existing;
+    });
+    if (missing.length) {
+      await this.request("/index/add", { database: this.database, collection, indexes: missing, buildExistedData: true });
+      info = await this.describeCollection(collection);
+    }
+    if (indexes.some((i) => !info.indexes?.some((v) => v.fieldName === i.fieldName && v.fieldType === i.fieldType && v.indexType === i.indexType)) || (info.indexStatus as { status?: string } | undefined)?.status !== "ready") {
+      throw new Error("Ledger filter indexes not ready; restart after index build completes");
+    }
+  }
+
   // ── Document operations ─────────────────────────────────
 
   async upsert(collection: string, documents: Record<string, unknown>[]): Promise<void> {
@@ -335,7 +351,8 @@ export class TcvdbClient {
       readConsistency: "strongConsistency",
       query,
     });
-    return resp.count ?? 0;
+    if (!Number.isSafeInteger(resp.count) || resp.count < 0) throw new Error("Invalid document count response");
+    return resp.count;
   }
 
   // ── Convenience getters ─────────────────────────────────

@@ -11,7 +11,7 @@ export class V3HttpTransport {
   private readonly timeout: number;
   private readonly dispatcher?: Agent;
 
-  constructor(opts: HttpTransportOptions) {
+  constructor(opts: HttpTransportOptions & { reviewerId?: string }) {
     let endpoint: URL;
     try {
       endpoint = new URL(opts.endpoint);
@@ -36,6 +36,11 @@ export class V3HttpTransport {
       "Content-Type": "application/json",
     };
     if (opts.userKey) this.headers["x-tdai-user-key"] = opts.userKey;
+    if (opts.reviewerId !== undefined) {
+      const id = opts.reviewerId.trim();
+      if (!id || id.length > 256 || /[\r\n]/.test(id)) throw new ParamError("reviewerId must be a nonempty safe header value (max 256 characters)");
+      this.headers["x-tdai-reviewer-id"] = id;
+    }
     if (opts.rejectUnauthorized === false) {
       this.dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
     }

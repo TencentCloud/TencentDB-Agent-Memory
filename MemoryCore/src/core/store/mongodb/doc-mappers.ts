@@ -14,10 +14,8 @@ import type { MemoryRecord } from "../../record/l1-writer.js";
 import type {
   L0Record,
   L0QueryRow,
-  L0SearchResult,
   L0FtsResult,
   L1RecordRow,
-  L1SearchResult,
   L1FtsResult,
 } from "../types.js";
 import { DEFAULT_ISOLATION_ID } from "../isolation.js";
@@ -56,7 +54,7 @@ export function l0RecordToDoc(record: L0Record): L0Doc {
     _id: record.id,
     session_key: record.sessionKey,
     session_id: record.sessionId || DEFAULT_ISOLATION_ID,
-    team_id: record.teamId ?? "",
+    team_id: record.teamId || DEFAULT_ISOLATION_ID,
     task_id: record.taskId ?? "",
     user_id: record.userId || DEFAULT_ISOLATION_ID,
     agent_id: record.agentId || DEFAULT_ISOLATION_ID,
@@ -83,10 +81,6 @@ export function docToL0QueryRow(doc: L0Doc): L0QueryRow {
     recorded_at: doc.recorded_at,
     timestamp: doc.timestamp ?? 0,
   };
-}
-
-export function docToL0SearchResult(doc: L0Doc, score: number): L0SearchResult {
-  return { ...docToL0QueryRow(doc), score };
 }
 
 export function docToL0FtsResult(doc: L0Doc, score: number): L0FtsResult {
@@ -118,6 +112,10 @@ export interface L1Doc {
   updated_time: string;
   updated_time_ms: number;
   metadata_json: string;
+  review_sources_json?: string;
+  review_sources?: string[];
+  review_guard_at?: string;
+  review_epoch?: number;
 }
 
 export function l1RecordToDoc(record: MemoryRecord): L1Doc {
@@ -133,9 +131,9 @@ export function l1RecordToDoc(record: MemoryRecord): L1Doc {
     type: record.type,
     priority: record.priority,
     scene_name: record.scene_name,
-    team_id: record.teamId ?? "",
-    user_id: record.userId ?? "",
-    agent_id: record.agentId ?? "",
+    team_id: record.teamId || DEFAULT_ISOLATION_ID,
+    user_id: record.userId || DEFAULT_ISOLATION_ID,
+    agent_id: record.agentId || DEFAULT_ISOLATION_ID,
     task_id: record.taskId ?? "",
     session_key: record.sessionKey,
     session_id: record.sessionId,
@@ -147,13 +145,16 @@ export function l1RecordToDoc(record: MemoryRecord): L1Doc {
     updated_time: record.updatedAt,
     updated_time_ms: isoToEpochMs(record.updatedAt),
     metadata_json: JSON.stringify(record.metadata ?? {}),
+    review_sources_json: JSON.stringify(record.review_sources ?? []),
+    review_guard_at: record.review_guard_at,
+    review_epoch: record.review_epoch,
   };
 }
 
 export function docToL1RecordRow(doc: L1Doc): L1RecordRow {
   return {
     record_id: doc._id,
-    content: doc.content,
+    content: doc.content ?? "",
     type: doc.type,
     priority: doc.priority ?? 0,
     scene_name: doc.scene_name ?? "",
@@ -170,10 +171,15 @@ export function docToL1RecordRow(doc: L1Doc): L1RecordRow {
     created_time: doc.created_time ?? "",
     updated_time: doc.updated_time ?? "",
     metadata_json: doc.metadata_json ?? "{}",
+    // 守卫与审核清单都依赖它；丢了就是静默失效。
+    review_status: (doc as { review_status?: string }).review_status as L1RecordRow["review_status"],
+    review_sources_json: JSON.stringify([...new Set([...(doc.review_sources_json ? JSON.parse(doc.review_sources_json) as string[] : []), ...(doc.review_sources ?? [])])]),
+    review_guard_at: doc.review_guard_at,
+    review_epoch: doc.review_epoch,
   };
 }
 
-export function docToL1SearchResult(doc: L1Doc, score: number): L1SearchResult {
+export function docToL1FtsResult(doc: L1Doc, score: number): L1FtsResult {
   const row = docToL1RecordRow(doc);
   return {
     record_id: row.record_id,
@@ -196,23 +202,21 @@ export function docToL1SearchResult(doc: L1Doc, score: number): L1SearchResult {
   };
 }
 
-export function docToL1FtsResult(doc: L1Doc, score: number): L1FtsResult {
-  return docToL1SearchResult(doc, score);
-}
-
 // ════════════════════════════════════════════════════════
 // Isolation → Mongo filter
 // ════════════════════════════════════════════════════════
 
 import type { IsolationFilter } from "../isolation.js";
+import { healIsoId } from "../memory-event-id.js";
 
 /** Build a plain Mongo find/`$match` filter fragment from an IsolationFilter. */
-export function isolationToMatch(filter: IsolationFilter | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
+export function isolationToMatch(filter: IsolationFilter | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   if (!filter) return out;
-  if (filter.teamId !== undefined) out.team_id = filter.teamId;
-  if (filter.userId !== undefined) out.user_id = filter.userId;
-  if (filter.agentId !== undefined) out.agent_id = filter.agentId;
+  for (const [field, value] of [["team_id", filter.teamId], ["user_id", filter.userId], ["agent_id", filter.agentId]] as const) {
+    const normalized = healIsoId(value);
+    if (normalized !== undefined) out[field] = normalized === DEFAULT_ISOLATION_ID ? { $in: ["", DEFAULT_ISOLATION_ID] } : normalized;
+  }
   if (filter.sessionId !== undefined) out.session_id = filter.sessionId;
   if (filter.taskId !== undefined) out.task_id = filter.taskId;
   if (filter.sessionKey !== undefined) out.session_key = filter.sessionKey;

@@ -16,6 +16,7 @@
  */
 
 import type { MemoryRecord } from "../record/l1-writer.js";
+import type { ReviewStatus, VisibilityAware } from "./visibility.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
 import type { Logger } from "../types.js";
 import type { IsolationFilter } from "./isolation.js";
@@ -97,8 +98,8 @@ export interface L1FtsResult {
 }
 
 /** Filter options for querying L1 records. */
-export interface L1QueryFilter {
-  /** Query by document primary keys (maps to VDB `documentIds`, max 20). */
+export interface L1QueryFilter extends VisibilityAware {
+  /** Query by primary keys; an empty selection matches nothing. Backend adapters own batching. */
   recordIds?: string[];
   sessionKey?: string;
   sessionId?: string;
@@ -113,6 +114,15 @@ export interface L1QueryFilter {
 
 /** Row shape returned by L1 query methods. */
 export interface L1RecordRow {
+  /** 审核状态；后端映射须覆盖。历史行可缺省，所以类型本身不能防止漏映射，需契约测试。 */
+  review_status?: ReviewStatus;
+  review_baseline?: ReviewStatus;
+  review_sources_json?: string;
+  review_guard_at?: string;
+  review_epoch?: number;
+  review_tokens?: string[];
+  review_invalid?: boolean;
+  review_incomplete?: boolean;
   record_id: string;
   content: string;
   type: string;
@@ -367,7 +377,7 @@ export interface L0PaginatedResult {
 }
 
 /** Filter for v2 L1 paginated query (`/atomic/query`). */
-export interface L1CountFilter {
+export interface L1CountFilter extends VisibilityAware {
   /** Filter by memory type (episodic/persona/instruction). */
   type?: string;
   /** Filter by session. */
@@ -523,8 +533,8 @@ export interface KnowledgeListResult {
  * - `SqliteMemoryStore` (sqlite.ts) — local SQLite + sqlite-vec + FTS5
  * - `TcvdbMemoryStore` (tcvdb.ts) — Tencent Cloud VectorDB (future)
  *
- * All methods are fault-tolerant: they return empty results or `false` on
- * failure rather than throwing, unless explicitly documented otherwise.
+ * Legacy writes may return `false`; ledger and review-aware reads propagate
+ * failures so callers cannot interpret an unavailable backend as empty data.
  */
 /**
  * Helper type: a value that may be sync or async.
@@ -587,6 +597,148 @@ export interface AuditQueryFilter {
   offset?: number;
 }
 
+// ============================
+// Memory Events（session 变更集）
+// ============================
+
+/**
+ * L1 记忆变更事件 —— writeMemory 的 dedup 决策落地时追加。
+ *
+ * 与 Memory Audit（AuditEntry）的分工：
+ *   - Audit 面向显式管理 API（atomic/update、atomic/delete、scenario/write 等），
+ *     不存 content、无 session 维度，回答"谁在什么时间改了哪条"。
+ *   - MemoryEvent 面向自动提取写入路径，存 content 快照 + session 维度 +
+ *     supersede 链，回答"这个 session 让记忆发生了什么变化"（session diff）。
+ *
+ * op 语义：
+ *   - created    : store action —— 新增一条记忆
+ *   - updated    : update action —— 新记录，supersedes 列出被替代的旧 record_id
+ *   - merged     : merge action —— 同 updated
+ *   - superseded : 旧记录被替代，content 为旧内容快照，superseded_by 指向新
+ *                  record_id；session_id 记执行淘汰的 session，
+ *                  origin_session_id 保留旧记录原归属（反向可查）；
+ *                  snapshot_json 存旧记录完整 JSON（revert 恢复用）。
+ *   - reverted   : 已生效变更被撤销（review 驳回）。record_id 是被撤销的
+ *                  新记录；supersedes 列出本次恢复的旧 record_id。
+ *   - deleted    : 记录被显式删除（管理面 mutation API：atomic/delete、
+ *                  chat-memory/clear 等）。content 为空（删除无新内容）。
+ *
+ * source 语义（变更来源；写入方显式标记）：
+ *   - extraction  : writeMemory 自动提取路径（dedup 决策）
+ *   - api_mutation: 显式管理 API（atomic/*、scenario/*、core/write、chat-memory/clear）
+ *   - review      : 审阅驳回（revert）
+ *
+ * layer 语义：事件所属记忆层（l1/l2/l3）。自动提取路径恒为 l1；管理面
+ * mutation 按 handler 实际操作的层填充。未填时按 l1 处理（老数据全部为 l1）。
+ */
+export interface MemoryEvent {
+  /**
+   * 事件唯一身份（`evt-` + 32 hex）。写入点生成一次，JSONL outbox 与各
+   * store 共用，同一 event_id 重复写入是幂等的（回放不产生重复事件）。
+   * 非审核事件在缺省时由 store 生成；审核收据必须提供确定性身份。
+   */
+  event_id?: string;
+  /** 事件发生时间（ISO 8601）。 */
+  event_ts: string;
+  /** 执行写入的 session key（conversation channel）。管理面 mutation 无 session 语义，为空串。 */
+  session_key: string;
+  /** 执行写入的 session id。superseded 事件记执行淘汰的 session。管理面 mutation 为空串。 */
+  session_id: string;
+  /** 被替代记录原本的归属 session（仅 superseded 事件填充）。 */
+  origin_session_id?: string;
+  /** 被替代记录原本的归属 session key（仅 superseded 事件填充）。 */
+  origin_session_key?: string;
+  /** 租户维度，与 record 的 tenancy 一致。 */
+  team_id?: string;
+  user_id?: string;
+  agent_id?: string;
+  task_id?: string;
+  review?: { protocol: 2; observed?: string[]; sources?: string[]; request_hash?: string; operation_id?: string; no_op?: boolean; previous_status?: ReviewStatus; missing?: string[]; content_hash?: string; fence_hash?: string; guard_at?: string; guard_epoch?: number };
+  /** 变更类型。 */
+  op: "created" | "updated" | "merged" | "superseded" | "reverted" | "deleted" | "retracted" | "restored";
+  /** 本事件对应的 record id（superseded 时为旧 record id）。 */
+  record_id: string;
+  /** 操作者的显式声明，不回落记忆所有者；不代表独立认证或授权。 */
+  reviewer_id?: string;
+  /** 内容快照（superseded 时为被替代的旧内容；deleted 事件为空串）。 */
+  content: string;
+  /** 记忆类型（persona / episodic / instruction / work_*）。 */
+  memory_type?: string;
+  /** 本事件对应 record 的 version。 */
+  version?: number;
+  /** updated/merged/reverted 事件：被替代/被恢复的旧 record_id 列表。 */
+  supersedes?: string[];
+  /** superseded 事件：指向新 record_id。 */
+  superseded_by?: string;
+  /** superseded 事件：旧记录完整 JSON 序列化（revert 恢复用）。 */
+  snapshot_json?: string;
+  /** 事件所属记忆层（l1/l2/l3）。未填按 l1 处理。 */
+  layer?: "l1" | "l2" | "l3";
+  /** 变更来源（extraction / api_mutation / review / retention）。未标记的行不命中 source 过滤。 */
+  source?: "extraction" | "api_mutation" | "review" | "retention";
+  /** Gateway request_id（api_mutation 来源时由调用方透传，便于与 audit 表对账）。 */
+  request_id?: string;
+  /** reverted 事件：驳回理由。 */
+  reason?: string;
+  /** reverted 事件：被撤销的那次写入事件的 event_id（逐层回退的定位键）。 */
+  target_event_id?: string;
+  /**
+   * deleted 事件的删除范围：record=单条（缺省）；agent=clear/archive 按
+   * team+agent(+user) 整体清空（record_id 为资产 id）；retention=TTL 过期清理
+   *（record_id 为 `retention-l1-<cutoff>`，被删的是 updated_time < until 的全部 L1）。
+   */
+  scope?: "record" | "agent" | "retention";
+  /** scope=agent|retention 的 deleted 事件：删除覆盖到的时间上界（ISO 8601）。 */
+  until?: string;
+}
+
+/** redactMemoryEvents 过滤条件：擦除 event_ts ≤ until 且租户（及 layer，设置时）匹配的事件内容。 */
+export interface MemoryEventRedactFilter {
+  team_id?: string;
+  agent_id?: string;
+  user_id?: string;
+  /**
+   * 只擦该层的事件（未设置 = 全部层）。L1 TTL 只应擦 L1 事件——L2/L3 不受
+   * L1 保留期管理。行侧缺省 layer 按 "l1" 处理（老数据全部为 l1）。
+   */
+  layer?: "l1" | "l2" | "l3";
+  until: string;
+}
+
+/** queryMemoryEvents 过滤条件，全部可选。 */
+export const MEMORY_EVENT_HISTORY_LIMIT = 50_000;
+
+export interface MemoryEventFilter {
+  session_id?: string;
+  session_key?: string;
+  origin_session_id?: string;
+  origin_session_key?: string;
+  record_id?: string;
+  /** record_id 属于该集合（IN）；空数组不匹配任何事件。与 record_id 同时给出时取交集。 */
+  record_ids?: string[];
+  op?: MemoryEvent["op"];
+  layer?: MemoryEvent["layer"];
+  source?: MemoryEvent["source"];
+  request_id?: string;
+  event_id?: string;
+  operation_id?: string;
+  team_id?: string;
+  agent_id?: string;
+  user_id?: string;
+  task_id?: string;
+  /** 只返 event_ts ≥ since 的事件（ISO 8601）。 */
+  since?: string;
+  /** 只返 event_ts ≤ until 的事件（ISO 8601）。 */
+  until?: string;
+  limit?: number;   // 默认 100，上限 1000
+  offset?: number;
+  metadata_only?: boolean;
+  scope?: MemoryEvent["scope"];
+  /** 排序方向：默认 "asc"（按追加序）。inbox 等"看最新"场景用 "desc"。 */
+  order?: "asc" | "desc";
+  order_by?: "event_ts" | "clear_epoch";
+}
+
 export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStore {
   // ── Capabilities ───────────────────────────────────────────
 
@@ -608,15 +760,29 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
 
   // ── L1 Write ─────────────────────────────────────────────
 
-  upsertL1(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
+  upsertL1(record: MemoryRecord, embedding?: Float32Array, options?: { import?: boolean }): MaybePromise<boolean>;
   deleteL1(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Batch(recordIds: string[], filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Expired(cutoffIso: string): MaybePromise<number>;
+  /**
+   * 事后审核：提交独立撤回或观察集合恢复命令（DP-01 retract/restore）。
+   *
+   * 可选能力 —— 未实现的后端由网关返回 501，沿用 appendMemoryEvent 的惯例。
+   * 返回 undefined = 记录不存在或不属于该租户；`changed:false` = 幂等空操作（DP-18）。
+   * 本方法持久提交审核事件；状态由统一解析器推导，返回 event 供已提交 outbox 镜像。
+   */
+  setL1ReviewStatus?(
+    recordId: string,
+    status: ReviewStatus,
+    filter?: IsolationFilter,
+    operation?: { operation_id?: string; request_id?: string; reviewer_id?: string; reason?: string },
+  ): MaybePromise<{ changed: boolean; previous: ReviewStatus; event?: MemoryEvent } | undefined>;
 
   // ── L1 Read ──────────────────────────────────────────────
 
   countL1(filter?: L1CountFilter): MaybePromise<number>;
-  queryL1Records(filter?: L1QueryFilter): MaybePromise<L1RecordRow[]>;
+  /** Backend errors propagate; raw audit reads do not bypass failure reporting. */
+  queryL1Records(filter?: L1QueryFilter, opts?: { review?: boolean; metadataOnly?: boolean }): MaybePromise<L1RecordRow[]>;
   getAllL1Texts(): MaybePromise<Array<{ record_id: string; content: string; updated_time: string }>>;
 
   // ── L1 Search ────────────────────────────────────────────
@@ -759,6 +925,19 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── Memory Audit（修改审计；optional 让 store 可以选择不实现）──
   appendAudit?(entry: AuditEntry): MaybePromise<void>;
   queryAudit?(filter: AuditQueryFilter): MaybePromise<AuditEntry[]>;
+
+  // ── Memory Events（统一变更账；optional，同上）─────────────
+  appendMemoryEvent?(event: MemoryEvent): MaybePromise<void>;
+  commitMemoryEvent?(event: MemoryEvent): MaybePromise<MemoryEvent>;
+  executeMemoryTransaction?<T>(program: () => Generator<MaybePromise<unknown>, T, unknown>): MaybePromise<T>;
+  getClearEpoch?(scope: { teamId?: string; agentId?: string }): MaybePromise<number>;
+  commitClearFence?(event: MemoryEvent): MaybePromise<MemoryEvent>;
+  queryMemoryEvents?(filter: MemoryEventFilter, options?: { complete?: boolean }): MaybePromise<MemoryEvent[]>;
+  /**
+   * 擦除匹配事件的 content / snapshot_json（保留 op/时间/id 等元数据骨架）。
+   * clear/archive/TTL 调用，使变更账不再保留已清空记忆的原文。返回受影响行数。
+   */
+  redactMemoryEvents?(filter: MemoryEventRedactFilter): MaybePromise<number>;
 }
 
 // ============================

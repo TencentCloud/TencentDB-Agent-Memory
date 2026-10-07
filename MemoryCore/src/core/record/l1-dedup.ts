@@ -3,8 +3,9 @@
  * memories against existing records in a single LLM call.
  *
  * Candidate recall uses the same strategy as memory_search (native hybrid, else
- * FTS ∥ client-vector + RRF). Isolation stays session-scoped via IsolationFilter;
- * search's cross-session filter is not reused.
+ * FTS ∥ client-vector + RRF). Isolation is AGENT-scoped (cross-session, the
+ * caller's filter carries no session dimensions — see batchDedup's docstring);
+ * tenant isolation stays via team/user/agent/task.
  *
  * If neither FTS, client embedding, nor native hybrid is available, conflict
  * detection is skipped — all memories go straight to store.
@@ -41,8 +42,11 @@ const TAG = "[memory-tdai][l1-dedup]";
  * 2. Otherwise FTS ∥ client-vector in parallel, RRF-merged (same as memory_search)
  * 3. Skip conflict detection entirely — all memories go straight to "store"
  *
- * Isolation is the caller's `filter` (production extraction is session-scoped).
- * Do not reuse search's cross-session isolation here.
+ * Isolation is the caller's `filter` (agent-level, cross-session — aligned
+ * with memory_search / conversation query). Memories are agent-scoped
+ * assets: a correction in session B must supersede records written by
+ * session A of the same agent, so the recall filter carries no session
+ * dimensions; tenant isolation stays via team/user/agent/task.
  *
  * @param memories - Newly extracted memories (with record_id)
  * @param config - OpenClaw config (for LLM access)
@@ -90,7 +94,10 @@ export async function batchDedup(params: {
     }));
 
   // Determine what recall capabilities are available
-  const hasVectorData = vectorStore && (await vectorStore.countL1()) > 0;
+  // DP-14 的第二道门：这里若只数 active，当一个租户的记忆全部被撤回时
+  // countL1() 返回 0 ⇒ 判定"没有可比对的数据" ⇒ **整个去重被跳过** ⇒
+  // 同一事实以新 record_id 原样写入，被撤回的内容复活。必须数全量。
+  const hasVectorData = !!vectorStore && (await vectorStore.countL1({ visibility: "all" })) > 0;
   const hasFts = vectorStore?.isFtsAvailable() ?? false;
   const nativeHybrid = !!(
     vectorStore &&
@@ -238,6 +245,11 @@ async function findCandidates(
   hasVectorData: boolean,
 ): Promise<CandidateMatch[]> {
   const newRecordIds = new Set(memories.map((m) => m.record_id));
+  // DP-14：去重**必须**能看见被撤回的记忆。
+  // 否则同一事实下次抽取时判不出重，会以一个新 record_id 重新写入，
+  // 审核员上次的撤回对新 id 无效 —— 被撤回的内容原样复活。
+  // 命中 quarantined 目标时，writer 拒绝该次替换；后到撤回由持久来源继续抑制。
+  const dedupFilter: IsolationFilter = { ...(filter ?? {}), visibility: "all" };
   const nativeHybrid = !!(
     typeof vectorStore.getCapabilities === "function" &&
     vectorStore.getCapabilities().nativeHybridSearch &&
@@ -275,7 +287,7 @@ async function findCandidates(
       vectorStore,
       embeddingService: vectorSvc,
       logger,
-      filter,
+      filter: dedupFilter,
       queryEmbedding: queryEmbeddings?.[i],
       embeddingTimeoutMs,
       logTag: TAG,
