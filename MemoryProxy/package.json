@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "outbox:pi": "node --import tsx/esm src/agent-adapters/pi-outbox-cli.ts",
     "test:pi-outbox": "vitest run src/agent-adapters/__tests__/pi-outbox",
-    "typecheck:pi-outbox": "tsc --noEmit -p tsconfig.pi-outbox.json"
+    "typecheck:pi-outbox": "tsc --noEmit -p tsconfig.pi-outbox.json",
+    "test:pi-outbox:contract": "node --import tsx/esm scripts/pi-outbox-contract.ts"
   },
   "optionalDependencies": {
     "better-sqlite3": "^11.5.0",
