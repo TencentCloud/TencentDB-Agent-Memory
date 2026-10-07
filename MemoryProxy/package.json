@@ -10,7 +10,9 @@
     "dev:config": "node --import tsx/esm --watch src/index.ts --config config.yaml",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:pi-outbox": "vitest run src/agent-adapters/__tests__/pi-outbox",
+    "typecheck:pi-outbox": "tsc --noEmit -p tsconfig.pi-outbox.json"
   },
   "optionalDependencies": {
     "better-sqlite3": "^11.5.0",
