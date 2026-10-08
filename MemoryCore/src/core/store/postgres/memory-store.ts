@@ -273,6 +273,11 @@ export class PgMemoryStore implements IMemoryStore {
       if (filter?.userId !== undefined) { c.push("user_id = $" + (++i)); p.push(filter.userId); }
       if (filter?.agentId !== undefined) { c.push("agent_id = $" + (++i)); p.push(filter.agentId); }
       if (filter?.updatedAfter) { c.push("updated_time > $" + (++i)); p.push(filter.updatedAfter); }
+      // [recordIds] 点读过滤（对齐 TCVDB 的 documentIds / Mongo 的 _id $in 语义；
+      // 空数组不施加过滤，与 TCVDB 一致）。Core 的 L1 更新取版本逻辑依赖此字段：
+      // queryL1Records({ recordIds: decision.target_ids }) —— 缺失会导致 maxVersion
+      // 按全表推导而非目标记录，且点读退化为全表扫描。
+      if (filter?.recordIds && filter.recordIds.length > 0) { c.push("record_id = ANY($" + (++i) + "::text[])"); p.push(filter.recordIds); }
       const w = c.length > 0 ? "WHERE " + c.join(" AND ") : "";
       const r = await this.pool.query("SELECT record_id, content, type, priority, scene_name, session_key, session_id, team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start, timestamp_end, created_time, updated_time, metadata_json FROM l1_records " + w + " ORDER BY updated_time ASC", p);
       return r.rows as L1RecordRow[];
