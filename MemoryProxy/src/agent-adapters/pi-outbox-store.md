@@ -147,10 +147,25 @@ npm run test:pi-outbox:contract -- E:/java/pr1142-outbox-contract-test/MemoryCor
 ```
 
 契约脚本启动 loopback HTTP 服务，调用 #1142 实际的 conversation handler 和 SQLite
-store；不启动完整生产网关的认证、配额和模型服务。发送子进程在收到并校验成功回执后，
-本地 ACK 前通知父进程；父进程强制 kill、重新打开数据库，再启动新的发送进程。
-为避免等待租约到期，重启子进程的测试时钟推进到租约到期后。断言：两次请求原文相同、
-accepted_ids 相同、数据库只有原来两条消息、pipeline 通知一次；内容冲突进入 DLQ。
+store；不启动完整生产网关的认证、配额和模型服务。故障注入发生在实际 handler
+完成写入和 pipeline 通知之后，不用模拟成功写入替代数据库。覆盖以下场景：
+
+| 场景 | 实际请求次数 | 最终断言 |
+| --- | --- | --- |
+| 收到成功回执、本地 ACK 前强杀，重新打开数据库并恢复 | 2 | 原回执、2 条 L0、1 次 pipeline 通知 |
+| 同一 key 改变内容 | 1 次冲突请求 | HTTP 409、进入 DLQ，原 2 条 L0 不变 |
+| 服务端已提交，但客户端收不到回执并超时，再重试 | 2 | 原回执、2 条 L0、1 次 pipeline 通知 |
+| 两个独立进程看到同一记录后同时领取 | 1 | 只有一个进程投递成功，另一个无租约丢失错误 |
+| 两次回执丢失耗尽预算，进入 DLQ，再用 redrive 重投 | 3 | 保留原编号、key、请求字节，复用服务端已完成回执 |
+
+每个成功场景直接查询 SQLite，检查只有 2 条 L0、1 条 completed 回执和 1 条
+acknowledged pipeline outbox；同时核对重放请求原文、accepted_ids 和 receiptId。
+并发场景用子进程屏障固定竞争时机，避免仅凭偶然运行成功判断领取安全。
+
+超时夹具设为 1 秒，耗尽预算夹具设为最多 2 次；生产默认值不变。为避免等待退避
+和租约到期，恢复子进程的测试时钟推进到持久化的可用时间之后。下面的实际 CLI
+强杀测试另行验证正常时钟下的 30 秒租约恢复。Windows 还强杀持有内部 SQLite
+写锁的子进程，确认另一个消费者可以继续领取和 ACK。
 
 Docker 也可以验证同一脚本：使用本机 memory-core 镜像的运行时依赖，将 #1142 的
 `MemoryCore/src` 只读挂载到 `/app/src`，本组件目录挂到 `/app/outbox/src/agent-adapters`，
