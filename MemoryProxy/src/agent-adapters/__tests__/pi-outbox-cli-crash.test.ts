@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiOutboxStore, type PiOutboxInput } from "../pi-outbox-store.js";
 
 const cleanups: (() => Promise<void>)[] = [];
+const allowedStderr = /^(?:\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\r?\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n)?$/;
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
@@ -78,7 +79,7 @@ describe("Pi outbox run command crash recovery", () => {
     expect(first.child.kill("SIGKILL")).toBe(true);
     await first.exited;
     expect(first.events.some(event => event.event === "stopped")).toBe(false);
-    expect(first.stderr()).toBe("");
+    expect(first.stderr()).toMatch(allowedStderr);
 
     const reopened = new PiOutboxStore(directory);
     expect((await reopened.inspect()).entries).toEqual([lease]);
@@ -113,7 +114,7 @@ describe("Pi outbox run command crash recovery", () => {
       { timeout: 5_000, interval: 50 });
     expect(await reopened.inspect()).toEqual({ entries: [], unreadable: [] });
     expect(requests).toHaveLength(2);
-    expect(restarted.stderr()).toBe("");
+    expect(restarted.stderr()).toMatch(allowedStderr);
     // Once durable ACK has removed the record, another abrupt exit and reopen
     // must not resurrect it. Graceful POSIX signals are tested separately.
     await restarted.kill();
