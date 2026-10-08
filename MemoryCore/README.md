@@ -181,9 +181,12 @@ An adapter generally has three responsibilities:
 | `/v3/skill/*` | Skill management, search, versions, resources, and extraction | Stable |
 | `/v3/meta/*` | User, Team, Agent, Task, Asset, and access relationships | Management plane |
 | `/v3/knowledge/*` | Knowledge asset metadata registration | Management plane |
+| `/v3/usage/summary`, `/timeseries`, `/recent` | Counters for the six memory data-plane calls | Read-only |
 | `/health` | Health check | Public |
 
 The v3 memory data plane requires `team_id`, `agent_id`, and `user_id`. Supply them in the request body or the corresponding `x-tdai-*` headers. `session_id` is optional and narrows operations to a session when provided.
+
+Usage rows go to `usage.sqlite` in the data directory, not into the memory database. Standalone mode records by default. Service mode stays off unless `usage.enabled` is true. A search row stores `query` up to 512 characters. Message bodies and recall bodies are not stored. A failed usage write does not change the memory response.
 
 ## Configuration
 

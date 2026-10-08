@@ -185,9 +185,12 @@ TDAI_MEMORY_INSTANCE_ID=default
 | `/v3/knowledge/*` | 知识资产元数据登记 | 管理面 |
 | `/v3/memory-prompt/*` | 自定义 Prompt CRUD、绑定、生效查询和设置日志 | 管理面 |
 | `/v3/memory-generation-log/list`、`/get` | L1-L3 生成日志列表、详情和按 Memory ID 溯源 | 管理面 |
+| `/v3/usage/summary`、`/timeseries`、`/recent` | 六条记忆数据面调用的用量统计 | 只读 |
 | `/health` | 健康检查 | 公共 |
 
 v3 记忆数据面要求 `team_id`、`agent_id`、`user_id`，可以通过请求体或对应的 `x-tdai-*` Header 传入；`session_id` 可选，用于限定会话范围。
+
+用量写在数据目录下单独的 `usage.sqlite`，不写进记忆库。standalone 默认开启，service 模式默认关闭，除非设置 `usage.enabled: true`。检索行只保存最长 512 字的 `query`，不保存消息正文和召回正文。用量写入失败不改变这次记忆响应。
 
 ## 自定义 Prompt 与生成溯源
 
