@@ -12,6 +12,7 @@
 | `pi-outbox-sender.ts` | 发送固定请求，严格检查网关回执，分类错误 |
 | `pi-outbox-worker.ts` | 自动续期、超时、退避重试、次数上限、停止和恢复 |
 | `pi-outbox-cli.ts` | 本地查询、单条死信重新投递、一次补发或持续发送 |
+| `__tests__/pi-outbox-cli-crash.test.ts` | 实际 run 命令强杀、租约到期恢复和 ACK 后再强杀测试 |
 | `scripts/pi-outbox-contract.ts` | 对接独立 #1142 checkout 的真实 HTTP/SQLite 崩溃测试 |
 
 ## 调用方式
@@ -144,6 +145,13 @@ Docker 也可以验证同一脚本：使用本机 memory-core 镜像的运行时
 scripts 挂到 `/app/outbox/scripts`，执行
 `node --import tsx/esm /app/outbox/scripts/pi-outbox-contract.ts /app`。
 无需外部网络，可用 `--network none --rm`，不要挂载生产数据目录。
+
+`pi-outbox-cli-crash.test.ts` 属于普通测试套件，启动实际 `pi-outbox-cli.ts run`
+子进程。在本机 HTTP 接收端收到请求、尚未返回回执时强杀，随后用同一目录重新
+启动命令。测试等待默认 30 秒租约自然到期，不改文件名或测试时钟，因此需要约
+30 秒。检查请求字节、编号、身份维度、持久化尝试次数和最终 ACK；ACK 后再强杀
+并打开队列，确认记录没有恢复。Windows 和 Linux 都执行此测试。
+这里的 HTTP 接收端是测试夹具；服务端数据库去重仍由上面的 #1142 契约测试验证。
 
 ## 暂不实施、需要对齐的接线
 
