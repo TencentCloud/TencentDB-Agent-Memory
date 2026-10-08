@@ -225,3 +225,62 @@ outbox 独立类型检查通过。新增用例在 Windows 单独运行约 31.5 �
 `windows-crash-targeted.log`、`windows-tests.log` 和 `linux-tests.log`。
 此前便携 Node 所在临时目录已不存在，本次重新下载同一官方版本并核对相同 SHA-256，
 没有修改系统默认 Node。测试子进程、HTTP 接收端、临时队列和测试容器均由测试清理。
+
+## 扩大真实 #1142 故障验证（2026-10-08）
+
+使用同一隔离 checkout，#1142 固定为
+`a524c609a84e41801d11cbedc77cf9718e9f3691`。扩展的契约脚本仍调用实际 conversation
+handler 和 SQLite store；新增故障发生在实际服务端提交并通知 pipeline 之后。
+没有启动生产认证、配额、模型服务，也没有修改 #1142 源码。
+
+| 新增场景 | 请求次数 | 服务端最终结果 |
+| --- | --- | --- |
+| 已提交但回执丢失，客户端超时后重试 | 2 | 2 条 L0、1 条 completed 回执、1 次 pipeline 通知 |
+| 两个独立发送进程同时领取同一记录 | 1 | 只有一个进程成功投递；2 条 L0、1 条 completed 回执、1 次通知 |
+| 丢失两次回执后进入 DLQ，再 redrive | 3 | 复用原 completed 回执；2 条 L0、1 次通知 |
+
+原有 ACK 前强杀重放和内容冲突场景保留，两个平台全部通过。通过只读 SQLite
+查询核对 L0、回执和 acknowledged pipeline outbox 数量；重放核对原请求字节、
+accepted_ids 和 receiptId，DLQ 重投还核对本地记录编号、key 和重置后的尝试次数。
+四个成功逻辑操作分别只通知一次 pipeline，总通知数为 4。
+
+### 并发测试发现的 Windows 问题及修复
+
+新加的两个进程竞争场景在 Windows 修复前连续失败两次：同一源文件的并发 rename
+都可能成功，导致两个消费者发送了请求，其中一个随后丢失租约。服务端 #1142 虽然
+仍只写入两条 L0，本地领取却没有满足只有一个消费者取得记录的要求。
+
+Windows 的 claim、renew、release、deadLetter、redrive 和 acknowledge 已增加
+Node 内置 SQLite 写锁保护，锁仅协调文件状态切换，不存储对话或第二份队列状态。
+锁争用异步等待，进程退出后操作系统释放锁。Linux 继续使用原文件状态切换。
+Windows 需要支持 `node:sqlite` 的 Node 22+，运行期间不能删除或替换内部锁文件。
+新增单元测试还强杀实际持锁子进程，确认后续领取和 ACK 不会永久卡住。
+
+### 最终验证结果及复现
+
+Windows 和 Linux Docker 均使用 Node 22.23.2。最终全套测试：
+
+- Windows：7 个文件，62 项通过，2 项 POSIX 信号测试跳过。
+- Linux：7 个文件，63 项通过，1 项仅 Windows 锁恢复测试跳过。
+- 两个平台的 `tsconfig.pi-outbox.json` 独立类型检查通过。
+- 两个平台的实际 #1142 契约脚本均通过全部五个场景。
+- 原有实际 CLI 强杀后等待默认 30 秒租约恢复的测试仍通过。
+
+本机证据目录为 `C:/Users/小米/.codex/tmp/pi-outbox-cli-crash-20261008`：
+`windows-expanded-contract.log`、`linux-expanded-contract.log`、
+`windows-expanded-tests.log` 和 `linux-expanded-tests.log`。
+
+在 #1391 工作目录的 `MemoryProxy` 下，Windows 命令为：
+
+```powershell
+$node22 = 'C:/Users/小米/.codex/tmp/pi-outbox-cli-crash-20261008/node-v22.23.2-win-x64/node.exe'
+& $node22 node_modules/vitest/vitest.mjs run
+& $node22 node_modules/typescript/bin/tsc --noEmit -p tsconfig.pi-outbox.json
+& $node22 --import tsx/esm scripts/pi-outbox-contract.ts E:/java/pr1142-outbox-contract-test/MemoryCore
+```
+
+Linux 契约验证使用上述只读挂载方式及 `--network none --rm`。超时和尝试次数
+缩短仅用于故障夹具；恢复夹具时钟推进至持久化的下次可用时间，生产默认值未改动。
+这些结果验证本地投递和该版本 #1142 SQLite 去重，不代表生产认证、其他后端、
+Pi 自动 enqueue 或完整 Pi → outbox → 网关接线已完成。未修改 `handler.ts`、
+`session/codebuddy/init.ts`、Pi 源码或现有 Pi 插件；变更按功能提交到本地，未推送。
