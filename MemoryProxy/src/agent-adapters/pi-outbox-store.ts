@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { createRequire } from "node:module";
+import { setTimeout as delay } from "node:timers/promises";
+
+const requireNode = createRequire(import.meta.url);
+const LOCK_DATABASE = ".pi-outbox-lock.sqlite";
+const LOCK_FILES = new Set([LOCK_DATABASE, `${LOCK_DATABASE}-journal`, `${LOCK_DATABASE}-wal`, `${LOCK_DATABASE}-shm`]);
 
 /** Immutable delivery input. Credentials must be resolved at send time, not stored here. */
 export interface PiOutboxInput {
@@ -109,6 +115,34 @@ function validateInput(input: PiOutboxInput): void {
 export class PiOutboxStore {
   constructor(private readonly directory: string, private readonly now: () => number = Date.now) {}
 
+  /** Windows can resolve two concurrent rename calls to the same source handle:
+   * both may succeed even with different destinations. Serialize transitions
+   * using SQLite's OS-backed writer lock. No payload or lease state lives in
+   * this database, and process death automatically releases the lock.
+   * Busy waits yield instead of blocking another transaction in this process.
+   */
+  private async transition(operation: () => Promise<void>): Promise<void> {
+    if (process.platform !== "win32") return operation();
+    const { DatabaseSync } = requireNode("node:sqlite") as typeof import("node:sqlite");
+    const lock = new DatabaseSync(join(this.directory, LOCK_DATABASE));
+    let owned = false;
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!owned) {
+        try { lock.exec("BEGIN IMMEDIATE"); owned = true; }
+        catch (error) {
+          if ((error as { errcode?: number }).errcode !== 5 || Date.now() >= deadline) throw error;
+          await delay(10);
+        }
+      }
+      await operation();
+      lock.exec("COMMIT"); owned = false;
+    } finally {
+      if (owned) { try { lock.exec("ROLLBACK"); } catch { /* Preserve the original filesystem error. */ } }
+      lock.close();
+    }
+  }
+
   private expiration(ttlMs: number): number {
     if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0 || ttlMs > 86_400_000) {
       throw new Error("Lease duration must be between 1 ms and 24 hours");
@@ -128,7 +162,8 @@ export class PiOutboxStore {
   /** Atomic rename claims the record itself, not a separate lock file.
    * Renewals change the source filename: a stale reclaimer cannot steal a renewed
    * lease using an earlier directory snapshot. All consumers must share this API
-   * and a local filesystem supporting atomic same-directory rename.
+   * and a local filesystem supporting same-directory rename. Windows uses the
+   * transition mutex as well, since concurrent native renames are not a CAS.
    */
   async claim(id: string, ttlMs: number = 30_000): Promise<PiOutboxLease | null> {
     if (!RECORD_NAME.test(id)) throw new Error("Invalid outbox record ID");
@@ -153,7 +188,7 @@ export class PiOutboxStore {
       try { validateInput(record); } catch { throw new Error("Invalid outbox record"); }
       const lease = { record, token: randomUUID(), expiresAt: this.expiration(ttlMs), attempts: entry.attempts + 1 };
       try {
-        await rename(join(this.directory, name), this.leasePath(lease));
+        await this.transition(() => rename(join(this.directory, name), this.leasePath(lease)));
         return lease;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -167,7 +202,7 @@ export class PiOutboxStore {
     const source = this.leasePath(lease);
     const renewed = { ...lease, token: randomUUID(), expiresAt: this.expiration(ttlMs) };
     if (lease.expiresAt <= this.now()) return null;
-    try { await rename(source, this.leasePath(renewed)); return renewed; }
+    try { await this.transition(() => rename(source, this.leasePath(renewed))); return renewed; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
@@ -180,7 +215,7 @@ export class PiOutboxStore {
     if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 86_400_000 || !REASONS.has(reason)) throw new Error("Invalid retry policy");
     if (lease.expiresAt <= this.now()) return false;
     const target = `${lease.record.id}.${lease.attempts}.${this.now() + delayMs}.${reason}.pending`;
-    try { await rename(source, join(this.directory, target)); return true; }
+    try { await this.transition(() => rename(source, join(this.directory, target))); return true; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
@@ -192,7 +227,7 @@ export class PiOutboxStore {
     if (!REASONS.has(reason) || reason === "none") throw new Error("Invalid failure reason");
     if (lease.expiresAt <= this.now()) return false;
     try {
-      await rename(source, join(this.directory, `${lease.record.id}.${lease.attempts}.0.${reason}.dead`));
+      await this.transition(() => rename(source, join(this.directory, `${lease.record.id}.${lease.attempts}.0.${reason}.dead`)));
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -207,7 +242,7 @@ export class PiOutboxStore {
     const entry = entries.find(item => item.id === id && item.state === "dead");
     if (!entry) return false;
     try {
-      await rename(join(this.directory, entry.file), join(this.directory, `${id}.json`));
+      await this.transition(() => rename(join(this.directory, entry.file), join(this.directory, `${id}.json`)));
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -226,6 +261,7 @@ export class PiOutboxStore {
     const entries: PiOutboxEntry[] = [];
     const unreadable: { file: string; reason: string }[] = [];
     for (const name of names.sort()) {
+      if (LOCK_FILES.has(name)) continue;
       const entry = parseEntry(name);
       if (!entry) {
         if (!name.endsWith(".tmp")) unreadable.push({ file: name, reason: "Unrecognized outbox filename" });
@@ -303,7 +339,7 @@ export class PiOutboxStore {
   async acknowledge(lease: PiOutboxLease): Promise<boolean> {
     const source = this.leasePath(lease);
     if (lease.expiresAt <= this.now()) return false;
-    try { await unlink(source); return true; }
+    try { await this.transition(() => unlink(source)); return true; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;

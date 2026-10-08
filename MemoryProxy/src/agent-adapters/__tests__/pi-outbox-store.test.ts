@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { PiOutboxStore, preparePiOutboxInput, type PiOutboxInput } from "../pi-outbox-store.js";
 
@@ -104,6 +105,53 @@ describe("Pi outbox storage and leases", () => {
     expect(await store.acknowledge(lease)).toBe(false);
     expect((await store.recover()).records).toEqual([second]);
     await expect(store.claim("../outside")).rejects.toThrow("Invalid outbox record ID");
+  });
+
+  it("serializes competing store instances without losing or duplicating a valid lease", async () => {
+    const dir = await directory();
+    const stores = Array.from({ length: 4 }, () => new PiOutboxStore(dir));
+    for (let round = 0; round < 8; round++) {
+      const record = await stores[0].enqueue(input());
+      const leases = await Promise.all(stores.map(store => store.claim(record.id, 5_000)));
+      const winners = leases.filter(lease => lease !== null);
+      expect(winners).toHaveLength(1);
+      expect(await stores[0].acknowledge(winners[0]!)).toBe(true);
+    }
+    expect(await stores[0].inspect()).toEqual({ entries: [], unreadable: [] });
+  });
+
+  it.skipIf(process.platform !== "win32")("releases the Windows transition mutex when its owning process is killed", async () => {
+    const dir = await directory();
+    const store = new PiOutboxStore(dir);
+    const seed = await store.enqueue(input());
+    expect(await store.acknowledge((await store.claim(seed.id))!)).toBe(true);
+    const record = await store.enqueue(input());
+    const owner = spawn(process.execPath, ["--input-type=module", "-e", `
+      import { DatabaseSync } from "node:sqlite";
+      const lock = new DatabaseSync(process.env.PI_OUTBOX_MUTEX_PATH);
+      lock.exec("BEGIN IMMEDIATE");
+      process.send({ type: "locked" });
+      setInterval(() => {}, 1000);
+    `], { env: { ...process.env, PI_OUTBOX_MUTEX_PATH: join(dir, ".pi-outbox-lock.sqlite") },
+      stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    const exited = once(owner, "exit");
+    try {
+      const [ready] = await once(owner, "message", { signal: AbortSignal.timeout(5_000) });
+      expect(ready).toEqual({ type: "locked" });
+      let finished = false;
+      const acquisition = store.claim(record.id);
+      void acquisition.then(() => { finished = true; }, () => { finished = true; });
+      await delay(100);
+      expect(finished).toBe(false);
+      expect(owner.kill("SIGKILL")).toBe(true);
+      await exited;
+      const lease = await acquisition;
+      expect(lease).not.toBeNull();
+      expect(await store.acknowledge(lease!)).toBe(true);
+      expect(await store.inspect()).toEqual({ entries: [], unreadable: [] });
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) { owner.kill("SIGKILL"); await exited; }
+    }
   });
 
   it("rejects requests missing the retry contract before persisting", async () => {
