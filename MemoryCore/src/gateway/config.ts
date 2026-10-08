@@ -392,6 +392,21 @@ export interface GatewayConfig {
   analytics?: {
     clickhouse: ClickHouseConfig;
   };
+  /**
+   * Memory data-plane usage counters, stored in `<data.baseDir>/usage.sqlite`.
+   *
+   * When `enabled` is omitted, standalone defaults to on and service mode
+   * defaults to off. A failed insert does not change the memory response.
+   * Search rows keep `query` (max 512 chars). Message and recall bodies are
+   * not stored.
+   *
+   * yaml: usage.enabled, usage.retentionDays
+   * env: USAGE_ENABLED, USAGE_RETENTION_DAYS, USAGE_DB_PATH
+   */
+  usage?: {
+    enabled?: boolean;
+    retentionDays?: number;
+  };
   /** Offload server executor 配置 (yaml: offload) */
   offload: {
     forceTriggerThreshold: number;
@@ -902,6 +917,7 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
     maxRetries: num(offloadConfig, "maxRetries") ?? 3,
   };
 
+  const usageYaml = obj(fileConfig, "usage");
   const base: GatewayConfig = {
     deployMode,
     stateBackend,
@@ -921,6 +937,10 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
     metadata,
     offload,
     skill: skillFromAnywhere,
+    usage: {
+      enabled: bool(usageYaml, "enabled"),
+      retentionDays: num(usageYaml, "retentionDays"),
+    },
   };
 
   // Merge overrides one level deep so partial `server`/`data`/`llm` patches

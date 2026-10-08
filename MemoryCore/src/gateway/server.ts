@@ -90,6 +90,7 @@ import {
 import { readApiTraceEnabled } from "../utils/env-config.js";
 import { readMongoEnvConfig } from "../utils/env-config.js";
 import { makeSkillRouteTable } from "./skill-handlers.js";
+import { getUsageRecorder, handleUsageReadRoute } from "./usage/usage-api.js";
 import { handleV3AnalyticsRoute, createAnalyticsChClientAsync } from "./analytics/index.js";
 import type { AnalyticsChClient } from "./analytics/index.js";
 import type { SkillRouterDeps as SkillRouterDeps } from "./skill-handlers.js";
@@ -978,6 +979,14 @@ export class TdaiGateway {
       // its existing semantics. When `server.apiKey` is unset, this gate
       // is a no-op (default-open), matching the develop_server_test
       // baseline.
+      if (pathname === "/v3/usage" || pathname.startsWith("/v3/usage/")) {
+        if (!this.checkAuthForV2(req, res)) return;
+        const handledUsage = handleUsageReadRoute(
+          req, res, pathname, method, sendJson, getUsageRecorder(this.config),
+        );
+        if (handledUsage) return;
+      }
+
       if (pathname.startsWith("/v2/") || pathname.startsWith("/v3/")) {
         if (!this.checkAuthForV2(req, res)) return;
       }
@@ -1109,13 +1118,37 @@ export class TdaiGateway {
         (body: unknown, auth: import("./v2-schemas.js").V2AuthContext, requestId: string, deps: unknown) => Promise<import("./v2-schemas.js").ApiResponseEnvelope>
       >;
 
+      const usageStartedAt = Date.now();
+      let usageRequestBody: unknown = null;
+      const parseJsonBodyForUsage = async <T>(incoming: http.IncomingMessage): Promise<T> => {
+        const parsed = await parseJsonBody<T>(incoming);
+        usageRequestBody = parsed;
+        return parsed;
+      };
+      const sendJsonForUsage = (response: http.ServerResponse, status: number, body: unknown): void => {
+        sendJson(response, status, body);
+        try {
+          getUsageRecorder(this.config).observe({
+            method,
+            pathname,
+            status,
+            requestBody: usageRequestBody,
+            responseBody: body,
+            startedAt: usageStartedAt,
+          });
+        } catch (usageError) {
+          const usageMessage = usageError instanceof Error ? usageError.message : String(usageError);
+          console.warn(`[usage] record failed: ${usageMessage}`);
+        }
+      };
+
       const handled = await handleV2Route(
         req,
         res,
         pathname,
         method,
-        parseJsonBody,
-        sendJson,
+        parseJsonBodyForUsage,
+        sendJsonForUsage,
         mergedDeps as V2RouterDeps,
         extraRoutes,
       );

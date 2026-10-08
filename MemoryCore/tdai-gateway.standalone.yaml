@@ -15,6 +15,13 @@ server:
 data:
   baseDir: "~/.memory-tencentdb/memory-tdai"
 
+# Memory data-plane usage. Omitted `enabled` means on for standalone and off
+# for service mode. Search queries are capped at 512 characters. Message and
+# recall bodies are not stored.
+# usage:
+#   enabled: true
+#   retentionDays: 30
+
 # ── LLM (必填) ──
 llm:
   baseUrl: "https://api.openai.com/v1"
