@@ -8,6 +8,8 @@
  *   - FTS5 → skills.fts_segmented（jieba 预分词）+ fts_tsv 生成列 + GIN。
  *     生成列随行更新自动维护，无需 SQLite 版的"删旧行/插新行"同步。
  *   - vec0 → 独立表 skill_vec(skill_id PK, embedding vector(dim)) + ivfflat cosine。
+ *     异步向量安装带版本条件（与 appendVersion 同一把 advisory lock + head
+ *     校验），乱序完成的旧版本 embedding 不会覆盖新 head 的向量。
  *   - 事务：SQLite 用 BEGIN IMMEDIATE 全库串行；PG 用事务级 advisory lock
  *     （pg_advisory_xact_lock(hashtext(skill_id))）按 skill_id 串行 appendVersion。
  *   - created_at_ms / updated_at_ms 用 BIGINT（Date.now() 超 int4），读回 Number()。
@@ -60,7 +62,8 @@ export interface PgSkillStoreOptions {
    * 可选文本嵌入函数（由 skill wiring 注入，对齐 TCVDB 后端的服务端
    * embedding 语义）。未注入（provider 未配置）时检索降级 bm25，与
    * SQLite/MongoDB 后端行为一致。写入侧：appendVersion 后 fire-and-forget
-   * 重算 head 向量；查询侧：embedding/hybrid 模式就地计算 queryEmbedding。
+   * 重算 head 向量（安装时校验版本仍为 head，防乱序覆盖）；查询侧：
+   * embedding/hybrid 模式就地计算 queryEmbedding。
    */
   embed?: (text: string) => Promise<Float32Array>;
   /** 注入的 now（毫秒）。默认 Date.now。便于测试。 */
@@ -405,8 +408,15 @@ export class PgSkillStore implements ISkillStore {
     if (!raw) throw new SkillStoreError("SKILL_NOT_FOUND", "inserted row vanished");
     // 写入侧接线：head 内容已提交，异步重算向量（fire-and-forget，失败只 warn
     // 不影响写入结果）。旧向量已在事务内清除（见上 DELETE FROM skill_vec）。
+    // 携带新版本号：安装时校验其仍是 head，防止乱序完成的旧 embed 覆盖。
     if (this.vecAvailable && this.embedFn) {
-      void this.reembedHead(input.skill_id, input.name, input.description, input.content);
+      void this.reembedHead(
+        input.skill_id,
+        Number(raw.version),
+        input.name,
+        input.description,
+        input.content,
+      );
     }
     return toSkill(raw);
   }
@@ -745,9 +755,14 @@ export class PgSkillStore implements ISkillStore {
   //  embedding 语义；未注入时本组方法全部 no-op，检索降级 bm25。）
   // ────────────────────────────────────────────────────────────────────
 
-  /** 重算某 skill head 版本的向量（文本组成与 ftsSegmented 一致）。失败仅 warn。 */
+  /**
+   * 重算某 skill head 版本的向量（文本组成与 ftsSegmented 一致），携带 version
+   * 条件安装 —— embed 期间若有更新版本提交，本次安装会被 upsertEmbedding
+   * 的 head 校验丢弃（乱序完成的旧 embed 不得覆盖新 head）。失败仅 warn。
+   */
   private async reembedHead(
     skillId: string,
+    version: number,
     name: string,
     description: string | undefined,
     content: string,
@@ -757,7 +772,7 @@ export class PgSkillStore implements ISkillStore {
       // 截断由 EmbeddingService 内部处理（local 512 字符 / remote maxInputChars）
       const text = `${name}\n${description ?? ""}\n${content}`;
       const vec = await this.embedFn(text);
-      await this.upsertEmbedding(skillId, vec);
+      await this.upsertEmbedding(skillId, version, vec);
     } catch (e) {
       this.logger?.warn(`[pg-skill-store] reembedHead(${skillId}) failed: ${(e as Error).message}`);
     }
@@ -771,15 +786,15 @@ export class PgSkillStore implements ISkillStore {
     if (!this.embedFn || !(await this.ready()) || !this.vecAvailable) return 0;
     try {
       const r = await this.pool.query(
-        `SELECT s.skill_id, s.name, s.description, s.content
+        `SELECT s.skill_id, s.version, s.name, s.description, s.content
          FROM skills s LEFT JOIN skill_vec v ON v.skill_id = s.skill_id
          WHERE s.is_head=1 AND s.status='active' AND v.skill_id IS NULL
          LIMIT $1`,
         [Math.max(1, Math.floor(limit))],
       );
-      const rows = r.rows as Array<{ skill_id: string; name: string; description: string | null; content: string }>;
+      const rows = r.rows as Array<{ skill_id: string; version: number; name: string; description: string | null; content: string }>;
       for (const row of rows) {
-        await this.reembedHead(row.skill_id, row.name, row.description ?? undefined, row.content);
+        await this.reembedHead(row.skill_id, Number(row.version), row.name, row.description ?? undefined, row.content);
       }
       if (rows.length > 0) {
         this.logger?.info(`[pg-skill-store] backfilled embeddings for ${rows.length} skill(s)`);
@@ -791,7 +806,17 @@ export class PgSkillStore implements ISkillStore {
     }
   }
 
-  async upsertEmbedding(skillId: string, embedding: Float32Array): Promise<void> {
+  /**
+   * 安装某 skill 的 head 向量（带版本条件）。先取与 appendVersion 相同的事务级
+   * advisory lock 串行化，再验证 (skill_id, version) 仍是 active head，通过才
+   * upsert —— 乱序完成的旧版本 embed（v1 慢、v2 快，v1 后落）会因版本校验
+   * 失败而被丢弃，不再覆盖新 head 的向量；已删除/archived 的 skill 同理不会
+   * 被残留 embed 复活出孤儿向量行。注意"校验+安装"必须在同一把锁内完成：
+   * 若只做单条条件 upsert，v2 事务的 DELETE 与 COMMIT 之间存在误通过窗口
+   * （校验读到未提交翻头前的旧 head）。embedding 计算仍在锁外，不损失
+   * fire-and-forget 的延迟特性。
+   */
+  async upsertEmbedding(skillId: string, version: number, embedding: Float32Array): Promise<void> {
     if (!(await this.ready()) || !this.vecAvailable) return;
     if (embedding.length !== this.dimensions) {
       this.logger?.warn(
@@ -799,14 +824,26 @@ export class PgSkillStore implements ISkillStore {
       );
       return;
     }
+    const client = await this.pool.connect();
     try {
-      await this.pool.query(
-        `INSERT INTO skill_vec (skill_id, embedding) VALUES ($1, $2::vector)
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [skillId]);
+      await client.query(
+        `INSERT INTO skill_vec (skill_id, embedding)
+         SELECT $1, $2::vector
+         WHERE EXISTS (
+           SELECT 1 FROM skills
+           WHERE skill_id=$1 AND version=$3 AND is_head=1 AND status='active'
+         )
          ON CONFLICT (skill_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
-        [skillId, float32ToPgVector(embedding)],
+        [skillId, float32ToPgVector(embedding), version],
       );
+      await client.query("COMMIT");
     } catch (e) {
+      try { await client.query("ROLLBACK"); } catch { /* ignore */ }
       this.logger?.warn(`[pg-skill-store] upsertEmbedding failed: ${(e as Error).message}`);
+    } finally {
+      client.release();
     }
   }
 
