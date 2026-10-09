@@ -147,6 +147,36 @@ export const knowledgeCodeGraphAudit = sqliteTable(
   (table) => [index("idx_kcga_cg_version").on(table.codeGraphId, table.version)],
 );
 
+// ───────────────────────── knowledge_source_credential ─────────────────────────
+// 外部知识源（wiki / codegraph）的令牌，**按资源 id 隔离**（非按用户）。
+// - 主键 (service_id, resource_type, resource_id)，与资源主键同构。
+// - resource_id 直接指向 code_graph_id / wiki_id，无外键约束（删资源由 store 级联删）。
+// - cred_secret 用 base64 存储（非加密），保密性由文件权限 + 接口不回吐承担；
+//   详见 MemoryPanel/docs/design/2026-09-08-external-source-import.md §4.1.3。
+// - 明文永不出 KS：路由层仅回吐 metadata。
+
+export const knowledgeSourceCredential = sqliteTable(
+  "knowledge_source_credential",
+  {
+    serviceId: text("service_id").notNull(),
+    resourceType: text("resource_type").notNull(),   // 'code-graph' | 'wiki'
+    resourceId: text("resource_id").notNull(),       // = code_graph_id 或 wiki_id
+    providerId: text("provider_id").notNull(),       // 'gongfeng' / 'iwiki' / ...（非键）
+    credKind: text("cred_kind").notNull(),           // 'bearer' | 'basic'
+    credSecret: text("cred_secret").notNull(),       // base64(UTF-8 令牌)
+    credUsername: text("cred_username"),             // 仅 basic
+    credExtraJson: text("cred_extra_json"),          // mcp_url / corpid / header 名
+    lastVerifiedAt: text("last_verified_at"),
+    createdBy: text("created_by"),                   // 审计：谁配的（不参与隔离）
+    updatedBy: text("updated_by"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("idx_ksc_pk").on(table.serviceId, table.resourceType, table.resourceId),
+  ],
+);
+
 // ───────────────────────── llm_binding ─────────────────────────
 // Per-instance (service_id) LLM routing for wiki ingest/summary.
 // mode='proxy' → call context_proxy with a dedicated knowledge-service user_key;
@@ -169,6 +199,7 @@ export type KnowledgeWiki = typeof knowledgeWiki.$inferSelect;
 export type KnowledgeWikiAudit = typeof knowledgeWikiAudit.$inferSelect;
 export type KnowledgeCodeGraphAudit = typeof knowledgeCodeGraphAudit.$inferSelect;
 export type LlmBinding = typeof llmBinding.$inferSelect;
+export type KnowledgeSourceCredential = typeof knowledgeSourceCredential.$inferSelect;
 
 /** Data format version constants (reserved field). */
 export const CODE_DATA_VERSION = 0;

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { GitCredentialStore, GitCredentialError, type GitSecret } from "../store/git-credential-store.js";
 import { GitSourceFetcher } from "../source-fetcher/git-fetcher.js";
@@ -13,12 +13,11 @@ import { verifyBearer } from "../middleware/auth.js";
  */
 export function createGitCredentialRoutes(store: GitCredentialStore, serviceKey: string): Hono {
   const app = new Hono();
-  app.use("*", async (c, next) => {
+  const requireServiceAuth: MiddlewareHandler = async (c, next) => {
     if (!serviceKey) return c.json(wrapError(503, "Git credentials require KNOWLEDGE_SERVICE_KEY"), 503);
     if (!verifyBearer(c.req.header("authorization"), serviceKey)) return c.json(wrapError(401, "Service authentication required"), 401);
     return next();
-  });
-  app.use("*", bodyLimit({ maxSize: 160 * 1024 }));
+  };
   app.onError((error, c) => {
     if (error instanceof GitCredentialError) return c.json(wrapError(error.status, error.message), error.status);
     if (error instanceof GitTransportError) return c.json(wrapError(400, error.message), 400);
@@ -26,7 +25,9 @@ export function createGitCredentialRoutes(store: GitCredentialStore, serviceKey:
     return c.json(wrapError(400, "Invalid Git credential request"), 400);
   });
   for (const action of ["list", "put", "delete", "test", "host-key", "trust-host"] as const) {
-    app.post(`/${action}`, async (c) => {
+    // This prefix also hosts resource-scoped GET/PUT/DELETE routes. Apply the
+    // stricter reusable-credential policy only to this API's POST actions.
+    app.post(`/${action}`, requireServiceAuth, bodyLimit({ maxSize: 160 * 1024 }), async (c) => {
       const body = await c.req.json<Record<string, unknown>>();
       const serviceId = c.req.header("x-tdai-service-id");
       const teamId = body.team_id;

@@ -50,6 +50,14 @@ export default function CodeSourcesPanel() {
     formBranch,
     setFormBranch,
     submitting,
+    // 外部来源
+    formSourceType,
+    setFormSourceType,
+    sourceProviders,
+    formProviderCredential,
+    setCredentialField,
+    setFormProviderCredential,
+    openRegister,
     // allocate
     allocateTarget,
     setAllocateTarget,
@@ -120,7 +128,7 @@ export default function CodeSourcesPanel() {
               </Button>
               <Button onClick={() => code.setShowCredentials(true)}>{t('gitCredential.manage')}</Button>
               {/* 注册（新增团队池资产）与 memory/skill 对齐，放右上角 header */}
-              <Button type="primary" onClick={() => setShowRegister(true)} data-guide="create-code">
+              <Button type="primary" onClick={openRegister} data-guide="create-code">
                 + {t('code.register')}
               </Button>
             </>
@@ -451,8 +459,16 @@ export default function CodeSourcesPanel() {
               <Modal.Body>
                 <Form>
                   <Form.Item label={t('gitCredential.authMode')}>
-                    <Select size="full" value={code.formAuth} onChange={(value) => { code.setFormAuth(value as 'none' | 'credential'); code.setFormCredential(''); code.setShareWithTeam(false); }}
-                      options={[{ value: 'none', text: t('gitCredential.noAuth') }, { value: 'credential', text: t('gitCredential.useSaved') }]} />
+                    <Select size="full" value={code.formAuth} onChange={(value) => {
+                      code.setFormAuth(value as 'none' | 'credential' | 'provider');
+                      code.setFormCredential(''); code.setShareWithTeam(false);
+                      setFormSourceType(''); setFormProviderCredential({});
+                    }}
+                      options={[
+                        { value: 'none', text: t('gitCredential.noAuth') },
+                        { value: 'credential', text: t('gitCredential.useSaved') },
+                        ...(sourceProviders.length > 0 ? [{ value: 'provider', text: t('gitCredential.useProvider') }] : []),
+                      ]} />
                   </Form.Item>
                   {code.formAuth === 'credential' && <Form.Item label={t('gitCredential.select')}>
                     <Select size="full" value={code.formCredential} onChange={(value) => { code.setFormCredential(value); code.setShareWithTeam(false); }}
@@ -491,13 +507,91 @@ export default function CodeSourcesPanel() {
                       placeholder="main"
                     />
                   </Form.Item>
+
+                  {/* 外部来源认证与已保存凭据互斥；来源清单来自 KS。 */}
+                  {code.formAuth === 'provider' && (
+                    <Form.Item
+                      label={t('code.register.source')}
+                      extra={t('code.register.sourceExtra')}
+                      required
+                    >
+                      <Select
+                        appearance="button"
+                        size="full"
+                        value={formSourceType}
+                        placeholder={t('code.register.sourceRequired')}
+                        onChange={(value) => {
+                          setFormSourceType(value);
+                          setFormProviderCredential({}); // 切换来源立即丢弃已填凭据
+                        }}
+                        options={[
+                          ...sourceProviders.map((p) => {
+                            // 展示名取 i18n（code.source.<id>）；未收录的来源回退 id。
+                            const i18nKey = `code.source.${p.id}`;
+                            const localized = t(i18nKey);
+                            return {
+                              value: p.id,
+                              text: localized === i18nKey ? p.id : localized,
+                            };
+                          }),
+                        ]}
+                      />
+                    </Form.Item>
+                  )}
+
+                  {(() => {
+                    // 按当前 provider 的 form_fields 动态渲染凭据表单
+                    if (code.formAuth !== 'provider') return null;
+                    const provider = sourceProviders.find((p) => p.id === formSourceType);
+                    if (!provider) return null;
+                    return provider.form_fields.map((field, idx) => {
+                      const isLast = idx === provider.form_fields.length - 1;
+                      // i18n key 规约：code.credField.<name>.{label,placeholder}
+                      // 未收录 name 时 fallback 到 code.register.token* 老 key（bearer 场景保持兼容）
+                      const labelKey = `code.credField.${field.name}.label`;
+                      const label = t(labelKey);
+                      const placeholderKey = `code.credField.${field.name}.placeholder`;
+                      const placeholder = t(placeholderKey);
+                      return (
+                        <Form.Item
+                          key={field.name}
+                          label={label === labelKey ? t('code.register.token') : label}
+                          required={field.required}
+                          extra={
+                            isLast && provider.token_doc_url ? (
+                              <a
+                                href={provider.token_doc_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="_codelist-token-doc"
+                              >
+                                {t('code.register.tokenDoc')}
+                              </a>
+                            ) : undefined
+                          }
+                        >
+                          <Input
+                            size="full"
+                            type={field.secret ? 'password' : 'text'}
+                            value={formProviderCredential[field.name] ?? ''}
+                            onChange={(v) => setCredentialField(field.name, v)}
+                            placeholder={
+                              placeholder === placeholderKey
+                                ? t('code.register.tokenPlaceholder')
+                                : placeholder
+                            }
+                          />
+                        </Form.Item>
+                      );
+                    });
+                  })()}
                 </Form>
               </Modal.Body>
               <Modal.Footer>
                 <Button
                   type="primary"
                   onClick={handleRegister}
-                  disabled={submitting || code.credentialMismatch || (code.formAuth === 'credential' && !code.formCredential) || !formBranch.trim() || !validUrl || (isSsh && !code.formCredential) || (!!code.formCredential && !code.shareWithTeam)}
+                  disabled={submitting || code.credentialMismatch || (code.formAuth === 'credential' && !code.formCredential) || (code.formAuth === 'provider' && !formSourceType) || !formBranch.trim() || !validUrl || (isSsh && !code.formCredential) || (!!code.formCredential && !code.shareWithTeam)}
                   loading={submitting}
                 >
                   {submitting ? t('code.register.submitting') : t('code.register.submit')}

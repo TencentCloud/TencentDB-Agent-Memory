@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { createDb } from '../src/db/client.js';
 import { createKnowledgeModule } from '../src/module.js';
 import { GitTransportError } from '../src/source-fetcher/git-auth.js';
+import { basicAuthMethod } from '../src/code-source/auth-methods/basic.js';
 
 const transport = vi.hoisted(() => ({ fetch: vi.fn(), sync: vi.fn() }));
 vi.mock('../src/source-fetcher/registry.js', () => ({ SourceFetcherRegistry: class { resolve() { return transport; } } }));
@@ -12,7 +13,7 @@ vi.mock('../src/engines/code/index.js', () => ({
   indexProject: vi.fn(async () => ({})), openIndex: vi.fn(async () => ({})), syncIndex: vi.fn(async () => undefined),
   getStats: () => ({ files: 1, nodes: 1, edges: 0 }), closeIndex: vi.fn(),
 }));
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
 
 it('resolves current credentials at execution time and preserves an existing index on auth failure', async () => {
   vi.stubEnv('KNOWLEDGE_GIT_CREDENTIAL_KEY', 'ab'.repeat(32));
@@ -36,6 +37,45 @@ it('resolves current credentials at execution time and preserves an existing ind
     module.cgService.sync('svc', 'team', row.code_graph_id);
     await module.cgService.onIdle();
     expect(transport.sync.mock.calls[0][3]).toMatchObject({ token: 'rotated' });
+    expect(transport.fetch).toHaveBeenCalledTimes(1);
+    expect(await readFile(join(module.cgService.dirFor('svc', 'team', row.code_graph_id), 'existing-index'), 'utf8')).toBe('preserve');
+    expect(module.cgService.getById('svc', row.code_graph_id)?.sync_error).toBe('Git authentication failed');
+  } finally {
+    module.autoSyncScheduler.stop(); raw.close(); await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it.each(['bearer', 'basic'] as const)('keeps %s provider secrets out of Git URLs and resolves rotations for incremental sync', async (kind) => {
+  vi.stubEnv('KNOWLEDGE_AUTO_SYNC_ENABLED', 'false');
+  vi.stubEnv('CODE_SOURCE_ENABLED', 'gongfeng');
+  const dir = await mkdtemp(join(tmpdir(), 'provider-worker-test-'));
+  const { db, raw } = createDb({ path: ':memory:' });
+  const module = createKnowledgeModule({ db, dataDir: dir, llmConfig: { mode: 'custom', protocol: 'openai', provider: 'custom', apiKey: '', model: '', baseUrl: '', maxTokens: 100, timeoutMs: 100 } });
+  try {
+    const repo = 'https://git.example.com/owner/repo.git';
+    const username = kind === 'basic' ? 'reader+user@example.com' : 'private';
+    if (kind === 'basic') module.codeSourceRegistry.register({ id: 'gongfeng', authMethod: basicAuthMethod, sitePaths: {} });
+    transport.fetch.mockImplementation(async (_url, _branch, path) => {
+      await mkdir(join(path, '.git'), { recursive: true });
+      await writeFile(join(path, 'existing-index'), 'preserve');
+      return { version: 'commit-one' };
+    });
+    const { row } = module.cgService.create({ service_id: 'svc', team_id: 'team', owner_user_id: 'alice', repo_url: repo, branch: 'main', credential: { provider_id: 'gongfeng', secret: 'first:@/% token', username } });
+    await module.cgService.onIdle();
+    expect(module.cgService.getById('svc', row.code_graph_id)?.status).toBe('ready');
+    expect(transport.fetch).toHaveBeenCalledWith(repo, 'main', expect.any(String), { kind: 'https', username, token: 'first:@/% token' });
+
+    module.credentialStore.put({ type: 'code-graph', serviceId: 'svc', resourceId: row.code_graph_id }, { kind, username, secret: 'rotated:@/% token' }, 'gongfeng', 'alice');
+    transport.sync.mockResolvedValueOnce({ version: 'commit-two' });
+    module.cgService.sync('svc', 'team', row.code_graph_id);
+    await module.cgService.onIdle();
+    expect(transport.sync).toHaveBeenLastCalledWith(repo, 'main', expect.any(String), { kind: 'https', username, token: 'rotated:@/% token' });
+    expect(module.cgService.getById('svc', row.code_graph_id)?.status).toBe('ready');
+    expect(transport.fetch).toHaveBeenCalledTimes(1);
+
+    transport.sync.mockRejectedValueOnce(new GitTransportError('Git authentication failed'));
+    module.cgService.sync('svc', 'team', row.code_graph_id);
+    await module.cgService.onIdle();
     expect(transport.fetch).toHaveBeenCalledTimes(1);
     expect(await readFile(join(module.cgService.dirFor('svc', 'team', row.code_graph_id), 'existing-index'), 'utf8')).toBe('preserve');
     expect(module.cgService.getById('svc', row.code_graph_id)?.sync_error).toBe('Git authentication failed');

@@ -1127,6 +1127,9 @@ ASSET_IMPORT_SCRIPT="${SCRIPT_DIR}/asset-import.ts"
 if [[ -f "$ASSET_IMPORT_SCRIPT" ]] && ! $ARG_NONINTERACTIVE; then
   header "资产导入 (可选)"
   info "检测到资产导入脚本，可以将该 Agent 的本地 skill/对话历史导入到团队记忆中"
+  info "冷启动 skill 抽取固定使用 ${BOLD}严格模式${RESET}(v1 五分类 + 四维打分 gate),"
+  info "只捕获高价值 SOP,减少 Background/Preference 类低价值 skill 噪音;"
+  info "实时抽取(日常代理调用)仍走宽松默认模式,行为不变。"
   echo ""
   if confirm "是否导入该 Agent 的本地资产 (skill + 对话) 到团队记忆?" "n"; then
     # Determine Panel URL for asset-import

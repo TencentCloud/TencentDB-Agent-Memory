@@ -57,11 +57,20 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     if ('error' in gate) return gate.error;
     const branch = str(body, 'branch') ?? undefined;
     const repoName = str(body, 'repo_name') ?? undefined;
+    // 私有仓：provider_id + secret(+ username) 透传给 KS，入队前落凭据（消除时序窗口）。
+    const providerId = str(body, 'provider_id') ?? undefined;
+    const credentialId = str(body, 'credential_id') ?? undefined;
+    if (credentialId && providerId) return respondControlError(c, 400, 'CONFLICTING_CREDENTIALS');
+    const secret = str(body, 'secret') ?? undefined;
+    const username = str(body, 'username') ?? undefined;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     try {
       const detail = await kc.codeGraphCreate(teamId, repoUrl, branch, gate.userId, repoName, {
-        credential_id: str(body, 'credential_id') ?? undefined,
+        credential_id: credentialId,
         share_with_team: body.share_with_team === true,
+        providerId,
+        secret,
+        username,
       });
       // stash owner key 供 status-callback ready 时以 owner 身份注册 meta asset
       // （callback 是 S2S、无 user_key；详见 knowledge-task-registry.ts）

@@ -32,7 +32,18 @@ The proxy speaks each client's native protocol. OpenCode connects through the Op
 
 3. OpenCode is installed (`curl -fsSL https://opencode.ai/install | bash` or `npm i -g opencode-ai`).
 
-## Setup
+## OpenCode 2.0 setup
+
+OpenCode 2.0 uses `providers`, `package`, `settings`, and provider-level `headers`. The legacy `opencode.json` below targets OpenCode 1.x and will not configure the 2.0 provider.
+
+```bash
+cp adapters/opencode/opencode.v2.json ./opencode.json
+node adapters/opencode/validate.js adapters/opencode/opencode.v2.json
+```
+
+Set `TDAI_MEMORY_KEY` to the business user's `sk-mem-...` key in the environment that starts OpenCode (including the desktop app, if used). Change the model key in the example to match `PROXY_UPSTREAM_MODEL`, then select `tencentdb-agent-memory/<model>` in OpenCode. The 2.0 example uses `@opencode/ai/providers/openai-compatible` so requests reach the proxy's `/opencode/<spaceId>/v1/chat/completions` route. The local OpenCode 2.0.18 CLI sent a streaming request with `stream_options.include_usage` to this route.
+
+## OpenCode 1.x setup
 
 ### 1. Add the provider config
 
@@ -93,7 +104,7 @@ It parses `opencode.json` and fails if `options.baseURL` does not route through 
 
 - **Endpoint prefix**: use the OpenCode-prefixed route family that already ships on `feat/server_team` — main path `POST /opencode/<spaceId>/v1/chat/completions` (bare-tail variant `/opencode/<spaceId>/chat/completions` when `baseURL` omits `/v1`), plus `/opencode/<spaceId>/cost-guard|analyse/v1` marker routes. The first path segment is how the proxy classifies `agentSource`; pointing OpenCode at `/codebuddy/<spaceId>` would classify it as `codebuddy` and break the native `question`-based session-init form (`MemoryProxy/src/session/opencode/form.ts`).
 - **Data flow**: only prompts/completions transit the proxy; memory data stays in your local SQLite (memory-core) unless you configure otherwise.
-- **Version**: tested with OpenCode ≥ 0.6 and TencentDB Agent Memory v3 (`feat/server_team` branch, v2.0.0 images).
+- **Version**: the legacy example covers OpenCode 1.x; `opencode.v2.json` is the 2.0 configuration. The 2.0.18 CLI request path and response were checked locally with a mock endpoint; full MemoryProxy deployment still needs end-to-end verification.
 
 ## License
 

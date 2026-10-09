@@ -212,12 +212,16 @@ export const useBackendStore = create<BackendState>((set, get) => ({
     const offset = params?.offset ?? 0;
     // 缓存 key：按 (offset, limit) 粒度（teamId 已在 tasksPagesByTeam[teamId] 这层隔离）
     const cacheKey = `${offset}:${limit}`;
+    // in-flight key 必须带 teamId —— 两个 team 用同样的分页参数并发拉取时，
+    // 若共用 offset:limit 做 key，后发的 team 会 await 到前一个 team 的请求，
+    // 自己既不写缓存也不真正发请求，页面会一直空着。
+    const inflightKey = `${teamId}:${cacheKey}`;
     // 已缓存且非强制刷新 → 直接返回
     if (!params?.force && state.tasksPagesByTeam[teamId]?.[cacheKey]) {
       return state.tasksPagesByTeam[teamId][cacheKey];
     }
     // in-flight 去重
-    if (state.inflightTasks[cacheKey]) { await state.inflightTasks[cacheKey]; return get().tasksPagesByTeam[teamId]?.[cacheKey] ?? []; }
+    if (state.inflightTasks[inflightKey]) { await state.inflightTasks[inflightKey]; return get().tasksPagesByTeam[teamId]?.[cacheKey] ?? []; }
 
     const epoch = state.epoch;
     const promise = (async () => {
@@ -234,7 +238,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
             tasksPagesByTeam: { ...s.tasksPagesByTeam, [teamId]: { ...teamPages, [cacheKey]: adapted } },
             tasksTotalByTeam: { ...s.tasksTotalByTeam, [teamId]: total },
             inflightTasks: Object.fromEntries(
-              Object.entries(s.inflightTasks).filter(([k]) => k !== cacheKey)
+              Object.entries(s.inflightTasks).filter(([k]) => k !== inflightKey)
             ),
           };
         });
@@ -243,7 +247,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
         console.error('[backend store] fetchTasks failed:', err);
         set((s) => ({
           inflightTasks: Object.fromEntries(
-            Object.entries(s.inflightTasks).filter(([k]) => k !== cacheKey)
+            Object.entries(s.inflightTasks).filter(([k]) => k !== inflightKey)
           ),
         }));
         tea.notify.error(i18n.t('backend.loadTasksFailed'));
@@ -251,7 +255,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
       }
     })();
 
-    set((s) => ({ inflightTasks: { ...s.inflightTasks, [cacheKey]: promise } }));
+    set((s) => ({ inflightTasks: { ...s.inflightTasks, [inflightKey]: promise } }));
     return promise;
   },
 

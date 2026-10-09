@@ -132,7 +132,9 @@ skill:
     #   allowExecutable — 本意为可执行资源安全开关，但未传入 SkillResourceStore，不拦截
     #   downloadDir     — 本意为资源落盘临时目录，但资源读取走内存返回，无消费者
 
-  # versionTtlDays: 0             # 旧（非 head）版本过期天数，0=永不过期
+  # ── 版本清理（两个维度，取并集；0=关闭）──
+  # versionTtlDays: 0             # 时间维度：非 head 版本保留天数
+  # maxVersions: 100              # 数量维度：每 skill 非 head 版本数上限
 
 # ── 可观测性配置（本地开发） ──
 observability:
@@ -171,3 +173,14 @@ metadata:
       userId: "${TDAI_MEMORY_SYSTEM_USER_ID}"
       displayName: "${TDAI_MEMORY_SYSTEM_USER_NAME}"
       userKey: "${TDAI_MEMORY_SYSTEM_USER_KEY}"
+
+# ── Task 外部导入配置，非必需──────────────────────────
+# 驼峰键 → env：sources.<id>.<键> ⇒ TASK_SOURCE_<大写ID>_<大写下划线键>。
+taskSource:
+  # enabled: "${TASK_SOURCE_ENABLED}"        # 启用的来源 id，逗号分隔；不配则不启用
+  taiPatUrl: "${TAI_PAT_URL}"              # 太湖令牌申请页（iWiki 与 TAPD 共用）
+  sources:
+    tapd:                                  # 以下两项均为必填，缺一即 fail-fast
+      mcpUrl: "${TASK_SOURCE_TAPD_MCP_URL}"              # MCP 网关端点
+      siteBaseUrl: "${TASK_SOURCE_TAPD_SITE_BASE_URL}"   # 站点根，拼接详情页地址
+      personalTokenUrl: "${TASK_SOURCE_TAPD_PERSONAL_TOKEN_URL}"  # TAPD 个人令牌申请页

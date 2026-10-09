@@ -19,7 +19,18 @@ export type TeamRole = "admin" | "member" | "reviewer";
 export type MemberStatus = "active" | "removed";
 export type AgentStatus = "active" | "inactive";
 export type TaskStatus = "running" | "completed";
-export type TaskSourceType = "manual" | "tapd" | "github" | "other";
+/**
+ * Task 来源的**大类**，不编码具体来源系统。
+ *
+ * - `manual`：用户在看板手工新建。
+ * - `external`：从第三方需求/任务系统导入。具体是哪个系统
+ *   （tapd / jira / …）一律读 `metadata_json.external.provider`。
+ * - `other`：其它。
+ *
+ * 刻意**不**把每个来源做成枚举项：那会让新增来源变成「改类型定义 + 改所有
+ * 引用处」的散弹式改动。来源标识是开放集合，放在 metadata 里才可扩展。
+ */
+export type TaskSourceType = "manual" | "external" | "other";
 
 export type AssetType = "skill" | "llm_wiki" | "code_graph" | "chat_memory";
 export type AssetVisibility = "private" | "team" | "restricted" | "agent" | "task";
@@ -541,49 +552,153 @@ export interface ListConfigParamsFilter {
 }
 
 // ============================
-// InstanceUpstreamConfig 类型
+// InstanceUpstreamConfig 类型（v2 模型组结构）
 // ============================
+//
+// 对应设计文档 docs/design/2026-08-25-instance-upstream-config.md §5.1。
+// v2 从"一行=一 agent"重构为"一行=一模型组"：
+//   - default 组:每实例最多 1 行,mode=official,name 固定"官方内置"
+//   - custom 组:0~N 行,mode ∈ {custom_unified, custom_passthrough},name 用户自定义
+//   - extraction 行:0 或 1 行,mode=custom_unified,agents 恒 [],name 固定"抽取模型"
+//
+// 与 v1 的核心差异:
+//   - agents 从"每行一个 agent_source"升级为"每行一个 agents 数组"
+//   - 引入 group_id (前缀 ULID) + group_type + name + enabled 字段
+//   - agents 全域唯一(default + custom 不重叠)
+//   - MongoDB 版本乐观锁(version 字段)保护并发写
 
-/** 配置类型：conversation（用户对话模型）或 extraction（记忆/Skill 抽取模型）。 */
-export type UpstreamConfigType = "conversation" | "extraction";
+export type GroupType = "default" | "custom" | "extraction";
+export type UpstreamMode = "official" | "custom_unified" | "custom_passthrough";
 
-/** 转发模式：official（官方主模型）、custom_unified（自定义+统一Key）、custom_passthrough（自定义+用户自带Key）。 */
-export type UpstreamConfigMode = "official" | "custom_unified" | "custom_passthrough";
+/** default 组 name 固定值（用户不可改）。 */
+export const DEFAULT_GROUP_NAME = "官方内置";
+/** extraction 行 name 固定值（用户不可改）。 */
+export const EXTRACTION_GROUP_NAME = "抽取模型";
 
-/** 实例上游配置行（存储层实体）。 */
+/**
+ * 实例上游配置行（存储层实体）。
+ *
+ * 一行 = 一个模型组(default / custom / extraction)。
+ * agents 字段以 JSON 数组形式存储(SQLite 用 TEXT 存 JSON, MongoDB 用原生数组)。
+ * MongoDB 侧额外多一个 `version` 字段(乐观锁,§5.3);SQLite 不需要。
+ */
 export interface InstanceUpstreamConfigEntity {
   id: number;
-  /** Agent 标识。当前阶段固定 "default"，预留 per-agent 扩展。 */
-  agent_source: string;
-  /** 配置类型。 */
-  type: UpstreamConfigType;
-  /** 转发模式。extraction 不支持 custom_passthrough。 */
-  mode: UpstreamConfigMode;
-  /** 自定义 LLM 上游 URL。official 模式下为空串。 */
+  /** 后端生成的组 ID:`dflt-<random>` / `grp-<random>` / `ext-<random>`。 */
+  group_id: string;
+  group_type: GroupType;
+  /** custom: 用户自定义;default 固定 DEFAULT_GROUP_NAME;extraction 固定 EXTRACTION_GROUP_NAME。 */
+  name: string;
+  /**
+   * default / custom 组:显式管理的 agent 列表(可 0~N);extraction 行:恒 []。
+   * 全域唯一约束:同一实例内 default.agents ∪ 所有 custom.agents 元素两两不重复。
+   */
+  agents: string[];
+  /**
+   * 三种 group_type 的 enabled 语义不同:
+   *   - default:  false = 命中该组的 agent 请求报 UPSTREAM_DISABLED
+   *   - custom:   false = 命中该组的 agent 请求报 UPSTREAM_DISABLED
+   *   - extraction: false = 优雅回退到全局 upstream(不报错)
+   */
+  enabled: boolean;
+  mode: UpstreamMode;
   base_url: string;
-  /** API Key（明文存储）。仅 custom_unified 模式有意义。 */
   api_key: string;
-  /** 可选：强制覆盖请求中的 model_id；空串 = 透传。 */
   model_id: string;
-  /** 管理备注。 */
   description: string;
   created_at: string;
   updated_at: string;
+  /** 乐观锁版本号。MongoDB 每次写入 $inc:1；SQLite 忽略此字段（依赖 BEGIN IMMEDIATE 事务）。 */
+  version: number;
+  /**
+   * 仅 default 组有值:上次 listGroups 时看到的 supported-agents 全集快照(去重 + 排序)。
+   *
+   * 用于"Proxy 新增 agent 后自动补齐 default.agents"逻辑(见 store 层
+   * `_syncDefaultAgentsWithSnapshot`):
+   *   - Proxy 加了 cursor,supported-agents 从 [old8] 变 [old8+cursor]
+   *   - listGroups 触发 diff:supported - snapshot = [cursor]
+   *   - 自动 append 到 default.agents,同时更新 snapshot = [old8+cursor]
+   *   - 用户主动 remove 的 agent(agents 里没,但 snapshot 里有)保留决策不变
+   *
+   * 存量实例首次 listGroups 时 snapshot=空 → 视为"用户已认可当前 agents",
+   * 直接把 snapshot 填成 agents(不改 agents),后续新增才走 diff-append。
+   *
+   * custom / extraction 组恒为 [];不参与 diff。
+   */
+  supported_agents_snapshot: string[];
 }
 
-/** 写入/更新输入。 */
-export interface UpsertInstanceUpstreamConfigInput {
-  agent_source?: string;
-  type?: UpstreamConfigType;
-  mode: UpstreamConfigMode;
+/**
+ * create 输入:新建 default (seed 内部用) / custom / extraction 行。
+ * group_id 由 store 层生成,调用方不传。
+ */
+export interface CreateInstanceUpstreamGroupInput {
+  group_type: GroupType;
+  name?: string;
+  agents?: string[];
+  enabled?: boolean;
+  mode: UpstreamMode;
   base_url?: string;
   api_key?: string;
   model_id?: string;
   description?: string;
 }
 
-/** 查询过滤。 */
+/**
+ * update 输入:PATCH 语义,未传字段保留原值。
+ * `api_key`:undefined = 保留原值;空串 = 显式清空。
+ */
+export interface UpdateInstanceUpstreamGroupInput {
+  group_id: string;
+  /** 期望的 group_type,用作 dispatch 守卫(与库中不符 → GROUP_TYPE_MISMATCH)。 */
+  expected_group_type: GroupType;
+  /** 乐观锁:调用方传当前读到的 version,写入时匹配失败 → WRITE_CONFLICT。 */
+  expected_version?: number;
+  name?: string;
+  agents?: string[];
+  enabled?: boolean;
+  mode?: UpstreamMode;
+  base_url?: string;
+  api_key?: string;
+  model_id?: string;
+  description?: string;
+}
+
+/** toggle 单字段快捷接口输入(是 update 的语法糖)。 */
+export interface ToggleInstanceUpstreamGroupInput {
+  group_id: string;
+  enabled: boolean;
+  expected_version?: number;
+}
+
+/** delete 输入:按 group_id 物理删除。 */
+export interface DeleteInstanceUpstreamGroupInput {
+  group_id: string;
+}
+
+/** 查询过滤(list 用)。 */
 export interface InstanceUpstreamConfigFilter {
-  agent_source?: string;
-  type?: UpstreamConfigType;
+  group_type?: GroupType;
+}
+
+/** supported-agents 单元(Core yaml 里读出来,也是本模块 seed default agents 的来源)。 */
+export interface SupportedAgent {
+  agent_source: string;
+  protocol: "anthropic" | "openai-chat" | "openai-responses";
+  display_name: string;
+}
+
+/**
+ * 写入冲突:并发写入时 agents 重叠、group_id 缺失、version 不匹配等。
+ * Store 层直接抛此错(不依赖 service 层的 MetadataError,避免反向依赖)。
+ */
+export class InstanceUpstreamWriteConflictError extends Error {
+  constructor(
+    public readonly reason: "agents_overlap" | "name_duplicate" | "group_not_found" | "group_type_mismatch" | "version_mismatch" | "default_already_exists" | "extraction_already_exists",
+    message: string,
+    public readonly detail?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "InstanceUpstreamWriteConflictError";
+  }
 }

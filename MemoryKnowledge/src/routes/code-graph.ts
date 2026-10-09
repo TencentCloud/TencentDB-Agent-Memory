@@ -31,9 +31,11 @@ import { GitCredentialStore, GitCredentialError } from "../store/git-credential-
 import { GitSourceFetcher } from "../source-fetcher/git-fetcher.js";
 import { parseGitSource, validateGitBranch } from "../source-fetcher/git-source.js";
 import { verifyBearer } from "../middleware/auth.js";
+import type { ICredentialStore } from "../source-auth/types.js";
 
 export interface CodeGraphRouteDeps {
   credentialStore: GitCredentialStore;
+  sourceCredentialStore?: ICredentialStore;
   serviceKey: string;
   cgService: CodeGraphService;
   instancePool: CodeGraphInstancePool;
@@ -213,6 +215,13 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       return c.json(wrapError(status, error instanceof Error ? error.message : "Invalid repository"), status);
     }
 
+    // 私有仓：可选 provider_id + secret，与 create 同请求传入，入队前落凭据（消除时序窗口）。
+    const providerId = typeof body.provider_id === "string" ? body.provider_id : undefined;
+    const secret = typeof body.secret === "string" ? body.secret : undefined;
+    const username = typeof body.username === "string" ? body.username : undefined;
+    if (credentialId && providerId) return c.json(wrapError(400, "Select either a saved Git credential or a source provider"), 400);
+    if (providerId && !secret) return c.json(wrapError(400, "secret is required when provider_id is set"), 400);
+
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
@@ -224,6 +233,7 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       user_id: idFields.user_id,
       agent_id: idFields.agent_id,
       task_id: idFields.task_id,
+      credential: providerId && secret ? { provider_id: providerId, secret, username } : undefined,
     });
 
     // Persist service_url (tools self-discovery base; resource selected via
@@ -258,6 +268,9 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     if (id !== null && !isValidIdSegment(id)) return c.json(wrapError(400, "credential_id must be an ID or null"), 400);
     try {
       if (id) {
+        if (deps.sourceCredentialStore?.status({ type: "code-graph", serviceId, resourceId: row.code_graph_id })) {
+          throw new GitCredentialError("Remove the source provider credential before selecting a saved Git credential", 409);
+        }
         if (body.share_with_team !== true) throw new GitCredentialError("Confirm sharing the indexed repository with this team");
         deps.credentialStore.assertUsable(serviceId, row.team_id, body.user_id, id, row.repo_url);
       } else if (parseGitSource(row.repo_url).kind === "ssh") {

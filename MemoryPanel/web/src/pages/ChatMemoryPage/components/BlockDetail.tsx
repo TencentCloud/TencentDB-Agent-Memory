@@ -4,7 +4,7 @@ import moment, { type Moment } from 'moment';
 import { Button, DatePicker, Dropdown, Input, List, Modal, Pagination } from 'tea-component';
 import { type MemoryLayer, type MemoryBlock, type AtomicItem } from '../constants/types';
 import { useLayers } from '../constants/constants';
-import { getLayerCount, stripAtMention, extractRole, formatDisplayTime } from '../utils/utils';
+import { getLayerCount, extractRole, formatDisplayTime } from '../utils/utils';
 import { stripScenarioMeta, copyToClipboard } from '../utils/memory-utils';
 import { useUserDisplayName } from '@/services/user-profile-store';
 import { tea } from '@/lib/tea-bridge';
@@ -886,7 +886,7 @@ export function BlockDetail({
                 <div className="_memory-chat-list">
                   {searchResults!.map((msg, idx) => {
                     const role = extractRole(msg.role || msg.title || '');
-                    const cleanBody = stripAtMention(msg.body);
+                    const body = msg.body;
                     const tone = toneOfRole(role);
                     const time = formatDisplayTime(msg.created_at);
                     return (
@@ -909,7 +909,7 @@ export function BlockDetail({
                             )}
                           </div>
                           <div className={`_memory-chat-bubble _memory-chat-bubble--${tone}`}>
-                            <pre className="_memory-chat-body">{cleanBody}</pre>
+                            <pre className="_memory-chat-body">{body}</pre>
                           </div>
                         </div>
                       </div>
@@ -949,7 +949,7 @@ export function BlockDetail({
                 {/* 后端按最新对话从上到下返回，聊天视图需要反转为「旧在上、新在下」 */}
                 {[...block.layers.L0].reverse().map((msg, idx) => {
                   const role = extractRole(msg.role || msg.title || '');
-                  const cleanBody = stripAtMention(msg.body);
+                  const body = msg.body;
                   const tone = toneOfRole(role);
                   const time = formatDisplayTime(msg.created_at);
 
@@ -958,7 +958,7 @@ export function BlockDetail({
                     return (
                       <div key={msg.id || idx} className="_memory-chat-system">
                         <InfoCircleIcon size={12} />
-                        <span className="_memory-chat-system-text">{cleanBody}</span>
+                        <span className="_memory-chat-system-text">{body}</span>
                         {time && <span className="_memory-chat-system-time">{time}</span>}
                       </div>
                     );
@@ -979,7 +979,7 @@ export function BlockDetail({
                           )}
                         </div>
                         <div className={`_memory-chat-bubble _memory-chat-bubble--${tone}`}>
-                          <pre className="_memory-chat-body">{cleanBody}</pre>
+                          <pre className="_memory-chat-body">{body}</pre>
                         </div>
                       </div>
                     </div>

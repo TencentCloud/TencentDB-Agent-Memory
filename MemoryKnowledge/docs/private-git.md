@@ -22,7 +22,7 @@ For `deploy/global-images`, set `KNOWLEDGE_GIT_CREDENTIAL_KEY` in that deploymen
 1. Open **Code_Graph → team assets → Manage Git credentials**.
 2. Add a named credential. For HTTPS, supply only the hostname (such as `cnb.cool`, without a protocol, port or repository path), provider username and a token with read access. For SSH, supply only a name and an unencrypted private key: no server URL or manual `known_hosts` is needed. Authorize the corresponding public key on each Git server you want to access.
 3. Test the saved credential by entering a repository URL. For a new SSH server, the service retrieves public host keys without authenticating. Compare the displayed SHA256 fingerprints with the Git provider or server administrator, then confirm. Cancellation does not persist trust or authenticate with the private key. The service then runs `git ls-remote`; the test URL is not saved as a credential binding.
-4. Register a repository and choose **No authentication** or **Use saved credential**. For the latter, select the saved credential; the list is available before entering the repository URL. Confirm that its indexed code will be shared with the selected team.
+4. Register a repository and choose **No authentication** or **Use saved credential**. For the latter, select the saved credential; the list is available before entering the repository URL. Confirm that its indexed code will be shared with the selected team. When source providers are enabled, **Use source access token** also offers the existing resource-scoped provider flow.
 5. Bind the resulting CodeGraph to agents as usual. Agents receive the knowledge asset, not the Git credential.
 
 The credential is private to its owner within one service and team, and reusable across repositories and branches. SSH identities work across servers and ports; HTTPS tokens match the repository URL hostname, regardless of repository path or port. Hostnames are normalized for case, internationalized names and a trailing DNS dot. Subdomains do not match their parent domain. Tokens are still used only with HTTPS repositories; HTTP and SSH URLs cannot use an HTTPS token. SCP-style and `ssh://` URLs match the same SSH server; default ports are normalized. Git provider permissions still determine which repositories the token/key can access: a deploy key restricted to one repository does not gain access to other repositories. Other team members cannot list, rotate, replace or delete the owner's Git credentials.
@@ -30,6 +30,8 @@ The credential is private to its owner within one service and team, and reusable
 Previously saved credentials retain their IDs, graph bindings and ciphertext. SSH credentials become reusable across servers, and their previously verified host entries still apply only to the original host/port. Legacy encryption inputs are preserved for decryption; no key re-entry or destructive migration is needed.
 
 Rotate a credential by supplying its replacement secret. Manual and scheduled sync resolve the current secret when the worker executes. To change which credential a graph uses, open its details and update the binding; the graph must be idle and you must own it. An in-use credential cannot be deleted until its graphs are unbound or deleted. SSH graphs must retain an SSH credential; deleting their graphs releases the binding.
+
+Saved Git credentials and source-provider credentials are mutually exclusive for a graph. Remove the current binding or provider credential before switching between them. Reusable Git credentials use the encrypted owner-scoped store described here; the existing resource-scoped provider store and its deployment requirements remain separate. Both Git authentication paths pass secrets through the isolated transport and support incremental sync without putting tokens in Git URLs or config.
 
 ## SSH server trust
 
@@ -52,6 +54,8 @@ Panel checks team membership and asset ACLs. The existing Knowledge tool/read en
 ## API additions
 
 All paths below are under `/v3`, require `Authorization: Bearer <KNOWLEDGE_SERVICE_KEY>` and `x-tdai-service-id`. Panel authenticates the user and supplies `user_id`; Knowledge treats that identity as an assertion from the trusted Panel service.
+
+The reusable credential API uses `POST`. The existing resource-scoped provider API shares `/source-credential` but uses `GET /status`, `PUT /put`, and `DELETE /delete`; its middleware and identity contract remain independent.
 
 | Endpoint | Request fields | Result |
 | --- | --- | --- |

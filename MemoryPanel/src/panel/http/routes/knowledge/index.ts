@@ -7,6 +7,7 @@
  *   - /api/v1/knowledge/status-callback（callback-routes，S2S）
  *   - /api/v1/knowledge/allocate 等    （allocate-routes）
  *   - /api/v1/knowledge/{type}/team-assets （list-routes）
+ *   - /api/v1/knowledge/source/*           （source-routes，外部来源/凭据薄转发）
  */
 import type { Hono } from 'hono';
 import { registerGitCredentialRoutes } from './git-credential-routes.js';
@@ -16,6 +17,7 @@ import { registerKnowledgeCodeGraphRoutes } from './code-graph-routes.js';
 import { registerKnowledgeCallbackRoutes } from './callback-routes.js';
 import { registerKnowledgeAllocateRoutes } from './allocate-routes.js';
 import { registerKnowledgeListRoutes } from './list-routes.js';
+import { registerKnowledgeSourceRoutes } from './source-routes.js';
 
 export function registerKnowledgeRoutes(api: Hono, deps: PanelDeps): void {
   registerGitCredentialRoutes(api, deps);
@@ -24,4 +26,5 @@ export function registerKnowledgeRoutes(api: Hono, deps: PanelDeps): void {
   registerKnowledgeCallbackRoutes(api, deps);
   registerKnowledgeAllocateRoutes(api, deps);
   registerKnowledgeListRoutes(api, deps);
+  registerKnowledgeSourceRoutes(api, deps);
 }

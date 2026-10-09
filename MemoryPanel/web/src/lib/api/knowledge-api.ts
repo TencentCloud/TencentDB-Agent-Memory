@@ -69,10 +69,29 @@ async function panelPost<T>(path: string, body?: unknown): Promise<T> {
 
 // ========================= Types（对接 Panel API） =========================
 
+export interface ImportAndIngestResult {
+  ok: boolean;
+  wiki_id: string;
+  /** 成功时返回 */
+  ingest_task_id?: string;
+  status?: string;
+  /** true = 取消了旧任务并排队了新任务 */
+  queued?: boolean;
+  /** 失败时返回 */
+  failed_at?: 'write' | 'ingest';
+  error_code?: string;
+  error_message?: string;
+  raw_persisted?: boolean;
+}
+
 export interface WikiDetail {
   wiki_id: string;
   team_id: string;
   name: string;
+  /** null=手工上传；'iwiki' 等=外部来源（详情页据此切换"添加文件"或"从外部拉取"）。 */
+  source_type: string | null;
+  /** 外部来源 URL；仅 source_type 非 null 时有值。 */
+  source_url: string | null;
   service_url: string | null;
   summary: string | null;
   status: 'draft' | 'pending' | 'processing' | 'ready' | 'failed' | 'missing';
@@ -118,6 +137,77 @@ export interface WikiSource {
   error?: string;
   agent_id?: string;
 }
+
+// ── 外部来源（工蜂 / GitHub / GitLab）──
+// 来源清单与凭据存储的真相源在 KS；前端只拿元数据，永不接收明文 token。
+
+export interface SourceProviderFormField {
+  name: string;
+  secret: boolean;
+  required: boolean;
+}
+
+export interface SourceProviderMeta {
+  id: string;
+  /** 认证方式类型（bearer / basic / ...）。 */
+  auth_method: 'bearer' | 'basic';
+  /** 表单字段清单：前端按此动态渲染。 */
+  form_fields: readonly SourceProviderFormField[];
+  token_doc_url?: string | null;
+}
+
+/** wiki 远端节点（扁平，含目录节点）。 */
+export interface WikiRemotePageRef {
+  externalId: string;
+  title: string;
+  path: string;
+  parentId?: string | null;
+  isDir?: boolean;
+  version?: string;
+  updatedAt?: string;
+}
+
+export interface WikiResolvedRoot {
+  rootType: 'dir' | 'doc';
+  rootId: string;
+  displayName: string;
+  estimatedCount?: number;
+}
+
+/**
+ * 遍历策略：决定从导入根出发如何发现文档。
+ * - tree：走平台层级接口展开子文档（结构完整，大空间较慢）
+ * - links：解析正文里的超链接发现文档（更快，只覆盖被链接到的页面）
+ */
+export interface WikiCrawlOptions {
+  mode?: 'tree' | 'links';
+  /** 最大遍历深度，仅 links 有意义；1 = 只取入口页直接链接到的文档。 */
+  maxDepth?: number;
+}
+
+export interface WikiSourceListResult {
+  root: WikiResolvedRoot;
+  pages: WikiRemotePageRef[];
+  importable: number;
+}
+
+export interface WikiSourceImportResult {
+  imported: number;
+  skippedDirs: number;
+  failed: Array<{ id: string; error: string }>;
+  warnings: string[];
+}
+
+export interface SourceCredentialStatus {
+  resource_type: 'code-graph' | 'wiki';
+  resource_id: string;
+  provider_id: string;
+  cred_kind: string;
+  last_verified_at: string | null;
+  updated_at: string;
+}
+
+export type SourceResourceType = SourceCredentialStatus['resource_type'];
 
 /** @deprecated 用 CodeGraphDetail 替代 */
 export interface CodeSource {
@@ -181,6 +271,10 @@ export interface KnowledgeAssetItem {
   summary?: string | null;
   page_count?: number | null;
   last_sync_at?: string | null;
+  /** wiki 专用：null=手工上传，'iwiki' 等=外部来源。 */
+  source_type?: string | null;
+  /** wiki 专用：外部来源 URL。 */
+  source_url?: string | null;
   repo_name?: string;
   repo_url?: string;
   credential_id?: string | null;
@@ -196,6 +290,8 @@ function assetItemToWiki(item: KnowledgeAssetItem): WikiDetail {
     wiki_id: item.knowledge_id,
     team_id: item.team_id ?? '',
     name: item.name,
+    source_type: item.source_type ?? null,
+    source_url: item.source_url ?? null,
     service_url: null,
     summary: item.summary ?? null,
     status: (item.status as WikiDetail['status']) || 'draft',
@@ -336,9 +432,22 @@ export const knowledgeApi = {
   // ---- Wiki ----
 
   wiki: {
-    /** 创建 wiki。返回 WikiDetail（含 wiki_id） */
-    create: (teamId: string, name: string): Promise<WikiDetail> =>
-      panelPost('/wiki/create', { team_id: teamId, name }),
+    /**
+     * 创建 wiki。返回 WikiDetail（含 wiki_id）。
+     * 外部来源（iWiki 等）须**同时**传 sourceType + sourceUrl；
+     * source_type 会落库，详情页据此决定「上传文件」还是「从外部拉取」。
+     */
+    create: (
+      teamId: string,
+      name: string,
+      sourceUrl?: string,
+      sourceType?: string,
+    ): Promise<WikiDetail> =>
+      panelPost('/wiki/create', {
+        team_id: teamId,
+        name,
+        ...(sourceUrl && sourceType ? { source_url: sourceUrl, source_type: sourceType } : {}),
+      }),
 
     /** @deprecated 使用 teamAssets */
     list: async (teamId: string): Promise<WikiDetail[]> => {
@@ -402,6 +511,25 @@ export const knowledgeApi = {
         callbacks.onError?.(err instanceof Error ? err.message : String(err));
       }
     },
+
+    /**
+     * 导入并抽取（设计 2026-09-21 合并入口）。
+     *
+     * 一次请求完成：写 raw（可选）→ 触发 ingest。KS 侧用 onBusy:'replace'
+     * 原子完成"取消旧任务 + 排队新任务"，前端无需感知、无需重试。
+     *
+     * mode 与 Modal 三 tab 对应：files | markdown | external | reingest。
+     */
+    importAndIngest: (params: {
+      wiki_id: string;
+      mode: 'files' | 'markdown' | 'external' | 'reingest';
+      files?: { filename: string; content: string }[];
+      markdown?: { filename: string; content: string }[];
+      source_url?: string;
+      provider_id?: string;
+      page_ids?: string[];
+    }): Promise<ImportAndIngestResult> =>
+      panelPost('/wiki/import-and-ingest', params),
 
     /** 删除 */
     delete: (wikiId: string): Promise<void> =>
@@ -474,9 +602,33 @@ export const knowledgeApi = {
   code: {
     setCredential: (codeGraphId: string, credentialId: string | null, shareWithTeam: boolean): Promise<CodeGraphDetail> =>
       panelPost('/code-graph/set-credential', { code_graph_id: codeGraphId, credential_id: credentialId, share_with_team: shareWithTeam }),
-    /** 创建（注册仓库） */
-    create: (opts: { teamId: string; repoUrl: string; branch?: string; repoName?: string; credentialId?: string; shareWithTeam?: boolean }): Promise<CodeGraphDetail> =>
-      panelPost('/code-graph/create', { team_id: opts.teamId, repo_url: opts.repoUrl, branch: opts.branch ?? 'main', repo_name: opts.repoName, credential_id: opts.credentialId, share_with_team: opts.shareWithTeam }),
+    /** 创建（注册仓库）。私有仓可使用已保存的 Git 凭据，或传入来源凭据。 */
+    create: (opts: {
+      teamId: string;
+      repoUrl: string;
+      branch?: string;
+      repoName?: string;
+      credentialId?: string;
+      shareWithTeam?: boolean;
+      providerId?: string;
+      secret?: string;
+      username?: string;
+    }): Promise<CodeGraphDetail> =>
+      panelPost('/code-graph/create', {
+        team_id: opts.teamId,
+        repo_url: opts.repoUrl,
+        branch: opts.branch ?? 'main',
+        repo_name: opts.repoName,
+        credential_id: opts.credentialId,
+        share_with_team: opts.shareWithTeam,
+        ...(opts.providerId && opts.secret
+          ? {
+              provider_id: opts.providerId,
+              secret: opts.secret,
+              ...(opts.username ? { username: opts.username } : {}),
+            }
+          : {}),
+      }),
 
     /** @deprecated 使用 teamAssets */
     list: async (teamId: string): Promise<CodeGraphDetail[]> => {
@@ -524,6 +676,95 @@ export const knowledgeApi = {
       const items = await listAgentFixedKnowledge(agentId);
       return items.filter((it) => it.asset_type === 'code_graph');
     },
+  },
+
+  // ---- 外部来源（工蜂 / GitHub / GitLab）----
+  // 凭据挂在**资源**上（resource_type + resource_id），不属人；不再有全局 list 端点。
+  source: {
+    /** 已启用的 codegraph 来源列表（注册表单下拉数据源）。 */
+    providers: (teamId: string): Promise<SourceProviderMeta[]> =>
+      panelPost<{ items: SourceProviderMeta[] }>('/source/providers', { team_id: teamId })
+        .then((d) => d.items ?? []),
+
+    /** 已启用的 wiki 来源列表（注册表单下拉数据源）。 */
+    wikiProviders: (teamId: string): Promise<SourceProviderMeta[]> =>
+      panelPost<{ items: SourceProviderMeta[] }>('/source/wiki-providers', { team_id: teamId })
+        .then((d) => d.items ?? []),
+
+    /** 列远端文档（resolveRoot + listPages）。crawl 省略 → 用 provider 默认策略。 */
+    wikiList: (opts: {
+      teamId: string;
+      wikiId: string;
+      sourceUrl: string;
+      providerId: string;
+      crawl?: WikiCrawlOptions;
+    }): Promise<WikiSourceListResult> =>
+      panelPost<WikiSourceListResult>('/source/wiki/list', {
+        team_id: opts.teamId,
+        wiki_id: opts.wikiId,
+        source_url: opts.sourceUrl,
+        provider_id: opts.providerId,
+        ...(opts.crawl ? { crawl: opts.crawl } : {}),
+      }),
+
+    /** 导入远端文档（拉取 + 写盘，不触发 ingest）。 */
+    wikiImport: (opts: {
+      teamId: string;
+      wikiId: string;
+      sourceUrl: string;
+      providerId: string;
+      pageIds?: string[];
+    }): Promise<WikiSourceImportResult> =>
+      panelPost<WikiSourceImportResult>('/source/wiki/import', {
+        team_id: opts.teamId,
+        wiki_id: opts.wikiId,
+        source_url: opts.sourceUrl,
+        provider_id: opts.providerId,
+        ...(opts.pageIds ? { page_ids: opts.pageIds } : {}),
+      }),
+
+    /** 某资源的凭据状态（仅元数据，无明文）。未配置返回 null。 */
+    credentialStatus: (opts: {
+      teamId: string;
+      resourceType: SourceResourceType;
+      resourceId: string;
+    }): Promise<SourceCredentialStatus | null> =>
+      panelPost<{ configured: boolean; credential: SourceCredentialStatus | null }>(
+        '/source/credential/status',
+        { team_id: opts.teamId, resource_type: opts.resourceType, resource_id: opts.resourceId },
+      ).then((d) => d.credential ?? null),
+
+    /** 写入 / 更新某资源的令牌（明文仅此一次经 Panel 转发给 KS，前端不留存）。 */
+    credentialPut: (opts: {
+      teamId: string;
+      resourceType: SourceResourceType;
+      resourceId: string;
+      providerId: string;
+      credKind: string;
+      secret: string;
+      username?: string;
+    }): Promise<SourceCredentialStatus> =>
+      panelPost<{ credential: SourceCredentialStatus }>('/source/credential', {
+        team_id: opts.teamId,
+        resource_type: opts.resourceType,
+        resource_id: opts.resourceId,
+        provider_id: opts.providerId,
+        cred_kind: opts.credKind,
+        secret: opts.secret,
+        ...(opts.username ? { username: opts.username } : {}),
+      }).then((d) => d.credential),
+
+    /** 删除某资源的令牌。 */
+    credentialDelete: (opts: {
+      teamId: string;
+      resourceType: SourceResourceType;
+      resourceId: string;
+    }): Promise<void> =>
+      panelPost('/source/credential/delete', {
+        team_id: opts.teamId,
+        resource_type: opts.resourceType,
+        resource_id: opts.resourceId,
+      }),
   },
 
   // ---- Connectors（导入 iwiki / TAPD 文档） ----

@@ -55,6 +55,13 @@ import { opikCreateLlmSpan } from "./opik.js";
 let _mod: any = null;
 let _available = false;
 
+/**
+ * Response cleanup policy keyed by the scalar stats object returned to a
+ * handler. WeakMap keeps extension-only metadata out of logs/ClickHouse and
+ * releases it with the request.
+ */
+const responseCleanupPolicies = new WeakMap<Record<string, unknown>, ReadonlySet<string>>();
+
 const EXTENSION_MODULE = "@context-proxy/cost-guard";
 try {
   _mod = await import(/* @vite-ignore */ EXTENSION_MODULE);
@@ -82,6 +89,27 @@ try {
  * same reason. With no control plane the default is all there is, and the stage
  * stays dormant.
  */
+/**
+ * Router `analyze*` credentials already live on `costGuard.options`. The host
+ * does not interpret `requestPrepare` — it only copies these sibling keys so
+ * the extension can default its own fields when they are omitted.
+ *
+ * Keys stay `analyzeModel` / `analyzeUrl` / `analyzeApiKey`. Never fold them
+ * onto `url` / `apiKey`: `requestPrepare.url` is the compressor endpoint.
+ */
+export function copyAnalyzeSiblings(options: Record<string, unknown>): {
+  analyzeModel?: string;
+  analyzeUrl?: string;
+  analyzeApiKey?: string;
+} {
+  const out: Record<string, string> = {};
+  for (const key of ["analyzeModel", "analyzeUrl", "analyzeApiKey"] as const) {
+    const value = options[key];
+    if (typeof value === "string" && value.trim() !== "") out[key] = value;
+  }
+  return out;
+}
+
 function stageOptions(config: ProxyConfig): Record<string, unknown> | undefined {
   const opts = config.costGuard.options.requestPrepare;
   if (!opts || typeof opts !== "object") return undefined;
@@ -90,7 +118,7 @@ function stageOptions(config: ProxyConfig): Record<string, unknown> | undefined 
   if (payload.enabled === false && controlPlane === undefined) return undefined;
   // The extension owns this shared private configuration. The host forwards it
   // as an opaque value and does not parse its shape.
-  return { ...payload, controlPlane };
+  return { ...payload, controlPlane, ...copyAnalyzeSiblings(config.costGuard.options) };
 }
 
 /**
@@ -161,6 +189,16 @@ export async function shutdownRequestPrepare(): Promise<void> {
 
 // ─── Request phase ──────────────────────────────────────────────────────────
 
+/**
+ * Wire protocol of the upstream call, as the stage understands it.
+ *
+ * `responses` is its own value rather than an `openai` variant: the Responses
+ * body carries tool calls and tool results as separate top-level `input[]`
+ * items keyed by `call_id`, so the stage cannot reuse the Chat Completions
+ * `messages[]` shape for either compression or CFQ injection.
+ */
+export type PreparedProtocol = "anthropic" | "openai" | "responses";
+
 /** Transport context of the upstream call the stage is preparing for. */
 export interface UpstreamCallContext {
   upstreamUrl: string;
@@ -173,7 +211,7 @@ export interface UpstreamCallContext {
 
 export interface PrepareUpstreamRequestArgs {
   config: ProxyConfig;
-  protocol: "anthropic" | "openai";
+  protocol: PreparedProtocol;
   /** Rewritten in place by the stage. */
   body: Record<string, unknown>;
   /** Rewritten in place by the stage. */
@@ -206,6 +244,11 @@ export interface PrepareUpstreamRequestArgs {
    * Key ID for the Opik project name dimension. Required when opikTraceId is set.
    */
   opikKeyId?: string;
+  /**
+   * When true, skip the preparation (compression) stage entirely. Used by
+   * `/cost-guard/cheap` mode which only wants routing, not compression.
+   */
+  skipPrepare?: boolean;
 }
 
 /**
@@ -242,6 +285,7 @@ function scalarProjection(result: unknown): Record<string, unknown> | null {
 export async function prepareUpstreamRequest(
   args: PrepareUpstreamRequestArgs,
 ): Promise<Record<string, unknown> | null> {
+  if (args.skipPrepare) return null;
   const options = stageOptions(args.config);
   if (!options) return null;
   if (typeof _mod.prepareUpstreamRequest !== "function") return null;
@@ -259,7 +303,22 @@ export async function prepareUpstreamRequest(
       args.spaceId,
     );
     reportPrepareObservations(args, options, result);
-    return scalarProjection(result);
+    let stats = scalarProjection(result);
+    if (typeof _mod.getResponseCleanupPolicy === "function") {
+      const rawPolicy = _mod.getResponseCleanupPolicy(result);
+      if (Array.isArray(rawPolicy)) {
+        const toolNames = rawPolicy.filter(
+          (name: unknown): name is string => typeof name === "string" && name.length > 0,
+        );
+        if (toolNames.length > 0) {
+          // Injection can be the only work performed, in which case there are
+          // no scalar stats. Create an otherwise-empty carrier for the WeakMap.
+          stats ??= {};
+          responseCleanupPolicies.set(stats, new Set(toolNames));
+        }
+      }
+    }
+    return stats;
   } catch (err: unknown) {
     args.pipe.error("REQUEST_PREPARE", err);
     return null;
@@ -380,6 +439,11 @@ function reportPrepareObservations(
 
 /** A tool call as it left the upstream, before any client-side normalization. */
 export interface UpstreamToolCall {
+  /**
+   * The id the *next* request will reference this call by — `tool_use.id` /
+   * `tool_calls[].id`, and for Responses the `call_id`, never the item `id`.
+   * A follow-up turn pairs its tool result on this value alone.
+   */
   id: string;
   name: string;
   /** Raw, unparsed argument JSON exactly as the upstream emitted it. */
@@ -388,7 +452,7 @@ export interface UpstreamToolCall {
 
 /** Everything the host observed on a completed upstream response. */
 export interface UpstreamResponse {
-  protocol: "anthropic" | "openai";
+  protocol: PreparedProtocol;
   sessionKey: string;
   model: string;
   stream: boolean;
@@ -410,10 +474,11 @@ export interface UpstreamResponse {
  * published codebase — one generic hook a reader can understand beats several
  * narrow ones that each hint at their purpose.
  *
- * Why the raw arguments matter: agent clients re-serialize tool calls against
- * their own schema and drop anything it does not declare, so whatever the
- * extension may have added is gone by the next request. This is its only chance
- * to see them intact. The host does not parse them.
+ * Why the raw arguments matter: whatever the extension added to a tool schema
+ * never survives the round trip — the client either drops it when it
+ * re-serializes the call against its own schema, or the host strips it on the
+ * way out (see {@link stripInjectedToolArguments}). This is its only chance to
+ * see them intact. The host does not parse them.
  *
  * Fire-and-forget, and never throws — nothing here is on the critical path.
  */
@@ -425,8 +490,167 @@ export async function notifyUpstreamResponse(
   if (!stageOptions(config)) return;
   if (typeof _mod.observeUpstreamResponse !== "function") return;
   try {
-    await _mod.observeUpstreamResponse(response);
+    const retained = await _mod.observeUpstreamResponse(response);
+    reportSideChannelRetention(response, retained, pipe);
   } catch (err: unknown) {
     pipe.error("UPSTREAM_RESPONSE_NOTIFY", err);
   }
+}
+
+/**
+ * Log what this response contributed to the extension's response-side channel.
+ *
+ * Why this is worth a dedicated line: the next turn logs a *miss* when it
+ * cannot find what it expected, but a miss has three different owners — the
+ * model never produced the value, our stream assembly mangled it, or the
+ * extension's store was unreachable when we tried to save it. All three look
+ * identical downstream, and the third is silent by design (the store degrades
+ * to a no-op rather than failing a request). Only the response side can tell
+ * them apart, so it has to say so here.
+ *
+ * `retained` is whatever the extension chose to keep; the host does not
+ * interpret it beyond comparing it against what it offered. The richer
+ * breakdown comes from an optional read-only entry point, so an extension too
+ * old to expose it simply yields a shorter line instead of breaking.
+ */
+function reportSideChannelRetention(
+  response: UpstreamResponse,
+  retained: unknown,
+  pipe: Pipeline,
+): void {
+  const offered = response.toolCalls.length;
+  // Nothing to say about a turn that made no tool calls: plain prose answers
+  // are the common case and would drown the signal.
+  if (offered === 0) return;
+
+  const kept = typeof retained === "number" ? retained : undefined;
+
+  if (typeof _mod?.inspectUpstreamCfq !== "function") {
+    pipe.info(
+      "CFQ_OBSERVE",
+      `tool_calls=${offered}${kept !== undefined ? ` retained=${kept}` : ""} detail=unavailable`,
+    );
+    return;
+  }
+
+  let obs: {
+    toolCalls?: number;
+    withCfq?: number;
+    malformed?: number;
+    cacheReady?: boolean;
+  };
+  try {
+    obs = _mod.inspectUpstreamCfq(response) ?? {};
+  } catch (err: unknown) {
+    pipe.error("CFQ_OBSERVE", err);
+    return;
+  }
+
+  const addressable = obs.toolCalls ?? offered;
+  const produced = obs.withCfq ?? 0;
+  const malformed = obs.malformed ?? 0;
+  const storeReady = obs.cacheReady !== false;
+  const base =
+    `protocol=${response.protocol} stream=${response.stream} ` +
+    `tool_calls=${addressable} with_cfq=${produced} malformed=${malformed} ` +
+    `retained=${kept ?? "?"} store=${storeReady ? "ready" : "unavailable"}`;
+
+  // Ordered by who has to act on it, most actionable first.
+  if (!storeReady) {
+    pipe.info(
+      "CFQ_SIDE_CHANNEL_DOWN",
+      `⚠️ ${base} — the store was unreachable, so nothing was saved and the ` +
+        `next turn will miss regardless of what the model produced (ours to fix)`,
+    );
+    return;
+  }
+  if (malformed > 0) {
+    pipe.info(
+      "CFQ_ARGS_MALFORMED",
+      `⚠️ ${base} — ${malformed} tool call(s) carried the field but it did not ` +
+        `survive parsing (truncated stream assembly, ours to fix)`,
+    );
+    return;
+  }
+  if (produced === 0) {
+    pipe.info(
+      "CFQ_NOT_PRODUCED",
+      `⚠️ ${base} — the model populated no focus question on any tool call, so ` +
+        `the next turn has nothing to find (model/schema side, not a loss)`,
+    );
+    return;
+  }
+  if (kept !== undefined && kept < produced) {
+    pipe.info(
+      "CFQ_RETENTION_GAP",
+      `⚠️ ${base} — fewer values were kept than produced (ours to fix)`,
+    );
+    return;
+  }
+  pipe.info("CFQ_OBSERVE", base);
+}
+
+// ─── Outbound tool-call cleanup ─────────────────────────────────────────────
+
+/**
+ * Remove the fields the extension added to tool schemas from a tool call on its
+ * way back to the client.
+ *
+ * The client validates tool arguments against the schema *it* published, which
+ * never had these fields; strict clients reject the whole call with an
+ * unexpected-parameter error and refuse to run the tool. The extension has
+ * already taken what it needs in {@link notifyUpstreamResponse}, so nothing is
+ * lost by removing them here.
+ *
+ * Both helpers no-op when the extension is absent — no extension means nothing
+ * was injected in the first place. The host never names the fields; only the
+ * side that adds them knows what they are.
+ *
+ * @returns the rewritten JSON, or null when there was nothing to remove
+ */
+export function stripInjectedToolArguments(args: string): string | null {
+  if (!_available || !_mod) return null;
+  if (typeof _mod.stripCfqFromArguments !== "function") return null;
+  try {
+    return _mod.stripCfqFromArguments(args) as string | null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * In-place variant for protocols that carry tool arguments as an object rather
+ * than a serialized string.
+ *
+ * @returns whether anything was removed
+ */
+export function stripInjectedToolInput(input: unknown): boolean {
+  if (!_available || !_mod) return false;
+  if (typeof _mod.stripCfqFromInput !== "function") return false;
+  try {
+    return _mod.stripCfqFromInput(input) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether this exact preparation run added extension-owned fields to the
+ * named tool. A false result means the response must remain byte-for-byte
+ * untouched, even if it happens to contain a similarly named client field.
+ */
+export function shouldStripInjectedTool(
+  preparedStats: Record<string, unknown> | null | undefined,
+  toolName: string | undefined,
+): boolean {
+  if (!preparedStats || !toolName) return false;
+  return responseCleanupPolicies.get(preparedStats)?.has(toolName) === true;
+}
+
+/** Whether this request has any response cleanup work at all. */
+export function hasInjectedToolCleanup(
+  preparedStats: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!preparedStats) return false;
+  return (responseCleanupPolicies.get(preparedStats)?.size ?? 0) > 0;
 }

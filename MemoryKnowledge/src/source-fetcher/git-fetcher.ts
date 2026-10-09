@@ -21,6 +21,43 @@ function privateAddress(host: string): boolean {
   return isIP(h) === 6 && (h.startsWith("::") || /^(f[cd]|fe[89ab]|ff)/.test(h));
 }
 
+/**
+ * 识别 git 认证 / 权限类错误（simple-git 无 TTY，git 交互式询问 Username/Password
+ * 会变成 `could not read Username for '...': No such device or address`）。
+ *
+ * 这类错误对用户极具误导性：本质是仓库需要认证（401/403），却被 git 表述成
+ * 「无法读取用户名」。用这里集中识别，再在 worker 层按是否带凭据转成人类可读提示。
+ */
+export function isGitAuthError(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("could not read username") ||
+    msg.includes("could not read password") ||
+    msg.includes("authentication failed") ||
+    msg.includes("permission denied") ||
+    msg.includes("returned error: 401") ||
+    msg.includes("returned error: 403") ||
+    msg.includes("could not read from remote repository") ||
+    msg.includes("unable to access") ||
+    msg.includes("remote: you are not allowed")
+  );
+}
+
+/** 把 git 认证错误转成面向用户的提示。needsCredential = clone 时是否已注入凭据。 */
+export function explainGitAuthError(raw: string, needsCredential: boolean): string {
+  const brief = raw.split("\n").find((l) => l.trim())?.trim() ?? raw.trim();
+  if (needsCredential) {
+    return (
+      `访问令牌无效或已过期，无法拉取仓库（git: ${brief}）。` +
+      `请在仓库详情里重新填写访问令牌。`
+    );
+  }
+  return (
+    `该仓库需要身份认证，无法以「公开」方式克隆（git: ${brief}）。` +
+    `请删除后重新注册，来源选择对应的代码平台并填写访问令牌。`
+  );
+}
+
 export interface GitSourceFetcherOptions {
   /** For trusted self-hosted Git on a private network only. */
   ssrfCheck?: boolean;

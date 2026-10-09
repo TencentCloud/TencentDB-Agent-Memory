@@ -1084,6 +1084,14 @@ components:
           type: string
         name:
           type: string
+        source_type:
+          type: string
+          nullable: true
+          description: 来源类型（如 'iwiki'）；null = 手工上传。决定详情页 UI 走「上传文件」还是「从外部拉取」。
+        source_url:
+          type: string
+          nullable: true
+          description: 外部来源根地址；仅 source_type 非 null 时有值。
         service_url:
           type: string
           nullable: true
@@ -1123,6 +1131,13 @@ components:
           properties:
             name:
               type: string
+            # 外部来源（iWiki 等）：二者必须成对出现，缺一 → 400。
+            source_type:
+              type: string
+              description: 来源类型（如 'iwiki'）；决定详情页 UI 走「上传文件」还是「从外部拉取」。
+            source_url:
+              type: string
+              description: 外部来源根地址（形如 <站点>/spaces/<spaceKey> 或 <站点>/p/<docId>）。
 
     WikiGetRequest:
       type: object
