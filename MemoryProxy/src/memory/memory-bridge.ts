@@ -147,12 +147,21 @@ function bindingToIdFields(
  * L1 fast path — try in-memory Map with prefix fallback.
  * Returns null on miss (caller decides whether to probe L2).
  */
+/**
+ * Candidate L1 session keys for a bare session id (#1424): the handler layer
+ * stores L1 under `${agentSource}:${sessionId}`; curl-style callers only have
+ * the bare id. Pi registers sessions as `pi:<sessionId>`, so it is probed too.
+ */
+export function sessionIdCandidatesL1(sessionId: string): string[] {
+  return sessionId.includes(":")
+    ? [sessionId]
+    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`, `pi:${sessionId}`];
+}
+
 function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
-  const candidates = sessionId.includes(":")
-    ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+  const candidates = sessionIdCandidatesL1(sessionId);
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {
