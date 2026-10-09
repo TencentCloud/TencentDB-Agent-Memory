@@ -1,0 +1,7 @@
+{
+  "name": "memory-tencentdb-codex",
+  "version": "0.1.0",
+  "description": "Codex integration for memory-tencentdb through MCP and hooks.",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}
