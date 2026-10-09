@@ -16,10 +16,16 @@ let KIND = 'openclaw';
 
 // ── 类型 ──
 type AgentKind = string;
+/** skill 附带资源；文本按 utf-8 上传，二进制（pdf/docx/图片等）按 base64 上传。 */
+interface SkillResourceFile {
+  path: string;
+  content: string;
+  encoding: 'utf-8' | 'base64';
+}
 interface ScannedSkill {
   name: string;
   content: string;
-  resources: { path: string; content: string }[];
+  resources: SkillResourceFile[];
   sourceKey: string;
 }
 interface ScannedMemoryFile {
@@ -166,7 +172,22 @@ export function skillNameFromContent(fallback: string, content: string): string 
   return n[1].trim().replace(/^['"]|['"]$/g, '') || fallback;
 }
 
-export function collectSubfiles(skillDir: string, rel: string, acc: { path: string; content: string }[]): void {
+/** 读取资源文件：合法 UTF-8 且不含 NUL 视为文本，否则按 base64 传输，避免二进制被损坏。 */
+export function readSkillResource(full: string, rel: string): SkillResourceFile {
+  const buf = readFileSync(full);
+  const path = rel.split('\\').join('/');
+  if (!buf.includes(0)) {
+    try {
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+      return { path, content: text, encoding: 'utf-8' };
+    } catch {
+      // 非法 UTF-8 → 按二进制处理
+    }
+  }
+  return { path, content: buf.toString('base64'), encoding: 'base64' };
+}
+
+export function collectSubfiles(skillDir: string, rel: string, acc: SkillResourceFile[]): void {
   const full = join(skillDir, rel);
   if (!existsSync(full)) return;
   const st = statSync(full);
@@ -175,15 +196,50 @@ export function collectSubfiles(skillDir: string, rel: string, acc: { path: stri
       collectSubfiles(skillDir, join(rel, child), acc);
     }
   } else if (st.isFile()) {
-    const text = readFileSync(full, 'utf-8');
-    acc.push({ path: rel.split('\\').join('/'), content: text });
+    acc.push(readSkillResource(full, rel));
   }
 }
 
-const DEFAULT_SKILL_SUBDIRS = ['scripts', 'references', 'assets', 'agents'];
+/** 收集资源时跳过的目录（依赖/缓存/VCS 等，非 skill 内容）。 */
+const SKILL_RESOURCE_EXCLUDED_DIRS = new Set(['node_modules', '__pycache__', '.venv', 'venv']);
+
+/**
+ * 收集 skill 目录下除根 SKILL.md 外的所有文件（任意格式、任意层级），
+ * 路径相对 skill 根。跳过隐藏文件、依赖目录，以及自带 SKILL.md 的子目录（嵌套的独立 skill）。
+ */
+export function collectSkillResources(skillDir: string, rel = ''): SkillResourceFile[] {
+  const out: SkillResourceFile[] = [];
+  const dir = rel ? join(skillDir, rel) : skillDir;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const name of entries.sort()) {
+    if (name.startsWith('.')) continue;
+    const childRel = rel ? join(rel, name) : name;
+    const full = join(skillDir, childRel);
+    let st;
+    try {
+      st = statSync(full);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) {
+      if (SKILL_RESOURCE_EXCLUDED_DIRS.has(name)) continue;
+      if (existsSync(join(full, 'SKILL.md'))) continue;
+      out.push(...collectSkillResources(skillDir, childRel));
+    } else if (st.isFile()) {
+      if (!rel && name === 'SKILL.md') continue;
+      out.push(readSkillResource(full, childRel));
+    }
+  }
+  return out;
+}
 
 /** 一层 `<name>/SKILL.md` 目录（name 用目录名，不读 frontmatter）。 */
-export function collectSkillDirs(kind: AgentKind, roots: string[], subdirs = DEFAULT_SKILL_SUBDIRS): ScannedSkill[] {
+export function collectSkillDirs(kind: AgentKind, roots: string[]): ScannedSkill[] {
   const out: ScannedSkill[] = [];
   const seenRoots = new Set<string>();
   for (const root of roots) {
@@ -196,8 +252,7 @@ export function collectSkillDirs(kind: AgentKind, roots: string[], subdirs = DEF
       if (!statSync(skillDir).isDirectory()) continue;
       const text = readIfExists(join(skillDir, 'SKILL.md'));
       if (text == null) continue;
-      const resources: { path: string; content: string }[] = [];
-      for (const sub of subdirs) collectSubfiles(skillDir, sub, resources);
+      const resources = collectSkillResources(skillDir);
       out.push({ name: entry, content: text, resources, sourceKey: `skill:${kind}:${join(root, entry)}` });
     }
   }
@@ -1108,7 +1163,7 @@ function buildSkillCreateBody(ctx: WriteCtx, skill: ScannedSkill): { name: strin
     body.resources = skill.resources.map((r) => ({
       path: r.path,
       content: r.content,
-      encoding: 'utf-8',
+      encoding: r.encoding,
     }));
   }
   return { name, body };
@@ -1394,7 +1449,7 @@ async function main(): Promise<void> {
     (s) => [
       `描述: ${skillDescription(s.content)}`,
       `来源: ${s.sourceKey.replace(`skill:${KIND}:`, '')}`,
-      `关联脚本: ${s.resources.length}`,
+      `关联文件: ${s.resources.length}`,
     ],
   );
 
@@ -1600,8 +1655,7 @@ function collectOpenClawSkillsFromRoot(root: string): ScannedSkill[] {
     if (!st.isDirectory()) continue;
     const text = readIfExists(join(skillDir, 'SKILL.md'));
     if (text == null) continue;
-    const resources: { path: string; content: string }[] = [];
-    for (const sub of ['scripts', 'references', 'assets', 'agents']) collectSubfiles(skillDir, sub, resources);
+    const resources = collectSkillResources(skillDir);
     out.push({ name: skillNameFromContent(entry, text), content: text, resources, sourceKey: `skill:${KIND}:${skillDir}` });
   }
   return out;
@@ -2112,8 +2166,7 @@ function collectSkillsFromDshRoot(root: string, skipSystem = false): ScannedSkil
       const skillMd = join(full, 'SKILL.md');
       const text = readIfExists(skillMd);
       if (text == null) continue;
-      const resources: { path: string; content: string }[] = [];
-      for (const sub of ['scripts', 'references', 'assets', 'agents']) collectSubfiles(full, sub, resources);
+      const resources = collectSkillResources(full);
       out.push({ name: skillNameFromContent(entry, text), content: text, resources, sourceKey: `skill:${KIND}:${full}` });
     } else if (st.isFile() && entry.endsWith('.md') && entry !== 'SKILL.md') {
       const text = readIfExists(full);
@@ -2258,7 +2311,6 @@ const HERMES_EXCLUDED_SKILL_DIRS = new Set([
   '.idea', '.vscode', '.DS_Store',
 ]);
 const HERMES_SKILL_SUPPORT_DIRS = new Set(['support', '_support']);
-const HERMES_SKILL_RESOURCE_DIRS = new Set(['scripts', 'references', 'assets', 'agents']);
 
 function hermesHome(): string {
   return process.env.HERMES_HOME || join(home(), '.hermes');
@@ -2320,8 +2372,7 @@ function collectHermesSkillsFromRoot(root: string): ScannedSkill[] {
     const name = skillNameFromContent(entry, text);
     if (seen.has(name)) continue;
     seen.add(name);
-    const resources: { path: string; content: string }[] = [];
-    for (const sub of HERMES_SKILL_RESOURCE_DIRS) collectSubfiles(dir, sub, resources);
+    const resources = collectSkillResources(dir);
     out.push({ name, content: text, resources, sourceKey: `skill:${KIND}:${dir}` });
   }
   return out;

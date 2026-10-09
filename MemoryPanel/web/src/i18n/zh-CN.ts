@@ -670,7 +670,7 @@ export const zhCN = {
     '当前 team 暂无 agent，无法导入。请先到团队管理中创建至少一个 agent。',
   'importSkill.mode.directory': '目录导入',
   'importSkill.mode.session': '对话导入',
-  'importSkill.directory.label': '选择本地目录（应包含 SKILL.md 和可选的 files/ 子目录）',
+  'importSkill.directory.label': '选择本地目录（应包含 SKILL.md；目录内其他任意格式的文件，如脚本、文档、图片、PDF 等，都会作为资源一并上传）',
   'importSkill.directory.selectFile': '选择文件夹',
   'importSkill.directory.picked': '已选择 {{count}} 个文件',
   'importSkill.directory.mainFile': '主文件：',

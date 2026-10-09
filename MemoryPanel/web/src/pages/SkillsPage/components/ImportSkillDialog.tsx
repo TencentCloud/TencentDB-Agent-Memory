@@ -60,17 +60,20 @@ async function readAsUtf8(file: File): Promise<string> {
 }
 
 /**
- * Heuristic: extension-based + small-size = text. The gateway already
- * enforces a 5MB cap, but we want to send big binaries as base64 not
- * as a 5MB-of-mojibake string.
+ * Read a resource file for upload. Text is decided by content, not by
+ * extension/size: valid UTF-8 without NUL bytes is sent as utf-8, anything
+ * else (pdf/docx/xlsx/images/...) as base64 so the bytes survive intact.
  */
-function looksLikeText(file: File): boolean {
-  const lower = file.name.toLowerCase();
-  if (/\.(md|markdown|txt|json|yaml|yml|sh|js|ts|tsx|py|go|rs|toml|html|css|csv|conf|cfg)$/.test(lower)) {
-    return true;
+async function readResource(file: File): Promise<{ content: string; encoding: 'utf-8' | 'base64' }> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!bytes.includes(0)) {
+    try {
+      return { content: new TextDecoder('utf-8', { fatal: true }).decode(bytes), encoding: 'utf-8' };
+    } catch {
+      // invalid UTF-8 → treat as binary
+    }
   }
-  if (file.size < 64 * 1024) return true;
-  return false;
+  return { content: await readAsBase64(file), encoding: 'base64' };
 }
 
 /**
@@ -263,9 +266,7 @@ export default function ImportSkillDialog(props: {
       if (!name) {
         throw new Error(t('importSkill.error.noName'));
       }
-      const resourceFiles: { path: string; file: File; isBinary: boolean }[] = partition.resources.map(
-        ({ path, file }) => ({ path, file, isBinary: !looksLikeText(file) }),
-      );
+      const resourceFiles = partition.resources;
 
       // 确保 content 以 `---\n` 开头（v3 frontmatter 格式要求）。
       const safeContent = content.trimStart().startsWith('---') ? content : `---\nname: ${name}\n---\n\n${content}`;
@@ -276,11 +277,7 @@ export default function ImportSkillDialog(props: {
       // v3 create 本身支持 resources 数组，合并为一次调用即可保证新建 skill = v1。
       const resources: SkillResourcePayload[] = resourceFiles.length > 0
         ? await Promise.all(
-            resourceFiles.map(async ({ path, file, isBinary }) =>
-              isBinary
-                ? { path, content: await readAsBase64(file), encoding: 'base64' as const }
-                : { path, content: await readAsUtf8(file), encoding: 'utf-8' as const },
-            ),
+            resourceFiles.map(async ({ path, file }) => ({ path, ...(await readResource(file)) })),
           )
         : [];
 
