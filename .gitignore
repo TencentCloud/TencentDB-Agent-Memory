@@ -44,3 +44,7 @@ test-offload-sessions.sh
 
 # log files
 *.log
+
+# Claude Code adapter local experiment artifacts
+.claude-tdai-experiments/
+.pi-tdai-experiments/
