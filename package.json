@@ -47,6 +47,7 @@
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
+    "cline-adapter/",
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
@@ -58,6 +59,7 @@
   "keywords": [
     "openclaw",
     "openclaw-plugin",
+    "cline",
     "memory",
     "ai-memory",
     "long-term-memory",
