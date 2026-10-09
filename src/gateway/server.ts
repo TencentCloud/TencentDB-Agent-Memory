@@ -17,6 +17,7 @@
 import http from "node:http";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
+import { homedir, userInfo } from "node:os";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -105,6 +106,14 @@ function safeEqual(a: string, b: string): boolean {
   const bb = Buffer.from(b, "utf-8");
   if (ab.length !== bb.length) return false;
   return timingSafeEqual(ab, bb);
+}
+
+function resolveProcessUser(): string | undefined {
+  try {
+    return userInfo().username || undefined;
+  } catch {
+    return process.env.USER || process.env.USERNAME || undefined;
+  }
 }
 
 // ============================
@@ -356,6 +365,12 @@ export class TdaiGateway {
   // ============================
 
   private handleHealth(res: http.ServerResponse): void {
+    const address = this.server?.address();
+    const actualPort =
+      address && typeof address !== "string"
+        ? address.port
+        : this.config.server.port;
+
     const response: HealthResponse = {
       status: this.core.getVectorStore() ? "ok" : "degraded",
       version: VERSION,
@@ -363,6 +378,19 @@ export class TdaiGateway {
       stores: {
         vectorStore: !!this.core.getVectorStore(),
         embeddingService: !!this.core.getEmbeddingService(),
+      },
+      diagnostics: {
+        process: {
+          pid: process.pid,
+          cwd: process.cwd(),
+          user: resolveProcessUser(),
+          home: homedir(),
+        },
+        gateway: {
+          host: this.config.server.host,
+          port: actualPort,
+          dataDir: this.config.data.baseDir,
+        },
       },
     };
     sendJson(res, 200, response);
