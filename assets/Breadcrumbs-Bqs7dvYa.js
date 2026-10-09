@@ -1,1 +1,0 @@
-import{j as a,r as e,L as n}from"./index-xOiQIHyj.js";function o({items:l}){return a.jsx("div",{className:"page-shell",children:a.jsx("nav",{className:"breadcrumbs","aria-label":"面包屑",children:l.map((s,r)=>a.jsxs(e.Fragment,{children:[r>0&&a.jsx("i",{children:"/"}),s.to?a.jsx(n,{to:s.to,children:s.label}):a.jsx("span",{children:s.label})]},`${s.label}-${r}`))})})}export{o as B};

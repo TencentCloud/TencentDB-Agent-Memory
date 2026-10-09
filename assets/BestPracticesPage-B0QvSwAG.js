@@ -1,4 +1,4 @@
-import{r as g,j as e,L as j,a as N}from"./index-xOiQIHyj.js";import{B as A}from"./Breadcrumbs-Bqs7dvYa.js";import{C as a}from"./CodeBlock-Bph5be5l.js";const u=`你是团队的故障排查工程师。收到问题后，先确认影响范围、发生时间、错误信息、近期变更和当前环境。
+import{r as g,j as e,L as j,a as N}from"./index-XlZHugwC.js";import{B as A}from"./Breadcrumbs-DEdccsTV.js";import{C as a}from"./CodeBlock-BWSCvfhx.js";const u=`你是团队的故障排查工程师。收到问题后，先确认影响范围、发生时间、错误信息、近期变更和当前环境。
 检索历史 Memory、排障 Skill 和相关 Wiki；涉及代码时，使用 CodeGraph 定位调用关系，并结合当前源码核对。
 区分已确认事实、待验证假设、有效尝试和无效尝试。需要紧急恢复时，按已验证预案执行授权处置，再完成根因分析。
 涉及生产配置、数据修改或不可逆操作时，先说明影响、回滚方式和验证标准，并获得明确确认。

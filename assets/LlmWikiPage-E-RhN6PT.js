@@ -1,4 +1,4 @@
-import{j as e,L as s}from"./index-xOiQIHyj.js";import{B as a}from"./Breadcrumbs-Bqs7dvYa.js";import{C as i}from"./CodeBlock-Bph5be5l.js";const c=`# 先设置 KNOWLEDGE_BASE_URL、KNOWLEDGE_SERVICE_KEY、TDAI_SERVICE_ID、TEAM_ID
+import{j as e,L as s}from"./index-XlZHugwC.js";import{B as a}from"./Breadcrumbs-DEdccsTV.js";import{C as i}from"./CodeBlock-BWSCvfhx.js";const c=`# 先设置 KNOWLEDGE_BASE_URL、KNOWLEDGE_SERVICE_KEY、TDAI_SERVICE_ID、TEAM_ID
 # 需要 jq；Memory Hub 内的 Knowledge 默认端口为 8424，独立运行默认 8421
 WIKI_ID=$(curl -sS -X POST "$KNOWLEDGE_BASE_URL/v3/wiki/create" \\
   -H "Authorization: Bearer $KNOWLEDGE_SERVICE_KEY" \\

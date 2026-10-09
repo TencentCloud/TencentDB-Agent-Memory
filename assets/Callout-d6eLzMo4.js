@@ -1,1 +1,0 @@
-import{j as l}from"./index-xOiQIHyj.js";function t({tone:s,strong:n,code:r,children:a}){return l.jsxs("div",{className:`callout${s==="warning"?" callout-warning":""}`,children:[n?l.jsx("strong",{children:n}):null,r?l.jsx("code",{children:r}):null,a]})}export{t as C};
