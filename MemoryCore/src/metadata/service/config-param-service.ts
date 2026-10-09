@@ -77,12 +77,19 @@ export class ConfigParamService implements IConfigParamService {
     registry: ConfigParamRegistry,
     quotaOverrides?: { maxUsersPerInstance?: number; maxTeamsPerInstance?: number },
   ): Promise<void> {
+    // 老写法:每 param 一次 getConfigParam (per-param 一次 RTT)。存量实例
+    // 6 param × ~100ms = ~600ms;空实例还多 6 次 upsert,~1.6s。
+    // 新写法:每个 module 一次 listConfigParams 拿到已存在集合,内存 diff,
+    // 只对缺失的写 upsert。存量实例(全存在)= 每 module 1 次 list,零 upsert。
     for (const [, moduleDef] of registry) {
+      const existing = await this.store.listConfigParams({
+        scope: "global",
+        module: moduleDef.module,
+      });
+      const seen = new Set(existing.map((p) => p.param_name));
+
       for (const param of moduleDef.params) {
-        const existing = await this.store.getConfigParam(
-          "global", null, moduleDef.module, param.param_name,
-        );
-        if (existing) continue;
+        if (seen.has(param.param_name)) continue;
 
         let value = param.param_value;
         if (quotaOverrides && moduleDef.module === "quota") {

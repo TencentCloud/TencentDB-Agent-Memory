@@ -15,6 +15,31 @@
 import type { SessionInitConfig } from "../types.js";
 import type { TeamOption } from "./types.js";
 
+/**
+ * Agents whose identity is driven ENTIRELY by request headers
+ * (`x-team-id` / `x-agent-id` / `x-task-id`) and which have **no interactive
+ * form UI** to fall back on:
+ *
+ *   - `pi`       — openai-chat, no `ask_followup_question` tool in body.tools
+ *   - `hermes`   — anthropic, no ask-user tool available
+ *   - `openclaw` — anthropic, same as hermes
+ *
+ * For these clients, `handleSessionInit` MUST NOT emit a fake tool_call form
+ * on preset failure/mismatch — the client renders unknown tool_use as an
+ * error. See `session/codebuddy/init.ts` header-preselect branch and the
+ * `mem:session-reset` pre-hooks in `handler.ts` / `anthropicHandler.ts`.
+ */
+export const HEADER_ONLY_AGENTS: ReadonlySet<string> = new Set([
+  "hermes",
+  "openclaw",
+  "pi",
+]);
+
+/** True when the agent has no interactive form UI to fall back on. */
+export function isHeaderOnlyAgent(agentSource: string | undefined | null): boolean {
+  return !!agentSource && HEADER_ONLY_AGENTS.has(agentSource);
+}
+
 /** Raw identity values parsed from request headers (may be partial / absent). */
 export interface PresetIdentity {
   teamId?: string;

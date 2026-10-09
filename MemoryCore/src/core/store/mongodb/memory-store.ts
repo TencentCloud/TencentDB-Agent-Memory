@@ -17,7 +17,7 @@
  * path) rather than silently mis-scoring.
  */
 
-import type { Collection, Db, Document } from "mongodb";
+import { MongoServerError, type Collection, type Db, type Document } from "mongodb";
 import type { MongoConfig } from "../../instance-config-provider.js";
 import type { MongoClientPool } from "./client-pool.js";
 import type { EmbeddingProviderInfo } from "../embedding.js";
@@ -55,6 +55,22 @@ import type {
   MemoryContentClearResult,
 } from "../types.js";
 import type { MemoryRecord } from "../../record/l1-writer.js";
+import {
+  buildMemoryGenerationRefId,
+  type MemoryGenerationLayer,
+  type MemoryGenerationRefRecord,
+} from "../../memory-generation-log/types.js";
+import type {
+  MemoryPromptLayer,
+  MemoryPromptListFilter,
+  MemoryPromptRecord,
+  MemoryPromptSettingListFilter,
+  MemoryPromptSettingLogFilter,
+  MemoryPromptSettingLogRecord,
+  MemoryPromptSettingRecord,
+  MemoryPromptSource,
+  MemoryPromptTargetType,
+} from "../../memory-prompt/types.js";
 import { DEFAULT_ISOLATION_ID } from "../isolation.js";
 import { mongoSearchScoreToScore } from "../tokenize.js";
 import { COLLECTIONS } from "./collections.js";
@@ -171,6 +187,22 @@ export class MongoMemoryStore implements IMemoryStore {
       ]),
       db.collection(COLLECTIONS.KNOWLEDGE).createIndexes([
         { key: { team_id: 1, type: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_PROMPTS).createIndexes([
+        { key: { layer: 1, updated_at_ms: 1 } },
+        { key: { status: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_PROMPT_SETTINGS).createIndexes([
+        { key: { memory_prompt_id: 1 } },
+        { key: { team_id: 1, agent_id: 1, layer: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_PROMPT_SETTING_LOGS).createIndexes([
+        { key: { before_memory_prompt_id: 1, operated_at_ms: 1 } },
+        { key: { after_memory_prompt_id: 1, operated_at_ms: 1 } },
+        { key: { team_id: 1, agent_id: 1, operated_at_ms: 1 } },
+      ]),
+      db.collection(COLLECTIONS.MEMORY_GENERATION_REFS).createIndexes([
+        { key: { layer: 1, memory_id: 1 }, unique: true },
       ]),
     ]);
   }
@@ -888,6 +920,356 @@ export class MongoMemoryStore implements IMemoryStore {
       updated_at: String(d.updated_at ?? ""),
     };
   }
+
+  // ─────────────────────────────────────────────────────────
+  // Memory Generation Provenance References
+  // ─────────────────────────────────────────────────────────
+
+  async upsertMemoryGenerationRefs(records: MemoryGenerationRefRecord[]): Promise<void> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_GENERATION_REFS);
+    for (const record of records) {
+      const doc = this.generationRefDoc(record);
+      await coll.replaceOne({ _id: doc._id } as never, doc as never, { upsert: true });
+    }
+  }
+
+  async getMemoryGenerationRef(
+    layer: MemoryGenerationLayer,
+    memoryId: string,
+  ): Promise<MemoryGenerationRefRecord | null> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_GENERATION_REFS);
+    const id = buildMemoryGenerationRefId(layer, memoryId);
+    const doc = await coll.findOne({ _id: id } as never);
+    if (!doc || String(doc.memory_id ?? "") !== memoryId || doc.layer !== layer) return null;
+    return this.generationRefFromDoc(doc as Record<string, unknown>, layer, memoryId);
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Custom Memory Prompt
+  // ─────────────────────────────────────────────────────────
+
+  private promptFromDoc(doc: Record<string, unknown>): MemoryPromptRecord {
+    return {
+      memory_prompt_id: String(doc._id ?? doc.memory_prompt_id ?? ""),
+      name: String(doc.name ?? ""),
+      layer: (doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1") as MemoryPromptLayer,
+      prompt: String(doc.prompt ?? ""),
+      version: Number(doc.version ?? 1),
+      status: doc.status === "deleting" ? "deleting" : "active",
+      created_by: String(doc.created_by ?? "") || undefined,
+      updated_by: String(doc.updated_by ?? "") || undefined,
+      created_at_ms: Number(doc.created_at_ms ?? 0),
+      updated_at_ms: Number(doc.updated_at_ms ?? 0),
+    };
+  }
+
+  private settingFromDoc(doc: Record<string, unknown>): MemoryPromptSettingRecord {
+    return {
+      setting_id: String(doc._id ?? doc.setting_id ?? ""),
+      target_type: doc.target_type === "agent" || doc.target_type === "team" ? doc.target_type : "instance",
+      team_id: String(doc.team_id ?? "") || undefined,
+      agent_id: String(doc.agent_id ?? "") || undefined,
+      layer: (doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1") as MemoryPromptLayer,
+      memory_prompt_id: String(doc.memory_prompt_id ?? ""),
+      updated_by: String(doc.updated_by ?? "") || undefined,
+      updated_at_ms: Number(doc.updated_at_ms ?? 0),
+    };
+  }
+
+  private promptLogFromDoc(doc: Record<string, unknown>): MemoryPromptSettingLogRecord {
+    return {
+      setting_log_id: String(doc._id ?? doc.setting_log_id ?? ""),
+      target_type: doc.target_type === "agent" || doc.target_type === "team" ? doc.target_type : "instance",
+      team_id: String(doc.team_id ?? "") || undefined,
+      agent_id: String(doc.agent_id ?? "") || undefined,
+      layer: (doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1") as MemoryPromptLayer,
+      action: doc.action === "replace" || doc.action === "clear" ? doc.action : "apply",
+      reason: doc.reason === "prompt_deleted" ? "prompt_deleted" : "explicit",
+      before_memory_prompt_id: String(doc.before_memory_prompt_id ?? "") || undefined,
+      after_memory_prompt_id: String(doc.after_memory_prompt_id ?? "") || undefined,
+      operator_id: String(doc.operator_id ?? "") || undefined,
+      operated_at_ms: Number(doc.operated_at_ms ?? 0),
+    };
+  }
+
+  private promptDoc(record: MemoryPromptRecord): Record<string, unknown> {
+    return {
+      _id: record.memory_prompt_id,
+      name: record.name,
+      layer: record.layer,
+      prompt: record.prompt,
+      version: record.version,
+      status: record.status,
+      created_by: record.created_by ?? "",
+      updated_by: record.updated_by ?? "",
+      created_at_ms: record.created_at_ms,
+      updated_at_ms: record.updated_at_ms,
+    };
+  }
+
+  private settingDoc(record: MemoryPromptSettingRecord): Record<string, unknown> {
+    return {
+      _id: record.setting_id,
+      target_type: record.target_type,
+      team_id: record.team_id ?? "",
+      agent_id: record.agent_id ?? "",
+      layer: record.layer,
+      memory_prompt_id: record.memory_prompt_id,
+      updated_by: record.updated_by ?? "",
+      updated_at_ms: record.updated_at_ms,
+    };
+  }
+
+  private promptLogDoc(log: MemoryPromptSettingLogRecord): Record<string, unknown> {
+    return {
+      _id: log.setting_log_id,
+      target_type: log.target_type,
+      team_id: log.team_id ?? "",
+      agent_id: log.agent_id ?? "",
+      layer: log.layer,
+      action: log.action,
+      reason: log.reason,
+      before_memory_prompt_id: log.before_memory_prompt_id ?? "",
+      after_memory_prompt_id: log.after_memory_prompt_id ?? "",
+      operator_id: log.operator_id ?? "",
+      operated_at_ms: log.operated_at_ms,
+    };
+  }
+
+  private generationRefDoc(record: MemoryGenerationRefRecord): Record<string, unknown> {
+    return {
+      _id: record.generation_ref_id,
+      layer: record.layer,
+      memory_id: record.memory_id,
+      generation_id: record.generation_id,
+      generation_log_id: record.generation_log_id,
+      generation_log_key: record.generation_log_key,
+      memory_prompt_id: record.memory_prompt_id,
+      memory_prompt_version: record.memory_prompt_version,
+      memory_prompt_source: record.memory_prompt_source,
+      created_at_ms: record.created_at_ms,
+    };
+  }
+
+  private generationRefFromDoc(
+    doc: Record<string, unknown>,
+    layer: MemoryGenerationLayer,
+    memoryId: string,
+  ): MemoryGenerationRefRecord {
+    const source = doc.memory_prompt_source;
+    return {
+      generation_ref_id: String(doc._id ?? ""),
+      layer,
+      memory_id: memoryId,
+      generation_id: String(doc.generation_id ?? ""),
+      generation_log_id: String(doc.generation_log_id ?? ""),
+      generation_log_key: String(doc.generation_log_key ?? ""),
+      memory_prompt_id: String(doc.memory_prompt_id ?? ""),
+      memory_prompt_version: Number(doc.memory_prompt_version ?? 1),
+      memory_prompt_source: source === "agent" || source === "team" || source === "instance"
+        ? source
+        : "system" as MemoryPromptSource,
+      created_at_ms: Number(doc.created_at_ms ?? 0),
+    };
+  }
+
+  async countMemoryPrompts(): Promise<number> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPTS);
+    return coll.countDocuments({});
+  }
+
+  async createMemoryPrompt(record: MemoryPromptRecord): Promise<MemoryPromptRecord> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPTS);
+    const doc = this.promptDoc(record);
+    await coll.replaceOne({ _id: doc._id } as never, doc as never, { upsert: true });
+    return record;
+  }
+
+  async getMemoryPrompts(ids: string[]): Promise<MemoryPromptRecord[]> {
+    if (ids.length === 0) return [];
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPTS);
+    const docs = await coll.find({ _id: { $in: ids } } as never).toArray();
+    const byId = new Map(docs.map((doc) => [String(doc._id), this.promptFromDoc(doc as Record<string, unknown>)]));
+    return ids.map((id) => byId.get(id)).filter((record): record is MemoryPromptRecord => record !== undefined);
+  }
+
+  async listMemoryPrompts(filter: MemoryPromptListFilter): Promise<MemoryPromptRecord[]> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPTS);
+    const q: Record<string, unknown> = { status: "active" };
+    if (filter.layer) q.layer = filter.layer;
+    const limit = Math.min(Math.max(filter.limit ?? 20, 1), 100);
+    const offset = Math.max(filter.offset ?? 0, 0);
+    const dir = filter.timeOrder === "asc" ? 1 : -1;
+    const docs = await coll
+      .find(q as never)
+      .sort({ updated_at_ms: dir, _id: dir })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    return docs.map((doc) => this.promptFromDoc(doc as Record<string, unknown>));
+  }
+
+  async updateMemoryPrompt(
+    id: string,
+    patch: { name?: string; prompt?: string; updated_by?: string; updated_at_ms: number },
+  ): Promise<MemoryPromptRecord | null> {
+    const current = (await this.getMemoryPrompts([id]))[0];
+    if (!current || current.status !== "active") return null;
+    const sameName = patch.name === undefined || patch.name === current.name;
+    const samePrompt = patch.prompt === undefined || patch.prompt === current.prompt;
+    if (sameName && samePrompt) return current;
+
+    const updated: MemoryPromptRecord = {
+      ...current,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.prompt !== undefined ? { prompt: patch.prompt } : {}),
+      updated_by: patch.updated_by,
+      updated_at_ms: patch.updated_at_ms,
+      version: current.version + 1,
+    };
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPTS);
+    const doc = this.promptDoc(updated);
+    await coll.replaceOne({ _id: doc._id } as never, doc as never, { upsert: true });
+    return updated;
+  }
+
+  async getMemoryPromptSettings(ids: string[]): Promise<MemoryPromptSettingRecord[]> {
+    if (ids.length === 0) return [];
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPT_SETTINGS);
+    const docs = await coll.find({ _id: { $in: ids } } as never).toArray();
+    const byId = new Map(docs.map((doc) => [String(doc._id), this.settingFromDoc(doc as Record<string, unknown>)]));
+    return ids.map((id) => byId.get(id)).filter((record): record is MemoryPromptSettingRecord => record !== undefined);
+  }
+
+  async listMemoryPromptSettings(filter: MemoryPromptSettingListFilter): Promise<MemoryPromptSettingRecord[]> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPT_SETTINGS);
+    const q: Record<string, unknown> = {};
+    if (filter.memoryPromptId) q.memory_prompt_id = filter.memoryPromptId;
+    if (filter.targetType) q.target_type = filter.targetType;
+    if (filter.teamId) q.team_id = filter.teamId;
+    if (filter.agentId) q.agent_id = filter.agentId;
+    if (filter.layer) q.layer = filter.layer;
+    const limit = Math.min(Math.max(filter.limit ?? 20, 1), 100);
+    const offset = Math.max(filter.offset ?? 0, 0);
+    const dir = filter.timeOrder === "asc" ? 1 : -1;
+    const docs = await coll
+      .find(q as never)
+      .sort({ updated_at_ms: dir, _id: dir })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    return docs.map((doc) => this.settingFromDoc(doc as Record<string, unknown>));
+  }
+
+  async upsertMemoryPromptSettings(
+    records: MemoryPromptSettingRecord[],
+    logs: MemoryPromptSettingLogRecord[],
+  ): Promise<void> {
+    const settings = await this.coll(COLLECTIONS.MEMORY_PROMPT_SETTINGS);
+    for (const record of records) {
+      const doc = this.settingDoc(record);
+      await settings.replaceOne({ _id: doc._id } as never, doc as never, { upsert: true });
+    }
+    await this.insertMemoryPromptSettingLogs(logs);
+  }
+
+  async clearMemoryPromptSettings(ids: string[], logs: MemoryPromptSettingLogRecord[]): Promise<void> {
+    if (ids.length > 0) {
+      const settings = await this.coll(COLLECTIONS.MEMORY_PROMPT_SETTINGS);
+      await settings.deleteMany({ _id: { $in: ids } } as never);
+    }
+    await this.insertMemoryPromptSettingLogs(logs);
+  }
+
+  async deleteMemoryPrompts(ids: string[], operatorId?: string): Promise<{
+    deleted_prompt_ids: string[];
+    cleared_settings: Record<MemoryPromptTargetType, number>;
+  }> {
+    const prompts = await this.getMemoryPrompts(ids);
+    if (prompts.length !== ids.length) {
+      return { deleted_prompt_ids: [], cleared_settings: { instance: 0, team: 0, agent: 0 } };
+    }
+
+    const now = Date.now();
+    const promptColl = await this.coll(COLLECTIONS.MEMORY_PROMPTS);
+    await promptColl.updateMany(
+      { _id: { $in: ids } } as never,
+      { $set: { status: "deleting", updated_at_ms: now } } as never,
+    );
+
+    const settingColl = await this.coll(COLLECTIONS.MEMORY_PROMPT_SETTINGS);
+    const settingDocs = await settingColl.find({ memory_prompt_id: { $in: ids } } as never).toArray();
+    const settings = settingDocs.map((doc) => this.settingFromDoc(doc as Record<string, unknown>));
+    const cleared: Record<MemoryPromptTargetType, number> = { instance: 0, team: 0, agent: 0 };
+    const logs: MemoryPromptSettingLogRecord[] = settings.map((setting) => {
+      cleared[setting.target_type] += 1;
+      return {
+        setting_log_id: `mpsl:delete:${setting.setting_id}:${setting.memory_prompt_id}`,
+        target_type: setting.target_type,
+        team_id: setting.team_id,
+        agent_id: setting.agent_id,
+        layer: setting.layer,
+        action: "clear",
+        reason: "prompt_deleted",
+        before_memory_prompt_id: setting.memory_prompt_id,
+        operator_id: operatorId,
+        operated_at_ms: now,
+      };
+    });
+
+    await this.insertMemoryPromptSettingLogs(logs);
+    if (settings.length > 0) {
+      await settingColl.deleteMany({ _id: { $in: settings.map((s) => s.setting_id) } } as never);
+    }
+    await promptColl.deleteMany({ _id: { $in: ids } } as never);
+    return { deleted_prompt_ids: ids, cleared_settings: cleared };
+  }
+
+  async queryMemoryPromptSettingLogs(filter: MemoryPromptSettingLogFilter): Promise<MemoryPromptSettingLogRecord[]> {
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPT_SETTING_LOGS);
+    const conds: Record<string, unknown>[] = [];
+    if (filter.memoryPromptId) {
+      conds.push({
+        $or: [
+          { before_memory_prompt_id: filter.memoryPromptId },
+          { after_memory_prompt_id: filter.memoryPromptId },
+        ],
+      });
+    }
+    if (filter.teamId) conds.push({ team_id: filter.teamId });
+    if (filter.agentId) conds.push({ agent_id: filter.agentId });
+    if (filter.action) conds.push({ action: filter.action });
+    if (filter.startTimeMs !== undefined) conds.push({ operated_at_ms: { $gte: filter.startTimeMs } });
+    if (filter.endTimeMs !== undefined) conds.push({ operated_at_ms: { $lte: filter.endTimeMs } });
+    const q = conds.length === 0 ? {} : conds.length === 1 ? conds[0]! : { $and: conds };
+    const limit = Math.min(Math.max(filter.limit ?? 20, 1), 100);
+    const offset = Math.max(filter.offset ?? 0, 0);
+    const dir = filter.timeOrder === "asc" ? 1 : -1;
+    const docs = await coll
+      .find(q as never)
+      .sort({ operated_at_ms: dir, _id: dir })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    return docs.map((doc) => this.promptLogFromDoc(doc as Record<string, unknown>));
+  }
+
+  private async insertMemoryPromptSettingLogs(logs: MemoryPromptSettingLogRecord[]): Promise<void> {
+    if (logs.length === 0) return;
+    const coll = await this.coll(COLLECTIONS.MEMORY_PROMPT_SETTING_LOGS);
+    const docs = logs.map((log) => this.promptLogDoc(log));
+    try {
+      await coll.insertMany(docs as never[], { ordered: false });
+    } catch (err) {
+      if (!isDuplicateKeyError(err)) throw err;
+    }
+  }
+}
+
+function isDuplicateKeyError(err: unknown): boolean {
+  if (err instanceof MongoServerError && err.code === 11000) return true;
+  const writeErrors = (err as { writeErrors?: Array<{ code?: number }> } | null)?.writeErrors;
+  return Array.isArray(writeErrors) && writeErrors.every((e) => e.code === 11000);
 }
 
 function escapeRegex(s: string): string {

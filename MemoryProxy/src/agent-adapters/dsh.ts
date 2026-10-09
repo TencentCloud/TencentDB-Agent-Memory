@@ -42,6 +42,7 @@
  */
 
 import type { AgentAdapter, RequestKind } from "./types.js";
+import { extractLastUserText } from "../common/user-text-extractor.js";
 
 // ── Title-gen body-shape detection ───────────────────────────────────────────
 
@@ -96,18 +97,17 @@ function isDshTitleGen(body: Record<string, unknown>): boolean {
 // ── User text extraction ─────────────────────────────────────────────────────
 
 /**
- * dsh messages.content 是 str,直接返回。
+ * dsh 两种协议下 user content 的形态:
+ *   - v0.1.x(OpenAI Chat): `content: string`
+ *   - v0.2+ (Anthropic Messages): `content: [{type:"text", text:"..."}, ...]`
  *
- * 抓包实证(fixtures/*.req.json 多条 messages 全 role=user + content:str):
- * dsh 从不用 Anthropic-style content-blocks 数组,连 tool_result 都是独立
- * role=tool 消息(而非嵌在 user 里)。
- *
- * 不做 CB 那种 `<user_query>` wrapper 剥离 —— dsh 主对话就是纯用户输入 +
- * 独立 `<system-reminder>` user 消息,没 wrapper 嵌套。
+ * 复用 `extractLastUserText`(和 CC 同款):string 直接返回;array 从后往前扫第一个
+ * `type==="text"` block —— 兼具老 dsh string 姿势和新 dsh anthropic block 姿势,
+ * 并顺带跳过 `<system-reminder>` 元数据只取最后一段真实用户话(dsh v0.2 Web UI
+ * 会像 CC 一样在 user content 里塞多段环境元数据 block)。
  */
 function extractDshUserText(content: unknown): string | null {
-  if (typeof content !== "string") return null;
-  return content.length > 0 ? content : null;
+  return extractLastUserText(content);
 }
 
 // ── Adapter export ───────────────────────────────────────────────────────────

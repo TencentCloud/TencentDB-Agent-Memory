@@ -190,6 +190,12 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
 
+    // 私有仓：可选 provider_id + secret，与 create 同请求传入，入队前落凭据（消除时序窗口）。
+    const providerId = typeof body.provider_id === "string" ? body.provider_id : undefined;
+    const secret = typeof body.secret === "string" ? body.secret : undefined;
+    const username = typeof body.username === "string" ? body.username : undefined;
+    if (providerId && !secret) return c.json(wrapError(400, "secret is required when provider_id is set"), 400);
+
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
@@ -200,6 +206,7 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       user_id: idFields.user_id,
       agent_id: idFields.agent_id,
       task_id: idFields.task_id,
+      credential: providerId && secret ? { provider_id: providerId, secret, username } : undefined,
     });
 
     // Persist service_url (tools self-discovery base; resource selected via

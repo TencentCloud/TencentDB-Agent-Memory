@@ -84,6 +84,40 @@ describe("Claude Code harness input at the L0/L1 boundaries", () => {
     ] }])).toEqual({ role: "user", content: "Now add tests for the parser." });
   });
 
+  it.each(["text", "input_text"])("records %s input after compaction alongside tool results and malformed blocks", async (type) => {
+    const client = createClient();
+    const write = vi.spyOn(client, "addConversation").mockResolvedValue(undefined);
+    const user = extractLatestUserMessage([{ role: "user", content: [
+      null, 42, "Generated string", [],
+      { type: "tool_result", text: "Generated tool text", content: "Generated tool output" },
+      { type: "image", text: "Image metadata" },
+      { text: "Untyped content" },
+      { type, text: summary },
+      { type, text: "Now add tests for the parser." },
+    ] }]);
+    await recordTdaiTurn(client, identity, user, "Tests added.");
+    expect(write).toHaveBeenCalledExactlyOnceWith(identity, [
+      { role: "user", content: "Now add tests for the parser." },
+      { role: "assistant", content: "Tests added." },
+    ]);
+  });
+
+  it("does not write L0 when content contains only invalid blocks and tool results", async () => {
+    const client = createClient();
+    const write = vi.spyOn(client, "addConversation").mockResolvedValue(undefined);
+    const user = extractLatestUserMessage([{ role: "user", content: [
+      null, undefined, 42, false, "Generated string", [],
+      { type: "tool_result", content: "Generated tool output" },
+      { type: "tool_result", text: "Generated tool text" },
+      { text: "Untyped content" },
+      { type: "text", content: "Wrong text field" },
+      { type: "input_text", text: 42 },
+    ] }]);
+    await recordTdaiTurn(client, identity, user, "Acknowledged.");
+    expect(user).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("preserves the existing backward scan past a trailing task notification", () => {
     expect(extractLatestUserMessage([
       { role: "user", content: "Run the tests." },

@@ -239,6 +239,18 @@ MemoryCore/
 └── package.json           Node.js package metadata and commands
 ```
 
+## External sources (Task)
+
+Import tasks from external task systems (TAPD, Jira, …) into `meta_tasks`:
+
+- Implementation: `src/task-source/`
+- Guide (import tasks from TAPD / add a new source like ONES): [`docs/external-task-source.md`](./docs/external-task-source.md)
+
+> Config goes to the **`tdai-memory-core`** container (not hub) — `TASK_SOURCE_*` is read by
+> `src/task-source/registry.ts`. Panel only forwards `/api/v1/task/source/*` → `/v3/task-source/*`.
+> Wiki and code sources live in MemoryKnowledge instead, see
+> [`MemoryKnowledge/docs/`](../MemoryKnowledge/docs/README.md).
+
 ## Local data utilities
 
 ```bash

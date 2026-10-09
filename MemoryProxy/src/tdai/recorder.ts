@@ -43,10 +43,10 @@ function extractContentBlocks(content: unknown): string[] {
   if (typeof content === "string") return [content];
   if (Array.isArray(content)) {
     return content.map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return "";
       const p = part as Record<string, unknown>;
-      if (typeof p.text === "string") return p.text;
-      if (typeof p.content === "string") return p.content;
-      return "";
+      if (p.type !== "text" && p.type !== "input_text") return "";
+      return typeof p.text === "string" ? p.text : "";
     }).filter(Boolean);
   }
   return [];
