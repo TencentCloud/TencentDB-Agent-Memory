@@ -39,6 +39,13 @@ export interface RecallRequest {
   query: string;
   session_key: string;
   user_id?: string;
+  /**
+   * Optional override for the number of L1 memories to recall.
+   * Clamped to 1..50 by the gateway; when omitted the configured
+   * `memory.recall.maxResults` (default 5) is used. Additive field —
+   * older gateways simply ignore it.
+   */
+  top_k?: number;
 }
 
 export interface RecallResponse {

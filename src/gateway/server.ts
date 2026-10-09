@@ -890,8 +890,16 @@ export class TdaiGateway {
       return;
     }
 
+    // Optional top_k override (additive; ignored by older cores). Clamp to
+    // 1..50 here so the core never sees hostile values; non-numeric input
+    // falls back to the configured default.
+    let topK: number | undefined;
+    if (typeof body.top_k === "number" && Number.isFinite(body.top_k)) {
+      topK = Math.min(50, Math.max(1, Math.trunc(body.top_k)));
+    }
+
     const startMs = Date.now();
-    const result = await this.core.handleBeforeRecall(body.query, body.session_key);
+    const result = await this.core.handleBeforeRecall(body.query, body.session_key, topK);
     const elapsed = Date.now() - startMs;
 
     // H-15: distinguish "no recall content to inject" from "recall failed".
