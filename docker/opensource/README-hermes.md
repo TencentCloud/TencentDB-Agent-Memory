@@ -24,10 +24,34 @@
 ## 快速开始
 
 ```bash
-# 构建（不依赖项目源码，任意目录均可）
+# 创建本地环境变量文件，并填入 MODEL_API_KEY
+cp .env.example .env
+$EDITOR .env
+
+# 构建并启动（后台常驻，Gateway 自动启动）
+docker compose up -d --build
+
+# 验证 Gateway
+curl http://localhost:8420/health
+
+# 进入 Hermes 对话
+docker compose exec hermes-memory hermes
+
+# 查看状态和日志
+docker compose ps
+docker compose logs -f hermes-memory
+
+# 停止服务；如需同时删除记忆数据，追加 -v
+docker compose down
+```
+
+> 镜像内置了腾讯云 DeepSeek-V3.2 的默认值，如果你使用该模型，只需要在 `.env` 中设置 `MODEL_API_KEY`。
+
+也可以直接使用 Docker 运行同一个镜像：
+
+```bash
 docker build -f Dockerfile.hermes -t hermes-memory .
 
-# 运行（后台常驻，Gateway 自动启动）
 docker run -d \
   --name hermes-memory \
   --restart unless-stopped \
@@ -45,8 +69,6 @@ curl http://localhost:8420/health
 # 进入 Hermes 对话
 docker exec -it hermes-memory hermes
 ```
-
-> 镜像内置了腾讯云 DeepSeek-V3.2 的默认值，如果你使用该模型，`MODEL_BASE_URL`/`MODEL_NAME`/`MODEL_PROVIDER` 可以省略，只传 `MODEL_API_KEY` 即可。
 
 ## 工作原理
 
@@ -72,6 +94,8 @@ docker exec -it hermes-memory hermes
 
 用户只需配置上述 `MODEL_*` 变量，容器启动时自动同步到 Hermes（`config.yaml` + `.env`）和 Gateway（`TDAI_LLM_*` 环境变量）。
 
+Compose 默认读取同目录的 `.env` 文件。不要提交 `.env`；提交和分享配置时使用 `.env.example`。
+
 ### 服务配置
 
 | 变量 | 默认值 | 说明 |
@@ -80,6 +104,8 @@ docker exec -it hermes-memory hermes
 | `TDAI_GATEWAY_HOST` | `0.0.0.0` | Gateway 绑定地址 |
 | `TDAI_DATA_DIR` | `/opt/data/tdai-memory` | 记忆数据目录 |
 | `HERMES_HOME` | `/opt/data` | Hermes 数据目录 |
+| `TDAI_GATEWAY_API_KEY` | - | 可选 Gateway Bearer token；设置后除 `/health` 外的接口需要鉴权 |
+| `TDAI_CORS_ORIGINS` | - | 可选浏览器 CORS 白名单，多个 origin 用逗号分隔 |
 
 ## 数据持久化
 
@@ -95,32 +121,39 @@ docker exec -it hermes-memory hermes
 ├── sessions/             # Hermes 会话记录
 ├── skills/               # Hermes 技能
 ├── config.yaml           # Hermes 配置（启动时自动生成）
-├── .env                  # 环境变量（启动时自动生成）
-└── gateway.log           # Gateway 日志
+└── .env                  # 环境变量（启动时自动生成）
 ```
+
+Gateway 日志写到容器 stdout / stderr，用 `docker compose logs -f hermes-memory` 查看。
 
 ## 故障排查
 
 ```bash
 # 查看 Gateway 日志
-docker exec hermes-memory cat /opt/data/tdai-memory/gateway.log
+docker compose logs -f hermes-memory
 
 # 查看 Gateway 健康状态
-docker exec hermes-memory curl -s http://localhost:8420/health | python3 -m json.tool
+docker compose exec hermes-memory curl -s http://localhost:8420/health | python3 -m json.tool
 
 # 手动测试记忆召回
-docker exec hermes-memory curl -s -X POST http://localhost:8420/recall \
+docker compose exec hermes-memory curl -s -X POST http://localhost:8420/recall \
   -H "Content-Type: application/json" \
   -d '{"query":"test","session_key":"debug"}'
 
+# 如果设置了 TDAI_GATEWAY_API_KEY，带 Bearer token 测试受保护接口
+docker compose exec hermes-memory sh -lc 'curl -s -X POST http://localhost:8420/recall \
+  -H "Authorization: Bearer $TDAI_GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\":\"test\",\"session_key\":\"debug\"}"'
+
 # 查看生成的 Hermes 配置
-docker exec hermes-memory cat /opt/data/config.yaml
+docker compose exec hermes-memory cat /opt/data/config.yaml
 
 # 查看环境变量同步结果
-docker exec hermes-memory env | grep -E '(MODEL_|TDAI_LLM_)'
+docker compose exec hermes-memory env | grep -E '(MODEL_|TDAI_LLM_)'
 
 # 进入容器调试
-docker exec -it hermes-memory bash
+docker compose exec hermes-memory bash
 ```
 
 ## 构建说明

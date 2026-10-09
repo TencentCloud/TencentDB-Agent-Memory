@@ -1,0 +1,30 @@
+services:
+  hermes-memory:
+    build:
+      context: .
+      dockerfile: Dockerfile.hermes
+    image: hermes-memory:latest
+    container_name: hermes-memory
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${TDAI_GATEWAY_PORT:-8420}:8420"
+    environment:
+      MODEL_API_KEY: "${MODEL_API_KEY:?Set MODEL_API_KEY in docker/opensource/.env}"
+      MODEL_BASE_URL: "${MODEL_BASE_URL:-https://api.lkeap.cloud.tencent.com/v1}"
+      MODEL_NAME: "${MODEL_NAME:-deepseek-v3.2}"
+      MODEL_PROVIDER: "${MODEL_PROVIDER:-custom}"
+      TDAI_GATEWAY_PORT: "8420"
+      TDAI_GATEWAY_HOST: "0.0.0.0"
+      TDAI_DATA_DIR: "/opt/data/tdai-memory"
+      TDAI_GATEWAY_API_KEY: "${TDAI_GATEWAY_API_KEY:-}"
+      TDAI_CORS_ORIGINS: "${TDAI_CORS_ORIGINS:-}"
+      MEMORY_TENCENTDB_GATEWAY_HOST: "127.0.0.1"
+      MEMORY_TENCENTDB_GATEWAY_PORT: "8420"
+      MEMORY_TENCENTDB_GATEWAY_API_KEY: "${TDAI_GATEWAY_API_KEY:-}"
+    volumes:
+      - hermes_data:/opt/data
+
+volumes:
+  hermes_data:
