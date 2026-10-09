@@ -256,6 +256,10 @@ Import tasks from external task systems (TAPD, Jira, …) into `meta_tasks`:
 ```bash
 npm run read-local-memory
 npm run seed-v2
+
+# Export memory assets (chat-memory) to a portable ZIP bundle (issue #779, step 1)
+npm run build:export-memory
+npm run export-memory -- --data-dir "$HOME/.memory-tencentdb/memory-tdai" --out ./memory-backup.zip
 ```
 
 ## Security recommendations
