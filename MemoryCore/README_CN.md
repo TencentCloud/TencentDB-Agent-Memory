@@ -275,6 +275,8 @@ Gateway 按以下优先级加载配置：
 | `TDAI_LLM_API_KEY` | 空 | LLM API Key |
 | `TDAI_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API 地址 |
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM 模型 |
+| `TDAI_LLM_WINDOW` | `off` | `on` 时把 LLM 提炼任务（L1/L2/L3/flush）限制在时间窗内，窗口外延迟执行而非失败 |
+| `TDAI_LLM_WINDOW_HOURS` | `9-18` | `TDAI_LLM_WINDOW=on` 时工作日关闭的小时区间；周末始终开放 |
 | `TDAI_SKILL_ENABLED` | 配置文件值 | 强制启用 Skill 模块 |
 
 配置模板：

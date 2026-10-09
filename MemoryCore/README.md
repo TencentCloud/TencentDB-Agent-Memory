@@ -207,6 +207,8 @@ Environment variables override file configuration. Common settings:
 | `TDAI_LLM_API_KEY` | Empty | LLM API key |
 | `TDAI_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API URL |
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM model |
+| `TDAI_LLM_WINDOW` | `off` | `on` restricts LLM pipeline tasks (L1/L2/L3/flush) to a time window, deferring them outside it instead of failing |
+| `TDAI_LLM_WINDOW_HOURS` | `9-18` | Weekday hours kept closed when `TDAI_LLM_WINDOW=on`; weekends always stay open |
 | `TDAI_SKILL_ENABLED` | File configuration | Force-enable the Skill module |
 
 Configuration templates:
