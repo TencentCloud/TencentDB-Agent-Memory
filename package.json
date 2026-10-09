@@ -81,6 +81,7 @@
     "ai": "^6.0.164",
     "js-tiktoken": "^1.0.18",
     "json5": "^2.2.3",
+    "pg": "^8.16.3",
     "sqlite-vec": "0.1.7-alpha.2",
     "tsx": "^4.21.0",
     "undici": "^8.1.0",
@@ -120,6 +121,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
+    "@types/pg": "^8.15.6",
     "@vitest/coverage-v8": "^4.1.2",
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
