@@ -264,7 +264,7 @@ export interface OffloadConfig {
   backendUrl?: string;
   /** Backend API authentication token */
   backendApiKey?: string;
-  /** Backend call timeout in milliseconds (default: 10000) */
+  /** Backend call timeout in milliseconds (default: 120000) */
   backendTimeoutMs: number;
   /**
    * Offload data retention days. Sessions/refs/mmds older than this are cleaned up.
