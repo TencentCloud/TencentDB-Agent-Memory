@@ -94,6 +94,14 @@ export class V3HttpTransport {
         );
       }
 
+      if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+        throw new TDAMError(
+          response.ok ? -1 : response.status,
+          `HTTP ${response.status} returned an invalid response envelope`,
+          headerRequestId,
+        );
+      }
+
       const businessCode = typeof envelope.code === "number" ? envelope.code : undefined;
       if (!response.ok || businessCode !== 0) {
         const code = businessCode && businessCode !== 0 ? businessCode : response.status;

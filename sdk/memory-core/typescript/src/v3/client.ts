@@ -234,11 +234,12 @@ export class MemoryClient {
     // 同时接受 session_ids（推荐）与已废弃的单数 session_id，归一成数组。
     const sessionIds = normalizeDeleteIds("session_ids", params.session_ids, 100);
     const legacySingle = params.session_id;
-    if (legacySingle !== undefined && !legacySingle) {
+    if (legacySingle !== undefined && (typeof legacySingle !== "string" || !legacySingle.trim())) {
       throw new ParamError("session_id must be a non-empty string");
     }
-    const mergedSessions = legacySingle
-      ? [...new Set([...(sessionIds ?? []), legacySingle])]
+    // Apply the limit to the final request, including the legacy single ID.
+    const mergedSessions = legacySingle !== undefined
+      ? normalizeDeleteIds("session_ids", [...(sessionIds ?? []), legacySingle], 100)
       : sessionIds;
 
     if (!messageIds?.length && !mergedSessions?.length) {
