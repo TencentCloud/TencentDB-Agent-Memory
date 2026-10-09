@@ -52,6 +52,8 @@ export interface CaptureRequest {
   session_id?: string;
   user_id?: string;
   messages?: unknown[];
+  /** Epoch ms when the captured turn started. */
+  started_at?: number;
 }
 
 export interface CaptureResponse {
