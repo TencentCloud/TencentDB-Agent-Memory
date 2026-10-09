@@ -469,12 +469,12 @@ async function postEmbeddingRequest(params: {
             `Embedding API error: HTTP ${resp.status} ${resp.statusText} — ${errBody.slice(0, 500)}`,
             resp.status,
           );
-          // Don't retry 4xx client errors (except 429 rate limit).
-          if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
-            throw err;
-          }
-          lastError = err;
-          continue;
+          // Throw rather than `continue`: the catch below owns BOTH the retry
+          // classification (isClientError() => 4xx except 429 is fatal) and the
+          // exponential backoff. A `continue` here would bypass the catch, so
+          // 429/5xx responses would re-fire every remaining attempt back-to-back
+          // with no delay — precisely wrong against a rate-limited server.
+          throw err;
         }
         return await resp.json();
       } finally {
@@ -623,6 +623,13 @@ export class OpenAIEmbeddingService implements EmbeddingService {
 
     if (!json.data || !Array.isArray(json.data)) {
       throw new Error("Embedding API returned unexpected format: missing 'data' array");
+    }
+
+    // Validate returned count matches requested count
+    if (json.data.length !== texts.length) {
+      throw new Error(
+        `Embedding API returned ${json.data.length} embeddings for ${texts.length} inputs — count mismatch`,
+      );
     }
 
     // Sort by index to ensure correct order, then sanitize+normalize for consistency with local provider.
