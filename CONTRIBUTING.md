@@ -60,7 +60,7 @@ openclaw plugins install --link .
 
 ## Submitting a Pull Request
 
-1. **Fork** this repository and create your feature branch from `main`.
+1. **Fork** this repository and create your feature branch from the branch you intend to target (see [Branch Information](#branch-information)).
 2. **Make changes** — keep each commit focused and atomic.
 3. **Test** — ensure existing functionality is not affected.
 4. **Update documentation** — if changes affect user-facing behavior, update the README or related docs.
@@ -70,7 +70,13 @@ openclaw plugins install --link .
 
 | Branch | Purpose |
 |--------|---------|
-| `main` | Default branch, PR target |
+| `feat/server_team` | Default branch |
+| `feat/server` | |
+| `main` | The only branch CI (`.github/workflows/pr-ci.yml`) runs on |
+
+Target the branch your change applies to, and mention in the PR description
+whether it also applies to the other two — changes relevant to all three are
+currently landed separately on each.
 
 ## Commit Message Convention
 
