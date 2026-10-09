@@ -13,6 +13,7 @@
     "dev:mcp": "tsx src/mcp/server.ts",
     "build": "tsdown",
     "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "db:generate": "drizzle-kit generate",

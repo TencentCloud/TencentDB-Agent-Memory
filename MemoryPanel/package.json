@@ -12,6 +12,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "test:watch": "vitest",
     "generate:meta-openapi": "tsx scripts/generate-meta-openapi.ts",
     "test:panel:e2e": "tests/panel/e2e-panel-meta.sh",

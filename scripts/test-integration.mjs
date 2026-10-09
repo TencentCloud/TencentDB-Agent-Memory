@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Run every offline unit suite; report all failures instead of stopping early. */
+/** Run every local integration suite; report all failures instead of stopping early. */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -11,11 +11,11 @@ const suites = [
   'MemoryPanel',
   'MemoryKnowledge',
   'sdk/memory-core/typescript',
-].map((directory) => ({ directory, command: 'npm', args: ['test'] }));
+].map((directory) => ({ directory, command: 'npm', args: ['run', 'test:integration'] }));
 suites.push({
   directory: 'sdk/memory-core/python',
   command: process.env.PYTHON || 'python3',
-  args: ['-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-m', 'not integration'],
+  args: ['-m', 'pytest', '-q', '-p', 'no:cacheprovider', '-m', 'integration'],
 });
 
 const failures = [];
@@ -35,5 +35,5 @@ if (failures.length) {
   console.error(`\nFailed suites: ${failures.join(', ')}`);
   process.exitCode = 1;
 } else {
-  console.log(`\nAll ${suites.length} unit suites passed.`);
+  console.log(`\nAll ${suites.length} integration suites passed.`);
 }

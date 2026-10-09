@@ -250,8 +250,8 @@ export class WikiService {
    * SerialQueue 里新旧任务是同一个 wiki_id key。若只判 "是否有标记"，
    * 新任务 runBuild 入口检查点会把自己也当成"被中止"直接 abort，
    * 导致 wiki 卡在 draft、ingest 永不执行。带上 version 后：
-   *   - 旧任务携带 version=N，标记里是 N → 命中，中止；
-   *   - 新任务携带 version=N+1，标记里仍是 N → 不命中，正常执行。
+   *   - 标记是取消版本的上界：此前仍在运行或排队的任务都需中止；
+   *   - 新任务携带 version=N+1，标记里是 N → 不命中，正常执行。
    *
    * delete() 触发时用 -1 作哨兵值（匹配任意代际，因为行会被硬删，
    * 后续所有排队任务都该中止）。
@@ -433,7 +433,7 @@ export class WikiService {
    *
    * 双判据（覆盖 delete-during-run 与 delete-already-done 两种时序）：
    *   1. 代际化 cancelled 标记命中：标记代际为 -1（delete 哨兵，匹配任意代际），
-   *      或等于本任务入队时的 version（replace 精确命中旧代际）；
+   *      或不小于本任务入队时的 version（replace 中止此前所有旧代际）；
    *   2. 行已不在库。
    *
    * 代际比对让 replace 入队的**新任务不会被自己触发的标记误伤**。
@@ -442,7 +442,7 @@ export class WikiService {
     const marked = this.cancelled.get(wikiId);
     const cancelledHit =
       marked !== undefined &&
-      (marked === WikiService.CANCEL_ALL_VERSIONS || marked === version);
+      (marked === WikiService.CANCEL_ALL_VERSIONS || version <= marked);
     return cancelledHit || this.store.getWikiById(serviceId, wikiId) === null;
   }
 
@@ -456,13 +456,13 @@ export class WikiService {
    * opts.preserveRaw=false 或省略（原 delete 触发）：
    *   evict 读连接池 + 硬删元数据行 + rmSync 磁盘目录（cleanupResources 三件套）。
    *
-   * 两种分支都会移除 cancelled 标记。
+   * 尚有更新的已取消代际排队时保留标记，直到它也完成收尾。
    */
   private finishCancelled(
     serviceId: string,
     teamId: string,
     wikiId: string,
-    opts?: { preserveRaw?: boolean },
+    opts?: { preserveRaw?: boolean; buildVersion?: number },
   ): void {
     if (opts?.preserveRaw) {
       // 仅当"当前行仍是自己这一代（version <= 被取消代际）"才复位到 draft。
@@ -494,7 +494,11 @@ export class WikiService {
       this.cleanupResources(serviceId, teamId, wikiId);
       this.logger?.info?.(`[wiki] ${wikiId} build aborted (deleted during processing)`);
     }
-    this.cancelled.delete(wikiId);
+    const marked = this.cancelled.get(wikiId);
+    if (marked === WikiService.CANCEL_ALL_VERSIONS || marked === undefined
+      || opts?.buildVersion === undefined || marked <= opts.buildVersion) {
+      this.cancelled.delete(wikiId);
+    }
   }
 
   /**
@@ -1256,8 +1260,16 @@ export class WikiService {
     if (this.isDeleted(serviceId, wikiId, version)) {
       this.finishCancelled(serviceId, teamId, wikiId, {
         preserveRaw: this.isCancelledByReplace(serviceId, wikiId),
+        buildVersion: version,
       });
       return;
+    }
+    // FIFO guarantees older builds have finished before this one starts. Raw
+    // uploads can advance the version without enqueuing a build, so the cancel
+    // cutoff may not correspond to a task that could clear it during cleanup.
+    const cutoff = this.cancelled.get(wikiId);
+    if (cutoff !== undefined && cutoff !== WikiService.CANCEL_ALL_VERSIONS && cutoff < version) {
+      this.cancelled.delete(wikiId);
     }
     this.store.updateWikiStatus(serviceId, wikiId, {
       status: "processing",
@@ -1281,6 +1293,7 @@ export class WikiService {
       if (this.isDeleted(serviceId, wikiId, version)) {
         this.finishCancelled(serviceId, teamId, wikiId, {
           preserveRaw: this.isCancelledByReplace(serviceId, wikiId),
+          buildVersion: version,
         });
         return;
       }
@@ -1305,6 +1318,7 @@ export class WikiService {
       if (this.isDeleted(serviceId, wikiId, version)) {
         this.finishCancelled(serviceId, teamId, wikiId, {
           preserveRaw: this.isCancelledByReplace(serviceId, wikiId),
+          buildVersion: version,
         });
         return;
       }
