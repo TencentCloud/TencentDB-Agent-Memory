@@ -34,6 +34,14 @@ import type {
 
 const TAG = "[memory-tdai] [seed]";
 
+/**
+ * Flush budget for `pipeline.destroy()` in seed (ms). Unlike the live gateway —
+ * whose 2s default is bounded by the 3s gateway_stop hook — seed teardown has
+ * no such race, so allow enough time for the final L2 scene + L3 persona work
+ * to flush before the store closes. One LLM round-trip is ~10–15s; 30s covers it.
+ */
+const SEED_DESTROY_TIMEOUT_MS = 30_000;
+
 // ============================
 // Seed pipeline options
 // ============================
@@ -67,9 +75,27 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
   // Parse config — all values come from pluginConfig (or parseConfig defaults)
   const cfg = parseConfig(pluginConfig);
 
+  // ── Seed-only pacing overrides ───────────────────────────────────────────
+  // Seed feeds rounds synchronously and pauses every `everyNConversations`
+  // rounds to wait for that L1 batch to drain (`waitForL1Idle`). Two live-mode
+  // defaults sabotage that wait and make seeds ~10x slower than the actual LLM
+  // work:
+  //   1. `enableWarmup` doubles the L1 threshold (1→2→4→8…), so a fixed 5-round
+  //      seed batch stops lining up with the threshold — L1 doesn't fire at the
+  //      boundary and `conversation_count` stays > 0.
+  //   2. `l1IdleTimeoutSeconds` defaults to 600s, so the idle-timer fallback is
+  //      far longer than waitForL1Idle's 120s/300s caps.
+  // The result: at most boundaries waitForL1Idle never sees idle and burns its
+  // full cap (~100s) doing nothing. Pin the threshold to everyN (warmup off) so
+  // L1 fires exactly at each boundary, and shrink the idle timer so the tail /
+  // any missed boundary still drains in seconds. Both are seed-local — the live
+  // gateway pipeline is untouched.
+  cfg.pipeline.enableWarmup = false;
+  cfg.pipeline.l1IdleTimeoutSeconds = Math.min(cfg.pipeline.l1IdleTimeoutSeconds, 5);
+
   logger.info(
     `${TAG} Creating seed pipeline: outputDir=${outputDir}, ` +
-    `everyN=${cfg.pipeline.everyNConversations}, l1Idle=${cfg.pipeline.l1IdleTimeoutSeconds}s, ` +
+    `everyN=${cfg.pipeline.everyNConversations}, l1Idle=${cfg.pipeline.l1IdleTimeoutSeconds}s, warmup=off, ` +
     `l2Delay=${cfg.pipeline.l2DelayAfterL1Seconds}s, l2Min=${cfg.pipeline.l2MinIntervalSeconds}s, l2Max=${cfg.pipeline.l2MaxIntervalSeconds}s`,
   );
 
@@ -96,13 +122,17 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
     logger.info(`${TAG} Seed using standalone LLM: model=${cfg.llm.model}`);
   }
 
-  // Use shared factory for everything: store init, L1 runner, persister, destroy
+  // Use shared factory for everything: store init, L1 runner, persister, destroy.
+  // Seed has no gateway_stop hook racing it, so give destroy a generous flush
+  // budget — the live default (2s) is tuned to stay under that hook and would
+  // cut off the final L2/L3 work (persona, last scene) mid-flight.
   const pipeline = await createPipeline({
     pluginDataDir: outputDir,
     cfg,
     openclawConfig,
     logger,
     l1LlmRunner,
+    destroyTimeoutMs: SEED_DESTROY_TIMEOUT_MS,
   });
 
   // Wire L2 runner via shared factory (same logic as index.ts live runtime)

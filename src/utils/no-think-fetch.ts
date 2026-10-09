@@ -8,7 +8,9 @@
  *
  * Strategies:
  * - `"vllm"`:      vLLM / SGLang — `chat_template_kwargs.enable_thinking = false`
- * - `"deepseek"`:  DeepSeek official API — top-level `enable_thinking: false`
+ * - `"deepseek"`:  DeepSeek V3-series API — top-level `enable_thinking: false`
+ * - `"deepseek-v4"`: DeepSeek V4 hybrid models (e.g. deepseek-v4-flash) — they
+ *                  ignore `enable_thinking`; honor `thinking: { type: "disabled" }`
  * - `"dashscope"`: Alibaba DashScope (Qwen) — top-level `enable_thinking: false`
  * - `"openai"`:    OpenAI o-series — `reasoning_effort: "low"` (cannot fully disable)
  * - `"anthropic"`: Anthropic Claude — `thinking: { type: "disabled" }`
@@ -22,6 +24,7 @@ export type DisableThinkingStrategy =
   | false
   | "vllm"
   | "deepseek"
+  | "deepseek-v4"
   | "dashscope"
   | "openai"
   | "anthropic"
@@ -29,7 +32,7 @@ export type DisableThinkingStrategy =
   | "gemini";
 
 export const VALID_DISABLE_THINKING_STRATEGIES: readonly DisableThinkingStrategy[] = [
-  false, "vllm", "deepseek", "dashscope", "openai", "anthropic", "kimi", "gemini",
+  false, "vllm", "deepseek", "deepseek-v4", "dashscope", "openai", "anthropic", "kimi", "gemini",
 ] as const;
 
 /** Check if a value is a valid DisableThinkingStrategy. */
@@ -52,7 +55,7 @@ export function normalizeDisableThinking(raw: boolean | string | undefined): Dis
   if (isValidDisableThinkingStrategy(raw)) return raw;
   console.warn(
     `[memory-tdai] Unknown disableThinking strategy "${raw}", ` +
-    `valid values: false, true, "vllm", "deepseek", "dashscope", "openai", "anthropic", "kimi", "gemini". ` +
+    `valid values: false, true, "vllm", "deepseek", "deepseek-v4", "dashscope", "openai", "anthropic", "kimi", "gemini". ` +
     `Thinking will NOT be disabled.`,
   );
   return false;
@@ -70,6 +73,13 @@ function applyVllm(body: Record<string, unknown>): void {
 
 function applyDeepSeek(body: Record<string, unknown>): void {
   body.enable_thinking = false;
+}
+
+// DeepSeek V4 hybrid models (deepseek-v4-flash, …) ignore the top-level
+// `enable_thinking` flag the V3 API used; they only suppress reasoning when
+// given the object form `thinking: { type: "disabled" }` (verified 2026-06).
+function applyDeepSeekV4(body: Record<string, unknown>): void {
+  body.thinking = { type: "disabled" };
 }
 
 function applyDashScope(body: Record<string, unknown>): void {
@@ -94,6 +104,7 @@ const STRATEGY_TRANSFORMERS: Record<
 > = {
   vllm: applyVllm,
   deepseek: applyDeepSeek,
+  "deepseek-v4": applyDeepSeekV4,
   dashscope: applyDashScope,
   openai: applyOpenAI,
   anthropic: applyAnthropic,
