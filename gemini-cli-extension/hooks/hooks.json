@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "name": "memory-recall",
+            "type": "command",
+            "command": "node ${extensionPath}/hook.mjs",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "memory-capture",
+            "type": "command",
+            "command": "node ${extensionPath}/hook.mjs",
+            "timeout": 10000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "name": "memory-flush",
+            "type": "command",
+            "command": "node ${extensionPath}/hook.mjs",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}
