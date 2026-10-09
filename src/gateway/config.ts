@@ -78,8 +78,9 @@ export interface GatewayConfig {
  * Resolution order for config file:
  * 1. `TDAI_GATEWAY_CONFIG` env var (explicit path)
  * 2. `./tdai-gateway.yaml` or `./tdai-gateway.json` in CWD
- * 3. `<dataDir>/tdai-gateway.yaml` or `<dataDir>/tdai-gateway.json`
- * 4. Pure environment-variable config (no file)
+ * 3. `$TDAI_DATA_DIR/tdai-gateway.yaml` or `.json` (when `TDAI_DATA_DIR` is set)
+ * 4. `<default dataDir>/tdai-gateway.yaml` or `<default dataDir>/tdai-gateway.json`
+ * 5. Pure environment-variable config (no file)
  */
 export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayConfig {
   let fileConfig: Record<string, unknown> = {};
@@ -177,7 +178,24 @@ function resolveConfigPath(): string | null {
     if (fs.existsSync(p)) return p;
   }
 
-  // 3. Default data dir
+  // 3. Explicit data dir. `TDAI_DATA_DIR` relocates the gateway's data storage
+  //    (see loadGatewayConfig), so a config file kept next to that data must be
+  //    found too — otherwise the gateway silently runs on defaults while its
+  //    data dir env var is honoured. Mirrors the `~/` expansion applied to
+  //    `data.baseDir`.
+  const explicitDataDir = env("TDAI_DATA_DIR");
+  if (explicitDataDir) {
+    const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
+    const dir = explicitDataDir.startsWith("~/")
+      ? path.join(home, explicitDataDir.slice(2))
+      : explicitDataDir;
+    for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
+      const p = path.join(dir, name);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+
+  // 4. Default data dir
   const dataDir = resolveDefaultDataDir();
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(dataDir, name);
