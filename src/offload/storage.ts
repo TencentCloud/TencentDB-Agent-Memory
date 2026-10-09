@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import type { OffloadEntry, PluginLogger } from "./types.js";
+import { sanitizeMmdFilename } from "./mmd-path.js";
 
 /** Default root data directory (parent of all agent subdirectories) */
 export const DEFAULT_DATA_ROOT = join(homedir(), ".openclaw", "context-offload");
@@ -571,7 +572,7 @@ export async function writeMmd(
   filename: string,
   content: string,
 ): Promise<void> {
-  const filePath = join(ctx.mmdsDir, filename);
+  const filePath = join(ctx.mmdsDir, sanitizeMmdFilename(filename));
   await writeFile(filePath, content, "utf-8");
 }
 
@@ -581,8 +582,9 @@ export async function patchMmd(
   filename: string,
   blocks: MmdReplaceBlock[],
 ): Promise<boolean> {
-  const filePath = join(ctx.mmdsDir, filename);
-  const original = await readMmd(ctx, filename);
+  const safeFilename = sanitizeMmdFilename(filename);
+  const filePath = join(ctx.mmdsDir, safeFilename);
+  const original = await readMmd(ctx, safeFilename);
   if (original === null) return false;
   const lines = original.split("\n");
   let allValid = true;
@@ -615,7 +617,7 @@ export async function readMmd(
   ctx: StorageContext,
   filename: string,
 ): Promise<string | null> {
-  const filePath = join(ctx.mmdsDir, filename);
+  const filePath = join(ctx.mmdsDir, sanitizeMmdFilename(filename));
   if (!existsSync(filePath)) return null;
   return readFile(filePath, "utf-8");
 }
@@ -625,7 +627,7 @@ export async function deleteMmd(
   ctx: StorageContext,
   filename: string,
 ): Promise<boolean> {
-  const filePath = join(ctx.mmdsDir, filename);
+  const filePath = join(ctx.mmdsDir, sanitizeMmdFilename(filename));
   if (!existsSync(filePath)) return false;
   await unlink(filePath);
   return true;
