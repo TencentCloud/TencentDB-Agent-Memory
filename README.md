@@ -384,6 +384,28 @@ memory:
 ```
 
 
+### 4. Google ADK (Agent Development Kit)
+
+Python agents built on [Google ADK](https://google.github.io/adk-docs/) can
+use the engine through a drop-in `BaseMemoryService` implementation that
+talks to the same Gateway sidecar as Hermes:
+
+```python
+from memory_tencentdb_adk import TdaiMemoryService
+
+runner = Runner(
+    agent=agent,
+    app_name="my-app",
+    session_service=session_service,
+    memory_service=TdaiMemoryService(),  # Gateway on 127.0.0.1:8420
+)
+```
+
+See [`adk-plugin/README.md`](./adk-plugin/README.md) for setup, the
+architecture/data-flow diagram, configuration, tests, and a guide to
+writing adapters for further platforms.
+
+
 ## 🔒 Gateway Security (optional)
 
 The Hermes Gateway listens on `:8420` and exposes capture / search / recall HTTP endpoints. Two opt-in switches let you turn it from "open localhost sidecar" into "authenticated network service". **Both default to off so existing deployments keep working unchanged.**
