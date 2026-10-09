@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "/absolute/path/to/TencentDB-Agent-Memory/node_modules/tsx/dist/cli.mjs",
+              "/absolute/path/to/TencentDB-Agent-Memory/src/adapters/claude-code/cli.ts"
+            ],
+            "timeout": 5,
+            "statusMessage": "Recalling TencentDB Agent Memory"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "/absolute/path/to/TencentDB-Agent-Memory/node_modules/tsx/dist/cli.mjs",
+              "/absolute/path/to/TencentDB-Agent-Memory/src/adapters/claude-code/cli.ts"
+            ],
+            "timeout": 5,
+            "statusMessage": "Capturing TencentDB Agent Memory"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "/absolute/path/to/TencentDB-Agent-Memory/node_modules/tsx/dist/cli.mjs",
+              "/absolute/path/to/TencentDB-Agent-Memory/src/adapters/claude-code/cli.ts"
+            ],
+            "timeout": 5,
+            "statusMessage": "Flushing TencentDB Agent Memory"
+          }
+        ]
+      }
+    ]
+  }
+}
