@@ -115,11 +115,13 @@ export class LocalLlmClient {
     if (!result) {
       this.logger?.warn?.(`${TAG} L1.5: failed to parse judgment from LLM response (${raw.length} chars)`);
       // Return all-null to trigger normalizeJudgment's "LLM unavailable" path
+      // (which checks `== null` on each field). Returning `false` here would be
+      // treated as a real no-op judgment and never trigger the retry path.
       return {
-        taskCompleted: false,
-        isContinuation: false,
-        isLongTask: false,
-      } as L15Response;
+        taskCompleted: null,
+        isContinuation: null,
+        isLongTask: null,
+      } as unknown as L15Response;
     }
 
     return result as L15Response;
