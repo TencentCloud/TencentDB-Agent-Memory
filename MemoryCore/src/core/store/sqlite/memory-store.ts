@@ -260,6 +260,12 @@ export class VectorStore implements IMemoryStore {
   private stmtQueryBySessionKeySince!: StatementSync;
   private stmtQueryAll!: StatementSync;
   private stmtQueryAllSince!: StatementSync;
+  /**
+   * Primary-key lookups for `queryL1Records({ recordIds })`. Keyed by the number
+   * of ids because `record_id IN (...)` needs one placeholder per id; the arity
+   * is bounded by the caller (VDB `documentIds`, max 20) so the map stays tiny.
+   */
+  private stmtQueryByRecordIds = new Map<number, StatementSync>();
 
   // Prepared statements — L0 (initialized in init())
   private stmtL0UpsertMeta!: StatementSync;
@@ -1634,10 +1640,34 @@ export class VectorStore implements IMemoryStore {
   }
 
   /**
-   * Query L1 records with optional session and time filters.
+   * Lazily-build (and memoize) the `record_id IN (...)` statement for a given
+   * arity. `record_id` is the L1 primary key, so this is the only shape that
+   * can answer a single-record lookup without scanning the table.
+   */
+  private stmtForRecordIds(count: number): StatementSync {
+    const cached = this.stmtQueryByRecordIds.get(count);
+    if (cached) return cached;
+    const placeholders = new Array(count).fill("?").join(", ");
+    const stmt = this.db.prepare(`
+      SELECT record_id, content, type, priority, scene_name, session_key, session_id,
+        team_id, task_id, user_id, agent_id, version,
+        timestamp_str, timestamp_start, timestamp_end,
+        created_time, updated_time, metadata_json
+      FROM l1_records
+      WHERE record_id IN (${placeholders})
+      ORDER BY updated_time ASC
+    `);
+    this.stmtQueryByRecordIds.set(count, stmt);
+    return stmt;
+  }
+
+  /**
+   * Query L1 records with optional primary-key, session and time filters.
    *
-   * Uses the composite index `idx_l1_session_updated(session_id, updated_time)`
-   * for efficient filtering. All timestamps are compared as UTC ISO 8601 strings.
+   * `recordIds` is answered by a primary-key lookup on `record_id` (matching
+   * the tcvdb `documentIds` and mongodb `_id: { $in }` paths); every other
+   * predicate uses the `idx_l1_session_updated(session_id, updated_time)`
+   * index. All timestamps are compared as UTC ISO 8601 strings.
    *
    * **Fault-tolerant**: returns an empty array on any error (degraded mode, DB issues).
    */
@@ -1651,8 +1681,13 @@ export class VectorStore implements IMemoryStore {
 
       let raw: Record<string, unknown>[];
 
-      // Priority: sessionId > sessionKey (sessionId is more specific)
-      if (sessionId && updatedAfter) {
+      // Priority: primary key (recordIds) > sessionId > sessionKey > updatedAfter > all.
+      // recordIds is a primary-key lookup and must never fall through to a
+      // table scan: callers (gateway /atomic/update, l1-writer reinforcement)
+      // take `rows[0]` and rely on it being the requested record.
+      if (filter?.recordIds && filter.recordIds.length > 0) {
+        raw = this.stmtForRecordIds(filter.recordIds.length).all(...filter.recordIds) as Record<string, unknown>[];
+      } else if (sessionId && updatedAfter) {
         raw = this.stmtQueryBySessionIdSince.all(sessionId, updatedAfter) as Record<string, unknown>[];
       } else if (sessionId) {
         raw = this.stmtQueryBySessionId.all(sessionId) as Record<string, unknown>[];
@@ -1687,7 +1722,7 @@ export class VectorStore implements IMemoryStore {
       if (taskId !== undefined) rows = rows.filter((r) => r.task_id === taskId);
 
       this.logger?.info(
-        `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
+        `${TAG} [L1-query] filter={recordIds=${filter?.recordIds?.length ?? 0}, sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
         `returned ${rows.length} record(s)`,
       );
       return rows;
@@ -3674,6 +3709,15 @@ export class VectorStore implements IMemoryStore {
       ORDER BY operated_at_ms ${order}, setting_log_id ${order}
       LIMIT ? OFFSET ?
     `).all(...args, limit, offset) as unknown as MemoryPromptSettingLogRecord[];
+  }
+
+  /**
+   * Whether `close()` has been called. Exposed so that caches (notably
+   * `pipeline-factory.ts:initStores`) can drop a torn-down store instead of
+   * serving one whose statements are already finalized.
+   */
+  isClosed(): boolean {
+    return this.closed;
   }
 
   /**

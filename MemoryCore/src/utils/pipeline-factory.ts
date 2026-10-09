@@ -255,12 +255,49 @@ export interface StoreInitResult {
 const _storeInitCache = new Map<string, Promise<StoreInitResult>>();
 
 /**
+ * Resolved bundles, keyed the same way as `_storeInitCache`. The promise cache
+ * alone cannot answer "is the cached store still usable?" — only a settled
+ * value can. Kept alongside it so `initStores` can self-heal a cache poisoned
+ * by a failed or torn-down init instead of serving it forever.
+ */
+const _resolvedBundles = new Map<string, StoreInitResult>();
+
+/**
+ * Whether a cached bundle is still usable.
+ *
+ * Three ways a cached bundle goes bad without anyone calling `resetStores()`:
+ *   - `vectorStore` is `undefined` — `_doInitStores()` swallowed an init error;
+ *   - the store reports `degraded` — sqlite-vec failed to load, schema init
+ *     failed, or the store refused to proceed;
+ *   - the store was closed elsewhere (compaction teardown, a restart race)
+ *     and its statements are finalized.
+ *
+ * Serving any of those makes every subsequent `initStores()` return the same
+ * broken bundle: vector/FTS recall and embedding are permanently disabled and
+ * reads fail with "statement has been finalized" / "database is not open"
+ * until the whole process restarts.
+ */
+function isBundleHealthy(bundle: StoreInitResult | undefined): boolean {
+  const store = bundle?.vectorStore;
+  if (!store) return false;
+  if (store.isDegraded()) return false;
+  // Optional on IMemoryStore — backends that do not expose it simply never
+  // look closed.
+  if (store.isClosed?.() === true) return false;
+  return true;
+}
+
+/**
  * Initialize store backend and (optionally) EmbeddingService.
  *
  * **Once-async semantics per dataDir**: the first call for a given
  * `pluginDataDir` creates the store and caches the result; subsequent
  * calls with the same dir return the cached Promise immediately.
  * Call `resetStores()` during shutdown to clear the cache.
+ *
+ * A cached bundle that is no longer usable is discarded and re-initialized, so
+ * a transient failure at first contact does not disable the store for the
+ * remaining lifetime of the process.
  *
  * Supports both SQLite (sync init) and TCVDB (async init) backends.
  */
@@ -270,8 +307,26 @@ export function initStores(
   logger: PipelineLogger,
 ): Promise<StoreInitResult> {
   const key = pluginDataDir;
+
+  if (_storeInitCache.has(key)) {
+    const resolved = _resolvedBundles.get(key);
+    if (resolved && !isBundleHealthy(resolved)) {
+      logger?.warn(
+        `${TAG} Cached store for ${key} is closed or degraded — discarding it and re-initializing`,
+      );
+      _storeInitCache.delete(key);
+      _resolvedBundles.delete(key);
+    }
+  }
+
   if (!_storeInitCache.has(key)) {
-    _storeInitCache.set(key, _doInitStores(cfg, pluginDataDir, logger));
+    _storeInitCache.set(
+      key,
+      _doInitStores(cfg, pluginDataDir, logger).then((result) => {
+        _resolvedBundles.set(key, result);
+        return result;
+      }),
+    );
   }
   return _storeInitCache.get(key)!;
 }
@@ -289,8 +344,10 @@ export function initStores(
 export function resetStores(pluginDataDir?: string): void {
   if (pluginDataDir) {
     _storeInitCache.delete(pluginDataDir);
+    _resolvedBundles.delete(pluginDataDir);
   } else {
     _storeInitCache.clear();
+    _resolvedBundles.clear();
   }
 }
 
