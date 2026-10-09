@@ -383,6 +383,33 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Claude Code and Codex (MCP)
+
+The MCP stdio adapter exposes recall, capture, L1/L0 search, health, and
+session flush tools to both Claude Code and Codex through the same binary.
+Start the Gateway first, then register the adapter:
+
+```bash
+# Claude Code
+claude mcp add --scope project --transport stdio \
+  --env TDAI_MCP_GATEWAY_URL=http://127.0.0.1:8420 \
+  --env TDAI_MCP_SESSION_KEY=my-project \
+  tencentdb-memory \
+  -- npx -y --package @tencentdb-agent-memory/memory-tencentdb tdai-memory-mcp
+
+# Codex
+codex mcp add tencentdb-memory \
+  --env TDAI_MCP_GATEWAY_URL=http://127.0.0.1:8420 \
+  --env TDAI_MCP_SESSION_KEY=my-project \
+  -- npx -y --package @tencentdb-agent-memory/memory-tencentdb tdai-memory-mcp
+```
+
+MCP has no universal before-prompt or turn-completed hooks, so recall and
+capture are model-initiated tools. The server advertises usage instructions;
+for deterministic behavior, add the same policy to `CLAUDE.md` or `AGENTS.md`.
+See the [cross-platform adapter guide](./docs/cross-platform-adapters.md) for
+architecture, data flow, environment variables, and extension practices.
+
 
 ## 🔒 Gateway Security (optional)
 
@@ -526,6 +553,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | OpenClaw plugin | Automatically captures, extracts, and recalls memory once installed |
 | Hermes Gateway adapter | `TdaiCore + HostAdapter`, decoupled from the host framework |
+| MCP adapter | Shared recall/capture/search tools for Claude Code and Codex |
 | Local backend | `SQLite + sqlite-vec`, ready to use out of the box |
 | Hybrid retrieval | BM25 + vector + RRF — supports both keyword and semantic recall |
 | Agent tools | `tdai_memory_search` / `tdai_conversation_search` |
@@ -536,6 +564,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/cross-platform-adapters.md`](./docs/cross-platform-adapters.md) | Adapter architecture, MCP setup, and platform comparison |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
