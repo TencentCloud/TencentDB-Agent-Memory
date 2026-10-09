@@ -17,3 +17,17 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Dify Workflow adapter
+export { DifyWorkflowMemoryAdapter, createDifyWorkflowMemoryAdapter } from "./dify/index.js";
+export type {
+  DifyCaptureResult,
+  DifyGatewayHttpFetch,
+  DifyGatewayHttpOptions,
+  DifyGatewayHttpRequestInit,
+  DifyGatewayHttpResponse,
+  DifyGatewayMemoryPort,
+  DifyRecallResult,
+  DifyWorkflowInput,
+  DifyWorkflowMemoryAdapterOptions,
+} from "./dify/index.js";
