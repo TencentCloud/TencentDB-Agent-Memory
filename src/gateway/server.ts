@@ -237,6 +237,13 @@ export class TdaiGateway {
     const method = req.method?.toUpperCase() ?? "GET";
     const pathname = url.pathname;
 
+    // Security headers (OWASP A05:2021)
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-XSS-Protection", "1; mode=block");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
     // Apply CORS headers based on configured allow-list (empty → no headers).
     this.applyCorsHeaders(req, res);
 
