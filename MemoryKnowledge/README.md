@@ -94,6 +94,10 @@ pnpm dev:mcp      # MCP stdio（另开终端；需 HTTP 已起）
 pnpm typecheck
 pnpm test
 pnpm build        # tsdown → dist/
+
+# 导出 llm-wiki / code-graph 资产为可移植 ZIP（issue #779，MemoryKnowledge 侧）
+pnpm build:export-knowledge
+pnpm export-knowledge -- --data-dir ./data --out ./knowledge-backup.zip --asset all
 ```
 
 ## 可选：ClickHouse 工具调用埋点
