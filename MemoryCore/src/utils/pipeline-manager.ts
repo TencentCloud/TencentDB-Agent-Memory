@@ -252,6 +252,17 @@ export class MemoryPipelineManager {
   // Lifecycle
   private destroyed = false;
 
+  /**
+   * `true` only for the duration of `destroy()`'s flush. Outside the flush,
+   * `destroyed` alone gates new work; inside it, the layers that `_doFlush()`
+   * runs explicitly must still be able to cascade into the next layer,
+   * otherwise the last L2's L3 persona generation is dropped while `destroy()`
+   * reports a successful flush.
+   *
+   * @see triggerL3
+   */
+  private flushing = false;
+
   /** Plugin instance ID for metric reporting (set externally after async init). */
   instanceId?: string;
 
@@ -524,8 +535,11 @@ export class MemoryPipelineManager {
   /**
    * Graceful shutdown with timeout protection:
    * 1. Mark destroyed, stop accepting new work
-   * 2. Attempt to flush pending L1/L2/L3 work within DESTROY_TIMEOUT_MS
-   * 3. If flush times out or fails, persist current state for recovery on next startup
+   * 2. Flush pending L1/L2/L3 work within DESTROY_TIMEOUT_MS, draining the
+   *    L1 → L2 → L3 dependency graph to a fixed point (so an L2 the flush
+   *    itself runs can still cascade into L3)
+   * 3. If flush times out, fails, or hits the round cap, persist current state
+   *    for recovery on next startup — and say so instead of reporting success
    * 4. Pending work is never lost — it will be recovered via checkpoint on next start()
    */
   async destroy(): Promise<void> {
@@ -538,7 +552,7 @@ export class MemoryPipelineManager {
 
     try {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
+      const flushed = await Promise.race([
         this._doFlush(),
         new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => reject(new Error("destroy timeout")), this.DESTROY_TIMEOUT_MS);
@@ -546,7 +560,14 @@ export class MemoryPipelineManager {
       ]).finally(() => {
         if (timeoutId !== undefined) clearTimeout(timeoutId);
       });
-      this.logger?.info(`${TAG} Pipeline flushed successfully`);
+      if (flushed) {
+        this.logger?.info(`${TAG} Pipeline flushed successfully`);
+      } else {
+        this.logger?.warn(
+          `${TAG} Pipeline flush finished with work still pending. ` +
+          `Pending work will be recovered on next startup.`,
+        );
+      }
     } catch (err) {
       this.logger?.warn(
         `${TAG} Pipeline flush timed out or failed: ${err instanceof Error ? err.message : String(err)}. ` +
@@ -569,40 +590,99 @@ export class MemoryPipelineManager {
   }
 
   /**
-   * Internal: attempt to flush all pending pipeline work (L1 → L2 → L3).
-   * Extracted from destroy() so it can be wrapped with a timeout.
+   * Maximum number of dependency-ordered drain rounds during `destroy()`.
+   * Each round re-checks whether an upstream layer produced new downstream
+   * work; `destroy()` already blocks `advanceL2Timer` / `armL2MaxInterval`, so
+   * only an L0 backlog round can add work and a few rounds always suffice. The
+   * cap exists so a runner that re-enqueues work endlessly cannot wedge
+   * shutdown — an incomplete drain is reported instead.
    */
-  private async _doFlush(): Promise<void> {
-    // Step 1: Flush all L1 idle timers — only enqueue if there are buffered messages
-    for (const [sessionKey, timers] of this.sessionTimers) {
-      if (timers.l1Idle.pending) {
-        timers.l1Idle.cancel(); // don't fire the idle callback directly
-        const buffer = this.messageBuffers.get(sessionKey);
-        if (buffer && buffer.length > 0) {
-          this.logger?.debug?.(`${TAG} [${sessionKey}] Flush: enqueuing L1 for ${buffer.length} buffered messages`);
-          this.enqueueL1(sessionKey, "flush");
+  private readonly MAX_FLUSH_ROUNDS = 5;
+
+  /**
+   * Internal: flush all pending pipeline work, L1 → L2 → L3, draining to a
+   * fixed point. Extracted from `destroy()` so it can be wrapped with a timeout.
+   *
+   * @returns `true` when every layer ended the drain with no pending work,
+   *   `false` when the round cap was hit — `destroy()` logs a different
+   *   message for each, so a partial flush is never reported as success.
+   */
+  private async _doFlush(): Promise<boolean> {
+    this.flushing = true;
+    try {
+      for (let round = 1; ; round++) {
+        // Step 1: Flush all L1 idle timers — only enqueue if there are buffered messages
+        for (const [sessionKey, timers] of this.sessionTimers) {
+          if (timers.l1Idle.pending) {
+            timers.l1Idle.cancel(); // don't fire the idle callback directly
+            const buffer = this.messageBuffers.get(sessionKey);
+            if (buffer && buffer.length > 0) {
+              this.logger?.debug?.(`${TAG} [${sessionKey}] Flush: enqueuing L1 for ${buffer.length} buffered messages`);
+              this.enqueueL1(sessionKey, "flush");
+            }
+          }
         }
+
+        // Step 2: Wait for the L1 queue to drain. L1 must be fully drained
+        // before L2 timers are flushed, because an L1 completion arms an L2
+        // timer that this round would otherwise miss.
+        this.logger?.debug?.(`${TAG} Waiting for L1 queue to drain (size=${this.l1Queue.size})`);
+        await this.l1Queue.onIdle();
+
+        // Step 3: Flush all L2 schedule timers
+        for (const [sessionKey, timers] of this.sessionTimers) {
+          if (timers.l2Schedule.pending) {
+            this.logger?.debug?.(`${TAG} [${sessionKey}] Flush: triggering L2 schedule timer`);
+            timers.l2Schedule.flush();
+          }
+        }
+
+        // Step 4: Drain L2 and then L3, in dependency order.
+        //
+        // Awaiting both queues concurrently (the previous behaviour) is not
+        // enough: `SerialQueue.onIdle()` resolves immediately when a queue is
+        // already empty, so an idle promise captured here would settle before
+        // the L2 task above even runs — and L2's `triggerL3()` cascade is
+        // never observed. Re-checking after L2 also covers L3 work that a
+        // previously-running L2 enqueued.
+        this.logger?.debug?.(`${TAG} Waiting for queues to drain (l2=${this.l2Queue.size}, l3=${this.l3Queue.size})`);
+        await this.l2Queue.onIdle();
+        await this.l3Queue.onIdle();
+
+        // Step 5: An upstream layer that produced new downstream work needs
+        // another round — one layer going idle once is not proof that shutdown
+        // is complete.
+        if (!this.hasPendingFlushWork()) return true;
+
+        if (round >= this.MAX_FLUSH_ROUNDS) {
+          this.logger?.warn(
+            `${TAG} Flush still had work after ${round} rounds ` +
+            `(l1=${this.l1Queue.size}, l2=${this.l2Queue.size}, l3=${this.l3Queue.size}). ` +
+            `Stopping to keep shutdown bounded; pending work will be recovered on next startup.`,
+          );
+          return false;
+        }
+
+        this.logger?.debug?.(`${TAG} Flush round ${round + 1}: downstream work appeared while draining`);
       }
+    } finally {
+      this.flushing = false;
     }
+  }
 
-    // Step 2: Wait for L1 queue to drain
-    this.logger?.debug?.(`${TAG} Waiting for L1 queue to drain (size=${this.l1Queue.size})`);
-    await this.l1Queue.onIdle();
-
-    // Step 3: Flush all L2 schedule timers
+  /**
+   * Whether any pipeline layer still holds work that another drain round
+   * could complete. A queue that is momentarily empty does not count — only
+   * queued/running tasks and pending timers do.
+   */
+  private hasPendingFlushWork(): boolean {
+    if (!this.l1Queue.idle || !this.l2Queue.idle || !this.l3Queue.idle) return true;
+    if (this.l3Pending) return true;
     for (const [sessionKey, timers] of this.sessionTimers) {
-      if (timers.l2Schedule.pending) {
-        this.logger?.debug?.(`${TAG} [${sessionKey}] Flush: triggering L2 schedule timer`);
-        timers.l2Schedule.flush();
-      }
+      if (timers.l2Schedule.pending) return true;
+      if (timers.l1Idle.pending && (this.messageBuffers.get(sessionKey)?.length ?? 0) > 0) return true;
     }
-
-    // Step 4: Wait for all remaining queues to drain
-    this.logger?.debug?.(`${TAG} Waiting for queues to drain (l2=${this.l2Queue.size}, l3=${this.l3Queue.size})`);
-    await Promise.all([
-      this.l2Queue.onIdle(),
-      this.l3Queue.onIdle(),
-    ]);
+    return false;
   }
 
   // ============================
@@ -986,7 +1066,11 @@ export class MemoryPipelineManager {
   // ============================
 
   private triggerL3(): void {
-    if (this.destroyed) return;
+    // `destroy()` sets `destroyed` first and only then drains, so a bare
+    // `destroyed` check here drops the L3 cascade of every L2 the flush runs
+    // itself — the final persona is never generated while destroy() reports
+    // success. Allow the cascade for the duration of the flush only.
+    if (this.destroyed && !this.flushing) return;
 
     if (this.l3Running) {
       // L3 is in progress — mark pending so it runs again after current finishes
@@ -1014,8 +1098,9 @@ export class MemoryPipelineManager {
     }).finally(() => {
       this.l3Running = false;
 
-      // If new L2 completions happened while L3 was running, run again
-      if (this.l3Pending && !this.destroyed) {
+      // If new L2 completions happened while L3 was running, run again.
+      // Allowed during destroy()'s flush for the same reason as triggerL3().
+      if (this.l3Pending && (!this.destroyed || this.flushing)) {
         this.logger?.debug?.(`${TAG} L3 has pending work, re-running`);
         this.enqueueL3();
       }
