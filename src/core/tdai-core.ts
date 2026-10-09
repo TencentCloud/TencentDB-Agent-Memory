@@ -33,6 +33,7 @@ import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
+import { RecallCachePolicy } from "./hooks/recall-cache-policy.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
@@ -122,6 +123,15 @@ export class TdaiCore {
    */
   private readonly bgTasks = new Set<Promise<void>>();
 
+  /**
+   * Prompt-cache stability policy.
+   *
+   * Lives on the core (not inside the recall function) because its whole job is
+   * to remember what a session has already been shown across turns.  A
+   * per-call instance would reset every turn and be a no-op.
+   */
+  private readonly cachePolicy: RecallCachePolicy;
+
   constructor(opts: TdaiCoreOptions) {
     this.hostAdapter = opts.hostAdapter;
     this.cfg = opts.config;
@@ -130,6 +140,7 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
+    this.cachePolicy = new RecallCachePolicy(this.cfg.recall.cacheStability, this.logger);
   }
 
   // ============================
@@ -253,6 +264,7 @@ export class TdaiCore {
       logger: this.logger,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      cachePolicy: this.cachePolicy,
     });
 
     return result ?? {};
@@ -358,6 +370,10 @@ export class TdaiCore {
    */
   async handleSessionEnd(sessionKey: string): Promise<void> {
     if (!sessionKey) return;
+    // The conversation is over, so the frozen system context and the
+    // "already injected" set for this session are dead weight — and keeping
+    // them would wrongly suppress memories if the key were ever reused.
+    this.cachePolicy.reset(sessionKey);
     await this.storeReady?.catch(() => {});
     if (!this.scheduler) return;
     await this.scheduler.flushSession(sessionKey);
