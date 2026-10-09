@@ -191,7 +191,25 @@ export async function extractL1Memories(params: {
 
   logger?.debug?.(`${TAG} Total extracted memories: ${allExtracted.length} across ${scenes.length} scene(s)`);
 
-  if (allExtracted.length === 0) {
+  const validatedExtracted = allExtracted.filter((memory) => {
+    const sourceText = getMemorySourceText(memory, qualifiedMessages);
+    const accepted = passesPostLlmValidation(memory, sourceText);
+    if (!accepted) {
+      logger?.warn?.(
+        `${TAG} Dropping low-confidence memory not grounded in source messages: ` +
+        `"${memory.content.slice(0, 100)}${memory.content.length > 100 ? "…" : ""}"`,
+      );
+    }
+    return accepted;
+  });
+
+  if (validatedExtracted.length < allExtracted.length) {
+    logger?.debug?.(
+      `${TAG} Post-LLM validation: ${allExtracted.length} → ${validatedExtracted.length} memories`,
+    );
+  }
+
+  if (validatedExtracted.length === 0) {
     return {
       success: true,
       extractedCount: 0,
@@ -203,7 +221,7 @@ export async function extractL1Memories(params: {
   }
 
   // Limit per session
-  let extracted = allExtracted;
+  let extracted = validatedExtracted;
   if (extracted.length > maxMemoriesPerSession) {
     logger?.debug?.(`${TAG} Limiting from ${extracted.length} to ${maxMemoriesPerSession} memories per session`);
     extracted = extracted.slice(0, maxMemoriesPerSession);
@@ -526,3 +544,58 @@ function normalizeType(raw: string): MemoryType | null {
   if (lower === "preference") return "persona"; // fold preference into persona
   return null;
 }
+
+function getMemorySourceText(memory: ExtractedMemory, messages: ConversationMessage[]): string {
+  const byId = new Map(messages.map((m) => [m.id, m.content]));
+  const matchedSourceText = memory.source_message_ids
+    .map((id) => byId.get(id))
+    .filter((content): content is string => typeof content === "string" && content.length > 0)
+    .join("\n");
+
+  return matchedSourceText || messages.map((m) => m.content).join("\n");
+}
+
+function passesPostLlmValidation(memory: ExtractedMemory, sourceText: string): boolean {
+  const content = memory.content.trim();
+  if (!content) return false;
+
+  const significantTokens = extractSignificantTokens(content);
+  if (significantTokens.length === 0) return false;
+
+  const normalizedSource = normalizeForMatching(sourceText);
+  const matched = significantTokens.filter((token) => normalizedSource.includes(token));
+  return matched.length / significantTokens.length >= 0.3;
+}
+
+function extractSignificantTokens(text: string): string[] {
+  const normalized = normalizeForMatching(text);
+  const tokens = new Set<string>();
+
+  for (const word of normalized.match(/[a-z0-9]{4,}/g) ?? []) {
+    if (!ENGLISH_STOPWORDS.has(word)) tokens.add(word);
+  }
+
+  const cjkChars = Array.from(normalized.match(/[\u4e00-\u9fff]/g) ?? []);
+  for (let i = 0; i < cjkChars.length - 1; i++) {
+    tokens.add(`${cjkChars[i]}${cjkChars[i + 1]}`);
+  }
+
+  return [...tokens];
+}
+
+function normalizeForMatching(text: string): string {
+  return text.toLowerCase().normalize("NFKC");
+}
+
+const ENGLISH_STOPWORDS = new Set([
+  "about",
+  "after",
+  "also",
+  "assistant",
+  "because",
+  "from",
+  "that",
+  "this",
+  "user",
+  "with",
+]);
