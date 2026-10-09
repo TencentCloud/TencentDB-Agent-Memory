@@ -29,10 +29,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from agent.memory_provider import MemoryProvider
 
@@ -126,8 +127,54 @@ def _resolve_gateway_host(default: str = _DEFAULT_GATEWAY_HOST) -> str:
     return host or default
 
 
+# Client-side gateway API key variable priority: the namespaced alias wins
+# over the legacy name. Shared by the process-env loop and the dotenv
+# fallback loop so the two orders cannot drift apart.
+_GATEWAY_API_KEY_VARS = ("MEMORY_TENCENTDB_GATEWAY_API_KEY", "TDAI_GATEWAY_API_KEY")
+
+# Hard ceiling on one credential-pool helper call. The helper may reach
+# external secret scopes (e.g. a locked 1Password vault); a hung lookup must
+# degrade instead of stalling provider registration, which runs synchronously
+# inside is_available()/initialize().
+_DOTENV_HELPER_TIMEOUT_S = 3.0
+
+_DotenvLookupOutcome = Literal["ok", "error", "timeout"]
+
+
+def _dotenv_lookup_bounded(get_env_prefer_dotenv, var: str) -> tuple[_DotenvLookupOutcome, Any]:
+    """Run one credential-pool lookup under a hard timeout.
+
+    Returns ``("ok", value)``, ``("error", exception)`` or ``("timeout", None)``.
+    The worker is a daemon thread: on timeout it is abandoned (the underlying
+    call, if it ever completes, writes into a dict nobody reads) and the
+    resolver degrades instead of blocking registration.
+    """
+    outcome: Dict[str, Any] = {}
+
+    def _run() -> None:
+        # BaseException, not Exception: in an isolated daemon worker even a
+        # SystemExit/KeyboardInterrupt must land in the outcome dict instead
+        # of escaping to threading.excepthook and spraying a stderr
+        # traceback. The caller logs the class name only, so this stays
+        # inside the no-credential-material-in-logs contract.
+        try:
+            outcome["value"] = get_env_prefer_dotenv(var).strip()
+        except BaseException as exc:  # noqa: BLE001 — isolated on purpose
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(_DOTENV_HELPER_TIMEOUT_S)
+    if worker.is_alive():
+        return "timeout", None
+    if "error" in outcome:
+        return "error", outcome["error"]
+    return "ok", outcome.get("value", "")
+
+
 def _resolve_gateway_api_key() -> Optional[str]:
-    """Read the optional Gateway Bearer token from the environment.
+    """Read the optional Gateway Bearer token from the environment or the
+    Hermes ``.env`` (profile-aware ``<hermes_home>/.env``).
 
     Looks at ``MEMORY_TENCENTDB_GATEWAY_API_KEY`` (Hermes-namespaced) first;
     falls back to ``TDAI_GATEWAY_API_KEY`` so an operator who already wired
@@ -137,6 +184,27 @@ def _resolve_gateway_api_key() -> Optional[str]:
     default. Whitespace-only values are treated as unset to guard against
     shells that quote ``\\n`` into env vars.
 
+    Service processes (launchd, systemd) never inherit shell exports, so the
+    operator's ``.env`` — the canonical Hermes secret store, resolved
+    profile-aware via ``get_env_prefer_dotenv`` (``<hermes_home>/.env``) — is
+    consulted as a fallback once neither variable is present in the process
+    environment. That helper reads the dotenv file and the 1Password secret
+    scope (secret_scope itself may fall back to ``os.environ`` when no
+    multiplex scope is active), making it a complement to the loop above
+    rather than a duplicate. A helper failure on one variable is logged
+    (exception class name and variable name only — never the message or
+    traceback, which could embed credential material) and skipped; the
+    credential-pool import is contained the same way. This resolver never
+    raises, so it cannot break provider registration where ``is_available``
+    must never throw.
+
+    Rotation caveat: the environment loop wins whenever a value is present,
+    so a long-lived process keeps using the key it loaded at startup even
+    after every ``.env`` copy has been updated — the dotenv fallback only
+    covers processes that never had the key. Rotating the key therefore
+    means updating all ``.env`` copies AND restarting the gateway (or
+    otherwise reloading the process environment).
+
     Important: this is purely the **client-side** secret. Whether the
     Gateway actually enforces a Bearer check is decided on the Gateway
     side (its own ``TDAI_GATEWAY_API_KEY`` / ``server.apiKey``); the
@@ -144,13 +212,50 @@ def _resolve_gateway_api_key() -> Optional[str]:
     The operator must configure the same secret on both ends if they
     want auth enforcement.
     """
-    for var in ("MEMORY_TENCENTDB_GATEWAY_API_KEY", "TDAI_GATEWAY_API_KEY"):
+    for var in _GATEWAY_API_KEY_VARS:
         raw = os.environ.get(var)
         if raw is None:
             continue
         value = raw.strip()
         if value:
             return value
+    try:
+        from agent.credential_pool import get_env_prefer_dotenv
+    except Exception as exc:
+        # Stub/partial checkouts don't ship the credential pool (ImportError)
+        # and a broken checkout can fail with anything else — either way the
+        # dotenv fallback is silently unavailable and legacy env-only
+        # behaviour applies. Class name only: never the message/traceback.
+        logger.debug(
+            "credential pool import failed (%s); no dotenv fallback",
+            type(exc).__name__,
+        )
+        return None
+    for var in _GATEWAY_API_KEY_VARS:
+        outcome, payload = _dotenv_lookup_bounded(get_env_prefer_dotenv, var)
+        if outcome == "error":
+            # Per-variable isolation: a misbehaving helper degrades to the
+            # next variable instead of escaping into provider registration.
+            # Only the exception class name and the variable name are logged
+            # — never the message or traceback, because helper exception
+            # text is operator-adjacent data and may embed credential
+            # material. warning (not debug) keeps the failure visible for
+            # attribution when the client later sends no/failed Bearer auth.
+            logger.warning(
+                "dotenv fallback lookup failed for %s (%s)",
+                var,
+                type(payload).__name__,
+            )
+            continue
+        if outcome == "timeout":
+            logger.warning(
+                "dotenv fallback lookup timed out for %s (>%.0fs); skipping this variable",
+                var,
+                _DOTENV_HELPER_TIMEOUT_S,
+            )
+            continue
+        if payload:
+            return payload
     return None
 
 
@@ -315,6 +420,38 @@ def _coerce_limit(
     return value
 
 
+# Valid uid shape after normalization. Must stay in lockstep with the
+# Gateway's ``normalizeUserId`` (src/utils/user-id.ts): lowercase(ascii-trim(raw))
+# fully matched against ^[a-z0-9_-]{1,64}$, else the id is invalid.
+_USER_ID_PATTERN = re.compile(r"^[a-z0-9_-]{1,64}$")
+
+# Leading/trailing ASCII whitespace only — NOT ``str.strip()`` without
+# arguments, which also strips Unicode whitespace (U+FEFF, U+00A0, …) and
+# would accept ids the Gateway's ASCII-only trim rejects.
+_ASCII_WHITESPACE = " \t\r\n\f\v"
+
+
+def _normalize_user_id(raw: Any) -> Optional[str]:
+    """Normalize a raw user id with the Gateway's exact semantics.
+
+    Mirrors ``normalizeUserId`` (src/utils/user-id.ts) so both sides accept
+    and reject the same ids: ``lowercase(ascii-trim(raw))`` must match
+    ``^[a-z0-9_-]{1,64}$`` in full. Lowercase only — characters are NEVER
+    stripped (fail-closed): ``"Wendy.Li"`` is rejected outright instead of
+    being silently mapped onto ``"wendyli"`` (which would cross-contaminate
+    two different users' stores).
+
+    Returns the normalized id, or ``None`` when ``raw`` is not a string, is
+    empty after trimming, or does not fully match the pattern.
+    """
+    if not isinstance(raw, str):
+        return None
+    uid = raw.strip(_ASCII_WHITESPACE).lower()
+    if not _USER_ID_PATTERN.fullmatch(uid):
+        return None
+    return uid
+
+
 # ---------------------------------------------------------------------------
 # Tool schemas
 # ---------------------------------------------------------------------------
@@ -351,10 +488,13 @@ MEMORY_SEARCH_SCHEMA = {
 CONVERSATION_SEARCH_SCHEMA = {
     "name": "memory_tencentdb_conversation_search",
     "description": (
-        "Search through past conversation history (raw dialogue records). "
-        "Use when memory_tencentdb_memory_search doesn't have the information "
-        "you need, or when you want to find specific past conversations or "
-        "exact words the user said before."
+        "Search past conversation history (raw dialogue records) when the current "
+        "context lacks details about prior interactions. Use it: when the user "
+        "references details of past conversations, decisions, or promises that you "
+        "cannot find in context; before asking the user to repeat something they "
+        "likely already said; when a compaction summary is too vague and you need "
+        "the original wording (especially after a CONTEXT COMPACTION marker); "
+        "before answering 'what did we say/discuss about X' questions."
     ),
     "parameters": {
         "type": "object",
@@ -385,6 +525,12 @@ class MemoryTencentdbProvider(MemoryProvider):
         self._client: Optional[MemoryTencentdbSdkClient] = None
         self._session_id = ""
         self._user_id = ""
+        # Per-turn user identity recorded by on_turn_start() (normalized, or
+        # None when the turn has no usable human author — bot turns, missing
+        # or invalid author id). It always wins over the static _user_id
+        # fallback so multi-user sessions attribute each turn to the person
+        # who actually sent it. See _effective_user_id().
+        self._current_user: Optional[str] = None
         self._gateway_available = False
         self._initialized = False  # Track if initialize() has been called
 
@@ -747,6 +893,18 @@ class MemoryTencentdbProvider(MemoryProvider):
             Gateway is ready.
         """
         self._session_id = session_id
+        # Host-injected kwargs like ``hermes_home`` are deliberately ignored:
+        # the gateway CLI exports HERMES_HOME as a process-level env long
+        # before this runs, so home-scoped resolution (dotenv fallback above,
+        # gateway discovery below) already targets the right profile home.
+        # Consuming the kwarg here would create a second source of truth.
+        # Static session-owner fallback. Deliberately NOT normalized here:
+        # the Gateway is the normalization authority — it lowercases,
+        # ASCII-trims and fail-closes this value at routing time, so a
+        # client-side rewrite would only duplicate (and potentially drift
+        # from) that rule. Unlike the per-turn chain below, no local
+        # decision depends on this id's validity, so it passes through
+        # verbatim.
         self._user_id = kwargs.get("user_id", "default")
 
         host = _resolve_gateway_host()
@@ -854,12 +1012,19 @@ class MemoryTencentdbProvider(MemoryProvider):
             result = self._client.recall(
                 query=query,
                 session_key=effective_session,
-                user_id=self._user_id,
+                user_id=self._effective_user_id() or "",
             )
             context = result.get("context", "")
             self._record_success()
             if context:
-                return f"## memory-tencentdb Memory\n{context}"
+                return (
+                    "## memory-tencentdb Memory\n"
+                    f"{context}\n\n"
+                    "If the above is insufficient for questions about past "
+                    "conversations, call memory_tencentdb_conversation_search — "
+                    "earlier context may have been compacted, and the raw record "
+                    "is retrievable only here."
+                )
             return ""
         except Exception as e:
             self._record_failure()
@@ -874,8 +1039,21 @@ class MemoryTencentdbProvider(MemoryProvider):
         """No-op — recall is done synchronously in prefetch()."""
         pass
 
-    def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+        turn_author: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Send the turn to Gateway for capture (non-blocking).
+
+        ``turn_author`` is the per-turn author snapshot Hermes passes when the
+        provider's signature accepts it (same ``{"id", "name", "is_bot"}``
+        shape as the ``on_turn_start`` kwargs). Its id is snapshotted HERE, at
+        call time — never re-read from ``self._current_user`` inside the
+        background thread, which by then may already describe the NEXT turn.
 
         Threading model:
           * Each call spawns a daemon thread that performs one ``capture``.
@@ -900,13 +1078,22 @@ class MemoryTencentdbProvider(MemoryProvider):
         effective_session = session_id or self._session_id
         client = self._client
 
+        # Capture attribution, resolved eagerly (chain step 1): a non-bot,
+        # valid turn_author id wins; anything else falls back to the
+        # on_turn_start-recorded identity and the static fallback
+        # (steps 2/3), or "" to omit the field (step 4).
+        turn_author_uid = None
+        if isinstance(turn_author, dict) and not turn_author.get("is_bot"):
+            turn_author_uid = _normalize_user_id(turn_author.get("id"))
+        capture_uid = turn_author_uid or self._effective_user_id() or ""
+
         def _sync():
             try:
                 client.capture(
                     user_content=user_content,
                     assistant_content=assistant_content,
                     session_key=effective_session,
-                    user_id=self._user_id,
+                    user_id=capture_uid,
                 )
                 self._record_success()
             except Exception as e:
@@ -978,7 +1165,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             try:
                 self._client.end_session(
                     session_key=self._session_id,
-                    user_id=self._user_id,
+                    user_id=self._effective_user_id() or "",
                 )
             except Exception as e:
                 logger.debug("memory-tencentdb session end failed: %s", e)
@@ -1036,6 +1223,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     query=query,
                     limit=_coerce_limit(args.get("limit")),
                     type_filter=args.get("type", ""),
+                    user_id=self._effective_user_id() or "",
                 )
                 self._record_success()
                 return json.dumps(result)
@@ -1047,6 +1235,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 result = self._client.search_conversations(
                     query=query,
                     limit=_coerce_limit(args.get("limit")),
+                    user_id=self._effective_user_id() or "",
                 )
                 self._record_success()
                 return json.dumps(result)
@@ -1059,6 +1248,54 @@ class MemoryTencentdbProvider(MemoryProvider):
             # returned to the LLM below is unchanged.
             self._try_recover_gateway()
             return json.dumps({"error": f"Tool call failed: {e}"})
+
+    # -- Per-turn identity ------------------------------------------------------
+    #
+    # The Gateway routes every request to a per-user store based on the
+    # ``user_id`` field, so capture/recall/search/end_session must all send
+    # the identity of the user who is actually talking THIS turn, not
+    # whoever opened the session. One authoritative priority chain:
+    #
+    #   1. ``sync_turn``'s ``turn_author.id`` snapshot (write path)
+    #   2. ``self._current_user`` (recorded by on_turn_start)
+    #   3. ``self._user_id``  (static fallback injected via initialize)
+    #   4. none of the above  → omit the user_id field entirely (the
+    #      Gateway then routes to the default pool)
+
+    def _effective_user_id(self) -> Optional[str]:
+        """Current read-path identity: per-turn user, else the static fallback.
+
+        Returns ``None`` when neither is set, which callers must translate to
+        "omit the user_id field" (the client methods do this themselves).
+        """
+        return self._current_user or self._user_id or None
+
+    def on_turn_start(
+        self,
+        turn_count: int,
+        query: str,
+        author_id: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_is_bot: bool = False,
+    ) -> None:
+        """Record the per-turn user identity for capture/recall attribution.
+
+        Hermes' ``MemoryManager.on_turn_start`` fans this hook out to every
+        provider, passing the *turn author* kwargs filtered by provider
+        signature — declaring ``author_id``/``author_name``/``author_is_bot``
+        is what makes them arrive.
+
+        Fail-closed rule: a bot-authored turn, or a turn whose author id is
+        missing or fails :func:`_normalize_user_id`, CLEARS the recorded
+        identity (``None``) so capture/recall fall back down the chain
+        instead of attributing this turn to the previous speaker.
+        """
+        # turn_count / query / author_name are part of the Hermes contract
+        # but carry no identity this provider needs.
+        if author_is_bot or not author_id:
+            self._current_user = None
+            return
+        self._current_user = _normalize_user_id(author_id)
 
     # -- Optional hooks -------------------------------------------------------
 
@@ -1074,7 +1311,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             try:
                 self._client.end_session(
                     session_key=self._session_id,
-                    user_id=self._user_id,
+                    user_id=self._effective_user_id() or "",
                 )
             except Exception as e:
                 logger.debug("memory-tencentdb on_session_end failed: %s", e)

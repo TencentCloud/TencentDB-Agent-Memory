@@ -298,6 +298,46 @@ variables are not already set:
 > `TDAI_DATA_DIR` (see above) so the provider and the Gateway can never
 > disagree about where L0~L3 live.
 
+### Multi-user routing (Gateway-side)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TDAI_MULTI_USER` | `false` | `true`/`1` → the Gateway keeps one isolated memory store per valid `user_id` under `<TDAI_DATA_DIR>/users/<uid>/` and routes every request by its `user_id`. Off (default) → every request lands in the main store and `user_id` is ignored. |
+| `TDAI_MULTI_USER_OWNERS` | — | Comma-separated user ids that keep using the main store even when routing is on (admins, cron identities). |
+
+Both variables are consumed by the **Gateway** (`src/gateway/config.ts`); this
+provider only attaches the `user_id` field to each request. Missing or invalid
+ids fail closed to the main store, and `POST /seed` with a regular user's id is
+refused (403) while multi-user routing is enabled. See "Multi-User Stores" in
+the main README for the full routing rules, the `^[a-z0-9_-]{1,64}$` uid
+contract (lowercase + trim, never character-stripped — `wendy.li` → main
+store), and the tcvdb backend limitation.
+
+### Per-turn identity chain
+
+When the Gateway runs in multi-user mode, the provider attributes each turn to
+the person who actually sent it. Every capture / recall / search / session-end
+call resolves `user_id` through one authoritative chain:
+
+```text
+turn author id (capture attribution is frozen from turn_author.id at the
+  moment sync_turn() is called)
+  → normalize: lowercase(trim(id)), must fully match ^[a-z0-9_-]{1,64}$
+  → else the static user_id given to initialize() (Hermes session owner)
+  → else omit the field entirely (Gateway routes to the main store)
+```
+
+- `on_turn_start` records the normalized turn author and **clears** it on bot
+  turns or missing/invalid author ids (fail-closed), so a turn is never
+  attributed to the previous speaker.
+- Background capture threads carry the `turn_author` snapshot resolved when
+  `sync_turn()` was called — they never re-read the mutable per-turn identity,
+  which the next turn may already have overwritten. `prefetch()` needs no
+  snapshot: it is synchronous and resolves the current identity at call time.
+- `user_id` is caller-declared: multi-user routing prevents accidents, not
+  forgery. Pair the Gateway with `TDAI_GATEWAY_API_KEY` and network-level
+  access control when isolation matters.
+
 ## LLM Tools
 
 This provider exposes two tools to the model via `get_tool_schemas()`:
