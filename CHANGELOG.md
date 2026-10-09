@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- **历史召回清理** ([#120](https://github.com/Tencent/TencentDB-Agent-Memory/issues/120))：新增离线清理工具，移除旧会话 JSONL 中已冻结的 <relevant-memories> 注入块，帮助恢复 OpenAI-compatible provider 的 prompt cache 命中率；默认 dry-run，支持 --yes 实际写入与 --json 汇总。
+
 ### ✨ 新功能
 
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
