@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 460" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+  <rect width="720" height="460" fill="#ffffff"/>
+  <defs>
+    <marker id="arw" markerWidth="10" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#556"/>
+    </marker>
+  </defs>
+
+  <!-- 1 Session Files -->
+  <rect x="20" y="20" width="680" height="66" rx="6" fill="#eef3ff" stroke="#9fb4d8" stroke-width="1.5"/>
+  <text x="36" y="44" font-weight="bold" fill="#33476b">1 · Agent Session Files</text>
+  <text x="36" y="66" fill="#51648a">Codex:  ~/.codex/sessions/rollout-*.jsonl</text>
+  <text x="36" y="80" fill="#51648a">OpenCode: ~/.local/share/opencode/opencode.db (read-only)</text>
+  <line x1="360" y1="86" x2="360" y2="106" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <!-- 2 Adapters -->
+  <rect x="20" y="106" width="680" height="66" rx="6" fill="#eaf7ea" stroke="#8cc08c" stroke-width="1.5"/>
+  <text x="36" y="130" font-weight="bold" fill="#2f5a2f">2 · Session Adapters (SessionAdapter iface)</text>
+  <text x="36" y="152" fill="#3f6b3f">CodexAdapter (JSONL) · OpenCodeAdapter (SQLite) → ParsedMessage</text>
+  <line x1="360" y1="172" x2="360" y2="192" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <!-- 3 Watcher -->
+  <rect x="20" y="192" width="680" height="66" rx="6" fill="#fff7e0" stroke="#e0bf66" stroke-width="1.5"/>
+  <text x="36" y="216" font-weight="bold" fill="#7a5c00">3 · Session Watcher</text>
+  <text x="36" y="238" fill="#8a6a00">File polling + cursors · detects turns · dispatches recall &amp; capture</text>
+  <line x1="360" y1="258" x2="360" y2="278" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <!-- 4 Gateway -->
+  <rect x="20" y="278" width="680" height="66" rx="6" fill="#f5ecf7" stroke="#c09bd0" stroke-width="1.5"/>
+  <text x="36" y="302" font-weight="bold" fill="#5e3a6e">4 · TDAI Gateway (HTTP, port 8420)</text>
+  <text x="36" y="324" fill="#6e4a7e">/recall · /capture · /search · /session/end</text>
+  <line x1="360" y1="344" x2="360" y2="364" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <!-- 5 Core -->
+  <rect x="20" y="364" width="680" height="72" rx="6" fill="#e3f4fd" stroke="#6aa8d8" stroke-width="1.5"/>
+  <text x="36" y="388" font-weight="bold" fill="#1f4f7a">5 · TdaiCore — host-neutral memory engine</text>
+  <text x="36" y="410" fill="#2f5f8a">handleBeforeRecall() · handleTurnCommitted()</text>
+  <text x="36" y="428" fill="#2f5f8a">L0 JSONL + Vector · L1 Memory · L2 Scene · L3 Persona</text>
+</svg>

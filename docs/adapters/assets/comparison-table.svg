@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 400" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">
+  <rect width="820" height="400" fill="#ffffff"/>
+
+  <!-- column separators -->
+  <line x1="185" y1="15" x2="185" y2="385" stroke="#e3e3e3" stroke-width="1"/>
+  <line x1="385" y1="15" x2="385" y2="385" stroke="#e3e3e3" stroke-width="1"/>
+  <line x1="585" y1="15" x2="585" y2="385" stroke="#e3e3e3" stroke-width="1"/>
+
+  <!-- header row -->
+  <rect x="15" y="15" width="790" height="34" rx="3" fill="#eeeeee" stroke="#cccccc" stroke-width="1"/>
+  <text x="25" y="37" font-weight="bold" fill="#444">Dimension</text>
+  <text x="195" y="37" font-weight="bold" fill="#444">OpenClaw Hook</text>
+  <text x="395" y="37" font-weight="bold" fill="#444">MCP Tool</text>
+  <text x="595" y="37" font-weight="bold" fill="#444">Session Watcher (this PR)</text>
+
+  <!-- Row 1 -->
+  <rect x="15" y="49" width="790" height="42" fill="#fafafa" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="67" fill="#555">Recall trigger</text>
+  <text x="195" y="67" fill="#2f7a2f">Hook auto</text>
+  <text x="195" y="83" fill="#2f7a2f">(before_prompt_build)</text>
+  <text x="395" y="67" fill="#b03a3a">Agent calls</text>
+  <text x="395" y="83" fill="#b03a3a">memory_recall</text>
+  <text x="595" y="67" fill="#2f7a2f">Watcher writes file;</text>
+  <text x="595" y="83" fill="#2f7a2f">agent reads it</text>
+
+  <!-- Row 2 -->
+  <rect x="15" y="91" width="790" height="42" fill="#ffffff" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="109" fill="#555">Capture trigger</text>
+  <text x="195" y="127" fill="#2f7a2f">Hook auto (agent_end)</text>
+  <text x="395" y="109" fill="#b03a3a">Agent calls</text>
+  <text x="395" y="125" fill="#b03a3a">memory_capture</text>
+  <text x="595" y="109" fill="#2f7a2f">Watcher auto</text>
+  <text x="595" y="125" fill="#2f7a2f">(file polling)</text>
+
+  <!-- Row 3 -->
+  <rect x="15" y="133" width="790" height="42" fill="#fafafa" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="151" fill="#555">Agent cooperation</text>
+  <text x="195" y="151" fill="#2f7a2f">No (transparent)</text>
+  <text x="395" y="151" fill="#b03a3a">Yes (manual call)</text>
+  <text x="595" y="151" fill="#2f7a2f">No (file-level)</text>
+
+  <!-- Row 4 -->
+  <rect x="15" y="175" width="790" height="42" fill="#ffffff" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="193" fill="#555">Prompt injection</text>
+  <text x="195" y="193" fill="#2f7a2f">Auto (prompt modify)</text>
+  <text x="395" y="193" fill="#b03a3a">Manual (reads</text>
+  <text x="395" y="209" fill="#b03a3a">tool output)</text>
+  <text x="595" y="193" fill="#a8601a">File-bridge (.md)</text>
+
+  <!-- Row 5 -->
+  <rect x="15" y="217" width="790" height="42" fill="#fafafa" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="235" fill="#555">Capture data</text>
+  <text x="195" y="235" fill="#2f7a2f">Full messages[]</text>
+  <text x="195" y="251" fill="#2f7a2f">+ tool_calls</text>
+  <text x="395" y="235" fill="#b03a3a">Text only</text>
+  <text x="595" y="235" fill="#a8601a">Text only (parsed</text>
+  <text x="595" y="251" fill="#a8601a">from session)</text>
+
+  <!-- Row 6 -->
+  <rect x="15" y="259" width="790" height="42" fill="#ffffff" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="277" fill="#555">Platform dependency</text>
+  <text x="195" y="277" fill="#555">OpenClaw plugin SDK</text>
+  <text x="395" y="277" fill="#555">MCP support needed</text>
+  <text x="595" y="277" fill="#2f7a2f">Session file access</text>
+
+  <!-- Row 7 -->
+  <rect x="15" y="301" width="790" height="42" fill="#fafafa" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="319" fill="#555">Platform modification</text>
+  <text x="195" y="319" fill="#2f7a2f">No (plugin loaded)</text>
+  <text x="395" y="319" fill="#2f7a2f">No (MCP config)</text>
+  <text x="595" y="319" fill="#2f7a2f">No (read-only)</text>
+
+  <!-- Row 8 -->
+  <rect x="15" y="343" width="790" height="42" fill="#ffffff" stroke="#eeeeee" stroke-width="1"/>
+  <text x="25" y="361" fill="#555">Latency</text>
+  <text x="195" y="361" fill="#2f7a2f">&lt;100ms (in-hook)</text>
+  <text x="395" y="361" fill="#a8601a">Tool round-trip</text>
+  <text x="595" y="361" fill="#a8601a">1-5s (polling)</text>
+</svg>
