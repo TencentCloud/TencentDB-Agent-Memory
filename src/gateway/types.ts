@@ -37,6 +37,8 @@ export interface RecallRequest {
 
 export interface RecallResponse {
   context: string;
+  prepend_context?: string;
+  append_context?: string;
   strategy?: string;
   memory_count?: number;
 }
