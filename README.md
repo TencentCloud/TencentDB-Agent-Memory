@@ -383,6 +383,24 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Xiaomi MiMo Code
+
+MiMo Code can connect to the Gateway through the dependency-free local plugin
+in [`mimo-adapter`](./mimo-adapter). It automatically recalls before each
+model run, captures completed main-agent turns, and fails open when the Gateway
+is unavailable.
+
+Install it for the current project:
+
+```bash
+mkdir -p .mimocode/plugins
+cp mimo-adapter/tdai-memory.ts .mimocode/plugins/tdai-memory.ts
+```
+
+See the [MiMo Code adapter guide](./mimo-adapter/README.md) for lifecycle
+mapping, global installation, configuration, native-memory boundaries, and
+failure behavior.
+
 
 ## 🔒 Gateway Security (optional)
 
