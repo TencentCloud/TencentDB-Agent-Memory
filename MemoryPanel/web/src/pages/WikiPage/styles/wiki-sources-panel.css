@@ -690,3 +690,17 @@
   width: 100%;
   height: 100%;
 }
+
+/* ── 注册弹窗：外部来源「如何获取令牌？」指引链接（必须显眼）── */
+._wikilist-token-doc {
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--tea-color-text-link-default, #006eff);
+  text-decoration: none;
+  font-weight: 500;
+  cursor: pointer;
+}
+._wikilist-token-doc:hover {
+  text-decoration: underline;
+  color: var(--tea-color-text-link-hover, #0052cc);
+}

@@ -121,6 +121,17 @@ export interface SkillRouterDeps {
   resolveConversationAdd?: (instanceId: string) => Promise<
     import("../core/skill/conversation-add/wire.js").WiredConversationAddHandler | undefined
   >;
+  /**
+   * 可选. Analytics ClickHouse 只读客户端 (跟 /v3/analytics/* 复用同一 lazy singleton)。
+   * 用于 `handleListing` 的 `mode='activity'` 分支读 `skill_usage_logs` 计算 MRR。
+   *
+   * 未提供 / 返回 null → activity 模式直接 fallback 到原 BM25/full 逻辑, 主链路无感知。
+   *
+   * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+   */
+  getAnalyticsChClient?: () => Promise<
+    import("./analytics/analytics-ch-client.js").AnalyticsChClient | null
+  >;
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -668,6 +679,177 @@ export async function handleExport(body: unknown, _auth: V2AuthContext, requestI
   }
 }
 
+/**
+ * `handleListing` 的 `mode='activity'` 分支实现 —— default-task 活跃度召回。
+ *
+ * 流程 (3 段式, 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md):
+ *   1. CH 查 skill_usage_logs 拿近 30 天 view/search 计数 + 最近活跃时间 top 60
+ *      (`WINDOW_DAYS × CANDIDATE_MULTIPLIER × top_k` 的超集, 保证 version 强
+ *       信号能翻盘挤进最终 top_k)
+ *   2. 批量拿这些 skill 的 head (name/description/version/updated_at_ms)
+ *   3. 4 维等权 MRR 打分 → 按 score DESC 取 top_k
+ *
+ * **绝不 throw**: 返回 null 表示"降级信号"(CH 不可用 / 查询失败 / 缺少必要 dep),
+ * 由 handleListing 落到 auto 分支。空数组表示"数据窗内 0 活跃 skill"(冷启动),
+ * 同样由 handleListing 落到 auto 分支。
+ *
+ * @returns
+ *   - `null`: 无法执行(不可用/异常); 语义 = "请走 fallback"
+ *   - `[]`  : 执行了但数据窗内无活跃 skill; 语义 = "请走 fallback (冷启动)"
+ *   - `Item[]`: 有 N 个活跃 skill (最多 top_k 个)
+ */
+async function resolveActivityHits(args: {
+  deps: SkillRouterDeps;
+  core: SkillCore;
+  team_id: string;
+  agent_id: string;
+  top_k: number;
+}): Promise<Array<{ skill_id: string; name: string; description: string; version: number }> | null> {
+  const { deps, core, team_id, agent_id, top_k } = args;
+
+  // 无 CH client dep → 未装配, 直接降级 (向后兼容: 老 deployment 完全不受影响)
+  if (!deps.getAnalyticsChClient) return null;
+
+  const ch = await deps.getAnalyticsChClient().catch(() => null);
+  if (!ch) return null;                              // CH 未配置
+
+  const WINDOW_DAYS = 30;
+  const CANDIDATE_MULTIPLIER = 3;                    // 超集: 20 * 3 = 60
+  const candidateK = Math.max(top_k, top_k * CANDIDATE_MULTIPLIER);
+
+  // Step 1: CH 查 view/search count + last_active_ts
+  type ActivityRow = {
+    skill_id: string;
+    view_cnt: string | number;
+    search_cnt: string | number;
+    last_active_ts: string;             // CH DateTime64 → ISO string in JSONEachRow
+  };
+  let candidates: ActivityRow[];
+  try {
+    candidates = await ch.query<ActivityRow>({
+      query: `
+        SELECT
+          skill_id,
+          countIf(event_type = 'view')       AS view_cnt,
+          countIf(event_type = 'search_hit') AS search_cnt,
+          max(timestamp)                     AS last_active_ts
+        FROM skill_usage_logs
+        WHERE team_id = {team_id:String}
+          AND agent_id = {agent_id:String}
+          AND timestamp >= now() - INTERVAL {window_days:UInt16} DAY
+        GROUP BY skill_id
+        ORDER BY view_cnt DESC, search_cnt DESC, last_active_ts DESC
+        LIMIT {candidate_k:UInt16}
+      `,
+      query_params: {
+        team_id,
+        agent_id,
+        window_days: WINDOW_DAYS,
+        candidate_k: candidateK,
+      },
+    });
+  } catch (err) {
+    deps.logger.warn?.(`${TAG} activity: CH query failed`, err instanceof Error ? err.message : String(err));
+    return null;                                     // CH 查询挂 → 降级
+  }
+  if (!candidates || candidates.length === 0) return [];   // 冷启动 → 降级
+
+  // Step 2: 批量 getHead 拿 name/description/version/updated_at_ms
+  // 不用 SkillCore.get (它有权限校验+审计, 不适合批查); 直接过 store。
+  // 内部错误吞掉不 throw, 单个 skill 失败不影响其他。
+  type Enriched = {
+    skill_id: string;
+    name: string;
+    description: string;
+    version: number;
+    view_cnt: number;                 // 从 candidates 透传, 强制 Number() 防 CH JSONEachRow string
+    search_cnt: number;               // 同上
+    version_cnt: number;              // 版本数近似 = head.version (每次 patch/update 递增)
+    last_active: number;              // max(events last_active, head.updated_at_ms)
+  };
+  const enriched: Enriched[] = [];
+  await Promise.all(candidates.map(async (c) => {
+    try {
+      const head = await core.get({ skill_id: c.skill_id, team_id });
+      const eventTs = Date.parse(String(c.last_active_ts));    // ISO → ms; 失败为 NaN
+      const eventTsSafe = Number.isFinite(eventTs) ? eventTs : 0;
+      // CH JSONEachRow 对 UInt64 count 默认返回 string (output_format_json_quote_64bit_integers=1);
+      // 不强转直接给 rankBy 用 → keyFn 拿到 undefined 或 string 都会让排序坏掉。
+      // Number(undefined) = NaN, Number("16") = 16, 都是安全的兜底。
+      const viewCnt = Number(c.view_cnt) || 0;
+      const searchCnt = Number(c.search_cnt) || 0;
+      enriched.push({
+        skill_id: head.skill_id,
+        name: head.name,
+        description: head.description,
+        version: head.version,
+        view_cnt: viewCnt,
+        search_cnt: searchCnt,
+        version_cnt: head.version,                              // = countVersions 的近似
+        last_active: Math.max(eventTsSafe, head.updated_at_ms),
+      });
+    } catch {
+      // skill 可能已删/无权访问 → 跳过, 不影响其他候选
+    }
+  }));
+  if (enriched.length === 0) return [];
+
+  // Step 3: 4 维 MRR 打分 + top_k slice
+  // 权重先都相等 (0.25), 上线看 dashboard 数据后调
+  const W = { view: 0.25, search: 0.25, recency: 0.25, version: 0.25 };
+
+  // 竞赛式排名 (同分同名次, 下一名跳过); tiebreaker: last_active DESC
+  function rankBy<K>(list: Enriched[], keyFn: (s: Enriched) => number): Map<string, number> {
+    const sorted = [...list].sort((a, b) => {
+      const dk = keyFn(b) - keyFn(a);
+      if (dk !== 0) return dk;
+      return b.last_active - a.last_active;
+    });
+    const ranks = new Map<string, number>();
+    let currentRank = 0;
+    let lastKey: number | null = null;
+    for (let i = 0; i < sorted.length; i++) {
+      const key = keyFn(sorted[i]);
+      if (lastKey === null || key !== lastKey) {
+        currentRank = i + 1;
+        lastKey = key;
+      }
+      ranks.set(sorted[i].skill_id, currentRank);
+    }
+    return ranks;
+  }
+
+  const rView    = rankBy(enriched, (s) => s.view_cnt);
+  const rSearch  = rankBy(enriched, (s) => s.search_cnt);
+  const rRecency = rankBy(enriched, (s) => s.last_active);
+  const rVersion = rankBy(enriched, (s) => s.version_cnt);
+
+  const scored = enriched.map((s) => ({
+    ...s,
+    score:
+        W.view    * (1 / (rView.get(s.skill_id)    ?? enriched.length))
+      + W.search  * (1 / (rSearch.get(s.skill_id)  ?? enriched.length))
+      + W.recency * (1 / (rRecency.get(s.skill_id) ?? enriched.length))
+      + W.version * (1 / (rVersion.get(s.skill_id) ?? enriched.length)),
+  }));
+
+  // 同分 tiebreaker: skill_id ASC —— enriched 由 Promise.all + push 组装,
+  // 天然顺序不稳定; 没有 tiebreaker 会让"view=4 search=6" 和 "view=3 search=6
+  // last_active_newer" 这种严格 MRR 相等的 skill 每次返回顺序不同。
+  // 按 skill_id 字典序做兜底保证幂等。
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.skill_id < b.skill_id ? -1 : (a.skill_id > b.skill_id ? 1 : 0);
+  });
+
+  return scored.slice(0, top_k).map((s) => ({
+    skill_id: s.skill_id,
+    name: s.name,
+    description: s.description,
+    version: s.version,
+  }));
+}
+
 export async function handleListing(body: unknown, _auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
   const t0 = Date.now();
   const pre = await precheck(listingRequestSchema, body, _auth, deps, requestId);
@@ -681,40 +863,76 @@ export async function handleListing(body: unknown, _auth: V2AuthContext, request
     const routing = deps.getResolvedSkillConfig?.()?.routing;
     const topK = routing?.searchTopK ?? 20;
 
-    // search 模式：按 routing.mode 选检索算法；fallback 到 list head（query 为空）。
     type Item = { skill_id: string; name: string; description: string; version: number };
-    let items: Item[];
-    let mode: "full" | "search";
-    if (useSearch) {
-      const hits = await pre.core.search({
-        user_id: pre.data.user_id,
-        team_id: pre.data.team_id,
-        agent_id: pre.data.agent_id,
-        query,
-        top_k: topK,
-        mode: routing?.mode,
-      });
-      items = hits.map((h) => ({
-        skill_id: h.skill.skill_id,
-        name: h.skill.name,
-        description: h.skill.description,
-        version: h.skill.version,
-      }));
-      mode = "search";
-    } else {
-      const r = await pre.core.list({
-        user_id: pre.data.user_id,
-        team_id: pre.data.team_id,
-        agent_id: pre.data.agent_id,
-        pagination: { limit: topK },
-      });
-      items = r.items.map((s) => ({
-        skill_id: s.skill_id,
-        name: s.name,
-        description: s.description,
-        version: s.version,
-      }));
-      mode = items.length < topK ? "full" : "search";
+    let items: Item[] = [];
+    let mode: "full" | "search" | "activity" = "full";
+
+    // 活跃度召回优先路径 (仅当调用方显式指定 mode='activity')。
+    // 任何环节失败/空 → 落到下面的老逻辑, 主链路无感知。
+    // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+    const wantActivity = pre.data.mode === "activity";
+    let activityAttempted = false;
+    let activityFallbackReason: string | undefined;
+    if (wantActivity) {
+      activityAttempted = true;
+      try {
+        const activityItems = await resolveActivityHits({
+          deps,
+          core: pre.core,
+          team_id: pre.data.team_id!,
+          agent_id: pre.data.agent_id!,
+          top_k: topK,
+        });
+        if (activityItems && activityItems.length > 0) {
+          items = activityItems;
+          mode = "activity";
+        } else {
+          activityFallbackReason = activityItems === null ? "unavailable" : "empty";
+        }
+      } catch (err) {
+        // resolveActivityHits 内部已经吞了大部分异常, 到这里说明极端情况。
+        activityFallbackReason = "exception";
+        deps.logger.warn?.(
+          `${TAG} activity recall failed, falling back to auto`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    // 老 auto 逻辑 —— 未走 activity 或 activity 空/失败 时走此路径。
+    // search 模式：按 routing.mode 选检索算法；fallback 到 list head（query 为空）。
+    if (mode !== "activity") {
+      if (useSearch) {
+        const hits = await pre.core.search({
+          user_id: pre.data.user_id,
+          team_id: pre.data.team_id,
+          agent_id: pre.data.agent_id,
+          query,
+          top_k: topK,
+          mode: routing?.mode,
+        });
+        items = hits.map((h) => ({
+          skill_id: h.skill.skill_id,
+          name: h.skill.name,
+          description: h.skill.description,
+          version: h.skill.version,
+        }));
+        mode = "search";
+      } else {
+        const r = await pre.core.list({
+          user_id: pre.data.user_id,
+          team_id: pre.data.team_id,
+          agent_id: pre.data.agent_id,
+          pagination: { limit: topK },
+        });
+        items = r.items.map((s) => ({
+          skill_id: s.skill_id,
+          name: s.name,
+          description: s.description,
+          version: s.version,
+        }));
+        mode = items.length < topK ? "full" : "search";
+      }
     }
 
     // 渲染 listing；按 char_budget 截断（保留头部 + 显式截断标记）。
@@ -746,7 +964,9 @@ export async function handleListing(body: unknown, _auth: V2AuthContext, request
     obsLogger.info("skill.handleListing.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0, mode,
       hits: items.length,
       listing_len: listing.length,
-      truncated: listing.length >= charBudget, });
+      truncated: listing.length >= charBudget,
+      activity_attempted: activityAttempted,
+      activity_fallback_reason: activityFallbackReason, });
     return successEnvelope({
       mode,
       listing,
@@ -879,6 +1099,9 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
       taskRefId: input.task_id,
       reason: input.reason,
       maxIterations: input.options?.max_iterations,
+      // strict_mode:true 时落 SkillTaskEntry.mode='strict', Worker 消费时透传给
+      // SkillExtractor 用 STRICT prompt。老 client 不传 → 恒走 default (v2 宽松)。
+      ...(input.strict_mode === true ? { mode: 'strict' as const } : {}),
       // 透传 requestId 给 trigger 内部分段 obsLogger 事件用作 anchor
       perfRequestId: requestId,
     });
@@ -999,6 +1222,9 @@ export async function handleConversationAdd(
         tool_call_id: m.tool_call_id,
         timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
       })),
+      // strict_mode:true 时归档段落 SkillTaskEntry.mode='strict', Worker 消费时用
+      // STRICT prompt (SKILL_REVIEW_PROMPT_STRICT)。老 client 不传即走 default。
+      ...(input.strict_mode === true ? { mode: 'strict' as const } : {}),
       // 透传 requestId 给 handler 内部分段 obsLogger 用；trigger.archive 也会再透传一层
       perfRequestId: requestId,
     });

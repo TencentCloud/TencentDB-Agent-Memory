@@ -39,6 +39,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     db: 0,
     keyPrefix: "cg:sess:",
     ttlSeconds: 1800,
+    turnSeqTtlDays: 30,
   },
   rateLimit: {
     tpm: 1_000_000,
@@ -126,6 +127,9 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     serviceToken: "",
     serviceId: "context-proxy",
     timeoutMs: 1500,
+  },
+  instanceUpstream: {
+    cacheTtlSec: 30,
   },
   knowledge: {
     enabled: false,
@@ -341,6 +345,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       keyPrefix: yaml.redis?.keyPrefix ?? DEFAULT_CONFIG.redis.keyPrefix,
       ttlSeconds: yaml.redis?.ttlSeconds ?? DEFAULT_CONFIG.redis.ttlSeconds,
       injectionTtlSeconds: yaml.redis?.injectionTtlSeconds ?? DEFAULT_CONFIG.redis.injectionTtlSeconds,
+      turnSeqTtlDays: yaml.redis?.turnSeqTtlDays ?? DEFAULT_CONFIG.redis.turnSeqTtlDays,
     },
     rateLimit: {
       tpm: Math.max(0, yaml.rateLimit?.tpm ?? DEFAULT_CONFIG.rateLimit.tpm),
@@ -392,6 +397,32 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
               cacheRead: t.cacheRead ?? 0,
               cacheWrite5m: t.cacheWrite5m ?? 0,
               cacheWrite1h: t.cacheWrite1h ?? 0,
+            }))
+          : undefined,
+        rules: Array.isArray(m.rules)
+          ? m.rules
+            .filter((rule) => typeof rule.id === "string" && rule.id.length > 0 && rule.pricing)
+            .map((rule) => ({
+              id: rule.id!,
+              priority: typeof rule.priority === "number" ? rule.priority : undefined,
+              when: rule.when,
+              pricing: {
+                input: rule.pricing?.input ?? 0,
+                output: rule.pricing?.output ?? 0,
+                cacheRead: rule.pricing?.cacheRead ?? 0,
+                cacheWrite5m: rule.pricing?.cacheWrite5m ?? 0,
+                cacheWrite1h: rule.pricing?.cacheWrite1h ?? 0,
+                tiers: Array.isArray(rule.pricing?.tiers)
+                  ? rule.pricing.tiers.map((tier) => ({
+                    maxInputTokens: typeof tier.maxInputTokens === "number" ? tier.maxInputTokens : null,
+                    input: tier.input ?? 0,
+                    output: tier.output ?? 0,
+                    cacheRead: tier.cacheRead ?? 0,
+                    cacheWrite5m: tier.cacheWrite5m ?? 0,
+                    cacheWrite1h: tier.cacheWrite1h ?? 0,
+                  }))
+                  : undefined,
+              },
             }))
           : undefined,
       })).filter((m) => m.name !== ""),
@@ -472,6 +503,10 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       serviceToken: yaml.skill?.serviceToken ?? yaml.coreSkill?.serviceToken ?? DEFAULT_CONFIG.coreSkill.serviceToken,
       serviceId: yaml.skill?.serviceId ?? yaml.coreSkill?.serviceId ?? DEFAULT_CONFIG.coreSkill.serviceId,
       timeoutMs: yaml.skill?.timeoutMs ?? yaml.coreSkill?.timeoutMs ?? DEFAULT_CONFIG.coreSkill.timeoutMs,
+    },
+    instanceUpstream: {
+      cacheTtlSec:
+        yaml.instanceUpstream?.cacheTtlSec ?? DEFAULT_CONFIG.instanceUpstream.cacheTtlSec,
     },
     knowledge: {
       enabled: yaml.knowledge?.enabled ?? DEFAULT_CONFIG.knowledge.enabled,

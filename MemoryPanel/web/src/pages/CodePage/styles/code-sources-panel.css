@@ -9,6 +9,20 @@
  * Code 特有的列表差异（branch 列 / 删除按钮）与详情页样式。
  */
 
+/* ── 注册弹窗：访问令牌「如何获取令牌？」指引链接（必须显眼）── */
+._codelist-token-doc {
+  display: inline-block;
+  margin-left: 4px;
+  color: var(--tea-color-text-link-default, #006eff);
+  text-decoration: none;
+  font-weight: 500;
+  cursor: pointer;
+}
+._codelist-token-doc:hover {
+  text-decoration: underline;
+  color: var(--tea-color-text-link-hover, #0052cc);
+}
+
 /* ── 列表页差异化：branch 列（纵向 stack） ── */
 ._codelist-branch {
   display: flex;

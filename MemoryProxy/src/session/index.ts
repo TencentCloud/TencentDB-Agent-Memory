@@ -215,6 +215,10 @@ export async function handleSessionInit(
       retry: cbFd.retry,
       stream: reqCtx.stream,
       modelId: reqCtx.modelId,
+      // dsh v0.2+ 走 anthropic /v1/messages(handler 层 reqCtx.protocol="anthropic")
+      // dsh v0.1.x 走 openai /v1/chat/completions(handler 层 reqCtx.protocol="openai"
+      // 或 undefined)。form builder 按此分支挑 SSE 骨架,见 dsh/form.ts buildFormResponse。
+      protocol: reqCtx.protocol,
     };
     result.response = buildDshFormResponse(dshFd);
   }

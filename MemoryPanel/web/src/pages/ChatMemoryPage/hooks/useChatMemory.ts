@@ -588,12 +588,18 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
   // 触发主加载 effect 重新拉取当前层数据、四层计数 effect 强制重拉计数。
   const refreshLayer = useCallback(() => {
     if (!selected?.id) return;
+    // 作废当前块的窗口总数缓存（让 windowTotal 回退到全量，等主加载 effect 重新填）
     setWindowTotals((prev) => {
       if (!(selected.id in prev)) return prev;
       const next = { ...prev };
       delete next[selected.id];
       return next;
     });
+    // 刷新时重置时间筛选到「当前时刻 ~ 前一天」：否则 L0/L1 新写入的记忆会因
+    // timeRange.end 停留在页面加载时刻而被过滤掉，表现为「点刷新看不到新数据」。
+    setTimeRange(defaultTimeRange());
+    setRangeTooLarge(false);
+    // 自增 nonce：触发主加载 effect（重新拉当前层数据）与四层计数 effect（强制重拉计数）
     setRefreshNonce((n) => n + 1);
   }, [selected?.id]);
 

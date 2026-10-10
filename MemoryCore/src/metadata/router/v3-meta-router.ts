@@ -50,23 +50,42 @@ const TAG = "[META-V3]";
 export interface V3MetaRouterDeps {
   getMetadataService: (instanceId: string) => MetadataService | undefined | Promise<MetadataService | undefined>;
   logger: Logger;
+  /**
+   * 返回当前 Core 部署支持的 agent 列表。
+   * 供 §6.A supported-agents 接口回响,以及 groups/create + update 时的 agents
+   * 枚举校验、seed default 数据源。由 Core 启动时从 gateway.yaml
+   * upstream.supportedAgents 加载(见 §8.1 Core 侧改造)。
+   */
+  getSupportedAgents: () => import("../types.js").SupportedAgent[];
+}
+
+/** 供 handler 消费的运行时依赖(bind 层传入的第 4 参数)。 */
+export interface V3MetaRouterRuntimeDeps {
+  getSupportedAgents: () => import("../types.js").SupportedAgent[];
 }
 
 type Ctx = V3AuthContext;
-type BizFn<T> = (data: T, ctx: Ctx, svc: MetadataService) => Promise<unknown>;
+type BizFn<T> = (
+  data: T,
+  ctx: Ctx,
+  svc: MetadataService,
+  requestId: string,
+  deps: V3MetaRouterRuntimeDeps,
+) => Promise<unknown>;
 type Handler = (
   body: unknown,
   ctx: Ctx,
   svc: MetadataService,
   requestId: string,
+  deps: V3MetaRouterRuntimeDeps,
 ) => Promise<ApiResponseEnvelope>;
 
 /** schema 校验 + 业务调用 + 成功封装；业务异常交由 dispatch 统一处理。 */
 function bind<S2 extends ZodType>(schema: S2, fn: BizFn<S2["_output"]>): Handler {
-  return async (body, ctx, svc, requestId) => {
+  return async (body, ctx, svc, requestId, deps) => {
     const parsed = schema.safeParse(body);
     if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-    const data = await fn(parsed.data as S2["_output"], ctx, svc);
+    const data = await fn(parsed.data as S2["_output"], ctx, svc, requestId, deps);
     return successEnvelope(data, requestId);
   };
 }
@@ -256,16 +275,15 @@ const routeTable: Record<string, Handler> = {
 
   // Asset
   [`${V3_PREFIX}/asset/create`]: bind(S.assetCreateSchema, (d, c, s) => s.createAssetForCaller(d, c)),
-  [`${V3_PREFIX}/asset/get`]: bind(S.assetGetSchema, async (d, _c, s) => orNotFound(await s.getAssetById(d.asset_id), "asset_not_found", d.asset_id)),
+  // 调用者视角读（水平越权修复）：无权访问返回 null → 404，不泄露资产存在性
+  [`${V3_PREFIX}/asset/get`]: bind(S.assetGetSchema, async (d, c, s) => orNotFound(await s.getAssetForCaller(d.asset_id, c), "asset_not_found", d.asset_id)),
   [`${V3_PREFIX}/asset/update`]: bind(S.assetUpdateSchema, (d, c, s) => {
     const { asset_id, ...patch } = d;
     return s.updateAssetForCaller(asset_id, patch, c);
   }),
   [`${V3_PREFIX}/asset/delete`]: bind(S.assetDeleteSchema, (d, c, s) => s.deleteAssetsForCaller(d.asset_ids, c)),
-  [`${V3_PREFIX}/asset/list`]: bind(S.assetListSchema, (d, _c, s) => {
-    const { team_id, limit, offset, ...filter } = d;
-    return s.listAssetsByTeam(team_id, resolvePagination({ limit, offset }), filter);
-  }),
+  // 调用者视角读（水平越权修复）：成员校验 + 逐条权限过滤，与 list-accessible 同源
+  [`${V3_PREFIX}/asset/list`]: bind(S.assetListSchema, (d, c, s) => s.listAssetsForCaller(d, c)),
   [`${V3_PREFIX}/asset/list-accessible`]: bind(S.assetListAccessibleSchema, (d, _c, s) =>
     s.listAccessibleAssets(d)),
 
@@ -325,22 +343,71 @@ const routeTable: Record<string, Handler> = {
     return s.configParams.setUserConfigForCaller(d);
   }),
 
-  // InstanceUpstreamConfig
-  [`${V3_PREFIX}/instance-upstream/set`]: bind(S.instanceUpstreamSetSchema, async (d, c, s) => {
+  // InstanceUpstreamConfig v2 (see docs/design/2026-08-25-instance-upstream-config.md §6)
+  //
+  // 依赖 deps.getSupportedAgents():从 Core gateway config 里读 upstream.supportedAgents。
+  // 用于:supported-agents 接口回响;B/C 类接口的 agents 枚举校验 + seed 数据源。
+
+  // §6.A supported-agents(挂 Core 后由本模块提供)
+  //
+  // 也触发 seed:Panel 首屏拉的第一发就是这个,响应体本身只回 supportedAgents,
+  // 但顺带 seed 保证用户随后打 groups/list 能看到 default 行(懒配置 = 用户
+  // 视角"每个实例都自带 default")。
+  [`${V3_PREFIX}/upstream/supported-agents`]: bind(S.supportedAgentsSchema, async (_d, c, s, _reqId, deps) => {
     s.assertCanManageUsers(c);
-    return s.setInstanceUpstreamConfig(d);
+    const supported = deps.getSupportedAgents();
+    await s.ensureDefaultSeeded(supported);
+    return { items: supported };
   }),
-  [`${V3_PREFIX}/instance-upstream/get`]: bind(S.instanceUpstreamGetSchema, async (d, c, s) => {
+
+  // §6.B groups/*
+  [`${V3_PREFIX}/instance-upstream/groups/list`]: bind(S.upstreamGroupsListSchema, async (_d, c, s, _reqId, deps) => {
     s.assertCanManageUsers(c);
-    return s.getInstanceUpstreamConfig(d.agent_source, d.type);
+    return s.listInstanceUpstreamGroups(deps.getSupportedAgents());
   }),
-  [`${V3_PREFIX}/instance-upstream/list`]: bind(S.instanceUpstreamListSchema, async (d, c, s) => {
+  [`${V3_PREFIX}/instance-upstream/groups/create`]: bind(S.upstreamGroupsCreateSchema, async (d, c, s, _reqId, deps) => {
     s.assertCanManageUsers(c);
-    return s.listInstanceUpstreamConfigs(d);
+    return s.createInstanceUpstreamCustomGroup(d, deps.getSupportedAgents());
   }),
-  [`${V3_PREFIX}/instance-upstream/reset`]: bind(S.instanceUpstreamResetSchema, async (d, c, s) => {
+  [`${V3_PREFIX}/instance-upstream/groups/update`]: bind(S.upstreamGroupsUpdateSchema, async (d, c, s, _reqId, deps) => {
     s.assertCanManageUsers(c);
-    return s.resetInstanceUpstreamConfig(d.agent_source, d.type);
+    return s.updateInstanceUpstreamGroup(d, deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/instance-upstream/groups/toggle`]: bind(S.upstreamGroupsToggleSchema, async (d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.toggleInstanceUpstreamGroup(d, deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/instance-upstream/groups/delete`]: bind(S.upstreamGroupsDeleteSchema, async (d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.deleteInstanceUpstreamGroup(d, deps.getSupportedAgents());
+  }),
+
+  // §6.C extraction/*
+  //
+  // 全部写入路径都传 supportedAgents 是为了兜底存量实例首个请求非 list 时的 seed
+  // (见 §11.11f 决策 + docs/design 2026-08-25 §5.5 存量实例兜底):
+  // Panel 用户可能直接进入 "extraction 新建" 或 "新建 custom",跳过 list,
+  // 若不 seed default 行,后续 hermes/其他 agent 请求会 AGENT_NOT_CONFIGURED。
+  // extraction/get 不写入,也无 seed 需求,保持只读语义。
+  [`${V3_PREFIX}/instance-upstream/extraction/get`]: bind(S.upstreamExtractionGetSchema, async (_d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.getInstanceUpstreamExtraction(deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/instance-upstream/extraction/create`]: bind(S.upstreamExtractionCreateSchema, async (d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.createInstanceUpstreamExtraction(d, deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/instance-upstream/extraction/update`]: bind(S.upstreamExtractionUpdateSchema, async (d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.updateInstanceUpstreamExtraction(d, deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/instance-upstream/extraction/toggle`]: bind(S.upstreamExtractionToggleSchema, async (d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.toggleInstanceUpstreamExtraction(d, deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/instance-upstream/extraction/delete`]: bind(S.upstreamExtractionDeleteSchema, async (_d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.deleteInstanceUpstreamExtraction(deps.getSupportedAgents());
   }),
 };
 
@@ -379,6 +446,28 @@ function mapErrorCode(code: string): number {
       return 403;
     case "user_key_not_found":
       return 404;
+    // ── v2 InstanceUpstream 错误码(§6.E)──
+    case "GROUP_NOT_FOUND":
+      return 404;
+    case "EXTRACTION_ALREADY_CONFIGURED":
+    case "WRITE_CONFLICT":
+      return 409;
+    case "PERMISSION_DENIED":
+      return 403;
+    case "AGENTS_OVERLAP":
+    case "DUPLICATE_GROUP_NAME":
+    case "INVALID_AGENTS":
+    case "INVALID_MODE_FOR_GROUP_TYPE":
+    case "MISSING_BASE_URL":
+    case "MISSING_API_KEY":
+    case "MISSING_GROUP_NAME":
+    case "DEFAULT_GROUP_IMMUTABLE_FIELDS":
+    case "CANNOT_DELETE_DEFAULT":
+    case "USE_EXTRACTION_ENDPOINT":
+    case "EXTRACTION_NOT_CONFIGURED":
+    case "CANNOT_CREATE_DEFAULT":
+    case "GROUP_TYPE_MISMATCH":
+      return 400;
     default:
       return 400;
   }
@@ -470,7 +559,10 @@ export async function handleV3MetaRoute(
       async () => {
         logMetaApiEntry(traceCtx, body);
         deps.logger.debug?.(`${TAG} ${pathname} instance=${instanceId} user=${ctx.userId ?? "(admin)"}`);
-        const envelope = await handler(body, ctx, svc, requestId);
+        const runtime: V3MetaRouterRuntimeDeps = {
+          getSupportedAgents: deps.getSupportedAgents,
+        };
+        const envelope = await handler(body, ctx, svc, requestId, runtime);
         const httpStatus = envelope.code === 0 ? 200 : envelope.code >= 400 && envelope.code < 600 ? envelope.code : 200;
         logMetaApiResponse(traceCtx, envelope, httpStatus);
         sendJson(res, httpStatus, envelope);
@@ -482,7 +574,8 @@ export async function handleV3MetaRoute(
       const message = `${err.code}: ${err.message}`;
       deps.logger.warn?.(`${TAG} [${pathname}] ${message}`);
       logMetaApiError(traceCtx, err, { envelopeCode: code, httpStatus: code });
-      sendJson(res, code, errorEnvelope(code, message, requestId));
+      // detail (如 AGENTS_OVERLAP 的 conflict_groups)带进 envelope.data 供前端渲染
+      sendJson(res, code, errorEnvelope(code, message, requestId, err.detail));
     } else {
       const msg = err instanceof Error ? err.message : String(err);
       deps.logger.error?.(`${TAG} [${pathname}] unexpected: ${msg}`);

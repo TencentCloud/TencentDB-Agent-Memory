@@ -199,28 +199,103 @@ function resolveSession(
 const DEFAULT_TASK_DRAFT_TIMEOUT_MS = 20000;
 
 /**
- * 方案 D：taskDraft LLM 完全跟随客户端当次请求。
- * 只接收 TaskDraftUpstream（model / upstreamUrl / protocol / apiKey），
- * 任一必需字段缺失 → 返 "not configured"，不再读 config.memCommand.taskDraft。
+ * 解析 taskDraft LLM 用的上游 apiKey。**严格复刻主链路的 per-agent 三档语义**
+ * （权威定义见 config.example.yaml 的 upstream.agents 表 / anthropicHandler.ts:1293），
+ * 避免 taskDraft 跟主链路用不同的 key 导致鉴权行为不一致：
+ *
+ *   ┌──────────────────────────────┬────────────────────────────────────┐
+ *   │ agent 配置                   │ 用的 apiKey                        │
+ *   ├──────────────────────────────┼────────────────────────────────────┤
+ *   │ 不在 agents 表里             │ upstream.apiKey（外层兜底）        │
+ *   │ 在表里，配了 apiKey          │ agent.apiKey                       │
+ *   │ 在表里，只有 url（无 apiKey）│ 透传客户端 key（外层兜底被切断！） │
+ *   └──────────────────────────────┴────────────────────────────────────┘
+ *
+ * ⚠️ 关键：用"agent 在不在表里"的三元判断，**不能用 `||` 兜底** —— 否则
+ * "在表里但没配 key"（应透传客户端 key）会被错误回落到外层 upstream.apiKey，
+ * 与主链路行为不一致（这正是 2026-09-21 测试环境暴露的 bug）。
+ *
+ * @param clientKey 客户端透传的原始 key（handler 里 input.apiKey）
  */
-function resolveTaskDraftConfig(
-  upstream: TaskDraftUpstream,
+function resolveUpstreamApiKeyForAgent(
+  config: ProxyConfig,
+  agentSource: string,
+  clientKey: string,
+): string {
+  // value 在类型里未必声明 apiKey，窄化断言安全取值；upstream 用可选链防御空壳 config。
+  const agents = config.upstream?.agents as
+    | Record<string, { url?: string; apiKey?: string }>
+    | undefined;
+  const entry = agents?.[agentSource];
+  if (entry) {
+    // 在表里：有 apiKey 用它；没配 apiKey → 透传客户端 key（不回落外层）
+    const agentKey = entry.apiKey ?? "";
+    return agentKey || clientKey;
+  }
+  // 不在表里：用外层 upstream.apiKey；外层留空同样透传客户端 key
+  // （对齐主链路 buildUpstreamHeaders：`if (config.upstream.apiKey)` 为空则不覆盖，
+  //  客户端原始 Authorization 原样透传 —— 见 config.example.yaml:35-36）。
+  return (config.upstream?.apiKey ?? "") || clientKey;
+}
+
+/**
+ * 解析 taskDraft LLM 配置。取值优先级（从高到低）：
+ *
+ *   1) 环境变量覆盖（ops escape hatch，运维部署时完全接管）：
+ *        MEMORY_LLM_PROTOCOL / MEMORY_LLM_API_KEY / MEMORY_LLM_BASE_URL / MEMORY_LLM_MODEL
+ *   2) 主链路上游（真·跟随主模型，方案 D）：
+ *        key   = resolveUpstreamApiKeyForAgent（严格复刻主链路 per-agent 三档语义）
+ *        url   = handler 透传的 upstreamUrl（已按 per-agent 解析）
+ *        model = handler 透传的客户端当次 model
+ *   3) taskDraft 专用配置（运维为草稿生成单独配的凭据）：config.memCommand.taskDraft.*
+ *
+ * 都取不到必需字段 → 返 "not configured"。
+ *
+ * ⚠️ 为什么 key 要跟随主链路而非客户端入口 key：
+ *   客户端请求头里的 key 是"入口鉴权 key"（verifyUserKey 用）。主链路 forward 会
+ *   按三档语义决定用 upstream.apiKey / agent.apiKey / 透传客户端 key，taskDraft 必须
+ *   用同一把，否则打上游鉴权行为不一致（历史 bug：现网全 401 → "未命名任务_"）。
+ *
+ * 环境变量场景：部署在 OpenAI 兼容网关（如 rcaaitoken）后，客户端传的 protocol
+ * 与上游实际协议不匹配导致 401 时，运维可用 MEMORY_LLM_* 覆盖，无需改代码。
+ */
+export function resolveTaskDraftConfig(
+  input: TaskDraftUpstream & { config: ProxyConfig; agentSource: string },
 ): { cfg: TaskDraftConfig } | { error: string } {
-  const { model, upstreamUrl, protocol, apiKey } = upstream;
-  if (!model || !upstreamUrl || !apiKey) {
+  const { config, agentSource } = input;
+  const td = config.memCommand?.taskDraft;
+
+  // 环境变量覆盖（最高优先级，运维可完全接管 task-draft 的 LLM 配置）
+  const envProtocol = process.env.MEMORY_LLM_PROTOCOL as "openai" | "anthropic" | "responses" | undefined;
+  const envApiKey = process.env.MEMORY_LLM_API_KEY;
+  const envBaseUrl = process.env.MEMORY_LLM_BASE_URL;
+  const envModel = process.env.MEMORY_LLM_MODEL;
+
+  // 主链路上游 key（复刻三档语义）→ taskDraft 专用 key
+  const upstreamKey = resolveUpstreamApiKeyForAgent(config, agentSource, input.apiKey ?? "");
+
+  // 优先级：env 覆盖 > 主链路三档 > taskDraft 专用
+  const apiKey = envApiKey || upstreamKey || td?.apiKey || "";
+  const url = envBaseUrl || input.upstreamUrl || td?.url || "";
+  const model = envModel || input.model || td?.model || "";
+  const protocol = envProtocol || input.protocol;
+
+  if (!model || !url || !apiKey) {
     return {
       error:
-        "task_draft is not configured (missing request model / upstream url / apiKey). " +
-        "This should not happen for a normal client turn — please check handler wiring.",
+        "task_draft is not configured (missing model / upstream url / apiKey). " +
+        "Checked: env (MEMORY_LLM_*), main upstream (config.upstream[.agents], per-agent 三档语义), " +
+        "config.memCommand.taskDraft — all empty. Set MEMORY_LLM_* env or check handler wiring / config.",
     };
   }
+
   return {
     cfg: {
       enabled: true,
       model,
-      url: upstreamUrl,
+      url,
       apiKey,
-      timeoutMs: DEFAULT_TASK_DRAFT_TIMEOUT_MS,
+      timeoutMs: td?.timeoutMs ?? DEFAULT_TASK_DRAFT_TIMEOUT_MS,
       ...(protocol ? { protocol } : {}),
     },
   };

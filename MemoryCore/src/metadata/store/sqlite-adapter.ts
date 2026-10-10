@@ -20,6 +20,7 @@ import {
 } from "./relation-id-insert.js";
 import { generateUserKey } from "../utils/crypto.js";
 import { isUserKeyExpired } from "../utils/user-key.js";
+import { DEFAULT_GROUP_NAME, EXTRACTION_GROUP_NAME, InstanceUpstreamWriteConflictError } from "../types.js";
 import type {
   UserEntity,
   UserKeyEntity,
@@ -57,9 +58,14 @@ import type {
   UpsertConfigParamInput,
   ListConfigParamsFilter,
   InstanceUpstreamConfigEntity,
-  UpsertInstanceUpstreamConfigInput,
   InstanceUpstreamConfigFilter,
-  UpstreamConfigType,
+  CreateInstanceUpstreamGroupInput,
+  UpdateInstanceUpstreamGroupInput,
+  ToggleInstanceUpstreamGroupInput,
+  DeleteInstanceUpstreamGroupInput,
+  SupportedAgent,
+  GroupType,
+  UpstreamMode,
 } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
@@ -314,20 +320,31 @@ export class SqliteMetadataStore implements IMetadataStore {
       CREATE INDEX IF NOT EXISTS idx_meta_config_params_module
         ON meta_config_params(module);
 
-      CREATE TABLE IF NOT EXISTS meta_instance_upstream_config (
+      -- v2 (模型组) 结构。v1 未真正投产,直接 DROP + 重建,不留兼容 shim。
+      -- 详见 docs/design/2026-08-25-instance-upstream-config.md §5.1。
+      DROP TABLE IF EXISTS meta_instance_upstream_config;
+      CREATE TABLE meta_instance_upstream_config (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_source TEXT NOT NULL DEFAULT 'default',
-        type TEXT NOT NULL DEFAULT 'conversation' CHECK (type IN ('conversation', 'extraction')),
-        mode TEXT NOT NULL DEFAULT 'official' CHECK (mode IN ('official', 'custom_unified', 'custom_passthrough')),
+        group_id TEXT NOT NULL,
+        group_type TEXT NOT NULL CHECK (group_type IN ('default','custom','extraction')),
+        name TEXT NOT NULL DEFAULT '',
+        agents TEXT NOT NULL DEFAULT '[]',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        mode TEXT NOT NULL DEFAULT 'official' CHECK (mode IN ('official','custom_unified','custom_passthrough')),
         base_url TEXT NOT NULL DEFAULT '',
         api_key TEXT NOT NULL DEFAULT '',
         model_id TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '',
+        version INTEGER NOT NULL DEFAULT 1,
+        supported_agents_snapshot TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        UNIQUE(group_id)
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS ux_meta_iuc_agent_type
-        ON meta_instance_upstream_config(agent_source, type);
+      -- default / extraction 单例约束(每实例最多 1 行)。
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_iuc_singleton_group_type
+        ON meta_instance_upstream_config(group_type)
+        WHERE group_type IN ('default','extraction');
     `);
     this.migrateUserTypeColumn();
     this.migrateLegacyUserKeys();
@@ -426,6 +443,32 @@ export class SqliteMetadataStore implements IMetadataStore {
 
   private tx<T>(fn: () => T): T {
     this.db.exec("BEGIN");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (e) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * BEGIN IMMEDIATE 事务:比 BEGIN 更早持有 RESERVED lock,阻止其他连接
+   * 在 SELECT-then-INSERT 的中间窗口插入冲突行。
+   *
+   * 用于 upstream config 的 "读全表 → 校验 agents 全域唯一 → 写入" 临界区
+   * (docs/design/2026-08-25-instance-upstream-config.md §5.3)。
+   *
+   * SQLite 的 busy_timeout (init 里设了 5s) 会让并发的第二个 IMMEDIATE
+   * 阻塞等待锁,拿到锁后重新执行事务体。所以调用方通常不需要重试。
+   */
+  private withImmediateTx<T>(fn: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = fn();
       this.db.exec("COMMIT");
@@ -1859,96 +1902,474 @@ export class SqliteMetadataStore implements IMetadataStore {
     };
   }
 
-  // ── InstanceUpstreamConfig ──────────────────────────────────────────────
+  // ── InstanceUpstreamConfig (v2 模型组) ─────────────────────────────────
+  //
+  // 所有写入方法都用 withImmediateTx 包裹,拿 RESERVED lock 后:
+  //   1. SELECT-all → 内存构建 "其他行 agents 并集" (排除自身 group_id)
+  //   2. 校验:agents 全域唯一 / group_type mismatch / version match
+  //   3. UPSERT/UPDATE/DELETE 完成后再 COMMIT
+  // 并发写入的第二个 IMMEDIATE 阻塞等待 busy_timeout(5s),自动串行化。
 
-  getInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
-  ): InstanceUpstreamConfigEntity | null {
-    return this.mapInstanceUpstreamConfig(
+  getInstanceUpstreamGroup(groupId: string): InstanceUpstreamConfigEntity | null {
+    return this.mapInstanceUpstreamGroup(
       this.get(
-        "SELECT * FROM meta_instance_upstream_config WHERE agent_source = ? AND type = ?",
-        agentSource, type,
+        "SELECT * FROM meta_instance_upstream_config WHERE group_id = ?",
+        groupId,
       ),
     );
   }
 
-  upsertInstanceUpstreamConfig(
-    input: UpsertInstanceUpstreamConfigInput,
-  ): InstanceUpstreamConfigEntity {
-    const now = nowIso();
-    const agentSource = input.agent_source ?? "default";
-    const type = input.type ?? "conversation";
-    this.run(
-      `INSERT INTO meta_instance_upstream_config
-        (agent_source, type, mode, base_url, api_key, model_id, description, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(agent_source, type) DO UPDATE SET
-        mode = excluded.mode,
-        base_url = excluded.base_url,
-        api_key = excluded.api_key,
-        model_id = excluded.model_id,
-        description = excluded.description,
-        updated_at = excluded.updated_at`,
-      agentSource,
-      type,
-      input.mode,
-      input.base_url ?? "",
-      input.api_key ?? "",
-      input.model_id ?? "",
-      input.description ?? "",
-      now,
-      now,
-    );
-    return this.getInstanceUpstreamConfig(agentSource, type)!;
-  }
-
-  listInstanceUpstreamConfigs(
+  listInstanceUpstreamGroups(
     filter?: InstanceUpstreamConfigFilter,
+    seedIfEmpty?: SupportedAgent[],
   ): InstanceUpstreamConfigEntity[] {
+    // seed + diff-append 只在传入 supportedAgents 时跑。
+    // seed 分支已抽成 ensureDefaultSeeded,供其他写入路径共用(存量实例首个请求
+    // 不是 list 而是 create/update/toggle/... 时的兜底,防止 default 未 seed 导致
+    // AGENT_NOT_CONFIGURED)。
+    if (seedIfEmpty && seedIfEmpty.length > 0) {
+      this.ensureDefaultSeeded(seedIfEmpty);
+      // 已存在 default → 走 diff-append 同步逻辑(方案 E)
+      this._syncDefaultAgentsWithSnapshot(seedIfEmpty);
+    }
+
     const conditions: string[] = [];
     const params: SQLInputValue[] = [];
-    if (filter?.agent_source) {
-      conditions.push("agent_source = ?");
-      params.push(filter.agent_source);
-    }
-    if (filter?.type) {
-      conditions.push("type = ?");
-      params.push(filter.type);
+    if (filter?.group_type) {
+      conditions.push("group_type = ?");
+      params.push(filter.group_type);
     }
     const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
-    const rows = this.all(`SELECT * FROM meta_instance_upstream_config${where} ORDER BY agent_source, type`, ...params);
-    return rows.map((r) => this.mapInstanceUpstreamConfig(r)!);
+    // 排序:group_type default → custom → extraction, 同类 updated_at DESC
+    const sql = `SELECT * FROM meta_instance_upstream_config${where}
+      ORDER BY CASE group_type WHEN 'default' THEN 0 WHEN 'custom' THEN 1 ELSE 2 END,
+      updated_at DESC`;
+    const rows = this.all(sql, ...params);
+    return rows.map((r) => this.mapInstanceUpstreamGroup(r)!);
   }
 
-  deleteInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
-  ): boolean {
+  /**
+   * 幂等 seed:若 default 行不存在,写入一行 (agents=supported, mode=official)。
+   * 供 list 及所有写入路径(create/update/toggle/delete + extraction/*)共用。
+   *
+   * 与 diff-append 分离:seed 只保证 "有" default 一行,不做 supported ↔ snapshot
+   * 收敛;后者只在 listInstanceUpstreamGroups 里跑,避免所有写入都刷 snapshot。
+   */
+  ensureDefaultSeeded(supported: SupportedAgent[]): void {
+    if (!supported || supported.length === 0) return;
+    const hasDefault = this.get(
+      "SELECT id FROM meta_instance_upstream_config WHERE group_type='default' LIMIT 1",
+    );
+    if (hasDefault) return;
+    try {
+      this.withImmediateTx(() => {
+        // 事务内再确认一次(可能刚被别人 seed)
+        const check = this.get(
+          "SELECT id FROM meta_instance_upstream_config WHERE group_type='default' LIMIT 1",
+        );
+        if (check) return;
+        const now = nowIso();
+        const agentsList = Array.from(new Set(supported.map((a) => a.agent_source))).sort();
+        this.run(
+          `INSERT INTO meta_instance_upstream_config
+            (group_id, group_type, name, agents, enabled, mode, base_url, api_key, model_id, description, version, supported_agents_snapshot, created_at, updated_at)
+           VALUES (?, 'default', ?, ?, 1, 'official', '', '', '', '', 1, ?, ?, ?)`,
+          this.newGroupId("default"),
+          DEFAULT_GROUP_NAME,
+          JSON.stringify(agentsList),
+          JSON.stringify(agentsList),   // seed 时 snapshot = agents
+          now,
+          now,
+        );
+      });
+    } catch (e) {
+      // 并发下的 UNIQUE 冲突:另一个进程刚 seed 完 → 忽略
+      const msg = (e as Error).message ?? "";
+      if (!msg.includes("UNIQUE") && !msg.includes("unique")) throw e;
+    }
+  }
+
+  /**
+   * 方案 E:default.agents 与 supported-agents 全集 diff-append 同步。
+   *
+   * 场景对照(design doc §11 决策 11d):
+   * - A. seed 首次: 由 seed 分支直接写入,不走本方法
+   * - B. 存量实例 snapshot=空: 视为"用户已认可当前状态",snapshot 填成 agents,不改 agents
+   * - C. Proxy 加了新 agent(supported > snapshot): diff append 到 agents,snapshot 更新
+   * - D. 用户主动 remove agent + Proxy 又加了新的: 只加新的,不恢复用户 remove 的
+   * - E. Proxy 下线 agent(supported < snapshot): snapshot 收缩,agents 不动
+   *      (老 agent 在 agents 里但已从 supported 移除是合法的,请求会 unmanaged;由 Panel 引导清理)
+   * - F. 无变化(diff=空): 不写 db,hot path 零开销
+   *
+   * 并发保护:UPDATE 用 WHERE version=<读到的>,失败静默(另一次 list 会重试);
+   * SQLite BEGIN IMMEDIATE 也是串行锁,极难冲突。
+   */
+  private _syncDefaultAgentsWithSnapshot(supported: SupportedAgent[]): void {
+    const supportedNames = Array.from(new Set(supported.map((a) => a.agent_source))).sort();
+    const supportedSet = new Set(supportedNames);
+
+    const row = this.get(
+      "SELECT id, group_id, agents, supported_agents_snapshot, version FROM meta_instance_upstream_config WHERE group_type='default' LIMIT 1",
+    );
+    if (!row) return; // 表还没 seed(理论上不该发生,seed 分支应先跑)
+    const r = row as Record<string, unknown>;
+    let currentAgents: string[] = [];
+    let currentSnapshot: string[] = [];
+    try { currentAgents = JSON.parse(String(r.agents ?? "[]")); } catch { /* 保持空 */ }
+    try { currentSnapshot = JSON.parse(String(r.supported_agents_snapshot ?? "[]")); } catch { /* 保持空 */ }
+    const version = Number(r.version ?? 1);
+
+    // 场景 B: snapshot 空(存量实例首次)→ 只补 snapshot,不改 agents
+    if (currentSnapshot.length === 0) {
+      const now = nowIso();
+      this.run(
+        `UPDATE meta_instance_upstream_config
+         SET supported_agents_snapshot = ?, updated_at = ?
+         WHERE id = ? AND version = ?`,
+        JSON.stringify(supportedNames),
+        now,
+        Number(r.id),
+        version,
+      );
+      return;
+    }
+
+    // 场景 C/D: supported 里有 snapshot 之外的新 agent → append 到 agents + snapshot 更新
+    const newAgents = supportedNames.filter((a) => !currentSnapshot.includes(a));
+    // 场景 E: supported 收缩(agent 下线),snapshot 也跟着收缩,但 agents 不动
+    const snapshotShrunk = currentSnapshot.some((a) => !supportedSet.has(a));
+    if (newAgents.length === 0 && !snapshotShrunk) {
+      return; // hot path: 全无变化,零开销
+    }
+
+    // 计算新 agents:union(current, newAgents),但要保持 全域唯一(不能跟 custom 组的 agents 重叠)
+    const nextAgents = [...currentAgents];
+    if (newAgents.length > 0) {
+      // 检查这些新 agent 有没有被 custom 组占用
+      const customRows = this.all<Row>(
+        "SELECT agents FROM meta_instance_upstream_config WHERE group_type='custom'",
+      );
+      const customUsed = new Set<string>();
+      for (const cr of customRows) {
+        try {
+          for (const a of JSON.parse(String((cr as Record<string, unknown>).agents ?? "[]"))) customUsed.add(a);
+        } catch { /* skip */ }
+      }
+      for (const a of newAgents) {
+        if (!customUsed.has(a) && !nextAgents.includes(a)) nextAgents.push(a);
+      }
+    }
+    const nextSnapshot = supportedNames; // 收缩 + 扩张都对齐 supported
+
+    const now = nowIso();
+    this.run(
+      `UPDATE meta_instance_upstream_config
+       SET agents = ?, supported_agents_snapshot = ?, version = version + 1, updated_at = ?
+       WHERE id = ? AND version = ?`,
+      JSON.stringify(nextAgents),
+      JSON.stringify(nextSnapshot),
+      now,
+      Number(r.id),
+      version,
+    );
+  }
+
+  createInstanceUpstreamGroup(
+    input: CreateInstanceUpstreamGroupInput,
+  ): InstanceUpstreamConfigEntity {
+    const groupId = this.newGroupId(input.group_type);
+    const now = nowIso();
+    const agents = input.agents ?? [];
+
+    return this.withImmediateTx(() => {
+      // 1. 单例约束(default / extraction 只能一行)
+      if (input.group_type === "default" || input.group_type === "extraction") {
+        const existing = this.get(
+          "SELECT group_id FROM meta_instance_upstream_config WHERE group_type = ? LIMIT 1",
+          input.group_type,
+        );
+        if (existing) {
+          throw new InstanceUpstreamWriteConflictError(
+            input.group_type === "default" ? "default_already_exists" : "extraction_already_exists",
+            `${input.group_type} group already exists in this instance`,
+          );
+        }
+      }
+
+      // 2. agents 全域唯一校验(仅 default/custom 参与)
+      if (input.group_type !== "extraction") {
+        this.assertAgentsNotOverlap(agents, null);
+      }
+
+      // 2b. 组名全域唯一(仅 custom 参与写入方,校验目标含 default/extraction 保留名)
+      //     default/extraction 走 seed 的固定名不触发此路径。历史脏数据不清理,
+      //     只拦新写入 —— 参考设计文档 §5.3(v2.8)。
+      if (input.group_type === "custom") {
+        this.assertGroupNameUnique(input.name ?? "", null);
+      }
+
+      // 3. INSERT(custom/extraction 的 snapshot 恒 [];default 由 seed 路径独立处理,不走此 create 分支)
+      this.run(
+        `INSERT INTO meta_instance_upstream_config
+          (group_id, group_type, name, agents, enabled, mode, base_url, api_key, model_id, description, version, supported_agents_snapshot, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', ?, ?)`,
+        groupId,
+        input.group_type,
+        input.name ?? "",
+        JSON.stringify(agents),
+        input.enabled === false ? 0 : 1,
+        input.mode,
+        input.base_url ?? "",
+        input.api_key ?? "",
+        input.model_id ?? "",
+        input.description ?? "",
+        now,
+        now,
+      );
+
+      return this.getInstanceUpstreamGroup(groupId)!;
+    });
+  }
+
+  updateInstanceUpstreamGroup(
+    input: UpdateInstanceUpstreamGroupInput,
+  ): InstanceUpstreamConfigEntity {
+    return this.withImmediateTx(() => {
+      const row = this.get(
+        "SELECT * FROM meta_instance_upstream_config WHERE group_id = ?",
+        input.group_id,
+      );
+      if (!row) {
+        throw new InstanceUpstreamWriteConflictError(
+          "group_not_found",
+          `group not found: ${input.group_id}`,
+        );
+      }
+      const current = this.mapInstanceUpstreamGroup(row)!;
+      if (current.group_type !== input.expected_group_type) {
+        throw new InstanceUpstreamWriteConflictError(
+          "group_type_mismatch",
+          `expected ${input.expected_group_type}, actual ${current.group_type}`,
+          { expected: input.expected_group_type, actual: current.group_type },
+        );
+      }
+      if (input.expected_version !== undefined && input.expected_version !== current.version) {
+        throw new InstanceUpstreamWriteConflictError(
+          "version_mismatch",
+          `version mismatch: expected ${input.expected_version}, actual ${current.version}`,
+          { expected: input.expected_version, actual: current.version },
+        );
+      }
+
+      // agents 变更 → 校验全域唯一(排除自身)
+      const nextAgents = input.agents ?? current.agents;
+      if (input.agents !== undefined && current.group_type !== "extraction") {
+        this.assertAgentsNotOverlap(nextAgents, current.group_id);
+      }
+
+      // name 变更 → 校验全域唯一(仅 custom;default/extraction 的 name 由 service 层
+      // DEFAULT_GROUP_IMMUTABLE_FIELDS 拦掉,这里再兜一次)
+      //
+      // 历史脏数据豁免:如果 trim 后 name 与 current.name 完全相同(前端"编辑弹层"
+      // 回传原名的常见姿势),不触发查重 — 否则库里已有的重名行任何 update 都会挂,
+      // 违背"以前重名的就算了不管"的产品约定。参考设计文档 §5.3(v2.8)。
+      if (
+        input.name !== undefined
+        && current.group_type === "custom"
+        && (input.name ?? "").trim() !== (current.name ?? "").trim()
+      ) {
+        this.assertGroupNameUnique(input.name, current.group_id);
+      }
+
+      // PATCH 合并
+      const merged = {
+        name: input.name ?? current.name,
+        agents: nextAgents,
+        enabled: input.enabled ?? current.enabled,
+        mode: input.mode ?? current.mode,
+        base_url: input.base_url ?? current.base_url,
+        api_key: input.api_key ?? current.api_key,
+        model_id: input.model_id ?? current.model_id,
+        description: input.description ?? current.description,
+      };
+      const now = nowIso();
+      this.run(
+        `UPDATE meta_instance_upstream_config
+         SET name = ?, agents = ?, enabled = ?, mode = ?, base_url = ?, api_key = ?, model_id = ?, description = ?, version = version + 1, updated_at = ?
+         WHERE group_id = ?`,
+        merged.name,
+        JSON.stringify(merged.agents),
+        merged.enabled ? 1 : 0,
+        merged.mode,
+        merged.base_url,
+        merged.api_key,
+        merged.model_id,
+        merged.description,
+        now,
+        input.group_id,
+      );
+      return this.getInstanceUpstreamGroup(input.group_id)!;
+    });
+  }
+
+  toggleInstanceUpstreamGroup(
+    input: ToggleInstanceUpstreamGroupInput,
+  ): InstanceUpstreamConfigEntity {
+    return this.withImmediateTx(() => {
+      const row = this.get(
+        "SELECT * FROM meta_instance_upstream_config WHERE group_id = ?",
+        input.group_id,
+      );
+      if (!row) {
+        throw new InstanceUpstreamWriteConflictError(
+          "group_not_found",
+          `group not found: ${input.group_id}`,
+        );
+      }
+      const current = this.mapInstanceUpstreamGroup(row)!;
+      if (input.expected_version !== undefined && input.expected_version !== current.version) {
+        throw new InstanceUpstreamWriteConflictError(
+          "version_mismatch",
+          `version mismatch: expected ${input.expected_version}, actual ${current.version}`,
+          { expected: input.expected_version, actual: current.version },
+        );
+      }
+      const now = nowIso();
+      this.run(
+        `UPDATE meta_instance_upstream_config
+         SET enabled = ?, version = version + 1, updated_at = ?
+         WHERE group_id = ?`,
+        input.enabled ? 1 : 0,
+        now,
+        input.group_id,
+      );
+      return this.getInstanceUpstreamGroup(input.group_id)!;
+    });
+  }
+
+  deleteInstanceUpstreamGroup(input: DeleteInstanceUpstreamGroupInput): boolean {
     const existing = this.get(
-      "SELECT id FROM meta_instance_upstream_config WHERE agent_source = ? AND type = ?",
-      agentSource, type,
+      "SELECT id FROM meta_instance_upstream_config WHERE group_id = ?",
+      input.group_id,
     );
     if (!existing) return false;
     this.run(
-      "DELETE FROM meta_instance_upstream_config WHERE agent_source = ? AND type = ?",
-      agentSource, type,
+      "DELETE FROM meta_instance_upstream_config WHERE group_id = ?",
+      input.group_id,
     );
     return true;
   }
 
-  private mapInstanceUpstreamConfig(row: Row | null): InstanceUpstreamConfigEntity | null {
+  /**
+   * 校验待写入 agents 与其他行的 agents 不重叠。
+   * `selfGroupId` 传入时排除自己(update 场景);create 时传 null。
+   * 冲突 → InstanceUpstreamWriteConflictError("agents_overlap", detail.conflict_groups)。
+   */
+  private assertAgentsNotOverlap(candidate: string[], selfGroupId: string | null): void {
+    if (candidate.length === 0) return;
+    const candidateSet = new Set(candidate);
+    const rows = this.all<Row>(
+      `SELECT group_id, group_type, name, agents FROM meta_instance_upstream_config
+       WHERE group_type IN ('default','custom')`,
+    );
+    const conflicts: Array<{ group_id: string; group_type: string; name: string; overlapping_agents: string[] }> = [];
+    for (const r of rows) {
+      const gid = String(r.group_id);
+      if (gid === selfGroupId) continue;
+      let existing: string[];
+      try {
+        existing = JSON.parse(String(r.agents));
+      } catch {
+        existing = [];
+      }
+      const overlap = existing.filter((a) => candidateSet.has(a));
+      if (overlap.length > 0) {
+        conflicts.push({
+          group_id: gid,
+          group_type: String(r.group_type),
+          name: String(r.name),
+          overlapping_agents: overlap,
+        });
+      }
+    }
+    if (conflicts.length > 0) {
+      throw new InstanceUpstreamWriteConflictError(
+        "agents_overlap",
+        `agents overlap with ${conflicts.length} existing group(s)`,
+        { conflict_groups: conflicts },
+      );
+    }
+  }
+
+  /**
+   * 校验组名(trim 后)与其他任意组(含 default / extraction 保留名)不冲突。
+   * 大小写敏感、空白 trim 后精确匹配。selfGroupId 传入时排除自己(update 场景);
+   * create 时传 null。冲突 → InstanceUpstreamWriteConflictError("name_duplicate",
+   * detail.conflict_group)。空串或全空白 name 直接放过(由 assertGroupName 兜住)。
+   *
+   * 历史脏数据不清理:表内已存在的重名行 list 出来照常,只在新写入时拦。
+   * 参考设计文档 §5.3(v2.8)。
+   */
+  private assertGroupNameUnique(candidateName: string, selfGroupId: string | null): void {
+    const candidate = (candidateName ?? "").trim();
+    if (!candidate) return;
+    const rows = this.all<Row>(
+      "SELECT group_id, group_type, name FROM meta_instance_upstream_config",
+    );
+    for (const r of rows) {
+      const gid = String(r.group_id);
+      if (gid === selfGroupId) continue;
+      if (String(r.name ?? "").trim() === candidate) {
+        throw new InstanceUpstreamWriteConflictError(
+          "name_duplicate",
+          `group name "${candidate}" is already used by another group in this instance`,
+          {
+            conflict_group: {
+              group_id: gid,
+              group_type: String(r.group_type),
+              name: String(r.name ?? ""),
+            },
+          },
+        );
+      }
+    }
+  }
+
+  /** 生成 group_id:default→dflt-<r> / custom→grp-<r> / extraction→ext-<r>。 */
+  private newGroupId(gt: GroupType): string {
+    const prefix = gt === "default" ? "dflt" : gt === "extraction" ? "ext" : "grp";
+    return generateId(prefix);
+  }
+
+  private mapInstanceUpstreamGroup(row: Row | null): InstanceUpstreamConfigEntity | null {
     if (!row) return null;
     const r = row as Record<string, unknown>;
+    let agents: string[] = [];
+    try {
+      agents = JSON.parse(String(r.agents ?? "[]"));
+    } catch {
+      agents = [];
+    }
+    let snapshot: string[] = [];
+    try {
+      snapshot = JSON.parse(String(r.supported_agents_snapshot ?? "[]"));
+    } catch {
+      snapshot = [];
+    }
     return {
       id: Number(r.id),
-      agent_source: String(r.agent_source),
-      type: String(r.type) as UpstreamConfigType,
-      mode: String(r.mode) as InstanceUpstreamConfigEntity["mode"],
-      base_url: String(r.base_url),
-      api_key: String(r.api_key),
-      model_id: String(r.model_id),
-      description: String(r.description),
+      group_id: String(r.group_id),
+      group_type: String(r.group_type) as GroupType,
+      name: String(r.name ?? ""),
+      agents,
+      enabled: Number(r.enabled) === 1,
+      mode: String(r.mode) as UpstreamMode,
+      base_url: String(r.base_url ?? ""),
+      api_key: String(r.api_key ?? ""),
+      model_id: String(r.model_id ?? ""),
+      description: String(r.description ?? ""),
+      version: Number(r.version ?? 1),
+      supported_agents_snapshot: snapshot,
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
     };

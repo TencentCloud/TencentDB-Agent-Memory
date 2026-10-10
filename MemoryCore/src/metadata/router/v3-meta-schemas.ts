@@ -21,7 +21,8 @@ const teamStatus = z.enum(["active", "archived"]);
 const memberStatus = z.enum(["active", "removed"]);
 const agentStatus = z.enum(["active", "inactive"]);
 const taskStatus = z.enum(["running", "completed"]);
-const taskSourceType = z.enum(["manual", "tapd", "github", "other"]);
+/** 大类，不含具体来源（来源读 metadata_json.external.provider）。 */
+const taskSourceType = z.enum(["manual", "external", "other"]);
 
 const nonEmpty = z.string().min(1);
 const idList = z.array(nonEmpty).min(1);
@@ -432,34 +433,90 @@ export const configUserSetSchema = z.object({
   params: z.record(z.string().min(1), z.string()),
 });
 
-// ── InstanceUpstreamConfig ──
-const upstreamConfigType = z.enum(["conversation", "extraction"]);
-const upstreamConfigMode = z.enum(["official", "custom_unified", "custom_passthrough"]);
+// ── InstanceUpstreamConfig (v2 模型组) ──
+// 详见 docs/design/2026-08-25-instance-upstream-config.md §6.B / §6.C。
+const upstreamGroupType = z.enum(["default", "custom", "extraction"]);
+const upstreamGroupTypeConvOnly = z.enum(["default", "custom"]); // update/delete/toggle 用
+const upstreamMode = z.enum(["official", "custom_unified", "custom_passthrough"]);
 
-export const instanceUpstreamSetSchema = z.object({
-  agent_source: z.string().min(1).default("default"),
-  type: upstreamConfigType.default("conversation"),
-  mode: upstreamConfigMode,
+// ── supported-agents & internal list ──
+
+export const supportedAgentsSchema = z.object({}).catchall(z.unknown());
+
+export const instanceUpstreamInternalListSchema = z.object({}).catchall(z.unknown());
+
+// ── B 类:conversation groups ──
+
+/** B1 groups/list */
+export const upstreamGroupsListSchema = z.object({}).catchall(z.unknown());
+
+/** B2 groups/create: 只允许 custom */
+export const upstreamGroupsCreateSchema = z.object({
+  group_type: z.literal("custom"),
+  name: z.string().min(1),
+  agents: z.array(z.string().min(1)).min(1),
+  enabled: z.boolean().optional(),
+  mode: z.enum(["custom_unified", "custom_passthrough"]),
+  base_url: z.string().min(1),
+  api_key: z.string().optional(),
+  model_id: z.string().optional(),
+  description: z.string().optional(),
+});
+
+/** B3 groups/update: PATCH; default 只能改 agents/enabled(其他字段传值 → immutable error) */
+export const upstreamGroupsUpdateSchema = z.object({
+  group_id: z.string().min(1),
+  group_type: upstreamGroupTypeConvOnly,
+  expected_version: z.number().int().nonnegative().optional(),
+  name: z.string().optional(),
+  agents: z.array(z.string().min(1)).optional(),
+  enabled: z.boolean().optional(),
+  mode: upstreamMode.optional(),
   base_url: z.string().optional(),
   api_key: z.string().optional(),
   model_id: z.string().optional(),
   description: z.string().optional(),
 });
 
-export const instanceUpstreamGetSchema = z.object({
-  agent_source: z.string().min(1).default("default"),
-  type: upstreamConfigType.default("conversation"),
+/** B4 groups/toggle */
+export const upstreamGroupsToggleSchema = z.object({
+  group_id: z.string().min(1),
+  enabled: z.boolean(),
+  expected_version: z.number().int().nonnegative().optional(),
 });
 
-export const instanceUpstreamListSchema = z.object({
-  agent_source: z.string().min(1).optional(),
-  type: upstreamConfigType.optional(),
+/** B5 groups/delete */
+export const upstreamGroupsDeleteSchema = z.object({
+  group_id: z.string().min(1),
 });
 
-export const instanceUpstreamResetSchema = z.object({
-  agent_source: z.string().min(1).default("default"),
-  type: upstreamConfigType.default("conversation"),
+// ── C 类:extraction ──
+
+export const upstreamExtractionGetSchema = z.object({}).catchall(z.unknown());
+
+export const upstreamExtractionCreateSchema = z.object({
+  base_url: z.string().min(1),
+  api_key: z.string().min(1),
+  model_id: z.string().optional(),
+  enabled: z.boolean().optional(),
+  description: z.string().optional(),
 });
+
+export const upstreamExtractionUpdateSchema = z.object({
+  expected_version: z.number().int().nonnegative().optional(),
+  base_url: z.string().optional(),
+  api_key: z.string().optional(),
+  model_id: z.string().optional(),
+  enabled: z.boolean().optional(),
+  description: z.string().optional(),
+});
+
+export const upstreamExtractionToggleSchema = z.object({
+  enabled: z.boolean(),
+  expected_version: z.number().int().nonnegative().optional(),
+});
+
+export const upstreamExtractionDeleteSchema = z.object({}).catchall(z.unknown());
 
 export const V3_SCHEMAS = {
   "/v3/meta/user/create": userCreateSchema,
@@ -517,10 +574,75 @@ export const V3_SCHEMAS = {
   "/v3/meta/instance-quota/get": instanceQuotaGetSchema,
   "/v3/meta/config/user/get": configUserGetSchema,
   "/v3/meta/config/user/set": configUserSetSchema,
-  "/v3/meta/instance-upstream/set": instanceUpstreamSetSchema,
-  "/v3/meta/instance-upstream/get": instanceUpstreamGetSchema,
-  "/v3/meta/instance-upstream/list": instanceUpstreamListSchema,
-  "/v3/meta/instance-upstream/reset": instanceUpstreamResetSchema,
+  // v2 InstanceUpstream (§6.A / §6.B / §6.C)
+  "/v3/meta/upstream/supported-agents": supportedAgentsSchema,
+  "/v3/meta/instance-upstream/groups/list": upstreamGroupsListSchema,
+  "/v3/meta/instance-upstream/groups/create": upstreamGroupsCreateSchema,
+  "/v3/meta/instance-upstream/groups/update": upstreamGroupsUpdateSchema,
+  "/v3/meta/instance-upstream/groups/toggle": upstreamGroupsToggleSchema,
+  "/v3/meta/instance-upstream/groups/delete": upstreamGroupsDeleteSchema,
+  "/v3/meta/instance-upstream/extraction/get": upstreamExtractionGetSchema,
+  "/v3/meta/instance-upstream/extraction/create": upstreamExtractionCreateSchema,
+  "/v3/meta/instance-upstream/extraction/update": upstreamExtractionUpdateSchema,
+  "/v3/meta/instance-upstream/extraction/toggle": upstreamExtractionToggleSchema,
+  "/v3/meta/instance-upstream/extraction/delete": upstreamExtractionDeleteSchema,
 } as const;
+
+// ── Task 外部来源（/v3/task-source/*）──
+// 注意：请求体**不含任何凭据**。令牌由 Panel 从会话注入 Core，
+// 既不进请求体也不落库（见 task-source 模块说明）。
+const providerId = z.string().min(1);
+
+/**
+ * 用户提交的手工令牌。
+ *
+ * 只有三种 kind，且**不含 oauth2** —— 认证方式统一为用户填入长期令牌
+ * （太湖统一认证令牌 / TAPD 个人令牌）。
+ */
+const credentialSchema = z.object({
+  kind: z.enum(["bearer", "basic", "custom"]),
+  secret: z.string().min(1),
+  username: z.string().optional(),
+  extra: z.record(z.unknown()).optional(),
+});
+
+export const taskSourceProvidersSchema = z.object({ team_id: nonEmpty });
+
+export const taskSourceWorkspacesSchema = z.object({
+  team_id: nonEmpty,
+  provider_id: providerId,
+  credential: credentialSchema,
+});
+
+export const taskSourceCandidatesSchema = z.object({
+  team_id: nonEmpty,
+  provider_id: providerId,
+  credential: credentialSchema,
+  workspace_id: z.string().optional(),
+  item_types: z.array(z.string().min(1)).optional(),
+  keyword: z.string().optional(),
+  owner: z.string().optional(),
+  status: z.string().optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  /** 只看当前令牌用户的待办（走 user_todo_*_get 接口族）。 */
+  only_todo: z.boolean().optional(),
+});
+
+export const taskSourceImportSchema = z.object({
+  team_id: nonEmpty,
+  provider_id: providerId,
+  credential: credentialSchema,
+  items: z
+    .array(
+      z.object({
+        external_id: z.string().min(1),
+        item_type: z.string().min(1),
+        scope: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(50),
+});
 
 export type V3Route = keyof typeof V3_SCHEMAS;

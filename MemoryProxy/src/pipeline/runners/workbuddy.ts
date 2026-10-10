@@ -18,23 +18,47 @@
  */
 
 import type { Context } from "hono";
-import type { ProxyConfig } from "./types.js";
-import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
-import { createPipeline, writeLog } from "./logger.js";
-import { extractSpaceIdFromPath } from "./credit-reporter.js";
+import type { ProxyConfig } from "../../types.js";
+import { apiKeyToKeyId, extractBearerToken, opikCreateTrace, uuidv7 } from "../../opik.js";
+import { createPipeline, writeLog } from "../../logger.js";
+import { extractSpaceIdFromPath } from "../../credit-reporter.js";
+import { writeFailedReportRaw } from "../../clickhouse.js";
+import { joinUrl } from "../../guard-adapter.js";
 import {
-  getInstanceUpstreamConfigs,
-  resolveUpstreamConfig,
-  shouldOverride,
-} from "./instance-upstream-cache.js";
-import { joinUrl } from "./guard-adapter.js";
-import { verifyUserKey } from "./auth.js";
-import { resolveModelId } from "./pricing.js";
-import { workbuddyAdapter } from "./agent-adapters/workbuddy.js";
+  stageInstanceUpstreamResponses,
+  isInstanceUpstreamBlocked,
+} from "../stages/instance-upstream-responses.js";
+import {
+  prepareUpstreamRequest,
+  notifyUpstreamResponse,
+  type UpstreamToolCall,
+} from "../../request-prepare-adapter.js";
+import {
+  createCfqStripStream,
+  createCfqStripObserver,
+  stripCfqFromResponseText,
+} from "../../common/cfq-strip.js";
+import {
+  collectResponsesOutputText,
+  mergeResponsesToolCalls,
+} from "../../common/responses-payload.js";
+import { verifyUserKey } from "../../auth.js";
+import { stageAuth } from "../stages/auth.js";
+import { stageParseBody } from "../stages/parse-body.js";
+import { stageSessionResetPreHook } from "../stages/session-reset-pre-hook.js";
+import { stageSessionResetConfirmation } from "../stages/session-reset-confirmation.js";
+import { countHumanTurnsResponses } from "../../turnSeq.js";
+import { stageCredit } from "../stages/credit.js";
+import { resolveModelId } from "../../pricing.js";
+import { stageIdentity } from "../stages/identity.js";
+import { stageModelGate } from "../stages/model-gate.js";
+import { resolveAgentStrategy } from "../strategies/agent/index.js";
+import { enforceRateLimit, isRateLimitExceededError } from "../../rate-limit/guard.js";
+import { workbuddyAdapter } from "../../agent-adapters/workbuddy.js";
 import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
-} from "./common/workbuddy-injection.js";
+} from "../../common/workbuddy-injection.js";
 // WorkBuddy 走 Responses API，与 codex wire 完全一致 —— 弹窗骨架直接复用
 // session/codex/form.ts 的 buildFormResponse + codexFormAnswersAsMessages，
 // 状态机复用 CB 的 handleSessionInit(agentSource="codex")。这样 WorkBuddy
@@ -42,39 +66,35 @@ import {
 import {
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
-} from "./session/codex/form.js";
+} from "../../session/codex/form.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
   langfuseTurnTraceId,
   type LangfuseTurnContext,
-} from "./langfuse.js";
+} from "../../langfuse.js";
 
 // ── TDAI L0 + Skill extraction imports ────────────────────────────────────────
-import { TdaiClient } from "./tdai/client.js";
-import { deriveTdaiIdentity } from "./tdai/identity.js";
-import { recordTdaiTurn } from "./tdai/recorder.js";
-import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
-import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
-import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
-import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import { TdaiClient, buildTdaiClientForRequest } from "../../tdai/client.js";
+import { deriveTdaiIdentity } from "../../tdai/identity.js";
+import type { TdaiIdentity, TdaiMessage } from "../../tdai/types.js";
+import { stageArchive } from "../stages/archive.js";
+import {
+  stageWriteUsageLog,
+  stageRecordTokenUsage,
+  stageEmitModelIntent,
+  stageOpikStreamSpan,
+} from "../stages/stream-finalize.js";
+import { stagePrewarmInjection } from "../stages/prewarm-injection.js";
+import { stageAssetCapabilities } from "../stages/asset-capabilities.js";
+import { stageSessionBypass } from "../stages/session-bypass.js";
+import { stageSessionInitOrchestrate } from "../stages/session-init-orchestrate.js";
+import { buildMemResponse } from "../../mem-command/response-builder.js";
 
 // ── Handler-level constants ──────────────────────────────────────────────────
 
-const SKIP_REQUEST_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-  "x-tdai-user-key",
-]);
-
-const SKIP_RESPONSE_HEADERS = new Set([
-  "content-encoding",
-  "transfer-encoding",
-  "content-length",
-  "connection",
-]);
+// SKIP header sets 已合并到 common/constants.ts (workbuddy 用 WITH_INTERNAL 版本)
+import { SKIP_REQUEST_HEADERS_WITH_INTERNAL as SKIP_REQUEST_HEADERS, filterResponseHeaders } from "../../common/constants.js";
 
 // ── Types (exported for unit tests) ──────────────────────────────────────────
 
@@ -167,7 +187,13 @@ export function extractWorkbuddySessionId(
   headers: Record<string, string>,
   body: Record<string, unknown>,
 ): string | null {
-  const fromHeader = headers["session-id"] ?? headers["Session-Id"];
+  // subagent 归一：带 x-parent-conversation-id 的请求（并行 subagent）一律用
+  // parent id 作为会话身份，复用主会话 session state，避免重弹 session-init 表单
+  // （2026-09-20 修复 WorkBuddy 压缩后无限循环，详见 session/session-key.ts 注释）。
+  const parentId = headers["x-parent-conversation-id"] ?? headers["X-Parent-Conversation-Id"];
+  if (typeof parentId === "string" && parentId.length > 0) return parentId;
+
+  const fromHeader = headers["session-id"] ?? headers["Session-Id"] ?? headers["x-conversation-id"];
   if (typeof fromHeader === "string" && fromHeader.length > 0) return fromHeader;
 
   const meta = body.client_metadata as Record<string, unknown> | undefined;
@@ -259,18 +285,9 @@ export function injectWorkbuddyAssets(
  * 与 codex 的 countHumanTurnsCodex 同逻辑，为了保持"handler 之间零依赖"独立
  * 复制一份。
  */
-export function countHumanTurnsWorkbuddy(input: unknown): number {
-  if (!Array.isArray(input)) return 0;
-  let count = 0;
-  for (const item of input) {
-    const it = item as Record<string, unknown> | null;
-    if (!it || typeof it !== "object") continue;
-    if (it.type !== "message") continue;
-    if (it.role !== "user") continue;
-    count++;
-  }
-  return count;
-}
+// countHumanTurnsWorkbuddy 合并到 turnSeq.ts::countHumanTurnsResponses (Round 7)。
+// 保留别名 export 供 backward-compat。
+export { countHumanTurnsResponses as countHumanTurnsWorkbuddy } from "../../turnSeq.js";
 
 // ── Workbuddy Archive Context (L0 write + Skill extract) ────────────────────
 
@@ -294,7 +311,7 @@ export interface WorkbuddyArchiveCtx {
    * 资产能力开关（chat_memory / skill / ...）；用于 gate 归档 hook。
    * 与 codexHandler.CodexArchiveCtx.assetCapabilities 对齐。
    */
-  assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
+  assetCapabilities?: import("../../injection/types.js").AssetCapabilityFlags;
 }
 
 /**
@@ -307,21 +324,10 @@ function extractLatestWorkbuddyUserMessage(input: unknown): TdaiMessage | null {
   return { role: "user", content: text };
 }
 
-function createWorkbuddyTdaiClient(config: ProxyConfig): TdaiClient | null {
-  if (!config.tdai?.enabled || !config.tdai?.memory?.enabled || !config.tdai?.endpoint) return null;
-  return new TdaiClient({
-    enabled: config.tdai.enabled,
-    endpoint: config.tdai.endpoint,
-    apiKey: config.tdai.apiKey,
-    serviceId: config.tdai.serviceId,
-    writeL0: config.tdai.memory.writeL0,
-    recallL1: config.tdai.memory.recallL1,
-    injectL2L3: config.tdai.memory.injectL2L3,
-    l1Limit: config.tdai.memory.l1Limit,
-    l2Limit: config.tdai.memory.l2Limit,
-    timeoutMs: config.tdai.memory.timeoutMs,
-  });
-}
+// createWorkbuddyTdaiClient 老实现漏传 spaceId (bug: multi-tenant 时写错 tenant),
+// 迁到 shared buildTdaiClientForRequest 自动修 — 老 wb call site 会补一个 spaceId 参数。
+const createWorkbuddyTdaiClient = (config: ProxyConfig, spaceId?: string) =>
+  buildTdaiClientForRequest(config, spaceId);
 
 function buildWorkbuddyArchiveCtx(args: {
   config: ProxyConfig;
@@ -331,7 +337,7 @@ function buildWorkbuddyArchiveCtx(args: {
   sessionKey: string;
   userId: string;
   callerUserKey?: string | null;
-  assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
+  assetCapabilities?: import("../../injection/types.js").AssetCapabilityFlags;
 }): WorkbuddyArchiveCtx | null {
   const { sessionInfo, injectionSkipped } = args;
   if (injectionSkipped || !sessionInfo) return null;
@@ -367,66 +373,39 @@ function buildWorkbuddyArchiveCtx(args: {
  * 流结束后触发 TDAI L0 write + skill 提取, 对齐 codexHandler 的
  * triggerCodexArchiveHooks 逻辑。失败静默(内部已 warn), 不阻塞下游。
  *
- * @param ctx         归档上下文 (非 null 时有效)
- * @param assistantText stream accumulator 累积的 assistant 文本
+ * 内部走 shared stages/archive.ts::stageArchive (tdaiWriteMode="fire-and-forget-tracked"),
+ * 与 codex archive hook 100% 对称, 仅 agentSource / logPrefix 参数不同。
  */
 async function triggerWorkbuddyArchiveHooks(
   ctx: WorkbuddyArchiveCtx,
   assistantText: string,
   toolCallCountOverride?: number,
 ): Promise<void> {
-  // ── TDAI L0 write ──
-  // 与 codexHandler triggerCodexArchiveHooks 对称:
-  //   trackWrite 挂全局 in-flight set (index.ts flushPendingWrites 兜底)
-  //   withL0Retry 3 次退避挡 tdai kernel 瞬断
-  //   stream 场景不 await, 让归档 hook 提前返回
-  //
-  // 注意：buildWorkbuddyArchiveCtx 已在 chat_memory=false 时把 tdaiClient 置 null，
-  // 所以此处不需要再判 assetCapabilities.chat_memory；tdaiClient 为 null 时自然跳过。
-  if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
-    trackWrite(
-      withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
-      ).catch((err: unknown) => {
-        console.warn("[workbuddy-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
-      }),
-    );
-  } else if (ctx.tdaiClient) {
-    logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKey);
-  }
-
-  // ── Skill conversation/add trigger ──
-  // 与 codexHandler 对称: 归档写完再返, 保证跨节点下一轮读到最新 buffer。
-  // assistantMessage 使用 stream accumulator 的 outputText 组装一份
-  // Responses API 格式的消息 (type:"message", role:"assistant",
-  // content:[{type:"output_text", text}]) —— 与 codexHandler 一致。
-  //
-  // protocol 必须传 "responses"：server.ts 注释明确说明 WorkBuddy 与 Codex 同协议，
-  // langfuse tag 也用 "protocol:responses"。若错传 "openai"，skill 提取时
-  // normalizeConversation 会按 Chat Completions 格式解析 messages[]，
-  // 与实际 body.input[] (Responses API) 错位。
-  if (isExtractionAllowed(ctx.config, "skill")) {
-    const assistantMessage = assistantText
-      ? {
-          type: "message" as const,
-          role: "assistant" as const,
-          content: [{ type: "output_text" as const, text: assistantText }],
-        }
-      : null;
-    await triggerSkillExtractIfReady({
-      config: ctx.config,
-      sessionKey: ctx.sessionKey,
-      agentSource: "workbuddy",
-      sessionInfo: ctx.sessionInfo,
-      inputMessages: ctx.input,
-      assistantMessage,
-      protocol: "responses",
-      assetCapabilities: ctx.assetCapabilities,
-      toolCallCountOverride,
-    });
-  } else {
-    logExtractionSkipped(ctx.config, "skill", ctx.sessionKey);
-  }
+  const assistantMessage = assistantText
+    ? {
+        type: "message" as const,
+        role: "assistant" as const,
+        content: [{ type: "output_text" as const, text: assistantText }],
+      }
+    : null;
+  await stageArchive({
+    config: ctx.config,
+    sessionKey: ctx.sessionKey,
+    agentSource: "workbuddy",
+    sessionInfo: ctx.sessionInfo,
+    inputMessages: ctx.input,
+    assistant: { text: assistantText, raw: assistantMessage },
+    protocol: "responses",
+    assetCapabilities: ctx.assetCapabilities,
+    tdaiClient: ctx.tdaiClient,
+    tdaiIdentity: ctx.tdaiIdentity ?? undefined,
+    tdaiUserMessage: ctx.tdaiUserMessage ?? undefined,
+    isAuxiliary: false,
+    dshHeadless: false,
+    tdaiWriteMode: "fire-and-forget-tracked",
+    toolCallCountOverride,
+    logPrefix: "[workbuddy-tdai-l0]",
+  });
 }
 
 // ── Upstream helpers ─────────────────────────────────────────────────────────
@@ -466,13 +445,7 @@ function buildUpstreamHeaders(c: Context, config: ProxyConfig): Record<string, s
   return h;
 }
 
-function filterResponseHeaders(source: Headers): Headers {
-  const out = new Headers();
-  source.forEach((v, k) => {
-    if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) out.set(k, v);
-  });
-  return out;
-}
+// filterResponseHeaders 合并到 common/constants.ts
 
 /**
  * Forward the request to upstream. On SSE responses with `lf != null`, tees
@@ -499,6 +472,7 @@ async function forwardToUpstream(
   const upstreamBase = ((perAgent?.url ?? config.upstream.url ?? "") as string).replace(/\/$/, "");
   const upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
   let upstreamUrl = joinUrl(upstreamBase, upstreamPath);
+  let skipCreditReport = false;
 
   const headers = buildUpstreamHeaders(c, config);
   // 若 per-agent 指定了独立 apiKey，覆盖全局注入的 authorization
@@ -508,26 +482,92 @@ async function forwardToUpstream(
   }
 
   // ── Instance upstream config override ──
-  {
-    const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
-    const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId);
-    const convCfg = resolveUpstreamConfig(instanceConfigs, "workbuddy", "conversation");
-    if (shouldOverride(convCfg)) {
-      upstreamUrl = joinUrl(convCfg.base_url, upstreamPath);
-      if (convCfg.mode === "custom_unified" && convCfg.api_key) {
-        headers["authorization"] = `Bearer ${convCfg.api_key}`;
-        delete headers["x-api-key"];
-      }
-      if (convCfg.model_id && typeof body.model === "string") {
-        body.model = convCfg.model_id;
-      }
+  // v2 model groups(§7.3): 走 shared stageInstanceUpstreamResponses (与 codex 共享)。
+  // pathForOverride 用剥去 /workbuddy/<sid> 前缀的 upstreamPath, 与老实现等价。
+  const spaceId = extractSpaceIdFromPath(c.req.path) ?? "";
+  const _upstreamResolve = await stageInstanceUpstreamResponses({
+    agent: "workbuddy",
+    spaceId,
+    config,
+    pathForOverride: upstreamPath,
+  });
+  if (isInstanceUpstreamBlocked(_upstreamResolve)) {
+    return c.json(_upstreamResolve.errorBody, 400);
+  }
+  if (_upstreamResolve.overrideUrl) {
+    upstreamUrl = _upstreamResolve.overrideUrl;
+    if (_upstreamResolve.headerUpdates?.authorization) {
+      headers["authorization"] = _upstreamResolve.headerUpdates.authorization;
     }
+    if (_upstreamResolve.headerUpdates?.deleteXApiKey) {
+      delete headers["x-api-key"];
+    }
+    if (_upstreamResolve.bodyModelOverride && typeof body.model === "string") {
+      body.model = _upstreamResolve.bodyModelOverride;
+    }
+  }
+  if (_upstreamResolve.skipCreditReport) skipCreditReport = true;
+
+  // Optional private preparation stage. It rewrites `body` and the `input[]`
+  // items in place, so it has to land after every host-side mutation (model
+  // resolution, instance override) and before `bodyStr` freezes them below.
+  //
+  // Auxiliary turns are excluded for the same reason they skip langfuse and
+  // archive: they are client-driven background calls, not dialogue turns.
+  let preparedStats: Record<string, unknown> | null = null;
+  if (lf && Array.isArray(body.input)) {
+    preparedStats = await prepareUpstreamRequest({
+      config,
+      protocol: "responses",
+      body,
+      messages: body.input,
+      sessionKey: lf.sessionId,
+      spaceId,
+      pipe,
+      upstreamCall: {
+        upstreamUrl,
+        headers,
+        model: modelId,
+        tools: body.tools,
+      },
+      userQuery: lf.userQuery,
+      lf,
+      opikTraceId: traceId,
+      opikKeyId: keyId,
+    });
   }
 
   const bodyStr = JSON.stringify(body);
 
   // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
   pipe.forwardStart(upstreamUrl);
+
+  // ── Opik: create trace (bug B7 fix 迁移时丢失, 本次补回) ──────────────────
+  // 与 codex.ts / anthropic.ts 对齐。⚠️ 必须用**独立的 v7 UUID** 作 Opik
+  // trace id —— 不能复用 lf.traceId (那是 Langfuse 的 sha256 hex, Opik 会
+  // 以 "must be a version 7 UUID" 400 拒掉)。
+  let forkTraceId: string | undefined;
+  try {
+    const { extractSimpleMessages: extractForOpik } = await import("../../mem-command/index.js");
+    const inputMessages = extractForOpik(body.input);
+    forkTraceId = opikCreateTrace(config, {
+      traceId,
+      projectName: keyId,
+      name: `${modelId} / ${keyId}`,
+      startTime,
+      input: { messages: inputMessages },
+      tags: lf?.tags ?? [],
+      forkProjectName: "request_log",
+      forkMetadata: {
+        keyId,
+        modelId,
+        stream: true,
+        upstreamUrl,
+      },
+    });
+  } catch (opikErr: unknown) {
+    pipe.error("OPIK_TRACE", opikErr instanceof Error ? opikErr : new Error(String(opikErr)));
+  }
 
   // usage.log 记录请求（方便运营 / 计费统计），对齐 codex writeLog 用法
   try {
@@ -544,14 +584,43 @@ async function forwardToUpstream(
     /* logger best-effort */
   }
 
+  // Bug B1 fix: 老 wb 完全不接 enforceRateLimit, 由 stageGates.rateLimit 门控
+  const wbAgentForForward = resolveAgentStrategy("workbuddy");
+  if (wbAgentForForward.stageGates.rateLimit && !skipCreditReport) {
+    try {
+      await enforceRateLimit({
+        config,
+        instanceId: extractSpaceIdFromPath(c.req.path) || undefined,
+        modelId,
+        protocol: "openai",
+      });
+    } catch (rlErr: unknown) {
+      if (isRateLimitExceededError(rlErr)) {
+        pipe.info("RATE_LIMIT", "TPM/QPM exceeded");
+        return rlErr.response;
+      }
+      throw rlErr;
+    }
+  }
+
+  // Bug B9 fix: 老 wb 无 AbortSignal.timeout, 上游卡死 fetch 永久 hang
+  const wbForwardTimeoutMs = config.server?.forwardTimeoutMs ?? 600_000;
+
   let upstreamResp: Response;
   try {
-    upstreamResp = await fetch(upstreamUrl, {
+    const fetchOpts: RequestInit = {
       method: "POST",
       headers,
       body: bodyStr,
-    });
+    };
+    if (wbForwardTimeoutMs > 0) {
+      fetchOpts.signal = AbortSignal.timeout(wbForwardTimeoutMs);
+    }
+    upstreamResp = await fetch(upstreamUrl, fetchOpts);
   } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      pipe.info("WORKBUDDY_FORWARD_ERR", `Timeout after ${wbForwardTimeoutMs / 1000}s`);
+    }
     const msg = err instanceof Error ? err.message : String(err);
     pipe.info("WORKBUDDY_FORWARD_ERR", msg);
     // 网络层失败 → langfuse failure 上报，让线上可视化能看到
@@ -580,10 +649,12 @@ async function forwardToUpstream(
   }
 
   const respHeaders = filterResponseHeaders(upstreamResp.headers);
+  // 上游请求 id —— 跨系统追溯用：客户端拿到的 x-request-id → 我方 usage_logs → 上游日志。
+  const upstreamRequestId = upstreamResp.headers.get("x-request-id") ?? "";
   const contentType = upstreamResp.headers.get("content-type") ?? "";
   const isSSE = contentType.includes("text/event-stream");
 
-  pipe.forwardDone(upstreamResp.status);
+  pipe.forwardDone(upstreamResp.status, upstreamResp.headers.get("x-request-id") ?? undefined);
 
   // 上游 4xx/5xx → langfuse failure 上报（body 已被上游消费，不重读，避免破坏流）
   if (lf && upstreamResp.status >= 400) {
@@ -610,12 +681,97 @@ async function forwardToUpstream(
     }
   }
 
-  // Non-SSE or no langfuse ctx → passthrough
-  if (!isSSE || !upstreamResp.body || !lf) {
-    return new Response(upstreamResp.body, {
+  if (!isSSE) {
+    const responseText = await upstreamResp.text();
+    let usage: Record<string, unknown> | undefined;
+    const toolCalls = new Map<string, UpstreamToolCall>();
+    let outputText = "";
+    try {
+      const responseBody = JSON.parse(responseText) as Record<string, unknown>;
+      if (responseBody.usage && typeof responseBody.usage === "object") {
+        usage = responseBody.usage as Record<string, unknown>;
+      }
+      mergeResponsesToolCalls(toolCalls, responseBody.output);
+      outputText = collectResponsesOutputText(responseBody);
+    } catch {
+      // Preserve an unexpected non-JSON response without billing it.
+    }
+    if (lf) {
+      void notifyUpstreamResponse(config, {
+        protocol: "responses",
+        sessionKey: lf.sessionId,
+        model: modelId,
+        stream: false,
+        turnSeq: lf.turnSeq,
+        text: outputText,
+        toolCalls: [...toolCalls.values()],
+        usage: usage ?? {},
+      }, pipe);
+    }
+    if (usage && Object.keys(usage).length > 0) {
+      writeLog(config, {
+        timestamp: new Date().toISOString(),
+        event: "usage",
+        modelId,
+        keyId,
+        sessionKey: lf?.sessionId ?? keyId,
+        turnSeq: lf?.turnSeq,
+        userInput: lf?.userQuery || undefined,
+        upstreamUrl,
+        stream: false,
+        usage,
+        requestReceivedAt: startTime,
+        extensionStats: preparedStats ?? undefined,
+        spaceId,
+        upstreamRequestId,
+      });
+      await stageRecordTokenUsage({
+        config, gates: wbAgentForForward.stageGates,
+        isCustomUpstream: skipCreditReport,
+        spaceId,
+        modelId, usage, protocol: "responses",
+      }).catch((rlErr: unknown) => pipe.error("RATE_LIMIT_RECORD", rlErr));
+      const creditResult = await stageCredit({
+        skipCreditReport, config, path: c.req.path, usage, effectiveModel: modelId,
+        upstreamUrl, event: "usage", startTime: new Date(startTime),
+        reqIds: pipe.ids(), upstreamRequestId,
+        sessionKey: lf?.sessionId ?? keyId, stream: false,
+        keyId, routedFrom: "",
+      }, pipe);
+      if (creditResult.responseErrorHeader) {
+        respHeaders.set("x-credit-report-error", creditResult.responseErrorHeader);
+      }
+    }
+    // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
+    const clientResponseText = stripCfqFromResponseText(
+      "responses",
+      responseText,
+      preparedStats,
+      createCfqStripObserver(pipe),
+    );
+    return new Response(clientResponseText, {
       status: upstreamResp.status,
       headers: respHeaders,
     });
+  }
+
+  // Main turns are tapped for observability/archive; auxiliary Responses calls
+  // are tapped for credit only.
+  if (!upstreamResp.body || (!lf && skipCreditReport)) {
+    // 不 tap 也要剥离：注入与否跟观测无关，客户端校验一样会拒。
+    return new Response(
+      upstreamResp.body
+        ? upstreamResp.body.pipeThrough(createCfqStripStream(
+            "responses",
+            preparedStats,
+            createCfqStripObserver(pipe),
+          ))
+        : null,
+      {
+        status: upstreamResp.status,
+        headers: respHeaders,
+      },
+    );
   }
 
   // SSE + langfuse: tee & tap
@@ -625,18 +781,32 @@ async function forwardToUpstream(
     modelId,
     keyId,
     traceId,
+    forkTraceId,
     lf,
     config,
+    requestPath: c.req.path,
+    spaceId,
+    upstreamRequestId,
+    skipCreditReport,
+    preparedStats,
     pipe,
     archiveCtx,
     inputBody: body,
     upstreamUrl,
   });
 
-  return new Response(passStream, {
-    status: upstreamResp.status,
-    headers: respHeaders,
-  });
+  // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
+  return new Response(
+    passStream.pipeThrough(createCfqStripStream(
+      "responses",
+      preparedStats,
+      createCfqStripObserver(pipe),
+    )),
+    {
+      status: upstreamResp.status,
+      headers: respHeaders,
+    },
+  );
 }
 
 /**
@@ -647,8 +817,24 @@ interface WorkbuddyTapContext {
   modelId: string;
   keyId: string;
   traceId: string;
+  /** Opik fork trace id (request_log 项目)；opik 关闭时 undefined。 */
+  forkTraceId?: string;
   lf: LangfuseTurnContext | null;
   config: ProxyConfig;
+  requestPath: string;
+  /**
+   * Session composite key (`${agentSource}:${sessionId}`), 用于 modelIntent
+   * telemetry 和 skill extract 的 sessionKey 字段。runner 在构造 tap ctx 时
+   * 以 `${lf.sessionId}` 传入 (老代码一直这么写)。
+   */
+  sessionKey?: string;
+  /** Tenant the usage is billed to; ClickHouse filters on it. */
+  spaceId: string;
+  /** Upstream `x-request-id`, carried for cross-system tracing. */
+  upstreamRequestId: string;
+  skipCreditReport: boolean;
+  /** Opaque counters from the preparation stage, recorded with the usage log. */
+  preparedStats: Record<string, unknown> | null;
   pipe: ReturnType<typeof createPipeline>;
   archiveCtx: WorkbuddyArchiveCtx | null;
   /**
@@ -678,8 +864,6 @@ async function consumeWorkbuddyStream(
   stream: ReadableStream<Uint8Array>,
   ctx: WorkbuddyTapContext,
 ): Promise<void> {
-  // aux passthrough: skip langfuse + archive hooks
-  if (!ctx.lf) return;
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -688,6 +872,9 @@ async function consumeWorkbuddyStream(
   let responseId: string | undefined;
   // Q: 累积当前 turn 内的 function_call 次数（round 边界判据）
   let toolUseCount = 0;
+  // 按 call_id 累积工具调用，供增量会话的 CFQ 侧信道使用。output_item.done
+  // 与 completed 会重复给出同一条，Map 去重后以终态为准。
+  const toolCalls = new Map<string, UpstreamToolCall>();
 
   // P: 5 分钟超时兜底。上游或客户端断链可能让 reader.read() 一直挂起，
   // 用 setTimeout 强制 cancel，避免 tap coroutine 泄漏。用 flag 而不是
@@ -734,6 +921,7 @@ async function consumeWorkbuddyStream(
           if (evtType === "response.output_item.done") {
             const item = evt.item as Record<string, unknown> | undefined;
             if (item?.type === "function_call") toolUseCount++;
+            if (item) mergeResponsesToolCalls(toolCalls, [item]);
             // response.output_item.done 里的 resp 语义与 codex 保持一致：
             // 有些上游会在这里把 usage/response.id 一起吐出（stream 内多次
             // done），下面 completed 分支才是权威 usage 来源。
@@ -749,6 +937,7 @@ async function consumeWorkbuddyStream(
             if (resp?.usage && typeof resp.usage === "object") {
               usage = resp.usage as Record<string, unknown>;
             }
+            mergeResponsesToolCalls(toolCalls, resp?.output);
           }
         } catch {
           /* ignore malformed frames */
@@ -768,8 +957,57 @@ async function consumeWorkbuddyStream(
   }
 
   const endTime = new Date().toISOString();
+  if (ctx.lf) {
+    void notifyUpstreamResponse(ctx.config, {
+      protocol: "responses",
+      sessionKey: ctx.lf.sessionId,
+      model: ctx.modelId,
+      stream: true,
+      turnSeq: ctx.lf.turnSeq,
+      text: assistantText,
+      toolCalls: [...toolCalls.values()],
+      usage: usage ?? {},
+    }, ctx.pipe);
+  }
+  if (usage && Object.keys(usage).length > 0) {
+    // wb 老行为: writeLog(usage) 无 gate 恒写 (与 codex 对齐, 避免任何 preset 档位让 wb 停写)
+    stageWriteUsageLog({
+      config: ctx.config, pipe: ctx.pipe,
+      timestamp: endTime, modelId: ctx.modelId,
+      keyId: ctx.keyId,
+      sessionKey: ctx.lf?.sessionId ?? ctx.keyId,
+      turnSeq: ctx.lf?.turnSeq,
+      userInput: ctx.lf?.userQuery || undefined,
+      upstreamUrl: ctx.upstreamUrl, usage,
+      requestReceivedAt: ctx.startTime,
+      extensionStats: ctx.preparedStats ?? undefined,
+      spaceId: ctx.spaceId,
+      upstreamRequestId: ctx.upstreamRequestId,
+    });
+  }
   try {
-    // R: 用结构化 input 上报（body.input + instructions），便于 langfuse UI 排障
+    await stageCredit({
+      skipCreditReport: ctx.skipCreditReport,
+      config: ctx.config,
+      path: ctx.requestPath,
+      usage,
+      effectiveModel: ctx.modelId,
+      upstreamUrl: ctx.upstreamUrl,
+      event: "usage",
+      startTime: new Date(ctx.startTime),
+      reqIds: ctx.pipe.ids(),
+      upstreamRequestId: ctx.upstreamRequestId,
+      sessionKey: ctx.keyId,
+      stream: true,
+      keyId: ctx.keyId,
+      routedFrom: "",
+    }, ctx.pipe);
+  } catch (err: unknown) {
+    ctx.pipe.error("CREDIT_REPORT", err instanceof Error ? err : new Error(String(err)));
+  }
+  if (ctx.lf) {
+    try {
+      // R: 用结构化 input 上报（body.input + instructions），便于 langfuse UI 排障
     langfuseReportGeneration({
       traceId: ctx.lf.traceId,
       name: `workbuddy:${ctx.modelId}`,
@@ -793,11 +1031,55 @@ async function consumeWorkbuddyStream(
         tool_use_count: toolUseCount,
       },
     });
-  } catch (err) {
-    ctx.pipe.info(
-      "WORKBUDDY_LANGFUSE_ERR",
-      err instanceof Error ? err.message : String(err),
-    );
+    } catch (err) {
+      ctx.pipe.info(
+        "WORKBUDDY_LANGFUSE_ERR",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  // ── Opik LLM span (bug B7, gated by stageGates.opik) ──
+  const wbAgentStrategy = resolveAgentStrategy("workbuddy");
+  if (ctx.config && usage && Object.keys(usage).length > 0) {
+    stageOpikStreamSpan({
+      config: ctx.config, gates: wbAgentStrategy.stageGates, pipe: ctx.pipe,
+      // ⚠️ 必须用 Opik 自己的 trace id (ctx.traceId, v7 UUID)。
+      // 曾经这里错用 ctx.lf.traceId —— 那是 Langfuse 的 sha256 hex,
+      // Opik 以 "must be a version 7 UUID" 400 拒掉整个 span。
+      traceId: ctx.traceId,
+      forkTraceId: ctx.forkTraceId,
+      keyId: ctx.keyId, modelId: ctx.modelId,
+      startTime: ctx.startTime, endTime,
+      inputMessages: [{ role: "user", content: JSON.stringify(ctx.inputBody?.input ?? []) }],
+      outputMessage: assistantText ? { role: "assistant", content: assistantText } : null,
+      usage, retried: false, upstreamUrl: ctx.upstreamUrl,
+      streamTag: "stream",
+    });
+  }
+
+  // ── ModelIntent telemetry (bug B4, gated by stageGates.modelIntentTelemetry) ──
+  // wb 独有: doesn't accumulate toolCalls, emit synthetic counter only
+  if (toolUseCount > 0) {
+    stageEmitModelIntent({
+      gates: wbAgentStrategy.stageGates,
+      sessionKey: `workbuddy:${ctx.sessionKey}`,
+      turnSeq: ctx.lf?.turnSeq ?? 0,
+      spaceId: ctx.spaceId,
+      userId: ctx.keyId,
+      agentSource: "workbuddy",
+      intents: [{ name: "wb_tool_use", arguments: `count=${toolUseCount}` }],
+    });
+  }
+
+  // ── recordInputTokenUsage (bug B1 stream side, gated by stageGates.rateLimit) ──
+  if (ctx.config && usage && Object.keys(usage).length > 0) {
+    await stageRecordTokenUsage({
+      config: ctx.config, gates: wbAgentStrategy.stageGates,
+      isCustomUpstream: !!ctx.skipCreditReport,
+      spaceId: ctx.spaceId,
+      modelId: ctx.modelId, usage, protocol: "responses",
+    }).catch((rlErr: unknown) => ctx.pipe.error("RATE_LIMIT_RECORD", rlErr));
   }
 
   // ── TDAI L0 write + Skill extraction ──
@@ -834,7 +1116,7 @@ async function consumeWorkbuddyStream(
  *   9. Injection   - 通用 injection pipeline，注入到 body.input[0].content[]
  *   10. Forward    - 转发上游 + tap SSE 上报 langfuse
  */
-export async function handleWorkbuddyEndpoint(
+export async function runWorkbuddyPipeline(
   c: Context,
   config: ProxyConfig,
 ): Promise<Response> {
@@ -842,35 +1124,39 @@ export async function handleWorkbuddyEndpoint(
   const startTime = new Date().toISOString();
   const path = c.req.path;
 
-  // ── 1. Auth ──────────────────────────────────────────────────────────────
-  const rawAuth = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const rawXApiKey = c.req.header("x-api-key") ?? "";
-  const apiKey =
-    extractBearerToken(rawAuth) ??
-    rawXApiKey ??
-    "";
-  const spaceId = extractSpaceIdFromPath(path) ?? "";
-  const { userId, rejected: userKeyRejected, rejectReason } = await verifyUserKey(
-    apiKey,
-    spaceId,
-  );
-  if (userKeyRejected) {
-    return c.json({ error: `Authentication failed: ${rejectReason ?? "unknown"}` }, 401);
+  // ── 1. Auth (via shared stageAuth) ───────────────────────────────────
+  const auth = await stageAuth(c, "bearer-first");
+  const apiKey = auth.apiKey;
+  const spaceId = auth.spaceId;
+  const userId = auth.userId;
+  if (auth.rejected) {
+    return c.json({ error: `Authentication failed: ${auth.rejectReason ?? "unknown"}` }, 401);
   }
-  const keyId = userId || (apiKey ? apiKeyToKeyId(apiKey) : "unknown");
+  const keyId = auth.keyId;
 
-  // ── 2. Read body ─────────────────────────────────────────────────────────
-  let body: Record<string, unknown>;
-  try {
-    body = await c.req.json<Record<string, unknown>>();
-  } catch {
+  // ── 2. Read body (via shared stageParseBody) ─────────────────────────
+  const parseResult = await stageParseBody(c);
+  if (!parseResult.ok) {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
+  // ⚠️ `let` 不能改回 `const`: 下面 § 9 注入阶段 (line 1616 附近)
+  // 会 `body = injectWorkbuddyAssets(body, ...)` 原地替换为注入后的新对象。
+  // c6fa775d (stageParseBody 迁移) 不小心改成了 const, 导致运行时
+  // 抛 "Assignment to constant variable", catch 后降级为**无注入透传** —
+  // workbuddy 的 skill/memory/session_context 从此全丢。TS 2588 一直报警
+  // 但被当成"重构遗留基线错误"没人修。
+  let body = parseResult.body;
 
   // ── 3. Extract headers ───────────────────────────────────────────────────
   const headers: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) {
     headers[k.toLowerCase()] = v;
+  }
+
+  // ── Identity 埋点 (bug B5 fix, gated by stageGates.identityRecord) ──
+  const wbAgent = resolveAgentStrategy("workbuddy");
+  if (wbAgent.stageGates.identityRecord) {
+    stageIdentity(c, body, "workbuddy");
   }
 
   // ── 4. Classify request ──────────────────────────────────────────────────
@@ -884,7 +1170,36 @@ export async function handleWorkbuddyEndpoint(
   const isAuxiliary = requestKind === "auxiliary";
 
   const requestedModel = typeof body.model === "string" ? body.model : "";
+
+  // ── Model gate (bug B8 fix, gated by stageGates.modelGate) ──
+  const _wbSpaceIdForGate = extractSpaceIdFromPath(path) ?? "";
+  let _wbIsCustomUpstream = false;
+  if (wbAgent.stageGates.modelGate && !isAuxiliary) {
+    try {
+      const { getInstanceUpstreamConfigs, resolveForAgent, shouldOverride } =
+        await import("../../instance-upstream-cache.js");
+      const cfgs = await getInstanceUpstreamConfigs(config.coreSkill, _wbSpaceIdForGate, config.instanceUpstream);
+      _wbIsCustomUpstream = shouldOverride(resolveForAgent(cfgs, "workbuddy"));
+    } catch {
+      _wbIsCustomUpstream = false;
+    }
+    if (!_wbIsCustomUpstream) {
+      const gateResult = stageModelGate(requestedModel, config, false);
+      if (!gateResult.ok) {
+        return c.json({
+          type: "error",
+          error: { type: "invalid_request_error",
+            message: `Model '${requestedModel}' is not a registered display name in the credit pricing table` },
+        }, 400);
+      }
+    }
+  }
+
   const modelId = resolveModelId(config.creditPricing, requestedModel);
+  // 对外展示名只用于客户端请求；TokenHub 只接受价目表中登记的真实服务 ID。
+  if (typeof body.model === "string" && modelId !== requestedModel) {
+    body.model = modelId;
+  }
   const pipe = createPipeline(config, traceId, modelId);
 
   // ── 5. Aux passthrough ───────────────────────────────────────────────────
@@ -900,7 +1215,7 @@ export async function handleWorkbuddyEndpoint(
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;
 
-  const turnSeq = countHumanTurnsWorkbuddy(body.input);
+  const turnSeq = countHumanTurnsResponses(body.input);
   const userQuery = workbuddyAdapter.extractUserText(body.input) ?? "";
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
@@ -929,7 +1244,7 @@ export async function handleWorkbuddyEndpoint(
   // 三者都是 codex 客户端专有行为，WorkBuddy 亦然。langfuse tag/日志侧的
   // agent_source 保持 "workbuddy" 不受影响。
   let sessionInfo: Record<string, unknown> | null | undefined;
-  let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
+  let assetCapabilities: import("../../injection/types.js").AssetCapabilityFlags | undefined;
   let injectionSkipped = false;
   let cachedAgentDetail: unknown = null;
   let cachedTaskDetail: unknown = null;
@@ -937,154 +1252,74 @@ export async function handleWorkbuddyEndpoint(
 
   const input = Array.isArray(body.input) ? body.input : [];
 
-  // ── mem:session-reset pre-hook ──
+  // ── mem:session-reset pre-hook (via shared stage) ──
+  // wb 用 `codex:${sessionKey}` 作 compositeKey (workbuddy agent 复用 codex adapter/state)
   {
-    const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
-    if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
-      const { parseCommandFromText } = await import("./mem-command/index.js");
-      const { workbuddyAdapter } = await import("./agent-adapters/workbuddy.js");
-      const userText = workbuddyAdapter.extractUserText(input) ?? "";
-      const memCmd = parseCommandFromText(userText);
-      if (memCmd) {
-        const { getSessionStore } = await import("./session/store.js");
-        const store = getSessionStore();
-        const compositeKey = `codex:${sessionKey}`;
-        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
-
-        // ── 强制归档旧 agent 的 skill buffer（best-effort）──
-        const oldState = store.get(compositeKey);
-        if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
-          if (si.space_id && si.user_id && si.team_id && si.agent_id) {
-            import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
-              const client = getCoreSkillClient(config.coreSkill!);
-              client.forceArchive(
-                {
-                  space_id: si.space_id,
-                  user_id: si.user_id,
-                  team_id: si.team_id,
-                  agent_id: si.agent_id,
-                  session_id: sessionKey,
-                  task_id: si.task_id || undefined,
-                  reason: "session-reset",
-                },
-                { serviceId: si.space_id },
-              ).then((res) => {
-                console.log(`[session-reset] force-archive old buffer: status=${res.status} session=${sessionKey} agent=${si.agent_id}`);
-              }).catch((err) => {
-                console.warn(`[session-reset] force-archive failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
-              });
-            }).catch(() => {});
-          }
-        }
-
-        const resetEpoch = Date.now();
-        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
-        const bindingRepo = store.getBindingRepo();
-        if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
-        console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
-      }
-    }
+    const { workbuddyAdapter } = await import("../../agent-adapters/workbuddy.js");
+    const userText = workbuddyAdapter.extractUserText(input) ?? "";
+    const _resetResp = await stageSessionResetPreHook({
+      c, config, body: body as Record<string, unknown>, agentSource, sessionKey, spaceId, userId,
+      isAuxiliary: false, dshHeadless: false, isStream,
+      protocol: "responses", userText, enabled: true,
+      compositeKeyOverride: `codex:${sessionKey}`,
+    });
+    if (_resetResp) return _resetResp;
   }
 
   if (config.sessionInit?.enabled && sessionId) {
     try {
-      const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import(
-        "./session/index.js"
-      );
-      const { getMetadataClient } = await import("./meta/client.js");
-      const store = getSessionStore();
-      // kernel 侧鉴权的 x-tdai-user-key 直接用客户端请求 bearer（与 codexHandler / anthropicHandler 对齐）。
-      // WorkBuddy / Codex / Claude Code 桌面客户端携带的 bearer 就是用户 key，kernel 能识别；
-      // 无需 config.tdai.apiKey 兜底（否则 config 里的 "local" 会覆盖真实用户 key，导致 401）。
-      const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
-      const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
-
-      const compositeKey = `codex:${sessionKey}`;
-      const identity = {
-        userId: userId || "anonymous",
-        agentSource: "codex" as const,
-        sessionId: sessionKey,
-        spaceId,
-      };
-      const recovered = await store.getOrRecover(compositeKey, identity, {
-        metadataClient,
-        // Responses API 客户端不用 messages[]，传空由 store 走 header/no-message 回收路径
-        messages: [],
-      });
-
-      let initResult: Awaited<ReturnType<typeof handleSessionInit>>;
-      const isTerminalState = recovered?.status === "initialized";
-      // Recovery hit source 决定是否需要 prewarm（详见 handler.ts 对称位置注释）。
-      const needsPrewarm =
-        recovered?.__recoverySource === "l2b" ||
-        recovered?.__recoverySource === "history-scan";
-
-      if (recovered && isTerminalState) {
-        // Recovered from L2b/L2a — skip form, apply context
-        const { buildSessionContextBlockWithToggles } = await import(
-          "./session/context-injector.js"
-        );
-        const systemAppend = recovered.bypassed
-          ? null
-          : buildSessionContextBlockWithToggles(
-              recovered.agentDetail ?? null,
-              recovered.taskDetail ?? null,
-              config.sessionInit,
-              sessionKey,
+      // Round 18: session-init 主编排走 shared stageSessionInitOrchestrate;
+      // workbuddy 4 个 callback:
+      //   - synthesizeMessages: codexFormAnswersAsMessages(input) (与 codex 对称)
+      //   - buildRecoverInitResult: systemAppend + messages:[] (responses API)
+      //   - buildInterceptResponse: buildCodexFormResponse (借用 codex form builder)
+      //   - buildDefaultGateResponse: wb 独有 Plan 提示 (含 reset 场景文案分支)
+      // wb 独有: compositeKeyOverride="codex:..." (借 codex L2b binding),
+      //          agentSourceForState="codex" (复用 CB 分支)
+      const _orch = await stageSessionInitOrchestrate({
+        agentSourceForState: "codex",
+        compositeKeyOverride: `codex:${sessionKey}`,
+        sessionKey, userId: userId || null, spaceId,
+        config: config as ProxyConfig & { sessionInit: NonNullable<ProxyConfig["sessionInit"]> },
+        kernelUserKey: apiKey,
+        headers, recoveryMessages: [],
+        synthesizeMessages: () => {
+          const synth = codexFormAnswersAsMessages(input);
+          const rawOutputs = input
+            .filter((it: any) => it?.type === "function_call_output")
+            .map((it: any) => ({
+              call_id: it.call_id,
+              output_preview: String(it.output ?? "").slice(0, 200),
+            }));
+          if (rawOutputs.length > 0) {
+            console.log(
+              `[workbuddy-debug] session=${sessionKey} function_call_outputs=${JSON.stringify(rawOutputs)} synth_msgs=${JSON.stringify(synth).slice(0, 500)}`,
             );
-        initResult = {
-          intercepted: false,
-          messages: [],
-          systemAppend,
-          sessionInfo: recovered.sessionInfo,
-          agentDetail: recovered.agentDetail,
-          taskDetail: recovered.taskDetail,
-          bypassed: recovered.bypassed,
-          justRegistered: needsPrewarm,
-        };
-      } else {
-        // Run the state machine — reuses CB's handleSessionInit with
-        // agentSource="codex". CB parses picks from `messages[]`, but codex/workbuddy
-        // clients send them as `function_call_output.output` items in body.input[]。
-        // 我们用 codexFormAnswersAsMessages 把 output 合成成 minimal messages[]
-        // 供 CB 的 extractor 识别（extractor 只看 last user/tool message text）。
-        const synthesizedMessages = codexFormAnswersAsMessages(input);
-        const rawOutputs = input
-          .filter((it: any) => it?.type === "function_call_output")
-          .map((it: any) => ({
-            call_id: it.call_id,
-            output_preview: String(it.output ?? "").slice(0, 200),
-          }));
-        if (rawOutputs.length > 0) {
-          console.log(
-            `[workbuddy-debug] session=${sessionKey} function_call_outputs=${JSON.stringify(rawOutputs)} synth_msgs=${JSON.stringify(synthesizedMessages).slice(0, 500)}`,
+          }
+          return synth;
+        },
+        buildRecoverInitResult: async (recovered) => {
+          const { buildSessionContextBlockWithToggles } = await import(
+            "../../session/context-injector.js"
           );
-        }
-        initResult = await handleSessionInit(
-          sessionKey,
-          userId || null,
-          synthesizedMessages,
-          config.sessionInit,
-          store,
-          {
-            stream: isStream,
-            modelId: modelId as string,
-            protocol: "responses" as any,
-            // 把原始 input[] 交给 CB 状态机识别 Default gate 与 MORE 翻页
-            codexAnswerInput: input,
-          },
-          "codex", // ← 状态机 source: 复用 codex 分支
-          metadataClient,
-          apiKey,
-          spaceId,
-          presetIdentity,
-        );
-      }
-
-      if (initResult.intercepted) {
-        // CB 状态机中断 → 用 codex form builder 渲染成 Responses API SSE 弹窗
-        if (initResult.formData) {
+          const systemAppend = recovered.bypassed
+            ? null
+            : buildSessionContextBlockWithToggles(
+                recovered.agentDetail ?? null,
+                recovered.taskDetail ?? null,
+                config.sessionInit,
+                sessionKey,
+              );
+          return { messages: [], systemAppend };
+        },
+        buildReqCtx: () => ({
+          stream: isStream,
+          modelId: modelId as string,
+          protocol: "responses" as any,
+          codexAnswerInput: input,
+        }),
+        buildInterceptResponse: (initResult) => {
+          if (!initResult.formData) return initResult.response ?? null;
           return buildCodexFormResponse({
             teams: initResult.formData.teams,
             stage: initResult.formData.stage,
@@ -1097,58 +1332,49 @@ export async function handleWorkbuddyEndpoint(
             stream: isStream,
             modelId: initResult.formData.modelId ?? (modelId as string),
           });
-        }
-        // Defensive fallback
-        if (initResult.response) return initResult.response;
-      }
-
-      // Default gate 首次命中 → 返一次 Plan 模式提示，后续同 session recovered.bypassed=true
-      if ((initResult as any).bypassReason === "default-gate") {
-        pipe.info("WORKBUDDY_GATE", "Default mode gate detected → notify user (first hit)");
-        const { buildMemResponse } = await import("./mem-command/response-builder.js");
-        // reset 场景下的 gate: 换成针对性文案,详见 codexHandler 同名段
-        const gateText = (initResult as any).resetFlow
-          ? "⚠️ mem:session-reset 需要 Plan 模式支持。\n\n"
-            + "workbuddy 客户端当前不在 Plan 模式，无法弹出资产选择表单。\n"
-            + "请切到 Plan 模式后再执行 mem:session-reset。"
-          : "检测到未开启 Plan 模式，本次会话跳过资产注入。"
-            + "如需管理 Skill / Task / Agent，请切到 Plan 模式后重新开启新会话。"
-            + "本次消息将直接由 LLM 回答。";
-        return buildMemResponse(gateText, {
-          protocol: "responses",
-          stream: isStream,
-          requestId: `workbuddy-gate-${Date.now()}`,
-        });
-      }
-
-      if (initResult.bypassed) {
-        injectionSkipped = true;
-        console.log(
-          `[workbuddy] session=${sessionKey} bypassed (reason=${(initResult as any).bypassReason ?? "unknown"}) → skipping injection`,
-        );
-        if (initResult.resetFlow) {
-          _resetFlowResult = { agentName: "", agentIdShort: "", teamIdShort: "", bypassed: true };
-        }
-      }
-
-      if (!initResult.bypassed && initResult.sessionInfo) {
-        try {
-          const { fetchAssetCapabilities } = await import("./tdai/capabilities.js");
-          assetCapabilities = await fetchAssetCapabilities({
-            endpoint: config.tdai.endpoint,
-            apiKey: config.tdai.apiKey,
-            serviceId: config.tdai.serviceId,
-            serviceIdOverride: spaceId,
-            userId: (initResult.sessionInfo as { user_id?: string }).user_id,
-            userKey: callerUserKey,
-            timeoutMs: config.tdai.memory.timeoutMs,
+        },
+        buildDefaultGateResponse: (initResult) => {
+          if ((initResult as any).bypassReason !== "default-gate") return null;
+          pipe.info("WORKBUDDY_GATE", "Default mode gate detected → notify user (first hit)");
+          const gateText = (initResult as any).resetFlow
+            ? "⚠️ mem:session-reset 需要 Plan 模式支持。\n\n"
+              + "workbuddy 客户端当前不在 Plan 模式，无法弹出资产选择表单。\n"
+              + "请切到 Plan 模式后再执行 mem:session-reset。"
+            : "检测到未开启 Plan 模式，本次会话跳过资产注入。"
+              + "如需管理 Skill / Task / Agent，请切到 Plan 模式后重新开启新会话。"
+              + "本次消息将直接由 LLM 回答。";
+          return buildMemResponse(gateText, {
+            protocol: "responses",
+            stream: isStream,
+            requestId: `workbuddy-gate-${Date.now()}`,
           });
-        } catch (err) {
-          console.warn(
-            `[workbuddy] asset-capability resolve failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
+        },
+      });
+      if (!_orch.proceed) return _orch.response!;
+      const initResult = _orch.initResult!;
+      const wentThroughSessionInitStateMachine = _orch.wentThroughStateMachine;
+      void wentThroughSessionInitStateMachine; // wb 不显式用, 但保留占位方便对齐 anthropic/openai
+
+      // Bypass path → skip injection (via shared stageSessionBypass)
+      // wb 独有: log 里带 bypassReason; resetFlow 用 teamIdShort 字段
+      const _bypassResult = stageSessionBypass({
+        bypassed: !!initResult.bypassed,
+        resetFlow: !!initResult.resetFlow,
+        sessionKey,
+        logPrefix: "[workbuddy]",
+        extraLog: ` (reason=${(initResult as any).bypassReason ?? "unknown"})`,
+        useTeamIdShort: true,
+      });
+      if (_bypassResult.skipInjection) injectionSkipped = true;
+      if (_bypassResult.resetFlowResult) _resetFlowResult = _bypassResult.resetFlowResult as unknown as typeof _resetFlowResult;
+
+      assetCapabilities = await stageAssetCapabilities({
+        bypassed: !!initResult.bypassed,
+        sessionInfo: initResult.sessionInfo,
+        config, spaceId,
+        userKey: callerUserKey,
+        warnPrefix: "[workbuddy] asset-capability resolve failed:",
+      });
 
       // Prewarm 前置短路：mem-command 命中的 turn 不走 forward、不消费 hook-cache，
       // 若照常 prewarm 会白花 2-3s + 3 次网络请求。见 handler.ts 对称位置详注。
@@ -1157,7 +1383,7 @@ export async function handleWorkbuddyEndpoint(
         try {
           const userTextPeek = workbuddyAdapter.extractUserText(input);
           if (userTextPeek) {
-            const { parseCommandFromText } = await import("./mem-command/index.js");
+            const { parseCommandFromText } = await import("../../mem-command/index.js");
             const peek = parseCommandFromText(userTextPeek);
             if (peek) {
               memCommandPending = true;
@@ -1172,34 +1398,17 @@ export async function handleWorkbuddyEndpoint(
         }
       }
 
-      if (
-        !initResult.bypassed &&
-        initResult.justRegistered &&
-        initResult.sessionInfo &&
-        !memCommandPending &&
-        config.injection?.enabled &&
-        (config.injection.injectors?.length ?? 0) > 0
-      ) {
-        try {
-          const mod = await import("./injection/index.js");
-          await mod.prewarmFromConfig(config, {
-            keyId: sessionKey,
-            userId: userId || "anonymous",
-            agentSource,
-            spaceId,
-            sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
-            agentDetail: initResult.agentDetail ?? null,
-            taskDetail: initResult.taskDetail ?? null,
-            assetCapabilities,
-            callerUserKey: callerUserKey ?? undefined,
-          }, { clearBefore: true });
-        } catch (err) {
-          console.warn(
-            "[workbuddy] prewarm error:",
-            err instanceof Error ? err.message : String(err),
-          );
-        }
-      }
+      await stagePrewarmInjection({
+        bypassed: !!initResult.bypassed,
+        justRegistered: !!initResult.justRegistered,
+        sessionInfo: initResult.sessionInfo,
+        agentDetail: initResult.agentDetail,
+        taskDetail: initResult.taskDetail,
+        memCommandPending,
+        config, sessionKey, userId, agentSource, spaceId, assetCapabilities,
+        callerUserKey: callerUserKey ?? undefined,
+        logTag: "[workbuddy] prewarm error:",
+      });
 
       sessionInfo = initResult.sessionInfo as Record<string, unknown> | null | undefined;
       if (sessionInfo && !sessionInfo.space_id && spaceId) {
@@ -1213,15 +1422,15 @@ export async function handleWorkbuddyEndpoint(
           agentName: initResult.agentDetail?.name ?? "未知",
           // agentIdShort 字段名沿用历史，但此处**存完整 agent_id**（如 agt-1celthr7yn）。
           // 之前 slice(-8) 会截断成 "elthr7yn" 用户看不懂，与 team 截断问题对称。
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id) : "",
+          agentIdShort: initResult.sessionInfo?.agent_id
+            ? String(initResult.sessionInfo?.agent_id) : "",
           // teamName 来自 session-init 返回值（从 cachedTeams 里查得）；
           // teamIdShort 字段名沿用历史，但此处**存完整 team_id**（如 team-wyuyb7sion）。
           // 之前 slice(-8) 只留后 8 位会让用户看到 "uyb7sion" 这种截断串，配合
           // teamName 常为空导致的兜底路径显示极不完整。团队 id 本身就短，全量展示无害。
           teamName: initResult.teamName ?? undefined,
-          teamIdShort: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id) : "",
+          teamIdShort: initResult.sessionInfo?.team_id
+            ? String(initResult.sessionInfo?.team_id) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1235,35 +1444,14 @@ export async function handleWorkbuddyEndpoint(
     }
   }
 
-  // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
+  // ── mem:session-reset 完成确认 (via shared stage) ────────────────────────
+  // wb 用 teamIdShort 字段名, 但 stage 期望 teamId — 直接映射
   if (_resetFlowResult) {
-    const { agentName, agentIdShort, teamName, teamIdShort, taskName, bypassed } = _resetFlowResult;
-    // Team 行拼装：优先 team_name (short-id)；没查到 team_name 时至少显示 short-id
-    // 兜底（比全丢更好）；两者都空则整行省略。
-    const teamLine = teamName
-      ? `- **Team**: ${teamName}${teamIdShort ? ` (${teamIdShort})` : ""}`
-      : teamIdShort
-        ? `- **Team**: ${teamIdShort}`
-        : null;
-    const lines = bypassed
-      ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
-      : [
-          "✅ 已重新绑定团队资产",
-          "",
-          `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
-          teamLine,
-          taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
-          "",
-          "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
-        ].filter(Boolean);
-    const text = (lines as string[]).join("\n");
-
-    const { buildMemResponse } = await import("./mem-command/response-builder.js");
-    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort}) team=${teamName ?? "-"} (${teamIdShort || "-"})`);
-    return buildMemResponse(text, {
+    const { teamIdShort, ...rest } = _resetFlowResult;
+    return stageSessionResetConfirmation({
+      resetFlowResult: { ...rest, teamId: teamIdShort },
       protocol: "responses",
-      stream: isStream,
-      requestId: `mem-reset-${Date.now()}`,
+      isStream,
     });
   }
 
@@ -1272,7 +1460,7 @@ export async function handleWorkbuddyEndpoint(
     const userText = workbuddyAdapter.extractUserText(input);
     if (userText) {
       const { parseCommandFromText, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } =
-        await import("./mem-command/index.js");
+        await import("../../mem-command/index.js");
       // ⚠️ 不用 parseMemCommand(body, "workbuddy") —— 它只解 body.messages[] (CC/CB 形态),
       // WorkBuddy 用的是 Responses API (body.input[])，传进去永远返 null → 命令静默透传给 LLM。
       // 改用 parseCommandFromText(userText) 直接解析用户文本。对齐 codexHandler 的做法。
@@ -1391,14 +1579,14 @@ export async function handleWorkbuddyEndpoint(
     (config.injection.injectors?.length ?? 0) > 0
   ) {
     try {
-      const { getInjectionPipeline } = await import("./injection/index.js");
+      const { getInjectionPipeline } = await import("../../injection/index.js");
       const pipeline = getInjectionPipeline(config);
       const { buildSessionContextBlockWithToggles } = await import(
-        "./session/context-injector.js"
+        "../../session/context-injector.js"
       );
       const sessionContextBlock = buildSessionContextBlockWithToggles(
-        cachedAgentDetail as import("./session/types.js").AgentDetail | null,
-        cachedTaskDetail as import("./session/types.js").TaskDetail | null,
+        cachedAgentDetail as import("../../session/types.js").AgentDetail | null,
+        cachedTaskDetail as import("../../session/types.js").TaskDetail | null,
         config.sessionInit,
         sessionKey,
       );

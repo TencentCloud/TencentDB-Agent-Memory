@@ -27,6 +27,7 @@ import type { GatewayConfig, GatewayConfigOverrides } from "./config.js";
 import { dbChoiceToStoreConfigs, LocalBackendResolver } from "../core/backend-selection/index.js";
 import type { BackendResolver } from "../core/backend-selection/index.js";
 import { applyMetadataEnvFromGatewayConfig } from "./metadata-env.js";
+import { applyTaskSourceEnvFromGatewayConfig } from "./task-source-env.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { WorkerPermitPool } from "../services/worker-permit-pool.js";
@@ -63,6 +64,7 @@ import type { SeedProgress } from "../core/seed/types.js";
 import { handleV2Route, errorEnvelope, makeRequestId } from "./v2-router.js";
 import type { V2RouterDeps } from "./v2-router.js";
 import { handleV3MetaRoute, V3_PREFIX } from "../metadata/router/v3-meta-router.js";
+import { handleV3TaskSourceRoute } from "../metadata/router/v3-task-source-router.js";
 import { handleInternalMetaRoute, V3_INTERNAL_PREFIX } from "../metadata/router/internal-meta-router.js";
 import { MetadataService } from "../metadata/service/metadata-service.js";
 import { ConfigParamService } from "../metadata/service/config-param-service.js";
@@ -525,6 +527,10 @@ export class TdaiGateway {
     initDataDirectories(this.config.data.baseDir);
 
     applyMetadataEnvFromGatewayConfig(this.config.metadata);
+    // yaml `taskSource.env` → process.env（env 已设置则不覆盖）。
+    // 必须在任何 task-source 路由 / provider 调用之前：registry 在构造上下文时
+    // 就直接读 env，晚于此处回填会拿到空串并被判为「未配置」而 fail-fast。
+    applyTaskSourceEnvFromGatewayConfig(this.config.taskSource);
 
     this.memorySystemUserConfig = resolveMemorySystemUserConfig(this.config.metadata);
     validateMemorySystemUserConfig(this.config.deployMode, this.memorySystemUserConfig);
@@ -929,6 +935,10 @@ export class TdaiGateway {
           {
             getMetadataService: (instanceId) => this.ensureMetadataService(instanceId),
             logger: this.logger,
+            // v2 InstanceUpstream:D 接口(§6.D)拉数据时触发 store 层 seed default 组,
+            // 数据源来自 config.upstream.supportedAgents。空数组 → 不 seed,
+            // Proxy 拉到 items=[] 走"零行 fallback",行为等同 v1(全走全局 upstream)。
+            getSupportedAgents: () => this.config.upstream.supportedAgents,
           },
         );
         if (handledInternal) return;
@@ -941,8 +951,25 @@ export class TdaiGateway {
         const handledV3 = await handleV3MetaRoute(req, res, pathname, method, parseJsonBody, sendJson, {
           getMetadataService: (instanceId) => this.ensureMetadataService(instanceId),
           logger: this.logger,
+          // v2 InstanceUpstream:supported-agents(§6.A)接口 + groups/create 时 agents 枚举校验 + Panel B1 seed 数据源。
+          getSupportedAgents: () => this.config.upstream.supportedAgents,
         });
         if (handledV3) return;
+      }
+
+      // ── v3 task-source routes (/v3/task-source/*) ──
+      // Layer 1: same Bearer apiKey gate as v2. Layer 3 (x-tdai-user-key) inside the router.
+      // 来源令牌由 Panel 放进**请求体 credential** 下发（不落库、不进 header）。
+      if (pathname.startsWith("/v3/task-source/")) {
+        if (!this.checkAuthForV2(req, res)) return;
+        const handledTaskSource = await handleV3TaskSourceRoute(
+          req, res, pathname, method, parseJsonBody, sendJson,
+          {
+            getMetadataService: (instanceId) => this.ensureMetadataService(instanceId),
+            logger: this.logger,
+          },
+        );
+        if (handledTaskSource) return;
       }
 
       // ── v3 analytics routes (/v3/analytics/*) ──
@@ -1019,6 +1046,11 @@ export class TdaiGateway {
         // 完成 asset 登记 + agent fixed-asset 绑定。service 模式下 buildSkillCore 里
         // 的 onSkillCreated 钩子做同样的事，两条路径都覆盖，ensureSkillAsset 本身幂等。
         getMetadataService: (instanceId) => this.ensureMetadataService(instanceId),
+        // handleListing mode='activity' 用: 读 proxy 侧 skill_usage_logs 计算 MRR。
+        // 复用 /v3/analytics/* 的 lazy singleton (ensureAnalyticsChClient)。
+        // CH 未配置 → 返回 null → activity 分支自动降级到原 auto 逻辑。
+        // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+        getAnalyticsChClient: () => this.ensureAnalyticsChClient(),
       };
 
       // Service mode: inject per-instance resolvers (storePool + configProvider + COS)
@@ -2061,10 +2093,15 @@ export class TdaiGateway {
     });
 
     const { SkillCore } = await import("../core/skill/skill-core.js");
+    // 旧版本清理双维度:时间 (versionTtlSeconds) + 数量 (maxNonHeadVersions)。
+    // 拿不到配置就是 0 (关闭), 行为与新增前完全一致, 向后兼容。
+    const skillCfg = this.core.getResolvedSkillConfig();
     return new SkillCore({
       store: skillStore,
       resources: skillResources,
       versioning: skillVersioning,
+      versionTtlSeconds: skillCfg?.versionTtlSeconds ?? 0,
+      maxNonHeadVersions: skillCfg?.maxNonHeadVersions ?? 0,
       onSkillAccessed: (skill) => {
         if (!skill.team_id || !skill.owner_agent_id) return;
         resolveMetaSvc()
@@ -2103,7 +2140,7 @@ export class TdaiGateway {
     skillCore: SkillCoreType,
     instanceId: string,
   ): Promise<SkillExtractorClass> {
-    const { SKILL_REVIEW_PROMPT } = await import("../core/skill/index.js");
+    const { SKILL_REVIEW_PROMPT, SKILL_REVIEW_PROMPT_STRICT } = await import("../core/skill/index.js");
     const { StandaloneLLMRunner } = await import("../adapters/standalone/llm-runner.js");
     const { resolveStandaloneLlmForRuntime, LlmProviderResolveError } = await import("../adapters/standalone/llm-provider-resolver.js");
 
@@ -2140,6 +2177,9 @@ export class TdaiGateway {
       core: skillCore,
       runner: llmRunner,
       systemPrompt: SKILL_REVIEW_PROMPT,
+      // 冷启动/批量导入 (asset-import) 会传 strict_mode:true,经 SkillTaskEntry.mode
+      // 一路带到 extract({mode:'strict'}); 老流量 mode 未传时仍用上面的 SKILL_REVIEW_PROMPT。
+      strictSystemPrompt: SKILL_REVIEW_PROMPT_STRICT,
       maxIterations: cfg?.extraction.maxIterations ?? 5,
       // 透传 archiveBytes 派生的 head/tail chars + 独立的 maxTokens，
       // 让 skill.extraction.archiveBytes 与 skill.extraction.maxTokens 生效

@@ -32,7 +32,7 @@ import { KvVersionPinRepo } from "./kv-version-pin-repo.js";
 import { getProxyStorage } from "../storage/factory.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { ProxyConfig } from "../types.js";
-import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "../memory/bridge-telemetry.js";
+import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, emitSkillUsageTelemetry, agentSourceFromSessionKey } from "../memory/bridge-telemetry.js";
 import { getCoreSkillClient, type CoreSkillClient } from "./core-client.js";
 
 /**
@@ -232,6 +232,11 @@ interface SessionIdFields {
  * L2 fallthrough 走拍平的 (spaceId, sessionId) → binding.json 直接 stamp。
  */
 function deriveSessionId(c: Context): string | null {
+  // subagent 归一：带 x-parent-conversation-id 时优先用 parent id，让 subagent
+  // 调 bridge 工具时命中主会话 binding，避免 session_not_initialized
+  // （对齐 session/session-key.ts，2026-09-20 WorkBuddy subagent 修复）。
+  const parentId = c.req.header("x-parent-conversation-id");
+  if (parentId && parentId.length > 0) return parentId;
   return (
     c.req.header("x-conversation-id") ??
     c.req.header("x-session-id") ??
@@ -949,6 +954,25 @@ export function createSkillBridgeHandler(
       await tryLazyPin(sub, finalRespText, ids.space_id ?? "", ids.user_id, ids.agent_source, sessionKey, pinRepoInline).catch(() => {});
     }
 
+    // ── Skill usage 埋点 (default-task 活跃度召回数据源) ──────────────
+    // 只在 2xx 成功 view/search 上埋。view: 一次调用一条; search: 遍历过滤后
+    // 的 items[] 每条一发。CH 未配置时 emitSkillUsageTelemetry no-op。
+    // 用 FILTERED 响应, 保证不埋 whitelist 之外的 skill_id。
+    // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+    if (resp.status >= 200 && resp.status < 300 && (sub === "get" || sub === "search")) {
+      try {
+        emitSkillUsageFromResponse({
+          sub,
+          respText: finalRespText,
+          inboundBody,
+          ids,
+          sessionKey: emitKey,
+        });
+      } catch {
+        // 埋点绝不阻塞业务
+      }
+    }
+
     return new Response(finalRespText, {
       status: resp.status,
       headers: {
@@ -956,6 +980,77 @@ export function createSkillBridgeHandler(
       },
     });
   };
+}
+
+/**
+ * Skill usage 埋点 —— 从 upstream 响应体解析 skill_id 并转发到
+ * `emitSkillUsageTelemetry`。
+ *
+ * - `sub === "get"`: 一次调用一条 event_type='view', skill_id 优先从
+ *   response.data.skill_id 拿(plugin skill-handlers.ts:toSummary), 拿不到
+ *   fallback 到 inboundBody.skill_id (LLM 请求时必带)。
+ * - `sub === "search"`: 遍历 FILTERED 响应的 data.items[] 每条发一条
+ *   event_type='search_hit'。空 items / 非 JSON / envelope 异常一律静默。
+ *
+ * 硬约束: 绝不 throw, 绝不阻塞业务。所有解析错误吞掉。
+ */
+function emitSkillUsageFromResponse(args: {
+  sub: string;
+  respText: string;
+  inboundBody: Record<string, unknown>;
+  ids: {
+    space_id?: string;
+    team_id?: string;
+    agent_id?: string;
+    user_id?: string;
+    agent_source?: string;
+  };
+  sessionKey: string;
+}): void {
+  const { sub, respText, inboundBody, ids, sessionKey } = args;
+
+  // Parse envelope; non-JSON or non-envelope response → no telemetry.
+  let env: { code?: number; data?: unknown };
+  try {
+    env = JSON.parse(respText) as { code?: number; data?: unknown };
+  } catch {
+    return;
+  }
+  if (env.code !== 0 || !env.data || typeof env.data !== "object") return;
+  const data = env.data as Record<string, unknown>;
+
+  const common = {
+    spaceId: ids.space_id,
+    teamId: ids.team_id,
+    agentId: ids.agent_id,
+    userId: ids.user_id,
+    agentSource: ids.agent_source,
+    sessionKey,
+  };
+
+  if (sub === "get") {
+    // response.data.skill_id (plugin toSummary flat) 优先; 兜底 inbound。
+    const respSkillId = typeof data.skill_id === "string" ? data.skill_id : undefined;
+    const inboundSkillId = typeof inboundBody.skill_id === "string" ? inboundBody.skill_id : undefined;
+    const skillId = respSkillId || inboundSkillId;
+    if (skillId) {
+      emitSkillUsageTelemetry({ ...common, eventType: "view", skillId });
+    }
+    return;
+  }
+
+  if (sub === "search") {
+    const items = Array.isArray(data.items) ? data.items : [];
+    for (const it of items) {
+      if (!it || typeof it !== "object") continue;
+      const rec = it as Record<string, unknown>;
+      const skillId = rec.skill_id;
+      if (typeof skillId === "string" && skillId) {
+        emitSkillUsageTelemetry({ ...common, eventType: "search_hit", skillId });
+      }
+    }
+    return;
+  }
 }
 
 /**

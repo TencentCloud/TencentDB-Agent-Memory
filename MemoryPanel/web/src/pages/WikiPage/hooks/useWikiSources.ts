@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type WikiDetail, type WikiPage } from '@/lib/api/knowledge-api';
+import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type WikiDetail, type WikiPage, type SourceProviderMeta, type WikiCrawlOptions, type WikiSourceListResult } from '@/lib/api/knowledge-api';
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea, confirmThenRun } from '@/lib/tea-bridge';
@@ -51,6 +51,201 @@ export function useWikiSources() {
   );
   // fixed tab 下选中的 agent_id
   const [agentFilter, setAgentFilter] = useState<string>('');
+
+  // ── 外部来源（iWiki 等）注册流程 ──
+  // '' = 本地上传（不走外部来源，直接上传文件）
+  const [formSourceType, setFormSourceType] = useState<string>('');
+  const [sourceProviders, setSourceProviders] = useState<SourceProviderMeta[]>([]);
+  /**
+   * 弹窗内临时填写的凭据（按 provider.form_fields 动态存）；
+   * 仅内存，提交后立即清空，绝不落 localStorage。
+   */
+  const [formCredential, setFormCredential] = useState<Record<string, string>>({});
+  const setCredentialField = (name: string, value: string) =>
+    setFormCredential((prev) => ({ ...prev, [name]: value }));
+
+  const [formSourceUrl, setFormSourceUrl] = useState<string>('');
+  /**
+   * 遍历策略：tree=遍历子文档，links=遍历文本超链接。
+   * 固定默认 'tree' —— UI 不暴露「跟随来源」选项，未手动切换时也按 tree 走，
+   * 与 iWiki 的 defaultCrawlMode 一致，避免"看起来没选"实则走 provider 兜底。
+   */
+  const [crawlMode, setCrawlMode] = useState<WikiCrawlOptions['mode']>('tree');
+  // links 策略的最大遍历深度：固定 1（只取入口页直接链接到的文档），UI 不暴露该选项。
+  const CRAWL_MAX_DEPTH = 1;
+  /** 该 wiki 是否已在 KS 存过凭据（决定详情页要不要弹令牌填写页）。 */
+  const [credConfigured, setCredConfigured] = useState(false);
+  const [savingCred, setSavingCred] = useState(false);
+  const [fetchingTree, setFetchingTree] = useState(false);
+  const [treeResult, setTreeResult] = useState<WikiSourceListResult | null>(null);
+  const [selectedPageIds, setSelectedPageIds] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
+  /** 外部来源流程中刚创建的 wiki_id（列树 / 导入都用它）。 */
+  const [pendingWikiId, setPendingWikiId] = useState<string>('');
+
+  /** 打开创建弹窗时拉取已启用的 wiki 来源。 */
+  const openCreate = async () => {
+    setShowCreate(true);
+    setFormSourceType('');
+    setFormCredential({});
+    setFormSourceUrl('');
+    setTreeResult(null);
+    setSelectedPageIds([]);
+    if (!activeTeamId) return;
+    try {
+      const items = await knowledgeApi.source.wikiProviders(activeTeamId);
+      setSourceProviders(items);
+    } catch {
+      setSourceProviders([]);
+    }
+  };
+
+  /** 拉取远端文档树。wikiId 省略 → 用新建流程的 pendingWikiId。 */
+  const fetchWikiTree = async (wikiId?: string, crawl?: WikiCrawlOptions) => {
+    const target = wikiId ?? pendingWikiId;
+    if (!activeTeamId || !formSourceType || !formSourceUrl.trim() || !target) return;
+    setFetchingTree(true);
+    try {
+      const res = await knowledgeApi.source.wikiList({
+        teamId: activeTeamId,
+        wikiId: target,
+        sourceUrl: formSourceUrl.trim(),
+        providerId: formSourceType,
+        ...(crawl ?? (crawlMode ? { crawl: { mode: crawlMode, maxDepth: CRAWL_MAX_DEPTH } } : {})),
+      });
+      setTreeResult(res);
+      // 默认全选非目录节点
+      setSelectedPageIds(res.pages.filter((p) => !p.isDir).map((p) => p.externalId));
+    } catch (e: unknown) {
+      tea.notify.error(e);
+      setTreeResult(null);
+    } finally {
+      setFetchingTree(false);
+    }
+  };
+
+  /** 导入选中的文档（拉取 + 写盘，不触发 ingest）。wikiId 省略 → 用 pendingWikiId。 */
+  const importWikiPages = async (wikiId?: string) => {
+    const target = wikiId ?? pendingWikiId;
+    if (!activeTeamId || !formSourceType || !formSourceUrl.trim() || !target) return;
+    setImporting(true);
+    try {
+      await knowledgeApi.source.wikiImport({
+        teamId: activeTeamId,
+        wikiId: target,
+        sourceUrl: formSourceUrl.trim(),
+        providerId: formSourceType,
+        pageIds: selectedPageIds,
+      });
+      // 关闭弹窗并清空外部来源临时状态
+      setShowCreate(false);
+      setShowAddDoc(false);
+      setFormSourceUrl('');
+      setTreeResult(null);
+      setSelectedPageIds([]);
+      setFormCredential({});
+      setPendingWikiId('');
+      fetchSources();
+      // 与手工上传对齐：导入只写原始文档，抽取交由用户选择
+      // 「开始抽取」或「稍后处理」，避免用户不知道还需手动抽取。
+    } catch (e: unknown) {
+      tea.notify.error(e);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  /**
+   * 打开「添加文档」弹窗时预拉 wiki 来源列表（详情页外部来源 tab 用）。
+   * 与 openCreate 的差异：不清空外部来源表单（用户可能在已创建的 wiki 里直接切 tab）。
+   */
+  const loadWikiProviders = async () => {
+    if (!activeTeamId) return;
+    try {
+      setSourceProviders(await knowledgeApi.source.wikiProviders(activeTeamId));
+    } catch {
+      setSourceProviders([]);
+    }
+  };
+
+  /**
+   * 详情页「添加」入口：按 wiki_id 查凭据状态（设计 §3.1 ②）。
+   *
+   * 已有凭据 → 直接拉文档树（不再要求用户重填令牌）；
+   * 无凭据   → 留在填写页，等用户填完令牌由 ensureCredential 落库。
+   *
+   * 来源地址从 wiki 落库的 source_url 回填：已有 wiki 不必重填，用户可改。
+   */
+  const openAddDocExternal = async (wiki: WikiDetail) => {
+    if (!activeTeamId) return;
+    setAddDocTab('external');
+    // 用落库的来源回填（可改），避免已有 wiki 让用户重填
+    if (wiki.source_type) setFormSourceType(wiki.source_type);
+    if (wiki.source_url) setFormSourceUrl(wiki.source_url);
+    setSelectedPageIds([]);
+    setTreeResult(null);
+    try {
+      setSourceProviders(await knowledgeApi.source.wikiProviders(activeTeamId));
+    } catch {
+      setSourceProviders([]);
+    }
+    if (!wiki.source_type) return;
+    try {
+      const cred = await knowledgeApi.source.credentialStatus({
+        teamId: activeTeamId,
+        resourceType: 'wiki',
+        resourceId: wiki.wiki_id,
+      });
+      setCredConfigured(!!cred);
+      // 已配凭据且地址已落库 → 直接列树，跳过令牌填写
+      if (cred && wiki.source_url) {
+        await fetchWikiTree(wiki.wiki_id);
+      }
+    } catch {
+      setCredConfigured(false);
+    }
+  };
+
+  /**
+   * 详情页外部来源：保存令牌到 KS（按 wiki_id 落库），成功后立即列树。
+   *
+   * 必须先存凭据再拉树 —— KS 侧 /list 是从 credentialStore 读令牌的，
+   * 不先存就是 401 NEED_CREDENTIAL（这正是之前"填了令牌也没用"的根因）。
+   */
+  const ensureCredential = async (wikiId: string) => {
+    if (!activeTeamId || !formSourceType) return false;
+    const provider = sourceProviders.find((p) => p.id === formSourceType);
+    if (!provider) return false;
+    const secret = (formCredential.secret ?? '').trim();
+    if (!secret) {
+      tea.notify.error(t('code.register.tokenRequired'));
+      return false;
+    }
+    setSavingCred(true);
+    try {
+      await knowledgeApi.source.credentialPut({
+        teamId: activeTeamId,
+        resourceType: 'wiki',
+        resourceId: wikiId,
+        providerId: provider.id,
+        credKind: provider.auth_method,
+        secret,
+        ...((formCredential.username ?? '').trim()
+          ? { username: (formCredential.username ?? '').trim() }
+          : {}),
+      });
+      setCredConfigured(true);
+      // 提交后立刻清空内存里的明文令牌，不留在前端状态
+      setFormCredential({});
+      await fetchWikiTree(wikiId);
+      return true;
+    } catch (e: unknown) {
+      tea.notify.error(e);
+      return false;
+    } finally {
+      setSavingCred(false);
+    }
+  };
 
   useEffect(() => {
     if (teamAgents.length === 0) {
@@ -118,30 +313,24 @@ export function useWikiSources() {
     });
   }, [scopeSources, keyword, statusFilter]);
 
-  // Ingest progress
-  const [ingestState, setIngestState] = useState<{
-    active: boolean;
-    wikiId: string;
-    wiki: string;
-    currentFile: string;
-    detail: string;
-    done: number;
-    total: number;
-    checkCount: number;
-    lastCheckedAt: string;
-    log: Array<{ file: string; status: 'done' | 'error'; error?: string }>;
-  }>({
-    active: false,
-    wikiId: '',
-    wiki: '',
-    currentFile: '',
-    detail: '',
-    done: 0,
-    total: 0,
-    checkCount: 0,
-    lastCheckedAt: '',
-    log: [],
-  });
+  /** 用户点「清除」后隐藏进度卡片；再次提交或切换 wiki 时复位。 */
+  const [ingestCardCleared, setIngestCardCleared] = useState(false);
+  /** 最近一次轮询拿到 KS 真值的时间 —— 加工中展示"最近更新"，让用户确认进度在动。 */
+  const [pollAt, setPollAt] = useState('');
+  /** 本轮轮询的检查次数（每次成功轮询 +1），展示"第 N 次检查 / 已实际查询 N 次"。 */
+  const [pollCount, setPollCount] = useState(0);
+  /**
+   * 已提交、但新任务尚未真正开跑（还没进入 processing）的 wiki id 集合。
+   *
+   * 这是「只显示最后一次提交的状态」的关键屏蔽：提交后到新任务被 dequeue
+   * 之前，wiki 行上仍是上一个任务写下的状态（可能是 ready/failed）。若不加
+   * 屏蔽，前端会把上一个任务的终态漏给用户 —— 表现为"刚提交却显示就绪""显示
+   * 前一个任务的完成页数"等中间态。
+   *
+   * 处于该集合时：终态一律当作"加工中"展示（沿用 KS 的加工中文案与进度），
+   * 直到轮询看到该 wiki 真正进入 processing（新任务已接管）后解除。
+   */
+  const [pendingTakeover, setPendingTakeover] = useState<Set<string>>(new Set());
 
   // Detail view state（Wiki 详情：图谱 / 页面 / 搜索 Tab）
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
@@ -156,9 +345,9 @@ export function useWikiSources() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
 
-  // Add doc（添加文档：文件 / 粘贴 markdown）
+  // Add doc（添加文档：文件 / 粘贴 markdown / 外部来源）
   const [showAddDoc, setShowAddDoc] = useState(false);
-  const [addDocTab, setAddDocTab] = useState<'file' | 'markdown'>('file');
+  const [addDocTab, setAddDocTab] = useState<'file' | 'markdown' | 'external'>('file');
   // 批量 markdown：每条 { filename, content }，可增删
   const [mdDocs, setMdDocs] = useState<Array<{ filename: string; content: string }>>([
     { filename: '', content: '' },
@@ -264,7 +453,12 @@ export function useWikiSources() {
 
   useEffect(() => {
     const running = sources.filter(
-      (s) => s.wiki_id && (s.status === 'pending' || s.status === 'processing'),
+      (s) =>
+        s.wiki_id &&
+        // 除了 pending/processing，还要覆盖"已提交但新任务尚未接管"的 wiki：
+        // 它表面上是终态（上一个任务留下的），实际还有新任务在排队，必须继续
+        // 轮询才能观察到新任务真正开跑的时刻。
+        (s.status === 'pending' || s.status === 'processing' || pendingTakeover.has(s.wiki_id)),
     );
     if (running.length === 0) return;
     let cancelled = false;
@@ -283,6 +477,23 @@ export function useWikiSources() {
       setSources((prev) =>
         prev.map((s) => (map.get(s.wiki_id) ? { ...s, ...map.get(s.wiki_id)! } : s)),
       );
+      // 新任务真正开跑（processing）→ 解除该 wiki 的屏蔽，之后就展示它的真实进度。
+      setPendingTakeover((prev) => {
+        if (prev.size === 0) return prev;
+        let changed = false;
+        const next = new Set(prev);
+        for (const w of map.values()) {
+          if (w && next.has(w.wiki_id) && w.status === 'processing') {
+            next.delete(w.wiki_id);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+      // 每次成功轮询递增检查计数 + 记录时间 —— 进度卡片据此展示
+      // "第 N 次检查：…"与"已实际查询 N 次，最近 HH:MM:SS"，让用户确认进度在动。
+      setPollCount((n) => n + 1);
+      setPollAt(new Date().toLocaleTimeString());
       if (selectedWikiId && map.has(selectedWikiId)) {
         const d = map.get(selectedWikiId)!;
         if (d.status === 'ready' || d.status === 'failed') void fetchDetail(selectedWikiId);
@@ -295,6 +506,82 @@ export function useWikiSources() {
       window.clearInterval(timer);
     };
   }, [runningWikiKey, selectedWikiId, fetchDetail]);
+
+  /**
+   * 详情页进度卡片的会话阶段机（纯派生，不引入独立数据源）。
+   *
+   * - sources 里当前 wiki 变成 pending/processing → 'active'
+   * - 会话中曾 'active'，之后看到终态 → 停在 'done'（显示结果直到用户清除）
+   * - 进入详情页时 wiki 已是终态且本会话没见过 active → 'idle'（不显示卡片）
+   */
+  const prevSessionRef = useRef<'idle' | 'active' | 'done'>('idle');
+  const displayIngestState = useMemo(() => {
+    const wiki = sources.find((s) => s.wiki_id === selectedWikiId);
+    const name = wiki?.name ?? '';
+    const rawStatus = wiki?.status ?? 'draft';
+    /**
+     * 屏蔽"上一个任务留下的终态"：已提交但新任务尚未接管（pendingTakeover）
+     * 时，wiki 行上的 ready/failed 属于上一个任务，绝不能展示给用户。
+     * 这段时间一律按"加工中"呈现（沿用 KS 的加工中文案与档位进度），
+     * 直到新任务真正进入 processing 解除屏蔽、展示它的真实进度。
+     */
+    const awaitingTakeover = selectedWikiId ? pendingTakeover.has(selectedWikiId) : false;
+    const staleTerminal =
+      awaitingTakeover && (rawStatus === 'ready' || rawStatus === 'failed');
+    const status = staleTerminal ? 'processing' : rawStatus;
+    // 陈旧终态不展示上一个任务的 internal_status / page_count（那属于旧任务）
+    const internalStatus = staleTerminal ? null : (wiki?.internal_status ?? null);
+    const pageCount = staleTerminal ? null : (wiki?.page_count ?? null);
+
+    const inFlight = status === 'pending' || status === 'processing';
+    const isTerminal = status === 'ready' || status === 'failed';
+    // 会话迁移：active → （终态）→ done。
+    // 注：ready 之后进度卡片会自动收起（终态由标题栏徽章 + 页数体现），
+    // session 主要用于 failed —— 出错原因要显式告知，故保留到用户点「清除」。
+    const session =
+      inFlight ? 'active'
+      : isTerminal && prevSessionRef.current === 'active' ? 'done'
+      : isTerminal && prevSessionRef.current === 'done' ? 'done'
+      : 'idle';
+    if (session !== prevSessionRef.current) prevSessionRef.current = session;
+
+    const stage = wikiStageLabel(status as WikiDetail['status'], internalStatus);
+    const pageHint =
+      typeof pageCount === 'number' && pageCount > 0
+        ? t('wiki.ingest.currentPage', { count: pageCount })
+        : '';
+
+    // 加工中的文案必须带"第 N 次检查"与页数提示 —— 这是用户判断"进度真的在动"
+    // 的唯一依据，任何重构都不得省略 attempt / pageHint 模板参数（历史回归教训）。
+    //
+    // pending / draft 同样按正常阶段文案展示（"扫描文件"档位），不再自造
+    // "排队中，等待上一次任务让位"之类文案 —— 状态行只描述 KS 真实状态。
+    let detail: string;
+    if (status === 'ready') {
+      detail = t('wiki.ingest.done', { count: pageCount ?? 0 });
+    } else if (status === 'failed') {
+      detail = wiki?.sync_error || t('wiki.ingest.failed');
+    } else {
+      detail = t('knowledgeApi.ingest.check', { attempt: Math.max(pollCount, 1), stage, pageHint });
+    }
+
+    return {
+      active: session === 'active',
+      /** 'done' 会话 = 本会话内观察到"加工中 → 终态"迁移，仍展示结果卡片。 */
+      session,
+      /** 屏蔽后的展示状态 —— 徽章与卡片共用，保证两者永远一致。 */
+      status: status as WikiDetail['status'],
+      wikiId: selectedWikiId,
+      wiki: name,
+      currentFile: '',
+      detail,
+      done: wikiProgressPercent(status as WikiDetail['status'], internalStatus),
+      total: 100,
+      checkCount: session === 'active' ? pollCount : 0,
+      lastCheckedAt: session === 'active' ? pollAt : '',
+      log: [] as { file: string; status: 'error' | 'done'; error?: string }[],
+    };
+  }, [sources, selectedWikiId, pollAt, pollCount, pendingTakeover]);
 
   async function handleUnbindWiki(wikiId: string) {
     if (!agentFilter) return;
@@ -318,12 +605,56 @@ export function useWikiSources() {
   // --- Handlers ---
   const handleCreate = async () => {
     if (!newName.trim() || !activeTeamId) return;
+
+    // 外部来源：校验必填凭据字段
+    const provider = sourceProviders.find((p) => p.id === formSourceType);
+    if (provider) {
+      for (const f of provider.form_fields) {
+        if (f.required && !(formCredential[f.name] ?? '').trim()) {
+          tea.notify.error(t('code.register.tokenRequired'));
+          return;
+        }
+      }
+      if (!formSourceUrl.trim()) {
+        tea.notify.error(t('wiki.register.sourceUrl'));
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
-      await knowledgeApi.wiki.create(activeTeamId, newName.trim());
+      const detail = await knowledgeApi.wiki.create(
+        activeTeamId,
+        newName.trim(),
+        provider ? formSourceUrl.trim() : undefined,
+        provider ? formSourceType : undefined,
+      );
+
+      // 外部来源：只保存凭据，**不在此处拉取文档列表**。
+      // 拉取放到详情页「添加」里按需触发，新建流程与手工新建保持一致
+      // （建完即关闭），避免每次新建都被迫等待整棵文档树。
+      if (provider) {
+        const secret = (formCredential.secret ?? '').trim();
+        const username = (formCredential.username ?? '').trim();
+        await knowledgeApi.source.credentialPut({
+          teamId: activeTeamId,
+          resourceType: 'wiki',
+          resourceId: detail.wiki_id,
+          providerId: provider.id,
+          credKind: provider.auth_method,
+          secret,
+          ...(username ? { username } : {}),
+        });
+        // 提交后立刻清空内存里的明文令牌
+        setFormCredential({});
+      }
+
       tea.notify.success(t('wiki.notify.created', { name: newName.trim() }));
       setShowCreate(false);
       setNewName('');
+      setFormSourceUrl('');
+      setTreeResult(null);
+      setSelectedPageIds([]);
       fetchSources();
     } catch (e: unknown) {
       tea.notify.error(e);
@@ -332,10 +663,6 @@ export function useWikiSources() {
     }
   };
 
-  const runningWiki = useMemo(
-    () => sources.find((s) => s.status === 'pending' || s.status === 'processing') ?? null,
-    [sources],
-  );
   /** 所有正在 ingest（pending / processing）的 wiki_id 集合，用于列表中逐卡片判断按钮状态。 */
   const runningWikiIds = useMemo(
     () =>
@@ -346,112 +673,104 @@ export function useWikiSources() {
       ),
     [sources],
   );
-  const hasManualIngestState =
-    ingestState.active ||
-    ingestState.log.length > 0 ||
-    (ingestState.done > 0 && !!ingestState.detail);
-  const displayIngestState = useMemo(() => {
-    if (hasManualIngestState || !runningWiki) return ingestState;
-    const stage = wikiStageLabel(runningWiki.status, runningWiki.internal_status);
-    const pageHint =
-      typeof runningWiki.page_count === 'number' ? t('wiki.ingest.currentPage', { count: runningWiki.page_count }) : '';
-    return {
-      active: true,
-      wikiId: runningWiki.wiki_id ?? '',
-      wiki: runningWiki.name,
-      currentFile: '',
-      detail: t('wiki.ingest.stateRecovery', { stage, pageHint }),
-      done: wikiProgressPercent(runningWiki.status, runningWiki.internal_status),
-      total: 100,
-      checkCount: 0,
-      lastCheckedAt: '',
-      log: [],
-    };
-  }, [hasManualIngestState, ingestState, runningWiki]);
-  const ingestBusy = displayIngestState.active || !!runningWiki;
+  /**
+   * 当前详情页这个 wiki 自身是否正在抽取（pending / processing）。
+   *
+   * 用于顶栏「导入文档」按钮的禁用判定：只关心**当前 wiki**，不因其它
+   * 知识库在跑就被连带禁用。
+   *
+   * 背景（设计 2026-09-21 §3.3）：KS 侧是 per-wiki SerialQueue（不同 wiki
+   * 各自独立队列、天然可并行），且同 wiki 重跑由 onBusy:'replace' 安全切换
+   * （取消旧任务 + 排队新任务）。因此原先"同一时间只允许一个 Wiki 提取"的
+   * 全局互斥（基于不带 wikiId 过滤的 runningWiki）已不再必要，反而会误伤
+   * 无关知识库的导入入口。
+   *
+   * 注意：displayIngestState / ingestBusy 仍保持全局语义 —— 顶部进度条需要
+   * 在页面刷新后恢复**任意**在跑 wiki 的进度（stateRecovery），不能收窄。
+   */
+  const isCurrentWikiIngesting = (wikiId: string): boolean => {
+    if (!wikiId) return false;
+    const self = sources.find(
+      (s) => s.wiki_id === wikiId && (s.status === 'pending' || s.status === 'processing'),
+    );
+    return !!self;
+  };
+
+  /**
+   * 导入并抽取（设计 2026-09-21 合并入口）。
+   *
+   * 一次复合请求完成"写 raw + 触发 ingest"；打断旧任务由 Panel/KS 的
+   * onBusy:'replace' 在后台完成，用户不可感知（无 confirm、无 Alert）。
+   *
+   * 本函数不自己轮询进度 —— 提交后立即 fetchSources 拿到新状态（KS 真值，
+   * pending/processing），由 runningWikiKey 轮询 effect 接管后续刷新。
+   */
+  const submitAddAndIngest = async (params: {
+    wikiId: string;
+    mode: 'files' | 'markdown' | 'external' | 'reingest';
+    files?: { filename: string; content: string }[];
+    markdown?: { filename: string; content: string }[];
+    source_url?: string;
+    provider_id?: string;
+    page_ids?: string[];
+  }): Promise<void> => {
+    const { wikiId, mode } = params;
+    if (!wikiId) return;
+
+    // 提交即进入新一轮：复位"已清除"标记让卡片重新出现，
+    // 并把检查计数清零——否则第二次导入会接着上一次的数字往下数。
+    setIngestCardCleared(false);
+    setPollCount(0);
+    setPollAt('');
+    // 屏蔽"上一个任务留下的终态"：从现在起直到新任务真正进入 processing，
+    // 该 wiki 上任何 ready/failed 都视为陈旧值、不展示给用户。
+    setPendingTakeover((prev) => {
+      const next = new Set(prev);
+      next.add(wikiId);
+      return next;
+    });
+
+    try {
+      const res = await knowledgeApi.wiki.importAndIngest({
+        wiki_id: wikiId,
+        mode,
+        ...(params.files ? { files: params.files } : {}),
+        ...(params.markdown ? { markdown: params.markdown } : {}),
+        ...(params.source_url ? { source_url: params.source_url } : {}),
+        ...(params.provider_id ? { provider_id: params.provider_id } : {}),
+        ...(params.page_ids ? { page_ids: params.page_ids } : {}),
+      });
+
+      // 复合请求已回执：无论成功与否都可能改动 raw。
+      // fetchSources 拉回新状态（pending/processing）—— sources 是唯一真相源，
+      // runningWikiKey 轮询 effect 会据它自动启动 2s 轮询直到终态。
+      setRawRefreshKey((k) => k + 1);
+      await fetchSources();
+
+      if (!res.ok) {
+        const msg = res.error_message || t('wiki.notify.ingestFailed');
+        tea.notify.error(msg);
+        fetchDetail(wikiId);
+        return;
+      }
+
+      // 触发一次立即刷新，避免等下一拍轮询才反映新状态
+      fetchDetail(wikiId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      tea.notify.error(msg);
+      setRawRefreshKey((k) => k + 1);
+      fetchDetail(wikiId);
+    }
+  };
 
   const handleIngest = async (wikiId: string) => {
-    // 防御：同一时间只允许一个 Wiki 提取，避免并发 ingest 导致后端排队混乱。
-    // 按钮已按 ingestBusy 禁用，这里再挡一层防止绕过。
-    if (ingestBusy) {
-      tea.notify.warning(t('wiki.ingest.warning'));
-      return;
-    }
-    const wiki = sources.find((s) => s.wiki_id === wikiId);
-    const name = wiki?.name ?? wikiId;
-    setIngestState({
-      active: true,
-      wikiId,
-      wiki: name,
-      currentFile: '',
-      detail: t('wiki.ingest.triggering'),
-      done: 0,
-      total: 100,
-      checkCount: 0,
-      lastCheckedAt: '',
-      log: [],
-    });
-    await knowledgeApi.wiki.ingestWithPolling(
-      wikiId,
-      {
-        onProgress: (ev) => {
-          setIngestState((prev) => {
-            const next = { ...prev };
-            const checkedAt = new Date(ev.ts).toLocaleTimeString();
-            if (ev.type === 'file_start') {
-              next.currentFile = ev.file || '';
-              next.detail = ev.detail || t('wiki.ingest.processing');
-              next.done = ev.done ?? prev.done;
-              next.total = ev.total ?? prev.total;
-              next.lastCheckedAt = checkedAt;
-            } else if (ev.type === 'file_done') {
-              next.done = ev.done ?? prev.done;
-              next.total = ev.total ?? prev.total;
-              next.detail = ev.detail || t('wiki.ingest.checked', { done: next.done, total: next.total });
-              next.checkCount = prev.checkCount + 1;
-              next.lastCheckedAt = checkedAt;
-              if (ev.file) next.log = [...prev.log, { file: ev.file, status: 'done' }];
-            } else if (ev.type === 'file_error') {
-              next.done = ev.done ?? prev.done;
-              next.detail = ev.detail || prev.detail;
-              next.checkCount = prev.checkCount + 1;
-              next.lastCheckedAt = checkedAt;
-              next.log = [...prev.log, { file: ev.file || '', status: 'error', error: ev.error }];
-            } else if (ev.type === 'batch_done') {
-              next.done = ev.done ?? 100;
-              next.total = ev.total ?? 100;
-              next.detail = ev.detail || t('wiki.ingest.complete');
-              next.lastCheckedAt = checkedAt;
-            }
-            return next;
-          });
-        },
-        onComplete: (result) => {
-          setIngestState((prev) => ({
-            ...prev,
-            active: false,
-            done: 100,
-            total: 100,
-            detail: t('wiki.ingest.done', { count: result.ingested }),
-            currentFile: '',
-          }));
-          tea.notify.success(t('wiki.notify.ingestComplete', { count: result.ingested }));
-          fetchSources();
-          fetchDetail(wikiId);
-        },
-        onError: (err) => {
-          setIngestState((prev) => ({ ...prev, active: false, detail: t('wiki.ingest.error', { error: err }) }));
-          tea.notify.error(err || t('wiki.notify.ingestFailed'));
-        },
-      },
-      activeTeamId ?? '',
-    );
-    setIngestState((prev) =>
-      prev.active
-        ? { ...prev, active: false, detail: prev.log.length > 0 ? t('wiki.ingest.finished') : prev.detail }
-        : prev,
-    );
-    fetchSources();
+    if (!wikiId) return;
+    // 列表页 ingest 只做抽取，与详情页「导入文档」Modal 在"三 tab 全空"时的
+    // 「重新抽取」路径完全一致：走同一个复合端点 import-and-ingest
+    // （mode: 'reingest'），由 KS 的 onBusy:'replace' 原子完成"取消旧任务 +
+    // 排队新任务"。
+    await submitAddAndIngest({ wikiId, mode: 'reingest' });
   };
 
   const handleDelete = async (wikiId: string, name: string) => {
@@ -586,23 +905,6 @@ export function useWikiSources() {
     }
   };
 
-  /**
-   * 上传只写入原始文档，不会自动触发知识抽取；成功后立即给出明确的下一步操作，
-   * 避免用户不知道还需要点击"开始抽取"。
-   */
-  const offerIngestAfterUpload = async (wikiId: string, uploadedCount: number) => {
-    const shouldIngest = await tea.confirm({
-      message: t('wiki.detail.uploaded', { count: uploadedCount }),
-      description: t('wiki.detail.uploaded.desc'),
-      okText: t('wiki.detail.uploaded.ok'),
-      cancelText: t('wiki.detail.uploaded.cancel'),
-    });
-    if (shouldIngest) {
-      void handleIngest(wikiId);
-    } else {
-      tea.notify.info(t('wiki.detail.uploaded.later'));
-    }
-  };
 
   const handleUploadMdBatch = async () => {
     if (!activeTeamId || !selectedWikiId) return;
@@ -633,7 +935,6 @@ export function useWikiSources() {
       setShowAddDoc(false);
       fetchDetail(selectedWikiId);
       setRawRefreshKey((k) => k + 1);
-      await offerIngestAfterUpload(selectedWikiId, valid.length);
     } else {
       const okCount = valid.length - failures.length;
       // 每个失败文件都列出原因，最多展示 3 个，超出折叠
@@ -645,7 +946,6 @@ export function useWikiSources() {
       tea.notify.error(t('wiki.detail.upload.partialFail', { ok: okCount, fail: failures.length, detail: `${shown}${more}` }));
       fetchDetail(selectedWikiId);
       setRawRefreshKey((k) => k + 1);
-      if (okCount > 0) await offerIngestAfterUpload(selectedWikiId, okCount);
     }
   };
 
@@ -686,7 +986,6 @@ export function useWikiSources() {
       fetchDetail(selectedWikiId);
       setRawRefreshKey((k) => k + 1);
       // 文件上传入口此前遗漏了这一步，导致用户上传完成后不知道还需手动抽取。
-      await offerIngestAfterUpload(selectedWikiId, succeeded);
     } else {
       results.forEach((r, i) => {
         if (r.status === 'rejected')
@@ -695,7 +994,6 @@ export function useWikiSources() {
       tea.notify.error(t('wiki.detail.upload.fail', { ok: succeeded, fail: failed }));
       fetchDetail(selectedWikiId);
       setRawRefreshKey((k) => k + 1);
-      if (succeeded > 0) await offerIngestAfterUpload(selectedWikiId, succeeded);
     }
   };
 
@@ -803,8 +1101,8 @@ export function useWikiSources() {
     setGraphData,
     graphLoading,
     setGraphLoading,
-    ingestState,
-    setIngestState,
+    ingestCardCleared,
+    setIngestCardCleared,
     selectedPage,
     setSelectedPage,
     readContent,
@@ -839,7 +1137,33 @@ export function useWikiSources() {
     fetchDetail,
     handleUnbindWiki,
     handleCreate,
+    // 外部来源（iWiki 等）
+    formSourceType,
+    setFormSourceType,
+    sourceProviders,
+    formCredential,
+    setFormCredential,
+    setCredentialField,
+    formSourceUrl,
+    setFormSourceUrl,
+    treeResult,
+    selectedPageIds,
+    setSelectedPageIds,
+    fetchingTree,
+    importing,
+    credConfigured,
+    crawlMode,
+    setCrawlMode,
+    savingCred,
+    fetchWikiTree,
+    importWikiPages,
+    loadWikiProviders,
+    openAddDocExternal,
+    ensureCredential,
+    openCreate,
     handleIngest,
+    isCurrentWikiIngesting,
+    submitAddAndIngest,
     handleDelete,
     openDetail,
     handleReadPage,
@@ -857,9 +1181,7 @@ export function useWikiSources() {
     filteredPages,
     edgeCount,
     runningWikiIds,
-    hasManualIngestState,
     displayIngestState,
-    ingestBusy,
     displayContent,
     metadata,
   };
