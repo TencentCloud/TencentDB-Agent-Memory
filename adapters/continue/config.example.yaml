@@ -1,0 +1,16 @@
+# ~/.continue/config.yaml  (Windows: %USERPROFILE%\.continue\config.yaml)
+name: TencentDB Agent Memory
+version: 0.0.1
+schema: v1
+
+models:
+  - name: TencentDB Memory
+    provider: openai
+    model: claude-sonnet-4-20250514
+    apiBase: http://127.0.0.1:8096/codebuddy/default
+    # keep the key in an env var instead of the file:
+    apiKey: ${TDB_MEM_USER_KEY}
+    roles:
+      - chat
+      - edit
+      - apply
