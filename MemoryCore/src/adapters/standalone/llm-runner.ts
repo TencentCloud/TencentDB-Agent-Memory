@@ -29,6 +29,11 @@ import type {
   Logger,
 } from "../../core/types.js";
 import type { LLMUsage } from "../../core/report/metric-tracking-runner.js";
+import {
+  assertPromptWithinContext,
+  createLlmFetch,
+  type StandaloneLLMCapabilityConfig,
+} from "./llm-capabilities.js";
 
 const TAG = "[memory-tdai] [standalone-runner]";
 
@@ -77,7 +82,7 @@ function buildTelemetryMetadata(params: LLMRunParams): Record<string, unknown> {
 // Configuration
 // ============================
 
-export interface StandaloneLLMConfig {
+export interface StandaloneLLMConfig extends StandaloneLLMCapabilityConfig {
   /** OpenAI-compatible API base URL (e.g. "https://api.openai.com/v1"). */
   baseUrl: string;
   /** API key for authentication. */
@@ -298,6 +303,20 @@ export class StandaloneLLMRunner implements LLMRunner {
       `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
     );
 
+    const inputTokens = assertPromptWithinContext(
+      params.systemPrompt,
+      params.prompt,
+      this.config,
+      maxTokens,
+    );
+    if (this.config.inputBudgetTokens || this.config.contextWindow || this.config.effectiveContextWindow) {
+      this.logger?.debug?.(
+        `${TAG} prompt context: input=${inputTokens}, configured=${this.config.contextWindow ?? "unknown"}, `
+        + `effective=${this.config.effectiveContextWindow ?? this.config.contextWindow ?? "unknown"}, `
+        + `budget=${this.config.inputBudgetTokens ?? "derived"}`,
+      );
+    }
+
     // Create OpenAI-compatible provider via AI SDK
     // Use "compatible" mode to call /chat/completions (not Responses API),
     // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
@@ -305,6 +324,7 @@ export class StandaloneLLMRunner implements LLMRunner {
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
       compatibility: "compatible",
+      fetch: createLlmFetch(this.config),
     });
 
     // Select tools based on mode + storage
