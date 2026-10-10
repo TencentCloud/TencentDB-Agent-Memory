@@ -185,6 +185,18 @@ An adapter generally has three responsibilities:
 
 The v3 memory data plane requires `team_id`, `agent_id`, and `user_id`. Supply them in the request body or the corresponding `x-tdai-*` headers. `session_id` is optional and narrows operations to a session when provided.
 
+### Health checks
+
+`GET /health` is a public liveness check and always returns HTTP 200 when the Gateway responds, including when the default vector store is degraded or unavailable. Top-level `status` is `"ok"` when that store reports `"ok"`, and `"degraded"` otherwise. The Hermes supervisor treats both values as `is_running() === true`; a degraded response means the process is responding, but memory storage may be unusable.
+
+| Field | Meaning |
+| --- | --- |
+| `stores.vectorStore` | Existing boolean presence contract: `true` when the default store instance exists, including in degraded mode; `false` otherwise. |
+| `stores.vectorStoreStatus` | Operational state: `"ok"` for a present store that is not degraded, `"degraded"` for a store in no-op mode, or `"unavailable"` when no store exists. |
+| `stores.vectorStoreReason` | Optional diagnostic detail explaining a degraded store. |
+
+For a readiness gate on the default memory store, check `stores.vectorStoreStatus === "ok"`. HTTP 200 and `stores.vectorStore === true` alone do not establish store readiness. This state does not validate LLM or embedding connectivity, integrated services, or the full memory workflow for every instance. `stores.embeddingService` only reports whether an embedding service instance exists; `false` is expected in the default BM25 configuration and does not make the store unready.
+
 ## Configuration
 
 The Gateway resolves configuration in this order:

@@ -189,6 +189,18 @@ TDAI_MEMORY_INSTANCE_ID=default
 
 v3 记忆数据面要求 `team_id`、`agent_id`、`user_id`，可以通过请求体或对应的 `x-tdai-*` Header 传入；`session_id` 可选，用于限定会话范围。
 
+### 健康检查
+
+`GET /health` 是公共活性检查（liveness）：只要 Gateway 能响应，就始终返回 HTTP 200，包括默认向量存储降级或不可用时。默认存储状态为 `"ok"` 时，顶层 `status` 为 `"ok"`，否则为 `"degraded"`。Hermes supervisor 对两种状态都返回 `is_running() === true`；降级响应表示进程仍能响应，但记忆存储可能无法使用。
+
+| 字段 | 含义 |
+| --- | --- |
+| `stores.vectorStore` | 保留原有布尔值存在语义：默认存储实例存在时为 `true`，包括降级模式；否则为 `false`。 |
+| `stores.vectorStoreStatus` | 运行状态：存储存在且未降级时为 `"ok"`，处于空操作模式时为 `"degraded"`，不存在时为 `"unavailable"`。 |
+| `stores.vectorStoreReason` | 可选的存储降级诊断信息。 |
+
+若需要判断默认记忆存储是否就绪（readiness），应检查 `stores.vectorStoreStatus === "ok"`。仅有 HTTP 200 或 `stores.vectorStore === true` 无法确定存储已就绪。该状态不验证 LLM 或 embedding 连通性、集成服务，也不验证各 instance 的完整记忆流程。`stores.embeddingService` 仅表示是否存在 embedding 服务实例；默认 BM25 配置下为 `false` 是正常情况，不会因此将存储判为未就绪。
+
 ## 自定义 Prompt 与生成溯源
 
 每个 Memory Instance 最多创建 500 个自定义 Prompt，单个 Prompt 内容最长 10,000 个 Unicode 字符。Prompt 本体和目标绑定分开存储，更新时保持 `memory_prompt_id` 不变并执行 `version += 1`，已有绑定的新生成任务会使用最新版本。
