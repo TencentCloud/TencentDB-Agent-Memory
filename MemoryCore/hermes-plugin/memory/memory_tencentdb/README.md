@@ -231,14 +231,19 @@ eliminates a silent no-op.
 
 ### Gateway LLM (consumed by the Node sidecar, not by this provider)
 
+The Gateway accepts the canonical `TDAI_LLM_*` variables and the
+`MEMORY_TENCENTDB_LLM_*` names used by this Hermes provider. If both are set,
+the canonical `TDAI_LLM_*` value takes precedence.
+
 | Variable                          | Default                      | Description                         |
 |-----------------------------------|------------------------------|-------------------------------------|
 | `MEMORY_TENCENTDB_LLM_API_KEY`    | —                            | LLM API key (required for L1/L2/L3) |
 | `MEMORY_TENCENTDB_LLM_BASE_URL`   | `https://api.openai.com/v1`  | OpenAI-compatible API base URL      |
 | `MEMORY_TENCENTDB_LLM_MODEL`      | `gpt-4o`                     | Model name                          |
 
-> ⚠️ Only `MEMORY_TENCENTDB_*` env vars are honored by this provider for the
-> Gateway location and LLM credentials. Data-directory resolution is
+> ⚠️ The Hermes provider uses `MEMORY_TENCENTDB_*` env vars for its own Gateway
+> location and LLM settings. The child Gateway also accepts the canonical
+> `TDAI_LLM_*` aliases. Data-directory resolution is
 > deliberately delegated to the Gateway via `TDAI_DATA_DIR` (see above) so
 > the provider and the Gateway can never disagree about where L0~L3 live.
 
