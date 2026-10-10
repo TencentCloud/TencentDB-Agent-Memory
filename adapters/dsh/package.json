@@ -1,0 +1,27 @@
+{
+  "name": "tdai-memory-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TencentDB Agent Memory plugin for DeepSeek Harness (DSH)",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./gateway": "./gateway.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "gateway.mjs",
+    "cordis.patch.yml",
+    "README.md",
+    "README_CN.md"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
