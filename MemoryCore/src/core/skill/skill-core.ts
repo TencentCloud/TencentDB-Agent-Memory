@@ -321,7 +321,7 @@ export class SkillCore {
     }
 
     try {
-      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input), {
+      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input, head), {
         content: input.content,
         name: head.name,
         description: file.frontmatter.description,
@@ -360,7 +360,7 @@ export class SkillCore {
     }
 
     try {
-      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input), {
+      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input, head), {
         content: newContent,
         name: head.name,
         description: file.frontmatter.description,
@@ -405,7 +405,7 @@ export class SkillCore {
     assertVersionFreshWrap(head, input.expected_version);
 
     try {
-      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input), {
+      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input, head), {
         content: head.content,
         name: head.name,
         description: head.description,
@@ -434,7 +434,7 @@ export class SkillCore {
     }
 
     try {
-      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input), {
+      const result = await this.versioning.appendNextVersion(head, this.ctxOf(input, head), {
         content: head.content,
         name: head.name,
         description: head.description,
@@ -672,10 +672,18 @@ export class SkillCore {
     return head;
   }
 
-  private ctxOf(input: { user_id?: string; team_id?: string; agent_id?: string; task_id?: string }) {
+  private ctxOf(
+    input: { user_id?: string; team_id?: string; agent_id?: string; task_id?: string },
+    head?: { team_id: string },
+  ) {
     return {
       user_id: input.user_id,
-      team_id: input.team_id,
+      // #1577: write paths locate the head by skill_id (team_id optional). The
+      // version row must land in the team the head actually lives in - silently
+      // falling back to "default" appends to the wrong team and trips the
+      // (skill_id, version) UNIQUE constraint with a misleading version-conflict
+      // error.
+      team_id: input.team_id ?? head?.team_id,
       agent_id: input.agent_id,
       task_id: input.task_id,
     };
