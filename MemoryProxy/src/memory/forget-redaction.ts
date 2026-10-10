@@ -15,18 +15,29 @@ const SECRET_PATTERNS: RegExp[] = [
 ];
 
 const SENSITIVE_FIELD = String.raw`(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?key|client[_-]?secret|auth(?:orization)?|credential|private[_-]?key)`;
-const SENSITIVE_FIELD_PATTERNS: Array<[RegExp, string]> = [
-  [new RegExp(`(\\b${SENSITIVE_FIELD}\\b\\s*["']?\\s*[:=]\\s*)"(?:\\\\.|[^"\\\\])*"`, "gi"), "$1\"[REDACTED]\""],
-  [new RegExp(`(\\b${SENSITIVE_FIELD}\\b\\s*["']?\\s*[:=]\\s*)'(?:\\\\.|[^'\\\\])*'`, "gi"), "$1'[REDACTED]'"],
-  [new RegExp(`(\\b${SENSITIVE_FIELD}\\b\\s*["']?\\s*[:=]\\s*)(?!["'])[^\\s,;}\\]]+`, "gi"), "$1[REDACTED]"],
-];
+const SENSITIVE_KEY = new RegExp(`^${SENSITIVE_FIELD}$`, "i");
+// For non-JSON text there is no trustworthy end-of-value boundary (YAML block
+// scalars, folded headers, broken JSON, etc.). Hide the remainder rather than
+// accidentally returning part of a credential.
+const SENSITIVE_TEXT_TAIL = new RegExp(`(\\b${SENSITIVE_FIELD}\\b["']?\\s*[:=])[\\s\\S]*`, "i");
 
 export function redactForgetPreview(value: string): string {
-  let result = value;
-  for (const pattern of SECRET_PATTERNS) result = result.replace(pattern, "[REDACTED]");
-  for (const [pattern, replacement] of SENSITIVE_FIELD_PATTERNS) {
-    result = result.replace(pattern, replacement);
+  let result: string;
+  try {
+    // The reviver visits nested objects and arrays and replaces the ENTIRE
+    // value of a sensitive field, including arrays, objects and null.
+    const parsed: unknown = JSON.parse(value, (key, fieldValue: unknown) => {
+      if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
+      // JSON may also contain a string holding a header or a YAML fragment.
+      return typeof fieldValue === "string"
+        ? fieldValue.replace(SENSITIVE_TEXT_TAIL, "$1 [REDACTED]")
+        : fieldValue;
+    });
+    result = JSON.stringify(parsed);
+  } catch {
+    result = value.replace(SENSITIVE_TEXT_TAIL, "$1 [REDACTED]");
   }
+  for (const pattern of SECRET_PATTERNS) result = result.replace(pattern, "[REDACTED]");
   return result;
 }
 
