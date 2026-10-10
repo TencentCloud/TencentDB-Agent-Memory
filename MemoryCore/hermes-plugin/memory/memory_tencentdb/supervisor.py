@@ -33,6 +33,56 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
 
+# Hermes-facing LLM variable names (advertised by the plugin schema in
+# __init__.py as ``env_var``) mapped to the names src/gateway/config.ts
+# actually reads when the spawned Gateway resolves its LLM settings.
+# Following only the documented MEMORY_TENCENTDB_LLM_* names without this
+# bridge produces a Gateway that boots green while every L1 extraction
+# fails on a missing API key (see issue #1386).
+LLM_ENV_BRIDGE = (
+    ("MEMORY_TENCENTDB_LLM_API_KEY", "TDAI_LLM_API_KEY"),
+    ("MEMORY_TENCENTDB_LLM_BASE_URL", "TDAI_LLM_BASE_URL"),
+    ("MEMORY_TENCENTDB_LLM_MODEL", "TDAI_LLM_MODEL"),
+)
+
+
+def bridge_llm_env(env: Dict[str, str]) -> Dict[str, str]:
+    """Copy the documented MEMORY_TENCENTDB_LLM_* values onto their TDAI_LLM_*
+    counterparts in ``env`` (in place), so the Gateway child sees them.
+
+    A ``TDAI_LLM_*`` variable the operator set explicitly always wins — this
+    bridge only fills names that are unset, mirroring the port/host dual-export
+    above. Empty MEMORY_TENCENTDB_LLM_* values are treated as unset.
+
+    When NO source yields ``TDAI_LLM_API_KEY``, emits a single warning: without
+    this line, "bridged but empty" and "not bridged at all" are indistinguishable
+    from the outside, and the Gateway boots green while every L1 extraction
+    fails on the missing key (#1386). The supervisor is yaml-blind — it only
+    sees the child env — so the warning also fires when the operator
+    deliberately configures ``llm.apiKey`` in the Gateway yaml instead; the
+    message says so explicitly so it can be ignored in that case.
+
+    Returns ``env`` for convenience.
+    """
+    for memory_name, tdai_name in LLM_ENV_BRIDGE:
+        value = env.get(memory_name)
+        if value and not env.get(tdai_name):
+            env[tdai_name] = value
+            logger.debug(
+                "memory-tencentdb: bridged %s -> %s for the Gateway child process",
+                memory_name, tdai_name,
+            )
+    if not env.get("TDAI_LLM_API_KEY"):
+        logger.warning(
+            "memory-tencentdb: no TDAI_LLM_API_KEY in the Gateway child env "
+            "(neither MEMORY_TENCENTDB_LLM_API_KEY nor TDAI_LLM_API_KEY is set) — "
+            "L1/L2/L3 extraction will fail unless llm.apiKey is configured in the "
+            "Gateway yaml. If you have already configured llm.apiKey there, this "
+            "warning does not apply to you (the supervisor only sees the child "
+            "env, not the yaml); see issue #1386"
+        )
+    return env
+
 # Health check parameters
 HEALTH_CHECK_INTERVAL = 0.5  # seconds between checks
 HEALTH_CHECK_MAX_WAIT = 30   # max seconds to wait for Gateway to start
@@ -230,6 +280,11 @@ class GatewaySupervisor:
                 env["MEMORY_TENCENTDB_GATEWAY_HOST"] = self._host
                 env["TDAI_GATEWAY_PORT"] = str(self._port)
                 env["TDAI_GATEWAY_HOST"] = self._host
+                # The plugin schema advertises LLM credentials as
+                # MEMORY_TENCENTDB_LLM_*; the Gateway reads TDAI_LLM_*.
+                # Bridge them so the documented README setup actually reaches
+                # the child process instead of failing extraction silently.
+                bridge_llm_env(env)
                 # Note: we deliberately do NOT inject TDAI_GATEWAY_API_KEY into
                 # the child's env from here. Whether the Gateway enforces auth is
                 # the operator's call — they configure it on the Gateway side
