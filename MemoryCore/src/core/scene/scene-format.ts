@@ -2,6 +2,18 @@
  * Scene Block file format: parse and format the META-delimited Markdown files.
  */
 
+/**
+ * Hard per-file character budget for scene blocks (#1543).
+ *
+ * The ≤1500-char guidance previously lived only in extraction prompt text,
+ * which is advisory by construction — heavy usage let scene blocks grow
+ * monotonically. Enforcement now happens deterministically at the write path
+ * (scene-extractor Phase 5) via enforceSceneBlockBudget().
+ */
+export const SCENE_BLOCK_CHAR_BUDGET = 1500;
+
+const TRIM_MARKER = "\n\n> [scene-block] trimmed: exceeded the 1500-char budget and was truncated (issue #1543)";
+
 export interface SceneBlockMeta {
   created: string;
   updated: string;
@@ -72,4 +84,27 @@ function extractMetaField(metaBlock: string, field: string): string {
   const re = new RegExp(`^${field}:\\s*(.*)$`, "m");
   const m = metaBlock.match(re);
   return m ? m[1]!.trim() : "";
+}
+
+/**
+ * Deterministically cap a scene block at SCENE_BLOCK_CHAR_BUDGET characters.
+ *
+ * The META header (when present) is structural and never trimmed; over-budget
+ * size is reclaimed from the body, which keeps its leading (most recent)
+ * lines and ends with a trim marker. Idempotent: enforcing an already-conforming
+ * block returns it unchanged.
+ */
+export function enforceSceneBlockBudget(
+  raw: string,
+  budget: number = SCENE_BLOCK_CHAR_BUDGET,
+): { content: string; trimmed: boolean } {
+  if (raw.length <= budget) return { content: raw, trimmed: false };
+
+  const endIdx = raw.indexOf(META_END);
+  if (endIdx !== -1) {
+    const metaPart = raw.slice(0, endIdx + META_END.length);
+    const bodyBudget = Math.max(200, budget - metaPart.length - TRIM_MARKER.length);
+    return { content: metaPart + raw.slice(metaPart.length, metaPart.length + bodyBudget) + TRIM_MARKER, trimmed: true };
+  }
+  return { content: raw.slice(0, Math.max(200, budget - TRIM_MARKER.length)) + TRIM_MARKER, trimmed: true };
 }

@@ -21,7 +21,7 @@ import { CheckpointManager } from "../../utils/checkpoint.js";
 import { BackupManager } from "../../utils/backup.js";
 import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import type { SceneIndexEntry } from "../scene/scene-index.js";
-import { parseSceneBlock } from "../scene/scene-format.js";
+import { enforceSceneBlockBudget, parseSceneBlock } from "../scene/scene-format.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import { normalizeSceneFilenames } from "./filename-normalizer.js";
 import type { MemoryPromptMode } from "../../config.js";
@@ -308,6 +308,7 @@ export class SceneExtractor {
     // These are artifacts of LLM merges that didn't properly delete old files.
     const cleanupStartMs = Date.now();
     let cleanedCount = 0;
+    let trimmedCount = 0;
     try {
       let allFiles: string[];
       if (this.storage) {
@@ -337,8 +338,22 @@ export class SceneExtractor {
           cleanedCount++;
           this.logger?.debug?.(`${TAG} extract() removed soft-deleted file: ${file}`);
         } else {
-          // Check if file has only META header but no actual content
-          const block = parseSceneBlock(raw, file);
+          // #1543: enforce the per-file character budget deterministically — the
+          // prompt-level guidance is advisory only, so oversized blocks (LLM
+          // appends on every UPDATE) are trimmed here before they reach the index.
+          const enforced = enforceSceneBlockBudget(raw, file);
+          if (enforced.trimmed) {
+            if (this.storage) {
+              await this.storage.writeFile(`${StoragePaths.sceneBlocksDir}${file}`, enforced.content);
+            } else {
+              const fs = await import("node:fs/promises");
+              const path = await import("node:path");
+              await fs.default.writeFile(path.default.join(this.dataDir, "scene_blocks", file), enforced.content, "utf-8");
+            }
+            trimmedCount++;
+            this.logger?.warn(`${TAG} extract() trimmed over-budget scene block: ${file} (${raw.length} -> ${enforced.content.length} chars)`);
+          }
+          const block = parseSceneBlock(enforced.content, file);
           if (!block.content || block.content.trim().length === 0) {
             if (this.storage) {
               await this.storage.unlink(`${StoragePaths.sceneBlocksDir}${file}`);
@@ -356,7 +371,7 @@ export class SceneExtractor {
       // Non-fatal — log and continue to index sync
       this.logger?.warn(`${TAG} extract() soft-delete cleanup error: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
     }
-    this.logger?.debug?.(`${TAG} extract() soft-delete cleanup: removed ${cleanedCount} empty files (${Date.now() - cleanupStartMs}ms)`);
+    this.logger?.debug?.(`${TAG} extract() soft-delete cleanup: removed ${cleanedCount} empty files, trimmed ${trimmedCount} over-budget blocks (${Date.now() - cleanupStartMs}ms)`);
 
     // Phase 5b: Normalize filenames (defensive — LLM occasionally produces names
     // with spaces / punctuation despite the prompt forbidding them, e.g.
