@@ -1313,10 +1313,17 @@ async function handleAtomicDelete(body: unknown, auth: V2AuthContext, requestId:
   let deletedCount = 0;
   const deletedIds: string[] = [];
   for (const id of ids) {
-    const ok = await store.deleteL1(id, deleteFilter);
-    if (ok) {
-      deletedCount++;
-      deletedIds.push(id);
+    try {
+      const ok = await store.deleteL1(id, deleteFilter);
+      if (ok) {
+        deletedCount++;
+        deletedIds.push(id);
+      }
+    } catch (err) {
+      // Store failure — log and continue (non-fatal for batch delete)
+      deps.logger?.error(
+        `[gateway] Failed to delete memory ${id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
