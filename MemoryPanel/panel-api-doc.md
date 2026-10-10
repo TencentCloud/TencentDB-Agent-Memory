@@ -765,7 +765,7 @@ L0/L1 列表批量删除。**仅资产 Owner**。
 | deleted_skill_count | number | 已删 skill 数 |
 | deleted_skill_ids | string[] | 已删 skill ID 列表 |
 
-**错误**：`MISSING_AGENT_ID`、`INVALID_USER_KEY`、`AGENT_NOT_FOUND`、`NOT_YOUR_AGENT`；任一 skill 删除失败返回 `500 SKILL_DELETE_FAILED`（含 `failed_skill_id`、`deleted_skill_ids`），此时 agent 不会 archive。
+**错误**：`MISSING_AGENT_ID`、`INVALID_USER_KEY`、`AGENT_NOT_FOUND`、`NOT_YOUR_AGENT`；任一 skill 删除失败返回 `500 SKILL_DELETE_FAILED`（含 `failed_skill_id`、`deleted_skill_ids`），此时 agent 不会 archive。若内核明确返回 `404 Skill module not enabled`，Control 会将其视为没有可级联的 skill 并继续归档 Agent；其它 `skill/list` 错误仍原样阻断归档。
 
 **示例**
 
