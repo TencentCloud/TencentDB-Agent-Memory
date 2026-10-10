@@ -15,6 +15,7 @@ import { parseL15Response } from "./parsers/l15-parser.js";
 import { parseL2Response, type L2ParsedResponse } from "./parsers/l2-parser.js";
 import type { OffloadEntry, TaskJudgment, PluginLogger } from "../types.js";
 import type { L1Request, L1Response, L15Request, L15Response, L2Request, L2Response } from "../backend-client.js";
+import { StructuredOutputParseError } from "../../utils/structured-output.js";
 
 const TAG = "[context-offload] [local-llm]";
 
@@ -66,7 +67,7 @@ export class LocalLlmClient {
 
     const entries = parseL1Response(raw);
     if (entries.length === 0) {
-      this.logger?.warn?.(`${TAG} L1: parsed 0 entries from LLM response (${raw.length} chars)`);
+      throw new StructuredOutputParseError("L1", raw);
     }
 
     return { entries };
