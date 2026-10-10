@@ -616,6 +616,7 @@ export function createL1Runner(opts: {
             maxMemoriesPerSession: cfg.extraction.maxMemoriesPerSession,
             model: cfg.extraction.model,
             promptMode: cfg.extraction.promptMode,
+            userIdentityNames: cfg.extraction.userIdentityNames,
             memoryPrompt: l1Prompts.get(memoryPromptResolveKey({
               teamId: group.teamId,
               agentId: group.agentId,
