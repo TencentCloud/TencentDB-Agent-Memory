@@ -588,6 +588,7 @@ export function createL1Runner(opts: {
       let totalExtracted = 0;
       let totalStored = 0;
       let lastSceneName: string | undefined;
+      let l1Failed = false;
       const profileScopes = new Set<string>();
       const l1PromptTargets = groups.map((group) => ({
         teamId: group.teamId,
@@ -635,6 +636,11 @@ export function createL1Runner(opts: {
 
         totalExtracted += l1Result.extractedCount;
         totalStored += l1Result.storedCount;
+        // A transient LLM failure makes extractL1Memories return { success: false }
+        // without throwing. Remember it so we can avoid advancing the cursor below.
+        if (l1Result?.success === false) {
+          l1Failed = true;
+        }
         if (l1Result.storedCount > 0) {
           // L2/L3 output is team+agent scoped, but each L2 extraction input must
           // stay bounded to the source session that just produced L1. Encode the
@@ -655,6 +661,17 @@ export function createL1Runner(opts: {
       // Use maxRecordedAtMs (write time) of the **processed** slice as cursor —
       // always positive, TCVDB-safe. Boundary alignment guarantees we will not
       // skip same-ms siblings on the next round.
+      // If any group's L1 extraction failed (transient LLM error, rate limit, etc.),
+      // do NOT advance the cursor: the checkpoint cursor is monotonic and would
+      // otherwise permanently skip the session ("L1 skipped: already processed"),
+      // turning a transient failure into silent data loss. Returning without
+      // markL1ExtractionComplete lets the next trigger re-attempt the session.
+      if (l1Failed) {
+        logger.warn(
+          `${TAG} [l1] L1 extraction had failures for session ${sessionKey}; not advancing cursor so the session is retried`,
+        );
+        return { processedCount: totalMessages, storedCount: totalStored, hasMore, hasFullBacklog, profileScopes: Array.from(profileScopes) };
+      }
       await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
       logger.info(
         `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`,
