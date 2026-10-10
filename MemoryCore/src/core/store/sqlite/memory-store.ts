@@ -2247,9 +2247,13 @@ export class VectorStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    opts?: { throwOnError?: boolean },
   ): L0QueryRow[] {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L0-query] SKIPPED (degraded mode)`);
+      if (opts?.throwOnError) {
+        throw new Error(`[L0-query] store in degraded mode (throwOnError)`);
+      }
       return [];
     }
     try {
@@ -2283,6 +2287,11 @@ export class VectorStore implements IMemoryStore {
         timestamp: (r.timestamp as number) || 0,
       }));
     } catch (err) {
+      if (opts?.throwOnError) {
+        // Layered swallow: the grouped L1 guard (throwOnError) needs the real
+        // error, otherwise a store failure reads as "zero pending" downstream.
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       this.logger?.warn(
         `${TAG} [L0-query] FAILED (non-fatal, returning empty): ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -2301,13 +2310,17 @@ export class VectorStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    opts?: { throwOnError?: boolean },
   ): Array<{ sessionId: string; teamId?: string; taskId?: string; userId: string; agentId: string; messages: Array<{ id: string; role: string; content: string; timestamp: number; recordedAtMs: number }> }> {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L0-query-grouped] SKIPPED (degraded mode)`);
+      if (opts?.throwOnError) {
+        throw new Error(`[L0-query-grouped] store in degraded mode (throwOnError)`);
+      }
       return [];
     }
     try {
-      const rows = this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
+      const rows = this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit, opts);
 
       // Group by full isolation tuple + session_id to avoid cross-tenant merging.
       const groupMap = new Map<string, {
@@ -2355,6 +2368,11 @@ export class VectorStore implements IMemoryStore {
 
       return groups;
     } catch (err) {
+      if (opts?.throwOnError) {
+        // A "zero rows" verdict gates the L1 timer skip — an error read as
+        // empty would strand the backlog, so guard-path callers get the error.
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       this.logger?.warn(
         `${TAG} [L0-query-grouped] FAILED (non-fatal, returning empty): ${err instanceof Error ? err.message : String(err)}`,
       );
