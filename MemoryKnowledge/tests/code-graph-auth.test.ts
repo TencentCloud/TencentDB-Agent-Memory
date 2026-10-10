@@ -1,13 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDb } from '../src/db/client.js';
 import { SqliteKnowledgeStore } from '../src/store/sqlite-store.js';
 import { GitCredentialStore } from '../src/store/git-credential-store.js';
 import { CodeGraphService } from '../src/store/code-graph-service.js';
 import { CodeSourceRegistry } from '../src/code-source/registry.js';
 import { basicAuthMethod } from '../src/code-source/auth-methods/basic.js';
+import { injectBasicAuth } from '../src/code-source/clone-url.js';
 import { createCredentialStore } from '../src/source-auth/credential-store.js';
 import { CodeGraphAuthService, type CodeGraphAuthInput } from '../src/source-auth/code-graph-auth.js';
 
@@ -202,6 +203,72 @@ describe('shared CodeGraph authentication rules', () => {
     const id = f.create({ mode: 'resource', provider_id: providerId, secret, username });
     expect(f.service.resolve('svc', id)).toEqual({ url: repo, auth: { kind: 'https', username: providerId === 'basic' ? username : 'private', token: secret } });
     expect(builder).not.toHaveBeenCalled();
+  });
+
+  it('adapts legacy provider URL hooks to isolated authentication for existing bindings and rotation', () => {
+    const f = setup(); const id = f.create(resource);
+    const provider = f.codeSourceRegistry.get('gongfeng')!;
+    const username = 'custom+reader%2F@example.com';
+    const hook = vi.fn((url, cred) => injectBasicAuth(url, { user: username, pass: cred.secret }));
+    f.codeSourceRegistry.register({ ...provider, applyToCloneUrl: hook });
+    const direct = vi.spyOn(provider.authMethod, 'toGitAuth').mockImplementation(() => { throw new Error('Legacy hook takes precedence'); });
+    expect(f.service.resolve('svc', id)).toEqual({ url: repo, auth: { kind: 'https', username, token: resource.secret } });
+    const secret = ' s:e@c/%2F ret+字 ';
+    f.service.replace('svc', id, { ...resource, secret }, actor);
+    expect(f.service.resolve('svc', id)).toEqual({ url: repo, auth: { kind: 'https', username, token: secret } });
+    expect(f.store.getCodeGraphById('svc', id)?.repo_url).toBe(repo);
+    const created = f.service.create({ ...params, branch: 'other', credential: { provider_id: 'gongfeng', secret } });
+    expect(f.service.resolve('svc', created.row.code_graph_id)).toEqual({ url: repo, auth: { kind: 'https', username, token: secret } });
+    expect(hook).toHaveBeenCalled();
+    expect(direct).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'https://other.example.com/owner/repo.git',
+    'https://git.example.com:8443/owner/repo.git',
+    'https://git.example.com/other/repo.git',
+    `${repo}?token=redirect`,
+    `${repo}#fragment`,
+    'http://git.example.com/owner/repo.git',
+    'ssh://git@git.example.com/owner/repo.git',
+  ])('rejects legacy provider destination changes to %s without altering the binding', (target) => {
+    const f = setup(); const id = f.create(resource);
+    const provider = f.codeSourceRegistry.get('gongfeng')!;
+    f.codeSourceRegistry.register({ ...provider, applyToCloneUrl: (_url, cred) => {
+      const url = new URL(target);
+      url.username = 'reader'; url.password = encodeURIComponent(cred.secret);
+      return url.toString();
+    } });
+    expect(() => f.service.resolve('svc', id)).toThrow(/invalid or unavailable/);
+    expect(() => f.service.replace('svc', id, { ...resource, secret: 'replacement' }, actor)).toThrow(/Invalid credentials/);
+    expect(() => f.service.create({ ...params, branch: 'other', credential: { provider_id: 'gongfeng', secret: 'replacement' } })).toThrow(/Invalid credentials/);
+    expect(f.credentialStore.get(f.ref(id))?.secret).toBe(resource.secret);
+    expect(f.store.getCodeGraphById('svc', id)?.repo_url).toBe(repo);
+    expect(f.store.listCodeGraphs('svc', 'team')).toHaveLength(1);
+  });
+
+  it.each([
+    ['malformed percent encoding', 'https://reader:bad%escape@git.example.com/owner/repo.git'],
+    ['encoded newline', 'https://reader:bad%0Atoken@git.example.com/owner/repo.git'],
+    ['encoded NUL', 'https://reader:bad%00token@git.example.com/owner/repo.git'],
+    ['raw newline', 'https://reader:bad\ntoken@git.example.com/owner/repo.git'],
+    ['missing credentials', repo],
+  ])('rejects malformed legacy authentication without returning its URL (%s)', (_label, url) => {
+    const f = setup(); const id = f.create(resource);
+    const provider = f.codeSourceRegistry.get('gongfeng')!;
+    f.codeSourceRegistry.register({ ...provider, applyToCloneUrl: () => url });
+    expect(() => f.service.resolve('svc', id)).toThrow(/^Repository authentication is invalid or unavailable; repair it before syncing$/);
+    expect(() => f.service.replace('svc', id, resource, actor)).toThrow(/^Invalid credentials for the selected repository provider$/);
+    expect(f.credentialStore.get(f.ref(id))?.secret).toBe(resource.secret);
+  });
+
+  it('sanitizes legacy provider errors containing secrets during resolution and replacement', () => {
+    const f = setup(); const id = f.create(resource);
+    const provider = f.codeSourceRegistry.get('gongfeng')!;
+    f.codeSourceRegistry.register({ ...provider, applyToCloneUrl: (_url, cred) => { throw new Error(`Provider rejected ${cred.secret}`); } });
+    expect(() => f.service.resolve('svc', id)).toThrow(/^Repository authentication is invalid or unavailable; repair it before syncing$/);
+    expect(() => f.service.replace('svc', id, resource, actor)).toThrow(/^Invalid credentials for the selected repository provider$/);
+    expect(f.credentialStore.get(f.ref(id))?.secret).toBe(resource.secret);
   });
 
   it('rejects incomplete or unavailable providers and unsafe URLs before persistence', () => {

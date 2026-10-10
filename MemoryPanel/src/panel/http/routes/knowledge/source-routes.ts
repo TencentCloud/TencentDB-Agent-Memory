@@ -152,13 +152,19 @@ export function registerKnowledgeSourceRoutes(api: Hono, deps: PanelDeps): void 
     const ref = parseRef(body);
     if (typeof ref === 'string') return respondControlError(c, 400, ref);
     const providerId = str(body, 'provider_id');
-    const secret = str(body, 'secret');
+    // Git passwords may contain surrounding spaces; match the create endpoint's
+    // byte-preserving forwarding without changing Wiki's existing normalization.
+    const secret = ref.type === 'code-graph' ? body.secret : str(body, 'secret');
+    const username = ref.type === 'code-graph' ? body.username : str(body, 'username') ?? undefined;
     const kind = str(body, 'cred_kind') ?? 'bearer';
     if (!providerId) return respondControlError(c, 400, 'MISSING_PROVIDER_ID');
-    if (!secret) return respondControlError(c, 400, 'MISSING_SECRET');
+    if (typeof secret !== 'string' || !secret) return respondControlError(c, 400, 'MISSING_SECRET');
+    if ((username !== undefined && (typeof username !== 'string' || !username)) ||
+        (ref.type === 'code-graph' && kind === 'basic' && username === undefined)) {
+      return respondControlError(c, 400, 'INVALID_CREDENTIAL');
+    }
     const gate = await requireTeamMember(deps, c, ctx, teamId);
     if ('error' in gate) return gate.error;
-    const username = str(body, 'username') ?? undefined;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     // 只回 KS 给的元数据（KS 保证不含 secret），不回显请求体。
     return runKs(c, () =>

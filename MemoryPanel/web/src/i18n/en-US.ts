@@ -2,7 +2,8 @@
 
 export const enUS = {
   'gitCredential.resourceToken': '{{provider}} · Token for this repository',
-  'gitCredential.resourceScope': 'Updating the token affects only this repository, starting with the next sync.',
+  'gitCredential.resourceScope':
+    'Updating the token affects only this repository, starting with the next sync.',
   'gitCredential.reload': 'Reload credential status',
   'gitCredential.conflict': 'Conflicting credentials; select a credential again',
   "gitCredential.scope": "Scope",

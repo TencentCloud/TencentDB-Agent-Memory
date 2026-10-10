@@ -59,6 +59,45 @@ function setup(serviceKey = '') {
 }
 
 describe('reusable Git and resource credentials coexistence', () => {
+  it.each([null, 42, {}, 'unknown'])('rejects an invalid explicit CodeGraph credential kind (%j)', async (cred_kind) => {
+    const f = setup(); const row = f.createReadyGraph();
+    const response = await f.request('PUT', '/source-credential/put', {
+      resource_type: 'code-graph', resource_id: row.code_graph_id,
+      provider_id: 'gongfeng', cred_kind, secret: 'replacement',
+    });
+    expect(response.status).toBe(400);
+    expect(f.sourceCredentials.status({ type: 'code-graph', serviceId: 'svc', resourceId: row.code_graph_id })).toBeNull();
+  });
+
+  it('rejects a provider credential kind mismatch without replacing a saved binding', async () => {
+    const f = setup('service-secret'); const saved = f.createGitCredential();
+    const row = f.createReadyGraph(saved.credential_id);
+    const response = await f.request('PUT', '/source-credential/put', {
+      resource_type: 'code-graph', resource_id: row.code_graph_id,
+      provider_id: 'gongfeng', cred_kind: 'basic', username: 'reader', secret: 'replacement',
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json()).message).toMatch(/cred_kind.*provider/i);
+    expect(f.store.getCodeGraphById('svc', row.code_graph_id)?.credential_id).toBe(saved.credential_id);
+    expect(f.sourceCredentials.status({ type: 'code-graph', serviceId: 'svc', resourceId: row.code_graph_id })).toBeNull();
+  });
+
+  it('preserves provider credential extras across PUT replacements without returning them', async () => {
+    const f = setup(); const row = f.createReadyGraph();
+    const ref = { type: 'code-graph' as const, serviceId: 'svc', resourceId: row.code_graph_id };
+    for (const extra of [{ scope: 'read_repository', nested: { revision: 1 } }, { scope: 'read_api' }]) {
+      const response = await f.request('PUT', '/source-credential/put', {
+        resource_type: 'code-graph', resource_id: row.code_graph_id,
+        provider_id: 'gongfeng', cred_kind: 'bearer', secret: 'resource-token', extra,
+      });
+      expect(response.status).toBe(200);
+      expect(f.sourceCredentials.get(ref)?.extra).toEqual(extra);
+      const body = await response.json();
+      expect(body.data.credential).not.toHaveProperty('extra');
+      expect(JSON.stringify(body)).not.toContain('resource-token');
+    }
+  });
+
   it.each(['code-graph', 'wiki'] as const)('keeps resource %s CRUD usable in legacy open mode', async (type) => {
     const { request, store, sourceCredentials, createReadyGraph } = setup();
     const id = type === 'code-graph'

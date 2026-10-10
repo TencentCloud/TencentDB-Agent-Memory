@@ -162,12 +162,14 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
       return c.json(wrapError(400, "secret is required"), 400);
     }
     const kind = (typeof body.cred_kind === "string" ? body.cred_kind : "bearer") as CredentialKind;
-    if (!VALID_KINDS.includes(kind)) {
+    if (!VALID_KINDS.includes(kind) || (refOrErr.type === "code-graph" && body.cred_kind !== undefined && typeof body.cred_kind !== "string")) {
       return c.json(wrapError(400, `cred_kind must be one of ${VALID_KINDS.join(", ")}`), 400);
     }
     if (kind === "basic" && typeof body.username !== "string") {
       return c.json(wrapError(400, "username is required for basic credential"), 400);
     }
+    const extra = typeof body.extra === "object" && body.extra !== null
+      ? (body.extra as Record<string, unknown>) : undefined;
 
     const gate = ensureTeamOwnership(store, who, refOrErr);
     if (!gate.ok) return c.json(wrapError(404, "resource not found"), 404);
@@ -175,7 +177,7 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
     if (refOrErr.type === "code-graph") {
       const authActor = { ...who, serviceAuthenticated: serviceAuthenticated(c.req.header("authorization")) };
       deps.codeGraphAuth.replace(who.serviceId, refOrErr.resourceId, {
-        mode: "resource", provider_id: providerId, secret,
+        mode: "resource", provider_id: providerId, secret, cred_kind: kind, extra,
         username: typeof body.username === "string" ? body.username : undefined,
       }, authActor);
       return c.json(wrapOk({ credential: deps.codeGraphAuth.resourceStatus(who.serviceId, refOrErr.resourceId, authActor) }));
@@ -187,10 +189,7 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
         kind,
         secret,
         username: typeof body.username === "string" ? body.username : undefined,
-        extra:
-          typeof body.extra === "object" && body.extra !== null
-            ? (body.extra as Record<string, unknown>)
-            : undefined,
+        extra,
       },
       providerId,
       who.userId,

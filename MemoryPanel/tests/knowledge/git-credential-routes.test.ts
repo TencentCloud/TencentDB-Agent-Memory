@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { registerGitCredentialRoutes } from '../../src/panel/http/routes/knowledge/git-credential-routes.js';
 import { registerKnowledgeCodeGraphRoutes } from '../../src/panel/http/routes/knowledge/code-graph-routes.js';
+import { registerKnowledgeSourceRoutes } from '../../src/panel/http/routes/knowledge/source-routes.js';
 import { HttpKnowledgeClient } from '../../src/panel/kernel/adapters/http-knowledge-client.js';
 import type { PanelDeps } from '../../src/panel/panel-deps.js';
 
@@ -17,6 +18,7 @@ function setup(member = true, owner = 'alice') {
     gitCredentialHostKey: vi.fn(async () => ({ trusted: false })), gitCredentialTrustHost: vi.fn(async () => ({ trusted: true })),
     codeGraphCreate: vi.fn(async () => ({ code_graph_id: 'cg-test' })),
     codeGraphGet: vi.fn(async () => ({ owner_user_id: owner })), codeGraphSetCredential: vi.fn(async () => ({})),
+    sourceCredentialPut: vi.fn(async () => ({ provider_id: 'custom', cred_kind: 'bearer' })),
   };
   const deps = {
     knowledgeClientFactory: vi.fn(() => client),
@@ -31,6 +33,7 @@ function setup(member = true, owner = 'alice') {
     }) },
   } as unknown as PanelDeps;
   const app = new Hono(); registerGitCredentialRoutes(app, deps); registerKnowledgeCodeGraphRoutes(app, deps);
+  registerKnowledgeSourceRoutes(app, deps);
   const request = (path: string, body: object) => app.request('/knowledge/' + path, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -98,6 +101,47 @@ describe('Panel Git credential authorization', () => {
     })).status).toBe(200);
     expect(client.codeGraphCreate).toHaveBeenCalledWith('team', 'https://host/repo', undefined, 'alice', undefined,
       expect.objectContaining({ providerId: 'custom-basic', username: ' reader ', secret: ' password ' }));
+  });
+  it.each([
+    { kind: 'bearer', username: undefined, secret: ' synthetic @:/?#% token ' },
+    { kind: 'basic', username: ' reader @:/?#% ', secret: ' synthetic password ' },
+  ])('preserves identical credential bytes when creating and rotating a $kind CodeGraph source', async ({ kind, username, secret }) => {
+    const { request, client } = setup();
+    const fields = { provider_id: 'custom', secret, username };
+    expect((await request('code-graph/create', {
+      team_id: 'team', repo_url: 'https://host/repo', ...fields,
+    })).status).toBe(200);
+    expect((await request('source/credential', {
+      team_id: 'team', resource_type: 'code-graph', resource_id: 'cg-test', cred_kind: kind, ...fields,
+    })).status).toBe(200);
+    expect(client.codeGraphCreate).toHaveBeenCalledWith('team', 'https://host/repo', undefined, 'alice', undefined,
+      expect.objectContaining({ providerId: 'custom', secret, username }));
+    expect(client.sourceCredentialPut).toHaveBeenCalledWith('code-graph', 'cg-test', { teamId: 'team', userId: 'alice' }, {
+      provider_id: 'custom', cred_kind: kind, secret, username,
+    });
+  });
+  it('rejects missing, empty and non-string CodeGraph credentials before forwarding', async () => {
+    const { request, client } = setup();
+    const input = {
+      team_id: 'team', resource_type: 'code-graph', resource_id: 'cg-test', provider_id: 'custom',
+      cred_kind: 'basic', secret: 'synthetic', username: 'reader',
+    };
+    for (const invalid of [undefined, null, '', 123, false, {}]) {
+      expect((await request('source/credential', { ...input, secret: invalid })).status).toBe(400);
+      expect((await request('source/credential', { ...input, username: invalid })).status).toBe(400);
+    }
+    expect((await request('source/credential', { ...input, cred_kind: 'bearer', username: 123 })).status).toBe(400);
+    expect(client.sourceCredentialPut).not.toHaveBeenCalled();
+  });
+  it('keeps the existing Wiki credential normalization', async () => {
+    const { request, client } = setup();
+    expect((await request('source/credential', {
+      team_id: 'team', resource_type: 'wiki', resource_id: 'wiki-test', provider_id: 'custom',
+      cred_kind: 'basic', secret: ' synthetic password ', username: ' reader ',
+    })).status).toBe(200);
+    expect(client.sourceCredentialPut).toHaveBeenCalledWith('wiki', 'wiki-test', { teamId: 'team', userId: 'alice' }, {
+      provider_id: 'custom', cred_kind: 'basic', secret: 'synthetic password', username: 'reader',
+    });
   });
 });
 

@@ -6,13 +6,13 @@ import { parseGitSource, validateGitBranch } from "../source-fetcher/git-source.
 import { GitCredentialStore, GitCredentialError, validateGitSecret, type GitSecret } from "../store/git-credential-store.js";
 import type { CodeGraphRow, IKnowledgeStore } from "../store/types.js";
 import type { CreateCodeGraphParams } from "../store/code-graph-service.js";
-import type { CredentialStatus, ICredentialStore, SourceCredential } from "./types.js";
+import type { CredentialKind, CredentialStatus, ICredentialStore, SourceCredential } from "./types.js";
 
 /** Internal representation only; the existing HTTP request formats stay unchanged. */
 export type CodeGraphAuthInput =
   | { mode: "none" }
   | { mode: "saved"; credential_id: string; share_with_team?: boolean }
-  | { mode: "resource"; provider_id: string; secret: string; username?: string };
+  | { mode: "resource"; provider_id: string; secret: string; username?: string; cred_kind?: CredentialKind; extra?: Record<string, unknown> };
 
 /** Membership is verified at the HTTP boundary, independently of credential input. */
 export interface CodeGraphAuthActor {
@@ -171,10 +171,26 @@ export class CodeGraphAuthService {
   private resolveResource(providerId: string, repoUrl: string, credential: SourceCredential): { url: string; auth: GitSecret } {
     const provider = this.deps.codeSourceRegistry.get(providerId);
     if (!provider || credential.kind !== provider.authMethod.kind) throw new CodeGraphAuthError("Code source provider is unavailable or its credential type does not match");
-    if (provider.applyToCloneUrl) throw new CodeGraphAuthError("Legacy clone URL overrides cannot be used with isolated Git authentication");
     const source = parseGitSource(repoUrl);
     if (source.kind !== "https") throw new CodeGraphAuthError("Source provider credentials require an HTTPS repository URL");
-    const auth = provider.authMethod.toGitAuth(credential, provider.cloneUsername);
+    let auth: GitSecret;
+    if (provider.applyToCloneUrl) {
+      // Legacy hooks may supply authentication, but cannot redirect the secret
+      // to a different repository. Their URL never reaches Git or persistence.
+      const legacyUrl = provider.applyToCloneUrl(repoUrl, credential);
+      if (typeof legacyUrl !== "string" || /[\x00-\x1f\x7f]/.test(legacyUrl)) {
+        throw new CodeGraphAuthError("Invalid legacy provider authentication URL");
+      }
+      const url = new URL(legacyUrl);
+      auth = { kind: "https", username: decodeURIComponent(url.username), token: decodeURIComponent(url.password) };
+      url.username = "";
+      url.password = "";
+      if (url.protocol !== "https:" || url.toString() !== source.url) {
+        throw new CodeGraphAuthError("Code source provider cannot change the repository destination");
+      }
+    } else {
+      auth = provider.authMethod.toGitAuth(credential, provider.cloneUsername);
+    }
     validateGitSecret(auth);
     return { url: source.url, auth };
   }
@@ -202,8 +218,11 @@ export class CodeGraphAuthService {
         (input.username !== undefined && typeof input.username !== "string")) throw new CodeGraphAuthError("A source provider and valid credentials are required");
     const provider = this.deps.codeSourceRegistry.get(input.provider_id);
     if (!provider) throw new CodeGraphAuthError("Code source provider is not enabled");
+    if (input.cred_kind !== undefined && input.cred_kind !== provider.authMethod.kind) {
+      throw new CodeGraphAuthError("cred_kind must match the selected provider authentication method");
+    }
     try {
-      const credential = { kind: provider.authMethod.kind, ...provider.authMethod.buildCredential({ secret: input.secret, username: input.username }) };
+      const credential = { kind: provider.authMethod.kind, ...provider.authMethod.buildCredential({ secret: input.secret, username: input.username }), extra: input.extra };
       this.resolveResource(input.provider_id, row.repo_url, credential);
       return credential;
     } catch {

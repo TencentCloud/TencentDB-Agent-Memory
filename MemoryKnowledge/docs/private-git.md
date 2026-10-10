@@ -31,11 +31,11 @@ Previously saved credentials retain their IDs, graph bindings and ciphertext. SS
 
 Rotate a credential by supplying its replacement secret. Manual and scheduled sync resolve the current secret when the worker executes. To change which credential a graph uses, open its details and update the binding; the graph must be idle and you must own it. An in-use credential cannot be deleted until its graphs are unbound or deleted. SSH graphs must retain an SSH credential; deleting their graphs releases the binding.
 
-Saved Git credentials and source-provider credentials are mutually exclusive for a graph. Remove the current binding or provider credential before switching between them. Reusable Git credentials use the encrypted owner-scoped store described here; the existing resource-scoped provider store and its deployment requirements remain separate. Both Git authentication paths pass secrets through the isolated transport and support incremental sync without putting tokens in Git URLs or config.
+Saved Git credentials and source-provider credentials are mutually exclusive for a graph. Reusable Git credentials use the encrypted owner-scoped store described here; the existing resource-scoped provider store and its deployment requirements remain separate. Both Git authentication paths pass secrets through the isolated transport and support incremental sync without putting tokens in Git subprocess URLs or config.
 
-CodeGraph uses one internal authentication service for creation, credential replacement, deletion cleanup and Git access. The existing API contracts remain unchanged. Replacing a resource-scoped provider token with a saved credential is atomic: validation or storage failure preserves the previous binding, and changes involving a saved credential require its owner and service authentication. Conflicting or unreadable bindings stop synchronization instead of falling back to anonymous access.
+CodeGraph uses one internal authentication service for creation, credential replacement, deletion cleanup and Git access. The existing endpoints handle replacement without a separate deletion: validation or storage failure preserves the previous binding, and changes involving a saved credential require the graph owner and service authentication. Conflicting or unreadable bindings stop synchronization instead of falling back to anonymous access. See the [CodeGraph API contract](../v3-api-memoryknowledge-doc.md#codegraph-认证与资源凭据) for request fields and error responses.
 
-Repository details show an existing provider token as a distinct credential selection and allow its token to be updated in place. Changing to a saved credential uses the existing binding action; no separate deletion is needed. Provider authentication reaches Git as structured fields rather than a credential-bearing URL. Existing resource-scoped storage and Wiki authentication remain unchanged.
+Repository details show an existing provider token as a distinct credential selection and allow its token to be updated in place. Changing to a saved credential uses the existing binding action. Provider authentication reaches Git as structured fields rather than a credential-bearing URL. Legacy `applyToCloneUrl` extensions are adapted in memory: they may supply HTTPS username/password fields but cannot change the repository destination. New authentication methods should implement `toGitAuth` directly. Existing resource-scoped storage and Wiki authentication remain unchanged.
 
 ## SSH server trust
 
@@ -43,15 +43,15 @@ Host trust is stored in SQLite separately from private keys, scoped by service, 
 
 ## Storage and execution
 
-- SQLite stores AES-256-GCM ciphertext with per-record nonces and authenticated service/team/owner/scope identity. Only credential metadata and `credential_id` leave the store.
+- The reusable Git credential store uses AES-256-GCM ciphertext in SQLite with per-record nonces and authenticated service/team/owner/scope identity. The resource-scoped provider store retains its existing base64 encoding, which is not encryption. Credential APIs return metadata only.
 - Git uses a temporary isolated HOME and environment. HTTPS secrets enter only the Git subprocess environment and a generated askpass helper reads them. SSH identity/host files use owner-only permissions outside the checkout, and are removed in `finally`.
-- Git URLs never contain usernames/tokens for HTTPS. Git helpers, global config and ssh-agent are not inherited. SSH host checking is mandatory. Authenticated Git operations do not follow redirects; public HTTPS repositories retain Git's initial redirect behavior. Non-HTTPS/non-SSH transports are disabled.
+- HTTPS URLs passed to Git never contain usernames/tokens. Git helpers, global config and ssh-agent are not inherited. SSH host checking is mandatory. Authenticated Git operations do not follow redirects; public HTTPS repositories retain Git's initial redirect behavior. Non-HTTPS/non-SSH transports are disabled.
 - Git failures return bounded, sanitized messages, not raw stderr. Authentication/network failure preserves the existing checkout and index. A graph is marked failed and can be retried after correcting the credential; the scheduler only automatically selects ready graphs.
 - URL and resolved-address checks retain the default private-network restriction. An operator may set `KNOWLEDGE_SSRF_CHECK=off` for trusted internal Git servers. Apply network egress controls as well: DNS preflight checks the initial host only and does not constrain public-repository redirects or DNS rebinding.
 
 ## Sharing and deployment boundary
 
-Private **Git access** and **knowledge asset sharing** are separate. This feature retains the project's current team asset model: importing with a credential requires explicit agreement to share the code index with the team. It does not synchronize Git provider membership with Knowledge ACLs.
+Private **Git access** and **knowledge asset sharing** are separate. This feature retains the project's current team asset model: importing with a saved personal credential requires explicit agreement to share the code index with the team. Resource-scoped provider credentials retain the existing team resource model. It does not synchronize Git provider membership with Knowledge ACLs.
 
 Panel checks team membership and asset ACLs. The existing Knowledge tool/read endpoints use a trusted-service/network model and some are exempt from service-key authentication. Do not expose the Knowledge port directly to untrusted networks when indexing private source code; deploy it on a trusted network or behind an authenticated gateway for authorized Agent clients. Adding credential management does not turn those existing read endpoints into user-authenticated APIs.
 

@@ -15,7 +15,7 @@
 | 服务 | MemoryKnowledge（知识服务，KS） |
 | 端口 | 8421（`PORT`，默认 `8421`） |
 | API 前缀 | `/v3`（`API_PREFIX`，默认 `/v3`） |
-| 方法 | 除 `GET /v3/auto-sync/status`、`GET /health` 外，**其余全部 `POST`** |
+| 方法 | 通常为 `POST`；资源凭据使用 `GET /status`、`PUT /put`、`DELETE /delete`，另有 `GET /v3/auto-sync/status`、`GET /health` |
 | Content-Type | `application/json` |
 | 健康检查 | `GET /health`（**非 v3**，返回裸 JSON `{ status, timestamp }`） |
 | Swagger | `GET /docs`（UI）、`GET /openapi.json`（spec，非 v3） |
@@ -366,6 +366,7 @@ POST /v3/wiki/search
 | sync_error | string\|null | 同步错误 |
 | version | string | 版本号 |
 | owner_user_id | string\|null | owner |
+| credential_id | string\|null | 绑定的个人 Git 凭据 ID；资源级 provider 凭据由独立状态接口查询 |
 | stats | `{ files, nodes, edges }`\|null | 统计 |
 | last_sync_at | string\|null | 最近同步时间 |
 | created_at / updated_at | string | 时间 |
@@ -383,10 +384,16 @@ POST /v3/wiki/search
 | branch | string | 否 | 分支，默认 `main` |
 | repo_name | string | 否 | 仓库名 |
 | user_id / agent_id / task_id | string | 否 | 归属 |
+| credential_id | string | 否 | 个人 Git 凭据 ID，与 provider 凭据互斥 |
+| share_with_team | boolean | 条件 | 使用个人 Git 凭据时必须为 `true`，确认索引共享给团队 |
+| provider_id / secret | string | 条件 | 使用资源级 provider 凭据时两者必填；`secret` 原样保存，不裁剪空格 |
+| username | string | 条件 | provider 使用 `basic` 时必填，原样保存 |
 
 **响应** `data`：`CodeGraphDetail`。
 
-**错误**：`400`(缺 team_id/repo_url)。
+**错误**：`400`（参数、凭据、仓库 URL 或分支无效）、`401`（私有仓库缺少身份，或个人 Git 凭据缺少服务认证）、`403`（身份或凭据归属不符）、`404`（凭据不存在）、`503`（个人凭据加密未配置）。
+
+配置任一凭据时须提供可信调用方断言的 `user_id`；使用个人 Git 凭据还须提供服务 Bearer。重复创建会校验本次凭据，但保留已有图和绑定；更换凭据使用下述替换接口。
 
 **示例**
 
@@ -411,6 +418,23 @@ POST /v3/code-graph/create
   }
 }
 ```
+
+### CodeGraph 认证与资源凭据
+
+已有接口共同执行原子替换；图处于 `pending` / `processing` 时拒绝修改，校验或存储失败保留原绑定。个人凭据的管理、SSH 主机信任和部署要求见 [Private Git](docs/private-git.md#api-additions)。
+
+| 接口 | 请求 | 响应 `data` |
+|---|---|---|
+| `POST /v3/code-graph/set-credential` | `code_graph_id`、`user_id`、`credential_id`（或 `null`）；绑定个人凭据时需 `share_with_team: true` | 更新后的 `CodeGraphDetail` |
+| `GET /v3/source-credential/status` | query：`resource_type=code-graph`、`resource_id` | `{ configured, credential }`，只含元数据 |
+| `PUT /v3/source-credential/put` | body：`resource_type=code-graph`、`resource_id`、`provider_id`、`secret`、`cred_kind?`、`username?`、`extra?` | `{ credential }`，只含元数据 |
+| `DELETE /v3/source-credential/delete` | query：`resource_type=code-graph`、`resource_id` | `{ deleted: true }` |
+
+资源级接口须提供 `x-tdai-service-id`、`x-tdai-team-id`、`x-tdai-user-id`，资源必须属于该团队；Panel 校验成员身份。服务 key 启用时仍需 Bearer。`set-credential` 始终要求有效服务 Bearer 和图 owner；资源级 PUT 替换已有个人凭据时同样要求这两项。读取绑定了个人凭据的图的资源凭据状态，也须有效服务 Bearer。
+
+资源级 PUT 的 `cred_kind` 默认 `bearer`，必须匹配 provider 的认证方式；`basic` 需要 `username`。`secret` / `username` 不裁剪空格，`extra` 对象随本次凭据一起替换保存，不出现在状态响应中。更新无需先删除旧配置。DELETE 只删除资源级凭据，不能解除个人凭据绑定；HTTPS 图可通过 `set-credential` 的 `null` 切换为公开访问，SSH 图必须保留 SSH 凭据。
+
+**错误**：`400`（字段无效、kind 不匹配或不支持的认证）、`401`（缺少所需服务认证）、`403`（非 owner 替换个人凭据）、`404`（资源、凭据不存在或团队不匹配）、`409`（图正在构建，或 DELETE 遇到双重绑定）、`503`（个人凭据加密未配置）。同步遇到双重绑定或不可读凭据时会失败，不能回退为匿名访问。
 
 ### POST /v3/code-graph/list
 
