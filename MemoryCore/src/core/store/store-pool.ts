@@ -231,10 +231,45 @@ export class StorePool {
     );
 
     // 初始化 Store (建表/检查连接)
+    // A failed init must NOT stay cached: the entry would be served forever
+    // (the cache-hit path never re-runs init), so one transient DB outage at
+    // first contact would permanently degrade the instance — reads swallowed
+    // into [], writes failing silently, health staying green (#1433). Close
+    // the half-initialized store, drop the entry, and rethrow: the next
+    // getStore() re-creates and re-inits, which is the natural retry.
     try {
       await pooledStore.store.init();
     } catch (e) {
-      this.logger.warn(`${TAG} Store init failed for ${instanceId}: ${e}`);
+      this.logger.error(
+        `${TAG} Store init failed for ${instanceId}: ${e instanceof Error ? e.message : String(e)} — discarding the entry so the next getStore() retries`,
+      );
+      this.pool.delete(instanceId);
+      try {
+        pooledStore.store.close();
+      } catch (closeErr) {
+        this.logger.warn(`${TAG} Closing the failed store also failed: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`);
+      }
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+
+    // A resolved init() is not proof of a usable store: TcvdbMemoryStore.init()
+    // catches its _initAsync() failure, sets degraded=true and RESOLVES normally,
+    // and SQLite behaves the same way in degraded mode. Such an entry would be
+    // served forever by the cache-hit path, so "resolved but degraded" is treated
+    // exactly like a thrown init failure (#1433 follow-up review).
+    if (pooledStore.store.isDegraded()) {
+      this.logger.error(
+        `${TAG} Store init for ${instanceId} RESOLVED in a degraded state — discarding the entry so the next getStore() retries`,
+      );
+      this.pool.delete(instanceId);
+      try {
+        pooledStore.store.close();
+      } catch (closeErr) {
+        this.logger.warn(`${TAG} Closing the degraded store also failed: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`);
+      }
+      throw new Error(
+        `Store for ${instanceId} initialized in a degraded state (unusable): backend reported degraded=true after init()`,
+      );
     }
 
     return pooledStore;
