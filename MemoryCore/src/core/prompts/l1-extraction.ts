@@ -7,6 +7,7 @@
  */
 
 import type { ConversationMessage } from "../conversation/l0-recorder.js";
+import { epochMsToIso } from "../record/l1-timestamps.js";
 
 // ============================
 // System Prompt
@@ -394,14 +395,10 @@ export function formatExtractionPrompt(params: {
   const { newMessages, backgroundMessages = [], previousSceneName = "无" } = params;
 
   const bgText = backgroundMessages.length > 0
-    ? backgroundMessages
-        .map((m) => `[${m.id}] [${m.role}] [${new Date(m.timestamp).toISOString()}]: ${m.content}`)
-        .join("\n\n")
+    ? backgroundMessages.map(formatPromptMessage).join("\n\n")
     : "无";
 
-  const newText = newMessages
-    .map((m) => `[${m.id}] [${m.role}] [${new Date(m.timestamp).toISOString()}]: ${m.content}`)
-    .join("\n\n");
+  const newText = newMessages.map(formatPromptMessage).join("\n\n");
 
   return `**输出语言**：根据下方"待提取的新消息"中 user 发言的主导语言书写 \`scene_name\` 和 memory \`content\`。
 
@@ -414,4 +411,10 @@ ${bgText}
 
 【待提取的新消息】（务必结合 timestamp 推算时间，只从这里提取记忆！）：
 ${newText}`;
+}
+
+function formatPromptMessage(m: ConversationMessage): string {
+  const ts = epochMsToIso(m.timestamp);
+  if (!ts) return `[${m.id}] [${m.role}]: ${m.content}`;
+  return `[${m.id}] [${m.role}] [${ts}]: ${m.content}`;
 }
