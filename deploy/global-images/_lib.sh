@@ -77,6 +77,36 @@ find_docker() {
 
 DOCKER="$(find_docker)"
 
+# ── Windows（Git Bash / MSYS2 / Cygwin）兼容 ──────────────────────
+# Git Bash 调 docker.exe 这类原生程序时，会把参数里像 Unix 路径的部分自动改写成 Windows 路径：
+#   -e TDAI_DATA_DIR=/data/tdai-memory      → C:/Program Files/Git/data/tdai-memory
+#   -v /c/x/config.yaml:/data/config.yaml:ro → 冒号被当成路径列表分隔符改成 `;`
+# 结果是挂载 / 环境变量静默失效（数据落到容器层、config 没挂进去）。对策：
+#   - 参数里带容器内路径的 docker 调用一律套 no_pathconv，关掉这层改写；
+#   - bind 挂载的宿主机源路径用 host_path 显式转成 Windows 路径（C:\...）。
+# 两者在 Linux / macOS 上都是 no-op。
+is_windows_shell() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# no_pathconv <cmd> [args...]
+#   MSYS_NO_PATHCONV 给 Git for Windows 用，MSYS2_ARG_CONV_EXCL 给原生 MSYS2 用。
+no_pathconv() {
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$@"
+}
+
+# host_path <path>：Windows 下 /c/x → C:\x（cygpath -w），其余平台原样返回。
+host_path() {
+  if is_windows_shell && command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    echo "$1"
+  fi
+}
+
 # PULL=1 时拉取镜像最新版本。
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。
