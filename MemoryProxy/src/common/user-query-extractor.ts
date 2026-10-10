@@ -65,6 +65,10 @@ const CC_INTERNAL_PROMPT_PATTERNS: RegExp[] = [
   /^\s*\d+\s*\{"parentUuid"|^\s*\{"parentUuid":\s*"[^"]+","isSidechain"/,
   // CC 用时间戳前缀重放对话日志（[2026-07-11T...][user] / [assistant]）
   /^\s*\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\]]*\]\[(?:user|assistant|system)\]/,
+  // CC compact continuation summary (model-generated recap, not user text) #1509
+  /^\s*This session is being continued from a previous conversation/i,
+  // user-interrupt marker (carries no user text on its own) #1509
+  /^\s*\[Request interrupted by user/,
   // 注：<persisted-output> / (Bash completed with no output) 移到 2b/2c 的
   //     wrapper 剥离层处理 —— 它们经常和用户下一句拼在同一条 user 消息里，
   //     只应剥除自身、保留用户后续输入。
@@ -143,6 +147,14 @@ export function extractUserQueryText(raw: string): string {
     "tool_result", "tool-result",
     // The proxy may prepend L1 recall inside a user-role message. It is
     // context for the model, not text typed by the user.
+    // CC background task / sub-agent completion notices (#1509: largest source)
+    "task-notification",
+    // CC local slash-command caveat and output streams (#1509)
+    "local-command-caveat", "local-command-stdout", "local-command-stderr",
+    // CC slash-command echoes (#1509)
+    "command-name", "command-message", "command-args",
+    // CC `!`-prefixed shell commands and their output (#1509)
+    "bash-input", "bash-stdout", "bash-stderr",
     "tdai_recalled_l1_memories",
   ]) {
     text = text.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi"), "");
@@ -169,19 +181,32 @@ export function extractUserQueryText(raw: string): string {
     .filter((line) => !LINE_DROP_PATTERNS.some((re) => re.test(line)))
     .join("\n");
 
-  // 2d) 整块剥除：MEMORY.md yaml frontmatter（--- 到 ---，含 metadata）
-  //     格式：
-  //       ---
-  //       name: ...
-  //       description: ...
-  //       metadata: ...
-  //       ---
-  //     只匹配"至少含 name / description / metadata / node_type 关键字"的 frontmatter
-  //     以避免误伤 markdown 分割线。
-  text = text.replace(
-    /(?:^|\n)---\s*\n(?:[a-z_][a-z0-9_]*:\s*.*\n)*?(?:name|description|metadata|node_type|originSessionId):[\s\S]*?\n---\s*(?:\n|$)/gi,
-    "\n",
-  );
+  // #1510: rewritten as a linear line scan. The original regex's lazy line
+  // group `(?:[a-z_][a-z0-9_]*:\s*.*\n)*?` combined with variable-width
+  // \s*/.* causes catastrophic backtracking on inputs with many key:value
+  // lines but no closing fence. Line scanning is linear-time and semantically
+  // equivalent: a --- fence pair whose body contains a frontmatter key line.
+  {
+    const lines = text.split("\n");
+    const out: string[] = [];
+    const isFence = (l: string) => /^\s*---\s*$/.test(l);
+    const hasFmKey = (l: string) =>
+      /^\s*(name|description|metadata|node_type|originsessionid)\s*:/i.test(l);
+    for (let i = 0; i < lines.length; i++) {
+      if (isFence(lines[i])) {
+        let end = -1;
+        for (let j = i + 1; j < lines.length && j <= i + 200; j++) {
+          if (isFence(lines[j])) { end = j; break; }
+        }
+        if (end !== -1 && lines.slice(i + 1, end).some(hasFmKey)) {
+          i = end; // skip the whole frontmatter block
+          continue;
+        }
+      }
+      out.push(lines[i]);
+    }
+    text = out.join("\n");
+  }
 
   // 2e) 残留的会话初始化表单标题行（如「会话初始化 — 选择 Agent 与任务」）
   text = text
