@@ -153,3 +153,8 @@ export function makeKnowledgeRouteTable(): Record<string, RouteHandler> {
     "/v3/knowledge/list": handleKnowledgeList,
   };
 }
+
+/** Public knowledge routes, exported for capability-registry coverage checks. */
+export const KNOWLEDGE_PUBLIC_ROUTES = Object.freeze(
+  Object.keys(makeKnowledgeRouteTable()),
+);
