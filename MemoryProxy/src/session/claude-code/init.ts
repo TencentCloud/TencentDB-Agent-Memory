@@ -306,25 +306,19 @@ async function advanceFromAgentPicked(
 ): Promise<SessionInitResult> {
   const teamId = team.team_id;
 
-  // 0 tasks → bypass (统一契约：team+agent+task 缺一不注入)。
-  //   历史行为是"注册但 task_id=undefined，只注入 [Agent] 段"，现改为完全 bypass。
+  // 0 tasks → register without a task. task_id is an optional recall
+  // dimension; the existing registration path keeps team/user/agent/session
+  // isolation intact and broadens recall across the agent's memories.
   // 1 task → auto-select，直接推进到 completeRegistration。
   if (team.tasks.length === 0) {
     console.log(
-      `[session-init:cc] session=${compositeKey} team=${teamId} agent=${agentId} has 0 tasks → bypass`,
+      `[session-init:cc] session=${compositeKey} team=${teamId} agent=${agentId} has 0 tasks → register without task`,
     );
-    await store.set(compositeKey, {
-      ...state,
-      status: "initialized",
-      selectedTeamId: teamId,
-      selectedAgentId: agentId,
-      cachedTeams,
-      sessionInfo: null,
-      agentDetail: null,
-      taskDetail: null,
-      bypassed: true,
-    } as SessionInitState);
-    return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
+    return completeRegistration(
+      { agent_id: agentId },
+      state, cachedTeams, teamId, compositeKey, sessionKey, userId,
+      config, store, reqCtx, strippedMsgs, metadataClient, userKey, spaceId,
+    );
   }
   if (team.tasks.length === 1) {
     const taskId = team.tasks[0].task_id;
