@@ -135,6 +135,14 @@ export interface RedisConfig {
   ttlSeconds: number;
   /** Injection layer TTL override (seconds). Defaults to ttlSeconds. */
   injectionTtlSeconds?: number;
+  /**
+   * Per-session turn-sequence counter TTL, in days. Default: 30.
+   *
+   * Must outlive `ttlSeconds` by a wide margin: session state expiring only
+   * costs a cache miss, but the turn sequence expiring restarts the session at
+   * 1 and collides with the usage rows it already wrote.
+   */
+  turnSeqTtlDays?: number;
 }
 
 /** Per-Memory-instance input-token rate limiting. */
@@ -337,6 +345,26 @@ export interface CoreSkillConfig {
 }
 
 /**
+ * Instance-upstream 配置缓存(自定义模型分流的每实例配置)。
+ *
+ * proxy 每次 handler 会走 skill.endpoint + /v3/internal/meta/instance-upstream/list
+ * 拉本 spaceId 的模型分组配置(default / custom / extraction 三类行),结果按 spaceId
+ * 缓存在进程内。缓存内部固定语义(hard expiry + stale-if-error + 256 LRU +
+ * 空数组零行 fallback = official),此配置仅暴露唯一可调项 TTL。
+ *
+ * 详见 `docs/design/2026-08-25-instance-upstream-config.md` §7.1。
+ */
+export interface InstanceUpstreamConfig {
+  /**
+   * 缓存 TTL(秒)。默认 30。决定"Panel 改完自定义模型 → proxy 生效"的最长延迟。
+   *
+   * 只接受正整数;非法/负数/0/NaN/小数一律回退默认 30s + warn 一行。
+   * 别调到 <5s:会把 core /v3/internal/meta/instance-upstream/list 打成热点。
+   */
+  cacheTtlSec: number;
+}
+
+/**
  * Knowledge tools injector configuration.
  *
  * Independent from `coreSkill` so knowledge gateway routing can diverge from
@@ -481,6 +509,7 @@ export interface ProxyConfig {
   sessionInit: SessionInitConfig;
   tdai: TdaiConfig;
   coreSkill: CoreSkillConfig;
+  instanceUpstream: InstanceUpstreamConfig;
   knowledge: KnowledgeConfig;
   skillRuntime: SkillRuntimeConfig;
   auth: AuthConfig;
@@ -579,7 +608,6 @@ export interface MemCommandConfig {
   /**
    * mem:create-task / mem:update-task 使用的 LLM 草稿生成器配置。可选。
    * 未配置或 enabled=false 时，task 命令族会返回"未配置 task_draft"错误。
-   * 结构与 packages/cost-guard 的 LLMInferConfig 保持形状一致。
    */
   taskDraft?: {
     enabled: boolean;
@@ -729,7 +757,39 @@ export interface PricingTier {
   cacheWrite1h: number;
 }
 
-export interface CreditPricingEntry {
+/** A complete set of token prices, optionally split by total input length. */
+export interface TieredPricing {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+  tiers?: PricingTier[];
+}
+
+export type PricingWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+
+/** A half-open local-time interval: start is inclusive, end is exclusive. */
+export interface PricingTimeRange {
+  start: string;
+  end: string;
+}
+
+/** Conditions for choosing a time-based price rule. Omitted fields match all requests. */
+export interface PricingRuleWhen {
+  weekdays?: PricingWeekday[];
+  timeRanges?: PricingTimeRange[];
+}
+
+/** A time-based price override. Highest priority matching rule wins. */
+export interface PricingRule {
+  id: string;
+  priority?: number;
+  when?: PricingRuleWhen;
+  pricing: TieredPricing;
+}
+
+export interface CreditPricingEntry extends TieredPricing {
   /**
    * Model ID for matching (case-insensitive full-word match against usage.model).
    * 语义是「唯一 ID」，如 `ep-pksklwtb` / `deepseek-v4-pro`。
@@ -741,27 +801,22 @@ export interface CreditPricingEntry {
    * 写入 usage_logs.model_name / usage_raw.model_name 供前端展示。
    */
   modelName?: string;
-  /** Standard input tokens (non-cache). */
-  input: number;
-  /** Output tokens. */
-  output: number;
-  /** Cache read (cache hit) tokens. */
-  cacheRead: number;
-  /** Cache write with 5-minute TTL (ephemeral). */
-  cacheWrite5m: number;
-  /** Cache write with 1-hour TTL (standard cache creation). */
-  cacheWrite1h: number;
   /**
    * 按 input token 总量 (nonCacheInput + cacheRead) 分档定价。
    * 升序排列，最后一档 maxInputTokens 为 null（兜底）。
    * 不配置时使用顶层 input/output/cacheRead/cacheWrite5m/cacheWrite1h 单价。
    */
-  tiers?: PricingTier[];
+  rules?: PricingRule[];
 }
 
 /** Credit pricing configuration section. */
 export interface CreditPricingConfig {
   models: CreditPricingEntry[];
+  /**
+   * IANA 时区名（如 "Asia/Shanghai"）用于 ClickHouse 按日分片时的时区锚点。
+   * 可选, 不传时沿用 ClickHouse server 的默认时区。只在测试里显式设置。
+   */
+  timezone?: string;
 }
 
 /** Raw YAML config file shape (all fields optional). */
@@ -803,6 +858,7 @@ export interface RawYamlConfig {
     keyPrefix?: string;
     ttlSeconds?: number;
     injectionTtlSeconds?: number;
+    turnSeqTtlDays?: number;
   };
   rateLimit?: {
     tpm?: number;
@@ -857,7 +913,15 @@ export interface RawYamlConfig {
     flushInterval?: number;
   };
   creditReport?: { url?: string; timeoutMs?: number };
-  creditPricing?: { models?: (Partial<CreditPricingEntry> & { tiers?: Partial<PricingTier>[] })[] };
+  creditPricing?: {
+    models?: (Partial<CreditPricingEntry> & {
+      tiers?: Partial<PricingTier>[];
+      rules?: (Partial<PricingRule> & {
+        when?: PricingRuleWhen;
+        pricing?: Partial<TieredPricing> & { tiers?: Partial<PricingTier>[] };
+      })[];
+    })[];
+  };
   /** Opaque private review options, forwarded to the extension untouched. */
   badcaseCollector?: Record<string, unknown>;
   injection?: {
@@ -879,6 +943,8 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    /** 一步到位: 预选 team/agent 都命中时, 跳过 asset_confirm 直接 initialized。 */
+    skipAssetConfirm?: boolean;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
@@ -909,6 +975,7 @@ export interface RawYamlConfig {
    */
   skill?: Partial<CoreSkillConfig>;
   coreSkill?: Partial<CoreSkillConfig>;
+  instanceUpstream?: Partial<InstanceUpstreamConfig>;
   knowledge?: Partial<KnowledgeConfig>;
   skillRuntime?: {
     allowLlmWrite?: boolean;
@@ -960,6 +1027,11 @@ export interface RequestLogEntry {
    * upstream did not return one. Used for cross-system tracing/audit.
    */
   upstreamRequestId?: string;
+  /**
+   * pipeline 内部的 traceId（uuidv7, 用于日志串联）；
+   * codex runner 把它塞进 request 事件便于跨协议 join。
+   */
+  traceId?: string;
 }
 
 /** usage event — written after LLM response is received. */
@@ -976,6 +1048,8 @@ export interface UsageLogEntry {
   upstreamUrl: string;
   stream: boolean;
   usage: Record<string, unknown>; // raw LLM usage object, unmodified
+  /** Request receipt time used for deterministic time-based credit pricing. */
+  requestReceivedAt?: string;
   routedFrom?: string;     // original model if routing was applied
   /**
    * Scalar counters reported by the optional private request-preparation

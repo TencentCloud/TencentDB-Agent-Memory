@@ -23,7 +23,7 @@ import { SessionStore } from "../store.js";
 import { buildSessionInfo } from "../registrar.js";
 import { injectSessionContextWithToggles } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
-import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
+import { isHeaderOnlyAgent, resolvePresetIdentity, type PresetIdentity } from "../preset.js";
 
 import { buildFormResponse, FormData } from "./form.js";
 import { buildBypassNoticeResponse } from "../workbuddy/text-form.js";
@@ -105,6 +105,14 @@ export interface SessionInitResult {
   teamName?: string | null;
   /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
   bypassed?: boolean;
+  /**
+   * 本次注册是 session-reset 触发的（pre-hook 设 state.resetFlow=true →
+   * 保留到 completeRegistration 的返回值里）。镜像自 claude-code/init.ts
+   * 的同名字段 —— 两边字段必须保持同形, 否则 session/index.ts 导出的联合
+   * 类型 (`CBSessionInitResult`) 读不到这个属性, runner 侧的
+   * `initResult.resetFlow` 全部 TS2339。
+   */
+  resetFlow?: boolean;
   /**
    * bypass 触发原因（仅 `bypassed === true` 时有意义）。codexHandler 用它决定
    * 首次 gate 命中是否要返 "Plan 模式提示" 而非直接透传。
@@ -820,6 +828,73 @@ async function handleSessionInitInner(
       return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
+    // ── Header-only agent short-circuit ────────────────────────────────────
+    // pi / hermes / openclaw 客户端只通过请求头预选身份,没有交互 form UI:
+    //   - pi:       openai-chat, body.tools 不含 ask_followup_question
+    //   - hermes:   anthropic, 客户端不挂 ask-user tool
+    //   - openclaw: 同 hermes
+    // preset 任何失败场景(缺失 / mismatch / 只对上 team 没对上 agent / feature
+    // 未开)都必须 bypass —— 绝不能落到下面弹 ask_followup_question tool_call 的
+    // 分支,那会让客户端渲染成 unknown tool 报错(用户实测:pi 页面直接崩)。
+    //
+    // 与下面通用 header-preselect 块分开写:非 header-only agent(codebuddy /
+    // workbuddy / dsh / opencode / codex)保留"只有 team → advance 到 agent form"
+    // 的旧语义,form 对这些客户端本来就有效。
+    if (isHeaderOnlyAgent(agentSource)) {
+      const prHo = presetIdentity && config.headerAutoSelect?.enabled
+        ? resolvePresetIdentity(teams, presetIdentity)
+        : null;
+      if (prHo && prHo.canRegister) {
+        if (presetIdentity?.taskId && !prHo.taskId) {
+          console.warn(
+            `[session-init:cb] session=${compositeKey} header-only agent=${agentSource} preset task_id="${presetIdentity.taskId}" not found in team=${prHo.teamId} → registering without a task (broad recall)`,
+          );
+        }
+        console.log(
+          `[session-init:cb] session=${compositeKey} header-only agent=${agentSource} preset hit team=${prHo.teamId} agent=${prHo.agentId} task=${prHo.taskId ?? "-"} → register directly`,
+        );
+        const seedState: SessionInitState = {
+          status: "uninitialized",
+          keyId: sessionKey,
+          startedAt: Date.now(),
+          attemptCount: 0,
+          userId,
+          cachedTeams: teams,
+          selectedTeamId: prHo.teamId,
+        };
+        return completeRegistration(
+          { agent_id: prHo.agentId!, task_id: prHo.taskId },
+          seedState, teams, compositeKey, sessionKey, userId,
+          config, store, messages, metadataClient, userKey, spaceId,
+        );
+      }
+      // preset 未命中 → bypass(不弹 form,不注入)。下次请求头修对了会 recreate
+      // uninitialized state,重新走一遍 canRegister 判定。
+      const reason = !presetIdentity
+        ? "no-preset-headers"
+        : !config.headerAutoSelect?.enabled
+          ? "header-auto-select-disabled"
+          : prHo?.hadMismatch
+            ? "preset-mismatch"
+            : "preset-partial (team resolved but agent missing/invalid)";
+      console.warn(
+        `[session-init:cb] session=${compositeKey} header-only agent=${agentSource} ${reason} → bypass (no form popup)`,
+      );
+      await store.set(compositeKey, {
+        status: "initialized",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teams,
+        sessionInfo: null,
+        agentDetail: null,
+        taskDetail: null,
+        bypassed: true,
+      } as SessionInitState);
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+    }
+
     // ── Header-driven pre-selection: skip forms when identity is provided ──
     if (presetIdentity && config.headerAutoSelect?.enabled) {
       const pr = resolvePresetIdentity(teams, presetIdentity);
@@ -1332,9 +1407,128 @@ async function handleSessionInitInner(
     }
 
     if (teamId && teamId !== BYPASS_MARKER) {
-      // codex/WB/dsh/opencode 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
-      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
-      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
+      const useSplitStage = isCodexClient
+        || agentSource === "workbuddy"
+        || agentSource === "dsh"
+        || agentSource === "opencode";
+
+      // ── Single-agent auto-select 级联 (2026-09-21 fix, 只对拆 stage 客户端生效) ──
+      //
+      // 背景: WB/dsh/opencode form builder 都有 solo-page 断言 (agents<2 → throw),
+      // 若用户主动选中一个 team 后, team.agents 只有 1 个, 直接推 pending_agent_select
+      // 弹 agent form → form builder throw → handleSessionInit 上层 catch 到 →
+      // sessionInfo=undefined → 请求透传上游 → LLM 幻觉 (活体证据: session 25f9eca5)。
+      //
+      // 逻辑与本文件 line 1135-1193 (asset_confirm choice===true 且 1-team 单 team) 完全对称;
+      // 与 CC advanceFromTeamPicked (session/claude-code/init.ts:220-285) 语义一致。
+      //
+      // CB 老一发同问路径 (useSplitStage=false) 不进这段, 因为 CB 老 form 不做断言,
+      // agent 只有 1 个时正常弹只列该 agent 的 agent_task form。
+      const selectedTeam = cachedTeamsForMore.find((t) => t.team_id === teamId);
+      if (useSplitStage && selectedTeam && selectedTeam.agents.length <= 1) {
+        // 分支 A: agents.length === 0 → bypass (team 无 agent, 无法建立绑定)
+        if (selectedTeam.agents.length === 0) {
+          await store.set(compositeKey, {
+            ...state,
+            status: "initialized",
+            selectedTeamId: teamId,
+            sessionInfo: null,
+            agentDetail: null,
+            taskDetail: null,
+            bypassed: true,
+          } as SessionInitState);
+          console.log(
+            `[session-init:cb] session=${compositeKey} team=${teamId} has 0 agents → bypass`,
+          );
+          return {
+            intercepted: false,
+            messages: messages as Record<string, unknown>[],
+            bypassed: true,
+            justRegistered: true,
+            resetFlow: state?.resetFlow ?? false,
+          };
+        }
+
+        // 分支 B: agents.length === 1 → auto-select agent, 级联判 task
+        const soloAgent = selectedTeam.agents[0];
+        const nextState: SessionInitState = {
+          ...state,
+          keyId: sessionKey,
+          attemptCount: 0,
+          selectedTeamId: teamId,
+          selectedAgentId: soloAgent.agent_id,
+        };
+        console.log(
+          `[session-init:cb] session=${compositeKey} team=${teamId} auto-select single agent=${soloAgent.agent_id}`,
+        );
+
+        // B.1: 0 task → bypass (team+agent+task 缺一不注入)
+        if (selectedTeam.tasks.length === 0) {
+          await store.set(compositeKey, {
+            ...nextState,
+            status: "initialized",
+            sessionInfo: null,
+            agentDetail: null,
+            taskDetail: null,
+            bypassed: true,
+          } as SessionInitState);
+          console.log(
+            `[session-init:cb] session=${compositeKey} agent=${soloAgent.agent_id} has 0 tasks → bypass`,
+          );
+          return {
+            intercepted: false,
+            messages: messages as Record<string, unknown>[],
+            bypassed: true,
+            justRegistered: true,
+            resetFlow: state?.resetFlow ?? false,
+          };
+        }
+        // B.2: 1 task → 直接 completeRegistration (含 defaultTaskId 虚拟条目场景)
+        if (selectedTeam.tasks.length === 1) {
+          const soleTaskId = selectedTeam.tasks[0].task_id;
+          console.log(
+            `[session-init:cb] session=${compositeKey} auto-select single task=${soleTaskId} → completeRegistration`,
+          );
+          return await completeRegistration(
+            { agent_id: soloAgent.agent_id, task_id: soleTaskId },
+            nextState,
+            cachedTeamsForMore,
+            compositeKey,
+            sessionKey,
+            userId,
+            config,
+            store,
+            messages,
+            metadataClient,
+            userKey,
+            spaceId,
+          );
+        }
+        // B.3: ≥2 tasks → 推进到 pending_task_select 弹 task form
+        await store.set(compositeKey, {
+          ...nextState,
+          status: "pending_task_select",
+        });
+        console.log(
+          `[session-init:cb] session=${compositeKey} → pending_task_select (tasks=${selectedTeam.tasks.length})`,
+        );
+        const fd: FormData = {
+          teams: cachedTeamsForMore,
+          stage: "task_select",
+          selectedTeamId: teamId,
+          selectedAgentId: soloAgent.agent_id,
+          stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
+          modelId: reqCtx.modelId,
+          protocol: reqCtx.protocol,
+        };
+        return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+      }
+
+      // ── 原逻辑保留: agents ≥ 2 (或 CB 老一发同问路径) → 推进到 next stage 弹 form ──
+      // codex/WB/dsh/opencode 拆 stage: 先 agent_select → task_select; CB 老路径继续 agent_task 一发同时问。
+      const nextStatus = useSplitStage ? "pending_agent_select" : "pending_agent_task";
+      const nextStage: FormData["stage"] = useSplitStage ? "agent_select" : "agent_task";
       const next: SessionInitState = {
         ...state,
         status: nextStatus,

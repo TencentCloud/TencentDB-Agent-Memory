@@ -64,6 +64,7 @@ import {
   SkillExtractor,
   resolveSkillConfig,
   SKILL_REVIEW_PROMPT,
+  SKILL_REVIEW_PROMPT_STRICT,
 } from "./skill/index.js";
 // Skill async-extract 现在完全走 conversation-add 侧的 agent 队列 + Worker
 // (SkillTriggerService.archive → agent 队列 → SkillConversationExtractWorker),
@@ -905,6 +906,10 @@ export class TdaiCore {
         store: skillStore,
         resources: skillResources,
         versioning: skillVersioning,
+        // 旧版本清理双维度:时间 (versionTtlSeconds) + 数量 (maxNonHeadVersions)。
+        // 都不配就是 0 (关闭), 行为与新增前完全一致, 向后兼容。
+        versionTtlSeconds: resolved.versionTtlSeconds,
+        maxNonHeadVersions: resolved.maxNonHeadVersions,
         onSkillAccessed: assetHooks?.onSkillAccessed,
         onSkillArchived: assetHooks?.onSkillArchived,
       });
@@ -946,6 +951,10 @@ export class TdaiCore {
             core: this.skillCore,
             runner: llmRunner,
             systemPrompt: SKILL_REVIEW_PROMPT,
+            // 冷启动/批量导入 (asset-import) 会在请求 body 传 strict_mode:true,
+            // 经 SkillTaskEntry.mode 一路带到这里的 extract({mode:'strict'})。
+            // 默认 (mode 未传) 一律走上面的 SKILL_REVIEW_PROMPT, 老流量零影响。
+            strictSystemPrompt: SKILL_REVIEW_PROMPT_STRICT,
             maxIterations: resolved.extraction.maxIterations,
             headChars: resolved.extraction.headChars,
             tailChars: resolved.extraction.tailChars,

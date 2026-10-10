@@ -27,7 +27,6 @@ import { KnowledgeGraphEmbed } from './wiki-ui';
 export function WikiActions({
   source,
   scopeTab,
-  ingestBusy,
   isCurrentIngesting,
   onIngest,
   onAllocate,
@@ -36,7 +35,6 @@ export function WikiActions({
 }: {
   source: WikiDetail;
   scopeTab: WikiScopeTab;
-  ingestBusy: boolean;
   /** 当前这条 wiki 自身是否处于 ingest（pending / processing）状态 */
   isCurrentIngesting: boolean;
   onIngest: (wikiId: string) => void;
@@ -47,8 +45,8 @@ export function WikiActions({
   const { t } = useTranslation();
   return (
     <div className="_asset-wiki-actions" onClick={(event) => event.stopPropagation()}>
-      <Button type="weak" disabled={ingestBusy} onClick={() => onIngest(source.wiki_id)}>
-        <StarIcon size={14} /> {isCurrentIngesting ? t('wiki.action.ingestBusy') : ingestBusy ? t('wiki.action.queuing') : t('wiki.action.ingest')}
+      <Button type="weak" disabled={isCurrentIngesting} onClick={() => onIngest(source.wiki_id)}>
+        <StarIcon size={14} /> {isCurrentIngesting ? t('wiki.action.ingestBusy') : t('wiki.action.ingest')}
       </Button>
       {scopeTab === 'fixed' ? (
         <Button type="weak" onClick={() => onUnbind(source.wiki_id)}>

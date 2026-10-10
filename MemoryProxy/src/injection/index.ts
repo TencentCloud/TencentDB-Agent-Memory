@@ -300,8 +300,17 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     // RAG-driven `<cloud_skills>` block. Calls /v3/skill/search at prewarm time.
     // When coreSkill is unconfigured (no serviceToken), the searchSkills call
     // will fail and the injector silently degrades to no <cloud_skills> block.
+    //
+    // `defaultTaskId` (from sessionInit config, defaults to "default") is passed
+    // through so the injector can detect the virtual default-task fallback and
+    // switch to activity-based recall. When absent (deployment 关闭了默认 task),
+    // activity 模式 gate 永远为 false, listing 走原 BM25 逻辑 —— 完全向后兼容。
+    // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
     registry.register(
-      new SkillInjector({ coreSkill: config.coreSkill }),
+      new SkillInjector({
+        coreSkill: config.coreSkill,
+        defaultTaskId: config.sessionInit?.defaultTaskId,
+      }),
     );
 
     // Always inject the curl-recipe `<skill_tools>` block alongside the

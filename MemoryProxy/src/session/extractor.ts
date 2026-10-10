@@ -15,7 +15,12 @@ import { PATH_SEP, SKIP_LABEL, MORE_LABEL } from "./form.js";
 
 // ── Path A: Match from option text (ask_followup_question click result) ────────
 
-const SKIP_RE = /跳过|不关联|skip/i;
+// SKIP_RE（`/跳过|不关联|skip/i` 自由文本正则）已于 2026-09-21 删除：它历史上
+// 作为"用户自由文本回复 → BYPASS"的兜底路径，但 team/agent/task 阶段的 form
+// 现在**不再提供主动跳过按钮**（唯一入口是 asset_confirm 的 ASSET_CONFIRM_NO），
+// 这条兜底既无正当业务场景又会误伤。删除后契约变成：extractor 只识别
+// SKIP_LABEL 精确文本；匹配失败一律 return null → 上层 attemptCount ≥
+// maxRetries 兜底。
 
 /** Bypass 标记：用户选了"本次不关联"，整个 session-init 直接跳过。 */
 export const BYPASS_MARKER = "__bypass__" as const;
@@ -134,8 +139,29 @@ export function extractTeamFromOptionText(
   try {
     const parsed = JSON.parse(content);
     if (typeof parsed === "object" && parsed !== null) {
-      // AskUserQuestion tool_result: { answers: { "q": "label" } }
-      if (parsed.answers && typeof parsed.answers === "object") {
+      // dsh v0.2 ask_user_question tool_result:
+      //   { answers: [ { id, selected: string[], custom? }, ... ] }
+      // (dsh 源码 packages/interaction/tool-ask-user/src/index.ts:91-97 + 抓包实证 2026-09-29)
+      // selected[] 是**选中的 option label 字符串数组**(见 dsh types.ts:58 注释)。
+      // 与 CC 老 shape `{ answers: { "q": "label" } }` 结构不同,array 分支必须先判。
+      if (Array.isArray(parsed.answers)) {
+        for (const a of parsed.answers) {
+          if (!a || typeof a !== "object") continue;
+          const ao = a as Record<string, unknown>;
+          // custom 优先(用户在 "Other" 里输入的自由文本,含 skip 判据),再看 selected[0]
+          const cand = typeof ao.custom === "string" && ao.custom.trim()
+            ? ao.custom.trim()
+            : Array.isArray(ao.selected)
+              ? ao.selected.find((x) => typeof x === "string" && x.trim())
+              : undefined;
+          if (typeof cand === "string" && cand.trim()) {
+            teamText = cand.trim();
+            break;
+          }
+        }
+      }
+      // AskUserQuestion tool_result (CC 老 shape): { answers: { "q": "label" } }
+      if (!teamText && parsed.answers && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
         const answers = parsed.answers as Record<string, string>;
         for (const val of Object.values(answers)) {
           if (typeof val === "string" && val.trim()) {
@@ -175,9 +201,9 @@ export function extractTeamFromOptionText(
     }
   }
 
-  // 检测"本次不关联"→ 直接 bypass（只在已提取到 teamText 时判断，
-  // 避免 content 中表单选项文本里的 "跳过/不关联" 误触发 bypass）
-  if (teamText && (teamText.includes(SKIP_LABEL) || SKIP_RE.test(teamText.trim()))) {
+  // 检测"本次不关联"→ 直接 bypass（只识别 SKIP_LABEL 精确文本，SKIP_RE 自由
+  // 文本兜底已删，见文件顶部说明）
+  if (teamText && teamText.includes(SKIP_LABEL)) {
     return BYPASS_MARKER;
   }
 
@@ -349,8 +375,34 @@ export function extractFromOptionText(
   try {
     const parsed = JSON.parse(content);
     if (typeof parsed === "object" && parsed !== null) {
-      // AskUserQuestion tool_result: { answers: { "q": "label" } }
-      if (!agentText && !taskText && parsed.answers && typeof parsed.answers === "object") {
+      // dsh v0.2 ask_user_question tool_result:
+      //   { answers: [ { id, selected: string[], custom? }, ... ] }
+      // 见 dsh 源码 packages/interaction/tool-ask-user/src/index.ts:91-97。
+      // 按 id 分派:agent_select → agent,task_select → task;都塞不进时回退看
+      // selected label 能否匹上 agent (向后兼容,防 dsh id 命名漂移)。
+      if (!agentText && !taskText && Array.isArray(parsed.answers)) {
+        for (const a of parsed.answers) {
+          if (!a || typeof a !== "object") continue;
+          const ao = a as Record<string, unknown>;
+          const id = typeof ao.id === "string" ? ao.id.toLowerCase() : "";
+          const cand = typeof ao.custom === "string" && ao.custom.trim()
+            ? ao.custom.trim()
+            : Array.isArray(ao.selected)
+              ? ao.selected.find((x) => typeof x === "string" && x.trim())
+              : undefined;
+          if (typeof cand !== "string" || !cand.trim()) continue;
+          const trimmed = cand.trim();
+          // id 显式 "agent_select"/"task_select"(dsh form.ts buildAskUserQuestionArgs
+          // 里塞的)—— 精确分派。也接受宽松命名。
+          if (!agentText && (id.includes("agent") || matchAgentInTeam(trimmed, team))) {
+            agentText = trimmed;
+          } else if (!taskText && id.includes("task")) {
+            taskText = trimmed;
+          }
+        }
+      }
+      // AskUserQuestion tool_result (CC 老 shape): { answers: { "q": "label" } }
+      if (!agentText && !taskText && parsed.answers && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
         const answers = parsed.answers as Record<string, string>;
         for (const val of Object.values(answers)) {
           const trimmed = val.trim();
@@ -406,8 +458,9 @@ export function extractFromOptionText(
     return { agent_id: MORE_MARKER };
   }
 
-  // 检测 Agent 选了"本次不关联"→ bypass（同上，仅在明确提取到 agentText 时判断）
-  if (agentText && (agentText.includes(SKIP_LABEL) || SKIP_RE.test(agentText.trim()))) {
+  // 检测 Agent 选了"本次不关联"→ bypass（只识别 SKIP_LABEL 精确文本，SKIP_RE
+  // 自由文本兜底已删，见文件顶部说明）
+  if (agentText && agentText.includes(SKIP_LABEL)) {
     return { agent_id: BYPASS_MARKER };
   }
 
@@ -417,12 +470,11 @@ export function extractFromOptionText(
   if (!agentId) agentId = matchAgentInTeam(content, team);
   if (!agentId) return null;
 
-  // Resolve task —— 同 team 内匹配；显式 skip 时返回 undefined
+  // Resolve task —— 同 team 内匹配；SKIP_RE 自由文本兜底已删（见文件顶部说明），
+  // 无条件调用 matchTaskInTeam；未命中即保持 taskId=undefined 走默认逻辑。
   let taskId: string | undefined;
   const taskHay = taskText ?? content;
-  if (!SKIP_RE.test(taskHay)) {
-    taskId = matchTaskInTeam(taskHay, team, agentId);
-  }
+  taskId = matchTaskInTeam(taskHay, team, agentId);
 
   return { agent_id: agentId, task_id: taskId };
 }

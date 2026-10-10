@@ -376,45 +376,95 @@ export class SkillVersioning {
   }
 
   // ─────────────────────────────────────────────────
-  //  TTL：写后清理过期旧版本
+  //  版本清理：写后清理超量/过期旧版本
   // ─────────────────────────────────────────────────
 
   private static readonly KEEP_RECENT = 3;
 
   /**
-   * 清理指定 skill 的过期非 head 版本（先删 DB 行，后删 storage 目录）。
+   * 单次清理可处理的最多版本行数（= store.listVersions 后端的硬上限）。
+   * 单 skill 版本数一旦超过 1000，1000 之外的最老版本本次看不到也删不掉，
+   * 要在下几轮写路径里分批收敛。实测生产环境 Top3 版本数 < 200，够用。
+   */
+  private static readonly LIST_LIMIT = 1000;
+
+  /**
+   * 清理指定 skill 的旧版本（先删 DB 行，后删 storage 目录）。
    * fire-and-forget 调用，不抛异常。
+   *
+   * 两个维度，取并集（谁更严谁生效）：
+   *  - 时间 (ttlSeconds > 0): 非 head 且 created_at < now - ttlSeconds 的被删；
+   *    对最近 KEEP_RECENT 个非 head 版本保底（即使过期也不删），防止高频写时
+   *    刚落下的历史版本立刻被清掉。
+   *  - 数量 (maxNonHeadVersions > 0): 非 head 版本数超过 N 时，删掉最老的
+   *    超出部分。注意数量维度**不受 KEEP_RECENT 保护** —— 它本身就保证了
+   *    "保留最新的 N 个"，再叠 KEEP_RECENT 会让小 N 值失效。
+   *  - 两者都为 0：早退，什么都不做（默认行为，向后兼容）。
+   *
+   * head 永不删（三个后端 deleteVersion 都硬编码了 is_head=0）；
+   * archived skill 整组跳过。
    */
   async cleanupExpiredVersionsForSkill(
     skillId: string,
     ttlSeconds: number,
+    maxNonHeadVersions = 0,
     now?: number,
   ): Promise<void> {
-    if (ttlSeconds <= 0) return;
+    if (ttlSeconds <= 0 && maxNonHeadVersions <= 0) return;
 
-    const nowMs = now ?? Date.now();
-    const cutoffMs = nowMs - ttlSeconds * 1000;
-    const all = await this.store.listVersions(skillId);
+    // ⚠️ 必须显式传大 limit：listVersions 的后端默认是 50 条，不传 limit 会导致
+    // 超过 50 版本的 skill 永远收敛不到真实上限（静默失效，不报错）。
+    // 1000 是三个后端的硬上限（Math.min(..., 1000)），对齐 deleteSkill:350 的既有写法。
+    const all = await this.store.listVersions(
+      skillId,
+      undefined,
+      { limit: SkillVersioning.LIST_LIMIT, offset: 0 },
+    );
     if (!all.length) return;
 
     // archived skill 整组保护
     const head = all.find((v) => v.is_head);
     if (!head || head.status === "archived") return;
 
-    // version DESC
+    // version DESC —— 最新在前
     const sorted = [...all].sort((a, b) => b.version - a.version);
-    // KEEP_RECENT 保护最近 N 个非 head 版本（即使过期）
-    const protectedVersions = new Set(
-      sorted.filter((v) => !v.is_head).slice(0, SkillVersioning.KEEP_RECENT).map((v) => v.version),
-    );
+    const nonHeadSorted = sorted.filter((v) => !v.is_head);
 
-    for (const v of sorted) {
-      if (v.is_head) continue;
-      if (protectedVersions.has(v.version)) continue;
-      if (v.created_at_ms >= cutoffMs) continue;
+    // 收集两个维度各自要删的 version 号，最后并集。
+    const toDelete = new Set<number>();
+
+    // ── 数量维度 ──
+    if (maxNonHeadVersions > 0 && nonHeadSorted.length > maxNonHeadVersions) {
+      for (const v of nonHeadSorted.slice(maxNonHeadVersions)) {
+        toDelete.add(v.version);
+      }
+    }
+
+    // ── 时间维度 ──
+    if (ttlSeconds > 0) {
+      const nowMs = now ?? Date.now();
+      const cutoffMs = nowMs - ttlSeconds * 1000;
+      // KEEP_RECENT 保护最近 N 个非 head 版本（即使过期）
+      const protectedVersions = new Set(
+        nonHeadSorted.slice(0, SkillVersioning.KEEP_RECENT).map((v) => v.version),
+      );
+      for (const v of nonHeadSorted) {
+        if (protectedVersions.has(v.version)) continue;
+        if (v.created_at_ms >= cutoffMs) continue;
+        toDelete.add(v.version);
+      }
+    }
+
+    if (toDelete.size === 0) return;
+
+    // 并集删除（按 version 号在 nonHeadSorted 的位置回查元数据拿 storage_dir）
+    const metaByVersion = new Map(nonHeadSorted.map((v) => [v.version, v]));
+    for (const version of toDelete) {
+      const v = metaByVersion.get(version);
+      if (!v) continue;
 
       // 先删 DB 行（数据源），再删 storage 目录（附属物）
-      const deleted = await this.store.deleteVersion(v.skill_id, v.version);
+      const deleted = await this.store.deleteVersion(v.skill_id, version);
       if (!deleted) continue;
 
       // 上报 VDB 删除（负值）

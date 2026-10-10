@@ -72,6 +72,13 @@ interface SessionIdFields {
    * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
    */
   composite_key?: string;
+  /**
+   * 客户端族群标签（claude-code / codebuddy / codex / workbuddy / dsh / opencode / pi）。
+   * 从 session composite key 的前缀取 → 用于 emitBridgeRejectTelemetry 的
+   * `agent_source` 字段，对齐 session_init_logs 侧的客户端维度。
+   * 不是必填：老 session 没拆 key 时为 undefined，埋点落空值可接受。
+   */
+  agent_source?: string;
 }
 
 /**
@@ -82,6 +89,11 @@ interface SessionIdFields {
  * 不再吃 Authorization。见 docs/design/2026-08-03-binding-flatten.md。
  */
 function deriveSessionId(c: Context): string | null {
+  // subagent 归一：带 x-parent-conversation-id 时优先用 parent id，让 subagent
+  // 调 bridge 工具时命中主会话 binding，避免 session_not_initialized
+  // （对齐 session/session-key.ts，2026-09-20 WorkBuddy subagent 修复）。
+  const parentId = c.req.header("x-parent-conversation-id");
+  if (parentId && parentId.length > 0) return parentId;
   return (
     c.req.header("x-conversation-id") ??
     c.req.header("x-session-id") ??

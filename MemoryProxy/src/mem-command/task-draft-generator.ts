@@ -1,21 +1,18 @@
 /**
  * task-draft-generator · mem:create-task / mem:update-task 的 LLM 草稿生成器。
  *
- * proxy 首个"主动"向 LLM 发起请求的模块（其它 LLM 调用都是 passthrough 反向代理）。
- * 骨架仿 packages/cost-guard/src/compressor/cfq/llm-infer.ts —— 直接 fetch OpenAI
+ * proxy 主动向 LLM 发起请求的模块，直接调用 OpenAI-compatible
  * chat/completions + AbortSignal.timeout，不引第三方 SDK。
  *
- * 与 CFQ LLMInfer 的关键差异：
- * - CFQ 失败 = 返回 null 数组（silent fallback），因为 CFQ 是可选增强；
- * - 本模块失败 = 返回 { ok: false, error }（**显式错误**），因为 Task 是持久化实体，
- *   坏草稿会污染库；上层 command 会把 error 拼进"❌ Task 生成失败：..."文案。
+ * 调用失败时返回 { ok: false, error }（显式错误），因为 Task 是持久化实体，
+ * 坏草稿会污染库；上层 command 会把 error 拼进失败文案。
  *
  * 使用方：mem-command/commands/create-task.ts / update-task.ts（阶段 3.2 / 3.3）
  *
  * 参考：docs/design/... TODO(阶段5) 补设计文档
  */
 
-/** LLM 端点配置。字段与 LLMInferConfig 保持形状一致，便于将来抽公共。 */
+/** LLM 端点配置。 */
 export interface TaskDraftConfig {
   /** 总开关。默认 false —— 未启用时命令层直接返"未配置"错误。 */
   enabled: boolean;
@@ -115,14 +112,14 @@ const LLM_MAX_TOKENS = 2000;
  * 但连续 2 次全部空对象/截断的概率很低。用户视角：无感，一次点击 = 一次成功。
  *
  * 参数：
- *   - LLM_RETRY_MAX_ATTEMPTS=3：总共 3 次机会（1 次首发 + 2 次重试）
- *   - LLM_RETRY_BASE_DELAY_MS=200：指数退避基数，第 2 次等 200ms，第 3 次等 400ms
+ *   - LLM_RETRY_MAX_ATTEMPTS=4：总共 4 次机会（1 次首发 + 3 次重试）
+ *   - LLM_RETRY_BASE_DELAY_MS=200：指数退避基数，第 2/3/4 次分别等 200/400/800ms
  *
  * 什么时候重试：只要 attemptDraftOnce 返回 ok=false 就重试（不区分具体错误类型，
  * 因为空对象 / 截断 / schema 违规 / 上游 5xx 都是"再来一次可能就好了"的情况）。
  * 什么时候不重试：cfg.enabled=false / 参数校验不通过 / 3 次都失败。
  */
-const LLM_RETRY_MAX_ATTEMPTS = 3;
+const LLM_RETRY_MAX_ATTEMPTS = 4;
 const LLM_RETRY_BASE_DELAY_MS = 200;
 
 /**
@@ -538,12 +535,16 @@ async function attemptDraftOnce(
       // ⚠️ copilot 上游对 /v1/messages **强制返 SSE 流式**（非流式返 200 + event-stream body
       // 会让 JSON.parse 直接爆 "Unexpected token 'e', event: mes..."）。因此显式设 stream:true
       // 并走 parseAnthropicStream 累积 content_block_delta。与 openai 分支的策略一致。
+      // ⚠️ 认证头同时发 x-api-key（原生 Anthropic 规范）和 Authorization: Bearer（OpenAI
+      // 风格的兼容层，如 rcaaitoken——它用 Anthropic Messages 报文格式但只认 Bearer）。
+      // 原生 Anthropic 会忽略 Authorization，兼容层会忽略 x-api-key，两边都不会冲突。
       fetchUrl = joinTaskDraftUrl(cfg.url, "/v1/messages");
       resp = await fetch(fetchUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-api-key": cfg.apiKey,
+          Authorization: `Bearer ${cfg.apiKey}`,
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
