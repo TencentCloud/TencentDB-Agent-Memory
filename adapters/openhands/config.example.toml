@@ -1,0 +1,6 @@
+# OpenHands config.toml — [llm] section (see docs.openhands.dev)
+# Equivalent env vars: LLM_MODEL / LLM_BASE_URL / LLM_API_KEY
+[llm]
+model = "openai/claude-sonnet-4-20250514"
+base_url = "http://127.0.0.1:8096/codebuddy/default"
+api_key = "sk-mem-..."   # prefer the LLM_API_KEY env var over committing the key
