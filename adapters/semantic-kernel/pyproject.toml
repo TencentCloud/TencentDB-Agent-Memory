@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tdai-sk"
+version = "0.1.0"
+description = "TencentDB Agent Memory adapter for Microsoft Semantic Kernel (Python)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "TencentDB Agent Memory Contributors" }]
+keywords = ["semantic-kernel", "agents", "memory", "tencentdb"]
+dependencies = [
+    "semantic-kernel>=1.30",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "aiohttp>=3.9",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["tdai_sk"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
