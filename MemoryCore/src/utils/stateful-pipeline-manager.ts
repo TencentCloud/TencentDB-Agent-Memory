@@ -142,12 +142,24 @@ export class StatefulPipelineManager {
   /**
    * Start: 恢复 checkpoint 状态到 IStateBackend
    * LocalStateBackend 场景下等价于原 MemoryPipelineManager.start()
+   *
+   * 恢复计数器之外，还要把"已有待处理 L0、但没有活跃定时器"的 session 重新挂上
+   * L1 idle 定时器——否则这些 session 的处理链条在进程重启后会彻底断掉：
+   * L1 处理只由 notifyConversation()（新消息到达）或上一批的 hasMore 链式续接触发，
+   * 两者都要求"有新事件发生"。重启后 in-memory 的 StateBackend 定时器被清空，
+   * checkpoint 恢复只把 conversation_count 等数值写回去，并不会重新安排任何定时器/
+   * 入队动作。结果是：没有新消息的 session（哪怕攒着几千条未处理的 L0）会永久停摆，
+   * 直到该 session 恰好再来一条新消息，或者靠其他 session 的活动间接带飞。
+   * 这里在恢复时按 conversation_count > 0（"自上次 L1 以来的未处理会话轮数"）识别出
+   * 这些 session，主动重新 arm 一次 idle 定时器，让现有 TimerScanner 在
+   * l1IdleTimeoutSeconds 后自然把它们捞回来处理，不需要等新对话。
    */
   async start(restoredStates?: Record<string, CheckpointPipelineSessionState>): Promise<void> {
     if (this.destroyed) return;
 
     if (restoredStates) {
       let restored = 0;
+      let rearmed = 0;
       for (const [sessionKey, state] of Object.entries(restoredStates)) {
         if (this.sessionFilter.shouldSkip(sessionKey)) continue;
 
@@ -161,8 +173,16 @@ export class StatefulPipelineManager {
           l2_last_extraction_time: state.l2_last_extraction_time,
         });
         restored++;
+
+        if (state.conversation_count > 0) {
+          await this.armL1IdleAfterDrain(sessionKey, this.defaultInstanceId);
+          rearmed++;
+        }
       }
-      this.logger?.info(`${TAG} Restored ${restored} session state(s) to StateBackend`);
+      this.logger?.info(
+        `${TAG} Restored ${restored} session state(s) to StateBackend ` +
+        `(${rearmed} with pending backlog re-armed for L1 drain)`,
+      );
     }
 
     this.logger?.info(`${TAG} Pipeline started (backend=${this.stateBackend.constructor.name})`);
