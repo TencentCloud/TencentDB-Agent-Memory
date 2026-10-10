@@ -281,6 +281,51 @@ function toSummary(s: Skill) {
   };
 }
 
+type SkillMetadataService = Awaited<ReturnType<NonNullable<SkillRouterDeps["getMetadataService"]>>>;
+
+/**
+ * Undo a create whose skill asset registration failed.
+ *
+ * `core.create` has already written the skill row, and the request is about
+ * to fail. Leaving that row behind produces a half-created skill: the name
+ * stays taken (the next create hits SKILL_NAME_DUPLICATE) and skill/list
+ * keeps listing it. Mirrors the Step 3 compensation in
+ * `SkillVersioning.createNewSkill`, which covers the service-mode
+ * `onSkillCreated` hook but never runs for this handler path.
+ *
+ * Best-effort and silent: the caller must still see the original
+ * registration error, never a rollback error.
+ */
+async function compensateFailedCreate(
+  core: SkillCore,
+  metaSvc: SkillMetadataService | null,
+  created: { skill_id: string; team_id?: string },
+  deps: SkillRouterDeps,
+): Promise<void> {
+  // Asset side: registration can leave a partially written row behind.
+  if (metaSvc) {
+    try {
+      await metaSvc.deleteAssets([created.skill_id]);
+    } catch (e) {
+      deps.logger.warn(
+        `${TAG} [skill-asset-sync] rollback deleteAssets failed for ${created.skill_id}: ` +
+          (e instanceof Error ? e.message : String(e)),
+      );
+    }
+  }
+  // Skill side: drop the row this request just wrote. In service mode the
+  // versioning hook may already have done it, which surfaces as
+  // SKILL_NOT_FOUND — that is the desired end state, so it is not an error.
+  try {
+    await core.delete({ skill_id: created.skill_id, team_id: created.team_id });
+  } catch (e) {
+    deps.logger.warn(
+      `${TAG} [skill-create-rollback] delete failed for ${created.skill_id}: ` +
+        (e instanceof Error ? e.message : String(e)),
+    );
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════
 //  Handlers
 // ═════════════════════════════════════════════════════════════════════
@@ -320,8 +365,9 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
     //     的静默不一致状态（用户会疑惑"我创建成功了但看不到"）。
     //   - 与 v2-router.ts handleConversationAdd 里 ensureChatMemoryAsset 的做法一致。
     if (deps.getMetadataService && r.team_id && r.owner_agent_id) {
+      let metaSvc: SkillMetadataService | null = null;
       try {
-        const metaSvc = await deps.getMetadataService(auth.serviceId);
+        metaSvc = await deps.getMetadataService(auth.serviceId);
         await metaSvc.ensureSkillAsset({
           skill_id: r.skill_id,
           team_id: r.team_id,
@@ -334,6 +380,8 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
             (err instanceof Error ? err.message : String(err)),
         );
         obsLogger.error("skill.handleCreate.done", { req_id: requestId, dur_ms: Date.now() - t0, skill_id: r.skill_id, phase: "ensureSkillAsset" }, err instanceof Error ? err : undefined);
+        // 补偿：core.create 已经落库，这里不能让 skill 行留在库里。
+        await compensateFailedCreate(pre.core, metaSvc, r, deps);
         return mapCoreError(err, requestId, deps, { skill_id: r.skill_id });
       }
     }
