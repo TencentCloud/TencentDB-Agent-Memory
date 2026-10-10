@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForgetPendingStore, type ForgetTarget } from "../../memory/forget-pending-store.js";
 import { __resetSessionStoreForTests, getSessionStore } from "../../session/store.js";
 import { createPiMemoryForgetHandlers } from "../pi-memory-forget.js";
+import { initAuth } from "../../auth.js";
 
 const identity = { userId: "user-a", teamId: "team-a", agentId: "agent-a", serviceId: "space-a" };
 const target: ForgetTarget = {
@@ -39,7 +40,11 @@ async function post(app: Hono, path: string, body: unknown) {
   });
 }
 
-afterEach(() => __resetSessionStoreForTests());
+afterEach(() => {
+  __resetSessionStoreForTests();
+  initAuth({ enabled: false, url: "", timeoutMs: 0 });
+  vi.unstubAllGlobals();
+});
 
 describe("Pi memory forget routes", () => {
   it("prepares selectable actions without deleting during discovery", async () => {
@@ -94,14 +99,67 @@ describe("Pi memory forget route identity", () => {
       },
     });
     const service = {
-      discover: vi.fn(async () => []),
+      discover: vi.fn(async () => [target]),
       execute: vi.fn(async () => undefined),
     };
     const handlers = createPiMemoryForgetHandlers({ coreSkill: { serviceId: "fallback" } } as any, { service });
     const app = new Hono();
     app.post("/preview", handlers.preview);
+    app.post("/confirm", handlers.confirm);
     return { app, service };
   }
+
+  function enableLiveAuth() {
+    initAuth({ enabled: true, url: "https://auth.fixture", timeoutMs: 1000 });
+    const fetcher = vi.fn(async () => Response.json({
+      code: 0, data: { valid: true, user: { user_id: "user-a" } },
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    return fetcher;
+  }
+
+  it("verifies the key and session user again on both preview and confirm", async () => {
+    const fetcher = enableLiveAuth();
+    const { app, service } = await setupAuthenticatedRoute();
+    const preview = await app.request("/preview", authenticatedRequest("user-key-a", { keyword: "deploy" }));
+    expect(preview.status).toBe(200);
+    const actionId = (await preview.json()).data.candidates[0].actionId;
+    const confirm = await app.request("/confirm", authenticatedRequest("user-key-a", { action_id: actionId }));
+    expect(confirm.status).toBe(200);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenLastCalledWith("https://auth.fixture/v3/meta/auth/verify", expect.objectContaining({
+      body: JSON.stringify({ user_key: "user-key-a" }),
+      headers: { "content-type": "application/json", "x-tdai-service-id": "space-a" },
+    }));
+    expect(service.execute).toHaveBeenCalledWith(identity, target);
+  });
+
+  it.each(["revoked", "different-user", "unavailable", "malformed"])(
+    "rejects preview and a previously prepared confirm when live auth is %s",
+    async (failure) => {
+      const fetcher = enableLiveAuth();
+      const { app, service } = await setupAuthenticatedRoute();
+      const preview = await app.request("/preview", authenticatedRequest("user-key-a", { keyword: "deploy" }));
+      expect(preview.status).toBe(200);
+      const actionId = (await preview.json()).data.candidates[0].actionId;
+      service.discover.mockClear();
+
+      if (failure === "unavailable") fetcher.mockRejectedValue(new Error("auth is down"));
+      else fetcher.mockImplementation(async () => Response.json(failure === "revoked"
+        ? { code: 0, data: { valid: false } }
+        : failure === "different-user"
+          ? { code: 0, data: { valid: true, user: { user_id: "other-user" } } }
+          : { code: 0, data: { valid: true } }));
+
+      const rejectedPreview = await app.request("/preview", authenticatedRequest("user-key-a", { keyword: "deploy" }));
+      const rejectedConfirm = await app.request("/confirm", authenticatedRequest("user-key-a", { action_id: actionId }));
+      expect(rejectedPreview.status).toBe(401);
+      expect(rejectedConfirm.status).toBe(401);
+      expect(service.discover).not.toHaveBeenCalled();
+      expect(service.execute).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledTimes(3);
+    },
+  );
 
   function authenticatedRequest(userKey: string, body: unknown) {
     return {

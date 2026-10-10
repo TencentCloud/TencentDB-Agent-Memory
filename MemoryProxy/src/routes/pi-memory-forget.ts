@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { Context } from "hono";
+import { isAuthEnabled, verifyUserKey } from "../auth.js";
 import { extractBearerToken } from "../opik.js";
 import { getSessionStore } from "../session/store.js";
 import { resolveConversationId } from "../session/session-key.js";
@@ -22,7 +23,7 @@ interface ForgetRouteService {
 interface ForgetRouteDeps {
   service?: ForgetRouteService;
   pending?: ForgetPendingStore;
-  resolveSession?: (c: Context) => ResolvedForgetSession | null;
+  resolveSession?: (c: Context) => ResolvedForgetSession | null | Promise<ResolvedForgetSession | null>;
   now?: () => number;
 }
 
@@ -32,8 +33,8 @@ function constantTimeEqual(left: string, right: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function defaultSessionResolver(config: ProxyConfig): (c: Context) => ResolvedForgetSession | null {
-  return (c) => {
+function defaultSessionResolver(config: ProxyConfig): (c: Context) => Promise<ResolvedForgetSession | null> {
+  return async (c) => {
     const conversationId = resolveConversationId(c);
     if (!conversationId) return null;
 
@@ -47,6 +48,13 @@ function defaultSessionResolver(config: ProxyConfig): (c: Context) => ResolvedFo
     const requestedServiceId = c.req.header("x-tdai-service-id") ?? "";
     const serviceId = info.space_id || requestedServiceId || config.coreSkill.serviceId;
     if (!serviceId || (info.space_id && requestedServiceId && info.space_id !== requestedServiceId)) return null;
+
+    // Cached session ownership does not prove that a key is still valid.
+    // Preserve the proxy's explicitly auth-disabled mode; otherwise require
+    // a fresh verification and the same user on both preview and confirm.
+    const authEnabled = isAuthEnabled();
+    const verified = await verifyUserKey(bearer, serviceId);
+    if (verified.rejected || (authEnabled && verified.userId !== info.user_id)) return null;
 
     return {
       sessionKey: `pi:${conversationId}`,
@@ -89,7 +97,7 @@ export function createPiMemoryForgetHandlers(config: ProxyConfig, deps: ForgetRo
 
   return {
     preview: async (c: Context) => {
-      const session = resolveSession(c);
+      const session = await resolveSession(c);
       if (!session) return fail(c, 401, "initialized Pi session and matching user key required");
 
       let body: Record<string, unknown>;
@@ -116,7 +124,7 @@ export function createPiMemoryForgetHandlers(config: ProxyConfig, deps: ForgetRo
     },
 
     confirm: async (c: Context) => {
-      const session = resolveSession(c);
+      const session = await resolveSession(c);
       if (!session) return fail(c, 401, "initialized Pi session and matching user key required");
       let body: Record<string, unknown>;
       try {
