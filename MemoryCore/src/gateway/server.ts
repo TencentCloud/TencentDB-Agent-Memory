@@ -49,6 +49,7 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
+import { resolveHealthStatus } from "./health.js";
 import type { Logger } from "../core/types.js";
 import { InstanceConfigProvider } from "../core/instance-config-provider.js";
 import type { VdbConfig, MongoConfig } from "../core/instance-config-provider.js";
@@ -1489,11 +1490,12 @@ export class TdaiGateway {
 
   private handleHealth(res: http.ServerResponse): void {
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: resolveHealthStatus(this.core.getVectorStore()),
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
         vectorStore: !!this.core.getVectorStore(),
+        vectorStoreDegraded: this.core.getVectorStore()?.isDegraded() ?? false,
         embeddingService: !!this.core.getEmbeddingService(),
       },
       // Integrated services status
