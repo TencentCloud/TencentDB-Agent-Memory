@@ -1679,9 +1679,20 @@ export class MetadataService {
     });
     if (fast.allowed) return fast;
 
-    // 只有「通过了前置门但角色默认未覆盖」(no_permission) 才需懒加载 ACL 重判
-    if (fast.reason !== "no_permission") return fast;
-    if (membership && roleDefaultCovers(membership.role, action)) return fast;
+    // 懒加载 ACL 重判的两类情形：
+    //   - no_permission：过了前置门但角色默认未覆盖；
+    //   - restricted 资产的 visibility_restricted：restricted 的语义就是「只看
+    //     显式 ACL 白名单」，此处的拒绝 = 「未匹配到 ACL」，必须查表重判——
+    //     否则 acl/grant 写入的授权对 check 端点永远不可达（#1522）。
+    // private / task 的 visibility_restricted 不在列：private 严格排除他人
+    // （含 admin）是设计语义，task 的拒绝来自角色/动作限制，ACL 不翻案。
+    const lazyEligible =
+      fast.reason === "no_permission" ||
+      (fast.reason === "visibility_restricted" && asset.visibility === "restricted");
+    if (!lazyEligible) return fast;
+    // 该保护只针对 no_permission（restricted 的 fast.reason 走不进这里时才成立；
+    // restricted 上纯函数本就跳过角色默认，roleDefaultCovers 在此语义不适用）。
+    if (fast.reason === "no_permission" && membership && roleDefaultCovers(membership.role, action)) return fast;
 
     const aclRecords = await this.allAclRecords(params.asset_id);
     return checkPermission({

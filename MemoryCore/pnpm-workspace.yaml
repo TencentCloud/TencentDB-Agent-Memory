@@ -1,3 +1,5 @@
+packages:
+  - "."
 allowBuilds:
   '@google/genai': set this to true or false
   es5-ext: set this to true or false
