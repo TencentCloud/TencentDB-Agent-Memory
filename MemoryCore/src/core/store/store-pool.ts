@@ -463,6 +463,12 @@ export class StorePool {
         apiKey: embCfg.apiKey,
         model: embCfg.model,
         dimensions: embCfg.dimensions,
+        // Must mirror core/store/factory.ts. Omitting it falls back to `true`
+        // in EmbeddingService, and endpoints that reject an explicit
+        // `dimensions` parameter (e.g. SiliconFlow returns 400 code 20015)
+        // then fail every embed call — silently, because every call site
+        // treats embedding failure as non-fatal.
+        sendDimensions: embCfg.sendDimensions,
         maxInputChars: embCfg.maxInputChars,
       }, this.logger as StoreLogger);
     }
