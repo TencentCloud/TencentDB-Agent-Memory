@@ -7,10 +7,11 @@ import {
 import type { PanelDeps } from '../../../panel-deps.js';
 import { validatePanelMetaHeaders } from '../../middleware/validate-panel-headers.js';
 import { respondControlError, respondEnvelope } from '../../envelope.js';
+import type { MetaEnvelope } from '../../../kernel/envelope.js';
 import type { MetaCallContext } from '../../../kernel/types.js';
 import { KNOWLEDGE_SERVICE_USERNAME } from '../../../startup/ensure-knowledge-llm-binding.js';
 import { DEFAULT_SKILLS } from './default-skills.js';
-import { extractListItems, isCallerSystemAdmin, resolveCallerUserId } from '../knowledge/common.js';
+import { fetchAllMetaListItems, isCallerSystemAdmin, resolveCallerUserId } from '../knowledge/common.js';
 import {
   getAgentTemplate as readTemplateFile,
   saveAgentTemplate as writeTemplateFile,
@@ -413,15 +414,21 @@ async function allocateKnowledgeToAgent(
   assetType: string,
 ): Promise<void> {
   const caller = await resolveCallerUserId(deps, ctx);
-  const listEnv = await deps.metaKernel.invoke('agent-fixed-asset/list', { agent_id: agentId }, ctx);
-  if (listEnv.code !== 0) return;
-  const bindings = extractListItems<{
+  // set 是全量替换：list 默认只返回 20 条，必须分页拉全量，否则第 20 条之后的
+  // 老绑定会被静默删掉（#928）。list 出错时直接抛出，不能拿残缺列表去 set。
+  let listError: MetaEnvelope<unknown> | null = null;
+  const bindings = await fetchAllMetaListItems<{
     asset_id: string;
     asset_type: string;
     injection_mode?: string;
     priority?: number;
     created_by?: string;
-  }>(listEnv);
+  }>(deps, ctx, 'agent-fixed-asset/list', { agent_id: agentId }, (env) => {
+    listError = env;
+  });
+  if (listError) {
+    throw new Error(`agent-fixed-asset/list failed: ${(listError as MetaEnvelope<unknown>).code}`);
+  }
   if (bindings.some((b) => b.asset_id === assetId)) return; // 已绑定，幂等跳过
 
   const newBindings = [
