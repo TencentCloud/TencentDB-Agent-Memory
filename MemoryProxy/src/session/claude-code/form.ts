@@ -41,6 +41,48 @@ const SKIP_HINT = '（请选择最匹配的选项，当前暂不支持自定义�
 // 分页布局统一走 pagination.ts；此处仅用其常量。
 const CC_MAX_OPTIONS = CC_MAX_OPTIONS_SHARED;
 
+/**
+ * fake `thinking` block 的固定 placeholder signature（供 buildFormResponse 用）。
+ *
+ * ## 背景 —— DeepSeek 官方 Anthropic 兼容端点强约束
+ *
+ * DeepSeek V4 的 `/anthropic/v1/messages` 端点在 thinking mode 下（deepseek-v4-pro
+ * 等 thinking 模型 + 带 `tools` 参数几乎默认开）**硬性要求**历史 assistant 消息
+ * 必须包含 `thinking` content block，否则返回：
+ *   `400 The content[].thinking in the thinking mode must be passed back to the API`
+ *
+ * 同款坑在 opencode #24803 / claude-code-router #1378 / hermes-agent #17992 /
+ * litellm #31439 都复现过。DeepSeek 官方文档也明说：带 tools 时 reasoning_content
+ * 必须在后续请求里回传，Anthropic 协议下同理指 thinking block。
+ *
+ * 我们的 session-init 假表单响应只发 `tool_use`，没 thinking → 用户答完表单，
+ * CC 把这条 fake assistant + tool_result 塞回下一次真实请求的历史 → DeepSeek 400。
+ *
+ * ## 为什么塞空 thinking + placeholder signature 就够了
+ *
+ * - **DeepSeek**: 只查 presence，`thinking: ""` + 任意 signature 都通过（社区案例
+ *   直接 curl 验证过 `reasoning_content: ""` 就能解锁）。
+ * - **proxy 自己的 `sanitizeThinkingBlocks`** (`anthropicHandler.ts:277-289`):
+ *   要求 signature 是 base64ish (`^[A-Za-z0-9+/=]+$`) + 长度 ≥ 40 + 不是 UUID。
+ *   我们的 placeholder 满足这三条 → 不会被误剥。
+ * - **真 Anthropic 上游**: 只在 request 本身开了 thinking mode 时才做 signature
+ *   crypto 校验。CC session-init 假响应场景下:
+ *     - 客户端未开 thinking → Anthropic 忽略历史 thinking sig → 无影响
+ *     - 客户端开了 thinking → 本来就已经因为 fake tool_use 无 thinking 而 400
+ *       (net-new 回归 0)
+ * - **CC 客户端 UI**: thinking 内容空，最多显示一个空的 thinking 折叠块，无碍。
+ *
+ * ## dsh 侧的对称补丁
+ *
+ * `src/session/dsh/form.ts` 的 `REASONING_PLACEHOLDER` 在 OpenAI 协议下解决同款
+ * 问题（deepseek 的 OpenAI `/v1/chat/completions` 端点强查 `reasoning_content`）。
+ * CC 这边是 Anthropic 协议 → thinking block 版本。
+ *
+ * 值本身对模型无影响 —— fake session-init 不真过模型。
+ */
+const THINKING_SIGNATURE_PLACEHOLDER =
+  "UHJveHlDQ1Nlc3Npb25Jbml0RmFrZVRoaW5raW5nUGxhY2Vob2xkZXJTaWc=";
+
 /** Returns true if the given string contains any CC form title marker. */
 export function containsFormTitle(s: string): boolean {
   return (
@@ -260,9 +302,36 @@ export function buildFormResponse(data: FormData): Response {
         },
       }));
 
+      // ── Fake `thinking` block (index 0) ───────────────────────────────────
+      // 无条件 emit —— DeepSeek 官方 Anthropic 兼容端点在 thinking mode 下强查
+      // 历史 assistant 必须带 thinking block,否则 400。详见
+      // THINKING_SIGNATURE_PLACEHOLDER 常量注释。real Anthropic 场景零回归
+      // (无 thinking mode 时不 crypto 校验 sig;有 thinking mode 时本来就已经
+      // 因为 fake tool_use 无 thinking 而 400)。
       controller.enqueue(sse("content_block_start", {
         type: "content_block_start",
         index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      }));
+
+      controller.enqueue(sse("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "" },
+      }));
+
+      controller.enqueue(sse("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "signature_delta", signature: THINKING_SIGNATURE_PLACEHOLDER },
+      }));
+
+      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 0 }));
+
+      // ── tool_use block (index 1) ─────────────────────────────────────────
+      controller.enqueue(sse("content_block_start", {
+        type: "content_block_start",
+        index: 1,
         content_block: {
           type: "tool_use",
           id: toolUseId,
@@ -273,11 +342,11 @@ export function buildFormResponse(data: FormData): Response {
 
       controller.enqueue(sse("content_block_delta", {
         type: "content_block_delta",
-        index: 0,
+        index: 1,
         delta: { type: "input_json_delta", partial_json: inputJson },
       }));
 
-      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 0 }));
+      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 1 }));
 
       controller.enqueue(sse("message_delta", {
         type: "message_delta",

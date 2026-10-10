@@ -9,7 +9,7 @@
  *   - sink 异常静默吞掉
  *   - body/sub 已由调用方准备好，绝不额外读 session store
  */
-import { writeToolCallRow, type ToolCallLogInput } from "../clickhouse.js";
+import { writeSkillUsageRow, writeToolCallRow, type SkillUsageLogInput, type ToolCallLogInput } from "../clickhouse.js";
 
 export interface BridgeCallTelemetryInput {
   sessionKey: string;
@@ -133,4 +133,55 @@ export function emitBridgeRejectTelemetry(input: BridgeRejectTelemetryInput): vo
     elapsedMs: 0,
     rejectReason: input.rejectReason,
   });
+}
+
+/**
+ * Skill usage 埋点 helper —— LLM 主动 view/search_hit 时发一条。
+ *
+ * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+ *
+ * 只在真实使用信号 (LLM 主动调 skill_view / skill_search 命中) 上埋,
+ * 不埋 `<available_skills>` 注入 —— 避免自循环 (召回→注入→埋点→分数更高)。
+ *
+ * 硬约束: 同步返回 void, sink 异常静默吞掉, 绝不阻塞主链路;
+ * CH 未配置时 writeSkillUsageRow 自身 no-op。
+ */
+export interface SkillUsageTelemetryInput {
+  /** 'view' | 'search_hit' */
+  eventType: string;
+  skillId: string;
+  sessionKey?: string;
+  spaceId?: string;
+  teamId?: string;
+  agentId?: string;
+  userId?: string;
+  /** claude-code/codebuddy/... 空时按 sessionKey 前缀反解 */
+  agentSource?: string;
+}
+
+export function emitSkillUsageTelemetry(
+  input: SkillUsageTelemetryInput,
+  sink: (row: SkillUsageLogInput) => void = writeSkillUsageRow,
+): void {
+  try {
+    const row: SkillUsageLogInput = {
+      timestamp: new Date().toISOString(),
+      eventType: input.eventType,
+      skillId: input.skillId,
+      sessionKey: input.sessionKey,
+      spaceId: input.spaceId,
+      teamId: input.teamId,
+      agentId: input.agentId,
+      userId: input.userId,
+      agentSource: input.agentSource
+        ?? (input.sessionKey ? agentSourceFromSessionKey(input.sessionKey) : "unknown"),
+    };
+    try {
+      sink(row);
+    } catch {
+      // sink 抛 → 埋点绝不阻塞业务
+    }
+  } catch {
+    // input 构造异常也吞掉
+  }
 }

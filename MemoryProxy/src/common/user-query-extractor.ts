@@ -156,6 +156,7 @@ export function extractUserQueryText(raw: string): string {
     /^\s*File created successfully at:/i,
     // CC Bash tool 静默完成
     /^\s*\(Bash completed with no output\)\s*$/,
+    /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/,
     // CC read tool 返回的 cat -n 行号格式（"     1  内容" / "1  内容"）
     // 至少 3 位数字更严格；1-2 位可能与用户输入冲突（如用户列表 "1 abc"）
     // 因此这里只匹配"数字 + 2 空格 + 内容"且行首无其它字符 —— cat -n 特有格式

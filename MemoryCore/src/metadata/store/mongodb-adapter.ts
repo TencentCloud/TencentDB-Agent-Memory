@@ -61,10 +61,16 @@ import type {
   UpsertConfigParamInput,
   ListConfigParamsFilter,
   InstanceUpstreamConfigEntity,
-  UpsertInstanceUpstreamConfigInput,
   InstanceUpstreamConfigFilter,
-  UpstreamConfigType,
+  CreateInstanceUpstreamGroupInput,
+  UpdateInstanceUpstreamGroupInput,
+  ToggleInstanceUpstreamGroupInput,
+  DeleteInstanceUpstreamGroupInput,
+  SupportedAgent,
+  GroupType,
+  UpstreamMode,
 } from "../types.js";
+import { DEFAULT_GROUP_NAME, InstanceUpstreamWriteConflictError } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
 import { DuplicateUserKeyError } from "./interface.js";
@@ -109,6 +115,19 @@ export class MongoMetadataStore implements IMetadataStore {
   private readonly db: Db;
   private readonly useTransactions: boolean;
   private readonly ownsClient: boolean;
+  /**
+   * v1→v2 legacy sweep 一次性标记。true 表示本进程已在 list 路径上做过 index/文档
+   * 清理,后续 list 直接跳过 —— sweep 是历史迁移动作 (dropIndex + deleteMany),
+   * 数据面已在 v2 后就永远不会再回退,不需要每次 list 都跑一遍 (每次要 2 次
+   * Mongo 网络往返,是 400ms 稳态延迟的主贡献者)。进程重启会再跑一次做兜底。
+   */
+  private legacyV1Swept = false;
+  /**
+   * v1 user_key 迁移一次性标记(与 legacyV1Swept 同套路)。init() 每次都跑
+   * `find(all users)` + 逐个 `findOne(user_key)`,存量实例首次冷启动 ~1s,
+   * 老实例更贵(要拉全部 users)。也是历史迁移动作,首次 init 跑完就 mark。
+   */
+  private legacyUserKeysMigrated = false;
 
   constructor(client: MongoClient, dbName: string, opts: MongoMetadataStoreOptions = {}) {
     this.client = client;
@@ -173,106 +192,132 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async init(): Promise<void> {
-    // ── meta_users ──
-    await this.ensureIndex("meta_users", { user_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_users",
-      { user_type: 1 },
-      { unique: true, partialFilterExpression: { user_type: "system_admin" } },
-    );
-    await this.ensureIndex("meta_users", { auth_provider: 1, username: 1 });
-    await this.ensureIndex("meta_users",
-      { auth_provider: 1, external_id: 1 },
-      { sparse: true },
-    );
-    await this.ensureIndex("meta_users", { email: 1 }, { sparse: true });
-    await this.ensureIndex("meta_users", { created_at: -1 });
+    // 25 个 ensureIndex 全部并行:createIndex 幂等,不同 collection/index 互不冲突,
+    // 服务器侧原来就是各自 create,唯一开销是 RTT。串行 25 × ~70ms ≈ 1.8s,
+    // 并行 max(独立 RTT) ≈ 100~300ms(空库首建更贵些)。
+    await Promise.all([
+      // ── meta_users ──
+      this.ensureIndex("meta_users", { user_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_users",
+        { user_type: 1 },
+        { unique: true, partialFilterExpression: { user_type: "system_admin" } },
+      ),
+      this.ensureIndex("meta_users", { auth_provider: 1, username: 1 }),
+      this.ensureIndex("meta_users",
+        { auth_provider: 1, external_id: 1 },
+        { sparse: true },
+      ),
+      this.ensureIndex("meta_users", { email: 1 }, { sparse: true }),
+      this.ensureIndex("meta_users", { created_at: -1 }),
 
-    // ── meta_user_keys ──
-    await this.ensureIndex("meta_user_keys", { key_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_user_keys", { key_value: 1 }, { unique: true });
-    await this.ensureIndex("meta_user_keys", { user_id: 1, status: 1 });
-    await this.ensureIndex("meta_user_keys", { user_id: 1, created_at: -1 });
+      // ── meta_user_keys ──
+      this.ensureIndex("meta_user_keys", { key_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_user_keys", { key_value: 1 }, { unique: true }),
+      this.ensureIndex("meta_user_keys", { user_id: 1, status: 1 }),
+      this.ensureIndex("meta_user_keys", { user_id: 1, created_at: -1 }),
 
-    // ── meta_teams ──
-    await this.ensureIndex("meta_teams", { team_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_teams", { created_at: -1 });
+      // ── meta_teams ──
+      this.ensureIndex("meta_teams", { team_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_teams", { created_at: -1 }),
 
-    // ── meta_team_members ──
-    await this.ensureIndex("meta_team_members", { team_id: 1, user_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_team_members", { team_id: 1, status: 1, joined_at: -1 });
-    await this.ensureIndex("meta_team_members", { user_id: 1, status: 1 });
+      // ── meta_team_members ──
+      this.ensureIndex("meta_team_members", { team_id: 1, user_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_team_members", { team_id: 1, status: 1, joined_at: -1 }),
+      this.ensureIndex("meta_team_members", { user_id: 1, status: 1 }),
 
-    // ── meta_agents ──
-    await this.ensureIndex("meta_agents", { agent_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_agents", { team_id: 1, status: 1, created_at: -1 });
-    await this.ensureIndex("meta_agents", { owner_user_id: 1, status: 1, created_at: -1 });
+      // ── meta_agents ──
+      this.ensureIndex("meta_agents", { agent_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_agents", { team_id: 1, status: 1, created_at: -1 }),
+      this.ensureIndex("meta_agents", { owner_user_id: 1, status: 1, created_at: -1 }),
 
-    // ── meta_tasks ──
-    await this.ensureIndex("meta_tasks", { task_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_tasks", { team_id: 1, status: 1, created_at: -1 });
-    await this.ensureIndex("meta_tasks", { creator_user_id: 1, status: 1, created_at: -1 });
+      // ── meta_tasks ──
+      this.ensureIndex("meta_tasks", { task_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_tasks", { team_id: 1, status: 1, created_at: -1 }),
+      this.ensureIndex("meta_tasks", { creator_user_id: 1, status: 1, created_at: -1 }),
 
-    // ── meta_task_agents ──
-    await this.ensureIndex("meta_task_agents", { task_id: 1, agent_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_task_agents", { task_id: 1, status: 1, created_at: -1 });
+      // ── meta_task_agents ──
+      this.ensureIndex("meta_task_agents", { task_id: 1, agent_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_task_agents", { task_id: 1, status: 1, created_at: -1 }),
 
-    // ── meta_participation_logs ──
-    await this.ensureIndex("meta_participation_logs", { team_id: 1, created_at: -1 }, { name: "ix_pl_team_created" });
-    await this.ensureIndex(
-      "meta_participation_logs",
-      { team_id: 1, task_id: 1, agent_id: 1, created_at: -1 },
-      { name: "ix_pl_team_task_agent_created" },
-    );
-    await this.ensureIndex(
-      "meta_participation_logs",
-      { team_id: 1, user_id: 1, created_at: -1 },
-      { name: "ix_pl_team_user_created" },
-    );
-    await this.ensureIndex(
-      "meta_participation_logs",
-      { team_id: 1, task_id: 1, agent_id: 1, user_id: 1, created_at: -1 },
-      { name: "ix_pl_team_dims_created" },
-    );
+      // ── meta_participation_logs ──
+      this.ensureIndex("meta_participation_logs", { team_id: 1, created_at: -1 }, { name: "ix_pl_team_created" }),
+      this.ensureIndex(
+        "meta_participation_logs",
+        { team_id: 1, task_id: 1, agent_id: 1, created_at: -1 },
+        { name: "ix_pl_team_task_agent_created" },
+      ),
+      this.ensureIndex(
+        "meta_participation_logs",
+        { team_id: 1, user_id: 1, created_at: -1 },
+        { name: "ix_pl_team_user_created" },
+      ),
+      this.ensureIndex(
+        "meta_participation_logs",
+        { team_id: 1, task_id: 1, agent_id: 1, user_id: 1, created_at: -1 },
+        { name: "ix_pl_team_dims_created" },
+      ),
 
-    // ── meta_assets ──
-    await this.ensureIndex("meta_assets", { asset_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_assets", { team_id: 1, status: 1, created_at: -1 });
+      // ── meta_assets ──
+      this.ensureIndex("meta_assets", { asset_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_assets", { team_id: 1, status: 1, created_at: -1 }),
 
-    // ── meta_agent_fixed_assets ──
-    await this.ensureIndex("meta_agent_fixed_assets", { agent_id: 1, asset_id: 1 }, { unique: true });
-    await this.ensureIndex("meta_agent_fixed_assets", { agent_id: 1, priority: -1, created_at: -1 });
+      // ── meta_agent_fixed_assets ──
+      this.ensureIndex("meta_agent_fixed_assets", { agent_id: 1, asset_id: 1 }, { unique: true }),
+      this.ensureIndex("meta_agent_fixed_assets", { agent_id: 1, priority: -1, created_at: -1 }),
 
-    // ── meta_asset_acl ──
-    await this.ensureIndex("meta_asset_acl",
-      { asset_id: 1, subject_type: 1, subject_id: 1, permission: 1 },
-      { unique: true },
-    );
-    await this.ensureIndex("meta_asset_acl", { id: 1 }, { unique: true });
-    await this.ensureIndex("meta_asset_acl", { asset_id: 1, created_at: -1 });
-    await this.ensureIndex("meta_asset_acl", { subject_type: 1, subject_id: 1, created_at: -1 });
+      // ── meta_asset_acl ──
+      this.ensureIndex("meta_asset_acl",
+        { asset_id: 1, subject_type: 1, subject_id: 1, permission: 1 },
+        { unique: true },
+      ),
+      this.ensureIndex("meta_asset_acl", { id: 1 }, { unique: true }),
+      this.ensureIndex("meta_asset_acl", { asset_id: 1, created_at: -1 }),
+      this.ensureIndex("meta_asset_acl", { subject_type: 1, subject_id: 1, created_at: -1 }),
 
-    // ── meta_config_params ──
-    await this.ensureIndex("meta_config_params",
-      { scope: 1, user_id: 1, module: 1, param_name: 1 },
-      { unique: true },
-    );
-    await this.ensureIndex("meta_config_params", { module: 1 });
-    await this.ensureIndex("meta_config_params",
-      { user_id: 1, module: 1 },
-      { partialFilterExpression: { scope: "user" } },
-    );
+      // ── meta_config_params ──
+      this.ensureIndex("meta_config_params",
+        { scope: 1, user_id: 1, module: 1, param_name: 1 },
+        { unique: true },
+      ),
+      this.ensureIndex("meta_config_params", { module: 1 }),
+      this.ensureIndex("meta_config_params",
+        { user_id: 1, module: 1 },
+        { partialFilterExpression: { scope: "user" } },
+      ),
 
-    // ── meta_instance_upstream_config ──
-    await this.ensureIndex("meta_instance_upstream_config",
-      { agent_source: 1, type: 1 },
-      { unique: true },
-    );
+      // ── meta_instance_upstream_config (v2 模型组) ──
+      this.ensureIndex("meta_instance_upstream_config",
+        { group_id: 1 },
+        { unique: true },
+      ),
+      // 单例约束:default / extraction 每实例最多 1 行。
+      // ⚠️ MongoDB partial index filter 只支持 equality/$exists/$gt/$gte/$lt/$lte/$type/$and
+      // (顶层),**不支持 `$in`**。之前用 `partialFilterExpression: {group_type: {$in: [...]}}`
+      // 会被 mongo 抛 code=67 "unsupported expression",ensureIndex 里 console.warn 静默吞,
+      // 结果实际上根本没这个 unique index → default 并发 seed 会插出 2 行(mem-orooh93g
+      // 现场实证)。改成两个独立 partial index,filter 用 equality。
+      // 显式 name 避免同 spec 撞名。
+      this.ensureIndex("meta_instance_upstream_config",
+        { group_type: 1 },
+        { unique: true, partialFilterExpression: { group_type: "default" }, name: "ux_group_type_default" },
+      ),
+      this.ensureIndex("meta_instance_upstream_config",
+        { group_type: 1 },
+        { unique: true, partialFilterExpression: { group_type: "extraction" }, name: "ux_group_type_extraction" },
+      ),
+    ]);
 
     await this.migrateLegacyUserKeys();
   }
 
   /**
    * 安全创建索引：索引创建失败不会中断初始化流程，但会记录日志便于线上排查。
+   *
+   * ★ E11000 自愈:当 partial unique index 因存量脏数据(dupe)建不成功时,
+   * 检测目标 spec 是不是我们已知的单例约束(default / extraction 单例),
+   * 是就调 _dedupSingletonRows 挑 winner 删其他,重试 createIndex。
+   * 只对 meta_instance_upstream_config 的 group_type=1 spec 生效,其他 collection
+   * 走静默 error(不认识的 spec 不敢乱删数据)。
    */
   private async ensureIndex(
     colName: string,
@@ -281,6 +326,7 @@ export class MongoMetadataStore implements IMetadataStore {
   ): Promise<void> {
     try {
       await this.col(colName).createIndex(spec, options);
+      return;
     } catch (err: unknown) {
       const code = (err as { code?: number })?.code;
       const msg = (err as { errmsg?: string })?.errmsg
@@ -289,18 +335,98 @@ export class MongoMetadataStore implements IMetadataStore {
       if (code === 85 || code === 86) {
         // 索引已存在但定义不同（如 options 变化），索引创建被跳过，功能不受影响
         console.warn(`[mongodb-adapter] ensureIndex skipped (index exists with different options) ${specStr}: ${msg}`);
-      } else if (code === 11000) {
-        // 存量数据违反 unique 约束，索引创建失败，该字段的唯一性校验无法生效
-        console.warn(`[mongodb-adapter] ensureIndex skipped (duplicate data violates unique constraint) ${specStr}: ${msg}`);
-      } else {
-        // 非预期错误（网络超时、权限不足等），需要人工排查
-        console.warn(`[mongodb-adapter] ensureIndex failed (unexpected error, code=${code}) ${specStr}: ${msg}`);
+        return;
       }
+      if (code === 67) {
+        // 索引规范本身非法(e.g. partial filter 里用了不支持的操作符 $in / $or 等)。
+        // **这是代码 bug**,unique 索引根本没建成 → 应用层并发写会绕过约束。
+        // 之前 group_type $in partial filter 就是这类 bug (mem-orooh93g 出 2 行 default)。
+        console.error(`[mongodb-adapter] ⚠ ensureIndex REJECTED (invalid spec — CODE BUG) ${specStr}: ${msg}`);
+        return;
+      }
+      if (code === 11000) {
+        // 尝试自愈:识别 meta_instance_upstream_config 的 default/extraction 单例约束
+        const partial = (options as { partialFilterExpression?: Record<string, unknown> } | undefined)?.partialFilterExpression;
+        const targetGroupType =
+          colName === "meta_instance_upstream_config" &&
+          spec.group_type === 1 &&
+          partial &&
+          (partial.group_type === "default" || partial.group_type === "extraction")
+            ? String(partial.group_type)
+            : null;
+
+        if (targetGroupType) {
+          console.error(`[mongodb-adapter] ensureIndex blocked by duplicate ${targetGroupType} rows ${specStr}, attempting auto-heal…`);
+          try {
+            const kept = await this._dedupSingletonRows(targetGroupType);
+            // 重试 createIndex,dedup 完再撞 11000 说明 dedup 有 bug,升级 error
+            await this.col(colName).createIndex(spec, options);
+            console.warn(`[mongodb-adapter] ✅ auto-healed ${targetGroupType} singleton (kept group_id=${kept}) and index built`);
+            return;
+          } catch (retryErr: unknown) {
+            const rcode = (retryErr as { code?: number })?.code;
+            const rmsg = (retryErr as { errmsg?: string })?.errmsg
+              ?? (retryErr instanceof Error ? retryErr.message : String(retryErr));
+            console.error(`[mongodb-adapter] ⚠ auto-heal for ${targetGroupType} FAILED (code=${rcode}) ${specStr}: ${rmsg} — unique invariant still NOT enforced`);
+            return;
+          }
+        }
+        // 不认识的 collection/spec 的 E11000,不敢乱删数据,只报警
+        console.error(`[mongodb-adapter] ⚠ ensureIndex BLOCKED by duplicate data ${specStr}: ${msg} — unique invariant is NOT enforced until dupes are cleaned`);
+        return;
+      }
+      // 非预期错误（网络超时、权限不足等），需要人工排查
+      console.warn(`[mongodb-adapter] ensureIndex failed (unexpected error, code=${code}) ${specStr}: ${msg}`);
     }
   }
 
+  /**
+   * Auto-heal helper: meta_instance_upstream_config 里同 group_type (default/extraction)
+   * 出现多行(历史脏数据 or 并发 double-seed 遗留)时,挑 winner 保留,删其他。
+   *
+   * Winner 规则(确定性 tiebreaker,多次跑结果一致):
+   *   1. 最早 created_at(先 seed 的留下 —— 正常并发场景先到者一般没被 update)
+   *   2. 平局 → 最早 updated_at
+   *   3. 再平 → 最小 id (auto-increment 递增号)
+   *
+   * 返回保留的 group_id。若只有 0 或 1 行,不动数据,返回可能存在的那一行的 group_id 或 null。
+   */
+  private async _dedupSingletonRows(groupType: string): Promise<string | null> {
+    const rows = await this.col<Document>("meta_instance_upstream_config")
+      .find({ group_type: groupType } as Document, { projection: { _id: 1, id: 1, group_id: 1, created_at: 1, updated_at: 1 } as unknown as Document })
+      .toArray();
+    if (rows.length <= 1) return (rows[0] as { group_id?: string })?.group_id ?? null;
+
+    // 确定性排序,winner 排第一
+    rows.sort((a, b) => {
+      const ca = String((a as Document).created_at ?? "");
+      const cb = String((b as Document).created_at ?? "");
+      if (ca !== cb) return ca.localeCompare(cb);
+      const ua = String((a as Document).updated_at ?? "");
+      const ub = String((b as Document).updated_at ?? "");
+      if (ua !== ub) return ua.localeCompare(ub);
+      const ia = Number((a as Document).id ?? Number.MAX_SAFE_INTEGER);
+      const ib = Number((b as Document).id ?? Number.MAX_SAFE_INTEGER);
+      return ia - ib;
+    });
+    const winner = rows[0] as Document;
+    const loserIds = rows.slice(1).map((r) => (r as Document)._id);
+    const loserGroupIds = rows.slice(1).map((r) => String((r as { group_id?: string }).group_id));
+    console.warn(`[mongodb-adapter] dedup ${groupType}: keeping group_id=${(winner as { group_id?: string }).group_id} (created_at=${(winner as { created_at?: string }).created_at}), deleting ${loserIds.length}: ${loserGroupIds.join(",")}`);
+    await this.col("meta_instance_upstream_config").deleteMany({ _id: { $in: loserIds } } as Document);
+    return String((winner as { group_id?: string }).group_id);
+  }
+
   private async migrateLegacyUserKeys(): Promise<void> {
-    const users = await this.col<UserEntity & { user_key?: string }>("meta_users").find({}, PROJECT_NO_ID).toArray();
+    if (this.legacyUserKeysMigrated) return;
+    // 只捞 **含 legacy user_key 字段** 的 users(v2 用户走 meta_user_keys 表,
+    // 根本没这个字段)。原来是 find({}) 全表 → 逐个 findOne(user_keys) 打 N 次
+    // 网络往返(存量老库 ~1s;新库还是 40ms 但每 store 首次都白付)。
+    // 换成 $exists 过滤:老库只捞真需要迁的少量 doc;全 v2 的实例直接空数组,
+    // 只花 1 次 count-level 查询 (~40ms) 就 mark 完事。
+    const users = await this.col<UserEntity & { user_key?: string }>("meta_users")
+      .find({ user_key: { $exists: true } } as Document, PROJECT_NO_ID)
+      .toArray();
     for (const u of users) {
       const existing = await this.col<UserKeyEntity>("meta_user_keys").findOne({ user_id: u.user_id } as Document, PROJECT_NO_ID);
       if (existing) continue;
@@ -313,6 +439,7 @@ export class MongoMetadataStore implements IMetadataStore {
         created_at: u.created_at,
       });
     }
+    this.legacyUserKeysMigrated = true;
   }
 
   private async insertUserKeyDoc(input: {
@@ -1391,7 +1518,11 @@ export class MongoMetadataStore implements IMetadataStore {
     return docs as unknown as ConfigParamEntity[];
   }
 
-  // ── InstanceUpstreamConfig ──────────────────────────────────────────────
+  // ── InstanceUpstreamConfig (v2 模型组) ─────────────────────────────────
+  //
+  // 与 SQLite 实现语义等价,并发写入靠 `version` 乐观锁 + 单例 UNIQUE 索引兜底。
+  // agents 全域唯一校验用 SELECT-all → 内存计算,写入用 findOneAndUpdate({version})
+  // 匹配失败(乐观锁冲突)最多重试 3 次,再失败抛 version_mismatch。
 
   private async nextInstanceUpstreamConfigId(): Promise<number> {
     const result = await this.col("meta_counters").findOneAndUpdate(
@@ -1402,68 +1533,489 @@ export class MongoMetadataStore implements IMetadataStore {
     return (result as any).seq as number;
   }
 
-  async getInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
-  ): Promise<InstanceUpstreamConfigEntity | null> {
+  async getInstanceUpstreamGroup(groupId: string): Promise<InstanceUpstreamConfigEntity | null> {
     return this.col<InstanceUpstreamConfigEntity>("meta_instance_upstream_config").findOne(
-      { agent_source: agentSource, type } as Document,
+      { group_id: groupId } as Document,
       PROJECT_NO_ID,
     ) as Promise<InstanceUpstreamConfigEntity | null>;
   }
 
-  async upsertInstanceUpstreamConfig(
-    input: UpsertInstanceUpstreamConfigInput,
-  ): Promise<InstanceUpstreamConfigEntity> {
-    const now = nowIso();
-    const agentSource = input.agent_source ?? "default";
-    const type = input.type ?? "conversation";
-    const id = await this.nextInstanceUpstreamConfigId();
-
-    await this.col("meta_instance_upstream_config").findOneAndUpdate(
-      { agent_source: agentSource, type } as Document,
-      {
-        $set: {
-          mode: input.mode,
-          base_url: input.base_url ?? "",
-          api_key: input.api_key ?? "",
-          model_id: input.model_id ?? "",
-          description: input.description ?? "",
-          updated_at: now,
-        },
-        $setOnInsert: {
-          id,
-          agent_source: agentSource,
-          type,
-          created_at: now,
-        },
-      },
-      { upsert: true },
-    );
-
-    return (await this.getInstanceUpstreamConfig(agentSource, type))!;
-  }
-
-  async listInstanceUpstreamConfigs(
+  async listInstanceUpstreamGroups(
     filter?: InstanceUpstreamConfigFilter,
+    seedIfEmpty?: SupportedAgent[],
   ): Promise<InstanceUpstreamConfigEntity[]> {
+    // v1 legacy 清理:v1 时期字段名 (agent_source/type) 与 v2 (group_id/group_type) 完全不同。
+    // 存量数据升级到 v2 时不做迁移(设计文档 §10.3 明确"回滚代价可接受"),这里做兜底:
+    // 一次性删掉库里没有 group_id 的旧文档,避免 seed 判断与 groups_list 结果错乱。
+    // 幂等操作,新库 deletedCount=0 无副作用。
+    await this._sweepLegacyV1Docs();
+
+    if (seedIfEmpty && seedIfEmpty.length > 0) {
+      await this.ensureDefaultSeeded(seedIfEmpty);
+      // 已存在 default → 走 diff-append 同步(方案 E,与 SQLite 语义等价)
+      await this._syncDefaultAgentsWithSnapshotMongo(seedIfEmpty);
+    }
+
     const query: Document = {};
-    if (filter?.agent_source) query.agent_source = filter.agent_source;
-    if (filter?.type) query.type = filter.type;
+    if (filter?.group_type) query.group_type = filter.group_type;
     const docs = await this.col("meta_instance_upstream_config")
       .find(query, PROJECT_NO_ID)
-      .sort({ agent_source: 1, type: 1 })
       .toArray();
-    return docs as unknown as InstanceUpstreamConfigEntity[];
+    // 排序:default → custom → extraction, 同类 updated_at DESC
+    const rank: Record<string, number> = { default: 0, custom: 1, extraction: 2 };
+    docs.sort((a, b) => {
+      const ra = rank[String((a as Document).group_type)] ?? 9;
+      const rb = rank[String((b as Document).group_type)] ?? 9;
+      if (ra !== rb) return ra - rb;
+      return String((b as Document).updated_at).localeCompare(String((a as Document).updated_at));
+    });
+    return docs.map((d) => this.mapMongoGroup(d as Document));
   }
 
-  async deleteInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
-  ): Promise<boolean> {
+  /**
+   * 幂等 seed:若 default 行不存在,写入一行 (agents=supported, mode=official)。
+   * 供 list 及所有写入路径(create/update/toggle/delete + extraction/*)共用。
+   * 与 SQLite ensureDefaultSeeded 语义等价。
+   */
+  async ensureDefaultSeeded(supported: SupportedAgent[]): Promise<void> {
+    if (!supported || supported.length === 0) return;
+    const hasDefault = await this.col("meta_instance_upstream_config").findOne(
+      { group_type: "default" } as Document,
+      { projection: { _id: 1 } },
+    );
+    if (hasDefault) return;
+    // 用 UNIQUE partial index (group_type='default') 兜并发:失败即别人刚 seed 完。
+    try {
+      const id = await this.nextInstanceUpstreamConfigId();
+      const now = nowIso();
+      const agentsList = Array.from(new Set(supported.map((a) => a.agent_source))).sort();
+      await this.col("meta_instance_upstream_config").insertOne({
+        id,
+        group_id: this.newGroupId("default"),
+        group_type: "default",
+        name: DEFAULT_GROUP_NAME,
+        agents: agentsList,
+        enabled: true,
+        mode: "official",
+        base_url: "",
+        api_key: "",
+        model_id: "",
+        description: "",
+        version: 1,
+        supported_agents_snapshot: agentsList,   // seed 时 snapshot = agents
+        created_at: now,
+        updated_at: now,
+      } as Document);
+    } catch (err) {
+      const code = (err as { code?: number })?.code;
+      if (code !== 11000) throw err;
+      // else: 并发 seed → 忽略
+    }
+  }
+
+  async createInstanceUpstreamGroup(
+    input: CreateInstanceUpstreamGroupInput,
+  ): Promise<InstanceUpstreamConfigEntity> {
+    const agents = input.agents ?? [];
+
+    // 1. 单例约束
+    if (input.group_type === "default" || input.group_type === "extraction") {
+      const existing = await this.col("meta_instance_upstream_config").findOne(
+        { group_type: input.group_type } as Document,
+        { projection: { _id: 1 } },
+      );
+      if (existing) {
+        throw new InstanceUpstreamWriteConflictError(
+          input.group_type === "default" ? "default_already_exists" : "extraction_already_exists",
+          `${input.group_type} group already exists in this instance`,
+        );
+      }
+    }
+
+    // 2. agents 全域唯一
+    if (input.group_type !== "extraction") {
+      await this.assertAgentsNotOverlapMongo(agents, null);
+    }
+
+    // 2b. 组名全域唯一(仅 custom;default/extraction 走 seed 固定名不触发)
+    //     历史脏数据不清理,只拦新写入 —— 参考设计文档 §5.3(v2.8)。
+    if (input.group_type === "custom") {
+      await this.assertGroupNameUniqueMongo(input.name ?? "", null);
+    }
+
+    const now = nowIso();
+    const id = await this.nextInstanceUpstreamConfigId();
+    const groupId = this.newGroupId(input.group_type);
+    try {
+      await this.col("meta_instance_upstream_config").insertOne({
+        id,
+        group_id: groupId,
+        group_type: input.group_type,
+        name: input.name ?? "",
+        agents,
+        enabled: input.enabled === false ? false : true,
+        mode: input.mode,
+        base_url: input.base_url ?? "",
+        api_key: input.api_key ?? "",
+        model_id: input.model_id ?? "",
+        description: input.description ?? "",
+        version: 1,
+        supported_agents_snapshot: [],   // custom/extraction 恒 [];default 由 seed 路径写入
+        created_at: now,
+        updated_at: now,
+      } as Document);
+    } catch (err) {
+      const code = (err as { code?: number })?.code;
+      const keyPattern = (err as { keyPattern?: Record<string, unknown> })?.keyPattern;
+      if (code === 11000 && keyPattern && "group_type" in keyPattern) {
+        // 并发 create default/extraction
+        throw new InstanceUpstreamWriteConflictError(
+          input.group_type === "default" ? "default_already_exists" : "extraction_already_exists",
+          `${input.group_type} group already exists (concurrent write)`,
+        );
+      }
+      throw err;
+    }
+    return (await this.getInstanceUpstreamGroup(groupId))!;
+  }
+
+  async updateInstanceUpstreamGroup(
+    input: UpdateInstanceUpstreamGroupInput,
+  ): Promise<InstanceUpstreamConfigEntity> {
+    // 3 次乐观锁重试
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.getInstanceUpstreamGroup(input.group_id);
+      if (!current) {
+        throw new InstanceUpstreamWriteConflictError(
+          "group_not_found",
+          `group not found: ${input.group_id}`,
+        );
+      }
+      if (current.group_type !== input.expected_group_type) {
+        throw new InstanceUpstreamWriteConflictError(
+          "group_type_mismatch",
+          `expected ${input.expected_group_type}, actual ${current.group_type}`,
+          { expected: input.expected_group_type, actual: current.group_type },
+        );
+      }
+      const effectiveExpectedVersion = input.expected_version ?? current.version;
+      if (input.expected_version !== undefined && input.expected_version !== current.version) {
+        throw new InstanceUpstreamWriteConflictError(
+          "version_mismatch",
+          `version mismatch: expected ${input.expected_version}, actual ${current.version}`,
+          { expected: input.expected_version, actual: current.version },
+        );
+      }
+      const nextAgents = input.agents ?? current.agents;
+      if (input.agents !== undefined && current.group_type !== "extraction") {
+        await this.assertAgentsNotOverlapMongo(nextAgents, current.group_id);
+      }
+
+      // name 变更 → 校验全域唯一(仅 custom;default/extraction 由 service 层拦掉,这里兜底)
+      //
+      // 历史脏数据豁免:trim 后 name 与 current.name 相同(前端回传原值)不触发查重,
+      // 避免"以前重名的就算了不管"约定被 update 路径打破。参考 §5.3(v2.8)。
+      if (
+        input.name !== undefined
+        && current.group_type === "custom"
+        && (input.name ?? "").trim() !== (current.name ?? "").trim()
+      ) {
+        await this.assertGroupNameUniqueMongo(input.name, current.group_id);
+      }
+
+      const now = nowIso();
+      const setDoc: Document = { updated_at: now };
+      if (input.name !== undefined) setDoc.name = input.name;
+      if (input.agents !== undefined) setDoc.agents = input.agents;
+      if (input.enabled !== undefined) setDoc.enabled = input.enabled;
+      if (input.mode !== undefined) setDoc.mode = input.mode;
+      if (input.base_url !== undefined) setDoc.base_url = input.base_url;
+      if (input.api_key !== undefined) setDoc.api_key = input.api_key;
+      if (input.model_id !== undefined) setDoc.model_id = input.model_id;
+      if (input.description !== undefined) setDoc.description = input.description;
+
+      const result = await this.col("meta_instance_upstream_config").updateOne(
+        { group_id: input.group_id, version: effectiveExpectedVersion } as Document,
+        { $set: setDoc, $inc: { version: 1 } },
+      );
+      if ((result.matchedCount ?? 0) === 1) {
+        return (await this.getInstanceUpstreamGroup(input.group_id))!;
+      }
+      // 匹配失败:并发写入抢先了。expected_version 显式传入 → 立即冲突,否则重试。
+      if (input.expected_version !== undefined) {
+        throw new InstanceUpstreamWriteConflictError(
+          "version_mismatch",
+          `concurrent write during update`,
+          { attempt },
+        );
+      }
+    }
+    throw new InstanceUpstreamWriteConflictError(
+      "version_mismatch",
+      "concurrent write exceeded retry limit",
+    );
+  }
+
+  async toggleInstanceUpstreamGroup(
+    input: ToggleInstanceUpstreamGroupInput,
+  ): Promise<InstanceUpstreamConfigEntity> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.getInstanceUpstreamGroup(input.group_id);
+      if (!current) {
+        throw new InstanceUpstreamWriteConflictError(
+          "group_not_found",
+          `group not found: ${input.group_id}`,
+        );
+      }
+      const effectiveExpectedVersion = input.expected_version ?? current.version;
+      if (input.expected_version !== undefined && input.expected_version !== current.version) {
+        throw new InstanceUpstreamWriteConflictError(
+          "version_mismatch",
+          `version mismatch: expected ${input.expected_version}, actual ${current.version}`,
+          { expected: input.expected_version, actual: current.version },
+        );
+      }
+      const now = nowIso();
+      const result = await this.col("meta_instance_upstream_config").updateOne(
+        { group_id: input.group_id, version: effectiveExpectedVersion } as Document,
+        { $set: { enabled: input.enabled, updated_at: now }, $inc: { version: 1 } },
+      );
+      if ((result.matchedCount ?? 0) === 1) {
+        return (await this.getInstanceUpstreamGroup(input.group_id))!;
+      }
+      if (input.expected_version !== undefined) {
+        throw new InstanceUpstreamWriteConflictError(
+          "version_mismatch",
+          `concurrent write during toggle`,
+        );
+      }
+    }
+    throw new InstanceUpstreamWriteConflictError(
+      "version_mismatch",
+      "concurrent write exceeded retry limit",
+    );
+  }
+
+  async deleteInstanceUpstreamGroup(input: DeleteInstanceUpstreamGroupInput): Promise<boolean> {
     const result = await this.col("meta_instance_upstream_config").deleteOne(
-      { agent_source: agentSource, type } as Document,
+      { group_id: input.group_id } as Document,
     );
     return (result.deletedCount ?? 0) > 0;
+  }
+
+  private async assertAgentsNotOverlapMongo(
+    candidate: string[],
+    selfGroupId: string | null,
+  ): Promise<void> {
+    if (candidate.length === 0) return;
+    const candidateSet = new Set(candidate);
+    const rows = await this.col("meta_instance_upstream_config")
+      .find({ group_type: { $in: ["default", "custom"] } } as Document, {
+        projection: { _id: 0, group_id: 1, group_type: 1, name: 1, agents: 1 },
+      })
+      .toArray();
+    const conflicts: Array<{ group_id: string; group_type: string; name: string; overlapping_agents: string[] }> = [];
+    for (const r of rows) {
+      const doc = r as Document;
+      const gid = String(doc.group_id);
+      if (gid === selfGroupId) continue;
+      const existing = Array.isArray(doc.agents) ? (doc.agents as string[]) : [];
+      const overlap = existing.filter((a) => candidateSet.has(a));
+      if (overlap.length > 0) {
+        conflicts.push({
+          group_id: gid,
+          group_type: String(doc.group_type),
+          name: String(doc.name ?? ""),
+          overlapping_agents: overlap,
+        });
+      }
+    }
+    if (conflicts.length > 0) {
+      throw new InstanceUpstreamWriteConflictError(
+        "agents_overlap",
+        `agents overlap with ${conflicts.length} existing group(s)`,
+        { conflict_groups: conflicts },
+      );
+    }
+  }
+
+  /**
+   * 校验组名(trim 后)与其他任意组(含 default / extraction 保留名)不冲突。
+   * SQLite 对称版:大小写敏感、空白 trim 后精确匹配。history 脏数据不清理,只拦新写入。
+   * 参考设计文档 §5.3(v2.8)。
+   */
+  private async assertGroupNameUniqueMongo(
+    candidateName: string,
+    selfGroupId: string | null,
+  ): Promise<void> {
+    const candidate = (candidateName ?? "").trim();
+    if (!candidate) return;
+    const rows = await this.col("meta_instance_upstream_config")
+      .find({} as Document, {
+        projection: { _id: 0, group_id: 1, group_type: 1, name: 1 },
+      })
+      .toArray();
+    for (const r of rows) {
+      const doc = r as Document;
+      const gid = String(doc.group_id);
+      if (gid === selfGroupId) continue;
+      if (String(doc.name ?? "").trim() === candidate) {
+        throw new InstanceUpstreamWriteConflictError(
+          "name_duplicate",
+          `group name "${candidate}" is already used by another group in this instance`,
+          {
+            conflict_group: {
+              group_id: gid,
+              group_type: String(doc.group_type),
+              name: String(doc.name ?? ""),
+            },
+          },
+        );
+      }
+    }
+  }
+
+  /**
+   * 清理 v1 遗留:文档 + v1 UNIQUE(agent_source,type) 索引。
+   *
+   * v1 时期建的 `agent_source_1_type_1` 索引不删掉的话,v2 写入(缺 agent_source/type)会被
+   * MongoDB 当作 `{agent_source: null, type: null}` → 第二次 v2 insert 撞 E11000。
+   *
+   * 三步幂等,进程内只跑一次(用 legacyV1Swept 记账):
+   *   1. dropIndex('agent_source_1_type_1') —— 不存在时 IndexNotFound(code 27) 静默吞
+   *   2. deleteMany({group_id: {\$exists: false}}) —— v1 文档没 group_id
+   *   3. 后续调 ensureIndex 会补回 v2 需要的 (group_id / group_type) 索引
+   *
+   * v1→v2 是历史迁移动作,数据面切到 v2 之后就不会再有 v1 写入,进程启动扫一次
+   * 足够。原来每次 list 都跑要花 2 次 Mongo 网络往返 (~150ms),稳态 list 延迟
+   * ~400ms 里这块是主贡献者。进程重启会再跑一次兜底,不留窗口。
+   */
+  private async _sweepLegacyV1Docs(): Promise<void> {
+    if (this.legacyV1Swept) return; // 本进程已扫过,直接返回
+
+    // 1. 删 v1 UNIQUE 索引(如果还在)
+    try {
+      await this.col("meta_instance_upstream_config").dropIndex("agent_source_1_type_1");
+      console.warn("[metadata-mongo] dropped v1-legacy index agent_source_1_type_1");
+    } catch (err) {
+      const code = (err as { code?: number })?.code;
+      if (code !== 27 && code !== 26) {
+        // 27 = IndexNotFound, 26 = NamespaceNotFound(collection 都还没建)
+        console.warn(
+          `[metadata-mongo] dropIndex agent_source_1_type_1 unexpected code=${code}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // 2. 删 v1 遗留文档
+    try {
+      const result = await this.col("meta_instance_upstream_config").deleteMany(
+        { group_id: { $exists: false } } as Document,
+      );
+      const deleted = result.deletedCount ?? 0;
+      if (deleted > 0) {
+        console.warn(
+          `[metadata-mongo] swept ${deleted} v1-legacy instance-upstream docs (no group_id field)`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[metadata-mongo] _sweepLegacyV1Docs deleteMany failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // 走完这一次(dropIndex 成功 or IndexNotFound 都算完成) → 记账,本进程后续 list 直接跳过。
+    // deleteMany 失败也 mark:反复重试对 500 类错误无意义,重启进程更合适。
+    this.legacyV1Swept = true;
+  }
+
+  /**
+   * 方案 E:default.agents 与 supported-agents 全集 diff-append 同步(Mongo 版)。
+   * 语义与 SqliteMetadataStore._syncDefaultAgentsWithSnapshot 完全一致。
+   * 并发:updateOne WHERE version=<读到的>,失败静默(下次 list 会重试)。
+   */
+  private async _syncDefaultAgentsWithSnapshotMongo(supported: SupportedAgent[]): Promise<void> {
+    const supportedNames = Array.from(new Set(supported.map((a) => a.agent_source))).sort();
+    const supportedSet = new Set(supportedNames);
+
+    const doc = await this.col("meta_instance_upstream_config").findOne(
+      { group_type: "default" } as Document,
+      { projection: { _id: 0, id: 1, group_id: 1, agents: 1, supported_agents_snapshot: 1, version: 1 } },
+    );
+    if (!doc) return;
+    const d = doc as Document;
+    const currentAgents = Array.isArray(d.agents) ? (d.agents as string[]) : [];
+    const currentSnapshot = Array.isArray(d.supported_agents_snapshot)
+      ? (d.supported_agents_snapshot as string[]) : [];
+    const version = Number(d.version ?? 1);
+    const now = nowIso();
+
+    // 场景 B: snapshot 空(存量实例迁移)→ 只补 snapshot,不改 agents
+    if (currentSnapshot.length === 0) {
+      await this.col("meta_instance_upstream_config").updateOne(
+        { group_type: "default", version } as Document,
+        { $set: { supported_agents_snapshot: supportedNames, updated_at: now } },
+      );
+      return;
+    }
+
+    // 场景 C/D/E: diff 计算
+    const newAgents = supportedNames.filter((a) => !currentSnapshot.includes(a));
+    const snapshotShrunk = currentSnapshot.some((a) => !supportedSet.has(a));
+    if (newAgents.length === 0 && !snapshotShrunk) return;
+
+    // 计算新 agents,排除已被 custom 组占用的
+    const nextAgents = [...currentAgents];
+    if (newAgents.length > 0) {
+      const customDocs = await this.col("meta_instance_upstream_config")
+        .find({ group_type: "custom" } as Document, { projection: { _id: 0, agents: 1 } })
+        .toArray();
+      const customUsed = new Set<string>();
+      for (const c of customDocs) {
+        const arr = Array.isArray((c as Document).agents) ? ((c as Document).agents as string[]) : [];
+        for (const a of arr) customUsed.add(a);
+      }
+      for (const a of newAgents) {
+        if (!customUsed.has(a) && !nextAgents.includes(a)) nextAgents.push(a);
+      }
+    }
+
+    await this.col("meta_instance_upstream_config").updateOne(
+      { group_type: "default", version } as Document,
+      {
+        $set: {
+          agents: nextAgents,
+          supported_agents_snapshot: supportedNames,
+          updated_at: now,
+        },
+        $inc: { version: 1 },
+      },
+    );
+  }
+
+  private newGroupId(gt: GroupType): string {
+    const prefix = gt === "default" ? "dflt" : gt === "extraction" ? "ext" : "grp";
+    return generateId(prefix);
+  }
+
+  private mapMongoGroup(doc: Document): InstanceUpstreamConfigEntity {
+    return {
+      id: Number(doc.id),
+      group_id: String(doc.group_id),
+      group_type: String(doc.group_type) as GroupType,
+      name: String(doc.name ?? ""),
+      agents: Array.isArray(doc.agents) ? (doc.agents as string[]) : [],
+      enabled: Boolean(doc.enabled),
+      mode: String(doc.mode) as UpstreamMode,
+      base_url: String(doc.base_url ?? ""),
+      api_key: String(doc.api_key ?? ""),
+      model_id: String(doc.model_id ?? ""),
+      description: String(doc.description ?? ""),
+      version: Number(doc.version ?? 1),
+      supported_agents_snapshot: Array.isArray(doc.supported_agents_snapshot)
+        ? (doc.supported_agents_snapshot as string[]) : [],
+      created_at: String(doc.created_at),
+      updated_at: String(doc.updated_at),
+    };
   }
 }

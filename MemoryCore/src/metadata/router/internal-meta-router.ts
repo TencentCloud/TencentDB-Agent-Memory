@@ -15,7 +15,7 @@ import type { Logger } from "../../core/types.js";
 import { MetadataService, MetadataError } from "../service/metadata-service.js";
 import { extractInstanceId, normalizeInstanceIdForRoute } from "./instance.js";
 import { resolvePagination } from "./pagination.js";
-import { internalListUsersByInstanceSchema, initAdminSchema, instanceUpstreamListSchema } from "./v3-meta-schemas.js";
+import { internalListUsersByInstanceSchema, initAdminSchema, instanceUpstreamInternalListSchema } from "./v3-meta-schemas.js";
 import {
   createMetaApiTraceContext,
   logMetaApiEntry,
@@ -35,6 +35,15 @@ const TAG = "[META-V3-INTERNAL]";
 export interface InternalMetaRouterDeps {
   getMetadataService: (instanceId: string) => MetadataService | undefined | Promise<MetadataService | undefined>;
   logger: Logger;
+  /**
+   * v2 InstanceUpstream:Proxy 拉数据时会触发 seed default 组,seed 逻辑依赖 supported-agents 数据源。
+   * 与 v3-meta-router 的 deps.getSupportedAgents 是同一份数据(Core 启动时从 gateway yaml 读)。
+   */
+  getSupportedAgents: () => import("../types.js").SupportedAgent[];
+}
+
+interface InternalRuntimeDeps {
+  getSupportedAgents: () => import("../types.js").SupportedAgent[];
 }
 
 type InternalHandler = (
@@ -42,16 +51,22 @@ type InternalHandler = (
   svc: MetadataService,
   instanceId: string,
   requestId: string,
+  runtime: InternalRuntimeDeps,
 ) => Promise<ApiResponseEnvelope>;
 
 function bind<S extends ZodType>(
   schema: S,
-  fn: (data: S["_output"], svc: MetadataService, instanceId: string) => Promise<unknown>,
+  fn: (
+    data: S["_output"],
+    svc: MetadataService,
+    instanceId: string,
+    runtime: InternalRuntimeDeps,
+  ) => Promise<unknown>,
 ): InternalHandler {
-  return async (body, svc, instanceId, requestId) => {
+  return async (body, svc, instanceId, requestId, runtime) => {
     const parsed = schema.safeParse(body);
     if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-    const data = await fn(parsed.data as S["_output"], svc, instanceId);
+    const data = await fn(parsed.data as S["_output"], svc, instanceId, runtime);
     return successEnvelope(data, requestId);
   };
 }
@@ -69,9 +84,11 @@ const routeTable: Record<string, InternalHandler> = {
       });
     },
   ),
+  // §6.D:Proxy 拉全量配置(明文 api_key),同时触发 seed default 组。
   [`${V3_INTERNAL_PREFIX}/instance-upstream/list`]: bind(
-    instanceUpstreamListSchema,
-    async (d, svc) => svc.listInstanceUpstreamConfigsInternal(d),
+    instanceUpstreamInternalListSchema,
+    async (_d, svc, _instanceId, runtime) =>
+      svc.listInstanceUpstreamGroupsInternal(runtime.getSupportedAgents()),
   ),
 };
 
@@ -166,7 +183,8 @@ export async function handleInternalMetaRoute(
       async () => {
         logMetaApiEntry(traceCtx, body);
         deps.logger.debug?.(`${TAG} ${pathname} instance=${instanceId}`);
-        const envelope = await handler(body, svc, instanceId, requestId);
+        const runtime: InternalRuntimeDeps = { getSupportedAgents: deps.getSupportedAgents };
+        const envelope = await handler(body, svc, instanceId, requestId, runtime);
         const httpStatus = envelope.code === 0 ? 200 : envelope.code >= 400 && envelope.code < 600 ? envelope.code : 200;
         logMetaApiResponse(traceCtx, envelope, httpStatus);
         sendJson(res, httpStatus, envelope);

@@ -6,7 +6,8 @@ import { metaPost, metaListAll, getCurrentUser, request, ApiError } from './base
 import type { MetaEnvelope } from './types';
 
 export type TaskStatus = 'running' | 'completed';
-export type TaskSourceType = 'manual' | 'tapd' | 'github' | 'other';
+/** 来源**大类**，与后端对齐；具体来源读 metadata_json.external.provider。 */
+export type TaskSourceType = 'manual' | 'external' | 'other';
 
 export interface BackendTask {
   task_id: string;

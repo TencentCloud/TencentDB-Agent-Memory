@@ -136,7 +136,12 @@ export {
 } from "./prompts/skill-listing-prompt.js";
 
 // 抽取 prompt
+//   - SKILL_REVIEW_PROMPT       : 实时抽取默认使用 (v2 宽松, 2026-08-10 引入)
+//   - SKILL_REVIEW_PROMPT_STRICT: 冷启动/批量导入使用 (v1 严格 gate 恢复)
+//     由 SkillExtractor 构造器 strictSystemPrompt 注入, 仅当 extract() 的
+//     input.mode==='strict' 时启用; 完全向后兼容 (老调用不受影响)。
 export { SKILL_REVIEW_PROMPT } from "./prompts/skill-review-prompt.js";
+export { SKILL_REVIEW_PROMPT_STRICT } from "./prompts/skill-review-prompt-strict.js";
 
 // 抽取链路里 worker / dedupe 共用的 ExtractorLLMRunner（与 v2 ExtractorRunner 形状兼容）。
 export type { ExtractorLLMRunner } from "./types.js";

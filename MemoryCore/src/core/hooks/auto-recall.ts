@@ -492,6 +492,17 @@ async function searchMemories(
   const embeddingCallOpts: EmbeddingCallOptions = { timeoutMs: recallEmbeddingTimeoutMs };
 
   try {
+    if (vectorStore?.getCapabilities?.().nativeBm25Search) {
+      const tFts = performance.now();
+      const results = await vectorStore.searchL1Fts(cleanText, maxResults);
+      const selected = results.filter((r) => r.score > 0 && r.score >= threshold).slice(0, maxResults);
+      return {
+        lines: selected.map((r) => formatMemoryLine(vectorResultToFormatable(r))),
+        scores: selected.map((r) => r.score),
+        timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: results.length, embeddingHits: 0 },
+      };
+    }
+
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
       const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
@@ -521,6 +532,7 @@ async function searchMemories(
     return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
+    if (vectorStore?.getCapabilities?.().nativeBm25Search) throw err;
     return emptyResult;
   }
 }
