@@ -26,6 +26,7 @@ import { createToolsRoutes } from "./routes/tools.js";
 import { createHealthRoutes } from "./routes/health.js";
 import { createLlmBindingRoutes } from "./routes/llm-binding.js";
 import { createAutoSyncRoutes } from "./routes/auto-sync.js";
+import { createGitCredentialRoutes } from "./routes/git-credential.js";
 import { createSourceCredentialRoutes } from "./routes/source-credential.js";
 import { createSourceProviderRoutes } from "./routes/source-provider.js";
 import { createWikiSourceRoutes } from "./wiki-source/routes.js";
@@ -78,10 +79,14 @@ export function createApp() {
     publicBaseUrl: config.publicBaseUrl,
   }));
   api.route("/code-graph", createCodeGraphRoutes({
+    authService: knowledgeModule.codeGraphAuth,
+    serviceKey: config.auth.serviceKey,
     cgService: knowledgeModule.cgService,
     instancePool: knowledgeModule.instancePool,
     publicBaseUrl: config.publicBaseUrl,
   }));
+
+  api.route("/source-credential", createGitCredentialRoutes(knowledgeModule.gitCredentialStore, config.auth.serviceKey));
 
   // tools/list + tools/call — Agent self-discovery HTTP endpoints
   api.route("/tools", createToolsRoutes({
@@ -106,6 +111,8 @@ export function createApp() {
   api.route("/source-credential", createSourceCredentialRoutes({
     credentialStore: knowledgeModule.credentialStore,
     store: knowledgeModule.store,
+    codeGraphAuth: knowledgeModule.codeGraphAuth,
+    serviceKey: config.auth.serviceKey,
   }));
   api.route("/source-provider", createSourceProviderRoutes({
     registry: knowledgeModule.codeSourceRegistry,

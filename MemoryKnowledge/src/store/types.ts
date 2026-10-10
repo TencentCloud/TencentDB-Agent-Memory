@@ -33,6 +33,7 @@ export interface CodeGraphRow {
   team_id: string;
   repo_name: string;
   repo_url: string;
+  credential_id: string | null;
   branch: string;
   commit_hash: string | null;
   owner_user_id: string | null;
@@ -57,6 +58,7 @@ export interface CreateCodeGraphInput {
   service_id: string;
   team_id: string;
   repo_url: string;
+  credential_id?: string;
   branch: string;
   repo_name?: string;
   owner_user_id?: string;
@@ -80,6 +82,7 @@ export interface CodeGraphStatusPatch {
 }
 
 export interface CodeGraphMetaPatch {
+  credential_id?: string | null;
   repo_name?: string;
   summary?: string | null;
 }

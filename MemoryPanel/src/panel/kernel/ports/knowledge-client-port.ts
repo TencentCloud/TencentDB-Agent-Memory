@@ -129,8 +129,9 @@ export interface CodeGraphDetail {
   team_id: string;
   repo_name: string;
   repo_url: string;
+  credential_id?: string | null;
   branch: string;
-  /** 外部来源（'gongfeng' 等）；null = 公开仓。 */
+  /** 外部来源（'gongfeng' 等）；null = 未指定 provider，仍可使用 Git 凭据。 */
   source_type: string | null;
   commit_hash: string | null;
   service_url: string | null;
@@ -158,6 +159,45 @@ export interface CodeGraphSyncResult {
 export interface CodeGraphToolResult {
   text: string;
   isError: boolean;
+}
+
+export type GitSecret =
+  | { kind: 'https'; username: string; token: string }
+  | { kind: 'ssh'; private_key: string };
+
+export interface GitHostKeyInfo {
+  server_url: string;
+  trusted: boolean;
+  known_hosts: string;
+  previous_known_hosts: string | null;
+  fingerprints: string[];
+}
+
+export interface GitCredentialInfo {
+  credential_id: string;
+  name: string;
+  hostname: string | null;
+  kind: 'https' | 'ssh';
+  username: string | null;
+  updated_at: string;
+}
+
+export interface GitCredentialInput {
+  credential_id?: string;
+  name: string;
+  hostname?: string;
+  secret: GitSecret;
+}
+
+export interface GitBindingInput {
+  credential_id?: string;
+  share_with_team?: boolean;
+}
+
+export interface CodeGraphCreateOptions extends GitBindingInput {
+  providerId?: string;
+  secret?: string;
+  username?: string;
 }
 
 // ── 外部来源（代码平台，如工蜂）──
@@ -231,6 +271,13 @@ export interface SourceCredentialStatus {
 // ── Port ──
 
 export interface KnowledgeClientPort {
+  gitCredentialList(teamId: string, userId: string): Promise<{ items: GitCredentialInfo[] }>;
+  gitCredentialPut(teamId: string, userId: string, input: GitCredentialInput): Promise<GitCredentialInfo>;
+  gitCredentialDelete(teamId: string, userId: string, id: string): Promise<{ deleted: boolean }>;
+  gitCredentialTest(teamId: string, userId: string, id: string, repoUrl: string): Promise<{ accessible: boolean }>;
+  gitCredentialHostKey(teamId: string, userId: string, id: string, repoUrl: string, refresh: boolean): Promise<GitHostKeyInfo>;
+  gitCredentialTrustHost(teamId: string, userId: string, id: string, repoUrl: string, knownHosts: string, previous: string | null): Promise<{ trusted: boolean }>;
+  codeGraphSetCredential(codeGraphId: string, userId: string, credentialId: string | null, shareWithTeam: boolean): Promise<CodeGraphDetail>;
   // Wiki — 资产层（create/list 带 IdFields；get/ingest/delete 仅资产 id 寻址）
   /**
    * 创建 wiki。
@@ -278,7 +325,7 @@ export interface KnowledgeClientPort {
     branch?: string,
     userId?: string,
     repoName?: string,
-    opts?: { providerId?: string; secret?: string; username?: string },
+    opts?: CodeGraphCreateOptions,
   ): Promise<CodeGraphDetail>;
   codeGraphList(teamId: string, opts?: { status?: string; limit?: number; offset?: number }): Promise<CodeGraphListResult>;
   codeGraphGet(codeGraphId: string): Promise<CodeGraphDetail>;

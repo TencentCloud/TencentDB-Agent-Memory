@@ -4,11 +4,16 @@
  * 用户只填一个"访问令牌"字段；basic-auth 用户名由各平台协议规定，
  * 由 provider 通过 `cloneUsername` 声明（具体取值不在本文档固化）。
  *
- * URL 形态：`https://<cloneUsername>:<secret>@host/repo.git`
+ * 运行时将占位用户名和令牌直接交给隔离的 Git 传输。
  */
 
 import { injectBasicAuth } from "../clone-url.js";
 import type { AuthMethod } from "./types.js";
+
+function buildCredential(form: Record<string, string | undefined>): { secret: string } {
+  if (typeof form.secret !== "string" || !form.secret) throw new Error("token is required");
+  return { secret: form.secret };
+}
 
 export const bearerAuthMethod: AuthMethod = {
   kind: "bearer",
@@ -17,9 +22,14 @@ export const bearerAuthMethod: AuthMethod = {
     { name: "secret", secret: true, required: true },
   ],
 
-  buildCredential(form) {
-    if (!form.secret) throw new Error("token is required");
-    return { secret: form.secret };
+  buildCredential,
+
+  toGitAuth(cred, cloneUsername) {
+    if (typeof cloneUsername !== "string" || !cloneUsername) {
+      throw new Error("bearer auth requires provider.cloneUsername");
+    }
+    const credential = buildCredential({ secret: cred.secret });
+    return { kind: "https", username: cloneUsername, token: credential.secret };
   },
 
   buildCloneUrl(repoUrl, cred, cloneUsername) {

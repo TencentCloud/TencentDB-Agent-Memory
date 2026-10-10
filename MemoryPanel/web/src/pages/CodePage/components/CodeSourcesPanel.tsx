@@ -4,15 +4,16 @@
  * Markdown 渲染统一走共享 AssetMarkdown。
  */
 import { useTranslation } from 'react-i18next';
-import { Alert, Button, Card, Form, Input, Justify, MetricsBoard, Modal, SearchBox, Segment, Select, StatusTip, Table, Text } from 'tea-component';
+import { Alert, Button, Card, Checkbox, Form, Input, Justify, MetricsBoard, Modal, SearchBox, Segment, Select, StatusTip, Table, Text } from 'tea-component';
 import { ChevronRightIcon, CodeIcon, DeleteIcon, RefreshIcon, UsergroupIcon, ViewListIcon, ViewModuleIcon } from 'tea-icons-react';
 import { knowledgeApi } from '@/lib/api/knowledge-api';
 import { tea } from '@/lib/tea-bridge';
 import AllocateAssetDialog from '@/components/asset/AllocateAssetDialog';
 import { AssetPageHeader } from '@/components/asset/AssetPageHeader';
-import { formatRepoName, formatShortTime, isValidGitHttpUrl, type ScopeTab, type StatusFilter, type ViewMode } from '../constants/code-constants';
+import { formatRepoName, formatShortTime, isValidGitUrl, isSshGitUrl, type ScopeTab, type StatusFilter, type ViewMode } from '../constants/code-constants';
 import { CodeOwnerLabel, statusLabel } from './code-ui';
 import { useCodeSources } from '../hooks/useCodeSources';
+import { GitCredentialManager } from './GitCredentialManager';
 import { CodeDetailView } from './code-detail-view';
 import '@/components/asset/asset-card.css';
 import '../styles/code-sources-panel.css';
@@ -53,9 +54,9 @@ export default function CodeSourcesPanel() {
     formSourceType,
     setFormSourceType,
     sourceProviders,
-    formCredential,
+    formProviderCredential,
     setCredentialField,
-    setFormCredential,
+    setFormProviderCredential,
     openRegister,
     // allocate
     allocateTarget,
@@ -125,6 +126,7 @@ export default function CodeSourcesPanel() {
               >
                 {t('code.allocateToAgent')}
               </Button>
+              <Button onClick={() => code.setShowCredentials(true)}>{t('gitCredential.manage')}</Button>
               {/* 注册（新增团队池资产）与 memory/skill 对齐，放右上角 header */}
               <Button type="primary" onClick={openRegister} data-guide="create-code">
                 + {t('code.register')}
@@ -442,10 +444,10 @@ export default function CodeSourcesPanel() {
       {showRegister &&
         (() => {
           const trimmedRepo = formRepo.trim();
-          const isSsh = trimmedRepo.startsWith('git@');
-          const validUrl = isValidGitHttpUrl(trimmedRepo);
-          // 已输入内容、非 SSH、但又不是合法 http(s) 地址 → 提示格式错误。
-          const showUrlError = !!trimmedRepo && !isSsh && !validUrl;
+          const isSsh = isSshGitUrl(trimmedRepo);
+          const validUrl = isValidGitUrl(trimmedRepo);
+          // 已输入但不是合法 HTTPS/SSH 地址时提示格式错误。
+          const showUrlError = !!trimmedRepo && !validUrl;
           return (
             <Modal
               visible
@@ -456,6 +458,25 @@ export default function CodeSourcesPanel() {
             >
               <Modal.Body>
                 <Form>
+                  <Form.Item label={t('gitCredential.authMode')}>
+                    <Select size="full" value={code.formAuth} onChange={(value) => {
+                      code.setFormAuth(value as 'none' | 'credential' | 'provider');
+                      code.setFormCredential(''); code.setShareWithTeam(false);
+                      setFormSourceType(''); setFormProviderCredential({});
+                    }}
+                      options={[
+                        { value: 'none', text: t('gitCredential.noAuth') },
+                        { value: 'credential', text: t('gitCredential.useSaved') },
+                        ...(sourceProviders.length > 0 ? [{ value: 'provider', text: t('gitCredential.useProvider') }] : []),
+                      ]} />
+                  </Form.Item>
+                  {code.formAuth === 'credential' && <Form.Item label={t('gitCredential.select')}>
+                    <Select size="full" value={code.formCredential} onChange={(value) => { code.setFormCredential(value); code.setShareWithTeam(false); }}
+                      placeholder={t('gitCredential.choose')}
+                      options={code.credentials.map((item) => ({ value: item.credential_id, text: `${item.name} · ${item.kind === 'ssh' ? t('gitCredential.anySshServer') : item.hostname}` }))} />
+                    <Button type="link" onClick={() => code.setShowCredentials(true)}>{t('gitCredential.manage')}</Button>
+                    {code.credentialError && <Alert type="error">{code.credentialError}</Alert>}
+                  </Form.Item>}
                   <Form.Item label={t('code.register.gitUrl')} required extra={t('code.register.gitUrlExtra')}>
                     <Input
                       size="full"
@@ -464,7 +485,7 @@ export default function CodeSourcesPanel() {
                       placeholder="https://gitlab.example.com/namespace/repo.git"
                     />
                   </Form.Item>
-                  {isSsh && (
+                  {isSsh && !code.formCredential && (
                     <Form.Item>
                       <Alert type="warning">{t('code.register.sshWarning')}</Alert>
                     </Form.Item>
@@ -474,6 +495,10 @@ export default function CodeSourcesPanel() {
                       <Alert type="error">{t('code.register.invalidUrl')}</Alert>
                     </Form.Item>
                   )}
+                  {code.credentialMismatch && <Form.Item><Alert type="error">{t('gitCredential.serverMismatch')}</Alert></Form.Item>}
+                  {code.formCredential && <Form.Item>
+                    <Checkbox value={code.shareWithTeam} onChange={code.setShareWithTeam}>{t('gitCredential.shareConsent')}</Checkbox>
+                  </Form.Item>}
                   <Form.Item label={t('code.register.branch')} required>
                     <Input
                       size="full"
@@ -483,22 +508,23 @@ export default function CodeSourcesPanel() {
                     />
                   </Form.Item>
 
-                  {/* 外部来源：选了才需要令牌；来源清单来自 KS，为空则不显示该行 */}
-                  {sourceProviders.length > 0 && (
+                  {/* 外部来源认证与已保存凭据互斥；来源清单来自 KS。 */}
+                  {code.formAuth === 'provider' && (
                     <Form.Item
                       label={t('code.register.source')}
                       extra={t('code.register.sourceExtra')}
+                      required
                     >
                       <Select
                         appearance="button"
                         size="full"
                         value={formSourceType}
+                        placeholder={t('code.register.sourceRequired')}
                         onChange={(value) => {
                           setFormSourceType(value);
-                          setFormCredential({}); // 切换来源立即丢弃已填凭据
+                          setFormProviderCredential({}); // 切换来源立即丢弃已填凭据
                         }}
                         options={[
-                          { value: '', text: t('code.register.sourcePublic') },
                           ...sourceProviders.map((p) => {
                             // 展示名取 i18n（code.source.<id>）；未收录的来源回退 id。
                             const i18nKey = `code.source.${p.id}`;
@@ -515,6 +541,7 @@ export default function CodeSourcesPanel() {
 
                   {(() => {
                     // 按当前 provider 的 form_fields 动态渲染凭据表单
+                    if (code.formAuth !== 'provider') return null;
                     const provider = sourceProviders.find((p) => p.id === formSourceType);
                     if (!provider) return null;
                     return provider.form_fields.map((field, idx) => {
@@ -546,7 +573,7 @@ export default function CodeSourcesPanel() {
                           <Input
                             size="full"
                             type={field.secret ? 'password' : 'text'}
-                            value={formCredential[field.name] ?? ''}
+                            value={formProviderCredential[field.name] ?? ''}
                             onChange={(v) => setCredentialField(field.name, v)}
                             placeholder={
                               placeholder === placeholderKey
@@ -564,7 +591,7 @@ export default function CodeSourcesPanel() {
                 <Button
                   type="primary"
                   onClick={handleRegister}
-                  disabled={submitting || !formBranch.trim() || !validUrl}
+                  disabled={submitting || code.credentialMismatch || (code.formAuth === 'credential' && !code.formCredential) || (code.formAuth === 'provider' && !formSourceType) || !formBranch.trim() || !validUrl || (isSsh && !code.formCredential) || (!!code.formCredential && !code.shareWithTeam)}
                   loading={submitting}
                 >
                   {submitting ? t('code.register.submitting') : t('code.register.submit')}
@@ -576,6 +603,9 @@ export default function CodeSourcesPanel() {
             </Modal>
           );
         })()}
+
+      {code.showCredentials && activeTeamId && <GitCredentialManager key={activeTeamId} teamId={activeTeamId} items={code.credentials} error={code.credentialError}
+        onChanged={code.reloadCredentials} onClose={() => code.setShowCredentials(false)} />}
 
       {/* Allocate Code-Graph → Agent (固定资产) */}
       {allocateTarget && (

@@ -7,12 +7,14 @@ import { useTranslation } from 'react-i18next';
 import {
   knowledgeApi,
   type CodeGraphDetail,
+  type GitCredentialInfo,
   type SourceProviderMeta,
 } from '@/lib/api/knowledge-api';
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
-import { isValidGitHttpUrl, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
+import { ensureGitHostTrusted } from '../components/git-host-trust';
+import { isValidGitUrl, isSshGitUrl, credentialMatchesRepo, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from '../constants/code-constants';
 
 export function useCodeSources() {
   const { t } = useTranslation();
@@ -34,8 +36,14 @@ export function useCodeSources() {
   const [formRepo, setFormRepo] = useState('');
   const [formBranch, setFormBranch] = useState('main');
   const [submitting, setSubmitting] = useState(false);
+  const [credentials, setCredentials] = useState<GitCredentialInfo[]>([]);
+  const [credentialError, setCredentialError] = useState('');
+  const [showCredentials, setShowCredentials] = useState(false);
+  const [formCredential, setFormCredential] = useState('');
+  const [formAuth, setFormAuth] = useState<'none' | 'credential' | 'provider'>('none');
+  const [shareWithTeam, setShareWithTeam] = useState(false);
 
-  // 外部来源（如工蜂）：'' = 公开仓
+  // 外部来源（如工蜂）：与已保存的 Git 凭据分开存储，避免同时提交两种认证。
   const [formSourceType, setFormSourceType] = useState('');
   const [sourceProviders, setSourceProviders] = useState<SourceProviderMeta[]>([]);
   /**
@@ -43,9 +51,9 @@ export function useCodeSources() {
    * 仅内存，提交后立即清空，绝不落 localStorage。
    * key = 字段 name（`secret` / `username` / 未来其它）。
    */
-  const [formCredential, setFormCredential] = useState<Record<string, string>>({});
+  const [formProviderCredential, setFormProviderCredential] = useState<Record<string, string>>({});
   const setCredentialField = (name: string, value: string) =>
-    setFormCredential((prev) => ({ ...prev, [name]: value }));
+    setFormProviderCredential((prev) => ({ ...prev, [name]: value }));
 
   // Allocate-to-agent dialog state
   const [allocateTarget, setAllocateTarget] = useState<{
@@ -61,6 +69,30 @@ export function useCodeSources() {
   const { activeTeamId, activeTeam } = useTeams();
   const auth = readAuth();
   const currentUser = auth?.user_id ?? '';
+  const currentInstance = auth?.instance_id ?? '';
+  const credentialRequest = useRef(0);
+  const reloadCredentials = useCallback(async () => {
+    const request = ++credentialRequest.current;
+    if (!activeTeamId) { setCredentials([]); return; }
+    try {
+      const items = await knowledgeApi.gitCredentials.list(activeTeamId);
+      if (request === credentialRequest.current) { setCredentials(items); setCredentialError(''); }
+    } catch (e) {
+      if (request === credentialRequest.current) {
+        setCredentials([]); setCredentialError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }, [activeTeamId, currentUser, currentInstance]);
+  useEffect(() => {
+    setCredentials([]); setCredentialError(''); setFormCredential(''); setFormAuth('none'); setShareWithTeam(false); setShowCredentials(false);
+    setFormSourceType(''); setFormProviderCredential({}); setSourceProviders([]);
+    void reloadCredentials();
+    return () => { credentialRequest.current++; };
+  }, [reloadCredentials]);
+  useEffect(() => { setShareWithTeam(false); }, [formRepo]);
+  const selectedCredential = credentials.find((item) => item.credential_id === formCredential);
+  const credentialMismatch = !!formCredential && isValidGitUrl(formRepo) &&
+    (!selectedCredential || !credentialMatchesRepo(selectedCredential, formRepo));
   // 固定资产 tab 只列自己 owner 的 agent（与 ChatMemory / Skills 面板一致，
   // 也符合文档 §4.2 权限规则：agent-fixed 只允许查看 caller 自己 owner 的 agent）。
   const { agents: allAgents } = useAgents(activeTeamId);
@@ -288,10 +320,8 @@ export function useCodeSources() {
   }
 
   /**
-   * 打开注册弹窗时加载来源清单。失败静默降级（表单退化为仅公开仓）。
-   *
-   * 不再查"当前用户已配置的来源"——凭据挂在**资源**上，注册前无 resource_id，
-   * 该概念已不成立；注册后如果失败，用户可在列表页对具体资源重新配置。
+   * 打开注册弹窗时加载来源清单。失败时仍可使用公开仓或已保存的 Git 凭据。
+   * 来源令牌绑定在资源上，注册时与创建请求一同提交。
    */
   const openRegister = useCallback(async () => {
     setShowRegister(true);
@@ -307,15 +337,26 @@ export function useCodeSources() {
   const handleRegister = async () => {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
-    if (!isValidGitHttpUrl(repo)) {
+    // 防御性校验：按钮已按 validUrl 禁用，这里再挡一层防止绕过
+    if (!isValidGitUrl(repo)) {
       tea.notify.error(t('code.register.invalidUrl'));
       return;
     }
+    if (formAuth === 'credential' && !formCredential) { tea.notify.error(t('gitCredential.choose')); return; }
+    if (isSshGitUrl(repo) && !formCredential) {
+      tea.notify.error(t('code.register.sshWarning')); return;
+    }
+    if (credentialMismatch) { tea.notify.error(t('gitCredential.serverMismatch')); return; }
+    if (formCredential && !shareWithTeam) return;
     // 私有仓：按 provider.form_fields 校验必填字段
-    const provider = sourceProviders.find((p) => p.id === formSourceType);
+    const provider = formAuth === 'provider' ? sourceProviders.find((p) => p.id === formSourceType) : undefined;
+    if (formAuth === 'provider' && !provider) {
+      tea.notify.error(t('code.register.sourceRequired'));
+      return;
+    }
     if (provider) {
       for (const f of provider.form_fields) {
-        if (f.required && !(formCredential[f.name] ?? '').trim()) {
+        if (f.required && !(formProviderCredential[f.name] ?? '').trim()) {
           tea.notify.error(t('code.register.tokenRequired'));
           return;
         }
@@ -323,15 +364,18 @@ export function useCodeSources() {
     }
     setSubmitting(true);
     try {
+      if (!await ensureGitHostTrusted(activeTeamId, selectedCredential, repo)) return;
       // 私有仓：create 时把凭据一并传过去，KS 在入队建图前先落凭据，
       // 避免「create 立即 clone、凭据尚未写入」的时序窗口（否则私有仓必 401）。
-      const secret = (formCredential.secret ?? '').trim();
-      const username = (formCredential.username ?? '').trim();
+      const secret = (formProviderCredential.secret ?? '').trim();
+      const username = (formProviderCredential.username ?? '').trim();
       const detail = await knowledgeApi.code.create({
         teamId: activeTeamId,
         repoUrl: repo,
         branch: formBranch.trim(),
         repoName: repo,
+        credentialId: formAuth === 'credential' ? formCredential : undefined,
+        shareWithTeam,
         ...(provider && secret
           ? {
               providerId: formSourceType,
@@ -344,8 +388,9 @@ export function useCodeSources() {
       setShowRegister(false);
       setFormRepo('');
       setFormBranch('main');
+      setFormCredential(''); setFormAuth('none'); setShareWithTeam(false);
       setFormSourceType('');
-      setFormCredential({});
+      setFormProviderCredential({});
       setScopeTab('team');
       setInFlight((prev) => [
         ...prev.filter((x) => x.code_graph_id !== detail.code_graph_id),
@@ -473,6 +518,8 @@ export function useCodeSources() {
     setSubView,
     selectedCgId,
     setSelectedCgId,
+    credentials, credentialError, showCredentials, setShowCredentials, reloadCredentials, credentialMismatch,
+    formCredential, setFormCredential, formAuth, setFormAuth, shareWithTeam, setShareWithTeam,
     // register
     showRegister,
     setShowRegister,
@@ -486,9 +533,9 @@ export function useCodeSources() {
     formSourceType,
     setFormSourceType,
     sourceProviders,
-    formCredential,
+    formProviderCredential,
     setCredentialField,
-    setFormCredential,
+    setFormProviderCredential,
     openRegister,
     // allocate
     allocateTarget,

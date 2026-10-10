@@ -9,7 +9,6 @@
 import { join } from "node:path";
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import pLimit from "p-limit";
-import simpleGit from "simple-git";
 
 import type { Db } from "./db/client.js";
 import { SqliteKnowledgeStore, type IKnowledgeStore } from "./store/index.js";
@@ -24,6 +23,7 @@ import {
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
 import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
+import { GitCredentialStore } from "./store/git-credential-store.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
 import { getGlobalLlmConcurrency } from "./config.js";
@@ -36,7 +36,7 @@ import {
 } from "./store/auto-sync-scheduler.js";
 import { createCredentialStore } from "./source-auth/credential-store.js";
 import type { ICredentialStore } from "./source-auth/types.js";
-import { buildCloneUrl, stripCredentials } from "./code-source/clone-url.js";
+import { CodeGraphAuthService } from "./source-auth/code-graph-auth.js";
 import { CodeSourceRegistry } from "./code-source/registry.js";
 import { WikiSourceRegistry } from "./wiki-source/registry.js";
 import { createWikiImporter } from "./wiki-source/wiki-importer.js";
@@ -74,6 +74,8 @@ export interface CodeGraphInstancePool {
 }
 
 export interface KnowledgeModule {
+  gitCredentialStore: GitCredentialStore;
+  codeGraphAuth: CodeGraphAuthService;
   wikiService: WikiService;
   cgService: CodeGraphService;
   wikiMgr: WikiSourceManager;
@@ -87,7 +89,7 @@ export interface KnowledgeModule {
   autoSyncScheduler: AutoSyncScheduler;
   /** 定时自动同步的解析后配置（挂载 admin 路由时透出）。 */
   autoSyncConfig: AutoSyncConfig;
-  /** 外部知识源用户令牌（加密存储，明文不出进程）。 */
+  /** Resource-scoped source credentials; metadata only leaves the service. */
   credentialStore: ICredentialStore;
   /** 代码来源 provider 注册中心（前端下拉 + provider 查询）。 */
   codeSourceRegistry: CodeSourceRegistry;
@@ -104,6 +106,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // Store
   const store = new SqliteKnowledgeStore(db);
+  const gitCredentialStore = new GitCredentialStore(db);
 
   // Per-instance LLM routing binding + resolver (proxy/byo → effective LlmConfig).
   // No binding → global LLM_MODE decides: 'custom' uses global LLM_* direct,
@@ -147,84 +150,26 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   // ── wiki 来源 provider 注册中心（内置 + 部署启用列表） ──
   const wikiSourceRegistry = new WikiSourceRegistry();
 
-  /**
-   * 需要凭据的仓库：clone/sync 前把令牌临时注入 URL。
-   *
-   * 凭据行是否存在**即**决定该仓是否外部来源（§4.2）：
-   *   有 → 走 provider.applyToCloneUrl 或默认 basic-auth 注入
-   *   无 → 公开仓，返回干净地址（行为与改造前一致）
-   *
-   * 落库的是干净地址，此处拼出来的带凭据 URL 只活在本次调用栈里
-   * （不写盘、不进日志、不进响应体）。
-   */
-  const cloneUrlFor = (
-    serviceId: string,
-    codeGraphId: string,
-    repoUrl: string,
-  ): string => {
-    const ref = { type: "code-graph" as const, serviceId, resourceId: codeGraphId };
-    const cred = credentialStore.get(ref);
-    if (!cred) return repoUrl; // 无凭据 = 公开仓
-    const status = credentialStore.status(ref);
-    if (!status) throw new Error(`no credential row for code-graph ${codeGraphId}`);
-    const provider = codeSourceRegistry.get(status.provider_id);
-    if (!provider) {
-      throw new Error(
-        `code source provider '${status.provider_id}' is not registered (check CODE_SOURCE_ENABLED)`,
-      );
-    }
-    return buildCloneUrl(provider, repoUrl, { secret: cred.secret, username: cred.username });
-  };
-
-  /**
-   * 把 clone 后 .git/config 里 origin 的带凭据 URL 改回干净地址。
-   *
-   * 失败不阻断建图，但要告警 —— 明文令牌留在磁盘是安全问题，
-   * 而建图结果本身仍然有效。
-   */
-  const sanitizeCloneRemote = async (
-    dir: string,
-    cleanUrl: string,
-    serviceId: string,
-    codeGraphId: string,
-  ): Promise<void> => {
-    try {
-      await simpleGit(dir).remote(["set-url", "origin", cleanUrl]);
-      log.info("[code-graph] sanitized clone remote (credentials stripped)", { codeGraphId });
-    } catch (err) {
-      log.warn("[code-graph] failed to sanitize clone remote", {
-        codeGraphId,
-        serviceId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  };
+  const codeGraphAuth = new CodeGraphAuthService({
+    db, store, gitCredentialStore, credentialStore, codeSourceRegistry,
+  });
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, serviceId, setInternalStatus } = ctx;
+    const { dir, branch, codeGraphId, setInternalStatus } = ctx;
 
-    // 外部来源（工蜂等）→ 注入令牌；无凭据行 → 公开仓。
-    const cleanUrl = stripCredentials(repoUrl);
-    const effectiveUrl = cloneUrlFor(serviceId, codeGraphId, cleanUrl);
-    // 判定「是否私有仓」用 URL 是否被改写（等价于凭据行是否存在，且无需再查一次库）。
-    const needsCredential = effectiveUrl !== cleanUrl;
-
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
-    const fetcher = fetcherRegistry.resolve(effectiveUrl);
+    const source = codeGraphAuth.resolve(ctx.serviceId, codeGraphId);
+    const fetcher = fetcherRegistry.resolve(source.url);
+    const secret = source.auth;
 
     const isExistingRepo = existsSync(join(dir, ".git"));
-    // ★ 私有仓不做增量 sync：GitSourceFetcher.sync() 内部是 `git fetch origin`，
-    //   用的是 .git/config 里的 URL —— 而那已被 sanitize 成干净地址，必然 401。
-    //   因此外部来源一律全量 clone（每次都带令牌），代价是慢，行为正确。
-    const canIncremental = isExistingRepo && !needsCredential;
     let didIncrementalSync = false;
     let version: string | null = null;
 
-    if (canIncremental) {
+    if (isExistingRepo) {
       try {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(effectiveUrl, branch, dir);
+        const res = await fetcher.sync(source.url, branch, dir, secret);
         version = res.version;
 
         setInternalStatus("indexing");
@@ -236,6 +181,9 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
         instancePool.set(codeGraphId, instance);
         didIncrementalSync = true;
       } catch (err) {
+        // Preserve the existing checkout/index when network/authentication fails.
+        // Only an index failure after a successful fetch may need a rebuild.
+        if (version === null) throw err;
         log.warn(
           `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -244,28 +192,17 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     }
 
     if (!didIncrementalSync) {
-      // 私有仓重跑：旧目录还在（增量被跳过）→ 先清掉，否则 clone 到非空目录会失败。
-      if (isExistingRepo) {
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
       mkdirSync(dir, { recursive: true });
       setInternalStatus("cloning");
       let res;
       try {
-        res = await fetcher.fetch(effectiveUrl, branch, dir);
+        res = await fetcher.fetch(source.url, branch, dir, secret);
       } catch (err) {
-        // git 认证/权限错误措辞误导（`could not read Username` = 仓库需要认证），
-        // 转成面向用户的提示后再抛，写入 sync_error 供前端展示。
         const raw = err instanceof Error ? err.message : String(err);
-        if (isGitAuthError(raw)) {
-          throw new Error(explainGitAuthError(raw, needsCredential));
-        }
+        if (!ctx.credentialId && isGitAuthError(raw)) throw new Error(explainGitAuthError(raw, !!secret));
         throw err;
       }
       version = res.version;
-      // ★ 凭据落地清理：clone 会把带令牌的 URL 写进 .git/config 的 origin。
-      //   不清理等于把用户 PAT 明文留在磁盘上（后续 git fetch 也一直用它）。
-      await sanitizeCloneRemote(dir, stripCredentials(repoUrl), serviceId, codeGraphId);
 
       setInternalStatus("indexing");
       const instance = await indexProject(dir);
@@ -342,8 +279,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
       if (inst) closeIndex(inst);
       instancePool.delete(codeGraphId);
     },
-    credentialStore,
-    codeSourceRegistry,
+    authService: codeGraphAuth,
   });
 
   // Restart recovery: mark interrupted tasks as failed
@@ -424,7 +360,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   return {
     wikiService, cgService, wikiMgr, store, instancePool,
-    llmBindingStore, autoSyncScheduler, autoSyncConfig, credentialStore,
-    codeSourceRegistry, wikiSourceRegistry,
+    llmBindingStore, gitCredentialStore, codeGraphAuth, autoSyncScheduler, autoSyncConfig,
+    credentialStore, codeSourceRegistry, wikiSourceRegistry,
   };
 }

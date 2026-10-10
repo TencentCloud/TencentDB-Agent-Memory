@@ -6,6 +6,7 @@
  * 返回 KS 的 { text, isError } 文本块。
  */
 import type { Hono } from 'hono';
+import { DomainError } from '../../../domain/errors.js';
 import { validatePanelMetaHeaders } from '../../middleware/validate-panel-headers.js';
 import { respondControlError } from '../../envelope.js';
 import type { PanelDeps } from '../../../panel-deps.js';
@@ -57,12 +58,29 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     const branch = str(body, 'branch') ?? undefined;
     const repoName = str(body, 'repo_name') ?? undefined;
     // 私有仓：provider_id + secret(+ username) 透传给 KS，入队前落凭据（消除时序窗口）。
-    const providerId = str(body, 'provider_id') ?? undefined;
-    const secret = str(body, 'secret') ?? undefined;
-    const username = str(body, 'username') ?? undefined;
+    const hasSaved = body.credential_id !== undefined;
+    const hasResource = ['provider_id', 'secret', 'username'].some(key => body[key] !== undefined);
+    if (hasSaved && hasResource) {
+      return respondControlError(c, 400, 'CONFLICTING_CREDENTIALS');
+    }
+    // Preserve explicit selections and secret bytes. Invalid legacy fields must
+    // fail here, never disappear into an anonymous create request.
+    if ((hasSaved && (typeof body.credential_id !== 'string' || !body.credential_id.trim())) ||
+        (hasResource && (typeof body.provider_id !== 'string' || !body.provider_id.trim() ||
+          typeof body.secret !== 'string' || !body.secret ||
+          (body.username !== undefined && typeof body.username !== 'string'))) ||
+        (body.share_with_team !== undefined && typeof body.share_with_team !== 'boolean')) {
+      return respondControlError(c, 400, 'INVALID_CREDENTIAL');
+    }
+    const providerId = body.provider_id as string | undefined;
+    const credentialId = body.credential_id as string | undefined;
+    const secret = body.secret as string | undefined;
+    const username = body.username as string | undefined;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     try {
       const detail = await kc.codeGraphCreate(teamId, repoUrl, branch, gate.userId, repoName, {
+        credential_id: credentialId,
+        share_with_team: body.share_with_team === true,
         providerId,
         secret,
         username,
@@ -91,6 +109,22 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     } catch (err) {
       return runKs(c, () => Promise.reject(err));
     }
+  });
+
+  api.post('/knowledge/code-graph/set-credential', mw, async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const id = str(body, 'code_graph_id');
+    if (!id) return respondControlError(c, 400, 'MISSING_CODE_GRAPH_ID');
+    const gate = await requireKnowledgeRead(deps, c, ctx, id, { action: 'write', allowInFlightCodeOwner: true });
+    if ('error' in gate) return gate.error;
+    const kc = deps.knowledgeClientFactory(ctx.instanceId);
+    return runKs(c, async () => {
+      const graph = await kc.codeGraphGet(id);
+      if (graph.owner_user_id !== gate.userId) throw new DomainError('Only the owner may change Git credentials', 'NOT_RESOURCE_OWNER', 403);
+      if (body.credential_id !== null && !str(body, 'credential_id')) throw new DomainError('Credential ID or null is required', 'INVALID_CREDENTIAL', 400);
+      return kc.codeGraphSetCredential(id, gate.userId, str(body, 'credential_id'), body.share_with_team === true);
+    });
   });
 
   // C3b register-meta — code ready 后 owner 登记 meta（create 时不写 meta）

@@ -1,7 +1,7 @@
 /**
  * AuthMethod —— 一种认证方式的完整封装。
  *
- * 一个 AuthMethod = 一个 kind + 表单元数据 + URL 注入方式 + 落库转换。
+ * 一个 AuthMethod = 一个 kind + 表单元数据 + 结构化 Git 认证 + 落库转换。
  *
  * 新增一种认证方式（如 token-header、oauth-pkce）：
  *   1. 在 `auth-methods/<kind>.ts` 建文件，导出一个实现该接口的常量
@@ -13,6 +13,7 @@
  */
 
 import type { CredentialPayload } from "../types.js";
+import type { GitSecret } from "../../store/git-credential-store.js";
 
 /** 认证方式类别（判别联合，加成员时全仓 kind 引用点会强制编译报错）。 */
 export type AuthMethodKind = "bearer" | "basic";
@@ -30,7 +31,7 @@ export interface CredentialFormField {
 /**
  * 认证方式契约。
  *
- * 一个方式的所有决策——表单长什么样、凭据落成什么形状、clone URL 怎么拼——
+ * 一个方式的所有决策——表单长什么样、凭据落成什么形状、Git 认证如何生成——
  * 都在这里。业务代码只调这些方法，不判 kind。
  */
 export interface AuthMethod {
@@ -52,7 +53,11 @@ export interface AuthMethod {
     username?: string;
   };
 
+  /** Resolve transport authentication without putting secrets into a URL. */
+  toGitAuth(cred: CredentialPayload, cloneUsername?: string): Extract<GitSecret, { kind: "https" }>;
+
   /**
+   * @deprecated Compatibility helper only; runtime Git operations use toGitAuth.
    * 把凭据注入 clone URL。
    *
    * 参数 `cloneUsername` 是 provider 侧声明的占位用户名（各平台不同，

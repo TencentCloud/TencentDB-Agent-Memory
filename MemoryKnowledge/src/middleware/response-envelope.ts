@@ -22,7 +22,7 @@ function pickReqFields(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== 'object') return {};
   const b = body as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const k of ['wiki_id', 'code_graph_id', 'knowledge_id', 'wiki_ids', 'code_graph_ids', 'knowledge_ids', 'team_id', 'repo_url', 'branch', 'filename', 'filenames', 'refs', 'tool_name', 'query', 'path']) {
+  for (const k of ['wiki_id', 'code_graph_id', 'knowledge_id', 'wiki_ids', 'code_graph_ids', 'knowledge_ids', 'team_id', 'branch', 'filename', 'filenames', 'refs', 'tool_name', 'query', 'path']) {
     if (k in b) out[k] = b[k];
   }
   return out;
@@ -38,14 +38,11 @@ export function accessLog(): MiddlewareHandler {
     c.set("requestId", requestId);
 
     // 缓存 request body（body 只能读一次，失败时用于日志）
-    // Hono 的 bodyCache 期望 Promise（c.req.json()/text() 会对缓存值调 .then()）
     let reqBody: unknown = undefined;
-    if (c.req.method === 'POST' || c.req.method === 'PUT') {
+    if (!c.req.path.includes('/source-credential/') && (c.req.method === 'POST' || c.req.method === 'PUT')) {
       try {
-        const raw = await c.req.text();
-        reqBody = raw ? JSON.parse(raw) : undefined;
-        c.req.bodyCache.text = Promise.resolve(raw);
-        if (reqBody) c.req.bodyCache.json = Promise.resolve(reqBody);
+        // Let Hono manage its cache; do not retain credential request bodies.
+        reqBody = await c.req.json();
       } catch {
         // 非 JSON body，忽略
       }

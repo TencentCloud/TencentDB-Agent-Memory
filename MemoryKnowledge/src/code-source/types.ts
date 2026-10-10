@@ -48,7 +48,7 @@ export interface ICodeSourceProvider {
     /** 令牌 / 账户申请页。 */
     tokenDoc?: string;
   };
-  /** 可选：覆盖 AuthMethod 的默认 clone URL 拼法（一般不用）。 */
+  /** Legacy authentication hook. Only HTTPS userinfo may change; the repository destination must stay unchanged. */
   applyToCloneUrl?(repoUrl: string, cred: CredentialPayload): string;
   /** 可选：覆盖通用 git 错误映射。 */
   explainCloneError?(rawStderr: string, needsCredential: boolean): string | null;

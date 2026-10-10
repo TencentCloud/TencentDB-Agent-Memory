@@ -420,6 +420,7 @@ export interface KnowledgeAssetListItem {
   source_url?: string | null;
   repo_name?: string;
   repo_url?: string;
+  credential_id?: string | null;
   branch?: string;
   commit_hash?: string | null;
   stats?: { files: number; nodes: number; edges: number } | null;
@@ -494,6 +495,7 @@ async function joinCodeKs(
       summary: ks.summary,
       repo_name: ks.repo_name,
       repo_url: ks.repo_url,
+      credential_id: ks.credential_id,
       branch: ks.branch,
       commit_hash: ks.commit_hash,
       stats: ks.stats,
@@ -592,6 +594,7 @@ async function fetchKsOnlyItems(
       summary: ks.summary,
       repo_name: ks.repo_name,
       repo_url: ks.repo_url,
+      credential_id: ks.credential_id,
       branch: ks.branch,
       commit_hash: ks.commit_hash,
       stats: ks.stats,

@@ -10,6 +10,7 @@
  *   - /api/v1/knowledge/source/*           （source-routes，外部来源/凭据薄转发）
  */
 import type { Hono } from 'hono';
+import { registerGitCredentialRoutes } from './git-credential-routes.js';
 import type { PanelDeps } from '../../../panel-deps.js';
 import { registerKnowledgeWikiRoutes } from './wiki-routes.js';
 import { registerKnowledgeCodeGraphRoutes } from './code-graph-routes.js';
@@ -19,6 +20,7 @@ import { registerKnowledgeListRoutes } from './list-routes.js';
 import { registerKnowledgeSourceRoutes } from './source-routes.js';
 
 export function registerKnowledgeRoutes(api: Hono, deps: PanelDeps): void {
+  registerGitCredentialRoutes(api, deps);
   registerKnowledgeWikiRoutes(api, deps);
   registerKnowledgeCodeGraphRoutes(api, deps);
   registerKnowledgeCallbackRoutes(api, deps);
