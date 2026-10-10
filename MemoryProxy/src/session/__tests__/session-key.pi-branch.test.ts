@@ -15,6 +15,28 @@ function context(agent: string, headers: Record<string, string>): Context {
 }
 
 describe("Pi session-store branch identity", () => {
+  it.each(["workbuddy", "pi"])("preserves parent-session binding for %s subagents", (agent) => {
+    expect(resolveConversationId(context(agent, {
+      "x-parent-conversation-id": "parent-session",
+      "x-conversation-id": "child-session",
+      "x-tdai-memory-branch": "branch-left",
+    }))).toBe("parent-session");
+  });
+
+  it("keeps Pi branch isolation when the parent header is empty", () => {
+    expect(resolveConversationId(context("pi", {
+      "x-parent-conversation-id": "",
+      "x-conversation-id": "pi-session-123",
+      "x-tdai-memory-branch": "branch-left",
+    }))).toBe("pi-session-123-branch-left");
+  });
+
+  it("preserves the upstream deepseek-harness session header", () => {
+    expect(resolveConversationId(context("dsh", {
+      "x-deepseek-harness-session-id": "dsh-session",
+    }))).toBe("dsh-session");
+  });
+
   it("uses the same derived identity as the Pi memory adapter", () => {
     expect(
       resolveConversationId(context("pi", {

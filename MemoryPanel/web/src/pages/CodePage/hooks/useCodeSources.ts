@@ -4,7 +4,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { knowledgeApi, type CodeGraphDetail } from '@/lib/api/knowledge-api';
+import {
+  knowledgeApi,
+  type CodeGraphDetail,
+  type SourceProviderMeta,
+} from '@/lib/api/knowledge-api';
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
@@ -30,6 +34,18 @@ export function useCodeSources() {
   const [formRepo, setFormRepo] = useState('');
   const [formBranch, setFormBranch] = useState('main');
   const [submitting, setSubmitting] = useState(false);
+
+  // 外部来源（如工蜂）：'' = 公开仓
+  const [formSourceType, setFormSourceType] = useState('');
+  const [sourceProviders, setSourceProviders] = useState<SourceProviderMeta[]>([]);
+  /**
+   * 弹窗内临时填写的凭据字段值（按 provider.form_fields 动态存）；
+   * 仅内存，提交后立即清空，绝不落 localStorage。
+   * key = 字段 name（`secret` / `username` / 未来其它）。
+   */
+  const [formCredential, setFormCredential] = useState<Record<string, string>>({});
+  const setCredentialField = (name: string, value: string) =>
+    setFormCredential((prev) => ({ ...prev, [name]: value }));
 
   // Allocate-to-agent dialog state
   const [allocateTarget, setAllocateTarget] = useState<{
@@ -88,14 +104,16 @@ export function useCodeSources() {
   }, [scopeTab, fetchFixedBindings]);
 
   const displaySources = useMemo(() => {
-    // team tab 下合并 inFlight（刚注册的仓库还在构建中，列表里先占位显示）
-    if (scopeTab === 'team') {
-      const ids = new Set(sources.map((s) => s.code_graph_id));
-      const extras = inFlight.filter((x) => x.code_graph_id && !ids.has(x.code_graph_id));
-      return [...extras, ...sources];
-    }
-    return sources;
-  }, [sources, inFlight, scopeTab]);
+    // inFlight = 刚注册或刚点过「同步」的仓库，其状态由 code.get 轮询实时刷新。
+    // 同 id 时以 inFlight 为准覆盖 sources：否则详情头只会显示 202 那一刻
+    // teamAssets 快照里的状态，轮询结果永远反映不到界面上。
+    if (inFlight.length === 0) return sources;
+    const inFlightMap = new Map(inFlight.map((x) => [x.code_graph_id, x]));
+    const sourceIds = new Set(sources.map((s) => s.code_graph_id));
+    // 还没进 teamAssets 的（刚注册、meta 尚未登记）排在最前占位
+    const extras = inFlight.filter((x) => x.code_graph_id && !sourceIds.has(x.code_graph_id));
+    return [...extras, ...sources.map((s) => inFlightMap.get(s.code_graph_id) ?? s)];
+  }, [sources, inFlight]);
 
   const scopeSources = useMemo(() => {
     if (scopeTab === 'team') return displaySources;
@@ -269,20 +287,65 @@ export function useCodeSources() {
     }
   }
 
+  /**
+   * 打开注册弹窗时加载来源清单。失败静默降级（表单退化为仅公开仓）。
+   *
+   * 不再查"当前用户已配置的来源"——凭据挂在**资源**上，注册前无 resource_id，
+   * 该概念已不成立；注册后如果失败，用户可在列表页对具体资源重新配置。
+   */
+  const openRegister = useCallback(async () => {
+    setShowRegister(true);
+    if (!activeTeamId) return;
+    try {
+      const providers = await knowledgeApi.source.providers(activeTeamId);
+      setSourceProviders(providers);
+    } catch {
+      setSourceProviders([]);
+    }
+  }, [activeTeamId]);
+
   const handleRegister = async () => {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
-    // 防御性校验：按钮已按 validUrl 禁用，这里再挡一层防止绕过
     if (!isValidGitHttpUrl(repo)) {
       tea.notify.error(t('code.register.invalidUrl'));
       return;
     }
+    // 私有仓：按 provider.form_fields 校验必填字段
+    const provider = sourceProviders.find((p) => p.id === formSourceType);
+    if (provider) {
+      for (const f of provider.form_fields) {
+        if (f.required && !(formCredential[f.name] ?? '').trim()) {
+          tea.notify.error(t('code.register.tokenRequired'));
+          return;
+        }
+      }
+    }
     setSubmitting(true);
     try {
-      const detail = await knowledgeApi.code.create({ teamId: activeTeamId, repoUrl: repo, branch: formBranch.trim(), repoName: repo });
+      // 私有仓：create 时把凭据一并传过去，KS 在入队建图前先落凭据，
+      // 避免「create 立即 clone、凭据尚未写入」的时序窗口（否则私有仓必 401）。
+      const secret = (formCredential.secret ?? '').trim();
+      const username = (formCredential.username ?? '').trim();
+      const detail = await knowledgeApi.code.create({
+        teamId: activeTeamId,
+        repoUrl: repo,
+        branch: formBranch.trim(),
+        repoName: repo,
+        ...(provider && secret
+          ? {
+              providerId: formSourceType,
+              secret,
+              ...(username ? { username } : {}),
+            }
+          : {}),
+      });
+
       setShowRegister(false);
       setFormRepo('');
       setFormBranch('main');
+      setFormSourceType('');
+      setFormCredential({});
       setScopeTab('team');
       setInFlight((prev) => [
         ...prev.filter((x) => x.code_graph_id !== detail.code_graph_id),
@@ -300,7 +363,19 @@ export function useCodeSources() {
   const handleSync = async (cgId: string) => {
     try {
       await knowledgeApi.code.sync(cgId);
-      fetchSources();
+      // sync 是异步的，202 只代表已入队。这里把该仓库放回 inFlight（与 handleRegister 对齐），
+      // 交给上面的 GET 轮询直到 status 回到 ready；否则只会拉一次 teamAssets 快照，
+      // 详情头会永远停在那一刻的「构建中」。
+      const current =
+        sources.find((s) => s.code_graph_id === cgId) ??
+        inFlightRef.current.find((x) => x.code_graph_id === cgId);
+      if (current) {
+        setInFlight((prev) => [
+          ...prev.filter((x) => x.code_graph_id !== cgId),
+          { ...current, status: 'processing' },
+        ]);
+      }
+      void fetchSources();
     } catch (e: unknown) {
       tea.notify.error(e);
     }
@@ -407,6 +482,14 @@ export function useCodeSources() {
     setFormBranch,
     submitting,
     setSubmitting,
+    // 外部来源
+    formSourceType,
+    setFormSourceType,
+    sourceProviders,
+    formCredential,
+    setCredentialField,
+    setFormCredential,
+    openRegister,
     // allocate
     allocateTarget,
     setAllocateTarget,

@@ -540,6 +540,7 @@ class SkillClient:
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        strict_mode: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """``POST /v3/skill/extract`` — fire-and-forget async extract.
 
@@ -554,6 +555,15 @@ class SkillClient:
         header (``auth.serviceId``). Set only when explicitly overriding
         the instance the transport is scoped to; body value wins over
         header, and a mismatch is logged server-side.
+
+        ``strict_mode`` (optional, default None) — set ``True`` for
+        cold-start / bulk-import scenarios (e.g. replaying historical
+        IDE sessions from ``agents/asset-import.ts``). Server routes the
+        resulting extract task through the strict v1 skill review prompt
+        (five-class classification + four-dimension ≥72 acceptance gate)
+        instead of the default v2 broad-capture prompt. Realtime
+        extraction should leave it unset — behaviour is unchanged.
+        Fully backward compatible.
         """
         body = _strip_none({
             **self._defaults.merge(team_id, agent_id, user_id, task_id),
@@ -562,6 +572,7 @@ class SkillClient:
             "messages": messages,
             "reason": reason,
             "options": options,
+            "strict_mode": strict_mode,
         })
         _validate_extract(messages, body)
         return self._stub.post(f"{_V3}/extract", body)
@@ -576,6 +587,7 @@ class SkillClient:
         messages: List[Dict[str, Any]],
         space_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        strict_mode: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """``POST /v3/skill/conversation/add`` — append this turn's messages
         to the session buffer.
@@ -591,6 +603,15 @@ class SkillClient:
         is forwarded to ``archive.task.task_ref_id`` when this call
         happens to trip an archive threshold.
 
+        ``strict_mode`` (optional, default None) — when this call trips
+        an archive threshold and the resulting task is later mined by
+        the extract worker, ``True`` routes it through the strict v1
+        skill review prompt (five-class classification + four-dimension
+        acceptance gate). Intended for cold-start / bulk-import
+        scenarios (see :meth:`extract`). Realtime turn-by-turn ingest
+        should leave it unset — behaviour is unchanged. Fully backward
+        compatible.
+
         Returns ``{status: "ok"|"archived", archived?: {task_id,
         archived_at_ms, archive_key, reason}}``. ``reason`` ∈
         ``{tool_calls, bytes, compressed, oversize}``. See
@@ -605,6 +626,7 @@ class SkillClient:
             "agent_id": agent_id,
             "task_id": task_id,
             "messages": messages,
+            "strict_mode": strict_mode,
         })
         return self._stub.post(f"{_V3}/conversation/add", body)
 
@@ -1023,6 +1045,7 @@ class AsyncSkillClient:
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        strict_mode: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """See :meth:`SkillClient.extract` for parameter and response docs."""
         body = _strip_none({
@@ -1032,6 +1055,7 @@ class AsyncSkillClient:
             "messages": messages,
             "reason": reason,
             "options": options,
+            "strict_mode": strict_mode,
         })
         _validate_extract(messages, body)
         return await self._stub.post(f"{_V3}/extract", body)
@@ -1046,6 +1070,7 @@ class AsyncSkillClient:
         messages: List[Dict[str, Any]],
         space_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        strict_mode: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """See :meth:`SkillClient.conversation_add` for the contract."""
         body = _strip_none({
@@ -1056,6 +1081,7 @@ class AsyncSkillClient:
             "agent_id": agent_id,
             "task_id": task_id,
             "messages": messages,
+            "strict_mode": strict_mode,
         })
         return await self._stub.post(f"{_V3}/conversation/add", body)
 

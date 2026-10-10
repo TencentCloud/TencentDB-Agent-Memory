@@ -145,6 +145,23 @@ export interface PanelAuthConfig {
      */
     authProvider: string;
   };
+  /**
+   * 任务看板「导入 Task」的第三方来源。
+   *
+   * 所有地址与客户端标识**全部来自配置、无内置默认值**：它们属内网基础设施信息，
+   * 硬编码进源码既是信息暴露，也会让漏配退化成「跳到错误地址且无报错」的静默错误。
+   * 缺失时由使用点显式抛错（fail-fast）。
+   */
+  taskSource: {
+    /** 启用的来源 id（逗号分隔）。空 → 面板不显示「导入 Task」入口。 */
+    enabled: string[];
+    tapd: {
+      /** MCP 资源地址（Core 侧端点）。 */
+      mcpUrl: string;
+      /** 站点根：详情页 URL 构造（task 接口不返回 detail_link）。 */
+      siteBaseUrl: string;
+    };
+  };
 }
 
 function buildAuthConfig(): PanelAuthConfig {
@@ -200,6 +217,16 @@ function buildAuthConfig(): PanelAuthConfig {
         ['METADATA_EXTERNAL_AUTH_PROVIDER', 'PANEL_AUTH_WOA_AUTH_PROVIDER'],
         'local',
       ),
+    },
+    taskSource: {
+      enabled: env('TASK_SOURCE_ENABLED', '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      tapd: {
+        mcpUrl: env('TASK_SOURCE_TAPD_MCP_URL', ''),
+        siteBaseUrl: env('TASK_SOURCE_TAPD_SITE_BASE_URL', ''),
+      },
     },
   };
 }

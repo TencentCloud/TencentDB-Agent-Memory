@@ -153,6 +153,12 @@ memory-core 通过 `MEMORY_PROMPT_MODE` 切换 L1/L2/L3 pipeline 的提示词族
 | `MEMORY_CORE_GATEWAY_API_KEY` | `local` | memory-hub / proxy → memory-core 的 Bearer |
 | `MEMORY_CORE_ADMIN_USERNAME` | `admin` | 初始化的 system_admin 用户名 |
 | `MEMORY_CORE_ADMIN_USER_KEY` | `admin` | 该 admin 用户的登录 key |
+| `KNOWLEDGE_SERVICE_KEY` | **自动生成随机值** | Panel ↔ Knowledge 服务间 Bearer（写/管理端点强制） |
+
+> `KNOWLEDGE_SERVICE_KEY` 不留固定默认值：首次启动时脚本自动生成 `ks-svc-*` 随机串
+> 并写回 `.env`（重启复用不漂移），同一个值注入 memory-hub 容器两次——
+> `KNOWLEDGE_SERVICE_KEY`（Knowledge 校验侧）+ `KNOWLEDGE_AUTH_TOKEN`（Panel 调用侧）。
+> 如需自行分发（多机/外部编排），在 `.env` 显式设置即可，脚本尊重既有值。
 
 > 这三个默认值只适合个人本地跑通流程。**生产/联调/公网暴露前必须替换成随机长串**，
 > 否则任何拿到端口的人都能拿到 system_admin 权限。

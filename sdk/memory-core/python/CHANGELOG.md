@@ -1,5 +1,20 @@
 # Changelog — tencentdb-agent-memory-sdk-python
 
+## Unreleased — 2026-09-20
+
+### Added
+
+- **Optional ``strict_mode: Optional[bool] = None`` on ``extract()`` and
+  ``conversation_add()`` (both sync + async)** — when ``True``, server
+  routes the resulting extract task through the strict v1 skill review
+  prompt (five-class classification + four-dimension ≥72 acceptance gate)
+  instead of the default v2 broad-capture prompt. Intended for cold-start
+  / bulk-import scenarios (e.g. ``agents/setup-proxy.sh`` →
+  ``agents/asset-import.ts`` replaying historical IDE sessions). Realtime
+  extraction should leave it unset — behaviour is unchanged. Fully
+  backward compatible: ``None`` / ``False`` keeps the existing default
+  path (field is stripped from the request body).
+
 ## Unreleased — 2026-07-31
 
 ### Added

@@ -16,7 +16,7 @@ model:
   provider: custom
   base_url: http://<proxy-host>:8096/hermes/<spaceId>
   api_key: <业务用户的 sk-mem-... user_key>
-  extra_headers:
+  default_headers:
     x-team-id: <从面板获取的 team_id>
     x-agent-id: <从面板获取的 agent_id>
     x-task-id: <从面板获取的 task_id>

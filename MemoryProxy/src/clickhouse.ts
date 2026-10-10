@@ -19,7 +19,7 @@ import type { ClickHouseClient } from "@clickhouse/client";
 import { log } from "./report/log.js";
 import { hostname } from "node:os";
 import { createHash } from "node:crypto";
-import { computeCreditDelta } from "./credit-reporter.js";
+import { computeCreditDelta, detectUsageProtocol } from "./credit-reporter.js";
 import { getModelPricing, resolveModelName } from "./pricing.js";
 import type { CreditPricingConfig, CreditPricingEntry } from "./types.js";
 
@@ -92,6 +92,10 @@ export interface ClickHouseRow {
   pre_compress_tokens: number;
   /** 同一批内容压缩后的 token 数；保留原文的项记为与压缩前相同。 */
   post_compress_tokens: number;
+  /** 实际访问压缩模型的次数；缓存命中和本地跳过不计入。 */
+  compress_remote_count: number;
+  /** 实际压缩模型请求耗时之和（毫秒），用于跨请求计算加权平均。 */
+  compress_remote_total_ms: number;
 }
 
 /**
@@ -160,6 +164,10 @@ export function initClickHouse(cfg: ClickHouseConfig): void {
     // Internal telemetry buffers (§7.1) — 静默兜底防 unhandledRejection
     void flushSessionInit().catch(() => {});
     void flushToolCall().catch(() => {});
+    // skill_usage_logs (2026-09-09 skill usage telemetry) —— 同上；
+    // 没有这条定时 flush,轻量场景 (< flushThreshold 行/周期) 数据会
+    // 一直卡在 buffer 里直到 shutdown 才落库,严重滞后。
+    void flushSkillUsage().catch(() => {});
   }, cfg.flushIntervalMs);
   flushTimer.unref(); // Don't prevent process exit
 
@@ -245,7 +253,9 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     "  upstream_request_id String DEFAULT '',",
     "  compress_tokens_saved UInt64 DEFAULT 0,",
     "  pre_compress_tokens UInt64 DEFAULT 0,",
-    "  post_compress_tokens UInt64 DEFAULT 0",
+    "  post_compress_tokens UInt64 DEFAULT 0,",
+    "  compress_remote_count UInt64 DEFAULT 0,",
+    "  compress_remote_total_ms UInt64 DEFAULT 0",
     ") ENGINE = MergeTree()",
     "ORDER BY (user_id, session_key, timestamp)",
     ttlClause,
@@ -302,10 +312,13 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
   try {
     await createTableIfNotExists(client, sessionInitTableDdl());
     await createTableIfNotExists(client, toolCallTableDdl());
+    await createTableIfNotExists(client, skillUsageTableDdl());
     log.info("clickhouse.init.telemetryTableReady", {
       sessionInitTable: `${cfg.database}.${SESSION_INIT_TABLE}`,
       toolCallTable: `${cfg.database}.${TOOL_CALL_TABLE}`,
+      skillUsageTable: `${cfg.database}.${SKILL_USAGE_TABLE}`,
       ttlDays: TELEMETRY_TTL_DAYS,
+      skillUsageTtlDays: SKILL_USAGE_TTL_DAYS,
     });
   } catch (err: unknown) {
     log.warn("clickhouse.init.telemetryTableFailed", {
@@ -375,6 +388,9 @@ export async function migrateSchema(
     // 压缩前后的原始计数，用于算压缩率——只有差值算不出分母。
     { table: cfg.table, column: "pre_compress_tokens", type: "UInt64 DEFAULT 0" },
     { table: cfg.table, column: "post_compress_tokens", type: "UInt64 DEFAULT 0" },
+    // 实际压缩服务访问次数及总耗时；两者结合可算跨请求加权平均耗时。
+    { table: cfg.table, column: "compress_remote_count", type: "UInt64 DEFAULT 0" },
+    { table: cfg.table, column: "compress_remote_total_ms", type: "UInt64 DEFAULT 0" },
   ];
 
   // usage_raw：追溯表补齐（本次新增 6 列 + model_name + upstream_request_id）
@@ -514,6 +530,8 @@ export interface ClickHouseWriteEntry {
    * compression columns; the rest is carried to the JSONL log untouched.
    */
   extensionStats?: Record<string, unknown>;
+  /** Original request receipt time used for time-based credit pricing. */
+  requestReceivedAt?: string;
   /** Pricing config for credit calculation (from config.yaml). */
   pricingConfig?: CreditPricingConfig;
 }
@@ -530,6 +548,7 @@ function computeCreditSaved(
   // Only for main usage events with routing
   if (entry.event !== "usage") return 0;
   if (!entry.routedFrom) return 0;
+  const requestTime = entry.requestReceivedAt ? new Date(entry.requestReceivedAt) : undefined;
 
   // Compute what credit would have been if using the original model
   const creditIfOriginal = computeCreditDelta(
@@ -537,6 +556,7 @@ function computeCreditSaved(
     entry.pricingConfig,
     entry.routedFrom,
     entry.upstreamUrl,
+    requestTime,
   );
   // Actual credit (using the routed model)
   const actualCredit = computeCreditDelta(
@@ -544,6 +564,7 @@ function computeCreditSaved(
     entry.pricingConfig,
     entry.modelId,
     entry.upstreamUrl,
+    requestTime,
   );
 
   const saved = creditIfOriginal - actualCredit;
@@ -576,6 +597,33 @@ function computeCompressTokens(
   };
 }
 
+/** Read actual compression-service call count and aggregate latency. */
+function computeCompressRemoteStats(
+  extensionStats: Record<string, unknown> | undefined,
+): { count: number; totalMs: number } {
+  const none = { count: 0, totalMs: 0 };
+  if (!extensionStats) return none;
+
+  const rawCount = extensionStats.remoteCount;
+  if (typeof rawCount !== "number" || !Number.isFinite(rawCount) || rawCount <= 0) {
+    return none;
+  }
+  const count = Math.floor(rawCount);
+  if (count <= 0) return none;
+
+  const rawTotalMs = extensionStats.remoteTotalMs;
+  if (typeof rawTotalMs === "number" && Number.isFinite(rawTotalMs) && rawTotalMs >= 0) {
+    return { count, totalMs: Math.floor(rawTotalMs) };
+  }
+
+  // Backward compatibility with an older extension that only reported avg.
+  const rawAvgMs = extensionStats.remoteAvgMs;
+  if (typeof rawAvgMs === "number" && Number.isFinite(rawAvgMs) && rawAvgMs >= 0) {
+    return { count, totalMs: Math.floor(count * rawAvgMs) };
+  }
+  return { count, totalMs: 0 };
+}
+
 /**
  * Pure mapper: usage log entry → ClickHouse row.
  * Returns null for error records (4xx/5xx upstream errors carry no real usage).
@@ -587,13 +635,18 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
   if (usage.error) return null;
 
   const promptDetails = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+  // Responses reports the cached prefix here; Chat uses prompt_tokens_details.
+  const inputDetails = usage.input_tokens_details as Record<string, unknown> | undefined;
   const cacheCreation = usage.cache_creation as Record<string, unknown> | undefined;
   const cacheHit =
     num(usage.prompt_cache_hit_tokens) ||
+    num(usage.cache_read_tokens) ||
     num(usage.cache_read_input_tokens) ||
-    num(promptDetails?.cached_tokens);
+    num(promptDetails?.cached_tokens) ||
+    num(inputDetails?.cached_tokens);
   const cacheMiss = num(usage.prompt_cache_miss_tokens);
   const cacheWrite =
+    num(usage.cache_write_tokens) ||
     num(usage.prompt_cache_write_tokens) ||
     num(usage.cache_creation_input_tokens);
 
@@ -601,9 +654,12 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
   //   - OpenAI / DeepSeek: 直接取 usage.prompt_tokens
   //   - TokenHub Anthropic: usage.input_tokens 已排除 cache，需加回 cache_hit + cache_write
   //     才能得到总输入
+  //   - TokenHub Responses: usage.input_tokens 已含 cache，加回会重复计数
   const inputTokens = num(usage.input_tokens);
+  const inputExcludesCache = detectUsageProtocol(entry.upstreamUrl) !== "responses";
   const promptTokens =
-    num(usage.prompt_tokens) || (inputTokens + cacheHit + cacheWrite);
+    num(usage.prompt_tokens) ||
+    (inputExcludesCache ? inputTokens + cacheHit + cacheWrite : inputTokens);
   const completionTokens = num(usage.completion_tokens) || num(usage.output_tokens);
   // total_tokens 语义：总 token = 输入 + 输出。
   //   - OpenAI / DeepSeek: 上游已给 usage.total_tokens，直接采用
@@ -612,6 +668,8 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
   const totalTokens = num(usage.total_tokens) || (promptTokens + completionTokens);
 
   const compressTokens = computeCompressTokens(entry.extensionStats);
+  const compressRemote = computeCompressRemoteStats(entry.extensionStats);
+  const requestTime = entry.requestReceivedAt ? new Date(entry.requestReceivedAt) : undefined;
 
   return {
     timestamp: toChTimestamp(entry.timestamp),
@@ -634,7 +692,7 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
     input_tokens: inputTokens,
     cache_creation_ephemeral_5m_input_tokens: num(cacheCreation?.ephemeral_5m_input_tokens),
     cache_creation_ephemeral_1h_input_tokens: num(cacheCreation?.ephemeral_1h_input_tokens),
-    credit: computeCreditDelta(usage, entry.pricingConfig, entry.modelId, entry.upstreamUrl),
+    credit: computeCreditDelta(usage, entry.pricingConfig, entry.modelId, entry.upstreamUrl, requestTime),
     credit_saved: computeCreditSaved(entry, usage),
     routed_from: entry.routedFrom ?? "",
     space_id: entry.spaceId ?? "",
@@ -644,6 +702,8 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
     compress_tokens_saved: compressTokens.saved,
     pre_compress_tokens: compressTokens.pre,
     post_compress_tokens: compressTokens.post,
+    compress_remote_count: compressRemote.count,
+    compress_remote_total_ms: compressRemote.totalMs,
   };
 }
 
@@ -668,6 +728,7 @@ export function getRawUsageReason(
   usage: Record<string, unknown> | null | undefined,
   pricingConfig: CreditPricingConfig | null | undefined,
   modelId?: string,
+  requestTime?: Date,
 ): string | null {
   if (!usage || Object.keys(usage).length === 0) return null;
 
@@ -689,7 +750,7 @@ export function getRawUsageReason(
   // TokenHub, valid format, known model — but credit calculation produced anomalous value.
   // We recompute here (not passed in) to keep this function callable from writeClickHouse
   // without threading the credit through. Extra compute is cheap (< 1μs).
-  const credit = computeCreditDelta(usage, pricingConfig, modelId, upstreamUrl);
+  const credit = computeCreditDelta(usage, pricingConfig, modelId, upstreamUrl, requestTime);
   if (isCreditAnomalous(credit)) return "invalid_credit";
 
   return null; // Normal TokenHub usage, no need for raw table
@@ -800,6 +861,7 @@ export function writeClickHouse(entry: ClickHouseWriteEntry): void {
         entry.usage,
         entry.pricingConfig,
         entry.modelId,
+        entry.requestReceivedAt ? new Date(entry.requestReceivedAt) : undefined,
       );
       if (rawReason) {
         rawBuffer.push(buildRawUsageRow(entry, rawReason));
@@ -907,6 +969,7 @@ export async function shutdownClickHouse(): Promise<void> {
   // Internal telemetry buffers (see §7.1)
   await flushSessionInit().catch(() => {});
   await flushToolCall().catch(() => {});
+  await flushSkillUsage().catch(() => {});
   if (client) {
     await client.close().catch(() => {});
     client = null;
@@ -938,8 +1001,20 @@ const REJECT_REASON_MAX_CHARS = 128;
 /** 表名（DDL + insert 共用） */
 const SESSION_INIT_TABLE = "session_init_logs";
 const TOOL_CALL_TABLE = "tool_call_logs";
+/**
+ * skill_usage_logs — 每次 LLM 主动 skill_view / skill_search_hit 一行事件。
+ * 设计见 docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md。
+ * 供 default-task 活跃度召回读取；只在真实使用信号(view/search)埋，不埋
+ * `<available_skills>` 注入(避免自循环放大)。
+ */
+const SKILL_USAGE_TABLE = "skill_usage_logs";
 /** TTL（天）—— 内部观测 90 天足够 */
 const TELEMETRY_TTL_DAYS = 90;
+/**
+ * skill_usage TTL —— recency 维度要看 30/90 天窗口, 90 天 TTL 就到边了；
+ * 180 天给窗口留 buffer。存储估算 40MB/天 × 180 天 ≈ 7GB, 很轻。
+ */
+const SKILL_USAGE_TTL_DAYS = 180;
 
 // ── 类型定义 ────────────────────────────────────────────────────────────────
 
@@ -1304,6 +1379,40 @@ export function sessionInitTableDdl(): string {
   ].filter(Boolean).join("\n");
 }
 
+/**
+ * skill_usage_logs 的 DDL —— default-task 活跃度召回埋点。
+ *
+ * 设计见 docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md §3.2。
+ *
+ * ORDER BY 前 4 段 (space_id, team_id, agent_id, skill_id, timestamp) 让 MRR
+ * 召回查询 `WHERE space_id=? AND team_id=? AND agent_id=? GROUP BY skill_id`
+ * 完美命中主键前缀, 千万行也是毫秒级。
+ */
+export function skillUsageTableDdl(): string {
+  const ttlClause = SKILL_USAGE_TTL_DAYS > 0
+    ? `TTL toDateTime(timestamp) + INTERVAL ${SKILL_USAGE_TTL_DAYS} DAY`
+    : "";
+  return [
+    `CREATE TABLE IF NOT EXISTS ${SKILL_USAGE_TABLE} (`,
+    "  timestamp DateTime64(3, 'Asia/Shanghai'),",
+    "  space_id String,",
+    "  team_id String,",
+    "  agent_id String,",
+    "  user_id String DEFAULT '',",
+    "  session_key String DEFAULT '',",
+    // 枚举: 'view' | 'search_hit' —— 未来加 'patch_hit' 等扩枚举, 不动 schema
+    "  event_type LowCardinality(String),",
+    "  skill_id String,",
+    "  agent_source LowCardinality(String) DEFAULT '',",
+    "  source_tag LowCardinality(String) DEFAULT 'proxy',",
+    "  host LowCardinality(String)",
+    ") ENGINE = MergeTree()",
+    "PARTITION BY toYYYYMM(timestamp)",
+    "ORDER BY (space_id, team_id, agent_id, skill_id, timestamp)",
+    ttlClause,
+  ].filter(Boolean).join("\n");
+}
+
 /** tool_call_logs 的 DDL（内部使用埋点 §3.2） */
 export function toolCallTableDdl(): string {
   const ttlClause = TELEMETRY_TTL_DAYS > 0
@@ -1335,4 +1444,105 @@ export function toolCallTableDdl(): string {
     "ORDER BY (space_id, session_key, timestamp)",
     ttlClause,
   ].filter(Boolean).join("\n");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Skill Usage Telemetry — default-task 活跃度召回埋点
+// 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+//
+// 只在 LLM 主动 view/search_hit 两个真实使用信号上埋; 不埋
+// `<available_skills>` 注入 (避免自循环: 召回→注入→埋点→分数更高→继续召回)。
+//
+// 硬约束 (与 session_init_logs / tool_call_logs 一致):
+//   1. writeSkillUsageRow 同步返回 void, 绝不 throw
+//   2. flush/requeue 全静默
+//   3. CH 未配置 (disabled=true) → no-op, 主链路无感知
+// ════════════════════════════════════════════════════════════════════════════
+
+/** 埋点点位传入的原始形态 (未截断/未 hash)。 */
+export interface SkillUsageLogInput {
+  timestamp: string;                   // ISO 8601 UTC
+  spaceId?: string;
+  teamId?: string;
+  agentId?: string;
+  userId?: string;
+  sessionKey?: string;
+  /** 'view' | 'search_hit' —— 未来加 'patch_hit' 等扩枚举。 */
+  eventType: string;
+  skillId: string;
+  agentSource?: string;                // claude-code/codebuddy/codex/...
+}
+
+/** CH `skill_usage_logs` 表一行的最终形态。 */
+export interface SkillUsageLogRow {
+  timestamp: string;
+  space_id: string;
+  team_id: string;
+  agent_id: string;
+  user_id: string;
+  session_key: string;
+  event_type: string;
+  skill_id: string;
+  agent_source: string;
+  source_tag: string;
+  host: string;
+}
+
+/** 构造 skill_usage 行；纯函数便于单测。 */
+export function buildSkillUsageLogRow(input: SkillUsageLogInput): SkillUsageLogRow {
+  return {
+    timestamp: toChTimestamp(input.timestamp),
+    space_id: input.spaceId ?? "",
+    team_id: input.teamId ?? "",
+    agent_id: input.agentId ?? "",
+    user_id: input.userId ?? "",
+    session_key: input.sessionKey ?? "",
+    event_type: input.eventType,
+    skill_id: input.skillId,
+    agent_source: input.agentSource ?? "",
+    source_tag: "proxy",
+    host: HOST_ID,
+  };
+}
+
+let skillUsageBuffer: SkillUsageLogRow[] = [];
+
+function requeueSkillUsage(rows: SkillUsageLogRow[]): void {
+  skillUsageBuffer = requeueWithOverflowGuard(
+    skillUsageBuffer,
+    rows,
+    "clickhouse.skillUsage.overflow",
+  );
+}
+
+async function flushSkillUsage(): Promise<void> {
+  await flushBuffer(
+    skillUsageBuffer,
+    client,
+    SKILL_USAGE_TABLE,
+    requeueSkillUsage,
+    "clickhouse.skillUsage",
+  );
+}
+
+/**
+ * 写一条 skill_usage 记录 (fire-and-forget, 绝不抛)。
+ * CH 未配置/未初始化时 no-op；构造异常静默吞掉。
+ *
+ * `skill_id` 若为空串直接跳过 (防御性: MRR 聚合键不能为空)。
+ */
+export function writeSkillUsageRow(input: SkillUsageLogInput): void {
+  if (disabled || !config) return;
+  if (!input.skillId) return;
+  try {
+    const row = buildSkillUsageLogRow(input);
+    enqueueRow(
+      skillUsageBuffer,
+      row,
+      flushSkillUsage,
+      config?.flushThreshold ?? 50,
+    );
+  } catch {
+    // 绝不阻塞业务
+  }
 }

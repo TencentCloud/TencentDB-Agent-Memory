@@ -199,11 +199,23 @@ export interface ListingInput extends IdFields {
   query?: string;
   /** char budget for the rendered listing block. Default 8000 in plugin. */
   char_budget?: number;
+  /**
+   * Recall mode:
+   *   - undefined / 'auto': plugin 走 BM25 (query 非空) 或 list head (query 空);
+   *   - 'activity': 读 skill_usage_logs 按 MRR 排序 (default-task 场景专用).
+   *
+   * 'activity' 在 CH 未配置/查询失败/冷启动时会 fallback 到 'auto' 逻辑,
+   * response.mode 会体现最终使用的模式 ('activity' / 'search' / 'full').
+   *
+   * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+   */
+  mode?: "auto" | "activity";
 }
 
 /** Result from /v3/skill/listing. `listing` is the pre-rendered `<available_skills>` block. */
 export interface ListingResult {
-  mode: "full" | "search";
+  /** 实际使用的召回模式 —— activity 请求可能因 fallback 返回 full/search。 */
+  mode: "full" | "search" | "activity";
   listing: string;
   hits: Array<{ skill_id: string; version: number; name: string }>;
 }

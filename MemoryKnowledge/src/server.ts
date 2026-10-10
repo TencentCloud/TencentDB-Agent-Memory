@@ -26,8 +26,12 @@ import { createToolsRoutes } from "./routes/tools.js";
 import { createHealthRoutes } from "./routes/health.js";
 import { createLlmBindingRoutes } from "./routes/llm-binding.js";
 import { createAutoSyncRoutes } from "./routes/auto-sync.js";
+import { createSourceCredentialRoutes } from "./routes/source-credential.js";
+import { createSourceProviderRoutes } from "./routes/source-provider.js";
+import { createWikiSourceRoutes } from "./wiki-source/routes.js";
 import { accessLog } from "./middleware/response-envelope.js";
 import { errorHandler } from "./middleware/error-handler.js";
+import { createServiceAuthMiddleware } from "./middleware/auth.js";
 import { createLogger } from "./logger.js";
 import {
   createKnowledgeTelemetry,
@@ -62,6 +66,10 @@ export function createApp() {
 
   // /v3 prefix applied once here — routes define paths without prefix
   const api = new Hono();
+  // 服务间鉴权：serviceKey 非空时，除只读白名单外的 /v3 端点均需
+  // Bearer 鉴权（fail-closed）；key 为空则全放行（向后兼容）。
+  // /health、/docs、/openapi.json 挂在 api 之外，保持开放。
+  api.use("*", createServiceAuthMiddleware(config.auth, config.apiPrefix));
   // Only Agent tool executions are usage telemetry; health/admin/ingest remain excluded.
   api.use("/tools/call", createKnowledgeTelemetryMiddleware(knowledgeTelemetry));
   api.route("/wiki", createWikiRoutes({
@@ -92,6 +100,23 @@ export function createApp() {
   api.route("/", createAutoSyncRoutes({
     scheduler: knowledgeModule.autoSyncScheduler,
     config: knowledgeModule.autoSyncConfig,
+  }));
+
+  // source-credential / source-provider — 外部知识源令牌 + 来源列表
+  api.route("/source-credential", createSourceCredentialRoutes({
+    credentialStore: knowledgeModule.credentialStore,
+    store: knowledgeModule.store,
+  }));
+  api.route("/source-provider", createSourceProviderRoutes({
+    registry: knowledgeModule.codeSourceRegistry,
+    wikiRegistry: knowledgeModule.wikiSourceRegistry,
+  }));
+
+  // wiki-source — 外部 wiki 列文档 / 导入（不触发 ingest）
+  api.route("/wiki-source", createWikiSourceRoutes({
+    registry: knowledgeModule.wikiSourceRegistry,
+    credentialStore: knowledgeModule.credentialStore,
+    wikiService: knowledgeModule.wikiService,
   }));
 
   // analytics — CH telemetry query endpoints (Panel dashboard)
@@ -128,6 +153,15 @@ async function startServer(): Promise<void> {
   log.info(`DB path: ${config.dbPath}`);
   log.info(`API prefix: ${config.apiPrefix}`);
   log.info(`ClickHouse telemetry: ${config.clickhouse.enabled ? "enabled" : "disabled"}`);
+  // Security posture：空 key 只 warn 不拒启（向后兼容），与 Core gateway 的默认开放语义一致。
+  if (config.auth.serviceKey) {
+    log.info("Service auth: enabled (KNOWLEDGE_SERVICE_KEY) — write/admin endpoints require Bearer");
+  } else {
+    log.warn(
+      "Service auth: DISABLED — KNOWLEDGE_SERVICE_KEY is empty, all /v3 endpoints are open. " +
+        "Set it for any shared or production deployment.",
+    );
+  }
 
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     log.info(`Knowledge service listening on http://localhost:${info.port}`);

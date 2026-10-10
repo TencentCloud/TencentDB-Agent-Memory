@@ -2,8 +2,9 @@
  * WikiDetailView —— Wiki 详情视图（概览 / 图谱 / 页面 / 搜索 四个 Tab + 添加文档 Modal）。
  * 全部数据与回调来自 useWikiSources 的返回对象，组件只做渲染。
  */
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Alert, Button, Card, Input, MetricsBoard, Modal, Progress, SearchBox, StatusTip, TabPanel, Tabs, Tag, Text } from 'tea-component';
+import { Alert, Button, Card, Input, MetricsBoard, Modal, Progress, SearchBox, Select, StatusTip, TabPanel, Tabs, Tag, Text } from 'tea-component';
 import {
   ArrowLeftIcon,
   AttachIcon,
@@ -17,28 +18,28 @@ import {
   LayersIcon as ArchitectureIcon,
   LoadingIcon,
   SearchIcon,
-  StarIcon,
 } from 'tea-icons-react';
-import { knowledgeApi } from '@/lib/api/knowledge-api';
+import { knowledgeApi, type SourceProviderMeta, type SourceProviderFormField } from '@/lib/api/knowledge-api';
 import { tea } from '@/lib/tea-bridge';
 import { WIKI_ALLOWED_FILE_RE, TYPE_COLORS, TYPE_COLOR_FALLBACK, type DetailTab } from '../constants/wiki-constants';
 import { WikiStatusBadge } from './wiki-ui';
 import { GraphTabContent, PagesTabContent } from './wiki-detail-components';
+import { WikiSourcePageTree } from './wiki-source-page-tree';
+import { ImportAndIngestModal } from './import-and-ingest-modal';
 import type { WikiSourcesStore } from '../hooks/useWikiSources';
 
 export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
   const { t } = useTranslation();
+  // 设计 2026-09-21：合并后的单一导入入口（原「添加」+「Ingest」）
+  const [showImportModal, setShowImportModal] = useState(false);
   const {
     sources,
     selectedWikiId,
     setSubView,
     fetchSources,
-    setShowAddDoc,
-    setAddDocTab,
-    handleIngest,
-    ingestBusy,
     displayIngestState,
-    setIngestState,
+    ingestCardCleared,
+    setIngestCardCleared,
     activeTab,
     setActiveTab,
     pages,
@@ -73,10 +74,40 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
     handleUploadMdBatch,
     handleBatchUpload,
     fileInputRef,
+    openAddDocExternal,
+    // 外部来源（iWiki 等）导入
+    sourceProviders,
+    formSourceType,
+    setFormSourceType,
+    formCredential,
+    setCredentialField,
+    formSourceUrl,
+    setFormSourceUrl,
+    treeResult,
+    selectedPageIds,
+    setSelectedPageIds,
+    fetchingTree,
+    importing,
+    credConfigured,
+    savingCred,
+    crawlMode,
+    setCrawlMode,
+    fetchWikiTree,
+    importWikiPages,
+    loadWikiProviders,
+    ensureCredential,
   } = store;
 
   const source = sources.find((s) => s.wiki_id === selectedWikiId);
   const wikiName = source?.name ?? '';
+  // 进度卡片只在「加工中」显示；完成后（ready）自动收起，与合并改动前的行为一致
+  // （终态由标题栏的状态徽章 + 页数体现，不需要再挂一个进度卡片）。
+  // failed 例外：出错原因必须显式告知用户，因此保留卡片直到用户点「清除」。
+  const showIngestCard =
+    !ingestCardCleared &&
+    displayIngestState.wiki === wikiName &&
+    (displayIngestState.active || displayIngestState.status === 'failed');
+  const isIngestingNow = displayIngestState.active;
 
   // 选中 Wiki 已不存在（被删除或刷新失败）时给出可返回的空态，避免死胡同
   if (!source) {
@@ -107,42 +138,44 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
             <div className="_wiki-detail-header-info">
               <BooksIcon size={20} />
               <span className="_wiki-detail-title">{wikiName}</span>
-              {source && <WikiStatusBadge status={source.status} />}
+              {/* 状态徽章与进度卡片同源：都用 displayIngestState（已屏蔽"上一个
+                  任务留下的终态"），保证徽章与卡片永远一致，不会一个显示就绪、
+                  另一个显示加工中。 */}
+              {displayIngestState.status && (
+                <WikiStatusBadge status={displayIngestState.status} />
+              )}
             </div>
             <div className="_wiki-detail-header-actions">
-              <Button
-                type="text"
-                onClick={() => {
-                  setShowAddDoc(true);
-                  setAddDocTab('file');
-                }}
-              >
-                <AttachIcon size={14} /> {t('wiki.detail.add')}
-              </Button>
+              {/* 设计 2026-09-21：「添加」+「Ingest」合并为单一入口。 */}
               <Button
                 type="primary"
-                onClick={() => handleIngest(selectedWikiId)}
-                disabled={ingestBusy}
-                loading={ingestBusy && displayIngestState.wiki === wikiName}
+                onClick={() => {
+                  // 打开即初始化 external 流程：回填来源地址、查凭据、已配置则直接拉树
+                  if (source?.source_type && !showImportModal) {
+                    void openAddDocExternal(source);
+                  }
+                  setShowImportModal(true);
+                }}
+                // 设计 2026-09-21 §3.3：合并入口允许"抽取中再次导入"——由 KS 的
+                // onBusy:'replace' 原子完成"取消旧任务 + 排队新任务"，UI 不禁用按钮。
+                // 之前基于 isCurrentWikiIngesting 的 disabled 与 replace 语义矛盾，
+                // 会阻断用户「换个文件再来一次」的合法流程。
               >
-                {ingestBusy && displayIngestState.wiki === wikiName ? (
-                  t('wiki.detail.processing')
-                ) : (
-                  <>
-                    <StarIcon size={14} /> {t('wiki.action.ingest')}
-                  </>
-                )}
+                <AttachIcon size={14} /> {t('wiki.detail.import')}
               </Button>
             </div>
           </div>
           <div className="_detail-meta-row">
-            <span>{t('wiki.detail.pages', { count: pages.length })}</span>
+            {/* 抽取进行中时不显示页数：replace 语义下旧页数尚未被新任务重建，
+                展示"0 页"或旧计数都会误导用户；等 ready 后由 fetchDetail 刷新。 */}
+            {!isIngestingNow && (
+              <span>{t('wiki.detail.pages', { count: pages.length })}</span>
+            )}
           </div>
         </Card.Body>
       </Card>
 
-      {(displayIngestState.active || displayIngestState.log.length > 0) &&
-        displayIngestState.wiki === wikiName && (
+      {showIngestCard && (
           <Card className="_wiki-detail-ingest-card">
             <Card.Body>
               <div className="_wiki-detail-ingest">
@@ -158,7 +191,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
                   {!displayIngestState.active && (
                     <Button
                       type="text"
-                      onClick={() => setIngestState((state) => ({ ...state, log: [] }))}
+                      onClick={() => setIngestCardCleared(true)}
                     >
                       {t('wiki.detail.clear')}
                     </Button>
@@ -177,7 +210,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
                         {displayIngestState.done}/{displayIngestState.total}
                       </Text>
                     </div>
-                    {displayIngestState.checkCount > 0 && (
+                    {displayIngestState.active && (
                       <Text theme="label">
                         {t('wiki.detail.queryCount', { count: displayIngestState.checkCount })}
                         {displayIngestState.lastCheckedAt
@@ -444,7 +477,15 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
       </Tabs>
 
       {/* Add Doc Modal */}
-      {store.showAddDoc && (
+      {store.showAddDoc && (() => {
+        // iWiki 等外部来源的 wiki：只显示"从外部拉取"，不显示"上传文件 / Markdown"两 tab。
+        // 否则（手工上传的 wiki）维持原两 tab；来源来自 wiki_detail.source_type（null=手工）。
+        const isExternal = !!source?.source_type;
+        // 打开时若为外部来源，强制切到 external tab，并预拉来源列表。
+        const modalTabId: 'file' | 'markdown' | 'external' = isExternal
+          ? 'external'
+          : (store.addDocTab === 'external' ? 'file' : store.addDocTab);
+        return (
         <Modal
           visible
           caption={t('wiki.detail.addDoc.caption', { name: wikiName })}
@@ -455,12 +496,19 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
           <Modal.Body>
             <Alert type="info">{t('wiki.detail.addDoc.hint')}</Alert>
             <Tabs
-              tabs={[
-                { id: 'file', label: t('wiki.detail.addDoc.file') },
-                { id: 'markdown', label: t('wiki.detail.addDoc.markdown') },
-              ]}
-              activeId={store.addDocTab}
-              onActive={(tab) => store.setAddDocTab(tab.id as 'file' | 'markdown')}
+              tabs={isExternal
+                ? [{ id: 'external', label: t('wiki.detail.addDoc.external') }]
+                : [
+                    { id: 'file', label: t('wiki.detail.addDoc.file') },
+                    { id: 'markdown', label: t('wiki.detail.addDoc.markdown') },
+                  ]}
+              activeId={modalTabId}
+              onActive={(tab) => {
+                const id = tab.id as 'file' | 'markdown' | 'external';
+                store.setAddDocTab(id);
+                // 首次切到「外部来源」时预拉来源列表
+                if (id === 'external' && sourceProviders.length === 0) void loadWikiProviders();
+              }}
             >
               <TabPanel id="file">
                 <div className="_wiki-detail-upload-panel">
@@ -593,6 +641,164 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
                   </div>
                 </div>
               </TabPanel>
+              <TabPanel id="external">
+                <div className="_wiki-detail-external-panel" style={{ paddingTop: 8 }}>
+                  {/* 来源选择 */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ marginBottom: 4 }}>{t('wiki.register.source')}</div>
+                    <Select
+                      size="full"
+                      value={formSourceType}
+                      onChange={(v) => {
+                        setFormSourceType(v);
+                        // 切换来源清空已填凭据与已拉取的树
+                        setSelectedPageIds([]);
+                      }}
+                      options={[
+                        { value: '', text: '—' },
+                        ...sourceProviders.map((p: SourceProviderMeta) => {
+                          const key = `wiki.source.${p.id}`;
+                          const localized = t(key);
+                          return { value: p.id, text: localized === key ? p.id : localized };
+                        }),
+                      ]}
+                    />
+                  </div>
+
+                  {/* 凭据字段（按 form_fields 动态渲染）—— 已存凭据时不再要求重填 */}
+                  {formSourceType && !credConfigured && (
+                    <>
+                      <Alert type="info">{t('wiki.register.credHint')}</Alert>
+                      {(sourceProviders.find((p) => p.id === formSourceType)?.form_fields ?? []).map(
+                        (field: SourceProviderFormField, idx: number, arr: readonly SourceProviderFormField[]) => {
+                          const provider = sourceProviders.find((p) => p.id === formSourceType)!;
+                          const isLast = idx === arr.length - 1;
+                          const labelKey = `code.credField.${field.name}.label`;
+                          const label = t(labelKey);
+                          const phKey = `code.credField.${field.name}.placeholder`;
+                          const ph = t(phKey);
+                          return (
+                            <div key={field.name} style={{ marginBottom: 12 }}>
+                              <div style={{ marginBottom: 4 }}>
+                                {label === labelKey ? field.name : label}
+                                {field.required && <span style={{ color: '#d0021b' }}> *</span>}
+                              </div>
+                              <Input
+                                size="full"
+                                type={field.secret ? 'password' : 'text'}
+                                value={formCredential[field.name] ?? ''}
+                                onChange={(v) => setCredentialField(field.name, v)}
+                                placeholder={ph === phKey ? '' : ph}
+                              />
+                              {isLast && provider.token_doc_url && (
+                                <a
+                                  href={provider.token_doc_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="_wikilist-token-doc"
+                                >
+                                  {t('code.register.tokenDoc')}
+                                </a>
+                              )}
+                            </div>
+                          );
+                        },
+                      )}
+                    </>
+                  )}
+
+                  {/* 来源地址 */}
+                  {formSourceType && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ marginBottom: 4 }}>{t('wiki.register.sourceUrl')}</div>
+                      <Input
+                        size="full"
+                        value={formSourceUrl}
+                        onChange={setFormSourceUrl}
+                        placeholder={t('wiki.register.sourceUrlPlaceholder')}
+                      />
+                      <div style={{ opacity: 0.6, fontSize: 12, marginTop: 4 }}>
+                        {t('wiki.register.sourceUrlExtra')}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 遍历策略：决定从来源地址出发如何发现文档 */}
+                  {formSourceType && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ marginBottom: 4 }}>{t('wiki.register.crawlMode')}</div>
+                      <Select
+                        size="full"
+                        value={crawlMode ?? 'tree'}
+                        options={[
+                          { value: 'tree', text: t('wiki.register.crawlMode.tree') },
+                          { value: 'links', text: t('wiki.register.crawlMode.links') },
+                        ]}
+                        onChange={(v) => setCrawlMode((v || 'tree') as typeof crawlMode)}
+                      />
+                      <div style={{ opacity: 0.6, fontSize: 12, marginTop: 4 }}>
+                        {crawlMode === 'links'
+                          ? t('wiki.register.crawlHint.links')
+                          : t('wiki.register.crawlHint.tree')}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 拉取按钮：未存凭据 → 先存再拉（存凭据是拉树的前提） */}
+                  {formSourceType && (
+                    <Button
+                      type="primary"
+                      onClick={() => {
+                        const wikiId = selectedWikiId ?? undefined;
+                        if (credConfigured) void fetchWikiTree(wikiId);
+                        else void ensureCredential(wikiId ?? '');
+                      }}
+                      disabled={
+                        fetchingTree || savingCred || !formSourceUrl.trim() || !selectedWikiId
+                      }
+                      loading={fetchingTree || savingCred}
+                      style={{ marginBottom: 12 }}
+                    >
+                      {fetchingTree || savingCred
+                        ? t('wiki.register.fetching')
+                        : credConfigured
+                          ? t('wiki.register.fetch')
+                          : t('wiki.register.saveAndFetch')}
+                    </Button>
+                  )}
+
+                  {/* 文档树勾选（按 parentId 还原层级，目录可折叠/快捷全选） */}
+                  {treeResult && (
+                    <div>
+                      <WikiSourcePageTree
+                        pages={treeResult.pages}
+                        selectedPageIds={selectedPageIds}
+                        onToggleLeaf={(id, checked) =>
+                          setSelectedPageIds((prev) =>
+                            checked ? [...prev, id] : prev.filter((x) => x !== id),
+                          )
+                        }
+                        onToggleDir={(ids, checked) =>
+                          setSelectedPageIds((prev) =>
+                            checked
+                              ? [...new Set([...prev, ...ids])]
+                              : prev.filter((x) => !ids.includes(x)),
+                          )
+                        }
+                      />
+                      <Button
+                        type="primary"
+                        style={{ marginTop: 12 }}
+                        onClick={() => void importWikiPages(selectedWikiId ?? undefined)}
+                        disabled={importing || selectedPageIds.length === 0}
+                        loading={importing}
+                      >
+                        {importing ? t('wiki.register.importing') : t('wiki.register.import')}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </TabPanel>
             </Tabs>
             <input
               ref={fileInputRef}
@@ -617,7 +823,51 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
             />
           </Modal.Body>
         </Modal>
-      )}
+        );
+      })()}
+
+      {/* 设计 2026-09-21：合并后的单一导入入口（替代原「添加」+「Ingest」两按钮） */}
+      <ImportAndIngestModal
+        visible={showImportModal}
+        sourceType={source?.source_type}
+        // Modal 的 submitting 仅用于展示按钮 loading 与阻止重复点击；由于我们
+        // 在 onSubmit 里 fire-and-forget 立即关闭 Modal（进度接管在页面顶部），
+        // Modal 存在期间没有"提交尚未返回"的窗口，恒为 false 即可。
+        submitting={false}
+        external={{
+          sourceProviders,
+          formSourceType,
+          setFormSourceType: (v) => {
+            setFormSourceType(v);
+            setSelectedPageIds([]);
+          },
+          formCredential,
+          setCredentialField,
+          credConfigured,
+          savingCred,
+          fetchingTree,
+          formSourceUrl,
+          setFormSourceUrl,
+          crawlMode: crawlMode ?? 'tree',
+          setCrawlMode,
+          treeResult,
+          selectedPageIds,
+          setSelectedPageIds,
+          onFetchTree: () => {
+            const wikiId = selectedWikiId ?? undefined;
+            if (credConfigured) void fetchWikiTree(wikiId);
+            else void ensureCredential(wikiId ?? '');
+          },
+        }}
+        onClose={() => setShowImportModal(false)}
+        onSubmit={(payload) => {
+          // 设计 2026-09-21 §2.2：提交后立即关闭 Modal，进度由页面顶部进度条接管。
+          // submitAddAndIngest 内部已完成错误 toast / 进度回调 / 刷新，无需在此 await
+          // 整个抽取流程（否则 Modal 会一直转到 ingest 结束）。
+          void store.submitAddAndIngest({ wikiId: selectedWikiId, ...payload });
+          setShowImportModal(false);
+        }}
+      />
     </div>
   );
 }

@@ -36,6 +36,7 @@
     "test:standalone:skill": "bash __tests__/standalone/skill-e2e.sh",
     "test:standalone:conv": "bash __tests__/standalone/all-e2e.sh",
     "test:standalone:all": "bash scripts/e2e-standalone.sh",
+    "test:e2e:bm25": "node --test __tests__/standalone/bm25-search-e2e.mjs",
     "lint:skill-isolation": "bash scripts/ci/check-skill-queue-isolation.sh",
     "smoke:skill:llm": "tsx scripts/smoke-skill/smoke-skill-llm.ts",
     "smoke:skill:manage": "tsx scripts/smoke-skill/smoke-skill-manage.ts",

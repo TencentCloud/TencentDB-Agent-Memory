@@ -49,9 +49,12 @@ import type {
   UpsertConfigParamInput,
   ListConfigParamsFilter,
   InstanceUpstreamConfigEntity,
-  UpsertInstanceUpstreamConfigInput,
   InstanceUpstreamConfigFilter,
-  UpstreamConfigType,
+  CreateInstanceUpstreamGroupInput,
+  UpdateInstanceUpstreamGroupInput,
+  ToggleInstanceUpstreamGroupInput,
+  DeleteInstanceUpstreamGroupInput,
+  SupportedAgent,
 } from "../types.js";
 
 export type MaybePromise<T> = T | Promise<T>;
@@ -208,21 +211,80 @@ export interface IMetadataStore {
   upsertConfigParam(input: UpsertConfigParamInput): MaybePromise<ConfigParamEntity>;
   listConfigParams(filter: ListConfigParamsFilter): MaybePromise<ConfigParamEntity[]>;
 
-  // ── InstanceUpstreamConfig ──
-  getInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
-  ): MaybePromise<InstanceUpstreamConfigEntity | null>;
-  upsertInstanceUpstreamConfig(
-    input: UpsertInstanceUpstreamConfigInput,
-  ): MaybePromise<InstanceUpstreamConfigEntity>;
-  listInstanceUpstreamConfigs(
+  // ── InstanceUpstreamConfig (v2 模型组) ──
+  //
+  // 语义详见 docs/design/2026-08-25-instance-upstream-config.md §5 / §6。
+  // 关键约束(store 层必须保证):
+  //   1. group_id 由 store 生成 (dflt-<r> / grp-<r> / ext-<r>)。
+  //   2. default / extraction 每实例最多 1 行(UNIQUE partial index)。
+  //   3. agents 全域唯一:同一实例内 default.agents ∪ 所有 custom.agents 元素两两不重复。
+  //      写入时需在事务内 SELECT-all → 内存交集校验 → 写入,冲突抛
+  //      InstanceUpstreamWriteConflictError("agents_overlap")。
+  //   4. version 字段乐观锁:update / toggle 传入 expected_version,不匹配抛
+  //      InstanceUpstreamWriteConflictError("version_mismatch")。SQLite 侧
+  //      同时用 BEGIN IMMEDIATE 加事务锁,双重保护。
+  //   5. seed 幂等:listGroups 见空表触发 ensureDefaultSeeded;两个并发写入
+  //      靠 default 单例 UNIQUE 约束兜底。
+
+  /** 按 group_id 精确获取一行(不存在返 null)。 */
+  getInstanceUpstreamGroup(groupId: string): MaybePromise<InstanceUpstreamConfigEntity | null>;
+
+  /**
+   * 列出该实例的所有行(default + custom + extraction),按 group_type 排序
+   * (default 首、custom 次、extraction 末),同类按 updated_at DESC。
+   * 触发 ensureDefaultSeeded:如果表内 0 default 行且传入 supported-agents
+   * 非空,自动 seed 一条 default 行(agents=supportedAgents, enabled=true)。
+   * 传 undefined 时不触发 seed。
+   */
+  listInstanceUpstreamGroups(
     filter?: InstanceUpstreamConfigFilter,
+    seedIfEmpty?: SupportedAgent[],
   ): MaybePromise<InstanceUpstreamConfigEntity[]>;
-  deleteInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
+
+  /**
+   * 创建新组:custom / default(仅 seed 内部用) / extraction。
+   * 冲突场景:
+   *   - default_already_exists / extraction_already_exists → 抛 InstanceUpstreamWriteConflictError
+   *   - agents 与其他行重叠 → agents_overlap
+   */
+  createInstanceUpstreamGroup(
+    input: CreateInstanceUpstreamGroupInput,
+  ): MaybePromise<InstanceUpstreamConfigEntity>;
+
+  /**
+   * PATCH 更新已存在的组;冲突场景:
+   *   - group_not_found / group_type_mismatch / version_mismatch / agents_overlap
+   */
+  updateInstanceUpstreamGroup(
+    input: UpdateInstanceUpstreamGroupInput,
+  ): MaybePromise<InstanceUpstreamConfigEntity>;
+
+  /** toggle enabled 快捷接口(是 update 的语法糖,同样支持 expected_version)。 */
+  toggleInstanceUpstreamGroup(
+    input: ToggleInstanceUpstreamGroupInput,
+  ): MaybePromise<InstanceUpstreamConfigEntity>;
+
+  /** 物理删除,不存在返 false。 */
+  deleteInstanceUpstreamGroup(
+    input: DeleteInstanceUpstreamGroupInput,
   ): MaybePromise<boolean>;
+
+  /**
+   * 幂等确保 default 行存在。给存量实例首次直接调 create/update/toggle/delete
+   * 等写入接口时兜底 seed —— 只走过 list 的实例会自动 seed,但 Panel 也可能不经
+   * list 直接进入 "新建 custom" 或 extraction 流程,那种情况下若不 seed,后续
+   * 请求会撞 AGENT_NOT_CONFIGURED。
+   *
+   * 语义:
+   *   - supported 为空 → no-op(尊重 list 侧 "undefined 不 seed" 的约定)
+   *   - 表内已存在 default → no-op
+   *   - 无 default → INSERT 一行(agents=supported、mode=official、enabled=true、
+   *     snapshot=supported),与 list 侧 seed 分支完全一致
+   *   - 并发 seed → 依赖 default 行的 UNIQUE partial index 兜底
+   *
+   * 不做 diff-append(方案 E 的收敛只在 list 时跑,避免所有写入路径都刷 snapshot)。
+   */
+  ensureDefaultSeeded(supported: SupportedAgent[]): MaybePromise<void>;
 }
 
 /** 后端类型。 */

@@ -23,6 +23,45 @@ llm:
   maxTokens: 4096
   timeoutMs: 120000
 
+# ── v2 InstanceUpstream:supported-agents ──
+# 事实源在 Proxy `MemoryProxy/src/supported-agents.ts`;此处为 Core 侧副本,
+# 用于 §6.A supported-agents 接口 + seed default 组的 agents 全集。
+# 详见 docs/design/2026-08-25-instance-upstream-config.md §6.A。
+#
+# 缺失/空数组 → Core 侧 seed 逻辑不触发 → Panel 打开是空表列 → Proxy 走 "零行 fallback"
+# (行为等同 v1,全走全局 upstream + alias),保证配置漏配不阻塞业务。
+upstream:
+  supportedAgents:
+    - agent_source: claude-code
+      protocol: anthropic
+      display_name: Claude Code
+    - agent_source: codebuddy
+      protocol: openai-chat
+      display_name: CodeBuddy
+    - agent_source: codex
+      protocol: openai-responses
+      display_name: Codex
+    - agent_source: workbuddy
+      protocol: openai-responses
+      display_name: WorkBuddy
+    - agent_source: dsh
+      protocol: openai-chat
+      display_name: DeepSeek Harness
+    - agent_source: opencode
+      protocol: openai-chat
+      display_name: OpenCode
+    - agent_source: pi
+      protocol: openai-chat
+      display_name: Pi
+    # ── header-only 客户端(hermes / openclaw):走 anthropic /v1/messages,
+    #    通过 x-team-id / x-agent-id / x-task-id 请求头预选身份 ──
+    - agent_source: hermes
+      protocol: anthropic
+      display_name: Hermes
+    - agent_source: openclaw
+      protocol: anthropic
+      display_name: OpenClaw
+
 # ── Memory 引擎配置 ──
 memory:
 

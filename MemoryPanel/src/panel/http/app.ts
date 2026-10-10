@@ -10,6 +10,7 @@ import { registerSkillProxyRoutes } from './routes/skill/proxy.js';
 import { registerAnalyticsProxyRoutes } from './routes/analytics/proxy.js';
 import { registerChatMemoryRoutes } from './routes/chat-memory.js';
 import { registerTaskRoutes } from './routes/task.js';
+import { registerTaskSourceRoutes } from './routes/task-source.js';
 import { registerAgentOverviewRoutes } from './routes/agent-overview.js';
 import { registerAgentLifecycleRoutes } from './routes/agent-lifecycle.js';
 import { registerKnowledgeRoutes } from './routes/knowledge/index.js';
@@ -39,6 +40,8 @@ export function buildPanelApp(deps: PanelDeps): Hono {
   registerChatMemoryRoutes(api, deps);
   // Task 聚合路由：task/list + 批量 task-agent/list 一次返回
   registerTaskRoutes(api, deps);
+  // Task 外部来源：/api/v1/task/source/* → 内核 /v3/task-source/*（令牌随请求体下发，不留存）
+  registerTaskSourceRoutes(api, deps);
   registerAgentOverviewRoutes(api, deps);
   // Agent 生命周期业务路由：/agent/delete-cascade 在 control 层级联清 skill 再 archive
   registerAgentLifecycleRoutes(api, deps);

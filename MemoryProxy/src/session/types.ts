@@ -148,6 +148,11 @@ export interface TaskInTeam {
    * 显示更干净的 label —— 反正虚拟 task 只有一个，不存在重名歧义。
    */
   isDefault?: boolean;
+  /**
+   * 关联到的 agent_id (core API 返回里带的字段, proxy 本身不消费, 但 extractor
+   * 测试里会给 task mock 这个字段表达"task 挂在哪个 agent 下"的关联)。
+   */
+  agent_id?: string;
 }
 
 export interface AgentInTeam {

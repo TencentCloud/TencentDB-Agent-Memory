@@ -87,9 +87,19 @@ import type {
   InstanceUserListFilter,
   UserListFilter,
   InstanceUpstreamConfigEntity,
-  UpsertInstanceUpstreamConfigInput,
   InstanceUpstreamConfigFilter,
-  UpstreamConfigType,
+  CreateInstanceUpstreamGroupInput,
+  UpdateInstanceUpstreamGroupInput,
+  ToggleInstanceUpstreamGroupInput,
+  DeleteInstanceUpstreamGroupInput,
+  SupportedAgent,
+  GroupType,
+  UpstreamMode,
+} from "../types.js";
+import {
+  DEFAULT_GROUP_NAME,
+  EXTRACTION_GROUP_NAME,
+  InstanceUpstreamWriteConflictError,
 } from "../types.js";
 import { formatListResult, paginateArray, resolvePagination, wrapPaginated, DEFAULT_PAGINATION } from "../pagination.js";
 import { generateId, ID_PREFIX } from "../utils/id-generator.js";
@@ -126,6 +136,11 @@ export class MetadataError extends Error {
   constructor(
     public readonly code: string,
     message: string,
+    /**
+     * 可选:结构化 detail,会带进 envelope response 供前端渲染
+     * (如 AGENTS_OVERLAP 的 conflict_groups 列表, DEFAULT_GROUP_IMMUTABLE_FIELDS 的 rejected_fields)。
+     */
+    public readonly detail?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "MetadataError";
@@ -1185,6 +1200,66 @@ export class MetadataService {
     return formatListResult({ items, total: page.total }, pagination);
   }
 
+  /**
+   * asset/get 的调用者视角读（水平越权修复）：
+   *   - system_admin 豁免（管理面排障通道，与 user/list 的 isSystemAdmin 特判同风格）；
+   *   - owner 恒可读（含 archived，保持原管理视角行为）；
+   *   - 其余调用者走 checkAssetPermission（visibility → ACL）；
+   *   - 无权返回 null（路由层映射 404，不泄露资产存在性）。
+   */
+  async getAssetForCaller(assetId: string, ctx: V3AuthContext): Promise<AssetEntity | null> {
+    const asset = await this.getAssetById(assetId);
+    if (!asset) return null;
+    if (ctx.isSystemAdmin) return asset;
+    if (!ctx.userId) return null;
+    if (asset.owner_user_id === ctx.userId) return asset;
+    const perm = await this.checkAssetPermission({ user_id: ctx.userId, asset_id: assetId, action: "read" });
+    return perm.allowed ? asset : null;
+  }
+
+  /**
+   * asset/list 的调用者视角读（水平越权修复）：
+   *   - system_admin：管理面全量（原 listAssetsByTeam 语义保留）；
+   *   - 团队成员：owner 资产恒可见，其余逐条 checkAssetPermission（与 list-accessible 同源判定）；
+   *   - 非团队成员 / 未解析调用者：空页（不报错，避免泄露 team 信息）。
+   * 权限过滤在分页前完成，保证 total 准确。
+   */
+  async listAssetsForCaller(
+    params: { team_id: string } & AssetFilter & PaginationParams,
+    ctx: V3AuthContext,
+  ): Promise<PaginatedResult<AssetEntity>> {
+    const pagination = this.pag(params);
+    const { team_id, limit: _limit, offset: _offset, ...filter } = params;
+    if (ctx.isSystemAdmin) {
+      return this.listAssetsByTeam(team_id, pagination, filter);
+    }
+    if (!ctx.userId) return paginateArray([], pagination);
+    const member = await this.store.getTeamMember(team_id, ctx.userId);
+    if (!member || member.status !== "active") return paginateArray([], pagination);
+
+    const result: AssetEntity[] = [];
+    let offset = 0;
+    const limit = 100;
+    while (true) {
+      const page = await this.store.listAssetsByTeam(team_id, { limit, offset }, filter);
+      for (const asset of page.items) {
+        if (asset.owner_user_id === ctx.userId) {
+          result.push(asset);
+          continue;
+        }
+        const perm = await this.checkAssetPermission({
+          user_id: ctx.userId,
+          asset_id: asset.asset_id,
+          action: "read",
+        });
+        if (perm.allowed) result.push(asset);
+      }
+      if (offset + page.items.length >= page.total) break;
+      offset += limit;
+    }
+    return paginateArray(result, pagination);
+  }
+
   async touchAssetUsage(assetId: string): Promise<void> {
     if (!(await this.getAssetById(assetId))) throw new MetadataError("asset_not_found", `asset not found: ${assetId}`);
     await this.store.touchAssetUsage(assetId);
@@ -1906,6 +1981,18 @@ export class MetadataService {
     return this.archiveTask(taskId);
   }
 
+  /**
+   * 外部来源导入门控：team 存在 + caller 是该 team 的 active member。
+   *
+   * 供 task-source 模块调用（import-service 无法访问本类的 private 门控）。
+   * 与 createTaskForCaller 的前两步同语义，只是把「resource owner」那步留给
+   * createTaskForCaller 自己（creator 恒为 caller）。
+   */
+  async assertExternalTaskImportAllowed(teamId: string, ctx: V3AuthContext): Promise<void> {
+    await this.assertTeamExists(teamId);
+    await this.requireActiveTeamMember(ctx, teamId);
+  }
+
   async linkTaskAgentForCaller(
     taskId: string,
     agentId: string,
@@ -2074,127 +2161,485 @@ export class MetadataService {
     return this.listAclByAsset(assetId, pagination);
   }
 
-  // ── InstanceUpstreamConfig ──────────────────────────────────────────────
+  // ── InstanceUpstreamConfig (v2 模型组) ─────────────────────────────────
+  //
+  // 对应设计文档 §6.B(groups/*) + §6.C(extraction/*) + §6.D(internal/list)。
+  // Service 层职责:
+  //   1. 应用层字段级校验(name 长度 / mode 合法性 / default 组不可改字段等)
+  //   2. store 抛的 InstanceUpstreamWriteConflictError 翻译为 MetadataError
+  //   3. Public/Internal 两条 list 路径:public 脱敏(api_key_masked),
+  //      Internal 明文(供 Proxy 转发)
+  //   4. 依赖调用方 (router 层) 提供 supported-agents 数组用于 seed 和 agents 校验;
+  //      service 本身不知道 yaml/config 存在
+  //
+  // 校验矩阵(§5.3):
+  //   default: name 固定 / mode='official' / base_url/api_key/model_id/description 必空;
+  //            agents 可 0~N,允许 update
+  //   custom:  name 非空 ≤64;agents ≥1;mode ∈ {custom_unified,custom_passthrough};
+  //            base_url 非空;custom_unified 时 api_key 非空
+  //   extraction: agents=[];mode='custom_unified';base_url + api_key 都必填
+
+  private static readonly NAME_MAX_LEN = 64;
+  // 与 §5.3 "允许中英文数字空格及 _-.()" 对齐;禁 换行/引号/尖括号/斜杠
+  private static readonly NAME_INVALID_RE = /[\n\r"'<>\/\\]/;
 
   /**
-   * 查询单条实例上游配置。
-   * type=conversation 且不存在时自动插入一条 mode=official 的默认行。
+   * 幂等确保 default 已 seed。Router 层给纯只读接口(supported-agents / extraction/get)
+   * 用,不想让它们绕过 store 直接暴露 store 引用,就在 service 加一层薄转发。
    */
-  async getInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
-  ): Promise<Record<string, unknown>> {
-    let entity = await this.store.getInstanceUpstreamConfig(agentSource, type);
-    if (!entity && type === "conversation") {
-      entity = await this.store.upsertInstanceUpstreamConfig({
-        agent_source: agentSource,
-        type: "conversation",
-        mode: "official",
-      });
-    }
-    if (!entity) {
-      return {
-        agent_source: agentSource,
-        type,
-        mode: "official",
-        base_url: "",
-        api_key_masked: "",
-        model_id: "",
-        description: "",
-        updated_at: null,
-      };
-    }
-    return this.toPublicInstanceUpstreamConfig(entity);
+  async ensureDefaultSeeded(supportedAgents: SupportedAgent[]): Promise<void> {
+    await this.store.ensureDefaultSeeded(supportedAgents);
   }
 
   /**
-   * 写入/覆盖实例上游配置。
-   * 校验：
-   *   - mode != official → base_url 必填
-   *   - mode == custom_unified → api_key 必填
-   *   - type == extraction → mode 不允许 custom_passthrough
+   * 列出所有组(default + custom),供 Panel B1 用。
+   * seed 语义: supportedAgents 非空时,若表内无 default 自动 seed 一行。
    */
-  async setInstanceUpstreamConfig(
-    input: UpsertInstanceUpstreamConfigInput,
-  ): Promise<Record<string, unknown>> {
-    const mode = input.mode;
-    const type = input.type ?? "conversation";
-    if (type === "extraction" && mode === "custom_passthrough") {
-      throw new MetadataError(
-        "invalid_input",
-        "extraction type does not support custom_passthrough mode",
-      );
-    }
-    if (mode !== "official" && !input.base_url?.trim()) {
-      throw new MetadataError(
-        "invalid_input",
-        "base_url is required when mode is custom_unified or custom_passthrough",
-      );
-    }
-    if (mode === "custom_unified" && !input.api_key?.trim()) {
-      throw new MetadataError(
-        "invalid_input",
-        "api_key is required when mode is custom_unified",
-      );
-    }
-    const entity = await this.store.upsertInstanceUpstreamConfig(input);
-    return this.toPublicInstanceUpstreamConfig(entity);
-  }
-
-  /** 全量列出实例上游配置（脱敏）。 */
-  async listInstanceUpstreamConfigs(
-    filter?: InstanceUpstreamConfigFilter,
+  async listInstanceUpstreamGroups(
+    supportedAgents: SupportedAgent[],
   ): Promise<{ items: Record<string, unknown>[] }> {
-    const entities = await this.store.listInstanceUpstreamConfigs(filter);
-    return { items: entities.map((e) => this.toPublicInstanceUpstreamConfig(e)) };
-  }
-
-  /** 全量列出实例上游配置（内部，不脱敏）。 */
-  async listInstanceUpstreamConfigsInternal(
-    filter?: InstanceUpstreamConfigFilter,
-  ): Promise<{ items: InstanceUpstreamConfigEntity[] }> {
-    const entities = await this.store.listInstanceUpstreamConfigs(filter);
-    return { items: entities };
+    const rows = await this.store.listInstanceUpstreamGroups(undefined, supportedAgents);
+    // 只返 default + custom(extraction 走 C 类接口)
+    const filtered = rows.filter((r) => r.group_type !== "extraction");
+    return { items: filtered.map((r) => this.toPublicGroup(r)) };
   }
 
   /**
-   * 重置实例上游配置。
-   * conversation: 重置为 official（保留行）；extraction: 删除行。
+   * 内部 D 接口:Proxy 拉数据,api_key 明文,全部行(含 extraction)。
+   * 与 Panel 侧共用 seed 逻辑(店店层保证)。
    */
-  async resetInstanceUpstreamConfig(
-    agentSource: string,
-    type: UpstreamConfigType,
-  ): Promise<{ reset: boolean }> {
-    if (type === "conversation") {
-      await this.store.upsertInstanceUpstreamConfig({
-        agent_source: agentSource,
-        type: "conversation",
-        mode: "official",
-        base_url: "",
-        api_key: "",
-        model_id: "",
-        description: "",
-      });
-      return { reset: true };
-    }
-    const deleted = await this.store.deleteInstanceUpstreamConfig(agentSource, type);
-    return { reset: deleted };
+  async listInstanceUpstreamGroupsInternal(
+    supportedAgents: SupportedAgent[],
+  ): Promise<{ items: InstanceUpstreamConfigEntity[] }> {
+    const rows = await this.store.listInstanceUpstreamGroups(undefined, supportedAgents);
+    return { items: rows };
   }
 
-  /** api_key 脱敏输出。 */
-  private toPublicInstanceUpstreamConfig(
-    entity: InstanceUpstreamConfigEntity,
-  ): Record<string, unknown> {
+  /** Panel B2: 新建 custom 组。 */
+  async createInstanceUpstreamCustomGroup(
+    input: {
+      name: string;
+      agents: string[];
+      enabled?: boolean;
+      mode: UpstreamMode;
+      base_url: string;
+      api_key?: string;
+      model_id?: string;
+      description?: string;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    this.assertGroupName(input.name);
+    this.assertAgents(input.agents, supportedAgents, "custom");
+    this.assertModeForGroupType("custom", input.mode);
+    if (!input.base_url?.trim()) {
+      throw new MetadataError("MISSING_BASE_URL", "base_url is required for custom group");
+    }
+    if (input.mode === "custom_unified" && !input.api_key?.trim()) {
+      throw new MetadataError("MISSING_API_KEY", "api_key is required for custom_unified mode");
+    }
+    // 存量实例首个请求可能不是 list 而是直接 create,兜底 seed default
+    // 防止 assertAgentsNotOverlap 见空表 → INSERT custom → 只有 1 行 custom
+    // 无 default → 后续 hermes 请求 AGENT_NOT_CONFIGURED (design §5.5 存量兜底)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.createInstanceUpstreamGroup({
+        group_type: "custom",
+        name: input.name.trim(),
+        agents: input.agents,
+        enabled: input.enabled !== false,
+        mode: input.mode,
+        base_url: input.base_url.trim(),
+        api_key: input.api_key ?? "",
+        model_id: input.model_id ?? "",
+        description: input.description ?? "",
+      });
+      return this.toPublicGroup(row);
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  /** Panel B3: PATCH 更新组(default 或 custom)。 */
+  async updateInstanceUpstreamGroup(
+    input: {
+      group_id: string;
+      group_type: GroupType;
+      name?: string;
+      agents?: string[];
+      enabled?: boolean;
+      mode?: UpstreamMode;
+      base_url?: string;
+      api_key?: string;
+      model_id?: string;
+      description?: string;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    if (input.group_type === "extraction") {
+      throw new MetadataError("USE_EXTRACTION_ENDPOINT", "use /extraction/update for extraction row");
+    }
+
+    // default 组的 immutable 字段守卫
+    if (input.group_type === "default") {
+      const rejected: string[] = [];
+      if (input.name !== undefined) rejected.push("name");
+      if (input.mode !== undefined) rejected.push("mode");
+      if (input.base_url !== undefined) rejected.push("base_url");
+      if (input.api_key !== undefined) rejected.push("api_key");
+      if (input.model_id !== undefined) rejected.push("model_id");
+      if (input.description !== undefined) rejected.push("description");
+      if (rejected.length > 0) {
+        throw new MetadataError(
+          "DEFAULT_GROUP_IMMUTABLE_FIELDS",
+          `default group only allows updating agents / enabled; rejected: ${rejected.join(",")}`,
+          { rejected_fields: rejected },
+        );
+      }
+    }
+
+    // custom 组字段校验(仅在传入时才校验)
+    if (input.group_type === "custom") {
+      if (input.name !== undefined) this.assertGroupName(input.name);
+      if (input.agents !== undefined) this.assertAgents(input.agents, supportedAgents, "custom");
+      if (input.mode !== undefined) this.assertModeForGroupType("custom", input.mode);
+      if (input.base_url !== undefined && !input.base_url.trim()) {
+        throw new MetadataError("MISSING_BASE_URL", "base_url must be non-empty");
+      }
+    }
+
+    // 存量兜底 seed (同 create 分支说明)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.updateInstanceUpstreamGroup({
+        group_id: input.group_id,
+        expected_group_type: input.group_type,
+        expected_version: input.expected_version,
+        name: input.name?.trim(),
+        agents: input.agents,
+        enabled: input.enabled,
+        mode: input.mode,
+        base_url: input.base_url?.trim(),
+        api_key: input.api_key,
+        model_id: input.model_id,
+        description: input.description,
+      });
+      return this.toPublicGroup(row);
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  /** Panel B4: 切换 enabled 字段。 */
+  async toggleInstanceUpstreamGroup(
+    input: {
+      group_id: string;
+      enabled: boolean;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    // 存量兜底 seed (同 create 分支说明)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.toggleInstanceUpstreamGroup(input);
+      return { group_id: row.group_id, enabled: row.enabled, updated_at: row.updated_at };
+    } catch (e) {
+      const err = this.translateUpstreamConflict(e);
+      // extraction 用 C4 toggle,B4 拿到 extraction 的 group_id 是走错通道
+      if (err.code === "group_not_found") throw err;
+      throw err;
+    }
+  }
+
+  /** Panel B5: 物理删除 custom 组。 */
+  async deleteInstanceUpstreamGroup(
+    input: { group_id: string },
+    supportedAgents: SupportedAgent[],
+  ): Promise<{ deleted: boolean; released_agents: string[] }> {
+    // 存量兜底 seed (同 create 分支说明)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const existing = await this.store.getInstanceUpstreamGroup(input.group_id);
+    if (!existing) {
+      throw new MetadataError("GROUP_NOT_FOUND", `group not found: ${input.group_id}`);
+    }
+    if (existing.group_type === "default") {
+      throw new MetadataError(
+        "CANNOT_DELETE_DEFAULT",
+        "default group cannot be deleted; set agents:[] + enabled:false instead",
+      );
+    }
+    if (existing.group_type === "extraction") {
+      throw new MetadataError(
+        "USE_EXTRACTION_ENDPOINT",
+        "use /extraction/delete for extraction row",
+      );
+    }
+    const ok = await this.store.deleteInstanceUpstreamGroup(input);
+    return { deleted: ok, released_agents: existing.agents };
+  }
+
+  // ── C 类:extraction 行 ─────────────────────────────────────────────
+
+  async getInstanceUpstreamExtraction(
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    // 只读也 seed:用户如果直接调 extraction/get 看到 default 未配置会误以为
+    // 实例真的没 default,去手动"配 default"就绕了 official 默认模型的语义。
+    // 每个实例都是自带 default 的,只是懒配置。查 = 保证有 default 存在。
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) return { configured: false, enabled: false };
     return {
-      agent_source: entity.agent_source,
-      type: entity.type,
-      mode: entity.mode,
-      base_url: entity.base_url,
-      api_key_masked: entity.api_key ? maskKeyValue(entity.api_key) : "",
-      model_id: entity.model_id,
-      description: entity.description,
-      created_at: entity.created_at,
-      updated_at: entity.updated_at,
+      configured: true,
+      enabled: ext.enabled,
+      base_url: ext.base_url,
+      api_key_masked: ext.api_key ? maskKeyValue(ext.api_key) : "",
+      model_id: ext.model_id,
+      description: ext.description,
+      updated_at: ext.updated_at,
     };
+  }
+
+  async createInstanceUpstreamExtraction(
+    input: {
+      base_url: string;
+      api_key: string;
+      model_id?: string;
+      enabled?: boolean;
+      description?: string;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    if (!input.base_url?.trim()) {
+      throw new MetadataError("MISSING_BASE_URL", "base_url is required for extraction");
+    }
+    if (!input.api_key?.trim()) {
+      throw new MetadataError("MISSING_API_KEY", "api_key is required for extraction");
+    }
+    // 存量兜底 seed:Panel 首个请求可能直接 extraction/create,不走 list/groups
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.createInstanceUpstreamGroup({
+        group_type: "extraction",
+        name: EXTRACTION_GROUP_NAME,
+        agents: [],
+        enabled: input.enabled !== false,
+        mode: "custom_unified",
+        base_url: input.base_url.trim(),
+        api_key: input.api_key.trim(),
+        model_id: input.model_id ?? "",
+        description: input.description ?? "",
+      });
+      return this.toPublicExtraction(row);
+    } catch (e) {
+      const err = this.translateUpstreamConflict(e);
+      if (err.code === "extraction_already_exists") {
+        throw new MetadataError(
+          "EXTRACTION_ALREADY_CONFIGURED",
+          "extraction row already exists; use /extraction/update to modify",
+        );
+      }
+      throw err;
+    }
+  }
+
+  async updateInstanceUpstreamExtraction(
+    input: {
+      base_url?: string;
+      api_key?: string;
+      model_id?: string;
+      enabled?: boolean;
+      description?: string;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    if (input.api_key !== undefined && input.api_key.trim() === "") {
+      // extraction 必须有 key,清空要走 delete
+      throw new MetadataError(
+        "MISSING_API_KEY",
+        "api_key cannot be cleared via update; use /extraction/delete instead",
+      );
+    }
+    if (input.base_url !== undefined && !input.base_url.trim()) {
+      throw new MetadataError("MISSING_BASE_URL", "base_url must be non-empty");
+    }
+
+    // 存量兜底 seed
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) {
+      throw new MetadataError(
+        "EXTRACTION_NOT_CONFIGURED",
+        "extraction row does not exist; use /extraction/create first",
+      );
+    }
+    try {
+      const row = await this.store.updateInstanceUpstreamGroup({
+        group_id: ext.group_id,
+        expected_group_type: "extraction",
+        expected_version: input.expected_version,
+        base_url: input.base_url?.trim(),
+        api_key: input.api_key?.trim(),
+        model_id: input.model_id,
+        enabled: input.enabled,
+        description: input.description,
+      });
+      return this.toPublicExtraction(row);
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  async toggleInstanceUpstreamExtraction(
+    input: {
+      enabled: boolean;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    // 存量兜底 seed
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) {
+      throw new MetadataError(
+        "EXTRACTION_NOT_CONFIGURED",
+        "extraction row does not exist",
+      );
+    }
+    try {
+      const row = await this.store.toggleInstanceUpstreamGroup({
+        group_id: ext.group_id,
+        enabled: input.enabled,
+        expected_version: input.expected_version,
+      });
+      return { enabled: row.enabled, updated_at: row.updated_at };
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  async deleteInstanceUpstreamExtraction(
+    supportedAgents: SupportedAgent[],
+  ): Promise<{ deleted: boolean }> {
+    // 存量兜底 seed
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) return { deleted: true }; // 幂等:不存在也返 true
+    const ok = await this.store.deleteInstanceUpstreamGroup({ group_id: ext.group_id });
+    return { deleted: ok };
+  }
+
+  // ── 内部工具 ─────────────────────────────────────────────
+
+  private assertGroupName(name: string): void {
+    const trimmed = (name ?? "").trim();
+    if (!trimmed) {
+      throw new MetadataError("MISSING_GROUP_NAME", "group name is required");
+    }
+    if (trimmed.length > MetadataService.NAME_MAX_LEN) {
+      throw new MetadataError(
+        "MISSING_GROUP_NAME",
+        `group name exceeds ${MetadataService.NAME_MAX_LEN} chars`,
+      );
+    }
+    if (MetadataService.NAME_INVALID_RE.test(trimmed)) {
+      throw new MetadataError(
+        "MISSING_GROUP_NAME",
+        "group name contains invalid characters (newline / quotes / angle brackets / slashes)",
+      );
+    }
+  }
+
+  private assertAgents(agents: string[], supported: SupportedAgent[], groupType: GroupType): void {
+    if (groupType === "custom" && agents.length === 0) {
+      throw new MetadataError("INVALID_AGENTS", "custom group must have at least 1 agent");
+    }
+    if (supported.length === 0) return; // 无 supported 列表时跳过枚举校验(仅 boot-time 极端情况)
+    const supportedSet = new Set(supported.map((a) => a.agent_source));
+    const unknown = agents.filter((a) => !supportedSet.has(a));
+    if (unknown.length > 0) {
+      throw new MetadataError(
+        "INVALID_AGENTS",
+        `unknown agents: ${unknown.join(",")}`,
+        { unknown_agents: unknown },
+      );
+    }
+  }
+
+  private assertModeForGroupType(gt: GroupType, mode: UpstreamMode): void {
+    if (gt === "custom" && mode === "official") {
+      throw new MetadataError(
+        "INVALID_MODE_FOR_GROUP_TYPE",
+        "custom group cannot use official mode",
+      );
+    }
+    if (gt === "default" && mode !== "official") {
+      throw new MetadataError(
+        "INVALID_MODE_FOR_GROUP_TYPE",
+        "default group must use official mode",
+      );
+    }
+    if (gt === "extraction" && mode !== "custom_unified") {
+      throw new MetadataError(
+        "INVALID_MODE_FOR_GROUP_TYPE",
+        "extraction row must use custom_unified mode",
+      );
+    }
+  }
+
+  private toPublicGroup(row: InstanceUpstreamConfigEntity): Record<string, unknown> {
+    return {
+      group_id: row.group_id,
+      group_type: row.group_type,
+      name: row.name,
+      agents: row.agents,
+      enabled: row.enabled,
+      mode: row.mode,
+      base_url: row.base_url,
+      api_key_masked: row.api_key ? maskKeyValue(row.api_key) : "",
+      model_id: row.model_id,
+      description: row.description,
+      version: row.version,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private toPublicExtraction(row: InstanceUpstreamConfigEntity): Record<string, unknown> {
+    return {
+      configured: true,
+      enabled: row.enabled,
+      base_url: row.base_url,
+      api_key_masked: row.api_key ? maskKeyValue(row.api_key) : "",
+      model_id: row.model_id,
+      description: row.description,
+      version: row.version,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private translateUpstreamConflict(e: unknown): MetadataError {
+    if (e instanceof InstanceUpstreamWriteConflictError) {
+      const codeMap: Record<string, string> = {
+        agents_overlap: "AGENTS_OVERLAP",
+        name_duplicate: "DUPLICATE_GROUP_NAME",
+        group_not_found: "GROUP_NOT_FOUND",
+        group_type_mismatch: "GROUP_TYPE_MISMATCH",
+        version_mismatch: "WRITE_CONFLICT",
+        default_already_exists: "CANNOT_CREATE_DEFAULT",
+        extraction_already_exists: "EXTRACTION_ALREADY_CONFIGURED",
+      };
+      const mapped = codeMap[e.reason] ?? e.reason;
+      return new MetadataError(mapped, e.message, e.detail);
+    }
+    if (e instanceof MetadataError) return e;
+    // 未知错误:包装抛出
+    return new MetadataError("internal_error", e instanceof Error ? e.message : String(e));
   }
 }

@@ -17,6 +17,8 @@ import type {
   ContextMessage,
 } from "../types.js";
 
+const TOP_LEVEL_SYSTEM = "anthropicTopLevelSystem";
+
 export class AnthropicAdapter implements ProtocolAdapter {
   readonly protocol = "anthropic" as const;
 
@@ -26,7 +28,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
     // Anthropic has a top-level "system" field
     if (body.system != null) {
       const systemBlocks = this.parseSystemField(body.system);
-      messages.push({ role: "system", blocks: systemBlocks });
+      messages.push({ role: "system", blocks: systemBlocks, metadata: { [TOP_LEVEL_SYSTEM]: true } });
     }
 
     // Parse conversation messages
@@ -57,8 +59,11 @@ export class AnthropicAdapter implements ProtocolAdapter {
     const body: Record<string, unknown> = { ...ctx.requestParams };
 
     // Separate system message from conversation messages
-    const systemMsg = ctx.messages.find((m) => m.role === "system");
-    const conversationMsgs = ctx.messages.filter((m) => m.role !== "system");
+    // Claude Code 2.1.277+ sends AGENTS.md as a role:"system" message while
+    // CLAUDE.md remains in the top-level `system` field. Only the latter is
+    // hoisted; filtering every system message silently dropped AGENTS.md.
+    const systemMsg = ctx.messages.find((m) => m.metadata?.[TOP_LEVEL_SYSTEM] === true);
+    const conversationMsgs = ctx.messages.filter((m) => m !== systemMsg);
 
     // Serialize system as top-level field
     if (systemMsg) {
@@ -89,7 +94,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
   }
 
   private parseMessage(m: Record<string, unknown>): ContextMessage {
-    const role = m.role as "user" | "assistant";
+    const role = m.role as ContextMessage["role"];
     const content = m.content;
     const blocks: ContextBlock[] = [];
 
