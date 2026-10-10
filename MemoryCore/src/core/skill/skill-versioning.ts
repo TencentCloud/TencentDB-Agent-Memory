@@ -277,7 +277,11 @@ export class SkillVersioning {
     try {
       const row = await this.store.appendVersion({
         user_id: ctx.user_id,
-        team_id: ctx.team_id,
+        // 新版本必须落在 head 所属 team：调用方可能省略 team_id（按 skill_id 全局
+        // 定位到 head），若透传 undefined，store 会 fallback 到 "default" team，
+        // 查不到 head → 误算 v1 → UNIQUE(skill_id, version) 冲突（#1577）。
+        // 传入 team_id 时 SkillCore.requireHead 已校验与 head.team_id 一致。
+        team_id: head.team_id,
         agent_id: ctx.agent_id,
         task_id: ctx.task_id,
         skill_id: head.skill_id,
