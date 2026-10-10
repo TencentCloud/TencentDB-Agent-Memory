@@ -121,6 +121,9 @@ redis:
   db: 0                    # Redis 数据库编号
   ttlSeconds: 1800         # 注入与 Skill 缓存 TTL（秒），默认 1800（30 分钟）
   # injectionTtlSeconds: 3600  # 注入层 hook 缓存 TTL（秒），默认复用 ttlSeconds
+  # turnSeqTtlDays: 30       # 会话 turn 序号计数 TTL（天），默认 30。必须远长于
+  #                          # ttlSeconds：会话态过期只是丢缓存，序号过期会让同一
+  #                          # 会话从 1 重新计数，与该会话早先的用量行撞号。
   # CostGuard 会话态（cg:sess:* / arch: / judge-*）也走这份 Redis。
   # 多实例部署必须开启，否则 task archive / judge latch 无法跨进程共享。
 
@@ -175,6 +178,63 @@ costGuard:
   #   port: 18097
   # requestPrepare:
   #   enabled: false
+  #   # CFQ（context_focus_question）子系统。字段全部可选，整段省略即用内置默认。
+  #   cfq:
+  #     enabled: true
+  #     # 是否给工具 schema 注入 context_focus_question 字段，让主模型自己填（T1）。
+  #     # 设 false 且下面 analyzeModelFallback.enabled 为 true 时进入「纯兜底模式」：
+  #     # 主模型完全不知道 CFQ 的存在，全部由分析模型在响应侧反推。
+  #     injectSchema: true
+  #     # 空数组 = 关闭白名单，内置黑名单之外的工具全部注入。
+  #     # 内置黑名单只认 Claude Code 的 PascalCase 名（Edit/Write/…），
+  #     # 其它客户端的 snake_case 工具要自己列进 schemaBlacklist。
+  #     schemaWhitelist: []
+  #     schemaBlacklist: ["edit_file", "write_file", "create_file",
+  #                       "str_replace_editor", "apply_diff", "replace_in_file"]
+  #     enforceRequired: true
+  #     maxLength: 200
+  #     # 主模型漏填 CFQ 时，用一个便宜模型在响应侧补生成并写进同一份缓存，
+  #     # 下一轮 backfill 照常命中。默认开启；显式 enabled: false 才关。
+  #     #
+  #     # model / url / apiKey 省略或留空时回退 costGuard 顶层的 analyzeModel /
+  #     # analyzeUrl / analyzeApiKey。三者补完仍缺一，兜底整体关闭；启动后
+  #     # grep cfq.analyze_fallback.misconfigured 可确认。写了非空值则用自己的。
+  #     #
+  #     # 其余字段省略即用代码默认值：batchSize 8、timeoutMs 30000、
+  #     # maxOutputTokens 128000、awaitPendingMs 8000、circuitBreaker 300/50/1800。
+  #     analyzeModelFallback:
+  #       enabled: true
+  #       batchSize: 8
+  #       # model / url / apiKey 可省略，默认用上面的 analyze*
+  #       timeoutMs: 30000
+  #       # 请求侧发现 backfill 缺口时，等待在途兜底的上限（毫秒）。
+  #       #
+  #       # 这个窗口就是兜底的全部机会：等到了当轮压，超时就落 no_cfq 缓存、
+  #       # 后续不再补。这样做是为了字节稳定——放行超时的条目去下一轮压，会让
+  #       # 同一段 tool_result 从原文变成压缩态，翻转点之后的整个前缀在上游
+  #       # prompt-cache 里失效。
+  #       #
+  #       # 8000 的依据：实测 77 次兜底中位 6.6s，82% 在 8.5s 内完成；等待从下
+  #       # 一轮请求到达时起算（兜底已先跑约 0.5s）。代价是有缺口的轮次平均阻塞
+  #       # 约 6.5 秒，请按自己分析模型的实际速度调整。
+  #       #
+  #       # 上限受 pending.ts 的 PENDING_TTL_S（30s）约束。0 = 不等，兜底退化成
+  #       # 只对后续轮次有效，当轮一律 no_cfq。
+  #       awaitPendingMs: 8000
+  #       # 兜底熔断 —— 按 spaceId 隔离的成本闸门，多节点通过 Redis 共享计数。
+  #       #
+  #       # 某个 space 在 windowSeconds 内兜底次数超过 threshold，接下来
+  #       # breakSeconds 内不再兜底，这些 tool_result 按 no_cfq 处理。
+  #       # 熔断期不打在途标记，所以请求侧也不会陪等 awaitPendingMs。
+  #       #
+  #       # 整段省略即用默认值（300 / 50 / 1800）；要关必须显式 enabled: false。
+  #       # 阈值按自己的流量调：5 分钟窗口 50 次，熔断后歇 30 分钟。
+  #       # 熔断是用来拦失控放大的，不是给正常使用设配额。
+  #       circuitBreaker:
+  #         enabled: true
+  #         windowSeconds: 300
+  #         threshold: 50
+  #         breakSeconds: 1800
 
 
 # ── Memory 实例 × 实际模型 Input TPM / QPM 限流 ──────────────────────────────
@@ -436,6 +496,9 @@ creditReport:
 
 # ── Credit 计费价目表 ────────────────────────────────────────────────────────
 # 单位：Credit / 1K Token。
+# 旧格式（模型顶层 input/output/... 与 tiers）继续有效。若配置 rules，
+# 按优先级从高到低选择首个命中的时段规则；未命中则回退模型顶层价格。
+# 时间规则默认按 TokenHub 时区 Asia/Shanghai 判定，时间范围为 [start, end)。
 # 模型匹配规则：usage.model → 大小写不敏感全词匹配 → 未匹配则 credit=0
 #   （回退到 usage_raw 表并标记 reason='unknown_model'）。
 # 字段说明：
@@ -446,6 +509,7 @@ creditReport:
 #   cacheRead     — 缓存命中读取 token（prompt_cache_hit_tokens / cache_read_input_tokens）
 #   cacheWrite5m  — 缓存写入 5 分钟 TTL（cache_creation.ephemeral_5m_input_tokens）
 #   cacheWrite1h  — 缓存写入 1 小时 TTL（cache_creation_input_tokens 非 ephemeral 部分）
+# 峰谷规则的时区固定为北京时间（Asia/Shanghai），不可通过配置修改。
 creditPricing:
   models:
     - name: "your-endpoint-id"         # 上游下发的 endpoint id / 模型别名，示例：Claude Sonnet
@@ -471,6 +535,30 @@ creditPricing:
       cacheRead: 0.0030
       cacheWrite5m: 0.1500
       cacheWrite1h: 0.1500
+
+    # 示例：工作日峰谷计费。每次请求只命中一条 rule；命中后才按 tiers（若有）选长度档。
+    - name: "deepseek-v4-pro-0813"
+      modelName: "DeepSeek V4 Pro 0813"
+      # 顶层价格是 rules 未命中时的兼容兜底（此处为空闲价格）。
+      input: 0.4500
+      output: 1.3500
+      cacheRead: 0.0150
+      cacheWrite5m: 0
+      cacheWrite1h: 0
+      rules:
+        - id: "weekday-peak"
+          priority: 100
+          when:
+            weekdays: [mon, tue, wed, thu, fri]
+            timeRanges:
+              - { start: "09:00", end: "12:00" }
+              - { start: "14:00", end: "18:00" }
+          pricing:
+            input: 0.9000
+            output: 2.7000
+            cacheRead: 0.0300
+            cacheWrite5m: 0
+            cacheWrite1h: 0
 
 
 # ── 上下文注入（injection pipeline） ─────────────────────────────────────────
@@ -634,6 +722,26 @@ skill:
   timeoutMs: 1500                     # 单次调用超时（毫秒）。RAG 在 session_init 热路径上，不宜太大
 
 
+# ── Instance-upstream 配置缓存（自定义模型分流的每实例配置） ─────────────────
+# proxy 每次 handler 会走 skill.endpoint + /v3/internal/meta/instance-upstream/list
+# 拉本 spaceId 的模型分组配置（default / custom / extraction 三类行），
+# 结果按 spaceId 缓存在进程内。数据接口复用 skill: 段的 endpoint / serviceToken /
+# timeoutMs，但语义与 skill 无关，独立成段以便未来扩展别的旋钮。
+#
+# 缓存内部固定语义（写死不走 yaml）：
+#   - hard expiry（不 refresh-on-access）+ stale-if-error 兜底
+#   - 最多 256 个实例，LRU 按写入顺序淘汰
+#   - 首次拿不到 → 返空 → 走"零行 fallback = official"，业务侧行为 = v1
+instanceUpstream:
+  # 缓存 TTL（秒）。默认 30。决定"Panel 改完自定义模型 → proxy 生效"的最长延迟。
+  #   非法值（0 / 负数 / NaN / 小数）一律回退默认 30s + warn 一行。
+  #   调优参考：
+  #     - 用户改完要 ≤1min 生效 → 保默认 30s
+  #     - core QPS 压力大、接受 N 秒生效 → 60~300 合理
+  #     - 别 <5s：会把 core /v3/internal/meta/instance-upstream/list 打热点
+  cacheTtlSec: 30
+
+
 # ── Knowledge tools 注入（独立 gateway 配置） ───────────────────────────────
 # proxy 通过此配置访问内核 gateway 拉取 team 知识资源（code-graph / wiki），
 # 渲染 <knowledge_tools> 块注入 system prompt，LLM 据此调 KS 的 tools/list|call。
@@ -719,3 +827,54 @@ ccRequestRouting:
 traceArchive:
   enabled: false                   # true = 启用本地 JSONL trace 归档；false = 关闭（默认）
   dir: "logs/traces"               # 归档目录（相对于项目根目录或绝对路径）
+
+
+# ── Pipeline 重构灰度切换 (2026-09-28, addendum) ─────────────────────────────
+# blueprint-review §2 采纳: 按 agent 粒度灰度, 每步只 flip 一个 key。
+#
+# 未定义 pipeline 字段 → 全部走老 handler.ts / anthropicHandler.ts /
+# codexHandler.ts / workbuddyHandler.ts / directHandler.ts / auxiliaryHandler.ts,
+# 与重构前 100% 等价 (向后兼容红线)。
+#
+# 迁移顺序 (v2 §4 Phase 4.1-4.5, 风险递增):
+#   1. direct        Phase 4.1 - 最简单最低风险
+#   2. utility       Phase 4.1 - 同批
+#   3. codex         Phase 4.2 - codex/wb 起步 stageGates=minimal, 与老 handler 等价
+#   4. workbuddy     Phase 4.3
+#   5. codebuddy/dsh/opencode/pi  Phase 4.4 (handler.ts 承载, stageGates=full)
+#   6. claude-code   Phase 4.5 - 最复杂的 anthropic 协议
+#
+# 回滚: 改回 false 或删除该行即可, 秒级生效。
+#
+# ⚠️ Phase 4.4/4.5 完全实现前, flip 到 true 时新 pipeline 会抛
+# PipelineNotImplementedError, pick() 自动 fallback 到老 handler 并记一次 warn ——
+# 生产不会挂线, 但 warn 一直响, 请勿提前 flip。
+pipeline:
+  migrated:
+    # Phase 4 已完整完成 (2026-09-28): 全部 6 个老 handler (handler.ts /
+    # anthropicHandler.ts / codexHandler.ts / workbuddyHandler.ts /
+    # directHandler.ts / auxiliaryHandler.ts) 的完整实现都已迁移到
+    # pipeline/runners/, 老 handler.ts 等文件已退化为 5-20 行 re-export shim。
+    #
+    # 因此: pipeline.migrated.<agent>=true 或 false 效果完全等价 (两个都会
+    # 最终调到 pipeline/runners/ 里的完整实现) —— 只是多/少一层浅层 shim 转发。
+    #
+    # 保留本配置字段是为 Phase 6 清理路径:
+    #   1. 清 server.ts pickHandler 层, 直接指向 entrypoints/*
+    #   2. 删本 pipeline 段
+    #   3. 删 6 个 shim 文件
+    # 逐步来, 每步独立可回滚。
+    #
+    # 唯一副作用差异: 迁移过程中顺手修的 latent leak (addendum §2.4) —
+    # direct/utility 的 SKIP_REQUEST_HEADERS 从 HOP_BY_HOP 版本升到
+    # WITH_INTERNAL, 防 x-tdai-user-key 透传上游。
+    # 默认 false, 走老 shim; 客户端确认无 x-tdai-user-key 依赖后可 flip。
+    direct: false
+    utility: false
+    codex: false
+    workbuddy: false
+    codebuddy: false
+    dsh: false
+    opencode: false
+    pi: false
+    claude-code: false

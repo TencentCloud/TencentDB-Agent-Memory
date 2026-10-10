@@ -194,8 +194,14 @@ const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai
  *
  * 见 `hasCostGuardMarker` 让 primary handler 判定是否**启用** router；
  * `normalizeWhitelistRequestPath` 同步剥离它以保证白名单匹配继续工作。
+ *
+ * 子模式扩展（`/cost-guard/pre` 和 `/cost-guard/cheap`）：
+ *   - `/cost-guard/pre/v1/messages`  → 只走压缩，不走路由
+ *   - `/cost-guard/cheap/v1/messages` → 只走路由，不走压缩
+ *   - `/cost-guard/v1/messages`       → 既走路由又走压缩（默认行为）
+ * 三种 marker 共用一条正则剥离，`resolveCostGuardMode` 细分语义。
  */
-const COST_GUARD_MARKER_RE = /(?<=(?:\/[^/]+){2,})\/cost-guard(?=\/)/;
+const COST_GUARD_MARKER_RE = /(?<=(?:\/[^/]+){2,})\/cost-guard(?:\/(?:pre|cheap))?(?=\/)/;
 
 /**
  * `/analyse` marker：结构完全对齐 `/cost-guard`——位于 `/{agent}/{spaceId}` 之后
@@ -211,6 +217,19 @@ const COST_GUARD_MARKER_RE = /(?<=(?:\/[^/]+){2,})\/cost-guard(?=\/)/;
 const ANALYSE_MARKER_RE = /(?<=(?:\/[^/]+){2,})\/analyse(?=\/)/;
 
 /**
+ * Cost-guard 运行模式，决定路由和压缩的启用组合。
+ *
+ * - `"full"`      — `/cost-guard/...` — 既走路由又走压缩（默认行为）
+ * - `"pre"`       — `/cost-guard/pre/...` — 只走压缩（request-prepare），不走路由
+ * - `"cheap"`     — `/cost-guard/cheap/...` — 只走路由（正常 cost-guard 路由），不走压缩
+ * - `"off"`       — 不带 marker — 不走 cost-guard
+ */
+export type CostGuardMode = "full" | "pre" | "cheap" | "off";
+
+/** 内部正则：提取 `/cost-guard` 后可选的子模式段。 */
+const COST_GUARD_SUB_MODE_RE = /(?<=(?:\/[^/]+){2,})\/cost-guard(?:\/(pre|cheap))?(?=\/)/;
+
+/**
  * 请求路径是否携带 `/cost-guard` marker（位于 `/v1/` 之前的独立 segment）。
  * 携带时 primary handler 走完整的 cost-guard 路由；不带时（默认）直接透传到默认上游。
  */
@@ -218,6 +237,41 @@ export function hasCostGuardMarker(requestPath: string): boolean {
   if (!requestPath) return false;
   const withoutQuery = requestPath.split("?", 1)[0] ?? "";
   return COST_GUARD_MARKER_RE.test(withoutQuery);
+}
+
+/**
+ * 解析请求路径中的 cost-guard 模式。
+ *
+ * | URL marker 段          | 返回值    | 路由 | 压缩 |
+ * |------------------------|-----------|------|------|
+ * | `/cost-guard/...`      | `"full"`  | ✓    | ✓    |
+ * | `/cost-guard/pre/...`  | `"pre"`   | ✗    | ✓    |
+ * | `/cost-guard/cheap/...`| `"cheap"` | ✓    | ✗    |
+ * | 不带 marker            | `"off"`   | ——   | ——   |
+ */
+export function resolveCostGuardMode(requestPath: string): CostGuardMode {
+  if (!requestPath) return "off";
+  const withoutQuery = requestPath.split("?", 1)[0] ?? "";
+  const match = COST_GUARD_SUB_MODE_RE.exec(withoutQuery);
+  if (!match) return "off";
+  const sub = match[1]; // "pre" | "cheap" | undefined
+  if (sub === "pre") return "pre";
+  if (sub === "cheap") return "cheap";
+  return "full";
+}
+
+/**
+ * 请求是否走遗留的 `/proxy/{spaceId}` 前缀。
+ *
+ * 该前缀不带 agent 信息，`agentSource` 只能兜底成 `claude-code`，据此解析出的
+ * 会话身份与消息结构对其它客户端并不成立。因此这条入口只承担路由、压缩与计费，
+ * 记忆类功能（session-init / mem 命令 / injection / L0 / skill）一律关闭——
+ * 宁可不注入，也不要按错误的 agent 画像往用户上下文里塞东西。
+ */
+export function isLegacyProxyPath(requestPath: string): boolean {
+  if (!requestPath) return false;
+  const withoutQuery = requestPath.split("?", 1)[0] ?? "";
+  return PROXY_PREFIX_RE.test(withoutQuery);
 }
 
 /**

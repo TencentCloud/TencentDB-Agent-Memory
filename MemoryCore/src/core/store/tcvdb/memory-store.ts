@@ -593,6 +593,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       vectorSearch: this.embeddingEnabled,
       ftsSearch: hasBm25,
       nativeHybridSearch: this.embeddingEnabled && hasBm25,
+      nativeBm25Search: !this.embeddingEnabled && hasBm25,
       sparseVectors: hasBm25,
       profileRows: true,
     };
@@ -956,6 +957,54 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
+  private async _searchBm25(
+    collection: string,
+    queryText: string,
+    topK: number,
+    outputFields: string[],
+    filter?: IsolationFilter,
+  ): Promise<Array<Array<Record<string, unknown>>>> {
+    if (!queryText.trim() || topK === 0) return [[]];
+    try {
+      if (!Number.isSafeInteger(topK) || topK < 0) {
+        throw new RangeError("BM25 topK must be a non-negative safe integer");
+      }
+      await this._ensureInit();
+      if (this.degraded) throw new Error("BM25 store is unavailable");
+      if (!this.bm25Encoder) throw new Error("BM25 encoder is not configured");
+      const sparseVec = this.bm25Encoder.encodeQueries([queryText])[0];
+      if (!sparseVec?.length) return [[]];
+      const filterExpr = joinFilter(buildIsolationConditions(filter));
+      const resp = await this.client.fullTextSearch(collection, {
+        match: { fieldName: "sparse_vector", data: [sparseVec] },
+        limit: topK,
+        retrieveVector: false,
+        outputFields,
+        ...(filterExpr ? { filter: filterExpr } : {}),
+      });
+      if (!Array.isArray(resp.documents) || resp.documents.length > 1 ||
+          (resp.documents.length === 1 && !Array.isArray(resp.documents[0]))) {
+        throw new Error("BM25 search returned an invalid documents response");
+      }
+      const results = (resp.documents[0] ?? []).map((doc) => {
+        const score = doc?.score;
+        if (typeof score !== "number" || !Number.isFinite(score) || score < 0) {
+          throw new Error("BM25 search returned a missing or invalid score");
+        }
+        return { ...doc, score };
+      });
+      return [results
+        .filter((doc) => doc.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK)
+        // Fixed c=1 saturation scaled to [0, 0.33); not a relevance probability.
+        .map((doc) => ({ ...doc, score: 0.33 * Math.min(doc.score / (doc.score + 1), 1 - Number.EPSILON) }))];
+    } catch (err) {
+      this.logger?.warn(`${TAG} [BM25-search] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
+  }
+
   // ── L1 Search Operations ─────────────────────────────────
 
   async searchL1Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string, filter?: IsolationFilter): Promise<L1SearchResult[]> {
@@ -969,8 +1018,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
   }
 
   async searchL1Fts(ftsQuery: string, limit?: number, filter?: IsolationFilter): Promise<L1FtsResult[]> {
-    // TCVDB has no pure FTS — use hybrid search with sparse-only path
-    // The ftsQuery is raw text, use it as queryText for hybrid
+    // Native BM25 callers pass raw text; embedding-enabled stores retain hybrid search.
     if (!ftsQuery) return [];
     const results = await this.searchL1HybridAsync({ queryText: ftsQuery, topK: limit, filter });
     // L1SearchResult and L1FtsResult have identical shapes
@@ -1000,6 +1048,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
   }): Promise<L1SearchResult[]> {
     const { queryText, topK = 10, filter } = params;
     if (!queryText) return [];
+    if (!this.embeddingEnabled) {
+      return this._parseL1SearchResults(await this._searchBm25(this.l1Collection, queryText, topK, L1_OUTPUT_FIELDS, filter));
+    }
 
     try {
       await this._ensureInit();
@@ -1016,19 +1067,6 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
       const sparse = this.bm25Encoder?.encodeQueries([queryText]) ?? [];
       const sparseVec = sparse.length > 0 && sparse[0].length > 0 ? sparse[0] : undefined;
-
-      if (!this.embeddingEnabled) {
-        if (!sparseVec) return [];
-        searchParams.ann = [{ fieldName: "vector", data: [[1]], limit: topK }];
-        searchParams.match = [{
-          fieldName: "sparse_vector",
-          data: [sparseVec],
-          limit: topK,
-        }];
-        searchParams.rerank = { method: "rrf", k: 60 };
-        const resp = await this.client.hybridSearch(this.l1Collection, searchParams);
-        return this._parseL1SearchResults(resp.documents);
-      }
 
       // ann: use embedding field name "text" for server-side embedding
       // (per SDK: AnnSearch(field_name="text", data='query string'))
@@ -1384,6 +1422,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
   }): Promise<L0SearchResult[]> {
     const { queryText, topK = 10, filter } = params;
     if (!queryText) return [];
+    if (!this.embeddingEnabled) {
+      return this._parseL0SearchResults(await this._searchBm25(this.l0Collection, queryText, topK, L0_OUTPUT_FIELDS, filter));
+    }
 
     try {
       await this._ensureInit();
@@ -1399,19 +1440,6 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
       const sparse = this.bm25Encoder?.encodeQueries([queryText]) ?? [];
       const sparseVec = sparse.length > 0 && sparse[0].length > 0 ? sparse[0] : undefined;
-
-      if (!this.embeddingEnabled) {
-        if (!sparseVec) return [];
-        searchParams.ann = [{ fieldName: "vector", data: [[1]], limit: topK }];
-        searchParams.match = [{
-          fieldName: "sparse_vector",
-          data: [sparseVec],
-          limit: topK,
-        }];
-        searchParams.rerank = { method: "rrf", k: 60 };
-        const resp = await this.client.hybridSearch(this.l0Collection, searchParams);
-        return this._parseL0SearchResults(resp.documents);
-      }
 
       // ann: use embedding field name "message_text" for L0 server-side embedding
       const ann = [{

@@ -32,11 +32,6 @@ export function formatShortTime(ms: number): string {
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** 去除 @ 提及，保留纯对话内容。 */
-export function stripAtMention(text: string): string {
-  return text.replace(/@\S+/g, '').replace(/\s+/g, ' ').trim();
-}
-
 /** 从后端显式 role 字段提取 L0 角色；仅对旧数据回退解析 title 的 @ 前缀。 */
 export function extractRole(roleOrTitle: string): string {
   const raw = roleOrTitle.split('@')[0]?.trim().toLowerCase() || '';

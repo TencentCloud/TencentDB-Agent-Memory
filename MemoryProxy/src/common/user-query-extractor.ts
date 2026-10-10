@@ -141,6 +141,9 @@ export function extractUserQueryText(raw: string): string {
     "persisted-output", "persisted_output",
     "tool_use_error", "tool-use-error",
     "tool_result", "tool-result",
+    // The proxy may prepend L1 recall inside a user-role message. It is
+    // context for the model, not text typed by the user.
+    "tdai_recalled_l1_memories",
   ]) {
     text = text.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi"), "");
   }
@@ -153,6 +156,7 @@ export function extractUserQueryText(raw: string): string {
     /^\s*File created successfully at:/i,
     // CC Bash tool 静默完成
     /^\s*\(Bash completed with no output\)\s*$/,
+    /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/,
     // CC read tool 返回的 cat -n 行号格式（"     1  内容" / "1  内容"）
     // 至少 3 位数字更严格；1-2 位可能与用户输入冲突（如用户列表 "1 abc"）
     // 因此这里只匹配"数字 + 2 空格 + 内容"且行首无其它字符 —— cat -n 特有格式

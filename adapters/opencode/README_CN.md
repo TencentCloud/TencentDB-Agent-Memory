@@ -32,7 +32,18 @@ OpenCode ──(OpenAI Chat Completions 协议)──> Memory Proxy :8096 ──
 
 3. 已安装 OpenCode（`curl -fsSL https://opencode.ai/install | bash` 或 `npm i -g opencode-ai`）。
 
-## 配置步骤
+## OpenCode 2.0 配置
+
+OpenCode 2.0 改用 `providers`、`package`、`settings` 和 provider 级 `headers`。下文的旧版 `opencode.json` 面向 OpenCode 1.x，不能直接用于 2.0。
+
+```bash
+cp adapters/opencode/opencode.v2.json ./opencode.json
+node adapters/opencode/validate.js adapters/opencode/opencode.v2.json
+```
+
+在启动 OpenCode 的进程环境中设置业务用户的 `TDAI_MEMORY_KEY`（`sk-mem-...`；桌面版也需要由其启动环境提供）。将示例中的模型键改为与 `PROXY_UPSTREAM_MODEL` 一致，再在 OpenCode 中选择 `tencentdb-agent-memory/<模型>`。2.0 示例使用 `@opencode/ai/providers/openai-compatible`，将请求发往代理的 `/opencode/<spaceId>/v1/chat/completions`。本机 OpenCode 2.0.18 CLI 已向该路径发出包含 `stream_options.include_usage` 的流式请求。
+
+## OpenCode 1.x 配置步骤
 
 ### 1. 添加 provider 配置
 
@@ -93,7 +104,7 @@ node adapters/opencode/validate.js
 
 - **端点前缀**：使用 `feat/server_team` 上已落地的 OpenCode 专用路由族 —— 主路径 `POST /opencode/<spaceId>/v1/chat/completions`（`baseURL` 不带 `/v1` 时为裸尾变体 `/opencode/<spaceId>/chat/completions`），另有 `/opencode/<spaceId>/cost-guard|analyse/v1` marker 路由。代理依据路径首段分类 `agentSource`；若将 OpenCode 指向 `/codebuddy/<spaceId>`，会被分类为 `codebuddy`，导致原生 `question` 工具的会话初始化表单（`MemoryProxy/src/session/opencode/form.ts`）失效。
 - **数据流**：只有提示词/补全流量经过代理；记忆数据始终保存在本地 SQLite（memory-core）中，除非你另行配置。
-- **版本**：已在 OpenCode ≥ 0.6 与 TencentDB Agent Memory v3（`feat/server_team` 分支，v2.0.0 镜像）上验证。
+- **版本**：旧版示例用于 OpenCode 1.x；`opencode.v2.json` 是 2.0 配置。本机已用模拟端点核对 OpenCode 2.0.18 CLI 的请求路径与响应；MemoryProxy 完整部署仍需端到端验证。
 
 ## 许可证
 

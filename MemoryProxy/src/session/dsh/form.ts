@@ -16,11 +16,16 @@
  *   - 顶层 `questions[]` 一次可发多题(workbuddy/CC 通常单题;这里为对齐 dsh
  *     schema 保留数组结构,单题就一元素数组)
  *
- * # 传输
- *   - 协议 = **OpenAI /v1/chat/completions**(与 dsh 客户端 fetch 一致)
+ * # 传输(双协议)
+ *   - dsh v0.1.x(老 llm-deepseek adapter): **OpenAI /v1/chat/completions**
+ *   - dsh v0.2+(新 llm-deepseek-api-key adapter, 抓包 2026-09-29 实证):
+ *     **Anthropic /v1/messages**(headers 带 `anthropic-version: 2023-06-01`,
+ *     路径拼 `${baseURL}/v1/messages`,见 dsh 源码
+ *     `packages/llm/llm-deepseek/src/adapter.ts:120-131`)
+ *   - 分支由 FormData.protocol 决定:"anthropic" | "openai"|undefined(=openai)
  *   - SSE stream 或 non-stream(与请求 `body.stream` 保持一致)
- *   - 骨架完全照抄 workbuddy(chunk 1 = role+tool_call decl / chunk 2 =
- *     arguments delta / chunk 3 = finish_reason:tool_calls / DONE)
+ *   - openai 骨架照抄 workbuddy;anthropic 骨架照抄 claude-code/form.ts
+ *     (message_start → thinking block → tool_use block → message_stop)
  *
  * # 状态机
  *   - 完全复用 CB 状态机(session/codebuddy/init.ts),同 workbuddy 模式;
@@ -54,7 +59,7 @@ export const TEAM_FORM_TITLE = "会话初始化 — 选择 Team";
 export const AGENT_TASK_FORM_TITLE = "会话初始化 — 选择 Agent 与任务";
 export const RETRY_FORM_TITLE = "未能识别选择,请重新选择";
 
-export const SKIP_LABEL = "本次不关联(跳过注入,直接放行)";
+export const SKIP_LABEL = "本次不关联（跳过注入，直接放行）";
 // dsh 不分页,MORE_LABEL 保留仅作向后兼容(测试或未来切分页时用);当前不产出。
 export const MORE_LABEL = "更多 →";
 
@@ -78,8 +83,26 @@ export const MORE_LABEL = "更多 →";
  */
 const REASONING_PLACEHOLDER = "[proxy session-init form]";
 
-export const ASSET_CONFIRM_YES = "是,关联团队资产";
-export const ASSET_CONFIRM_NO = "否,本次不关联";
+/**
+ * anthropic 分支专用:fake `thinking` block 的固定 placeholder signature。
+ *
+ * 与 claude-code/form.ts 的 THINKING_SIGNATURE_PLACEHOLDER 完全等价 —— 同一份
+ * base64 字符串,同一份合规理由:
+ *   - DeepSeek 官方 Anthropic 兼容端点在 thinking mode 下强查历史 assistant
+ *     必须带 thinking block,否则 400
+ *     `The content[].thinking in the thinking mode must be passed back to the API`
+ *   - proxy 自己的 `sanitizeThinkingBlocks` (`anthropicHandler.ts:280`) 要求
+ *     signature 满足 `^[A-Za-z0-9+/=]+$` + 长度 ≥ 40 + 不是 UUID —— 此值全命中
+ *   - 真 Anthropic 上游只在请求本身开 thinking mode 时才做 crypto 校验;fake
+ *     session-init 不真过模型
+ *
+ * 详细分析见 claude-code/form.ts:83 THINKING_SIGNATURE_PLACEHOLDER 注释。
+ */
+const THINKING_SIGNATURE_PLACEHOLDER =
+  "UHJveHlDQ1Nlc3Npb25Jbml0RmFrZVRoaW5raW5nUGxhY2Vob2xkZXJTaWc=";
+
+export const ASSET_CONFIRM_YES = "是，关联团队资产";
+export const ASSET_CONFIRM_NO = "否，本次不关联";
 export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
 
 /**
@@ -119,6 +142,16 @@ export interface FormData {
   retry?: boolean;
   stream?: boolean;
   modelId?: string;
+  /**
+   * 传输协议 —— 决定 buildFormResponse 走哪个 SSE 骨架。
+   *   - "anthropic"(dsh v0.2+ llm-deepseek-api-key adapter): message_start
+   *     → thinking → tool_use SSE
+   *   - "openai" 或 undefined(dsh v0.1.x 老 adapter): chat.completion.chunk
+   *     tool_calls SSE
+   * 由 handler 层构建 reqCtx 时透传:anthropicHandler.ts 传 "anthropic",
+   * handler.ts 传 "openai"(见 session/index.ts dsh 分派)。
+   */
+  protocol?: "openai" | "anthropic";
 }
 
 // ── ask_user_question input schema (dsh snake_case + 必填 id) ──────────────────
@@ -242,21 +275,127 @@ function buildAskUserQuestionArgs(data: FormData): { questions: DshAskQuestion[]
 /**
  * Build a dsh `ask_user_question` fake form response.
  *
- * 传输:**OpenAI chat/completions**(stream 或 non-stream)。
- * arguments shape:dsh 原生 `{questions: [{id, question, header, options, multi_select}]}`。
+ * 双协议分支(见 FormData.protocol):
+ *   - "anthropic" (dsh v0.2+ llm-deepseek-api-key adapter): Anthropic SSE
+ *   - "openai" 或 undefined (dsh v0.1.x 老 adapter): OpenAI chat.completion(.chunk)
+ * arguments shape 完全一致:dsh 原生
+ *   `{questions: [{id, question, header, options, multi_select}]}`。
  */
 export function buildFormResponse(data: FormData): Response {
   const model = data.modelId ?? "unknown";
-  const created = Math.floor(Date.now() / 1000);
-  const id = "dsh-session-init-" + Date.now();
-  const toolCallId = TOOLCALL_PREFIX + Date.now();
   const input = buildAskUserQuestionArgs(data);
   const argsStr = JSON.stringify(input);
 
+  if (data.protocol === "anthropic") {
+    // dsh v0.2+ 走 anthropic /v1/messages(dsh llm-deepseek-api-key adapter,
+    // 抓包实证 2026-09-29;详见文件头 "传输" 段)。
+    // 无 non-stream 分支:dsh anthropic adapter 硬编码 `accept: text/event-stream`
+    // (adapter.ts:124),真实客户端永远走 SSE;可能存在的 non-stream 探针路径
+    // 直接复用 SSE 响应,anthropic SDK 也能一次性收全。
+    const msgId = "msg_dsh_session_init_" + Date.now();
+    const toolUseId = TOOLCALL_PREFIX + Date.now();
+    return buildAnthropicStreamingResponse(msgId, model, toolUseId, argsStr);
+  }
+
+  // openai 分支(老 dsh v0.1.x / 未来 openai-shape 客户端)
+  const created = Math.floor(Date.now() / 1000);
+  const id = "dsh-session-init-" + Date.now();
+  const toolCallId = TOOLCALL_PREFIX + Date.now();
   if (data.stream) {
     return buildOpenAIStreamingResponse(id, created, model, toolCallId, argsStr);
   }
   return buildOpenAINonStreamingResponse(id, created, model, toolCallId, argsStr);
+}
+
+// ── Anthropic Streaming(dsh v0.2+ /v1/messages) ─────────────────────────────
+
+/**
+ * Anthropic SSE 骨架,与 claude-code/form.ts buildFormResponse 完全对称。
+ * 关键 3 层:
+ *   1. thinking block (index 0):无条件 emit,防 DeepSeek thinking-mode 400
+ *   2. tool_use block (index 1):dsh 原生 `ask_user_question` name + 完整 input
+ *   3. message_delta stop_reason=tool_use
+ */
+function buildAnthropicStreamingResponse(
+  msgId: string,
+  model: string,
+  toolUseId: string,
+  inputJson: string,
+): Response {
+  const encoder = new TextEncoder();
+  const sse = (event: string, d: unknown) =>
+    encoder.encode(`event: ${event}\ndata: ${JSON.stringify(d)}\n\n`);
+
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(sse("message_start", {
+        type: "message_start",
+        message: {
+          id: msgId, type: "message", role: "assistant", model,
+          content: [], stop_reason: null, stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+      }));
+
+      // ── Fake `thinking` block (index 0) ──────────────────────────────────
+      // 无条件 emit —— DeepSeek 官方 Anthropic 兼容端点在 thinking mode 下强查
+      // 历史 assistant 必须带 thinking block,否则 400。详见
+      // THINKING_SIGNATURE_PLACEHOLDER 常量注释。
+      controller.enqueue(sse("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      }));
+
+      controller.enqueue(sse("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "" },
+      }));
+
+      controller.enqueue(sse("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "signature_delta", signature: THINKING_SIGNATURE_PLACEHOLDER },
+      }));
+
+      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 0 }));
+
+      // ── tool_use block (index 1) ─────────────────────────────────────────
+      controller.enqueue(sse("content_block_start", {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: toolUseId,
+          name: TOOL_NAME,
+          input: {},
+        },
+      }));
+
+      controller.enqueue(sse("content_block_delta", {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: inputJson },
+      }));
+
+      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 1 }));
+
+      controller.enqueue(sse("message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use", stop_sequence: null },
+        usage: { output_tokens: 0 },
+      }));
+
+      controller.enqueue(sse("message_stop", { type: "message_stop" }));
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+  });
 }
 
 // ── OpenAI Non-streaming ───────────────────────────────────────────────────────

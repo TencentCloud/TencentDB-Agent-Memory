@@ -74,6 +74,9 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     const wikiId = body.wiki_id;
     if (!isValidIdSegment(wikiId)) return c.json(wrapError(400, "wiki_id is required"), 400);
     const requesterUserId = typeof body.user_id === "string" && body.user_id ? body.user_id : undefined;
+    // 设计 2026-09-21 §3.3：可选 on_busy，默认 'reject' 保持原并发拒绝语义；
+    // 'replace' 由 Panel 复合端点专用（取消旧任务 + 排队新任务）。
+    const onBusy = body.on_busy === "replace" ? "replace" : "reject";
 
     const row = wikiService.getById(serviceId, wikiId);
     if (!row) return c.json(wrapError(404, "wiki not found"), 404);
@@ -84,13 +87,21 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       return c.json(wrapError(400, "wiki has no source files, upload before ingest"), 400);
     }
 
-    const result = wikiService.ingest(serviceId, row.team_id, wikiId, requesterUserId);
+    const result = wikiService.ingest(serviceId, row.team_id, wikiId, requesterUserId, { onBusy });
     if (result.kind === "not_found") return c.json(wrapError(404, "wiki not found"), 404);
     if (result.kind === "busy") {
       // 并发拒绝：干净最小的 409 响应体（调用方用 code 判断，不 parse message）。
       return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
     }
-    return c.json(wrapOk({ wiki_id: result.row.wiki_id, status: result.row.status }), 202);
+    // ok = 直接入队；queued = 已有在途任务，按 replace 取消旧任务后排队新任务。
+    return c.json(
+      wrapOk({
+        wiki_id: result.row.wiki_id,
+        status: result.row.status,
+        queued: result.kind === "queued",
+      }),
+      202,
+    );
   });
 
   app.post("/delete", async (c) => {
@@ -160,10 +171,25 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     const name = body.name;
     if (typeof name !== "string" || !name) return c.json(wrapError(400, "name is required"), 400);
 
+    // 外部来源（iWiki 等）：source_type 决定详情页 UI 走「上传文件」还是「从外部拉取」。
+    // 二者必须成对出现：有 URL 无类型 → 前端无法判断来源；有类型无 URL → 导入无从下手。
+    const sourceType =
+      typeof body.source_type === "string" && body.source_type ? body.source_type : undefined;
+    const sourceUrl =
+      typeof body.source_url === "string" && body.source_url ? body.source_url : undefined;
+    if (sourceType && !sourceUrl) {
+      return c.json(wrapError(400, "source_url is required when source_type is set"), 400);
+    }
+    if (sourceUrl && !sourceType) {
+      return c.json(wrapError(400, "source_type is required when source_url is set"), 400);
+    }
+
     const { row, existed } = wikiService.create({
       service_id: ids.service_id,
       team_id: ids.team_id,
       name,
+      source_type: sourceType,
+      source_url: sourceUrl,
       owner_user_id: ids.user_id,
       user_id: ids.user_id,
       agent_id: ids.agent_id,

@@ -89,6 +89,13 @@ export interface MetaFetchConfig {
   logger?: Logger;
   /** 透传为 x-request-id；缺省则生成 UUID。 */
   requestId?: string;
+  /**
+   * 额外请求头（如 task-source 的令牌注入）。
+   *
+   * 注意：这些头**不参与日志**（logRemoteMeta 只序列化 body），
+   * 因此绝不把敏感值放这里后又手工拼进日志字段。
+   */
+  extraHeaders?: Record<string, string>;
 }
 
 interface RawEnvelope<T> {
@@ -147,6 +154,7 @@ export async function executeMetaFetch<T>(
     };
     if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
     if (cfg.userKey) headers[META_HEADER_USER_KEY] = cfg.userKey;
+    if (cfg.extraHeaders) Object.assign(headers, cfg.extraHeaders);
     const resp = await fetch(`${base}${path}`, {
       method,
       headers,
