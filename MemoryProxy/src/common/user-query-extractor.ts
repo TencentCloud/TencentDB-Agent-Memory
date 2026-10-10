@@ -105,6 +105,25 @@ export function extractUserQueryText(raw: string): string {
   // 否则 extractLatestUserMessage 从后往前扫会把它当成真实提问写入 L0。
   if (isDshRuntimeContextSnapshot(raw)) return "";
 
+  // #1520: CC 在 turn 进行中收到用户补发消息时，把它包在 <system-reminder> 里
+  // 拼进下一条 tool-result user message。整块剥离会把用户真实指令一起丢掉
+  // （L0 记成 tool 输出、L1 recall 拿空 query）。因此在 wrapper 剥离之前，
+  // 先把标准形态的 queued-message 正文提升为用户键入文本——包裹层本身仍被
+  // 后续剥离剥掉，只有正文存活。boilerplate（IMPORTANT: ... Do not ignore it.）
+  // 是 CC 固定模板，不属于用户输入。
+  {
+    const queuedRe = /<system-reminder>\s*The user sent a new message while you were working:\s*([\s\S]*?)<\/system-reminder>/gi;
+    const parts: string[] = [];
+    let qm: RegExpExecArray | null;
+    while ((qm = queuedRe.exec(raw)) !== null) {
+      const body = qm[1]
+        .replace(/\s*IMPORTANT:[\s\S]*$/i, "")
+        .trim();
+      if (body) parts.push(body);
+    }
+    if (parts.length > 0) return parts.join("\n\n");
+  }
+
   // 1) 优先：显式 <user_query> 块（即便同一条消息里还夹着 session-init 问答，
   //    也只取真实 query，用户输入完整保留）。
   const queries: string[] = [];
