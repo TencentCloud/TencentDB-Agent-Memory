@@ -1,0 +1,175 @@
+import type { CoreSkillClient } from "../skill/core-client.js";
+import { renderForgetPreview } from "./forget-redaction.js";
+import type { ForgetTarget } from "./forget-pending-store.js";
+
+export interface ForgetIdentity {
+  userId: string;
+  teamId: string;
+  agentId: string;
+  serviceId: string;
+}
+
+type CoreClient = Pick<CoreSkillClient, "post">;
+
+interface SkillSearchHit {
+  skill_id: string;
+  name: string;
+  description?: string;
+  version: number;
+  owner_agent_id?: string;
+  team_id?: string;
+}
+
+interface MemoryPromptRecord {
+  memory_prompt_id: string;
+  name: string;
+  layer: "l1" | "l2" | "l3";
+  prompt: string;
+  version: number;
+  status: "active" | "deleting";
+}
+
+interface EffectiveMemoryPrompt {
+  memory_prompt_id: string;
+  prompt: string;
+  layer: "l1" | "l2" | "l3";
+  source: "agent" | "team" | "instance" | "system";
+  version: number;
+}
+
+interface MemoryPromptSetting {
+  target_type: "instance" | "team" | "agent";
+  team_id?: string;
+  agent_id?: string;
+  memory_prompt_id: string;
+}
+
+const PROMPT_LAYERS = ["l1", "l2", "l3"] as const;
+
+export class ForgetService {
+  constructor(private readonly core: CoreClient) {}
+
+  async discover(identity: ForgetIdentity, keyword: string): Promise<ForgetTarget[]> {
+    const [skills, prompts] = await Promise.all([
+      this.discoverSkills(identity, keyword),
+      this.discoverMemoryPrompts(identity, keyword),
+    ]);
+    return [...skills, ...prompts];
+  }
+
+  async execute(identity: ForgetIdentity, target: ForgetTarget): Promise<void> {
+    if (target.teamId !== identity.teamId || target.agentId !== identity.agentId) {
+      throw new Error("forget target no longer belongs to this session");
+    }
+
+    if (target.kind === "skill") {
+      await this.core.post(
+        "/v3/skill/delete",
+        {
+          user_id: identity.userId,
+          team_id: identity.teamId,
+          agent_id: identity.agentId,
+          skill_id: target.id,
+        },
+        { serviceId: identity.serviceId },
+      );
+    } else {
+      const settings = await this.listPromptSettings(identity, target.id);
+      if (!this.isAgentPrivate(settings, identity)) {
+        throw new Error("memory prompt is shared or no longer assigned to this agent");
+      }
+      await this.core.post(
+        "/v3/memory-prompt/delete",
+        { memory_prompt_ids: [target.id] },
+        { serviceId: identity.serviceId },
+      );
+    }
+  }
+
+  private async discoverSkills(identity: ForgetIdentity, keyword: string): Promise<ForgetTarget[]> {
+    const result = await this.core.post<{ items: SkillSearchHit[] }>(
+      "/v3/skill/search",
+      {
+        team_id: identity.teamId,
+        agent_id: identity.agentId,
+        query: keyword,
+        top_k: 10,
+        mode: "bm25",
+      },
+      { serviceId: identity.serviceId },
+    );
+
+    return result.items
+      .filter((skill) => !skill.owner_agent_id || skill.owner_agent_id === identity.agentId)
+      .filter((skill) => !skill.team_id || skill.team_id === identity.teamId)
+      .map((skill) => ({
+        kind: "skill" as const,
+        id: skill.skill_id,
+        name: renderForgetPreview(skill.name),
+        teamId: identity.teamId,
+        agentId: identity.agentId,
+        preview: renderForgetPreview(skill.description || skill.name),
+        detail: `version ${skill.version}`,
+      }));
+  }
+
+  private async discoverMemoryPrompts(identity: ForgetIdentity, keyword: string): Promise<ForgetTarget[]> {
+    const normalizedKeyword = keyword.toLowerCase();
+    const effective = await Promise.all(PROMPT_LAYERS.map((layer) =>
+      this.core.post<EffectiveMemoryPrompt>(
+        "/v3/memory-prompt/get",
+        { team_id: identity.teamId, agent_id: identity.agentId, layer },
+        { serviceId: identity.serviceId },
+      ),
+    ));
+
+    const uniqueIds = [...new Set(effective
+      .filter((prompt) => prompt.source === "agent" && !prompt.memory_prompt_id.startsWith("builtin:"))
+      .map((prompt) => prompt.memory_prompt_id))];
+
+    const candidates: ForgetTarget[] = [];
+    for (const id of uniqueIds) {
+      const [record, settings] = await Promise.all([
+        this.core.post<MemoryPromptRecord>(
+          "/v3/memory-prompt/get",
+          { memory_prompt_id: id },
+          { serviceId: identity.serviceId },
+        ),
+        this.listPromptSettings(identity, id),
+      ]);
+      if (record.status !== "active" || !this.isAgentPrivate(settings, identity)) continue;
+      if (!`${record.name}\n${record.prompt}`.toLowerCase().includes(normalizedKeyword)) continue;
+
+      candidates.push({
+        kind: "memory-prompt",
+        id: record.memory_prompt_id,
+        name: renderForgetPreview(record.name),
+        teamId: identity.teamId,
+        agentId: identity.agentId,
+        preview: renderForgetPreview(record.prompt),
+        detail: `${record.layer.toUpperCase()}, version ${record.version}`,
+      });
+    }
+    return candidates;
+  }
+
+  private async listPromptSettings(
+    identity: ForgetIdentity,
+    memoryPromptId: string,
+  ): Promise<MemoryPromptSetting[]> {
+    const result = await this.core.post<{ items: MemoryPromptSetting[] }>(
+      "/v3/memory-prompt/setting/list",
+      { memory_prompt_id: memoryPromptId, limit: 2, offset: 0 },
+      { serviceId: identity.serviceId },
+    );
+    return result.items;
+  }
+
+  private isAgentPrivate(settings: MemoryPromptSetting[], identity: ForgetIdentity): boolean {
+    const [setting] = settings;
+    return settings.length === 1
+      && setting?.target_type === "agent"
+      && setting.team_id === identity.teamId
+      && setting.agent_id === identity.agentId;
+  }
+}
