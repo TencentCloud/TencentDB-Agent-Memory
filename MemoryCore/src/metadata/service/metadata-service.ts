@@ -728,7 +728,7 @@ export class MetadataService {
     }
   }
 
-  async verifyAuthForCaller(userKey: string, ctx: V3AuthContext): Promise<{ valid: boolean; user: UserPublic | null }> {
+  async verifyAuthForCaller(userKey: string, ctx: V3AuthContext): Promise<{ valid: boolean; user: UserPublic | null; key_id?: string }> {
     const user = await this.verifyAuth(userKey);
     if (!user) return { valid: false, user: null };
     const visibilityCtx: V3AuthContext = ctx.userId
@@ -753,7 +753,8 @@ export class MetadataService {
         },
       };
     }
-    return { valid: true, user: toPublicUser(user, visibilityCtx) };
+    const key = await this.store.getUserKeyByValue(userKey);
+    return { valid: true, user: toPublicUser(user, visibilityCtx), key_id: key?.key_id };
   }
 
   /** 校验 user_key 并返回对应用户（无效返回 null）。 */

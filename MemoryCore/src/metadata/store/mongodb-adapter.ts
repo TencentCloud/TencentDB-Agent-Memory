@@ -547,11 +547,8 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async getUserByKey(userKey: string): Promise<UserEntity | null> {
-    const keyDoc = await this.col<UserKeyEntity>("meta_user_keys").findOne(
-      { key_value: userKey, status: "active" } as Document,
-      PROJECT_NO_ID,
-    ) as UserKeyEntity | null;
-    if (!keyDoc || isUserKeyExpired(keyDoc.expires_at)) return null;
+    const keyDoc = await this.getUserKeyByValue(userKey);
+    if (!keyDoc) return null;
     await this.touchUserKeyUsage(keyDoc.key_id);
     return this.getUserById(keyDoc.user_id);
   }
@@ -670,6 +667,14 @@ export class MongoMetadataStore implements IMetadataStore {
 
   async getUserKeyById(keyId: string): Promise<UserKeyEntity | null> {
     return this.col<UserKeyEntity>("meta_user_keys").findOne({ key_id: keyId } as Document, PROJECT_NO_ID) as Promise<UserKeyEntity | null>;
+  }
+
+  async getUserKeyByValue(keyValue: string): Promise<UserKeyEntity | null> {
+    const key = await this.col<UserKeyEntity>("meta_user_keys").findOne(
+      { key_value: keyValue, status: "active" } as Document,
+      PROJECT_NO_ID,
+    ) as UserKeyEntity | null;
+    return key && !isUserKeyExpired(key.expires_at) ? key : null;
   }
 
   async listUserKeys(userId: string, pagination?: PaginationParams | null): Promise<ListPage<UserKeyEntity>> {

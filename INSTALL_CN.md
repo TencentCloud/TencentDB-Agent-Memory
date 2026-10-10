@@ -188,6 +188,12 @@ curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
 之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 业务用户，
 可以在 **admin 已经把你加入的 Team 内**管理 Agent / Task / Skill / Wiki / 记忆等资产了。
 
+面板左侧「API Key」按账号管理 User Key：普通用户只管理自己的 Key；`system_admin`
+可在页面中选择自己或任一 `normal` 用户，包括尚未加入 Team 的账号。新 Key
+完整值仅在创建成功时显示一次；列表只显示脱敏前缀。面板禁止吊销当前登录 Key，
+Core 也会拒绝吊销某账号最后一把有效 Key。这里管理的是 Memory User Key，
+不包含模型供应商凭证或服务间 Key。
+
 > **面板上建 Team 只对 admin 开放。** 业务用户登录后**看不到「新建团队」入口**，这是
 > 面板的权限设计（不是 bug）。业务用户需要新 Team 时有两条路：① 让 admin 在面板里建好
 > 并把你加入；② 用自己的 key 调 `team/create` API 自助建（把 `owner_user_id` 填成自己，
