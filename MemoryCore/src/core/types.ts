@@ -129,6 +129,31 @@ export interface LLMRunParams {
    * Langfuse 顶级 userId 字段。空字符串等价于未传。
    */
   userId?: string;
+  /**
+   * Best-effort request for provider-native Structured Output (issue #1210).
+   *
+   * Contract: `run()` ALWAYS resolves with the model's text output, whether
+   * or not structured generation was used. Runners that recognize this field
+   * (StandaloneLLMRunner) constrain generation via the provider's native
+   * structured output (json_schema → json_object → plain text, degrading only
+   * on explicit capability errors). Runners that don't recognize it (OpenClaw
+   * host runner, mock runners) ignore it and behave exactly as before — the
+   * caller's tolerant parser remains the single normalization entry point.
+   */
+  structuredOutput?: {
+    /**
+     * JSON Schema (draft 2020-12) describing the expected output object.
+     * Must have an object root (json_schema mode requirement).
+     */
+    schema: object;
+    /** Optional schema name (maps to json_schema.name; default "response"). */
+    schemaName?: string;
+    /**
+     * Optional local validation for outputs obtained without schema
+     * constraint (JSON Object tier). Receives the parsed JSON value.
+     */
+    validate?: (value: unknown) => boolean;
+  };
 }
 
 /**
