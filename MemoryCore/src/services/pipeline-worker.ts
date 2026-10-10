@@ -51,7 +51,7 @@ export interface TaskExecutor {
 export interface PipelineWorkerConfig {
   /** Worker 节点 ID */
   workerId?: string;
-  /** 并发消费协程数 (default: 60). 每个协程独立消费任务，不同 session 并行执行。 */
+  /** 并发消费协程数 (default: 6). 每个协程独立消费任务，不同 session 并行执行。 */
   concurrency?: number;
   /** 消费轮询间隔 ms (default: 200) */
   pollIntervalMs?: number;
