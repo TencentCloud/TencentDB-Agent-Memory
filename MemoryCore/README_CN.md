@@ -275,12 +275,14 @@ Gateway 按以下优先级加载配置：
 | `TDAI_LLM_API_KEY` | 空 | LLM API Key |
 | `TDAI_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API 地址 |
 | `TDAI_LLM_MODEL` | `gpt-4o` | LLM 模型 |
+| `TDAI_LLM_STRICT_OPENAI_COMPAT` | `false` | 为严格聊天接口转换纯文本数组/null 消息内容 |
 | `TDAI_SKILL_ENABLED` | 配置文件值 | 强制启用 Skill 模块 |
 
 配置模板：
 
 - `tdai-gateway.standalone.yaml`：最小单机 Memory 配置。
 - `tdai-gateway.yaml`：Standalone + Skill 默认配置。
+  如果上游在多轮工具调用时拒绝数组/null 消息内容（如 [#1313](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1313) 报告的 Cloudflare Workers AI 场景），可设置 `llm.strictOpenAICompat: true` 或 `TDAI_LLM_STRICT_OPENAI_COMPAT=true`。环境变量优先于 YAML，显式 `false` 可关闭。此选项默认关闭，适用于 standalone runner 的流式和非流式请求：合并纯文本片段、将 null 转为空字符串，并保留工具调用。图片、音频及未知片段保持原样；它不是通用的上游兼容开关。插件配置中可与 `llm.enabled: true` 一起设置该选项。
 - `tdai-gateway.proxy.yaml`：通过 OpenAI-compatible Proxy 调用模型。
 
 ## 存储与隔离

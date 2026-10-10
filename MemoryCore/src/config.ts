@@ -200,6 +200,8 @@ export interface ReportConfig {
  * Leave undefined (default) to use the host's native LLM mechanism.
  */
 export interface StandaloneLLMOverrideConfig {
+  /** Normalize text-only array/null message content for strict chat endpoints. */
+  strictOpenAICompat?: boolean;
   /** Enable standalone LLM mode (default: false). When false, uses host LLM. */
   enabled: boolean;
   /** OpenAI-compatible API base URL (e.g. "https://api.openai.com/v1"). */
@@ -653,6 +655,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
         provider,
         stream: bool(llmGroup, "stream") ?? false,
+        strictOpenAICompat: bool(llmGroup, "strictOpenAICompat") ?? false,
         proxy: {
           // 默认 true：走 proxy 时用 memory 系统用户 key 作为 Authorization。
           useMemorySystemUserKey: bool(proxyGroup, "useMemorySystemUserKey") ?? true,
