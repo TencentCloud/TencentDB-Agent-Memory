@@ -172,7 +172,31 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  * 白名单入口 `/v1/messages`、`/responses` 自身不会被误剥（因为它们不匹配 agent
  * 段——agent 段限定为已知名字）。
  */
-const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai|pi)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
+/**
+ * Known agent-source segments — the single literal list in this codebase.
+ * Both consumers derive from it: the route regex below and the bridge
+ * session-key prefix probes (memory-bridge / skill-bridge `loadSessionIdsL1`).
+ *
+ * Historia (fix 2026-09-09): las listas duplicadas ya divergieron DOS veces
+ * (pi/#1195, opencode/40101 en lectura viva). La regex se deriva del array;
+ * al agregar una fuente, agrégala SOLO aquí.
+ */
+export const AGENT_SOURCE_PREFIXES = [
+  "claude-code",
+  "codebuddy",
+  "codex",
+  "cursor",
+  "anthropic",
+  "openai",
+  "pi",
+  "opencode",
+] as const;
+
+/** Derivada del array — NO editar tokens aquí (ronda 2026-09-09, hallazgo 1). */
+const AGENT_PREFIX_RE = new RegExp(
+  `^/(${AGENT_SOURCE_PREFIXES.join("|")})(?:/[^/]+)?(?=/v1/|/responses(?:/|$)|/memories/|/realtime/)`,
+  "i",
+);
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。
