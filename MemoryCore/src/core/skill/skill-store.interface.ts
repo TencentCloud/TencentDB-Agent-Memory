@@ -124,6 +124,14 @@ export interface ISkillStore {
   listSkills(opts: ListSkillsOptions): Promise<{ items: Skill[]; total: number }>;
   /** 搜索 skill（BM25 / embedding / hybrid，由实现决定） */
   searchSkills(opts: SearchSkillsOptions): Promise<SkillSearchResult[]>;
+  /**
+   * 可选：写入/覆盖某 skill 的向量（patch skill-hybrid-vec）。
+   * sqlite 实现在 vec 不可用或维度不匹配时静默跳过；TCVDB 实现由服务端
+   * 内嵌 embedding，无需客户端写向量（不实现本方法即可）。
+   */
+  upsertEmbedding?(skillId: string, embedding: Float32Array): void;
+  /** 可选：删除某 skill 的向量。 */
+  deleteEmbedding?(skillId: string): void;
   /** 列出某 skill 的全部版本（DESC） */
   listVersions(skillId: string, teamId?: string, pagination?: { limit?: number; offset?: number }): Promise<Skill[]>;
   /** 某 skill 的版本总数 */
