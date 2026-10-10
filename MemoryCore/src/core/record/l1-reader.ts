@@ -13,6 +13,7 @@
 
 import type { MemoryRecord, MemoryType, EpisodicMetadata } from "./l1-writer.js";
 import type { IMemoryStore, L1RecordRow, L1QueryFilter } from "../store/types.js";
+import { parseSourceMessageIds } from "../store/types.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 
@@ -77,7 +78,7 @@ function rowToMemoryRecord(row: L1RecordRow): MemoryRecord {
     type: row.type as MemoryType,
     priority: row.priority,
     scene_name: row.scene_name,
-    source_message_ids: [], // not stored in SQLite (vector search doesn't need them)
+    source_message_ids: parseSourceMessageIds(row.source_message_ids_json),
     metadata,
     timestamps,
     createdAt: row.created_time,
