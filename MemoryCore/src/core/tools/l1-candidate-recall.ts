@@ -59,6 +59,13 @@ export async function recallL1Candidates(
     return { hits: [], strategy: "none" };
   }
 
+  if (vectorStore.getCapabilities?.().nativeBm25Search) {
+    const results = filter
+      ? await vectorStore.searchL1Fts(query, topK, filter)
+      : await vectorStore.searchL1Fts(query, topK);
+    return { hits: results.map(toL1Hit), strategy: "fts" };
+  }
+
   if (hasNativeL1Hybrid(vectorStore)) {
     logger?.debug?.(`${tag} [native-hybrid] Single-call hybrid search...`);
     const results = await vectorStore.searchL1Hybrid!(

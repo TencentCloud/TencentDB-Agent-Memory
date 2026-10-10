@@ -268,6 +268,15 @@ export function resolveSkillConfig(
       allowExecutable: input.resources?.allowExecutable === true,
     },
     versionTtlSeconds: (input.versionTtlDays ?? 0) * 86400,
+    // maxVersions:
+    //  - 不配 / 显式 0: 关闭 (向后兼容: 所有未配置的旧实例保持原行为)
+    //  - 正整数: 作为非 head 版本数上限
+    //  - 非法值 (负数 / 非整数 / NaN): 走 validPositiveInteger 的 warn + 落回 0
+    // 显式 0 走短路, 避免被 validPositiveInteger 当"must be positive"误报 warn。
+    maxNonHeadVersions:
+      input.maxVersions === 0
+        ? 0
+        : validPositiveInteger(input.maxVersions, 0, logger, "maxVersions"),
     worker: {
       concurrency: workerConcurrency,
       brpopBlockMs: workerBrpopMs,

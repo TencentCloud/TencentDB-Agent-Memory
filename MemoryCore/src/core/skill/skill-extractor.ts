@@ -53,6 +53,13 @@ export interface ExtractorOptions {
   core: SkillCore;
   runner?: ExtractorRunner;
   systemPrompt?: string;
+  /**
+   * 冷启动 / 批量导入使用的严格版 systemPrompt (SKILL_REVIEW_PROMPT_STRICT)。
+   * 仅当 extract() 的 input.mode==='strict' 且本字段已注入时启用; 否则一律
+   * 走 systemPrompt (向后兼容)。生产 wiring (tdai-core / server) 已默认注入
+   * SKILL_REVIEW_PROMPT_STRICT; 测试环境不注入 → 老行为完全不变。
+   */
+  strictSystemPrompt?: string;
   maxIterations?: number;
   /** Transcript head-tail truncation: chars to keep from the start (default 8000). */
   headChars?: number;
@@ -88,6 +95,16 @@ export interface ExtractInput {
   };
   /** 主 Agent 的抽取提示，有值时注入到抽取 LLM 的 user prompt 最前面。 */
   reason?: string;
+  /**
+   * 抽取模式:
+   *   - 缺省 / 'default': 走 systemPrompt (SKILL_REVIEW_PROMPT v2 宽松版)
+   *   - 'strict'        : 走 strictSystemPrompt (SKILL_REVIEW_PROMPT_STRICT
+   *                       v1 严格 gate); 若 strictSystemPrompt 未注入则退回
+   *                       systemPrompt (不崩)。
+   * 冷启动 / 批量导入场景 (agents/asset-import.ts) 应传 'strict';日常实时
+   * 抽取不传即可,行为跟历史版本一致。
+   */
+  mode?: 'default' | 'strict';
 }
 
 export interface ExtractResult {
@@ -99,6 +116,8 @@ export class SkillExtractor {
   private readonly core: SkillCore;
   private readonly runner?: ExtractorRunner;
   private readonly systemPrompt: string;
+  /** 冷启动/批量导入用的严格 prompt; undefined 时 mode==='strict' 也退回 systemPrompt。 */
+  private readonly strictSystemPrompt?: string;
   private readonly maxIterations: number;
   private readonly headChars: number;
   private readonly tailChars: number;
@@ -110,6 +129,7 @@ export class SkillExtractor {
     this.core = opts.core;
     this.runner = opts.runner;
     this.systemPrompt = opts.systemPrompt ?? "You are a Skill Review Agent. Use tools to look at existing skills, decide what to add/improve, and call skill_create / skill_update / skill_patch / skill_files_write to persist.";
+    this.strictSystemPrompt = opts.strictSystemPrompt;
     this.maxIterations = opts.maxIterations ?? 16;
     this.headChars = opts.headChars ?? 8000;
     this.tailChars = opts.tailChars ?? 32000;
@@ -207,6 +227,21 @@ export class SkillExtractor {
 
     const auditSink: ExtractedSkillCandidate[] = [];
 
+    // 选择 systemPrompt: 冷启动/批量导入模式走 strict, 否则走默认 v2。
+    // 关键向后兼容:
+    //   - input.mode 缺省 / 'default'   → 恒用 this.systemPrompt (老流量零回归)
+    //   - input.mode === 'strict' 但构造器没注入 strictSystemPrompt (测试环境 /
+    //     未升级 wiring) → 退回 this.systemPrompt (不崩、不静默改行为)
+    const effectiveSystemPrompt = input.mode === 'strict' && this.strictSystemPrompt
+      ? this.strictSystemPrompt
+      : this.systemPrompt;
+    // 观测用: 记录实际生效的模式 (相对 input 判定, 而非"是否真启用 strict prompt")。
+    //   requested_strict = 上游是否要求走严格模式
+    //   effective_mode   = 实际用了哪一个 prompt (strict / default)
+    // 便于统计 wiring 是否漏注入 strictSystemPrompt (二者不一致就是漏)。
+    const effectiveMode: 'strict' | 'default' =
+      input.mode === 'strict' && this.strictSystemPrompt ? 'strict' : 'default';
+
     if (!this.runner) {
       // No runner injected (test environment / disabled) → 返回空候选
       this.logger?.info(`${TAG} no runner provided; returning empty candidates`);
@@ -216,6 +251,8 @@ export class SkillExtractor {
         msg_count: messages.length,
         candidates: 0,
         skipped: "no_runner",
+        requested_mode: input.mode ?? 'default',
+        effective_mode: effectiveMode,
       });
       return { candidates: [] };
     }
@@ -234,7 +271,7 @@ export class SkillExtractor {
     try {
       text = await this.runner.run({
         prompt,
-        systemPrompt: this.systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         tools,
         enableTools: true,
         maxIterations: input.options?.max_iterations ?? this.maxIterations,
@@ -263,6 +300,8 @@ export class SkillExtractor {
         candidates: auditSink.length,
         err_name: (e as Error).name,
         err_msg: (e as Error).message,
+        requested_mode: input.mode ?? 'default',
+        effective_mode: effectiveMode,
       });
       try {
         trace.report("skill.extractor.extract", {
@@ -275,6 +314,8 @@ export class SkillExtractor {
           dur_ms: dur,
           success: false,
           error: (e as Error).message,
+          requested_mode: input.mode ?? 'default',
+          effective_mode: effectiveMode,
         });
       } catch { /* noop */ }
       throw e;
@@ -292,6 +333,8 @@ export class SkillExtractor {
       prefix_mode: prefixMode,
       // 只截前 60 字符 (够识别关键词; 长了对 obs 无用)。
       prefix_query: prefixQuery ? prefixQuery.slice(0, 60) : undefined,
+      requested_mode: input.mode ?? 'default',
+      effective_mode: effectiveMode,
     });
     try {
       trace.report("skill.extractor.extract", {
@@ -304,6 +347,8 @@ export class SkillExtractor {
         prompt_chars: prompt.length,
         dur_ms: dur,
         success: true,
+        requested_mode: input.mode ?? 'default',
+        effective_mode: effectiveMode,
       });
     } catch { /* noop */ }
 
@@ -381,8 +426,16 @@ export class SkillExtractor {
       enableTools: false,
       // 让 runner 别真跑 tool loop, 就当一次普通 completion 用。
       maxIterations: 1,
-      // 关键词很短; 32 token 足够 5 词 ×~6 字符 CJK, 也帮 runner 快速返回。
-      maxTokens: 64,
+      // 关键词本身很短 (5 词 ×~6 CJK char), 但 A₂ 派 thinking 模型
+      // (minimax-m3 inline `<think>` / minimax-m2.7 独立 reasoning_content /
+      // GLM-4-thinking / qwq-32b / DeepSeek-R1) 会先花 100~500 token 走
+      // reasoning, 然后才吐 visible content。历史 maxTokens=64 会把 reasoning
+      // 卡死在 length, m2.7 拿到空 content 静默降级 recent, m3 拿到未闭合
+      // `<think>...` 走 sanitize 后成为脏 BM25 query 命中随机 skill。
+      // 给 8192 简单一刀切: A₁ 派 (o1/o3/deepseek-v4-pro/无 think) content
+      // 仍是短短几个词, 不会真吃到上限; A₂ 派 reasoning 段能完整走完再输出
+      // 关键词。query-gen 就一次调用, 成本可控。
+      maxTokens: 8192,
       taskId: `skill-extract-query-${input.task_id ?? "unknown"}`,
       // Langfuse 上可按此 traceName 单独筛这类 query-gen call, 跟主 skill.extract 分开。
       traceName: "skill.extract.query-gen",
@@ -591,6 +644,10 @@ export function createExtractorAdapter(
         messages: toExtractMessages(input.conversation),
         reason: (input as { reason?: string }).reason,
         options: (input as { options?: { max_iterations?: number } }).options,
+        // strict_mode 透传:Worker → adapter → SkillExtractor 三段链路完整,
+        // 缺任一环节冷启动的 strict_mode 就会被丢弃退回 default v2 prompt。
+        // 本行是 adff8768 遗漏的一环 (adapter 显式 map 字段, 未覆盖 mode)。
+        mode: (input as { mode?: 'default' | 'strict' }).mode,
       });
       return { candidates: toLegacyCandidates(r.candidates) };
     },

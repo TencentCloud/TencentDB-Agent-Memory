@@ -10,10 +10,13 @@ cc-session-reset-full-rebind.py — pexpect PTY E2E: reset 后完整走 session-
 每个 case 独立起一个 claude 进程避免 state 污染。
 
 依赖: pexpect (`pip install pexpect`)
-环境: CLAUDE_CONFIG_DIR 指向 ~/.claude-inter (已配 proxy base_url)
+环境变量:
+    CLAUDE_CONFIG_DIR   指向一个已配好 proxy base_url 的 CC 配置目录
+                        (若未设, 透传当前环境, 让 claude 自己找)
+    CLAUDE_BIN_DIR      若 `claude` 不在 PATH, 用它追加到 PATH 前缀 (可选)
 
 用法:
-    python3 scripts/qa/cc-session-reset-full-rebind.py
+    CLAUDE_CONFIG_DIR=~/.my-claude-cfg python3 scripts/qa/cc-session-reset-full-rebind.py
     python3 scripts/qa/cc-session-reset-full-rebind.py --case p0-2
     python3 scripts/qa/cc-session-reset-full-rebind.py --timeout 120
 """
@@ -106,11 +109,12 @@ def spawn_cc(cwd, log_path, timeout):
     """Spawn a fresh claude process."""
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
-    env["CLAUDE_CONFIG_DIR"] = os.path.expanduser("~/.claude-inter")
+    # 若调用方已设 CLAUDE_CONFIG_DIR 则沿用, 否则不动, 让 claude 走默认
     env["CLAUDE_DISABLE_UPDATE_CHECK"] = "1"
-    # Ensure PATH includes claude
-    if "/data/home/jzhizhuang/.local/bin" not in env.get("PATH", ""):
-        env["PATH"] = "/data/home/jzhizhuang/.local/bin:" + env.get("PATH", "")
+    # 若 claude 不在 PATH, 允许通过 CLAUDE_BIN_DIR 环境变量追加 PATH 前缀
+    extra_bin = os.environ.get("CLAUDE_BIN_DIR", "")
+    if extra_bin and extra_bin not in env.get("PATH", ""):
+        env["PATH"] = extra_bin + ":" + env.get("PATH", "")
 
     child = pexpect.spawn(
         "claude",
@@ -593,7 +597,7 @@ def main():
     os.makedirs(args.log_dir, exist_ok=True)
     print(f"[INFO] log_dir={args.log_dir}")
     print(f"[INFO] timeout={args.timeout}s per step")
-    print(f"[INFO] CLAUDE_CONFIG_DIR=~/.claude-inter")
+    print(f"[INFO] CLAUDE_CONFIG_DIR={os.environ.get('CLAUDE_CONFIG_DIR', '<default>')}")
     print(f"[INFO] started at {datetime.now().isoformat()}")
 
     all_results = {}

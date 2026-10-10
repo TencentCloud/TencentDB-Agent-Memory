@@ -25,9 +25,9 @@ export function isValidGitHttpUrl(raw: string): boolean {
  *
  * repo_name 可能为空（旧数据），此时回退到 URL 会显得很长。
  * 这里从 URL 中提取最后两段路径作为 `namespace/repo` 格式：
- *   https://gitlab.example.com/namespace/repo.git → namespace/repo
- *   https://github.com/org/project.git → org/project
- *   https://git.woa.com/group/sub/repo.git → sub/repo
+ *   https://<host>/namespace/repo.git → namespace/repo
+ *   https://<host>/org/project.git → org/project
+ *   https://<host>/group/sub/repo.git → sub/repo
  * 如果只有一段路径，直接返回该段（去掉 .git 后缀）。
  * 解析失败时返回原始 URL（保底）。
  */

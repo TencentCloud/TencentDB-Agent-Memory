@@ -197,34 +197,14 @@ curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
 
 Coding agent 用记忆必须落到具体 `team / agent / task` 三元组上：
 
-1. **Team**（团队）：**左上角的 Team 切换器**（顶栏显示当前团队名的下拉）→ 底部「**+ 新建团队**」
+1. **Team**（团队）：顶栏 TeamSwitcher → 新建（入口名称以当前 Panel 为准，旧版为左侧「团队」）
    - 一个 Team 是一组资产的归属容器（memory、skill、knowledge 都归 Team）
-   - ⚠️ **面板上只有 admin 能建 Team**；业务用户看不到这个入口属正常，请让 admin 建好并把你加入
-   - 💡 **业务用户想自助建 Team？** 面板没有入口，但可以用**自己的 key** 调 API，把
-     `owner_user_id` 填成自己的 user_id —— 内核会建出 Team 并**自动把你设为该 Team 的
-     admin**（无需再手动加成员）：
-
-     ```bash
-     # 用第 1.5 步创建的那个业务用户自己的 user_key 调用
-     # 其中 name 就是团队名，改成你想要的即可（示例用的是 repro-own-team）
-     curl -sS -X POST http://localhost:8420/v3/meta/team/create \
-       -H "x-tdai-user-key: <该业务用户的 user_key>" \
-       -H "x-tdai-service-id: default" \
-       -H "Content-Type: application/json" \
-       -d '{"name":"repro-own-team","owner_user_id":"<该业务用户的 user_id>"}' | jq
-     ```
-
-     > `name` 是团队显示名，可自定义（同一用户名下不要重名，否则返回 `409`）。
-     > `team/create` 要求 body 里的 `owner_user_id` **必须等于调用 key 对应的 user_id**
-     > （即"只能建自己 own 的 Team"），否则返回 `permission_denied`。建成后你就是 owner
-     > 兼 admin，可直接在这个 Team 内管资产、跑会话。
-2. **Agent**（智能体）：进入 Team → 左侧「**Agents 管理**」→ 新建
+2. **Agent**（智能体）：进入 Team → 「Agents 管理」→ 新建
    - 给它填一段清晰的 `description` + `system prompt`（就是这个 agent 的角色说明）
    - 例：`bug-fix 工程师`、`前端评审 agent`、`SQL 优化师`
-3. **Task**（任务，可选）：左侧「**任务看板**」→「**新建 Task**」
+3. **Task**（任务，可选）：Team → 「任务看板」→ 新建
    - Task 是**这一次工作的抓手**，比如「修复登录页 XSS」「上线 v1.4 灰度」
-   - 记忆会关联到 Task；不建 Task 也能用，但 L2/L3 会缺 Task 维度
-   - 若想让首次会话有"一键跳过 Task"入口，可给 proxy 配 `defaultTaskId`（见后文）
+   - 记忆会关联到 Task；不建 Task 也能用，但交互式 session-init 在 Team 为 0 Task 且未配置 `sessionInit.defaultTaskId` 时会进入 bypass，需要「本次不关联任务」入口时按后文配置 `defaultTaskId`
 
 先准备好**至少 1 个 Team**（admin 面板建、或业务用户用上面的 API 自助建），Team 内建**至少 1 个 Agent**，可选建 Task。
 

@@ -49,6 +49,14 @@ export default function CodeSourcesPanel() {
     formBranch,
     setFormBranch,
     submitting,
+    // 外部来源
+    formSourceType,
+    setFormSourceType,
+    sourceProviders,
+    formCredential,
+    setCredentialField,
+    setFormCredential,
+    openRegister,
     // allocate
     allocateTarget,
     setAllocateTarget,
@@ -118,7 +126,7 @@ export default function CodeSourcesPanel() {
                 {t('code.allocateToAgent')}
               </Button>
               {/* 注册（新增团队池资产）与 memory/skill 对齐，放右上角 header */}
-              <Button type="primary" onClick={() => setShowRegister(true)} data-guide="create-code">
+              <Button type="primary" onClick={openRegister} data-guide="create-code">
                 + {t('code.register')}
               </Button>
             </>
@@ -474,6 +482,82 @@ export default function CodeSourcesPanel() {
                       placeholder="main"
                     />
                   </Form.Item>
+
+                  {/* 外部来源：选了才需要令牌；来源清单来自 KS，为空则不显示该行 */}
+                  {sourceProviders.length > 0 && (
+                    <Form.Item
+                      label={t('code.register.source')}
+                      extra={t('code.register.sourceExtra')}
+                    >
+                      <Select
+                        appearance="button"
+                        size="full"
+                        value={formSourceType}
+                        onChange={(value) => {
+                          setFormSourceType(value);
+                          setFormCredential({}); // 切换来源立即丢弃已填凭据
+                        }}
+                        options={[
+                          { value: '', text: t('code.register.sourcePublic') },
+                          ...sourceProviders.map((p) => {
+                            // 展示名取 i18n（code.source.<id>）；未收录的来源回退 id。
+                            const i18nKey = `code.source.${p.id}`;
+                            const localized = t(i18nKey);
+                            return {
+                              value: p.id,
+                              text: localized === i18nKey ? p.id : localized,
+                            };
+                          }),
+                        ]}
+                      />
+                    </Form.Item>
+                  )}
+
+                  {(() => {
+                    // 按当前 provider 的 form_fields 动态渲染凭据表单
+                    const provider = sourceProviders.find((p) => p.id === formSourceType);
+                    if (!provider) return null;
+                    return provider.form_fields.map((field, idx) => {
+                      const isLast = idx === provider.form_fields.length - 1;
+                      // i18n key 规约：code.credField.<name>.{label,placeholder}
+                      // 未收录 name 时 fallback 到 code.register.token* 老 key（bearer 场景保持兼容）
+                      const labelKey = `code.credField.${field.name}.label`;
+                      const label = t(labelKey);
+                      const placeholderKey = `code.credField.${field.name}.placeholder`;
+                      const placeholder = t(placeholderKey);
+                      return (
+                        <Form.Item
+                          key={field.name}
+                          label={label === labelKey ? t('code.register.token') : label}
+                          required={field.required}
+                          extra={
+                            isLast && provider.token_doc_url ? (
+                              <a
+                                href={provider.token_doc_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="_codelist-token-doc"
+                              >
+                                {t('code.register.tokenDoc')}
+                              </a>
+                            ) : undefined
+                          }
+                        >
+                          <Input
+                            size="full"
+                            type={field.secret ? 'password' : 'text'}
+                            value={formCredential[field.name] ?? ''}
+                            onChange={(v) => setCredentialField(field.name, v)}
+                            placeholder={
+                              placeholder === placeholderKey
+                                ? t('code.register.tokenPlaceholder')
+                                : placeholder
+                            }
+                          />
+                        </Form.Item>
+                      );
+                    });
+                  })()}
                 </Form>
               </Modal.Body>
               <Modal.Footer>
