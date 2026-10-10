@@ -1,0 +1,14 @@
+{
+  "name": "@local/cross-agent-memory",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22.16.0" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "doctor": "node src/doctor.mjs",
+    "install-hooks": "node src/install-hooks.mjs install",
+    "uninstall-hooks": "node src/install-hooks.mjs uninstall",
+    "restore-claude-minimax": "node src/restore-claude-minimax.mjs"
+  }
+}
