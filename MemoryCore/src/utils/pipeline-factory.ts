@@ -404,7 +404,13 @@ export function createL1Runner(opts: {
 }): (params: { sessionKey: string }) => Promise<{
   processedCount: number;
   storedCount: number;
-  /** True iff the over-fetch returned > L1_BATCH_PROCESS rows (i.e. there's residual past the cursor). */
+  /**
+   * True when work remains past the cursor and should be picked up by the
+   * l1Idle timer. Two causes:
+   *   - the over-fetch returned > L1_BATCH_PROCESS rows (residual past the cursor)
+   *   - this round's extraction failed and the cursor was deliberately not
+   *     advanced, so the same rows need another pass
+   */
   hasMore: boolean;
   /** True iff the over-fetch returned exactly L1_BATCH_QUERY rows (i.e. likely large backlog). */
   hasFullBacklog: boolean;
@@ -587,6 +593,7 @@ export function createL1Runner(opts: {
 
       let totalExtracted = 0;
       let totalStored = 0;
+      let failedGroups = 0;
       let lastSceneName: string | undefined;
       const profileScopes = new Set<string>();
       const l1PromptTargets = groups.map((group) => ({
@@ -633,6 +640,13 @@ export function createL1Runner(opts: {
           storage,
         });
 
+        // `success: false` comes back only when the LLM call itself threw (the
+        // `llm_error` path in l1-extractor.ts). A run that completed normally
+        // but had nothing to remember is `success: true` with
+        // extractedCount === 0, so this is a precise signal rather than a
+        // heuristic. See the cursor guard below for what we do with it.
+        if (!l1Result.success) failedGroups += 1;
+
         totalExtracted += l1Result.extractedCount;
         totalStored += l1Result.storedCount;
         if (l1Result.storedCount > 0) {
@@ -650,6 +664,36 @@ export function createL1Runner(opts: {
         if (l1Result.lastSceneName) {
           lastSceneName = l1Result.lastSceneName;
         }
+      }
+
+      // ── Do not consume the batch when the LLM call failed ──
+      //
+      // The cursor is a single value covering every group in this batch, and
+      // markL1ExtractionComplete only ever moves it forward. Advancing it after
+      // a failed extraction would push it past rows that were never read, and
+      // the next round's `recorded_at_ms > cursor` filter would skip them for
+      // good — one transient upstream error would silently discard the whole
+      // batch with no way to get it back.
+      //
+      // Leaving the cursor where it is makes the same rows get re-read on the
+      // next round. We report hasMore=true so pipeline-manager arms the l1Idle
+      // timer (l1IdleTimeoutSeconds, 600s by default) and retries on its own;
+      // hasFullBacklog is forced to false on purpose, because it triggers an
+      // immediate re-enqueue and a sustained upstream outage would turn into a
+      // tight retry loop.
+      if (failedGroups > 0) {
+        logger.warn(
+          `${TAG} [l1] LLM extraction failed for ${failedGroups}/${groups.length} group(s), ` +
+          `cursor NOT advanced for session ${sessionKey} ` +
+          `(extracted=${totalExtracted}, stored=${totalStored}) — batch will be retried`,
+        );
+        return {
+          processedCount: 0,
+          storedCount: totalStored,
+          hasMore: true,
+          hasFullBacklog: false,
+          profileScopes: Array.from(profileScopes),
+        };
       }
 
       // Use maxRecordedAtMs (write time) of the **processed** slice as cursor —
