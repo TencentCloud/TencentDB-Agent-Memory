@@ -691,6 +691,13 @@ export interface AuthConfig {
   url: string;
   /** Request timeout in ms. Default: 5000. */
   timeoutMs: number;
+  /**
+   * Bearer token sent as `Authorization` on the verify call, for a MemoryCore
+   * whose gateway is protected by an API key (`server.apiKey` /
+   * `TDAI_GATEWAY_API_KEY`). Empty (default) sends no `Authorization` header.
+   * Mirrors `tdai.apiKey` / `skill.serviceToken` for the sibling kernel clients.
+   */
+  apiKey: string;
 }
 
 /**
@@ -984,6 +991,7 @@ export interface RawYamlConfig {
     enabled?: boolean;
     url?: string;
     timeoutMs?: number;
+    apiKey?: string;
   };
   systemUsers?: Partial<SystemUserEntry>[];
   admin?: {
