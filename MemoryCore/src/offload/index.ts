@@ -2150,9 +2150,10 @@ class OffloadContextEngine {
     const logger = this._logger;
     logger.debug?.(`[context-offload] >>> CE.compact CALLED: sessionKey=${params.sessionKey ?? "?"}`);
     let stateManager: OffloadStateManager | undefined = params._offloadManager;
-    if (!stateManager && params.sessionKey) {
+    const effectiveSessionKey = params.sessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
+    if (!stateManager && effectiveSessionKey) {
       try {
-        const entry = await this._sessions.resolveIfAllowed(params.sessionKey, params.sessionId);
+        const entry = await this._sessions.resolveIfAllowed(effectiveSessionKey, params.sessionId);
         if (entry) stateManager = entry.manager;
       } catch { /* ignore */ }
     }
