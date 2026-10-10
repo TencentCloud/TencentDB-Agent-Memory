@@ -59,6 +59,7 @@ sdk/python/*.egg-info/
 # Environment (already covered above, explicit for clarity)
 .env.*
 !.env.example
+!.env.podman.example
 
 # offload_server 真值配置（含 tdai kernel Bearer），按 .example 自建
 __tests__/offload_server/remote-config.json
@@ -135,6 +136,11 @@ coverage/
 
 # L0 mongo bench generated reports
 MemoryCore/scripts/bench-l0-mongo/reports/
+
+# Local machine runbooks/status logs (may contain live keys, never commit).
+# NOTE: docs/tdai-v2-technical-ops.md stays tracked (upstream, placeholders only).
+docs/*.md
+docs/*.txt
 
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
