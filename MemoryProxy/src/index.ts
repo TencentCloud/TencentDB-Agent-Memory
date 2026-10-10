@@ -33,6 +33,7 @@ import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
 import { initProxyStorage, getEffectiveBackend } from "./storage/factory.js";
 import { flushPendingWrites, pendingWriteCount } from "./tdai/pending-writes.js";
+import { startPiOutbox } from "./agent-adapters/pi-outbox-runtime.js";
 
 const overrides = parseArgv(process.argv);
 const config = buildConfig(overrides);
@@ -111,6 +112,12 @@ if (isRequestPrepareActive(config)) {
   });
 }
 
+const piOutbox = await startPiOutbox(config.tdai, result => {
+  if ("error" in result) log.error("pi_outbox.scan_failed", {});
+  else if (result.delivered || result.retried || result.dead || result.lost || result.errors.length || result.unreadable.length) {
+    log.info("pi_outbox.pass", { ...result });
+  }
+});
 const app = createApp(config);
 
 log.info("server.starting", {
@@ -138,7 +145,7 @@ log.info("server.starting", {
   traceArchive: config.traceArchive.enabled ? config.traceArchive.dir : "disabled",
 });
 
-serve(
+const server = serve(
   {
     fetch: app.fetch,
     hostname: config.server.host,
@@ -159,8 +166,19 @@ serve(
 // pod rolling update 收到 SIGTERM 时 event loop 里可能还有 in-flight POST
 // 未落到 tdai kernel。先等它们跑完（10s 兜底），再关闭 langfuse/clickhouse/log。
 // k8s 默认 terminationGracePeriodSeconds=30s，10s 留出充足余量。
+let shuttingDown = false;
 async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info("server.shutdown", { signal });
+  // Stop admission and give active responses a bounded opportunity to enqueue.
+  await new Promise<void>(resolve => {
+    const timer = setTimeout(() => {
+      if ("closeAllConnections" in server) server.closeAllConnections();
+      resolve();
+    }, 10_000);
+    server.close(() => { clearTimeout(timer); resolve(); });
+  });
   const pending = pendingWriteCount();
   if (pending > 0) {
     log.info("server.shutdown.flush_l0", { pending });
@@ -168,6 +186,7 @@ async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     log.info("server.shutdown.flush_l0.done", { drained, remaining });
   }
   await shutdownGuard();
+  await piOutbox.stop();
   await shutdownPrivateControlPlane();
   await shutdownRequestPrepare();
   await shutdownTraceArchive();

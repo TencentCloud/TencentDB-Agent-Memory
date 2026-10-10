@@ -309,6 +309,8 @@ export interface TdaiConfig {
   endpoint: string;
   apiKey: string;
   serviceId: string;
+  /** Explicit opt-in; the deployment must provide the #1142 gateway contract. */
+  piOutbox?: { enabled: boolean; directory: string; idempotencyContract: string };
   memory: {
     enabled: boolean;
     /** Master switch for all TDAI memory prompt injection. */
@@ -966,6 +968,7 @@ export interface RawYamlConfig {
     apiKey?: string;
     serviceId?: string;
     memory?: Partial<TdaiConfig["memory"]>;
+    piOutbox?: TdaiConfig["piOutbox"];
   };
   /**
    * Skill/Kernel bridge config. Historically named `coreSkill`; accepted under

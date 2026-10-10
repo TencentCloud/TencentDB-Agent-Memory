@@ -82,6 +82,8 @@ import { TdaiClient, buildTdaiClientForRequest } from "../../tdai/client.js";
 import { deriveTdaiIdentity } from "../../tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "../../tdai/recorder.js";
 import { opencodeAdapter } from "../../agent-adapters/opencode.js";
+import { buildPiTdaiClient } from "../../agent-adapters/pi.js";
+import { createPiDurableStreamTap } from "../../agent-adapters/pi-outbox-stream.js";
 import { trackWrite, withL0Retry } from "../../tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "../../tdai/types.js";
 import { triggerSkillExtractIfReady } from "../../skill/handler-glue.js";
@@ -100,7 +102,6 @@ import {
  * carries no spaceId (older single-tenant deployments).
  */
 // TDAI client factory 已合并到 tdai/client.ts::buildTdaiClientForRequest
-const createTdaiClient = buildTdaiClientForRequest;
 
 /**
  * Flatten messages into Opik-friendly chat messages (no truncation).
@@ -579,6 +580,9 @@ export async function runOpenaiChatPipeline(
   const agentFromPath = pathParts[0] && !["v1", "proxy", "skill-bridge", "memory-bridge"].includes(pathParts[0])
     ? pathParts[0] : undefined;
   const agentSource = agentFromPath ?? "claude-code";
+  const createTdaiClient = (requestConfig: ProxyConfig, requestSpace?: string) => agentSource === "pi"
+    ? buildPiTdaiClient(requestConfig, requestSpace, `pi.${traceId}`)
+    : buildTdaiClientForRequest(requestConfig, requestSpace);
   // _agentStrategy / _gates 已在前面 resolve (agentSource 也许 differs from _agentSourceEarly
   // 因为下面 pathParts 用 filter(Boolean)[0] 提取; 早期资源用同样规则应等价)
 
@@ -1246,7 +1250,7 @@ export async function runOpenaiChatPipeline(
       retried,
       logMeta: responseLogMeta,
       routedFrom,
-      tdaiClient,
+      tdaiClient: !upstreamResp.ok && tdaiClient?.requiresDurableCapture ? null : tdaiClient,
       tdaiIdentity,
       tdaiUserMessage,
       assetCapabilities,
@@ -1852,12 +1856,14 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       //   - trackWrite 注册 in-flight promise 到全局 set；SIGTERM 时 index.ts 会
       //     flushPendingWrites 等待或超时兜底，避免 pod rolling 时丢 L0。
       //   - withL0Retry 应对 tdai kernel 瞬断 / 5xx（3 次退避 ~3.5s 总时长）。
-      trackWrite(
+      const recording = trackWrite(
         withL0Retry(() => recordTdaiTurn(
           ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
           outputMessageContent(outputMessage),
-        )).catch((err: unknown) => pipe.error("TDAI_L0", err))
+        ))
       );
+      if (ctx.tdaiClient.requiresDurableCapture) await recording;
+      else void recording.catch((err: unknown) => pipe.error("TDAI_L0", err));
     } else if (ctx.tdaiClient) {
       logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKeyForSkill);
     }
@@ -1905,6 +1911,10 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     }
   }
 
+  if (ctx.tdaiClient?.requiresDurableCapture && ctx.tdaiIdentity && ctx.tdaiUserMessage
+    && isExtractionAllowed(ctx.config, "tdai-memory")) {
+    return createPiDurableStreamTap(processSseChunk, finalize);
+  }
   return new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       controller.enqueue(chunk);
