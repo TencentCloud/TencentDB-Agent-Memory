@@ -327,6 +327,12 @@ export interface PrewarmInput {
 export interface InjectionHook {
   /** Unique hook identifier. */
   id: string;
+  /**
+   * Optional short fingerprint for configuration that changes generated blocks.
+   * The logical hook id remains stable; the fingerprint only versions the
+   * persistent storage key used by session-init caching.
+   */
+  cacheVariant?: string;
   /** Injection point where this hook operates (always required, used as fallback). */
   point: InjectionPoint;
   /**
