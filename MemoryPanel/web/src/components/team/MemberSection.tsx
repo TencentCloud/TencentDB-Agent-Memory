@@ -3,7 +3,7 @@
  * AddMemberDialog / CreatedUserKeyModal —— 添加已有用户 / 新建用户弹窗。
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, Button, Copy, Form, Input, Modal, Segment, Select, Switch, Tag } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { AddIcon, CloseIcon } from 'tea-icons-react';
@@ -11,6 +11,7 @@ import { isTeamAdmin, invalidateBackendCache, type Team } from '@/services';
 import { membersApi, usersApi } from '@/lib/teamApi';
 import { tea } from '@/lib/tea-bridge';
 import { canRemoveMember } from './types';
+import { addCreatedMember, createAccount, findAccount, type CreatedAccount } from './newMemberFlow';
 
 // =================== Members section ===================
 
@@ -167,7 +168,7 @@ export function AddMemberDialog({
   team: Team;
   onClose: () => void;
   /** 新建用户成功后，回调父组件展示初始 API Key */
-  onCreatedUser?: (info: { username: string; userId: string; keyValue: string }) => void;
+  onCreatedUser?: (info: CreatedAccount) => void;
   currentUser: string;
   isAdmin: boolean;
 }) {
@@ -176,6 +177,7 @@ export function AddMemberDialog({
   const [role, setRole] = useState<'admin' | 'member'>('member');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submitInFlight = useRef(false);
   const { t } = useTranslation();
 
   // 新建用户表单
@@ -183,11 +185,19 @@ export function AddMemberDialog({
   // 自定义 user_key 开关（仅新建用户模式生效）：默认关 → 内核自动生成；开启 → 走 user/create-with-key
   const [customKeyEnabled, setCustomKeyEnabled] = useState(false);
   const [customKey, setCustomKey] = useState('');
+  const [createdAccount, setCreatedAccount] = useState<CreatedAccount | null>(null);
+  const [creationUnconfirmed, setCreationUnconfirmed] = useState(false);
 
   const canGrantAdmin = isTeamAdmin(team, currentUser) || _globalAdmin;
   // user/create 须 system_admin 权限（见 docs/api/metadata-api.md §1.4），
   // 非 全局 admin 调了必 403 —— 这里直接隐藏"新建用户"选项，避免用户操作后才报错。
   const canCreateUser = _globalAdmin;
+
+  function memberFailureMessage(failure: unknown) {
+    const { status, code } = (failure ?? {}) as { status?: number; code?: number | string };
+    return t(status === 403 || code === 403 || code === 'permission_denied'
+      ? 'addMember.memberPermissionDenied' : 'addMember.memberPending');
+  }
 
 
 
@@ -204,9 +214,21 @@ export function AddMemberDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await membersApi.add(team.team_id, { user_id: id, role });
+      if (createdAccount?.userId === id) {
+        const result = await addCreatedMember(createdAccount, {
+          add: () => membersApi.add(team.team_id, { user_id: id, role }),
+          listMembers: () => membersApi.list(team.team_id),
+        }, true);
+        if (result.status === 'pending') {
+          setError(memberFailureMessage(result.error));
+          return;
+        }
+      } else {
+        await membersApi.add(team.team_id, { user_id: id, role });
+      }
       invalidateBackendCache();
       onClose();
+      if (createdAccount?.userId === id) onCreatedUser?.(createdAccount);
     } catch (err) {
       tea.notify.error(err);
     } finally {
@@ -216,45 +238,59 @@ export function AddMemberDialog({
 
   async function submitNew() {
     const username = newUsername.trim();
-    if (!username) {
+    if (!username && !createdAccount) {
       setError(t('addMember.error.emptyName'));
       return;
     }
     // 用户名只允许英文字母、数字、下划线（与后端 user_id 段校验规则一致）
-    if (!/^[A-Za-z0-9_]+$/.test(username)) {
+    if (!createdAccount && !/^[A-Za-z0-9_]+$/.test(username)) {
       setError(t('addMember.error.invalidName'));
       return;
     }
     // 自定义 key 模式下额外校验 user_key 非空
     const trimmedKey = customKey.trim();
-    if (customKeyEnabled && !trimmedKey) {
+    if (!createdAccount && !creationUnconfirmed && customKeyEnabled && !trimmedKey) {
       setError(t('addMember.error.emptyKey'));
       return;
     }
     setSubmitting(true);
     setError(null);
     try {
-      // Step 1: 创建用户
-      //   - 默认走 meta/user/create（内核自动生成 default_user_key）
-      //   - 开启「自定义 user_key」→ 走 meta/user/create-with-key，把 key 交给内核作为默认 key
-      const created = customKeyEnabled
-        ? await usersApi.createWithKey({ username, user_key: trimmedKey })
-        : await usersApi.create({
-            username,
-            auth_provider: 'api_key',
-            external_id: username,
-          });
-      const keyValue = created.default_user_key ?? '';
-      // Step 3: 自动加入当前 team
-      await membersApi.add(team.team_id, { user_id: created.user_id, role });
+      let account = createdAccount;
+      if (!account) {
+        const result = creationUnconfirmed
+          ? await findAccount(username, () => usersApi.list({ username }))
+          : await createAccount(
+              username,
+              () => customKeyEnabled
+                ? usersApi.createWithKey({ username, user_key: trimmedKey })
+                : usersApi.create({ username, auth_provider: 'api_key', external_id: username }),
+              () => usersApi.list({ username }),
+            );
+        if (result.status === 'unconfirmed') {
+          setCreationUnconfirmed(true);
+          setError(t('addMember.createUnconfirmed'));
+          return;
+        }
+        account = result.account;
+        setCreatedAccount(account);
+        setCreationUnconfirmed(false);
+        if (result.recovered) {
+          return;
+        }
+      }
+
+      const result = await addCreatedMember(account, {
+        add: () => membersApi.add(team.team_id, { user_id: account.userId, role }),
+        listMembers: () => membersApi.list(team.team_id),
+      }, createdAccount !== null);
+      if (result.status === 'pending') {
+        setError(memberFailureMessage(result.error));
+        return;
+      }
       invalidateBackendCache();
-      // Step 4: 关闭添加弹窗，通过回调让父组件展示密钥弹窗
       onClose();
-      onCreatedUser?.({
-        username,
-        userId: created.user_id,
-        keyValue,
-      });
+      onCreatedUser?.(account);
     } catch (err) {
       tea.notify.error(err);
     } finally {
@@ -265,13 +301,21 @@ export function AddMemberDialog({
   const canSubmit =
     mode === 'existing'
       ? userId.trim().length > 0
-      : newUsername.trim().length > 0 &&
-        /^[A-Za-z0-9_]+$/.test(newUsername.trim()) &&
-        (!customKeyEnabled || customKey.trim().length > 0);
+      : createdAccount !== null || (
+          newUsername.trim().length > 0 &&
+          /^[A-Za-z0-9_]+$/.test(newUsername.trim()) &&
+          (creationUnconfirmed || !customKeyEnabled || customKey.trim().length > 0)
+        );
 
   async function handleSubmit() {
-    if (mode === 'existing') await submitExisting();
-    else await submitNew();
+    if (submitInFlight.current) return;
+    submitInFlight.current = true;
+    try {
+      if (mode === 'existing') await submitExisting();
+      else await submitNew();
+    } finally {
+      submitInFlight.current = false;
+    }
   }
 
   return (
@@ -292,6 +336,7 @@ export function AddMemberDialog({
             onChange={(v) => {
               setMode(v as 'existing' | 'new');
               setError(null);
+              if (v === 'existing' && createdAccount) setUserId(createdAccount.userId);
               if (v === 'new') setRole('member');
             }}
             options={[
@@ -313,6 +358,7 @@ export function AddMemberDialog({
               autoFocus
               size="full"
               value={userId}
+              disabled={Boolean(createdAccount)}
               onChange={(v) => {
                 setUserId(v);
                 setError(null);
@@ -331,6 +377,7 @@ export function AddMemberDialog({
                 autoFocus
                 size="full"
                 value={newUsername}
+                disabled={Boolean(createdAccount || creationUnconfirmed)}
                 onChange={(v) => {
                   setNewUsername(v);
                   setError(null);
@@ -357,6 +404,7 @@ export function AddMemberDialog({
             <div>
               <Switch
                 value={customKeyEnabled}
+                disabled={Boolean(createdAccount || creationUnconfirmed)}
                 onChange={(v) => {
                   setCustomKeyEnabled(v);
                   setError(null);
@@ -373,6 +421,7 @@ export function AddMemberDialog({
                 <Input
                   size="full"
                   value={customKey}
+                  disabled={Boolean(createdAccount || creationUnconfirmed)}
                   onChange={(v) => {
                     setCustomKey(v);
                     setError(null);
@@ -385,6 +434,29 @@ export function AddMemberDialog({
             </Form.Item>
           )}
         </>
+      )}
+
+      {createdAccount && (
+        <Form.Item>
+          <Alert type="warning">
+            {t(createdAccount.recovered ? 'addMember.accountFound' : 'addMember.accountCreated', {
+              username: createdAccount.username, userId: createdAccount.userId,
+            })}
+          </Alert>
+          {createdAccount.keyValue ? (
+            <div>
+              <div className="_memory-field-hint">{t('createdUserKey.warning')}</div>
+              <code className="block rounded border bg-muted px-3 py-2 text-[12px] font-mono break-all select-all">
+                {createdAccount.keyValue}
+              </code>
+              <Copy text={createdAccount.keyValue}>
+                <Button>{t('createdUserKey.copy')}</Button>
+              </Copy>
+            </div>
+          ) : (
+            <Alert type="warning">{t('createdUserKey.noKey')}</Alert>
+          )}
+        </Form.Item>
       )}
 
       <Form.Item label={t('addMember.role')}>
@@ -403,7 +475,9 @@ export function AddMemberDialog({
       </Modal.Body>
       <Modal.Footer>
         <Button type="primary" onClick={() => void handleSubmit()} disabled={!canSubmit || submitting} loading={submitting}>
-          {mode === 'existing' ? t('addMember.existing.submit') : t('addMember.new.submit')}
+          {mode === 'existing' ? t('addMember.existing.submit') : createdAccount
+            ? t('addMember.retryAdd') : creationUnconfirmed
+              ? t('addMember.checkCreate') : t('addMember.new.submit')}
         </Button>
         <Button onClick={onClose} disabled={submitting}>{t('addMember.cancel')}</Button>
       </Modal.Footer>
@@ -418,17 +492,19 @@ export function CreatedUserKeyModal({
   info,
   onClose,
 }: {
-  info: { username: string; userId: string; keyValue: string };
+  info: CreatedAccount;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const { t } = useTranslation();
 
   return (
-    <Modal visible caption={t('createdUserKey.caption')} size="m" onClose={onClose}>
+    <Modal visible caption={t(info.recovered ? 'createdUserKey.recoveredCaption' : 'createdUserKey.caption')} size="m" onClose={onClose}>
       <Modal.Body>
         <Form>
-          <Alert type="success">{t('createdUserKey.success', { username: info.username, userId: info.userId })}</Alert>
+          <Alert type="success">{t(info.recovered ? 'createdUserKey.recoveredSuccess' : 'createdUserKey.success', {
+            username: info.username, userId: info.userId,
+          })}</Alert>
           <div className="space-y-4 text-[13px]">
         {info.keyValue ? (
           <>

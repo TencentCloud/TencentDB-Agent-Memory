@@ -1113,6 +1113,13 @@ export const zhCN = {
   'addMember.role.hint': '新成员默认角色为 member。',
   'addMember.existing.submit': '添加',
   'addMember.new.submit': '新建并添加',
+  'addMember.retryAdd': '检查并重试入团',
+  'addMember.checkCreate': '重新检查账号',
+  'addMember.accountCreated': '账号 {{username}}（{{userId}}）已存在，尚未确认加入团队。请保存一次性 Key，然后检查并重试入团；也可切换到“添加已有用户”。',
+  'addMember.accountFound': '查到账号 {{username}}（{{userId}}），但无法确认它是否由刚才的请求创建。请核对身份后再点击“检查并重试入团”；一次性 Key 无法从查询结果恢复。',
+  'addMember.memberPending': '账号已创建，但入团未确认成功。重试时只会检查和执行入团，不会再次创建账号。',
+  'addMember.memberPermissionDenied': '账号已创建，但你无权为这个 Team 添加成员。请保存一次性 Key，让 Team owner 或成员 admin 添加此 user_id，然后在这里检查入团状态。',
+  'addMember.createUnconfirmed': '创建请求结果无法确认。请重新检查账号，或切换到“添加已有用户”并填写已知的 user_id；不会再次发送创建请求。',
   'addMember.cancel': '取消',
   'addMember.error.emptyId': '请输入对方的 user_id。',
   'addMember.error.self': '不能添加自己；如需调整角色，请由其他 team admin 操作。',
@@ -1129,14 +1136,16 @@ export const zhCN = {
 
   // ===== CreatedUserKeyModal =====
   'createdUserKey.caption': '用户创建成功',
+  'createdUserKey.recoveredCaption': '用户已加入团队',
   'createdUserKey.success': '用户 {{username}}（{{userId}}）已创建并加入团队。',
+  'createdUserKey.recoveredSuccess': '账号 {{username}}（{{userId}}）已加入团队；无法确认它是否由之前的创建请求建立。',
   'createdUserKey.warning':
     '以下 User_Key 仅显示这一次，请立即复制并安全地发送给该用户。关闭此弹窗后无法再次查看该 Key。',
   'createdUserKey.keyLabel': 'User_Key',
   'createdUserKey.copy': '复制',
   'createdUserKey.copied': '已复制',
   'createdUserKey.noKey':
-    '未能自动生成初始 User_Key。请让该用户使用以下 user_id 登录后自行在「User_Key 管理」中创建：',
+    '无法从这次响应恢复一次性 User_Key。请核对账号并通过现有凭据或独立的 Key 管理流程处理。user_id：',
   'createdUserKey.close': '我知道了',
 
   // ===== Shared (team components) =====
