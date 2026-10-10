@@ -7,6 +7,17 @@
  */
 import { defaultAdapter } from "./default.js";
 import type { AgentAdapter } from "./types.js";
+import type { ProxyConfig } from "../types.js";
+import { buildTdaiClientForRequest } from "../tdai/client.js";
+import { createPiConversationWrite } from "./pi-outbox-runtime.js";
+
+/** One server-side recording operation per model response, scoped by request trace. */
+export function buildPiTdaiClient(config: ProxyConfig, spaceId: string | undefined, turnKey: string) {
+  const t = config.tdai;
+  const write = t.piOutbox?.enabled && t.enabled && t.memory.enabled && t.memory.writeL0
+    ? createPiConversationWrite(t, spaceId || t.serviceId, turnKey) : undefined;
+  return buildTdaiClientForRequest(config, spaceId, write);
+}
 
 export const piAdapter: AgentAdapter = {
   agentKind: "pi",

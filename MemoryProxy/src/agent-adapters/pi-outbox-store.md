@@ -1,8 +1,52 @@
 # Pi durable outbox（#1391）
 
-当前交付的是可独立运行和测试的投递组件，**尚未接入 Pi 自动捕获流程**。
-导入模块不会启动后台任务，不会改变现有代理的保存路径。没有修改 `handler.ts`
+已接入 Proxy 服务端的 Pi 保存路径，默认关闭，通过 `tdai.piOutbox` 显式启用。
+Pi 客户端和插件不需要修改。保存单位沿用现有行为：每次模型回复生成一次记录，
+包括工具调用回复；不把整个用户活动合并成一个新回合。没有修改 `handler.ts`
 或 `session/codebuddy/init.ts`，没有把 #1142 的服务端实现合入本分支。
+
+## 启用服务端自动入队
+
+在现有 Proxy 配置的 `tdai` 节点下添加：
+
+```yaml
+tdai:
+  # 沿用已有 endpoint、apiKey、serviceId 和 memory 配置
+  piOutbox:
+    enabled: true
+    directory: /var/lib/memory-proxy/pi-outbox
+    idempotencyContract: "1142"
+```
+
+目录必须是绝对路径且可写；Windows 例如 `E:/private-data/pi-outbox`。Docker 需要把
+该目录挂到持久化本地卷，例如 `-v pi-outbox:/var/lib/memory-proxy/pi-outbox`。
+支持同一主机上的多个消费者，不支持多台主机通过网络文件系统共享队列。
+目录固定对应同一个网关数据域，不要更换 endpoint 后把旧队列发往另一个数据库。
+
+`idempotencyContract` 是部署者对网关能力的显式确认，不会给旧网关添加去重能力。
+启动时验证配置和目录可写性，然后自动恢复并持续发送；不需要另外启动 `run`。
+API key 在发送时从运行配置读取，不写入磁盘记录。新增捕获仍受原身份校验、
+`memory.enabled`、`memory.writeL0`、extraction 和资产能力门控控制。
+关闭捕获不会撤销之前已经入队的写入；关闭 `piOutbox.enabled` 才停止自动消费。
+
+服务端 `pi.ts` 构造 Pi 专属客户端，现有 recorder 组装对话后，经 `TdaiClient`
+分流为本地 enqueue，随即返回，避免再走直接写网关。其他客户端和未启用时维持
+原路径。`index.ts` 管理 worker 生命周期；正常停止先停止接收新连接，并有界等待
+活动请求、在途保存和 worker 收尾。强杀后重新启动会恢复旧目录。
+
+### 固定编号与可靠性边界
+
+`turn.key` 为 `pi.<服务端请求 traceId>`，在一次请求内稳定。长消息沿用现有 8192
+字符分块和每批 100 条的限制，多批次使用 `.0`、`.1` 等固定后缀。同一次本地重试
+复用成功入队的批次；重新发送、重启和 redrive 使用落盘原文。任务 ID 也保留。
+两个独立请求即使文字相同，仍是两个不同操作。客户端重新发起整个模型请求属于新
+操作；本 PR 不承诺跨客户端 HTTP 重试识别同一用户活动。
+
+非流式路径等待本地 enqueue 完成后返回回复。Pi 流式路径继续转发内容，但暂扣
+`[DONE]`，本地 enqueue 完成才释放结束标记。磁盘写入失败会使请求/流失败，不能
+回退到无队列的直接写入。流中断、缺少完整结束事件时不报告该次捕获成功。
+**可靠投递从成功落盘开始**：进程在入队之前被强杀，尚未持久化的内容无法靠 outbox
+恢复；已展示部分流式文字不等于已保存。多批长回复也不提供跨批次全有或全无保证。
 
 ## 组件
 
@@ -12,12 +56,15 @@
 | `pi-outbox-sender.ts` | 发送固定请求，严格检查网关回执，分类错误 |
 | `pi-outbox-worker.ts` | 自动续期、超时、退避重试、次数上限、停止和恢复 |
 | `pi-outbox-cli.ts` | 本地查询、单条死信重新投递、一次补发或持续发送 |
+| `pi.ts` / `pi-outbox-runtime.ts` | 服务端接入、固定编号、本地重试和 worker 生命周期 |
+| `pi-outbox-stream.ts` | 本地入队前暂扣流式完成标记 |
 | `__tests__/pi-outbox-cli-crash.test.ts` | 实际 run 命令强杀、租约到期恢复和 ACK 后再强杀测试 |
 | `scripts/pi-outbox-contract.ts` | 对接独立 #1142 checkout 的真实 HTTP/SQLite 崩溃测试 |
+| `scripts/pi-outbox-e2e.ts` | 真实 Pi、实际 Proxy 入口和 #1142 SQLite 的联调及重启测试 |
 
 ## 调用方式
 
-以下示例由未来接入层调用；当前不替 Pi 选择生命周期事件或生成回合编号。
+以下是独立组件 API；服务端启用后自动调用，无需 Pi 插件手动调用。
 
 ```ts
 const store = new PiOutboxStore(privateQueueDirectory);
@@ -41,8 +88,8 @@ await worker.flush(); // 一次有界补发，返回成功/重试/死信/丢失�
 本地 UUID；不会替调用方推断两个事件是否属于同一回合。
 
 输入必须符合网关单次请求限制：1–100 条 user/assistant 消息，每条内容 1–8192
-个 JavaScript 字符。超限会明确拒绝排队，不截断或静默丢弃。完整 Pi 对话如何归一化、
-大回合如何拆分并分配稳定编号，留给尚未确定的捕获接入层。
+个 JavaScript 字符。直接调用 store 的超限输入会明确拒绝排队。服务端接入层先按
+现有 TdaiClient 的规则分块和分批，保持全部文本及 Unicode 字符完整。
 
 ## 本地操作命令
 
@@ -84,7 +131,7 @@ exit 0 表示此操作成功且补发后队列为空；exit 2 表示仍有待处
 导致循环无法继续的本地 I/O 错误或输出失败返回 1。
 exit 0 在 `run` 中表示服务正常停止，不能作为队列已清空的证明；需要检查 `stopped`
 状态或使用 `list`。强杀无法执行收尾，重启后仍需等待旧租约到期再接管。
-独立命令仍不捕获 Pi 对话，也不自动挂到 Proxy 启动流程。
+独立命令只消费已有队列；Pi 自动捕获和内置消费者由 Proxy 启动流程负责。
 
 原因：`network` 网络异常；`timeout` 超时或取消；`server` 服务端错误；`auth`
 认证失败；`conflict` 同编号不同内容；`rejected` 其他拒绝；`malformed` 回执不完整；
@@ -180,26 +227,20 @@ scripts 挂到 `/app/outbox/scripts`，执行
 并打开队列，确认记录没有恢复。Windows 和 Linux 都执行此测试。
 这里的 HTTP 接收端是测试夹具；服务端数据库去重仍由上面的 #1142 契约测试验证。
 
-## 暂不实施、需要对齐的接线
+## 端到端验证
 
-2026-10-07 补充完成 Windows / Linux Node 22 检查和真实 Pi 普通问答、read 工具调用。
-结果、复现方法、DeepSeek 兼容配置及工具循环的重复问题记录见
-[Pi / Node 22 实测记录](./pi-outbox-verification.md)。真实 Pi 验证使用现有捕获路径，
-不表示已完成 outbox 自动接线。
+```powershell
+npm run test:pi-outbox:e2e -- E:/java/pr1142-outbox-contract-test/MemoryCore E:/java/pi
+```
 
-本次验证记录（2026-10-06）：基线 `8b86874`，#1142 为 `a524c60`。
-新增组件测试 43 项；MemoryProxy 整套测试 52 项通过；组件、测试和联调脚本的独立
-类型检查通过。全仓类型检查存在 60 个错误：排除新增 outbox 文件后的基线检查与包含
-这些文件的检查，错误输出完全一致；不在本任务中修改这些现有类型问题。
-真实 #1142 契约脚本分别在 Windows Node 24.14.1 和本机 memory-core Docker 镜像内通过。
-这些结果不代表已验证完整 Pi 自动捕获或完整生产网关部署。
+脚本启动真正的 `src/index.ts` 和本机 Pi 源码 CLI，加载未修改的 Pi 插件，实际执行
+read 工具，并将自动捕获的记录送到 #1142 的真实 handler/SQLite。模型回复和
+auth/metadata 使用本机确定性夹具，不使用外部模型凭据、不产生模型费用。
+验证相同提问的不同请求、鉴权拒绝、网关不可用期间入队、强杀 Proxy 后恢复，以及
+服务端提交后回执丢失时重放。等待默认 30 秒租约自然到期，不修改时钟。
 
-1. 谁组装完整回合：Pi 插件还是代理侧？当前 `pi.ts` 没有完成回合的生命周期入口。
-2. 从哪个稳定事件编号产生 turn.key，如何处理工具循环、重试与超长回合？
-3. 如何让 Pi 改走可靠投递，同时避免现有代理路径另存一次，并遵守两个禁改文件约束？
-4. 部署端采用哪个 #1142 版本，实际后端是否具有等价的原子幂等能力？
-
-本机 Pi 已更新到 `ddaa0a0341a84b073a087a3d89b9b9e7fbdaf6ba`，包版本 1.0.4。
-`agent_settled` 在自动重试/压缩/排队续跑都结束后触发，但事件本身不携带 messages；
-`turn_end` 提供 messageEntryId，却不等同完整用户活动结束。源码提供候选接入能力，
-不等于维护者已经认可插件侧接入。本次不修改 Pi 源码或现有 Pi 插件。
+`.github/workflows/pi-outbox.yml` 在 Windows/Linux Node 22 上运行测试和组件类型
+检查，并在 Linux 对固定 #1142 提交运行网关契约测试。实际 Pi 联调需额外提供
+已安装依赖的 Pi checkout；不属于上述 CI job。完整 Proxy 类型检查仍需官方的
+可选私有包，组件检查排除会引入整个 Proxy 的 pipeline 测试文件；该文件由测试
+套件实际执行。历史与本次证据见 [验证记录](./pi-outbox-verification.md)。

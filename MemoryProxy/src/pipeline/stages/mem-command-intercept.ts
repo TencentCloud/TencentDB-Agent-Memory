@@ -157,6 +157,7 @@ export async function stageMemCommandIntercept(
     try {
       await recordTdaiTurn(tdaiClientForMem, tdaiIdentityForMem, userMsg, memResult.messageText);
     } catch (err: unknown) {
+      if (tdaiClientForMem.requiresDurableCapture) throw err;
       console.error("[mem-command] L0 write error:", err);
     }
   }

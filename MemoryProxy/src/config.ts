@@ -484,6 +484,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       endpoint: yaml.tdai?.endpoint ?? DEFAULT_CONFIG.tdai.endpoint,
       apiKey: yaml.tdai?.apiKey ?? DEFAULT_CONFIG.tdai.apiKey,
       serviceId: yaml.tdai?.serviceId ?? DEFAULT_CONFIG.tdai.serviceId,
+      piOutbox: yaml.tdai?.piOutbox,
       memory: {
         enabled: yaml.tdai?.memory?.enabled ?? DEFAULT_CONFIG.tdai.memory.enabled,
         inject: yaml.tdai?.memory?.inject ?? DEFAULT_CONFIG.tdai.memory.inject,
