@@ -17,6 +17,9 @@ Config via environment variables:
                                   unset, the provider auto-discovers
                                   ``src/gateway/server.ts`` next to the plugin
                                   checkout or under ``$HOME``)
+  MEMORY_TENCENTDB_AGENT_ID     — v3 agent id (``agt-...``) used when
+                                  ``initialize`` gets no ``agent_id``; set it
+                                  in each Hermes profile's ``.env``
 
 The on-disk data directory (L0~L3 storage) is owned by the Gateway, not by
 this provider. Point the Gateway at a custom location with ``TDAI_DATA_DIR``
@@ -126,6 +129,19 @@ def _resolve_gateway_api_key() -> Optional[str]:
         if value:
             return value
     return None
+
+
+def _resolve_agent_id(value: Any, default: str = _DEFAULT_AGENT_ID) -> str:
+    """Resolve the v3 agent id: initialize() arg, then MEMORY_TENCENTDB_AGENT_ID.
+
+    Hermes never sends ``agent_id``; it sends the profile name as
+    ``agent_identity``, which is a local alias and not a Panel agent id, so it
+    is deliberately not used here. Each Hermes profile loads its own ``.env``,
+    which is where the per-profile mapping belongs.
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return os.environ.get("MEMORY_TENCENTDB_AGENT_ID", "").strip() or default
 
 
 # Candidate locations searched by _discover_gateway_cmd() when the user has not
@@ -539,7 +555,15 @@ class MemoryTencentdbProvider(MemoryProvider):
         self._session_id = session_id
         self._user_id = kwargs.get("user_id", _DEFAULT_USER_ID)
         self._team_id = kwargs.get("team_id", _DEFAULT_TEAM_ID)
-        self._agent_id = kwargs.get("agent_id", _DEFAULT_AGENT_ID)
+        self._agent_id = _resolve_agent_id(kwargs.get("agent_id"))
+        profile = kwargs.get("agent_identity")
+        if self._agent_id == _DEFAULT_AGENT_ID and profile not in (None, "", _DEFAULT_AGENT_ID):
+            logger.warning(
+                "Hermes profile %r has no MEMORY_TENCENTDB_AGENT_ID; its memories "
+                "are stored under agent_id=%r. Set it in this profile's .env to "
+                "the Panel agent id (agt-...).",
+                profile, self._agent_id,
+            )
 
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
@@ -985,6 +1009,12 @@ class MemoryTencentdbProvider(MemoryProvider):
                 "description": "LLM model name",
                 "default": "gpt-4o",
                 "env_var": "MEMORY_TENCENTDB_LLM_MODEL",
+            },
+            {
+                "key": "agent_id",
+                "description": "Panel agent id (agt-...) for this Hermes profile's memories",
+                "required": False,
+                "env_var": "MEMORY_TENCENTDB_AGENT_ID",
             },
         ]
 
