@@ -1,5 +1,43 @@
 # Pi / Node 22 实测记录
 
+最新验证见下方 2026-10-10 服务端自动接入记录；后面的 2026-10-07/08 内容保留为历史证据。
+
+## 2026-10-10：服务端自动接入
+
+本次已合并官方 `feat/server_team` 的 `274e549`，在新的 OpenAI chat pipeline 中接入
+Pi 持久队列，并随真实 Proxy 入口启动和关闭消费者。保存单位仍为每次模型回复；
+Pi 源码和插件未改动，`handler.ts` 和 `session/codebuddy/init.ts` 未新增修改。
+
+Windows Node 22.23.2 验证结果：
+
+- MemoryProxy 全套测试：7 个文件，69 项通过，2 项 POSIX 信号测试跳过。
+- 独立 outbox 类型检查通过；pipeline 接入测试由普通测试套件执行。
+- 固定 #1142 提交的实际 handler/SQLite 故障契约测试全部五个场景通过。
+- 真正的 Proxy `src/index.ts`、Pi 源码 CLI 和现有插件端到端联调通过，实际执行
+  `read` 工具，覆盖普通回复、工具循环、相同提问的新请求、401 拒绝、网关不可用、
+  强杀 Proxy、网关提交后丢回执及重启补发。等待默认 30 秒租约自然到期。
+- 6 次逻辑保存最终产生 12 条 L0、6 份完成回执、6 次 pipeline 通知；提交后的
+  网关投递尝试有 7 次，其中一次重放复用原回执，没有重复入库。
+
+端到端脚本使用确定性模型和 auth/metadata 夹具，网关处理器和 SQLite 是实际
+#1142 代码；这些结果不代表生产认证、真实外部模型或其他存储后端全部已验证。
+本次 Linux 验证尚未执行。新增 GitHub workflow 负责 Windows/Linux 测试、组件
+类型检查和 Linux #1142 契约验证；推送前不将 CI 记为通过。
+
+完整 Proxy 类型检查剩一处 `src/storage/factory.ts:102` 缺少私有模块
+`@context-proxy/cost-guard` 的报错。用官方 `274e549` 源码及相同依赖独立检查后，
+基线同样报这一处错误；这不是完整项目类型检查通过。组件类型检查排除会引入
+整个 Proxy 的 pipeline 测试文件，该测试文件实际运行已通过。
+
+本机证据目录 `C:/Users/小米/.codex/tmp/pi-outbox-cli-crash-20261008`：
+`server-integration-tests.log`、`server-integration-contract.log`、`real-pi-e2e.log`、
+`full-integration-types.log`、`upstream-types.log`。
+复现入口：`npm test`、`npm run typecheck:pi-outbox`、
+`npm run test:pi-outbox:contract -- <MemoryCore checkout>`、
+`npm run test:pi-outbox:e2e -- <MemoryCore checkout> <Pi checkout>`。
+
+## 2026-10-07：组件与旧 Pi 链路
+
 验证日期：2026-10-07（Asia/Shanghai）。本记录区分现有 Pi 接入链路和新增 outbox
 组件的验证；二者分别通过，不代表 Pi 已自动接入 outbox。
 
