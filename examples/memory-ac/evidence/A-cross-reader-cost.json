@@ -1,0 +1,233 @@
+{
+  "status": "pass",
+  "readers": {
+    "qwen3.5-9b": {
+      "all": {
+        "reader": {
+          "views": 270,
+          "actual_calls": 235,
+          "actual_tokens": 105673,
+          "uncached_equivalent_tokens": 147441,
+          "cached_wall_p50_ms": 329.3286999999982
+        },
+        "judge": {
+          "views": 270,
+          "actual_calls": 214,
+          "actual_tokens": 36592,
+          "uncached_equivalent_tokens": 45278,
+          "cached_wall_p50_ms": 112.62289999999848
+        }
+      },
+      "matched": {
+        "reader": {
+          "views": 136,
+          "actual_calls": 102,
+          "actual_tokens": 80146,
+          "uncached_equivalent_tokens": 121710,
+          "cached_wall_p50_ms": 343.254099999991
+        },
+        "judge": {
+          "views": 136,
+          "actual_calls": 81,
+          "actual_tokens": 14450,
+          "uncached_equivalent_tokens": 22946,
+          "cached_wall_p50_ms": 86.7628999999979
+        }
+      },
+      "by_mode": {
+        "original": {
+          "reader": {
+            "views": 34,
+            "actual_calls": 0,
+            "actual_tokens": 0,
+            "uncached_equivalent_tokens": 41564,
+            "cached_wall_p50_ms": 0
+          },
+          "judge": {
+            "views": 34,
+            "actual_calls": 0,
+            "actual_tokens": 0,
+            "uncached_equivalent_tokens": 5724,
+            "cached_wall_p50_ms": 0
+          }
+        },
+        "support_removed": {
+          "reader": {
+            "views": 34,
+            "actual_calls": 34,
+            "actual_tokens": 37217,
+            "uncached_equivalent_tokens": 37217,
+            "cached_wall_p50_ms": 619.5650000000023
+          },
+          "judge": {
+            "views": 34,
+            "actual_calls": 30,
+            "actual_tokens": 5744,
+            "uncached_equivalent_tokens": 6278,
+            "cached_wall_p50_ms": 102.59000000000015
+          }
+        },
+        "control_removed": {
+          "reader": {
+            "views": 34,
+            "actual_calls": 34,
+            "actual_tokens": 36611,
+            "uncached_equivalent_tokens": 36611,
+            "cached_wall_p50_ms": 447.5755999999965
+          },
+          "judge": {
+            "views": 34,
+            "actual_calls": 17,
+            "actual_tokens": 3382,
+            "uncached_equivalent_tokens": 5620,
+            "cached_wall_p50_ms": 0
+          }
+        },
+        "no_memory": {
+          "reader": {
+            "views": 168,
+            "actual_calls": 167,
+            "actual_tokens": 31845,
+            "uncached_equivalent_tokens": 32049,
+            "cached_wall_p50_ms": 324.4632000000056
+          },
+          "judge": {
+            "views": 168,
+            "actual_calls": 167,
+            "actual_tokens": 27466,
+            "uncached_equivalent_tokens": 27656,
+            "cached_wall_p50_ms": 122.22209999999905
+          }
+        }
+      }
+    },
+    "qwen3-14b": {
+      "all": {
+        "reader": {
+          "views": 270,
+          "actual_calls": 270,
+          "actual_tokens": 146166,
+          "uncached_equivalent_tokens": 146166,
+          "cached_wall_p50_ms": 424.63300000000163
+        },
+        "judge": {
+          "views": 270,
+          "actual_calls": 239,
+          "actual_tokens": 38699,
+          "uncached_equivalent_tokens": 42912,
+          "cached_wall_p50_ms": 103.34230000000025
+        }
+      },
+      "matched": {
+        "reader": {
+          "views": 136,
+          "actual_calls": 136,
+          "actual_tokens": 120929,
+          "uncached_equivalent_tokens": 120929,
+          "cached_wall_p50_ms": 548.3422999999893
+        },
+        "judge": {
+          "views": 136,
+          "actual_calls": 105,
+          "actual_tokens": 17300,
+          "uncached_equivalent_tokens": 21513,
+          "cached_wall_p50_ms": 87.68479999999909
+        }
+      },
+      "by_mode": {
+        "original": {
+          "reader": {
+            "views": 34,
+            "actual_calls": 34,
+            "actual_tokens": 41413,
+            "uncached_equivalent_tokens": 41413,
+            "cached_wall_p50_ms": 678.8736000000063
+          },
+          "judge": {
+            "views": 34,
+            "actual_calls": 22,
+            "actual_tokens": 3709,
+            "uncached_equivalent_tokens": 5372,
+            "cached_wall_p50_ms": 80.68579999999929
+          }
+        },
+        "support_removed": {
+          "reader": {
+            "views": 34,
+            "actual_calls": 34,
+            "actual_tokens": 36634,
+            "uncached_equivalent_tokens": 36634,
+            "cached_wall_p50_ms": 665.5819000000047
+          },
+          "judge": {
+            "views": 34,
+            "actual_calls": 29,
+            "actual_tokens": 4919,
+            "uncached_equivalent_tokens": 5539,
+            "cached_wall_p50_ms": 94.02909999999974
+          }
+        },
+        "control_removed": {
+          "reader": {
+            "views": 34,
+            "actual_calls": 34,
+            "actual_tokens": 36639,
+            "uncached_equivalent_tokens": 36639,
+            "cached_wall_p50_ms": 597.395199999999
+          },
+          "judge": {
+            "views": 34,
+            "actual_calls": 21,
+            "actual_tokens": 3672,
+            "uncached_equivalent_tokens": 5478,
+            "cached_wall_p50_ms": 83.15159999999742
+          }
+        },
+        "no_memory": {
+          "reader": {
+            "views": 168,
+            "actual_calls": 168,
+            "actual_tokens": 31480,
+            "uncached_equivalent_tokens": 31480,
+            "cached_wall_p50_ms": 324.7621999999974
+          },
+          "judge": {
+            "views": 168,
+            "actual_calls": 167,
+            "actual_tokens": 26399,
+            "uncached_equivalent_tokens": 26523,
+            "cached_wall_p50_ms": 112.25210000000152
+          }
+        }
+      }
+    }
+  },
+  "matched": 34,
+  "selective_signal_agreement": 0.8529411764705882,
+  "selective_signal_both_positive": 14,
+  "selective_signal_either_positive": 19,
+  "different_reader_signal_delta": {
+    "paired_n": 34,
+    "eligible_n": 34,
+    "clusters": 34,
+    "complete_delta": 0.029411764705882353,
+    "complete_delta_ci95": [
+      -0.08823529411764706,
+      0.14705882352941177
+    ],
+    "token_reduction": 0,
+    "token_reduction_ci95": [
+      0,
+      0
+    ],
+    "quality_wins": 3,
+    "quality_losses": 2,
+    "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+  },
+  "caveats": [
+    "Same reference and same Gemma judge across Readers; not independent human confirmation.",
+    "No-memory covers all 168 queries per Reader; matched interventions cover only 34.",
+    "Uncached-equivalent token counts avoid claiming cache reuse alone makes the diagnostic intrinsically cheaper.",
+    "No coding end-to-end repeat experiment was executed, so no relative cost-reduction claim is made."
+  ]
+}

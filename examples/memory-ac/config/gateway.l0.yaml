@@ -1,0 +1,42 @@
+deployMode: standalone
+stateBackend: local
+instanceId: default
+server:
+  host: 127.0.0.1
+  port: 18420
+data:
+  baseDir: ./runtime/gateway
+llm:
+  baseUrl: http://127.0.0.1:9/v1
+  apiKey: ""
+  model: disabled-l0-pilot
+  timeoutMs: 500
+memory:
+  storeBackend: sqlite
+  capture:
+    enabled: true
+  extraction:
+    enabled: false
+  pipeline:
+    enableWarmup: false
+    everyNConversations: 1000000000
+    l1IdleTimeoutSeconds: 604800
+  embedding:
+    provider: none
+  recall:
+    enabled: true
+    strategy: keyword
+    maxResults: 5
+    timeoutMs: 5000
+  bm25:
+    enabled: true
+    language: en
+skill:
+  enabled: false
+observability:
+  otel:
+    enabled: false
+  clickhouse:
+    enabled: false
+  kafka:
+    enabled: false

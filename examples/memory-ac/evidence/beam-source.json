@@ -1,0 +1,35 @@
+{
+  "at": "2026-09-14T04:11:15.447Z",
+  "kind": "beam",
+  "revision": "3205395e897e7318c7b094ef4e6047b9b82dbb03",
+  "sources": [
+    {
+      "path": "data/100K-00000-of-00001.parquet",
+      "url": "https://huggingface.co/datasets/Mohammadta/BEAM/resolve/3205395e897e7318c7b094ef4e6047b9b82dbb03/data/100K-00000-of-00001.parquet",
+      "size": 5429768,
+      "sha256": "c0519be25907005ba873c927c50877471d550873039d96c041554d0075a78ace",
+      "lfs_hash_checked": true
+    },
+    {
+      "path": "data/500K-00000-of-00001.parquet",
+      "url": "https://huggingface.co/datasets/Mohammadta/BEAM/resolve/3205395e897e7318c7b094ef4e6047b9b82dbb03/data/500K-00000-of-00001.parquet",
+      "size": 33956263,
+      "sha256": "af05921c979355038e1761b7cde3d2dd713200dd3071b278de0200f6c7f30122",
+      "lfs_hash_checked": true
+    },
+    {
+      "path": "data/1M-00000-of-00001.parquet",
+      "url": "https://huggingface.co/datasets/Mohammadta/BEAM/resolve/3205395e897e7318c7b094ef4e6047b9b82dbb03/data/1M-00000-of-00001.parquet",
+      "size": 66156374,
+      "sha256": "41b5acbbb55a586b1305514ef9d9fb03365d9b3331b598a1c2dd7603d93ef533",
+      "lfs_hash_checked": true
+    },
+    {
+      "path": "README.md",
+      "url": "https://huggingface.co/datasets/Mohammadta/BEAM/resolve/3205395e897e7318c7b094ef4e6047b9b82dbb03/README.md",
+      "size": 7437,
+      "sha256": "30b9ff56f4ca52e4078754e91f5e8dd8cd73b1b1246a42a000f11ce6b940400d",
+      "lfs_hash_checked": false
+    }
+  ]
+}

@@ -1,0 +1,4970 @@
+[
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:6071bd76",
+    "group_id": "0a452a83767c8462",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:7405e8b1",
+    "group_id": "0e47ccb3d57c77a8",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:d682f1a2",
+    "group_id": "875254fc1932d5bf",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:b6025781",
+    "group_id": "da00a576cac93bae",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:1faac195",
+    "group_id": "9816dfc2b22ec921",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:95228167",
+    "group_id": "99d94ec5022d9f5c",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:38146c39",
+    "group_id": "d93ff8568ed04f8a",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_8279ba02",
+    "group_id": "aed3336469c8adce",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2698e78f",
+    "group_id": "886a41b010bd288b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2698e78f_abs",
+    "group_id": "886a41b010bd288b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:3d86fd0a",
+    "group_id": "ea5eaf4b16e114aa",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:c2ac3c61",
+    "group_id": "34ef98d79007d844",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:76d63226",
+    "group_id": "87facd2eddb65f2e",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:cc06de0d",
+    "group_id": "cd000049ad30ea54",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:89527b6b",
+    "group_id": "b95c8dc92f48150e",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:6f9b354f",
+    "group_id": "c74c3d15293ce61e",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:15745da0",
+    "group_id": "fc3ad09a212ef87b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:15745da0_abs",
+    "group_id": "fc3ad09a212ef87b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:5a4f22c0",
+    "group_id": "62681644a5e40bbc",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8aef76bc",
+    "group_id": "7232e690e3c4080a",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:b320f3f8",
+    "group_id": "a68d33f53f5550a1",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:0e4e4c46",
+    "group_id": "569b3a972c461665",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_78cf46a3",
+    "group_id": "2ab6ce05f2197fc8",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:afdc33df",
+    "group_id": "d6f7aa24925e5776",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_2487a7cb",
+    "group_id": "a04e61631269d20e",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_d84a3211",
+    "group_id": "b242a41da1699111",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:a9f6b44c",
+    "group_id": "629eb60a44294e5e",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:a11281a2",
+    "group_id": "0cba22f1de71389a",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_372c3eed",
+    "group_id": "3c63510df932fe64",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_372c3eed_abs",
+    "group_id": "3c63510df932fe64",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:69fee5aa",
+    "group_id": "4df8d43f6302c201",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:42ec0761",
+    "group_id": "f86a0899ad84aa5a",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:e48988bc",
+    "group_id": "db1b912df6e3d5ee",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_76048e76",
+    "group_id": "fab900be0040011f",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2133c1b5",
+    "group_id": "2510c468120c8bea",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2133c1b5_abs",
+    "group_id": "2510c468120c8bea",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:dfde3500",
+    "group_id": "f89c355688655627",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_6dc9b45b",
+    "group_id": "e003eb934a08d80f",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:3fe836c9",
+    "group_id": "87efd540bb75f75d",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:7e974930",
+    "group_id": "4e94552c7d3f66fb",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_b0863698",
+    "group_id": "15805be0b961a938",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8cf4d046",
+    "group_id": "9c4774cdb636584d",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:ad7109d1",
+    "group_id": "0d6d706dfc00b9c5",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_98f46fc6",
+    "group_id": "730906bc4bda88f0",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:36580ce8",
+    "group_id": "11f1317ad7c818e3",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:71017276",
+    "group_id": "cc1c7d2c3af8f1ac",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:71017277",
+    "group_id": "cc1c7d2c3af8f1ac",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_59149c77",
+    "group_id": "2b6611290a98a941",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8464fc84",
+    "group_id": "4a0bfcc0cf25203b",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:6d550036",
+    "group_id": "71c9e14fe4081310",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_b5700ca9",
+    "group_id": "3c0d5a537aefe439",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:a06e4cfe",
+    "group_id": "a560f0db54b5eae4",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_7ca326fa",
+    "group_id": "4f697b9aac67d00c",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:51c32626",
+    "group_id": "fc5f6c9d522ee2c4",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:b46e15ed",
+    "group_id": "78ca37277f7b778e",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:71315a70",
+    "group_id": "9ca43a1a71d8b1c5",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:3b6f954b",
+    "group_id": "f9b851f19b8ef12b",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2311e44b",
+    "group_id": "eb610596b05c3fc4",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2311e44b_abs",
+    "group_id": "eb610596b05c3fc4",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:ceb54acb",
+    "group_id": "086818d80aedba6c",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:e25c3b8d",
+    "group_id": "9c857b6909900183",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:1a8a66a6",
+    "group_id": "502d5fae24cff22d",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:e493bb7c",
+    "group_id": "d3161fa4e05cb1cc",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:0ddfec37",
+    "group_id": "ecdd5e3c0096a15b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:0ddfec37_abs",
+    "group_id": "ecdd5e3c0096a15b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:28bcfaac",
+    "group_id": "5744dd62a214aabe",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_85da3956",
+    "group_id": "517309ed0d5d30ec",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:0edc2aef",
+    "group_id": "eb03e274c38dc2e3",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_a56e767c",
+    "group_id": "31b37e2ccbb662cf",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:f9e8c073",
+    "group_id": "6789752404041088",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_a2d1d1f6",
+    "group_id": "c247427d371340a1",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_b5700ca0",
+    "group_id": "77f7a94cc53cce05",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:caf9ead2",
+    "group_id": "482936e8c0f990e8",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:4b24c848",
+    "group_id": "e66712c76ad0fa4d",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:4baee567",
+    "group_id": "b3ea5f6a3cdf59e0",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:08e075c7",
+    "group_id": "3eef78eac6d87957",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:6e984302",
+    "group_id": "3a93947c178c5460",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8e91e7d9",
+    "group_id": "56f1905ea97381a0",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:0e5e2d1a",
+    "group_id": "57b430c9c177f386",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:51a45a95",
+    "group_id": "1799915ffb3ad52b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:f4f1d8a4",
+    "group_id": "d0f9a0d12c096268",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:f4f1d8a4_abs",
+    "group_id": "d0f9a0d12c096268",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:d52b4f67",
+    "group_id": "cc3f1b35753ebc44",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:c4ea545c",
+    "group_id": "37ed3a0a2444ac26",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:3c1045c8",
+    "group_id": "77d328527896f375",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:e9327a54",
+    "group_id": "ecfb8669c6866196",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_f420262d",
+    "group_id": "99b8d69950ad7928",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:001be529",
+    "group_id": "97d15ab4839a9e35",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:af082822",
+    "group_id": "58821011193981ec",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:61f8c8f8",
+    "group_id": "13a96ee967c9d4f9",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:6aeb4375",
+    "group_id": "47e8db10eb3fcb03",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:6aeb4375_abs",
+    "group_id": "47e8db10eb3fcb03",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:1cea1afa",
+    "group_id": "b38b9a1391e6ed66",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_0b2f1d21",
+    "group_id": "fc892ac9c186c989",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:bb7c3b45",
+    "group_id": "f6454758e23902a8",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_61e13b3c",
+    "group_id": "c142ead2718ca7e6",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:bc8a6e93",
+    "group_id": "98947b891477de29",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:bc8a6e93_abs",
+    "group_id": "98947b891477de29",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:1568498a",
+    "group_id": "b26a54cc10d103de",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:87f22b4a",
+    "group_id": "1a6db80e7a9162b7",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:f0853d11",
+    "group_id": "b9e2b582b89fdbfe",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:a3838d2b",
+    "group_id": "d2cec59580d6b96b",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:5809eb10",
+    "group_id": "f72b5c0bb11bf04c",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:60036106",
+    "group_id": "9a1140a6f1a2f912",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8979f9ec",
+    "group_id": "73969038fe15b3a2",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:5e1b23de",
+    "group_id": "e855c8736fdd39bf",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_59c863d7",
+    "group_id": "433e3d321f9c54ab",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:5d3d2817",
+    "group_id": "4fbc48ccc11248f5",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:099778bb",
+    "group_id": "b1d6dace5ef4eb03",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:d24813b1",
+    "group_id": "78749d2afb3efd9a",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:75499fd8",
+    "group_id": "6766dc7522973b64",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:5c40ec5b",
+    "group_id": "ecb09fb23acce9d0",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:bbf86515",
+    "group_id": "e8f495921a1f8edc",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:dcfa8644",
+    "group_id": "7abac8ec4cc711f7",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_ab202e7f",
+    "group_id": "8bec1fb41fd0ad56",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_d31cdae3",
+    "group_id": "018e9f0e0ae53369",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:1da05512",
+    "group_id": "c1d5ca81c4bd1cc2",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2b8f3739",
+    "group_id": "59ff53ecf3b17a9c",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:4c36ccef",
+    "group_id": "b924d9557ca6cb38",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:c7dc5443",
+    "group_id": "ab1749c7a19a6e43",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:35a27287",
+    "group_id": "8e06309559a66a3e",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:d7c942c3",
+    "group_id": "995836c6dc5e1aa8",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:2bf43736",
+    "group_id": "708dc671685ef475",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_4ef30696",
+    "group_id": "86bf072e0e881b4e",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_e414231f",
+    "group_id": "04e886b4077bed53",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_18c2b244",
+    "group_id": "22c36da51be1bc34",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:a82c026e",
+    "group_id": "fd14cb14ca42ac1a",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8e9d538c",
+    "group_id": "d2f6cbdf4e47f77b",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:06878be2",
+    "group_id": "07b2f05a1c9c8c71",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_0a05b494",
+    "group_id": "c9f06f4f7acfa9ad",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:32260d93",
+    "group_id": "b7f14d0ed3e747bb",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:cc539528",
+    "group_id": "ae45e78afc82f192",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_6ed717ea",
+    "group_id": "03fb30388741cd0b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:726462e0",
+    "group_id": "477266164f82bcac",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8077ef71",
+    "group_id": "5acb71ebc09519c2",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:a3332713",
+    "group_id": "4869799cb8a77f16",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:21436231",
+    "group_id": "7573b8ade3fd78b1",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_65aabe59",
+    "group_id": "3904e129b215e776",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_e061b84f",
+    "group_id": "afc42a54a318eeb8",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:c960da58",
+    "group_id": "5f7b615f26178791",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:07741c44",
+    "group_id": "707bdfd9d987e962",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:07741c45",
+    "group_id": "707bdfd9d987e962",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_70e84552",
+    "group_id": "2dfe2863b6473984",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_70e84552_abs",
+    "group_id": "2dfe2863b6473984",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:0862e8bf",
+    "group_id": "183806328d400993",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:0862e8bf_abs",
+    "group_id": "183806328d400993",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:853b0a1d",
+    "group_id": "c083b7f29a7229cf",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:a40e080f",
+    "group_id": "8b142f20fe1ee467",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:8fb83627",
+    "group_id": "e857ec893c968d6e",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:3fdac837",
+    "group_id": "b6428537b1bc32ca",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_68e94288",
+    "group_id": "2150830a703a7bcd",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:00ca467f",
+    "group_id": "0663852a70258a0a",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:25e5aa4f",
+    "group_id": "be6ada12c4961958",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:22d2cb42",
+    "group_id": "e36b7544f7fea398",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:6613b389",
+    "group_id": "ece93ddf0fd265db",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_7de946e7",
+    "group_id": "1b617a7fee76046c",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:01493427",
+    "group_id": "6967a9865a1399c6",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:67e0d0f2",
+    "group_id": "7eb3d697767dfacd",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:b5ef892d",
+    "group_id": "1beed9480e166492",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_483dd43c",
+    "group_id": "fc48efc71976b10c",
+    "split": "train"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_d6585ce9",
+    "group_id": "baa7c2a1b8b97fcb",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:ef9cf60a",
+    "group_id": "b047bd9f24eeac48",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:ce6d2d27",
+    "group_id": "3d95d7b53170d6b9",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:af8d2e46",
+    "group_id": "f21e14f394239b0b",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:37d43f65",
+    "group_id": "84865ef74bd0da32",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:50635ada",
+    "group_id": "e8b3e7550af7b8a4",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:7a8d0b71",
+    "group_id": "5259bd5a2b312f89",
+    "split": "development"
+  },
+  {
+    "cohort": "longmem",
+    "probe_id": "longmem:gpt4_1916e0ea",
+    "group_id": "c69dcd348d4509df",
+    "split": "development"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:abstention:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:abstention:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:contradiction_resolution:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:contradiction_resolution:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:event_ordering:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:event_ordering:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:information_extraction:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:information_extraction:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:instruction_following:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:instruction_following:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:knowledge_update:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:knowledge_update:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:multi_session_reasoning:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:multi_session_reasoning:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:preference_following:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:preference_following:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:summarization:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:summarization:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:temporal_reasoning:0",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:1:temporal_reasoning:1",
+    "group_id": "426e1059b4e98fbad3ca7c19",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:abstention:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:abstention:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:contradiction_resolution:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:contradiction_resolution:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:event_ordering:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:event_ordering:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:information_extraction:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:information_extraction:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:instruction_following:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:instruction_following:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:knowledge_update:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:knowledge_update:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:multi_session_reasoning:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:multi_session_reasoning:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:preference_following:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:preference_following:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:summarization:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:summarization:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:temporal_reasoning:0",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:4:temporal_reasoning:1",
+    "group_id": "ea64de547f44783a85c42c97",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:abstention:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:abstention:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:contradiction_resolution:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:contradiction_resolution:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:event_ordering:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:event_ordering:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:information_extraction:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:information_extraction:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:instruction_following:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:instruction_following:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:knowledge_update:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:knowledge_update:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:multi_session_reasoning:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:multi_session_reasoning:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:preference_following:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:preference_following:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:summarization:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:summarization:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:temporal_reasoning:0",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:5:temporal_reasoning:1",
+    "group_id": "52aaa8c2d3b72fa4aebd82e9",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:abstention:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:abstention:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:contradiction_resolution:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:contradiction_resolution:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:event_ordering:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:event_ordering:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:information_extraction:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:information_extraction:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:instruction_following:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:instruction_following:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:knowledge_update:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:knowledge_update:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:multi_session_reasoning:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:multi_session_reasoning:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:preference_following:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:preference_following:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:summarization:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:summarization:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:temporal_reasoning:0",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:6:temporal_reasoning:1",
+    "group_id": "fb64cd0378d69870bfe25340",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:abstention:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:abstention:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:contradiction_resolution:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:contradiction_resolution:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:event_ordering:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:event_ordering:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:information_extraction:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:information_extraction:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:instruction_following:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:instruction_following:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:knowledge_update:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:knowledge_update:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:multi_session_reasoning:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:multi_session_reasoning:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:preference_following:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:preference_following:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:summarization:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:summarization:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:temporal_reasoning:0",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:7:temporal_reasoning:1",
+    "group_id": "bb87b5ecd56f007012d10c82",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:abstention:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:abstention:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:contradiction_resolution:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:contradiction_resolution:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:event_ordering:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:event_ordering:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:information_extraction:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:information_extraction:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:instruction_following:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:instruction_following:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:knowledge_update:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:knowledge_update:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:multi_session_reasoning:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:multi_session_reasoning:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:preference_following:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:preference_following:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:summarization:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:summarization:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:temporal_reasoning:0",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:8:temporal_reasoning:1",
+    "group_id": "e801e7be5f294fffdfc4661e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:abstention:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:abstention:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:contradiction_resolution:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:contradiction_resolution:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:event_ordering:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:event_ordering:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:information_extraction:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:information_extraction:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:instruction_following:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:instruction_following:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:knowledge_update:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:knowledge_update:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:multi_session_reasoning:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:multi_session_reasoning:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:preference_following:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:preference_following:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:summarization:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:summarization:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:temporal_reasoning:0",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:9:temporal_reasoning:1",
+    "group_id": "107db8022a037b7874bb7b61",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:abstention:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:abstention:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:contradiction_resolution:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:contradiction_resolution:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:event_ordering:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:event_ordering:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:information_extraction:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:information_extraction:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:instruction_following:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:instruction_following:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:knowledge_update:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:knowledge_update:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:multi_session_reasoning:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:multi_session_reasoning:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:preference_following:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:preference_following:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:summarization:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:summarization:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:temporal_reasoning:0",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:11:temporal_reasoning:1",
+    "group_id": "12b0427cac652553fab7e180",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:abstention:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:abstention:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:contradiction_resolution:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:contradiction_resolution:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:event_ordering:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:event_ordering:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:information_extraction:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:information_extraction:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:instruction_following:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:instruction_following:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:knowledge_update:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:knowledge_update:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:multi_session_reasoning:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:multi_session_reasoning:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:preference_following:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:preference_following:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:summarization:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:summarization:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:temporal_reasoning:0",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:13:temporal_reasoning:1",
+    "group_id": "10594c427c754a6397b2c051",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:abstention:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:abstention:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:contradiction_resolution:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:contradiction_resolution:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:event_ordering:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:event_ordering:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:information_extraction:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:information_extraction:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:instruction_following:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:instruction_following:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:knowledge_update:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:knowledge_update:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:multi_session_reasoning:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:multi_session_reasoning:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:preference_following:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:preference_following:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:summarization:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:summarization:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:temporal_reasoning:0",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:14:temporal_reasoning:1",
+    "group_id": "3801d956db421f5698f2fc55",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:abstention:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:abstention:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:contradiction_resolution:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:contradiction_resolution:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:event_ordering:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:event_ordering:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:information_extraction:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:information_extraction:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:instruction_following:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:instruction_following:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:knowledge_update:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:knowledge_update:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:multi_session_reasoning:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:multi_session_reasoning:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:preference_following:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:preference_following:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:summarization:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:summarization:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:temporal_reasoning:0",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:15:temporal_reasoning:1",
+    "group_id": "38007ef6dabbaeedfc8f71a2",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:abstention:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:abstention:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:contradiction_resolution:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:contradiction_resolution:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:event_ordering:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:event_ordering:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:information_extraction:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:information_extraction:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:instruction_following:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:instruction_following:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:knowledge_update:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:knowledge_update:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:multi_session_reasoning:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:multi_session_reasoning:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:preference_following:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:preference_following:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:summarization:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:summarization:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:temporal_reasoning:0",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:16:temporal_reasoning:1",
+    "group_id": "ead243e28d1bd5d8d23970b3",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:abstention:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:abstention:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:contradiction_resolution:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:contradiction_resolution:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:event_ordering:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:event_ordering:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:information_extraction:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:information_extraction:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:instruction_following:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:instruction_following:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:knowledge_update:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:knowledge_update:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:multi_session_reasoning:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:multi_session_reasoning:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:preference_following:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:preference_following:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:summarization:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:summarization:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:temporal_reasoning:0",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:17:temporal_reasoning:1",
+    "group_id": "0c8ada5a38306835e5553a2f",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:abstention:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:abstention:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:contradiction_resolution:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:contradiction_resolution:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:event_ordering:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:event_ordering:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:information_extraction:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:information_extraction:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:instruction_following:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:instruction_following:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:knowledge_update:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:knowledge_update:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:multi_session_reasoning:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:multi_session_reasoning:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:preference_following:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:preference_following:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:summarization:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:summarization:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:temporal_reasoning:0",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:19:temporal_reasoning:1",
+    "group_id": "6e8721a0f57f868a9d91d914",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:abstention:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:abstention:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:contradiction_resolution:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:contradiction_resolution:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:event_ordering:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:event_ordering:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:information_extraction:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:information_extraction:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:instruction_following:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:instruction_following:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:knowledge_update:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:knowledge_update:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:multi_session_reasoning:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:multi_session_reasoning:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:preference_following:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:preference_following:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:summarization:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:summarization:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:temporal_reasoning:0",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-100K",
+    "probe_id": "beam:100K:20:temporal_reasoning:1",
+    "group_id": "26fc2ae109faf454f5c1c2bf",
+    "split": "train"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:abstention:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:abstention:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:contradiction_resolution:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:contradiction_resolution:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:event_ordering:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:event_ordering:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:information_extraction:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:information_extraction:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:instruction_following:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:instruction_following:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:knowledge_update:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:knowledge_update:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:multi_session_reasoning:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:multi_session_reasoning:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:preference_following:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:preference_following:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:summarization:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:summarization:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:temporal_reasoning:0",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:2:temporal_reasoning:1",
+    "group_id": "0fd3ee1b0d1cde068db71f21",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:abstention:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:abstention:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:contradiction_resolution:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:contradiction_resolution:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:event_ordering:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:event_ordering:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:information_extraction:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:information_extraction:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:instruction_following:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:instruction_following:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:knowledge_update:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:knowledge_update:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:multi_session_reasoning:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:multi_session_reasoning:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:preference_following:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:preference_following:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:summarization:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:summarization:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:temporal_reasoning:0",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:6:temporal_reasoning:1",
+    "group_id": "903ccce2a99da193fefc1a20",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:abstention:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:abstention:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:contradiction_resolution:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:contradiction_resolution:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:event_ordering:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:event_ordering:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:information_extraction:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:information_extraction:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:instruction_following:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:instruction_following:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:knowledge_update:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:knowledge_update:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:multi_session_reasoning:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:multi_session_reasoning:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:preference_following:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:preference_following:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:summarization:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:summarization:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:temporal_reasoning:0",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:7:temporal_reasoning:1",
+    "group_id": "0cebb37fb8b0c202520c8218",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:abstention:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:abstention:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:contradiction_resolution:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:contradiction_resolution:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:event_ordering:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:event_ordering:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:information_extraction:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:information_extraction:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:instruction_following:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:instruction_following:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:knowledge_update:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:knowledge_update:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:multi_session_reasoning:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:multi_session_reasoning:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:preference_following:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:preference_following:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:summarization:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:summarization:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:temporal_reasoning:0",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:10:temporal_reasoning:1",
+    "group_id": "7310d7d4a6b59bbb3ec091ac",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:abstention:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:abstention:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:contradiction_resolution:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:contradiction_resolution:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:event_ordering:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:event_ordering:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:information_extraction:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:information_extraction:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:instruction_following:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:instruction_following:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:knowledge_update:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:knowledge_update:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:multi_session_reasoning:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:multi_session_reasoning:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:preference_following:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:preference_following:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:summarization:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:summarization:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:temporal_reasoning:0",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:11:temporal_reasoning:1",
+    "group_id": "6df1bb42746aa7479dc70205",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:abstention:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:abstention:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:contradiction_resolution:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:contradiction_resolution:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:event_ordering:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:event_ordering:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:information_extraction:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:information_extraction:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:instruction_following:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:instruction_following:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:knowledge_update:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:knowledge_update:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:multi_session_reasoning:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:multi_session_reasoning:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:preference_following:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:preference_following:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:summarization:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:summarization:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:temporal_reasoning:0",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:20:temporal_reasoning:1",
+    "group_id": "f5a63e81ba22cf2102d5b02d",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:abstention:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:abstention:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:contradiction_resolution:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:contradiction_resolution:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:event_ordering:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:event_ordering:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:information_extraction:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:information_extraction:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:instruction_following:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:instruction_following:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:knowledge_update:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:knowledge_update:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:multi_session_reasoning:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:multi_session_reasoning:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:preference_following:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:preference_following:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:summarization:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:summarization:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:temporal_reasoning:0",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:23:temporal_reasoning:1",
+    "group_id": "b7fdababf0be62c62dda8387",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:abstention:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:abstention:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:contradiction_resolution:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:contradiction_resolution:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:event_ordering:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:event_ordering:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:information_extraction:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:information_extraction:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:instruction_following:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:instruction_following:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:knowledge_update:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:knowledge_update:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:multi_session_reasoning:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:multi_session_reasoning:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:preference_following:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:preference_following:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:summarization:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:summarization:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:temporal_reasoning:0",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:30:temporal_reasoning:1",
+    "group_id": "cb7382766ba8cf6dd25c8b25",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:abstention:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:abstention:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:contradiction_resolution:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:contradiction_resolution:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:event_ordering:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:event_ordering:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:information_extraction:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:information_extraction:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:instruction_following:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:instruction_following:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:knowledge_update:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:knowledge_update:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:multi_session_reasoning:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:multi_session_reasoning:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:preference_following:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:preference_following:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:summarization:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:summarization:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:temporal_reasoning:0",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-500K",
+    "probe_id": "beam:500K:35:temporal_reasoning:1",
+    "group_id": "65cd310d17d6155f6f3ac3f7",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:abstention:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:abstention:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:contradiction_resolution:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:contradiction_resolution:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:event_ordering:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:event_ordering:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:information_extraction:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:information_extraction:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:instruction_following:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:instruction_following:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:knowledge_update:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:knowledge_update:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:multi_session_reasoning:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:multi_session_reasoning:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:preference_following:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:preference_following:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:summarization:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:summarization:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:temporal_reasoning:0",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:1:temporal_reasoning:1",
+    "group_id": "a1d36c021a116af750e1a24b",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:abstention:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:abstention:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:contradiction_resolution:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:contradiction_resolution:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:event_ordering:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:event_ordering:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:information_extraction:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:information_extraction:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:instruction_following:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:instruction_following:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:knowledge_update:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:knowledge_update:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:multi_session_reasoning:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:multi_session_reasoning:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:preference_following:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:preference_following:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:summarization:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:summarization:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:temporal_reasoning:0",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:6:temporal_reasoning:1",
+    "group_id": "6cd99ff2ce3c01229478a99e",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:abstention:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:abstention:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:contradiction_resolution:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:contradiction_resolution:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:event_ordering:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:event_ordering:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:information_extraction:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:information_extraction:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:instruction_following:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:instruction_following:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:knowledge_update:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:knowledge_update:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:multi_session_reasoning:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:multi_session_reasoning:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:preference_following:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:preference_following:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:summarization:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:summarization:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:temporal_reasoning:0",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:8:temporal_reasoning:1",
+    "group_id": "b19beb28545fcdea90771337",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:abstention:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:abstention:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:contradiction_resolution:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:contradiction_resolution:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:event_ordering:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:event_ordering:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:information_extraction:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:information_extraction:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:instruction_following:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:instruction_following:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:knowledge_update:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:knowledge_update:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:multi_session_reasoning:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:multi_session_reasoning:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:preference_following:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:preference_following:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:summarization:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:summarization:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:temporal_reasoning:0",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:17:temporal_reasoning:1",
+    "group_id": "4aacf4a1949579f0da74f035",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:abstention:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:abstention:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:contradiction_resolution:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:contradiction_resolution:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:event_ordering:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:event_ordering:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:information_extraction:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:information_extraction:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:instruction_following:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:instruction_following:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:knowledge_update:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:knowledge_update:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:multi_session_reasoning:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:multi_session_reasoning:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:preference_following:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:preference_following:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:summarization:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:summarization:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:temporal_reasoning:0",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:18:temporal_reasoning:1",
+    "group_id": "ec661ffdcdea658e99cc60a5",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:abstention:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:abstention:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:contradiction_resolution:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:contradiction_resolution:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:event_ordering:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:event_ordering:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:information_extraction:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:information_extraction:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:instruction_following:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:instruction_following:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:knowledge_update:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:knowledge_update:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:multi_session_reasoning:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:multi_session_reasoning:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:preference_following:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:preference_following:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:summarization:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:summarization:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:temporal_reasoning:0",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:19:temporal_reasoning:1",
+    "group_id": "51efd17e6afcab4bfa17325a",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:abstention:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:abstention:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:contradiction_resolution:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:contradiction_resolution:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:event_ordering:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:event_ordering:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:information_extraction:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:information_extraction:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:instruction_following:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:instruction_following:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:knowledge_update:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:knowledge_update:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:multi_session_reasoning:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:multi_session_reasoning:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:preference_following:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:preference_following:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:summarization:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:summarization:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:temporal_reasoning:0",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:20:temporal_reasoning:1",
+    "group_id": "acf5c32e91fe1710c8dee795",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:abstention:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:abstention:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:contradiction_resolution:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:contradiction_resolution:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:event_ordering:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:event_ordering:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:information_extraction:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:information_extraction:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:instruction_following:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:instruction_following:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:knowledge_update:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:knowledge_update:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:multi_session_reasoning:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:multi_session_reasoning:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:preference_following:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:preference_following:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:summarization:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:summarization:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:temporal_reasoning:0",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:21:temporal_reasoning:1",
+    "group_id": "18a6d5c8cb9fbf9e68073b58",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:abstention:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:abstention:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:contradiction_resolution:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:contradiction_resolution:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:event_ordering:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:event_ordering:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:information_extraction:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:information_extraction:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:instruction_following:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:instruction_following:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:knowledge_update:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:knowledge_update:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:multi_session_reasoning:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:multi_session_reasoning:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:preference_following:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:preference_following:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:summarization:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:summarization:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:temporal_reasoning:0",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  },
+  {
+    "cohort": "beam-1M",
+    "probe_id": "beam:1M:28:temporal_reasoning:1",
+    "group_id": "a8e98ebdee27e582417cdb56",
+    "split": "calibration"
+  }
+]

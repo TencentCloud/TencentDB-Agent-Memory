@@ -1,0 +1,159 @@
+{
+  "version": "ac-slate-feedback-v11.0",
+  "at": "2026-09-14T08:46:20.569Z",
+  "timing": "After v10 results; before new acquisition outcomes, fitting, and BEAM 1M scoring. Old cohorts exploratory.",
+  "hypotheses": [
+    "Align full ordered-context feedback representation with full-context runtime decisions.",
+    "Prioritize outcome-disagreeing and scorer-disagreeing training interventions; compare with fixed-seed uniform acquisition.",
+    "Five group-excluded heads gate unstable changes; this is not calibrated risk control."
+  ],
+  "training": "All old LongMem train 72 and old BEAM100K train 200; dataset then conversation equal weighting. Never fit development/calibration/protected outcomes.",
+  "training_expansion_confound": "Different from v10 LongMem-only training. QA-only slate learner is the matched-data control for A value.",
+  "actions": [
+    "qwen_fixed",
+    "qa_residual",
+    "intervention_residual"
+  ],
+  "hyperparameters": {
+    "version": "ac-slate-feedback-v11.0",
+    "dimensions": 32,
+    "maxPairs": 4096,
+    "maxCandidates": 3,
+    "epochs": 400,
+    "step": 0.2,
+    "ridge": 0.01,
+    "maxNorm": 4,
+    "folds": 5,
+    "interventionWeight": 0.2,
+    "costWeight": 0.03,
+    "stabilityMargin": 0.01
+  },
+  "intervention": {
+    "max_queries_per_arm": 32,
+    "arms": [
+      "active",
+      "uniform"
+    ],
+    "require_original_correct": true,
+    "match_removed_item_count": true,
+    "token_caliper": "max(8, 5% removed tokens)",
+    "active_priority": "Known training QA repair relative to qwen_fixed, then control minus support Qwen mean score; before intervention labels.",
+    "signal": "original=1, control_removed=1, support_removed=0",
+    "denominator": "All attempted matched queries per arm; report unmatched eligible ledger and incremental cost.",
+    "caveat": "Label-assisted public evaluator; not autonomous unlabeled online feedback; active-vs-uniform is a fixed-pool budget diagnostic, not a randomized causal acquisition trial."
+  },
+  "modes": [
+    "native_k5",
+    "qwen_fixed",
+    "qa_residual",
+    "intervention_residual",
+    "slate_qa",
+    "slate_active",
+    "slate_uniform",
+    "slate_sham",
+    "slate_active_ungated"
+  ],
+  "primary_contrasts": [
+    "slate_active vs slate_qa",
+    "slate_active vs slate_uniform",
+    "slate_active vs qwen_fixed"
+  ],
+  "statistics": "10000 paired group bootstrap; Holm three QA contrasts within each evaluation cohort; report all harms, costs and categories.",
+  "new_external": {
+    "dataset": "BEAM 1M",
+    "split": "calibration",
+    "groups": [
+      {
+        "scale": "1M",
+        "id": "1",
+        "group_id": "a1d36c021a116af750e1a24b",
+        "category": "Coding",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "6",
+        "group_id": "6cd99ff2ce3c01229478a99e",
+        "category": "Math",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "8",
+        "group_id": "b19beb28545fcdea90771337",
+        "category": "Math",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "17",
+        "group_id": "4aacf4a1949579f0da74f035",
+        "category": "Health & Wellness",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "18",
+        "group_id": "ec661ffdcdea658e99cc60a5",
+        "category": "Relationship & Family",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "19",
+        "group_id": "51efd17e6afcab4bfa17325a",
+        "category": "Education & Learning",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "20",
+        "group_id": "acf5c32e91fe1710c8dee795",
+        "category": "Home & Real Estate",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "21",
+        "group_id": "18a6d5c8cb9fbf9e68073b58",
+        "category": "Home & Real Estate",
+        "split": "calibration"
+      },
+      {
+        "scale": "1M",
+        "id": "28",
+        "group_id": "a8e98ebdee27e582417cdb56",
+        "category": "Sport",
+        "split": "calibration"
+      }
+    ],
+    "expected_questions": 180,
+    "policy": "All nine preexisting calibration conversations; no replacement or score-based subsampling."
+  },
+  "bounds": {
+    "pool": 32,
+    "max_pool": 64,
+    "max_items": 5,
+    "budget_ratio": 0.8,
+    "max_new_chat_calls": 2400,
+    "max_feedback_opportunities": 40000,
+    "auto_deploy": false
+  },
+  "prior_human_validation": "user_confirmed_agreement; no new human review claimed",
+  "private_mirror_tested": false,
+  "protected_access": false,
+  "PR_authorized": false,
+  "references": [
+    "https://aclanthology.org/2026.acl-long.1406/",
+    "https://aclanthology.org/2025.findings-naacl.328/",
+    "https://github.com/microsoft/SeCom/"
+  ],
+  "source_hashes": {
+    "src/v11-slate.mjs": "e90df782e1ccb2b6ef5d6e53c40f6ffdf288b36b83ad4b069cafc177b1d3e620",
+    "src/v11-acquisition.mjs": "34c66d1207d7e40a9387fa3f73f3aa7fa9e6cad28df0e5a79854310b8755caeb",
+    "scripts/v11-freeze.mjs": "e72c82884664112b7aa643d0a0ef516966aee238e815c336c3f9bb9699e49f32",
+    "results/controlled-v10/models.json": "3e61ea9248c0e84a3e5d7771776703077f3b602e55e44be7369a063d2b969e2e",
+    "data/beam-v9/export-v9.0/split-manifest.json": "016f9d2c349af193ed3422983620cd0fc6e7db8040cbb3a63405537b3d4bfc65",
+    "results/controlled-v10/verification-v10.4/checked-manifest.json": "b8004bacf31b8210ffe6fa68960a49cf97408449b1ef8ae6d1ce2edb13f2b847"
+  }
+}
