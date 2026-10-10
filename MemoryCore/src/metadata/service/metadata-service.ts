@@ -623,6 +623,18 @@ export class MetadataService {
     if (totalAdmins > 0 && totalAdmins - deletingSystemAdmins < 1) {
       throw new MetadataError("last_system_admin", "cannot delete the last system_admin user");
     }
+    // 删除用户前级联硬删除其所有 Agent（owner 即将不存在，归档无意义）。
+    // 顺序刻意「先 Agent 后用户」：中途失败只会留下"用户还在、Agent 已删"的可重试状态，
+    // 重试时 collect 为空、直接走 deleteUsers 收敛；反过来会留下任何角色都无法删除的孤儿。
+    // 范围仅限 meta 侧（task_agents / fixed_assets / chat_memory 由 store.deleteAgents 级联）；
+    // skill 内核的 owner_agent_id 记录是跨内核数据，此处不可达，由 Panel delete-cascade
+    // 路由逐条 skill/delete 清理（见 MemoryPanel agent-lifecycle.ts）。
+    const allAgentIds: string[] = [];
+    for (const userId of userIds) {
+      const ids = await this.collectAgentIdsByOwner(userId);
+      allAgentIds.push(...ids);
+    }
+    if (allAgentIds.length > 0) await this.deleteAgents(allAgentIds);
     return this.deleteUsers(userIds);
   }
 
@@ -1895,6 +1907,11 @@ export class MetadataService {
     if (userId === team.owner_user_id) {
       throw new MetadataError("permission_denied", "cannot remove team owner");
     }
+    // 移除成员前级联硬删除其在此 team 的所有 Agent（owner 即将不可达，归档无意义）。
+    // 顺序与 deleteUsersForCaller 相同：先 Agent 后成员关系，失败可重试收敛。
+    // 只删该用户在本 team 的 Agent；其在其他 team 的 Agent 不受影响（owner 仍可达）。
+    const agentIds = await this.collectAgentIdsByOwnerInTeam(teamId, userId);
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
     return this.removeTeamMember(teamId, userId);
   }
 
@@ -1941,15 +1958,31 @@ export class MetadataService {
     return this.updateAgent(agentId, patch);
   }
 
+  // team admin 可代删/代归档成员的 Agent（与 createAgentForCaller 允许 admin 代建对称）；
+  // system_admin 是实例级管理员，无需加入目标 team 即可操作（对齐 Panel delete-cascade 的权限面）。
+  // system_admin 旁路只豁免归属校验、不豁免存在性校验：目标不存在时与 owner 路径一样
+  // 显式抛 agent_not_found，而不是静默成功。
   async deleteAgentsForCaller(agentIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
     for (const agentId of agentIds) {
-      await this.assertCallerIsAgentOwner(ctx, agentId);
+      if (ctx.isSystemAdmin) {
+        if (!(await this.getAgentById(agentId))) {
+          throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+        }
+      } else {
+        await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+      }
     }
     return this.deleteAgents(agentIds);
   }
 
   async archiveAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    if (ctx.isSystemAdmin) {
+      if (!(await this.getAgentById(agentId))) {
+        throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+      }
+    } else {
+      await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
+    }
     return this.archiveAgent(agentId);
   }
 
@@ -2123,6 +2156,55 @@ export class MetadataService {
       const page = await this.store.listAgentsByTeam(teamId, { limit: PAGE, offset });
       for (const agent of page.items) ids.push(agent.agent_id);
       if (page.items.length < PAGE) break;
+    }
+    return ids;
+  }
+
+  /**
+   * 收集指定用户在指定 team 下拥有的全部 agent_id（分页遍历）。
+   * 用于成员移除时级联删除其 Agent。超过 MAX_AGENTS 视为异常规模，告警并截断。
+   */
+  private async collectAgentIdsByOwnerInTeam(teamId: string, userId: string): Promise<string[]> {
+    const PAGE = 100;
+    const MAX_AGENTS = 10_000;
+    const ids: string[] = [];
+    for (let offset = 0; offset < MAX_AGENTS; offset += PAGE) {
+      const page = await this.store.listAgentsByTeam(
+        teamId,
+        { limit: PAGE, offset },
+        { owner_user_id: userId },
+      );
+      for (const agent of page.items) ids.push(agent.agent_id);
+      if (page.items.length < PAGE) break;
+    }
+    if (ids.length >= MAX_AGENTS) {
+      // 静默截断会让级联删漏变成隐性数据问题，这里必须留痕
+      console.warn(
+        `[metadata] collectAgentIdsByOwnerInTeam hit MAX_AGENTS=${MAX_AGENTS} ` +
+          `(team=${teamId}, owner=${userId}); orphan-agent cascade may be incomplete`,
+      );
+    }
+    return ids;
+  }
+
+  /**
+   * 收集指定用户在所有 team 下拥有的全部 agent_id（分页遍历）。
+   * 用于用户删除时级联删除其所有 Agent。超过 MAX_AGENTS 视为异常规模，告警并截断。
+   */
+  private async collectAgentIdsByOwner(userId: string): Promise<string[]> {
+    const PAGE = 100;
+    const MAX_AGENTS = 10_000;
+    const ids: string[] = [];
+    for (let offset = 0; offset < MAX_AGENTS; offset += PAGE) {
+      const page = await this.store.listAgentsByOwner(userId, { limit: PAGE, offset });
+      for (const agent of page.items) ids.push(agent.agent_id);
+      if (page.items.length < PAGE) break;
+    }
+    if (ids.length >= MAX_AGENTS) {
+      console.warn(
+        `[metadata] collectAgentIdsByOwner hit MAX_AGENTS=${MAX_AGENTS} ` +
+          `(owner=${userId}); orphan-agent cascade may be incomplete`,
+      );
     }
     return ids;
   }

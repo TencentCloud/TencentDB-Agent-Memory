@@ -790,10 +790,21 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async deleteTeams(teamIds: string[]): Promise<BatchDeleteResult> {
+    // 级联删除 agents（走 deleteAgents 获得完整级联：task_agents, fixed_assets, chat_memory）。
+    // 注意：这里没有包 withTx —— deleteAgents → deleteAssets 内部已有 withTx，Mongo 事务
+    // 不能嵌套；要整体原子需把 session 穿透 deleteAgents/deleteAssets/batchDelete 整条链，
+    // 属于独立改造。当前顺序保证失败方向安全：先删 agents 再删 team，中途失败留下
+    // "team 还在、agents 已删"的可重试状态（重试 collect 为空、直接清理团队侧收敛）。
+    const agents = await this.col("meta_agents")
+      .find({ team_id: { $in: teamIds } } as Document, { projection: { agent_id: 1 } })
+      .toArray();
+    const agentIds = agents.map((a) => a.agent_id as string);
+    if (agentIds.length > 0) await this.deleteAgents(agentIds);
+
     const result = await this.batchDelete("meta_teams", "team_id", teamIds);
     if (result.deleted_ids.length > 0) {
       await this.col("meta_team_members").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
-      await this.col("meta_agents").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
+      // meta_agents 已由 deleteAgents 处理
       await this.col("meta_tasks").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
       await this.col("meta_assets").deleteMany({ team_id: { $in: result.deleted_ids } } as Document);
     }
