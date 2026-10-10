@@ -64,6 +64,7 @@ interface BackendState {
   agentsLoadedTeamIds: Set<string>;
   // in-flight 去重
   inflightTeams: Promise<void> | null;
+  inflightTeamsPreserveSelection: boolean;
   inflightAgents: Record<string, Promise<Agent[]>>;
   inflightTasks: Record<string, Promise<Task[]> | undefined>;
   /**
@@ -83,7 +84,7 @@ interface BackendState {
    * 场景，避免 TeamManagementPanel 等消费方因 teamsLoading=true 而整体进入
    * loading 占位（表现为"点一下下拉框页面就刷新"）。
    */
-  refreshTeams: (opts?: { silent?: boolean }) => Promise<void>;
+  refreshTeams: (opts?: { silent?: boolean; preserveActiveTeam?: boolean }) => Promise<void>;
   fetchAgents: (teamId: string) => Promise<Agent[]>;
   fetchTasks: (teamId: string, params?: { limit?: number; offset?: number; force?: boolean }) => Promise<Task[]>;
   setActiveTeamId: (teamId: string | null) => void;
@@ -104,6 +105,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
   teamsLoading: false,
   agentsLoadedTeamIds: new Set(),
   inflightTeams: null,
+  inflightTeamsPreserveSelection: false,
   inflightAgents: {},
   inflightTasks: {},
   epoch: 0,
@@ -115,8 +117,10 @@ export const useBackendStore = create<BackendState>((set, get) => ({
     await get().refreshTeams();
   },
 
-  refreshTeams: async (opts?: { silent?: boolean }) => {
+  refreshTeams: async (opts?: { silent?: boolean; preserveActiveTeam?: boolean }) => {
     const state = get();
+    // A recovery caller can join a list request already started by another component.
+    if (opts?.preserveActiveTeam) set({ inflightTeamsPreserveSelection: true });
     // in-flight 去重：多个组件同时挂载时只发一次
     if (state.inflightTeams) { await state.inflightTeams; return; }
 
@@ -141,12 +145,14 @@ export const useBackendStore = create<BackendState>((set, get) => ({
           adaptTeam(bt, memberResults[i].map(adaptMember))
         );
         seedDisplayNameCache(adapted.flatMap((t) => t.members));
-        ensureValidActiveTeamId(adapted);
+        // Create recovery discovers Teams without inferring ownership of a lost response.
+        const preserveActiveTeam = get().inflightTeamsPreserveSelection;
+        if (!preserveActiveTeam) ensureValidActiveTeamId(adapted);
         set({
           teams: adapted,
           teamsLoaded: true,
           teamsLoading: false,
-          activeTeamId: readActiveTeamId(),
+          activeTeamId: preserveActiveTeam ? get().activeTeamId : readActiveTeamId(),
         });
       } catch (err) {
         if (get().epoch !== epoch) return;
@@ -155,7 +161,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
         tea.notify.error(i18n.t('backend.loadTeamsFailed'));
       } finally {
         // 只清理"自己"的 in-flight 标记：过期请求不得清掉新请求的引用
-        set((s) => (s.inflightTeams === promise ? { inflightTeams: null } : {}));
+        set((s) => (s.inflightTeams === promise ? { inflightTeams: null, inflightTeamsPreserveSelection: false } : {}));
       }
     })();
 
@@ -275,6 +281,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
       tasksPagesByTeam: {},
       agentsLoadedTeamIds: new Set(),
       inflightTeams: null,
+      inflightTeamsPreserveSelection: false,
       inflightAgents: {},
       inflightTasks: {},
       // 写操作前的在途请求结果是旧数据，必须丢弃
@@ -313,6 +320,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
       tasksPagesByTeam: {},
       agentsLoadedTeamIds: new Set(),
       inflightTeams: null,
+      inflightTeamsPreserveSelection: false,
       inflightAgents: {},
       inflightTasks: {},
       // 自增代数：让旧会话的在途请求结果在返回后被丢弃
