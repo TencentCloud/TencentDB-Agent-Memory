@@ -26,7 +26,7 @@
     "export-tencent-vdb": "node ./bin/export-tencent-vdb.mjs",
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
     "read-local-memory": "node ./bin/read-local-memory.mjs",
-    "build:seed-v2": "tsc --project scripts/seed-v2/tsconfig.json",
+    "build:seed-v2": "node -e \"const fs=require('fs');if(fs.existsSync('scripts/seed-v2/tsconfig.json')){require('child_process').execSync('tsc --project scripts/seed-v2/tsconfig.json',{stdio:'inherit'})}else{console.log('[build:seed-v2] scripts/seed-v2/ is not present in this checkout yet -- skipping (bin/seed-v2.mjs already falls back gracefully at runtime if neither dist nor source exists)')}\"",
     "seed-v2": "node ./bin/seed-v2.mjs",
     "test": "vitest run",
     "test:oss": "vitest run -c vitest.oss.config.ts",
