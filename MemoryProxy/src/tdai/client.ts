@@ -9,6 +9,7 @@ import type {
   TdaiMessage,
 } from "./types.js";
 import { log } from "../report/log.js";
+import { createHash } from "node:crypto";
 
 interface TdaiEnvelope<T = unknown> {
   code?: number;
@@ -18,6 +19,36 @@ interface TdaiEnvelope<T = unknown> {
 
 const TDAI_MESSAGE_CONTENT_MAX_CHARS = 8192;
 const TDAI_CONVERSATION_MAX_MESSAGES = 100;
+
+// ── L0 user 消息去重 ──────────────────────────────────────────────────────
+// 背景：agent 客户端（DSH / Claude Code / Hermes 等）是「一个提问 → N 步工具
+// 循环 → N 个 HTTP 请求」，每步都携带同一条 user 消息；而 addConversation 按
+// 「每个请求」调用，于是同一条 user 消息被反复写入 L0（实测 22–309 倍），
+// 下游 L1 抽取为这些重复内容重复付费。
+// 语义：同一 (agent, session, task) 下，内容相同的 user 消息在 TTL 窗口内只写
+// 一次；assistant 消息不受影响（保证最终回复不丢）。水位在写入成功后才记录，
+// 失败重试仍会真正写入（宁重勿丢）；进程重启水位清空，最多多写一轮。
+// TTL / 上限目前为常量，可按需调整。
+const L0_USER_DEDUP_TTL_MS = 10 * 60 * 1000;
+const L0_USER_DEDUP_MAX_ENTRIES = 4096;
+const l0UserDedupSeen = new Map<string, number>();
+
+function l0UserDedupKey(identity: TdaiIdentity, userContent: string): string {
+  const hash = createHash("sha1").update(userContent).digest("hex").slice(0, 16);
+  return `${identity.agentId}|${identity.sessionId}|${identity.taskId}|${hash}`;
+}
+
+/** 命中 = 该内容在 TTL 内已写过；同时顺手做过期清理。 */
+function l0UserDedupHit(key: string, now: number): boolean {
+  const seenAt = l0UserDedupSeen.get(key);
+  if (seenAt !== undefined && now - seenAt < L0_USER_DEDUP_TTL_MS) return true;
+  if (l0UserDedupSeen.size >= L0_USER_DEDUP_MAX_ENTRIES) {
+    for (const [k, t] of l0UserDedupSeen) {
+      if (now - t >= L0_USER_DEDUP_TTL_MS) l0UserDedupSeen.delete(k);
+    }
+  }
+  return false;
+}
 
 /**
  * Split messages to fit the gateway schema without losing content or breaking
@@ -141,16 +172,39 @@ export class TdaiClient {
   async addConversation(identity: TdaiIdentity, messages: TdaiMessage[]): Promise<void> {
     if (!this.isEnabled() || !this.config.writeL0 || messages.length === 0) return;
 
-    const chunkedMessages = chunkConversationMessages(messages);
+    const userLenForLog = (messages[0]?.content ?? "").length;
+
+    // L0 user 去重：命中则本轮只写 assistant（若有），不再重复写 user。
+    const now = Date.now();
+    let outgoing = messages;
+    let pendingDedupKey: string | null = null;
+    const userIdx = messages.findIndex((m) => m.role === "user" && m.content.trim().length > 0);
+    if (userIdx >= 0) {
+      const dedupKey = l0UserDedupKey(identity, messages[userIdx].content);
+      if (l0UserDedupHit(dedupKey, now)) {
+        outgoing = messages.filter((_, i) => i !== userIdx);
+        log.info("tdai-recorder:write-l0-dedup", {
+          session: identity.sessionId,
+          agent: identity.agentId,
+          userLen: messages[userIdx].content.length,
+          remaining: outgoing.length,
+        });
+      } else {
+        pendingDedupKey = dedupKey;
+      }
+    }
+    if (outgoing.length === 0) return;
+
+    const chunkedMessages = chunkConversationMessages(outgoing);
     log.info("tdai-recorder:write-l0", {
       team: identity.teamId,
       agent: identity.agentId,
       user: identity.userId,
       session: identity.sessionId,
       task: identity.taskId,
-      msgs: messages.length,
+      msgs: outgoing.length,
       chunks: chunkedMessages.length,
-      userLen: (messages[0]?.content ?? "").length,
+      userLen: userLenForLog,
     });
 
     for (let offset = 0; offset < chunkedMessages.length; offset += TDAI_CONVERSATION_MAX_MESSAGES) {
@@ -171,6 +225,9 @@ export class TdaiClient {
         { includeSession: true, includeTask: true, throwOnError: true },
       );
     }
+
+    // 写入成功后才记录水位：失败重试时不会误跳过 user 消息。
+    if (pendingDedupKey) l0UserDedupSeen.set(pendingDedupKey, now);
   }
 
   async searchL1(identity: TdaiIdentity, query: string): Promise<TdaiL1Memory[]> {
