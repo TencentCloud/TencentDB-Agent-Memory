@@ -7,6 +7,9 @@ import { SqliteKnowledgeStore } from '../src/store/sqlite-store.js';
 import { CodeGraphService } from '../src/store/code-graph-service.js';
 import { createGitCredentialRoutes } from '../src/routes/git-credential.js';
 import { createCodeGraphRoutes } from '../src/routes/code-graph.js';
+import { createCredentialStore } from '../src/source-auth/credential-store.js';
+import { CodeGraphAuthService } from '../src/source-auth/code-graph-auth.js';
+import { CodeSourceRegistry } from '../src/code-source/registry.js';
 
 const closers: (() => void)[] = [];
 afterEach(() => { vi.restoreAllMocks(); closers.splice(0).forEach((close) => close()); });
@@ -15,11 +18,13 @@ function setup(serviceKey = 'service-test-key') {
   const { db, raw } = createDb({ path: ':memory:' }); closers.push(() => raw.close());
   const credentials = new GitCredentialStore(db, 'ab'.repeat(32));
   const store = new SqliteKnowledgeStore(db);
+  const authService = new CodeGraphAuthService({ db, store, gitCredentialStore: credentials,
+    credentialStore: createCredentialStore({ db }), codeSourceRegistry: new CodeSourceRegistry(['gongfeng']) });
   const worker = vi.fn(async () => ({ commitHash: '123456', stats: { files: 1, nodes: 1, edges: 0 } }));
-  const graphs = new CodeGraphService({ store, worker, dataRoot: '/unused' });
+  const graphs = new CodeGraphService({ store, worker, authService, dataRoot: '/unused' });
   const app = new Hono();
   app.route('/credentials', createGitCredentialRoutes(credentials, serviceKey));
-  app.route('/graphs', createCodeGraphRoutes({ cgService: graphs, credentialStore: credentials, serviceKey,
+  app.route('/graphs', createCodeGraphRoutes({ cgService: graphs, authService, serviceKey,
     instancePool: { get: () => undefined, set() {}, delete() {} }, publicBaseUrl: '' }));
   const request = (path: string, body: unknown, authorization = 'Bearer service-test-key') => app.request(path, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-tdai-service-id': 'svc', authorization }, body: JSON.stringify(body),

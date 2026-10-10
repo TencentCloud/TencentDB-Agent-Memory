@@ -27,15 +27,13 @@ import {
   type BatchDeleteResult,
 } from "../api-helpers.js";
 import type { CodeGraphInstancePool } from "../module.js";
-import { GitCredentialStore, GitCredentialError } from "../store/git-credential-store.js";
-import { GitSourceFetcher } from "../source-fetcher/git-fetcher.js";
-import { parseGitSource, validateGitBranch } from "../source-fetcher/git-source.js";
+import { CodeGraphAuthError, type CodeGraphAuthActor, type CodeGraphAuthService } from "../source-auth/code-graph-auth.js";
+import { GitCredentialError } from "../store/git-credential-store.js";
+import { errorHandler } from "../middleware/error-handler.js";
 import { verifyBearer } from "../middleware/auth.js";
-import type { ICredentialStore } from "../source-auth/types.js";
 
 export interface CodeGraphRouteDeps {
-  credentialStore: GitCredentialStore;
-  sourceCredentialStore?: ICredentialStore;
+  authService: CodeGraphAuthService;
   serviceKey: string;
   cgService: CodeGraphService;
   instancePool: CodeGraphInstancePool;
@@ -184,6 +182,12 @@ function buildToolParams(
 export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
   const app = new Hono();
   const { cgService, instancePool, publicBaseUrl } = deps;
+  app.onError((error, c) => {
+    if (error instanceof CodeGraphAuthError || error instanceof GitCredentialError) {
+      return c.json(wrapError(error.status, error.message), error.status);
+    }
+    return errorHandler(error, c);
+  });
 
   // ═══════════════════ Management ═══════════════════
 
@@ -197,43 +201,28 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
 
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
-    const credentialId = body.credential_id;
-    if (credentialId !== undefined && !isValidIdSegment(credentialId)) return c.json(wrapError(400, "Invalid credential ID"), 400);
-    try {
-      new GitSourceFetcher().validate(repoUrl);
-      validateGitBranch(branch);
-      if (parseGitSource(repoUrl).kind === "ssh" && !credentialId) throw new GitCredentialError("SSH repositories require a credential");
-      if (credentialId) {
-        if (!deps.serviceKey || !verifyBearer(c.req.header("authorization"), deps.serviceKey)) {
-          return c.json(wrapError(401, "Private Git requires service authentication"), 401);
-        }
-        if (body.share_with_team !== true) throw new GitCredentialError("Confirm sharing the indexed repository with this team");
-        deps.credentialStore.assertUsable(idFields.service_id, idFields.team_id, idFields.user_id ?? "", credentialId, repoUrl);
-      }
-    } catch (error) {
-      const status = error instanceof GitCredentialError ? error.status : 400;
-      return c.json(wrapError(status, error instanceof Error ? error.message : "Invalid repository"), status);
-    }
-
-    // 私有仓：可选 provider_id + secret，与 create 同请求传入，入队前落凭据（消除时序窗口）。
-    const providerId = typeof body.provider_id === "string" ? body.provider_id : undefined;
-    const secret = typeof body.secret === "string" ? body.secret : undefined;
-    const username = typeof body.username === "string" ? body.username : undefined;
-    if (credentialId && providerId) return c.json(wrapError(400, "Select either a saved Git credential or a source provider"), 400);
-    if (providerId && !secret) return c.json(wrapError(400, "secret is required when provider_id is set"), 400);
-
+    const authActor: CodeGraphAuthActor | undefined = isValidIdSegment(idFields.user_id)
+      ? { serviceId: idFields.service_id, teamId: idFields.team_id, userId: idFields.user_id,
+          serviceAuthenticated: !!deps.serviceKey && verifyBearer(c.req.header("authorization"), deps.serviceKey) }
+      : undefined;
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
       repo_url: repoUrl,
-      credential_id: credentialId as string | undefined,
       branch,
       repo_name: repoName,
       owner_user_id: idFields.user_id,
       user_id: idFields.user_id,
       agent_id: idFields.agent_id,
       task_id: idFields.task_id,
-      credential: providerId && secret ? { provider_id: providerId, secret, username } : undefined,
+      authActor,
+      credential_id: body.credential_id as string | undefined,
+      share_with_team: body.share_with_team as boolean | undefined,
+      credential: body.provider_id === undefined && body.secret === undefined && body.username === undefined ? undefined : {
+        provider_id: body.provider_id as string,
+        secret: body.secret as string,
+        username: body.username as string | undefined,
+      },
     });
 
     // Persist service_url (tools self-discovery base; resource selected via
@@ -249,8 +238,7 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     return c.json(wrapOk(toCodeGraphDetail(row)), existed ? 200 : 201);
   });
 
-  // Only the resource owner can attach/replace their own repository credential.
-  // This also makes recovery from an expired credential possible without recreating the graph.
+  // Legacy saved-credential API delegates to the same replacement service.
   app.post("/set-credential", async (c) => {
     if (!deps.serviceKey || !verifyBearer(c.req.header("authorization"), deps.serviceKey)) {
       return c.json(wrapError(401, "Private Git requires service authentication"), 401);
@@ -263,25 +251,13 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const row = cgService.getById(serviceId, body.code_graph_id);
     if (!row) return c.json(wrapError(404, "Code graph not found"), 404);
     if (row.owner_user_id !== body.user_id) return c.json(wrapError(403, "Only the owner may change Git credentials"), 403);
-    if (row.status === "pending" || row.status === "processing") return c.json(wrapError(409, "Code graph is busy"), 409);
-    const id = body.credential_id;
-    if (id !== null && !isValidIdSegment(id)) return c.json(wrapError(400, "credential_id must be an ID or null"), 400);
-    try {
-      if (id) {
-        if (deps.sourceCredentialStore?.status({ type: "code-graph", serviceId, resourceId: row.code_graph_id })) {
-          throw new GitCredentialError("Remove the source provider credential before selecting a saved Git credential", 409);
-        }
-        if (body.share_with_team !== true) throw new GitCredentialError("Confirm sharing the indexed repository with this team");
-        deps.credentialStore.assertUsable(serviceId, row.team_id, body.user_id, id, row.repo_url);
-      } else if (parseGitSource(row.repo_url).kind === "ssh") {
-        throw new GitCredentialError("SSH repositories require a credential");
-      }
-      const updated = cgService.updateMeta(serviceId, row.code_graph_id, { credential_id: id });
-      return c.json(wrapOk(toCodeGraphDetail(updated!)));
-    } catch (error) {
-      const status = error instanceof GitCredentialError ? error.status : 400;
-      return c.json(wrapError(status, error instanceof Error ? error.message : "Invalid credential"), status);
-    }
+    const input = body.credential_id === null ? { mode: "none" as const } : {
+      mode: "saved" as const, credential_id: body.credential_id as string, share_with_team: body.share_with_team as boolean | undefined,
+    };
+    deps.authService.replace(serviceId, row.code_graph_id, input, {
+      serviceId, teamId: row.team_id, userId: body.user_id, serviceAuthenticated: true,
+    });
+    return c.json(wrapOk(toCodeGraphDetail(cgService.getById(serviceId, row.code_graph_id)!)));
   });
 
   app.post("/list", async (c) => {

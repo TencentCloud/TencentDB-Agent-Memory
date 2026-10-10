@@ -58,11 +58,24 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     const branch = str(body, 'branch') ?? undefined;
     const repoName = str(body, 'repo_name') ?? undefined;
     // 私有仓：provider_id + secret(+ username) 透传给 KS，入队前落凭据（消除时序窗口）。
-    const providerId = str(body, 'provider_id') ?? undefined;
-    const credentialId = str(body, 'credential_id') ?? undefined;
-    if (credentialId && providerId) return respondControlError(c, 400, 'CONFLICTING_CREDENTIALS');
-    const secret = str(body, 'secret') ?? undefined;
-    const username = str(body, 'username') ?? undefined;
+    const hasSaved = body.credential_id !== undefined;
+    const hasResource = ['provider_id', 'secret', 'username'].some(key => body[key] !== undefined);
+    if (hasSaved && hasResource) {
+      return respondControlError(c, 400, 'CONFLICTING_CREDENTIALS');
+    }
+    // Preserve explicit selections and secret bytes. Invalid legacy fields must
+    // fail here, never disappear into an anonymous create request.
+    if ((hasSaved && (typeof body.credential_id !== 'string' || !body.credential_id.trim())) ||
+        (hasResource && (typeof body.provider_id !== 'string' || !body.provider_id.trim() ||
+          typeof body.secret !== 'string' || !body.secret ||
+          (body.username !== undefined && typeof body.username !== 'string'))) ||
+        (body.share_with_team !== undefined && typeof body.share_with_team !== 'boolean')) {
+      return respondControlError(c, 400, 'INVALID_CREDENTIAL');
+    }
+    const providerId = body.provider_id as string | undefined;
+    const credentialId = body.credential_id as string | undefined;
+    const secret = body.secret as string | undefined;
+    const username = body.username as string | undefined;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     try {
       const detail = await kc.codeGraphCreate(teamId, repoUrl, branch, gate.userId, repoName, {

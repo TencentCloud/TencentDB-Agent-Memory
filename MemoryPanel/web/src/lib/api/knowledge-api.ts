@@ -621,13 +621,9 @@ export const knowledgeApi = {
         repo_name: opts.repoName,
         credential_id: opts.credentialId,
         share_with_team: opts.shareWithTeam,
-        ...(opts.providerId && opts.secret
-          ? {
-              provider_id: opts.providerId,
-              secret: opts.secret,
-              ...(opts.username ? { username: opts.username } : {}),
-            }
-          : {}),
+        provider_id: opts.providerId,
+        secret: opts.secret,
+        username: opts.username,
       }),
 
     /** @deprecated 使用 teamAssets */

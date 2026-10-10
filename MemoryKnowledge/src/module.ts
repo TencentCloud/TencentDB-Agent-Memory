@@ -23,7 +23,7 @@ import {
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
 import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
-import { GitCredentialStore, type GitSecret } from "./store/git-credential-store.js";
+import { GitCredentialStore } from "./store/git-credential-store.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
 import { getGlobalLlmConcurrency } from "./config.js";
@@ -36,7 +36,7 @@ import {
 } from "./store/auto-sync-scheduler.js";
 import { createCredentialStore } from "./source-auth/credential-store.js";
 import type { ICredentialStore } from "./source-auth/types.js";
-import { buildCloneUrl, stripCredentials } from "./code-source/clone-url.js";
+import { CodeGraphAuthService } from "./source-auth/code-graph-auth.js";
 import { CodeSourceRegistry } from "./code-source/registry.js";
 import { WikiSourceRegistry } from "./wiki-source/registry.js";
 import { createWikiImporter } from "./wiki-source/wiki-importer.js";
@@ -75,6 +75,7 @@ export interface CodeGraphInstancePool {
 
 export interface KnowledgeModule {
   gitCredentialStore: GitCredentialStore;
+  codeGraphAuth: CodeGraphAuthService;
   wikiService: WikiService;
   cgService: CodeGraphService;
   wikiMgr: WikiSourceManager;
@@ -88,7 +89,7 @@ export interface KnowledgeModule {
   autoSyncScheduler: AutoSyncScheduler;
   /** 定时自动同步的解析后配置（挂载 admin 路由时透出）。 */
   autoSyncConfig: AutoSyncConfig;
-  /** 外部知识源用户令牌（加密存储，明文不出进程）。 */
+  /** Resource-scoped source credentials; metadata only leaves the service. */
   credentialStore: ICredentialStore;
   /** 代码来源 provider 注册中心（前端下拉 + provider 查询）。 */
   codeSourceRegistry: CodeSourceRegistry;
@@ -149,40 +150,17 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   // ── wiki 来源 provider 注册中心（内置 + 部署启用列表） ──
   const wikiSourceRegistry = new WikiSourceRegistry();
 
-  /** Adapt resource-scoped provider credentials to the isolated Git transport.
-   * Provider URL builders only run in memory: Git receives a clean URL and an
-   * operation-scoped secret, so clone and incremental sync never persist tokens.
-   */
-  const providerSourceFor = (
-    serviceId: string,
-    codeGraphId: string,
-    repoUrl: string,
-  ): { url: string; secret?: GitSecret } => {
-    const ref = { type: "code-graph" as const, serviceId, resourceId: codeGraphId };
-    const cred = credentialStore.get(ref);
-    if (!cred) return { url: repoUrl };
-    const status = credentialStore.status(ref);
-    const provider = status && codeSourceRegistry.get(status.provider_id);
-    if (!provider) throw new Error("Code source provider is not registered (check CODE_SOURCE_ENABLED)");
-    const authenticatedUrl = new URL(buildCloneUrl(provider, repoUrl, cred));
-    const secret: GitSecret = {
-      kind: "https",
-      username: decodeURIComponent(authenticatedUrl.username),
-      token: decodeURIComponent(authenticatedUrl.password),
-    };
-    return { url: stripCredentials(authenticatedUrl.toString()), secret };
-  };
+  const codeGraphAuth = new CodeGraphAuthService({
+    db, store, gitCredentialStore, credentialStore, codeSourceRegistry,
+  });
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
+    const { dir, branch, codeGraphId, setInternalStatus } = ctx;
 
-    // Resolve the source fetcher (validates HTTPS/SSH URLs and private-network restrictions).
-    const source = ctx.credentialId
-      ? { url: repoUrl, secret: gitCredentialStore.resolve(ctx.serviceId, ctx.teamId, ctx.ownerUserId ?? "", ctx.credentialId, repoUrl) }
-      : providerSourceFor(ctx.serviceId, codeGraphId, repoUrl);
+    const source = codeGraphAuth.resolve(ctx.serviceId, codeGraphId);
     const fetcher = fetcherRegistry.resolve(source.url);
-    const { secret } = source;
+    const secret = source.auth;
 
     const isExistingRepo = existsSync(join(dir, ".git"));
     let didIncrementalSync = false;
@@ -301,8 +279,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
       if (inst) closeIndex(inst);
       instancePool.delete(codeGraphId);
     },
-    credentialStore,
-    codeSourceRegistry,
+    authService: codeGraphAuth,
   });
 
   // Restart recovery: mark interrupted tasks as failed
@@ -383,7 +360,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   return {
     wikiService, cgService, wikiMgr, store, instancePool,
-    llmBindingStore, gitCredentialStore, autoSyncScheduler, autoSyncConfig,
+    llmBindingStore, gitCredentialStore, codeGraphAuth, autoSyncScheduler, autoSyncConfig,
     credentialStore, codeSourceRegistry, wikiSourceRegistry,
   };
 }

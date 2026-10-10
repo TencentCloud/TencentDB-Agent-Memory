@@ -29,7 +29,9 @@ it('resolves current credentials at execution time and preserves an existing ind
       await writeFile(join(path, 'existing-index'), 'preserve');
       return { version: 'commit-one' };
     });
-    const { row } = module.cgService.create({ service_id: 'svc', team_id: 'team', owner_user_id: 'alice', repo_url: repo, branch: 'main', credential_id: info.credential_id });
+    const { row } = module.cgService.create({ service_id: 'svc', team_id: 'team', owner_user_id: 'alice', repo_url: repo, branch: 'main',
+      authActor: { serviceId: 'svc', teamId: 'team', userId: 'alice', serviceAuthenticated: true },
+      credential_id: info.credential_id, share_with_team: true });
     await module.cgService.onIdle();
     expect(module.cgService.getById('svc', row.code_graph_id)?.status).toBe('ready');
     module.gitCredentialStore.put('svc', 'team', 'alice', { ...info, secret: { kind: 'https', username: 'reader', token: 'rotated' } });
@@ -60,12 +62,16 @@ it.each(['bearer', 'basic'] as const)('keeps %s provider secrets out of Git URLs
       await writeFile(join(path, 'existing-index'), 'preserve');
       return { version: 'commit-one' };
     });
-    const { row } = module.cgService.create({ service_id: 'svc', team_id: 'team', owner_user_id: 'alice', repo_url: repo, branch: 'main', credential: { provider_id: 'gongfeng', secret: 'first:@/% token', username } });
+    const actor = { serviceId: 'svc', teamId: 'team', userId: 'alice', serviceAuthenticated: false };
+    const { row } = module.cgService.create({ service_id: 'svc', team_id: 'team', owner_user_id: 'alice', repo_url: repo, branch: 'main',
+      authActor: actor, credential: { provider_id: 'gongfeng', secret: 'first:@/% token', username } });
     await module.cgService.onIdle();
     expect(module.cgService.getById('svc', row.code_graph_id)?.status).toBe('ready');
     expect(transport.fetch).toHaveBeenCalledWith(repo, 'main', expect.any(String), { kind: 'https', username, token: 'first:@/% token' });
 
-    module.credentialStore.put({ type: 'code-graph', serviceId: 'svc', resourceId: row.code_graph_id }, { kind, username, secret: 'rotated:@/% token' }, 'gongfeng', 'alice');
+    module.codeGraphAuth.replace('svc', row.code_graph_id, {
+      mode: 'resource', provider_id: 'gongfeng', username, secret: 'rotated:@/% token',
+    }, actor);
     transport.sync.mockResolvedValueOnce({ version: 'commit-two' });
     module.cgService.sync('svc', 'team', row.code_graph_id);
     await module.cgService.onIdle();
@@ -79,6 +85,52 @@ it.each(['bearer', 'basic'] as const)('keeps %s provider secrets out of Git URLs
     expect(transport.fetch).toHaveBeenCalledTimes(1);
     expect(await readFile(join(module.cgService.dirFor('svc', 'team', row.code_graph_id), 'existing-index'), 'utf8')).toBe('preserve');
     expect(module.cgService.getById('svc', row.code_graph_id)?.sync_error).toBe('Git authentication failed');
+  } finally {
+    module.autoSyncScheduler.stop(); raw.close(); await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it.each(['corrupt resource credential', 'conflicting bindings'])('stops before Git and preserves an existing checkout for %s', async (failure) => {
+  vi.stubEnv('KNOWLEDGE_GIT_CREDENTIAL_KEY', 'ab'.repeat(32));
+  vi.stubEnv('KNOWLEDGE_AUTO_SYNC_ENABLED', 'false');
+  vi.stubEnv('CODE_SOURCE_ENABLED', 'gongfeng');
+  const dir = await mkdtemp(join(tmpdir(), 'invalid-auth-worker-test-'));
+  const { db, raw } = createDb({ path: ':memory:' });
+  const module = createKnowledgeModule({ db, dataDir: dir, llmConfig: { mode: 'custom', protocol: 'openai', provider: 'custom', apiKey: '', model: '', baseUrl: '', maxTokens: 100, timeoutMs: 100 } });
+  try {
+    transport.fetch.mockImplementation(async (_url, _branch, path) => {
+      await mkdir(join(path, '.git'), { recursive: true });
+      await writeFile(join(path, 'existing-index'), 'preserve');
+      return { version: 'commit-one' };
+    });
+    const repo = 'https://git.example.com/owner/repo.git';
+    const { row } = module.cgService.create({
+      service_id: 'svc', team_id: 'team', owner_user_id: 'alice', repo_url: repo, branch: 'main',
+      authActor: { serviceId: 'svc', teamId: 'team', userId: 'alice', serviceAuthenticated: true },
+      credential: { provider_id: 'gongfeng', secret: 'provider-token' },
+    });
+    await module.cgService.onIdle();
+    expect(module.cgService.getById('svc', row.code_graph_id)?.status).toBe('ready');
+
+    // Simulate legacy/corrupted persisted state that the write service would reject.
+    if (failure === 'corrupt resource credential') {
+      raw.prepare('UPDATE knowledge_source_credential SET cred_secret = ? WHERE resource_id = ?')
+        .run('invalid-base64!', row.code_graph_id);
+    } else {
+      const credential = module.gitCredentialStore.put('svc', 'team', 'alice', {
+        name: 'Saved credential', hostname: 'git.example.com',
+        secret: { kind: 'https', username: 'reader', token: 'saved-token' },
+      });
+      raw.prepare('UPDATE knowledge_code_graph SET credential_id = ? WHERE code_graph_id = ?')
+        .run(credential.credential_id, row.code_graph_id);
+    }
+
+    module.cgService.sync('svc', 'team', row.code_graph_id);
+    await module.cgService.onIdle();
+    expect(transport.sync).not.toHaveBeenCalled();
+    expect(transport.fetch).toHaveBeenCalledTimes(1);
+    expect(await readFile(join(module.cgService.dirFor('svc', 'team', row.code_graph_id), 'existing-index'), 'utf8')).toBe('preserve');
+    expect(module.cgService.getById('svc', row.code_graph_id)?.sync_error).toMatch(/authentication/i);
   } finally {
     module.autoSyncScheduler.stop(); raw.close(); await rm(dir, { recursive: true, force: true });
   }

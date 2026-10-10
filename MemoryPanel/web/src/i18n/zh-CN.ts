@@ -1,6 +1,10 @@
 /** 中文翻译 — zh-CN */
 
 export const zhCN = {
+  'gitCredential.resourceToken': '{{provider}} · 此仓库的访问令牌',
+  'gitCredential.resourceScope': '更新令牌只影响此仓库，下次同步时生效。',
+  'gitCredential.reload': '重新读取凭据状态',
+  'gitCredential.conflict': '凭据配置存在冲突，请重新选择',
   "gitCredential.scope": "适用范围",
   "gitCredential.anySshServer": "SSH · 多服务器",
   "gitCredential.managedHosts": "无需手填 known_hosts。首次连接服务器时确认其指纹，系统保存后持续校验；服务器指纹变更时会阻止连接。",

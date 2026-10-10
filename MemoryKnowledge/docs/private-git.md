@@ -13,7 +13,7 @@ KNOWLEDGE_GIT_CREDENTIAL_KEY=<64-hex-characters>
 
 Generate the encryption key once using `openssl rand -hex 32`. Retain the same key across restarts, replicas and database restores. Store it separately from the database and source control. Losing or changing it makes previously saved credentials unreadable. Rotating a repository token/key in the UI does not require changing this encryption key.
 
-Panel must use the same service key as `KNOWLEDGE_AUTH_TOKEN`. Credential management stays disabled when the service key is empty, even though legacy public-repository endpoints support unauthenticated local deployments. Missing encryption configuration does not affect existing public repositories.
+Panel must use the same service key as `KNOWLEDGE_AUTH_TOKEN`. Reusable Git credential management stays disabled when the service key is empty; existing public and resource-scoped provider endpoints retain their local deployment behavior. Missing encryption configuration does not affect existing public repositories.
 
 For `deploy/global-images`, set `KNOWLEDGE_GIT_CREDENTIAL_KEY` in that deployment's `.env`; the launch script forwards it to Memory Hub. The combined and standalone Docker images include the SSH client. Native deployments require Git, OpenSSH and a POSIX shell. For private Git servers using a custom CA, set `GIT_SSL_CAINFO` to the CA file available inside the Knowledge container; TLS verification remains enabled.
 
@@ -32,6 +32,10 @@ Previously saved credentials retain their IDs, graph bindings and ciphertext. SS
 Rotate a credential by supplying its replacement secret. Manual and scheduled sync resolve the current secret when the worker executes. To change which credential a graph uses, open its details and update the binding; the graph must be idle and you must own it. An in-use credential cannot be deleted until its graphs are unbound or deleted. SSH graphs must retain an SSH credential; deleting their graphs releases the binding.
 
 Saved Git credentials and source-provider credentials are mutually exclusive for a graph. Remove the current binding or provider credential before switching between them. Reusable Git credentials use the encrypted owner-scoped store described here; the existing resource-scoped provider store and its deployment requirements remain separate. Both Git authentication paths pass secrets through the isolated transport and support incremental sync without putting tokens in Git URLs or config.
+
+CodeGraph uses one internal authentication service for creation, credential replacement, deletion cleanup and Git access. The existing API contracts remain unchanged. Replacing a resource-scoped provider token with a saved credential is atomic: validation or storage failure preserves the previous binding, and changes involving a saved credential require its owner and service authentication. Conflicting or unreadable bindings stop synchronization instead of falling back to anonymous access.
+
+Repository details show an existing provider token as a distinct credential selection and allow its token to be updated in place. Changing to a saved credential uses the existing binding action; no separate deletion is needed. Provider authentication reaches Git as structured fields rather than a credential-bearing URL. Existing resource-scoped storage and Wiki authentication remain unchanged.
 
 ## SSH server trust
 

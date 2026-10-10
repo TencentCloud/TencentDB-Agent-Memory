@@ -13,6 +13,10 @@
  */
 
 import { Hono } from "hono";
+import { CodeGraphAuthError, type CodeGraphAuthService } from "../source-auth/code-graph-auth.js";
+import { GitCredentialError } from "../store/git-credential-store.js";
+import { verifyBearer } from "../middleware/auth.js";
+import { errorHandler } from "../middleware/error-handler.js";
 
 import { wrapOk, wrapError, isValidIdSegment } from "../api-helpers.js";
 import type { IKnowledgeStore } from "../store/types.js";
@@ -28,6 +32,8 @@ const VALID_TYPES: ResourceType[] = ["code-graph", "wiki"];
 
 export interface SourceCredentialRouteDeps {
   credentialStore: ICredentialStore;
+  codeGraphAuth: CodeGraphAuthService;
+  serviceKey: string;
   /** 用于校验 resource_id 属于请求头 team_id（越权门控）。 */
   store: IKnowledgeStore;
 }
@@ -85,6 +91,14 @@ function ensureTeamOwnership(
 export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): Hono {
   const app = new Hono();
   const { credentialStore, store } = deps;
+  app.onError((error, c) => {
+    if (error instanceof CodeGraphAuthError || error instanceof GitCredentialError) {
+      return c.json(wrapError(error.status, error.message), error.status);
+    }
+    return errorHandler(error, c);
+  });
+  const serviceAuthenticated = (authorization: string | undefined) =>
+    !!deps.serviceKey && verifyBearer(authorization, deps.serviceKey);
 
   // GET /status?resource_type=xxx&resource_id=yyy —— 元数据（不含 secret）
   app.get("/status", async (c) => {
@@ -98,7 +112,11 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
     const gate = ensureTeamOwnership(store, who, refOrErr);
     if (!gate.ok) return c.json(wrapError(404, "resource not found"), 404);
 
-    const status = credentialStore.status(refOrErr);
+    const status = refOrErr.type === "code-graph"
+      ? deps.codeGraphAuth.resourceStatus(who.serviceId, refOrErr.resourceId, {
+          ...who, serviceAuthenticated: serviceAuthenticated(c.req.header("authorization")),
+        })
+      : credentialStore.status(refOrErr);
     return c.json(wrapOk({ configured: !!status, credential: status }));
   });
 
@@ -114,6 +132,11 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
     const gate = ensureTeamOwnership(store, who, refOrErr);
     if (!gate.ok) return c.json(wrapError(404, "resource not found"), 404);
 
+    if (refOrErr.type === "code-graph") {
+      return c.json(wrapOk(deps.codeGraphAuth.deleteResource(who.serviceId, refOrErr.resourceId, {
+        ...who, serviceAuthenticated: serviceAuthenticated(c.req.header("authorization")),
+      })));
+    }
     const ok = credentialStore.delete(refOrErr);
     if (!ok) return c.json(wrapError(404, "credential not found"), 404);
     return c.json(wrapOk({ deleted: true }));
@@ -149,8 +172,13 @@ export function createSourceCredentialRoutes(deps: SourceCredentialRouteDeps): H
     const gate = ensureTeamOwnership(store, who, refOrErr);
     if (!gate.ok) return c.json(wrapError(404, "resource not found"), 404);
 
-    if (refOrErr.type === "code-graph" && store.getCodeGraphById(who.serviceId, refOrErr.resourceId)?.credential_id) {
-      return c.json(wrapError(409, "Remove the saved Git credential binding before configuring a source provider"), 409);
+    if (refOrErr.type === "code-graph") {
+      const authActor = { ...who, serviceAuthenticated: serviceAuthenticated(c.req.header("authorization")) };
+      deps.codeGraphAuth.replace(who.serviceId, refOrErr.resourceId, {
+        mode: "resource", provider_id: providerId, secret,
+        username: typeof body.username === "string" ? body.username : undefined,
+      }, authActor);
+      return c.json(wrapOk({ credential: deps.codeGraphAuth.resourceStatus(who.serviceId, refOrErr.resourceId, authActor) }));
     }
 
     credentialStore.put(

@@ -346,13 +346,9 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
       repo_name: repoName,
       credential_id: opts?.credential_id,
       share_with_team: opts?.share_with_team,
-      ...(opts?.providerId && opts.secret
-        ? {
-            provider_id: opts.providerId,
-            secret: opts.secret,
-            ...(opts.username ? { username: opts.username } : {}),
-          }
-        : {}),
+      provider_id: opts?.providerId,
+      secret: opts?.secret,
+      username: opts?.username,
     });
   }
 

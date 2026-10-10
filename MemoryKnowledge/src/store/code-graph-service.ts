@@ -29,7 +29,7 @@ import type {
   CountOpts,
 } from "./types.js";
 import { BuildQueue } from "./build-queue.js";
-import type { ICredentialStore } from "../source-auth/types.js";
+import type { CodeGraphAuthActor, CodeGraphAuthService } from "../source-auth/code-graph-auth.js";
 
 export interface CodeGraphBuildContext {
   codeGraphId: string;
@@ -71,6 +71,7 @@ export interface CodeGraphServiceLogger {
 
 export interface CodeGraphServiceOptions {
   store: IKnowledgeStore;
+  authService?: CodeGraphAuthService;
   /** knowledge 数据根目录；资产目录 = {dataRoot}/{service_id}/{team_id}/{code_graph_id}/。 */
   dataRoot: string;
   worker: CodeGraphWorker;
@@ -78,21 +79,6 @@ export interface CodeGraphServiceOptions {
   logger?: CodeGraphServiceLogger;
   /** Callback config for TMC status notifications. Optional. */
   callbackConfig?: { tmcCallbackUrl: string };
-  /**
-   * 外部来源凭据存储（create 带 credential 时在入队前先落库）。
-   * 未注入时 create 不接受 credential 参数（公开仓场景）。
-   */
-  credentialStore?: ICredentialStore;
-  /**
-   * 代码来源 provider 注册中心。
-   *
-   * 用途：create 时按 `provider.authMethod.kind` 决定落库凭据的 kind
-   * （bearer / basic ...），避免在此硬编码认证方式。
-   * 未注入时 create 若带 credential 会退化为写 kind=bearer（向后兼容）。
-   */
-  codeSourceRegistry?: {
-    get(id: string): { authMethod: { kind: "bearer" | "basic" } } | undefined;
-  };
   /**
    * 释放该 code-graph 占用的内存资源（instance pool + 关闭索引句柄）。
    * 注入而非直依赖 module，保持 store 层不反向依赖装配层。幂等：重复调用安全。
@@ -106,6 +92,8 @@ export interface CreateCodeGraphParams {
   team_id: string;
   repo_url: string;
   credential_id?: string;
+  share_with_team?: boolean;
+  authActor?: CodeGraphAuthActor;
   branch: string;
   repo_name?: string;
   owner_user_id?: string;
@@ -132,8 +120,7 @@ export class CodeGraphService {
   private readonly logger?: CodeGraphServiceLogger;
   private readonly callbackConfig?: { tmcCallbackUrl: string };
   private readonly releaseInstance?: (codeGraphId: string) => void;
-  private readonly credentialStore?: ICredentialStore;
-  private readonly codeSourceRegistry?: CodeGraphServiceOptions["codeSourceRegistry"];
+  private readonly authService?: CodeGraphAuthService;
   /**
    * In-flight delete 标记：delete 命中一个正在排队/执行的资源时置位，
    * worker 在检查点读取以决定中止。仅内存态（同 id 由 SerialQueue 串行 +
@@ -149,8 +136,7 @@ export class CodeGraphService {
     this.logger = opts.logger;
     this.callbackConfig = opts.callbackConfig;
     this.releaseInstance = opts.releaseInstance;
-    this.credentialStore = opts.credentialStore;
-    this.codeSourceRegistry = opts.codeSourceRegistry;
+    this.authService = opts.authService;
   }
 
   dirFor(serviceId: string, teamId: string, codeGraphId: string): string {
@@ -163,23 +149,11 @@ export class CodeGraphService {
    * - 新建 → 入库 pending + 后台建图。
    */
   create(params: CreateCodeGraphParams): { row: CodeGraphRow; existed: boolean } {
-    const { row, existed } = this.store.createCodeGraph(params);
+    if (!this.authService && (params.credential_id !== undefined || params.credential !== undefined)) {
+      throw new Error("CodeGraphAuthService is required for authenticated repositories");
+    }
+    const { row, existed } = this.authService ? this.authService.create(params) : this.store.createCodeGraph(params);
     if (!existed) {
-      // ① 私有仓：入队前先落凭据（否则 worker 立刻 clone 时凭据还不存在 → 401）。
-      if (params.credential) {
-        if (!this.credentialStore) {
-          throw new Error("credential provided but credentialStore is not wired");
-        }
-        // 落库 kind 按 provider 的认证方式决定；未注入 registry 时兼容退化为 bearer。
-        const kind =
-          this.codeSourceRegistry?.get(params.credential.provider_id)?.authMethod.kind ?? "bearer";
-        this.credentialStore.put(
-          { type: "code-graph", serviceId: row.service_id, resourceId: row.code_graph_id },
-          { kind, secret: params.credential.secret, username: params.credential.username },
-          params.credential.provider_id,
-          params.user_id,
-        );
-      }
       this.audit(row, "create", `clone ${row.repo_url}@${row.branch}`, params.user_id);
       this.enqueueBuild(row);
     }
@@ -194,6 +168,7 @@ export class CodeGraphService {
 
   /** Update code-graph metadata (repo_name, summary). Returns updated row or null. */
   updateMeta(serviceId: string, codeGraphId: string, patch: CodeGraphMetaPatch): CodeGraphRow | null {
+    if (patch.credential_id !== undefined) throw new Error("Change repository authentication through CodeGraphAuthService");
     return this.store.updateCodeGraphMeta(serviceId, codeGraphId, patch);
   }
 
@@ -276,7 +251,8 @@ export class CodeGraphService {
       this.logger?.warn?.(`[code-graph] release instance failed ${codeGraphId}: ${String(err)}`);
     }
     try {
-      this.store.deleteCodeGraph(serviceId, teamId, codeGraphId);
+      if (this.authService) this.authService.cleanup(serviceId, codeGraphId);
+      else this.store.deleteCodeGraph(serviceId, teamId, codeGraphId);
     } catch (err) {
       this.logger?.warn?.(`[code-graph] hard-delete row failed ${codeGraphId}: ${String(err)}`);
     }

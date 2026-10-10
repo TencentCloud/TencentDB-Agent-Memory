@@ -1,6 +1,10 @@
 /** English translation — en-US */
 
 export const enUS = {
+  'gitCredential.resourceToken': '{{provider}} · Token for this repository',
+  'gitCredential.resourceScope': 'Updating the token affects only this repository, starting with the next sync.',
+  'gitCredential.reload': 'Reload credential status',
+  'gitCredential.conflict': 'Conflicting credentials; select a credential again',
   "gitCredential.scope": "Scope",
   "gitCredential.anySshServer": "SSH · Multiple servers",
   "gitCredential.managedHosts": "No manual known_hosts needed. Confirm the fingerprint on the first connection; it is saved and checked on subsequent connections. Changed keys block access.",

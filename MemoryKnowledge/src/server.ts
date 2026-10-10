@@ -79,8 +79,7 @@ export function createApp() {
     publicBaseUrl: config.publicBaseUrl,
   }));
   api.route("/code-graph", createCodeGraphRoutes({
-    credentialStore: knowledgeModule.gitCredentialStore,
-    sourceCredentialStore: knowledgeModule.credentialStore,
+    authService: knowledgeModule.codeGraphAuth,
     serviceKey: config.auth.serviceKey,
     cgService: knowledgeModule.cgService,
     instancePool: knowledgeModule.instancePool,
@@ -112,6 +111,8 @@ export function createApp() {
   api.route("/source-credential", createSourceCredentialRoutes({
     credentialStore: knowledgeModule.credentialStore,
     store: knowledgeModule.store,
+    codeGraphAuth: knowledgeModule.codeGraphAuth,
+    serviceKey: config.auth.serviceKey,
   }));
   api.route("/source-provider", createSourceProviderRoutes({
     registry: knowledgeModule.codeSourceRegistry,

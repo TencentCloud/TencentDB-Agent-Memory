@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { registerGitCredentialRoutes } from '../../src/panel/http/routes/knowledge/git-credential-routes.js';
 import { registerKnowledgeCodeGraphRoutes } from '../../src/panel/http/routes/knowledge/code-graph-routes.js';
+import { HttpKnowledgeClient } from '../../src/panel/kernel/adapters/http-knowledge-client.js';
 import type { PanelDeps } from '../../src/panel/panel-deps.js';
 
 vi.mock('../../src/panel/http/middleware/validate-panel-headers.js', () => ({
@@ -14,10 +15,13 @@ function setup(member = true, owner = 'alice') {
     gitCredentialList: vi.fn(async () => ({ items: [] })), gitCredentialPut: vi.fn(async () => ({ credential_id: 'cred' })),
     gitCredentialDelete: vi.fn(async () => ({ deleted: true })), gitCredentialTest: vi.fn(async () => ({ accessible: true })),
     gitCredentialHostKey: vi.fn(async () => ({ trusted: false })), gitCredentialTrustHost: vi.fn(async () => ({ trusted: true })),
+    codeGraphCreate: vi.fn(async () => ({ code_graph_id: 'cg-test' })),
     codeGraphGet: vi.fn(async () => ({ owner_user_id: owner })), codeGraphSetCredential: vi.fn(async () => ({})),
   };
   const deps = {
     knowledgeClientFactory: vi.fn(() => client),
+    knowledgeTaskRegistry: { record: vi.fn() },
+    logger: { info: vi.fn(), warn: vi.fn() },
     metaKernel: { invoke: vi.fn(async (action: string) => {
       if (action === 'auth/verify') return { code: 0, data: { valid: true, user: { user_id: 'alice' } } };
       if (action === 'team-member/get') return { code: member ? 0 : 403, data: member ? {} : null };
@@ -73,5 +77,49 @@ describe('Panel Git credential authorization', () => {
     const { request, client } = setup(true, 'bob');
     expect((await request('code-graph/set-credential', { code_graph_id: 'cg-test', credential_id: 'cred', share_with_team: true })).status).toBe(403);
     expect(client.codeGraphSetCredential).not.toHaveBeenCalled();
+  });
+  it('rejects incomplete legacy credentials rather than creating a public repository', async () => {
+    const { request, client } = setup();
+    for (const fields of [
+      { provider_id: 'gongfeng' }, { secret: 'token' }, { username: 'reader' },
+      { provider_id: 'gongfeng', secret: '' }, { provider_id: 123, secret: 'token' },
+      { credential_id: '' }, { credential_id: 123 }, { credential_id: null },
+      { credential_id: 'cred', secret: 'token' }, { share_with_team: 'true' },
+    ]) {
+      expect((await request('code-graph/create', { team_id: 'team', repo_url: 'https://host/repo', ...fields })).status).toBe(400);
+    }
+    expect(client.codeGraphCreate).not.toHaveBeenCalled();
+  });
+  it('preserves the exact username and secret in legacy creation', async () => {
+    const { request, client } = setup();
+    expect((await request('code-graph/create', {
+      team_id: 'team', repo_url: 'https://host/repo', provider_id: 'custom-basic',
+      username: ' reader ', secret: ' password ',
+    })).status).toBe(200);
+    expect(client.codeGraphCreate).toHaveBeenCalledWith('team', 'https://host/repo', undefined, 'alice', undefined,
+      expect.objectContaining({ providerId: 'custom-basic', username: ' reader ', secret: ' password ' }));
+  });
+});
+
+describe('Knowledge HTTP credential forwarding', () => {
+  it('preserves an incomplete legacy auth request so Knowledge can reject it', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      code: 400, message: 'secret is required',
+    }), { status: 400, headers: { 'content-type': 'application/json' } }));
+    globalThis.fetch = fetchMock;
+    try {
+      const client = new HttpKnowledgeClient({ baseUrl: 'http://knowledge.test', authToken: 'service-key', serviceId: 'svc' });
+      await expect(client.codeGraphCreate('team', 'https://host/repo', undefined, 'alice', undefined, {
+        providerId: 'gongfeng',
+      })).rejects.toThrow('secret is required');
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [, request] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(JSON.parse(request.body as string)).toMatchObject({
+        team_id: 'team', user_id: 'alice', provider_id: 'gongfeng',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
