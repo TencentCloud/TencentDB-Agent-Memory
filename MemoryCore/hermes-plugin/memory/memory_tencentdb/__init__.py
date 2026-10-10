@@ -224,6 +224,13 @@ def _coerce_limit(
     return value
 
 
+def _format_search_result(prefix: str, content: Any) -> str:
+    """Keep multiline recall results readable in Hermes logs and tool output."""
+    text = str(content or "").strip()
+    lines = text.splitlines() or [""]
+    return "\n".join([f"{prefix}{lines[0]}", *(f"  {line}" for line in lines[1:])])
+
+
 # ---------------------------------------------------------------------------
 # Tool schemas
 # ---------------------------------------------------------------------------
@@ -676,7 +683,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 for m in l1_items:
                     mtype = m.get("type", "unknown")
                     content = m.get("content", "")
-                    lines.append(f"- [{mtype}] {content}")
+                    lines.append(_format_search_result(f"- [{mtype}] ", content))
                 parts.append(
                     "<relevant-memories>\n"
                     "以下是当前对话召回的相关记忆，仅作为参考：\n\n"
@@ -857,7 +864,9 @@ class MemoryTencentdbProvider(MemoryProvider):
                     return "No memories found for this query."
                 lines = []
                 for m in items:
-                    lines.append(f"- [{m.get('type', '?')}] {m.get('content', '')}")
+                    lines.append(_format_search_result(
+                        f"- [{m.get('type', '?')}] ", m.get("content", ""),
+                    ))
                 return "\n".join(lines)
 
             if tool_name == "memory_tencentdb_conversation_search":
@@ -879,7 +888,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 for m in items:
                     role = m.get("role", "?")
                     content = m.get("content", "")
-                    lines.append(f"[{role}] {content}")
+                    lines.append(_format_search_result(f"[{role}] ", content))
                 return "\n".join(lines)
 
             if tool_name == "memory_tencentdb_read_scene":
