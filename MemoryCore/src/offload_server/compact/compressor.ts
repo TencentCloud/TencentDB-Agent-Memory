@@ -200,6 +200,27 @@ function isSystemReminder(msg: Message): boolean {
 /** Max characters to keep when truncating a large tool_result. */
 export const TOOL_RESULT_TRUNCATE_CHARS = 2000;
 
+/** Suffix appended when a tool_result is truncated. Reserved inside the char budget. */
+export function toolResultTruncationNotice(truncateChars: number): string {
+  return `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+}
+
+/**
+ * Truncate tool_result text so the result (notice included) fits in `truncateChars`.
+ *
+ * Slicing to `truncateChars` and then appending a notice produces a string still
+ * longer than the skip threshold (`content.length <= truncateChars`), so the
+ * truncation loops re-select the same message forever (#832).
+ */
+export function truncateToolResultText(content: string, truncateChars: number): string {
+  if (content.length <= truncateChars) return content;
+  const notice = toolResultTruncationNotice(truncateChars);
+  if (notice.length >= truncateChars) {
+    return content.slice(0, truncateChars);
+  }
+  return content.slice(0, truncateChars - notice.length) + notice;
+}
+
 /**
  * Find index of the last user message (excluding MMD injections).
  * Returns -1 if no user message found.
@@ -227,6 +248,7 @@ export function truncateTailToolResults(
   truncateChars: number = TOOL_RESULT_TRUNCATE_CHARS,
 ): number {
   let totalFreed = 0;
+  const seen = new Set<number>();
 
   while (tokensToFree > 0) {
     // Find the largest tool_result in protected zone
@@ -234,6 +256,7 @@ export function truncateTailToolResults(
     let maxLen = 0;
 
     for (let i = protectedTailIdx; i < messages.length; i++) {
+      if (seen.has(i)) continue;
       if (!isToolResultMessage(messages[i])) continue;
       const content = getTextContent(messages[i]);
       if (content.length <= truncateChars) continue; // already small enough
@@ -244,17 +267,20 @@ export function truncateTailToolResults(
     }
 
     if (maxIdx === -1) break; // nothing left to truncate
+    seen.add(maxIdx);
 
-    // Truncate
+    // Truncate — result (notice included) must stay within truncateChars
     const msg = messages[maxIdx];
     const oldContent = getTextContent(msg);
-    const truncated = oldContent.slice(0, truncateChars) + `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const truncated = truncateToolResultText(oldContent, truncateChars);
+    if (truncated.length >= oldContent.length) continue;
     setTextContent(msg, truncated);
 
     // Recalculate token for this message
     const newTokens = estimateTokensFn(truncated);
     const freed = tokenArray[maxIdx] - newTokens;
     tokenArray[maxIdx] = newTokens;
+    if (freed <= 0) continue;
     tokensToFree -= freed;
     totalFreed += freed;
   }
@@ -277,6 +303,7 @@ function truncateRemainingToolResults(
   truncateChars: number = TOOL_RESULT_TRUNCATE_CHARS,
 ): number {
   let totalFreed = 0;
+  const seen = new Set<number>();
 
   while (tokensToFree > 0) {
     // Find the largest tool_result content among non-deleted messages
@@ -284,7 +311,7 @@ function truncateRemainingToolResults(
     let maxLen = 0;
 
     for (let i = 0; i < messages.length; i++) {
-      if (deleteIndices.has(i)) continue;
+      if (seen.has(i) || deleteIndices.has(i)) continue;
       if (!isToolResultMessage(messages[i])) continue;
       const content = getTextContent(messages[i]);
       if (content.length <= truncateChars) continue;
@@ -295,11 +322,12 @@ function truncateRemainingToolResults(
     }
 
     if (maxIdx === -1) break;
+    seen.add(maxIdx);
 
-    // Truncate
+    // Truncate — result (notice included) must stay within truncateChars
     const oldContent = getTextContent(messages[maxIdx]);
-    const truncated = oldContent.slice(0, truncateChars) +
-      `\n\n[... content truncated, only first ${truncateChars} characters retained ...]`;
+    const truncated = truncateToolResultText(oldContent, truncateChars);
+    if (truncated.length >= oldContent.length) continue;
     setTextContent(messages[maxIdx], truncated);
 
     // Recalculate token
@@ -309,6 +337,7 @@ function truncateRemainingToolResults(
       : Math.max(1, Math.ceil(truncated.length / 4));
     tokenArray[maxIdx] = newTokens;
     const freed = oldTokens - newTokens;
+    if (freed <= 0) continue;
     tokensToFree -= freed;
     totalFreed += freed;
   }
@@ -754,8 +783,7 @@ export function aggressiveCompress(
 
     const oldTokens = tokenArray[maxIdx];
     const oldContent = getTextContent(messages[maxIdx]);
-    const truncated = oldContent.slice(0, TOOL_RESULT_TRUNCATE_CHARS) +
-      `\n\n[... content truncated, only first ${TOOL_RESULT_TRUNCATE_CHARS} characters retained ...]`;
+    const truncated = truncateToolResultText(oldContent, TOOL_RESULT_TRUNCATE_CHARS);
     setTextContent(messages[maxIdx], truncated);
     const newTokens = preciseMessageTokens(messages[maxIdx]);
     tokenArray[maxIdx] = newTokens;
@@ -1079,8 +1107,7 @@ export function emergencyCompress(
 
     const oldTokens = tokenArray[maxIdx];
     const oldContent = getTextContent(messages[maxIdx]);
-    const truncated = oldContent.slice(0, TOOL_RESULT_TRUNCATE_CHARS) +
-      `\n\n[... content truncated, only first ${TOOL_RESULT_TRUNCATE_CHARS} characters retained ...]`;
+    const truncated = truncateToolResultText(oldContent, TOOL_RESULT_TRUNCATE_CHARS);
     setTextContent(messages[maxIdx], truncated);
     const newTokens = preciseMessageTokens(messages[maxIdx]);
     tokenArray[maxIdx] = newTokens;
