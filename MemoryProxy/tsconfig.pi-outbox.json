@@ -4,5 +4,6 @@
     "src/agent-adapters/pi-outbox-*.ts",
     "src/agent-adapters/__tests__/pi-outbox-*.test.ts",
     "scripts/pi-outbox-*.ts"
-  ]
+  ],
+  "exclude": ["src/agent-adapters/__tests__/pi-outbox-pipeline.test.ts"]
 }
