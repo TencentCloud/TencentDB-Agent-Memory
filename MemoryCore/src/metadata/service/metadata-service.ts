@@ -16,7 +16,6 @@ import { DuplicateUserKeyError, type IMetadataStore } from "../store/interface.j
 import {
   checkPermission,
   canBindAsset,
-  roleDefaultCovers,
   type PermCheckResult,
   type PermCheckLogger,
 } from "./permission-checker.js";
@@ -1665,10 +1664,10 @@ export class MetadataService {
     if (fast.allowed) return fast;
 
     // 空 ACL 快路径只放行角色默认覆盖的情况；
-    // 未覆盖时（no_permission）或「受 restricted 显式授权保护」(visibility_restricted)
+    // 未覆盖时（no_permission）或 restricted 资产缺少显式授权时
     // 都需懒加载 ACL 重判，否则 acl/grant 的显式授权在 acl/check 路径上会失效。
-    if (fast.reason !== "no_permission" && fast.reason !== "visibility_restricted") return fast;
-    if (membership && roleDefaultCovers(membership.role, action)) return fast;
+    if (fast.reason !== "no_permission" &&
+        !(fast.reason === "visibility_restricted" && asset.visibility === "restricted")) return fast;
 
     const aclRecords = await this.allAclRecords(params.asset_id);
     return checkPermission({
