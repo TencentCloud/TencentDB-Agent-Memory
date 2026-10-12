@@ -1,0 +1,56 @@
+name: Pi outbox
+
+on:
+  pull_request:
+    branches: [feat/server_team, main]
+    paths: ["MemoryProxy/**", ".github/workflows/pi-outbox.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-outbox-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: MemoryProxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck:pi-outbox
+      - run: npm test
+
+  gateway-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: TencentCloud/TencentDB-Agent-Memory
+          ref: a524c609a84e41801d11cbedc77cf9718e9f3691
+          path: contract-gateway
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+      - run: npm ci --ignore-scripts
+        working-directory: MemoryProxy
+      # The pinned #1142 MemoryCore checkout does not contain a package-lock.json.
+      - run: npm install --ignore-scripts
+        working-directory: contract-gateway/MemoryCore
+      - run: npm rebuild better-sqlite3
+        working-directory: contract-gateway/MemoryCore
+      - run: npm run test:pi-outbox:contract -- ../contract-gateway/MemoryCore
+        working-directory: MemoryProxy

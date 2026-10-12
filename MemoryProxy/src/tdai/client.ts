@@ -85,6 +85,7 @@ export function buildTdaiClientForRequest(
     };
   },
   spaceId?: string,
+  durableWrite?: DurableConversationWrite,
 ): TdaiClient | null {
   const t = config.tdai;
   if (!t?.enabled || !t.memory?.enabled || !t.endpoint) return null;
@@ -101,7 +102,7 @@ export function buildTdaiClientForRequest(
     l1Limit: t.memory.l1Limit ?? 0,
     l2Limit: t.memory.l2Limit ?? 0,
     timeoutMs: t.memory.timeoutMs ?? 0,
-  });
+  }, durableWrite);
 }
 
 // ── ACL types ─────────────────────────────────────────────────────────────
@@ -131,8 +132,12 @@ export interface AclCheckResult {
   reason?: string;
 }
 
+export type DurableConversationWrite = (identity: TdaiIdentity, batches: TdaiMessage[][]) => Promise<void>;
+
 export class TdaiClient {
-  constructor(private config: TdaiMemoryConfig) {}
+  constructor(private config: TdaiMemoryConfig, private durableWrite?: DurableConversationWrite) {}
+
+  get requiresDurableCapture(): boolean { return !!this.durableWrite; }
 
   isEnabled(): boolean {
     return this.config.enabled && !!this.config.endpoint;
@@ -142,6 +147,14 @@ export class TdaiClient {
     if (!this.isEnabled() || !this.config.writeL0 || messages.length === 0) return;
 
     const chunkedMessages = chunkConversationMessages(messages);
+    if (this.durableWrite) {
+      const batches: TdaiMessage[][] = [];
+      for (let offset = 0; offset < chunkedMessages.length; offset += TDAI_CONVERSATION_MAX_MESSAGES) {
+        batches.push(chunkedMessages.slice(offset, offset + TDAI_CONVERSATION_MAX_MESSAGES));
+      }
+      await this.durableWrite(identity, batches);
+      return;
+    }
     log.info("tdai-recorder:write-l0", {
       team: identity.teamId,
       agent: identity.agentId,

@@ -687,6 +687,12 @@ sessionInit:
 #   inject=true 时，L2+L3 作为系统级上下文注入 system prompt；
 #   L0/L1 不直接注入 prompt（会破坏 KV cache），改为暴露只读工具供 LLM 主动查询。
 tdai:
+  # Enable only with a #1142-compatible gateway. Keep this directory on a
+  # persistent local volume (Docker: mount the same path across restarts).
+  piOutbox:
+    enabled: false
+    directory: /var/lib/memory-proxy/pi-outbox
+    idempotencyContract: "1142"
   enabled: true             # 是否启用 TDAI Memory
   endpoint: "http://127.0.0.1:8420"   # 内核 gateway 地址（通常与 skill.endpoint 相同）
   apiKey: "local"           # Authorization: Bearer 值（通常与 skill.serviceToken 相同）
