@@ -22,6 +22,7 @@ import { L2_SYSTEM_PROMPT, buildL2UserPrompt } from "./prompts/l2-prompt.js";
 import { handleTaskTransition, extractMmdMeta } from "./task-transition.js";
 import { buildOffloadBasePath } from "./session-utils.js";
 import { traceServerModelIo, traceServerTaskDecision } from "./opik-tracer.js";
+import { StructuredOutputParseError } from "../utils/structured-output.js";
 
 // ─── LLM Client Interface ────────────────────────────────────────────────────
 
@@ -146,6 +147,9 @@ export class OffloadTaskExecutor {
       });
       l1RawResponse = response;
       newEntries = parseL1Response(response);
+      if (newEntries.length === 0) {
+        throw new StructuredOutputParseError("L1", response);
+      }
       traceServerModelIo({
         sessionId,
         stage: "L1",
@@ -164,7 +168,7 @@ export class OffloadTaskExecutor {
         model: this.config.l1Model,
         systemPrompt: L1_SYSTEM_PROMPT,
         userPrompt,
-        responseContent: l1RawResponse ?? "",
+        responseContent: err instanceof StructuredOutputParseError ? "" : (l1RawResponse ?? ""),
         status: "error",
         errorMessage: String(err),
         durationMs: Date.now() - l1LlmStart,
