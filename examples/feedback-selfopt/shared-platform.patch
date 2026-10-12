@@ -1,0 +1,11 @@
+--- upstream/hermes_memory_host.py
++++ shared/hermes_memory_host.py
+@@ -52,7 +52,7 @@
+             '--isolated', '--db', str(db), '--scope', json.dumps(scope, separators=(',', ':')),
+             '--deadline-ms', str(deadline_ms),
+         ], cwd=core, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+-           env={**{k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL') if k in os.environ},
++           env={**{k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'SystemRoot') if k in os.environ},
+                 'HOME': str(db.parent), 'NODE_ENV': 'test'}, bufsize=0)
+         self._reader = threading.Thread(target=self._read, daemon=True)
+         self._reader.start()

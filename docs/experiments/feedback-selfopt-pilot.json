@@ -1,0 +1,38 @@
+{
+  "name": "E3-M16-C1: historical rule transfer pilot",
+  "date": "2026-09-07",
+  "evidence_kind": "historical_real_provider_pilot_aggregate",
+  "public_raw_trace_reproduction_available": false,
+  "packaged_sdk_itself_evaluated_in_pilot": false,
+  "model_both_arms": "MiniMax-M3",
+  "candidate_origin": "unchanged historical automatically generated rule",
+  "candidate_newly_generated_in_this_comparison": false,
+  "comparison": "one historical rule versus empty rules; common guarded memory pipeline",
+  "planned_per_arm": {"dialogues": 2, "turns_per_dialogue": 24, "repeats": 3, "turns": 144, "probes": 24},
+  "completed_turns": {"baseline": 129, "candidate": 137},
+  "primary_planned_denominator": {
+    "baseline": {"correct": 117, "incorrect": 12, "unknown": 15},
+    "candidate": {"correct": 136, "incorrect": 0, "unknown": 8}
+  },
+  "primary_paired": {"baseline_correct": 110, "candidate_correct": 121, "known": 121, "improved": 11, "regressed": 0, "unchanged": 110, "unknown": 23},
+  "fact_state_paired": {"baseline_correct": 110, "candidate_correct": 122, "known": 122, "unknown": 22},
+  "commit_paired": {"baseline_correct": 119, "candidate_correct": 122, "known": 122, "unknown": 22},
+  "probe_content_paired": {"baseline_correct": 17, "candidate_correct": 18, "known": 18, "unknown": 6},
+  "complete_project_dialogue": {"baseline_correct": 68, "candidate_correct": 72, "pairs": 72},
+  "originating_improvement_chains": 2,
+  "diagnostic_regression_coordinates": 30,
+  "diagnostic_dimensions_overlap": true,
+  "candidate_probe_format_regressions": 1,
+  "infrastructure_interruptions": {"baseline": 1, "candidate": 1},
+  "cost": {
+    "model_requests": 535, "metadata_requests": 4, "known_tokens": 733823,
+    "unknown_usage_requests": 0, "retries": 0, "provider_fallbacks": 0, "generation_requests": 0,
+    "matched_turns": 122,
+    "matched_tokens": {"baseline": 325828, "candidate": 335613},
+    "matched_mean_turn_seconds": {"baseline": 25.29, "candidate": 26.09}
+  },
+  "complete_plan_adoption": "inconclusive",
+  "statistical_confidence_established": false,
+  "independent_generalization_established": false,
+  "production_benefit_established": false
+}

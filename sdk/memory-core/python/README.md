@@ -4,17 +4,22 @@ Python SDK for the **TencentDB Agent Memory v2 API**.
 
 Provides synchronous (`MemoryClient`) and asynchronous (`AsyncMemoryClient`) clients.
 
-> **Distribution name**: `tencentdb-agent-memory-sdk-python` (PyPI / `pip install`)
+An optional, disabled-by-default [feedback optimizer](docs/feedback.md) accepts
+host-verified training outcomes and performs bounded policy staging, adoption,
+rejection and rollback. It owns no model transport or memory store. The supplied
+synthetic example verifies an API lifecycle, not independent memory improvement.
+
+> **Distribution name**: `tencentdb-agent-memory-sdk-python-v2` (PyPI / `pip install`)
 > **Import path**: `tencentdb_agent_memory` (Python module)
 
 ## Install
 
 ```bash
 # From PyPI (after publish)
-pip install tencentdb-agent-memory-sdk-python
+pip install tencentdb-agent-memory-sdk-python-v2
 
 # From local .whl
-pip install ./tencentdb_agent_memory_sdk_python-0.1.0-py3-none-any.whl
+pip install ./tencentdb_agent_memory_sdk_python_v2-1.0.1b1-py3-none-any.whl
 ```
 
 ## Quick Start
@@ -276,7 +281,7 @@ except TDAMError as e:
 ```bash
 # Build wheel
 python -m build
-# → dist/tencentdb_agent_memory_sdk_python-0.1.0-py3-none-any.whl
+# → dist/tencentdb_agent_memory_sdk_python_v2-1.0.1b1-py3-none-any.whl
 
 # Or just wheel
 pip wheel . --no-deps -w dist/

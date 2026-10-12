@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.feedback.json",
+  "include": ["src/core/feedback/retrieval-budget*.ts", "../examples/public-memory-feedback/*.ts"]
+}
