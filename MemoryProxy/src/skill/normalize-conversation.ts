@@ -15,6 +15,18 @@
  *   protocol="openai"    → OpenAI Chat Completions (CodeBuddy, /v1/chat/completions)
  *     - tool_result 是独立 role=tool 消息 (只有 tool_call_id, 没有 tool_name)
  *     - assistant.tool_calls 是独立数组字段
+ *   protocol="responses" → OpenAI Responses API (Codex CLI, /responses)
+ *     - 顶层字段是 `input[]` 而非 `messages[]`, item 由 `type` 判别:
+ *         · type="message" role=user/assistant/developer → content[].input_text|output_text
+ *         · type="function_call" → 独立顶层项, 含 call_id / name / arguments
+ *         · type="function_call_output" → 独立顶层项, 含 call_id / output
+ *         · type="reasoning" → 内部思考, 一律丢弃 (跟 anthropic thinking 对齐)
+ *     - developer message 等同 openai role=system, 丢弃 (不进 skill 语料)
+ *     - assistant 侧 tool 调用不是 embedded 到 message.content, 而是独立 item, 因此
+ *       "本轮 assistantMessage" 抽出来时可能包含前面若干 function_call/function_call_output
+ *       跟 text 混在一起 —— caller 传 assistantMessage 时只放"响应的 assistant text 段
+ *       + 本轮 stream 累积的 tool_use count override", 已存在的 input[] 里的 function_call
+ *       仍由 normalizeConversation 遍历时处理。
  *
  * 关键规则 (对应 docs/design/2026-07-17-conversation-normalize.md):
  *   - Anthropic user 里全是 tool_result blocks 时 → 输出 role=tool_result, 不输出 user
@@ -43,9 +55,11 @@
  * 累计爆炸 (10 次 tool_use 或 40KB 就触发一次归档)。
  */
 
+import { resolveAgentAdapter } from "../agent-adapters/index.js";
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type Protocol = "anthropic" | "openai";
+export type Protocol = "anthropic" | "openai" | "responses";
 
 /** 输出格式, 对应 core conversationMessageSchema。 */
 export interface NormalizedMessage {
@@ -55,12 +69,18 @@ export interface NormalizedMessage {
   tool_name?: string;
 }
 
-/** raw message shape - loose 因为两种协议的原始形态都要能塞进来。 */
+/** raw message shape - loose 因为三种协议的原始形态都要能塞进来。 */
 interface RawMessage {
   role?: string;
   content?: unknown;
   tool_calls?: unknown[];
   tool_call_id?: string;
+  /**
+   * codex Responses API input[] 的判别字段:
+   *   "message" | "function_call" | "function_call_output" | "reasoning" | ...
+   * anthropic/openai 的 message 里无此字段。
+   */
+  type?: string;
   [k: string]: unknown;
 }
 
@@ -85,6 +105,10 @@ export function countToolCalls(assistantMessage: Record<string, unknown> | null 
     for (const block of content) {
       const t = (block as Record<string, unknown>)?.type;
       if (t === "tool_use") n++;
+      // Codex Responses API: assistant "message" 只含 output_text; function_call
+      // 是 sibling item, 不在 assistant.content 里出现。所以 responses 场景
+      // countToolCalls(assistantMessage) 恒 0 —— 真正的 tool call 数由 stream
+      // accumulator 的 toolCallCountOverride 传入 (跟 anthropic stream 一致)。
     }
     return n;
   }
@@ -138,6 +162,27 @@ export function findLastFinalAssistant(
   rawMessages: RawMessage[],
   protocol: Protocol,
 ): number {
+  if (protocol === "responses") {
+    // Codex `input[]` 里 assistant 用 `{type:"message", role:"assistant"}`;
+    // 它的 tool 调用是 sibling item `{type:"function_call", ...}` 而非
+    // 内嵌 block。判 "本条 assistant 是 final" 的规则：从该 index 往后扫,
+    // 只要在遇到下一条 role=user 的 message 之前**没有** function_call
+    // (以及配套的 function_call_output) 出现, 就算 final answer, 本轮结束。
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+      const m = rawMessages[i];
+      if (!m || m.type !== "message" || m.role !== "assistant") continue;
+      // 扫 tail 看有没有 function_call
+      let hasFnCall = false;
+      for (let j = i + 1; j < rawMessages.length; j++) {
+        const next = rawMessages[j];
+        if (!next || typeof next !== "object") continue;
+        if (next.type === "function_call") { hasFnCall = true; break; }
+        if (next.type === "message" && next.role === "user") break;   // 到了下一轮
+      }
+      if (!hasFnCall) return i;
+    }
+    return -1;
+  }
   for (let i = rawMessages.length - 1; i >= 0; i--) {
     const m = rawMessages[i];
     if (!m || m.role !== "assistant") continue;
@@ -158,27 +203,43 @@ export function normalizeConversation(
   rawMessages: RawMessage[],
   protocol: Protocol,
   assistantMessage: RawMessage | null,
+  agentSource: string = "claude-code",
 ): NormalizedMessage[] {
   const out: NormalizedMessage[] = [];
+  // 兜底: protocol=responses 但 agentSource 默认为 claude-code (老调用方没传)
+  // → 强制切到 codex adapter, 否则 extractUserText 会用错客户端规则返 null,
+  // 归档链路整个断掉。
+  const effectiveAgentSource = protocol === "responses" && agentSource === "claude-code"
+    ? "codex"
+    : agentSource;
+  const convertOne = (m: RawMessage): NormalizedMessage[] => {
+    if (protocol === "anthropic") return convertAnthropicMessage(m, effectiveAgentSource);
+    if (protocol === "openai") return convertOpenAIMessage(m, effectiveAgentSource);
+    return convertCodexInputItem(m, effectiveAgentSource);
+  };
   for (const m of rawMessages) {
     if (!m || typeof m !== "object") continue;
-    const converted = protocol === "anthropic"
-      ? convertAnthropicMessage(m)
-      : convertOpenAIMessage(m);
-    for (const c of converted) out.push(c);
+    for (const c of convertOne(m)) out.push(c);
   }
   if (assistantMessage) {
-    const asstConverted = protocol === "anthropic"
-      ? convertAnthropicMessage({ role: "assistant", ...assistantMessage })
-      : convertOpenAIMessage({ role: "assistant", ...assistantMessage });
-    for (const c of asstConverted) out.push(c);
+    // 对 responses 协议, upstream 只回 assistant text (function_call 在流里
+    // 单独识别并已进入 input[] 下一轮请求, 归档时通过 rawMessages 遍历覆盖),
+    // 所以这里只补一条 role=assistant + text —— 复用 convertCodexInputItem
+    // 走同一路径, 保持与另外两协议对称。
+    const asst: RawMessage = protocol === "responses"
+      ? { type: "message", role: "assistant", ...assistantMessage }
+      : { role: "assistant", ...assistantMessage };
+    // 保险: 显式设 role=assistant 以防调用方传入的 assistantMessage 缺 role;
+    // convertOne 依赖 effectiveAgentSource, 上面已覆盖 protocol=responses 兜底。
+    asst.role = "assistant";
+    for (const c of convertOne(asst)) out.push(c);
   }
   return out;
 }
 
 // ─── Anthropic ─────────────────────────────────────────────────────────────
 
-function convertAnthropicMessage(msg: RawMessage): NormalizedMessage[] {
+function convertAnthropicMessage(msg: RawMessage, agentSource: string): NormalizedMessage[] {
   const role = msg.role;
   const content = msg.content;
 
@@ -197,7 +258,7 @@ function convertAnthropicMessage(msg: RawMessage): NormalizedMessage[] {
   }
 
   if (role === "user") {
-    return convertAnthropicUser(content);
+    return convertAnthropicUser(content, agentSource);
   }
 
   // 其它 role 一律 drop
@@ -249,7 +310,7 @@ function convertAnthropicAssistant(content: unknown): NormalizedMessage[] {
   return out;
 }
 
-function convertAnthropicUser(content: unknown): NormalizedMessage[] {
+function convertAnthropicUser(content: unknown, agentSource: string): NormalizedMessage[] {
   if (typeof content === "string") {
     return [{ role: "user", content }];
   }
@@ -258,34 +319,32 @@ function convertAnthropicUser(content: unknown): NormalizedMessage[] {
   }
 
   const out: NormalizedMessage[] = [];
-  const textParts: string[] = [];
   const toolResults: NormalizedMessage[] = [];
 
+  // 收集所有 tool_result（单独输出成 role=tool_result 消息）
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
     const b = block as Record<string, unknown>;
-    const t = b.type;
-
-    if (t === "text") {
-      const txt = b.text;
-      if (typeof txt === "string" && txt.length > 0) textParts.push(txt);
-    } else if (t === "tool_result") {
-      const id = typeof b.tool_use_id === "string" ? b.tool_use_id : "";
-      // tool_result.content 可能是 string / array of {type:"text",text} / other
-      const resultText = anthropicToolResultContentToString(b.content);
-      toolResults.push({
-        role: "tool_result",
-        content: resultText,
-        tool_call_id: id,
-        // 注意: anthropic tool_result 没有 tool_name 字段, proxy 也不做反查
-        // (core schema 已放宽为 optional)
-      });
-    }
-    // image / 其它 block type 丢弃
+    if (b.type !== "tool_result") continue;
+    const id = typeof b.tool_use_id === "string" ? b.tool_use_id : "";
+    // tool_result.content 可能是 string / array of {type:"text",text} / other
+    const resultText = anthropicToolResultContentToString(b.content);
+    toolResults.push({
+      role: "tool_result",
+      content: resultText,
+      tool_call_id: id,
+      // 注意: anthropic tool_result 没有 tool_name 字段, proxy 也不做反查
+      // (core schema 已放宽为 optional)
+    });
   }
 
-  if (textParts.length > 0) {
-    out.push({ role: "user", content: textParts.join("\n") });
+  // text 部分：通过 agentAdapter 按客户端规则提取"用户真正键入的文本"：
+  //   - claude-code: 取最后一个 text block（跳过 <system-reminder> 前缀元数据）
+  //   - codebuddy / unknown: 走保守的"拼接所有 text"（等价改造前老逻辑）
+  const adapter = resolveAgentAdapter(agentSource);
+  const userText = adapter.extractUserText(content);
+  if (typeof userText === "string" && userText.length > 0) {
+    out.push({ role: "user", content: userText });
   }
   for (const tr of toolResults) out.push(tr);
   return out;
@@ -310,7 +369,7 @@ function anthropicToolResultContentToString(rc: unknown): string {
 
 // ─── OpenAI ────────────────────────────────────────────────────────────────
 
-function convertOpenAIMessage(msg: RawMessage): NormalizedMessage[] {
+function convertOpenAIMessage(msg: RawMessage, agentSource: string): NormalizedMessage[] {
   const role = msg.role;
   const content = msg.content;
 
@@ -319,7 +378,18 @@ function convertOpenAIMessage(msg: RawMessage): NormalizedMessage[] {
     return [];
   }
   if (role === "user") {
-    return [{ role: "user", content: contentToString(content) }];
+    // 通过 adapter 按客户端规则提取"用户真正键入的文本"，跟 anthropic 侧对称：
+    //   - codebuddy: 走 <user_query> 抽取（剥掉 <user_info> / <additional_data> /
+    //     <question_answer> 等 CB pseudo-XML wrapper），返回 null 时该轮不进
+    //     skill buffer（避免污染 skill 抽取语料）
+    //   - unknown / cursor 等: 走 default 兜底（拼接所有 text，等价改造前老逻辑）
+    // 详见 agent-adapters/codebuddy.ts + common/user-query-extractor.ts。
+    const adapter = resolveAgentAdapter(agentSource);
+    const userText = adapter.extractUserText(content);
+    if (typeof userText === "string" && userText.length > 0) {
+      return [{ role: "user", content: userText }];
+    }
+    return [];
   }
   if (role === "tool") {
     // openai role=tool → role=tool_result
@@ -369,6 +439,106 @@ function convertOpenAIAssistant(content: unknown, toolCalls: unknown): Normalize
   }
 
   return out;
+}
+
+// ─── Codex Responses API (input[] items) ───────────────────────────────────
+
+/**
+ * 把 codex `input[]` 的一个 item 翻译成 5-role NormalizedMessage[]。
+ *
+ * item 类型清单 (docs/2026-08-07-codex-integration-plan.md §7.2 / agent-adapters/codex.ts):
+ *   - {type:"message", role:"user"|"assistant"|"developer", content:[...]}
+ *   - {type:"function_call", call_id, name, arguments}
+ *   - {type:"function_call_output", call_id, output}
+ *   - {type:"reasoning", encrypted_content}
+ *
+ * 映射:
+ *   message.developer         → 丢弃 (等同 openai role=system, 不进 skill 语料)
+ *   message.user              → role=user, content = 用户真键入文本 (走 codex adapter)
+ *   message.assistant         → role=assistant, content = output_text 拼接
+ *   function_call             → role=tool_call, tool_call_id, tool_name, content=arguments
+ *   function_call_output      → role=tool_result, tool_call_id, content=output
+ *   reasoning                 → 丢弃 (跟 anthropic thinking 对齐; 不进 skill 语料)
+ *   其它未知 type              → 丢弃 (偏严不偏宽, 未来 codex 加新 item type 也不会误采)
+ */
+function convertCodexInputItem(item: RawMessage, agentSource: string): NormalizedMessage[] {
+  const type = item.type;
+
+  if (type === "message") {
+    const role = item.role;
+    // developer / system / 其它 role 一律丢
+    if (role === "user") {
+      return convertCodexUserMessage(item.content, agentSource);
+    }
+    if (role === "assistant") {
+      return convertCodexAssistantMessage(item.content);
+    }
+    return [];
+  }
+
+  if (type === "function_call") {
+    const id = typeof item.call_id === "string" ? item.call_id : "";
+    const name = typeof item.name === "string" ? item.name : undefined;
+    const argsRaw = item.arguments;
+    const args = typeof argsRaw === "string" ? argsRaw : safeStringify(argsRaw);
+    const call: NormalizedMessage = {
+      role: "tool_call",
+      content: args,
+      tool_call_id: id,
+    };
+    if (name) call.tool_name = name;
+    return [call];
+  }
+
+  if (type === "function_call_output") {
+    const id = typeof item.call_id === "string" ? item.call_id : "";
+    const outputRaw = item.output;
+    const output = typeof outputRaw === "string" ? outputRaw : safeStringify(outputRaw);
+    return [{
+      role: "tool_result",
+      content: output,
+      tool_call_id: id,
+    }];
+  }
+
+  // reasoning / 其它一律 drop
+  return [];
+}
+
+/** codex user message 里 content 是 [{type:"input_text",text}, ...] */
+function convertCodexUserMessage(content: unknown, agentSource: string): NormalizedMessage[] {
+  // 优先复用 codex agent adapter 的 extractUserText —— 它跟 codexHandler
+  // 里 `extractCodexUserText(input)` 是同一份实现 (agent-adapters/codex.ts:81),
+  // 语义一致, 未来任何抽取规则升级只需改那一份。这里传单条 message 是包一层
+  // adapter 期望的 [message] 数组即可 (它按 role=user 过滤)。
+  //   注: adapter.extractUserText 期望的入参是完整 input[] 数组, 但内部只按
+  //   条 iterate 挑最后一条 user; 传单条也能命中。
+  const singleItem = { type: "message", role: "user", content } as Record<string, unknown>;
+  const adapter = resolveAgentAdapter(agentSource);
+  const text = adapter.extractUserText([singleItem]);
+  if (typeof text === "string" && text.length > 0) {
+    return [{ role: "user", content: text }];
+  }
+  return [];
+}
+
+/** codex assistant message 里 content 是 [{type:"output_text",text}, ...] */
+function convertCodexAssistantMessage(content: unknown): NormalizedMessage[] {
+  if (typeof content === "string") {
+    return content.length > 0 ? [{ role: "assistant", content }] : [];
+  }
+  if (!Array.isArray(content)) return [];
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    // codex assistant text 用 output_text; 兜底 text 万一 codex 用了别的写法
+    if ((b.type === "output_text" || b.type === "text") && typeof b.text === "string") {
+      parts.push(b.text);
+    }
+  }
+  if (parts.length === 0) return [];
+  return [{ role: "assistant", content: parts.join("\n") }];
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

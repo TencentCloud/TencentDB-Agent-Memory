@@ -32,6 +32,8 @@ import type { LLMRunner, Logger, TraceContext } from "../types.js";
 import { buildTraceParams } from "../types.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
+import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
+import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
 
 const TAG = "[memory-tdai] [extractor]";
 
@@ -52,6 +54,8 @@ export interface SceneExtractorOptions {
   maxScenes?: number;
   /** Prompt family for L2 scene extraction (default: chat). */
   promptMode?: MemoryPromptMode;
+  /** Resolved custom strategy. Undefined preserves the current system prompt exactly. */
+  memoryPrompt?: ResolvedMemoryPrompt;
   sceneBackupCount?: number;
   timeoutMs?: number;
   logger?: ExtractorLogger;
@@ -98,6 +102,7 @@ export class SceneExtractor {
   private maxScenes: number;
   private sceneBackupCount: number;
   private promptMode: MemoryPromptMode;
+  private memoryPrompt: ResolvedMemoryPrompt | undefined;
   private timeoutMs: number;
   private logger: ExtractorLogger | undefined;
   private instanceId: string | undefined;
@@ -108,6 +113,7 @@ export class SceneExtractor {
     this.dataDir = opts.dataDir;
     this.maxScenes = opts.maxScenes ?? 15;
     this.promptMode = opts.promptMode ?? "chat";
+    this.memoryPrompt = opts.memoryPrompt;
     this.sceneBackupCount = opts.sceneBackupCount ?? 10;
     this.timeoutMs = opts.timeoutMs ?? 300_000; // 5 min — LLM may do multiple tool calls
     this.logger = opts.logger;
@@ -227,7 +233,7 @@ export class SceneExtractor {
 
     const currentTimestamp = formatTimestamp(new Date());
 
-    const { systemPrompt, userPrompt } = buildSceneExtractionPrompt({
+    const { systemPrompt: baseSystemPrompt, userPrompt } = buildSceneExtractionPrompt({
       memoriesJson,
       sceneSummaries: sceneSummaries || "(无已有场景)",
       currentTimestamp,
@@ -236,6 +242,7 @@ export class SceneExtractor {
       maxScenes: this.maxScenes,
       promptMode: this.promptMode,
     });
+    const systemPrompt = composeMemorySystemPrompt(baseSystemPrompt, this.memoryPrompt);
     this.logger?.debug?.(`${TAG} extract() prompt built: ${userPrompt.length} chars (${Date.now() - promptStartMs}ms)`);
 
     // Phase 4: Run LLM agent (sandboxed to scene_blocks/)

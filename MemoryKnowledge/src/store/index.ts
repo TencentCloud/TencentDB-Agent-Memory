@@ -75,3 +75,24 @@ export type {
   PageRmResult,
   WriteOutcome,
 } from "./wiki-service.js";
+
+export { AutoSyncScheduler, resolveAutoSyncConfig } from "./auto-sync-scheduler.js";
+export type { AutoSyncConfig, AutoSyncSchedulerDeps, WikiImporter } from "./auto-sync-scheduler.js";
+
+export { toCodeGraphTarget, toWikiTarget, targetKey } from "./auto-sync-target.js";
+export type { SyncTarget, SyncTargetKind } from "./auto-sync-target.js";
+
+export { createCredentialStore } from "../source-auth/credential-store.js";
+export { encodeSecret, decodeSecret } from "../source-auth/credential-codec.js";
+export type {
+  ICredentialStore,
+  SourceCredential,
+  CredentialKind,
+  CredentialStatus,
+  ResourceRef,
+  ResourceType,
+} from "../source-auth/types.js";
+
+export { buildCloneUrl, stripCredentials } from "../code-source/clone-url.js";
+export { CodeSourceRegistry } from "../code-source/registry.js";
+export type { CodeSourceMeta, ICodeSourceProvider } from "../code-source/types.js";

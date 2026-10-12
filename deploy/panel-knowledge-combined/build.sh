@@ -85,13 +85,9 @@ rsync -a --delete \
   "$TMC_DIR"/ "$CTX_DIR/panel"/
 
 # rsync knowledge（builder stage 编译需要 src/ + package*.json + tsconfig.json + tsdown.config.ts，
-# runtime 需要 docs/api/openapi.yaml（Swagger UI）。排除其他文档、测试、.claude、docker 配置等）
+# runtime 需要包根的 openapi.yaml（Swagger UI）。排除文档、测试、.claude、docker 配置等）
 echo "[build-combined] rsync knowledge → $CTX_DIR/knowledge/"
 rsync -a --delete \
-  --include 'docs/' \
-  --include 'docs/api/' \
-  --include 'docs/api/openapi.yaml' \
-  --exclude 'docs/*' \
   --exclude .git \
   --exclude node_modules \
   --exclude dist \

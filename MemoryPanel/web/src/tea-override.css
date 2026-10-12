@@ -111,7 +111,7 @@ body,
  * 业务页面无需自行处理视口高度与外层间距。 */
 ._memory-content-body {
   max-width: 100%;
-  min-height: calc(100% - 36px);
+  min-height: calc(100% - 34px);
   padding: 16px;
   background: var(--tea-color-bg-page-default);
 }
@@ -120,6 +120,63 @@ body,
   width: 100%;
   min-width: 0;
   min-height: 100%;
+  /* 路由切换连续性：快速淡入 + 轻微上移，仅 transform/opacity，不做加载编排 */
+  animation: _page-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes _page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 视图切换（卡片/列表）快速淡入，使布局状态变化可感知 */
+._view-swap {
+  animation: _view-swap-in 0.15s ease-out;
+}
+
+@keyframes _view-swap-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 资源详情头的元数据行（次级信息：Branch / commit / 时间 / 页数 等），两页通用 */
+._detail-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-left: 28px; /* 与 icon(20px) + gap(8px) 对齐，让元信息从标题下方开始 */
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._detail-meta-sep {
+  color: var(--tea-color-text-disabled);
+}
+
+/* 尊重系统「减少动态效果」偏好：全局关闭动画/过渡 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* 防止 Tea 默认 margin 与 Tailwind 布局冲突 */
@@ -128,7 +185,8 @@ body,
 }
 
 /* 链接颜色 */
-a, .tea-link-external {
+a,
+.tea-link-external {
   color: var(--tea-color-text-link-default);
 }
 
@@ -185,11 +243,46 @@ a, .tea-link-external {
   color: var(--tea-color-text-on-bg-brand-default);
 }
 
-.tea-menu--light .tea-menu__list > li:not(.tea-menu__label).is-selected > .tea-menu__item .tea-menu__text {
+.tea-menu--light
+  .tea-menu__list
+  > li:not(.tea-menu__label).is-selected
+  > .tea-menu__item
+  .tea-menu__text {
   color: var(--tea-color-text-on-bg-brand-default) !important;
 }
 
 /* 分组标题与 pill 间距对齐 */
 .tea-menu--light .tea-menu__list > li.tea-menu__label {
   padding-left: 8px;
+}
+
+/* ===== Onboarding Guide 气泡自适应（避免窄视口/边缘元素时气泡溢出视口） =====
+ * Tea Guide 内部 overlay modifiers 关闭了 flip / preventOverflow / hide，
+ * 气泡固定宽 356px（.tea-guide{min-width:356px;max-width:356px}）会硬溢出。
+ * 覆盖为「按视口宽度自适应，且贴 16px 视口安全边」，让按钮与正文始终可点。 */
+.tea-guide {
+  min-width: 280px;
+  max-width: min(360px, calc(100vw - 32px));
+}
+
+/* ===== Onboarding Guide footer 平铺布局 =====
+ * Tea Guide 默认 footer 用 flex 横排：圆点（dot）在左、按钮组（btn-group）在右。
+ * 8 步引导时 dot 占 ~120px，3 个按钮（跳过/上一步/下一步）总宽超 200px，
+ * 总宽 320+ 不够，圆点会挤掉按钮，按钮被迫换行堆成大块。
+ * 改为「圆点独占一行（居中），按钮组在第二行水平平铺不换行」，保证 3 个按钮始终同行。 */
+.tea-guide__footer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.tea-guide__footer .tea-guide__dot {
+  justify-content: center;
+}
+.tea-guide__footer .tea-guide__btn-group {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }

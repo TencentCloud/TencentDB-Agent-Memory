@@ -102,7 +102,14 @@ export class OpenAIAdapter implements ProtocolAdapter {
         }
       }
 
-      return { role, blocks };
+      // Preserve `reasoning_content` (deepseek thinking-mode; dsh 客户端必带此字段
+      // 回传上游,否则 deepseek 官方 400 `reasoning_content ... must be passed back`).
+      // 其它 OpenAI 兼容上游不认识这个字段,pass-through 无害。
+      const msg: ContextMessage = { role, blocks };
+      if (typeof m.reasoning_content === "string") {
+        msg.metadata = { ...(msg.metadata ?? {}), reasoning_content: m.reasoning_content };
+      }
+      return msg;
     }
 
     // system or user
@@ -191,6 +198,12 @@ export class OpenAIAdapter implements ProtocolAdapter {
             },
           };
         });
+      }
+
+      // Restore reasoning_content preserved during parse (deepseek thinking mode).
+      const rc = msg.metadata?.reasoning_content;
+      if (typeof rc === "string") {
+        result.reasoning_content = rc;
       }
 
       return result;

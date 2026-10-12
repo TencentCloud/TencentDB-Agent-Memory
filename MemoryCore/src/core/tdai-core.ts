@@ -64,6 +64,7 @@ import {
   SkillExtractor,
   resolveSkillConfig,
   SKILL_REVIEW_PROMPT,
+  SKILL_REVIEW_PROMPT_STRICT,
 } from "./skill/index.js";
 // Skill async-extract 现在完全走 conversation-add 侧的 agent 队列 + Worker
 // (SkillTriggerService.archive → agent 队列 → SkillConversationExtractWorker),
@@ -631,6 +632,7 @@ export class TdaiCore {
     model: string;
     maxTokens: number;
     timeoutMs: number;
+    stream: boolean;
   } {
     const resolved = resolveStandaloneLlmForRuntime(this.cfg.llm, this.instanceId);
     return {
@@ -639,6 +641,7 @@ export class TdaiCore {
       model: resolved.model,
       maxTokens: resolved.maxTokens ?? 4096,
       timeoutMs: resolved.timeoutMs ?? 120_000,
+      stream: resolved.stream ?? false,
     };
   }
 
@@ -903,6 +906,10 @@ export class TdaiCore {
         store: skillStore,
         resources: skillResources,
         versioning: skillVersioning,
+        // 旧版本清理双维度:时间 (versionTtlSeconds) + 数量 (maxNonHeadVersions)。
+        // 都不配就是 0 (关闭), 行为与新增前完全一致, 向后兼容。
+        versionTtlSeconds: resolved.versionTtlSeconds,
+        maxNonHeadVersions: resolved.maxNonHeadVersions,
         onSkillAccessed: assetHooks?.onSkillAccessed,
         onSkillArchived: assetHooks?.onSkillArchived,
       });
@@ -944,9 +951,15 @@ export class TdaiCore {
             core: this.skillCore,
             runner: llmRunner,
             systemPrompt: SKILL_REVIEW_PROMPT,
+            // 冷启动/批量导入 (asset-import) 会在请求 body 传 strict_mode:true,
+            // 经 SkillTaskEntry.mode 一路带到这里的 extract({mode:'strict'})。
+            // 默认 (mode 未传) 一律走上面的 SKILL_REVIEW_PROMPT, 老流量零影响。
+            strictSystemPrompt: SKILL_REVIEW_PROMPT_STRICT,
             maxIterations: resolved.extraction.maxIterations,
             headChars: resolved.extraction.headChars,
             tailChars: resolved.extraction.tailChars,
+            maxTokens: resolved.extraction.maxTokens,
+            prefixSkillsLimit: resolved.extraction.prefixSkillsLimit,
             logger: this.logger,
           });
         } else {
@@ -1004,6 +1017,7 @@ export class TdaiCore {
         model: runtimeLlm.model,
         maxTokens: runtimeLlm.maxTokens,
         timeoutMs: runtimeLlm.timeoutMs,
+        stream: runtimeLlm.stream,
       },
       // Default to enabled so the runner doesn't strip caller-provided tools.
       enableTools: true,
@@ -1037,6 +1051,15 @@ export class TdaiCore {
     store: IMemoryStore,
     embedding: EmbeddingService,
     storage?: StorageAdapter,
+    /**
+     * service 模式必须传：跨节点保护 checkpoint 读改写的分布式锁。
+     *
+     * 同 instance 的 checkpoint 是**同一个** COS 对象，而 L1 的任务锁是
+     * session 级 —— 不同 session / 不同 agent 会在多节点合法并发，
+     * 若不额外互斥，后写者会用旧快照覆盖先写者的 runner_states（L1 游标丢失）。
+     * standalone 单进程不需要传（进程内 withFileLock 已足够）。
+     */
+    checkpointLock?: import("../utils/checkpoint.js").CheckpointLockOptions,
   ): Promise<{ storedCount: number; creditUsed: number; hasMore: boolean; hasFullBacklog: boolean; profileScopes: string[] }> {
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
@@ -1071,6 +1094,7 @@ export class TdaiCore {
       getInstanceId: () => this.instanceId,
       llmRunner,
       storage: storage ?? this.getStorage(),
+      checkpointLock,
     });
     const result = await runner({ sessionKey, msg: [], bg_msg: [] });
 

@@ -28,7 +28,17 @@ KS_PUBLIC_URL="${KNOWLEDGE_PUBLIC_BASE_URL:-${KS_INTERNAL_URL}/v3}"
 PROXY_BASE_URL="${KNOWLEDGE_LLM_PROXY_BASE_URL:-}"
 
 # 仅当用户未提供 instances 文件时，才用 REMOTE_INSTANCE_* env 生成单实例配置。
+# REMOTE_INSTANCE_PROXY_URL 为可选项：
+#   - 未设置 → 不写 proxy_endpoint 字段，Panel UI "客户端接入地址"卡片仍按老行为
+#     回落到 gateway_endpoint（线上部署 gateway 前置 proxy 时两者合一，无需改动）
+#   - 已设置 → 写入 proxy_endpoint；此时 UI 卡片显示的接入地址会切到 proxy，
+#     但 Panel 后端 → Kernel 的转发地址仍走 gateway_endpoint（不受影响）
 if [[ "$USER_PROVIDED_INSTANCES" -ne 1 ]]; then
+# 只有非空时才拼一行 proxy_endpoint 到 dict 字面量里；空则完全不出现，保持老行为。
+PROXY_ENDPOINT_LINE=""
+if [[ -n "${REMOTE_INSTANCE_PROXY_URL:-}" ]]; then
+  PROXY_ENDPOINT_LINE="    'proxy_endpoint': '${REMOTE_INSTANCE_PROXY_URL}',"
+fi
 python3 - <<PY
 import json
 from pathlib import Path
@@ -38,6 +48,7 @@ p.write_text(json.dumps({
     'id': '${INSTANCE_ID}',
     'name': '${INSTANCE_NAME}',
     'gateway_endpoint': '${REMOTE_INSTANCE_URL}',
+${PROXY_ENDPOINT_LINE}
     'api_key': '${REMOTE_INSTANCE_KEY}',
   }]
 }, ensure_ascii=False, indent=2) + '\n')
@@ -52,6 +63,7 @@ trap cleanup INT TERM EXIT
 export API_PREFIX="${API_PREFIX:-/v3}"
 export KNOWLEDGE_DATA_DIR="${KNOWLEDGE_DATA_DIR:-/data/knowledge}"
 export KNOWLEDGE_DB_PATH="${KNOWLEDGE_DB_PATH:-/data/knowledge/knowledge.db}"
+export TDAI_AGENT_TEMPLATE_DIR="${TDAI_AGENT_TEMPLATE_DIR:-/data/knowledge/agent-templates}"
 export KNOWLEDGE_PUBLIC_BASE_URL="${KS_PUBLIC_URL}"
 export TMC_CALLBACK_URL="${TMC_CALLBACK_URL:-http://127.0.0.1:${PANEL_PORT}}"
 
@@ -87,6 +99,7 @@ fi
 
 cd /app/knowledge
 PORT="${KNOWLEDGE_PORT}" LOG_LEVEL="${LOG_LEVEL:-info}" \
+  KNOWLEDGE_SERVICE_KEY="${KNOWLEDGE_SERVICE_KEY:-}" \
   node "$(test -f dist/server.js && echo dist/server.js || echo dist/server.mjs)" 2>&1 \
   | tee -a "$KNOWLEDGE_LOG" &
 KNOWLEDGE_PID=$!

@@ -1,5 +1,42 @@
 # Changelog — tencentdb-agent-memory-sdk-python
 
+## Unreleased — 2026-09-20
+
+### Added
+
+- **Optional ``strict_mode: Optional[bool] = None`` on ``extract()`` and
+  ``conversation_add()`` (both sync + async)** — when ``True``, server
+  routes the resulting extract task through the strict v1 skill review
+  prompt (five-class classification + four-dimension ≥72 acceptance gate)
+  instead of the default v2 broad-capture prompt. Intended for cold-start
+  / bulk-import scenarios (e.g. ``agents/setup-proxy.sh`` →
+  ``agents/asset-import.ts`` replaying historical IDE sessions). Realtime
+  extraction should leave it unset — behaviour is unchanged. Fully
+  backward compatible: ``None`` / ``False`` keeps the existing default
+  path (field is stripped from the request body).
+
+## Unreleased — 2026-07-31
+
+### Added
+
+- **`SkillClient.conversation_force_archive(...)`** and
+  **`AsyncSkillClient.conversation_force_archive(...)`** — wrapper for
+  ``POST /v3/skill/conversation/force-archive``, the manual archive
+  trigger added in ``MemoryCore@7ed54292`` (2026-07-28). Complements
+  the existing ``/conversation/add`` auto-triggers (tool_call ≥ 10,
+  bytes ≥ 40 KB) by letting callers force an archive regardless of
+  buffer size. Brings the SDK to the full 15 ``/v3/skill/*`` endpoints
+  defined by ``src/gateway/skill-handlers.ts``.
+- Required kwargs: ``session_id / user_id / team_id / agent_id``;
+  optional ``space_id / reason / task_id``. Like ``conversation_add``,
+  this method does NOT merge constructor defaults — callers pass ids
+  explicitly.
+- Response is ``{"status": "empty" | "archived", ...}``. When
+  ``status == "archived"``, ``task_id / archived_at_ms / archive_key``
+  sit at the top level (NOT nested under ``archived``), which is
+  different from ``conversation_add``'s response shape — see the
+  docstring.
+
 ## Unreleased — 2026-07-20
 
 ### Added

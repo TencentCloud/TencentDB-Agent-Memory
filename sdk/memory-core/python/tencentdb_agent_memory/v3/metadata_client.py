@@ -28,7 +28,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-from .._http import AsyncHttpStub, HttpStub, Stub
+from .._http import Stub
+from .._v3_http import AsyncHttpStub, HttpStub
 from ..errors import ParamError
 
 _V3 = "/v3/meta"
@@ -43,6 +44,11 @@ def _body(p: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(p, dict):
         raise ParamError("request payload must be a dict")
     return _strip_none(p)
+
+
+def _require_any(payload: Dict[str, Any], fields: tuple[str, ...], operation: str) -> None:
+    if not any(isinstance(payload.get(field), str) and payload[field].strip() for field in fields):
+        raise ParamError(f"{operation} requires one of {', '.join(fields)}")
 
 
 class _MetadataMethodsMixin:
@@ -116,9 +122,14 @@ class _MetadataMethodsMixin:
         *,
         pagination: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if isinstance(user_id_or_request, str):
-            return self._stub.post(f"{_V3}/team/list", _body({"user_id": user_id_or_request, **(pagination or {})}))
-        return self._stub.post(f"{_V3}/team/list", _body(user_id_or_request or {}))
+        payload = (
+            {"user_id": user_id_or_request, **(pagination or {})}
+            if isinstance(user_id_or_request, str)
+            else (user_id_or_request or {})
+        )
+        payload = _body(payload)
+        _require_any(payload, ("user_id", "user_key"), "list_teams")
+        return self._stub.post(f"{_V3}/team/list", payload)
 
     # ── TeamMember ──
 
@@ -180,12 +191,14 @@ class _MetadataMethodsMixin:
         status: Optional[str] = None,
         pagination: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if isinstance(team_id_or_request, str):
-            return self._stub.post(
-                f"{_V3}/task/list",
-                _body({"team_id": team_id_or_request, "status": status, **(pagination or {})}),
-            )
-        return self._stub.post(f"{_V3}/task/list", _body(team_id_or_request or {}))
+        payload = (
+            {"team_id": team_id_or_request, "status": status, **(pagination or {})}
+            if isinstance(team_id_or_request, str)
+            else (team_id_or_request or {})
+        )
+        payload = _body(payload)
+        _require_any(payload, ("team_id", "creator_user_id", "creator_user_key"), "list_tasks")
+        return self._stub.post(f"{_V3}/task/list", payload)
 
     def _archive_task(self, task_id: str) -> Dict[str, Any]:
         return self._stub.post(f"{_V3}/task/archive", {"task_id": task_id})
@@ -334,14 +347,14 @@ class MetadataClient(_MetadataMethodsMixin):
         *,
         user_key: Optional[str] = None,
         timeout: float = 30,
-        verify: bool = False,
+        verify: bool = True,
         stub: Optional[Stub] = None,
     ) -> None:
         if stub is not None:
             self._stub = stub
         else:
             if not service_id:
-                raise ValueError("service_id must be provided")
+                raise ParamError("service_id must be provided")
             if not api_key:
                 raise ParamError("api_key must be provided")
             self._stub = HttpStub(
@@ -621,14 +634,14 @@ class AsyncMetadataClient(_MetadataMethodsMixin):
         *,
         user_key: Optional[str] = None,
         timeout: float = 30,
-        verify: bool = False,
+        verify: bool = True,
         stub: Optional[Any] = None,
     ) -> None:
         if stub is not None:
             self._stub = stub
         else:
             if not service_id:
-                raise ValueError("service_id must be provided")
+                raise ParamError("service_id must be provided")
             if not api_key:
                 raise ParamError("api_key must be provided")
             self._stub = AsyncHttpStub(

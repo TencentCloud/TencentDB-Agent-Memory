@@ -127,6 +127,40 @@ asyncio.run(main())
 | Offload | `offload_ingest()` | `POST /v3/offload/ingest` |
 | Offload | `offload_compact()` | `POST /v3/offload/compact` |
 | Offload | `offload_query_mmd()` | `POST /v3/offload/query-mmd` |
+| 资产 | `clear_chat_memory()` | `POST /v3/chat-memory/clear` |
+
+#### 批量删除与清空
+
+`delete_conversation()`（L0）与 `delete_atomic()`（L1）支持批量：
+
+```python
+# L0：按消息 id 批量删除（≤5000）
+client.delete_conversation(message_ids=["m1", "m2"])
+
+# L0：按会话批量清空（≤100），两者可同时给
+client.delete_conversation(session_ids=["s1", "s2"])
+
+# L1：按笔记 id 批量删除（≤5000）
+client.delete_atomic(["a1", "a2"])
+```
+
+> **注意**：删除路径**不会**回退到构造时的 `session_id`。
+> 只想按 `message_ids` 删几条消息时，不会意外把整个会话删掉；
+> 要清空会话必须显式传 `session_ids`。
+
+`clear_chat_memory()` 是**资产级**操作，一键清空 memory 全部内容但保留资产：
+
+```python
+res = client.clear_chat_memory(["chat_memory-t1-agt1"])
+if not res["all_cleared"]:
+    # 失败项带 retryable 标志；True 表示服务端已自动重试仍失败，稍后可再试
+    retryable = [i for i in res["items"] if not i["cleared"] and i.get("retryable")]
+```
+
+- 清空 L0/L1/L2/L3 + 向量 + 文件；保留 `memory_id`、Agent 绑定、ACL、Owner、可见性
+- 清空后 Agent 继续用原 `memory_id` 写入，无需重建
+- 任一 `memory_id` 不存在或不是 chat_memory 时**整批拒绝**；重复调用幂等
+- 权限：与其它删除接口一致，内核不做用户级鉴权。需要「仅 Owner 可清空」请走面板后端 `/api/v1/chat-memory/clear`
 
 ### v2（兼容）
 
@@ -162,6 +196,35 @@ asyncio.run(main())
 | L2/L3 | 仅三元组隔离 | 仅三元组隔离（无变化） |
 | 响应包络 | `{ code, message, data, request_id }` | 同 v2，结构不变 |
 
+### 自定义 Prompt 与生成溯源
+
+```python
+from tencentdb_agent_memory.v3 import MemoryGenerationLogClient, MemoryPromptClient
+
+prompts = MemoryPromptClient(endpoint, api_key, service_id, team_id="team-1", agent_id="agent-1")
+created = prompts.create(name="决策抽取", layer="l1", prompt="重点提取明确决策。")
+prompts.apply(created["memory_prompt_id"], layer="l1", agent_ids=["agent-1"])
+effective = prompts.get_effective(layer="l1")
+settings = prompts.list_settings(memory_prompt_id=created["memory_prompt_id"], layer="l1")
+
+logs = MemoryGenerationLogClient(endpoint, api_key, service_id)
+provenance = logs.get_by_memory_id("memory-id", "l1")
+```
+
+| SDK 方法 | 接口 | 说明 |
+|----------|------|------|
+| `create()` | `POST /v3/memory-prompt/create` | 创建 Prompt |
+| `get()` / `list()` / `get_effective()` | `GET /v3/memory-prompt/get` | 查详情、列表或最终生效 Prompt |
+| `update()` | `POST /v3/memory-prompt/update` | 更新名称/内容；相同值为幂等 no-op |
+| `delete()` | `POST /v3/memory-prompt/delete` | 批量删除 Prompt 并清理其绑定 |
+| `apply()` / `clear()` | `POST /v3/memory-prompt/set` | 应用、替换或清除目标绑定 |
+| `list_settings()` | `GET /v3/memory-prompt/setting/list` | 按 Prompt、目标或 Layer 查询当前绑定 |
+| `list_setting_logs()` | `GET /v3/memory-prompt/log` | 查询不可变的绑定变更日志 |
+| `MemoryGenerationLogClient.list()` | `GET /v3/memory-generation-log/list` | 按 Layer/时间分页查询生成日志 |
+| `get()` / `get_by_memory_id()` | `GET /v3/memory-generation-log/get` | 按日志 ID 或 Memory ID + Layer 查询溯源 |
+
+`list_settings()` 不传筛选条件时列出当前 Instance 的全部绑定；传 `memory_prompt_id` 可反向查询该 Prompt 绑定到哪些目标。传 `agent_id` 时必须同时传 `team_id`。异步版本对应 `AsyncMemoryPromptClient` 和 `AsyncMemoryGenerationLogClient`。
+
 ### MetadataClient（v3 管理面）
 
 `MetadataClient` / `AsyncMetadataClient` 封装网关 v3 管理面接口。与 `MemoryClient` 不同，**不需要** isolation 四元组（team/agent/user/session）；鉴权用 Bearer + `x-tdai-service-id`，`team_id` 等业务字段放在请求 body 里。
@@ -169,11 +232,13 @@ asyncio.run(main())
 当前先落地 **Knowledge 实体管理** 5 个端点（`/v3/knowledge/*`，类型 `wiki` | `code-graph`）。其余 v3/meta 实体（user/team/agent/task/asset/acl/config）后续再补。
 
 ```python
+import os
+
 from tencentdb_agent_memory.v3 import MetadataClient
 
 meta = MetadataClient(
     endpoint="http://127.0.0.1:8420",
-    api_key="verify-token",        # 网关 Bearer（KERNEL_AUTH_TOKEN）
+    api_key=os.environ["KERNEL_AUTH_TOKEN"],  # 网关 Bearer，勿硬编码
     service_id="knowledge-debug",  # x-tdai-service-id
     # user_key="...",              # 可选；system_admin 接口才需要
 )

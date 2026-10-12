@@ -21,7 +21,7 @@
     {
       "id": "mem-xxxxxxxx",
       "name": "我的 Memory 实例",
-      "gateway_endpoint": "https://memory.ap-shanghai.tencenttdai.com",
+      "gateway_endpoint": "<your-gateway>.ap-shanghai",
       "api_key": "your-gateway-api-key"
     }
   ]
@@ -44,7 +44,7 @@ KS 的 Wiki ingest / 总结等能力会调用大模型，默认走 Memory 提供
 
 `KNOWLEDGE_LLM_PROXY_BASE_URL` 与上面的 `gateway_endpoint` **是同一个地址**：从 Memory 控制台拿到的 Gateway 地址。例如上海地域：
 
-`https://memory.ap-shanghai.tencenttdai.com`
+`<your-gateway>.ap-shanghai`
 
 （其它地域按控制台实际地址填写。）
 
@@ -60,7 +60,7 @@ docker run -d --name memory-hub \
   -v memory-hub:/data/knowledge \
   -v /path/to/metadata-instances.json:/app/panel/config/metadata-instances.json:ro \
   -e KNOWLEDGE_PUBLIC_BASE_URL=http://10.2.3.4:8424/v3 \
-  -e KNOWLEDGE_LLM_PROXY_BASE_URL=https://memory.ap-shanghai.tencenttdai.com \
+  -e KNOWLEDGE_LLM_PROXY_BASE_URL=<your-gateway>.ap-shanghai \
   agentmemory/memory-hub:latest
 ```
 
@@ -122,6 +122,7 @@ docker run -d --name memory-hub \
 | `TMC_CALLBACK_URL` | `http://127.0.0.1:8125` | KS ingest 完成回调 Panel 的根地址（容器内自动回环，一般不用改） |
 | `KNOWLEDGE_TIMEOUT_MS` | `15000` | Panel 调 KS 的请求超时 |
 | `METADATA_REMOTE_TIMEOUT_MS` | `15000` | Panel 调远端 Gateway 的请求超时 |
+| `REMOTE_INSTANCE_PROXY_URL` | 空 | Panel UI "客户端接入地址"卡片显示的 base URL。开源本地部署 core+proxy 分开跑时填 proxy 的外部地址（如 `http://host.docker.internal:8096`），Panel UI 复制的 CodeBuddy/ClaudeCode 接入地址就会指向 proxy。留空则老行为 —— UI 回落到 `gateway_endpoint`。**Panel 后端 → Kernel 的转发始终走 `REMOTE_INSTANCE_URL`，与此变量无关。**（挂载了 `metadata-instances.json` 时忽略此变量，直接在 JSON 里加 `proxy_endpoint` 字段） |
 
 ### TLS 证书
 

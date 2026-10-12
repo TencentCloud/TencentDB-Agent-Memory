@@ -15,7 +15,6 @@
  */
 
 import type { Team } from './backendStore';
-import { isGlobalAdmin } from './permissions';
 import { isTeamAdmin, isTeamMember } from './backendStore';
 import { emitChange, safeParse, useChangeNotifier } from './storage-utils';
 
@@ -99,7 +98,10 @@ export function canManageAssetScope(
   isAdmin?: boolean
 ): boolean {
   if (!user_id) return false;
-  if (isGlobalAdmin(user_id, isAdmin)) return true;
+  // 全局 admin 不再自动获得资产管理特权，与普通 member 一致：
+  // 只有 owner 本人或 team admin 能改资产的可配置范围。
+  // 保留 isAdmin 参数仅为兼容已有调用方签名（未来清理时可去掉）。
+  void isAdmin;
   if (team && isTeamAdmin(team, user_id)) return true;
   if (!ownerUserId) return isTeamMember(team, user_id);
   return ownerUserId === user_id;

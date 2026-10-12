@@ -32,6 +32,8 @@ import type {
   ISkillExtractor,
 } from "../queue/types.js";
 import { runInRootContext } from "../../report/otel-context.js";
+import { obsLogger } from "../../report/obs-logger.js";
+import { trace } from "../../report/trace.js";
 
 /**
  * 把 candidates 落到业务侧（例如调 SkillCore.create/patch，或者直接写 SkillStore）。
@@ -160,6 +162,10 @@ export class SkillConversationExtractWorker {
 
   /**
    * 单次消费一个 agent。测试专用（同步跑通）。返回处理结果，方便断言。
+   *
+   * 2026-08-03 crash-recovery §4.1: 取队用 peekAgent (RPOP+LPUSH 原子, LMOVE 语义),
+   * agent 从取到那一刻起始终在 List 里, worker 中途崩溃下一轮 peek 仍能拿到。
+   * 详见 docs/design/2026-07-21-skill-worker-crash-recovery.md §4。
    */
   async runOnce(): Promise<{
     agent?: AgentTuple;
@@ -167,7 +173,7 @@ export class SkillConversationExtractWorker {
     lockContended?: boolean;
     dropped?: string[]; // 幽灵 / 抽取失败被丢弃的 task
   }> {
-    const agent = await this.opts.queue.dequeueAgent(this.opts.brpopBlockMs ?? 5000);
+    const agent = await this.opts.queue.peekAgent(this.opts.brpopBlockMs ?? 5000);
     if (!agent) return { processedTaskIds: [] };
     return this.consumeAgent(agent);
   }
@@ -177,10 +183,10 @@ export class SkillConversationExtractWorker {
     while (!this.closed) {
       let agent: AgentTuple | null = null;
       try {
-        agent = await this.opts.queue.dequeueAgent(blockMs);
+        agent = await this.opts.queue.peekAgent(blockMs);
       } catch (err) {
         if (this.closed) break;
-        this.logger.warn(`[skill-conv-worker] dequeue error: ${(err as Error).message}`);
+        this.logger.warn(`[skill-conv-worker] peek error: ${(err as Error).message}`);
         await sleep(200);
         continue;
       }
@@ -193,7 +199,12 @@ export class SkillConversationExtractWorker {
     }
   }
 
-  private async consumeAgent(agent: AgentTuple): Promise<{
+  /**
+   * 消费一个 agent 的完整 8 步流程。默认走 runLoop 内部调用; 也对外暴露给
+   * SkillWorkerPool 复用 —— pool 里的每条 workerLoop 只承担调度 (dequeue +
+   * resolver + legacy 兜底), 具体抽取仍走这里, 避免重复实现。
+   */
+  async consumeAgent(agent: AgentTuple): Promise<{
     agent: AgentTuple;
     processedTaskIds: string[];
     lockContended?: boolean;
@@ -209,16 +220,56 @@ export class SkillConversationExtractWorker {
     const processedTaskIds: string[] = [];
     const dropped: string[] = [];
 
+    // 2026-08-03 crash-recovery: peek 策略决定失败/成功分支行为。
+    //   - lmove / evalsha / eval  → 原子路径, agent 已在 List, 各分支不再显式 requeue,
+    //     成功路径也不再 remove, 靠下一轮 peek 到空 tasks 时懒删除。
+    //   - rpop_lpush_downgrade    → 非原子 v1 语义: 失败/成功分支照旧 requeue / remove,
+    //     配合 pool 侧周期 selfHealScan 兜底。
+    // 详见 docs/design/2026-07-21-skill-worker-crash-recovery.md §5.3。
+    const isDowngrade =
+      (typeof q.getPeekStrategy === "function" ? q.getPeekStrategy() : "lmove") ===
+      "rpop_lpush_downgrade";
+
+    const instanceId = agent.instance_id;
+    // agentKey 保持 4 段 (space|user|team|agent) 语义, 不加 instance_id 段 ——
+    // 兼容老观测面板按 agent_key 做过滤/聚合的 SQL。instance_id 单独作为字段带上,
+    // 供后端按 instance 维度分组过滤 (对应池化重构后的排障需要)。
     const agentKey = `${agent.space_id}|${agent.user_id}|${agent.team_id}|${agent.agent_id}`;
+    // [obs] worker 段结构化事件：consume_start → acquire_lock → read_head →
+    //   read_archive → extractor → apply_candidates → delete_task → consume_done。
+    // 拿到 task_id 之前用 agent_key + worker_id 定位；拿到 task_id 之后每条事件
+    // 都带 task_id —— handler 侧 skill.trigger.enqueue_agent 事件已带同一 task_id，
+    // 后端按 task_id 就能拉全 handler + worker 双段。
+    // obsLogger 内部 try/catch + 后端降级，不需要额外防御。
+    const workerId = this.opts.workerId;
+    const t0Consume = Date.now();
+    obsLogger.info("skill.worker.consume_start", {
+      worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
+    });
     this.logger.info(`[skill-conv-worker] dequeued agent=${agentKey}`);
 
     // ② 抢 extract-lock
+    const t0Lock = Date.now();
     const handle = await q.acquireExtractLock(agent, extractLockTtl);
+    obsLogger.info("skill.worker.acquire_lock", {
+      worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
+      dur_ms: Date.now() - t0Lock, acquired: !!handle,
+    });
     if (!handle) {
-      this.logger.info(`[skill-conv-worker] extract-lock contended agent=${agentKey}, requeue+sleep`);
-      await q.requeueAgent(agent);
+      // 2026-08-03: 原子路径下 agent 已在 List (peek 保证), 不需要 requeue;
+      // 降级路径下走 v1 语义, mutex 外 requeue 保证 agent 不丢。
+      if (isDowngrade) {
+        this.logger.info(`[skill-conv-worker] extract-lock contended agent=${agentKey}, requeue+sleep (downgrade)`);
+        await q.requeueAgent(agent);
+      } else {
+        this.logger.info(`[skill-conv-worker] extract-lock contended agent=${agentKey}, sleep (peek keeps agent in queue)`);
+      }
       const jitter = Math.floor(Math.random() * (this.opts.lockContentionSleepJitterMs ?? 500));
       await sleep((this.opts.lockContentionSleepMs ?? 2000) + jitter);
+      obsLogger.info("skill.worker.consume_done", {
+        worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
+        outcome: "lock_contended", dur_ms: Date.now() - t0Consume,
+      });
       return { agent, processedTaskIds: [], lockContended: true };
     }
     this.logger.info(`[skill-conv-worker] acquired extract-lock agent=${agentKey}`);
@@ -259,6 +310,7 @@ export class SkillConversationExtractWorker {
         // LPUSH——新 task 落地了但 Redis 队列毫无记录，永久卡死成幽灵任务。
         // 把 removeAgent 收进同一把锁，跟 trigger-service.ts 的 fix
         // （enqueueAgent 挪进写 task 的临界区）配合，保证两侧互斥。
+        const t0Head = Date.now();
         const head = await q.withTasksMutex(agent, mutexOpts, async () => {
           const doc = await this.opts.buffer.readTasks(agent);
           const first = doc.tasks[0] ?? null;
@@ -267,11 +319,33 @@ export class SkillConversationExtractWorker {
           }
           return first;
         });
+        obsLogger.info("skill.worker.read_head", {
+          worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
+          dur_ms: Date.now() - t0Head, has_head: !!head,
+        });
 
         if (!head) {
           // tasks 空 → agent 已在上面的临界区内下线，跳出
+          obsLogger.info("skill.worker.consume_done", {
+            worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
+            outcome: "empty", dur_ms: Date.now() - t0Consume,
+          });
           return { agent, processedTaskIds, dropped };
         }
+
+        // task_id 就位：从此往下所有事件都带 task_id，跟 handler 侧同 task_id
+        // 关联（handler 的 skill.trigger.enqueue_agent 已经带过一次）。
+        const t0Task = Date.now();
+        obsLogger.info("skill.worker.task_start", {
+          worker_id: workerId,
+          task_id: head.task_id,
+          instance_id: instanceId,
+          task_ref_id: head.task_ref_id,
+          session_id: head.session_id,
+          team_id: head.team_id,
+          agent_id: head.agent_id,
+          archive_key: head.archive_key,
+        });
 
         // ④ 读 archive
         let candidates: ExtractedCandidate[] | null = null;
@@ -280,12 +354,23 @@ export class SkillConversationExtractWorker {
           this.logger.info(
             `[skill-conv-worker] processing task_id=${head.task_id} archive_key=${head.archive_key}`,
           );
+          const t0Arch = Date.now();
           const archive = await this.opts.buffer.readArchive(head.archive_key);
+          obsLogger.info("skill.worker.read_archive", {
+            worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+            dur_ms: Date.now() - t0Arch,
+            found: !!archive,
+            msg_count: archive?.messages?.length ?? 0,
+          });
           if (!archive) {
             isGhost = true;
             this.logger.warn(
               `[skill-conv-worker] ghost task, dropping task_id=${head.task_id} archive_key=${head.archive_key}`,
             );
+            obsLogger.warn("skill.worker.ghost", {
+              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+              archive_key: head.archive_key,
+            });
           } else {
             const conversation = (archive.messages ?? []).map((m) => ({
               role: String(m.role ?? "user"),
@@ -294,6 +379,7 @@ export class SkillConversationExtractWorker {
             this.logger.info(
               `[skill-conv-worker] extract start task_id=${head.task_id} messages=${conversation.length}`,
             );
+            const t0Ext = Date.now();
             const result = await this.opts.extractor.extract({
               task_id: head.task_id,
               team_id: head.team_id,
@@ -310,15 +396,31 @@ export class SkillConversationExtractWorker {
               options: head.max_iterations != null
                 ? { max_iterations: head.max_iterations }
                 : undefined,
+              // strict_mode 透传:老 task (未升级前入队) mode 字段不存在,undefined 透
+              // 给 extractor 恒走 SKILL_REVIEW_PROMPT (v2 宽松) — 零回归; 冷启动写入的
+              // task mode='strict' 才切到 SKILL_REVIEW_PROMPT_STRICT (v1 严格 gate)。
+              mode: head.mode,
             });
             candidates = result.candidates ?? [];
+            obsLogger.info("skill.worker.extractor", {
+              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+              dur_ms: Date.now() - t0Ext,
+              candidates: candidates.length,
+              msg_count: conversation.length,
+            });
             this.logger.info(
               `[skill-conv-worker] extract done task_id=${head.task_id} candidates=${candidates.length}`,
             );
+            const t0Sink = Date.now();
             await this.opts.sink.applyCandidates({
               task: head,
               candidates,
               workerId: this.opts.workerId,
+            });
+            obsLogger.info("skill.worker.apply_candidates", {
+              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+              dur_ms: Date.now() - t0Sink,
+              candidates: candidates.length,
             });
           }
         } catch (err) {
@@ -330,27 +432,41 @@ export class SkillConversationExtractWorker {
           const category = classifyError(err as Error);
           if (category === "transient") {
             this.logTransientFailure(head.task_id, errMsg);
+            // 注意：outcome 用 `retry_transient` 简写，不含 "transient" 关键字 ——
+            // DLQ 单测用 .includes("transient") 判定 transient 采样计数，
+            // 避免 obsLogger 事件也被算进去。
+            obsLogger.info("skill.worker.task_done", {
+              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+              outcome: "retry_transient", dur_ms: Date.now() - t0Task,
+            });
             await sleep(this.opts.failureRequeueSleepMs ?? 2000);
-            await q.requeueAgent(agent);
+            // 2026-08-03: 原子 peek 路径下 agent 仍在 List, task.json 也未动,
+            // 下一轮 peek 直接拿到同一 head 重跑; 降级路径显式 requeue。
+            if (isDowngrade) await q.requeueAgent(agent);
             break;
           }
           // permanent
           // 清掉 transient 计数器，避免历史 transient 干扰后续采样。
           this.transientFailStreak.delete(head.task_id);
+          obsLogger.info("skill.worker.task_done", {
+            worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+            outcome: "dlq_or_retry", dur_ms: Date.now() - t0Task,
+          });
           await sleep(this.opts.failureRequeueSleepMs ?? 2000);
-          await this.handlePermanentFailure(agent, head, errMsg, mutexOpts);
+          await this.handlePermanentFailure(agent, head, errMsg, mutexOpts, isDowngrade);
           break;
         }
 
         // ⑤ 抽取成功 or 幽灵 task → CAS filter 删 task（按 task_id）。
         //
-        // 关键修复：删 task 之后紧接着判断「本 agent 是否还有剩余任务 →
-        // requeue 还是 remove」必须合并进同一个 tasks-mutex 临界区（原来是
-        // 两次独立、其中第二次完全无锁的 readTasks），否则同样会跟
-        // trigger-service.archive() 产生竞态：本函数在无锁间隙判定"空了"
-        // 要 removeAgent，但 archive() 恰好在这之前抢到锁写入了新 task 且
-        // 已经 enqueueAgent —— 之后本函数再 removeAgent 把 Set/List 清空，
-        // 新写入的 task 就变成了 Redis 队列里彻底找不到记录的幽灵任务。
+        // 2026-08-03 crash-recovery §4.1: 原子 peek 路径下不再判定剩余 tasks
+        // 也不再 requeue/remove — agent 一直在 List, 靠下一轮 peek 读到空 tasks
+        // 时同 mutex 内懒删除 (见步骤 ③ tasks 空分支)。
+        //
+        // 降级路径 (peekAgent 只 pop 不 push) 走 v1 语义: 判定剩余 → requeue/remove,
+        // 跟 trigger-service.archive() 通过同一把 mutex 保序。
+        const t0Del = Date.now();
+        let remainingTasks = 0;
         await q.withTasksMutex(agent, mutexOpts, async () => {
           const doc = await this.opts.buffer.readTasks(agent);
           const before = doc.tasks.length;
@@ -359,17 +475,57 @@ export class SkillConversationExtractWorker {
             doc.updated_at_ms = this.opts.now?.() ?? Date.now();
             await this.opts.buffer.writeTasks(agent, doc);
           }
-          if (doc.tasks.length > 0) {
-            await q.requeueAgent(agent);
-          } else {
-            await q.removeAgent(agent);
+          remainingTasks = doc.tasks.length;
+          if (isDowngrade) {
+            if (doc.tasks.length > 0) {
+              await q.requeueAgent(agent);
+            } else {
+              await q.removeAgent(agent);
+            }
           }
+          // 原子路径: 什么都不做, agent 已在 List, 下一轮 peek 触发懒删除。
+        });
+        obsLogger.info("skill.worker.delete_task", {
+          worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+          dur_ms: Date.now() - t0Del,
+          remaining: remainingTasks,
+        });
+
+        // trace.report 后端 span：跟 skill.extract / skill.conversation_add 对齐，
+        // 按 task_id 就能在 clickhouse / langfuse 里拉到 handler + worker 双段。
+        try {
+          trace.report("skill.worker.task_done", {
+            task_id: head.task_id,
+            instance_id: instanceId,
+            task_ref_id: head.task_ref_id,
+            team_id: head.team_id,
+            agent_id: head.agent_id,
+            session_id: head.session_id,
+            outcome: isGhost ? "ghost" : "ok",
+            candidates: candidates?.length ?? 0,
+            dur_ms: Date.now() - t0Task,
+            success: true,
+          });
+        } catch { /* noop */ }
+
+        obsLogger.info("skill.worker.task_done", {
+          worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
+          outcome: isGhost ? "ghost" : "ok",
+          candidates: candidates?.length ?? 0,
+          dur_ms: Date.now() - t0Task,
         });
 
         if (isGhost) dropped.push(head.task_id);
         else processedTaskIds.push(head.task_id);
       }
 
+      obsLogger.info("skill.worker.consume_done", {
+        worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
+        outcome: "ok",
+        processed: processedTaskIds.length,
+        dropped: dropped.length,
+        dur_ms: Date.now() - t0Consume,
+      });
       return { agent, processedTaskIds, dropped };
     } finally {
       // ⑥ 停续约 + 释放 extract-lock
@@ -423,6 +579,7 @@ export class SkillConversationExtractWorker {
     head: SkillTaskEntry,
     errMsg: string,
     mutexOpts: { lockTtlMs: number; waitDeadlineMs: number },
+    isDowngrade: boolean,
   ): Promise<void> {
     const q = this.opts.queue;
     const maxRetries = this.opts.permanentMaxRetries ?? 3;
@@ -439,8 +596,11 @@ export class SkillConversationExtractWorker {
         this.logger.warn(
           `[skill-conv-worker] permanent failure but task gone task=${head.task_id}`,
         );
-        if (doc.tasks.length > 0) await q.requeueAgent(agent);
-        else await q.removeAgent(agent);
+        // 2026-08-03: 原子路径不 requeue/remove, 靠下一轮懒删除; 降级路径 v1 语义。
+        if (isDowngrade) {
+          if (doc.tasks.length > 0) await q.requeueAgent(agent);
+          else await q.removeAgent(agent);
+        }
         return;
       }
       const cur = doc.tasks[idx]!;
@@ -464,8 +624,10 @@ export class SkillConversationExtractWorker {
             `retries=${nextRetry}/${maxRetries} err=${truncated}`,
         );
       }
-      if (doc.tasks.length > 0) await q.requeueAgent(agent);
-      else await q.removeAgent(agent);
+      if (isDowngrade) {
+        if (doc.tasks.length > 0) await q.requeueAgent(agent);
+        else await q.removeAgent(agent);
+      }
     });
 
     // 写 DLQ 放在 mutex 外：Worker 持 extract-lock 独占该 agent，DLQ 没有别的写者。

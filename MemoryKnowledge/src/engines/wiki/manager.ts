@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSy
 import { join, basename, relative } from "path";
 import Graph from "graphology";
 import type DatabaseType from "better-sqlite3";
+import pLimit, { type LimitFunction } from "p-limit";
 import type {
   WikiPage,
   WikiSourceConfig,
@@ -40,6 +41,7 @@ import {
 } from "./index-db.js";
 import { createLogger } from "../../logger.js";
 import { withSpan } from "../../telemetry.js";
+import { getIngestConcurrency } from "../../config.js";
 import { slugify } from "./ingest-v2/slug.js";
 import { DEFAULT_SCHEMA, DEFAULT_PURPOSE } from "./ingest-v2/template.js";
 
@@ -103,6 +105,53 @@ export interface SearchOptions {
   minScore?: number;
 }
 
+/** ingest 进度回调载荷（KS → Panel）。 */
+export interface IngestProgress {
+  phase: "extracting" | "merging" | "indexing";
+  total: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  percent: number;
+}
+
+export type ProgressFn = (progress: IngestProgress) => void;
+
+/** extracting 同阶段节流间隔；阶段切换（merging/indexing）始终立即上报。 */
+export const PROGRESS_THROTTLE_MS = 500;
+
+/**
+ * 节流 onProgress：阶段切换立即发；同阶段仅在 percent 上升且距上次 ≥ minIntervalMs
+ * （或已到 extracting 末段 percent≥90）时发送，避免多源并发打爆 Panel。
+ */
+export function createThrottledProgressFn(
+  onProgress: ProgressFn | undefined,
+  minIntervalMs: number = PROGRESS_THROTTLE_MS,
+): ProgressFn | undefined {
+  if (!onProgress) return undefined;
+  let lastPhase: IngestProgress["phase"] | undefined;
+  let lastPercent = -1;
+  let lastEmitAt = 0;
+  return (p) => {
+    const now = Date.now();
+    const phaseChanged = p.phase !== lastPhase;
+    if (!phaseChanged) {
+      if (p.percent <= lastPercent) return;
+      const nearExtractEnd = p.phase === "extracting" && p.percent >= 90;
+      if (!nearExtractEnd && now - lastEmitAt < minIntervalMs) return;
+    }
+    lastPhase = p.phase;
+    lastPercent = p.percent;
+    lastEmitAt = now;
+    onProgress(p);
+  };
+}
+
+export interface IngestExecOptions {
+  onProgress?: ProgressFn;
+  globalLlmLimit?: LimitFunction;
+}
+
 export interface WikiSourceManager {
   register(config: WikiSourceConfig): WikiSourceState;
   sync(name: string): WikiSourceState;
@@ -114,7 +163,7 @@ export interface WikiSourceManager {
   readPage(name: string, relPath: string): string | null;
   getPages(name: string): WikiPage[];
   init(config: WikiSourceConfig): WikiSourceState;
-  ingest(name: string, llmConfig: any): Promise<any[]>;
+  ingest(name: string, llmConfig: any, opts?: IngestExecOptions): Promise<any[]>;
 }
 
 /** 图谱中不参与建边/展示的页类型（如内部 query 页）。 */
@@ -502,16 +551,22 @@ interface IngestOutcome {
 }
 
 /**
- * 增量抽取（设计 003 §3.6）：对比磁盘源与 source 表，只对"新增/未成功/ sha 变化"的源调 LLM，
- * 跳过"已抽取且 sha 未变"的源（省 token）；表中有但磁盘无的源做级联删除。
+ * 增量抽取（设计 003 §3.6 + wiki-ingest-optimization）：
+ * 阶段1 并行 LLM 抽取 → 已删源级联清理 → 阶段2 串行 merge 落盘 → overview。
  * 不在此更新 source 表 / 不重建索引——那些交由 ingest() 在同一事务内完成（强一致）。
+ * 全部失败检测不在此 throw，由上层 WikiSourceManager.ingest 写事务后判定。
+ *
+ * 导出供编排层单测（进度相位 / skipped / 全失败不 throw）。
  */
-async function runIngestIncremental(
+export async function runIngestIncremental(
   projectPath: string,
   oldStates: Map<string, { sha256: string; status: SourceStatus }>,
   llmConfig: any,
+  onProgress?: ProgressFn,
+  globalLlmLimit?: LimitFunction,
 ): Promise<IngestOutcome> {
-  const { ingestSource } = await import("./ingest-v2/index.js");
+  const { extractSource, commitCandidates, scanExistingPages } = await import("./ingest-v2/index.js");
+  const report = createThrottledProgressFn(onProgress);
   const sourcesDir = join(projectPath, "raw", "sources");
   if (!existsSync(sourcesDir)) {
     log.warn("runIngest: raw/sources 不存在，跳过", { projectPath });
@@ -530,6 +585,9 @@ async function runIngestIncremental(
   });
 
   const { toIngest, skipped, deleted } = classifySources(disk, oldStates);
+  const skippedCount = skipped.length;
+  const toIngestSet = new Set(toIngest);
+  const toIngestDisk = disk.filter((d) => toIngestSet.has(d.filename));
   log.info("runIngest 增量分类", {
     projectPath,
     disk: disk.length,
@@ -538,28 +596,75 @@ async function runIngestIncremental(
     deleted: deleted.length,
   });
 
-  const results: any[] = [];
-  const processed: ProcessedSource[] = [];
-  const toIngestSet = new Set(toIngest);
-  for (const d of disk) {
-    if (!toIngestSet.has(d.filename)) continue;
-    const t0 = Date.now();
-    try {
-      const written = await withSpan("ingest-source", async (span) => {
-        span.setAttribute("source.name", d.filename);
-        return ingestSource(projectPath, d.abs, llmConfig);
-      });
-      log.info("runIngest 单源完成", { source: d.filename, written: written.length, ms: Date.now() - t0 });
-      results.push({ source: d.filename, filesWritten: written, error: null });
-      processed.push({ filename: d.filename, sha256: d.sha256, size: d.size, ok: true, error: null });
-    } catch (err) {
-      log.error("runIngest 单源失败", { source: d.filename, ms: Date.now() - t0, error: String(err) });
-      results.push({ source: d.filename, filesWritten: [], error: String(err) });
-      processed.push({ filename: d.filename, sha256: d.sha256, size: d.size, ok: false, error: String(err) });
-    }
-  }
+  const existingPages = scanExistingPages(projectPath);
+  const concurrency = getIngestConcurrency();
+  const wikiLimit = pLimit(concurrency);
 
-  // 表中有但磁盘已无的源 → 级联删除其独占的下游页（cascade.js 按 frontmatter sources 匹配）。
+  // ── 阶段1：并行 LLM 抽取 ──
+  report?.({
+    phase: "extracting",
+    total: toIngestDisk.length,
+    completed: 0,
+    failed: 0,
+    skipped: skippedCount,
+    percent: 0,
+  });
+
+  let completed = 0;
+  let failed = 0;
+
+  const tasks = toIngestDisk.map((d) =>
+    wikiLimit(async () => {
+      const t0 = Date.now();
+      try {
+        const candidates = await withSpan("ingest-source", async (span) => {
+          span.setAttribute("source.name", d.filename);
+          const run = () => extractSource(projectPath, d.abs, llmConfig, existingPages);
+          return globalLlmLimit ? globalLlmLimit(run) : run();
+        });
+        completed++;
+        report?.({
+          phase: "extracting",
+          total: toIngestDisk.length,
+          completed,
+          failed,
+          skipped: skippedCount,
+          percent: Math.round(((completed + failed) / Math.max(toIngestDisk.length, 1)) * 90),
+        });
+        log.info("runIngest 单源抽取完成", {
+          source: d.filename,
+          candidates: candidates.size,
+          ms: Date.now() - t0,
+        });
+        return { ...d, ok: true as const, candidates, error: null };
+      } catch (err) {
+        failed++;
+        report?.({
+          phase: "extracting",
+          total: toIngestDisk.length,
+          completed,
+          failed,
+          skipped: skippedCount,
+          percent: Math.round(((completed + failed) / Math.max(toIngestDisk.length, 1)) * 90),
+        });
+        log.error("runIngest 单源抽取失败", {
+          source: d.filename,
+          ms: Date.now() - t0,
+          error: String(err),
+        });
+        return {
+          ...d,
+          ok: false as const,
+          candidates: new Map<string, string>(),
+          error: String(err),
+        };
+      }
+    }),
+  );
+
+  const extractResults = await Promise.all(tasks);
+
+  // ── 已删源级联清理（与现有逻辑对齐）──
   if (deleted.length > 0) {
     try {
       const { deleteSourceFiles } = await import("./ingest-v2/cascade.js");
@@ -573,20 +678,105 @@ async function runIngestIncremental(
     }
   }
 
-  const okCount = processed.filter((p) => p.ok).length;
-  log.info("runIngest 全部完成", { total: results.length, ok: okCount, failed: results.length - okCount });
+  // ── 阶段2：串行落盘合并 ──
+  report?.({
+    phase: "merging",
+    total: toIngestDisk.length,
+    completed,
+    failed,
+    skipped: skippedCount,
+    percent: 90,
+  });
 
-  // 有源被成功抽取才重新生成全局综述 overview.md（llm-wiki synthesis）。失败不影响主流程。
-  if (okCount > 0) {
+  const successResults = extractResults.filter((r) => r.ok);
+  const allCandidates = successResults.map((r) => ({
+    sourceFilename: r.filename,
+    candidates: r.candidates,
+  }));
+
+  // B-1：仅在有候选需 merge/overview 时建 client；失败不 throw，保证上层仍能写 source 状态。
+  // 纯 no-op（toIngest=0）或抽取全失败时不建 client（commit 只 rebuild index，不调 LLM）。
+  let llm: import("./ingest-v2/llm.js").LlmClient | undefined;
+  if (allCandidates.length > 0) {
     try {
       const { createLlmClient } = await import("./ingest-v2/llm.js");
-      const { generateOverview } = await import("./ingest-v2/overview.js");
-      await generateOverview(projectPath, createLlmClient(llmConfig));
+      llm = createLlmClient(llmConfig);
     } catch (err) {
-      log.warn("overview 生成失败（不影响摄取）", { error: String(err) });
+      log.error("创建 LLM client 失败（阶段2 merge/overview 将降级，source 状态仍会落库）", {
+        error: String(err),
+      });
     }
   }
 
+  // 无成功抽取时仍可能需要在级联删除后重建 index.md；skipLog 避免空 batch 日志
+  const { written, mergeErrors } = await commitCandidates(projectPath, allCandidates, llm, {
+    globalLlmLimit,
+    skipLog: allCandidates.length === 0,
+  });
+
+  if (mergeErrors.length > 0) {
+    log.warn("阶段2 合并部分页失败", { count: mergeErrors.length, errors: mergeErrors });
+  }
+
+  // ── 源状态判定（必须在 commitCandidates 之后）──
+  const processed: ProcessedSource[] = extractResults.map((r) => {
+    if (!r.ok) {
+      return { filename: r.filename, sha256: r.sha256, size: r.size, ok: false, error: r.error };
+    }
+    const sourcePages = [...r.candidates.keys()];
+    const allMergeFailed =
+      sourcePages.length > 0 &&
+      sourcePages.every((p) => mergeErrors.some((e) => e.source === r.filename && e.relPath === p)) &&
+      !sourcePages.some((p) => written.includes(p));
+    return {
+      filename: r.filename,
+      sha256: r.sha256,
+      size: r.size,
+      ok: !allMergeFailed,
+      error: allMergeFailed ? "all candidates merge failed" : null,
+    };
+  });
+
+  // ── 阶段3：overview（FTS 索引由上层 ingest 写事务完成）──
+  report?.({
+    phase: "indexing",
+    total: toIngestDisk.length,
+    completed,
+    failed,
+    skipped: skippedCount,
+    percent: 98,
+  });
+
+  if (successResults.length > 0) {
+    if (!llm) {
+      log.warn("overview 跳过：LLM client 不可用（不影响摄取）");
+    } else {
+      try {
+        const { generateOverview } = await import("./ingest-v2/overview.js");
+        const runOverview = () => generateOverview(projectPath, llm);
+        await (globalLlmLimit ? globalLlmLimit(runOverview) : runOverview());
+      } catch (err) {
+        log.warn("overview 生成失败（不影响摄取）", { error: String(err) });
+      }
+    }
+  }
+
+  const results = extractResults.map((r) => {
+    if (!r.ok) return { source: r.filename, filesWritten: [] as string[], error: r.error };
+    const sourcePages = [...r.candidates.keys()];
+    const filesWritten = sourcePages.filter((p) => written.includes(p));
+    return { source: r.filename, filesWritten, error: null };
+  });
+
+  const okCount = processed.filter((p) => p.ok).length;
+  log.info("runIngest 全部完成", {
+    total: results.length,
+    ok: okCount,
+    failed: results.length - okCount,
+    written: written.length,
+  });
+
+  // 全部失败检测：不在此处 throw（由上层写事务后判定，保证 source 状态已持久化）。
   return { results, processed, deletedSources: deleted };
 }
 
@@ -786,7 +976,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     return register(config);
   }
 
-  async function ingest(name: string, llmConfig: any): Promise<any[]> {
+  async function ingest(name: string, llmConfig: any, opts?: IngestExecOptions): Promise<any[]> {
     const state = sources.get(name);
     if (!state) throw new Error(`Not found: ${name}`);
     const projectPath = state.path;
@@ -802,7 +992,13 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
 
     const outcome = await withSpan("wiki-ingest", async (span) => {
       span.setAttribute("wiki.name", name);
-      return runIngestIncremental(projectPath, oldStates, llmConfig);
+      return runIngestIncremental(
+        projectPath,
+        oldStates,
+        llmConfig,
+        opts?.onProgress,
+        opts?.globalLlmLimit,
+      );
     });
 
     // 重建索引 + 登记 source 状态 + 删已删源行：**同一写事务**（设计 003 §3.6 step 6，强一致）。

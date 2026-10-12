@@ -40,6 +40,7 @@ if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "tdai-memory-hub"; 
   warn "memory-hub 容器未运行，proxy 的 sessionInit control plane 不可达。"
 fi
 
+pull_image "$PROXY_IMAGE"
 rm_container_if_exists "$CONTAINER"
 
 # proxy 只从 YAML 读上游 URL / API key（不认 PROXY_UPSTREAM_URL 环境变量），
@@ -105,6 +106,15 @@ tdai:
 skill:
   endpoint: "http://memory-core:8420"
   serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
+
+# knowledge 注入器的注册门槛（shouldRegisterKnowledgeInjector）：
+# injectors 含 knowledge + knowledge.enabled + knowledge.serviceToken 三者同时满足。
+# 缺了这一段时注入器静默不注册，<knowledge_tools> 永远不会出现。
+knowledge:
+  enabled: $(bool $PROXY_ENABLE_TDAI)
+  endpoint: "http://memory-core:8420"
+  serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
+  serviceId: default
 
 auth:
   enabled: $(bool $PROXY_ENABLE_AUTH)

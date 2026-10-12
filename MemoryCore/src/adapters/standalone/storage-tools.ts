@@ -102,7 +102,7 @@ export function createStorageTools(
         if (!key) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         try {
           await storage.writeFile(key, args.content);
-          logger?.debug?.(`${TAG} write: "${args.path}" → ${args.content.length} chars`);
+          logger?.debug?.(`${TAG} write: "${args.path}" → ${Buffer.byteLength(args.content, "utf8")} bytes`);
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -149,10 +149,16 @@ export function createStorageTools(
             if (!content.includes(edit.oldText)) {
               return JSON.stringify({ error: `oldText not found in file "${args.path}": ${edit.oldText.slice(0, 80)}` });
             }
-            content = content.replace(edit.oldText, edit.newText);
+            // Pass a replacer function so `$&`, `$'`, "$`", `$1`, `$$` in newText are
+            // inserted literally. A plain string replacement would expand them as
+            // special patterns -- `$'` (matched substring's suffix) duplicates the rest
+            // of the file on every edit, growing scene blocks exponentially.
+            content = content.replace(edit.oldText, () => edit.newText);
           }
           await storage.writeFile(key, content);
-          logger?.debug?.(`${TAG} edit: "${args.path}" → ${args.edits.length} replacement(s), ${content.length} chars`);
+          logger?.debug?.(
+            `${TAG} edit: "${args.path}" → ${args.edits.length} replacement(s), ${Buffer.byteLength(content, "utf8")} bytes`,
+          );
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

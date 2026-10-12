@@ -151,17 +151,71 @@ export interface ConversationAddResult {
   archived?: ConversationAddArchived;
 }
 
+/** Input for /v3/skill/conversation/force-archive — 手动强制归档。 */
+export interface ForceArchiveInput {
+  space_id: string;
+  user_id: string;
+  team_id: string;
+  agent_id: string;
+  session_id: string;
+  reason?: string;
+  task_id?: string;
+}
+
+/** Response from /v3/skill/conversation/force-archive. */
+export interface ForceArchiveResponse {
+  status: "archived" | "empty";
+  task_id?: string;
+  archived_at_ms?: number;
+  archive_key?: string;
+  message?: string;
+}
+
+/**
+ * Input for /v3/skill/list — owner-agent skill enumeration.
+ *
+ * Used by skill-bridge team-search to build the "agent 自有全量" 部分的
+ * whitelist（见 `docs/design/2026-08-10-skill-search-scope-fix.md` §4）。
+ * limit 走 core schema 上限 1000，一次拿完，不分页。
+ */
+export interface ListSkillsInput extends IdFields {
+  filters?: {
+    owner_agent_id?: string;
+    name_prefix?: string;
+    status?: Array<"active" | "archived">;
+  };
+  pagination?: { limit?: number; offset?: number };
+}
+
+/** Result from /v3/skill/list. */
+export interface ListSkillsResult {
+  items: SkillSummary[];
+  total: number;
+}
+
 /** Input for /v3/skill/listing — owner-agent skill injection. */
 export interface ListingInput extends IdFields {
   /** Optional search query; when set, plugin uses FTS BM25 to match relevant skills. */
   query?: string;
   /** char budget for the rendered listing block. Default 8000 in plugin. */
   char_budget?: number;
+  /**
+   * Recall mode:
+   *   - undefined / 'auto': plugin 走 BM25 (query 非空) 或 list head (query 空);
+   *   - 'activity': 读 skill_usage_logs 按 MRR 排序 (default-task 场景专用).
+   *
+   * 'activity' 在 CH 未配置/查询失败/冷启动时会 fallback 到 'auto' 逻辑,
+   * response.mode 会体现最终使用的模式 ('activity' / 'search' / 'full').
+   *
+   * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+   */
+  mode?: "auto" | "activity";
 }
 
 /** Result from /v3/skill/listing. `listing` is the pre-rendered `<available_skills>` block. */
 export interface ListingResult {
-  mode: "full" | "search";
+  /** 实际使用的召回模式 —— activity 请求可能因 fallback 返回 full/search。 */
+  mode: "full" | "search" | "activity";
   listing: string;
   hits: Array<{ skill_id: string; version: number; name: string }>;
 }
@@ -235,6 +289,34 @@ export class CoreSkillClient {
     opts: CoreSkillRequestOptions = {},
   ): Promise<ConversationAddResult> {
     return this.post<ConversationAddResult>("/v3/skill/conversation/add", input, opts);
+  }
+
+  /**
+   * `POST /v3/skill/conversation/force-archive` — 手动强制归档当前 session buffer。
+   * 跳过阈值判断，直接调 trigger.archive()。
+   */
+  async forceArchive(
+    input: ForceArchiveInput,
+    opts: CoreSkillRequestOptions = {},
+  ): Promise<ForceArchiveResponse> {
+    return this.post<ForceArchiveResponse>("/v3/skill/conversation/force-archive", input, opts);
+  }
+
+  /**
+   * `POST /v3/skill/list` — 枚举 agent 自有 skill 的 skill_id / 元数据。
+   *
+   * skill-bridge team-search 用来扩大 whitelist：把 agent 自己（含 private）
+   * 的 skill 也纳入检索池，避免 session-init `<available_skills>` 20 条上限
+   * 之外的私有 skill 永远搜不到。见
+   * `docs/design/2026-08-10-skill-search-scope-fix.md`。
+   *
+   * 语义：默认只返回 head + active。owner 归属由 (team_id, agent_id) 决定。
+   */
+  async listSkills(
+    input: ListSkillsInput,
+    opts: CoreSkillRequestOptions = {},
+  ): Promise<ListSkillsResult> {
+    return this.post<ListSkillsResult>("/v3/skill/list", input, opts);
   }
 
   /**

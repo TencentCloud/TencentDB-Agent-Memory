@@ -1,0 +1,93 @@
+/**
+ * ImportSkillDialog 样式补丁。
+ */
+
+._memory-isd-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-isd-mode-segment {
+  display: flex;
+  margin-bottom: 12px;
+}
+._memory-isd-mode-segment .tea-segment {
+  flex: 1;
+  text-align: center;
+}
+
+._memory-isd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+._memory-isd-label {
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+}
+
+._memory-isd-hidden-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  clip: rect(0, 0, 0, 0);
+}
+
+._memory-isd-picked-count {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-isd-partition-box {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+._memory-isd-main-file {
+  font-family: var(--font-mono);
+  color: var(--tea-color-text-brand-default);
+}
+
+._memory-isd-error-text {
+  color: var(--tea-color-text-error-default);
+}
+
+._memory-isd-warning-text {
+  color: var(--tea-color-text-warning-default);
+}
+
+._memory-isd-resource-list {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  max-height: 128px;
+  overflow-y: auto;
+  margin: 0;
+  padding-left: 2px;
+  list-style: none;
+}
+
+._memory-isd-mono-input.tea-input,
+textarea._memory-isd-mono-input {
+  font-family: var(--font-mono);
+}
+
+._memory-isd-mono-inline {
+  font-family: var(--font-mono);
+}
+
+._memory-isd-result-text {
+  white-space: pre-wrap;
+}

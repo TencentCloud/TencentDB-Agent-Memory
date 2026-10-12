@@ -15,27 +15,10 @@ knowledge/.env
 knowledge/.env.*
 
 # ── 文档：非 runtime 必需，且含内部路径引用 ──
-# panel 层：docs/ 全排除
+# 两层 docs/ 全排除。runtime 唯一需要的 spec 是 knowledge/openapi.yaml（包根，
+# src/server.ts 读它给 Swagger UI），不在 docs/ 下，不受影响。
 panel/docs/
-# knowledge 层：只保留 runtime 必需的 openapi.yaml，其它 md 全排除
-knowledge/docs/README.md
-knowledge/docs/architecture.md
-knowledge/docs/development.md
-knowledge/docs/deployment.md
-knowledge/docs/design/
-knowledge/docs/prd-*.md
-knowledge/docs/REFACTOR-*.md
-knowledge/docs/codegraph-*.md
-knowledge/docs/wiki-upload-*.md
-knowledge/docs/multi-service.md
-knowledge/docs/retrieval.md
-knowledge/docs/ingest-flow.md
-knowledge/docs/observation.md
-knowledge/docs/mcp/
-knowledge/docs/memory/
-knowledge/docs/api/endpoints.md
-knowledge/docs/api/wiki-search.md
-# 保留：knowledge/docs/api/openapi.yaml（src/server.ts:86 要读它给 Swagger UI）
+knowledge/docs/
 
 # ── 测试脚本：含内部环境硬编码路径，非 runtime 必需 ──
 panel/tests/

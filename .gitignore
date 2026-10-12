@@ -63,6 +63,11 @@ sdk/python/*.egg-info/
 # offload_server 真值配置（含 tdai kernel Bearer），按 .example 自建
 __tests__/offload_server/remote-config.json
 
+# start-all.sh 运行时生成，含 admin user_key 与上游 LLM API key
+deploy/global-images/.admin-key
+deploy/global-images/.proxy-config/
+deploy/global-images/.memory-core-config/
+
 # Eval scripts output
 scripts/eval-report.json
 
@@ -100,16 +105,37 @@ __tests__/devcloud-multipod/diag-instance.sh
 scripts/COMMIT_CONVENTION.md
 scripts/pre-commit-check.sh
 
+# OpenClaw 安装脚本 env 单测（本地保留，不入库）
+MemoryCore/scripts/tests/
+
 # Backup files
 *.bak
 
 # self-implement-wiki e2e 产物（人工查看用，不入库）
 docs/knowledge/self-implement-wiki/_e2e-output/
 
-# Development databases (empty placeholder)
+# Development databases and runtime data (never commit)
 data/skills.db
 data/tdai-memory.db
+**/data/vectors.db
+**/data/.metadata/
+**/data/scene_blocks/
+**/data/knowledge.db
+**/data/knowledge.db-shm
+**/data/knowledge.db-wal
+**/data/_wiki_engines/
+**/data/mem-*/
 
 # Test coverage output
 coverage/
 **/coverage/
+
+# Local project docs (generated, not for VCS)
+.local-docs/
+
+# L0 mongo bench generated reports
+MemoryCore/scripts/bench-l0-mongo/reports/
+
+# Local-only: parity snapshots & runtime configs (never commit)
+MemoryProxy/.archive-tmp/
+z_config/

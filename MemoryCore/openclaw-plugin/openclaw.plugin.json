@@ -1,8 +1,8 @@
 {
   "id": "memory-tencentdb-client",
   "name": "Memory TencentDB (Client)",
-  "version": "0.1.0",
-  "description": "长期记忆插件（客户端接入版）— 通过远端 memory server 提供四层记忆能力",
+  "version": "1.0.0-beta.1",
+  "description": "长期记忆插件（客户端接入版 /v3）— 通过远端 Memory Gateway 提供四层记忆能力",
   "author": "TDAI Team",
   "activation": {
     "onStartup": true
@@ -11,7 +11,7 @@
     "tools": [
       "tdai_memory_search",
       "tdai_conversation_search",
-      "tdai_read_cos"
+      "tdai_read_file"
     ]
   },
   "configSchema": {
@@ -19,7 +19,7 @@
     "properties": {
       "server": {
         "type": "object",
-        "description": "远端 memory server 连接配置",
+        "description": "远端 memory server 连接与 v3 isolation 配置",
         "properties": {
           "url": {
             "type": "string",
@@ -28,13 +28,28 @@
           },
           "apiKey": {
             "type": "string",
-            "default": "sk-xxxx",
-            "description": "API Key for server authentication"
+            "default": "local",
+            "description": "API Key（Bearer）；local 模式可用 local"
           },
           "instanceId": {
             "type": "string",
             "default": "default",
             "description": "Memory instance id（HTTP header x-tdai-service-id）"
+          },
+          "teamId": {
+            "type": "string",
+            "default": "default",
+            "description": "v3 isolation team_id（local 默认与 DEFAULT_ISOLATION_ID 一致）"
+          },
+          "agentId": {
+            "type": "string",
+            "default": "default",
+            "description": "v3 isolation agent_id"
+          },
+          "userId": {
+            "type": "string",
+            "default": "default",
+            "description": "v3 isolation user_id"
           },
           "rejectUnauthorized": {
             "type": "boolean",
@@ -72,36 +87,6 @@
             "type": "boolean",
             "default": true,
             "description": "是否启用自动对话捕获 (L0)"
-          }
-        }
-      },
-      "offload": {
-        "type": "object",
-        "description": "Offload 压缩/摘要服务配置（可选，不配则复用 server 配置）",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": false,
-            "description": "是否启用 Offload 上下文压缩"
-          },
-          "serverUrl": {
-            "type": "string",
-            "description": "Offload server URL。不填则自动从 server.url 推导（替换端口为 9100）"
-          },
-          "compactionRatio": {
-            "type": "number",
-            "default": 0.5,
-            "description": "上下文占比超过此阈值时触发压缩（0-1）"
-          },
-          "ingestTimeoutMs": {
-            "type": "number",
-            "default": 5000,
-            "description": "Ingest 请求超时（毫秒）"
-          },
-          "compactionTimeoutMs": {
-            "type": "number",
-            "default": 30000,
-            "description": "Compaction 请求超时（毫秒）"
           }
         }
       }

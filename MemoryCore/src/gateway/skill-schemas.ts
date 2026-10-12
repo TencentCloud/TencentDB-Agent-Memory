@@ -114,7 +114,6 @@ export const patchRequestSchema = z.object({
 export const deleteRequestSchema = z.object({
   ...idFieldsShape,
   skill_id: z.string().min(1),
-  expected_version: z.number().int().min(1),
 }).superRefine(refineAgentNeedsTeam);
 
 export const getRequestSchema = z.object({
@@ -124,6 +123,32 @@ export const getRequestSchema = z.object({
   include_content: z.boolean().optional(),
   include_manifest: z.boolean().optional(),
 }).superRefine(refineAgentNeedsTeam);
+
+/**
+ * `POST /v3/skill/get-by-name` —— 基于 (team_id, agent_id, skill_name) 唯一定位。
+ *
+ * 存在动机:agent 通过工具调用 skill 时,更自然地使用 skill_name(与
+ * `<available_skills>` 块里渲染的 `- name: description` 一致),而不是内部
+ * `skl-xxx` id。之前 agent 必须先 skill_list 再解析出 skill_id 才能 get,
+ * 一次交互两次调用还费 tokens。新接口让 agent 一次拿到全文。
+ *
+ * 唯一性契约:同一 `(team_id, agent_id)` 下 skill_name 唯一(由 skill_create 侧
+ * 42201 SKILL_NAME_DUPLICATE 保证)。三个字段都必填:
+ *   - team_id + agent_id → owner scope
+ *   - skill_name          → 具体名字
+ *
+ * 缺 team_id 或 agent_id 直接 40001; 找不到 name 返回 40401(与 get 对齐)。
+ */
+export const getByNameRequestSchema = z.object({
+  user_id: z.string().min(1).optional(),
+  team_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  task_id: z.string().min(1).optional(),
+  skill_name: z.string().min(1).max(64),
+  version: z.number().int().min(1).optional(),
+  include_content: z.boolean().optional(),
+  include_manifest: z.boolean().optional(),
+});
 
 export const listRequestSchema = z.object({
   ...idFieldsShape,
@@ -172,10 +197,31 @@ export const filesReadRequestSchema = z.object({
   encoding: z.enum(["utf-8", "base64"]).optional(),
 }).superRefine(refineAgentNeedsTeam);
 
+export const exportRequestSchema = z.object({
+  ...idFieldsShape,
+  skill_id: z.string().min(1),
+  version: z.number().int().min(1).optional(),
+  format: z.enum(["zip"]).optional(),
+}).superRefine(refineAgentNeedsTeam);
+
 export const listingRequestSchema = z.object({
   ...idFieldsShape,
   query: z.string().max(2048).optional(),
   char_budget: z.number().int().min(0).max(64_000).optional(),
+  /**
+   * 召回模式:
+   *  - undefined / 'auto': 走原逻辑 —— query 非空走 search, 空走 mode=full head
+   *  - 'activity': default-task 活跃度召回 —— 读 skill_usage_logs 按 MRR 排序
+   *
+   * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+   *
+   * `activity` 模式在下列任一情况会自动 fallback 到原逻辑, 完全向后兼容:
+   *   - CH 未配置 (analytics.clickhouse.enabled=false 或 endpoint 空)
+   *   - CH 查询失败 / 超时
+   *   - 该 agent 近 30 天 0 活跃 skill (冷启动)
+   *   - store 批查异常
+   */
+  mode: z.enum(["auto", "activity"]).optional(),
 }).superRefine(refineAgentNeedsTeam);
 
 /**
@@ -205,6 +251,12 @@ export const extractRequestSchema = z.object({
   options: z.object({
     max_iterations: z.number().int().min(1).max(64).optional(),
   }).optional(),
+  /**
+   * 冷启动/批量导入场景 (agents/asset-import.ts) 显式传 true 触发严格 gate 抽取
+   * (SKILL_REVIEW_PROMPT_STRICT v1 五分类+四维打分)。日常实时调用不传即可,
+   * 走当前 v2 SKILL_REVIEW_PROMPT (宽松, 广召回), 老 client 完全兼容。
+   */
+  strict_mode: z.boolean().optional(),
 });
 
 /**
@@ -228,6 +280,13 @@ export const conversationAddRequestSchema = z.object({
   agent_id: z.string().min(1).refine((v) => !v.includes("|"), "agent_id must not contain '|'"),
   task_id: z.string().min(1).max(128).optional(),
   messages: z.array(conversationMessageSchema).min(1).max(500),
+  /**
+   * 冷启动/批量导入场景 (agents/asset-import.ts) 显式传 true 触发严格 gate 抽取
+   * (SKILL_REVIEW_PROMPT_STRICT v1 五分类+四维打分)。归档时 handler 把该字段
+   * 存进 SkillTaskEntry.mode='strict', worker 拿到后透传给 SkillExtractor。
+   * 老 client 不传即可, 走当前 v2 SKILL_REVIEW_PROMPT (宽松, 广召回), 零回归。
+   */
+  strict_mode: z.boolean().optional(),
 });
 
 // ═════════════════════════════════════════════════════════════════════
@@ -239,12 +298,29 @@ export type UpdateRequest = z.infer<typeof updateRequestSchema>;
 export type PatchRequest = z.infer<typeof patchRequestSchema>;
 export type DeleteRequest = z.infer<typeof deleteRequestSchema>;
 export type GetRequest = z.infer<typeof getRequestSchema>;
+export type GetByNameRequest = z.infer<typeof getByNameRequestSchema>;
 export type ListRequest = z.infer<typeof listRequestSchema>;
 export type SearchRequest = z.infer<typeof searchRequestSchema>;
 export type VersionsRequest = z.infer<typeof versionsRequestSchema>;
 export type FilesWriteRequest = z.infer<typeof filesWriteRequestSchema>;
 export type FilesRemoveRequest = z.infer<typeof filesRemoveRequestSchema>;
 export type FilesReadRequest = z.infer<typeof filesReadRequestSchema>;
+export type ExportRequest = z.infer<typeof exportRequestSchema>;
 export type ListingRequest = z.infer<typeof listingRequestSchema>;
 export type ExtractRequest = z.infer<typeof extractRequestSchema>;
 export type ConversationAddRequest = z.infer<typeof conversationAddRequestSchema>;
+
+// ═════════════════════════════════════════════════════════════════════
+//  force-archive (手动强制归档，跳过阈值)
+// ═════════════════════════════════════════════════════════════════════
+
+export const forceArchiveRequestSchema = z.object({
+  space_id: z.string().min(1),
+  user_id: z.string().min(1),
+  team_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  session_id: z.string().min(1),
+  reason: z.string().max(2000).optional(),
+  task_id: z.string().optional(),
+});
+export type ForceArchiveRequest = z.infer<typeof forceArchiveRequestSchema>;

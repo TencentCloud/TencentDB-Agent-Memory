@@ -1,155 +1,22 @@
 import type { TdaiClient } from "./client.js";
 import type { TdaiIdentity, TdaiMessage } from "./types.js";
+import { extractUserQueryText } from "../common/user-query-extractor.js";
 
 /**
  * 从最后一条 user 消息中抽取「真正的用户提问」，写入 L0。
  *
- * 背景：CodeBuddy / Claude Code 等编码 agent 的 user 消息里除了真实问题，
- * 还塞了大量 harness 上下文（<additional_data> 打开的文件、current_time、
- * <system_reminder> 等）。如果把整条消息原样写进 L0，记忆会被这些噪声污染，
- * 而且每轮都不一样、检索价值极低。因此这里只保留 <user_query> 正文。
+ * 背景：CodeBuddy / Claude Code / DSH 等编码 agent 的 user 消息里除了真实问题，
+ * 还塞了大量 harness 上下文（<additional_data>、current_time、<system_reminder>、
+ * DSH 的 `Current runtime context.` 快照等）。如果把整条消息原样写进 L0，记忆
+ * 会被这些噪声污染，而且每轮都不一样、检索价值极低。因此这里只保留真实提问。
  *
- * 策略：
- *   1. 优先抽取所有 <user_query>...</user_query> 块（可能多个，如「继续任务」），
- *      去掉 harness 包裹，仅留真实意图。
- *   2. 没有 <user_query> 时，**只剥离会话初始化（选 Team/Agent/任务）的表单工件**
- *      （<question_answer> 段、标题行）与 harness wrapper，保留用户真实输入；
- *      若整条本就是初始化交互，剥离后自然为空 → 该轮不写 L0。
+ * 抽取算法在 `common/user-query-extractor.ts` 内实现（tdai / mem-command /
+ * codebuddy adapter 共用同一份，避免语义漂移）；本模块只负责"取最后一条
+ * user message → 抽 query 文本 → 组装 TdaiMessage"这几步。
  */
-/**
- * 会话初始化（选择 Team / Agent / 任务）表单问答的标题标记。
- * 用于剥离残留的标题行；真实用户输入不受影响。
- */
-const SESSION_INIT_TITLE_MARKER = "会话初始化";
 
-/**
- * Claude Code CLI 用 role=user 塞进对话流的"内部辅助 prompt"识别器。
- *
- * 场景：CC 客户端会用 role=user 承载多种**非用户真实输入**的内容，如果整条命中
- * 任一模式，直接判定为"非人类输入" → 该轮不写 L0，避免污染记忆库。
- *
- * 命中规则设计：
- *   - 全消息**开头**出现明显 CC 模式标记（[SUGGESTION MODE]、[TITLE MODE] 等）；
- *   - 或 CC 结构化元数据 JSON（{"parentUuid": ..., "promptId": ...}）；
- *   - 或系统级 recap/summary prompt（"The user stepped away and is coming back..."）；
- *   - 或 session-init AskUserQuestion 的回执（"Your questions have been answered:"）；
- *   - 或 tool 输出被伪装成 user 的典型格式（"(Bash completed with no output)"、
- *     `<persisted-output>` 大文件占位、CC 时间戳日志块）。
- *
- * 匹配用 startsWith / 全串锚定 —— 不误伤真实用户输入。
- */
-const CC_INTERNAL_PROMPT_PATTERNS: RegExp[] = [
-  // CC 模式标记：[XXX MODE: ...] / [XXX: ...]
-  /^\s*\[(?:SUGGESTION|TITLE|SUMMARY|COMPACT|COMPACTION|ANALYSIS|EVAL|RECAP|MEMORY|SIDECHAIN)\s+MODE[:\s]/i,
-  // CC 会话恢复 prompt（在 core prompts/session-resume 里定义）
-  /^\s*The user stepped away and is coming back\.\s*Recap/i,
-  // AskUserQuestion 回执（session-init 或运行时问答）
-  /^\s*Your questions have been answered:\s*"/i,
-  // CC 结构化 promptId 元数据 JSON（首字符是数字 + JSON 或直接 JSON 元信息）
-  /^\s*\d+\s*\{"parentUuid"|^\s*\{"parentUuid":\s*"[^"]+","isSidechain"/,
-  // CC 用时间戳前缀重放对话日志（[2026-07-11T...][user] / [assistant]）
-  /^\s*\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\]]*\]\[(?:user|assistant|system)\]/,
-  // 注：<persisted-output> / (Bash completed with no output) 移到 2b/2c 的
-  //     wrapper 剥离层处理 —— 它们经常和用户下一句拼在同一条 user 消息里，
-  //     只应剥除自身、保留用户后续输入。
-];
-
-function isClaudeCodeInternalPrompt(text: string): boolean {
-  const t = text.trim();
-  if (!t) return false;
-  return CC_INTERNAL_PROMPT_PATTERNS.some((re) => re.test(t));
-}
-
-export function extractUserQueryText(raw: string): string {
-  // 0) CC 内部 prompt / tool_result 伪装 / 表单回执 → 整条丢弃（不写 L0）
-  //    这是最高优先级：即便同时含 <user_query> 也整条判定为非人类输入。
-  //    真实用户输入不会命中这些锚定在开头/整串的模式。
-  if (isClaudeCodeInternalPrompt(raw)) return "";
-
-  // 1) 优先：显式 <user_query> 块（即便同一条消息里还夹着 session-init 问答，
-  //    也只取真实 query，用户输入完整保留）。
-  const queries: string[] = [];
-  const re = /<user_query>([\s\S]*?)<\/user_query>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) {
-    const inner = m[1].trim();
-    if (inner) queries.push(inner);
-  }
-  if (queries.length > 0) return queries.join("\n\n");
-
-  // 2) 没有显式 user_query：剥离所有"非用户键入"的内容片段，保留剩余的
-  //    用户真实输入。核心原则：只有用户手打的文本值得写 L0；一切 tool 回显
-  //    / 系统提醒 / 文件正文 / 表单工件 / CC 本地 memory 内容 —— 全部剥除。
-  let text = raw;
-
-  // 2a) session-init 表单回答 <question_answer>...</question_answer>
-  text = text.replace(/<question_answer[^>]*>[\s\S]*?<\/question_answer>/gi, "");
-
-  // 2b) XML 包裹类：CC / CodeBuddy 塞进 user role 的各种 harness 段
-  //     - system-reminder / system_reminder（两种拼写都覆盖）
-  //     - additional_data
-  //     - open_and_recently_viewed_files
-  //     - session（proxy 自己注入的 session context 包裹）
-  //     - persisted-output（CC "Output too large" 大文件占位）
-  //     - tool_use_error / tool-use-error / tool-result / tool_result（伪 wrapper）
-  for (const tag of [
-    "system-reminder", "system_reminder",
-    "additional_data",
-    "open_and_recently_viewed_files",
-    "session",
-    "persisted-output", "persisted_output",
-    "tool_use_error", "tool-use-error",
-    "tool_result", "tool-result",
-  ]) {
-    text = text.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi"), "");
-  }
-
-  // 2c) 行级过滤：单行匹配的 tool 回显 / 文件片段 / memory frontmatter
-  //     每条规则单行判定，匹配则删除该行；不阻断其它行的用户输入。
-  const LINE_DROP_PATTERNS: RegExp[] = [
-    // CC Write/Edit tool 成功回执
-    /^\s*The file .+ has been (updated|created) successfully.*$/i,
-    /^\s*File created successfully at:/i,
-    // CC Bash tool 静默完成
-    /^\s*\(Bash completed with no output\)\s*$/,
-    // CC read tool 返回的 cat -n 行号格式（"     1  内容" / "1  内容"）
-    // 至少 3 位数字更严格；1-2 位可能与用户输入冲突（如用户列表 "1 abc"）
-    // 因此这里只匹配"数字 + 2 空格 + 内容"且行首无其它字符 —— cat -n 特有格式
-    /^\s{0,6}\d+\t/,   // cat -n 用 tab 分隔（Read tool 的标准格式）
-    // MEMORY.md 相关：CC session_init/memory 命令产生的输出
-    /^\s*File .+ has been (updated|created)/i,
-  ];
-  text = text
-    .split("\n")
-    .filter((line) => !LINE_DROP_PATTERNS.some((re) => re.test(line)))
-    .join("\n");
-
-  // 2d) 整块剥除：MEMORY.md yaml frontmatter（--- 到 ---，含 metadata）
-  //     格式：
-  //       ---
-  //       name: ...
-  //       description: ...
-  //       metadata: ...
-  //       ---
-  //     只匹配"至少含 name / description / metadata / node_type 关键字"的 frontmatter
-  //     以避免误伤 markdown 分割线。
-  text = text.replace(
-    /(?:^|\n)---\s*\n(?:[a-z_][a-z0-9_]*:\s*.*\n)*?(?:name|description|metadata|node_type|originSessionId):[\s\S]*?\n---\s*(?:\n|$)/gi,
-    "\n",
-  );
-
-  // 2e) 残留的会话初始化表单标题行（如「会话初始化 — 选择 Agent 与任务」）
-  text = text
-    .split("\n")
-    .filter((line) => !line.includes(SESSION_INIT_TITLE_MARKER))
-    .join("\n");
-
-  // 2f) 折叠多余空行（前面剥除后可能留下大段空行）
-  text = text.replace(/\n{3,}/g, "\n\n");
-
-  // 剩余即用户真实输入；若整条本就全是 CC 工件，这里会自然变空 → 不写 L0。
-  return text.trim();
-}
+// 保留 re-export，避免下游（含单测）import 路径变化引发一次性大改。
+export { extractUserQueryText };
 
 export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | null {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -175,10 +42,10 @@ function extractContentText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content.map((part) => {
+      if (!part || typeof part !== "object" || Array.isArray(part)) return "";
       const p = part as Record<string, unknown>;
-      if (typeof p.text === "string") return p.text;
-      if (typeof p.content === "string") return p.content;
-      return "";
+      if (p.type !== "text" && p.type !== "input_text") return "";
+      return typeof p.text === "string" ? p.text : "";
     }).filter(Boolean).join("\n");
   }
   return "";

@@ -77,6 +77,7 @@ export { TdaiL1RecallInjector } from "./injectors/tdai-l1-recall-injector.js";
 export { TdaiProfileMemoryInjector } from "./injectors/tdai-profile-memory-injector.js";
 export { TdaiToolsInjector } from "./injectors/tdai-tools-injector.js";
 export { KnowledgeToolsInjector } from "./injectors/knowledge-tools-injector.js";
+export { AssetReflectionInjector, renderAssetReflectionBlock } from "./injectors/asset-reflection-injector.js";
 
 // CodeBuddy
 export { isCodeBuddyPrompt, parseCodeBuddySystemPrompt } from "./agents/codebuddy/parser.js";
@@ -86,6 +87,16 @@ export { CodeBuddyProfile } from "./agents/codebuddy/profile.js";
 
 // Claude Code
 export { ClaudeCodeProfile } from "./agents/claude-code/index.js";
+
+// WorkBuddy — independent client (structurally XML-tag, wire protocol OpenAI/Responses).
+// Deliberately kept as a distinct namespace with duplicated logic; no cross-imports
+// from codebuddy/codex/claude-code.
+export {
+  WorkbuddyProfile,
+  parseWorkbuddySystemPrompt,
+  isWorkbuddyPrompt,
+  WORKBUDDY_KNOWN_TAGS,
+} from "./agents/workbuddy/index.js";
 
 // ── Pipeline Factory ──────────────────────────────────────────────────────────
 
@@ -100,10 +111,13 @@ import { SkillToolsInjector } from "./injectors/skill-tools-injector.js";
 import { TdaiProfileMemoryInjector } from "./injectors/tdai-profile-memory-injector.js";
 import { TdaiToolsInjector } from "./injectors/tdai-tools-injector.js";
 import { KnowledgeToolsInjector } from "./injectors/knowledge-tools-injector.js";
+import { AssetReflectionInjector } from "./injectors/asset-reflection-injector.js";
 import type { ProtocolAdapter } from "./adapters/interface.js";
 import type { AgentProfile } from "./agents/interface.js";
 import { CodeBuddyProfile } from "./agents/codebuddy/profile.js";
 import { ClaudeCodeProfile } from "./agents/claude-code/index.js";
+import { WorkbuddyProfile } from "./agents/workbuddy/profile.js";
+import { PiProfile } from "./agents/pi/index.js";
 import { getHookCacheRepo, setHookCacheRepo, type HookCacheRepo } from "../db/hookCacheRepo.js";
 import { getSessionRepo, setSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import { getRedisClient } from "../db/redis-client.js";
@@ -114,6 +128,7 @@ import { KvSessionRepo } from "../db/kv-session-repo.js";
 import { KvHookCacheRepo } from "../db/kv-hook-cache-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { getProxyStorage, getEffectiveBackend } from "../storage/factory.js";
+import { FsStorage } from "../storage/fs-storage.js";
 import { getSessionStore } from "../session/store.js";
 import type { HookRegistry, PrewarmInput } from "./types.js";
 import { prewarmAll, type PrewarmOptions, type PrewarmResult } from "./prewarm.js";
@@ -177,6 +192,41 @@ export function tryActivateRedis(config: ProxyConfig): boolean {
   } catch (err) {
     console.warn("[injection] Redis unavailable, falling back to SQLite:", err instanceof Error ? err.message : String(err));
     return false;
+  }
+}
+
+/**
+ * session binding 必须始终持久化，不存在纯内存运行模式。
+ *
+ * 如果 storage 和 redis 都未激活（bindingRepo 仍为 undefined），
+ * 用 fs 自动创建一个 KvBindingRepo 兜底。
+ *
+ * 默认路径: ~/.memory-tencentdb/proxy-state/ （与 MemoryCore 的
+ * ~/.memory-tencentdb/memory-tdai/ 同级，保持项目数据聚拢）。
+ * 可通过 config.storage.fs.fsRoot 或环境变量 PROXY_DATA_DIR 覆盖。
+ *
+ * 降级机制: fs 创建失败（权限不足、磁盘满等）→ 打 warn 回退到内存逻辑，
+ * 不阻断 proxy 启动。用户可在线使用但 proxy 重启后需重新 session-init。
+ */
+export function ensureBindingRepoPersistent(config: ProxyConfig): void {
+  const store = getSessionStore();
+  if (store.getBindingRepo()) return; // 已有（storage/redis 激活过了）
+
+  const home = process.env.HOME || process.env.USERPROFILE || "/tmp";
+  const defaultFsRoot = `${home}/.memory-tencentdb/proxy-state`;
+  const fsRoot = process.env.PROXY_DATA_DIR || config.storage?.fs?.fsRoot || defaultFsRoot;
+
+  try {
+    const fsStorage = new FsStorage(fsRoot);
+    store.setBindingRepo(new KvBindingRepo(fsStorage));
+    console.log(`[injection] bindingRepo fallback → fs (${fsRoot})`);
+  } catch (err) {
+    // 降级: fs 不可用时回退到内存逻辑，不阻断启动。
+    // proxy 可正常运行，但重启后 binding 丢失 → 用户需重新 session-init。
+    console.warn(
+      `[injection] fs bindingRepo at ${fsRoot} failed: ${(err as Error).message}. ` +
+      `Falling back to in-memory — session bindings will NOT persist across restarts.`,
+    );
   }
 }
 
@@ -250,8 +300,17 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     // RAG-driven `<cloud_skills>` block. Calls /v3/skill/search at prewarm time.
     // When coreSkill is unconfigured (no serviceToken), the searchSkills call
     // will fail and the injector silently degrades to no <cloud_skills> block.
+    //
+    // `defaultTaskId` (from sessionInit config, defaults to "default") is passed
+    // through so the injector can detect the virtual default-task fallback and
+    // switch to activity-based recall. When absent (deployment 关闭了默认 task),
+    // activity 模式 gate 永远为 false, listing 走原 BM25 逻辑 —— 完全向后兼容。
+    // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
     registry.register(
-      new SkillInjector({ coreSkill: config.coreSkill }),
+      new SkillInjector({
+        coreSkill: config.coreSkill,
+        defaultTaskId: config.sessionInit?.defaultTaskId,
+      }),
     );
 
     // Always inject the curl-recipe `<skill_tools>` block alongside the
@@ -305,12 +364,48 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     }
   }
 
+  // ── Asset Reflection (内部效果评估) ─────────────────────────────────────
+  // 默认开启（markerOptIn=true）—— 未配置 assetReflection 的 pod 也 register
+  // 本 injector。register 只是加进 registry，marker 未命中时 execute() 直接
+  // 返回 []，正常请求 prompt 完全不变；只有请求 URL 带 `/analyse` marker
+  // 才真 emit 块。Tag 列表由本节点上"实际 register 了的资产 injector"派生，
+  // 避免让 LLM 反思一个本节点根本没接入的资产。
+  //
+  // 显式配 markerOptIn=false 时 injector 不 register，且 server.ts 顶部 gate
+  // 会把任何带 `/analyse/` 段的请求 404 拒。
+  if (config.injection?.assetReflection?.markerOptIn) {
+    const registeredIds = new Set(registry.getAll().map((h) => h.id));
+    const activeAssetTags: string[] = [];
+    // Skill 家族：SkillInjector 出 <available_skills>，SkillToolsInjector 出 <skill_tools>；
+    // 两个 injector 一起启用（见上文 `if (injectors.includes("skill"))`），任一存在都算 skill 资产命中。
+    if (registeredIds.has("skill-injector") || registeredIds.has("skill-tools-injector")) {
+      activeAssetTags.push("skill_tools");
+      activeAssetTags.push("available_skills");
+    }
+    if (registeredIds.has("tdai-memory-tools-injector")) {
+      activeAssetTags.push("tdai_memory_tools");
+    }
+    if (registeredIds.has("knowledge-tools-injector")) {
+      activeAssetTags.push("knowledge_tools");
+    }
+    if (activeAssetTags.length > 0) {
+      registry.register(new AssetReflectionInjector({ activeAssetTags }));
+      console.log(`[injection] asset-reflection registered, tags=[${activeAssetTags.join(",")}]`);
+    } else {
+      console.log(`[injection] asset-reflection markerOptIn=true 但本节点无资产 injector，跳过 register`);
+    }
+  }
+
   // Activate storage backend if configured (before loading repos).
   // ProxyStorage (COS/SQLite/FS/Memory) takes precedence when storage.enabled;
   // otherwise fall back to the original Redis path.
   if (!tryActivateStorage(config)) {
     tryActivateRedis(config);
   }
+
+  // session binding 必须始终持久化 — 不存在纯内存模式。
+  // 如果 storage 和 redis 都未激活，用 fs 作为 bindingRepo 兜底。
+  ensureBindingRepoPersistent(config);
 
   const hookCacheRepo = tryLoadHookCacheRepo();
 
@@ -330,6 +425,8 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     agentProfiles: new Map<string, AgentProfile>([
       ["codebuddy", new CodeBuddyProfile()],
       ["claude-code", new ClaudeCodeProfile()],
+      ["workbuddy", new WorkbuddyProfile()],
+      ["pi", new PiProfile()],
       // ["cursor", new CursorProfile()],
     ]),
     // Legacy fallback: scan system prompt content (for backward compat).
@@ -337,6 +434,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
       const agentProfiles: AgentProfile[] = [
         new CodeBuddyProfile(),
         new ClaudeCodeProfile(),
+        new WorkbuddyProfile(),
       ];
       return (systemText: string) =>
         agentProfiles.find((p) => p.detect(systemText)) ?? null;

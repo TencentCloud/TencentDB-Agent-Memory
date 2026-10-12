@@ -1,0 +1,319 @@
+/**
+ * SkillDetailPane 样式补丁 — 颜色/字体全部走 Tea Design Token。
+ * 不使用 tailwind 语义色，不在原生标签上写内联 style。
+ */
+
+/* 右侧详情是内容主列：24px 内边距与左栏标题的 32px 基线对齐。 */
+/* 撑满右栏高度（外层 _asset-split-detail 已限定视口高度），内容少也不留空白 */
+._memory-skill-detail-card {
+  --card-body-padding: 24px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Tea Card 内部结构撑满；改为「固定 head + 滚动 body」两段式，
+   overflow 下沉到 _memory-skill-detail-scroll，head 常驻不滚动 */
+._memory-skill-detail-card > .tea-card__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+._memory-skill-detail-empty {
+  min-height: 480px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+._memory-skill-detail-body {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Tea Card.Body 会把 children 再包一层 .tea-card__content，
+   需让它同样撑满并成为 flex 列，否则内部的固定 head + 滚动区 flex 布局失效、
+   scroll 拿不到 bounded 高度导致「正文无法滚动」。 */
+._memory-skill-detail-body > .tea-card__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 滚动内容区：占据 head 以下全部空间并独立滚动 */
+._memory-skill-detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 12px;
+}
+
+/* 刷新中（编辑/新建保存后 reload）：定位上下文 + 内容降透明度，配合遮罩层给出加载反馈 */
+._memory-skill-detail-scroll--refreshing {
+  position: relative;
+}
+
+._memory-skill-detail-scroll--refreshing > *:not(._memory-skill-detail-refresh-mask) {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+._memory-skill-detail-refresh-mask {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+  opacity: 1 !important;
+  pointer-events: none;
+}
+
+/* 附属资源固定底部：不随正文滚动，始终可见；列表自身超高时内部滚动 */
+._memory-skill-detail-footer {
+  flex: 0 0 auto;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--tea-color-border-primary-default);
+}
+
+/* 窄屏堆叠布局下（AssetSplitLayout 取消高度限制），卡片回归文档流高度 */
+@media (max-width: 960px) {
+  ._memory-skill-detail-card {
+    height: auto;
+  }
+
+  ._memory-skill-detail-card > .tea-card__body,
+  ._memory-skill-detail-body,
+  ._memory-skill-detail-body > .tea-card__content {
+    overflow: visible;
+  }
+
+  ._memory-skill-detail-scroll {
+    overflow-y: visible;
+  }
+
+  /* 窄屏堆叠：附属资源不再固定/内部滚动，回归文档流跟随整卡片 */
+  ._memory-skill-files-box--footer {
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+/* 固定悬浮头部：不滚动，承载 skill 名 + 描述 + 操作栏 */
+._memory-skill-detail-head {
+  flex: 0 0 auto;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--tea-color-border-primary-default);
+}
+
+/* 头部主行：左信息区 + 右操作区 */
+._memory-skill-detail-head-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+._memory-skill-detail-head-info {
+  min-width: 0;
+  flex: 1;
+}
+
+/* 操作栏：编辑 / 新建文件 / 历史版本，靠右不换行 */
+._memory-skill-detail-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+._memory-skill-detail-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  word-break: break-all;
+}
+
+._memory-skill-detail-desc {
+  margin-top: 4px;
+}
+
+/* skill_id 行：等宽弱化小字 + 复制按钮，紧贴名称下方 */
+._memory-skill-detail-id {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  min-width: 0;
+}
+
+._memory-skill-detail-id-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-skill-detail-error {
+  margin-bottom: 8px;
+}
+
+._memory-skill-detail-section + ._memory-skill-detail-section {
+  margin-top: 16px;
+}
+
+._memory-skill-detail-section-title.tea-text {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+/* section 标题行：标题占左，编辑/新建等操作按钮靠右 */
+._memory-skill-detail-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+._memory-skill-detail-section-head ._memory-skill-detail-section-title.tea-text {
+  margin-bottom: 0;
+}
+
+/* ===== 编辑态（正文 / 文件 / 新建文件）===== */
+._memory-skill-edit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Input.TextArea 撑满宽度，等宽字体，给足编辑高度 */
+._memory-skill-edit-textarea,
+._memory-skill-edit-textarea textarea {
+  width: 100%;
+  min-height: 320px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+._memory-skill-edit-hint {
+  font-size: 12px;
+}
+
+._memory-skill-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+._memory-skill-newfile-field + ._memory-skill-newfile-field {
+  margin-top: 12px;
+}
+
+._memory-skill-newfile-path,
+._memory-skill-newfile-path input {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+/* 历史版本查看 Modal 内：附属资源与正文的间距 */
+._memory-skill-version-files {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--tea-color-border-primary-default);
+}
+
+/* ===== 版本历史（Table 内的版本号单元格）===== */
+._memory-skill-version-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+._memory-skill-version-current {
+  color: var(--tea-color-text-link-default);
+}
+
+._memory-skill-detail-json,
+._memory-skill-file-content {
+  margin: 0;
+  padding: 12px;
+  background-color: var(--tea-color-bg-secondary-default);
+  border: 1px solid var(--tea-color-border-primary-default);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-primary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Markdown 正文盒样式已迁移到共享组件 components/markdown-view.css（._md-view） */
+
+._memory-skill-files-box {
+  padding: 8px 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  background-color: var(--tea-color-bg-secondary-default);
+}
+
+/* 底部固定区的附属资源盒：限制最大高度，文件多时内部滚动，不挤压中间正文 */
+._memory-skill-files-box--footer {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+/* ===== 文件树 ===== */
+._memory-skill-filetree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* 子层级靠嵌套 ul 的固定缩进，避免在 li 上写动态内联 style */
+._memory-skill-filetree ._memory-skill-filetree {
+  padding-left: 12px;
+}
+
+._memory-skill-filetree li {
+  padding: 1px 0;
+}
+
+._memory-skill-file-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-link-default);
+}
+
+._memory-skill-file-btn:hover {
+  text-decoration: underline;
+}
+
+._memory-skill-dir {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+}

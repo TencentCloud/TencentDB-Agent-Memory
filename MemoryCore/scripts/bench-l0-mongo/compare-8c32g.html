@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>MongoDB L0 一亿条压测报告</title>
+<style>
+  :root{--bg:#0b0f17;--card:#121826;--card2:#0e1420;--line:#1f2937;--fg:#e5e7eb;--fg2:#9aa4b2;--fg3:#6b7280;
+    --green:#22c55e;--red:#ef4444;--blue:#3b82f6;--amber:#f59e0b;--purple:#a855f7}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:44px 26px 80px}
+  h1{font-size:30px;margin:0 0 8px} h2{font-size:20px;margin:52px 0 16px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  h3{font-size:15px;margin:26px 0 10px;color:var(--fg2);font-weight:600}
+  p{margin:12px 0} .sub{color:var(--fg2);font-size:14px;margin-bottom:20px}
+  code{background:#1b2333;padding:2px 6px;border-radius:4px;font-size:13px;font-family:ui-monospace,Menlo,monospace}
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 26px}
+  .pill{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:5px 13px;font-size:13px;color:var(--fg2)}
+  .pill.on{border-color:#166534;background:#0d2016;color:#86efac}
+  .pill.warn{border-color:#78350f;background:#1f1508;color:#fcd34d}
+  .verdict{background:linear-gradient(180deg,#101a12,#0d1410);border:1px solid #1c3b25;border-left:3px solid var(--green);
+    border-radius:10px;padding:20px 24px;margin:24px 0} .verdict b{color:#86efac}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .stat .k{font-size:12.5px;color:var(--fg3)} .stat .v{font-size:27px;font-weight:650;margin:6px 0 2px}
+  .stat .d{font-size:12.5px;color:var(--fg2)} .up{color:var(--green)} .down{color:var(--red)} .neutral{color:var(--fg)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{text-align:right;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--fg3);font-weight:600;font-size:12.5px;border-bottom:1px solid #2a3444}
+  tbody tr:hover{background:#0f1521} .num{font-family:ui-monospace,Menlo,monospace;font-size:13.5px}
+  .chart{width:100%;height:auto;background:var(--card2);border:1px solid var(--line);border-radius:10px;margin:16px 0}
+  .plot{fill:#0a0f18;stroke:none} .grid{stroke:#1c2432;stroke-width:1}
+  .ax{fill:#6b7280;font-size:11px;font-family:ui-monospace,Menlo,monospace} .axl{fill:#9aa4b2;font-size:12.5px} .lg{fill:#c7d0dc;font-size:12.5px}
+  .bars{margin:14px 0} .bar-row{display:grid;grid-template-columns:230px 1fr 120px;align-items:center;gap:14px;margin:9px 0}
+  .bar-lab{font-size:13.5px;color:var(--fg2)} .bar-track{background:#0d1420;border-radius:5px;height:22px;overflow:hidden;border:1px solid var(--line)}
+  .bar-fill{height:100%;border-radius:4px} .bar-stack{display:flex;height:100%} .seg{height:100%} .seg.rtt{background:#374151}
+  .bar-val{text-align:right;font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--fg)}
+  .note{background:var(--card2);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:8px;padding:15px 19px;margin:18px 0;font-size:14px;color:var(--fg2)}
+  .note b{color:#fcd34d} .note.info{border-left-color:var(--blue)} .note.info b{color:#93c5fd}
+  .note.ok{border-left-color:var(--green)} .note.ok b{color:#86efac}
+  ul{margin:12px 0;padding-left:22px} li{margin:7px 0}
+  .foot{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);color:var(--fg3);font-size:12.5px}
+  .lgd{display:inline-flex;align-items:center;gap:7px;margin-right:22px;font-size:12.5px;color:var(--fg2)}
+  .lgd i{width:14px;height:10px;border-radius:2px;display:inline-block}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>MongoDB L0 一亿条压测报告</h1>
+<p class="sub">
+  实例 <code>28.79.181.33:7026</code> · 8C32G500G · 跨地域 RTT 37ms<br/>
+  最新：<code>l0_bench_w1_r1_s100m</code>（9/1，w:1）· 对比：<code>l0_bench_8c32g_r3_s100m</code>（8/31，w:majority）<br/>
+  两次均为 batch=1000、并发=8，唯一变量是写关注。
+</p>
+
+<div class="pills">
+  <span class="pill on">1 亿条 × 2 轮均完成</span>
+  <span class="pill on">w:1 — 0 stall · 32 分钟</span>
+  <span class="pill on">BM25 READY</span>
+  <span class="pill warn">w:majority — 3 次完全停顿</span>
+</div>
+
+<div class="verdict">
+  <p><b>结论：改成 w:1 后 WriteStall 完全消除，1 亿条 32 分钟写完，0 错误，最长单批 1.2 秒。</b></p>
+  <p style="color:var(--fg2)">
+    w:majority 那轮（8/31）平均 42,249 docs/s、3 次完全停顿、最长单批 134.9 秒——
+    根因是复制跟不上导致 flow control 限流（<code>isLaggedCount=3</code>）。
+    改成 w:1 后（9/1）平均 51,631 docs/s、<b>零吞吐窗口 0 次</b>、最长单批 1.2 秒。
+    查询性能不受写关注影响，仅列 w:1 轮结果；延迟均扣除 37ms RTT 给出服务端耗时。
+  </p>
+</div>
+
+<h2>一、写入对比：w:1 vs w:majority</h2>
+
+<div class="grid2">
+  <div class="stat"><div class="k">w:1 总耗时</div><div class="v up">32.3 分钟</div>
+    <div class="d">w:majority 39.4 分钟</div></div>
+  <div class="stat"><div class="k">w:1 平均吞吐</div><div class="v up">51,631 docs/s</div>
+    <div class="d">w:majority 42,249 docs/s</div></div>
+  <div class="stat"><div class="k">w:1 零吞吐窗口</div><div class="v up">0 次</div>
+    <div class="d">w:majority 3 次</div></div>
+  <div class="stat"><div class="k">w:1 最长单批</div><div class="v up">1.2 秒</div>
+    <div class="d">w:majority 134.9 秒</div></div>
+</div>
+
+<table>
+  <thead><tr><th>指标</th><th>w:1（9/1）</th><th>w:majority（8/31）</th><th>升配前（参考）</th></tr></thead>
+  <tbody>
+    <tr><td>写关注</td><td class="num up">w:1</td><td class="num">w:majority</td><td class="num">w:majority</td></tr>
+    <tr><td>总耗时</td><td class="num up">32.3 min</td><td class="num">39.4 min</td><td class="num">21.3 h</td></tr>
+    <tr><td>平均吞吐</td><td class="num up">51,631 /s</td><td class="num">42,249 /s</td><td class="num">1,305 /s</td></tr>
+    <tr><td>峰值吞吐</td><td class="num">88,500 /s</td><td class="num">85,439 /s</td><td class="num">24,245 /s</td></tr>
+    <tr><td>零吞吐窗口</td><td class="num up">0</td><td class="num down">3</td><td class="num">—</td></tr>
+    <tr><td>慢批次 (>5s)</td><td class="num up">0</td><td class="num down">有</td><td class="num">—</td></tr>
+    <tr><td>写入错误</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+    <tr><td>BM25 索引</td><td class="num up">READY</td><td class="num up">READY</td><td class="num down">构建失败</td></tr>
+  </tbody>
+</table>
+
+<h3>批延迟分位对比（batch=1000）</h3>
+<table>
+  <thead><tr><th>运行</th><th>p50</th><th>p90</th><th>p95</th><th>p99</th><th>p999</th><th>max</th></tr></thead>
+  <tbody>
+    <tr><td>w:1（9/1）</td>
+  <td class="num">95</td><td class="num">194</td><td class="num">762</td>
+  <td class="num">834</td><td class="num">944</td><td class="num ">1,230</td></tr>
+    <tr><td>w:majority（8/31）</td>
+  <td class="num">103</td><td class="num">164</td><td class="num">198</td>
+  <td class="num">371</td><td class="num">0</td><td class="num down">134,938</td></tr>
+  </tbody>
+</table>
+<p style="color:var(--fg2);font-size:13.5px">
+  w:majority 的 p99（371ms）看起来比 w:1（834ms）更好，
+  但 max 高达 135 秒——极端长尾被 majority 等待「拉平」了，真正的问题在 max 和零吞吐窗口。
+  w:1 的 p999 仅 944ms，分布干净。
+</p>
+
+<h2>二、QPS 曲线</h2>
+<p>横轴统一为写入进度百分比。w:1（绿）全程平滑下滑；w:majority（橙）有三次断崖归零。</p>
+<svg viewBox="0 0 1000 340" class="chart"><rect x="78" y="22" width="902" height="272" class="plot"/>
+    <line x1="78" y1="294.0" x2="980" y2="294.0" class="grid"/><text x="68" y="298.0" class="ax" text-anchor="end">100</text><line x1="78" y1="203.3" x2="980" y2="203.3" class="grid"/><text x="68" y="207.3" class="ax" text-anchor="end">1,000</text><line x1="78" y1="112.7" x2="980" y2="112.7" class="grid"/><text x="68" y="116.7" class="ax" text-anchor="end">10,000</text><line x1="78" y1="22.0" x2="980" y2="22.0" class="grid"/><text x="68" y="26.0" class="ax" text-anchor="end">100,000</text><line x1="78.0" y1="22" x2="78.0" y2="294" class="grid"/><text x="78.0" y="314" class="ax" text-anchor="middle">0</text><line x1="168.2" y1="22" x2="168.2" y2="294" class="grid"/><text x="168.2" y="314" class="ax" text-anchor="middle">10</text><line x1="258.4" y1="22" x2="258.4" y2="294" class="grid"/><text x="258.4" y="314" class="ax" text-anchor="middle">20</text><line x1="348.6" y1="22" x2="348.6" y2="294" class="grid"/><text x="348.6" y="314" class="ax" text-anchor="middle">30</text><line x1="438.8" y1="22" x2="438.8" y2="294" class="grid"/><text x="438.8" y="314" class="ax" text-anchor="middle">40</text><line x1="529.0" y1="22" x2="529.0" y2="294" class="grid"/><text x="529.0" y="314" class="ax" text-anchor="middle">50</text><line x1="619.2" y1="22" x2="619.2" y2="294" class="grid"/><text x="619.2" y="314" class="ax" text-anchor="middle">60</text><line x1="709.4" y1="22" x2="709.4" y2="294" class="grid"/><text x="709.4" y="314" class="ax" text-anchor="middle">70</text><line x1="799.6" y1="22" x2="799.6" y2="294" class="grid"/><text x="799.6" y="314" class="ax" text-anchor="middle">80</text><line x1="889.8" y1="22" x2="889.8" y2="294" class="grid"/><text x="889.8" y="314" class="ax" text-anchor="middle">90</text><line x1="980.0" y1="22" x2="980.0" y2="294" class="grid"/><text x="980.0" y="314" class="ax" text-anchor="middle">100</text><path d="M124.6,27.9L172.5,26.8L210.2,36.2L252.9,31.4L289.0,38.0L317.1,47.7L361.5,29.8L385.5,53.9L422.4,37.1L444.6,57.2L485.2,33.3L510.7,51.6L549.7,35.0L571.2,58.3L593.1,57.6L622.5,46.1L660.8,35.6L689.8,46.6L719.8,45.2L755.1,38.8L773.2,65.1L784.9,82.1L812.3,48.9L843.2,44.0L860.5,67.0L884.3,54.3L905.4,59.0L924.1,63.9L940.8,68.2L955.1,74.6L965.8,85.5L976.7,85.4" fill="none" stroke="#22c55e" stroke-width="2.2" stroke-linejoin="round"/><circle cx="124.6" cy="27.9" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 1min · 86,161/s</title></circle><circle cx="172.5" cy="26.8" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 2min · 88,500/s</title></circle><circle cx="210.2" cy="36.2" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 3min · 69,664/s</title></circle><circle cx="252.9" cy="31.4" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 4min · 78,799/s</title></circle><circle cx="289.0" cy="38.0" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 5min · 66,640/s</title></circle><circle cx="317.1" cy="47.7" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 6min · 52,076/s</title></circle><circle cx="361.5" cy="29.8" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 7min · 81,948/s</title></circle><circle cx="385.5" cy="53.9" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 8min · 44,432/s</title></circle><circle cx="422.4" cy="37.1" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 9min · 68,161/s</title></circle><circle cx="444.6" cy="57.2" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 10min · 40,949/s</title></circle><circle cx="485.2" cy="33.3" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 11min · 75,046/s</title></circle><circle cx="510.7" cy="51.6" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 12min · 47,149/s</title></circle><circle cx="549.7" cy="35.0" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 13min · 71,941/s</title></circle><circle cx="571.2" cy="58.3" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 14min · 39,782/s</title></circle><circle cx="593.1" cy="57.6" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 15min · 40,495/s</title></circle><circle cx="622.5" cy="46.1" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 16min · 54,226/s</title></circle><circle cx="660.8" cy="35.6" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 17min · 70,834/s</title></circle><circle cx="689.8" cy="46.6" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 18min · 53,529/s</title></circle><circle cx="719.8" cy="45.2" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 19min · 55,417/s</title></circle><circle cx="755.1" cy="38.8" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 20min · 65,194/s</title></circle><circle cx="773.2" cy="65.1" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 21min · 33,434/s</title></circle><circle cx="784.9" cy="82.1" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 22min · 21,733/s</title></circle><circle cx="812.3" cy="48.9" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 23min · 50,501/s</title></circle><circle cx="843.2" cy="44.0" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 24min · 57,199/s</title></circle><circle cx="860.5" cy="67.0" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 25min · 31,867/s</title></circle><circle cx="884.3" cy="54.3" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 26min · 44,031/s</title></circle><circle cx="905.4" cy="59.0" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 27min · 39,084/s</title></circle><circle cx="924.1" cy="63.9" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 28min · 34,483/s</title></circle><circle cx="940.8" cy="68.2" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 29min · 30,900/s</title></circle><circle cx="955.1" cy="74.6" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 30min · 26,267/s</title></circle><circle cx="965.8" cy="85.5" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 31min · 19,948/s</title></circle><circle cx="976.7" cy="85.4" r="2.6" fill="#22c55e"><title>w:1（9/1，32 分钟） — 32min · 19,984/s</title></circle><path d="M124.3,28.2L169.7,28.9L201.9,42.5L242.3,33.5L266.3,54.0L302.7,37.7L331.1,47.4L351.8,59.7L379.2,48.8L412.5,41.2L446.1,40.8L475.4,46.2L497.9,56.4L520.9,55.7L559.1,35.8L576.2,67.2L606.4,45.0L630.4,54.0L645.7,71.7L667.6,57.6L689.7,57.2L689.7,294.0L715.2,51.7L733.5,64.8L768.3,39.4L770.9,140.8L794.2,55.3L809.7,71.2L809.7,294.0L815.7,108.4L847.3,43.2L868.4,59.0L883.3,73.0L892.2,92.9L918.4,50.6L940.4,57.4L953.7,77.5L953.7,294.0L967.0,77.3" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/><path d="M91.1,77.8L118.5,127.4L140.3,137.5L160.1,137.1L178.8,138.7L197.4,141.7L214.3,144.5L229.7,153.3L241.6,159.0L252.9,161.4L261.0,189.2L266.3,186.9L271.5,191.0L276.6,191.0L281.9,188.7L287.1,192.0L292.6,185.2L299.1,180.9L305.4,182.0L310.9,191.5L316.0,190.1L321.3,189.2L326.5,192.0L331.5,192.0L336.8,189.2L342.3,187.8L347.9,188.2L353.7,189.2L359.3,188.7L364.9,188.2L370.2,196.2L375.6,189.2L380.9,189.2L386.1,195.1L391.3,190.6L396.4,192.0L401.4,195.1L406.2,197.8L410.7,196.2L415.3,196.2L419.9,194.5L424.6,193.5L429.1,196.7L433.5,196.2L438.0,196.2L442.7,194.5L447.5,193.5L452.2,193.0L456.8,196.2L461.4,195.1L465.9,196.2L470.4,196.2L474.9,197.3L479.2,197.3L483.5,200.8L487.8,197.3L492.2,196.2L496.6,197.3L501.0,196.7L505.5,197.3L509.9,197.3L514.2,199.0L518.4,200.2L522.9,196.7L527.2,200.8L531.3,199.6L535.6,198.4L539.7,200.8L543.9,200.2L548.1,200.2L552.3,199.0L556.5,198.4L560.7,200.8L564.8,200.8L568.9,199.6L573.0,200.2L577.2,199.0L581.4,198.4L585.6,198.4L589.8,200.2L593.8,199.6L597.9,199.6L602.0,200.2L606.1,199.0L610.1,200.8L614.1,199.0L617.9,200.8L621.9,200.8L626.0,205.4L630.0,197.3L634.0,198.4L638.0,200.2L642.1,200.8L646.2,201.4L650.2,201.4L654.1,202.1L658.0,200.8L662.0,201.4L665.8,204.0L669.7,200.8L673.6,200.8L677.4,206.1L681.3,205.4L685.2,201.4L689.1,202.1L693.0,204.0L696.8,204.7L700.7,204.0L704.6,204.7L708.5,202.7L712.5,200.8L716.4,202.1L720.2,202.7L724.0,204.0L727.9,204.0L731.7,203.3L735.5,205.4L739.3,203.3L743.1,206.1L746.9,201.4L750.6,205.4L754.5,205.4L758.2,204.0L762.0,200.8L765.8,200.8L769.6,201.4L773.4,204.0L777.2,204.7L781.0,205.4L784.8,204.7L788.6,202.1L792.4,203.3L796.1,206.1L799.8,206.1L803.5,205.4L807.2,205.4L811.0,203.3L814.7,206.1L818.5,205.4L822.2,200.8L825.8,206.1L829.5,201.4L833.2,206.1L836.9,200.8L840.6,205.4L844.3,206.1L848.0,206.1L851.7,203.3L855.4,206.1L859.1,203.3L862.8,204.0L866.4,202.1L870.1,205.4L873.8,203.3L877.4,202.7L881.1,204.7L884.8,201.4L888.4,204.0L892.0,208.2L895.7,204.0L899.4,205.4L902.9,206.1L906.5,209.7L910.2,206.1L914.0,206.1L917.6,205.4L921.3,205.4L925.0,203.3L928.7,206.0L932.4,204.0L936.1,204.7L939.8,204.0L943.4,204.7L947.1,206.0L950.7,206.1L954.4,203.3L958.0,206.0L961.6,204.7L965.2,206.1L968.7,205.4L972.3,205.4L976.0,204.0L979.5,206.0" fill="none" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="5 4" stroke-linejoin="round"/><g transform="translate(90,28)">
+    <rect width="26" height="3.5" y="5" rx="1.7" fill="#22c55e"/>
+    <text x="34" y="11" class="lg">w:1（9/1，32 分钟）</text></g><g transform="translate(370,28)">
+    <rect width="26" height="3.5" y="5" rx="1.7" fill="#f59e0b"/>
+    <text x="34" y="11" class="lg">w:majority（8/31，39 分钟）</text></g><g transform="translate(650,28)">
+    <rect width="26" height="3.5" y="5" rx="1.7" fill="#ef4444" opacity="0.75"/>
+    <text x="34" y="11" class="lg">升配前（索引已损坏）</text></g>
+    <text x="529" y="332" class="axl" text-anchor="middle">写入进度（% of 1 亿条）</text>
+    <text x="16" y="158" class="axl" text-anchor="middle" transform="rotate(-90 16 158)">瞬时吞吐 docs/s（对数轴）</text></svg>
+
+<h3>按实际分钟（线性轴）</h3>
+<svg viewBox="0 0 1000 340" class="chart"><rect x="78" y="22" width="902" height="272" class="plot"/>
+    <line x1="78" y1="294.0" x2="980" y2="294.0" class="grid"/><text x="68" y="298.0" class="ax" text-anchor="end">0</text><line x1="78" y1="233.6" x2="980" y2="233.6" class="grid"/><text x="68" y="237.6" class="ax" text-anchor="end">20,000</text><line x1="78" y1="173.1" x2="980" y2="173.1" class="grid"/><text x="68" y="177.1" class="ax" text-anchor="end">40,000</text><line x1="78" y1="112.7" x2="980" y2="112.7" class="grid"/><text x="68" y="116.7" class="ax" text-anchor="end">60,000</text><line x1="78" y1="52.2" x2="980" y2="52.2" class="grid"/><text x="68" y="56.2" class="ax" text-anchor="end">80,000</text><line x1="78.0" y1="22" x2="78.0" y2="294" class="grid"/><text x="78.0" y="314" class="ax" text-anchor="middle">0</text><line x1="168.2" y1="22" x2="168.2" y2="294" class="grid"/><text x="168.2" y="314" class="ax" text-anchor="middle">4</text><line x1="258.4" y1="22" x2="258.4" y2="294" class="grid"/><text x="258.4" y="314" class="ax" text-anchor="middle">8</text><line x1="348.6" y1="22" x2="348.6" y2="294" class="grid"/><text x="348.6" y="314" class="ax" text-anchor="middle">12</text><line x1="438.8" y1="22" x2="438.8" y2="294" class="grid"/><text x="438.8" y="314" class="ax" text-anchor="middle">16</text><line x1="529.0" y1="22" x2="529.0" y2="294" class="grid"/><text x="529.0" y="314" class="ax" text-anchor="middle">20</text><line x1="619.2" y1="22" x2="619.2" y2="294" class="grid"/><text x="619.2" y="314" class="ax" text-anchor="middle">24</text><line x1="709.4" y1="22" x2="709.4" y2="294" class="grid"/><text x="709.4" y="314" class="ax" text-anchor="middle">28</text><line x1="799.6" y1="22" x2="799.6" y2="294" class="grid"/><text x="799.6" y="314" class="ax" text-anchor="middle">32</text><line x1="889.8" y1="22" x2="889.8" y2="294" class="grid"/><text x="889.8" y="314" class="ax" text-anchor="middle">36</text><line x1="980.0" y1="22" x2="980.0" y2="294" class="grid"/><text x="980.0" y="314" class="ax" text-anchor="middle">40</text><path d="M100.6,33.6L123.1,26.5L145.7,83.5L168.2,55.9L190.8,92.6L213.3,136.6L235.9,46.3L258.4,159.7L281.0,88.0L303.5,170.2L326.1,67.2L348.6,151.5L371.2,76.6L393.7,173.8L416.3,171.6L438.8,130.1L461.4,79.9L483.9,132.2L506.5,126.5L529.0,97.0L551.6,193.0L574.1,228.3L596.7,141.4L619.2,121.1L641.8,197.7L664.3,160.9L686.9,175.9L709.4,189.8L732.0,200.6L754.5,214.6L777.1,233.7L799.6,233.6" fill="none" stroke="#22c55e" stroke-width="2.2" stroke-linejoin="round"/><circle cx="100.6" cy="33.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 1min · 86,161/s</title></circle><circle cx="123.1" cy="26.5" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 2min · 88,500/s</title></circle><circle cx="145.7" cy="83.5" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 3min · 69,664/s</title></circle><circle cx="168.2" cy="55.9" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 4min · 78,799/s</title></circle><circle cx="190.8" cy="92.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 5min · 66,640/s</title></circle><circle cx="213.3" cy="136.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 6min · 52,076/s</title></circle><circle cx="235.9" cy="46.3" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 7min · 81,948/s</title></circle><circle cx="258.4" cy="159.7" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 8min · 44,432/s</title></circle><circle cx="281.0" cy="88.0" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 9min · 68,161/s</title></circle><circle cx="303.5" cy="170.2" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 10min · 40,949/s</title></circle><circle cx="326.1" cy="67.2" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 11min · 75,046/s</title></circle><circle cx="348.6" cy="151.5" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 12min · 47,149/s</title></circle><circle cx="371.2" cy="76.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 13min · 71,941/s</title></circle><circle cx="393.7" cy="173.8" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 14min · 39,782/s</title></circle><circle cx="416.3" cy="171.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 15min · 40,495/s</title></circle><circle cx="438.8" cy="130.1" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 16min · 54,226/s</title></circle><circle cx="461.4" cy="79.9" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 17min · 70,834/s</title></circle><circle cx="483.9" cy="132.2" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 18min · 53,529/s</title></circle><circle cx="506.5" cy="126.5" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 19min · 55,417/s</title></circle><circle cx="529.0" cy="97.0" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 20min · 65,194/s</title></circle><circle cx="551.6" cy="193.0" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 21min · 33,434/s</title></circle><circle cx="574.1" cy="228.3" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 22min · 21,733/s</title></circle><circle cx="596.7" cy="141.4" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 23min · 50,501/s</title></circle><circle cx="619.2" cy="121.1" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 24min · 57,199/s</title></circle><circle cx="641.8" cy="197.7" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 25min · 31,867/s</title></circle><circle cx="664.3" cy="160.9" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 26min · 44,031/s</title></circle><circle cx="686.9" cy="175.9" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 27min · 39,084/s</title></circle><circle cx="709.4" cy="189.8" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 28min · 34,483/s</title></circle><circle cx="732.0" cy="200.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 29min · 30,900/s</title></circle><circle cx="754.5" cy="214.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 30min · 26,267/s</title></circle><circle cx="777.1" cy="233.7" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 31min · 19,948/s</title></circle><circle cx="799.6" cy="233.6" r="2.6" fill="#22c55e"><title>w:1 — 瞬时吞吐 — 32min · 19,984/s</title></circle><path d="M100.6,35.8L123.1,40.1L145.7,114.5L168.2,68.4L190.8,159.8L213.3,90.9L235.9,135.5L258.4,178.0L281.0,141.1L303.5,108.2L326.1,106.4L348.6,130.4L371.2,167.9L393.7,165.7L416.3,81.0L438.8,198.1L461.4,125.7L483.9,159.9L506.5,208.5L529.0,171.7L551.6,170.3L574.1,294.0L596.7,151.7L619.2,192.2L641.8,99.5L664.3,279.2L686.9,164.2L709.4,207.4L732.0,294.0L754.5,260.3L777.1,117.6L799.6,176.0L822.2,211.1L844.7,244.0L867.3,147.8L889.8,171.0L912.4,220.3L934.9,294.0L957.5,219.7" fill="none" stroke="#f59e0b" stroke-width="2.2" stroke-linejoin="round"/><g transform="translate(90,28)">
+    <rect width="26" height="3.5" y="5" rx="1.7" fill="#22c55e"/>
+    <text x="34" y="11" class="lg">w:1 — 瞬时吞吐</text></g><g transform="translate(370,28)">
+    <rect width="26" height="3.5" y="5" rx="1.7" fill="#f59e0b"/>
+    <text x="34" y="11" class="lg">w:majority — 瞬时吞吐</text></g>
+    <text x="529" y="332" class="axl" text-anchor="middle">耗时（分钟）</text>
+    <text x="16" y="158" class="axl" text-anchor="middle" transform="rotate(-90 16 158)">瞬时吞吐 docs/s</text></svg>
+
+<h3>w:1 分阶段平均吞吐</h3>
+<div class="bars"><div class="bar-row">
+    <div class="bar-lab">0–25%</div>
+    <div class="bar-track"><div class="bar-fill" style="width:100.0%;background:#22c55e"></div></div>
+    <div class="bar-val">77,953 docs/s</div></div><div class="bar-row">
+    <div class="bar-lab">25–50%</div>
+    <div class="bar-track"><div class="bar-fill" style="width:75.1%;background:#4ade80"></div></div>
+    <div class="bar-val">58,537 docs/s</div></div><div class="bar-row">
+    <div class="bar-lab">50–75%</div>
+    <div class="bar-track"><div class="bar-fill" style="width:70.8%;background:#86efac"></div></div>
+    <div class="bar-val">55,175 docs/s</div></div><div class="bar-row">
+    <div class="bar-lab">75–100%</div>
+    <div class="bar-track"><div class="bar-fill" style="width:46.8%;background:#bbf7d0"></div></div>
+    <div class="bar-val">36,509 docs/s</div></div></div>
+
+<h2>三、w:majority 的 WriteStall 分析</h2>
+
+<div class="note ok">
+  <p style="margin:0"><b>w:1 已验证消除此问题。</b>以下分析针对 w:majority 那轮，供理解根因；w:1 轮零吞吐窗口 = 0。</p>
+</div>
+
+<h3>精确时间窗口（2026-08-31，w:majority 轮）</h3>
+<table>
+  <thead><tr><th>窗口</th><th>瞬时吞吐</th><th>累计文档</th><th>判定</th></tr></thead>
+  <tbody><tr>
+    <td class="num">15:39:39 → 15:40:39</td>
+    <td class="num down">0 /s</td>
+    <td class="num">67,821,000</td><td>完全停顿</td></tr><tr>
+    <td class="num">15:43:39 → 15:44:39</td>
+    <td class="num ">4,900 /s</td>
+    <td class="num">76,822,000</td><td>严重降速</td></tr><tr>
+    <td class="num">15:46:39 → 15:47:39</td>
+    <td class="num down">0 /s</td>
+    <td class="num">81,119,000</td><td>完全停顿</td></tr><tr>
+    <td class="num">15:47:39 → 15:48:39</td>
+    <td class="num ">11,150 /s</td>
+    <td class="num">81,788,000</td><td>停顿尾声</td></tr><tr>
+    <td class="num">15:55:39 → 15:56:39</td>
+    <td class="num down">0 /s</td>
+    <td class="num">97,079,000</td><td>完全停顿</td></tr>
+  </tbody>
+</table>
+
+<h3>证据：flow control 触发 3 次</h3>
+<p>PRIMARY 上 <code>serverStatus().flowControl.isLaggedCount = 3</code>，与 3 次完全停顿数量一致。
+<code>w:1</code> 不等从节点确认，绕开了这条限流路径。</p>
+
+<h2>四、查询性能（w:1 轮，1 亿条）</h2>
+<div class="note info"><p style="margin:0">不与升配前对比（索引已损坏）。串行单连接 200 次，延迟扣除 37ms RTT 给出服务端耗时。</p></div>
+<table>
+  <thead><tr><th>查询</th><th>实测 p50</th><th>服务端</th><th>实测 QPS</th><th>同机房理论 QPS</th><th>行数</th></tr></thead>
+  <tbody><tr><td>BM25 关键词检索（命中）</td>
+      <td class="num">95.2 ms</td><td class="num up">58.2 ms</td>
+      <td class="num">10.0</td><td class="num up">17</td><td class="num">5</td></tr><tr><td>BM25 关键词检索（无命中）</td>
+      <td class="num">62.3 ms</td><td class="num up">25.3 ms</td>
+      <td class="num">15.0</td><td class="num up">40</td><td class="num">0</td></tr><tr><td>会话回放（按 session 分页）</td>
+      <td class="num">115.3 ms</td><td class="num up">78.3 ms</td>
+      <td class="num">8.3</td><td class="num up">13</td><td class="num">6</td></tr><tr><td>L1 聚合取数（按 session_key）</td>
+      <td class="num">57.1 ms</td><td class="num up">20.1 ms</td>
+      <td class="num">16.7</td><td class="num up">50</td><td class="num">6</td></tr><tr><td>租户维度分页列表</td>
+      <td class="num">155.1 ms</td><td class="num up">118.1 ms</td>
+      <td class="num">6.0</td><td class="num up">8</td><td class="num">20</td></tr><tr><td>租户维度计数</td>
+      <td class="num">61.4 ms</td><td class="num up">24.4 ms</td>
+      <td class="num">15.2</td><td class="num up">41</td><td class="num">16,326</td></tr>
+</tbody></table>
+<h3>延迟拆解</h3>
+<div class="bars"><div class="bar-row">
+    <div class="bar-lab">BM25 关键词检索（命中）</div>
+    <div class="bar-track"><div class="bar-stack">
+      <div class="seg rtt" style="width:23.9%"></div>
+      <div class="seg srv" style="width:37.5%;background:#a855f7"></div>
+    </div></div>
+    <div class="bar-val">58.2 ms</div></div><div class="bar-row">
+    <div class="bar-lab">BM25 关键词检索（无命中）</div>
+    <div class="bar-track"><div class="bar-stack">
+      <div class="seg rtt" style="width:23.9%"></div>
+      <div class="seg srv" style="width:16.3%;background:#a855f7"></div>
+    </div></div>
+    <div class="bar-val">25.3 ms</div></div><div class="bar-row">
+    <div class="bar-lab">会话回放（按 session 分页）</div>
+    <div class="bar-track"><div class="bar-stack">
+      <div class="seg rtt" style="width:23.9%"></div>
+      <div class="seg srv" style="width:50.5%;background:#3b82f6"></div>
+    </div></div>
+    <div class="bar-val">78.3 ms</div></div><div class="bar-row">
+    <div class="bar-lab">L1 聚合取数（按 session_key）</div>
+    <div class="bar-track"><div class="bar-stack">
+      <div class="seg rtt" style="width:23.9%"></div>
+      <div class="seg srv" style="width:12.9%;background:#3b82f6"></div>
+    </div></div>
+    <div class="bar-val">20.1 ms</div></div><div class="bar-row">
+    <div class="bar-lab">租户维度分页列表</div>
+    <div class="bar-track"><div class="bar-stack">
+      <div class="seg rtt" style="width:23.9%"></div>
+      <div class="seg srv" style="width:76.1%;background:#3b82f6"></div>
+    </div></div>
+    <div class="bar-val">118.1 ms</div></div><div class="bar-row">
+    <div class="bar-lab">租户维度计数</div>
+    <div class="bar-track"><div class="bar-stack">
+      <div class="seg rtt" style="width:23.9%"></div>
+      <div class="seg srv" style="width:15.7%;background:#3b82f6"></div>
+    </div></div>
+    <div class="bar-val">24.4 ms</div></div>
+    <div class="bar-row" style="margin-top:14px"><div class="bar-lab"></div>
+    <div class="bar-track" style="border:none;background:none;height:auto">
+      <span class="lgd"><i style="background:#374151"></i>跨地域 RTT 37 ms</span>
+      <span class="lgd"><i style="background:#3b82f6"></i>服务端耗时</span></div>
+    <div class="bar-val" style="color:var(--fg3);font-size:12px">右侧=服务端</div></div></div>
+
+<h2>五、结论</h2>
+<ul>
+  <li><b>w:1 验证通过。</b>1 亿条 32 分钟、51,631 docs/s、0 错误、0 stall、BM25 READY。</li>
+  <li><b>w:majority 的 stall 根因是复制跟不上。</b>flow control 触发 3 次 = 3 次完全停顿；改成 w:1 后问题消除。</li>
+  <li><b>查询瓶颈是网络。</b>扣 RTT 后多数查询服务端 &lt;10ms；同机房或提并发可大幅改善。</li>
+  <li><b>生产建议。</b>w:1 牺牲跨节点持久性保证；若业务需要 majority 安全，需控制写入速率或优化从节点复制能力。</li>
+</ul>
+
+<div class="foot">
+  报告生成于 2026/9/2 11:22:58 ·
+  w:1 数据 <code>l0-bench-2026-09-01T14-02-56-975Z.json</code> ·
+  w:majority 数据 <code>l0-bench-2026-08-31T07-18-23-351Z.json</code> ·
+  重新生成：<code>node build-compare.mjs</code>
+</div>
+</div></body></html>

@@ -56,11 +56,14 @@ export interface TriggerInput {
    *                 tool_result 藏在 role=user 里, tool_use 藏在 role=assistant 里
    *   "openai"    → handler.ts (/v1/chat/completions), content 一般是字符串,
    *                 tool_result 是独立 role=tool 消息, tool_calls 是 assistant 独立字段
+   *   "responses" → codexHandler.ts (/responses), 顶层是 input[] 而非 messages[],
+   *                 item 按 type 判别: message / function_call / function_call_output /
+   *                 reasoning (详见 normalize-conversation.ts 顶部)
    *
    * proxy 已经通过路由 whitelist 明确知道每条请求走哪个协议（见 routes/whitelist.ts）,
-   * 所以由调用方 (handler.ts / anthropicHandler.ts) 显式传入, 不做推断。
+   * 所以由调用方 (handler.ts / anthropicHandler.ts / codexHandler.ts) 显式传入, 不做推断。
    */
-  protocol: "anthropic" | "openai";
+  protocol: "anthropic" | "openai" | "responses";
   /** Per-user asset capability flags; skill=false disables extraction collection. */
   assetCapabilities?: AssetCapabilityFlags;
   /** Optional override (e.g. SSE accumulators contain the truth in streaming mode). */
@@ -100,9 +103,7 @@ export async function triggerSkillExtractIfReady(input: TriggerInput): Promise<v
     // 判定依赖 assistantMessage 里 tool_use / tool_calls 数量;
     // stream 分支 assistantMessage.content 被拉平成 string 丢了 blocks 信息,
     // 此时 input.toolCallCountOverride 才是权威 (见 anthropicHandler.ts:1592-1597).
-    if (!isFinalAnswer(hasAsst ? rawAsst : null, input.toolCallCountOverride)) {
-      return;
-    }
+    if (!isFinalAnswer(hasAsst ? rawAsst : null, input.toolCallCountOverride)) return;
 
     // ── 本 round 切片 ──
     // slice 起点 = 上一次 "final assistant" 之后 = 本 round 的 user 输入起点。
@@ -112,11 +113,13 @@ export async function triggerSkillExtractIfReady(input: TriggerInput): Promise<v
 
     // 按协议分支做 5-role 规范化 —— 展开 anthropic content blocks / openai tool_calls,
     // 识别 tool_use / tool_result 分别转成 role=tool_call / role=tool_result。
+    // agentSource 用于按客户端规则提取 user text (详见 agent-adapters/)
     // 详见 normalize-conversation.ts 和 docs/design/2026-07-17-conversation-normalize.md
     const turnMessages = normalizeConversation(
       rawMsgs.slice(startIdx),
       input.protocol,
       hasAsst ? rawAsst : null,
+      input.agentSource,
     );
     if (turnMessages.length === 0) return;
 
@@ -144,8 +147,8 @@ export async function triggerSkillExtractIfReady(input: TriggerInput): Promise<v
         );
       } else {
         // status=ok: 未触发归档 —— core 已把本 round 累计到 buffer, 等下次
-        // 或再几次 round 累够阈值才会归档。debug 级只在运维排查时看。
-        console.debug(
+        // 或再几次 round 累够阈值才会归档。
+        console.log(
           `[skill-conversation-add] appended session=${sessionKey}` +
             ` round_msgs=${turnMessages.length} slice=${startIdx}/${rawMsgs.length}` +
             ` took=${Date.now() - t0}ms`,

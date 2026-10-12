@@ -15,7 +15,7 @@ import type { Logger } from "../logger.js";
 import type { IQuotaReporter } from "../abstractions/index.js";
 
 export interface QuotaConfig {
-  memoryLimit: number;   // 记忆总条数上限 (default: 50000)
+  memoryLimit: number;   // 记忆总条数上限 (default: 10000)
   creditLimit: number;   // Credit 限额 (default: 1000)
   memoryUsage: number;   // 当前已用记忆条数
   creditUsage: number;   // 当前已用 Credit
@@ -56,7 +56,7 @@ export class QuotaManager {
     this.reporter = opts.reporter;
     this.logger = opts.logger;
     this.cacheTtlMs = opts.cacheTtlMs ?? 60_000;
-    this.defaultMemoryLimit = opts.defaultMemoryLimit ?? 50_000;
+    this.defaultMemoryLimit = opts.defaultMemoryLimit ?? 10_000;
     this.defaultCreditLimit = opts.defaultCreditLimit ?? 1_000;
   }
 

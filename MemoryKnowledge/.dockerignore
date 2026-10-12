@@ -8,4 +8,4 @@ coverage
 __tests__
 .data-dir
 *.md
-!docs/api/openapi.yaml
+docs

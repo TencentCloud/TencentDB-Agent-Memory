@@ -106,8 +106,23 @@ export interface AgentContextMetadata {
    * derive the deterministic Langfuse turn-trace ID.
    */
   turnSeq?: number;
+  /**
+   * Raw request URL path (e.g. `/codebuddy/default/analyse/v1/messages`).
+   * Optional —— 用于需要按 URL marker 决定行为的 injector（如
+   * `AssetReflectionInjector` 用它调 `hasAnalyseMarker`）。缺省时
+   * marker 一律视为未命中，injector 静默降级。
+   */
+  requestPath?: string;
   /** Allow injectors to attach custom key-value pairs. */
   custom?: Record<string, unknown>;
+  /**
+   * Read-only mode: cache-miss 分支时**不 self-heal put**（只用 hook.execute() 拿
+   * 结果，不写回 hook-cache）。用于 FORK 类请求 —— 它们的目的是复用主对话的 cache 命中，
+   * 如果 miss 时 self-heal，写入的内容跟主对话那次不一定 byte-level 一致，反而破坏 cache。
+   *
+   * 主对话请求（默认）不设或设 false —— 保留 self-heal，保证首次 miss 后续能命中。
+   */
+  readOnly?: boolean;
 }
 
 // ── Agent Context ─────────────────────────────────────────────────────────────

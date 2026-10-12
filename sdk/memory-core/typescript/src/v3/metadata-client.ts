@@ -5,7 +5,8 @@
  * 鉴权：Bearer + x-tdai-service-id + x-tdai-user-key（`auth/verify` 仅 body 传 user_key）。
  */
 
-import { HttpTransport } from "../http.js";
+import { ParamError } from "../errors.js";
+import { V3HttpTransport } from "./http.js";
 import type { Transport } from "../client.js";
 import type {
   UserPublic,
@@ -77,7 +78,20 @@ function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
 }
 
 function body(o: object): Record<string, unknown> {
+  if (!o || typeof o !== "object" || Array.isArray(o)) {
+    throw new ParamError("request payload must be an object");
+  }
   return stripUndefined(o as Record<string, unknown>);
+}
+
+function requireAnyString(
+  payload: Record<string, unknown>,
+  fields: string[],
+  operation: string,
+): void {
+  if (!fields.some((field) => typeof payload[field] === "string" && (payload[field] as string).trim())) {
+    throw new ParamError(`${operation} requires one of ${fields.join(", ")}`);
+  }
 }
 
 export interface MetadataClientConfig {
@@ -91,7 +105,7 @@ export interface MetadataClientConfig {
   userKey?: string;
   /** Request timeout in ms (default 30 000). */
   timeout?: number;
-  /** Whether to reject invalid TLS certificates. Default: false. */
+  /** Whether to reject invalid TLS certificates. Default: true. */
   rejectUnauthorized?: boolean;
 }
 
@@ -105,9 +119,9 @@ export class MetadataClient {
       this.http = configOrTransport;
     } else {
       const cfg = configOrTransport;
-      if (!cfg.apiKey) throw new Error("apiKey must be provided");
-      if (!cfg.serviceId) throw new Error("serviceId must be provided");
-      this.http = new HttpTransport({
+      if (!cfg.apiKey) throw new ParamError("apiKey must be provided");
+      if (!cfg.serviceId) throw new ParamError("serviceId must be provided");
+      this.http = new V3HttpTransport({
         endpoint: cfg.endpoint,
         apiKey: cfg.apiKey,
         serviceId: cfg.serviceId,
@@ -165,10 +179,13 @@ export class MetadataClient {
     userIdOrRequest: string | ListTeamsRequest,
     pagination?: PaginationInput,
   ): Promise<PaginatedResult<TeamEntity>> {
-    if (typeof userIdOrRequest === "string") {
-      return this.http.post(`${V3}/team/list`, body({ user_id: userIdOrRequest, ...pagination }));
-    }
-    return this.http.post(`${V3}/team/list`, body(userIdOrRequest));
+    const payload = body(
+      typeof userIdOrRequest === "string"
+        ? { user_id: userIdOrRequest, ...pagination }
+        : userIdOrRequest,
+    );
+    requireAnyString(payload, ["user_id", "user_key"], "listTeams");
+    return this.http.post(`${V3}/team/list`, payload);
   }
 
   // ── TeamMember ──
@@ -199,10 +216,13 @@ export class MetadataClient {
     status?: TaskEntity["status"],
     pagination?: PaginationInput,
   ): Promise<PaginatedResult<TaskEntity>> {
-    if (typeof teamIdOrRequest === "string") {
-      return this.http.post(`${V3}/task/list`, body({ team_id: teamIdOrRequest, status, ...pagination }));
-    }
-    return this.http.post(`${V3}/task/list`, body(teamIdOrRequest));
+    const payload = body(
+      typeof teamIdOrRequest === "string"
+        ? { team_id: teamIdOrRequest, status, ...pagination }
+        : teamIdOrRequest,
+    );
+    requireAnyString(payload, ["team_id", "creator_user_id", "creator_user_key"], "listTasks");
+    return this.http.post(`${V3}/task/list`, payload);
   }
   archiveTask(taskId: string): Promise<TaskEntity> { return this.http.post(`${V3}/task/archive`, { task_id: taskId }); }
 

@@ -76,3 +76,9 @@
   background: var(--tea-color-bg-secondary-hover);
   color: var(--tea-color-text-primary);
 }
+
+/* 键盘可达性：tab 项焦点环 */
+._memory-tabbar-item:focus-visible {
+  outline: 2px solid var(--tea-color-border-brand-default);
+  outline-offset: -2px;
+}

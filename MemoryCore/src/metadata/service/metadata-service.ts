@@ -12,7 +12,7 @@
  * 不感知具体后端（SQLite / MongoDB），保证存储可切换。
  */
 
-import type { IMetadataStore } from "../store/interface.js";
+import { DuplicateUserKeyError, type IMetadataStore } from "../store/interface.js";
 import {
   checkPermission,
   canBindAsset,
@@ -21,7 +21,7 @@ import {
   type PermCheckLogger,
 } from "./permission-checker.js";
 import {
-  maskUserKey, isUserKeyExpired, DEFAULT_MAX_ACTIVE_USER_KEYS,
+  maskUserKey, maskKeyValue, isUserKeyExpired, DEFAULT_MAX_ACTIVE_USER_KEYS,
 } from "../utils/user-key.js";
 import {
   lookupMemorySystemUser,
@@ -86,21 +86,77 @@ import type {
   PaginationParams,
   InstanceUserListFilter,
   UserListFilter,
+  InstanceUpstreamConfigEntity,
+  InstanceUpstreamConfigFilter,
+  CreateInstanceUpstreamGroupInput,
+  UpdateInstanceUpstreamGroupInput,
+  ToggleInstanceUpstreamGroupInput,
+  DeleteInstanceUpstreamGroupInput,
+  SupportedAgent,
+  GroupType,
+  UpstreamMode,
+} from "../types.js";
+import {
+  DEFAULT_GROUP_NAME,
+  EXTRACTION_GROUP_NAME,
+  InstanceUpstreamWriteConflictError,
 } from "../types.js";
 import { formatListResult, paginateArray, resolvePagination, wrapPaginated, DEFAULT_PAGINATION } from "../pagination.js";
 import { generateId, ID_PREFIX } from "../utils/id-generator.js";
-import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
+import { buildChatMemoryAssetId, resolveChatMemoryAgentId } from "../utils/chat-memory-asset.js";
+
+// ── 默认 Agent / Team 常量 ──
+
+const DEFAULT_TEAM_NAME = "default-team";
+const DEFAULT_TEAM_DESCRIPTION = "系统初始化时自动创建的默认团队，用于存放默认助手";
+
+const DEFAULT_AGENT_NAME = "default-agent";
+const DEFAULT_AGENT_DESCRIPTION = "默认助手，可处理通用开发任务与日常协作。";
+
+// prompt 拼接格式与前端手动创建 Agent 完全一致：
+// [card.rolePrompt, card.rulesPrompt].filter(Boolean).join('\n\n')
+const DEFAULT_AGENT_ROLE_PROMPT = "";
+const DEFAULT_AGENT_RULES_PROMPT = "";
+const DEFAULT_AGENT_PROMPT = [DEFAULT_AGENT_ROLE_PROMPT, DEFAULT_AGENT_RULES_PROMPT]
+  .filter(Boolean)
+  .join("\n\n");
+
+// metadata_json 存储拆分后的 role_prompt / rules_prompt，
+// 与前端 writeAgentUiMeta / readAgentUiMeta 的 "ui" namespace 格式一致，
+// 保证 Agent 详情页「角色定位 prompt」和「规则固定 prompt」分开显示。
+const DEFAULT_AGENT_METADATA_JSON = JSON.stringify({
+  ui: {
+    role_prompt: DEFAULT_AGENT_ROLE_PROMPT,
+    rules_prompt: DEFAULT_AGENT_RULES_PROMPT,
+  },
+});
 
 /** 业务校验错误，带可映射到 HTTP 状态的 code。 */
 export class MetadataError extends Error {
   constructor(
     public readonly code: string,
     message: string,
+    /**
+     * 可选:结构化 detail,会带进 envelope response 供前端渲染
+     * (如 AGENTS_OVERLAP 的 conflict_groups 列表, DEFAULT_GROUP_IMMUTABLE_FIELDS 的 rejected_fields)。
+     */
+    public readonly detail?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "MetadataError";
   }
 }
+
+/**
+ * 清空某个 (team, agent) 的 chat_memory 内容（L0/L1/L2/L3 + 向量 + 文件）。
+ *
+ * 由 gateway 装配处实现并注入（见 MetadataService.setChatMemoryContentCleaner），
+ * 因为内容存放在 IMemoryStore / StorageAdapter，不在 metadata store 里。
+ */
+export type ChatMemoryContentCleaner = (params: {
+  teamId: string;
+  agentId: string;
+}) => Promise<void>;
 
 /** Detect unique constraint violation (SQLite UNIQUE or MongoDB E11000) on a specific column. */
 function isUniqueViolation(err: unknown, column?: string): boolean {
@@ -144,6 +200,8 @@ export interface ListWithDetailParams {
   touch_usage?: boolean;
   limit?: number;
   offset?: number;
+  /** 可选类型过滤：只返回列表中匹配的 asset_type；省略 / 空数组 = 不过滤。 */
+  asset_types?: Array<"skill" | "llm_wiki" | "code_graph" | "chat_memory">;
 }
 
 export interface AgentFixedAssetDetailResult {
@@ -219,6 +277,9 @@ export class MetadataService {
   private readonly ensuredSkillAssets = new Map<string, true>();
   private static readonly SKILL_ENSURE_CACHE_SIZE = 4096;
 
+  /** 由 gateway 注入的 chat_memory 内容清理器；未注入时归档只删资产不清内容。 */
+  private _chatMemoryContentCleaner?: ChatMemoryContentCleaner;
+
   constructor(
     private readonly store: IMetadataStore,
     private readonly instanceId: string = DEFAULT_INSTANCE_ID,
@@ -243,6 +304,21 @@ export class MetadataService {
 
   setConfigParamService(svc: import("./config-param-service.js").IConfigParamService): void {
     this._configParams = svc;
+  }
+
+  /**
+   * 注入「chat_memory 内容清理器」。
+   *
+   * 为什么用可选钩子而不是直接依赖 store：metadata 层只持有 IMetadataStore
+   * （元数据），拿不到 IMemoryStore / StorageAdapter（L0–L3 内容）。归档
+   * Agent 时要顺带删掉它的记忆内容，就需要由gateway 装配处把清理能力注入
+   * 进来 —— 与 setConfigParamService 同一模式，保持依赖方向不反转。
+   *
+   * 未注入时 archiveAgent 退化为原行为（只删资产，不清内容），因此
+   * 单测/ 迁移脚本等不装配该钩子的场景不受影响。
+   */
+  setChatMemoryContentCleaner(cleaner: ChatMemoryContentCleaner): void {
+    this._chatMemoryContentCleaner = cleaner;
   }
 
   /** memory 静态 key 仅用于 auth/verify body，不可作 Header 鉴权。 */
@@ -325,10 +401,46 @@ export class MetadataService {
     if ((await this.store.countSystemAdmins()) > 0) {
       throw new MetadataError("already_initialized", "system_admin already exists");
     }
+
+    // 核心操作：创建 admin 用户
     const created = await this.createUserWithType(
       { username: input.username, default_key_value: input.user_key },
       "system_admin",
     );
+
+    // 辅助操作：自动创建默认 Team 和 Agent（失败不阻塞核心流程）
+    try {
+      const team = await this.createTeam({
+        name: DEFAULT_TEAM_NAME,
+        description: DEFAULT_TEAM_DESCRIPTION,
+        owner_user_id: created.user_id,
+      });
+
+      try {
+        const agentName = `${DEFAULT_AGENT_NAME}-${input.username}`;
+        await this.createAgent({
+          team_id: team.team_id,
+          owner_user_id: created.user_id,
+          name: agentName,
+          description: DEFAULT_AGENT_DESCRIPTION,
+          prompt: DEFAULT_AGENT_PROMPT,
+          metadata_json: DEFAULT_AGENT_METADATA_JSON,
+          visibility: "team",
+          status: "active",
+        });
+      } catch (err) {
+        console.warn(
+          `[init-admin] 默认 Agent 创建失败，已跳过 (user=${created.user_id})`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[init-admin] 默认 Team 创建失败，已跳过 (user=${created.user_id})`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
     return { user_id: created.user_id, user_key: created.default_user_key };
   }
 
@@ -336,12 +448,58 @@ export class MetadataService {
     return this.createUserWithType(input, "normal");
   }
 
+  /**
+   * 仅供 /v3/meta/user/create-with-key 使用：允许 system_admin 在建号时显式指定 user_key。
+   *
+   * 两层去重：
+   *   1. 前置 getUserByKey：正常路径快速失败，不进事务
+   *   2. store 层 UNIQUE 约束（DuplicateUserKeyError）：TOCTOU / 并发兜底
+   *
+   * router 层需先调 assertCanManageUsers 做鉴权。
+   */
+  async createNormalUserWithKey(input: {
+    username: string;
+    user_key: string;
+    /** 外部认证建号时传（如 WOA 工号），用于下次登录判断是否初次。 */
+    external_id?: string;
+    /** 外部认证体系标识（如 woa）；与 external_id 同域，缺省回落 local。 */
+    auth_provider?: string;
+    display_name?: string;
+    email?: string;
+  }): Promise<CreateUserApiResult> {
+    const existing = await this.store.getUserByKey(input.user_key);
+    if (existing) {
+      throw new MetadataError("duplicate_user_key", "user_key already exists");
+    }
+    try {
+      return await this.createUserWithType(
+        {
+          username: input.username,
+          default_key_value: input.user_key,
+          external_id: input.external_id,
+          auth_provider: input.auth_provider,
+          display_name: input.display_name,
+          email: input.email,
+        },
+        "normal",
+      );
+    } catch (err) {
+      if (err instanceof DuplicateUserKeyError) {
+        throw new MetadataError("duplicate_user_key", "user_key already exists");
+      }
+      throw err;
+    }
+  }
+
   /** 未传 auth_provider / external_id 时补默认值（local / user_id）。 */
   private resolveCreateUserInput(
     input: CreateUserInput,
   ): CreateUserInput & { auth_provider: string; external_id: string } {
-    const authProvider = input.auth_provider?.trim() || DEFAULT_AUTH_PROVIDER;
+    // 显式带 external_id = 外部认证建号：即使调用方省略 auth_provider，也要落
+    // 到外部域，与 find-by-external 的读取同域。
+    // 否则会"写进 local 域、按外部域查"，下次登录被误判为初次。
     const externalId = input.external_id?.trim();
+    const authProvider = input.auth_provider?.trim() || DEFAULT_AUTH_PROVIDER;
     if (externalId) {
       return { ...input, auth_provider: authProvider, external_id: externalId };
     }
@@ -387,6 +545,69 @@ export class MetadataService {
 
   async getUserByExternalId(authProvider: string, externalId: string): Promise<UserEntity | null> {
     return this.store.getUserByExternalId(authProvider, externalId);
+  }
+
+  /**
+   * 外部认证（如 WOA）登录后判断是否初次：按 (auth_provider, external_id) 反查 user。
+   *
+   * 复用 core 既有的 meta_users.external_id 字段（origin 引入，原为太湖 OAuth2 的
+   * sub/工号而设，语义与本需求一致），不新建关联表。
+   *
+   * 注意：未绑定外部身份的账号，其 external_id 由 resolveCreateUserInput 兜底填
+   * user_id（`usr-xxx`），与工号格式不同，因此不会误命中。
+   */
+  async findUserByExternalId(
+    externalId: string,
+    authProvider?: string,
+  ): Promise<UserEntity | null> {
+    const provider = authProvider?.trim() || DEFAULT_AUTH_PROVIDER;
+    return this.store.getUserByExternalId(provider, externalId);
+  }
+
+  /**
+   * 把外部认证唯一标识绑定到**已有**账号（存量账号接入外部认证）。
+   *
+   * 只写 external_id，**不改 auth_provider**——存量账号原本用 user_key 登录，
+   * 绑定后仍可用原 user_key 登录，外部认证只是新增一种入口。
+   *
+   * 冲突：该 external_id 已绑到**另一个** user 时抛错，避免一个外部身份对应多个账号。
+   * 幂等：重复绑定同一个 external_id 到同一 user 直接返回。
+   */
+  async bindExternalIdToUser(
+    userId: string,
+    externalId: string,
+    authProvider?: string,
+    displayName?: string,
+  ): Promise<UserEntity> {
+    const provider = authProvider?.trim() || DEFAULT_AUTH_PROVIDER;
+    // 先确认目标账号存在，避免把外部身份绑到不存在的 user 上。
+    const user = await this.requireUser(userId);
+
+    const existing = await this.store.getUserByExternalId(provider, externalId);
+    if (existing && existing.user_id !== userId) {
+      throw new MetadataError(
+        "external_id_already_bound",
+        `external_id is already bound to another user: ${existing.user_id}`,
+      );
+    }
+
+    // 绑定前先摘掉"未绑定占位 external_id"（= user_id）可能带来的误撞：
+    // 目标账号若正持有占位值，而待绑的 external_id 恰好等于它（极端场景），
+    // 上面的 existing 判定会被自己命中而提前返回，故统一走一次写入。
+    const patch: Partial<UserEntity> = {
+      external_id: externalId,
+      auth_provider: provider,
+    };
+    // 展示名只在"有值且目标账号当前为空"时补写：
+    // 不覆盖人工改过的名字，也不把 IdP 的空值写进去把已有名字抹掉。
+    const incomingName = displayName?.trim();
+    if (incomingName && !user.display_name) patch.display_name = incomingName;
+
+    if (existing && existing.user_id === userId && !patch.display_name) return user;
+
+    const updated = await this.store.updateUser(userId, patch);
+    if (!updated) throw new MetadataError("user_not_found", `user not found: ${userId}`);
+    return updated;
   }
 
   async deleteUsersForCaller(userIds: string[], ctx: V3AuthContext): Promise<BatchDeleteResult> {
@@ -699,7 +920,11 @@ export class MetadataService {
         `member already exists: ${input.team_id}/${input.user_id}`,
       );
     }
-    return this.store.addTeamMember({ ...input, role: reqRole });
+
+    // 核心操作：将用户加入 Team
+    const result = await this.store.addTeamMember({ ...input, role: reqRole });
+
+    return result;
   }
 
   async removeTeamMember(teamId: string, userId: string): Promise<void> {
@@ -780,11 +1005,34 @@ export class MetadataService {
     return formatListResult({ items, total: page.total }, pagination);
   }
 
-  /** 归档（软关闭）agent：status → inactive，并归档其自身 chat_memory 资产。 */
+  /**
+   * 归档（软关闭）agent。
+   *
+   * 顺序很关键 —— **先清内容，再删资产**：
+   *   1. status → inactive
+   *   2.清空该 agent 的 chat_memory 内容（L0/L1/L2/L3 + 向量 + 文件）
+   *   3. 删除自身 chat_memory 资产记录（并级联清掉其它 agent 的借入绑定）
+   *
+   * 若把顺序颠倒（先删资产再清内容），资产记录一没，就再也无法从
+   * asset_id 定位到 (team, agent)，内容会变成**永久不可达的孤儿数据**
+   * 留在库里 —— 这正是本次修复的问题。
+   *
+   * 内容清理失败时**中止归档**并向上抛：宁可让调用方重试，也不要留下
+   * "资产已删、内容还在"的不一致状态。未注入 cleaner 时（单测 / 迁移
+   * 脚本）跳过第 2 步，退化为原行为。
+   */
   async archiveAgent(agentId: string): Promise<AgentEntity> {
     const existing = await this.getAgentById(agentId);
     if (!existing) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
     const archived = await this.updateAgent(agentId, { status: "inactive" });
+
+    if (this._chatMemoryContentCleaner) {
+      await this._chatMemoryContentCleaner({
+        teamId: existing.team_id,
+        agentId: existing.agent_id,
+      });
+    }
+
     const selfMemoryAssetId = buildChatMemoryAssetId(existing.team_id, existing.agent_id);
     await this.store.deleteAssets([selfMemoryAssetId]);
     return archived;
@@ -950,6 +1198,66 @@ export class MetadataService {
     const page = await this.store.listAssetsByTeam(teamId, pagination, filter);
     const items = page.items;
     return formatListResult({ items, total: page.total }, pagination);
+  }
+
+  /**
+   * asset/get 的调用者视角读（水平越权修复）：
+   *   - system_admin 豁免（管理面排障通道，与 user/list 的 isSystemAdmin 特判同风格）；
+   *   - owner 恒可读（含 archived，保持原管理视角行为）；
+   *   - 其余调用者走 checkAssetPermission（visibility → ACL）；
+   *   - 无权返回 null（路由层映射 404，不泄露资产存在性）。
+   */
+  async getAssetForCaller(assetId: string, ctx: V3AuthContext): Promise<AssetEntity | null> {
+    const asset = await this.getAssetById(assetId);
+    if (!asset) return null;
+    if (ctx.isSystemAdmin) return asset;
+    if (!ctx.userId) return null;
+    if (asset.owner_user_id === ctx.userId) return asset;
+    const perm = await this.checkAssetPermission({ user_id: ctx.userId, asset_id: assetId, action: "read" });
+    return perm.allowed ? asset : null;
+  }
+
+  /**
+   * asset/list 的调用者视角读（水平越权修复）：
+   *   - system_admin：管理面全量（原 listAssetsByTeam 语义保留）；
+   *   - 团队成员：owner 资产恒可见，其余逐条 checkAssetPermission（与 list-accessible 同源判定）；
+   *   - 非团队成员 / 未解析调用者：空页（不报错，避免泄露 team 信息）。
+   * 权限过滤在分页前完成，保证 total 准确。
+   */
+  async listAssetsForCaller(
+    params: { team_id: string } & AssetFilter & PaginationParams,
+    ctx: V3AuthContext,
+  ): Promise<PaginatedResult<AssetEntity>> {
+    const pagination = this.pag(params);
+    const { team_id, limit: _limit, offset: _offset, ...filter } = params;
+    if (ctx.isSystemAdmin) {
+      return this.listAssetsByTeam(team_id, pagination, filter);
+    }
+    if (!ctx.userId) return paginateArray([], pagination);
+    const member = await this.store.getTeamMember(team_id, ctx.userId);
+    if (!member || member.status !== "active") return paginateArray([], pagination);
+
+    const result: AssetEntity[] = [];
+    let offset = 0;
+    const limit = 100;
+    while (true) {
+      const page = await this.store.listAssetsByTeam(team_id, { limit, offset }, filter);
+      for (const asset of page.items) {
+        if (asset.owner_user_id === ctx.userId) {
+          result.push(asset);
+          continue;
+        }
+        const perm = await this.checkAssetPermission({
+          user_id: ctx.userId,
+          asset_id: asset.asset_id,
+          action: "read",
+        });
+        if (perm.allowed) result.push(asset);
+      }
+      if (offset + page.items.length >= page.total) break;
+      offset += limit;
+    }
+    return paginateArray(result, pagination);
   }
 
   async touchAssetUsage(assetId: string): Promise<void> {
@@ -1276,7 +1584,10 @@ export class MetadataService {
     if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${params.agent_id}`);
 
     const pagination = this.pag(params);
-    const bindingPage = await this.store.listAgentFixedAssets(params.agent_id, pagination);
+    const assetTypes = params.asset_types && params.asset_types.length > 0
+      ? params.asset_types
+      : undefined;
+    const bindingPage = await this.store.listAgentFixedAssets(params.agent_id, pagination, { assetTypes });
     const items: AgentAssetView[] = [];
 
     for (const b of bindingPage.items) {
@@ -1506,6 +1817,20 @@ export class MetadataService {
     return agent;
   }
 
+  /**
+   * agent 固定资产写操作的权限：owner 本人，或该 agent 所属团队的 team admin。
+   * 用于冷启动「admin 代新用户挂载默认 Agent 资产」等场景（参照 asset 的
+   * assertCallerIsAssetOwnerOrTeamAdmin 先例，放通 team admin）。
+   */
+  private async assertCallerIsAgentOwnerOrTeamAdmin(ctx: V3AuthContext, agentId: string): Promise<AgentEntity> {
+    const agent = await this.getAgentById(agentId);
+    if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+    const callerId = this.requireCallerId(ctx);
+    if (agent.owner_user_id === callerId) return agent;
+    await this.assertCallerIsTeamAdmin(ctx, agent.team_id);
+    return agent;
+  }
+
   private async assertCallerIsTaskCreator(ctx: V3AuthContext, taskId: string): Promise<TaskEntity> {
     const task = await this.getTaskById(taskId);
     if (!task) throw new MetadataError("task_not_found", `task not found: ${taskId}`);
@@ -1599,7 +1924,11 @@ export class MetadataService {
   async createAgentForCaller(input: CreateAgentInput, ctx: V3AuthContext): Promise<AgentEntity> {
     await this.assertTeamExists(input.team_id);
     await this.requireActiveTeamMember(ctx, input.team_id);
-    this.assertCallerIsResourceOwner(ctx, input.owner_user_id);
+    // owner 本人，或该 team 的 team admin（admin 代新用户创建默认 Agent）
+    const callerId = this.requireCallerId(ctx);
+    if (input.owner_user_id !== callerId) {
+      await this.assertCallerIsTeamAdmin(ctx, input.team_id);
+    }
     return this.createAgent(input);
   }
 
@@ -1650,6 +1979,18 @@ export class MetadataService {
   async archiveTaskForCaller(taskId: string, ctx: V3AuthContext): Promise<TaskEntity> {
     await this.assertCallerIsTaskCreator(ctx, taskId);
     return this.archiveTask(taskId);
+  }
+
+  /**
+   * 外部来源导入门控：team 存在 + caller 是该 team 的 active member。
+   *
+   * 供 task-source 模块调用（import-service 无法访问本类的 private 门控）。
+   * 与 createTaskForCaller 的前两步同语义，只是把「resource owner」那步留给
+   * createTaskForCaller 自己（creator 恒为 caller）。
+   */
+  async assertExternalTaskImportAllowed(teamId: string, ctx: V3AuthContext): Promise<void> {
+    await this.assertTeamExists(teamId);
+    await this.requireActiveTeamMember(ctx, teamId);
   }
 
   async linkTaskAgentForCaller(
@@ -1719,12 +2060,79 @@ export class MetadataService {
     return this.touchAssetUsage(assetId);
   }
 
+  /**
+   * 为 `/v3/chat-memory/clear` 做整批前置解析：把 asset_id 映射到 (team, agent)。
+   *
+   * 语义（与需求「任一 memory_id 不合法时，整批拒绝」对齐）：
+   *   - 每个 id 必须存在且 asset_type === "chat_memory"；
+   *   - 必须能在该资产的 team 下定位到对应 agent；
+   *   - 任一条不满足直接抛 MetadataError，整批不执行。
+   *
+   * **不做用户级 Owner 校验**：内核数据面的信任模型是 Bearer +
+   * x-tdai-service-id 即管理员级凭据（与 L0–L3 删除接口一致）。
+   * "仅资产 Owner 可操作"由面板后端在转发前完成。
+   *
+   * 只做校验与读取，**不修改任何资产字段** —— 清空只删内容不动资产。
+   */
+  async resolveChatMemoryTargets(
+    assetIds: string[],
+  ): Promise<Array<{ asset_id: string; team_id: string; agent_id: string }>> {
+    const targets: Array<{ asset_id: string; team_id: string; agent_id: string }> = [];
+    // 同一 team 的 agent 列表在批量场景里会被反复用到，按 team 缓存一次。
+    const agentIdsByTeam = new Map<string, string[]>();
+
+    for (const assetId of assetIds) {
+      const asset = await this.getAssetById(assetId);
+      if (!asset) {
+        throw new MetadataError("asset_not_found", `asset not found: ${assetId}`);
+      }
+      if (asset.asset_type !== "chat_memory") {
+        throw new MetadataError(
+          "asset_type_mismatch",
+          `asset ${assetId} is not a chat_memory asset (got ${asset.asset_type})`,
+        );
+      }
+
+      let agentIds = agentIdsByTeam.get(asset.team_id);
+      if (!agentIds) {
+        agentIds = await this.listAllAgentIdsByTeam(asset.team_id);
+        agentIdsByTeam.set(asset.team_id, agentIds);
+      }
+
+      const agentId = resolveChatMemoryAgentId(assetId, asset.team_id, agentIds);
+      if (!agentId) {
+        throw new MetadataError(
+          "agent_not_found",
+          `cannot resolve owning agent for chat_memory asset ${assetId} in team ${asset.team_id}`,
+        );
+      }
+      targets.push({ asset_id: assetId, team_id: asset.team_id, agent_id: agentId });
+    }
+    return targets;
+  }
+
+  /**
+   * 拉取一个 team 下全部 agent_id（分页遍历，单页上限 100）。
+   * 加硬上限防御异常大team 把内存打满。
+   */
+  private async listAllAgentIdsByTeam(teamId: string): Promise<string[]> {
+    const PAGE = 100;
+    const MAX_AGENTS = 10_000;
+    const ids: string[] = [];
+    for (let offset = 0; offset < MAX_AGENTS; offset += PAGE) {
+      const page = await this.store.listAgentsByTeam(teamId, { limit: PAGE, offset });
+      for (const agent of page.items) ids.push(agent.agent_id);
+      if (page.items.length < PAGE) break;
+    }
+    return ids;
+  }
+
   async setAgentFixedAssetsForCaller(
     agentId: string,
     bindings: FixedAssetBindingInput[],
     ctx: V3AuthContext,
   ): Promise<void> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     return this.setAgentFixedAssets(agentId, bindings);
   }
 
@@ -1751,5 +2159,487 @@ export class MetadataService {
   ): Promise<PaginatedResult<AclEntity>> {
     await this.assertCallerIsAssetOwnerOrTeamAdmin(ctx, assetId);
     return this.listAclByAsset(assetId, pagination);
+  }
+
+  // ── InstanceUpstreamConfig (v2 模型组) ─────────────────────────────────
+  //
+  // 对应设计文档 §6.B(groups/*) + §6.C(extraction/*) + §6.D(internal/list)。
+  // Service 层职责:
+  //   1. 应用层字段级校验(name 长度 / mode 合法性 / default 组不可改字段等)
+  //   2. store 抛的 InstanceUpstreamWriteConflictError 翻译为 MetadataError
+  //   3. Public/Internal 两条 list 路径:public 脱敏(api_key_masked),
+  //      Internal 明文(供 Proxy 转发)
+  //   4. 依赖调用方 (router 层) 提供 supported-agents 数组用于 seed 和 agents 校验;
+  //      service 本身不知道 yaml/config 存在
+  //
+  // 校验矩阵(§5.3):
+  //   default: name 固定 / mode='official' / base_url/api_key/model_id/description 必空;
+  //            agents 可 0~N,允许 update
+  //   custom:  name 非空 ≤64;agents ≥1;mode ∈ {custom_unified,custom_passthrough};
+  //            base_url 非空;custom_unified 时 api_key 非空
+  //   extraction: agents=[];mode='custom_unified';base_url + api_key 都必填
+
+  private static readonly NAME_MAX_LEN = 64;
+  // 与 §5.3 "允许中英文数字空格及 _-.()" 对齐;禁 换行/引号/尖括号/斜杠
+  private static readonly NAME_INVALID_RE = /[\n\r"'<>\/\\]/;
+
+  /**
+   * 幂等确保 default 已 seed。Router 层给纯只读接口(supported-agents / extraction/get)
+   * 用,不想让它们绕过 store 直接暴露 store 引用,就在 service 加一层薄转发。
+   */
+  async ensureDefaultSeeded(supportedAgents: SupportedAgent[]): Promise<void> {
+    await this.store.ensureDefaultSeeded(supportedAgents);
+  }
+
+  /**
+   * 列出所有组(default + custom),供 Panel B1 用。
+   * seed 语义: supportedAgents 非空时,若表内无 default 自动 seed 一行。
+   */
+  async listInstanceUpstreamGroups(
+    supportedAgents: SupportedAgent[],
+  ): Promise<{ items: Record<string, unknown>[] }> {
+    const rows = await this.store.listInstanceUpstreamGroups(undefined, supportedAgents);
+    // 只返 default + custom(extraction 走 C 类接口)
+    const filtered = rows.filter((r) => r.group_type !== "extraction");
+    return { items: filtered.map((r) => this.toPublicGroup(r)) };
+  }
+
+  /**
+   * 内部 D 接口:Proxy 拉数据,api_key 明文,全部行(含 extraction)。
+   * 与 Panel 侧共用 seed 逻辑(店店层保证)。
+   */
+  async listInstanceUpstreamGroupsInternal(
+    supportedAgents: SupportedAgent[],
+  ): Promise<{ items: InstanceUpstreamConfigEntity[] }> {
+    const rows = await this.store.listInstanceUpstreamGroups(undefined, supportedAgents);
+    return { items: rows };
+  }
+
+  /** Panel B2: 新建 custom 组。 */
+  async createInstanceUpstreamCustomGroup(
+    input: {
+      name: string;
+      agents: string[];
+      enabled?: boolean;
+      mode: UpstreamMode;
+      base_url: string;
+      api_key?: string;
+      model_id?: string;
+      description?: string;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    this.assertGroupName(input.name);
+    this.assertAgents(input.agents, supportedAgents, "custom");
+    this.assertModeForGroupType("custom", input.mode);
+    if (!input.base_url?.trim()) {
+      throw new MetadataError("MISSING_BASE_URL", "base_url is required for custom group");
+    }
+    if (input.mode === "custom_unified" && !input.api_key?.trim()) {
+      throw new MetadataError("MISSING_API_KEY", "api_key is required for custom_unified mode");
+    }
+    // 存量实例首个请求可能不是 list 而是直接 create,兜底 seed default
+    // 防止 assertAgentsNotOverlap 见空表 → INSERT custom → 只有 1 行 custom
+    // 无 default → 后续 hermes 请求 AGENT_NOT_CONFIGURED (design §5.5 存量兜底)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.createInstanceUpstreamGroup({
+        group_type: "custom",
+        name: input.name.trim(),
+        agents: input.agents,
+        enabled: input.enabled !== false,
+        mode: input.mode,
+        base_url: input.base_url.trim(),
+        api_key: input.api_key ?? "",
+        model_id: input.model_id ?? "",
+        description: input.description ?? "",
+      });
+      return this.toPublicGroup(row);
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  /** Panel B3: PATCH 更新组(default 或 custom)。 */
+  async updateInstanceUpstreamGroup(
+    input: {
+      group_id: string;
+      group_type: GroupType;
+      name?: string;
+      agents?: string[];
+      enabled?: boolean;
+      mode?: UpstreamMode;
+      base_url?: string;
+      api_key?: string;
+      model_id?: string;
+      description?: string;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    if (input.group_type === "extraction") {
+      throw new MetadataError("USE_EXTRACTION_ENDPOINT", "use /extraction/update for extraction row");
+    }
+
+    // default 组的 immutable 字段守卫
+    if (input.group_type === "default") {
+      const rejected: string[] = [];
+      if (input.name !== undefined) rejected.push("name");
+      if (input.mode !== undefined) rejected.push("mode");
+      if (input.base_url !== undefined) rejected.push("base_url");
+      if (input.api_key !== undefined) rejected.push("api_key");
+      if (input.model_id !== undefined) rejected.push("model_id");
+      if (input.description !== undefined) rejected.push("description");
+      if (rejected.length > 0) {
+        throw new MetadataError(
+          "DEFAULT_GROUP_IMMUTABLE_FIELDS",
+          `default group only allows updating agents / enabled; rejected: ${rejected.join(",")}`,
+          { rejected_fields: rejected },
+        );
+      }
+    }
+
+    // custom 组字段校验(仅在传入时才校验)
+    if (input.group_type === "custom") {
+      if (input.name !== undefined) this.assertGroupName(input.name);
+      if (input.agents !== undefined) this.assertAgents(input.agents, supportedAgents, "custom");
+      if (input.mode !== undefined) this.assertModeForGroupType("custom", input.mode);
+      if (input.base_url !== undefined && !input.base_url.trim()) {
+        throw new MetadataError("MISSING_BASE_URL", "base_url must be non-empty");
+      }
+    }
+
+    // 存量兜底 seed (同 create 分支说明)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.updateInstanceUpstreamGroup({
+        group_id: input.group_id,
+        expected_group_type: input.group_type,
+        expected_version: input.expected_version,
+        name: input.name?.trim(),
+        agents: input.agents,
+        enabled: input.enabled,
+        mode: input.mode,
+        base_url: input.base_url?.trim(),
+        api_key: input.api_key,
+        model_id: input.model_id,
+        description: input.description,
+      });
+      return this.toPublicGroup(row);
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  /** Panel B4: 切换 enabled 字段。 */
+  async toggleInstanceUpstreamGroup(
+    input: {
+      group_id: string;
+      enabled: boolean;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    // 存量兜底 seed (同 create 分支说明)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.toggleInstanceUpstreamGroup(input);
+      return { group_id: row.group_id, enabled: row.enabled, updated_at: row.updated_at };
+    } catch (e) {
+      const err = this.translateUpstreamConflict(e);
+      // extraction 用 C4 toggle,B4 拿到 extraction 的 group_id 是走错通道
+      if (err.code === "group_not_found") throw err;
+      throw err;
+    }
+  }
+
+  /** Panel B5: 物理删除 custom 组。 */
+  async deleteInstanceUpstreamGroup(
+    input: { group_id: string },
+    supportedAgents: SupportedAgent[],
+  ): Promise<{ deleted: boolean; released_agents: string[] }> {
+    // 存量兜底 seed (同 create 分支说明)
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const existing = await this.store.getInstanceUpstreamGroup(input.group_id);
+    if (!existing) {
+      throw new MetadataError("GROUP_NOT_FOUND", `group not found: ${input.group_id}`);
+    }
+    if (existing.group_type === "default") {
+      throw new MetadataError(
+        "CANNOT_DELETE_DEFAULT",
+        "default group cannot be deleted; set agents:[] + enabled:false instead",
+      );
+    }
+    if (existing.group_type === "extraction") {
+      throw new MetadataError(
+        "USE_EXTRACTION_ENDPOINT",
+        "use /extraction/delete for extraction row",
+      );
+    }
+    const ok = await this.store.deleteInstanceUpstreamGroup(input);
+    return { deleted: ok, released_agents: existing.agents };
+  }
+
+  // ── C 类:extraction 行 ─────────────────────────────────────────────
+
+  async getInstanceUpstreamExtraction(
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    // 只读也 seed:用户如果直接调 extraction/get 看到 default 未配置会误以为
+    // 实例真的没 default,去手动"配 default"就绕了 official 默认模型的语义。
+    // 每个实例都是自带 default 的,只是懒配置。查 = 保证有 default 存在。
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) return { configured: false, enabled: false };
+    return {
+      configured: true,
+      enabled: ext.enabled,
+      base_url: ext.base_url,
+      api_key_masked: ext.api_key ? maskKeyValue(ext.api_key) : "",
+      model_id: ext.model_id,
+      description: ext.description,
+      updated_at: ext.updated_at,
+    };
+  }
+
+  async createInstanceUpstreamExtraction(
+    input: {
+      base_url: string;
+      api_key: string;
+      model_id?: string;
+      enabled?: boolean;
+      description?: string;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    if (!input.base_url?.trim()) {
+      throw new MetadataError("MISSING_BASE_URL", "base_url is required for extraction");
+    }
+    if (!input.api_key?.trim()) {
+      throw new MetadataError("MISSING_API_KEY", "api_key is required for extraction");
+    }
+    // 存量兜底 seed:Panel 首个请求可能直接 extraction/create,不走 list/groups
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    try {
+      const row = await this.store.createInstanceUpstreamGroup({
+        group_type: "extraction",
+        name: EXTRACTION_GROUP_NAME,
+        agents: [],
+        enabled: input.enabled !== false,
+        mode: "custom_unified",
+        base_url: input.base_url.trim(),
+        api_key: input.api_key.trim(),
+        model_id: input.model_id ?? "",
+        description: input.description ?? "",
+      });
+      return this.toPublicExtraction(row);
+    } catch (e) {
+      const err = this.translateUpstreamConflict(e);
+      if (err.code === "extraction_already_exists") {
+        throw new MetadataError(
+          "EXTRACTION_ALREADY_CONFIGURED",
+          "extraction row already exists; use /extraction/update to modify",
+        );
+      }
+      throw err;
+    }
+  }
+
+  async updateInstanceUpstreamExtraction(
+    input: {
+      base_url?: string;
+      api_key?: string;
+      model_id?: string;
+      enabled?: boolean;
+      description?: string;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    if (input.api_key !== undefined && input.api_key.trim() === "") {
+      // extraction 必须有 key,清空要走 delete
+      throw new MetadataError(
+        "MISSING_API_KEY",
+        "api_key cannot be cleared via update; use /extraction/delete instead",
+      );
+    }
+    if (input.base_url !== undefined && !input.base_url.trim()) {
+      throw new MetadataError("MISSING_BASE_URL", "base_url must be non-empty");
+    }
+
+    // 存量兜底 seed
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) {
+      throw new MetadataError(
+        "EXTRACTION_NOT_CONFIGURED",
+        "extraction row does not exist; use /extraction/create first",
+      );
+    }
+    try {
+      const row = await this.store.updateInstanceUpstreamGroup({
+        group_id: ext.group_id,
+        expected_group_type: "extraction",
+        expected_version: input.expected_version,
+        base_url: input.base_url?.trim(),
+        api_key: input.api_key?.trim(),
+        model_id: input.model_id,
+        enabled: input.enabled,
+        description: input.description,
+      });
+      return this.toPublicExtraction(row);
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  async toggleInstanceUpstreamExtraction(
+    input: {
+      enabled: boolean;
+      expected_version?: number;
+    },
+    supportedAgents: SupportedAgent[],
+  ): Promise<Record<string, unknown>> {
+    // 存量兜底 seed
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) {
+      throw new MetadataError(
+        "EXTRACTION_NOT_CONFIGURED",
+        "extraction row does not exist",
+      );
+    }
+    try {
+      const row = await this.store.toggleInstanceUpstreamGroup({
+        group_id: ext.group_id,
+        enabled: input.enabled,
+        expected_version: input.expected_version,
+      });
+      return { enabled: row.enabled, updated_at: row.updated_at };
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  async deleteInstanceUpstreamExtraction(
+    supportedAgents: SupportedAgent[],
+  ): Promise<{ deleted: boolean }> {
+    // 存量兜底 seed
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const rows = await this.store.listInstanceUpstreamGroups({ group_type: "extraction" });
+    const ext = rows[0];
+    if (!ext) return { deleted: true }; // 幂等:不存在也返 true
+    const ok = await this.store.deleteInstanceUpstreamGroup({ group_id: ext.group_id });
+    return { deleted: ok };
+  }
+
+  // ── 内部工具 ─────────────────────────────────────────────
+
+  private assertGroupName(name: string): void {
+    const trimmed = (name ?? "").trim();
+    if (!trimmed) {
+      throw new MetadataError("MISSING_GROUP_NAME", "group name is required");
+    }
+    if (trimmed.length > MetadataService.NAME_MAX_LEN) {
+      throw new MetadataError(
+        "MISSING_GROUP_NAME",
+        `group name exceeds ${MetadataService.NAME_MAX_LEN} chars`,
+      );
+    }
+    if (MetadataService.NAME_INVALID_RE.test(trimmed)) {
+      throw new MetadataError(
+        "MISSING_GROUP_NAME",
+        "group name contains invalid characters (newline / quotes / angle brackets / slashes)",
+      );
+    }
+  }
+
+  private assertAgents(agents: string[], supported: SupportedAgent[], groupType: GroupType): void {
+    if (groupType === "custom" && agents.length === 0) {
+      throw new MetadataError("INVALID_AGENTS", "custom group must have at least 1 agent");
+    }
+    if (supported.length === 0) return; // 无 supported 列表时跳过枚举校验(仅 boot-time 极端情况)
+    const supportedSet = new Set(supported.map((a) => a.agent_source));
+    const unknown = agents.filter((a) => !supportedSet.has(a));
+    if (unknown.length > 0) {
+      throw new MetadataError(
+        "INVALID_AGENTS",
+        `unknown agents: ${unknown.join(",")}`,
+        { unknown_agents: unknown },
+      );
+    }
+  }
+
+  private assertModeForGroupType(gt: GroupType, mode: UpstreamMode): void {
+    if (gt === "custom" && mode === "official") {
+      throw new MetadataError(
+        "INVALID_MODE_FOR_GROUP_TYPE",
+        "custom group cannot use official mode",
+      );
+    }
+    if (gt === "default" && mode !== "official") {
+      throw new MetadataError(
+        "INVALID_MODE_FOR_GROUP_TYPE",
+        "default group must use official mode",
+      );
+    }
+    if (gt === "extraction" && mode !== "custom_unified") {
+      throw new MetadataError(
+        "INVALID_MODE_FOR_GROUP_TYPE",
+        "extraction row must use custom_unified mode",
+      );
+    }
+  }
+
+  private toPublicGroup(row: InstanceUpstreamConfigEntity): Record<string, unknown> {
+    return {
+      group_id: row.group_id,
+      group_type: row.group_type,
+      name: row.name,
+      agents: row.agents,
+      enabled: row.enabled,
+      mode: row.mode,
+      base_url: row.base_url,
+      api_key_masked: row.api_key ? maskKeyValue(row.api_key) : "",
+      model_id: row.model_id,
+      description: row.description,
+      version: row.version,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private toPublicExtraction(row: InstanceUpstreamConfigEntity): Record<string, unknown> {
+    return {
+      configured: true,
+      enabled: row.enabled,
+      base_url: row.base_url,
+      api_key_masked: row.api_key ? maskKeyValue(row.api_key) : "",
+      model_id: row.model_id,
+      description: row.description,
+      version: row.version,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private translateUpstreamConflict(e: unknown): MetadataError {
+    if (e instanceof InstanceUpstreamWriteConflictError) {
+      const codeMap: Record<string, string> = {
+        agents_overlap: "AGENTS_OVERLAP",
+        name_duplicate: "DUPLICATE_GROUP_NAME",
+        group_not_found: "GROUP_NOT_FOUND",
+        group_type_mismatch: "GROUP_TYPE_MISMATCH",
+        version_mismatch: "WRITE_CONFLICT",
+        default_already_exists: "CANNOT_CREATE_DEFAULT",
+        extraction_already_exists: "EXTRACTION_ALREADY_CONFIGURED",
+      };
+      const mapped = codeMap[e.reason] ?? e.reason;
+      return new MetadataError(mapped, e.message, e.detail);
+    }
+    if (e instanceof MetadataError) return e;
+    // 未知错误:包装抛出
+    return new MetadataError("internal_error", e instanceof Error ? e.message : String(e));
   }
 }

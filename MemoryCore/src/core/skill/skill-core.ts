@@ -27,6 +27,8 @@ import { parseSkillFile, validateSkillFile } from "./skill-format.js";
 import { SkillResourceStore, type SkillResourcePayload } from "./skill-resource-store.js";
 import type { ISkillStore, SkillSearchResult } from "./skill-store.interface.js";
 import { SkillVersioning } from "./skill-versioning.js";
+import { randomBase62 } from "../../utils/short-id.js";
+import { strToU8, zipSync } from "fflate";
 import {
   SkillPermissionError,
   assertOwner,
@@ -61,11 +63,13 @@ export type SkillCoreErrorCode =
   | "SKILL_NOT_FOUND"
   | "SKILL_VERSION_STALE"
   | "SKILL_VERSION_EXPIRED"
+  | "SKILL_ID_COLLISION"
   | "INVALID_PATH"
   | "RESOURCE_TOO_LARGE"
   | "STORAGE_NOT_FOUND"
   | "LLM_UNAVAILABLE"
-  | "SKILL_COS_REQUIRED";
+  | "SKILL_COS_REQUIRED"
+  | "SKILL_EXPORT_TOO_LARGE";
 
 export class SkillCoreError extends Error {
   constructor(public readonly code: SkillCoreErrorCode, message?: string) {
@@ -93,12 +97,18 @@ export interface SkillCoreOptions {
   store: ISkillStore;
   resources: SkillResourceStore;
   versioning: SkillVersioning;
-  /** 用于 skill_id 生成。默认 'skl-' + ulid。 */
+  /**
+   * 用于 skill_id 生成。默认 `skl-` + 12 字符 base62（CSPRNG，71 bit 真熵）。
+   * 保持与老 sid 相同长度 (16 字符)，仅字符集从 base36 扩到 base62 且用真随机源。
+   * 测试可注入固定值。
+   */
   ulid?: () => string;
   /** Date.now 的注入。默认 Date.now。 */
   now?: () => number;
   /** 旧版本 TTL 秒数。0 = 关闭。 */
   versionTtlSeconds?: number;
+  /** 每个 skill 最多保留的非 head 版本数。0 = 关闭。 */
+  maxNonHeadVersions?: number;
   /**
    * `delete` 成功归档 head 后同步触发。fire-and-forget：钩子抛异常
    * 会被吞掉，不影响 delete 返回值（asset 状态漂移可容忍：skill 已经
@@ -148,7 +158,6 @@ export interface PatchInput extends IdFields {
 
 export interface DeleteInput extends IdFields {
   skill_id: string;
-  expected_version: number;
 }
 
 export interface GetInput extends IdFields {
@@ -175,6 +184,12 @@ export interface ReadFileInput extends IdFields {
   version?: number;
   path: string;
   encoding?: "utf-8" | "base64";
+}
+
+export interface ExportInput extends IdFields {
+  skill_id: string;
+  version?: number;
+  format?: "zip";
 }
 
 export interface ListInput extends IdFields {
@@ -208,6 +223,7 @@ export class SkillCore {
   private readonly ulid: () => string;
   private readonly now: () => number;
   private readonly versionTtlSeconds: number;
+  private readonly maxNonHeadVersions: number;
   private readonly onSkillArchived?: SkillCoreOptions["onSkillArchived"];
   private readonly onSkillAccessed?: SkillCoreOptions["onSkillAccessed"];
 
@@ -215,9 +231,13 @@ export class SkillCore {
     this.store = opts.store;
     this.resources = opts.resources;
     this.versioning = opts.versioning;
-    this.ulid = opts.ulid ?? (() => `skl-${Math.random().toString(36).slice(2, 14)}`);
+    // 默认 sid = `skl-` + 12 字符 base62（CSPRNG，~71 bit 真熵）；总长 16。
+    // 与旧 `skl-${Math.random().toString(36).slice(2,14)}` 相同长度，
+    // 碰撞概率从单实例 100 万条时的 ~1.1e-4 降至 ~1.5e-10（详见 utils/short-id.ts）。
+    this.ulid = opts.ulid ?? (() => `skl-${randomBase62(12)}`);
     this.now = opts.now ?? (() => Date.now());
     this.versionTtlSeconds = opts.versionTtlSeconds ?? 0;
+    this.maxNonHeadVersions = opts.maxNonHeadVersions ?? 0;
     this.onSkillArchived = opts.onSkillArchived;
     this.onSkillAccessed = opts.onSkillAccessed;
   }
@@ -239,9 +259,38 @@ export class SkillCore {
       throw new SkillCoreError("INVALID_FRONTMATTER", `frontmatter.name '${file.frontmatter.name}' != body.name '${input.name}'`);
     }
 
+    // 2) 生成 sid 并做碰撞检测
+    //
+    // 背景：默认 ulid 走 CSPRNG base62 12 字符（~71 bit 真熵，单实例 100 万
+    // skill 时碰撞概率 ~1.5e-10），工程上"永远不会撞"；但仍加一层 preflight
+    // 防御，把"撞了静默覆盖"变成"撞了 retry"。为什么不上 DB UNIQUE 约束：
+    //   - SQLite skills 表 UNIQUE(skill_id, version) 已存在，v1 碰撞会被物理挡住
+    //   - TCVDB 主键是 row_id（每行唯一），无法给 skill_id 加"仅 v1 唯一"约束
+    //     （skill 天生多版本，version 2/3 就是同 skill_id 共存）
+    // → 应用层 preflight 是唯一可移植到两种 store 的方案。
+    //
     // 注：注入的 ulid 工厂可能不带 'skl-' 前缀，这里兜底拼上。
-    const u = this.ulid();
-    const sid = u.startsWith("skl-") ? u : `skl-${u}`;
+    const MAX_ID_ATTEMPTS = 3;
+    let sid = "";
+    for (let attempt = 1; attempt <= MAX_ID_ATTEMPTS; attempt++) {
+      const u = this.ulid();
+      sid = u.startsWith("skl-") ? u : `skl-${u}`;
+
+      // 全 team 范围查（不带 team_id）：只要 skill_id 全局撞了就重试。
+      // 用 getHeadIncludingArchived 覆盖 archived 行——归档不代表 sid 空闲，
+      // 版本表 UNIQUE(skill_id, version) 仍会挡住写入。
+      const existing = await this.store.getHeadIncludingArchived(sid);
+      if (!existing) break;
+
+      if (attempt >= MAX_ID_ATTEMPTS) {
+        // 连续 3 次撞 —— 只可能是 ulid 注入器坏了（比如测试里固定返回同一值）
+        // 或熵源崩了，不是概率事件，直接抛。
+        throw new SkillCoreError(
+          "SKILL_ID_COLLISION",
+          `failed to generate a unique skill_id after ${MAX_ID_ATTEMPTS} attempts`,
+        );
+      }
+    }
 
     try {
       return await this.versioning.createNewSkill(
@@ -278,7 +327,7 @@ export class SkillCore {
         description: file.frontmatter.description,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {
@@ -317,7 +366,7 @@ export class SkillCore {
         description: file.frontmatter.description,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {
@@ -335,7 +384,6 @@ export class SkillCore {
     if (input.team_id) assertTeamMatchWrap(head, input.team_id);
     if (!head) throw new SkillCoreError("SKILL_NOT_FOUND");
     if (input.agent_id) assertOwnerWrap(head, input.agent_id, input.team_id);
-    assertVersionFreshWrap(head, input.expected_version);
 
     // 物理删除所有版本 + 清 storage + 汇总上报 shark(-N)
     const deleted = await this.versioning.deleteSkill(input.skill_id, input.team_id);
@@ -364,7 +412,7 @@ export class SkillCore {
         resourcesToWrite: input.files,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {
@@ -393,7 +441,7 @@ export class SkillCore {
         resourcesToRemove: toRemove,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {
@@ -525,6 +573,82 @@ export class SkillCore {
     };
   }
 
+  async exportSkill(input: ExportInput): Promise<{
+    zip_base64: string;
+    filename: string;
+    name: string;
+    version: number;
+    file_count: number;
+    total_bytes: number;
+    warnings: string[];
+  }> {
+    // 1. 取目标版本
+    const head = await this.store.getHead(input.skill_id, input.team_id);
+    if (input.team_id) assertTeamMatchWrap(head, input.team_id);
+    if (!head) throw new SkillCoreError("SKILL_NOT_FOUND");
+
+    let target: Skill;
+    if (typeof input.version === "number" && input.version !== head.version) {
+      const byVersion = await this.store.getByVersion(input.skill_id, input.version, input.team_id);
+      if (!byVersion) {
+        throw new SkillCoreError(
+          "SKILL_NOT_FOUND",
+          `version ${input.version} not found`,
+        );
+      }
+      target = byVersion;
+      this.assertVersionNotExpired(target, head.version);
+    } else {
+      target = head;
+    }
+
+    // 2. 读 SKILL.md 内容（DB 权威源）
+    const content = target.content;
+
+    // 3. 读资源文件
+    const warnings: string[] = [];
+    const resources: Array<{
+      path: string; content: string; encoding: "base64"; is_executable: boolean;
+    }> = [];
+
+    for (const entry of target.manifest) {
+      const r = await this.resources.readResource(
+        input.skill_id, target.version, entry.path, "base64",
+      );
+      if (!r) {
+        warnings.push(`${entry.path}: missing in storage, skipped`);
+        continue;
+      }
+      resources.push({
+        path: entry.path,
+        content: r.content,
+        encoding: "base64",
+        is_executable: entry.is_executable,
+      });
+    }
+
+    // 4. 打包 zip
+    const zipBuf = buildZip(target.name, content, resources);
+
+    // 5. 上限防护
+    if (zipBuf.length > this.resources.getMaxSkillTotalBytes()) {
+      throw new SkillCoreError(
+        "SKILL_EXPORT_TOO_LARGE",
+        `exported zip ${zipBuf.length} bytes exceeds max ${this.resources.getMaxSkillTotalBytes()} bytes`,
+      );
+    }
+
+    return {
+      zip_base64: zipBuf.toString("base64"),
+      filename: `${target.name}.zip`,
+      name: target.name,
+      version: target.version,
+      file_count: resources.length,
+      total_bytes: zipBuf.length,
+      warnings,
+    };
+  }
+
   // ───────────────────────────────────────────────────────────────────
   //  helpers
   // ───────────────────────────────────────────────────────────────────
@@ -620,4 +744,35 @@ function countOccurrences(haystack: string, needle: string): number {
 
 function splitJoin(s: string, find: string, replace: string): string {
   return s.split(find).join(replace);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  zip 打包
+// ═════════════════════════════════════════════════════════════════════
+
+function buildZip(
+  name: string,
+  skillMdContent: string,
+  resources: Array<{ path: string; content: string; encoding: "base64"; is_executable: boolean }>,
+): Buffer {
+  const files: Record<string, [Uint8Array, { level?: number; mtime?: Date; mode?: number }?]> = {};
+
+  // 1. SKILL.md
+  files[`${name}/SKILL.md`] = [strToU8(skillMdContent)];
+
+  // 2. 资源文件（直接放在 name/ 下，与导入源目录结构一致）
+  for (const r of resources) {
+    const key = `${name}/${r.path}`;
+    const buf = r.encoding === "base64"
+      ? Uint8Array.from(Buffer.from(r.content, "base64"))
+      : strToU8(r.content);
+    files[key] = [buf, {
+      mode: r.is_executable ? 0o755 : 0o644,
+    }];
+  }
+
+  // fflate 的 Zippable 类型对 value 的约束与我们的 Record 不完全一致，
+  // 但运行时完全兼容（Uint8Array + opts tuple 就是合法的 ZippableFile）。
+  const zipped = zipSync(files as unknown as Parameters<typeof zipSync>[0]);
+  return Buffer.from(zipped);
 }

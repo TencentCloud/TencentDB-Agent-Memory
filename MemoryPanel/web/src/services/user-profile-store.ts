@@ -4,7 +4,7 @@
  * 从后端 usersApi.get() 拉取 display_name，内存缓存避免重复请求。
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 // 内存缓存：user_id → display_name
 const _displayNameCache = new Map<string, string>();
@@ -57,4 +57,38 @@ export function useUserDisplayName(user_id: string | null | undefined): string {
   }
 
   return user_id; // 拉取完成前显示 user_id
+}
+
+/**
+ * 批量场景（如列表 tooltip 需要 join 多个用户名）的解析器。
+ * 返回稳定函数引用；渲染期触发未缓存 id 的拉取，缓存就绪后经订阅触发重渲染。
+ * 与 useUserDisplayName 同套缓存/订阅，二者解析结果一致。
+ */
+export function useDisplayNameResolver(): (userId: string) => string {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const sub = () => force((n) => n + 1);
+    _subscribers.add(sub);
+    return () => { _subscribers.delete(sub); };
+  }, []);
+
+  return useCallback((userId: string) => {
+    if (!userId) return '';
+    const cached = _displayNameCache.get(userId);
+    if (cached) return cached;
+    if (!_fetching.has(userId)) {
+      _fetching.add(userId);
+      import('@/lib/teamApi').then(({ usersApi }) => {
+        usersApi.get(userId)
+          .then((u) => {
+            const name = u.display_name || u.username || userId;
+            _displayNameCache.set(userId, name);
+            notify();
+          })
+          .catch(() => { /* 静默失败 */ })
+          .finally(() => { _fetching.delete(userId); });
+      });
+    }
+    return userId;
+  }, []);
 }

@@ -11,18 +11,42 @@ export interface CostGuardConfig {
   /** Master switch for the private forwarding extension. */
   enabled: boolean;
   /**
+   * Whether the `/cost-guard` URL marker is required to activate the router.
+   *
+   *   - `false` (default, historical behavior): every request that reaches a
+   *     primary handler goes through the cost-guard router (subject to
+   *     `enabled`). The `/{agent}/{spaceId}/cost-guard/...` routes are NOT
+   *     registered and return 404. This is what production runs — clients that
+   *     never learned about the marker continue to work unchanged.
+   *   - `true` (opt-in, test env): the router is only activated when the
+   *     request path contains the `/cost-guard` segment. Paths without the
+   *     marker skip the router and passthrough directly to the default
+   *     upstream. Used to A/B compare guarded vs. bare traffic side by side.
+   *
+   * Independent of `enabled`: when `enabled=false` every request is a
+   * passthrough regardless of this flag, matching pre-existing semantics.
+   */
+  markerOptIn?: boolean;
+  /**
    * Pin the agent profile by id ("claude-code", "codebuddy").
    * Empty or "auto" (default) = auto-detect from request headers.
    */
   agentProfile?: string;
   /**
    * Anthropic-specific upstream override（用于 anthropic 协议请求的全局兜底上游）。
-   * Per-agent override（agentUpstreams.anthropic[agent]）优先级更高。
+   * Per-agent override（upstream.agents[agent].url）优先级更高。
    */
   anthropicUpstream?: {
     url: string;
   };
-  /** Opaque private options, forwarded to the extension as-is. */
+  /**
+   * Opaque private options, forwarded to the extension as-is.
+   *
+   * Known keys the current cost-guard build understands (still untyped here):
+   * `taskArchiveEnabled`, `compress*` / `gate*`, `judge` (enabled, baseUrl,
+   * timeouts, everyNToolTurns, latch*), `requestPrepare`, `controlPlane`,
+   * analyze/cheap model fields, `agents` (per-agent cheap overrides).
+   */
   options: Record<string, unknown>;
 }
 
@@ -111,6 +135,14 @@ export interface RedisConfig {
   ttlSeconds: number;
   /** Injection layer TTL override (seconds). Defaults to ttlSeconds. */
   injectionTtlSeconds?: number;
+  /**
+   * Per-session turn-sequence counter TTL, in days. Default: 30.
+   *
+   * Must outlive `ttlSeconds` by a wide margin: session state expiring only
+   * costs a cache miss, but the turn sequence expiring restarts the session at
+   * 1 and collides with the usage rows it already wrote.
+   */
+  turnSeqTtlDays?: number;
 }
 
 /** Per-Memory-instance input-token rate limiting. */
@@ -135,6 +167,36 @@ export interface LangfuseConfig {
   publicKey: string;
   /** Langfuse secret key（sk-lf-...）。 */
   secretKey: string;
+  /**
+   * Debug 模式：上报 generation 时保留原始 Anthropic body 结构
+   * （含 `cache_control` marker / `thinking` block / tool_use 原生形态），
+   * 而不是走 `flattenAnthropicMessagesForOpik` 压平。
+   *
+   * 用途：排查请求分类（Fork vs SideQuery vs Main）、cache 命中率、
+   *      thinking 签名合法性等需要看原生结构才能判断的问题。
+   *
+   * 代价：上报体积增大 2-5x（cache_control block、thinking block 全带过去），
+   *      Langfuse 存储成本增加。**线上默认关闭**，只在排障时打开。
+   */
+  debug?: boolean;
+
+  // ── 批量上报调优（防高并发丢 span）──
+
+  /**
+   * 内存队列最大深度（超出即丢弃）。
+   * 映射 OTel BatchSpanProcessor 的 maxQueueSize。默认 8192。
+   */
+  maxQueueSize: number;
+  /**
+   * 每批导出的最大 span 数。
+   * 映射 LangfuseSpanProcessor 的 flushAt / OTel maxExportBatchSize。默认 256。
+   */
+  flushAt: number;
+  /**
+   * 定时 flush 间隔（秒）。
+   * 映射 LangfuseSpanProcessor 的 flushInterval / OTel scheduledDelayMillis。默认 2。
+   */
+  flushInterval: number;
 }
 
 /** Session initialization configuration. */
@@ -183,6 +245,24 @@ export interface SessionInitConfig {
     task_id?: string;
   };
   /**
+   * DEBUG：把请求识别到的 userId（来自 auth verify / x-user-id 头等）强制
+   * 覆盖为指定值。用于本地联调时——客户端传的 tokenhub-uid 与 kernel-uid 不一致
+   * （kernel 侧资产挂在另一个真实 user_id 下），无法通过 kernel /team/list 拉到
+   * 资产，导致 CB 状态机走 "no active agents, passing through" bypass。
+   *
+   * 配置此字段后，handler 层会用此 user_id 替换识别结果，让 CB 状态机以真实
+   * kernel 用户身份拉资产列表，弹出完整 team→agent→task 表单流程。
+   *
+   * 仅供本地/e2e 联调，生产环境务必留空。
+   */
+  debugForceUserId?: string;
+  /**
+   * DEBUG：开启详细诊断日志（包括请求 tools schema、system prompt 摘要、
+   * 用户输入文本等）。仅用于本地联调排查 session-init 表单交互问题。
+   * 生产环境务必保持 false 或不配置（默认关闭）。
+   */
+  debugVerboseLogging?: boolean;
+  /**
    * 从请求头自动预选 team/agent/task 身份。
    *
    * 当首轮请求头已带上身份字段时，先去（当前认证用户可见的）team/agent/task
@@ -196,6 +276,20 @@ export interface SessionInitConfig {
    * - 任一「已提供」的字段在列表中查不到     → 视为 mismatch，按 onMismatch 处理
    * - 未带 team header                      → 完全走原有流程（零行为变化）
    */
+  /**
+   * 当用户在 task_select 阶段选择"跳过"时，使用此 task_id 作为默认关联。
+   * 该 task_id 不需要在控制面元数据中真实存在——仅作为标签记录，不影响
+   * 检索隔离（主维度为 team/user/agent/session）。
+   *
+   * 默认 "default"（开启）。若想关闭，在 YAML 中配为空字符串 `defaultTaskId: ""`。
+   */
+  defaultTaskId?: string;
+  /**
+   * 跳过 asset_confirm 前置对话框，默认视为用户选了"是，关联团队资产"。
+   * 开启后首轮直接进入 team → agent → task 选择流程（或 auto-select 级联）。
+   * 默认 false（保持原有行为，弹 asset_confirm 对话框）。
+   */
+  skipAssetConfirm?: boolean;
   headerAutoSelect?: {
     /** 是否启用 header 自动预选。默认 true。 */
     enabled: boolean;
@@ -251,6 +345,26 @@ export interface CoreSkillConfig {
 }
 
 /**
+ * Instance-upstream 配置缓存(自定义模型分流的每实例配置)。
+ *
+ * proxy 每次 handler 会走 skill.endpoint + /v3/internal/meta/instance-upstream/list
+ * 拉本 spaceId 的模型分组配置(default / custom / extraction 三类行),结果按 spaceId
+ * 缓存在进程内。缓存内部固定语义(hard expiry + stale-if-error + 256 LRU +
+ * 空数组零行 fallback = official),此配置仅暴露唯一可调项 TTL。
+ *
+ * 详见 `docs/design/2026-08-25-instance-upstream-config.md` §7.1。
+ */
+export interface InstanceUpstreamConfig {
+  /**
+   * 缓存 TTL(秒)。默认 30。决定"Panel 改完自定义模型 → proxy 生效"的最长延迟。
+   *
+   * 只接受正整数;非法/负数/0/NaN/小数一律回退默认 30s + warn 一行。
+   * 别调到 <5s:会把 core /v3/internal/meta/instance-upstream/list 打成热点。
+   */
+  cacheTtlSec: number;
+}
+
+/**
  * Knowledge tools injector configuration.
  *
  * Independent from `coreSkill` so knowledge gateway routing can diverge from
@@ -290,16 +404,47 @@ export interface SkillRuntimeConfig {
 }
 
 /**
- * Per-agent upstream override. When an agent (identified by URL path prefix like
- * "claude-code") needs a different upstream than the global default, this map
- * provides the replacement URL. Falls back to costGuard.anthropicUpstream.url or
- * upstream.url when no entry exists.
+ * Per-agent upstream override entry. When an agent (identified by URL path
+ * prefix like "claude-code") needs a different upstream than the global
+ * default, this struct provides the replacement `url` (and optional `apiKey`).
+ *
+ * Fallback semantics — three cases, matching the runtime `effectiveApiKey`
+ * resolution in `handler.ts` / `anthropicHandler.ts`:
+ *
+ *   ┌──────────────────────────────┬────────────┬──────────────────────────┐
+ *   │ agent config                 │ url used   │ apiKey used              │
+ *   ├──────────────────────────────┼────────────┼──────────────────────────┤
+ *   │ NOT in agents map            │ upstream.url│ upstream.apiKey (global)│
+ *   │ in map, url only, no apiKey  │ agent.url  │ passthrough client key  │
+ *   │ in map, url + apiKey         │ agent.url  │ agent.apiKey            │
+ *   └──────────────────────────────┴────────────┴──────────────────────────┘
+ *
+ * The presence of an entry cuts the global `upstream.apiKey` fallback —
+ * this is intentional so an operator can run some agents on a server-side
+ * key and others on the client's own key from a single proxy config.
+ *
+ * Priority order (high → low):
+ *   1. `costGuard`-provided `target.authHeaders`（cheap-model 兜底路由自带凭据）
+ *   2. `upstream.agents[agent].url` + `upstream.agents[agent].apiKey`
+ *   3. `costGuard.anthropicUpstream.url`（仅 Anthropic 协议）
+ *   4. `upstream.url` + `upstream.apiKey`（未命中 agent 时的默认）
+ *
+ * The same map serves both Anthropic and OpenAI protocols — the agent name
+ * alone determines routing, matching how {@link ProxyConfig#upstream.url}
+ * itself is protocol-agnostic.
  */
-export interface AgentUpstreamsConfig {
-  /** Anthropic Messages API endpoint override, keyed by agent name. */
-  anthropic?: Record<string, string>;
-  /** OpenAI Chat Completions endpoint override, keyed by agent name. */
-  openai?: Record<string, string>;
+export interface AgentUpstreamEntry {
+  /** Target upstream base URL. Required. */
+  url: string;
+  /**
+   * Per-agent apiKey. When set (non-empty):
+   *   - OpenAI: `Authorization: Bearer <apiKey>` is injected
+   *   - Anthropic: `x-api-key: <apiKey>` is injected
+   * When absent / empty: the client's own auth header is passed through
+   * upstream untouched. This does NOT fall back to `upstream.apiKey` —
+   * that fallback only applies when this agent has no entry at all.
+   */
+  apiKey?: string;
 }
 
 /** Top-level proxy configuration (merged from config file + CLI args). */
@@ -313,6 +458,11 @@ export interface ProxyConfig {
   upstream: {
     url: string; // OpenAI-compatible upstream URL
     apiKey: string; // 若非空则替换请求中的 API Key
+    /**
+     * Per-agent overrides keyed by agent name (URL path prefix, e.g. "claude-code").
+     * Empty / missing entry → agent falls back to `url` + `apiKey`.
+     */
+    agents: Record<string, AgentUpstreamEntry>;
   };
   log: {
     file: string;    // JSONL path; empty string disables file logging
@@ -359,9 +509,9 @@ export interface ProxyConfig {
   sessionInit: SessionInitConfig;
   tdai: TdaiConfig;
   coreSkill: CoreSkillConfig;
+  instanceUpstream: InstanceUpstreamConfig;
   knowledge: KnowledgeConfig;
   skillRuntime: SkillRuntimeConfig;
-  agentUpstreams: AgentUpstreamsConfig;
   auth: AuthConfig;
   /**
    * Internal service accounts allowed to passthrough the proxy without any
@@ -385,6 +535,86 @@ export interface ProxyConfig {
    */
   admin: {
     apiKey: string;
+  };
+  /**
+   * `mem:` 特殊命令配置。
+   *
+   * 命令拦截恒定启用（无配置开关）：handler 在 session init 之后检测最后一条 user
+   * message 是否为 mem: 命令，命中已知命令（sync/create-skill/help/create-task/
+   * update-task/session-reset）则执行对应操作并直接返回伪造 LLM 响应（不注入 /
+   * 不转发 / 不计费）；未知命令由 executeMemCommand 内置提示兜底。
+   *
+   * 结构仅承载 `taskDraft`（create-task / update-task 依赖的 LLM 草稿生成器）；
+   * 未配置时 task 命令族返回"未配置 task_draft"错误，其它命令不受影响。
+   */
+  memCommand: MemCommandConfig;
+
+  /**
+   * CC 请求分流总开关。
+   *
+   * 启用时：根据 `cache_control` marker 位置 + tools/thinking 兜底将请求分为
+   *   main / fork / sidequery 三类，走差异化路径（fork/sidequery 跳过
+   *   session-init / mem 拦截 / injection / L0 / skill buffer，credit 仍上报）。
+   * 关闭时：所有请求视为 main，走原有一刀切链路，行为 100% 等价现状。
+   *
+   * 默认关闭。启用前建议先跑一段"分类识别但不改路径"的观察期，见方案 §7。
+   * 详见 docs/design/2026-07-30-cc-request-routing-plan.md
+   */
+  ccRequestRouting: CcRequestRoutingConfig;
+
+  /**
+   * WorkBuddy 请求分流总开关（运维 kill switch）。
+   *
+   * 启用时（默认）：调用 `classifyWorkbuddyRequest` 将请求分为 main / auxiliary
+   *   两类，auxiliary 请求直接 passthrough（跳过 session-init / injection / L0 /
+   *   skill 归档），credit 仍上报。
+   * 关闭时：所有请求视为 main，走完整业务链路 —— 等价于 aux 分流未启用的老链路，
+   *   用于 aux 分类规则出问题时快速回滚。
+   *
+   * 默认启用（与 CC 的 `ccRequestRouting.enabled` 默认 false 不同）：WB 的 aux
+   *   分流已在生产跑通并有日志验证，此开关是"保守回滚"保险而非"灰度上线"开关。
+   */
+  workbuddyRequestRouting: WorkbuddyRequestRoutingConfig;
+
+  /**
+   * 本地 JSONL trace 归档配置。
+   *
+   * 启用后，每个 trace + span 以 JSONL 行写入本地文件（按日期分文件），
+   * 可配合 crontab 定时压缩上传到 COS/S3 归档存储。
+   *
+   * 默认关闭。启用后不影响 Opik / Langfuse 等远程上报链路。
+   */
+  traceArchive: TraceArchiveConfig;
+}
+
+export interface TraceArchiveConfig {
+  /** 是否启用本地 JSONL trace 归档。默认 false（关闭）。 */
+  enabled: boolean;
+  /** 归档目录（相对于项目根目录或绝对路径）。默认 "logs/traces"。 */
+  dir: string;
+}
+
+export interface CcRequestRoutingConfig {
+  /** 是否启用 CC 请求分流。默认 false —— 关闭时走完全等价原有行为的老链路。 */
+  enabled: boolean;
+}
+
+export interface WorkbuddyRequestRoutingConfig {
+  /** 是否启用 WB 请求分流。默认 true —— 关闭时所有请求视为 main，跳过 aux 分流。 */
+  enabled: boolean;
+}
+
+export interface MemCommandConfig {
+  /**
+   * mem:create-task / mem:update-task 使用的 LLM 草稿生成器配置。可选。
+   * 未配置或 enabled=false 时，task 命令族会返回"未配置 task_draft"错误。
+   */
+  taskDraft?: {
+    enabled: boolean;
+    model: string;
+    url: string;
+    apiKey: string;
+    timeoutMs: number;
   };
 }
 
@@ -412,6 +642,26 @@ export interface InjectionConfig {
    * 单节点 / 本地开发场景可用），启动时 warn 一次。
    */
   externalGatewayUrl?: string;
+  /**
+   * 资产反思模式（内部效果评估用）。**默认开启**——为了让运营方零配置即可
+   * 用 URL marker 观测资产注入效果。marker 本身仍是 opt-in：不带 `/analyse/`
+   * 段的请求完全无感。
+   *
+   * 开启后，请求路径带 `/analyse` marker（结构同 `/cost-guard`：夹在
+   * `/{agent}/{spaceId}` 之后，如 `/codebuddy/default/analyse/v1/messages`）
+   * 时，proxy 会在系统提示词末尾追加一个 `<asset_reflection>` 块，指导
+   * agent 在回答里点评「本轮调用过的云端资产工具是否起到作用」。
+   *
+   * marker 段列表由本节点上实际注册的资产 injector 决定（skill /
+   * tdai-memory / knowledge），一个都没注册时 injector 不 emit 任何块。
+   *
+   * 姿势对齐 `costGuard.markerOptIn`，但 default 相反：
+   *   - `true`（默认）：injector register；仅当 URL 带 `/analyse/` 段时才 emit 块
+   *   - `false`：injector 不 register 且顶部 gate 把 `/analyse/` 段 404 拒
+   */
+  assetReflection?: {
+    markerOptIn: boolean;
+  };
 }
 
 /**
@@ -486,7 +736,60 @@ export interface CreditReportConfig {
 }
 
 /** Credit pricing entry for a single model (Credit / 1K Token). */
-export interface CreditPricingEntry {
+/**
+ * 分档定价条目。按 input token 总量 (nonCacheInput + cacheRead) 命中对应档位，
+ * 该请求全部 token 类型都按该档单价计费（整体定档，非分段累进）。
+ *
+ * `tiers` 数组须按 `maxInputTokens` 升序排列，最后一档以 `null` 表示兜底（无上限）。
+ */
+export interface PricingTier {
+  /** 该档 input token 上限（包含）。null = 兜底档（无上限）。 */
+  maxInputTokens: number | null;
+  /** Standard input tokens (non-cache) — credit per 1K tokens. */
+  input: number;
+  /** Output tokens — credit per 1K tokens. */
+  output: number;
+  /** Cache read (cache hit) tokens — credit per 1K tokens. */
+  cacheRead: number;
+  /** Cache write with 5-minute TTL (ephemeral) — credit per 1K tokens. */
+  cacheWrite5m: number;
+  /** Cache write with 1-hour TTL (standard cache creation) — credit per 1K tokens. */
+  cacheWrite1h: number;
+}
+
+/** A complete set of token prices, optionally split by total input length. */
+export interface TieredPricing {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+  tiers?: PricingTier[];
+}
+
+export type PricingWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+
+/** A half-open local-time interval: start is inclusive, end is exclusive. */
+export interface PricingTimeRange {
+  start: string;
+  end: string;
+}
+
+/** Conditions for choosing a time-based price rule. Omitted fields match all requests. */
+export interface PricingRuleWhen {
+  weekdays?: PricingWeekday[];
+  timeRanges?: PricingTimeRange[];
+}
+
+/** A time-based price override. Highest priority matching rule wins. */
+export interface PricingRule {
+  id: string;
+  priority?: number;
+  when?: PricingRuleWhen;
+  pricing: TieredPricing;
+}
+
+export interface CreditPricingEntry extends TieredPricing {
   /**
    * Model ID for matching (case-insensitive full-word match against usage.model).
    * 语义是「唯一 ID」，如 `ep-pksklwtb` / `deepseek-v4-pro`。
@@ -498,21 +801,22 @@ export interface CreditPricingEntry {
    * 写入 usage_logs.model_name / usage_raw.model_name 供前端展示。
    */
   modelName?: string;
-  /** Standard input tokens (non-cache). */
-  input: number;
-  /** Output tokens. */
-  output: number;
-  /** Cache read (cache hit) tokens. */
-  cacheRead: number;
-  /** Cache write with 5-minute TTL (ephemeral). */
-  cacheWrite5m: number;
-  /** Cache write with 1-hour TTL (standard cache creation). */
-  cacheWrite1h: number;
+  /**
+   * 按 input token 总量 (nonCacheInput + cacheRead) 分档定价。
+   * 升序排列，最后一档 maxInputTokens 为 null（兜底）。
+   * 不配置时使用顶层 input/output/cacheRead/cacheWrite5m/cacheWrite1h 单价。
+   */
+  rules?: PricingRule[];
 }
 
 /** Credit pricing configuration section. */
 export interface CreditPricingConfig {
   models: CreditPricingEntry[];
+  /**
+   * IANA 时区名（如 "Asia/Shanghai"）用于 ClickHouse 按日分片时的时区锚点。
+   * 可选, 不传时沿用 ClickHouse server 的默认时区。只在测试里显式设置。
+   */
+  timezone?: string;
 }
 
 /** Raw YAML config file shape (all fields optional). */
@@ -525,6 +829,8 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
+    /** Per-agent override map. See `AgentUpstreamEntry`. */
+    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
   };
   log?: {
     file?: string;
@@ -552,6 +858,7 @@ export interface RawYamlConfig {
     keyPrefix?: string;
     ttlSeconds?: number;
     injectionTtlSeconds?: number;
+    turnSeqTtlDays?: number;
   };
   rateLimit?: {
     tpm?: number;
@@ -600,9 +907,21 @@ export interface RawYamlConfig {
     host?: string;
     publicKey?: string;
     secretKey?: string;
+    debug?: boolean;
+    maxQueueSize?: number;
+    flushAt?: number;
+    flushInterval?: number;
   };
   creditReport?: { url?: string; timeoutMs?: number };
-  creditPricing?: { models?: Partial<CreditPricingEntry>[] };
+  creditPricing?: {
+    models?: (Partial<CreditPricingEntry> & {
+      tiers?: Partial<PricingTier>[];
+      rules?: (Partial<PricingRule> & {
+        when?: PricingRuleWhen;
+        pricing?: Partial<TieredPricing> & { tiers?: Partial<PricingTier>[] };
+      })[];
+    })[];
+  };
   /** Opaque private review options, forwarded to the extension untouched. */
   badcaseCollector?: Record<string, unknown>;
   injection?: {
@@ -610,6 +929,9 @@ export interface RawYamlConfig {
     endpoint?: string;
     injectors?: string[];
     externalGatewayUrl?: string;
+    assetReflection?: {
+      markerOptIn?: boolean;
+    };
   };
   extraction?: {
     enabled?: boolean;
@@ -620,11 +942,16 @@ export interface RawYamlConfig {
     maxRetries?: number;
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
+    defaultTaskId?: string;
+    /** 一步到位: 预选 team/agent 都命中时, 跳过 asset_confirm 直接 initialized。 */
+    skipAssetConfirm?: boolean;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
       task_id?: string;
     };
+    debugForceUserId?: string;
+    debugVerboseLogging?: boolean;
     headerAutoSelect?: {
       enabled?: boolean;
       teamHeader?: string;
@@ -648,13 +975,10 @@ export interface RawYamlConfig {
    */
   skill?: Partial<CoreSkillConfig>;
   coreSkill?: Partial<CoreSkillConfig>;
+  instanceUpstream?: Partial<InstanceUpstreamConfig>;
   knowledge?: Partial<KnowledgeConfig>;
   skillRuntime?: {
     allowLlmWrite?: boolean;
-  };
-  agentUpstreams?: {
-    anthropic?: Record<string, string>;
-    openai?: Record<string, string>;
   };
   auth?: {
     enabled?: boolean;
@@ -664,6 +988,23 @@ export interface RawYamlConfig {
   systemUsers?: Partial<SystemUserEntry>[];
   admin?: {
     apiKey?: string;
+  };
+  /**
+   * mem: 命令族配置（含 create-task / update-task 的 LLM 草稿生成器）。
+   * 与 ProxyConfig.memCommand 对应；命令拦截恒定启用，taskDraft 未配置则 task 命令族按现有 fallback 行为。
+   */
+  memCommand?: {
+    taskDraft?: {
+      enabled?: unknown;
+      model?: unknown;
+      url?: unknown;
+      apiKey?: unknown;
+      timeoutMs?: unknown;
+    };
+  };
+  traceArchive?: {
+    enabled?: boolean;
+    dir?: string;
   };
 }
 
@@ -686,6 +1027,11 @@ export interface RequestLogEntry {
    * upstream did not return one. Used for cross-system tracing/audit.
    */
   upstreamRequestId?: string;
+  /**
+   * pipeline 内部的 traceId（uuidv7, 用于日志串联）；
+   * codex runner 把它塞进 request 事件便于跨协议 join。
+   */
+  traceId?: string;
 }
 
 /** usage event — written after LLM response is received. */
@@ -702,7 +1048,16 @@ export interface UsageLogEntry {
   upstreamUrl: string;
   stream: boolean;
   usage: Record<string, unknown>; // raw LLM usage object, unmodified
+  /** Request receipt time used for deterministic time-based credit pricing. */
+  requestReceivedAt?: string;
   routedFrom?: string;     // original model if routing was applied
+  /**
+   * Scalar counters reported by the optional private request-preparation
+   * stage, recorded verbatim. The host neither defines nor interprets the key
+   * set — it varies with the extension version, and omitting the field means
+   * the stage did not run. See `request-prepare-adapter.ts`.
+   */
+  extensionStats?: Record<string, unknown>;
   /** Space/tenant ID extracted from /proxy/<spaceId>/... path. */
   spaceId?: string;
   /**

@@ -52,6 +52,7 @@ MemoryCore is distributed as a standalone runtime for local development, single-
 - Node.js `>= 22.16.0`
 - npm
 - An OpenAI-compatible LLM API. Read-only queries may not invoke an LLM, but memory extraction and aggregation require valid credentials.
+- **SQLite FTS5 module** for BM25 keyword / hybrid recall. The official Node binaries are not guaranteed to include FTS5 (e.g. v22.13.1 lacks it; v22.23.2 has it). When FTS5 is absent, keyword search silently returns nothing and recall degrades to embedding-only — check `GET /health` → `stores.ftsAvailable`.
 
 ## Quick start
 
@@ -141,7 +142,7 @@ Use the lightweight client adapter under `openclaw-plugin/`. It connects to an e
 Run from the repository root:
 
 ```bash
-bash MemoryCore/scripts/install-openclaw-plugin-v2.sh
+bash MemoryCore/scripts/install-openclaw-plugin.sh
 ```
 
 Common connection settings:
@@ -238,6 +239,18 @@ MemoryCore/
 ├── tdai-gateway*.yaml     Gateway configuration templates
 └── package.json           Node.js package metadata and commands
 ```
+
+## External sources (Task)
+
+Import tasks from external task systems (TAPD, Jira, …) into `meta_tasks`:
+
+- Implementation: `src/task-source/`
+- Guide (import tasks from TAPD / add a new source like ONES): [`docs/external-task-source.md`](./docs/external-task-source.md)
+
+> Config goes to the **`tdai-memory-core`** container (not hub) — `TASK_SOURCE_*` is read by
+> `src/task-source/registry.ts`. Panel only forwards `/api/v1/task/source/*` → `/v3/task-source/*`.
+> Wiki and code sources live in MemoryKnowledge instead, see
+> [`MemoryKnowledge/docs/`](../MemoryKnowledge/docs/README.md).
 
 ## Local data utilities
 

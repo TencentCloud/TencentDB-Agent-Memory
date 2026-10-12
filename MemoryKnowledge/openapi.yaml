@@ -1,0 +1,1270 @@
+openapi: 3.0.3
+info:
+  title: Knowledge Service API
+  description: |
+    Standalone knowledge service for Code-Graph + LLM-Wiki.
+    Provides 28 endpoints for managing and querying code repositories
+    and wiki knowledge bases.
+
+    ## Multi-tenancy (001)
+
+    Every endpoint requires the tenant identity `service_id` in the
+    **`x-tdai-service-id` request header** (`^[A-Za-z0-9_-]+$`, missing/malformed → 400).
+    This is the same value the kernel uses for store/VDB routing, so tenant identity is
+    unified end-to-end. All lookups are scoped by `service_id`; an id-only endpoint
+    targeting another tenant's resource returns 404. `service_id` is never a request-body
+    field and is not echoed in responses.
+
+    ## Asset ID Model
+
+    Assets have globally unique, immutable IDs:
+
+    | Asset Type  | Field           | Prefix   | Example        |
+    |-------------|-----------------|----------|----------------|
+    | LLM-Wiki    | `wiki_id`       | `wiki-`  | `wiki-9c1f2b`  |
+    | Code-Graph  | `code_graph_id` | `cg-`    | `cg-7e3d10`    |
+
+    ## Response Envelope
+
+    All responses use `ApiResponseEnvelope`:
+    - `code: 0` means success; non-zero means business error
+    - `data` contains the payload on success, `null` on error
+    - `message` provides human-readable status
+
+  version: "1.0.0"
+  contact:
+    name: Knowledge Service
+
+servers:
+  - url: http://localhost:8421/v3
+    description: Local development server
+
+tags:
+  - name: LLM-Wiki
+    description: Wiki knowledge base management and querying.
+  - name: Code-Graph
+    description: Code repository indexing and structured code queries.
+
+paths:
+  # ═══════════════════════════════════════════════
+  # LLM-Wiki (15 endpoints)
+  # ═══════════════════════════════════════════════
+
+  /wiki/create:
+    post:
+      tags: [LLM-Wiki]
+      summary: Create wiki metadata + directory shell
+      description: |
+        Generates wiki_id (wiki-{8char}), creates DB record + directory shell.
+        Idempotent: same (service_id, team_id, name) → returns existing (200).
+        Does not auto-trigger ingest; call /wiki/ingest explicitly.
+      operationId: createWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WikiDetail'
+        '200':
+          description: Idempotent hit
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WikiDetail'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/get:
+    post:
+      tags: [LLM-Wiki]
+      summary: Get wiki metadata by ID
+      operationId: getWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiGetRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WikiDetail'
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/list:
+    post:
+      tags: [LLM-Wiki]
+      summary: List wikis for a team
+      operationId: listWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiListRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WikiListData'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/ingest:
+    post:
+      tags: [LLM-Wiki]
+      summary: Trigger LLM ingest (async)
+      description: |
+        Background SerialQueue processes raw/sources/* via LLM to generate
+        wiki pages + BM25 index. Returns immediately with status=pending.
+      operationId: ingestWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiIngestRequest'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          wiki_id:
+                            type: string
+                          status:
+                            type: string
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/delete:
+    post:
+      tags: [LLM-Wiki]
+      summary: Batch delete wikis
+      description: |
+        Deletes wikis in any status, including `pending`/`processing` (008): a
+        delete never returns 409. In-flight ingest is signalled to abort at its
+        next checkpoint; the row is hard-deleted and connection/disk/index
+        resources are cleaned up. Cross-memory ids report as "not found".
+      operationId: deleteWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiDeleteRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/BatchDeleteResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/raw/ls:
+    post:
+      tags: [LLM-Wiki]
+      summary: List raw source files
+      operationId: rawLsWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiRawLsRequest'
+      responses:
+        '200':
+          description: Success
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/raw/read:
+    post:
+      tags: [LLM-Wiki]
+      summary: Batch read raw source files
+      operationId: rawReadWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiRawReadRequest'
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Invalid path or too many files
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/raw/write:
+    post:
+      tags: [LLM-Wiki]
+      summary: Batch write raw source files
+      operationId: rawWriteWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiRawWriteRequest'
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Invalid path, too large, or processing
+        '404':
+          description: Wiki not found
+        '409':
+          description: Wiki is processing
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/raw/rm:
+    post:
+      tags: [LLM-Wiki]
+      summary: Batch delete raw source files + cascade
+      operationId: rawRmWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiRawRmRequest'
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Invalid path or too many files
+        '404':
+          description: Wiki not found
+        '409':
+          description: Wiki is processing
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/page/ls:
+    post:
+      tags: [LLM-Wiki]
+      summary: List wiki pages (processed)
+      operationId: pageLsWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiPageLsRequest'
+      responses:
+        '200':
+          description: Success
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/page/read:
+    post:
+      tags: [LLM-Wiki]
+      summary: Batch read wiki pages
+      operationId: pageReadWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiPageReadRequest'
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Invalid path or too many refs
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/page/write:
+    post:
+      tags: [LLM-Wiki]
+      summary: Batch write wiki pages (auto-injects locked:true)
+      operationId: pageWriteWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiPageWriteRequest'
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Invalid path, forbidden path, or too large
+        '404':
+          description: Wiki not found
+        '409':
+          description: Wiki is processing
+        '413':
+          description: Content exceeds size limit
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/page/rm:
+    post:
+      tags: [LLM-Wiki]
+      summary: Batch delete wiki pages + cascade
+      operationId: pageRmWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiPageRmRequest'
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Invalid path or forbidden path
+        '404':
+          description: Wiki not found
+        '409':
+          description: Wiki is processing
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/graph:
+    post:
+      tags: [LLM-Wiki]
+      summary: Get wiki knowledge graph (nodes, edges, communities)
+      operationId: graphWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiGraphRequest'
+      responses:
+        '200':
+          description: Success
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /wiki/search:
+    post:
+      tags: [LLM-Wiki]
+      summary: Search wiki pages (BM25 full-text)
+      operationId: searchWiki
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WikiSearchRequest'
+      responses:
+        '200':
+          description: Success
+        '400':
+          description: Missing query
+        '404':
+          description: Wiki not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  # ═══════════════════════════════════════════════
+  # Code-Graph (13 endpoints)
+  # ═══════════════════════════════════════════════
+
+  /code-graph/create:
+    post:
+      tags: [Code-Graph]
+      summary: Register repo + async clone & index
+      description: |
+        Generates code_graph_id (cg-{8char}), creates DB record + returns
+        immediately (status=pending). Background queue runs clone + indexing.
+        Idempotent: same (service_id, team_id, repo_url, branch) → returns existing (200).
+      operationId: createCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CodeGraphDetail'
+        '200':
+          description: Idempotent hit
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/list:
+    post:
+      tags: [Code-Graph]
+      summary: List code graphs for a team
+      operationId: listCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphListRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CodeGraphListData'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/get:
+    post:
+      tags: [Code-Graph]
+      summary: Get code graph metadata by ID
+      operationId: getCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphGetRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CodeGraphDetail'
+        '404':
+          description: Code graph not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/sync:
+    post:
+      tags: [Code-Graph]
+      summary: Re-sync (git fetch + re-index)
+      operationId: syncCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphSyncRequest'
+      responses:
+        '202':
+          description: Accepted
+        '404':
+          description: Code graph not found
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/delete:
+    post:
+      tags: [Code-Graph]
+      summary: Batch delete code graphs
+      description: |
+        Deletes code graphs in any status, including `pending`/`processing`
+        (008): a delete never returns 409. In-flight clone/index is signalled to
+        abort at its next checkpoint; the row is hard-deleted and instance
+        pool / disk resources are released. Cross-memory ids report as "not found".
+      operationId: deleteCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphDeleteRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/BatchDeleteResult'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/search:
+    post:
+      tags: [Code-Graph]
+      summary: Search symbols/files by keyword
+      operationId: searchCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphSearchRequest'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CodeGraphQueryResponse'
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/explore:
+    post:
+      tags: [Code-Graph]
+      summary: Explore files matching query
+      operationId: exploreCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphExploreRequest'
+      responses:
+        '200':
+          description: Success
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/callers:
+    post:
+      tags: [Code-Graph]
+      summary: Find callers of a symbol
+      operationId: callersCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphCallersRequest'
+      responses:
+        '200':
+          description: Success
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/callees:
+    post:
+      tags: [Code-Graph]
+      summary: Find callees of a symbol
+      operationId: calleesCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphCalleesRequest'
+      responses:
+        '200':
+          description: Success
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/impact:
+    post:
+      tags: [Code-Graph]
+      summary: Analyze impact of changing a symbol
+      operationId: impactCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphImpactRequest'
+      responses:
+        '200':
+          description: Success
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/node:
+    post:
+      tags: [Code-Graph]
+      summary: Get detailed info about a symbol node
+      operationId: nodeCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphNodeRequest'
+      responses:
+        '200':
+          description: Success
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/status:
+    post:
+      tags: [Code-Graph]
+      summary: Get indexing status
+      operationId: statusCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphStatusRequest'
+      responses:
+        '200':
+          description: Success
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+  /code-graph/files:
+    post:
+      tags: [Code-Graph]
+      summary: List files in code graph
+      operationId: filesCodeGraph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeGraphFilesRequest'
+      responses:
+        '200':
+          description: Success
+        default:
+          $ref: '#/components/responses/ErrorResponse'
+
+components:
+  parameters:
+    ServiceIdHeader:
+      name: x-tdai-service-id
+      in: header
+      required: true
+      description: >-
+        Tenant identity `service_id` (001 multi-tenancy). Required on every endpoint;
+        same value the kernel uses for store/VDB routing. Missing/malformed → 400.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9_-]+$"
+
+  responses:
+    ErrorResponse:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponseEnvelope'
+
+  schemas:
+    ApiResponseEnvelope:
+      type: object
+      required: [code, message, data]
+      properties:
+        code:
+          type: integer
+          description: 0 = success, non-zero = business error
+        message:
+          type: string
+        request_id:
+          type: string
+        data:
+          nullable: true
+
+    IdFields:
+      type: object
+      description: >-
+        Common body id fields. Note: the tenant identity `service_id` is NOT a body
+        field — it is sent via the `x-tdai-service-id` request header (001; unified
+        with the kernel routing key). See the ServiceIdHeader parameter.
+      properties:
+        team_id:
+          type: string
+          description: Team ID (required for create/list)
+        user_id:
+          type: string
+        agent_id:
+          type: string
+        task_id:
+          type: string
+
+    # ── Wiki Schemas ──
+
+    WikiDetail:
+      type: object
+      properties:
+        wiki_id:
+          type: string
+        team_id:
+          type: string
+        name:
+          type: string
+        source_type:
+          type: string
+          nullable: true
+          description: 来源类型（如 'iwiki'）；null = 手工上传。决定详情页 UI 走「上传文件」还是「从外部拉取」。
+        source_url:
+          type: string
+          nullable: true
+          description: 外部来源根地址；仅 source_type 非 null 时有值。
+        service_url:
+          type: string
+          nullable: true
+          description: Tools self-discovery base URL (includes API prefix, e.g. http://host:8421/v3)
+        summary:
+          type: string
+          nullable: true
+          maxLength: 256
+        status:
+          type: string
+          enum: [draft, pending, processing, ready, failed]
+          description: draft = 建壳未加工（仅 create 一次性出现）；pending/processing = in-flight；ready = 可查询；failed = 可重试。
+        sync_error:
+          type: string
+          nullable: true
+        version:
+          type: string
+        owner_user_id:
+          type: string
+          nullable: true
+        page_count:
+          type: integer
+          nullable: true
+        last_sync_at:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+
+    WikiCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id, name]
+          properties:
+            name:
+              type: string
+            # 外部来源（iWiki 等）：二者必须成对出现，缺一 → 400。
+            source_type:
+              type: string
+              description: 来源类型（如 'iwiki'）；决定详情页 UI 走「上传文件」还是「从外部拉取」。
+            source_url:
+              type: string
+              description: 外部来源根地址（形如 <站点>/spaces/<spaceKey> 或 <站点>/p/<docId>）。
+
+    WikiGetRequest:
+      type: object
+      required: [wiki_id]
+      properties:
+        wiki_id:
+          type: string
+
+    WikiListRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id]
+          properties:
+            status:
+              type: string
+              enum: [draft, pending, processing, ready, failed]
+            limit:
+              type: integer
+              default: 20
+            offset:
+              type: integer
+              default: 0
+
+    WikiListData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WikiDetail'
+        total:
+          type: integer
+
+    WikiIngestRequest:
+      type: object
+      required: [wiki_id]
+      properties:
+        wiki_id:
+          type: string
+
+    WikiDeleteRequest:
+      type: object
+      required: [wiki_ids]
+      properties:
+        wiki_ids:
+          type: array
+          items:
+            type: string
+          maxItems: 100
+
+    WikiRawLsRequest:
+      type: object
+      required: [wiki_id]
+      properties:
+        wiki_id:
+          type: string
+
+    WikiRawReadRequest:
+      type: object
+      required: [wiki_id, filenames]
+      properties:
+        wiki_id:
+          type: string
+        filenames:
+          type: array
+          items:
+            type: string
+          maxItems: 50
+
+    WikiRawWriteRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id, wiki_id, files]
+          properties:
+            wiki_id:
+              type: string
+            files:
+              type: array
+              items:
+                type: object
+                properties:
+                  filename:
+                    type: string
+                  content:
+                    type: string
+              maxItems: 50
+
+    WikiRawRmRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id, wiki_id, filenames]
+          properties:
+            wiki_id:
+              type: string
+            filenames:
+              type: array
+              items:
+                type: string
+              maxItems: 50
+
+    WikiPageLsRequest:
+      type: object
+      required: [wiki_id]
+      properties:
+        wiki_id:
+          type: string
+
+    WikiPageReadRequest:
+      type: object
+      required: [wiki_id, refs]
+      properties:
+        wiki_id:
+          type: string
+        refs:
+          type: array
+          items:
+            type: string
+          maxItems: 20
+
+    WikiPageWriteRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id, wiki_id, pages]
+          properties:
+            wiki_id:
+              type: string
+            pages:
+              type: array
+              items:
+                type: object
+                properties:
+                  ref:
+                    type: string
+                  content:
+                    type: string
+              maxItems: 20
+
+    WikiPageRmRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id, wiki_id, refs]
+          properties:
+            wiki_id:
+              type: string
+            refs:
+              type: array
+              items:
+                type: string
+              maxItems: 20
+
+    WikiGraphRequest:
+      type: object
+      required: [wiki_id]
+      properties:
+        wiki_id:
+          type: string
+
+    WikiSearchRequest:
+      type: object
+      required: [wiki_id, query]
+      properties:
+        wiki_id:
+          type: string
+        query:
+          type: string
+        limit:
+          type: integer
+          default: 20
+
+    # ── Code-Graph Schemas ──
+
+    CodeGraphStats:
+      type: object
+      properties:
+        files:
+          type: integer
+        nodes:
+          type: integer
+        edges:
+          type: integer
+
+    CodeGraphDetail:
+      type: object
+      properties:
+        code_graph_id:
+          type: string
+        team_id:
+          type: string
+        repo_name:
+          type: string
+        repo_url:
+          type: string
+        branch:
+          type: string
+        commit_hash:
+          type: string
+          nullable: true
+        service_url:
+          type: string
+          nullable: true
+          description: Tools self-discovery base URL (includes API prefix, e.g. http://host:8421/v3)
+        summary:
+          type: string
+          nullable: true
+          maxLength: 256
+        status:
+          type: string
+          enum: [pending, processing, ready, failed]
+        sync_error:
+          type: string
+          nullable: true
+        version:
+          type: string
+        owner_user_id:
+          type: string
+          nullable: true
+        stats:
+          allOf:
+            - $ref: '#/components/schemas/CodeGraphStats'
+          nullable: true
+        last_sync_at:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+
+    CodeGraphCreateRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id, repo_url]
+          properties:
+            repo_url:
+              type: string
+            branch:
+              type: string
+              default: main
+            repo_name:
+              type: string
+
+    CodeGraphListRequest:
+      allOf:
+        - $ref: '#/components/schemas/IdFields'
+        - type: object
+          required: [team_id]
+          properties:
+            status:
+              type: string
+              enum: [pending, processing, ready, failed]
+            limit:
+              type: integer
+              default: 20
+            offset:
+              type: integer
+              default: 0
+
+    CodeGraphListData:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeGraphDetail'
+        total:
+          type: integer
+
+    CodeGraphGetRequest:
+      type: object
+      required: [code_graph_id]
+      properties:
+        code_graph_id:
+          type: string
+
+    CodeGraphSyncRequest:
+      type: object
+      required: [code_graph_id]
+      properties:
+        code_graph_id:
+          type: string
+
+    CodeGraphDeleteRequest:
+      type: object
+      required: [code_graph_ids]
+      properties:
+        code_graph_ids:
+          type: array
+          items:
+            type: string
+          maxItems: 100
+
+    CodeGraphQueryResponse:
+      type: object
+      properties:
+        text:
+          type: string
+        isError:
+          type: boolean
+
+    CodeGraphSearchRequest:
+      type: object
+      required: [code_graph_id, query]
+      properties:
+        code_graph_id:
+          type: string
+        query:
+          type: string
+        kind:
+          type: string
+          enum: [symbol, file, any]
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 10
+
+    CodeGraphExploreRequest:
+      type: object
+      required: [code_graph_id, query]
+      properties:
+        code_graph_id:
+          type: string
+        query:
+          type: string
+        maxFiles:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 12
+
+    CodeGraphCallersRequest:
+      type: object
+      required: [code_graph_id, symbol]
+      properties:
+        code_graph_id:
+          type: string
+        symbol:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 20
+
+    CodeGraphCalleesRequest:
+      type: object
+      required: [code_graph_id, symbol]
+      properties:
+        code_graph_id:
+          type: string
+        symbol:
+          type: string
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 20
+
+    CodeGraphImpactRequest:
+      type: object
+      required: [code_graph_id, symbol]
+      properties:
+        code_graph_id:
+          type: string
+        symbol:
+          type: string
+        depth:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 2
+
+    CodeGraphNodeRequest:
+      type: object
+      required: [code_graph_id, symbol]
+      properties:
+        code_graph_id:
+          type: string
+        symbol:
+          type: string
+        includeCode:
+          type: boolean
+          default: false
+        file:
+          type: string
+        line:
+          type: integer
+          minimum: 1
+
+    CodeGraphStatusRequest:
+      type: object
+      required: [code_graph_id]
+      properties:
+        code_graph_id:
+          type: string
+
+    CodeGraphFilesRequest:
+      type: object
+      required: [code_graph_id]
+      properties:
+        code_graph_id:
+          type: string
+        path:
+          type: string
+        pattern:
+          type: string
+        format:
+          type: string
+          enum: [tree, flat]
+          default: tree
+        includeMetadata:
+          type: boolean
+          default: true
+        maxDepth:
+          type: integer
+          minimum: 1
+
+    BatchDeleteResult:
+      type: object
+      properties:
+        deleted_ids:
+          type: array
+          items:
+            type: string
+        failed:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              reason:
+                type: string

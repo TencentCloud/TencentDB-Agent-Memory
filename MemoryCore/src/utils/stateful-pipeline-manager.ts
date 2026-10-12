@@ -210,7 +210,7 @@ export class StatefulPipelineManager {
       sessionId: sessionKey,
       teamId,
       agentId,
-      messageJson: "[]", // 实际消息已持久化到 VDB/JSONL，这里只做计数
+      // 实际消息已持久化到 Store；这里只原子计数，不再写无用 Buffer 占位符。
       threshold: warmupThreshold,
       fireAtMs: now + this.l1IdleTimeoutMs,
       timerMember: buildPipelineTimerMember(sessionKey, "L1_idle", { teamId, agentId }),

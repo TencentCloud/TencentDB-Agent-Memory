@@ -12,10 +12,22 @@ if (!process.version.startsWith("v22.")) {
 import { serve } from "@hono/node-server";
 import { buildConfig, parseArgv } from "./config.js";
 import { createApp } from "./server.js";
-import { setExtensionDebug, shutdownGuard } from "./guard-adapter.js";
+import {
+  setExtensionDebug,
+  shutdownGuard,
+  shutdownPrivateControlPlane,
+  startPrivateControlPlane,
+} from "./guard-adapter.js";
+import {
+  initRequestPrepare,
+  isRequestPrepareActive,
+  isRequestPrepareEnabledByDefault,
+  shutdownRequestPrepare,
+} from "./request-prepare-adapter.js";
 import { initLogger, shutdownLogger, log } from "./report/log.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
+import { initTraceArchive, shutdownTraceArchive } from "./trace-archive.js";
 import { initAuth } from "./auth.js";
 import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
@@ -39,6 +51,12 @@ setExtensionDebug(config.log.level === "debug");
 // ── Initialize ClickHouse writer ─────────────────────────────────────────────
 initClickHouse(config.clickhouse);
 
+// ── Initialize local JSONL trace archive (disabled by default) ───────────────
+{
+  const projectRoot = new URL("../", import.meta.url).pathname;
+  initTraceArchive(projectRoot, config.traceArchive);
+}
+
 // ── Initialize Langfuse tracing (official SDK) ───────────────────────────────
 initLangfuse(config).catch((err: unknown) => {
   log.warn("langfuse.init_error", { error: String(err) });
@@ -61,6 +79,35 @@ if (config.storage.enabled && config.storage.backend === "cos" && effectiveStora
     effective: effectiveStorage.effective,
     reason: effectiveStorage.error,
     note: "cost-guard submodule missing or shark unreachable — cos falling back",
+  });
+}
+
+// ── Start private control plane (optional, same process / separate port) ────
+try {
+  if (await startPrivateControlPlane(config)) {
+    log.info("private_control_plane.enabled");
+  }
+} catch (err: unknown) {
+  // A management-plane outage must not prevent the LLM data plane from starting.
+  log.warn("private_control_plane.start_failed", { error: String(err) });
+}
+
+// ── Bring up the optional request-preparation stage ─────────────────────────
+// Opaque to the host: it only owns the resource lifecycle, never the behavior.
+if (isRequestPrepareActive(config)) {
+  if (!config.redis.enabled) {
+    // The stage keeps its cross-request state in Redis. Without it every
+    // request starts cold — correct, but it gives up the shared cache.
+    log.warn("request_prepare.no_redis", {
+      note: "costGuard.requestPrepare is configured but redis.enabled=false — running uncached",
+    });
+  }
+  initRequestPrepare(config);
+  log.info("request_prepare.enabled", {
+    redis: config.redis.enabled,
+    // False means the stage is wired but idle until the control plane enables
+    // it for a space, so an empty compression log is expected rather than a bug.
+    enabledByDefault: isRequestPrepareEnabledByDefault(config),
   });
 }
 
@@ -88,6 +135,7 @@ log.info("server.starting", {
   systemUsers: config.systemUsers.length > 0
     ? config.systemUsers.map((u) => u.name || "unnamed").join(",")
     : "disabled",
+  traceArchive: config.traceArchive.enabled ? config.traceArchive.dir : "disabled",
 });
 
 serve(
@@ -120,6 +168,9 @@ async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     log.info("server.shutdown.flush_l0.done", { drained, remaining });
   }
   await shutdownGuard();
+  await shutdownPrivateControlPlane();
+  await shutdownRequestPrepare();
+  await shutdownTraceArchive();
   await shutdownLangfuse();
   await shutdownClickHouse();
   await shutdownLogger();

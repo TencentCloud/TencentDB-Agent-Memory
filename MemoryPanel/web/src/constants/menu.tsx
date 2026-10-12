@@ -4,6 +4,7 @@
  * 包含页面 ID 类型、页面元信息、分组排序、分组图标。
  * Sidebar / TabBar / 路由等模块共用。
  */
+import { useTranslation } from 'react-i18next';
 import {
   DashboardIcon,
   UserIcon,
@@ -23,7 +24,8 @@ export type PageId =
   | 'chat_memory'
   | 'team_members'
   | 'team_agents'
-  | 'api_keys';
+  | 'api_keys'
+  | 'analytics';
 
 /** 页面元数据 */
 export interface PageMeta {
@@ -38,23 +40,36 @@ export interface PageMeta {
   affix?: boolean;
 }
 
-export const PAGE_META: Record<PageId, PageMeta> = {
-  workbench_board: { id: 'workbench_board', label: '任务看板', desc: 'Task 列表 / 创建 / 详情', group: '工作台', order: 0, affix: true },
-  wiki:            { id: 'wiki',            label: 'Wiki 知识库', desc: '来源 / 图谱 / 页面 / 搜索', group: '资产管理', order: 2 },
-  code:            { id: 'code',            label: 'Code_Graph', desc: '仓库 / 索引 / 搜索 / 探索', group: '资产管理', order: 3 },
-  skills:          { id: 'skills',          label: 'Skill 技能', desc: '全部 / 团队池 / Agent 资产', group: '资产管理', order: 4 },
-  chat_memory:     { id: 'chat_memory',     label: 'Chat_Memory', desc: 'L0–L3 分层记忆资产', group: '资产管理', order: 5 },
-  team_members:    { id: 'team_members',    label: '成员管理', desc: 'Team 成员 / 用户 / 角色', group: '组织与权限', order: 0 },
-  team_agents:     { id: 'team_agents',     label: 'Agents 管理', desc: 'Agent / 可配置范围 / 固定资产', group: '组织与权限', order: 1 },
-  api_keys:        { id: 'api_keys',        label: 'API Key', desc: '管理你的 API Key，用于外部客户端接入', group: '组织与权限', order: 2 },
-};
+// 使用 useTranslation 的 hook 版本
+export function usePageMeta(): Record<PageId, PageMeta> {
+  const { t } = useTranslation();
+  return {
+    workbench_board: { id: 'workbench_board', label: t('menu.workbench_board'), desc: t('menu.desc.workbench_board'), group: t('menu.group.workbench'), order: 0, affix: true },
+    analytics:      { id: 'analytics',      label: t('menu.analytics'), desc: t('menu.desc.analytics'), group: t('menu.group.observability'), order: 0 },
+    wiki:            { id: 'wiki',            label: t('menu.wiki'), desc: t('menu.desc.wiki'), group: t('menu.group.assets'), order: 2 },
+    code:            { id: 'code',            label: t('menu.code'), desc: t('menu.desc.code'), group: t('menu.group.assets'), order: 3 },
+    skills:          { id: 'skills',          label: t('menu.skills'), desc: t('menu.desc.skills'), group: t('menu.group.assets'), order: 4 },
+    chat_memory:     { id: 'chat_memory',     label: t('menu.chat_memory'), desc: t('menu.desc.chat_memory'), group: t('menu.group.assets'), order: 5 },
+    team_members:    { id: 'team_members',    label: t('menu.team_members'), desc: t('menu.desc.team_members'), group: t('menu.group.organization'), order: 0 },
+    team_agents:     { id: 'team_agents',     label: t('menu.team_agents'), desc: t('menu.desc.team_agents'), group: t('menu.group.organization'), order: 1 },
+    api_keys:        { id: 'api_keys',        label: t('menu.api_keys'), desc: t('menu.desc.api_keys'), group: t('menu.group.organization'), order: 2 },
+  };
+}
 
 /** 分组排序顺序 */
-export const GROUP_ORDER = ['工作台', '组织与权限', '资产管理'];
+export const GROUP_ORDER_KEYS = ['workbench', 'observability', 'organization', 'assets'] as const;
 
 /** 每个页面在侧边栏菜单中的图标（Tea 官方图标，size 16） */
 export const ITEM_ICON: Record<PageId, JSX.Element> = {
   workbench_board: <DashboardIcon size={16} />,
+  analytics: (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="20" x2="20" y2="20" />
+      <rect x="6" y="10" width="3" height="6" rx="0.8" />
+      <rect x="10.5" y="6" width="3" height="10" rx="0.8" />
+      <rect x="15" y="13" width="3" height="3" rx="0.8" />
+    </svg>
+  ),
   team_members: <UserIcon size={16} />,
   team_agents: <UsergroupIcon size={16} />,
   api_keys: <LockOnIcon size={16} />,
@@ -64,9 +79,9 @@ export const ITEM_ICON: Record<PageId, JSX.Element> = {
   chat_memory: <ChatIcon size={16} />,
 };
 
-/** 分组图标（工作台 / 组织与权限 / 资产管理） */
+/** 分组图标（工作台 / 可观测 / 组织与权限 / 资产管理） */
 export const GROUP_ICON: Record<string, JSX.Element> = {
-  工作台: (
+  workbench: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="7" height="7" rx="1.5" />
       <rect x="14" y="3" width="7" height="7" rx="1.5" />
@@ -74,7 +89,12 @@ export const GROUP_ICON: Record<string, JSX.Element> = {
       <rect x="14" y="14" width="7" height="7" rx="1.5" />
     </svg>
   ),
-  组织与权限: (
+  observability: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
+  ),
+  organization: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
       <circle cx="9" cy="7" r="4" />
@@ -82,7 +102,7 @@ export const GROUP_ICON: Record<string, JSX.Element> = {
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   ),
-  资产管理: (
+  assets: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2l9 5-9 5-9-5 9-5z" />
       <path d="M3 12l9 5 9-5" />

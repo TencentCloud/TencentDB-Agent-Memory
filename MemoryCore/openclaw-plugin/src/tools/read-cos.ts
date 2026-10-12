@@ -1,9 +1,10 @@
 /**
- * tdai_read_cos tool — reads memory pipeline artifacts (persona.md,
- * scene_blocks/*.md, ...) by relative path via the SDK's `client.readFile`.
+ * tdai_read_file tool — reads memory pipeline artifacts (persona.md,
+ * scene_blocks/*.md, ...) by relative path via SDK MemoryFileReader
+ * (POST /v2/cos/secret + STS GET). COS STS bypass; independent of MemoryClient.
  */
 
-import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts";
+import type { MemoryFileReader } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 
 interface Logger {
   debug?: (msg: string) => void;
@@ -11,7 +12,7 @@ interface Logger {
 }
 
 export async function handleReadCos(
-  client: MemoryClient,
+  reader: MemoryFileReader,
   params: { path: string },
   logger?: Logger,
 ) {
@@ -28,7 +29,7 @@ export async function handleReadCos(
 
   try {
     logger?.debug?.(`[read-cos] read: "${path}"`);
-    const content = await client.readFile(path);
+    const content = await reader.read(path);
     logger?.debug?.(`[read-cos] ✅ "${path}" (${content.length} chars)`);
     return { content: [{ type: "text" as const, text: content }] };
   } catch (err) {

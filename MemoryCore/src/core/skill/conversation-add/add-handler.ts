@@ -24,6 +24,7 @@ import {
 import { prepareArchivePayload } from "./prepare-archive.js";
 import type { SkillBufferStorage, SessionKey, SessionMeta } from "./buffer-storage.js";
 import type { SkillTriggerService } from "./trigger-service.js";
+import { obsLogger } from "../../report/obs-logger.js";
 
 const VALID_ROLES: ReadonlySet<CompressibleRole> = new Set([
   "user",
@@ -55,6 +56,12 @@ const TOOL_PAIR_ROLES: ReadonlySet<CompressibleRole> = new Set(["tool_call", "to
 const ID_FORBIDDEN_CHAR = "|";
 
 export interface AddConversationInput {
+  /**
+   * 2026-07-30 新增：多租户实例 ID。透传到 AgentTuple 里让 worker pool
+   * 出队时能按 instance_id 动态解析对应 instance 的 CoS/VDB/LLM 资源。
+   * standalone 模式下由 gateway 兜底 "default"。缺失会在 validate 阶段拒绝。
+   */
+  instance_id: string;
   session_id: string;
   space_id: string;
   user_id: string;
@@ -63,6 +70,18 @@ export interface AddConversationInput {
   /** 业务侧 task 引用，透传到 archive 落地时的 task.task_ref_id。 */
   task_id?: string;
   messages: CompressibleMessage[];
+  /**
+   * 抽取模式;仅当上游 handler 收到 body.strict_mode:true 时传 'strict'。
+   * 归档段透传给 SkillTriggerService.archive({mode}) → SkillTaskEntry.mode
+   * → Worker → SkillExtractor.extract({mode:'strict'}) → 使用 STRICT prompt。
+   * 缺省不传即走 default (SKILL_REVIEW_PROMPT v2 宽松), 老 client 完全兼容。
+   */
+  mode?: 'strict';
+  /**
+   * 上游 HTTP handler 的 req_id，用于 obsLogger 分段事件关联链路。
+   * 缺省则事件字段少一个 req_id，业务逻辑不受影响。
+   */
+  perfRequestId?: string;
 }
 
 export interface AddConversationResult {
@@ -126,9 +145,15 @@ export class SkillConversationAddHandler {
   }
 
   async handle(input: AddConversationInput): Promise<AddConversationResult> {
+    // [obs] handler 内部分段：readBuffer / prepareArchive / trigger.archive / writeBack。
+    // 走 obsLogger 底座（结构化事件 + FileLogger + ClickHouse 后端），
+    // 通过 req_id 与上游 handleConversationAdd + trigger + worker 关联全链路。
+    const rid = input.perfRequestId;
+
     // ① 校验
     this.validate(input);
     const sess: SessionKey = {
+      instance_id: input.instance_id,
       space_id: input.space_id,
       user_id: input.user_id,
       team_id: input.team_id,
@@ -141,16 +166,25 @@ export class SkillConversationAddHandler {
 
     // ③ 分路径：读现状 + 走共享 helper 做压缩 + 兜底
     const useCompress = rawBytes >= this.thresholds.requestCompressThresholdBytes;
+    const t0Buf = Date.now();
     const [current, meta] = await Promise.all([
       this.buffer.readCurrent(sess),
       this.buffer.readMeta(sess),
     ]);
+    obsLogger.info("skill.add_handler.read_buffer", {
+      req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
+      dur_ms: Date.now() - t0Buf,
+      current_msgs: current.messages.length,
+      raw_bytes: rawBytes,
+      use_compress: useCompress,
+    });
 
     // conversation-add 特有语义：只有压缩路径才走 oversize 兜底 (原实现见下方注释);
     // 用 helper 时，forceCompress=useCompress，当 useCompress=false 时 helper 内部
     // 也不会走 applyOversizeStrategy——因为常规路径下 combinedBytes 不该 > chunkMax
     // (那种情况下 rawBytes 早已 >= requestCompressThresholdBytes 走了压缩路径)。
     // helper 里的 oversize 判定跟原实现语义等价：都是"combined > chunkMax"。
+    const t0Prep = Date.now();
     const prepared = prepareArchivePayload(
       current.messages as OversizeMessage[],
       input.messages,
@@ -160,6 +194,13 @@ export class SkillConversationAddHandler {
         forceCompress: useCompress,
       },
     );
+    obsLogger.info("skill.add_handler.prepare_archive", {
+      req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
+      dur_ms: Date.now() - t0Prep,
+      msg_in: input.messages.length,
+      msg_out: prepared.messages.length,
+      used_oversize: prepared.usedOversize,
+    });
     const combinedMessages: OversizeMessage[] = prepared.messages;
     const usedOversize = prepared.usedOversize;
 
@@ -187,10 +228,24 @@ export class SkillConversationAddHandler {
             ? "tool_calls"
             : "bytes";
 
+      const t0Arch = Date.now();
       const archiveRes = await this.trigger.archive({
         session: sess,
         bufferAtTrigger: { messages: combinedMessages as Array<Record<string, unknown>> },
         taskRefId: input.task_id,
+        // strict_mode 透传:input.mode 仅在上游 handler 收到 body.strict_mode:true 时有值,
+        // 走 trigger → SkillTaskEntry.mode → Worker → SkillExtractor STRICT prompt。
+        // 缺省不传即走 default,老 client 一字节不变。
+        ...(input.mode ? { mode: input.mode } : {}),
+        // 透传 req_id 给 trigger 内部分段事件（write_archive / mutex_* / enqueue_agent）
+        perfRequestId: input.perfRequestId,
+      });
+      obsLogger.info("skill.add_handler.trigger_archive", {
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        dur_ms: Date.now() - t0Arch,
+        task_id: archiveRes.taskId,
+        archive_key: archiveRes.archiveKey,
+        reason,
       });
 
       // 归档后清空 data-current + 计数
@@ -207,10 +262,16 @@ export class SkillConversationAddHandler {
         last_archived_at_ms: archiveRes.archivedAtMs,
       };
 
+      const t0Wb = Date.now();
       await Promise.all([
         this.buffer.writeCurrent(sess, { messages: [] }),
         this.buffer.writeMeta(sess, nextMeta),
       ]);
+      obsLogger.info("skill.add_handler.write_back", {
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        dur_ms: Date.now() - t0Wb,
+        archived: true,
+      });
 
       result = {
         status: "archived",
@@ -235,10 +296,18 @@ export class SkillConversationAddHandler {
         last_appended_at_ms: nowMs,
         last_archived_at_ms: meta.last_archived_at_ms,
       };
+      const t0Wb = Date.now();
       await Promise.all([
         this.buffer.writeCurrent(sess, { messages: combinedMessages as Array<Record<string, unknown>> }),
         this.buffer.writeMeta(sess, nextMeta),
       ]);
+      obsLogger.info("skill.add_handler.write_back", {
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        dur_ms: Date.now() - t0Wb,
+        archived: false,
+        tool_count: nextTool,
+        byte_count: nextBytes,
+      });
     }
 
     return result;
@@ -246,6 +315,7 @@ export class SkillConversationAddHandler {
 
   private validate(input: AddConversationInput): void {
     const required: Array<keyof AddConversationInput> = [
+      "instance_id",
       "session_id",
       "space_id",
       "user_id",

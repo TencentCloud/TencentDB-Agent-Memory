@@ -53,6 +53,12 @@ export async function initLangfuse(config: ProxyConfig): Promise<boolean> {
   }
 
   try {
+    // BatchSpanProcessor 的 maxQueueSize 只能通过 OTel env var 注入（Langfuse 构造器不透传）。
+    // 在 SDK 初始化前设好，确保 BatchSpanProcessor 读到我们的值。
+    if (lf.maxQueueSize && !process.env.OTEL_BSP_MAX_QUEUE_SIZE) {
+      process.env.OTEL_BSP_MAX_QUEUE_SIZE = String(lf.maxQueueSize);
+    }
+
     const [{ NodeSDK }, { LangfuseSpanProcessor }] = await Promise.all([
       import("@opentelemetry/sdk-node"),
       import("@langfuse/otel"),
@@ -63,6 +69,8 @@ export async function initLangfuse(config: ProxyConfig): Promise<boolean> {
       publicKey: lf.publicKey,
       secretKey: lf.secretKey,
       baseUrl,
+      flushAt: lf.flushAt || undefined,           // 每批最大 span 数
+      flushInterval: lf.flushInterval || undefined, // 定时 flush 间隔（秒）
     });
 
     const sdk = new NodeSDK({ spanProcessors: [processor] });
@@ -70,7 +78,12 @@ export async function initLangfuse(config: ProxyConfig): Promise<boolean> {
     _sdk = sdk;
     _enabled = true;
 
-    log.info("langfuse.initialized", { baseUrl });
+    log.info("langfuse.initialized", {
+      baseUrl,
+      flushAt: lf.flushAt,
+      flushInterval: lf.flushInterval,
+      maxQueueSize: lf.maxQueueSize,
+    });
     return true;
   } catch (err: unknown) {
     log.warn("langfuse.init_failed", { error: String(err) });

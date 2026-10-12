@@ -2,6 +2,13 @@
  * TencentDB Agent Memory SDK error types.
  */
 
+export class ParamError extends TypeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ParamError";
+  }
+}
+
 export class TDAMError extends Error {
   readonly code: number;
   readonly requestId: string;

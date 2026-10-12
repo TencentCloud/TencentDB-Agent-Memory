@@ -11,6 +11,8 @@
  * 后端上线后替换成真正的用户中心 API 即可。
  */
 
+import i18n from '@/i18n';
+
 const ACCOUNTS_KEY = 'tdai-memory.accounts.v1';
 
 /**
@@ -90,11 +92,11 @@ export function findAccountByUsername(username: string): MockAccount | null {
 /** 校验邮箱 + 密码登录 */
 export function verifyAccountCredentials(email: string, password: string): MockAccount {
   const e = email.trim().toLowerCase();
-  if (!e) throw new Error('请输入邮箱。');
-  if (!password) throw new Error('请输入密码。');
+  if (!e) throw new Error(i18n.t('account.error.emailRequired'));
+  if (!password) throw new Error(i18n.t('account.error.passwordRequired'));
   const account = readAccounts().find((a) => a.email.toLowerCase() === e);
-  if (!account) throw new Error(`账号不存在：${e}`);
-  if (account.password !== password) throw new Error('密码错误。');
+  if (!account) throw new Error(i18n.t('account.error.accountNotFound', { email: e }));
+  if (account.password !== password) throw new Error(i18n.t('account.error.passwordIncorrect'));
   return account;
 }
 
@@ -102,11 +104,11 @@ export function verifyAccountCredentials(email: string, password: string): MockA
  *  用户名允许重复，邮箱全局唯一。 */
 export function createAccount(input: { email: string; username: string; password?: string; isAdmin?: boolean; description?: string }): MockAccount {
   const e = input.email.trim().toLowerCase();
-  if (!e) throw new Error('邮箱不能为空。');
-  if (!input.username.trim()) throw new Error('用户名不能为空。');
+  if (!e) throw new Error(i18n.t('account.error.emailEmpty'));
+  if (!input.username.trim()) throw new Error(i18n.t('account.error.usernameEmpty'));
   const accounts = readAccounts();
   if (accounts.some((a) => a.email.toLowerCase() === e)) {
-    throw new Error(`邮箱 "${input.email}" 已被注册。`);
+    throw new Error(i18n.t('account.error.emailExists', { email: input.email }));
   }
   const account: MockAccount = {
     email: input.email.trim(),
@@ -133,11 +135,11 @@ export function batchCreateAccounts(
     const e = entry.email.trim().toLowerCase();
     const u = entry.username.trim();
     if (!e || !u) {
-      errors.push({ email: entry.email || '(空)', error: '邮箱和用户名都不能为空' });
+      errors.push({ email: entry.email || i18n.t('account.error.emptyPlaceholder'), error: i18n.t('account.error.emailAndUsernameEmpty') });
       continue;
     }
     if (emailSet.has(e)) {
-      errors.push({ email: entry.email, error: '邮箱已被注册' });
+      errors.push({ email: entry.email, error: i18n.t('account.error.emailRegistered') });
       continue;
     }
     const account: MockAccount = {
@@ -160,13 +162,13 @@ export function batchCreateAccounts(
 
 /** 修改密码 */
 export function changePassword(username: string, oldPassword: string, newPassword: string): void {
-  if (!oldPassword) throw new Error('请输入当前密码。');
-  if (!newPassword) throw new Error('请输入新密码。');
-  if (newPassword.length < 4) throw new Error('新密码至少需要 4 位。');
+  if (!oldPassword) throw new Error(i18n.t('account.error.currentPasswordRequired'));
+  if (!newPassword) throw new Error(i18n.t('account.error.newPasswordRequired'));
+  if (newPassword.length < 4) throw new Error(i18n.t('account.error.passwordTooShort'));
   const accounts = readAccounts();
   const account = accounts.find((a) => a.username === username);
-  if (!account) throw new Error('账号不存在。');
-  if (account.password !== oldPassword) throw new Error('当前密码错误。');
+  if (!account) throw new Error(i18n.t('account.error.accountNotFoundByUsername', { username }));
+  if (account.password !== oldPassword) throw new Error(i18n.t('account.error.currentPasswordIncorrect'));
   account.password = newPassword;
   writeAccountsRaw(accounts);
 }
@@ -176,12 +178,12 @@ export function changePassword(username: string, oldPassword: string, newPasswor
  * 权限校验在 UI 层（仅 admin 可调用）。
  */
 export function setAccountPassword(username: string, newPassword: string): void {
-  if (!newPassword) throw new Error('请输入新密码。');
-  if (newPassword.length < 4) throw new Error('新密码至少需要 4 位。');
-  if (!username) throw new Error('用户名不能为空。');
+  if (!newPassword) throw new Error(i18n.t('account.error.newPasswordRequired'));
+  if (newPassword.length < 4) throw new Error(i18n.t('account.error.passwordTooShort'));
+  if (!username) throw new Error(i18n.t('account.error.usernameEmpty'));
   const accounts = readAccounts();
   const account = accounts.find((a) => a.username === username);
-  if (!account) throw new Error(`账号不存在：${username}`);
+  if (!account) throw new Error(i18n.t('account.error.accountNotFoundByUsername', { username }));
   account.password = newPassword;
   writeAccountsRaw(accounts);
 }
@@ -189,14 +191,14 @@ export function setAccountPassword(username: string, newPassword: string): void 
 /** 修改用户邮箱（admin 专有权限，权限校验在 UI 层） */
 export function updateAccountEmail(username: string, newEmail: string): void {
   const e = newEmail.trim().toLowerCase();
-  if (!e) throw new Error('邮箱不能为空。');
-  if (!username) throw new Error('用户名不能为空。');
+  if (!e) throw new Error(i18n.t('account.error.emailEmpty'));
+  if (!username) throw new Error(i18n.t('account.error.usernameEmpty'));
   const accounts = readAccounts();
   const account = accounts.find((a) => a.username === username);
-  if (!account) throw new Error(`账号不存在：${username}`);
+  if (!account) throw new Error(i18n.t('account.error.accountNotFoundByUsername', { username }));
   // 检查邮箱是否已被其他人使用
   const conflict = accounts.find((a) => a.email.toLowerCase() === e && a.username !== username);
-  if (conflict) throw new Error(`邮箱 "${newEmail.trim()}" 已被其他用户使用。`);
+  if (conflict) throw new Error(i18n.t('account.error.emailUsedByOther', { email: newEmail.trim() }));
   account.email = newEmail.trim();
   writeAccountsRaw(accounts);
 }

@@ -1,0 +1,21 @@
+._memory-lang-switcher-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+  transition: background 0.15s;
+}
+
+._memory-lang-switcher-btn:hover {
+  background: var(--tea-color-bg-secondary-default);
+}
+
+._memory-lang-switcher-label {
+  line-height: 1;
+}

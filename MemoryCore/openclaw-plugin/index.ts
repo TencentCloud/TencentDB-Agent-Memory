@@ -1,21 +1,21 @@
 /**
- * memory-tencentdb-client — OpenClaw 记忆插件（客户端接入版）
+ * memory-tencentdb-client — OpenClaw 记忆插件（v3 客户端）
  *
- * 通过 @tencentdb-agent-memory/memory-sdk-ts 连接远端 memory server，
- * 提供四层记忆的自动捕获、召回和工具调用能力，
- * 并集成 offload 上下文压缩/摘要服务。
+ * 通过 @tencentdb-agent-memory/memory-sdk-ts-v2 连接远端 Memory Gateway，
+ * 使用 /v3/* API 与强制 team/agent/user isolation，
+ * 提供四层记忆的自动捕获、召回和工具调用能力。
  *
- * 本插件不包含任何数据处理逻辑（无 VDB/Embedding/Pipeline），
- * 所有操作委托给远端 server。
+ * COS 读文件旁路：createMemoryFileReader（/v2/cos/secret + STS），工具 tdai_read_file。
+ * 本插件不包含任何数据处理逻辑（无 VDB/Embedding/Pipeline），也不含 Offload；
+ * 所有记忆操作委托给远端 Gateway。
  */
 
-import { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts";
+import { MemoryClient, createMemoryFileReader } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { performRecall } from "./src/hooks/recall.js";
 import { performCapture } from "./src/hooks/capture.js";
 import { handleMemorySearch } from "./src/tools/memory-search.js";
 import { handleConversationSearch } from "./src/tools/conversation-search.js";
 import { handleReadCos } from "./src/tools/read-cos.js";
-import { registerOffloadClient } from "./src/offload-client/index.js";
 
 const TAG = "[memory-client]";
 
@@ -24,6 +24,9 @@ interface ServerConfig {
   url?: string;
   apiKey?: string;
   instanceId?: string;
+  teamId?: string;
+  agentId?: string;
+  userId?: string;
   rejectUnauthorized?: boolean;
 }
 interface RecallConfig {
@@ -34,18 +37,10 @@ interface RecallConfig {
 interface CaptureConfig {
   enabled?: boolean;
 }
-interface OffloadConfig {
-  enabled?: boolean;
-  serverUrl?: string;
-  compactionRatio?: number;
-  ingestTimeoutMs?: number;
-  compactionTimeoutMs?: number;
-}
 interface PluginConfig {
   server?: ServerConfig;
   recall?: RecallConfig;
   capture?: CaptureConfig;
-  offload?: OffloadConfig;
 }
 
 // Matches OpenClaw plugin register() signature: export default function register(api)
@@ -55,39 +50,45 @@ export default function register(api: any) {
   const server = cfg.server ?? {};
   const recall = cfg.recall ?? {};
   const capture = cfg.capture ?? {};
-  const offload = cfg.offload ?? {};
 
   const serverUrl = server.url || "http://127.0.0.1:8420";
-  const apiKey = server.apiKey || "sk-xxxx";
+  const apiKey = server.apiKey || "local";
   const instanceId = server.instanceId || "default";
+  const teamId = server.teamId || "default";
+  const agentId = server.agentId || "default";
+  const userId = server.userId || "default";
   const recallMaxResults = recall.maxResults ?? 5;
   const includePersona = recall.includePersona !== false;
   const includeSceneNav = recall.includeSceneNav !== false;
   const captureEnabled = capture.enabled !== false;
   const rejectUnauthorized = server.rejectUnauthorized !== false;
 
-  // Offload config (auto-inherits from server config)
-  const offloadEnabled = offload.enabled ?? false;
-  const offloadServerUrl = offload.serverUrl || serverUrl;
-  const offloadCompactionRatio = offload.compactionRatio ?? 0.5;
-  const offloadCompactionTimeoutMs = offload.compactionTimeoutMs ?? 30000;
-
-  // ── Initialize SDK ──
-  // NOTE: pass config (not a raw Transport) so client.readFile can lazily
-  // build its internal MemoryFileReader for STS-signed reads.
+  // ── Initialize v3 SDK ──
+  // Isolation (team/agent/user) is required by Gateway /v3/*; sessionId may be
+  // narrowed per-hook via client.withIsolation({ sessionId }).
   const client = new MemoryClient({
     endpoint: serverUrl,
     apiKey,
     serviceId: instanceId,
+    teamId,
+    agentId,
+    userId,
     rejectUnauthorized,
   });
 
-
+  // COS STS 旁路；无独立配置块。
+  // STS 凭证仍走 POST /v2/cos/secret，鉴权复用 server.apiKey / instanceId。
+  const fileReader = createMemoryFileReader({
+    endpoint: serverUrl,
+    apiKey,
+    serviceId: instanceId,
+  });
 
   api.logger.info?.(
     `${TAG} Initialized: server=${serverUrl}, instance=${instanceId}, ` +
+    `isolation(team=${teamId},agent=${agentId},user=${userId}), ` +
     `recall(persona=${includePersona},sceneNav=${includeSceneNav},max=${recallMaxResults}), ` +
-    `capture=${captureEnabled}, offload=${offloadEnabled}, rejectUnauthorized=${rejectUnauthorized}`,
+    `capture=${captureEnabled}, cosRead=on, rejectUnauthorized=${rejectUnauthorized}`,
   );
 
   // ── Register Tools (same pattern as extensions/memory-tencentdb/index.ts) ──
@@ -139,23 +140,28 @@ export default function register(api: any) {
 
   api.registerTool(
     {
-      name: "tdai_read_cos",
-      label: "Read COS File",
+      name: "tdai_read_file",
+      label: "Read Memory File",
       description:
-        "Read a file from cloud storage. Use paths from Scene Navigation " +
-        "(e.g. 'scene_blocks/xxx.md') or 'persona.md'.",
+        "Read a memory pipeline file from object storage by relative path " +
+        "(e.g. Scene Navigation paths like 'scene_blocks/xxx.md', or 'persona.md'). " +
+        "Uses STS credentials from the Memory Gateway.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "File path (relative key)." },
+          path: {
+            type: "string",
+            description:
+              "Full relative storage key (e.g. 'scene_blocks/travel-plan.md' or 'persona.md').",
+          },
         },
         required: ["path"],
       },
       async execute(_toolCallId: string, params: Record<string, unknown>) {
-        return handleReadCos(client, params as any, api.logger);
+        return handleReadCos(fileReader, params as any, api.logger);
       },
     },
-    { name: "tdai_read_cos" },
+    { name: "tdai_read_file" },
   );
 
   // ── Register Hooks (api.on pattern, same as memory-tencentdb) ──
@@ -184,7 +190,12 @@ export default function register(api: any) {
     }
 
     try {
-      const result = await performRecall(client, {
+      // Scope L0/L1 recall to this session when sessionId is available
+      const sessionClient = ctx?.sessionId
+        ? client.withIsolation({ sessionId: ctx.sessionId })
+        : client;
+
+      const result = await performRecall(sessionClient, {
         query: userText,
         maxResults: recallMaxResults,
         includePersona,
@@ -235,8 +246,12 @@ export default function register(api: any) {
       // or let it be overwritten on next before_prompt_build.
 
       try {
+        const sessionClient = ctx?.sessionId
+          ? client.withIsolation({ sessionId: ctx.sessionId })
+          : client;
+
         const result = await performCapture(
-          client,
+          sessionClient,
           {
             sessionKey,
             sessionId: ctx?.sessionId,
@@ -270,18 +285,5 @@ export default function register(api: any) {
     });
   } else {
     api.logger.info?.(`${TAG} capture disabled by config`);
-  }
-
-  // ── Offload: unified registration via registerOffloadClient ────────────────────
-  if (offloadEnabled) {
-    registerOffloadClient(api, {
-      enabled: true,
-      serverUrl: offloadServerUrl,
-      apiKey,
-      serviceId: instanceId,
-      agentName: "default",
-      compactionRatio: offloadCompactionRatio,
-      compactionTimeoutMs: offloadCompactionTimeoutMs,
-    });
   }
 }

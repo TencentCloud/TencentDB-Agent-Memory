@@ -78,6 +78,33 @@ export function readVdbEnvConfig(): VdbEnvConfig {
   };
 }
 
+/** Connection details for the per-instance MongoDB store (phase-1 backend). */
+export interface MongoEnvConfig {
+  endpoint: string;
+  user: string;
+  password: string;
+  database: string;
+}
+
+/**
+ * Read `MONGODB_*` environment variables into a structured config object.
+ *
+ * Mirrors {@link readVdbEnvConfig} but with an independent namespace so the two
+ * data-plane backends never share variables:
+ *   MONGODB_ENDPOINT   — connection string (e.g. mongodb://host:27017/?directConnection=true)
+ *   MONGODB_USER       — username (empty when the connection string carries auth)
+ *   MONGODB_PASSWORD   — password (empty when the connection string carries auth)
+ *   MONGODB_DATABASE   — per-instance database name (delivered verbatim, not derived)
+ */
+export function readMongoEnvConfig(): MongoEnvConfig {
+  return {
+    endpoint: ENV.MONGODB_ENDPOINT ?? "",
+    user: ENV.MONGODB_USER ?? "",
+    password: ENV.MONGODB_PASSWORD ?? "",
+    database: ENV.MONGODB_DATABASE ?? "",
+  };
+}
+
 /**
  * Optional COS credentials. Returns `null` if `COS_SECRET_ID` is unset
  * (the marker we use to mean "COS not configured for this deployment").
@@ -103,7 +130,7 @@ export function readCosEnvConfig(): CosEnvConfig | null {
 }
 
 /**
- * Config consumed by the `tdai_read_cos` tool. Unlike {@link CosEnvConfig}
+ * Config consumed by the `tdai_read_file` tool. Unlike {@link CosEnvConfig}
  * (which is for the storage-backend hot path and is loaded from the same
  * env vars used by the gateway), this variant supports a layered lookup:
  * environment variables override the values read from `cos.env`, which

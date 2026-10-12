@@ -1,5 +1,5 @@
 {
-  "_comment": "复制本文件为 metadata-instances.json 后按注释替换真值。真值文件已被 .gitignore 排除，禁止提交。api_key 是 tdai kernel gateway 的 bearer token，从 kernel 侧获取。",
+  "_comment": "复制本文件为 metadata-instances.json 后按注释替换真值。真值文件已被 .gitignore 排除，禁止提交。api_key 是 tdai kernel gateway 的 bearer token，从 kernel 侧获取。proxy_endpoint 可选，仅影响 UI '客户端接入地址' 显示；本地开源 core+proxy 分开跑时填 proxy 对外地址（如 http://127.0.0.1:8096），线上/内网 gateway 前置 proxy 时省略。",
   "instances": [
     {
       "id": "default",

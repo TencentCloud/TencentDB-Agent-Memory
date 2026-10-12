@@ -9,6 +9,7 @@
  *
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Switch,
@@ -30,56 +31,46 @@ import { tea } from '@/lib/tea-bridge';
 interface ResourceModule {
   id: string;
   paramKey: AssetCapabilityKey;
-  label: string;
-  desc: string;
+  labelKey: string;
+  descKey: string;
   icon: JSX.Element;
 }
 
-// Wiki / Code_Graph 关闭 = 仅停止工具注入，不影响已有数据。
-// Skill / Chat_Memory 关闭 = 工具注入 + 新数据写入都停（已有数据保留）。
 const RESOURCE_MODULES: ResourceModule[] = [
   {
     id: 'wiki',
     paramKey: 'llm_wiki.enabled',
-    label: 'Wiki 知识库',
-    desc: '关闭后仅停止工具注入',
+    labelKey: 'settings.module.wiki',
+    descKey: 'settings.module.wiki.desc',
     icon: <BooksIcon size={16} />,
   },
   {
     id: 'code',
     paramKey: 'code_graph.enabled',
-    label: 'Code_Graph',
-    desc: '关闭后仅停止工具注入',
+    labelKey: 'settings.module.code',
+    descKey: 'settings.module.code.desc',
     icon: <CodeIcon size={16} />,
   },
   {
     id: 'skill',
     paramKey: 'skill.enabled',
-    label: 'Skill 技能',
-    desc: '关闭后工具注入与新技能抽取均停止',
+    labelKey: 'settings.module.skill',
+    descKey: 'settings.module.skill.desc',
     icon: <ToolsIcon size={16} />,
   },
   {
     id: 'chat_memory',
     paramKey: 'chat_memory.enabled',
-    label: 'Chat_Memory',
-    desc: '关闭后工具注入与新对话写入均停止',
+    labelKey: 'settings.module.chatMemory',
+    descKey: 'settings.module.chatMemory.desc',
     icon: <ChatIcon size={16} />,
   },
 ];
 
-// ===== Tab 定义 =====
-//
-// 目前只有「权限管理」一个 tab；上一版删掉 <Tabs> 后 TABS / TabDef 变成
-// unused declaration（tsc noUnusedLocals 直接 error）。这里保留 SettingsTab
-// 类型给未来扩展，TABS 数组等真加了第二个 tab 再声明。
-
 type SettingsTab = 'permissions';
 
-// ===== Component =====
-
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
-  // 目前只有一个 tab；等未来加第二个再改回 useState 承载 activeTab。
+  const { t } = useTranslation();
   const activeTab: SettingsTab = 'permissions';
 
   const [enabled, setEnabled] = useState<Record<string, boolean>>(() => ({
@@ -122,37 +113,31 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setError('');
     try {
       await userConfigApi.setAssetCapability(mod.paramKey, next);
-      tea.notify.success(`${mod.label} 已${next ? '开启' : '关闭'}`);
+      tea.notify.success(t(next ? 'settings.notify.enabled' : 'settings.notify.disabled', { label: t(mod.labelKey) }));
     } catch (e) {
       setEnabled((prev) => ({ ...prev, [mod.id]: previous }));
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
-      tea.notify.error(`保存失败：${msg}`);
+      tea.notify.error(t('settings.notify.saveFailed', { msg }));
     } finally {
       setSavingKey(null);
     }
   }
 
   return (
-    <Modal visible caption="设置 · 权限管理" size="m" onClose={onClose}>
+    <Modal visible caption={t('settings.caption')} size="m" onClose={onClose}>
       <Modal.Body>
-      {/*
-        当前只有「权限管理」一个 tab，历史上用 <Tabs>+<TabPanel> 会渲染两条下划线
-        （tab bar 底边 + 选中项 indicator）视觉上像 bug。直接铺开内容，等未来
-        真的加了第二个 tab 再把 Tabs 加回来。activeTab / setActiveTab 保留作为
-        未来扩展锚点。
-      */}
       {activeTab === 'permissions' && (
         <div>
           <div style={{ paddingTop: 4 }}>
             <Text theme="label" style={{ display: 'block', marginBottom: 8 }}>
-              资源管理模块开关
+              {t('settings.title')}
             </Text>
             <Text theme="weak" style={{ display: 'block', marginBottom: 16, fontSize: 12 }}>
-              开关按当前登录用户保存。关闭后，proxy 不会为该用户注入对应原子能力；变更对新会话即时生效。
+              {t('settings.desc')}
             </Text>
             {error && <Alert type="error" style={{ marginBottom: 12 }}>{error}</Alert>}
-            {loading && <Alert type="info" style={{ marginBottom: 12 }}>正在读取当前用户资源配置…</Alert>}
+            {loading && <Alert type="info" style={{ marginBottom: 12 }}>{t('settings.loadingConfig')}</Alert>}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {RESOURCE_MODULES.map((mod) => (
@@ -178,18 +163,18 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <Text style={{ fontSize: 13, fontWeight: 500 }}>
-                          {mod.label}
+                          {t(mod.labelKey)}
                         </Text>
                         {savingKey === mod.paramKey ? (
-                          <Tag theme="warning" variant="soft" size="sm">保存中</Tag>
+                          <Tag theme="warning" variant="soft" size="sm">{t('settings.tag.saving')}</Tag>
                         ) : enabled[mod.id] ? (
-                          <Tag theme="success" variant="soft" size="sm">已开启</Tag>
+                          <Tag theme="success" variant="soft" size="sm">{t('settings.tag.enabled')}</Tag>
                         ) : (
-                          <Tag theme="default" variant="soft" size="sm">已关闭</Tag>
+                          <Tag theme="default" variant="soft" size="sm">{t('settings.tag.disabled')}</Tag>
                         )}
                       </div>
                       <Text theme="weak" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
-                        {mod.desc}
+                        {t(mod.descKey)}
                       </Text>
                     </div>
                   </div>

@@ -224,7 +224,7 @@ Anthropic Messages 客户端：
 | `rateLimit` | Memory 实例 × 实际模型的 Input TPM / QPM 限流 |
 | `clickhouse` | 按 turn 的用量上报（计费数据源） |
 | `creditReport` / `creditPricing` | Credit 计费上报与定价表 |
-| `agentUpstreams` | 按 agent name 覆盖上游 URL（如 `claude-code` 单独走 CCR） |
+| `upstream.agents` | 按 agent name 覆盖上游 URL + apiKey（如 `claude-code` 单独走 CCR） |
 
 > `injection`、`extraction`、`sessionInit`、`tdai`、`skill`、`knowledge`、`skillRuntime` 是与“记忆”直接相关的配置段，接入时优先关注它们。
 

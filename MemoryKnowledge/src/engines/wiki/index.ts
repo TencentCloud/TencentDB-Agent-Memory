@@ -1,4 +1,14 @@
-export { createWikiSourceManager, type WikiSourceManager, type SearchOptions } from "./manager.js";
+export {
+  createWikiSourceManager,
+  runIngestIncremental,
+  createThrottledProgressFn,
+  PROGRESS_THROTTLE_MS,
+  type WikiSourceManager,
+  type SearchOptions,
+  type IngestProgress,
+  type ProgressFn,
+  type IngestExecOptions,
+} from "./manager.js";
 export type {
   WikiPage,
   WikiSourceConfig,

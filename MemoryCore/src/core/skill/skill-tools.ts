@@ -63,11 +63,21 @@ export function createSkillTools(opts: CreateSkillToolsOptions) {
   return {
     skill_list: tool({
       description:
-        "List skills available in the current team. Use this FIRST to see what already exists.",
+        "List or search your agent's skills. Use this FIRST to see what already exists. "
+        + "Pass `query` to rank results by keyword/semantic relevance; omit `query` to browse "
+        + "the most-recently-updated skills.",
       inputSchema: jsonSchema<{ query?: string; top_k?: number }>({
         type: "object",
         properties: {
-          query: { type: "string", description: "Optional substring match on name+description" },
+          query: {
+            type: "string",
+            description:
+              "Optional. When set, ranks skills by relevance to this query using BM25 "
+              + "keyword search over name + description + content (Chinese tokenized with jieba); "
+              + "hybrid embedding retrieval is planned but not yet enabled — same field, will "
+              + "transparently upgrade. Write 2-5 relevant keywords for best recall. "
+              + "When omitted, returns the most-recently-updated skills ordered by updated_at DESC.",
+          },
           top_k: { type: "number", description: "Max results (default 10)" },
         },
       }),

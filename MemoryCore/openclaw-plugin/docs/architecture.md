@@ -13,7 +13,7 @@
 
 **原插件（memory-tencentdb）**是"全栈"架构：本地 SQLite/VDB + 本地 Pipeline + 本地 Embedding + OpenClaw Hooks + CLI，~15000 行。
 
-**新插件（memory-tencentdb-client）**是纯客户端：只注册 OpenClaw hooks + tools，所有数据操作通过 `@tencentdb-agent-memory/memory-sdk-ts` 委托给远端 Gateway。
+**新插件（memory-tencentdb-client）**是纯客户端：只注册 OpenClaw hooks + tools，所有数据操作通过 `@tencentdb-agent-memory/memory-sdk-ts-v2` 委托给远端 Gateway。
 
 ## 2. 三层架构
 
@@ -23,7 +23,7 @@
 │  hooks (recall/capture) + tools + prompt 注入          │  只依赖 SDK，不碰 HTTP/存储
 │  └─ import { MemoryClient, MemoryFileReader } from SDK│
 ├───────────────────────────────────────────────────────┤
-│  @tencentdb-agent-memory/memory-sdk-ts (独立包)                             │  通用 SDK 层
+│  @tencentdb-agent-memory/memory-sdk-ts-v2 (独立包)                             │  通用 SDK 层
 │  MemoryClient (14 API) + MemoryFileReader (STS 直读)   │  零框架依赖，纯 fetch
 │  以后 Dify / AutoGen / LangChain 也用这个              │
 ├───────────────────────────────────────────────────────┤
@@ -41,7 +41,7 @@
 | **标签清理** | `before_message_write` hook | 剥离 `<relevant-memories>` 标签 |
 | **L1 搜索** | `tdai_memory_search` tool | SDK `client.searchAtomic()` |
 | **L0 搜索** | `tdai_conversation_search` tool | SDK `client.searchConversation()` |
-| **文件读取** | `tdai_read_cos` tool | SDK `MemoryFileReader.read()` (STS 直读对象存储) |
+| **文件读取** | `tdai_read_file` tool | SDK `MemoryFileReader.read()` (STS 直读对象存储) |
 | **Prompt 注入** | recall 内部 | 格式化: Persona + L1 记忆 + Scene Navigation + 工具引导 |
 
 ### 不做的事
@@ -78,7 +78,7 @@
 ```
 memory-tencentdb-client/
 ├── openclaw.plugin.json       # 插件清单
-├── package.json               # deps: { "@tencentdb-agent-memory/memory-sdk-ts": "^0.1.0-beta.1" }
+├── package.json               # deps: { "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.0-beta.2" }
 ├── index.ts                   # 入口：初始化 SDK + 注册 hooks/tools
 ├── src/
 │   ├── hooks/
@@ -87,7 +87,7 @@ memory-tencentdb-client/
 │   ├── tools/
 │   │   ├── memory-search.ts   # tdai_memory_search → SDK searchAtomic
 │   │   ├── conversation-search.ts  # → SDK searchConversation
-│   │   └── read-cos.ts        # tdai_read_cos → SDK MemoryFileReader.read
+│   │   └── read-cos.ts        # tdai_read_file → SDK MemoryFileReader.read
 │   └── format.ts              # 召回结果格式化 + 工具引导注入
 ├── tests/
 │   └── sdk-cos.ts             # SDK COS 直读手动测试
@@ -99,13 +99,11 @@ memory-tencentdb-client/
 
 ```jsonc
 "dependencies": {
-  // caret + 预发版语义：自动跟到 0.1.0-beta.* 系列最新
-  // 以及 0.1.x 系列正式版（发布后）
-  "@tencentdb-agent-memory/memory-sdk-ts": "^0.1.0-beta.1"
+  "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.0-beta.2"
 }
 ```
 
-SDK 已发布到 npm registry，由 `npm install` 自动拉取，不再走 vendor / 本地 tgz。
+SDK 已发布到 npm registry：[`@tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2`](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-sdk-ts-v2/v/1.0.0-beta.2)，由 `npm install` 自动拉取，不再走 vendor / 本地 `file:` / tgz。
 SDK 保持独立包，不绑定任何框架，以后出 Dify 插件、Python 版等都复用。
 
 ## 7. read_cos 工具设计
@@ -124,14 +122,14 @@ SDK 保持独立包，不绑定任何框架，以后出 Dify 插件、Python 版
    ### Path: scene_blocks/职业发展与技术实践.md
    **热度**: 3 | Summary: 后端工程师，Go + TypeScript...
    ```
-   AI 看到路径后主动调 `tdai_read_cos` 读取详情。
+   AI 看到路径后主动调 `tdai_read_file` 读取详情。
 
 2. **工具引导（format.ts 注入）**：
    ```
    <memory-tools-guide>
    - tdai_memory_search: 搜索结构化记忆
    - tdai_conversation_search: 搜索原始对话
-   - tdai_read_cos: 读取场景文件（使用 Scene Navigation 中的路径）
+   - tdai_read_file: 读取场景文件（使用 Scene Navigation 中的路径）
    </memory-tools-guide>
    ```
 

@@ -1,8 +1,8 @@
 /**
- * tdai_memory_search tool — delegates to SDK searchAtomic.
+ * tdai_memory_search tool — delegates to v3 SDK searchAtomic.
  */
 
-import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts";
+import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 
 interface Logger {
   debug?: (msg: string) => void;

@@ -1,24 +1,8 @@
 /**
  * AssetScopeManager — 统一的「资产可配置范围」管理视图。
- *
- * Tea 组件重构版：说明条用 Tea `Alert`，范围切换用 Tea `Segment`，
- * 只读态用 Tea `Tag`，图标改用 tea-icons-react（去除 emoji）。
- *
- * 5 类资产（agent / skill / code / wiki / memory）的对应面板各挂一个
- * 「可配置范围」tab，内容统一复用本组件，保证交互一致、心智一份。
- *
- * 语义（owner 视角管理自己的资产）：
- *   - 团队内可配置（team）   ：team 成员都能配置 / 编辑这条资产
- *   - 仅自己私有（private）   ：只有 owner（+ team admin / 全局 admin）能配置 / 编辑
- *
- * 谁能切换：只有该资产的 owner / team admin / 全局 admin。其他人看到只读徽章。
- * 无归属资产（后端 Code/Wiki 没有 owner 概念）演示阶段允许任意 team 成员设置，
- * 首次设置者成为 owner（由 services/asset-scope-store.ts 的 setAssetConfigScope 负责记录）。
- *
- * 数据落 asset-scope-store.ts 的统一覆盖层（localStorage），刷新不丢；后端上线后换成
- * asset_acl 接口即可，本组件不用改。
  */
 
+import { useTranslation } from 'react-i18next';
 import { Alert, Segment, Tag, Text } from 'tea-component';
 import { UsergroupIcon, LockOnIcon } from 'tea-icons-react';
 import {
@@ -30,21 +14,30 @@ import {
   canManageAssetScope,
   useAssetConfigScopes
 } from '@/services';
+import { useUserDisplayName } from '@/services/user-profile-store';
 import './asset-scope-manager.css';
 
 export interface AssetScopeItem {
   id: string;
   name: string;
-  /** 资产自带的 owner（若有）；无归属资产留空 */
   owner_user_id?: string;
-  /** 副标题：类型 / 路径 / 归属 agent 等补充信息 */
   meta?: string;
 }
 
-const SCOPE_OPTIONS: Array<{ value: AssetConfigScope; label: string }> = [
-  { value: 'team', label: '团队内可配置' },
-  { value: 'private', label: '仅自己私有' }
-];
+/** Owner 标签：显示 display_name（未命中回退 id），title 保留 user_id。抽子组件因 .map 内不能调 hook。 */
+function ScopeOwnerLabel({ ownerId, isMe }: { ownerId: string; isMe: boolean }) {
+  const { t } = useTranslation();
+  const name = useUserDisplayName(ownerId);
+  return (
+    <Text theme="weak" className="_memory-asset-scope-item-owner">
+      {t('assetScope.owner')}{' '}
+      <span className="_memory-asset-scope-item-owner-id" title={ownerId}>
+        @{name || ownerId}
+      </span>
+      {isMe && <Text theme="primary">{t('assetScope.you')}</Text>}
+    </Text>
+  );
+}
 
 export default function AssetScopeManager({
   kind,
@@ -55,35 +48,39 @@ export default function AssetScopeManager({
   items
 }: {
   kind: AssetKind;
-  /** 资产类型中文名，用于标题 / 空态文案，如 "Skill" / "Agent" */
   label: string;
   currentUser: string;
   isAdmin: boolean;
   team: Team | null;
   items: AssetScopeItem[];
 }) {
-  // 订阅覆盖层变化：任意一条 scope 被改动后自动重渲染。
+  const { t } = useTranslation();
   useAssetConfigScopes();
+
+  const SCOPE_OPTIONS: Array<{ value: AssetConfigScope; label: string }> = [
+    { value: 'team', label: t('assetScope.option.team') },
+    { value: 'private', label: t('assetScope.option.private') }
+  ];
 
   return (
     <div className="_memory-asset-scope">
       <Alert type="info">
-        <span className="_memory-asset-scope-alert-title">{label} · 可配置范围</span>
+        <span className="_memory-asset-scope-alert-title">{t('assetScope.title', { label })}</span>
         <div className="_memory-asset-scope-alert-desc">
-          每个 owner 可以管理自己的 {label}：选择
+          {t('assetScope.desc', { label })}
           <span className="_memory-asset-scope-alert-em">
-            <UsergroupIcon size={12} /> 团队内可配置
+            <UsergroupIcon size={12} /> {t('assetScope.team')}
           </span>
-          （团队成员都能改）或
+          （{t('assetScope.team.desc')}）{t('assetScope.or')}
           <span className="_memory-asset-scope-alert-em">
-            <LockOnIcon size={12} /> 仅自己私有
+            <LockOnIcon size={12} /> {t('assetScope.private')}
           </span>
-          （只有你能改）。只有资产 owner 与团队管理员可切换。
+          （{t('assetScope.private.desc')}）。{t('assetScope.manageHint')}
         </div>
       </Alert>
 
       {items.length === 0 ? (
-        <div className="_memory-asset-scope-empty">当前团队下还没有 {label} 资产。</div>
+        <div className="_memory-asset-scope-empty">{t('assetScope.empty', { label })}</div>
       ) : (
         <ul className="_memory-asset-scope-list">
           {items.map((item) => {
@@ -94,19 +91,15 @@ export default function AssetScopeManager({
 
             return (
               <li key={item.id} className="_memory-asset-scope-item">
-                {/* 左：资产信息 */}
                 <div className="_memory-asset-scope-item-info">
                   <div className="_memory-asset-scope-item-name-row">
                     <span className="_memory-asset-scope-item-name" title={item.name}>
                       {item.name}
                     </span>
                     {effectiveOwner ? (
-                      <Text theme="weak" className="_memory-asset-scope-item-owner">
-                        owner <span className="_memory-asset-scope-item-owner-id">@{effectiveOwner}</span>
-                        {ownerIsMe && <Text theme="primary"> （你）</Text>}
-                      </Text>
+                      <ScopeOwnerLabel ownerId={effectiveOwner} isMe={ownerIsMe} />
                     ) : (
-                      <Text theme="weak" className="_memory-asset-scope-item-owner">无归属</Text>
+                      <Text theme="weak" className="_memory-asset-scope-item-owner">{t('assetScope.noOwner')}</Text>
                     )}
                   </div>
                   {item.meta && (
@@ -116,7 +109,6 @@ export default function AssetScopeManager({
                   )}
                 </div>
 
-                {/* 右：范围切换或只读徽章 */}
                 {canManage ? (
                   <Segment
                     value={scope}
@@ -127,7 +119,7 @@ export default function AssetScopeManager({
                   />
                 ) : (
                   <Tag theme={scope === 'private' ? 'default' : 'success'} size="sm">
-                    {scope === 'private' ? '仅自己私有' : '团队内可配置'}
+                    {scope === 'private' ? t('assetScope.tag.private') : t('assetScope.tag.team')}
                   </Tag>
                 )}
               </li>

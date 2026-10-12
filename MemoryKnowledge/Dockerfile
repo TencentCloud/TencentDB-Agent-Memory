@@ -13,8 +13,13 @@
 # ── Stage 1: build ──
 FROM node:22-slim AS builder
 
-RUN sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list 2>/dev/null || true
+# apt 源默认走 Debian 官方，公网可直接构建。内网构建加速：
+#   docker build --build-arg APT_MIRROR=mirrors.tencent.com .
+ARG APT_MIRROR=deb.debian.org
+RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+    fi
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -24,15 +29,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
+# node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" bug（Cannot read
+# properties of null (reading 'edgesOut')）—— 干净 `npm install` 稳定挂。
+# 升到 npm@11 规避；不影响其它构建行为。
+RUN npm install -g npm@11 --no-audit --no-fund
+
 COPY package.json .npmrc* ./
 RUN --mount=type=cache,id=npm-cache-knowledge,target=/root/.npm \
     npm install --no-audit --no-fund
 
 COPY tsconfig.json tsdown.config.ts ./
 COPY src/ ./src/
-# 只拷 runtime 必需的 openapi.yaml（Swagger UI 从 docs/api/openapi.yaml 读取，
-# 见 src/server.ts:86）。docs 下其它 md 文件不参与运行时，不入镜像。
-COPY docs/api/openapi.yaml ./docs/api/openapi.yaml
+# Swagger UI 运行时要读的 spec（见 src/server.ts）。放在包根而非 docs/，
+# 镜像因此完全不依赖文档目录。
+COPY openapi.yaml ./openapi.yaml
 
 RUN npm run build
 RUN npm prune --omit=dev
@@ -40,8 +50,11 @@ RUN npm prune --omit=dev
 # ── Stage 2: runtime ──
 FROM node:22-slim AS runtime
 
-RUN sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list 2>/dev/null || true
+ARG APT_MIRROR=deb.debian.org
+RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+    fi
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -53,7 +66,7 @@ WORKDIR /app
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/docs ./docs
+COPY --from=builder /app/openapi.yaml ./openapi.yaml
 COPY --from=builder /app/package.json ./
 
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh

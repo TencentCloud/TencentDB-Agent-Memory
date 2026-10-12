@@ -1,0 +1,270 @@
+/**
+ * AssetListPanel — 资产管理页左侧列表面板样式。
+ *
+ * Apple-inspired clean design：
+ *   - 标题行只有名称 + 操作，徽章独立成行
+ *   - 徽章用纯文本 + 小图标，不用亮色 Tag
+ *   - 选中态用浅品牌底色，不用左 border
+ *   - 骨架屏、空态、禁用态统一
+ *   - 颜色全部走 var(--tea-color-*)，不硬编码
+ */
+
+/* ===== 面板容器 ===== */
+._alp {
+  /* 撑满左栏高度（外层 _asset-split-sidebar 已限定视口高度），内容少也不留空 */
+  height: 100%;
+  min-height: 480px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== 头部：标题 + 计数 ===== */
+._alp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--tea-color-border-secondary-default);
+}
+
+._alp-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._alp-title-suffix {
+  font-weight: 400;
+  color: var(--tea-color-text-tertiary);
+}
+
+._alp-count {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  flex-shrink: 0;
+}
+
+/* ===== 列表滚动区 ===== */
+._alp-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* 撑满卡片剩余高度并内部滚动（高度由外层 _alp 的 100% 约束），不再用固定 max-height */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ===== 空态 ===== */
+._alp-empty {
+  padding: 48px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ===== 列表项 ===== */
+._alp-item {
+  border-bottom: 1px solid var(--tea-color-border-secondary-default);
+  transition: background-color 0.15s ease-in-out;
+  position: relative;
+}
+
+._alp-item:last-child {
+  border-bottom: none;
+}
+
+._alp-item-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 12px 12px;
+  font: inherit;
+  color: inherit;
+  transition: background-color 0.15s ease-in-out;
+}
+
+._alp-item-btn:hover {
+  background-color: var(--tea-color-bg-secondary-default);
+}
+
+._alp-item--selected ._alp-item-btn {
+  background-color: var(--tea-color-bg-brand-lighten-default);
+}
+
+._alp-item--selected ._alp-item-btn:hover {
+  background-color: var(--tea-color-bg-brand-lighten-default);
+}
+
+._alp-item--disabled ._alp-item-btn {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+._alp-item--disabled ._alp-item-btn:hover {
+  background-color: transparent;
+}
+
+/* ===== 骨架屏 ===== */
+._alp-skeleton {
+  padding: 12px 12px;
+  animation: _alp-pulse 1.5s ease-in-out infinite;
+}
+
+._alp-skeleton-line {
+  border-radius: 3px;
+  background: var(--tea-color-bg-secondary-default);
+  margin-bottom: 6px;
+}
+
+._alp-skeleton-primary {
+  height: 14px;
+  width: 60%;
+}
+
+._alp-skeleton-secondary {
+  height: 12px;
+  width: 85%;
+  opacity: 0.6;
+}
+
+@keyframes _alp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ============================================================
+ * 列表项内容区 — 标准化 4 行结构
+ * ============================================================ */
+
+/* 标题行：名称 + 操作按钮 */
+._alp-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+
+._alp-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* 资产真实 id：独立成行，紧贴标题行下方（与 ChatMemory 页 ._memory-card-id 同构）。
+   等宽灰色小字，超宽省略号截断。 */
+._alp-item-id {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  font-family: var(--font-mono);
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 描述：2 行截断 */
+._alp-item-desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--tea-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 徽章行 */
+._alp-item-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* 纯文本徽章 — 替代亮色 Tag */
+._alp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--tea-color-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+._alp-badge svg {
+  flex-shrink: 0;
+}
+
+._alp-badge-you {
+  color: var(--tea-color-text-brand-default);
+  font-weight: 500;
+}
+
+/* 元信息行 */
+._alp-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._alp-item-time {
+  margin-left: auto;
+  white-space: nowrap;
+  /* 独立声明字号颜色，不再依赖 _alp-item-meta 行继承，保证放哪都统一 */
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+}
+
+/* 等宽字体（user_id / agent_id 等唯一标识） */
+._alp-mono {
+  font-family: var(--font-mono);
+  color: var(--tea-color-text-secondary);
+}
+
+/* 详情面板空态 */
+._alp-detail-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 480px;
+  font-size: 13px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 960px) {
+  ._alp {
+    min-height: 0;
+  }
+}

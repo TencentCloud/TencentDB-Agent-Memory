@@ -14,6 +14,20 @@ export interface SceneIndexEntry {
   updated: string;
 }
 
+/**
+ * 行视图后端的场景索引派生能力（P2-D2）：rowfs 模式下索引从 L2 行实时
+ * 投影，`.metadata/scene_index.json` 不读不写。结构化鸭子类型，避免
+ * scene ↔ storage 模块环依赖。
+ */
+interface SceneIndexDerivable {
+  deriveSceneIndex(): Promise<SceneIndexEntry[]>;
+}
+
+function asSceneIndexDerivable(storage: StorageAdapter | undefined): SceneIndexDerivable | null {
+  const backend = storage?.getBackend() as unknown as Partial<SceneIndexDerivable> | undefined;
+  return backend && typeof backend.deriveSceneIndex === "function" ? backend as SceneIndexDerivable : null;
+}
+
 // ── fs fallback helpers (used when no StorageAdapter is provided) ──
 
 async function fsReadFile(absPath: string): Promise<string | null> {
@@ -45,6 +59,9 @@ async function fsReaddir(absDir: string, suffix: string): Promise<string[]> {
  * The LLM is sandboxed to scene_blocks/ and cannot access this file.
  */
 export async function readSceneIndex(dataDir: string, storage?: StorageAdapter): Promise<SceneIndexEntry[]> {
+  // P2-D2: rowfs 模式索引实时派生自 L2 行，不读 sidecar 文件。
+  const derivable = asSceneIndexDerivable(storage);
+  if (derivable) return derivable.deriveSceneIndex();
   try {
     let raw: string | null;
     if (storage) {
@@ -100,6 +117,9 @@ export async function writeSceneIndex(
  * Rebuild scene index by scanning all .md files in the scene_blocks directory.
  */
 export async function syncSceneIndex(dataDir: string, storage?: StorageAdapter): Promise<SceneIndexEntry[]> {
+  // P2-D2: rowfs 模式索引实时派生，不落盘（scene_index.json 退役）。
+  const derivable = asSceneIndexDerivable(storage);
+  if (derivable) return derivable.deriveSceneIndex();
   let files: string[];
   if (storage) {
     files = await storage.readdirNames(StoragePaths.sceneBlocksDir, ".md");

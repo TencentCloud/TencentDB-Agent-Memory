@@ -1,11 +1,11 @@
 /**
- * Recall hook: search memories from Gateway + format prompt injection.
+ * Recall hook (v3): search memories from Gateway + format prompt injection.
  */
 
-import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts";
+import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { formatRecallResult } from "../format.js";
 
-const TAG = "[memory-client][recall]";
+const TAG = "[memory-client-v3][recall]";
 
 interface Logger {
   debug?: (msg: string) => void;

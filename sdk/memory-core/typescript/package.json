@@ -1,6 +1,6 @@
 {
   "name": "@tencentdb-agent-memory/memory-sdk-ts-v2",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.1-beta.1",
   "description": "TypeScript SDK for TencentDB Agent Memory (v3 strict-isolation API + /v3/skill/*)",
   "type": "module",
   "main": "./dist/index.js",
@@ -31,5 +31,8 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "undici": "^6.21.3"
   }
 }

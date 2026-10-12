@@ -32,7 +32,7 @@ export type {
 
 // 共享类型 / util（不属于 v3-only，也不是 v2 API 实现，导出给需要自定义 transport
 // 或用 STS COS 直读的调用方使用）
-export { TDAMError } from "./errors.js";
+export { ParamError, TDAMError } from "./errors.js";
 export { HttpTransport, type HttpTransportOptions } from "./http.js";
 export type { MemoryClientConfig, Transport } from "./client.js";
 export {

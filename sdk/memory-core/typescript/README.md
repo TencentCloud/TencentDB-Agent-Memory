@@ -80,6 +80,87 @@ v3 数据面差异要点：
 | L3 | `readCore()` | `POST /v3/core/read` |
 | L3 | `writeCore()` | `POST /v3/core/write` |
 | L3 | `countCore()` | `POST /v3/core/count` |
+| Asset | `clearChatMemory()` | `POST /v3/chat-memory/clear` |
+
+### Batch delete and clear
+
+`deleteConversation()` (L0) and `deleteAtomic()` (L1) accept batches:
+
+```typescript
+// L0: delete by message ids (max 5000)
+await client.deleteConversation({ message_ids: ["m1", "m2"] });
+
+// L0: wipe whole sessions (max 100); both selectors may be combined
+await client.deleteConversation({ session_ids: ["s1", "s2"] });
+
+// L1: delete by note ids (max 5000)
+await client.deleteAtomic({ ids: ["a1", "a2"] });
+```
+
+> **Note**: delete paths never fall back to the constructor's `session_id`.
+> Deleting a few messages by `message_ids` will not silently wipe the whole
+> session; to clear sessions you must pass `session_ids` explicitly.
+
+`clearChatMemory()` is an **asset-level** operation: it wipes all content but
+keeps the asset itself.
+
+```typescript
+const res = await client.clearChatMemory({ memory_ids: ["chat_memory-t1-agt1"] });
+if (!res.all_cleared) {
+  // Failed items carry `retryable`; true means the server already retried
+  // internally and the call can be retried later.
+  const retryable = res.items.filter((i) => !i.cleared && i.retryable);
+}
+```
+
+- Wipes L0/L1/L2/L3 + vectors + files; keeps `memory_id`, agent bindings, ACL, owner, visibility
+- After clearing, the agent keeps writing to the same `memory_id` — no re-creation needed
+- Rejects the **whole batch** if any `memory_id` is missing or is not a chat_memory; repeated calls are idempotent
+- Permissions: like other delete endpoints, the kernel performs no user-level authorization. For owner-only semantics, call the panel backend `/api/v1/chat-memory/clear`
+
+## Custom Prompt and generation provenance
+
+```typescript
+import { MemoryGenerationLogClient, MemoryPromptClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
+
+const config = { endpoint, apiKey, serviceId };
+const prompts = new MemoryPromptClient({ ...config, teamId: "team-1", agentId: "agent-1" });
+const created = await prompts.create({ name: "decisions", layer: "l1", prompt: "Focus on decisions." });
+await prompts.apply({ memory_prompt_id: created.memory_prompt_id, layer: "l1", agent_ids: ["agent-1"] });
+const effective = await prompts.getEffective({ layer: "l1" });
+
+const logs = new MemoryGenerationLogClient(config);
+const provenance = await logs.getByMemoryId("memory-id", "l1");
+```
+
+`MemoryPromptClient` covers CRUD, effective resolution, current binding queries, apply/clear and setting logs.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `create()` | `POST /v3/memory-prompt/create` | Create a Prompt |
+| `get()` / `list()` / `getEffective()` | `GET /v3/memory-prompt/get` | Get one, list Prompts, or resolve the effective Prompt |
+| `update()` | `POST /v3/memory-prompt/update` | Update name/content; identical values are a no-op |
+| `delete()` | `POST /v3/memory-prompt/delete` | Batch-delete Prompts and clear their bindings |
+| `apply()` / `clear()` | `POST /v3/memory-prompt/set` | Apply, replace, or clear a target binding |
+| `listSettings()` | `GET /v3/memory-prompt/setting/list` | List current bindings by Prompt, target, or layer |
+| `listSettingLogs()` | `GET /v3/memory-prompt/log` | Query immutable binding-change logs |
+
+```typescript
+const settings = await prompts.listSettings({
+  memory_prompt_id: created.memory_prompt_id, // reverse lookup: where is this Prompt bound?
+  target_type: "agent",
+  team_id: "team-1",
+  layer: "l1",
+  limit: 20,
+});
+```
+
+`MemoryGenerationLogClient` supports time-partitioned list, log-id lookup and direct Memory-ID provenance lookup.
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `list()` | `GET /v3/memory-generation-log/list` | List generation logs by layer/time |
+| `get()` / `getByMemoryId()` | `GET /v3/memory-generation-log/get` | Read by log ID or Memory ID + layer |
 
 ## MetadataClient (v3 management plane)
 
@@ -93,9 +174,9 @@ import { MetadataClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 
 const meta = new MetadataClient({
   endpoint: "http://127.0.0.1:8420",
-  apiKey: "verify-token",        // gateway Bearer (KERNEL_AUTH_TOKEN)
+  apiKey: process.env.KERNEL_AUTH_TOKEN!,
   serviceId: "knowledge-debug",  // x-tdai-service-id
-  // userKey: "...",             // optional; needed by system_admin endpoints (user/create, user/delete)
+  // userKey: process.env.TDAI_USER_KEY,
 });
 ```
 

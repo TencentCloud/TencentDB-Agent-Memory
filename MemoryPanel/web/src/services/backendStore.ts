@@ -66,7 +66,13 @@ export interface Agent {
 }
 
 export type TaskStatus = 'running' | 'completed';
-export type TaskSourceType = 'manual' | 'tapd';
+/**
+ * 来源**大类**，与后端 TaskSourceType 对齐。
+ *
+ * 不含具体来源（tapd / jira / …）—— 那类信息读 `metadata_json.external.provider`，
+ * 见 readExternalProvider()。新增来源无需改这里。
+ */
+export type TaskSourceType = 'manual' | 'external' | 'other';
 
 export interface Task {
   task_id: string;
@@ -243,7 +249,8 @@ export function adaptTask(bt: BackendTask, linkedAgents: string[]): Task {
     participants: ui.participants,
     title: bt.title,
     description: bt.description ?? '',
-    source_type: bt.source_type === 'tapd' ? 'tapd' : 'manual',
+    // 大类即可：具体来源在 metadata_json.external.provider 里。
+    source_type: bt.source_type === 'manual' ? 'manual' : ('external' as TaskSourceType),
     source_url: bt.source_url ?? '',
     linked_agents: linkedAgents,
     status: normalizeTaskStatus(bt.status),
@@ -328,10 +335,10 @@ export function canManageAsset(
   asset: { owner_user_id: string; team_id: string },
   team: Team | null | undefined,
   userId: string,
-  isGlobalAdminFlag?: boolean
+  _isGlobalAdminFlag?: boolean
 ): boolean {
   if (!userId) return false;
-  if (isGlobalAdminFlag) return true;
+  // admin 不再拥有全局特权，与 member 一致：只能操作自己 owner 的资产。
   if (asset.owner_user_id === userId) return true;
   if (team && team.team_id === asset.team_id && isTeamAdmin(team, userId)) return true;
   return false;

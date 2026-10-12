@@ -3,12 +3,14 @@
 # 用法: ./proxy.sh [start|stop|restart|status|log|daemon|daemon-stop|daemon-status]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 项目根目录（scripts/ 的上一级），src/index.ts 与 config.yaml 都在这里
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PID_FILE="$SCRIPT_DIR/context-proxy.pid"
 DAEMON_PID_FILE="$SCRIPT_DIR/context-proxy-daemon.pid"
 LOG_DIR="$SCRIPT_DIR/logs"
 LOG_FILE="$LOG_DIR/$(date +%Y-%m-%d).log"
 DAEMON_LOG="$LOG_DIR/daemon.log"
-CONFIG_FILE="$SCRIPT_DIR/config.yaml"
+CONFIG_FILE="$PROJECT_ROOT/config.yaml"
 
 # 从 config.yaml 读取端口（默认 8096）
 PROXY_PORT="$(grep -E '^\s*port:' "$CONFIG_FILE" 2>/dev/null | head -1 | awk '{print $2}')"
@@ -69,7 +71,7 @@ cmd_start() {
   fi
 
   echo "[context-proxy] starting..."
-  cd "$SCRIPT_DIR"
+  cd "$PROJECT_ROOT"
   nohup "$NODE_BIN" --import tsx/esm src/index.ts --config "$CONFIG_FILE" \
     >> "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"

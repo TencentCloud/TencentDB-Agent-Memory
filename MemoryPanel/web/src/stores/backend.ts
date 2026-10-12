@@ -4,7 +4,7 @@
  * 取代 backendStore.ts 里的模块级变量（_cachedTeams / _cachedAgentsMap / _inflightTeams …）。
  *
  * 核心设计：
- *   - teamsLoaded / agentsLoadedTeamIds / tasksLoadedTeamIds：标记"已加载过"，
+ *   - teamsLoaded / agentsLoadedTeamIds：标记"已加载过"，
  *     避免每个组件挂载都重复 fetch。
  *   - invalidate()：写操作后调，清所有缓存 + 广播 BACKEND_REFRESH_EVENT。
  *   - invalidateTeam(teamId)：切 team 时只清当前 team 的 agents/tasks 缓存。
@@ -21,6 +21,7 @@ import {
   type TeamMember as BackendMember,
 } from '@/lib/teamApi';
 import { tea } from '@/lib/tea-bridge';
+import i18n from '@/i18n';
 import { seedDisplayNameCache } from '@/services/user-profile-store';
 
 // 从 backendStore.ts re-import 纯函数（adapters / types），避免循环依赖
@@ -53,21 +54,38 @@ interface BackendState {
   teams: Team[];
   activeTeamId: string | null;
   agentsByTeam: Record<string, Agent[]>;
-  tasksByTeam: Record<string, Task[]>;
+  // 全量总数（内核返回的 total），前端分页基于此计算总页数
+  tasksTotalByTeam: Record<string, number>;
+  // 后端分页缓存：tasksPagesByTeam[teamId]["offset:limit"] = Task[]
+  tasksPagesByTeam: Record<string, Record<string, Task[]>>;
   // loaded 标记（避免重复 fetch）
   teamsLoaded: boolean;
   teamsLoading: boolean;
   agentsLoadedTeamIds: Set<string>;
-  tasksLoadedTeamIds: Set<string>;
   // in-flight 去重
   inflightTeams: Promise<void> | null;
   inflightAgents: Record<string, Promise<Agent[]>>;
-  inflightTasks: Record<string, Promise<Task[]>>;
+  inflightTasks: Record<string, Promise<Task[]> | undefined>;
+  /**
+   * 代数计数器：clearAll（登出 / 401）/ invalidate 时自增。
+   * refreshTeams / fetchAgents / fetchTasks 发起时捕获当前 epoch，await 返回后
+   * 若 epoch 已变化（说明期间发生过登出/清缓存），丢弃本次结果 —— 防止旧会话的
+   * 在途请求完成后把上一个用户的 teams/agents/tasks 重新写回 store，或把旧 team
+   * 回写到 localStorage activeTeamId，导致新用户登录后短暂/持续看到旧数据。
+   */
+  epoch: number;
 
   // actions
   fetchTeams: () => Promise<void>;
+  /**
+   * 强制重新拉取 team 列表（忽略 teamsLoaded 缓存，保留 in-flight 去重）。
+   * `silent: true` 时不在 UI 层翻转 teamsLoading —— 用于下拉框展开等后台保新鲜
+   * 场景，避免 TeamManagementPanel 等消费方因 teamsLoading=true 而整体进入
+   * loading 占位（表现为"点一下下拉框页面就刷新"）。
+   */
+  refreshTeams: (opts?: { silent?: boolean }) => Promise<void>;
   fetchAgents: (teamId: string) => Promise<Agent[]>;
-  fetchTasks: (teamId: string) => Promise<Task[]>;
+  fetchTasks: (teamId: string, params?: { limit?: number; offset?: number; force?: boolean }) => Promise<Task[]>;
   setActiveTeamId: (teamId: string | null) => void;
   invalidate: () => void;
   invalidateTeam: (teamId: string) => void;
@@ -80,30 +98,45 @@ export const useBackendStore = create<BackendState>((set, get) => ({
   teams: [],
   activeTeamId: readActiveTeamId(),
   agentsByTeam: {},
-  tasksByTeam: {},
+  tasksTotalByTeam: {},
+  tasksPagesByTeam: {},
   teamsLoaded: false,
   teamsLoading: false,
   agentsLoadedTeamIds: new Set(),
-  tasksLoadedTeamIds: new Set(),
   inflightTeams: null,
   inflightAgents: {},
   inflightTasks: {},
+  epoch: 0,
 
   fetchTeams: async () => {
     const state = get();
     // 已加载过 → 不重复 fetch（只有 invalidate / clearAll 后才会重新拉）
     if (state.teamsLoaded) return;
+    await get().refreshTeams();
+  },
+
+  refreshTeams: async (opts?: { silent?: boolean }) => {
+    const state = get();
     // in-flight 去重：多个组件同时挂载时只发一次
     if (state.inflightTeams) { await state.inflightTeams; return; }
 
+    const silent = opts?.silent === true;
+    // 捕获发起时的代数：期间若发生登出/清缓存（epoch 自增），本次结果必须丢弃
+    const epoch = state.epoch;
     const promise = (async () => {
-      set({ teamsLoading: true });
+      // 静默刷新不翻转 teamsLoading —— 消费方（TeamManagementPanel 等）依赖它
+      // 显示 loading 占位；下拉框展开这类后台保新鲜场景翻转它会导致
+      // "点一下下拉框整个页面闪成 loading 再恢复"。
+      if (!silent) set({ teamsLoading: true });
       try {
         const backendTeams = await teamsApi.list();
         // 批量拉 members（N+1 → N，但这是后端 API 限制，无批量接口）
         const memberResults = await Promise.all(
           backendTeams.map((t) => membersApi.list(t.team_id).catch(() => [] as BackendMember[]))
         );
+        // 登出/清缓存后返回的旧会话结果：丢弃，防止旧 teams 写回 store、
+        // 防止 ensureValidActiveTeamId 把旧 team 重新写回 localStorage activeTeamId。
+        if (get().epoch !== epoch) return;
         const adapted = backendTeams.map((bt, i) =>
           adaptTeam(bt, memberResults[i].map(adaptMember))
         );
@@ -116,11 +149,13 @@ export const useBackendStore = create<BackendState>((set, get) => ({
           activeTeamId: readActiveTeamId(),
         });
       } catch (err) {
-        console.error('[backend store] fetchTeams failed:', err);
+        if (get().epoch !== epoch) return;
+        console.error('[backend store] refreshTeams failed:', err);
         set({ teamsLoading: false });
-        tea.notify.error('加载团队列表失败');
+        tea.notify.error(i18n.t('backend.loadTeamsFailed'));
       } finally {
-        set({ inflightTeams: null });
+        // 只清理"自己"的 in-flight 标记：过期请求不得清掉新请求的引用
+        set((s) => (s.inflightTeams === promise ? { inflightTeams: null } : {}));
       }
     })();
 
@@ -139,9 +174,12 @@ export const useBackendStore = create<BackendState>((set, get) => ({
       return state.inflightAgents[teamId];
     }
 
+    const epoch = state.epoch;
     const promise = (async () => {
       try {
         const backendAgents = await agentsApi.list(teamId);
+        // 登出/清缓存后返回的旧会话结果：丢弃，不写入 store
+        if (get().epoch !== epoch) return [];
         const adapted = backendAgents.map((ba, i) => adaptAgent(ba, i));
         set((s) => ({
           agentsByTeam: { ...s.agentsByTeam, [teamId]: adapted },
@@ -152,13 +190,14 @@ export const useBackendStore = create<BackendState>((set, get) => ({
         }));
         return adapted;
       } catch (err) {
+        if (get().epoch !== epoch) return [];
         console.error('[backend store] fetchAgents failed:', err);
         set((s) => ({
           inflightAgents: Object.fromEntries(
             Object.entries(s.inflightAgents).filter(([k]) => k !== teamId)
           ),
         }));
-        tea.notify.error('加载 Agent 列表失败');
+        tea.notify.error(i18n.t('backend.loadAgentsFailed'));
         return [];
       }
     })();
@@ -167,49 +206,56 @@ export const useBackendStore = create<BackendState>((set, get) => ({
     return promise;
   },
 
-  fetchTasks: async (teamId: string) => {
+  fetchTasks: async (teamId: string, params?: { limit?: number; offset?: number; force?: boolean }) => {
     const state = get();
-    if (state.tasksLoadedTeamIds.has(teamId)) {
-      return state.tasksByTeam[teamId] ?? [];
+    const limit = params?.limit ?? 20;
+    const offset = params?.offset ?? 0;
+    // 缓存 key：按 (offset, limit) 粒度（teamId 已在 tasksPagesByTeam[teamId] 这层隔离）
+    const cacheKey = `${offset}:${limit}`;
+    // in-flight key 必须带 teamId —— 两个 team 用同样的分页参数并发拉取时，
+    // 若共用 offset:limit 做 key，后发的 team 会 await 到前一个 team 的请求，
+    // 自己既不写缓存也不真正发请求，页面会一直空着。
+    const inflightKey = `${teamId}:${cacheKey}`;
+    // 已缓存且非强制刷新 → 直接返回
+    if (!params?.force && state.tasksPagesByTeam[teamId]?.[cacheKey]) {
+      return state.tasksPagesByTeam[teamId][cacheKey];
     }
-    if (state.inflightTasks[teamId] != null) {
-      return state.inflightTasks[teamId];
-    }
+    // in-flight 去重
+    if (state.inflightTasks[inflightKey]) { await state.inflightTasks[inflightKey]; return get().tasksPagesByTeam[teamId]?.[cacheKey] ?? []; }
 
+    const epoch = state.epoch;
     const promise = (async () => {
       try {
-        const backendTasks = await tasksApi.list(teamId);
-        // task/list 不带 linked_agents，逐条拉 task/get 补齐
-        const linkedResults = await Promise.all(
-          backendTasks.map((bt) =>
-            tasksApi
-              .get(bt.task_id)
-              .then((full) => full.agents.filter((a) => a.status === 'active').map((a) => a.agent_id))
-              .catch(() => [] as string[])
-          )
+        const { items: tasksWithAgents, total } = await tasksApi.listWithAgents(teamId, { limit, offset });
+        // 登出/清缓存后返回的旧会话结果：丢弃，不写入 store
+        if (get().epoch !== epoch) return [];
+        const adapted = tasksWithAgents.map((t) =>
+          adaptTask(t, t.agents.filter((a) => a.status === 'active').map((a) => a.agent_id))
         );
-        const adapted = backendTasks.map((bt, i) => adaptTask(bt, linkedResults[i]));
-        set((s) => ({
-          tasksByTeam: { ...s.tasksByTeam, [teamId]: adapted },
-          tasksLoadedTeamIds: new Set(s.tasksLoadedTeamIds).add(teamId),
-          inflightTasks: Object.fromEntries(
-            Object.entries(s.inflightTasks).filter(([k]) => k !== teamId)
-          ),
-        }));
+        set((s) => {
+          const teamPages = s.tasksPagesByTeam[teamId] ?? {};
+          return {
+            tasksPagesByTeam: { ...s.tasksPagesByTeam, [teamId]: { ...teamPages, [cacheKey]: adapted } },
+            tasksTotalByTeam: { ...s.tasksTotalByTeam, [teamId]: total },
+            inflightTasks: Object.fromEntries(
+              Object.entries(s.inflightTasks).filter(([k]) => k !== inflightKey)
+            ),
+          };
+        });
         return adapted;
       } catch (err) {
         console.error('[backend store] fetchTasks failed:', err);
         set((s) => ({
           inflightTasks: Object.fromEntries(
-            Object.entries(s.inflightTasks).filter(([k]) => k !== teamId)
+            Object.entries(s.inflightTasks).filter(([k]) => k !== inflightKey)
           ),
         }));
-        tea.notify.error('加载任务列表失败');
+        tea.notify.error(i18n.t('backend.loadTasksFailed'));
         return [];
       }
     })();
 
-    set((s) => ({ inflightTasks: { ...s.inflightTasks, [teamId]: promise } }));
+    set((s) => ({ inflightTasks: { ...s.inflightTasks, [inflightKey]: promise } }));
     return promise;
   },
 
@@ -220,18 +266,20 @@ export const useBackendStore = create<BackendState>((set, get) => ({
 
   // 写操作后调：清所有缓存 + 广播刷新
   invalidate: () => {
-    set({
+    set((s) => ({
       teams: [],
       teamsLoaded: false,
       teamsLoading: false,
       agentsByTeam: {},
-      tasksByTeam: {},
+      tasksTotalByTeam: {},
+      tasksPagesByTeam: {},
       agentsLoadedTeamIds: new Set(),
-      tasksLoadedTeamIds: new Set(),
       inflightTeams: null,
       inflightAgents: {},
       inflightTasks: {},
-    });
+      // 写操作前的在途请求结果是旧数据，必须丢弃
+      epoch: s.epoch + 1,
+    }));
     emitBackendRefresh();
   },
 
@@ -240,31 +288,36 @@ export const useBackendStore = create<BackendState>((set, get) => ({
     set((s) => {
       const agentsLoadedTeamIds = new Set(s.agentsLoadedTeamIds);
       agentsLoadedTeamIds.delete(teamId);
-      const tasksLoadedTeamIds = new Set(s.tasksLoadedTeamIds);
-      tasksLoadedTeamIds.delete(teamId);
       const agentsByTeam = { ...s.agentsByTeam };
       delete agentsByTeam[teamId];
-      const tasksByTeam = { ...s.tasksByTeam };
-      delete tasksByTeam[teamId];
-      return { agentsLoadedTeamIds, tasksLoadedTeamIds, agentsByTeam, tasksByTeam };
+      const tasksPagesByTeam = { ...s.tasksPagesByTeam };
+      delete tasksPagesByTeam[teamId];
+      const tasksTotalByTeam = { ...s.tasksTotalByTeam };
+      delete tasksTotalByTeam[teamId];
+      return { agentsLoadedTeamIds, agentsByTeam, tasksPagesByTeam, tasksTotalByTeam };
     });
     emitBackendRefresh();
   },
 
   // 登出 / 401 时调：清所有缓存但不广播事件
   clearAll: () => {
-    set({
+    set((s) => ({
       teams: [],
+      // 同步清 store 内的 activeTeamId（writeActiveTeamId(null) 只清 localStorage，
+      // 这里兜底清内存态，避免无 useTeams 挂载监听时残留旧 team）
+      activeTeamId: null,
       teamsLoaded: false,
       teamsLoading: false,
       agentsByTeam: {},
-      tasksByTeam: {},
+      tasksTotalByTeam: {},
+      tasksPagesByTeam: {},
       agentsLoadedTeamIds: new Set(),
-      tasksLoadedTeamIds: new Set(),
       inflightTeams: null,
       inflightAgents: {},
       inflightTasks: {},
-    });
+      // 自增代数：让旧会话的在途请求结果在返回后被丢弃
+      epoch: s.epoch + 1,
+    }));
   },
 }));
 
@@ -343,21 +396,30 @@ export function useAgents(teamId: string | null | undefined): {
 /**
  * useTasks — 从 store 读指定 team 的 task 列表。
  */
-export function useTasks(teamId: string | null | undefined): Task[] {
+export function useTasks(teamId: string | null | undefined, page: number = 1, pageSize: number = 12): {
+  tasks: Task[];
+  total: number;
+  loading: boolean;
+} {
+  const offset = (page - 1) * pageSize;
+  const cacheKey = `${offset}:${pageSize}`;
   const tasks = useBackendStore((s) =>
-    teamId ? (s.tasksByTeam[teamId] ?? EMPTY_TASKS) : EMPTY_TASKS
+    teamId ? (s.tasksPagesByTeam[teamId]?.[cacheKey] ?? EMPTY_TASKS) : EMPTY_TASKS
   );
-  const loaded = useBackendStore((s) => (teamId ? s.tasksLoadedTeamIds.has(teamId) : true));
+  const total = useBackendStore((s) =>
+    teamId ? (s.tasksTotalByTeam[teamId] ?? 0) : 0
+  );
+  const loaded = useBackendStore((s) =>
+    teamId ? !!s.tasksPagesByTeam[teamId]?.[cacheKey] : true
+  );
   const fetchTasks = useBackendStore((s) => s.fetchTasks);
 
   useEffect(() => {
-    if (!teamId) return;
-    if (!loaded) {
-      void fetchTasks(teamId);
-    }
-  }, [teamId, loaded, fetchTasks]);
+    if (!teamId || loaded) return;
+    void fetchTasks(teamId, { limit: pageSize, offset });
+  }, [teamId, offset, pageSize, loaded, fetchTasks]);
 
-  return tasks;
+  return { tasks, total, loading: !!teamId && !loaded };
 }
 
 /**

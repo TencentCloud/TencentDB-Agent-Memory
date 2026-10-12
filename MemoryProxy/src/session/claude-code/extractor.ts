@@ -17,7 +17,12 @@ import { SKIP_LABEL, MORE_LABEL, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./f
 
 // ── Markers ────────────────────────────────────────────────────────────────────
 
-const SKIP_RE = /跳过|不关联|skip/i;
+// SKIP_RE（`/跳过|不关联|skip/i` 自由文本正则）已于 2026-09-21 删除：它历史上
+// 作为"用户自由文本回复 → BYPASS"的兜底路径，但 team/agent/task 阶段的 CC
+// form 现在**不再提供主动跳过按钮**（唯一入口是 asset_confirm 的
+// ASSET_CONFIRM_NO），这条兜底既无正当业务场景又会误伤。删除后契约变成：
+// extractor 只识别 SKIP_LABEL 精确文本；匹配失败一律 return null → 上层
+// attemptCount ≥ maxRetries 兜底。
 export const BYPASS_MARKER = "__bypass__" as const;
 export const MORE_MARKER = "__more__" as const;
 
@@ -191,11 +196,17 @@ function extractAgentTaskFromJson(content: string): { agentText: string | null; 
 /**
  * 轮1 提取：从用户答复中识别选定的 team_id。
  * Claude Code: 用户选择在 `role: "tool"` 消息中，走 JSON 解析。
+ *
+ * 返回值（对齐 extractTaskFromOptionText 三档姿势）：
+ *   - team_id string：命中真实 team
+ *   - MORE_MARKER：用户点了 "更多 →"，调用方翻页（team 分页 2026-09-03 新增）
+ *   - BYPASS_MARKER：用户选 SKIP / declined
+ *   - null：未识别
  */
 export function extractTeamFromOptionText(
   content: string,
   cachedTeams: TeamOption[],
-): string | null {
+): string | typeof MORE_MARKER | typeof BYPASS_MARKER | null {
   if (cachedTeams.length === 0) return null;
 
   // 先检查是否是拒绝/跳过（Chat about this / declined）
@@ -205,9 +216,15 @@ export function extractTeamFromOptionText(
 
   const teamText = extractAnswerFromJson(content);
 
-  // 检测"本次不关联"→ bypass
-  if (teamText && (teamText.includes(SKIP_LABEL) || SKIP_RE.test(teamText.trim()))) {
+  // 检测"本次不关联"→ bypass（只识别 SKIP_LABEL 精确文本，SKIP_RE 自由文本
+  // 兜底已删，见文件顶部说明）
+  if (teamText && teamText.includes(SKIP_LABEL)) {
     return BYPASS_MARKER;
+  }
+
+  // 检测 "更多 →" → 翻页 (与 extractFromOptionText / extractTaskFromOptionText 一致)
+  if (teamText && teamText.includes(MORE_LABEL)) {
+    return MORE_MARKER;
   }
 
   // 匹配策略
@@ -304,6 +321,10 @@ function matchTaskInTeam(text: string, team: TeamOption): string | undefined {
  *   - MORE_MARKER：用户点了 "更多 →"，调用方翻页；
  *   - BYPASS_MARKER：declined / 空答复 / 兼容旧表单的显式跳过；
  *   - null：identify 得到答案但匹配不到 team.tasks（调用方按未识别 → bypass 处理）。
+ *
+ * defaultTaskId 兜底关联通过 fetchTeamsAndAgents 头部注入实现 —— 用户选"本次
+ * 不关联任务" label 时走 matchTaskInTeam 命中虚拟条目、返回 defaultTaskId，无
+ * 需在此单独分支。
  */
 export function extractTaskFromOptionText(
   content: string,
@@ -321,14 +342,13 @@ export function extractTaskFromOptionText(
   // 翻页
   if (answer.includes(MORE_LABEL)) return MORE_MARKER;
 
-  // 兼容旧表单：老 UI 里的 "跳过（不选择任务）" 或用户手打 "跳过 / skip / 不关联"
-  // → 显式 bypass。新 UI 已删除该按钮，正常流程不会走到。
-  if (answer.includes(SKIP_LABEL) || SKIP_RE.test(answer.trim())) {
-    return BYPASS_MARKER;
-  }
-
+  // 先尝试正常匹配 —— defaultTaskId 虚拟条目的 label 是"暂时跳过"，能命中
+  // matchTaskInTeam 返回 defaultTaskId（不算 BYPASS）。SKIP_RE 自由文本兜底
+  // 已删（见文件顶部说明），未命中一律 return null，交由上层 attemptCount 兜底。
   const taskId = matchTaskInTeam(answer, team);
-  return taskId ?? null;
+  if (taskId) return taskId;
+
+  return null;
 }
 
 /**
@@ -359,8 +379,9 @@ export function extractFromOptionText(
     return { agent_id: MORE_MARKER };
   }
 
-  // 检测 "本次不关联" → bypass
-  if (agentText && (agentText.includes(SKIP_LABEL) || SKIP_RE.test(agentText.trim()))) {
+  // 检测 "本次不关联" → bypass（只识别 SKIP_LABEL 精确文本，SKIP_RE 自由文本
+  // 兜底已删，见文件顶部说明）
+  if (agentText && agentText.includes(SKIP_LABEL)) {
     return { agent_id: BYPASS_MARKER };
   }
 
@@ -370,12 +391,11 @@ export function extractFromOptionText(
   if (!agentId) agentId = matchAgentInTeam(content, team);
   if (!agentId) return null;
 
-  // Resolve task
+  // Resolve task —— SKIP_RE 自由文本兜底已删（见文件顶部说明），无条件调用
+  // matchTaskInTeam；未命中即保持 taskId=undefined 走默认 task 逻辑。
   let taskId: string | undefined;
   const taskHay = taskText ?? content;
-  if (!SKIP_RE.test(taskHay)) {
-    taskId = matchTaskInTeam(taskHay, team);
-  }
+  taskId = matchTaskInTeam(taskHay, team);
 
   return { agent_id: agentId, task_id: taskId };
 }

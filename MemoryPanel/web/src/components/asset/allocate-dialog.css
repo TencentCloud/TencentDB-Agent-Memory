@@ -1,0 +1,48 @@
+/**
+ * AllocateAssetDialog / AllocateSkillDialog / ForkSkillDialog 共用样式补丁。
+ */
+
+._memory-allocate-team-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  margin-bottom: 8px;
+}
+
+._memory-allocate-team-name {
+  font-weight: 500;
+  color: var(--tea-color-text-primary);
+}
+
+._memory-allocate-desc {
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  line-height: 18px;
+  margin-bottom: 8px;
+}
+
+._memory-allocate-desc-asset {
+  font-family: var(--font-mono);
+  color: var(--tea-color-text-brand-default);
+  word-break: break-all;
+}
+
+._memory-allocate-desc-muted {
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-allocate-preview-name {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+}

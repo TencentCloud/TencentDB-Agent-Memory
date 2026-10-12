@@ -15,6 +15,8 @@ import { getEnv } from "../utils/env.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
+// v2.6 方案 E fallback:yaml 未配 supportedAgents 时用此常量
+import { DEFAULT_SUPPORTED_AGENTS_FALLBACK } from "../metadata/default-supported-agents.js";
 
 // ============================
 // Gateway config types
@@ -35,6 +37,47 @@ import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
  *     May require deployment-specific remote backends.
  */
 export type DeployMode = "standalone" | "service";
+
+/**
+ * FS-dimension backend selection (dimension ②, symmetric to STORE_MODE for DB).
+ *
+ * - `local` — LocalStorageBackend (filesystem under data.baseDir)
+ * - `cos`   — per-instance CosStorageBackend
+ * - `rowfs` — ProfileRowStorageBackend over a profile-row-capable store
+ *             (requires STORE_MODE whose store serves profile rows; the
+ *             combination is validated at assembly, not here)
+ *
+ * env: `FILE_STORE_MODE`; yaml: `data.fileStore`. Default by deploy mode
+ * (§5.3.1): service → cos, standalone → local.
+ */
+export type FileStoreMode = "local" | "cos" | "rowfs";
+
+/**
+ * Backend for the composite's non-profile key space ("others") when
+ * `fileStore === "rowfs"` (env `FILE_STORE_OTHERS` / yaml
+ * `data.fileStoreOthers`). `mongofs` keeps every byte in the instance's
+ * Mongo database (the TCS zero-disk form) and is only legal with
+ * STORE_MODE=mongodb — validated by the selection layer, not here.
+ */
+export type FileStoreOthersMode = "local" | "cos" | "mongofs";
+
+/**
+ * Resolve the P9 kill switch (`TDAI_BACKEND_RESOLVER` / `features.backendResolver`).
+ *
+ * Default `true`: the assembly layer resolves backends through the
+ * `BackendResolver` selection layer. Set to `off`/`false`/`0` to fall back to
+ * the legacy global-mode branches (R1 缓解：保留旧分支开关). Invalid values
+ * fail fast, consistent with {@link resolveFileStoreMode}.
+ */
+export function resolveBackendResolverFlag(raw: string | undefined): boolean {
+  if (raw === undefined) return true;
+  const v = raw.trim().toLowerCase();
+  if (v === "off" || v === "false" || v === "0") return false;
+  if (v === "on" || v === "true" || v === "1") return true;
+  throw new Error(
+    `invalid TDAI_BACKEND_RESOLVER/features.backendResolver: ${JSON.stringify(raw)} (expected on/off)`,
+  );
+}
 
 export interface RedisConfig {
   host: string;
@@ -62,10 +105,24 @@ export interface WorkerConfig {
   pollMs: number;
   /** 并发消费协程数 (default: 60) */
   concurrency: number;
+  /** 分布式执行锁 TTL。 */
+  lockTtlMs?: number;
+  /** PEL 消息可被接管前的 idle 时间，必须大于 lockTtlMs。 */
+  pendingStaleMs?: number;
+  /** PEL stale 扫描间隔。 */
+  pendingRecoveryIntervalMs?: number;
+  /** parked/lock-free 在途任务的 PEL 心跳间隔。 */
+  parkedClaimHeartbeatMs?: number;
+  /** 同时抢锁重试的 scope 上限。 */
+  lockRetryConcurrency?: number;
+  /** 锁冲突停车上限；未配置时由 PipelineWorker 按并发数计算。 */
+  maxParkedTasks?: number;
 }
 
 export interface CosExtraConfig {
   domain?: string;
+  /** Generation log retention in days. Default: 30. Set 0 to disable lifecycle management. */
+  generationLogRetentionDays: number;
 }
 
 export interface KafkaConfig {
@@ -151,7 +208,7 @@ export interface LangfuseConfig {
  *     protocol: "grpc"
  *     serviceName: "core"
  *     serviceVersion: "1.0.0"
- *     tenantId: "18910#apm-log-dg3527fad4feeb6c#18597_190149___apm"
+ *     tenantId: "<APM_TENANT_ID>"
  *     metricExportInterval: 60
  *     logExportInterval: 5
  *   clickhouse:
@@ -274,6 +331,27 @@ export interface GatewayConfig {
   data: {
     /** Base directory for TDAI data storage. */
     baseDir: string;
+    /**
+     * FS-dimension backend switch (env `FILE_STORE_MODE` / yaml `data.fileStore`).
+     * Always resolved (default applied by deploy mode, §5.3.1).
+     */
+    fileStore: FileStoreMode;
+    /**
+     * Rowfs "others" switch (env `FILE_STORE_OTHERS` / yaml
+     * `data.fileStoreOthers`). Always resolved; only consumed when
+     * `fileStore === "rowfs"`.
+     */
+    fileStoreOthers: FileStoreOthersMode;
+  };
+  features: {
+    /**
+     * P9: route store/storage assembly through the BackendResolver selection
+     * layer. `false` → legacy global-mode branches (rollback switch).
+     *
+     * env: `TDAI_BACKEND_RESOLVER` (on/off); yaml: `features.backendResolver`.
+     * Default: true.
+     */
+    backendResolver: boolean;
   };
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
@@ -306,6 +384,44 @@ export interface GatewayConfig {
    * env: TDAI_METADATA_*
    */
   metadata: GatewayMetadataConfig;
+  /**
+   * Task 外部来源配置（env 优先于 yaml；见 applyTaskSourceEnvFromGatewayConfig）。
+   * yaml: taskSource.*（驼峰键，与 metadata / skill 等段同风格）
+   * env:  TASK_SOURCE_* / TAI_PAT_URL
+   *
+   * 各来源下有哪些键由 provider 自己的 requiredEnv 声明，通用层不预设，
+   * 故 sources 用 Record 而非固定字段；驼峰键 → env 名的转换统一由
+   * task-source-env.ts 负责，此处只保留结构化配置。
+   *
+   * 注意：overrides 里若传本字段会**整体替换**（与 metadata / upstream 同，
+   * 不做一层浅合并），传部分字段会丢掉从 yaml 解析出的其余字段。
+   */
+  taskSource: GatewayTaskSourceConfig;
+  /**
+   * Analytics 查询模块配置（读取 Proxy 侧 ClickHouse 的 usage/session/tool-call 数据）。
+   * 与 observability.clickhouse（OTel 导出到 tdai_eval）完全独立。
+   *
+   * env: ANALYTICS_CLICKHOUSE_*
+   * yaml: analytics.clickhouse.*
+   */
+  analytics?: {
+    clickhouse: ClickHouseConfig;
+  };
+  /**
+   * v2 InstanceUpstream:supported-agents 元数据。
+   * 详见 docs/design/2026-08-25-instance-upstream-config.md §6.A 数据来源与同步机制。
+   *
+   * 事实源在 Proxy `src/supported-agents.ts` 代码常量;这里的 yaml 是 Core 侧运行时副本,
+   * 用于 §6.A supported-agents HTTP 接口 + Core store 层 seed default 组。
+   *
+   * 缺失或空数组时,Core 侧的 seed 逻辑触发时会拿到空数组 → 不 seed default 行,
+   * Panel B1 list 返回 items=[] → Proxy 侧走"零行 fallback",行为等同 v1(全走全局 upstream)。
+   * 这样保证 Core yaml 忘配也不会导致业务中断,但缺配置时 v2 面板 UI 表现异常(空列表)。
+   */
+  upstream: {
+    supportedAgents: import("../metadata/types.js").SupportedAgent[];
+  };
+
   /** Offload server executor 配置 (yaml: offload) */
   offload: {
     forceTriggerThreshold: number;
@@ -356,6 +472,33 @@ export interface GatewayMetadataConfig {
   systemUser?: GatewayMetadataSystemUserConfig;
 }
 
+/**
+ * Task 外部来源配置（yaml: `taskSource`）。
+ *
+ * 沿用 yaml 里其它段的**驼峰**风格：键是配置项（驼峰），不是 env 名。
+ * 由 task-source-env.ts 把驼峰键转成 provider 实际读取的
+ * `TASK_SOURCE_<ID>_<SUFFIX>` 再回填 env。
+ */
+export interface GatewayTaskSourceConfig {
+  /** 启用的来源 id，逗号分隔（对应 env `TASK_SOURCE_ENABLED`）。 */
+  enabled?: string;
+  /**
+   * 各来源自己的配置，键是来源 id（小写，如 `tapd`）。
+   *
+   * 每个来源下的键是驼峰配置项名，会转成 `TASK_SOURCE_<ID>_<大写下划线形式>`。
+   * 例如 `tapd: { mcpUrl }` → `TASK_SOURCE_TAPD_MCP_URL`。
+   *
+   * 之所以不预设有哪些键：后缀由 provider 自己的 `requiredEnv` 声明
+   * （如 TAPD 是 MCP_URL / SITE_BASE_URL），通用层不该知道。
+   */
+  sources?: Record<string, Record<string, string>>;
+  /**
+   * 跨来源共用的令牌申请页（对应 env `TAI_PAT_URL`）。
+   * 多个来源共用同一个令牌页（如太湖 PAT），故提到顶层而非各来源下。
+   */
+  taiPatUrl?: string;
+}
+
 // ============================
 // Config loading
 // ============================
@@ -381,6 +524,59 @@ export function parseBrokers(brokers: string | string[]): string[] {
 }
 
 /**
+ * Resolve the FS-dimension switch (`FILE_STORE_MODE` / `data.fileStore`).
+ *
+ * Semantics (design doc §5.3.1, 2026-08-31 定稿):
+ * - unset → default by deploy mode: service → `cos`, standalone → `local`;
+ * - set to a valid value → that value wins over the default;
+ * - set to anything else → config parse failure, fail-fast (throw).
+ */
+export function resolveFileStoreMode(
+  raw: string | undefined,
+  deployMode: DeployMode,
+): FileStoreMode {
+  if (raw === undefined) return deployMode === "service" ? "cos" : "local";
+  if (raw === "local" || raw === "cos" || raw === "rowfs") return raw;
+  throw new Error(
+    `invalid FILE_STORE_MODE/data.fileStore: ${JSON.stringify(raw)} (expected "local" | "cos" | "rowfs")`,
+  );
+}
+
+/**
+ * Resolve the rowfs "others" switch (`FILE_STORE_OTHERS` /
+ * `data.fileStoreOthers`). Only meaningful with `fileStore === "rowfs"`;
+ * same semantics as {@link resolveFileStoreMode}: unset → per-mode default,
+ * invalid → fail-fast. The `mongofs × STORE_MODE` legality check happens in
+ * the selection layer (`validateResolution`), not here.
+ */
+export function resolveFileStoreOthersMode(
+  raw: string | undefined,
+  deployMode: DeployMode,
+): FileStoreOthersMode {
+  if (raw === undefined) return deployMode === "service" ? "cos" : "local";
+  if (raw === "local" || raw === "cos" || raw === "mongofs") return raw;
+  throw new Error(
+    `invalid FILE_STORE_OTHERS/data.fileStoreOthers: ${JSON.stringify(raw)} (expected "local" | "cos" | "mongofs")`,
+  );
+}
+
+/**
+ * Overrides accepted by {@link loadGatewayConfig} / the TdaiGateway constructor.
+ *
+ * `server` / `data` / `llm` are merged one level deep onto the parsed base
+ * (see the merge at the end of loadGatewayConfig), so callers may pass partial
+ * nested blocks — e.g. `data: { baseDir }` keeps the resolved `fileStore`
+ * default. Typing them as nested Partial makes the type match the runtime
+ * merge behaviour.
+ */
+export type GatewayConfigOverrides = Omit<Partial<GatewayConfig>, "server" | "data" | "llm" | "features"> & {
+  server?: Partial<GatewayConfig["server"]>;
+  data?: Partial<GatewayConfig["data"]>;
+  features?: Partial<GatewayConfig["features"]>;
+  llm?: Partial<GatewayConfig["llm"]>;
+};
+
+/**
  * Load gateway config from file + environment variables.
  *
  * Resolution order for config file:
@@ -389,7 +585,7 @@ export function parseBrokers(brokers: string | string[]): string[] {
  * 3. `<dataDir>/tdai-gateway.yaml` or `<dataDir>/tdai-gateway.json`
  * 4. Pure environment-variable config (no file)
  */
-export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayConfig {
+export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayConfig {
   let fileConfig: Record<string, unknown> = {};
 
   // Try to load config file
@@ -455,6 +651,13 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
     },
+    // env 存在时直接用 env 解析(可显式关闭 yaml);
+    // env 未设置才回退 yaml,与其他 LLM 字段语义一致。
+    stream: (() => {
+      const envVal = env("TDAI_LLM_STREAM");
+      if (envVal !== undefined) return envVal === "true";
+      return bool(llmConfig, "stream") ?? false;
+    })(),
   };
 
   // Memory config (reuse the plugin's parseConfig for full compatibility)
@@ -543,6 +746,25 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const rawMode = env("TDAI_DEPLOY_MODE") ?? str(fileConfig, "deployMode") ?? "standalone";
   const deployMode: DeployMode = rawMode === "service" ? "service" : "standalone";
 
+  // FS-dimension switch (dimension ②). env > yaml > deploy-mode default.
+  // An explicitly-set but invalid value is a config parse failure → fail-fast
+  // (§5.3.1 rule 2); the rowfs × store-mode combination check happens at
+  // assembly time (D8③), not here.
+  const fileStore = resolveFileStoreMode(
+    env("FILE_STORE_MODE") ?? str(dataConfig, "fileStore"),
+    deployMode,
+  );
+  const fileStoreOthers = resolveFileStoreOthersMode(
+    env("FILE_STORE_OTHERS") ?? str(dataConfig, "fileStoreOthers"),
+    deployMode,
+  );
+
+  // P9 kill switch: assembly via BackendResolver (default) vs legacy branches.
+  const featuresConfig = obj(fileConfig, "features");
+  const backendResolver = resolveBackendResolverFlag(
+    env("TDAI_BACKEND_RESOLVER") ?? (bool(featuresConfig, "backendResolver") === false ? "off" : undefined),
+  );
+
   // State backend (env > yaml > auto from deployMode)
   const rawBackend = env("STATE_BACKEND") ?? str(fileConfig, "stateBackend");
   const stateBackend = rawBackend === "redis" || rawBackend === "local" ? rawBackend : undefined;
@@ -589,13 +811,25 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const worker: WorkerConfig = {
     pollMs: envInt("WORKER_POLL_MS") ?? num(workerConfig, "pollMs") ?? 200,
     concurrency: envInt("WORKER_CONCURRENCY") ?? num(workerConfig, "concurrency") ?? 60,
+    lockTtlMs: envInt("WORKER_LOCK_TTL_MS") ?? num(workerConfig, "lockTtlMs"),
+    pendingStaleMs: envInt("WORKER_PENDING_STALE_MS") ?? num(workerConfig, "pendingStaleMs"),
+    pendingRecoveryIntervalMs: envInt("WORKER_PENDING_RECOVERY_INTERVAL_MS") ?? num(workerConfig, "pendingRecoveryIntervalMs"),
+    parkedClaimHeartbeatMs: envInt("WORKER_PARKED_HEARTBEAT_MS") ?? num(workerConfig, "parkedClaimHeartbeatMs"),
+    lockRetryConcurrency: envInt("WORKER_LOCK_RETRY_CONCURRENCY") ?? num(workerConfig, "lockRetryConcurrency"),
+    maxParkedTasks: envInt("WORKER_MAX_PARKED_TASKS") ?? num(workerConfig, "maxParkedTasks"),
   };
 
   // COS extra config
   const cosConfig = obj(fileConfig, "cos");
   const cos: CosExtraConfig = {
     domain: env("COS_DOMAIN") ?? str(cosConfig, "domain"),
+    generationLogRetentionDays: envInt("COS_GENERATION_LOG_RETENTION_DAYS")
+      ?? num(cosConfig, "generationLogRetentionDays")
+      ?? 30,
   };
+  if (!Number.isInteger(cos.generationLogRetentionDays) || cos.generationLogRetentionDays < 0) {
+    throw new Error("cos.generationLogRetentionDays must be a non-negative integer");
+  }
 
   // Observability config (yaml: observability.{otel,clickhouse,kafka}, env 兜底)
   const observabilityConfig = obj(fileConfig, "observability");
@@ -624,6 +858,22 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     username: str(chConfig, "username") ?? env("CLICKHOUSE_USERNAME") ?? "default",
     password: str(chConfig, "password") ?? env("CLICKHOUSE_PASSWORD") ?? "",
     database: str(chConfig, "database") ?? env("CLICKHOUSE_DATABASE") ?? "tdai_eval",
+  };
+
+  // Analytics ClickHouse config (reads Proxy CH — independent from observability CH)
+  const analyticsYaml = obj(fileConfig, "analytics");
+  const analyticsChYaml = obj(analyticsYaml, "clickhouse");
+  const analyticsChEnabledEnv = env("ANALYTICS_CLICKHOUSE_ENABLED");
+  const analyticsClickhouse: ClickHouseConfig = {
+    enabled: analyticsChEnabledEnv !== undefined
+      ? analyticsChEnabledEnv === "true"
+      : analyticsChYaml.enabled !== undefined
+        ? Boolean(analyticsChYaml.enabled)
+        : false,
+    endpoint: env("ANALYTICS_CLICKHOUSE_ENDPOINT") ?? str(analyticsChYaml, "endpoint") ?? "",
+    username: env("ANALYTICS_CLICKHOUSE_USERNAME") ?? str(analyticsChYaml, "username") ?? "default",
+    password: env("ANALYTICS_CLICKHOUSE_PASSWORD") ?? str(analyticsChYaml, "password") ?? "",
+    database: env("ANALYTICS_CLICKHOUSE_DATABASE") ?? str(analyticsChYaml, "database") ?? "context_proxy",
   };
 
   // Kafka config
@@ -688,6 +938,62 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
         }
       : undefined,
   };
+  /**
+   * Task 外部来源：yaml 用**驼峰**风格（与 metadata / skill 等段一致），
+   * 这里读成结构化配置，再由 task-source-env.ts 转成 env 名回填。
+   *
+   * 值已在文件加载时过一遍 expandEnvVars，所以 `${VAR}` 插值照样可用 ——
+   * 便于把内网地址继续留在 .env、只在 yaml 里做映射。
+   */
+  const taskSourceConfig = obj(fileConfig, "taskSource");
+  const sourcesRaw = obj(taskSourceConfig, "sources");
+  const taskSourceSources: Record<string, Record<string, string>> = {};
+  for (const [sourceId, raw] of Object.entries(sourcesRaw)) {
+    const id = sourceId.trim();
+    if (!id || !isSafeTaskSourceId(id)) continue;
+    const entries = (raw && typeof raw === "object" && !Array.isArray(raw))
+      ? raw as Record<string, unknown>
+      : {};
+    const cfg: Record<string, string> = {};
+    for (const [k, v] of Object.entries(entries)) {
+      if (typeof v !== "string") continue;
+      const key = k.trim();
+      if (!key) continue;
+      cfg[key] = v.trim();
+    }
+    if (Object.keys(cfg).length) taskSourceSources[id] = cfg;
+  }
+  const taskSource: GatewayTaskSourceConfig = {
+    enabled: str(taskSourceConfig, "enabled")?.trim() || undefined,
+    sources: Object.keys(taskSourceSources).length ? taskSourceSources : undefined,
+    taiPatUrl: str(taskSourceConfig, "taiPatUrl")?.trim() || undefined,
+  };
+
+  // v2 InstanceUpstream 的 supported-agents(§6.A):
+  // ── 数据源优先级(v2.6+) ──
+  //   1. yaml `upstream.supportedAgents` **非空** → 以 yaml 为准(允许运维临时下线某 agent)
+  //   2. yaml 未配 / 空数组 → **自动 fallback** 到 `DEFAULT_SUPPORTED_AGENTS_FALLBACK`
+  //      (Core 代码常量,与 Proxy `src/supported-agents.ts` 一一对应)
+  //
+  // 这样 Core 升级上线新 agent 时,只要**同步改 fallback 常量**即可,无需强制运维改 yaml,
+  // 避免"忘配 yaml → seed 空数组 → 老实例行为静默丢失"的坑。
+  const upstreamConfig = obj(fileConfig, "upstream");
+  const supportedAgentsRaw = (upstreamConfig["supportedAgents"] ?? []) as unknown[];
+  const parsedFromYaml: import("../metadata/types.js").SupportedAgent[] = Array.isArray(supportedAgentsRaw)
+    ? supportedAgentsRaw
+        .filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null)
+        .map((e) => ({
+          agent_source: String(e.agent_source ?? ""),
+          protocol: (e.protocol as "anthropic" | "openai-chat" | "openai-responses") ?? "openai-chat",
+          display_name: String(e.display_name ?? ""),
+        }))
+        .filter((a) => a.agent_source !== "")
+    : [];
+  // yaml 有值(非空)以 yaml 为准;否则 fallback 到代码常量
+  const supportedAgents = parsedFromYaml.length > 0
+    ? parsedFromYaml
+    : [...DEFAULT_SUPPORTED_AGENTS_FALLBACK];
+  const upstream = { supportedAgents };
 
   const offloadConfig = obj(fileConfig, "offload");
   const offload = {
@@ -714,7 +1020,8 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     stateBackend,
     instanceId,
     server: { port, host, apiKey, corsOrigins },
-    data: { baseDir },
+    data: { baseDir, fileStore, fileStoreOthers },
+    features: { backendResolver },
     llm,
     memory,
     redis,
@@ -723,7 +1030,10 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     worker,
     cos,
     observability,
+    analytics: { clickhouse: analyticsClickhouse },
     metadata,
+    upstream,
+    taskSource,
     offload,
     skill: skillFromAnywhere,
   };
@@ -737,6 +1047,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     ...overrides,
     server: { ...base.server, ...(overrides.server ?? {}) },
     data: { ...base.data, ...(overrides.data ?? {}) },
+    features: { ...base.features, ...(overrides.features ?? {}) },
     llm: { ...base.llm, ...(overrides.llm ?? {}) },
   };
 }
@@ -819,6 +1130,19 @@ function envInt(key: string): number | undefined {
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {
   const v = c[key];
   return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+/**
+ * 来源 id 的合法形状：小写字母 / 数字 / 连字符（如 `tapd`、`jira`）。
+ *
+ * 来源 id 会参与拼 env 名（`TASK_SOURCE_<大写ID>_<后缀>`），而 env 名里的
+ * 字符必须可控 —— 否则 yaml 能借 id 注入 `_` 或换行，把 env 名拼成
+ * `TASK_SOURCE_A_ENV_B` 之类意外名字，甚至覆盖其它变量。故收紧到这个字符集。
+ */
+const TASK_SOURCE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+function isSafeTaskSourceId(id: string): boolean {
+  return TASK_SOURCE_ID_PATTERN.test(id);
 }
 
 function str(src: Record<string, unknown>, key: string): string | undefined {

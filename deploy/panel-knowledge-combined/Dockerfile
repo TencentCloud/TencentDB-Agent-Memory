@@ -1,11 +1,21 @@
 FROM node:22-slim AS base
 
-RUN sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list 2>/dev/null || true
+# apt 源默认走 Debian 官方，公网可直接构建。内网构建加速：
+#   docker build --build-arg APT_MIRROR=mirrors.tencent.com .
+ARG APT_MIRROR=deb.debian.org
+RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+    fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" crash（干净 `npm
+# install` 稳定报 `Cannot read properties of null (reading 'edgesOut')`）。
+# base 里升到 11，三个 builder stage 全部继承。
+RUN npm install -g npm@11 --no-audit --no-fund
 
 WORKDIR /app
 
@@ -53,6 +63,7 @@ ENV NODE_ENV=production \
     LLM_TIMEOUT_MS=1200000 \
     KNOWLEDGE_DATA_DIR=/data/knowledge \
     KNOWLEDGE_DB_PATH=/data/knowledge/knowledge.db \
+    TDAI_AGENT_TEMPLATE_DIR=/data/knowledge/agent-templates \
     LOG_LEVEL=info \
     LOG_FORMAT=json
 
@@ -65,8 +76,8 @@ COPY --from=panel-builder /build/panel/web/dist /app/panel/web/dist
 COPY --from=knowledge-builder /build/knowledge/dist /app/knowledge/dist
 COPY --from=knowledge-builder /build/knowledge/node_modules /app/knowledge/node_modules
 COPY --from=knowledge-builder /build/knowledge/package.json /app/knowledge/package.json
-# Swagger UI 从这个路径读 openapi.yaml（src/server.ts:86）
-COPY --from=knowledge-builder /build/knowledge/docs/api/openapi.yaml /app/knowledge/docs/api/openapi.yaml
+# Swagger UI 从这个路径读 openapi.yaml（src/server.ts）
+COPY --from=knowledge-builder /build/knowledge/openapi.yaml /app/knowledge/openapi.yaml
 
 COPY start-combined.sh /usr/local/bin/start-combined.sh
 COPY README.md /app/README.md

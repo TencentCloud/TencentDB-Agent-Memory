@@ -1,26 +1,32 @@
 /**
  * Claude Code AskUserQuestion 分页布局器。
  *
- * 背景：CC AskUserQuestion 单 question 最多 4 个 option。以往我们按"3 个真实
- * 选项 + 1 个'更多→'"硬分页，导致 `total mod 3 == 1`（4、7、10、13…）时末页
- * 只剩 1 个真实选项。此时 form builder 会因 <2 选项 assert 失败，而 init.ts
- * 又在 MORE 处理里悄悄 auto-select 那个孤零零的选项 —— 用户从"点更多"直接
- * 跳到"被替我选中"，体验很怪。
+ * 背景：CC AskUserQuestion 单 question 最多 4 个 option。中间页需要留 1 个
+ * slot 给"更多 →"，所以最多塞 3 个真实项；末页无 MORE，可塞满 4 个。
  *
- * 新策略：**末页永远不能只有 1 个真实选项**。
- *   - total ≤ 4：单页展示所有（可用满 4 个 slot，不放 MORE）
- *   - total > 4 且 total mod 3 == 1：把倒数第二页减 1 匀到末页，让两页各 2 个
- *   - 其它：常规 3 每页 + MORE，末页 2 或 3 个
+ * 策略：
+ *   - total ≤ 4：单页展示所有（无 MORE）
+ *   - total > 4：前 N-1 页每页 3 个 + MORE，末页塞剩下的（∈ [2, 4]）
+ *
+ * 页数：`totalPages = ceil((total - 4) / 3) + 1`
+ *   - 前 N-1 页各 3 项 = 3(N-1) 项
+ *   - 末页 total - 3(N-1) 项
+ *   - 反过来推 N：total - 3(N-1) ∈ [2, 4] ⇔ N - 1 = ceil((total - 4) / 3)
  *
  * 效果：
- *   total=4  → 页 [4]                     （单页，无 MORE）
- *   total=5  → 页 [3+MORE, 2]             （无变化）
- *   total=6  → 页 [3+MORE, 3]             （无变化）
- *   total=7  → 页 [3+MORE, 2+MORE, 2]     （原为 3+MORE, 3+MORE, 1）
- *   total=8  → 页 [3+MORE, 3+MORE, 2]
- *   total=9  → 页 [3+MORE, 3+MORE, 3]
- *   total=10 → 页 [3+MORE, 3+MORE, 2+MORE, 2] （原为 3+MORE ×3, 1）
- *   total=13 → 页 [3+MORE ×3, 2+MORE, 2]
+ *   total=4  → [4]                   （单页）
+ *   total=5  → [3+MORE, 2]
+ *   total=6  → [3+MORE, 3]
+ *   total=7  → [3+MORE, 4]           ← 末页塞满 4，比"3+2+2"少 1 页
+ *   total=8  → [3+MORE, 3+MORE, 2]
+ *   total=9  → [3+MORE, 3+MORE, 3]
+ *   total=10 → [3+MORE, 3+MORE, 4]   ← 末页塞满 4
+ *   total=11 → [3+MORE, 3+MORE, 3+MORE, 2]
+ *   total=13 → [3+MORE ×3, 4]
+ *
+ * 每页 count 恒定 ≥ 2 ≤ 4，永不 solo末页 —— init.ts 的 autoSelectSolo* 兜底
+ * 分支从此进不到 MORE 翻页路径（total===1 的场景由 advanceFromAgentPicked 上
+ * 游 auto-select，也走不到 form）。
  *
  * agents 和 tasks 共用同一分页，行为一致。
  */
@@ -72,42 +78,16 @@ export function computePagination(total: number, pageIndex: number): PageSlice {
     };
   }
 
-  // 常规多页布局。当 total mod 3 == 1 时（5+ 且 ≡ 1 mod 3 = 7, 10, 13…），
-  // 把倒数第二页缩到 2 项，末页 2 项，避免 solo 末页。
-  const balanceLastTwo = safeTotal % CC_PAGE_SIZE === 1;
-
-  let totalPages: number;
-  if (balanceLastTwo) {
-    // 前 (total - 4) 项按 3 每页 + 剩下 4 项拆 2+2，共 (total-4)/3 + 2 页。
-    // total=7 → 前 3 项 1 页 + 2+2 = 3 页
-    // total=10 → 前 6 项 2 页 + 2+2 = 4 页
-    // total=13 → 前 9 项 3 页 + 2+2 = 5 页
-    totalPages = (safeTotal - 4) / CC_PAGE_SIZE + 2;
-  } else {
-    totalPages = Math.ceil(safeTotal / CC_PAGE_SIZE);
-  }
+  // total > 4 时：前 N-1 页各 3 real + MORE，末页塞 total - 3(N-1) 项（∈ [2, 4]）。
+  // N - 1 页承载 3 每页需 ≥ (total - 4) 项（末页最多 4），即 N-1 = ceil((total-4) / 3)。
+  const totalPages = Math.ceil((safeTotal - CC_MAX_OPTIONS) / CC_PAGE_SIZE) + 1;
 
   // 钳制 pageIndex 到合法范围（防御性）。
   const idx = Math.max(0, Math.min(pageIndex, totalPages - 1));
 
   const isLastPage = idx === totalPages - 1;
-  const isSecondLast = balanceLastTwo && idx === totalPages - 2;
-
-  let start: number;
-  let end: number;
-  if (balanceLastTwo && (isLastPage || isSecondLast)) {
-    // 倒数两页各 2 个：倒数第二页起点 = total - 4，末页起点 = total - 2
-    if (isSecondLast) {
-      start = safeTotal - 4;
-      end = safeTotal - 2;
-    } else {
-      start = safeTotal - 2;
-      end = safeTotal;
-    }
-  } else {
-    start = idx * CC_PAGE_SIZE;
-    end = Math.min(start + CC_PAGE_SIZE, safeTotal);
-  }
+  const start = idx * CC_PAGE_SIZE;
+  const end = isLastPage ? safeTotal : start + CC_PAGE_SIZE;
 
   return {
     start,

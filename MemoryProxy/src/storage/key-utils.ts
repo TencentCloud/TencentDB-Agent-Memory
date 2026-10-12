@@ -65,3 +65,20 @@ export function sessionDirOf(
   assertKeySegment("sessionId", sessionId);
   return `${bucket}/${spaceId}/${userId}/${agentSource}/${sessionId}/`;
 }
+
+/**
+ * 2 段版:`<bucket>/<spaceId>/<sessionId>/`。
+ *
+ * 给 BindingRepo 用 —— bridge 只凭 (spaceId, sessionId) 就要能读回身份,
+ * userId/agentSource 挪到 JSON 内部字段。见 docs/design/2026-08-03-binding-flatten.md。
+ * 老的 4 段 `sessionDirOf` 继续给 SessionRepo (ttl inj-sess.json) 用,不动。
+ */
+export function sessionBindingDirOf(
+  bucket: "ttl" | "nottl",
+  spaceId: string,
+  sessionId: string,
+): string {
+  assertKeySegment("spaceId", spaceId);
+  assertKeySegment("sessionId", sessionId);
+  return `${bucket}/${spaceId}/${sessionId}/`;
+}

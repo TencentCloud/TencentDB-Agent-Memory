@@ -1,20 +1,20 @@
 /**
- * Capture hook (client mode):
+ * Capture hook (v3 client mode):
  *   1. Extract user/assistant messages from the agent_end raw message array
  *   2. Apply position slice + (optional) timestamp cursor to keep only this turn
  *   3. Replace the polluted user message with the cached original prompt
  *   4. Sanitize text + strip code blocks (assistant) + filter noise
- *   5. POST the cleaned messages to the gateway via SDK addConversation
+ *   5. POST the cleaned messages to the gateway via SDK addConversation (/v3)
  *
  * Mirrors the structural cleanup in extensions/memory-tencentdb/src/core/conversation/l0-recorder.ts
  * (recordConversation), but does not write any local JSONL — the server is
  * authoritative for L0 storage.
  */
 
-import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts";
+import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { sanitizeText, stripCodeBlocks, shouldCaptureL0 } from "../sanitize.js";
 
-const TAG = "[memory-client][capture]";
+const TAG = "[memory-client-v3][capture]";
 
 interface Logger {
   debug?: (msg: string) => void;
