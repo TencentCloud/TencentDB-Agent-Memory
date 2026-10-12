@@ -18,6 +18,7 @@
 
 import crypto from "node:crypto";
 import { DEFAULT_ISOLATION_ID, type IMemoryStore } from "../store/types.js";
+import { buildDedupScopeFilter } from "../store/isolation.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
@@ -278,14 +279,17 @@ export async function writeMemory(params: {
     // by memory-cleaner (which reconciles against VectorStore as source of truth).
     if (vectorStore) {
       try {
-        const deleteFilter = teamId || userId || agentId || sessionId
-          ? { teamId, userId, agentId, sessionId: sessionId || undefined, sessionKey }
-          : undefined;
-        if (deleteFilter) {
-          await vectorStore.deleteL1Batch(decision.target_ids, deleteFilter);
-        } else {
-          await vectorStore.deleteL1Batch(decision.target_ids);
-        }
+        // When deleting by ID, isolate only by scope (team/user/agent) without
+        // sessionId/sessionKey — target_ids are cross-session old records the LLM
+        // explicitly decided to replace; including the current sessionId would let
+        // rowMatchesIsolation filter out those cross-session old records, so
+        // update/merge could not actually delete them (old and new coexist). This
+        // matches atomic/delete, which omits sessionId when deleting by id.
+        // buildDedupScopeFilter always returns a non-empty filter (user/agent
+        // normalized to "default") to avoid the filter disappearing when all three
+        // scope fields are empty, which would cause cross-tenant unisolated deletes.
+        const deleteFilter = buildDedupScopeFilter(teamId, userId, agentId);
+        await vectorStore.deleteL1Batch(decision.target_ids, deleteFilter);
         logger?.debug?.(`${TAG} VectorStore: deleted ${decision.target_ids.length} target record(s) for ${decision.action}`);
       } catch (err) {
         logger?.warn?.(
