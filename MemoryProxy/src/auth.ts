@@ -78,6 +78,9 @@ export async function verifyUserKey(userKey: string, serviceId: string): Promise
       headers: {
         "content-type": "application/json",
         "x-tdai-service-id": serviceId,
+        ...(config.serviceToken
+          ? { authorization: `Bearer ${config.serviceToken}` }
+          : {}),
       },
       body: JSON.stringify({ user_key: userKey }),
     };
