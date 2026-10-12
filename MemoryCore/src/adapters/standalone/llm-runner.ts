@@ -18,6 +18,7 @@
 
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import pLimit from "p-limit";
 import { generateText, streamText, tool, stepCountIs, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
@@ -32,12 +33,75 @@ import type { LLMUsage } from "../../core/report/metric-tracking-runner.js";
 
 const TAG = "[memory-tdai] [standalone-runner]";
 
+// ============================================================
+// GLOBAL rate-limit / concurrency state (ponytail: shortest path)
+// Shared across ALL runner instances/models, NOT per-instance.
+// ============================================================
+class GlobalRateLimiter {
+  private limit: ReturnType<typeof pLimit>;
+  private readonly maxConcurrent: number;
+  private readonly rateLimitPerMinute: number;
+  private timestamps: number[] = [];
+  private warnThrottled = false;
+
+  constructor(maxConcurrent: number, rateLimitPerMinute: number) {
+    this.maxConcurrent = maxConcurrent;
+    this.rateLimitPerMinute = rateLimitPerMinute;
+    this.limit = pLimit(maxConcurrent);
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    return this.limit(() => this.withRateLimit(fn));
+  }
+
+  private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
+    await this.ensureRateLimit();
+    return fn();
+  }
+
+  private ensureRateLimit(): Promise<void> {
+    if (this.rateLimitPerMinute <= 0) return Promise.resolve();
+    const now = Date.now();
+    const windowMs = 60_000;
+    const cutoff = now - windowMs;
+    while (this.timestamps.length && this.timestamps[0] < cutoff) {
+      this.timestamps.shift();
+    }
+    if (this.timestamps.length >= this.rateLimitPerMinute) {
+      const oldest = this.timestamps[0];
+      const waitMs = windowMs - (now - oldest) + 20;
+      if (!this.warnThrottled) {
+        console.warn(
+          `${TAG} GLOBAL rate limit reached (${this.rateLimitPerMinute}/min), will throttle new calls`,
+        );
+        this.warnThrottled = true;
+      }
+      return new Promise((resolve) => setTimeout(resolve, Math.max(waitMs, 0)))
+        .then(() => this.ensureRateLimit());
+    }
+    this.timestamps.push(Date.now());
+    this.warnThrottled = false;
+    return Promise.resolve();
+  }
+}
+
+let GLOBAL_RATE_LIMITER: GlobalRateLimiter | null = null;
+function getGlobalRateLimiter(maxConcurrent?: number, rateLimitPerMinute?: number): GlobalRateLimiter {
+  if (!GLOBAL_RATE_LIMITER) {
+    GLOBAL_RATE_LIMITER = new GlobalRateLimiter(
+      maxConcurrent ?? 6,
+      rateLimitPerMinute ?? 60,
+    );
+  }
+  return GLOBAL_RATE_LIMITER;
+}
+
 // Max iterations in the tool-call loop to prevent infinite loops
 const MAX_TOOL_ITERATIONS = 20;
 
-// ============================
+// ============================================================
 // experimental_telemetry.metadata 组装
-// ============================
+// ============================================================
 
 /**
  * 组装传给 Vercel AI SDK 的 experimental_telemetry.metadata。
@@ -73,9 +137,9 @@ function buildTelemetryMetadata(params: LLMRunParams): Record<string, unknown> {
   return meta;
 }
 
-// ============================
+// ============================================================
 // Configuration
-// ============================
+// ============================================================
 
 export interface StandaloneLLMConfig {
   /** OpenAI-compatible API base URL (e.g. "https://api.openai.com/v1"). */
@@ -109,11 +173,21 @@ export interface StandaloneLLMConfig {
    * 透传给调用方,只是"以流式协议请求上游后等待完整文本"的兼容层。
    */
   stream?: boolean;
+  /**
+   * 分钟级总请求上限（默认 60）。0 表示不限。
+   * 由 runner 在内部做滑动窗口限流。
+   */
+  rateLimitPerMinute?: number;
+  /**
+   * 最大并发 LLM 调用数（默认 6）。
+   * 由 runner 在内部做信号量限流。
+   */
+  maxConcurrentCalls?: number;
 }
 
-// ============================
+// ============================================================
 // Sandboxed tool execution helpers
-// ============================
+// ============================================================
 
 function resolveSandboxedPath(workspaceDir: string, relativePath: string): string | null {
   const resolved = path.resolve(workspaceDir, relativePath);
@@ -123,9 +197,9 @@ function resolveSandboxedPath(workspaceDir: string, relativePath: string): strin
   return resolved;
 }
 
-// ============================
+// ============================================================
 // Tool definitions (Vercel AI SDK `tool()` format)
-// ============================
+// ============================================================
 
 function createSandboxedTools(workspaceDir: string, logger?: Logger) {
   return {
@@ -169,7 +243,9 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         try {
           await fsPromises.mkdir(path.dirname(resolved), { recursive: true });
           await fsPromises.writeFile(resolved, args.content, "utf-8");
-          logger?.debug?.(`${TAG} write: "${args.path}" → ${Buffer.byteLength(args.content, "utf8")} bytes`);
+          logger?.debug?.(
+            `${TAG} write: "${args.path}" → ${Buffer.byteLength(args.content, "utf8")} bytes`,
+          );
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -258,13 +334,11 @@ export class StandaloneLLMRunner implements LLMRunner {
   private enableTools: boolean;
   private stream: boolean;
   private logger?: Logger;
-
-  /**
-   * Side-channel: 最近一次 run() 调用的 token usage。
-   * 由 MetricTrackingRunner 装饰器读取，用于精确上报 credit。
-   * 不改变 LLMRunner 接口签名。
-   */
   lastUsage?: LLMUsage;
+  private readonly rateLimitPerMinute: number;
+  private readonly maxConcurrentCalls: number;
+  private readonly limit: ReturnType<typeof pLimit>;
+  private readonly rateTimestamps: number[];
 
   constructor(opts: {
     config: StandaloneLLMConfig;
@@ -278,6 +352,10 @@ export class StandaloneLLMRunner implements LLMRunner {
     this.enableTools = opts.enableTools ?? false;
     this.stream = opts.stream ?? opts.config.stream ?? false;
     this.logger = opts.logger;
+    this.rateLimitPerMinute = opts.config.rateLimitPerMinute ?? 60;
+    this.maxConcurrentCalls = opts.config.maxConcurrentCalls ?? 6;
+    this.limit = pLimit(this.maxConcurrentCalls);
+    this.rateTimestamps = [];
   }
 
   async run(params: LLMRunParams): Promise<string> {
@@ -295,7 +373,7 @@ export class StandaloneLLMRunner implements LLMRunner {
 
     this.logger?.debug?.(
       `${TAG} run() start: taskId=${params.taskId}, model=${this.model}, ` +
-      `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
+        `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
     );
 
     // Create OpenAI-compatible provider via AI SDK
@@ -355,86 +433,103 @@ export class StandaloneLLMRunner implements LLMRunner {
         },
       };
 
-      // stream=true → streamText(给只吃流式的上游);否则 generateText。
-      // 读 totalUsage 而不是单 step 的 usage —— tool-call 多 step 时后者只报最后一步,
-      // 会漏掉前序工具调用请求的用量,导致 credit 计费偏低。
-      // ai@6.0.164 的字段是 inputTokens/outputTokens/totalTokens。
-      const { text, usage, steps } = this.stream
-        ? await (async () => {
-            const streamResult = streamText(callParams);
-            return {
-              text: ((await streamResult.text) ?? "").trim(),
-              usage: await streamResult.totalUsage,
-              steps: await streamResult.steps,
+      // Ponytail global rate-limit gate: minute quota + max-concurrency semaphore.
+      // This prevents 429 storms and keeps in-flight LLM calls bounded
+      // globally, not just per-runner.
+      const text = await getGlobalRateLimiter(this.maxConcurrentCalls, this.rateLimitPerMinute).run(
+        async () => {
+          // stream=true → streamText(给只吃流式的上游);否则 generateText。
+          // 读 totalUsage 而不是单 step 的 usage —— tool-call 多 step 时后者只报最后一步,
+          // 会漏掉前序工具调用请求的用量,导致 credit 计费偏低。
+          // ai@6.0.164 的字段是 inputTokens/outputTokens/totalTokens。
+          const { text, usage, steps } = await this.limit(() =>
+            this.stream
+              ? (async () => {
+                  const streamResult = streamText(callParams);
+                  return {
+                    text: ((await streamResult.text) ?? "").trim(),
+                    usage: await streamResult.totalUsage,
+                    steps: await streamResult.steps,
+                  };
+                })()
+              : (async () => {
+                  const genResult = await generateText(callParams);
+                  return {
+                    text: (genResult.text ?? "").trim(),
+                    usage: genResult.totalUsage,
+                    steps: genResult.steps,
+                  };
+                })(),
+          );
+
+          const totalMs = Date.now() - runStartMs;
+
+          // 暴露 token usage 到 side-channel（供 MetricTrackingRunner 读取）
+          // AI SDK 用 inputTokens/outputTokens,我们的内部 LLMUsage 沿用旧命名
+          // promptTokens/completionTokens 以匹配 MetricTrackingRunner。
+          if (usage) {
+            const promptTokens = usage.inputTokens ?? 0;
+            const completionTokens = usage.outputTokens ?? 0;
+            this.lastUsage = {
+              promptTokens,
+              completionTokens,
+              totalTokens: usage.totalTokens ?? promptTokens + completionTokens,
             };
-          })()
-        : await (async () => {
-            const genResult = await generateText(callParams);
-            return {
-              text: (genResult.text ?? "").trim(),
-              usage: genResult.totalUsage,
-              steps: genResult.steps,
-            };
-          })();
+          } else {
+            this.lastUsage = undefined;
+          }
+
+          this.logger?.debug?.(
+            `${TAG} run() completed: ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
+          );
+
+          // Log each step's activity (tool calls + text output)
+          for (const step of steps) {
+            const calls = step.toolCalls ?? [];
+            const textLen = step.text?.length ?? 0;
+            if (calls.length > 0) {
+              const callSummary = calls.map((tc) =>
+                `${tc.toolName}(${JSON.stringify(tc.input).slice(0, 120)})`,
+              ).join(", ");
+              this.logger?.debug?.(
+                `${TAG} step[${step.stepNumber}] toolCalls: ${callSummary}`,
+              );
+            }
+            if (textLen > 0) {
+              this.logger?.debug?.(
+                `${TAG} step[${step.stepNumber}] text: ${textLen} chars, finishReason=${step.finishReason}`,
+              );
+            }
+            if (calls.length === 0 && textLen === 0) {
+              this.logger?.debug?.(
+                `${TAG} step[${step.stepNumber}] empty (no tools, no text), finishReason=${step.finishReason}`,
+              );
+            }
+          }
+
+          // Metric
+          if (params.instanceId) {
+            report("llm_call", {
+              taskId: params.taskId,
+              provider: "standalone",
+              model: this.model,
+              inputLength: params.prompt.length,
+              outputLength: text.length,
+              totalDurationMs: totalMs,
+              success: true,
+              error: null,
+            });
+          }
+
+          return text;
+        },
+      );
 
       const totalMs = Date.now() - runStartMs;
 
-      // 暴露 token usage 到 side-channel（供 MetricTrackingRunner 读取）
-      // AI SDK 用 inputTokens/outputTokens,我们的内部 LLMUsage 沿用旧命名
-      // promptTokens/completionTokens 以匹配 MetricTrackingRunner。
-      if (usage) {
-        const promptTokens = usage.inputTokens ?? 0;
-        const completionTokens = usage.outputTokens ?? 0;
-        this.lastUsage = {
-          promptTokens,
-          completionTokens,
-          totalTokens: usage.totalTokens ?? promptTokens + completionTokens,
-        };
-      } else {
-        this.lastUsage = undefined;
-      }
-
       this.logger?.debug?.(
-        `${TAG} run() completed: ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
+        `${TAG} run() completed: ${totalMs}ms, output=${text.length} chars`,
       );
-
-      // Log each step's activity (tool calls + text output)
-      for (const step of steps) {
-        const calls = step.toolCalls ?? [];
-        const textLen = step.text?.length ?? 0;
-        if (calls.length > 0) {
-          const callSummary = calls.map((tc) =>
-            `${tc.toolName}(${JSON.stringify(tc.input).slice(0, 120)})`,
-          ).join(", ");
-          this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] toolCalls: ${callSummary}`,
-          );
-        }
-        if (textLen > 0) {
-          this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] text: ${textLen} chars, finishReason=${step.finishReason}`,
-          );
-        }
-        if (calls.length === 0 && textLen === 0) {
-          this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] empty (no tools, no text), finishReason=${step.finishReason}`,
-          );
-        }
-      }
-
-      // Metric
-      if (params.instanceId) {
-        report("llm_call", {
-          taskId: params.taskId,
-          provider: "standalone",
-          model: this.model,
-          inputLength: params.prompt.length,
-          outputLength: text.length,
-          totalDurationMs: totalMs,
-          success: true,
-          error: null,
-        });
-      }
 
       return text;
     } catch (err) {
@@ -457,6 +552,27 @@ export class StandaloneLLMRunner implements LLMRunner {
 
       throw err;
     }
+  }
+
+  private async ensureRateLimit(): Promise<void> {
+    if (this.rateLimitPerMinute <= 0) return;
+    const now = Date.now();
+    const windowMs = 60_000;
+    // Drop timestamps older than the window
+    const cutoff = now - windowMs;
+    while (this.rateTimestamps.length && this.rateTimestamps[0] < cutoff) {
+      this.rateTimestamps.shift();
+    }
+    if (this.rateTimestamps.length >= this.rateLimitPerMinute) {
+      const oldest = this.rateTimestamps[0];
+      const waitMs = windowMs - (now - oldest) + 20;
+      this.logger?.warn?.(
+        `${TAG} rate limit reached (${this.rateLimitPerMinute}/min), sleeping ${Math.max(waitMs, 0)}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, Math.max(waitMs, 0)));
+      return this.ensureRateLimit();
+    }
+    this.rateTimestamps.push(Date.now());
   }
 }
 
@@ -497,13 +613,19 @@ export class StandaloneLLMRunnerFactory implements LLMRunnerFactory {
     }
 
     this.logger?.debug?.(
-      `${TAG} Creating StandaloneLLMRunner: model=${model}, tools=${enableTools}`,
+      `[memory-tdai] [standalone-runner-factory] Creating StandaloneLLMRunner: model=${model}, ` +
+        `tools=${enableTools ? "enabled" : "disabled"}`,
     );
+
+    // Pre-warm global rate limiter so configs are applied even before the
+    // first run() invocation.
+    getGlobalRateLimiter(this.config.maxConcurrentCalls, this.config.rateLimitPerMinute);
 
     return new StandaloneLLMRunner({
       config: this.config,
       model,
       enableTools,
+      stream: opts?.stream,
       logger: this.logger,
     });
   }
