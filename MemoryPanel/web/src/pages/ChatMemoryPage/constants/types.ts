@@ -32,7 +32,8 @@ export interface MemoryBlock {
   agent_id?: string;
   uploaded_by_user_id: string;
   scope?: 'team' | 'private';
-  layer_counts: { L0_messages: number; L1: number; L2: number; L3: number };
+  /** 列表不预加载分层统计；选中后通过 layer 接口读取真实数量。 */
+  layer_counts?: { L0_messages: number; L1: number; L2: number; L3: number };
   bound_agent_count?: number;
   layers: {
     L0: ChatMemoryLayerItem[];
