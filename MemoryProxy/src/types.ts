@@ -558,6 +558,41 @@ export interface AgentUpstreamEntry {
   apiKey?: string;
 }
 
+/**
+ * MCP (Model Context Protocol) endpoint configuration.
+ *
+ * 挂载一个无状态 Streamable HTTP MCP 端点（`/mcp`），暴露只读 skill 工具集：
+ * `skill_search` / `skill_get` / `skill_read_file`。默认关闭（`enabled: false`）。
+ *
+ * 认证复用 `auth.ts` 的 `verifyUserKey` 用户体系（与主 handler early-auth 路径对称）。
+ * 调用身份由客户端配置的 header（`X-Team-Id` / `X-Agent-Id` / `X-User-Id`）优先，
+ * 服务端静态配置（`teamId` / `agentId` / `userId`）作为兜底。
+ *
+ * 详见 openspec/changes/add-skill-mcp-server/design.md。
+ */
+export interface McpConfig {
+  /** MCP 端点总开关。false（默认）= `/mcp` 路由不注册，零开销。 */
+  enabled: boolean;
+  /**
+   * 客户端未带 `Authorization: Bearer` header 时的兜底 user_key。
+   * 对齐 `upstream.apiKey` 语义——通过 `verifyUserKey` 校验，不在 proxy 侧比对。
+   * 空 = 无兜底（未带 key 的请求会被 `verifyUserKey` 拒绝；`auth.enabled:false` 时无影响）。
+   */
+  apiKey: string;
+  /**
+   * `verifyUserKey` 所需的 serviceId（对应 `x-tdai-service-id`）。
+   * 取 `X-Space-Id` header（如有）否则此静态配置。
+   * 空 = 不带（`auth.enabled:false` 时无影响；否则 verifyUserKey 会拒绝空 serviceId）。
+   */
+  spaceId: string;
+  /** 服务端身份兜底：客户端未携带 `X-Team-Id` header 时的 team_id。必须有值；两者均无时报错。 */
+  teamId: string;
+  /** 服务端身份兜底：客户端未携带 `X-Agent-Id` header 时的 agent_id。 */
+  agentId: string;
+  /** 服务端身份兜底（可选，仅 audit 用）：客户端未携带 `X-User-Id` header 时的 user_id。 */
+  userId: string;
+}
+
 /** Top-level proxy configuration (merged from config file + CLI args). */
 export interface ProxyConfig {
   server: {
@@ -703,6 +738,11 @@ export interface ProxyConfig {
    * 默认关闭。启用后不影响 Opik / Langfuse 等远程上报链路。
    */
   traceArchive: TraceArchiveConfig;
+  /**
+   * MCP endpoint configuration. Optional — `undefined` (or `enabled: false`) disables the feature entirely.
+   * 详见 `McpConfig` 注释。
+   */
+  mcp?: McpConfig;
 }
 
 export interface TraceArchiveConfig {
@@ -1146,6 +1186,15 @@ export interface RawYamlConfig {
   traceArchive?: {
     enabled?: boolean;
     dir?: string;
+  };
+  /** MCP endpoint configuration. Optional. */
+  mcp?: {
+    enabled?: boolean;
+    apiKey?: string;
+    spaceId?: string;
+    teamId?: string;
+    agentId?: string;
+    userId?: string;
   };
 }
 

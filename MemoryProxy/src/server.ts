@@ -13,12 +13,14 @@ import { handleModels } from "./modelsHandler.js";
 import { apiKeyToKeyId, extractBearerToken } from "./opik.js";
 import { createSkillBridgeHandler } from "./skill/skill-bridge.js";
 import { createMemoryBridgeHandler } from "./memory/memory-bridge.js";
+import { createMcpHandler } from "./mcp/handler.js";
 import { createInstanceDestroyHandler } from "./routes/instance-destroy.js";
 import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { createModelAliasHandler } from "./routes/model-aliases.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
+import { log } from "./report/log.js";
 import type { ProxyConfig } from "./types.js";
 
 const handleChatCompletions = withClientFacingModel(runOpenaiChatPipeline);
@@ -147,6 +149,22 @@ export function createApp(config: ProxyConfig): Hono {
   // 让 LLM 用 Bash 调 <proxy>/memory-bridge/v3/atomic/search 等，proxy 注入身份。
   const memoryBridgeHandler = createMemoryBridgeHandler(config);
   app.post("/memory-bridge/*", (c) => memoryBridgeHandler(c));
+
+  // ── MCP endpoint (Streamable HTTP 2026-07-28, 无状态) ──────────────────────
+  // 当 config.mcp.enabled=true 时注册；支持 skill_search / skill_get /
+  // skill_read_file 三个只读 skill 工具。GET/DELETE → 405。
+  if (config.mcp?.enabled) {
+    // Task 1.3：apiKey 为空时，无 Authorization header 的客户端会被 verifyUserKey 拒绝。
+    if (config.auth.enabled && !config.mcp.apiKey) {
+      log.info("mcp.startup.noApiKey", {
+        message:
+          "MCP 未配置 apiKey，无 Authorization header 的客户端将被 verifyUserKey 拒绝。" +
+          "如需无鉴权访问，请设置 auth.enabled=false 或在 mcp.apiKey 中提供兜底密钥。",
+      });
+    }
+    const mcpHandler = createMcpHandler(config);
+    app.all("/mcp", (c) => mcpHandler(c));
+  }
 
   // ── Ops endpoint（在 catch-all `POST /*` 之前注册） ───────────────────────
   // /v3/instance/proxy-destroy — shark 销毁实例时清理 proxy 侧 COS 缓存 +

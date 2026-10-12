@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@clickhouse/client": "^1.22.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@hono/node-server": "^1.13.7",
     "@langfuse/otel": "^5.9.0",
     "@langfuse/tracing": "^5.9.0",
