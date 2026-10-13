@@ -29,6 +29,7 @@ const MAX_CACHED_SESSIONS = 20;
 /** Routes sessionKey → per-session OffloadStateManager with LRU eviction. */
 export class SessionRegistry {
   private _sessions = new Map<string, SessionCtx>();
+  private _initializing = new Map<string, Promise<SessionCtx>>();
   private _dataRoot: string;
   readonly _registryId = ++SessionRegistry._registryCounter;
   private static _registryCounter = 0;
@@ -48,12 +49,26 @@ export class SessionRegistry {
    * to fully initialize storage paths and rebuild in-memory state from offload files.
    */
   async resolve(sessionKey: string, realSessionId?: string): Promise<SessionCtx> {
-    let entry = this._sessions.get(sessionKey);
+    const entry = this._sessions.get(sessionKey);
     if (entry) {
       entry.lastAccessMs = Date.now();
       return entry;
     }
 
+    const pending = this._initializing.get(sessionKey);
+    if (pending) return pending;
+
+    const initializing = this._createSession(sessionKey, realSessionId);
+    this._initializing.set(sessionKey, initializing);
+    try {
+      return await initializing;
+    } finally {
+      // Failed initialization remains retryable; completed sessions live in _sessions.
+      this._initializing.delete(sessionKey);
+    }
+  }
+
+  private async _createSession(sessionKey: string, realSessionId?: string): Promise<SessionCtx> {
     // New session — create manager and fully initialize
     const mgr = new OffloadStateManager();
     const parsed = parseSessionKey(sessionKey);
@@ -73,7 +88,7 @@ export class SessionRegistry {
       await mgr.init(this._dataRoot, fallbackName, fallbackSessionId);
     }
 
-    entry = { sessionKey, manager: mgr, lastAccessMs: Date.now() };
+    const entry = { sessionKey, manager: mgr, lastAccessMs: Date.now() };
     this._sessions.set(sessionKey, entry);
 
     // LRU eviction
