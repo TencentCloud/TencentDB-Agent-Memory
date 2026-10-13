@@ -2,9 +2,50 @@
 
 import { readFileSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
-import type { CostGuardConfig, ProxyConfig, RawYamlConfig } from "./types.js";
+import type {
+  CostGuardConfig,
+  ProxyConfig,
+  RawSelectionYaml,
+  RawSkillSelectionYaml,
+  RawYamlConfig,
+  SelectionConfig,
+  SelectionStrategiesConfig,
+  SelectionStrategyConfig,
+  SkillSelectionConfig,
+} from "./types.js";
 
 const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
+
+/** First line of a key file; "" when no path is given. A missing file is a startup error. */
+export function readKeyFile(path: string | undefined): string {
+  if (!path?.trim()) return "";
+  return readFileSync(path.trim(), "utf8").split(/\r?\n/, 1)[0].trim();
+}
+
+/** 通用选择策略默认值。密钥默认为空，只从 env（或 YAML `${VAR}` 引用）解析。 */
+const DEFAULT_SELECTION: SelectionConfig = {
+  strategies: {
+    jev: {
+      provider: "jev",
+      endpoint: "https://api.typesafe.ai/v1/systemone",
+      apiKey: "",
+      model: "jev-latest",
+      timeoutMs: 3000,
+      minConfidence: 0,
+    },
+  },
+};
+
+/** Proxy 侧 skill 选择默认值。`enabled: false` → legacy，行为与改造前一致。 */
+const DEFAULT_SKILL_SELECTION: SkillSelectionConfig = {
+  enabled: false,
+  strategy: "jev",
+  contextCharBudget: 6000,
+  contentCharBudget: 24_000,
+  maxCandidates: 20,
+  // 用对话 query 检索候选，让领域专项 skill 能进候选集。
+  useConversationQuery: true,
+};
 
 export const DEFAULT_CONFIG: ProxyConfig = {
   server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 600_000 },
@@ -30,6 +71,12 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     flushThreshold: 50,
     ttlDays: 0,
   },
+  wecomIdentity: {
+    enabled: false,
+    table: "api_key_wecom_names",
+    cacheTtlMs: 60 * 60 * 1000,
+    maxNameLength: 128,
+  },
   redis: {
     enabled: false,
     url: "",
@@ -39,6 +86,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     db: 0,
     keyPrefix: "cg:sess:",
     ttlSeconds: 1800,
+    turnSeqTtlDays: 30,
   },
   rateLimit: {
     tpm: 1_000_000,
@@ -108,7 +156,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   tdai: {
     enabled: false,
     endpoint: "",
-    apiKey: "local-proxy",
+    apiKey: "example-only-default-tdai",
     serviceId: "default",
     memory: {
       enabled: false,
@@ -127,6 +175,9 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     serviceId: "context-proxy",
     timeoutMs: 1500,
   },
+  instanceUpstream: {
+    cacheTtlSec: 30,
+  },
   knowledge: {
     enabled: false,
     endpoint: "http://127.0.0.1:8420",
@@ -136,7 +187,9 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   },
   skillRuntime: {
     allowLlmWrite: false,
+    selection: DEFAULT_SKILL_SELECTION,
   },
+  selection: DEFAULT_SELECTION,
   auth: {
     enabled: false,
     url: "",
@@ -232,9 +285,21 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
     typeof anthropicUpstream === "object" &&
     typeof (anthropicUpstream as { url?: unknown }).url === "string"
   ) {
-    result.anthropicUpstream = { url: (anthropicUpstream as { url: string }).url };
+    const { url, headers } = anthropicUpstream as { url: string; headers?: unknown };
+    const parsedHeaders = parseHeaderMap(headers);
+    result.anthropicUpstream = parsedHeaders ? { url, headers: parsedHeaders } : { url };
   }
   return result;
+}
+
+/** Keep non-empty string values only; keys are lower-cased to match forwarded header keys. */
+function parseHeaderMap(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (k.trim() && typeof v === "string" && v.trim()) out[k.trim().toLowerCase()] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -268,6 +333,10 @@ function parseUpstreamAgents(
 export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
+  const defaultWecomIdentity = DEFAULT_CONFIG.wecomIdentity!;
+
+  const selection = buildSelectionConfig(yaml.selection, configPath);
+  const skillSelection = buildSkillSelectionConfig(yaml.skillRuntime?.selection);
 
   return {
     server: {
@@ -282,7 +351,10 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         overrides.upstreamUrl ??
         yaml.upstream?.url ??
         DEFAULT_CONFIG.upstream.url,
-      apiKey: yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey,
+      // TDAI_PROXY_UPSTREAM_API_KEY_FILE keeps the key out of the YAML and the environment.
+      apiKey:
+        readKeyFile(process.env.TDAI_PROXY_UPSTREAM_API_KEY_FILE) ||
+        (yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey),
       agents: parseUpstreamAgents(yaml.upstream?.agents),
     },
     log: {
@@ -331,6 +403,12 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       flushThreshold: yaml.clickhouse?.flushThreshold ?? DEFAULT_CONFIG.clickhouse.flushThreshold,
       ttlDays: yaml.clickhouse?.ttlDays ?? DEFAULT_CONFIG.clickhouse.ttlDays,
     },
+    wecomIdentity: {
+      enabled: yaml.wecomIdentity?.enabled ?? defaultWecomIdentity.enabled,
+      table: yaml.wecomIdentity?.table ?? defaultWecomIdentity.table,
+      cacheTtlMs: Math.max(0, yaml.wecomIdentity?.cacheTtlMs ?? defaultWecomIdentity.cacheTtlMs),
+      maxNameLength: Math.max(1, yaml.wecomIdentity?.maxNameLength ?? defaultWecomIdentity.maxNameLength),
+    },
     redis: {
       enabled: yaml.redis?.enabled ?? DEFAULT_CONFIG.redis.enabled,
       url: yaml.redis?.url ?? DEFAULT_CONFIG.redis.url,
@@ -341,6 +419,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       keyPrefix: yaml.redis?.keyPrefix ?? DEFAULT_CONFIG.redis.keyPrefix,
       ttlSeconds: yaml.redis?.ttlSeconds ?? DEFAULT_CONFIG.redis.ttlSeconds,
       injectionTtlSeconds: yaml.redis?.injectionTtlSeconds ?? DEFAULT_CONFIG.redis.injectionTtlSeconds,
+      turnSeqTtlDays: yaml.redis?.turnSeqTtlDays ?? DEFAULT_CONFIG.redis.turnSeqTtlDays,
     },
     rateLimit: {
       tpm: Math.max(0, yaml.rateLimit?.tpm ?? DEFAULT_CONFIG.rateLimit.tpm),
@@ -392,6 +471,32 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
               cacheRead: t.cacheRead ?? 0,
               cacheWrite5m: t.cacheWrite5m ?? 0,
               cacheWrite1h: t.cacheWrite1h ?? 0,
+            }))
+          : undefined,
+        rules: Array.isArray(m.rules)
+          ? m.rules
+            .filter((rule) => typeof rule.id === "string" && rule.id.length > 0 && rule.pricing)
+            .map((rule) => ({
+              id: rule.id!,
+              priority: typeof rule.priority === "number" ? rule.priority : undefined,
+              when: rule.when,
+              pricing: {
+                input: rule.pricing?.input ?? 0,
+                output: rule.pricing?.output ?? 0,
+                cacheRead: rule.pricing?.cacheRead ?? 0,
+                cacheWrite5m: rule.pricing?.cacheWrite5m ?? 0,
+                cacheWrite1h: rule.pricing?.cacheWrite1h ?? 0,
+                tiers: Array.isArray(rule.pricing?.tiers)
+                  ? rule.pricing.tiers.map((tier) => ({
+                    maxInputTokens: typeof tier.maxInputTokens === "number" ? tier.maxInputTokens : null,
+                    input: tier.input ?? 0,
+                    output: tier.output ?? 0,
+                    cacheRead: tier.cacheRead ?? 0,
+                    cacheWrite5m: tier.cacheWrite5m ?? 0,
+                    cacheWrite1h: tier.cacheWrite1h ?? 0,
+                  }))
+                  : undefined,
+              },
             }))
           : undefined,
       })).filter((m) => m.name !== ""),
@@ -463,6 +568,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         l2Limit: yaml.tdai?.memory?.l2Limit ?? DEFAULT_CONFIG.tdai.memory.l2Limit,
         timeoutMs: yaml.tdai?.memory?.timeoutMs ?? DEFAULT_CONFIG.tdai.memory.timeoutMs,
       },
+      sessionTrace: yaml.tdai?.sessionTrace,
     },
     // `skill:` is the canonical YAML section name; `coreSkill:` is kept as a
     // backward-compat alias so existing deployments don't break. Prefer the
@@ -472,6 +578,10 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       serviceToken: yaml.skill?.serviceToken ?? yaml.coreSkill?.serviceToken ?? DEFAULT_CONFIG.coreSkill.serviceToken,
       serviceId: yaml.skill?.serviceId ?? yaml.coreSkill?.serviceId ?? DEFAULT_CONFIG.coreSkill.serviceId,
       timeoutMs: yaml.skill?.timeoutMs ?? yaml.coreSkill?.timeoutMs ?? DEFAULT_CONFIG.coreSkill.timeoutMs,
+    },
+    instanceUpstream: {
+      cacheTtlSec:
+        yaml.instanceUpstream?.cacheTtlSec ?? DEFAULT_CONFIG.instanceUpstream.cacheTtlSec,
     },
     knowledge: {
       enabled: yaml.knowledge?.enabled ?? DEFAULT_CONFIG.knowledge.enabled,
@@ -484,7 +594,9 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       allowLlmWrite:
         yaml.skillRuntime?.allowLlmWrite ??
         DEFAULT_CONFIG.skillRuntime.allowLlmWrite,
+      selection: skillSelection,
     },
+    selection,
     auth: {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
@@ -550,6 +662,161 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled: yaml.traceArchive?.enabled ?? DEFAULT_CONFIG.traceArchive.enabled,
       dir: yaml.traceArchive?.dir ?? DEFAULT_CONFIG.traceArchive.dir,
     },
+  };
+}
+
+const ENV_REF_RE = /\$\{[A-Z_][A-Z0-9_]*(?::-[^}]*)?\}/i;
+
+function numberInRange(name: string, value: unknown, fallback: number, min: number, max: number): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`[config] ${name} must be a number in [${min}, ${max}], got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function boolOr(name: string, value: unknown, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") {
+    throw new Error(`[config] ${name} must be a boolean, got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function stringOr(name: string, value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "string") {
+    throw new Error(`[config] ${name} must be a string, got ${JSON.stringify(value)}`);
+  }
+  return value.trim() || fallback;
+}
+
+function assertNoUnknownKeys(name: string, obj: object, allowed: readonly string[]): void {
+  const unknown = Object.keys(obj).filter((k) => !allowed.includes(k));
+  if (unknown.length > 0) {
+    throw new Error(`[config] ${name} has unknown key(s): ${unknown.join(", ")}; allowed: ${allowed.join(", ")}`);
+  }
+}
+
+/**
+ * 解析顶层 `selection`（通用选择策略）。
+ * 数值字段类型错误或越界 → 启动期抛错（fail-fast），不静默回落默认值。
+ */
+export function buildSelectionConfig(
+  raw: RawSelectionYaml | undefined,
+  configPath = "config.yaml",
+): SelectionConfig {
+  const r: RawSelectionYaml = raw ?? {};
+  assertNoUnknownKeys("selection", r, ["strategies"]);
+  const rawStrategies = r.strategies ?? {};
+  if (typeof rawStrategies !== "object" || Array.isArray(rawStrategies)) {
+    throw new Error("[config] selection.strategies must be a mapping of strategy name → params");
+  }
+
+  const strategies: Record<string, SelectionStrategyConfig> = {
+    jev: buildSelectionStrategy("jev", rawStrategies.jev, configPath),
+  };
+  for (const [name, params] of Object.entries(rawStrategies)) {
+    if (name === "jev") continue;
+    if (!STRATEGY_KEY_RE.test(name)) {
+      throw new Error(`[config] selection.strategies has invalid strategy name ${JSON.stringify(name)}`);
+    }
+    strategies[name] = buildSelectionStrategy(name, params, configPath);
+  }
+  return { strategies: strategies as SelectionStrategiesConfig };
+}
+
+const STRATEGY_KEY_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+/** 内置 provider 的默认 apiKey 环境变量（保持旧行为：jev → TYPESAFE_API_KEY）。 */
+const DEFAULT_PROVIDER_KEY_ENV: Record<string, string> = { jev: "TYPESAFE_API_KEY" };
+
+/**
+ * 解析单个策略。`provider` 默认 `jev`；jev 的 endpoint/model 有默认值，其他 provider
+ * 必须显式配置（缺失时策略视为不可用，由 provider.isUsable() 判断）。
+ * provider 是否已注册在构造策略时校验（允许启动时运行期注册第三方 provider）。
+ */
+function buildSelectionStrategy(
+  name: string,
+  raw: unknown,
+  configPath: string,
+): SelectionStrategyConfig {
+  const P = `selection.strategies.${name}`;
+  if (raw !== undefined && raw !== null && (typeof raw !== "object" || Array.isArray(raw))) {
+    throw new Error(`[config] ${P} must be a mapping`);
+  }
+  const s = (raw ?? {}) as Partial<SelectionStrategyConfig> & { apiKeyEnv?: unknown };
+  assertNoUnknownKeys(P, s, [
+    "provider", "endpoint", "apiKey", "apiKeyEnv", "model", "timeoutMs", "minConfidence", "options",
+  ]);
+
+  const provider = stringOr(`${P}.provider`, s.provider, "jev");
+  if (!STRATEGY_KEY_RE.test(provider)) {
+    throw new Error(`[config] ${P}.provider has invalid name ${JSON.stringify(provider)}`);
+  }
+  const d = DEFAULT_SELECTION.strategies.jev;
+  const isJev = provider === "jev";
+
+  const keyEnv = stringOr(`${P}.apiKeyEnv`, s.apiKeyEnv, DEFAULT_PROVIDER_KEY_ENV[provider] ?? "");
+  if (keyEnv && !ENV_NAME_RE.test(keyEnv)) {
+    throw new Error(`[config] ${P}.apiKeyEnv must be an environment variable name, got ${JSON.stringify(keyEnv)}`);
+  }
+  const rawKey = s.apiKey === undefined || s.apiKey === null ? "" : String(s.apiKey);
+  const envKey = keyEnv ? (process.env[keyEnv] ?? "").trim() : "";
+  if (!envKey && rawKey.trim() && !ENV_REF_RE.test(rawKey)) {
+    const hint = keyEnv || "<PROVIDER>_API_KEY";
+    console.warn(
+      `[config] ${P}.apiKey is stored as plaintext in ${configPath}. `
+        + `Prefer the ${hint} env var, or a \`\${${hint}}\` reference, `
+        + "and make sure this file is not committed to version control.",
+    );
+  }
+
+  let options: Record<string, unknown> | undefined;
+  if (s.options !== undefined && s.options !== null) {
+    if (typeof s.options !== "object" || Array.isArray(s.options)) {
+      throw new Error(`[config] ${P}.options must be a mapping`);
+    }
+    options = s.options as Record<string, unknown>;
+  }
+
+  return {
+    provider,
+    endpoint: stringOr(`${P}.endpoint`, s.endpoint, isJev ? d.endpoint : ""),
+    // Precedence: env(apiKeyEnv) > yaml(`${VAR}` 展开) > ""。
+    apiKey: envKey || expandEnv(rawKey).trim(),
+    model: stringOr(`${P}.model`, s.model, isJev ? d.model : ""),
+    timeoutMs: numberInRange(`${P}.timeoutMs`, s.timeoutMs, d.timeoutMs, 100, 60_000),
+    minConfidence: numberInRange(`${P}.minConfidence`, s.minConfidence, d.minConfidence, 0, 1),
+    ...(options ? { options } : {}),
+  };
+}
+
+/**
+ * 解析 `skillRuntime.selection`（skill 资产的选择开关与预算）。
+ * 已移除的字段（`delivery` / `reselectEachTurn` / `strategies` / 旧扁平写法）出现即报错，
+ * 避免配置写了却静默不生效。
+ */
+export function buildSkillSelectionConfig(raw: RawSkillSelectionYaml | undefined): SkillSelectionConfig {
+  const d = DEFAULT_SKILL_SELECTION;
+  const r: RawSkillSelectionYaml = raw ?? {};
+  const P = "skillRuntime.selection";
+  assertNoUnknownKeys(P, r, [
+    "enabled", "strategy", "contextCharBudget", "contentCharBudget", "maxCandidates", "useConversationQuery",
+  ]);
+
+  const strategy = stringOr(`${P}.strategy`, r.strategy, d.strategy);
+  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(strategy)) {
+    throw new Error(`[config] ${P}.strategy has invalid name ${JSON.stringify(strategy)}`);
+  }
+
+  return {
+    enabled: boolOr(`${P}.enabled`, r.enabled, d.enabled),
+    strategy,
+    contextCharBudget: numberInRange(`${P}.contextCharBudget`, r.contextCharBudget, d.contextCharBudget, 200, 200_000),
+    contentCharBudget: numberInRange(`${P}.contentCharBudget`, r.contentCharBudget, d.contentCharBudget, 200, 500_000),
+    maxCandidates: Math.floor(numberInRange(`${P}.maxCandidates`, r.maxCandidates, d.maxCandidates, 1, 50)),
+    useConversationQuery: boolOr(`${P}.useConversationQuery`, r.useConversationQuery, d.useConversationQuery),
   };
 }
 

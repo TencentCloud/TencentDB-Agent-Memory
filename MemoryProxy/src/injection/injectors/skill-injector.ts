@@ -42,6 +42,17 @@ const TAG = "[skill-injector]";
 export interface SkillInjectorConfig {
   /** Core skill client config; passed to `getCoreSkillClient(config)`. */
   coreSkill: CoreSkillConfig;
+  /**
+   * Optional. The virtual default task_id (from `sessionInit.defaultTaskId`)。
+   * 当 session 关联的 task_id === defaultTaskId 时, prewarm 会向 core 传
+   * `mode='activity'` 走活跃度召回替代 BM25/head。
+   *
+   * 未配置 (undefined / 空字符串) → 完全跳过 activity 分支, 100% 走原 BM25 逻辑。
+   * 向后兼容硬约束: 老 deployment 不配这个字段时行为一字不差。
+   *
+   * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+   */
+  defaultTaskId?: string;
 }
 
 /**
@@ -212,6 +223,31 @@ export class SkillInjector implements InjectionHook {
   async prewarm(input: PrewarmInput): Promise<ContextBlock[]> {
     if (input.assetCapabilities?.skill === false) return [];
     const ids = input.sessionInfo;
+
+    // Default-task 活跃度召回 gate (设计: 2026-09-09 skill usage telemetry doc §4.1)
+    // - 需要 defaultTaskId 已配置 且 session.task_id 显式等于它
+    // - core 侧 mode='activity' 分支在 CH 不可用/查询失败/冷启动时自动 fallback
+    //   到原 auto (BM25/full) 逻辑, response.mode 会体现最终使用的模式
+    // - 向后兼容: 老 deployment 不配 defaultTaskId 或用户选了真 task → 100% 走原逻辑
+    const isDefaultTask = !!(
+      this.config.defaultTaskId
+      && ids?.task_id
+      && ids.task_id === this.config.defaultTaskId
+    );
+
+    if (isDefaultTask) {
+      // 走活跃度召回。不带 query (activity 模式不 care query)。
+      return this.renderListingBlocks({
+        team_id: ids?.team_id,
+        agent_id: ids?.agent_id,
+        space_id: ids?.space_id,
+        query: undefined,
+        mode: "activity",
+        trigger: "prewarm-default",
+      });
+    }
+
+    // 老路径 —— 真 task 或未配置 defaultTaskId 时保持不变。
     // Build search query from agent description + task description
     // so listing semantically matches relevant skills (FTS BM25).
     const query = buildListingQuery(input);
@@ -242,9 +278,11 @@ export class SkillInjector implements InjectionHook {
     agent_id?: string;
     space_id?: string;
     query: string | undefined;
-    trigger: "prewarm" | "execute";
+    /** 'activity' 触发 core 的活跃度分支; 未传 = auto (老逻辑)。 */
+    mode?: "auto" | "activity";
+    trigger: "prewarm" | "execute" | "prewarm-default";
   }): Promise<ContextBlock[]> {
-    const { team_id, agent_id, space_id, query, trigger } = args;
+    const { team_id, agent_id, space_id, query, mode, trigger } = args;
     if (!team_id || !agent_id) {
       console.log(
         `${TAG} ${trigger}: missing session identity (team_id/agent_id) — skipping listing`,
@@ -260,7 +298,8 @@ export class SkillInjector implements InjectionHook {
     console.log(
       `${TAG} ${trigger} team=${team_id} agent=${agent_id}`
         + ` space=${space_id ?? "(none)"} serviceId=${serviceId ?? "(fallback config)"}`
-        + ` query=${JSON.stringify(query?.slice(0, 80) ?? null)}`,
+        + ` query=${JSON.stringify(query?.slice(0, 80) ?? null)}`
+        + ` requested_mode=${mode ?? "auto"}`,
     );
 
     let result: ListingResult;
@@ -270,6 +309,7 @@ export class SkillInjector implements InjectionHook {
         team_id,
         agent_id,
         query,
+        mode,
       }, { serviceId });
       console.log(
         `${TAG} ${trigger} result mode=${result.mode}`

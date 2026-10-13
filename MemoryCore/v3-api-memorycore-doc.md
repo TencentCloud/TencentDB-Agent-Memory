@@ -47,12 +47,12 @@ v3 接口按鉴权方式分四层（均需 `Authorization: Bearer <KERNEL_AUTH_T
 
 | 层 | 路由范围 | 额外鉴权 |
 |---|---|---|
-| 数据面 | `/v3/conversation·atomic·scenario·core/*`、`/v3/skill/*`、`/v3/knowledge/*`、`/v3/chat-memory/*`、`/v3/memory-prompt/*`、`/v3/memory-generation-log/*` | `x-tdai-service-id`（实例 ID） |
+| 数据面 | `/v3/conversation·atomic·scenario·core/*`、`/v3/session/add`、`/v3/skill/*`、`/v3/knowledge/*`、`/v3/chat-memory/*`、`/v3/memory-prompt/*`、`/v3/memory-generation-log/*` | `x-tdai-service-id`（实例 ID） |
 | 元数据面 | `/v3/meta/*` | `x-tdai-service-id` + `x-tdai-user-key`（用户 key，`auth/verify` 免 user-key） |
 | 内部运维面 | `/v3/internal/meta/*` | 仅 Bearer，**不解析** user-key |
 | 实例销毁 | `/v3/instance/destroy` | 仅 Bearer apiKey（v1 风格，运维接口） |
 
-> 隔离字段说明：数据面接口的 `team_id / agent_id / user_id / task_id` 可从 **body 或 Header** 传入（`x-tdai-team-id` / `x-tdai-agent-id` / `x-tdai-user-id` / `x-tdai-task-id`），body 优先。v3 数据面**强制** team + agent + user 三元组隔离（缺省回落到 `default` 桶）。
+> 隔离字段说明：数据面接口的 `team_id / agent_id / user_id / task_id` 可从 **body 或 Header** 传入（`x-tdai-team-id` / `x-tdai-agent-id` / `x-tdai-user-id` / `x-tdai-task-id`），body 优先。v3 数据面**强制** team + agent + user 三元组隔离（缺省回落到 `default` 桶）。例外：`/v3/session/add` 的隔离字段**只从 Header 取**（`x-tdai-user-id` / `x-tdai-session-id` 必填、`x-tdai-team-id` 可选、无 agent），body 传 `user` / `session` 即拒绝，缺必填 Header 返回 `400`，见该接口说明。
 
 ### 1.5 错误码语义（数据面通用）
 
@@ -84,23 +84,23 @@ v3 接口按鉴权方式分四层（均需 `Authorization: Bearer <KERNEL_AUTH_T
 
 | 模块 | 接口数 | 前缀 |
 |---|---|---|
-| L0–L3 数据面 | 18 | `/v3/conversation·atomic·scenario·core/*` |
+| L0–L3 数据面 | 19 | `/v3/conversation·atomic·scenario·core/*`、`/v3/session/add` |
 | Skill | 17 | `/v3/skill/*` |
 | Knowledge 明细 | 5 | `/v3/knowledge/*` |
 | Chat-Memory | 1 | `/v3/chat-memory/*` |
 | Memory-Prompt | 7 | `/v3/memory-prompt/*` |
 | Memory-Generation-Log | 2 | `/v3/memory-generation-log/*` |
 | Meta 元数据 | 55 | `/v3/meta/*` |
-| Internal Meta | 2 | `/v3/internal/meta/*` |
+| Internal Meta | 4 | `/v3/internal/meta/*` |
 | Instance Destroy | 1 | `/v3/instance/destroy` |
 
-**合计 108 个接口。**
+**合计 109 个接口。**
 
 ---
 
 ## 3. 接口明细
 
-## 3.1 L0–L3 数据面（18）
+## 3.1 L0–L3 数据面（19）
 
 > 记忆分层：L0 原始对话（conversation）、L1 记忆原子（atomic，含 episodic/persona/instruction 三类）、L2 场景文件（scenario）、L3 核心人格（core）。
 > 全部接口接受 4 ID 隔离字段（`team_id/agent_id/user_id/task_id`，body 或 Header）。
@@ -324,6 +324,99 @@ L3 计数（**仅 v3**）。
 **请求体**：`{}`（空对象）。
 
 **响应** `data`：`{ total: number }`。
+
+### POST /v3/session/add
+
+写入一个会话轮次（一轮 = 用户一次提问 + agent 为它做的全部事情），一次调用写一个对象。在线会话由 MemoryProxy 在轮次结束时调用（`source: online`），冷启动导入逐条调用（`source: offline`）。对象路径与记录格式见 `docs/cos-format.md`，设计说明见 `docs/session-api.md`。
+
+Core **不做协议转换**，只校验路径段和记录顶层字段，`messages` / `output` 内容原样保存。
+
+**请求头**（隔离字段只从 Header 取，**不接受 body 传入**，与其它数据面接口不同）
+
+| 名称 | 必填 | 说明 |
+|---|---|---|
+| `Authorization` | 是* | `Bearer <KERNEL_AUTH_TOKEN>`，`apiKey` 未配置时不强制 |
+| `x-tdai-service-id` | 是 | 实例 ID |
+| `x-tdai-user-id` | 是 | 用户 ID，即对象里的 `user`。未知时传 `unknown` |
+| `x-tdai-session-id` | 是 | 会话 ID，即对象里的 `session`。子 agent 传父会话的 ID |
+| `x-tdai-team-id` | 否 | 团队 ID。缺省或空串时写入 `_unassigned` |
+
+ID 类取值（含 body 中的 `subagent`）会成为路径的一段：非空、不超过 256 字节、不含 `/`、`\` 或控制字符、不等于 `.` / `..`。Core 不做 trim 和转义，不满足返回 `400`。本接口不做用户级鉴权，信任 Bearer + `x-tdai-service-id`。
+
+**请求体**（上限 **32 MiB**，可用环境变量 `MEMORY_SESSION_MAX_BODY_BYTES` 调整；其它接口仍为 1 MiB）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| source | string | 是 | `online` \| `offline` |
+| started_at | string | 是 | 本轮开始时刻，固定格式 `YYYY-MM-DDTHH:MM:SS.sssZ`，同时决定文件名 |
+| ended_at | string | 是 | 本轮结束时刻，格式同上 |
+| user_query | string | 是 | 本轮用户提问（纯文本），可以为空串 |
+| model | string | 是 | 本轮末次调用的模型，非空 |
+| messages | array | 是 | 本轮末次调用发出的消息数组，至少一条，内容不校验 |
+| output | object | 是 | 本轮末次调用的模型回复，内容不校验 |
+| subagent | string | 否 | 子 agent 的 ID，仅子 agent 的轮次传；出现时必须是非空串，不能是 `null` |
+
+不接受上表以外的字段，传 `user` / `session` 同样拒绝。
+
+**落盘**：body 去掉 `source`，补上 Header 里的 `user` / `session`，序列化为 UTF-8 JSON，同步写入实例根目录下的：
+
+```
+sessions/<source>/<team-id>/<user-id>/<session-id>/<started-at>-<id>.json
+sessions/<source>/<team-id>/<user-id>/<session-id>/subagents/<subagent-id>/<started-at>-<id>.json
+```
+
+`<started-at>` 为 `started_at` 去掉 `-` 和 `:`，`<id>` 为 8 位小写十六进制随机数。实例根目录：service 形态为 COS `<path-prefix>/<instance-id>/`；standalone / 开源版为 Gateway 数据目录（`data.baseDir`，不区分实例）。
+
+**不幂等**：每次调用生成新的 `<id>`，重复调用会写出多个对象。调用方只在 `500` / `503` / 网络错误时重试。
+
+**响应** `data`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| object_key | string | 写入的对象路径（相对实例根目录，不含 `<path-prefix>/<instance-id>/`） |
+| bytes | number | 写入的字节数 |
+
+**错误**（失败时无 `data`）
+
+| code | 场景 |
+|---|---|
+| 400 | 缺 `x-tdai-service-id` / `x-tdai-user-id` / `x-tdai-session-id`（`missing header: <name>`），路径段非法，`source` 缺失或取值非法，请求体不是合法 JSON |
+| 401 | 鉴权失败 |
+| 413 | 请求体超过上限 |
+| 415 | 不支持的 `Content-Encoding`（支持 gzip / deflate） |
+| 422 | body 不是 JSON 对象，必填字段缺失、类型或格式错误，含未定义字段或 `user` / `session` |
+| 503 | 存储不可用（COS 凭证 / 网络异常，本地磁盘写失败），可重试 |
+| 500 | 内部错误 |
+
+**示例**
+
+```json
+// 请求
+// Header: x-tdai-service-id: ins-01
+// Header: x-tdai-team-id: team-7
+// Header: x-tdai-user-id: 124e14bf
+// Header: x-tdai-session-id: 8df5f09b4c614ed19f49697201c39b0b
+{
+  "source": "online",
+  "started_at": "2026-06-11T02:18:20.359Z",
+  "ended_at": "2026-06-11T02:18:47.945Z",
+  "user_query": "怎样将当前二进制发布到机器 10.0.0.1",
+  "model": "deepseek-v4-flash-ioa",
+  "messages": [ { "role": "user", "content": "怎样将当前二进制发布到机器 10.0.0.1" } ],
+  "output": { "role": "assistant", "content": "发布步骤如下：…" }
+}
+
+// 响应
+{
+  "code": 0,
+  "message": "ok",
+  "request_id": "abc-123",
+  "data": {
+    "object_key": "sessions/online/team-7/124e14bf/8df5f09b4c614ed19f49697201c39b0b/20260611T021820.359Z-3f9a1c2e.json",
+    "bytes": 1832
+  }
+}
+```
 
 ---
 
@@ -1004,7 +1097,7 @@ upsert 知识明细（幂等）。
 
 ---
 
-## 3.8 Internal Meta（2）
+## 3.8 Internal Meta（3）
 
 > `/v3/internal/meta/*`，运维/控制面，仅 Bearer（不解析 user-key）。
 
@@ -1025,6 +1118,32 @@ upsert 知识明细（幂等）。
 **请求体**：`instance_id?`、`status?`、`user_type?`(normal/system_admin)、`user_ids?`(≤100) + 分页。
 
 **响应** `data`：`{ items, total, limit, offset }`。
+
+### POST /v3/internal/meta/instance-upstream/list
+
+InstanceUpstreamConfig v2 的 §6.D 接口：Proxy 拉该实例全量组配置（**api_key 明文**），响应同时触发 default 组 seed。
+
+**请求体**：`instance_id?`。
+
+**响应** `data`：`{ items: InstanceUpstreamConfig[] }`。
+
+### POST /v3/internal/meta/upstream/supported-agents
+
+§6.A 的内部镜像：返回支持的 agent 全集，数据源同 Core `tdai-gateway.yaml` 的 `upstream.supportedAgents`。供无 user-key 的控制面服务（shark 等，典型场景是**实例发货**）调用。
+
+与公开版 `/v3/meta/upstream/supported-agents` 的三点差异：
+
+1. 不做 system_admin 校验（本族只校验 Layer 1 Bearer，不解析用户身份）；
+2. **不触发 default seed**，保持只读；
+3. **免 `x-tdai-service-id`**（见下方 `NO_INSTANCE_ROUTES`）——数据源是 Core 级 yaml，不落实例库，发货时实例尚不存在。
+
+**请求头**：仅 `Authorization: Bearer <TDAI_GATEWAY_API_KEY>`（Core 未配该 key 时可省略）。
+
+**请求体**：`{}`。
+
+**响应** `data`：`{ items: SupportedAgent[] }`，每项 `{ agent_source, protocol, display_name }`。
+
+> 其余 `/v3/internal/meta/*` 路由仍强制 `x-tdai-service-id`（它们要落到 `{prefix}_{instance_id}` 实例库）。
 
 ---
 
@@ -1089,8 +1208,10 @@ upsert 知识明细（幂等）。
 
 | HTTP | message 示例 | 说明 |
 |---|---|---|
-| 400 | 字段校验失败文本 | Zod schema 失败 |
+| 400 | 字段校验失败文本 / `missing header: x-tdai-session-id` | Zod schema 失败；session/add 缺必填 Header、路径段或 `source` 非法 |
 | 403 | Knowledge team_id mismatch | 归属不一致 |
 | 404 | Knowledge not found / MEMORY_PROMPT_NOT_FOUND / MEMORY_GENERATION_LOG_NOT_FOUND | 资源不存在 |
 | 409 | PROMPT_LIMIT_EXCEEDED | 超限 |
-| 503 | Store not available / Storage not available / Metadata service not available / GENERATION_LOG_STORE_UNAVAILABLE | 依赖不可用 |
+| 413 | Request body exceeds N bytes limit | 请求体超限（session/add 默认 32 MiB，其它 1 MiB） |
+| 422 | unknown field: extra / missing field: model / field not allowed: user | session/add 记录字段不符合 cos-format.md |
+| 503 | Store not available / Storage not available / Session storage unavailable / Metadata service not available / GENERATION_LOG_STORE_UNAVAILABLE | 依赖不可用 |

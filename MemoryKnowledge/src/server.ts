@@ -26,6 +26,11 @@ import { createToolsRoutes } from "./routes/tools.js";
 import { createHealthRoutes } from "./routes/health.js";
 import { createLlmBindingRoutes } from "./routes/llm-binding.js";
 import { createAutoSyncRoutes } from "./routes/auto-sync.js";
+import { createSourceCredentialRoutes } from "./routes/source-credential.js";
+import { createSourceProviderRoutes } from "./routes/source-provider.js";
+import { createSshKeyRoutes } from "./routes/ssh-key.js";
+import { SshKeyStore } from "./ssh-key/store.js";
+import { createWikiSourceRoutes } from "./wiki-source/routes.js";
 import { accessLog } from "./middleware/response-envelope.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createServiceAuthMiddleware } from "./middleware/auth.js";
@@ -44,11 +49,14 @@ export function createApp() {
 
   // Initialize DB + knowledge module
   const { db } = createDb({ path: config.dbPath });
+  // SSH 密钥存储（每用户一对 RSA）。目录默认落在数据卷内（config.sshKeyDir）。
+  const sshKeyStore = new SshKeyStore({ rootDir: config.sshKeyDir });
   const knowledgeModule = createKnowledgeModule({
     dataDir: config.dataDir,
     db,
     llmConfig: config.llm,
     tmcCallbackUrl: config.tmcCallbackUrl,
+    sshKeyStore,
   });
 
   // Hono app
@@ -97,6 +105,28 @@ export function createApp() {
   api.route("/", createAutoSyncRoutes({
     scheduler: knowledgeModule.autoSyncScheduler,
     config: knowledgeModule.autoSyncConfig,
+  }));
+
+  // source-credential / source-provider — 外部知识源令牌 + 来源列表
+  api.route("/source-credential", createSourceCredentialRoutes({
+    credentialStore: knowledgeModule.credentialStore,
+    store: knowledgeModule.store,
+  }));
+  api.route("/source-provider", createSourceProviderRoutes({
+    registry: knowledgeModule.codeSourceRegistry,
+    wikiRegistry: knowledgeModule.wikiSourceRegistry,
+  }));
+
+  // ssh-key — 每用户 SSH 密钥对（SSH 仓库 clone 用）
+  api.route("/ssh-key", createSshKeyRoutes({
+    sshKeyStore: knowledgeModule.sshKeyStore ?? sshKeyStore,
+  }));
+
+  // wiki-source — 外部 wiki 列文档 / 导入（不触发 ingest）
+  api.route("/wiki-source", createWikiSourceRoutes({
+    registry: knowledgeModule.wikiSourceRegistry,
+    credentialStore: knowledgeModule.credentialStore,
+    wikiService: knowledgeModule.wikiService,
   }));
 
   // analytics — CH telemetry query endpoints (Panel dashboard)

@@ -28,6 +28,7 @@ import {
 } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
 import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
+import { resolveUserSessionDefault } from "../user-default.js";
 
 import { buildFormResponse, FormData, MORE_LABEL } from "./form.js";
 import { computePagination } from "./pagination.js";
@@ -758,6 +759,43 @@ async function handleSessionInitInner(
         bypassed: true,
       } as SessionInitState);
       return { intercepted: false, bypassed: true, resetFlow: state?.resetFlow ?? false };
+    }
+
+    // ── User session default (v3.3): 账户级配置 —— 优先级最高 ───────────────
+    //
+    // 用户通过面板设置的"默认 (team, agent, task) 三元组"。命中有效即一步到位
+    // fastRegister, 跳过 asset_confirm / team_select / agent_select / task_select
+    // 全部表单, 且**忽略**请求 header 里带的 x-team-id/x-agent-id/x-task-id
+    // (设计文档 §2.2 优先级链)。
+    //
+    // 失败路径 (无记录 / RPC 异常 / team/agent/task 校验不过) → resolver 返 null,
+    // 继续往下走 header preset → 原交互表单。resolver 内部 catch 所有异常,
+    // 保证"账户默认失效"路径对用户无差别。
+    const userDefaultResolution = await resolveUserSessionDefault({
+      userId,
+      teams,
+      metadataClient,
+      compositeKey,
+      defaultTaskId: config.defaultTaskId,
+    });
+    if (userDefaultResolution && userDefaultResolution.canRegister) {
+      const seedState: SessionInitState = {
+        status: "uninitialized",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teams,
+        selectedTeamId: userDefaultResolution.teamId,
+      };
+      return completeRegistration(
+        {
+          agent_id: userDefaultResolution.agentId!,
+          task_id: userDefaultResolution.taskId,
+        },
+        seedState, teams, userDefaultResolution.teamId, compositeKey, sessionKey, userId,
+        config, store, reqCtx, stripped, metadataClient, userKey, spaceId,
+      );
     }
 
     // ── Header-driven pre-selection: skip forms when identity is provided ──

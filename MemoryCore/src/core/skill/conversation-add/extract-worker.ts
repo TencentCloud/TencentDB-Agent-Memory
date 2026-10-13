@@ -396,6 +396,10 @@ export class SkillConversationExtractWorker {
               options: head.max_iterations != null
                 ? { max_iterations: head.max_iterations }
                 : undefined,
+              // strict_mode 透传:老 task (未升级前入队) mode 字段不存在,undefined 透
+              // 给 extractor 恒走 SKILL_REVIEW_PROMPT (v2 宽松) — 零回归; 冷启动写入的
+              // task mode='strict' 才切到 SKILL_REVIEW_PROMPT_STRICT (v1 严格 gate)。
+              mode: head.mode,
             });
             candidates = result.candidates ?? [];
             obsLogger.info("skill.worker.extractor", {

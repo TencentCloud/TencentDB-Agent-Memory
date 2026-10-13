@@ -54,6 +54,9 @@ import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
 import { resolveStandaloneLlmForRuntime } from "../adapters/standalone/llm-provider-resolver.js";
 import { MetricTrackingRunnerFactory } from "./report/metric-tracking-runner.js";
+import type { L3JevExecutionContext, L2SceneDiffDiagnostic } from "./persona/jev-gate.js";
+import { warnIfFullDiagnostics } from "./persona/jev-diagnostics.js";
+import { hasDecisionProvider, listDecisionProviders } from "./decision/registry.js";
 
 // ── Skill module (v2 redesign 2026-06-17) ──
 import {
@@ -64,6 +67,7 @@ import {
   SkillExtractor,
   resolveSkillConfig,
   SKILL_REVIEW_PROMPT,
+  SKILL_REVIEW_PROMPT_STRICT,
 } from "./skill/index.js";
 // Skill async-extract 现在完全走 conversation-add 侧的 agent 队列 + Worker
 // (SkillTriggerService.archive → agent 队列 → SkillConversationExtractWorker),
@@ -243,6 +247,15 @@ export class TdaiCore {
    */
   async initialize(): Promise<void> {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
+    warnIfFullDiagnostics(this.logger, this.cfg.persona.jev?.diagnostics?.mode ?? "off");
+    // Fail fast on an unregistered decision provider instead of degrading every L3 gate.
+    const decisionProvider = this.cfg.persona.jev?.provider || "jev";
+    if (this.cfg.persona.triggerMode === "jev" && !hasDecisionProvider(decisionProvider)) {
+      throw new Error(
+        `memory.persona.jev.provider "${decisionProvider}" is not registered; ` +
+        `available: ${listDecisionProviders().join(", ")}`,
+      );
+    }
     initDataDirectories(this.dataDir);
 
     // Initialize stores (async)
@@ -905,6 +918,10 @@ export class TdaiCore {
         store: skillStore,
         resources: skillResources,
         versioning: skillVersioning,
+        // 旧版本清理双维度:时间 (versionTtlSeconds) + 数量 (maxNonHeadVersions)。
+        // 都不配就是 0 (关闭), 行为与新增前完全一致, 向后兼容。
+        versionTtlSeconds: resolved.versionTtlSeconds,
+        maxNonHeadVersions: resolved.maxNonHeadVersions,
         onSkillAccessed: assetHooks?.onSkillAccessed,
         onSkillArchived: assetHooks?.onSkillArchived,
       });
@@ -946,6 +963,10 @@ export class TdaiCore {
             core: this.skillCore,
             runner: llmRunner,
             systemPrompt: SKILL_REVIEW_PROMPT,
+            // 冷启动/批量导入 (asset-import) 会在请求 body 传 strict_mode:true,
+            // 经 SkillTaskEntry.mode 一路带到这里的 extract({mode:'strict'})。
+            // 默认 (mode 未传) 一律走上面的 SKILL_REVIEW_PROMPT, 老流量零影响。
+            strictSystemPrompt: SKILL_REVIEW_PROMPT_STRICT,
             maxIterations: resolved.extraction.maxIterations,
             headChars: resolved.extraction.headChars,
             tailChars: resolved.extraction.tailChars,
@@ -1101,7 +1122,19 @@ export class TdaiCore {
   /**
    * Run L2 scene extraction using an externally provided Store.
    */
-  async runL2WithStore(sessionKey: string, store: IMemoryStore, storage?: StorageAdapter, cursor?: string): Promise<{ creditUsed: number; skipped: boolean }> {
+  async runL2WithStore(
+    sessionKey: string,
+    store: IMemoryStore,
+    storage?: StorageAdapter,
+    cursor?: string,
+    executionContext?: L3JevExecutionContext,
+    checkpointLock?: import("../utils/checkpoint.js").CheckpointLockOptions,
+  ): Promise<{
+    creditUsed: number;
+    skipped: boolean;
+    sceneDiff?: L2SceneDiffDiagnostic;
+    jevGateId?: string;
+  }> {
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
       ? (this.hostAdapter as { getOpenClawConfig?(): unknown }).getOpenClawConfig?.()
@@ -1134,18 +1167,30 @@ export class TdaiCore {
       instanceId: this.instanceId,
       llmRunner,
       storage: storage ?? this.getStorage(),
+      executionContext,
+      checkpointLock,
     });
     const runnerResult = await runner(sessionKey, cursor);
     const creditUsed: number = (llmRunner as any)?.accumulatedCredit ?? 0;
     // L2 runner returns undefined when no new L1 records, or { skipped: true } on empty extraction
     const skipped = (runnerResult === undefined && creditUsed === 0) || (runnerResult?.skipped === true);
-    return { creditUsed, skipped };
+    return {
+      creditUsed,
+      skipped,
+      sceneDiff: runnerResult?.sceneDiff,
+      jevGateId: runnerResult?.jevGateId,
+    };
   }
 
   /**
    * Run L3 persona generation using an externally provided Store.
    */
-  async runL3WithStore(store: IMemoryStore, storage?: StorageAdapter): Promise<{ creditUsed: number }> {
+  async runL3WithStore(
+    store: IMemoryStore,
+    storage?: StorageAdapter,
+    executionContext?: L3JevExecutionContext,
+    checkpointLock?: import("../utils/checkpoint.js").CheckpointLockOptions,
+  ): Promise<{ creditUsed: number }> {
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
       ? (this.hostAdapter as { getOpenClawConfig?(): unknown }).getOpenClawConfig?.()
@@ -1178,8 +1223,9 @@ export class TdaiCore {
       instanceId: this.instanceId,
       llmRunner,
       storage: storage ?? this.getStorage(),
+      checkpointLock,
     });
-    await runner();
+    await runner(executionContext);
     const creditUsed: number = (llmRunner as any)?.accumulatedCredit ?? 0;
     return { creditUsed };
   }

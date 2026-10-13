@@ -63,7 +63,23 @@
           "maxScenes": { "type": "number", "default": 15, "description": "最大场景数" },
           "backupCount": { "type": "number", "default": 3, "description": "画像备份保留数量" },
           "sceneBackupCount": { "type": "number", "default": 10, "description": "场景块备份保留数量" },
-          "model": { "type": "string", "description": "画像生成模型 (格式: provider/model)，未填写时使用openclaw默认模型" }
+          "model": { "type": "string", "description": "画像生成模型 (格式: provider/model)，未填写时使用openclaw默认模型" },
+          "triggerMode": { "type": "string", "enum": ["current", "jev"], "default": "current", "description": "L3触发策略；jev在现有触发器未命中时判断是否立即同步" },
+          "jev": {
+            "type": "object",
+            "properties": {
+              "endpoint": { "type": "string", "description": "System One HTTPS endpoint" },
+              "apiKey": { "type": "string", "description": "JEV密钥；优先使用TYPESAFE_API_KEY环境变量" },
+              "model": { "type": "string", "description": "JEV模型或TokenHub服务ID" },
+              "timeoutMs": { "type": "number", "minimum": 100, "maximum": 3000, "default": 3000 },
+              "diagnostics": {
+                "type": "object",
+                "properties": {
+                  "mode": { "type": "string", "enum": ["off", "metadata", "full"], "default": "off" }
+                }
+              }
+            }
+          }
         }
       },
       "pipeline": {

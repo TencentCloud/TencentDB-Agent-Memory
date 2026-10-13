@@ -82,6 +82,36 @@ export interface TaskEntity {
 }
 
 /**
+ * /v3/meta/user-session-default/get · set · delete 的实体返回。
+ *
+ * 用户级 session 默认 (team, agent, task) 三元组, 一个 user_id 至多一行。
+ *
+ * task_id 字段可能为:
+ *   - 真实 task_id (如 `tsk-xxx`)
+ *   - 字面量字符串 `"default"` (= DEFAULT_TASK_SENTINEL) —— 表示"不绑定任何 Task"
+ *
+ * 这个字面量与 Proxy 侧 `config.sessionInit.defaultTaskId` 契约对称, 下游
+ * injection / participation-log / getTask 等 10+ 处 `task_id !== defaultTaskId`
+ * 短路天然适用, 不需要额外处理。
+ *
+ * 详见设计文档 `docs/design/2026-10-10-user-session-default-design.md` §3.1.1。
+ */
+export interface UserSessionDefaultEntity {
+  user_id: string;
+  team_id: string;
+  agent_id: string;
+  task_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetUserSessionDefaultInput {
+  team_id: string;
+  agent_id: string;
+  task_id: string;
+}
+
+/**
  * /v3/meta/task/create 请求入参。
  *
  * 权限约束（内核）：caller 必须是 team 活跃成员，且 creator_user_id 强制 == caller。
@@ -333,6 +363,64 @@ export class MetadataClient {
     if (patch.description !== undefined) body.description = patch.description;
     if (patch.status !== undefined) body.status = patch.status;
     return this.fetch<TaskEntity>("/v3/meta/task/update", body);
+  }
+
+  // ── UserSessionDefault (v3.3) ──────────────────────────────────────────
+  //
+  // 用户级 session 默认 (team, agent, task) 三元组。详见 UserSessionDefaultEntity
+  // 类型注释与 docs/design/2026-10-10-user-session-default-design.md。
+
+  /**
+   * 查询用户的默认 (team, agent, task) 配置。
+   *
+   * 行为:
+   *   - 已配置: 返回完整 entity
+   *   - 未配置: Core 侧返 entity_not_found (code=404), 本方法吞成 `null`
+   *   - 其他异常 (网络 / 鉴权失败): 原样抛出, 由 caller 决定降级
+   */
+  async getUserSessionDefault(userId: string): Promise<UserSessionDefaultEntity | null> {
+    try {
+      return await this.fetch<UserSessionDefaultEntity>(
+        "/v3/meta/user-session-default/get",
+        { user_id: userId },
+      );
+    } catch (err) {
+      // Core 把 "未设置"表达为 envelope code=404 (entity_not_found);
+      // fetch() 层把它翻译成 Error 带 "404" 字样。
+      if (err instanceof Error && /\b404\b|entity_not_found/.test(err.message)) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * 设置 / 覆盖用户默认配置。
+   *
+   * task_id 字段可传真实 task_id 或字面量 `"default"` (= 不绑定任何 Task);
+   * Core Service 识别 "default" 字面量时跳过 task 实体校验。
+   */
+  async setUserSessionDefault(
+    userId: string,
+    input: SetUserSessionDefaultInput,
+  ): Promise<UserSessionDefaultEntity> {
+    return this.fetch<UserSessionDefaultEntity>(
+      "/v3/meta/user-session-default/set",
+      {
+        user_id: userId,
+        team_id: input.team_id,
+        agent_id: input.agent_id,
+        task_id: input.task_id,
+      },
+    );
+  }
+
+  /** 清除用户默认配置。幂等: 不存在也返 ok。 */
+  async deleteUserSessionDefault(userId: string): Promise<{ ok: true }> {
+    return this.fetch<{ ok: true }>(
+      "/v3/meta/user-session-default/delete",
+      { user_id: userId },
+    );
   }
 
   /**

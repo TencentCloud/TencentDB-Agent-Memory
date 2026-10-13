@@ -34,6 +34,7 @@ import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
 import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
+import { createHash } from "node:crypto";
 
 const TAG = "[memory-tdai] [extractor]";
 
@@ -45,6 +46,30 @@ export interface ExtractionResult {
   error?: string;
   /** True if LLM ran but produced no file changes (scene_index unchanged). */
   emptyExtraction?: boolean;
+  /** Persisted final scene-file delta, captured after index synchronization. */
+  sceneDiff?: PersistedSceneDiff;
+}
+
+export interface SceneFileSnapshot {
+  filename: string;
+  sha256: string;
+  chars: number;
+  parseable: boolean;
+  created: string;
+  updated: string;
+  summary: string;
+  heat: number;
+  /** Present in memory only; diagnostic serialization decides whether it may be logged. */
+  content: string;
+  raw: string;
+}
+
+export interface PersistedSceneDiff {
+  beforeFiles: string[];
+  afterFiles: string[];
+  created: SceneFileSnapshot[];
+  updated: Array<{ before: SceneFileSnapshot; after: SceneFileSnapshot }>;
+  deleted: SceneFileSnapshot[];
 }
 
 export interface SceneExtractorOptions {
@@ -202,7 +227,7 @@ export class SceneExtractor {
     // Snapshot scene index + content before LLM — used later to diff created/updated/deleted
     const preExtractIndex = new Map(index.map((e) => [e.filename, e.summary]));
     // Also snapshot scene content so we can detect content-only changes vs metadata-only changes
-    const preExtractContent = new Map<string, string>();
+    const preExtractSnapshots = new Map<string, SceneFileSnapshot>();
     for (const e of index) {
       try {
         let raw: string | null;
@@ -215,7 +240,7 @@ export class SceneExtractor {
         }
         if (!raw) continue;
         const block = parseSceneBlock(raw, e.filename);
-        preExtractContent.set(e.filename, block.content);
+        preExtractSnapshots.set(e.filename, snapshotSceneFile(e.filename, raw, block));
       } catch { /* non-fatal */ }
     }
 
@@ -412,67 +437,29 @@ export class SceneExtractor {
     const totalMs = Date.now() - extractStartMs;
     this.logger?.info(`${TAG} extract() completed: ${memories.length} memories processed in ${totalMs}ms`);
 
+    const sceneDiff = await this.capturePersistedDiff(preExtractSnapshots);
+    const resultScenes: Array<{ title: string; summary: string; content: string; status: "created" | "updated" }> = [
+      ...sceneDiff.created.map((scene) => ({
+        title: scene.filename.replace(/\.md$/, ""),
+        summary: scene.summary,
+        content: scene.content,
+        status: "created" as const,
+      })),
+      ...sceneDiff.updated
+        .filter(({ before, after }) => before.content !== after.content)
+        .map(({ after }) => ({
+          title: after.filename.replace(/\.md$/, ""),
+          summary: after.summary,
+          content: after.content,
+          status: "updated" as const,
+        })),
+    ];
+    const scenesCreated = sceneDiff.created.length;
+    const scenesUpdated = sceneDiff.updated.filter(({ before, after }) => before.content !== after.content).length;
+    const scenesDeleted = sceneDiff.deleted.length;
+
     // ── l2_extraction metric ──
     if (this.instanceId && this.logger) {
-      // Read updated scene index to report final state + diff against pre-extract snapshot
-      let resultScenes: Array<{ title: string; summary: string; content: string; status: "created" | "updated" }> = [];
-      let scenesCreated = 0;
-      let scenesUpdated = 0;
-      let scenesDeleted = 0;
-      try {
-        const finalIndex = await readSceneIndex(this.dataDir, this.storage);
-        const postFilenames = new Set<string>();
-        for (const e of finalIndex) {
-          postFilenames.add(e.filename);
-          const oldSummary = preExtractIndex.get(e.filename);
-          // Read scene block content from disk
-          let content = "";
-          try {
-            let raw: string | null;
-            if (this.storage) {
-              raw = await this.storage.readFile(`${StoragePaths.sceneBlocksDir}${e.filename}`);
-            } else {
-              const fs = await import("node:fs/promises");
-              const path = await import("node:path");
-              raw = await fs.default.readFile(path.default.join(this.dataDir, "scene_blocks", e.filename), "utf-8");
-            }
-            if (raw) {
-              const block = parseSceneBlock(raw, e.filename);
-              content = block.content;
-            }
-          } catch { /* file read failure is non-fatal */ }
-
-          if (oldSummary === undefined) {
-            // New scene
-            scenesCreated++;
-            resultScenes.push({
-              title: e.filename.replace(/\.md$/, ""),
-              summary: e.summary,
-              content,
-              status: "created",
-            });
-          } else {
-            // Existing scene — check if content actually changed (not just metadata)
-            const oldContent = preExtractContent.get(e.filename) ?? "";
-            if (content !== oldContent) {
-              scenesUpdated++;
-              resultScenes.push({
-                title: e.filename.replace(/\.md$/, ""),
-                summary: e.summary,
-                content,
-                status: "updated",
-              });
-            }
-            // If only metadata (summary/heat) changed but content is the same, skip
-          }
-        }
-        // Scenes in pre-extract but missing from post-extract = deleted
-        for (const [filename] of preExtractIndex) {
-          if (!postFilenames.has(filename)) {
-            scenesDeleted++;
-          }
-        }
-      } catch { /* non-fatal */ }
 
       report("l2_extraction", {
         inputMemoryCount: memories.length,
@@ -513,7 +500,67 @@ export class SceneExtractor {
       this.logger?.warn(`${TAG} extract() empty extraction detected: LLM produced no file changes`);
     }
 
-    return { memoriesProcessed: memories.length, success: true, emptyExtraction };
+    // Preserve the historical enumerable result shape: several callers compare
+    // this object structurally. The in-process L2 runner can still read the
+    // diagnostic delta, but it is not accidentally serialized as user content.
+    const result: ExtractionResult = {
+      memoriesProcessed: memories.length,
+      success: true,
+      emptyExtraction,
+    };
+    Object.defineProperty(result, "sceneDiff", {
+      value: sceneDiff,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+    return result;
+  }
+
+  private async capturePersistedDiff(
+    before: Map<string, SceneFileSnapshot>,
+  ): Promise<PersistedSceneDiff> {
+    const finalIndex = await readSceneIndex(this.dataDir, this.storage);
+    const after = new Map<string, SceneFileSnapshot>();
+    for (const entry of finalIndex) {
+      try {
+        let raw: string | null;
+        if (this.storage) {
+          raw = await this.storage.readFile(`${StoragePaths.sceneBlocksDir}${entry.filename}`);
+        } else {
+          const fs = await import("node:fs/promises");
+          const path = await import("node:path");
+          raw = await fs.default.readFile(
+            path.default.join(this.dataDir, "scene_blocks", entry.filename),
+            "utf-8",
+          );
+        }
+        if (!raw) continue;
+        const block = parseSceneBlock(raw, entry.filename);
+        after.set(entry.filename, snapshotSceneFile(entry.filename, raw, block));
+      } catch {
+        // A final index entry without a readable file is still visible through afterFiles.
+      }
+    }
+
+    const created: SceneFileSnapshot[] = [];
+    const updated: Array<{ before: SceneFileSnapshot; after: SceneFileSnapshot }> = [];
+    const deleted: SceneFileSnapshot[] = [];
+    for (const [filename, snapshot] of after) {
+      const old = before.get(filename);
+      if (!old) created.push(snapshot);
+      else if (old.sha256 !== snapshot.sha256) updated.push({ before: old, after: snapshot });
+    }
+    for (const [filename, snapshot] of before) {
+      if (!after.has(filename)) deleted.push(snapshot);
+    }
+    return {
+      beforeFiles: [...before.keys()].sort(),
+      afterFiles: finalIndex.map((entry) => entry.filename).sort(),
+      created,
+      updated,
+      deleted,
+    };
   }
 
   /**
@@ -597,6 +644,25 @@ export class SceneExtractor {
       await fs.default.writeFile(path.default.join(this.dataDir, "persona.md"), updated, "utf-8");
     }
   }
+}
+
+function snapshotSceneFile(
+  filename: string,
+  raw: string,
+  block: ReturnType<typeof parseSceneBlock>,
+): SceneFileSnapshot {
+  return {
+    filename,
+    sha256: createHash("sha256").update(raw).digest("hex"),
+    chars: raw.length,
+    parseable: block.meta.created.length > 0 || block.meta.updated.length > 0,
+    created: block.meta.created,
+    updated: block.meta.updated,
+    summary: block.meta.summary,
+    heat: block.meta.heat,
+    content: block.content,
+    raw,
+  };
 }
 
 function formatTimestamp(d: Date): string {

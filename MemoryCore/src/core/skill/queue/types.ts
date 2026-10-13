@@ -72,6 +72,12 @@ export interface ISkillExtractor {
     reason?: string;
     /** direct-trigger 场景：LLM 迭代上限，透传给 SkillExtractor 覆盖默认。 */
     options?: { max_iterations?: number };
+    /**
+     * 抽取模式;Worker 从 SkillTaskEntry.mode 读取后透传到这里,adapter 再传给
+     * SkillExtractor.extract({mode})。缺省/undefined 走默认 v2 SKILL_REVIEW_PROMPT;
+     * 'strict' 走 SKILL_REVIEW_PROMPT_STRICT (v1 严格 gate),用于冷启动/批量导入。
+     */
+    mode?: 'default' | 'strict';
   }): Promise<{ candidates: ExtractedCandidate[] }>;
 }
 

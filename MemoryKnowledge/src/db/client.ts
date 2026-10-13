@@ -48,6 +48,16 @@ export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Databas
  * via drizzle-kit, but for runtime we ensure tables exist).
  */
 export function migrate(_db: Db, raw: Database.Database): void {
+  // 前置：把老 user-scoped 凭据表清掉（新结构无法 IF NOT EXISTS 上位）。
+  // 判据：resource_id 列缺失 = 老结构，DROP 后由下方 CREATE 重建。
+  // 该能力尚未发布，无真实存量凭据。
+  if (
+    tableExists(raw, "knowledge_source_credential") &&
+    !hasColumn(raw, "knowledge_source_credential", "resource_id")
+  ) {
+    raw.exec("DROP TABLE knowledge_source_credential");
+  }
+
   raw.exec(`
     CREATE TABLE IF NOT EXISTS knowledge_code_graph (
       code_graph_id   TEXT PRIMARY KEY,
@@ -140,6 +150,25 @@ export function migrate(_db: Db, raw: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_kcga_cg_version
       ON knowledge_code_graph_audit(code_graph_id, version DESC);
 
+    CREATE TABLE IF NOT EXISTS knowledge_source_credential (
+      service_id       TEXT NOT NULL,
+      resource_type    TEXT NOT NULL,        -- 'code-graph' | 'wiki'
+      resource_id      TEXT NOT NULL,        -- = code_graph_id 或 wiki_id
+      provider_id      TEXT NOT NULL,        -- 'gongfeng' / 'iwiki' / ...（非键）
+      cred_kind        TEXT NOT NULL,        -- 'bearer' | 'basic'
+      cred_secret      TEXT NOT NULL,        -- base64(UTF-8 令牌)
+      cred_username    TEXT,                 -- 仅 basic
+      cred_extra_json  TEXT,
+      last_verified_at TEXT,
+      created_by       TEXT,
+      updated_by       TEXT,
+      created_at       TEXT NOT NULL,
+      updated_at       TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ksc_pk
+      ON knowledge_source_credential(service_id, resource_type, resource_id);
+
     CREATE TABLE IF NOT EXISTS llm_binding (
       service_id     TEXT PRIMARY KEY,
       mode           TEXT NOT NULL DEFAULT 'proxy',
@@ -163,6 +192,14 @@ export function migrate(_db: Db, raw: Database.Database): void {
   addColumnIfMissing(raw, "knowledge_code_graph_audit", "service_id", "TEXT");
 }
 
+/** True iff the given table exists in the DB. */
+function tableExists(raw: Database.Database, table: string): boolean {
+  const row = raw
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+    .get(table);
+  return !!row;
+}
+
 /** Add a column to a table if it doesn't already exist. SQLite-safe. */
 function addColumnIfMissing(
   raw: Database.Database,
@@ -170,8 +207,12 @@ function addColumnIfMissing(
   column: string,
   type: string,
 ): void {
+  if (hasColumn(raw, table, column)) return;
+  raw.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
+}
+
+/** True iff the given column exists on the table (SQLite PRAGMA-based). */
+function hasColumn(raw: Database.Database, table: string, column: string): boolean {
   const cols = raw.pragma(`table_info(${table})`) as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === column)) {
-    raw.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type};`);
-  }
+  return cols.some((c) => c.name === column);
 }

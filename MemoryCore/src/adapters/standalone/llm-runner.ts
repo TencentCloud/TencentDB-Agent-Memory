@@ -18,7 +18,7 @@
 
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { generateText, streamText, tool, stepCountIs, jsonSchema, Output, APICallError, NoObjectGeneratedError } from "ai";
+import { APICallError, NoObjectGeneratedError, Output, generateText, streamText, tool, stepCountIs, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
 import type {
@@ -421,7 +421,20 @@ export class StandaloneLLMRunner implements LLMRunner {
       return await this.executePlainCall(params, callParams, runStartMs);
     } catch (err) {
       const totalMs = Date.now() - runStartMs;
-      const errMsg = err instanceof Error ? err.message : String(err);
+      let errMsg = err instanceof Error ? err.message : String(err);
+      if (APICallError.isInstance(err)) {
+        // err.message alone can be as terse as "Not Found"; the failing URL,
+        // status and response body only exist on APICallError, so surface them
+        // here (preview + remainder counter, same convention as l1-extractor).
+        const body = typeof err.responseBody === "string" ? err.responseBody : "";
+        const bodyPreview = body.slice(0, 2048);
+        errMsg =
+          `${errMsg} (status=${err.statusCode ?? "?"}, url=${err.url}` +
+          (bodyPreview
+            ? `, body=${bodyPreview}${body.length > 2048 ? `…(+${body.length - 2048})` : ""}`
+            : "") +
+          ")";
+      }
       this.logger?.error(`${TAG} run() failed after ${totalMs}ms: ${errMsg}`);
 
       if (params.instanceId) {

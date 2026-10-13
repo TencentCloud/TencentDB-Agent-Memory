@@ -314,6 +314,11 @@ export class LangfuseInjectionObserver implements InjectionObserver {
         protocol: this.meta?.protocol ?? "unknown",
         agentSource: this.meta?.agentSource ?? "unknown",
       };
+      // 实例维度：注入 span 与上游 generation 共享同一 turn trace，
+      // 而 TRACE_METADATA 是 last-write-wins —— 不带 instanceId 会把它覆盖掉。
+      // 注入 metadata 的 injection meta 字段（AgentContextMetadata.spaceId）
+      // 内部保留 spaceId 名字；只有写进 Langfuse 的 key 改成 instanceId。
+      if (this.meta?.spaceId) obsMeta.instanceId = this.meta.spaceId;
 
       const span = startObservation(
         name,
@@ -338,8 +343,10 @@ export class LangfuseInjectionObserver implements InjectionObserver {
       const otelSpan = span.otelSpan;
       otelSpan.setAttribute(LangfuseOtelSpanAttributes.OBSERVATION_METADATA, JSON.stringify(obsMeta));
       // trace 级标注：叠加注入摘要（last-write-wins，所有 hook 都会写，最终保留最后一次的值）
+      // instanceId 一并带上：trace metadata 会被注入 span 覆盖，漏了它实例维度就丢了。
       otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_METADATA, JSON.stringify({
         injection: { hookId: hook.id, point, blockCount: blocks.length, durationMs },
+        ...(this.meta?.spaceId ? { instanceId: this.meta.spaceId } : {}),
       }));
       if (this.meta?.sessionKey) {
         otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, this.meta.sessionKey);
@@ -370,6 +377,7 @@ export class LangfuseInjectionObserver implements InjectionObserver {
         protocol: this.meta?.protocol ?? "unknown",
         agentSource: this.meta?.agentSource ?? "unknown",
       };
+      if (this.meta?.spaceId) obsMeta.instanceId = this.meta.spaceId;
 
       const span = startObservation(
         `[inject] ${hook.id} @ ${point} (error)`,

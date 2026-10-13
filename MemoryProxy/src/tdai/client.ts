@@ -54,6 +54,56 @@ function isLowSurrogate(code: number): boolean {
   return code >= 0xDC00 && code <= 0xDFFF;
 }
 
+// ── 共享工厂 (Phase 0.4, 2026-09-28) ─────────────────────────────────────
+/**
+ * 建 per-request TdaiClient。原本 handler / anthropicHandler / codexHandler /
+ * workbuddyHandler 各写一遍完全相同的 factory (workbuddy 版漏传 spaceId 是
+ * 已知 bug, 见 handler-audit §2.2)。
+ *
+ * `spaceId` (来自 URL `/{agent}/{spaceId}/...`) 覆盖 config.tdai.serviceId,
+ * 让多租户请求写到正确的 kernel tenant; 不传 spaceId 时回退全局默认 (兼容
+ * 老单租户部署)。
+ *
+ * memory 未启用时返 null, 调用侧靠 `if (client)` 短路。
+ */
+export function buildTdaiClientForRequest(
+  config: {
+    tdai: {
+      enabled?: boolean;
+      endpoint?: string;
+      apiKey?: string;
+      serviceId?: string;
+      memory: {
+        enabled?: boolean;
+        writeL0?: boolean;
+        recallL1?: boolean;
+        injectL2L3?: boolean;
+        l1Limit?: number;
+        l2Limit?: number;
+        timeoutMs?: number;
+      };
+    };
+  },
+  spaceId?: string,
+): TdaiClient | null {
+  const t = config.tdai;
+  if (!t?.enabled || !t.memory?.enabled || !t.endpoint) return null;
+  // 与 handler/anthropic 的 createTdaiClient 完全一致的字段透传;
+  // 老 factory 也没做 defaults — 依赖 config 加载器 fillDefaults 已经填过。
+  return new TdaiClient({
+    enabled: t.enabled && t.memory.enabled,
+    endpoint: t.endpoint,
+    apiKey: t.apiKey ?? "",
+    serviceId: spaceId || t.serviceId || "",
+    writeL0: t.memory.writeL0 ?? false,
+    recallL1: t.memory.recallL1 ?? false,
+    injectL2L3: t.memory.injectL2L3 ?? false,
+    l1Limit: t.memory.l1Limit ?? 0,
+    l2Limit: t.memory.l2Limit ?? 0,
+    timeoutMs: t.memory.timeoutMs ?? 0,
+  });
+}
+
 // ── ACL types ─────────────────────────────────────────────────────────────
 export type AclAction = "read" | "write" | "delete" | "grant";
 
@@ -118,7 +168,7 @@ export class TdaiClient {
         },
         identity.sessionId,
         identity.taskId,
-        { includeSession: true, includeTask: true },
+        { includeSession: true, includeTask: true, throwOnError: true },
       );
     }
   }
@@ -267,7 +317,7 @@ export class TdaiClient {
     body: Record<string, unknown>,
     sessionId: string,
     taskId: string | undefined,
-    options: { includeSession: boolean; includeTask: boolean } = { includeSession: true, includeTask: true },
+    options: { includeSession: boolean; includeTask: boolean; throwOnError?: boolean } = { includeSession: true, includeTask: true },
   ): Promise<T> {
     const base = this.config.endpoint.replace(/\/$/, "");
     const controller = new AbortController();
@@ -290,11 +340,18 @@ export class TdaiClient {
         headers,
         body: JSON.stringify(stripUndefined(body)),
       });
-      if (!res.ok) return {} as T;
+      if (!res.ok) {
+        if (options.throwOnError) throw new Error(`TDAI ${path} failed: HTTP ${res.status}`);
+        return {} as T;
+      }
       const envelope = await res.json() as TdaiEnvelope<T>;
-      if (typeof envelope.code === "number" && envelope.code !== 0) return {} as T;
+      if (typeof envelope.code === "number" && envelope.code !== 0) {
+        if (options.throwOnError) throw new Error(`TDAI ${path} failed: code ${envelope.code}`);
+        return {} as T;
+      }
       return (envelope.data ?? {}) as T;
-    } catch {
+    } catch (error) {
+      if (options.throwOnError) throw error;
       return {} as T;
     } finally {
       clearTimeout(timer);
@@ -303,8 +360,8 @@ export class TdaiClient {
 
   // ── ACL check ──────────────────────────────────────────────────────────
   //
-  // 与 memory 数据面调用（postForCtx）**语义相反**：
-  //   - postForCtx 网络/HTTP/envelope 错都吞掉返回空 —— 让注入路径静默降级
+  // 与 memory 读取调用（postForCtx 默认模式）**语义相反**：
+  //   - postForCtx 读取失败返回空，让注入路径降级；L0 写入开启 throwOnError
   //   - checkAcl 网络/HTTP/envelope 错要抛出 —— 让上层 fail-closed 拒绝注入
   //     并打 error 日志（否则 acl 服务挂了会静默变成"全部允许"，越权）
   //

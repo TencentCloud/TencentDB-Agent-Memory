@@ -62,7 +62,7 @@ upstream:
   agents: {}
     # claude-code:                                        # 服务端 key 模式
     #   url: "https://claude-upstream.example.com/v1"
-    #   apiKey: "sk-ant-agent-key"
+    #   apiKey: "example-only-agent-key"
     # codex:                                              # 客户端 key 透传模式
     #   url: "https://codex-upstream.example.com/v1"
     #   # 不写 apiKey → 透传客户端自己带上来的 key，不走外层兜底
@@ -121,6 +121,9 @@ redis:
   db: 0                    # Redis 数据库编号
   ttlSeconds: 1800         # 注入与 Skill 缓存 TTL（秒），默认 1800（30 分钟）
   # injectionTtlSeconds: 3600  # 注入层 hook 缓存 TTL（秒），默认复用 ttlSeconds
+  # turnSeqTtlDays: 30       # 会话 turn 序号计数 TTL（天），默认 30。必须远长于
+  #                          # ttlSeconds：会话态过期只是丢缓存，序号过期会让同一
+  #                          # 会话从 1 重新计数，与该会话早先的用量行撞号。
   # CostGuard 会话态（cg:sess:* / arch: / judge-*）也走这份 Redis。
   # 多实例部署必须开启，否则 task archive / judge latch 无法跨进程共享。
 
@@ -128,18 +131,18 @@ redis:
 # ── Cost Guard（可选私有路由扩展；未初始化 submodule 时整段无感透传） ────────
 # 宿主只解析 enabled / markerOptIn / agentProfile / anthropicUpstream。
 # 其余字段原样放进 options，交给 @context-proxy/cost-guard。
-#
-# 当前扩展会用到的 options（缺省时的行为）：
-#   taskArchiveEnabled  省略 = true。每个新 user turn 多一次同步 gate LLM。
-#   judge.enabled       省略 = false。开启后需配 baseUrl；宿主负责 HTTP 调用。
-#   compress* / gate*   省略则回退到 analyze 模型。
-#   requestPrepare      CCR 压缩门面，与路由开关相互独立。
 costGuard:
   enabled: false
+  # eitherOrEnabled: false
   markerOptIn: false       # true = 仅 /{agent}/{spaceId}/cost-guard/... 走路由
   agentProfile: auto
   # anthropicUpstream:
   #   url: "https://anthropic-upstream.example.com"
+  #   # 发往该上游时强制覆盖的请求头（覆盖客户端同名头），只作用于目标地址
+  #   # 等于 url 的请求。例：copilot /v1/messages 只对 TClaude-code 的
+  #   # User-Agent 正确处理 glm/kimi/deepseek + tools，其他 UA 返回 500。
+  #   headers:
+  #     User-Agent: "TClaude-code/0.1.8"
   # analyzeModel: "deepseek-v4-flash"
   # analyzeUrl: "https://analyzer.example.com/v1/chat/completions"
   # analyzeApiKey: ""
@@ -171,10 +174,104 @@ costGuard:
   #   everyNToolTurns: 5
   #   latchTtlSeconds: 0
   #   latchMaxTurns: 0
+  #   agentTurnSync: true     # agent turn 同步等判定结果再写 effort
+  #   effort:
+  #     userTurn: max          # 新 user turn 固定档位
+  #     agentTurnFallback: max # 判定失败/超时时的档位
+  #     only: [kimi-k3, deepseek-v4.1-flash, glm-5.3, claude-opus-5]
+  # modelPool:               # 客户端请求 serviceName 时在池内选模型
+  #   enabled: false         # 关闭时 tdai-code-o5 自动替换为 claude-opus-5 走原路径
+  #   serviceName: tdai-code-o5
+  #   compress: false        # 池请求是否requestPrepare；只在 requestPrepare 开着时有意义
+  #   primary:               # 兜底/强制场景用主模型；url/apiKey 省略走默认上游
+  #     id: claude-opus-5
+  #     model: claude-opus-5
+  #     # protocolModels:      # 某协议下上游模型名不同时按协议覆盖 model
+  #     #   anthropic: claude-opus-5-1m
+  #     description: "最强，复杂任务"
+  #   candidates:
+  #     - id: glm-5.3
+  #       model: glm-5.3
+  #       description: ""
+  #     - id: kimi-k3
+  #       model: kimi-k3
+  #       description: ""
+  #     - id: deepseek-v4.1-flash
+  #       model: deepseek-v4.1-flash
+  #       protocols: [openai]  # 省略 = openai + anthropic
+  #       description: ""
+  #   analyzer:              # 池分析模型；字段省略回退 analyze*
+  #     # 收到最近 3 轮原始 messages + 客户端 tools，无系统提示词，按请求自身协议发送：
+  #     # OpenAI 请求发 /v1/chat/completions，Anthropic 请求发 /v1/messages。
+  #     # 回 {"model":"<id>","confidence":n}，可以直接作为响应体
+  #     model: "router"
+  #     url: "http://analyzer.example.com:8091"   # base 或任一协议的完整路径
+  #     timeoutMs: 30000
   # controlPlane:            # 此 block 存在即启用；关闭时请整段省略
   #   port: 18097
   # requestPrepare:
   #   enabled: false
+  #   # CFQ（context_focus_question）子系统。字段全部可选，整段省略即用内置默认。
+  #   cfq:
+  #     enabled: true
+  #     # 是否给工具 schema 注入 context_focus_question 字段，让主模型自己填（T1）。
+  #     # 设 false 且下面 analyzeModelFallback.enabled 为 true 时进入「纯兜底模式」：
+  #     # 主模型完全不知道 CFQ 的存在，全部由分析模型在响应侧反推。
+  #     injectSchema: true
+  #     # 空数组 = 关闭白名单，内置黑名单之外的工具全部注入。
+  #     # 内置黑名单只认 Claude Code 的 PascalCase 名（Edit/Write/…），
+  #     # 其它客户端的 snake_case 工具要自己列进 schemaBlacklist。
+  #     schemaWhitelist: []
+  #     schemaBlacklist: ["edit_file", "write_file", "create_file",
+  #                       "str_replace_editor", "apply_diff", "replace_in_file"]
+  #     enforceRequired: true
+  #     # 覆盖注入字段的 description，仅 enforceRequired: true 时生效；省略即用内置 prompt。
+  #     # schemaPrompt: "REQUIRED. ..."
+  #     # 覆盖分析模型兜底的 system prompt；须保留 [{"id": 0, "cfq": "..."}] 的输出格式要求。
+  #     # analyzePrompt: "You generate Context Focus Questions ..."
+  #     maxLength: 200
+  #     # 主模型漏填 CFQ 时，用一个便宜模型在响应侧补生成并写进同一份缓存，
+  #     # 下一轮 backfill 照常命中。默认开启；显式 enabled: false 才关。
+  #     #
+  #     # model / url / apiKey 省略或留空时回退 costGuard 顶层的 analyzeModel /
+  #     # analyzeUrl / analyzeApiKey。三者补完仍缺一，兜底整体关闭；启动后
+  #     # grep cfq.analyze_fallback.misconfigured 可确认。写了非空值则用自己的。
+  #     #
+  #     # 其余字段省略即用代码默认值：batchSize 8、timeoutMs 30000、
+  #     # maxOutputTokens 128000、awaitPendingMs 8000、circuitBreaker 300/50/1800。
+  #     analyzeModelFallback:
+  #       enabled: true
+  #       batchSize: 8
+  #       # model / url / apiKey 可省略，默认用上面的 analyze*
+  #       timeoutMs: 30000
+  #       # 请求侧发现 backfill 缺口时，等待在途兜底的上限（毫秒）。
+  #       #
+  #       # 这个窗口就是兜底的全部机会：等到了当轮压，超时就落 no_cfq 缓存、
+  #       # 后续不再补。这样做是为了字节稳定——放行超时的条目去下一轮压，会让
+  #       # 同一段 tool_result 从原文变成压缩态，翻转点之后的整个前缀在上游
+  #       # prompt-cache 里失效。
+  #       #
+  #       # 8000 的依据：实测 77 次兜底中位 6.6s，82% 在 8.5s 内完成；等待从下
+  #       # 一轮请求到达时起算（兜底已先跑约 0.5s）。代价是有缺口的轮次平均阻塞
+  #       # 约 6.5 秒，请按自己分析模型的实际速度调整。
+  #       #
+  #       # 上限受 pending.ts 的 PENDING_TTL_S（30s）约束。0 = 不等，兜底退化成
+  #       # 只对后续轮次有效，当轮一律 no_cfq。
+  #       awaitPendingMs: 8000
+  #       # 兜底熔断 —— 按 spaceId 隔离的成本闸门，多节点通过 Redis 共享计数。
+  #       #
+  #       # 某个 space 在 windowSeconds 内兜底次数超过 threshold，接下来
+  #       # breakSeconds 内不再兜底，这些 tool_result 按 no_cfq 处理。
+  #       # 熔断期不打在途标记，所以请求侧也不会陪等 awaitPendingMs。
+  #       #
+  #       # 整段省略即用默认值（300 / 50 / 1800）；要关必须显式 enabled: false。
+  #       # 阈值按自己的流量调：5 分钟窗口 50 次，熔断后歇 30 分钟。
+  #       # 熔断是用来拦失控放大的，不是给正常使用设配额。
+  #       circuitBreaker:
+  #         enabled: true
+  #         windowSeconds: 300
+  #         threshold: 50
+  #         breakSeconds: 1800
 
 
 # ── Memory 实例 × 实际模型 Input TPM / QPM 限流 ──────────────────────────────
@@ -366,6 +463,15 @@ clickhouse:
   flushThreshold: 50                 # 缓冲区积累 N 条后立即 flush（0 = 禁止批量 flush）
   ttlDays: 30                        # 数据保留天数（0 = 不自动过期；启动时通过 CREATE TABLE TTL 生效）
 
+# ── 企业微信名称归属（可选）─────────────────────────────────────────────────
+# 启用后首次使用一个 API Key 时会通过客户端原生交互工具要求填写企业微信名称；
+# 未填写、无交互能力或 ClickHouse 不可用时请求会被拒绝。仅保存 SHA-256(API Key)，
+# 不会把明文 API Key 写进 ClickHouse、日志或进程缓存。
+wecomIdentity:
+  enabled: false
+  table: api_key_wecom_names
+  cacheTtlMs: 3600000                # 进程内正缓存 TTL（1 小时）
+  maxNameLength: 128
 
 # ── Auth 鉴权（user_key 校验 → user_id 解析） ─────────────────────────────────
 # 启用后 proxy 调用内核 POST /v3/meta/auth/verify 验证客户端 API Key。
@@ -436,6 +542,9 @@ creditReport:
 
 # ── Credit 计费价目表 ────────────────────────────────────────────────────────
 # 单位：Credit / 1K Token。
+# 旧格式（模型顶层 input/output/... 与 tiers）继续有效。若配置 rules，
+# 按优先级从高到低选择首个命中的时段规则；未命中则回退模型顶层价格。
+# 时间规则默认按 TokenHub 时区 Asia/Shanghai 判定，时间范围为 [start, end)。
 # 模型匹配规则：usage.model → 大小写不敏感全词匹配 → 未匹配则 credit=0
 #   （回退到 usage_raw 表并标记 reason='unknown_model'）。
 # 字段说明：
@@ -446,6 +555,7 @@ creditReport:
 #   cacheRead     — 缓存命中读取 token（prompt_cache_hit_tokens / cache_read_input_tokens）
 #   cacheWrite5m  — 缓存写入 5 分钟 TTL（cache_creation.ephemeral_5m_input_tokens）
 #   cacheWrite1h  — 缓存写入 1 小时 TTL（cache_creation_input_tokens 非 ephemeral 部分）
+# 峰谷规则的时区固定为北京时间（Asia/Shanghai），不可通过配置修改。
 creditPricing:
   models:
     - name: "your-endpoint-id"         # 上游下发的 endpoint id / 模型别名，示例：Claude Sonnet
@@ -455,6 +565,12 @@ creditPricing:
       cacheRead: 0.5493
       cacheWrite5m: 6.8668
       cacheWrite1h: 10.9869
+
+    # 模型池关闭时 tdai-code-o5 回退为 claude-opus-5，需要 modelName 为 claude-opus-5 的条目：
+    # - name: "claude-opus-5"
+    #   modelName: "claude-opus-5"
+    #   input: <price>
+    #   output: <price>
 
     - name: "deepseek-v4-pro"          # DeepSeek V4 Pro
       modelName: "DeepSeek V4 Pro"
@@ -471,6 +587,30 @@ creditPricing:
       cacheRead: 0.0030
       cacheWrite5m: 0.1500
       cacheWrite1h: 0.1500
+
+    # 示例：工作日峰谷计费。每次请求只命中一条 rule；命中后才按 tiers（若有）选长度档。
+    - name: "deepseek-v4-pro-0813"
+      modelName: "DeepSeek V4 Pro 0813"
+      # 顶层价格是 rules 未命中时的兼容兜底（此处为空闲价格）。
+      input: 0.4500
+      output: 1.3500
+      cacheRead: 0.0150
+      cacheWrite5m: 0
+      cacheWrite1h: 0
+      rules:
+        - id: "weekday-peak"
+          priority: 100
+          when:
+            weekdays: [mon, tue, wed, thu, fri]
+            timeRanges:
+              - { start: "09:00", end: "12:00" }
+              - { start: "14:00", end: "18:00" }
+          pricing:
+            input: 0.9000
+            output: 2.7000
+            cacheRead: 0.0300
+            cacheWrite5m: 0
+            cacheWrite1h: 0
 
 
 # ── 上下文注入（injection pipeline） ─────────────────────────────────────────
@@ -612,6 +752,8 @@ tdai:
     l1Limit: 5              # L1 召回最大条数
     l2Limit: 3              # L2/L3 注入最大条数
     timeoutMs: 5000         # 单次内核调用超时（毫秒）
+  sessionTrace:
+    maxQueuedBytes: 1073741824  # 在途会话上传（/v3/session/add）合计字节上限，超出的轮次直接丢弃。默认 1 GiB
 
 
 # ── Skill / 内核 gateway 数据面 ──────────────────────────────────────────────
@@ -632,6 +774,26 @@ skill:
   serviceId: "context-proxy"          # 租户/服务标识 → x-tdai-service-id
                                        #   请求路径带 /proxy/<spaceId>/ 时会被 spaceId 覆盖
   timeoutMs: 1500                     # 单次调用超时（毫秒）。RAG 在 session_init 热路径上，不宜太大
+
+
+# ── Instance-upstream 配置缓存（自定义模型分流的每实例配置） ─────────────────
+# proxy 每次 handler 会走 skill.endpoint + /v3/internal/meta/instance-upstream/list
+# 拉本 spaceId 的模型分组配置（default / custom / extraction 三类行），
+# 结果按 spaceId 缓存在进程内。数据接口复用 skill: 段的 endpoint / serviceToken /
+# timeoutMs，但语义与 skill 无关，独立成段以便未来扩展别的旋钮。
+#
+# 缓存内部固定语义（写死不走 yaml）：
+#   - hard expiry（不 refresh-on-access）+ stale-if-error 兜底
+#   - 最多 256 个实例，LRU 按写入顺序淘汰
+#   - 首次拿不到 → 返空 → 走"零行 fallback = official"，业务侧行为 = v1
+instanceUpstream:
+  # 缓存 TTL（秒）。默认 30。决定"Panel 改完自定义模型 → proxy 生效"的最长延迟。
+  #   非法值（0 / 负数 / NaN / 小数）一律回退默认 30s + warn 一行。
+  #   调优参考：
+  #     - 用户改完要 ≤1min 生效 → 保默认 30s
+  #     - core QPS 压力大、接受 N 秒生效 → 60~300 合理
+  #     - 别 <5s：会把 core /v3/internal/meta/instance-upstream/list 打热点
+  cacheTtlSec: 30
 
 
 # ── Knowledge tools 注入（独立 gateway 配置） ───────────────────────────────
@@ -666,6 +828,77 @@ skillRuntime:
                                  #   true:  <skill_tools> 注入全部工具（含写操作 create/update/delete 等）
                                  #          /skill-bridge 放行写操作
 
+  # ── skill 召回决策：谁来决定「用不用 skill / 用哪个」 ────────────────────
+  #
+  # enabled: false (默认, 行为与改造前完全一致 = legacy):
+  #   注入 <available_skills> 目录 + <skill_tools> curl 说明,
+  #   由主模型自己判断, 再自己 curl skill_view 拿正文。
+  #
+  # enabled: true 且所引用的策略可用:
+  #   目录与工具说明**都不注入**。新用户轮次由 proxy 用 `strategy` (定义在顶层
+  #   `selection.strategies`) 从候选里选 0 或 1 个; 选中后 proxy 直接返回一次工具调用
+  #   (Bash / execute_command / bash / shell / exec_command, 按客户端 tools 自动选择),
+  #   客户端执行 curl /skill-bridge/v3/skill/raw 加载 (会弹权限确认)。结果进入客户端
+  #   历史: 不回补、当轮生效、前缀缓存稳定。
+  #   支持协议: Anthropic Messages (claude-code) / OpenAI Chat (codebuddy / opencode / dsh) /
+  #   OpenAI Responses (codex / workbuddy)。
+  #
+  # enabled: true 但策略不可用 (如未配 apiKey): 启动时告警并回退 legacy。
+  #
+  # 开启后的已知边界（切换前务必确认）:
+  #   - 主模型不再具备「自己检索团队 skill 库」的默认能力 (skill_search 不注入)
+  #   - 只加载 SKILL.md 正文; scripts/ 等附件不会自动下发
+  #   - 运行期单次失败 (超时/限流/无权限/版本不一致/正文超预算): 本轮不加载, 不回退 legacy
+  #   - 上游为原生 Anthropic/Bedrock/Vertex 且开启 thinking 时本轮跳过;
+  #     斜杠命令 / compact 摘要 / session-init 完成轮不触发
+  #   - 策略再次选中已加载或失败过的 skill 时跳过本轮, 不再加载或自动改选次优项
+  #   - 按客户端历史计数: 累计失败 2 次后停止; 最多加载 3 个; 客户端 compact 后计数可能丢失
+  #   - 加载的 skill 正文受 cost-guard 压缩保护; 不保证客户端自己的 compact 保留全文
+  #   - listing 路径依赖 /v3/skill/listing 返回 `candidates` 字段, Core 需同步升级
+  #
+  # 以下两段 selection 样例默认都注释, 未配置时 enabled=false, 保持 legacy。
+  # 启用时: 取消本段和下方顶层 selection 的注释, 设置模型/服务 ID, 配置环境变量,
+  # 确保 injection.enabled=true、injectors 包含 skill, externalGatewayUrl 可被客户端访问,
+  # 然后重启 proxy。不要恢复已移除的 delivery / reselectEachTurn 配置。
+  # selection:
+  #   enabled: true               # 仅取消注释后启用; 代码默认 false
+  #   strategy: jev               # 引用顶层 selection.strategies 下的策略
+  #   contextCharBudget: 6000      # 发给策略模型的对话上下文字符预算
+  #   contentCharBudget: 24000     # 加载 SKILL.md 正文的上限; 超限则不加载
+  #   maxCandidates: 20           # 默认最多 20 个; 要先召回 Top-5 则改为 5, 另加 none 选项
+  #   useConversationQuery: true  # 新用户轮次按对话 query 做 hybrid 召回, 工具结果续轮不触发
+
+# ── 通用选择策略（与资产无关，skill / 以后的 memory 等按名引用） ───────────
+# 每个策略 = 一个 decision provider + 选择参数; 策略名即 YAML key, 由
+# skillRuntime.selection.strategy 引用。`provider` 默认 jev (当前唯一内置实现)。
+# 接入其他 decision API: 在 src/decision/providers/<type>/ 实现 DecisionProvider,
+# 在 src/decision/registry.ts 注册, 然后在这里写 `provider: <type>` 即可, 无需改策略代码。
+# 非 jev provider 不继承 jev 的默认 endpoint/model, 也不读取 TYPESAFE_API_KEY;
+# 用 apiKeyEnv 指定它自己的环境变量。provider 私有参数放 options。
+# 本段是顶层配置, 不要嵌套在 skillRuntime.selection 中。
+# 以下使用 TokenHub 示例; 原生 Typesafe 可改用 https://api.typesafe.ai/v1/systemone
+# 并填写该服务支持的模型名。模型 ID 与 key 必须属于可访问的同一服务。
+# selection:
+#   strategies:
+#     jev:
+#       provider: jev               # decision provider 类型, 默认 jev
+#       endpoint: "https://tokenhub.tencentmaas.com/v1/systemone"
+#       # 解析优先级: TYPESAFE_API_KEY env > 这里 (支持 ${VAR}) > 空。
+#       # 空 → 引用它的资产回退 legacy（启动时告警）。不要写明文。
+#       apiKey: "${TYPESAFE_API_KEY}"
+#       model: "ep-YOUR-SERVICE-ID" # 替换为实际模型 / 服务 ID, 此处仅为占位符
+#       timeoutMs: 3000             # 在线路径单次调用超时
+#       minConfidence: 0            # 选中项置信度门槛 (0~1), 0 = 不设门槛
+#
+#   # 接入其他 decision API 的写法 (需先注册对应 provider; 引用时改
+#   # skillRuntime.selection.strategy: my-decision):
+#   #   my-decision:
+#   #     provider: my-decision-api      # 已在 src/decision/registry.ts 注册的类型
+#   #     endpoint: "https://decision.example.com/v1/decide"
+#   #     apiKeyEnv: <ENV_VAR_NAME>      # 存放 key 的环境变量名 (不是 key 本身)
+#   #     model: "decide-v1"
+#   #     timeoutMs: 3000
+#   #     options: {}                    # provider 私有参数
 
 # ── mem: 特殊命令 ──────────────────────────────────────────────────────────
 # 用户在对话框输入 mem:sync / mem:create-skill / mem:help 等命令时，
@@ -719,3 +952,54 @@ ccRequestRouting:
 traceArchive:
   enabled: false                   # true = 启用本地 JSONL trace 归档；false = 关闭（默认）
   dir: "logs/traces"               # 归档目录（相对于项目根目录或绝对路径）
+
+
+# ── Pipeline 重构灰度切换 (2026-09-28, addendum) ─────────────────────────────
+# blueprint-review §2 采纳: 按 agent 粒度灰度, 每步只 flip 一个 key。
+#
+# 未定义 pipeline 字段 → 全部走老 handler.ts / anthropicHandler.ts /
+# codexHandler.ts / workbuddyHandler.ts / directHandler.ts / auxiliaryHandler.ts,
+# 与重构前 100% 等价 (向后兼容红线)。
+#
+# 迁移顺序 (v2 §4 Phase 4.1-4.5, 风险递增):
+#   1. direct        Phase 4.1 - 最简单最低风险
+#   2. utility       Phase 4.1 - 同批
+#   3. codex         Phase 4.2 - codex/wb 起步 stageGates=minimal, 与老 handler 等价
+#   4. workbuddy     Phase 4.3
+#   5. codebuddy/dsh/opencode/pi  Phase 4.4 (handler.ts 承载, stageGates=full)
+#   6. claude-code   Phase 4.5 - 最复杂的 anthropic 协议
+#
+# 回滚: 改回 false 或删除该行即可, 秒级生效。
+#
+# ⚠️ Phase 4.4/4.5 完全实现前, flip 到 true 时新 pipeline 会抛
+# PipelineNotImplementedError, pick() 自动 fallback 到老 handler 并记一次 warn ——
+# 生产不会挂线, 但 warn 一直响, 请勿提前 flip。
+pipeline:
+  migrated:
+    # Phase 4 已完整完成 (2026-09-28): 全部 6 个老 handler (handler.ts /
+    # anthropicHandler.ts / codexHandler.ts / workbuddyHandler.ts /
+    # directHandler.ts / auxiliaryHandler.ts) 的完整实现都已迁移到
+    # pipeline/runners/, 老 handler.ts 等文件已退化为 5-20 行 re-export shim。
+    #
+    # 因此: pipeline.migrated.<agent>=true 或 false 效果完全等价 (两个都会
+    # 最终调到 pipeline/runners/ 里的完整实现) —— 只是多/少一层浅层 shim 转发。
+    #
+    # 保留本配置字段是为 Phase 6 清理路径:
+    #   1. 清 server.ts pickHandler 层, 直接指向 entrypoints/*
+    #   2. 删本 pipeline 段
+    #   3. 删 6 个 shim 文件
+    # 逐步来, 每步独立可回滚。
+    #
+    # 唯一副作用差异: 迁移过程中顺手修的 latent leak (addendum §2.4) —
+    # direct/utility 的 SKIP_REQUEST_HEADERS 从 HOP_BY_HOP 版本升到
+    # WITH_INTERNAL, 防 x-tdai-user-key 透传上游。
+    # 默认 false, 走老 shim; 客户端确认无 x-tdai-user-key 依赖后可 flip。
+    direct: false
+    utility: false
+    codex: false
+    workbuddy: false
+    codebuddy: false
+    dsh: false
+    opencode: false
+    pi: false
+    claude-code: false

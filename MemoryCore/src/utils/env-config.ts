@@ -60,6 +60,23 @@ export function resolveMaxBodyBytes(): number {
   return n;
 }
 
+export const DEFAULT_SESSION_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Resolve the request body limit for the `/v3/session/add` route.
+ *
+ * Source: `MEMORY_SESSION_MAX_BODY_BYTES` (positive integer). Falls back to
+ * {@link DEFAULT_SESSION_MAX_BODY_BYTES} (32 MiB) if unset, non-numeric, or
+ * non-positive. Other routes keep {@link resolveMaxBodyBytes}.
+ */
+export function resolveSessionMaxBodyBytes(): number {
+  const raw = ENV.MEMORY_SESSION_MAX_BODY_BYTES;
+  if (!raw) return DEFAULT_SESSION_MAX_BODY_BYTES;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_SESSION_MAX_BODY_BYTES;
+  return n;
+}
+
 /** Connection details for the per-instance vector store. */
 export interface VdbEnvConfig {
   url: string;

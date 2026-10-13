@@ -28,6 +28,12 @@ MEMORY_CORE_ADMIN_USERNAME="${MEMORY_CORE_ADMIN_USERNAME:-admin}"
 # admin user_key 持久化位置（宿主机侧；volume 数据被清后需一并删掉此文件）
 ADMIN_KEY_FILE="${MEMORY_CORE_ADMIN_KEY_FILE:-$SCRIPT_DIR/.admin-key}"
 
+# 可选 Bearer 头：仅在设置了 gateway 凭据时附带（数组展开，避免分词问题）。
+AUTH_HEADER=()
+if [[ -n "$MEMORY_CORE_GATEWAY_API_KEY" ]]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $MEMORY_CORE_GATEWAY_API_KEY")
+fi
+
 if [[ -n "$MEMORY_CORE_GATEWAY_API_KEY" ]]; then
   warn "MEMORY_CORE_GATEWAY_API_KEY 非空 —— proxy 的 sessionInit/auth 目前会因缺 Bearer 而失败。"
   warn "本地体验请把 .env 里的 MEMORY_CORE_GATEWAY_API_KEY 留空。"
@@ -118,6 +124,38 @@ else
   info "memory-core 元数据后端 = sqlite（容器 volume 内）"
 fi
 
+# ── L3 即时更新决策（默认 current；显式启用才生成 JEV 配置）──────────────
+MEMORY_CORE_PERSONA_TRIGGER_MODE="${MEMORY_CORE_PERSONA_TRIGGER_MODE:-current}"
+JEV_ENV_ARGS=()
+case "$MEMORY_CORE_PERSONA_TRIGGER_MODE" in
+  current)
+    PERSONA_TRIGGER_YAML="    triggerMode: current"
+    ;;
+  jev)
+    require_vars MEMORY_CORE_JEV_ENDPOINT MEMORY_CORE_JEV_MODEL TYPESAFE_API_KEY
+    MEMORY_CORE_JEV_PROVIDER="${MEMORY_CORE_JEV_PROVIDER:-jev}"
+    MEMORY_CORE_JEV_TIMEOUT_MS="${MEMORY_CORE_JEV_TIMEOUT_MS:-3000}"
+    MEMORY_CORE_JEV_DIAGNOSTICS_MODE="${MEMORY_CORE_JEV_DIAGNOSTICS_MODE:-off}"
+    PERSONA_TRIGGER_YAML=$(cat <<YAML
+    triggerMode: jev
+    jev:
+      provider: "${MEMORY_CORE_JEV_PROVIDER}"
+      endpoint: "${MEMORY_CORE_JEV_ENDPOINT}"
+      # Secret 不落盘；Core 启动后从同名环境变量解析。
+      apiKey: "\${TYPESAFE_API_KEY}"
+      model: "${MEMORY_CORE_JEV_MODEL}"
+      timeoutMs: ${MEMORY_CORE_JEV_TIMEOUT_MS}
+      diagnostics:
+        mode: "${MEMORY_CORE_JEV_DIAGNOSTICS_MODE}"
+YAML
+)
+    JEV_ENV_ARGS+=( -e "TYPESAFE_API_KEY=$TYPESAFE_API_KEY" )
+    ;;
+  *)
+    die "MEMORY_CORE_PERSONA_TRIGGER_MODE 仅支持 current 或 jev"
+    ;;
+esac
+
 pull_image "$MEMORY_CORE_IMAGE"
 rm_container_if_exists "$CONTAINER"
 
@@ -127,6 +165,7 @@ rm_container_if_exists "$CONTAINER"
 CORE_CONFIG_DIR="${MEMORY_CORE_CONFIG_DIR:-$SCRIPT_DIR/.memory-core-config}"
 mkdir -p "$CORE_CONFIG_DIR"
 CORE_CONFIG_FILE="$CORE_CONFIG_DIR/tdai-gateway.yaml"
+
 info "生成 gateway config → $CORE_CONFIG_FILE"
 cat > "$CORE_CONFIG_FILE" <<YAML
 # 由 start-memory-core.sh 自动生成 —— 每次启动覆盖，请不要手动改。
@@ -161,6 +200,7 @@ memory:
   persona:
     triggerEveryN: 50
     maxScenes: 15
+${PERSONA_TRIGGER_YAML}
   pipeline:
     everyNConversations: 5
     enableWarmup: true
@@ -212,6 +252,7 @@ $DOCKER run -d --name "$CONTAINER" \
   -e TDAI_GATEWAY_API_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
   -e TDAI_DATA_DIR=/data/tdai-memory \
   -e STORE_MODE="$MEMORY_CORE_STORE_MODE" \
+  ${JEV_ENV_ARGS[@]+"${JEV_ENV_ARGS[@]}"} \
   ${MONGO_ENV_ARGS[@]+"${MONGO_ENV_ARGS[@]}"} \
   "$MEMORY_CORE_IMAGE" >/dev/null
 
@@ -247,7 +288,7 @@ verify_user_key() {
   code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
-    ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
+    "${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"}" \
     "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify" \
     -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || echo "000")
   [[ "$code" == "200" ]]
@@ -267,7 +308,7 @@ init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
 init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
-  ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
+  "${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"}" \
   -H "x-tdai-service-id: default" \
   "http://localhost:${MEMORY_CORE_PORT}/v3/internal/meta/user/init-admin" \
   -d "$init_body" 2>/dev/null || echo "000")

@@ -24,11 +24,36 @@ import {
   okEnvelope,
   requireTeamMember,
   requireKnowledgeRead,
+  requireWikiWritable,
   runKs,
   ensureKnowledgeAsset,
   deleteKnowledgeCascade,
   ASSET_TYPE_WIKI,
 } from './common.js';
+
+// 上传大小限制（W9 raw/write 与 import-and-ingest 共用，避免复合端点绕过 W9 限制）
+const MAX_FILE_SIZE = 512 * 1024;        // 单文件 512KB
+const MAX_FILES_PER_REQUEST = 10;        // 单次最多 10 个文件
+const MAX_TOTAL_SIZE = 5 * 1024 * 1024;  // 单次总大小 5MB
+
+/** 校验一批待写文件是否满足大小限制；违规返回错误码，否则返回 null。 */
+function checkFileSizes(files: WikiRawWriteFile[]): string | null {
+  if (files.length > MAX_FILES_PER_REQUEST) {
+    return `TOO_MANY_FILES (max ${MAX_FILES_PER_REQUEST})`;
+  }
+  let totalSize = 0;
+  for (const f of files) {
+    const size = Buffer.byteLength(f?.content ?? '', 'utf-8');
+    if (size > MAX_FILE_SIZE) {
+      return `FILE_TOO_LARGE (max ${MAX_FILE_SIZE} bytes, got ${size})`;
+    }
+    totalSize += size;
+  }
+  if (totalSize > MAX_TOTAL_SIZE) {
+    return `TOTAL_TOO_LARGE (max ${MAX_TOTAL_SIZE} bytes, got ${totalSize})`;
+  }
+  return null;
+}
 
 export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
   const mw = validatePanelMetaHeaders(deps);
@@ -56,6 +81,12 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const body = await readJson(c);
     const teamId = str(body, 'team_id');
     const name = str(body, 'name');
+    const sourceUrl = str(body, 'source_url') ?? undefined;
+    const sourceType = str(body, 'source_type') ?? undefined;
+    // 成对校验：只给其一属前端/调用方 bug，早失败好过静默丢掉来源。
+    if (!!sourceUrl !== !!sourceType) {
+      return respondControlError(c, 400, 'SOURCE_TYPE_AND_URL_MUST_BE_PAIRED');
+    }
     if (!teamId) return respondControlError(c, 400, 'MISSING_TEAM_ID');
     if (!name) return respondControlError(c, 400, 'MISSING_NAME');
     const gate = await requireTeamMember(deps, c, ctx, teamId);
@@ -63,7 +94,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     let detail;
     try {
-      detail = await kc.wikiCreate(teamId, name, gate.userId);
+      detail = await kc.wikiCreate(teamId, name, gate.userId, sourceUrl, sourceType);
     } catch (err) {
       return runKs(c, () => Promise.reject(err));
     }
@@ -81,13 +112,16 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     return respondEnvelope(c, okEnvelope(c, detail));
   });
 
-  // W4 ingest — id-only（需 read 权限）+ 空 wiki 校验
+  // W4 ingest — id-only（team 成员即可）+ 空 wiki 校验
+  //
+  // 门控用 requireWikiWritable 而非 action:'write'：wiki 是 team 共享资产，
+  // 抽取属于内容贡献，同 team 任何成员都应能触发（否则"A 建的库 B 能看不能抽"）。
   api.post('/knowledge/wiki/ingest', mw, async (c) => {
     const ctx = buildCtx(c);
     const body = await readJson(c);
     const wikiId = str(body, 'wiki_id');
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write' });
+    const gate = await requireWikiWritable(deps, c, ctx, wikiId);
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     // 空 wiki 禁止 ingest：先查 raw/ls，无源文件则拒绝
@@ -236,7 +270,9 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     return runKs(c, () => kc.wikiRawRead(wikiId, filenames));
   });
 
-  // W10 raw/rm — id-only + write 权限；KS 需要 team_id，来自 meta_asset.team_id
+  // W10 raw/rm — id-only + team 成员即可；KS 需要 team_id，来自 meta_asset.team_id
+  //
+  // 与 raw/write（requireTeamMember）保持同一口径：能写素材就能删素材。
   api.post('/knowledge/wiki/raw/rm', mw, async (c) => {
     const ctx = buildCtx(c);
     const body = await readJson(c);
@@ -244,7 +280,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     const filenames = Array.isArray(body.filenames) ? (body.filenames as string[]) : [];
     if (filenames.length === 0) return respondControlError(c, 400, 'MISSING_FILENAMES');
-    const gate = await requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'write' });
+    const gate = await requireWikiWritable(deps, c, ctx, wikiId);
     if ('error' in gate) return gate.error;
     const teamId = gate.asset?.team_id;
     if (!teamId) return respondControlError(c, 400, 'MISSING_TEAM_ID');
@@ -253,10 +289,6 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
   });
 
   // W9 raw/write — team 门控 + 上传大小限制
-  const MAX_FILE_SIZE = 512 * 1024;        // 单文件 512KB
-  const MAX_FILES_PER_REQUEST = 10;        // 单次最多 10 个文件
-  const MAX_TOTAL_SIZE = 5 * 1024 * 1024;  // 单次总大小 5MB
-
   api.post('/knowledge/wiki/raw/write', mw, async (c) => {
     const ctx = buildCtx(c);
     const body = await readJson(c);
@@ -266,23 +298,144 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
     const files = Array.isArray(body.files) ? (body.files as WikiRawWriteFile[]) : [];
     if (files.length === 0) return respondControlError(c, 400, 'MISSING_FILES');
-    if (files.length > MAX_FILES_PER_REQUEST) {
-      return respondControlError(c, 413, `TOO_MANY_FILES (max ${MAX_FILES_PER_REQUEST})`);
-    }
-    let totalSize = 0;
-    for (const f of files) {
-      const size = Buffer.byteLength(f.content ?? '', 'utf-8');
-      if (size > MAX_FILE_SIZE) {
-        return respondControlError(c, 413, `FILE_TOO_LARGE (max ${MAX_FILE_SIZE} bytes, got ${size})`);
-      }
-      totalSize += size;
-    }
-    if (totalSize > MAX_TOTAL_SIZE) {
-      return respondControlError(c, 413, `TOTAL_TOO_LARGE (max ${MAX_TOTAL_SIZE} bytes, got ${totalSize})`);
-    }
+    // 大小校验复用模块级 checkFileSizes，与 import-and-ingest 同源：
+    // 阈值与错误码只有一份定义，避免两处各自维护导致复合端点绕过 W9 限制。
+    const sizeErr = checkFileSizes(files);
+    if (sizeErr) return respondControlError(c, 413, sizeErr);
     const gate = await requireTeamMember(deps, c, ctx, teamId);
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     return runKs(c, () => kc.wikiRawWrite(teamId, wikiId, files, gate.userId));
+  });
+
+  // W17 import-and-ingest — 设计 2026-09-21：详情页「添加」+「Ingest」合并后的单一入口。
+  //
+  // 一次调用完成：写 raw（可选）→ 触发 ingest（onBusy:'replace'，KS 侧原子完成
+  // "取消旧任务 + 排队新任务"）。Panel 不做独立 cancel 步骤，也不做有限重试。
+  //
+  // mode 与 Modal 三 tab 一一对应：
+  //   files | markdown → wikiRawWrite；external → wikiSourceImport；reingest → 跳过写 raw。
+  api.post('/knowledge/wiki/import-and-ingest', mw, async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const wikiId = str(body, 'wiki_id');
+    const mode = str(body, 'mode');
+    if (!wikiId) return respondControlError(c, 400, 'MISSING_WIKI_ID');
+    if (!mode || !['files', 'markdown', 'external', 'reingest'].includes(mode)) {
+      return respondControlError(c, 400, 'INVALID_MODE');
+    }
+    // 门控：team 成员即可（requireWikiWritable）—— 同 team 任何成员都能往共享
+    // wiki 里导入文档，不再要求是该 wiki 的 owner。
+    const gate = await requireWikiWritable(deps, c, ctx, wikiId);
+    if ('error' in gate) return gate.error;
+    // teamId 来自 meta_asset（与 page/rm、raw/rm 同款写法），不信任 body。
+    const teamId = gate.asset?.team_id;
+    if (!teamId) return respondControlError(c, 400, 'MISSING_TEAM_ID');
+    const kc = deps.knowledgeClientFactory(ctx.instanceId);
+
+    const startedAt = Date.now();
+    let rawPersisted = false;
+    let writeMs = 0;
+    let yieldMs = 0;
+
+    try {
+      // ⓪ 无等待让位：KS 的 rawWrite/rawWriteMany 已放行 processing 状态写入
+      //    （设计 2026-09-21「新导入覆盖旧导入」），因此此处不再轮询等待
+      //    旧任务归位。旧任务的取消由后续 ingest(onBusy:'replace') 完成。
+      // ① 写 raw（reingest 模式跳过）
+      // ① 写 raw（reingest 模式跳过）
+      if (mode === 'files' || mode === 'markdown') {
+        const files = Array.isArray(body.files)
+          ? (body.files as WikiRawWriteFile[])
+          : Array.isArray(body.markdown)
+            ? (body.markdown as WikiRawWriteFile[])
+            : [];
+        if (files.length === 0) return respondControlError(c, 400, 'MISSING_FILES');
+        // 字段校验：KS 要求 { filename, content }，缺 filename 会在 KS 侧报
+        // "filename is required for each file"。在 Panel 层提前拦下并给出明确错误，
+        // 避免这类契约不匹配静默穿透到 KS。
+        const badFile = files.find(
+          (f) => !f || typeof f.filename !== 'string' || f.filename.trim() === '' || typeof f.content !== 'string',
+        );
+        if (badFile) return respondControlError(c, 400, 'INVALID_FILE_ITEM');
+        const sizeErr = checkFileSizes(files);
+        if (sizeErr) return respondControlError(c, 413, sizeErr);
+
+        const w0 = Date.now();
+        await kc.wikiRawWrite(teamId, wikiId, files, gate.userId);
+        writeMs = Date.now() - w0;
+        rawPersisted = true;
+      } else if (mode === 'external') {
+        const sourceUrl = str(body, 'source_url');
+        const providerId = str(body, 'provider_id');
+        if (!sourceUrl) return respondControlError(c, 400, 'MISSING_SOURCE_URL');
+        if (!providerId) return respondControlError(c, 400, 'MISSING_PROVIDER_ID');
+        const pageIds = Array.isArray(body.page_ids)
+          ? (body.page_ids as unknown[]).filter((x): x is string => typeof x === 'string')
+          : undefined;
+
+        const w0 = Date.now();
+        await kc.wikiSourceImport({
+          wikiId,
+          sourceUrl,
+          providerId,
+          pageIds,
+          actor: { teamId, userId: gate.userId },
+        });
+        writeMs = Date.now() - w0;
+        rawPersisted = true;
+      }
+
+      // ② 触发 ingest：onBusy='replace' 让 KS 原子完成"取消旧任务 + 排队新任务"
+      const i0 = Date.now();
+      const task = await kc.wikiIngest(wikiId, { onBusy: 'replace' });
+      const ingestMs = Date.now() - i0;
+
+      deps.logger.info('[wiki.import_and_ingest] ok', {
+        wiki_id: wikiId,
+        mode,
+        write_ms: writeMs,
+        ingest_ms: ingestMs,
+        total_ms: Date.now() - startedAt,
+        is_replace: task.queued === true,
+        yield_ms: yieldMs,
+        raw_persisted: rawPersisted,
+      });
+
+      return respondEnvelope(
+        c,
+        okEnvelope(c, {
+          ok: true,
+          wiki_id: wikiId,
+          ingest_task_id: task.wiki_id,
+          status: task.status,
+          queued: task.queued === true,
+        }),
+      );
+    } catch (err) {
+      const failedAt = rawPersisted ? 'ingest' : 'write';
+      const message = err instanceof Error ? err.message : String(err);
+      deps.logger.error('[wiki.import_and_ingest] failed', {
+        wiki_id: wikiId,
+        mode,
+        write_ms: writeMs,
+        yield_ms: yieldMs,
+        total_ms: Date.now() - startedAt,
+        failed_at: failedAt,
+        raw_persisted: rawPersisted,
+        error: message,
+      });
+      return respondEnvelope(
+        c,
+        okEnvelope(c, {
+          ok: false,
+          wiki_id: wikiId,
+          failed_at: failedAt,
+          error_code: 'IMPORT_AND_INGEST_FAILED',
+          error_message: message,
+          raw_persisted: rawPersisted,
+        }),
+      );
+    }
   });
 }

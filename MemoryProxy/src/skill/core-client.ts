@@ -199,13 +199,60 @@ export interface ListingInput extends IdFields {
   query?: string;
   /** char budget for the rendered listing block. Default 8000 in plugin. */
   char_budget?: number;
+  /**
+   * Recall mode:
+   *   - undefined / 'auto': plugin 走 BM25 (query 非空) 或 list head (query 空);
+   *   - 'activity': 读 skill_usage_logs 按 MRR 排序 (default-task 场景专用).
+   *
+   * 'activity' 在 CH 未配置/查询失败/冷启动时会 fallback 到 'auto' 逻辑,
+   * response.mode 会体现最终使用的模式 ('activity' / 'search' / 'full').
+   *
+   * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+   */
+  mode?: "auto" | "activity";
+}
+
+/**
+ * 结构化候选项 —— `/v3/skill/listing` 在 `hits` 之外额外返回的字段。
+ *
+ * 与 `hits` 的区别：
+ *   - 带 `description`（selection 策略 判断相关性必需）
+ *   - 只包含**实际渲染进 `listing` 且未被 char_budget 截断**的条目，
+ *     所以候选范围与旧链路注入到 prompt 的目录严格一致
+ *
+ * 老内核不返回该字段 → `undefined`，调用方必须能降级（selection 模式下等价于
+ * 无候选 → 不注入 skill）。
+ */
+export interface ListingCandidate {
+  skill_id: string;
+  version: number;
+  name: string;
+  description: string;
 }
 
 /** Result from /v3/skill/listing. `listing` is the pre-rendered `<available_skills>` block. */
 export interface ListingResult {
-  mode: "full" | "search";
+  /** 实际使用的召回模式 —— activity 请求可能因 fallback 返回 full/search。 */
+  mode: "full" | "search" | "activity";
   listing: string;
   hits: Array<{ skill_id: string; version: number; name: string }>;
+  /** 结构化候选。老内核缺该字段时为 `undefined`。 */
+  candidates?: ListingCandidate[];
+}
+
+/** Input for /v3/skill/get —— 只读取指定 skill 的正文/清单。 */
+export interface GetSkillInput extends IdFields {
+  skill_id: string;
+  /** 固定版本。不传 = head —— selection 链路必须显式传，避免读到与候选不同的版本。 */
+  version?: number;
+  include_content?: boolean;
+  include_manifest?: boolean;
+}
+
+/** Result from /v3/skill/get（`toSummary` flat 形状 + 可选 content/manifest）。 */
+export interface GetSkillResult extends SkillSummary {
+  content?: string;
+  manifest?: Array<{ path: string; size_bytes?: number; mime_type?: string }>;
 }
 
 /** Core gateway envelope (mirrors `tdai-memory-plugin/src/gateway/v2-router.ts:145-150`). */
@@ -318,6 +365,20 @@ export class CoreSkillClient {
     opts: CoreSkillRequestOptions = {},
   ): Promise<ListingResult> {
     return this.post<ListingResult>("/v3/skill/listing", input, opts);
+  }
+
+  /**
+   * `POST /v3/skill/get` —— 只读取单个 skill（含 SKILL.md 正文）。
+   *
+   * 供 selection 链路使用：proxy 自己加载选中 skill 的正文注入 prompt，替代
+   * 让主模型 curl `skill_view`。与 skill-bridge 的区别是不经过 HTTP 回环，
+   * 但身份/版本约束由调用方（`skill-loader.ts`）负责，语义保持一致。
+   */
+  async getSkill(
+    input: GetSkillInput,
+    opts: CoreSkillRequestOptions = {},
+  ): Promise<GetSkillResult> {
+    return this.post<GetSkillResult>("/v3/skill/get", input, opts);
   }
 
   /**

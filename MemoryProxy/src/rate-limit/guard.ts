@@ -2,7 +2,7 @@ import type { ProxyConfig } from "../types.js";
 import { getRedisClient } from "../db/redis-client.js";
 import { log } from "../report/log.js";
 import { RedisRateLimitStore, type RateLimitDecision } from "./redis-store.js";
-import { getActualInputTokens } from "./usage.js";
+import { getActualInputTokens, type UsageProtocol } from "./usage.js";
 
 export type RateLimitProtocol = "openai" | "anthropic";
 
@@ -74,7 +74,7 @@ export async function recordInputTokenUsage(params: {
   instanceId?: string;
   modelId: string;
   usage: Record<string, unknown> | null | undefined;
-  protocol: RateLimitProtocol;
+  protocol: UsageProtocol;
 }): Promise<void> {
   const { config, instanceId, modelId, usage, protocol } = params;
   if (!config.rateLimit || config.rateLimit.tpm <= 0 || !instanceId) return;
