@@ -1,15 +1,14 @@
 /**
  * OpenTelemetry + Langfuse span processor 初始化。
  *
- * 在 server.ts 最顶部调用 initTelemetry()，确保在所有模块加载前
- * 注册 OTel SDK。未配置 LANGFUSE_SECRET_KEY 时静默跳过，不影响服务运行。
+ * The HTTP entrypoint initializes telemetry after configuration validation and
+ * before serving requests. Importing this module does not initialize the SDK.
  *
  * AI SDK 的 generateText({ experimental_telemetry: { isEnabled: true } })
  * 会自动产生 GEN_AI 语义约定 span，LangfuseSpanProcessor 负责批量上报到 Langfuse。
  */
 
-// 必须在读取 process.env 之前加载 .env，
-// 因为 initTelemetry() 在 config.ts (含 import 'dotenv/config') 之前执行
+// Load environment configuration before explicit telemetry initialization.
 import 'dotenv/config';
 
 import { NodeSDK } from "@opentelemetry/sdk-node";
@@ -54,6 +53,21 @@ export function initTelemetry(): void {
   process.on("SIGTERM", () => {
     sdk?.shutdown().catch(() => {});
   });
+}
+
+/** 优雅关闭 OpenTelemetry SDK。 */
+export async function shutdownTelemetry(): Promise<void> {
+  if (sdk) {
+    try {
+      await sdk.shutdown();
+    } catch {}
+    sdk = null;
+  }
+}
+
+/** 检查 Telemetry SDK 是否已初始化（用于回归测试）。 */
+export function isTelemetryInitialized(): boolean {
+  return sdk !== null;
 }
 
 // ── Tracing helpers ──

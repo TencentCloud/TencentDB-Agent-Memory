@@ -21,7 +21,7 @@ import { getObservabilityBackend } from "./factory.js";
 
 // 初始化文件写入器（降级策略：初始化失败不影响业务）
 const fileLogger = new FileLogger({
-  path: process.env.LOG_PATH || "/data/log/",
+  path: process.env.LOG_PATH ?? "/data/log/",
   filename: "core.log",
   rotateSizeBytes: 100 * 1024 * 1024, // 100MB
   rotateBackupLimit: 10,

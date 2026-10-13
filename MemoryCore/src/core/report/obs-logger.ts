@@ -18,11 +18,24 @@
 import { FileLogger } from "./file-logger.js";
 import { getObservabilityBackend } from "./factory.js";
 
-export type LogAttrs = Record<string, string | number | boolean>;
+import type { LogAttrs as BackendLogAttrs } from "./types.js";
+
+/** Optional inputs are omitted before export; backend values remain scalars. */
+export type LogAttrs = Record<string, string | number | boolean | undefined>;
+
+function definedAttrs(attrs: LogAttrs): BackendLogAttrs {
+  const result: BackendLogAttrs = {};
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value !== undefined) {
+      Object.defineProperty(result, key, { value, enumerable: true, configurable: true, writable: true });
+    }
+  }
+  return result;
+}
 
 // 初始化文件写入器（降级策略：初始化失败不影响业务）
 const obsFileLogger = new FileLogger({
-  path: process.env.LOG_PATH || "/data/log/",
+  path: process.env.LOG_PATH ?? "/data/log/",
   filename: "observability.log",
   rotateSizeBytes: 100 * 1024 * 1024, // 100MB
   rotateBackupLimit: 10,
@@ -38,9 +51,10 @@ export const obsLogger = {
    */
   info(eventName: string, attrs: LogAttrs = {}): void {
     try {
-      getObservabilityBackend().log.info(eventName, attrs);
+      const exported = definedAttrs(attrs);
+      getObservabilityBackend().log.info(eventName, exported);
       // 同时写入本地日志文件
-      obsFileLogger.write("INFO", eventName, attrs as Record<string, unknown>);
+      obsFileLogger.write("INFO", eventName, exported);
     } catch {
       // 静默失败，不影响业务
     }
@@ -51,9 +65,10 @@ export const obsLogger = {
    */
   warn(eventName: string, attrs: LogAttrs = {}): void {
     try {
-      getObservabilityBackend().log.warn(eventName, attrs);
+      const exported = definedAttrs(attrs);
+      getObservabilityBackend().log.warn(eventName, exported);
       // 同时写入本地日志文件
-      obsFileLogger.write("WARN", eventName, attrs as Record<string, unknown>);
+      obsFileLogger.write("WARN", eventName, exported);
     } catch {
       // 静默失败，不影响业务
     }
@@ -65,11 +80,13 @@ export const obsLogger = {
   error(eventName: string, attrs: LogAttrs = {}, error?: Error): void {
     try {
       if (error) {
-        attrs = { ...attrs, "error.message": error.message, "error.type": error.name };
+        // Do not inspect or export exception payloads; they may contain provider data.
+        attrs = { ...attrs, "error.present": true };
       }
-      getObservabilityBackend().log.error(eventName, attrs, error);
+      const exported = definedAttrs(attrs);
+      getObservabilityBackend().log.error(eventName, exported);
       // 同时写入本地日志文件
-      obsFileLogger.write("ERROR", eventName, attrs as Record<string, unknown>);
+      obsFileLogger.write("ERROR", eventName, exported);
     } catch {
       // 静默失败，不影响业务
     }

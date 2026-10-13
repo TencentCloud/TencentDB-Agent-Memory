@@ -20,11 +20,14 @@
 # ──────────────────────────────────────────────────────────────────────
 ARG PANEL_UI=web
 
-# ── base：node:22-slim + 腾讯云 apt 镜像 + 原生编译工具链 ──────────────
+# ── base：node:22-slim + 官方 Debian apt 源（支持可选镜像） + 原生编译工具链 ──────────────
 FROM node:22-slim AS base
 
-RUN sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list 2>/dev/null || true
+ARG APT_MIRROR=deb.debian.org
+RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+    fi
 
 # better-sqlite3 原生编译 + git（可选）+ curl（healthcheck）
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -51,17 +54,17 @@ RUN --mount=type=cache,id=npm-tmc-ui,target=/root/.npm \
       mkdir -p /ui/dist && \
       printf '<!doctype html><meta charset="utf-8"><title>panel disabled</title><body>Control panel UI is disabled in this image (WEB_UI=0).</body>' > /ui/dist/index.html; \
     else \
-      npm install --no-audit --no-fund && npm run build; \
+      npm ci --no-audit --no-fund && npm run build; \
     fi
 
 # ── runtime：control 后端（tsx 直跑 src/index.ts） ────────────────────
 FROM base AS runtime
 ARG PANEL_UI
 
-# 整仓 COPY，再 install（原生 better-sqlite3 在此镜像编译）
+# 整仓 COPY，再 ci（原生 better-sqlite3 在此镜像编译）
 COPY . .
 RUN --mount=type=cache,id=npm-tmc,target=/root/.npm \
-    npm install --no-audit --no-fund
+    npm ci --no-audit --no-fund
 
 # 把选中的面板产物放到 Panel 静态托管目录
 COPY --from=ui-builder /ui/dist ./${PANEL_UI}/dist

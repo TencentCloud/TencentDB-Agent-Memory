@@ -32,6 +32,9 @@ benchmark-runs/
 # Dev-only scripts & lockfile (not shipped in MR)
 install-plugin.sh
 package-lock.json
+!MemoryKnowledge/package-lock.json
+!MemoryCore/package-lock.json
+!sdk/memory-core/typescript/package-lock.json
 pnpm-lock.yaml
 yarn.lock
 test-offload.sh
@@ -139,3 +142,6 @@ MemoryCore/scripts/bench-l0-mongo/reports/
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
 z_config/
+
+# Reviewed, reproducible development-only npm artifact
+!MemoryCore/vendor/npm-12.2.0-unbundled.tgz

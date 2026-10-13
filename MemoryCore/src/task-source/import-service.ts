@@ -144,7 +144,9 @@ export class TaskSourceImportService {
     const tctx = TaskSourceRegistry.contextFor(providerId, cred);
     // 参与记录挂在哨兵 agent 下，而 appendParticipationLog 会校验该 agent 存在 ——
     // 必须在写入前确保它已建好，否则每条都会被 agent_not_found 拒掉。
-    await this.ensureImportAgent(teamId, ctx.userId ?? "");
+    const creatorUserId = ctx.userId;
+    if (!creatorUserId) throw new TaskSourceError("missing_user", "Task import requires an authenticated user");
+    await this.ensureImportAgent(teamId, creatorUserId);
 
     const result: ImportResult = { created: [], failed: [] };
     for (const item of items) {
@@ -153,7 +155,7 @@ export class TaskSourceImportService {
         const task = await this.svc.createTaskForCaller(
           {
             team_id: teamId,
-            creator_user_id: ctx.userId,
+            creator_user_id: creatorUserId,
             title: detail.title || "(无标题)",
             description: detail.body || null,
             /**

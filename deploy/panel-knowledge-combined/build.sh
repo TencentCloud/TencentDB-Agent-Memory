@@ -57,53 +57,95 @@ fi
 mkdir -p "$CTX_DIR"
 
 # rsync panel（builder stage 编译需要 src/ + web/ + package*.json + tsconfig.json，
-# 排除敏感真值 config/*.json、文档、测试、.claude、docker 配置等非必要文件）
+# 排除敏感真值 config/*.json、本地配置、.npmrc、audit scratch、数据库、日志、私有元数据等）
 echo "[build-combined] rsync panel → $CTX_DIR/panel/"
 rsync -a --delete \
   --exclude .git \
+  --exclude .gitmodules \
+  --exclude .coding-ci.yaml \
+  --exclude .gitlab-ci.yml \
+  --exclude .claude \
+  --exclude .codebuddy \
+  --exclude .iwiki \
   --exclude node_modules \
   --exclude web/node_modules \
   --exclude dist \
   --exclude build \
   --exclude coverage \
   --exclude data \
-  --exclude .claude \
   --exclude .env \
-  --exclude .env.* \
-  --exclude config/metadata-instances.json \
-  --exclude config/*.yaml \
-  --exclude config/*.yml \
+  --exclude '.env.*' \
+  --exclude '.npmrc*' \
+  --exclude '**/.npmrc*' \
+  --exclude '.audit*' \
+  --exclude '**/.audit*' \
+  --exclude '*.audit' \
+  --exclude 'config/*.json' \
+  --exclude 'config/*.yaml' \
+  --exclude 'config/*.yml' \
+  --exclude 'config/*.local.*' \
+  --exclude '*.local.*' \
+  --exclude '**/*.local.*' \
+  --exclude '*.db*' \
+  --exclude '*.sqlite*' \
+  --exclude dump.rdb \
+  --exclude logs/ \
+  --exclude '**/logs' \
+  --exclude '*.log' \
+  --exclude '**/*.log' \
+  --exclude nohup.out \
   --exclude docs/ \
   --exclude tests/ \
   --exclude scripts/ \
   --exclude docker/ \
-  --exclude e2e-*.sh \
-  --exclude *.md \
+  --exclude 'e2e-*.sh' \
+  --exclude '*.md' \
   --exclude pnpm-lock.yaml \
   --exclude pnpm-workspace.yaml \
   --exclude vitest.config.ts \
   "$TMC_DIR"/ "$CTX_DIR/panel"/
 
 # rsync knowledge（builder stage 编译需要 src/ + package*.json + tsconfig.json + tsdown.config.ts，
-# runtime 需要包根的 openapi.yaml（Swagger UI）。排除文档、测试、.claude、docker 配置等）
+# runtime 需要包根的 openapi.yaml（Swagger UI）。排除本地配置、.npmrc、audit scratch、数据库、日志、私有元数据等）
 echo "[build-combined] rsync knowledge → $CTX_DIR/knowledge/"
 rsync -a --delete \
   --exclude .git \
+  --exclude .gitmodules \
+  --exclude .coding-ci.yaml \
+  --exclude .gitlab-ci.yml \
+  --exclude .claude \
+  --exclude .codebuddy \
+  --exclude .iwiki \
   --exclude node_modules \
   --exclude dist \
   --exclude coverage \
   --exclude data \
-  --exclude .claude \
   --exclude .env \
-  --exclude .env.* \
+  --exclude '.env.*' \
+  --exclude '.npmrc*' \
+  --exclude '**/.npmrc*' \
+  --exclude '.audit*' \
+  --exclude '**/.audit*' \
+  --exclude '*.audit' \
+  --exclude '*.local.*' \
+  --exclude '**/*.local.*' \
+  --exclude '*.db*' \
+  --exclude '*.sqlite*' \
+  --exclude dump.rdb \
+  --exclude logs/ \
+  --exclude '**/logs' \
+  --exclude '*.log' \
+  --exclude '**/*.log' \
+  --exclude nohup.out \
   --exclude bin/ \
   --exclude docs/ \
-  --exclude __tests__/ \
+  --exclude '__tests__/' \
+  --exclude tests/ \
   --exclude docker/ \
-  --exclude docker-compose*.yml \
+  --exclude 'docker-compose*.yml' \
   --exclude Dockerfile \
   --exclude .dockerignore \
-  --exclude *.md \
+  --exclude '*.md' \
   --exclude pnpm-lock.yaml \
   --exclude vitest.config.ts \
   --exclude start.sh \

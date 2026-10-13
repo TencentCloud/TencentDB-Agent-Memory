@@ -15,8 +15,6 @@
 #   DOCKER_BUILDKIT=1 docker build -t memory-proxy:latest .
 #
 # 说明: 运行时用 tsx 直接执行 TypeScript（不预编译）。tsx 是 devDependency，
-# 因此镜像内保留 dev 依赖；optional 依赖（better-sqlite3 / cos-nodejs-sdk-v5 /
-# cost-guard）保留，用于 sqlite / cos 存储后端与 CostGuard 智能路由。
 # ──────────────────────────────────────────────────────────────────────
 
 # ──────────────────────────────────────────────────────────────────────
@@ -39,18 +37,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" crash（干净
-# `npm install` 稳定报 `Cannot read properties of null (reading
-# 'edgesOut')`）。升到 11 规避，不影响其它构建行为。
-RUN npm install -g npm@11 --no-audit --no-fund
-
 # 先复制包元数据以最大化 Docker layer cache。
 COPY package.json package-lock.json ./
 
-# 安装全部依赖（保留 dev：tsx 运行时需要；保留 optional：sqlite/cos/cost-guard）。
 # 使用 BuildKit npm cache mount 大幅加速重复构建。
 RUN --mount=type=cache,id=proxy-npm-cache,target=/root/.npm \
-    npm install \
+    npm ci \
         --no-audit \
         --no-fund
 
@@ -77,12 +69,11 @@ WORKDIR /app
 # 非 root 运行（安全基线）
 RUN groupadd -r app && useradd -r -g app -u 10001 -m app
 
-# 从 builder 拷贝整个 /app（含 node_modules 里指向 packages/cost-guard 的 file: 软链）
-COPY --from=deps-builder /app /app
+COPY --from=deps-builder --chown=app:app /app /app
 
 # 数据 / 日志目录（可作为 K8s PVC 挂载）
 RUN mkdir -p /data/tdai-memory-proxy /data/config /app/logs && \
-    chown -R app:app /app /data
+    chown -R app:app /data && chown app:app /app /app/logs
 
 USER app
 

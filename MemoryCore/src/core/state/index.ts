@@ -1,9 +1,7 @@
 /**
- * State Backend — 接口 + 默认实现导出 + 后端工厂。
- *
- * 默认实现 (LocalStateBackend) 跟接口同住 core，自带可用。
- * 远程状态后端在运行时按需动态加载；如果当前构建未包含对应实现，
- * 当配置要求使用远程后端时会抛出明确错误。
+ * Public state backend factory. Local state is in memory; Redis is unsupported
+ * because this distribution does not ship a Redis state implementation.
+ * Explicit selection prevents accidental fallback to volatile local state.
  */
 
 export type {
@@ -39,56 +37,16 @@ export interface StateBackendConfig {
   };
 }
 
-/**
- * 工厂函数：根据配置创建对应的 State Backend。
- *
- * - type === "local": 内置 LocalStateBackend，零外部依赖
- * - remote backend: 动态加载远程状态后端实现；如果当前构建未包含，
- *   抛出明确错误。
- */
+/** Create the explicitly selected public state backend. */
 export async function createStateBackend(config: StateBackendConfig): Promise<IStateBackend> {
   if (config.type === "redis") {
-    const redisCfg = config.redis;
-    if (!redisCfg) throw new Error("redis config is required when state_backend=redis");
-
-    let RedisStateBackendCtor: typeof import("../../integrations/redis/index.js").RedisStateBackend;
-    try {
-      ({ RedisStateBackend: RedisStateBackendCtor } = await import("../../integrations/redis/index.js"));
-    } catch (err) {
-      throw new Error(
-        "[state-backend] Redis integration is not available — install or initialize " +
-        "src/integrations/redis/ (private submodule) to use state_backend=redis, " +
-        "or switch to state_backend=local. " +
-        `Original error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    // Dynamically import the remote backend client only when needed.
-    const { default: Redis } = await import("ioredis");
-
-    let client;
-    if (redisCfg.url) {
-      client = new Redis(redisCfg.url);
-    } else {
-      client = new Redis({
-        host: redisCfg.host ?? "127.0.0.1",
-        port: redisCfg.port ?? 6379,
-        password: redisCfg.password,
-        db: redisCfg.db ?? 0,
-      });
-    }
-
-    const backend = new RedisStateBackendCtor({
-      client: client as never,
-      keyPrefix: redisCfg.keyPrefix,
-      consumerGroup: redisCfg.consumerGroup,
-    });
-    await backend.initialize();
-    return backend;
+    throw new Error("Redis state backend is not supported in this distribution; choose local explicitly after reviewing its in-memory lifecycle");
+  }
+  if (config.type !== "local") {
+    throw new Error("Unsupported state backend; supported public type: local");
   }
 
-  // default: local
   const backend = new LocalStateBackend(config.local);
-  await backend.initialize?.();
+  await backend.initialize();
   return backend;
 }

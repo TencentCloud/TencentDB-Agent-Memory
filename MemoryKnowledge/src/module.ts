@@ -6,10 +6,9 @@
  * Real wiki worker: LLM ingest via wiki engine.
  */
 
-import { join } from "node:path";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { mkdirSync, existsSync } from "node:fs";
 import pLimit from "p-limit";
-import simpleGit from "simple-git";
 
 import type { Db } from "./db/client.js";
 import { SqliteKnowledgeStore, type IKnowledgeStore } from "./store/index.js";
@@ -37,10 +36,10 @@ import {
 import { createCredentialStore } from "./source-auth/credential-store.js";
 import type { ICredentialStore } from "./source-auth/types.js";
 import { buildCloneUrl, stripCredentials } from "./code-source/clone-url.js";
+import type { GitCredential } from "./source-fetcher/types.js";
 import { CodeSourceRegistry } from "./code-source/registry.js";
 import { WikiSourceRegistry } from "./wiki-source/registry.js";
 import { createWikiImporter } from "./wiki-source/wiki-importer.js";
-import { isGitAuthError, explainGitAuthError } from "./source-fetcher/git-fetcher.js";
 
 const log = createLogger("knowledge-module");
 
@@ -71,6 +70,8 @@ export interface CodeGraphInstancePool {
   set(codeGraphId: string, instance: CodeGraphInstance): void;
   delete(codeGraphId: string): void;
   loadIfMissing?(codeGraphId: string, dir: string): Promise<CodeGraphInstance | undefined>;
+  acquireGuard?(codeGraphId: string): boolean;
+  releaseGuard?(codeGraphId: string): void;
 }
 
 export interface KnowledgeModule {
@@ -87,7 +88,7 @@ export interface KnowledgeModule {
   autoSyncScheduler: AutoSyncScheduler;
   /** 定时自动同步的解析后配置（挂载 admin 路由时透出）。 */
   autoSyncConfig: AutoSyncConfig;
-  /** 外部知识源用户令牌（加密存储，明文不出进程）。 */
+  /** Source credentials are base64-encoded, not encrypted; protect the database and backups. */
   credentialStore: ICredentialStore;
   /** 代码来源 provider 注册中心（前端下拉 + provider 查询）。 */
   codeSourceRegistry: CodeSourceRegistry;
@@ -114,14 +115,35 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // Instance pool (code-graph) — lazy loading
   const _poolMap = new Map<string, CodeGraphInstance>();
-  const instancePool: CodeGraphInstancePool = {
-    get(id: string) { return _poolMap.get(id); },
+  const _mutating = new Set<string>();
+  const _generation = new Map<string, number>();
+
+  const instancePool = {
+    get(id: string) { return _mutating.has(id) ? undefined : _poolMap.get(id); },
     set(id: string, inst: CodeGraphInstance) { _poolMap.set(id, inst); },
     delete(id: string) { _poolMap.delete(id); },
+    acquireGuard(id: string) {
+      if (_mutating.has(id)) return false;
+      const oldInstance = _poolMap.get(id);
+      if (oldInstance) {
+        closeIndex(oldInstance);
+        _poolMap.delete(id);
+      }
+      _mutating.add(id);
+      _generation.set(id, (_generation.get(id) || 0) + 1);
+      return true;
+    },
+    releaseGuard(id: string) { _mutating.delete(id); },
     async loadIfMissing(id: string, dir: string) {
+      if (_mutating.has(id)) return undefined;
       if (_poolMap.has(id)) return _poolMap.get(id);
+      const startGen = _generation.get(id) || 0;
       try {
         const instance = await openIndex(dir);
+        if (_mutating.has(id) || (_generation.get(id) || 0) !== startGen) {
+          closeIndex(instance);
+          return undefined;
+        }
         _poolMap.set(id, instance);
         log.info(`[code-graph] lazy-loaded instance ${id}`);
         return instance;
@@ -147,140 +169,96 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   // ── wiki 来源 provider 注册中心（内置 + 部署启用列表） ──
   const wikiSourceRegistry = new WikiSourceRegistry();
 
-  /**
-   * 需要凭据的仓库：clone/sync 前把令牌临时注入 URL。
-   *
-   * 凭据行是否存在**即**决定该仓是否外部来源（§4.2）：
-   *   有 → 走 provider.applyToCloneUrl 或默认 basic-auth 注入
-   *   无 → 公开仓，返回干净地址（行为与改造前一致）
-   *
-   * 落库的是干净地址，此处拼出来的带凭据 URL 只活在本次调用栈里
-   * （不写盘、不进日志、不进响应体）。
-   */
-  const cloneUrlFor = (
-    serviceId: string,
-    codeGraphId: string,
-    repoUrl: string,
-  ): string => {
-    const ref = { type: "code-graph" as const, serviceId, resourceId: codeGraphId };
-    const cred = credentialStore.get(ref);
-    if (!cred) return repoUrl; // 无凭据 = 公开仓
-    const status = credentialStore.status(ref);
-    if (!status) throw new Error(`no credential row for code-graph ${codeGraphId}`);
-    const provider = codeSourceRegistry.get(status.provider_id);
-    if (!provider) {
-      throw new Error(
-        `code source provider '${status.provider_id}' is not registered (check CODE_SOURCE_ENABLED)`,
-      );
-    }
-    return buildCloneUrl(provider, repoUrl, { secret: cred.secret, username: cred.username });
-  };
-
-  /**
-   * 把 clone 后 .git/config 里 origin 的带凭据 URL 改回干净地址。
-   *
-   * 失败不阻断建图，但要告警 —— 明文令牌留在磁盘是安全问题，
-   * 而建图结果本身仍然有效。
-   */
-  const sanitizeCloneRemote = async (
-    dir: string,
-    cleanUrl: string,
-    serviceId: string,
-    codeGraphId: string,
-  ): Promise<void> => {
-    try {
-      await simpleGit(dir).remote(["set-url", "origin", cleanUrl]);
-      log.info("[code-graph] sanitized clone remote (credentials stripped)", { codeGraphId });
-    } catch (err) {
-      log.warn("[code-graph] failed to sanitize clone remote", {
-        codeGraphId,
-        serviceId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  };
-
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
     const { dir, repoUrl, branch, codeGraphId, serviceId, setInternalStatus } = ctx;
 
-    // 外部来源（工蜂等）→ 注入令牌；无凭据行 → 公开仓。
-    const cleanUrl = stripCredentials(repoUrl);
-    const effectiveUrl = cloneUrlFor(serviceId, codeGraphId, cleanUrl);
-    // 判定「是否私有仓」用 URL 是否被改写（等价于凭据行是否存在，且无需再查一次库）。
-    const needsCredential = effectiveUrl !== cleanUrl;
+    // Reject caller URL credentials before a provider could strip or replace them.
+    let originalUrl: URL;
+    try { originalUrl = new URL(repoUrl); }
+    catch { throw new Error("Invalid repository URL"); }
+    if (originalUrl.username || originalUrl.password) {
+      throw new Error("Repository URL credentials are not allowed; use resource credentials");
+    }
 
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
-    const fetcher = fetcherRegistry.resolve(effectiveUrl);
+    const credentialRef = { type: "code-graph" as const, serviceId, resourceId: codeGraphId };
+    let sourceUrl = repoUrl;
+    let gitCredential: GitCredential | undefined;
+    const credentialStatus = credentialStore.status(credentialRef);
+    if (credentialStatus) {
+      const credential = credentialStore.get(credentialRef);
+      const provider = codeSourceRegistry.get(credentialStatus.provider_id);
+      if (!credential || !provider) throw new Error("Resource Git credentials or provider are unavailable");
+      // Provider transformations stay in memory. Only a clean URL goes to Git.
+      const authenticated = new URL(buildCloneUrl(provider, repoUrl, credential));
+      gitCredential = { username: decodeURIComponent(authenticated.username), password: decodeURIComponent(authenticated.password) };
+      sourceUrl = stripCredentials(authenticated.toString());
+    }
 
-    const isExistingRepo = existsSync(join(dir, ".git"));
-    // ★ 私有仓不做增量 sync：GitSourceFetcher.sync() 内部是 `git fetch origin`，
-    //   用的是 .git/config 里的 URL —— 而那已被 sanitize 成干净地址，必然 401。
-    //   因此外部来源一律全量 clone（每次都带令牌），代价是慢，行为正确。
-    const canIncremental = isExistingRepo && !needsCredential;
-    let didIncrementalSync = false;
-    let version: string | null = null;
+    if (!instancePool.acquireGuard(codeGraphId)) {
+      throw new Error("Concurrent mutation detected");
+    }
 
-    if (canIncremental) {
-      try {
+    try {
+      // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
+      const fetcher = fetcherRegistry.resolve(sourceUrl);
+
+      const isExistingRepo = existsSync(join(dir, ".git"));
+      let didIncrementalSync = false;
+      let version: string | null = null;
+
+      if (isExistingRepo) {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(effectiveUrl, branch, dir);
+
+        try {
+          const res = await fetcher.sync(sourceUrl, branch, dir, gitCredential);
+          version = res.version;
+
+          setInternalStatus("indexing");
+          const instance = await openIndex(dir);
+          try {
+            await syncIndex(instance);
+            instancePool.set(codeGraphId, instance);
+            didIncrementalSync = true;
+          } catch (e) {
+            closeIndex(instance);
+            throw e;
+          }
+        } catch (err) {
+          log.warn(
+            `[code-graph] incremental sync failed for ${codeGraphId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          throw err;
+        }
+      }
+
+      if (!didIncrementalSync) {
+        if (fetcher.supportedType === "git") {
+          mkdirSync(dirname(dir), { recursive: true });
+        } else {
+          mkdirSync(dir, { recursive: true });
+        }
+        setInternalStatus("cloning");
+        const res = await fetcher.fetch(sourceUrl, branch, dir, gitCredential);
         version = res.version;
 
         setInternalStatus("indexing");
-        let instance = instancePool.get(codeGraphId);
-        if (!instance) {
-          instance = await openIndex(dir);
-        }
-        await syncIndex(instance);
+        const instance = await indexProject(dir);
         instancePool.set(codeGraphId, instance);
-        didIncrementalSync = true;
-      } catch (err) {
-        log.warn(
-          `[code-graph] incremental sync failed for ${codeGraphId}, falling back to fresh clone: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
       }
+
+      // commit hash comes from the fetcher's FetchResult (unified after clone / sync)
+      const commitHash = version ?? undefined;
+
+      const instance = _poolMap.get(codeGraphId);
+      const rawStats = instance ? getStats(instance) : undefined;
+      const stats = rawStats
+        ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
+        : undefined;
+      return { commitHash, stats };
+    } finally {
+      instancePool.releaseGuard(codeGraphId);
     }
-
-    if (!didIncrementalSync) {
-      // 私有仓重跑：旧目录还在（增量被跳过）→ 先清掉，否则 clone 到非空目录会失败。
-      if (isExistingRepo) {
-        try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
-      mkdirSync(dir, { recursive: true });
-      setInternalStatus("cloning");
-      let res;
-      try {
-        res = await fetcher.fetch(effectiveUrl, branch, dir);
-      } catch (err) {
-        // git 认证/权限错误措辞误导（`could not read Username` = 仓库需要认证），
-        // 转成面向用户的提示后再抛，写入 sync_error 供前端展示。
-        const raw = err instanceof Error ? err.message : String(err);
-        if (isGitAuthError(raw)) {
-          throw new Error(explainGitAuthError(raw, needsCredential));
-        }
-        throw err;
-      }
-      version = res.version;
-      // ★ 凭据落地清理：clone 会把带令牌的 URL 写进 .git/config 的 origin。
-      //   不清理等于把用户 PAT 明文留在磁盘上（后续 git fetch 也一直用它）。
-      await sanitizeCloneRemote(dir, stripCredentials(repoUrl), serviceId, codeGraphId);
-
-      setInternalStatus("indexing");
-      const instance = await indexProject(dir);
-      instancePool.set(codeGraphId, instance);
-    }
-
-    // commit hash comes from the fetcher's FetchResult (unified after clone / sync)
-    const commitHash = version ?? undefined;
-
-    const instance = instancePool.get(codeGraphId);
-    const rawStats = instance ? getStats(instance) : undefined;
-    const stats = rawStats
-      ? { files: rawStats.fileCount ?? rawStats.files ?? 0, nodes: rawStats.nodeCount ?? rawStats.nodes ?? 0, edges: rawStats.edgeCount ?? rawStats.edges ?? 0 }
-      : undefined;
-    return { commitHash, stats };
   };
 
   // ── Real wiki worker: ingest via wiki engine ──

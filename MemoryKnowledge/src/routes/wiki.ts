@@ -17,6 +17,7 @@
  */
 
 import { Hono } from "hono";
+import { validateBundle, BundleValidationError, BundleConflictError, type BundleFile } from "../engines/wiki/okf-bundle.js";
 
 import type { WikiService } from "../store/index.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
@@ -89,6 +90,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
 
     const result = wikiService.ingest(serviceId, row.team_id, wikiId, requesterUserId, { onBusy });
     if (result.kind === "not_found") return c.json(wrapError(404, "wiki not found"), 404);
+    if (result.kind === "recovery_required") return c.json(wrapError(409, "OKF recovery is required before ingestion"), 409);
     if (result.kind === "busy") {
       // 并发拒绝：干净最小的 409 响应体（调用方用 code 判断，不 parse message）。
       return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
@@ -469,6 +471,98 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       const msg = err instanceof Error ? err.message : String(err);
       return c.json(wrapError(400, msg), 400);
     }
+  });
+
+  // Native bundle transport: no LLM, no path canonicalization, no frontmatter injection.
+  app.post("/okf/validate", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json(wrapError(400, "body must be a JSON object"), 400);
+    if (!isValidIdSegment(c.req.header("x-tdai-service-id"))) return c.json(wrapError(400, "x-tdai-service-id header is required"), 400);
+    try { return c.json(wrapOk(validateBundle(body.files as BundleFile[]))); }
+    catch (e) {
+      if (e instanceof BundleValidationError) return c.json(wrapError(400, e.message), 400);
+      return c.json(wrapError(500, "Internal validation error"), 500);
+    }
+  });
+
+  app.post("/okf/import", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json(wrapError(400, "body must be a JSON object"), 400);
+    const ids = extractIdFields(c.req.header("x-tdai-service-id"), body);
+    if (!ids || !isValidIdSegment(body.wiki_id)) return c.json(wrapError(400, "service_id, team_id and wiki_id are required"), 400);
+    if (body.overwrite !== undefined && typeof body.overwrite !== "boolean") return c.json(wrapError(400, "overwrite must be boolean"), 400);
+    try {
+      const result = wikiService.okfImport(ids.service_id, ids.team_id, body.wiki_id, body.files as BundleFile[], body.overwrite === true);
+      const err = maybeWriteError(result);
+      if (err) return err;
+      const path = wikiService.dirFor(ids.service_id, ids.team_id, body.wiki_id);
+      let indexed;
+      try {
+        wikiMgr.register({ name: body.wiki_id, path });
+        indexed = wikiMgr.sync(body.wiki_id);
+      } catch (e) {
+        wikiService.okfIndexed(ids.service_id, ids.team_id, body.wiki_id, 0, "Internal error during indexing");
+        return c.json(wrapError(500, "Bundle saved, but an internal error occurred during indexing. Recovery is required."), 500);
+      }
+      wikiService.okfIndexed(ids.service_id, ids.team_id, body.wiki_id, indexed.pageCount ?? 0, indexed.error ? "Internal error during indexing" : undefined);
+      if (indexed.status !== "ready") return c.json(wrapError(500, "Bundle saved, but indexing failed. Recovery is required."), 500);
+      return c.json(wrapOk(result));
+    } catch (e) {
+      if (e instanceof BundleConflictError) return c.json(wrapError(409, e.message), 409);
+      if (e instanceof BundleValidationError) return c.json(wrapError(400, e.message), 400);
+      return c.json(wrapError(500, "Unexpected internal error during import"), 500);
+    }
+  });
+
+  app.post("/okf/recover", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json(wrapError(400, "body must be a JSON object"), 400);
+    const ids = extractIdFields(c.req.header("x-tdai-service-id"), body);
+    if (!ids || !isValidIdSegment(body.wiki_id)) return c.json(wrapError(400, "service_id, team_id and wiki_id are required"), 400);
+
+    let outcome;
+    try {
+      outcome = wikiService.okfRecover(ids.service_id, ids.team_id, body.wiki_id);
+    } catch (e) {
+      if (e instanceof BundleConflictError) return c.json(wrapError(409, e.message), 409);
+      const msg = e instanceof Error && e.name === "RecoveryError" ? e.message : "Internal error";
+      // Safe 500, don't expose path details unless it's the public RecoveryError which is already sanitized.
+      return c.json(wrapError(500, "Recovery failed: " + msg), 500);
+    }
+
+    const err = maybeWriteError(outcome);
+    if (err) return err;
+
+    const result = outcome as { action: "rolled_forward" | "no_op", message: string };
+
+    if (result.action === "no_op") {
+      return c.json(wrapOk({ action: result.action, message: result.message }));
+    }
+
+    // we need to re-index
+    try {
+      wikiMgr.register({ name: body.wiki_id, path: wikiService.dirFor(ids.service_id, ids.team_id, body.wiki_id) });
+      const indexed = wikiMgr.sync(body.wiki_id);
+      wikiService.okfIndexed(ids.service_id, ids.team_id, body.wiki_id, indexed.pageCount ?? 0, indexed.error);
+      if (indexed.status !== "ready") return c.json(wrapError(500, "Bundle recovered, indexing failed; retry sync before searching"), 500);
+      return c.json(wrapOk({ action: result.action, message: "Recovery completed and re-indexed successfully." }));
+    } catch (e) {
+      wikiService.okfIndexed(ids.service_id, ids.team_id, body.wiki_id, 0, String(e));
+      return c.json(wrapError(500, "Bundle recovered, indexing threw an error"), 500);
+    }
+  });
+
+  app.post("/okf/export", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    if (!body || typeof body !== "object" || Array.isArray(body)) return c.json(wrapError(400, "body must be a JSON object"), 400);
+    const ids = extractIdFields(c.req.header("x-tdai-service-id"), body);
+    if (!ids || !isValidIdSegment(body.wiki_id)) return c.json(wrapError(400, "service_id, team_id and wiki_id are required"), 400);
+    try {
+      const files = wikiService.okfExport(ids.service_id, ids.team_id, body.wiki_id);
+      const err = maybeWriteError(files);
+      if (err) return err;
+      return c.json(wrapOk({ files }));
+    } catch (e) { return c.json(wrapError(500, "Internal error during export"), 500); }
   });
 
   // ═══════════════════ Derived Views (id-only) ═══════════════════

@@ -18,7 +18,7 @@
 
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { APICallError, generateText, streamText, tool, stepCountIs, jsonSchema } from "ai";
+import { APICallError, generateText, streamText, tool, stepCountIs, jsonSchema, type ToolSet, type TelemetrySettings } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
 import type {
@@ -52,8 +52,8 @@ const MAX_TOOL_ITERATIONS = 20;
  *
  * 未传对应字段时，metadata 里也不出现该键 —— 保持与旧行为完全一致。
  */
-function buildTelemetryMetadata(params: LLMRunParams): Record<string, unknown> {
-  const meta: Record<string, unknown> = {
+function buildTelemetryMetadata(params: LLMRunParams): NonNullable<TelemetrySettings["metadata"]> {
+  const meta: NonNullable<TelemetrySettings["metadata"]> = {
     instanceId: params.instanceId ?? "unknown",
   };
   if (params.traceName) {
@@ -115,12 +115,30 @@ export interface StandaloneLLMConfig {
 // Sandboxed tool execution helpers
 // ============================
 
-function resolveSandboxedPath(workspaceDir: string, relativePath: string): string | null {
-  const resolved = path.resolve(workspaceDir, relativePath);
-  if (!resolved.startsWith(path.resolve(workspaceDir))) {
+async function resolveSandboxedPath(workspaceDir: string, relativePath: string): Promise<string | null> {
+  // The operator-selected root may itself be a symlink. Below that root,
+  // reject symlinks rather than following model-selected filesystem paths.
+  try {
+    const root = await fsPromises.realpath(workspaceDir);
+    const resolved = path.resolve(root, relativePath);
+    const relative = path.relative(root, resolved);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return null;
+    }
+    let current = root;
+    for (const component of relative.split(path.sep)) {
+      current = path.join(current, component);
+      try {
+        if ((await fsPromises.lstat(current)).isSymbolicLink()) return null;
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") break;
+        return null;
+      }
+    }
+    return resolved;
+  } catch {
     return null;
   }
-  return resolved;
 }
 
 // ============================
@@ -139,15 +157,15 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         required: ["path"],
       }),
       execute: (async (args: { path: string }) => {
-        const resolved = resolveSandboxedPath(workspaceDir, args.path);
+        const resolved = await resolveSandboxedPath(workspaceDir, args.path);
         if (!resolved) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         try {
           const content = await fsPromises.readFile(resolved, "utf-8");
-          logger?.debug?.(`${TAG} read: "${args.path}" → ${content.length} chars`);
+          logger?.debug?.(`${TAG} read: ${content.length} chars`);
           return content;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger?.warn?.(`${TAG} read failed: ${msg}`);
+          logger?.warn?.(`${TAG} read failed`);
           return JSON.stringify({ error: msg });
         }
       }) as any,
@@ -164,16 +182,19 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         required: ["path", "content"],
       }),
       execute: (async (args: { path: string; content: string }) => {
-        const resolved = resolveSandboxedPath(workspaceDir, args.path);
+        const resolved = await resolveSandboxedPath(workspaceDir, args.path);
         if (!resolved) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         try {
           await fsPromises.mkdir(path.dirname(resolved), { recursive: true });
+          if (await resolveSandboxedPath(workspaceDir, args.path) !== resolved) {
+            return JSON.stringify({ error: "Workspace path changed during write." });
+          }
           await fsPromises.writeFile(resolved, args.content, "utf-8");
-          logger?.debug?.(`${TAG} write: "${args.path}" → ${Buffer.byteLength(args.content, "utf8")} bytes`);
+          logger?.debug?.(`${TAG} write: ${Buffer.byteLength(args.content, "utf8")} bytes`);
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger?.warn?.(`${TAG} write failed: ${msg}`);
+          logger?.warn?.(`${TAG} write failed`);
           return JSON.stringify({ error: msg });
         }
       }) as any,
@@ -201,7 +222,7 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         required: ["path", "edits"],
       }),
       execute: (async (args: { path: string; edits: Array<{ oldText: string; newText: string }> }) => {
-        const resolved = resolveSandboxedPath(workspaceDir, args.path);
+        const resolved = await resolveSandboxedPath(workspaceDir, args.path);
         if (!resolved) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         if (!args.edits || args.edits.length === 0) return JSON.stringify({ error: "edits array cannot be empty." });
         try {
@@ -219,12 +240,12 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
           }
           await fsPromises.writeFile(resolved, content, "utf-8");
           logger?.debug?.(
-            `${TAG} edit: "${args.path}" → ${args.edits.length} replacement(s), ${Buffer.byteLength(content, "utf8")} bytes`,
+            `${TAG} edit: ${args.edits.length} replacement(s), ${Buffer.byteLength(content, "utf8")} bytes`,
           );
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger?.warn?.(`${TAG} edit failed: ${msg}`);
+          logger?.warn?.(`${TAG} edit failed`);
           return JSON.stringify({ error: msg });
         }
       }) as any,
@@ -294,17 +315,16 @@ export class StandaloneLLMRunner implements LLMRunner {
     const maxIterations = params.maxIterations ?? MAX_TOOL_ITERATIONS;
 
     this.logger?.debug?.(
-      `${TAG} run() start: taskId=${params.taskId}, model=${this.model}, ` +
+      `${TAG} run() start: ` +
       `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
     );
 
     // Create OpenAI-compatible provider via AI SDK
-    // Use "compatible" mode to call /chat/completions (not Responses API),
-    // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
+    // Select the Chat Completions API explicitly below using provider.chat().
+    // The installed provider does not support a compatibility option.
     const provider = createOpenAI({
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
-      compatibility: "compatible",
     });
 
     // Select tools based on mode + storage
@@ -313,14 +333,14 @@ export class StandaloneLLMRunner implements LLMRunner {
     // enableTools=false: omit tools entirely so the model cannot hallucinate calls.
     // Caller-provided tools (params.tools) override the defaults — used by
     // SkillExtractor to inject domain-specific tools (skill_list, etc.).
-    let tools: Record<string, unknown> | undefined;
+    let tools: ToolSet | undefined;
     if (callerProvidedTools && effectiveEnableTools) {
       tools = params.tools;
-      this.logger?.debug?.(`${TAG} Using caller-provided tools: [${Object.keys(tools!).join(", ")}]`);
+      this.logger?.debug?.(`${TAG} Using caller-provided tools: count=${Object.keys(tools!).length}`);
     } else if (effectiveEnableTools && params.storage) {
       const { createStorageTools } = await import("./storage-tools.js");
       tools = createStorageTools(params.storage, params.storagePrefix ?? "", this.logger);
-      this.logger?.debug?.(`${TAG} Using storage-backed tools (prefix="${params.storagePrefix ?? ""}")`);
+      this.logger?.debug?.(`${TAG} Using storage-backed tools`);
     } else if (effectiveEnableTools) {
       tools = createSandboxedTools(workspaceDir, this.logger);
     } else {
@@ -403,21 +423,18 @@ export class StandaloneLLMRunner implements LLMRunner {
         const calls = step.toolCalls ?? [];
         const textLen = step.text?.length ?? 0;
         if (calls.length > 0) {
-          const callSummary = calls.map((tc) =>
-            `${tc.toolName}(${JSON.stringify(tc.input).slice(0, 120)})`,
-          ).join(", ");
           this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] toolCalls: ${callSummary}`,
+            `${TAG} step[${step.stepNumber}] toolCalls: count=${calls.length}`,
           );
         }
         if (textLen > 0) {
           this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] text: ${textLen} chars, finishReason=${step.finishReason}`,
+            `${TAG} step[${step.stepNumber}] text: ${textLen} chars`,
           );
         }
         if (calls.length === 0 && textLen === 0) {
           this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] empty (no tools, no text), finishReason=${step.finishReason}`,
+            `${TAG} step[${step.stepNumber}] empty (no tools, no text)`,
           );
         }
       }
@@ -439,21 +456,12 @@ export class StandaloneLLMRunner implements LLMRunner {
       return text;
     } catch (err) {
       const totalMs = Date.now() - runStartMs;
-      let errMsg = err instanceof Error ? err.message : String(err);
-      if (APICallError.isInstance(err)) {
-        // err.message alone can be as terse as "Not Found"; the failing URL,
-        // status and response body only exist on APICallError, so surface them
-        // here (preview + remainder counter, same convention as l1-extractor).
-        const body = typeof err.responseBody === "string" ? err.responseBody : "";
-        const bodyPreview = body.slice(0, 2048);
-        errMsg =
-          `${errMsg} (status=${err.statusCode ?? "?"}, url=${err.url}` +
-          (bodyPreview
-            ? `, body=${bodyPreview}${body.length > 2048 ? `…(+${body.length - 2048})` : ""}`
-            : "") +
-          ")";
-      }
-      this.logger?.error(`${TAG} run() failed after ${totalMs}ms: ${errMsg}`);
+      const errMsg = "Standalone LLM request failed";
+      // Provider URLs, messages and response bodies can contain private data.
+      // Preserve the upstream HTTP diagnostic without forwarding those payloads.
+      const status = APICallError.isInstance(err) && Number.isInteger(err.statusCode)
+        && err.statusCode! >= 100 && err.statusCode! <= 599 ? ` (status=${err.statusCode})` : "";
+      this.logger?.error(`${TAG} run() failed after ${totalMs}ms${status}`);
 
       if (params.instanceId) {
         report("llm_call", {

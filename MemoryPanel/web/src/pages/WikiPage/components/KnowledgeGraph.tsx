@@ -236,7 +236,7 @@ export default function KnowledgeGraph({ data, loading, onNodeClick, highlightNo
         <div className="relative flex-1 max-w-[180px]">
           <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 text-xs inline-flex items-center"><SearchIcon size={12} /></span>
           <input
-            className="h-7 w-full pl-7 pr-6 text-xs border rounded-md bg-card/80 border-border text-foreground/70 placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary"
+            className="h-7 w-full pl-7 pr-6 text-xs border rounded-md bg-card/80 border-border text-foreground/70 placeholder:text-muted-foreground/70 focus:outline-hidden focus:ring-1 focus:ring-primary"
             placeholder={t('graph.searchPlaceholder')}
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}

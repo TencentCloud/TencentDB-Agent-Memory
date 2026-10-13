@@ -1,3 +1,4 @@
+import { buildCodeGraphToolParams } from "./tool-params.js";
 /**
  * CodeGraph Bridge — 封装 @colbymchenry/codegraph 的核心 API。
  *
@@ -8,6 +9,7 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "url";
 import { createLogger } from "../../logger.js";
+import { validateProjectBoundary } from "./guard.js";
 
 const log = createLogger("bridge");
 
@@ -88,6 +90,7 @@ export interface CodeGraphInstance {
  */
 export async function openIndex(projectPath: string): Promise<CodeGraphInstance> {
   log.info("openIndex", { projectPath });
+  await validateProjectBoundary(projectPath);
   const { CodeGraph, ToolHandler } = await loadModules();
   const cg = await CodeGraph.open(projectPath);
   const stats = cg.getStats();
@@ -105,6 +108,7 @@ export async function openIndex(projectPath: string): Promise<CodeGraphInstance>
  */
 export async function indexProject(projectPath: string): Promise<CodeGraphInstance> {
   log.info("indexProject start", { projectPath });
+  await validateProjectBoundary(projectPath);
   const { CodeGraph, ToolHandler, isInitialized } = await loadModules();
 
   const initialized = isInitialized(projectPath);
@@ -138,6 +142,7 @@ export async function indexProject(projectPath: string): Promise<CodeGraphInstan
  */
 export async function syncIndex(instance: CodeGraphInstance): Promise<{ changed: number }> {
   log.info("syncIndex start", { projectRoot: instance.projectRoot });
+  await validateProjectBoundary(instance.projectRoot);
   const result = await instance.cg.sync();
   const changed = result?.filesChanged ?? 0;
   log.info("syncIndex complete", { changed });
@@ -152,7 +157,14 @@ export async function executeTool(
   toolName: string,
   params: Record<string, unknown>,
 ): Promise<{ text: string; isError: boolean }> {
-  log.info("executeTool", { toolName, params, projectRoot: instance.projectRoot });
+  // The SDK's projectPath option bypasses the resource selected by the caller.
+  // Apply the same allowlist even to direct bridge consumers.
+  const built = buildCodeGraphToolParams(toolName.startsWith("codegraph_") ? toolName.slice(10) : "", params);
+  if ("error" in built) throw new Error("invalid CodeGraph tool parameters: " + built.error);
+
+  log.info("executeTool start", { toolName, projectRoot: instance.projectRoot });
+
+  await validateProjectBoundary(instance.projectRoot);
 
   // 检查 handler 实例状态
   log.debug("handler state", {
@@ -161,20 +173,17 @@ export async function executeTool(
     hasExecute: typeof instance.handler.execute === "function",
   });
 
-  const result = await instance.handler.execute(toolName, params);
+  const result = await instance.handler.execute(toolName, built.params);
 
   log.debug("executeTool raw result", {
     toolName,
-    resultKeys: Object.keys(result || {}),
-    contentLength: result?.content?.length,
-    content0: result?.content?.[0],
     isError: result?.isError,
   });
 
   const text = result.content?.[0]?.text ?? "";
   const isError = result.isError ?? false;
 
-  log.info("executeTool response", { toolName, isError, textLength: text.length, textPreview: text.slice(0, 200) });
+  log.info("executeTool response", { toolName, isError, textLength: text.length });
   return { text, isError };
 }
 

@@ -32,14 +32,7 @@ let minLevel: LogLevel = "info";
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-/**
- * Initialize the logging system.
- * Must be called once at startup (in index.ts).
- * Idempotent: subsequent calls are ignored.
- *
- * @param config Log configuration from ProxyConfig
- * @param customBackend Optional custom ILogBackend (for testing/extension)
- */
+
 export function initLogger(config: LogConfig, customBackend?: ILogBackend): void {
   minLevel = config.level;
 

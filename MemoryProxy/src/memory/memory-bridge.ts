@@ -28,6 +28,7 @@ import { getMetadataClient } from "../meta/client.js";
 import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
+import type { MemorySessionIdFields } from "../session/types.js";
 import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
 
 const TAG = "[memory-bridge]";
@@ -52,35 +53,6 @@ const ALLOWED_SUBPATHS = new Set<string>([
   "scenario/read",        // L2 按 path 读全文
 ]);
 
-interface SessionIdFields {
-  user_id: string;
-  team_id: string;
-  agent_id: string;
-  session_id: string;
-  task_id?: string;
-  user_key?: string;
-  /**
-   * Kernel tenant/instance ID for `x-tdai-service-id`. Extracted from
-   * `SessionInfo.space_id`（原本来自请求路径 `/{agent}/{spaceId}/...`）。
-   * 用它做 tenant 路由是正确形态；`config.tdai.serviceId` /
-   * `config.coreSkill.serviceId` 只作为老 session（迁移前缓存）的兜底。
-   */
-  space_id?: string;
-  /**
-   * Composite key actually used to load state from SessionStore
-   * (`${agentSource}:${sessionId}`). 用于埋点侧对齐 session_init_logs 的
-   * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
-   */
-  composite_key?: string;
-  /**
-   * 客户端族群标签（claude-code / codebuddy / codex / workbuddy / dsh / opencode / pi）。
-   * 从 session composite key 的前缀取 → 用于 emitBridgeRejectTelemetry 的
-   * `agent_source` 字段，对齐 session_init_logs 侧的客户端维度。
-   * 不是必填：老 session 没拆 key 时为 undefined，埋点落空值可接受。
-   */
-  agent_source?: string;
-}
-
 /**
  * curl 模板固定 2 header:
  *   - x-conversation-id → sessionId
@@ -104,17 +76,20 @@ function deriveSessionId(c: Context): string | null {
   );
 }
 
-function toIdFields(
+export function toIdFields(
   state: import("../session/types.js").SessionInitState | undefined,
   compositeKey: string,
-): SessionIdFields | null {
+): MemorySessionIdFields | null {
   if (!state || state.status !== "initialized" || !state.sessionInfo) return null;
   const s = state.sessionInfo;
   if (!s.user_id || !s.team_id || !s.agent_id || !s.session_id) return null;
+  const colonIdx = compositeKey.indexOf(":");
+  const agentSource = colonIdx > 0 ? compositeKey.slice(0, colonIdx) : undefined;
   return {
     user_id: s.user_id,
     team_id: s.team_id,
     agent_id: s.agent_id,
+    agent_source: agentSource,
     session_id: s.session_id,
     task_id: s.task_id,
     user_key: s.user_key,
@@ -123,11 +98,11 @@ function toIdFields(
   };
 }
 
-function bindingToIdFields(
+export function bindingToIdFields(
   binding: import("../db/binding-repo.js").SessionBinding,
   spaceId: string,
   sessionId: string,
-): SessionIdFields | null {
+): MemorySessionIdFields | null {
   if (binding.outcome !== "initialized") return null;
   if (!binding.userId || !binding.teamId || !binding.agentId) return null;
   const agentSource = binding.agentSource || "claude-code";
@@ -135,6 +110,7 @@ function bindingToIdFields(
     user_id: binding.userId,
     team_id: binding.teamId,
     agent_id: binding.agentId,
+    agent_source: agentSource,
     session_id: sessionId,
     task_id: binding.taskId,
     user_key: binding.userKey,
@@ -147,7 +123,7 @@ function bindingToIdFields(
  * L1 fast path — try in-memory Map with prefix fallback.
  * Returns null on miss (caller decides whether to probe L2).
  */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+export function loadSessionIdsL1(sessionId: string): MemorySessionIdFields | null {
   // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
   const candidates = sessionId.includes(":")
@@ -172,11 +148,11 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
  *   2) 拍平后 binding.json 里已经存了 user_id/team_id/agent_id/agent_source/user_key,
  *      单次 GET 直接凑齐 IdFields
  */
-async function loadSessionIdsL2(
+export async function loadSessionIdsL2(
   bindingRepo: BindingRepo | null,
   spaceId: string,
   sessionId: string,
-): Promise<SessionIdFields | null> {
+): Promise<MemorySessionIdFields | null> {
   if (!bindingRepo) return null;
   try {
     const binding = await bindingRepo.getBinding(spaceId, sessionId);
@@ -201,11 +177,11 @@ function extractSubpath(path: string): string | null {
   return m[1].replace(/\/+$/, "");
 }
 
-function selfCtx(ids: SessionIdFields): FixedAssetCtx {
+function selfCtx(ids: MemorySessionIdFields): FixedAssetCtx {
   return { teamId: ids.team_id, userId: ids.user_id, agentId: ids.agent_id, agentName: ids.agent_id, isSelf: true };
 }
 
-async function resolveMemoryCtxs(config: ProxyConfig, ids: SessionIdFields, sessionKey: string): Promise<FixedAssetCtx[]> {
+async function resolveMemoryCtxs(config: ProxyConfig, ids: MemorySessionIdFields, sessionKey: string): Promise<FixedAssetCtx[]> {
   if (!ids.user_key) return [selfCtx(ids)];
   try {
     const serviceId = ids.space_id || config.tdai?.serviceId || config.coreSkill.serviceId;

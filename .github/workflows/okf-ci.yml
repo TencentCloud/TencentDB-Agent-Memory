@@ -1,0 +1,83 @@
+name: OKF Wiki
+on:
+  push:
+    paths: ['MemoryKnowledge/**', 'MemoryPanel/**', 'sdk/memory-core/typescript/**', 'sdk/memory-core/python/**', 'agents/asset-import.ts', 'MemoryCore/**', 'MemoryCore/hermes-plugin/**', 'MemoryCore/scripts/import-opik-to-memory-skill-py/**', '.github/workflows/okf-ci.yml']
+  pull_request:
+    paths: ['MemoryKnowledge/**', 'MemoryPanel/**', 'sdk/memory-core/typescript/**', 'sdk/memory-core/python/**', 'agents/asset-import.ts', 'MemoryCore/**', 'MemoryCore/hermes-plugin/**', 'MemoryCore/scripts/import-opik-to-memory-skill-py/**', '.github/workflows/okf-ci.yml']
+permissions:
+  contents: read
+jobs:
+  okf:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MemoryKnowledge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: MemoryKnowledge/package-lock.json
+      - name: Install with native SQLite source compilation
+        run: |
+          node_root="$(dirname "$(dirname "$(command -v node)")")"
+          test -f "$node_root/include/node/node.h"
+          npm_config_build_from_source=true npm_config_nodedir="$node_root" npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+  python-transport-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify authenticated stdlib transports
+        run: python3 -m unittest discover -s MemoryCore/hermes-plugin/tests -v
+  client-transports:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        directory: [MemoryCore, MemoryPanel, sdk/memory-core/typescript]
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.directory == 'MemoryCore' && '24' || '22' }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - if: ${{ matrix.directory == 'MemoryCore' }}
+        name: Verify development npm artifact
+        run: |
+          python3 scripts/vendor-npm.py
+          git diff --exit-code -- vendor/npm-12.2.0-unbundled.tgz
+      - if: ${{ matrix.directory == 'MemoryCore' }}
+        name: Verify licensed Jieba loader adapter
+        run: python3 scripts/vendor-jieba-loader.py --check
+      - if: ${{ matrix.directory == 'MemoryCore' }}
+        run: npm ci --ignore-scripts
+      - if: ${{ matrix.directory == 'MemoryCore' }}
+        run: npm audit --audit-level=low
+      - if: ${{ matrix.directory != 'MemoryCore' }}
+        run: npm ci
+      - if: ${{ matrix.directory == 'MemoryPanel' || matrix.directory == 'MemoryCore' }}
+        run: npm run typecheck
+      - if: ${{ matrix.directory == 'MemoryCore' }}
+        name: Verify public Knowledge contract generation
+        run: |
+          npm run generate:knowledge
+          git diff --exit-code -- src/gateway/generated/knowledge
+      - run: npm run build
+      - run: npm test
+
+  python-sdk-transports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install ./sdk/memory-core/python
+      - run: python -m unittest discover -s sdk/memory-core/python/tests -v

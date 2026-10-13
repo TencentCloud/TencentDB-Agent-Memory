@@ -429,8 +429,7 @@ skill / 记忆 / 知识注入是否物有所值。**特意做成可选,不建议
 
 ### 路径写法
 
-把 `/analyse` 作为一段插到 `/{agent}/{spaceId}` 和协议尾巴之间,结构和
-`/cost-guard` 完全对称:
+把 `/analyse` 作为一段插到 `/{agent}/{spaceId}` 和协议尾巴之间:
 
 ```text
 # Claude Code(Anthropic Messages)

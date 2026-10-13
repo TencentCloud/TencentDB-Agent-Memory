@@ -36,6 +36,13 @@ from typing import Any, Iterable, Optional
 # ──────────────────────────── HTTP 小工具（不带任何第三方依赖） ────────────────────────────
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Fail closed instead of forwarding service credentials to redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class HttpError(Exception):
     def __init__(self, status: int, message: str, body: str = "") -> None:
         super().__init__(f"HTTP {status}: {message}")
@@ -61,11 +68,12 @@ def http_request(
         hdrs.setdefault("Content-Type", "application/json")
     hdrs.setdefault("Accept", "application/json")
 
+    opener = urllib.request.build_opener(_NoRedirect())
     last_err: Optional[Exception] = None
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, data=payload, method=method, headers=hdrs)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with opener.open(req, timeout=timeout) as resp:
                 raw = resp.read()
                 if not raw:
                     return None
@@ -75,7 +83,8 @@ def http_request(
                     return raw.decode("utf-8", errors="replace")
         except urllib.error.HTTPError as err:
             body = err.read().decode("utf-8", errors="replace") if err.fp else ""
-            # 4xx（除 429）直接抛，不重试
+            # Redirects and 4xx (except 429) fail without retry. A redirect must
+            # never forward the Opik or Core service credential to another URL.
             if err.code < 500 and err.code != 429:
                 raise HttpError(err.code, err.reason or "http error", body)
             last_err = HttpError(err.code, err.reason or "http error", body)

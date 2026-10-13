@@ -21,7 +21,7 @@ export const enum EntityType {
   Acl = "acl",
 }
 
-const LOOKUP: Record<EntityType, (svc: MetadataService, id: string) => Promise<unknown>> = {
+const LOOKUP: Record<EntityType, (svc: MetadataService, id: string) => unknown | Promise<unknown>> = {
   [EntityType.User]: (svc, id) => svc.getUserById(id),
   [EntityType.Team]: (svc, id) => svc.getTeamById(id),
   [EntityType.Agent]: (svc, id) => svc.getAgentById(id),

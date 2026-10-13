@@ -41,6 +41,9 @@ export class V3HttpTransport {
     }
   }
 
+  /** Release the optional transport-owned connection pool. */
+  async close(): Promise<void> { await this.dispatcher?.close(); }
+
   async post<T = unknown>(
     path: string,
     body: Record<string, unknown> = {},
@@ -73,6 +76,7 @@ export class V3HttpTransport {
         headers: this.headers,
         ...(method === "POST" ? { body: JSON.stringify(params) } : {}),
         signal: controller.signal,
+        redirect: "error",
       };
       if (this.dispatcher) fetchOptions.dispatcher = this.dispatcher;
       const url = `${this.endpoint}${path}${query && query.size > 0 ? `?${query.toString()}` : ""}`;

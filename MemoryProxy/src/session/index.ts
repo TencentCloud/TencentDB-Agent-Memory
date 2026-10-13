@@ -18,6 +18,10 @@ export type {
   SessionInitData,
   SessionRegistrationData,
   SessionInfo,
+  SessionIdFields,
+  SkillSessionIdFields,
+  MemorySessionIdFields,
+  SessionInitResult,
   AgentDetail,
   TaskDetail,
   TeamOption,
@@ -64,16 +68,15 @@ export {
 // ── 旧兼容 API（向后兼容 handler.ts 旧调用方式）─────────────────────────────────
 
 import type { SessionInitConfig } from "../types.js";
+import type { SessionInitResult } from "./types.js";
 import { SessionStore } from "./store.js";
 import {
   handleSessionInit as cbHandle,
   SessionRequestContext as CBSessionRequestContext,
-  SessionInitResult as CBSessionInitResult,
 } from "./codebuddy/init.js";
 import {
   handleSessionInit as ccHandle,
   SessionRequestContext as CCSessionRequestContext,
-  SessionInitResult as CCSessionInitResult,
 } from "./claude-code/init.js";
 import {
   buildFormResponse as buildWorkBuddyFormResponse,
@@ -94,7 +97,7 @@ import {
 
 // Re-export the types under their old names for backward compat
 export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
-export type SessionInitResult = CBSessionInitResult;
+
 
 /**
  * @deprecated 请使用 handleCodeBuddySessionInit() 或 handleClaudeCodeSessionInit()。

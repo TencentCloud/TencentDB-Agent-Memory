@@ -173,8 +173,7 @@ export async function performCapture(
 
   const maxTimestamp = Math.max(...cleaned.map((m) => m.timestamp));
   logger?.info(
-    `${TAG} Captured ${cleaned.length} message(s) (server total=${result.total_count}, ` +
-    `sessionKey=${sessionKey.slice(0, 32)}${sessionKey.length > 32 ? "…" : ""})`,
+    `${TAG} Captured ${cleaned.length} message(s) (server total=${result.total_count})`,
   );
 
   return {

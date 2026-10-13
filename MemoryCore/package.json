@@ -1,7 +1,7 @@
 {
   "name": "@tencentdb-agent-memory/memory-tencentdb-v2",
   "version": "1.0.2-beta.1",
-  "description": "Four-layer local memory system plugin for OpenClaw — auto-captures, structures, and profiles conversational knowledge using local LLM + SQLite vector search (L0→L1→L2→L3 pipeline)",
+  "description": "Four-layer local memory system plugin for OpenClaw \u2014 auto-captures, structures, and profiles conversational knowledge using local LLM + SQLite vector search (L0\u2192L1\u2192L2\u2192L3 pipeline)",
   "type": "module",
   "main": "./dist/index.mjs",
   "bin": {
@@ -18,7 +18,7 @@
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
     "build:plugin": "tsdown",
-    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory && npm run build:seed-v2",
+    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory",
     "prepack": "npm run build",
     "build:migrate-sqlite-to-vdb": "tsc -p scripts/migrate-sqlite-to-tcvdb/tsconfig.json --noEmitOnError false",
     "migrate-sqlite-to-tcvdb": "node ./bin/migrate-sqlite-to-tcvdb.mjs",
@@ -26,8 +26,6 @@
     "export-tencent-vdb": "node ./bin/export-tencent-vdb.mjs",
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
     "read-local-memory": "node ./bin/read-local-memory.mjs",
-    "build:seed-v2": "tsc --project scripts/seed-v2/tsconfig.json",
-    "seed-v2": "node ./bin/seed-v2.mjs",
     "test": "vitest run",
     "test:oss": "vitest run -c vitest.oss.config.ts",
     "test:watch": "vitest",
@@ -46,7 +44,8 @@
     "smoke:skill:all": "tsx scripts/smoke-skill/smoke-skill-all.ts",
     "e2e:memory-prompt:vdb-cos": "tsx scripts/e2e-memory-prompt-vdb-cos.ts",
     "import:opik": "tsx scripts/import-opik-to-memory-core/index.ts",
-    "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
+    "typecheck": "tsc -p tsconfig.audit.json",
+    "generate:knowledge": "mkdir -p src/gateway/generated/knowledge && kubb generate --config kubb.knowledge.config.ts"
   },
   "files": [
     "dist/",
@@ -64,7 +63,6 @@
     "scripts/install-openclaw-plugin.sh",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
-    "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
     "openclaw-plugin/",
@@ -78,7 +76,10 @@
     "!src/**/*.spec.ts",
     "!src/**/__tests__/",
     "!hermes-plugin/**/__pycache__/**",
-    "!hermes-plugin/**/*.pyc"
+    "!hermes-plugin/**/*.pyc",
+    "vendor/jieba-loader.cjs",
+    "vendor/jieba-loader.LICENSE",
+    "vendor/jieba-loader.provenance.json"
   ],
   "keywords": [
     "openclaw",
@@ -101,15 +102,16 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
-    "@node-rs/jieba": "^2.0.1",
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/api-logs": "^0.218.0",
-    "@opentelemetry/exporter-logs-otlp-http": "^0.218.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.218.0",
-    "@opentelemetry/resources": "^2.7.1",
-    "@opentelemetry/sdk-logs": "^0.218.0",
-    "@opentelemetry/sdk-node": "^0.218.0",
-    "@opentelemetry/sdk-trace-base": "^2.7.1",
+    "@node-rs/jieba": "2.0.3",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/api-logs": "^0.222.0",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.222.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/otlp-grpc-exporter-base": "^0.222.0",
+    "@opentelemetry/resources": "^2.8.0",
+    "@opentelemetry/sdk-logs": "^0.222.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
+    "@opentelemetry/sdk-trace-base": "^2.8.0",
     "@opentelemetry/semantic-conventions": "^1.41.1",
     "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1",
     "@tencentdb-agent-memory/tcvdb-text": "^0.1.1",
@@ -131,8 +133,9 @@
   "optionalDependencies": {
     "@clickhouse/client": "^1.18.5",
     "@opentelemetry/context-async-hooks": "^2.7.1",
-    "@opentelemetry/exporter-logs-otlp-grpc": "^0.218.0",
-    "@opentelemetry/exporter-trace-otlp-grpc": "^0.218.0",
+    "@opentelemetry/exporter-logs-otlp-grpc": "^0.222.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.222.0",
+    "chokidar": "^4.0.3",
     "cos-nodejs-sdk-v5": "^3.0.0",
     "ioredis": "^5.10.1",
     "kafkajs": "^2.2.4",
@@ -177,6 +180,28 @@
     "mongodb-memory-server": "^10.4.3",
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.11",
+    "openclaw": "2026.10.2",
+    "node-llama-cpp": "3.22.1",
+    "prettier": "3.8.3",
+    "npm": "file:vendor/npm-12.2.0-unbundled.tgz"
+  },
+  "overrides": {
+    "nunjucks": {
+      "chokidar": "^4.0.3"
+    },
+    "simple-git": "4.0.2",
+    "@simple-git/argv-parser": "2.0.1",
+    "npm": {
+      ".": "$npm",
+      "brace-expansion": "5.0.12",
+      "http-cache-semantics": "4.3.0",
+      "ip-address": "10.7.4",
+      "postcss-selector-parser": "7.1.6",
+      "undici@^6.0.0": "6.29.0"
+    }
+  },
+  "imports": {
+    "#jieba-loader": "./vendor/jieba-loader.cjs"
   }
 }

@@ -33,7 +33,6 @@ export function parseL1Response(raw: string): OffloadEntry[] {
       timestamp: item.timestamp ?? "",
       score: typeof item.score === "number" ? Math.min(10, Math.max(0, item.score)) : 5,
       node_id: null,
-      seq: -1,
     });
   }
 

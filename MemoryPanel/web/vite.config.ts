@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
+import tailwindcss from '@tailwindcss/vite';
 
 // team-memory-control 后端地址（链路 A `/api/v1/meta/*` 等接口所在的后端）。
 const TMC_BACKEND_TARGET = process.env.VITE_TMC_BACKEND_URL || 'http://127.0.0.1:8123';
@@ -9,7 +10,7 @@ const TMC_BACKEND_TARGET = process.env.VITE_TMC_BACKEND_URL || 'http://127.0.0.1
 const SKILL_GATEWAY_TARGET = process.env.VITE_SKILL_GATEWAY_URL || 'http://127.0.0.1:8420';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss(), react()],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),

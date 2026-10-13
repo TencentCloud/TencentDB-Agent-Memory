@@ -30,17 +30,9 @@ import type { ProxyConfig } from "../../types.js";
 import { apiKeyToKeyId, extractBearerToken, opikCreateTrace, uuidv7 } from "../../opik.js";
 import { createPipeline, writeLog } from "../../logger.js";
 import { extractSpaceIdFromPath } from "../../credit-reporter.js";
-import { joinUrl } from "../../guard-adapter.js";
-import {
-  prepareUpstreamRequest,
-  notifyUpstreamResponse,
-  type UpstreamToolCall,
-} from "../../request-prepare-adapter.js";
-import {
-  createCfqStripStream,
-  createCfqStripObserver,
-  stripCfqFromResponseText,
-} from "../../common/cfq-strip.js";
+import { joinUrl } from '../../upstream-target.js';
+import type { UpstreamToolCall } from '../../common/upstream-tool-call.js';
+
 import {
   collectResponsesOutputText,
   collectResponsesToolCalls,
@@ -411,7 +403,7 @@ export async function runCodexPipeline(
   // codex 的 turn 序号从 body.input[] 里"人类输入"数量推导（同 CC/CB 惯例；
   // 同 turn 内的工具循环请求会算出相同的 turnSeq → 同一 trace）。用户问题
   // 走 codex adapter 的 extractUserText——codex 用 input[] 而非 messages[]，
-  // 通用 resolveLatestUserQuery 靠 costGuard profile 走 messages[]，这里不合用。
+
   const turnSeq = countHumanTurnsResponses(body.input);
   const userQuery = codexAdapter.extractUserText(body.input) ?? "";
   const lf: LangfuseTurnContext = {
@@ -949,7 +941,7 @@ async function forwardToUpstream(
     // else: 保留 c.req.header('authorization') 里的客户端 key 透传
   }
 
-  // ── Instance upstream config override (codex has no cost-guard routing) ──
+
   // v2 model groups(§7.3): 走 shared stageInstanceUpstreamResponses (与 wb 共享)。
   // 4 态处理: blocked/unmanaged → 400; override → 替换上游; official → 保持。
   // `/proxy/<spaceId>` 不带 agent 段: 强制 official (forceOfficial=true), 避免
@@ -977,34 +969,13 @@ async function forwardToUpstream(
   }
   if (_upstreamResolve.skipCreditReport) skipCreditReport = true;
 
-  // Optional private preparation stage. It rewrites `body` and the `input[]`
+
   // items in place, so it has to land after every host-side mutation (model
   // resolution, instance override) and before the body is serialized below.
   //
   // Auxiliary turns are excluded for the same reason they skip langfuse and
   // archive: they are client-driven background calls, not dialogue turns.
-  let preparedStats: Record<string, unknown> | null = null;
-  if (lf && Array.isArray(body.input)) {
-    preparedStats = await prepareUpstreamRequest({
-      config,
-      protocol: "responses",
-      body,
-      messages: body.input,
-      sessionKey: lf.sessionId,
-      spaceId,
-      pipe,
-      upstreamCall: {
-        upstreamUrl,
-        headers: upstreamHeaders,
-        model: modelId,
-        tools: body.tools,
-      },
-      userQuery: lf.userQuery,
-      lf,
-      opikTraceId: traceId,
-      opikKeyId: keyId,
-    });
-  }
+
 
   pipe.forwardStart(upstreamUrl);
 
@@ -1162,18 +1133,7 @@ async function forwardToUpstream(
     } catch {
       // Preserve an unexpected non-JSON response without billing it.
     }
-    if (lf) {
-      void notifyUpstreamResponse(config, {
-        protocol: "responses",
-        sessionKey: lf.sessionId,
-        model: modelId,
-        stream: false,
-        turnSeq: lf.turnSeq,
-        text: outputText,
-        toolCalls,
-        usage: usage ?? {},
-      }, pipe);
-    }
+
     if (usage && Object.keys(usage).length > 0) {
       writeLog(config, {
         timestamp: new Date().toISOString(),
@@ -1187,7 +1147,7 @@ async function forwardToUpstream(
         stream: false,
         usage,
         requestReceivedAt: startTime,
-        extensionStats: preparedStats ?? undefined,
+
         spaceId,
         upstreamRequestId,
       });
@@ -1219,12 +1179,7 @@ async function forwardToUpstream(
       }
     }
     // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-    const clientResponseText = stripCfqFromResponseText(
-      "responses",
-      responseText,
-      preparedStats,
-      createCfqStripObserver(pipe),
-    );
+    const clientResponseText = responseText;
     return new Response(clientResponseText, {
       status: upstreamResp.status,
       headers: responseHeaders,
@@ -1241,11 +1196,7 @@ async function forwardToUpstream(
     // 不 tap 也要剥离：注入与否跟观测无关，客户端校验一样会拒。
     return new Response(
       upstreamResp.body
-        ? upstreamResp.body.pipeThrough(createCfqStripStream(
-            "responses",
-            preparedStats,
-            createCfqStripObserver(pipe),
-          ))
+        ? upstreamResp.body
         : null,
       {
         status: upstreamResp.status,
@@ -1273,17 +1224,13 @@ async function forwardToUpstream(
     forkTraceId,
     upstreamRequestId,
     skipCreditReport,
-    preparedStats,
+
     archiveCtx,
   });
 
-  // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
+
   return new Response(
-    rawClientStream.pipeThrough(createCfqStripStream(
-      "responses",
-      preparedStats,
-      createCfqStripObserver(pipe),
-    )),
+    rawClientStream,
     {
     status: upstreamResp.status,
     headers: filterResponseHeaders(upstreamResp.headers),
@@ -1341,7 +1288,7 @@ export interface CodexTapContext {
   upstreamRequestId?: string;
   skipCreditReport?: boolean;
   /** Opaque counters from the preparation stage, recorded with the usage log. */
-  preparedStats?: Record<string, unknown> | null;
+
   /**
    * skill 归档 + TDAI L0 write hook 上下文;
    * null 表示当前请求不需要触发归档 (aux / session 未初始化 / bypass)。
@@ -1362,236 +1309,5 @@ export interface CodexTapContext {
 export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: CodexTapContext): void {
   const { lf, modelId, startTime, upstreamUrl, inputBody, pipe, archiveCtx } = ctx;
 
-  (async () => {
-    const decoder = new TextDecoder();
-    let sseBuf = "";
-    let usage: Record<string, unknown> = {};
-    let outputText = "";
-    let toolUseCount = 0;
-    let toolCalls: UpstreamToolCall[] = [];
-    let stopReason: string | undefined;
-    let streamCompleted = false;
-    // 5 分钟兜底：客户端断开可能让上游流卡住，这里超时也强制收尾一次。
-    const timeoutHandle = setTimeout(() => {
-      if (!streamCompleted) {
-        pipe.error("STREAM_TIMEOUT", "Codex stream reading exceeded 5 minutes");
-        void completeStream().catch((err) => pipe.error("STREAM_TIMEOUT_COMPLETE", err));
-      }
-    }, 5 * 60 * 1000);
 
-    async function completeStream(): Promise<void> {
-      if (streamCompleted) return;
-      streamCompleted = true;
-      clearTimeout(timeoutHandle);
-
-      const endTime = new Date().toISOString();
-      if (ctx.config && lf) {
-        void notifyUpstreamResponse(ctx.config, {
-          protocol: "responses",
-          sessionKey: lf.sessionId,
-          model: modelId,
-          stream: true,
-          turnSeq: lf.turnSeq,
-          text: outputText,
-          toolCalls,
-          usage,
-        }, pipe);
-      }
-      if (ctx.config && Object.keys(usage).length > 0) {
-        // codex 老行为: writeLog(usage) 无 gate 恒写 (B6 已在 pipeline 迁移时补齐,
-        // 不套 stageGates.writeLogUsage 以避免任何 preset 档位让 codex 停写)
-        stageWriteUsageLog({
-          config: ctx.config, pipe,
-          timestamp: endTime, modelId,
-          keyId: ctx.keyId ?? "unknown",
-          sessionKey: ctx.sessionKey ?? "",
-          turnSeq: lf?.turnSeq,
-          userInput: lf?.userQuery || undefined,
-          upstreamUrl, usage,
-          requestReceivedAt: startTime,
-          extensionStats: ctx.preparedStats ?? undefined,
-          spaceId: ctx.spaceId,
-          upstreamRequestId: ctx.upstreamRequestId,
-        });
-      }
-      if (ctx.config && ctx.requestPath) {
-        // stageCredit 统一走 shared 计费实现 (与 openai-chat / anthropic stream 分支对齐)
-        // stream 场景客户端已收到, 响应头写不进去 (但 stage 内部仍会 log + CH raw 兜底)
-        await stageCredit({
-          skipCreditReport: ctx.skipCreditReport,
-          config: ctx.config,
-          path: ctx.requestPath,
-          usage: Object.keys(usage).length > 0 ? usage : undefined,
-          effectiveModel: modelId,
-          upstreamUrl,
-          event: "usage",
-          startTime: new Date(startTime),
-          reqIds: pipe.ids(),
-          upstreamRequestId: ctx.upstreamRequestId ?? "",
-          sessionKey: ctx.sessionKey ?? "",
-          stream: true,
-          keyId: ctx.keyId ?? "unknown",
-          routedFrom: "",
-        }, pipe).catch((err: unknown) => pipe.error("CREDIT_REPORT", err));
-      }
-      if (lf) {
-        try {
-          const output = outputText
-            ? { role: "assistant", content: outputText }
-            : toolUseCount > 0
-              ? { role: "assistant", content: `[${toolUseCount} tool call(s)]` }
-              : undefined;
-          langfuseReportGeneration({
-            traceId: lf.traceId,
-            name: modelId,
-            model: modelId,
-            startTime,
-            endTime,
-            input: buildCodexLangfuseInput(inputBody),
-            output,
-            usage: Object.keys(usage).length > 0 ? usage : undefined,
-            traceName: lf.traceName,
-            userId: lf.userId,
-            sessionId: lf.sessionId,
-            tags: lf.tags,
-            traceInput: lf.userQuery || undefined,
-            traceOutput: output,
-            traceMetadata: {
-              stream: true,
-              upstreamUrl,
-              stop_reason: stopReason,
-              tool_use_count: toolUseCount,
-            },
-            observationMetadata: {
-              stream: true,
-              stop_reason: stopReason,
-              tool_use_count: toolUseCount,
-            },
-          });
-        } catch (lfErr: unknown) {
-          pipe.error("LANGFUSE_SPAN", lfErr);
-        }
-      }
-
-      // ── Opik LLM span (bug B7 fix, gated by stageGates.opik) ──
-      const codexAgent = resolveAgentStrategy("codex");
-      if (ctx.config && Object.keys(usage).length > 0) {
-        const output = outputText
-          ? { role: "assistant" as const, content: outputText }
-          : toolUseCount > 0
-            ? { role: "assistant" as const, content: `[${toolUseCount} tool call(s)]` }
-            : null;
-        stageOpikStreamSpan({
-          config: ctx.config, gates: codexAgent.stageGates, pipe,
-          // Opik trace id 来自 ctx.traceId (由 forwardToUpstream 的
-          // opikCreateTrace 产出)。缺失说明 opik 关闭 → stage 内部会因
-          // opik.enabled=false 而 no-op, 不会发空 trace_id 的请求。
-          traceId: ctx.traceId ?? "",
-          forkTraceId: ctx.forkTraceId,
-          keyId: ctx.keyId ?? "unknown",
-          modelId, startTime, endTime,
-          inputMessages: [{ role: "user", content: JSON.stringify(inputBody.input ?? []) }],
-          outputMessage: output,
-          usage,
-          retried: false,
-          upstreamUrl,
-          streamTag: "stream",
-          // codex 特色 "codex" tag 追加保留在这里, stageOpikStreamSpan 内部走 streamTag + retry tag
-        });
-        // stageOpikStreamSpan 只能带 stream / retry tag; codex 独有 "codex" tag 单独通过 forkMetadata 处理
-        // 也可以直接在 stageOpikStreamSpan 输出后由 caller 追加, 但 opikCreateLlmSpan 是幂等 sink 无二次调用
-        // 决定: 不严格保留 "codex" tag (老行为里只是分类标, opik 侧 tag 不影响 UI 主路径)
-      }
-
-      // ── ModelIntent telemetry (bug B4 fix, gated by stageGates.modelIntentTelemetry) ──
-      stageEmitModelIntent({
-        gates: codexAgent.stageGates,
-        sessionKey: `codex:${ctx.sessionKey}`,
-        turnSeq: lf?.turnSeq ?? 0,
-        spaceId: ctx.spaceId,
-        userId: ctx.keyId ?? "unknown",
-        agentSource: "codex",
-        intents: toolCalls.filter((tc) => tc.name).map((tc) => ({ name: tc.name, arguments: tc.arguments })),
-      });
-
-      // ── recordInputTokenUsage (bug B1 fix, gated by stageGates.rateLimit) ──
-      if (ctx.config && Object.keys(usage).length > 0) {
-        await stageRecordTokenUsage({
-          config: ctx.config, gates: codexAgent.stageGates,
-          isCustomUpstream: !!ctx.skipCreditReport,  // codex 用 skipCreditReport 当 custom 标志
-          spaceId: ctx.spaceId,
-          modelId, usage, protocol: "responses",
-        }).catch((rlErr: unknown) => pipe.error("RATE_LIMIT_RECORD", rlErr));
-      }
-
-      // ── Skill/conversation/add + TDAI L0 归档 hook ──
-      // 对齐 anthropicHandler.ts 的 stream 分支 (line 1867-1948): langfuse 上报后
-      // 触发 skill 归档 + L0 write。失败静默 (内部已 warn), 不阻塞客户端 SSE。
-      // archiveCtx=null (aux / 未初始化 session / bypass) 直接跳过。
-      if (archiveCtx) {
-        try {
-          await triggerCodexArchiveHooks(archiveCtx, outputText, toolUseCount);
-        } catch (archiveErr: unknown) {
-          pipe.error("CODEX_ARCHIVE", archiveErr instanceof Error ? archiveErr : new Error(String(archiveErr)));
-        }
-      }
-    }
-
-    try {
-      const reader = stream.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        sseBuf += decoder.decode(value, { stream: true });
-        const parts = sseBuf.split("\n\n");
-        sseBuf = parts.pop() ?? "";
-
-        for (const part of parts) {
-          const lines = part.split("\n");
-          let dataStr = "";
-          for (const line of lines) {
-            if (line.startsWith("data: ")) dataStr = line.slice(6);
-            else if (line.startsWith("data:")) dataStr = line.slice(5);
-          }
-          if (!dataStr) continue;
-
-          try {
-            const evt = JSON.parse(dataStr) as Record<string, unknown>;
-            const evtType = evt.type as string | undefined;
-
-            if (evtType === "response.output_text.delta") {
-              const delta = evt.delta;
-              if (typeof delta === "string") outputText += delta;
-            } else if (evtType === "response.output_item.added") {
-              const item = evt.item as Record<string, unknown> | undefined;
-              if (item?.type === "function_call") toolUseCount++;
-            } else if (evtType === "response.completed") {
-              const resp = evt.response as Record<string, unknown> | undefined;
-              if (resp?.usage) {
-                Object.assign(usage, resp.usage as Record<string, unknown>);
-              }
-              // 终态 `output[]` 带完整的 call_id 与逐字 arguments，比累积
-              // response.function_call_arguments.delta 更可靠。
-              if (resp?.output) toolCalls = collectResponsesToolCalls(resp.output);
-              stopReason = (resp?.status as string) ?? "completed";
-            } else if (evtType === "response.incomplete") {
-              // max_output_tokens / 其它中断（Responses API 标准）
-              const resp = evt.response as Record<string, unknown> | undefined;
-              const details = resp?.incomplete_details as Record<string, unknown> | undefined;
-              stopReason = `incomplete:${details?.reason ?? "unknown"}`;
-              if (resp?.usage) Object.assign(usage, resp.usage as Record<string, unknown>);
-              if (resp?.output) toolCalls = collectResponsesToolCalls(resp.output);
-            }
-          } catch {
-            // ignore malformed frames — 埋点级别的问题不阻塞
-          }
-        }
-      }
-    } catch (err: unknown) {
-      pipe.error("CODEX_TAP", err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      await completeStream();
-    }
-  })().catch((err: unknown) => pipe.error("CODEX_TAP_UNHANDLED", err));
 }

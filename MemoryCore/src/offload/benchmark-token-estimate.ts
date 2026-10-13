@@ -1,7 +1,7 @@
 /**
  * Benchmark: fastEstimateTokens vs tiktoken cl100k_base
  */
-import { fastEstimateTokens } from "../src/offload/fast-token-estimate.ts";
+import { fastEstimateTokens } from "./fast-token-estimate.ts";
 import { getEncoding } from "js-tiktoken";
 import { readFileSync, existsSync } from "fs";
 import { join, dirname } from "path";

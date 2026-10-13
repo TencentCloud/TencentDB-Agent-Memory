@@ -63,7 +63,9 @@ esac
 [[ -n "${VERSION:-}" ]] || die "请显式指定 VERSION，例：VERSION=1.0.0 ./publish.sh $TARGET"
 [[ "$VERSION" == dev-* ]] && die "VERSION 不能以 dev- 开头（避免把开发 tag 推上公网）"
 
-command -v docker >/dev/null || die "需要 docker"
+if [[ "${DRY_RUN:-0}" != "1" ]]; then
+  command -v docker >/dev/null || die "需要 docker"
+fi
 command -v rsync  >/dev/null || die "需要 rsync"
 [[ -f "$SECRET_SCAN" ]] || die "secret-scan 脚本不存在: $SECRET_SCAN"
 
@@ -153,9 +155,7 @@ build_memory_core() {
 }
 
 # ── memory-proxy ────────────────────────────────────────────────────
-# packages/cost-guard 是私有 submodule，不进开源镜像。但 package.json 把它声明
-# 成 file: 依赖、Dockerfile 也会 COPY 它，所以在独立 context 里放一个 stub 包，
-# 让 npm 能解析依赖图；运行时 dynamic import 失败会走 passthrough fallback。
+# Build a clean public context from source and the committed lockfile.
 build_memory_proxy() {
   local image="${REGISTRY}/${NAMESPACE}/memory-proxy"
   [[ "$REGISTRY" == "docker.io" ]] && image="${NAMESPACE}/memory-proxy"
@@ -174,8 +174,6 @@ build_memory_proxy() {
     --exclude 'node_modules' \
     --exclude 'dist' \
     --exclude 'coverage' \
-    --exclude 'packages/cost-guard/*' \
-    --exclude 'packages/cost-guard/.*' \
     --exclude '.env' \
     --exclude '.env.*' \
     --exclude '**/.env' \
@@ -184,55 +182,15 @@ build_memory_proxy() {
     --exclude 'config.*.local.yaml' \
     "$src"/ "$ctx"/
 
-  make_cost_guard_stub "$ctx/packages/cost-guard"
 
-  # 源 lockfile 记录的是真实 submodule 结构，与 stub 冲突；换成空壳让 npm 重解析。
-  cat > "$ctx/package-lock.json" <<'JSON'
-{
-  "name": "context-proxy",
-  "version": "0.0.0",
-  "lockfileVersion": 3,
-  "requires": true,
-  "packages": {}
-}
-JSON
-
-  scan "$ctx" src package.json packages
+  scan "$ctx" src package.json
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    ok "DRY_RUN=1 → context 就绪在 $ctx，跳过 build/push"
+    ok "DRY_RUN=1 → context 就绪在 ${ctx}，跳过 build/push"
     return 0
   fi
   build_image "$image" "$ctx"
   info "context 保留在 $ctx"
-}
-
-make_cost_guard_stub() {
-  local dir="$1"
-  if [[ -d "$dir" ]] && [[ -n "$(ls -A "$dir" 2>/dev/null)" ]]; then
-    die "$dir 非空 —— 私有 submodule 不能打进公开镜像，请检查 rsync 排除规则"
-  fi
-  info "生成 cost-guard stub → $dir"
-  mkdir -p "$dir/src"
-  cat > "$dir/package.json" <<'JSON'
-{
-  "name": "@context-proxy/cost-guard",
-  "version": "0.0.0-stub",
-  "description": "Placeholder for the optional cost-guard extension. The proxy falls back to passthrough routing when the real module is absent.",
-  "type": "module",
-  "main": "src/index.js",
-  "exports": { ".": "./src/index.js" },
-  "private": true
-}
-JSON
-  cat > "$dir/src/index.js" <<'JS'
-// Placeholder for the optional @context-proxy/cost-guard extension.
-// src/guard-adapter.ts imports this package dynamically and degrades to
-// passthrough routing when the real implementation is unavailable.
-export const CostGuard = undefined;
-export const setAnalyzerDebug = undefined;
-export const resolveAgentProfile = undefined;
-JS
 }
 
 # ── memory-hub ──────────────────────────────────────────────────────
@@ -261,7 +219,7 @@ build_memory_hub() {
   scan "$ctx" panel knowledge Dockerfile start-combined.sh
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    ok "DRY_RUN=1 → context 就绪在 $ctx，跳过 build/push"
+    ok "DRY_RUN=1 → context 就绪在 ${ctx}，跳过 build/push"
     return 0
   fi
   build_image "$image" "$ctx"

@@ -302,14 +302,15 @@ export interface GatewayConfig {
      * header. Requests without a valid token receive HTTP 401.
      *
      * **Default: undefined** — authentication is disabled, all routes are
-     * open (preserves legacy behaviour). A WARN is emitted at startup if the
-     * gateway binds to a non-loopback host without an API key set, to avoid
-     * silently exposing an unauthenticated endpoint to the network.
+     * open (preserves legacy behaviour). Non-loopback startup is refused without a key unless
+     * TDAI_GATEWAY_ALLOW_INSECURE_NO_KEY_LISTEN=true is explicitly set.
      *
      * env: `TDAI_GATEWAY_API_KEY`
      * yaml: `server.apiKey`
      */
     apiKey?: string;
+    /** Explicit opt-in for a keyless non-loopback listener. Default false. */
+    allowInsecureNoKeyListen?: boolean;
     /**
      * Optional CORS allow-list.
      *
@@ -370,7 +371,7 @@ export interface GatewayConfig {
   /** State backend type. env: STATE_BACKEND. yaml: stateBackend */
   stateBackend?: "redis" | "local";
   /** Default instance ID for standalone pipeline. env: TDAI_INSTANCE_ID. yaml: instanceId */
-  instanceId: string;
+  instanceId?: string;
   redis: RedisConfig;
   shark: SharkConfig;
   scanner: ScannerConfig;
@@ -1019,7 +1020,7 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
     deployMode,
     stateBackend,
     instanceId,
-    server: { port, host, apiKey, corsOrigins },
+    server: { port, host, apiKey, corsOrigins, allowInsecureNoKeyListen: env("TDAI_GATEWAY_ALLOW_INSECURE_NO_KEY_LISTEN") === "true" },
     data: { baseDir, fileStore, fileStoreOthers },
     features: { backendResolver },
     llm,

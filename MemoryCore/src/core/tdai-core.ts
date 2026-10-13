@@ -822,6 +822,12 @@ export class TdaiCore {
       try { await this.storeReady; } catch { /* fall through to gate check */ }
     }
 
+    // Configuration can change while storeReady is pending.
+    if (!this.cfg.skill?.enabled) {
+      this.resolvedSkillConfig = undefined;
+      return;
+    }
+
     if (!this.vectorStore) {
       this.logger.debug?.(`${TAG} Skill wiring deferred: vectorStore not ready`);
       return;
@@ -837,15 +843,13 @@ export class TdaiCore {
       const tcvdbHasCreds = !!(
         this.cfg.tcvdb?.url && this.cfg.tcvdb?.apiKey && this.cfg.tcvdb?.database
       );
-      const cosHasCreds = !!(
-        this.cfg.cos?.secretId &&
-        this.cfg.cos?.secretKey &&
-        this.cfg.cos?.bucket
-      );
+      // Storage is already injected; its public capability is authoritative.
+      // Do not inspect removed legacy configuration or duplicate credentials.
+      const hasCosStorage = this.storage.type === "cos";
       const probe: SkillEnvProbe = {
         outerStoreBackend: this.cfg.storeBackend,
         hasTcvdbCredentials: tcvdbHasCreds,
-        hasCosCredentials: cosHasCreds,
+        hasCosCredentials: hasCosStorage,
         embeddingAvailable:
           this.cfg.embedding.enabled && (this.cfg.embedding.dimensions ?? 0) > 0,
         llmRunnerAvailable:
@@ -856,9 +860,11 @@ export class TdaiCore {
       const resolverLogger = {
         info: (m: string) => this.logger.info(m),
         warn: (m: string) => this.logger.warn(m),
+        error: (m: string) => this.logger.error(m),
       };
       const resolved = resolveSkillConfig(this.cfg.skill, probe, resolverLogger);
-      this.resolvedSkillConfig = resolved;
+      this.resolvedSkillConfig = resolved ?? undefined;
+      if (!resolved) return;
 
       // Open the underlying DatabaseSync (raw handle escape hatch — see
       // VectorStore.getRawDb() docstring). Skill tables (skill_meta /
@@ -941,8 +947,7 @@ export class TdaiCore {
           llmRunner = this.buildSkillLlmRunner();
         } catch (err) {
           this.logger.warn(
-            `${TAG} Skill singleton llm runner build failed (non-fatal in service mode): ` +
-              `${err instanceof Error ? err.message : String(err)}`,
+            `${TAG} Skill singleton llm runner build failed (non-fatal in service mode)`,
           );
           llmRunner = undefined;
         }
@@ -977,7 +982,7 @@ export class TdaiCore {
       );
     } catch (err) {
       this.logger.warn(
-        `${TAG} Skill module wiring failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        `${TAG} Skill module wiring failed (non-fatal)`,
       );
       this.skillCore = undefined;
       this.skillExtractor = undefined;
@@ -1096,7 +1101,7 @@ export class TdaiCore {
       storage: storage ?? this.getStorage(),
       checkpointLock,
     });
-    const result = await runner({ sessionKey, msg: [], bg_msg: [] });
+    const result = await runner({ sessionKey });
 
     // Read accumulated credit from the tracking runner (原始浮点数，与监控侧严格一致)
     const creditUsed: number = (llmRunner as any)?.accumulatedCredit ?? 0;

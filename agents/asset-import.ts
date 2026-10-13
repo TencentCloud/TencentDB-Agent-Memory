@@ -632,6 +632,7 @@ export class PanelClient {
     const url = `${this.cfg.panelUrl.replace(/\/$/, '')}${normPath}`;
     const res = await fetch(url, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
         'X-Tdai-Service-Id': this.cfg.serviceId,
@@ -644,10 +645,10 @@ export class PanelClient {
     try {
       json = JSON.parse(text) as PanelEnvelope<T>;
     } catch {
-      throw new Error(`非 JSON 响应 (${res.status}): ${text.slice(0, 200)}`);
+      throw new Error(`Non-JSON response (HTTP ${res.status}); response body omitted`);
     }
     if (typeof json.code !== 'number') {
-      throw new Error(`响应缺少 code 字段 (${res.status}): ${text.slice(0, 200)}`);
+      throw new Error(`Response lacks a numeric code (HTTP ${res.status}); response body omitted`);
     }
     // 业务 envelope（含数字 code）一律返回给调用方判断，不在此抛错。
     return json;

@@ -40,7 +40,8 @@ export function createStorageContext(
   agentName: string,
   sessionId: string,
 ): StorageContext {
-  const dataDir = join(dataRoot, agentName);
+  const dataDir = scopedFilePath(dataRoot, agentName);
+  scopedFilePath(dataDir, sessionId); // Validate the raw component before prefixing it.
   return Object.freeze({
     dataRoot,
     dataDir,
@@ -101,6 +102,10 @@ export async function ensureDirs(ctx: StorageContext): Promise<void> {
 
 // ─── Session Registry ────────────────────────────────────────────────────────
 
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /** Record a sessionKey → realSessionId mapping in the agent's registry. */
 export async function registerSession(
   ctx: StorageContext,
@@ -108,21 +113,28 @@ export async function registerSession(
   realSessionId: string,
 ): Promise<void> {
   if (!sessionKey || !realSessionId || !existsSync(ctx.dataDir)) return;
+  scopedFilePath(ctx.dataDir, realSessionId);
   const registryPath = join(ctx.dataDir, "sessions-registry.json");
   let registry: Record<string, unknown> = {};
   try {
     if (existsSync(registryPath)) {
-      registry = JSON.parse(await readFile(registryPath, "utf-8"));
+      const loaded: unknown = JSON.parse(await readFile(registryPath, "utf-8"));
+      if (!isRecordObject(loaded)) throw new Error();
+      registry = loaded;
     }
   } catch {
-    /* corrupt file, start fresh */
+    // Never replace unreadable/corrupt metadata with a new single-session map.
+    throw new Error("Offload session registry unavailable or invalid");
   }
-  registry[sessionKey] = {
-    sessionId: realSessionId,
-    offloadFile: `offload-${realSessionId}.jsonl`,
-    updatedAt: new Date().toISOString(),
+  const nextRegistry = {
+    ...registry,
+    [sessionKey]: {
+      sessionId: realSessionId,
+      offloadFile: `offload-${realSessionId}.jsonl`,
+      updatedAt: new Date().toISOString(),
+    },
   };
-  await writeFile(registryPath, JSON.stringify(registry, null, 2), "utf-8");
+  await writeFile(registryPath, JSON.stringify(nextRegistry, null, 2), "utf-8");
 }
 
 /** Look up the real sessionId for a given sessionKey from the registry. */
@@ -134,8 +146,12 @@ export async function lookupSessionId(
   const registryPath = join(ctx.dataDir, "sessions-registry.json");
   try {
     if (!existsSync(registryPath)) return null;
-    const registry = JSON.parse(await readFile(registryPath, "utf-8")) as Record<string, { sessionId?: string }>;
-    return registry[sessionKey]?.sessionId ?? null;
+    const registry: unknown = JSON.parse(await readFile(registryPath, "utf-8"));
+    if (!isRecordObject(registry) || !Object.hasOwn(registry, sessionKey)) return null;
+    const row = registry[sessionKey];
+    if (!isRecordObject(row) || typeof row.sessionId !== "string") return null;
+    scopedFilePath(ctx.dataDir, row.sessionId);
+    return row.sessionId;
   } catch {
     return null;
   }
@@ -149,11 +165,11 @@ export async function listRegisteredSessions(
   const registryPath = join(ctx.dataDir, "sessions-registry.json");
   try {
     if (!existsSync(registryPath)) return [];
-    const registry = JSON.parse(await readFile(registryPath, "utf-8")) as Record<string, Record<string, unknown>>;
-    return Object.entries(registry).map(([key, val]) => ({
-      sessionKey: key,
-      ...val,
-    }));
+    const registry: unknown = JSON.parse(await readFile(registryPath, "utf-8"));
+    if (!isRecordObject(registry)) return [];
+    return Object.entries(registry).flatMap(([key, val]) =>
+      isRecordObject(val) ? [{ ...val, sessionKey: key }] : [],
+    );
   } catch {
     return [];
   }
@@ -473,6 +489,7 @@ export async function rewriteAllOffloadEntries(
   const groups = new Map<string, Array<Record<string, unknown>>>();
   for (const entry of entries) {
     const sourceFile = (entry._sourceFile as string) ?? basename(ctx.offloadJsonl);
+    scopedOffloadFilePath(ctx.dataDir, sourceFile);
     if (!groups.has(sourceFile)) {
       groups.set(sourceFile, []);
     }
@@ -491,9 +508,11 @@ export async function rewriteAllOffloadEntries(
       }
     }
   }
+  // Validate the entire group set before any asynchronous write starts.
+  for (const filename of groups.keys()) scopedOffloadFilePath(ctx.dataDir, filename);
   await Promise.all(
     Array.from(groups.entries()).map(async ([filename, fileEntries]) => {
-      const filePath = join(ctx.dataDir, filename);
+      const filePath = scopedOffloadFilePath(ctx.dataDir, filename);
       const content =
         fileEntries.map(safeStringifyEntry).join("\n") +
         (fileEntries.length > 0 ? "\n" : "");
@@ -528,6 +547,26 @@ export function isoToFilename(iso: string): string {
   return iso.replace(/:/g, "-").replace(/\./g, "-").replace(/\+/g, "p");
 }
 
+/** Reject lexical escapes; trusted contexts and filesystem ownership remain required. */
+function scopedFilePath(directory: string, filename: string): string {
+  if (typeof filename !== "string" || !filename || filename === "." || filename === ".." ||
+      /[\/\\\x00-\x1f\x7f]/.test(filename) || basename(filename) !== filename) {
+    throw new Error("Invalid offload storage filename");
+  }
+  return join(directory, filename);
+}
+
+function scopedOffloadFilePath(directory: string, filename: string): string {
+  try {
+    const filePath = scopedFilePath(directory, filename);
+    if (!filename.startsWith("offload-") || !filename.endsWith(".jsonl") ||
+        filename.length <= "offload-.jsonl".length) throw new Error();
+    return filePath;
+  } catch {
+    throw new Error("Invalid offload JSONL source filename");
+  }
+}
+
 /** Write tool result content to a ref MD file, return relative path */
 export async function writeRefMd(
   ctx: StorageContext,
@@ -536,7 +575,7 @@ export async function writeRefMd(
   content: string,
 ): Promise<string> {
   const filename = `${isoToFilename(timestamp)}.md`;
-  const filePath = join(ctx.refsDir, filename);
+  const filePath = scopedFilePath(ctx.refsDir, filename);
   const safeContent = (content ?? "").replace(UNSAFE_CHAR_RE, "");
   const header = `# Tool Result: ${toolName}\n\n**Timestamp:** ${timestamp}\n\n---\n\n`;
   await writeFile(filePath, header + safeContent, "utf-8");
@@ -548,7 +587,12 @@ export async function readRefMd(
   ctx: StorageContext,
   refPath: string,
 ): Promise<string | null> {
-  const filePath = join(ctx.dataDir, refPath);
+  if (typeof refPath !== "string" || !refPath.startsWith("refs/")) {
+    throw new Error("Invalid offload ref path");
+  }
+  let filePath: string;
+  try { filePath = scopedFilePath(ctx.refsDir, refPath.slice("refs/".length)); }
+  catch { throw new Error("Invalid offload ref path"); }
   if (!existsSync(filePath)) return null;
   return readFile(filePath, "utf-8");
 }
@@ -571,7 +615,7 @@ export async function writeMmd(
   filename: string,
   content: string,
 ): Promise<void> {
-  const filePath = join(ctx.mmdsDir, filename);
+  const filePath = scopedFilePath(ctx.mmdsDir, filename);
   await writeFile(filePath, content, "utf-8");
 }
 
@@ -581,7 +625,7 @@ export async function patchMmd(
   filename: string,
   blocks: MmdReplaceBlock[],
 ): Promise<boolean> {
-  const filePath = join(ctx.mmdsDir, filename);
+  const filePath = scopedFilePath(ctx.mmdsDir, filename);
   const original = await readMmd(ctx, filename);
   if (original === null) return false;
   const lines = original.split("\n");
@@ -615,7 +659,7 @@ export async function readMmd(
   ctx: StorageContext,
   filename: string,
 ): Promise<string | null> {
-  const filePath = join(ctx.mmdsDir, filename);
+  const filePath = scopedFilePath(ctx.mmdsDir, filename);
   if (!existsSync(filePath)) return null;
   return readFile(filePath, "utf-8");
 }
@@ -625,7 +669,7 @@ export async function deleteMmd(
   ctx: StorageContext,
   filename: string,
 ): Promise<boolean> {
-  const filePath = join(ctx.mmdsDir, filename);
+  const filePath = scopedFilePath(ctx.mmdsDir, filename);
   if (!existsSync(filePath)) return false;
   await unlink(filePath);
   return true;

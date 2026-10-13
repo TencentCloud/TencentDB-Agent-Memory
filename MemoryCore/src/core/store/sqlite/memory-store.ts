@@ -1836,7 +1836,7 @@ export class VectorStore implements IMemoryStore {
       this.db.exec("BEGIN");
       try {
         this.stmtL0DeleteVec!.run(recordId);
-        this.stmtL0InsertVec!.run(recordId, Buffer.from(embedding.buffer), meta.recorded_at);
+        this.stmtL0InsertVec!.run(recordId, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), meta.recorded_at);
         this.db.exec("COMMIT");
       } catch (err) {
         try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
@@ -2180,7 +2180,7 @@ export class VectorStore implements IMemoryStore {
           this.db.exec("BEGIN");
           try {
             this.stmtDeleteVec!.run(record_id);
-            this.stmtInsertVec!.run(record_id, Buffer.from(embedding.buffer), updated_time);
+            this.stmtInsertVec!.run(record_id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), updated_time);
             this.db.exec("COMMIT");
           } catch (txErr) {
             try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
@@ -2205,7 +2205,7 @@ export class VectorStore implements IMemoryStore {
           this.db.exec("BEGIN");
           try {
             this.stmtL0DeleteVec!.run(record_id);
-            this.stmtL0InsertVec!.run(record_id, Buffer.from(embedding.buffer), recorded_at);
+            this.stmtL0InsertVec!.run(record_id, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength), recorded_at);
             this.db.exec("COMMIT");
           } catch (txErr) {
             try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }

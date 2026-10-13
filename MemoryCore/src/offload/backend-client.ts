@@ -108,6 +108,8 @@ export class BackendClient {
   private apiKey: string | undefined;
   /** Hardcoded timeout for all backend calls (L1/L1.5/L2/L4) */
   private static readonly TIMEOUT_MS = 120_000;
+  /** Bound response bytes before decoding or parsing remote content. */
+  private static readonly MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
   private logger: PluginLogger;
   private sessionKeyFn: () => string | null;
   /** Resolves the value of the `X-User-Id` header sent on every call. */
@@ -134,14 +136,12 @@ export class BackendClient {
 
   /** L1 Summarize — synchronous await (used by assemble flush + force trigger) */
   async l1Summarize(req: L1Request): Promise<L1Response> {
-    const pairNames = req.toolPairs.map((p) => `${p.toolName}(${p.toolCallId})`).join(", ");
-    this.logger.debug?.(`[context-offload] L1 >>> summarize ${req.toolPairs.length} pairs: [${pairNames}]`);
+    this.logger.debug?.(`[context-offload] L1 >>> summarize ${req.toolPairs.length} pairs`);
     const startMs = Date.now();
     const resp = await this.post<L1Response>("/offload/v1/l1/summarize", req, BackendClient.TIMEOUT_MS);
     const durationMs = Date.now() - startMs;
     const entryCount = resp.entries?.length ?? 0;
-    const scores = resp.entries?.map((e) => `${e.tool_call_id}:score=${e.score}`).join(", ") ?? "";
-    this.logger.debug?.(`[context-offload] L1 <<< ${entryCount} entries [${scores}]`);
+    this.logger.debug?.(`[context-offload] L1 <<< ${entryCount} entries`);
     traceOffloadModelIo({
       sessionKey: this.sessionKeyFn(),
       stage: "L1.backend",
@@ -162,13 +162,13 @@ export class BackendClient {
   /** L1.5 Task Judgment — synchronous await, uses unified timeout */
   async l15Judge(req: L15Request): Promise<L15Response> {
     this.logger.debug?.(
-      `[context-offload] L1.5 >>> judge: currentMmd=${req.currentMmd?.filename ?? "null"}, availableMmds=${req.availableMmdMetas.length}, recentMessages=${req.recentMessages.length} chars`,
+      `[context-offload] L1.5 >>> judge: hasCurrentMmd=${!!req.currentMmd}, availableMmds=${req.availableMmdMetas.length}, recentMessages=${req.recentMessages.length} chars`,
     );
     const startMs = Date.now();
     const resp = await this.post<L15Response>("/offload/v1/l15/judge", req, BackendClient.TIMEOUT_MS);
     const durationMs = Date.now() - startMs;
     this.logger.debug?.(
-      `[context-offload] L1.5 <<< completed=${resp.taskCompleted}, continuation=${resp.isContinuation}, continuationFile=${resp.continuationMmdFile ?? "null"}, newLabel=${resp.newTaskLabel ?? "null"}, longTask=${resp.isLongTask}`,
+      `[context-offload] L1.5 <<< completed=${resp.taskCompleted === true}, continuation=${resp.isContinuation === true}, hasContinuationFile=${!!resp.continuationMmdFile}, hasNewLabel=${!!resp.newTaskLabel}, longTask=${resp.isLongTask === true}`,
     );
     traceOffloadModelIo({
       sessionKey: this.sessionKeyFn(),
@@ -188,17 +188,15 @@ export class BackendClient {
 
   /** L2 MMD Generation — async background, uses unified timeout */
   async l2Generate(req: L2Request): Promise<L2Response> {
-    const entryIds = req.newEntries.map((e) => e.tool_call_id).join(", ");
     this.logger.debug?.(
-      `[context-offload] L2 >>> generate: task=${req.taskLabel}, prefix=${req.mmdPrefix}, entries=${req.newEntries.length} [${entryIds}], existingMmd=${req.existingMmd ? `${req.mmdCharCount} chars` : "null (new)"}`,
+      `[context-offload] L2 >>> generate: entries=${req.newEntries.length}, hasExistingMmd=${!!req.existingMmd}`,
     );
     const startMs = Date.now();
     const resp = await this.post<L2Response>("/offload/v1/l2/generate", req, BackendClient.TIMEOUT_MS);
     const durationMs = Date.now() - startMs;
     const mappingCount = Object.keys(resp.nodeMapping ?? {}).length;
-    const mappingStr = Object.entries(resp.nodeMapping ?? {}).map(([k, v]) => `${k}->${v}`).join(", ");
     this.logger.debug?.(
-      `[context-offload] L2 <<< action=${resp.fileAction}, mmdContent=${resp.mmdContent ? `${resp.mmdContent.length} chars` : "null"}, replaceBlocks=${resp.replaceBlocks?.length ?? 0}, nodeMapping=${mappingCount} [${mappingStr}]`,
+      `[context-offload] L2 <<< replace=${resp.fileAction === "replace"}, mmdContent=${resp.mmdContent ? `${resp.mmdContent.length} chars` : "null"}, replaceBlocks=${resp.replaceBlocks?.length ?? 0}, nodeMapping=${mappingCount}`,
     );
     traceOffloadModelIo({
       sessionKey: this.sessionKeyFn(),
@@ -219,13 +217,13 @@ export class BackendClient {
   /** L4 Skill Generation — synchronous await, uses unified timeout */
   async l4Generate(req: L4Request): Promise<L4Response> {
     this.logger.debug?.(
-      `[context-offload] L4 >>> generate: mmd=${req.mmdFilename}, entries=${req.offloadEntries.length}, skillFocus=${req.skillFocus ?? "null"}`,
+      `[context-offload] L4 >>> generate: entries=${req.offloadEntries.length}, hasSkillFocus=${!!req.skillFocus}`,
     );
     const startMs = Date.now();
     const resp = await this.post<L4Response>("/offload/v1/l4/generate", req, BackendClient.TIMEOUT_MS);
     const durationMs = Date.now() - startMs;
     this.logger.debug?.(
-      `[context-offload] L4 <<< skill="${resp.skillName}", content=${resp.skillContent?.length ?? 0} chars`,
+      `[context-offload] L4 <<< hasSkillName=${!!resp.skillName}, content=${resp.skillContent?.length ?? 0} chars`,
     );
     traceOffloadModelIo({
       sessionKey: this.sessionKeyFn(),
@@ -256,12 +254,12 @@ export class BackendClient {
       const resp = await this.post<StoreStateResponse>("/offload/v1/store", payload, timeoutMs);
       const durationMs = Date.now() - startMs;
       this.logger.debug?.(
-        `[context-offload] store <<< insertedId=${resp.insertedId ?? "?"} (${durationMs}ms)`,
+        `[context-offload] store <<< success (${durationMs}ms)`,
       );
       return resp;
     } catch (err) {
       const durationMs = Date.now() - startMs;
-      this.logger.warn(`[context-offload] store !!! failed after ${durationMs}ms: ${err}`);
+      this.logger.warn(`[context-offload] store !!! failed after ${durationMs}ms`);
       throw err;
     }
   }
@@ -273,7 +271,7 @@ export class BackendClient {
     const startMs = Date.now();
 
     const bodyStr = JSON.stringify(body);
-    this.logger.debug?.(`[context-offload] HTTP >>> POST ${url} (${bodyStr.length} bytes, timeout=${timeoutMs}ms)`);
+    this.logger.debug?.(`[context-offload] HTTP >>> POST ${path} (${bodyStr.length} bytes, timeout=${timeoutMs}ms)`);
 
     const reqHeaders: Record<string, string> = {
       "Content-Type": "application/json",
@@ -294,14 +292,21 @@ export class BackendClient {
     } catch { /* ignore */ }
 
     const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Backend URL must use HTTP or HTTPS");
+    }
     const isHttps = parsed.protocol === "https:";
     const transport = isHttps ? https : http;
 
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        req.destroy(new Error("timeout"));
-      }, timeoutMs);
-
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      };
       const req = transport.request(
         {
           hostname: parsed.hostname,
@@ -309,22 +314,44 @@ export class BackendClient {
           path: parsed.pathname + parsed.search,
           method: "POST",
           headers: reqHeaders,
-          ...(isHttps ? { rejectUnauthorized: false } : {}),
         },
         (res) => {
-          let data = "";
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          res.on("error", fail);
+          res.on("aborted", () => fail(new Error("Backend response aborted")));
+          res.on("close", () => {
+            if (!res.complete) fail(new Error("Backend response aborted"));
+          });
+          const oversized = () => {
+            fail(new Error("Backend response exceeds 16 MiB"));
+            res.destroy();
+          };
+          const declaredBytes = Number(res.headers["content-length"]);
+          if (declaredBytes > BackendClient.MAX_RESPONSE_BYTES) {
+            oversized();
+            return;
+          }
           res.on("data", (chunk: Buffer) => {
-            data += chunk.toString();
+            if (settled) return;
+            bytes += chunk.length;
+            if (bytes > BackendClient.MAX_RESPONSE_BYTES) {
+              oversized();
+              return;
+            }
+            chunks.push(chunk);
           });
           res.on("end", () => {
+            if (settled) return;
             clearTimeout(timer);
+            const data = Buffer.concat(chunks, bytes).toString("utf8");
             const durationMs = Date.now() - startMs;
 
             if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
               this.logger.warn(
-                `[context-offload] HTTP <<< ${path}: ${res.statusCode} ${res.statusMessage} (${durationMs}ms) body=${data.slice(0, 500)}`,
+                `[context-offload] HTTP <<< ${path}: ${res.statusCode} (${durationMs}ms)`,
               );
-              reject(new Error(`Backend API error ${res.statusCode}: ${data}`));
+              fail(new Error(`Backend API error ${res.statusCode}`));
               return;
             }
 
@@ -333,23 +360,31 @@ export class BackendClient {
               this.logger.debug?.(
                 `[context-offload] HTTP <<< ${path}: ${res.statusCode} (${durationMs}ms, ${data.length} bytes)`,
               );
+              settled = true;
               resolve(parsed);
             } catch {
-              reject(new Error(`Backend response JSON parse error: ${data.slice(0, 500)}`));
+              fail(new Error("Backend response JSON parse error"));
             }
           });
         },
       );
 
+      // Construct the request before scheduling: invalid headers must not leave
+      // a timer referencing a request that was never created.
+      timer = setTimeout(() => {
+        const error = new Error("timeout");
+        fail(error);
+        req.destroy(error);
+      }, timeoutMs);
       req.on("error", (err: Error) => {
-        clearTimeout(timer);
+        if (settled) return;
         const durationMs = Date.now() - startMs;
         const errMsg = err.message;
         const isTimeout = errMsg.includes("timeout");
         this.logger.warn(
-          `[context-offload] HTTP !!! ${path}: ${isTimeout ? "TIMEOUT" : "ERROR"} after ${durationMs}ms — ${errMsg}`,
+          `[context-offload] HTTP !!! ${path}: ${isTimeout ? "TIMEOUT" : "ERROR"} after ${durationMs}ms`,
         );
-        reject(err);
+        fail(err);
       });
 
       req.write(bodyStr);

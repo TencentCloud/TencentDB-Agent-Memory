@@ -21,8 +21,12 @@ import {
   readdirSync,
   statSync,
   existsSync,
+  realpathSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { parseFrontmatter, buildPage } from "../engines/wiki/ingest-v2/frontmatter.js";
+import { importBundle, exportBundle, BundleRollbackError, BundleConflictError, type BundleFile, type BundleReport } from "../engines/wiki/okf-bundle.js";
+import { writeJournal, applyRecovery, finishRecovery, journalExists, RecoveryError } from "../engines/wiki/okf-recovery.js";
 
 import type {
   AuditAction,
@@ -73,6 +77,7 @@ export type IngestResult =
   | { kind: "ok"; row: WikiRow }
   | { kind: "queued"; row: WikiRow }
   | { kind: "not_found" }
+  | { kind: "recovery_required" }
   | { kind: "busy"; status: "pending" | "processing"; step: string | null };
 
 /**
@@ -266,7 +271,8 @@ export class WikiService {
 
   constructor(opts: WikiServiceOptions) {
     this.store = opts.store;
-    this.dataRoot = opts.dataRoot;
+    if (!existsSync(opts.dataRoot)) mkdirSync(opts.dataRoot, { recursive: true });
+    this.dataRoot = realpathSync(opts.dataRoot);
     this.worker = opts.worker;
     this.queue = opts.queue ?? new BuildQueue();
     this.logger = opts.logger;
@@ -329,6 +335,10 @@ export class WikiService {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return { kind: "not_found" };
 
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) {
+      return { kind: "recovery_required" };
+    }
+
     const inFlightStatus = row.status === "pending" || row.status === "processing" ? row.status : null;
     if (inFlightStatus && opts?.onBusy !== "replace") {
       // 并发拒绝：正在排队/执行中直接拒绝，不覆盖状态、不重复入队、不写 audit。
@@ -342,7 +352,6 @@ export class WikiService {
       this.cancelled.set(wikiId, row.version);
       this.store.updateWikiStatus(serviceId, wikiId, { internal_status: "cancelling" });
     }
-
     const nextVersion = row.version + 1;
     this.store.updateWikiStatus(serviceId, wikiId, {
       status: "pending",
@@ -390,6 +399,7 @@ export class WikiService {
   delete(serviceId: string, teamId: string, wikiId: string): boolean {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return false;
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) return false;
 
     if (row.status === "pending" || row.status === "processing") {
       // 哨兵 -1：delete 会硬删行，所有排队中的代际都该中止。
@@ -523,7 +533,7 @@ export class WikiService {
         detail,
       });
     } catch (err) {
-      this.logger?.warn?.(`[wiki] audit ${action} failed: ${String(err)}`);
+      this.logger?.warn?.(`[wiki] audit ${action} failed: audit_log_write_error`);
     }
   }
 
@@ -624,6 +634,7 @@ export class WikiService {
   ): WriteOutcome<RawWriteResult> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) return "processing";
     // 注：此处**刻意不拦 processing**。设计 2026-09-21「导入并抽取」要求
     // "新导入覆盖旧导入"：抽取进行中再次导入时必须允许写入 raw，否则返回
     // 409 "wiki is processing; cannot write/delete" 阻断导入。
@@ -660,6 +671,7 @@ export class WikiService {
   ): WriteOutcome<RawWriteManyItem[]> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) return "processing";
     // 同上（rawWrite）：刻意不拦 processing，以支持"抽取中再次导入"覆盖写入。
     if (files.length > RAW_WRITE_MAX) {
       throw new Error(`files exceeds max ${RAW_WRITE_MAX}`);
@@ -830,6 +842,7 @@ export class WikiService {
   ): Promise<WriteOutcome<RawRmResult>> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) return "processing";
     if (row.status === "processing") return "processing";
     if (filenames.length > RAW_RM_MAX) {
       throw new Error(`filenames exceeds max ${RAW_RM_MAX}`);
@@ -963,6 +976,7 @@ export class WikiService {
   ): WriteOutcome<PageWriteResult> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) return "processing";
     if (row.status === "processing") return "processing";
 
     const size = Buffer.byteLength(content, "utf-8");
@@ -995,6 +1009,7 @@ export class WikiService {
   ): WriteOutcome<PageWriteManyItem[]> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) return "processing";
     if (row.status === "processing") return "processing";
     if (pages.length > PAGE_WRITE_MAX) {
       throw new Error(`pages exceeds max ${PAGE_WRITE_MAX}`);
@@ -1067,6 +1082,7 @@ export class WikiService {
   ): Promise<WriteOutcome<PageRmResult>> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
+    if (journalExists(join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json"))) return "processing";
     if (row.status === "processing") return "processing";
     if (refs.length > PAGE_RM_MAX) {
       throw new Error(`refs exceeds max ${PAGE_RM_MAX}`);
@@ -1092,6 +1108,134 @@ export class WikiService {
       ),
       rewritten_files: result.rewrittenFiles,
     };
+  }
+
+  /** Native OKF exchange shares the existing service/team/wiki authorization boundary. */
+  okfImport(serviceId: string, teamId: string, wikiId: string, files: BundleFile[], overwrite = false): WriteOutcome<BundleReport> {
+    const row = this.store.getWiki(serviceId, teamId, wikiId);
+    if (!row) return null;
+    if (row.status === "pending" || row.status === "processing") return "processing";
+    this.store.updateWikiStatus(serviceId, wikiId, { status: "processing" });
+
+    const wikiDir = join(this.dirFor(serviceId, teamId, wikiId), "wiki");
+    const journalPath = join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json");
+    if (journalExists(journalPath)) {
+      this.store.updateWikiStatus(serviceId, wikiId, { status: "failed" });
+      throw new BundleConflictError("Cannot start import: unresolved recovery journal exists. Manual operator intervention required.");
+    }
+    const stageDir = `${wikiDir}.okf-stage-${randomUUID()}`;
+    const backupDir = `${wikiDir}.okf-backup-${randomUUID()}`;
+    const targetVersion = row.version + 1;
+
+    const journal: import("../engines/wiki/okf-recovery.js").OkfJournal = {
+      wikiDir,
+      stageDir,
+      backupDir,
+      targetVersion,
+      phase: "started"
+    };
+
+    let swapCommitted = false;
+    try {
+      writeJournal(journalPath, journal);
+
+      const report = importBundle(wikiDir, files, {
+        overwrite,
+        stageDir,
+        backupDir,
+        retainBackup: true
+      });
+
+      swapCommitted = true;
+      journal.phase = "indexing";
+      writeJournal(journalPath, journal);
+
+      this.store.updateWikiStatus(serviceId, wikiId, { version: targetVersion });
+      return report;
+    } catch (e) {
+      try {
+        if (e instanceof BundleRollbackError) {
+          this.store.updateWikiStatus(serviceId, wikiId, { status: "failed", sync_error: "Bundle rollback failed" });
+        } else if (swapCommitted) {
+          this.store.updateWikiStatus(serviceId, wikiId, { status: "failed", sync_error: "Post-commit metadata update failed" });
+        } else {
+          if (existsSync(journalPath)) rmSync(journalPath, { force: true });
+          this.store.updateWikiStatus(serviceId, wikiId, { status: row.status });
+        }
+      } catch (secondaryError) {
+        // preserve and rethrow the original exception object
+      }
+      throw e;
+    }
+  }
+
+  /** Native OKF recovery path after committed-files/metadata/indexing failures and process restart. */
+  okfRecover(serviceId: string, teamId: string, wikiId: string): WriteOutcome<{ action: "rolled_forward" | "no_op", message: string }> {
+    const row = this.store.getWiki(serviceId, teamId, wikiId);
+    if (!row) return null;
+
+    // Authorization is already handled by the calling router.
+    const wikiDir = join(this.dirFor(serviceId, teamId, wikiId), "wiki");
+    const journalPath = join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json");
+
+    if (!journalExists(journalPath)) {
+      if (row.status === "processing" || row.status === "pending") {
+        throw new BundleConflictError("Cannot recover an active unrelated ingestion.");
+      }
+      return { action: "no_op", message: "No recovery pending (idempotent)." };
+    }
+
+    let result: { action: "rolled_forward", version: number };
+    try {
+      result = applyRecovery(journalPath, wikiDir, this.dataRoot, row.version);
+    } catch (e) {
+      if (e instanceof RecoveryError) {
+        const errMsg = "Recovery failed: operator intervention required. " + e.message;
+        this.store.updateWikiStatus(serviceId, wikiId, { status: "failed", sync_error: errMsg });
+        this.audit(row, "failed", errMsg);
+        throw e;
+      }
+      throw e;
+    }
+
+    // rolled_forward: need to re-index. We must not advertise as ready yet.
+    this.store.updateWikiStatus(serviceId, wikiId, { status: "processing", version: result.version });
+    return { action: "rolled_forward", message: "Recovery rolled forward; indexing pending." };
+  }
+
+  okfExport(serviceId: string, teamId: string, wikiId: string): WriteOutcome<BundleFile[]> {
+    const row = this.store.getWiki(serviceId, teamId, wikiId);
+    if (!row) return null;
+    if (row.status === "pending" || row.status === "processing") return "processing";
+    const dir = join(this.dirFor(serviceId, teamId, wikiId), "wiki");
+    return existsSync(dir) ? exportBundle(dir) : [];
+  }
+
+  okfIndexed(serviceId: string, teamId: string, wikiId: string, pageCount: number, error?: string): void {
+    const row = this.store.getWiki(serviceId, teamId, wikiId);
+    if (!row) throw new Error("wiki not found");
+
+    // Completely sanitize incoming errors to avoid leaking secrets/paths to the DB and audit log
+    const safeError = error ? "Internal error during indexing" : null;
+
+    this.store.updateWikiStatus(serviceId, wikiId, {
+      status: safeError ? "failed" : "ready", internal_status: null, sync_error: safeError, page_count: pageCount, last_sync_at: new Date().toISOString(),
+    });
+    this.audit(row, safeError ? "failed" : "ready", safeError ?? "native OKF import and reindex (no LLM)");
+
+    if (!safeError) {
+      try {
+        const wikiDir = join(this.dirFor(serviceId, teamId, wikiId), "wiki");
+        const journalPath = join(this.dirFor(serviceId, teamId, wikiId), "okf-journal.json");
+        finishRecovery(journalPath, wikiDir, this.dataRoot, row.version);
+      } catch (e: unknown) {
+        this.logger?.warn?.(`[wiki] okfIndexed cleanup failed: internal cleanup error`);
+        // Never swallow finalization errors after marking ready; mark as failed instead.
+        this.store.updateWikiStatus(serviceId, wikiId, { status: "failed", sync_error: "Recovery finalization failed" });
+        this.audit(row, "failed", "Recovery finalization failed");
+        throw e;
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1190,7 +1334,7 @@ export class WikiService {
 
   private isForbiddenPageRef(ref: string): boolean {
     const cleanRef = ref.replace(/^wiki\//, "").replace(/\.md$/, "");
-    return PAGE_FORBIDDEN_REFS.has(cleanRef) || PAGE_FORBIDDEN_REFS.has(`wiki/${cleanRef}`);
+    return ["index", "log"].includes(cleanRef.split("/").pop() ?? "") || PAGE_FORBIDDEN_REFS.has(cleanRef) || PAGE_FORBIDDEN_REFS.has(`wiki/${cleanRef}`);
   }
 
   private scanPagesRecursive(
@@ -1383,19 +1527,12 @@ export class WikiService {
 
 /** 极简 frontmatter 解析（取 title/type/description/locked），与 manager 一致风格。 */
 function parseFrontmatterMin(content: string): { title: string; type: string; description: string; locked: boolean } {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  const fm = fmMatch ? fmMatch[1] : "";
-  const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
-  const typeMatch = fm.match(/^type:\s*["']?(.+?)["']?\s*$/m);
-  // description 由 ingest-v2 写入（见 engines/wiki/ingest-v2/frontmatter.ts），
-  // 是页面的一句话概述——比标题更能说明内容，用于生成 wiki summary。
-  const descMatch = fm.match(/^description:\s*["']?(.+?)["']?\s*$/m);
-  const lockedMatch = fm.match(/^locked:\s*(true|false)\s*$/m);
+  const { frontmatter: fm } = parseFrontmatter(content);
   return {
-    title: titleMatch ? titleMatch[1].trim() : "",
-    type: typeMatch ? typeMatch[1].trim().toLowerCase() : "",
-    description: descMatch ? descMatch[1].trim() : "",
-    locked: lockedMatch ? lockedMatch[1] === "true" : false,
+    title: typeof fm.title === "string" ? fm.title : "",
+    type: fm.type,
+    description: typeof fm.description === "string" ? fm.description : "",
+    locked: fm.locked === true,
   };
 }
 
@@ -1408,26 +1545,11 @@ function parseFrontmatterMin(content: string): { title: string; type: string; de
  * 字段（已是 true 也算 lockedInjected=false，因为没有改动）。
  */
 function injectLockedTrue(content: string): { content: string; lockedInjected: boolean } {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!fmMatch) {
-    const wrapped = `---\nlocked: true\n---\n${content.startsWith("\n") ? content.slice(1) : content}`;
-    return { content: wrapped, lockedInjected: true };
-  }
-  const fmBody = fmMatch[1];
-  const lockedMatch = fmBody.match(/^locked:\s*(true|false)\s*$/m);
-  if (lockedMatch) {
-    if (lockedMatch[1] === "true") return { content, lockedInjected: false };
-    const newFmBody = fmBody.replace(/^locked:\s*(true|false)\s*$/m, "locked: true");
-    return {
-      content: content.replace(fmBody, newFmBody),
-      lockedInjected: true,
-    };
-  }
-  const newFmBody = fmBody.endsWith("\n") ? `${fmBody}locked: true` : `${fmBody}\nlocked: true`;
-  return {
-    content: content.replace(fmBody, newFmBody),
-    lockedInjected: true,
-  };
+  const parsed = parseFrontmatter(content);
+  if (parsed.frontmatter.locked === true) return { content, lockedInjected: false };
+  // buildPage omits the producer-control field; prepend it to valid YAML afterwards.
+  const valid = buildPage(parsed.frontmatter, parsed.body);
+  return { content: valid.replace(/^---\n/, "---\nlocked: true\n"), lockedInjected: true };
 }
 
 export const __testing = { parseFrontmatterMin, injectLockedTrue };

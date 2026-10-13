@@ -164,14 +164,11 @@ export class SceneExtractor {
     const backupStartMs = Date.now();
     const cpManager = new CheckpointManager(this.dataDir, this.logger, this.storage);
     const cp = await cpManager.read();
-    // BackupManager is only meaningful for local-fs deployments. In service
-    // mode (StorageAdapter / COS) snapshot/restore is the storage backend's
-    // responsibility, so `bm` stays undefined and the catch-block restore
-    // below short-circuits to a no-op.
-    let bm: BackupManager | undefined;
+    // Filesystem snapshots are retained for explicit operator recovery only.
+    // Adapter-backed snapshots are not implemented by this extractor.
     if (!this.storage) {
       const path = await import("node:path");
-      bm = new BackupManager(path.default.join(this.dataDir, ".backup"));
+      const bm = new BackupManager(path.default.join(this.dataDir, ".backup"));
       await bm.backupDirectory(sceneBlocksDir, "scene_blocks", `offset${cp.total_processed}`, this.sceneBackupCount);
     }
     this.logger?.debug?.(`${TAG} extract() backup phase: ${Date.now() - backupStartMs}ms`);
@@ -270,27 +267,12 @@ export class SceneExtractor {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const totalMs = Date.now() - extractStartMs;
-      this.logger?.error(`${TAG} extract() LLM runner failed after ${totalMs}ms: ${errMsg}`);
+      this.logger?.error(`${TAG} extract() LLM runner failed after ${totalMs}ms`);
 
-      // Restore scene_blocks/ from the Phase 1 backup so partial LLM writes
-      // (or a wiped sandbox) don't leak into the next recall cycle.
-      // Fail-soft: a restore failure must never mask the original LLM error.
-      // In service mode (`this.storage` set) we never took a local backup,
-      // so `bm` is undefined and we skip restore — the storage backend
-      // owns its own snapshot/restore semantics.
-      if (bm) {
-        try {
-          const result = await bm.restoreLatestDirectory("scene_blocks", sceneBlocksDir);
-          if (result.restored) {
-            this.logger?.warn(`${TAG} extract() restored scene_blocks/ from backup: ${result.from}`);
-          } else {
-            this.logger?.debug?.(`${TAG} extract() no scene_blocks backup to restore from (first run or empty)`);
-          }
-        } catch (restoreErr) {
-          const rMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
-          this.logger?.warn(`${TAG} extract() restore failed (non-fatal, original LLM error preserved): ${rMsg}`);
-        }
-      }
+      // Never restore the latest snapshot automatically: it may belong to an
+      // earlier extraction, and newer writes cannot be distinguished from this
+      // runner's partial writes. Recovery requires an explicit verified plan.
+      this.logger?.warn(`${TAG} extract() failed; scene files retained for explicit recovery`);
 
       return { memoriesProcessed: 0, success: false, error: errMsg };
     }

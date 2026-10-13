@@ -10,6 +10,8 @@
  * 3. RuntimeContext is the single source of truth for session/user identity.
  */
 
+import type { ToolSet } from "ai";
+
 // ============================
 // Logger (unified across all layers)
 // ============================
@@ -79,7 +81,7 @@ export interface LLMRunParams {
    * SkillExtractor to inject skill_list / skill_view / skill_manage
    * without polluting the runner's permanent configuration.
    */
-  tools?: Record<string, unknown>;
+  tools?: ToolSet;
   /**
    * Per-call override of the runner's `enableTools` setting. When true
    * and `tools` is provided, the runner drives an automatic tool-call

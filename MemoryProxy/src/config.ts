@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { load as yamlLoad } from "js-yaml";
-import type { CostGuardConfig, ProxyConfig, RawYamlConfig } from "./types.js";
+import type { ProxyConfig, RawYamlConfig } from "./types.js";
 
 const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
@@ -49,26 +49,11 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     enabled: false,
     backend: "sqlite",
     ttlDays: 7,
-    cos: {
-      rootPrefix: "proxy_cache/",
-      shark: {
-        baseUrl: "",
-        timeoutMs: 10_000,
-        retryCount: 2,
-        refreshBufferMs: 2 * 60_000,
-        maxSpaces: 100,
-        graceCloseDelayMs: 30_000,
-      },
-    },
+
     sqlite: { dbPath: "" },
     fs: { fsRoot: "" },  // 空串 → ensureBindingRepoPersistent 用 ~/.memory-tencentdb/proxy-state/
   },
-  costGuard: {
-    enabled: false,
-    markerOptIn: false,
-    agentProfile: "auto",
-    options: {},
-  },
+
   creditReport: {
     url: "http://gateway.example.com:8000/UpdateMemoryPlusUsage",
     timeoutMs: 5000,
@@ -142,6 +127,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     allowLlmWrite: false,
   },
   auth: {
+    apiKey: "",
     enabled: false,
     url: "",
     timeoutMs: 5000,
@@ -200,46 +186,6 @@ export interface CliOverrides {
   verbose?: boolean;
 }
 
-/**
- * Parse the optional private forwarding extension config.
- *
- * The host only reads the generic fields (`enabled`, `agentProfile`,
- * `anthropicUpstream`); every other key is kept opaque in `options` and handed
- * to the extension untouched. The legacy top-level `badcaseCollector` block, if
- * present, is folded into `options` without being interpreted.
- */
-function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
-  const raw: Record<string, unknown> = { ...(yaml.costGuard ?? {}) };
-  const enabled = raw.enabled;
-  const markerOptIn = raw.markerOptIn;
-  const agentProfile = raw.agentProfile;
-  const anthropicUpstream = raw.anthropicUpstream;
-
-  // Everything else is opaque private options — never parsed by the host.
-  delete raw.enabled;
-  delete raw.markerOptIn;
-  delete raw.agentProfile;
-  delete raw.anthropicUpstream;
-  const options: Record<string, unknown> = raw;
-  if (yaml.badcaseCollector !== undefined) {
-    options.badcaseCollector = yaml.badcaseCollector;
-  }
-
-  const result: CostGuardConfig = {
-    enabled: typeof enabled === "boolean" ? enabled : DEFAULT_CONFIG.costGuard.enabled,
-    markerOptIn: typeof markerOptIn === "boolean" ? markerOptIn : DEFAULT_CONFIG.costGuard.markerOptIn,
-    agentProfile: typeof agentProfile === "string" ? agentProfile : DEFAULT_CONFIG.costGuard.agentProfile,
-    options,
-  };
-  if (
-    anthropicUpstream &&
-    typeof anthropicUpstream === "object" &&
-    typeof (anthropicUpstream as { url?: unknown }).url === "string"
-  ) {
-    result.anthropicUpstream = { url: (anthropicUpstream as { url: string }).url };
-  }
-  return result;
-}
 
 /**
  * Parse `upstream.agents` from raw YAML into the normalized `AgentUpstreamEntry`
@@ -272,6 +218,14 @@ function parseUpstreamAgents(
 export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
+  if (Object.hasOwn(yaml, "costGuard") || Object.hasOwn(yaml, "badcaseCollector")) {
+    throw new Error("costGuard and its private extension were removed. Delete the legacy configuration block; configure upstream.agents for explicit model endpoints.");
+  }
+  const storageInput = yaml.storage as Record<string, unknown> | undefined;
+  if (storageInput?.backend === "cos" || storageInput?.cos !== undefined) {
+    throw new Error("Proxy COS storage was removed. Migrate state to sqlite or fs and remove storage.cos before startup; multi-node shared storage is not supported.");
+  }
+
 
   return {
     server: {
@@ -355,22 +309,11 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled: yaml.storage?.enabled ?? DEFAULT_CONFIG.storage.enabled,
       backend: yaml.storage?.backend ?? DEFAULT_CONFIG.storage.backend,
       ttlDays: yaml.storage?.ttlDays ?? DEFAULT_CONFIG.storage.ttlDays,
-      cos: {
-        rootPrefix: yaml.storage?.cos?.rootPrefix ?? DEFAULT_CONFIG.storage.cos.rootPrefix,
-        endpointDomain: yaml.storage?.cos?.endpointDomain ?? undefined,
-        shark: {
-          baseUrl: yaml.storage?.cos?.shark?.baseUrl ?? DEFAULT_CONFIG.storage.cos.shark.baseUrl,
-          timeoutMs: yaml.storage?.cos?.shark?.timeoutMs ?? DEFAULT_CONFIG.storage.cos.shark.timeoutMs,
-          retryCount: yaml.storage?.cos?.shark?.retryCount ?? DEFAULT_CONFIG.storage.cos.shark.retryCount,
-          refreshBufferMs: yaml.storage?.cos?.shark?.refreshBufferMs ?? DEFAULT_CONFIG.storage.cos.shark.refreshBufferMs,
-          maxSpaces: yaml.storage?.cos?.shark?.maxSpaces ?? DEFAULT_CONFIG.storage.cos.shark.maxSpaces,
-          graceCloseDelayMs: yaml.storage?.cos?.shark?.graceCloseDelayMs ?? DEFAULT_CONFIG.storage.cos.shark.graceCloseDelayMs,
-        },
-      },
+
       sqlite: { dbPath: yaml.storage?.sqlite?.dbPath ?? DEFAULT_CONFIG.storage.sqlite.dbPath },
       fs: { fsRoot: yaml.storage?.fs?.fsRoot ?? DEFAULT_CONFIG.storage.fs.fsRoot },
     },
-    costGuard: parseCostGuard(yaml),
+
     creditReport: {
       url: yaml.creditReport?.url ?? DEFAULT_CONFIG.creditReport.url,
       timeoutMs: yaml.creditReport?.timeoutMs ?? DEFAULT_CONFIG.creditReport.timeoutMs,
@@ -433,7 +376,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       externalGatewayUrl: typeof yaml.injection?.externalGatewayUrl === "string" && yaml.injection.externalGatewayUrl.trim() !== ""
         ? yaml.injection.externalGatewayUrl.trim().replace(/\/$/, "")
         : undefined,
-      // 只接受 boolean；yaml 缺省或类型错走 default（关）。跟 costGuard.markerOptIn
+
       // 同姿势，保证线上未配 assetReflection: 段的 yaml 完全无感。
       assetReflection: {
         markerOptIn: typeof yaml.injection?.assetReflection?.markerOptIn === "boolean"
@@ -521,6 +464,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         DEFAULT_CONFIG.skillRuntime.allowLlmWrite,
     },
     auth: {
+      apiKey: (process.env.TDAI_AUTH_API_KEY ?? yaml.auth?.apiKey ?? "").trim(),
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
       timeoutMs: yaml.auth?.timeoutMs ?? DEFAULT_CONFIG.auth.timeoutMs,

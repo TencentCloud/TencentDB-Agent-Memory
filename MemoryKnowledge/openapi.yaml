@@ -3,17 +3,17 @@ info:
   title: Knowledge Service API
   description: |
     Standalone knowledge service for Code-Graph + LLM-Wiki.
-    Provides 28 endpoints for managing and querying code repositories
-    and wiki knowledge bases.
+    Provides service endpoints for code repositories and wiki knowledge bases.
 
-    ## Multi-tenancy (001)
+    ## Multi-tenancy (001) & Security Posture
 
-    Every endpoint requires the tenant identity `service_id` in the
+    Every endpoint scopes tenant data using the tenant identity `service_id` in the
     **`x-tdai-service-id` request header** (`^[A-Za-z0-9_-]+$`, missing/malformed → 400).
-    This is the same value the kernel uses for store/VDB routing, so tenant identity is
-    unified end-to-end. All lookups are scoped by `service_id`; an id-only endpoint
-    targeting another tenant's resource returns 404. `service_id` is never a request-body
-    field and is not echoed in responses.
+    This header defines logical isolation boundaries and is NOT caller authentication.
+
+    When `KNOWLEDGE_SERVICE_KEY` is configured, **ALL `/v3/*` service API endpoints**
+    require `Authorization: Bearer <KNOWLEDGE_SERVICE_KEY>`. Missing or invalid tokens
+    return 401. Health check `/health` is public.
 
     ## Asset ID Model
 
@@ -39,6 +39,9 @@ servers:
   - url: http://localhost:8421/v3
     description: Local development server
 
+security:
+  - ServiceBearerAuth: []
+
 tags:
   - name: LLM-Wiki
     description: Wiki knowledge base management and querying.
@@ -52,7 +55,7 @@ paths:
 
   /wiki/create:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Create wiki metadata + directory shell
       description: |
         Generates wiki_id (wiki-{8char}), creates DB record + directory shell.
@@ -93,7 +96,7 @@ paths:
 
   /wiki/get:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Get wiki metadata by ID
       operationId: getWiki
       requestBody:
@@ -121,7 +124,7 @@ paths:
 
   /wiki/list:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: List wikis for a team
       operationId: listWiki
       requestBody:
@@ -147,7 +150,7 @@ paths:
 
   /wiki/ingest:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Trigger LLM ingest (async)
       description: |
         Background SerialQueue processes raw/sources/* via LLM to generate
@@ -183,7 +186,7 @@ paths:
 
   /wiki/delete:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Batch delete wikis
       description: |
         Deletes wikis in any status, including `pending`/`processing` (008): a
@@ -214,7 +217,7 @@ paths:
 
   /wiki/raw/ls:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: List raw source files
       operationId: rawLsWiki
       requestBody:
@@ -233,7 +236,7 @@ paths:
 
   /wiki/raw/read:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Batch read raw source files
       operationId: rawReadWiki
       requestBody:
@@ -254,7 +257,7 @@ paths:
 
   /wiki/raw/write:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Batch write raw source files
       operationId: rawWriteWiki
       requestBody:
@@ -277,7 +280,7 @@ paths:
 
   /wiki/raw/rm:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Batch delete raw source files + cascade
       operationId: rawRmWiki
       requestBody:
@@ -300,7 +303,7 @@ paths:
 
   /wiki/page/ls:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: List wiki pages (processed)
       operationId: pageLsWiki
       requestBody:
@@ -319,7 +322,7 @@ paths:
 
   /wiki/page/read:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Batch read wiki pages
       operationId: pageReadWiki
       requestBody:
@@ -340,7 +343,7 @@ paths:
 
   /wiki/page/write:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Batch write wiki pages (auto-injects locked:true)
       operationId: pageWriteWiki
       requestBody:
@@ -365,7 +368,7 @@ paths:
 
   /wiki/page/rm:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Batch delete wiki pages + cascade
       operationId: pageRmWiki
       requestBody:
@@ -388,7 +391,7 @@ paths:
 
   /wiki/graph:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Get wiki knowledge graph (nodes, edges, communities)
       operationId: graphWiki
       requestBody:
@@ -407,7 +410,7 @@ paths:
 
   /wiki/search:
     post:
-      tags: [LLM-Wiki]
+      tags: [ LLM-Wiki ]
       summary: Search wiki pages (BM25 full-text)
       operationId: searchWiki
       requestBody:
@@ -432,7 +435,7 @@ paths:
 
   /code-graph/create:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Register repo + async clone & index
       description: |
         Generates code_graph_id (cg-{8char}), creates DB record + returns
@@ -464,7 +467,7 @@ paths:
 
   /code-graph/list:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: List code graphs for a team
       operationId: listCodeGraph
       requestBody:
@@ -490,7 +493,7 @@ paths:
 
   /code-graph/get:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Get code graph metadata by ID
       operationId: getCodeGraph
       requestBody:
@@ -518,7 +521,7 @@ paths:
 
   /code-graph/sync:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Re-sync (git fetch + re-index)
       operationId: syncCodeGraph
       requestBody:
@@ -537,7 +540,7 @@ paths:
 
   /code-graph/delete:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Batch delete code graphs
       description: |
         Deletes code graphs in any status, including `pending`/`processing`
@@ -568,7 +571,7 @@ paths:
 
   /code-graph/search:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Search symbols/files by keyword
       operationId: searchCodeGraph
       requestBody:
@@ -594,7 +597,7 @@ paths:
 
   /code-graph/explore:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Explore files matching query
       operationId: exploreCodeGraph
       requestBody:
@@ -611,7 +614,7 @@ paths:
 
   /code-graph/callers:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Find callers of a symbol
       operationId: callersCodeGraph
       requestBody:
@@ -628,7 +631,7 @@ paths:
 
   /code-graph/callees:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Find callees of a symbol
       operationId: calleesCodeGraph
       requestBody:
@@ -645,7 +648,7 @@ paths:
 
   /code-graph/impact:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Analyze impact of changing a symbol
       operationId: impactCodeGraph
       requestBody:
@@ -662,7 +665,7 @@ paths:
 
   /code-graph/node:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Get detailed info about a symbol node
       operationId: nodeCodeGraph
       requestBody:
@@ -679,7 +682,7 @@ paths:
 
   /code-graph/status:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: Get indexing status
       operationId: statusCodeGraph
       requestBody:
@@ -696,7 +699,7 @@ paths:
 
   /code-graph/files:
     post:
-      tags: [Code-Graph]
+      tags: [ Code-Graph ]
       summary: List files in code graph
       operationId: filesCodeGraph
       requestBody:
@@ -710,16 +713,294 @@ paths:
           description: Success
         default:
           $ref: '#/components/responses/ErrorResponse'
+  /wiki/okf/validate:
+    post:
+      tags:
+        - LLM-Wiki
+      operationId: okfValidate
+      summary: Native OKF validate
+      parameters:
+        - $ref: "#/components/parameters/ServiceIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OkfValidateRequest"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                properties:
+                  code:
+                    type: integer
+                    enum:
+                      - 0
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/OkfReport"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "401":
+          description: Missing or invalid service key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "413":
+          description: Streamed request exceeds 20 MiB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "500":
+          description: Internal failure; an import may already have committed content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+  /wiki/okf/import:
+    post:
+      tags:
+        - LLM-Wiki
+      operationId: okfImport
+      summary: Native OKF import
+      parameters:
+        - $ref: "#/components/parameters/ServiceIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OkfImportRequest"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                properties:
+                  code:
+                    type: integer
+                    enum:
+                      - 0
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/OkfReport"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "401":
+          description: Missing or invalid service key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "404":
+          description: Missing or foreign resource
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "409":
+          description: Active processing, unresolved journal or file conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "413":
+          description: Streamed request exceeds 20 MiB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "500":
+          description: Internal failure; an import may already have committed content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+  /wiki/okf/export:
+    post:
+      tags:
+        - LLM-Wiki
+      operationId: okfExport
+      summary: Native OKF export
+      parameters:
+        - $ref: "#/components/parameters/ServiceIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OkfResourceRequest"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                properties:
+                  code:
+                    type: integer
+                    enum:
+                      - 0
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/OkfExport"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "401":
+          description: Missing or invalid service key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "404":
+          description: Missing or foreign resource
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "409":
+          description: Active processing, unresolved journal or file conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "413":
+          description: Streamed request exceeds 20 MiB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "500":
+          description: Internal failure; an import may already have committed content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+  /wiki/okf/recover:
+    post:
+      tags:
+        - LLM-Wiki
+      operationId: okfRecover
+      summary: Native OKF recover
+      parameters:
+        - $ref: "#/components/parameters/ServiceIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OkfResourceRequest"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                  - data
+                properties:
+                  code:
+                    type: integer
+                    enum:
+                      - 0
+                  message:
+                    type: string
+                  data:
+                    $ref: "#/components/schemas/OkfRecovery"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "401":
+          description: Missing or invalid service key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "404":
+          description: Missing or foreign resource
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "409":
+          description: Active processing, unresolved journal or file conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "413":
+          description: Streamed request exceeds 20 MiB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
+        "500":
+          description: Internal failure; an import may already have committed content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEnvelope"
 
 components:
+  securitySchemes:
+    ServiceBearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Service-to-service Bearer authentication configured via KNOWLEDGE_SERVICE_KEY.
+        When configured, all /v3 service API endpoints require this Bearer token.
+        Health check /health remains public.
+
   parameters:
     ServiceIdHeader:
       name: x-tdai-service-id
       in: header
       required: true
       description: >-
-        Tenant identity `service_id` (001 multi-tenancy). Required on every endpoint;
-        same value the kernel uses for store/VDB routing. Missing/malformed → 400.
+        Tenant identity `service_id` (001 multi-tenancy). Required on every
+        endpoint; same value the kernel uses for store/VDB routing.
+        Missing/malformed → 400.
       schema:
         type: string
         pattern: "^[A-Za-z0-9_-]+$"
@@ -735,7 +1016,7 @@ components:
   schemas:
     ApiResponseEnvelope:
       type: object
-      required: [code, message, data]
+      required: [ code, message, data ]
       properties:
         code:
           type: integer
@@ -750,9 +1031,9 @@ components:
     IdFields:
       type: object
       description: >-
-        Common body id fields. Note: the tenant identity `service_id` is NOT a body
-        field — it is sent via the `x-tdai-service-id` request header (001; unified
-        with the kernel routing key). See the ServiceIdHeader parameter.
+        Common body id fields. Note: the tenant identity `service_id` is NOT a
+        body field — it is sent via the `x-tdai-service-id` request header (001;
+        unified with the kernel routing key). See the ServiceIdHeader parameter.
       properties:
         team_id:
           type: string
@@ -786,15 +1067,17 @@ components:
         service_url:
           type: string
           nullable: true
-          description: Tools self-discovery base URL (includes API prefix, e.g. http://host:8421/v3)
+          description: Tools self-discovery base URL (includes API prefix, e.g.
+            http://host:8421/v3)
         summary:
           type: string
           nullable: true
           maxLength: 256
         status:
           type: string
-          enum: [draft, pending, processing, ready, failed]
-          description: draft = 建壳未加工（仅 create 一次性出现）；pending/processing = in-flight；ready = 可查询；failed = 可重试。
+          enum: [ draft, pending, processing, ready, failed ]
+          description: draft = 建壳未加工（仅 create 一次性出现）；pending/processing = in-flight；ready
+            = 可查询；failed = 可重试。
         sync_error:
           type: string
           nullable: true
@@ -818,8 +1101,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id, name]
+          required: [ team_id, name ]
           properties:
+            team_id:
+              type: string
             name:
               type: string
             # 外部来源（iWiki 等）：二者必须成对出现，缺一 → 400。
@@ -832,7 +1117,7 @@ components:
 
     WikiGetRequest:
       type: object
-      required: [wiki_id]
+      required: [ wiki_id ]
       properties:
         wiki_id:
           type: string
@@ -841,11 +1126,13 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id]
+          required: [ team_id ]
           properties:
+            team_id:
+              type: string
             status:
               type: string
-              enum: [draft, pending, processing, ready, failed]
+              enum: [ draft, pending, processing, ready, failed ]
             limit:
               type: integer
               default: 20
@@ -865,14 +1152,14 @@ components:
 
     WikiIngestRequest:
       type: object
-      required: [wiki_id]
+      required: [ wiki_id ]
       properties:
         wiki_id:
           type: string
 
     WikiDeleteRequest:
       type: object
-      required: [wiki_ids]
+      required: [ wiki_ids ]
       properties:
         wiki_ids:
           type: array
@@ -882,14 +1169,14 @@ components:
 
     WikiRawLsRequest:
       type: object
-      required: [wiki_id]
+      required: [ wiki_id ]
       properties:
         wiki_id:
           type: string
 
     WikiRawReadRequest:
       type: object
-      required: [wiki_id, filenames]
+      required: [ wiki_id, filenames ]
       properties:
         wiki_id:
           type: string
@@ -903,8 +1190,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id, wiki_id, files]
+          required: [ team_id, wiki_id, files ]
           properties:
+            team_id:
+              type: string
             wiki_id:
               type: string
             files:
@@ -922,8 +1211,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id, wiki_id, filenames]
+          required: [ team_id, wiki_id, filenames ]
           properties:
+            team_id:
+              type: string
             wiki_id:
               type: string
             filenames:
@@ -934,14 +1225,14 @@ components:
 
     WikiPageLsRequest:
       type: object
-      required: [wiki_id]
+      required: [ wiki_id ]
       properties:
         wiki_id:
           type: string
 
     WikiPageReadRequest:
       type: object
-      required: [wiki_id, refs]
+      required: [ wiki_id, refs ]
       properties:
         wiki_id:
           type: string
@@ -955,8 +1246,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id, wiki_id, pages]
+          required: [ team_id, wiki_id, pages ]
           properties:
+            team_id:
+              type: string
             wiki_id:
               type: string
             pages:
@@ -974,8 +1267,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id, wiki_id, refs]
+          required: [ team_id, wiki_id, refs ]
           properties:
+            team_id:
+              type: string
             wiki_id:
               type: string
             refs:
@@ -986,14 +1281,14 @@ components:
 
     WikiGraphRequest:
       type: object
-      required: [wiki_id]
+      required: [ wiki_id ]
       properties:
         wiki_id:
           type: string
 
     WikiSearchRequest:
       type: object
-      required: [wiki_id, query]
+      required: [ wiki_id, query ]
       properties:
         wiki_id:
           type: string
@@ -1034,14 +1329,15 @@ components:
         service_url:
           type: string
           nullable: true
-          description: Tools self-discovery base URL (includes API prefix, e.g. http://host:8421/v3)
+          description: Tools self-discovery base URL (includes API prefix, e.g.
+            http://host:8421/v3)
         summary:
           type: string
           nullable: true
           maxLength: 256
         status:
           type: string
-          enum: [pending, processing, ready, failed]
+          enum: [ pending, processing, ready, failed ]
         sync_error:
           type: string
           nullable: true
@@ -1066,8 +1362,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id, repo_url]
+          required: [ team_id, repo_url ]
           properties:
+            team_id:
+              type: string
             repo_url:
               type: string
             branch:
@@ -1080,11 +1378,13 @@ components:
       allOf:
         - $ref: '#/components/schemas/IdFields'
         - type: object
-          required: [team_id]
+          required: [ team_id ]
           properties:
+            team_id:
+              type: string
             status:
               type: string
-              enum: [pending, processing, ready, failed]
+              enum: [ pending, processing, ready, failed ]
             limit:
               type: integer
               default: 20
@@ -1104,21 +1404,21 @@ components:
 
     CodeGraphGetRequest:
       type: object
-      required: [code_graph_id]
+      required: [ code_graph_id ]
       properties:
         code_graph_id:
           type: string
 
     CodeGraphSyncRequest:
       type: object
-      required: [code_graph_id]
+      required: [ code_graph_id ]
       properties:
         code_graph_id:
           type: string
 
     CodeGraphDeleteRequest:
       type: object
-      required: [code_graph_ids]
+      required: [ code_graph_ids ]
       properties:
         code_graph_ids:
           type: array
@@ -1136,7 +1436,7 @@ components:
 
     CodeGraphSearchRequest:
       type: object
-      required: [code_graph_id, query]
+      required: [ code_graph_id, query ]
       properties:
         code_graph_id:
           type: string
@@ -1144,7 +1444,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [symbol, file, any]
+          enum: [ symbol, file, any ]
         limit:
           type: integer
           minimum: 1
@@ -1153,7 +1453,7 @@ components:
 
     CodeGraphExploreRequest:
       type: object
-      required: [code_graph_id, query]
+      required: [ code_graph_id, query ]
       properties:
         code_graph_id:
           type: string
@@ -1167,7 +1467,7 @@ components:
 
     CodeGraphCallersRequest:
       type: object
-      required: [code_graph_id, symbol]
+      required: [ code_graph_id, symbol ]
       properties:
         code_graph_id:
           type: string
@@ -1181,7 +1481,7 @@ components:
 
     CodeGraphCalleesRequest:
       type: object
-      required: [code_graph_id, symbol]
+      required: [ code_graph_id, symbol ]
       properties:
         code_graph_id:
           type: string
@@ -1195,7 +1495,7 @@ components:
 
     CodeGraphImpactRequest:
       type: object
-      required: [code_graph_id, symbol]
+      required: [ code_graph_id, symbol ]
       properties:
         code_graph_id:
           type: string
@@ -1209,7 +1509,7 @@ components:
 
     CodeGraphNodeRequest:
       type: object
-      required: [code_graph_id, symbol]
+      required: [ code_graph_id, symbol ]
       properties:
         code_graph_id:
           type: string
@@ -1226,14 +1526,14 @@ components:
 
     CodeGraphStatusRequest:
       type: object
-      required: [code_graph_id]
+      required: [ code_graph_id ]
       properties:
         code_graph_id:
           type: string
 
     CodeGraphFilesRequest:
       type: object
-      required: [code_graph_id]
+      required: [ code_graph_id ]
       properties:
         code_graph_id:
           type: string
@@ -1243,7 +1543,10 @@ components:
           type: string
         format:
           type: string
-          enum: [tree, flat]
+          enum:
+            - tree
+            - flat
+            - grouped
           default: tree
         includeMetadata:
           type: boolean
@@ -1268,3 +1571,108 @@ components:
                 type: string
               reason:
                 type: string
+    OkfBundleFile:
+      type: object
+      required:
+        - path
+        - content
+      properties:
+        path: &a1
+          type: string
+        content: *a1
+        encoding:
+          type: string
+          enum:
+            - utf-8
+            - base64
+          default: utf-8
+    OkfValidateRequest:
+      type: object
+      required:
+        - files
+      properties:
+        files:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/OkfBundleFile"
+          description: "Maximum total decoded bytes: 10 MiB. Maximum streamed HTTP
+            request: 20 MiB."
+    OkfImportRequest:
+      type: object
+      required:
+        - team_id
+        - wiki_id
+        - files
+      properties:
+        team_id: &a1
+          type: string
+          pattern: ^[A-Za-z0-9_-]+$
+        wiki_id: *a1
+        files:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/OkfBundleFile"
+          description: "Maximum total decoded bytes: 10 MiB. Maximum streamed HTTP
+            request: 20 MiB."
+        overwrite:
+          type: boolean
+          default: false
+    OkfResourceRequest:
+      type: object
+      required:
+        - team_id
+        - wiki_id
+      properties:
+        team_id: &a1
+          type: string
+          pattern: ^[A-Za-z0-9_-]+$
+        wiki_id: *a1
+    OkfReport:
+      type: object
+      required:
+        - files
+        - concepts
+        - warnings
+      properties:
+        files:
+          type: integer
+        concepts:
+          type: integer
+        warnings:
+          type: array
+          items:
+            type: object
+            required:
+              - path
+              - message
+            properties:
+              path: &a1
+                type: string
+              message: *a1
+    OkfExport:
+      type: object
+      required:
+        - files
+      properties:
+        files:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/OkfBundleFile"
+    OkfRecovery:
+      type: object
+      required:
+        - action
+        - message
+      properties:
+        action:
+          type: string
+          enum:
+            - rolled_forward
+            - no_op
+        message:
+          type: string

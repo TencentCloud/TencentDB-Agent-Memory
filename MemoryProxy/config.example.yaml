@@ -16,16 +16,13 @@
 #
 # 状态存储后端：
 #   注入/Skill 相关数据（inj:*/sk:*/vpin:*）默认走 Redis；启用 storage.enabled=true
-#   后可切到 ProxyStorage（COS/SQLite/FS/Memory）。详见 storage: 段。
 # ═══════════════════════════════════════════════════════════════════════════════
-
 
 # ── 服务监听 ─────────────────────────────────────────────────────────────────
 server:
-  host: 0.0.0.0           # 监听地址；0.0.0.0 表示所有网卡
-  port: 8096               # 监听端口
+  host: 0.0.0.0 # 监听地址；0.0.0.0 表示所有网卡
+  port: 8096 # 监听端口
   forwardTimeoutMs: 600000 # 上游转发超时（毫秒），默认 600000（10 分钟）；0 = 不超时
-
 
 # ── 上游 LLM 服务（默认兜底） ──────────────────────────────────────────────────
 upstream:
@@ -55,9 +52,7 @@ upstream:
   # 一部分 agent 走服务端 key、另一部分透传客户端自己的 key。
   #
   # 完整优先级（高→低）：
-  #   1. costGuard 内部路由自带的凭据（cheap-model 兜底）
   #   2. upstream.agents[agent].url + upstream.agents[agent].apiKey
-  #   3. costGuard.anthropicUpstream.url（仅 Anthropic 协议）
   #   4. upstream.url + upstream.apiKey（未命中 agent 时的默认）
   agents: {}
     # claude-code:                                        # 服务端 key 模式
@@ -70,7 +65,6 @@ upstream:
     # 它们的请求会自然落到外层 upstream.url + 鉴权走的 user_key，proxy 自动按 user_id
     # 在内核拉取对应的 team/agent/task 上下文（不需要手动创建资源）。
     # 用户资产（Team / Agent / Task / 用户授权）请在 MemoryPanel Web 面板里创建。
-
 
 # ──── 多客户端接入（workbuddy / codebuddy / claude-code 等） ───────────────────
 # MemoryProxy 不管理用户资产。Team / Agent / Task / 用户授权均在 MemoryPanel Web
@@ -98,156 +92,43 @@ upstream:
 
 # ── 日志 ─────────────────────────────────────────────────────────────────────
 log:
-  file: logs               # 日志目录；按日期自动生成 usage JSONL + proxy.log 结构化日志
-                           #   留空 "" 则不写文件，仅 console
-  verbose: false           # true = 额外输出 debug 信息到 stderr
-  level: info              # info | debug — debug 会额外输出路由/分析细节
-  backend: console         # noop | console — 结构化日志输出到 stderr（console）或关闭（noop）
+  file: logs
+    # 日志目录；按日期自动生成 usage JSONL + proxy.log 结构化日志
+    #   留空 "" 则不写文件，仅 console
+  verbose: false # true = 额外输出 debug 信息到 stderr
+  level: info # info | debug — debug 会额外输出路由/分析细节
+  backend: console # noop | console — 结构化日志输出到 stderr（console）或关闭（noop）
   rotate:
-    maxSizeBytes: 104857600  # proxy.log 单文件最大字节数，超过后轮转（默认 100MB）
-    backupLimit: 10          # 最多保留多少份轮转备份
-
+    maxSizeBytes: 104857600 # proxy.log 单文件最大字节数，超过后轮转（默认 100MB）
+    backupLimit: 10 # 最多保留多少份轮转备份
 
 # ── Redis（注入 / Skill 层的历史后端） ────────────────────────────────────────
 # 注入层 / Skill 层数据（inj:*, sk:*, skill:vpin:*）默认走 Redis（历史行为）。
 # 启用下方 storage.enabled=true 后，这些数据改走 ProxyStorage
-# （COS/SQLite/FS/Memory）。详见 storage: 段。
 redis:
-  enabled: true            # 是否启用 Redis；注入/Skill 数据是否走 Redis 由 storage.enabled 决定。
+  enabled: true # 是否启用 Redis；注入/Skill 数据是否走 Redis 由 storage.enabled 决定。
   # url: "redis://:password@host:port/db"   # 完整 Redis URL，设置后覆盖下方 host/port/password/db
-  host: "127.0.0.1"        # Redis 主机
-  port: 6379               # Redis 端口
-  password: ""             # Redis 密码
-  db: 0                    # Redis 数据库编号
-  ttlSeconds: 1800         # 注入与 Skill 缓存 TTL（秒），默认 1800（30 分钟）
+  host: "127.0.0.1" # Redis 主机
+  port: 6379 # Redis 端口
+  password: "" # Redis 密码
+  db: 0 # Redis 数据库编号
+  ttlSeconds: 1800 # 注入与 Skill 缓存 TTL（秒），默认 1800（30 分钟）
   # injectionTtlSeconds: 3600  # 注入层 hook 缓存 TTL（秒），默认复用 ttlSeconds
   # turnSeqTtlDays: 30       # 会话 turn 序号计数 TTL（天），默认 30。必须远长于
   #                          # ttlSeconds：会话态过期只是丢缓存，序号过期会让同一
   #                          # 会话从 1 重新计数，与该会话早先的用量行撞号。
-  # CostGuard 会话态（cg:sess:* / arch: / judge-*）也走这份 Redis。
-  # 多实例部署必须开启，否则 task archive / judge latch 无法跨进程共享。
 
 
-# ── Cost Guard（可选私有路由扩展；未初始化 submodule 时整段无感透传） ────────
-# 宿主只解析 enabled / markerOptIn / agentProfile / anthropicUpstream。
-# 其余字段原样放进 options，交给 @context-proxy/cost-guard。
-#
-# 当前扩展会用到的 options（缺省时的行为）：
-#   taskArchiveEnabled  省略 = true。每个新 user turn 多一次同步 gate LLM。
-#   judge.enabled       省略 = false。开启后需配 baseUrl；宿主负责 HTTP 调用。
-#   compress* / gate*   省略则回退到 analyze 模型。
-#   requestPrepare      CCR 压缩门面，与路由开关相互独立。
-costGuard:
-  enabled: false
-  markerOptIn: false       # true = 仅 /{agent}/{spaceId}/cost-guard/... 走路由
-  agentProfile: auto
-  # anthropicUpstream:
-  #   url: "https://anthropic-upstream.example.com"
-  # analyzeModel: "deepseek-v4-flash"
-  # analyzeUrl: "https://analyzer.example.com/v1/chat/completions"
-  # analyzeApiKey: ""
-  # analyzeProtocol: openai
-  # analyzeTimeout: 30000
-  # cheapModel: "deepseek-v4-pro"
-  # cheapUrl: ""
-  # cheapApiKey: ""
-  # cheapProtocol: openai
-  # toolLoopDegradeStrategy: none
-  # agents:                  # 按 URL 第一段 agentName 覆盖 cheap 配置
-  #   claude-code:
-  #     cheapModel: "claude-haiku"
-  #     cheapUrl: "https://cheap.example.com"
-  # taskArchiveEnabled: true
-  # compressModel: "deepseek-v4-flash"  # selector + merge；省略回退 analyze*
-  # compressUrl: "https://analyzer.example.com/v1/chat/completions"
-  # compressApiKey: ""
-  # compressProtocol: openai
-  # compressTimeout: 30000
-  # gateModel: "deepseek-v4-flash"      # 同步关键路径；省略回退 compress*
-  # gateUrl: "https://analyzer.example.com/v1/chat/completions"
-  # gateTimeout: 8000
-  # judge:
-  #   enabled: false
-  #   baseUrl: "http://judge.example.com"
-  #   userTurnTimeoutMs: 25000
-  #   agentTurnTimeoutMs: 10000
-  #   everyNToolTurns: 5
-  #   latchTtlSeconds: 0
-  #   latchMaxTurns: 0
-  # controlPlane:            # 此 block 存在即启用；关闭时请整段省略
-  #   port: 18097
-  # requestPrepare:
-  #   enabled: false
-  #   # CFQ（context_focus_question）子系统。字段全部可选，整段省略即用内置默认。
-  #   cfq:
-  #     enabled: true
-  #     # 是否给工具 schema 注入 context_focus_question 字段，让主模型自己填（T1）。
-  #     # 设 false 且下面 analyzeModelFallback.enabled 为 true 时进入「纯兜底模式」：
-  #     # 主模型完全不知道 CFQ 的存在，全部由分析模型在响应侧反推。
-  #     injectSchema: true
-  #     # 空数组 = 关闭白名单，内置黑名单之外的工具全部注入。
-  #     # 内置黑名单只认 Claude Code 的 PascalCase 名（Edit/Write/…），
-  #     # 其它客户端的 snake_case 工具要自己列进 schemaBlacklist。
-  #     schemaWhitelist: []
-  #     schemaBlacklist: ["edit_file", "write_file", "create_file",
-  #                       "str_replace_editor", "apply_diff", "replace_in_file"]
-  #     enforceRequired: true
-  #     maxLength: 200
-  #     # 主模型漏填 CFQ 时，用一个便宜模型在响应侧补生成并写进同一份缓存，
-  #     # 下一轮 backfill 照常命中。默认开启；显式 enabled: false 才关。
-  #     #
-  #     # model / url / apiKey 省略或留空时回退 costGuard 顶层的 analyzeModel /
-  #     # analyzeUrl / analyzeApiKey。三者补完仍缺一，兜底整体关闭；启动后
-  #     # grep cfq.analyze_fallback.misconfigured 可确认。写了非空值则用自己的。
-  #     #
-  #     # 其余字段省略即用代码默认值：batchSize 8、timeoutMs 30000、
-  #     # maxOutputTokens 128000、awaitPendingMs 8000、circuitBreaker 300/50/1800。
-  #     analyzeModelFallback:
-  #       enabled: true
-  #       batchSize: 8
-  #       # model / url / apiKey 可省略，默认用上面的 analyze*
-  #       timeoutMs: 30000
-  #       # 请求侧发现 backfill 缺口时，等待在途兜底的上限（毫秒）。
-  #       #
-  #       # 这个窗口就是兜底的全部机会：等到了当轮压，超时就落 no_cfq 缓存、
-  #       # 后续不再补。这样做是为了字节稳定——放行超时的条目去下一轮压，会让
-  #       # 同一段 tool_result 从原文变成压缩态，翻转点之后的整个前缀在上游
-  #       # prompt-cache 里失效。
-  #       #
-  #       # 8000 的依据：实测 77 次兜底中位 6.6s，82% 在 8.5s 内完成；等待从下
-  #       # 一轮请求到达时起算（兜底已先跑约 0.5s）。代价是有缺口的轮次平均阻塞
-  #       # 约 6.5 秒，请按自己分析模型的实际速度调整。
-  #       #
-  #       # 上限受 pending.ts 的 PENDING_TTL_S（30s）约束。0 = 不等，兜底退化成
-  #       # 只对后续轮次有效，当轮一律 no_cfq。
-  #       awaitPendingMs: 8000
-  #       # 兜底熔断 —— 按 spaceId 隔离的成本闸门，多节点通过 Redis 共享计数。
-  #       #
-  #       # 某个 space 在 windowSeconds 内兜底次数超过 threshold，接下来
-  #       # breakSeconds 内不再兜底，这些 tool_result 按 no_cfq 处理。
-  #       # 熔断期不打在途标记，所以请求侧也不会陪等 awaitPendingMs。
-  #       #
-  #       # 整段省略即用默认值（300 / 50 / 1800）；要关必须显式 enabled: false。
-  #       # 阈值按自己的流量调：5 分钟窗口 50 次，熔断后歇 30 分钟。
-  #       # 熔断是用来拦失控放大的，不是给正常使用设配额。
-  #       circuitBreaker:
-  #         enabled: true
-  #         windowSeconds: 300
-  #         threshold: 50
-  #         breakSeconds: 1800
-
-
-# ── Memory 实例 × 实际模型 Input TPM / QPM 限流 ──────────────────────────────
-# 对所有 URL 中带 spaceId 的主模型调用生效。
-# 多 Pod 通过上面的共享 Redis 原子计数。Redis 不可用时 fail-open 并记录告警。
-# 实例/模型 override 通过 /v3/admin/rate-limits 管理，修改后下一次请求立即生效。
+  # 宿主只解析 enabled / markerOptIn / agentProfile / anthropicUpstream。
+  #
+  # 当前扩展会用到的 options（缺省时的行为）：
+  #   taskArchiveEnabled  省略 = true。每个新 user turn 多一次同步 gate LLM。
+  #   compress* / gate*   省略则回退到 analyze 模型。
 rateLimit:
-  tpm: 1000000             # 实际 Input Token / 最近 60 秒
-  qpm: 100                 # 发起请求数 / 最近 60 秒；与 TPM 使用相同维度
-
+  tpm: 1000000 # 实际 Input Token / 最近 60 秒
+  qpm: 100 # 发起请求数 / 最近 60 秒；与 TPM 使用相同维度
 
 # ── Storage（注入 + Skill 层的统一存储抽象，替代 Redis 承载 inj:*/sk:*/vpin:*）─
-# 见 docs/design/2026-07-09-redis-to-cos-migration-plan.md
 #
 # 【总开关】storage.enabled=false（默认）→ 完全走原 Redis 路径；不加载迁移代码，
 #           行为与本次迁移前**完全一致**。
@@ -256,11 +137,9 @@ rateLimit:
 #
 # 【生产推荐】
 #   - 单实例本地/内部：backend=sqlite（默认；用 ~/.tdai-memory-proxy/proxy.db）
-#   - 生产多实例：    backend=cos（多节点共享 + 廉价对象存储）
 #   - 离线/私有部署： backend=fs
 #   - 兜底 / 测试：   backend=memory
 #
-# 【降级链】cos → sqlite → fs → memory；任一后端 init 失败自动降级，
 #          /health 会暴露 storage.effective（生产观测告警锚点）
 #
 # 【回滚】任意阶段改成 enabled=false 无需重启即可回到 Redis 路径。
@@ -269,34 +148,23 @@ rateLimit:
 # 字段速查（[必] = 必配 / [可] = 可选有默认 / [死] = 当前 backend 下不读，删了无影响）
 #
 #   ┌─────────────────────────────┬────────┬───────────────────────────────────┐
-#   │ 字段                        │ cos    │ sqlite / fs / memory              │
 #   ├─────────────────────────────┼────────┼───────────────────────────────────┤
 #   │ enabled                     │ [必]   │ [必]                              │
 #   │ backend                     │ [必]   │ [必]                              │
 #   │ ttlDays                     │ [死]*  │ sqlite=[可默认7] fs/memory=[死]   │
-#   │ cos.rootPrefix              │ [死]** │ [死]                              │
-#   │ cos.endpointDomain          │ [可]   │ [死]                              │
-#   │ cos.shark.baseUrl           │ [必]   │ [死]                              │
-#   │ cos.shark.*  (其它)         │ [可]   │ [死]                              │
 #   │ sqlite.dbPath               │ [死]   │ sqlite=[可默认空] 其他=[死]       │
 #   │ fs.fsRoot                   │ [死]   │ fs=[必] 其他=[死]                 │
 #   └─────────────────────────────┴────────┴───────────────────────────────────┘
 #
-#   * cos 桶过期靠 COS lifecycle rule，不看 ttlDays
-#   ** shark 侧硬编码 "proxy_cache"，proxy 侧任何值都无效
 # ═══════════════════════════════════════════════════════════════════════════
 storage:
   # [必] 总开关：false = 完全走 Redis 老路径（默认）
   enabled: false
 
-  # [必] 优选后端：cos | sqlite | fs | memory
-  #   - cos:    生产多实例部署（跨节点共享）
   #   - sqlite: 单实例本地开发 / CI；有 sweeper 自动清 ttl 桶
   #   - fs:     离线 / docker 兜底；无 sweeper
   #   - memory: 兜底 / 测试；进程重启即清
-  # 生产多节点必须用 cos；sqlite/fs/memory 都是 process-local，跨节点必读 miss。
   backend: sqlite
-
 
   # ── TTL / NoTTL 前缀分档（业务代码按 key 前缀落桶，见 2026-07-10 方案）─────
   # `ttl/`   —— 热缓存：inj-sess (会话初始化状态) / inj-hook (预热注入)。
@@ -305,72 +173,12 @@ storage:
   #             不配任何 lifecycle rule；丢了会让用户重走 session_init 表单。
   #
   # 只清 `ttl/` 前缀（各后端实现方式不同）：
-  #   - CosStorage:    ⚠️ ttlDays **不读**！在 COS 控制台配 lifecycle rule：
   #                    `proxy_cache/ttl/` 前缀 N 天未修改删除。**nottl/ 不配**。
   #   - SqliteStorage: 内置 sweeper 5 分钟一次按 ttlDays 清 proxy_kv 表 ttl 桶
   #   - FsStorage:     不做 sweeper（容器 FS mtime 不可靠），交给外部 tmpwatch
   #   - MemoryStorage: 进程重启即清，此 TTL 不生效
   #
-  # [cos=死 / sqlite=可默认7 / fs+memory=死] `ttl/` 前缀清理窗口（天）。
   ttlDays: 7
-
-  # ── COS 后端（生产多实例首选） ─────────────────────────────────────────────
-  # 上线前必须在 COS 控制台配 lifecycle rule：
-  #   `proxy_cache/ttl/`   前缀 N 天未修改 → 删除
-  #   `proxy_cache/nottl/` 前缀 → 不配任何 rule → 永久保留
-  #
-  # 只支持 kernel-sts 模式（正式环境禁止静态 AK/SK）：
-  # - 每个 spaceId 从 Shark 拉一份独立 STS，权限严格绑到
-  #   `proxy_cache/ttl/{spaceId}/*` + `proxy_cache/nottl/{spaceId}/*` 两个前缀
-  # - bucket / region 由 Shark 返回的 CosUrl 解析，不用配
-  # - endpointDomain 未配时按 4 层优先级自动决策（见字段注释），无脑留空也能跑
-  # - Shark 不可用时 COS 后端装配失败，进程不会降级启动
-  # 详见 docs/design/2026-07-12-cos-shark-sts-credential-plan.md
-  #
-  # Key layout：
-  #   proxy_cache/{ttl|nottl}/{spaceId}/{userId}/{agentSource}/{sessionId}/...
-  # ttl/nottl 必须在 spaceId 之前 —— lifecycle rule 不支持路径中间通配。
-  #
-  # backend != cos 时整段可删。
-  cos:
-    # [死] shark 侧硬编码 "proxy_cache"，proxy 层根本不读此字段。
-    # 留着仅为向后兼容 yaml 结构，未来会移除。删了不影响运行。
-    rootPrefix: "proxy_cache/"
-
-    # [可] 覆盖 COS SDK 的 endpoint 域名。**优先级最高**。
-    # 不配（空 / undefined）时按 4 层优先级自动决定，对齐 core
-    # `tdai-memory-openclaw-plugin/src/gateway/server.ts::initSharedCosClient`：
-    #   1. 本字段非空                                   → 用它
-    #   2. Shark CosUrl 已是 VPC 内网（云厂商内网域名）→ 用它
-    #   3. Shark CosUrl 是公网 → 自动改写为 VPC 内网域名（按 cred.region 拼）
-    #   4. 前三项都不适用（cred 无 region）             → SDK 默认公网
-    # 生产 kernel-sts 部署（云厂商 VPC 内）通常留空即可 —— 自动走内网省钱又稳。
-    # 部署在云厂商 VPC 外必须显式配公网 / 自定义域名，且确保桶允许对应网络。
-    # 支持 `{Bucket}` 占位符（自定义 CDN 场景）。
-    endpointDomain: ""   # 例：`cos.example.com`（自定义 CDN 或公网映射）
-
-    # ── Shark 拉临时凭证 ──
-    # 需要 Shark 侧接口 `POST /meta/GetProxyCacheCosConfig`（见方案文档 §3.1）。
-    shark:
-      # [必] Shark 管理面 base URL。测试环境地址；正式环境由部署方在 config.yaml 覆盖。
-      baseUrl: "http://gateway.example.com:8000"
-
-      # [可] shark HTTP 请求超时（ms）。默认 10000。
-      timeoutMs: 10000
-
-      # [可] 5xx / 429 / 网络错 / 超时重试次数。默认 2。
-      retryCount: 2
-
-      # [可] STS 到期前提前多少 ms 刷新。默认 120000 (2 min)。
-      # 值影响可用性：太短 → shark 抖动就用到过期凭证；太长 → 无谓频繁刷新。
-      refreshBufferMs: 120000
-
-      # [可] per-spaceId backend 池上限（LRU）。默认 100。
-      # 值影响容量：多租户 space 数超过后会 LRU evict（延迟关闭旧 backend）。
-      maxSpaces: 100
-
-      # [可] LRU evict 时延迟关闭旧 backend 的 ms（in-flight 请求保护）。默认 30000。
-      graceCloseDelayMs: 30000
 
   # ── SQLite 后端（单实例本地开发 / CI） ─────────────────────────────────────
   # 唯一一个"改 yaml ttlDays 立即生效"的后端 —— sweeper 5 分钟一次按顶层
@@ -387,26 +195,25 @@ storage:
     # [fs=必 / 其他=死] 根目录（需可写）
     fsRoot: "/var/lib/context-proxy/storage"
 
-
 # ── Opik LLM 可观测（Comet ML Opik） ─────────────────────────────────────────
 # 请求/响应的 trace 和 span 自动上报到 Opik。
 opik:
-  enabled: false           # 是否启用 Opik 上报
-  url: "http://127.0.0.1:5173"   # Opik 服务地址
-  apiKey: ""               # Opik API Key（若 Opik 实例需要鉴权）
+  enabled: false # 是否启用 Opik 上报
+  url: "http://127.0.0.1:5173" # Opik 服务地址
+  apiKey: "" # Opik API Key（若 Opik 实例需要鉴权）
   # stripRequestLogContent: false  # true = fork 出的 request_log trace 不记录消息内容（节省存储）
 
 
-# ── Langfuse LLM 可观测（官方 SDK 上报） ──────────────────────────────────────
-# 一个 trace = 一个 turn（一次用户输入），同一 turn 内的工具循环请求归到同一个
-# trace 下的多个 generation。上报内容含：模型/延时/token 用量/缓存命中/成本。
+  # ── Langfuse LLM 可观测（官方 SDK 上报） ──────────────────────────────────────
+  # 一个 trace = 一个 turn（一次用户输入），同一 turn 内的工具循环请求归到同一个
+  # trace 下的多个 generation。上报内容含：模型/延时/token 用量/缓存命中/成本。
 langfuse:
-  enabled: false           # 是否启用 Langfuse 上报
-  host: ""                 # Langfuse 实例 base URL，例如 http://localhost:3000
-                           #   OTLP 模式：填 OTLP endpoint
-  publicKey: ""            # Langfuse public key（pk-lf-...）；OTLP 模式：填 token
-  secretKey: ""            # Langfuse secret key（sk-lf-...）；OTLP 模式：留空
-
+  enabled: false # 是否启用 Langfuse 上报
+  host: ""
+    # Langfuse 实例 base URL，例如 http://localhost:3000
+    #   OTLP 模式：填 OTLP endpoint
+  publicKey: "" # Langfuse public key（pk-lf-...）；OTLP 模式：填 token
+  secretKey: "" # Langfuse secret key（sk-lf-...）；OTLP 模式：留空
 
 # ── ClickHouse 用量上报 ──────────────────────────────────────────────────────
 # 按 turn 记录每个用户的 token 消耗，支持按 model / user / session 维度查询。
@@ -415,17 +222,16 @@ langfuse:
 #           cache_hit_tokens / cache_write_tokens。
 # 4xx/5xx 失败请求不写入。
 clickhouse:
-  enabled: false           # 是否启用 ClickHouse 用量上报
-  url: "http://clickhouse.example.com:8123"   # ClickHouse HTTP endpoint
-  database: context_proxy            # 数据库名
-  table: usage_logs                  # 用量表名（TokenHub 等已知格式）
-  rawTable: usage_raw                # 原始用量追溯表（非 TokenHub / 未知格式回退到这里）
-  user: default                      # ClickHouse 用户名
-  password: ""                       # ClickHouse 密码
-  flushIntervalMs: 5000              # 定时 flush 间隔（毫秒），默认 5 秒
-  flushThreshold: 50                 # 缓冲区积累 N 条后立即 flush（0 = 禁止批量 flush）
-  ttlDays: 30                        # 数据保留天数（0 = 不自动过期；启动时通过 CREATE TABLE TTL 生效）
-
+  enabled: false # 是否启用 ClickHouse 用量上报
+  url: "http://clickhouse.example.com:8123" # ClickHouse HTTP endpoint
+  database: context_proxy # 数据库名
+  table: usage_logs # 用量表名（TokenHub 等已知格式）
+  rawTable: usage_raw # 原始用量追溯表（非 TokenHub / 未知格式回退到这里）
+  user: default # ClickHouse 用户名
+  password: "" # ClickHouse 密码
+  flushIntervalMs: 5000 # 定时 flush 间隔（毫秒），默认 5 秒
+  flushThreshold: 50 # 缓冲区积累 N 条后立即 flush（0 = 禁止批量 flush）
+  ttlDays: 30 # 数据保留天数（0 = 不自动过期；启动时通过 CREATE TABLE TTL 生效）
 
 # ── Auth 鉴权（user_key 校验 → user_id 解析） ─────────────────────────────────
 # 启用后 proxy 调用内核 POST /v3/meta/auth/verify 验证客户端 API Key。
@@ -433,14 +239,14 @@ clickhouse:
 # x-tdai-service-id 从请求路径 /proxy/<spaceId>/... 自动提取。
 # 验证通过后 user_id 写入 ClickHouse key_id 列，并作为全链路用户标识。
 auth:
-  enabled: true            # 是否启用鉴权
-  url: "http://kernel.example.com:8420"   # 内核鉴权服务 base URL（自动拼接 /v3/meta/auth/verify）
-  timeoutMs: 5000          # 鉴权请求超时（毫秒）
-
+  # Core gateway service credential, separate from client user keys.
+  # Prefer TDAI_AUTH_API_KEY supplied by your secret manager.
+  apiKey: ""
+  enabled: true # 是否启用鉴权
+  url: "http://kernel.example.com:8420" # 内核鉴权服务 base URL（自动拼接 /v3/meta/auth/verify）
+  timeoutMs: 5000 # 鉴权请求超时（毫秒）
 
 # ── Admin / Ops 端点鉴权（服务级 shared secret） ─────────────────────────────
-# 作用范围：仅 `/v3/instance/proxy-destroy` 这类运维口（shark 销毁实例时清 proxy
-# 侧 COS 缓存）。跟上面 auth.* 的租户 verifyUserKey 完全独立 —— 那个是租户维度
 # 的 x-tdai-user-key 校验；这个是给运维/系统服务用的 shared secret。
 #
 # 行为（语义对齐 core gateway 的 server.apiKey，参考 openclaw-plugin
@@ -452,17 +258,15 @@ auth:
 #                                 常量时间比对（crypto.timingSafeEqual）
 #
 # 值怎么定：
-#   - 双方（proxy 侧 + shark 侧）约定的一个固定字符串，跟具体实例无关
 #   - 一般由运维用 `openssl rand -hex 32` 生成，同时下发到 proxy 的
-#     `TDAI_PROXY_ADMIN_API_KEY` env 和 shark 的 client 配置里
 #   - 不是任何 memory 实例的 admin user_key（那个是走 `x-tdai-user-key` 的
 #     实例内 user 概念，两个东西完全不搭）
 #
 # 优先级：env TDAI_PROXY_ADMIN_API_KEY > yaml admin.apiKey > 默认 ""
 admin:
-  apiKey: ""               # 空 = 运维口公开（等价于不配）。生产建议通过
-                           # env TDAI_PROXY_ADMIN_API_KEY 注入，避免落 git
-
+  apiKey: ""
+    # 空 = 运维口公开（等价于不配）。生产建议通过
+    # env TDAI_PROXY_ADMIN_API_KEY 注入，避免落 git
 
 # ── System users（内部服务账号：命中即全链路透传） ─────────────────────────────
 # 命中流程：先用 apiKey 走 auth/verify 拿到 user_id → user_id 在下方 systemUsers
@@ -473,8 +277,8 @@ admin:
 # userKey 字段保留仅用作运维参考（曾经是匹配键，现在只在日志/注释里出现），
 # 可以不配；userId 必填。数组支持多条；空数组即禁用此特性。
 systemUsers:
-  - name: memory                              # 逻辑名，只用于日志
-    userId: "${TDAI_MEMORY_SYSTEM_USER_ID}"   # 匹配键 & 计费归属的 user_id（必填）
+  - name: memory # 逻辑名，只用于日志
+    userId: "${TDAI_MEMORY_SYSTEM_USER_ID}" # 匹配键 & 计费归属的 user_id（必填）
     displayName: "${TDAI_MEMORY_SYSTEM_USER_NAME}"
     userKey: "${TDAI_MEMORY_SYSTEM_USER_KEY}" # 历史 sk-mem-xxx，仅供运维查看（可选）
   # - name: wiki
@@ -483,16 +287,15 @@ systemUsers:
   #   userKey: "${TDAI_WIKI_SYSTEM_USER_KEY}"
 
 
-# ── Credit 上报（TDAI MemoryPlus 计费） ──────────────────────────────────────
-# 每个 LLM 应答完成后，按 creditPricing 定价表计算本轮 CreditDelta，
-# POST 到外部计费服务。仅 TokenHub 上游执行定价；非 TokenHub 上游 CreditDelta=0。
-# 仅携带 /proxy/<spaceId>/ 前缀的请求触发上报，SpaceId 从 path 自动提取。
-# 流式请求为 best-effort：上报失败仅记日志不打断流。
-# 非流式请求失败时会在响应头 `x-credit-report-error` 中记录原因。
+  # ── Credit 上报（TDAI MemoryPlus 计费） ──────────────────────────────────────
+  # 每个 LLM 应答完成后，按 creditPricing 定价表计算本轮 CreditDelta，
+  # POST 到外部计费服务。仅 TokenHub 上游执行定价；非 TokenHub 上游 CreditDelta=0。
+  # 仅携带 /proxy/<spaceId>/ 前缀的请求触发上报，SpaceId 从 path 自动提取。
+  # 流式请求为 best-effort：上报失败仅记日志不打断流。
+  # 非流式请求失败时会在响应头 `x-credit-report-error` 中记录原因。
 creditReport:
   url: "http://gateway.example.com:8000/UpdateMemoryPlusUsage"
-  timeoutMs: 5000          # 上报超时（毫秒），0 = 不超时
-
+  timeoutMs: 5000 # 上报超时（毫秒），0 = 不超时
 
 # ── Credit 计费价目表 ────────────────────────────────────────────────────────
 # 单位：Credit / 1K Token。
@@ -512,7 +315,7 @@ creditReport:
 # 峰谷规则的时区固定为北京时间（Asia/Shanghai），不可通过配置修改。
 creditPricing:
   models:
-    - name: "your-endpoint-id"         # 上游下发的 endpoint id / 模型别名，示例：Claude Sonnet
+    - name: "your-endpoint-id" # 上游下发的 endpoint id / 模型别名，示例：Claude Sonnet
       modelName: "Claude Sonnet"
       input: 5.4935
       output: 27.4673
@@ -520,7 +323,7 @@ creditPricing:
       cacheWrite5m: 6.8668
       cacheWrite1h: 10.9869
 
-    - name: "deepseek-v4-pro"          # DeepSeek V4 Pro
+    - name: "deepseek-v4-pro" # DeepSeek V4 Pro
       modelName: "DeepSeek V4 Pro"
       input: 0.4500
       output: 0.9000
@@ -528,7 +331,7 @@ creditPricing:
       cacheWrite5m: 0.4500
       cacheWrite1h: 0.4500
 
-    - name: "deepseek-v4-flash"        # DeepSeek V4 Flash
+    - name: "deepseek-v4-flash" # DeepSeek V4 Flash
       modelName: "DeepSeek V4 Flash"
       input: 0.1500
       output: 0.3000
@@ -549,7 +352,7 @@ creditPricing:
         - id: "weekday-peak"
           priority: 100
           when:
-            weekdays: [mon, tue, wed, thu, fri]
+            weekdays: [ mon, tue, wed, thu, fri ]
             timeRanges:
               - { start: "09:00", end: "12:00" }
               - { start: "14:00", end: "18:00" }
@@ -559,7 +362,6 @@ creditPricing:
             cacheRead: 0.0300
             cacheWrite5m: 0
             cacheWrite1h: 0
-
 
 # ── 上下文注入（injection pipeline） ─────────────────────────────────────────
 # 在每次 LLM 请求的 system prompt 中注入相关知识/记忆/技能。
@@ -574,13 +376,12 @@ creditPricing:
 #                 注入两步自发现流程工具（依赖 skill.serviceToken）。
 #   tdai-memory — TDAI L2/L3 记忆注入（由 tdai.memory.* 控制，详见 tdai 段）。
 injection:
-  enabled: true             # 是否启用上下文注入（关闭后下方 injectors 列表全部失效）
-  injectors: ["skill", "knowledge", "tdai-memory"]   # 要启用的注入器列表
+  enabled: true # 是否启用上下文注入（关闭后下方 injectors 列表全部失效）
+  injectors: [ "skill", "knowledge", "tdai-memory" ] # 要启用的注入器列表
   # 对外统一 gateway 地址 —— LLM 生成的 <skill_tools> / <tdai_memory_tools>
   # 段里嵌的 curl URL 都以这个为 base。只填 gateway 域名，**不带端口**
   # （gateway 内部路由到 proxy pod 的端口由 ops 在 gateway 侧配，跟这里无关）。
   #
-  # ⚠️ 多节点部署必配。未配时每个 pod 用自己的 host:port 兜底 → COS 里同一份
   # hook cache 被 pods 互相覆盖 → 上游 Anthropic KV cache 每次 miss（费钱+慢）。
   #
   # gateway 侧需把下面两个前缀原样透传到 proxy pod：
@@ -589,10 +390,8 @@ injection:
   externalGatewayUrl: "https://gateway.example.com"
 
   # ── 资产反思模式（内部效果评估用；默认开启） ─────────────────────────────
-  # 结构与 costGuard.markerOptIn 姿势对齐,但 default 相反:
   #   markerOptIn=true（默认）：AssetReflectionInjector 会 register。marker 仍是
   #                             opt-in——只有请求 URL 带 `/analyse` 段（结构同
-  #                             `/cost-guard`:夹在 `/{agent}/{spaceId}` 之后,如
   #                             `/codebuddy/default/analyse/v1/messages`）才 emit
   #                             `<asset_reflection>` 块到 system prompt 末尾,指导
   #                             agent 点评「本轮调用过哪些云端资产工具、各自
@@ -604,7 +403,6 @@ injection:
   # knowledge）,一个都没启用时 injector 恒不 emit。
   assetReflection:
     markerOptIn: true
-
 
 # ── 提取（写侧：把每轮对话/工具调用回流到内核） ─────────────────────────────
 # 与 injection 对偶：injection 决定"往 prompt 塞什么"，extraction 决定"往内核回写什么"。
@@ -619,8 +417,7 @@ injection:
 # 想"只注入不提取"：extraction.enabled: false 即可，一刀切。
 extraction:
   enabled: true
-  extractors: ["skill", "tdai-memory"]
-
+  extractors: [ "skill", "tdai-memory" ]
 
 # ── 会话初始化（session init） ──────────────────────────────────────────────
 # 用户首次对话时拦截请求，弹出交互式表单引导选择 team → agent → task，
@@ -634,12 +431,11 @@ extraction:
 #   5. 注册会话 → 注入 agent/task 上下文到 system prompt
 #
 # 状态存储：默认 Redis（redis.enabled=true）；启用 storage.enabled=true 后走
-# ProxyStorage（COS/SQLite/FS）。都不启用则回落 SQLite 单实例本地存储。
 # team/agent/task 列表来自内核 MetadataClient（复用 skill 段配置）。
 # 用户身份由 auth/verify 一跳确定；未通过鉴权/无法识别用户 → 直接 bypass session init。
 sessionInit:
-  enabled: true             # 是否启用会话初始化
-  maxRetries: 3             # 表单解析失败最大重试次数，超出后 bypass（跳过 session init）
+  enabled: true # 是否启用会话初始化
+  maxRetries: 3 # 表单解析失败最大重试次数，超出后 bypass（跳过 session init）
   # skipAssetConfirm: true  # 跳过"是否关联团队资产"前置对话框，默认视为选"是"直接进入 team/agent/task 选择
   # 历史注释: 曾经有 keepInitArtifacts 开关用来在 session_init 完成后剥离
   # 假表单对话；已删除。现在**永远保留**用户的所有真实对话（含 session_init
@@ -648,16 +444,15 @@ sessionInit:
   # 信息以 <session_context> 块追加到 system prompt。下面两个开关可分别静默。
   # 两个都关 = 完全不注入 <session_context>。默认都为 true，行为与历史一致。
   # 关闭时每个 session 只 warn 一次（避免长会话刷屏）。
-  injectAgentContext: true  # false = 不注入 [Agent] 段（id/name/description/prompt）
-  injectTaskContext: true   # false = 不注入 [Task] 段（id/name/description/goal）
+  injectAgentContext: true # false = 不注入 [Agent] 段（id/name/description/prompt）
+  injectTaskContext: true # false = 不注入 [Task] 段（id/name/description/goal）
   # header 自动预选：首轮请求头已带身份字段时，去列表里校验存在性，命中则跳过对应选择步骤。
   headerAutoSelect:
-    enabled: true            # 是否启用 header 预选
-    teamHeader: "x-team-id"  # 携带 team_id 的请求头名
+    enabled: true # 是否启用 header 预选
+    teamHeader: "x-team-id" # 携带 team_id 的请求头名
     agentHeader: "x-agent-id" # 携带 agent_id 的请求头名
-    taskHeader: "x-task-id"  # 携带 task_id 的请求头名（可选）
-    onMismatch: "form"       # header 值查不到时：form=回退交互表单（默认）| bypass=跳过 session init
-
+    taskHeader: "x-task-id" # 携带 task_id 的请求头名（可选）
+    onMismatch: "form" # header 值查不到时：form=回退交互表单（默认）| bypass=跳过 session init
   # ── DEBUG：本地开发/e2e 短路 ────────────────────────────────────────────────
   # 打开 debugForceIdentity 后，agentSource=workbuddy 和 agentSource=codebuddy
   # 的会话会**直接**注册为固定三元组，绕过所有表单/header 匹配逻辑；
@@ -675,32 +470,31 @@ sessionInit:
   # debugVerboseLogging: false
 
 
-# ── TDAI Memory Gateway（core / openclaw-plugin） ────────────────────────────
-# proxy 通过与同机部署的内核 gateway（监听 8420）交互实现记忆读写。
-# 四级记忆：
-#   L0 — 短期对话记忆（最近 N 轮对话自动写入）
-#   L1 — 会话级关键信息提取（从对话中提取可复用的结构化记忆）
-#   L2 — Agent Profile（agent 的长效人格/规则/知识）
-#   L3 — Team/Global 记忆（跨 agent 共享的组织级知识）
-#
-# 注入行为：
-#   inject=true 时，L2+L3 作为系统级上下文注入 system prompt；
-#   L0/L1 不直接注入 prompt（会破坏 KV cache），改为暴露只读工具供 LLM 主动查询。
+  # ── TDAI Memory Gateway（core / openclaw-plugin） ────────────────────────────
+  # proxy 通过与同机部署的内核 gateway（监听 8420）交互实现记忆读写。
+  # 四级记忆：
+  #   L0 — 短期对话记忆（最近 N 轮对话自动写入）
+  #   L1 — 会话级关键信息提取（从对话中提取可复用的结构化记忆）
+  #   L2 — Agent Profile（agent 的长效人格/规则/知识）
+  #   L3 — Team/Global 记忆（跨 agent 共享的组织级知识）
+  #
+  # 注入行为：
+  #   inject=true 时，L2+L3 作为系统级上下文注入 system prompt；
+  #   L0/L1 不直接注入 prompt（会破坏 KV cache），改为暴露只读工具供 LLM 主动查询。
 tdai:
-  enabled: true             # 是否启用 TDAI Memory
-  endpoint: "http://127.0.0.1:8420"   # 内核 gateway 地址（通常与 skill.endpoint 相同）
-  apiKey: "local"           # Authorization: Bearer 值（通常与 skill.serviceToken 相同）
-  serviceId: "default"      # x-tdai-service-id header 值
+  enabled: true # 是否启用 TDAI Memory
+  endpoint: "http://127.0.0.1:8420" # 内核 gateway 地址（通常与 skill.endpoint 相同）
+  apiKey: "local" # Authorization: Bearer 值（通常与 skill.serviceToken 相同）
+  serviceId: "default" # x-tdai-service-id header 值
   memory:
-    enabled: true           # Memory 子模块总开关
-    inject: true            # 上下文注入总开关（false = 所有 L0~L3 注入全关）
-    writeL0: true           # 是否写入 L0（短期对话记忆）
-    recallL1: true          # 是否启用 L1 召回（从对话中检索相关记忆）
-    injectL2L3: true        # 是否注入 L2（Agent Profile）+ L3（Team/Global 记忆）到 system prompt
-    l1Limit: 5              # L1 召回最大条数
-    l2Limit: 3              # L2/L3 注入最大条数
-    timeoutMs: 5000         # 单次内核调用超时（毫秒）
-
+    enabled: true # Memory 子模块总开关
+    inject: true # 上下文注入总开关（false = 所有 L0~L3 注入全关）
+    writeL0: true # 是否写入 L0（短期对话记忆）
+    recallL1: true # 是否启用 L1 召回（从对话中检索相关记忆）
+    injectL2L3: true # 是否注入 L2（Agent Profile）+ L3（Team/Global 记忆）到 system prompt
+    l1Limit: 5 # L1 召回最大条数
+    l2Limit: 3 # L2/L3 注入最大条数
+    timeoutMs: 5000 # 单次内核调用超时（毫秒）
 
 # ── Skill / 内核 gateway 数据面 ──────────────────────────────────────────────
 # proxy 通过此配置与内核 gateway 通信，用于三项能力：
@@ -714,13 +508,14 @@ tdai:
 #
 # 段名兼容：也可写作 `coreSkill:`（旧名，仍被读取）；两者同时存在时 `skill:` 优先。
 skill:
-  endpoint: "http://127.0.0.1:8420"   # 内核 gateway 地址（通常与 tdai.endpoint 相同）
-  serviceToken: "local"               # 鉴权凭据 → Authorization: Bearer <serviceToken>
-                                       #   与内核约定的服务白名单一致；本地开发用 "local"
-  serviceId: "context-proxy"          # 租户/服务标识 → x-tdai-service-id
-                                       #   请求路径带 /proxy/<spaceId>/ 时会被 spaceId 覆盖
-  timeoutMs: 1500                     # 单次调用超时（毫秒）。RAG 在 session_init 热路径上，不宜太大
-
+  endpoint: "http://127.0.0.1:8420" # 内核 gateway 地址（通常与 tdai.endpoint 相同）
+  serviceToken: "local"
+    # 鉴权凭据 → Authorization: Bearer <serviceToken>
+    #   与内核约定的服务白名单一致；本地开发用 "local"
+  serviceId: "context-proxy"
+    # 租户/服务标识 → x-tdai-service-id
+    #   请求路径带 /proxy/<spaceId>/ 时会被 spaceId 覆盖
+  timeoutMs: 1500 # 单次调用超时（毫秒）。RAG 在 session_init 热路径上，不宜太大
 
 # ── Instance-upstream 配置缓存（自定义模型分流的每实例配置） ─────────────────
 # proxy 每次 handler 会走 skill.endpoint + /v3/internal/meta/instance-upstream/list
@@ -741,7 +536,6 @@ instanceUpstream:
   #     - 别 <5s：会把 core /v3/internal/meta/instance-upstream/list 打热点
   cacheTtlSec: 30
 
-
 # ── Knowledge tools 注入（独立 gateway 配置） ───────────────────────────────
 # proxy 通过此配置访问内核 gateway 拉取 team 知识资源（code-graph / wiki），
 # 渲染 <knowledge_tools> 块注入 system prompt，LLM 据此调 KS 的 tools/list|call。
@@ -751,12 +545,11 @@ instanceUpstream:
 #
 # 关闭方式：enabled=false（默认），injector 不注册，无注入。
 knowledge:
-  enabled: false                        # 默认关闭，跟 tdai.enabled 行为一致
-  endpoint: "http://127.0.0.1:8420"     # 内核 gateway 地址
-  serviceToken: "local"               # Authorization: Bearer
-  serviceId: "context-proxy"          # x-tdai-service-id（被请求路径 spaceId 覆盖）
-  timeoutMs: 1500                     # 单次调用超时（毫秒）
-
+  enabled: false # 默认关闭，跟 tdai.enabled 行为一致
+  endpoint: "http://127.0.0.1:8420" # 内核 gateway 地址
+  serviceToken: "local" # Authorization: Bearer
+  serviceId: "context-proxy" # x-tdai-service-id（被请求路径 spaceId 覆盖）
+  timeoutMs: 1500 # 单次调用超时（毫秒）
 
 # ── Skill 运行时 ──────────────────────────────────────────────────────────
 #
@@ -768,12 +561,12 @@ knowledge:
 # 历史配置项 (已删除): extractToolCallThreshold / maxBucketCount /
 # conversationAddEnabled — 属于 proxy 侧老链路 SkillExtractTrigger, 已下线。
 skillRuntime:
-  allowLlmWrite: false           # 是否允许主模型创建/修改 skill（默认 false）
-                                 #   false: <skill_tools> 只注入只读工具（search/list/view/files_read）
-                                 #          /skill-bridge 拒绝写操作返回 403
-                                 #   true:  <skill_tools> 注入全部工具（含写操作 create/update/delete 等）
-                                 #          /skill-bridge 放行写操作
-
+  allowLlmWrite: false
+    # 是否允许主模型创建/修改 skill（默认 false）
+    #   false: <skill_tools> 只注入只读工具（search/list/view/files_read）
+    #          /skill-bridge 拒绝写操作返回 403
+    #   true:  <skill_tools> 注入全部工具（含写操作 create/update/delete 等）
+    #          /skill-bridge 放行写操作
 
 # ── mem: 特殊命令 ──────────────────────────────────────────────────────────
 # 用户在对话框输入 mem:sync / mem:create-skill / mem:help 等命令时，
@@ -810,8 +603,7 @@ skillRuntime:
 # 关闭时所有请求视为 main，走完全等价老链路。
 # 详见 docs/design/2026-07-30-cc-request-routing-plan.md
 ccRequestRouting:
-  enabled: true                    # 默认开启。关闭时所有请求强制 main，title-gen 并发会撞 session-init state 导致 bypass。
-
+  enabled: true # 默认开启。关闭时所有请求强制 main，title-gen 并发会撞 session-init state 导致 bypass。
 
 # ── Per-Agent 上游路由 ─────────────────────────────────────────────────────
 # 见文件顶部 `upstream.agents` 一段。
@@ -820,14 +612,12 @@ ccRequestRouting:
 # ── 本地 JSONL Trace 归档 ─────────────────────────────────────────────────────
 # 启用后，每个 trace + span 以 JSONL 行追加写入本地文件（按日期分文件），
 # 文件名格式：<hostname>-<YYYY-MM-DD>.jsonl
-# 可配合 crontab 脚本定时压缩上传到 COS/S3 归档存储。
 #
 # 此归档链路独立于 Opik / Langfuse 远程上报：即使远程上报关闭，本地归档仍可独立工作。
 # 默认关闭，对性能无影响。
 traceArchive:
-  enabled: false                   # true = 启用本地 JSONL trace 归档；false = 关闭（默认）
-  dir: "logs/traces"               # 归档目录（相对于项目根目录或绝对路径）
-
+  enabled: false # true = 启用本地 JSONL trace 归档；false = 关闭（默认）
+  dir: "logs/traces" # 归档目录（相对于项目根目录或绝对路径）
 
 # ── Pipeline 重构灰度切换 (2026-09-28, addendum) ─────────────────────────────
 # blueprint-review §2 采纳: 按 agent 粒度灰度, 每步只 flip 一个 key。

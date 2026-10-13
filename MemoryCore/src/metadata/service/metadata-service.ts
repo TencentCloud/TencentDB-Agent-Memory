@@ -1225,7 +1225,7 @@ export class MetadataService {
    * 权限过滤在分页前完成，保证 total 准确。
    */
   async listAssetsForCaller(
-    params: { team_id: string } & AssetFilter & PaginationParams,
+    params: { team_id: string } & AssetFilter & { limit?: number; offset?: number },
     ctx: V3AuthContext,
   ): Promise<PaginatedResult<AssetEntity>> {
     const pagination = this.pag(params);

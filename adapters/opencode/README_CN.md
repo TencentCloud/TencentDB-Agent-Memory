@@ -102,7 +102,7 @@ node adapters/opencode/validate.js
 
 ## 说明
 
-- **端点前缀**：使用 `feat/server_team` 上已落地的 OpenCode 专用路由族 —— 主路径 `POST /opencode/<spaceId>/v1/chat/completions`（`baseURL` 不带 `/v1` 时为裸尾变体 `/opencode/<spaceId>/chat/completions`），另有 `/opencode/<spaceId>/cost-guard|analyse/v1` marker 路由。代理依据路径首段分类 `agentSource`；若将 OpenCode 指向 `/codebuddy/<spaceId>`，会被分类为 `codebuddy`，导致原生 `question` 工具的会话初始化表单（`MemoryProxy/src/session/opencode/form.ts`）失效。
+- **端点前缀**：使用 `feat/server_team` 上已落地的 OpenCode 专用路由族 —— 主路径 `POST /opencode/<spaceId>/v1/chat/completions`（`baseURL` 不带 `/v1` 时为裸尾变体 `/opencode/<spaceId>/chat/completions`），另有 `/opencode/<spaceId>/analyse/v1` marker 路由。代理依据路径首段分类 `agentSource`；若将 OpenCode 指向 `/codebuddy/<spaceId>`，会被分类为 `codebuddy`，导致原生 `question` 工具的会话初始化表单（`MemoryProxy/src/session/opencode/form.ts`）失效。
 - **数据流**：只有提示词/补全流量经过代理；记忆数据始终保存在本地 SQLite（memory-core）中，除非你另行配置。
 - **版本**：旧版示例用于 OpenCode 1.x；`opencode.v2.json` 是 2.0 配置。本机已用模拟端点核对 OpenCode 2.0.18 CLI 的请求路径与响应；MemoryProxy 完整部署仍需端到端验证。
 

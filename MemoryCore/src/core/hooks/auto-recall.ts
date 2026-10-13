@@ -463,7 +463,8 @@ async function searchMemories(
     strategy === "hybrid" &&
     !!vectorStore &&
     typeof vectorStore.getCapabilities === "function" &&
-    !!vectorStore.getCapabilities().nativeHybridSearch;
+    !!vectorStore.getCapabilities().nativeHybridSearch &&
+    typeof vectorStore.searchL1Hybrid === "function";
   const embeddingAvailable =
     !!vectorStore && (hasClientEmbedding(embeddingService) || nativeHybrid);
 
@@ -518,7 +519,7 @@ async function searchMemories(
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
     // server-side dense + sparse + RRF in a single API call), short-circuit
     // to avoid a redundant second HTTP request and a wasted local embed().
-    if (vectorStore?.getCapabilities().nativeHybridSearch) {
+    if (nativeHybrid && vectorStore?.searchL1Hybrid) {
       const tNative = performance.now();
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
@@ -531,7 +532,7 @@ async function searchMemories(
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
     return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
   } catch (err) {
-    logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
+    logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy})`);
     if (vectorStore?.getCapabilities?.().nativeBm25Search) throw err;
     return emptyResult;
   }
@@ -553,12 +554,11 @@ async function searchByKeyword(
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
     if (ftsQuery) {
-      logger?.debug?.(`${TAG} [keyword-fts] Using FTS5 BM25 search: query="${ftsQuery}"`);
+      logger?.debug?.(`${TAG} [keyword-fts] Using FTS5 BM25 search`);
       const ftsResults = await vectorStore.searchL1Fts(ftsQuery, maxResults * 2);
       if (ftsResults.length > 0) {
         logger?.debug?.(
-          `${TAG} [keyword-fts] FTS5 raw results (${ftsResults.length}): ` +
-          ftsResults.map((r) => `id=${r.record_id} score=${r.score.toFixed(6)}`).join(", "),
+          `${TAG} [keyword-fts] FTS5 raw results: ${ftsResults.length}`,
         );
         const filtered = ftsResults
           .filter((r) => r.score >= threshold)

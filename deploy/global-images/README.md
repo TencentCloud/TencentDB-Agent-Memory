@@ -180,7 +180,7 @@ memory-core 通过 `MEMORY_PROMPT_MODE` 切换 L1/L2/L3 pipeline 的提示词族
 
 - **memory-core**：无外部依赖，可以独立起
 - **memory-hub**：能独立启动（LLM_MODE=custom 直连 LLM），但内部 knowledge 调 memory-core 做 RAG 时会失败 → 建议 memory-core 先起
-- **proxy**：能独立启动（cost-guard 不可用时自动降级 passthrough，直接转发），但 auth / tdai memory / skill 注入需要 memory-core 才有效
+- **proxy**：能独立启动（configured public upstream forwarding），但 auth / tdai memory / skill 注入需要 memory-core 才有效
 
 任意组件缺失时脚本会 `warn` 提醒但不阻塞。
 
@@ -240,7 +240,7 @@ Panel 后端 → Kernel 的转发不受此变量影响（始终走 `REMOTE_INSTA
 `MEMORY_HUB_PROXY_PUBLIC_URL=http://<真值>:8096`。想让 UI 卡片走老行为（回落到
 gateway_endpoint）就把 `MEMORY_HUB_PROXY_PUBLIC_URL` 显式设为空字符串。
 
-`proxy` 默认关闭 `auth` / `sessionInit` / `costGuard`（这些依赖内部服务），只做纯转发 + `tdai-memory` 上下文注入（injector 名称，非容器名）。要开启完整流水线，需要另行配置 —— 参见 `context_proxy/config.example.yaml`。
+`proxy` 默认关闭 `auth` / `sessionInit`（这些依赖内部服务），只做纯转发 + `tdai-memory` 上下文注入（injector 名称，非容器名）。要开启完整流水线，需要另行配置 —— 参见 `context_proxy/config.example.yaml`。
 
 ## 常见问题
 

@@ -43,7 +43,7 @@ export interface StageGates {
   modelIntentTelemetry: boolean;
   /** fetch 加 AbortSignal.timeout(config.forwardTimeoutMs) */
   forwardTimeout: boolean;
-  /** cost-guard retryTarget 存在时二次转发 (含 anthropic sanitizeForRetry 钩子) */
+
   forwardRetry: boolean;
   /** systemUser 短路 (匹配到 systemUserId 直接 passthrough, 跳过 session/injection) */
   systemUser: boolean;

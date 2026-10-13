@@ -48,7 +48,7 @@ function collectBriefs(wikiDir: string): PageBrief[] {
       }
       if (!entry.endsWith(".md")) continue;
       const rel = relative(wikiDir, full).replace(/\\/g, "/");
-      if (STRUCTURAL.has(rel)) continue;
+      if (STRUCTURAL.has(rel) || ["index.md", "log.md"].includes(entry)) continue;
       let content: string;
       try {
         content = readFileSync(full, "utf-8");
@@ -103,7 +103,7 @@ export async function generateOverview(projectPath: string, llm: LlmClient): Pro
   }
 
   const content = buildPage(
-    { type: "overview", title: "Overview", description: "A global overview of this wiki", timestamp: new Date().toISOString() },
+    { type: "overview", title: "Overview", description: "A global overview of this wiki", generated: { by: "wiki-ingest/2", at: new Date().toISOString() } },
     body,
   );
   writeFileSync(join(wikiDir, "overview.md"), content, "utf-8");

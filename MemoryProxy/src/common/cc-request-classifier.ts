@@ -18,7 +18,18 @@
  *   docs/design/2026-07-30-cc-request-routing-plan.md
  */
 
+import type { RequestKind } from "../agent-adapters/types.js";
+
 export type CcRequestKind = "main" | "fork" | "sidequery";
+
+/**
+ * Map an adapter RequestKind to the Anthropic CcRequestKind subset.
+ * Auxiliary requests (title generation, compaction, etc.) map to "sidequery"
+ * so session-init forms and mutation hooks are bypassed without widening CcRequestKind.
+ */
+export function mapRequestKindToCc(kind: RequestKind): CcRequestKind {
+  return kind === "auxiliary" ? "sidequery" : kind;
+}
 
 /**
  * 根据 Anthropic 请求 body 判定请求类型。

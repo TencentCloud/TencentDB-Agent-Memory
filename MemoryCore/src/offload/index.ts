@@ -268,17 +268,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   const logger: PluginLogger = api.logger;
 
   // ── Diagnostic: detect whether api.on / api.registerHook is functional ──
-  const regMode = api.registrationMode ?? "(not exposed)";
+  const registrationModePresent = api.registrationMode != null;
   const hasRegisterHook = typeof api.registerHook === "function";
   const hasOn = typeof api.on === "function";
   const hasRegisterContextEngine = typeof api.registerContextEngine === "function";
-  const onFnName = api.on?.name ?? "(unnamed)";
-  const onFnBody = String(api.on).slice(0, 200);
   logger.debug?.(
-    `[context-offload] [DIAG] registrationMode=${regMode}, ` +
-    `registerHook=${hasRegisterHook}, api.on=${hasOn} name="${onFnName}", ` +
-    `registerContextEngine=${hasRegisterContextEngine}, ` +
-    `api.on body=${onFnBody}`,
+    `[context-offload] [DIAG] registrationModePresent=${registrationModePresent}, ` +
+    `registerHook=${hasRegisterHook}, api.on=${hasOn}, ` +
+    `registerContextEngine=${hasRegisterContextEngine}`,
   );
 
   logger.debug?.("[context-offload] Registering offload module...");
@@ -319,7 +316,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   // primary non-loopback IPv4 address.
   const _resolvedUserId = resolveUserId(offloadConfig.userId ?? null);
   logger.debug?.(
-    `[context-offload] user-id resolved: "${_resolvedUserId}" (source=${getUserIdSource() ?? "?"})`,
+    `[context-offload] user-id resolved (source=${getUserIdSource() ?? "?"})`,
   );
 
   let backendClient: BackendClient | LocalLlmClient | null = null;
@@ -390,7 +387,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   let _lastActiveSessionKey: string | null = null;
 
   if (backendClient && (offloadConfig.mode === "backend" || offloadConfig.mode === "collect")) {
-    logger.debug?.(`[context-offload] LLM mode: backend (${offloadConfig.backendUrl})`);
+    logger.debug?.("[context-offload] LLM mode: backend");
   } else if (backendClient) {
     logger.debug?.(`[context-offload] LLM mode: local (${offloadConfig.model ?? "main-agent-model"})`);
   } else {
@@ -1327,7 +1324,17 @@ class OffloadContextEngine {
   private _disposeL15: () => void;
 
   constructor(opts: any) {
-    this.update(opts);
+    this._sessions = opts.sessions;
+    this._logger = opts.logger;
+    this._pCfg = opts.pCfg;
+    this._getContextWindow = opts.getContextWindow;
+    this._notifyL2NewNullEntries = opts.notifyL2NewNullEntries;
+    this._clearL2Timeout = opts.clearL2Timeout;
+    this._l4State = opts.l4State;
+    this._flushL1 = opts.flushL1;
+    this._backendClient = opts.backendClient;
+    this._judgeL15 = opts.judgeL15;
+    this._disposeL15 = opts.disposeL15 ?? (() => {});
   }
 
   /**

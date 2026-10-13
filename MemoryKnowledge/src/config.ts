@@ -57,15 +57,19 @@ export interface ClickHouseTelemetryConfig {
 }
 
 export interface ServiceConfig {
+  /** HTTP server hostname/IP (default: 127.0.0.1). */
+  host: string;
   /** HTTP server port. */
   port: number;
   /**
    * Service-to-service auth.
-   * serviceKey 为空 = 不启用鉴权（向后兼容本地/开发部署）；
-   * 非空 = /v3 下除只读白名单外的端点均要求 `Authorization: Bearer <serviceKey>`。
+   * serviceKey 为空 = 不启用鉴权（仅允许在本机 loopback 监听）；
+   * 非空 = /v3 下所有服务 API 端点均要求 `Authorization: Bearer <serviceKey>`。
    */
   auth: {
     serviceKey: string;
+    /** Insecure opt-in: allow non-loopback listener without serviceKey. */
+    allowInsecureNoKeyListen: boolean;
   };
   /** Data root directory for knowledge assets (git clones, wiki dirs, SQLite). */
   dataDir: string;
@@ -141,6 +145,57 @@ function validateClickHouseConfig(config: ClickHouseTelemetryConfig): void {
   if (config.requestTimeoutMs < 100) throw new Error("KNOWLEDGE_CLICKHOUSE_REQUEST_TIMEOUT_MS must be >= 100");
 }
 
+/** Check if a hostname/IP represents a local loopback interface. */
+export function isLoopbackHost(host: string): boolean {
+  if (!host) return false;
+  const h = host.trim().toLowerCase();
+  if (h === "localhost" || h === "::1" || h === "[::1]") return true;
+  // 127.0.0.0/8 IPv4 block
+  if (/^127(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(h)) return true;
+  return false;
+}
+
+/**
+ * Validate listener security posture.
+ * Non-loopback addresses (0.0.0.0, external IP, etc.) expose the service
+ * to the network. When KNOWLEDGE_SERVICE_KEY is empty, non-loopback binding
+ * is forbidden unless KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN is explicitly true.
+ */
+export function validateListenerConfig(config: {
+  host: string;
+  auth: {
+    serviceKey: string;
+    allowInsecureNoKeyListen?: boolean;
+  };
+}): void {
+  const isLoopback = isLoopbackHost(config.host);
+  if (!isLoopback) {
+    if (!config.auth.serviceKey && !config.auth.allowInsecureNoKeyListen) {
+      throw new Error(
+        `Refusing to bind to non-loopback host "${config.host}" without KNOWLEDGE_SERVICE_KEY configured. ` +
+        `Configure KNOWLEDGE_SERVICE_KEY or set KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN=true for trusted-network / insecure development.`
+      );
+    }
+  }
+}
+
+export function normalizeAndValidateApiPrefix(rawPrefix: string): string {
+  let apiPrefix = rawPrefix.trim().replace(/\/+$/, "");
+  if (apiPrefix.length > 0 && !apiPrefix.startsWith("/")) {
+    apiPrefix = "/" + apiPrefix;
+  }
+  if (apiPrefix === "" || apiPrefix === "/") {
+    throw new Error(`API_PREFIX cannot be empty or root ("/") because it compromises authentication boundaries for public endpoints (/health, /docs). Use a distinct prefix like "/v3".`);
+  }
+  if (apiPrefix.includes("?") || apiPrefix.includes("*")) {
+    throw new Error(`API_PREFIX "${rawPrefix}" contains invalid characters. Wildcards and query strings are not permitted.`);
+  }
+  if (!/^\/(?:[A-Za-z0-9_-]+)(?:\/[A-Za-z0-9_-]+)*$/.test(apiPrefix)) {
+    throw new Error("API_PREFIX must contain static slash-separated segments using letters, digits, underscores or hyphens");
+  }
+  return apiPrefix;
+}
+
 /**
  * Load service configuration from environment variables.
  */
@@ -159,15 +214,19 @@ export function loadConfig(): ServiceConfig {
   };
   validateClickHouseConfig(clickhouse);
 
+  let apiPrefix = normalizeAndValidateApiPrefix(env("API_PREFIX", "/v3"));
+
   return {
+    host: env("KNOWLEDGE_HOST", env("HOST", "127.0.0.1")),
     port: envInt("PORT", 8421),
     auth: {
       serviceKey: env("KNOWLEDGE_SERVICE_KEY", ""),
+      allowInsecureNoKeyListen: envBool("KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN", false),
     },
     dataDir: expandHome(env("KNOWLEDGE_DATA_DIR", "./data")),
     dbPath: expandHome(env("KNOWLEDGE_DB_PATH", "./data/knowledge.db")),
     logLevel: env("LOG_LEVEL", "debug"),
-    apiPrefix: env("API_PREFIX", "/v3"),
+    apiPrefix,
     publicBaseUrl: env("KNOWLEDGE_PUBLIC_BASE_URL", ""),
     tmcCallbackUrl: env("TMC_CALLBACK_URL", ""),
     clickhouse,

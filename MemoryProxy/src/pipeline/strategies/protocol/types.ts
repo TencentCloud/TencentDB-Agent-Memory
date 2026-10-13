@@ -14,7 +14,7 @@
  */
 
 import type { PipelineContext } from "../../context.js";
-import type { ForwardTarget } from "../../../guard-adapter.js";
+import type { ForwardTarget } from '../../../upstream-target.js';
 
 export type ProtocolName =
   | "openai-chat"
@@ -77,14 +77,7 @@ export interface ProtocolStrategy {
    */
   sanitizeForRetry?(body: Record<string, unknown>): Record<string, unknown>;
 
-  /**
-   * 构造 stream tap: fork 一份流给客户端、另一份后台解析 usage/text/tools。
-   *
-   * ⚠️ blueprint §3.3 红线 6: 各协议的并发模型 (inline TransformStream vs
-   * tee()+coroutine) 差异必须在此方法内部封装, 不暴露给 stage。
-   *
-   * ⚠️ addendum §4.1: CFQ 兜底路径必须在此保留 (preparedStats.cfqFallback)。
-   */
+
   createStreamTap(ctx: PipelineContext, upstreamBody: ReadableStream<Uint8Array>): {
     clientStream: ReadableStream<Uint8Array>;
     outcome: Promise<StreamOutcome>;

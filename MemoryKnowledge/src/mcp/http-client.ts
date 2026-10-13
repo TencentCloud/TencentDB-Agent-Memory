@@ -6,6 +6,7 @@
  * ApiResponseEnvelope data field (or error).
  */
 
+import { isValidIdSegment } from "../api-helpers.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("mcp-http");
@@ -14,6 +15,8 @@ export interface HttpClientOptions {
   baseUrl: string;
   /** Optional bearer token for auth. */
   token?: string;
+  /** Optional service tenant ID (x-tdai-service-id header). */
+  serviceId?: string;
 }
 
 export interface ApiResponse {
@@ -36,6 +39,12 @@ export async function callApi(
   const url = `${opts.baseUrl.replace(/\/$/, "")}/v3${endpoint}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+  if (opts.serviceId !== undefined) {
+    if (!isValidIdSegment(opts.serviceId)) {
+      throw new Error("Invalid serviceId: expected 1-200 ASCII letters, digits, underscores or hyphens");
+    }
+    headers["x-tdai-service-id"] = opts.serviceId;
+  }
 
   log.debug(`POST ${url}`);
 

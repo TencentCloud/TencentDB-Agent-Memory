@@ -1,11 +1,59 @@
+# Dependencies & build outputs (rebuilt inside image)
 node_modules
-.git
-.env
-.env.*
 dist
 coverage
+
+# Version control & editor artifacts
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+
+# Private & local configuration, credentials, and env files
+.npmrc
+.npmrc*
+.env
+.env.*
+**/.env
+**/.env.*
+*.local.*
+*.local
+
+# Temporary / scratch directories
+scratch/
+**/scratch/
+tmp/
+**/tmp/
+
+# Local databases and runtime data
+data/
+**/data/
+*.db
+*.db-*
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+.data-dir
+
+# Logs
+logs/
+**/logs/
+*.log
+
+# Tests and documentation not needed at runtime
 *.test.ts
 __tests__
-.data-dir
+tests/
 *.md
-docs
+docs/
+docker-compose.yml
+
+# Private review and local settings
+.audit*
+**/.audit*
+.npmrc*
+**/.npmrc*
+config.local.*
+**/config.local.*

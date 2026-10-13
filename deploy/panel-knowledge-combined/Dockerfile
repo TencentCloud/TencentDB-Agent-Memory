@@ -12,24 +12,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ git curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" crash（干净 `npm
-# install` 稳定报 `Cannot read properties of null (reading 'edgesOut')`）。
-# base 里升到 11，三个 builder stage 全部继承。
-RUN npm install -g npm@11 --no-audit --no-fund
-
 WORKDIR /app
 
 FROM base AS panel-ui-builder
 WORKDIR /build/panel-web
 COPY panel/web/package*.json ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY panel/web/ ./
 RUN npm run build
 
 FROM base AS panel-builder
 WORKDIR /build/panel
 COPY panel/package*.json ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY panel/ ./
 COPY --from=panel-ui-builder /build/panel-web/dist ./web/dist
 RUN npm run build
@@ -37,7 +32,8 @@ RUN npm run build
 FROM base AS knowledge-builder
 WORKDIR /build/knowledge
 COPY knowledge/package*.json ./
-RUN npm install --no-audit --no-fund
+# Compile native SQLite against the image's Node headers; avoid release prebuilds.
+RUN npm_config_build_from_source=true npm_config_nodedir=/usr/local npm ci --no-audit --no-fund
 COPY knowledge/ ./
 RUN npm run build
 

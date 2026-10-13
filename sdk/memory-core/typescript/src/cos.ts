@@ -165,6 +165,7 @@ export class StsCredentialManager {
         },
         body: "{}",
         signal: controller.signal,
+        redirect: "error",
       });
 
       if (!resp.ok) {
@@ -311,6 +312,7 @@ export class MemoryFileReader {
         method: "GET",
         headers,
         signal: controller.signal,
+        redirect: "error",
       });
       const body = await resp.text();
       return { status: resp.status, body };

@@ -127,6 +127,12 @@ export function isTracerEnabled(): boolean {
   return tracerEnabled && client !== null;
 }
 
+export async function flushServerOpikTracer(): Promise<void> {
+  if (client) {
+    await client.flush();
+  }
+}
+
 // ─── Trace: Model I/O (L1/L1.5/L2 LLM calls) ───────────────────────────────
 
 /**

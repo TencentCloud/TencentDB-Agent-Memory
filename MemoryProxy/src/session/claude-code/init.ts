@@ -13,6 +13,7 @@ import type { SessionInitConfig } from "../../types.js";
 import type {
   AgentDetail,
   SessionInitData,
+  SessionInitResult,
   SessionInitState,
   SessionRegistrationData,
   TaskDetail,
@@ -61,26 +62,8 @@ export interface SessionRequestContext {
   protocol?: "openai" | "anthropic";
 }
 
-export interface SessionInitResult {
-  intercepted: boolean;
-  response?: Response;
-  messages?: Record<string, unknown>[];
-  sessionInfo?: import("../types.js").SessionInfo | null;
-  justRegistered?: boolean;
-  agentDetail?: AgentDetail | null;
-  taskDetail?: TaskDetail | null;
-  bypassed?: boolean;
-  /** 本次注册是 session-reset 触发的（pre-hook 设 resetFlow=true → 保留到 completeRegistration）。 */
-  resetFlow?: boolean;
-  /**
-   * Anthropic-only: the pre-built `<session_context>` string that MUST be
-   * appended to `body.system` by the caller (see {@link SessionRequestContext.protocol}).
-   * `null` / omitted = nothing to append (either not Anthropic, or agent+task
-   * both empty, or both toggles off). OpenAI callers can ignore this field —
-   * the injection has already been performed inside `messages`.
-   */
-  systemAppend?: string | null;
-}
+export type { SessionInitResult };
+
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

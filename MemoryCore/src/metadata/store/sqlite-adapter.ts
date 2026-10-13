@@ -1,3 +1,4 @@
+import type { IMetadataStore } from "./interface.js";
 /**
  * SQLite 实现的 IMetadataStore。
  *

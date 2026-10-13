@@ -1,22 +1,4 @@
-/**
- * stages/observability.ts — LangfuseTurnContext 构造 + turnSeq 单调化 (Phase 1)。
- *
- * 提取自 4 处近乎相同的 lf 装配代码:
- *   - handler.ts:1482-1499         (openai protocol, target.tags 是 route 标签)
- *   - anthropicHandler.ts:1408-1425 (anthropic protocol, 同上)
- *   - codexHandler.ts / workbuddyHandler.ts 部分 lf 装配 (缺 turn ctx, 后期 opt-in)
- *
- * turnSeq 单调化 (addendum §4.2, cd898d2e) 依赖 Redis, 未启用 Redis 时
- * localTurnSeq 直接返回 —— 保持等价。
- *
- * 本 stage 只做 3 件事:
- *   1. resolveMonotonicTurnSeq → 得到会话级单调 turnSeq
- *   2. langfuseTurnTraceId(sessionKey, turnSeq) → 确定性 traceId
- *   3. 组装 LangfuseTurnContext bundle
- *
- * 不包含 opikCreateTrace / analyzerTrace / debugMetadata 等各自独立的调用 —
- * 那些 caller 拿到 lf 后自行调, Phase 2 protocol strategy 层进一步统一。
- */
+
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "../../types.js";
@@ -25,7 +7,7 @@ import {
   langfuseTurnTraceId,
   type LangfuseTurnContext,
 } from "../../langfuse.js";
-import { resolveLatestUserQuery, reportAnalyzerTrace, type ForwardTarget } from "../../guard-adapter.js";
+import { type ForwardTarget } from '../../upstream-target.js';
 
 export interface LangfuseTurnContextBuildInput {
   config: ProxyConfig;
@@ -41,7 +23,7 @@ export interface LangfuseTurnContextBuildInput {
   protocol: "openai" | "anthropic" | "responses";
   /** trace 级 tags (稳定维度: protocol/stream/session, 不含 route tag) */
   traceTags: string[];
-  /** 供 resolveLatestUserQuery 拿最新用户输入 (path + headers + body) */
+
   path: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
@@ -54,12 +36,7 @@ export interface LangfuseTurnContextBuildInput {
    *   保证 CC fork/sidequery 类别不与主对话争 turnSeq。
    */
   lane?: string;
-  /**
-   * userQuery 覆写 (58e4c55b opencode fix)。
-   * opencode 主请求的最后一条 user content 才是本 turn 用户输入, 且 tool-loop
-   * 续接以 tool 消息结尾时不该被算作新 human input; caller 算好传入即可,
-   * 不传时 stage 走 resolveLatestUserQuery 默认姿势。
-   */
+
   userQueryOverride?: string | null;
 }
 
@@ -106,46 +83,12 @@ export async function stageBuildLangfuseTurnContext(
     sessionId: input.sessionKey,
     tags: input.traceTags,
     routeTags: input.target.tags,
-    userQuery: input.userQueryOverride ?? resolveLatestUserQuery(
-      input.config,
-      input.headers,
-      input.path,
-      input.body,
-      input.messages,
-    ),
+    userQuery: input.userQueryOverride ?? "",
   };
 
   return { turnSeq, lf };
 }
 
-/**
- * analyzerTrace 上报 — target.analyzerTrace 非 null 时调 reportAnalyzerTrace。
- * openai-chat + anthropic runner 内联块合并。
- */
-export function stageReportAnalyzerTrace(input: {
-  config: ProxyConfig;
-  target: ForwardTarget;
-  traceId: string;
-  lf: LangfuseTurnContext;
-  keyId: string;
-  sessionKey: string;
-  turnSeq: number;
-  startTime: string;
-  spaceId: string;
-}): void {
-  if (!input.target.analyzerTrace) return;
-  reportAnalyzerTrace(input.config, input.target.analyzerTrace, {
-    traceId: input.traceId,
-    langfuseTraceId: input.lf.traceId,
-    traceName: input.lf.traceName,
-    traceTags: input.lf.tags,
-    keyId: `${input.keyId}:${input.sessionKey}`,
-    sessionKey: input.sessionKey,
-    turnSeq: input.turnSeq,
-    startTime: input.startTime,
-    spaceId: input.spaceId,
-  });
-}
 
 /**
  * 把 lowercase 请求头装成 plain object — handler 里各处都要

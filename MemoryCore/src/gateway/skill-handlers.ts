@@ -434,8 +434,8 @@ export async function handleDelete(body: unknown, _auth: V2AuthContext, requestI
     obsLogger.info("skill.handleDelete.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0, skill_id: r.skill_id, archived: r.archived, asset_synced: assetSynced });
     return successEnvelope(r, requestId);
   } catch (e) {
-    obsLogger.error("skill.handleDelete.done", { req_id: requestId, dur_ms: Date.now() - t0, skill_id: pre.data.skill_id, expected_version: pre.data.expected_version }, e instanceof Error ? e : undefined);
-    return mapCoreError(e, requestId, deps, { skill_id: pre.data.skill_id, expected_version: pre.data.expected_version });
+    obsLogger.error("skill.handleDelete.done", { req_id: requestId, dur_ms: Date.now() - t0, skill_id: pre.data.skill_id }, e instanceof Error ? e : undefined);
+    return mapCoreError(e, requestId, deps, { skill_id: pre.data.skill_id });
   }
 }
 
@@ -749,7 +749,7 @@ async function resolveActivityHits(args: {
       },
     });
   } catch (err) {
-    deps.logger.warn?.(`${TAG} activity: CH query failed`, err instanceof Error ? err.message : String(err));
+    deps.logger.warn?.(`${TAG} activity: CH query failed`);
     return null;                                     // CH 查询挂 → 降级
   }
   if (!candidates || candidates.length === 0) return [];   // 冷启动 → 降级
@@ -894,7 +894,6 @@ export async function handleListing(body: unknown, _auth: V2AuthContext, request
         activityFallbackReason = "exception";
         deps.logger.warn?.(
           `${TAG} activity recall failed, falling back to auto`,
-          err instanceof Error ? err.message : String(err),
         );
       }
     }
@@ -1031,6 +1030,7 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
         toolContentThresholdBytes: skillCfg.compress.toolContentThresholdBytes,
         headBytes: skillCfg.compress.headBytes,
         tailBytes: skillCfg.compress.tailBytes,
+        placeholder: DEFAULT_COMPRESS_OPTIONS.placeholder,
       }
     : DEFAULT_COMPRESS_OPTIONS;
   const oversizeOpts = skillCfg
@@ -1038,6 +1038,7 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
         chunkMaxBytes: skillCfg.extraction.chunkMaxBytes,
         headKeepBytes: skillCfg.extraction.headKeepBytes,
         tailKeepBytes: skillCfg.extraction.tailKeepBytes,
+        placeholderTemplate: DEFAULT_OVERSIZE_OPTIONS.placeholderTemplate,
       }
     : DEFAULT_OVERSIZE_OPTIONS;
   const chunkMax = oversizeOpts.chunkMaxBytes ?? DEFAULT_OVERSIZE_OPTIONS.chunkMaxBytes;

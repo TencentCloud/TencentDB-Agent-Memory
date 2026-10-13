@@ -1071,42 +1071,29 @@ export class PipelineWorker {
   // ============================
 
   /**
-   * Lock key 设计：
+   * Session mode: L1/flush lock a session; L2/L3 share an agent lock.
+   * Instance mode: ordinary stages share one instance lock. Offload L2 locks
+   * its MMD target; offload L1/L1.5 remain lock-free at the worker level.
+   * Encode complete identity tuples inside the Redis hash tag, so delimiters,
+   * braces and missing identities cannot alias another scope. The same scope
+   * keeps the same hash tag across its session and agent locks.
    *
-   * v2 pipeline 默认 (lockGranularity="session", 实际是 (instance, team, agent) 散开):
-   *   - L1: pipeline:{inst:tid:aid}:s:{sess}   — session 级锁
-   *           L1 数据按 (team,user,agent,session) 在 TCVDB 隔离，
-   *           不同 session 真并发抽取
-   *   - L2: pipeline:{inst:tid:aid}            — agent 级锁
-   *           L2 落地是 profiles/team:T|agent:X/scene_blocks/ 共享目录，
-   *           同 agent 不同 session 的 L2 必须互斥避免撞写 scene/index 文件
-   *   - L3: pipeline:{inst:tid:aid}            — agent 级锁（同 L2）
-   *           L3 写 profiles/team:T|agent:X/persona.md 一个 agent 一份
-   *
-   * 跨 agent 完全并发：不同 (tid, aid) 散到不同 Redis Cluster slot，
-   * 避免单 instance 集中到一个 hash slot 形成大 key 热点。
-   *
-   * teamId / agentId 缺失（旧调用 / offload）时退化到 "_:_" 占位，
-   * 等价于按 instance 维度落同一 slot —— 兼容老行为，不会破坏锁互斥。
-   *
-   * lockGranularity="instance" (legacy CR-1 缓解):
-   *   - L1/L2/L3: pipeline:{instanceId}        — 全部 instance 级共享同一把锁
-   *   不推荐使用，保留向后兼容。新部署用默认即可。
-   *
-   * Rolling upgrade caveat:
-   *   新旧 worker 的 ACK/PEL 协议不同，不允许在同一 keyPrefix + consumer group
-   *   下长期混跑。上线应先停止旧 consumer 并等待在途任务结束，再启动新版本；
-   *   或使用独立 keyPrefix 做蓝绿切换并显式排空旧 Stream。
+   * Stop old consumers and drain in-flight work before changing this format.
+   * Mixed old/new workers cannot coordinate their exclusion with different keys.
    */
   private getLockKey(task: TaskPayload): string | null {
+    const hashTag = (parts: Array<string | null>): string =>
+      `{${encodeURIComponent(JSON.stringify(parts))}}`;
+
     // offload-l1 is lock-free: rename guarantees exclusive file ownership,
     // appendFile is atomic (O_APPEND), and state.json is read-only for L1.
     if (task.type === "offload-l1") return null;
 
     // offload-l2: per-MMD lock so different MMDs can be processed concurrently.
     if (task.type === "offload-l2") {
-      const mmdFile = (task.data as any)?.targetMmdFile ?? "default";
-      return `pipeline:{${task.instanceId}}:offload-l2:${mmdFile}`;
+      const mmdFile = task.data?.targetMmdFile ?? "default";
+      if (typeof mmdFile !== "string") throw new Error("Invalid offload lock target: expected a string");
+      return `pipeline:${hashTag([task.instanceId])}:offload-l2:${encodeURIComponent(JSON.stringify(mmdFile))}`;
     }
 
     // offload-l15: lock-free at worker level. The executor acquires a short
@@ -1115,7 +1102,7 @@ export class PipelineWorker {
     if (task.type === "offload-l15") return null;
 
     if (this.config.lockGranularity === "instance") {
-      return `pipeline:{${task.instanceId}}`;
+      return `pipeline:${hashTag([task.instanceId])}`;
     }
 
     // v2 默认：按 (instance, team, agent) 散开 hash tag
@@ -1126,9 +1113,9 @@ export class PipelineWorker {
     //   3. 从 task.sessionId 解析（timer-scanner 入队的 L2/L3 task,
     //      sessionId 形如 "profile:team:T|agent:A" 或
     //      "profile:team:T|agent:A|session:S" 时从里面抠出 tid/aid）
-    //   4. "_" 占位退化到 instance 级（不推荐，hash 集中）
-    let tid = task.teamId || (task.data as any)?.teamId;
-    let aid = task.agentId || (task.data as any)?.agentId;
+    //   4. Missing identities remain null components (instance-scoped fallback).
+    let tid = task.teamId ?? (typeof task.data?.teamId === "string" ? task.data.teamId : undefined);
+    let aid = task.agentId ?? (typeof task.data?.agentId === "string" ? task.data.agentId : undefined);
     if (!tid || !aid) {
       const m = task.sessionId.match(/^profile:team:([^|]+)\|agent:([^|]+)(?:\|session:.+)?$/);
       if (m) {
@@ -1139,16 +1126,14 @@ export class PipelineWorker {
         aid = aid || m[2];
       }
     }
-    tid = tid || "_";
-    aid = aid || "_";
-    const ns = `{${task.instanceId}:${tid}:${aid}}`;
+    const ns = hashTag([task.instanceId, tid ?? null, aid ?? null]);
 
     if (task.type === "L2" || task.type === "L3") {
       // agent 级锁：同 agent 的 L2/L3 互斥，避免共享目录撞写
       return `pipeline:${ns}`;
     }
     // L1 + flush 仍是 session 级
-    return `pipeline:${ns}:s:${task.sessionId}`;
+    return `pipeline:${ns}:s:${encodeURIComponent(JSON.stringify(task.sessionId))}`;
   }
 
   // ============================

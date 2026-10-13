@@ -16,7 +16,7 @@
  *     "data": {
  *       "instance_id": "...",
  *       "cleaned": {
- *         "storage_backend": "cos" | "sqlite" | "fs" | "memory",
+ *         "storage_backend": "sqlite" | "fs" | "memory",
  *         "storage_ttl_deleted":   <number>,   // 缺省 0；出错时 storage_ttl_error 会同时出现
  *         "storage_nottl_deleted": <number>,
  *         "cos_pool_evicted":      "evicted" | "not-cached" | "unsupported",
@@ -37,7 +37,7 @@
  */
 
 import type { Context } from "hono";
-import { getProxyStorage, evictCosSpace } from "../storage/factory.js";
+import { getProxyStorage } from "../storage/factory.js";
 import { assertKeySegment } from "../storage/key-utils.js";
 import { log } from "../report/log.js";
 import type { ProxyConfig } from "../types.js";
@@ -124,16 +124,6 @@ export function createInstanceDestroyHandler(config: ProxyConfig) {
       cleaned.storage_nottl_deleted = 0;
       cleaned.storage_nottl_error = msg;
       log.warn("instance_destroy.storage_nottl_error", { instance_id: instanceId, error: msg });
-    }
-
-    // 3c. kernel-sts pool evict —— 回收该 space 的 STS backend
-    try {
-      cleaned.cos_pool_evicted = await evictCosSpace(instanceId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      cleaned.cos_pool_evicted = "error";
-      cleaned.cos_pool_error = msg;
-      log.warn("instance_destroy.cos_pool_error", { instance_id: instanceId, error: msg });
     }
 
     // 3d. Redis 不清 —— 声明式，方便调用方知道我们没漏

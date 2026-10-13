@@ -14,13 +14,22 @@ import { createMemoryBridgeHandler } from "./memory/memory-bridge.js";
 import { createInstanceDestroyHandler } from "./routes/instance-destroy.js";
 import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { createModelAliasHandler } from "./routes/model-aliases.js";
-import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
+import { hasAnalyseMarker } from './routes/whitelist.js';
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
 import type { ProxyConfig } from "./types.js";
 
 export function createApp(config: ProxyConfig): Hono {
   const app = new Hono();
+
+  // Retired endpoint names must not fall through to generic forwarding.
+  app.use("*", async (c, next) => {
+    const segments = c.req.path.split("/").filter(Boolean);
+    if (segments.length >= 3 && segments.slice(2).includes("cost-guard")) {
+      return c.json({ error: "endpoint_removed", message: "This optional extension endpoint was removed. Use the normal agent endpoint." }, 404);
+    }
+    await next();
+  });
 
   // Eagerly activate storage/bindingRepo so bridge-only requests (no main
   // /v1/messages hits yet) can still recover session state via L2 fallthrough
@@ -30,35 +39,18 @@ export function createApp(config: ProxyConfig): Hono {
     tryActivateRedis(config);
   }
 
-  // `/cost-guard` marker 门控 (P0 前置)：
-  // markerOptIn=false 时 marker 完全作废——任何路径里带 `/cost-guard/` 段的请求
+
   // 都直接 404，避免 catch-all `POST /*` 把它兜住走成默认路由（会产生迷惑：
   // 客户端以为自己"启用了 marker"，proxy 却按 default_passthrough 处理）。
   // 放在最前面，早于所有业务路由。
-  if (!config.costGuard.markerOptIn) {
-    app.use("*", async (c, next) => {
-      if (hasCostGuardMarker(c.req.path)) {
-        return c.json(
-          {
-            error: "cost_guard_marker_disabled",
-            message:
-              "The /cost-guard URL marker is disabled on this deployment. " +
-              "Remove the /cost-guard segment from the path, or set costGuard.markerOptIn=true.",
-          },
-          404,
-        );
-      }
-      await next();
-    });
-  }
 
-  // `/analyse` marker 门控（结构完全对齐 cost-guard）：
+
   // assetReflection.markerOptIn=false 时任何带 `/analyse/` 段的请求都 404，
   // 避免 catch-all 静默兜住把 marker 请求当默认路径处理。此前只有 primary
   // 路由的注册开关，缺这个顶部拒绝——CC/CB 侧的 `/analyse` marker 请求
   // 在 markerOptIn=false 时会 fall through 到 catch-all `POST /*` 让上游
   // 收到裸 body（marker 客户端以为"启用"了实际没走 injector）；codex 侧
-  // 同样症状（P1-6 报告里除 `/cost-guard` 之外的 `/analyse` 变体）。一并
+
   // 修掉，保持两 marker 门控行为对称。
   if (!config.injection?.assetReflection?.markerOptIn) {
     app.use("*", async (c, next) => {
@@ -93,7 +85,7 @@ export function createApp(config: ProxyConfig): Hono {
       version: "0.2.0",
       upstream: config.upstream.url,
       opik: config.opik.enabled ? config.opik.url : "disabled",
-      costGuard: config.costGuard.enabled ? "enabled" : "disabled",
+
       rateLimit: config.rateLimit.tpm > 0 || config.rateLimit.qpm > 0 ? "enabled" : "disabled",
       storage: {
         enabled: !!config.storage?.enabled,
@@ -125,7 +117,7 @@ export function createApp(config: ProxyConfig): Hono {
   });
 
   // ── /direct/* — 纯路由透传通道（必须置于所有业务路由之前） ────────────────
-  // 完全绕开 cost-guard / auth / model alias / thinking sanitize；
+
   // 但保留 opik trace/span 上报与 jsonl usage 落表（仅对 Anthropic messages
   // 与 OpenAI chat/completions 生效）。详见 directHandler.ts 头部注释。
   app.all("/direct/*", (c) => handleDirectPassthrough(c, config));
@@ -182,32 +174,21 @@ export function createApp(config: ProxyConfig): Hono {
   //   CB:  OPENAI_BASE_URL=http://<proxy>:8096/codebuddy/<spaceId>
   // 路径示例: /claude-code/mem-example001/v1/messages
   //          /codebuddy/mem-example001/v1/chat/completions
-  // `/cost-guard` marker: primary handler 检测到该段后启用 cost-guard 路由；
+
   // 默认路径（不带 marker）则跳过 router 直接透传上游。
   //
-  // marker 机制受 `config.costGuard.markerOptIn` 门控：
+
   //   - false（默认/线上）: 不注册这两条路由——所有请求走 `/:agent/:spaceId/v1/...`，
   //     handler 内 useGuard 恒 true，行为等同于历史"默认走 router"。此时任何
-  //     `/cost-guard/...` 请求都命中不到路由，走到最终 catch-all 或返 404
+
   //     （catch-all `/*` 存在，会 fallthrough 到 handleChatCompletions；下面在
   //     顶部加了 marker→404 拒绝，见 handler / anthropicHandler）。
   //   - true（测试环境）: 注册以下两条 marker 路由；handler 内根据 marker 决定
   //     是否走 router。
-  // 详见 `hasCostGuardMarker`。
-  // Hono 优先匹配更精确的路径，需注册在通用 `/:agent/:spaceId/v1/...` 之前。
-  if (config.costGuard.markerOptIn) {
-    app.post("/:agent/:spaceId/cost-guard/v1/messages", (c) => handleAnthropicMessages(c, config));
-    app.post("/:agent/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    // Sub-mode markers: `/cost-guard/pre` (compress only) and `/cost-guard/cheap` (route only).
-    // Handler internally resolves mode via resolveCostGuardMode — these routes just ensure Hono
-    // catches the 6-segment paths instead of falling through to catch-all.
-    app.post("/:agent/:spaceId/cost-guard/pre/v1/messages", (c) => handleAnthropicMessages(c, config));
-    app.post("/:agent/:spaceId/cost-guard/pre/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/:agent/:spaceId/cost-guard/cheap/v1/messages", (c) => handleAnthropicMessages(c, config));
-    app.post("/:agent/:spaceId/cost-guard/cheap/v1/chat/completions", (c) => handleChatCompletions(c, config));
-  }
 
-  // `/analyse` marker (asset-reflection 内部效果评估) —— 跟 cost-guard 完全对称：
+  // Hono 优先匹配更精确的路径，需注册在通用 `/:agent/:spaceId/v1/...` 之前。
+
+
   // 由 `injection.assetReflection.markerOptIn` 门控。marker 只是一个透明标记，
   // handler 内 (AssetReflectionInjector) 检测到即在 system prompt 末尾追加
   // <asset_reflection>；不带 marker 的请求走原有正常路由。
@@ -261,32 +242,24 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/workbuddy/:spaceId/realtime/calls", (c) => handleWorkbuddyEndpoint(c, config));
   app.post("/workbuddy/:spaceId/responses", (c) => handleWorkbuddyEndpoint(c, config));
 
-  // Codex 侧的 `/cost-guard` / `/analyse` marker 路由 —— 完全对齐 CC/CB：
+
   // marker 是 URL 上的独立段（位于 `/{agent}/{spaceId}` 之后），门控开关相同。
-  // 不注册这些路由时，`/codex/{spaceId}/cost-guard/responses` 5 段路径既不
+
   // 匹配 codex 上面 8 条精确路由，也不匹配任何 agent-prefixed 路由，会 fall
   // through 到 catch-all `POST /*` → handleChatCompletions，把 Responses API
   // body 打到 OpenAI /chat/completions 上游返 200 chatcmpl-* 让客户端崩。
   //
-  // `/cost-guard` 语义：primary handler 检测到该段后启用 cost-guard 路由；
-  //   codex 侧的 handler 需要在 forwardToUpstream 时读 hasCostGuardMarker
-  //   决定是否走 router。（当前 codexHandler.ts 尚未接 resolveForwardTarget，
+
+
   //   见 P1-6 报告；本 commit 只解决路由注册与 fall-through 静默 200 的
-  //   问题，让请求先到达 codexHandler。cost-guard router 分流的实际支持
+
   //   独立 commit 处理。）
   //
   // `/analyse` 语义：AssetReflectionInjector 检测到该段后往 system prompt
   //   末尾追加 `<asset_reflection>` 反思块；codexHandler.ts 已将 requestPath
   //   传给注入 pipeline（见 codexHandler.ts injection 段落中 `requestPath:
   //   c.req.path`），路由一注册 `/analyse` marker 立即对 codex 生效。
-  if (config.costGuard.markerOptIn) {
-    app.post("/codex/:spaceId/cost-guard/v1/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/codex/:spaceId/cost-guard/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/codex/:spaceId/cost-guard/pre/v1/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/codex/:spaceId/cost-guard/pre/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/codex/:spaceId/cost-guard/cheap/v1/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/codex/:spaceId/cost-guard/cheap/responses", (c) => handleCodexEndpoint(c, config));
-  }
+
   if (config.injection?.assetReflection?.markerOptIn) {
     app.post("/codex/:spaceId/analyse/v1/responses", (c) => handleCodexEndpoint(c, config));
     app.post("/codex/:spaceId/analyse/responses", (c) => handleCodexEndpoint(c, config));
@@ -320,38 +293,24 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/dsh/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/dsh/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
 
-  // dsh cost-guard / analyse marker 路由 —— 与 CC/CB/Codex 完全对称。
+
   // 参照 codex 注释:必须显式注册这四条 5 段路径,否则会 fall through 到 catch-all
   // POST /*(默认路径),marker 静默失效。
-  if (config.costGuard.markerOptIn) {
-    app.post("/dsh/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/dsh/:spaceId/cost-guard/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/dsh/:spaceId/cost-guard/pre/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/dsh/:spaceId/cost-guard/pre/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/dsh/:spaceId/cost-guard/cheap/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/dsh/:spaceId/cost-guard/cheap/chat/completions", (c) => handleChatCompletions(c, config));
-  }
+
   if (config.injection?.assetReflection?.markerOptIn) {
     app.post("/dsh/:spaceId/analyse/v1/chat/completions", (c) => handleChatCompletions(c, config));
     app.post("/dsh/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
   }
 
-  // opencode cost-guard / analyse marker 路由 —— 与 CC/CB/Codex/dsh 完全对称。
+
   // opencode 客户端走标准 OpenAI Chat Completions（POST /v1/chat/completions），
   // 路径形态与 CB/dsh 同族；因此 marker 段的路由形态与 dsh 一致：
-  //   /opencode/{spaceId}/cost-guard/v1/chat/completions
-  //   /opencode/{spaceId}/cost-guard/chat/completions（客户端 base 不带 /v1 时）
+
+
   // 未显式注册这些 5 段路径时，会 fall through 到 catch-all POST /*，marker 静默失效。
   // Router 分流已经在 handler.ts 里通过 agentName=agentFromPath("opencode") 传给
-  // resolveForwardTarget，只要路由能命中，Router 就能按 agentSource=opencode 分支决策。
-  if (config.costGuard.markerOptIn) {
-    app.post("/opencode/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/opencode/:spaceId/cost-guard/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/opencode/:spaceId/cost-guard/pre/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/opencode/:spaceId/cost-guard/pre/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/opencode/:spaceId/cost-guard/cheap/v1/chat/completions", (c) => handleChatCompletions(c, config));
-    app.post("/opencode/:spaceId/cost-guard/cheap/chat/completions", (c) => handleChatCompletions(c, config));
-  }
+
+
   if (config.injection?.assetReflection?.markerOptIn) {
     app.post("/opencode/:spaceId/analyse/v1/chat/completions", (c) => handleChatCompletions(c, config));
     app.post("/opencode/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
@@ -381,7 +340,7 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/proxy/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
   // Responses 协议必须显式分派：catch-all 会落到 handleChatCompletions，那里按
   // `body.messages` 解析，而 Responses 的内容在 `body.input` 里 —— 转发和计费
-  // 仍然正确（白名单按后缀拼上游 endpoint），但压缩与 CFQ 会静默失效。
+
   // 辅助端点同样不能掉进 chat catch-all，否则 compact / memories / realtime
   // 会被当成 chat/completions 打到上游。
   app.post("/proxy/:spaceId/v1/responses/compact", (c) => handleCodexEndpoint(c, config));
@@ -392,17 +351,10 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/proxy/:spaceId/memories/trace_summarize", (c) => handleCodexEndpoint(c, config));
   app.post("/proxy/:spaceId/realtime/calls", (c) => handleCodexEndpoint(c, config));
   app.post("/proxy/:spaceId/responses", (c) => handleCodexEndpoint(c, config));
-  // `/cost-guard` / `/analyse` 的 Responses 变体：通用 `/:agent/:spaceId/...`
+
   // marker 路由只挂了 messages / chat/completions，不覆盖 /responses。不注册
   // 时会 fall through 到下面的 `/proxy/:spaceId/*` → handleChatCompletions。
-  if (config.costGuard.markerOptIn) {
-    app.post("/proxy/:spaceId/cost-guard/v1/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/proxy/:spaceId/cost-guard/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/proxy/:spaceId/cost-guard/pre/v1/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/proxy/:spaceId/cost-guard/pre/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/proxy/:spaceId/cost-guard/cheap/v1/responses", (c) => handleCodexEndpoint(c, config));
-    app.post("/proxy/:spaceId/cost-guard/cheap/responses", (c) => handleCodexEndpoint(c, config));
-  }
+
   if (config.injection?.assetReflection?.markerOptIn) {
     app.post("/proxy/:spaceId/analyse/v1/responses", (c) => handleCodexEndpoint(c, config));
     app.post("/proxy/:spaceId/analyse/responses", (c) => handleCodexEndpoint(c, config));

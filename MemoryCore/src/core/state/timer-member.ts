@@ -34,10 +34,17 @@ export function buildPipelineTimerMember(
   timerType: string,
   ctx?: PipelineTimerMemberContext,
 ): string {
-  if (ctx?.teamId && ctx?.agentId) {
-    return `${SCOPED_TIMER_PREFIX}team:${encodeURIComponent(ctx.teamId)}|agent:${encodeURIComponent(ctx.agentId)}|session:${encodeURIComponent(sessionId)}:${timerType}`;
-  }
-  return `${sessionId}:${timerType}`;
+  // Timer names are internal scheduling labels, not identity components.
+  if (!/^[A-Za-z0-9_-]+$/.test(timerType)) throw new Error("Invalid pipeline timer type");
+  const tenant = ctx?.teamId !== undefined || ctx?.agentId !== undefined
+    ? ctx : parseProfileSessionTenant(sessionId);
+  const fields: string[] = [];
+  if (tenant?.teamId !== undefined) fields.push(`team:${encodeURIComponent(tenant.teamId)}`);
+  if (tenant?.agentId !== undefined) fields.push(`agent:${encodeURIComponent(tenant.agentId)}`);
+  fields.push(`session:${encodeURIComponent(sessionId)}`);
+  // Always wrap the session, even without a tenant. A literal session that
+  // resembles scoped syntax must not be interpreted as another identity.
+  return `${SCOPED_TIMER_PREFIX}${fields.join("|")}:${timerType}`;
 }
 
 export function parseProfileSessionTenant(sessionId: string): PipelineTimerMemberContext | undefined {
@@ -52,20 +59,20 @@ export function parsePipelineTimerMember(member: string): ParsedPipelineTimerMem
     if (lastColon > SCOPED_TIMER_PREFIX.length) {
       const timerType = member.slice(lastColon + 1);
       const scope = member.slice(SCOPED_TIMER_PREFIX.length, lastColon);
-      const values: Record<string, string> = {};
+      const values: Record<string, string> = Object.create(null);
       for (const part of scope.split("|")) {
         const idx = part.indexOf(":");
         if (idx > 0) values[part.slice(0, idx)] = part.slice(idx + 1);
       }
-      const sessionId = values.session ? safeDecodeURIComponent(values.session) : "";
-      if (sessionId) {
+      const sessionId = values.session !== undefined ? safeDecodeURIComponent(values.session) : "";
+      if (values.session !== undefined) {
         const classified = classifyTimerType(timerType);
         return {
           sessionId,
           timerType,
           ...classified,
-          ...(values.team ? { teamId: safeDecodeURIComponent(values.team) } : {}),
-          ...(values.agent ? { agentId: safeDecodeURIComponent(values.agent) } : {}),
+          ...(values.team !== undefined ? { teamId: safeDecodeURIComponent(values.team) } : {}),
+          ...(values.agent !== undefined ? { agentId: safeDecodeURIComponent(values.agent) } : {}),
         };
       }
     }

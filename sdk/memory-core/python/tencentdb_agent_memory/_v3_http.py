@@ -36,6 +36,9 @@ def _validate_transport_options(
 
 
 def _decode_response(resp: httpx.Response) -> dict:
+    # Reject redirects even when an injected client enables automatic following.
+    if resp.is_redirect:
+        resp.raise_for_status()
     header_request_id = (
         resp.headers.get("x-qcloud-transaction-id")
         or resp.headers.get("x-trace-id")
@@ -101,8 +104,9 @@ class HttpStub(Stub):
             json=body,
             headers=self.headers,
             timeout=timeout or self.client.timeout,
+            follow_redirects=False,
         )
-        logger.debug("Response %s %s", path, resp.text)
+        logger.debug("HTTP response status=%s", resp.status_code)
         return _decode_response(resp)
 
     def get(self, path: str, query: Optional[dict] = None, timeout: Optional[float] = None) -> dict:
@@ -111,8 +115,9 @@ class HttpStub(Stub):
             params=query or {},
             headers=self.headers,
             timeout=timeout or self.client.timeout,
+            follow_redirects=False,
         )
-        logger.debug("Response %s %s", path, resp.text)
+        logger.debug("HTTP response status=%s", resp.status_code)
         return _decode_response(resp)
 
     def close(self) -> None:
@@ -150,8 +155,9 @@ class AsyncHttpStub:
             json=body,
             headers=self.headers,
             timeout=timeout or self.client.timeout,
+            follow_redirects=False,
         )
-        logger.debug("Response %s %s", path, resp.text)
+        logger.debug("HTTP response status=%s", resp.status_code)
         return _decode_response(resp)
 
     async def get(self, path: str, query: Optional[dict] = None, timeout: Optional[float] = None) -> dict:
@@ -160,8 +166,9 @@ class AsyncHttpStub:
             params=query or {},
             headers=self.headers,
             timeout=timeout or self.client.timeout,
+            follow_redirects=False,
         )
-        logger.debug("Response %s %s", path, resp.text)
+        logger.debug("HTTP response status=%s", resp.status_code)
         return _decode_response(resp)
 
     async def close(self) -> None:

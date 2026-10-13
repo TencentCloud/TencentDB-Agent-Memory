@@ -62,7 +62,12 @@ async function handleKnowledgeCreate(
   if (!parsed.success) return errorEnvelope(400, formatZodErr(parsed.error), requestId);
   const store = getEntityStore(deps);
   if (!store?.createKnowledge) return missingEntityStore(requestId);
-  return successEnvelope<KnowledgeEntity>(await store.createKnowledge(parsed.data), requestId);
+  const input: Omit<KnowledgeEntity, "created_at" | "updated_at"> = {
+    ...parsed.data,
+    summary: parsed.data.summary ?? null,
+    user_id: parsed.data.user_id ?? null,
+  };
+  return successEnvelope<KnowledgeEntity>(await store.createKnowledge(input), requestId);
 }
 
 async function handleKnowledgeGet(
@@ -75,7 +80,7 @@ async function handleKnowledgeGet(
   const data = await store.getKnowledge(parsed.data.knowledge_id);
   if (!data) return errorEnvelope(404, "Knowledge not found", requestId);
   if (parsed.data.team_id && data.team_id !== parsed.data.team_id) {
-    return errorEnvelope(403, "Knowledge team_id mismatch", requestId);
+    return errorEnvelope(404, "Knowledge not found", requestId);
   }
   return successEnvelope<KnowledgeEntity>(data, requestId);
 }
@@ -93,7 +98,7 @@ async function handleKnowledgeUpdate(
   if (team_id) {
     const current = store.getKnowledge ? await store.getKnowledge(knowledge_id) : null;
     if (!current) return errorEnvelope(404, "Knowledge not found", requestId);
-    if (current.team_id !== team_id) return errorEnvelope(403, "Knowledge team_id mismatch", requestId);
+    if (current.team_id !== team_id) return errorEnvelope(404, "Knowledge not found", requestId);
   }
 
   const data = await store.updateKnowledge(knowledge_id, patch);

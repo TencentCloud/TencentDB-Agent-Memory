@@ -23,11 +23,23 @@ function keyOf(
   return `${KEY_PREFIX}${userId}:${agentSource}:${sessionId}`;
 }
 
+export interface VersionPinPipeline {
+  hset(key: string, field: string, value: string): unknown;
+  expire(key: string, seconds: number): unknown;
+  exec(): Promise<unknown>;
+}
+
+export interface VersionPinRedisClient {
+  hget(key: string, field: string): Promise<string | null>;
+  eval(script: string, numkeys: number, ...args: (string | number)[]): Promise<unknown>;
+  multi(): VersionPinPipeline;
+}
+
 export class VersionPinRepo {
   private ttl: number;
 
   constructor(
-    private redis: Redis | null,
+    private redis: VersionPinRedisClient | null,
     ttlSeconds?: number,
   ) {
     this.ttl = ttlSeconds ?? DEFAULT_TTL;

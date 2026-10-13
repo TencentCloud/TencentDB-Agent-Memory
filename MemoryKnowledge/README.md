@@ -1,104 +1,137 @@
-# MemoryKnowledge（Knowledge Service）
+# MemoryKnowledge (Knowledge Service)
 
-本目录是 monorepo 内的 **Knowledge Service（KS）**：用户侧 Wiki + Code-Graph 引擎。  
-管控面在 [`../MemoryPanel`](../MemoryPanel/)。
+This directory contains the **Knowledge Service (KS)**: a user-side Wiki and Code-Graph engine within the monorepo.
+The control plane is located in [`../MemoryPanel`](../MemoryPanel/).
 
-默认端口 **8421**，API 前缀 **`/v3`**。
+Default port is **8421**, and the API prefix is **`/v3`**.
+`API_PREFIX` accepts static slash-separated segments containing ASCII letters, digits,
+underscores or hyphens (for example `/api/knowledge`). A leading slash is added and
+trailing slashes are removed. Root, wildcard, query, fragment, encoded and dynamic
+route prefixes are rejected before startup; use the same prefix in client URLs.
 
-## 做什么
+## Features
 
-| 能力 | 说明 |
+| Capability | Description |
 | --- | --- |
-| **LLM-Wiki** | 上传/拉取文档 → LLM 抽取结构化页面 → FTS5 全文检索 + 知识图谱 |
-| **Code-Graph** | `git clone` 仓库 → CodeGraph 索引（符号、调用、文件树）→ 探索查询 |
-| **Auto-Sync**（可选） | 定时扫描 code-graph，FIFO 队列 + worker pool 自动拉取 git 更新并重建索引。默认关闭，见下方「可选：Auto-Sync」。 |
-| **Tools** | `POST /v3/tools/list`、`/v3/tools/call`，供 Agent / Kernel 自发现调用 |
-| **状态回调** | ingest/sync 完成后回调 Panel（`TMC_CALLBACK_URL`），再写远端 meta / knowledge |
+| **Native OKF Wiki** | Import/Export standard Open Knowledge Format 0.2 bundles seamlessly without LLM rewrites. |
+| **LLM-Wiki** | Upload/pull documents → LLM extracts structured pages → FTS5 full-text search + knowledge graph. |
+| **Code-Graph** | `git clone` repositories → CodeGraph indexing (symbols, calls, file trees) → explorative queries. |
+| **Auto-Sync** (Optional) | Periodically scans code-graphs. Uses a FIFO queue + worker pool to automatically pull Git updates and rebuild indexes. Disabled by default, see the Auto-Sync section below. |
+| **Tools** | `POST /v3/tools/list` and `/v3/tools/call`, enabling agents/kernels to self-discover and invoke tools. |
+| **Status Callbacks** | After ingestion/sync completion, sends callbacks to the Panel (`TMC_CALLBACK_URL`), which then writes to remote metadata / knowledge. |
 
-单独 `pnpm dev` 可以起服务；产品链路里必须有 Panel 推 `llm_binding`、收 callback、写远端元数据。
+You can start the service alone using `npm run dev`, but in a product workflow, a Panel must push `llm_binding`, receive callbacks, and update remote metadata.
 
-## 源码结构
+## Directory Structure
 
 ```text
 MemoryKnowledge/
 ├── src/
-│   ├── server.ts           # Hono 入口：挂路由、Swagger、启动监听
-│   ├── module.ts           # 组装 store / wiki / code-graph / 队列 / 恢复
-│   ├── config.ts           # 环境变量
-│   ├── callback.ts         # → Panel status-callback
-│   ├── telemetry.ts        # 可选 Langfuse（未配 KEY 则关闭）
-│   ├── routes/             # wiki / code-graph / tools / llm-binding / health
+│   ├── server.ts           # Hono entry point: mounts routes, Swagger, starts listener
+│   ├── module.ts           # Assembles store / wiki / code-graph / queues / recovery
+│   ├── config.ts           # Environment variables
+│   ├── callback.ts         # → Panel status-callbacks
+│   ├── telemetry.ts        # Optional Langfuse tracing
+│   ├── routes/             # API routes: wiki, code-graph, tools, llm-binding, health
 │   ├── engines/
-│   │   ├── wiki/           # ingest-v2、索引、图谱搜索
+│   │   ├── wiki/           # OKF bundle transport, ingest-v2, FTS indexing, graph search
 │   │   └── code/           # CodeGraph bridge
-│   ├── store/              # SQLite（Drizzle）+ 构建队列 + llm_binding
-│   ├── source-fetcher/     # Git 拉取
-│   ├── mcp/                # MCP stdio（转发到本机 HTTP API）
-│   ├── db/                 # schema / client
-│   └── middleware/
-├── docs/                   # 设计与 API 细节
-├── Dockerfile              # KS 单镜像（可选）
-└── docker-compose.yml      # 本地一键跑 KS 容器（可选）
+│   ├── store/              # SQLite (Drizzle) + build queue + llm_binding store
+│   ├── source-fetcher/     # Git fetching module
+│   ├── mcp/                # MCP stdio server (forwards to local HTTP APIs)
+│   ├── db/                 # Database schemas and clients
+│   └── middleware/         # Security and request parsing middlewares
+├── docs/                   # Design, OKF specs, and API documentation
+├── tests/                  # Vitest regression tests
+├── package.json            # Node.js dependencies
+└── tsconfig.json           # TypeScript configuration
 ```
 
-## 本地启动
+## Running Locally
 
-生产/联调若要用 **Panel + KS 一体镜像**，直接拉 [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)（用法见 [`../deploy/panel-knowledge-combined/README.md`](../deploy/panel-knowledge-combined/README.md)）。下面是只跑本服务源码的方式：
+If you need a unified **Panel + KS image** for production/debugging, use [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub) (see [`../deploy/panel-knowledge-combined/README.md`](../deploy/panel-knowledge-combined/README.md)).
+
+To run this specific OKF patched service from source:
 
 ```bash
 cd MemoryKnowledge
-pnpm install --ignore-workspace
+npm ci
 cp .env.example .env
-# 编辑 .env（见下）
-pnpm dev
+# Edit .env as shown below
+npm run dev
 ```
 
+Check health and API documentation:
 ```bash
 curl -s http://127.0.0.1:8421/health
-# Swagger: http://127.0.0.1:8421/docs
+# Swagger UI available at: http://127.0.0.1:8421/docs
 ```
 
-与 Panel 联调时（Panel 默认 `8123`），KS `.env` 至少：
+When integrating with the Panel (which defaults to port `8123`), the KS `.env` requires at least:
 
 ```dotenv
 PORT=8421
 API_PREFIX=/v3
 KNOWLEDGE_DATA_DIR=./data
 KNOWLEDGE_DB_PATH=./data/knowledge.db
-KNOWLEDGE_PUBLIC_BASE_URL=http://127.0.0.1:8421/v3   # Agent 可达，必须含 /v3
-TMC_CALLBACK_URL=http://127.0.0.1:8123               # Panel 根地址，不要带 callback path
+KNOWLEDGE_PUBLIC_BASE_URL=http://127.0.0.1:8421/v3   # Accessible by Agent, must include /v3
+TMC_CALLBACK_URL=http://127.0.0.1:8123               # Panel base URL, no callback path
 LLM_MODE=proxy
 LLM_MODEL=Memory-Model
 ```
 
-Panel 侧（Panel 自己的 `.env`，不是 KS）：
+On the Panel side (Panel's `.env`, not KS):
 
 ```dotenv
 KNOWLEDGE_SERVICE_URL=http://127.0.0.1:8421
 ```
 
-| 变量 | 谁读 | 带 `/v3`？ |
+| Variable | Consumer | Includes `/v3`? |
 | --- | --- | --- |
-| `KNOWLEDGE_PUBLIC_BASE_URL` | KS → 写入资源 `service_url` | 要 |
-| Panel `KNOWLEDGE_SERVICE_URL` | Panel → 调 KS 管理 API | 不要 |
-| `TMC_CALLBACK_URL` | KS → 回调 Panel | 不要（只填根） |
+| `KNOWLEDGE_PUBLIC_BASE_URL` | KS → Writes resource `service_url` | Yes |
+| Panel `KNOWLEDGE_SERVICE_URL` | Panel → Calls KS admin APIs | No |
+| `TMC_CALLBACK_URL` | KS → Callbacks to Panel | No (Root URL only) |
 
-`LLM_MODE=proxy`（默认）：Wiki 用 Panel 按 `x-tdai-service-id` 推送的 `llm_binding`，本地不必起 Proxy。  
-`LLM_MODE=custom`：在 `.env` 设 `LLM_API_KEY` / `LLM_BASE_URL`（及可选 `LLM_PROTOCOL=anthropic`）。
+`LLM_MODE=proxy` (default): Wiki uses the `llm_binding` pushed by the Panel via `x-tdai-service-id`.
+`LLM_MODE=custom`: Set `LLM_API_KEY` / `LLM_BASE_URL` (and optionally `LLM_PROTOCOL=anthropic`) in `.env` directly.
 
-## 常用命令
+## Common Commands
 
 ```bash
-pnpm dev          # HTTP API（tsx 热更）
-pnpm dev:mcp      # MCP stdio（另开终端；需 HTTP 已起）
-pnpm typecheck
-pnpm test
-pnpm build        # tsdown → dist/
+npm run dev          # Start HTTP API (with TSX hot-reloading)
+npm run dev:mcp      # Start MCP stdio (requires HTTP server running)
+npm run typecheck    # Validate TypeScript types
+npm test             # Run Vitest test suite
+npm run build        # Build using tsdown → dist/
+npm run okf          # OKF CLI utility for validating/migrating bundles
 ```
 
-## 可选：ClickHouse 工具调用埋点
+## Security and Authentication Architecture
 
-默认关闭。设置以下环境变量后，Knowledge Service 会把 `POST /v3/tools/call` 写入与 Memory/Skill 兼容的 `tool_call_logs`；启动时会幂等建表，批写或建表失败均不阻断业务请求。
+### 1. Service Authentication
+When `KNOWLEDGE_SERVICE_KEY` is configured:
+- **ALL service API endpoints (`/v3/*`) require `Authorization: Bearer <KNOWLEDGE_SERVICE_KEY>`.** This includes read queries (`wiki/page/read`, `wiki/raw/read`, `wiki/search`), write/ingest mutations, tool execution (`tools/list`, `tools/call`), internal configurations, auto-sync, and analytics.
+- Missing or invalid tokens fail-closed immediately with HTTP 401 without reading or buffering request bodies or emitting telemetry.
+- Public endpoints: `/health` (liveness check) and `/docs` / `/openapi.json` (OpenAPI specification) are hosted outside the API prefix and remain public.
+
+### 2. Multi-Tenancy Boundary vs. Authentication
+- The `x-tdai-service-id` and `team_id` headers passed in requests define logical multi-tenancy boundaries and resource scoping across SQLite stores and directory structures.
+- **These headers are NOT caller authentication.** Supplying arbitrary tenant headers without a valid service key does not grant access.
+- `KNOWLEDGE_SERVICE_KEY` is a trusted **service-to-service** credential (e.g. Panel ↔ Knowledge), **NOT end-user tenant authentication**. Production deployments require an operator-provided trusted gateway that authenticates end-user sessions and derives the tenant identity before proxying to Knowledge. (Note: The included MemoryProxy and MemoryCore do not currently supply an end-user gateway for Knowledge endpoints; a custom ingress proxy or sidecar is required for direct Agent access.)
+
+### 3. Agent Migration for Direct Reads
+- Previously unauthenticated agent reads must now access Knowledge through an authenticated operator-provided gateway/proxy, or carry the service token within trusted private environments.
+- **CRITICAL:** Never embed the global `KNOWLEDGE_SERVICE_KEY` into LLM prompts or user-visible generated tool definitions.
+
+### 4. Network Listener Posture
+- The service defaults to binding explicitly to the loopback interface (`127.0.0.1`, configurable via `HOST` or `KNOWLEDGE_HOST`).
+- Unauthenticated (no-key) mode is permitted **only** on loopback for local development.
+- Binding to a non-loopback interface (such as `0.0.0.0` or external network interfaces) **strictly requires** `KNOWLEDGE_SERVICE_KEY`. Attempting to start without a service key on non-loopback will immediately throw a configuration error before initializing network or telemetry side effects, unless explicitly overridden with `KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN=true` (strictly for trusted/isolated development networks).
+
+## Telemetry (Optional)
+
+### ClickHouse Tool Call Logging
+Disabled by default. Set the following environment variables to write `POST /v3/tools/call` invocations into a `tool_call_logs` table compatible with Memory/Skill. Tables are idempotently created on startup. Logging failures do not block business requests.
 
 ```dotenv
 KNOWLEDGE_CLICKHOUSE_ENABLED=true
@@ -106,24 +139,14 @@ KNOWLEDGE_CLICKHOUSE_URL=http://clickhouse.example.com:8123
 KNOWLEDGE_CLICKHOUSE_DATABASE=default
 KNOWLEDGE_CLICKHOUSE_TABLE=tool_call_logs
 KNOWLEDGE_CLICKHOUSE_USER=knowledge_writer
-KNOWLEDGE_CLICKHOUSE_PASSWORD=              # 仅从环境注入，不写入代码
+KNOWLEDGE_CLICKHOUSE_PASSWORD=              # Injected via env, never committed
 ```
 
-可选调优项见 `.env.example`。若调用方传入 `x-conversation-id`、`x-tdai-user-id`、`x-tdai-team-id`、`x-tdai-agent-id`、`x-tdai-agent-source`、`x-tdai-space-id`、`x-tdai-turn-seq`，这些维度会一并入库；缺失时对应列为空。请求正文递归脱敏并截断到 512 bytes。
+If the caller provides headers like `x-conversation-id`, `x-tdai-user-id`, `x-tdai-team-id`, `x-tdai-agent-id`, `x-tdai-agent-source`, `x-tdai-space-id`, or `x-tdai-turn-seq`, these dimensions are recorded. Request bodies are recursively masked and truncated to 512 bytes.
 
-## 可选：Langfuse
+### Langfuse Tracing
+Configure `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` (and optionally `LANGFUSE_BASE_URL`) to report Wiki LLM invocations. When unset, tracing is safely disabled.
 
-配置 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`（及可选 `LANGFUSE_BASE_URL`）即可上报 Wiki LLM 调用。  
-未配置时关闭 Trace，不影响业务。
+### Auto-Sync
 
-## 可选：Auto-Sync
-
-默认关闭。设置 `KNOWLEDGE_AUTO_SYNC_ENABLED=true` 后，Knowledge Service 会定时扫描 code-graph，以 FIFO 队列 + worker pool 自动拉取 git 更新并重建索引。
-
-```dotenv
-KNOWLEDGE_AUTO_SYNC_ENABLED=true
-KNOWLEDGE_AUTO_SYNC_SCAN_INTERVAL_MIN=10   # 扫描间隔（分钟），范围 1–60
-KNOWLEDGE_AUTO_SYNC_MAX_CONCURRENT=3       # 最大并发 sync worker 数，范围 1–20
-```
-
-启动后延迟 30 秒执行首次扫描；禁用期间调用 `POST /v3/auto-sync/trigger` 为空操作（返回 `triggered: false`）。
+Disabled by default. Set `KNOWLEDGE_AUTO_SYNC_ENABLED=true` to enable scheduled updates. `KNOWLEDGE_AUTO_SYNC_SCAN_INTERVAL_MIN` defaults to 10 (range 1–60); `KNOWLEDGE_AUTO_SYNC_MAX_CONCURRENT` defaults to 3 (range 1–20). The first scan runs after 30 seconds. While disabled, `POST /v3/auto-sync/trigger` returns `triggered: false`.

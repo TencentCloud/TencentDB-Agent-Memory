@@ -6,18 +6,22 @@
  * Swagger UI at /docs.
  */
 
-// Telemetry must initialize before any module that may produce OpenTelemetry spans
-import { initTelemetry } from "./telemetry.js";
-initTelemetry();
-
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import { bodyLimit } from "hono/body-limit";
 import { swaggerUI } from "@hono/swagger-ui";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { initTelemetry, shutdownTelemetry } from "./telemetry.js";
 
-import { loadConfig } from "./config.js";
+import {
+  loadConfig,
+  validateListenerConfig,
+  isLoopbackHost,
+  normalizeAndValidateApiPrefix,
+  type ServiceConfig,
+} from "./config.js";
 import { createDb } from "./db/client.js";
 import { createKnowledgeModule } from "./module.js";
 import { createWikiRoutes } from "./routes/wiki.js";
@@ -41,12 +45,33 @@ import { createAnalyticsRoutes } from "./analytics-routes.js";
 
 const log = createLogger("server");
 
-export function createApp() {
-  const config = loadConfig();
+export interface AppInstance {
+  app: Hono;
+  config: ServiceConfig;
+  knowledgeModule: ReturnType<typeof createKnowledgeModule>;
+  knowledgeTelemetry: ReturnType<typeof createKnowledgeTelemetry>;
+  db: ReturnType<typeof createDb>["db"];
+  rawDb: ReturnType<typeof createDb>["raw"];
+  close: () => void;
+}
+
+export function createApp(explicitConfig?: ServiceConfig | Partial<ServiceConfig>): AppInstance {
+  const baseConfig = loadConfig();
+  const config: ServiceConfig = explicitConfig
+    ? {
+        ...baseConfig,
+        ...explicitConfig,
+        apiPrefix: explicitConfig.apiPrefix !== undefined
+          ? normalizeAndValidateApiPrefix(explicitConfig.apiPrefix)
+          : baseConfig.apiPrefix,
+        auth: { ...baseConfig.auth, ...(explicitConfig.auth ?? {}) },
+        clickhouse: { ...baseConfig.clickhouse, ...(explicitConfig.clickhouse ?? {}) },
+        llm: { ...baseConfig.llm, ...(explicitConfig.llm ?? {}) },
+      }
+    : baseConfig;
   const knowledgeTelemetry = createKnowledgeTelemetry(config.clickhouse);
 
-  // Initialize DB + knowledge module
-  const { db } = createDb({ path: config.dbPath });
+  const { db, raw } = createDb({ path: config.dbPath });
   const knowledgeModule = createKnowledgeModule({
     dataDir: config.dataDir,
     db,
@@ -57,19 +82,25 @@ export function createApp() {
   // Hono app
   const app = new Hono();
 
-  // Middleware
+  // Health (no prefix, public)
+  app.route("/", createHealthRoutes());
+
+  // Service-to-service auth: reject unauthenticated requests BEFORE
+  // body reading, logging, OKF body limit, or telemetry.
+  const authMiddleware = createServiceAuthMiddleware(config.auth, config.apiPrefix);
+  app.use(config.apiPrefix, authMiddleware);
+  app.use(`${config.apiPrefix}/*`, authMiddleware);
+
+  // Middleware (applied only to authenticated or open requests)
+  app.use(`${config.apiPrefix}/wiki/okf/*`, bodyLimit({
+    maxSize: 20 * 1024 * 1024,
+    onError: (c) => c.json({ code: 413, message: "payload too large", data: null }, 413)
+  }));
   app.use("*", accessLog());
   app.onError(errorHandler);
 
-  // Health (no prefix)
-  app.route("/", createHealthRoutes());
-
   // /v3 prefix applied once here — routes define paths without prefix
   const api = new Hono();
-  // 服务间鉴权：serviceKey 非空时，除只读白名单外的 /v3 端点均需
-  // Bearer 鉴权（fail-closed）；key 为空则全放行（向后兼容）。
-  // /health、/docs、/openapi.json 挂在 api 之外，保持开放。
-  api.use("*", createServiceAuthMiddleware(config.auth, config.apiPrefix));
   // Only Agent tool executions are usage telemetry; health/admin/ingest remain excluded.
   api.use("/tools/call", createKnowledgeTelemetryMiddleware(knowledgeTelemetry));
   api.route("/wiki", createWikiRoutes({
@@ -141,31 +172,59 @@ export function createApp() {
     log.warn("OpenAPI spec not found at openapi.yaml, skipping Swagger UI");
   }
 
-  return { app, config, knowledgeModule, knowledgeTelemetry };
+  return {
+    app,
+    config,
+    knowledgeModule,
+    knowledgeTelemetry,
+    db,
+    rawDb: raw,
+    close: () => {
+      try {
+        knowledgeModule.autoSyncScheduler.stop();
+      } catch {}
+      try {
+        raw.close();
+      } catch {}
+    },
+  };
 }
 
-async function startServer(): Promise<void> {
-  const { app, config, knowledgeTelemetry } = createApp();
+export async function startServer(): Promise<void> {
+  const config = loadConfig();
+  // Validate listener posture before starting network/telemetry side effects
+  validateListenerConfig(config);
+
+  // Initialize tracing only after listener security posture validation
+  initTelemetry();
+
+  const { app, knowledgeTelemetry } = createApp(config);
   await knowledgeTelemetry.initialize();
 
-  log.info(`Starting knowledge service on port ${config.port}`);
+  log.info(`Starting knowledge service on http://${config.host}:${config.port}`);
   log.info(`Data dir: ${config.dataDir}`);
   log.info(`DB path: ${config.dbPath}`);
   log.info(`API prefix: ${config.apiPrefix}`);
   log.info(`ClickHouse telemetry: ${config.clickhouse.enabled ? "enabled" : "disabled"}`);
-  // Security posture：空 key 只 warn 不拒启（向后兼容），与 Core gateway 的默认开放语义一致。
   if (config.auth.serviceKey) {
-    log.info("Service auth: enabled (KNOWLEDGE_SERVICE_KEY) — write/admin endpoints require Bearer");
+    log.info("Service auth: enabled (KNOWLEDGE_SERVICE_KEY) — all service API endpoints require Bearer");
+  } else if (isLoopbackHost(config.host)) {
+    log.warn(
+      "Service auth: DISABLED — KNOWLEDGE_SERVICE_KEY is empty. Permitted on loopback (127.0.0.1) for local development.",
+    );
   } else {
     log.warn(
-      "Service auth: DISABLED — KNOWLEDGE_SERVICE_KEY is empty, all /v3 endpoints are open. " +
-        "Set it for any shared or production deployment.",
+      "Service auth: DISABLED on non-loopback host via KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN=true. " +
+        "INSECURE POSTURE — do not use in production!",
     );
   }
 
-  const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
-    log.info(`Knowledge service listening on http://localhost:${info.port}`);
-  });
+  const server = serve(
+    { fetch: app.fetch, port: config.port, hostname: config.host },
+    (info) => {
+      log.info(`Knowledge service listening on http://${config.host}:${info.port}`);
+    },
+  );
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
@@ -173,14 +232,24 @@ async function startServer(): Promise<void> {
     shuttingDown = true;
     log.info(`Received ${signal}, shutting down`);
     await knowledgeTelemetry.shutdown();
+    await shutdownTelemetry();
     server.close(() => process.exit(0));
   };
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
   process.once("SIGINT", () => void shutdown("SIGINT"));
 }
 
+function isDirectRun(metaUrl: string, argv1?: string): boolean {
+  if (!argv1) return false;
+  try {
+    return fileURLToPath(metaUrl) === resolve(argv1);
+  } catch {
+    return false;
+  }
+}
+
 // Start server when run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRun(import.meta.url, process.argv[1])) {
   void startServer().catch((err) => {
     log.error("Knowledge service failed to start", {
       error: err instanceof Error ? err.message : String(err),

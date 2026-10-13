@@ -4,6 +4,7 @@
 #   docker compose --env-file docker/env.docker up -d
 #
 # Or pass vars inline:
+#   KNOWLEDGE_SERVICE_KEY=your-secret-service-key \
 #   PUBLIC_URL=http://203.0.113.10:8421/v3 \
 #   TMC_CALLBACK=http://203.0.113.10:8123 \
 #   LLM_MODE=custom LLM_API_KEY=sk-xxx \
@@ -20,6 +21,9 @@ services:
     volumes:
       - knowledge-data:/app/data
     environment:
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      KNOWLEDGE_HOST: ${KNOWLEDGE_HOST:-0.0.0.0}
+      KNOWLEDGE_SERVICE_KEY: ${KNOWLEDGE_SERVICE_KEY:?set KNOWLEDGE_SERVICE_KEY for container deployment}
       KNOWLEDGE_CLICKHOUSE_ENABLED: ${KNOWLEDGE_CLICKHOUSE_ENABLED:-false}
       KNOWLEDGE_CLICKHOUSE_URL: ${KNOWLEDGE_CLICKHOUSE_URL:-}
       KNOWLEDGE_CLICKHOUSE_DATABASE: ${KNOWLEDGE_CLICKHOUSE_DATABASE:-default}
@@ -32,11 +36,11 @@ services:
       KNOWLEDGE_CLICKHOUSE_REQUEST_TIMEOUT_MS: ${KNOWLEDGE_CLICKHOUSE_REQUEST_TIMEOUT_MS:-5000}
     restart: unless-stopped
     command:
+      - --host=${KNOWLEDGE_HOST:-0.0.0.0}
       - --public-url=${PUBLIC_URL:?set PUBLIC_URL e.g. http://203.0.113.10:8421/v3}
       - --tmc-callback=${TMC_CALLBACK:-}
       # proxy（默认）走 context_proxy 绑定；custom 才需 --llm-key/--llm-base-url。
       - --llm-mode=${LLM_MODE:-proxy}
-      - --llm-key=${LLM_API_KEY:-}
       - --llm-base-url=${LLM_BASE_URL:-}
       - --llm-model=${LLM_MODEL:-gpt-4o-mini}
     healthcheck:

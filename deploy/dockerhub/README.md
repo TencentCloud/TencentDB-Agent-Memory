@@ -72,9 +72,7 @@ APT_MIRROR=<your-debian-mirror> VERSION=1.0.0 ./publish.sh all
 
 ## 关于可选私有模块
 
-- `MemoryProxy/packages/cost-guard` 是可选扩展，不进公开镜像。`publish.sh` 会在
-  临时 context 里生成一个 stub 包让依赖图能解析；运行时 `src/guard-adapter.ts`
-  的动态 import 失败后自动降级为直通转发。
+- Proxy builds from its committed lockfile without private extensions or generated placeholder packages. See the [migration guide](../../docs/extension-removal.md).
 - `MemoryCore/src/integrations` 同理，已在 `MemoryCore/.dockerignore` 中排除，
   运行时走 fallback。
 

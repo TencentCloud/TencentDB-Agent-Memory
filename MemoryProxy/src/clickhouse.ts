@@ -48,10 +48,10 @@ export interface ClickHouseConfig {
   ttlDays: number;
 }
 
-/** One row = one upstream request (primary usage or extension telemetry). turn 由 (session_key, turn_seq) 标识。 */
+
 export interface ClickHouseRow {
   timestamp: string;       // ClickHouse DateTime64 format "YYYY-MM-DD HH:MM:SS.mmm"
-  event: string;           // 'usage' | 'analyzer_usage' (extension telemetry)
+  event: string;
   session_key: string;     // 会话隔离键（turn 归并用）
   turn_seq: number;        // turn 序号
   user_input: string;      // 该 turn 的用户输入（仅首请求有值，去噪后；其余为空）
@@ -77,10 +77,7 @@ export interface ClickHouseRow {
   source_tag: string;          // 来源标记，恒定为 "proxy"
   host: string;
   upstream_request_id: string; // 上游响应 header `x-request-id`（tokenhub/OpenAI 兼容网关生成），用于跨系统追溯
-  /**
-   * 压缩节省的 token 数：max(0, pre_compress_tokens − post_compress_tokens)。
-   * 来自 cost-guard extensionStats；未压缩时为 0。
-   */
+
   compress_tokens_saved: number;
   /**
    * 压缩服务报告的压缩前 token 数（仅统计它真的返回过数字的内容）。
@@ -383,7 +380,7 @@ export async function migrateSchema(
     // 上游响应 header `x-request-id`（tokenhub 等 OpenAI/Anthropic 兼容网关返回）。
     // 本次新增：用于跨系统追溯（客户端 x-request-id → 我方 upstream_request_id → 上游日志）。
     { table: cfg.table, column: "upstream_request_id", type: "String DEFAULT ''" },
-    // cost-guard 压缩节省 token：max(0, preCompressTokens − postCompressTokens)
+
     { table: cfg.table, column: "compress_tokens_saved", type: "UInt64 DEFAULT 0" },
     // 压缩前后的原始计数，用于算压缩率——只有差值算不出分母。
     { table: cfg.table, column: "pre_compress_tokens", type: "UInt64 DEFAULT 0" },
@@ -524,12 +521,6 @@ export interface ClickHouseWriteEntry {
    * → 上游服务日志。
    */
   upstreamRequestId?: string;
-  /**
-   * Opaque scalar counters from the optional request-preparation stage
-   * (cost-guard). `preCompressTokens` / `postCompressTokens` feed the three
-   * compression columns; the rest is carried to the JSONL log untouched.
-   */
-  extensionStats?: Record<string, unknown>;
   /** Original request receipt time used for time-based credit pricing. */
   requestReceivedAt?: string;
   /** Pricing config for credit calculation (from config.yaml). */
@@ -569,59 +560,6 @@ function computeCreditSaved(
 
   const saved = creditIfOriginal - actualCredit;
   return saved > 0 ? saved : 0;
-}
-
-/**
- * Read the compression token pair out of extensionStats.
- *
- * Both columns are written together or not at all: a post without a pre has no
- * denominator and would read as a 100% saving. Anything missing or non-finite
- * means the stage produced no measurement, which is recorded as three zeros
- * rather than a guess.
- */
-function computeCompressTokens(
-  extensionStats: Record<string, unknown> | undefined,
-): { pre: number; post: number; saved: number } {
-  const none = { pre: 0, post: 0, saved: 0 };
-  if (!extensionStats) return none;
-  const pre = extensionStats.preCompressTokens;
-  const post = extensionStats.postCompressTokens;
-  if (typeof pre !== "number" || typeof post !== "number") return none;
-  if (!Number.isFinite(pre) || !Number.isFinite(post)) return none;
-  if (pre < 0 || post < 0) return none;
-  const saved = pre - post;
-  return {
-    pre: Math.floor(pre),
-    post: Math.floor(post),
-    saved: saved > 0 ? Math.floor(saved) : 0,
-  };
-}
-
-/** Read actual compression-service call count and aggregate latency. */
-function computeCompressRemoteStats(
-  extensionStats: Record<string, unknown> | undefined,
-): { count: number; totalMs: number } {
-  const none = { count: 0, totalMs: 0 };
-  if (!extensionStats) return none;
-
-  const rawCount = extensionStats.remoteCount;
-  if (typeof rawCount !== "number" || !Number.isFinite(rawCount) || rawCount <= 0) {
-    return none;
-  }
-  const count = Math.floor(rawCount);
-  if (count <= 0) return none;
-
-  const rawTotalMs = extensionStats.remoteTotalMs;
-  if (typeof rawTotalMs === "number" && Number.isFinite(rawTotalMs) && rawTotalMs >= 0) {
-    return { count, totalMs: Math.floor(rawTotalMs) };
-  }
-
-  // Backward compatibility with an older extension that only reported avg.
-  const rawAvgMs = extensionStats.remoteAvgMs;
-  if (typeof rawAvgMs === "number" && Number.isFinite(rawAvgMs) && rawAvgMs >= 0) {
-    return { count, totalMs: Math.floor(count * rawAvgMs) };
-  }
-  return { count, totalMs: 0 };
 }
 
 /**
@@ -667,8 +605,8 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
   //     （promptTokens 已是含缓存的总输入）
   const totalTokens = num(usage.total_tokens) || (promptTokens + completionTokens);
 
-  const compressTokens = computeCompressTokens(entry.extensionStats);
-  const compressRemote = computeCompressRemoteStats(entry.extensionStats);
+  const compressTokens = { pre: 0, post: 0, saved: 0 };
+  const compressRemote = { count: 0, totalMs: 0 };
   const requestTime = entry.requestReceivedAt ? new Date(entry.requestReceivedAt) : undefined;
 
   return {

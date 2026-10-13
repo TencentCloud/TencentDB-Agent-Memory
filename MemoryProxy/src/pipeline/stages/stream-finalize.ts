@@ -1,22 +1,4 @@
-/**
- * stages/stream-finalize.ts —— stream tap 尾段的可复用小 helper 集合。
- *
- * 4 个 helper (对应 openai-chat + anthropic + codex + workbuddy 4 处 finalize):
- *   1. stageWriteUsageLog      — writeLog(event:"usage") + gate + try/catch
- *   2. stageRecordTokenUsage   — recordInputTokenUsage + custom+rateLimit gate
- *   3. stageEmitModelIntent    — emitModelIntentTelemetry + gate + fanout
- *   4. stageOpikStreamSpan     — opikUpdateTrace(main) + opikUpdateTrace(fork) + opikCreateLlmSpan
- *
- * 不做"一次巨型 stageStreamFinalize", 因为 4 runner 的 finalize:
- *   - Langfuse input formatter 各 protocol 不同 (buildLangfuseInputChat / buildLangfuseInput / codex+wb 各自)
- *   - assistantMessage 组装形态各不同 (openai role+content+tool_calls / anthropic content[] / responses type+content)
- *   - notifyUpstreamResponse toolCalls mapper 各不同 (openai/anthropic/wb 特色)
- * 这些留在 caller inline, 只抽"给相同参数产生相同副作用"的 4 段。
- *
- * 每个 helper 内部实现严格 preserving 老 handler 行为 + gate 语义:
- *   - opikGate / writeLogUsageGate / modelIntentTelemetryGate / rateLimitGate
- *   - 全部走 ctx.gates?.<name> !== false, 默认 undefined = 保留老行为 (跑)
- */
+
 
 import type { ProxyConfig } from "../../types.js";
 import { writeLog, type Pipeline } from "../../logger.js";
@@ -40,7 +22,6 @@ export interface WriteUsageLogInput {
   upstreamUrl: string;
   usage: Record<string, unknown> | null | undefined;
   requestReceivedAt: string;
-  extensionStats?: Record<string, unknown> | undefined;
   logMeta?: Record<string, unknown>;
   routedFrom?: string;
   spaceId?: string;
@@ -65,7 +46,7 @@ export function stageWriteUsageLog(input: WriteUsageLogInput): void {
       // 一直这么兜底, UsageLogEntry.usage 下游只 spread, 空对象不会出错)。
       usage: input.usage ?? {},
       requestReceivedAt: input.requestReceivedAt,
-      extensionStats: input.extensionStats,
+
       ...(input.logMeta ?? {}),
       routedFrom: input.routedFrom,
       spaceId: input.spaceId,

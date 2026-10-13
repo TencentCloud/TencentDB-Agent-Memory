@@ -21,23 +21,36 @@ class ScopedStorageBackend implements IStorageBackend {
 
   constructor(private readonly base: IStorageBackend, prefix: string) {
     this.type = base.type;
-    const normalized = prefix.replace(/^\/+/, "").replace(/\/+/g, "/");
+    if (prefix.includes("\0") || prefix.startsWith("/") || prefix.includes("\\")) {
+      throw new Error("Invalid storage scope");
+    }
+    const normalized = prefix.replace(/\/+/g, "/");
+    if (normalized.split("/").some((part) => part === "." || part === "..")) {
+      throw new Error("Invalid storage scope");
+    }
     this.prefix = normalized && !normalized.endsWith("/") ? `${normalized}/` : normalized;
   }
 
   private key(key: string): string {
     if (typeof key !== "string" || key.includes("\0") || key.startsWith("/") || key.startsWith("\\")) {
-      throw new Error(`Invalid scoped storage key: ${JSON.stringify(key)}`);
+      throw new Error("Invalid scoped storage key");
     }
     const normalized = key.replace(/^\/+/, "").replace(/\\+/g, "/").replace(/\/+/g, "/");
-    if (normalized.split("/").some((part) => part === "..")) {
-      throw new Error(`Path traversal rejected in scoped storage key: ${key}`);
+    if (normalized.split("/").some((part) => part === "." || part === "..")) {
+      throw new Error("Path traversal rejected in scoped storage key");
     }
     return `${this.prefix}${normalized}`;
   }
 
   private unkey(key: string): string {
-    return key.startsWith(this.prefix) ? key.slice(this.prefix.length) : key;
+    if (typeof key !== "string" || !key.startsWith(this.prefix)) {
+      throw new Error("Scoped storage backend returned an out-of-scope key");
+    }
+    const relative = key.slice(this.prefix.length);
+    try {
+      if (this.key(relative) === key) return relative;
+    } catch { /* Reject noncanonical response keys without copying their values. */ }
+    throw new Error("Scoped storage backend returned an out-of-scope key");
   }
 
   async putObject(key: string, content: string | Buffer, opts?: PutObjectOptions): Promise<void> {
@@ -79,7 +92,8 @@ class ScopedStorageBackend implements IStorageBackend {
 }
 
 export function createScopedStorageAdapter(base: StorageAdapter, prefix: string): StorageAdapter {
-  if (!prefix) return base;
+  if (typeof prefix !== "string") throw new Error("Invalid storage scope");
+  if (prefix === "") return base;
   return new StorageAdapter(new ScopedStorageBackend(base.getBackend(), prefix));
 }
 

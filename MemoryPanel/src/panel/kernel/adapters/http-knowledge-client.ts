@@ -83,6 +83,7 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
         headers,
         body: method === 'GET' ? undefined : JSON.stringify(opts?.body ?? {}),
         signal: ctrl.signal,
+      redirect: 'error',
       });
       const json = (await resp.json()) as CoreEnvelope<T>;
       if (json.code !== undefined && json.code !== 0) {

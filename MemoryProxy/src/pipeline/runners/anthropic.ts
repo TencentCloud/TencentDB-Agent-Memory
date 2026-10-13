@@ -1,11 +1,4 @@
-/**
- * Anthropic Messages API handler.
- * Supports /v1/messages endpoint with streaming (SSE) and non-streaming modes.
- * Integrates with routing module, Opik observability, and JSONL logging.
- *
- * This handler uses ForwardTarget opaquely — no routing semantics
- * leak into the handler. All routing logic is encapsulated in the private module.
- */
+
 
 import type { Context } from "hono";
 import { createHash } from "node:crypto";
@@ -24,21 +17,11 @@ import {
 } from "../../langfuse.js";
 import { countHumanTurns, resolveMonotonicTurnSeq } from "../../turnSeq.js";
 import type { ProxyConfig } from "../../types.js";
-import {
-  resolveForwardTarget,
-  resolveSessionKey,
-  resolveLatestUserQuery,
-  reportAnalyzerTrace,
-  type ForwardTarget,
-} from "../../guard-adapter.js";
-import { hasCostGuardMarker, isLegacyProxyPath, matchWhitelistEndpoint, resolveCostGuardMode } from "../../routes/whitelist.js";
+import { type ForwardTarget } from '../../upstream-target.js';
+import { isLegacyProxyPath, matchWhitelistEndpoint } from '../../routes/whitelist.js';
 import { writeRequestLog } from "../../requestLog.js";
-import { prepareUpstreamRequest, notifyUpstreamResponse } from "../../request-prepare-adapter.js";
-import {
-  createCfqStripStream,
-  createCfqStripObserver,
-  stripCfqFromResponseText,
-} from "../../common/cfq-strip.js";
+
+
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "../../credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
@@ -66,7 +49,7 @@ import { stageSessionBypass } from "../stages/session-bypass.js";
 import { stageSessionInitOrchestrate } from "../stages/session-init-orchestrate.js";
 import { stageCredit } from "../stages/credit.js";
 import { stageSystemUser } from "../stages/system-user.js";
-import { stageBuildLangfuseTurnContext, stageReportAnalyzerTrace } from "../stages/observability.js";
+import { stageBuildLangfuseTurnContext,  } from "../stages/observability.js";
 import { stageSessionResetPreHook } from "../stages/session-reset-pre-hook.js";
 import { stageResponseTailFix } from "../stages/response-tail-fix.js";
 import { stageSessionResetConfirmation } from "../stages/session-reset-confirmation.js";
@@ -87,7 +70,7 @@ import type { TdaiIdentity, TdaiMessage } from "../../tdai/types.js";
 import { triggerSkillExtractIfReady } from "../../skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "../../session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "../../extraction-gate.js";
-import type { CcRequestKind } from "../../common/cc-request-classifier.js";
+import { mapRequestKindToCc, type CcRequestKind } from "../../common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "../../common/langfuse-debug.js";
 import { resolveAgentAdapter } from "../../agent-adapters/index.js";
 import { resolveAgentStrategy } from "../strategies/agent/index.js";
@@ -324,9 +307,7 @@ export function sanitizeThinkingBlocks(
   return { body: { ...body, messages: newMessages }, removed };
 }
 
-/**
- * Build upstream body from original body + cost guard overrides.
- */
+
 function buildUpstreamBody(
   body: Record<string, unknown>,
   target: ForwardTarget,
@@ -339,9 +320,7 @@ function buildUpstreamBody(
   return { body: sanitized.body, sanitizedCount: sanitized.removed };
 }
 
-/**
- * Build upstream headers from request headers + cost guard auth overrides.
- */
+
 function buildUpstreamHeaders(
   c: Context,
   _config: ProxyConfig,
@@ -361,7 +340,7 @@ function buildUpstreamHeaders(
   // per-agent fallback rule (see the resolveEffectiveApiKey call site).
   //   - non-empty string → inject as server-side key, drop client's own
   //   - empty/undefined  → passthrough: keep whatever the client sent
-  // The cost-guard extension can still fully override via target.authHeaders.
+
   if (effectiveApiKey && !target.authHeaders) {
     headers["x-api-key"] = effectiveApiKey;
     delete headers["authorization"];
@@ -496,7 +475,7 @@ export async function runAnthropicPipeline(
   // 只会返 main/fork/sidequery (anthropic 协议没有 /count_tokens 这类 aux 端点
   // 走到这里 —— aux 端点在 server.ts 分到 handleAuxiliaryEndpoint, 不进本 runner)。
   // 强转窄化 OK, 下游全部按 CcRequestKind 消费。
-  const requestKind: CcRequestKind = (ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main") as CcRequestKind;
+  const requestKind: CcRequestKind = mapRequestKindToCc(ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main");
   // 遗留 `/proxy/<spaceId>` 前缀不带 agent 段，客户端身份无从判断；按错误的 agent
   // 画像弹表单、拦 mem 命令、注入资产比不做更糟，因此记忆类功能一律关闭。
   // 压缩、路由与计费不在这条门控下，照常生效。
@@ -611,7 +590,7 @@ export async function runAnthropicPipeline(
 // ── Session key: prefer conversation header, fallback to agent profile ───────────
   const { resolveConversationId } = await import("../../session/session-key.js");
   const conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  const sessionKey = conversationId ?? keyId;
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -886,7 +865,7 @@ export async function runAnthropicPipeline(
       });
   const tdaiUserMessage = extractLatestUserMessage(messages);
 
-  // ── Context injection (via shared stage, before cost guard) ────────────
+
   // CC 分流:
   //   - SIDEQUERY: 完全跳过 (skip=true)
   //   - FORK:      readOnly=true (miss 时不 self-heal)
@@ -911,10 +890,10 @@ export async function runAnthropicPipeline(
     hasTools = Array.isArray(body.tools) && body.tools.length > 0;
   }
 
-  // ── Cost guard: resolve forward target (opaque — no routing logic here) ──
+
   // upstream.agents[agent] is a single map keyed by agent name (URL path
   // prefix); both url and apiKey may be overridden per agent. When there's
-  // no entry, we fall through to the Anthropic-specific global (costGuard
+
   // .anthropicUpstream) and finally to upstream.url — exactly as before.
   // ── Resolve forward target (via shared stage, anthropic protocol) ────
   const resolvedTarget = await stageResolveTargetFull({
@@ -926,7 +905,7 @@ export async function runAnthropicPipeline(
   const target = resolvedTarget.target;
   let effectiveApiKey = resolvedTarget.effectiveApiKey;
   const forwardEndpoint = resolvedTarget.forwardEndpoint;
-  const costGuardMode = resolvedTarget.costGuardMode;
+
 
   // ── Instance upstream config override (via shared stage) ──────────────
   // b11bf612 GLM anthropic base_url /v1 auto-insert 修复走 joinUrl,已在
@@ -949,12 +928,11 @@ export async function runAnthropicPipeline(
   // ── Create pipeline logger ──────────────────────────────────────────────
   const pipe = createPipeline(config, traceId, target.model);
   pipe.requestReceived(messages.length, isStream);
-  if (target.logLine) pipe.info("COST_GUARD", target.logLine);
-  if (target.logLineExtra) pipe.info("COST_GUARD_DETAIL", target.logLineExtra);
+  if (target.logLine) pipe.info("UPSTREAM", target.logLine);
+  if (target.logLineExtra) pipe.info("UPSTREAM_DETAIL", target.logLineExtra);
   if (ccRoutingEnabled) {
     console.log(`[cc-routing] session=${sessionKey} kind=${requestKind} msgs=${messages.length}`);
   }
-
 
 
   // ── Trace-level tags ──
@@ -970,9 +948,9 @@ export async function runAnthropicPipeline(
 
   // ── Langfuse turn context: one trace = one turn (deterministic traceId) ──
   // Same (sessionKey, turnSeq) across a turn's tool-loop requests → same trace.
-  // Prefer the extension's monotonic per-session turnSeq (survives context
+
   // compaction); fall back to the stateless count when it's not tracked
-  // (extension disabled/unavailable, or no-tools auxiliary request).
+
   // Both sources drop back to 1 when their state is lost (truncated history /
   // expired counter), colliding with the usage rows this session already wrote
   // — Redis, when enabled, turns them into a per-session sequence that only
@@ -984,7 +962,7 @@ export async function runAnthropicPipeline(
     config, sessionKey, keyId, target, messages, protocol: "anthropic",
     traceTags, path: c.req.path, headers: lcHeaders, body, lane: requestKind,
   });
-  stageReportAnalyzerTrace({ config, target, traceId, lf, keyId, sessionKey, turnSeq, startTime, spaceId });
+
 
   // ── Langfuse debug metadata (only when config.langfuse.debug=true) ────────
   // 抓 CB / CC 客户端指纹用；关闭时恒返回 {}，不污染线上 metadata。
@@ -1031,32 +1009,10 @@ export async function runAnthropicPipeline(
   // effectiveApiKey already resolved above (before instance config override).
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
 
-  // Optional private preparation stage. It rewrites `body` / `messages` in
+
   // place, so it has to land after every host-side mutation (injection, agent
   // overrides) and before the upstream body is assembled below. The host does
-  // not interpret the returned stats — see request-prepare-adapter.ts.
-  const preparedStats = await prepareUpstreamRequest({
-    config,
-    protocol: "anthropic",
-    body,
-    messages,
-    sessionKey,
-    pipe,
-    upstreamCall: {
-      upstreamUrl: target.url,
-      headers: upstreamHeaders,
-      model: target.model,
-      tools: body.tools,
-      system: body.system,
-      bodyOverrides: target.bodyOverrides ?? undefined,
-    },
-    userQuery: lf.userQuery,
-    spaceId,
-    lf,
-    opikTraceId: traceId,
-    opikKeyId: keyId,
-    skipPrepare: costGuardMode === "cheap",
-  });
+
 
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
   if (sanitizedCount > 0) {
@@ -1093,7 +1049,7 @@ export async function runAnthropicPipeline(
   // 会用 0 作为 AbortSignal.timeout,行为 = 立即 abort;所以关闭仅在 caller 明确要"永不超时"时用。
   // 目前 anthropic runner 只服务 CC (full preset gates.forwardTimeout=true),不会踩到 0-timeout。
   const forwardTimeoutMs = _gates.forwardTimeout ? (config.server.forwardTimeoutMs ?? 600_000) : 0;
-  // 传 target.url:override 生效时(instance-upstream custom 组)与 cost-guard 便宜模型路由
+
   // 都会改 target.url,不传参会 fallback 到 config.upstream.url 打错日志(实际 fetch 用 target.url,
   // 但 log 上会误导排障)。handler.ts 已对这么做,anthropicHandler 之前漏了。
   pipe.forwardStart(target.url);
@@ -1227,20 +1183,15 @@ export async function runAnthropicPipeline(
       requestKind,
       langfuseDebug,
       debugMetadata,
-      preparedStats,
+
       skipCreditReport,
       isCustomUpstream: _isCustomUpstream,
       gates: _gates,
     });
 
-    // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
+
     const clientStream = rawClientStream
-      .pipeThrough(createSseThinkingFixStream(pipe))
-      .pipeThrough(createCfqStripStream(
-        "anthropic",
-        preparedStats,
-        createCfqStripObserver(pipe),
-      ));
+      .pipeThrough(createSseThinkingFixStream(pipe));
 
     return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
   }
@@ -1285,29 +1236,9 @@ export async function runAnthropicPipeline(
       // Preserve full content array (incl. tool_use blocks) for skill trigger.
       assistantMessage = { role: "assistant", content };
 
-      // Report the completed response to the extension (same signal the
+
       // streaming path emits). Fire-and-forget.
-      void notifyUpstreamResponse(
-        config,
-        {
-          protocol: "anthropic",
-          sessionKey,
-          model: effectiveModel,
-          stream: false,
-          turnSeq: lf.turnSeq,
-          text: outputContent,
-          toolCalls: (content as Record<string, unknown>[])
-            .filter((b) => b?.type === "tool_use")
-            .map((b) => ({
-              id: (b.id as string) ?? "",
-              name: (b.name as string) ?? "",
-              arguments: typeof b.input === "string" ? b.input : JSON.stringify(b.input ?? ""),
-            }))
-            .filter((tc) => tc.id && tc.arguments),
-          usage: usage ?? {},
-        },
-        pipe,
-      );
+
 
       // 内部使用埋点：非流式响应 tool_use 块逐个记 model_intent。
       try {
@@ -1366,7 +1297,7 @@ export async function runAnthropicPipeline(
         stream: false,
         usage,
         requestReceivedAt: startTime,
-        extensionStats: preparedStats ?? undefined,
+
         ...logMeta,
         routedFrom,
         spaceId,
@@ -1502,12 +1433,7 @@ export async function runAnthropicPipeline(
   }
 
   // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-  const clientRespText = stripCfqFromResponseText(
-    "anthropic",
-    respText,
-    preparedStats,
-    createCfqStripObserver(pipe),
-  );
+  const clientRespText = respText;
   return new Response(clientRespText, {
     status: upstreamResp.status,
     headers: respHeaders,
@@ -1658,7 +1584,7 @@ interface AnthropicTapContext {
   /** buildRequestDebugMetadata 求值结果；debug=false 时为 {}。 */
   debugMetadata: Record<string, unknown>;
   /** Opaque counters from the request-preparation stage; null when it didn't run. */
-  preparedStats: Record<string, unknown> | null;
+
   /** Instance upstream config: skip credit reporting for custom model. */
   skipCreditReport?: boolean;
   /** true when the request is routed to a custom upstream (user's own base_url + api_key). */
@@ -1673,301 +1599,5 @@ interface AnthropicTapContext {
 function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: AnthropicTapContext): void {
   const { config, modelId, keyId, sessionKey, upstreamUrl, traceId, forkTraceId, startTime, inputMessages, system, retried, logMeta, pipe, lf, spaceId, upstreamRequestId } = ctx;
 
-  (async () => {
-    const decoder = new TextDecoder();
-    let sseBuf = "";
-    let usage: Record<string, unknown> = {};
-    let outputText = "";
-    let toolUseCount = 0;
-    let streamCompleted = false;
-    // 内部使用埋点用：按 index 累积每个 tool_use 块。
-    // Anthropic SSE 协议：
-    //   1. content_block_start(type=tool_use)  → 拿到 index + name（此时 input 是空 {}）
-    //   2. content_block_delta(type=input_json_delta) → 累积 partial_json 字符串
-    //   3. content_block_stop → 该块结束
-    // 之前的实现只读了 (1) 里的 input（永远空）—— 现在按 index 累加 (2) 里的 partial_json。
-    const toolUseAcc = new Map<number, { id: string; name: string; inputJson: string }>();
 
-    const timeoutHandle = setTimeout(() => {
-      if (!streamCompleted) {
-        pipe.error("STREAM_TIMEOUT", "Anthropic stream reading exceeded 5 minutes");
-        // completeStream 是 async；这里 fire-and-forget（timeout 里已经无法 await）
-        void completeStream().catch((err) => pipe.error("STREAM_TIMEOUT_COMPLETE", err));
-      }
-    }, 5 * 60 * 1000);
-
-    async function completeStream(): Promise<void> {
-      if (streamCompleted) return;
-      streamCompleted = true;
-      clearTimeout(timeoutHandle);
-
-      const endTime = new Date().toISOString();
-
-      if (Object.keys(usage).length > 0) {
-        await stageRecordTokenUsage({
-          config, gates: ctx.gates,
-          isCustomUpstream: !!ctx.isCustomUpstream,
-          spaceId, modelId, usage, protocol: "anthropic",
-        });
-        stageWriteUsageLog({
-          config, gates: ctx.gates, pipe,
-          timestamp: endTime, modelId, keyId, sessionKey,
-          turnSeq: lf.turnSeq, userInput: lf.userQuery || undefined,
-          upstreamUrl, usage, requestReceivedAt: startTime,
-          extensionStats: ctx.preparedStats ?? undefined,
-          logMeta, routedFrom: ctx.routedFrom, spaceId, upstreamRequestId,
-        });
-        stageOpikStreamSpan({
-          config, gates: ctx.gates, pipe,
-          traceId, forkTraceId, keyId, modelId, startTime, endTime,
-          inputMessages: flattenAnthropicMessagesForOpik(inputMessages, system),
-          outputMessage: outputText ? { role: "assistant", content: outputText } : null,
-          usage, retried, upstreamUrl,
-          // anthropic 老行为: 只 create span, 不 updateTrace, 无 "stream" tag
-        });
-
-        // Langfuse: report this LLM call as a generation under the turn trace
-        // 流式无完整原生 assistant content 数组可用（tool_use 块在 SSE 里是分片
-        // 增量事件），debug 时把 tool_use_count 与 stop_reason 塞进 metadata 兜底。
-        try {
-          const streamDebugExtra = ctx.langfuseDebug
-            ? {
-                stream_tool_use_count: toolUseCount,
-                stream_output_text_len: outputText.length,
-              }
-            : {};
-          langfuseReportGeneration({
-            traceId: lf.traceId,
-            name: modelId,
-            model: modelId,
-            startTime,
-            endTime,
-            input: buildLangfuseInput(inputMessages, system, ctx.langfuseDebug),
-            output: outputText ? { role: "assistant", content: outputText } : undefined,
-            usage,
-            traceName: lf.traceName,
-            userId: lf.userId,
-            sessionId: lf.sessionId,
-            tags: lf.tags,
-            traceInput: lf.userQuery || undefined,
-            traceOutput: outputText ? { role: "assistant", content: outputText } : undefined,
-            traceMetadata: {
-              stream: true, retried, upstreamUrl, ...logMeta,
-              ...ctx.debugMetadata, ...streamDebugExtra,
-            },
-            observationMetadata: {
-              retried, ...logMeta,
-              ...ctx.debugMetadata, ...streamDebugExtra,
-            },
-          });
-        } catch (langfuseErr: unknown) {
-          pipe.error("LANGFUSE_SPAN", langfuseErr);
-        }
-      }
-
-      // CC 分流：FORK/SIDEQUERY 不是真实对话轮，跳过 L0/skill。Credit 仍上报。
-      const isMainDialog = ctx.requestKind === "main";
-
-      // Tdai L0 write
-      if (isMainDialog && ctx.tdaiClient && isExtractionAllowed(ctx.config, "tdai-memory")) {
-        // Streaming 不 await（会拖慢 SSE 关流），trackWrite + withL0Retry 应对两条丢包线：
-        //   - trackWrite 注册 in-flight promise 到全局 set；SIGTERM 时 index.ts 会
-        //     flushPendingWrites 兜底，避免 pod rolling 时 event loop 未 flush 就退出丢 L0。
-        //   - withL0Retry 3 次退避重试（~3.5s），挡 tdai kernel 瞬断 / 5xx / 网络抖动。
-        trackWrite(
-          withL0Retry(() => recordTdaiTurn(
-            ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
-            outputText || null,
-          )).catch((err: unknown) => pipe.error("TDAI_L0", err))
-        );
-      } else if (isMainDialog && ctx.tdaiClient) {
-        logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKeyForSkill);
-      } else if (!isMainDialog) {
-        console.log(`[cc-routing] skip L0 write (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`);
-      }
-
-      pipe.streamDone(Object.keys(usage).length > 0 ? usage : null);
-
-      // Report the completed response to the extension. Fire-and-forget; the
-      // client has already been served by this point.
-      void notifyUpstreamResponse(
-        ctx.config,
-        {
-          protocol: "anthropic",
-          sessionKey: ctx.sessionKey ?? "",
-          model: modelId,
-          stream: true,
-          turnSeq: lf.turnSeq,
-          text: outputText,
-          toolCalls: Array.from(toolUseAcc.values())
-            .filter((v) => v.id && v.inputJson)
-            .map((v) => ({ id: v.id, name: v.name, arguments: v.inputJson })),
-          usage,
-        },
-        pipe,
-      );
-
-      // 内部使用埋点：SSE 流累积的 tool_use 各出一条 model_intent。
-      // 详见 docs/design/2026-08-03-internal-usage-telemetry-plan.md §7.2 F。
-      // session_key 必须与 session_init_logs 用同一份 compositeKey (agentSource:sessionKey)，
-      // 否则 §4.1 CTE 里的 `session_key IN (init_sessions)` 会对不上。
-      // 按 index 排序输出（还原模型生成顺序）；inputJson 是流式累积的 partial_json
-      stageEmitModelIntent({
-        gates: ctx.gates,
-        sessionKey: `${ctx.agentSource}:${ctx.sessionKey}`,
-        turnSeq: ctx.lf.turnSeq,
-        spaceId: ctx.spaceId,
-        userId: ctx.keyId,
-        agentSource: ctx.agentSource,
-        intents: Array.from(toolUseAcc.entries())
-          .sort(([a], [b]) => a - b)
-          .filter(([, v]) => v.name)
-          .map(([, v]) => ({ name: v.name, arguments: v.inputJson || "{}" })),
-      });
-
-      // Skill extract trigger — after stream finalization.
-      // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-      if (isMainDialog && isExtractionAllowed(ctx.config, "skill")) {
-        await triggerSkillExtractIfReady({
-          config: ctx.config,
-          sessionKey: ctx.sessionKeyForSkill,
-          agentSource: ctx.agentSource,
-          sessionInfo: ctx.sessionInfo,
-          inputMessages: ctx.inputMessages,
-          assistantMessage: outputText
-            ? { role: "assistant", content: outputText }
-            : null,
-          protocol: "anthropic",
-          assetCapabilities: ctx.assetCapabilities,
-          toolCallCountOverride: toolUseCount,
-        });
-      } else if (isMainDialog) {
-        logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
-      } else {
-        console.log(`[cc-routing] skip skill buffer (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`);
-      }
-
-      // Credit usage reporting (streaming) via shared stageCredit.
-      if (ctx.gates?.creditReport !== false) {
-        stageCredit({
-          skipCreditReport: ctx.skipCreditReport,
-          config: ctx.config,
-          path: ctx.requestPath,
-          usage,
-          effectiveModel: ctx.modelId,
-          upstreamUrl: ctx.upstreamUrl,
-          event: "usage",
-          startTime: new Date(ctx.startTime),
-          reqIds: pipe.ids(),
-          upstreamRequestId: ctx.upstreamRequestId,
-          sessionKey: ctx.sessionKey ?? "",
-          stream: true,
-          keyId: ctx.keyId,
-          routedFrom: ctx.routedFrom,
-        }, pipe).catch((err: unknown) => pipe.error("CREDIT_REPORT", err));
-      }
-    }
-
-    try {
-      const reader = stream.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        sseBuf += decoder.decode(value, { stream: true });
-
-        const parts = sseBuf.split("\n\n");
-        sseBuf = parts.pop() ?? "";
-
-        for (const part of parts) {
-          const lines = part.split("\n");
-          let dataStr = "";
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              dataStr = line.slice(6);
-            } else if (line.startsWith("data:")) {
-              dataStr = line.slice(5);
-            }
-          }
-
-          if (!dataStr || dataStr === "[DONE]") continue;
-
-          try {
-            const evt = JSON.parse(dataStr) as Record<string, unknown>;
-            const evtType = evt.type as string;
-
-            if (evtType === "message_start") {
-              const message = evt.message as Record<string, unknown> | undefined;
-              if (message?.usage) {
-                Object.assign(usage, message.usage as Record<string, unknown>);
-              }
-            } else if (evtType === "message_delta") {
-              if (evt.usage) {
-                Object.assign(usage, evt.usage as Record<string, unknown>);
-              }
-            } else if (evtType === "content_block_delta") {
-              const delta = evt.delta as Record<string, unknown> | undefined;
-              if (delta?.type === "text_delta" && typeof delta.text === "string") {
-                outputText += delta.text;
-              } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
-                // 累积到对应 tool_use 块（按 index）
-                try {
-                  const idx = evt.index as number | undefined;
-                  if (typeof idx === "number") {
-                    const acc = toolUseAcc.get(idx);
-                    if (acc) acc.inputJson += delta.partial_json;
-                  }
-                } catch {
-                  // ignore — 埋点级别的问题不阻塞主链路
-                }
-              }
-            } else if (evtType === "content_block_start") {
-              const block = evt.content_block as Record<string, unknown> | undefined;
-              if (block?.type === "tool_use") {
-                toolUseCount++;
-                try {
-                  const name = (block.name as string) ?? "";
-                  const idx = evt.index as number | undefined;
-                  if (name && typeof idx === "number") {
-                    toolUseAcc.set(idx, { id: (block.id as string) ?? "", name, inputJson: "" });
-                  }
-                } catch {
-                  // ignore — 累积失败不影响主链路
-                }
-              }
-            }
-          } catch {
-            // ignore malformed SSE data
-          }
-        }
-      }
-
-      // Drain remaining buffer
-      if (sseBuf.trim()) {
-        const lines = sseBuf.split("\n");
-        let dataStr = "";
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            dataStr = line.slice(6);
-          }
-        }
-        if (dataStr && dataStr !== "[DONE]") {
-          try {
-            const evt = JSON.parse(dataStr) as Record<string, unknown>;
-            if (evt.type === "message_delta" && evt.usage) {
-              Object.assign(usage, evt.usage as Record<string, unknown>);
-            }
-          } catch {
-            // ignore
-          }
-        }
-      }
-    } catch (err: unknown) {
-      pipe.error("STREAM", err);
-    }
-
-    await completeStream();
-  })().catch((err: unknown) => {
-    pipe.error("STREAM_CONSUME", err);
-  });
 }

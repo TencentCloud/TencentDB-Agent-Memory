@@ -5,9 +5,9 @@
  * Maps object keys to local file paths under a configurable root directory.
  */
 
-import { readFile, writeFile, mkdir, readdir, unlink, stat, rm, appendFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, unlink, stat, lstat, rm, appendFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, dirname, sep, resolve } from "node:path";
+import { join, dirname, sep, resolve, relative } from "node:path";
 import type {
   IStorageBackend,
   StorageObject,
@@ -59,15 +59,15 @@ export class LocalStorageBackend implements IStorageBackend {
    * - Keys with leading "/" or "\" (absolute paths).
    * - Keys whose resolved path falls outside rootDir (../ traversal).
    */
-  private resolvePath(key: string): string {
+  private async resolvePath(key: string): Promise<string> {
     if (!key || typeof key !== "string") {
-      throw new Error(`Invalid storage key: ${JSON.stringify(key)}`);
+      throw new Error("Invalid storage key");
     }
     if (key.includes("\0")) {
       throw new Error("Storage key must not contain NUL character");
     }
     if (key.startsWith("/") || key.startsWith("\\")) {
-      throw new Error(`Storage key must be relative, got absolute: ${key}`);
+      throw new Error("Storage key must be relative");
     }
 
     // Normalize key separators to OS path separators
@@ -82,15 +82,40 @@ export class LocalStorageBackend implements IStorageBackend {
     // whose name happens to start with rootDir's name) is also rejected.
     const rootWithSep = absRoot.endsWith(sep) ? absRoot : absRoot + sep;
     if (absResolved !== absRoot && !absResolved.startsWith(rootWithSep)) {
-      throw new Error(`Path traversal rejected: key "${key}" escapes rootDir`);
+      throw new Error("Path traversal rejected");
     }
 
+    if (absResolved === absRoot) {
+      throw new Error("Storage key must name an object below rootDir");
+    }
+    await this.assertSafePath(absResolved);
     return absResolved;
   }
 
+  /** Check existing components below the trusted configured root. */
+  private async assertSafePath(target: string): Promise<void> {
+    const root = resolve(this.rootDir);
+    const rel = relative(root, target);
+    if (rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("Path traversal rejected");
+    let current = root;
+    for (const part of rel.split(sep).filter(Boolean)) {
+      current = join(current, part);
+      try {
+        if ((await lstat(current)).isSymbolicLink()) throw new Error("Storage path contains symbolic link");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw err;
+      }
+    }
+  }
+
   async putObject(key: string, content: string | Buffer, opts?: PutObjectOptions): Promise<void> {
-    const filePath = this.resolvePath(key);
+    const filePath = await this.resolvePath(key);
+    if (opts?.contentType || (opts?.metadata && Object.keys(opts.metadata).length > 0)) {
+      await this.assertSafePath(filePath + ".meta.json");
+    }
     await mkdir(dirname(filePath), { recursive: true });
+    await this.assertSafePath(filePath);
 
     const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
     await writeFile(filePath, buf);
@@ -98,6 +123,7 @@ export class LocalStorageBackend implements IStorageBackend {
     // Store metadata as a sidecar .meta.json file if metadata is provided
     if (opts?.contentType || (opts?.metadata && Object.keys(opts.metadata).length > 0)) {
       const metaPath = filePath + ".meta.json";
+      await this.assertSafePath(metaPath);
       await writeFile(metaPath, JSON.stringify({
         contentType: opts.contentType,
         metadata: opts.metadata,
@@ -113,8 +139,9 @@ export class LocalStorageBackend implements IStorageBackend {
    * so concurrent appendObject calls to the same key do not race.
    */
   async appendObject(key: string, content: string | Buffer): Promise<void> {
-    const filePath = this.resolvePath(key);
+    const filePath = await this.resolvePath(key);
     await mkdir(dirname(filePath), { recursive: true });
+    await this.assertSafePath(filePath);
 
     const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
     // fs.appendFile uses O_APPEND which provides POSIX atomic-append guarantees
@@ -126,7 +153,7 @@ export class LocalStorageBackend implements IStorageBackend {
   }
 
   async getObject(key: string): Promise<StorageObject | null> {
-    const filePath = this.resolvePath(key);
+    const filePath = await this.resolvePath(key);
 
     if (!existsSync(filePath)) {
       return null;
@@ -142,6 +169,7 @@ export class LocalStorageBackend implements IStorageBackend {
       let contentType: string | undefined;
       let metadata: Record<string, string> | undefined;
       const metaPath = filePath + ".meta.json";
+      await this.assertSafePath(metaPath);
       if (existsSync(metaPath)) {
         try {
           const metaRaw = await readFile(metaPath, "utf-8");
@@ -170,7 +198,7 @@ export class LocalStorageBackend implements IStorageBackend {
   }
 
   async exists(key: string): Promise<boolean> {
-    const filePath = this.resolvePath(key);
+    const filePath = await this.resolvePath(key);
     return existsSync(filePath);
   }
 
@@ -184,12 +212,15 @@ export class LocalStorageBackend implements IStorageBackend {
    * with "wo".
    */
   async listObjects(prefix: string, opts?: ListObjectsOptions): Promise<ListResult> {
+    if (typeof prefix !== "string" || prefix.includes("\0") || prefix.startsWith("/") || prefix.startsWith("\\")) {
+      throw new Error("Invalid storage key");
+    }
     const recursive = opts?.recursive ?? false;
 
     const lastSlash = prefix.lastIndexOf("/");
     const dirKey = lastSlash >= 0 ? prefix.slice(0, lastSlash + 1) : "";
     const namePrefix = lastSlash >= 0 ? prefix.slice(lastSlash + 1) : prefix;
-    const dirPath = this.resolveDir(dirKey);
+    const dirPath = await this.resolveDir(dirKey);
 
     if (!existsSync(dirPath)) {
       return { entries: [], total: 0 };
@@ -206,7 +237,8 @@ export class LocalStorageBackend implements IStorageBackend {
   }
 
   async deleteObject(key: string): Promise<void> {
-    const filePath = this.resolvePath(key);
+    const filePath = await this.resolvePath(key);
+    await this.assertSafePath(filePath + ".meta.json");
 
     try {
       await unlink(filePath);
@@ -225,7 +257,7 @@ export class LocalStorageBackend implements IStorageBackend {
   }
 
   async deleteByPrefix(prefix: string): Promise<number> {
-    const dirPath = this.resolvePath(prefix);
+    const dirPath = await this.resolvePath(prefix);
 
     if (!existsSync(dirPath)) {
       return 0;
@@ -246,7 +278,7 @@ export class LocalStorageBackend implements IStorageBackend {
   // ── Private helpers ──────────────────────────────────────
 
   /** Resolve the directory part of a key prefix; "" means the backend root. */
-  private resolveDir(dirKey: string): string {
+  private async resolveDir(dirKey: string): Promise<string> {
     return dirKey ? this.resolvePath(dirKey) : resolve(this.rootDir);
   }
 
@@ -263,6 +295,7 @@ export class LocalStorageBackend implements IStorageBackend {
   ): Promise<void> {
     let items: string[];
     try {
+      await this.assertSafePath(dirPath);
       items = await readdir(dirPath);
     } catch {
       return;
@@ -273,7 +306,8 @@ export class LocalStorageBackend implements IStorageBackend {
       if (!item.startsWith(namePrefix)) continue;
 
       try {
-        const stats = await stat(join(dirPath, item));
+        const stats = await lstat(join(dirPath, item));
+        if (stats.isSymbolicLink()) continue;
         entries.push(stats.isDirectory()
           ? { key: `${dirKey}${item}/`, size: 0, lastModified: stats.mtime, isDirectory: true }
           : { key: `${dirKey}${item}`, size: stats.size, lastModified: stats.mtime, isDirectory: false });
@@ -298,6 +332,7 @@ export class LocalStorageBackend implements IStorageBackend {
 
     let items: string[];
     try {
+      await this.assertSafePath(dirPath);
       items = await readdir(dirPath);
     } catch {
       return;
@@ -311,7 +346,8 @@ export class LocalStorageBackend implements IStorageBackend {
       const itemKey = `${dirKey}${item}`;
 
       try {
-        const stats = await stat(fullPath);
+        const stats = await lstat(fullPath);
+        if (stats.isSymbolicLink()) continue;
 
         if (stats.isDirectory()) {
           const subKey = `${itemKey}/`;

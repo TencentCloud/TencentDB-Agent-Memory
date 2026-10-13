@@ -4,15 +4,27 @@
 # rsync 到临时 context 目录，本文件在此 context 里生效。
 # 目的：避免把敏感真值 / 内网信息 / 大文件打进镜像。
 
-# ── 真值配置：必须运行时挂载，不入镜像 ──
+# ── 真值配置与本地环境：必须运行时挂载，不入镜像 ──
 # metadata-instances.json 含 tdai kernel Bearer token，见 panel README 部署段。
-panel/config/metadata-instances.json
+panel/config/*.json
 panel/config/*.yaml
 panel/config/*.yml
+panel/config/*.local.*
 panel/.env
 panel/.env.*
 knowledge/.env
 knowledge/.env.*
+**/.env
+**/.env.*
+.npmrc
+**/.npmrc
+**/*.local.*
+
+# ── Audit scratch / 临时文件 ──
+.audit
+.audit*
+**/.audit*
+*.audit
 
 # ── 文档：非 runtime 必需，且含内部路径引用 ──
 # 两层 docs/ 全排除。runtime 唯一需要的 spec 是 knowledge/openapi.yaml（包根，
@@ -31,19 +43,35 @@ knowledge/bin/e2e-*.sh
 **/dist
 **/build
 **/.git
+**/.gitmodules
 **/logs
 **/*.log
+nohup.out
 **/data/
 **/*.db
 **/*.db-shm
 **/*.db-wal
 **/*.sqlite
+**/*.sqlite3
+**/dump.rdb
 
-# ── 编辑器/OS 杂物 ──
+# ── 内部 CI / 编辑器 / 私有元数据 ──
+**/.coding-ci.yaml
+**/.gitlab-ci.yml
+**/.claude
+**/.codebuddy
+**/.iwiki
 **/.DS_Store
 **/.idea/
 **/.vscode/
 **/*.swp
 **/*.swo
-**/.iwiki
-**/.codebuddy
+
+# Nested local credentials, database files and runtime state
+**/.npmrc*
+**/.env*
+**/*.db*
+**/*.sqlite*
+**/data
+**/dump.rdb
+**/*.local.*

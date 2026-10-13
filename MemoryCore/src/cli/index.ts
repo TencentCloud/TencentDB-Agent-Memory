@@ -8,7 +8,8 @@
  *   index.ts → api.registerCli() → registerMemoryTdaiCli() → registerSeedCommand()
  */
 
-import type { Command } from "commander";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+type Command = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0]["program"];
 import { registerSeedCommand } from "./commands/seed.js";
 
 // ============================

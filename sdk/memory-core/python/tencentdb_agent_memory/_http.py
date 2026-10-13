@@ -59,7 +59,7 @@ class HttpStub(Stub):
         api_key: str,
         service_id: str,
         timeout: float = 30,
-        verify: bool = False,
+        verify: bool = True,
         user_key: Optional[str] = None,
         client: Optional[httpx.Client] = None,
     ) -> None:
@@ -75,14 +75,15 @@ class HttpStub(Stub):
 
     def post(self, path: str, body: dict, timeout: Optional[float] = None) -> dict:
         url = f"{self.endpoint}{path}"
-        logger.debug("Request %s %s", path, body)
+        logger.debug("HTTP request")
         resp = self.client.post(
             url=url,
             json=body,
             headers=self.headers,
             timeout=timeout or self.client.timeout,
+            follow_redirects=False,
         )
-        logger.debug("Response %s %s", path, resp.text)
+        logger.debug("HTTP response status=%s", resp.status_code)
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != 0:
@@ -119,7 +120,7 @@ class AsyncHttpStub:
         api_key: str,
         service_id: str,
         timeout: float = 30,
-        verify: bool = False,
+        verify: bool = True,
         user_key: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
@@ -135,14 +136,15 @@ class AsyncHttpStub:
 
     async def post(self, path: str, body: dict, timeout: Optional[float] = None) -> dict:
         url = f"{self.endpoint}{path}"
-        logger.debug("Request %s %s", path, body)
+        logger.debug("HTTP request")
         resp = await self.client.post(
             url=url,
             json=body,
             headers=self.headers,
             timeout=timeout or self.client.timeout,
+            follow_redirects=False,
         )
-        logger.debug("Response %s %s", path, resp.text)
+        logger.debug("HTTP response status=%s", resp.status_code)
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != 0:

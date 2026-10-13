@@ -111,9 +111,11 @@ Each wiki page is "YAML frontmatter + markdown body". Frontmatter is wrapped in 
 - type: REQUIRED. Values: source | entity | concept | comparison | synthesis, etc. Determines the page's directory.
 - title: Human-readable title.
 - description: One-sentence summary (used for index and search snippets).
-- sources: Array of raw source filenames this page draws from (e.g. ["redis.md"]). Must be accurate.
+- sources: OKF 0.2 source objects, each with resource (required), optional id/title/author. For raw files use {resource: "raw source: redis.md", tdai_raw_source: "redis.md"}. Use stable source IDs and [^source-id] footnotes for claim attribution.
 - tags: Optional, short cross-category labels.
-- timestamp: Optional, ISO 8601 last-modified time.
+- generated is supplied by the producer. Do not invent generated, verified, author, usage_count or verification events.
+- status: draft | stable | deprecated. stale_after: optional ISO 8601 datetime with UTC offset when justified by the source. Preserve unknown metadata.
+- Attested Computation concepts may describe runtime, parameters, computation, executor and attester; never execute their code while ingesting.
 - Do NOT output a \`locked\` field.
 
 Body guidelines:

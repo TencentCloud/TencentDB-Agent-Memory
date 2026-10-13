@@ -116,8 +116,8 @@ export function parseSkillFile(raw: string): SkillFile {
 
   return {
     frontmatter: {
-      name: fm.name,
-      description: fm.description,
+      name,
+      description,
       category: typeof fm.category === "string" ? fm.category : undefined,
       created_at: typeof fm.created_at === "string" ? fm.created_at : undefined,
       updated_at: typeof fm.updated_at === "string" ? fm.updated_at : undefined,

@@ -28,10 +28,10 @@ const MAX_CACHED_SESSIONS = 20;
 
 /** Routes sessionKey → per-session OffloadStateManager with LRU eviction. */
 export class SessionRegistry {
+  private static _registryCounter = 0;
   private _sessions = new Map<string, SessionCtx>();
   private _dataRoot: string;
   readonly _registryId = ++SessionRegistry._registryCounter;
-  private static _registryCounter = 0;
 
   constructor(dataRoot: string) {
     this._dataRoot = dataRoot;

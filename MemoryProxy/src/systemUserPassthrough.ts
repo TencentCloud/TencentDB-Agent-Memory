@@ -44,7 +44,7 @@
 import type { Context } from "hono";
 import { writeLog } from "./logger.js";
 import { log } from "./report/log.js";
-import { joinUrl } from "./guard-adapter.js";
+import { joinUrl } from './upstream-target.js';
 import { extractSpaceIdFromPath, tryReportCreditFromPath } from "./credit-reporter.js";
 import { extractSseUsage } from "./pipeline/runners/openai-chat.js";
 import {

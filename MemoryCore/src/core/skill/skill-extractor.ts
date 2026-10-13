@@ -10,6 +10,8 @@
  * 每次调用都走 LLM，不做任何对话级去重/缓存 —— 缓存机制已移除。
  */
 
+import type { ToolSet } from "ai";
+
 import type { ExtractMessage } from "./types.js";
 import type { SkillCore } from "./skill-core.js";
 import { createSkillTools, type ExtractedSkillCandidate } from "./skill-tools.js";
@@ -28,7 +30,7 @@ export interface ExtractorRunner {
   run(params: {
     prompt: string;
     systemPrompt?: string;
-    tools?: Record<string, unknown>;
+    tools?: ToolSet;
     enableTools?: boolean;
     maxIterations?: number;
     /** Output token 上限；不填由 runner 兜底 (标准 runner 走 llm.maxTokens)。 */

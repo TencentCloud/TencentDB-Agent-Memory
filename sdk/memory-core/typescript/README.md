@@ -8,11 +8,27 @@ API + `/v3/skill/*` + `/v3/meta/*` metadata management.
 - 老代码若之前从 `.../v2/v3` 子路径导入，可继续用 —— 子路径保留为向后兼容
   别名，与顶级 export 是同一个类。
 
-## Install
+## Install this contribution from source
+
+The upstream npm package does not automatically include this fork's changes.
+Build and package the SDK from the reviewed checkout:
 
 ```bash
-npm install @tencentdb-agent-memory/memory-sdk-ts-v2
+git clone https://github.com/adamokon/TencentDB-Agent-Memory.git
+cd TencentDB-Agent-Memory/sdk/memory-core/typescript
+npm ci
+npm pack
 ```
+
+From the consuming project, install the resulting package:
+
+```bash
+npm install /path/to/tencentdb-agent-memory-memory-sdk-ts-v2-1.0.1-beta.1.tgz
+```
+
+Use the Core gateway service credential as `apiKey`. Where metadata operations
+require a user's key, supply that distinct credential as `userKey`; do not
+substitute a user key for the gateway service credential.
 
 ## Quick Start
 
@@ -21,7 +37,7 @@ import { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 
 const client = new MemoryClient({
   endpoint: "http://127.0.0.1:8420",
-  apiKey: "your-user-key",           // 从面板拿的 sk-mem-…
+  apiKey: "your-core-service-key",
   serviceId: "your-memory-instance-id",
   teamId: "team-xxx",
   agentId: "agt-xxx",
@@ -249,3 +265,28 @@ npm pack
 ## License
 
 MIT
+
+## TLS verification
+
+Both v2 and v3 verify server certificates and hostnames by default. The v2
+transport no longer modifies `NODE_TLS_REJECT_UNAUTHORIZED`. Prefer a trusted
+private CA, configured at Node startup (for example `NODE_EXTRA_CA_CERTS`), for
+private deployments. `rejectUnauthorized: false` is an explicit development
+opt-in scoped to that transport and removes protection against interception;
+it is not needed for the normal HTTPS workflow.
+
+Run `npm ci`, `npm run build` and `npm test`. TLS regression tests use local HTTPS
+servers and synthetic certificates, plus actual v2/v3 requests.
+
+### Redirect policy
+
+SDK v2/v3, STS and COS requests reject HTTP redirects, including same-origin
+redirects. Set the canonical service endpoint directly. This prevents user keys,
+STS tokens and private request bodies from being forwarded by automatic redirects.
+The real transport regression tests use only synthetic loopback services:
+
+```sh
+npm ci
+npm run build
+npm test
+```

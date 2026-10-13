@@ -1,16 +1,7 @@
 /**
- * Observability Backend Factory — 工厂函数 + 全局单例管理。
- *
- * 通过配置驱动创建可观测性后端实例：
- * - "noop"     → NoopObservabilityBackend（默认，零开销）
- * - "console"  → ConsoleObservabilityBackend（开发调试，输出到 stdout）
- * - "otlp"     → OtlpObservabilityBackend（开源用户推荐，标准 OTLP 协议）
- * - "internal" → 动态加载私有模块（内部环境：智研 + Kafka + Langfuse）
- *
- * 开源用户推荐使用 "otlp" 类型，只需配置一个 endpoint 即可将
- * Trace/Log/Metric 全部上报到任何支持 OTLP 协议的后端。
- *
- * 参考 src/core/storage/factory.ts 的设计模式。
+ * Observability factory and process-wide backend lifecycle.
+ * Noop is the default. Console output and OTLP export require explicit selection.
+ * The retired private internal backend is unsupported in this public build.
  */
 
 import type { IObservabilityBackend, ObservabilityConfig } from "./types.js";
@@ -19,26 +10,6 @@ import { ConsoleObservabilityBackend } from "./console-backend.js";
 import { OtlpObservabilityBackend } from "./otlp-backend.js";
 
 const TAG = "[observability][factory]";
-
-// ============================
-// 动态加载私有模块
-// ============================
-
-/**
- * 尝试动态加载可选可观测性模块。
- * 加载失败返回 null。
- */
-async function loadInternalBackend(): Promise<{ createInternalObservabilityBackend: (config: ObservabilityConfig) => Promise<IObservabilityBackend> } | null> {
-  try {
-    return await import("../../integrations/observability/index.js");
-  } catch {
-    return null;
-  }
-}
-
-// ============================
-// 工厂函数
-// ============================
 
 /**
  * 创建可观测性后端实例。
@@ -53,19 +24,10 @@ export async function createObservabilityBackend(
 
   switch (type) {
     case "internal": {
-      const privateModule = await loadInternalBackend();
-      if (!privateModule) {
-        console.warn(
-          `${TAG} Internal observability backend requested but private module not available. ` +
-          `Falling back to console backend. Install the private submodule for full observability.`,
-        );
-        const backend = new ConsoleObservabilityBackend();
-        await backend.initialize(config);
-        return backend;
-      }
-      const backend = await privateModule.createInternalObservabilityBackend(config);
-      await backend.initialize(config);
-      return backend;
+      throw new Error(
+        `${TAG} Internal observability backend is not supported in this build; ` +
+        `select noop, otlp, or explicitly select console for debugging.`,
+      );
     }
 
     case "otlp": {
@@ -120,9 +82,8 @@ export async function initObservabilityBackend(config: ObservabilityConfig): Pro
     _globalBackend = await createObservabilityBackend(config);
     _initialized = true;
     console.log(`${TAG} Observability backend initialized: type=${_globalBackend.type}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`${TAG} Failed to initialize observability backend: ${msg}. Using noop.`);
+  } catch {
+    console.warn(`${TAG} Failed to initialize observability backend. Using noop.`);
     _globalBackend = new NoopObservabilityBackend();
     _initialized = true;
   }

@@ -17,7 +17,7 @@ import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
 import type { LangfuseTurnContext } from "../langfuse.js";
 import type { Pipeline } from "../logger.js";
-import type { ForwardTarget } from "../guard-adapter.js";
+import type { ForwardTarget } from '../upstream-target.js';
 import type { TdaiClient } from "../tdai/client.js";
 import type { TdaiIdentity, TdaiMessage } from "../tdai/types.js";
 import type { RequestKind } from "../agent-adapters/types.js";

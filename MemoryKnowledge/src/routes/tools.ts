@@ -12,6 +12,7 @@
  */
 
 import { Hono } from "hono";
+import { buildCodeGraphToolParams } from "../engines/code/tool-params.js";
 
 import type { WikiService, CodeGraphService } from "../store/index.js";
 import type { CodeGraphInstancePool } from "../module.js";
@@ -259,7 +260,7 @@ export function createToolsRoutes(deps: ToolsRouteDeps): Hono {
       return c.json(wrapError(400, "tool_name is required"), 400);
     }
     const params = body.params;
-    if (!params || typeof params !== "object") {
+    if (!params || typeof params !== "object" || Array.isArray(params)) {
       return c.json(wrapError(400, "params is required (object)"), 400);
     }
 
@@ -404,6 +405,11 @@ async function executeCodeGraphTool(
 ): Promise<Response> {
   const { code_graph_id, team_id } = row;
 
+  const built = toolName === "get_info"
+    ? (Object.keys(params).length === 0 ? { params: {} } : { error: "get_info accepts no parameters" })
+    : buildCodeGraphToolParams(toolName, params);
+  if ("error" in built) return Response.json(wrapError(400, built.error), { status: 400 });
+
   // get_info is a simple metadata return
   if (toolName === "get_info") {
     const detail = cgService.get(serviceId, team_id, code_graph_id);
@@ -422,12 +428,6 @@ async function executeCodeGraphTool(
     return Response.json(wrapError(403, `unknown tool: ${toolName}`), { status: 403 });
   }
 
-  // Build toolParams — map HTTP params to code-graph executeTool params
-  const toolParams: Record<string, unknown> = { code_graph_id };
-  for (const [k, v] of Object.entries(params)) {
-    toolParams[k] = v;
-  }
-
   let instance = instancePool.get(code_graph_id);
   if (!instance && instancePool.loadIfMissing) {
     const dir = cgService.dirFor(serviceId, team_id, code_graph_id);
@@ -437,6 +437,6 @@ async function executeCodeGraphTool(
     return Response.json(wrapError(503, "code graph instance not loaded"), { status: 503 });
   }
 
-  const result = await executeCodeTool(instance, cgToolName, toolParams);
+  const result = await executeCodeTool(instance, cgToolName, built.params);
   return Response.json(wrapOk(result), { status: result.isError ? 500 : 200 });
 }

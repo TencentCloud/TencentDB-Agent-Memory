@@ -8,7 +8,7 @@
  * ingestSource() 保留为薄封装（= extract + commit 串行），现有单测/外部调用不变。 */
 
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, relative } from "node:path";
 import type { LimitFunction } from "p-limit";
 import { createLlmClient, type LlmClient, type RawLlmConfig } from "./llm.js";
 import { loadTemplate } from "./template.js";
@@ -21,7 +21,7 @@ import {
   type ExistingPageInfo,
 } from "./prompts.js";
 import { parseFileBlocks } from "./file-protocol.js";
-import { parseFrontmatter, buildPage } from "./frontmatter.js";
+import { parseFrontmatter, buildPage, sourceEntries, rawSourceKey } from "./frontmatter.js";
 import { mergePage, type MergeOptions } from "./merge.js";
 import { chunkText } from "./chunker.js";
 import { slugify, dirForType } from "./slug.js";
@@ -119,7 +119,8 @@ export async function extractSource(
 ): Promise<Map<string, string>> {
   if (!existsSync(sourcePath)) throw new Error(`源文件不存在: ${sourcePath}`);
   const sourceText = readFileSync(sourcePath, "utf-8");
-  const sourceName = basename(sourcePath);
+  const sourceRelative = relative(join(projectPath, "raw", "sources"), sourcePath).replace(/\\/g, "/");
+  const sourceName = sourceRelative.startsWith("../") || sourceRelative === ".." ? basename(sourcePath) : sourceRelative;
   if (!sourceText.trim()) throw new Error(`源文件为空: ${sourceName}`);
 
   const llm = options.llm ?? createLlmClient(llmConfig);
@@ -310,7 +311,8 @@ export async function ingestSource(
   const existingPages = scanExistingPages(projectPath);
   const candidates = await extractSource(projectPath, sourcePath, llmConfig, existingPages, options);
   const llm = options.llm ?? createLlmClient(llmConfig);
-  const sourceName = basename(sourcePath);
+  const sourceRelative = relative(join(projectPath, "raw", "sources"), sourcePath).replace(/\\/g, "/");
+  const sourceName = sourceRelative.startsWith("../") || sourceRelative === ".." ? basename(sourcePath) : sourceRelative;
   const { written } = await commitCandidates(
     projectPath,
     [{ sourceFilename: sourceName, candidates }],
@@ -358,7 +360,7 @@ function walk(baseDir: string, dir: string, out: ExistingPageInfo[]): void {
       if (entry !== "media") walk(baseDir, full, out);
     } else if (entry.endsWith(".md")) {
       const rel = `wiki/${full.slice(baseDir.length + 1).replace(/\\/g, "/")}`;
-      if (STRUCTURAL_FILES.has(rel)) continue;
+      if (STRUCTURAL_FILES.has(rel) || ["index.md", "log.md"].includes(entry)) continue;
       try {
         const content = readFileSync(full, "utf-8");
         const { frontmatter } = parseFrontmatter(content);
@@ -381,11 +383,15 @@ function walk(baseDir: string, dir: string, out: ExistingPageInfo[]): void {
  */
 export function ensureSources(content: string, sourceName: string): string {
   const parsed = parseFrontmatter(content);
-  const cur = Array.isArray(parsed.frontmatter.sources)
-    ? parsed.frontmatter.sources.filter((x): x is string => typeof x === "string")
-    : [];
-  if (cur.includes(sourceName)) return content;
-  return buildPage({ ...parsed.frontmatter, sources: [...cur, sourceName] }, parsed.body);
+  const cur = sourceEntries(parsed.frontmatter.sources);
+  const sources = cur.some((s) => rawSourceKey(s) === sourceName) ? cur : [...cur, {
+    resource: `raw source: ${sourceName}`, tdai_raw_source: sourceName,
+  }];
+  // Actor comes from the producer, never from LLM-generated frontmatter.
+  const fm = { ...parsed.frontmatter, sources,
+    generated: { by: "wiki-ingest/2", at: new Date().toISOString() } };
+  delete fm.verified;
+  return buildPage(fm, parsed.body);
 }
 
 /**

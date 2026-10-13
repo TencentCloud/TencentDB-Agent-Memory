@@ -141,35 +141,7 @@ function firstAttemptTimeoutMs(configuredTimeoutMs: number): number {
   return Math.min(configuredTimeoutMs, cap);
 }
 
-/**
- * 智能拼接 taskDraft 请求 URL —— 处理 "base 尾巴可能已经带了 endpoint 前缀段" 的坑。
- *
- * ## 背景（2026-09-01 修复 Claude Code 404）
- *
- * 主链路（guard-adapter.joinUrl）的约定：`upstream.agents[x].url` 里的 `/v1`、`/v2`
- * 尾巴是 base 的一部分，endpoint 只写路径尾段（如 anthropic 用 `/messages`）。
- * 例如配置里：
- *   claude-code.url = "https://copilot.tencent.com/v1"   （base 自带 /v1 尾巴）
- *   codebuddy.url   = "https://copilot.tencent.com/v2"   （base 自带 /v2 尾巴）
- *   codex.url       = "https://copilot.tencent.com"      （base 是根，不带前缀）
- *
- * 但 taskDraft 生成器为了自包含，写的 endpoint 是"完整路径"：
- *   anthropic  → "/v1/messages"
- *   openai     → "/chat/completions"（本来就没歧义）
- *   responses  → "/responses"
- *
- * 直接 `${base}${endpoint}` 会踩：
- *   base=".../v1" + endpoint="/v1/messages" → ".../v1/v1/messages" ❌ 404
- *
- * ## 拼接规则
- *
- * 1. base 已经完整以 endpoint 结尾 → 原样返回（幂等，处理 base 直接是完整 URL 的场景）
- * 2. base 已经以 endpoint **的开头段**结尾（如 base=`.../v1`，endpoint=`/v1/messages`）
- *    → 去掉 base 已有的那段前缀，只拼剩下的（`.../v1/messages`）
- * 3. base 与 endpoint 无重合 → 直接拼（`.../responses`）
- *
- * 参考主链路 joinUrl 的处理（guard-adapter.ts:326）。
- */
+
 export function joinTaskDraftUrl(base: string, endpoint: string): string {
   const normalized = base.replace(/\/+$/, "");
   // 规则 1：完全相等

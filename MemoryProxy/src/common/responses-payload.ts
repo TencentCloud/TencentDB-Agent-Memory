@@ -7,7 +7,7 @@
  * require touching another.
  */
 
-import type { UpstreamToolCall } from "../request-prepare-adapter.js";
+import type { UpstreamToolCall } from '../common/upstream-tool-call.js';
 
 /**
  * Tool calls of a Responses `output[]`, keyed by `call_id`.

@@ -1,25 +1,27 @@
 /**
- * GitSourceFetcher — 基于 simple-git 的源码拉取实现。
+ * GitSourceFetcher - secure source retrieval via simple-git.
  *
- * simple-git 内部用 child_process.spawn + args 数组，不走 shell，从原理上消除 shell 注入。
+ * Uses child_process.spawn to eliminate shell injection.
+ * Implements strict HTTPS-only transport with optional SSRF mitigation (DNS pinning).
  *
- * 安全防护（002 §4-5）：
- *   - R1 git hooks：clone/fetch 本就不拉取远端 .git/hooks（hooks 为本地态），故不额外
- *     配置 core.hooksPath（加固版 git 会拒绝该配置，需 allowUnsafeHooksPath）。
- *   - R2 SSRF：只允许 public HTTPS + 内网/环回地址黑名单（对齐项目 security_rules）。
- *   - Bug 修复（方案 A）：增量 sync 的 git clean 排除 .codegraph/，避免删掉 codegraph 索引库。
+ * Directory lifecycle:
+ * - fetch: clones into isolated staging. Rejects existing destinations, checks incoming
+ *   .codegraph conflicts, and extracts the commit hash before renaming to localPath.
+ * - sync: clones into isolated staging. Checks incoming .codegraph conflicts, extracts
+ *   the commit hash, validates existing localPath, backs up old checkout, and atomically
+ *   replaces it with staging before restoring the old .codegraph overlay. Fails securely
+ *   leaving backup in place if replacement fails.
  */
 
-import simpleGit, { CleanOptions, ResetMode } from "simple-git";
-import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
+import { simpleGit } from "simple-git";
+import type { ISourceFetcher, FetchResult, SourceType, GitCredential } from "./types.js";
+import { resolveAndValidate, isNonPublicAddress } from "./git-address-policy.js";
+import * as net from "node:net";
+import { join } from "node:path";
+import { lstatSync, renameSync, rmSync, mkdirSync, readdirSync, copyFileSync } from "node:fs";
+import { GitRelay } from "./git-relay.js";
+import { randomUUID } from "node:crypto";
 
-/**
- * 识别 git 认证 / 权限类错误（simple-git 无 TTY，git 交互式询问 Username/Password
- * 会变成 `could not read Username for '...': No such device or address`）。
- *
- * 这类错误对用户极具误导性：本质是仓库需要认证（401/403），却被 git 表述成
- * 「无法读取用户名」。用这里集中识别，再在 worker 层按是否带凭据转成人类可读提示。
- */
 export function isGitAuthError(raw: string): boolean {
   const msg = raw.toLowerCase();
   return (
@@ -50,22 +52,25 @@ export function explainGitAuthError(raw: string, needsCredential: boolean): stri
   );
 }
 
-/**
- * 内网 / 环回 / link-local 地址黑名单（标准网段）：
- *   - 10. / 172.16-31. / 192.168.  → RFC1918 私有网段
- *   - 169.254.                     → link-local（含云元数据 169.254.169.254）
- *   - 127. / 0. / localhost / ::1  → 环回
- *   - fe80:                        → IPv6 link-local
- *
- * 该黑名单可通过环境变量 KNOWLEDGE_SSRF_CHECK=off 关闭（见 GitSourceFetcher 构造）。
- */
-const PRIVATE_ADDR_RE =
-  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|localhost$|::1$|fe80:)/i;
 
-/**
- * 读取 SSRF 私网黑名单开关。默认开启；
- * 当 KNOWLEDGE_SSRF_CHECK 为 off/false/0/no（大小写不敏感）时关闭。
- */
+function copyCodegraphSafely(srcDir: string, destDir: string) {
+  mkdirSync(destDir, { recursive: true });
+  const entries = readdirSync(srcDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = join(srcDir, entry.name);
+    const destPath = join(destDir, entry.name);
+    const stats = lstatSync(srcPath);
+    if (stats.isSymbolicLink() || (!stats.isDirectory() && !stats.isFile())) {
+      throw new Error(`Invalid entry in .codegraph: ${entry.name}`);
+    }
+    if (stats.isDirectory()) {
+      copyCodegraphSafely(srcPath, destPath);
+    } else {
+      copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
 function ssrfCheckEnabledFromEnv(): boolean {
   const raw = process.env.KNOWLEDGE_SSRF_CHECK;
   if (raw == null || raw.trim() === "") return true;
@@ -74,84 +79,431 @@ function ssrfCheckEnabledFromEnv(): boolean {
 }
 
 export interface GitSourceFetcherOptions {
-  /**
-   * 是否启用 SSRF 私网 / 环回地址黑名单校验。
-   * 默认读环境变量 KNOWLEDGE_SSRF_CHECK（默认开启）；显式传入时优先于环境变量。
-   */
   ssrfCheck?: boolean;
+  dnsResolver?: (hostname: string) => Promise<{ address: string; family: number }[]>;
+  trustedCA?: string; // Narrowly trusted CA option for synthetic TLS tests
 }
 
 export class GitSourceFetcher implements ISourceFetcher {
   readonly supportedType: SourceType = "git";
 
-  /** SSRF 私网黑名单校验开关（https-only 协议校验始终生效，不受此开关影响）。 */
   private readonly ssrfCheck: boolean;
+  private readonly dnsResolver?: (hostname: string) => Promise<{ address: string; family: number }[]>;
+  private readonly trustedCA?: string;
 
   constructor(opts?: GitSourceFetcherOptions) {
     this.ssrfCheck = opts?.ssrfCheck ?? ssrfCheckEnabledFromEnv();
+    this.dnsResolver = opts?.dnsResolver;
+    this.trustedCA = opts?.trustedCA;
   }
 
   validate(sourceUrl: string): void {
-    // 第一版：仅支持 public HTTPS 仓库（SSH / 私有仓库鉴权见文档 005）。
     if (!sourceUrl.startsWith("https://")) {
-      throw new Error(
-        "first version only supports public HTTPS repos; SSH/private repo support coming soon",
-      );
+      throw new Error("first version only supports public HTTPS repos");
     }
-    const host = this.extractHost(sourceUrl);
-    if (!host) {
-      throw new Error(`invalid repo_url: cannot parse host from ${sourceUrl}`);
+
+    let parsed: URL;
+    try {
+      parsed = new URL(sourceUrl);
+    } catch {
+      throw new Error("invalid repo_url: cannot parse URL");
     }
-    // R2: SSRF 防护 —— 禁止指向内网 / 环回地址（可经 KNOWLEDGE_SSRF_CHECK=off 关闭）。
-    if (this.ssrfCheck && this.isPrivateAddress(host)) {
-      throw new Error(`repo_url must not point to private/loopback address: ${host}`);
+
+    if (parsed.protocol !== "https:") {
+      throw new Error("invalid repo_url: only HTTPS is allowed");
+    }
+
+    if (parsed.username || parsed.password) {
+      throw new Error("invalid repo_url: credentials in URL are not allowed");
+    }
+
+    if (parsed.hash) {
+      throw new Error("invalid repo_url: fragments are not allowed");
+    }
+
+    if (/[\x00-\x1F\x7F]/.test(sourceUrl)) {
+      throw new Error("invalid repo_url: control characters are not allowed");
+    }
+
+    if (sourceUrl.includes("\\") || sourceUrl.includes("@")) {
+      throw new Error("invalid repo_url: backslash and @ are not allowed");
+    }
+
+    const rawHost = sourceUrl.substring(sourceUrl.indexOf("://") + 3).split("/")[0].split("?")[0].split("#")[0];
+    if (!rawHost) {
+      throw new Error("invalid repo_url: missing host");
+    }
+
+    let expectedHost = parsed.host;
+    if (net.isIPv6(parsed.hostname)) {
+      expectedHost = `[${parsed.hostname}]${parsed.port ? ":" + parsed.port : ""}`;
+    }
+
+    if (rawHost !== expectedHost) {
+      throw new Error("invalid repo_url: alternate numeric IPv4 URL forms or ambiguity detected");
+    }
+
+    const hostForIpCheck = parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+      ? parsed.hostname.slice(1, -1)
+      : parsed.hostname;
+
+    if (this.ssrfCheck && net.isIP(hostForIpCheck) && isNonPublicAddress(hostForIpCheck)) {
+      throw new Error(`SSRF Address Policy Violation: repo_url must not point to a non-public literal IP: ${parsed.hostname}`);
     }
   }
 
-  async fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
+  validateBranch(branch: string): void {
+    if (!branch || typeof branch !== "string") {
+      throw new Error("invalid branch");
+    }
+    if (branch.startsWith("-")) {
+      throw new Error("invalid branch: cannot start with dash");
+    }
+    if (
+      branch.includes("..") ||
+      branch.includes("//") ||
+      branch.startsWith(".") ||
+      branch.endsWith(".") ||
+      branch.includes("/.") ||
+      branch.endsWith(".lock") ||
+      branch.includes(".lock/") ||
+      branch.endsWith("/") ||
+      branch.includes("@{") ||
+      branch.includes("\\") ||
+      branch.includes(":") ||
+      branch.includes(" ") ||
+      branch.includes("~") ||
+      branch.includes("^") ||
+      branch.includes("*") ||
+      branch.includes("?") ||
+      branch.includes("[") ||
+      branch === "@" ||
+      /[\x00-\x20\x7F]/.test(branch)
+    ) {
+      throw new Error("invalid branch: contains invalid characters or refs");
+    }
+  }
+
+  private async secureGit(
+    baseDir: string,
+    parsedUrl: URL | null, // If null, no proxy (for local ops like rev-parse)
+    validatedIps?: string[],
+    credential?: GitCredential,
+  ): Promise<{ git: ReturnType<typeof simpleGit>; cleanup: () => Promise<void> }> {
+    let proxyPort = 0;
+    let relay: GitRelay | undefined;
+
+    if (parsedUrl && validatedIps && validatedIps.length > 0) {
+      const targetIp = validatedIps[0];
+      const expectedPort = parsedUrl.port ? parseInt(parsedUrl.port, 10) : 443;
+      relay = new GitRelay({ targetIp, expectedHost: parsedUrl.hostname, expectedPort });
+      proxyPort = await relay.start();
+    }
+
+    const env: Record<string, string> = {
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      HOME: "/dev/null",
+      XDG_CONFIG_HOME: "/dev/null",
+      XDG_DATA_HOME: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+      http_proxy: "",
+      https_proxy: "",
+      all_proxy: "",
+      no_proxy: "",
+    };
+
+    if (this.trustedCA) {
+      env.GIT_SSL_CAINFO = this.trustedCA;
+    }
+
+    if (credential) {
+      if (!parsedUrl || !credential.username || !credential.password || /[\x00-\x1f\x7f:]/.test(credential.username) || /[\x00-\x1f\x7f]/.test(credential.password)) {
+        if (relay) await relay.stop();
+        throw new Error("Invalid Git credential");
+      }
+      // Git's scoped config environment carries exactly one generated header.
+      // It is neither an argument nor persisted in the clone's .git/config.
+      // Other same-user/root processes may still inspect child environments.
+      env.GIT_CONFIG_COUNT = "1";
+      env.GIT_CONFIG_KEY_0 = `http.${parsedUrl.toString()}.extraHeader`;
+      env.GIT_CONFIG_VALUE_0 = "Authorization: Basic " + Buffer.from(`${credential.username}:${credential.password}`, "utf8").toString("base64");
+    }
+
+    const config = [
+      `http.followRedirects=false`,
+      `core.hooksPath=/dev/null`,
+      `init.templateDir=/dev/null`,
+      `credential.helper=`,
+      `protocol.allow=never`,
+      `protocol.https.allow=always`
+    ];
+
+    if (proxyPort > 0) {
+      config.push(`http.proxy=http://127.0.0.1:${proxyPort}`);
+    }
+
+    const allowEnvironment = [
+      "GIT_CONFIG_NOSYSTEM",
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_SYSTEM",
+      "GIT_TERMINAL_PROMPT",
+    ];
+
+    if (this.trustedCA) {
+      allowEnvironment.push("GIT_SSL_CAINFO");
+    }
+    if (credential) allowEnvironment.push("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0");
+
+    let git: ReturnType<typeof simpleGit>;
+    try {
+      git = simpleGit(baseDir, {
+      config,
+      allowEnvironment,
+      unsafe: {
+        allowUnsafeHooksPath: true,
+        allowUnsafeTemplateDir: true,
+        allowUnsafeCredentialHelper: true,
+        allowUnsafeProtocolOverride: true,
+        allowUnsafeConfigPaths: true,
+        allowUnsafeConfigEnvCount: credential !== undefined,
+      },
+      timeout: { block: 60000, stdOut: false, stdErr: false } // 1 min true process deadline
+      }).env(env);
+    } catch (error) {
+      if (relay) await relay.stop();
+      throw error;
+    }
+
+    return {
+      git,
+      cleanup: async () => {
+        if (relay) await relay.stop();
+      }
+    };
+  }
+
+  async fetch(sourceUrl: string, branch: string, localPath: string, credential?: GitCredential): Promise<FetchResult> {
     this.validate(sourceUrl);
-    // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
-    // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
-    // （加固版 git 会拒绝该配置：需 allowUnsafeHooksPath）。
-    await simpleGit().clone(sourceUrl, localPath, {
-      "--depth": 1,
-      "--branch": branch,
-    });
-    const version = await this.headCommit(localPath);
+    this.validateBranch(branch);
+
+    const parsed = new URL(sourceUrl);
+    const validatedIps = await resolveAndValidate(parsed.hostname, { ssrfCheck: this.ssrfCheck, dnsResolver: this.dnsResolver });
+
+    const uid = randomUUID();
+    const stagingPath = `${localPath}.staging.${uid}`;
+    mkdirSync(stagingPath);
+
+    let transport: Awaited<ReturnType<GitSourceFetcher["secureGit"]>>;
+    try { transport = await this.secureGit(stagingPath, parsed, validatedIps, credential); }
+    catch (error) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      throw error;
+    }
+    const { git, cleanup } = transport;
+    try {
+      await git.clone(sourceUrl, ".", {
+        "--depth": 1,
+        "--branch": branch,
+        "--no-tags": null,
+        "--single-branch": null,
+        "--config": "core.hooksPath=/dev/null"
+      });
+    } catch (err) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      if (credential) throw new Error("Authenticated Git retrieval failed; check the resource credentials and repository access");
+      throw err;
+    } finally {
+      await cleanup();
+    }
+
+    const incomingCodegraphDir = join(stagingPath, ".codegraph");
+    let hasIncomingCodegraph = false;
+    try {
+      lstatSync(incomingCodegraphDir);
+      hasIncomingCodegraph = true;
+    } catch (e: any) {
+      if (e.code !== "ENOENT") {
+        try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+        throw e;
+      }
+    }
+
+    if (hasIncomingCodegraph) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      throw new Error("Rejecting hostile incoming .codegraph conflict");
+    }
+
+    let version: string;
+    try {
+      version = await this.headCommit(stagingPath);
+    } catch (e) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      throw new Error(`Failed to read commit hash: ${e}`);
+    }
+
+    let hasLocalPath = false;
+    try {
+      lstatSync(localPath);
+      hasLocalPath = true;
+    } catch (e: any) {
+      if (e.code !== "ENOENT") {
+        try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+        throw e;
+      }
+    }
+
+    if (hasLocalPath) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      throw new Error(`fetch destination already exists: ${localPath}`);
+    }
+
+    renameSync(stagingPath, localPath);
+
     return { localPath, version, sourceType: "git" };
   }
 
-  async sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
+  async sync(sourceUrl: string, branch: string, localPath: string, credential?: GitCredential): Promise<FetchResult> {
     this.validate(sourceUrl);
-    const git = simpleGit(localPath);
-    await git.fetch("origin", branch, { "--depth": 1 });
-    await git.reset(ResetMode.HARD, [`origin/${branch}`]);
-    // Bug 修复（方案 A）：clean 排除 .codegraph/，否则会删掉 codegraph 的索引库，
-    // 导致增量 sync 永远失败、每次回退到全量 clone。
-    await git.clean(CleanOptions.FORCE + CleanOptions.RECURSIVE, ["-e", ".codegraph"]);
-    const version = await this.headCommit(localPath);
+    this.validateBranch(branch);
+
+    const parsed = new URL(sourceUrl);
+    const validatedIps = await resolveAndValidate(parsed.hostname, { ssrfCheck: this.ssrfCheck, dnsResolver: this.dnsResolver });
+
+    const uid = randomUUID();
+    const stagingPath = `${localPath}.staging.${uid}`;
+    const backupPath = `${localPath}.backup.${uid}`;
+
+    mkdirSync(stagingPath);
+
+    let transport: Awaited<ReturnType<GitSourceFetcher["secureGit"]>>;
+    try { transport = await this.secureGit(stagingPath, parsed, validatedIps, credential); }
+    catch (error) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      throw error;
+    }
+    const { git, cleanup } = transport;
+    try {
+      await git.clone(sourceUrl, ".", {
+        "--depth": 1,
+        "--branch": branch,
+        "--no-tags": null,
+        "--single-branch": null,
+        "--config": "core.hooksPath=/dev/null"
+      });
+    } catch (err) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      if (credential) throw new Error("Authenticated Git retrieval failed; check the resource credentials and repository access");
+      throw err;
+    } finally {
+      await cleanup();
+    }
+
+    const incomingCodegraphDir = join(stagingPath, ".codegraph");
+    let hasIncomingCodegraph = false;
+    try {
+      lstatSync(incomingCodegraphDir);
+      hasIncomingCodegraph = true;
+    } catch (e: any) {
+      if (e.code !== "ENOENT") {
+        try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+        throw e;
+      }
+    }
+
+    if (hasIncomingCodegraph) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      throw new Error("Rejecting hostile incoming .codegraph conflict");
+    }
+
+    let version: string;
+    try {
+      version = await this.headCommit(stagingPath);
+    } catch (e) {
+      try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+      throw new Error(`Failed to read commit hash: ${e}`);
+    }
+
+    let hasLocalPath = false;
+    let localPathStats: import("node:fs").Stats | undefined;
+    try {
+      localPathStats = lstatSync(localPath);
+      hasLocalPath = true;
+    } catch (e: any) {
+      if (e.code !== "ENOENT") {
+        try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+        throw e;
+      }
+    }
+
+    if (hasLocalPath) {
+      if (!localPathStats!.isDirectory() || localPathStats!.isSymbolicLink()) {
+         try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+         throw new Error("Rejecting existing sync root that is not a directory");
+      }
+
+      const codegraphDir = join(localPath, ".codegraph");
+      let hasLocalCodegraph = false;
+      let localCodegraphStats: import("node:fs").Stats | undefined;
+      try {
+        localCodegraphStats = lstatSync(codegraphDir);
+        hasLocalCodegraph = true;
+      } catch (e: any) {
+        if (e.code !== "ENOENT") {
+          try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+          throw e;
+        }
+      }
+
+      if (hasLocalCodegraph) {
+        if (localCodegraphStats!.isSymbolicLink() || !localCodegraphStats!.isDirectory()) {
+          try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+          throw new Error("Rejecting conflicting/symlink .codegraph state");
+        }
+        try {
+          copyCodegraphSafely(codegraphDir, incomingCodegraphDir);
+        } catch (e) {
+          try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+          throw new Error(`Rejecting conflicting/symlink .codegraph state: ${e}`);
+        }
+      }
+
+      try {
+        renameSync(localPath, backupPath);
+      } catch (e) {
+        try { rmSync(stagingPath, { recursive: true, force: true }); } catch {}
+        throw new Error(`Failed to backup old checkout: ${e}`);
+      }
+
+      try {
+        renameSync(stagingPath, localPath);
+      } catch (e) {
+        try { renameSync(backupPath, localPath); } catch (e2) {
+          throw new Error(`Directory replacement failed and rollback failed. Recovery location: ${backupPath}`);
+        }
+        throw new Error(`Directory replacement failed: ${e}`);
+      }
+
+      try { rmSync(backupPath, { recursive: true, force: true }); } catch (e) {
+        // Log or ignore cleanup failure
+      }
+    } else {
+      renameSync(stagingPath, localPath);
+    }
+
     return { localPath, version, sourceType: "git" };
   }
 
-  // ── 内部 helper ──
-
-  private async headCommit(localPath: string): Promise<string | null> {
+  private async headCommit(targetPath: string): Promise<string> {
+    const { git, cleanup } = await this.secureGit(targetPath, null);
     try {
-      return (await simpleGit(localPath).revparse(["HEAD"])).trim().slice(0, 12);
-    } catch {
-      return null;
+      const output = await git.revparse(["HEAD"]);
+      if (!output) throw new Error("rev-parse returned empty string");
+      return output.trim().slice(0, 12);
+    } finally {
+      await cleanup();
     }
-  }
-
-  private extractHost(url: string): string {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return "";
-    }
-  }
-
-  private isPrivateAddress(host: string): boolean {
-    return PRIVATE_ADDR_RE.test(host);
   }
 }

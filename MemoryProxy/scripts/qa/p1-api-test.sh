@@ -241,56 +241,6 @@ fi
 fi  # end MEM_SKIP guard
 
 ##############################################################################
-head_ "P1-K Cost-Guard 路由 (2 可自动)"
-##############################################################################
-
-# P1-K4 markerOptIn=false → 默认 useGuard (本实例 markerOptIn=false)
-before=$(log_lines)
-req "/claude-code/$SPACE/v1/messages" \
-  "{\"model\":\"$MODEL\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
-delta=$(log_delta "$before")
-if printf '%s' "$delta" | grep -qE "COST_GUARD"; then
-  ok "P1-K4" "markerOptIn=false 默认行为生效: $(printf '%s' "$delta" | grep -oE 'COST_GUARD[^(]*\([^)]*\)' | head -1)"
-else
-  bad "P1-K4" "无 COST_GUARD 日志"
-fi
-
-# P1-K6 analyzerTrace report：cost-guard 关闭时无 → 依赖 K4 状态
-if [[ "$(curl -s -m 5 "$PROXY/health" | jq -r '.costGuard')" == "disabled" ]]; then
-  skip "P1-K6" "costGuard 未启用，analyzer trace 不产生（config 决定）"
-else
-  before=$(log_lines)
-  req "/claude-code/$SPACE/v1/messages" \
-    "{\"model\":\"$MODEL\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
-  delta=$(log_delta "$before")
-  if printf '%s' "$delta" | grep -qi "analyzer\|analyse"; then
-    ok "P1-K6" "analyzer trace 有调用"
-  else
-    skip "P1-K6" "未见 analyzer trace 日志"
-  fi
-fi
-
-# P1-K7 CC anthropic 独立上游: 本实例已被 instance-upstream 覆盖成 api.deepseek.com
-before=$(log_lines)
-req "/claude-code/$SPACE/v1/messages" \
-  "{\"model\":\"$MODEL\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
-delta=$(log_delta "$before")
-fwd=$(printf '%s' "$delta" | grep -oE "FORWARD upstream=\S+" | head -1)
-if [[ -n "$fwd" ]]; then
-  ok "P1-K7" "CC 转发目标: $fwd"
-else
-  skip "P1-K7" "未捕获转发目标"
-fi
-
-##############################################################################
-head_ "P1-L 压缩 (2 可自动)"
-##############################################################################
-
-# P1-L3/L4 CFQ tag 剥离: cost-guard 关闭时压缩不启用 → SKIP
-skip "P1-L3" "CFQ tag 剥离需 requestPrepare 启用（本实例 space policy 未开）"
-skip "P1-L4" "同上"
-
-##############################################################################
 head_ "P1-M 转发 + 重试 (2 可自动)"
 ##############################################################################
 

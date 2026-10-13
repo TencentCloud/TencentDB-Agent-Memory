@@ -22,6 +22,8 @@ export interface HealthResponse {
   stores: {
     vectorStore: boolean;
     embeddingService: boolean;
+    /** Whether keyword recall can use SQLite FTS5. */
+    ftsAvailable: boolean;
   };
   /** Integrated services status (only present when state_backend is configured) */
   services?: {

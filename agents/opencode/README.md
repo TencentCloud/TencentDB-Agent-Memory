@@ -87,43 +87,22 @@ asset_confirm → team_select → agent_task_select → initialized
 
 ---
 
-## 4. Marker 路由（⚠️ 重点）
+## 4. Optional analyse routing
 
-OpenCode 支持通过 URL 段追加 **marker** 来触发 cost-guard 分流或 analyse 请求分类，
-用法与 CB / Codex 完全对齐：
+The normal endpoint is `/opencode/<spaceId>/v1/chat/completions`.
+For explicitly enabled evaluation traffic, use
+`/opencode/<spaceId>/analyse/v1/chat/completions` (or the same path without
+`v1` when the client appends the bare protocol tail).
 
-| Marker | 路径 | 用途 |
-|--------|------|------|
-| （无） | `/opencode/<spaceId>/v1/chat/completions` | 默认走通用管道 |
-| **cost-guard** | `/opencode/<spaceId>/cost-guard/v1/chat/completions` | 强制走 cost-guard 档位 |
-| **analyse** | `/opencode/<spaceId>/analyse/v1/chat/completions` | 请求分类标记为 analyse |
+Set `injection.assetReflection.markerOptIn: true` in the proxy configuration
+to enable analyse routes. When disabled, these routes return HTTP 404 with
+`analyse_marker_disabled`. See `MemoryProxy/config.example.yaml` for the
+public configuration template.
 
-裸尾变体（`baseURL` 不含 `/v1` 时）：
-- `/opencode/<spaceId>/cost-guard/chat/completions`
-- `/opencode/<spaceId>/analyse/chat/completions`
-
-### 4.1 marker 门控
-
-两条 marker 路由都受配置门控 `assetReflection.markerOptIn` 控制：
-- `markerOptIn: true` → 命中并生效
-- `markerOptIn: false` → 返回 `404 {"error":"cost_guard_marker_disabled"}` / 类似
-
-见 `MemoryProxy/z_config/config.yaml` → `assetReflection.markerOptIn`。
-
-### 4.2 客户端如何使用
-
-在 opencode.json 的 `baseURL` 中直接切换：
-
-```jsonc
-// 默认档位
-"baseURL": "http://127.0.0.1:8096/opencode/default/v1"
-
-// 强制 cost-guard
-"baseURL": "http://127.0.0.1:8096/opencode/default/cost-guard/v1"
-
-// analyse 分类（供后台链路识别）
-"baseURL": "http://127.0.0.1:8096/opencode/default/analyse/v1"
-```
+Use `http://127.0.0.1:8096/opencode/default/v1` as the normal client
+`baseURL`, or `http://127.0.0.1:8096/opencode/default/analyse/v1` for the
+optional evaluation route. Retired private extension routes return HTTP 404;
+see [the migration guide](../../docs/extension-removal.md).
 
 ---
 
@@ -173,7 +152,7 @@ OpenCode 共享 CB 的 handler 路径（都是 OpenAI Chat Completions），注�
 - **共享 Handler**: OpenCode 复用 CB 的 `handleChatCompletions`（与 dsh 同一路径）
 - **agentSource 区分**: 路由层 `/opencode/` 段 → `agentSource=opencode`
 - **无独立 header 指纹**: OpenCode CLI 不带自定义 header，proxy 依赖 URL 段 + user-agent 识别
-- **Marker 路由**: `/cost-guard/` 和 `/analyse/` 两条 URL marker，见 §4
+- **Marker 路由**: 可选 `/analyse/` URL marker，见 §4
 
 ---
 
@@ -227,7 +206,7 @@ A: OpenCode 客户端本地不落 skill / session 文件（与 CB / dsh 不同�
 | Key 传递 | JSON `apiKey` | `.credentials.yaml` 环境变量 | **JSON `provider.*.options.apiKey`** |
 | Form tool | `ask_followup_question` | `ask_user_question` | **`ask_followup_question`**（同 CB） |
 | Session ID | client 带 `x-conversation-id` | client 带 `x-deepseek-harness-session-id` | **proxy 自生成** |
-| Marker 路由 | 无 | 无 | **`/cost-guard/` `/analyse/`** |
+| Marker 路由 | 无 | 无 | **`/analyse/`** |
 | 本地资产导入 | 有 (`asset-import.md`) | 有 (`asset-import.md`) | **无**（客户端不落文件） |
 
 ---
@@ -235,6 +214,6 @@ A: OpenCode 客户端本地不落 skill / session 文件（与 CB / dsh 不同�
 ## 13. 当前状态
 
 - ✅ 代码实现完成（handler 复用 CB 路径）
-- ✅ marker 路由（cost-guard / analyse）单测 6/6 通过
+- Current proxy forwarding and retired-route checks are documented in [verification evidence](../../docs/verification-evidence.md).
 - ✅ 端到端 curl 验证通过（3 条真实上游流式响应）
 - ✅ Panel 已展示 OpenCode 卡片

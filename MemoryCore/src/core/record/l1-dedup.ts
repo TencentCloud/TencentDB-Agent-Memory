@@ -90,7 +90,7 @@ export async function batchDedup(params: {
     }));
 
   // Determine what recall capabilities are available
-  const hasVectorData = vectorStore && (await vectorStore.countL1()) > 0;
+  const hasVectorData = !!vectorStore && (await vectorStore.countL1()) > 0;
   const hasFts = vectorStore?.isFtsAvailable() ?? false;
   const nativeHybrid = !!(
     vectorStore &&

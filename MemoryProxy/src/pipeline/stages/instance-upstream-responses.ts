@@ -21,7 +21,7 @@
 
 import type { ProxyConfig } from "../../types.js";
 import { getInstanceUpstreamConfigs, resolveForAgent } from "../../instance-upstream-cache.js";
-import { joinUrl } from "../../guard-adapter.js";
+import { joinUrl } from '../../upstream-target.js';
 
 export interface InstanceUpstreamResponsesInput {
   agent: string;

@@ -1335,170 +1335,51 @@ export const deleteTaskMutationRequestSchema = z.lazy(() => taskBatchDeleteReque
 
 export const deleteTaskMutationResponseSchema = z.lazy(() => deleteTask200Schema) as unknown as z.ZodType<DeleteTaskMutationResponse>
 
-/**
- * @description 列举成功
- */
-export const listWiki200Schema = z.lazy(() => apiResponseEnvelopeSchema).and(z.object({
-    get "data"(){
-                return wikiListDataSchema.optional()
-              }
-    })) as unknown as z.ZodType<ListWiki200>
+// Knowledge schemas are generated from the standalone public OpenAPI contract.
+// Legacy names remain exported; unpublished operations fail closed below.
+export {
+  listWiki200Schema,
+  listWikiErrorSchema,
+  listWikiMutationRequestSchema,
+  listWikiMutationResponseSchema,
+  createWiki200Schema,
+  createWikiErrorSchema,
+  createWikiMutationRequestSchema,
+  createWikiMutationResponseSchema,
+  deleteWiki200Schema,
+  deleteWikiErrorSchema,
+  deleteWikiMutationRequestSchema,
+  deleteWikiMutationResponseSchema,
+  searchWiki200Schema,
+  searchWikiErrorSchema,
+  searchWikiMutationRequestSchema,
+  searchWikiMutationResponseSchema,
+  listCodeGraph200Schema,
+  listCodeGraphErrorSchema,
+  listCodeGraphMutationRequestSchema,
+  listCodeGraphMutationResponseSchema,
+  createCodeGraph200Schema,
+  createCodeGraphErrorSchema,
+  createCodeGraphMutationRequestSchema,
+  createCodeGraphMutationResponseSchema,
+  syncCodeGraphErrorSchema,
+  syncCodeGraphMutationRequestSchema,
+  syncCodeGraphMutationResponseSchema,
+  deleteCodeGraph200Schema,
+  deleteCodeGraphErrorSchema,
+  deleteCodeGraphMutationRequestSchema,
+  deleteCodeGraphMutationResponseSchema,
+  searchCodeGraph200Schema,
+  searchCodeGraphErrorSchema,
+  searchCodeGraphMutationRequestSchema,
+  searchCodeGraphMutationResponseSchema
+} from "./knowledge/schemas.js";
 
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const listWikiErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<ListWikiError>
-
-export const listWikiMutationRequestSchema = z.lazy(() => wikiListRequestSchema) as unknown as z.ZodType<ListWikiMutationRequest>
-
-export const listWikiMutationResponseSchema = z.lazy(() => listWiki200Schema) as unknown as z.ZodType<ListWikiMutationResponse>
-
-/**
- * @description 受理成功
- */
-export const createWiki200Schema = z.lazy(() => apiResponseEnvelopeSchema).and(z.object({
-    get "data"(){
-                return assetMutateDataSchema.describe("通用资产变更返回。`asset_id` 为全局唯一、不可变 id，按资产类型\n前缀区分：Skill=`skl-`，LLM-Wiki=`wiki-`，Code-Graph=`cg-`。\n具体接口语义上等价于 `skill_id` / `wiki_id` / `code_graph_id`。\n").optional()
-              }
-    })) as unknown as z.ZodType<CreateWiki200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const createWikiErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<CreateWikiError>
-
-export const createWikiMutationRequestSchema = z.lazy(() => wikiCreateRequestSchema) as unknown as z.ZodType<CreateWikiMutationRequest>
-
-export const createWikiMutationResponseSchema = z.lazy(() => createWiki200Schema) as unknown as z.ZodType<CreateWikiMutationResponse>
-
-/**
- * @description 更新成功
- */
-export const updateWiki200Schema = z.lazy(() => apiResponseEnvelopeSchema).and(z.object({
-    get "data"(){
-                return wikiDetailSchema.optional()
-              }
-    })) as unknown as z.ZodType<UpdateWiki200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const updateWikiErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<UpdateWikiError>
-
-export const updateWikiMutationRequestSchema = z.lazy(() => wikiUpdateRequestSchema) as unknown as z.ZodType<UpdateWikiMutationRequest>
-
-export const updateWikiMutationResponseSchema = z.lazy(() => updateWiki200Schema) as unknown as z.ZodType<UpdateWikiMutationResponse>
-
-/**
- * @description 删除成功
- */
-export const deleteWiki200Schema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<DeleteWiki200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const deleteWikiErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<DeleteWikiError>
-
-export const deleteWikiMutationRequestSchema = z.lazy(() => wikiDeleteRequestSchema) as unknown as z.ZodType<DeleteWikiMutationRequest>
-
-export const deleteWikiMutationResponseSchema = z.lazy(() => deleteWiki200Schema) as unknown as z.ZodType<DeleteWikiMutationResponse>
-
-/**
- * @description 检索成功
- */
-export const searchWiki200Schema = z.lazy(() => apiResponseEnvelopeSchema).and(z.object({
-    get "data"(){
-                return assetSearchDataSchema.optional()
-              }
-    })) as unknown as z.ZodType<SearchWiki200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const searchWikiErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<SearchWikiError>
-
-export const searchWikiMutationRequestSchema = z.lazy(() => assetSearchRequestSchema) as unknown as z.ZodType<SearchWikiMutationRequest>
-
-export const searchWikiMutationResponseSchema = z.lazy(() => searchWiki200Schema) as unknown as z.ZodType<SearchWikiMutationResponse>
-
-/**
- * @description 列举成功
- */
-export const listCodeGraph200Schema = z.lazy(() => apiResponseEnvelopeSchema).and(z.object({
-    get "data"(){
-                return codeGraphListDataSchema.optional()
-              }
-    })) as unknown as z.ZodType<ListCodeGraph200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const listCodeGraphErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<ListCodeGraphError>
-
-export const listCodeGraphMutationRequestSchema = z.lazy(() => codeGraphListRequestSchema) as unknown as z.ZodType<ListCodeGraphMutationRequest>
-
-export const listCodeGraphMutationResponseSchema = z.lazy(() => listCodeGraph200Schema) as unknown as z.ZodType<ListCodeGraphMutationResponse>
-
-/**
- * @description 受理成功
- */
-export const createCodeGraph200Schema = z.lazy(() => apiResponseEnvelopeSchema).and(z.object({
-    get "data"(){
-                return assetMutateDataSchema.describe("通用资产变更返回。`asset_id` 为全局唯一、不可变 id，按资产类型\n前缀区分：Skill=`skl-`，LLM-Wiki=`wiki-`，Code-Graph=`cg-`。\n具体接口语义上等价于 `skill_id` / `wiki_id` / `code_graph_id`。\n").optional()
-              }
-    })) as unknown as z.ZodType<CreateCodeGraph200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const createCodeGraphErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<CreateCodeGraphError>
-
-export const createCodeGraphMutationRequestSchema = z.lazy(() => codeGraphCreateRequestSchema) as unknown as z.ZodType<CreateCodeGraphMutationRequest>
-
-export const createCodeGraphMutationResponseSchema = z.lazy(() => createCodeGraph200Schema) as unknown as z.ZodType<CreateCodeGraphMutationResponse>
-
-/**
- * @description 受理成功
- */
-export const syncCodeGraph200Schema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<SyncCodeGraph200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const syncCodeGraphErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<SyncCodeGraphError>
-
-export const syncCodeGraphMutationRequestSchema = z.lazy(() => codeGraphSyncRequestSchema) as unknown as z.ZodType<SyncCodeGraphMutationRequest>
-
-export const syncCodeGraphMutationResponseSchema = z.lazy(() => syncCodeGraph200Schema) as unknown as z.ZodType<SyncCodeGraphMutationResponse>
-
-/**
- * @description 删除成功
- */
-export const deleteCodeGraph200Schema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<DeleteCodeGraph200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const deleteCodeGraphErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<DeleteCodeGraphError>
-
-export const deleteCodeGraphMutationRequestSchema = z.lazy(() => codeGraphDeleteRequestSchema) as unknown as z.ZodType<DeleteCodeGraphMutationRequest>
-
-export const deleteCodeGraphMutationResponseSchema = z.lazy(() => deleteCodeGraph200Schema) as unknown as z.ZodType<DeleteCodeGraphMutationResponse>
-
-/**
- * @description 检索成功
- */
-export const searchCodeGraph200Schema = z.lazy(() => apiResponseEnvelopeSchema).and(z.object({
-    get "data"(){
-                return assetSearchDataSchema.optional()
-              }
-    })) as unknown as z.ZodType<SearchCodeGraph200>
-
-/**
- * @description 业务错误（HTTP 200/4xx/5xx 均可能返回）
- */
-export const searchCodeGraphErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n") as unknown as z.ZodType<SearchCodeGraphError>
-
-export const searchCodeGraphMutationRequestSchema = z.lazy(() => assetSearchRequestSchema) as unknown as z.ZodType<SearchCodeGraphMutationRequest>
-
-export const searchCodeGraphMutationResponseSchema = z.lazy(() => searchCodeGraph200Schema) as unknown as z.ZodType<SearchCodeGraphMutationResponse>
+// No Wiki update operation is published by the standalone Knowledge contract.
+// Retain legacy response validators where their definitions are complete.
+// The standalone sync mutation response uses the actual HTTP 202 contract.
+export const updateWiki200Schema = z.never().describe("Unpublished legacy Knowledge contract; use the standalone Knowledge API");
+export const updateWikiErrorSchema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n");
+export const updateWikiMutationRequestSchema = z.never().describe("Unpublished legacy Knowledge contract; use the standalone Knowledge API");
+export const updateWikiMutationResponseSchema = z.never().describe("Unpublished legacy Knowledge contract; use the standalone Knowledge API");
+export const syncCodeGraph200Schema = z.lazy(() => apiResponseEnvelopeSchema).describe("统一响应外壳。`code = 0` 表示成功；非 0 表示业务错误。\n常见业务错误语义：\n  - `400`：参数不合法（如关键 ID 缺失、互斥字段同时出现、空入参等）；\n  - `401`：鉴权失败；\n  - `403`：**全接口统一**——多个业务字段均可见但归属一致性校验\n    失败（如 `(team_id, agent_id)` 不构成有效 Agent 归属、\n    `task_id` 不属于 `team_id`、`(task_id, agent_id) ∉\n    task_agents`、`creator_user_id` 不是该 team 成员等）；\n    写审计日志；\n  - `404`：资源不存在或不属于当前调用上下文（记忆原子层 / 资产层 /\n    实体 CRUD 一律按 404，与 offload.yaml 同契约，不暴露存在性）；\n  - `409`：会话级 / 资产级并发竞争超时；\n  - `422`：Schema 校验通过但业务规则不通过（如 Skill 重名 / 版本冲突）；\n  - `429`：频控触发；\n  - `500`：内部错误，可有限重试；\n  - `503-LLM_UNAVAILABLE` / `503-STORAGE_UNAVAILABLE`：依赖不可用；\n  - `504`：请求超时。\n");

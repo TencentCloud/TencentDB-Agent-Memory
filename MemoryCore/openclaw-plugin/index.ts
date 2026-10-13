@@ -85,8 +85,7 @@ export default function register(api: any) {
   });
 
   api.logger.info?.(
-    `${TAG} Initialized: server=${serverUrl}, instance=${instanceId}, ` +
-    `isolation(team=${teamId},agent=${agentId},user=${userId}), ` +
+    `${TAG} Initialized: ` +
     `recall(persona=${includePersona},sceneNav=${includeSceneNav},max=${recallMaxResults}), ` +
     `capture=${captureEnabled}, cosRead=on, rejectUnauthorized=${rejectUnauthorized}`,
   );
@@ -210,7 +209,7 @@ export default function register(api: any) {
       if (result.appendSystemContext) out.appendSystemContext = result.appendSystemContext;
       return out;
     } catch (err) {
-      api.logger.warn(`${TAG} [recall] Failed: ${err instanceof Error ? err.message : String(err)}`);
+      api.logger.warn(`${TAG} [recall] Failed`);
     }
   });
 
@@ -223,7 +222,7 @@ export default function register(api: any) {
 
       api.logger.debug?.(
         `${TAG} [agent_end] hook triggered: success=${event?.success}, ` +
-        `messages=${messages.length}, sessionKey=${sessionKey ?? "(none)"}`,
+        `messages=${messages.length}, hasSession=${Boolean(sessionKey)}`,
       );
 
       // Skip on agent failure — partial / errored turns shouldn't pollute L0.
@@ -278,8 +277,7 @@ export default function register(api: any) {
       } catch (err) {
         const elapsed = Date.now() - startMs;
         api.logger.warn(
-          `${TAG} [capture] Failed after ${elapsed}ms: ` +
-          (err instanceof Error ? err.message : String(err)),
+          `${TAG} [capture] Failed after ${elapsed}ms`,
         );
       }
     });

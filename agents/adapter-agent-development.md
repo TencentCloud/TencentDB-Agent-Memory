@@ -91,7 +91,7 @@ Memory Proxy 对一个客户端**至少**做以下 10 件事。别一上来就 d
 | 1 | `MemoryProxy/src/agent-adapters/<client>.ts` | 新建 —— `classifyRequest` 三重信号 + `extractUserText` | #3 #4 |
 | 2 | `MemoryProxy/src/agent-adapters/types.ts` | `AgentKind` 联合加 `"<client>"` | #3 |
 | 3 | `MemoryProxy/src/agent-adapters/index.ts` | factory switch 加 case | #3 |
-| 4 | `MemoryProxy/src/server.ts` | 加 9 条路由（带/不带 `v1` × 主端点/aux/cost-guard/analyse marker），对照 dsh 段抄 | #1 |
+| 4 | `MemoryProxy/src/server.ts` | 添加主端点、aux 和可选 analyse 路由（按协议支持带/不带 `v1`），对照 dsh 段抄 | #1 |
 
 ### 2.2 白名单 & Session 识别 3 步 —— 对应能力 #1、#2、#7
 
@@ -221,7 +221,7 @@ dsh 是**目前踩坑最多、覆盖最完整**的接入案例。下表按[阶�
 
 | 能力 | dsh 实现位置 | 说明 |
 |---|---|---|
-| #1 路由 & 白名单 | `MemoryProxy/src/server.ts` dsh 段（9 条路由）<br>`MemoryProxy/src/credit-reporter.ts::extractSpaceIdFromPath` | 主 `/chat/completions` × (带/不带 v1) × (main/aux/cost-guard/analyse marker) 组合 |
+| #1 路由 & 白名单 | `MemoryProxy/src/server.ts` dsh 路由段<br>`MemoryProxy/src/credit-reporter.ts::extractSpaceIdFromPath` | 主 `/chat/completions` × (带/不带 v1) × (main/aux/optional analyse marker) 组合 |
 | #2 Session ID 解析 | `MemoryProxy/src/session/session-key.ts::resolveConversationId`（`x-deepseek-harness-session-id` fallback） | dsh 只从 header 拿 sid，body 没 fallback |
 | #3 请求分类 | `MemoryProxy/src/agent-adapters/dsh.ts::classifyRequest`<br>`MemoryProxy/src/handler.ts` 顶部 aux short-circuit | 三重信号：compact header > title body-shape > main |
 | #4 用户文本 & 元数据过滤 | `MemoryProxy/src/agent-adapters/dsh.ts::extractUserText`<br>`MemoryProxy/src/session/codebuddy/init.ts::isFreshCBConversation`<br>`MemoryProxy/src/session/store.ts::tryHistoryScan` | dsh 首帧塞 3 条元数据 role=user，签名匹配跳过 |

@@ -2,6 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    env: { LOG_PATH: "" },
     environment: "node",
     pool: "forks",
     include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],

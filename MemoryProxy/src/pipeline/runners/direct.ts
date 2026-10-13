@@ -30,7 +30,7 @@ import {
 } from "../../opik.js";
 import { extractSpaceIdFromPath } from "../../credit-reporter.js";
 import { extractSseUsage, flattenMessagesForOpik } from "./openai-chat.js";
-import { resolveSessionKey } from "../../guard-adapter.js";
+
 import { SKIP_REQUEST_HEADERS_WITH_INTERNAL, filterResponseHeaders } from "../../common/constants.js";
 import {
   stripDirectPrefix,
@@ -331,7 +331,7 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
 
   const lcHeaders: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) lcHeaders[k.toLowerCase()] = v;
-  const sessionKey = resolveSessionKey(config, lcHeaders, c.req.path, parsedBody ?? {}, keyId);
+  const sessionKey = keyId;
 
   const headers = buildDirectRequestHeaders(c);
 

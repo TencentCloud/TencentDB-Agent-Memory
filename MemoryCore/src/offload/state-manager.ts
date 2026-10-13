@@ -31,6 +31,7 @@ const DEFAULT_STATE: PluginState & { estimatedSystemOverhead: number | null } = 
 };
 
 export class OffloadStateManager {
+  private static _instanceCounter = 0;
   /** Immutable storage path context — set by init() or switchSession() */
   private _ctx: StorageContext | null = null;
 
@@ -54,7 +55,6 @@ export class OffloadStateManager {
   l15Settled = false;
   /** Unique instance ID for debugging (each new OffloadStateManager gets a new id). */
   readonly _instanceId = ++OffloadStateManager._instanceCounter;
-  private static _instanceCounter = 0;
 
   /** Set of toolCallIds confirmed offloaded in previous rounds. */
   confirmedOffloadIds = new Set<string>();

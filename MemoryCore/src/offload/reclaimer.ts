@@ -14,11 +14,10 @@
  * All file-age checks use mtime (last modification time).
  */
 
-import { readdir, stat, unlink, readFile, writeFile, rename, truncate } from "node:fs/promises";
+import { readdir, lstat, unlink, readFile, writeFile, rename, truncate } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { randomBytes } from "node:crypto";
-import { parseJsonlSafe } from "./storage.js";
 import type { PluginLogger } from "./types.js";
 
 // ============================
@@ -56,8 +55,8 @@ const MS_PER_DAY = 86_400_000;
 /**
  * Run a full reclamation pass over the offload data directory.
  *
- * Safe to call concurrently (each step is idempotent) but designed
- * for single-caller-per-process via a 24h setInterval.
+ * Coordinate this destructive pass with writers and other reclaimers.
+ * Pre-existing symlinks are skipped; this is not race-free confinement.
  */
 export async function reclaimOffloadData(
   dataRoot: string,
@@ -77,7 +76,7 @@ export async function reclaimOffloadData(
     return stats;
   }
 
-  if (!existsSync(dataRoot)) {
+  if (!(await isPlainDirectory(dataRoot))) {
     logger.debug?.(`${TAG} Skipped: dataRoot does not exist: ${dataRoot}`);
     return stats;
   }
@@ -130,6 +129,13 @@ export async function reclaimOffloadData(
 // Step helpers
 // ============================
 
+async function isPlainDirectory(filePath: string): Promise<boolean> {
+  try { return (await lstat(filePath)).isDirectory(); } catch { return false; }
+}
+async function isRegularFile(filePath: string): Promise<boolean> {
+  try { return (await lstat(filePath)).isFile(); } catch { return false; }
+}
+
 /** Discover agent subdirectories under dataRoot. */
 async function discoverAgentDirs(dataRoot: string): Promise<string[]> {
   const entries = await readdir(dataRoot, { withFileTypes: true });
@@ -164,6 +170,7 @@ async function deleteExpiredJsonlInDir(
   cutoffMs: number,
   logger: PluginLogger,
 ): Promise<number> {
+  if (!(await isPlainDirectory(dir))) return 0;
   let deleted = 0;
   let entries: string[];
   try {
@@ -176,8 +183,8 @@ async function deleteExpiredJsonlInDir(
   for (const file of jsonlFiles) {
     const filePath = join(dir, file);
     try {
-      const s = await stat(filePath);
-      if (s.mtimeMs < cutoffMs) {
+      const s = await lstat(filePath);
+      if (s.isFile() && s.mtimeMs < cutoffMs) {
         await unlink(filePath);
         deleted++;
         logger.debug?.(`${TAG} Step 1: deleted expired JSONL: ${filePath} (mtime=${new Date(s.mtimeMs).toISOString()})`);
@@ -198,7 +205,7 @@ async function deleteExpiredJsonlInDir(
 /** Remove registry entries whose offloadFile no longer exists on disk. */
 async function syncRegistryAfterJsonlDeletion(dir: string, logger: PluginLogger): Promise<void> {
   const registryPath = join(dir, "sessions-registry.json");
-  if (!existsSync(registryPath)) return;
+  if (!(await isRegularFile(registryPath))) return;
   try {
     const raw = await readFile(registryPath, "utf-8");
     const registry = JSON.parse(raw) as Record<string, Record<string, unknown>>;
@@ -229,15 +236,16 @@ async function reclaimOrphanRefs(
 
   for (const agentDir of agentDirs) {
     const refsDir = join(agentDir, "refs");
-    if (!existsSync(refsDir)) continue;
+    if (!(await isPlainDirectory(agentDir)) || !(await isPlainDirectory(refsDir))) continue;
 
     // Build set of referenced ref filenames from surviving JSONL files
     let referencedRefs: Set<string> | null = null;
     try {
       referencedRefs = await buildReferencedRefSet(agentDir);
     } catch {
-      // Fall through: if we can't build the set, use mtime-only fallback
-      logger.warn(`${TAG} Step 2: failed to build ref set for ${agentDir}, using mtime-only fallback`);
+      // Incomplete evidence cannot establish that an old ref is an orphan.
+      logger.warn(`${TAG} Step 2: reference evidence unavailable, skipping ref reclamation`);
+      continue;
     }
 
     let refFiles: string[];
@@ -253,9 +261,9 @@ async function reclaimOrphanRefs(
         const isReferenced = referencedRefs !== null && referencedRefs.has(file);
         if (isReferenced) continue;
 
-        // Not referenced (or ref set unavailable) — check mtime
-        const s = await stat(filePath);
-        if (s.mtimeMs < cutoffMs) {
+        // Proven unreferenced in the readable index — check mtime
+        const s = await lstat(filePath);
+        if (s.isFile() && s.mtimeMs < cutoffMs) {
           await unlink(filePath);
           deleted++;
           logger.debug?.(`${TAG} Step 2: deleted orphan ref: ${filePath}`);
@@ -272,27 +280,22 @@ async function reclaimOrphanRefs(
 /** Parse all offload-*.jsonl in an agent dir, collect referenced ref filenames. */
 async function buildReferencedRefSet(agentDir: string): Promise<Set<string>> {
   const refs = new Set<string>();
-  let files: string[];
-  try {
-    files = await readdir(agentDir);
-  } catch {
-    return refs;
-  }
-
+  const files = await readdir(agentDir);
   const jsonlFiles = files.filter((f) => f.startsWith("offload-") && f.endsWith(".jsonl"));
   for (const file of jsonlFiles) {
-    try {
-      const content = await readFile(join(agentDir, file), "utf-8");
-      const { entries } = parseJsonlSafe(content, { skipValidation: true });
-      for (const entry of entries) {
-        const resultRef = entry.result_ref;
-        if (typeof resultRef === "string" && resultRef.length > 0) {
-          // result_ref format: "refs/2026-04-12T17-26-08-123p08-00.md"
-          refs.add(basename(resultRef));
-        }
+    const filePath = join(agentDir, file);
+    if (!(await isRegularFile(filePath))) throw new Error("Reference evidence unavailable");
+    const content = await readFile(filePath, "utf-8");
+    // Do not repair/skip malformed lines when authorizing destructive cleanup.
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      const entry: unknown = JSON.parse(line);
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new Error("Reference evidence invalid");
       }
-    } catch {
-      /* skip corrupt files */
+      const resultRef = (entry as Record<string, unknown>).result_ref;
+      if (typeof resultRef !== "string") throw new Error("Reference evidence invalid");
+      if (resultRef.length > 0) refs.add(basename(resultRef));
     }
   }
 
@@ -313,19 +316,21 @@ async function reclaimExpiredMmds(
 
   for (const agentDir of agentDirs) {
     const mmdsDir = join(agentDir, "mmds");
-    if (!existsSync(mmdsDir)) continue;
+    if (!(await isPlainDirectory(agentDir)) || !(await isPlainDirectory(mmdsDir))) continue;
 
     // Read activeMmdFile from state.json to protect it
     let activeMmdFile: string | null = null;
     try {
       const stateFile = join(agentDir, "state.json");
-      if (existsSync(stateFile)) {
-        const stateRaw = await readFile(stateFile, "utf-8");
-        const state = JSON.parse(stateRaw) as Record<string, unknown>;
-        activeMmdFile = typeof state.activeMmdFile === "string" ? state.activeMmdFile : null;
-      }
+      if (!(await isRegularFile(stateFile))) continue;
+      const state: unknown = JSON.parse(await readFile(stateFile, "utf-8"));
+      if (!state || typeof state !== "object" || Array.isArray(state)) continue;
+      const active = (state as Record<string, unknown>).activeMmdFile;
+      if (active !== null && (typeof active !== "string" || !active || basename(active) !== active)) continue;
+      activeMmdFile = active;
     } catch {
-      /* state.json unreadable — proceed without protection (conservative: skip all) */
+      // Missing, unreadable or malformed state cannot authorize MMD deletion.
+      continue;
     }
 
     let mmdFiles: string[];
@@ -342,8 +347,8 @@ async function reclaimExpiredMmds(
     const fileMetas: Array<{ name: string; mtimeMs: number }> = [];
     for (const file of mmdFiles) {
       try {
-        const s = await stat(join(mmdsDir, file));
-        fileMetas.push({ name: file, mtimeMs: s.mtimeMs });
+        const s = await lstat(join(mmdsDir, file));
+        if (s.isFile()) fileMetas.push({ name: file, mtimeMs: s.mtimeMs });
       } catch {
         /* skip unstat-able files */
       }
@@ -398,7 +403,7 @@ async function rotateDebugLogs(
 
     const filePath = join(dataRoot, name);
     try {
-      const s = await stat(filePath);
+      const s = await lstat(filePath);
       if (s.isFile()) {
         logFiles.push({ name, path: filePath, size: s.size });
       }
@@ -441,8 +446,9 @@ async function pruneRegistries(
   let pruned = 0;
 
   for (const agentDir of agentDirs) {
+    if (!(await isPlainDirectory(agentDir))) continue;
     const registryPath = join(agentDir, "sessions-registry.json");
-    if (!existsSync(registryPath)) continue;
+    if (!(await isRegularFile(registryPath))) continue;
 
     try {
       const raw = await readFile(registryPath, "utf-8");

@@ -114,7 +114,7 @@ async function loadOTelRuntime(): Promise<OTelRuntime | null> {
  * 初始化 OTel SDK（NodeSDK）。
  * 配置 OTLP exporter 将 trace/log/metric 发送到用户指定的 endpoint。
  */
-async function initOTelSDK(config: OTelConfig): Promise<boolean> {
+async function initOTelSDK(config: OTelConfig): Promise<{ sdk: any, shutdown: () => Promise<void> } | null> {
   try {
     const protocol = config.protocol ?? "http";
     const endpoint = config.endpoint ?? "http://localhost:4318";
@@ -122,7 +122,7 @@ async function initOTelSDK(config: OTelConfig): Promise<boolean> {
 
     // 动态加载 SDK 组件
     const { NodeSDK } = await import("@opentelemetry/sdk-node");
-    const { Resource } = await import("@opentelemetry/resources");
+    const { resourceFromAttributes } = await import("@opentelemetry/resources");
     const { ATTR_SERVICE_NAME } = await import("@opentelemetry/semantic-conventions");
 
     // 根据协议选择 exporter
@@ -158,7 +158,7 @@ async function initOTelSDK(config: OTelConfig): Promise<boolean> {
 
     // 构建 SDK 配置
     const sdkConfig: any = {
-      resource: new Resource({
+      resource: resourceFromAttributes({
         [ATTR_SERVICE_NAME]: serviceName,
       }),
       traceExporter,
@@ -168,7 +168,7 @@ async function initOTelSDK(config: OTelConfig): Promise<boolean> {
     if (logExporter) {
       try {
         const { SimpleLogRecordProcessor } = await import("@opentelemetry/sdk-logs");
-        sdkConfig.logRecordProcessors = [new SimpleLogRecordProcessor(logExporter)];
+        sdkConfig.logRecordProcessors = [new SimpleLogRecordProcessor({ exporter: logExporter })];
       } catch {
         // sdk-logs 可选
       }
@@ -180,11 +180,20 @@ async function initOTelSDK(config: OTelConfig): Promise<boolean> {
     console.log(
       `${TAG} OTel SDK initialized ✓ | endpoint=${endpoint} | protocol=${protocol} | service=${serviceName}`,
     );
-    return true;
+    return {
+      sdk,
+      shutdown: async () => {
+        try {
+          await sdk.shutdown();
+        } catch (e) {
+          // ignore
+        }
+      }
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`${TAG} Failed to initialize OTel SDK: ${msg}. Trace/Log will use console fallback.`);
-    return false;
+    return null;
   }
 }
 
@@ -661,6 +670,8 @@ export class OtlpObservabilityBackend implements IObservabilityBackend {
   readonly traceMiddleware: ITraceMiddleware = new OtlpTraceMiddleware();
   readonly tracePropagation: ITracePropagation = new OtlpTracePropagation();
 
+  private _otelSdk: { sdk: any, shutdown: () => Promise<void> } | null = null;
+
   async initialize(config: ObservabilityConfig): Promise<void> {
     const otelConfig = config.otel;
 
@@ -677,7 +688,7 @@ export class OtlpObservabilityBackend implements IObservabilityBackend {
     }
 
     // 2. 初始化 OTel SDK（配置 OTLP exporter）
-    await initOTelSDK(otelConfig);
+    this._otelSdk = await initOTelSDK(otelConfig);
 
     // 3. 初始化 Metric 后端
     await this.metric.initialize({
@@ -690,6 +701,10 @@ export class OtlpObservabilityBackend implements IObservabilityBackend {
 
   async shutdown(): Promise<void> {
     await this.metric.destroy();
+    if (this._otelSdk) {
+      await this._otelSdk.shutdown();
+      this._otelSdk = null;
+    }
     console.log(`${TAG} OtlpObservabilityBackend shutdown`);
   }
 }

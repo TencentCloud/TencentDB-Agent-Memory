@@ -150,7 +150,7 @@ export const MCP_TOOLS: McpToolDef[] = [
 
   {
     name: "wiki_search",
-    description: "Search wiki pages by keyword (BM25 full-text search). Optional graph multi-hop expansion (PRD: hop, decay, minScore) walks [[wikilink]] edges from BM25 seeds to surface graph-related pages whose body doesn't match the query directly. Each result also carries `related` (neighbour pages) and the response includes `links` (edges between results) for relationship visualisation.",
+    description: "Search wiki pages by keyword (BM25 full-text search). Optional graph multi-hop expansion (PRD: hop, decay, minScore) walks [[wikilink]] edges from BM25 seeds to surface graph-related pages whose body doesn't match the query directly. Each result carries `okf` metadata with original provenance, advisory trust/status, live staleness and verificationPredatesContent. Surface stale/deprecated or unverified information to the user; older verification is not a new confirmation, and metadata is not access control. Each result also carries `related` (neighbour pages) and the response includes `links` (edges between results) for relationship visualisation.",
     inputSchema: {
       type: "object",
       properties: {

@@ -16,7 +16,7 @@
  */
 
 import type { LlmClient } from "./llm.js";
-import { parseFrontmatter, buildPage } from "./frontmatter.js";
+import { parseFrontmatter, buildPage, sourceEntries, mergeSources, type SourceEntry } from "./frontmatter.js";
 
 export type MergeDecision =
   | { action: "write"; content: string }   // 新建或重写
@@ -85,13 +85,16 @@ export async function mergePage(
   }
 
   const candParsed = parseFrontmatter(candidateContent);
-  const union = unionSources(arr(oldParsed.frontmatter.sources), arr(candParsed.frontmatter.sources));
+  if (oldParsed.frontmatter.type === "Attested Computation" || candParsed.frontmatter.type === "Attested Computation") {
+    return { action: "skip", reason: "Attested computation contracts require explicit edits; LLM merge disabled" };
+  }
+  const union = mergeSources(sourceEntries(oldParsed.frontmatter.sources), sourceEntries(candParsed.frontmatter.sources));
 
   // OQ-1 优化①：规则判重——候选已被旧页覆盖，不调 LLM，仅更新 sources 并集。
   if (isCandidateRedundant(oldParsed.body, candParsed.body)) {
     return {
       action: "write",
-      content: buildPage({ ...oldParsed.frontmatter, sources: union }, oldParsed.body),
+      content: buildPage({ ...candParsed.frontmatter, ...oldParsed.frontmatter, verified: oldParsed.frontmatter.verified, sources: union }, oldParsed.body),
     };
   }
 
@@ -99,7 +102,7 @@ export async function mergePage(
 
   // OQ-1 优化②：大页走追加模式，省 output token 且不丢旧事实。
   if (oldParsed.body.length > threshold) {
-    const merged = await appendMerge(oldParsed, candParsed.body, union, llm);
+    const merged = await appendMerge(oldParsed, candParsed, union, llm);
     return { action: "write", content: merged };
   }
 
@@ -149,7 +152,10 @@ Output the merged complete page.`;
   // 兜底：若 LLM 返回空或无 frontmatter，退回候选页，避免丢页。
   const mergedParsed = parseFrontmatter(out);
   if (!out.trim() || !mergedParsed.hasFrontmatter) {
-    return reconcileSources(existingContent, candidateContent, candidateContent);
+    const old = parseFrontmatter(existingContent);
+    const candidate = parseFrontmatter(candidateContent);
+    return reconcileSources(existingContent, candidateContent,
+      buildPage(old.frontmatter, `${old.body.trimEnd()}\n\n${candidate.body}`));
   }
   return reconcileSources(existingContent, candidateContent, out);
 }
@@ -163,15 +169,15 @@ Output the merged complete page.`;
  */
 async function appendMerge(
   oldParsed: ReturnType<typeof parseFrontmatter>,
-  candidateBody: string,
-  union: string[],
+  candidate: ReturnType<typeof parseFrontmatter>,
+  union: SourceEntry[],
   llm: LlmClient,
 ): Promise<string> {
   const prompt = `## Existing page body
 ${oldParsed.body}
 
 ## New material
-${candidateBody}
+${candidate.body}
 
 Output only the incremental information not already in the existing page. If nothing is new, output an empty string.`;
 
@@ -183,18 +189,28 @@ Output only the incremental information not already in the existing page. If not
   }
 
   const newBody = `${oldParsed.body.trimEnd()}\n\n${fragment}`;
-  return buildPage({ ...oldParsed.frontmatter, sources: union }, newBody);
+  const fm = { ...candidate.frontmatter, ...oldParsed.frontmatter, sources: union };
+  fm.verified = oldParsed.frontmatter.verified;
+  return buildPage(markGenerated(fm, true), newBody);
 }
 
 /** 把合并结果页的 sources 重写为「旧 ∪ 新」并集。 */
 function reconcileSources(existingContent: string, candidateContent: string, mergedContent: string): string {
-  const oldSrc = arr(parseFrontmatter(existingContent).frontmatter.sources);
-  const newSrc = arr(parseFrontmatter(candidateContent).frontmatter.sources);
+  const oldSrc = sourceEntries(parseFrontmatter(existingContent).frontmatter.sources);
+  const newSrc = sourceEntries(parseFrontmatter(candidateContent).frontmatter.sources);
   const merged = parseFrontmatter(mergedContent);
-  const union = unionSources(oldSrc, newSrc);
-  return buildPage({ ...merged.frontmatter, sources: union }, merged.body);
+  const union = mergeSources(oldSrc, newSrc);
+  const old = parseFrontmatter(existingContent);
+  // Model output is not authoritative for lifecycle, verification or extension fields.
+  const candidate = parseFrontmatter(candidateContent);
+  const fm = { ...candidate.frontmatter, ...old.frontmatter, sources: union };
+  fm.verified = old.frontmatter.verified;
+  return buildPage(markGenerated(fm, old.body !== merged.body), merged.body);
 }
 
-function arr(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+function markGenerated(fm: import("./frontmatter.js").PageFrontmatter, changed: boolean) {
+  if (!changed) return fm;
+  const next = { ...fm, generated: { by: "wiki-ingest/2", at: new Date().toISOString() } };
+  // Keep historical verification events as specified by OKF; do not fabricate new ones.
+  return next;
 }

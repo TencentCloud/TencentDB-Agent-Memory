@@ -12,18 +12,8 @@ if (!process.version.startsWith("v22.")) {
 import { serve } from "@hono/node-server";
 import { buildConfig, parseArgv } from "./config.js";
 import { createApp } from "./server.js";
-import {
-  setExtensionDebug,
-  shutdownGuard,
-  shutdownPrivateControlPlane,
-  startPrivateControlPlane,
-} from "./guard-adapter.js";
-import {
-  initRequestPrepare,
-  isRequestPrepareActive,
-  isRequestPrepareEnabledByDefault,
-  shutdownRequestPrepare,
-} from "./request-prepare-adapter.js";
+
+
 import { initLogger, shutdownLogger, log } from "./report/log.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
@@ -32,6 +22,7 @@ import { initAuth } from "./auth.js";
 import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
 import { initProxyStorage, getEffectiveBackend } from "./storage/factory.js";
+
 import { flushPendingWrites, pendingWriteCount } from "./tdai/pending-writes.js";
 
 const overrides = parseArgv(process.argv);
@@ -44,9 +35,6 @@ initLogger({
   rotate: config.log.rotate,
   backend: config.log.backend,
 });
-
-// Enable extension debug logging if log.level === "debug"
-setExtensionDebug(config.log.level === "debug");
 
 // ── Initialize ClickHouse writer ─────────────────────────────────────────────
 initClickHouse(config.clickhouse);
@@ -68,48 +56,8 @@ initAuth(config.auth);
 // ── Register internal service accounts (bypass whole pipeline on match) ──────
 initSystemUsers(config.systemUsers);
 
-// ── Initialize ProxyStorage (dynamic import cost-guard for kernel-sts COS) ──
-// 必须 await —— dynamic import 是 async 的；不 await 直接进 createApp 会
-// 让首个 cos 请求 fallback 到 sqlite（backend 已经拿到但 _kernelStsFactory null）
+// Initialize local Proxy storage.
 await initProxyStorage(config.storage);
-const effectiveStorage = getEffectiveBackend();
-if (config.storage.enabled && config.storage.backend === "cos" && effectiveStorage.effective !== "cos") {
-  log.warn("storage.degraded", {
-    requested: effectiveStorage.requested,
-    effective: effectiveStorage.effective,
-    reason: effectiveStorage.error,
-    note: "cost-guard submodule missing or shark unreachable — cos falling back",
-  });
-}
-
-// ── Start private control plane (optional, same process / separate port) ────
-try {
-  if (await startPrivateControlPlane(config)) {
-    log.info("private_control_plane.enabled");
-  }
-} catch (err: unknown) {
-  // A management-plane outage must not prevent the LLM data plane from starting.
-  log.warn("private_control_plane.start_failed", { error: String(err) });
-}
-
-// ── Bring up the optional request-preparation stage ─────────────────────────
-// Opaque to the host: it only owns the resource lifecycle, never the behavior.
-if (isRequestPrepareActive(config)) {
-  if (!config.redis.enabled) {
-    // The stage keeps its cross-request state in Redis. Without it every
-    // request starts cold — correct, but it gives up the shared cache.
-    log.warn("request_prepare.no_redis", {
-      note: "costGuard.requestPrepare is configured but redis.enabled=false — running uncached",
-    });
-  }
-  initRequestPrepare(config);
-  log.info("request_prepare.enabled", {
-    redis: config.redis.enabled,
-    // False means the stage is wired but idle until the control plane enables
-    // it for a space, so an empty compression log is expected rather than a bug.
-    enabledByDefault: isRequestPrepareEnabledByDefault(config),
-  });
-}
 
 const app = createApp(config);
 
@@ -122,7 +70,7 @@ log.info("server.starting", {
   opik: config.opik.enabled ? config.opik.url : "disabled",
   langfuse: config.langfuse.enabled ? config.langfuse.host : "disabled",
   clickhouse: config.clickhouse.enabled ? config.clickhouse.url : "disabled",
-  costGuard: config.costGuard.enabled ? "enabled" : "disabled",
+
   rateLimit: config.rateLimit.tpm > 0 || config.rateLimit.qpm > 0
     ? `${config.rateLimit.tpm} TPM / ${config.rateLimit.qpm} QPM`
     : "disabled",
@@ -167,9 +115,8 @@ async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
     const { drained, remaining } = await flushPendingWrites(10_000);
     log.info("server.shutdown.flush_l0.done", { drained, remaining });
   }
-  await shutdownGuard();
-  await shutdownPrivateControlPlane();
-  await shutdownRequestPrepare();
+
+
   await shutdownTraceArchive();
   await shutdownLangfuse();
   await shutdownClickHouse();

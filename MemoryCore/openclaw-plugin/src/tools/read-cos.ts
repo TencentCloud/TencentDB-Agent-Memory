@@ -28,13 +28,13 @@ export async function handleReadCos(
   }
 
   try {
-    logger?.debug?.(`[read-cos] read: "${path}"`);
+    logger?.debug?.("[read-cos] Reading memory file");
     const content = await reader.read(path);
-    logger?.debug?.(`[read-cos] ✅ "${path}" (${content.length} chars)`);
+    logger?.debug?.(`[read-cos] Read complete (${content.length} chars)`);
     return { content: [{ type: "text" as const, text: content }] };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger?.warn(`[read-cos] Failed to read "${path}": ${msg}`);
+    logger?.warn("[read-cos] Read failed; details omitted");
     return { content: [{ type: "text" as const, text: `Failed to read file: ${msg}` }] };
   }
 }

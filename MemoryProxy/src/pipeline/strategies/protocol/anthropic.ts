@@ -14,7 +14,7 @@ import type {
   StreamOutcome,
 } from "./types.js";
 import type { PipelineContext } from "../../context.js";
-import type { ForwardTarget } from "../../../guard-adapter.js";
+import type { ForwardTarget } from '../../../upstream-target.js';
 import { parseAnthropicSseStream } from "./stream-parsers.js";
 
 export const anthropicProtocol: ProtocolStrategy = {

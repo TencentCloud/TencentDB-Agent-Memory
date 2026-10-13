@@ -21,18 +21,42 @@ frontend/src/**/*.js.map
 #      -v /path/to/metadata-instances.json:/app/config/metadata-instances.json:ro
 .env
 .env.*
+**/.env
+**/.env.*
+.npmrc
+**/.npmrc
 config/*.json
 config/*.yaml
 config/*.yml
+config/*.local.*
+config.*.local.*
+*.local.yaml
+*.local.yml
+*.local.json
+*.local.*
+**/*.local.*
+
+# Audit scratch / 临时文件
+.audit
+.audit*
+**/.audit*
+*.audit
+
+# 数据库与本地持久化数据
 data/
+**/data/
 **/*.db
 **/*.db-shm
 **/*.db-wal
 **/*.sqlite
+**/*.sqlite3
+dump.rdb
+**/dump.rdb
 
 # 日志 / 覆盖率 / e2e 输出
 **/logs
 **/*.log
+nohup.out
 coverage/
 frontend/test-results/
 frontend/playwright-report/
@@ -40,10 +64,14 @@ frontend/playwright-report/
 # 版本控制与工具元数据
 .git
 .gitignore
+.gitmodules
 .idea/
 .vscode/
 .iwiki
 .codebuddy
+.claude
+.coding-ci.yaml
+.gitlab-ci.yml
 
 # OS / 编辑器杂项
 .DS_Store
@@ -64,3 +92,12 @@ docs/
 tests/
 **/*.e2e.sh
 e2e-*.sh
+
+# Nested local credentials, database files and runtime state
+**/.npmrc*
+**/.env*
+**/*.db*
+**/*.sqlite*
+**/data
+**/dump.rdb
+**/*.local.*

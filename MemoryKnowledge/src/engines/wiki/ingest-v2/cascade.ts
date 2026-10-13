@@ -11,7 +11,7 @@
 
 import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import { join, basename, relative } from "node:path";
-import { parseFrontmatter, buildPage } from "./frontmatter.js";
+import { parseFrontmatter, buildPage, sourceEntries, rawSourceKey } from "./frontmatter.js";
 import { slugify } from "./slug.js";
 
 export interface DeleteSourceFilesResult {
@@ -57,7 +57,7 @@ function collectWikiPages(wikiDir: string): string[] {
 
 /** 结构性文件不参与级联删除/重写。 */
 function isStructural(relFromWiki: string): boolean {
-  return relFromWiki === "index.md" || relFromWiki === "schema.md" || relFromWiki === "purpose.md";
+  return ["index.md", "log.md"].includes(basename(relFromWiki)) || relFromWiki === "schema.md" || relFromWiki === "purpose.md";
 }
 
 /**
@@ -74,7 +74,7 @@ export async function deleteSourceFiles(
   // 待删源的文件名集合（page 的 sources 里记的是文件名）。
   const deletedNames = new Set<string>();
   for (const p of sourceFullPaths) {
-    deletedNames.add(basename(p));
+    deletedNames.add(relative(join(projectPath, "raw", "sources"), p).replace(/\\/g, "/"));
     try {
       if (existsSync(p)) rmSync(p, { force: true });
     } catch {
@@ -97,12 +97,12 @@ export async function deleteSourceFiles(
       continue;
     }
     const parsed = parseFrontmatter(content);
-    const sources = Array.isArray(parsed.frontmatter.sources)
-      ? parsed.frontmatter.sources.filter((x): x is string => typeof x === "string")
-      : [];
+    if (parsed.frontmatter.locked || parsed.frontmatter.type === "Attested Computation") continue;
+
+    const sources = sourceEntries(parsed.frontmatter.sources);
     if (sources.length === 0) continue;
 
-    const remaining = sources.filter((s) => !deletedNames.has(s));
+    const remaining = sources.filter((s) => !deletedNames.has(rawSourceKey(s) ?? ""));
     if (remaining.length === sources.length) continue; // 本页不引用被删源
 
     if (remaining.length === 0) {
@@ -114,9 +114,11 @@ export async function deleteSourceFiles(
         /* ignore */
       }
     } else {
-      // 共享 → 重写去掉被删源
+      // 共享 → 重写去掉被删源并更新时间戳
       try {
-        const rewritten = buildPage({ ...parsed.frontmatter, sources: remaining }, parsed.body);
+        const fm = { ...parsed.frontmatter, sources: remaining };
+        fm.generated = { by: "wiki-cascade/1", at: new Date().toISOString() };
+        const rewritten = buildPage(fm, parsed.body);
         writeFileSync(pagePath, rewritten, "utf-8");
         rewrittenSourcePages++;
       } catch {
@@ -204,8 +206,11 @@ export async function cascadeDeleteWikiPagesWithRefs(
     } catch {
       continue;
     }
+    const parsed = parseFrontmatter(content);
+    if (parsed.frontmatter.locked || parsed.frontmatter.type === "Attested Computation") continue;
+
     let changed = false;
-    const next = content.replace(linkRe, (whole, inner: string) => {
+    const nextBody = parsed.body.replace(linkRe, (whole, inner: string) => {
       const target = normalizeLinkTarget(inner);
       if (deletedAliases.has(target)) {
         changed = true;
@@ -217,7 +222,10 @@ export async function cascadeDeleteWikiPagesWithRefs(
     });
     if (changed) {
       try {
-        writeFileSync(pagePath, next, "utf-8");
+        const fm = { ...parsed.frontmatter };
+        fm.generated = { by: "wiki-cascade/1", at: new Date().toISOString() };
+        const rewritten = buildPage(fm, nextBody);
+        writeFileSync(pagePath, rewritten, "utf-8");
         rewrittenFiles++;
       } catch {
         /* ignore */

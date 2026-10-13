@@ -102,7 +102,7 @@ It parses `opencode.json` and fails if `options.baseURL` does not route through 
 
 ## Notes
 
-- **Endpoint prefix**: use the OpenCode-prefixed route family that already ships on `feat/server_team` — main path `POST /opencode/<spaceId>/v1/chat/completions` (bare-tail variant `/opencode/<spaceId>/chat/completions` when `baseURL` omits `/v1`), plus `/opencode/<spaceId>/cost-guard|analyse/v1` marker routes. The first path segment is how the proxy classifies `agentSource`; pointing OpenCode at `/codebuddy/<spaceId>` would classify it as `codebuddy` and break the native `question`-based session-init form (`MemoryProxy/src/session/opencode/form.ts`).
+- **Endpoint prefix**: use the OpenCode-prefixed route family that already ships on `feat/server_team` — main path `POST /opencode/<spaceId>/v1/chat/completions` (bare-tail variant `/opencode/<spaceId>/chat/completions` when `baseURL` omits `/v1`), plus `/opencode/<spaceId>/analyse/v1` marker routes. The first path segment is how the proxy classifies `agentSource`; pointing OpenCode at `/codebuddy/<spaceId>` would classify it as `codebuddy` and break the native `question`-based session-init form (`MemoryProxy/src/session/opencode/form.ts`).
 - **Data flow**: only prompts/completions transit the proxy; memory data stays in your local SQLite (memory-core) unless you configure otherwise.
 - **Version**: the legacy example covers OpenCode 1.x; `opencode.v2.json` is the 2.0 configuration. The 2.0.18 CLI request path and response were checked locally with a mock endpoint; full MemoryProxy deployment still needs end-to-end verification.
 

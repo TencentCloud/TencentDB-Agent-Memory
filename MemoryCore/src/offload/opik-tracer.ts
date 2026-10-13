@@ -4,6 +4,9 @@
  */
 import type { PluginLogger } from "./types.js";
 import { getEnv } from "../utils/env.js";
+import { createRequire } from "node:module";
+
+const cjsRequire = createRequire(import.meta.url);
 
 // Opik client types (minimal shape to avoid hard dependency)
 interface OpikClient {
@@ -68,7 +71,10 @@ function getOpikConfigFromOpenClawConfig(config: Record<string, unknown>): {
   const entries = plugins?.entries as Record<string, Record<string, unknown>> | undefined;
   const opikEntry = entries?.["opik-openclaw"];
   const opikCfg = opikEntry?.config as Record<string, unknown> | undefined;
-  const enabled = opikEntry?.enabled !== false && opikCfg?.enabled !== false;
+  // Shared environment credentials must not grant consent to export memory.
+  // Either explicit enable flag opts in; an explicit false at either level wins.
+  const enabled = (opikEntry?.enabled === true || opikCfg?.enabled === true)
+    && opikEntry?.enabled !== false && opikCfg?.enabled !== false;
   const apiUrl =
     typeof opikCfg?.apiUrl === "string" ? opikCfg.apiUrl : getEnv("OPIK_URL_OVERRIDE");
   const apiKey =
@@ -88,16 +94,24 @@ export function initOffloadOpikTracer(
   openClawConfig: Record<string, unknown>,
   logger: PluginLogger,
 ): void {
-  if (tracerInitTried) return;
-  tracerInitTried = true;
   try {
     const cfg = getOpikConfigFromOpenClawConfig(openClawConfig);
-    if (!cfg.enabled) return;
+    // Apply revocation before the initialization guard on host config reload.
+    // Already queued/in-flight SDK exports are not retroactively cancelled.
+    if (!cfg.enabled) {
+      tracerEnabled = false;
+      client = null;
+      tracerInitTried = false;
+      return;
+    }
+    if (tracerInitTried) return;
+    tracerInitTried = true;
     // Dynamic import — graceful when opik is not installed
     let OpikConstructor: new (params: Record<string, unknown>) => OpikClient;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const opikModule = require("opik") as { Opik: new (params: Record<string, unknown>) => OpikClient };
+      const req = typeof require !== "undefined" ? require : cjsRequire;
+      const opikModule = req("opik") as { Opik: new (params: Record<string, unknown>) => OpikClient };
       OpikConstructor = opikModule.Opik;
     } catch {
       logger.debug?.("[context-offload] opik package not available, tracer disabled");
@@ -113,10 +127,21 @@ export function initOffloadOpikTracer(
     logger.debug?.(
       `[context-offload] Opik tracer enabled: project=${cfg.projectName}, workspace=${cfg.workspaceName}`,
     );
-  } catch (err) {
+  } catch {
     tracerEnabled = false;
     client = null;
-    logger.debug?.(`[context-offload] Opik tracer init failed: ${String(err)}`);
+    tracerInitTried = false;
+    logger.debug?.("[context-offload] Opik tracer initialization failed, tracer disabled");
+  }
+}
+
+export function isOffloadTracerEnabled(): boolean {
+  return tracerEnabled && client !== null;
+}
+
+export async function flushOffloadOpikTracer(): Promise<void> {
+  if (client) {
+    await client.flush();
   }
 }
 

@@ -1,110 +1,17 @@
 /** Shared type definitions for context-proxy. */
 
-/**
- * Optional private forwarding extension config.
- *
- * The host only understands a few generic fields; every other setting is kept
- * opaque in `options` and passed through to the private extension untouched.
- * The host never inspects, defaults, or type-checks the opaque payload.
- */
-export interface CostGuardConfig {
-  /** Master switch for the private forwarding extension. */
-  enabled: boolean;
-  /**
-   * Whether the `/cost-guard` URL marker is required to activate the router.
-   *
-   *   - `false` (default, historical behavior): every request that reaches a
-   *     primary handler goes through the cost-guard router (subject to
-   *     `enabled`). The `/{agent}/{spaceId}/cost-guard/...` routes are NOT
-   *     registered and return 404. This is what production runs — clients that
-   *     never learned about the marker continue to work unchanged.
-   *   - `true` (opt-in, test env): the router is only activated when the
-   *     request path contains the `/cost-guard` segment. Paths without the
-   *     marker skip the router and passthrough directly to the default
-   *     upstream. Used to A/B compare guarded vs. bare traffic side by side.
-   *
-   * Independent of `enabled`: when `enabled=false` every request is a
-   * passthrough regardless of this flag, matching pre-existing semantics.
-   */
-  markerOptIn?: boolean;
-  /**
-   * Pin the agent profile by id ("claude-code", "codebuddy").
-   * Empty or "auto" (default) = auto-detect from request headers.
-   */
-  agentProfile?: string;
-  /**
-   * Anthropic-specific upstream override（用于 anthropic 协议请求的全局兜底上游）。
-   * Per-agent override（upstream.agents[agent].url）优先级更高。
-   */
-  anthropicUpstream?: {
-    url: string;
-  };
-  /**
-   * Opaque private options, forwarded to the extension as-is.
-   *
-   * Known keys the current cost-guard build understands (still untyped here):
-   * `taskArchiveEnabled`, `compress*` / `gate*`, `judge` (enabled, baseUrl,
-   * timeouts, everyNToolTurns, latch*), `requestPrepare`, `controlPlane`,
-   * analyze/cheap model fields, `agents` (per-agent cheap overrides).
-   */
-  options: Record<string, unknown>;
-}
 
-/**
- * ProxyStorage configuration —— injection/skill 数据从 Redis 迁到 COS/SQLite/FS
- * 的统一存储抽象层。见 docs/design/2026-07-10-cos-ttl-nottl-split-plan.md
- *
- * 当 `enabled: true` 时，注入层与 Skill 层会用 ProxyStorage 替换 Redis repo；
- * 否则完全走原 Redis 路径。CostGuard 的 `cg:sess:*` 不受影响。
- *
- * 存储 key 前缀分两档：
- *   - `ttl/` —— 热缓存（Session Init State / Injection Hook 预热），配 COS
- *     lifecycle rule `ttlDays` 天未修改自动删。丢了能重建，业务无感。
- *   - `nottl/` —— 业务态（Binding / Skill 抽取 / Skill 版本锁），**不配** rule，
- *     永久保留。
- */
 export interface StorageConfig {
   /** 总开关。false = 完全走原 Redis 路径，本次迁移代码等同于未加载。 */
   enabled: boolean;
   /** 优选后端；init 失败按 cos → sqlite → fs → memory 顺序降级。 */
-  backend: "cos" | "sqlite" | "fs" | "memory";
+  backend: "sqlite" | "fs" | "memory";
   /**
    * `ttl/` 前缀下对象的生存期（天）。只对 ttl 前缀生效，nottl 完全不受影响。
    * 默认 7 天，与 COS lifecycle rule 的粒度对齐（COS 天级扫描）。
    */
   ttlDays: number;
 
-  cos: {
-    /**
-     * 业务命名空间前缀（跟 core 的 memory_v2/cos_data 隔离）。
-     * bucket/region/endpointDomain 都由 Shark 返回的 CosUrl 解析，不用配。
-     */
-    rootPrefix: string;
-    /**
-     * 可选：强制走 VPC 内网 / 自定义域名（例：`cos.example.com`）。
-     * 空则用 Shark 返回 CosUrl 里的 host。
-     */
-    endpointDomain?: string;
-    /**
-     * Shark 拉临时凭证 —— 每个 spaceId 独立 STS，权限严格绑到
-     * `proxy_cache/{ttl|nottl}/{spaceId}/*` 两个前缀。
-     * 见 docs/design/2026-07-12-cos-shark-sts-credential-plan.md §3.1。
-     */
-    shark: {
-      /** Shark base URL，例如 `http://gateway.example.com:8000`。 */
-      baseUrl: string;
-      /** shark HTTP 请求超时。默认 10s。 */
-      timeoutMs: number;
-      /** 5xx / 429 / 网络错 / 超时的重试次数。默认 2。 */
-      retryCount: number;
-      /** STS 到期前多少 ms 提前刷新。默认 2min。 */
-      refreshBufferMs: number;
-      /** per-spaceId backend 池上限（LRU）。默认 100。 */
-      maxSpaces: number;
-      /** LRU evict 时延迟关闭旧 backend 的 ms。默认 30_000。 */
-      graceCloseDelayMs: number;
-    };
-  };
 
   sqlite: {
     /** 空 = 用 PROXY_DB_PATH 或 ~/.tdai-memory-proxy/proxy.db。 */
@@ -116,7 +23,7 @@ export interface StorageConfig {
   };
 }
 
-/** Redis connection configuration for session store (CostGuard + Injection). */
+
 export interface RedisConfig {
   enabled: boolean;
   /** Redis connection URL (e.g. redis://:password@host:port/db). Overrides host/port/password/db if set. */
@@ -129,7 +36,7 @@ export interface RedisConfig {
   password: string;
   /** Redis database index. Default: 0. */
   db: number;
-  /** Key prefix for CostGuard session keys. Default: "cg:sess:". */
+
   keyPrefix: string;
   /** Session TTL in seconds. Default: 1800 (30 minutes). */
   ttlSeconds: number;
@@ -403,36 +310,7 @@ export interface SkillRuntimeConfig {
   //     曾经用作新老链路互斥灰度开关。现在永远走新链路 conversation/add, 该开关废弃。
 }
 
-/**
- * Per-agent upstream override entry. When an agent (identified by URL path
- * prefix like "claude-code") needs a different upstream than the global
- * default, this struct provides the replacement `url` (and optional `apiKey`).
- *
- * Fallback semantics — three cases, matching the runtime `effectiveApiKey`
- * resolution in `handler.ts` / `anthropicHandler.ts`:
- *
- *   ┌──────────────────────────────┬────────────┬──────────────────────────┐
- *   │ agent config                 │ url used   │ apiKey used              │
- *   ├──────────────────────────────┼────────────┼──────────────────────────┤
- *   │ NOT in agents map            │ upstream.url│ upstream.apiKey (global)│
- *   │ in map, url only, no apiKey  │ agent.url  │ passthrough client key  │
- *   │ in map, url + apiKey         │ agent.url  │ agent.apiKey            │
- *   └──────────────────────────────┴────────────┴──────────────────────────┘
- *
- * The presence of an entry cuts the global `upstream.apiKey` fallback —
- * this is intentional so an operator can run some agents on a server-side
- * key and others on the client's own key from a single proxy config.
- *
- * Priority order (high → low):
- *   1. `costGuard`-provided `target.authHeaders`（cheap-model 兜底路由自带凭据）
- *   2. `upstream.agents[agent].url` + `upstream.agents[agent].apiKey`
- *   3. `costGuard.anthropicUpstream.url`（仅 Anthropic 协议）
- *   4. `upstream.url` + `upstream.apiKey`（未命中 agent 时的默认）
- *
- * The same map serves both Anthropic and OpenAI protocols — the agent name
- * alone determines routing, matching how {@link ProxyConfig#upstream.url}
- * itself is protocol-agnostic.
- */
+
 export interface AgentUpstreamEntry {
   /** Target upstream base URL. Required. */
   url: string;
@@ -501,7 +379,7 @@ export interface ProxyConfig {
   redis: RedisConfig;
   rateLimit: RateLimitConfig;
   storage: StorageConfig;
-  costGuard: CostGuardConfig;
+
   creditReport: CreditReportConfig;
   creditPricing: CreditPricingConfig;  // NEW: model pricing for credit calculation
   injection: InjectionConfig;
@@ -642,23 +520,7 @@ export interface InjectionConfig {
    * 单节点 / 本地开发场景可用），启动时 warn 一次。
    */
   externalGatewayUrl?: string;
-  /**
-   * 资产反思模式（内部效果评估用）。**默认开启**——为了让运营方零配置即可
-   * 用 URL marker 观测资产注入效果。marker 本身仍是 opt-in：不带 `/analyse/`
-   * 段的请求完全无感。
-   *
-   * 开启后，请求路径带 `/analyse` marker（结构同 `/cost-guard`：夹在
-   * `/{agent}/{spaceId}` 之后，如 `/codebuddy/default/analyse/v1/messages`）
-   * 时，proxy 会在系统提示词末尾追加一个 `<asset_reflection>` 块，指导
-   * agent 在回答里点评「本轮调用过的云端资产工具是否起到作用」。
-   *
-   * marker 段列表由本节点上实际注册的资产 injector 决定（skill /
-   * tdai-memory / knowledge），一个都没注册时 injector 不 emit 任何块。
-   *
-   * 姿势对齐 `costGuard.markerOptIn`，但 default 相反：
-   *   - `true`（默认）：injector register；仅当 URL 带 `/analyse/` 段时才 emit 块
-   *   - `false`：injector 不 register 且顶部 gate 把 `/analyse/` 段 404 拒
-   */
+
   assetReflection?: {
     markerOptIn: boolean;
   };
@@ -686,6 +548,8 @@ export interface ExtractionConfig {
 
 /** Auth service configuration — verify user_key and resolve user_id via auth/verify API. */
 export interface AuthConfig {
+  /** Service credential for the Core gateway, distinct from client user keys. */
+  apiKey?: string;
   enabled: boolean;
   /** Auth service base URL (e.g. http://kernel.example.com:8420). */
   url: string;
@@ -866,30 +730,13 @@ export interface RawYamlConfig {
   };
   storage?: {
     enabled?: boolean;
-    backend?: "cos" | "sqlite" | "fs" | "memory";
+    backend?: "sqlite" | "fs" | "memory";
     ttlDays?: number;
-    cos?: {
-      rootPrefix?: string;
-      endpointDomain?: string;
-      shark?: {
-        baseUrl?: string;
-        timeoutMs?: number;
-        retryCount?: number;
-        refreshBufferMs?: number;
-        maxSpaces?: number;
-        graceCloseDelayMs?: number;
-      };
-    };
+
     sqlite?: { dbPath?: string };
     fs?: { fsRoot?: string };
   };
-  costGuard?: {
-    enabled?: boolean;
-    agentProfile?: string;
-    anthropicUpstream?: { url?: string };
-    /** Opaque private options, kept unparsed and forwarded to the extension. */
-    [key: string]: unknown;
-  };
+
   clickhouse?: {
     enabled?: boolean;
     url?: string;
@@ -922,8 +769,6 @@ export interface RawYamlConfig {
       })[];
     })[];
   };
-  /** Opaque private review options, forwarded to the extension untouched. */
-  badcaseCollector?: Record<string, unknown>;
   injection?: {
     enabled?: boolean;
     endpoint?: string;
@@ -981,6 +826,7 @@ export interface RawYamlConfig {
     allowLlmWrite?: boolean;
   };
   auth?: {
+    apiKey?: string;
     enabled?: boolean;
     url?: string;
     timeoutMs?: number;
@@ -1050,14 +896,7 @@ export interface UsageLogEntry {
   usage: Record<string, unknown>; // raw LLM usage object, unmodified
   /** Request receipt time used for deterministic time-based credit pricing. */
   requestReceivedAt?: string;
-  routedFrom?: string;     // original model if routing was applied
-  /**
-   * Scalar counters reported by the optional private request-preparation
-   * stage, recorded verbatim. The host neither defines nor interprets the key
-   * set — it varies with the extension version, and omitting the field means
-   * the stage did not run. See `request-prepare-adapter.ts`.
-   */
-  extensionStats?: Record<string, unknown>;
+  routedFrom?: string;
   /** Space/tenant ID extracted from /proxy/<spaceId>/... path. */
   spaceId?: string;
   /**
@@ -1068,17 +907,7 @@ export interface UsageLogEntry {
   upstreamRequestId?: string;
 }
 
-/**
- * Extension-emitted telemetry event.
- *
- * Emitted by the optional private extension (when loaded) via the injected
- * `writeLogEvent` callback. The host only forwards the payload to the log sink
- * — it does not interpret or generate this event on its own.
- *
- * The field set intentionally mirrors {@link UsageLogEntry} so downstream log
- * consumers can process both events with a single schema; `event` distinguishes
- * them at query time.
- */
+
 export interface AnalyzerUsageLogEntry {
   timestamp: string;
   event: "analyzer_usage";

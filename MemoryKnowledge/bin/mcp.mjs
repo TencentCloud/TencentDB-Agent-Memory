@@ -1,2 +1,7 @@
 #!/usr/bin/env node
-import "../dist/mcp/server.js";
+import { fileURLToPath } from "node:url";
+
+const distPath = fileURLToPath(new URL("../dist/mcp/server.mjs", import.meta.url));
+process.argv[1] = distPath;
+
+await import("../dist/mcp/server.mjs");

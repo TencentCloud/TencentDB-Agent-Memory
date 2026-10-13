@@ -11,7 +11,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import type { Command } from "commander";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+type Command = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0]["program"];
 import type { SeedCliContext } from "../index.ts";
 import type { SeedCommandOptions } from "../../core/seed/types.js";
 import { loadAndValidateInput, fillTimestamps, SeedValidationError } from "../../core/seed/input.js";

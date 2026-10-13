@@ -58,14 +58,15 @@ function collectEntries(wikiDir: string): IndexEntry[] {
       }
       if (!entry.endsWith(".md")) continue;
       const rel = relative(wikiDir, full).replace(/\\/g, "/");
-      if (STRUCTURAL.has(rel)) continue;
+      if (STRUCTURAL.has(rel) || ["index.md", "log.md"].includes(entry)) continue;
       let content: string;
       try {
         content = readFileSync(full, "utf-8");
       } catch {
         continue;
       }
-      const { frontmatter } = parseFrontmatter(content);
+      const { frontmatter, hasFrontmatter } = parseFrontmatter(content);
+      if (!hasFrontmatter) continue;
       const title =
         typeof frontmatter.title === "string" && frontmatter.title.trim()
           ? frontmatter.title.trim()
@@ -91,7 +92,7 @@ export function renderIndex(entries: IndexEntry[]): string {
     byType.set(e.type, arr);
   }
 
-  const sections: string[] = ["# Index", ""];
+  const sections: string[] = ['---\nokf_version: "0.2"\n---\n', "# Index", ""];
   const emitted = new Set<string>();
 
   const emitGroup = (type: string, heading: string) => {

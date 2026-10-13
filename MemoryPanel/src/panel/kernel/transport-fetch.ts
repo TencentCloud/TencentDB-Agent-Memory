@@ -9,62 +9,6 @@ import { META_HEADER_REQUEST_ID, META_HEADER_SERVICE_ID, META_HEADER_USER_KEY } 
 
 export { mapHttpStatusFromEnvelopeCode };
 
-const SENSITIVE_KEYS = new Set([
-  'password',
-  'initial_password',
-  'default_user_key',
-  'user_key',
-  'key_value',
-  'granted_by_key',
-  'owner_user_key',
-  'creator_user_key',
-  'authorization',
-  'api_key',
-  'token',
-  'secret',
-  'bearer',
-]);
-const MAX_LOG_FIELD_CHARS = 300;
-const MAX_LOG_JSON_CHARS = 1200;
-
-function maskSecret(value: string): string {
-  if (!value) return '';
-  if (value.length <= 8) return `${value}…`;
-  return `${value.slice(0, 8)}…`;
-}
-
-function truncateString(value: string): string {
-  if (value.length <= MAX_LOG_FIELD_CHARS) return value;
-  return `${value.slice(0, MAX_LOG_FIELD_CHARS)}…[truncated ${value.length - MAX_LOG_FIELD_CHARS} chars]`;
-}
-
-function sanitizeMetaBody(value: unknown, depth = 0): unknown {
-  if (depth > 8) return '[max_depth]';
-  if (value === null || value === undefined) return value;
-  if (typeof value === 'string') return truncateString(value);
-  if (typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map((item) => sanitizeMetaBody(item, depth + 1));
-  const out: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (SENSITIVE_KEYS.has(key.toLowerCase())) {
-      out[key] = typeof raw === 'string' && raw.length > 0 ? maskSecret(raw) : '[redacted]';
-      continue;
-    }
-    out[key] = sanitizeMetaBody(raw, depth + 1);
-  }
-  return out;
-}
-
-function serializeForLog(value: unknown): string {
-  try {
-    const json = JSON.stringify(sanitizeMetaBody(value));
-    if (json.length <= MAX_LOG_JSON_CHARS) return json;
-    return `${json.slice(0, MAX_LOG_JSON_CHARS)}…[truncated ${json.length - MAX_LOG_JSON_CHARS} chars]`;
-  } catch {
-    return '[unserializable]';
-  }
-}
-
 /** 内核 HTTP 调用失败（网络/超时/无效信封）。 */
 export class KernelFetchError extends Error {
   constructor(
@@ -92,7 +36,7 @@ export interface MetaFetchConfig {
   /**
    * 额外请求头（如 task-source 的令牌注入）。
    *
-   * 注意：这些头**不参与日志**（logRemoteMeta 只序列化 body），
+   * 注意：这些头**不参与日志**（logRemoteMeta 仅记录操作和状态），
    * 因此绝不把敏感值放这里后又手工拼进日志字段。
    */
   extraHeaders?: Record<string, string>;
@@ -142,7 +86,7 @@ export async function executeMetaFetch<T>(
     path,
     serviceId: cfg.serviceId,
     request_id: reqId,
-    requestBody: serializeForLog(body ?? {}),
+    requestPayloadOmitted: true,
   });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -160,6 +104,7 @@ export async function executeMetaFetch<T>(
       headers,
       ...(method === 'POST' ? { body: JSON.stringify(body ?? {}) } : {}),
       signal: ctrl.signal,
+      redirect: 'error',
     });
     const env = (await resp.json().catch(() => null)) as RawEnvelope<unknown> | null;
     if (!env || typeof env.code !== 'number') {
@@ -186,14 +131,14 @@ export async function executeMetaFetch<T>(
           request_id: envelope.request_id,
           durationMs: Date.now() - startedAt,
           envelopeCode: env.code,
-          envelopeMessage: envelope.message,
+          responsePayloadOmitted: true,
         });
       } else {
         logRemoteMeta(log, 'response', envelope.request_id, {
           path,
           durationMs: Date.now() - startedAt,
           request_id: envelope.request_id,
-          responseBody: serializeForLog(env.data ?? {}),
+          responsePayloadOmitted: true,
         });
       }
       return envelope as T;
@@ -205,8 +150,7 @@ export async function executeMetaFetch<T>(
         request_id: envelope.request_id,
         durationMs: Date.now() - startedAt,
         envelopeCode: env.code,
-        envelopeMessage: envelope.message,
-        error: err.message,
+        responsePayloadOmitted: true,
       });
       throw err;
     }
@@ -214,7 +158,7 @@ export async function executeMetaFetch<T>(
       path,
       durationMs: Date.now() - startedAt,
       request_id: envelope.request_id,
-      responseBody: serializeForLog(env.data ?? {}),
+      responsePayloadOmitted: true,
     });
     return (env.data ?? {}) as T;
   } catch (err) {

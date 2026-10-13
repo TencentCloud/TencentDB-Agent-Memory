@@ -18,7 +18,7 @@ import {
   extractSpaceIdFromPath,
 } from "../../credit-reporter.js";
 import { matchWhitelistEndpoint, type WhitelistEndpoint } from "../../routes/whitelist.js";
-import { joinUrl } from "../../guard-adapter.js";
+import { joinUrl } from '../../upstream-target.js';
 import { log } from "../../report/log.js";
 import { verifyUserKey } from "../../auth.js";
 import { stageAuth } from "../stages/auth.js";

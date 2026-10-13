@@ -10,6 +10,10 @@ MemoryCore runs independently and exposes these capabilities through an HTTP Gat
 
 > MemoryCore stores knowledge metadata, not knowledge content. Wiki parsing, code graph construction, indexing, and content retrieval are provided by `MemoryKnowledge/`.
 
+Chinese keyword segmentation uses a pinned Jieba dependency and a licensed lazy
+[loader adapter](../docs/jieba-loader.md). See its verification, packaging and
+index migration limits before changing native loader configuration.
+
 ## Core capabilities
 
 - **Memory storage and processing**: records L0 conversations and maintains L1 atomic memories, L2 scenarios, and L3 profiles.
@@ -256,8 +260,9 @@ Import tasks from external task systems (TAPD, Jira, …) into `meta_tasks`:
 
 ```bash
 npm run read-local-memory
-npm run seed-v2
 ```
+
+The source distribution does not include the historical `seed-v2` implementation. It is not part of the build or the supported command set. Use the documented migration tools or the current HTTP API to import existing data.
 
 ## Security recommendations
 

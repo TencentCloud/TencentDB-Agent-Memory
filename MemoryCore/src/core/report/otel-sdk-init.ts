@@ -107,6 +107,7 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
       { OTLPLogExporter: HttpLogExporter },
       { LoggerProvider, BatchLogRecordProcessor },
       { AsyncLocalStorageContextManager },
+      { createEmptyMetadata },
     ] = await Promise.all([
       import("@opentelemetry/sdk-node"),
       import("@opentelemetry/resources"),
@@ -117,18 +118,8 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
       import("@opentelemetry/exporter-logs-otlp-http"),
       import("@opentelemetry/sdk-logs"),
       import("@opentelemetry/context-async-hooks"),
+      import("@opentelemetry/otlp-grpc-exporter-base"),
     ]);
-
-    // 兼容新旧版本 @opentelemetry/resources
-    // 新版使用 resourceFromAttributes()，旧版使用 new Resource()
-    const createResource = (attrs: Record<string, string>) => {
-      if ("resourceFromAttributes" in resourcesModule) {
-        return (resourcesModule as { resourceFromAttributes: (a: Record<string, string>) => unknown }).resourceFromAttributes(attrs);
-      }
-      // 旧版 fallback
-      const ResourceClass = (resourcesModule as { Resource: new (a: Record<string, string>) => unknown }).Resource;
-      return new ResourceClass(attrs);
-    };
 
     const logsApiModule = "@opentelemetry/api-logs";
     const { logs } = await import(logsApiModule);
@@ -146,6 +137,12 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
       ?? "grpc";
 
     const headers = options.headers ?? parseHeadersFromEnv();
+    // gRPC exporters accept Metadata, not HTTP headers. Explicit options must
+    // override environment credentials just as they do for HTTP exporters.
+    const metadata = createEmptyMetadata();
+    if (protocol === "grpc") {
+      for (const [key, value] of Object.entries(headers)) metadata.set(key, value);
+    }
     const serviceName = options.serviceName ?? process.env.OTEL_SERVICE_NAME ?? "core";
     const serviceVersion = options.serviceVersion ?? "unknown";
     const os = await import("node:os");
@@ -164,14 +161,15 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
     if (tenantId) {
       resourceAttrs["tps.tenant.id"] = tenantId;
     }
-    const resource = createResource(resourceAttrs);
+    // The declared @opentelemetry/resources 2.x dependency provides this typed API.
+    const resource = resourcesModule.resourceFromAttributes(resourceAttrs);
 
     // Trace Exporter（仅当有主 OTel endpoint 时创建）
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let traceExporter: any = null;
     if (hasMainOtel) {
       traceExporter = protocol === "grpc"
-        ? new GrpcTraceExporter({ url: endpoint, headers })
+        ? new GrpcTraceExporter({ url: endpoint, metadata })
         : new HttpTraceExporter({ url: `${endpoint}/v1/traces`, headers });
     }
 
@@ -182,7 +180,7 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
     let logExporter: any = null;
     if (hasMainOtel) {
       logExporter = protocol === "grpc"
-        ? new GrpcLogExporter({ url: endpoint, headers })
+        ? new GrpcLogExporter({ url: endpoint, metadata })
         : new HttpLogExporter({ url: `${endpoint}/v1/logs`, headers });
     }
 
@@ -191,7 +189,8 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
     const logProcessors: any[] = [];
     if (logExporter) {
       logProcessors.push(
-        new BatchLogRecordProcessor(logExporter, {
+        new BatchLogRecordProcessor({
+          exporter: logExporter,
           maxExportBatchSize: 512,
           scheduledDelayMillis: options.logExportIntervalMs ?? 5_000,
         }),
@@ -225,7 +224,8 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
         // 添加 ClickHouse Log Processor
         const chLogExporter = new ClickHouseLogExporter(chExporter);
         logProcessors.push(
-          new BatchLogRecordProcessor(chLogExporter as unknown as InstanceType<typeof GrpcLogExporter>, {
+          new BatchLogRecordProcessor({
+            exporter: chLogExporter as unknown as InstanceType<typeof GrpcLogExporter>,
             maxExportBatchSize: 512,
             scheduledDelayMillis: options.logExportIntervalMs ?? 5_000,
           }),
@@ -239,9 +239,8 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
         };
 
         console.info(`[core][otel] ClickHouse direct-write enabled ✓`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[core][otel] ClickHouse exporter init failed: ${msg}. Continuing without ClickHouse.`);
+      } catch {
+        console.warn("[core][otel] ClickHouse exporter init failed. Continuing without ClickHouse.");
       }
     }
 
@@ -316,13 +315,10 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
         const langfuseProcessor = new LangfuseFilteringProcessor(langfuseExporter);
         spanProcessors.push(langfuseProcessor);
         langfuseShutdown = () => langfuseProcessor.shutdown();
-        console.info(
-          `[core][otel] Langfuse exporter enabled ✓ | host=${langfuseHost}`,
-        );
+        console.info("[core][otel] Langfuse exporter enabled ✓");
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[core][otel] Langfuse exporter init failed: ${msg}. Continuing without Langfuse.`);
+    } catch {
+      console.warn("[core][otel] Langfuse exporter init failed. Continuing without Langfuse.");
     }
 
     // 初始化 NodeSDK（不含 Metric，Metric 通过 Kafka 上报）
@@ -349,13 +345,12 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
     _initialized = true;
 
     console.info(
-      `[core][otel] SDK initialized ✓ | endpoint=${endpoint || "(langfuse-only)"} | protocol=${protocol} | service=${serviceName} | tenantId=${tenantId ? tenantId.slice(0, 20) + "..." : "(none)"} | metrics=kafka`,
+      `[core][otel] SDK initialized ✓ | protocol=${protocol === "grpc" ? "grpc" : "http/protobuf"} | metrics=kafka`,
     );
 
     return true;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    diag.warn(`[core] Failed to initialize OTel SDK: ${msg}`);
+  } catch {
+    diag.warn("[core] Failed to initialize OTel SDK. Check exporter configuration and installed dependencies.");
     return false;
   }
 }

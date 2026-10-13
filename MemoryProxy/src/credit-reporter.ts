@@ -403,20 +403,15 @@ export async function tryReportCreditFromPath(
   pricingConfig: CreditPricingConfig | null | undefined,
   modelId?: string,
   upstreamUrl?: string,
-  /**
-   * Log event kind. When `"analyzer_usage"`, this function short-circuits and
-   * never issues a credit report — extension telemetry events are
-   * infrastructure consumption and must not be billed to the user's memory space.
-   * Defaults to `"usage"` semantically when omitted (backward compatible).
-   */
+
   event?: "usage" | "analyzer_usage",
   requestTime?: Date,
   logContext?: CreditLogContext,
 ): Promise<CreditReportOutcome> {
-  // Defense-in-depth: extension telemetry events must never trigger a credit report.
-  // Today the extension telemetry path (writeLog with event="analyzer_usage") does not
+
+
   // reach this function, but this guard ensures future refactors cannot
-  // accidentally bill extension consumption to the caller's memory space.
+
   if (event === "analyzer_usage") {
     return { attempted: false, ok: false };
   }

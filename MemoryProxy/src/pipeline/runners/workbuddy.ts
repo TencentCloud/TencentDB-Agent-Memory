@@ -23,21 +23,13 @@ import { apiKeyToKeyId, extractBearerToken, opikCreateTrace, uuidv7 } from "../.
 import { createPipeline, writeLog } from "../../logger.js";
 import { extractSpaceIdFromPath } from "../../credit-reporter.js";
 import { writeFailedReportRaw } from "../../clickhouse.js";
-import { joinUrl } from "../../guard-adapter.js";
+import { joinUrl } from '../../upstream-target.js';
 import {
   stageInstanceUpstreamResponses,
   isInstanceUpstreamBlocked,
 } from "../stages/instance-upstream-responses.js";
-import {
-  prepareUpstreamRequest,
-  notifyUpstreamResponse,
-  type UpstreamToolCall,
-} from "../../request-prepare-adapter.js";
-import {
-  createCfqStripStream,
-  createCfqStripObserver,
-  stripCfqFromResponseText,
-} from "../../common/cfq-strip.js";
+import type { UpstreamToolCall } from '../../common/upstream-tool-call.js';
+
 import {
   collectResponsesOutputText,
   mergeResponsesToolCalls,
@@ -210,7 +202,7 @@ export function extractWorkbuddySessionId(
  * 识别 WorkBuddy 客户端的 Default mode gate 信号。
  *
  * 客户端在用户拒绝 request_user_input 表单（选择 Default mode）时，会在
- * 下一轮请求的 input[] 里带上 function_call_output.output ~= 
+ * 下一轮请求的 input[] 里带上 function_call_output.output ~=
  * "request_user_input is unavailable in Default mode"。命中即表示用户
  * 明确要绕过绑定流程→ session 应标记 bypassed。
  *
@@ -508,34 +500,13 @@ async function forwardToUpstream(
   }
   if (_upstreamResolve.skipCreditReport) skipCreditReport = true;
 
-  // Optional private preparation stage. It rewrites `body` and the `input[]`
+
   // items in place, so it has to land after every host-side mutation (model
   // resolution, instance override) and before `bodyStr` freezes them below.
   //
   // Auxiliary turns are excluded for the same reason they skip langfuse and
   // archive: they are client-driven background calls, not dialogue turns.
-  let preparedStats: Record<string, unknown> | null = null;
-  if (lf && Array.isArray(body.input)) {
-    preparedStats = await prepareUpstreamRequest({
-      config,
-      protocol: "responses",
-      body,
-      messages: body.input,
-      sessionKey: lf.sessionId,
-      spaceId,
-      pipe,
-      upstreamCall: {
-        upstreamUrl,
-        headers,
-        model: modelId,
-        tools: body.tools,
-      },
-      userQuery: lf.userQuery,
-      lf,
-      opikTraceId: traceId,
-      opikKeyId: keyId,
-    });
-  }
+
 
   const bodyStr = JSON.stringify(body);
 
@@ -696,18 +667,7 @@ async function forwardToUpstream(
     } catch {
       // Preserve an unexpected non-JSON response without billing it.
     }
-    if (lf) {
-      void notifyUpstreamResponse(config, {
-        protocol: "responses",
-        sessionKey: lf.sessionId,
-        model: modelId,
-        stream: false,
-        turnSeq: lf.turnSeq,
-        text: outputText,
-        toolCalls: [...toolCalls.values()],
-        usage: usage ?? {},
-      }, pipe);
-    }
+
     if (usage && Object.keys(usage).length > 0) {
       writeLog(config, {
         timestamp: new Date().toISOString(),
@@ -721,7 +681,7 @@ async function forwardToUpstream(
         stream: false,
         usage,
         requestReceivedAt: startTime,
-        extensionStats: preparedStats ?? undefined,
+
         spaceId,
         upstreamRequestId,
       });
@@ -743,12 +703,7 @@ async function forwardToUpstream(
       }
     }
     // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-    const clientResponseText = stripCfqFromResponseText(
-      "responses",
-      responseText,
-      preparedStats,
-      createCfqStripObserver(pipe),
-    );
+    const clientResponseText = responseText;
     return new Response(clientResponseText, {
       status: upstreamResp.status,
       headers: respHeaders,
@@ -761,11 +716,7 @@ async function forwardToUpstream(
     // 不 tap 也要剥离：注入与否跟观测无关，客户端校验一样会拒。
     return new Response(
       upstreamResp.body
-        ? upstreamResp.body.pipeThrough(createCfqStripStream(
-            "responses",
-            preparedStats,
-            createCfqStripObserver(pipe),
-          ))
+        ? upstreamResp.body
         : null,
       {
         status: upstreamResp.status,
@@ -788,20 +739,16 @@ async function forwardToUpstream(
     spaceId,
     upstreamRequestId,
     skipCreditReport,
-    preparedStats,
+
     pipe,
     archiveCtx,
     inputBody: body,
     upstreamUrl,
   });
 
-  // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
+
   return new Response(
-    passStream.pipeThrough(createCfqStripStream(
-      "responses",
-      preparedStats,
-      createCfqStripObserver(pipe),
-    )),
+    passStream,
     {
       status: upstreamResp.status,
       headers: respHeaders,
@@ -834,7 +781,7 @@ interface WorkbuddyTapContext {
   upstreamRequestId: string;
   skipCreditReport: boolean;
   /** Opaque counters from the preparation stage, recorded with the usage log. */
-  preparedStats: Record<string, unknown> | null;
+
   pipe: ReturnType<typeof createPipeline>;
   archiveCtx: WorkbuddyArchiveCtx | null;
   /**
@@ -872,7 +819,7 @@ async function consumeWorkbuddyStream(
   let responseId: string | undefined;
   // Q: 累积当前 turn 内的 function_call 次数（round 边界判据）
   let toolUseCount = 0;
-  // 按 call_id 累积工具调用，供增量会话的 CFQ 侧信道使用。output_item.done
+
   // 与 completed 会重复给出同一条，Map 去重后以终态为准。
   const toolCalls = new Map<string, UpstreamToolCall>();
 
@@ -957,18 +904,7 @@ async function consumeWorkbuddyStream(
   }
 
   const endTime = new Date().toISOString();
-  if (ctx.lf) {
-    void notifyUpstreamResponse(ctx.config, {
-      protocol: "responses",
-      sessionKey: ctx.lf.sessionId,
-      model: ctx.modelId,
-      stream: true,
-      turnSeq: ctx.lf.turnSeq,
-      text: assistantText,
-      toolCalls: [...toolCalls.values()],
-      usage: usage ?? {},
-    }, ctx.pipe);
-  }
+
   if (usage && Object.keys(usage).length > 0) {
     // wb 老行为: writeLog(usage) 无 gate 恒写 (与 codex 对齐, 避免任何 preset 档位让 wb 停写)
     stageWriteUsageLog({
@@ -980,7 +916,7 @@ async function consumeWorkbuddyStream(
       userInput: ctx.lf?.userQuery || undefined,
       upstreamUrl: ctx.upstreamUrl, usage,
       requestReceivedAt: ctx.startTime,
-      extensionStats: ctx.preparedStats ?? undefined,
+
       spaceId: ctx.spaceId,
       upstreamRequestId: ctx.upstreamRequestId,
     });

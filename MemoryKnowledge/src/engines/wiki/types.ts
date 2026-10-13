@@ -1,3 +1,4 @@
+import type { OkfMetadata } from "./okf.js";
 /**
  * Wiki 类型定义
  */
@@ -58,6 +59,8 @@ export interface ResultLink {
 }
 
 export interface SearchResult {
+  /** Advisory OKF provenance, freshness and trust; never an authorization decision. */
+  okf?: OkfMetadata;
   path: string;
   title: string;
   snippet: string;

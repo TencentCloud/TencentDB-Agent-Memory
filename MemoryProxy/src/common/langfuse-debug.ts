@@ -67,26 +67,7 @@ export interface RequestDebugMetadataInput {
   debug: boolean;
 }
 
-/**
- * 从 body / headers / 路由上下文抽取"客户端指纹 + 请求分类关键字段"，塞进
- * Langfuse 的 observationMetadata / traceMetadata。
- *
- * `debug=false` 时恒返回**空对象**（不污染线上 metadata）。
- *
- * 抽取的字段（都是 flat key，方便 Langfuse UI 展示）：
- *   - `model` / `stream` / `max_tokens` / `temperature` / `top_p` / `top_k`
- *   - `thinking_type` / `stop_sequences_len` / `system_len` / `messages_len`
- *   - `tools_len` / `tools_summary` — 前 N 个 tool 的 name + desc 截断到 200 char
- *   - `cache_control_marker_idx` — messages 里最后一个 cache_control marker 位置
- *     （识别 CC fork/main/sidequery 的核心信号；详见 cc-request-classifier.ts）
- *   - `body_metadata` — Anthropic body.metadata（含 user_id 等）
- *   - `body_extra_keys` — body 顶层"非标准字段"名字（CB / cursor 常私塞 extension 字段）
- *   - `agent_source` / `request_kind` / `space_id` / `turn_seq` / `request_path`
- *   - `header_<name>` — 白名单前缀的 client header（x-* / cb-* / codebuddy-*）
- *
- * Tools/description 均截断以防单条上报膨胀。抽取失败静默返回已有字段
- * （debug 数据缺一两个字段不影响排障，不能因此抛异常影响业务）。
- */
+
 export function buildRequestDebugMetadata(
   opts: RequestDebugMetadataInput,
 ): Record<string, unknown> {
@@ -164,7 +145,7 @@ export function buildRequestDebugMetadata(
       out.body_metadata = b.metadata as Record<string, unknown>;
     }
 
-    // body 顶层非标准字段（客户端私塞的 extension keys —— 识别客户端指纹）
+
     const standardKeys = new Set([
       "model", "messages", "system", "tools", "tool_choice",
       "temperature", "top_p", "top_k", "max_tokens",

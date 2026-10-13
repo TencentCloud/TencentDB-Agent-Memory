@@ -53,13 +53,17 @@ export class LocalStateBackend implements IStateBackend {
     this.onTimerExpired = options?.onTimerExpired;
   }
 
-  /**
-   * Map key 拼成 `{instanceId}:{teamId}:{agentId}:{sessionId}` —— 与 RedisStateBackend 的
-   * hash tag 形态对齐：同一 (inst, tid, aid, sess) 必然 hash 到同一桶。
-   * tid/aid 缺失（旧调用）时用 "_" 占位，等价于退化到 instance 维度。
-   */
+  /** Encode identity components without delimiter or missing-value collisions. */
   private k(instanceId: string, sessionId: string, teamId?: string, agentId?: string): string {
-    return `${instanceId}:${teamId || "_"}:${agentId || "_"}:${sessionId}`;
+    return JSON.stringify([instanceId, teamId ?? null, agentId ?? null, sessionId]);
+  }
+
+  private instancePrefix(instanceId: string): string {
+    return JSON.stringify([instanceId]).slice(0, -1) + ",";
+  }
+
+  private timerKey(instanceId: string, member: string): string {
+    return JSON.stringify([instanceId, member]);
   }
 
   // ═══ Buffer ═══
@@ -103,13 +107,12 @@ export class LocalStateBackend implements IStateBackend {
   }
 
   async listActiveSessions(instanceId: string): Promise<string[]> {
-    const prefix = `${instanceId}:`;
+    const prefix = this.instancePrefix(instanceId);
     const sessions: string[] = [];
     for (const key of this.sessionStates.keys()) {
       if (key.startsWith(prefix)) {
-        // key format: {inst}:{tid}:{aid}:{sess}  → 取最后一段作为 sessionId
-        const parts = key.split(":");
-        if (parts.length >= 4) sessions.push(parts.slice(3).join(":"));
+        const parts: unknown = JSON.parse(key);
+        if (Array.isArray(parts) && typeof parts[3] === "string") sessions.push(parts[3]);
       }
     }
     return sessions;
@@ -118,7 +121,7 @@ export class LocalStateBackend implements IStateBackend {
   // ═══ Timer ═══
 
   async setTimer(instanceId: string, member: string, fireAtMs: number): Promise<void> {
-    const key = `${instanceId}:${member}`;
+    const key = this.timerKey(instanceId, member);
     const existing = this.timers.get(key);
     if (existing?.handle) clearTimeout(existing.handle);
 
@@ -131,21 +134,21 @@ export class LocalStateBackend implements IStateBackend {
   }
 
   async setTimerIfEarlier(instanceId: string, member: string, fireAtMs: number): Promise<boolean> {
-    const existing = this.timers.get(`${instanceId}:${member}`);
+    const existing = this.timers.get(this.timerKey(instanceId, member));
     if (existing && fireAtMs >= existing.fireAtMs) return false;
     await this.setTimer(instanceId, member, fireAtMs);
     return true;
   }
 
   async removeTimer(instanceId: string, member: string): Promise<void> {
-    const key = `${instanceId}:${member}`;
+    const key = this.timerKey(instanceId, member);
     const existing = this.timers.get(key);
     if (existing?.handle) clearTimeout(existing.handle);
     this.timers.delete(key);
   }
 
   async getExpiredTimers(instanceId: string, nowMs: number): Promise<TimerEntry[]> {
-    const prefix = `${instanceId}:`;
+    const prefix = this.instancePrefix(instanceId);
     const expired: TimerEntry[] = [];
     for (const [key, timer] of this.timers) {
       if (key.startsWith(prefix) && timer.fireAtMs <= nowMs) {
@@ -153,7 +156,7 @@ export class LocalStateBackend implements IStateBackend {
       }
     }
     for (const entry of expired) {
-      const key = `${instanceId}:${entry.member}`;
+      const key = this.timerKey(instanceId, entry.member);
       const t = this.timers.get(key);
       if (t?.handle) clearTimeout(t.handle);
       this.timers.delete(key);
@@ -341,7 +344,7 @@ export class LocalStateBackend implements IStateBackend {
     let sessions = 0;
     let timers = 0;
     let buffers = 0;
-    const prefix = `${instanceId}:`;
+    const prefix = this.instancePrefix(instanceId);
 
     // Clear session states
     for (const key of [...this.sessionStates.keys()]) {

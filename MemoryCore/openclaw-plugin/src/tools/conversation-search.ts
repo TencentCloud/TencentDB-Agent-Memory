@@ -21,7 +21,7 @@ export async function handleConversationSearch(
   }
 
   try {
-    logger?.debug?.(`[conversation-search] query="${query}", limit=${limit}, session=${session_key ?? "(all)"}`);
+    logger?.debug?.(`[conversation-search] Searching; limit=${limit}`);
     const result = await client.searchConversation({
       query,
       limit,
@@ -51,7 +51,7 @@ export async function handleConversationSearch(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger?.warn(`[conversation-search] Failed: ${msg}`);
+    logger?.warn("[conversation-search] Search failed; details omitted");
     return { content: [{ type: "text" as const, text: `Conversation search failed: ${msg}` }] };
   }
 }

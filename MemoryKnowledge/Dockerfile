@@ -4,11 +4,11 @@
 # Build:
 #   DOCKER_BUILDKIT=1 docker build -t team-knowledge:0.1.0 .
 #
-# Run (CLI flags, no .env):
-#   docker run -d -p 8421:8421 -v team-knowledge-data:/app/data team-knowledge:0.1.0 \
-#     --public-url http://203.0.113.10:8421/v3 \
-#     --tmc-callback http://203.0.113.10:8123 \
-#     --llm-key sk-xxx --llm-base-url https://api.example.com/v1
+# Run after supplying KNOWLEDGE_SERVICE_KEY securely in the shell environment:
+#   docker run -d -p 127.0.0.1:8421:8421 -e KNOWLEDGE_SERVICE_KEY \
+#     -v team-knowledge-data:/app/data team-knowledge:0.1.0 \
+#     --public-url http://127.0.0.1:8421/v3
+# Configure LLM credentials separately when enabling ingestion.
 
 # ── Stage 1: build ──
 FROM node:22-slim AS builder
@@ -29,14 +29,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" bug（Cannot read
-# properties of null (reading 'edgesOut')）—— 干净 `npm install` 稳定挂。
-# 升到 npm@11 规避；不影响其它构建行为。
-RUN npm install -g npm@11 --no-audit --no-fund
-
-COPY package.json .npmrc* ./
+# Compile native SQLite from locked npm source using the image's Node headers.
+# This avoids the separate better-sqlite3 release-prebuild download.
+# Copy package metadata and committed lockfile for locked dependency installation
+COPY package.json package-lock.json ./
 RUN --mount=type=cache,id=npm-cache-knowledge,target=/root/.npm \
-    npm install --no-audit --no-fund
+    npm_config_build_from_source=true npm_config_nodedir=/usr/local npm ci --no-audit --no-fund
 
 COPY tsconfig.json tsdown.config.ts ./
 COPY src/ ./src/

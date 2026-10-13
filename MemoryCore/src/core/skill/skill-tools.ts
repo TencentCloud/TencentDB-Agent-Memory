@@ -17,6 +17,7 @@
  */
 
 import { tool, jsonSchema } from "ai";
+import type { ExtractedCandidate } from "./queue/types.js";
 import { SkillCoreError, type SkillCore } from "./skill-core.js";
 
 export type ExtractedAction =
@@ -25,7 +26,7 @@ export type ExtractedAction =
   | "patch"
   | "files_write";
 
-export interface ExtractedSkillCandidate {
+export interface ExtractedSkillCandidate extends Pick<ExtractedCandidate, "confidence" | "reason" | "file_path" | "file_type"> {
   action: ExtractedAction;
   name: string;
   skill_id?: string;

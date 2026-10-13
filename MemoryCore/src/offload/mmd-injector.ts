@@ -9,6 +9,7 @@
  * The marker property `_mmdContextMessage` is used to locate the message for
  * replacement. L3 compression must skip messages carrying this marker.
  */
+import { createHash } from "node:crypto";
 import { readMmd, listMmds } from "./storage.js";
 import { PLUGIN_DEFAULTS, type PluginConfig, type PluginLogger } from "./types.js";
 import { createL3TokenCounter } from "./l3-token-counter.js";
@@ -50,7 +51,7 @@ export async function injectMmdIntoMessages(
   const injReady = stateManager.isMmdInjectionReady();
   const actFile = stateManager.getActiveMmdFile();
   logger.debug?.(
-    `[context-offload] mmd-injector inject: injectionReady=${injReady}, activeMmdFile=${actFile ?? "null"}, msgs=${messages.length}`,
+    `[context-offload] mmd-injector inject: injectionReady=${injReady}, hasActiveMmd=${!!actFile}, msgs=${messages.length}`,
   );
   if (!injReady) {
     removeMmdMessages(messages);
@@ -89,7 +90,7 @@ export async function injectMmdIntoMessages(
 
   const activeMmd = stateManager.getActiveMmdFile();
   logger.debug?.(
-    `[context-offload] mmd-injector: injected active MMD into messages (${totalMmdTokens} tokens, file=${activeMmd})`,
+    `[context-offload] mmd-injector: injected active MMD into messages (${totalMmdTokens} tokens, hasActiveMmd=${!!activeMmd})`,
   );
 
   // Summary after active MMD injection (was full dump, now aggregated)
@@ -134,7 +135,7 @@ export async function maybeUpdateMmdInMessages(
   const injectionReady = stateManager.isMmdInjectionReady();
   const activeMmdFile = stateManager.getActiveMmdFile();
   logger.debug?.(
-    `[context-offload] mmd-injector maybeUpdate: injectionReady=${injectionReady}, activeMmdFile=${activeMmdFile ?? "null"}, msgs=${messages.length}`,
+    `[context-offload] mmd-injector maybeUpdate: injectionReady=${injectionReady}, hasActiveMmd=${!!activeMmdFile}, msgs=${messages.length}`,
   );
   if (!injectionReady) return false;
   if (!activeMmdFile) return false;
@@ -145,8 +146,8 @@ export async function maybeUpdateMmdInMessages(
     logger.debug?.(
       `[context-offload] mmd-injector maybeUpdate: readMmd result=${mmdContent ? `${mmdContent.length} chars` : "null"}`,
     );
-  } catch (e) {
-    logger.debug?.(`[context-offload] mmd-injector maybeUpdate: readMmd error=${e}`);
+  } catch {
+    logger.debug?.("[context-offload] mmd-injector maybeUpdate: readMmd failed");
     return false;
   }
   if (!mmdContent) return false;
@@ -156,7 +157,7 @@ export async function maybeUpdateMmdInMessages(
   if (newFp === lastFp) return false;
 
   logger.debug?.(
-    `[context-offload] mmd-injector: MMD updated (${activeMmdFile}), refreshing in-loop`,
+    `[context-offload] mmd-injector: MMD updated, refreshing in-loop`,
   );
   await injectMmdIntoMessages(
     messages,
@@ -361,14 +362,16 @@ async function buildActiveMmdBlock(
     ]
       .filter((line) => line !== "")
       .join("\n");
-  } catch (err) {
+  } catch {
     logger.error(
-      `[context-offload] mmd-injector: Error building active MMD block: ${err}`,
+      "[context-offload] mmd-injector: Error building active MMD block",
     );
     return null;
   }
 }
 
 function computeFingerprint(content: string): string {
-  return `${content.length}:${content.slice(0, 64)}`;
+  // Track the complete decoded content, including equal-length tail edits.
+  // This runtime-only identifier retains no plaintext content prefix.
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }

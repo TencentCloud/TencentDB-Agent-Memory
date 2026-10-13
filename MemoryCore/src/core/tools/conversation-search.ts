@@ -103,8 +103,7 @@ export async function executeConversationSearch(params: {
   } = params;
 
   logger?.debug?.(
-    `${TAG} CALLED: query="${query.slice(0, 100)}", limit=${limit}, ` +
-    `sessionFilter=${sessionFilter ?? "(none)"}, ` +
+    `${TAG} CALLED: limit=${limit}, sessionFilterSet=${sessionFilter !== undefined}, ` +
     `vectorStore=${vectorStore ? "available" : "UNAVAILABLE"}, ` +
     `embeddingService=${embeddingService ? "available" : "UNAVAILABLE"}`,
   );
@@ -186,7 +185,7 @@ export async function executeConversationSearch(params: {
           logger?.debug?.(`${TAG} [hybrid-fts] No usable FTS tokens from query`);
           return [];
         }
-        logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
+        logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query prepared`);
         const ftsResults = isolationFilter
           ? await vectorStore.searchL0Fts(ftsQuery, candidateK, isolationFilter)
           : await vectorStore.searchL0Fts(ftsQuery, candidateK);
@@ -194,6 +193,9 @@ export async function executeConversationSearch(params: {
         return ftsResults.map((r) => ({
           id: r.record_id,
           session_key: r.session_key,
+          session_id: r.session_id,
+          user_id: r.user_id,
+          agent_id: r.agent_id,
           role: r.role,
           content: r.message_text,
           score: r.score,
@@ -201,7 +203,7 @@ export async function executeConversationSearch(params: {
         }));
       } catch (err) {
         logger?.warn?.(
-          `${TAG} [hybrid-fts] FTS5 search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          `${TAG} [hybrid-fts] FTS5 search failed (non-fatal)`,
         );
         return [];
       }
@@ -233,7 +235,7 @@ export async function executeConversationSearch(params: {
         }));
       } catch (err) {
         logger?.warn?.(
-          `${TAG} [hybrid-vec] Embedding search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          `${TAG} [hybrid-vec] Embedding search failed (non-fatal)`,
         );
         return [];
       }
@@ -272,7 +274,7 @@ export async function executeConversationSearch(params: {
   if (sessionFilter) {
     const preFilterCount = results.length;
     results = results.filter((r) => r.session_key === sessionFilter);
-    logger?.debug?.(`${TAG} After session filter "${sessionFilter}": ${results.length}/${preFilterCount}`);
+    logger?.debug?.(`${TAG} After session filter: ${results.length}/${preFilterCount}`);
   }
 
   // ── Trim to requested limit ──

@@ -12,7 +12,7 @@
  * fetch 无超时 (与老 codex/wb 100% 等价; Phase 5 opt-in 修 bug B9)。
  */
 
-import type { ForwardTarget } from "../../guard-adapter.js";
+import type { ForwardTarget } from '../../upstream-target.js';
 import type { ProtocolStrategy } from "../strategies/protocol/types.js";
 
 export interface ForwardStageInput {

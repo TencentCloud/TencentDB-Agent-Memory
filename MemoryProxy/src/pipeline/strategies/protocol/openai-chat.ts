@@ -1,23 +1,4 @@
-/**
- * OpenAI Chat Completions ProtocolStrategy (Phase 2)。
- *
- * 覆盖 codebuddy / dsh / opencode / pi / default agent 走的协议。
- * 老代码入口: handler.ts::handleChatCompletions。
- *
- * ⚠️ 本文件目前只填 3 类方法:
- *   1. 纯函数 (extractMessages / extractUserQuery / applyInjection)
- *   2. buildErrorResponse (openai envelope)
- *   3. 委托 stream-parsers (parseNonStreamResponse)
- *
- * 尚未填的方法 (Phase 4 组装时补):
- *   - buildUpstreamBody: 需要 target 已 resolve + prepareUpstreamRequest 逻辑
- *   - buildUpstreamHeaders: 需要 effectiveApiKey + SKIP_REQUEST_HEADERS
- *   - createStreamTap: 需要完整 ctx (lf/tdai/opik/cfq) — Phase 4 定型
- *   - buildMemResponse / buildLangfuseInput: 大量入参, Phase 4 时按需
- *
- * 所以本策略当前不完整, 尚不能被 runPipeline 直接使用; 属于 "types.ts 契约 +
- * 首批可复用纯函数集中放置" 的过渡形态。Phase 4 前会补齐所有方法。
- */
+
 
 import type {
   ProtocolStrategy,
@@ -26,7 +7,7 @@ import type {
   StreamOutcome,
 } from "./types.js";
 import type { PipelineContext } from "../../context.js";
-import type { ForwardTarget } from "../../../guard-adapter.js";
+import type { ForwardTarget } from '../../../upstream-target.js';
 import { extractOpenaiSseUsage, extractOpenaiSseAssistantText } from "./stream-parsers.js";
 
 /** OpenAI Chat protocol strategy — Phase 2 skeleton with pure helpers. */
@@ -38,9 +19,9 @@ export const openaiChatProtocol: ProtocolStrategy = {
   },
 
   extractUserQuery(_body, _headers): string {
-    // 实际实现在 handler.ts 里用 resolveLatestUserQuery + resolveAgentProfile 拿最新用户输入;
+
     // Phase 4 组装时接入。当前 stub 返回空 —— caller 若要用, 用 stages/observability.ts
-    // 里的 resolveLatestUserQuery 桥接。
+
     return "";
   },
 

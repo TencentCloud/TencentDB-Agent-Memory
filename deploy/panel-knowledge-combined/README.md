@@ -281,7 +281,7 @@ Tag 约定：
 
 | Tag | 含义 |
 | --- | --- |
-| `1.0.0-beta.N` | 钉死版本（文档/复现用这个） |
+| `1.0.0-beta.N` | 固定发布版本（用于文档说明与环境对齐；使用可变基础镜像 node:22-slim，非字节级位可复现） |
 | `beta` | 浮动频道：始终指向当前最新 beta（默认随发布一起推） |
 | `latest` | 正式稳定版再用（默认不推） |
 
@@ -337,3 +337,11 @@ docker pull agentmemory/memory-hub:beta
 | `PUSH` | `1` | `0` = 本地 `--load` 单架构 |
 | `ALSO_BETA` | `1` | `1` = 额外推浮动 `:beta` |
 | `ALSO_LATEST` | `0` | `1` = 额外推 `:latest` |
+
+## Configuration generation checks
+
+Run `python3 deploy/panel-knowledge-combined/test_config_generation.py` from the repository root. The tests execute the real startup script with synthetic environment values and temporary output paths, without starting services. They cover exact JSON values, quotes, backslashes, Unicode, newlines, code-like strings, the optional proxy endpoint, defaults, and preservation of mounted files.
+
+`CONFIG_ONLY=1` exits after preparing configuration; `INSTANCES_FILE` selects its output path (default `/app/panel/config/metadata-instances.json`). Newly generated files are created exclusively with mode `0600`; existing files are left untouched. The directory must be controlled by the trusted service account. Configuration values are read as data from the environment, never interpolated into Python source.
+
+The images install committed npm lockfiles with `npm ci`. Mutable base-image tags and apt repositories mean this is not a guarantee of bit-reproducible images. Linux image builds and runtime checks remain separate from these portable configuration tests.

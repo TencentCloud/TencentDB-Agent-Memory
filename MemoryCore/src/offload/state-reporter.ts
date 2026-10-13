@@ -339,10 +339,10 @@ export function reportL3Trigger(
           `toolCalls=${report.cumulative.totalToolCalls} patch=${report.patch.status}`,
         );
       })
-      .catch((err) => {
-        logger.warn(`[context-offload] state-report FAILED: stage=${report.stage} — ${err}`);
+      .catch(() => {
+        logger.warn("[context-offload] state-report upload failed");
       });
-  } catch (err) {
-    logger.warn(`[context-offload] state-report schedule FAILED: ${err}`);
+  } catch {
+    logger.warn("[context-offload] state-report scheduling failed");
   }
 }

@@ -11,7 +11,11 @@
  */
 
 import fs from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+
 import path from "node:path";
+
+const INCOMPLETE_MARKER = ".backup-incomplete";
 
 export class BackupManager {
   private backupRoot: string;
@@ -40,6 +44,8 @@ export class BackupManager {
     tag: string,
     maxKeep: number,
   ): Promise<void> {
+    validateBackupName(category, "category");
+    validateBackupName(tag, "tag");
     try {
       await fs.access(srcFile);
     } catch {
@@ -47,12 +53,12 @@ export class BackupManager {
     }
 
     const destDir = path.join(this.backupRoot, category);
-    await fs.mkdir(destDir, { recursive: true });
+    await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
 
     const ext = path.extname(srcFile); // e.g. ".md"
     const timestamp = formatTimestamp(new Date());
     const destName = `${category}_${timestamp}_${tag}${ext}`;
-    await fs.copyFile(srcFile, path.join(destDir, destName));
+    await fs.copyFile(srcFile, path.join(destDir, destName), fsConstants.COPYFILE_EXCL);
 
     if (maxKeep > 0) {
       await pruneOldEntries(destDir, maxKeep, "file");
@@ -75,6 +81,8 @@ export class BackupManager {
     tag: string,
     maxKeep: number,
   ): Promise<void> {
+    validateBackupName(category, "category");
+    validateBackupName(tag, "tag");
     let entries: import("node:fs").Dirent[];
     try {
       entries = await fs.readdir(srcDir, { withFileTypes: true });
@@ -89,10 +97,19 @@ export class BackupManager {
     const parentDir = path.join(this.backupRoot, category);
     const timestamp = formatTimestamp(new Date());
     const destDir = path.join(parentDir, `${category}_${timestamp}_${tag}`);
-    await fs.mkdir(destDir, { recursive: true });
-
-    for (const file of files) {
-      await fs.copyFile(path.join(srcDir, file), path.join(destDir, file));
+    if (files.includes(INCOMPLETE_MARKER)) throw new Error("Reserved backup marker in source");
+    await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+    // Own a new snapshot; never merge into an existing generation.
+    await fs.mkdir(destDir, { mode: 0o700 });
+    try {
+      await fs.writeFile(path.join(destDir, INCOMPLETE_MARKER), "incomplete\n", { flag: "wx" });
+      for (const file of files) {
+        await fs.copyFile(path.join(srcDir, file), path.join(destDir, file));
+      }
+      await fs.unlink(path.join(destDir, INCOMPLETE_MARKER));
+    } catch (err) {
+      try { await fs.rm(destDir, { recursive: true, force: true }); } catch { /* marker blocks selection if cleanup fails */ }
+      throw err;
     }
 
     if (maxKeep > 0) {
@@ -111,6 +128,7 @@ export class BackupManager {
    * @returns Absolute path to the latest backup directory, or undefined if none.
    */
   async findLatestBackup(category: string): Promise<string | undefined> {
+    validateBackupName(category, "category");
     const parentDir = path.join(this.backupRoot, category);
     let entries: import("node:fs").Dirent[];
     try {
@@ -118,7 +136,11 @@ export class BackupManager {
     } catch {
       return undefined; // No backup directory yet
     }
-    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    const dirs: string[] = [];
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name.startsWith(`${category}_`) &&
+          await isCompleteDirectory(path.join(parentDir, entry.name))) dirs.push(entry.name);
+    }
     if (dirs.length === 0) return undefined;
     dirs.sort(); // ascending — oldest first; last = newest
     return path.join(parentDir, dirs[dirs.length - 1]);
@@ -151,7 +173,7 @@ export class BackupManager {
     // Wipe the destination first so any partial LLM writes are removed,
     // then recreate the directory and copy regular files back.
     await fs.rm(destDir, { recursive: true, force: true });
-    await fs.mkdir(destDir, { recursive: true });
+    await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
 
     const entries = await fs.readdir(from, { withFileTypes: true });
     for (const entry of entries) {
@@ -166,6 +188,23 @@ export class BackupManager {
 // ============================
 // Helpers
 // ============================
+
+function validateBackupName(value: string, kind: "category" | "tag"): void {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error(`Invalid backup ${kind}`);
+  }
+}
+
+async function isCompleteDirectory(dir: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return !entries.some((entry) => entry.name === INCOMPLETE_MARKER) &&
+      entries.some((entry) => entry.isFile());
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+}
 
 function formatTimestamp(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -196,7 +235,14 @@ async function pruneOldEntries(
 ): Promise<void> {
   let entries: string[];
   try {
-    entries = await fs.readdir(dir);
+    const candidates = await fs.readdir(dir, { withFileTypes: true });
+    entries = [];
+    for (const entry of candidates) {
+      if (!entry.name.startsWith(`${path.basename(dir)}_`)) continue;
+      if (kind === "file" && entry.isFile()) entries.push(entry.name);
+      if (kind === "directory" && entry.isDirectory() &&
+          await isCompleteDirectory(path.join(dir, entry.name))) entries.push(entry.name);
+    }
   } catch {
     return;
   }

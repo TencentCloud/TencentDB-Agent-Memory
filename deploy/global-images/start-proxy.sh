@@ -133,8 +133,6 @@ sessionInit:
     taskHeader: "x-task-id"
     onMismatch: "form"
 
-costGuard:
-  enabled: false
 
 # 打开 skill + knowledge + tdai-memory 三个注入器；
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。

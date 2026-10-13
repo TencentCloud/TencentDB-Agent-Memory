@@ -20,6 +20,7 @@
 import type { Context } from "hono";
 import type { Redis } from "ioredis";
 import { getSessionStore } from "../session/store.js";
+import type { SkillSessionIdFields } from "../session/types.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { RedisBindingRepo } from "../db/binding-repo.js";
@@ -189,39 +190,6 @@ const WRITE_LOCK_OPS = new Set<string>([
   "files/remove",
 ]);
 
-interface SessionIdFields {
-  user_id: string;
-  team_id: string;
-  agent_id: string;
-  /**
-   * URL 路径侧的 agentSource（`claude-code` / `codebuddy` ...）—— 用于
-   * Repo 三段隔离键。从 SessionStore 里存储 session 的 keyId 反解出来
-   * （keyId 形如 `${agentSource}:${sessionId}`）。
-   */
-  agent_source: string;
-  /**
-   * Kernel tenant/instance ID for `x-tdai-service-id`. Extracted from
-   * `SessionInfo.space_id` (which itself was captured from the original
-   * request path `/{agent}/{spaceId}/...`). Undefined for legacy sessions
-   * created before space_id tracking — caller falls back to
-   * `config.coreSkill.serviceId`.
-   */
-  space_id?: string;
-  /**
-   * User API key (`x-tdai-user-key`). Captured during session init from the
-   * upstream request's api key exchange. Required by kernel /v3/meta/* endpoints
-   * to enforce per-user ACL/visibility. Missing here means the session upstream
-   * bypassed apikey verification — that's a programming bug, not a rejectable
-   * runtime state; team-wide search returns 500 rather than silently opening up.
-   */
-  user_key?: string;
-  /**
-   * Composite key actually used to load state from SessionStore
-   * (`${agentSource}:${sessionId}`). 用于埋点侧对齐 session_init_logs 的
-   * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
-   */
-  composite_key?: string;
-}
 
 /**
  * Bridge 只吃 2 个 header:
@@ -246,10 +214,10 @@ function deriveSessionId(c: Context): string | null {
   );
 }
 
-function stateToIdFields(
+export function stateToIdFields(
   state: import("../session/types.js").SessionInitState | undefined,
   matchedKey: string,
-): SessionIdFields | null {
+): SkillSessionIdFields | null {
   if (!state || state.status !== "initialized" || !state.sessionInfo) return null;
   const s = state.sessionInfo;
   if (!s.user_id || !s.team_id || !s.agent_id) return null;
@@ -268,11 +236,11 @@ function stateToIdFields(
   };
 }
 
-function bindingToIdFields(
+export function bindingToIdFields(
   binding: import("../db/binding-repo.js").SessionBinding,
   spaceId: string,
   sessionId: string,
-): SessionIdFields | null {
+): SkillSessionIdFields | null {
   if (binding.outcome !== "initialized") return null;
   if (!binding.userId || !binding.teamId || !binding.agentId) return null;
   const agentSource = binding.agentSource || "claude-code";
@@ -296,7 +264,7 @@ function bindingToIdFields(
  * 2 段 key,不再需要前缀轮询;这里 L1 保留是为了 L2b 出问题时,仍能从内存 L1
  * 恢复而不 401。
  */
-function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+export function loadSessionIdsL1(sessionId: string): SkillSessionIdFields | null {
   const candidates = sessionId.includes(":")
     ? [sessionId]
     : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
@@ -319,11 +287,11 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
  *   2) 拍平后 binding.json 里已经存了 user_id/team_id/agent_id/agent_source/user_key,
  *      一次 GET 就够,不需要再补 kernel getAgent/getTask
  */
-async function loadSessionIdsL2(
+export async function loadSessionIdsL2(
   bindingRepo: BindingRepo | null,
   spaceId: string,
   sessionId: string,
-): Promise<SessionIdFields | null> {
+): Promise<SkillSessionIdFields | null> {
   if (!bindingRepo) return null;
   try {
     const binding = await bindingRepo.getBinding(spaceId, sessionId);

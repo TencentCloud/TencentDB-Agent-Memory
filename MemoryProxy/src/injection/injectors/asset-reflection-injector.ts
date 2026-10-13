@@ -1,24 +1,4 @@
-/**
- * Asset Reflection Injector — 内部效果评估用，在 system prompt 末尾追加
- * `<asset_reflection>` 块，指导 agent 在最终回答里点评「本轮调用过哪些云端
- * 资产工具、各自起没起到作用」。
- *
- * ## 门控
- * 完全对齐 `costGuard.markerOptIn` 的双闸门模式：
- *   1. `injection.assetReflection.markerOptIn=true` → factory 才 register 本 hook
- *      （否则线上 pod 上 getAll() 里根本没这个 hook，零性能开销）；
- *   2. 请求 URL 带 `/analyse` marker → execute 才真 emit 块（否则返回 []，
- *      对无 marker 的请求 prompt 零改动）。
- *
- * ## Tag 集合
- * 由构造函数传入的 `activeAssetTags` 决定——由 factory 根据本节点上实际
- * register 了哪些资产 injector 计算好静态列表：
- *   - skill-*         → `<skill_tools>` + `<available_skills>`
- *   - tdai-*          → `<tdai_memory_tools>`
- *   - knowledge-*     → `<knowledge_tools>`
- *
- * 一个都没注册（activeAssetTags 空） → hook 恒不 emit。
- */
+
 
 import type {
   AgentContext,

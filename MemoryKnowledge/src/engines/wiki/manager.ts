@@ -11,6 +11,8 @@
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join, basename, relative } from "path";
+import { parseFrontmatter, readSources } from "./ingest-v2/frontmatter.js";
+import { okfLinks, readOkfMetadata } from "./okf.js";
 import Graph from "graphology";
 import type DatabaseType from "better-sqlite3";
 import pLimit, { type LimitFunction } from "p-limit";
@@ -47,40 +49,16 @@ import { DEFAULT_SCHEMA, DEFAULT_PURPOSE } from "./ingest-v2/template.js";
 
 const log = createLogger("wiki-mgr");
 
-// ── 内联 frontmatter/wikilink 解析（不依赖外部模块，确保可编译） ──
+// ── Shared YAML frontmatter and legacy wikilink consumption ──
 
 function extractFrontmatter(content: string): { title: string; type: string; sources: string[]; description: string } {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  const fm = fmMatch ? fmMatch[1] : "";
-  const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
-  const typeMatch = fm.match(/^type:\s*["']?(.+?)["']?\s*$/m);
-  const descMatch = fm.match(/^description:\s*["']?(.+?)["']?\s*$/m);
-  const sources: string[] = [];
-  const sourcesBlockMatch = fm.match(/^sources:\s*\n((?:\s+-\s+.+\n?)*)/m);
-  if (sourcesBlockMatch) {
-    for (const line of sourcesBlockMatch[1].split("\n")) {
-      const itemMatch = line.match(/^\s+-\s+["']?(.+?)["']?\s*$/);
-      if (itemMatch) sources.push(itemMatch[1]);
-    }
-  } else {
-    const inlineMatch = fm.match(/^sources:\s*\[([^\]]*)\]/m);
-    if (inlineMatch) {
-      for (const item of inlineMatch[1].split(",")) {
-        const trimmed = item.trim().replace(/^["']|["']$/g, "");
-        if (trimmed) sources.push(trimmed);
-      }
-    }
-  }
-  let title = titleMatch ? titleMatch[1].trim() : "";
-  if (!title) {
-    const headingMatch = content.match(/^#\s+(.+)$/m);
-    title = headingMatch ? headingMatch[1].trim() : "";
-  }
+  const { frontmatter: fm, body } = parseFrontmatter(content);
+  const heading = body.match(/^#\s+(.+)$/m);
   return {
-    title,
-    type: typeMatch ? typeMatch[1].trim().toLowerCase() : "other",
-    sources,
-    description: descMatch ? descMatch[1].trim() : "",
+    title: typeof fm.title === "string" ? fm.title : heading?.[1]?.trim() ?? "",
+    type: fm.type,
+    sources: readSources(content),
+    description: typeof fm.description === "string" ? fm.description : "",
   };
 }
 
@@ -212,8 +190,12 @@ function resolveEdges(pages: WikiPage[]): Array<{ source: string; target: string
 
   const seen = new Set<string>();
   for (const page of visible) {
+    const standardTargets = new Set(okfLinks(page.content, page.id + ".md"));
     for (const targetRaw of page.links) {
-      const targetId = resolveTarget(targetRaw, nodeIds, titleSlugToId);
+      // Standard OKF paths are exact and must not bind a broken link to a same-name page.
+      const targetId = standardTargets.has(targetRaw)
+        ? (nodeIds.has(targetRaw) ? targetRaw : null)
+        : resolveTarget(targetRaw, nodeIds, titleSlugToId);
       if (!targetId || targetId === page.id) continue;
       const key = `${page.id}\u0000${targetId}`;
       if (seen.has(key)) continue;
@@ -829,10 +811,11 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
       else if (entry.endsWith(".md")) {
         try {
           const content = readFileSync(full, "utf-8");
-          const rel = full.slice(baseDir.length + 1);
+          const rel = full.slice(baseDir.length + 1).replace(/\\/g, "/");
+          if (["index.md", "log.md"].includes(entry)) continue;
           const id = rel.replace(/\.md$/, "").replace(/\\/g, "/");
           const fm = extractFrontmatter(content);
-          pages.push({ id, title: fm.title || basename(entry, ".md").replace(/-/g, " "), type: fm.type, path: full, relPath: `wiki/${rel}`, content, sources: fm.sources, links: extractWikilinks(content), description: fm.description });
+          pages.push({ id, title: fm.title || basename(entry, ".md").replace(/-/g, " "), type: fm.type, path: full, relPath: `wiki/${rel}`, content, sources: fm.sources, links: [...extractWikilinks(content), ...okfLinks(content, rel)], description: fm.description });
         } catch { /* skip */ }
       }
     }
@@ -896,6 +879,9 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
         hop: hit.hop,
         related: buildRelated(meta.id, pg, metaById),
       };
+      // Read current metadata, not a cached staleness verdict; clocks advance without reindexing.
+      try { result.okf = readOkfMetadata(readFileSync(join(state.path, meta.relPath), "utf-8")); }
+      catch { /* A concurrent delete must not fail all search results. */ }
       if (hit.hop > 0 && hit.via) result.via = hit.via;
       results.push(result);
       resultIds.push(meta.id);
@@ -964,8 +950,8 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
       state.status = "ready"; state.pageCount = pages.length; state.lastSyncAt = new Date().toISOString(); state.error = undefined;
       log.info("sync 完成（索引已重建）", { name, pageCount: pages.length, ms: Date.now() - t0 });
     } catch (err) {
-      state.status = "error"; state.error = String(err);
-      log.error("sync 失败", { name, path: state.path, error: String(err) });
+      state.status = "error"; state.error = "Internal sync error";
+      log.error("sync 失败", { name, error: "Internal sync error" });
     }
     persist();
     return state;

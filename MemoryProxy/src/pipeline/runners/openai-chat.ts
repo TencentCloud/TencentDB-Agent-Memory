@@ -23,21 +23,11 @@ import {
 } from "../../common/langfuse-debug.js";
 import { countHumanTurns, resolveMonotonicTurnSeq } from "../../turnSeq.js";
 import type { ProxyConfig } from "../../types.js";
-import {
-  resolveForwardTarget,
-  resolveSessionKey,
-  resolveLatestUserQuery,
-  reportAnalyzerTrace,
-  type ForwardTarget,
-} from "../../guard-adapter.js";
-import { hasCostGuardMarker, isLegacyProxyPath, matchWhitelistEndpoint, resolveCostGuardMode } from "../../routes/whitelist.js";
+import { type ForwardTarget } from '../../upstream-target.js';
+import { isLegacyProxyPath, matchWhitelistEndpoint } from '../../routes/whitelist.js';
 import { writeRequestLog } from "../../requestLog.js";
-import { prepareUpstreamRequest, notifyUpstreamResponse } from "../../request-prepare-adapter.js";
-import {
-  createCfqStripStream,
-  createCfqStripObserver,
-  stripCfqFromResponseText,
-} from "../../common/cfq-strip.js";
+
+
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "../../credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
@@ -55,7 +45,7 @@ import { stageParseBody } from "../stages/parse-body.js";
 import { stageModelGate, buildUnregisteredModelErrorBody } from "../stages/model-gate.js";
 import { stageCredit } from "../stages/credit.js";
 import { stageSystemUser } from "../stages/system-user.js";
-import { stageBuildLangfuseTurnContext, stageReportAnalyzerTrace } from "../stages/observability.js";
+import { stageBuildLangfuseTurnContext,  } from "../stages/observability.js";
 import { stageSessionResetPreHook } from "../stages/session-reset-pre-hook.js";
 import { stageSessionResetConfirmation } from "../stages/session-reset-confirmation.js";
 import { stageMemCommandIntercept } from "../stages/mem-command-intercept.js";
@@ -252,10 +242,7 @@ export function extractSseUsage(sseText: string): Record<string, unknown> | null
   return lastUsage;
 }
 
-/**
- * Build upstream body from original body + cost guard overrides.
- * The host does NOT branch on routing — it just applies overrides if present.
- */
+
 function buildUpstreamBody(
   body: Record<string, unknown>,
   target: ForwardTarget,
@@ -290,7 +277,7 @@ function buildUpstreamHeaders(
   // `effectiveApiKey` is pre-resolved by the caller — see the resolveEffective
   // block near the call site. Non-empty → inject as server-side Bearer;
   // empty/undefined → passthrough (client's own Authorization survives).
-  // cost-guard's `target.authHeaders` still gets to override everything.
+
   if (effectiveApiKey && !target.authHeaders) {
     headers["authorization"] = `Bearer ${effectiveApiKey}`;
   }
@@ -605,7 +592,7 @@ export async function runOpenaiChatPipeline(
   // ── Session key: prefer conversation header, fallback to agent profile ───────────
   const { resolveConversationId } = await import("../../session/session-key.js");
   const conversationId = resolveConversationId(c);
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  const sessionKey = conversationId ?? keyId;
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -942,7 +929,7 @@ export async function runOpenaiChatPipeline(
     ? (opencodeUserQuery ? { role: "user", content: opencodeUserQuery } : null)
     : extractLatestUserMessage(messages);
 
-  // ── Context injection (via shared stage, before cost guard) ─────────────
+
   {
     const injected = await stageInjectionRunner({
       skip: injectedSkipped,
@@ -959,7 +946,7 @@ export async function runOpenaiChatPipeline(
 
   const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
 
-  // ── Resolve forward target (opaque extension — no routing logic here) ──
+
   // upstream.agents[agent] is a single map keyed by agent name — same lookup
   // as anthropicHandler. Empty / missing entry → fall back to upstream.url,
   // preserving legacy behavior for configs that don't declare `agents:` at all.
@@ -973,7 +960,7 @@ export async function runOpenaiChatPipeline(
   const target = resolvedTarget.target;
   let effectiveApiKey = resolvedTarget.effectiveApiKey;
   const forwardEndpoint = resolvedTarget.forwardEndpoint;
-  const costGuardMode = resolvedTarget.costGuardMode;
+
 
   // ── Instance upstream config override (via shared stage) ──────────────
   // b11bf612 GLM /v1 auto-insert 修复走 joinUrl, stageInstanceUpstreamOverride 内部
@@ -997,8 +984,8 @@ export async function runOpenaiChatPipeline(
   // ── Create pipeline logger ──────────────────────────────────────────────
   const pipe = createPipeline(config, traceId, target.model);
   pipe.requestReceived(messages.length, isStream);
-  if (target.logLine) pipe.info("COST_GUARD", target.logLine);
-  if (target.logLineExtra) pipe.info("COST_GUARD_DETAIL", target.logLineExtra);
+  if (target.logLine) pipe.info("UPSTREAM", target.logLine);
+  if (target.logLineExtra) pipe.info("UPSTREAM_DETAIL", target.logLineExtra);
 
   // ── Trace-level tags ──
   // agent_source 标明客户端族群（codebuddy / claude-code / codex / …），供
@@ -1013,7 +1000,7 @@ export async function runOpenaiChatPipeline(
 
   // ── Langfuse turn context: one trace = one turn (deterministic traceId) ──
   // Same (sessionKey, turnSeq) across a turn's tool-loop requests → same trace.
-  // Prefer the extension's monotonic per-session turnSeq (survives context
+
   // compaction); fall back to the stateless count when it's not tracked.
   // Both sources drop back to 1 when their state is lost (truncated history /
   // expired counter), colliding with the usage rows this session already wrote
@@ -1021,13 +1008,13 @@ export async function runOpenaiChatPipeline(
   // ever moves forward. See resolveMonotonicTurnSeq.
   // ── Turn context 装配 via shared stageBuildLangfuseTurnContext ──
   // 58e4c55b opencode fix: opencode 的 userQuery 由 caller 算好后覆写, 不走
-  // stage 内默认 resolveLatestUserQuery (见上方 opencodeUserQuery 计算与注释)。
+
   const { turnSeq, lf } = await stageBuildLangfuseTurnContext({
     config, sessionKey, keyId, target, messages, protocol: "openai",
     traceTags, path: c.req.path, headers: lcHeaders, body,
     userQueryOverride: opencodeUserQuery,
   });
-  stageReportAnalyzerTrace({ config, target, traceId, lf, keyId, sessionKey, turnSeq, startTime, spaceId });
+
 
   // ── Langfuse debug metadata (only when config.langfuse.debug=true) ────────
   // CB / cursor / windsurf 走 OpenAI 协议命中本 handler；开 debug 时把请求
@@ -1069,31 +1056,10 @@ export async function runOpenaiChatPipeline(
   // ── Build upstream request ───────────────────────────────────────────────
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
 
-  // Optional private preparation stage. It rewrites `body` / `messages` in
+
   // place, so it has to land after every host-side mutation (injection, agent
   // overrides) and before the upstream body is assembled below. The host does
-  // not interpret the returned stats — see request-prepare-adapter.ts.
-  const preparedStats = await prepareUpstreamRequest({
-    config,
-    protocol: "openai",
-    body,
-    messages,
-    sessionKey,
-    pipe,
-    upstreamCall: {
-      upstreamUrl: target.url,
-      headers: upstreamHeaders,
-      model: target.model,
-      tools: body.tools,
-      bodyOverrides: target.bodyOverrides ?? undefined,
-    },
-    userQuery: lf.userQuery,
-    spaceId,
-    lf,
-    opikTraceId: traceId,
-    opikKeyId: keyId,
-    skipPrepare: costGuardMode === "cheap",
-  });
+
 
   const upstreamBody = buildUpstreamBody(body, target);
   // Retry headers: preserve original client headers (x-request-id, user-agent,
@@ -1180,7 +1146,7 @@ export async function runOpenaiChatPipeline(
   // A retry falls back to the model the client asked for, so the request ends
   // up costing what it would have cost unrouted — no saving to attribute.
   const routedFrom = retried ? "" : target.routedFrom;
-  // `routedFrom` is also present in cost-guard's opaque logMeta. Keep the
+
   // normalized post-retry value authoritative so fallback requests never book
   // savings or carry stale route attribution.
   const { routedFrom: _ignoredRoutedFrom, ...routeLogMeta } = target.logMeta;
@@ -1261,7 +1227,7 @@ export async function runOpenaiChatPipeline(
       upstreamRequestId,
       langfuseDebug,
       debugMetadata,
-      preparedStats,
+
       skipCreditReport,
       isCustomUpstream: _isCustomUpstream,
       gates: _gates,
@@ -1269,12 +1235,7 @@ export async function runOpenaiChatPipeline(
     const passthrough = createUsageTapTransform(tapCtx);
     // 顺序要紧：tap 在前，读到的是模型原始输出；剥离在后，只影响客户端那一份。
     const tappedStream = upstreamResp.body
-      .pipeThrough(passthrough)
-      .pipeThrough(createCfqStripStream(
-        "openai",
-        preparedStats,
-        createCfqStripObserver(pipe),
-      ));
+      .pipeThrough(passthrough);
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
   }
@@ -1303,33 +1264,9 @@ export async function runOpenaiChatPipeline(
 
   const logMeta = responseLogMeta;
 
-  // Report the completed response to the extension (same signal the streaming
+
   // path emits from its tap). Fire-and-forget.
-  void notifyUpstreamResponse(
-    config,
-    {
-      protocol: "openai",
-      sessionKey,
-      model: effectiveModel,
-      stream: false,
-      turnSeq: lf.turnSeq,
-      text: typeof assistantMessage?.content === "string" ? assistantMessage.content : "",
-      toolCalls: (Array.isArray(assistantMessage?.tool_calls) ? assistantMessage.tool_calls : [])
-        .map((tc) => {
-          const t = tc as Record<string, unknown>;
-          const fn = t.function as Record<string, unknown> | undefined;
-          const argsVal = fn?.arguments;
-          return {
-            id: (t.id as string) ?? "",
-            name: (fn?.name as string) ?? "",
-            arguments: typeof argsVal === "string" ? argsVal : JSON.stringify(argsVal ?? ""),
-          };
-        })
-        .filter((tc) => tc.id && tc.arguments),
-      usage: usage ?? {},
-    },
-    pipe,
-  );
+
 
   // 内部使用埋点：非流式响应里的 tool_calls 逐个记 model_intent。
   try {
@@ -1386,7 +1323,7 @@ export async function runOpenaiChatPipeline(
         stream: false,
         usage,
         requestReceivedAt: startTime,
-        extensionStats: preparedStats ?? undefined,
+
         ...logMeta,
         routedFrom,
         spaceId,
@@ -1534,12 +1471,7 @@ export async function runOpenaiChatPipeline(
   }
 
   // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-  const clientRespText = stripCfqFromResponseText(
-    "openai",
-    respText,
-    preparedStats,
-    createCfqStripObserver(pipe),
-  );
+  const clientRespText = respText;
   return new Response(clientRespText, {
     status: upstreamResp.status,
     headers: respHeaders,
@@ -1611,7 +1543,7 @@ interface TapContext {
   /** buildRequestDebugMetadata 结果；debug=false 时为 {}。 */
   debugMetadata: Record<string, unknown>;
   /** Opaque counters from the request-preparation stage; null when it didn't run. */
-  preparedStats: Record<string, unknown> | null;
+
   /** Instance upstream config: skip credit reporting for custom model. */
   skipCreditReport?: boolean;
   /** true when the request is routed to a custom upstream (user's own base_url + api_key). */
@@ -1745,28 +1677,9 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       }
     }
 
-    // Report the completed response to the extension. Fire-and-forget; the
+
     // client has already been served by this point.
-    void notifyUpstreamResponse(
-      config,
-      {
-        protocol: "openai",
-        sessionKey,
-        model: modelId,
-        stream: true,
-        turnSeq: lf.turnSeq,
-        text: assistantContent,
-        toolCalls: Array.from(toolCallAccumulators.values())
-          .filter((acc) => acc.id && acc.functionArguments)
-          .map((acc) => ({
-            id: acc.id,
-            name: acc.functionName,
-            arguments: acc.functionArguments,
-          })),
-        usage: lastUsage ?? {},
-      },
-      pipe,
-    );
+
 
     // 内部使用埋点：每个 tool_use 意图一条 model_intent（fan-out）。
     stageEmitModelIntent({
@@ -1796,7 +1709,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         timestamp: endTime, modelId, keyId, sessionKey,
         turnSeq: lf.turnSeq, userInput: lf.userQuery || undefined,
         upstreamUrl, usage: lastUsage, requestReceivedAt: startTime,
-        extensionStats: ctx.preparedStats ?? undefined,
+
         logMeta: ctx.logMeta, routedFrom: ctx.routedFrom, spaceId, upstreamRequestId,
       });
       stageOpikStreamSpan({

@@ -14,7 +14,7 @@
  * 所有方法 async；覆盖写可 fire-and-forget（`.catch(() => {})`）。
  * putIfAbsent 必须 await（返回值决定后续分支）。
  */
-export type ProxyStorageType = "cos" | "sqlite" | "fs" | "memory";
+export type ProxyStorageType = "sqlite" | "fs" | "memory";
 
 export interface ProxyStorage {
   readonly type: ProxyStorageType;

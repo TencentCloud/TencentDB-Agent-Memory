@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 先确保 config 目录存在，避免用户 bind-mount 文件时父目录缺失被当成目录挂载。
-mkdir -p /app/panel/config "${KNOWLEDGE_DATA_DIR:-/data/knowledge}" "$(dirname "${KNOWLEDGE_DB_PATH:-/data/knowledge/knowledge.db}")"
-
 # 用户可通过挂载 /app/panel/config/metadata-instances.json 提供多实例配置；
 # 此时 REMOTE_INSTANCE_* env 不再必需，脚本也不会覆盖该文件。
-INSTANCES_FILE="/app/panel/config/metadata-instances.json"
+INSTANCES_FILE="${INSTANCES_FILE:-/app/panel/config/metadata-instances.json}"
+mkdir -p "$(dirname "$INSTANCES_FILE")"
+
 USER_PROVIDED_INSTANCES=0
 if [[ -f "$INSTANCES_FILE" ]]; then
   USER_PROVIDED_INSTANCES=1
@@ -34,26 +33,48 @@ PROXY_BASE_URL="${KNOWLEDGE_LLM_PROXY_BASE_URL:-}"
 #   - 已设置 → 写入 proxy_endpoint；此时 UI 卡片显示的接入地址会切到 proxy，
 #     但 Panel 后端 → Kernel 的转发地址仍走 gateway_endpoint（不受影响）
 if [[ "$USER_PROVIDED_INSTANCES" -ne 1 ]]; then
-# 只有非空时才拼一行 proxy_endpoint 到 dict 字面量里；空则完全不出现，保持老行为。
-PROXY_ENDPOINT_LINE=""
-if [[ -n "${REMOTE_INSTANCE_PROXY_URL:-}" ]]; then
-  PROXY_ENDPOINT_LINE="    'proxy_endpoint': '${REMOTE_INSTANCE_PROXY_URL}',"
-fi
-python3 - <<PY
+  export INSTANCES_FILE
+  export INSTANCE_ID
+  export INSTANCE_NAME
+  export REMOTE_INSTANCE_URL
+  export REMOTE_INSTANCE_KEY
+  export REMOTE_INSTANCE_PROXY_URL="${REMOTE_INSTANCE_PROXY_URL:-}"
+
+  python3 - <<'PY'
 import json
+import os
 from pathlib import Path
-p=Path('$INSTANCES_FILE')
-p.write_text(json.dumps({
-  'instances': [{
-    'id': '${INSTANCE_ID}',
-    'name': '${INSTANCE_NAME}',
-    'gateway_endpoint': '${REMOTE_INSTANCE_URL}',
-${PROXY_ENDPOINT_LINE}
-    'api_key': '${REMOTE_INSTANCE_KEY}',
-  }]
-}, ensure_ascii=False, indent=2) + '\n')
+
+instances_file = os.environ.get('INSTANCES_FILE', '/app/panel/config/metadata-instances.json')
+instance_id = os.environ.get('INSTANCE_ID', 'default')
+instance_name = os.environ.get('INSTANCE_NAME') or instance_id
+gateway_endpoint = os.environ.get('REMOTE_INSTANCE_URL', '')
+api_key = os.environ.get('REMOTE_INSTANCE_KEY', '')
+proxy_endpoint = os.environ.get('REMOTE_INSTANCE_PROXY_URL', '')
+
+instance = {
+    'id': instance_id,
+    'name': instance_name,
+    'gateway_endpoint': gateway_endpoint,
+}
+if proxy_endpoint:
+    instance['proxy_endpoint'] = proxy_endpoint
+instance['api_key'] = api_key
+
+p = Path(instances_file)
+p.parent.mkdir(parents=True, exist_ok=True)
+fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'w', encoding='utf-8') as output:
+    output.write(json.dumps({'instances': [instance]}, ensure_ascii=False, indent=2) + '\n')
 PY
 fi
+
+if [[ "${CONFIG_ONLY:-0}" == "1" ]]; then
+  exit 0
+fi
+
+# 确保运行时数据目录存在
+mkdir -p "${KNOWLEDGE_DATA_DIR:-/data/knowledge}" "$(dirname "${KNOWLEDGE_DB_PATH:-/data/knowledge/knowledge.db}")"
 
 cleanup() {
   jobs -p | xargs -r kill 2>/dev/null || true
@@ -98,6 +119,7 @@ if [[ "${LLM_MODE}" == "proxy" ]]; then
 fi
 
 cd /app/knowledge
+HOST="${KNOWLEDGE_HOST:-127.0.0.1}" \
 PORT="${KNOWLEDGE_PORT}" LOG_LEVEL="${LOG_LEVEL:-info}" \
   KNOWLEDGE_SERVICE_KEY="${KNOWLEDGE_SERVICE_KEY:-}" \
   node "$(test -f dist/server.js && echo dist/server.js || echo dist/server.mjs)" 2>&1 \
@@ -125,7 +147,7 @@ UI_DIST_DIR=/app/panel/web/dist \
 METADATA_INSTANCES_CONFIG=/app/panel/config/metadata-instances.json \
 METADATA_REMOTE_TIMEOUT_MS="${METADATA_REMOTE_TIMEOUT_MS:-15000}" \
 KNOWLEDGE_SERVICE_URL="${KS_INTERNAL_URL}" \
-KNOWLEDGE_AUTH_TOKEN="${KNOWLEDGE_AUTH_TOKEN:-}" \
+KNOWLEDGE_AUTH_TOKEN="${KNOWLEDGE_AUTH_TOKEN:-${KNOWLEDGE_SERVICE_KEY:-}}" \
 KNOWLEDGE_TIMEOUT_MS="${KNOWLEDGE_TIMEOUT_MS:-15000}" \
 KNOWLEDGE_LLM_BINDING_SYNC="${SYNC_ENV}" \
 KNOWLEDGE_LLM_PROXY_BASE_URL="${PROXY_BASE_URL}" \

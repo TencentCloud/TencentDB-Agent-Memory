@@ -255,3 +255,67 @@ export interface SessionInfo {
     total_est_tokens: number;
   };
 }
+
+export interface SessionIdFields {
+  user_id: string;
+  team_id: string;
+  agent_id: string;
+  agent_source?: string;
+  session_id?: string;
+  task_id?: string;
+  user_key?: string;
+  /**
+   * Kernel tenant/instance ID for `x-tdai-service-id`. Extracted from
+   * `SessionInfo.space_id`.
+   */
+  space_id?: string;
+  /**
+   * Composite key actually used to load state from SessionStore
+   * (`${agentSource}:${sessionId}`).
+   */
+  composite_key?: string;
+}
+
+/** Specialized session identity for skill-bridge where agent_source is strictly required for storage key isolation. */
+export interface SkillSessionIdFields extends SessionIdFields {
+  agent_source: string;
+}
+
+/** Specialized session identity for memory-bridge where session_id is strictly required by TdaiIdentity. */
+export interface MemorySessionIdFields extends SessionIdFields {
+  session_id: string;
+}
+
+export interface SessionInitResult {
+  intercepted: boolean;
+  response?: Response;
+  messages?: Record<string, unknown>[];
+  sessionInfo?: SessionInfo | null;
+  justRegistered?: boolean;
+  agentDetail?: AgentDetail | null;
+  taskDetail?: TaskDetail | null;
+  /**
+   * 已绑定 team 的 display name（来自 cachedTeams[selected].team_name）。
+   * 供 mem:session-reset 完成确认等展示层使用；session-init 完成时才有值。
+   */
+  teamName?: string | null;
+  /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
+  bypassed?: boolean;
+  /** mem:session-reset 触发时写入，标记本次 init 是 reset 流程。 */
+  resetFlow?: boolean;
+  /**
+   * bypass 触发原因（仅 `bypassed === true` 时有意义）。codexHandler 用它决定
+   * 首次 gate 命中是否要返 "Plan 模式提示" 而非直接透传。
+   */
+  bypassReason?: "default-gate";
+  /**
+   * Anthropic-only: pre-built `<session_context>` string that MUST be appended
+   * to `body.system` by the caller.
+   */
+  systemAppend?: string | null;
+  /**
+   * 状态机拦截时产生的内部表单数据（仅 intercepted=true 时有值）。
+   * codex/workbuddy/dsh/opencode 外层重渲染逻辑消费它生成客户端原生 SSE。
+   */
+  formData?: import("./codebuddy/form.js").FormData;
+}

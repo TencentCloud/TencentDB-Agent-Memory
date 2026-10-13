@@ -12,15 +12,9 @@
 # Build:
 #   docker build -t tencentdb-agent-memory:latest .
 #
-# Package manager: npm (Node.js bundled). The repo ships pnpm-lock.yaml for
-# local development, but inside the image we generate an npm lockfile on the
-# fly to keep the image free of pnpm/corepack and to align with team CI/CD
-# conventions. A small package.json patch is applied to:
-#   - drop optional peerDependencies (`openclaw`, `node-llama-cpp`) which
-#     pull in transitive packages that ship broken `workspace:*` refs to
-#     unpublished sub-packages (e.g. @jimp/config-typescript).
-#   - add `overrides` to short-circuit any straggler workspace refs.
-# These tweaks only affect the image, not the source tree.
+# Package manager: npm (Node.js bundled). Uses committed package-lock.json
+# with npm ci for locked dependency installation. Base images and apt packages
+# remain mutable; this does not guarantee bit-reproducible images.
 # ──────────────────────────────────────────────────────────────────────
 
 # Stage 1: build/install deps (with toolchain for native bindings)
@@ -46,71 +40,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /build
 
-# node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" crash（干净
-# `npm install` 稳定报 `Cannot read properties of null (reading
-# 'edgesOut')`）。升到 11 规避，不影响其它构建行为。
-RUN npm install -g npm@11 --no-audit --no-fund
-
 # Copy package metadata first to maximize Docker layer cache
-COPY package.json ./
+COPY package.json package-lock.json ./
 
-# Patch package.json for npm-friendly install:
-#   1. Strip optional peerDependencies (openclaw, node-llama-cpp) — these
-#      pull in @whiskeysockets/baileys → jimp@1.6.1, whose published manifest
-#      contains a broken `workspace:*` ref to @jimp/config-typescript that
-#      npm cannot resolve.
-#   2. Add overrides as a defensive short-circuit in case any other
-#      transitive dep reintroduces the same pattern.
-RUN node -e " \
-        const fs=require('fs'); \
-        const p=JSON.parse(fs.readFileSync('package.json','utf8')); \
-        delete p.peerDependencies; \
-        delete p.peerDependenciesMeta; \
-        p.overrides=Object.assign({},p.overrides,{ \
-            '@jimp/config-typescript':'npm:dotenv@latest' \
-        }); \
-        fs.writeFileSync('package.json',JSON.stringify(p,null,2)); \
-    "
-
-# Generate lockfile + install production deps.
-# --omit=optional 精简镜像体积，减少 CI push 超时风险（可选依赖如
-# @clickhouse/client、kafkajs、cos-nodejs-sdk-v5 等在网关镜像中不需要；
-# mongodb 自 2026-09-03 起是正式 dependency —— Mongo 是一等存储后端，不再可裁）。
-# --ignore-scripts skips the openclaw postinstall patch (irrelevant in image).
-# --legacy-peer-deps relaxes strict peer resolution for older transitive deps.
-# 使用 BuildKit cache mount 缓存 npm 下载缓存，大幅加速重复构建
+# Install production dependencies using committed package-lock.json.
+# --omit=dev preserves production dependencies and optional dependencies
+# (including native bindings like @esbuild/linux-* for tsx, sqlite-vec, etc.).
 RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
-    npm install \
+    npm ci \
         --omit=dev \
-        --omit=optional \
-        --ignore-scripts \
-        --legacy-peer-deps \
+        --omit=peer \
         --no-audit \
         --no-fund
-
-# tsx 需要 esbuild 二进制（是 tsx 的 optionalDependency），--omit=optional 后会丢失。
-# 单独安装 esbuild (--no-save 不修改 package.json)，esbuild ~10MB 远小于被省略的
-# 可选依赖总大小。
-#
-# 注意：这里**不能**加 --omit=optional —— esbuild 的平台特定二进制
-# （@esbuild/linux-x64 / @esbuild/linux-arm64）本身就是 optionalDependency，
-# 加了会导致运行时报 "The package @esbuild/linux-x64 could not be found"。
-# 允许 dev 也不影响：esbuild 本身没有 devDep。
-RUN --mount=type=cache,id=npm-cache,target=/root/.npm \
-    npm install \
-        --no-save \
-        --ignore-scripts \
-        --no-audit \
-        --no-fund \
-        esbuild
 
 # Now copy the rest of the source
 # 注意: .dockerignore 已排除 node_modules/.git/__tests__/docs 等
 COPY . .
-
-# 保留原始 package.json（COPY . 会覆盖 patch 后的版本，所以无需 git checkout）
-# 注: .git 已被 .dockerignore 排除，原来的 git checkout 命令实际上总是失败的
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Stage 2: runtime — slim image
@@ -135,6 +80,10 @@ WORKDIR /app
 
 # Copy app from builder stage
 COPY --from=deps-builder /build /app
+
+# The standalone runtime does not need npm/npx or optional host/native-LLM peers.
+# Install such optional backends in a separately verified custom image.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Data directory (mountable as PVC in K8s)
 RUN mkdir -p /data/tdai-memory /data/config

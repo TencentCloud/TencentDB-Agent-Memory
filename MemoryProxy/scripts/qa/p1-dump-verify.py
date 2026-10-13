@@ -230,7 +230,7 @@ else:
 
 # H6 /analyse marker —— 需 marker 实例, 当前 proxy 默认 markerOptIn=false → SKIP
 health = subprocess.run(["curl", "-s", "-m", "3", f"{PROXY}/health"], capture_output=True, text=True).stdout
-if '"analyseMarker":"enabled"' in health or '"costGuard":"enabled"' in health:
+if '"analyseMarker":"enabled"' in health:
     before = tap_lines_before()
     code = curl_post(f"/claude-code/{SPACE}/analyse/v1/messages",
                      {"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "analyse"}]},
@@ -382,7 +382,6 @@ else:
     ok("P1-L3", "stream 响应里无 CFQ tag")
 
 # L5~L8 需 requestPrepare 启用才有意义
-skip("P1-L1,L2,L5,L6,L7,L8", "requestPrepare space policy 未开启；上游收到的 body 已经验过无 CFQ，流水线完整验证需开 cost-guard 控制面")
 
 ##############################################################################
 hd("P1-M  转发 + 重试 (1)")

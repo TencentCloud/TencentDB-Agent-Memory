@@ -14,7 +14,7 @@
  * 本文件改名为 `skill-store.ts`。
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 
 import { randomBase62 } from "../../../utils/short-id.js";
 import { SKILLS_DDL, SKILL_FTS_DDL, SKILL_VEC_DDL_TEMPLATE, FTS_CONTENT_MAX } from "../../skill/skill-store-ddl.js";
@@ -69,57 +69,57 @@ function defaultUlid(): string {
   return randomBase62(12);
 }
 
-interface SkillRowRaw {
-  row_id: string;
-  skill_id: string;
-  version: number;
-  is_head: number;
+type SqliteRow = Record<string, SQLOutputValue>;
 
-  user_id: string;
-  owner_agent_id: string;
-  team_id: string;
-  task_id: string;
-
-  name: string;
-  description: string;
-  content: string;
-  content_hash: string;
-  manifest_json: string;
-  storage_dir: string;
-
-  status: string;
-  metadata_json: string;
-  created_at_ms: number;
-  updated_at_ms: number;
+function invalidRow(): never {
+  // Do not include persisted identifiers, payloads or private schema details.
+  throw new Error("Invalid SQLite skill row");
 }
 
-function toSkill(raw: SkillRowRaw): Skill {
+function rowString(row: SqliteRow | undefined, key: string): string {
+  const value = row?.[key];
+  return typeof value === "string" ? value : invalidRow();
+}
+
+function safeInteger(value: SQLOutputValue | undefined): number {
+  if (typeof value !== "number" && typeof value !== "bigint") return invalidRow();
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) return invalidRow();
+  return number;
+}
+
+function toSkill(raw: SqliteRow | undefined): Skill {
+  const version = safeInteger(raw?.version);
+  const head = safeInteger(raw?.is_head);
+  const status = rowString(raw, "status");
+  if (version < 1 || (head !== 0 && head !== 1) || (status !== "active" && status !== "archived")) return invalidRow();
+  const manifestJson = rowString(raw, "manifest_json");
   let manifest: SkillManifestEntry[];
   try {
-    manifest = JSON.parse(raw.manifest_json);
+    manifest = JSON.parse(manifestJson);
     if (!Array.isArray(manifest)) manifest = [];
   } catch {
     manifest = [];
   }
   return {
-    row_id: raw.row_id,
-    skill_id: raw.skill_id,
-    version: raw.version,
-    is_head: raw.is_head === 1,
-    user_id: raw.user_id,
-    owner_agent_id: raw.owner_agent_id,
-    team_id: raw.team_id,
-    task_id: raw.task_id,
-    name: raw.name,
-    description: raw.description,
-    content: raw.content,
-    content_hash: raw.content_hash,
+    row_id: rowString(raw, "row_id"),
+    skill_id: rowString(raw, "skill_id"),
+    version,
+    is_head: head === 1,
+    user_id: rowString(raw, "user_id"),
+    owner_agent_id: rowString(raw, "owner_agent_id"),
+    team_id: rowString(raw, "team_id"),
+    task_id: rowString(raw, "task_id"),
+    name: rowString(raw, "name"),
+    description: rowString(raw, "description"),
+    content: rowString(raw, "content"),
+    content_hash: rowString(raw, "content_hash"),
     manifest,
-    storage_dir: raw.storage_dir,
-    status: raw.status as SkillStatus,
-    metadata_json: raw.metadata_json,
-    created_at_ms: raw.created_at_ms,
-    updated_at_ms: raw.updated_at_ms,
+    storage_dir: rowString(raw, "storage_dir"),
+    status,
+    metadata_json: rowString(raw, "metadata_json"),
+    created_at_ms: safeInteger(raw?.created_at_ms),
+    updated_at_ms: safeInteger(raw?.updated_at_ms),
   };
 }
 
@@ -281,7 +281,7 @@ export class SqliteSkillStore implements ISkillStore {
         .prepare(
           "SELECT * FROM skills WHERE team_id=? AND owner_agent_id=? AND name=? AND is_head=1 AND status='active' LIMIT 1",
         )
-        .get(tid, oid, input.name) as SkillRowRaw | undefined;
+        .get(tid, oid, input.name);
       if (dupRaw) {
         throw new SkillStoreError("SKILL_NAME_DUPLICATE", `name '${input.name}' already exists for agent in team`);
       }
@@ -365,7 +365,7 @@ export class SqliteSkillStore implements ISkillStore {
     // 取回新行（事务外读取，节省持锁时间）
     const inserted = this.db
       .prepare("SELECT * FROM skills WHERE row_id=?")
-      .get(newRowId) as SkillRowRaw;
+      .get(newRowId);
     return toSkill(inserted);
   }
 
@@ -373,8 +373,8 @@ export class SqliteSkillStore implements ISkillStore {
   //  archiveHead
   // ────────────────────────────────────────────────────────────────────
   async archiveHead(skillId: string, teamId?: string): Promise<{ archived: boolean }> {
-    const where = teamId ? "skill_id=? AND team_id=? AND is_head=1" : "skill_id=? AND is_head=1";
-    const args: unknown[] = teamId ? [this.now(), skillId, teamId] : [this.now(), skillId];
+    const where = teamId !== undefined ? "skill_id=? AND team_id=? AND is_head=1" : "skill_id=? AND is_head=1";
+    const args: SQLInputValue[] = teamId !== undefined ? [this.now(), skillId, teamId] : [this.now(), skillId];
     const r = this.db
       .prepare(`UPDATE skills SET status='archived', updated_at_ms=? WHERE ${where}`)
       .run(...args);
@@ -386,10 +386,10 @@ export class SqliteSkillStore implements ISkillStore {
     }
 
     // 检查是否之前已 archived（仍算成功 / 幂等）
-    const checkWhere = teamId
+    const checkWhere = teamId !== undefined
       ? "skill_id=? AND team_id=? AND is_head=1 AND status='archived'"
       : "skill_id=? AND is_head=1 AND status='archived'";
-    const checkArgs = teamId ? [skillId, teamId] : [skillId];
+    const checkArgs = teamId !== undefined ? [skillId, teamId] : [skillId];
     const exists = this.db.prepare(`SELECT 1 FROM skills WHERE ${checkWhere} LIMIT 1`).get(...checkArgs);
     return { archived: !!exists };
   }
@@ -404,15 +404,15 @@ export class SqliteSkillStore implements ISkillStore {
    * 想拿到 archived 行请用 {@link getHeadIncludingArchived}。
    */
   async getHead(skillId: string, teamId?: string): Promise<Skill | null> {
-    if (teamId) {
+    if (teamId !== undefined) {
       const raw = this.db
         .prepare("SELECT * FROM skills WHERE skill_id=? AND team_id=? AND is_head=1 AND status='active' LIMIT 1")
-        .get(skillId, teamId) as SkillRowRaw | undefined;
+        .get(skillId, teamId);
       return raw ? toSkill(raw) : null;
     }
     const raw = this.db
       .prepare("SELECT * FROM skills WHERE skill_id=? AND is_head=1 AND status='active' LIMIT 1")
-      .get(skillId) as SkillRowRaw | undefined;
+      .get(skillId);
     return raw ? toSkill(raw) : null;
   }
 
@@ -421,28 +421,28 @@ export class SqliteSkillStore implements ISkillStore {
    * 普通读写路径 **不应** 调用本方法。
    */
   async getHeadIncludingArchived(skillId: string, teamId?: string): Promise<Skill | null> {
-    if (teamId) {
+    if (teamId !== undefined) {
       const raw = this.db
         .prepare("SELECT * FROM skills WHERE skill_id=? AND team_id=? AND is_head=1 LIMIT 1")
-        .get(skillId, teamId) as SkillRowRaw | undefined;
+        .get(skillId, teamId);
       return raw ? toSkill(raw) : null;
     }
     const raw = this.db
       .prepare("SELECT * FROM skills WHERE skill_id=? AND is_head=1 LIMIT 1")
-      .get(skillId) as SkillRowRaw | undefined;
+      .get(skillId);
     return raw ? toSkill(raw) : null;
   }
 
   async getByVersion(skillId: string, version: number, teamId?: string): Promise<Skill | null> {
-    if (teamId) {
+    if (teamId !== undefined) {
       const raw = this.db
         .prepare("SELECT * FROM skills WHERE skill_id=? AND version=? AND team_id=? LIMIT 1")
-        .get(skillId, version, teamId) as SkillRowRaw | undefined;
+        .get(skillId, version, teamId);
       return raw ? toSkill(raw) : null;
     }
     const raw = this.db
       .prepare("SELECT * FROM skills WHERE skill_id=? AND version=? LIMIT 1")
-      .get(skillId, version) as SkillRowRaw | undefined;
+      .get(skillId, version);
     return raw ? toSkill(raw) : null;
   }
 
@@ -453,30 +453,30 @@ export class SqliteSkillStore implements ISkillStore {
   ): Promise<Skill[]> {
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 1000);
     const offset = Math.max(opts.offset ?? 0, 0);
-    if (teamId) {
+    if (teamId !== undefined) {
       const rows = this.db
         .prepare("SELECT * FROM skills WHERE skill_id=? AND team_id=? ORDER BY version DESC LIMIT ? OFFSET ?")
-        .all(skillId, teamId, limit, offset) as SkillRowRaw[];
+        .all(skillId, teamId, limit, offset);
       return rows.map(toSkill);
     }
     const rows = this.db
       .prepare("SELECT * FROM skills WHERE skill_id=? ORDER BY version DESC LIMIT ? OFFSET ?")
-      .all(skillId, limit, offset) as SkillRowRaw[];
+      .all(skillId, limit, offset);
     return rows.map(toSkill);
   }
 
   /** 该 skill_id 下的版本总数（team_id 可选过滤）。 */
   async countVersions(skillId: string, teamId?: string): Promise<number> {
-    if (teamId) {
+    if (teamId !== undefined) {
       const row = this.db
         .prepare("SELECT COUNT(*) AS c FROM skills WHERE skill_id=? AND team_id=?")
-        .get(skillId, teamId) as { c: number };
-      return row.c;
+        .get(skillId, teamId);
+      return safeInteger(row?.c);
     }
     const row = this.db
       .prepare("SELECT COUNT(*) AS c FROM skills WHERE skill_id=?")
-      .get(skillId) as { c: number };
-    return row.c;
+      .get(skillId);
+    return safeInteger(row?.c);
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -488,22 +488,22 @@ export class SqliteSkillStore implements ISkillStore {
     const offset = Math.max(opts.offset ?? 0, 0);
 
     const where: string[] = ["is_head=1"];
-    const args: unknown[] = [];
+    const args: SQLInputValue[] = [];
 
     // 四个 ID：传了就过滤，不传不限制
-    if (opts.team_id) {
+    if (opts.team_id !== undefined) {
       where.push("team_id=?");
       args.push(opts.team_id);
     }
-    if (opts.owner_agent_id) {
+    if (opts.owner_agent_id !== undefined) {
       where.push("owner_agent_id=?");
       args.push(opts.owner_agent_id);
     }
-    if (opts.user_id) {
+    if (opts.user_id !== undefined) {
       where.push("user_id=?");
       args.push(opts.user_id);
     }
-    if (opts.task_id) {
+    if (opts.task_id !== undefined) {
       where.push("task_id=?");
       args.push(opts.task_id);
     }
@@ -518,12 +518,12 @@ export class SqliteSkillStore implements ISkillStore {
 
     const whereSql = where.join(" AND ");
 
-    const totalRow = this.db.prepare(`SELECT COUNT(*) AS c FROM skills WHERE ${whereSql}`).get(...args) as { c: number };
+    const totalRow = this.db.prepare(`SELECT COUNT(*) AS c FROM skills WHERE ${whereSql}`).get(...args);
     const rows = this.db
       .prepare(`SELECT * FROM skills WHERE ${whereSql} ORDER BY updated_at_ms DESC LIMIT ? OFFSET ?`)
-      .all(...args, limit, offset) as SkillRowRaw[];
+      .all(...args, limit, offset);
 
-    return { items: rows.map(toSkill), total: totalRow.c };
+    return { items: rows.map(toSkill), total: safeInteger(totalRow?.c) };
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -563,19 +563,19 @@ export class SqliteSkillStore implements ISkillStore {
     try {
       const ftsArgs: Array<string | number> = [ftsQuery];
       let ftsWhere = "skill_fts MATCH ?";
-      if (opts.team_id) {
+      if (opts.team_id !== undefined) {
         ftsWhere += " AND team_id=?";
         ftsArgs.push(opts.team_id);
       }
-      if (opts.agent_id) {
+      if (opts.agent_id !== undefined) {
         ftsWhere += " AND owner_agent_id=?";
         ftsArgs.push(opts.agent_id);
       }
-      if (opts.task_id) {
+      if (opts.task_id !== undefined) {
         ftsWhere += " AND task_id=?";
         ftsArgs.push(opts.task_id);
       }
-      if (opts.user_id) {
+      if (opts.user_id !== undefined) {
         ftsWhere += " AND user_id=?";
         ftsArgs.push(opts.user_id);
       }
@@ -602,8 +602,14 @@ export class SqliteSkillStore implements ISkillStore {
         .prepare(
           `SELECT * FROM skills WHERE skill_id=? AND is_head=1 AND status='active' LIMIT 1`,
         )
-        .get(r.skill_id) as SkillRowRaw | undefined;
+        .get(r.skill_id);
       if (!row) continue;
+      // FTS metadata may be stale or inconsistent: authorize the result scope
+      // against the authoritative row, not solely the secondary index.
+      if (opts.team_id !== undefined && row.team_id !== opts.team_id) continue;
+      if (opts.agent_id !== undefined && row.owner_agent_id !== opts.agent_id) continue;
+      if (opts.task_id !== undefined && row.task_id !== opts.task_id) continue;
+      if (opts.user_id !== undefined && row.user_id !== opts.user_id) continue;
       // bm25 越小越相关 → 转为越大越好的 score
       hits.push({
         skill: toSkill(row),
@@ -658,10 +664,10 @@ export class SqliteSkillStore implements ISkillStore {
    * 返回实际删除的行数。`SkillCore.delete` 走此路径，权限校验由调用方负责。
    */
   async deleteAllVersions(skillId: string, teamId?: string): Promise<number> {
-    const where = teamId ? "skill_id=? AND team_id=?" : "skill_id=?";
-    const args: unknown[] = teamId ? [skillId, teamId] : [skillId];
+    const where = teamId !== undefined ? "skill_id=? AND team_id=?" : "skill_id=?";
+    const args: SQLInputValue[] = teamId !== undefined ? [skillId, teamId] : [skillId];
     const r = this.db.prepare(`DELETE FROM skills WHERE ${where}`).run(...args);
-    const changes = r.changes ?? 0;
+    const changes = safeInteger(r.changes);
     // 仅当主表真的删掉了行时才 DELETE 附属表 —— 避免跨 team 校验失败时误清 fts
     if (changes > 0) {
       try {
@@ -689,11 +695,21 @@ export class SqliteSkillStore implements ISkillStore {
       this.logger?.warn(`[skill-store] embedding dim mismatch: ${embedding.length} vs ${this.dimensions}`);
       return;
     }
+    let savepointStarted = false;
     try {
+      // Nested savepoints preserve a caller-owned transaction on failure.
+      this.db.exec("SAVEPOINT skill_embedding_update");
+      savepointStarted = true;
       this.db.prepare("DELETE FROM skill_vec WHERE skill_id=?").run(skillId);
-      this.db.prepare("INSERT INTO skill_vec (skill_id, embedding) VALUES (?, ?)").run(skillId, Buffer.from(embedding.buffer));
-    } catch (e) {
-      this.logger?.warn(`[skill-store] upsertEmbedding failed: ${(e as Error).message}`);
+      this.db.prepare("INSERT INTO skill_vec (skill_id, embedding) VALUES (?, ?)").run(skillId, Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength));
+      this.db.exec("RELEASE SAVEPOINT skill_embedding_update");
+    } catch {
+      if (savepointStarted) {
+        try {
+          this.db.exec("ROLLBACK TO SAVEPOINT skill_embedding_update; RELEASE SAVEPOINT skill_embedding_update");
+        } catch { /* connection failure may also prevent rollback */ }
+      }
+      this.logger?.warn("[skill-store] upsertEmbedding failed");
     }
   }
 
@@ -701,8 +717,8 @@ export class SqliteSkillStore implements ISkillStore {
     if (!this.vecAvailable) return;
     try {
       this.db.prepare("DELETE FROM skill_vec WHERE skill_id=?").run(skillId);
-    } catch (e) {
-      this.logger?.warn(`[skill-store] deleteEmbedding failed: ${(e as Error).message}`);
+    } catch {
+      this.logger?.warn("[skill-store] deleteEmbedding failed");
     }
   }
 }

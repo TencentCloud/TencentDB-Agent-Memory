@@ -72,6 +72,7 @@ async function ksPost<T>(
       headers,
       body: JSON.stringify(body ?? {}),
       signal: ctrl.signal,
+      redirect: 'error',
     });
     const json = (await resp.json().catch(() => null)) as KsEnvelope<T> | null;
     if (!json || (json.code !== undefined && json.code !== 0)) {

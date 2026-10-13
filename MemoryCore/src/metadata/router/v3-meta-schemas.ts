@@ -603,7 +603,7 @@ const credentialSchema = z.object({
   kind: z.enum(["bearer", "basic", "custom"]),
   secret: z.string().min(1),
   username: z.string().optional(),
-  extra: z.record(z.unknown()).optional(),
+  extra: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const taskSourceProvidersSchema = z.object({ team_id: nonEmpty });

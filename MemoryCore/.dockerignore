@@ -24,23 +24,52 @@ scripts/sync-hermes-llm-to-tdai.sh
 dump.rdb
 vitest.config.ts
 vitest.e2e.config.ts
-kubb.config.ts
-tsdown.config.ts
 
-# ── 敏感配置（不入镜像；生产走 env 注入或 volume 挂载） ──
+# ── 敏感配置与本地文件（不入镜像；生产走 env 注入或 volume 挂载） ──
 # tdai-gateway.yaml 等根目录 yaml 会残留 Langfuse / VDB / API_KEY 等真值，
 # 即使空字符串 fallback，也不该跟着镜像跑；prod 走 K8s Secret + env template。
 tdai-gateway.yaml
 tdai-gateway.*.yaml
+*.local.yaml
+*.local.yml
+*.local.json
+*.local.*
+config.local.*
+config.*.local.*
 .env
 .env.*
 **/.env
 **/.env.*
+.npmrc
+**/.npmrc
 
-# 内部 CI/git 元数据
+# ── Audit scratch / 临时文件 ──
+.audit
+.audit*
+**/.audit*
+*.audit
+
+# ── 数据库与本地持久化数据 ──
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+dump.rdb
+
+# ── 日志 ──
+logs/
+**/logs
+*.log
+**/*.log
+nohup.out
+
+# 内部 CI/git 元数据及私有部署元数据
 .gitmodules
 .coding-ci.yaml
 .gitlab-ci.yml
+.claude
+.iwiki
 
 # src/integrations 是私有 submodule 挂载点。开源分支上该目录不存在(git 会
 # 把它当成空的 submodule pointer),内部构建 checkout 出来后携带 Redis /
@@ -64,3 +93,21 @@ scripts/soak-*
 
 # 保留必要的 md 文件（被上面 *.md 排除了，但 README.md 等对运行无影响，不需要保留）
 # 如果需要在容器中读取 README.md，删除上面的 *.md 行
+
+# Nested local credentials, database files and runtime state
+**/.npmrc*
+**/.env*
+**/*.db*
+**/*.sqlite*
+**/data
+**/dump.rdb
+**/*.local.*
+
+# Keep only the licensed runtime loader adapter from vendor/.
+# Development-only npm archive and reproduction tools stay outside runtime.
+vendor/*
+!vendor/jieba-loader.cjs
+!vendor/jieba-loader.LICENSE
+!vendor/jieba-loader.provenance.json
+scripts/vendor-npm.py
+scripts/vendor-jieba-loader.py

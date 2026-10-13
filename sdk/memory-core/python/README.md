@@ -7,15 +7,17 @@ Provides synchronous (`MemoryClient`) and asynchronous (`AsyncMemoryClient`) cli
 > **Distribution name**: `tencentdb-agent-memory-sdk-python` (PyPI / `pip install`)
 > **Import path**: `tencentdb_agent_memory` (Python module)
 
-## Install
+## Install this contribution from source
+
+Registry packages do not automatically include this fork's changes. From the
+reviewed repository checkout, install the Python SDK locally:
 
 ```bash
-# From PyPI (after publish)
-pip install tencentdb-agent-memory-sdk-python
-
-# From local .whl
-pip install ./tencentdb_agent_memory_sdk_python-0.1.0-py3-none-any.whl
+python3 -m pip install ./sdk/memory-core/python
 ```
+
+Use the Core gateway service credential as `api_key`. Protect environment files,
+client configuration and logs; a configured user credential is a separate key.
 
 ## Quick Start
 
@@ -24,7 +26,7 @@ from tencentdb_agent_memory import MemoryClient
 
 client = MemoryClient(
     endpoint="http://127.0.0.1:8420",
-    api_key="your-api-key",
+    api_key="your-core-service-key",
     service_id="your-memory-space-id",
 )
 
@@ -93,7 +95,7 @@ from tencentdb_agent_memory import AsyncMemoryClient
 async def main():
     async with AsyncMemoryClient(
         endpoint="http://127.0.0.1:8420",
-        api_key="your-api-key",
+        api_key="your-core-service-key",
         service_id="your-memory-space-id",
     ) as client:
         result = await client.search_atomic(query="preferences")
@@ -289,3 +291,28 @@ pip wheel . --no-deps -w dist/
 ## License
 
 MIT
+
+## TLS verification
+
+The v2 synchronous and asynchronous clients now verify server certificates and
+hostnames by default, matching v3. Existing private deployments using self-signed
+certificates must configure a trusted CA or an `httpx` client with a verified SSL
+context. Explicit `verify=False` is a development opt-in and permits interception;
+no process-wide TLS setting is changed. HTTP transport debug logs include the response status only, excluding request
+and response bodies. Other application logging requires a separate privacy review.
+
+Run the local HTTPS regression suite with `python -m unittest discover -s tests -v`
+after installing the SDK dependencies. OpenSSL must be available on PATH; the tests
+use temporary self-signed certificates and synthetic memory, with no external service.
+
+### Redirect policy
+
+The v2/v3 API transports, STS acquisition and COS reads (including the 403 retry)
+reject redirects in synchronous and asynchronous mode, including
+when an injected httpx client has `follow_redirects=True`. Configure the canonical
+endpoint directly. Custom client hooks/transports remain trusted caller code.
+Run real HTTPS trust, hostname, log-privacy and redirect regressions with:
+
+```sh
+python -m unittest discover -s sdk/memory-core/python/tests -v
+```

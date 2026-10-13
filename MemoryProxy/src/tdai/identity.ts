@@ -1,3 +1,4 @@
+import type { SessionInfo } from "../session/types.js";
 import type { TdaiIdentity } from "./types.js";
 
 interface SessionInfoLike {
@@ -9,7 +10,7 @@ interface SessionInfoLike {
 }
 
 export interface TdaiIdentitySource {
-  sessionInfo?: Record<string, unknown> | null;
+  sessionInfo?: SessionInfo | SessionInfoLike | Record<string, unknown> | null;
   /** User ID from auth/verify — replaces legacy codeBuddyUserId. */
   userId?: string | null;
   sessionKey?: string | null;

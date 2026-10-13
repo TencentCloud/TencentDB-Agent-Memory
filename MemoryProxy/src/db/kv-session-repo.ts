@@ -93,7 +93,7 @@ export class KvSessionRepo implements SessionRepo {
   async loadAllInitialized(): Promise<HydratedSessionRow[]> {
     // CosStorage 下关闭启动 hydrate —— 全量 listObjects 太慢且价值有限
     // （多节点下只能覆盖本节点第一个请求）。走 probeL2a 懒加载即可。
-    if (this.storage.type === "cos") return [];
+
 
     try {
       // listNames 传入 "ttl/" 前缀，返回的 name 是移除该前缀后的路径，

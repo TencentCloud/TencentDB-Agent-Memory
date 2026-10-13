@@ -6,7 +6,7 @@
 
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, lstatSync, openSync, closeSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 
 import * as schema from "./schema.js";
@@ -26,7 +26,19 @@ export interface CreateDbOptions {
  */
 export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Database } {
   if (opts.path !== ":memory:") {
-    mkdirSync(dirname(opts.path), { recursive: true });
+    mkdirSync(dirname(opts.path), { recursive: true, mode: 0o700 });
+    // Protect encoded source credentials and memory data before SQLite opens.
+    // The parent directory must be trusted; this is not a multi-writer defense.
+    for (const path of [opts.path, opts.path + "-wal", opts.path + "-shm"]) {
+      try {
+        const stat = lstatSync(path);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("SQLite state must be a regular file with a single hard link");
+        chmodSync(path, 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if (path === opts.path) closeSync(openSync(path, "wx", 0o600));
+      }
+    }
   }
 
   const raw = new Database(opts.path);
@@ -34,12 +46,13 @@ export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Databas
   raw.pragma("busy_timeout = 5000");
 
   const db = drizzle(raw, { schema });
-
-  if (opts.autoMigrate !== false) {
-    migrate(db, raw);
+  try {
+    if (opts.autoMigrate !== false) migrate(db, raw);
+    return { db, raw };
+  } catch (error) {
+    raw.close();
+    throw error;
   }
-
-  return { db, raw };
 }
 
 /**
@@ -48,14 +61,13 @@ export function createDb(opts: CreateDbOptions): { db: Db; raw: Database.Databas
  * via drizzle-kit, but for runtime we ensure tables exist).
  */
 export function migrate(_db: Db, raw: Database.Database): void {
-  // 前置：把老 user-scoped 凭据表清掉（新结构无法 IF NOT EXISTS 上位）。
-  // 判据：resource_id 列缺失 = 老结构，DROP 后由下方 CREATE 重建。
-  // 该能力尚未发布，无真实存量凭据。
+  // Preserve unknown legacy credential ownership rather than dropping secrets.
+  // A user-to-resource mapping requires an explicit offline migration.
   if (
     tableExists(raw, "knowledge_source_credential") &&
     !hasColumn(raw, "knowledge_source_credential", "resource_id")
   ) {
-    raw.exec("DROP TABLE knowledge_source_credential");
+    throw new Error("Legacy source credentials require explicit offline migration; back up the database before changing its schema");
   }
 
   raw.exec(`

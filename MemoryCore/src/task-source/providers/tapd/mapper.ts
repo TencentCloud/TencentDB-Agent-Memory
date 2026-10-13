@@ -200,7 +200,7 @@ export function toDetail(
   itemType: string,
   siteBaseUrl: string,
   scope: string,
-  prettyName: string,
+  prettyName?: string,
   statusLabelMap?: Readonly<Record<string, string>>,
 ): RemoteTaskDetail {
   const ref = toRef(row, itemType, siteBaseUrl, scope, prettyName, statusLabelMap);

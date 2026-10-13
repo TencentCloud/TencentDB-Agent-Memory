@@ -32,7 +32,8 @@ import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { WorkerPermitPool } from "../services/worker-permit-pool.js";
 import { createExtractorAdapter, SkillExtractor as SkillExtractorClass } from "../core/skill/skill-extractor.js";
-import type { SkillCore as SkillCoreType } from "../core/skill/skill-core.js";
+import { SkillCoreError, type SkillCore as SkillCoreType } from "../core/skill/skill-core.js";
+import type { IMemoryStore } from "../core/store/types.js";
 import type {
   HealthResponse,
   RecallRequest,
@@ -54,7 +55,7 @@ import { InstanceConfigProvider } from "../core/instance-config-provider.js";
 import type { VdbConfig, MongoConfig } from "../core/instance-config-provider.js";
 import { wrapWithTrace } from "../core/report/trace-middleware.js";
 import { initOTelSDK, shutdownOTelSDK } from "../core/report/otel-sdk-init.js";
-import { initObservabilityBackend } from "../core/report/factory.js";
+import { initObservabilityBackend, getObservabilityBackend } from "../core/report/factory.js";
 import type { ObservabilityConfig as CoreObservabilityConfig } from "../core/report/types.js";
 import { TracedTaskExecutor } from "../core/report/traced-task-executor.js";
 import { StorePool } from "../core/store/store-pool.js";
@@ -155,12 +156,18 @@ function nowLocalIso(): string {
   return dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ");
 }
 
-function createConsoleLogger(): Logger {
+function requirePublicDeploymentMode(mode: "service" | "standalone"): void {
+  if (mode === "service") throw new Error("Service deployment adapters are unavailable in this public build");
+}
+
+type GatewayLogger = { [K in "debug" | "info" | "warn" | "error"]: (...args: unknown[]) => void };
+
+function createConsoleLogger(): GatewayLogger {
   return {
-    debug: (msg: string) => console.debug(`${nowLocalIso()} DEBUG ${TAG} ${msg}`),
-    info: (msg: string) => console.info(`${nowLocalIso()} INFO  ${TAG} ${msg}`),
-    warn: (msg: string) => console.warn(`${nowLocalIso()} WARN  ${TAG} ${msg}`),
-    error: (msg: string) => console.error(`${nowLocalIso()} ERROR ${TAG} ${msg}`),
+    debug: (msg: unknown) => console.debug(`${nowLocalIso()} DEBUG ${TAG} ${msg}`),
+    info: (msg: unknown) => console.info(`${nowLocalIso()} INFO  ${TAG} ${msg}`),
+    warn: (msg: unknown) => console.warn(`${nowLocalIso()} WARN  ${TAG} ${msg}`),
+    error: (msg: unknown) => console.error(`${nowLocalIso()} ERROR ${TAG} ${msg}`),
   };
 }
 
@@ -290,9 +297,17 @@ function safeEqual(a: string, b: string): boolean {
 // Gateway Server
 // ============================
 
+/** Reject accidental public exposure before initializing storage or listening. */
+export function assertGatewayAuthBoundary(server: { host: string; apiKey?: string; allowInsecureNoKeyListen?: boolean }): void {
+  const loopback = ["127.0.0.1", "::1", "localhost"].includes(server.host);
+  if (!loopback && !server.apiKey?.trim() && server.allowInsecureNoKeyListen !== true) {
+    throw new Error("Non-loopback gateway requires TDAI_GATEWAY_API_KEY; insecure operation requires explicit TDAI_GATEWAY_ALLOW_INSECURE_NO_KEY_LISTEN=true");
+  }
+}
+
 export class TdaiGateway {
   private config: GatewayConfig;
-  private logger: Logger;
+  private logger: GatewayLogger;
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
@@ -319,7 +334,7 @@ export class TdaiGateway {
   private statefulPipelineManager: StatefulPipelineManager | null = null;
 
   // ── COS: global shared client singleton + per-instance StorageAdapter cache ──
-  private sharedCosClient: import("../integrations/cos/cos-backend.js").SharedCosClient | null = null;
+  private sharedCosClient: null = null;
   private cosStorageCache: Map<string, StorageAdapter> | null = null;
 
   // ── Metadata (v3): shared store pool + per-instance MetadataService ──
@@ -523,6 +538,7 @@ export class TdaiGateway {
    * Start the Gateway HTTP server.
    */
   async start(): Promise<void> {
+    assertGatewayAuthBoundary(this.config.server);
     // Initialize data directories
     initDataDirectories(this.config.data.baseDir);
 
@@ -611,10 +627,9 @@ export class TdaiGateway {
         langfuse: langfuseConfig,
       };
       await initObservabilityBackend(coreObsCfg);
-      this.logger.info("Observability backend initialized (type=internal)");
+      this.logger.info(`Observability backend initialized (type=${getObservabilityBackend().type})`);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Observability backend init failed (non-fatal): ${msg}`);
+      this.logger.warn("Observability backend init failed (non-fatal)");
     }
 
     // ── 初始化 OTel SDK（Trace + Log + ClickHouse 双写 + Langfuse）──
@@ -641,11 +656,7 @@ export class TdaiGateway {
               ])
             : false,
           langfuse: obsCfg.langfuse.enabled
-            ? Object.fromEntries([
-                ["host", obsCfg.langfuse.host],
-                ["publicKey", obsCfg.langfuse.publicKey],
-                ["secretKey", obsCfg.langfuse.secretKey],
-              ])
+            ? { host: obsCfg.langfuse.host, publicKey: obsCfg.langfuse.publicKey, secretKey: obsCfg.langfuse.secretKey }
             : false,
         });
         this.logger.info(`OTel SDK initialized: ${otelOk ? "enabled" : "skipped (deps not available)"}`);
@@ -1118,7 +1129,7 @@ export class TdaiGateway {
         resolveStorage: v2Deps.resolveStorage,
         getStorage: v2Deps.getStorage ?? (() => undefined),
         logger: this.logger,
-        stateBackend: this.stateBackend,
+        stateBackend: this.stateBackend ?? undefined,
         config: { ...this.config.offload, l1Model: "", l15Model: "", l2Model: "" },
       };
       const offloadHandled = await handleOffloadV2Route(req, res, pathname, method, parseJsonBody, sendJson, offloadDeps);
@@ -1416,26 +1427,7 @@ export class TdaiGateway {
     if (this.cosStorageCache?.has(instanceId)) {
       this.cosStorageCache.delete(instanceId);
     }
-    if (this.sharedCosClient && this.configProvider) {
-      try {
-        const cosConfig = await this.configProvider.resolveCos();
-        if (cosConfig?.cosUrl) {
-          const { CosStorageBackend } = await import("../integrations/cos/cos-backend.js");
-          const prefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${instanceId}/`;
-          const backend = new CosStorageBackend({
-            sharedClient: this.sharedCosClient,
-            prefix,
-            logger: this.logger,
-          });
-          const deletedCount = await backend.deleteByPrefix("");
-          cleaned.cos_objects_deleted = deletedCount;
-          this.logger.info(`${tag} COS objects deleted: ${deletedCount}`);
-        }
-      } catch (err) {
-        this.logger.error(`${tag} COS cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
-        cleaned.cos_error = err instanceof Error ? err.message : String(err);
-      }
-    }
+
 
     // 4. Purge skill queue residue (2026-07-30)
     //
@@ -1855,32 +1847,10 @@ export class TdaiGateway {
     // standalone falls back to LocalConfigSource + NoopQuotaReporter; service
     // mode fails fast because it requires deployment-specific adapters.
     let adapterDeps: { configSource: import("../core/abstractions/index.js").IConfigSource; quotaReporter: import("../core/abstractions/index.js").IQuotaReporter };
-    try {
-      const { createAdapterDeps } = await import("../integrations/factory.js");
-      adapterDeps = await createAdapterDeps({
-        deployMode: this.config.deployMode,
-        sharkBaseUrl: this.config.shark.baseUrl,
-        logger: this.logger,
-      });
-    } catch (err) {
-      if (this.config.deployMode === "service") {
-        throw new Error(
-          `[gateway] deployMode=service requires src/integrations/ (private submodule), ` +
-            `but it could not be loaded. Either initialize the submodule or set ` +
-            `deployMode=standalone. Original error: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      this.logger.warn(
-        `[gateway] integrations/ not available (${err instanceof Error ? err.message : String(err)}); ` +
-          `falling back to inline LocalConfigSource + NoopQuotaReporter (standalone only).`,
-      );
-      const { LocalConfigSource } = await import("../core/instance-config-provider.js");
-      const { NoopQuotaReporter } = await import("../core/quota/noop-quota-reporter.js");
-      adapterDeps = {
-        configSource: new LocalConfigSource(this.logger),
-        quotaReporter: new NoopQuotaReporter(),
-      };
-    }
+    requirePublicDeploymentMode(this.config.deployMode);
+    const { LocalConfigSource } = await import("../core/instance-config-provider.js");
+    const { NoopQuotaReporter } = await import("../core/quota/noop-quota-reporter.js");
+    adapterDeps = { configSource: new LocalConfigSource(this.logger), quotaReporter: new NoopQuotaReporter() };
 
     this.configProvider = new InstanceConfigProvider({
       source: adapterDeps.configSource,
@@ -2689,31 +2659,7 @@ export class TdaiGateway {
       return adapter;
     }
 
-    if (!this.sharedCosClient) {
-      throw new Error(`SharedCosClient not initialized for instance ${instanceId}`);
-    }
-    if (!this.configProvider) {
-      throw new Error(`configProvider not initialized for instance ${instanceId}`);
-    }
-
-    // Get current COS config to determine prefix
-    const cosConfig = await this.configProvider.resolveCos();
-    if (!cosConfig?.cosUrl) {
-      throw new Error(`COS config not available for instance ${instanceId} (Shark returned null or empty CosUrl)`);
-    }
-
-    // Per-instance CosStorageBackend: lightweight, only holds prefix
-    const { CosStorageBackend } = await import("../integrations/cos/cos-backend.js");
-    const prefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${instanceId}/`;
-    const backend = new CosStorageBackend({
-      sharedClient: this.sharedCosClient,
-      prefix,
-      logger: this.logger,
-    });
-    const adapter = new StorageAdapter(backend);
-    if (!this.cosStorageCache) this.cosStorageCache = new Map();
-    this.cosStorageCache.set(instanceId, adapter);
-    return adapter;
+    throw new Error("COS storage backend is unavailable in this public build");
   }
 
   /**
@@ -2761,88 +2707,7 @@ export class TdaiGateway {
    * If already initialized, returns immediately.
    */
   private async initSharedCosClient(maxRetries = 3): Promise<void> {
-    if (this.sharedCosClient) return;
-    if (!this.configProvider) return;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const cosConfig = await this.configProvider.resolveCos();
-        if (!cosConfig?.cosUrl) {
-          this.logger.warn(`${TAG} COS config unavailable from Shark (attempt ${attempt}/${maxRetries})`);
-          if (attempt < maxRetries) {
-            await new Promise(r => setTimeout(r, attempt * 2000));
-            continue;
-          }
-          this.logger.error(`${TAG} COS init failed after ${maxRetries} attempts: Shark returned empty COS config`);
-          return;
-        }
-
-        const { CosStorageBackend, SharedCosClient } = await import("../integrations/cos/cos-backend.js");
-        const { CachedCredentialProvider, parseCosUrl } = await import("../core/storage/credential-provider.js");
-        const { bucket, region } = parseCosUrl(cosConfig.cosUrl);
-        const cosHost = cosConfig.cosUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-        const bucketPrefix = `${bucket}.`;
-        const endpointDomain = cosHost.startsWith(bucketPrefix) ? cosHost.slice(bucketPrefix.length) : undefined;
-        const isInternalDomain = endpointDomain?.includes("tencentcos.cn");
-        const internalDomain = isInternalDomain ? endpointDomain : `cos-internal.${region}.tencentcos.cn`;
-        const cosEndpointDomain = this.config.cos.domain || internalDomain;
-
-        const configProvider = this.configProvider;
-        const credentialProvider = new CachedCredentialProvider({
-          fetcher: async () => {
-            const fresh = await configProvider.resolveCos();
-            if (!fresh) throw new Error("Shark returned null COS config");
-            const parsed = parseCosUrl(fresh.cosUrl);
-            return Object.fromEntries([
-              ["secretId", fresh.tmpSecretId],
-              ["secretKey", fresh.tmpSecretKey],
-              ["token", fresh.tmpToken || undefined],
-              ["bucket", parsed.bucket],
-              ["region", parsed.region],
-              ["prefix", fresh.pathPrefix],
-              ["expiresAt", fresh.expirationTime ? new Date(fresh.expirationTime).getTime() : undefined],
-            ]);
-          },
-          cacheTtlMs: this.config.shark.cosBufferMs ?? 120000,
-          logger: this.logger,
-        });
-
-        this.sharedCosClient = new SharedCosClient({
-          credentialProvider,
-          logger: this.logger,
-          cosEndpointDomain,
-        });
-        await this.sharedCosClient.getClient();
-        this.logger.info(`${TAG} SharedCosClient initialized (bucket=${bucket}, domain=${cosEndpointDomain}, attempt=${attempt})`);
-        if (this.config.cos.generationLogRetentionDays > 0) {
-          try {
-            await this.sharedCosClient.ensureGenerationLogRetention(this.config.cos.generationLogRetentionDays);
-          } catch (error) {
-            this.logger.warn(
-              `${TAG} generation log lifecycle setup failed (non-fatal, retention=${this.config.cos.generationLogRetentionDays}d): ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }
-
-        // Set Core default storage to COS
-        const defaultInstanceId = this.config.instanceId ?? "default";
-        const defaultPrefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${defaultInstanceId}/`;
-        const cosBackend = new CosStorageBackend({
-          sharedClient: this.sharedCosClient,
-          prefix: defaultPrefix,
-          logger: this.logger,
-        });
-        this.core.setStorage(new StorageAdapter(cosBackend));
-        this.logger.info(`${TAG} Core default storage switched to COS (prefix=${defaultPrefix})`);
-        return;
-      } catch (err) {
-        this.logger.warn(`${TAG} COS init attempt ${attempt}/${maxRetries} failed: ${err instanceof Error ? err.message : String(err)}`);
-        if (attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, attempt * 2000));
-        }
-      }
-    }
-    this.logger.error(`${TAG} SharedCosClient init failed after ${maxRetries} retries, L2/L3 tasks will fail until COS is available`);
+    throw new Error("COS storage backend is unavailable in this public build");
   }
 
   /**

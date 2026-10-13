@@ -146,7 +146,7 @@ Codex 的注入点是 `body.instructions`（Responses API 的 system prompt 等�
 
 - **独立 Handler**: `codexHandler.ts`，不与 CB/CC 共享
 - **fc_ 前缀强制**: OpenAI Responses API 要求 function_call id 必须以 `fc_` 开头，否则客户端 replay 时返回 400
-- **marker 路由**: `/codex/:spaceId/cost-guard/responses` 和 `/codex/:spaceId/analyse/responses` 支持 cost-guard/analyse 分流
+- **marker 路由**: `/codex/:spaceId/analyse/responses` 支持可选的 analyse 分类
 - **归档 hook**: 2026-08-11 补齐了 codex 的 `skill/conversation/add` + TDAI L0 写入（之前静默丢数据）
 
 ---

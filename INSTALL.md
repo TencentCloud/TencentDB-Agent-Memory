@@ -552,7 +552,7 @@ opt-in and **not** meant for production user traffic.
 ### Path shape
 
 Insert `/analyse` as a segment between `/{agent}/{spaceId}` and the
-protocol tail. Structure is identical to `/cost-guard`. Examples:
+protocol tail. Examples:
 
 ```text
 # Claude Code (Anthropic Messages)

@@ -7,11 +7,13 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "resolveJsonModule": true,
-    "paths": {
-      "@context-proxy/cost-guard": ["./packages/cost-guard/src/index.ts"]
-    }
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

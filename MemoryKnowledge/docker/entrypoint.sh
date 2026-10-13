@@ -6,6 +6,9 @@ set -euo pipefail
 DATA_DIR="${KNOWLEDGE_DATA_DIR:-/app/data}"
 DB_PATH="${KNOWLEDGE_DB_PATH:-/app/data/knowledge.db}"
 PORT="${PORT:-8421}"
+HOST="${KNOWLEDGE_HOST:-${HOST:-0.0.0.0}}"
+SERVICE_KEY="${KNOWLEDGE_SERVICE_KEY:-}"
+ALLOW_INSECURE="${KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN:-false}"
 SKIP_LLM_CHECK=0
 REQUIRE_TMC=0
 
@@ -19,6 +22,11 @@ Usage:
 Required:
   --public-url URL       Agent-reachable API base (must include /v3)
                          e.g. http://203.0.113.10:8421/v3
+
+Security & Listening:
+  --service-key KEY      Service-to-service Bearer key (required for non-loopback listening)
+  --host IP              Bind host (default: 0.0.0.0 in container)
+  --allow-insecure-no-key-listen  Explicit opt-in for no-key non-loopback dev only (insecure)
 
 LLM routing:
   --llm-mode MODE        proxy (default) | custom
@@ -44,12 +52,13 @@ Optional:
 
 Same settings via environment (-e), flags override unset env:
   KNOWLEDGE_PUBLIC_BASE_URL, TMC_CALLBACK_URL,
+  KNOWLEDGE_SERVICE_KEY, KNOWLEDGE_HOST, KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN,
   LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_MODE,
   PORT, KNOWLEDGE_DATA_DIR, KNOWLEDGE_DB_PATH
 
 Examples:
-  # Full (wiki + code-graph + TMC callback)
-  docker run -d --name team-knowledge -p 8421:8421 -v team-knowledge-data:/app/data \\
+  # Full (wiki + code-graph + service auth + TMC callback)
+  docker run -d --name team-knowledge -e KNOWLEDGE_SERVICE_KEY -p 8421:8421 -v team-knowledge-data:/app/data \\
     csighub.tencentyun.com/<ns>/team-knowledge:latest \\
     --public-url http://203.0.113.10:8421/v3 \\
     --tmc-callback http://203.0.113.10:8123 \\
@@ -135,6 +144,26 @@ parse_args() {
         set_if_empty LLM_MODE "${1#*=}"
         shift
         ;;
+      --host)
+        HOST="$2"
+        shift 2
+        ;;
+      --host=*)
+        HOST="${1#*=}"
+        shift
+        ;;
+      --service-key)
+        SERVICE_KEY="$2"
+        shift 2
+        ;;
+      --service-key=*)
+        SERVICE_KEY="${1#*=}"
+        shift
+        ;;
+      --allow-insecure-no-key-listen)
+        ALLOW_INSECURE="true"
+        shift
+        ;;
       --port)
         PORT="$2"
         shift 2
@@ -187,6 +216,19 @@ validate() {
     err=1
   fi
 
+  # 监听安全姿态：非 loopback 监听必须配置 serviceKey 或显式 opt-in
+  case "$HOST" in
+    127.*|localhost|::1|\[::1\])
+      ;;
+    *)
+      if [[ -z "$SERVICE_KEY" && "$ALLOW_INSECURE" != "true" && "$ALLOW_INSECURE" != "1" ]]; then
+        echo "error: Binding to non-loopback host ($HOST) requires --service-key / KNOWLEDGE_SERVICE_KEY," >&2
+        echo "       or set --allow-insecure-no-key-listen / KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN=true for trusted development." >&2
+        err=1
+      fi
+      ;;
+  esac
+
   # 仅 LLM_MODE=custom（自带端点直连）时才需要 --llm-key/--llm-base-url。
   # 默认 LLM_MODE=proxy：wiki ingest 走 context_proxy（TMC 推送的 llm_binding），
   # 无需容器内的直连凭据。
@@ -220,6 +262,10 @@ main() {
   validate
 
   export PORT
+  export HOST
+  export KNOWLEDGE_HOST="$HOST"
+  export KNOWLEDGE_SERVICE_KEY="$SERVICE_KEY"
+  export KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN="$ALLOW_INSECURE"
   export KNOWLEDGE_DATA_DIR="$DATA_DIR"
   export KNOWLEDGE_DB_PATH="$DB_PATH"
   export NODE_ENV="${NODE_ENV:-production}"
@@ -230,7 +276,7 @@ main() {
   mkdir -p "$KNOWLEDGE_DATA_DIR"
 
   echo "team-knowledge starting:"
-  echo "  listen:      0.0.0.0:${PORT}"
+  echo "  listen:      ${HOST}:${PORT}"
   echo "  data:        ${KNOWLEDGE_DATA_DIR}"
   echo "  public url:  ${KNOWLEDGE_PUBLIC_BASE_URL}"
   echo "  tmc callback:${TMC_CALLBACK_URL:-<none>}"

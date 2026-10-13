@@ -53,7 +53,6 @@ export {
 export type {
   ConversationRole,
   Pagination,
-  ConversationAddRequest,
   ConversationAddData,
   ConversationQueryRequest,
   ConversationQueryData,
@@ -147,7 +146,7 @@ export type CoreCountRequest = z.infer<typeof coreCountRequestSchema>;
 // Override: atomic response version exposure
 // ============================
 
-export interface AtomicDetail extends GeneratedAtomicDetail {
+export interface AtomicDetail extends Omit<GeneratedAtomicDetail, "version"> {
   /** Monotonic L1 memory version, starts from 0 and increments on update/merge. */
   version: number;
   team_id?: string;

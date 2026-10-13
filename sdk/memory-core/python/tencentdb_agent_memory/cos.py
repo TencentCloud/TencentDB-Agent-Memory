@@ -159,14 +159,13 @@ class StsCredentialManager:
             "x-tdai-service-id": self._service_id,
             "Content-Type": "application/json",
         }
-        resp = self._client.post(url, json={}, headers=headers)
+        resp = self._client.post(url, json={}, headers=headers, follow_redirects=False)
         resp.raise_for_status()
         data = resp.json()
 
         cred = StsCredential(data)
         self._credential = cred
-        logger.debug("[cos] STS refreshed: bucket=%s prefix=%s expires=%.0f",
-                     cred.bucket, cred.prefix, cred.expires_at_epoch)
+        logger.debug("[cos] STS credential refreshed")
         return cred
 
     def close(self) -> None:
@@ -222,7 +221,7 @@ class AsyncStsCredentialManager:
             "x-tdai-service-id": self._service_id,
             "Content-Type": "application/json",
         }
-        resp = await self._client.post(url, json={}, headers=headers)
+        resp = await self._client.post(url, json={}, headers=headers, follow_redirects=False)
         resp.raise_for_status()
         data = resp.json()
 
@@ -345,13 +344,13 @@ class MemoryFileReader:
             headers["x-cos-security-token"] = cred.token
 
         url = f"https://{host}{cos_path}"
-        logger.debug("[cos] GET %s", url)
+        logger.debug("[cos] Reading memory file")
 
-        resp = self._client.get(url, headers=headers)
+        resp = self._client.get(url, headers=headers, follow_redirects=False)
 
         if resp.status_code == 403:
             # Invalidate and retry once
-            logger.warning("[cos] 403 on GET %s — invalidating STS and retrying", path)
+            logger.warning("[cos] GET returned 403; refreshing credential and retrying")
             self._sts.invalidate()
             cred = self._sts.get_credential()
             full_key = f"{cred.prefix}{path}"
@@ -368,7 +367,7 @@ class MemoryFileReader:
             if cred.token:
                 headers["x-cos-security-token"] = cred.token
             url = f"https://{host}{cos_path}"
-            resp = self._client.get(url, headers=headers)
+            resp = self._client.get(url, headers=headers, follow_redirects=False)
 
         if resp.status_code == 404:
             raise TDAMError(code=404, message=f"File not found: {path}")
@@ -376,7 +375,7 @@ class MemoryFileReader:
         if resp.status_code != 200:
             raise TDAMError(
                 code=resp.status_code,
-                message=f"COS GET failed: HTTP {resp.status_code} — {resp.text[:200]}",
+                message=f"COS GET failed: HTTP {resp.status_code}; response body omitted",
             )
 
         return resp.text
@@ -403,6 +402,7 @@ class AsyncMemoryFileReader:
         self._client = client or httpx.AsyncClient(timeout=timeout)
 
     async def read(self, path: str) -> str:
+        logger.debug("[cos] Reading memory file")
         cred = await self._sts.get_credential()
         full_key = f"{cred.prefix}{path}"
         cos_path = f"/{full_key}"
@@ -424,7 +424,7 @@ class AsyncMemoryFileReader:
             headers["x-cos-security-token"] = cred.token
 
         url = f"https://{host}{cos_path}"
-        resp = await self._client.get(url, headers=headers)
+        resp = await self._client.get(url, headers=headers, follow_redirects=False)
 
         if resp.status_code == 403:
             self._sts.invalidate()
@@ -443,7 +443,7 @@ class AsyncMemoryFileReader:
             if cred.token:
                 headers["x-cos-security-token"] = cred.token
             url = f"https://{host}{cos_path}"
-            resp = await self._client.get(url, headers=headers)
+            resp = await self._client.get(url, headers=headers, follow_redirects=False)
 
         if resp.status_code == 404:
             raise TDAMError(code=404, message=f"File not found: {path}")
@@ -451,7 +451,7 @@ class AsyncMemoryFileReader:
         if resp.status_code != 200:
             raise TDAMError(
                 code=resp.status_code,
-                message=f"COS GET failed: HTTP {resp.status_code} — {resp.text[:200]}",
+                message=f"COS GET failed: HTTP {resp.status_code}; response body omitted",
             )
 
         return resp.text

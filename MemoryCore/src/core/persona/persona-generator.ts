@@ -186,12 +186,9 @@ export class PersonaGenerator {
     const systemPrompt = composeMemorySystemPrompt(baseSystemPrompt, this.memoryPrompt);
 
     // 7. Backup before LLM run (LLM writes persona.md via tools)
-    const bm = new BackupManager(this.storage
-      ? undefined  // COS mode: BackupManager not used (TODO: adapt BackupManager for StorageAdapter)
-      : await (async () => { const path = await import("node:path"); return path.default.join(this.dataDir, ".backup"); })()
-    );
     if (!this.storage) {
       const path = await import("node:path");
+      const bm = new BackupManager(path.default.join(this.dataDir, ".backup"));
       await bm.backupFile(path.default.join(this.dataDir, targetFile), "persona", `offset${cp.total_processed}`, this.backupCount);
     }
 
@@ -213,9 +210,9 @@ export class PersonaGenerator {
         ...traceParams,
       });
       this.logger?.debug?.(`${TAG} LLM runner completed`);
-    } catch (err) {
+    } catch {
       const elapsedMs = Date.now() - startMs;
-      this.logger?.error(`${TAG} Persona generation failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+      this.logger?.error(`${TAG} Persona generation failed after ${elapsedMs}ms`);
       return false;
     }
 

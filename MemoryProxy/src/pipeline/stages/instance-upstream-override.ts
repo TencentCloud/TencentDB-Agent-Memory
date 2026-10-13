@@ -1,16 +1,7 @@
-/**
- * stages/instance-upstream-override.ts — instance upstream override 应用 stage。
- *
- * 提取自 openai-chat + anthropic runner ~18 行 相同的 override 应用块:
- *   1. routedToCheapModel gate (cost-guard 已路由到 cheap → 不应用 override)
- *   2. kind=override → 替换 target.url / effectiveApiKey / body.model / modelId
- *   3. skipCreditReport=true (custom upstream 用户自付, 不算平台账)
- *
- * 这是 stateful mutation (body/target 变), stage 返回新值让 caller 应用。
- */
+
 
 import type { Resolution } from "../../instance-upstream-cache.js";
-import { joinUrl } from "../../guard-adapter.js";
+import { joinUrl } from '../../upstream-target.js';
 
 export interface InstanceUpstreamOverrideInput {
   earlyConvResolution: Resolution;

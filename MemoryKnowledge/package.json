@@ -3,21 +3,24 @@
   "version": "0.1.0",
   "description": "Standalone knowledge service — Code-Graph + LLM-Wiki engine for user-side deployment",
   "type": "module",
-  "main": "./dist/server.js",
+  "main": "./dist/server.mjs",
   "bin": {
     "knowledge-server": "./bin/server.mjs",
     "knowledge-mcp": "./bin/mcp.mjs"
   },
   "scripts": {
+    "start": "node bin/server.mjs",
     "dev": "tsx src/server.ts",
     "dev:mcp": "tsx src/mcp/server.ts",
     "build": "tsdown",
+    "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "okf": "node --import tsx scripts/okf.ts"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -33,13 +36,13 @@
     "@modelcontextprotocol/sdk": "^1.12.0",
     "@node-rs/jieba": "^2.0.1",
     "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/sdk-node": "^0.219.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
     "ai": "^6.0.164",
     "better-sqlite3": "^11.10.0",
     "crc-32": "^1.2.2",
     "dayjs": "^1.11.20",
     "dotenv": "^16.4.0",
-    "drizzle-orm": "^0.44.0",
+    "drizzle-orm": "^0.45.3",
     "graphology": "^0.26.0",
     "graphology-communities-louvain": "^2.0.2",
     "hono": "^4.7.0",
@@ -47,9 +50,10 @@
     "js-yaml": "^4.2.0",
     "json5": "^2.2.3",
     "lru-cache": "^11.0.0",
+    "mdast-util-from-markdown": "^2.0.3",
     "minisearch": "^7.2.0",
     "p-limit": "^6.2.0",
-    "simple-git": "^3.36.0",
+    "simple-git": "4.0.2",
     "yaml": "^2.8.3",
     "zod": "^4.4.3"
   },
@@ -57,11 +61,11 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.2",
     "@vitest/coverage-v8": "^4.1.2",
-    "drizzle-kit": "^0.31.0",
+    "drizzle-kit": "^0.31.11",
     "tsdown": "^0.21.10",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.11"
   },
   "license": "MIT",
   "pnpm": {
@@ -69,5 +73,10 @@
       "better-sqlite3",
       "esbuild"
     ]
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.4"
+    }
   }
 }

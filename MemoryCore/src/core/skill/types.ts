@@ -5,6 +5,8 @@
  * 设计文档：docs/design/2026-06-17-skill-redesign-v2.md
  */
 
+import type { ToolSet } from "ai";
+
 // ============================
 // Configuration types (input from user / openclaw.json)
 // ============================
@@ -369,7 +371,7 @@ export interface ExtractorLLMRunner {
     prompt: string;
     systemPrompt?: string;
     /** Tool dict (Vercel AI SDK shape). 当 enableTools=true 时驱动 tool-call 循环。 */
-    tools?: Record<string, unknown>;
+    tools?: ToolSet;
     enableTools?: boolean;
     maxIterations?: number;
     taskId: string;
@@ -377,4 +379,19 @@ export interface ExtractorLLMRunner {
     /** Worker 在锁失效时通过 abort 信号取消 LLM 调用。 */
     signal?: AbortSignal;
   }): Promise<string>;
+}
+
+/** Parsed representation used by skill-format's existing frontmatter contract. */
+export interface SkillFile {
+  frontmatter: {
+    name: string;
+    description: string;
+    category?: string;
+    created_at?: string;
+    updated_at?: string;
+    source?: "auto" | "manual";
+    resources?: Array<{ path: string; type: "text" | "executable" | "binary" }>;
+  };
+  body: string;
+  raw: string;
 }

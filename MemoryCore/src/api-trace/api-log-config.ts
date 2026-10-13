@@ -53,4 +53,4 @@ export function isApiTraceActive(): boolean {
   return getApiTraceConfig().log.enabled;
 }
 
-export { resolvePolicy, resolveProfile, type ApiTracePolicy } from "./api-trace-policy.js";
+export { resolvePolicy, resolveProfile, type ApiTracePolicy, type ApiTraceProfile } from "./api-trace-policy.js";

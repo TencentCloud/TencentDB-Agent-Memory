@@ -11,7 +11,7 @@
  *   - service:    由部署环境注入远程配额 reporter
  */
 
-import type { Logger } from "../logger.js";
+import type { Logger } from "../types.js";
 import type { IQuotaReporter } from "../abstractions/index.js";
 
 export interface QuotaConfig {
@@ -96,8 +96,8 @@ export class QuotaManager {
       };
       this.cache.set(instanceId, { config, expiresAt: now + this.cacheTtlMs });
       return config;
-    } catch (err) {
-      this.logger.warn(`${TAG} Failed to fetch quota for ${instanceId}: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      this.logger.warn(`${TAG} Failed to fetch quota; using cached or default limits`);
       return this.getDefaultOrCached(instanceId);
     }
   }
@@ -156,10 +156,10 @@ export class QuotaManager {
         cached.config.creditUsage += creditDelta;
       }
 
-      this.logger.debug?.(`${TAG} Usage reported: instance=${instanceId}, memDelta=${memoryDelta}, creditDelta=${creditDelta}`);
-    } catch (err) {
+      this.logger.debug?.(`${TAG} Usage reported`);
+    } catch {
       // Defensive: reporter 不应该抛错, 但万一抛了不能影响业务
-      this.logger.error(`${TAG} reportUsage unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.error(`${TAG} reportUsage unexpected error`);
     }
   }
 

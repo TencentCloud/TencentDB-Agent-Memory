@@ -38,16 +38,17 @@
 
 > ⚠️ **isError 特例（code-graph 查询工具 / tools/call）**：工具执行失败（`result.isError === true`）时，HTTP 状态码是 **500**，但 body 仍是 `wrapOk(result)` 的**成功信封** `{ code: 0, message: "ok", data: { text, isError: true } }`。即 **`code=0` 但 HTTP=500**，违反上表「HTTP 状态码 = code」的常规约定。前端判断工具失败的唯一标志是 **`data.isError === true`**（错误文案在 `data.text`），不能只看 HTTP 状态或 `code`。
 
-### 1.3 鉴权
+### 1.3 鉴权与安全架构
 
-KS 走 **内网信任模型**，与 MemoryCore 的 user-key 体系不同：
+KS 采用 **服务间受信任凭据（Service-to-Service）+ 租户标识（Tenant Header）** 架构模型：
 
 | 项 | 说明 |
 |---|---|
-| 唯一必填 Header | `x-tdai-service-id`（租户/service 标识，即内核路由键） |
-| 其他鉴权 | 可选 Bearer：`KNOWLEDGE_SERVICE_KEY` 非空时，除只读白名单外的端点需 `Authorization: Bearer <key>`（含 `internal/llm-binding/*` 全部）；为空则不启用（向后兼容，内网信任） |
+| 服务鉴权 Header | 可选 Bearer：`KNOWLEDGE_SERVICE_KEY` 非空时，**全部 `/v3/*` 服务端点均需** `Authorization: Bearer <KNOWLEDGE_SERVICE_KEY>`（含读、写、工具、管理、分析全部）；为空则仅允许在 loopback（127.0.0.1）本地开发使用。健康检查 `/health` 位于 API 前缀之外保持公开。 |
+| 租户标识 Header | `x-tdai-service-id`（租户/service 逻辑隔离标识，即内核路由键）。注意：**租户头仅用于数据隔离边界，不是鉴权凭据**。生产环境必须经由受信任网关校验终端用户后注入。 |
 | 例外 | `POST /v3/internal/llm-binding/list` 不需要 `x-tdai-service-id` 头（返回全部 binding，供 Panel 启动缓存；key 启用时仍需 Bearer） |
 
+> ⚠️ **严禁将全局 `KNOWLEDGE_SERVICE_KEY` 写入 LLM Prompt 或公开工具定义**。原先直连 KS 未鉴权的 Agent 读调用，应迁移为经由受信任网关/代理转发，或在受信任私网内注入凭据。
 > `service_id` / `team_id` / 资源 ID 统一做**路径分段白名单校验**（`^[A-Za-z0-9_-]+$`、长度 ≤200），防止路径穿越。
 
 ### 1.4 ID 与多租户

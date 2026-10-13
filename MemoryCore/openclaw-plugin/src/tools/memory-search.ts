@@ -21,7 +21,7 @@ export async function handleMemorySearch(
   }
 
   try {
-    logger?.debug?.(`[memory-search] query="${query}", limit=${limit}, type=${type ?? "(all)"}`);
+    logger?.debug?.(`[memory-search] Searching; limit=${limit}`);
     const result = await client.searchAtomic({ query, limit, type });
     const items = result.items ?? [];
     logger?.debug?.(`[memory-search] ✅ ${items.length} results`);
@@ -44,7 +44,7 @@ export async function handleMemorySearch(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger?.warn(`[memory-search] Failed: ${msg}`);
+    logger?.warn("[memory-search] Search failed; details omitted");
     return { content: [{ type: "text" as const, text: `Memory search failed: ${msg}` }] };
   }
 }

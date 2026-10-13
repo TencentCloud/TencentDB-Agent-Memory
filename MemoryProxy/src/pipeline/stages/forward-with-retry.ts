@@ -14,7 +14,7 @@
  */
 
 import type { ProxyConfig } from "../../types.js";
-import type { ForwardTarget } from "../../guard-adapter.js";
+import type { ForwardTarget } from '../../upstream-target.js';
 import type { createPipeline } from "../../logger.js";
 import { enforceRateLimit, isRateLimitExceededError } from "../../rate-limit/guard.js";
 

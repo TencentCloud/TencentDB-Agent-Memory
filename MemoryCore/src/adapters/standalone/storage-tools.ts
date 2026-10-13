@@ -74,14 +74,14 @@ export function createStorageTools(
         try {
           const content = await storage.readFile(key);
           if (content === null) {
-            logger?.debug?.(`${TAG} read: "${args.path}" → not found`);
+            logger?.debug?.(`${TAG} read: not found`);
             return JSON.stringify({ error: `File not found: ${args.path}` });
           }
-          logger?.debug?.(`${TAG} read: "${args.path}" → ${content.length} chars`);
+          logger?.debug?.(`${TAG} read: ${content.length} chars`);
           return content;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger?.warn(`${TAG} read failed (key=${key}): ${msg}`);
+          logger?.warn(`${TAG} read failed`);
           return JSON.stringify({ error: msg });
         }
       }) as any,
@@ -102,11 +102,11 @@ export function createStorageTools(
         if (!key) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         try {
           await storage.writeFile(key, args.content);
-          logger?.debug?.(`${TAG} write: "${args.path}" → ${Buffer.byteLength(args.content, "utf8")} bytes`);
+          logger?.debug?.(`${TAG} write: ${Buffer.byteLength(args.content, "utf8")} bytes`);
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger?.warn(`${TAG} write failed (key=${key}): ${msg}`);
+          logger?.warn(`${TAG} write failed`);
           return JSON.stringify({ error: msg });
         }
       }) as any,
@@ -140,7 +140,7 @@ export function createStorageTools(
         try {
           const existing = await storage.readFile(key);
           if (existing === null) {
-            logger?.debug?.(`${TAG} edit: "${args.path}" → not found`);
+            logger?.debug?.(`${TAG} edit: not found`);
             return JSON.stringify({ error: `File not found: ${args.path}` });
           }
           let content = existing;
@@ -157,12 +157,12 @@ export function createStorageTools(
           }
           await storage.writeFile(key, content);
           logger?.debug?.(
-            `${TAG} edit: "${args.path}" → ${args.edits.length} replacement(s), ${Buffer.byteLength(content, "utf8")} bytes`,
+            `${TAG} edit: ${args.edits.length} replacement(s), ${Buffer.byteLength(content, "utf8")} bytes`,
           );
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger?.warn(`${TAG} edit failed (key=${key}): ${msg}`);
+          logger?.warn(`${TAG} edit failed`);
           return JSON.stringify({ error: msg });
         }
       }) as any,

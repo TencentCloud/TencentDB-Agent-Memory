@@ -12,6 +12,7 @@ import type { SessionInitConfig } from "../../types.js";
 import type {
   AgentDetail,
   SessionInitData,
+  SessionInitResult,
   SessionInitState,
   SessionRegistrationData,
   TaskDetail,
@@ -90,61 +91,8 @@ export interface SessionRequestContext {
   questionsAsArray?: boolean;
 }
 
-export interface SessionInitResult {
-  intercepted: boolean;
-  response?: Response;
-  messages?: Record<string, unknown>[];
-  sessionInfo?: import("../types.js").SessionInfo | null;
-  justRegistered?: boolean;
-  agentDetail?: AgentDetail | null;
-  taskDetail?: TaskDetail | null;
-  /**
-   * 已绑定 team 的 display name（来自 cachedTeams[selected].team_name）。
-   * 供 mem:session-reset 完成确认等展示层使用；session-init 完成时才有值。
-   */
-  teamName?: string | null;
-  /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
-  bypassed?: boolean;
-  /**
-   * 本次注册是 session-reset 触发的（pre-hook 设 state.resetFlow=true →
-   * 保留到 completeRegistration 的返回值里）。镜像自 claude-code/init.ts
-   * 的同名字段 —— 两边字段必须保持同形, 否则 session/index.ts 导出的联合
-   * 类型 (`CBSessionInitResult`) 读不到这个属性, runner 侧的
-   * `initResult.resetFlow` 全部 TS2339。
-   */
-  resetFlow?: boolean;
-  /**
-   * bypass 触发原因（仅 `bypassed === true` 时有意义）。codexHandler 用它决定
-   * 首次 gate 命中是否要返 "Plan 模式提示" 而非直接透传。
-   *
-   * - "default-gate"  → codex 客户端 Default 模式截断了我们的 request_user_input
-   *                     并伪造出 "request_user_input is unavailable in Default mode"
-   *                     字符串；codexHandler 应返一次 Plan 模式提示后再进入 bypass
-   *                     稳态。
-   * - undefined       → 其它 bypass 路径（用户显式选"否"、no-agents、preset
-   *                     mismatch 等），走各自 handler 的默认 bypass 行为。
-   *
-   * CC/CB 客户端本身触发不到 default-gate（客户端不会伪造 gate 字符串），保留
-   * 常量供跨 handler 判定即可。
-   */
-  bypassReason?: "default-gate";
-  /**
-   * Anthropic-only: pre-built `<session_context>` string the caller must
-   * append to `body.system` (the ClaudeCode init module populates this;
-   * CodeBuddy stays OpenAI so it is always undefined here). Kept in this
-   * interface so `session/index.ts`'s union type stays uniform.
-   */
-  systemAppend?: string | null;
-  /**
-   * 原始 FormData —— 当 `intercepted === true` 时**总是**填充。
-   *
-   * codex handler 拿到后用 `session/codex/form.ts::buildFormResponse` 重渲染成
-   * OpenAI Responses API SSE 格式（`response.output_item.added` +
-   * `function_call` item）。CB / CC 自身不会读这个字段——`response` 已经是它们
-   * 各自协议下的完整响应。
-   */
-  formData?: FormData;
-}
+export type { SessionInitResult };
+
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

@@ -20,8 +20,31 @@ config-a.yaml
 config-example.yaml
 config.yaml.bak.*
 config.*.local.yaml
+config.*.local.*
+*.local.yaml
+*.local.yml
+*.local.json
+*.local.*
+.env
+.env.*
 **/.env
 **/.env.*
+.npmrc
+**/.npmrc
+
+# Audit scratch / 临时文件
+.audit
+.audit*
+**/.audit*
+*.audit
+
+# 数据库与本地持久化数据
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+dump.rdb
 
 # 版本控制与编辑器
 .git
@@ -31,9 +54,11 @@ config.*.local.yaml
 .idea
 .codebuddy
 .claude
+.iwiki
 
 # 内部 CI / 内部构建工具（若打进镜像会暴露内部拓扑）
 .coding-ci.yaml
+.gitlab-ci.yml
 
 # E2E / verify / smoke scripts —— 不需要进运行镜像
 scripts/e2e-*
@@ -47,3 +72,12 @@ e2e/
 # 容器相关自身
 Dockerfile
 .dockerignore
+
+# Nested local credentials, database files and runtime state
+**/.npmrc*
+**/.env*
+**/*.db*
+**/*.sqlite*
+**/data
+**/dump.rdb
+**/*.local.*

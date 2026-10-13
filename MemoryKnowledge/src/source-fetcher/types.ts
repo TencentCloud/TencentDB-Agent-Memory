@@ -8,6 +8,9 @@
 
 export type SourceType = "git" | "local" | "ftp";
 
+/** Trusted resource credential; never accepted as a tool parameter or embedded in repo URLs. */
+export interface GitCredential { username: string; password: string }
+
 export interface FetchResult {
   /** 源码落盘的本地目录（绝对路径）。 */
   localPath: string;
@@ -29,10 +32,10 @@ export interface FetchResult {
  */
 export interface ISourceFetcher {
   /** 首次拉取：把源码下载到 localPath。 */
-  fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  fetch(sourceUrl: string, branch: string, localPath: string, credential?: GitCredential): Promise<FetchResult>;
 
   /** 增量同步：更新已存在的 localPath 到最新版本。 */
-  sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  sync(sourceUrl: string, branch: string, localPath: string, credential?: GitCredential): Promise<FetchResult>;
 
   /** 校验 sourceUrl 是否合法（协议白名单 + SSRF 防护）。非法则 throw。 */
   validate(sourceUrl: string): void;

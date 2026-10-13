@@ -87,7 +87,7 @@ class MemoryClient:
         service_id: Optional[str] = None,
         *,
         timeout: float = 30,
-        verify: bool = False,
+        verify: bool = True,
         stub: Optional[Stub] = None,
     ) -> None:
         if stub is not None:
@@ -581,7 +581,7 @@ class AsyncMemoryClient:
         service_id: Optional[str] = None,
         *,
         timeout: float = 30,
-        verify: bool = False,
+        verify: bool = True,
     ) -> None:
         if not service_id:
             raise ValueError("service_id must be provided")

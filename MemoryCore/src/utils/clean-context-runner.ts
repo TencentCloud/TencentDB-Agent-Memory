@@ -52,13 +52,26 @@ const TAG = "[memory-tdai] [runner]";
 
 type RunnerLogger = Logger;
 
-// Dynamic import type — runEmbeddedPiAgent is an internal API
-// Prefer the public plugin runtime signature so host-injected runtimes stay assignable.
-type RunEmbeddedPiAgentFn = OpenClawPluginApi["runtime"]["agent"]["runEmbeddedPiAgent"];
-
-export interface EmbeddedAgentRuntimeLike {
-  runEmbeddedPiAgent?: RunEmbeddedPiAgentFn;
+// This legacy bridge is not part of the current public OpenClaw agent API.
+// Keep its actual call contract separate and detect the capability at runtime.
+interface EmbeddedAgentRunParams {
+  sessionId: string;
+  sessionFile: string;
+  workspaceDir: string;
+  config: unknown;
+  prompt: string;
+  timeoutMs: number;
+  runId: string;
+  provider?: string;
+  model?: string;
+  disableTools: boolean;
+  extraSystemPrompt: string;
+  streamParams: { maxTokens?: number };
 }
+type RunEmbeddedPiAgentFn = (params: EmbeddedAgentRunParams) => Promise<unknown>;
+export type EmbeddedAgentRuntimeLike = OpenClawPluginApi["runtime"]["agent"] | {
+  runEmbeddedPiAgent: RunEmbeddedPiAgentFn;
+};
 
 let _preferredAgentRuntime: EmbeddedAgentRuntimeLike | undefined;
 
@@ -71,9 +84,12 @@ export function setPreferredEmbeddedAgentRuntime(
 function resolveInjectedRunEmbeddedPiAgent(
   agentRuntime?: EmbeddedAgentRuntimeLike,
 ): RunEmbeddedPiAgentFn | undefined {
-  const candidate =
-    agentRuntime?.runEmbeddedPiAgent ?? _preferredAgentRuntime?.runEmbeddedPiAgent;
-  return typeof candidate === "function" ? candidate : undefined;
+  for (const runtime of [agentRuntime, _preferredAgentRuntime]) {
+    if (runtime && "runEmbeddedPiAgent" in runtime && typeof runtime.runEmbeddedPiAgent === "function") {
+      return runtime.runEmbeddedPiAgent;
+    }
+  }
+  return undefined;
 }
 
 async function resolveRunEmbeddedPiAgent(
@@ -146,7 +162,7 @@ function loadRunEmbeddedPiAgent(logger?: RunnerLogger): Promise<RunEmbeddedPiAge
       throw new Error("runEmbeddedPiAgent not exported from dist/extensionAPI.js");
     }
     logger?.info(`${TAG} loadRunEmbeddedPiAgent: dist/ import OK (${Date.now() - t0}ms)`);
-    return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
+    return (params: EmbeddedAgentRunParams) => Promise.resolve(mod.runEmbeddedPiAgent(params));
   })();
 
   _loadPromise.catch(() => { _loadPromise = null; });

@@ -58,7 +58,6 @@ export async function callLlm(
   const provider = createOpenAI({
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
-    compatibility: "compatible",
   });
 
   try {

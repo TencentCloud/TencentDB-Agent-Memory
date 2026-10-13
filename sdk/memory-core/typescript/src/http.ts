@@ -4,10 +4,11 @@
  * - Auth: `Authorization: Bearer {apiKey}` + `x-tdai-service-id` + optional `x-tdai-user-key`
  * - Envelope unwrap: `code === 0` → return `data`; else throw `TDAMError`
  * - trace_id: extracted from `x-trace-id` response header
- * - Zero runtime dependencies — uses native `fetch`.
- * - TLS: `rejectUnauthorized` defaults to `false` (self-signed cert friendly).
+ * - Uses native fetch and an optional per-transport undici dispatcher.
+ * - TLS: certificate and hostname verification is enabled by default.
  */
 
+import { Agent } from "undici";
 import { TDAMError } from "./errors.js";
 import type { ApiResponseEnvelope } from "./types.js";
 
@@ -20,7 +21,7 @@ export interface HttpTransportOptions {
   /** 用户 API 密钥（x-tdai-user-key）；user/create、user/delete 须 system_admin key。 */
   userKey?: string;
   timeout?: number;
-  /** Whether to reject self-signed / invalid TLS certs. Default: false. */
+  /** Whether to reject self-signed / invalid TLS certs. Default: true. */
   rejectUnauthorized?: boolean;
 }
 
@@ -28,7 +29,7 @@ export class HttpTransport {
   private readonly endpoint: string;
   private readonly headers: Record<string, string>;
   private readonly timeout: number;
-  private dispatcher: unknown;
+  private readonly dispatcher?: Agent;
 
   constructor(opts: HttpTransportOptions) {
     this.endpoint = opts.endpoint.replace(/\/+$/, "");
@@ -42,25 +43,15 @@ export class HttpTransport {
       this.headers["x-tdai-user-key"] = opts.userKey;
     }
 
-    // When rejectUnauthorized=false (default), create an undici Agent that
-    // skips TLS certificate validation. This mirrors the Python SDK's
-    // `verify=False` default for self-signed cert environments.
-    if (opts.rejectUnauthorized !== true) {
-      try {
-        // Node 18+ bundles undici; dynamic import to keep zero-dep for bundlers
-        const { Agent } = require("undici");
-        this.dispatcher = new Agent({
-          connect: { rejectUnauthorized: false },
-        });
-      } catch {
-        // If undici is not available (browser/edge runtime), fall back to
-        // process.env which only works in Node.js.
-        if (typeof process !== "undefined") {
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-        }
-      }
+    // Explicit development opt-in affects this transport only. Never change
+    // NODE_TLS_REJECT_UNAUTHORIZED or another client's verification policy.
+    if (opts.rejectUnauthorized === false) {
+      this.dispatcher = new Agent({ connect: { rejectUnauthorized: false } });
     }
   }
+
+  /** Release the optional transport-owned connection pool. */
+  async close(): Promise<void> { await this.dispatcher?.close(); }
 
   async post<T = unknown>(path: string, body: Record<string, unknown> = {}): Promise<T & { trace_id?: string }> {
     const url = `${this.endpoint}${path}`;
@@ -73,6 +64,7 @@ export class HttpTransport {
         headers: this.headers,
         body: JSON.stringify(body),
         signal: controller.signal,
+        redirect: "error",
       };
       if (this.dispatcher) {
         fetchOpts.dispatcher = this.dispatcher;

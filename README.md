@@ -1,378 +1,344 @@
+# TencentDB Agent Memory with native OKF support
 
-<div align="center">
+A memory system for agents, with conversation storage and retrieval, skills,
+Git code graphs, and document wikis. This project retains the upstream source
+and adds native Open Knowledge Format (OKF) 0.2 exchange and security fixes.
 
-<img src="./assets/images/logo.png" alt="TencentDB Agent Memory" width="880" />
+Upstream base: [TencentCloud/TencentDB-Agent-Memory v2.0.2](https://github.com/TencentCloud/TencentDB-Agent-Memory/commit/274e549069ad780e411d70e6fff51f6a977d81d3).
+Specification baseline: [official OKF 0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/tree/ad30107c31c06aec8a7d5636e0d1058118604e6f).
+The original project is maintained by TencentCloud; this fork is maintained by adamokon.
 
-### Agents remember. Humans innovate.
+## Components and operation
 
-<a href="https://trendshift.io/repositories/29310?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-29310" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/29310" alt="TencentCloud%2FTencentDB-Agent-Memory | Trendshift" width="250" height="55"/></a>
+| Component | Purpose | Guide |
+| --- | --- | --- |
+| MemoryCore | Conversation capture, layered retrieval, skill extraction and gateway APIs | [Core](MemoryCore/README.md) |
+| MemoryProxy | Agent-facing LLM forwarding, memory injection and optional extensions | [Proxy](MemoryProxy/README.md) |
+| MemoryKnowledge | CodeGraph indexes, generated wikis and native OKF bundles | [Knowledge](MemoryKnowledge/README.md) |
+| MemoryPanel | Management backend and web interface | [Panel](MemoryPanel/README.md) |
+| SDKs | Client interfaces | [TypeScript SDK](sdk/memory-core/typescript/README.md) |
 
-[![npm](https://img.shields.io/npm/v/@tencentdb-agent-memory/memory-tencentdb?color=blue)](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-tencentdb)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E=2026.3.13-orange)](https://github.com/openclaw/openclaw)
-[![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
+Native OKF import preserves supplied Markdown and attachment bytes, indexes
+concepts for search, and does not invoke an LLM. Generated wiki ingestion is a
+separate workflow that requires an LLM configuration. Contracts and optional
+metadata are retained; computation runners and attesters are not executed.
 
-[Installation](#installation) · [Supported Agents](#all-agents-share-the-same-memory-server) · [What is it?](#what-is-tencentdb-agent-memory) · [Team Play](#one-play-style-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
+Read [data flow and trust](docs/architecture-and-data-flow.md),
+[Git transport](docs/git-transport.md), [OKF API and migration](MemoryKnowledge/docs/okf/README.md),
+and [verification and limitations](docs/verification-evidence.md).
 
-[**English**](./README.md) · [简体中文](./README_CN.md)
+## Requirements
 
-</div>
+Use Node.js 22 or later for the standalone Linux service. Development/typechecking
+with OpenClaw 2026.10.2 requires Node.js 24.16+ (or its supported Node 26 range).
+Native SQLite,
+Jieba and CodeGraph packages require compatible platform binaries or their build
+toolchains. Linux container verification is a separate requirement; a macOS build
+does not establish Linux readiness. Docker Engine and Compose are needed only
+for container deployment. A configured LLM is needed for generated ingestion and
+conversation extraction, but not native OKF exchange.
+The pinned Jieba dependency uses a licensed lazy [loader compatibility adapter](docs/jieba-loader.md)
+that preserves native version enforcement; index migration and native trust limits
+are documented there.
 
----
+## Installation from source
 
-> **Latest:** Team Memory Beta is evolving quickly — install it and start exploring in minutes.
+Build this checkout. Upstream images do not contain these changes.
 
-<td>
-   <video src="https://github.com/user-attachments/assets/efb1a808-1f86-4cfe-802c-f7453f7ca938" width="100%" controls autoplay loop muted playsinline></video>
-</td>
-
-# Installation
-
-Start all three services in one go (`memory-core` + `memory-hub` + `proxy`):
-
-```bash
-git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
-cd TencentDB-Agent-Memory/deploy/global-images
+```sh
+cd MemoryKnowledge
+npm ci
+npm run build
+umask 077
 cp .env.example .env
-$EDITOR .env       # Fill in two sets of LLM parameters (memory group + proxy group)
-./start-all.sh     # Launch everything with one command; when finished, it prints a one-liner you can paste directly into Claude
+# Configure .env before starting. Keep it out of Git.
+npm start
 ```
 
-Open the panel: [http://localhost:8125](http://localhost:8125).
+The default Knowledge listener is `127.0.0.1:8421`, with API prefix `/v3`.
+`npm run dev` starts the TypeScript source; `npm start` uses the built launcher.
+For MCP, build first and run `node bin/mcp.mjs` with the configuration below.
 
-Complete installation documentation (standalone Memory Hub deployment, Proxy + Claude Code / CodeBuddy usage, stop and cleanup, port reference, etc.) is available in [**INSTALL.md**](./INSTALL.md) (中文: [INSTALL_CN.md](./INSTALL_CN.md)).
-The MongoDB storage backend is **experimental** (off by default); see
-[INSTALL.md · MongoDB storage backend](./INSTALL.md#optional-mongodb-storage-backend-experimental-off-by-default).
+For a source-built Knowledge container:
 
-### Migrating data from an older version
-
-If you're already on an older release (v1.x / v0.x) and want to bring your existing data over to v2.0.0+, we provide a migration tool:
-
-See [**Data Migration Tool (v2 → v3)**](./MemoryCore/scripts/migrate-v2-to-v3/README.md) for full usage and flags. New installations can skip this.
-
-## All Agents Share the Same Memory Server
-
-One Proxy, unchanged protocol, zero-code integration — point the Agent's base URL to the Proxy and it's done. No plugin, hook, or MCP server is required.
-
-<table>
-<tr>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-deepseek-harness-dsh"><img src="./assets/images/agents/dsh.png" width="48" height="48" /><br /><sub><b>DeepSeek Harness</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-claude-code"><img src="./assets/images/agents/claude-code.png" width="48" height="48" /><br /><sub><b>Claude Code</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-codex"><img src="./assets/images/agents/codex.png" width="48" height="48" /><br /><sub><b>Codex</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-codebuddy"><img src="./assets/images/agents/codebuddy.png" width="48" height="48" /><br /><sub><b>CodeBuddy</b></sub></a></td>
-</tr>
-<tr>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-workbuddy"><img src="./assets/images/agents/workbuddy.png" width="48" height="48" /><br /><sub><b>WorkBuddy</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-hermes"><img src="./assets/images/agents/hermes.png" width="48" height="48" /><br /><sub><b>Hermes</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-openclaw"><img src="./assets/images/agents/openclaw.png" width="48" height="48" /><br /><sub><b>OpenClaw</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-other-platforms-generic"><sub><b>More frameworks coming soon...</b></sub></a></td>
-</tr>
-</table>
-
-See [**INSTALL.md**](./INSTALL.md) for the exact configuration steps of each client.
-
-Don't see your favorite Agent? You can try adapting it yourself with the [Generic integration guide](./INSTALL.md#using-proxy-with-other-platforms-generic) — and we'd love a PR adding native support for it. See [**CONTRIBUTING.md**](./CONTRIBUTING.md) to get started.
-
-# What is TencentDB Agent Memory?
-
-We started from a practical question: **How do you reduce repetitive work when using Agents?**
-
-If project context has already been explained, it shouldn't need to be repeated in a new session. If documents have already been read, every Agent shouldn't have to start again from page one. A workflow that already works shouldn't have to be rediscovered next time.
-
-Memory here means more than just "remembering conversations." **Any information that helps the next Agent avoid reinventing the wheel should be saved, organized, and reused.**
-
-```text
-Existing information → Reusable memory assets → Fewer turns → Less rework → More stable results and higher efficiency
+```sh
+cd MemoryKnowledge
+umask 077
+cp docker/env.example docker/env.docker
+# Set KNOWLEDGE_SERVICE_KEY and PUBLIC_URL in docker/env.docker.
+docker compose --env-file docker/env.docker up -d --build
 ```
 
-### Let experience accumulate, flow, and pass on to the next Agent
+Compose is defined in `MemoryKnowledge/docker-compose.yml`. Its published port
+is reachable on host interfaces unless the port mapping or firewall restricts
+it. Set the public URL to the actual service base including its API prefix.
+This is a source-based deployment recipe; see verification status before using
+it as evidence of a tested image.
 
-**Memory Hub** for Agent teams closes the loop across the entire experience lifecycle: work produces assets, assets circulate through the team, and new members can load the team's save file on day one.
+Other services have separate configuration and data directories:
 
-1. **Automatic asset extraction**: Extract Chat Memory and Skills from conversations and tasks; convert documents and code into Wiki and CodeGraph; then manage, review, and route them consistently.
-2. **Portable & multi-Agent compatible**: Memory assets are decoupled from Agent frameworks — they can move across frameworks and be shared and maintained by multiple Agents and team members.
-3. **Cold-start friendly**: Import existing documents, codebases, and Agent conversation sessions. New Agent teams can start from existing experience instead of learning from scratch.
+```sh
+# Core: configure the standalone YAML and its LLM/storage settings first.
+cd MemoryCore
+npm ci
+npm run build
+export TDAI_GATEWAY_CONFIG="$PWD/tdai-gateway.standalone.yaml"
+node --import tsx src/gateway/server.ts
 
-### 🧠 A brain that remembers people and context
+# Proxy: configure the upstream, authentication and memory bindings first.
+cd MemoryProxy
+npm ci
+npm run start:config
 
-- **Chat Memory** retains preferences, facts, decisions, and interaction history.
-- Each Agent automatically gets its own memory when created — no need to re-introduce yourself next time.
-- L0 Conversation → L1 Atom → L2 Scenario → L3 Persona — raw conversations are distilled layer by layer.
-
-<img width="" src="assets/images/chat_memory.png" alt="image.png" />
-
-> "Don't refactor the old auth module — mobile is still using it." — Context this costly shouldn't depend on humans repeating it every time.
-
-### ⚡ A Skill library that accumulates expertise
-
-- After completing complex work, Agents can extract and manage reusable Skills from conversations and tool calls, and import them into the context of a designated Agent when needed.
-- A Skill isn't just a prompt snippet; it has versions, resource files, trigger boundaries, execution steps, and validation rules.
-- Personal Skills are private by default; after review, they can be shared with the team and assigned to other Agents.
-
-<img width="" src="assets/images/skill.png" alt="image.png" />
-
-> Troubleshooting, code review, release checklists — learn it once, and the whole team can use it.
-
-### 📖 A knowledge map that reads both docs and code
-
-- **Wiki** turns product docs, design specs, and ops runbooks into structured pages with a link graph. (Inspired by Karpathy's LLM knowledge base.)
-
-<img src="./assets/images/wiki.png" alt="image.png" />
-
-- **CodeGraph** indexes code symbols, files, call relationships, and impact paths.
-<img width="" src="assets/images/codegraph.png" alt="image.png" />
-
-- Agents can search, read, inspect callers/callees, and perform impact analysis before modifying code.
-
-> Wiki keeps Agents from reading every file list before getting to work. CodeGraph doesn't just tell them "the code is here" — it tells them "changing this might affect those."
-
-### 🛡️ A team memory panel controlled by humans
-
-- Create teams and Agents in Memory Hub; review, share, and equip memory assets.
-- Manage ownership, versions, status, visibility, usage counts, and Agent bindings in one place.
-- `private` belongs strictly to the Owner; `team` is visible to all team members; `restricted` grants precise access via User / Role / Agent ACLs.
-- Two role layers: **global System Admin** manages users and teams (creating teams, adding members) and can also use Wiki, CodeGraph, Skill, and other asset management features; **Team-level roles** include Admin (team manager) and Member (regular member), responsible for asset collaboration and access control within a team. Asset ownership is tracked via Owner — the Owner automatically has management permissions for their assets.
-
-<img width="" src="assets/images/asset.png" alt="image.png" />
-
-
-## Cold Start: Load the Save File, Then Get to Work
-
-Most Agents' first task is re-learning your project. TencentDB Agent Memory turns the learning cost you've already paid into a save file:
-
-<img alt="Cold Start: import codebase, docs, and history into Memory Hub" src="assets/images/flowchart3.png" />
-
-Specifically, these existing assets can be imported directly and processed automatically in the panel:
-
-- **Codebases**: Import existing repositories — **CodeGraph** automatically indexes symbols, files, call relationships, and impact paths.
-- **Documents & files**: Import relevant docs and files — **Wiki** automatically generates structured pages with a link graph.
-- **Conversation sessions**: Import past Agent conversation sessions — **Skills and Chat Memory** are automatically extracted as reusable assets.
-
-> Stop retraining every Agent. Give it the save file.
-
-## One Play Style: Build a Growing Agent Team for a One-Person Company
-
-Open Memory Hub and create a team:
-
-```text
-Tiny but Serious Inc.
-├── 👤 You · Set goals / Make decisions
-├── 🔭 Scout · Research / Find opportunities
-├── 🛠 Builder · Write code / Build products
-├── 🧪 Reviewer · Test / Find issues
-└── 🧠 Agent Memory · Preserve the team's experience
+# Panel backend and frontend are separate npm projects.
+cd MemoryPanel
+npm ci
+npm run build
+npm start
+# In MemoryPanel/web: npm ci && npm run build
 ```
 
-You're not opening four disconnected chat windows — you're assembling a squad with different roles that can inherit the team's accumulated experience.
+Each `cd` above starts from the repository root. Follow the linked component
+guides to configure Core metadata instances, Panel login and Proxy routing; these
+commands alone do not configure a complete production system.
 
-### Recruit first, then equip
+## Configuration and authentication
 
-```text
-🔭 Scout
-   ├── User interview Chat Memory
-   ├── Market research Wiki
-   └── Competitive analysis Skill
+| Setting | Effect |
+| --- | --- |
+| `KNOWLEDGE_SERVICE_KEY` | Bearer authentication for every Knowledge service API under its prefix |
+| `KNOWLEDGE_HOST`, `PORT` | Knowledge listener; defaults `127.0.0.1`, `8421` |
+| `API_PREFIX` | HTTP API prefix; defaults `/v3` |
+| `KNOWLEDGE_DATA_DIR`, `KNOWLEDGE_DB_PATH` | Knowledge filesystem and metadata SQLite locations; defaults under `./data` |
+| `TDAI_GATEWAY_API_KEY` | Core gateway Bearer key; separate from the Knowledge key |
+| `KNOWLEDGE_API_URL`, `KNOWLEDGE_SERVICE_ID` | MCP upstream base and one fixed service scope |
+| `KNOWLEDGE_API_TOKEN` | MCP Bearer token; falls back to `KNOWLEDGE_SERVICE_KEY` |
 
-🛠 Builder
-   ├── Product Wiki
-   ├── Project CodeGraph
-   └── Feature Delivery Skill
+Knowledge rejects keyless non-loopback startup unless
+`KNOWLEDGE_ALLOW_INSECURE_NO_KEY_LISTEN=true` is explicitly set. A configured key
+is required even on loopback. `/health`, `/docs` and `/openapi.json` are outside
+its service prefix and remain public. Core likewise rejects a keyless
+non-loopback bind unless `TDAI_GATEWAY_ALLOW_INSECURE_NO_KEY_LISTEN=true` is set.
+Keyless loopback mode is for trusted local development.
 
-🧪 Reviewer
-   ├── Historical incident Chat Memory
-   ├── Project CodeGraph
-   └── Release Checklist Skill
+A service key authenticates a service, not an end user. A trusted gateway must
+resolve identity and enforce user/team permissions before forwarding tenant
+headers. Never give an untrusted client unrestricted access to a shared service
+key. MCP currently uses one service ID and assumes the default `/v3` prefix.
+
+Core's public state backend supports explicit `STATE_BACKEND=local`. Its session
+buffers, timers, task queue and locks live in process memory and are lost on
+restart; persistent memory databases are separate. Service mode otherwise selects
+Redis by default, whose private state implementation is not shipped here: select
+local explicitly only when its lifecycle fits the deployment. Redis and unknown
+backend types fail explicitly, with no silent fallback or state migration.
+Worker lock identities are encoded per scope. When upgrading from older key
+formats, stop old consumers and drain in-flight tasks before starting the new
+workers; mixed versions cannot coordinate through different lock names. This
+changes coordination keys, not persistent memory records.
+New pipeline timers always encode the session and preserve each supplied tenant
+field. Scheduling labels accept ASCII letters, digits, `_` and `-`; ordinary
+`L1_idle`/`L2_schedule` labels are unchanged. Legacy timer members remain readable,
+but stored legacy names are not automatically rewritten or cancelled by new names.
+Drain/recreate transient timers when upgrading; legacy scoped metadata must be
+trusted, since its ambiguous original identity cannot always be recovered.
+
+Disable optional exporters unless required. Protect environment files, databases,
+backups and logs with service-account permissions. Source credentials are
+base64-encoded in SQLite, **not encrypted**. The database and its WAL/SHM files
+are restricted to mode 0600; use a trusted parent directory and restricted backups.
+
+## API and examples
+
+[Knowledge OpenAPI](MemoryKnowledge/openapi.yaml) describes the HTTP service.
+[The OKF guide](MemoryKnowledge/docs/okf/README.md) covers file encoding, statuses,
+recovery and migration. The main native endpoints are:
+
+| POST path beneath the API prefix | Request | Result |
+| --- | --- | --- |
+| `/wiki/okf/validate` | `{files}` | Validation counts and warnings |
+| `/wiki/okf/import` | `{team_id,wiki_id,files,overwrite?}` | Save and index supplied files |
+| `/wiki/okf/export` | `{team_id,wiki_id}` | Bundle `{files}` |
+| `/wiki/okf/recover` | `{team_id,wiki_id}` | Explicit validated recovery or no-op |
+
+All require the configured Bearer key; resource operations also require
+`x-tdai-service-id`. Responses use `{code,message,data}`. Validation is 400,
+foreign/missing resources are 404, conflicts are 409, body overflow is 413 and
+internal failures are 500. Import can report failure after committing content;
+retain the journal and recover instead of blindly repeating writes.
+
+Export the checked-in example to a new, private temporary file:
+
+```sh
+cd MemoryKnowledge
+umask 077
+okf_work=$(mktemp -d)
+npm run okf -- export examples/okf "$okf_work/bundle.json"
+# The output is {files}, not a complete HTTP import body.
 ```
 
-Different roles, different loadouts. Less noise — give each Agent the memory assets it actually needs to get work done.
+For an HTTP example that creates an isolated wiki, supplies the required IDs,
+keeps the key out of command arguments and round-trips the bundle, see
+[the executable example](MemoryKnowledge/examples/okf-http-roundtrip.mjs).
+Run it from `MemoryKnowledge` with `KNOWLEDGE_SERVICE_KEY` configured and a
+running local service:
 
-**The company can be tiny. Experience can compound forever.**
+```sh
+node examples/okf-http-roundtrip.mjs
+```
 
-## Memory Assets, Not a Chat Log Warehouse
+The example uses synthetic content and deletes its created wiki on success.
+It does not operate on an existing wiki or use credentials in command arguments.
 
-RAG answers "what can be found?" Team Memory also answers "who can use it, which version is valid, and which Agent should receive it."
+## Migration, backup and rollback
 
-| | Chat History | Standard RAG | TencentDB Agent Memory |
-| :--- | :---: | :---: | :---: |
-| Cross-session user understanding | △ | △ | ✅ Chat Memory |
-| Distilled executable experience | — | — | ✅ Skill |
-| Document structure & relationships | — | △ Chunk retrieval | ✅ Wiki + Link Graph |
-| Code call graphs & impact scope | — | △ Text match | ✅ CodeGraph |
-| Ownership / Version / Status | — | — | ✅ |
-| Team sharing & Agent loadout | — | — | ✅ |
-| Private / Team / ACL | — | △ | ✅ |
+Before upgrading, stop clients, workers and scheduled sync. Take a consistent
+backup of each component's entire data directory, SQLite state (including WAL
+when present), configuration and previous image/build. An OKF export excludes
+raw inputs, permissions, operational databases and queue state, so it is not a
+complete deployment backup.
 
-## Memory Hub Is Not a Display Board — It's a Control Panel
+Use the OKF guide's dry-run legacy Markdown migration before applying changes.
+An unknown legacy source-credential schema is retained and startup is refused;
+map user-scoped credentials to resources in an explicit offline migration after
+backing up the database. Never delete the old table merely to make startup pass.
 
-| Play Style | What you do in the Hub |
-| :--- | :--- |
-| **Team Up** | Create teams, add people and Agents, define sharing boundaries |
-| **Asset Library** | Browse, search, review, and manage Chat Memory, Skills, Wiki, and CodeGraph |
-| **Agent Loadout** | Bind different memory assets to different Agents; adjust priority and usage mode |
-| **Knowledge Workshop** | Build Wiki and CodeGraph; monitor processing status and asset metadata |
-| **Access Control** | Switch between private, team, and ACL-based access; revoke sharing when needed |
+Keep previous binaries/images and configuration for rollback. If a migration has
+changed persistent state, restore the matching consistent backup while all
+writers are stopped before restarting the previous version. Test a restore on
+an isolated target; archive integrity alone is not a restore test.
 
-When you open an asset, what matters is not just "what it says," but also "where it came from, which version it is, who it's assigned to, and whether it's been used recently."
+## Tests and limitations
 
-## Every Loop Gains Experience
+Run `npm test` and `npm run typecheck` in Knowledge, Core, Proxy and Panel; run `npm test`
+and `npm run build` in Core. In the web project run `npm run build` and `npm run lint`.
+Run `npm audit` for each component's lockfile. See the verification document for
+actual results, host details, warnings and unexecuted checks.
 
-<img alt="Every Loop Gains Experience: continuous accumulation, making every use smarter" src="assets/images/flowchart4.png" />
+OKF HTTP transport accepts up to 1,000 files and 10 MiB of decoded data, with a
+20 MiB streamed request limit. Unknown concept types and extensions are preserved;
+optional trust metadata is advisory. Remote Git uses validated DNS/IP transport,
+verified TLS, denied redirects and a 60-second child-process deadline. This is
+not a bound on complete native indexing time or memory usage.
 
-Memory doesn't run the Agent loop; it ensures the next iteration inherits the previous one's results: valuable interactions stay in Chat Memory, proven workflows are distilled into Skills, and document/code changes are updated through Wiki ingest and CodeGraph sync.
+CodeGraph rejects symlinks and special filesystem entries, including legitimate
+in-tree symlinks, and limits its preflight tree to depth 100 and 100,000 entries.
+Tool arguments cannot select another SDK project. These are point-in-time checks
+for trusted parent directories and a single writer; they are not an OS sandbox
+or a defense against concurrent privileged filesystem changes.
 
-**Without Memory, loops may just repeat faster. With inherited memory, each iteration has the chance to be better than the last.**
+OKF recovery has no startup auto-repair, fsync/power-loss durability or atomic
+SQLite/filesystem transaction guarantee. The private Proxy routing/preparation
+extension was removed. Other optional private integrations and
+native dependencies and optional remote providers require their own operational
+and supply-chain assessment. No universal security guarantee is implied.
 
-## One Agent Team: Shared Experience, Not Shared Privacy
+See [verification evidence and remaining release gates](docs/verification-evidence.md) and [security review findings](docs/security-review.md) for tested scope and limitations.
 
-New Chat Memory and Skills are private by default. Sharing is an explicit action, not a default leak.
+See the [Knowledge API integration guide](docs/knowledge-api.md) for authentication, native OKF, tool parameters, source credentials and synchronization.
 
-| Visibility | Semantics |
-| :--- | :--- |
-| `private` | Only the Owner can read — not even team admins |
-| `team` | Team members can read; the Owner / Admin can manage |
-| `restricted` | Precise access via User / Role / Agent ACL |
-| `agent` | For targeted equipping of Agents within the same team |
+See the [Proxy extension removal and storage migration guide](docs/extension-removal.md) before upgrading an older Proxy configuration.
 
-You can assign the "Release Skill" to the Release Agent, the "Architecture Wiki" to all development Agents, and CodeGraph to Coder and Reviewer.
+## License and contribution
 
-## Technical Implementation
-
-TencentDB Agent Memory doesn't aim to "store everything." It solves three problems: **what's worth keeping, who can use it, and how to retrieve less while retrieving the right things next time.**
-
-<img alt="Technical overview: layering (L0–L3), Memory Assets, Memory Hub, identity-based assembly for Agents" src="assets/images/flowchart5.png" />
-
-### 1. Memory isn't flat records — it grows in layers
-
-Conversations are first saved as L0, then refined by an async pipeline into multiple levels of granularity:
-
-| Layer | What it stores | Primary use |
-| :--- | :--- | :--- |
-| **L0 Conversation** | Raw conversations with full context | Verify exact wording, timestamps, and sources |
-| **L1 Atom** | Facts, preferences, constraints, and events extracted from conversations | Precise recall of actionable information |
-| **L2 Scenario** | Knowledge blocks organized around projects or scenarios | Quickly restore a working context |
-| **L3 Core / Persona** | Long-term profiles, stable patterns, and high-level cognition | Let Agents rapidly enter a user's and team's context |
-
-Both generation and retrieval are layered: normally, L2/L3 provide a quick context bootstrap; when specific facts are needed, BM25 + vector retrieval + RRF fall back to L1/L0. Results are further capped by item count, character budget, and timeout limits to prevent memory from overwhelming the context window.
-
-### 2. Memory isn't a global prompt — it's the Agent's loadout
-
-Chat Memory, Skills, Wiki, and CodeGraph are all registered uniformly as Memory Assets. Memory Hub uses **Fixed Binding + ACL** to determine which assets a given Agent can use: first narrow the permission scope by Team, User, Agent, and visibility, then retrieve based on the current query.
-
-This lets teams share experience without exposing all their private information; switching Agents or frameworks only requires re-equipping, not retraining.
-
-### 3. Knowledge isn't injected wholesale — it's called on demand
-
-Documents are organized into searchable Wiki pages that support link-graph drill-down; codebases are indexed into CodeGraph assets containing files, symbols, and call relationships. Agents first discover capabilities via `/v3/tools/list`, then use `/v3/tools/call` to read relevant pages, source code, or impact paths.
-
-This makes documents and code part of memory as well — but they remain available tools that only enter context when truly needed.
-
-## Benchmark
-
-| Benchmark | Without TencentDB Agent Memory | With it enabled | Relative improvement |
-| :--- | :---: | :---: | :---: |
-| **PersonaMem** | 48% | **76%** | **+59%** |
-
-PersonaMem tests whether an Agent can correctly understand and apply user information after extended interactions.
-
-## Notes
-
-- Wiki and CodeGraph are built asynchronously; allow some processing time before they reach `ready` status.
-- CodeGraph currently prioritizes public HTTPS repositories; support for private repositories and SSH credentials is still being refined.
-- The Hub supports manual asset binding; fully automated memory routing is still under iteration.
-
-## Related Documentation
-
-- [Roadmap](./ROADMAP.md) (what we're building next)
-- [Full Installation Guide](./INSTALL.md) (Memory Core + Hub + Proxy one-click deployment)
-- [Roadmap](./ROADMAP.md) (what we're building next; 中文: [ROADMAP_CN.md](./ROADMAP_CN.md))
-- [Data Migration Tool (v2 → v3)](./MemoryCore/scripts/migrate-v2-to-v3/README.md) (if you're on an older release and want to migrate existing data)
-- [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
-- **API Documentation**:
-  - [Memory Core v3 API](./MemoryCore/v3-api-memorycore-doc.md)
-  - [Memory Knowledge v3 API](./MemoryKnowledge/v3-api-memoryknowledge-doc.md)
-  - [Memory Proxy v3 API](./MemoryProxy/v3-api-memoryproxy-doc.md)
-  - [Memory Panel API](./MemoryPanel/panel-api-doc.md)
-- [Contributing Guide](./CONTRIBUTING.md)
-
-Agent Memory doesn't have a settled standard yet. Bug reports, documentation, benchmarks, new framework adapters, and more creative Memory Hub use cases are all welcome.
-
----
-## Roadmap
-
-Current release is **v2.0.0**. Next up (**v2.0.1**): zero-config cold start, faster Wiki generation, user/team custom prompts, Skill export, and Codex (IDE Plan mode) support.
-
-👉 See the full plan in [**ROADMAP.md**](./ROADMAP.md) (中文: [ROADMAP_CN.md](./ROADMAP_CN.md)).
-
----
-## Acknowledgements
-
-TencentDB Agent Memory stands on the shoulders of the open-source community:
-
-- [**CodeGraph**](https://github.com/colbymchenry/codegraph) — our CodeGraph asset module **uses code from this project**. Its design of a pre-indexed code graph is the foundation of our implementation.
-- [**Hermes Agent**](https://github.com/nousresearch/hermes-agent) (Nous Research) — our Skill asset management **uses part of the Skill-related code from Hermes Agent and builds further optimizations base on it**.
-- [**"LLM Wiki"** by Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — the idea of treating documentation as an LLM-maintained, incrementally growing knowledge artifact directly informed how our Wiki layer is built and kept up to date.
-
-We are grateful to the authors and contributors of these projects.
-
----
-## Community & Contributing
-
-We welcome contributions of all kinds — bug reports, feature suggestions, documentation fixes, benchmark reproductions, ecosystem integrations, or pull requests. Agent memory is far from settled, and we hope to build it together with the community.
-
-- 🐞 **Found a bug or have a question?** Open an issue in [GitHub Issues](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues) — we respond within 24 hours.
-- 💡 **Have an idea to share?** Start a thread in [GitHub Discussions](https://github.com/TencentCloud/TencentDB-Agent-Memory/discussions).
-- 🛠️ **Want to contribute code?** Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
-- 💬 **Want to chat with us?** Join our [Discord community](https://discord.gg/dJQM6mKMF) and talk to the core developers directly.
-
----
-
-<p align="center">
- Let the path the team has walked become the next Agent's starting line.
-</p>
-
----
-
-## ✨ Contributors
-
-> 💡 Thanks to the following contributors building with us — you make TencentDB Agent Memory better.
-
-<div align="center">
-  <a href="https://github.com/TencentCloud/TencentDB-Agent-Memory/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=TencentCloud/TencentDB-Agent-Memory&columns=12&anon=1" />
-  </a>
-
-  <br /><br />
-<a href="https://github.com/TencentCloud/TencentDB-Agent-Memory/issues">
-  <img src="https://img.shields.io/badge/Contributions_Welcome-006eff?style=for-the-badge&logo=github&logoColor=white" alt="Contributions Welcome" />
-</a>
-
-</div>
+[MIT](LICENSE), with upstream copyright and authorship retained. See
+[CONTRIBUTING](CONTRIBUTING.md). Report reproducible issues with sanitized test data,
+versions and configuration; do not include credentials or private memory.
 
 
-<table width="100%">
-  <tr>
-    <td width="68%">
-      <b>If TencentDB Agent Memory has been helpful to you, please consider starring the project.</b><br />
-      If you have any suggestions, feel free to open an issue for discussion.
-    </td>
-    <td width="32%" align="right">
-      <img src="./assets/images/star-helper.png" alt="Star TencentDB Agent Memory" width="260" />
-    </td>
-  </tr>
-</table>
+### Current Core verification and optional host contracts
 
----
+Strict Core source checking now passes with `npm run typecheck`; 273 Linux tests
+and build pass. Install development dependencies on supported Node 24 with
+`npm ci --ignore-scripts` to inspect/test host declarations without running native
+LLM installation scripts. This does not certify a working native llama backend
+or every OpenClaw host integration. The standalone Linux service is also tested
+on Node 22. Host packages are development/optional peers, external to that service.
 
-## Star History
+Wiki/CodeGraph schema exports use generated files from
+`MemoryKnowledge/openapi.yaml`. Regenerate on Linux with
+`cd MemoryCore && npm run generate:knowledge`. The old unpublished Wiki update
+request/success/mutation-response validators remain exported but reject all input;
+use the documented Knowledge API. Complete legacy error/sync response validators
+are retained. This does not add legacy routes to Core. Required team fields are
+explicit in the OpenAPI compositions and checked by regression tests.
 
-<p align="center">
-  <a href="https://star-history.dera.page/#TencentCloud/TencentDB-Agent-Memory&Date">
-    <img src="https://star-history.dera.page/svg?repos=TencentCloud/TencentDB-Agent-Memory&type=Date" alt="Star History Chart" width="600" />
-  </a>
-</p>
+The Docker image omits development and optional peer packages and removes npm/npx
+from its runtime stage. Native llama/OpenClaw integrations require a separately
+verified environment or custom image; they are not bundled into this standalone
+image. The production and full development dependency audits report no known advisories
+in the verified Linux install. A reproducible, locally repackaged development-only
+npm archive replaces vulnerable bundled libraries with separately locked patched
+versions; its CLI sources and licenses are unchanged. See the [artifact provenance
+and maintenance instructions](MemoryCore/vendor/README.md). This does not patch
+separate host-managed OpenClaw installations. Independent final review and native
+supply-chain/recovery limitations remain open.
 
----
+The legacy embedded OpenClaw runner requires an injected embedded-agent capability
+or the legacy distribution bridge. Current SDK typechecking is not evidence that
+modern hosts supply that internal runtime API; absence fails explicitly.
 
-[MIT](./LICENSE) © TencentDB Agent Memory Team
+Optional offload HTTP responses are capped at 16 MiB of collected body bytes.
+Advertised and streamed over-limit bodies are rejected, truncated responses
+settle as failures, and UTF-8 is decoded after collection to preserve codepoints
+split across network chunks. This is not a total process-memory or concurrency
+limit. See [verification evidence](docs/verification-evidence.md).
+
+
+Optional offload Opik export requires an explicit enable flag. Shared
+`OPIK_API_KEY`/URL environment settings alone do not authorize export. Set
+`plugins.entries["opik-openclaw"].enabled` or its `config.enabled` to `true`;
+an explicit `false` at either level disables it. Enabling this feature sends
+unredacted decision/model/message trace content to the configured Opik collector.
+See [the migration and privacy boundaries](docs/security-review.md#offload-opik-explicit-opt-in-13-october-2026).
+
+Offload reclamation skips MMD deletion when active-state metadata is missing,
+malformed or symlinked, and skips orphan-ref deletion when surviving reference
+indexes cannot be read completely. Pre-existing cleanup directory/file symlinks
+are skipped. Repair metadata before retrying cleanup; skipped cleanup can retain
+disk usage. Use trusted storage roots and coordinate reclamation with writers.
+[Cleanup evidence and limits](docs/security-review.md#offload-reclamation-safety-13-october-2026)
+describe the tested boundaries.
+
+Normal offload backend stage diagnostics retain counts and presence flags while
+omitting tool names/IDs, task labels, filenames, node mappings and generated skill
+names. Request/response data still goes to the selected backend; explicitly
+enabled Opik tracing still exports full content. See the
+[diagnostic review scope](docs/security-review.md#offload-backend-stage-diagnostics-13-october-2026).
+
+Offload MMD file selectors must be nonempty basenames; ref reads require
+`refs/<basename>`. Parent traversal, nested paths, separators and control
+characters are rejected with payload-free errors. Generated ref filenames use
+the same basename validation. Existing invalid selectors require operator or
+producer correction; files are not renamed automatically. This lexical check
+requires trusted storage contexts/filesystem ownership and does not prevent
+symlink or hard-link traversal. See the
+[storage boundary evidence](docs/security-review.md#offload-file-selector-boundaries-13-october-2026).
+
+Offload storage contexts also validate agent and raw session components before
+building paths, including real session overrides. JSONL rewrites accept only
+`offload-<nonempty-session>.jsonl` basenames and validate all source groups before
+starting writes. Invalid selectors leave the previous manager context and
+existing files unchanged. These checks do not provide tenant authentication,
+atomic multi-file rewrites or filesystem confinement against links/races. See
+[context and JSONL selector limits](docs/security-review.md#offload-context-and-jsonl-selectors-13-october-2026).
+
+Offload session registration preserves corrupt or invalid existing registry
+metadata by rejecting the write, rather than replacing it with a new map.
+Prototype-named keys are stored as ordinary own entries. Lookup accepts only
+owned rows with valid basename session IDs, and listing preserves authoritative
+map keys. Unavailable lookup/list still returns null/empty results; no automatic
+repair or new alerting is provided. See
+[registry evidence and recovery limits](docs/security-review.md#offload-registry-integrity-13-october-2026).
+
+Offload state-report upload/scheduling failures emit fixed warnings without
+exception payloads or custom string conversion. Native Node regressions cover
+privacy and coercion-induced process failures. Successful report export is
+unchanged; custom logger failures and malformed success fields still need review.
+See [the failure-diagnostic scope](docs/security-review.md#offload-report-failure-diagnostics-13-october-2026).
+
+Offload MMD context refresh compares a SHA-256 fingerprint of the complete decoded
+file rather than its length and first 64 characters, so equal-length tail edits
+refresh the injected context. Selected injector diagnostics omit filenames and
+caught exception payloads; intended prompt context and explicitly enabled tracing
+are retained. [Refresh and diagnostic limits](docs/security-review.md#mmd-context-refresh-and-diagnostics-14-october-2026).

@@ -1,80 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── Knowledge Service 启动脚本 ───
-# 自动处理 Node 版本、pnpm、better-sqlite3 编译等兼容性问题
+# ─── Knowledge Service Startup Script ───
+# Portable local launcher using standard Node.js and npm workflows.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-NODE_VERSION="22.19.0"
-NODE_PATH="/codev/opt/nodejs/${NODE_VERSION}/bin"
-PYTHON_BIN="/usr/bin/python3.8"
-
 echo "========================================"
-echo "  Knowledge Service 启动脚本"
+echo "  Knowledge Service Launcher"
 echo "========================================"
 
-# ── Step 1: 检查/切换 Node 版本 ──
-echo "[1/5] 检查 Node.js 版本..."
-if [ ! -x "${NODE_PATH}/node" ]; then
-  echo "  错误: 未找到 Node.js ${NODE_VERSION} (${NODE_PATH})"
-  echo "  请先安装 Node.js ${NODE_VERSION}"
+# ── Step 1: Verify Node.js and npm ──
+echo "[1/4] Checking Node.js runtime..."
+if ! command -v node >/dev/null 2>&1; then
+  echo "  Error: 'node' executable not found in PATH."
+  echo "  Please install Node.js >= 22 (engines: >=22.0.0)."
   exit 1
 fi
 
-export PATH="${NODE_PATH}:$PATH"
-echo "  Node: $(node -v) ($(which node))"
-echo "  npm:  $(npm -v)"
-
-# ── Step 2: 安装 pnpm（如需要） ──
-echo "[2/5] 检查 pnpm..."
-if ! command -v pnpm &>/dev/null; then
-  echo "  安装 pnpm@9.15.0..."
-  npm install -g pnpm@9.15.0 2>&1 | tail -1
+if ! command -v npm >/dev/null 2>&1; then
+  echo "  Error: 'npm' executable not found in PATH."
+  echo "  Please ensure npm is installed alongside Node.js."
+  exit 1
 fi
-echo "  pnpm: $(pnpm --version)"
 
-# ── Step 3: 安装依赖 ──
-echo "[3/5] 安装依赖..."
+NODE_VER="$(node -v | sed 's/^v//')"
+NODE_MAJOR="$(echo "$NODE_VER" | cut -d. -f1)"
+echo "  Node: $(node -v) ($(command -v node))"
+echo "  npm:  $(npm -v) ($(command -v npm))"
+
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  echo "  Error: Node.js version must be >= 22 (current: $NODE_VER)"
+  exit 1
+fi
+
+# ── Step 2: Verify dependencies ──
+echo "[2/4] Verifying dependencies..."
 if [ ! -d "node_modules" ]; then
-  PYTHON="${PYTHON_BIN}" npm_config_python="${PYTHON_BIN}" pnpm install --ignore-scripts
-fi
-
-# ── Step 4: 编译 better-sqlite3 ──
-echo "[4/5] 编译 better-sqlite3..."
-BETTER_SQLITE3_DIR="node_modules/.pnpm/better-sqlite3@11.10.0/node_modules/better-sqlite3"
-BINDING_GYP="${BETTER_SQLITE3_DIR}/binding.gyp"
-BUILD_NODE="${BETTER_SQLITE3_DIR}/build/Release/better_sqlite3.node"
-
-if [ ! -f "${BUILD_NODE}" ]; then
-  # Patch GCC 8.5 不支持 -std=c++20
-  if [ -f "${BINDING_GYP}" ]; then
-    sed -i "s/-std=c++20/-std=c++2a/g" "${BINDING_GYP}"
-    echo "  Patched binding.gyp: -std=c++20 → -std=c++2a"
-  fi
-
-  # 手动编译
-  cd "${BETTER_SQLITE3_DIR}"
-  PYTHON="${PYTHON_BIN}" npm_config_python="${PYTHON_BIN}" \
-    npx node-gyp rebuild --python="${PYTHON_BIN}" 2>&1 | grep -E "(gyp info ok|error|Error)" || true
-  cd "$SCRIPT_DIR"
-
-  if [ -f "${BUILD_NODE}" ]; then
-    echo "  better-sqlite3 编译成功"
-  else
-    echo "  错误: better-sqlite3 编译失败"
-    exit 1
-  fi
+  echo "  node_modules not found. Running npm ci..."
+  npm ci
 else
-  echo "  better-sqlite3 已编译，跳过"
+  echo "  node_modules present."
 fi
 
-# ── Step 5: 启动服务 ──
-echo "[5/5] 启动 Knowledge 服务..."
-echo "  端口: ${PORT:-8421}"
-echo "  数据目录: ${KNOWLEDGE_DATA_DIR:-~/.memory-tencentdb/knowledge}"
+# ── Step 3: Build verification (if needed) ──
+echo "[3/4] Checking build artifacts..."
+MODE="${1:-${NODE_ENV:-dev}}"
+if [ "$MODE" = "prod" ] || [ "$MODE" = "production" ] || [ ! -f "dist/server.mjs" ]; then
+  if [ ! -f "dist/server.mjs" ]; then
+    echo "  dist/server.mjs not found. Running npm run build..."
+    npm run build
+  else
+    echo "  dist/server.mjs present."
+  fi
+fi
+
+# ── Step 4: Start service ──
+PORT="${PORT:-8421}"
+DATA_DIR="${KNOWLEDGE_DATA_DIR:-${HOME}/.memory-tencentdb/knowledge}"
+echo "[4/4] Starting Knowledge Service..."
+echo "  Mode:     $MODE"
+echo "  Port:     $PORT"
+echo "  Data Dir: $DATA_DIR"
 echo "========================================"
 echo ""
 
-pnpm run dev
+if [ "$MODE" = "prod" ] || [ "$MODE" = "production" ]; then
+  exec node bin/server.mjs
+else
+  exec npm run dev
+fi

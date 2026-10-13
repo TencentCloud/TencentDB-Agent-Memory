@@ -20,6 +20,8 @@ import {
 
 import { MCP_TOOLS, type McpToolDef } from "./tools.js";
 import { callApi, type HttpClientOptions } from "./http-client.js";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("mcp-server");
@@ -89,14 +91,24 @@ export function createMcpServer(httpOpts: HttpClientOptions): Server {
   return server;
 }
 
+function isDirectRun(metaUrl: string, argv1?: string): boolean {
+  if (!argv1) return false;
+  try {
+    return fileURLToPath(metaUrl) === resolve(argv1);
+  } catch {
+    return false;
+  }
+}
+
 // Start server when run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRun(import.meta.url, process.argv[1])) {
   const baseUrl = process.env.KNOWLEDGE_API_URL || "http://localhost:8421";
-  const token = process.env.KNOWLEDGE_API_TOKEN;
+  const token = process.env.KNOWLEDGE_API_TOKEN || process.env.KNOWLEDGE_SERVICE_KEY;
+  const serviceId = process.env.KNOWLEDGE_SERVICE_ID || undefined;
 
-  log.info(`MCP server starting, API URL: ${baseUrl}`);
+  log.info("MCP server starting");
 
-  const server = createMcpServer({ baseUrl, token });
+  const server = createMcpServer({ baseUrl, token, serviceId });
   const transport = new StdioServerTransport();
 
   server.connect(transport).then(() => {

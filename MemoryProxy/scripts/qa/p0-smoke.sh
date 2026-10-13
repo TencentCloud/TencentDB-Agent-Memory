@@ -244,18 +244,17 @@ if [[ "$code" == "200" ]] && printf '%s' "$body" | jq -e '.data' >/dev/null 2>&1
 else
   bad "P0-B11" "期望 200+.data，实际 $code"
 fi
-# P0-B12 cost-guard marker（markerOptIn=false → 预期 404；true → 不 404）
-MOPT=$(curl -s -m 5 "$PROXY/health" | jq -r '.costGuard' 2>/dev/null)
+# P0-B12 cost-guard marker（removed optional endpoint must return 404）
 route_probe "P0-B12" "/claude-code/$SPACE/cost-guard/v1/messages" \
   "{\"model\":\"$MODEL\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
-  "$([[ "$MOPT" == "enabled" ]] && echo not404 || echo 404)"
+  404
 # P0-B13 analyse marker
 route_probe "P0-B13" "/claude-code/$SPACE/analyse/v1/messages" \
   "{\"model\":\"$MODEL\",\"max_tokens\":8,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" not404
 # P0-B14 codex cost-guard marker
 route_probe "P0-B14" "/codex/$SPACE/cost-guard/v1/responses" \
   "{\"model\":\"$MODEL\",\"input\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
-  "$([[ "$MOPT" == "enabled" ]] && echo not404 || echo 404)"
+  404
 
 ##############################################################################
 head_ "P0-C 协议格式正确 (4)"
