@@ -700,6 +700,168 @@ export function createPersister(
  *
  * Used by both `index.ts` (live runtime) and `seed-runtime.ts` (seed CLI).
  */
+
+// ────────────────────────────────────────────────────────────────────────────
+// Scene maintenance — semantic dedup + heat decay + cold eviction.
+//
+// The stock L2 flow bounds the scene set only via the LLM's *reactive* MERGE at
+// the hard `persona.maxScenes` cap ("merge the coldest / most similar"). `heat`
+// is a monotonic hit counter with no time decay, and there is no eviction, so
+// the set skews toward whatever is recalled most and loses topic diversity —
+// and since the persona (L3) is built from scenes, it narrows to those topics.
+// Raising maxScenes only delays this.
+//
+// This deterministic pass runs after each L2 extract and keeps the scene set
+// BOUNDED and FRESH without any LLM involvement, using the same embedding
+// service as the store (local model → no extra remote cost):
+//   1) semantic dedup — near-duplicate scenes (cosine >= SCENE_DEDUP_THRESHOLD)
+//      collapse into the highest-priority anchor, which absorbs the losers'
+//      heat; losers are archived (moved under .archive/scene_blocks/), not
+//      deleted.
+//   2) heat decay — rank by decayedHeat = heat * 0.5^(ageDays / halfLife) so a
+//      scene not updated for a long time cools even if it was once hot. Stored
+//      heat is NOT mutated by decay; an UPDATE refreshes `updated` (recency).
+//   3) cold eviction — if survivors still exceed SCENE_SOFT_CAP (default 80% of
+//      maxScenes, leaving headroom for the LLM to CREATE new diverse scenes),
+//      archive the lowest-decayedHeat scenes down to the cap.
+// Tunables via env: SCENE_DEDUP_THRESHOLD (0.88), SCENE_HEAT_HALFLIFE_DAYS (14),
+// SCENE_SOFT_CAP.
+const SCENE_DEDUP_THRESHOLD = Number(process.env.SCENE_DEDUP_THRESHOLD ?? 0.88);
+const SCENE_HEAT_HALFLIFE_DAYS = Number(process.env.SCENE_HEAT_HALFLIFE_DAYS ?? 14);
+
+function sceneCosine(a: Float32Array, b: Float32Array): number {
+  const n = Math.min(a.length, b.length);
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < n; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return (na === 0 || nb === 0) ? 0 : dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+function sceneDecayedHeat(heat: number, updated: string): number {
+  const t = Date.parse(updated);
+  if (!Number.isFinite(t)) return heat;
+  const ageDays = Math.max(0, (Date.now() - t) / 86400000);
+  return heat * Math.pow(0.5, ageDays / SCENE_HEAT_HALFLIFE_DAYS);
+}
+
+async function runSceneMaintenance(params: {
+  dataDir: string;
+  storage: StorageAdapter | undefined;
+  embed: EmbeddingService | undefined;
+  maxScenes: number;
+  logger: PipelineLogger;
+}): Promise<void> {
+  const { dataDir, storage, embed, maxScenes, logger } = params;
+  const TAGM = `${TAG} [scene-maint]`;
+  try {
+    const { readSceneIndex, syncSceneIndex } = await import("../core/scene/scene-index.js");
+    const { parseSceneBlock, formatSceneBlock } = await import("../core/scene/scene-format.js");
+    const { StoragePaths } = await import("../core/storage/types.js");
+    const softCap = Math.max(3, Number(process.env.SCENE_SOFT_CAP ?? Math.round(maxScenes * 0.8)));
+
+    const index = await readSceneIndex(dataDir, storage);
+    if (index.length <= 3) return;
+
+    const nodeFs = async () => (await import("node:fs/promises")).default;
+    const nodePath = async () => (await import("node:path")).default;
+    const readBlockRaw = async (filename: string): Promise<string | null> => {
+      if (storage) return storage.readFile(`${StoragePaths.sceneBlocksDir}${filename}`);
+      const p = await nodePath(); const fs = await nodeFs();
+      return fs.readFile(p.join(dataDir, "scene_blocks", filename), "utf-8").catch(() => null);
+    };
+    const writeBlockRaw = async (filename: string, content: string): Promise<void> => {
+      if (storage) return storage.writeFile(`${StoragePaths.sceneBlocksDir}${filename}`, content);
+      const p = await nodePath(); const fs = await nodeFs();
+      await fs.writeFile(p.join(dataDir, "scene_blocks", filename), content, "utf-8");
+    };
+    const archive = async (filename: string, reason: string): Promise<void> => {
+      const dest = `.archive/scene_blocks/${Date.now()}-${filename}`;
+      try {
+        if (storage) {
+          await storage.rename(`${StoragePaths.sceneBlocksDir}${filename}`, dest);
+        } else {
+          const p = await nodePath(); const fs = await nodeFs();
+          const d = p.join(dataDir, ".archive", "scene_blocks");
+          await fs.mkdir(d, { recursive: true });
+          await fs.rename(p.join(dataDir, "scene_blocks", filename), p.join(d, `${Date.now()}-${filename}`));
+        }
+        logger.info(`${TAGM} archived "${filename}" (${reason})`);
+      } catch (e) {
+        logger.warn(`${TAGM} archive failed for "${filename}": ${e instanceof Error ? e.message : String(e)}`);
+      }
+    };
+
+    type S = { filename: string; heat: number; updated: string; content: string; summary: string; removed: boolean };
+    const blocks: S[] = [];
+    for (const e of index) {
+      const raw = await readBlockRaw(e.filename);
+      if (!raw) continue;
+      const b = parseSceneBlock(raw, e.filename);
+      blocks.push({ filename: e.filename, heat: b.meta.heat, updated: b.meta.updated || e.updated, content: b.content, summary: b.meta.summary, removed: false });
+    }
+    if (blocks.length <= 3) return;
+
+    let dedupCount = 0, evictCount = 0;
+    const origHeat = new Map(blocks.map((b) => [b.filename, b.heat]));
+
+    // 1) Semantic dedup (needs embeddings; skipped gracefully if unavailable)
+    if (embed) {
+      let vecs: Float32Array[] | null = null;
+      try {
+        vecs = await embed.embedBatch(blocks.map((b) => `${b.summary}\n${b.content}`.slice(0, 2000)));
+      } catch (e) {
+        logger.warn(`${TAGM} embedBatch failed, skipping dedup: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (vecs && vecs.length === blocks.length && vecs.every((v) => v && v.length > 0)) {
+        // Anchors processed in DESC decayedHeat: the most important scene of a
+        // near-dup cluster survives and absorbs the others' heat.
+        const order = blocks.map((_, i) => i).sort((x, y) =>
+          sceneDecayedHeat(blocks[y].heat, blocks[y].updated) - sceneDecayedHeat(blocks[x].heat, blocks[x].updated));
+        for (const i of order) {
+          if (blocks[i].removed) continue;
+          for (const j of order) {
+            if (j === i || blocks[j].removed || blocks[i].removed) continue;
+            if (sceneCosine(vecs[i], vecs[j]) >= SCENE_DEDUP_THRESHOLD) {
+              blocks[i].heat += blocks[j].heat;
+              blocks[j].removed = true;
+              await archive(blocks[j].filename, `near-dup of "${blocks[i].filename}"`);
+              dedupCount++;
+            }
+          }
+        }
+      }
+    }
+
+    // 2) heat decay + 3) cold eviction over softCap
+    const survivors = blocks.filter((b) => !b.removed);
+    if (survivors.length > softCap) {
+      survivors.sort((a, b) => sceneDecayedHeat(a.heat, a.updated) - sceneDecayedHeat(b.heat, b.updated));
+      const toEvict = survivors.length - softCap;
+      for (let k = 0; k < toEvict; k++) {
+        survivors[k].removed = true;
+        await archive(survivors[k].filename, `cold-evict: lowest decayedHeat over softCap ${softCap}`);
+        evictCount++;
+      }
+    }
+
+    // Persist absorbed heat onto surviving anchors (whose heat grew via dedup)
+    for (const b of blocks) {
+      if (b.removed || (origHeat.get(b.filename) ?? b.heat) === b.heat) continue;
+      const raw = await readBlockRaw(b.filename);
+      if (!raw) continue;
+      const parsed = parseSceneBlock(raw, b.filename);
+      parsed.meta.heat = b.heat;
+      await writeBlockRaw(b.filename, formatSceneBlock(parsed.meta, parsed.content));
+    }
+
+    if (dedupCount > 0 || evictCount > 0) {
+      await syncSceneIndex(dataDir, storage);
+      logger.info(`${TAGM} done: deduped=${dedupCount}, evicted=${evictCount}, remaining=${blocks.filter((b) => !b.removed).length} (softCap=${softCap}, maxScenes=${maxScenes}, threshold=${SCENE_DEDUP_THRESHOLD})`);
+    }
+  } catch (err) {
+    logger.warn(`${TAG} [scene-maint] pass failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export function createL2Runner(opts: {
   pluginDataDir: string;
   cfg: MemoryTdaiConfig;
@@ -719,6 +881,21 @@ export function createL2Runner(opts: {
 }): L2Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage, checkpointLock } = opts;
   let profileBaseline = new Map<string, { version: number; contentMd5: string; createdAtMs: number }>();
+  // Lazily-built, memoized embedding service for scene maintenance (semantic
+  // dedup). Uses the same cfg.embedding as the store (local model → no extra
+  // remote cost). null = not yet attempted; undefined = unavailable.
+  let sceneMaintEmbedder: EmbeddingService | undefined | null = null;
+  const getSceneMaintEmbedder = async (): Promise<EmbeddingService | undefined> => {
+    if (sceneMaintEmbedder !== null) return sceneMaintEmbedder;
+    try {
+      const { createEmbeddingService } = await import("../core/store/embedding.js");
+      sceneMaintEmbedder = createEmbeddingService(cfg.embedding as unknown as Parameters<typeof createEmbeddingService>[0], logger as unknown as Parameters<typeof createEmbeddingService>[1]);
+    } catch (e) {
+      logger.warn(`${TAG} [scene-maint] embedder init failed (dedup disabled): ${e instanceof Error ? e.message : String(e)}`);
+      sceneMaintEmbedder = undefined;
+    }
+    return sceneMaintEmbedder;
+  };
 
   return async (sessionKey: string, cursor?: string) => {
     const profileFilter = parseProfileL2Key(sessionKey);
@@ -841,6 +1018,23 @@ export function createL2Runner(opts: {
         layer: "l2",
       }));
       const extractResult = await extractor.extract(memories);
+
+      // Deterministic scene maintenance (semantic dedup + heat decay + cold
+      // eviction). Runs unconditionally after extract — the extractor leaves
+      // scene_blocks/ in a consistent state whether it created scenes, made no
+      // change, or failed (it restores from backup on LLM error) — so
+      // accumulated near-dups get cleaned and the soft cap enforced regardless
+      // of this run's outcome, instead of relying on the LLM's lossy at-cap
+      // MERGE. It reads the current on-disk scene set, so it is safe to run
+      // even when the L2 LLM call itself failed.
+      await runSceneMaintenance({
+        dataDir: groupDataDir,
+        storage: groupStorage,
+        embed: await getSceneMaintEmbedder(),
+        maxScenes: cfg.persona.maxScenes,
+        logger,
+      });
+
       if (!(extractResult.success && extractResult.memoriesProcessed > 0)) continue;
       if (extractResult.emptyExtraction) {
         anyEmptyExtraction = true;
