@@ -5,7 +5,7 @@ export type AdminAuthResult = "ok" | "missing" | "invalid";
 
 /** Shared Bearer authentication for proxy administration endpoints. */
 export function checkAdminAuth(c: Context, expected: string): AdminAuthResult {
-  if (!expected) return "ok";
+  if (!expected) return "missing";
 
   const header = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
   if (!header.startsWith("Bearer ")) return "missing";
