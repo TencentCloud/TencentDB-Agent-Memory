@@ -201,6 +201,8 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   ccRequestRouting: { enabled: true },
   workbuddyRequestRouting: { enabled: true },
   traceArchive: { enabled: false, dir: "logs/traces" },
+  // mcp is intentionally omitted from DEFAULT_CONFIG — it is optional on ProxyConfig.
+  // Absence means disabled (zero overhead); `buildConfig` sets it only when yaml.mcp is present.
 };
 
 /** Load and parse a YAML config file. Returns empty object on missing file. */
@@ -662,6 +664,21 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled: yaml.traceArchive?.enabled ?? DEFAULT_CONFIG.traceArchive.enabled,
       dir: yaml.traceArchive?.dir ?? DEFAULT_CONFIG.traceArchive.dir,
     },
+    // Parse `mcp` section only when explicitly present in YAML.
+    // Absent or `enabled: false` → `mcp` field is `undefined` on ProxyConfig,
+    // which signals "disabled" everywhere without allocating a dead config object.
+    ...(yaml.mcp
+      ? {
+          mcp: {
+            enabled: yaml.mcp.enabled ?? false,
+            apiKey: String(yaml.mcp.apiKey ?? ""),
+            spaceId: String(yaml.mcp.spaceId ?? ""),
+            teamId: String(yaml.mcp.teamId ?? ""),
+            agentId: String(yaml.mcp.agentId ?? ""),
+            userId: String(yaml.mcp.userId ?? ""),
+          },
+        }
+      : {}),
   };
 }
 

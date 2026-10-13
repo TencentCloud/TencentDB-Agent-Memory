@@ -1003,3 +1003,40 @@ pipeline:
     opencode: false
     pi: false
     claude-code: false
+
+# ── MCP 端点（skill 只读工具，供 MCP 客户端接入）────────────────────────────────────────
+# 为 Agent 客户端提供标准 MCP (Model Context Protocol) 端点，暴露 skill 检索与读取能力。
+# 协议：无状态 Streamable HTTP (MCP 2026-07-28 规范)，每条 JSON-RPC 消息独立 POST，
+# server 不维护跨请求状态，不铸 session ID。
+#
+# 认证复用 auth.verifyUserKey 用户体系（与主 handler 对称）：
+#   Authorization: Bearer <api-key>  →  verifyUserKey(apiKey, spaceId)
+#   未带 header 时 fallback 到 mcp.apiKey（服务端配置的统一 service account key）
+#
+# 调用身份解析（优先级：客户端 header > 服务端静态配置）：
+#   客户端 header  : X-Team-Id / X-Agent-Id / X-User-Id（通过 claude mcp add --header 配置）
+#   服务端兜底     : mcp.teamId / mcp.agentId / mcp.userId
+#
+# 工具集（只读）：skill_search / skill_get / skill_read_file
+#
+# 典型接入命令（两种模式二选一）：
+#
+#   A. 客户端携带自己的 API Key（推荐，多租户）：
+#      claude mcp add --transport http tdai-skills http://<proxy>/mcp \
+#        --header "Authorization: Bearer <api-key>" \
+#        --header "X-Space-Id: <spaceId>" \
+#        --header "X-Team-Id: <team-id>"
+#
+#   B. 内网 / 统一 service account（服务端配 apiKey + spaceId，客户端无需带 Authorization）：
+#      claude mcp add --transport http tdai-skills http://<proxy>/mcp \
+#        --header "X-Team-Id: <team-id>" \
+#        --header "X-Agent-Id: <agent-id>"
+mcp:
+  enabled: false           # 默认关闭。true = 注册 /mcp 路由；false = /mcp 路由不存在（零开销）
+  apiKey: ""               # 服务端兜底 user_key（客户端未带 Authorization header 时使用）
+                           # 空 = 无兜底（auth.enabled:true 时未带 key 的请求被拒绝）
+  spaceId: ""              # verifyUserKey 所需的 serviceId（对应 x-tdai-service-id）
+                           # 可被客户端 X-Space-Id header 覆盖
+  teamId: ""               # 服务端身份兜底（客户端未带 X-Team-Id 时生效）；team_id 两者均无时报错
+  agentId: ""              # 服务端身份兜底（客户端未带 X-Agent-Id 时生效）
+  userId: ""               # 可选，仅 audit 用（客户端未带 X-User-Id 时兜底）

@@ -209,10 +209,65 @@ Codex appears only as an agent-name routing boundary on an already-running proxy
 | `POST` | `/*` | OpenAI-compatible chat endpoint (catch-all) |
 | `ALL`  | `/skill-bridge/**` | reverse-proxy for MemoryCore skill HTTP tools |
 | `ALL`  | `/memory-bridge/**` | reverse-proxy for MemoryCore memory HTTP tools |
+| `POST` | `/mcp` | MCP Streamable HTTP endpoint (skill tools; requires `mcp.enabled: true`) |
 | `POST` | `/v3/instance/proxy-destroy` | ops endpoint: clear COS cache on instance destroy |
 | `GET/PUT/DELETE` | `/v3/admin/rate-limits` | query / modify per-instance × model TPM/QPM |
 | `GET`  | `/health` | runtime health check (includes `storage.effective`) |
 | `GET`  | `/whoami` | API Key → keyId (plain text, handy with curl) |
+
+## MCP Skill Server
+
+MemoryProxy exposes a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) Streamable HTTP endpoint at `/mcp` that lets Claude Code, CodeBuddy, and other MCP-compatible clients call skill tools directly — no curl scripting, no credential juggling.
+
+### Capabilities
+
+| Tool | Description |
+| --- | --- |
+| `skill_search` | Semantic search over skills. `query` (required), `top_k` (1–50, default 10). |
+| `skill_get` | Fetch skill metadata + content. `skill_name` (preferred) or `skill_id`. |
+| `skill_read_file` | Read a file inside a skill. `skill_id`, `path`, optional `version`. |
+
+All tools are annotated `readOnlyHint: true` / `openWorldHint: false`.
+
+### Configuration
+
+Enable in `config.yaml`:
+
+```yaml
+mcp:
+  enabled: true
+  spaceId: "your-space-id"     # serviceId for verifyUserKey; can be overridden per-client via X-Space-Id
+  teamId: "your-team-id"       # server-side identity fallback; client header X-Team-Id takes priority
+  agentId: ""                  # optional; overridden by X-Agent-Id
+  userId: ""                   # optional; overridden by X-User-Id
+  apiKey: ""                   # fallback API key when client sends no Authorization header
+```
+
+If `auth.enabled: true` and `mcp.apiKey` is empty, every client **must** supply `Authorization: Bearer <key>`.
+
+### Connecting
+
+**Option A — client carries its own API Key (recommended):**
+
+```bash
+claude mcp add --transport http tdai-skills http://<proxy>:8096/mcp \
+  --header "Authorization: Bearer <api-key>" \
+  --header "X-Space-Id: <spaceId>"
+```
+
+**Option B — server-side API Key (intranet / service account):**
+
+```bash
+claude mcp add --transport http tdai-skills http://<proxy>:8096/mcp \
+  --header "X-Team-Id: <team>" \
+  --header "X-Agent-Id: <agent>"
+```
+
+### Protocol notes
+
+- Implements MCP 2026-07-28 Streamable HTTP (stateless): no `Mcp-Session-Id` is ever minted.
+- `GET` / `DELETE` → `405 Method Not Allowed`.
+- Rate limiting uses the same QPM bucket as other endpoints (keyed on `spaceId`).
 
 ## Configuration
 

@@ -193,10 +193,65 @@ Anthropic Messages 客户端：
 | `POST` | `/*` | OpenAI 兼容聊天接口（catch-all） |
 | `ALL`  | `/skill-bridge/**` | 反向代理 MemoryCore skill HTTP 工具 |
 | `ALL`  | `/memory-bridge/**` | 反向代理 MemoryCore memory HTTP 工具 |
+| `POST` | `/mcp` | MCP Streamable HTTP 端点（skill 工具；需 `mcp.enabled: true`） |
 | `POST` | `/v3/instance/proxy-destroy` | 运维口：实例销毁时清 COS 缓存 |
 | `GET/PUT/DELETE` | `/v3/admin/rate-limits` | 查询 / 修改实例 × 模型 TPM/QPM |
 | `GET`  | `/health` | 运行时健康检查（含 `storage.effective`） |
 | `GET`  | `/whoami` | API Key → keyId（纯文本，便于 curl） |
+
+## MCP Skill Server
+
+MemoryProxy 在 `/mcp` 暴露 [Model Context Protocol](https://modelcontextprotocol.io/)（MCP）Streamable HTTP 端点，让 Claude Code、CodeBuddy 及其他支持 MCP 的客户端直接调用 skill 工具——无需 curl 脚本，无需在 prompt 里暴露凭证。
+
+### 工具列表
+
+| 工具 | 说明 |
+| --- | --- |
+| `skill_search` | 语义检索 skill。`query`（必填），`top_k`（1–50，默认 10）。 |
+| `skill_get` | 获取 skill 元数据与内容。`skill_name`（优先）或 `skill_id`。 |
+| `skill_read_file` | 读取 skill 内指定文件。`skill_id`、`path`，可选 `version`。 |
+
+所有工具均标注 `readOnlyHint: true` / `openWorldHint: false`。
+
+### 配置
+
+在 `config.yaml` 中启用：
+
+```yaml
+mcp:
+  enabled: true
+  spaceId: "your-space-id"     # verifyUserKey 的 serviceId；客户端可用 X-Space-Id 覆盖
+  teamId: "your-team-id"       # 服务端身份兜底；客户端 X-Team-Id header 优先
+  agentId: ""                  # 可选；被 X-Agent-Id 覆盖
+  userId: ""                   # 可选；被 X-User-Id 覆盖
+  apiKey: ""                   # 客户端未带 Authorization header 时的兜底 API Key
+```
+
+若 `auth.enabled: true` 且 `mcp.apiKey` 为空，每个客户端**必须**携带 `Authorization: Bearer <key>`。
+
+### 接入方式
+
+**方式 A — 客户端携带自己的 API Key（推荐）：**
+
+```bash
+claude mcp add --transport http tdai-skills http://<proxy>:8096/mcp \
+  --header "Authorization: Bearer <api-key>" \
+  --header "X-Space-Id: <spaceId>"
+```
+
+**方式 B — 服务端统一 API Key（内网 / 服务账号）：**
+
+```bash
+claude mcp add --transport http tdai-skills http://<proxy>:8096/mcp \
+  --header "X-Team-Id: <team>" \
+  --header "X-Agent-Id: <agent>"
+```
+
+### 协议说明
+
+- 实现 MCP 2026-07-28 Streamable HTTP（无状态）：服务端不生成 `Mcp-Session-Id`。
+- `GET` / `DELETE` → `405 Method Not Allowed`。
+- 限流复用既有 QPM 桶（以 `spaceId` 为维度）。
 
 ## 配置说明
 
