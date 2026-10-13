@@ -26,12 +26,20 @@ export function parseL15Response(raw: string): TaskJudgment | null {
   }
 
   return {
-    taskCompleted: Boolean(parsed.taskCompleted),
-    isContinuation: Boolean(parsed.isContinuation),
-    isLongTask: Boolean(parsed.isLongTask),
+    taskCompleted: toBool(parsed.taskCompleted),
+    isContinuation: toBool(parsed.isContinuation),
+    isLongTask: toBool(parsed.isLongTask),
     continuationMmdFile:
       typeof parsed.continuationMmdFile === "string" ? parsed.continuationMmdFile : undefined,
     newTaskLabel:
       typeof parsed.newTaskLabel === "string" ? parsed.newTaskLabel : undefined,
   };
+}
+
+/** Match server-mode coercion when the model returns quoted boolean values. */
+function toBool(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.toLowerCase() !== "false" && value !== "0" && value !== "";
+  }
+  return Boolean(value);
 }
