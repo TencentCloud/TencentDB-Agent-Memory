@@ -197,7 +197,9 @@ export class LocalStorageBackend implements IStorageBackend {
 
     const allEntries: ListEntry[] = [];
     if (recursive) {
-      await this.collectFiles(dirPath, dirKey, prefix, allEntries, 10_000);
+      // Pagination must address the complete matching set, including keys
+      // beyond the former fixed collection limit.
+      await this.collectFiles(dirPath, dirKey, prefix, allEntries, Number.MAX_SAFE_INTEGER);
     } else {
       await this.collectFolded(dirPath, dirKey, namePrefix, allEntries);
     }
