@@ -22,6 +22,7 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
+import { timestampsForWrite, uniqueSortedTimestamps } from "./l1-timestamps.js";
 
 // ============================
 // Types
@@ -109,6 +110,12 @@ export interface ExtractedMemory {
   metadata: EpisodicMetadata | Record<string, never>;
   /** Scene name this memory was extracted in */
   scene_name: string;
+  /**
+   * ISO timestamps of the source L0 messages (`source_message_ids`).
+   * Empty when none of the source IDs could be resolved. Distinct from
+   * event time in `metadata` and from `createdAt`/`updatedAt`.
+   */
+  timestamps?: string[];
 }
 
 export type DedupAction = "store" | "update" | "merge" | "skip";
@@ -132,7 +139,10 @@ export interface DedupDecision {
   merged_type?: MemoryType;
   /** Priority after merge (for update/merge) */
   merged_priority?: number;
-  /** Union of all related timestamps (for update/merge) */
+  /**
+   * Union of new-memory source timestamps and selected candidate timestamps.
+   * Filled in code after conflict detection — not taken from the model.
+   */
   merged_timestamps?: string[];
 }
 
@@ -150,12 +160,52 @@ export function generateMemoryId(): string {
 }
 
 /**
+ * Merge/update may delete existing records. Keep that action only when the
+ * new memory has source timestamps AND at least one non-blank target. Otherwise
+ * store the original extracted memory (no merged_content, no deletes).
+ *
+ * `merged_timestamps` is not enough to keep merge/update: that field can be
+ * model-invented or copied from old records. This guard looks at the new
+ * memory's own source timestamps, matching `applyDedupProvenance`.
+ *
+ * Blank target ids are stripped. Hallucinated ids that look non-blank cannot
+ * be detected here — the writer has no candidate pool. `applyDedupProvenance`
+ * is the check for "every listed target is in this batch's pool". This is
+ * only a last-line guard for writeMemory called with a raw decision.
+ */
+export function normalizeDedupDecisionForWrite(
+  decision: DedupDecision,
+  memory: ExtractedMemory,
+): DedupDecision {
+  if (decision.action !== "merge" && decision.action !== "update") {
+    return decision;
+  }
+
+  const listedTargets = decision.target_ids.filter((id) => id.trim() !== "");
+  if (listedTargets.length === 0) {
+    return { record_id: decision.record_id, action: "store", target_ids: [] };
+  }
+
+  const sourceTimestamps = uniqueSortedTimestamps(memory.timestamps ?? []);
+  if (sourceTimestamps.length === 0) {
+    return { record_id: decision.record_id, action: "store", target_ids: [] };
+  }
+
+  return listedTargets.length === decision.target_ids.length
+    ? decision
+    : { ...decision, target_ids: listedTargets };
+}
+
+/**
  * Write a memory record according to the dedup decision.
  *
  * - store: append new record
  * - update: remove target records + append updated record
  * - merge: remove target records + append merged record
  * - skip: do nothing
+ *
+ * Merge/update without source timestamps or without targets is coerced to store
+ * so existing records are not deleted. This does not re-check the candidate pool.
  *
  * v3: supports multi-target removal for update/merge.
  * v3.1: optional VectorStore + EmbeddingService for dual-write (JSONL + vector).
@@ -179,7 +229,15 @@ export async function writeMemory(params: {
   /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
   storage?: StorageAdapter;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  const { memory, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  const incomingDecision = params.decision;
+  const decision = normalizeDedupDecisionForWrite(incomingDecision, memory);
+
+  if (decision.action !== incomingDecision.action) {
+    logger?.warn?.(
+      `${TAG} Falling back to store for ${incomingDecision.record_id} (${incomingDecision.action} → store)`,
+    );
+  }
 
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
@@ -209,14 +267,19 @@ export async function writeMemory(params: {
     finalContent = decision.merged_content ?? memory.content;
     finalType = decision.merged_type ?? memory.type;
     finalPriority = decision.merged_priority ?? memory.priority;
-    finalTimestamps = decision.merged_timestamps ?? [now];
   } else {
     // store
     finalContent = memory.content;
     finalType = memory.type;
     finalPriority = memory.priority;
-    finalTimestamps = [now];
   }
+
+  finalTimestamps = timestampsForWrite({
+    action: decision.action,
+    memoryTimestamps: memory.timestamps,
+    mergedTimestamps: decision.merged_timestamps,
+    nowIso: now,
+  });
 
   const record: MemoryRecord = {
     id: decision.record_id || generateMemoryId(),
