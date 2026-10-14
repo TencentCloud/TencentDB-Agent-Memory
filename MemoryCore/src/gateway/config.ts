@@ -688,6 +688,7 @@ export function loadGatewayConfig(overrides?: GatewayConfigOverrides): GatewayCo
       model: llm.model,
       maxTokens: llm.maxTokens ?? 4096,
       timeoutMs: llm.timeoutMs ?? 120_000,
+      stream: llm.stream ?? false,
       provider: llm.provider,
       proxy: {
         useMemorySystemUserKey: llm.proxy?.useMemorySystemUserKey ?? true,
