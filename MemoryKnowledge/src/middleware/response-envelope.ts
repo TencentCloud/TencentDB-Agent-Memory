@@ -44,7 +44,9 @@ export function accessLog(): MiddlewareHandler {
       try {
         const raw = await c.req.text();
         reqBody = raw ? JSON.parse(raw) : undefined;
-        c.req.bodyCache.text = Promise.resolve(raw);
+        // Hono's Body.text is typed `string`, but bodyCache holds Promises at
+        // runtime (c.req.text()/json() call .then() on the cached value).
+        c.req.bodyCache.text = Promise.resolve(raw) as unknown as string;
         if (reqBody) c.req.bodyCache.json = Promise.resolve(reqBody);
       } catch {
         // 非 JSON body，忽略
