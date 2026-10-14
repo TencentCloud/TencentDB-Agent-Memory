@@ -1440,10 +1440,14 @@ export class VectorStore implements IMemoryStore {
   /**
    * Delete a single record (metadata + vector).
    *
-   * **Fault-tolerant**: logs a warning on failure, never throws.
+   * **Fault-tolerant** by default; callers that must distinguish a store
+   * failure from a missing record can set `opts.throwOnError`.
    */
-  deleteL1(recordId: string, filter?: IsolationFilter): boolean {
-    if (this.degraded) return false;
+  deleteL1(recordId: string, filter?: IsolationFilter, opts?: { throwOnError?: boolean }): boolean {
+    if (this.degraded) {
+      if (opts?.throwOnError) throw new Error("deleteL1: store is degraded");
+      return false;
+    }
     try {
       if (filter) {
         const meta = this.stmtGetMeta.get(recordId) as { user_id?: string; agent_id?: string; session_id?: string; session_key?: string } | undefined;
@@ -1466,6 +1470,7 @@ export class VectorStore implements IMemoryStore {
         throw err;
       }
     } catch (err) {
+      if (opts?.throwOnError) throw err instanceof Error ? err : new Error(String(err));
       this.logger?.warn(
         `${TAG} delete failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
