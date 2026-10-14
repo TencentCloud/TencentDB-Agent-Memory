@@ -32,7 +32,12 @@ function getJieba(): JiebaInstance | null {
   if (_jieba !== undefined) return _jieba;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { Jieba } = require("@node-rs/jieba");
+    // Keep resolution inside the official package, including native/WASI paths.
+    // The licensed adapter corrects the upstream 2.0.3 loader's stale gate;
+    // installed dependencies and operator enforcement flags remain unchanged.
+    const packageRequire = createRequire(require.resolve("@node-rs/jieba/package.json"));
+    const loadJieba = require("#jieba-loader");
+    const { Jieba } = loadJieba(packageRequire);
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { dict } = require("@node-rs/jieba/dict");
     _jieba = Jieba.withDict(dict) as JiebaInstance;
