@@ -19,12 +19,22 @@ import type { ExtractedMemory, MemoryRecord, DedupDecision, MemoryType } from ".
 import { formatBatchConflictPrompt, getConflictDetectionSystemPrompt } from "../prompts/l1-dedup.js";
 import type { CandidateMatch } from "../prompts/l1-dedup.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
-import { sanitizeJsonForParse } from "../../utils/sanitize.js";
+import {
+  sanitizeJsonForParse,
+  findClosedThinkSpans,
+  indexOfOutsideThinkSpan,
+  lastIndexOfOutsideThinkSpan,
+} from "../../utils/sanitize.js";
 import type { IMemoryStore, IsolationFilter, L1SearchResult } from "../store/types.js";
 import { hasClientEmbedding, type EmbeddingService } from "../store/embedding.js";
 import type { LLMRunner, Logger, TraceContext } from "../types.js";
 import { buildTraceParams } from "../types.js";
 import { recallL1Candidates } from "../tools/l1-candidate-recall.js";
+import {
+  L1_DEDUP_JSON_SCHEMA,
+  L1_DEDUP_SCHEMA_NAME,
+  validateL1DedupOutput,
+} from "../schema/l1-extraction.js";
 
 const TAG = "[memory-tdai][l1-dedup]";
 
@@ -90,7 +100,7 @@ export async function batchDedup(params: {
     }));
 
   // Determine what recall capabilities are available
-  const hasVectorData = vectorStore && (await vectorStore.countL1()) > 0;
+  const hasVectorData = !!vectorStore && (await vectorStore.countL1()) > 0;
   const hasFts = vectorStore?.isFtsAvailable() ?? false;
   const nativeHybrid = !!(
     vectorStore &&
@@ -159,12 +169,20 @@ async function runLlmJudgment(
     const traceParams = buildTraceParams("memory.l1-dedup", traceContext);
 
     if (llmRunner) {
-      // Use the host-neutral LLMRunner interface
+      // Use the host-neutral LLMRunner interface. structuredOutput is
+      // best-effort (issue #1210): constrains the decision array when the
+      // runner supports it; ignored otherwise. The dedup algorithm itself
+      // (recall, actions, fallback semantics) is unchanged.
       result = await llmRunner.run({
         prompt: userPrompt,
         systemPrompt,
         taskId: "l1-conflict-detection",
         timeoutMs: 180_000,
+        structuredOutput: {
+          schema: L1_DEDUP_JSON_SCHEMA,
+          schemaName: L1_DEDUP_SCHEMA_NAME,
+          validate: validateL1DedupOutput,
+        },
         ...traceParams,
       });
     } else {
@@ -307,52 +325,38 @@ const VALID_TYPES: MemoryType[] = ["persona", "episodic", "instruction", "work_f
  *
  * Expected format: [{record_id, action, target_ids, merged_content, merged_type, merged_priority, merged_timestamps}]
  */
-function parseBatchResult(
+/** Exported for unit tests (parser layers are tested directly). */
+export function parseBatchResult(
   raw: string,
   memories: Array<ExtractedMemory & { record_id: string }>,
   logger?: Logger,
 ): DedupDecision[] {
   try {
-    // ── Strip inline reasoning wrappers (A₂-style thinking models) ───────
-    // Mirror of l1-extractor.ts@ccaa5dc3: A₂ models (minimax-m3 / GLM-4-
-    // thinking / qwq-32b / some vLLM DeepSeek-R1) inline reasoning as
-    // `<think>…</think>` inside `content`. Their think prose here frequently
-    // contains stray `[` (candidate id refs like `[rec_a1]`, JSON preview
-    // sketches, priority tags), which fatally derails the greedy
-    // `/\[[\s\S]*\]/` array-match below by anchoring it inside the think
-    // section. So we peel `<think>` blocks BEFORE the array-match fires.
-    //
-    // Same safeguards as l1-extractor:
-    //   • non-greedy `*?` + explicit `</think>` requirement — truncated
-    //     think tags (max_tokens cap) fall through as-is instead of eating
-    //     the rest of the response, and the fallbackStoreAll safety net in
-    //     the caller then quietly stores everything (dedup no-op).
-    //   • `g` flag — multi-segment thinking is fully stripped.
-    //   • Preserve untouched `raw` for the [l1-dedup-debug] log path so
-    //     ops can still see original wire content when they need to debug
-    //     a novel A₂ variant.
-    //
-    // A₁ models (minimax-m2.7 / deepseek-v4-pro / o1 / o3 / Claude thinking
-    // API) put reasoning in a separate reasoning_content field, so `content`
-    // never has <think> here — the replace is a no-op (backward-compatible,
-    // per [[default-no-config-backward-compat]]).
-    const stripped = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+    // ── Reasoning-wrapper-aware payload location (review R4, mirrors
+    // parseExtractionResult): locate the decision array among text OUTSIDE
+    // closed <think> spans and slice the ORIGINAL raw text, so literal think
+    // tags inside merged_content survive verbatim and stray `[` in think
+    // prose cannot anchor the array match.
+    const spans = findClosedThinkSpans(raw);
+    const unclosedThinkIdx = indexOfOutsideThinkSpan("<think>", raw, spans);
+    const arrayStart = indexOfOutsideThinkSpan("[", raw, spans);
 
-    // Strip markdown code block wrappers
-    let cleaned = stripped.trim();
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+    if (unclosedThinkIdx !== -1 && (arrayStart === -1 || unclosedThinkIdx < arrayStart)) {
+      logger?.warn?.(`${TAG} Unclosed <think> wrapper before decisions payload — unparsable`);
+      return fallbackStoreAll(memories);
     }
-
-    // Extract JSON array
-    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
+    if (arrayStart === -1) {
       logger?.warn?.(`${TAG} No JSON array found in conflict detection response`);
       return fallbackStoreAll(memories);
     }
+    const arrayEnd = lastIndexOfOutsideThinkSpan("]", raw, spans);
+    if (arrayEnd <= arrayStart) {
+      return fallbackStoreAll(memories);
+    }
+    const payload = raw.slice(arrayStart, arrayEnd + 1);
 
     // Sanitize control characters inside JSON string literals that LLM may produce
-    const sanitized = sanitizeJsonForParse(arrayMatch[0]);
+    const sanitized = sanitizeJsonForParse(payload);
     const parsed = JSON.parse(sanitized) as unknown[];
 
     if (!Array.isArray(parsed)) {
