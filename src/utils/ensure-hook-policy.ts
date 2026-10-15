@@ -8,6 +8,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { optionalConfigFileExists, resolveHomeDir } from "./config-paths.js";
 import { getEnv } from "./env.js";
 import JSON5 from "json5";
 
@@ -139,23 +140,22 @@ function isGatewayStart(): boolean {
   return !skip.includes(cmd);
 }
 
-function resolveConfigPath(): string | null {
+export function resolveOpenClawConfigPath(): string | null {
   // 1. OPENCLAW_CONFIG_PATH env override (same as core uses)
   const envPath = getEnv("OPENCLAW_CONFIG_PATH")?.trim();
-  if (envPath && fs.existsSync(envPath)) return envPath;
+  if (envPath && optionalConfigFileExists(envPath)) return envPath;
 
   // 2. OPENCLAW_STATE_DIR override
   const stateDir = getEnv("OPENCLAW_STATE_DIR")?.trim();
   if (stateDir) {
     const p = path.join(stateDir, "openclaw.json");
-    if (fs.existsSync(p)) return p;
+    if (optionalConfigFileExists(p)) return p;
   }
 
   // 3. Standard location: ~/.openclaw/openclaw.json
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "";
-  if (!home) return null;
+  const home = resolveHomeDir();
   const p = path.join(home, ".openclaw", "openclaw.json");
-  return fs.existsSync(p) ? p : null;
+  return optionalConfigFileExists(p) ? p : null;
 }
 
 function hasPolicyAlready(root: unknown): boolean {
@@ -213,7 +213,7 @@ export function ensurePluginHookPolicy(params: {
 function manualPatch(logger: Logger): void {
   const TAG = "[memory-tdai] [hook-policy]";
 
-  const configPath = resolveConfigPath();
+  const configPath = resolveOpenClawConfigPath();
   if (!configPath) {
     logger.warn(`${TAG} Cannot locate openclaw.json — please add hooks.allowConversationAccess manually`);
     return;
