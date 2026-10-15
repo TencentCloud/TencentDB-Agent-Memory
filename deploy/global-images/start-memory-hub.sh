@@ -34,29 +34,45 @@ ensure_knowledge_service_key
 # 默认按下面顺序探测宿主机对外可达地址：
 #   1) Linux 上 `hostname -I` 首个非 127 的 IPv4（LAN IP）
 #   2) macOS 上常见网卡（en0 / en1）的 IPv4
-#   3) 前两步都失败 → localhost（仅同机使用，跨机需要用户显式设 MEMORY_HUB_PROXY_PUBLIC_URL）
+#   3) Windows（Git Bash 等）上默认路由所在网卡的 IPv4
+#   4) 以上都失败 → localhost（仅同机使用，跨机需要用户显式设 MEMORY_HUB_PROXY_PUBLIC_URL）
 #
 # 显式设了 MEMORY_HUB_PROXY_PUBLIC_URL 环境变量则完全按你给的值来。
 # 显式设为空字符串则 Panel 前端回落到 gateway_endpoint（老行为）。
 # Panel 后端 → Kernel 的转发地址始终走 REMOTE_INSTANCE_URL，不受此变量影响。
+# 每一步的结果都要是合法 IPv4 才采纳：探测命令出错时可能把帮助文本打到 stdout，
+# 直接拼进 URL 会让 memory-hub 启动即崩。
+is_ipv4() {
+  [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]
+}
+
 detect_host_ip() {
   local ip=""
   # Linux
   if command -v hostname >/dev/null 2>&1; then
     ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
+    is_ipv4 "$ip" && { echo "$ip"; return; }
   fi
-  # macOS
-  if command -v ipconfig >/dev/null 2>&1; then
+  # macOS（限定 Darwin：Windows 也有同名的 ipconfig.exe，不认 getifaddr，会把帮助文本打到 stdout）
+  if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]] && command -v ipconfig >/dev/null 2>&1; then
     for iface in en0 en1 en2; do
       ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
-      [[ -n "$ip" ]] && { echo "$ip"; return; }
+      is_ipv4 "$ip" && { echo "$ip"; return; }
     done
+  fi
+  # Windows：`route print -4` 里默认路由行（0.0.0.0 0.0.0.0 <网关> <接口 IP> <跃点数>）
+  # 取跃点数最小的接口 IP。只看数字列，不受系统语言影响；没有默认网关的
+  # vEthernet（WSL / Hyper-V）等虚拟网卡也自然被排除。
+  if is_windows_shell && command -v route >/dev/null 2>&1; then
+    ip=$(route print -4 2>/dev/null | tr -d '\r' \
+      | awk '$1 == "0.0.0.0" && $2 == "0.0.0.0" && $4 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print $5, $4 }' \
+      | sort -n | head -n1 | awk '{ print $2 }')
+    is_ipv4 "$ip" && { echo "$ip"; return; }
   fi
   # 兜底：ip route（Linux 无 hostname -I 时）
   if command -v ip >/dev/null 2>&1; then
     ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
+    is_ipv4 "$ip" && { echo "$ip"; return; }
   fi
   echo "localhost"
 }
@@ -89,7 +105,7 @@ rm_container_if_exists "$CONTAINER"
 # 内部 knowledge 通过 upstream memory 调 LLM 走 custom 模式，直接指向 MEMORY_LLM_*
 # LLM_MODE=custom → 不走 memory 的 LLM proxy，而是 knowledge 直连用户提供的端点
 info "启动 memory-hub (image=$MEMORY_HUB_IMAGE, panel=$PANEL_PORT knowledge=$KNOWLEDGE_PORT)"
-$DOCKER run -d --name "$CONTAINER" \
+no_pathconv $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias memory-hub \
   --add-host=host.docker.internal:host-gateway \
