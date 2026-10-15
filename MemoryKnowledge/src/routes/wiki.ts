@@ -17,6 +17,7 @@
  */
 
 import { Hono } from "hono";
+import { createOkfImportRoutes } from "./okf-import.js";
 
 import type { WikiService } from "../store/index.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
@@ -31,6 +32,7 @@ import {
 } from "../api-helpers.js";
 
 export interface WikiRouteDeps {
+  serviceAuth?: { serviceKey: string };
   wikiService: WikiService;
   wikiMgr: WikiSourceManager;
   /** Public base URL for service_url; should already include the API prefix (e.g. http://host:8421/v3). */
@@ -49,6 +51,7 @@ function maybeWriteError(outcome: unknown): Response | null {
 
 export function createWikiRoutes(deps: WikiRouteDeps): Hono {
   const app = new Hono();
+  app.route("/okf", createOkfImportRoutes(deps.wikiService, deps.wikiMgr, deps.serviceAuth?.serviceKey ?? ""));
   const { wikiService, wikiMgr, publicBaseUrl } = deps;
 
   // ═══════════════════ Asset Layer ═══════════════════
@@ -89,6 +92,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
 
     const result = wikiService.ingest(serviceId, row.team_id, wikiId, requesterUserId, { onBusy });
     if (result.kind === "not_found") return c.json(wrapError(404, "wiki not found"), 404);
+    if (result.kind === "recovery_required") return c.json(wrapError(409, "Wiki recovery required before ingestion"), 409);
     if (result.kind === "busy") {
       // 并发拒绝：干净最小的 409 响应体（调用方用 code 判断，不 parse message）。
       return c.json({ code: 409, message: "busy", data: { status: result.status, step: result.step } }, 409);
