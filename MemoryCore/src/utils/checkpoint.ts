@@ -139,6 +139,16 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
   total_memories_extracted: 0,
 };
 
+/**
+ * Fresh checkpoint factory: shallow-expands DEFAULT_CHECKPOINT with freshly
+ * allocated nested runner_states/pipeline_states objects (no shared references),
+ * so the readRaw hot path avoids structuredClone's per-call deep-clone overhead.
+ * Result shape, key order and values are identical to a deep clone.
+ */
+function freshCheckpoint(): Checkpoint {
+  return { ...DEFAULT_CHECKPOINT, runner_states: {}, pipeline_states: {} };
+}
+
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
@@ -286,14 +296,14 @@ export class CheckpointManager {
         const fs = await import("node:fs/promises");
         raw = await fs.default.readFile(this.filePath, "utf-8");
       }
-      if (!raw) return structuredClone(DEFAULT_CHECKPOINT);
+      if (!raw) return freshCheckpoint();
 
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       // Merge with defaults for backward compat (old checkpoints lack new fields).
       // structuredClone avoids shallow-copy pitfall: without it, the nested
       // runner_states/pipeline_states objects in DEFAULT_CHECKPOINT would be
       // shared across all callers and mutated in place — corrupting the default.
-      const cp = { ...structuredClone(DEFAULT_CHECKPOINT), ...parsed } as Checkpoint;
+      const cp = { ...freshCheckpoint(), ...parsed } as Checkpoint;
 
       // Migrate from old session_states format (pre-split)
       const oldStates = parsed.session_states as Record<string, Record<string, unknown>> | undefined;
@@ -319,26 +329,32 @@ export class CheckpointManager {
         }
       } else {
         // Ensure per-session states have all fields with defaults
-        if (cp.runner_states) {
-          for (const [key, state] of Object.entries(cp.runner_states)) {
-            cp.runner_states[key] = { ...DEFAULT_RUNNER_STATE, ...state };
+        // for...in reuses each map's own string keys and avoids the per-session
+        // [key, state] pair arrays + outer array that Object.entries allocates
+        // on every read (~700KB transient heap at 5000 sessions). Hoisting the
+        // map refs also removes repeated cp.* property lookups.
+        const runnerStates = cp.runner_states;
+        if (runnerStates) {
+          for (const key in runnerStates) {
+            runnerStates[key] = { ...DEFAULT_RUNNER_STATE, ...runnerStates[key] };
           }
         }
-        if (cp.pipeline_states) {
-          for (const [key, state] of Object.entries(cp.pipeline_states)) {
-            cp.pipeline_states[key] = { ...DEFAULT_PIPELINE_STATE, ...state };
+        const pipelineStates = cp.pipeline_states;
+        if (pipelineStates) {
+          for (const key in pipelineStates) {
+            pipelineStates[key] = { ...DEFAULT_PIPELINE_STATE, ...pipelineStates[key] };
           }
         }
       }
       return cp;
     } catch {
-      return structuredClone(DEFAULT_CHECKPOINT);
+      return freshCheckpoint();
     }
   }
 
   /** Atomic write: write to tmp file, then rename into place (fs mode). Storage mode: direct overwrite. */
   private async writeRaw(checkpoint: Checkpoint): Promise<void> {
-    const content = JSON.stringify(checkpoint, null, 2);
+    const content = JSON.stringify(checkpoint);
     if (this.storage) {
       await this.storage.writeFile(this.filePath, content);
     } else {
