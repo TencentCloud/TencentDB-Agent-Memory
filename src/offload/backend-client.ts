@@ -13,6 +13,15 @@ import { traceOffloadModelIo } from "./opik-tracer.js";
 import * as https from "node:https";
 import * as http from "node:http";
 
+/**
+ * Escape hatch for backends fronted by a self-signed certificate.
+ *
+ * Read once at module load so the security posture cannot change mid-process.
+ * Off by default: see the SECURITY note in `post()` for why disabling
+ * certificate verification on an API-key-bearing request is dangerous.
+ */
+const INSECURE_TLS = process.env.MEMORY_TDAI_INSECURE_TLS === "1";
+
 // ─── Request / Response Types ────────────────────────────────────────────────
 
 export interface L1Request {
@@ -298,10 +307,6 @@ export class BackendClient {
     const transport = isHttps ? https : http;
 
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        req.destroy(new Error("timeout"));
-      }, timeoutMs);
-
       const req = transport.request(
         {
           hostname: parsed.hostname,
@@ -309,7 +314,13 @@ export class BackendClient {
           path: parsed.pathname + parsed.search,
           method: "POST",
           headers: reqHeaders,
-          ...(isHttps ? { rejectUnauthorized: false } : {}),
+          // SECURITY: this request carries `Authorization: Bearer <apiKey>`.
+          // Disabling certificate verification lets any MITM on the path present
+          // a self-signed cert, terminate the TLS session and read that key
+          // verbatim — so verification is now ON by default. Deployments using a
+          // self-signed backend cert must opt out explicitly via
+          // MEMORY_TDAI_INSECURE_TLS=1 (preferably supply a CA instead).
+          ...(isHttps ? { rejectUnauthorized: !INSECURE_TLS } : {}),
         },
         (res) => {
           let data = "";
@@ -340,6 +351,18 @@ export class BackendClient {
           });
         },
       );
+
+      // Must be armed *after* `req` exists. Previously the timer was created
+      // first and its callback closed over the not-yet-initialised `const req`.
+      // In the normal path that is harmless (the callback runs long after the
+      // declaration), but if transport.request() throws synchronously — bad
+      // hostname, malformed header — `req` stays in its temporal dead zone and
+      // the still-pending timer fires a ReferenceError from a bare timer
+      // callback, i.e. an uncaught exception that takes the process down rather
+      // than rejecting this promise.
+      const timer = setTimeout(() => {
+        req.destroy(new Error("timeout"));
+      }, timeoutMs);
 
       req.on("error", (err: Error) => {
         clearTimeout(timer);
