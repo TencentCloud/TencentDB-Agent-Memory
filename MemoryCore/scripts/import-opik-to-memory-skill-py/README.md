@@ -208,3 +208,58 @@ python3 scripts/import-opik-to-memory-skill-py/import_opik.py import \
 - 不做 SWE-bench 之类的评测数据过滤（选 project 时手工避开）
 - 抽取产出不查，稍后自己看 UI / `/v3/skill/list`
 - 单 session 内一轮失败会 warn 继续，不整体回滚（下次重跑同 session 内容一致，不会重复归档？—— 会重复；断点粒度是 session，session 内不细分。如果单轮失败很多，可以删掉这个 session 的断点条目重跑）
+
+
+## Error and progress log privacy
+
+The importer uses only Python's standard library; no new dependency or database
+migration is required for this change. Replace `import_opik.py` with the updated
+source and run the existing commands and configuration. Gateway authentication,
+request payloads, retries and returned success data retain their existing behavior.
+
+HTTP exceptions now show the status and a fixed failure message. Original reason
+and response body remain available through `HttpError.message` and `HttpError.body`
+for deliberate inspection; keep those attributes out of logs and shared reports.
+Application error exceptions omit backend response fields. Import and forced-archive
+warnings report only the exception class, without evaluating its string conversion.
+Progress output omits remote task IDs and arbitrary status values; counters and the
+archived/skipped outcome still identify progress.
+
+This fixes a concrete disclosure path: a backend error message, reason phrase,
+request ID, invalid application code or success task/status value could otherwise
+be copied into terminal or captured job logs. It is not a general-purpose secret
+redactor. Existing session/trace/project identifiers, explicit project listings,
+exported data files and operator configuration remain sensitive. Protect output
+files and logs. Existing logs are not rewritten or removed. This scoped change does
+not address redirects, response-size bounds, TLS/proxy policy or tenant authorization.
+
+Run focused regressions on Linux from the repository root:
+
+```sh
+python3 -m unittest discover -s MemoryCore/scripts/import-opik-to-memory-skill-py/tests -v
+```
+
+Four tests use temporary loopback HTTP servers, synthetic credentials and a hostile
+exception whose string conversion raises. The unchanged upstream importer fails
+all four cases (five failing assertions including subtests); the patched importer
+passes. They cover backend application failures, HTTP reason/body privacy, forced
+archive failures and success-path task/status logging. No external service, model
+or production memory is involved. These bounded checks are not an independent
+security audit or proof that every log or deployment is safe.
+
+### Numeric application acknowledgments
+
+Successful import and force-archive replies require a JSON-object envelope with
+numeric `code: 0`; numeric `0.0` remains valid. Boolean `false` is not a success
+code even though Python compares it equal to zero. Boolean/string/null/missing
+or nonzero codes are rejected before reporting imported or archived progress.
+This keeps a malformed HTTP200 reply from falsely acknowledging rejected work.
+The fixed diagnostic contains no response-controlled values.
+
+Four additional real loopback HTTP tests cover malformed codes, import/archive
+failure counters and integer/float-zero compatibility. Two fail on the preceding
+implementation; both success controls already pass. All eight importer tests pass
+on unprivileged Linux Python3.11 with external networking disabled/read-only root.
+No dependency, configuration or data migration is required. Custom Gateways must
+return the numeric v3 success contract. This does not validate every `data` field,
+add capture retries, or prove remote backend compatibility or an independent audit.
