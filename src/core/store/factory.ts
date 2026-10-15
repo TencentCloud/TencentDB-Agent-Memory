@@ -5,6 +5,7 @@
  * Supports:
  * - "sqlite" (default): local SQLite + sqlite-vec + FTS5
  * - "tcvdb": Tencent Cloud VectorDB (server-side embedding + hybridSearch)
+ * - "postgres": PostgreSQL + pgvector + pg_textsearch
  */
 
 import path from "node:path";
@@ -12,6 +13,7 @@ import type { MemoryTdaiConfig } from "../../config.js";
 import type { IMemoryStore, IEmbeddingService, StoreLogger } from "./types.js";
 import { VectorStore } from "./sqlite.js";
 import { TcvdbMemoryStore } from "./tcvdb.js";
+import { PgMemoryStore } from "./postgres.js";
 import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
 import type { EmbeddingService } from "./embedding.js";
 import { createBM25Encoder } from "./bm25-local.js";
@@ -83,6 +85,42 @@ export function createStoreBundle(
           tcvdbUrl: tcvdbCfg.url,
           tcvdbDatabase: database,
           tcvdbAlias: tcvdbCfg.alias || undefined,
+        },
+      };
+    }
+
+    case "postgres": {
+      const pgCfg = config.postgres;
+      let embeddingService: EmbeddingService | undefined;
+      if (config.embedding.enabled && config.embedding.provider !== "local" && config.embedding.apiKey) {
+        embeddingService = createEmbeddingService({
+          provider: config.embedding.provider,
+          baseUrl: config.embedding.baseUrl,
+          apiKey: config.embedding.apiKey,
+          model: config.embedding.model,
+          dimensions: config.embedding.dimensions,
+          sendDimensions: config.embedding.sendDimensions,
+          maxInputChars: config.embedding.maxInputChars,
+        }, logger);
+      }
+
+      const store = new PgMemoryStore(pgCfg, config.embedding.dimensions, logger);
+      logger?.debug?.(
+        `${TAG} Store created: backend=postgres, host=${pgCfg.host}, port=${pgCfg.port}, ` +
+        `database=${pgCfg.database}, schema=${pgCfg.schema}, dimensions=${config.embedding.dimensions}, ` +
+        `embedding=${embeddingService ? "enabled" : "disabled"}`,
+      );
+
+      return {
+        store,
+        embedding: embeddingService as unknown as IEmbeddingService,
+        bm25Encoder,
+        storeSnapshot: {
+          type: "postgres",
+          postgresHost: pgCfg.host,
+          postgresPort: pgCfg.port,
+          postgresDatabase: pgCfg.database,
+          postgresSchema: pgCfg.schema,
         },
       };
     }
