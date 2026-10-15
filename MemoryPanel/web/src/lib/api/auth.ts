@@ -14,7 +14,7 @@ import type { PublicUser } from './types';
 export const authVerifyApi = {
   /** 登录验活：Header 仅带实例 ID，user_key 只放 body（meta-api.openapi.yaml §auth/verify） */
   verify: (instanceId: string, userKey: string) =>
-    metaCall<{ valid: boolean; user?: PublicUser }>(
+    metaCall<{ valid: boolean; user?: PublicUser; key_id?: string }>(
       'auth/verify',
       { user_key: userKey },
       { 'X-Tdai-Service-Id': instanceId }

@@ -24,6 +24,8 @@ export interface PanelSession {
   instanceName?: string;
   /** 旧 user_key 会话的 API 密钥；IdP Session 使用空字符串占位，不会下发真实 user_key。 */
   userKey: string;
+  /** auth/verify 返回的当前 User Key 资源 ID；旧 Core 和 IdP 会话可能缺省。 */
+  keyId?: string;
   /** auth/verify 响应 data.user（可选，用于展示 + 作为 owner_user_id/creator_user_id 来源） */
   user?: PublicUser;
 }

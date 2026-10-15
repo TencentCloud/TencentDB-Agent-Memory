@@ -114,6 +114,7 @@ export async function resumeSession(): Promise<AuthState | null> {
       }
       // 优先用后端刚返回的最新 user；缺失时回退到缓存的 user。
       const user = res.user ?? session.user;
+      setPanelSession({ ...latest, user, keyId: res.key_id });
       const auth = toAuthState(user, session.instanceId, session.instanceName ?? '');
       writeAuthCache(auth);
       return auth;
@@ -258,7 +259,7 @@ export default function LoginGate({
     setSubmitting(true);
     setError(null);
     try {
-      const { valid, user } = await authVerifyApi.verify(instanceId, key);
+      const { valid, user, key_id } = await authVerifyApi.verify(instanceId, key);
       if (!valid) {
         setError(t('login.error.invalidKey'));
         setSubmitting(false);
@@ -270,7 +271,7 @@ export default function LoginGate({
         return;
       }
       const instance = instances.find((i) => i.instance_id === instanceId) ?? null;
-      setPanelSession({ authMethod: 'user_key', instanceId, instanceName: instance?.name, userKey: key, user });
+      setPanelSession({ authMethod: 'user_key', instanceId, instanceName: instance?.name, userKey: key, keyId: key_id, user });
       const auth = toAuthState(user, instanceId, instance?.name ?? '');
       writeAuthCache(auth);
       onLoggedIn(auth);

@@ -218,6 +218,14 @@ Then log out of the panel and log back in with this new key — you're now
 a `normal` business user, and you can manage assets (Agent / Task / Skill /
 Wiki / memory) **inside the Team the admin already added you to**.
 
+The sidebar **API Key** page manages account User Keys. A business user manages
+their own Keys; `system_admin` can select their own account or a `normal`
+account, including one with no Team. A new Key is shown in full only in its
+successful creation response; the list shows masked prefixes. The panel blocks
+revoking the Key used for the current login, and Core rejects revoking an
+account's last active Key. These are Memory User Keys, not model-provider or
+service-to-service credentials.
+
 > **Creating a Team in the panel is admin-only.** After logging in, a business user
 > **won't see the "New Team" entry** — this is the panel's permission design, not a
 > bug. When a business user needs a new Team, there are two ways: ① ask an admin to
