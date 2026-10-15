@@ -74,8 +74,16 @@ export async function batchDedup(params: {
   filter?: IsolationFilter;
   /** langfuse 上报身份四元组（team/user/agent/session），透传给 llmRunner。 */
   traceContext?: TraceContext;
+  /**
+   * Fail-closed opt-in (experimental): when true, a batch-dedup failure re-throws
+   * instead of silently defaulting to store-all — an unchecked store duplicates
+   * existing memories. Only enable this if your pipeline defers on extraction
+   * failure (does not advance the cursor); otherwise the failed batch would be
+   * silently dropped. See #1397/#1523.
+   */
+  dedupFailFast?: boolean;
 }): Promise<DedupDecision[]> {
-  const { memories, config, logger, model, promptMode = "chat", vectorStore, embeddingService, llmRunner, filter, traceContext } = params;
+  const { memories, config, logger, model, promptMode = "chat", vectorStore, embeddingService, llmRunner, filter, traceContext, dedupFailFast } = params;
   const topK = params.conflictRecallTopK ?? 5;
 
   if (memories.length === 0) {
@@ -131,7 +139,7 @@ export async function batchDedup(params: {
   }
 
   // Phase 2: Batch LLM judgment
-  return runLlmJudgment(matches, memories, config, logger, model, promptMode, llmRunner, traceContext);
+  return runLlmJudgment(matches, memories, config, logger, model, promptMode, llmRunner, traceContext, dedupFailFast);
 }
 
 /**
@@ -146,6 +154,7 @@ async function runLlmJudgment(
   promptMode: MemoryPromptMode,
   llmRunner?: LLMRunner,
   traceContext?: TraceContext,
+  dedupFailFast?: boolean,
 ): Promise<DedupDecision[]> {
   logger?.debug?.(`${TAG} Running batch conflict detection for ${memories.length} memories (promptMode=${promptMode})`);
 
@@ -188,8 +197,17 @@ async function runLlmJudgment(
     const decisions = parseBatchResult(result, memories, logger);
     return decisions;
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (dedupFailFast) {
+      // Fail-closed: a dedup failure must not bypass dedup (an unchecked store
+      // duplicates existing memories). Re-throw so the caller can defer/retry the
+      // batch. Note: do NOT log "defaulting all to store" here — that string is
+      // the operational kill-switch metric for this opt-in behavior.
+      logger?.warn?.(`${TAG} Batch conflict detection failed (fail-fast, batch deferred): ${msg}`);
+      throw err instanceof Error ? err : new Error(msg);
+    }
     logger?.warn?.(
-      `${TAG} Batch conflict detection failed, defaulting all to store: ${err instanceof Error ? err.message : String(err)}`,
+      `${TAG} Batch conflict detection failed, defaulting all to store: ${msg}`,
     );
     return memories.map((m) => ({
       record_id: m.record_id,
