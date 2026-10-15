@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
@@ -37,9 +38,6 @@ DEFAULT_PORT = 8420
 HEALTH_CHECK_INTERVAL = 0.5  # seconds between checks
 HEALTH_CHECK_MAX_WAIT = 30   # max seconds to wait for Gateway to start
 HEALTH_CHECK_RETRIES = 3     # retries for is_running check
-
-# Log file rotation parameters
-LOG_TAIL_BYTES_ON_CRASH = 2048  # bytes of stderr log to surface on startup crash
 
 # Startup single-flight state. The thread lock prevents multiple supervisor
 # instances in the same Python process from spawning the same Gateway
@@ -73,6 +71,22 @@ def _startup_singleflight(host: str, port: int) -> Iterator[None]:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
                 finally:
                     lock_file.close()
+
+
+def _open_private_log(path: str) -> IO[bytes]:
+    """Append only to a regular, single-link log owned by the current user."""
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise OSError("Private no-follow log creation is unavailable")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid():
+            raise OSError("Unsafe private log target")
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "ab", buffering=0)
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 class GatewaySupervisor:
@@ -217,7 +231,7 @@ class GatewaySupervisor:
                 )
                 return False
 
-            logger.info("Starting memory-tencentdb Gateway: %s", self._gateway_cmd)
+            logger.info("Starting configured memory-tencentdb Gateway")
             self._shutdown_requested = False
 
             try:
@@ -244,11 +258,11 @@ class GatewaySupervisor:
                 # blocking risk entirely.
                 log_dir = self._resolve_log_dir()
                 try:
-                    os.makedirs(log_dir, exist_ok=True)
+                    os.makedirs(log_dir, mode=0o700, exist_ok=True)
                 except OSError as e:
                     logger.warning(
-                        "memory-tencentdb Gateway: failed to create log dir %s (%s); "
-                        "falling back to DEVNULL", log_dir, e,
+                        "memory-tencentdb Gateway: log directory unavailable (%s); "
+                        "falling back to DEVNULL", type(e).__name__,
                     )
                     log_dir = None
 
@@ -256,11 +270,18 @@ class GatewaySupervisor:
                     stdout_path = os.path.join(log_dir, "gateway.stdout.log")
                     stderr_path = os.path.join(log_dir, "gateway.stderr.log")
                     # Append mode: preserve previous runs for postmortem.
-                    self._stdout_log = open(stdout_path, "ab", buffering=0)
-                    self._stderr_log = open(stderr_path, "ab", buffering=0)
-                    self._stderr_log_path = stderr_path
-                    stdout_target: object = self._stdout_log
-                    stderr_target: object = self._stderr_log
+                    try:
+                        self._stdout_log = _open_private_log(stdout_path)
+                        self._stderr_log = _open_private_log(stderr_path)
+                        self._stderr_log_path = stderr_path
+                        stdout_target: object = self._stdout_log
+                        stderr_target: object = self._stderr_log
+                    except OSError as e:
+                        self._close_log_handles()
+                        self._stderr_log_path = None
+                        logger.warning("memory-tencentdb Gateway: private logs unavailable (%s); using DEVNULL", type(e).__name__)
+                        stdout_target = subprocess.DEVNULL
+                        stderr_target = subprocess.DEVNULL
                 else:
                     stdout_target = subprocess.DEVNULL
                     stderr_target = subprocess.DEVNULL
@@ -273,7 +294,7 @@ class GatewaySupervisor:
                     start_new_session=True,
                 )
             except Exception as e:
-                logger.error("Failed to start memory-tencentdb Gateway: %s", e)
+                logger.error("Failed to start memory-tencentdb Gateway (%s)", type(e).__name__)
                 self._close_log_handles()
                 return False
 
@@ -315,20 +336,6 @@ class GatewaySupervisor:
                     pass
                 setattr(self, attr, None)
 
-    def _tail_stderr_log(self, max_bytes: int = LOG_TAIL_BYTES_ON_CRASH) -> str:
-        """Return the last `max_bytes` of the stderr log for crash diagnostics."""
-        path = self._stderr_log_path
-        if not path:
-            return ""
-        try:
-            size = os.path.getsize(path)
-            with open(path, "rb") as f:
-                if size > max_bytes:
-                    f.seek(-max_bytes, os.SEEK_END)
-                return f.read().decode("utf-8", errors="replace")
-        except Exception:
-            return ""
-
     def _wait_for_health(self) -> bool:
         """Wait for the Gateway to become healthy."""
         start = time.monotonic()
@@ -340,13 +347,9 @@ class GatewaySupervisor:
             # Check if process died
             if self._process and self._process.poll() is not None:
                 rc = self._process.returncode
-                # stderr was redirected to a log file; tail it for diagnostics.
-                stderr = self._tail_stderr_log()[:500]
-                logger.error(
-                    "memory-tencentdb Gateway process exited with code %d during startup. "
-                    "stderr_log=%s tail=%s",
-                    rc, self._stderr_log_path or "<none>", stderr,
-                )
+                # Child diagnostics can contain credentials or memory. Keep them
+                # in the private local file rather than copying into plugin logs.
+                logger.error("memory-tencentdb Gateway process exited with code %d during startup", rc)
                 self._close_log_handles()
                 return False
 
@@ -398,7 +401,7 @@ class GatewaySupervisor:
                     proc.kill()
                 proc.wait(timeout=5)
         except Exception as e:
-            logger.warning("Error shutting down memory-tencentdb Gateway: %s", e)
+            logger.warning("Error shutting down memory-tencentdb Gateway (%s)", type(e).__name__)
         finally:
             self._process = None
             self._close_log_handles()
