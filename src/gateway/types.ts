@@ -52,6 +52,8 @@ export interface CaptureRequest {
   session_id?: string;
   user_id?: string;
   messages?: unknown[];
+  /** Epoch milliseconds or ISO timestamp immediately before this turn's first message. */
+  started_at?: number | string;
 }
 
 export interface CaptureResponse {
