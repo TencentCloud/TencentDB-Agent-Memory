@@ -466,6 +466,9 @@ export interface UpstreamResponse {
   toolCalls: UpstreamToolCall[];
   /** Raw usage as the upstream reported it; empty when it reported none. */
   usage: Record<string, unknown>;
+  /** L0-flush fix: true when the audit loop force-finalized on upstream
+   * inactivity timeout — the record (text/usage) may be partial. */
+  truncated?: boolean;
 }
 
 /**

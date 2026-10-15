@@ -1360,15 +1360,24 @@ export async function runOpenaiChatPipeline(
       gates: _gates,
       sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
     };
-    const passthrough = createUsageTapTransform(tapCtx);
+    const { stream: passthrough, auditDone, startAudit } = createUsageTapTransform(tapCtx);
+    // ---- L0-flush fix (from issue #1289 deployment patch, 2026-09-09) ----
+    // tee() splits upstream: one branch to client, one to proxy audit loop.
+    // Prevents L0/skill-loss when client disconnects early (e.g. Hermes tool-call rounds).
+    const [clientBranch, auditBranch] = upstreamResp.body.tee();
     // 顺序要紧：tap 在前，读到的是模型原始输出；剥离在后，只影响客户端那一份。
-    const tappedStream = upstreamResp.body
+    const tappedStream = clientBranch
       .pipeThrough(passthrough)
       .pipeThrough(createCfqStripStream(
         "openai",
         preparedStats,
         createCfqStripObserver(pipe),
       ));
+    // Fire-and-forget audit: reads the audit branch, drives processSseChunk + finalize
+    startAudit(auditBranch);
+    // auditDone exposes the audit-loop completion promise (used by tests /
+    // future callers that need to await full upstream consumption).
+    void auditDone;
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
   }
@@ -1666,7 +1675,7 @@ function outputMessageContent(message: Record<string, unknown> | null): string |
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
-interface TapContext {
+export interface TapContext {
   config: ProxyConfig;
   modelId: string;
   keyId: string;
@@ -1798,10 +1807,38 @@ function mergeToolCallDeltas(
 /** Create a TransformStream that passes bytes through unchanged,
  *  while extracting usage/content/tool_calls from SSE events in-band.
  */
-function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, Uint8Array> {
+/**
+ * Result of creating the usage tap for a streaming chat completion.
+ *
+ * Contract notes:
+ * - `auditDone` resolves at the **audit loop's exit point** (upstream EOF /
+ *   timeout / error) — i.e. when the audit loop has *read* the full upstream
+ *   stream — NOT when `finalize()` (L0 write / token accounting / skill
+ *   extraction) has *completed*. Awaiting `auditDone` therefore does not
+ *   imply the L0 record is durable; the DB write may still be in flight.
+ *   Consumers that need durability must wait on their own finalize signal.
+ * - `stream` is a pure passthrough to the client: SSE parsing is driven
+ *   exclusively by the audit loop via `startAudit(auditBranch)`. If
+ *   `startAudit` is never called (or its reader errors out before EOF), the
+ *   parse buffer stays empty and `finalize()` still runs on flush — data
+ *   may be missing. Callers must therefore pass the tee'd audit branch to
+ *   `startAudit` synchronously before the response is consumed.
+ * - `startAudit` is fire-and-forget (returns void); errors are reported via
+ *   `pipe.error("STREAM_AUDIT_ERR", ...)` and `auditComplete` still resolves
+ *   so a client flush can proceed with whatever was read.
+ */
+export interface UsageTap {
+  /** Pure passthrough TransformStream to the client (SSE parsed by audit loop). */
+  stream: TransformStream<Uint8Array, Uint8Array>;
+  /** Resolves when the audit loop has consumed the full upstream (not when finalize completes). */
+  auditDone: Promise<void>;
+  /** Fire-and-forget: feed the tee'd audit branch to drive parsing + finalize. */
+  startAudit: (auditSrc: ReadableStream<Uint8Array>) => void;
+}
+
+export function createUsageTapTransform(ctx: TapContext): UsageTap {
   const { config, modelId, keyId, sessionKey, upstreamUrl, traceId, forkTraceId, startTime, inputMessages, retried, logMeta, pipe, lf, spaceId, upstreamRequestId } = ctx;
 
-  const decoder = new TextDecoder();
   let sseBuf = "";
   let lastUsage: Record<string, unknown> | null = null;
   let assistantContent = "";
@@ -1813,16 +1850,37 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     const parts = sseBuf.split("\n\n");
     sseBuf = parts.pop() ?? "";
     for (const part of parts) {
-      const usage = extractSseUsage(part);
-      if (usage) lastUsage = usage;
-      const { content, toolCallDeltas } = extractSseContentAndTools(part);
-      assistantContent += content;
-      mergeToolCallDeltas(toolCallAccumulators, toolCallDeltas);
-      if (replyAssembler) parseSseData(part).forEach((evt) => replyAssembler.push(evt));
+      // Per-part try/catch: one malformed SSE block must not abort the whole
+      // parse loop (regression vs. legacy per-chunk handling). Failed blocks
+      // are logged and skipped; later blocks still accumulate.
+      try {
+        const usage = extractSseUsage(part);
+        if (usage) lastUsage = usage;
+        const { content, toolCallDeltas } = extractSseContentAndTools(part);
+        assistantContent += content;
+        mergeToolCallDeltas(toolCallAccumulators, toolCallDeltas);
+        // Merged from feat/server_team: session-turn/session-trace event
+        // collection must survive the per-part try/catch (never drop session
+        // assembly when a later block is malformed).
+        if (replyAssembler) parseSseData(part).forEach((evt) => replyAssembler.push(evt));
+      } catch (err: unknown) {
+        pipe.error("SSE_PARSE_PART", err instanceof Error ? err.message : String(err));
+      }
     }
   }
 
+  let finalized = false;
+  // Completeness gate: the audit loop is the only consumer that reads the
+  // full upstream stream, so it owns data completeness. `auditComplete`
+  // resolves at the loop's exit point (EOF / timeout / error) — BEFORE the
+  // heavy finalize() work — so a client-side flush() waits for full data
+  // instead of racing the gate with a truncated buffer.
+  let resolveAuditComplete!: () => void;
+  const auditComplete = new Promise<void>((resolve) => { resolveAuditComplete = resolve; });
+  let auditTimedOut = false;
   async function finalize(): Promise<void> {
+    if (finalized) return; // idempotent: audit loop or client flush may trigger twice
+    finalized = true;
     if (sseBuf.trim()) {
       const usage = extractSseUsage(sseBuf);
       if (usage) lastUsage = usage;
@@ -1871,6 +1929,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
             arguments: acc.functionArguments,
           })),
         usage: lastUsage ?? {},
+        truncated: auditTimedOut,
       },
       pipe,
     );
@@ -1893,26 +1952,34 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       // 58e4c55b: token 记账 + usage log + opik span 保留在 usage 块内
       // (三者都需要 usage 数据); 下面的 langfuseReportGeneration 外移,
       // 让"上游 200 但没 usage chunk"的流也照常上报 generation。
-      await stageRecordTokenUsage({
-        config, gates: ctx.gates,
-        isCustomUpstream: !!ctx.isCustomUpstream,
-        spaceId, modelId, usage: lastUsage, protocol: "openai",
-      });
-      stageWriteUsageLog({
-        config, gates: ctx.gates, pipe,
-        timestamp: endTime, modelId, keyId, sessionKey,
-        turnSeq: lf.turnSeq, userInput: lf.userQuery || undefined,
-        upstreamUrl, usage: lastUsage, requestReceivedAt: startTime,
-        extensionStats: ctx.preparedStats ?? undefined,
-        logMeta: ctx.logMeta, routedFrom: ctx.routedFrom, spaceId, upstreamRequestId,
-      });
-      stageOpikStreamSpan({
-        config, gates: ctx.gates, pipe,
-        traceId, forkTraceId: ctx.forkTraceId, keyId, projectName: ctx.obsProjectName, modelId,
-        startTime, endTime, inputMessages, outputMessage,
-        usage: lastUsage, retried, upstreamUrl,
-        updateTrace: true, streamTag: "stream",
-      });
+      // Review fix (finalize retry-net gap): 闸门置位后先 await
+      // stageRecordTokenUsage 无防护——抛错则下方 L0 的 trackWrite(withL0Retry)
+      // 永不安排（flush 再触发也被闸门挡）。usage 块整体 try/catch 保证 L0
+      // 写入一定被安排；错误单独打标（STREAM_FINALIZE_USAGE）便于 grep。
+      try {
+        await stageRecordTokenUsage({
+          config, gates: ctx.gates,
+          isCustomUpstream: !!ctx.isCustomUpstream,
+          spaceId, modelId, usage: lastUsage, protocol: "openai",
+        });
+        stageWriteUsageLog({
+          config, gates: ctx.gates, pipe,
+          timestamp: endTime, modelId, keyId, sessionKey,
+          turnSeq: lf.turnSeq, userInput: lf.userQuery || undefined,
+          upstreamUrl, usage: lastUsage, requestReceivedAt: startTime,
+          extensionStats: ctx.preparedStats ?? undefined,
+          logMeta: ctx.logMeta, routedFrom: ctx.routedFrom, spaceId, upstreamRequestId,
+        });
+        stageOpikStreamSpan({
+          config, gates: ctx.gates, pipe,
+          traceId, forkTraceId: ctx.forkTraceId, keyId, projectName: ctx.obsProjectName, modelId,
+          startTime, endTime, inputMessages, outputMessage,
+          usage: lastUsage, retried, upstreamUrl,
+          updateTrace: true, streamTag: "stream",
+        });
+      } catch (err: unknown) {
+        pipe.error("STREAM_FINALIZE_USAGE", err);
+      }
     }
 
     if (!lastUsage) pipe.info("USAGE_MISSING", "stream completed without usage chunk");
@@ -2013,21 +2080,78 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     }
   }
 
-  return new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      controller.enqueue(chunk);
+  // ---- Stream audit loop (L0-flush fix, ported from legacy handler.ts) ----
+  // Reads a tee-branch of the upstream stream independently of the client.
+  // Calls processSseChunk on every chunk and finalize() when the upstream
+  // stream ends or times out. Guarantees finalize() runs even when the
+  // client disconnects early (e.g. Hermes tool-call rounds close the
+  // connection after reading tool_calls).
+  const startAudit = (auditSrc: ReadableStream<Uint8Array>): void => {
+    void (async () => {
+      const reader = auditSrc.getReader();
+      const dec2 = new TextDecoder();
+      let auditDone = false;
+      // Review fix:真 inactivity 检测——原实现 timer 在循环开始前 arm 一次、
+      // 数据到达不 re-arm，是"总时长上限"而非"上游静默检测"（长推理解码/
+      // 大会话总时长 >5min 即被强制 finalize：L0 半句 + token 记账跳掉，
+      // 而客户端无感但完整收完）。改为每次读到 chunk 都 re-arm，仅在连续
+      // 5 分钟无任何数据时触发；慢但持续有数据的流不再被误杀。
+      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+      const armInactivity = () => {
+        if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(() => {
+          if (auditDone) return;
+          auditTimedOut = true;
+          pipe.error("STREAM_AUDIT_TIMEOUT", "5 min upstream inactivity - force finalizing (data may be truncated)");
+          void reader.cancel().catch(() => {});
+        }, 5 * 60 * 1000);
+      };
+      armInactivity();
       try {
-        processSseChunk(decoder.decode(chunk, { stream: true }));
-      } catch (err: unknown) {
-        pipe.error("STREAM_TAP", err);
+        for (;;) {
+          const { done: streamDone, value } = await reader.read();
+          if (streamDone) break;
+          processSseChunk(dec2.decode(value, { stream: true }));
+          armInactivity(); // 数据到达即 re-arm：慢但持续有数据不触发
+        }
+      } catch (err) {
+        pipe.error("STREAM_AUDIT_ERR", err instanceof Error ? err.message : String(err));
+      } finally {
+        auditDone = true;
+        if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+        try { reader.releaseLock(); } catch { /* best-effort */ }
+        // Exit point: resolve the completeness gate so a client flush() can
+        // proceed with the full data. Deliberately before finalize() so the
+        // audit loop stays in charge of completeness while flush waits.
+        resolveAuditComplete();
       }
+      await finalize();
+    })().catch((err: unknown) => {
+      // Review fix: reader 异常（上文 catch，STREAM_AUDIT_ERR）与 audit 循环
+      // 主体结束后 finalize() 阶段的异常分开打标签——grep 不再两义。
+      pipe.error("STREAM_FINALIZE_AUDIT", err instanceof Error ? err.message : String(err));
+    });
+  };
+
+  const ts = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      // Pure passthrough to client; SSE parsing is driven by the audit loop
+      // so tool-call round early disconnects don't lose L0.
+      controller.enqueue(chunk);
     },
     async flush() {
       try {
+        // Wait for the audit loop to have consumed the full upstream before
+        // finalizing: prevents a client-side flush from winning the idempotent
+        // gate with a truncated buffer (data completeness is audit-owned).
+        // Do NOT await finalize() itself here — heavy DB writes must not hold
+        // up the client's SSE close.
+        await auditComplete;
         await finalize();
       } catch (err: unknown) {
         pipe.error("STREAM_FINALIZE", err);
       }
     },
   });
+  return { stream: ts, auditDone: auditComplete, startAudit };
 }
