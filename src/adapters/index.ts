@@ -6,8 +6,10 @@
  *
  * Directory structure:
  *   adapters/
- *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── openclaw/       — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
+ *   ├── standalone/     — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── gateway-client/ — Generic HTTP client for new platform adapters
+ *   └── claude-code/    — Claude Code hook helper built on gateway-client
  */
 
 // OpenClaw adapter
@@ -17,3 +19,32 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Gateway client adapter
+export {
+  GatewayMemoryClient,
+  GatewayMemoryClientError,
+  createGatewayPlatformAdapter,
+} from "./gateway-client/index.js";
+export type {
+  GatewayMemoryClientOptions,
+  GatewayPlatformAdapter,
+  GatewayPlatformAdapterOptions,
+  GatewayPlatformContext,
+} from "./gateway-client/index.js";
+
+// Claude Code Gateway hook adapter
+export {
+  createClaudeCodeContextFromHookInput,
+  createClaudeCodeGatewayAdapter,
+  createClaudeCodeSessionKey,
+} from "./claude-code/index.js";
+export type {
+  ClaudeCodeCompletedTurn,
+  ClaudeCodeGatewayAdapter,
+  ClaudeCodeGatewayAdapterOptions,
+  ClaudeCodeGatewayContext,
+  ClaudeCodeHookContextOptions,
+  ClaudeCodeHookInput,
+  ClaudeCodeSessionKeyInput,
+} from "./claude-code/index.js";
