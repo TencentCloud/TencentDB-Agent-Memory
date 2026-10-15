@@ -62,6 +62,65 @@ export interface GatewayConfig {
   data: {
     /** Base directory for TDAI data storage. */
     baseDir: string;
+    /**
+     * Multi-tenant mode. When `true`, one Gateway process safely serves many
+     * end-user accounts: each `session_key` is routed to its own `TdaiCore`
+     * with a dedicated dataDir under `baseDir/{account}` (structural isolation
+     * — see design §8.4). When `false` (default), the Gateway behaves exactly
+     * as before: a single shared core rooted at `baseDir`, `session_key` only
+     * isolates L0/pipeline state.
+     *
+     * In multi-tenant mode `session_key` becomes **required** on every routed
+     * endpoint (`/recall`, `/capture`, `/search/*`, `/session/end`).
+     *
+     * env: `TDAI_MULTI_TENANT`
+     * yaml: `data.multiTenant`
+     */
+    multiTenant: boolean;
+    /**
+     * Max concurrent background extraction runs (L1/L2/L3) across ALL per-account
+     * cores. Structural multi-tenant gives each account its own pipeline, so `N`
+     * active accounts otherwise fan out to up to `~3N` simultaneous LLM
+     * extraction calls (design §8.4 #5). One shared limiter caps the total.
+     *
+     * - `> 0` — hard cap.
+     * - `0`   — unbounded.
+     * - unset — multi-tenant defaults to a safe internal cap; single-tenant
+     *   stays unbounded (a lone core can't fan out).
+     *
+     * env: `TDAI_MAX_CONCURRENT_EXTRACTIONS`
+     * yaml: `data.maxConcurrentExtractions`
+     */
+    maxConcurrentExtractions?: number;
+    /**
+     * Max number of per-account cores kept resident at once (multi-tenant LRU
+     * eviction). When a request would exceed this, the least-recently-used idle
+     * core is flushed + torn down to bound process memory. Must exceed the peak
+     * number of concurrently active accounts.
+     *
+     * - `> 0` — keep at most this many cores warm.
+     * - `0` / unset — unlimited (legacy: every account stays warm forever).
+     *
+     * Ignored in single-tenant mode.
+     *
+     * env: `TDAI_MAX_RESIDENT_CORES`
+     * yaml: `data.maxResidentCores`
+     */
+    maxResidentCores?: number;
+    /**
+     * Idle time-to-live (ms) for resident per-account cores (multi-tenant). A
+     * periodic sweep evicts any idle (unpinned) core whose last request was
+     * longer ago than this, reclaiming long-tail accounts during quiet periods
+     * instead of waiting for an LRU push. Complements `maxResidentCores` (a count
+     * bound) with a time bound.
+     *
+     * - `> 0` — evict cores idle longer than this.
+     * - `0` / unset — disabled (default). Ignored in single-tenant mode.
+     *
+     * env: `TDAI_CORE_IDLE_TTL_MS`
+     * yaml: `data.coreIdleTtlMs`
+     */
+    coreIdleTtlMs?: number;
   };
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
@@ -124,6 +183,13 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const rawBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir") ?? resolveDefaultDataDir();
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
   const baseDir = rawBaseDir.startsWith("~/") ? path.join(home, rawBaseDir.slice(2)) : rawBaseDir;
+  const multiTenant = envBool("TDAI_MULTI_TENANT") ?? bool(dataConfig, "multiTenant") ?? true;
+  const maxConcurrentExtractions =
+    envInt("TDAI_MAX_CONCURRENT_EXTRACTIONS") ?? num(dataConfig, "maxConcurrentExtractions");
+  const maxResidentCores =
+    envInt("TDAI_MAX_RESIDENT_CORES") ?? num(dataConfig, "maxResidentCores");
+  const coreIdleTtlMs =
+    envInt("TDAI_CORE_IDLE_TTL_MS") ?? num(dataConfig, "coreIdleTtlMs");
 
   // LLM config
   const llmConfig = obj(fileConfig, "llm");
@@ -144,7 +210,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
-    data: { baseDir },
+    data: { baseDir, multiTenant, maxConcurrentExtractions, maxResidentCores, coreIdleTtlMs },
     llm,
     memory,
   };
@@ -152,14 +218,37 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   // Merge overrides one level deep so partial `server`/`data`/`llm` patches
   // (frequently used by e2e tests) don't accidentally drop sibling fields
   // such as `corsOrigins` introduced after they were written.
-  if (!overrides) return base;
-  return {
-    ...base,
-    ...overrides,
-    server: { ...base.server, ...(overrides.server ?? {}) },
-    data: { ...base.data, ...(overrides.data ?? {}) },
-    llm: { ...base.llm, ...(overrides.llm ?? {}) },
-  };
+  const effective: GatewayConfig = overrides
+    ? {
+        ...base,
+        ...overrides,
+        server: { ...base.server, ...(overrides.server ?? {}) },
+        data: { ...base.data, ...(overrides.data ?? {}) },
+        llm: { ...base.llm, ...(overrides.llm ?? {}) },
+      }
+    : base;
+
+  // Fail fast on the one config combo that silently breaks tenant isolation.
+  //
+  // Multi-tenant isolation in this fork is *structural*: each account gets its
+  // own dataDir + its own SQLite file (distinct L0/L1 tables, persona.md, …).
+  // The TCVDB backend ignores dataDir and routes EVERY core to one shared
+  // `${database}_l1_memories` / `_l0_conversations` / `_profiles` collection
+  // set (see core/store/factory.ts + tcvdb.ts), while the structural route does
+  // not push `session_key` into L1/L0 search — so `/recall` and
+  // `/search/memories` would return other accounts' memories. Refuse at load
+  // time rather than leak across tenants. (Single-tenant + TCVDB is fine: one
+  // shared core, one database, no cross-account routing.)
+  if (effective.data.multiTenant && effective.memory.storeBackend === "tcvdb") {
+    throw new Error(
+      "Multi-tenant mode is incompatible with storeBackend=tcvdb: every per-account " +
+      "core shares one TCVDB database/collection set, so L1/L0 recall and search would " +
+      "leak across accounts (structural isolation only holds for the per-dataDir SQLite " +
+      "backend). Use storeBackend=sqlite for multi-tenant, or run single-tenant " +
+      "(TDAI_MULTI_TENANT=false) with TCVDB.",
+    );
+  }
+  return effective;
 }
 
 // ============================
@@ -235,6 +324,26 @@ function envInt(key: string): number | undefined {
   if (!v) return undefined;
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Read a strict boolean env var. Accepts true/1/yes/on and false/0/no/off
+ * (case-insensitive); anything else (including unset) returns undefined so the
+ * caller can fall through to the next source / default.
+ */
+function envBool(key: string): boolean | undefined {
+  const v = env(key);
+  if (v === undefined) return undefined;
+  const s = v.toLowerCase();
+  if (s === "true" || s === "1" || s === "yes" || s === "on") return true;
+  if (s === "false" || s === "0" || s === "no" || s === "off") return false;
+  return undefined;
+}
+
+/** Read a boolean field from a config object (non-boolean → undefined). */
+function bool(src: Record<string, unknown>, key: string): boolean | undefined {
+  const v = src[key];
+  return typeof v === "boolean" ? v : undefined;
 }
 
 /**

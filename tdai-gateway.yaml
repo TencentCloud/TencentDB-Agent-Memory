@@ -1,0 +1,27 @@
+# TDAI Gateway config — picked up automatically from the project root (CWD)
+# by resolveConfigPath() in src/gateway/config.ts.
+#
+# Scope: this file ONLY carries what env vars cannot express — the embedding
+# block (the gateway has no TDAI_EMBEDDING_* vars). server / data / llm keep
+# coming from .env (TDAI_DATA_DIR, TDAI_MULTI_TENANT, TDAI_LLM_*), and env
+# always wins over yaml, so there is nothing to keep in sync here.
+#
+# ${VAR} placeholders are expanded from process.env at load time. Because the
+# gateway is launched with `node --env-file=.env ...`, ${DASHSCOPE_API_KEY}
+# resolves to the value in .env — the key is never written into this file
+# (which, unlike .env, is NOT gitignored).
+
+memory:
+  embedding:
+    enabled: true
+    # Any non-"none"/"local"/"qclaw" provider is treated as OpenAI-compatible
+    # and hits ${baseUrl}/embeddings. Aliyun Bailian / DashScope exposes exactly
+    # that shape under its compatible-mode endpoint.
+    provider: dashscope
+    baseUrl: https://dashscope.aliyuncs.com/compatible-mode/v1
+    apiKey: ${DASHSCOPE_API_KEY}
+    model: text-embedding-v3
+    dimensions: 1024        # text-embedding-v3 default output dim
+    sendDimensions: true    # compat mode accepts the dimensions param (verified)
+  recall:
+    strategy: hybrid        # vector + BM25; falls back to keyword if embedding is down

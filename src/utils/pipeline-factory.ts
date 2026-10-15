@@ -70,6 +70,12 @@ export interface PipelineFactoryOptions {
   l1LlmRunner?: import("../core/types.js").LLMRunner;
   /** Host-neutral LLM runner for L2/L3 (tool-call enabled, enableTools=true). */
   l2l3LlmRunner?: import("../core/types.js").LLMRunner;
+  /**
+   * Max time (ms) `pipeline.destroy()` waits to flush pending L1/L2/L3 work.
+   * Defaults to the manager's live-safe 2s. Seed raises it (no gateway_stop
+   * hook to race) so the final persona/scene flush isn't cut off.
+   */
+  destroyTimeoutMs?: number;
 }
 
 // ============================
@@ -651,11 +657,18 @@ export function createL3Runner(opts: {
 
 /**
  * Create a MemoryPipelineManager with the standard config mapping.
+ *
+ * `extractionLimiter`, when provided, gates L1/L2/L3 runner execution. Pass the
+ * same instance to every manager (as the multi-tenant CoreRegistry does) to cap
+ * total concurrent extraction across cores; omit it for the unbounded
+ * single-core default.
  */
 export function createPipelineManager(
   cfg: MemoryTdaiConfig,
   logger: PipelineLogger,
   sessionFilter?: SessionFilter,
+  extractionLimiter?: import("./async-semaphore.js").ConcurrencyLimiter,
+  destroyTimeoutMs?: number,
 ): MemoryPipelineManager {
   return new MemoryPipelineManager(
     {
@@ -668,9 +681,11 @@ export function createPipelineManager(
         maxIntervalSeconds: cfg.pipeline.l2MaxIntervalSeconds,
         sessionActiveWindowHours: cfg.pipeline.sessionActiveWindowHours,
       },
+      ...(destroyTimeoutMs !== undefined ? { destroyTimeoutMs } : {}),
     },
     logger,
     sessionFilter ?? new SessionFilter([]),
+    extractionLimiter,
   );
 }
 
@@ -687,7 +702,7 @@ export function createPipelineManager(
  * and `createL3Runner()` from this module.
  */
 export async function createPipeline(opts: PipelineFactoryOptions): Promise<PipelineInstance> {
-  const { pluginDataDir, cfg, openclawConfig, logger, sessionFilter, l1LlmRunner } = opts;
+  const { pluginDataDir, cfg, openclawConfig, logger, sessionFilter, l1LlmRunner, destroyTimeoutMs } = opts;
 
   // Ensure data directories exist
   initDataDirectories(pluginDataDir);
@@ -697,7 +712,7 @@ export async function createPipeline(opts: PipelineFactoryOptions): Promise<Pipe
   const { vectorStore, embeddingService } = stores;
 
   // Create pipeline manager
-  const scheduler = createPipelineManager(cfg, logger, sessionFilter);
+  const scheduler = createPipelineManager(cfg, logger, sessionFilter, undefined, destroyTimeoutMs);
 
   // Wire L1 runner
   scheduler.setL1Runner(createL1Runner({

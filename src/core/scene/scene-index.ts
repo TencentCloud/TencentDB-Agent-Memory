@@ -4,6 +4,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
 import { parseSceneBlock } from "./scene-format.js";
 
 export interface SceneIndexEntry {
@@ -57,7 +58,7 @@ export async function writeSceneIndex(
 ): Promise<void> {
   const indexPath = path.join(dataDir, ".metadata", "scene_index.json");
   await fs.mkdir(path.dirname(indexPath), { recursive: true });
-  await fs.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
+  await atomicWriteFile(indexPath, JSON.stringify(entries, null, 2));
 }
 
 /**
