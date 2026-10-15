@@ -80,6 +80,7 @@ export function createApp() {
   api.route("/wiki", createWikiRoutes({
     wikiService: knowledgeModule.wikiService,
     wikiMgr: knowledgeModule.wikiMgr,
+    serviceAuth: config.auth,
     publicBaseUrl: config.publicBaseUrl,
   }));
   api.route("/code-graph", createCodeGraphRoutes({
