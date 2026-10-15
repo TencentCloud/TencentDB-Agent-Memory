@@ -87,6 +87,39 @@ export function isDshRuntimeContextSnapshot(text: string): boolean {
   return text.trimStart().startsWith(DSH_RUNTIME_CONTEXT_PREFIX);
 }
 
+function stripMemoryFrontmatter(text: string): string {
+  const lines = text.split("\n");
+  const output: string[] = [];
+  let keepFrom = 0;
+  let blockStart = -1;
+  let hasMemoryKey = false;
+  let validPrefix = true;
+
+  // Inspect each line once. A rejecting block must not trigger regex backtracking.
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^---[^\S\n]*$/.test(line)) {
+      if (blockStart >= 0 && hasMemoryKey && validPrefix) {
+        output.push(lines.slice(keepFrom, blockStart).join("\n"));
+        keepFrom = i + 1;
+        blockStart = -1;
+      } else {
+        blockStart = i;
+      }
+      hasMemoryKey = false;
+      validPrefix = true;
+    } else if (blockStart >= 0 && !hasMemoryKey) {
+      if (/^(?:name|description|metadata|node_type|originSessionId):/i.test(line)) {
+        hasMemoryKey = true;
+      } else if (line.trim() && !/^[a-z_][a-z0-9_]*:/i.test(line)) {
+        validPrefix = false;
+      }
+    }
+  }
+  output.push(lines.slice(keepFrom).join("\n"));
+  return output.join("\n");
+}
+
 /**
  * 从原始 user content 文本抽取用户真实键入。
  *
@@ -178,10 +211,7 @@ export function extractUserQueryText(raw: string): string {
   //       ---
   //     只匹配"至少含 name / description / metadata / node_type 关键字"的 frontmatter
   //     以避免误伤 markdown 分割线。
-  text = text.replace(
-    /(?:^|\n)---\s*\n(?:[a-z_][a-z0-9_]*:\s*.*\n)*?(?:name|description|metadata|node_type|originSessionId):[\s\S]*?\n---\s*(?:\n|$)/gi,
-    "\n",
-  );
+  text = stripMemoryFrontmatter(text);
 
   // 2e) 残留的会话初始化表单标题行（如「会话初始化 — 选择 Agent 与任务」）
   text = text
