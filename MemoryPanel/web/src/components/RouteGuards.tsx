@@ -7,6 +7,7 @@
 import { type ReactNode, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCurrentRole, type TeamRole } from '@/services/useCurrentRole';
+import { useAuthStore } from '@/stores/auth';
 
 /** 资源管理页面守卫：admin 不可见 */
 export function ResourceGuard({ children }: { children: ReactNode }) {
@@ -38,4 +39,16 @@ export function MemberManageGuard({ children, allowedRoles }: {
   }, [blocked, navigate]);
 
   return blocked ? null : <>{children}</>;
+}
+
+/** Global user directory is available only to system_admin, regardless of Team role. */
+export function SystemAdminGuard({ children }: { children: ReactNode }) {
+  const isAdmin = useAuthStore((state) => state.auth?.isAdmin === true);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!isAdmin) navigate('/', { replace: true });
+  }, [isAdmin, navigate]);
+
+  return isAdmin ? <>{children}</> : null;
 }

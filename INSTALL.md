@@ -160,31 +160,30 @@ Knowledge Service Swagger (optional, for API poking):
 
 ### Step 1.5: Admin creates a business user (recommended for ops/business separation)
 
-> **Important (entry-point convention in the current version)**: the panel has
-> **no standalone "Users" menu**. Creating a business user lives inside a
-> **Team's member management**, so the order is: **admin creates a Team first,
-> then creates the business user inside that Team**. Only admin can do this step.
+> **Accounts and Team membership are separate.** A `system_admin` can create a
+> business account from the standalone **Users** page without creating a Team first.
+> Add that account to a Team before using Team assets.
 
 After logging in as admin:
 
-1. **Create a Team first**: click the **Team switcher in the top-left** (the
-   dropdown in the header showing the current team name) → **"+ New Team"** at
-   the bottom of the panel → enter a name → create. (This entry is admin-only.)
-2. **Open that Team's member management**: left sidebar → **"Members"** →
-   **"Add Member"** in the top-right.
-3. In the dialog, switch the mode to **"Create New User & Add to Team"** → enter a
-   username (letters / digits / underscore only) → click **"Create & Add"**.
-   - To assign an initial key yourself, toggle "Custom User_Key"; otherwise the
-     core generates one automatically.
-4. On success, the dialog shows the new user's `user_key` (`sk-mem-...`)
-   **exactly once** — **copy and save it right away**; the panel won't show the
-   full value again.
+1. Open **Users** in the sidebar → **Create User**, then enter a username
+   (letters, digits, and underscores only).
+2. The success dialog shows the new `user_key` (`sk-mem-...`) **exactly once**.
+   **Copy and save it now**; the full value cannot be retrieved later.
+3. Create a Team from the top-left Team switcher → **"+ New Team"**.
+4. Open that Team's **Members** page → **Add Member** → **Add Existing User**,
+   then enter the `user_id` returned in step 2. Account creation and Team
+   membership can be completed at different times.
+
+The existing **Create New User & Add to Team** mode in Members still combines
+these two steps. Its Custom User_Key switch can assign a chosen initial key.
 
 > In addition to the panel, this flow can also be completed via the API. Note that it
 > requires **two steps**: `user/create` only creates the user account and does **not**
 > add it to any Team; to "create a user and add them to a team", you must also call
-> `team-member/add`. Both endpoints require **admin / team-admin** privilege —
-> calling them with an ordinary business user's key returns `permission_denied`:
+> `team-member/add`. `user/create` requires `system_admin`; `team-member/add`
+> requires owner or member-admin permission in the target Team. A global admin
+> does not automatically have permission to add members to every Team:
 
 ```bash
 ADMIN_KEY=$(cat ./.admin-key)
@@ -205,7 +204,7 @@ curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
 ```
 
 > ⚠️ Running only step 1 (`user/create`) **creates a user that belongs to no team** —
-> it can't manage anything in the panel and won't appear in the session picker. You
+> it cannot use Team assets in the panel and won't appear in the session picker. You
 > must also run step 2 `team-member/add` to match the panel's "Create New User & Add
 > to Team". `team-member/add` requires the `team_id` Team to already exist, and you
 > cannot add yourself.

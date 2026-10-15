@@ -25,6 +25,7 @@ const PATH_TO_PAGE: Record<string, PageId> = {
   '/skills': 'skills',
   '/memory': 'chat_memory',
   '/analytics': 'analytics',
+  '/users': 'users',
   '/team/members': 'team_members',
   '/team/agents': 'team_agents',
   '/team/api-keys': 'api_keys',
@@ -154,6 +155,7 @@ export function ConsoleLayout() {
     const byGroup = new Map<string, (typeof PAGE_META)[PageId][]>();
 
     for (const meta of Object.values(PAGE_META)) {
+      if (meta.id === 'users' && auth?.isAdmin !== true) continue;
       if (userRole === 'reviewer' && meta.id === 'team_members') continue;
       // 「可观测」仅 system_admin 可见，且需面板开关开启 + 内核已配置 CH
       if (meta.id === 'analytics') {
@@ -170,7 +172,7 @@ export function ConsoleLayout() {
         title: g,
         items: byGroup.get(g)!.sort((a, b) => a.order - b.order),
       }));
-  }, [userRole, PAGE_META, t, analyticsVisible]);
+  }, [userRole, PAGE_META, t, analyticsVisible, auth?.isAdmin]);
 
   const workbenchGroupTitle = t('menu.group.workbench');
   const pinnedGroup = menuGroups.find((g) => g.title === workbenchGroupTitle);
@@ -238,4 +240,3 @@ export function ConsoleLayout() {
     </div>
   );
 }
- 
