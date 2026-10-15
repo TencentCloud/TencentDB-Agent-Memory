@@ -78,6 +78,7 @@ export function createApp() {
   // Only Agent tool executions are usage telemetry; health/admin/ingest remain excluded.
   api.use("/tools/call", createKnowledgeTelemetryMiddleware(knowledgeTelemetry));
   api.route("/wiki", createWikiRoutes({
+    serviceAuth: config.auth,
     wikiService: knowledgeModule.wikiService,
     wikiMgr: knowledgeModule.wikiMgr,
     publicBaseUrl: config.publicBaseUrl,
