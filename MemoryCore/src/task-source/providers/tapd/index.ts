@@ -24,6 +24,7 @@ import {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+const TAPD_MAX_PAGE_SIZE = 200;
 const MAX_BATCH_SIZE = 50;
 
 function clientFor(ctx: TaskSourceContext): TapdMcpClient {
@@ -165,45 +166,70 @@ export const tapdProvider: TaskSourceProvider = {
       return { items: items.slice(start, start + limit), total, hasMore: start + limit < total };
     }
 
+
     // 各类型并发拉取后合并：TAPD 没有跨类型统一列表接口。
+    // TAPD 单次请求最多返回 200 条；深分页必须通过多个上游页面获取。
+    const requiredCount = page * limit;
+
     const perType = await Promise.all(
       types.map(async (itemType) => {
-        const args: Record<string, unknown> = { workspace_id: q.scope, limit, page };
+        const args: Record<string, unknown> = {
+          workspace_id: q.scope,
+        };
+
         if (q.keyword) args[keywordField(itemType)] = q.keyword;
+
         // 处理人字段名按类型区分：bug 是 current_owner，story/task 是 owner。
-        // 用错会触发服务端「参数X不存在于工具Y的参数定义中」错误文本。
         if (q.owner) args[ownerField(itemType)] = q.owner;
         if (q.status) args["status"] = q.status;
-        // 中文状态：仅 story 支持，其余类型下发会被服务端拒绝（见 mapper.supportsVStatus）。
+
+        // 中文状态：仅 story 支持，其余类型下发会被服务端拒绝。
         if (supportsVStatus(itemType)) args["with_v_status"] = "1";
-        // 一次调用同时拿到分页包络（total）与数据行（data）。
-        const raw = await client.callRaw(toolFor(itemType), args);
-        const rows = asRows(unwrapData(raw));
-        return { itemType, rows, total: totalOf(raw, rows.length) };
+
+        const { rows, total } = await fetchCandidateRows(
+          client,
+          itemType,
+          args,
+          requiredCount,
+        );
+
+        return { itemType, rows, total };
       }),
     );
 
     // task / bug 不支持 with_v_status，需要另取状态中文映射表。
-    const statusMaps = await loadStatusLabelMaps(client, types, q.scope as string);
+    const statusMaps = await loadStatusLabelMaps(
+      client,
+      types,
+      q.scope as string,
+    );
 
     const items: RemoteTaskRef[] = perType
       .flatMap(({ itemType, rows }) =>
         rows.map((r) =>
-          toRef(r, itemType, ctx.siteBaseUrl, q.scope as string, undefined, statusMaps[itemType]),
+          toRef(
+            r,
+            itemType,
+            ctx.siteBaseUrl,
+            q.scope as string,
+            undefined,
+            statusMaps[itemType],
+          ),
         ),
       )
       .filter((r) => r.externalId);
 
-    // 排序沿用 TAPD 返回顺序（服务端默认 created desc，实测三类一致）。
-    //
-    // 注意：此处**不**再本地按 updatedAt 重排。分页发生在服务端且基准是 created，
-    // 若本地按 modified 重排会导致「第 2 页出现比第 1 页更新的条目」这类翻页错乱。
-    // 各类型并发拉取时，每类各返回 limit 条，合并后最多 limit × 类型数 ——
-    // 若直接返回会让前端一页显示远超 PAGE_SIZE 的行（表现为「一页显示了所有」），
-    // 故合并后统一截断到 limit，保持与单页大小一致。
-    const paged = items.slice(0, limit);
+    // 保持原有类型顺序和 TAPD 每种类型的返回顺序。
+    // 先按类型获取足够的前缀，再对合并结果进行全局分页。
+    const start = (page - 1) * limit;
+    const paged = items.slice(start, start + limit);
     const total = perType.reduce((sum, t) => sum + t.total, 0);
-    return { items: paged, total, hasMore: page * limit < total };
+
+    return {
+      items: paged,
+      total,
+      hasMore: start + limit < total,
+    };
   },
 
   async fetchTask(
@@ -245,6 +271,60 @@ function clampLimit(limit?: number): number {
  * `{ status: { options: { "new": "新", "in_progress": "接受/处理", ... } } }`。
  * 失败时静默回落到英文码 —— 状态展示降级不应阻断列表查询。
  */
+
+/**
+ * 获取指定类型所需的前缀记录。
+ *
+ * TAPD 单次请求最多返回 200 条。使用固定的上游 page size，
+ * 通过 page=1、2、3... 获取后续记录，避免请求 limit 超过 API 上限。
+ *
+ * 每种类型只需获取 page * limit 条以内的记录，因为最终只会返回
+ * 合并结果中当前页对应的切片。
+ */
+
+async function fetchCandidateRows(
+  client: TapdMcpClient,
+  itemType: string,
+  baseArgs: Record<string, unknown>,
+  requiredCount: number,
+): Promise<{
+  rows: Array<Record<string, unknown>>;
+  total: number;
+}> {
+  if (requiredCount <= 0) {
+    return { rows: [], total: 0 };
+  }
+
+  // 所有上游页面使用相同的 page size，确保页号对应的记录范围连续。
+  const requestLimit = Math.min(requiredCount, TAPD_MAX_PAGE_SIZE);
+  const rows: Array<Record<string, unknown>> = [];
+  let total = 0;
+
+  for (let upstreamPage = 1; rows.length < requiredCount; upstreamPage += 1) {
+    const raw = await client.callRaw(toolFor(itemType), {
+      ...baseArgs,
+      limit: requestLimit,
+      page: upstreamPage,
+    });
+
+    const pageRows = asRows(unwrapData(raw));
+    const fallbackTotal = (upstreamPage - 1) * requestLimit + pageRows.length;
+
+    total = Math.max(total, totalOf(raw, fallbackTotal));
+    rows.push(...pageRows);
+
+    // 没有取满当前页，说明已经到达数据末尾。
+    if (pageRows.length < requestLimit) {
+      break;
+    }
+  }
+
+  return {
+    rows: rows.slice(0, requiredCount),
+    total,
+  };
+}
+
 async function loadStatusLabelMaps(
   client: TapdMcpClient,
   types: readonly string[],
