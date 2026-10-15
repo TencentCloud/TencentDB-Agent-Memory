@@ -134,6 +134,9 @@ export interface L0RecordRow {
 
 const TAG = "[memory-tdai][sqlite]";
 
+/** FTS5 layers that carry a record_id → rowid lookup table. */
+type FtsLayer = "l0" | "l1";
+
 /** Persisted metadata about the embedding provider used to generate stored vectors. */
 interface EmbeddingMeta {
   provider: string;
@@ -282,13 +285,23 @@ export class VectorStore implements IMemoryStore {
 
   // Prepared statements — FTS5 L1 (initialized in init())
   private stmtL1FtsInsert!: StatementSync;
-  private stmtL1FtsDelete!: StatementSync;
   private stmtL1FtsSearch!: StatementSync;
 
   // Prepared statements — FTS5 L0 (initialized in init())
   private stmtL0FtsInsert!: StatementSync;
-  private stmtL0FtsDelete!: StatementSync;
   private stmtL0FtsSearch!: StatementSync;
+
+  /**
+   * record_id → FTS rowid lookup, one per layer (see `deleteFtsRow`).
+   * `record_id` is an UNINDEXED FTS5 column, so `DELETE FROM l0_fts WHERE record_id = ?`
+   * scans the whole FTS table on every call.
+   */
+  private ftsRowmap!: Record<FtsLayer, {
+    get: StatementSync;
+    put: StatementSync;
+    del: StatementSync;
+    ftsDeleteByRowid: StatementSync;
+  }>;
 
   /**
    * Create a VectorStore instance.
@@ -982,6 +995,10 @@ export class VectorStore implements IMemoryStore {
         )
       `);
 
+      // record_id → FTS rowid lookup tables. Created after the FTS tables so a
+      // missing lookup table on an existing FTS table means "needs backfill".
+      const rowmapsToBackfill = this.ensureFtsRowmapTables();
+
       // L1 FTS prepared statements
       this.stmtL1FtsInsert = this.db.prepare(`
         INSERT INTO l1_fts (content, content_original, record_id, type, priority, scene_name,
@@ -989,8 +1006,6 @@ export class VectorStore implements IMemoryStore {
           timestamp_str, timestamp_start, timestamp_end, metadata_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-
-      this.stmtL1FtsDelete = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ?");
 
       this.stmtL1FtsSearch = this.db.prepare(`
         SELECT record_id, content_original AS content, type, priority, scene_name,
@@ -1011,7 +1026,16 @@ export class VectorStore implements IMemoryStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      this.stmtL0FtsDelete = this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?");
+      const rowmapStmts = (layer: FtsLayer) => ({
+        get: this.db.prepare(`SELECT fts_rowid FROM ${layer}_fts_rowmap WHERE record_id = ?`),
+        put: this.db.prepare(
+          `INSERT INTO ${layer}_fts_rowmap (record_id, fts_rowid) VALUES (?, ?)
+           ON CONFLICT(record_id) DO UPDATE SET fts_rowid = excluded.fts_rowid`,
+        ),
+        del: this.db.prepare(`DELETE FROM ${layer}_fts_rowmap WHERE record_id = ?`),
+        ftsDeleteByRowid: this.db.prepare(`DELETE FROM ${layer}_fts WHERE rowid = ?`),
+      });
+      this.ftsRowmap = { l0: rowmapStmts("l0"), l1: rowmapStmts("l1") };
 
       this.stmtL0FtsSearch = this.db.prepare(`
         SELECT record_id, message_text_original AS message_text,
@@ -1026,9 +1050,12 @@ export class VectorStore implements IMemoryStore {
       this.ftsAvailable = true;
       this.logger?.debug?.(`${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v2 — jieba segmented]`);
 
-      // Rebuild FTS index if migrated from v1 or tables were freshly created
+      // Rebuild FTS index if migrated from v1 or tables were freshly created.
+      // A rebuild repopulates the lookup tables too, so backfill is only needed otherwise.
       if (needsFtsRebuild) {
         this.rebuildFtsIndex();
+      } else {
+        for (const layer of rowmapsToBackfill) this.backfillFtsRowmap(layer);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1273,8 +1300,8 @@ export class VectorStore implements IMemoryStore {
         // filtering doesn't require a join.
         if (this.ftsAvailable) {
           try {
-            this.stmtL1FtsDelete.run(recordId);
-            this.stmtL1FtsInsert.run(
+            this.deleteFtsRow("l1", recordId);
+            const ins = this.stmtL1FtsInsert.run(
               tokenizeForFts(record.content), // content — segmented for indexing
               record.content,                 // content_original — raw for display
               recordId,
@@ -1293,6 +1320,7 @@ export class VectorStore implements IMemoryStore {
               tsEnd,
               JSON.stringify(record.metadata),
             );
+            this.putFtsRowid("l1", recordId, ins.lastInsertRowid);
           } catch (ftsErr) {
             // FTS write failure is non-fatal — log and continue
             this.logger?.warn(
@@ -1455,7 +1483,7 @@ export class VectorStore implements IMemoryStore {
         const deleted = (result as any)?.changes > 0;
         if (this.vecTablesReady) this.stmtDeleteVec!.run(recordId);
         if (this.ftsAvailable) {
-          try { this.stmtL1FtsDelete.run(recordId); } catch { /* non-fatal */ }
+          try { this.deleteFtsRow("l1", recordId); } catch { /* non-fatal */ }
         }
         this.db.exec("COMMIT");
         return deleted;
@@ -1493,7 +1521,7 @@ export class VectorStore implements IMemoryStore {
           this.stmtDeleteMeta.run(id);
           if (this.vecTablesReady) this.stmtDeleteVec!.run(id);
           if (this.ftsAvailable) {
-            try { this.stmtL1FtsDelete.run(id); } catch { /* non-fatal */ }
+            try { this.deleteFtsRow("l1", id); } catch { /* non-fatal */ }
           }
         }
         this.db.exec("COMMIT");
@@ -1766,8 +1794,8 @@ export class VectorStore implements IMemoryStore {
         // filtering doesn't require a join.
         if (this.ftsAvailable) {
           try {
-            this.stmtL0FtsDelete.run(record.id);
-            this.stmtL0FtsInsert.run(
+            this.deleteFtsRow("l0", record.id);
+            const ins = this.stmtL0FtsInsert.run(
               tokenizeForFts(record.messageText), // message_text — segmented for indexing
               record.messageText,                 // message_text_original — raw for display
               record.id,
@@ -1781,6 +1809,7 @@ export class VectorStore implements IMemoryStore {
               record.recordedAt,
               record.timestamp,
             );
+            this.putFtsRowid("l0", record.id, ins.lastInsertRowid);
           } catch (ftsErr) {
             // FTS write failure is non-fatal — log and continue
             this.logger?.warn(
@@ -1976,7 +2005,7 @@ export class VectorStore implements IMemoryStore {
         const deleted = (result as any)?.changes > 0;
         if (this.vecTablesReady) this.stmtL0DeleteVec!.run(recordId);
         if (this.ftsAvailable) {
-          try { this.stmtL0FtsDelete.run(recordId); } catch { /* non-fatal */ }
+          try { this.deleteFtsRow("l0", recordId); } catch { /* non-fatal */ }
         }
         this.db.exec("COMMIT");
         return deleted;
@@ -2572,7 +2601,7 @@ export class VectorStore implements IMemoryStore {
             try { this.db.prepare("DELETE FROM l0_vec WHERE record_id = ?").run(row.record_id); } catch { /* vec may not exist */ }
           }
           if (this.ftsAvailable) {
-            try { this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?").run(row.record_id); } catch { /* fts may not exist */ }
+            try { this.deleteFtsRow("l0", row.record_id); } catch { /* fts may not exist */ }
           }
         }
         this.db.exec("COMMIT");
@@ -2629,7 +2658,7 @@ export class VectorStore implements IMemoryStore {
             try { this.db.prepare("DELETE FROM l0_vec WHERE record_id = ?").run(id); } catch { /* vec may not exist */ }
           }
           if (this.ftsAvailable) {
-            try { this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?").run(id); } catch { /* fts may not exist */ }
+            try { this.deleteFtsRow("l0", id); } catch { /* fts may not exist */ }
           }
         }
 
@@ -2642,7 +2671,7 @@ export class VectorStore implements IMemoryStore {
             try { this.db.prepare("DELETE FROM l1_vec WHERE record_id = ?").run(id); } catch { /* vec may not exist */ }
           }
           if (this.ftsAvailable) {
-            try { this.db.prepare("DELETE FROM l1_fts WHERE record_id = ?").run(id); } catch { /* fts may not exist */ }
+            try { this.deleteFtsRow("l1", id); } catch { /* fts may not exist */ }
           }
         }
 
@@ -3111,6 +3140,90 @@ export class VectorStore implements IMemoryStore {
     }
   }
 
+  // ── FTS5 row lookup (record_id → rowid) ───────────────────────────────────
+  //
+  // `record_id` is an UNINDEXED FTS5 column, so deleting by it is a full scan
+  // of the FTS table. Every L0/L1 upsert deletes the old FTS row first, and
+  // node:sqlite is synchronous, so the scan blocks the whole event loop and
+  // grows with history (~39k L0 rows ≈ 0.9 s per scan, ~2 s per upsert).
+  //
+  // A plain table keyed by record_id stores the FTS rowid instead, and deletes
+  // go by rowid. FTS5 keeps rowids in its own shadow tables, so they survive
+  // VACUUM; the main tables use TEXT primary keys whose implicit rowids may be
+  // renumbered by VACUUM, which is why the FTS rowid is not aligned with them.
+
+  /**
+   * Create the lookup tables if missing.
+   * @returns layers whose FTS table already exists but whose lookup table was
+   *          just created, i.e. existing FTS rows that need a one-time backfill.
+   */
+  private ensureFtsRowmapTables(): FtsLayer[] {
+    const missing = (["l0", "l1"] as const).filter(
+      (layer) => !this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+        .get(`${layer}_fts_rowmap`),
+    );
+    for (const layer of ["l0", "l1"] as const) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS ${layer}_fts_rowmap (
+          record_id TEXT PRIMARY KEY,
+          fts_rowid INTEGER NOT NULL
+        )
+      `);
+    }
+    return missing;
+  }
+
+  /**
+   * One-time backfill of a lookup table from the existing FTS rows. Duplicate
+   * FTS rows for the same record_id (only the newest is kept) would otherwise
+   * be unreachable once deletes go by rowid; the old delete-by-record_id
+   * removed all of them, so dropping them here keeps search results the same.
+   */
+  private backfillFtsRowmap(layer: FtsLayer): void {
+    const started = Date.now();
+    this.db.exec("BEGIN");
+    try {
+      const dup = this.db.prepare(
+        `DELETE FROM ${layer}_fts WHERE rowid NOT IN (SELECT MAX(rowid) FROM ${layer}_fts GROUP BY record_id)`,
+      ).run();
+      const filled = this.db.prepare(
+        `INSERT INTO ${layer}_fts_rowmap (record_id, fts_rowid) SELECT record_id, rowid FROM ${layer}_fts`,
+      ).run();
+      this.db.exec("COMMIT");
+      this.logger?.info(
+        `${TAG} Backfilled ${layer}_fts_rowmap: ${Number(filled.changes)} rows` +
+        ` (removed ${Number(dup.changes)} duplicate FTS rows) in ${Date.now() - started}ms`,
+      );
+    } catch (err) {
+      try { this.db.exec("ROLLBACK"); } catch { /* ignore rollback errors */ }
+      // Leave the table empty: deletes become no-ops for unmapped rows (stale
+      // FTS rows may then linger), but writes and searches keep working.
+      this.logger?.warn(
+        `${TAG} ${layer}_fts_rowmap backfill failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private dropFtsRowmapTables(): void {
+    this.db.exec("DROP TABLE IF EXISTS l1_fts_rowmap");
+    this.db.exec("DROP TABLE IF EXISTS l0_fts_rowmap");
+  }
+
+  /** Remember the FTS rowid of a freshly inserted FTS row. */
+  private putFtsRowid(layer: FtsLayer, recordId: string, ftsRowid: number | bigint): void {
+    this.ftsRowmap[layer].put.run(recordId, ftsRowid);
+  }
+
+  /** Delete the FTS row of `recordId` (if any) by rowid, plus its lookup entry. */
+  private deleteFtsRow(layer: FtsLayer, recordId: string): void {
+    const m = this.ftsRowmap[layer];
+    const row = m.get.get(recordId) as { fts_rowid: number } | undefined;
+    if (!row) return;
+    m.ftsDeleteByRowid.run(row.fts_rowid);
+    m.del.run(recordId);
+  }
+
   // ── FTS5 migration & rebuild ──────────────────────────────────────────────
 
   /**
@@ -3131,6 +3244,8 @@ export class VectorStore implements IMemoryStore {
         .get();
       if (!l1Exists) {
         // Fresh install — tables will be created with v2 schema.
+        // Lookup tables are only valid for the FTS rows they were built from.
+        this.dropFtsRowmapTables();
         // Still need rebuild if there's existing data in l1_records.
         const hasData = this.db.prepare("SELECT 1 FROM l1_records LIMIT 1").get();
         return !!hasData;
@@ -3167,6 +3282,7 @@ export class VectorStore implements IMemoryStore {
       }
       this.db.exec("DROP TABLE IF EXISTS l1_fts");
       this.db.exec("DROP TABLE IF EXISTS l0_fts");
+      this.dropFtsRowmapTables();
       return true;
     } catch (err) {
       this.logger?.warn(
@@ -3195,6 +3311,7 @@ export class VectorStore implements IMemoryStore {
       // ── Rebuild L1 FTS ──
       // Clear existing FTS data
       this.db.exec("DELETE FROM l1_fts");
+      this.db.exec("DELETE FROM l1_fts_rowmap");
 
       // Read all L1 records from metadata table.
       // Include user_id / agent_id so the rebuilt FTS rows carry isolation info.
@@ -3227,7 +3344,7 @@ export class VectorStore implements IMemoryStore {
       let l1Count = 0;
       for (const r of l1Rows) {
         try {
-          this.stmtL1FtsInsert.run(
+          const ins = this.stmtL1FtsInsert.run(
             tokenizeForFts(r.content),  // content — segmented
             r.content,                   // content_original — raw
             r.record_id,
@@ -3246,6 +3363,7 @@ export class VectorStore implements IMemoryStore {
             r.timestamp_end,
             r.metadata_json,
           );
+          this.putFtsRowid("l1", r.record_id, ins.lastInsertRowid);
           l1Count++;
         } catch (err) {
           this.logger?.warn?.(
@@ -3256,6 +3374,7 @@ export class VectorStore implements IMemoryStore {
 
       // ── Rebuild L0 FTS ──
       this.db.exec("DELETE FROM l0_fts");
+      this.db.exec("DELETE FROM l0_fts_rowmap");
 
       const l0Rows = this.db
         .prepare(`
@@ -3280,7 +3399,7 @@ export class VectorStore implements IMemoryStore {
       let l0Count = 0;
       for (const r of l0Rows) {
         try {
-          this.stmtL0FtsInsert.run(
+          const ins = this.stmtL0FtsInsert.run(
             tokenizeForFts(r.message_text),  // message_text — segmented
             r.message_text,                   // message_text_original — raw
             r.record_id,
@@ -3294,6 +3413,7 @@ export class VectorStore implements IMemoryStore {
             r.recorded_at,
             r.timestamp,
           );
+          this.putFtsRowid("l0", r.record_id, ins.lastInsertRowid);
           l0Count++;
         } catch (err) {
           this.logger?.warn?.(
