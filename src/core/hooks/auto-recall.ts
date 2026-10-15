@@ -83,13 +83,18 @@ export async function performAutoRecall(params: {
   const timeoutMs = cfg.recall.timeoutMs ?? 5000;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Abort the in-flight embedding/VectorStore search when the recall timeout
+  // fires, so the work doesn't keep consuming an embedding API slot / holding
+  // the SQLite connection after we've already given up on the result.
+  const abortController = new AbortController();
 
   return Promise.race([
-    performAutoRecallInner(params).finally(() => {
+    performAutoRecallInner(params, abortController.signal).finally(() => {
       if (timer) clearTimeout(timer);
     }),
     new Promise<undefined>((resolve) => {
       timer = setTimeout(() => {
+        abortController.abort();
         logger?.warn?.(
           `${TAG} ⚠️ Recall timed out after ${timeoutMs}ms — skipping memory injection to avoid blocking the user`,
         );
@@ -99,16 +104,19 @@ export async function performAutoRecall(params: {
   ]);
 }
 
-async function performAutoRecallInner(params: {
-  userText: string;
-  actorId: string;
-  sessionKey: string;
-  cfg: MemoryTdaiConfig;
-  pluginDataDir: string;
-  logger?: Logger;
-  vectorStore?: IMemoryStore;
-  embeddingService?: EmbeddingService;
-}): Promise<RecallResult | undefined> {
+async function performAutoRecallInner(
+  params: {
+    userText: string;
+    actorId: string;
+    sessionKey: string;
+    cfg: MemoryTdaiConfig;
+    pluginDataDir: string;
+    logger?: Logger;
+    vectorStore?: IMemoryStore;
+    embeddingService?: EmbeddingService;
+  },
+  abortSignal?: AbortSignal,
+): Promise<RecallResult | undefined> {
   const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
   const tRecallStart = performance.now();
 
@@ -122,7 +130,7 @@ async function performAutoRecallInner(params: {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
-    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService, abortSignal);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
@@ -140,6 +148,13 @@ async function performAutoRecallInner(params: {
     });
   }
   const tSearchEnd = performance.now();
+
+  // If the recall timeout fired during the search phase, skip the remaining
+  // persona/scene file reads — the result is already going to be discarded.
+  if (abortSignal?.aborted) {
+    logger?.debug?.(`${TAG} Recall aborted after search — skipping persona/scene reads`);
+    return undefined;
+  }
 
   // Read persona (L3 layer)
   const tPersonaStart = performance.now();
@@ -313,6 +328,7 @@ async function searchMemories(
   strategy: "keyword" | "embedding" | "hybrid",
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  abortSignal?: AbortSignal,
 ): Promise<SearchResult> {
   const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
@@ -356,7 +372,10 @@ async function searchMemories(
   // Resolve per-call embedding timeout for recall path.
   // Falls back to global embedding.timeoutMs when recallTimeoutMs is not configured.
   const recallEmbeddingTimeoutMs = cfg.embedding?.recallTimeoutMs ?? cfg.embedding?.timeoutMs;
-  const embeddingCallOpts: EmbeddingCallOptions = { timeoutMs: recallEmbeddingTimeoutMs };
+  const embeddingCallOpts: EmbeddingCallOptions = {
+    timeoutMs: recallEmbeddingTimeoutMs,
+    ...(abortSignal ? { abortSignal } : {}),
+  };
 
   try {
     if (effectiveStrategy === "keyword") {
