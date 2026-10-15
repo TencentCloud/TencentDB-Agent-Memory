@@ -1,0 +1,9 @@
+vendor/
+runtime/
+data/
+runs/
+node_modules/
+*.zip
+*.log
+__pycache__/
+.env*

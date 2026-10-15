@@ -1,0 +1,253 @@
+{
+  "status": "pass",
+  "training": {
+    "active": {
+      "n": 32,
+      "selective": 14,
+      "novel": 12,
+      "token_gap_p50": 4,
+      "token_gap_max": 17,
+      "selective_repair": 2,
+      "conditional_incremental_tokens_per_selective": 8795
+    },
+    "uniform": {
+      "n": 32,
+      "selective": 11,
+      "novel": 8,
+      "token_gap_p50": 4,
+      "token_gap_max": 17,
+      "selective_repair": 0,
+      "conditional_incremental_tokens_per_selective": 11421.272727272728
+    }
+  },
+  "acquisition_cost": {
+    "active": {
+      "logical_requests": 192,
+      "unique_requests": 185,
+      "incremental_unique_requests": 112,
+      "incremental_unique_tokens": 123130,
+      "uncached_unique_tokens": 192681,
+      "note": "Standalone incremental cost conditional on preexisting v9/v10 QA cache; shared new keys counted once in each arm, so arms must not be summed."
+    },
+    "uniform": {
+      "logical_requests": 192,
+      "unique_requests": 182,
+      "incremental_unique_requests": 107,
+      "incremental_unique_tokens": 125634,
+      "uncached_unique_tokens": 197145,
+      "note": "Standalone incremental cost conditional on preexisting v9/v10 QA cache; shared new keys counted once in each arm, so arms must not be summed."
+    }
+  },
+  "diagnostics": {
+    "longmem": {
+      "train": {
+        "n": 72,
+        "repairable_baseline_errors": 1,
+        "captured_repairs": 0,
+        "active_changes": 2,
+        "gate_rejected_changes": 17,
+        "gate_avoided_harms": 0,
+        "gate_missed_repairs": 1,
+        "active_vs_ungated": {
+          "paired_n": 72,
+          "eligible_n": 72,
+          "clusters": 67,
+          "complete_delta": -0.013888888888888888,
+          "complete_delta_ci95": [
+            -0.04285714285714286,
+            0
+          ],
+          "token_reduction": -0.011355772255426277,
+          "token_reduction_ci95": [
+            -0.027093679842166152,
+            0.0008097285201107418
+          ],
+          "quality_wins": 0,
+          "quality_losses": 1,
+          "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+        },
+        "effective_gate_rate": 0.027777777777777776
+      },
+      "development": {
+        "n": 96,
+        "repairable_baseline_errors": 5,
+        "captured_repairs": 0,
+        "active_changes": 0,
+        "gate_rejected_changes": 20,
+        "gate_avoided_harms": 1,
+        "gate_missed_repairs": 0,
+        "active_vs_ungated": {
+          "paired_n": 96,
+          "eligible_n": 96,
+          "clusters": 88,
+          "complete_delta": 0.010416666666666666,
+          "complete_delta_ci95": [
+            0,
+            0.031578947368421054
+          ],
+          "token_reduction": -0.0010678356657112253,
+          "token_reduction_ci95": [
+            -0.003074905604919742,
+            0.0007231750623333255
+          ],
+          "quality_wins": 1,
+          "quality_losses": 0,
+          "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+        },
+        "effective_gate_rate": 0
+      }
+    },
+    "beam-100K": {
+      "train": {
+        "n": 200,
+        "repairable_baseline_errors": 22,
+        "captured_repairs": 0,
+        "active_changes": 6,
+        "gate_rejected_changes": 64,
+        "gate_avoided_harms": 5,
+        "gate_missed_repairs": 5,
+        "active_vs_ungated": {
+          "paired_n": 200,
+          "eligible_n": 200,
+          "clusters": 10,
+          "complete_delta": 0,
+          "complete_delta_ci95": [
+            -0.02,
+            0.02
+          ],
+          "token_reduction": -0.014209284672063838,
+          "token_reduction_ci95": [
+            -0.030005725999757038,
+            -0.002538343735978499
+          ],
+          "quality_wins": 5,
+          "quality_losses": 5,
+          "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+        },
+        "effective_gate_rate": 0.03
+      },
+      "calibration": {
+        "n": 100,
+        "repairable_baseline_errors": 6,
+        "captured_repairs": 0,
+        "active_changes": 3,
+        "gate_rejected_changes": 32,
+        "gate_avoided_harms": 2,
+        "gate_missed_repairs": 1,
+        "active_vs_ungated": {
+          "paired_n": 100,
+          "eligible_n": 100,
+          "clusters": 5,
+          "complete_delta": 0.01,
+          "complete_delta_ci95": [
+            -0.02,
+            0.04
+          ],
+          "token_reduction": -0.015204748551538971,
+          "token_reduction_ci95": [
+            -0.03727677546710728,
+            0.0005249049565296815
+          ],
+          "quality_wins": 2,
+          "quality_losses": 1,
+          "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+        },
+        "effective_gate_rate": 0.03
+      }
+    },
+    "beam-500K": {
+      "calibration": {
+        "n": 180,
+        "repairable_baseline_errors": 13,
+        "captured_repairs": 0,
+        "active_changes": 5,
+        "gate_rejected_changes": 61,
+        "gate_avoided_harms": 2,
+        "gate_missed_repairs": 5,
+        "active_vs_ungated": {
+          "paired_n": 180,
+          "eligible_n": 180,
+          "clusters": 9,
+          "complete_delta": -0.016666666666666666,
+          "complete_delta_ci95": [
+            -0.044444444444444446,
+            0.011111111111111112
+          ],
+          "token_reduction": -0.026019891227130332,
+          "token_reduction_ci95": [
+            -0.04021690013556256,
+            -0.013366661519456535
+          ],
+          "quality_wins": 2,
+          "quality_losses": 5,
+          "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+        },
+        "effective_gate_rate": 0.027777777777777776
+      }
+    },
+    "beam-1M": {
+      "calibration": {
+        "n": 180,
+        "repairable_baseline_errors": 14,
+        "captured_repairs": 0,
+        "active_changes": 6,
+        "gate_rejected_changes": 59,
+        "gate_avoided_harms": 4,
+        "gate_missed_repairs": 3,
+        "active_vs_ungated": {
+          "paired_n": 180,
+          "eligible_n": 180,
+          "clusters": 9,
+          "complete_delta": 0.005555555555555556,
+          "complete_delta_ci95": [
+            -0.011111111111111112,
+            0.022222222222222223
+          ],
+          "token_reduction": -0.02036635645520901,
+          "token_reduction_ci95": [
+            -0.038965785564385014,
+            -0.005486089319810095
+          ],
+          "quality_wins": 4,
+          "quality_losses": 3,
+          "caveat": "Pilot percentile bootstrap; few clusters/zero discordant pairs do not certify tight non-inferiority."
+        },
+        "effective_gate_rate": 0.03333333333333333
+      }
+    }
+  },
+  "isolation": {
+    "new_questions": 180,
+    "new_groups": 9,
+    "shared_group_ids": 0,
+    "exact_normalized_query_matches": 0,
+    "exact_normalized_query_answer_matches": 0,
+    "shared_retrieved_content_hashes": 0,
+    "new_unique_retrieved_chunks": 4304,
+    "limitation": "Exact content audit is restricted to retrieved pools, not all conversation text. Distinct IDs or no exact overlap do not prove IID users or absence of template/synthetic dependence."
+  },
+  "limits": [
+    "Acquisition counts are conditional on this finite training opportunity pool, not evidence of population-level superiority.",
+    "Removal contexts are not generally selectable by the three-proposer runtime. Full-context feature alignment does not remove this action-support mismatch.",
+    "Stability rejection is not a statistical risk certificate. Previously used cohorts are not confirmatory."
+  ],
+  "source_hashes": {
+    "results/slate-feedback-v11/fit/feedback.jsonl": "40d985929ea955c24ab99db6ff5f2e95f0730cbbeeb19fbe3d2fc78f2cdbd7fc",
+    "results/slate-feedback-v11/acquisition-v1.1/arms.json": "b2f608853d4acbfdb04ecfae0362fc53e9b8ee1fe1262a1a783bb3fbff4204b1",
+    "results/slate-feedback-v11/acquisition-v1.1/qa/reader.jsonl": "029a69a26e7fb06d1f7d1b41732529462b5a2d2c7253b60e590c2f31f2e66388",
+    "results/slate-feedback-v11/acquisition-v1.1/qa/judge.jsonl": "d67e8b93a4a19a0ef6fc021a1436e05f1cfffe5cb7c29f35bd95fea5d05d6d2f",
+    "results/slate-feedback-v11/analysis/longmem/cases.jsonl": "4c8814c1d20af7b93184d757149307282b580bb1c5f35cacb2c08fe1490ed49e",
+    "results/slate-feedback-v11/longmem/decisions.jsonl": "a8e9e11784d2cf88847803576a6d1c12564cce04ab0e78f0cbfe70664313fa42",
+    "results/slate-feedback-v11/analysis/beam-100K/cases.jsonl": "12d89496c92a0d4b0599693e2eb709541fba789322f97185a75ba41a424b7889",
+    "results/slate-feedback-v11/beam-100K/decisions.jsonl": "57b83e28bcdca963e1fe43c589ee3394f567a19c07236a6c2d131479cbddcf70",
+    "results/slate-feedback-v11/analysis/beam-500K/cases.jsonl": "38e0f9c887b7ae22ff5ba310f98ac6b8b9f6c7f0efb6ca3fe5a56e3440cee8bc",
+    "results/slate-feedback-v11/beam-500K/decisions.jsonl": "59b58685912105ee5bdd7dd0b2487c6a7a4e45b4b1cbda2b8e0945c6bc2ad759",
+    "results/slate-feedback-v11/analysis/beam-1M/cases.jsonl": "b9fc7dccda3efb9b529b4fa7c4d1c3db129b6f2ce8980ee304114118de899761",
+    "results/slate-feedback-v11/beam-1M/decisions.jsonl": "1433fbeeab81c7d2c1cb7998096d7f60fbf692aaad492ac554ff86e1e42b23ad",
+    "results/controlled-v10/longmem/bundle.jsonl": "5faa240859968dbc8784b4d6032226402903bfb3bb4b77cc6ff6b29227164982",
+    "results/controlled-v10/beam-100K/bundle.jsonl": "958be11d655984424992b3f6bc258008c856de18f27d0034c222f9c4e53a3fd8",
+    "results/controlled-v10/beam-500K/qwen/bundle.jsonl": "118784b79ca88be71bdf3bd270fa0d49b64e672ef74d9d4fed32d1963b26cda5",
+    "results/slate-feedback-v11/beam-1M-qwen/bundle.jsonl": "7260bdc80ba85edc571c62b2695e779767cf245c33036b991dd64bab10a8d4ac",
+    "scripts/v11-diagnostics.mjs": "1de9fa0c5452a17377486acd1d0dfc80a05650b30e35b411c268ef495baab298"
+  }
+}
