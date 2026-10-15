@@ -144,11 +144,10 @@ Open **<http://localhost:8125>** in your browser (Panel UI).
   back in as the new user.
 
 > **Permission model (understand this first, or the later steps won't add up)**:
-> - **admin is the "ops account"**: responsible for organization-level actions —
->   **creating Teams, creating users, and adding users into Teams**. The
->   "New Team" and "New User" entries in the panel are **visible only to admin**.
-> - **Business users are the "app accounts"**: they manage assets (Agent / Task /
->   Skill / Wiki / CodeGraph / memory) **inside the Teams the admin added them to**,
+> - **admin is the "ops account"**: creates users, adds users to Teams it can manage,
+>   and can create Teams it owns. The current "New User" entry is visible only to admin.
+> - **Business users are the "app accounts"**: they can create Teams they own and manage
+>   assets (Agent / Task / Skill / Wiki / CodeGraph / memory) inside those Teams or Teams they joined,
 >   and use their own `user_key` to drive coding agents like Claude Code.
 > - Even in a single-machine local playground, keeping this split is recommended —
 >   don't use the admin key to drive CC.
@@ -169,7 +168,7 @@ After logging in as admin:
 
 1. **Create a Team first**: click the **Team switcher in the top-left** (the
    dropdown in the header showing the current team name) → **"+ New Team"** at
-   the bottom of the panel → enter a name → create. (This entry is admin-only.)
+   the bottom of the panel → enter a name → create.
 2. **Open that Team's member management**: left sidebar → **"Members"** →
    **"Add Member"** in the top-right.
 3. In the dialog, switch the mode to **"Create New User & Add to Team"** → enter a
@@ -218,12 +217,10 @@ Then log out of the panel and log back in with this new key — you're now
 a `normal` business user, and you can manage assets (Agent / Task / Skill /
 Wiki / memory) **inside the Team the admin already added you to**.
 
-> **Creating a Team in the panel is admin-only.** After logging in, a business user
-> **won't see the "New Team" entry** — this is the panel's permission design, not a
-> bug. When a business user needs a new Team, there are two ways: ① ask an admin to
-> create it in the panel and add you; ② create it yourself via the `team/create` API
-> with your own key (set `owner_user_id` to yourself — you automatically become that
-> Team's admin). See the next step.
+> **Authenticated users can create Teams they own in the panel.** A business user
+> with no Team can choose "New Team" from the empty state or top-left Team switcher.
+> The creator becomes owner and Team admin. To join someone else's Team, ask its
+> owner or member-admin to add you.
 
 ### Step 2: Create Team / Agent / Task in the panel
 
@@ -232,10 +229,9 @@ Every memory entry attaches to a `team / agent / task` triple:
 1. **Team**: the **Team switcher in the top-left** (the header dropdown showing the
    current team name) → **"+ New Team"** at the bottom
    - A Team owns everything: memory, skill, knowledge
-   - ⚠️ **Only admin can create a Team in the panel**; it's normal that a business
-     user doesn't see this entry — ask an admin to create it and add you
-   - 💡 **Want a business user to self-serve a Team?** There's no panel entry, but you
-     can call the API with **your own key** and set `owner_user_id` to your own user_id —
+   - A Teamless business user can use the empty-state "New Team" action.
+   - The same self-owned operation is available via API with **your own key** and
+     `owner_user_id` set to your own user_id —
      the core creates the Team and **automatically makes you its admin** (no separate
      add-member step needed):
 
@@ -348,12 +344,10 @@ the panel. If using the admin account, ensure you've created the relevant
 assets; if using a business user, check that you've created Agents under
 the corresponding team.
 
-**Q: I logged in as a business user but there's no "New Team" button?**
-This is the panel's permission design, not a bug: **creating a Team in the panel is
-admin-only**. You have two options: ① ask an admin to log in → top-left Team switcher →
-"+ New Team", then add you under that Team's "Members"; ② create it yourself via the
-`team/create` API (set `owner_user_id` to your own user_id — you become that Team's
-admin; see Step 2). Either way, after you log back in the Team shows up in the picker.
+**Q: I logged in as a business user but have no Team?**
+Use "New Team" in the workbench empty state or top-left Team switcher to create
+one you own. To join an existing Team, ask its owner or member-admin to add you.
+The new Team should become active after creation.
 
 **Q: Panel shows "Panel API 8125 not started"?**
 `docker ps` and check `tdai-memory-hub` is healthy. If not, look at

@@ -10,7 +10,7 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Dropdown, Input, Button } from 'tea-component';
+import { Dropdown, Button } from 'tea-component';
 import { ChevronDownIcon, AddIcon, EditIcon, DeleteIcon } from 'tea-icons-react';
 import {
   useTeams,
@@ -26,16 +26,16 @@ import { teamColor } from '@/utils/color';
 import { tea } from '@/lib/tea-bridge';
 import { getErrorMessage } from '@/lib/error-message';
 import EditTeamDialog from '@/components/team/EditTeamDialog';
+import { CreateOwnTeamForm } from '@/components/team/CreateOwnTeamForm';
+import { useAuthStore } from '@/stores/auth';
 import './team-switcher.css';
 
 export function TeamSwitcher({ userRole }: { userRole: TeamRole | null }) {
   const { t } = useTranslation();
   const { teams, activeTeamId } = useTeams();
   const refreshTeams = useBackendStore((s) => s.refreshTeams);
+  const canCreateTeam = useAuthStore((s) => Boolean(s.auth?.user_id));
   const [showCreateTeam, setShowCreateTeam] = useState(false);
-  const [newTeamName, setNewTeamName] = useState('');
-  const [newTeamDesc, setNewTeamDesc] = useState('');
-  const [creating, setCreating] = useState(false);
   // 编辑弹窗可见状态
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
 
@@ -49,8 +49,6 @@ export function TeamSwitcher({ userRole }: { userRole: TeamRole | null }) {
 
   function resetCreateForm() {
     setShowCreateTeam(false);
-    setNewTeamName('');
-    setNewTeamDesc('');
   }
 
   function pick(team_id: string, close: () => void) {
@@ -64,22 +62,6 @@ export function TeamSwitcher({ userRole }: { userRole: TeamRole | null }) {
     //    已经保证数据新鲜度，切换本身不需要再强刷。
     writeActiveTeamId(team_id);
     close();
-  }
-
-  async function handleCreate() {
-    const name = newTeamName.trim();
-    if (!name) return;
-    setCreating(true);
-    try {
-      const created = await teamsApi.create({ name, description: newTeamDesc.trim() });
-      invalidateBackendCache();
-      writeActiveTeamId(created.team_id);
-      resetCreateForm();
-    } catch (err) {
-      tea.notify.error(getErrorMessage(err));
-    } finally {
-      setCreating(false);
-    }
   }
 
   async function handleUpdateTeam(input: { name: string; description: string }) {
@@ -169,9 +151,7 @@ export function TeamSwitcher({ userRole }: { userRole: TeamRole | null }) {
             <div className="_memory-team-switcher-list-wrap">
               {myTeams.length === 0 ? (
                 <div className="_memory-team-switcher-empty">
-                  {userRole === 'admin'
-                    ? t('teamSwitcher.empty.admin')
-                    : t('teamSwitcher.empty.member')}
+                  {canCreateTeam ? t('teamSwitcher.empty.admin') : t('teamSwitcher.empty.member')}
                 </div>
               ) : (
                 // 用原生 ul/li 而非 Tea List：Tea 的 List.Item selected 会自动渲染 ✓
@@ -235,32 +215,8 @@ export function TeamSwitcher({ userRole }: { userRole: TeamRole | null }) {
             </div>
 
             <div className="_memory-team-switcher-footer">
-              {userRole !== 'admin' ? null : showCreateTeam ? (
-                <div className="_memory-team-switcher-create-form">
-                  <Input
-                    autoFocus
-                    size="full"
-                    value={newTeamName}
-                    onChange={setNewTeamName}
-                    placeholder={t('teamSwitcher.teamNamePlaceholder')}
-                  />
-                  <Input
-                    size="full"
-                    value={newTeamDesc}
-                    onChange={setNewTeamDesc}
-                    placeholder={t('teamSwitcher.teamDescPlaceholder')}
-                  />
-                  <div className="_memory-team-switcher-create-actions">
-                    <Button onClick={resetCreateForm}>{t('teamSwitcher.cancel')}</Button>
-                    <Button type="primary"
-                      loading={creating}
-                      disabled={!newTeamName.trim() || creating}
-                      onClick={handleCreate}
-                    >
-                      {t('teamSwitcher.create')}
-                    </Button>
-                  </div>
-                </div>
+              {!canCreateTeam ? null : showCreateTeam ? (
+                <CreateOwnTeamForm onCancel={resetCreateForm} onCreated={resetCreateForm} />
               ) : (
                 <Button type="text"
                   className="_memory-team-switcher-create-trigger"
