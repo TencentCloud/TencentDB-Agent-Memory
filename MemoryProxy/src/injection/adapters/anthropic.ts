@@ -18,6 +18,10 @@ import type {
 } from "../types.js";
 
 const TOP_LEVEL_SYSTEM = "anthropicTopLevelSystem";
+/** Original tool_result.content array, kept when it holds non-text blocks. */
+const NESTED_BLOCKS = "anthropicNestedBlocks";
+/** Text view of NESTED_BLOCKS at parse time, to detect hook rewrites. */
+const NESTED_TEXT = "anthropicNestedText";
 
 export class AnthropicAdapter implements ProtocolAdapter {
   readonly protocol = "anthropic" as const;
@@ -137,24 +141,32 @@ export class AnthropicAdapter implements ProtocolAdapter {
       case "tool_result": {
         const resultContent = block.content;
         let contentStr: string;
+        const metadata: Record<string, unknown> = {
+          tool_use_id: block.tool_use_id as string,
+          is_error: block.is_error as boolean | undefined,
+        };
         if (typeof resultContent === "string") {
           contentStr = resultContent;
         } else if (Array.isArray(resultContent)) {
-          // tool_result can have nested content blocks
-          contentStr = (resultContent as Record<string, unknown>[])
+          // tool_result can have nested content blocks. Hooks only see the text;
+          // non-text blocks (image, document, …) must survive the round-trip,
+          // otherwise the model never sees screenshots returned by tools.
+          const nested = resultContent as Record<string, unknown>[];
+          contentStr = nested
             .filter((c) => c.type === "text")
             .map((c) => c.text as string)
             .join("\n");
+          if (nested.some((c) => c.type !== "text")) {
+            metadata[NESTED_BLOCKS] = nested;
+            metadata[NESTED_TEXT] = contentStr;
+          }
         } else {
           contentStr = JSON.stringify(resultContent ?? "");
         }
         return {
           type: "tool_result",
           content: contentStr,
-          metadata: {
-            tool_use_id: block.tool_use_id as string,
-            is_error: block.is_error as boolean | undefined,
-          },
+          metadata,
         };
       }
 
@@ -245,7 +257,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
         const result: Record<string, unknown> = {
           type: "tool_result",
           tool_use_id: block.metadata?.tool_use_id ?? "",
-          content: block.content,
+          content: this.serializeToolResultContent(block),
         };
         if (block.metadata?.is_error) {
           result.is_error = true;
@@ -278,6 +290,24 @@ export class AnthropicAdapter implements ProtocolAdapter {
           return { type: block.type, content: block.content };
         }
     }
+  }
+
+  /**
+   * Rebuild tool_result.content. Without non-text nested blocks this is the
+   * plain string, as before. With them: unchanged text → original array
+   * verbatim; text rewritten by a hook → new text first, then the original
+   * non-text blocks in their original order.
+   */
+  private serializeToolResultContent(block: ContextBlock): unknown {
+    const nested = block.metadata?.[NESTED_BLOCKS] as Record<string, unknown>[] | undefined;
+    if (!Array.isArray(nested)) return block.content;
+    if (block.content === block.metadata?.[NESTED_TEXT]) return nested;
+    const out: Record<string, unknown>[] = [];
+    if (block.content) out.push({ type: "text", text: block.content });
+    for (const c of nested) {
+      if (c.type !== "text") out.push(c);
+    }
+    return out;
   }
 
   private serializeTool(tool: AgentTool): Record<string, unknown> {
