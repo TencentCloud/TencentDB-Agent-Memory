@@ -109,9 +109,16 @@ export class V3HttpTransport {
         );
       }
 
-      const result = (envelope.data ?? {}) as T & { trace_id?: string };
+      const raw = envelope.data ?? {};
+      // Same contract as the Python transports: only null/undefined data
+      // falls back to {}; any other non-object payload is malformed and must
+      // fail as a clean TDAMError instead of passing through as a success.
+      if (typeof raw !== "object" || Array.isArray(raw)) {
+        throw new TDAMError(-1, "API response data must be a JSON object", headerRequestId);
+      }
+      const result = raw as T & { trace_id?: string };
       const traceId = response.headers.get("x-trace-id");
-      if (traceId && result && typeof result === "object") {
+      if (traceId) {
         (result as Record<string, unknown>).trace_id = traceId;
       }
       return result;
