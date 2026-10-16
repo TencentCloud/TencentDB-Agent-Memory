@@ -19,6 +19,7 @@
  *   // HTTP handler calls core.handleBeforeRecall / core.handleTurnCommitted / etc.
  */
 
+import path from "node:path";
 import type {
   HostAdapter,
   Logger,
@@ -48,6 +49,7 @@ import {
   createL2Runner,
   createL3Runner,
 } from "../utils/pipeline-factory.js";
+import { openSkillDatabase } from "./store/sqlite/skill-db.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
@@ -159,6 +161,7 @@ export class TdaiCore {
 
   // Lazy-initialized resources
   private vectorStore?: IMemoryStore;
+  private skillDb?: import("node:sqlite").DatabaseSync;
   private embeddingService?: EmbeddingService;
   private scheduler?: MemoryPipelineManager;
   /**
@@ -362,6 +365,8 @@ export class TdaiCore {
       this.vectorStore = undefined;
       this.logger.debug?.(`${TAG} VectorStore closed`);
     }
+    this.skillDb?.close();
+    this.skillDb = undefined;
 
     if (this.embeddingService?.close) {
       try {
@@ -855,7 +860,7 @@ export class TdaiCore {
         this.cfg.cos?.bucket
       );
       const probe: SkillEnvProbe = {
-        outerStoreBackend: this.cfg.storeBackend,
+        outerStoreBackend: this.cfg.storeBackend === "qdrant" ? "sqlite" : this.cfg.storeBackend,
         hasTcvdbCredentials: tcvdbHasCreds,
         hasCosCredentials: cosHasCreds,
         embeddingAvailable:
@@ -879,17 +884,24 @@ export class TdaiCore {
         getRawDb?: () => unknown;
         getEmbeddingDimensions?: () => number;
       };
-      if (typeof rawDbCarrier.getRawDb !== "function") {
+      let db: import("node:sqlite").DatabaseSync;
+      let dimensions: number;
+      if (typeof rawDbCarrier.getRawDb === "function") {
+        db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
+        dimensions =
+          typeof rawDbCarrier.getEmbeddingDimensions === "function"
+            ? rawDbCarrier.getEmbeddingDimensions()
+            : (this.cfg.embedding.dimensions ?? 0);
+      } else if (this.cfg.storeBackend === "qdrant") {
+        const dims = this.cfg.embedding.enabled ? (this.cfg.embedding.dimensions ?? 0) : 0;
+        ({ db, dimensions } = openSkillDatabase(path.join(this.dataDir, "skills.db"), dims, this.logger));
+        this.skillDb = db;
+      } else {
         this.logger.warn(
           `${TAG} Skill wiring skipped: vectorStore does not expose getRawDb() (only SQLite-backed VectorStore is supported in MVP)`,
         );
         return;
       }
-      const db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
-      const dimensions =
-        typeof rawDbCarrier.getEmbeddingDimensions === "function"
-          ? rawDbCarrier.getEmbeddingDimensions()
-          : (this.cfg.embedding.dimensions ?? 0);
 
       const skillStore = new SqliteSkillStore({
         db,
@@ -993,6 +1005,8 @@ export class TdaiCore {
       );
       this.skillCore = undefined;
       this.skillExtractor = undefined;
+      this.skillDb?.close();
+      this.skillDb = undefined;
     }
   }
 

@@ -293,6 +293,38 @@ Gateway 按以下优先级加载配置：
 
 所有业务调用都应明确 `x-tdai-service-id`。新 Adapter 建议使用 v3 数据面，并始终提供 Team、Agent、User 隔离维度。
 
+### Qdrant 存储后端（可选）
+
+设置 `STORE_MODE=qdrant` 后，记忆数据面——L0 对话、L1 原子、L2/L3 profile、memory prompt、生成溯源、审计与知识元数据——存入 [Qdrant](https://qdrant.tech)（已在 1.19 上验证）。Skill 存于本地 SQLite `skills.db`（gateway 下按实例位于 `instances/{id}/`），元数据仍走原有存储。
+
+```bash
+export STORE_MODE=qdrant
+export QDRANT_URL="http://localhost:6333"
+# export QDRANT_API_KEY=...              # Qdrant Cloud / 开启鉴权的集群
+# export QDRANT_COLLECTION_PREFIX=tdai    # 默认值
+node --import tsx src/gateway/server.ts
+```
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `QDRANT_URL` | 未设置（必填） | Qdrant REST 地址。按标准 URL 语义：未写端口时使用协议默认端口（80/443），路径（如 `https://gw/qdrant`）作为请求前缀保留 |
+| `QDRANT_API_KEY` | 空 | API key |
+| `QDRANT_COLLECTION_PREFIX` | `tdai` | collection 命名为 `{prefix}_{l0,l1,profiles,…}`，所有实例共用 |
+
+插件 / SDK 形态通过 `storeBackend: qdrant` 选择该后端，读取相同的环境变量。
+
+检索方式：
+
+- **关键词**：每条 L0/L1 带一个 BM25 稀疏向量，分词与其他后端一致（jieba）；collection 开启 Qdrant `idf` modifier，IDF 由服务端按语料计算。无需 embedding 服务即可使用。
+- **向量**：配置 `memory.embedding` 后，额外写入余弦稠密向量，向量名由 embedding 配置决定（`dense_{维度}_{hash(provider, model)}`）。
+- **混合**：稠密与 BM25 候选在一次 Query API 调用内用 RRF（k=60）融合。查询向量化受 `embedding.recallTimeoutMs` 约束，失败或超时则退化为 BM25。
+- **多租户**：遵循 Qdrant [多租户指南](https://qdrant.tech/documentation/guides/multiple-partitions/)，所有实例共用一组 collection。每个点在 `_tenant` payload 字段中记录实例 ID（以 `is_tenant: true` 建索引），所有读写都按该字段过滤；稠密向量使用按租户构建的 HNSW 图（`m: 0, payload_m: 16`）。
+- **更换 embedding provider / 模型 / 维度**：在旧向量旁新增一个向量，不删除任何数据，滚动发布期间新旧配置的 pod 可以并存。store 会在后台为缺少当前向量的点补齐向量：启动后、写入时未带向量（embedding 失败或其他配置改写了文本）之后，以及每 10 分钟一次。无需手动 reindex；期间关键词检索不受影响。确认没有 pod 再使用旧配置后，可用 `DELETE /collections/{collection}/vectors/{name}` 删除旧向量。
+
+支持 `FILE_STORE_MODE=rowfs`（Qdrant store 提供 L2/L3 profile 行，乐观锁通过服务端条件 upsert 保证原子性）。切换后端不会迁移已有数据。
+
+测试需连真实服务：`QDRANT_TEST_URL=http://localhost:6333 npx vitest run src/core/store/qdrant`。
+
 ## 目录结构
 
 ```text
