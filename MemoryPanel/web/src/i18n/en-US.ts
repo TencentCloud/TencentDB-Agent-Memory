@@ -106,6 +106,7 @@ export const enUS = {
   'login.woa.yourUserKey': 'Your user_key',
   'login.woa.copyKey': 'Copy',
   'login.woa.copied': 'Copied',
+  'login.woa.copyFailed': 'Copy failed, please select and copy manually',
   'login.woa.keyReadyWarn': 'Save it now: an auto-generated key is shown only once and cannot be retrieved later.',
   'login.woa.savedEnter': 'I have saved it, enter',
   'login.submitting': 'Logging in…',

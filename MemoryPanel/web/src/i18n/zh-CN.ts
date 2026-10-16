@@ -104,6 +104,7 @@ export const zhCN = {
   'login.woa.yourUserKey': '你的 user_key',
   'login.woa.copyKey': '复制',
   'login.woa.copied': '已复制',
+  'login.woa.copyFailed': '复制失败，请手动选择复制',
   'login.woa.keyReadyWarn': '请立即妥善保存：自动生成的 key 仅此一次完整展示，离开后无法再次查看。',
   'login.woa.savedEnter': '我已保存，进入',
   'login.submitting': '登录中…',
