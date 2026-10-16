@@ -2115,6 +2115,11 @@ export function createUsageTapTransform(ctx: TapContext): UsageTap {
           armInactivity(); // 数据到达即 re-arm：慢但持续有数据不触发
         }
       } catch (err) {
+        // Review fix: reader/parse abort (upstream drop) leaves the buffer
+        // necessarily incomplete — mark truncated like the inactivity path.
+        // Previously auditTimedOut had a single assignment (timer callback)
+        // and this path wrote L0 with truncated=false, defeating the marker.
+        auditTimedOut = true;
         pipe.error("STREAM_AUDIT_ERR", err instanceof Error ? err.message : String(err));
       } finally {
         auditDone = true;
