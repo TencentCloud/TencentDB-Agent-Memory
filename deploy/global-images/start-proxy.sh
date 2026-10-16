@@ -64,6 +64,7 @@ fi
 PROXY_ENABLE_AUTH="${PROXY_ENABLE_AUTH:-0}"
 PROXY_ENABLE_TDAI="${PROXY_ENABLE_TDAI:-0}"
 PROXY_ENABLE_SESSION_INIT="${PROXY_ENABLE_SESSION_INIT:-0}"
+PROXY_PUBLIC_URL=$(resolve_proxy_public_url)
 
 # sessionInit 依赖 auth 拿 user_id；开 sessionInit 时自动补 auth
 if [[ "$PROXY_ENABLE_SESSION_INIT" == "1" && "$PROXY_ENABLE_AUTH" != "1" ]]; then
@@ -140,6 +141,8 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  # Agent 在宿主机执行 curl，必须注入宿主机可达地址，不能让 Proxy 自行回落到容器 IP。
+  externalGatewayUrl: "${PROXY_PUBLIC_URL}"
   injectors:
     - skill
     - knowledge
@@ -150,6 +153,7 @@ redis:
 YAML
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
+info "Agent skill/memory 工具地址: $PROXY_PUBLIC_URL"
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias proxy \

@@ -36,32 +36,9 @@ MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 # 显式设了 MEMORY_HUB_PROXY_PUBLIC_URL 环境变量则完全按你给的值来。
 # 显式设为空字符串则 Panel 前端回落到 gateway_endpoint（老行为）。
 # Panel 后端 → Kernel 的转发地址始终走 REMOTE_INSTANCE_URL，不受此变量影响。
-detect_host_ip() {
-  local ip=""
-  # Linux
-  if command -v hostname >/dev/null 2>&1; then
-    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
-  fi
-  # macOS
-  if command -v ipconfig >/dev/null 2>&1; then
-    for iface in en0 en1 en2; do
-      ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
-      [[ -n "$ip" ]] && { echo "$ip"; return; }
-    done
-  fi
-  # 兜底：ip route（Linux 无 hostname -I 时）
-  if command -v ip >/dev/null 2>&1; then
-    ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
-  fi
-  echo "localhost"
-}
-
 if [[ -z "${MEMORY_HUB_PROXY_PUBLIC_URL+x}" ]]; then
   # 未设 → 用探测出的 IP + PROXY_PORT 拼默认值
-  _host_ip=$(detect_host_ip)
-  MEMORY_HUB_PROXY_PUBLIC_URL="http://${_host_ip}:${PROXY_PORT:-8096}"
+  MEMORY_HUB_PROXY_PUBLIC_URL=$(resolve_proxy_public_url)
   info "自动探测宿主机地址: MEMORY_HUB_PROXY_PUBLIC_URL=$MEMORY_HUB_PROXY_PUBLIC_URL"
   info "  (如需覆盖，在 .env 里显式设 MEMORY_HUB_PROXY_PUBLIC_URL=http://<your-ip>:${PROXY_PORT:-8096})"
 fi

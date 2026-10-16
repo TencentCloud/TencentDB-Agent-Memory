@@ -1097,6 +1097,7 @@ function buildSkillCreateBody(ctx: WriteCtx, skill: ScannedSkill): { name: strin
   const body: Record<string, unknown> = {
     name,
     content: skill.content,
+    user_id: ctx.userId,
     team_id: ctx.teamId,
     agent_id: resolveSkillAgentId(ctx),
   };

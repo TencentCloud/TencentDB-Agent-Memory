@@ -1,0 +1,81 @@
+name: tencentdb-agent-memory
+
+services:
+  memory-core:
+    image: ${MEMORY_CORE_IMAGE}
+    container_name: tdai-memory-core
+    restart: unless-stopped
+    networks:
+      - tdai-memory-stack
+    ports:
+      - "${MEMORY_CORE_PORT}:8420"
+    volumes:
+      - memory-core-data:/data/tdai-memory
+      - ./.memory-core-config/tdai-gateway.yaml:/data/config/tdai-gateway.yaml:ro
+    environment:
+      TDAI_GATEWAY_PORT: "8420"
+      TDAI_GATEWAY_HOST: "0.0.0.0"
+      TDAI_GATEWAY_API_KEY: "${MEMORY_CORE_GATEWAY_API_KEY}"
+      TDAI_DATA_DIR: /data/tdai-memory
+
+  memory-hub:
+    image: ${MEMORY_HUB_IMAGE}
+    container_name: tdai-memory-hub
+    restart: unless-stopped
+    depends_on:
+      memory-core:
+        condition: service_healthy
+    networks:
+      - tdai-memory-stack
+    ports:
+      - "${PANEL_PORT}:8125"
+      - "${KNOWLEDGE_PORT}:8424"
+    volumes:
+      - panel-data:/data/knowledge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PANEL_PORT: "8125"
+      KNOWLEDGE_PORT: "8424"
+      KNOWLEDGE_PUBLIC_BASE_URL: "${KNOWLEDGE_PUBLIC_BASE_URL}"
+      REMOTE_INSTANCE_ID: default
+      REMOTE_INSTANCE_NAME: default
+      REMOTE_INSTANCE_URL: http://memory-core:8420
+      REMOTE_INSTANCE_KEY: "${MEMORY_CORE_GATEWAY_API_KEY:-local}"
+      REMOTE_INSTANCE_PROXY_URL: "${MEMORY_HUB_PROXY_PUBLIC_URL}"
+      LLM_MODE: custom
+      LLM_PROTOCOL: "${MEMORY_LLM_PROTOCOL}"
+      LLM_API_KEY: "${MEMORY_LLM_API_KEY}"
+      LLM_BASE_URL: "${MEMORY_LLM_BASE_URL}"
+      LLM_MODEL: "${MEMORY_LLM_MODEL}"
+      KNOWLEDGE_LLM_BINDING_SYNC: "0"
+
+  proxy:
+    image: ${PROXY_IMAGE}
+    container_name: tdai-proxy
+    restart: unless-stopped
+    depends_on:
+      memory-core:
+        condition: service_healthy
+      memory-hub:
+        condition: service_healthy
+    networks:
+      - tdai-memory-stack
+    ports:
+      - "${PROXY_PORT}:8096"
+    volumes:
+      - ./.proxy-config/config.yaml:/data/config.yaml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  tdai-memory-stack:
+    name: tdai-memory-stack
+
+volumes:
+  memory-core-data:
+    name: ${MEMORY_CORE_VOLUME}
+    external: true
+  panel-data:
+    name: ${PANEL_VOLUME}
+    external: true

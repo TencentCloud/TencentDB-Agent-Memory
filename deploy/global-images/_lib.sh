@@ -30,6 +30,40 @@ load_env() {
   set +a
 }
 
+# Detect an address on the Docker host that is reachable by agents running
+# outside the stack. Container-local interface addresses must not be exposed in
+# injected tool URLs.
+detect_host_ip() {
+  local ip=""
+  if command -v hostname >/dev/null 2>&1; then
+    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
+    [[ -n "$ip" ]] && { echo "$ip"; return; }
+  fi
+  if command -v ipconfig >/dev/null 2>&1; then
+    local iface
+    for iface in en0 en1 en2; do
+      ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+      [[ -n "$ip" ]] && { echo "$ip"; return; }
+    done
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
+    [[ -n "$ip" ]] && { echo "$ip"; return; }
+  fi
+  echo "localhost"
+}
+
+# Public proxy URL used in URLs copied from Panel and injected into Agent
+# prompts. An explicitly empty Panel URL keeps its legacy UI behavior, while
+# Proxy still needs a usable URL and therefore falls back to host detection.
+resolve_proxy_public_url() {
+  if [[ -n "${MEMORY_HUB_PROXY_PUBLIC_URL:-}" ]]; then
+    echo "${MEMORY_HUB_PROXY_PUBLIC_URL%/}"
+  else
+    echo "http://$(detect_host_ip):${PROXY_PORT:-8096}"
+  fi
+}
+
 # 校验一组必填变量；缺一个都不启动，一次性列出所有缺失项
 require_vars() {
   local missing=()

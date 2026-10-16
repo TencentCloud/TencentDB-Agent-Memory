@@ -139,3 +139,5 @@ MemoryCore/scripts/bench-l0-mongo/reports/
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
 z_config/
+
+.playwright-mcp/
