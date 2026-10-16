@@ -4,9 +4,17 @@
 #
 # 用法：
 #   ./start-memory-core.sh
+#   ./start-memory-core.sh --force-regenerate-config
 #
 # 数据持久化到 named volume（默认 tdai-memory-core-data，可在 .env 改 MEMORY_CORE_VOLUME）。
 # 重复执行会先移除旧容器再启新的，volume 数据保留 —— admin user_key 也随之保留。
+#
+# Gateway 配置只读挂到容器 /data/config/tdai-gateway.yaml：
+#   MEMORY_CORE_CONFIG_FILE=/path  校验存在且可读后收成绝对路径再挂载，脚本不修改该文件
+#   未设置时默认 ${SCRIPT_DIR}/.memory-core-config/tdai-gateway.yaml（脚本所在目录）。
+#   MEMORY_CORE_CONFIG_DIR 为相对路径时按当前工作目录解析，再收成绝对路径后挂载。
+#   该文件不存在才生成一次；已存在则原样复用。
+#   MEMORY_CORE_REGENERATE_CONFIG=1 等同 --force-regenerate-config（与外部文件互斥）。
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +45,53 @@ fi
 if [[ -n "$MEMORY_CORE_GATEWAY_API_KEY" ]]; then
   warn "MEMORY_CORE_GATEWAY_API_KEY 非空 —— proxy 的 sessionInit/auth 目前会因缺 Bearer 而失败。"
   warn "本地体验请把 .env 里的 MEMORY_CORE_GATEWAY_API_KEY 留空。"
+fi
+
+# ── Gateway 配置选择（在任何 docker 变更之前失败）────────────────
+# 默认文件只生成一次；外部文件只读挂载，绝不改写。
+FORCE_REGENERATE_CONFIG=0
+if [[ "${MEMORY_CORE_REGENERATE_CONFIG:-}" == "1" ]]; then
+  FORCE_REGENERATE_CONFIG=1
+fi
+for _core_arg in "$@"; do
+  case "${_core_arg}" in
+    --force-regenerate-config)
+      FORCE_REGENERATE_CONFIG=1
+      ;;
+    *)
+      die "未知参数: ${_core_arg}（仅支持 --force-regenerate-config）"
+      ;;
+  esac
+done
+
+CORE_CONFIG_DIR="${MEMORY_CORE_CONFIG_DIR:-${SCRIPT_DIR}/.memory-core-config}"
+CORE_CONFIG_IS_EXTERNAL=0
+if [[ -n "${MEMORY_CORE_CONFIG_FILE:-}" ]]; then
+  if [[ "${FORCE_REGENERATE_CONFIG}" == "1" ]]; then
+    die "已指定 MEMORY_CORE_CONFIG_FILE，不会修改该文件；请去掉 --force-regenerate-config 和 MEMORY_CORE_REGENERATE_CONFIG=1"
+  fi
+  if [[ ! -f "${MEMORY_CORE_CONFIG_FILE}" || ! -r "${MEMORY_CORE_CONFIG_FILE}" ]]; then
+    die "MEMORY_CORE_CONFIG_FILE 不存在或不可读: ${MEMORY_CORE_CONFIG_FILE}"
+  fi
+  # docker -v 把不含 / 的源当成 named volume。收成物理绝对路径再挂载。
+  # bash 3.2 不用 realpath：清空 CDPATH，cd -P / pwd -P，并与 [[ -f ]] 接受的文件比对（-ef）。
+  # 否则导出的 CDPATH，或符号链接 cwd 上的逻辑 ..，会把别的文件挂进容器。
+  _core_rel_dir="$(dirname -- "${MEMORY_CORE_CONFIG_FILE}")" || die "无法解析 MEMORY_CORE_CONFIG_FILE 的绝对路径: ${MEMORY_CORE_CONFIG_FILE}"
+  [[ -n "${_core_rel_dir}" ]] || die "无法解析 MEMORY_CORE_CONFIG_FILE 的绝对路径: ${MEMORY_CORE_CONFIG_FILE}"
+  _core_cfg_dir="$(CDPATH= cd -P -- "${_core_rel_dir}" >/dev/null && pwd -P)" || die "无法解析 MEMORY_CORE_CONFIG_FILE 的绝对路径: ${MEMORY_CORE_CONFIG_FILE}"
+  [[ "${_core_cfg_dir}" == /* ]] || die "无法解析 MEMORY_CORE_CONFIG_FILE 的绝对路径: ${MEMORY_CORE_CONFIG_FILE}"
+  CORE_CONFIG_FILE="${_core_cfg_dir}/$(basename -- "${MEMORY_CORE_CONFIG_FILE}")"
+  [[ -f "${CORE_CONFIG_FILE}" && "${MEMORY_CORE_CONFIG_FILE}" -ef "${CORE_CONFIG_FILE}" ]] || die "无法解析 MEMORY_CORE_CONFIG_FILE 的绝对路径: ${MEMORY_CORE_CONFIG_FILE}"
+  CORE_CONFIG_IS_EXTERNAL=1
+fi
+
+# 默认路径若已存在但不是普通文件（例如目录），mv 会把临时文件移进去并返回 0，
+# 随后 docker -v 会挂载该目录。在任何 docker 变更之前失败，且不要生成或覆盖。
+if [[ "${CORE_CONFIG_IS_EXTERNAL}" != "1" ]]; then
+  _default_cfg="${CORE_CONFIG_DIR}/tdai-gateway.yaml"
+  if [[ -e "${_default_cfg}" && ! -f "${_default_cfg}" ]]; then
+    die "默认 gateway config 已存在但不是普通文件: ${_default_cfg}"
+  fi
 fi
 
 CONTAINER=tdai-memory-core
@@ -156,19 +211,39 @@ YAML
     ;;
 esac
 
-pull_image "$MEMORY_CORE_IMAGE"
-rm_container_if_exists "$CONTAINER"
+# 默认配置目录在 mkdir 之后、docker -v 之前收成物理绝对路径。
+# 相对 MEMORY_CORE_CONFIG_DIR 按当前工作目录解析。bash 3.2 不用 realpath：
+# 清空 CDPATH，cd -P / pwd -P，并与原目录 -ef 比对。否则相对路径会被 docker
+# 当成 volume name，导出的 CDPATH 或符号链接 cwd 上的逻辑 .. 会挂到另一个目录。
+pin_core_config_dir() {
+  _core_dir_in="${CORE_CONFIG_DIR}"
+  _core_dir_abs="$(CDPATH= cd -P -- "${_core_dir_in}" >/dev/null && pwd -P)" || die "无法解析 MEMORY_CORE_CONFIG_DIR 的绝对路径: ${_core_dir_in}"
+  [[ "${_core_dir_abs}" == /* ]] || die "无法解析 MEMORY_CORE_CONFIG_DIR 的绝对路径: ${_core_dir_in}"
+  [[ -d "${_core_dir_abs}" && "${_core_dir_abs}" -ef "${_core_dir_in}" ]] || die "无法解析 MEMORY_CORE_CONFIG_DIR 的绝对路径: ${_core_dir_in}"
+  CORE_CONFIG_DIR="${_core_dir_abs}"
+}
 
-# ── 生成 gateway config.yaml，挂到容器 /data/config/tdai-gateway.yaml ──
+# ── gateway config：挂到容器 /data/config/tdai-gateway.yaml ──
 # 默认镜像里没 config，memory-core 走编译时的默认（skill / knowledge 模块关闭）。
-# 从 .env 里的 MEMORY_LLM_* 生成一份 standalone+skill 的最小配置。
-CORE_CONFIG_DIR="${MEMORY_CORE_CONFIG_DIR:-$SCRIPT_DIR/.memory-core-config}"
-mkdir -p "$CORE_CONFIG_DIR"
-CORE_CONFIG_FILE="$CORE_CONFIG_DIR/tdai-gateway.yaml"
-
-info "生成 gateway config → $CORE_CONFIG_FILE"
-cat > "$CORE_CONFIG_FILE" <<YAML
-# 由 start-memory-core.sh 自动生成 —— 每次启动覆盖，请不要手动改。
+# 未指定外部文件时，从 .env 里的 MEMORY_LLM_* 生成一份 standalone+skill 的最小配置。
+# 只在默认文件缺失，或显式要求重生时写入；已存在的文件保持不变。
+if [[ "${CORE_CONFIG_IS_EXTERNAL}" == "1" ]]; then
+  info "使用外部 gateway config（只读挂载，不修改）→ ${CORE_CONFIG_FILE}"
+elif [[ "${FORCE_REGENERATE_CONFIG}" == "1" || ! -f "${CORE_CONFIG_DIR}/tdai-gateway.yaml" ]]; then
+  mkdir -p "${CORE_CONFIG_DIR}"
+  pin_core_config_dir
+  CORE_CONFIG_FILE="${CORE_CONFIG_DIR}/tdai-gateway.yaml"
+  if [[ "${FORCE_REGENERATE_CONFIG}" == "1" && -f "${CORE_CONFIG_FILE}" ]]; then
+    info "重新生成 gateway config → ${CORE_CONFIG_FILE}"
+  else
+    info "生成 gateway config → ${CORE_CONFIG_FILE}"
+  fi
+  _cfg_tmp="${CORE_CONFIG_FILE}.tmp.$$"
+  cat > "${_cfg_tmp}" <<YAML
+# 由 start-memory-core.sh 首次生成。之后启动复用本文件，不会覆盖手工修改。
+# 重新生成：./start-memory-core.sh --force-regenerate-config 或 MEMORY_CORE_REGENERATE_CONFIG=1
+# MEMORY_PROMPT_MODE 与 MEMORY_LLM_BASE_URL / MEMORY_LLM_API_KEY / MEMORY_LLM_MODEL
+# 只在生成或重新生成时写入；改 .env 不会改已经存在的本文件。
 deployMode: standalone
 stateBackend: local
 
@@ -189,7 +264,7 @@ llm:
 memory:
   # promptMode: code（默认，代码工程场景，抽取项目事实/任务/决策/SOP/禁忌等团队共享记忆）
   #           | chat（通用聊天/教学场景，抽取 persona/episodic/instruction 个人记忆）
-  # 通过 .env 里 MEMORY_PROMPT_MODE 覆盖。
+  # MEMORY_PROMPT_MODE 与上面的 MEMORY_LLM_* 只在生成或重新生成本文件时生效。
   # 注意：code 模式下，纯闲聊对话可能抽出 0 条记忆（LLM 认为没有可沉淀的工程内容）。
   promptMode: ${MEMORY_PROMPT_MODE:-code}
   capture: { enabled: true }
@@ -239,6 +314,17 @@ skill:
   resources:
     maxResourceSizeBytes: 5000000
 YAML
+  mv -f "${_cfg_tmp}" "${CORE_CONFIG_FILE}"
+else
+  pin_core_config_dir
+  CORE_CONFIG_FILE="${CORE_CONFIG_DIR}/tdai-gateway.yaml"
+  info "复用已有 gateway config（未修改）→ ${CORE_CONFIG_FILE}。重新生成请执行 ./start-memory-core.sh --force-regenerate-config 或设置 MEMORY_CORE_REGENERATE_CONFIG=1"
+  # 不比较字段，也不因 .env 变化自动重生。只提示操作者下次如何生效。
+  warn ".env、交互式 LLM、prompt-mode 和 persona 的变更不会写入已有 YAML，直到 --force-regenerate-config"
+fi
+
+pull_image "$MEMORY_CORE_IMAGE"
+rm_container_if_exists "$CONTAINER"
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
 $DOCKER run -d --name "$CONTAINER" \

@@ -638,6 +638,12 @@ Core 反向去查 Proxy 已经写好的埋点库。
 配好后 Core 会额外暴露 16 个 `/v3/analytics/*` 只读端点，Panel 拿到数据
 后渲染出 session-init / tool-call / usage 各类图表。
 
+`deploy/global-images/start-memory-core.sh` 生成的
+`.memory-core-config/tdai-gateway.yaml` 会在重启时复用，不会被覆盖。
+需要按当前环境重建这份默认文件时，用 `--force-regenerate-config` 或
+`MEMORY_CORE_REGENERATE_CONFIG=1`。`MEMORY_CORE_CONFIG_FILE` 只读挂载
+已有文件，脚本不会改它。
+
 ### 第 5 步：重启三件套并验证
 
 ```bash
