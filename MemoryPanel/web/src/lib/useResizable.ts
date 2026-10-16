@@ -12,9 +12,23 @@ export function useResizable(initial: number, min: number, max: number, side: 'l
   const dragging = useRef(false);
   const startX = useRef(0);
   const startW = useRef(0);
+  const bodyStyles = useRef<{ cursor: string; userSelect: string } | null>(null);
+
+  const stopDragging = useCallback(() => {
+    dragging.current = false;
+    if (!bodyStyles.current) return;
+    document.body.style.cursor = bodyStyles.current.cursor;
+    document.body.style.userSelect = bodyStyles.current.userSelect;
+    bodyStyles.current = null;
+  }, []);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    if (dragging.current) return;
+    bodyStyles.current = {
+      cursor: document.body.style.cursor,
+      userSelect: document.body.style.userSelect,
+    };
     dragging.current = true;
     startX.current = e.clientX;
     startW.current = width;
@@ -31,20 +45,16 @@ export function useResizable(initial: number, min: number, max: number, side: 'l
         : Math.max(min, Math.min(max, startW.current - delta));
       setWidth(newW);
     };
-    const onMouseUp = () => {
-      if (dragging.current) {
-        dragging.current = false;
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-      }
-    };
     window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('mouseup', stopDragging);
+    window.addEventListener('blur', stopDragging);
     return () => {
+      stopDragging();
       window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('mouseup', stopDragging);
+      window.removeEventListener('blur', stopDragging);
     };
-  }, [min, max, side]);
+  }, [min, max, side, stopDragging]);
 
   return { width, onMouseDown };
 }
