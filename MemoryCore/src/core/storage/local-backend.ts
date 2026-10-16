@@ -225,7 +225,8 @@ export class LocalStorageBackend implements IStorageBackend {
   }
 
   async deleteByPrefix(prefix: string): Promise<number> {
-    const dirPath = this.resolvePath(prefix);
+    // An empty prefix addresses the complete backend, as it does for listing.
+    const dirPath = prefix === "" ? resolve(this.rootDir) : this.resolvePath(prefix);
 
     if (!existsSync(dirPath)) {
       return 0;
@@ -233,7 +234,7 @@ export class LocalStorageBackend implements IStorageBackend {
 
     // Count files before deleting
     const entries: ListEntry[] = [];
-    const dirKey = prefix.endsWith("/") ? prefix : `${prefix}/`;
+    const dirKey = prefix === "" || prefix.endsWith("/") ? prefix : `${prefix}/`;
     await this.collectFiles(dirPath, dirKey, dirKey, entries, Number.MAX_SAFE_INTEGER);
     const fileCount = entries.length;
 
