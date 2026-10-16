@@ -5,6 +5,7 @@
  * Supports:
  * - "sqlite" (default): local SQLite + sqlite-vec + FTS5
  * - "tcvdb": Tencent Cloud VectorDB (server-side embedding + hybridSearch)
+ * - "postgres": PostgreSQL + pgvector + tsvector (application-side embedding)
  *
  * Both backends ship with core — TCVDB is a vendor-provided store that has
  * always been part of the open-source surface of this plugin (matches the
@@ -17,6 +18,7 @@ import type { IMemoryStore, IEmbeddingService, StoreLogger } from "./types.js";
 import { VectorStore } from "./sqlite/memory-store.js";
 import { TcvdbMemoryStore } from "./tcvdb/memory-store.js";
 import { MongoMemoryStore } from "./mongodb/memory-store.js";
+import { PgMemoryStore } from "./pg-store.js";
 import { getSharedMongoClientPool } from "./mongodb/client-pool.js";
 import { readMongoEnvConfig } from "../../utils/env-config.js";
 import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
@@ -124,6 +126,46 @@ export function createStoreBundle(
           mongoEndpoint: mongoConfig.endpoint,
           mongoDatabase: mongoConfig.database,
         },
+      };
+    }
+
+    case "postgres": {
+      // PostgreSQL backend: pgvector (cosine) + tsvector FTS behind the
+      // standard IMemoryStore interface. Tables/extensions are created by
+      // init(). Embedding is computed application-side (same as sqlite).
+      const pgCfg = config.postgres;
+      if (!pgCfg || !pgCfg.connectionString) {
+        throw new Error(`${TAG} PostgreSQL backend requires postgres.connectionString`);
+      }
+      let pgEmbeddingService: EmbeddingService | undefined;
+      if (config.embedding.enabled && config.embedding.provider !== "local" && config.embedding.provider !== "none" && config.embedding.apiKey) {
+        pgEmbeddingService = createEmbeddingService({
+          provider: config.embedding.provider,
+          baseUrl: config.embedding.baseUrl,
+          apiKey: config.embedding.apiKey,
+          model: config.embedding.model,
+          dimensions: config.embedding.dimensions,
+          sendDimensions: config.embedding.sendDimensions,
+          maxInputChars: config.embedding.maxInputChars,
+        }, logger);
+      }
+      const pgDims = config.embedding.dimensions;
+      const store = new PgMemoryStore({
+        connectionString: pgCfg.connectionString,
+        dimensions: pgDims,
+        logger,
+        schema: pgCfg.schema,
+      });
+      logger?.debug?.(
+        `${TAG} Store created: backend=postgres, dimensions=${pgDims}, ` +
+        `embedding=${pgEmbeddingService ? "enabled" : "disabled"}, ` +
+        `bm25=${bm25Encoder ? "enabled" : "disabled"}`,
+      );
+      return {
+        store,
+        embedding: pgEmbeddingService as unknown as IEmbeddingService,
+        bm25Encoder,
+        storeSnapshot: { type: "postgres" as const, postgresConnection: pgCfg.connectionString },
       };
     }
 
