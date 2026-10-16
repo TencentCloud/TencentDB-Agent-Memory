@@ -295,13 +295,21 @@ export class VectorStore implements IMemoryStore {
    * record_id → FTS rowid lookup, one per layer (see `deleteFtsRow`).
    * `record_id` is an UNINDEXED FTS5 column, so `DELETE FROM l0_fts WHERE record_id = ?`
    * scans the whole FTS table on every call.
+   *
+   * `null` = the lookup table is not usable for this layer (its one-time
+   * backfill failed and was rolled back); deletes then fall back to the slow
+   * but complete delete-by-record_id, and the backfill is retried on the next
+   * startup.
    */
-  private ftsRowmap!: Record<FtsLayer, {
+  private ftsRowmap: Record<FtsLayer, {
     get: StatementSync;
     put: StatementSync;
     del: StatementSync;
     ftsDeleteByRowid: StatementSync;
-  }>;
+  } | null> = { l0: null, l1: null };
+
+  /** Fallback FTS delete (full scan), used only while `ftsRowmap[layer]` is null. */
+  private ftsDeleteByRecordId!: Record<FtsLayer, StatementSync>;
 
   /**
    * Create a VectorStore instance.
@@ -995,10 +1003,6 @@ export class VectorStore implements IMemoryStore {
         )
       `);
 
-      // record_id → FTS rowid lookup tables. Created after the FTS tables so a
-      // missing lookup table on an existing FTS table means "needs backfill".
-      const rowmapsToBackfill = this.ensureFtsRowmapTables();
-
       // L1 FTS prepared statements
       this.stmtL1FtsInsert = this.db.prepare(`
         INSERT INTO l1_fts (content, content_original, record_id, type, priority, scene_name,
@@ -1026,6 +1030,14 @@ export class VectorStore implements IMemoryStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
+      this.ftsDeleteByRecordId = {
+        l0: this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?"),
+        l1: this.db.prepare("DELETE FROM l1_fts WHERE record_id = ?"),
+      };
+
+      // record_id → FTS rowid lookup tables. Created after the FTS tables;
+      // creation and backfill share one transaction, so an existing lookup
+      // table is always complete (see ensureFtsRowmap).
       const rowmapStmts = (layer: FtsLayer) => ({
         get: this.db.prepare(`SELECT fts_rowid FROM ${layer}_fts_rowmap WHERE record_id = ?`),
         put: this.db.prepare(
@@ -1035,7 +1047,9 @@ export class VectorStore implements IMemoryStore {
         del: this.db.prepare(`DELETE FROM ${layer}_fts_rowmap WHERE record_id = ?`),
         ftsDeleteByRowid: this.db.prepare(`DELETE FROM ${layer}_fts WHERE rowid = ?`),
       });
-      this.ftsRowmap = { l0: rowmapStmts("l0"), l1: rowmapStmts("l1") };
+      for (const layer of ["l0", "l1"] as const) {
+        this.ftsRowmap[layer] = this.ensureFtsRowmap(layer) ? rowmapStmts(layer) : null;
+      }
 
       this.stmtL0FtsSearch = this.db.prepare(`
         SELECT record_id, message_text_original AS message_text,
@@ -1051,11 +1065,10 @@ export class VectorStore implements IMemoryStore {
       this.logger?.debug?.(`${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v2 — jieba segmented]`);
 
       // Rebuild FTS index if migrated from v1 or tables were freshly created.
-      // A rebuild repopulates the lookup tables too, so backfill is only needed otherwise.
+      // (The FTS tables are empty then, so the lookup backfill above was trivial;
+      // the rebuild repopulates both.)
       if (needsFtsRebuild) {
         this.rebuildFtsIndex();
-      } else {
-        for (const layer of rowmapsToBackfill) this.backfillFtsRowmap(layer);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -3153,37 +3166,36 @@ export class VectorStore implements IMemoryStore {
   // renumbered by VACUUM, which is why the FTS rowid is not aligned with them.
 
   /**
-   * Create the lookup tables if missing.
-   * @returns layers whose FTS table already exists but whose lookup table was
-   *          just created, i.e. existing FTS rows that need a one-time backfill.
+   * Make sure the lookup table of `layer` exists and covers every FTS row.
+   *
+   * Invariant: the lookup table exists ⇒ its backfill has committed. Creating
+   * the table and backfilling it from the existing FTS rows happen in ONE
+   * transaction (SQLite DDL is transactional), so a crash or error midway
+   * rolls the CREATE TABLE back too, and the next startup simply retries.
+   *
+   * Duplicate FTS rows for the same record_id (only the newest is kept) would
+   * otherwise be unreachable once deletes go by rowid; the old
+   * delete-by-record_id removed all of them, so dropping them here keeps
+   * search results the same.
+   *
+   * @returns `true` if the lookup table is ready; `false` if the backfill failed
+   *          (rolled back) and deletes must fall back to delete-by-record_id.
    */
-  private ensureFtsRowmapTables(): FtsLayer[] {
-    const missing = (["l0", "l1"] as const).filter(
-      (layer) => !this.db
-        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
-        .get(`${layer}_fts_rowmap`),
-    );
-    for (const layer of ["l0", "l1"] as const) {
+  private ensureFtsRowmap(layer: FtsLayer): boolean {
+    const exists = this.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+      .get(`${layer}_fts_rowmap`);
+    if (exists) return true;
+
+    const started = Date.now();
+    this.db.exec("BEGIN");
+    try {
       this.db.exec(`
-        CREATE TABLE IF NOT EXISTS ${layer}_fts_rowmap (
+        CREATE TABLE ${layer}_fts_rowmap (
           record_id TEXT PRIMARY KEY,
           fts_rowid INTEGER NOT NULL
         )
       `);
-    }
-    return missing;
-  }
-
-  /**
-   * One-time backfill of a lookup table from the existing FTS rows. Duplicate
-   * FTS rows for the same record_id (only the newest is kept) would otherwise
-   * be unreachable once deletes go by rowid; the old delete-by-record_id
-   * removed all of them, so dropping them here keeps search results the same.
-   */
-  private backfillFtsRowmap(layer: FtsLayer): void {
-    const started = Date.now();
-    this.db.exec("BEGIN");
-    try {
       const dup = this.db.prepare(
         `DELETE FROM ${layer}_fts WHERE rowid NOT IN (SELECT MAX(rowid) FROM ${layer}_fts GROUP BY record_id)`,
       ).run();
@@ -3191,17 +3203,21 @@ export class VectorStore implements IMemoryStore {
         `INSERT INTO ${layer}_fts_rowmap (record_id, fts_rowid) SELECT record_id, rowid FROM ${layer}_fts`,
       ).run();
       this.db.exec("COMMIT");
-      this.logger?.info(
-        `${TAG} Backfilled ${layer}_fts_rowmap: ${Number(filled.changes)} rows` +
-        ` (removed ${Number(dup.changes)} duplicate FTS rows) in ${Date.now() - started}ms`,
-      );
+      if (Number(filled.changes) > 0 || Number(dup.changes) > 0) {
+        this.logger?.info(
+          `${TAG} Backfilled ${layer}_fts_rowmap: ${Number(filled.changes)} rows` +
+          ` (removed ${Number(dup.changes)} duplicate FTS rows) in ${Date.now() - started}ms`,
+        );
+      }
+      return true;
     } catch (err) {
       try { this.db.exec("ROLLBACK"); } catch { /* ignore rollback errors */ }
-      // Leave the table empty: deletes become no-ops for unmapped rows (stale
-      // FTS rows may then linger), but writes and searches keep working.
       this.logger?.warn(
-        `${TAG} ${layer}_fts_rowmap backfill failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        `${TAG} ${layer}_fts_rowmap backfill failed (non-fatal, rolled back): ` +
+        `${err instanceof Error ? err.message : String(err)}. ` +
+        `FTS deletes fall back to scanning by record_id; backfill will be retried on next startup.`,
       );
+      return false;
     }
   }
 
@@ -3212,12 +3228,17 @@ export class VectorStore implements IMemoryStore {
 
   /** Remember the FTS rowid of a freshly inserted FTS row. */
   private putFtsRowid(layer: FtsLayer, recordId: string, ftsRowid: number | bigint): void {
-    this.ftsRowmap[layer].put.run(recordId, ftsRowid);
+    this.ftsRowmap[layer]?.put.run(recordId, ftsRowid);
   }
 
   /** Delete the FTS row of `recordId` (if any) by rowid, plus its lookup entry. */
   private deleteFtsRow(layer: FtsLayer, recordId: string): void {
     const m = this.ftsRowmap[layer];
+    if (!m) {
+      // Lookup table not ready (backfill failed): stay correct, at full-scan cost.
+      this.ftsDeleteByRecordId[layer].run(recordId);
+      return;
+    }
     const row = m.get.get(recordId) as { fts_rowid: number } | undefined;
     if (!row) return;
     m.ftsDeleteByRowid.run(row.fts_rowid);
@@ -3311,7 +3332,7 @@ export class VectorStore implements IMemoryStore {
       // ── Rebuild L1 FTS ──
       // Clear existing FTS data
       this.db.exec("DELETE FROM l1_fts");
-      this.db.exec("DELETE FROM l1_fts_rowmap");
+      if (this.ftsRowmap.l1) this.db.exec("DELETE FROM l1_fts_rowmap");
 
       // Read all L1 records from metadata table.
       // Include user_id / agent_id so the rebuilt FTS rows carry isolation info.
@@ -3374,7 +3395,7 @@ export class VectorStore implements IMemoryStore {
 
       // ── Rebuild L0 FTS ──
       this.db.exec("DELETE FROM l0_fts");
-      this.db.exec("DELETE FROM l0_fts_rowmap");
+      if (this.ftsRowmap.l0) this.db.exec("DELETE FROM l0_fts_rowmap");
 
       const l0Rows = this.db
         .prepare(`
