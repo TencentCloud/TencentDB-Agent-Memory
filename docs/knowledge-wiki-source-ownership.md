@@ -1,0 +1,9 @@
+# Wiki source ownership before credential use
+
+`POST /wiki-source/list` and `/wiki-source/import` now look up the Wiki using the header service identity and require its team to match the header team identity before retrieving credentials, resolving the provider, listing remote documents or starting import. Missing and foreign resources share the fixed `resource not found` code-404 envelope. These endpoints retain their existing HTTP-200/code-envelope error convention.
+
+The check matches the ownership rule already applied by source-credential CRUD. Existing owner requests keep their behavior; callers need an existing Wiki belonging to the selected service/team. Body `team_id` cannot override the header identity. Internal callers constructing `createWikiSourceRoutes` must supply `store.getWikiById`; the server wiring does so. No dependency, lockfile or schema changes are required.
+
+Fourteen in-process Hono cases check foreign teams, service scoping, absent resources, body identity spoofing, successful owner calls and malformed identities/IDs. Four additional cases mount authenticated Hono routes with native SQLite and its real credential store, with only provider execution replaced by a synthetic fixture. They check both endpoints for an owner and another team. The preceding complete source reproduces ten failures with eight controls; corrected scoped and complete sources pass all eighteen. No real provider, inference or production data is used.
+
+Service keys remain administrative credentials. These caller-supplied identity headers are trusted application selectors, not cryptographic end-user authentication or proof of team membership. The check does not establish a transaction spanning resource ownership changes and remote provider execution, nor cover background synchronization, other resource routes, every tenant boundary or independent final review.
