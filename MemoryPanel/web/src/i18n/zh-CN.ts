@@ -25,6 +25,9 @@ export const zhCN = {
   'menu.desc.team_agents': 'Agent / 可配置范围 / 固定资产',
   'menu.desc.api_keys': '管理你的 API Key，用于外部客户端接入',
 
+  // ===== TabBar =====
+  'tabBar.close': '关闭{{label}}',
+
   // ===== GlobalHeader =====
   'header.guide': '使用说明',
   'header.sync': '实时同步',
