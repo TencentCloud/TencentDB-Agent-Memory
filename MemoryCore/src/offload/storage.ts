@@ -101,6 +101,9 @@ export async function ensureDirs(ctx: StorageContext): Promise<void> {
 
 // ─── Session Registry ────────────────────────────────────────────────────────
 
+/** Serialize in-process read-modify-write updates to each agent's registry. */
+const sessionRegistryUpdates = new Map<string, Promise<void>>();
+
 /** Record a sessionKey → realSessionId mapping in the agent's registry. */
 export async function registerSession(
   ctx: StorageContext,
@@ -109,20 +112,31 @@ export async function registerSession(
 ): Promise<void> {
   if (!sessionKey || !realSessionId || !existsSync(ctx.dataDir)) return;
   const registryPath = join(ctx.dataDir, "sessions-registry.json");
-  let registry: Record<string, unknown> = {};
-  try {
-    if (existsSync(registryPath)) {
-      registry = JSON.parse(await readFile(registryPath, "utf-8"));
+  const previous = sessionRegistryUpdates.get(registryPath) ?? Promise.resolve();
+  const update = previous.catch(() => {}).then(async () => {
+    let registry: Record<string, unknown> = {};
+    try {
+      if (existsSync(registryPath)) {
+        registry = JSON.parse(await readFile(registryPath, "utf-8"));
+      }
+    } catch {
+      /* corrupt file, start fresh */
     }
-  } catch {
-    /* corrupt file, start fresh */
+    registry[sessionKey] = {
+      sessionId: realSessionId,
+      offloadFile: `offload-${realSessionId}.jsonl`,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeFile(registryPath, JSON.stringify(registry, null, 2), "utf-8");
+  });
+  sessionRegistryUpdates.set(registryPath, update);
+  try {
+    await update;
+  } finally {
+    if (sessionRegistryUpdates.get(registryPath) === update) {
+      sessionRegistryUpdates.delete(registryPath);
+    }
   }
-  registry[sessionKey] = {
-    sessionId: realSessionId,
-    offloadFile: `offload-${realSessionId}.jsonl`,
-    updatedAt: new Date().toISOString(),
-  };
-  await writeFile(registryPath, JSON.stringify(registry, null, 2), "utf-8");
 }
 
 /** Look up the real sessionId for a given sessionKey from the registry. */
