@@ -165,10 +165,11 @@ export const tapdProvider: TaskSourceProvider = {
       return { items: items.slice(start, start + limit), total, hasMore: start + limit < total };
     }
 
-    // 各类型并发拉取后合并：TAPD 没有跨类型统一列表接口。
+    // 多类型按类型顺序组成一个逻辑列表，先取首页及总数以定位全局分页区间。
+    // 单类型仍直接使用服务端分页，避免增加请求。
     const perType = await Promise.all(
       types.map(async (itemType) => {
-        const args: Record<string, unknown> = { workspace_id: q.scope, limit, page };
+        const args: Record<string, unknown> = { workspace_id: q.scope, limit, page: types.length > 1 ? 1 : page };
         if (q.keyword) args[keywordField(itemType)] = q.keyword;
         // 处理人字段名按类型区分：bug 是 current_owner，story/task 是 owner。
         // 用错会触发服务端「参数X不存在于工具Y的参数定义中」错误文本。
@@ -179,9 +180,42 @@ export const tapdProvider: TaskSourceProvider = {
         // 一次调用同时拿到分页包络（total）与数据行（data）。
         const raw = await client.callRaw(toolFor(itemType), args);
         const rows = asRows(unwrapData(raw));
-        return { itemType, rows, total: totalOf(raw, rows.length) };
+        return { itemType, args, rows, total: totalOf(raw, rows.length) };
       }),
     );
+
+    if (types.length > 1) {
+      const start = (page - 1) * limit;
+      const end = start + limit;
+      let typeOffset = 0;
+      await Promise.all(perType.map(async (entry) => {
+        // 全局区间与该类型区间求交，再换算成类型内的偏移。
+        const localStart = Math.max(0, start - typeOffset);
+        const localEnd = Math.min(entry.total, end - typeOffset);
+        typeOffset += entry.total;
+        if (localStart >= localEnd) {
+          entry.rows = [];
+          return;
+        }
+        const firstPage = Math.floor(localStart / limit) + 1;
+        const lastPage = Math.floor((localEnd - 1) / limit) + 1;
+        const rows: Array<Record<string, unknown>> = [];
+        // 一个 UI 页在每个类型中最多跨两个服务端页；limit 始终不变。
+        for (let upstreamPage = firstPage; upstreamPage <= lastPage; upstreamPage++) {
+          const pageRows = upstreamPage === 1
+            ? entry.rows
+            : asRows(unwrapData(await client.callRaw(toolFor(entry.itemType), {
+              ...entry.args, page: upstreamPage,
+            })));
+          const pageOffset = (upstreamPage - 1) * limit;
+          rows.push(...pageRows.slice(
+            Math.max(0, localStart - pageOffset),
+            Math.min(limit, localEnd - pageOffset),
+          ));
+        }
+        entry.rows = rows;
+      }));
+    }
 
     // task / bug 不支持 with_v_status，需要另取状态中文映射表。
     const statusMaps = await loadStatusLabelMaps(client, types, q.scope as string);
@@ -194,16 +228,9 @@ export const tapdProvider: TaskSourceProvider = {
       )
       .filter((r) => r.externalId);
 
-    // 排序沿用 TAPD 返回顺序（服务端默认 created desc，实测三类一致）。
-    //
-    // 注意：此处**不**再本地按 updatedAt 重排。分页发生在服务端且基准是 created，
-    // 若本地按 modified 重排会导致「第 2 页出现比第 1 页更新的条目」这类翻页错乱。
-    // 各类型并发拉取时，每类各返回 limit 条，合并后最多 limit × 类型数 ——
-    // 若直接返回会让前端一页显示远超 PAGE_SIZE 的行（表现为「一页显示了所有」），
-    // 故合并后统一截断到 limit，保持与单页大小一致。
-    const paged = items.slice(0, limit);
+    // 类型间按请求顺序排列，类型内保留 TAPD 顺序，不对分页结果重新排序。
     const total = perType.reduce((sum, t) => sum + t.total, 0);
-    return { items: paged, total, hasMore: page * limit < total };
+    return { items, total, hasMore: page * limit < total };
   },
 
   async fetchTask(
