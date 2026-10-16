@@ -23,13 +23,13 @@ function format(level: Level, tag: string, msg: string, data?: unknown) {
   return `${prefix} ${msg}`;
 }
 
-export function createLogger(tag: string) {
+export function createLogger(tag: string, { stderrOnly = false }: { stderrOnly?: boolean } = {}) {
   return {
     debug(msg: string, data?: unknown) {
-      if (shouldLog("debug")) console.log(format("debug", tag, msg, data));
+      if (shouldLog("debug")) (stderrOnly ? console.error : console.log)(format("debug", tag, msg, data));
     },
     info(msg: string, data?: unknown) {
-      if (shouldLog("info")) console.log(format("info", tag, msg, data));
+      if (shouldLog("info")) (stderrOnly ? console.error : console.log)(format("info", tag, msg, data));
     },
     warn(msg: string, data?: unknown) {
       if (shouldLog("warn")) console.warn(format("warn", tag, msg, data));
