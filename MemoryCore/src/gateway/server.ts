@@ -91,7 +91,7 @@ import {
   wrapApiStoreForTrace,
 } from "../api-trace/index.js";
 import { readApiTraceEnabled } from "../utils/env-config.js";
-import { readMongoEnvConfig } from "../utils/env-config.js";
+import { readMongoEnvConfig, readQdrantEnvConfig } from "../utils/env-config.js";
 import { makeSkillRouteTable } from "./skill-handlers.js";
 import { handleV3AnalyticsRoute, createAnalyticsChClientAsync } from "./analytics/index.js";
 import type { AnalyticsChClient } from "./analytics/index.js";
@@ -125,6 +125,7 @@ import { ProfileRowStorageBackend } from "../core/storage/profile-row-backend.js
 import { CompositeStorageBackend } from "../core/storage/composite-backend.js";
 import { MongoFSBackend } from "../core/storage/mongo-fs-backend.js";
 import { getSharedMongoClientPool } from "../core/store/mongodb/client-pool.js";
+import { qdrantClientParams } from "../core/store/qdrant/memory-store.js";
 import type { FsOthersKind } from "../core/backend-selection/index.js";
 import { requireProfileRowStore } from "../core/store/profile-row-store.js";
 import type { TaskPayload } from "../core/state/types.js";
@@ -1135,7 +1136,7 @@ export class TdaiGateway {
         // 复用 Memory 侧的 COS adapter，创建 per-instance SkillCore。
         // Skill queue + worker 如果已在 tdai-core 中启动则复用；否则
         // service 模式下可在此处单独启动。
-        if (storePool.mode === "tcvdb" || storePool.mode === "mongodb") {
+        if (storePool.mode !== "sqlite") {
           // per-instance resolvers 抽到了私有方法（同一份实现被 handler 和 skill worker 共用）。
           // tcvdb: TcvdbSkillStore + COS storage；mongodb: MongoSkillStore + (standalone) LocalStorage / (service) COS。
           skillDeps.resolveSkillCore = (instanceId: string) => this.resolveSkillCoreForInstance(instanceId);
@@ -1151,7 +1152,7 @@ export class TdaiGateway {
         //   - handleConversationAdd 用 .handler
         //   - handleExtract 用 .trigger (direct-trigger)
         skillDeps.resolveConversationAdd = async (instanceId: string) => {
-          const wired = storePool.mode === "tcvdb" || storePool.mode === "mongodb"
+          const wired = storePool.mode !== "sqlite"
             ? await this.ensureConversationAddForInstance(instanceId)
             : await this.ensureConversationAddForStandalone(instanceId);
           return wired;
@@ -1950,8 +1951,9 @@ export class TdaiGateway {
     // VDB is available — set STORE_MODE=sqlite to keep the VDB-dependent
     // pieces local while exercising the rest of the service-mode wiring.
     const storeModeOverride =
-      process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb" || process.env.STORE_MODE === "mongodb"
-        ? (process.env.STORE_MODE as "sqlite" | "tcvdb" | "mongodb")
+      process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb" || process.env.STORE_MODE === "mongodb" ||
+      process.env.STORE_MODE === "qdrant"
+        ? (process.env.STORE_MODE as "sqlite" | "tcvdb" | "mongodb" | "qdrant")
         : undefined;
     const effectiveStoreMode = storeModeOverride ?? (this.config.deployMode === "service" ? "tcvdb" : "sqlite");
     // T12 fail-fast: mongodb backend hard-requires MONGODB_ENDPOINT/DATABASE
@@ -1969,6 +1971,11 @@ export class TdaiGateway {
         );
       }
       this.logger.info(`[gateway] Store backend = mongodb (endpoint=${mongoEnv.endpoint}, database=${mongoEnv.database})`);
+    }
+    if (effectiveStoreMode === "qdrant") {
+      const qdrant = readQdrantEnvConfig();
+      qdrantClientParams(qdrant.url);
+      this.logger.info(`[gateway] Store backend = qdrant (url=${qdrant.url}, collectionPrefix=${qdrant.collectionPrefix})`);
     }
     this.storePool = new StorePool({
       mode: effectiveStoreMode,
@@ -2442,8 +2449,7 @@ export class TdaiGateway {
     //   - tcvdb / mongodb → per-instance SkillCore from StorePool (TcvdbSkillStore /
     //     MongoSkillStore). This holds even for standalone + STORE_MODE=mongodb.
     //   - otherwise (sqlite singleton) → TdaiCore's standalone SkillExtractor.
-    const usePerInstanceSkill =
-      this.storePool?.mode === "tcvdb" || this.storePool?.mode === "mongodb";
+    const usePerInstanceSkill = !!this.storePool && this.storePool.mode !== "sqlite";
 
     this.skillWorkerPool = new SkillWorkerPool({
       concurrency: skillCfg.worker.concurrency,
