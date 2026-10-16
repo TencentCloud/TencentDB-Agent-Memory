@@ -73,6 +73,7 @@ import type {
 } from "../../memory-prompt/types.js";
 import { DEFAULT_ISOLATION_ID } from "../isolation.js";
 import { mongoSearchScoreToScore } from "../tokenize.js";
+import { ProfileVersionConflictError } from "../profile-row-store.js";
 import { COLLECTIONS } from "./collections.js";
 import {
   MEMORY_SEARCH_INDEX,
@@ -91,6 +92,7 @@ import {
   isolationToMatch,
   isolationToSearchFilters,
   ftsQueryToSearchText,
+  groupL0RowsBySession,
   isoToEpochMs,
 } from "./doc-mappers.js";
 
@@ -515,34 +517,7 @@ export class MongoMemoryStore implements IMemoryStore {
   }
 
   async queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0SessionGroup[]> {
-    const rows = await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
-    const groupMap = new Map<string, L0SessionGroup>();
-    for (const row of rows) {
-      const sid = row.session_id || DEFAULT_ISOLATION_ID;
-      const teamId = row.team_id || "";
-      const userId = row.user_id || "";
-      const agentId = row.agent_id || "";
-      const taskId = row.task_id || "";
-      const groupKey = `${teamId}\u0000${userId}\u0000${agentId}\u0000${taskId}\u0000${sid}`;
-      let group = groupMap.get(groupKey);
-      if (!group) {
-        group = { sessionId: sid, teamId, userId, agentId, taskId, messages: [] };
-        groupMap.set(groupKey, group);
-      }
-      group.messages.push({
-        id: row.record_id,
-        role: row.role,
-        content: row.message_text,
-        timestamp: row.timestamp,
-        recordedAtMs: row.recorded_at ? Date.parse(row.recorded_at) || 0 : 0,
-      });
-    }
-    const groups: L0SessionGroup[] = [];
-    for (const group of groupMap.values()) {
-      if (group.messages.length > 0) groups.push(group);
-    }
-    groups.sort((a, b) => a.messages[0].timestamp - b.messages[0].timestamp);
-    return groups;
+    return groupL0RowsBySession(await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit));
   }
 
   async getAllL0Texts(): Promise<Array<{ record_id: string; message_text: string; recorded_at: string }>> {
@@ -714,7 +689,7 @@ export class MongoMemoryStore implements IMemoryStore {
           if (exists === 0) {
             await coll.insertOne(doc as never);
           } else {
-            throw new Error(`${TAG} profile optimistic-lock conflict id=${r.id} baseline=${r.baselineVersion}`);
+            throw new ProfileVersionConflictError(r.id, r.baselineVersion, TAG);
           }
         }
       } else {
