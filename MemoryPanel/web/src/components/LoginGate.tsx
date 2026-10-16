@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Input, Select } from 'tea-component';
 import { getErrorMessage } from '@/lib/error-message';
+import { tea } from '@/lib/tea-bridge';
 import {
   authMethodsApi,
   authVerifyApi,
@@ -27,6 +28,7 @@ import {
   type PublicUser,
 } from '@/lib/teamApi';
 import { getPanelSession, setPanelSession, clearPanelSession } from '@/lib/panelSession';
+import { copyToClipboard } from '@/pages/ChatMemoryPage/utils/memory-utils';
 import ParticleWaveBackground from './ParticleWaveBackground';
 import './login-gate.css';
 
@@ -400,6 +402,25 @@ export default function LoginGate({
     if (instanceId) authMethodsApi.loginWoa(instanceId);
   }
 
+  /**
+   * 复制自动生成的 user_key。
+   *
+   * 以 copyToClipboard 的真实结果为准：Clipboard API 不存在（非安全上下文）
+   * 或被拒绝时都会先走 execCommand 降级，彻底失败才提示错误——避免像以前
+   * 那样不等结果就置"已复制"，让用户误以为凭据已保存。
+   */
+  async function copyCreatedKey() {
+    if (!createdKey) return;
+    const ok = await copyToClipboard(createdKey.userKey);
+    if (ok) {
+      setCopied(true);
+    } else {
+      // 失败时清掉可能残留的上一次成功态，按钮回到"复制"允许重试。
+      setCopied(false);
+      tea.notify.error(t('login.woa.copyFailed'));
+    }
+  }
+
   return (
     <div className="_tdai-login">
       {/* 明亮点阵波纹动效背景（纯 Canvas，零外部依赖） */}
@@ -434,10 +455,7 @@ export default function LoginGate({
                 />
                 <Button
                   className="_tdai-login-copy"
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(createdKey.userKey);
-                    setCopied(true);
-                  }}
+                  onClick={() => void copyCreatedKey()}
                 >
                   {copied ? t('login.woa.copied') : t('login.woa.copyKey')}
                 </Button>
