@@ -173,6 +173,32 @@ describe('useResizable', () => {
     expect(style).toEqual({ cursor: 'pointer', userSelect: 'text' });
   });
 
+  describe.each(['active first', 'idle first'])('shared window events with %s', (order) => {
+    it.each(['mouseup', 'blur'])('restores styles on %s while both instances remain mounted', (method) => {
+      Object.assign(style, { cursor: 'pointer', userSelect: 'text' });
+      const first = mount();
+      const second = mount();
+      const [active, idle] = order === 'active first' ? [first, second] : [second, first];
+      active.start();
+      move(125);
+      expect(active.result.width).toBe(225);
+      expect(idle.result.width).toBe(200);
+
+      end(method, active);
+      expect(style).toEqual({ cursor: 'pointer', userSelect: 'text' });
+      move(175);
+      expect(active.result.width).toBe(225);
+      expect(idle.result.width).toBe(200);
+
+      Object.assign(style, { cursor: 'wait', userSelect: 'all' });
+      end('mouseup', active);
+      end('blur', active);
+      idle.unmount();
+      active.unmount();
+      expect(style).toEqual({ cursor: 'wait', userSelect: 'all' });
+    });
+  });
+
   it('does not change styles again after a drag has already ended', () => {
     const panel = mount();
     panel.start();
@@ -202,11 +228,16 @@ describe('useResizable', () => {
     expect(style).toEqual({ cursor: 'crosshair', userSelect: 'text' });
   });
 
-  it('preserves the original style snapshot on repeated mousedown', () => {
+  it('preserves the original styles and drag origin on repeated mousedown', () => {
     Object.assign(style, { cursor: 'pointer', userSelect: 'text' });
     const panel = mount();
     panel.start();
-    panel.start();
+    move(125);
+    expect(panel.result.width).toBe(225);
+
+    panel.start(140);
+    move(150);
+    expect(panel.result.width).toBe(250);
     end('mouseup', panel);
     expect(style).toEqual({ cursor: 'pointer', userSelect: 'text' });
   });
