@@ -131,7 +131,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       if (ok) {
         // wiki engine manager 注册清理仍由路由负责（wikiMgr 未注入 service）；
         // 连接/元数据/磁盘四类清理已在 service.cleanupResources 内完成。
-        try { wikiMgr.remove(id); } catch (err) { console.warn(`[wiki] wikiMgr.remove(${id}) failed:`, err); }
+        try { wikiMgr.remove(id); } catch { console.warn("[wiki] engine cleanup failed after delete"); }
         result.deleted_ids.push(id);
       } else {
         result.failed.push({ id, reason: "delete failed" });
@@ -347,7 +347,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       const result = await wikiService.rawRm(ids.service_id, ids.team_id, wikiId, filenames);
       const err = maybeWriteError(result);
       if (err) return err;
-      try { wikiMgr.sync(wikiId); } catch (e) { console.warn(`[wiki] wikiMgr.sync(${wikiId}) failed after raw/rm:`, e); }
+      try { wikiMgr.sync(wikiId); } catch { console.warn("[wiki] index sync failed after raw/rm"); }
       return c.json(wrapOk(result));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -436,7 +436,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       const result = wikiService.pageWriteMany(ids.service_id, ids.team_id, wikiId, validated);
       const err = maybeWriteError(result);
       if (err) return err;
-      try { wikiMgr.sync(wikiId); } catch (e) { console.warn(`[wiki] wikiMgr.sync(${wikiId}) failed after page/write:`, e); }
+      try { wikiMgr.sync(wikiId); } catch { console.warn("[wiki] index sync failed after page/write"); }
       return c.json(wrapOk({ items: result }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -463,7 +463,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
       const result = await wikiService.pageRm(ids.service_id, ids.team_id, wikiId, refs);
       const err = maybeWriteError(result);
       if (err) return err;
-      try { wikiMgr.sync(wikiId); } catch (e) { console.warn(`[wiki] wikiMgr.sync(${wikiId}) failed after page/rm:`, e); }
+      try { wikiMgr.sync(wikiId); } catch { console.warn("[wiki] index sync failed after page/rm"); }
       return c.json(wrapOk(result));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
