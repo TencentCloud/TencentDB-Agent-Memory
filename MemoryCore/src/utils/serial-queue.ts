@@ -105,8 +105,12 @@ export class SerialQueue {
 
     this.debugFn?.(`[queue:${this.name}] dequeued, starting execution (remaining=${this.queue.length})`);
 
-    entry
-      .task()
+    // Invoke the task from a resolved promise instead of calling it directly:
+    // if the task throws synchronously, the call escapes before the .finally()
+    // handler below is registered, leaving `running = true` forever and
+    // deadlocking the queue (issue #518).
+    Promise.resolve()
+      .then(() => entry.task())
       .then((result) => entry.resolve(result))
       .catch((err) => entry.reject(err))
       .finally(() => {
