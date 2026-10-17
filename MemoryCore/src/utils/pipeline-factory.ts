@@ -856,7 +856,12 @@ export function createL2Runner(opts: {
         layer: "l2",
       }));
       const extractResult = await extractor.extract(memories);
-      if (!(extractResult.success && extractResult.memoriesProcessed > 0)) continue;
+      if (!extractResult.success) {
+        throw new Error(
+          `${TAG} [L2] Scene extraction failed (scope=${groupScope}): ${extractResult.error ?? "unknown error"}`,
+        );
+      }
+      if (extractResult.memoriesProcessed <= 0) continue;
       if (extractResult.emptyExtraction) {
         anyEmptyExtraction = true;
         logger.warn(`${TAG} [L2] Extraction produced no file changes (empty run), skipping checkpoint increment`);
