@@ -14,6 +14,7 @@
  */
 
 import { Hono } from "hono";
+import { repositoryUrlValidationError } from "../code-source/clone-url.js";
 
 import type { CodeGraphService } from "../store/index.js";
 import type { SyncStatus } from "../store/index.js";
@@ -188,6 +189,8 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
 
     const repoUrl = body.repo_url;
     if (typeof repoUrl !== "string" || !repoUrl) return c.json(wrapError(400, "repo_url is required"), 400);
+    const urlError = repositoryUrlValidationError(repoUrl);
+    if (urlError) return c.json(wrapError(400, urlError), 400);
 
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
