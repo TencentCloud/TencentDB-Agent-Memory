@@ -53,6 +53,12 @@ export async function initLangfuse(config: ProxyConfig): Promise<boolean> {
   }
 
   try {
+    // BatchSpanProcessor 的 maxQueueSize 只能通过 OTel env var 注入（Langfuse 构造器不透传）。
+    // 在 SDK 初始化前设好，确保 BatchSpanProcessor 读到我们的值。
+    if (lf.maxQueueSize && !process.env.OTEL_BSP_MAX_QUEUE_SIZE) {
+      process.env.OTEL_BSP_MAX_QUEUE_SIZE = String(lf.maxQueueSize);
+    }
+
     const [{ NodeSDK }, { LangfuseSpanProcessor }] = await Promise.all([
       import("@opentelemetry/sdk-node"),
       import("@langfuse/otel"),
@@ -63,6 +69,8 @@ export async function initLangfuse(config: ProxyConfig): Promise<boolean> {
       publicKey: lf.publicKey,
       secretKey: lf.secretKey,
       baseUrl,
+      flushAt: lf.flushAt || undefined,           // 每批最大 span 数
+      flushInterval: lf.flushInterval || undefined, // 定时 flush 间隔（秒）
     });
 
     const sdk = new NodeSDK({ spanProcessors: [processor] });
@@ -70,7 +78,12 @@ export async function initLangfuse(config: ProxyConfig): Promise<boolean> {
     _sdk = sdk;
     _enabled = true;
 
-    log.info("langfuse.initialized", { baseUrl });
+    log.info("langfuse.initialized", {
+      baseUrl,
+      flushAt: lf.flushAt,
+      flushInterval: lf.flushInterval,
+      maxQueueSize: lf.maxQueueSize,
+    });
     return true;
   } catch (err: unknown) {
     log.warn("langfuse.init_failed", { error: String(err) });
@@ -131,6 +144,14 @@ export interface LangfuseTurnContext {
   /** trace sessionId（会话隔离键；可据此聚合多个 turn）。 */
   sessionId: string;
   /**
+   * 记忆实例 ID（kernel tenant；来自请求路径 `/<agent>/<instanceId>/...`
+   * 或 auth.serviceId）。写进 trace 级 + observation 级 metadata 的 `instanceId`。
+   * 同一实例的多次请求在 Langfuse 上可按它筛选/聚合；缺省时不上报该键。
+   * 内部变量仍叫 `spaceId`（CH 列 / credit 上报都是），只有 Langfuse 这层
+   * 对外统一叫 `instanceId`，避免看板上的"spaceId"与"instance"二义。
+   */
+  instanceId?: string;
+  /**
    * trace 级标签 —— 只放该 turn 内稳定的维度（protocol / stream / session），
    * 不含随请求变化的路由标签，避免同一 turn 的工具循环请求互相覆盖（last-write-wins）。
    */
@@ -176,6 +197,12 @@ export interface LangfuseGenerationReport {
   userId: string;
   /** trace sessionId（会话隔离键；Langfuse 上可据此聚合多个 turn）。 */
   sessionId: string;
+  /**
+   * 记忆实例 ID（kernel tenant）。与 traceMetadata 里的 `instanceId` 同源，
+   * 单独提出一个字段是为了让所有调用点（含不传 langfuseTurnContext 的内联上报）
+   * 都能低成本补上实例维度。缺省不上报。
+   */
+  instanceId?: string;
   /** trace 标签。 */
   tags?: string[];
   /**
@@ -268,6 +295,24 @@ function asAttrString(v: unknown): string {
 }
 
 /**
+ * 把实例 ID 合并进 metadata，作为 `instanceId` 键。
+ *
+ * - `instanceId` 为空（老单租户部署 / 路径无 instance 段）→ 返回原对象引用，零开销。
+ * - metadata 里已显式给了 `instanceId` → 以显式值为准（保证调用点可覆盖）。
+ * - 都缺 → 返回 `undefined`，避免写出空 metadata 属性。
+ *
+ * Exported for unit testing.
+ */
+export function mergeInstanceId(
+  metadata: Record<string, unknown> | undefined,
+  instanceId: string | undefined,
+): Record<string, unknown> | undefined {
+  if (!instanceId) return metadata;
+  if (metadata && metadata.instanceId !== undefined) return metadata;
+  return { ...(metadata ?? {}), instanceId };
+}
+
+/**
  * 上报一次 LLM 调用：在指定 turn trace 下创建一个 generation observation，
  * 并把 trace 级属性写到该 span 上（SDK 会据此设置所属 trace 的字段）。
  *
@@ -284,7 +329,7 @@ export function langfuseReportGeneration(report: LangfuseGenerationReport): void
         input: report.input,
         output: report.output,
         usageDetails: report.usage ? normalizeUsageDetails(report.usage) : undefined,
-        metadata: report.observationMetadata,
+        metadata: mergeInstanceId(report.observationMetadata, report.instanceId),
         level: report.level,
         statusMessage: report.statusMessage,
       },
@@ -319,7 +364,15 @@ export function langfuseReportGeneration(report: LangfuseGenerationReport): void
     if (report.traceMetadata) {
       span.setAttribute(
         LangfuseOtelSpanAttributes.TRACE_METADATA,
-        JSON.stringify(report.traceMetadata),
+        JSON.stringify(mergeInstanceId(report.traceMetadata, report.instanceId)),
+      );
+    }
+    // traceMetadata 未传但知道实例 ID 时，也补一条 metadata，保证 Langfuse 上
+    // 每条 trace 都能按实例筛选（不依赖调用点是否传 traceMetadata）。
+    else if (report.instanceId) {
+      span.setAttribute(
+        LangfuseOtelSpanAttributes.TRACE_METADATA,
+        JSON.stringify({ instanceId: report.instanceId }),
       );
     }
 
@@ -345,6 +398,11 @@ export interface LangfuseFailureReport {
   status?: number;
   /** 失败描述（如错误体片段或 "timeout/error"）。 */
   statusMessage: string;
+  /**
+   * 记忆实例 ID —— 不传时继承 `lf.instanceId`（turn 上下文里已有）。
+   * 仅在 lf 未携带实例 ID 时才需要显式传。
+   */
+  instanceId?: string;
   /** 额外标签（如 ["error"]）。 */
   extraTags?: string[];
   /** observation 级 metadata。 */
@@ -374,6 +432,8 @@ export function langfuseReportFailure(report: LangfuseFailureReport): void {
     traceName: lf.traceName,
     userId: lf.userId,
     sessionId: lf.sessionId,
+    // 失败上报同样带实例 ID：lf 上有就继承，调用点显式传的优先。
+    instanceId: report.instanceId ?? lf.instanceId,
     tags: report.extraTags && report.extraTags.length > 0 ? [...lf.tags, ...report.extraTags] : lf.tags,
     // trace 级 input 仍记录用户问题（便于在失败 trace 上看到原始诉求）；不写 output。
     traceInput: lf.userQuery || undefined,

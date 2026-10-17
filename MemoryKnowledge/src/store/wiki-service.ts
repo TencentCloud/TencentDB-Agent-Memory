@@ -12,7 +12,7 @@
  *   lib 层 cascadeDeleteWikiPagesWithRefs 做引用级联。
  */
 
-import { join, resolve, normalize } from "node:path";
+import { join, resolve, normalize, dirname } from "node:path";
 import {
   rmSync,
   mkdirSync,
@@ -63,14 +63,28 @@ export type WikiWorker = (ctx: WikiBuildContext) => Promise<WikiBuildResult | vo
 
 /**
  * ingest 结果（判别联合）：
- *   - ok       已入队重建；
+ *   - ok       已入队重建（无在途任务）；
+ *   - queued   已在途，按 onBusy:'replace' 取消旧任务后排队新任务（设计 2026-09-21 §3.3）；
  *   - not_found memory/team/id 不匹配；
- *   - busy     正在 pending/processing（并发拒绝，对应 HTTP 409），step 为内部阶段（可 null）。
+ *   - busy     正在 pending/processing 且 onBusy:'reject'（并发拒绝，对应 HTTP 409），
+ *              step 为内部阶段（可 null）。
  */
 export type IngestResult =
   | { kind: "ok"; row: WikiRow }
+  | { kind: "queued"; row: WikiRow }
   | { kind: "not_found" }
   | { kind: "busy"; status: "pending" | "processing"; step: string | null };
+
+/**
+ * ingest 行为选项（设计 2026-09-21 §3.3）。
+ * onBusy 仅在 wiki 已有在途任务（status ∈ {pending, processing}）时生效：
+ *   - 'reject'（默认）：拒绝，返回 busy（原语义，自动同步/CLI/sync 别名保持不变）；
+ *   - 'replace'：置 cancelled 标记 + internal_status='cancelling'，并把新任务
+ *     排入 SerialQueue（FIFO）。旧 worker 返回后由检查点做 preserveRaw 收尾。
+ */
+export interface IngestOptions {
+  onBusy?: "reject" | "replace";
+}
 
 export interface WikiServiceLogger {
   info?: (msg: string) => void;
@@ -147,6 +161,19 @@ export interface RawRmResult {
   rewritten_pages: number;
 }
 
+/**
+ * 导入文件名映射文件结构（`<wikiDir>/import-map.json`）。
+ * providerId → (externalId → 落盘文件名)。
+ * 兼容两种值形态：字符串（当前写入形式）或 { filename }（历史/未来扩展）。
+ */
+export interface ImportNameMapFile {
+  version: 1;
+  providers: Record<
+    string,
+    Record<string, string | { filename: string; title?: string }>
+  >;
+}
+
 export interface PageWriteResult {
   ref: string;
   locked_injected: boolean;
@@ -215,11 +242,27 @@ export class WikiService {
     resolveLlm: (serviceId: string) => import("../config.js").LlmConfig;
   };
   /**
-   * In-flight delete 标记：delete 命中一个正在排队/执行的 wiki 时置位，
-   * worker 在检查点读取以决定中止。仅内存态（同 id 由 SerialQueue 串行 +
-   * Node 单线程，读写无并发）。清理收尾后移除。
+   * 中止标记（代际化，设计 2026-09-21 §3.3）。
+   *
+   * key = wiki_id，value = **被中止那一代** ingest 的 version。
+   *
+   * 为什么带代际：onBusy:'replace' 会在置标记后**立刻入队新任务**，而
+   * SerialQueue 里新旧任务是同一个 wiki_id key。若只判 "是否有标记"，
+   * 新任务 runBuild 入口检查点会把自己也当成"被中止"直接 abort，
+   * 导致 wiki 卡在 draft、ingest 永不执行。带上 version 后：
+   *   - 旧任务携带 version=N，标记里是 N → 命中，中止；
+   *   - 新任务携带 version=N+1，标记里仍是 N → 不命中，正常执行。
+   *
+   * delete() 触发时用 -1 作哨兵值（匹配任意代际，因为行会被硬删，
+   * 后续所有排队任务都该中止）。
+   *
+   * 仅内存态（同 id 由 SerialQueue 串行 + Node 单线程，读写无并发）。
+   * 收尾后移除。
    */
-  private readonly cancelled = new Set<string>();
+  private readonly cancelled = new Map<string, number>();
+
+  /** delete 的中止哨兵：匹配任意代际。 */
+  private static readonly CANCEL_ALL_VERSIONS = -1;
 
   constructor(opts: WikiServiceOptions) {
     this.store = opts.store;
@@ -267,15 +310,39 @@ export class WikiService {
 
   /**
    * 显式触发 ingest（LLM 加工 raw → page + 建索引）。
-   * 立即返回，后台异步执行。memory/team 不匹配返回 not_found；pending/processing 返回 busy。
+   * 立即返回，后台异步执行。memory/team 不匹配返回 not_found。
+   *
+   * 已有在途任务（pending/processing）时按 opts.onBusy 决定行为（设计 2026-09-21 §3.3）：
+   *   - 'reject'（默认）：返回 busy（HTTP 409），不覆盖状态、不写 audit —— 原语义；
+   *   - 'replace'：置 cancelled 标记 + internal_status='cancelling'，并把新任务排入
+   *     SerialQueue（FIFO）。旧 worker 返回时由 runBuild 检查点做 preserveRaw 收尾
+   *     （status 复位到 draft，保留 wiki 行与 raw），新任务出队后正常 scanning。
+   *     这样"取消旧任务 + 排队新任务"在同一调用内原子完成，不存在中间脏态。
    */
-  ingest(serviceId: string, teamId: string, wikiId: string, requesterUserId?: string): IngestResult {
+  ingest(
+    serviceId: string,
+    teamId: string,
+    wikiId: string,
+    requesterUserId?: string,
+    opts?: IngestOptions,
+  ): IngestResult {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return { kind: "not_found" };
-    // 并发拒绝：正在排队/执行中直接拒绝，不覆盖状态、不重复入队、不写 audit。
-    if (row.status === "pending" || row.status === "processing") {
-      return { kind: "busy", status: row.status, step: row.internal_status };
+
+    const inFlightStatus = row.status === "pending" || row.status === "processing" ? row.status : null;
+    if (inFlightStatus && opts?.onBusy !== "replace") {
+      // 并发拒绝：正在排队/执行中直接拒绝，不覆盖状态、不重复入队、不写 audit。
+      return { kind: "busy", status: inFlightStatus, step: row.internal_status };
     }
+    const inFlight = inFlightStatus !== null;
+
+    if (inFlight) {
+      // replace 语义：只中止**当前这一代**（row.version），新任务 version+1 不受影响；
+      // 同时置 cancelling 中间态供前端感知。
+      this.cancelled.set(wikiId, row.version);
+      this.store.updateWikiStatus(serviceId, wikiId, { internal_status: "cancelling" });
+    }
+
     const nextVersion = row.version + 1;
     this.store.updateWikiStatus(serviceId, wikiId, {
       status: "pending",
@@ -283,13 +350,14 @@ export class WikiService {
       sync_error: null,
       version: nextVersion,
     });
-    this.audit({ ...row, version: nextVersion }, "ingest", "manual ingest", requesterUserId);
+    this.audit({ ...row, version: nextVersion }, "ingest", inFlight ? "ingest (replace)" : "manual ingest", requesterUserId);
     const fresh = this.store.getWiki(serviceId, teamId, wikiId);
     if (fresh) this.enqueueBuild(fresh);
-    return fresh ? { kind: "ok", row: fresh } : { kind: "not_found" };
+    if (!fresh) return { kind: "not_found" };
+    return inFlight ? { kind: "queued", row: fresh } : { kind: "ok", row: fresh };
   }
 
-  /** sync 语义 = 重跑 ingest（管控显式触发）。 */
+  /** sync 语义 = 重跑 ingest（管控显式触发）。保持 reject 语义不变。 */
   sync(serviceId: string, teamId: string, wikiId: string, requesterUserId?: string): IngestResult {
     return this.ingest(serviceId, teamId, wikiId, requesterUserId);
   }
@@ -324,7 +392,8 @@ export class WikiService {
     if (!row) return false;
 
     if (row.status === "pending" || row.status === "processing") {
-      this.cancelled.add(wikiId);
+      // 哨兵 -1：delete 会硬删行，所有排队中的代际都该中止。
+      this.cancelled.set(wikiId, WikiService.CANCEL_ALL_VERSIONS);
     }
 
     this.audit(row, "delete", null);
@@ -360,21 +429,84 @@ export class WikiService {
   }
 
   /**
-   * worker 检查点：wiki 是否已被删除（cancelled 标记命中，或行已不在库）。
-   * 双判据覆盖 delete-during-run 与 delete-already-done 两种时序。
+   * worker 检查点：本次 build 是否应中止。
+   *
+   * 双判据（覆盖 delete-during-run 与 delete-already-done 两种时序）：
+   *   1. 代际化 cancelled 标记命中：标记代际为 -1（delete 哨兵，匹配任意代际），
+   *      或等于本任务入队时的 version（replace 精确命中旧代际）；
+   *   2. 行已不在库。
+   *
+   * 代际比对让 replace 入队的**新任务不会被自己触发的标记误伤**。
    */
-  private isDeleted(serviceId: string, wikiId: string): boolean {
-    return this.cancelled.has(wikiId) || this.store.getWikiById(serviceId, wikiId) === null;
+  private isDeleted(serviceId: string, wikiId: string, version: number): boolean {
+    const marked = this.cancelled.get(wikiId);
+    const cancelledHit =
+      marked !== undefined &&
+      (marked === WikiService.CANCEL_ALL_VERSIONS || marked === version);
+    return cancelledHit || this.store.getWikiById(serviceId, wikiId) === null;
   }
 
   /**
-   * worker 检查点判定“已删”后的收尾：幂等清理 worker 可能刚写下的盘/连接，
-   * 并移除 cancelled 标记。
+   * worker 检查点判定“需中止”后的收尾（幂等）。
+   *
+   * opts.preserveRaw=true（设计 2026-09-21 §3.3.2，由 ingest(onBusy:'replace') 触发）：
+   *   仅把 status 复位到 draft —— 保留 wiki 元数据行、raw 与已 ready 的 pages，
+   *   供后续新任务通过增量差分继续处理。不做任何删除动作。
+   *
+   * opts.preserveRaw=false 或省略（原 delete 触发）：
+   *   evict 读连接池 + 硬删元数据行 + rmSync 磁盘目录（cleanupResources 三件套）。
+   *
+   * 两种分支都会移除 cancelled 标记。
    */
-  private finishCancelled(serviceId: string, teamId: string, wikiId: string): void {
-    this.cleanupResources(serviceId, teamId, wikiId);
+  private finishCancelled(
+    serviceId: string,
+    teamId: string,
+    wikiId: string,
+    opts?: { preserveRaw?: boolean },
+  ): void {
+    if (opts?.preserveRaw) {
+      // 仅当"当前行仍是自己这一代（version <= 被取消代际）"才复位到 draft。
+      //
+      // 若新任务已经把 version 推高（replace 时 ingest() 会立刻 version+1 并置
+      // pending），说明新任务已接管这一行 —— 此时**绝不能**复位，否则会把新
+      // 任务的 pending 冲成 draft，前端就会看到"待加工/排队"的假窗口，实际是
+      // 旧 worker 把新任务状态覆盖了。让位不动即可，新任务的状态由它自己驱动。
+      const current = this.store.getWikiById(serviceId, wikiId);
+      const cancelledVersion = this.cancelled.get(wikiId);
+      const superseded =
+        current !== null &&
+        cancelledVersion !== undefined &&
+        cancelledVersion !== WikiService.CANCEL_ALL_VERSIONS &&
+        current.version > cancelledVersion;
+      if (superseded) {
+        this.logger?.info?.(
+          `[wiki] ${wikiId} old build aborted; newer ingest (v${current?.version}) already owns status, leaving as-is`,
+        );
+      } else {
+        this.store.updateWikiStatus(serviceId, wikiId, {
+          status: "draft",
+          internal_status: null,
+          sync_error: "cancelled by user",
+        });
+        this.logger?.info?.(`[wiki] ${wikiId} build aborted (replaced by newer ingest; raw preserved)`);
+      }
+    } else {
+      this.cleanupResources(serviceId, teamId, wikiId);
+      this.logger?.info?.(`[wiki] ${wikiId} build aborted (deleted during processing)`);
+    }
     this.cancelled.delete(wikiId);
-    this.logger?.info?.(`[wiki] ${wikiId} build aborted (deleted during processing)`);
+  }
+
+  /**
+   * 判定本次中止的触发源：
+   *   - wiki 行仍在 → ingest(onBusy:'replace') 触发 → preserveRaw（保留 raw）；
+   *   - wiki 行已删 → delete() 触发 → 硬删。
+   *
+   * 注意：不能直接用 isDeleted() 区分（它是 cancelled 标记 OR 行不存在的双判据），
+   * 必须单独查行是否存在。
+   */
+  private isCancelledByReplace(serviceId: string, wikiId: string): boolean {
+    return this.store.getWikiById(serviceId, wikiId) !== null;
   }
 
   /** 写一条 wiki 审计记录。失败不阻断主流程。 */
@@ -492,7 +624,12 @@ export class WikiService {
   ): WriteOutcome<RawWriteResult> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
-    if (row.status === "processing") return "processing";
+    // 注：此处**刻意不拦 processing**。设计 2026-09-21「导入并抽取」要求
+    // "新导入覆盖旧导入"：抽取进行中再次导入时必须允许写入 raw，否则返回
+    // 409 "wiki is processing; cannot write/delete" 阻断导入。
+    // 安全性：跟随的 ingest(onBusy:'replace') 会取消旧任务，其产出的 page
+    // 结果被 runBuild 检查点丢弃；新任务重新按 sha256 差分扫描全部 raw
+    // （已 ingested 且 sha 未变者跳过），因此不存在脏数据落库。
 
     const size = Buffer.byteLength(content, "utf-8");
     if (size > RAW_WRITE_MAX_BYTES) return "too_large";
@@ -523,7 +660,7 @@ export class WikiService {
   ): WriteOutcome<RawWriteManyItem[]> {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
-    if (row.status === "processing") return "processing";
+    // 同上（rawWrite）：刻意不拦 processing，以支持"抽取中再次导入"覆盖写入。
     if (files.length > RAW_WRITE_MAX) {
       throw new Error(`files exceeds max ${RAW_WRITE_MAX}`);
     }
@@ -583,7 +720,98 @@ export class WikiService {
       plans.map((p) => ({ filename: p.filename, content: p.content, size: p.size })),
       userId,
     );
+    // 拉取入盘后 bump version + 更新 last_sync_at（设计 §3.1⑥）。
+    // - version 用于下游变更检测（ingest 时对比源文件版本 vs 已抽取版本）
+    // - last_sync_at 用于外部同步观测点（"上次拉取时间"）
+    // 幂等：即使 files 内容全部相同，写盘 + 登记也走一遍，版本仍会前进，
+    //   这是 SoT（wiki 表状态）的期望行为：raw 一旦被写过就算作新版本，
+    //   由下游 ingest 决定是否真的重新抽取（sha 相同则跳过）。
+    if (plans.length > 0) {
+      this.store.updateWikiStatus(serviceId, wikiId, {
+        version: row.version + 1,
+        last_sync_at: new Date().toISOString(),
+      });
+    }
     return plans.map(({ filename, size }) => ({ filename, size }));
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 导入文件名映射（externalId → filename）
+  //
+  // 背景：wiki 导入（wiki-source）落盘文件名取自文档**标题**（可读性好），
+  // 但标题会变，而"标题"不是稳定身份。定时同步每轮全量重拉、且去重组只在单轮内有效，
+  // 于是远端改名后会出现：新标题 → 新建文件；另一篇仍用旧标题 → 复用旧文件名并覆盖，
+  // 造成内容串档 + 残留垃圾文件，且无任何告警。
+  //
+  // 解决：把 provider+externalId → filename 持久化到 wiki 目录下的 import-map.json。
+  // 已导入过的文档复用旧文件名，标题仅作展示。存储放在这里（而非 import-runner）是因为
+  // 只有本类持有 dataRoot / dirFor()，调用方无需再透传路径。
+  // ─────────────────────────────────────────────────────────────
+
+  /** 映射文件路径：`<wikiDir>/import-map.json`。 */
+  private importMapPath(serviceId: string, teamId: string, wikiId: string): string {
+    return join(this.dirFor(serviceId, teamId, wikiId), "import-map.json");
+  }
+
+  /**
+   * 读取某 provider 的文件名映射。
+   * 文件缺失/损坏 → 返回空对象（降级为"按标题生成"的旧行为，不阻断导入）。
+   */
+  readImportNameMap(
+    serviceId: string,
+    teamId: string,
+    wikiId: string,
+    providerId: string,
+  ): Record<string, string> {
+    try {
+      const p = this.importMapPath(serviceId, teamId, wikiId);
+      if (!existsSync(p)) return {};
+      const parsed = JSON.parse(readFileSync(p, "utf-8")) as ImportNameMapFile | null;
+      const providers = parsed?.providers;
+      if (!providers || typeof providers !== "object") return {};
+      const m = providers[providerId];
+      // 兼容旧结构：值可能是 { filename } 对象
+      if (!m || typeof m !== "object") return {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(m)) {
+        const fn = typeof v === "string" ? v : v?.filename;
+        if (typeof fn === "string" && fn) out[k] = fn;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * 写回某 provider 的文件名映射（整份覆盖）。
+   * 写失败只记日志——文件本身已落盘，映射丢失仅影响下一轮的名字复用，不阻断当前导入。
+   */
+  writeImportNameMap(
+    serviceId: string,
+    teamId: string,
+    wikiId: string,
+    providerId: string,
+    map: Record<string, string>,
+  ): void {
+    try {
+      const p = this.importMapPath(serviceId, teamId, wikiId);
+      let file: ImportNameMapFile = { version: 1, providers: {} };
+      if (existsSync(p)) {
+        try {
+          const parsed = JSON.parse(readFileSync(p, "utf-8")) as ImportNameMapFile | null;
+          if (parsed && typeof parsed === "object" && parsed.providers) file = parsed;
+        } catch {
+          // 损坏则整体重建
+        }
+      }
+      file.providers[providerId] = map;
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, JSON.stringify(file, null, 2), "utf-8");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger?.warn?.(`import-map write failed: ${msg}`);
+    }
   }
 
   /**
@@ -1008,13 +1236,27 @@ export class WikiService {
   // ═══════════════════════════════════════════════════════════════════
 
   private enqueueBuild(row: WikiRow): void {
-    this.queue.enqueue(row.wiki_id, () => this.runBuild(row.service_id, row.wiki_id, row.team_id, row.name));
+    // 代际 version 随任务一起入队：runBuild 用它与 cancelled 标记比对，
+    // 使 replace 新入队的任务（version 更大）不会被旧代际的标记误伤。
+    const version = row.version;
+    this.queue.enqueue(row.wiki_id, () =>
+      this.runBuild(row.service_id, row.wiki_id, row.team_id, row.name, version),
+    );
   }
 
-  private async runBuild(serviceId: string, wikiId: string, teamId: string, name: string): Promise<void> {
-    // 入口检查点：pending 期间被删 → 跳过，不置 processing、不 ingest。
-    if (this.isDeleted(serviceId, wikiId)) {
-      this.finishCancelled(serviceId, teamId, wikiId);
+  private async runBuild(
+    serviceId: string,
+    wikiId: string,
+    teamId: string,
+    name: string,
+    version: number,
+  ): Promise<void> {
+    // 入口检查点：pending 期间被中止 → 跳过，不置 processing、不 ingest。
+    // preserveRaw 由触发源决定：replace（行仍在）保留 raw，delete（行已删）硬删。
+    if (this.isDeleted(serviceId, wikiId, version)) {
+      this.finishCancelled(serviceId, teamId, wikiId, {
+        preserveRaw: this.isCancelledByReplace(serviceId, wikiId),
+      });
       return;
     }
     this.store.updateWikiStatus(serviceId, wikiId, {
@@ -1035,9 +1277,11 @@ export class WikiService {
           this.store.updateWikiStatus(serviceId, wikiId, { status: "processing", internal_status: s }),
         ingestRunId,
       });
-      // 结束前检查点：processing 期间被删 → 跳过 ready/audit/回调，幂等收尾清理。
-      if (this.isDeleted(serviceId, wikiId)) {
-        this.finishCancelled(serviceId, teamId, wikiId);
+      // 结束前检查点：processing 期间被中止 → 跳过 ready/audit/回调，幂等收尾。
+      if (this.isDeleted(serviceId, wikiId, version)) {
+        this.finishCancelled(serviceId, teamId, wikiId, {
+          preserveRaw: this.isCancelledByReplace(serviceId, wikiId),
+        });
         return;
       }
       this.store.updateWikiStatus(serviceId, wikiId, {
@@ -1057,9 +1301,11 @@ export class WikiService {
       await this.onBuildComplete(synced, "ready", null, ingestRunId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
-      if (this.isDeleted(serviceId, wikiId)) {
-        this.finishCancelled(serviceId, teamId, wikiId);
+      // worker 抛错，但若期间已被中止，视为取消而非失败：跳过 failed 状态/回调，做收尾。
+      if (this.isDeleted(serviceId, wikiId, version)) {
+        this.finishCancelled(serviceId, teamId, wikiId, {
+          preserveRaw: this.isCancelledByReplace(serviceId, wikiId),
+        });
         return;
       }
       this.store.updateWikiStatus(serviceId, wikiId, {

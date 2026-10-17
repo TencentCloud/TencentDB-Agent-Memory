@@ -95,6 +95,30 @@ export interface EmbeddingService {
 }
 
 /**
+ * Whether `svc` can produce client-side query/document vectors via `embed()`.
+ *
+ * `NoopEmbeddingService` (`provider === "noop"`) is a placeholder for stores
+ * that embed server-side (TCVDB). Treating it as a real embedder makes L1
+ * dedup skip FTS and call vector search with empty vectors.
+ *
+ * Does not use `instanceof` (avoids cross-bundle class identity issues) or
+ * `isReady()` (a local model still counts as a client embedder while warming up).
+ * Dimension is not used: Noop is identified by provider, and a real remote
+ * service cannot be constructed with dimensions <= 0.
+ */
+export function hasClientEmbedding(
+  svc: EmbeddingService | undefined | null,
+): svc is EmbeddingService {
+  if (!svc) return false;
+  const provider =
+    typeof svc.getProviderInfo === "function"
+      ? svc.getProviderInfo()?.provider
+      : undefined;
+  if (provider === "noop") return false;
+  return true;
+}
+
+/**
  * Error thrown when embed() / embedBatch() is called before the local
  * embedding model has finished downloading and loading.
  * Callers should catch this and fall back to keyword-only mode.

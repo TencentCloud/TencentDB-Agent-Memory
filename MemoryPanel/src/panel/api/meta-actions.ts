@@ -48,6 +48,8 @@ export const META_ACTIONS = [
   'agent/delete',
   'agent/list',
   'agent/archive',
+  'agent/set-default-template',
+  'agent/get-default-template',
   'task/create',
   'task/get',
   'task/update',
@@ -78,6 +80,11 @@ export const META_ACTIONS = [
   'instance-quota/get',
   'config/user/get',
   'config/user/set',
+  // UserSessionDefault (v3.3) — 用户级 session 默认 (team, agent, task) 三元组
+  // 详见 MemoryProxy/docs/design/2026-10-10-user-session-default-design.md
+  'user-session-default/get',
+  'user-session-default/set',
+  'user-session-default/delete',
 ] as const;
 
 export type MetaAction = (typeof META_ACTIONS)[number];

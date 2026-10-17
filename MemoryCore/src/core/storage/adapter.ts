@@ -12,9 +12,11 @@
  */
 
 import type { IStorageBackend, StorageObject, ListEntry, ListObjectsOptions, ListResult, PutObjectOptions } from "./types.js";
+import type { ProfileIsolation } from "../profile/profile-scope.js";
+import { isProfileIsolationRebindable } from "./composite-backend.js";
 
 class ScopedStorageBackend implements IStorageBackend {
-  readonly type: "local" | "cos";
+  readonly type: IStorageBackend["type"];
   private readonly prefix: string;
 
   constructor(private readonly base: IStorageBackend, prefix: string) {
@@ -79,6 +81,39 @@ class ScopedStorageBackend implements IStorageBackend {
 export function createScopedStorageAdapter(base: StorageAdapter, prefix: string): StorageAdapter {
   if (!prefix) return base;
   return new StorageAdapter(new ScopedStorageBackend(base.getBackend(), prefix));
+}
+
+/**
+ * Apply a profile isolation domain to a storage view — the single place where
+ * request tenancy meets storage.
+ *
+ * Legacy backends (local/cos) get the key-prefix wrap (`profiles/{scope}/`).
+ * A row-view backend (type "rowfs") instead rebinds the isolation into the
+ * row *query*: wrapping it in a key prefix would put `profiles/{scope}/` in
+ * front of keys that the row-view key convention only recognises as
+ * `scene_blocks/` / `persona.md`, and every profile read would miss
+ * (design doc D12 ③).
+ *
+ * `prefix` is ignored on the rowfs branch — it exists for the legacy wrap.
+ * `isolation` undefined rebinds to the unbound (whole-set) view, matching the
+ * legacy "global scope = no prefix" behaviour.
+ */
+export function scopeProfileStorageView(
+  storage: StorageAdapter,
+  prefix: string,
+  isolation: ProfileIsolation | undefined,
+): StorageAdapter {
+  const backend = storage.getBackend();
+  if (backend.type === "rowfs") {
+    if (!isProfileIsolationRebindable(backend)) {
+      throw new Error(
+        `rowfs backend (type=${backend.type}) cannot bind isolation — ` +
+          `refusing to serve a scoped request through an unbound row view`,
+      );
+    }
+    return new StorageAdapter(backend.withProfileIsolation(isolation));
+  }
+  return createScopedStorageAdapter(storage, prefix);
 }
 
 export class StorageAdapter {

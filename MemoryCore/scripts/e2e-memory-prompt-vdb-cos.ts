@@ -15,8 +15,8 @@ import {
   syncLocalProfilesToStore,
 } from "../src/core/profile/profile-sync.js";
 import type { LLMRunner } from "../src/core/types.js";
-import { TcvdbClient } from "../src/core/store/tcvdb-client.js";
-import { TcvdbMemoryStore } from "../src/core/store/tcvdb.js";
+import { TcvdbClient } from "../src/core/store/tcvdb/client.js";
+import { TcvdbMemoryStore } from "../src/core/store/tcvdb/memory-store.js";
 import {
   buildMemoryPromptSettingId,
   type MemoryPromptSettingLogRecord,

@@ -184,9 +184,16 @@ export async function extractL1Memories(params: {
   logger?.debug?.(`${TAG} Extracting from ${newMessages.length} new messages (+ ${backgroundMessages.length} background) [${qualifiedMessages.length} qualified from ${messages.length} input]`);
 
   // Step 1: LLM extraction (scene segmentation + memory extraction)
+  //
+  // When we end up with 0 memories at any downstream branch we tag one of the
+  // reasons defined by `L1EmptyReason` and let the `allExtracted.length === 0`
+  // block below emit a single, greppable `l1-empty reason=<label>` line. This
+  // is the ops handle we always wished we had — a silent 0-count run should
+  // never happen again.
   let scenes: SceneSegment[];
+  let earlyEmptyReason: L1EmptyReason | undefined;
   try {
-    scenes = await callLlmExtraction({
+    const outcome = await callLlmExtraction({
       newMessages,
       backgroundMessages,
       previousSceneName: options.previousSceneName,
@@ -198,9 +205,14 @@ export async function extractL1Memories(params: {
       traceContext: { teamId, userId, agentId, sessionId },
       llmRunner: options.llmRunner,
     });
+    scenes = outcome.scenes;
+    earlyEmptyReason = outcome.emptyReason;
     logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
   } catch (err) {
     logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+    logger?.warn?.(
+      `${TAG} l1-empty reason=llm_error sessionKey=${sessionKey} msg=${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`,
+    );
     return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
   }
 
@@ -230,6 +242,21 @@ export async function extractL1Memories(params: {
   logger?.debug?.(`${TAG} Total extracted memories: ${allExtracted.length} across ${scenes.length} scene(s)`);
 
   if (allExtracted.length === 0) {
+    // ── Diagnostic warn line: one greppable reason so ops can see WHY ──
+    // Emitted only on the 0-count path (never on success), so log volume stays
+    // low. Reason values are the closed set of `L1EmptyReason` — matches the
+    // observability contract callers can build dashboards / alerts on.
+    //
+    // Priority when both are present:
+    //   - `earlyEmptyReason` from parseExtractionResult (parse-side signal)
+    //   - `normalized_all_dropped` fallback: parse succeeded with scenes, but
+    //     the type-normalization loop above rejected every entry.
+    const finalReason: L1EmptyReason | "normalized_all_dropped" =
+      earlyEmptyReason ?? (scenes.length > 0 ? "normalized_all_dropped" : "empty_scenes");
+    logger?.warn?.(
+      `${TAG} l1-empty reason=${finalReason} sessionKey=${sessionKey} scenes=${scenes.length} inputMsgs=${messages.length}`,
+    );
+
     // ── 评测指标：L1 提取率（提取为空的情况） ──
     if (metricInstanceId) {
       try {
@@ -461,7 +488,7 @@ async function callLlmExtraction(params: {
   llmRunner?: LLMRunner;
   /** langfuse 上报身份四元组（team/user/agent/session）。 */
   traceContext?: TraceContext;
-}): Promise<SceneSegment[]> {
+}): Promise<ParseExtractionOutcome> {
   const { newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", memoryPrompt, llmRunner, traceContext } = params;
 
   const systemPrompt = composeMemorySystemPrompt(getExtractMemoriesSystemPrompt(promptMode), memoryPrompt);
@@ -513,13 +540,64 @@ async function callLlmExtraction(params: {
 }
 
 /**
+ * Coarse classification for a "why did we get zero memories" diagnostic line.
+ * Emitted by `extractL1Memories` when the final memory count is 0, so ops can
+ * distinguish "LLM returned garbage" from "LLM legitimately said nothing".
+ */
+export type L1EmptyReason =
+  | "llm_error"      // LLM call raised (thrown by callLlmExtraction)
+  | "no_json"        // /\[[\s\S]*\]/ did not match in raw content
+  | "parse_fail"     // JSON.parse threw on the extracted substring
+  | "not_array"      // parse succeeded but result is not an array
+  | "empty_scenes";  // parse succeeded, array had 0 scenes OR all scenes had 0 memories
+
+interface ParseExtractionOutcome {
+  scenes: SceneSegment[];
+  /** Populated iff we ended with 0 memories across all scenes. */
+  emptyReason?: L1EmptyReason;
+}
+
+/**
  * Parse the LLM's JSON response into SceneSegment array.
  * Expected format: [{scene_name, message_ids, memories: [...]}]
+ *
+ * Diagnostics contract:
+ *   - Debug-level [l1-debug] lines dump raw content on NO_JSON / PARSE_FAIL
+ *     (unchanged from prior behavior).
+ *   - The returned `emptyReason` is the CANONICAL machine-readable label —
+ *     `extractL1Memories` uses it to emit a single-line `l1-empty` warn when
+ *     the final count is 0. See L1EmptyReason for the closed set.
  */
-function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
+function parseExtractionResult(raw: string, logger?: Logger): ParseExtractionOutcome {
   try {
+    // ── Strip inline reasoning wrappers (A₂-style thinking models) ───────
+    // A₁ models (minimax-m2.7 / deepseek-v4-pro / o1 / o3 / Claude thinking)
+    // put reasoning in a separate `reasoning_content` field, so `content`
+    // itself is nothing but pure JSON — the strip below is a no-op.
+    //
+    // A₂ models (minimax-m3 / ep-2cocgw76 / GLM-4-thinking / qwq-32b / some
+    // vLLM-hosted DeepSeek-R1) inline reasoning as `<think>…</think>` inside
+    // the main `content`. Their think prose frequently contains stray `[`
+    // (message-id dumps, priority tags, and sometimes a full JSON template
+    // pre-written for "structure preview"), which fatally derails the greedy
+    // `/\[[\s\S]*\]/` array-match below by anchoring it inside the think
+    // section. So we peel `<think>` blocks BEFORE the array-match fires.
+    //
+    // Safeguards:
+    //   • non-greedy `*?` + explicit `</think>` requirement — a truncated
+    //     (max_tokens cap) think tag falls through as-is instead of eating
+    //     the rest of the response.
+    //   • `g` flag — rare multi-segment thinking is fully stripped.
+    // See docs/design/2026-09-03-l1-thinking-models-compatibility.md.
+    //
+    // NOTE: strip result goes to a new local (`stripped`) — we preserve the
+    // original `raw` so the NO_JSON / PARSE_FAIL dumps below still show
+    // exactly what came off the wire. If a future A₂ variant emits a shape
+    // this regex misses, ops need the pristine raw to diagnose it.
+    const stripped = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+
     // Strip markdown code block wrappers if present
-    let cleaned = raw.trim();
+    let cleaned = stripped.trim();
     if (cleaned.startsWith("```")) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     }
@@ -528,12 +606,13 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
     const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
     if (!arrayMatch) {
       logger?.warn?.(`${TAG} No JSON array found in extraction response`);
-      // [l1-debug] NO_JSON — dump the full raw so we can see what the LLM actually said
+      // [l1-debug] NO_JSON — dump the full ORIGINAL raw (not the stripped
+      // version), otherwise a broken <think> variant would leave no trace.
       const rawPreview = raw.slice(0, 2048);
       logger?.warn?.(
-        `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
+        `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, strippedLen=${stripped.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
-      return [];
+      return { scenes: [], emptyReason: "no_json" };
     }
 
     // Sanitize control characters inside JSON string literals that LLM may produce.
@@ -553,7 +632,7 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
 
     if (!Array.isArray(parsed)) {
       logger?.warn?.(`${TAG} Extraction response is not an array`);
-      return [];
+      return { scenes: [], emptyReason: "not_array" };
     }
 
     const scenes: SceneSegment[] = [];
@@ -578,14 +657,17 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       });
     }
 
-    return scenes;
+    const totalMemories = scenes.reduce((acc, sc) => acc + sc.memories.length, 0);
+    return {
+      scenes,
+      emptyReason: totalMemories === 0 ? "empty_scenes" : undefined,
+    };
   } catch (err) {
     logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
-    const rawPreview = raw.slice(0, 2048);
     logger?.warn?.(
-      `${TAG} [l1-debug] PARSE_FAIL rawLen=${raw.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
+      `${TAG} [l1-debug] PARSE_FAIL rawLen=${raw.length}, rawFull=${JSON.stringify(raw)}`,
     );
-    return [];
+    return { scenes: [], emptyReason: "parse_fail" };
   }
 }
 

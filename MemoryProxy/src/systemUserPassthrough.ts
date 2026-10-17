@@ -46,7 +46,7 @@ import { writeLog } from "./logger.js";
 import { log } from "./report/log.js";
 import { joinUrl } from "./guard-adapter.js";
 import { extractSpaceIdFromPath, tryReportCreditFromPath } from "./credit-reporter.js";
-import { extractSseUsage } from "./handler.js";
+import { extractSseUsage } from "./pipeline/runners/openai-chat.js";
 import {
   opikCreateTrace,
   opikCreateLlmSpan,
@@ -60,6 +60,10 @@ import {
 } from "./langfuse.js";
 import type { ProxyConfig } from "./types.js";
 import type { SystemUserMatch } from "./systemUser.js";
+import {
+  getInstanceUpstreamConfigs,
+  resolveExtraction,
+} from "./instance-upstream-cache.js";
 import {
   enforceRateLimit,
   isRateLimitExceededError,
@@ -193,10 +197,17 @@ async function recordTracesAndUsage(params: {
   usage: Record<string, unknown> | null;
   upstreamRequestId?: string;
   status: number;
+  /**
+   * true = 该请求走的是 custom extraction upstream(用户自定义 base_url + api_key)。
+   * proxy 官方 tpm 桶不记这类 token —— 用户的 quota 用户自己管。
+   * caller 侧的判据:extractionApiKeyOverride 非空 ⇔ resolveExtraction 命中有效 row。
+   */
+  isCustomExtraction?: boolean;
 }): Promise<void> {
   const {
     config, match, path, upstreamUrl, modelId, startTime, endTime, stream,
     traceId, requestPayload, responsePayload, usage, upstreamRequestId, status,
+    isCustomExtraction,
   } = params;
 
   const spaceId = extractSpaceIdFromPath(path) ?? "";
@@ -213,7 +224,8 @@ async function recordTracesAndUsage(params: {
   if (usage && Object.keys(usage).length > 0) {
     const isAnthropicMain = /\/v1\/messages$/.test(path);
     const isOpenAiMain = /\/v1\/chat\/completions$/.test(path);
-    if (isAnthropicMain || isOpenAiMain) {
+    // custom extraction upstream 不记 token 桶(与 enforceRateLimit 对称)
+    if ((isAnthropicMain || isOpenAiMain) && !isCustomExtraction) {
       await recordInputTokenUsage({
         config,
         instanceId: spaceId || undefined,
@@ -232,6 +244,7 @@ async function recordTracesAndUsage(params: {
         upstreamUrl,
         stream,
         usage,
+        requestReceivedAt: startTime,
         spaceId: spaceId || undefined,
         upstreamRequestId,
       });
@@ -253,6 +266,8 @@ async function recordTracesAndUsage(params: {
       modelId,
       upstreamUrl,
       "usage",
+      new Date(startTime),
+      { traceId, upstreamRequestId, sessionKey },
     );
     if (outcome.attempted && !outcome.ok) {
       log.warn("systemUser.credit_report_failed", {
@@ -358,6 +373,9 @@ async function recordTracesAndUsage(params: {
         traceName: `${modelId} / ${match.name}`,
         userId: attributionKey,
         sessionId: sessionKey,
+        // 统一走 instanceId（mergeInstanceId 负责落进 trace/observation metadata）。
+        // 内部变量仍叫 spaceId（与 CH/credit 命名一致），只有 Langfuse 这层改名。
+        instanceId: spaceId || undefined,
         tags: traceTags,
         traceInput: requestPayload ?? undefined,
         traceOutput: responsePayload ?? undefined,
@@ -365,7 +383,6 @@ async function recordTracesAndUsage(params: {
           stream,
           upstreamUrl,
           systemUser: match.name,
-          spaceId: spaceId || undefined,
         },
         observationMetadata: {
           stream,
@@ -381,6 +398,7 @@ async function recordTracesAndUsage(params: {
           traceName: `${modelId} / ${match.name}`,
           userId: attributionKey,
           sessionId: sessionKey,
+          instanceId: spaceId || undefined,
           tags: traceTags,
           routeTags: [],
           userQuery: "",
@@ -468,8 +486,30 @@ export async function handleSystemUserPassthrough(
   const startTime = new Date().toISOString();
   const traceId = uuidv7();
   const path = c.req.path;
-  const upstreamUrl = joinUrl(config.upstream.url, path);
+  let upstreamUrl = joinUrl(config.upstream.url, path);
   const spaceId = extractSpaceIdFromPath(path) ?? "";
+
+  // ── Instance upstream config: extraction model override ──────────────
+  // System users = internal service (memory/skill extraction). Check if the
+  // instance has a custom extraction model configured. If so, override the
+  // upstream URL and API key.
+  //
+  // v2 model groups(§7.4):resolveExtraction 三态优雅回退:
+  //   - 未配置 / enabled=false / base_url 空 → null → 走全局 upstream + alias(不 block)
+  //   - 有效配置 → 替换 upstream + 跳过 alias + 不上报 credit(用户的模型归用户)
+  let extractionApiKeyOverride: string | undefined;
+  let extractionModelIdOverride: string | undefined;
+  {
+    const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId, config.instanceUpstream);
+    const extractRow = resolveExtraction(instanceConfigs);
+    if (extractRow) {
+      upstreamUrl = joinUrl(extractRow.base_url, path);
+      extractionApiKeyOverride = extractRow.api_key;
+      if (extractRow.model_id) {
+        extractionModelIdOverride = extractRow.model_id;
+      }
+    }
+  }
 
   // Two body-forwarding paths (see file header). We normalise both to
   // `ArrayBuffer` so `fetch({body})` accepts them without a type-union
@@ -478,6 +518,10 @@ export async function handleSystemUserPassthrough(
   let bodyObj: Record<string, unknown> | null;
   let bodyTextForTrace: string;
   if (rewrittenBody) {
+    // Apply extraction model_id override before serializing.
+    if (extractionModelIdOverride && typeof rewrittenBody.model === "string") {
+      rewrittenBody.model = extractionModelIdOverride;
+    }
     // Main-handler path: reuse the already-parsed + alias-resolved body so
     // upstream sees the canonical `model_id`, exactly like external callers.
     bodyTextForTrace = JSON.stringify(rewrittenBody);
@@ -508,13 +552,22 @@ export async function handleSystemUserPassthrough(
   });
 
   const headers = buildPassthroughHeaders(c, config);
+  // Override API key if extraction model is configured for this instance.
+  if (extractionApiKeyOverride) {
+    headers["authorization"] = `Bearer ${extractionApiKeyOverride}`;
+    delete headers["x-api-key"];
+  }
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
 
   let upstreamResp: Response;
+  // custom extraction upstream(用户自定义 extraction base_url + api_key)不走 proxy
+  // 官方限流桶 —— 用户的 quota 自己管。extractionApiKeyOverride 非空 ⇔ resolveExtraction
+  // 命中了有效 row (§7.4:未配置 / disabled / base_url 空 都返 null;此处一定是 override)。
+  const isCustomExtraction = extractionApiKeyOverride !== undefined;
   try {
     const isAnthropicMain = /\/v1\/messages$/.test(path);
     const isOpenAiMain = /\/v1\/chat\/completions$/.test(path);
-    if (bodyObj && (isAnthropicMain || isOpenAiMain)) {
+    if (bodyObj && (isAnthropicMain || isOpenAiMain) && !isCustomExtraction) {
       await enforceRateLimit({
         config,
         instanceId: spaceId || undefined,
@@ -556,6 +609,7 @@ export async function handleSystemUserPassthrough(
       responsePayload: { error: message },
       usage: null,
       status: 502,
+      isCustomExtraction,
     }).catch(() => { /* best-effort */ });
 
     return c.json({ error: "Upstream request failed", detail: message }, 502);
@@ -598,6 +652,7 @@ export async function handleSystemUserPassthrough(
             usage,
             upstreamRequestId,
             status,
+            isCustomExtraction,
           });
         })
         .catch((err: unknown) => {
@@ -627,6 +682,7 @@ export async function handleSystemUserPassthrough(
     startTime, endTime, stream: false, traceId,
     requestPayload, responsePayload, usage,
     upstreamRequestId, status,
+    isCustomExtraction,
   });
 
   return new Response(respBuf, {

@@ -221,11 +221,9 @@ export function registerAgentOverviewRoutes(api: Hono, deps: PanelDeps): void {
         // agent 时看不到自己的记忆池；且外部借入这些私密后即使已解除也会残留在
         // 选择列表里造成困惑。
       }),
-      deps.metaKernel.invoke(
-        "agent/list",
-        { team_id: teamId, limit: 100, offset: 0 },
-        ctx,
-      ),
+      // 分页拉全量：limit 上限 100，团队 agent > 100 时裸 invoke 会截断
+      // （新建 Agent 的"挂到哪个 agent"选择器、self memory 判断都会漏）
+      fetchAllMetaListItems<AgentRaw>(deps, ctx, "agent/list", { team_id: teamId }),
       // skill 真实归属：skill 内核 list（按 owner_agent_id 统计），运行时注入
       // <available_skills> 读的就是这张表，是权威源。
       deps.skillKernel.invoke(
@@ -267,10 +265,8 @@ export function registerAgentOverviewRoutes(api: Hono, deps: PanelDeps): void {
         ? chatTeamAssetsRes.value.filter((a) => isActiveStatus(a.status))
         : [];
     const agents =
-      agentsRes.status === "fulfilled" && agentsRes.value.code === 0
-        ? (
-            (agentsRes.value.data as { items?: AgentRaw[] } | null)?.items ?? []
-          ).filter((a) => isActiveStatus(a.status))
+      agentsRes.status === "fulfilled"
+        ? agentsRes.value.filter((a) => isActiveStatus(a.status))
         : [];
     const agentIds =
       requestedAgentIds.length > 0

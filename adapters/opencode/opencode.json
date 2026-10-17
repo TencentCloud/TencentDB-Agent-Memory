@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "tencentdb-agent-memory": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "TencentDB Agent Memory",
+      "options": {
+        "baseURL": "http://127.0.0.1:8096/opencode/default/v1",
+        "headers": {
+          "x-tdai-service-id": "default"
+        }
+      },
+      "models": {
+        "claude-sonnet-4-20250514": {
+          "name": "claude-sonnet-4 (via Memory Proxy)",
+          "limit": {
+            "context": 200000
+          }
+        }
+      }
+    }
+  }
+}

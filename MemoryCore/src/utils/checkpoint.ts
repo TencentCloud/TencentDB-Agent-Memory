@@ -538,6 +538,31 @@ export class CheckpointManager {
     this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
   }
 
+  /**
+   * Increment `memories_since_last_persona` (and `total_memories_extracted`)
+   * on this checkpoint by `count`.
+   *
+   * Used to propagate L1 extraction counts to per-profile scoped checkpoints
+   * so that PersonaTrigger P4 (threshold) works correctly.
+   *
+   * This is the counterpart to `markL1ExtractionComplete` (which writes the
+   * root checkpoint): after root is updated, the caller MUST also call this
+   * on each relevant profile-scope checkpoint.
+   *
+   * Goes through `mutate()` → in-process file lock + optional distributed lock,
+   * so concurrent L1 tasks targeting the same profile scope are safe.
+   */
+  async incrementMemoriesSincePersona(count: number): Promise<void> {
+    if (count <= 0) return;
+    const cp = await this.mutate((cp) => {
+      cp.memories_since_last_persona += count;
+      cp.total_memories_extracted += count;
+    });
+    this.logger.info(
+      `[checkpoint] incrementMemoriesSincePersona: +${count} → memories_since=${cp.memories_since_last_persona}, total=${cp.total_memories_extracted}`,
+    );
+  }
+
   // ============================
   // Per-session helpers — runner state (L0/L1 owned)
   // ============================

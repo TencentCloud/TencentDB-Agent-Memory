@@ -107,6 +107,8 @@ export interface SkillCoreOptions {
   now?: () => number;
   /** 旧版本 TTL 秒数。0 = 关闭。 */
   versionTtlSeconds?: number;
+  /** 每个 skill 最多保留的非 head 版本数。0 = 关闭。 */
+  maxNonHeadVersions?: number;
   /**
    * `delete` 成功归档 head 后同步触发。fire-and-forget：钩子抛异常
    * 会被吞掉，不影响 delete 返回值（asset 状态漂移可容忍：skill 已经
@@ -156,7 +158,6 @@ export interface PatchInput extends IdFields {
 
 export interface DeleteInput extends IdFields {
   skill_id: string;
-  expected_version: number;
 }
 
 export interface GetInput extends IdFields {
@@ -222,6 +223,7 @@ export class SkillCore {
   private readonly ulid: () => string;
   private readonly now: () => number;
   private readonly versionTtlSeconds: number;
+  private readonly maxNonHeadVersions: number;
   private readonly onSkillArchived?: SkillCoreOptions["onSkillArchived"];
   private readonly onSkillAccessed?: SkillCoreOptions["onSkillAccessed"];
 
@@ -235,6 +237,7 @@ export class SkillCore {
     this.ulid = opts.ulid ?? (() => `skl-${randomBase62(12)}`);
     this.now = opts.now ?? (() => Date.now());
     this.versionTtlSeconds = opts.versionTtlSeconds ?? 0;
+    this.maxNonHeadVersions = opts.maxNonHeadVersions ?? 0;
     this.onSkillArchived = opts.onSkillArchived;
     this.onSkillAccessed = opts.onSkillAccessed;
   }
@@ -324,7 +327,7 @@ export class SkillCore {
         description: file.frontmatter.description,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {
@@ -363,7 +366,7 @@ export class SkillCore {
         description: file.frontmatter.description,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {
@@ -381,7 +384,6 @@ export class SkillCore {
     if (input.team_id) assertTeamMatchWrap(head, input.team_id);
     if (!head) throw new SkillCoreError("SKILL_NOT_FOUND");
     if (input.agent_id) assertOwnerWrap(head, input.agent_id, input.team_id);
-    assertVersionFreshWrap(head, input.expected_version);
 
     // 物理删除所有版本 + 清 storage + 汇总上报 shark(-N)
     const deleted = await this.versioning.deleteSkill(input.skill_id, input.team_id);
@@ -410,7 +412,7 @@ export class SkillCore {
         resourcesToWrite: input.files,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {
@@ -439,7 +441,7 @@ export class SkillCore {
         resourcesToRemove: toRemove,
       });
       void this.versioning.cleanupExpiredVersionsForSkill(
-        head.skill_id, this.versionTtlSeconds,
+        head.skill_id, this.versionTtlSeconds, this.maxNonHeadVersions,
       ).catch(() => { /* fire-and-forget */ });
       return result;
     } catch (e) {

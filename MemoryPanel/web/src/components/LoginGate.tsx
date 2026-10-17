@@ -9,15 +9,25 @@
  *   4. 前端把 { instance_id, user_key, user } 缓存到 localStorage（见 lib/panelSession.ts），
  *      之后每个 meta 请求都从这里读出注入双 Header
  *
- * 设计：保留原有左右分栏视觉（左侧深色插图 + 右侧表单），
- * 把「邮箱+密码本地校验」替换为「选实例 + 输入 user_key」。
+ * 设计：单列居中的明亮极简风格 —— 全屏点阵波纹动效背景（ParticleWaveBackground，
+ * 纯 Canvas 零依赖，视觉参考 React Bits 的 Particles / DotGrid）+ 居中毛玻璃卡片，
+ * 卡片内为「选实例 + 输入 user_key」表单。
  */
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Select, Input, Button, Alert } from 'tea-component';
-import { authVerifyApi, metaInstancesApi, type MetadataInstance, type PublicUser } from '@/lib/teamApi';
+import { Alert, Button, Input, Select } from 'tea-component';
+import { getErrorMessage } from '@/lib/error-message';
+import {
+  authMethodsApi,
+  authVerifyApi,
+  metaInstancesApi,
+  type AuthMethod,
+  type MetadataInstance,
+  type PublicUser,
+} from '@/lib/teamApi';
 import { getPanelSession, setPanelSession, clearPanelSession } from '@/lib/panelSession';
+import ParticleWaveBackground from './ParticleWaveBackground';
 import './login-gate.css';
 
 export interface AuthState {
@@ -67,133 +77,70 @@ function toAuthState(user: PublicUser, instanceId: string, instanceName: string)
 }
 
 /**
- * 尝试用 localStorage 里缓存的 { instance_id, user_key, user } 直接恢复登录态；
- * 新面板无 Cookie，"恢复会话"就是读本地缓存，不需要再打后端。
- * App 启动时调用；成功则写入内存镜像缓存并返回，失败（未登录/缓存不全）返回 null。
+ * 尝试用 localStorage 里缓存的 { instance_id, user_key, user } 恢复登录态。
+ * 新面板无 Cookie，凭证由前端自持；但缓存是持久的（跨 tab、关 tab 不失效），
+ * 若只信本地缓存，实例被删除 / user_key 失效后仍会判定「已登录」，导致假登录。
+ * 因此恢复前必须打一次 auth/verify 向后端验活：
+ *   - valid === true  → 用后端返回的最新 user 恢复（顺带刷新 user 信息与 admin 判定）；
+ *   - valid !== true 或请求抛错（实例已删 / 凭证失效 / 业务错）→ 清缓存，返回 null，回登录页。
+ * App 启动时调用；成功则写入内存镜像缓存并返回，失败（未登录/缓存不全/验活未过）返回 null。
+ *
+ * 竞态兜底：verify 是异步的，其 RTT 窗口内本地会话可能被并发操作改变
+ * （如其他 tab 登出触发 storage 事件清了缓存、或切换了实例）。若返回后
+ * localStorage 里的 { instanceId, userKey } 已与发起时不一致，说明本次恢复
+ * 的结果已过期，直接丢弃、不写缓存，避免把已被清掉/换掉的登录态又写回。
  */
 export async function resumeSession(): Promise<AuthState | null> {
   const session = getPanelSession();
-  if (!session?.user) return null;
-  const auth = toAuthState(session.user, session.instanceId, session.instanceName ?? '');
-  writeAuthCache(auth);
-  return auth;
-}
+  // 路径一：本地有 user_key 缓存（旧登录方式）——向后端验活后恢复。
+  if (session?.user && session.instanceId && session.userKey) {
+    try {
+      const res = await authVerifyApi.verify(session.instanceId, session.userKey);
 
-/** 左侧 3D 风格 SVG 插图 — 模拟数据可视化/知识图谱场景 */
-function HeroIllustration() {
-  return (
-    <svg
-      viewBox="0 0 400 340"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="w-[320px] h-auto drop-shadow-2xl"
-    >
-      <defs>
-        <linearGradient id="platform-grad" x1="50%" y1="0%" x2="50%" y2="100%">
-          <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="#1e3a5f" stopOpacity="0.8" />
-        </linearGradient>
-        <linearGradient id="glow" x1="50%" y1="0%" x2="50%" y2="100%">
-          <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.6" />
-          <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
-        </linearGradient>
-      </defs>
+      // verify RTT 期间本地会话若被并发登出/切换，本次结果作废。
+      const latest = getPanelSession();
+      if (
+        !latest ||
+        latest.instanceId !== session.instanceId ||
+        latest.userKey !== session.userKey
+      ) {
+        return null;
+      }
 
-      <path d="M200 280 L340 220 L200 260 L60 220 Z" fill="url(#platform-grad)" opacity="0.8" />
-      <path d="M200 260 L340 200 L340 220 L200 280 Z" fill="#1e40af" opacity="0.4" />
-      <path d="M200 260 L60 200 L60 220 L200 280 Z" fill="#1e3a8a" opacity="0.3" />
+      if (!res.valid) {
+        // 验活未过：实例被删 / user_key 失效，清掉过期登录态。
+        clearAuth();
+        return null;
+      }
+      // 优先用后端刚返回的最新 user；缺失时回退到缓存的 user。
+      const user = res.user ?? session.user;
+      const auth = toAuthState(user, session.instanceId, session.instanceName ?? '');
+      writeAuthCache(auth);
+      return auth;
+    } catch {
+      // 请求抛错（实例不存在 / 后端拒绝 / 网络不可达）：按登录态失效处理，清缓存回登录页。
+      clearAuth();
+      return null;
+    }
+  }
 
-      <ellipse cx="200" cy="220" rx="60" ry="20" fill="url(#glow)" />
-      <ellipse
-        cx="200"
-        cy="220"
-        rx="40"
-        ry="13"
-        stroke="#60a5fa"
-        strokeWidth="1.5"
-        fill="none"
-        opacity="0.6"
-      />
-
-      <rect x="155" y="160" width="14" height="55" rx="3" fill="#3b82f6" opacity="0.85" />
-      <rect x="175" y="140" width="14" height="75" rx="3" fill="#60a5fa" opacity="0.9" />
-      <rect x="195" y="150" width="14" height="65" rx="3" fill="#2563eb" opacity="0.85" />
-      <rect x="215" y="130" width="14" height="85" rx="3" fill="#93c5fd" opacity="0.8" />
-      <rect x="235" y="155" width="14" height="60" rx="3" fill="#3b82f6" opacity="0.75" />
-
-      <g transform="translate(260, 70)">
-        <rect
-          width="70"
-          height="50"
-          rx="6"
-          fill="#1e293b"
-          stroke="#334155"
-          strokeWidth="1"
-          opacity="0.9"
-        />
-        <rect x="8" y="10" width="20" height="3" rx="1.5" fill="#60a5fa" />
-        <rect x="8" y="17" width="35" height="3" rx="1.5" fill="#475569" />
-        <rect x="8" y="24" width="28" height="3" rx="1.5" fill="#475569" />
-        <polyline
-          points="8,40 20,35 35,38 50,32 60,36"
-          stroke="#34d399"
-          strokeWidth="1.5"
-          fill="none"
-        />
-      </g>
-
-      <g transform="translate(70, 90)">
-        <rect
-          width="60"
-          height="45"
-          rx="6"
-          fill="#1e293b"
-          stroke="#334155"
-          strokeWidth="1"
-          opacity="0.9"
-        />
-        <circle cx="16" cy="15" r="4" fill="#a78bfa" />
-        <circle cx="30" cy="15" r="4" fill="#60a5fa" />
-        <circle cx="44" cy="15" r="4" fill="#34d399" />
-        <rect x="8" y="28" width="44" height="3" rx="1.5" fill="#475569" />
-        <rect x="8" y="35" width="30" height="3" rx="1.5" fill="#475569" />
-      </g>
-
-      <line
-        x1="130"
-        y1="112"
-        x2="160"
-        y2="155"
-        stroke="#60a5fa"
-        strokeWidth="0.8"
-        opacity="0.5"
-        strokeDasharray="3 2"
-      />
-      <line
-        x1="260"
-        y1="95"
-        x2="240"
-        y2="140"
-        stroke="#60a5fa"
-        strokeWidth="0.8"
-        opacity="0.5"
-        strokeDasharray="3 2"
-      />
-
-      <g transform="translate(255, 120)" opacity="0.7">
-        <circle cx="8" cy="5" r="5" fill="#94a3b8" />
-        <path d="M0 22 Q8 15 16 22 L14 35 L2 35 Z" fill="#64748b" />
-      </g>
-      <g transform="translate(110, 130)" opacity="0.6">
-        <circle cx="8" cy="5" r="5" fill="#94a3b8" />
-        <path d="M0 22 Q8 15 16 22 L14 35 L2 35 Z" fill="#64748b" />
-      </g>
-
-      <circle cx="90" cy="185" r="8" fill="#6366f1" opacity="0.6" />
-      <circle cx="310" cy="175" r="6" fill="#a78bfa" opacity="0.5" />
-      <circle cx="145" cy="100" r="5" fill="#60a5fa" opacity="0.4" />
-    </svg>
-  );
+  // 路径二：IdP（WOA）Session 使用 HttpOnly Cookie，不能从 localStorage 恢复；
+  // 向后端查询当前会话。本地 session 缺失/无 userKey（IdP 登录不落 userKey）时才走这里。
+  try {
+    const idp = await authMethodsApi.session();
+    if (!idp.authenticated || !idp.instance_id || !idp.user) return null;
+    setPanelSession({
+      authMethod: 'idp',
+      instanceId: idp.instance_id,
+      userKey: '',
+      user: idp.user,
+    });
+    const auth = toAuthState(idp.user, idp.instance_id, '');
+    writeAuthCache(auth);
+    return auth;
+  } catch {
+    return null;
+  }
 }
 
 export default function LoginGate({
@@ -203,11 +150,45 @@ export default function LoginGate({
 }) {
   const { t } = useTranslation();
   const [instances, setInstances] = useState<MetadataInstance[]>([]);
+  const [authMethods, setAuthMethods] = useState<AuthMethod[]>([]);
   const [instanceId, setInstanceId] = useState('');
   const [userKey, setUserKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [instancesError, setInstancesError] = useState(false);
+  const [authMethodsLoaded, setAuthMethodsLoaded] = useState(false);
+  const [pendingWoa, setPendingWoa] = useState<{
+    instanceId: string;
+    displayName?: string;
+    loginName?: string;
+  } | null>(null);
+  const [pendingUsername, setPendingUsername] = useState('');
+  // 首次外部认证登录：用户提供的 user_key（必填）。
+  const [pendingUserKey, setPendingUserKey] = useState('');
+  // 预览结果：null=未预览；exists=true 表示该 key 已属于系统内某账号（可绑定）。
+  const [pendingPreview, setPendingPreview] = useState<{
+    exists: boolean;
+    user_id?: string;
+    username?: string;
+    display_name?: string;
+    user_type?: string;
+  } | null>(null);
+  const [pendingPreviewing, setPendingPreviewing] = useState(false);
+  const [pendingSubmitting, setPendingSubmitting] = useState(false);
+  const [dismissingWoa, setDismissingWoa] = useState(false);
+  const [resumingWoa, setResumingWoa] = useState(false);
+  // 建号成功后一次性展示自动生成的 user_key（供用户复制到客户端连 proxy）。
+  const [createdKey, setCreatedKey] = useState<{ userKey: string; user: PublicUser; instanceId: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const hasUserKeyMethod = authMethods.some((method) => method.type === 'user_key');
+  const showWoaLogin = authMethodsLoaded && authMethods.some((method) => method.type === 'woa');
+  /**
+   * user_key 表单始终直接展示 —— 没有"登录方式选择页"这一层。
+   *
+   * 开启 iOA 也不再改变默认页：登录页就是 user_key 表单，iOA 只是表单下方的一个
+   * 跳转链接（"使用 iOA 登录"）。两个登录面各自内嵌一条通往对方的链接，点一下直达。
+   */
+  const showUserKeyLogin = authMethodsLoaded && hasUserKeyMethod;
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -219,6 +200,31 @@ export default function LoginGate({
 
   useEffect(() => {
     let cancelled = false;
+    authMethodsApi.session()
+      .then((session) => {
+        if (!cancelled && session.pending && session.instance_id) {
+          setPendingWoa({
+            instanceId: session.instance_id,
+            displayName: session.pending_identity?.display_name,
+            loginName: session.pending_identity?.login_name,
+          });
+          setPendingUsername(session.pending_identity?.login_name || '');
+          setInstanceId(session.instance_id);
+        }
+      })
+      .catch(() => undefined);
+    authMethodsApi.list()
+      .then((result) => {
+        if (cancelled) return;
+        setAuthMethods(result.methods.filter((method) => method.enabled));
+        setAuthMethodsLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // 配置接口不可用时保守回退到旧 user_key 登录，避免登录页空白。
+        setAuthMethods([{ id: 'user_key', type: 'user_key', display_name: 'user_key', enabled: true }]);
+        setAuthMethodsLoaded(true);
+      });
     metaInstancesApi
       .list()
       .then((list) => {
@@ -237,6 +243,7 @@ export default function LoginGate({
     };
   }, [t]);
 
+  /** 提交 user_key：验活通过后直接登录，无效 key 报错（不自动建号）。 */
   async function submit(e?: React.FormEvent) {
     e?.preventDefault();
     if (!instanceId) {
@@ -263,13 +270,87 @@ export default function LoginGate({
         return;
       }
       const instance = instances.find((i) => i.instance_id === instanceId) ?? null;
-      setPanelSession({ instanceId, instanceName: instance?.name, userKey: key, user });
+      setPanelSession({ authMethod: 'user_key', instanceId, instanceName: instance?.name, userKey: key, user });
       const auth = toAuthState(user, instanceId, instance?.name ?? '');
       writeAuthCache(auth);
       onLoggedIn(auth);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
       setSubmitting(false);
+    }
+  }
+
+  function enterWithAuth(user: PublicUser, instanceId: string) {
+    setPanelSession({
+      authMethod: 'idp',
+      instanceId,
+      userKey: '',
+      user,
+    });
+    const auth = toAuthState(user, instanceId, '');
+    writeAuthCache(auth);
+    onLoggedIn(auth);
+  }
+
+  /**
+   * 第一步（预览）：查询用户填的 user_key 在系统内是否已有账号。
+   * exists=true → 展示该账号信息让用户确认绑定（老数据完整保留）；
+   * exists=false → 让用户确认用这把 key 新建账号。
+   * 用户改 key 时必须清掉旧预览，避免拿 A 的预览结果去提交 B。
+   */
+  async function previewPendingKey() {
+    const key = pendingUserKey.trim();
+    if (!key) {
+      setError(t('login.woa.userKeyRequired'));
+      return;
+    }
+    setPendingPreviewing(true);
+    setError(null);
+    try {
+      setPendingPreview(await authMethodsApi.previewWoaKey(key));
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setPendingPreview(null);
+    } finally {
+      setPendingPreviewing(false);
+    }
+  }
+
+  // 第二步（确认）：按预览结果绑定存量账号或新建。
+  async function completePendingWoa() {
+    if (!/^[A-Za-z0-9_-]+$/.test(pendingUsername.trim())) {
+      setError(t('login.woa.invalidUsername'));
+      return;
+    }
+    if (!pendingUserKey.trim()) {
+      setError(t('login.woa.userKeyRequired'));
+      return;
+    }
+    // 必须先看预览再提交，确保用户是在知情（绑定 vs 新建）的情况下确认的。
+    if (!pendingPreview) {
+      await previewPendingKey();
+      return;
+    }
+    setPendingSubmitting(true);
+    setError(null);
+    try {
+      const result = await authMethodsApi.completeWoa({
+        username: pendingUsername.trim(),
+        userKey: pendingUserKey.trim(),
+      });
+      if (!result.user) throw new Error(t('login.error.noUser'));
+      const user = result.user;
+      // 自动生成的 key：先一次性展示让用户复制保存，再进面板；
+      // 自定义 key：用户本就知道，直接进。
+      if (result.user_key_autogenerated && result.user_key) {
+        setCreatedKey({ userKey: result.user_key, user, instanceId: result.instance_id });
+        setPendingSubmitting(false);
+      } else {
+        enterWithAuth(user, result.instance_id);
+      }
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setPendingSubmitting(false);
     }
   }
 
@@ -277,76 +358,224 @@ export default function LoginGate({
     if (e.key === 'Enter' && !submitting) void submit();
   }
 
+  /**
+   * WOA 确认页 → 改用 user_key 登录。
+   *
+   * 必须先调后端 dismiss：WOA 网关对每个请求都注入身份头，只清前端状态的话
+   * 刷新页面会被立刻弹回确认页。后端会清 pending Cookie 并下发抑制标记。
+   */
+  async function switchToUserKeyFromWoa() {
+    setDismissingWoa(true);
+    setError(null);
+    try {
+      await authMethodsApi.dismissWoa();
+      setPendingWoa(null);
+      setPendingUserKey('');
+      setPendingPreview(null);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setDismissingWoa(false);
+    }
+  }
+
+  /**
+   * 点 iOA 相关按钮：撤销抑制标记 + 走回原有行为。
+   *
+   * 必须与 switchToUserKeyFromWoa 成对：撤销之前落下的抑制标记，
+   * 否则 WOA ingress 中间件会直接放行，用户点 iOA 后仍停在 user_key 表单。
+   *
+   * 后端调用失败不阻断：抑制标记是会话级的，关掉浏览器即失效；
+   * 且相比"点 iOA 没反应"，"慢一点"是可以接受的降级。
+   */
+  async function switchToWoa() {
+    setResumingWoa(true);
+    setError(null);
+    try {
+      await authMethodsApi.resumeWoa();
+    } catch {
+      // 忽略：见上方说明，失败不阻断。
+    }
+    setResumingWoa(false);
+    if (instanceId) authMethodsApi.loginWoa(instanceId);
+  }
+
   return (
-    <div className="fixed inset-0 z-[100] flex">
-      {/* ====== 左侧深色面板 ====== */}
-      <div className="hidden lg:flex flex-col flex-1 bg-[#0b1120] relative overflow-hidden">
-        <div className="flex items-center gap-2.5 px-6 py-5">
-          <img src="/logo.png" alt="Memory Hub" className="h-8 w-8" />
-          <span className="text-[15px] font-semibold text-white/90 tracking-wide">Memory Hub</span>
-        </div>
-
-        <div className="flex-1 flex flex-col items-center justify-center px-8">
-          <HeroIllustration />
-          <h2 className="mt-8 text-xl font-semibold text-white/90 tracking-wide">
-            TencentDB Memory Hub
-          </h2>
-          <p className="mt-2 text-sm text-slate-400 text-center max-w-xs">
-            {t('login.tagline')}
-          </p>
-        </div>
-
-        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          <div className="absolute top-[15%] left-[10%] w-1 h-1 rounded-full bg-blue-400/30 animate-pulse" />
-          <div
-            className="absolute top-[25%] right-[20%] w-1.5 h-1.5 rounded-full bg-purple-400/20 animate-pulse"
-            style={{ animationDelay: '1s' }}
-          />
-          <div
-            className="absolute bottom-[30%] left-[25%] w-1 h-1 rounded-full bg-cyan-400/25 animate-pulse"
-            style={{ animationDelay: '2s' }}
-          />
-          <div
-            className="absolute top-[60%] right-[15%] w-1 h-1 rounded-full bg-blue-300/20 animate-pulse"
-            style={{ animationDelay: '0.5s' }}
-          />
-        </div>
+    <div className="_tdai-login">
+      {/* 明亮点阵波纹动效背景（纯 Canvas，零外部依赖） */}
+      <div className="_tdai-login-bg" aria-hidden="true">
+        <ParticleWaveBackground
+          className="_tdai-login-bg-canvas"
+          gap={22}
+          dotRadius={1.6}
+          speed={1}
+        />
       </div>
 
-      {/* ====== 右侧登录表单面板 ====== */}
-      <div className="w-full lg:w-[480px] xl:w-[520px] flex flex-col bg-white dark:bg-[#0f172a] overflow-y-auto">
-        <div className="flex lg:hidden items-center gap-2.5 px-6 py-4 border-b border-slate-200 dark:border-slate-700">
-          <img src="/logo.png" alt="Memory Hub" className="h-7 w-7" />
-          <span className="text-[14px] font-semibold text-slate-800 dark:text-white/90">
-            Memory Hub
-          </span>
-        </div>
+      {/* 居中内容区 */}
+      <main className="_tdai-login-main">
+        <div className="_tdai-login-card">
+          <img src="/logo.png" alt="Memory Hub" className="_tdai-login-logo" />
 
-        <div className="flex-1 flex flex-col justify-center px-8 sm:px-12 lg:px-14 py-10">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white/95">{t('login.welcome')}</h1>
-          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            {t('login.subtitle')}
-          </p>
+          <h1 className="_tdai-login-title">{t('login.welcome')}</h1>
+          <p className="_tdai-login-subtitle">{t('login.tagline')}</p>
 
-          <form onSubmit={submit} className="mt-8 _tdai-login-form">
+          {pendingWoa && createdKey && (
+            <div className="_tdai-login-pending">
+              <h2 className="_tdai-login-pending-title">{t('login.woa.keyReadyTitle')}</h2>
+              <p className="_tdai-login-hint">{t('login.woa.keyReadyHint')}</p>
+
+              <div className="_tdai-login-field">
+                <p className="_tdai-login-field-label">{t('login.woa.yourUserKey')}</p>
+                <Input
+                  size="full"
+                  value={createdKey.userKey}
+                  readonly
+                />
+                <Button
+                  className="_tdai-login-copy"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(createdKey.userKey);
+                    setCopied(true);
+                  }}
+                >
+                  {copied ? t('login.woa.copied') : t('login.woa.copyKey')}
+                </Button>
+                <p className="_tdai-login-hint _tdai-login-warn">{t('login.woa.keyReadyWarn')}</p>
+              </div>
+
+              <Button
+                type="primary"
+                className="_tdai-login-submit"
+                onClick={() => enterWithAuth(createdKey.user, createdKey.instanceId)}
+              >
+                {t('login.woa.savedEnter')}
+              </Button>
+            </div>
+          )}
+
+          {pendingWoa && !createdKey && (
+            <div className="_tdai-login-pending">
+              <h2 className="_tdai-login-pending-title">{t('login.woa.pendingTitle')}</h2>
+              <p className="_tdai-login-hint">
+                {t('login.woa.pendingIdentity', { name: pendingWoa.displayName || pendingWoa.loginName || 'WOA user' })}
+              </p>
+
+              <div className="_tdai-login-field">
+                <p className="_tdai-login-field-label">{t('login.woa.usernameLabel')}</p>
+                <Input
+                  size="full"
+                  value={pendingUsername}
+                  onChange={(value) => {
+                    setPendingUsername(value);
+                    setError(null);
+                  }}
+                  placeholder={t('login.woa.usernamePlaceholder')}
+                  disabled={pendingSubmitting}
+                />
+                <p className="_tdai-login-hint">{t('login.woa.usernameHint')}</p>
+              </div>
+
+              <div className="_tdai-login-field">
+                <p className="_tdai-login-field-label">{t('login.woa.userKeyLabel')}</p>
+                <Input
+                  size="full"
+                  value={pendingUserKey}
+                  onChange={(value) => {
+                    setPendingUserKey(value);
+                    // key 变了，旧预览立即作废——否则会拿 A 的预览结果去提交 B。
+                    setPendingPreview(null);
+                    setError(null);
+                  }}
+                  placeholder={t('login.woa.userKeyPlaceholder')}
+                  disabled={pendingSubmitting}
+                />
+                <p className="_tdai-login-hint">{t('login.woa.userKeyHint')}</p>
+              </div>
+
+              {/* 预览结果：让用户看清这把 key 属于谁，再决定绑定还是新建 */}
+              {pendingPreview && (
+                <div className="_tdai-login-alert">
+                  {pendingPreview.exists ? (
+                    <Alert type="info">
+                      {t('login.woa.keyExistsHint', {
+                        name: pendingPreview.display_name || pendingPreview.username || pendingPreview.user_id || '',
+                      })}
+                    </Alert>
+                  ) : (
+                    <Alert type="info">{t('login.woa.keyMissingHint')}</Alert>
+                  )}
+                </div>
+              )}
+
+              {error && (
+                <div className="_tdai-login-alert">
+                  <Alert type="error">{error}</Alert>
+                </div>
+              )}
+
+              <Button
+                type="primary"
+                className="_tdai-login-submit"
+                onClick={() => void completePendingWoa()}
+                loading={pendingSubmitting || pendingPreviewing}
+                disabled={pendingSubmitting || pendingPreviewing || !pendingUsername.trim() || !pendingUserKey.trim()}
+              >
+                {/* 未预览=下一步（先看清 key 归属）；已预览=明确告知是绑定还是新建 */}
+                {!pendingPreview
+                  ? t('login.woa.previewNext')
+                  : pendingPreview.exists
+                    ? t('login.woa.confirmBind')
+                    : t('login.woa.confirmCreate')}
+              </Button>
+
+              {/* 已有 user_key 的老用户不该被强制建号：提供切回 user_key 登录的出口 */}
+              {hasUserKeyMethod && (
+                <div className="_tdai-login-switch">
+                  <Button
+                    type="link"
+                    className="_tdai-login-switch-link"
+                    onClick={() => void switchToUserKeyFromWoa()}
+                    loading={dismissingWoa}
+                    disabled={pendingSubmitting || dismissingWoa}
+                  >
+                    {t('login.switchUserKey')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!pendingWoa && showUserKeyLogin && (
+            <form onSubmit={submit} className="_tdai-login-form">
             {/* 记忆实例选择 — GET /api/v1/meta/instances */}
-            <Select
-              appearance="button"
-              size="full"
-              value={instanceId}
-              onChange={(value) => {
-                setInstanceId(value);
-                setError(null);
-              }}
-              disabled={submitting || instances.length === 0}
-              placeholder={instancesError ? t('login.placeholder.instanceError') : t('login.placeholder.instance')}
-              options={instances.map((inst) => ({ value: inst.instance_id, text: inst.name }))}
-            />
+            <div className="_tdai-login-field">
+              <label className="_tdai-login-label" htmlFor="tdai-login-instance">
+                {t('login.field.instance')}
+              </label>
+              <Select
+                appearance="button"
+                size="full"
+                value={instanceId}
+                onChange={(value) => {
+                  setInstanceId(value);
+                  setError(null);
+                }}
+                disabled={submitting || instances.length === 0}
+                placeholder={
+                  instancesError ? t('login.placeholder.instanceError') : t('login.placeholder.instance')
+                }
+                options={instances.map((inst) => ({ value: inst.instance_id, text: inst.name }))}
+                boxSizeSync
+              />
+            </div>
 
             {/* user_key（sk-mem-…），经 auth/verify 验活后写入前端会话 */}
-            <div>
+            <div className="_tdai-login-field">
+              <label className="_tdai-login-label" htmlFor="tdai-login-key">
+                {t('login.field.userKey')}
+              </label>
               <Input.Password
-                autoFocus
                 size="full"
                 value={userKey}
                 onChange={(value) => {
@@ -359,14 +588,17 @@ export default function LoginGate({
                 disabled={submitting}
                 rules={false}
               />
-              <div className="_tdai-login-hint">
-                {t('login.hint.userKey')}
-              </div>
+              <p className="_tdai-login-hint">{t('login.hint.userKey')}</p>
             </div>
 
-            {error && <Alert type="error">{error}</Alert>}
+            {error && (
+              <div className="_tdai-login-alert">
+                <Alert type="error">{error}</Alert>
+              </div>
+            )}
 
-            <Button type="primary"
+            <Button
+              type="primary"
               htmlType="submit"
               className="_tdai-login-submit"
               loading={submitting}
@@ -374,9 +606,27 @@ export default function LoginGate({
             >
               {submitting ? t('login.submitting') : t('login.submit')}
             </Button>
-          </form>
+            </form>
+          )}
+
+          {/* user_key 表单下方的 iOA 跳转入口：开启 iOA 时直接跳过去，不经选择页 */}
+          {!pendingWoa && showWoaLogin && showUserKeyLogin && instanceId && (
+            <div className="_tdai-login-switch">
+              <Button
+                type="link"
+                className="_tdai-login-switch-link"
+                onClick={() => void switchToWoa()}
+                loading={resumingWoa}
+                disabled={submitting || resumingWoa}
+              >
+                {t('login.useWoa')}
+              </Button>
+            </div>
+          )}
         </div>
-      </div>
+
+        <p className="_tdai-login-footer">{t('login.footer')}</p>
+      </main>
     </div>
   );
 }

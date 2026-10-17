@@ -16,20 +16,34 @@
  *   ForwardTarget, ForwardTargetRequest
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ProxyConfig } from "./types.js";
 import { log } from "./report/log.js";
 import { RedisSessionStore } from "./redis-session-store.js";
-import { matchWhitelistEndpoint } from "./routes/whitelist.js";
+import { matchWhitelistEndpoint, type CostGuardMode } from "./routes/whitelist.js";
 import { opikCreateTrace, opikCreateLlmSpan, uuidv7 } from "./opik.js";
 import { langfuseReportGeneration } from "./langfuse.js";
-import { writeLog } from "./logger.js";
+import { judgeAgentTurn, judgeUserTurn, readJudgeTransport } from "./judge-client.js";
 
 // Optional Opik/Langfuse hooks — invoked only when the private extension is loaded
 // and produces telemetry. Kept out of the primary bridge flow to avoid coupling
 // the passthrough path with observability wiring.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ExtensionTelemetry = { duration: number; input: string; output: string; model: string; usage: Record<string, unknown>; tags: string[] };
-type ExtensionTelemetryCtx = { traceId: string; keyId: string; sessionKey: string; turnSeq: number; startTime: string; spaceId?: string; triggeredBy?: string };
+type ExtensionTelemetryCtx = {
+  traceId: string;
+  langfuseTraceId?: string;
+  traceName?: string;
+  traceTags?: string[];
+  /** Project / user the turn trace was created under; defaults to the bare keyId. */
+  projectName?: string;
+  keyId: string;
+  sessionKey: string;
+  turnSeq: number;
+  startTime: string;
+  spaceId?: string;
+  triggeredBy?: string;
+};
 
 // ─── Transport types (host-side, generic) ───────────────────────────────────
 
@@ -40,12 +54,21 @@ interface RetryTarget {
   authHeaders: Record<string, string> | null;
 }
 
+/** Analyzer trace returned by cost-guard for host observability. */
+export interface AnalyzerTrace {
+  duration: number;
+  input: string;
+  output: string;
+  model: string;
+  usage: Record<string, unknown>;
+  tags: string[];
+}
+
 /**
  * ForwardTarget — the generic forwarding instruction returned by the extension.
  *
- * The host understands the transport-level fields plus the two accounting
- * values below (`turnSeq`, `routedFrom`); every other routing semantic the
- * extension may attach is ignored and never surfaced.
+ * Routing semantics remain opaque, but observability fields are preserved so
+ * the host can attach route/judge attribution to its own logs and traces.
  */
 export interface ForwardTarget {
   url: string;
@@ -53,6 +76,11 @@ export interface ForwardTarget {
   authHeaders: Record<string, string> | null;
   bodyOverrides: Record<string, unknown> | null;
   retryTarget: RetryTarget | null;
+  logLine: string;
+  logLineExtra: string;
+  tags: string[];
+  analyzerTrace: AnalyzerTrace | null;
+  logMeta: Record<string, unknown>;
   /**
    * Monotonic per-session turn sequence number provided by the extension.
    * 0 = not tracked (extension disabled/unavailable) — the handler falls back
@@ -71,6 +99,8 @@ export interface ForwardTarget {
    * host never makes a forwarding decision from it.
    */
   routedFrom: string;
+  /** The extension asked the host not to run request preparation for this request. */
+  skipPrepare?: boolean;
 }
 
 /** resolveForwardTarget 的输入参数。 */
@@ -85,6 +115,10 @@ export interface ForwardTargetRequest {
   requestPath: string;
   /** 原始请求头（小写键），用于 agent profile 检测与 session key 解析。 */
   headers?: Record<string, string>;
+  /** The model the caller asked for, when the main-model override replaced it. */
+  requestedModel?: string;
+  /** The client named the pool service; only these requests use the model pool. */
+  modelPool?: boolean;
   /** Parent trace ID for observability reporting (Opik/Langfuse). */
   traceId?: string;
   /** ISO 8601 timestamp when the request started. */
@@ -104,6 +138,18 @@ export interface ForwardTargetRequest {
    * Optional — if not provided, falls back to top-level cheap config.
    */
   agentName?: string;
+  /**
+   * Fine-grained cost-guard mode resolved from the URL marker variant.
+   *
+   * - `"full"` (default when useGuard=true) — router + compressor
+   * - `"pre"` — compressor only, router passthrough
+   * - `"cheap"` — normal router, compressor skipped
+   * - `"off"` — neither (handled before this point via useGuard=false)
+   *
+   * When the corresponding capability (router or compressor) is not configured,
+   * the handler falls back to the direct passthrough path.
+   */
+  costGuardMode?: CostGuardMode;
 }
 
 // ─── Dynamic import + passthrough fallback ──────────────────────────────────
@@ -137,6 +183,40 @@ export function isCostGuardAvailable(): boolean {
   return costGuardAvailable;
 }
 
+/** Model-pool service as published to clients; see pool-service.ts. */
+export interface PoolServiceInfo {
+  /** The router will pick a pool member for requests naming `serviceName`. */
+  active: boolean;
+  serviceName: string;
+  /** Upstream model of the pool primary; null while inactive. */
+  primaryModel: string | null;
+}
+
+export const DEFAULT_POOL_SERVICE_NAME = "tdai-code-o5";
+
+/**
+ * Ask the extension whether its model pool is live. The pool block lives in the
+ * opaque `costGuard.options`; the host only learns the published name and the
+ * primary's upstream model. Inactive when the extension is missing or switched
+ * off the same way `resolveForwardTarget` would treat it.
+ */
+export function poolServiceFor(config: ProxyConfig): PoolServiceInfo {
+  const inactive = { active: false, serviceName: DEFAULT_POOL_SERVICE_NAME, primaryModel: null };
+  if (typeof extensionModule?.resolvePoolService !== "function") return inactive;
+  let info: PoolServiceInfo;
+  try {
+    info = extensionModule.resolvePoolService(config.costGuard.options) as PoolServiceInfo;
+  } catch {
+    return inactive;
+  }
+  const serviceName = typeof info?.serviceName === "string" && info.serviceName ? info.serviceName : DEFAULT_POOL_SERVICE_NAME;
+  const extensionOn = config.costGuard.enabled || config.costGuard.options.controlPlane !== undefined;
+  if (!info?.active || !extensionOn || typeof info.primaryModel !== "string") {
+    return { active: false, serviceName, primaryModel: null };
+  }
+  return { active: true, serviceName, primaryModel: info.primaryModel };
+}
+
 /**
  * Toggle the extension's debug logging.
  * No-op if the extension is not available.
@@ -162,7 +242,7 @@ export async function startPrivateControlPlane(config: ProxyConfig): Promise<boo
   );
   return extensionModule.startManagedControlPlane(
     config.costGuard.options,
-    { routerEnabled: config.costGuard.enabled, compressorEnabled },
+    { routerEnabled: config.costGuard.enabled && config.costGuard.options.eitherOrEnabled !== false, compressorEnabled },
   ) as Promise<boolean>;
 }
 
@@ -170,6 +250,40 @@ export async function startPrivateControlPlane(config: ProxyConfig): Promise<boo
 export async function shutdownPrivateControlPlane(): Promise<void> {
   if (!extensionModule || typeof extensionModule.shutdownManagedControlPlane !== "function") return;
   await extensionModule.shutdownManagedControlPlane();
+}
+
+// ─── Eval-harness run ids ───────────────────────────────────────────────────
+
+/** Ids an eval harness stamps on every request of one run (X-Job-Id / X-Trial-Id). */
+export interface HarnessRunIds {
+  jobId?: string;
+  trialId?: string;
+}
+
+/** What the decision log records next to each judge call. */
+interface JudgeContext extends HarnessRunIds {
+  /** The request's `x-effort-policy`, as cost-guard reads it. */
+  effortPolicy?: string;
+}
+
+/**
+ * The judge callbacks are wired once on the singleton guard, so the ids of the
+ * request being judged reach them through async context instead of arguments.
+ */
+const judgeContext = new AsyncLocalStorage<JudgeContext>();
+
+function headerId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.slice(0, 200) : undefined;
+}
+
+export function harnessRunIds(headers: Record<string, string> | undefined): HarnessRunIds {
+  const ids: HarnessRunIds = {};
+  const jobId = headerId(headers?.["x-job-id"]);
+  const trialId = headerId(headers?.["x-trial-id"]);
+  if (jobId) ids.jobId = jobId;
+  if (trialId) ids.trialId = trialId;
+  return ids;
 }
 
 // ─── Singleton CostGuard instance ────────────────────────────────────────────
@@ -203,18 +317,69 @@ function getCostGuard(config: ProxyConfig): unknown {
       anthropicUpstreamUrl: config.costGuard.anthropicUpstream?.url ?? "",
     };
 
-    // Create session store based on config
-    let sessionStore: undefined | RedisSessionStore;
+    // Create session store based on config. Redis is required for the
+    // extension's task-archive / judge side keys in multi-instance deploys.
+    // When Redis is off, inject the extension's in-memory store so the new
+    // FileSessionStore default does not write ~/.cost-guard on this host.
+    let sessionStore: unknown;
     if (config.redis.enabled) {
       redisSessionStore = new RedisSessionStore(config.redis);
       sessionStore = redisSessionStore;
       log.info("guard_adapter.redis_session_store", { keyPrefix: config.redis.keyPrefix });
+    } else {
+      try {
+        const MemoryStore = extensionModule.MemorySessionStore as (new () => unknown) | undefined;
+        if (typeof MemoryStore === "function") {
+          sessionStore = new MemoryStore();
+          log.info("guard_adapter.memory_session_store", {});
+        }
+      } catch {
+        // Older / mocked extension modules may not export MemorySessionStore.
+      }
     }
+
+    const judgeTransport = readJudgeTransport(options);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     guardInstance = new CostGuardClass(guardConfig, {
       log,
       sessionStore,
+      ...(judgeTransport
+        ? {
+            judgeAgentTurn: async (request: {
+              sessionKey: string;
+              messages: unknown[];
+              protocol?: "openai" | "anthropic";
+              modelId?: string;
+              turnSeq?: number;
+              toolTurnCount?: number;
+            }) => judgeAgentTurn(judgeTransport, {
+              sessionId: request.sessionKey,
+              messages: request.messages,
+              protocol: request.protocol,
+              modelId: request.modelId,
+              turnSeq: request.turnSeq,
+              toolTurnCount: request.toolTurnCount,
+              ...judgeContext.getStore(),
+            }),
+            judgeUserTurn: async (request: {
+              sessionKey: string;
+              userQuery: string;
+              turnSeq?: number;
+              requestId?: string;
+              modelId?: string;
+              protocol?: "openai" | "anthropic";
+            }) => judgeUserTurn(judgeTransport, {
+              sessionId: request.sessionKey,
+              userQuery: request.userQuery,
+              requestId: request.requestId,
+              turnSeq: request.turnSeq,
+              modelId: request.modelId,
+              protocol: request.protocol,
+              ...judgeContext.getStore(),
+            }),
+          }
+        : {}),
 
       // ── Badcase reporting: structured event to Opik ──
       reportBadcase: (report: Record<string, unknown>) => {
@@ -240,21 +405,6 @@ function getCostGuard(config: ProxyConfig): unknown {
         });
       },
 
-      // ── Optional telemetry callback (opaque to the host) ──
-      // Invoked by the private extension with an internal step payload; the
-      // exact shape of that payload is owned by the extension. The host just
-      // forwards whatever it receives to the configured observability sinks so
-      // that internal steps appear alongside the primary request trace.
-      reportAnalyzerTrace: (trace: ExtensionTelemetry, ctx: ExtensionTelemetryCtx) =>
-        forwardExtensionTelemetry(config, trace, ctx),
-
-      // ── Structured log events (ClickHouse / JSONL) ──
-      writeLogEvent: (event: Record<string, unknown>) => {
-        // The extension produces events matching the host's LogEntry union shape.
-        // We trust the structure and cast — the logger validates internally.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        writeLog(config, event as any);
-      },
     });
 
     // Forward the optional opaque review options to the extension, if supported.
@@ -290,17 +440,37 @@ export function joinUrl(base: string, requestPath: string): string {
     return normalizedBase;
   }
 
+  // ── /v1 智能兼容(2026-09-28,fix InstanceUpstream v2 用户填 base 不带 /v1)──
+  // 仅针对 **anthropic 协议**:官方 base_url 约定不含 /v1(如
+  // `https://api.anthropic.com`、`https://open.bigmodel.cn/api/anthropic`),
+  // 完整路径 `/v1/messages`;而 TokenHub 全局 upstream 约定含 /v1
+  // (`https://tokenhub.tencentmaas.com/v1`),whitelist 的 `upstreamEndpoint`
+  // 剥掉了 /v1(如 `/messages`),假设 base 已含 /v1。按官方姿势填 base 的
+  // 用户 URL 少 /v1 打 GLM/Anthropic 官方端点 → 404。这里在 anthropic 协议
+  // 且 base 无 `/vN` 版本号后缀时自动补 `/v1`。
+  //
+  // 排除范围:
+  //   - openai chat/completions/embeddings/responses 一律不动(codex/workbuddy
+  //     `/responses` 客户端约定就是不带 /v1,不能强行补;openai chat 端点由用
+  //     户自行保证 base 形态)
+  //   - base 已含 `/vN`(v1/v2/v3...)时保持原样,兼容 TokenHub 姿势
+  const hasVersionSuffix = /\/v\d+$/.test(baseWithoutQuery);
+
   const entry = matchWhitelistEndpoint(requestPath);
   if (entry) {
-    return `${normalizedBase}${entry.upstreamEndpoint}`;
+    const shouldPatchV1 = entry.protocol === "anthropic" && !hasVersionSuffix;
+    const versionPrefix = shouldPatchV1 ? "/v1" : "";
+    return `${normalizedBase}${versionPrefix}${entry.upstreamEndpoint}`;
   }
 
   // Fallback: 按请求路径后缀推断 Anthropic / OpenAI endpoint。
-  const endpoint = requestPath.endsWith("/messages")
-    ? "/messages"
-    : "/chat/completions";
+  // `/messages` 结尾兜底为 anthropic,同样享受 /v1 智能补齐;
+  // `/chat/completions` 兜底为 openai,保持原样不动。
+  const isAnthropicFallback = requestPath.endsWith("/messages");
+  const endpoint = isAnthropicFallback ? "/messages" : "/chat/completions";
+  const versionPrefixFallback = isAnthropicFallback && !hasVersionSuffix ? "/v1" : "";
   log.warn("joinUrl.fallback", { requestPath, endpoint });
-  return `${normalizedBase}${endpoint}`;
+  return `${normalizedBase}${versionPrefixFallback}${endpoint}`;
 }
 
 function buildPassthroughTarget(req: ForwardTargetRequest): ForwardTarget {
@@ -310,6 +480,14 @@ function buildPassthroughTarget(req: ForwardTargetRequest): ForwardTarget {
     authHeaders: null,
     bodyOverrides: null,
     retryTarget: null,
+    logLine: "passthrough",
+    logLineExtra: "",
+    tags: [],
+    analyzerTrace: null,
+    logMeta: {
+      ...harnessRunIds(req.headers),
+      ...(req.requestedModel !== undefined ? { requestedModel: req.requestedModel } : {}),
+    },
     turnSeq: 0,
     routedFrom: "",
   };
@@ -400,6 +578,12 @@ export async function resolveForwardTarget(
     log.info("guard_adapter.passthrough", { reason: "default_passthrough", requestPath: req.requestPath });
     return buildPassthroughTarget(req);
   }
+  // `/cost-guard/pre` — compress-only mode: skip router, passthrough to default upstream.
+  // The handler will still run the preparation (compression) stage afterward.
+  if (req.costGuardMode === "pre") {
+    log.info("guard_adapter.passthrough", { reason: "compress_only_mode", requestPath: req.requestPath });
+    return buildPassthroughTarget(req);
+  }
   const guard = getCostGuard(config);
   if (!guard) {
     log.debug("guard_adapter.passthrough", { reason: "extension_unavailable", requestPath: req.requestPath });
@@ -411,15 +595,24 @@ export async function resolveForwardTarget(
     log.debug("guard_adapter.passthrough", { reason: "extension_disabled", requestPath: req.requestPath });
     return buildPassthroughTarget(req);
   }
+  const runIds = harnessRunIds(req.headers);
+  const effortPolicy = typeof extensionModule?.effortPolicyOf === "function"
+    ? String(extensionModule.effortPolicyOf(req.headers ?? {}))
+    : undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = (await (guard as any).resolveForwardTarget(req)) as {
+  const raw = (await judgeContext.run({ ...runIds, effortPolicy }, () => (guard as any).resolveForwardTarget(req))) as {
     url: string;
     model: string;
     authHeaders: Record<string, string> | null;
     bodyOverrides: Record<string, unknown> | null;
     retryTarget: RetryTarget | null;
+    logLine?: string;
+    logLineExtra?: string;
+    tags?: unknown[];
+    analyzerTrace?: AnalyzerTrace | null;
     turnSeq?: number;
     logMeta?: Record<string, unknown>;
+    skipPrepare?: boolean;
   };
 
   // The extension stamps `logMeta.routedFrom` only when it forwarded to a model
@@ -432,12 +625,33 @@ export async function resolveForwardTarget(
     authHeaders: raw.authHeaders ?? null,
     bodyOverrides: raw.bodyOverrides ?? null,
     retryTarget: raw.retryTarget ?? null,
+    logLine: typeof raw.logLine === "string" ? raw.logLine : "",
+    logLineExtra: typeof raw.logLineExtra === "string" ? raw.logLineExtra : "",
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.filter((tag): tag is string => typeof tag === "string")
+      : [],
+    analyzerTrace: raw.analyzerTrace ?? null,
+    logMeta: {
+      ...(raw.logMeta && typeof raw.logMeta === "object" ? raw.logMeta : {}),
+      ...runIds,
+      ...(req.requestedModel !== undefined ? { requestedModel: req.requestedModel } : {}),
+    },
     turnSeq: raw.turnSeq ?? 0,
     routedFrom: typeof routedFrom === "string" ? routedFrom : "",
+    ...(raw.skipPrepare === true ? { skipPrepare: true } : {}),
   };
 }
 
 // ─── Extension telemetry forwarding (used only when the private extension is loaded) ───
+
+/** Forward a returned analyzer trace after the host has created its turn trace. */
+export function reportAnalyzerTrace(
+  config: ProxyConfig,
+  trace: AnalyzerTrace,
+  ctx: ExtensionTelemetryCtx,
+): void {
+  forwardExtensionTelemetry(config, trace, ctx);
+}
 
 /**
  * Forward an opaque telemetry payload from the private extension to the
@@ -454,13 +668,17 @@ function forwardExtensionTelemetry(
   ctx: ExtensionTelemetryCtx,
 ): void {
   const endTime = new Date().toISOString();
-  const pureKeyId = ctx.keyId.split(":")[0] ?? ctx.keyId;
-  const sessionId = ctx.keyId.includes(":") ? ctx.keyId.slice(ctx.keyId.indexOf(":") + 1) : ctx.keyId;
+  const sessionId = ctx.sessionKey || ctx.keyId;
+  const sessionSuffix = `:${sessionId}`;
+  const pureKeyId = ctx.keyId.endsWith(sessionSuffix)
+    ? ctx.keyId.slice(0, -sessionSuffix.length)
+    : ctx.keyId;
+  const projectName = ctx.projectName || pureKeyId;
   const tags = [...(trace.tags || []), `session:${sessionId}`];
 
   opikCreateLlmSpan(config, {
     traceId: ctx.traceId,
-    projectName: pureKeyId,
+    projectName,
     name: `[internal] ${trace.model}`,
     startTime: ctx.startTime,
     endTime,
@@ -474,7 +692,7 @@ function forwardExtensionTelemetry(
   if (trace.duration > 0) {
     const end = new Date(Date.parse(ctx.startTime) + trace.duration).toISOString();
     langfuseReportGeneration({
-      traceId: ctx.traceId,
+      traceId: ctx.langfuseTraceId ?? ctx.traceId,
       name: `[internal] ${trace.model}`,
       model: trace.model,
       startTime: ctx.startTime,
@@ -482,10 +700,12 @@ function forwardExtensionTelemetry(
       input: trace.input ? [{ role: "user", content: trace.input }] : undefined,
       output: trace.output ? { role: "assistant", content: trace.output } : undefined,
       usage: trace.usage && Object.keys(trace.usage).length > 0 ? trace.usage : undefined,
-      traceName: `${trace.model} / ${pureKeyId}`,
-      userId: pureKeyId,
+      traceName: ctx.traceName ?? `${trace.model} / ${projectName}`,
+      userId: projectName,
       sessionId,
-      tags,
+
+      instanceId: ctx.spaceId,
+      tags: ctx.traceTags ?? [`session:${sessionId}`],
       observationMetadata: { kind: "internal", tags: trace.tags },
     });
   }

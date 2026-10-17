@@ -28,7 +28,7 @@ import { getMetadataClient } from "../meta/client.js";
 import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
-import { emitBridgeToolCallTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
+import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
 
 const TAG = "[memory-bridge]";
 
@@ -72,6 +72,13 @@ interface SessionIdFields {
    * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
    */
   composite_key?: string;
+  /**
+   * 客户端族群标签（claude-code / codebuddy / codex / workbuddy / dsh / opencode / pi）。
+   * 从 session composite key 的前缀取 → 用于 emitBridgeRejectTelemetry 的
+   * `agent_source` 字段，对齐 session_init_logs 侧的客户端维度。
+   * 不是必填：老 session 没拆 key 时为 undefined，埋点落空值可接受。
+   */
+  agent_source?: string;
 }
 
 /**
@@ -82,6 +89,11 @@ interface SessionIdFields {
  * 不再吃 Authorization。见 docs/design/2026-08-03-binding-flatten.md。
  */
 function deriveSessionId(c: Context): string | null {
+  // subagent 归一：带 x-parent-conversation-id 时优先用 parent id，让 subagent
+  // 调 bridge 工具时命中主会话 binding，避免 session_not_initialized
+  // （对齐 session/session-key.ts，2026-09-20 WorkBuddy subagent 修复）。
+  const parentId = c.req.header("x-parent-conversation-id");
+  if (parentId && parentId.length > 0) return parentId;
   return (
     c.req.header("x-conversation-id") ??
     c.req.header("x-session-id") ??
@@ -258,23 +270,48 @@ export function createMemoryBridgeHandler(
 
     const path = new URL(c.req.url).pathname;
     const sub = extractSubpath(path);
+    // 前置校验早退埋点: 每个 return 前落一条 reject_reason 非空的 bridge_call, 与 skill-bridge 对称。
     if (!sub) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "memory-bridge",
+        rejectReason: "unknown_path", httpStatus: 404,
+      });
       return envelope(40401, `${TAG} unknown path ${path}`, 404);
     }
     if (!ALLOWED_SUBPATHS.has(sub)) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "memory-bridge",
+        rejectReason: "subpath_forbidden", httpStatus: 403,
+        executedEndpoint: sub,
+      });
       return envelope(40301, `${TAG} subpath '${sub}' not allowed via bridge`, 403);
     }
     if (c.req.method !== "POST") {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "memory-bridge",
+        rejectReason: "method_not_allowed", httpStatus: 405,
+        executedEndpoint: sub,
+      });
       return envelope(40501, `${TAG} method ${c.req.method} not allowed`, 405);
     }
 
     const ct = c.req.header("content-type") ?? "";
     if (!ct.toLowerCase().includes("application/json")) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "memory-bridge",
+        rejectReason: "content_type_invalid", httpStatus: 415,
+        executedEndpoint: sub,
+      });
       return envelope(41501, `${TAG} content-type must be application/json`, 415);
     }
 
     const sessionKey = deriveSessionId(c);
     if (!sessionKey) {
+      emitBridgeRejectTelemetry({
+        sessionKey: "", bridgeSource: "memory-bridge",
+        rejectReason: "missing_conversation_id", httpStatus: 401,
+        executedEndpoint: sub,
+      });
       return envelope(40101, `${TAG} missing x-conversation-id (or x-session-id / x-chat-id / x-thread-id) header`, 401);
     }
     const spaceId = c.req.header("x-tdai-service-id")
@@ -289,6 +326,11 @@ export function createMemoryBridgeHandler(
       ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey);
     }
     if (!ids) {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "memory-bridge",
+        rejectReason: "session_not_initialized", httpStatus: 401,
+        executedEndpoint: sub, spaceId,
+      });
       return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
     }
 
@@ -300,10 +342,24 @@ export function createMemoryBridgeHandler(
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           inboundBody = parsed as Record<string, unknown>;
         } else {
+          emitBridgeRejectTelemetry({
+            sessionKey, bridgeSource: "memory-bridge",
+            rejectReason: "body_not_object", httpStatus: 400,
+            executedEndpoint: sub, requestBody: raw.slice(0, 512),
+            spaceId: ids.space_id, userId: ids.user_id, teamId: ids.team_id,
+            agentId: ids.agent_id, agentSource: ids.agent_source,
+          });
           return envelope(40001, `${TAG} body must be a JSON object`, 400);
         }
       }
     } catch (err) {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "memory-bridge",
+        rejectReason: "invalid_json_body", httpStatus: 400,
+        executedEndpoint: sub,
+        spaceId: ids.space_id, userId: ids.user_id, teamId: ids.team_id,
+        agentId: ids.agent_id, agentSource: ids.agent_source,
+      });
       return envelope(40001, `${TAG} invalid JSON body: ${(err as Error).message}`, 400);
     }
 

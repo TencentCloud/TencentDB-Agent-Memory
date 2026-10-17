@@ -8,8 +8,9 @@ RUN if [ "$APT_MIRROR" != "deb.debian.org" ]; then \
       sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
     fi
 
+# openssh-client：SSH 仓库 clone 需要 `ssh`（GIT_SSH_COMMAND）+ `ssh-keygen`（每用户 RSA 密钥对）。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 make g++ git curl ca-certificates \
+      python3 make g++ git curl ca-certificates openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # node:22-slim 自带 npm@10.9.8 有 arborist "edgesOut" crash（干净 `npm
@@ -63,6 +64,8 @@ ENV NODE_ENV=production \
     LLM_TIMEOUT_MS=1200000 \
     KNOWLEDGE_DATA_DIR=/data/knowledge \
     KNOWLEDGE_DB_PATH=/data/knowledge/knowledge.db \
+    TDAI_AGENT_TEMPLATE_DIR=/data/knowledge/agent-templates \
+    KNOWLEDGE_SSH_KEY_DIR=/data/knowledge/ssh-keys \
     LOG_LEVEL=info \
     LOG_FORMAT=json
 

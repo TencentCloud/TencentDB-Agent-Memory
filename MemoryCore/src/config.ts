@@ -13,6 +13,28 @@
 
 /** Prompt family for L1-L3 memory pipeline. */
 export type MemoryPromptMode = "chat" | "code";
+export type PersonaTriggerMode = "current" | "jev";
+export type JevDiagnosticsMode = "off" | "metadata" | "full";
+
+/**
+ * L3 decision gate config (`memory.persona.jev`). The key name stays `jev` for
+ * compatibility; `provider` selects the decision backend (built-in: `jev`; other
+ * decision APIs register in `src/core/decision/registry.ts`).
+ */
+export interface PersonaJevConfig {
+  /** Decision provider type. Default `jev`. */
+  provider: string;
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  /** Timeout used by the shared single-attempt decision provider. */
+  timeoutMs: number;
+  /** Provider-private params, passed through as-is and validated by the provider. */
+  options?: Record<string, unknown>;
+  diagnostics: {
+    mode: JevDiagnosticsMode;
+  };
+}
 
 /** Capture settings — controls L0 conversation recording. */
 export interface CaptureConfig {
@@ -61,6 +83,10 @@ export interface PersonaConfig {
   model?: string;
   /** Prompt family for L2/L3 prompts (default: chat; code prompts will be wired as they are added). */
   promptMode: MemoryPromptMode;
+  /** Existing trigger policy, optionally augmented by the JEV immediate-update gate. */
+  triggerMode: PersonaTriggerMode;
+  /** Direct System One client configuration used only when triggerMode="jev". */
+  jev: PersonaJevConfig;
 }
 
 /** Pipeline trigger settings (L1→L2→L3 scheduling). */
@@ -180,7 +206,7 @@ export interface TcvdbConfig {
 }
 
 /** Storage backend type. */
-export type StoreBackend = "sqlite" | "tcvdb";
+export type StoreBackend = "sqlite" | "tcvdb" | "mongodb";
 
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
@@ -226,6 +252,16 @@ export interface StandaloneLLMOverrideConfig {
     /** 是否用 memory systemUser.userKey 作为 Authorization（默认 true）。 */
     useMemorySystemUserKey?: boolean;
   };
+  /**
+   * 是否用流式请求(streamText)调用上游。默认 false(generateText 非流式)。
+   * 个别 OpenAI 兼容上游只接受流式请求时置 true。
+   *
+   * ⚠️ 仅在 standalone LLM 路径生效(即 llm.enabled=true 时,memory 用自带的
+   * StandaloneLLMRunner 调用上游);未启用 standalone 时走 OpenClaw host runner,
+   * 该开关被忽略。也不会把增量 token 透传给调用方,只是"以流式协议请求上游后
+   * 等待完整文本",给只接受流式的兼容后端做兼容层用。
+   */
+  stream?: boolean;
 }
 
 /** Context Offload settings — controls multi-layer context compression. */
@@ -246,6 +282,15 @@ export interface OffloadConfig {
   model?: string;
   /** LLM temperature (default: 0.2) */
   temperature: number;
+  /**
+   * 是否用流式请求(streamText)调用上游(仅 mode="local" 生效)。默认 false(非流式)。
+   * 个别只接受流式请求的 OpenAI 兼容上游需置 true。
+   *
+   * ⚠️ mode="backend"/"client"/"collect" 由远端 offload server 主导调用,
+   * 本地 stream 开关被忽略。也不会把增量 token 透传给调用方,只是"以流式协议
+   * 请求上游后等待完整文本",给只接受流式的兼容后端做兼容层用。
+   */
+  stream?: boolean;
   /** Force-trigger L1 when pending tool pairs >= this threshold (default: 4) */
   forceTriggerThreshold: number;
   /** Custom data directory (absolute path). Default: ~/.openclaw/context-offload */
@@ -381,6 +426,64 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Persona (L2/L3) ---
   const personaGroup = obj(c, "persona");
+  const jevGroup = obj(personaGroup, "jev");
+  const jevDiagnosticsGroup = obj(jevGroup, "diagnostics");
+  const rawTriggerMode = str(personaGroup, "triggerMode");
+  if (rawTriggerMode && rawTriggerMode !== "current" && rawTriggerMode !== "jev") {
+    throw new Error(`memory.persona.triggerMode must be "current" or "jev", got "${rawTriggerMode}"`);
+  }
+  const triggerMode: PersonaTriggerMode = rawTriggerMode === "jev" ? "jev" : "current";
+  const rawDiagnosticsMode = str(jevDiagnosticsGroup, "mode");
+  if (rawDiagnosticsMode && !["off", "metadata", "full"].includes(rawDiagnosticsMode)) {
+    throw new Error(
+      `memory.persona.jev.diagnostics.mode must be "off", "metadata", or "full", got "${rawDiagnosticsMode}"`,
+    );
+  }
+  const diagnosticsMode: JevDiagnosticsMode =
+    rawDiagnosticsMode === "metadata" || rawDiagnosticsMode === "full" ? rawDiagnosticsMode : "off";
+  const jevTimeoutMs = num(jevGroup, "timeoutMs") ?? 3_000;
+  if (jevTimeoutMs < 100 || jevTimeoutMs > 60_000) {
+    throw new Error("memory.persona.jev.timeoutMs must be between 100 and 60000 milliseconds");
+  }
+  const jevProvider = str(jevGroup, "provider") ?? "jev";
+  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(jevProvider)) {
+    throw new Error(`memory.persona.jev.provider has invalid name "${jevProvider}"`);
+  }
+  // jev keeps its historical env var; other providers name theirs via apiKeyEnv.
+  const jevKeyEnv = str(jevGroup, "apiKeyEnv") ?? (jevProvider === "jev" ? "TYPESAFE_API_KEY" : "");
+  if (jevKeyEnv && !/^[A-Z_][A-Z0-9_]*$/.test(jevKeyEnv)) {
+    throw new Error(`memory.persona.jev.apiKeyEnv must be an environment variable name, got "${jevKeyEnv}"`);
+  }
+  const rawJevOptions = jevGroup.options;
+  if (rawJevOptions !== undefined && rawJevOptions !== null
+    && (typeof rawJevOptions !== "object" || Array.isArray(rawJevOptions))) {
+    throw new Error("memory.persona.jev.options must be a mapping");
+  }
+  const jevOptions = rawJevOptions ? rawJevOptions as Record<string, unknown> : undefined;
+  const yamlJevKey = resolveExactEnvReference(optStr(jevGroup, "apiKey") ?? "");
+  const jevApiKey = (jevKeyEnv ? process.env[jevKeyEnv]?.trim() : "") || yamlJevKey;
+  const jevEndpoint = str(jevGroup, "endpoint") ?? "";
+  const jevModel = str(jevGroup, "model") ?? "";
+  if (triggerMode === "jev") {
+    const missing = [
+      !jevEndpoint && "endpoint",
+      !jevApiKey && `apiKey/${jevKeyEnv || "apiKeyEnv"}`,
+      !jevModel && "model",
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      throw new Error(`memory.persona.triggerMode="jev" requires memory.persona.jev ${missing.join(", ")}`);
+    }
+    let parsedEndpoint: URL;
+    try {
+      parsedEndpoint = new URL(jevEndpoint);
+    } catch {
+      throw new Error("memory.persona.jev.endpoint must be a valid URL");
+    }
+    const loopback = ["127.0.0.1", "localhost", "::1"].includes(parsedEndpoint.hostname);
+    if (parsedEndpoint.protocol !== "https:" && !(parsedEndpoint.protocol === "http:" && loopback)) {
+      throw new Error("memory.persona.jev.endpoint must use HTTPS (HTTP is allowed only for loopback tests)");
+    }
+  }
 
   // --- Pipeline ---
   const pipelineGroup = obj(c, "pipeline");
@@ -477,7 +580,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Store backend ---
   const storeBackendRaw = str(c, "storeBackend") ?? "sqlite";
-  const storeBackend: StoreBackend = storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
+  const storeBackend: StoreBackend =
+    storeBackendRaw === "tcvdb" ? "tcvdb"
+    : storeBackendRaw === "mongodb" ? "mongodb"
+    : "sqlite";
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
@@ -490,6 +596,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Offload ---
   const offloadGroup = obj(c, "offload");
+  const offloadBackendKey = optStr(offloadGroup, "backendApiKey");
 
   // Auto-derive offload serverUrl/apiKey/serviceId from top-level server config
   // when offload client fields are not explicitly set.
@@ -512,6 +619,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     mode: offloadMode,
     model: optStr(offloadGroup, "model"),
     temperature: num(offloadGroup, "temperature") ?? 0.2,
+    stream: bool(offloadGroup, "stream") ?? false,
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
     dataDir: optStr(offloadGroup, "dataDir"),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
@@ -522,7 +630,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     aggressiveCompressRatio: num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
     mmdMaxTokenRatio: num(offloadGroup, "mmdMaxTokenRatio") ?? 0.2,
     backendUrl: optStr(offloadGroup, "backendUrl"),
-    backendApiKey: optStr(offloadGroup, "backendApiKey"),
+    backendApiKey: offloadBackendKey,
     backendTimeoutMs: num(offloadGroup, "backendTimeoutMs") ?? 120000,
     offloadRetentionDays: normalizeOffloadRetentionDays(num(offloadGroup, "offloadRetentionDays") ?? 0),
     logMaxSizeMb: num(offloadGroup, "logMaxSizeMb") ?? 50,
@@ -558,6 +666,16 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       sceneBackupCount: num(personaGroup, "sceneBackupCount") ?? 10,
       model: optStr(personaGroup, "model"),
       promptMode: normalizePromptMode(str(personaGroup, "promptMode"), globalPromptMode),
+      triggerMode,
+      jev: {
+        provider: jevProvider,
+        endpoint: jevEndpoint,
+        apiKey: jevApiKey,
+        model: jevModel,
+        timeoutMs: jevTimeoutMs,
+        ...(jevOptions ? { options: jevOptions } : {}),
+        diagnostics: { mode: diagnosticsMode },
+      },
     },
     pipeline: {
       everyNConversations: num(pipelineGroup, "everyNConversations") ?? 5,
@@ -629,6 +747,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         maxTokens: num(llmGroup, "maxTokens") ?? 4096,
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
         provider,
+        stream: bool(llmGroup, "stream") ?? false,
         proxy: {
           // 默认 true：走 proxy 时用 memory 系统用户 key 作为 Authorization。
           useMemorySystemUserKey: bool(proxyGroup, "useMemorySystemUserKey") ?? true,
@@ -668,6 +787,12 @@ function normalizePromptMode(value: string | undefined, fallback: MemoryPromptMo
 function optStr(src: Record<string, unknown>, key: string): string | undefined {
   const v = src[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/** Resolve only the explicit `${NAME}` form used by config examples. */
+function resolveExactEnvReference(value: string): string {
+  const match = value.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/);
+  return match ? process.env[match[1]!] ?? "" : value;
 }
 
 function num(src: Record<string, unknown>, key: string): number | undefined {

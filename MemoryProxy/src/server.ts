@@ -1,23 +1,34 @@
 /** Hono app factory — registers all routes. */
 
 import { Hono } from "hono";
-import { handleChatCompletions } from "./handler.js";
-import { handleAnthropicMessages } from "./anthropicHandler.js";
-import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
-import { handleCodexEndpoint } from "./codexHandler.js";
-import { handleWorkbuddyEndpoint } from "./workbuddyHandler.js";
+import { accessKeyMiddleware } from "./accessKeys.js";
+import { runOpenaiChatPipeline } from "./pipeline/runners/openai-chat.js";
+import { runAnthropicPipeline } from "./pipeline/runners/anthropic.js";
+import { withClientFacingModel } from "./response-model-mask.js";
+import { runUtilityPipeline as handleAuxiliaryEndpoint } from "./pipeline/runners/utility.js";
+import { runDirectPipeline as handleDirectPassthrough } from "./pipeline/runners/direct.js";
+import { runCodexPipeline as handleCodexEndpoint } from "./pipeline/runners/codex.js";
+import { runWorkbuddyPipeline as handleWorkbuddyEndpoint } from "./pipeline/runners/workbuddy.js";
+import { handleModels } from "./modelsHandler.js";
 import { apiKeyToKeyId, extractBearerToken } from "./opik.js";
 import { createSkillBridgeHandler } from "./skill/skill-bridge.js";
 import { createMemoryBridgeHandler } from "./memory/memory-bridge.js";
 import { createInstanceDestroyHandler } from "./routes/instance-destroy.js";
 import { createRateLimitHandlers } from "./routes/rate-limits.js";
+import { createModelAliasHandler } from "./routes/model-aliases.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
 import type { ProxyConfig } from "./types.js";
 
+const handleChatCompletions = withClientFacingModel(runOpenaiChatPipeline);
+const handleAnthropicMessages = withClientFacingModel(runAnthropicPipeline);
+
 export function createApp(config: ProxyConfig): Hono {
   const app = new Hono();
+
+  const accessKeysFile = process.env.TDAI_PROXY_ACCESS_KEYS_FILE?.trim();
+  if (accessKeysFile) app.use("*", accessKeyMiddleware(accessKeysFile));
 
   // Eagerly activate storage/bindingRepo so bridge-only requests (no main
   // /v1/messages hits yet) can still recover session state via L2 fallthrough
@@ -121,6 +132,12 @@ export function createApp(config: ProxyConfig): Hono {
     return c.text(keyId + "\n");
   });
 
+  // ── /direct/* — 纯路由透传通道（必须置于所有业务路由之前） ────────────────
+  // 完全绕开 cost-guard / auth / model alias / thinking sanitize；
+  // 但保留 opik trace/span 上报与 jsonl usage 落表（仅对 Anthropic messages
+  // 与 OpenAI chat/completions 生效）。详见 directHandler.ts 头部注释。
+  app.all("/direct/*", (c) => handleDirectPassthrough(c, config));
+
 // Skill bridge: LLM curls land here, proxy injects auth + identity, forwards to core.
   // MUST be registered before the agent-prefixed `/:agent/v1/*` routes below.
   const bridgeHandler = createSkillBridgeHandler(config);
@@ -143,6 +160,8 @@ export function createApp(config: ProxyConfig): Hono {
   app.put("/v3/admin/rate-limits", rateLimitHandlers.put);
   app.delete("/v3/admin/rate-limits", rateLimitHandlers.delete);
 
+  app.get("/v3/admin/model-aliases", createModelAliasHandler(config));
+
   // ── Session management endpoints (mem: command 底层接口, 面板前端可复用) ──
   app.post("/v3/session/refresh-cache", (c) => {
     return import("./routes/session-refresh.js").then(({ createSessionRefreshHandler }) =>
@@ -156,7 +175,6 @@ export function createApp(config: ProxyConfig): Hono {
   });
 
   // ── Whitelisted primary endpoints ────────────────────────────────────────
-  // Anthropic Messages API
   app.post("/v1/messages", (c) => handleAnthropicMessages(c, config));
 
   // ── Whitelisted auxiliary endpoints (must precede catch-all) ─────────────
@@ -188,6 +206,13 @@ export function createApp(config: ProxyConfig): Hono {
   if (config.costGuard.markerOptIn) {
     app.post("/:agent/:spaceId/cost-guard/v1/messages", (c) => handleAnthropicMessages(c, config));
     app.post("/:agent/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    // Sub-mode markers: `/cost-guard/pre` (compress only) and `/cost-guard/cheap` (route only).
+    // Handler internally resolves mode via resolveCostGuardMode — these routes just ensure Hono
+    // catches the 6-segment paths instead of falling through to catch-all.
+    app.post("/:agent/:spaceId/cost-guard/pre/v1/messages", (c) => handleAnthropicMessages(c, config));
+    app.post("/:agent/:spaceId/cost-guard/pre/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/:agent/:spaceId/cost-guard/cheap/v1/messages", (c) => handleAnthropicMessages(c, config));
+    app.post("/:agent/:spaceId/cost-guard/cheap/v1/chat/completions", (c) => handleChatCompletions(c, config));
   }
 
   // `/analyse` marker (asset-reflection 内部效果评估) —— 跟 cost-guard 完全对称：
@@ -265,6 +290,10 @@ export function createApp(config: ProxyConfig): Hono {
   if (config.costGuard.markerOptIn) {
     app.post("/codex/:spaceId/cost-guard/v1/responses", (c) => handleCodexEndpoint(c, config));
     app.post("/codex/:spaceId/cost-guard/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/codex/:spaceId/cost-guard/pre/v1/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/codex/:spaceId/cost-guard/pre/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/codex/:spaceId/cost-guard/cheap/v1/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/codex/:spaceId/cost-guard/cheap/responses", (c) => handleCodexEndpoint(c, config));
   }
   if (config.injection?.assetReflection?.markerOptIn) {
     app.post("/codex/:spaceId/analyse/v1/responses", (c) => handleCodexEndpoint(c, config));
@@ -287,6 +316,13 @@ export function createApp(config: ProxyConfig): Hono {
   // 的 classifyRequest 按 header + body 特征判(见其 doc)。
   app.post("/dsh/:spaceId/v1/chat/completions", (c) => handleChatCompletions(c, config));
   app.post("/dsh/:spaceId/chat/completions", (c) => handleChatCompletions(c, config));
+  // dsh v0.2+ 换 anthropic 协议 —— llm-deepseek-api-key adapter 硬发
+  // `${baseURL}/v1/messages` + `anthropic-version: 2023-06-01`(源码
+  // packages/llm/llm-deepseek/src/adapter.ts:120-131,抓包 2026-09-29 实证)。
+  // 显式挂,别靠通配 /:agent/:spaceId/v1/messages 兜(挂了不影响,但和 CC/CB
+  // 姿势对齐更明确)。
+  app.post("/dsh/:spaceId/v1/messages", (c) => handleAnthropicMessages(c, config));
+  app.post("/dsh/:spaceId/v1/messages/count_tokens", (c) => handleAuxiliaryEndpoint(c, config));
   // dsh 目前抓包未见 embeddings/moderations/completions,预留 aux 端点(与 CC/CB 对称)
   app.post("/dsh/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/dsh/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
@@ -298,30 +334,87 @@ export function createApp(config: ProxyConfig): Hono {
   if (config.costGuard.markerOptIn) {
     app.post("/dsh/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
     app.post("/dsh/:spaceId/cost-guard/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/dsh/:spaceId/cost-guard/pre/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/dsh/:spaceId/cost-guard/pre/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/dsh/:spaceId/cost-guard/cheap/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/dsh/:spaceId/cost-guard/cheap/chat/completions", (c) => handleChatCompletions(c, config));
   }
   if (config.injection?.assetReflection?.markerOptIn) {
     app.post("/dsh/:spaceId/analyse/v1/chat/completions", (c) => handleChatCompletions(c, config));
     app.post("/dsh/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
   }
 
+  // opencode cost-guard / analyse marker 路由 —— 与 CC/CB/Codex/dsh 完全对称。
+  // opencode 客户端走标准 OpenAI Chat Completions（POST /v1/chat/completions），
+  // 路径形态与 CB/dsh 同族；因此 marker 段的路由形态与 dsh 一致：
+  //   /opencode/{spaceId}/cost-guard/v1/chat/completions
+  //   /opencode/{spaceId}/cost-guard/chat/completions（客户端 base 不带 /v1 时）
+  // 未显式注册这些 5 段路径时，会 fall through 到 catch-all POST /*，marker 静默失效。
+  // Router 分流已经在 handler.ts 里通过 agentName=agentFromPath("opencode") 传给
+  // resolveForwardTarget，只要路由能命中，Router 就能按 agentSource=opencode 分支决策。
+  if (config.costGuard.markerOptIn) {
+    app.post("/opencode/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/cost-guard/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/cost-guard/pre/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/cost-guard/pre/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/cost-guard/cheap/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/cost-guard/cheap/chat/completions", (c) => handleChatCompletions(c, config));
+  }
+  if (config.injection?.assetReflection?.markerOptIn) {
+    app.post("/opencode/:spaceId/analyse/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
+  }
+
+  // OpenAI Models API — tenant-scoped and generated locally from the public pricing catalog.
+  app.get("/:agent/:spaceId/v1/models", (c) => handleModels(c, config));
   app.post("/:agent/:spaceId/v1/messages", (c) => handleAnthropicMessages(c, config));
   app.post("/:agent/:spaceId/v1/messages/count_tokens", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
+  // Chat completions catch — runner 内部按 URL agent 段派 codebuddy/dsh/opencode/pi
   app.post("/:agent/:spaceId/v1/chat/completions", (c) => handleChatCompletions(c, config));
 
   // Agent-prefixed routes without spaceId (deprecated: no credit reporting)
   app.post("/:agent/v1/messages", (c) => handleAnthropicMessages(c, config));
   app.post("/:agent/v1/chat/completions", (c) => handleChatCompletions(c, config));
 
-  // Legacy /proxy/<spaceId>/ prefix — no agent info, defaults to codebuddy.
-  // 保留以兼容不带 agent 前缀的客户端。
+  // Legacy /proxy/<spaceId>/ prefix — 不带 agent 段，按 path 后缀分派协议。
+  // 这条入口只做路由 / 压缩 / 计费 / 会话上传（不区分 subagent）；handler 内见 isLegacyProxyPath，记忆类
+  // 功能（session-init / mem 命令 / injection / L0 / skill）一律关闭。
   app.post("/proxy/:spaceId/v1/messages", (c) => handleAnthropicMessages(c, config));
   app.post("/proxy/:spaceId/v1/messages/count_tokens", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/proxy/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/proxy/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/proxy/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
+  // Responses 协议必须显式分派：catch-all 会落到 handleChatCompletions，那里按
+  // `body.messages` 解析，而 Responses 的内容在 `body.input` 里 —— 转发和计费
+  // 仍然正确（白名单按后缀拼上游 endpoint），但压缩与 CFQ 会静默失效。
+  // 辅助端点同样不能掉进 chat catch-all，否则 compact / memories / realtime
+  // 会被当成 chat/completions 打到上游。
+  app.post("/proxy/:spaceId/v1/responses/compact", (c) => handleCodexEndpoint(c, config));
+  app.post("/proxy/:spaceId/v1/memories/trace_summarize", (c) => handleCodexEndpoint(c, config));
+  app.post("/proxy/:spaceId/v1/realtime/calls", (c) => handleCodexEndpoint(c, config));
+  app.post("/proxy/:spaceId/v1/responses", (c) => handleCodexEndpoint(c, config));
+  app.post("/proxy/:spaceId/responses/compact", (c) => handleCodexEndpoint(c, config));
+  app.post("/proxy/:spaceId/memories/trace_summarize", (c) => handleCodexEndpoint(c, config));
+  app.post("/proxy/:spaceId/realtime/calls", (c) => handleCodexEndpoint(c, config));
+  app.post("/proxy/:spaceId/responses", (c) => handleCodexEndpoint(c, config));
+  // `/cost-guard` / `/analyse` 的 Responses 变体：通用 `/:agent/:spaceId/...`
+  // marker 路由只挂了 messages / chat/completions，不覆盖 /responses。不注册
+  // 时会 fall through 到下面的 `/proxy/:spaceId/*` → handleChatCompletions。
+  if (config.costGuard.markerOptIn) {
+    app.post("/proxy/:spaceId/cost-guard/v1/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/proxy/:spaceId/cost-guard/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/proxy/:spaceId/cost-guard/pre/v1/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/proxy/:spaceId/cost-guard/pre/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/proxy/:spaceId/cost-guard/cheap/v1/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/proxy/:spaceId/cost-guard/cheap/responses", (c) => handleCodexEndpoint(c, config));
+  }
+  if (config.injection?.assetReflection?.markerOptIn) {
+    app.post("/proxy/:spaceId/analyse/v1/responses", (c) => handleCodexEndpoint(c, config));
+    app.post("/proxy/:spaceId/analyse/responses", (c) => handleCodexEndpoint(c, config));
+  }
   app.post("/proxy/:spaceId/*", (c) => handleChatCompletions(c, config));
 
   // OpenAI-compatible chat completions (catch-all for any remaining POST paths)
@@ -329,3 +422,4 @@ export function createApp(config: ProxyConfig): Hono {
 
   return app;
 }
+

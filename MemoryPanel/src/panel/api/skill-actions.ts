@@ -28,6 +28,7 @@ export const SKILL_ACTIONS = [
   'listing',
   'extract',
   'export',
+  'conversation/add',
 ] as const;
 
 export type SkillAction = (typeof SKILL_ACTIONS)[number];

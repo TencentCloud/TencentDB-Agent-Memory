@@ -31,13 +31,12 @@ export const ASSET_CONFIRM_NO = "否，本次不关联";
 export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
 
 /**
- * 附在每步 question 文末的通用备注：告诉用户"选择跳过 = 本次 session init 跳过、不注入任何团队资产"。
+ * 附在每步 question 文末的通用备注。
  * CodeBuddy 是按钮式表单，唯一的跳过入口在最初的 asset_confirm 步骤选「否」；
  * 进入 team / agent_task 后没有按钮内跳过，需要下一次会话重新选择。
- * 文案与 claude-code/workbuddy/codex/dsh 五端统一；后续步骤额外提示回退路径。
+ * 文案与 claude-code/workbuddy/codex/dsh 五端统一。
  */
-const SKIP_HINT_ASSET_CONFIRM = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产）';
-const SKIP_HINT_LATER_STAGE = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产；本步骤无跳过按钮，请在最初的「是否关联团队资产」步骤选择「否」）';
+const SKIP_HINT = '（请选择最匹配的选项，当前暂不支持自定义输入。若选择跳过，本次 Session 将不注入团队资产）';
 
 /** Returns true if the given string contains any CodeBuddy form title marker. */
 export function containsFormTitle(s: string): boolean {
@@ -97,11 +96,22 @@ export interface FormData {
   teamPage?: number;
   agentPage?: number;
   taskPage?: number;
+  /**
+   * true = questions 传真 array（CB v1.106+）；false = 传 JSON string（老版本）。
+   * 未设置时默认 true。
+   */
+  questionsAsArray?: boolean;
 }
 
 // ── Form Builder ───────────────────────────────────────────────────────────────
 
-function buildFollowupQuestionArgs(data: FormData): { title: string; questions: string } {
+/**
+ * CB v1.106+ 的 ask_followup_question schema 要求 `questions` 是真 array（不再接受
+ * JSON 字符串）。老版本（v1.105-）则期望 questions 为 JSON string。
+ * 通过 FormData.questionsAsArray 判断走哪条路径，默认 true（新版）。
+ */
+function buildFollowupQuestionArgs(data: FormData): { title: string; questions: Array<Record<string, unknown>> | string } {
+  const asArray = data.questionsAsArray !== false;
   const { teams, stage, selectedTeamId, retry } = data;
 
   const title = retry
@@ -122,23 +132,23 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
   if (stage === "asset_confirm") {
     questions.push({
       id: "asset_confirm",
-      question: "本次对话是否要关联团队资产？" + SKIP_HINT_ASSET_CONFIRM,
+      question: "本次对话是否要关联团队资产？" + SKIP_HINT,
       options: [ASSET_CONFIRM_YES, ASSET_CONFIRM_NO],
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { title, questions: asArray ? questions : JSON.stringify(questions) };
   }
 
   if (stage === "team") {
     questions.push({
       id: "team",
-      question: "请选择本次会话所属的 Team：" + SKIP_HINT_LATER_STAGE,
+      question: "请选择本次会话所属的 Team：" + SKIP_HINT,
       options: [
         ...teams.map((t) => `${t.team_name} (${t.team_id.slice(-8)})`),
       ],
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { title, questions: asArray ? questions : JSON.stringify(questions) };
   }
 
   // stage in { "agent_task" (CB one-shot), "agent_select" / "task_select"
@@ -146,7 +156,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
   // codex form.ts 重渲染，不会调 CB `buildFollowupQuestionArgs`。分支保留
   // 是防御性兜底，让 CB fallback render 也能出合法结构。
   const team = teams.find((t) => t.team_id === selectedTeamId) ?? teams[0];
-  if (!team) return { title, questions: JSON.stringify(questions) };
+  if (!team) return { title, questions: asArray ? questions : JSON.stringify(questions) };
 
   const wantAgent = stage === "agent_task" || stage === "agent_select";
   const wantTask = stage === "agent_task" || stage === "task_select";
@@ -157,7 +167,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
     ];
     questions.push({
       id: "agent",
-      question: `请选择「${team.team_name}」下要使用的 Agent：` + SKIP_HINT_LATER_STAGE,
+      question: `请选择「${team.team_name}」下要使用的 Agent：` + SKIP_HINT,
       options: agentLabelOptions,
       multiSelect: false,
     });
@@ -176,14 +186,14 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
     if (taskOptions.length > 0) {
       questions.push({
         id: "task",
-        question: `请选择「${team.team_name}」下关联的任务：` + SKIP_HINT_LATER_STAGE,
+        question: `请选择「${team.team_name}」下关联的任务：` + SKIP_HINT,
         options: taskOptions,
         multiSelect: false,
       });
     }
   }
 
-  return { title, questions: JSON.stringify(questions) };
+  return { title, questions: asArray ? questions : JSON.stringify(questions) };
 }
 
 /**
@@ -221,7 +231,7 @@ function buildOpenAINonStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   return new Response(JSON.stringify({
     id,
@@ -255,7 +265,7 @@ function buildOpenAIStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   const encoder = new TextEncoder();
   const argsStr = JSON.stringify(args);
@@ -321,7 +331,7 @@ function buildAnthropicNonStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   return new Response(JSON.stringify({
     id: msgId,
@@ -346,7 +356,7 @@ function buildAnthropicStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   const encoder = new TextEncoder();
   const inputJson = JSON.stringify(args);

@@ -11,9 +11,9 @@
  */
 
 import type { IMemoryStore, IsolationFilter, L1SearchResult } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
-import type { EmbeddingService } from "../store/embedding.js";
+import { hasClientEmbedding, type EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
+import { recallL1Candidates } from "./l1-candidate-recall.js";
 
 // ============================
 // Types
@@ -45,39 +45,30 @@ export interface MemorySearchResult {
 
 const TAG = "[memory-tdai][tdai_memory_search]";
 
-// ============================
-// RRF (Reciprocal Rank Fusion)
-// ============================
+function toSearchItem(r: L1SearchResult): MemorySearchResultItem {
+  return {
+    id: r.record_id,
+    content: r.content,
+    type: r.type,
+    priority: r.priority,
+    scene_name: r.scene_name,
+    score: r.score,
+    team_id: r.team_id,
+    user_id: r.user_id,
+    agent_id: r.agent_id,
+    task_id: r.task_id,
+    version: r.version ?? 0,
+    created_at: r.timestamp_start,
+    updated_at: r.timestamp_end,
+  };
+}
 
-/** Standard RRF constant from the original RRF paper. */
-const RRF_K = 60;
-
-/**
- * Merge multiple ranked lists of `MemorySearchResultItem` via Reciprocal Rank
- * Fusion. Items appearing in multiple lists get their RRF scores summed.
- *
- * Returns items sorted by descending RRF score. The `score` field of each
- * returned item is replaced by the RRF score for consistent ranking semantics.
- */
-function rrfMergeL1(...lists: MemorySearchResultItem[][]): MemorySearchResultItem[] {
-  const map = new Map<string, { item: MemorySearchResultItem; rrfScore: number }>();
-
-  for (const list of lists) {
-    for (let rank = 0; rank < list.length; rank++) {
-      const item = list[rank];
-      const score = 1 / (RRF_K + rank + 1);
-      const existing = map.get(item.id);
-      if (existing) {
-        existing.rrfScore += score;
-      } else {
-        map.set(item.id, { item, rrfScore: score });
-      }
-    }
-  }
-
-  return [...map.values()]
-    .sort((a, b) => b.rrfScore - a.rrfScore)
-    .map(({ item, rrfScore }) => ({ ...item, score: rrfScore }));
+function hasNativeL1Hybrid(store: IMemoryStore): boolean {
+  return (
+    typeof store.getCapabilities === "function" &&
+    !!store.getCapabilities().nativeHybridSearch &&
+    typeof store.searchL1Hybrid === "function"
+  );
 }
 
 // ============================
@@ -122,11 +113,12 @@ export async function executeMemorySearch(params: {
     return { results: [], total: 0, strategy: "none" };
   }
 
-  // ── Determine available capabilities ──
-  const hasEmbedding = !!embeddingService;
+  // Native hybrid (TCVDB) is a valid search path even with NoopEmbeddingService.
+  const hasEmbedding = hasClientEmbedding(embeddingService);
   const hasFts = vectorStore.isFtsAvailable();
+  const nativeHybrid = hasNativeL1Hybrid(vectorStore);
 
-  if (!hasEmbedding && !hasFts) {
+  if (!hasEmbedding && !hasFts && !nativeHybrid) {
     logger?.warn?.(`${TAG} Neither EmbeddingService nor FTS5 available — cannot search`);
     return {
       results: [],
@@ -139,153 +131,19 @@ export async function executeMemorySearch(params: {
     };
   }
 
-  // ── Over-retrieve for later filtering and RRF merging ──
   const candidateK = limit * 3;
+  const recalled = await recallL1Candidates({
+    query,
+    topK: candidateK,
+    vectorStore,
+    embeddingService,
+    logger,
+    filter: isolationFilter,
+    logTag: TAG,
+  });
 
-  // ── Native hybrid short-circuit (TCVDB) ──
-  // If the store natively supports hybrid search (dense + sparse + RRF in a
-  // single API call), skip the dual-path FTS+Vector logic to avoid a redundant
-  // second HTTP request with garbled FTS tokens as embedding input.
-  if (vectorStore.getCapabilities().nativeHybridSearch && vectorStore.searchL1Hybrid) {
-    logger?.debug?.(`${TAG} [native-hybrid] Single-call hybrid search...`);
-    const results = await vectorStore.searchL1Hybrid(
-      isolationFilter ? { query, topK: candidateK, filter: isolationFilter } : { query, topK: candidateK },
-    );
-    let items: MemorySearchResultItem[] = results.map((r) => ({
-      id: r.record_id,
-      content: r.content,
-      type: r.type,
-      priority: r.priority,
-      scene_name: r.scene_name,
-      score: r.score,
-      team_id: r.team_id,
-      user_id: r.user_id,
-      agent_id: r.agent_id,
-      task_id: r.task_id,
-      version: r.version ?? 0,
-      created_at: r.timestamp_start,
-      updated_at: r.timestamp_end,
-    }));
+  let results = recalled.hits.map(toSearchItem);
 
-    // Apply secondary filters
-    if (typeFilter) items = items.filter((r) => r.type === typeFilter);
-    if (sceneFilter) {
-      const ns = sceneFilter.toLowerCase();
-      items = items.filter((r) => r.scene_name.toLowerCase().includes(ns));
-    }
-    const trimmed = items.slice(0, limit);
-    logger?.debug?.(
-      `${TAG} RESULT (strategy=native-hybrid): returning ${trimmed.length} memories ` +
-      `(scores: [${trimmed.map((r) => r.score.toFixed(3)).join(", ")}])`,
-    );
-    return { results: trimmed, total: trimmed.length, strategy: "hybrid" };
-  }
-
-  // ── SQLite dual-path: run FTS5 + Vector in parallel, merge with client-side RRF ──
-  const [ftsItems, vecItems] = await Promise.all([
-    // FTS5 keyword search
-    (async (): Promise<MemorySearchResultItem[]> => {
-      if (!hasFts) return [];
-      try {
-        const ftsQuery = buildFtsQuery(query);
-        if (!ftsQuery) {
-          logger?.debug?.(`${TAG} [hybrid-fts] No usable FTS tokens from query`);
-          return [];
-        }
-        logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
-        const ftsResults = isolationFilter
-          ? await vectorStore.searchL1Fts(ftsQuery, candidateK, isolationFilter)
-          : await vectorStore.searchL1Fts(ftsQuery, candidateK);
-        logger?.debug?.(`${TAG} [hybrid-fts] FTS5 returned ${ftsResults.length} candidates`);
-        return ftsResults.map((r) => ({
-          id: r.record_id,
-          content: r.content,
-          type: r.type,
-          priority: r.priority,
-          scene_name: r.scene_name,
-          score: r.score,
-          team_id: r.team_id,
-      user_id: r.user_id,
-      agent_id: r.agent_id,
-      task_id: r.task_id,
-      version: r.version ?? 0,
-          created_at: r.timestamp_start,
-          updated_at: r.timestamp_end,
-        }));
-      } catch (err) {
-        logger?.warn?.(
-          `${TAG} [hybrid-fts] FTS5 search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return [];
-      }
-    })(),
-
-    // Vector embedding search
-    (async (): Promise<MemorySearchResultItem[]> => {
-      if (!hasEmbedding) return [];
-      try {
-        logger?.debug?.(`${TAG} [hybrid-vec] Generating query embedding...`);
-        const queryEmbedding = await embeddingService!.embed(query);
-        logger?.debug?.(
-          `${TAG} [hybrid-vec] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
-        );
-        const vecResults: L1SearchResult[] = isolationFilter
-          ? await vectorStore.searchL1Vector(queryEmbedding, candidateK, query, isolationFilter)
-          : await vectorStore.searchL1Vector(queryEmbedding, candidateK, query);
-        logger?.debug?.(`${TAG} [hybrid-vec] Vector search returned ${vecResults.length} candidates`);
-        return vecResults.map((r) => ({
-          id: r.record_id,
-          content: r.content,
-          type: r.type,
-          priority: r.priority,
-          scene_name: r.scene_name,
-          score: r.score,
-          team_id: r.team_id,
-      user_id: r.user_id,
-      agent_id: r.agent_id,
-      task_id: r.task_id,
-      version: r.version ?? 0,
-          created_at: r.timestamp_start,
-          updated_at: r.timestamp_end,
-        }));
-      } catch (err) {
-        logger?.warn?.(
-          `${TAG} [hybrid-vec] Embedding search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-        );
-        return [];
-      }
-    })(),
-  ]);
-
-  // ── Determine effective strategy ──
-  const ftsOk = ftsItems.length > 0;
-  const vecOk = vecItems.length > 0;
-  let strategy: string;
-
-  if (ftsOk && vecOk) {
-    strategy = "hybrid";
-  } else if (vecOk) {
-    strategy = "embedding";
-  } else if (ftsOk) {
-    strategy = "fts";
-  } else {
-    logger?.debug?.(`${TAG} Both search paths returned 0 results`);
-    return { results: [], total: 0, strategy: hasEmbedding ? "embedding" : "fts" };
-  }
-
-  // ── Merge results ──
-  let results: MemorySearchResultItem[];
-  if (strategy === "hybrid") {
-    results = rrfMergeL1(ftsItems, vecItems);
-    logger?.debug?.(
-      `${TAG} [hybrid] RRF merged: fts=${ftsItems.length}, vec=${vecItems.length} → ${results.length} unique`,
-    );
-  } else {
-    // Single-source: use whichever list has results (already sorted by score)
-    results = ftsOk ? ftsItems : vecItems;
-  }
-
-  // ── Apply secondary filters (type, scene) ──
   const preFilterCount = results.length;
   if (typeFilter) {
     results = results.filter((r) => r.type === typeFilter);
@@ -299,18 +157,17 @@ export async function executeMemorySearch(params: {
     logger?.debug?.(`${TAG} After scene filter "${sceneFilter}": ${results.length}/${preFilterCount}`);
   }
 
-  // ── Trim to requested limit ──
   const trimmed = results.slice(0, limit);
 
   logger?.debug?.(
-    `${TAG} RESULT (strategy=${strategy}): returning ${trimmed.length} memories ` +
+    `${TAG} RESULT (strategy=${recalled.strategy}): returning ${trimmed.length} memories ` +
     `(scores: [${trimmed.map((r) => r.score.toFixed(3)).join(", ")}])`,
   );
 
   return {
     results: trimmed,
     total: trimmed.length,
-    strategy,
+    strategy: recalled.strategy,
   };
 }
 

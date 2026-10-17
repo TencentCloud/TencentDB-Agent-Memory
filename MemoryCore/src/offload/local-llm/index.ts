@@ -24,6 +24,8 @@ export interface LocalLlmClientConfig {
   model: string;
   temperature?: number;
   timeoutMs?: number;
+  /** 流式请求开关,透传给 callLlm。默认 false。 */
+  stream?: boolean;
 }
 
 export class LocalLlmClient {
@@ -37,6 +39,7 @@ export class LocalLlmClient {
       model: cfg.model,
       temperature: cfg.temperature ?? 0.2,
       timeoutMs: cfg.timeoutMs ?? 120_000,
+      stream: cfg.stream,
     };
     this.logger = logger;
     logger?.info?.(`${TAG} Initialized: model=${cfg.model}, baseUrl=${cfg.baseUrl}`);

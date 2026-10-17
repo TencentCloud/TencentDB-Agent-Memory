@@ -66,6 +66,18 @@ export async function resolveCallerUserId(
   return typeof uid === 'string' && uid.length > 0 ? uid : null;
 }
 
+/** 判断当前 caller 是否为 system_admin（auth/verify 返回 user.user_type）。失败保守返 false。 */
+export async function isCallerSystemAdmin(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+): Promise<boolean> {
+  if (!ctx.userKey) return false;
+  const env = await deps.metaKernel.invoke('auth/verify', { user_key: ctx.userKey }, ctx);
+  if (env.code !== 0) return false;
+  const data = env.data as { valid?: boolean; user?: { user_type?: string } } | null;
+  return data?.valid === true && data.user?.user_type === 'system_admin';
+}
+
 /** 校验 user 是否是 team 成员（team-member/get 存在→成员）。异常保守返 false。 */
 export async function isTeamMember(
   deps: PanelDeps,
@@ -242,22 +254,46 @@ export interface KnowledgeAssetMetaRaw {
   updated_at?: string;
 }
 
-/** 分页拉取 meta list / list-accessible 全部 items。 */
+/**
+ * 分页拉取 meta list 全部 items（不限具体 action —— 任何返回 `{items:[], total}` 的
+ * list 接口都可复用，避免单页 DEFAULT_PAGINATION=20 在资产多时被静默截断）。
+ *
+ * 注意：内核 `DEFAULT_PAGINATION = {limit: 20}`，调用方不传 limit 时只会拿到前 20 条；
+ * 任何做「list 全量 → 改 → set 全量替换」语义的接口（如 knowledge/allocate 里的
+ * agent-fixed-asset/list）必须用本工具拿到全量，否则后段老 binding 会被静默覆盖。
+ *
+ * 错误处理：分页中途失败时调用 `onError(env)` 并返回已收集的数据，由调用方决定
+ * 是透传错误还是继续 —— 禁止静默忽略（写路径上会把错误当"空列表"做全量替换，
+ * 造成数据清空）。
+ */
 export async function fetchAllMetaListItems<T>(
   deps: PanelDeps,
   ctx: MetaCallContext,
-  action: 'asset/list' | 'asset/list-accessible',
+  action: string,
   body: Record<string, unknown>,
+  onError?: (env: MetaEnvelope<unknown>) => void,
 ): Promise<T[]> {
   const all: T[] = [];
   let offset = 0;
   for (;;) {
     const env = await deps.metaKernel.invoke(action, { ...body, limit: META_LIST_PAGE, offset }, ctx);
-    if (env.code !== 0) return all;
+    if (env.code !== 0) {
+      onError?.(env);
+      return all;
+    }
     const batch = extractListItems<T>(env);
     all.push(...batch);
-    const total = (env.data as { total?: number } | null)?.total ?? all.length;
-    if (all.length >= total || batch.length === 0) break;
+    const total = (env.data as { total?: number } | null)?.total;
+    if (batch.length === 0) {
+      // 空页：已到末尾（无 total 接口的唯一终止信号）。但带过滤语义的接口中间页
+      // 可能整页为空（total 仍是绑定总数），此时继续推进避免漏拉。
+      if (typeof total === 'number' && offset < total) {
+        offset += META_LIST_PAGE;
+        continue;
+      }
+      break;
+    }
+    if (typeof total === 'number' && offset + batch.length >= total) break;
     offset += META_LIST_PAGE;
   }
   return all;
@@ -337,6 +373,31 @@ export async function requireKnowledgeRead(
   return { error: respondControlError(c, 404, 'KNOWLEDGE_NOT_FOUND') };
 }
 
+/**
+ * wiki「内容贡献」写门控：同 team 成员即可，**不要求 owner / admin**。
+ *
+ * 背景：wiki 创建时 visibility='team'（见 ensureKnowledgeAsset），是团队共享资产；
+ * 但 permission-checker 的角色默认里 MEMBER_ACTIONS 只有 'read'，
+ * write 仅授予 owner / admin —— 于是"A 建的 wiki，同 team 的 B 能看却不能导入"。
+ *
+ * 取舍：导入/抽取/改素材属于**内容贡献**，不是所有权变更，因此放开到 team 成员；
+ * 而"删除整个知识库""删除已抽取页面"属于破坏性操作，仍走 requireKnowledgeRead
+ * 的 action:'write'（owner / admin），避免误删他人成果。
+ *
+ * 实现上直接复用 requireKnowledgeRead(action:'read')：它已包含 team 成员校验
+ * （见其上 isTeamMember 分支），因此这里只需确认 asset 存在且成员校验通过，
+ * 无需重复实现 ACL 查询。不改 permission-checker 的全局常量，故不影响
+ * skill / code-graph 等其他资产类型的权限模型。
+ */
+export async function requireWikiWritable(
+  deps: PanelDeps,
+  c: Context,
+  ctx: MetaCallContext,
+  wikiId: string,
+): Promise<{ userId: string; asset?: KnowledgeAssetMetaRaw } | { error: Response }> {
+  return requireKnowledgeRead(deps, c, ctx, wikiId, { action: 'read' });
+}
+
 export interface KnowledgeAssetListItem {
   knowledge_id: string;
   asset_type: string;
@@ -353,6 +414,10 @@ export interface KnowledgeAssetListItem {
   summary?: string | null;
   page_count?: number | null;
   last_sync_at?: string | null;
+  /** wiki 专用：null=手工上传，'iwiki' 等=外部来源；决定详情页 UI 切换。 */
+  source_type?: string | null;
+  /** wiki 专用：外部来源 URL。 */
+  source_url?: string | null;
   repo_name?: string;
   repo_url?: string;
   branch?: string;
@@ -390,6 +455,8 @@ async function joinWikiKs(
       summary: ks.summary,
       page_count: ks.page_count,
       last_sync_at: ks.last_sync_at,
+      source_type: ks.source_type,
+      source_url: ks.source_url,
       ks_missing: false,
       created_at: ks.created_at,
       updated_at: ks.updated_at,
@@ -503,6 +570,8 @@ async function fetchKsOnlyItems(
         summary: ks.summary,
         page_count: ks.page_count,
         last_sync_at: ks.last_sync_at,
+        source_type: ks.source_type,
+        source_url: ks.source_url,
         ks_missing: false,
         created_at: ks.created_at,
         updated_at: ks.updated_at,

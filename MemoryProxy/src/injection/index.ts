@@ -101,7 +101,9 @@ export {
 // ── Pipeline Factory ──────────────────────────────────────────────────────────
 
 import os from "os";
-import type { ProxyConfig } from "../types.js";
+import type { ProxyConfig, SelectionConfig } from "../types.js";
+import { DEFAULT_CONFIG } from "../config.js";
+import { ClientToolDelivery } from "../skill/selection/delivery/client-tool.js";
 import { InjectionPipeline } from "./pipeline.js";
 import { HookRegistryImpl } from "./registry.js";
 import { OpenAIAdapter } from "./adapters/openai.js";
@@ -117,6 +119,7 @@ import type { AgentProfile } from "./agents/interface.js";
 import { CodeBuddyProfile } from "./agents/codebuddy/profile.js";
 import { ClaudeCodeProfile } from "./agents/claude-code/index.js";
 import { WorkbuddyProfile } from "./agents/workbuddy/profile.js";
+import { PiProfile } from "./agents/pi/index.js";
 import { getHookCacheRepo, setHookCacheRepo, type HookCacheRepo } from "../db/hookCacheRepo.js";
 import { getSessionRepo, setSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import { getRedisClient } from "../db/redis-client.js";
@@ -127,6 +130,7 @@ import { KvSessionRepo } from "../db/kv-session-repo.js";
 import { KvHookCacheRepo } from "../db/kv-hook-cache-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { getProxyStorage, getEffectiveBackend } from "../storage/factory.js";
+import { FsStorage } from "../storage/fs-storage.js";
 import { getSessionStore } from "../session/store.js";
 import type { HookRegistry, PrewarmInput } from "./types.js";
 import { prewarmAll, type PrewarmOptions, type PrewarmResult } from "./prewarm.js";
@@ -138,6 +142,8 @@ interface PipelineBundle {
   pipeline: InjectionPipeline;
   registry: HookRegistry;
   hookCacheRepo?: HookCacheRepo;
+  /** skill 选择启用且策略可用时的交付器（与 pipeline 同生命周期）。 */
+  clientToolDelivery?: ClientToolDelivery;
 }
 
 let cachedBundle: PipelineBundle | null = null;
@@ -193,6 +199,41 @@ export function tryActivateRedis(config: ProxyConfig): boolean {
   }
 }
 
+/**
+ * session binding 必须始终持久化，不存在纯内存运行模式。
+ *
+ * 如果 storage 和 redis 都未激活（bindingRepo 仍为 undefined），
+ * 用 fs 自动创建一个 KvBindingRepo 兜底。
+ *
+ * 默认路径: ~/.memory-tencentdb/proxy-state/ （与 MemoryCore 的
+ * ~/.memory-tencentdb/memory-tdai/ 同级，保持项目数据聚拢）。
+ * 可通过 config.storage.fs.fsRoot 或环境变量 PROXY_DATA_DIR 覆盖。
+ *
+ * 降级机制: fs 创建失败（权限不足、磁盘满等）→ 打 warn 回退到内存逻辑，
+ * 不阻断 proxy 启动。用户可在线使用但 proxy 重启后需重新 session-init。
+ */
+export function ensureBindingRepoPersistent(config: ProxyConfig): void {
+  const store = getSessionStore();
+  if (store.getBindingRepo()) return; // 已有（storage/redis 激活过了）
+
+  const home = process.env.HOME || process.env.USERPROFILE || "/tmp";
+  const defaultFsRoot = `${home}/.memory-tencentdb/proxy-state`;
+  const fsRoot = process.env.PROXY_DATA_DIR || config.storage?.fs?.fsRoot || defaultFsRoot;
+
+  try {
+    const fsStorage = new FsStorage(fsRoot);
+    store.setBindingRepo(new KvBindingRepo(fsStorage));
+    console.log(`[injection] bindingRepo fallback → fs (${fsRoot})`);
+  } catch (err) {
+    // 降级: fs 不可用时回退到内存逻辑，不阻断启动。
+    // proxy 可正常运行，但重启后 binding 丢失 → 用户需重新 session-init。
+    console.warn(
+      `[injection] fs bindingRepo at ${fsRoot} failed: ${(err as Error).message}. ` +
+      `Falling back to in-memory — session bindings will NOT persist across restarts.`,
+    );
+  }
+}
+
 /** Resolve `HookCacheRepo`. `getHookCacheRepo()` self-degrades to a NullRepo
  *  when better-sqlite3 is absent, so callers always receive a usable instance. */
 function tryLoadHookCacheRepo(): HookCacheRepo | undefined {
@@ -216,6 +257,14 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   // Register configured injectors. Each injector reads its own kernel config
   // (`coreSkill`, `tdai`, ...); there is no shared external endpoint anymore.
   const injectors = config.injection?.injectors ?? [];
+  let clientToolDelivery: ClientToolDelivery | undefined;
+
+  // Skill 链路 —— selection.enabled 决定注册 legacy 的「目录 + 工具说明」还是
+  // 「proxy 侧策略选择 + 客户端加载」。两条链路都需要 proxyBaseUrl（后者用于
+  // 下发给客户端的加载命令地址，必须跨节点稳定）。
+  const skillSelection = config.skillRuntime?.selection;
+  const skillSelectionEnabled = skillSelection?.enabled === true;
+  const needsSkillToolsUrl = injectors.includes("skill");
 
   // proxyBaseUrl 在 skill-tools-injector 和 tdai-tools-injector 之间共享。
   //
@@ -226,7 +275,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   //
   // 未配时 fallback 到本机 host:port（仅单节点 / 本地开发场景可用），启动时 warn 一次。
   let proxyBaseUrl: string | undefined;
-  if (injectors.includes("skill") || (injectors.includes("tdai-memory") && config.tdai.enabled)) {
+  if (needsSkillToolsUrl || (injectors.includes("tdai-memory") && config.tdai.enabled)) {
     const externalBase = config.injection?.externalGatewayUrl;
     if (externalBase && externalBase.length > 0) {
       proxyBaseUrl = externalBase.replace(/\/$/, "");
@@ -260,18 +309,69 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   }
 
   if (injectors.includes("skill")) {
-    // RAG-driven `<cloud_skills>` block. Calls /v3/skill/search at prewarm time.
-    // When coreSkill is unconfigured (no serviceToken), the searchSkills call
-    // will fail and the injector silently degrades to no <cloud_skills> block.
-    registry.register(
-      new SkillInjector({ coreSkill: config.coreSkill }),
-    );
+    // ── 两种 skill 链路互斥 ────────────────────────────────────────────────
+    //
+    // legacy (默认, selection.enabled=false): `<available_skills>` 目录 +
+    //   `<skill_tools>` curl 说明, 由主模型自己判断并 curl skill_view 加载。
+    //
+    // selection (enabled=true 且策略可用): 不注入目录、不注入工具说明; 在新用户轮次
+    //   由 handler 调交付器选 0..1 个 skill，直接返回 tool_use 让客户端加载。
+    //
+    // ⚠️ 必须是「不注册」而不是「让旧 injector 返回空」——SkillInjector /
+    // SkillToolsInjector 的 cacheStrategy 是 session_init, pipeline 命中缓存时
+    // 直接读缓存、根本不会调 execute(), 返回空拦不住已缓存的工具说明。
+    //
+    // 策略不可用（如未配 apiKey）时在**构建期**回退 legacy：bundle 按配置 hash 缓存，
+    // 同一份配置始终走同一条链路，不会出现运行期在两条链路间来回切换（破坏前缀缓存）。
+    // 运行期的单次失败（超时 / 非法响应）仍按「本轮不加载」处理，不回退。
+    let selectionActive = false;
+    if (skillSelectionEnabled && skillSelection) {
+      // 未注册的策略名在这里抛错 —— 配置错误应在启动期暴露。
+      const delivery = new ClientToolDelivery({
+        selection: skillSelection,
+        strategies: (config.selection ?? DEFAULT_CONFIG.selection!).strategies,
+        coreSkill: config.coreSkill,
+        defaultTaskId: config.sessionInit?.defaultTaskId,
+        proxyBaseUrl: proxyBaseUrl!,
+      });
+      if (delivery.service.strategy.isUsable()) {
+        clientToolDelivery = delivery;
+        selectionActive = true;
+        console.log(
+          `[injection] skill selection enabled strategy=${skillSelection.strategy} `
+            + `candidates<=${skillSelection.maxCandidates} — legacy skill catalog/tools injectors disabled`,
+        );
+      } else {
+        console.warn(
+          `[injection] skillRuntime.selection.strategy=${skillSelection.strategy} is not configured `
+            + "(e.g. missing API key) — falling back to legacy skill catalog/tools injectors.",
+        );
+      }
+    }
 
-    // Always inject the curl-recipe `<skill_tools>` block alongside the
-    // dynamic `<cloud_skills>` block. Even when there are no skills to
-    // recommend, the LLM still needs to know how to create / search them.
-    const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
-    registry.register(new SkillToolsInjector({ proxyBaseUrl: proxyBaseUrl!, allowLlmWrite }));
+    if (!selectionActive) {
+      // RAG-driven `<cloud_skills>` block. Calls /v3/skill/search at prewarm time.
+      // When coreSkill is unconfigured (no serviceToken), the searchSkills call
+      // will fail and the injector silently degrades to no <cloud_skills> block.
+      //
+      // `defaultTaskId` (from sessionInit config, defaults to "default") is passed
+      // through so the injector can detect the virtual default-task fallback and
+      // switch to activity-based recall. When absent (deployment 关闭了默认 task),
+      // activity 模式 gate 永远为 false, listing 走原 BM25 逻辑 —— 完全向后兼容。
+      // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+      registry.register(
+        new SkillInjector({
+          coreSkill: config.coreSkill,
+          defaultTaskId: config.sessionInit?.defaultTaskId,
+        }),
+      );
+
+      // Always inject the curl-recipe `<skill_tools>` block alongside the
+      // dynamic `<cloud_skills>` block. Even when there are no skills to
+      // recommend, the LLM still needs to know how to create / search them.
+      const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
+      registry.register(new SkillToolsInjector({ proxyBaseUrl: proxyBaseUrl!, allowLlmWrite }));
+    }
   }
 
   if (injectors.includes("knowledge")) {
@@ -319,10 +419,14 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   }
 
   // ── Asset Reflection (内部效果评估) ─────────────────────────────────────
-  // 默认关闭（markerOptIn=false）—— 生产 pod 完全跳过 register，零性能开销。
-  // 开启后即使 register，只有请求 URL 带 `/analyse` marker 才真 emit 块。
-  // Tag 列表由本节点上"实际 register 了的资产 injector"派生，避免让 LLM 反思
-  // 一个本节点根本没接入的资产。
+  // 默认开启（markerOptIn=true）—— 未配置 assetReflection 的 pod 也 register
+  // 本 injector。register 只是加进 registry，marker 未命中时 execute() 直接
+  // 返回 []，正常请求 prompt 完全不变；只有请求 URL 带 `/analyse` marker
+  // 才真 emit 块。Tag 列表由本节点上"实际 register 了的资产 injector"派生，
+  // 避免让 LLM 反思一个本节点根本没接入的资产。
+  //
+  // 显式配 markerOptIn=false 时 injector 不 register，且 server.ts 顶部 gate
+  // 会把任何带 `/analyse/` 段的请求 404 拒。
   if (config.injection?.assetReflection?.markerOptIn) {
     const registeredIds = new Set(registry.getAll().map((h) => h.id));
     const activeAssetTags: string[] = [];
@@ -353,6 +457,10 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     tryActivateRedis(config);
   }
 
+  // session binding 必须始终持久化 — 不存在纯内存模式。
+  // 如果 storage 和 redis 都未激活，用 fs 作为 bindingRepo 兜底。
+  ensureBindingRepoPersistent(config);
+
   const hookCacheRepo = tryLoadHookCacheRepo();
 
   // Observer: prefer Langfuse (injection spans under LLM trace) when enabled;
@@ -372,6 +480,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
       ["codebuddy", new CodeBuddyProfile()],
       ["claude-code", new ClaudeCodeProfile()],
       ["workbuddy", new WorkbuddyProfile()],
+      ["pi", new PiProfile()],
       // ["cursor", new CursorProfile()],
     ]),
     // Legacy fallback: scan system prompt content (for backward compat).
@@ -386,7 +495,18 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     })(),
   }, observer);
 
-  return { pipeline, registry, hookCacheRepo };
+  return { pipeline, registry, hookCacheRepo, clientToolDelivery };
+}
+
+/** 把各策略参数里的 apiKey 替换为 `<set>` / ""，用于 hash，不泄露明文。 */
+function redactSelectionSecrets(selection: SelectionConfig | undefined): unknown {
+  if (!selection) return undefined;
+  const strategies: Record<string, unknown> = {};
+  for (const [name, params] of Object.entries(selection.strategies ?? {})) {
+    const p = (params ?? {}) as unknown as Record<string, unknown>;
+    strategies[name] = "apiKey" in p ? { ...p, apiKey: p.apiKey ? "<set>" : "" } : p;
+  }
+  return { strategies };
 }
 
 function getOrBuildBundle(config: ProxyConfig): PipelineBundle {
@@ -395,6 +515,12 @@ function getOrBuildBundle(config: ProxyConfig): PipelineBundle {
     tdai: config.tdai,
     coreSkill: config.coreSkill,
     knowledge: config.knowledge,
+    // skillRuntime 决定注册 legacy 还是 selection 的 skill injector（以及
+    // allowLlmWrite 影响 <skill_tools> 内容），必须参与 hash —— 否则改了
+    // selection.enabled 仍会命中旧 bundle，注册的 injector 与配置不一致。
+    // 策略密钥以 set/unset 参与（仍能反映「配上密钥」这一变化），不放明文。
+    skillRuntime: config.skillRuntime,
+    selection: redactSelectionSecrets(config.selection),
     server: config.server,
   });
   if (cachedBundle && cachedConfigHash === configHash) {
@@ -411,6 +537,16 @@ function getOrBuildBundle(config: ProxyConfig): PipelineBundle {
  */
 export function getInjectionPipeline(config: ProxyConfig): InjectionPipeline {
   return getOrBuildBundle(config).pipeline;
+}
+
+/**
+ * skill 选择启用且策略可用时返回交付器，否则 null（含 injection 未启用 /
+ * 未配置 skill injector / 策略不可用而回退 legacy）。与 pipeline 共用同一份 bundle 缓存。
+ */
+export function getClientToolDelivery(config: ProxyConfig): ClientToolDelivery | null {
+  if (!config.injection?.enabled || !(config.injection.injectors ?? []).includes("skill")) return null;
+  if (!config.skillRuntime?.selection?.enabled) return null;
+  return getOrBuildBundle(config).clientToolDelivery ?? null;
 }
 
 /**

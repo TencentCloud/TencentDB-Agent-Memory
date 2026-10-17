@@ -42,6 +42,7 @@ import {
 import type { MetaEnvelope } from "../../kernel/envelope.js";
 import { MAX_IMPORTED_AGENTS } from "../../domain/chat-memory-governance.js";
 import { newExternalAssetId } from "../../domain/asset-id.js";
+import { fetchAllMetaListItems } from "./knowledge/common.js";
 
 /**
  * 归一化详情页时间筛选器传来的 time_start / time_end。
@@ -132,13 +133,20 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       const teamId = requiredTeamId(await readJson(c));
       if (!teamId) return respondControlError(c, 400, "MISSING_TEAM_ID");
 
-      const listEnv = await deps.metaKernel.invoke(
-        "asset/list",
-        { team_id: teamId, asset_type: "chat_memory", visibility: "team" },
-        ctx,
-      );
-      if (listEnv.code !== 0) return respondEnvelope(c, listEnv);
-      const items = extractListItems<AssetRaw>(listEnv).filter(isActive);
+      // 分页拉全量：内核 DEFAULT_PAGINATION=20，单页截断会让列表显示不全
+      let listError: MetaEnvelope<unknown> | null = null;
+      const items = (
+        await fetchAllMetaListItems<AssetRaw>(
+          deps,
+          ctx,
+          "asset/list",
+          { team_id: teamId, asset_type: "chat_memory", visibility: "team" },
+          (env) => {
+            listError = env;
+          },
+        )
+      ).filter(isActive);
+      if (listError) return respondEnvelope(c, listError);
 
       // perf: 列表接口不再计算 bound_agent_count（旧实现 N+1：M 条 asset × 每条
       // 一次 agent/list + 一次 summary-by-agents，20 asset 场景实测 41 次 kernel 调用，
@@ -204,13 +212,15 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       //   - 解绑操作：允许（清理脏 binding 的入口）
       // 若用 filter=true 会直接把已私密条目从 items 里剔除 → 使用者永远无法
       // 知晓/清理这些残留绑定；filter=false + 前端标记是"感知 + 可清理"的更好体验。
-      // 分页注意：list-with-detail 默认 limit=20（DEFAULT_PAGINATION），排序
-      // priority DESC, created_at DESC。当 agent 绑定资产较多（skill/wiki/code_graph/
-      // chat_memory 混排）时，priority 较低的 chat_memory 绑定会被排到 20 名之外而
-      // 被整页截断 → 固定资产记忆 tab 丢失记忆块。这里做翻页聚合（对齐
-      // MetadataClient.getAgentFixedAssets 的 FA_PAGE_SIZE 循环模式），把该 agent 的
-      // 全部固定资产绑定拉回来再过滤，避免"拍上限"导致 skill 一多仍会丢。
-      // list-with-detail 返回的 items（AgentAssetView）不带 owner_user_id
+      //
+      // 类型过滤下推：core `agent-fixed-asset/list-with-detail` 支持
+      // `asset_types` 参数（v3-meta-schemas.ts:fixedAssetListWithDetailSchema），
+      // 在 SQL 层按类型过滤 —— 无关类型（skill / wiki / code_graph）不会占分页额度。
+      // 之前"拉全量再内存 filter(asset_type==='chat_memory')"的写法，在 skill 特别
+      // 多的 agent（如实际线上 519 skill + 1 chat_memory 场景）上，chat_memory
+      // 绑定按 priority DESC/created_at DESC 排在第 520 位，会被 500 硬上限翻页
+      // 窗口截断，前端拿到空数组、"固定资产记忆"tab 完全空白（case: zcchizhang）。
+      // 现在直接让内核只返 chat_memory 那 1 条，分页/硬上限都无需再考虑。
       interface FixedAssetDetailRaw {
         asset_id: string;
         asset_type: string;
@@ -219,46 +229,29 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         visibility: string;
         created_at: string;
       }
-      const FA_PAGE_SIZE = 100;
-      const FA_PAGE_HARD_LIMIT = 500;
-      const fixedAssets: FixedAssetDetailRaw[] = [];
-      let offset = 0;
-      while (true) {
-        const listEnv = await deps.metaKernel.invoke(
-          "agent-fixed-asset/list-with-detail",
-          {
-            agent_id: agentId,
-            apply_visibility_filter: false,
-            touch_usage: false,
-            limit: FA_PAGE_SIZE,
-            offset,
-          },
-          ctx,
-        );
-        if (listEnv.code !== 0) return respondEnvelope(c, listEnv);
-        const data =
-          listEnv.data as ListEnvelopeData<FixedAssetDetailRaw> | null;
-        const page = Array.isArray(data?.items) ? data.items : [];
-        fixedAssets.push(...page);
-        const total =
-          typeof data?.total === "number" ? data.total : fixedAssets.length;
-        offset += FA_PAGE_SIZE;
-        if (
-          fixedAssets.length >= total ||
-          page.length === 0 ||
-          offset >= FA_PAGE_HARD_LIMIT
-        )
-          break;
-      }
+      let listError: MetaEnvelope<unknown> | null = null;
+      const fixedAssets = await fetchAllMetaListItems<FixedAssetDetailRaw>(
+        deps,
+        ctx,
+        "agent-fixed-asset/list-with-detail",
+        {
+          agent_id: agentId,
+          apply_visibility_filter: false,
+          touch_usage: false,
+          asset_types: ["chat_memory"],
+        },
+        (env) => {
+          listError = env;
+        },
+      );
+      if (listError) return respondEnvelope(c, listError);
 
-      const items = fixedAssets
-        .filter((it) => it.asset_type === "chat_memory")
-        .filter(
-          (it) =>
-            it.status !== "archived" &&
-            it.status !== "deprecated" &&
-            it.status !== "failed",
-        );
+      const items = fixedAssets.filter(
+        (it) =>
+          it.status !== "archived" &&
+          it.status !== "deprecated" &&
+          it.status !== "failed",
+      );
 
       // 拿真实 owner_user_id 和 updated_at（list-with-detail 不返这两个字段）
       const out: MemoryBlockOut[] = await Promise.all(
@@ -322,15 +315,20 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
 
       // 拉 team 下所有 agent，然后面板层按 owner=me 过滤
       // （tdai /v3/meta/agent/list 传 team_id 时会忽略 owner_user_id，需自己过滤）
-      const agentEnv = await deps.metaKernel.invoke(
-        "agent/list",
-        { team_id: teamId, status: "active" },
-        ctx,
-      );
-      if (agentEnv.code !== 0) return respondEnvelope(c, agentEnv);
-      const agents = extractListItems<
-        AgentRaw & { name: string; description?: string }
-      >(agentEnv).filter((a) => a.owner_user_id === meUserId);
+      // 分页拉全量：单页 20 条截断会让团队 agent > 20 时"我的 Agent"列表显示不全
+      let agentListError: MetaEnvelope<unknown> | null = null;
+      const agents = (
+        await fetchAllMetaListItems<AgentRaw & { name: string; description?: string }>(
+          deps,
+          ctx,
+          "agent/list",
+          { team_id: teamId, status: "active" },
+          (env) => {
+            agentListError = env;
+          },
+        )
+      ).filter((a) => a.owner_user_id === meUserId);
+      if (agentListError) return respondEnvelope(c, agentListError);
 
       // 每个 agent 对应一块记忆：查 chat_memory asset（若已 auto-mint）拿到 visibility
       const out: MemoryBlockOut[] = await Promise.all(
@@ -382,13 +380,20 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
     const meUserId = await resolveCallerUserId(deps, ctx);
     if (!meUserId) return respondControlError(c, 401, "INVALID_USER_KEY");
 
-    const listEnv = await deps.metaKernel.invoke(
-      "asset/list",
-      { team_id: teamId, asset_type: "chat_memory", owner_user_id: meUserId },
-      ctx,
-    );
-    if (listEnv.code !== 0) return respondEnvelope(c, listEnv);
-    const items = extractListItems<AssetRaw>(listEnv).filter(isActive);
+    // 分页拉全量：单页 20 条截断会让"我的资产"超过 20 条时列表显示不全
+    let listError: MetaEnvelope<unknown> | null = null;
+    const items = (
+      await fetchAllMetaListItems<AssetRaw>(
+        deps,
+        ctx,
+        "asset/list",
+        { team_id: teamId, asset_type: "chat_memory", owner_user_id: meUserId },
+        (env) => {
+          listError = env;
+        },
+      )
+    ).filter(isActive);
+    if (listError) return respondEnvelope(c, listError);
 
     const out: MemoryBlockOut[] = await Promise.all(
       items.map(async (a) => ({
@@ -515,6 +520,10 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
     // 权限：agent.owner = me
     const meUserId = await resolveCallerUserId(deps, ctx);
     if (!meUserId) return respondControlError(c, 401, "INVALID_USER_KEY");
+    c.set('resolvedUserId', meUserId);
+    // 顺手把 user_key → user_id 塞进 resolver，让同 user_key 的后续
+    // skill/create、skill/conversation/add 等埋点也能立刻命中（asset-import 冷启动场景）。
+    if (ctx.userKey) deps.userIdResolver.warm(ctx.userKey, meUserId, ctx.instanceId);
     const agentEnv = await deps.metaKernel.invoke(
       "agent/get",
       { agent_id: agentId },
@@ -694,13 +703,19 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         }
       }
 
-      const bindEnv = await deps.metaKernel.invoke(
+      // 分页拉全量：内核 DEFAULT_PAGINATION=20，不传 limit 只拿前 20 条，
+      // 下面 set 是全量替换 → ≥21 条时老绑定会被静默清掉。
+      let bindListError: MetaEnvelope<unknown> | null = null;
+      const existing = await fetchAllMetaListItems<FixedAssetRaw>(
+        deps,
+        ctx,
         "agent-fixed-asset/list",
         { agent_id: agentId },
-        ctx,
+        (env) => {
+          bindListError = env;
+        },
       );
-      if (bindEnv.code !== 0) return respondEnvelope(c, bindEnv);
-      const existing = extractListItems<FixedAssetRaw>(bindEnv);
+      if (bindListError) return respondEnvelope(c, bindListError);
       const nonMemoryBindings = existing.filter(
         (b) => b.asset_type !== "chat_memory",
       );
@@ -822,14 +837,19 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         );
       }
 
-      // 拉现有绑定
-      const bindEnv = await deps.metaKernel.invoke(
+      // 拉现有绑定（分页拉全量，理由同 4.4 借入：set 是全量替换，
+      // 单页 20 条截断会让第 21+ 条绑定被静默清掉，imported 计数也会失真）
+      let bindListError: MetaEnvelope<unknown> | null = null;
+      const bindings = await fetchAllMetaListItems<FixedAssetRaw>(
+        deps,
+        ctx,
         "agent-fixed-asset/list",
         { agent_id: agentId },
-        ctx,
+        (env) => {
+          bindListError = env;
+        },
       );
-      if (bindEnv.code !== 0) return respondEnvelope(c, bindEnv);
-      const bindings = extractListItems<FixedAssetRaw>(bindEnv);
+      if (bindListError) return respondEnvelope(c, bindListError);
       if (bindings.some((b) => b.asset_id === blockId)) {
         return respondControlError(
           c,
@@ -935,12 +955,8 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
     // 的历史脏 binding**（例如别人已把资产切私密但绑定未清），否则下一步 set 全量
     // 重写会触发内核 asset_not_bindable 409。这里用 list-with-detail 一次拉齐
     // 每条 binding 对应 asset 的 visibility，本地做过滤，避免 N 次 asset/get。
-    const bindEnv = await deps.metaKernel.invoke(
-      "agent-fixed-asset/list-with-detail",
-      { agent_id: agentId, apply_visibility_filter: true, touch_usage: false },
-      ctx,
-    );
-    if (bindEnv.code !== 0) return respondEnvelope(c, bindEnv);
+    // 分页拉全量：set 是全量替换，单页 20 条截断会让第 21+ 条绑定被静默清掉。
+    let bindListError: MetaEnvelope<unknown> | null = null;
     interface BindingWithDetail {
       asset_id: string;
       asset_type: string;
@@ -950,7 +966,16 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       visibility?: string;
       status?: string;
     }
-    const detailBindings = extractListItems<BindingWithDetail>(bindEnv);
+    const detailBindings = await fetchAllMetaListItems<BindingWithDetail>(
+      deps,
+      ctx,
+      "agent-fixed-asset/list-with-detail",
+      { agent_id: agentId, apply_visibility_filter: true, touch_usage: false },
+      (env) => {
+        bindListError = env;
+      },
+    );
+    if (bindListError) return respondEnvelope(c, bindListError);
 
     // 若 blockId 不在 filter 后 items 里，说明要么本来就没绑定，要么内核判定 caller 不能 bind
     // 都视为"当前实际可解的绑定不含 blockId" → 404 便于 UI 语义清晰
@@ -960,13 +985,18 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       (b) => b.asset_id === blockId,
     );
     if (!targetInFilteredList) {
-      const rawEnv = await deps.metaKernel.invoke(
+      // 二次确认同样分页拉全量：目标绑定若排在 21+，单页 list 会漏掉而误判 404
+      let rawListError: MetaEnvelope<unknown> | null = null;
+      const raw = await fetchAllMetaListItems<FixedAssetRaw>(
+        deps,
+        ctx,
         "agent-fixed-asset/list",
         { agent_id: agentId },
-        ctx,
+        (env) => {
+          rawListError = env;
+        },
       );
-      if (rawEnv.code !== 0) return respondEnvelope(c, rawEnv);
-      const raw = extractListItems<FixedAssetRaw>(rawEnv);
+      if (rawListError) return respondEnvelope(c, rawListError);
       const exists = raw.some((b) => b.asset_id === blockId);
       if (!exists) return respondControlError(c, 404, "BINDING_NOT_FOUND");
       // 存在但因 visibility 被 filter 掉 —— 属于"要清理的脏 binding"，允许继续
@@ -2009,25 +2039,25 @@ async function authorizeChatMemoryRead(
   }
   // 借入判定：遍历 caller 在本 team 下 owner 的 agent，看有没有绑定过该 asset。
   try {
-    const myAgentsEnv = await deps.metaKernel.invoke(
-      "agent/list",
-      { team_id: asset.team_id, status: "active" },
-      ctx,
-    );
-    if (myAgentsEnv.code === 0) {
-      const myAgents = extractListItems<AgentRaw>(myAgentsEnv).filter(
-        (a) => a.owner_user_id === meUserId,
+    // 分页拉全量：单页 20 条截断会让借入判定漏掉排在 21+ 的 agent，误判无权限
+    const myAgents = (
+      await fetchAllMetaListItems<AgentRaw>(
+        deps,
+        ctx,
+        "agent/list",
+        { team_id: asset.team_id, status: "active" },
+      )
+    ).filter((a) => a.owner_user_id === meUserId);
+    for (const a of myAgents) {
+      // 分页拉全量：该 asset 若排在 agent 绑定 21+，单页 list 会漏掉而误判无权限。
+      // 出错时与原来一致（continue 跳过该 agent），不阻断其余 agent 的判定。
+      const bindings = await fetchAllMetaListItems<FixedAssetRaw>(
+        deps,
+        ctx,
+        "agent-fixed-asset/list",
+        { agent_id: a.agent_id },
       );
-      for (const a of myAgents) {
-        const bindEnv = await deps.metaKernel.invoke(
-          "agent-fixed-asset/list",
-          { agent_id: a.agent_id },
-          ctx,
-        );
-        if (bindEnv.code !== 0) continue;
-        const bindings = extractListItems<FixedAssetRaw>(bindEnv);
-        if (bindings.some((b) => b.asset_id === blockId)) return true;
-      }
+      if (bindings.some((b) => b.asset_id === blockId)) return true;
     }
   } catch {
     /* fallthrough → deny */

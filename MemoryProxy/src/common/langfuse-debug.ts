@@ -81,7 +81,7 @@ export interface RequestDebugMetadataInput {
  *     （识别 CC fork/main/sidequery 的核心信号；详见 cc-request-classifier.ts）
  *   - `body_metadata` — Anthropic body.metadata（含 user_id 等）
  *   - `body_extra_keys` — body 顶层"非标准字段"名字（CB / cursor 常私塞 extension 字段）
- *   - `agent_source` / `request_kind` / `space_id` / `turn_seq` / `request_path`
+ *   - `agent_source` / `request_kind` / `instanceId` / `turn_seq` / `request_path`
  *   - `header_<name>` — 白名单前缀的 client header（x-* / cb-* / codebuddy-*）
  *
  * Tools/description 均截断以防单条上报膨胀。抽取失败静默返回已有字段
@@ -178,7 +178,9 @@ export function buildRequestDebugMetadata(
     // ── 路由上下文 ──
     if (opts.agentSource) out.agent_source = opts.agentSource;
     if (opts.requestKind) out.request_kind = opts.requestKind;
-    if (opts.spaceId) out.space_id = opts.spaceId;
+    // 与主链路（langfuse.ts / stageBuildLangfuseTurnContext）用同一个 key：
+    // Langfuse 对外统一 `instanceId`（camelCase），不再 debug 时另写 `space_id`。
+    if (opts.spaceId) out.instanceId = opts.spaceId;
     if (typeof opts.turnSeq === "number") out.turn_seq = opts.turnSeq;
     if (opts.requestPath) out.request_path = opts.requestPath;
     if (opts.protocol) out.protocol = opts.protocol;

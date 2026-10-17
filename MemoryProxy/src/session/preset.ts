@@ -15,6 +15,31 @@
 import type { SessionInitConfig } from "../types.js";
 import type { TeamOption } from "./types.js";
 
+/**
+ * Agents whose identity is driven ENTIRELY by request headers
+ * (`x-team-id` / `x-agent-id` / `x-task-id`) and which have **no interactive
+ * form UI** to fall back on:
+ *
+ *   - `pi`       — openai-chat, no `ask_followup_question` tool in body.tools
+ *   - `hermes`   — anthropic, no ask-user tool available
+ *   - `openclaw` — anthropic, same as hermes
+ *
+ * For these clients, `handleSessionInit` MUST NOT emit a fake tool_call form
+ * on preset failure/mismatch — the client renders unknown tool_use as an
+ * error. See `session/codebuddy/init.ts` header-preselect branch and the
+ * `mem:session-reset` pre-hooks in `handler.ts` / `anthropicHandler.ts`.
+ */
+export const HEADER_ONLY_AGENTS: ReadonlySet<string> = new Set([
+  "hermes",
+  "openclaw",
+  "pi",
+]);
+
+/** True when the agent has no interactive form UI to fall back on. */
+export function isHeaderOnlyAgent(agentSource: string | undefined | null): boolean {
+  return !!agentSource && HEADER_ONLY_AGENTS.has(agentSource);
+}
+
 /** Raw identity values parsed from request headers (may be partial / absent). */
 export interface PresetIdentity {
   teamId?: string;
@@ -98,13 +123,20 @@ export function resolvePresetIdentity(
   if (preset.taskId) {
     const task = team.tasks.find((t) => t.task_id === preset.taskId);
     if (task) res.taskId = task.task_id;
-    else res.hadMismatch = true;
+    // A stale/unknown task_id does NOT flip hadMismatch: task_id is an
+    // optional business dimension in the kernel (isolation.ts: "taskId is
+    // an optional business dimension for L0/L1 filtering"). An absent or
+    // stale task must not block registration — it just means recall is
+    // broadened across all of the agent's memories. Only an unknown team or
+    // unknown agent is a real identity mismatch (they're the mandatory
+    // dimensions); a task mismatch is silently dropped with a caller-side
+    // warning instead. See PR feat/task-optional-memory.
   }
 
-  // team + agent + task 三者齐全（且无 mismatch）→ 才走"直接登记"快捷路径。
-  // 与 CC/CB completeRegistration 的守卫一致：缺 task 直接 bypass，不再"只注入
-  // agent"；header 缺 task_id 时也不走 shortcut，回退到交互式流程（该流程内部
-  // 的 auto-select 级联在 tasks.length===0 时也会 bypass）。
-  res.canRegister = !!res.agentId && !!res.taskId && !res.hadMismatch;
+  // team + agent resolved → register directly. task_id is OPTIONAL: a
+  // missing/stale task yields undefined taskId (broad recall), not a block.
+  // This matches the kernel's own semantics and the interactive "本次不关联
+  // 任务" / defaultTaskId path.
+  res.canRegister = !!res.agentId && !res.hadMismatch;
   return res;
 }

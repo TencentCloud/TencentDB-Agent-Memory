@@ -5,7 +5,7 @@
  * 使用 /v3/* API 与强制 team/agent/user isolation，
  * 提供四层记忆的自动捕获、召回和工具调用能力。
  *
- * COS 读文件旁路：createMemoryFileReader（/v2/cos/secret + STS），工具 tdai_read_cos。
+ * COS 读文件旁路：createMemoryFileReader（/v2/cos/secret + STS），工具 tdai_read_file。
  * 本插件不包含任何数据处理逻辑（无 VDB/Embedding/Pipeline），也不含 Offload；
  * 所有记忆操作委托给远端 Gateway。
  */
@@ -140,7 +140,7 @@ export default function register(api: any) {
 
   api.registerTool(
     {
-      name: "tdai_read_cos",
+      name: "tdai_read_file",
       label: "Read Memory File",
       description:
         "Read a memory pipeline file from object storage by relative path " +
@@ -161,7 +161,7 @@ export default function register(api: any) {
         return handleReadCos(fileReader, params as any, api.logger);
       },
     },
-    { name: "tdai_read_cos" },
+    { name: "tdai_read_file" },
   );
 
   // ── Register Hooks (api.on pattern, same as memory-tencentdb) ──

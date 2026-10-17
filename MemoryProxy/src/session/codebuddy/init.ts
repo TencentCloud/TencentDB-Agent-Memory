@@ -23,9 +23,11 @@ import { SessionStore } from "../store.js";
 import { buildSessionInfo } from "../registrar.js";
 import { injectSessionContextWithToggles } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
-import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
+import { isHeaderOnlyAgent, resolvePresetIdentity, type PresetIdentity } from "../preset.js";
+import { resolveUserSessionDefault } from "../user-default.js";
 
 import { buildFormResponse, FormData } from "./form.js";
+import { buildBypassNoticeResponse } from "../workbuddy/text-form.js";
 import {
   extractFromOptionText,
   extractTeamFromOptionText,
@@ -39,6 +41,7 @@ import {
 } from "./extractor.js";
 import { getLastUserMessageText } from "./cleaner.js";
 import { emitSessionInitTelemetryIfCompleted } from "../init-telemetry.js";
+import { isDshRuntimeContextSnapshot } from "../../common/user-query-extractor.js";
 import {
   CODEX_MORE_LABEL,
   DEFAULT_GATE_PREFIX,
@@ -50,6 +53,7 @@ import {
 // form 侧切片对齐。CC 的 MORE_LABEL 值与 workbuddy/form.ts 完全一致。
 import { MORE_LABEL as WB_MORE_LABEL } from "../claude-code/form.js";
 import { computePagination as computeCCPagination } from "../claude-code/pagination.js";
+import type { ClientCapabilities } from "../client-capabilities.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -57,6 +61,16 @@ export interface SessionRequestContext {
   stream: boolean;
   modelId: string;
   protocol?: "openai" | "anthropic";
+  /**
+   * 客户端能力标记（handler 层探测后透传进来）。
+   *
+   * 目前唯一消费方是 workbuddy 分支：
+   *   - `askUserQuestion === false` → 无卡片能力，走文字模式（content chunk + 纯文字解析）
+   *   - `askUserQuestion === true` / `undefined` → 走原卡片模式
+   *
+   * 未设置时相当于 `{ askUserQuestion: true }`（对齐既有行为）。
+   */
+  capabilities?: ClientCapabilities;
   /**
    * codex 客户端专属：codex 的答复不走 CB 兼容的 messages[]，而是塞在
    * `body.input[]` 里的 `function_call_output` 项。codexHandler 已经用
@@ -68,6 +82,13 @@ export interface SessionRequestContext {
    * CC/普通 CB 场景永远不传此字段。
    */
   codexAnswerInput?: unknown[];
+  /**
+   * CB v1.106+ 的 ask_followup_question schema 要求 questions 为真 array；
+   * 老版本期望 JSON 字符串。handler 从 body.tools 中检测后填入此字段，
+   * form builder 据此决定是否 JSON.stringify(questions)。
+   * 未设置时默认 true（向新版对齐）。
+   */
+  questionsAsArray?: boolean;
 }
 
 export interface SessionInitResult {
@@ -78,8 +99,21 @@ export interface SessionInitResult {
   justRegistered?: boolean;
   agentDetail?: AgentDetail | null;
   taskDetail?: TaskDetail | null;
+  /**
+   * 已绑定 team 的 display name（来自 cachedTeams[selected].team_name）。
+   * 供 mem:session-reset 完成确认等展示层使用；session-init 完成时才有值。
+   */
+  teamName?: string | null;
   /** 用户选"否"不关联团队资产 → bypass 路径，所有注入钩子应跳过。 */
   bypassed?: boolean;
+  /**
+   * 本次注册是 session-reset 触发的（pre-hook 设 state.resetFlow=true →
+   * 保留到 completeRegistration 的返回值里）。镜像自 claude-code/init.ts
+   * 的同名字段 —— 两边字段必须保持同形, 否则 session/index.ts 导出的联合
+   * 类型 (`CBSessionInitResult`) 读不到这个属性, runner 侧的
+   * `initResult.resetFlow` 全部 TS2339。
+   */
+  resetFlow?: boolean;
   /**
    * bypass 触发原因（仅 `bypassed === true` 时有意义）。codexHandler 用它决定
    * 首次 gate 命中是否要返 "Plan 模式提示" 而非直接透传。
@@ -127,16 +161,24 @@ type MessageArr = Record<string, unknown>[];
  */
 function detectCodexDefaultGate(input: unknown): boolean {
   if (!Array.isArray(input)) return false;
-  for (const item of input) {
-    const it = item as Record<string, unknown> | null;
-    if (!it || typeof it !== "object") continue;
-    if (it.type !== "function_call_output") continue;
-    const output = it.output;
-    if (typeof output === "string" && output.startsWith(DEFAULT_GATE_PREFIX)) {
-      return true;
-    }
-  }
-  return false;
+  // 只识别"input 的最后一个 item 就是 gate output"的情况 —— 即这一轮 codex 客户端
+  // 拦截了 tool_call 并直接 replay gate。
+  //
+  // 为什么必须看**最末 item** 而不是"最新的 function_call_output"：
+  // codex 客户端每一轮都 replay 整个历史 input,一旦历史里出现过 Default 模式的
+  // gate output,它会永远沉淀在 input 里。用户从 Default 切到 Plan 后重发命令,
+  // 客户端会在 input 尾部**追加一条新的 user message**（那条 mem:session-reset
+  // 或用户对 form 的答复）,老 gate output 仍留在中间。若扫"最新 function_call_output"
+  // 则永远命中老 gate,死循环卡住"请切到 Plan 模式"文案。
+  //
+  // 只有当尾部就是 function_call_output(说明客户端刚 replay gate,还没让用户输入)
+  // 才判 Default;若尾部是 user message / tool_use / 其他 → 说明当前是新一轮 turn,
+  // 忽略历史残留 gate。
+  const last = input[input.length - 1] as Record<string, unknown> | null | undefined;
+  if (!last || typeof last !== "object") return false;
+  if (last.type !== "function_call_output") return false;
+  const output = last.output;
+  return typeof output === "string" && output.startsWith(DEFAULT_GATE_PREFIX);
 }
 
 /**
@@ -243,7 +285,7 @@ function isFreshCBConversation(messages: MessageArr): boolean {
     if (typeof c === "string") {
       if (
         c.startsWith("<system-reminder>") ||
-        c.startsWith("Current runtime context.")
+        isDshRuntimeContextSnapshot(c)
       ) {
         continue;
       }
@@ -374,24 +416,22 @@ export async function completeRegistration(
       `[session-init:cb] session=${compositeKey} no user_id available → bypass`,
     );
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
+    return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
   }
-  // 与 CC 侧一致：只有 team + agent + task 三者齐全才注入。task_id 缺失一律 bypass。
-  // CodeBuddy 的 team+agent+task 在同一 form 里提交，用户如果没选 task 就走 bypass。
-  if (!resolved.task_id) {
-    console.warn(
-      `[session-init:cb] session=${compositeKey} agent=${resolved.agent_id} without task → bypass (task required for injection)`,
-    );
-    await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
-  }
+  // task_id is OPTIONAL for registration: the kernel treats task as an
+  // optional business dimension (isolation.ts), so a header-identity agent
+  // with team+agent but no task (or a stale task) still registers and gets
+  // memory — recall just broadens across the agent's memories instead of
+  // narrowing to a task. The interactive "暂时跳过" / defaultTaskId path
+  // also lands here with task_id = defaultTaskId (a virtual value). Do NOT
+  // bypass when task_id is missing/undefined.
   const regData = buildRegistrationData(resolved, cachedTeams, sessionKey, regUserId);
   if (!regData) {
     console.warn(
       `[session-init:cb] session=${compositeKey} agent=${resolved.agent_id} not bound to any team → bypass`,
     );
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
+    return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
   }
 
   let agentDetail: AgentDetail | null = null;
@@ -429,10 +469,13 @@ export async function completeRegistration(
 
   // Fire-and-forget: 记录参与日志（对齐 claude-code 分支，源标记为 codebuddy）。
   // bypass 场景已在上方 return，天然被过滤；失败仅 warn，不阻断注入。
+  // ⚠️ task_id === defaultTaskId 是"暂时跳过"虚拟值，不是内核里真实存在的 task；
+  //    此时直接上报会触发 `task_not_found: task not found: default` 404，跳过。
   if (
     metadataClient &&
     typeof metadataClient.appendParticipationLog === "function" &&
-    regData.task_id
+    regData.task_id &&
+    regData.task_id !== config.defaultTaskId
   ) {
     metadataClient
       .appendParticipationLog({
@@ -449,6 +492,13 @@ export async function completeRegistration(
       });
   }
 
+  // 从 cachedTeams 里查已选中 team 的 display name，用于 mem:session-reset
+  // 完成确认等展示层拼 `Team: {name} ({shortId})`。查不到则返回 null。
+  const selectedTeam = (state.cachedTeams ?? cachedTeams).find(
+    (t) => t.team_id === regData.team_id,
+  );
+  const teamName = selectedTeam?.team_name ?? null;
+
   const nextState: SessionInitState = {
     status: "initialized",
     keyId: sessionKey,
@@ -460,6 +510,8 @@ export async function completeRegistration(
     selectedTeamId: state.selectedTeamId,
     agentDetail,
     taskDetail,
+    resetFlow: state.resetFlow,
+    resetEpoch: state.resetEpoch,
   };
   await store.set(compositeKey, nextState);
 
@@ -471,6 +523,8 @@ export async function completeRegistration(
     justRegistered: true,
     agentDetail,
     taskDetail,
+    teamName,
+    resetFlow: state.resetFlow ?? false,
   };
 }
 
@@ -586,6 +640,9 @@ async function handleSessionInitInner(
         bypassed: true,
         justRegistered: true,
         bypassReason: "default-gate",
+        // codex Default gate 触发时若来自 mem:session-reset,resetFlow 从旧 state 透传出
+        // 供 codexHandler 换成"reset 命令需要 Plan 模式"的针对性文案。
+        resetFlow: state?.resetFlow ?? false,
       };
     }
     // 已 bypass: fall through, Case 3 会走透传分支
@@ -651,6 +708,7 @@ async function handleSessionInitInner(
             selectedTeamId: state.selectedTeamId,
             selectedAgentId: state.selectedAgentId,
             stream: reqCtx.stream,
+            questionsAsArray: reqCtx.questionsAsArray,
             modelId: reqCtx.modelId,
             protocol: reqCtx.protocol,
           }, next);
@@ -661,13 +719,7 @@ async function handleSessionInitInner(
     }
   }
 
-  // ── Safety net: state 丢失但对话已有历史 → 跳过 init（避免会话中途重弹表单）──
-  if ((!state || state.status === "uninitialized") && !isFreshCBConversation(messages)) {
-    console.warn(
-      `[session-init:cb] session=${compositeKey} state lost but conversation has history, skipping init`,
-    );
-    return { intercepted: false };
-  }
+  // [session-reset] gate removed: always init on missing state
 
   // ── DEBUG BYPASS ─────────────────────────────────────────────────────
   // 当 sessionInit.debugForceIdentity 三元组齐全且 state 尚未 initialized 时，
@@ -754,7 +806,7 @@ async function handleSessionInitInner(
         taskDetail: null,
         bypassed: true,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     const totalAgents = teams.reduce((acc, t) => acc + t.agents.length, 0);
@@ -774,7 +826,111 @@ async function handleSessionInitInner(
         taskDetail: null,
         bypassed: true,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+    }
+
+    // ── User session default (v3.3): 账户级配置 —— 优先级最高 ───────────────
+    //
+    // 用户通过面板设置的"默认 (team, agent, task) 三元组"。命中有效即一步到位
+    // fastRegister, 跳过 asset_confirm / team_select / agent_select / task_select
+    // 全部表单, 且**忽略**请求 header 里带的 x-team-id/x-agent-id/x-task-id
+    // (设计文档 §2.2 优先级链)。
+    //
+    // 失败路径 (无记录 / RPC 异常 / team/agent/task 校验不过) → resolver 返 null,
+    // 继续往下走 header-only short-circuit → header preset → 原交互表单。
+    // resolver 内部 catch 所有异常, 保证"账户默认失效"路径对用户无差别。
+    const userDefaultResolution = await resolveUserSessionDefault({
+      userId,
+      teams,
+      metadataClient,
+      compositeKey,
+      defaultTaskId: config.defaultTaskId,
+    });
+    if (userDefaultResolution && userDefaultResolution.canRegister) {
+      const seedState: SessionInitState = {
+        status: "uninitialized",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teams,
+        selectedTeamId: userDefaultResolution.teamId,
+      };
+      return completeRegistration(
+        {
+          agent_id: userDefaultResolution.agentId!,
+          task_id: userDefaultResolution.taskId,
+        },
+        seedState, teams, compositeKey, sessionKey, userId,
+        config, store, messages, metadataClient, userKey, spaceId,
+      );
+    }
+
+    // ── Header-only agent short-circuit ────────────────────────────────────
+    // pi / hermes / openclaw 客户端只通过请求头预选身份,没有交互 form UI:
+    //   - pi:       openai-chat, body.tools 不含 ask_followup_question
+    //   - hermes:   anthropic, 客户端不挂 ask-user tool
+    //   - openclaw: 同 hermes
+    // preset 任何失败场景(缺失 / mismatch / 只对上 team 没对上 agent / feature
+    // 未开)都必须 bypass —— 绝不能落到下面弹 ask_followup_question tool_call 的
+    // 分支,那会让客户端渲染成 unknown tool 报错(用户实测:pi 页面直接崩)。
+    //
+    // 与下面通用 header-preselect 块分开写:非 header-only agent(codebuddy /
+    // workbuddy / dsh / opencode / codex)保留"只有 team → advance 到 agent form"
+    // 的旧语义,form 对这些客户端本来就有效。
+    if (isHeaderOnlyAgent(agentSource)) {
+      const prHo = presetIdentity && config.headerAutoSelect?.enabled
+        ? resolvePresetIdentity(teams, presetIdentity)
+        : null;
+      if (prHo && prHo.canRegister) {
+        if (presetIdentity?.taskId && !prHo.taskId) {
+          console.warn(
+            `[session-init:cb] session=${compositeKey} header-only agent=${agentSource} preset task_id="${presetIdentity.taskId}" not found in team=${prHo.teamId} → registering without a task (broad recall)`,
+          );
+        }
+        console.log(
+          `[session-init:cb] session=${compositeKey} header-only agent=${agentSource} preset hit team=${prHo.teamId} agent=${prHo.agentId} task=${prHo.taskId ?? "-"} → register directly`,
+        );
+        const seedState: SessionInitState = {
+          status: "uninitialized",
+          keyId: sessionKey,
+          startedAt: Date.now(),
+          attemptCount: 0,
+          userId,
+          cachedTeams: teams,
+          selectedTeamId: prHo.teamId,
+        };
+        return completeRegistration(
+          { agent_id: prHo.agentId!, task_id: prHo.taskId },
+          seedState, teams, compositeKey, sessionKey, userId,
+          config, store, messages, metadataClient, userKey, spaceId,
+        );
+      }
+      // preset 未命中 → bypass(不弹 form,不注入)。下次请求头修对了会 recreate
+      // uninitialized state,重新走一遍 canRegister 判定。
+      const reason = !presetIdentity
+        ? "no-preset-headers"
+        : !config.headerAutoSelect?.enabled
+          ? "header-auto-select-disabled"
+          : prHo?.hadMismatch
+            ? "preset-mismatch"
+            : "preset-partial (team resolved but agent missing/invalid)";
+      console.warn(
+        `[session-init:cb] session=${compositeKey} header-only agent=${agentSource} ${reason} → bypass (no form popup)`,
+      );
+      await store.set(compositeKey, {
+        status: "initialized",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teams,
+        sessionInfo: null,
+        agentDetail: null,
+        taskDetail: null,
+        bypassed: true,
+      } as SessionInitState);
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     // ── Header-driven pre-selection: skip forms when identity is provided ──
@@ -796,12 +952,20 @@ async function handleSessionInitInner(
             taskDetail: null,
             bypassed: true,
           } as SessionInitState);
-          return { intercepted: false, bypassed: true, justRegistered: true };
+          return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
         }
         console.warn(`[session-init:cb] session=${compositeKey} preset mismatch → fallback to form`);
         // fall through to the normal asset_confirm flow below
       } else if (pr.canRegister) {
-        // team + agent resolved → register directly (task optional)
+        // team + agent resolved → register directly (task optional). A missing
+        // task_id yields undefined → broad recall across the agent's memories;
+        // a stale (unknown) task_id was already dropped by resolvePresetIdentity
+        // (not echoed back) — warn so the operator can re-point the client.
+        if (presetIdentity?.taskId && !pr.taskId) {
+          console.warn(
+            `[session-init:cb] session=${compositeKey} preset task_id="${presetIdentity.taskId}" not found in team=${pr.teamId} → registering without a task (broad recall)`,
+          );
+        }
         console.log(
           `[session-init:cb] session=${compositeKey} preset hit team=${pr.teamId} agent=${pr.agentId} task=${pr.taskId ?? "-"} → register directly`,
         );
@@ -821,10 +985,13 @@ async function handleSessionInitInner(
         );
       } else if (pr.teamId) {
         // only team resolved → jump straight to agent+task selection (skip
-        // asset_confirm + team_select). codex 走两步 stage 拆分，先 agent_select；
+        // asset_confirm + team_select). codex/WB/dsh/opencode 走两步 stage 拆分，先 agent_select；
         // CB 客户端保持老 pending_agent_task 一发同时问的语义。
-        const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "pending_agent_select" : "pending_agent_task";
-        const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "agent_select" : "agent_task";
+        //
+        // opencode 说明：opencode 客户端原生 `question` tool 每次只能弹一个题，
+        // 无法承载"同时问 agent+task"的语义，必须拆 stage（同 codex/wb/dsh）。
+        const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
+        const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
           status: nextStatus,
           keyId: sessionKey,
@@ -842,11 +1009,103 @@ async function handleSessionInitInner(
           stage: nextStage,
           selectedTeamId: pr.teamId,
           stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId,
           protocol: reqCtx.protocol,
         };
         return { intercepted: true, response: buildFormResponse(fd), formData: fd };
       }
+    }
+
+    // ── skipAssetConfirm: 跳过 asset_confirm 对话框，视为用户选了"是" ─────────
+    if (config.skipAssetConfirm) {
+      console.log(
+        `[session-init:cb] session=${compositeKey} skipAssetConfirm=true → skip asset_confirm (teams=${teams.length})`,
+      );
+      if (teams.length === 1) {
+        const onlyTeam = teams[0];
+        // 递进 auto-select：复用 choice===true 的 1-team 级联逻辑
+        if (onlyTeam.agents.length === 1) {
+          const soloAgent = onlyTeam.agents[0];
+          const nextState: SessionInitState = {
+            status: "pending_agent_select" as any,
+            keyId: sessionKey,
+            startedAt: Date.now(),
+            attemptCount: 0,
+            userId,
+            cachedTeams: teams,
+            selectedTeamId: onlyTeam.team_id,
+            selectedAgentId: soloAgent.agent_id,
+          };
+          console.log(
+            `[session-init:cb] session=${compositeKey} skipAssetConfirm only-team=${onlyTeam.team_id} only-agent=${soloAgent.agent_id} auto-select`,
+          );
+          if (onlyTeam.tasks.length === 0) {
+            await store.set(compositeKey, {
+              ...nextState,
+              status: "initialized",
+              sessionInfo: null,
+              agentDetail: null,
+              taskDetail: null,
+              bypassed: true,
+            } as SessionInitState);
+            return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
+          }
+          if (onlyTeam.tasks.length === 1) {
+            return await completeRegistration(
+              { agent_id: soloAgent.agent_id, task_id: onlyTeam.tasks[0].task_id },
+              nextState, teams, compositeKey, sessionKey, userId,
+              config, store, messages, metadataClient, userKey, spaceId,
+            );
+          }
+          // ≥2 tasks
+          await store.set(compositeKey, { ...nextState, status: "pending_task_select" });
+          const fd: FormData = {
+            teams, stage: "task_select",
+            selectedTeamId: onlyTeam.team_id, selectedAgentId: soloAgent.agent_id,
+            stream: reqCtx.stream, questionsAsArray: reqCtx.questionsAsArray,
+            modelId: reqCtx.modelId, protocol: reqCtx.protocol,
+          };
+          return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+        }
+        // ≥2 agents
+        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode";
+        const nextStatus = useSplitStage ? "pending_agent_select" : "pending_agent_task";
+        const nextStage: FormData["stage"] = useSplitStage ? "agent_select" : "agent_task";
+        await store.set(compositeKey, {
+          status: nextStatus,
+          keyId: sessionKey,
+          startedAt: Date.now(),
+          attemptCount: 0,
+          userId,
+          cachedTeams: teams,
+          selectedTeamId: onlyTeam.team_id,
+        });
+        const fd: FormData = {
+          teams, stage: nextStage, selectedTeamId: onlyTeam.team_id,
+          stream: reqCtx.stream, questionsAsArray: reqCtx.questionsAsArray,
+          modelId: reqCtx.modelId, protocol: reqCtx.protocol,
+        };
+        return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+      }
+      // ≥2 teams → 弹 team_select 表单
+      await store.set(compositeKey, {
+        status: "pending_team_select",
+        keyId: sessionKey,
+        startedAt: Date.now(),
+        attemptCount: 0,
+        userId,
+        cachedTeams: teams,
+      });
+      console.log(
+        `[session-init:cb] session=${compositeKey} → pending_team_select (teams=${teams.length})`,
+      );
+      const fd: FormData = {
+        teams, stage: "team",
+        stream: reqCtx.stream, questionsAsArray: reqCtx.questionsAsArray,
+        modelId: reqCtx.modelId, protocol: reqCtx.protocol,
+      };
+      return { intercepted: true, response: buildFormResponse(fd), formData: fd };
     }
 
     // 先弹 asset_confirm 对话框
@@ -865,10 +1124,88 @@ async function handleSessionInitInner(
       teams,
       stage: "asset_confirm",
       stream: reqCtx.stream,
+      questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
     };
     return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+  }
+
+  // ── CP3 · WorkBuddy 文字模式预处理（严格 gate） ─────────────────────────
+  //
+  // 只有 `capabilities?.askUserQuestion === false`（即 CP1 探测到 workbuddy
+  // 官方 tools 里没有 AskUserQuestion）时才进入。其他所有 client、以及
+  // capabilities === undefined 的既有行为**一行不变**。
+  //
+  // 预处理做四件事（详见 workbuddy/text-preprocess.ts）：
+  //   1. 用户输 "prev / 上一页"   → paginate-prev 短路：改 codexPageIndex[stage]
+  //                                后 return formData（session/index.ts 层会
+  //                                根据 capabilities 用 buildWorkBuddyTextFormResponse
+  //                                重渲染同 stage form）
+  //   2. 用户输 "next / 下一页"   → paginate-next 短路（同上，页码 +1，clamp）
+  //   3. 用户输数字 N             → translate：替换 messages 尾部 user 消息内容为
+  //                                当前页第 N 项的 team_name / agent_name / task_name
+  //                                / "是，关联团队资产" / "否，本次不关联"
+  //   4. 其他（skip / 名字 / short-id / 乱码） → passthrough，交 CB extractor 兜底
+  //
+  // translate 情况下**不 mutate 原 messages 数组**——深拷贝末尾一条 user 消息
+  // 后替换 content，然后重新赋给局部 `messages`。原 body.messages 零污染。
+  //
+  // paginate-* 情况下**短路 return**——跟 codex/workbuddy 的 MORE 拦截同款姿势：
+  // 改 state.codexPageIndex[stage] 后 return `{ intercepted: true, formData }`，
+  // 由 session/index.ts 的 workbuddy 分流点接手用 text-form 重渲染。
+  if (
+    reqCtx.capabilities?.askUserQuestion === false &&
+    isTextModePendingSelectStage(state.status)
+  ) {
+    const stageForPreprocess = statusToTextModeStage(state.status);
+    if (stageForPreprocess) {
+      const { preprocessTextModeInput } = await import(
+        "../workbuddy/text-preprocess.js"
+      );
+      const currentPage = readCurrentPageForStage(state, stageForPreprocess);
+      const rawUserText = getLastUserMessageText(messages);
+      const preResult = preprocessTextModeInput(rawUserText, {
+        stage: stageForPreprocess,
+        teams: state.cachedTeams ?? [],
+        selectedTeamId: state.selectedTeamId,
+        selectedAgentId: state.selectedAgentId,
+        currentPage,
+      });
+
+      if (config.debugVerboseLogging) {
+        console.log(
+          `[session-init:text-mode] session=${compositeKey} stage=${stageForPreprocess} ` +
+            `input=${JSON.stringify(rawUserText).slice(0, 100)} → action=${preResult.action} ` +
+            `reason=${preResult.reason}`,
+        );
+      }
+
+      // ── 短路分支：paginate-next / paginate-prev ─────────────────
+      if (
+        (preResult.action === "paginate-next" ||
+          preResult.action === "paginate-prev") &&
+        preResult.newPageIndex !== undefined
+      ) {
+        const newState = writeCurrentPageForStage(
+          state,
+          stageForPreprocess,
+          preResult.newPageIndex,
+        );
+        await store.set(compositeKey, newState);
+        // 拼 formData（不消耗 attemptCount / 不推进 stage）。session/index.ts
+        // 层的 workbuddy 分流会根据 capabilities.askUserQuestion=false 选到
+        // text-form 重渲染，输出 content chunk SSE。
+        const fd = buildFormDataForTextModeStage(newState, stageForPreprocess, reqCtx);
+        return { intercepted: true, formData: fd };
+      }
+
+      // ── translate 分支：替换 messages 尾部 user 消息内容 ────
+      if (preResult.action === "translate" && preResult.translated !== undefined) {
+        messages = replaceLastUserMessageContentImmutable(messages, preResult.translated);
+      }
+      // passthrough：什么都不做
+    }
   }
 
   // ── Case 1.25: Awaiting asset_confirm ────────────────────────────────────
@@ -897,7 +1234,7 @@ async function handleSessionInitInner(
         bypassed: true,
       } as SessionInitState);
       console.log(`[session-init:cb] session=${compositeKey} user chose no-asset → bypass`);
-      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     if (choice === true) {
@@ -935,7 +1272,7 @@ async function handleSessionInitInner(
             console.log(
               `[session-init:cb] session=${compositeKey} team has 0 tasks → bypass`,
             );
-            return { intercepted: false, bypassed: true, justRegistered: true };
+            return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
           }
           if (onlyTeam.tasks.length === 1) {
             const soleTaskId = onlyTeam.tasks[0].task_id;
@@ -962,17 +1299,19 @@ async function handleSessionInitInner(
             selectedTeamId: onlyTeam.team_id,
             selectedAgentId: soloAgent.agent_id,
             stream: reqCtx.stream,
+            questionsAsArray: reqCtx.questionsAsArray,
             modelId: reqCtx.modelId,
             protocol: reqCtx.protocol,
           };
           return { intercepted: true, response: buildFormResponse(fd), formData: fd };
         }
 
-        // ≥2 agents：CB 老路径 pending_agent_task 一发同时问；codex/WB 拆 stage
+        // ≥2 agents：CB 老路径 pending_agent_task 一发同时问；codex/WB/dsh/opencode 拆 stage
         // 走 pending_agent_select。WB 的 form 本来就按 CC 风格拆开问，让它走
         // codex 分支，避免落到 legacy agent_task stage 后 form 里只问 agent
-        // 却按老语义处理的语义歧义。
-        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh";
+        // 却按老语义处理的语义歧义。opencode 原生 `question` tool 每次只能弹
+        // 一个题，也必须走 split stage。
+        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode";
         const nextStatus = useSplitStage ? "pending_agent_select" : "pending_agent_task";
         const nextStage: FormData["stage"] = useSplitStage ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
@@ -992,6 +1331,7 @@ async function handleSessionInitInner(
           stage: nextStage,
           selectedTeamId: onlyTeam.team_id,
           stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId,
           protocol: reqCtx.protocol,
         };
@@ -1013,6 +1353,7 @@ async function handleSessionInitInner(
         teams,
         stage: "team",
         stream: reqCtx.stream,
+        questionsAsArray: reqCtx.questionsAsArray,
         modelId: reqCtx.modelId,
         protocol: reqCtx.protocol,
       };
@@ -1023,7 +1364,11 @@ async function handleSessionInitInner(
     if (state.attemptCount >= config.maxRetries) {
       console.warn(`[session-init:cb] session=${compositeKey} asset-confirm max retries, abandoning`);
       await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      // CP4 · 文字模式：本次请求返回"已跳过团队资产关联"文字通知，
+      // 不上游；下次请求走 recovered.bypassed 自动 skip injection。
+      const textBypass = tryBuildTextModeBypassResult(reqCtx);
+      if (textBypass) return textBypass;
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
     await store.set(compositeKey, state);
     const fd: FormData = {
@@ -1031,6 +1376,7 @@ async function handleSessionInitInner(
       stage: "asset_confirm",
       retry: true,
       stream: reqCtx.stream,
+      questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
     };
@@ -1040,7 +1386,42 @@ async function handleSessionInitInner(
   // ── Case 1.5: Awaiting team selection ─────────────────────────────────────
   if (state.status === "pending_team_select") {
     const lastUserText = getLastUserMessageText(messages);
-    const teamId = extractTeamFromOptionText(lastUserText, state.cachedTeams ?? []);
+    const cachedTeamsForMore = state.cachedTeams ?? [];
+
+    // ── WorkBuddy / opencode: team MORE 翻页拦截 ──
+    // WB/OC 复用 CB 状态机 + WB/OC form.ts 的分页 form（MORE_LABEL="更多 →"）。
+    // extractTeamFromOptionText 不识别 MORE，必须在其之前拦截，否则点"更多 →"
+    // 会被当"未识别"计 attemptCount，3 次 maxRetries 才强制 bypass。命中则 bump
+    // codexPageIndex.teamPage 重发 team_select form（页码经 session/index.ts 的
+    // 重渲染分支按 stage 从 codexPageIndex.teamPage 挑出，传给 WB/OC form 的
+    // pageIndex）。dsh 客户端无 options 上限，team 不分页，即使误触也无害。
+    // 2026-09-03 新增，对齐 agent_select / task_select 分支的姿势。
+    if (agentSource === "workbuddy" || agentSource === "opencode" || agentSource === "dsh") {
+      const curTeamPage = state.codexPageIndex?.teamPage ?? 0;
+      const nextTeamPage = detectWorkbuddyMorePage(lastUserText, curTeamPage, cachedTeamsForMore.length);
+      if (nextTeamPage !== null) {
+        const nextPx = {
+          teamPage: nextTeamPage,
+          agentPage: state.codexPageIndex?.agentPage ?? 0,
+          taskPage: state.codexPageIndex?.taskPage ?? 0,
+        };
+        await store.set(compositeKey, { ...state, codexPageIndex: nextPx });
+        console.log(
+          `[session-init:cb] session=${compositeKey} WB/OC team MORE page ${curTeamPage} → ${nextTeamPage}`,
+        );
+        const fd: FormData = withCodexPageIndex({
+          teams: cachedTeamsForMore,
+          stage: "team",
+          stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
+          modelId: reqCtx.modelId,
+          protocol: reqCtx.protocol,
+        }, nextPx);
+        return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+      }
+    }
+
+    const teamId = extractTeamFromOptionText(lastUserText, cachedTeamsForMore);
 
     // 用户在 team_select 阶段用 SKIP_RE (跳过/不关联/skip) 主动 bypass
     // (P1-4 修复)。对齐 pending_agent_select (init.ts:922) / pending_task_select
@@ -1060,13 +1441,132 @@ async function handleSessionInitInner(
         bypassed: true,
       } as SessionInitState);
       console.log(`[session-init:cb] session=${compositeKey} team_select bypass`);
-      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     if (teamId && teamId !== BYPASS_MARKER) {
-      // codex/WB 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
-      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "pending_agent_select" : "pending_agent_task";
-      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "agent_select" : "agent_task";
+      const useSplitStage = isCodexClient
+        || agentSource === "workbuddy"
+        || agentSource === "dsh"
+        || agentSource === "opencode";
+
+      // ── Single-agent auto-select 级联 (2026-09-21 fix, 只对拆 stage 客户端生效) ──
+      //
+      // 背景: WB/dsh/opencode form builder 都有 solo-page 断言 (agents<2 → throw),
+      // 若用户主动选中一个 team 后, team.agents 只有 1 个, 直接推 pending_agent_select
+      // 弹 agent form → form builder throw → handleSessionInit 上层 catch 到 →
+      // sessionInfo=undefined → 请求透传上游 → LLM 幻觉 (活体证据: session 25f9eca5)。
+      //
+      // 逻辑与本文件 line 1135-1193 (asset_confirm choice===true 且 1-team 单 team) 完全对称;
+      // 与 CC advanceFromTeamPicked (session/claude-code/init.ts:220-285) 语义一致。
+      //
+      // CB 老一发同问路径 (useSplitStage=false) 不进这段, 因为 CB 老 form 不做断言,
+      // agent 只有 1 个时正常弹只列该 agent 的 agent_task form。
+      const selectedTeam = cachedTeamsForMore.find((t) => t.team_id === teamId);
+      if (useSplitStage && selectedTeam && selectedTeam.agents.length <= 1) {
+        // 分支 A: agents.length === 0 → bypass (team 无 agent, 无法建立绑定)
+        if (selectedTeam.agents.length === 0) {
+          await store.set(compositeKey, {
+            ...state,
+            status: "initialized",
+            selectedTeamId: teamId,
+            sessionInfo: null,
+            agentDetail: null,
+            taskDetail: null,
+            bypassed: true,
+          } as SessionInitState);
+          console.log(
+            `[session-init:cb] session=${compositeKey} team=${teamId} has 0 agents → bypass`,
+          );
+          return {
+            intercepted: false,
+            messages: messages as Record<string, unknown>[],
+            bypassed: true,
+            justRegistered: true,
+            resetFlow: state?.resetFlow ?? false,
+          };
+        }
+
+        // 分支 B: agents.length === 1 → auto-select agent, 级联判 task
+        const soloAgent = selectedTeam.agents[0];
+        const nextState: SessionInitState = {
+          ...state,
+          keyId: sessionKey,
+          attemptCount: 0,
+          selectedTeamId: teamId,
+          selectedAgentId: soloAgent.agent_id,
+        };
+        console.log(
+          `[session-init:cb] session=${compositeKey} team=${teamId} auto-select single agent=${soloAgent.agent_id}`,
+        );
+
+        // B.1: 0 task → bypass (team+agent+task 缺一不注入)
+        if (selectedTeam.tasks.length === 0) {
+          await store.set(compositeKey, {
+            ...nextState,
+            status: "initialized",
+            sessionInfo: null,
+            agentDetail: null,
+            taskDetail: null,
+            bypassed: true,
+          } as SessionInitState);
+          console.log(
+            `[session-init:cb] session=${compositeKey} agent=${soloAgent.agent_id} has 0 tasks → bypass`,
+          );
+          return {
+            intercepted: false,
+            messages: messages as Record<string, unknown>[],
+            bypassed: true,
+            justRegistered: true,
+            resetFlow: state?.resetFlow ?? false,
+          };
+        }
+        // B.2: 1 task → 直接 completeRegistration (含 defaultTaskId 虚拟条目场景)
+        if (selectedTeam.tasks.length === 1) {
+          const soleTaskId = selectedTeam.tasks[0].task_id;
+          console.log(
+            `[session-init:cb] session=${compositeKey} auto-select single task=${soleTaskId} → completeRegistration`,
+          );
+          return await completeRegistration(
+            { agent_id: soloAgent.agent_id, task_id: soleTaskId },
+            nextState,
+            cachedTeamsForMore,
+            compositeKey,
+            sessionKey,
+            userId,
+            config,
+            store,
+            messages,
+            metadataClient,
+            userKey,
+            spaceId,
+          );
+        }
+        // B.3: ≥2 tasks → 推进到 pending_task_select 弹 task form
+        await store.set(compositeKey, {
+          ...nextState,
+          status: "pending_task_select",
+        });
+        console.log(
+          `[session-init:cb] session=${compositeKey} → pending_task_select (tasks=${selectedTeam.tasks.length})`,
+        );
+        const fd: FormData = {
+          teams: cachedTeamsForMore,
+          stage: "task_select",
+          selectedTeamId: teamId,
+          selectedAgentId: soloAgent.agent_id,
+          stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
+          modelId: reqCtx.modelId,
+          protocol: reqCtx.protocol,
+        };
+        return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+      }
+
+      // ── 原逻辑保留: agents ≥ 2 (或 CB 老一发同问路径) → 推进到 next stage 弹 form ──
+      // codex/WB/dsh/opencode 拆 stage: 先 agent_select → task_select; CB 老路径继续 agent_task 一发同时问。
+      const nextStatus = useSplitStage ? "pending_agent_select" : "pending_agent_task";
+      const nextStage: FormData["stage"] = useSplitStage ? "agent_select" : "agent_task";
       const next: SessionInitState = {
         ...state,
         status: nextStatus,
@@ -1080,6 +1580,7 @@ async function handleSessionInitInner(
         stage: nextStage,
         selectedTeamId: teamId,
         stream: reqCtx.stream,
+        questionsAsArray: reqCtx.questionsAsArray,
         modelId: reqCtx.modelId,
         protocol: reqCtx.protocol,
       };
@@ -1090,7 +1591,9 @@ async function handleSessionInitInner(
     if (state.attemptCount >= config.maxRetries) {
       console.warn(`[session-init:cb] session=${compositeKey} team-select max retries, abandoning`);
       await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      const textBypass = tryBuildTextModeBypassResult(reqCtx);
+      if (textBypass) return textBypass;
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
     await store.set(compositeKey, state);
     const fd: FormData = {
@@ -1098,6 +1601,7 @@ async function handleSessionInitInner(
       stage: "team",
       retry: true,
       stream: reqCtx.stream,
+      questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
     };
@@ -1118,7 +1622,7 @@ async function handleSessionInitInner(
         `[session-init:cb] session=${compositeKey} pending_agent_select but team=${selectedTeamId} not in cache → bypass`,
       );
       await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     const lastUserText = getLastUserMessageText(messages);
@@ -1127,8 +1631,9 @@ async function handleSessionInitInner(
     // WorkBuddy 复用 CB 状态机 + workbuddy/form.ts 的分页 form（MORE_LABEL="更多 →"）。
     // extractAgentOnly 不识别 MORE，必须在其之前拦截，否则点"更多 →"会被当未识别 →
     // 无限重发第 1 页。命中则 bump agentPage 并重发 agent_select form（页码经
-    // session/index.ts 的 workbuddy 重渲染分支按 stage 从 codexPageIndex.agentPage 挑出）。
-    if (agentSource === "workbuddy") {
+    // session/index.ts 的 workbuddy/opencode 重渲染分支按 stage 从 codexPageIndex.agentPage 挑出）。
+    // opencode 与 workbuddy 共用 `更多 →` MORE_LABEL 与分页语义，一并拦截。
+    if (agentSource === "workbuddy" || agentSource === "opencode") {
       const curAgentPage = state.codexPageIndex?.agentPage ?? 0;
       const nextAgentPage = detectWorkbuddyMorePage(lastUserText, curAgentPage, team.agents.length);
       if (nextAgentPage !== null) {
@@ -1146,6 +1651,7 @@ async function handleSessionInitInner(
           stage: "agent_select",
           selectedTeamId,
           stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId,
           protocol: reqCtx.protocol,
         }, nextPx);
@@ -1170,7 +1676,7 @@ async function handleSessionInitInner(
         bypassed: true,
       } as SessionInitState);
       console.log(`[session-init:cb] session=${compositeKey} agent_select bypass`);
-      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     if (picked) {
@@ -1194,7 +1700,7 @@ async function handleSessionInitInner(
           taskDetail: null,
           bypassed: true,
         } as SessionInitState);
-        return { intercepted: false, bypassed: true, justRegistered: true };
+        return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
       }
       if (team.tasks.length === 1) {
         const soleTaskId = team.tasks[0].task_id;
@@ -1227,6 +1733,7 @@ async function handleSessionInitInner(
         selectedTeamId,
         selectedAgentId: resolvedAgentId,
         stream: reqCtx.stream,
+        questionsAsArray: reqCtx.questionsAsArray,
         modelId: reqCtx.modelId,
         protocol: reqCtx.protocol,
       };
@@ -1238,7 +1745,9 @@ async function handleSessionInitInner(
     if (state.attemptCount >= config.maxRetries) {
       console.warn(`[session-init:cb] session=${compositeKey} agent_select max retries, abandoning`);
       await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      const textBypass = tryBuildTextModeBypassResult(reqCtx);
+      if (textBypass) return textBypass;
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
     await store.set(compositeKey, state);
     const fd: FormData = {
@@ -1247,6 +1756,7 @@ async function handleSessionInitInner(
       selectedTeamId,
       retry: true,
       stream: reqCtx.stream,
+      questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
     };
@@ -1264,16 +1774,16 @@ async function handleSessionInitInner(
         `[session-init:cb] session=${compositeKey} pending_task_select missing team/agent (team=${selectedTeamId} agent=${selectedAgentId}) → bypass`,
       );
       await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     const lastUserText = getLastUserMessageText(messages);
 
     // ── WorkBuddy-only: MORE 翻页拦截 ──
     // 同 pending_agent_select：extractTaskOnly 不识别 "更多 →"，必须先拦截。命中则
-    // bump taskPage 并重发 task_select form（页码经 session/index.ts 的 workbuddy
+    // bump taskPage 并重发 task_select form（页码经 session/index.ts 的 workbuddy/opencode
     // 重渲染分支按 stage 从 codexPageIndex.taskPage 挑出）。
-    if (agentSource === "workbuddy") {
+    if (agentSource === "workbuddy" || agentSource === "opencode") {
       const curTaskPage = state.codexPageIndex?.taskPage ?? 0;
       const nextTaskPage = detectWorkbuddyMorePage(lastUserText, curTaskPage, team.tasks.length);
       if (nextTaskPage !== null) {
@@ -1292,6 +1802,7 @@ async function handleSessionInitInner(
           selectedTeamId,
           selectedAgentId,
           stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
           modelId: reqCtx.modelId,
           protocol: reqCtx.protocol,
         }, nextPx);
@@ -1317,7 +1828,7 @@ async function handleSessionInitInner(
         bypassed: true,
       } as SessionInitState);
       console.log(`[session-init:cb] session=${compositeKey} task_select bypass`);
-      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
 
     if (typeof picked === "string") {
@@ -1334,7 +1845,9 @@ async function handleSessionInitInner(
     if (state.attemptCount >= config.maxRetries) {
       console.warn(`[session-init:cb] session=${compositeKey} task_select max retries, abandoning`);
       await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      const textBypass = tryBuildTextModeBypassResult(reqCtx);
+      if (textBypass) return textBypass;
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
     await store.set(compositeKey, state);
     const fd: FormData = {
@@ -1344,6 +1857,7 @@ async function handleSessionInitInner(
       selectedAgentId,
       retry: true,
       stream: reqCtx.stream,
+      questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
     };
@@ -1391,7 +1905,9 @@ async function handleSessionInitInner(
     if (state.attemptCount >= config.maxRetries) {
       console.warn(`[session-init:cb] session=${compositeKey} max retries, abandoning`);
       await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      const textBypass = tryBuildTextModeBypassResult(reqCtx);
+      if (textBypass) return textBypass;
+      return { intercepted: false, bypassed: true, justRegistered: true, resetFlow: state?.resetFlow ?? false };
     }
     await store.set(compositeKey, state);
     const fd: FormData = {
@@ -1400,6 +1916,7 @@ async function handleSessionInitInner(
       selectedTeamId: state.selectedTeamId,
       retry: true,
       stream: reqCtx.stream,
+      questionsAsArray: reqCtx.questionsAsArray,
       modelId: reqCtx.modelId,
       protocol: reqCtx.protocol,
     };
@@ -1412,4 +1929,171 @@ async function handleSessionInitInner(
   const task = bypassed ? null : (state.taskDetail ?? null);
   const out = applyArtifactsAndContext(messages, agent, task, sessionKey, config);
   return { intercepted: false, messages: out, sessionInfo: state.sessionInfo, bypassed };
+}
+
+// ── CP3 · Text-Mode Preprocess Helpers ─────────────────────────────────────
+//
+// 下面 4 个辅助函数只服务于文字模式预处理钩子（见上方 CP3 段落）。它们**不
+// 被任何既有代码路径调用**，是纯新增。放在文件末尾保持既有函数 diff 最小。
+
+/**
+ * 判断当前 status 是否是"文字模式预处理需要处理的 pending_* select stage"。
+ *
+ * 只处理 4 个：pending_asset_confirm / pending_team_select /
+ * pending_agent_select / pending_task_select。
+ *
+ * 不处理 pending_agent_task（CB 老路径 one-shot，workbuddy 走不到）也不处理
+ * pending_agent_select_ambiguous 之类的中间态（现有代码没有这些）。
+ */
+function isTextModePendingSelectStage(status: string | undefined): boolean {
+  return (
+    status === "pending_asset_confirm" ||
+    status === "pending_team_select" ||
+    status === "pending_agent_select" ||
+    status === "pending_task_select"
+  );
+}
+
+/**
+ * status → FormStage 映射（跟 workbuddy/form.ts::FormStage 对齐）。
+ * 只映射 4 个 pending 状态，其他一律返回 null。
+ */
+function statusToTextModeStage(
+  status: string | undefined,
+): "asset_confirm" | "team" | "agent_select" | "task_select" | null {
+  switch (status) {
+    case "pending_asset_confirm":
+      return "asset_confirm";
+    case "pending_team_select":
+      return "team";
+    case "pending_agent_select":
+      return "agent_select";
+    case "pending_task_select":
+      return "task_select";
+    default:
+      return null;
+  }
+}
+
+/**
+ * 读取当前 stage 对应的页码（用 state.codexPageIndex 的 teamPage/agentPage/
+ * taskPage —— 跟 workbuddy 卡片模式复用同一存储字段，保持行为一致；
+ * asset_confirm 只有 2 个固定选项无分页，恒 0）。
+ */
+function readCurrentPageForStage(
+  state: SessionInitState,
+  stage: "asset_confirm" | "team" | "agent_select" | "task_select",
+): number {
+  const pi = state.codexPageIndex;
+  switch (stage) {
+    case "team":
+      return pi?.teamPage ?? 0;
+    case "agent_select":
+      return pi?.agentPage ?? 0;
+    case "task_select":
+      return pi?.taskPage ?? 0;
+    case "asset_confirm":
+      return 0;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * 返回一个**新的** SessionInitState（不 mutate 入参），把对应 stage 的页码
+ * 更新为 newPage。asset_confirm 无分页 → 原样返回。
+ */
+function writeCurrentPageForStage(
+  state: SessionInitState,
+  stage: "asset_confirm" | "team" | "agent_select" | "task_select",
+  newPage: number,
+): SessionInitState {
+  if (stage === "asset_confirm") return state;
+  const oldPi = state.codexPageIndex ?? {};
+  const nextPi = { ...oldPi };
+  if (stage === "team") nextPi.teamPage = newPage;
+  else if (stage === "agent_select") nextPi.agentPage = newPage;
+  else if (stage === "task_select") nextPi.taskPage = newPage;
+  return { ...state, codexPageIndex: nextPi };
+}
+
+/**
+ * 为 paginate-* 短路重渲染构造 FormData（session/index.ts 层的 workbuddy 分流
+ * 会把它塞进 buildWorkBuddyTextFormResponse）。
+ *
+ * 关键：**不推进 stage、不消耗 attemptCount** —— stage 保持不变，retry=false。
+ */
+function buildFormDataForTextModeStage(
+  state: SessionInitState,
+  stage: "asset_confirm" | "team" | "agent_select" | "task_select",
+  reqCtx: SessionRequestContext,
+): FormData {
+  return {
+    teams: state.cachedTeams ?? [],
+    stage,
+    selectedTeamId: state.selectedTeamId,
+    selectedAgentId: state.selectedAgentId,
+    // codexPageIndex 已经被 writeCurrentPageForStage 更新，透传给下游渲染
+    teamPage: state.codexPageIndex?.teamPage,
+    agentPage: state.codexPageIndex?.agentPage,
+    taskPage: state.codexPageIndex?.taskPage,
+    retry: false,
+    stream: reqCtx.stream,
+    questionsAsArray: reqCtx.questionsAsArray,
+    modelId: reqCtx.modelId,
+    protocol: reqCtx.protocol,
+  };
+}
+
+/**
+ * **不 mutate 原数组**，返回一个新的 messages 数组：把最后一条 role="user"
+ * 消息的 content 替换成 newContent。
+ *
+ * 找不到 user 消息 → 原样返回（passthrough，不该发生但兜底）。
+ *
+ * 注意：这里我们**只处理 content 是 string 的情况**——文字模式下 WorkBuddy
+ * 客户端发的一定是纯文本 user 消息，不会有 multipart。极端情况（content 是
+ * array）也原样保留，让 CB extractor 自己去处理。
+ */
+function replaceLastUserMessageContentImmutable(
+  messages: MessageArr,
+  newContent: string,
+): MessageArr {
+  // 从后往前找最后一条 user 消息
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role === "user") {
+      // 只覆盖 string content 的情况，其它 content 类型原样保留
+      if (typeof m.content !== "string") return messages;
+      const copy = [...messages];
+      copy[i] = { ...m, content: newContent };
+      return copy;
+    }
+  }
+  return messages;
+}
+
+/**
+ * CP4 · 文字模式 max-retry bypass 兜底。
+ *
+ * 当且仅当 `reqCtx.capabilities?.askUserQuestion === false` 时返回一个带
+ * response 的 intercepted 结果——发送"已跳过团队资产关联"文本通知给客户端，
+ * 本次请求**不上游**。返回 undefined 表示走原 bypass 路径（transparent
+ * transfer 到上游 LLM），既有 CB / codex / dsh / opencode 行为不变。
+ *
+ * store 里的 state 由调用方在调用前设置为 `{status: "initialized",
+ * bypassed: true}`，下次请求 recovered 会走 handler.ts 的
+ * `recovered.bypassed` 分支自动跳过 injection —— 完全对齐既有 bypass 语义。
+ */
+function tryBuildTextModeBypassResult(
+  reqCtx: SessionRequestContext,
+): SessionInitResult | undefined {
+  if (reqCtx.capabilities?.askUserQuestion !== false) return undefined;
+  const response = buildBypassNoticeResponse(reqCtx.modelId, reqCtx.stream === true);
+  return {
+    intercepted: true,
+    response,
+    bypassed: true,
+    justRegistered: true,
+  };
 }

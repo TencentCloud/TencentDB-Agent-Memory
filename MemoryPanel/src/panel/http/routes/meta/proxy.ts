@@ -10,6 +10,12 @@ import { respondControlError, respondEnvelope } from '../../envelope.js';
 import type { MetaCallContext } from '../../../kernel/types.js';
 import { KNOWLEDGE_SERVICE_USERNAME } from '../../../startup/ensure-knowledge-llm-binding.js';
 import { DEFAULT_SKILLS } from './default-skills.js';
+import { extractListItems, isCallerSystemAdmin, resolveCallerUserId } from '../knowledge/common.js';
+import {
+  getAgentTemplate as readTemplateFile,
+  saveAgentTemplate as writeTemplateFile,
+  type AgentTemplateConfig,
+} from '../../../state/agent-template-store.js';
 
 /**
  * Hide the internal per-instance `knowledge-service` billing user from panel user
@@ -176,11 +182,30 @@ export function registerMetaProxyRoutes(api: Hono, deps: PanelDeps): void {
       return respondControlError(c, 409, duplicateMsg);
     }
 
+    // ── 默认 Agent 模板读写：Panel 直接读写本地文件（不转发内核）──
+    if (action === 'agent/set-default-template') {
+      if (!(await isCallerSystemAdmin(deps, ctx))) {
+        return respondControlError(c, 403, 'permission_denied');
+      }
+      const teamId = typeof body.team_id === 'string' ? body.team_id : '';
+      const template = body.template;
+      if (!teamId || !template || typeof template !== 'object') {
+        return respondControlError(c, 400, 'INVALID_PARAM');
+      }
+      writeTemplateFile(deps.config.agentTemplateDir, ctx.instanceId, teamId, template as AgentTemplateConfig);
+      return respondEnvelope(c, { code: 0, message: 'ok', request_id: ctx.reqId ?? '', data: { ok: true } });
+    }
+    if (action === 'agent/get-default-template') {
+      const teamId = typeof body.team_id === 'string' ? body.team_id : '';
+      const template = teamId ? readTemplateFile(deps.config.agentTemplateDir, ctx.instanceId, teamId) : null;
+      return respondEnvelope(c, { code: 0, message: 'ok', request_id: ctx.reqId ?? '', data: template ?? {} });
+    }
+
     const envelope = await deps.metaKernel.invoke(action, body, ctx);
 
-    // team-member/add 成功后，为默认 Agent 导入预置 Skill（best-effort，异步不阻塞响应）
+    // team-member/add 成功后，为默认 Agent 复制模板资产（best-effort，异步不阻塞响应）
     if (action === 'team-member/add' && envelope.code === 0) {
-      void importDefaultSkillsForNewMember(body, ctx, deps);
+      void cloneDefaultAgentForNewMember(body, ctx, deps);
     }
 
     if (action === 'user/list' && envelope.code === 0) {
@@ -192,6 +217,227 @@ export function registerMetaProxyRoutes(api: Hono, deps: PanelDeps): void {
     // apply_visibility_filter=true 过滤掉 canBindAsset=false 的项。
     return respondEnvelope(c, envelope);
   });
+}
+
+// ── team-member/add 成功后：为默认 Agent 复制模板资产（best-effort）──
+
+// 默认 Agent 预置字段（对齐内核 DEFAULT_AGENT_*，无模板时建 default-agent 用）
+const DEFAULT_AGENT_NAME = 'default-agent';
+const DEFAULT_AGENT_DESCRIPTION = '默认助手，可处理通用开发任务与日常协作。';
+const DEFAULT_AGENT_PROMPT = '';
+const DEFAULT_AGENT_METADATA_JSON = JSON.stringify({
+  ui: { role_prompt: '', rules_prompt: '' },
+});
+
+/**
+ * 有模板 → 建同名 Agent（owner=新用户）→ 复制模板资产（skill fork / code_graph·wiki allocate）；
+ * 无模板 → 建 default-agent-{username} → 导入预置 Skill。
+ */
+async function cloneDefaultAgentForNewMember(
+  body: Record<string, unknown>,
+  ctx: MetaCallContext,
+  deps: PanelDeps,
+): Promise<void> {
+  const userId = body.user_id as string | undefined;
+  const teamId = body.team_id as string | undefined;
+  if (!userId || !teamId) return;
+
+  // 1. 读本地模板文件
+  const template = readTemplateFile(deps.config.agentTemplateDir, ctx.instanceId, teamId);
+  const hasTemplate = !!template?.name;
+
+  // 2. 拿 username（拼 default-agent 名）
+  const userEnv = await deps.metaKernel.invoke('user/get', { user_id: userId }, ctx);
+  const user = userEnv.code === 0 ? (userEnv.data as { username?: string } | null) : null;
+  const defaultAgentName = `${DEFAULT_AGENT_NAME}-${user?.username ?? userId}`;
+
+  // 3. 决定目标 Agent：有模板同名 / 无模板 default-agent
+  const agentName = hasTemplate ? template!.name : defaultAgentName;
+
+  // 4. 幂等查重：已存在同名 active agent 则跳过建本体
+  const agentsEnv = await deps.metaKernel.invoke('agent/list', {
+    team_id: teamId,
+    owner_user_id: userId,
+    limit: 50,
+    offset: 0,
+  }, ctx);
+  const agents = agentsEnv.code === 0
+    ? ((agentsEnv.data as { items?: Array<{ agent_id: string; name: string }> })?.items ?? [])
+    : [];
+  let defaultAgent = agents.find((a) => a.name === agentName);
+
+  if (!defaultAgent) {
+    // 建本体（owner=新用户；有模板用模板字段，无模板用 default-agent 预置字段）
+    const createEnv = await deps.metaKernel.invoke('agent/create', {
+      team_id: teamId,
+      owner_user_id: userId,
+      name: agentName,
+      description: hasTemplate ? template!.description ?? null : DEFAULT_AGENT_DESCRIPTION,
+      prompt: hasTemplate ? template!.prompt ?? '' : DEFAULT_AGENT_PROMPT,
+      visibility: hasTemplate ? template!.visibility ?? 'team' : 'team',
+      metadata_json: hasTemplate ? template!.metadata_json ?? '{}' : DEFAULT_AGENT_METADATA_JSON,
+      status: 'active',
+    }, ctx);
+    if (createEnv.code !== 0) {
+      deps.logger.warn('create default agent failed', {
+        instanceId: ctx.instanceId, userId, teamId, agentName,
+        code: createEnv.code, message: createEnv.message,
+      });
+      return;
+    }
+    defaultAgent = {
+      agent_id: (createEnv.data as { agent_id: string }).agent_id,
+      name: agentName,
+    };
+  }
+
+  // 5. 有模板 → 复制资产；无模板 → 导入预置 skill
+  if (hasTemplate) {
+    await cloneTemplateAssets(deps, ctx, userId, teamId, template!, defaultAgent.agent_id);
+  } else {
+    await importDefaultSkillsForNewMember(body, ctx, deps);
+  }
+}
+
+/** 复制模板资产：skill fork 副本 + code_graph/wiki allocate 引用。 */
+async function cloneTemplateAssets(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+  userId: string,
+  teamId: string,
+  template: AgentTemplateConfig,
+  agentId: string,
+): Promise<void> {
+  // skills：fork 独立副本
+  for (const skillId of template.asset_ids?.skills ?? []) {
+    try {
+      await forkSkillToAgent(deps, ctx, userId, teamId, skillId, agentId);
+    } catch (err) {
+      deps.logger.warn('fork template skill failed', {
+        instanceId: ctx.instanceId, skillId, agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // code_graph / wiki：allocate 引用
+  const knowledgeIds: Array<{ assetId: string; assetType: string }> = [
+    ...(template.asset_ids?.code_graphs ?? []).map((assetId) => ({ assetId, assetType: 'code_graph' })),
+    ...(template.asset_ids?.wikis ?? []).map((assetId) => ({ assetId, assetType: 'llm_wiki' })),
+  ];
+  for (const k of knowledgeIds) {
+    try {
+      await allocateKnowledgeToAgent(deps, ctx, agentId, k.assetId, k.assetType);
+    } catch (err) {
+      deps.logger.warn('allocate template knowledge failed', {
+        instanceId: ctx.instanceId, assetId: k.assetId, agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+/** fork skill 到目标 agent（get → files/read → create），复用前端 forkToAgent 的语义。 */
+async function forkSkillToAgent(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+  userId: string,
+  teamId: string,
+  sourceSkillId: string,
+  targetAgentId: string,
+): Promise<void> {
+  const getEnv = await deps.skillKernel.invoke('get', {
+    user_id: userId,
+    team_id: teamId,
+    skill_id: sourceSkillId,
+    include_content: true,
+    include_manifest: true,
+  }, ctx);
+  if (getEnv.code !== 0) throw new Error(`skill get failed: ${getEnv.code}`);
+  const detail = getEnv.data as {
+    name: string;
+    content: string;
+    manifest?: Array<{ path: string; is_executable?: boolean }>;
+  };
+
+  const resources: Array<{
+    path: string;
+    content: string;
+    encoding: string;
+    mime_type?: string;
+    is_executable?: boolean;
+  }> = [];
+  for (const entry of detail.manifest ?? []) {
+    try {
+      const fEnv = await deps.skillKernel.invoke('files/read', {
+        user_id: userId,
+        team_id: teamId,
+        skill_id: sourceSkillId,
+        path: entry.path,
+      }, ctx);
+      if (fEnv.code === 0) {
+        const f = fEnv.data as { path: string; content: string; encoding: string; mime_type?: string };
+        resources.push({
+          path: f.path,
+          content: f.content,
+          encoding: f.encoding,
+          mime_type: f.mime_type,
+          is_executable: entry.is_executable,
+        });
+      }
+    } catch {
+      /* 单个资源读取失败则跳过 */
+    }
+  }
+
+  const createEnv = await deps.skillKernel.invoke('create', {
+    user_id: userId,
+    team_id: teamId,
+    agent_id: targetAgentId,
+    name: detail.name,
+    content: detail.content,
+    resources: resources.length ? resources : undefined,
+    metadata: { forked_from: { skill_id: sourceSkillId, name: detail.name } },
+  }, ctx);
+  if (createEnv.code !== 0 && createEnv.code !== 42201) {
+    throw new Error(`skill create failed: ${createEnv.code}`);
+  }
+}
+
+/** 把 knowledge 资产（code_graph / wiki）引用绑定到 agent（list → append → set）。 */
+async function allocateKnowledgeToAgent(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+  agentId: string,
+  assetId: string,
+  assetType: string,
+): Promise<void> {
+  const caller = await resolveCallerUserId(deps, ctx);
+  const listEnv = await deps.metaKernel.invoke('agent-fixed-asset/list', { agent_id: agentId }, ctx);
+  if (listEnv.code !== 0) return;
+  const bindings = extractListItems<{
+    asset_id: string;
+    asset_type: string;
+    injection_mode?: string;
+    priority?: number;
+    created_by?: string;
+  }>(listEnv);
+  if (bindings.some((b) => b.asset_id === assetId)) return; // 已绑定，幂等跳过
+
+  const newBindings = [
+    ...bindings.map((b) => ({
+      asset_id: b.asset_id,
+      asset_type: b.asset_type,
+      injection_mode: b.injection_mode ?? 'summary',
+      priority: b.priority ?? 50,
+      created_by: b.created_by,
+    })),
+    { asset_id: assetId, asset_type: assetType, injection_mode: 'tool', priority: 50, created_by: caller },
+  ];
+  const setEnv = await deps.metaKernel.invoke('agent-fixed-asset/set', { agent_id: agentId, bindings: newBindings }, ctx);
+  if (setEnv.code !== 0) {
+    throw new Error(`agent-fixed-asset/set failed: ${setEnv.code}`);
+  }
 }
 
 // ── team-member/add 成功后：为 default-agent 导入预置 Skill ──

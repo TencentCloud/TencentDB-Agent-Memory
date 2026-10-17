@@ -19,18 +19,21 @@
 git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/deploy/global-images
 
-# 2) 准备 .env（把 LLM 相关字段填成真值）
-cp .env.example .env
-$EDITOR .env
-#   MEMORY_LLM_BASE_URL   / MEMORY_LLM_API_KEY   / MEMORY_LLM_MODEL     ← memory + hub 内部用
-#   PROXY_UPSTREAM_URL    / PROXY_UPSTREAM_API_KEY / PROXY_UPSTREAM_MODEL ← proxy 转发到的上游
-
-# 3) 干跑校验（可选；会真做 LLM 通路预检，加 --skip-llm 跳过）
-./verify.sh
-
-# 4) 一键起
+# 2) 一键起（交互式）
 ./start-all.sh
 ```
+
+`start-all.sh` 是**交互式**的，运行时会自动完成：
+
+1. `.env` 不存在时，自动从 `.env.example` 复制一份
+2. 引导你填写两组 LLM（回车 = 保留默认值）：
+   - `memory 组`：`MEMORY_LLM_BASE_URL` / `MEMORY_LLM_API_KEY` / `MEMORY_LLM_MODEL`（memory + hub 内部用）
+   - `proxy 组`：`PROXY_UPSTREAM_URL` / `PROXY_UPSTREAM_API_KEY` / `PROXY_UPSTREAM_MODEL`（proxy 转发上游，可复用 memory 组）
+3. 填完**立即检查 LLM 通路**，不通会提示重新输入，直到通过或主动放弃
+4. 把填写值写回 `.env` 持久化
+5. 通过后拉起三件套
+
+> 干跑校验（可选，只检查不启动）：`./verify.sh`（`--skip-llm` 跳过 LLM 检查）。
 
 启动完成后脚本会自动：
 
@@ -56,10 +59,64 @@ $EDITOR .env
 
 ---
 
+## 可选能力：MongoDB 存储后端（试验特性，默认关闭）
+
+**做什么用。** 默认存储后端是 sqlite（零依赖，数据落容器卷）。MongoDB
+作为可选数据面，提供 L0/L1/profile/skill 文档存储与 mongot 原生 BM25
+检索；元数据默认跟随落入同一个 Mongo 实例。
+
+**默认关闭。** `./start-all.sh` 行为不变，现有 sqlite 部署无需改动。
+本能力仍为**试验特性**，不建议作为生产默认后端。
+
+### 开启方式
+
+```bash
+./start-all-mongo.sh
+```
+
+交互流程与 `./start-all.sh` 完全一致。脚本会将
+`MEMORY_CORE_STORE_MODE=mongodb` 写入 `.env`，此后再执行 `./start-all.sh`
+也会保持 MongoDB 后端，不会静默回退到 sqlite。
+
+未配置 `MONGODB_ENDPOINT` 时，脚本在本机拉起 `mongodb-atlas-local`
+容器（mongod + mongot 一体，**不是**云上的 MongoDB Atlas）。数据卷为
+`mongo-local-*`，`./stop-all.sh --purge` 会一并清理。
+若要对接外部 Mongo（云 Atlas 或自建、且带 mongot 的副本集），在 `.env`
+中设置 `MONGODB_ENDPOINT` 即可。
+
+### 关闭方式
+
+将 `.env` 中的 `MEMORY_CORE_STORE_MODE` 注释掉或改为 `sqlite`，再执行
+`./start-all.sh`。
+
+> ⚠️ **切换存储后端不会迁移已有数据。** sqlite 与 MongoDB 使用相互独立的
+> 数据目录 / 实例：sqlite 数据在 `MEMORY_CORE_VOLUME`，MongoDB 数据在
+> `mongo-local-*`（或你配置的外部实例）。切换后原数据仍留在原后端。
+> 当前版本需自行备份并手工迁移；后续版本将提供官方迁移工具。
+> 切换前请确认数据已备份。更多细节见
+> [`deploy/global-images/README.md`](./deploy/global-images/README.md)。
+
+---
+
 ## 部署完成后：把它跑起来
 
-服务起来只是第一步。要让 Claude Code 之类的 coding agent 用上团队记忆，
-你还需要在面板里**建组织结构**、然后**在 CC 会话里选它们**。
+服务起来只是第一步。要让 coding agent 用上团队记忆，
+你还需要在面板里**建组织结构**、然后**在 agent 会话里选它们**。
+
+---
+
+> **⚠️ 本节以 Claude Code 为示例。** 如果你使用的是其他 agent，请直接跳转到对应文档：
+>
+> | Agent | 文档 |
+> |-------|------|
+> | CodeBuddy | [`agents/codebuddy/`](./agents/codebuddy/) |
+> | WorkBuddy | [`agents/workbuddy/`](./agents/workbuddy/) |
+> | Codex | [`agents/codex/`](./agents/codex/) |
+> | DeepSeek Harness | [`agents/dsh/`](./agents/dsh/) |
+> | OpenCode | [`agents/opencode/`](./agents/opencode/) |
+> | Hermes / OpenClaw / 其他 | [`agents/README.md`](./agents/README.md) |
+
+---
 
 ### 第 1 步：登录管理面板
 
@@ -70,51 +127,88 @@ $EDITOR .env
 - admin 登录后可以直接使用 Wiki、CodeGraph、Skill 等资产管理功能，创建 Team / Agent / Task 等业务资产
 - 如果希望隔离运维与业务（推荐），可创建 `normal` 业务用户 → 复制新用户的 `user_key` → 退出 admin 换新用户登录
 
-> 换句话说：admin 是"运维口"用来管人，业务用户是"应用口"用来管资产。
-> 单机本地体验也推荐遵循这个分层，不要用 admin key 直接跑 CC。
-> 注：2.0.0-beta.1 中 admin 不能拥有业务资产；2.0.0 正式版起 admin 也可以直接操作资产。
+> **权限模型（先理解这一点，后面步骤才不会走错）**：
+> - **admin 是"运维口"**：负责**创建 Team、创建用户、把用户拉进 Team** 这类组织管理操作。
+>   面板上「新建团队」「新建用户」的入口**只有 admin 能看到**。
+> - **业务用户是"应用口"**：在**被 admin 加入的 Team 内**管理资产（Agent / Task / Skill /
+>   Wiki / CodeGraph / 记忆），并用自己的 `user_key` 去跑 Claude Code 等 coding agent。
+> - 单机本地体验也推荐遵循这个分层，不要用 admin key 直接跑 CC。
+> - 注：2.0.0-beta.1 中 admin 不能拥有业务资产；2.0.0 正式版起 admin 也可以直接操作资产。
 
 Knowledge Service Swagger（可选，看接口调试用）：
 <http://localhost:8424/docs>
 
-### 第 1.5 步：admin 建业务用户（可选，推荐隔离运维与业务）
+### 第 1.5 步：admin 建业务用户（推荐隔离运维与业务）
 
-面板左上角「用户管理」（或用 admin 直接调 API）新建一个用户：
+> **重要（当前版本的入口约定）**：面板上**没有独立的「用户管理」菜单**。创建业务用户
+> 的入口挂在**某个 Team 的成员管理**里，因此顺序是**先由 admin 建好一个 Team，再在这个
+> Team 里创建业务用户**。这一步只能由 admin 完成。
+
+用 admin 登录面板后：
+
+1. **先建一个 Team**：点击**左上角的 Team 切换器**（顶栏那个显示当前团队名的下拉）→
+   面板底部「**+ 新建团队**」→ 填团队名 → 创建。（此入口仅 admin 可见。）
+2. **进入该 Team 的成员管理**：左侧「**成员管理**」→ 右上角「**添加成员**」。
+3. 在弹窗里把「方式」切到「**新建用户并加入团队**」→ 填用户名（仅英文字母 / 数字 /
+   下划线）→ 点「**新建并添加**」。
+   - 需要指定初始 key 时，可打开「自定义 User_Key」开关；否则由内核自动生成。
+4. 创建成功后弹窗会**一次性**显示该用户的 `user_key`（`sk-mem-...`），
+   **务必当场复制保存**——面板之后不会再展示完整值。
+
+> 除面板操作外，上述流程也可通过 API 完成。请注意这需要**两个步骤**：`user/create` 仅
+> 创建用户账号，**不会**将其加入任何 Team；如需实现"新建用户并加入团队"，还须再调用
+> `team-member/add`。两个接口均需要 **admin / 团队 admin** 权限，使用普通业务用户的 key 调用将返回 `permission_denied`：
 
 ```bash
-# API 方式，更明确（面板里等价操作在「用户」→「新建」）
 ADMIN_KEY=$(cat ./.admin-key)
+
+# 第 1 步：创建用户（仅建账号，不加入任何团队）。记下返回的 data.user_id 与 data.default_user_key
 curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
   -d '{"username":"you"}' | jq
+
+# 第 2 步：把上一步的 user_id 加入某个已存在的 Team（TEAM_ID 换成目标团队，role 一般填 member）
+curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
+  -H "x-tdai-user-key: $ADMIN_KEY" \
+  -H "x-tdai-service-id: default" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id":"<TEAM_ID>","user_id":"<上一步返回的 user_id>","role":"member"}' | jq
 ```
 
-返回体里 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
+> ⚠️ 只跑第 1 步（`user/create`）**只会建出一个不属于任何团队的用户**——它无法在面板里
+> 被自己管理，也进不了会话表单。务必接着跑第 2 步 `team-member/add` 才等于面板的
+> 「新建用户并加入团队」。`team-member/add` 要求 `team_id` 对应的 Team 已存在，且不能把
+> 自己 add 进去。
+
+第 1 步返回体里的 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
 **保存好**（面板无处再看到全值，只有创建时返回一次）。
 
-之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 用户，
-可以在自己名下建 Team / Agent / Task 了。当然，admin 也可以直接操作，这里只是推荐隔离。
+之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 业务用户，
+可以在 **admin 已经把你加入的 Team 内**管理 Agent / Task / Skill / Wiki / 记忆等资产了。
+
+> **面板上建 Team 只对 admin 开放。** 业务用户登录后**看不到「新建团队」入口**，这是
+> 面板的权限设计（不是 bug）。业务用户需要新 Team 时有两条路：① 让 admin 在面板里建好
+> 并把你加入；② 用自己的 key 调 `team/create` API 自助建（把 `owner_user_id` 填成自己，
+> 建成后自动成为该 Team admin）—— 详见下一步。
 
 ### 第 2 步：在面板里建 Team / Agent / Task
 
 Coding agent 用记忆必须落到具体 `team / agent / task` 三元组上：
 
-1. **Team**（团队）：面板左侧「团队」→ 新建
+1. **Team**（团队）：顶栏 TeamSwitcher → 新建（入口名称以当前 Panel 为准，旧版为左侧「团队」）
    - 一个 Team 是一组资产的归属容器（memory、skill、knowledge 都归 Team）
-2. **Agent**（智能体）：进入 Team → 「Agent」→ 新建
+2. **Agent**（智能体）：进入 Team → 「Agents 管理」→ 新建
    - 给它填一段清晰的 `description` + `system prompt`（就是这个 agent 的角色说明）
    - 例：`bug-fix 工程师`、`前端评审 agent`、`SQL 优化师`
-3. **Task**（任务，可选）：Team → 「任务」→ 新建
+3. **Task**（任务，可选）：Team → 「任务看板」→ 新建
    - Task 是**这一次工作的抓手**，比如「修复登录页 XSS」「上线 v1.4 灰度」
-   - 记忆会关联到 Task；不建 Task 也能用，但 L2/L3 会缺 Task 维度
+   - 记忆会关联到 Task；不建 Task 也能用，但交互式 session-init 在 Team 为 0 Task 且未配置 `sessionInit.defaultTaskId` 时会进入 bypass，需要「本次不关联任务」入口时按后文配置 `defaultTaskId`
 
-先建**至少 1 个 Team + 1 个 Agent**，可选建 Task。
+先准备好**至少 1 个 Team**（admin 面板建、或业务用户用上面的 API 自助建），Team 内建**至少 1 个 Agent**，可选建 Task。
 
-### 第 3 步：用 Claude Code 走 Proxy
-
-跑 CC 时用 admin 或业务用户的 `user_key`（2.0.0 正式版起 admin 也可拥有资产）：
+### 第 3 步：把 Claude Code 指向 Proxy
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8096/claude-code/default
@@ -130,9 +224,6 @@ claude --model <PROXY_UPSTREAM_MODEL 里配的上游模型>
   只有这个 user own 的 team/agent/task 才会出现在下一步表单里
 - `--model` 用你在 `.env` 里 `PROXY_UPSTREAM_MODEL` 配的那个上游模型名
   （proxy 会把请求转发到 `PROXY_UPSTREAM_URL`）
-
-> 💡 **也可以用 CodeBuddy 走 Proxy**——配置方式见下方
-> [通过 Proxy 使用 CodeBuddy](#通过-proxy-使用-codebuddy) 章节。
 
 ### 第 4 步：CC 首次会话，选 Team → Agent → Task
 
@@ -160,7 +251,7 @@ claude --model <PROXY_UPSTREAM_MODEL 里配的上游模型>
 - proxy 记住这次会话的 team/agent/task 绑定
 - **后续每一轮请求，proxy 会自动把这个 agent 的 L2/L3 记忆、skill、
   knowledge 注入到 system prompt**
-- L0（原始对话）会自动落到 memory-core 的 SQLite 里
+- L0（原始对话）默认落到 memory-core 的 sqlite；若启用了 MongoDB 试验后端，则落到 MongoDB
 - 满足触发条件时后台跑 L1（抽 memory）→ L2（scene）→ L3（persona）
 
 只有**新 CC 会话**才会弹表单；同一次 `claude` 进程内的多轮不会再问。
@@ -191,6 +282,12 @@ curl -s http://localhost:8420/health | jq .services.pipelineWorker
 
 **Q: 表单选择项里空空的，或者只有别人的 team？**
 请确认当前使用的账号已在面板中创建过 Team 和 Agent。如果用的是 admin 账号，确保已创建了相关资产；如果用的是业务用户账号，检查是否已在对应 team 下建过 Agent。
+
+**Q: 用业务用户登录后，找不到「新建团队」按钮？**
+这是面板的权限设计，不是 bug：**面板上建 Team 只对 admin 开放**。你有两种办法：
+① 让 admin 登录 → 左上角 Team 切换器 →「+ 新建团队」建好，再到该 Team 的「成员管理」把你加入；
+② 自己用 `team/create` API 建（`owner_user_id` 填自己的 user_id，建成后你就是该 Team 的 admin，
+见第 2 步的说明）。两种方式建好后，重新登录就能在会话表单里看到这个 Team。
 
 
 **Q: 面板显示"Panel API 8125 未启动"？**
@@ -235,361 +332,28 @@ docker run -d --name tdai-memory-hub \
 
 打开 [http://localhost:8125](http://localhost:8125)。
 
-## 通过 Proxy 使用 Claude Code
+## 通过 Proxy 接入各类 Agent
 
-`start-all.sh` 已经把 admin user_key 写在 `deploy/global-images/.admin-key`；
-让 Claude Code 直接走 proxy：
+Proxy 目前支持 8 类 AI Agent 客户端。每个 agent 的**完整接入配置、适配细节、常见问题**
+已拆分到独立文档，按需查阅：
 
-```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8096/claude-code/default
-export ANTHROPIC_AUTH_TOKEN="$(cat ./.admin-key)"
-claude --model <PROXY_UPSTREAM_MODEL 里配的上游模型>
-```
+| Agent | 配置方式 | 详细文档 |
+|-------|----------|----------|
+| **Claude Code** | 环境变量 或 `~/.claude/settings.json` | [`agents/claude-code/`](./agents/claude-code/) |
+| **CodeBuddy** | `~/.codebuddy/models.json` | [`agents/codebuddy/`](./agents/codebuddy/) |
+| **WorkBuddy** | `~/.workbuddy/models.json` | [`agents/workbuddy/`](./agents/workbuddy/) |
+| **Codex** | `~/.codex/config.toml`（⚠️ 首次需切 Plan 模式） | [`agents/codex/`](./agents/codex/) |
+| **DeepSeek Harness (dsh)** | `~/.dsh/settings.yaml` + `.credentials.yaml` | [`agents/dsh/`](./agents/dsh/) |
+| **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
+| **Hermes** | `~/.hermes/config.yaml` + Header 预选 | [`agents/hermes/`](./agents/hermes/) |
+| **OpenClaw** | `~/.openclaw/openclaw.json` + Header 预选 | [`agents/openclaw/`](./agents/openclaw/) |
+| **其他平台** | Header 预选（通用） | [`agents/README.md`](./agents/README.md) |
 
 Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/agent/task
 表单）→ `injection`（把 L2/L3 记忆、skill、knowledge 注入 system prompt）→
 转发到上游 LLM。
 
 关掉完整流水线（只做透传）：`PROXY_FULL_STACK=0 ./start-proxy.sh`。
-
-## 通过 Proxy 使用 CodeBuddy
-
-[CodeBuddy](https://www.codebuddy.ai/) 是腾讯推出的 AI 编程助手 IDE 插件。通过自定义模型配置，你可以把 CodeBuddy 的对话请求路由到 Proxy，在 IDE 内获得与 Claude Code 相同的记忆能力。
-
-### ⚠️ 版本限制
-
-> CodeBuddy **4.10.2、4.10.3、4.10.4** 存在已知 Bug：这些版本不会在请求中
-> 携带 `sessionId`，导致 Proxy 无法完成 Session 初始化。
->
-> **请使用 CodeBuddy ≥ 4.10.5 或 ≤ 4.10.1。**
-
-### 配置
-
-在开发机的 `~/.codebuddy/models.json` 文件中写入以下内容（注意替换 API Key）：
-
-```json
-{
-  "models": [
-    {
-      "id": "claude-sonnet-4-20250514",
-      "name": "proxy-memory-agent",
-      "vendor": "claude",
-      "apiKey": "<业务用户的 sk-mem-... user_key>",
-      "maxInputTokens": 200000,
-      "url": "http://127.0.0.1:8096/codebuddy/default",
-      "supportsToolCall": true,
-      "supportsImages": true
-    }
-  ]
-}
-```
-
-- `id`：Proxy 上游 LLM 支持的模型 ID（必须与 Proxy 配置的 `PROXY_UPSTREAM_MODEL`
-  或 upstream 模型列表中的某个模型匹配，如 `claude-sonnet-4-20250514`）
-- `name`：在 CodeBuddy 对话框中显示的名称，可自定义（如 `proxy-memory-agent`）
-- `vendor`：模型供应商标识，仅用于 UI 展示（如 `claude`、`openai`），不影响实际请求
-- `apiKey`：使用**业务用户**的 `user_key`（与 Claude Code 的
-  `ANTHROPIC_AUTH_TOKEN` 相同；不建议直接使用 admin key）
-- `url`：Proxy 地址 + `/codebuddy/default` 路径（端口与 Claude Code 一致，
-  默认 `8096`）；`default` 是 memory 实例 ID
-
-配置完成后，在 CodeBuddy 对话框中选择刚才配置的模型名称即可开始对话。
-Session init 流程与 Claude Code 一致（选 Team → Agent → Task）。
-
-## 通过 Proxy 使用 WorkBuddy
-
-[WorkBuddy](https://www.codebuddy.cn/work/) 是腾讯推出的桌面 AI 智能体（Electron 桌面客户端）。与 CodeBuddy 一样，通过自定义模型配置，你可以把 WorkBuddy 的对话请求路由到 Proxy，在桌面端获得与 Claude Code 相同的记忆能力。
-
-### 配置
-
-在开发机的 `~/.workbuddy/models.json` 文件中写入以下内容（注意替换 API Key）：
-
-```json
-[
-  {
-    "id": "claude-opus-4.7-1m",
-    "name": "claude-opus-4.7-1m",
-    "vendor": "Custom",
-    "url": "http://127.0.0.1:8096/workbuddy/default",
-    "apiKey": "<业务用户的 sk-mem-... user_key>",
-    "supportsToolCall": true,
-    "supportsImages": false,
-    "supportsReasoning": false,
-    "useCustomProtocol": false
-  }
-]
-```
-
-- `id`：Proxy 上游 LLM 支持的模型 ID（必须与 Proxy 配置的 `PROXY_UPSTREAM_MODEL`
-  或 upstream 模型列表中的某个模型匹配，如 `claude-opus-4.7-1m`）
-- `name`：在 WorkBuddy「自定义模型」列表中显示的名称，可自定义
-- `vendor`：模型供应商标识，仅用于 UI 展示（如 `Custom`、`claude`），不影响实际请求
-- `url`：Proxy 地址 + `/workbuddy/default` 路径（端口与 Claude Code 一致，
-  默认 `8096`）；`default` 是 memory 实例 ID
-- `apiKey`：使用**业务用户**的 `user_key`（与 Claude Code 的
-  `ANTHROPIC_AUTH_TOKEN` 相同；不建议直接使用 admin key）
-
-配置完成后，在 WorkBuddy 对话框底部的模型选择器里，从「自定义模型」中选择刚才配置的
-模型名称即可开始对话。Session init 流程与 Claude Code / CodeBuddy 一致
-（选 Team → Agent → Task），session ID 由客户端自动管理，无需手动指定。
-
-## 通过 Proxy 使用 Codex
-
-我们支持的是 [OpenAI 官方 Codex CLI 客户端](https://github.com/openai/codex)
-（走 **Responses API** 协议）。通过在 `~/.codex/config.toml` 里配置一个自定义
-`model_provider`，可以把 Codex 的请求路由到 Proxy，在 TUI 里获得与 Claude Code
-/ CodeBuddy 相同的记忆能力。
-
-> ⚠️ **首次对话前必须切到 Plan 模式**。Codex 默认的"Agent"模式在收到 proxy
-> 返回的 session-init 表单（function_call）时会自动执行工具、跳过用户选择，
-> 导致 Team / Agent / Task 永远选不到、session 无法完成初始化。**首次对话
-> 之前用 `Shift+Tab` 切到 Plan 模式**，选完 Team → Agent → Task 之后再切回
-> Agent 模式即可正常使用。
-
-### 配置
-
-编辑 `~/.codex/config.toml`（Linux / macOS 路径相同），写入以下内容（注意
-替换 API Key 和模型名）：
-
-```toml
-# ~/.codex/config.toml
-model_provider = "team-proxy"
-model = "claude-opus-4.7"
-model_reasoning_effort = "high"
-disable_response_storage = true
-
-[model_providers.team-proxy]
-name       = "TDAI team-proxy"
-wire_api   = "responses"
-base_url   = "http://127.0.0.1:8096/codex/default"
-experimental_bearer_token = "<业务用户的 sk-mem-... user_key>"
-
-request_max_retries    = 2
-stream_max_retries     = 3
-stream_idle_timeout_ms = 120000
-```
-
-- `model_provider`：必须与下方 `[model_providers.<name>]` 段名一致
-- `model`：Proxy 上游 LLM 支持的模型 ID(必须与 `PROXY_UPSTREAM_MODEL` 或 upstream
-  模型列表中的某个模型匹配，如 `claude-opus-4.7`、`gpt-5.5`)
-- `wire_api = "responses"`：**必填**，Codex 使用 OpenAI Responses API 协议
-- `base_url`：Proxy 地址 + `/codex/<spaceId>` 路径（端口与 Claude Code 一致，
-  默认 `8096`）；`default` 是 memory 实例 ID
-- `experimental_bearer_token`：使用**业务用户**的 `user_key`（与 Claude Code 的
-  `ANTHROPIC_AUTH_TOKEN` 相同；不建议直接使用 admin key）
-- `disable_response_storage = true`：关闭 Codex 本地缓存 response，让所有请求
-  都真实经过 Proxy（否则第 2 轮起可能命中本地缓存跳过注入）
-- `request_max_retries` / `stream_max_retries` / `stream_idle_timeout_ms`：
-  推荐值；session-init 表单等待用户操作时避免 stream 空闲被上游断开
-
-配好之后启动 `codex`，**先切到 Plan 模式**再发第一条消息，按提示选 Team →
-Agent → Task；选完再切回 Agent 模式正常对话。`mem:help` / `mem:sync` /
-`mem:create-skill` 等 mem 命令在 Codex 内同样可用。
-
-### 与 Claude Code / CodeBuddy 的差异
-
-| 维度 | Claude Code | CodeBuddy | Codex |
-|------|-------------|-----------|-------|
-| 协议 | Anthropic Messages | OpenAI Chat Completions | **OpenAI Responses** |
-| 配置文件 | 环境变量 | `~/.codebuddy/models.json` | `~/.codex/config.toml` |
-| URL 前缀 | `/claude-code/<spaceId>` | `/codebuddy/<spaceId>` | `/codex/<spaceId>` |
-| Key 传递 | env `ANTHROPIC_AUTH_TOKEN` | JSON `apiKey` | TOML `experimental_bearer_token` |
-| Session init | 自动弹表单 | 自动弹表单 | **首次需手动切 Plan 模式** |
-
-## 通过 Proxy 使用 DeepSeek Harness (dsh)
-
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（npm 名
-`@deepseek-ai/dsh`）是 DeepSeek 官方的 agent harness —— 基于 Cordis 插件架构
-的 coding agent 宿主，自带 Web UI(默认 `127.0.0.1:3080`)。它走**标准 OpenAI
-Chat Completions** 协议,通过 `llm-deepseek` adapter 连 `api.deepseek.com`(或
-任何 OpenAI 兼容端点)。把 adapter 指到 Proxy 后,dsh 会话就能拿到与 Claude
-Code / CodeBuddy 相同的团队记忆 / skill / knowledge 注入。
-
-> **这份是 Web UI 接入方式**,不是 CLI headless。每个浏览器里新开的对话都会
-> 在首帧走完 Team → Agent → Task 4 步选择器。选择器以 dsh 原生的
-> `ask_user_question` tool call 形式返回,在聊天面板里直接渲染成可点击按钮。
->
-> CLI headless(`dsh --profile headless "task"`)也支持 —— Proxy 会自动检测
-> tools 列表里没有 `ask_user_question`,自动 bypass session-init,请求直接透传,
-> 不做任何团队资产注入。
-
-### 配置
-
-编辑 `~/.dsh/settings.yaml`:
-
-```yaml
-llm-deepseek:
-  # dsh 会从这个环境变量名里读 proxy user_key
-  apiKeyEnv: PROXY_USER_KEY
-
-  # ⚠️ 尾巴**不要**加 /v1 —— dsh 客户端硬编码 ${baseURL}/chat/completions,
-  # 所以 baseURL 末段必须是 <spaceId>,不能再有别的段
-  baseURL: http://127.0.0.1:8096/dsh/default
-
-  # thinking 模式;dsh 会带 `thinking:{type:"enabled"}` + `reasoning_effort:"high"`
-  reasoningEffort: high
-```
-
-编辑 `~/.dsh/.credentials.yaml`:
-
-```yaml
-PROXY_USER_KEY: <业务用户的 sk-mem-... user_key>
-```
-
-**权限硬要求** —— dsh boot 时会检查,权限不对直接拒启动:
-
-```bash
-chmod 700 ~/.dsh
-chmod 600 ~/.dsh/.credentials.yaml
-```
-
-- `baseURL`:Proxy 地址 + `/dsh/<spaceId>` 路径(端口与 Claude Code 一致,
-  默认 `8096`);`default` 是 memory 实例 ID。**尾巴带 `/v1` 是错的** ——
-  dsh 客户端 endpoint 常量是 `${baseURL}/chat/completions`(不带 `/v1`),
-  Proxy 侧路由 `/dsh/{spaceId}/chat/completions` 与之对应
-- `apiKeyEnv`:dsh 从这个环境变量名里读 key —— 值本身在 `.credentials.yaml`
-- `PROXY_USER_KEY`:使用**业务用户**的 `user_key`(与 Claude Code 的
-  `ANTHROPIC_AUTH_TOKEN` 相同)
-
-### 首次会话 —— 选 Team → Agent → Task
-
-启动 Web UI:
-
-```bash
-cd /path/to/deepseek-harness
-pnpm dsh web --port 3080
-# 或: node apps/cli/lib/bin.js web --port 3080
-```
-
-浏览器打开 <http://127.0.0.1:3080>,发一句话(比如 "hi"),Proxy 会返回 4 步
-按钮式表单:
-
-1. "是否关联团队资产?" —— 选 **是** 关联注入,选 **否** 直接透传
-2. Team 选择器(只有一个 team 时自动跳过)
-3. Agent 选择器
-4. Task 选择器(首项是虚拟 **"本次不关联任务"**)
-
-选完后 Agent 会做一次自我介绍,之后每轮对话都会自动注入 `<session_context>` +
-`<available_skills>` + `<tdai_profile_memory>` 等块。
-
-`mem:help` / `mem:sync` / `mem:create-skill` 等 mem 命令在 session init 完成
-后同样可用。
-
-### 与 Claude Code / CodeBuddy / Codex 的差异
-
-| 维度 | Claude Code | CodeBuddy | Codex | **dsh** |
-|---|---|---|---|---|
-| 协议 | Anthropic Messages | OpenAI Chat | OpenAI Responses | **OpenAI Chat** |
-| 配置文件 | 环境变量 | `~/.codebuddy/models.json` | `~/.codex/config.toml` | `~/.dsh/settings.yaml` + `.credentials.yaml` |
-| URL 前缀 | `/claude-code/<spaceId>` | `/codebuddy/<spaceId>` | `/codex/<spaceId>` | **`/dsh/<spaceId>`**(不带 `/v1`) |
-| Key 传递 | env `ANTHROPIC_AUTH_TOKEN` | JSON `apiKey` | TOML `experimental_bearer_token` | `.credentials.yaml` 环境变量 |
-| Session init | 自动弹表单 | 自动弹表单 | 首次需切 Plan 模式 | **自动弹表单** |
-| UI 表单 tool | `AskUserQuestion` | `ask_followup_question` | fake `function_call` | **`ask_user_question`**(dsh 原生) |
-| Wire 特殊 | cache_control markers | 无 | encrypted rs_id | **tool-call 轮 `reasoning_content` 必带**(Proxy 自动处理) |
-
-## 通过 Proxy 使用 Hermes
-
-[Hermes](https://hermes-agent.nousresearch.com/docs/) 是一个开源的 AI Agent 框架。通过配置 extra headers，可以让 Hermes 的对话请求经过 Proxy，获得团队记忆能力。
-
-### 配置
-
-编辑 `~/.hermes/config.yaml`：
-
-```yaml
-model:
-  default: gpt-5.5
-  provider: custom
-  base_url: http://<proxy-host>:<port>/hermes/<spaceId>
-  api_key: <从面板获取的 API Key>
-  extra_headers:
-    x-team-id: <从面板获取的 team_id>
-    x-agent-id: <从面板获取的 agent_id>
-    x-task-id: <从面板获取的 task_id>
-    x-conversation-id: <自定义的会话标识>
-```
-
-- `base_url`：Proxy 地址 + `/hermes/<spaceId>` 路径。`<spaceId>` 是 memory 实例 ID（从面板获取，通常为 `default`）
-- `api_key`：业务用户的 `user_key`（从管理面板"API Key"页获取）
-- `x-team-id` / `x-agent-id`：从管理面板对应页面获取，与 CodeBuddy / Claude Code 的获取方式相同
-- `x-task-id`：从管理面板"任务管理"页获取。**当前版本必填**——缺少此字段会导致 session 注册失败，记忆功能不生效（见下方[已知限制](#关于-x-task-id-的已知限制)）
-- `x-conversation-id`：用户自定义的会话标识（见下方[已知限制](#关于-x-conversation-id-的已知限制)）
-
-## 通过 Proxy 使用 OpenClaw
-
-[OpenClaw](https://github.com/openclaw/openclaw) 是一个开源的 AI 编码 Agent。通过自定义 provider 配置，可以让 OpenClaw 的请求经过 Proxy。
-
-### 配置
-
-编辑 `~/.openclaw/openclaw.json`，在 `models.providers` 中添加：
-
-```jsonc
-{
-  "models": {
-    "mode": "merge",
-    "providers": {
-      "memory-proxy": {
-        "baseUrl": "http://<proxy-host>:<port>/openclaw/<spaceId>",
-        "apiKey": "<从面板获取的 API Key>",
-        "api": "openai-completions",
-        "headers": {
-          "x-team-id": "<从面板获取的 team_id>",
-          "x-agent-id": "<从面板获取的 agent_id>",
-          "x-task-id": "<从面板获取的 task_id>",
-          "x-conversation-id": "<自定义的会话标识>"
-        },
-        "request": {
-          "allowPrivateNetwork": true
-        },
-        "models": [
-          {
-            "id": "gpt-5.5",
-            "name": "GPT-5.5",
-            "reasoning": false,
-            "input": ["text"],
-            "contextWindow": 128000,
-            "maxTokens": 32000,
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
-          }
-        ]
-      }
-    }
-  }
-}
-```
-
-- `baseUrl`：Proxy 地址 + `/openclaw/<spaceId>` 路径
-- `apiKey`：业务用户的 `user_key`
-- `headers`：必须包含 `x-team-id`、`x-agent-id`、`x-task-id`、`x-conversation-id`。其中 `x-task-id` 当前版本为必填（见下方[已知限制](#关于-x-task-id-的已知限制)）
-- `models[].id`：必须与 Proxy 上游配置的模型 ID 匹配
-
-## 其他平台接入（通用）
-
-除 ClaudeCode / CodeBuddy / WorkBuddy / Codex / Hermes / OpenClaw 外，任何兼容 OpenAI API 的平台或自行开发的 Agent 均可接入 Proxy，获得团队记忆能力。
-
-### 接入方式
-
-将平台的 API base URL 指向 Proxy：
-
-```text
-http://<proxy-host>:<port>/<agent-source>/<spaceId>
-```
-
-- `<agent-source>`：平台标识，必须从 Proxy 支持的以下值中选用：`claude-code`、`codebuddy`、`workbuddy`、`codex`、`hermes`、`openclaw`。如果使用的是其他平台，可伪装成其中某一个接入（如使用 `codebuddy` 作为标识）
-- `<spaceId>`：memory 实例 ID（本地部署固定为 `default`）
-
-请求 Path 自动拼接 `/v1/chat/completions`（OpenAI 协议）或 `/v1/messages`（Anthropic 协议）。
-
-### 必须携带的 Header
-
-| Header | 说明 |
-|--------|------|
-| `Authorization: Bearer <user_key>` | 业务用户的 API Key（从面板"API Key"页获取） |
-| `x-team-id` | 团队 ID |
-| `x-agent-id` | Agent ID |
-| `x-task-id` | 任务 ID（当前版本必填，见下方[已知限制](#关于-x-task-id-的已知限制)） |
-| `x-conversation-id` | 会话标识，由客户端自行生成和管理 |
-
-以上 header 缺一不可——Proxy 会通过 header 直接完成 session 注册，跳过交互式表单。无法提供 headers 的平台将触发 session bypass，记忆注入和对话回流均不生效。
 
 ## 可选能力：`sessionInit.defaultTaskId`（"本次不关联任务"选项）
 
@@ -678,6 +442,10 @@ http://<proxy-host>:<port>/codebuddy/<spaceId>/analyse/v1/chat/completions
 # Codex(OpenAI Responses)
 http://<proxy-host>:<port>/codex/<spaceId>/analyse/v1/responses
 http://<proxy-host>:<port>/codex/<spaceId>/analyse/responses   # base_url 不带 /v1
+
+# OpenCode(OpenAI Chat Completions,协议同 CodeBuddy)
+http://<proxy-host>:<port>/opencode/<spaceId>/analyse/v1/chat/completions
+http://<proxy-host>:<port>/opencode/<spaceId>/analyse/chat/completions   # base_url 不带 /v1
 ```
 
 不带 `/analyse` 的普通请求一字节不改——injector 不 emit 任何块,上游 KV
@@ -685,9 +453,10 @@ cache 的前缀完全和平常一致。
 
 ### 开启方式(双闸门)
 
-**闸门 1 —— 配置开关。** 在 proxy `config.yaml` 的 `injection` 段追加
-`assetReflection`(`start-proxy.sh` 生成的模板里已经有 `injection` 段,
-只要在下面加一行即可):
+**闸门 1 —— 配置开关。** `injection.assetReflection.markerOptIn` **默认已开
+(true)**——`start-proxy.sh` 生成的模板 / `config.example.yaml` 都写着 true,
+直接把这个开关删掉也会走默认 true。想显式关掉时才在 proxy `config.yaml` 的
+`injection` 段追加:
 
 ```yaml
 injection:
@@ -697,12 +466,12 @@ injection:
     - knowledge
     - tdai-memory
   assetReflection:
-    markerOptIn: true       # 默认 false
+    markerOptIn: false      # 默认 true;这里显式关掉才不允许 /analyse marker
 ```
 
-`markerOptIn` 为 `false`(默认)时,任何带 `/analyse/` 段的请求都直接
-`404 analyse_marker_disabled` 拒绝——这是刻意的,防止客户端"以为"打开了
-marker 实际却 fall through 到默认透传。
+`markerOptIn` 显式为 `false` 时,任何带 `/analyse/` 段的请求都直接
+`404 analyse_marker_disabled` 拒绝——用来给"确定不需要资产反思能力"的部署
+兜底,避免客户端"以为"打开了 marker 实际却 fall through 到默认透传。
 
 **闸门 2 —— URL 段。** 即便 `markerOptIn: true`,也只有 URL 真的带
 `/analyse/` 段时,反思块才会被追加。普通的
@@ -745,6 +514,164 @@ pipeline 时才有意义。
 > 3. **部分客户端的 tool call 后续请求可能不携带 extra headers**，导致那些轮次跳过记忆注入和对话回流。
 >
 > 我们将在下一个版本中优化 conversation ID 的使用体验。
+
+## 可选能力：数据分析与可观测性（默认关闭）
+
+**做什么用。** Panel 里的「数据分析」页会把这套系统的运行情况汇成看板：
+Skill / 记忆 / Knowledge 各类云端资产工具被调用了多少次、命中率如何、
+LLM 侧的 token 与用量分布、按团队 / Agent 的对比等等，用来评估记忆资产
+到底沉淀出了什么效果、哪些接入姿势有问题。
+
+**默认关闭。** 这套能力**不会自动跑起来** —— 它由三个服务分工完成，
+任何一个没配 ClickHouse 都会让对应数据缺失：
+
+| 角色 | 服务 | 干什么 |
+|---|---|---|
+| 采集（Memory / Skill 工具调用） | **Proxy** | 每次调用云端 memory / skill 工具时把埋点写到 ClickHouse `usage_logs` / `tool_call_logs` |
+| 采集（Wiki / Code-Graph 工具调用） | **Knowledge** | 每次调用 wiki / code-graph 工具时写到 ClickHouse `tool_call_logs` |
+| 查询接口 | **Core** | 提供 `/v3/analytics/*` 只读接口，从 Proxy 写入的 ClickHouse 库里聚合出各种维度的图表数据 |
+| 查询接口 | **Knowledge** | 提供 `/v3/analytics/*` 只读接口,读自己写入的 `tool_call_logs` |
+| 展示 | **Panel** | 启动时探测 Core / Knowledge 的 `/v3/analytics/config`，任一端返回 `configured: true` 才显示对应图表；否则显示"未启用" |
+
+也就是说：**Proxy + Knowledge 写数据，Core + Knowledge 提供查询接口，Panel 展示**。
+你可以按需只开一部分（比如只想看 Skill / 记忆的调用统计而不管 Wiki，
+那 Knowledge 侧的埋点可以先不开）。
+
+> ⚠️ 三个服务的 ClickHouse 可以是同一实例，也可以拆开；Core 的
+> `analytics.clickhouse.endpoint` 必须指向 **Proxy 写入的那个 CH**，
+> 否则 Core 查不到 Proxy 的埋点数据。
+
+### 第 1 步：准备一个 ClickHouse 实例
+
+自己起一个 ClickHouse（或者复用现有的），确保 HTTP 端口（默认 8123）
+可达。给 Proxy / Knowledge 用到的库最简单可以都用同一个（比如
+`context_proxy`）；也可以拆库。
+
+```bash
+# 举例：一条命令拉一个本地 ClickHouse
+docker run -d --name tdai-clickhouse \
+  -p 8123:8123 -p 9000:9000 \
+  -e CLICKHOUSE_DB=context_proxy \
+  -e CLICKHOUSE_USER=default \
+  -e CLICKHOUSE_PASSWORD=<your-ch-password> \
+  clickhouse/clickhouse-server:latest
+```
+
+表结构由 Proxy / Knowledge 首次写入时自动 `CREATE TABLE IF NOT EXISTS`
+建好，不用手工建表。
+
+### 第 2 步：Proxy 开启 ClickHouse 上报
+
+编辑 proxy 的 `config.yaml`（`start-proxy.sh` 生成的模板里已经有
+`clickhouse:` 段，默认 `enabled: false`），把它改成：
+
+```yaml
+clickhouse:
+  enabled: true
+  url: "http://<ch-host>:8123"       # ClickHouse HTTP endpoint
+  database: context_proxy            # 库名，跟下面 Core 的 database 保持一致
+  table: usage_logs                  # 用量表名
+  rawTable: usage_raw                # 原始用量追溯表
+  user: default
+  password: "<your-ch-password>"
+  flushIntervalMs: 5000
+  flushThreshold: 50
+  ttlDays: 30
+```
+
+Proxy 会把 memory / skill 相关工具调用与 LLM token 用量按 turn 写进
+`usage_logs` 与 `tool_call_logs` 两张表。写入失败静默降级，不影响
+Proxy 转发主链路。
+
+> 💡 走 `deploy/global-images/start-proxy.sh` 时，生成的 `config.yaml`
+> 每次启动都会被覆盖。要么改脚本里 YAML 模板加上 `clickhouse` 段，
+> 要么用 `PROXY_CONFIG_DIR` 指到你自己维护的 `config.yaml` 目录。
+
+### 第 3 步：Knowledge 开启 ClickHouse 上报 + 查询接口
+
+Knowledge 的 CH 配置走 `.env`，改 `MemoryKnowledge/.env`（或
+`start-memory-hub.sh` 使用的 env 文件）：
+
+```bash
+# ═══ 埋点上报（写入 tool_call_logs）═══
+KNOWLEDGE_CLICKHOUSE_ENABLED=true
+KNOWLEDGE_CLICKHOUSE_URL=http://<ch-host>:8123
+KNOWLEDGE_CLICKHOUSE_DATABASE=context_proxy      # 跟 Proxy 保持一致
+KNOWLEDGE_CLICKHOUSE_TABLE=tool_call_logs
+KNOWLEDGE_CLICKHOUSE_USER=default
+KNOWLEDGE_CLICKHOUSE_PASSWORD=<your-ch-password> # 有密码时必填
+KNOWLEDGE_CLICKHOUSE_FLUSH_INTERVAL_MS=5000
+KNOWLEDGE_CLICKHOUSE_FLUSH_THRESHOLD=50
+KNOWLEDGE_CLICKHOUSE_TTL_DAYS=90
+
+# ═══ 查询接口鉴权（/v3/analytics/*）═══
+# 需要 x-tdai-user-key 匹配这把 key 才能查询；Panel 用 admin user_key 即可
+KNOWLEDGE_ANALYTICS_ADMIN_KEY=<admin sk-mem-... 或自定义字符串>
+```
+
+`KNOWLEDGE_ANALYTICS_ADMIN_KEY` 留空时,`/v3/analytics/*` 数据接口会返回
+`503`（`/config` 仍可用，Panel 会把 Wiki / Code-Graph 图表显示为"未启用"）；
+只有配好后 Panel 才拿得到数据。填 admin 的 `user_key`（即
+`.admin-key` 文件里那串 `sk-mem-...`）最省事，也可以是任意稳定字符串
+（前端向 Knowledge `/v3/analytics/*` 发请求时会带这把 key）。
+
+### 第 4 步：Core 打开 analytics 查询接口
+
+Core 侧要开一个 **只读** 的 CH 查询模块，指向 Proxy 写入的 CH。改
+`MemoryCore/tdai-gateway.yaml`（或 `start-memory-core.sh` 使用的 yaml
+文件）:
+
+```yaml
+analytics:
+  clickhouse:
+    enabled: true
+    endpoint: "http://<ch-host>:8123"   # 必须指向 Proxy 写入的同一个 CH
+    username: "default"
+    password: "<your-ch-password>"      # 通过 Secret / .env 注入
+    database: "context_proxy"           # 跟 Proxy 的 database 一致
+```
+
+这段跟 Core 原有的 `observability.clickhouse`（OTel 导出到 `tdai_eval`）
+**完全独立**：那个是把 Core 自己产生的 trace 往外发的旁路，这个是让
+Core 反向去查 Proxy 已经写好的埋点库。
+
+配好后 Core 会额外暴露 16 个 `/v3/analytics/*` 只读端点，Panel 拿到数据
+后渲染出 session-init / tool-call / usage 各类图表。
+
+### 第 5 步：重启三件套并验证
+
+```bash
+# 重启（如果走一键部署）
+./stop-all.sh
+./start-all.sh
+```
+
+验证顺序：
+
+```bash
+# Core 探针：configured=true 表示 analytics 模块已启用
+curl -s http://localhost:8420/v3/analytics/config \
+  -H "x-tdai-service-id: default" \
+  -H "x-tdai-user-key: <admin sk-mem-...>" | jq
+
+# Knowledge 探针（无需 user_key）
+curl -s http://localhost:8424/v3/analytics/config \
+  -H "x-tdai-service-id: default" | jq
+```
+
+两条都返回 `{"configured": true, ...}` 才算通。之后打开 Panel
+「数据分析」页，就能看到 Proxy / Knowledge 各类工具调用汇总；如果任一端
+返回 `configured: false`，Panel 会把对应图表显示为"未启用",不会报错。
+
+**排查小抄。**
+
+- Panel 显示"未启用"或"暂无数据" → 先 `curl` 两个 `/config`,
+  哪端 `configured: false` 就先修哪端的 CH 配置
+- Proxy 有请求但 Core 查不到 → 十有八九 Core 的
+  `analytics.clickhouse.database` / `endpoint` 跟 Proxy 的
+  `clickhouse.database` / `url` 不一致
+- Knowledge `/v3/analytics/*` 401 → `KNOWLEDGE_ANALYTICS_ADMIN_KEY`
+  没配或者跟 Panel 传的 `x-tdai-user-key` 对不上
 
 ## 停止 / 清理
 

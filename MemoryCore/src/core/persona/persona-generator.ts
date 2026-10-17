@@ -77,7 +77,7 @@ export class PersonaGenerator {
   /**
    * Execute local persona generation without advancing checkpoint.
    */
-  async generateLocalPersona(triggerReason?: string): Promise<boolean> {
+  async generateLocalPersona(triggerReason?: string): Promise<"generated" | "unchanged" | "failed"> {
     const startMs = Date.now();
     this.logger?.debug?.(`${TAG} Starting generation: reason="${triggerReason ?? "none"}"`);
 
@@ -142,7 +142,7 @@ export class PersonaGenerator {
 
     if (changedSceneContents.length === 0 && existingPersona) {
       this.logger?.debug?.(`${TAG} No scene changes and persona exists, skipping generation`);
-      return false;
+      return "unchanged";
     }
 
     // 4. Determine mode
@@ -194,6 +194,11 @@ export class PersonaGenerator {
       const path = await import("node:path");
       await bm.backupFile(path.default.join(this.dataDir, targetFile), "persona", `offset${cp.total_processed}`, this.backupCount);
     }
+    const personaWriteMarkerBefore = await readPersonaWriteMarker(
+      this.dataDir,
+      targetFile,
+      this.storage,
+    );
 
     // 8. Run LLM agent (sandboxed to dataDir, tools enabled — LLM writes target L3 file directly)
     try {
@@ -216,8 +221,13 @@ export class PersonaGenerator {
     } catch (err) {
       const elapsedMs = Date.now() - startMs;
       this.logger?.error(`${TAG} Persona generation failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-      return false;
+      return "failed";
     }
+    const personaWriteMarkerAfter = await readPersonaWriteMarker(
+      this.dataDir,
+      targetFile,
+      this.storage,
+    );
 
     // 9. Read LLM-written persona.md and apply post-processing
     let personaText: string;
@@ -234,7 +244,17 @@ export class PersonaGenerator {
     } catch {
       // LLM failed to write persona.md — treat as failure
       this.logger?.error(`${TAG} LLM did not write ${targetFile} — file not found after runner completed`);
-      return false;
+      return "failed";
+    }
+    if (
+      existingPersona &&
+      personaWriteMarkerBefore &&
+      personaWriteMarkerAfter === personaWriteMarkerBefore
+    ) {
+      this.logger?.error(
+        `${TAG} LLM completed without writing ${targetFile}; preserving checkpoint for retry`,
+      );
+      return "failed";
     }
 
     // 10. Strip any navigation the LLM might have added + sanitize for safe injection
@@ -242,8 +262,12 @@ export class PersonaGenerator {
 
     if (!personaText) {
       this.logger?.error(`${TAG} LLM wrote empty ${targetFile} — skipping`);
-      return false;
+      return "failed";
     }
+
+    const personaUnchanged =
+      existingPersona !== undefined &&
+      personaText === escapeXmlTags(existingPersona);
 
     // 11. Append fresh scene navigation and write final content
     const nav = generateSceneNavigation(index, undefined, false);
@@ -286,19 +310,38 @@ export class PersonaGenerator {
       // 静默忽略
     }
 
-    return true;
+    return personaUnchanged ? "unchanged" : "generated";
   }
 
   /**
    * Backward-compatible wrapper: local generation + checkpoint advance.
    */
   async generate(triggerReason?: string): Promise<boolean> {
-    const updated = await this.generateLocalPersona(triggerReason);
-    if (!updated) return false;
+    const result = await this.generateLocalPersona(triggerReason);
+    if (result !== "generated") return false;
 
     const cpManager = new CheckpointManager(this.dataDir, this.logger, this.storage);
     const cp = await cpManager.read();
     await cpManager.markPersonaGenerated(cp.total_processed);
     return true;
+  }
+}
+
+async function readPersonaWriteMarker(
+  dataDir: string,
+  targetFile: string,
+  storage?: StorageAdapter,
+): Promise<string | undefined> {
+  try {
+    if (storage) {
+      const stat = await storage.stat(targetFile);
+      return stat ? `${stat.size}:${stat.lastModified}` : undefined;
+    }
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const stat = await fs.default.stat(path.default.join(dataDir, targetFile));
+    return `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return undefined;
   }
 }

@@ -125,7 +125,7 @@ export async function prewarmAll(
   // 阻断后续 prewarm,符合 "prewarm 是 best-effort" 的整体语义。
   if (opts.clearBefore) {
     try {
-      repo.clearBySession(input.spaceId ?? "", input.userId, input.agentSource, sessionId);
+      await repo.clearBySession(input.spaceId ?? "", input.userId, input.agentSource, sessionId);
       console.log(
         `[hook-cache] prewarm session=${sessionId}: clearBefore=true, cleared existing entries`,
       );
@@ -201,7 +201,7 @@ export async function prewarmAll(
   }
 
   if (okEntries.length > 0) {
-    repo.putMany(input.spaceId ?? "", input.userId, input.agentSource, sessionId, okEntries);
+    await repo.putMany(input.spaceId ?? "", input.userId, input.agentSource, sessionId, okEntries);
   }
 
   const durationMs = Date.now() - startedAt;

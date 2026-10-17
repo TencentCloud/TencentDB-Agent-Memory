@@ -10,15 +10,16 @@
 import type { Hono } from 'hono';
 import { validatePanelMetaHeaders } from '../../middleware/validate-panel-headers.js';
 import { respondControlError, respondEnvelope } from '../../envelope.js';
+import type { MetaEnvelope } from '../../../kernel/envelope.js';
 import type { PanelDeps } from '../../../panel-deps.js';
 import {
   buildCtx,
   readJson,
   str,
   okEnvelope,
-  extractListItems,
   resolveCallerUserId,
   isTeamMember,
+  fetchAllMetaListItems,
   ASSET_TYPE_WIKI,
   ASSET_TYPE_CODE_GRAPH,
 } from './common.js';
@@ -85,9 +86,21 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
     const agent = agentEnv.data as AgentRaw;
     if (agent.team_id !== teamId) return respondControlError(c, 400, 'AGENT_NOT_IN_TEAM');
 
-    const bindEnv = await deps.metaKernel.invoke('agent-fixed-asset/list', { agent_id: agentId }, ctx);
-    if (bindEnv.code !== 0) return respondEnvelope(c, bindEnv);
-    const bindings = extractListItems<BindingRaw>(bindEnv);
+    // 关键：必须分页聚合拉取全量 binding。内核 DEFAULT_PAGINATION=20，
+    // 不传 limit 会导致当 agent 已绑定 ≥21 条资产时，老 binding 排在 20 之外被截断，
+    // append 后 set 全量替换会静默覆盖那些老绑定。
+    // 同时：list 出错必须透传而不是当"空列表"，否则 set 全量替换会清空现有绑定。
+    let bindListError: MetaEnvelope<unknown> | null = null;
+    const bindings = await fetchAllMetaListItems<BindingRaw>(
+      deps,
+      ctx,
+      'agent-fixed-asset/list',
+      { agent_id: agentId },
+      (env) => {
+        bindListError = env;
+      },
+    );
+    if (bindListError) return respondEnvelope(c, bindListError);
     if (bindings.some((b) => b.asset_id === knowledgeId)) {
       return respondControlError(c, 409, 'ALREADY_ALLOCATED');
     }
@@ -124,9 +137,19 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
     if (!agent) return respondControlError(c, 404, 'AGENT_NOT_FOUND');
     if (agent.owner_user_id !== caller) return respondControlError(c, 403, 'NOT_YOUR_AGENT');
 
-    const bindEnv = await deps.metaKernel.invoke('agent-fixed-asset/list', { agent_id: agentId }, ctx);
-    if (bindEnv.code !== 0) return respondEnvelope(c, bindEnv);
-    const bindings = extractListItems<BindingRaw>(bindEnv);
+    // 同 allocate：必须分页拉全量，否则未在第一页的 binding 永远解不干净；
+    // list 出错透传，避免被误判为 BINDING_NOT_FOUND。
+    let bindListError: MetaEnvelope<unknown> | null = null;
+    const bindings = await fetchAllMetaListItems<BindingRaw>(
+      deps,
+      ctx,
+      'agent-fixed-asset/list',
+      { agent_id: agentId },
+      (env) => {
+        bindListError = env;
+      },
+    );
+    if (bindListError) return respondEnvelope(c, bindListError);
     const remaining = bindings.filter((b) => b.asset_id !== knowledgeId);
     if (remaining.length === bindings.length) return respondControlError(c, 404, 'BINDING_NOT_FOUND');
 
@@ -171,12 +194,31 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
     }
     const applyVisibility = !isOwner;
 
-    const listEnv = await deps.metaKernel.invoke(
-      'agent-fixed-asset/list-with-detail',
-      { agent_id: agentId, apply_visibility_filter: applyVisibility, touch_usage: false },
+    // 类型过滤下推：core `agent-fixed-asset/list-with-detail` 支持
+    // `asset_types` 参数（v3-meta-schemas.ts:fixedAssetListWithDetailSchema），
+    // 在 SQL 层按类型过滤 —— 无关类型（skill / chat_memory）不会占分页额度。
+    // 之前"拉全量再内存 filter(KNOWLEDGE_ASSET_TYPES.includes(...))"的写法，
+    // 在 skill 特别多的 agent 上（如实际线上 519 skill 场景）会浪费 5+ 次
+    // kernel 调用只为翻过 skill 分页；且如果 wiki/code_graph 绑定按
+    // priority DESC/created_at DESC 排在 500 位之外，同样会被硬上限截断
+    // 让"固定资产"tab 空白。
+    // list 出错透传，避免把"查询失败"误显示为"无绑定"。
+    let listError: MetaEnvelope<unknown> | null = null;
+    const rawItems = await fetchAllMetaListItems<FixedAssetDetailRaw>(
+      deps,
       ctx,
+      'agent-fixed-asset/list-with-detail',
+      {
+        agent_id: agentId,
+        apply_visibility_filter: applyVisibility,
+        touch_usage: false,
+        asset_types: KNOWLEDGE_ASSET_TYPES,
+      },
+      (env) => {
+        listError = env;
+      },
     );
-    if (listEnv.code !== 0) return respondEnvelope(c, listEnv);
+    if (listError) return respondEnvelope(c, listError);
 
     interface FixedAssetDetailRaw {
       asset_id: string;
@@ -187,9 +229,9 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
       visibility: string;
       created_at: string;
     }
-    let items = extractListItems<FixedAssetDetailRaw>(listEnv)
-      .filter((it) => KNOWLEDGE_ASSET_TYPES.includes(it.asset_type))
-      .filter((it) => it.status !== 'archived' && it.status !== 'deprecated' && it.status !== 'failed');
+    let items = rawItems.filter(
+      (it) => it.status !== 'archived' && it.status !== 'deprecated' && it.status !== 'failed',
+    );
 
     if (!isOwner) {
       items = items.filter((it) => it.visibility === 'team');

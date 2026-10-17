@@ -80,10 +80,19 @@ const TYPE_DIR: Record<string, string> = {
   finding: "synthesis",
 };
 
-/** 把 type 映射到目录名；未知 type 退到以 type 复数化的 generic 目录。 */
+/**
+ * 合法 type 的值域：type 是 OKF 分类标签，不是路径，只可能是标识符。
+ * 任何含 `/`、`.`（含 `..`）或其它字符的值都不是合法分类，一律归到 other 目录。
+ */
+const SAFE_TYPE_RE = /^[a-z0-9_-]+$/;
+
+/** 把 type 映射到目录名；未知但合法的 type 以自身作 generic 目录，非法值归 other。 */
 export function dirForType(type: string): string {
   const key = (type ?? "").trim().toLowerCase();
-  return TYPE_DIR[key] ?? `${key || "other"}`;
+  // hasOwn 而非索引取值：避免 "__proto__"/"constructor" 命中 Object 原型链上的成员。
+  if (Object.hasOwn(TYPE_DIR, key)) return TYPE_DIR[key];
+  if (!SAFE_TYPE_RE.test(key)) return "other";
+  return key;
 }
 
 /**

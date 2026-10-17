@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sseDataValue } from "../anthropicHandler.js";
+import { sseDataValue } from "../pipeline/runners/anthropic.js";
 
 describe("sseDataValue", () => {
   it("reads a data field written with the conventional space", () => {
