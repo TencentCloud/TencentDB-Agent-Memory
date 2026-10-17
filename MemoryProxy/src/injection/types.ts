@@ -63,6 +63,11 @@ export interface AgentTool {
    * Sits at the same level as `input_schema` in the wire format.
    */
   cacheControl?: unknown;
+  /**
+   * Catch-all for provider-specific or unknown fields (e.g. Anthropic server tools).
+   * Preserved during parse/serialize round-trips for lossless forwarding.
+   */
+  custom?: Record<string, unknown>;
 }
 
 // ── Context Metadata ──────────────────────────────────────────────────────────
