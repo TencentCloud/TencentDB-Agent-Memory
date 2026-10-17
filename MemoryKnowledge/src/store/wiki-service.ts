@@ -12,7 +12,7 @@
  *   lib 层 cascadeDeleteWikiPagesWithRefs 做引用级联。
  */
 
-import { join, resolve, normalize, dirname } from "node:path";
+import { join, resolve, normalize, dirname, isAbsolute, relative, sep } from "node:path";
 import {
   rmSync,
   mkdirSync,
@@ -1130,14 +1130,14 @@ export class WikiService {
   }
 
   private resolveRawPath(sourcesDir: string, filename: string): string | null {
-    if (!filename || filename.includes("..") || filename.startsWith("/")) return null;
+    if (!filename || filename.includes("..") || isAbsolute(filename)) return null;
     const normalized = normalize(filename);
     if (normalized.startsWith("..") || normalized.startsWith("/")) return null;
     // resolve(sourcesDir) 转成绝对路径，避免 sourcesDir 是相对路径时
     // （如 KNOWLEDGE_DATA_DIR=./data）与 resolve 出来的绝对路径比较失败。
     const base = resolve(sourcesDir);
     const safe = resolve(base, normalized);
-    const dirWithSep = base.endsWith("/") ? base : base + "/";
+    const dirWithSep = base.endsWith(sep) ? base : base + sep;
     if (safe !== base && !safe.startsWith(dirWithSep)) return null;
     return safe;
   }
@@ -1152,13 +1152,13 @@ export class WikiService {
     ref: string,
     opts: { allowMissing?: boolean } = {},
   ): string | null {
-    if (!ref || ref.includes("..") || ref.startsWith("/")) return null;
+    if (!ref || ref.includes("..") || isAbsolute(ref)) return null;
     const cleanRef = ref.replace(/^wiki\//, "");
     if (cleanRef.includes("..")) return null;
 
     // resolve 成绝对路径，避免 projectPath 是相对路径时比较失败。
     const wikiDir = resolve(projectPath, "wiki");
-    const wikiDirSep = wikiDir.endsWith("/") ? wikiDir : wikiDir + "/";
+    const wikiDirSep = wikiDir.endsWith(sep) ? wikiDir : wikiDir + sep;
 
     // 先按原样尝试，再尝试补 .md 扩展。
     const candidates = cleanRef.endsWith(".md") ? [cleanRef] : [cleanRef + ".md", cleanRef];
@@ -1183,9 +1183,9 @@ export class WikiService {
   /** 把 wiki/.../page.md 绝对路径转换回 ref（如 "concepts/redis"）。 */
   private absToPageRef(projectPath: string, abs: string): string {
     const wikiDir = resolve(projectPath, "wiki");
-    const prefix = wikiDir.endsWith("/") ? wikiDir : wikiDir + "/";
+    const prefix = wikiDir.endsWith(sep) ? wikiDir : wikiDir + sep;
     if (!abs.startsWith(prefix)) return abs;
-    return abs.slice(prefix.length).replace(/\.md$/, "");
+    return relative(wikiDir, abs).split(sep).join("/").replace(/\.md$/, "");
   }
 
   private isForbiddenPageRef(ref: string): boolean {
