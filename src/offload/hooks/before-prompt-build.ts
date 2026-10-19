@@ -8,7 +8,7 @@
  */
 import { PLUGIN_DEFAULTS } from "../types.js";
 import { readOffloadEntries, markOffloadStatus } from "../storage.js";
-import { buildTiktokenContextSnapshot } from "../context-token-tracker.js";
+import { buildTiktokenContextSnapshot, invalidateTokenCache } from "../context-token-tracker.js";
 import { traceOffloadDecision } from "../opik-tracer.js";
 import { injectMmdIntoMessages, findHistoryMmdInsertionPoint } from "../mmd-injector.js";
 import { createL3TokenCounter } from "../l3-token-counter.js";
@@ -109,6 +109,9 @@ export function createBeforePromptBuildHandler(
                   content.splice(j, 1);
                 }
               }
+              // Invalidate token cache after mutation so the next
+              // buildTiktokenContextSnapshot sees the post-strip count.
+              invalidateTokenCache(msg);
             }
           }
         }
