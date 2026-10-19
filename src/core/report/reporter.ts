@@ -83,21 +83,37 @@ class LocalReporter implements IReporter {
 
 let _instanceIdCache: string | undefined;
 
+// Serializes concurrent cold-start instance-id creation so two parallel calls
+// don't both miss the cache, both generate a UUID, and both write (last-writer
+// wins producing a transient duplicate id in early metrics).
+let _instanceIdInFlight: Promise<string> | null = null;
+
 export async function getOrCreateInstanceId(pluginDataDir: string): Promise<string> {
   if (_instanceIdCache) return _instanceIdCache;
+  if (_instanceIdInFlight) return _instanceIdInFlight;
 
-  const idFile = path.join(pluginDataDir, ".metadata", "instance_id");
-  try {
-    const existing = (await fs.readFile(idFile, "utf-8")).trim();
-    if (existing) {
-      _instanceIdCache = existing;
-      return existing;
-    }
-  } catch { /* file doesn't exist */ }
+  _instanceIdInFlight = (async () => {
+    const idFile = path.join(pluginDataDir, ".metadata", "instance_id");
+    try {
+      const existing = (await fs.readFile(idFile, "utf-8")).trim();
+      if (existing) {
+        _instanceIdCache = existing;
+        return existing;
+      }
+    } catch { /* file doesn't exist */ }
 
-  const newId = randomUUID();
-  await fs.mkdir(path.dirname(idFile), { recursive: true });
-  await fs.writeFile(idFile, newId, "utf-8");
-  _instanceIdCache = newId;
-  return newId;
+    const newId = randomUUID();
+    await fs.mkdir(path.dirname(idFile), { recursive: true });
+    // Atomic write (tmp + rename) so a crash mid-write can't leave a truncated
+    // instance_id file that would silently change the instance id on next boot.
+    const tmp = `${idFile}.${randomUUID()}.tmp`;
+    await fs.writeFile(tmp, newId, "utf-8");
+    await fs.rename(tmp, idFile);
+    _instanceIdCache = newId;
+    return newId;
+  })().finally(() => {
+    _instanceIdInFlight = null;
+  });
+
+  return _instanceIdInFlight;
 }
