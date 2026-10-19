@@ -20,9 +20,9 @@
       },
       "storeBackend": {
         "type": "string",
-        "enum": ["sqlite", "tcvdb"],
+        "enum": ["sqlite", "tcvdb", "postgres"],
         "default": "sqlite",
-        "description": "存储后端：sqlite（本地 SQLite + sqlite-vec）或 tcvdb（腾讯云向量数据库）"
+        "description": "存储后端：sqlite（本地 SQLite + sqlite-vec）、tcvdb（腾讯云向量数据库）或 postgres（PostgreSQL + pgvector + pg_textsearch）"
       },
       "capture": {
         "type": "object",
@@ -113,6 +113,24 @@
           "embeddingModel": { "type": "string", "default": "bge-large-zh", "description": "服务端 embedding 模型" },
           "timeout": { "type": "number", "default": 10000, "description": "请求超时（毫秒）" },
           "caPemPath": { "type": "string", "description": "CA 证书 PEM 文件路径（HTTPS 连接时使用）" }
+        }
+      },
+      "postgres": {
+        "type": "object",
+        "description": "PostgreSQL 记忆层配置（仅 storeBackend=postgres 时生效）",
+        "properties": {
+          "host": { "type": "string", "default": "127.0.0.1", "description": "PostgreSQL 主机" },
+          "port": { "type": "number", "default": 5432, "description": "PostgreSQL 端口" },
+          "database": { "type": "string", "default": "postgres", "description": "数据库名" },
+          "user": { "type": "string", "default": "postgres", "description": "数据库用户" },
+          "password": { "type": "string", "description": "数据库密码；trust/peer 认证可不填" },
+          "schema": { "type": "string", "default": "agent_memory", "description": "记忆表所在 schema" },
+          "ssl": { "type": "boolean", "default": false, "description": "是否启用 SSL" },
+          "poolMax": { "type": "number", "default": 5, "description": "连接池最大连接数" },
+          "statementTimeoutMs": { "type": "number", "default": 10000, "description": "SQL 语句超时（毫秒）" },
+          "textConfig": { "type": "string", "default": "simple", "description": "pg_textsearch BM25 索引用的文本搜索配置；默认 simple（无需额外扩展），中文分词可填 jieba（映射为 public.jiebacfg，需 pg_jieba 扩展），也可填任意已安装的 text search configuration" },
+          "vectorIndex": { "type": "string", "enum": ["none", "hnsw", "ivfflat", "diskann"], "default": "hnsw", "description": "向量索引类型；diskann 需要 vectorscale" },
+          "useVectorScale": { "type": "boolean", "default": true, "description": "vectorIndex=diskann 时尝试使用 vectorscale StreamingDiskANN" }
         }
       },
       "bm25": {
