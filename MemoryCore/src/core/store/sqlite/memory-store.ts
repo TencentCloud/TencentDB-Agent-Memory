@@ -2280,7 +2280,7 @@ export class VectorStore implements IMemoryStore {
         role: r.role as string,
         message_text: r.message_text as string,
         recorded_at: (r.recorded_at as string) || "",
-        timestamp: (r.timestamp as number) || 0,
+        timestamp: Number(r.timestamp) || 0,
       }));
     } catch (err) {
       this.logger?.warn(
