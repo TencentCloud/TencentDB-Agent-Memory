@@ -1441,13 +1441,17 @@ export async function runOpenaiChatPipeline(
       protocol: "openai",
       branch: "client_pipeline",
     });
-    const tappedStream = observedStream
-      .pipeThrough(passthrough)
-      .pipeThrough(createCfqStripStream(
-        "openai",
-        preparedStats,
-        createCfqStripObserver(pipe),
-      ));
+    // tap 必须与客户端解耦：客户端常常在流尾直接 abort 连接（dsh/pi-ai 每轮消费完都
+    // 无条件 abort），而 pipeThrough 的 flush 在流被 cancel 时按规范不执行，L0 就整轮丢。
+    // 所以照 anthropic 通道的做法 tee 出一支独立消费：客户端怎么断都不影响它读到结尾。
+    const [upstreamClientBranch, tapStream] = observedStream.tee();
+    consumeOpenAiTapStream(tapStream, tapCtx);
+    // 顺序要紧：tap 读的是模型原始输出；剥离只作用于客户端那一份。
+    const tappedStream = upstreamClientBranch.pipeThrough(createCfqStripStream(
+      "openai",
+      preparedStats,
+      createCfqStripObserver(pipe),
+    ));
 
     // v3.3 user-session-default: 命中账户默认时, Proxy 在客户端那份流最前面拼
     // 一段 markdown 绑定提示(✅ Team/Agent/Task)。放在 tap/strip 之后是为了:
@@ -1905,10 +1909,11 @@ function mergeToolCallDeltas(
   }
 }
 
-/** Create a TransformStream that passes bytes through unchanged,
- *  while extracting usage/content/tool_calls from SSE events in-band.
+/** 消费 tee 出来的 tap 支：逐块解析 SSE，累计 usage / content / tool_calls，
+ *  读完统一收尾（L0、usage log、langfuse、credit 都挂在这条收尾链上）。
+ *  与客户端流解耦，所以客户端提前断开也一定会走到收尾。
  */
-function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, Uint8Array> {
+function consumeOpenAiTapStream(stream: ReadableStream<Uint8Array>, ctx: TapContext): void {
   const { config, modelId, keyId, sessionKey, upstreamUrl, traceId, forkTraceId, startTime, inputMessages, retried, logMeta, pipe, lf, spaceId, upstreamRequestId } = ctx;
 
   const decoder = new TextDecoder();
@@ -2132,6 +2137,18 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     pipe.streamDone(lastUsage);
   }
 
+  // 收尾只能跑一次：正常读完走 flush，客户端断连或上游中断走 cancel，两者可能先后触发。
+  let finalized = false;
+  async function finalizeOnce(): Promise<void> {
+    if (finalized) return;
+    finalized = true;
+    try {
+      await finalize();
+    } catch (err: unknown) {
+      pipe.error("STREAM_FINALIZE", err);
+    }
+  }
+
   // `cancel` is part of the Streams spec and implemented by Node 22, but not yet
   // declared in the bundled `Transformer` type.
   const transformer: Transformer<Uint8Array, Uint8Array> & { cancel?: (reason: unknown) => void } = {
@@ -2144,20 +2161,13 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       }
     },
     async flush() {
-      try {
-        await finalize();
-      } catch (err: unknown) {
-        pipe.error("STREAM_FINALIZE", err);
-      }
+      await finalizeOnce();
     },
-    // A client disconnect or an upstream stream error skips flush(); the
-    // session record still keeps the part of the reply that arrived.
-    cancel() {
-      try {
-        submitSessionRecord();
-      } catch (err: unknown) {
-        pipe.error("STREAM_CANCEL", err);
-      }
+    // A client disconnect or an upstream stream error skips flush(); the turn
+    // still gets finalized so the part of the reply that arrived is recorded —
+    // session call and L0 alike — instead of being dropped.
+    async cancel() {
+      await finalizeOnce();
     },
   };
   return new TransformStream<Uint8Array, Uint8Array>(transformer);

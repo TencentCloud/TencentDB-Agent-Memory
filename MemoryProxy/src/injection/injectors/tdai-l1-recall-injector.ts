@@ -1,6 +1,6 @@
-import type { AgentContext, ContextBlock, InjectionHook, HookPriority } from "../types.js";
+import type { AgentContext, ContextBlock, ContextMessage, InjectionHook, HookPriority } from "../types.js";
 import { HOOK_PRIORITY } from "../types.js";
-import { getLastUserMessage, getMessageText } from "../context.js";
+import { getMessageText } from "../context.js";
 import type { TdaiClient } from "../../tdai/client.js";
 import { getTdaiIdentity } from "../../tdai/identity.js";
 import { extractUserQueryText } from "../../tdai/recorder.js";
@@ -9,10 +9,31 @@ import { getMetadataClient } from "../../meta/client.js";
 import { resolveFixedAssetCtxs } from "./tdai-fixed-asset.js";
 
 /**
+ * 取「最后一条真正含人类文本的 user 消息」作为检索词。
+ *
+ * 不能只取最后一条 user 消息：dsh 0.2.1 起每步都会追加一条 `role=user` 的
+ * 运行时通知（时间读数 / 工作目录变更）。它们被 extractUserQueryText 判为噪声
+ * 返回 ""，若这时直接 `return []`，整轮 L1 召回会被静默跳过；若反过来拿通知
+ * 原文当检索词，则召回全是垃圾。两种情况都错，正解是继续往前找。
+ *
+ * @param messages - AgentContext 里的消息序列（按时间正序）
+ * @returns 干净的用户提问；整段对话没有任何人类文本时返回 ""
+ */
+export function lastHumanUserQuery(messages: readonly ContextMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "user") continue;
+    const query = extractUserQueryText(getMessageText(msg)).trim();
+    if (query) return query;
+  }
+  return "";
+}
+
+/**
  * L1 召回（"自有 + 借入"跨 agent 合并 top-K）：
  *   1. 从 ctx 拿当前 (team, user, agent) identity（ProxyConfig 走出来的）
  *   2. 调控制面 /fixed-asset-agents 拿 [self, ...借入≤2]
- *   3. 对每个 ctx 并发 /atomic/search (query=last user message)
+ *   3. 对每个 ctx 并发 /atomic/search (query=最后一条含人类文本的 user 消息)
  *   4. 合并所有命中 → 按 score 降序 → 取前 globalTopK
  *   5. 注入到 user.before，每条标 [from <agent_name>]
  *
@@ -46,12 +67,11 @@ export class TdaiL1RecallInjector implements InjectionHook {
     const identity = getTdaiIdentity(ctx.metadata.custom);
     if (!identity) return [];
 
-    const lastUser = getLastUserMessage(ctx);
-    if (!lastUser) return [];
     // 用「干净的真实 user_query」作检索词，而不是整条原始消息 blob
     // （后者含 <user_info>/<additional_data>/<question_answer> 等噪声，
     //  会让 FTS5/向量检索命中率极低甚至 0，导致 L1 召不回）。
-    const query = extractUserQueryText(getMessageText(lastUser)).trim().slice(0, 2048);
+    // 倒序跳过纯 harness 通知，避免最后一条 user 消息是通知时整轮零召回。
+    const query = lastHumanUserQuery(ctx.messages).slice(0, 2048);
     if (!query) return [];
 
     // 拿 self + 借入 ≤2 个的 ctx 列表
