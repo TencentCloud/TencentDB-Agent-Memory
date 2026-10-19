@@ -21,6 +21,8 @@ const TOP_LEVEL_SYSTEM = "anthropicTopLevelSystem";
 
 export class AnthropicAdapter implements ProtocolAdapter {
   readonly protocol = "anthropic" as const;
+  // Keep protocol fields that the shared tool model does not represent.
+  private readonly toolDefinitions = new WeakMap<AgentTool, Record<string, unknown>>();
 
   parse(body: Record<string, unknown>, metadata: AgentContextMetadata): AgentContext {
     const messages: ContextMessage[] = [];
@@ -195,6 +197,7 @@ export class AnthropicAdapter implements ProtocolAdapter {
     if (raw.cache_control !== undefined) {
       tool.cacheControl = raw.cache_control;
     }
+    this.toolDefinitions.set(tool, raw);
     return tool;
   }
 
@@ -281,7 +284,11 @@ export class AnthropicAdapter implements ProtocolAdapter {
   }
 
   private serializeTool(tool: AgentTool): Record<string, unknown> {
+    const original = this.toolDefinitions.get(tool);
+    // Server tools (for example advisor) do not use a custom input schema.
+    if (original?.type && original.type !== "custom") return { ...original };
     const out: Record<string, unknown> = {
+      ...original,
       name: tool.name,
       description: tool.description,
       input_schema: tool.parameters,
