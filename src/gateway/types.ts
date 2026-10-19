@@ -33,12 +33,14 @@ export interface RecallRequest {
   query: string;
   session_key: string;
   user_id?: string;
+  dedup?: boolean;
 }
 
 export interface RecallResponse {
   context: string;
   strategy?: string;
   memory_count?: number;
+  deduped?: boolean;
 }
 
 // ============================
