@@ -28,6 +28,7 @@ const PATH_TO_PAGE: Record<string, PageId> = {
   '/team/members': 'team_members',
   '/team/agents': 'team_agents',
   '/team/api-keys': 'api_keys',
+  '/team/subscription-pool': 'subscription_pool',
 };
 
 /** PageId → 路由 path */
@@ -159,6 +160,8 @@ export function ConsoleLayout() {
       if (meta.id === 'analytics') {
         if (userRole !== 'admin' || !analyticsVisible) continue;
       }
+      // 订阅账号池仅 system_admin 可见
+      if (meta.id === 'subscription_pool' && userRole !== 'admin') continue;
       const list = byGroup.get(meta.group) ?? [];
       list.push(meta);
       byGroup.set(meta.group, list);
@@ -220,7 +223,8 @@ export function ConsoleLayout() {
           <Content>
             {!isGuide && (
               <TabBar
-                pages={openPages}
+                // 非 admin 不显示订阅账号池标签（页面本身也会重定向）
+                pages={openPages.filter((id) => id !== 'subscription_pool' || userRole === 'admin')}
                 activePage={activePage}
                 onNavigate={navigateTo}
                 onClose={closePage}

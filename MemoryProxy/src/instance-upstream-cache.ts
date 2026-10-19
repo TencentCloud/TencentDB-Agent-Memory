@@ -46,7 +46,7 @@ function normalizeTtlMs(rawSec: number | undefined): number {
 // ── Types (v2 模型组) ────────────────────────────────────────────────────
 
 export type GroupType = "default" | "custom" | "extraction";
-export type UpstreamMode = "official" | "custom_unified" | "custom_passthrough";
+export type UpstreamMode = "official" | "custom_unified" | "custom_passthrough" | "subscription_pool";
 
 /** Core D 接口返回的每行(注意 api_key 是明文,仅内部接口才这样)。 */
 export interface InstanceUpstreamRow {
@@ -77,12 +77,14 @@ export interface InstanceUpstreamRow {
 /**
  * resolveForAgent 4 态返回:
  *   - override:  匹配到 custom.agents 且 enabled → 用该 row 的配置转发
+ *   - pool:      enabled custom group in mode subscription_pool → the proxy picks a subscription account
  *   - official:  匹配到 default.agents 且 enabled(或 items 空的零行 fallback)→ 走全局 upstream + alias
  *   - blocked:   命中 default/custom 组但 enabled=false → 拒绝服务(UPSTREAM_DISABLED 400)
  *   - unmanaged: agent 既不在 default 也不在任何 custom → 拒绝服务(AGENT_NOT_CONFIGURED 400)
  */
 export type Resolution =
   | { kind: "override"; row: InstanceUpstreamRow }
+  | { kind: "pool"; row: InstanceUpstreamRow }
   | { kind: "official"; row: InstanceUpstreamRow | null }
   | { kind: "blocked"; reason: "default_disabled" | "custom_disabled"; group_id: string }
   | { kind: "unmanaged"; agent: string };
@@ -219,6 +221,9 @@ export function resolveForAgent(
   if (custom) {
     if (!custom.enabled) {
       return { kind: "blocked", reason: "custom_disabled", group_id: custom.group_id };
+    }
+    if (custom.mode === "subscription_pool") {
+      return { kind: "pool", row: custom };
     }
     return { kind: "override", row: custom };
   }

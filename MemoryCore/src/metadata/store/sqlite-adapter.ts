@@ -20,7 +20,12 @@ import {
 } from "./relation-id-insert.js";
 import { generateUserKey } from "../utils/crypto.js";
 import { isUserKeyExpired } from "../utils/user-key.js";
-import { DEFAULT_GROUP_NAME, EXTRACTION_GROUP_NAME, InstanceUpstreamWriteConflictError } from "../types.js";
+import {
+  DEFAULT_GROUP_NAME,
+  EXTRACTION_GROUP_NAME,
+  InstanceUpstreamWriteConflictError,
+  SubscriptionAccountWriteConflictError,
+} from "../types.js";
 import type {
   UserEntity,
   UserKeyEntity,
@@ -65,9 +70,18 @@ import type {
   UpdateInstanceUpstreamGroupInput,
   ToggleInstanceUpstreamGroupInput,
   DeleteInstanceUpstreamGroupInput,
+  MoveAgentBetweenUpstreamGroupsInput,
+  MoveAgentBetweenUpstreamGroupsResult,
   SupportedAgent,
   GroupType,
   UpstreamMode,
+  SubscriptionAccountEntity,
+  SubscriptionAccountStatus,
+  SubscriptionAccountUsage,
+  SubscriptionProvider,
+  UpsertSubscriptionAccountInput,
+  UpsertSubscriptionAccountResult,
+  UpdateSubscriptionAccountPatch,
 } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
@@ -99,6 +113,70 @@ function isUserKeyValueCollision(err: unknown): boolean {
 function isStorePkCollision(err: unknown): boolean {
   return isPkCollision(err) || isSqliteRelationIdCollision(err);
 }
+
+/**
+ * Definition of the upstream group table (v2 model groups, see
+ * docs/design/2026-08-25-instance-upstream-config.md §5.1).
+ * Used for a new database and for the rebuild in migrateSubscriptionPool.
+ */
+function instanceUpstreamTableDdl(tableName: string): string {
+  return `
+    CREATE TABLE IF NOT EXISTS ${tableName} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id TEXT NOT NULL,
+      group_type TEXT NOT NULL CHECK (group_type IN ('default','custom','extraction')),
+      name TEXT NOT NULL DEFAULT '',
+      agents TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      mode TEXT NOT NULL DEFAULT 'official' CHECK (mode IN ('official','custom_unified','custom_passthrough','subscription_pool')),
+      base_url TEXT NOT NULL DEFAULT '',
+      api_key TEXT NOT NULL DEFAULT '',
+      model_id TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1,
+      supported_agents_snapshot TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(group_id)
+    );
+  `;
+}
+
+/** default / extraction: each instance has at most one row. */
+const INSTANCE_UPSTREAM_SINGLETON_INDEX_DDL = `
+  CREATE UNIQUE INDEX IF NOT EXISTS ux_iuc_singleton_group_type
+    ON meta_instance_upstream_config(group_type)
+    WHERE group_type IN ('default','extraction');
+`;
+
+const SUBSCRIPTION_ACCOUNT_TABLE_DDL = `
+  CREATE TABLE IF NOT EXISTS meta_upstream_subscription_account (
+    account_id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL,
+    provider TEXT NOT NULL CHECK (provider IN ('claude','codex')),
+    display_name TEXT NOT NULL,
+    account_label TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','exhausted','auth_error','disabled')),
+    access_token TEXT NOT NULL DEFAULT '',
+    refresh_token TEXT NOT NULL DEFAULT '',
+    token_expires_at INTEGER,
+    provider_account_id TEXT NOT NULL,
+    usage_json TEXT NOT NULL DEFAULT '{"windows":[]}',
+    usage_updated_at INTEGER,
+    exhausted_until INTEGER,
+    usage_fail_count INTEGER NOT NULL DEFAULT 0,
+    refresh_fail_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    active_sessions INTEGER NOT NULL DEFAULT 0,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (group_id) REFERENCES meta_instance_upstream_config(group_id) ON DELETE CASCADE,
+    UNIQUE(group_id, provider_account_id),
+    UNIQUE(group_id, display_name)
+  );
+`;
 
 type Row = Record<string, SQLInputValue>;
 
@@ -136,6 +214,7 @@ export class SqliteMetadataStore implements IMetadataStore {
   // Schema
   // ============================================================
   private createSchema(): void {
+    this.dropLegacyInstanceUpstreamTable();
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS meta_users (
         user_id TEXT PRIMARY KEY,
@@ -341,34 +420,79 @@ export class SqliteMetadataStore implements IMetadataStore {
       CREATE INDEX IF NOT EXISTS idx_meta_user_session_defaults_task
         ON meta_user_session_defaults(task_id);
 
-      -- v2 (模型组) 结构。v1 未真正投产,直接 DROP + 重建,不留兼容 shim。
-      -- 详见 docs/design/2026-08-25-instance-upstream-config.md §5.1。
-      DROP TABLE IF EXISTS meta_instance_upstream_config;
-      CREATE TABLE meta_instance_upstream_config (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id TEXT NOT NULL,
-        group_type TEXT NOT NULL CHECK (group_type IN ('default','custom','extraction')),
-        name TEXT NOT NULL DEFAULT '',
-        agents TEXT NOT NULL DEFAULT '[]',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        mode TEXT NOT NULL DEFAULT 'official' CHECK (mode IN ('official','custom_unified','custom_passthrough')),
-        base_url TEXT NOT NULL DEFAULT '',
-        api_key TEXT NOT NULL DEFAULT '',
-        model_id TEXT NOT NULL DEFAULT '',
-        description TEXT NOT NULL DEFAULT '',
-        version INTEGER NOT NULL DEFAULT 1,
-        supported_agents_snapshot TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(group_id)
-      );
-      -- default / extraction 单例约束(每实例最多 1 行)。
-      CREATE UNIQUE INDEX IF NOT EXISTS ux_iuc_singleton_group_type
-        ON meta_instance_upstream_config(group_type)
-        WHERE group_type IN ('default','extraction');
     `);
+    // The table is created outside the big statement above because the migration below
+    // may have to rebuild it, and both paths must use the same definition.
+    this.db.exec(instanceUpstreamTableDdl("meta_instance_upstream_config"));
+    this.db.exec(INSTANCE_UPSTREAM_SINGLETON_INDEX_DDL);
     this.migrateUserTypeColumn();
     this.migrateLegacyUserKeys();
+    this.migrateSubscriptionPool();
+  }
+
+  /**
+   * The v1 table has no group_id column. Drop it only when it still has that old
+   * shape. A v2 table must stay as it is on every start. If it is dropped, a restart
+   * deletes all custom upstream groups.
+   */
+  private dropLegacyInstanceUpstreamTable(): void {
+    const columns = this.all<{ name: string }>(
+      "SELECT name FROM pragma_table_info('meta_instance_upstream_config')",
+    );
+    if (columns.length === 0) return;
+    if (columns.some((c) => c.name === "group_id")) return;
+    this.db.exec("DROP TABLE meta_instance_upstream_config");
+  }
+
+  /**
+   * Bring the upstream group table up to date for subscription pool groups, then create the
+   * account table. The CHECK on `mode` of a table from an older release rejects
+   * `subscription_pool`. SQLite cannot change a CHECK, so the table is rebuilt
+   * (create, copy, drop, rename) in one transaction. The old table stays if the copy fails.
+   * Only the columns of the current definition are copied. An extra column in an existing
+   * table is not used and is not dropped when no rebuild is needed.
+   *
+   * The account table is created after the rebuild. It has a foreign key with ON DELETE
+   * CASCADE to the group table. Foreign keys are off during the swap, because dropping the
+   * old table would otherwise delete the accounts of its groups.
+   */
+  private migrateSubscriptionPool(): void {
+    const tableSql = this.get<{ sql: string | null }>(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'meta_instance_upstream_config'",
+    )?.sql ?? "";
+
+    if (!tableSql.includes("subscription_pool")) {
+      const copiedColumns = [
+        "id", "group_id", "group_type", "name", "agents", "enabled", "mode", "base_url", "api_key",
+        "model_id", "description", "version", "supported_agents_snapshot", "created_at", "updated_at",
+      ].join(", ");
+      this.db.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.withImmediateTx(() => {
+          this.db.exec("DROP TABLE IF EXISTS meta_instance_upstream_config_rebuild");
+          this.db.exec(instanceUpstreamTableDdl("meta_instance_upstream_config_rebuild"));
+          this.db.exec(
+            `INSERT INTO meta_instance_upstream_config_rebuild (${copiedColumns})
+             SELECT ${copiedColumns} FROM meta_instance_upstream_config`,
+          );
+          this.db.exec("DROP TABLE meta_instance_upstream_config");
+          this.db.exec("ALTER TABLE meta_instance_upstream_config_rebuild RENAME TO meta_instance_upstream_config");
+          this.db.exec(INSTANCE_UPSTREAM_SINGLETON_INDEX_DDL);
+        });
+      } finally {
+        this.db.exec("PRAGMA foreign_keys = ON");
+      }
+    }
+
+    this.db.exec(SUBSCRIPTION_ACCOUNT_TABLE_DDL);
+
+    // An account table from an earlier build has no session counter column.
+    const hasSessionColumn = this.all<{ name: string }>(
+      "SELECT name FROM pragma_table_info('meta_upstream_subscription_account') WHERE name = 'active_sessions'",
+    );
+    if (hasSessionColumn.length === 0) {
+      this.db.exec("ALTER TABLE meta_upstream_subscription_account ADD COLUMN active_sessions INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   private migrateUserTypeColumn(): void {
@@ -2340,6 +2464,96 @@ export class SqliteMetadataStore implements IMetadataStore {
     });
   }
 
+  moveAgentBetweenUpstreamGroups(
+    input: MoveAgentBetweenUpstreamGroupsInput,
+  ): MoveAgentBetweenUpstreamGroupsResult {
+    return this.withImmediateTx(() => {
+      const groups = this.all<Row>(
+        "SELECT * FROM meta_instance_upstream_config WHERE group_type IN ('default','custom')",
+      ).map((r) => this.mapInstanceUpstreamGroup(r)!);
+      const byId = new Map(groups.map((g) => [g.group_id, g]));
+      const toId = "group_id" in input.to ? input.to.group_id : null;
+      const fromIds = new Set(input.from.map((f) => f.group_id));
+
+      for (const id of [...fromIds, ...(toId ? [toId] : [])]) {
+        if (!byId.has(id)) {
+          throw new InstanceUpstreamWriteConflictError("group_not_found", `group not found: ${id}`);
+        }
+      }
+
+      // The agent may stay only in the groups of this move.
+      const conflicts = groups
+        .filter((g) => g.agents.includes(input.agent) && !fromIds.has(g.group_id) && g.group_id !== toId)
+        .map((g) => ({
+          group_id: g.group_id,
+          group_type: g.group_type,
+          name: g.name,
+          overlapping_agents: [input.agent],
+        }));
+      if (conflicts.length > 0) {
+        throw new InstanceUpstreamWriteConflictError(
+          "agents_overlap",
+          `agents overlap with ${conflicts.length} existing group(s)`,
+          { conflict_groups: conflicts },
+        );
+      }
+
+      const now = nowIso();
+      const rewrite = (group: InstanceUpstreamConfigEntity, agents: string[], enabled?: boolean): void => {
+        this.run(
+          `UPDATE meta_instance_upstream_config
+           SET agents = ?, enabled = ?, version = version + 1, updated_at = ?
+           WHERE group_id = ?`,
+          JSON.stringify(agents),
+          (enabled ?? group.enabled) ? 1 : 0,
+          now,
+          group.group_id,
+        );
+      };
+
+      for (const f of input.from) {
+        const group = byId.get(f.group_id)!;
+        rewrite(group, group.agents.filter((a) => a !== input.agent), f.enabled);
+      }
+
+      let targetId: string;
+      if ("group_id" in input.to) {
+        const group = byId.get(input.to.group_id)!;
+        rewrite(
+          group,
+          group.agents.includes(input.agent) ? group.agents : [...group.agents, input.agent],
+          input.to.enabled,
+        );
+        targetId = group.group_id;
+      } else {
+        const create = input.to.create;
+        this.assertGroupNameUnique(create.name ?? "", null);
+        targetId = this.newGroupId("custom");
+        this.run(
+          `INSERT INTO meta_instance_upstream_config
+            (group_id, group_type, name, agents, enabled, mode, base_url, api_key, model_id, description, version, supported_agents_snapshot, created_at, updated_at)
+           VALUES (?, 'custom', ?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', ?, ?)`,
+          targetId,
+          create.name ?? "",
+          JSON.stringify([input.agent]),
+          create.enabled === false ? 0 : 1,
+          create.mode,
+          create.base_url ?? "",
+          create.api_key ?? "",
+          create.model_id ?? "",
+          create.description ?? "",
+          now,
+          now,
+        );
+      }
+
+      return {
+        from: input.from.map((f) => this.getInstanceUpstreamGroup(f.group_id)!),
+        to: this.getInstanceUpstreamGroup(targetId)!,
+      };
+    });
+  }
+
   deleteInstanceUpstreamGroup(input: DeleteInstanceUpstreamGroupInput): boolean {
     const existing = this.get(
       "SELECT id FROM meta_instance_upstream_config WHERE group_id = ?",
@@ -2463,6 +2677,237 @@ export class SqliteMetadataStore implements IMetadataStore {
       description: String(r.description ?? ""),
       version: Number(r.version ?? 1),
       supported_agents_snapshot: snapshot,
+      created_at: String(r.created_at),
+      updated_at: String(r.updated_at),
+    };
+  }
+
+  // ── Subscription accounts ──────────────────────────────────────────────
+  //
+  // Writes run in an IMMEDIATE transaction, so checks and writes cannot interleave with
+  // another writer. Deleting a group deletes its accounts through the foreign key.
+
+  listSubscriptionAccounts(groupId?: string): SubscriptionAccountEntity[] {
+    const rows = groupId === undefined
+      ? this.all("SELECT * FROM meta_upstream_subscription_account ORDER BY created_at ASC, account_id ASC")
+      : this.all(
+        "SELECT * FROM meta_upstream_subscription_account WHERE group_id = ? ORDER BY created_at ASC, account_id ASC",
+        groupId,
+      );
+    return rows.map((r) => this.mapSubscriptionAccount(r));
+  }
+
+  getSubscriptionAccount(accountId: string): SubscriptionAccountEntity | null {
+    const row = this.get(
+      "SELECT * FROM meta_upstream_subscription_account WHERE account_id = ?",
+      accountId,
+    );
+    return row ? this.mapSubscriptionAccount(row) : null;
+  }
+
+  upsertSubscriptionAccountByProviderId(
+    input: UpsertSubscriptionAccountInput,
+  ): UpsertSubscriptionAccountResult {
+    return this.withImmediateTx(() => {
+      if (!this.get("SELECT 1 AS ok FROM meta_instance_upstream_config WHERE group_id = ?", input.group_id)) {
+        throw new SubscriptionAccountWriteConflictError(
+          "group_not_found",
+          `group not found: ${input.group_id}`,
+        );
+      }
+      const now = nowIso();
+      const existing = this.get(
+        "SELECT * FROM meta_upstream_subscription_account WHERE group_id = ? AND provider_account_id = ?",
+        input.group_id,
+        input.provider_account_id,
+      );
+
+      if (existing) {
+        // New tokens fix an auth error. The admin switch decides which state follows.
+        const wasAuthError = String(existing.status) === "auth_error";
+        const nextStatus = wasAuthError
+          ? (Number(existing.enabled) === 1 ? "active" : "disabled")
+          : String(existing.status);
+        this.run(
+          `UPDATE meta_upstream_subscription_account
+           SET access_token = ?, refresh_token = ?, token_expires_at = ?, account_label = ?,
+               status = ?, refresh_fail_count = 0, last_error = NULL,
+               version = version + 1, updated_at = ?
+           WHERE account_id = ?`,
+          input.access_token,
+          input.refresh_token,
+          input.token_expires_at,
+          input.account_label ?? String(existing.account_label ?? ""),
+          nextStatus,
+          now,
+          String(existing.account_id),
+        );
+        return {
+          account: this.getSubscriptionAccount(String(existing.account_id))!,
+          created: false,
+        };
+      }
+
+      this.assertSubscriptionAccountNameUnique(input.group_id, input.display_name, null);
+      const accountId = this.newSubscriptionAccountId();
+      this.run(
+        `INSERT INTO meta_upstream_subscription_account
+          (account_id, group_id, provider, display_name, account_label, enabled, status,
+           access_token, refresh_token, token_expires_at, provider_account_id,
+           usage_json, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, 'active', ?, ?, ?, ?, ?, 1, ?, ?)`,
+        accountId,
+        input.group_id,
+        input.provider,
+        input.display_name,
+        input.account_label ?? "",
+        input.access_token,
+        input.refresh_token,
+        input.token_expires_at,
+        input.provider_account_id,
+        JSON.stringify({ windows: [] }),
+        now,
+        now,
+      );
+      return { account: this.getSubscriptionAccount(accountId)!, created: true };
+    });
+  }
+
+  updateSubscriptionAccount(
+    accountId: string,
+    patch: UpdateSubscriptionAccountPatch,
+    expectedVersion?: number,
+  ): SubscriptionAccountEntity {
+    return this.withImmediateTx(() => {
+      const row = this.get(
+        "SELECT * FROM meta_upstream_subscription_account WHERE account_id = ?",
+        accountId,
+      );
+      if (!row) {
+        throw new SubscriptionAccountWriteConflictError(
+          "account_not_found",
+          `subscription account not found: ${accountId}`,
+        );
+      }
+      const current = this.mapSubscriptionAccount(row);
+      if (expectedVersion !== undefined && expectedVersion !== current.version) {
+        throw new SubscriptionAccountWriteConflictError(
+          "version_mismatch",
+          `version mismatch: expected ${expectedVersion}, actual ${current.version}`,
+          { expected: expectedVersion, actual: current.version },
+        );
+      }
+      if (patch.display_name !== undefined && patch.display_name !== current.display_name) {
+        this.assertSubscriptionAccountNameUnique(current.group_id, patch.display_name, accountId);
+      }
+
+      const sets: string[] = [];
+      const params: SQLInputValue[] = [];
+      const setColumn = (column: string, value: SQLInputValue | undefined): void => {
+        if (value === undefined) return;
+        sets.push(`${column} = ?`);
+        params.push(value);
+      };
+      setColumn("display_name", patch.display_name);
+      setColumn("account_label", patch.account_label);
+      setColumn("enabled", patch.enabled === undefined ? undefined : patch.enabled ? 1 : 0);
+      setColumn("status", patch.status);
+      setColumn("access_token", patch.access_token);
+      setColumn("refresh_token", patch.refresh_token);
+      setColumn("token_expires_at", patch.token_expires_at);
+      setColumn("usage_json", patch.usage === undefined ? undefined : JSON.stringify(patch.usage));
+      setColumn("usage_updated_at", patch.usage_updated_at);
+      setColumn("exhausted_until", patch.exhausted_until);
+      setColumn("usage_fail_count", patch.usage_fail_count);
+      setColumn("refresh_fail_count", patch.refresh_fail_count);
+      setColumn("last_error", patch.last_error);
+      setColumn("active_sessions", patch.active_sessions);
+
+      this.run(
+        `UPDATE meta_upstream_subscription_account
+         SET ${[...sets, "version = version + 1", "updated_at = ?"].join(", ")}
+         WHERE account_id = ?`,
+        ...params,
+        nowIso(),
+        accountId,
+      );
+      return this.getSubscriptionAccount(accountId)!;
+    });
+  }
+
+  deleteSubscriptionAccount(accountId: string): boolean {
+    return this.withImmediateTx(() => {
+      const existing = this.get(
+        "SELECT 1 AS ok FROM meta_upstream_subscription_account WHERE account_id = ?",
+        accountId,
+      );
+      if (!existing) return false;
+      this.run("DELETE FROM meta_upstream_subscription_account WHERE account_id = ?", accountId);
+      return true;
+    });
+  }
+
+  /** Account names are unique inside one group. `selfAccountId` is skipped when an account is renamed. */
+  private assertSubscriptionAccountNameUnique(
+    groupId: string,
+    displayName: string,
+    selfAccountId: string | null,
+  ): void {
+    const clash = this.get<{ account_id: string }>(
+      "SELECT account_id FROM meta_upstream_subscription_account WHERE group_id = ? AND display_name = ?",
+      groupId,
+      displayName,
+    );
+    if (clash && clash.account_id !== selfAccountId) {
+      throw new SubscriptionAccountWriteConflictError(
+        "name_duplicate",
+        `account name "${displayName}" is already used in this group`,
+        { conflict_account_id: clash.account_id },
+      );
+    }
+  }
+
+  /** Generate an account id. The caller holds the write lock, so the check cannot race. */
+  private newSubscriptionAccountId(): string {
+    for (let attempt = 0; attempt < PK_RETRY_LIMIT; attempt++) {
+      const id = generateId("sacc");
+      if (!this.get("SELECT 1 AS ok FROM meta_upstream_subscription_account WHERE account_id = ?", id)) {
+        return id;
+      }
+    }
+    throw new Error("subscription account id collision after max retries");
+  }
+
+  private mapSubscriptionAccount(row: Row): SubscriptionAccountEntity {
+    const r = row as Record<string, unknown>;
+    let usage: SubscriptionAccountUsage = { windows: [] };
+    try {
+      const parsed = JSON.parse(String(r.usage_json ?? "{}")) as Partial<SubscriptionAccountUsage>;
+      if (Array.isArray(parsed.windows)) usage = { windows: parsed.windows };
+    } catch {
+      /* keep the empty usage when the stored JSON is damaged */
+    }
+    const nullableNumber = (v: unknown): number | null => (v == null ? null : Number(v));
+    return {
+      account_id: String(r.account_id),
+      group_id: String(r.group_id),
+      provider: String(r.provider) as SubscriptionProvider,
+      display_name: String(r.display_name),
+      account_label: String(r.account_label ?? ""),
+      enabled: Number(r.enabled) === 1,
+      status: String(r.status) as SubscriptionAccountStatus,
+      access_token: String(r.access_token ?? ""),
+      refresh_token: String(r.refresh_token ?? ""),
+      token_expires_at: nullableNumber(r.token_expires_at),
+      provider_account_id: String(r.provider_account_id),
+      usage,
+      usage_updated_at: nullableNumber(r.usage_updated_at),
+      exhausted_until: nullableNumber(r.exhausted_until),
+      usage_fail_count: Number(r.usage_fail_count ?? 0),
+      refresh_fail_count: Number(r.refresh_fail_count ?? 0),
+      last_error: r.last_error == null ? null : String(r.last_error),
+      active_sessions: Number(r.active_sessions ?? 0),
+      version: Number(r.version ?? 1),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at),
     };

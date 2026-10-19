@@ -68,11 +68,24 @@ import type {
   UpdateInstanceUpstreamGroupInput,
   ToggleInstanceUpstreamGroupInput,
   DeleteInstanceUpstreamGroupInput,
+  MoveAgentBetweenUpstreamGroupsInput,
+  MoveAgentBetweenUpstreamGroupsResult,
   SupportedAgent,
   GroupType,
   UpstreamMode,
+  SubscriptionAccountEntity,
+  SubscriptionAccountStatus,
+  SubscriptionAccountUsage,
+  SubscriptionProvider,
+  UpsertSubscriptionAccountInput,
+  UpsertSubscriptionAccountResult,
+  UpdateSubscriptionAccountPatch,
 } from "../types.js";
-import { DEFAULT_GROUP_NAME, InstanceUpstreamWriteConflictError } from "../types.js";
+import {
+  DEFAULT_GROUP_NAME,
+  InstanceUpstreamWriteConflictError,
+  SubscriptionAccountWriteConflictError,
+} from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
 import { DuplicateUserKeyError } from "./interface.js";
@@ -94,6 +107,17 @@ function isPkCollision(err: unknown): boolean {
 
 function isStorePkCollision(err: unknown): boolean {
   return isPkCollision(err) || isMongoRelationIdCollision(err);
+}
+
+const SUBSCRIPTION_ACCOUNT_COLLECTION = "meta_upstream_subscription_account";
+
+/** Returns true if the error is an E11000 duplicate key on an index that has all the given fields. */
+function isDuplicateOnFields(err: unknown, fields: string[]): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+  if (e.code !== 11000 || !e.keyPattern) return false;
+  const keys = Object.keys(e.keyPattern);
+  return fields.length === keys.length && fields.every((f) => keys.includes(f));
 }
 
 /** E11000 on meta_user_keys.key_value (调用方显式指定 default_key_value 时并发命中)。 */
@@ -315,6 +339,20 @@ export class MongoMetadataStore implements IMetadataStore {
       this.ensureIndex("meta_instance_upstream_config",
         { group_type: 1 },
         { unique: true, partialFilterExpression: { group_type: "extraction" }, name: "ux_group_type_extraction" },
+      ),
+
+      // ── meta_upstream_subscription_account ──
+      // The two compound unique indexes keep the provider identity and the display name
+      // unique inside one group.
+      this.ensureIndex(SUBSCRIPTION_ACCOUNT_COLLECTION, { account_id: 1 }, { unique: true }),
+      this.ensureIndex(SUBSCRIPTION_ACCOUNT_COLLECTION, { group_id: 1 }),
+      this.ensureIndex(SUBSCRIPTION_ACCOUNT_COLLECTION,
+        { group_id: 1, provider_account_id: 1 },
+        { unique: true },
+      ),
+      this.ensureIndex(SUBSCRIPTION_ACCOUNT_COLLECTION,
+        { group_id: 1, display_name: 1 },
+        { unique: true },
       ),
     ]);
 
@@ -1853,11 +1891,140 @@ export class MongoMetadataStore implements IMetadataStore {
     );
   }
 
+  async moveAgentBetweenUpstreamGroups(
+    input: MoveAgentBetweenUpstreamGroupsInput,
+  ): Promise<MoveAgentBetweenUpstreamGroupsResult> {
+    const cfg = this.col("meta_instance_upstream_config");
+    return this.withTx(async (session) => {
+      const docs = await cfg
+        .find({ group_type: { $in: ["default", "custom"] } } as Document, { ...PROJECT_NO_ID, session })
+        .toArray();
+      const groups = docs.map((d) => this.mapMongoGroup(d as Document));
+      const byId = new Map(groups.map((g) => [g.group_id, g]));
+      const toId = "group_id" in input.to ? input.to.group_id : null;
+      const fromIds = new Set(input.from.map((f) => f.group_id));
+
+      for (const id of [...fromIds, ...(toId ? [toId] : [])]) {
+        if (!byId.has(id)) {
+          throw new InstanceUpstreamWriteConflictError("group_not_found", `group not found: ${id}`);
+        }
+      }
+
+      // The agent may stay only in the groups of this move.
+      const conflicts = groups
+        .filter((g) => g.agents.includes(input.agent) && !fromIds.has(g.group_id) && g.group_id !== toId)
+        .map((g) => ({
+          group_id: g.group_id,
+          group_type: g.group_type,
+          name: g.name,
+          overlapping_agents: [input.agent],
+        }));
+      if (conflicts.length > 0) {
+        throw new InstanceUpstreamWriteConflictError(
+          "agents_overlap",
+          `agents overlap with ${conflicts.length} existing group(s)`,
+          { conflict_groups: conflicts },
+        );
+      }
+
+      const now = nowIso();
+      const rewrite = async (
+        group: InstanceUpstreamConfigEntity,
+        agents: string[],
+        enabled?: boolean,
+      ): Promise<void> => {
+        const result = await cfg.updateOne(
+          { group_id: group.group_id, version: group.version } as Document,
+          { $set: { agents, enabled: enabled ?? group.enabled, updated_at: now }, $inc: { version: 1 } },
+          { session },
+        );
+        if ((result.matchedCount ?? 0) !== 1) {
+          throw new InstanceUpstreamWriteConflictError(
+            "version_mismatch",
+            "concurrent write during agent move",
+            { group_id: group.group_id },
+          );
+        }
+      };
+
+      for (const f of input.from) {
+        const group = byId.get(f.group_id)!;
+        await rewrite(group, group.agents.filter((a) => a !== input.agent), f.enabled);
+      }
+
+      let targetId: string;
+      if ("group_id" in input.to) {
+        const group = byId.get(input.to.group_id)!;
+        await rewrite(
+          group,
+          group.agents.includes(input.agent) ? group.agents : [...group.agents, input.agent],
+          input.to.enabled,
+        );
+        targetId = group.group_id;
+      } else {
+        const create = input.to.create;
+        const candidate = (create.name ?? "").trim();
+        if (candidate) {
+          const names = await cfg
+            .find({} as Document, { projection: { _id: 0, group_id: 1, group_type: 1, name: 1 }, session })
+            .toArray();
+          const clash = names.find((d) => String((d as Document).name ?? "").trim() === candidate);
+          if (clash) {
+            throw new InstanceUpstreamWriteConflictError(
+              "name_duplicate",
+              `group name "${candidate}" is already used by another group in this instance`,
+              {
+                conflict_group: {
+                  group_id: String((clash as Document).group_id),
+                  group_type: String((clash as Document).group_type),
+                  name: String((clash as Document).name ?? ""),
+                },
+              },
+            );
+          }
+        }
+        targetId = this.newGroupId("custom");
+        await cfg.insertOne({
+          id: await this.nextInstanceUpstreamConfigId(),
+          group_id: targetId,
+          group_type: "custom",
+          name: create.name ?? "",
+          agents: [input.agent],
+          enabled: create.enabled !== false,
+          mode: create.mode,
+          base_url: create.base_url ?? "",
+          api_key: create.api_key ?? "",
+          model_id: create.model_id ?? "",
+          description: create.description ?? "",
+          version: 1,
+          supported_agents_snapshot: [],
+          created_at: now,
+          updated_at: now,
+        } as Document, { session });
+      }
+
+      const read = async (groupId: string): Promise<InstanceUpstreamConfigEntity> =>
+        this.mapMongoGroup((await cfg.findOne({ group_id: groupId } as Document, { ...PROJECT_NO_ID, session }))!);
+      const from: InstanceUpstreamConfigEntity[] = [];
+      for (const f of input.from) from.push(await read(f.group_id));
+      return { from, to: await read(targetId) };
+    });
+  }
+
   async deleteInstanceUpstreamGroup(input: DeleteInstanceUpstreamGroupInput): Promise<boolean> {
-    const result = await this.col("meta_instance_upstream_config").deleteOne(
-      { group_id: input.group_id } as Document,
-    );
-    return (result.deletedCount ?? 0) > 0;
+    // The accounts of the group go with it. MongoDB has no foreign keys, so delete them here.
+    return this.withTx(async (session) => {
+      const result = await this.col("meta_instance_upstream_config").deleteOne(
+        { group_id: input.group_id } as Document,
+        { session },
+      );
+      if ((result.deletedCount ?? 0) === 0) return false;
+      await this.col(SUBSCRIPTION_ACCOUNT_COLLECTION).deleteMany(
+        { group_id: input.group_id } as Document,
+        { session },
+      );
+      return true;
+    });
   }
 
   private async assertAgentsNotOverlapMongo(
@@ -2071,6 +2238,232 @@ export class MongoMetadataStore implements IMetadataStore {
       version: Number(doc.version ?? 1),
       supported_agents_snapshot: Array.isArray(doc.supported_agents_snapshot)
         ? (doc.supported_agents_snapshot as string[]) : [],
+      created_at: String(doc.created_at),
+      updated_at: String(doc.updated_at),
+    };
+  }
+
+  // ── Subscription accounts ──────────────────────────────────────────────
+  //
+  // Same behavior as the SQLite store. Writes use the `version` field as an optimistic lock,
+  // and unique indexes guard the group-scoped names.
+
+  async listSubscriptionAccounts(groupId?: string): Promise<SubscriptionAccountEntity[]> {
+    const docs = await this.col(SUBSCRIPTION_ACCOUNT_COLLECTION)
+      .find((groupId === undefined ? {} : { group_id: groupId }) as Document, PROJECT_NO_ID)
+      .sort({ created_at: 1, account_id: 1 })
+      .toArray();
+    return docs.map((d) => this.mapSubscriptionAccount(d));
+  }
+
+  async getSubscriptionAccount(accountId: string): Promise<SubscriptionAccountEntity | null> {
+    const doc = await this.col(SUBSCRIPTION_ACCOUNT_COLLECTION).findOne(
+      { account_id: accountId } as Document,
+      PROJECT_NO_ID,
+    );
+    return doc ? this.mapSubscriptionAccount(doc) : null;
+  }
+
+  async upsertSubscriptionAccountByProviderId(
+    input: UpsertSubscriptionAccountInput,
+  ): Promise<UpsertSubscriptionAccountResult> {
+    const group = await this.col("meta_instance_upstream_config").findOne(
+      { group_id: input.group_id } as Document,
+      PROJECT_NO_ID,
+    );
+    if (!group) {
+      throw new SubscriptionAccountWriteConflictError(
+        "group_not_found",
+        `group not found: ${input.group_id}`,
+      );
+    }
+    const col = this.col(SUBSCRIPTION_ACCOUNT_COLLECTION);
+
+    // Each round either replaces the tokens of the existing row or inserts a new row.
+    // A concurrent insert of the same provider identity makes the next round take the replace path.
+    for (let attempt = 0; attempt < PK_RETRY_LIMIT + 2; attempt++) {
+      const existing = await col.findOne(
+        { group_id: input.group_id, provider_account_id: input.provider_account_id } as Document,
+        PROJECT_NO_ID,
+      );
+      const now = nowIso();
+
+      if (existing) {
+        // New tokens fix an auth error. The admin switch decides which state follows.
+        const nextStatus = existing.status === "auth_error"
+          ? (existing.enabled === false ? "disabled" : "active")
+          : String(existing.status);
+        const result = await col.updateOne(
+          { account_id: existing.account_id, version: existing.version } as Document,
+          {
+            $set: {
+              access_token: input.access_token,
+              refresh_token: input.refresh_token,
+              token_expires_at: input.token_expires_at,
+              account_label: input.account_label ?? String(existing.account_label ?? ""),
+              status: nextStatus,
+              refresh_fail_count: 0,
+              last_error: null,
+              updated_at: now,
+            },
+            $inc: { version: 1 },
+          },
+        );
+        if ((result.matchedCount ?? 0) === 1) {
+          return {
+            account: (await this.getSubscriptionAccount(String(existing.account_id)))!,
+            created: false,
+          };
+        }
+        continue; // lost a race with another writer, read the row again
+      }
+
+      const accountId = generateId("sacc");
+      const doc: Document = {
+        account_id: accountId,
+        group_id: input.group_id,
+        provider: input.provider,
+        display_name: input.display_name,
+        account_label: input.account_label ?? "",
+        enabled: true,
+        status: "active",
+        access_token: input.access_token,
+        refresh_token: input.refresh_token,
+        token_expires_at: input.token_expires_at,
+        provider_account_id: input.provider_account_id,
+        usage: { windows: [] },
+        usage_updated_at: null,
+        exhausted_until: null,
+        usage_fail_count: 0,
+        refresh_fail_count: 0,
+        last_error: null,
+        active_sessions: 0,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      };
+      try {
+        await col.insertOne(doc);
+        return { account: (await this.getSubscriptionAccount(accountId))!, created: true };
+      } catch (err) {
+        if (isDuplicateOnFields(err, ["group_id", "display_name"])) {
+          throw new SubscriptionAccountWriteConflictError(
+            "name_duplicate",
+            `account name "${input.display_name}" is already used in this group`,
+          );
+        }
+        if (
+          isDuplicateOnFields(err, ["group_id", "provider_account_id"])
+          || isDuplicateOnFields(err, ["account_id"])
+        ) {
+          continue; // same identity added at the same time, or an id clash: try again
+        }
+        throw err;
+      }
+    }
+    throw new SubscriptionAccountWriteConflictError(
+      "version_mismatch",
+      "concurrent write exceeded retry limit",
+    );
+  }
+
+  async updateSubscriptionAccount(
+    accountId: string,
+    patch: UpdateSubscriptionAccountPatch,
+    expectedVersion?: number,
+  ): Promise<SubscriptionAccountEntity> {
+    const col = this.col(SUBSCRIPTION_ACCOUNT_COLLECTION);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.getSubscriptionAccount(accountId);
+      if (!current) {
+        throw new SubscriptionAccountWriteConflictError(
+          "account_not_found",
+          `subscription account not found: ${accountId}`,
+        );
+      }
+      if (expectedVersion !== undefined && expectedVersion !== current.version) {
+        throw new SubscriptionAccountWriteConflictError(
+          "version_mismatch",
+          `version mismatch: expected ${expectedVersion}, actual ${current.version}`,
+          { expected: expectedVersion, actual: current.version },
+        );
+      }
+
+      const setDoc: Document = { updated_at: nowIso() };
+      const fields: Array<keyof UpdateSubscriptionAccountPatch> = [
+        "display_name", "account_label", "enabled", "status", "access_token", "refresh_token",
+        "token_expires_at", "usage", "usage_updated_at", "exhausted_until", "usage_fail_count",
+        "refresh_fail_count", "last_error", "active_sessions",
+      ];
+      for (const field of fields) {
+        if (patch[field] !== undefined) setDoc[field] = patch[field];
+      }
+
+      try {
+        const result = await col.updateOne(
+          { account_id: accountId, version: current.version } as Document,
+          { $set: setDoc, $inc: { version: 1 } },
+        );
+        if ((result.matchedCount ?? 0) === 1) {
+          return (await this.getSubscriptionAccount(accountId))!;
+        }
+      } catch (err) {
+        if (isDuplicateOnFields(err, ["group_id", "display_name"])) {
+          throw new SubscriptionAccountWriteConflictError(
+            "name_duplicate",
+            `account name "${patch.display_name}" is already used in this group`,
+          );
+        }
+        throw err;
+      }
+      // Another writer changed the row first. A caller that gave a version must handle it.
+      if (expectedVersion !== undefined) {
+        throw new SubscriptionAccountWriteConflictError(
+          "version_mismatch",
+          "concurrent write during update",
+          { attempt },
+        );
+      }
+    }
+    throw new SubscriptionAccountWriteConflictError(
+      "version_mismatch",
+      "concurrent write exceeded retry limit",
+    );
+  }
+
+  async deleteSubscriptionAccount(accountId: string): Promise<boolean> {
+    const result = await this.col(SUBSCRIPTION_ACCOUNT_COLLECTION).deleteOne(
+      { account_id: accountId } as Document,
+    );
+    return (result.deletedCount ?? 0) > 0;
+  }
+
+  private mapSubscriptionAccount(doc: Document): SubscriptionAccountEntity {
+    const windows = (doc.usage as { windows?: unknown } | undefined)?.windows;
+    const usage: SubscriptionAccountUsage = {
+      windows: Array.isArray(windows) ? (windows as SubscriptionAccountUsage["windows"]) : [],
+    };
+    const nullableNumber = (v: unknown): number | null => (v == null ? null : Number(v));
+    return {
+      account_id: String(doc.account_id),
+      group_id: String(doc.group_id),
+      provider: String(doc.provider) as SubscriptionProvider,
+      display_name: String(doc.display_name),
+      account_label: String(doc.account_label ?? ""),
+      enabled: Boolean(doc.enabled),
+      status: String(doc.status) as SubscriptionAccountStatus,
+      access_token: String(doc.access_token ?? ""),
+      refresh_token: String(doc.refresh_token ?? ""),
+      token_expires_at: nullableNumber(doc.token_expires_at),
+      provider_account_id: String(doc.provider_account_id),
+      usage,
+      usage_updated_at: nullableNumber(doc.usage_updated_at),
+      exhausted_until: nullableNumber(doc.exhausted_until),
+      usage_fail_count: Number(doc.usage_fail_count ?? 0),
+      refresh_fail_count: Number(doc.refresh_fail_count ?? 0),
+      last_error: doc.last_error == null ? null : String(doc.last_error),
+      active_sessions: Number(doc.active_sessions ?? 0),
+      version: Number(doc.version ?? 1),
       created_at: String(doc.created_at),
       updated_at: String(doc.updated_at),
     };

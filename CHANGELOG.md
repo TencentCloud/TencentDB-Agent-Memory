@@ -9,6 +9,21 @@
 
 ---
 
+## [Unreleased]
+
+### 🔁 Codex 订阅账号池（可选，默认关闭）
+
+- 新的上游分组模式 `subscription_pool`：Proxy 为每个新 Codex 会话轮流分配 ChatGPT 订阅账号，
+  会话固定在同一账号；账号达到阈值（默认 95%）或返回 429 时换账号，到重置时间后自动恢复
+- Memory Core 统一保存 token：过期前 10 分钟刷新，每 30 分钟、每个重置时间点和启动时检查用量；
+  新增环境变量 `SUBSCRIPTION_POOL_ENABLED`、`SUBSCRIPTION_POOL_CHECK_INTERVAL_MIN`
+- Memory Hub 新增「订阅账号池」页面（仅 System Admin），可添加/重新登录/停用账号并查看用量与重置时间
+- Proxy 支持 `x-tdai-user-key` 请求头：带上它时 `Authorization` 保留为客户端自己的凭据；
+  `setup-proxy.sh --codex-own-login` 可保留自己的 ChatGPT 登录作为回退
+- 不支持 Claude 订阅账号池（Anthropic 条款不允许服务端保存或转发 Claude.ai 订阅凭据）
+- 修复：sqlite 元数据后端每次重启 Memory Core 都会丢失自定义上游分组
+- 修复：API trace 日志不再记录方法参数中的 token 等敏感字段
+
 ## [2.0.3-beta.1] — 2026-10-13
 
 ### 🧩 可插拔决策服务（默认关闭）

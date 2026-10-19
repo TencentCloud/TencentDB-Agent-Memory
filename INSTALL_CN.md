@@ -515,6 +515,54 @@ pipeline 时才有意义。
 >
 > 我们将在下一个版本中优化 conversation ID 的使用体验。
 
+## 可选能力：订阅账号池（仅 Codex，默认关闭）
+
+团队可以让多个 ChatGPT Plus/Pro 订阅账号在 Codex 用户之间共用。Proxy 给每个新的 Codex 会话分配下一个账号，
+同一会话保持在同一账号上；账号用量到达上限时把会话切到其他账号，到重置时间后再重新使用该账号。
+没有开启账号池的分组行为不变。
+
+只支持 ChatGPT（Codex）账号。Claude 订阅不做账号池：Anthropic 的条款不允许服务端为他人保存或转发
+Claude.ai 订阅凭据。
+
+**开启前需要接受的风险**：共用个人订阅可能违反服务商条款，账号可能被封禁；登录、刷新和用量接口不是 OpenAI
+公开文档的接口，可能随时变化。用量接口失效时，账号池仍依靠响应头和 429 工作。
+
+### 开启方式
+
+1. 以 System Admin 登录 Memory Hub，打开 **组织与权限 → 订阅账号池**，切到 **Codex** 标签页。
+2. 打开账号池开关。`codex` agent 会从 `default` 上游分组移到账号池分组。如果 `codex` 在自定义上游分组中，
+   请先把它移回 `default`。
+3. 点击 **添加账号**，在新标签页登录 ChatGPT。浏览器随后打开 `http://localhost:1455/auth/callback?...`，
+   页面无法加载属于正常现象；复制地址栏中的完整地址，粘贴到对话框。每个账号重复一次。
+   同一个 ChatGPT 账号再次登录时只替换 token，名称保持不变。
+4. 可选：调整阈值（默认 95%）。达到阈值的账号不再接新会话，已有会话继续使用。
+
+### 运行方式
+
+- Memory Core 保存 token，在过期前 10 分钟刷新；每 30 分钟、每个重置时间点以及 Core 启动时读取所有账号的用量。
+- ChatGPT 返回 429 时，该账号标记为用尽直到重置时间；请求在发送任何内容给客户端之前换一个账号重试一次。
+- 所有账号都到达阈值时，Proxy 使用用量最低的账号；全部返回 429 时，如果客户端带了自己的 ChatGPT 登录（见下文）
+  就用它，否则返回 429 并给出最早的重置时间。
+
+**保留自己的 ChatGPT 登录作为回退（可选）**：在客户端先执行 `codex login`，再运行
+`bash agents/setup-proxy.sh --agent codex`，回退问题选 yes（或传入 `--codex-own-login`）。
+Codex provider 将使用 `requires_openai_auth = true`，proxy key 通过 `x-tdai-user-key` 请求头发送。
+
+### 运维
+
+- 8420 端口只能暴露在可信网络：Core 的内部接口会把订阅账号的 access token 返回给 Proxy。
+- 每个实例只运行一个 Memory Core 进程；刷新 token 的定时任务不在多个副本之间共享。
+- 账号池请求不走 TokenHub，不计 credit，也不受 Proxy 的 TPM/QPM 限制。这些对话的记忆抽取仍调用 TokenHub
+  （或实例的 extraction 分组），计费方式不变。
+- 先启动 Memory Core 再启动 Proxy。Core 不可用时启动的 Proxy 还不知道上游分组，会把 `codex` 发往 `default`
+  分组（TokenHub，按 token 计费），直到能读到分组为止（Core 恢复后约 30 秒）。所有自定义上游分组都有同样的现有行为。
+- `deploy/global-images/.env.example` 中的变量：`SUBSCRIPTION_POOL_ENABLED=false` 关闭全部账号池定时任务；
+  `SUBSCRIPTION_POOL_CHECK_INTERVAL_MIN` 修改 30 分钟的用量检查间隔。
+
+### 关闭方式
+
+在 **订阅账号池** 页面关闭开关。约 30 秒内 `codex` agent 回到 `default` 分组；账号会保留，直到手动删除。
+
 ## 可选能力：数据分析与可观测性（默认关闭）
 
 **做什么用。** Panel 里的「数据分析」页会把这套系统的运行情况汇成看板：

@@ -457,7 +457,41 @@ export const userSessionDefaultDeleteSchema = z.object({
 // 详见 docs/design/2026-08-25-instance-upstream-config.md §6.B / §6.C。
 const upstreamGroupType = z.enum(["default", "custom", "extraction"]);
 const upstreamGroupTypeConvOnly = z.enum(["default", "custom"]); // update/delete/toggle 用
-const upstreamMode = z.enum(["official", "custom_unified", "custom_passthrough"]);
+const upstreamMode = z.enum(["official", "custom_unified", "custom_passthrough", "subscription_pool"]);
+
+export const subscriptionPoolProviderSchema = z.enum(["claude", "codex"]);
+export const subscriptionPoolStatusSchema = z.object({ provider: subscriptionPoolProviderSchema.optional() });
+export const subscriptionPoolEnableSchema = z.object({ provider: subscriptionPoolProviderSchema });
+export const subscriptionPoolDisableSchema = z.object({ provider: subscriptionPoolProviderSchema });
+export const subscriptionPoolSettingsSchema = z.object({ threshold_pct: z.number().int().min(50).max(100) });
+export const subscriptionPoolAccountUpdateSchema = z.object({
+  account_id: z.string().min(1), expected_version: z.number().int().nonnegative().optional(),
+  display_name: z.string().min(1).optional(), enabled: z.boolean().optional(),
+  status: z.enum(["active", "exhausted", "auth_error", "disabled"]).optional(),
+});
+export const subscriptionPoolAccountDeleteSchema = z.object({ account_id: z.string().min(1) });
+export const subscriptionPoolAccountsListSchema = z.object({}).catchall(z.unknown());
+export const subscriptionPoolReportSchema = z.object({
+  account_id: z.string().min(1), status_code: z.number().int().optional(), retry_after: z.number().nonnegative().optional(),
+  active_sessions: z.number().int().nonnegative().optional(), windows: z.array(z.object({
+    name: z.string(), model_scope: z.string().nullable().optional(), used_pct: z.number(), resets_at: z.number().nullable(), observed_at: z.number(), source: z.string(),
+  })).optional(),
+});
+export const subscriptionPoolOAuthStartSchema = z.object({ provider: subscriptionPoolProviderSchema });
+export const subscriptionPoolOAuthCompleteSchema = z.object({
+  provider: subscriptionPoolProviderSchema,
+  state: z.string().min(1),
+  code: z.string().min(1).optional(),
+  redirect_url: z.string().min(1).optional(),
+  display_name: z.string().min(1).optional(),
+});
+export const subscriptionPoolAccountCheckSchema = z.object({ account_id: z.string().min(1) });
+export const subscriptionPoolCheckAllSchema = z.object({}).catchall(z.unknown());
+export const subscriptionPoolRefreshSchema = z.object({
+  account_id: z.string().min(1),
+  /** Expiry of the token the proxy used. A newer stored token is returned without a provider call. */
+  held_expires_at: z.number().nullable().optional(),
+});
 
 // ── supported-agents & internal list ──
 

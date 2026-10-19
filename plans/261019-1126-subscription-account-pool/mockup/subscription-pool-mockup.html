@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mockup — Memory Hub (existing) + Subscription Pool (new)</title>
+<style>
+  :root {
+    --brand: #0052d9; --brand-hover: #266fe8; --brand-light: #f2f3ff;
+    --text: rgba(0,0,0,.9); --text-2: rgba(0,0,0,.6); --text-3: rgba(0,0,0,.4);
+    --border: #e7e7e7; --border-2: #dcdcdc; --page: #f3f4f7; --panel: #fff;
+    --success: #2ba471; --success-bg: #e3f9e9; --warning: #e37318; --warning-bg: #fff1e9;
+    --error: #d54941; --error-bg: #fff0ed; --gray-bg: #f3f3f3;
+    --note: #fff8d6; --note-border: #f0c419; --new: #7b2ff7; --chg: #0a8f8f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, sans-serif; color: var(--text); background: #2b2f36; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  a { color: var(--brand); text-decoration: none; cursor: pointer; }
+
+  /* ---------- mockup toolbar ---------- */
+  .mk { position: sticky; top: 0; z-index: 80; background: #1f2329; color: #e8e8e8; padding: 6px 12px; border-bottom: 1px solid #000; font-size: 12px; }
+  .mk .r { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0; }
+  .mk b { color: #fff; }
+  .mk .lab { color: #9aa0a6; width: 118px; flex: none; }
+  .mk button { background: #353b45; color: #e8e8e8; border: 1px solid #4a515c; border-radius: 3px; padding: 2px 8px; cursor: pointer; font-size: 12px; }
+  .mk button.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .mk button.nw { border-color: var(--new); }
+  .mk button.nw.on { background: var(--new); }
+  .mk button.cg { border-color: var(--chg); }
+  .mk button.cg.on { background: var(--chg); }
+  .mk label { cursor: pointer; display: inline-flex; gap: 4px; align-items: center; }
+
+  /* ---------- badges for new / changed ---------- */
+  .B { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .3px; color: #fff; padding: 0 5px; border-radius: 3px; line-height: 16px; vertical-align: middle; margin-left: 4px; }
+  .B.n { background: var(--new); } .B.c { background: var(--chg); }
+  .hl-new { outline: 2px dashed var(--new); outline-offset: 3px; }
+  .hl-chg { outline: 2px dashed var(--chg); outline-offset: 3px; }
+  body.no-hl .hl-new, body.no-hl .hl-chg { outline: none; }
+
+  /* ---------- shell ---------- */
+  .shell { display: grid; grid-template-columns: 200px 1fr; grid-template-rows: 48px 34px 1fr; min-height: calc(100vh - 66px); background: var(--page); }
+  .hdr { grid-column: 1 / 3; background: #fff; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 12px; }
+  .logo { font-weight: 600; display: flex; gap: 8px; align-items: center; }
+  .logo i { width: 18px; height: 18px; border: 2px solid #333; border-radius: 4px; display: inline-block; }
+  .team { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 3px; padding: 2px 8px; cursor: pointer; position: relative; }
+  .team .av { background: #e34d59; color: #fff; width: 22px; height: 22px; border-radius: 3px; display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+  .team small { display: block; color: var(--text-3); font-size: 11px; line-height: 1; }
+  .hdr .right { margin-left: auto; display: flex; gap: 14px; align-items: center; color: var(--text-2); }
+  .hdr .right span { cursor: pointer; }
+  .uav { background: var(--brand); color: #fff; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; }
+  .dd { position: absolute; top: 34px; background: #fff; border: 1px solid var(--border); box-shadow: 0 6px 20px rgba(0,0,0,.12); border-radius: 3px; z-index: 40; min-width: 240px; display: none; padding: 6px 0; }
+  .dd.show { display: block; }
+  .dd div { padding: 6px 14px; cursor: pointer; } .dd div:hover { background: #f3f3f3; }
+  .dd hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+  .side { background: #fff; border-right: 1px solid var(--border); padding: 8px; grid-row: 2 / 4; }
+  .side .grp { color: var(--text-3); font-size: 12px; margin: 14px 8px 4px; }
+  .side .it { padding: 7px 10px; border-radius: 4px; display: flex; gap: 8px; align-items: center; cursor: pointer; margin: 1px 0; }
+  .side .it:hover { background: #f3f3f3; }
+  .side .it.on { background: var(--brand); color: #fff; }
+  .tabs { background: #fff; border-bottom: 1px solid var(--border); display: flex; align-items: flex-end; padding: 0 12px; gap: 2px; overflow: hidden; }
+  .tabs span { padding: 6px 12px; color: var(--text-2); border: 1px solid transparent; border-bottom: none; white-space: nowrap; }
+  .tabs span.on { color: var(--text); border-color: var(--border); background: var(--page); border-radius: 3px 3px 0 0; }
+  main { padding: 12px; overflow: auto; }
+
+  /* ---------- components ---------- */
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 16px 20px; margin-bottom: 12px; }
+  .tr { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; } h2 { font-size: 14px; margin: 0 0 4px; } h3 { font-size: 13px; margin: 0 0 4px; }
+  .sub { color: var(--text-3); font-size: 12px; margin-top: 4px; }
+  .seg { display: inline-flex; border: 1px solid var(--border-2); border-radius: 3px; overflow: hidden; }
+  .seg button { border: 0; background: #fff; padding: 5px 14px; cursor: pointer; font: inherit; color: var(--text); border-right: 1px solid var(--border-2); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
+  .btn { border: 1px solid var(--border-2); background: #fff; color: var(--text); border-radius: 3px; padding: 5px 14px; cursor: pointer; font: inherit; white-space: nowrap; }
+  .btn:hover { border-color: var(--brand); color: var(--brand); }
+  .btn.p { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .btn.p:hover { background: var(--brand-hover); color: #fff; }
+  .btn.dz { background: var(--error); border-color: var(--error); color: #fff; }
+  .btn.sm { padding: 2px 8px; font-size: 12px; }
+  .btn.ln { border: 0; background: none; color: var(--brand); padding: 2px 4px; }
+  .btn.ln.red { color: var(--error); }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .ml { margin-left: auto; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .sw { width: 40px; height: 22px; border-radius: 11px; background: #c5c5c5; position: relative; cursor: pointer; flex: none; display: inline-block; vertical-align: middle; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: #fff; border-radius: 50%; }
+  .sw.on { background: var(--brand); } .sw.on::after { left: 20px; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 0 8px; border-radius: 3px; line-height: 22px; white-space: nowrap; }
+  .tag.ok { background: var(--success-bg); color: var(--success); } .tag.warn { background: var(--warning-bg); color: var(--warning); }
+  .tag.err { background: var(--error-bg); color: var(--error); } .tag.gray { background: var(--gray-bg); color: var(--text-2); }
+  .tag.blue { background: var(--brand-light); color: var(--brand); }
+  .alert { border-radius: 3px; padding: 10px 14px; display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
+  .alert.info { background: var(--brand-light); border: 1px solid #d9e1ff; } .alert.warn { background: var(--warning-bg); border: 1px solid #ffd9c2; }
+  .alert.ok { background: var(--success-bg); border: 1px solid #bfe8cd; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .stat { border: 1px solid var(--border); border-radius: 4px; padding: 12px 16px; background: #fff; }
+  .stat .k { color: var(--text-3); font-size: 12px; } .stat .v { font-size: 22px; font-weight: 600; } .stat .v small { font-size: 12px; font-weight: 400; color: var(--text-2); }
+  .input { border: 1px solid var(--border-2); border-radius: 3px; padding: 4px 8px; font: inherit; width: 72px; background: #fff; }
+  .input.w { width: 100%; } .input.m { width: 220px; }
+  textarea.input { width: 100%; min-height: 60px; resize: vertical; }
+  select.input { width: auto; }
+  table { width: 100%; border-collapse: collapse; background: #fff; }
+  th { text-align: left; font-weight: 500; color: var(--text-2); background: #f8f8f8; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr.dim td { color: var(--text-3); }
+  .acct b { display: block; } .acct small, .muted { color: var(--text-3); }
+  .meter { min-width: 140px; } .meter .l { font-size: 12px; }
+  .bar { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; margin: 3px 0 2px; position: relative; }
+  .bar i { display: block; height: 100%; background: var(--success); } .bar i.w { background: var(--warning); } .bar i.e { background: var(--error); }
+  .bar .th { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #333; opacity: .55; }
+  .meter small { color: var(--text-3); font-size: 11px; }
+  .split { display: grid; grid-template-columns: 300px 1fr; gap: 12px; }
+  .list .li { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .list .li.on { background: var(--brand-light); }
+  .list .li b { display: block; } .list .li small { color: var(--text-3); }
+  .kanban { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tcard { border: 1px solid var(--border); border-radius: 4px; padding: 12px; background: #fff; cursor: pointer; }
+  .tcard:hover { border-color: var(--brand); }
+  .layers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; }
+  .layer { border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; cursor: pointer; }
+  .layer.on { border-color: var(--brand); background: var(--brand-light); }
+  .layer b { display: flex; justify-content: space-between; } .layer small { color: var(--text-3); }
+  .graph { height: 260px; border: 1px solid var(--border); background-image: linear-gradient(#f0f0f0 1px, transparent 1px), linear-gradient(90deg, #f0f0f0 1px, transparent 1px); background-size: 24px 24px; position: relative; border-radius: 4px; }
+  .graph i { position: absolute; border-radius: 50%; }
+  .graph em { position: absolute; font-style: normal; font-size: 11px; }
+  pre.snip { background: #f6f8fa; border: 1px solid var(--border); border-radius: 3px; padding: 10px 12px; overflow: auto; margin: 6px 0 0; font-size: 12px; }
+  .chart { height: 120px; border: 1px solid var(--border); border-radius: 4px; display: flex; align-items: flex-end; gap: 6px; padding: 10px; background: #fff; }
+  .chart i { flex: 1; background: #8fb1ff; border-radius: 2px 2px 0 0; }
+  .stepper { display: flex; gap: 0; margin: 10px 0 14px; }
+  .stepper div { flex: 1; border-top: 3px solid var(--border); padding-top: 6px; color: var(--text-3); font-size: 12px; }
+  .stepper div.on { border-color: var(--brand); color: var(--brand); } .stepper div.done { border-color: var(--success); color: var(--success); }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; background: #fff; box-shadow: -8px 0 30px rgba(0,0,0,.15); z-index: 70; padding: 18px 20px; display: none; overflow: auto; }
+  .drawer.show { display: block; }
+
+  /* ---------- modal ---------- */
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 90; }
+  .mask.show { display: flex; }
+  .modal { background: #fff; width: 620px; max-width: 94vw; max-height: 90vh; overflow: auto; border-radius: 4px; box-shadow: 0 8px 30px rgba(0,0,0,.2); }
+  .modal .mh { padding: 16px 20px 0; font-size: 16px; font-weight: 600; display: flex; gap: 6px; align-items: center; }
+  .modal .mh .x { margin-left: auto; cursor: pointer; color: var(--text-3); font-weight: 400; }
+  .modal .mb { padding: 14px 20px; } .modal .mf { padding: 0 20px 18px; display: flex; gap: 8px; justify-content: flex-end; }
+  .f { margin-bottom: 12px; } .f > div:first-child { color: var(--text-2); margin-bottom: 4px; }
+  .cl { display: flex; gap: 6px; } .cl .input { flex: 1; width: auto; background: #f8f8f8; }
+
+  /* ---------- terminal ---------- */
+  .term { background: #0d1117; color: #c9d1d9; border-radius: 6px; padding: 14px 16px; font: 12.5px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+  .term .r { color: #ff7b72; } .term .y { color: #e3b341; } .term .d { color: #8b949e; } .term .b { color: #79c0ff; }
+
+  /* ---------- annotations ---------- */
+  .notes { background: var(--note); border: 1px solid var(--note-border); border-radius: 4px; padding: 10px 14px; margin-bottom: 12px; }
+  .notes h3 { margin: 0 0 4px; } .notes ol, .notes ul { margin: 0; padding-left: 20px; } .notes li { margin: 2px 0; }
+  body.no-ann .notes { display: none; }
+  .pg { display: none; } .pg.on { display: block; }
+
+  /* ---------- login ---------- */
+  #login { display: none; min-height: calc(100vh - 66px); background: radial-gradient(circle at 30% 30%, #e8eeff, #f6f8ff 60%); align-items: center; justify-content: center; }
+  #login.on { display: flex; }
+  .lcard { background: #fff; width: 400px; border-radius: 6px; padding: 32px; box-shadow: 0 10px 40px rgba(0,40,120,.12); }
+  body.is-login .shell { display: none; }
+  .mem-only {} .adm-only {}
+  body.role-mem .adm-only { display: none !important; }
+  body.role-adm .mem-only-hide { display: none !important; }
+</style>
+</head>
+<body class="role-adm">
+
+<div class="mk">
+  <div class="r"><b>MOCKUP · Memory Hub</b>
+    <span style="color:#9aa0a6">— Phần 1: giao diện hiện có (dựng lại từ code). Phần 2: tính năng mới</span>
+    <span class="B n">NEW</span><span style="color:#9aa0a6">màn hình / thành phần mới</span>
+    <span class="B c">CHANGED</span><span style="color:#9aa0a6">chỗ có sẵn được sửa</span>
+    <span class="ml" style="display:flex;gap:12px;margin-left:auto">
+      <label>Xem với vai trò: <select id="roleSel" style="font-size:12px"><option value="adm">System Admin</option><option value="mem">Member</option></select></label>
+      <label><input type="checkbox" id="annT" checked /> Chú thích</label>
+      <label><input type="checkbox" id="hlT" checked /> Viền đánh dấu</label>
+    </span>
+  </div>
+  <div class="r"><span class="lab">Phần 1 · Hiện có</span>
+    <button data-page="login">Login</button>
+    <button data-page="board">Task Board</button>
+    <button data-page="analytics">Observability</button>
+    <button data-page="members">Members</button>
+    <button data-page="agents">Agents</button>
+    <button data-page="apikey">API Key</button>
+    <button data-page="wiki">Wiki</button>
+    <button data-page="code">Code_Graph</button>
+    <button data-page="skills">Skills</button>
+    <button data-page="memory">Chat_Memory</button>
+    <button data-page="guide">Guide</button>
+    <button data-open="mSettings">⚙ Settings</button>
+    <button data-open="mProfile">My Profile</button>
+  </div>
+  <div class="r"><span class="lab">Phần 2 · Mới / sửa</span>
+    <button class="nw" data-page="poolClaude">Subscription Pool · Claude</button>
+    <button class="nw" data-page="poolCodex">Subscription Pool · Codex</button>
+    <button class="nw" data-open="mAddClaude">Add Claude account</button>
+    <button class="nw" data-open="mAddCodex">Add Codex account</button>
+    <button class="nw" data-open="mEnable">Turn pool on</button>
+    <button class="nw" data-open="mDisable">Turn pool off</button>
+    <button class="nw" data-open="mDelAcct">Delete account</button>
+    <button class="cg" data-page="guideNew">Guide · Connect IDE</button>
+    <button class="cg" data-page="apikeyNew">API Key · hint</button>
+    <button class="nw" data-page="client">Lỗi hiển thị ở client</button>
+    <button class="nw" data-page="summary">Tóm tắt thay đổi</button>
+  </div>
+</div>
+
+<!-- ============================================================ LOGIN ============================================================ -->
+<div id="login">
+  <div>
+    <div class="notes" style="width:400px"><h3>Login — không đổi</h3>Đăng nhập bằng Memory Instance + User Key (có thể bật thêm WOA). Tính năng mới không thay đổi màn hình này.</div>
+    <div class="lcard">
+      <div class="logo" style="justify-content:center;font-size:20px"><i></i> Memory Hub</div>
+      <div class="sub" style="text-align:center;margin-bottom:22px">Centrally manage Agent memory, skills, and knowledge assets</div>
+      <div class="f"><div>Memory Instance</div><select class="input w"><option>default · memory</option></select></div>
+      <div class="f"><div>User Key</div><input class="input w" type="password" value="sk-mem-xxxxxxxxxxxxxxxx" /></div>
+      <button class="btn p" style="width:100%" data-page="board">Log In</button>
+      <div class="sub" style="text-align:center;margin-top:18px">TencentDB · AI Memory Hub</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ SHELL ============================================================ -->
+<div class="shell">
+  <div class="hdr">
+    <div class="logo"><i></i> Memory Hub</div>
+    <div class="team" data-dd="ddTeam"><span class="av">M</span><span>memory<small>team-wyuyb7sion</small></span> ▾
+      <div class="dd" id="ddTeam"><div style="color:var(--text-3);cursor:default">Select Team</div><div>✓ memory · 6 members</div><div>platform · 3 members</div><hr/><div class="adm-only">+ Create Team</div><div class="adm-only">Edit Team</div><div class="adm-only" style="color:var(--error)">Delete Team</div></div>
+    </div>
+    <div class="right">
+      <span data-page="guide">Guide</span><span>🌐 English</span><span data-open="mSettings">⚙</span>
+      <span class="team" data-dd="ddUser" style="border:0;padding:0"><span class="uav">K</span> <span id="uname">kevin</span> ▾
+        <div class="dd" id="ddUser" style="right:0;left:auto"><div data-open="mProfile">My Profile</div><div data-page="login">Log Out</div></div>
+      </span>
+    </div>
+  </div>
+  <nav class="side">
+    <div class="grp">Workbench</div>
+    <div class="it" data-page="board">▦ Task Board</div>
+    <div class="grp adm-only">Observability</div>
+    <div class="it adm-only" data-page="analytics">▥ Observability</div>
+    <div class="grp">Organization</div>
+    <div class="it" data-page="members">👤 Members</div>
+    <div class="it" data-page="agents">👥 Agents</div>
+    <div class="it" data-page="apikey">🔒 API Key</div>
+    <div class="it adm-only hl-new" data-page="poolClaude">⇄ Subscription Pool <span class="B n">NEW</span></div>
+    <div class="grp">Asset Management</div>
+    <div class="it" data-page="wiki">📚 Wiki Knowledge Base</div>
+    <div class="it" data-page="code">[/] Code_Graph</div>
+    <div class="it" data-page="skills">🛠 Skills</div>
+    <div class="it" data-page="memory">💬 Chat_Memory</div>
+  </nav>
+  <div class="tabs" id="tabbar"><span>Task Board</span><span>Agents</span><span>API Key</span><span class="on" id="curTab">Task Board</span></div>
+
+  <main>
+  <!-- ======================= TASK BOARD ======================= -->
+  <section class="pg" id="board">
+    <div class="notes"><h3>Task Board (trang chủ) — không đổi</h3>Danh sách task của team đang chọn. Bấm thẻ để mở drawer chi tiết. "New Task" và "Import Task" (TAPD nếu bật nguồn).</div>
+    <div class="card"><div class="tr"><h1>memory</h1><span class="tag blue">team-wyuyb7sion</span><span class="sub" style="margin:0">6 members · 4 agents</span></div></div>
+    <div class="card">
+      <div class="tr"><h2 style="margin:0">Task List</h2><span class="tag gray">5 tasks</span>
+        <div class="row ml"><button class="btn">Import Task</button><button class="btn p" data-open="mTask">New Task</button></div></div>
+      <div class="sub">Click a card to view details and manage settings in the drawer</div>
+      <div class="kanban" style="margin-top:12px">
+        <div class="tcard" data-drawer="dTask"><div class="row"><b>Refactor payment module</b><span class="tag blue ml">In Progress</span></div><div class="muted">Split PaymentService into adapters…</div><div class="row" style="margin-top:8px"><span class="tag gray">Manual</span><small class="muted ml">2026-10-18 17:20</small></div></div>
+        <div class="tcard" data-drawer="dTask"><div class="row"><b>Release 2.4 checklist</b><span class="tag blue ml">In Progress</span></div><div class="muted">Run the release skill and verify…</div><div class="row" style="margin-top:8px"><span class="tag gray">TAPD</span><small class="muted ml">2026-10-17 10:02</small></div></div>
+        <div class="tcard" data-drawer="dTask"><div class="row"><b>Fix flaky integration test</b><span class="tag ok ml">Completed</span></div><div class="muted">CI job integration-db fails 1/10…</div><div class="row" style="margin-top:8px"><span class="tag gray">Manual</span><small class="muted ml">2026-10-15 09:41</small></div></div>
+      </div>
+      <div class="row" style="margin-top:12px;justify-content:flex-end"><span class="muted">12 / page ▾</span><button class="btn sm">‹</button><span>1</span><button class="btn sm">›</button></div>
+    </div>
+  </section>
+
+  <!-- ======================= ANALYTICS ======================= -->
+  <section class="pg" id="analytics">
+    <div class="notes"><h3>Observability — không đổi (chỉ System Admin, cần bật ClickHouse)</h3>Hai tab: Usage Behavior và Cost &amp; Models. Bản đầu của tính năng mới <b>không</b> thêm thống kê theo tài khoản subscription vào đây.</div>
+    <div class="card"><div class="tr"><div class="seg"><button class="on">Usage Behavior</button><button>Cost &amp; Models</button></div>
+      <div class="row ml"><select class="input"><option>Last 7 days</option></select><select class="input" disabled><option>default</option></select><button class="btn">Refresh</button><span class="muted">Updated at 11:40</span></div></div></div>
+    <div class="grid4" style="grid-template-columns:repeat(5,1fr);margin-bottom:12px">
+      <div class="stat"><div class="k">Tool Call Rate</div><div class="v">64%</div></div><div class="stat"><div class="k">Avg Calls per Session</div><div class="v">3.2</div></div>
+      <div class="stat"><div class="k">Bypass Rate</div><div class="v">8%</div></div><div class="stat"><div class="k">Distinct Sessions</div><div class="v">412</div></div><div class="stat"><div class="k">Total Calls</div><div class="v">1,318</div></div>
+    </div>
+    <div class="grid2"><div class="card"><h2>Daily Trend (Session Init / Called / Bypass)</h2><div class="chart"><i style="height:40%"></i><i style="height:55%"></i><i style="height:70%"></i><i style="height:48%"></i><i style="height:80%"></i><i style="height:62%"></i><i style="height:90%"></i></div></div>
+      <div class="card"><h2>Asset Call Distribution</h2><div class="grid2"><div class="stat"><div class="k">Memory</div><div class="v">540</div></div><div class="stat"><div class="k">Skill</div><div class="v">302</div></div><div class="stat"><div class="k">Wiki</div><div class="v">211</div></div><div class="stat"><div class="k">Code Graph</div><div class="v">188</div></div></div></div></div>
+    <div class="card"><h2>Member Usage</h2><table><tr><th>User</th><th>Calls</th><th>Sessions</th><th>Top category</th><th>Avg elapsed</th><th>Errors</th><th>Last call</th><th></th></tr>
+      <tr><td>dev1</td><td>402</td><td>88</td><td>Memory</td><td>210 ms</td><td>2</td><td>11:38</td><td><a>Details</a></td></tr></table></div>
+    <div class="card"><h2>Call Details (Trace)</h2><input class="input m" placeholder="Search by endpoint (fuzzy)" /><table style="margin-top:8px"><tr><th>Time</th><th>User</th><th>Agent</th><th>Tool</th><th>Endpoint</th><th>Status</th><th>Elapsed</th></tr><tr><td>11:38:02</td><td>dev1</td><td>Builder</td><td>tdai_memory_search</td><td>/v3/atomic/search</td><td><span class="tag ok">200</span></td><td>180 ms</td></tr></table></div>
+  </section>
+
+  <!-- ======================= MEMBERS ======================= -->
+  <section class="pg" id="members">
+    <div class="notes"><h3>Members — không đổi</h3>Thẻ thành viên, vai trò admin/member/reviewer. "Add Member" có 2 tab: thêm user có sẵn, hoặc tạo user mới (chỉ System Admin) và hiện user_key một lần.</div>
+    <div class="card"><div class="tr"><h1>Members (6)</h1><button class="btn p ml" data-open="mMember">Add Member</button></div>
+      <div class="sub">Human members of "memory". Admins manage team assets, members use assets and create tasks · Click cards for details</div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="stat row"><span class="uav">KE</span><div><b>kevin</b> <span class="muted">(you)</span><div class="muted">admin · Creator</div></div></div>
+        <div class="stat row"><span class="uav" style="background:#2ba471">DE</span><div><b>dev1</b><div class="muted">member</div></div><span class="ml muted adm-only">✕</span></div>
+        <div class="stat row"><span class="uav" style="background:#e37318">QA</span><div><b>qa-lead</b><div class="muted">reviewer</div></div><span class="ml muted adm-only">✕</span></div>
+      </div></div>
+  </section>
+
+  <!-- ======================= AGENTS ======================= -->
+  <section class="pg" id="agents">
+    <div class="notes"><h3>Agents — không đổi</h3>Lưu ý: "Agent" ở đây là agent của team (Builder, Reviewer…) để gắn tài sản bộ nhớ. Nó khác "agent type" (<code>claude-code</code>, <code>codex</code>) mà Subscription Pool dùng. Pool không cần sửa trang này.</div>
+    <div class="card"><div class="tr"><h1>Agents</h1><input class="input m" placeholder="Search agent name/description/ID" /><select class="input adm-only"><option>All owners</option></select><button class="btn p ml" data-open="mAgent">New Agent</button></div>
+      <div class="sub">Agents created by you in team "memory" (team-wyuyb7sion) · 4 total</div>
+      <div class="grid3" style="margin-top:12px">
+        <div class="stat"><div class="row"><span style="font-size:20px">🤖</span><b>Builder</b><span class="ml"><a data-open="mAgent">Edit</a> · <a style="color:var(--error)">Delete</a></span></div><div class="muted">Writes code and ships features</div><div class="muted mono">id: agt-82cosh96w · owner kevin</div><div class="row" style="margin-top:6px"><span class="tag gray">🛠 3</span><span class="tag gray">[/] 1</span><span class="tag gray">📚 2</span><span class="tag gray">💬 1</span></div></div>
+        <div class="stat"><div class="row"><span style="font-size:20px">🎯</span><b>Reviewer</b><span class="ml muted">· Read-only</span></div><div class="muted">Reviews PRs, runs release checklist</div><div class="muted mono">id: agt-p0k2m1 · owner dev1</div><div class="row" style="margin-top:6px"><span class="tag gray">🛠 1</span><span class="tag gray">[/] 1</span><span class="tag gray">📚 0</span><span class="tag gray">💬 1</span></div></div>
+        <div class="stat"><div class="row"><span style="font-size:20px">🚀</span><b>Scout</b></div><div class="muted">Research and market analysis</div><div class="muted mono">id: agt-s8c0ut · owner kevin</div><div class="row" style="margin-top:6px"><span class="tag gray">🛠 2</span><span class="tag gray">[/] 0</span><span class="tag gray">📚 1</span><span class="tag gray">💬 1</span></div></div>
+      </div></div>
+  </section>
+
+  <!-- ======================= API KEY ======================= -->
+  <section class="pg" id="apikey">
+    <div class="notes"><h3>API Key — hiện tại</h3>Quản lý User Key <code>sk-mem-…</code>. Key đầy đủ chỉ hiện một lần sau khi tạo. Thẻ "Client Access Endpoint" hiện địa chỉ Proxy. Xem bản có thay đổi ở nút <b>API Key · hint</b> (Phần 2).</div>
+    <div class="card"><div class="tr"><h1>User_Key Management</h1><button class="btn p ml" data-open="mKey">+ New Key</button></div><div class="sub">Manage your User Keys for external client access (e.g. CodeBuddy / ClaudeCode CLI).</div>
+      <table style="margin-top:12px"><tr><th>Key ID</th><th>Key Prefix</th><th>Created At</th><th>Expires At</th><th>Actions</th></tr>
+        <tr><td class="mono">key-7f2a9c</td><td class="mono">sk-mem-Ab3k****</td><td>2026-10-02 09:12</td><td>Never Expires</td><td><button class="btn ln red">Revoke</button></td></tr>
+        <tr class="dim"><td class="mono">key-11b0e4</td><td class="mono">sk-mem-Zq81****</td><td>2026-08-20 14:03</td><td>Revoked</td><td><button class="btn ln" disabled>Revoke</button></td></tr></table></div>
+    <div class="card"><h2>Client Access Endpoint</h2><div class="muted">Current instance: memory (default)</div><div class="cl" style="margin-top:6px"><input class="input" value="http://10.0.0.5:8096" readonly /><button class="btn">Copy</button></div></div>
+  </section>
+
+  <!-- ======================= WIKI ======================= -->
+  <section class="pg" id="wiki">
+    <div class="notes"><h3>Wiki Knowledge Base — không đổi</h3>Danh sách wiki + trang chi tiết với tab Overview / Graph / Pages / Search / Raw Files. Nạp tài liệu qua "Import Docs" (upload, iWiki, chạy lại ingest).</div>
+    <div class="card"><div class="tr"><h1>Wiki Knowledge Base</h1><div class="seg"><button class="on">Team Wiki Pool</button><button>Agent Assets</button></div><div class="row ml"><button class="btn">Allocate to Agent</button><button class="btn p" data-open="mWiki">+ New Wiki</button></div></div></div>
+    <div class="grid4" style="margin-bottom:12px"><div class="stat"><div class="k">Total Wikis</div><div class="v">3</div></div><div class="stat"><div class="k">Ready</div><div class="v">2</div></div><div class="stat"><div class="k">Processing</div><div class="v">1</div></div><div class="stat"><div class="k">Total Pages</div><div class="v">61</div></div></div>
+    <div class="card"><div class="tr"><a>← Wiki</a><span class="muted">/ Memory assets</span></div><div class="tr" style="margin-top:6px"><h1>Memory assets</h1><span class="tag ok">Ready</span><span class="muted">25 pages</span><div class="row ml"><button class="btn" data-open="mImportDocs">Add</button><button class="btn p">Ingest</button></div></div>
+      <div class="seg" style="margin:12px 0"><button>Overview</button><button class="on">Graph</button><button>Pages</button><button>Search</button><button>Raw Files</button></div>
+      <div class="graph"><i style="left:46%;top:44%;width:30px;height:30px;background:#0052d9"></i><em style="left:51%;top:47%">MemoryCore Gateway</em><i style="left:22%;top:30%;width:20px;height:20px;background:#0052d9"></i><em style="left:26%;top:31%">SQLite</em><i style="left:34%;top:62%;width:16px;height:16px;background:#e37318"></i><em style="left:37%;top:62%">Asset Metadata Management</em><i style="left:66%;top:20%;width:16px;height:16px;background:#e37318"></i><em style="left:69%;top:20%">Memory Hierarchy (L0–L3)</em><i style="left:70%;top:70%;width:18px;height:18px;background:#0052d9"></i><em style="left:74%;top:71%">Hermes Plugin</em></div></div>
+  </section>
+
+  <!-- ======================= CODE GRAPH ======================= -->
+  <section class="pg" id="code">
+    <div class="notes"><h3>Code_Graph — không đổi</h3>Đăng ký repo (HTTPS / Gongfeng / SSH key), đồng bộ, xem số file / node / edge, tìm symbol và "Code Explore".</div>
+    <div class="card"><div class="tr"><h1>Code_Graph</h1><div class="seg"><button class="on">Team Code Pool</button><button>Agent Assets</button></div><div class="row ml"><button class="btn">Allocate to Agent</button><button class="btn p" data-open="mRepo">+ Register Repo</button></div></div></div>
+    <div class="card"><div class="tr"><span>[/]</span><h1 class="mono">deepseek-ai/deepseek-harness</h1><span class="tag ok">Ready</span><button class="btn p ml">⟳ Sync</button></div><div class="sub">Branch master · @ 47f943859bef · 2026-08-15 17:23:34</div></div>
+    <div class="grid3" style="margin-bottom:12px"><div class="stat"><div class="k">Files</div><div class="v">3,839</div></div><div class="stat"><div class="k">Nodes</div><div class="v">40,300</div></div><div class="stat"><div class="k">Edges</div><div class="v">226,215</div></div></div>
+    <div class="card"><h2>Code Search</h2><div class="sub">Quickly locate by symbol name.</div><input class="input w" placeholder="Enter a symbol name (function / class / variable) to find its location..." /></div>
+    <div class="card"><h2>Code Explore</h2><div class="sub">Returns full source code and call relationships of related files in one request.</div><input class="input w" placeholder="Describe the feature / flow you want to understand in natural language or symbol names..." /></div>
+  </section>
+
+  <!-- ======================= SKILLS ======================= -->
+  <section class="pg" id="skills">
+    <div class="notes"><h3>Skills — không đổi</h3>Danh sách skill (Team Assets / Agent Assets), chi tiết frontmatter + body + file đính kèm + lịch sử phiên bản. Fork / Export / Import Skill.</div>
+    <div class="card"><div class="tr"><h1>Skill Asset Management</h1><div class="seg"><button class="on">Team Assets</button><button>Agent Assets</button></div><div class="row ml"><button class="btn">Fork (writable)</button><button class="btn">Export Skill</button><button class="btn p" data-open="mSkill">Import Skill</button></div></div><div class="sub">memory · 10 Skills</div></div>
+    <div class="split"><div class="card list" style="padding:0"><div style="padding:10px 12px" class="row"><b>Team Assets</b><span class="muted ml">10 items</span></div>
+      <div class="li on"><b>code-sensitive-info-checker</b><small>test2 · kentyhuang · v1 · 2026-08-04 21:31</small></div><div class="li"><b>opik-trace-export-and-analysis</b><small>kentyhuang · v1 · 2026-08-13</small></div><div class="li"><b>release-checklist</b><small>dev1 · v3 · 2026-10-10</small></div></div>
+      <div class="card"><h2 class="mono">code-sensitive-info-checker</h2><div class="sub">This skill should be used before Git commits, pull requests, releases…</div><h3 style="margin-top:10px">Frontmatter</h3><pre class="snip">{ "name": "code-sensitive-info-checker", "version": 1, "owner_agent_id": "agt-i82cosh96w" }</pre><h3 style="margin-top:10px">Body</h3><div style="font-size:20px;font-weight:700">Code Sensitive Info Checker</div><div class="muted">Prevent sensitive information from entering Git commits…</div><div class="row" style="margin-top:10px"><a>Attached Files (2)</a><a>View version history</a></div></div></div>
+  </section>
+
+  <!-- ======================= CHAT MEMORY ======================= -->
+  <section class="pg" id="memory">
+    <div class="notes"><h3>Chat_Memory — không đổi</h3>Khối bộ nhớ theo agent, xem 4 tầng L0–L3, lọc theo thời gian, Import Memory, Allocate to Agent, bật Shared/Private.</div>
+    <div class="card"><div class="tr"><h1>Chat_Memory · Atomic Memory Blocks</h1><div class="seg"><button class="on">Team Assets</button><button>Agent Assets</button></div><div class="row ml"><button class="btn">Allocate to Agent</button><button class="btn p" data-open="mMem">Import Memory</button></div></div><div class="sub">memory · 4 memory blocks</div></div>
+    <div class="split"><div class="card list" style="padding:0"><div style="padding:10px 12px" class="row"><b>Memory Blocks</b><span class="muted ml">4 items</span></div>
+      <div class="li on"><b>Memory of test1</b><small>Team Pool · kentyhuang · 2026-08-04 20:33</small></div><div class="li"><b>Memory of bug</b><small>Team Pool · kentyhuang</small></div><div class="li"><b>Memory of Builder</b><small>Team Pool · kevin</small></div></div>
+      <div class="card"><div class="tr"><h2 style="margin:0">Memory of test1</h2><span class="mono muted">chat_memory-team-wyuyb7sion-agt-i6gvlvay5j</span><div class="row ml"><select class="input"><option>All time</option></select><button class="btn sm">Refresh</button></div></div>
+        <div class="layers"><div class="layer"><b>L0 · Raw Conversation <span>1583</span></b><small>Original conversation / tool call flow</small></div><div class="layer"><b>L1 · Atomic Memory <span>166</span></b><small>Minimal facts / constraints</small></div><div class="layer on"><b>L2 · Scenario Memory <span>7</span></b><small>Aggregated summary around a scenario</small></div><div class="layer"><b>L3 · Core Memory <span>1</span></b><small>Distilled core principles</small></div></div>
+        <table><tr><td><span class="tag ok">L2</span> MemoryPanel-data-consistency-debugging.md</td><td class="muted">2026-08-14 16:32 ▾</td></tr><tr><td><span class="tag ok">L2</span> Recall-analysis-multi-user.md</td><td class="muted">2026-08-15 17:13 ▾</td></tr></table></div></div>
+  </section>
+
+  <!-- ======================= GUIDE ======================= -->
+  <section class="pg" id="guide">
+    <div class="notes"><h3>Guide — hiện tại</h3>3 tab: Quick Setup (tải gói cấu hình → kết nối IDE → nhập lịch sử), Best Practices, Memory Commands. Bước "Connect your IDE" có cấu hình thủ công cho từng IDE. Xem bản có thay đổi ở nút <b>Guide · Connect IDE</b> (Phần 2).</div>
+    <div class="card"><div class="seg"><button class="on">Quick Setup</button><button>Best Practices</button><button>Memory Commands</button></div>
+      <div class="stepper"><div class="done">1 · Download config pack</div><div class="on">2 · Connect your IDE</div><div>3 · Import history</div></div>
+      <div class="grid3"><div class="stat"><div class="k">1. Proxy</div><div class="mono">http://10.0.0.5:8096</div></div><div class="stat"><div class="k">2. Mode</div><div class="seg"><button class="on">Default</button><button>Analyse</button></div></div><div class="stat"><div class="k">3. API Key</div><a>Same Key as the login panel — get it from the API Key page</a></div></div>
+      <div class="grid2" style="margin-top:12px"><div class="stat"><b>Option 1: Skill-based</b><div class="muted">Recommended · guided by your Agent</div></div><div class="stat"><b>Option 2: Script-based</b><div class="muted">Run the interactive wizard in your terminal</div></div></div>
+      <h3 style="margin-top:14px">Manual Configuration — Claude Code</h3><div class="muted">Write to ~/.claude/settings.json</div>
+<pre class="snip">{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://10.0.0.5:8096/claude-code/default",
+    "ANTHROPIC_AUTH_TOKEN": "sk-mem-••••••••",
+    "ANTHROPIC_MODEL": "claude-opus-4.7"
+  }
+}</pre>
+      <div class="row" style="margin-top:12px"><button class="btn">Back</button><button class="btn p">Next</button></div></div>
+  </section>
+
+  <!-- ======================= NEW: POOL CLAUDE ======================= -->
+  <section class="pg" id="poolClaude">
+    <div class="notes"><h3><span class="B n">NEW</span> Subscription Pool — thẻ Claude Code, pool đang bật</h3>
+      <ol>
+        <li>Mục menu mới trong nhóm Organization. Chỉ <b>System Admin</b> thấy (đổi vai trò ở thanh trên để kiểm tra). Pool là cấp <b>instance</b>: không phụ thuộc team đang chọn ở header.</li>
+        <li>Hai thẻ Claude Code và Codex. Mỗi thẻ là một upstream group mode <code>subscription_pool</code> cho agent type đó.</li>
+        <li>Công tắc Pool: bật thì chuyển <code>claude-code</code> từ group <code>default</code> sang pool. Tắt thì trả về như cũ. Có hộp thoại xác nhận.</li>
+        <li>Ngưỡng ngừng giao session mới (mặc định 95%). Usage được kiểm tra 30 phút một lần và đúng giờ reset.</li>
+        <li>Mỗi tài khoản có 2 thanh quota (5 giờ và 7 ngày), vạch đen là ngưỡng, giờ reset theo Asia/Saigon.</li>
+        <li>Trạng thái: Active · Near limit (≥ ngưỡng, không nhận session mới) · Exhausted (429, tự mở lại khi reset) · Re-login needed · Disabled.</li>
+        <li>Token không bao giờ hiển thị. Thêm / đăng nhập lại tài khoản qua OAuth (hộp thoại riêng).</li>
+      </ol></div>
+    <div class="card hl-new">
+      <div class="tr"><h1>Subscription Pool</h1>
+        <div class="seg"><button class="on" data-page="poolClaude">Claude Code</button><button data-page="poolCodex">Codex</button></div>
+        <div class="row ml"><span>Pool</span><span class="sw on" data-open="mDisable"></span><span class="tag ok">● On — claude-code uses this pool</span></div></div>
+      <div class="sub">Instance "default" · Rotates Claude Pro/Max accounts per session. Turn off to return claude-code to the default upstream group.</div>
+    </div>
+    <div class="grid4 hl-new" style="margin-bottom:12px">
+      <div class="stat"><div class="k">Available accounts</div><div class="v">2 <small>/ 5</small></div></div>
+      <div class="stat"><div class="k">Active sessions</div><div class="v">7</div></div>
+      <div class="stat"><div class="k">Earliest reset</div><div class="v">14:30 <small>in 2h 41m</small></div></div>
+      <div class="stat"><div class="k">Client OAuth fallback (24h)</div><div class="v">0 <small>requests</small></div></div>
+    </div>
+    <div class="card hl-new"><h2>Settings</h2>
+      <div style="display:grid;grid-template-columns:200px 1fr;gap:12px;margin-top:8px;align-items:center">
+        <div class="muted">Stop new sessions at</div><div class="row"><input class="input" value="95" /> % of either window <button class="btn sm">Save</button></div>
+        <div class="muted">Usage check</div><div class="row">Every 30 min and at each reset time · Last: 11:30 · Next: 12:00 <button class="btn sm">Check all now</button></div>
+        <div class="muted">When all accounts are exhausted</div><div class="muted">Keep using the account with the lowest usage until it returns 429 → forward the client's own OAuth (if sent) → return 429 with the earliest reset time.</div>
+      </div></div>
+    <div class="card hl-new">
+      <div class="tr" style="margin-bottom:10px"><h2 style="margin:0">Accounts</h2><span class="muted">Tokens are stored by Memory Core and never shown here.</span><button class="btn p ml" data-open="mAddClaude">+ Add account</button></div>
+      <table>
+        <tr><th>Account</th><th>Status</th><th>5-hour window</th><th>7-day window</th><th>Sessions</th><th>Updated</th><th>Actions</th></tr>
+        <tr><td class="acct"><b>dev-team-1</b><small>dev1@vtc.vn · Max 20x</small></td><td><span class="tag ok">● Active</span></td>
+          <td class="meter"><div class="l">42%</div><div class="bar"><i style="width:42%"></i><span class="th" style="left:95%"></span></div><small>Resets 15:10 · in 3h 21m</small></td>
+          <td class="meter"><div class="l">61%</div><div class="bar"><i style="width:61%"></i><span class="th" style="left:95%"></span></div><small>Resets Thu 09:00 · in 2d</small></td>
+          <td>3</td><td><small>Proxy · 11:48</small></td><td><button class="btn ln">Check now</button><button class="btn ln">Disable</button><button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr>
+        <tr><td class="acct"><b>dev-team-2</b><small>dev2@vtc.vn · Max 5x</small></td><td><span class="tag ok">● Active</span></td>
+          <td class="meter"><div class="l">18%</div><div class="bar"><i style="width:18%"></i><span class="th" style="left:95%"></span></div><small>Resets 16:40 · in 4h 51m</small></td>
+          <td class="meter"><div class="l">77%</div><div class="bar"><i class="w" style="width:77%"></i><span class="th" style="left:95%"></span></div><small>Resets Wed 21:00 · in 1d 9h</small></td>
+          <td>4</td><td><small>Proxy · 11:49</small></td><td><button class="btn ln">Check now</button><button class="btn ln">Disable</button><button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr>
+        <tr><td class="acct"><b>dev-team-3</b><small>dev3@vtc.vn · Pro</small></td><td><span class="tag warn">▲ Near limit</span><div><small class="muted">No new sessions</small></div></td>
+          <td class="meter"><div class="l">96%</div><div class="bar"><i class="w" style="width:96%"></i><span class="th" style="left:95%"></span></div><small>Resets 12:25 · in 36m</small></td>
+          <td class="meter"><div class="l">58%</div><div class="bar"><i style="width:58%"></i><span class="th" style="left:95%"></span></div><small>Resets Fri 08:00</small></td>
+          <td>0</td><td><small>Usage API · 11:30</small></td><td><button class="btn ln">Check now</button><button class="btn ln">Disable</button><button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr>
+        <tr><td class="acct"><b>design-team</b><small>design@vtc.vn · Max 5x</small></td><td><span class="tag err">■ Exhausted</span><div><small class="muted">429 at 11:12 · auto release 14:30</small></div></td>
+          <td class="meter"><div class="l">100%</div><div class="bar"><i class="e" style="width:100%"></i><span class="th" style="left:95%"></span></div><small>Resets 14:30 · in 2h 41m</small></td>
+          <td class="meter"><div class="l">83%</div><div class="bar"><i class="w" style="width:83%"></i><span class="th" style="left:95%"></span></div><small>Resets Tue 10:00</small></td>
+          <td>0</td><td><small>Proxy (429) · 11:12</small></td><td><button class="btn ln">Check now</button><button class="btn ln">Disable</button><button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr>
+        <tr><td class="acct"><b>qa-team</b><small>qa@vtc.vn · Pro</small></td><td><span class="tag err">✕ Re-login needed</span><div><small class="muted">Refresh token rejected at 09:05</small></div></td>
+          <td class="meter"><div class="l">—</div><div class="bar"></div><small>No data</small></td><td class="meter"><div class="l">—</div><div class="bar"></div><small>No data</small></td>
+          <td>0</td><td><small>—</small></td><td><button class="btn sm p" data-open="mAddClaude">Re-login</button> <button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr>
+        <tr class="dim"><td class="acct"><b>backup-account</b><small>backup@vtc.vn · Pro</small></td><td><span class="tag gray">○ Disabled</span></td>
+          <td class="meter"><div class="l">5%</div><div class="bar"><i style="width:5%"></i></div><small>Resets 13:00</small></td><td class="meter"><div class="l">12%</div><div class="bar"><i style="width:12%"></i></div><small>Resets Sat 07:00</small></td>
+          <td>0</td><td><small>Usage API · 11:30</small></td><td><button class="btn ln">Check now</button><button class="btn ln">Enable</button><button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr>
+      </table>
+      <div class="sub" style="margin-top:8px">"Available" = Active accounts below the threshold. 5 accounts, 1 disabled.</div>
+    </div>
+  </section>
+
+  <!-- ======================= NEW: POOL CODEX ======================= -->
+  <section class="pg" id="poolCodex">
+    <div class="notes"><h3><span class="B n">NEW</span> Subscription Pool — thẻ Codex, pool chưa bật (mặc định)</h3>
+      <ol><li>Pool tắt: <code>codex</code> dùng group <code>default</code>, hành vi như cũ.</li>
+        <li>Có thể thêm tài khoản và xem quota trước khi bật pool.</li>
+        <li>Codex có cửa sổ <b>primary (5 giờ)</b> và <b>weekly</b>.</li>
+        <li>Cảnh báo vàng: "dùng OAuth của client khi pool hết" có thể không áp dụng cho Codex; spike (phase 0) sẽ chốt.</li></ol></div>
+    <div class="card hl-new"><div class="tr"><h1>Subscription Pool</h1><div class="seg"><button data-page="poolClaude">Claude Code</button><button class="on" data-page="poolCodex">Codex</button></div>
+      <div class="row ml"><span>Pool</span><span class="sw" data-open="mEnable"></span><span class="tag gray">○ Off</span></div></div>
+      <div class="sub">Instance "default" · Rotates ChatGPT Plus/Pro accounts per session for Codex.</div></div>
+    <div class="alert info hl-new"><span>ℹ</span><div><b>Pool is off.</b> <code>codex</code> uses the <b>default</b> upstream group — same behavior as before. You can add accounts now; usage is checked every 30 minutes.</div></div>
+    <div class="alert warn hl-new"><span>⚠</span><div>Codex may not send its own ChatGPT login to the proxy. When every pool account is exhausted, Codex requests get a 429 with the earliest reset time.</div></div>
+    <div class="card hl-new"><div class="tr" style="margin-bottom:10px"><h2 style="margin:0">Accounts</h2><button class="btn p ml" data-open="mAddCodex">+ Add account</button></div>
+      <table><tr><th>Account</th><th>Status</th><th>Primary window (5h)</th><th>Weekly window</th><th>Sessions</th><th>Updated</th><th>Actions</th></tr>
+        <tr><td class="acct"><b>codex-pro-1</b><small>ops1@vtc.vn · Pro</small></td><td><span class="tag blue">● Ready (pool off)</span></td>
+          <td class="meter"><div class="l">27%</div><div class="bar"><i style="width:27%"></i><span class="th" style="left:95%"></span></div><small>Resets 15:29 · in 3h 40m</small></td>
+          <td class="meter"><div class="l">40%</div><div class="bar"><i style="width:40%"></i><span class="th" style="left:95%"></span></div><small>Resets Mon 07:00</small></td>
+          <td>—</td><td><small>Usage API · 11:30</small></td><td><button class="btn ln">Check now</button><button class="btn ln">Disable</button><button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr>
+        <tr><td class="acct"><b>codex-plus-2</b><small>ops2@vtc.vn · Plus</small></td><td><span class="tag blue">● Ready (pool off)</span></td>
+          <td class="meter"><div class="l">88%</div><div class="bar"><i class="w" style="width:88%"></i><span class="th" style="left:95%"></span></div><small>Resets 12:51 · in 1h 2m</small></td>
+          <td class="meter"><div class="l">65%</div><div class="bar"><i style="width:65%"></i><span class="th" style="left:95%"></span></div><small>Resets Wed 18:00</small></td>
+          <td>—</td><td><small>Usage API · 11:30</small></td><td><button class="btn ln">Check now</button><button class="btn ln">Disable</button><button class="btn ln red" data-open="mDelAcct">Delete</button></td></tr></table></div>
+    <div class="card hl-new"><h2>Empty state (no accounts yet)</h2><div style="text-align:center;padding:24px 0" class="muted"><div style="font-size:26px">⇄</div><div style="margin:6px 0 12px">No Codex accounts yet. Add a ChatGPT Plus/Pro account to start a pool.</div><button class="btn p" data-open="mAddCodex">+ Add account</button></div></div>
+  </section>
+
+  <!-- ======================= CHANGED: GUIDE ======================= -->
+  <section class="pg" id="guideNew">
+    <div class="notes"><h3><span class="B c">CHANGED</span> Guide → Connect your IDE (dùng lại trang có sẵn, không làm trang mới)</h3>
+      <ol><li>Thêm một lựa chọn <b>"Keep my own Claude login as fallback"</b> ở phần cấu hình thủ công. Khi bật, đoạn cấu hình chuyển user key sang header <code>x-tdai-user-key</code> và bỏ <code>ANTHROPIC_AUTH_TOKEN</code>, để Claude Code gửi OAuth của chính người dùng.</li>
+        <li>Khi tắt (mặc định), đoạn cấu hình giữ nguyên như hiện nay. Pool vẫn hoạt động, chỉ không có dự phòng OAuth.</li>
+        <li>Script <code>setup-proxy.sh</code> và Skill setup-proxy sẽ có câu hỏi tương ứng. Đoạn Codex chốt sau spike.</li></ol></div>
+    <div class="card"><div class="seg"><button class="on">Quick Setup</button><button>Best Practices</button><button>Memory Commands</button></div>
+      <div class="stepper"><div class="done">1 · Download config pack</div><div class="on">2 · Connect your IDE</div><div>3 · Import history</div></div>
+      <h3>Manual Configuration — Claude Code</h3>
+      <div class="row hl-chg" style="margin:8px 0;padding:6px 0"><span class="sw on"></span> <b>Keep my own Claude login as fallback</b> <span class="B c">CHANGED</span><span class="muted">— used only when every subscription pool account is exhausted</span></div>
+      <div class="muted">Write to ~/.claude/settings.json</div>
+<pre class="snip hl-chg">{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://10.0.0.5:8096/claude-code/default",
+    "ANTHROPIC_CUSTOM_HEADERS": "x-tdai-user-key: sk-mem-••••••••",
+    "ANTHROPIC_MODEL": "claude-opus-4.7"
+  }
+}
+// then run `claude` and log in with your own account (optional)</pre>
+      <h3 style="margin-top:14px">Manual Configuration — Codex</h3><div class="muted">Write to ~/.codex/config.toml</div>
+<pre class="snip hl-chg">model_provider = "memory-proxy"
+[model_providers.memory-proxy]
+name     = "Memory Proxy"
+base_url = "http://10.0.0.5:8096/codex/default/v1"
+wire_api = "responses"
+http_headers = { "x-tdai-user-key" = "sk-mem-••••••••" }</pre>
+      <div class="alert warn" style="margin:10px 0 0"><span>⚠</span><div>Final Codex settings are confirmed after the spike (phase 0).</div></div></div>
+  </section>
+
+  <!-- ======================= CHANGED: API KEY ======================= -->
+  <section class="pg" id="apikeyNew">
+    <div class="notes"><h3><span class="B c">CHANGED</span> API Key — thêm một dòng gợi ý</h3>Chức năng tạo / thu hồi key giữ nguyên. Chỉ thêm một dòng gợi ý dẫn tới Guide.</div>
+    <div class="card"><div class="tr"><h1>User_Key Management</h1><button class="btn p ml">+ New Key</button></div><div class="sub">Manage your User Keys for external client access (e.g. CodeBuddy / ClaudeCode CLI).</div>
+      <div class="alert info hl-chg" style="margin:12px 0 0"><span>ℹ</span><div>Want to keep your own Claude login as a fallback for the subscription pool? Send this key in the <code>x-tdai-user-key</code> header. <a data-page="guideNew">How to connect →</a> <span class="B c">CHANGED</span></div></div>
+      <table style="margin-top:12px"><tr><th>Key ID</th><th>Key Prefix</th><th>Created At</th><th>Expires At</th><th>Actions</th></tr><tr><td class="mono">key-7f2a9c</td><td class="mono">sk-mem-Ab3k****</td><td>2026-10-02 09:12</td><td>Never Expires</td><td><button class="btn ln red">Revoke</button></td></tr></table></div>
+  </section>
+
+  <!-- ======================= NEW: CLIENT ======================= -->
+  <section class="pg" id="client">
+    <div class="notes"><h3><span class="B n">NEW</span> Người dùng thấy gì trong Claude Code / Codex</h3>
+      <ol><li><b>Bình thường:</b> không thấy gì khác. Đổi tài khoản giữa session diễn ra ngầm (Proxy thử lại một lần bằng tài khoản khác).</li>
+        <li><b>Pool hết, có OAuth riêng:</b> request đi bằng OAuth của người dùng, không có lỗi.</li>
+        <li><b>Pool hết, không có OAuth riêng:</b> lỗi 429 với thông điệp dễ hiểu, giờ reset sớm nhất và header <code>retry-after</code>.</li></ol></div>
+    <div class="grid2">
+      <div class="card"><h2>Claude Code — every pool account exhausted</h2>
+<div class="term"><span class="d">&gt; refactor the payment module</span>
+
+<span class="r">⎿  API Error: 429</span> <span class="y">{"type":"error","error":{"type":"rate_limit_error",
+   "message":"All 4 Claude accounts in the subscription pool are at their limit.
+   Earliest reset: 14:30 (Asia/Saigon), in 2h 41m.
+   Tip: log in with your own Claude account to keep working."}}</span></div></div>
+      <div class="card"><h2>Codex — every pool account exhausted</h2>
+<div class="term"><span class="b">▌</span> <span class="d">fix the flaky integration test</span>
+
+<span class="r">■ You've hit your usage limit.</span> <span class="y">All 2 Codex accounts in the
+  subscription pool are at their limit. Earliest reset: 15:29
+  (Asia/Saigon), in 3h 40m.</span></div></div></div>
+    <div class="card"><h2>Response sent by the proxy</h2><pre class="snip">HTTP/1.1 429 Too Many Requests
+retry-after: 9763
+x-tdai-pool-status: exhausted
+x-tdai-pool-earliest-reset: 2026-10-19T14:30:00+07:00</pre></div>
+  </section>
+
+  <!-- ======================= SUMMARY ======================= -->
+  <section class="pg" id="summary">
+    <div class="card"><h1>Tóm tắt thay đổi giao diện</h1>
+      <table style="margin-top:10px">
+        <tr><th>Màn hình</th><th>Trạng thái</th><th>Thay đổi</th></tr>
+        <tr><td>Login, Task Board, Observability, Members, Agents, Wiki, Code_Graph, Skills, Chat_Memory, Settings, Profile, Team switcher</td><td><span class="tag gray">Không đổi</span></td><td>—</td></tr>
+        <tr><td>Sidebar</td><td><span class="B n">NEW</span></td><td>Thêm mục "Subscription Pool" trong Organization, chỉ System Admin thấy.</td></tr>
+        <tr><td>Subscription Pool (Claude / Codex)</td><td><span class="B n">NEW</span></td><td>Trang mới: công tắc pool, chỉ số, cài đặt ngưỡng, bảng tài khoản và quota.</td></tr>
+        <tr><td>Add account (Claude / Codex), Turn pool on/off, Delete account</td><td><span class="B n">NEW</span></td><td>5 hộp thoại mới.</td></tr>
+        <tr><td>Guide → Connect your IDE</td><td><span class="B c">CHANGED</span></td><td>Thêm lựa chọn "Keep my own Claude login as fallback" và đoạn cấu hình dùng <code>x-tdai-user-key</code>.</td></tr>
+        <tr><td>API Key</td><td><span class="B c">CHANGED</span></td><td>Thêm một dòng gợi ý dẫn tới Guide.</td></tr>
+        <tr><td>i18n</td><td><span class="B c">CHANGED</span></td><td>Thêm chuỗi mới vào <code>en-US.ts</code> và <code>zh-CN.ts</code>.</td></tr>
+        <tr><td>Claude Code / Codex (ngoài Panel)</td><td><span class="B n">NEW</span></td><td>Thông báo lỗi 429 khi toàn bộ pool hết quota.</td></tr>
+      </table></div>
+  </section>
+  </main>
+</div>
+
+<!-- ============================================================ DRAWER ============================================================ -->
+<div class="drawer" id="dTask"><div class="row"><h1>Refactor payment module</h1><span class="ml" style="cursor:pointer" data-close-drawer>✕</span></div>
+  <div class="sub">Source: Manual · Created by kevin · 2026-10-18 17:20</div>
+  <div class="f" style="margin-top:12px"><div>Status</div><span class="sw on"></span> In Progress</div>
+  <div class="f"><div>Description</div><div>Split PaymentService into adapters and add retries.</div></div>
+  <div class="f"><div>Participants</div><span class="tag gray">kevin</span> <span class="tag gray">dev1</span></div>
+  <div class="f"><div>Linked agents</div><span class="tag blue">Builder</span> <span class="tag blue">Reviewer</span></div>
+  <div class="row"><button class="btn">Edit</button><button class="btn ln red">Delete</button></div></div>
+
+<!-- ============================================================ MODALS (existing) ============================================================ -->
+<div class="mask" id="mSettings"><div class="modal"><div class="mh">Settings · Permissions <span class="x" data-close>✕</span></div><div class="mb">
+  <h3>Resource Module Toggles</h3><div class="sub" style="margin-bottom:12px">Toggles are saved for the current user. When disabled, the proxy will not inject the corresponding capability for that user. Changes take effect immediately for new sessions.</div>
+  <div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span>📚 Wiki Knowledge Base</span><span class="sw on"></span></div>
+  <div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span>[/] Code_Graph</span><span class="sw on"></span></div>
+  <div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span>🛠 Skills</span><span class="sw on"></span></div>
+  <div class="row" style="justify-content:space-between;padding:8px 0"><span>💬 Chat_Memory</span><span class="sw on"></span></div>
+  <div class="notes" style="margin:10px 0 0">Không đổi. Pool không thêm công tắc ở đây vì đây là cài đặt theo người dùng, còn pool là cài đặt của instance.</div></div></div></div>
+
+<div class="mask" id="mProfile"><div class="modal" style="width:420px"><div class="mh">My Profile <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="row"><span class="uav" style="width:40px;height:40px">K</span><div><b>kevin</b><div class="mono muted">usr-mqjs8tusyn <a>Copy</a></div></div></div>
+  <div class="f" style="margin-top:12px"><div>Role</div><span class="tag blue">Admin</span></div><div class="f"><div>Instance</div>memory (default)</div></div><div class="mf"><button class="btn" data-close>Close</button></div></div></div>
+
+<div class="mask" id="mTask"><div class="modal"><div class="mh">New Task <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="f"><div>Team</div><input class="input w" value="memory" disabled /></div><div class="f"><div>Title *</div><input class="input w" /></div><div class="f"><div>Description *</div><textarea class="input"></textarea></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Create Task</button></div></div></div>
+
+<div class="mask" id="mMember"><div class="modal"><div class="mh">Add Member <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="seg" style="margin-bottom:12px"><button class="on">Add Existing Member</button><button class="adm-only">Create New User</button></div>
+  <div class="f"><div>User ID</div><input class="input w" placeholder="usr-…" /></div><div class="f"><div>Role</div><select class="input"><option>member (default)</option><option>admin</option></select></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Add</button></div></div></div>
+
+<div class="mask" id="mAgent"><div class="modal"><div class="mh">New Agent <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="f"><div>Name *</div><input class="input w" /></div><div class="f"><div>Description</div><input class="input w" /></div>
+  <div class="f"><div>Role Prompt</div><textarea class="input"></textarea></div><div class="f"><div>Rules Prompt</div><textarea class="input"></textarea></div>
+  <h3>Capabilities</h3>
+  <div class="stat" style="margin-bottom:6px">▸ 🛠 Skills <span class="muted">Skills can only be managed in Skill asset pages</span></div>
+  <div class="stat" style="margin-bottom:6px">▾ [/] Code Graphs <span class="muted">Selected 1/3</span><div><label><input type="checkbox" checked /> deepseek-harness</label> <label><input type="checkbox" /> payment-service</label></div></div>
+  <div class="stat" style="margin-bottom:6px">▸ 📚 Wiki <span class="muted">Selected 2/3</span></div>
+  <div class="stat">▸ 💬 Chat Memory <span class="muted">Own memory + up to 2 imported</span></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Save Changes</button></div></div></div>
+
+<div class="mask" id="mKey"><div class="modal" style="width:460px"><div class="mh">New User_Key <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="f"><div>Expires At</div><input class="input w" placeholder="Leave empty for never expires" /></div>
+  <div class="alert ok"><span>✔</span><div>Here is the full Key for key-9a1… (shown only once…): <code>sk-mem-••••••••••••</code> <a>Copy</a></div></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Create</button></div></div></div>
+
+<div class="mask" id="mWiki"><div class="modal" style="width:440px"><div class="mh">New Wiki <span class="x" data-close>✕</span></div><div class="mb"><div class="f"><div>Name</div><input class="input w" /></div></div><div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Create</button></div></div></div>
+
+<div class="mask" id="mImportDocs"><div class="modal"><div class="mh">Import Docs <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="seg" style="margin-bottom:12px"><button class="on">Upload and ingest</button><button>Import and ingest</button><button>Re-run ingest</button></div>
+  <div style="border:1px dashed var(--border-2);border-radius:4px;padding:28px;text-align:center" class="muted">Drop files here or click to upload (.md, .txt, .pdf)</div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Upload and Ingest</button></div></div></div>
+
+<div class="mask" id="mRepo"><div class="modal"><div class="mh">Register Repository <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="f"><div>Git URL</div><input class="input w" placeholder="https://… or git@…" /></div><div class="f"><div>Branch</div><input class="input w" value="main" /></div>
+  <div class="f"><div>Source</div><select class="input"><option>Public</option><option>Tencent Gongfeng</option><option>SSH</option></select></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Register</button></div></div></div>
+
+<div class="mask" id="mSkill"><div class="modal"><div class="mh">Import Skill <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="f"><div>Agent *</div><select class="input"><option>Builder</option></select></div><div class="seg" style="margin-bottom:12px"><button class="on">Directory Import</button><button>Conversation Import</button></div>
+  <div style="border:1px dashed var(--border-2);border-radius:4px;padding:24px;text-align:center" class="muted">Choose a skill directory (contains SKILL.md)</div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Import Skill</button></div></div></div>
+
+<div class="mask" id="mMem"><div class="modal"><div class="mh">Import Memory <span class="x" data-close>✕</span></div><div class="mb">
+  <div class="f"><div>Agent *</div><select class="input"><option>Builder</option></select></div><div class="seg" style="margin-bottom:12px"><button class="on">Paste Text</button><button>Import JSON File</button></div>
+  <textarea class="input" placeholder='[{"role":"user","content":"…"}]'></textarea></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close>Import Memory</button></div></div></div>
+
+<!-- ============================================================ MODALS (new) ============================================================ -->
+<div class="mask" id="mAddClaude"><div class="modal"><div class="mh">Add Claude account <span class="B n">NEW</span><span class="x" data-close>✕</span></div><div class="mb">
+  <div class="notes"><ol><li>Login bằng luồng OAuth chính thức của Claude trong tab mới. Mỗi lần login là một phiên riêng, <b>không làm người đang login trên máy bị đăng xuất</b>.</li><li>Sau khi login, Claude hiện một mã. Dán mã vào bước 2 (mã hết hạn sau vài phút).</li><li>Nút "Re-login" ở dòng tài khoản lỗi mở cùng hộp thoại này, giữ nguyên tên tài khoản.</li></ol></div>
+  <div class="stepper"><div class="done">1 · Open login</div><div class="on">2 · Paste code</div><div>3 · Done</div></div>
+  <div class="f"><div>Display name</div><input class="input w" value="dev-team-4" /></div>
+  <div class="f"><div>Step 1 — Open this link and log in with the Claude account</div><div class="cl"><input class="input" value="https://claude.ai/oauth/authorize?code=true&client_id=…&state=…" readonly /><button class="btn">Copy</button><button class="btn p">Open ↗</button></div></div>
+  <div class="f"><div>Step 2 — Paste the code that Claude shows after login</div><input class="input w" placeholder="Paste authorization code here" /></div>
+  <div class="alert warn" style="margin:0"><span>⚠</span><div>This uses the Claude Code public login. It may stop working if Anthropic changes it, and pooling personal plans may break Anthropic's terms.</div></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close data-toast="Account dev-team-4 added. Checking usage…">Add account</button></div></div></div>
+
+<div class="mask" id="mAddCodex"><div class="modal"><div class="mh">Add Codex (ChatGPT) account <span class="B n">NEW</span><span class="x" data-close>✕</span></div><div class="mb">
+  <div class="notes"><ol><li>Sau khi login, ChatGPT chuyển về <code>http://localhost:1455/auth/callback?…</code> và trang báo lỗi không kết nối được — đó là bình thường.</li><li>Copy <b>toàn bộ URL</b> trên thanh địa chỉ và dán vào bước 2.</li></ol></div>
+  <div class="stepper"><div class="done">1 · Open login</div><div class="on">2 · Paste redirect URL</div><div>3 · Done</div></div>
+  <div class="f"><div>Display name</div><input class="input w" value="codex-pro-3" /></div>
+  <div class="f"><div>Step 1 — Open this link and log in with the ChatGPT account</div><div class="cl"><input class="input" value="https://auth.openai.com/oauth/authorize?client_id=…&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2F…" readonly /><button class="btn">Copy</button><button class="btn p">Open ↗</button></div></div>
+  <div class="f"><div>Step 2 — Copy the full URL of the page on localhost:1455 (it fails to load) and paste it here</div><textarea class="input" placeholder="http://localhost:1455/auth/callback?code=…&state=…"></textarea></div>
+  <div class="alert warn" style="margin:0"><span>⚠</span><div>This uses the Codex CLI public login. It may stop working if OpenAI changes it, and pooling personal plans may break OpenAI's terms.</div></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close data-toast="Account codex-pro-3 added. Checking usage…">Add account</button></div></div></div>
+
+<div class="mask" id="mEnable"><div class="modal"><div class="mh">Turn on the Codex pool? <span class="B n">NEW</span><span class="x" data-close>✕</span></div><div class="mb">
+  <ul><li><code>codex</code> moves from the <b>default</b> upstream group to the subscription pool.</li><li>New Codex sessions get pool accounts in turn. Running sessions switch on their next request.</li><li>The change reaches the proxy within 30 seconds.</li></ul>
+  <div class="alert info" style="margin:0"><span>ℹ</span><div>2 accounts are ready. To undo, turn the pool off. Nothing is deleted.</div></div></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn p" data-close data-toast="Codex pool is on.">Turn on</button></div></div></div>
+
+<div class="mask" id="mDisable"><div class="modal"><div class="mh">Turn off the Claude Code pool? <span class="B n">NEW</span><span class="x" data-close>✕</span></div><div class="mb">
+  <p><code>claude-code</code> goes back to the <b>default</b> upstream group — same behavior as before the pool.</p><ul><li>7 active sessions stop using pool accounts on their next request.</li><li>Accounts and their tokens stay saved. Usage checks continue.</li></ul></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn dz" data-close data-toast="Claude Code pool is off.">Turn off</button></div></div></div>
+
+<div class="mask" id="mDelAcct"><div class="modal" style="width:480px"><div class="mh">Delete account? <span class="B n">NEW</span><span class="x" data-close>✕</span></div><div class="mb">
+  <p>The account and its saved tokens are removed from Memory Hub. Sessions that use it move to another account on their next request.</p><p class="muted">The account itself is not changed at Anthropic / OpenAI. People who log in to it directly are not affected.</p></div>
+  <div class="mf"><button class="btn" data-close>Cancel</button><button class="btn dz" data-close data-toast="Account deleted.">Delete</button></div></div></div>
+
+<div id="toast" style="position:fixed;top:80px;left:50%;transform:translateX(-50%);background:#fff;border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.15);padding:8px 16px;border-radius:3px;display:none;z-index:95"><span style="color:var(--success)">✔</span> <span id="toastT"></span></div>
+
+<script>
+  const TITLES = { board:'Task Board', analytics:'Observability', members:'Members', agents:'Agents', apikey:'API Key', wiki:'Wiki Knowledge Base', code:'Code_Graph', skills:'Skills', memory:'Chat_Memory', guide:'Guide', poolClaude:'Subscription Pool', poolCodex:'Subscription Pool', guideNew:'Guide', apikeyNew:'API Key', client:'(client)', summary:'(summary)' };
+  const NAV = { poolCodex:'poolClaude', guideNew:'guide', apikeyNew:'apikey' };
+  function show(id) {
+    document.body.classList.toggle('is-login', id === 'login');
+    document.getElementById('login').classList.toggle('on', id === 'login');
+    document.querySelectorAll('.pg').forEach(p => p.classList.toggle('on', p.id === id));
+    document.querySelectorAll('.side .it').forEach(i => i.classList.toggle('on', i.dataset.page === (NAV[id] || id)));
+    document.querySelectorAll('.mk button[data-page]').forEach(b => b.classList.toggle('on', b.dataset.page === id));
+    document.getElementById('curTab').textContent = (TITLES[id] || '') + ' ×';
+    document.querySelectorAll('.dd.show').forEach(d => d.classList.remove('show'));
+    window.scrollTo(0, 0);
+  }
+  document.addEventListener('click', (e) => {
+    const dd = e.target.closest('[data-dd]');
+    const p = e.target.closest('[data-page]');
+    if (p) { e.preventDefault(); show(p.dataset.page); return; }
+    const o = e.target.closest('[data-open]');
+    if (o) { document.querySelectorAll('.dd.show').forEach(d => d.classList.remove('show')); document.getElementById(o.dataset.open).classList.add('show'); return; }
+    const dr = e.target.closest('[data-drawer]');
+    if (dr) { document.getElementById(dr.dataset.drawer).classList.add('show'); return; }
+    if (e.target.closest('[data-close-drawer]')) { e.target.closest('.drawer').classList.remove('show'); return; }
+    const c = e.target.closest('[data-close]');
+    if (c) { c.closest('.mask').classList.remove('show');
+      if (c.dataset.toast) { const t = document.getElementById('toast'); document.getElementById('toastT').textContent = c.dataset.toast; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 1800); }
+      return; }
+    if (e.target.classList.contains('mask')) { e.target.classList.remove('show'); return; }
+    if (dd) { const m = document.getElementById(dd.dataset.dd); const was = m.classList.contains('show'); document.querySelectorAll('.dd.show').forEach(d => d.classList.remove('show')); if (!was) m.classList.add('show'); return; }
+    document.querySelectorAll('.dd.show').forEach(d => d.classList.remove('show'));
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { document.querySelectorAll('.mask.show,.drawer.show').forEach(m => m.classList.remove('show')); } });
+  document.getElementById('annT').addEventListener('change', e => document.body.classList.toggle('no-ann', !e.target.checked));
+  document.getElementById('hlT').addEventListener('change', e => document.body.classList.toggle('no-hl', !e.target.checked));
+  document.getElementById('roleSel').addEventListener('change', e => {
+    document.body.classList.toggle('role-adm', e.target.value === 'adm');
+    document.body.classList.toggle('role-mem', e.target.value === 'mem');
+    document.getElementById('uname').textContent = e.target.value === 'adm' ? 'kevin' : 'dev1';
+    const cur = document.querySelector('.pg.on');
+    if (e.target.value === 'mem' && cur && ['poolClaude','poolCodex','analytics'].includes(cur.id)) show('board');
+  });
+  // Deep link format: #/page or #/page/modalId (the "/" prefix stops the browser from scrolling to the element id)
+  const [hPage, hModal] = location.hash.replace(/^#\/?/, '').split('/');
+  show(hPage || 'board');
+  if (hModal) document.getElementById(hModal)?.classList.add('show');
+</script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+/* SubscriptionPoolPage — layout and meter details that Tea components do not cover. */
+
+._memory-pool-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+._memory-pool-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+._memory-pool-dialog {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 20px 24px 16px;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+._memory-pool-dialog-title {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+._memory-pool-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* Tea cards shrink to their content by default; keep them full width like the API Key page. */
+._memory-pool-body > .tea-card {
+  width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+._memory-pool-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+._memory-pool-switch {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+._memory-pool-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+._memory-pool-summary > .tea-card {
+  width: 100%;
+  margin: 0;
+}
+
+._memory-pool-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+._memory-pool-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+._memory-pool-settings {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+._memory-pool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+._memory-pool-list {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+._memory-pool-small {
+  font-size: 12px;
+}
+
+._memory-pool-footnote {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+}
+
+._memory-pool-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+._memory-pool-extra-name {
+  padding-left: 12px;
+}
+
+/* Quota meter: fill, threshold mark and reset note */
+._memory-pool-meter-label {
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+._memory-pool-meter-name {
+  color: var(--tea-color-text-secondary);
+}
+
+._memory-pool-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+}
+
+._memory-pool-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--tea-color-bg-success-default, #0abf5b);
+}
+
+._memory-pool-fill--warn {
+  background: var(--tea-color-bg-warning-default, #ff9d00);
+}
+
+._memory-pool-fill--full {
+  background: var(--tea-color-bg-error-default, #e54545);
+}
+
+._memory-pool-mark {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 14px;
+  background: var(--tea-color-text-primary, #000);
+  transform: translateX(-1px);
+}

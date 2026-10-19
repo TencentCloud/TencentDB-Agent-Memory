@@ -35,6 +35,16 @@ stream_idle_timeout_ms = 120000
 - `disable_response_storage = true` — 关闭本地缓存，确保每轮都经过 Proxy 注入
 - `stream_idle_timeout_ms = 120000` — session-init 等待用户操作时避免被超时
 
+**保留自己的 ChatGPT 登录作为回退（订阅账号池可选）**：先执行 `codex login`，再把
+`experimental_bearer_token` 换成下面两行。Codex 会在 `Authorization` 中发送自己的 ChatGPT 登录和
+`ChatGPT-Account-ID`，Proxy 从 `x-tdai-user-key` 读取 user key；账号池全部用尽时用这个登录回退。
+`setup-proxy.sh --codex-own-login` 会写入同样的配置。
+
+```toml
+requires_openai_auth = true
+http_headers = { "x-tdai-user-key" = "<业务用户的 sk-mem-... user_key>" }
+```
+
 > ⚠️ **首次对话前必须切到 Plan 模式**（`Shift+Tab`）。Codex 默认 Agent 模式会自动执行 tool call 跳过用户选择，导致 session-init 永远完不成。选完 Team→Agent→Task 后再切回 Agent 模式。
 
 请求路径：

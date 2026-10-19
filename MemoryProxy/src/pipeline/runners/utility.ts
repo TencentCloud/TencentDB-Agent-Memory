@@ -22,6 +22,7 @@ import { joinUrl } from "../../guard-adapter.js";
 import { log } from "../../report/log.js";
 import { verifyUserKey } from "../../auth.js";
 import { stageAuth } from "../stages/auth.js";
+import { openPoolRequest, applyPoolAuth, type PoolRequest } from "../../subscription-pool/pool-request.js";
 import { stageSystemUser } from "../stages/system-user.js";
 import { matchSystemUserByUserId, hasSystemUsers } from "../../systemUser.js";
 import { handleSystemUserPassthrough } from "../../systemUserPassthrough.js";
@@ -54,6 +55,16 @@ function buildAuxUpstreamHeaders(
     }
   }
   return headers;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  if (!text) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 function extractModelId(bodyText: string): string {
@@ -123,6 +134,7 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
   // 命中 custom 组时同时置 skipCreditReport —— 与 stages/instance-upstream-override.ts
   // 的语义一致: custom upstream 由用户自付, 不算平台账。
   let skipCreditReport = false;
+  let poolRequest: PoolRequest | null = null;
   {
     const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId, config.instanceUpstream);
     const agentFromPath = c.req.path.split("/").filter(Boolean)[0] ?? undefined;
@@ -140,6 +152,22 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
           delete upstreamHeaders["x-api-key"];
         }
       }
+    } else if (resolution.kind === "pool" && (entry.protocol === "openai" || entry.protocol === "anthropic")) {
+      // Subscription pool: use the account the session is bound to, else any eligible account.
+      // An auxiliary call never creates or moves a binding.
+      const provider = entry.protocol === "anthropic" ? "claude" as const : "codex" as const;
+      poolRequest = openPoolRequest({
+        config,
+        spaceId,
+        row: resolution.row,
+        clientHeaders: c.req.raw.headers,
+        body: parseJsonObject(bodyText),
+        userKey: apiKey,
+        bindSession: false,
+        provider,
+      });
+      upstreamUrl = joinUrl(poolRequest.upstreamBase, c.req.path);
+      skipCreditReport = true;
     }
   }
 
@@ -150,11 +178,11 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
 
   let upstreamResp: Response;
   try {
-    upstreamResp = await fetch(upstreamUrl, {
-      method: "POST",
-      headers: upstreamHeaders,
-      body: rawBody,
-    });
+    const sendTo = (headers: Record<string, string>): Promise<Response> =>
+      fetch(upstreamUrl, { method: "POST", headers, body: rawBody });
+    upstreamResp = poolRequest
+      ? await poolRequest.send((auth) => sendTo(applyPoolAuth(upstreamHeaders, c.req.raw.headers, auth, poolRequest.provider)))
+      : await sendTo(upstreamHeaders);
   } catch (err: unknown) {
     pipe.error("AUX_FORWARD", err instanceof Error ? err : new Error(String(err)));
     return c.json({
@@ -214,6 +242,7 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
       stream: false,
       usage,
       requestReceivedAt: startTime,
+        ...(poolRequest?.accountId ? { subscriptionAccountId: poolRequest.accountId } : {}),
     });
   }
 

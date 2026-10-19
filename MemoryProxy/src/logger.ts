@@ -55,6 +55,8 @@ export function writeLog(config: ProxyConfig, entry: LogEntry): void {
       spaceId: "spaceId" in entry ? entry.spaceId : undefined,
       upstreamRequestId:
         "upstreamRequestId" in entry ? entry.upstreamRequestId : undefined,
+      subscriptionAccountId:
+        "subscriptionAccountId" in entry ? entry.subscriptionAccountId : undefined,
       extensionStats:
         "extensionStats" in entry ? entry.extensionStats : undefined,
       requestReceivedAt:

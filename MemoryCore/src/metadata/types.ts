@@ -608,7 +608,12 @@ export interface UpsertUserSessionDefaultInput {
 //   - MongoDB 版本乐观锁(version 字段)保护并发写
 
 export type GroupType = "default" | "custom" | "extraction";
-export type UpstreamMode = "official" | "custom_unified" | "custom_passthrough";
+export type UpstreamMode =
+  | "official"
+  | "custom_unified"
+  | "custom_passthrough"
+  /** Requests use a pool of subscription accounts that belong to this group. */
+  | "subscription_pool";
 
 /** default 组 name 固定值（用户不可改）。 */
 export const DEFAULT_GROUP_NAME = "官方内置";
@@ -704,6 +709,28 @@ export interface UpdateInstanceUpstreamGroupInput {
   description?: string;
 }
 
+/**
+ * Input of `moveAgentBetweenUpstreamGroups`: take one agent out of some groups and put it into
+ * another group (existing or new) in one transaction.
+ */
+export interface MoveAgentBetweenUpstreamGroupsInput {
+  agent: string;
+  /**
+   * Groups the agent leaves. A group that does not hold the agent is not changed, except for
+   * its `enabled` flag when one is given.
+   */
+  from: Array<{ group_id: string; enabled?: boolean }>;
+  /** The group the agent joins: an existing one, or a custom group to create with the agent in it. */
+  to:
+    | { group_id: string; enabled?: boolean }
+    | { create: Omit<CreateInstanceUpstreamGroupInput, "agents" | "group_type"> };
+}
+
+export interface MoveAgentBetweenUpstreamGroupsResult {
+  from: InstanceUpstreamConfigEntity[];
+  to: InstanceUpstreamConfigEntity;
+}
+
 /** toggle 单字段快捷接口输入(是 update 的语法糖)。 */
 export interface ToggleInstanceUpstreamGroupInput {
   group_id: string;
@@ -740,5 +767,147 @@ export class InstanceUpstreamWriteConflictError extends Error {
   ) {
     super(message);
     this.name = "InstanceUpstreamWriteConflictError";
+  }
+}
+
+// ============================
+// Subscription account types
+// ============================
+//
+// A Subscription Account is one paid Claude or ChatGPT login that a group in
+// `subscription_pool` mode uses on behalf of its members. Tokens are stored in plain
+// text, like `api_key` of an upstream group. They must never be returned by a public API.
+
+export type SubscriptionProvider = "claude" | "codex";
+export type SubscriptionAccountStatus = "active" | "exhausted" | "auth_error" | "disabled";
+
+/**
+ * One usage limit of an account (5 hour window, 7 day window, weekly per-model window).
+ * Times are epoch milliseconds.
+ */
+export interface SubscriptionQuotaWindow {
+  name: string;
+  /** Model the window applies to. Null or absent means the window is shared by all models. */
+  model_scope?: string | null;
+  used_pct: number;
+  /** Reset time of the window. Null when the provider did not tell it. */
+  resets_at: number | null;
+  observed_at: number;
+  /** Where the observation came from, for example a response header, the usage API or a 429. */
+  source: string;
+}
+
+export interface SubscriptionAccountUsage {
+  windows: SubscriptionQuotaWindow[];
+}
+
+export interface SubscriptionAccountEntity {
+  /** `sacc-<random>`. */
+  account_id: string;
+  group_id: string;
+  provider: SubscriptionProvider;
+  /** Unique inside the group. */
+  display_name: string;
+  /** E-mail and plan from the provider profile. For display only. */
+  account_label: string;
+  /** Admin switch. */
+  enabled: boolean;
+  status: SubscriptionAccountStatus;
+  access_token: string;
+  refresh_token: string;
+  /** Epoch milliseconds. */
+  token_expires_at: number | null;
+  /** Identity on the provider side. Unique inside the group. */
+  provider_account_id: string;
+  usage: SubscriptionAccountUsage;
+  /** Epoch milliseconds of the last usage change. */
+  usage_updated_at: number | null;
+  /** Epoch milliseconds. The account counts as Exhausted while `now < exhausted_until`. */
+  exhausted_until: number | null;
+  /** Consecutive failures of the usage API. */
+  usage_fail_count: number;
+  /** Consecutive transient failures of the token refresh. */
+  refresh_fail_count: number;
+  /** Short message without any token. */
+  last_error: string | null;
+  /** Client sessions bound to the account, as the proxy reported them last. 0 when never reported. */
+  active_sessions: number;
+  /** Optimistic lock. Each write adds 1. */
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * What the proxy may see for one account. The refresh token stays in Core.
+ * `provider_account_id` is the Codex `chatgpt-account-id` the proxy sends with the bearer token.
+ */
+export interface SubscriptionAccountProxyView {
+  account_id: string;
+  group_id: string;
+  provider: SubscriptionProvider;
+  provider_account_id: string;
+  status: SubscriptionAccountStatus;
+  enabled: boolean;
+  access_token: string;
+  token_expires_at: number | null;
+  usage: SubscriptionAccountUsage;
+  exhausted_until: number | null;
+}
+
+/**
+ * Input of `upsertSubscriptionAccountByProviderId`. When the group has an account with the
+ * same `provider_account_id`, its tokens and label change and refresh failures are cleared; an
+ * `auth_error` account returns to `active` (or `disabled` when its switch is off). Its name,
+ * enabled switch, usage and exhaustion stay.
+ */
+export interface UpsertSubscriptionAccountInput {
+  group_id: string;
+  provider: SubscriptionProvider;
+  provider_account_id: string;
+  /** Used when the account is created. Ignored when the account exists. */
+  display_name: string;
+  account_label?: string;
+  access_token: string;
+  refresh_token: string;
+  token_expires_at: number | null;
+}
+
+export interface UpsertSubscriptionAccountResult {
+  account: SubscriptionAccountEntity;
+  /** True when a new row was created. False when the tokens of an existing row were replaced. */
+  created: boolean;
+}
+
+/**
+ * Patch for `updateSubscriptionAccount`. A field that is `undefined` keeps its value.
+ * `null` clears a nullable field.
+ */
+export interface UpdateSubscriptionAccountPatch {
+  display_name?: string;
+  account_label?: string;
+  enabled?: boolean;
+  status?: SubscriptionAccountStatus;
+  access_token?: string;
+  refresh_token?: string;
+  token_expires_at?: number | null;
+  usage?: SubscriptionAccountUsage;
+  usage_updated_at?: number | null;
+  exhausted_until?: number | null;
+  usage_fail_count?: number;
+  refresh_fail_count?: number;
+  last_error?: string | null;
+  active_sessions?: number;
+}
+
+/** Write conflict of a subscription account. The store throws it so it does not depend on the service layer. */
+export class SubscriptionAccountWriteConflictError extends Error {
+  constructor(
+    public readonly reason: "account_not_found" | "group_not_found" | "name_duplicate" | "version_mismatch",
+    message: string,
+    public readonly detail?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "SubscriptionAccountWriteConflictError";
   }
 }

@@ -21,6 +21,7 @@
 
 import type { ProxyConfig } from "../../types.js";
 import { getInstanceUpstreamConfigs, resolveForAgent } from "../../instance-upstream-cache.js";
+import type { InstanceUpstreamRow } from "../../instance-upstream-cache.js";
 import { joinUrl } from "../../guard-adapter.js";
 
 export interface InstanceUpstreamResponsesInput {
@@ -31,6 +32,11 @@ export interface InstanceUpstreamResponsesInput {
   pathForOverride: string;
   /** 是否强制走 official (codex 的 isLegacyProxyPath /proxy/<sid>/ 场景 → true) */
   forceOfficial?: boolean;
+  /**
+   * Whether the caller can use a subscription pool (only codex today). When false, an agent
+   * in a pool group is handled as `official`.
+   */
+  poolSupported?: boolean;
 }
 
 export interface InstanceUpstreamResponsesBlocked {
@@ -52,6 +58,11 @@ export interface InstanceUpstreamResponsesResult {
   bodyModelOverride?: string;
   /** custom upstream 用户自付 → credit 跳过 */
   skipCreditReport: boolean;
+  /**
+   * The agent is in a subscription_pool group. The caller picks the account and builds the URL
+   * and auth headers (see subscription-pool/pool-request.ts); no overrideUrl / headerUpdates.
+   */
+  pool?: { row: InstanceUpstreamRow };
 }
 
 /**
@@ -121,6 +132,11 @@ export async function stageInstanceUpstreamResponses(
       bodyModelOverride: row.model_id || undefined,
       skipCreditReport: true,
     };
+  }
+
+  // Pool traffic is paid by the subscription, so it is not reported as TokenHub credit (same as override groups).
+  if (resolution.kind === "pool" && input.poolSupported) {
+    return { skipCreditReport: true, pool: { row: resolution.row } };
   }
 
   // official / 零行 fallback: 保持全局 upstream

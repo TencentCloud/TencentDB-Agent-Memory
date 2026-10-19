@@ -66,7 +66,7 @@ interface ManualIde {
   file: string;
   protocol: string;
   /** 生成配置文件内容（占位符，不含真实密钥）。第二个参数为接入地址。 */
-  config: (base: string, instanceId: string, mode: ProxyMode, model: string) => string;
+  config: (base: string, instanceId: string, mode: ProxyMode, model: string, ownLoginFallback: boolean) => string;
   /** 启动/注意事项（可空） */
   notes?: string[];
 }
@@ -95,8 +95,14 @@ const MANUAL_IDES: ManualIde[] = [
     name: 'Codex CLI',
     file: '~/.codex/config.toml',
     protocol: 'OpenAI Responses',
-    config: (base, instanceId, mode, model) =>
-      `model_provider = "team-proxy"\nmodel = "${model}"\nmodel_reasoning_effort = "high"\ndisable_response_storage = true\n\n[model_providers.team-proxy]\nname       = "TDAI team-proxy"\nwire_api   = "responses"\nbase_url   = "${proxyEndpoint(base, 'codex', instanceId, mode)}"\nexperimental_bearer_token = "${KEY_PLACEHOLDER}"\n\nrequest_max_retries    = 2\nstream_max_retries     = 3\nstream_idle_timeout_ms = 120000`,
+    config: (base, instanceId, mode, model, ownLoginFallback) => {
+      // 保留自己的 ChatGPT 登录作为备用时：用户 key 走 x-tdai-user-key 请求头，
+      // Authorization 留给 Codex 自己的登录（requires_openai_auth）。
+      const auth = ownLoginFallback
+        ? `requires_openai_auth = true\nhttp_headers = { "x-tdai-user-key" = "${KEY_PLACEHOLDER}" }`
+        : `experimental_bearer_token = "${KEY_PLACEHOLDER}"`;
+      return `model_provider = "team-proxy"\nmodel = "${model}"\nmodel_reasoning_effort = "high"\ndisable_response_storage = true\n\n[model_providers.team-proxy]\nname       = "TDAI team-proxy"\nwire_api   = "responses"\nbase_url   = "${proxyEndpoint(base, 'codex', instanceId, mode)}"\n${auth}\n\nrequest_max_retries    = 2\nstream_max_retries     = 3\nstream_idle_timeout_ms = 120000`;
+    },
     notes: ['guide.manual.note.codex'],
   },
   {
@@ -283,6 +289,8 @@ export function GuidePage() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualIdeId, setManualIdeId] = useState<ManualIdeId>('claude');
   const [modelId, setModelId] = useState('claude-sonnet-4-5');
+  // Codex 手动配置：保留自己的 ChatGPT 登录作为订阅账号池用尽后的备用
+  const [ownLoginFallback, setOwnLoginFallback] = useState(false);
 
   useEffect(() => {
     const session = getPanelSession();
@@ -327,8 +335,8 @@ export function GuidePage() {
   const proxyFallback = t('guide.proxyFallback');
   const modelFallback = t('guide.modelFallback');
   const manualConfig = useMemo(
-    () => manualIde.config(proxyBase || proxyFallback, instanceId, proxyMode, modelId || modelFallback),
-    [manualIde, modelId, proxyBase, proxyMode, instanceId, proxyFallback, modelFallback],
+    () => manualIde.config(proxyBase || proxyFallback, instanceId, proxyMode, modelId || modelFallback, ownLoginFallback),
+    [manualIde, modelId, proxyBase, proxyMode, instanceId, proxyFallback, modelFallback, ownLoginFallback],
   );
   const practiceSteps = PRACTICE_STEPS[practice];
   const activePracticeStep = practiceSteps[practiceStep] ?? practiceSteps[0];
@@ -557,6 +565,19 @@ export function GuidePage() {
                       />
                       <small>{t('guide.manual.modelHint')}</small>
                     </label>
+                    {manualIde.id === 'codex' && (
+                      <label className="guide-manual-switch">
+                        <span>
+                          <input
+                            type="checkbox"
+                            checked={ownLoginFallback}
+                            onChange={(event) => setOwnLoginFallback(event.target.checked)}
+                          />
+                          <b>{t('guide.manual.ownLoginFallback')}</b>
+                        </span>
+                        <small>{t('guide.manual.ownLoginFallbackHint')}</small>
+                      </label>
+                    )}
                     <div className="guide-command secondary">
                       <code>{proxyEndpoint(proxyBase || proxyFallback, manualIde.id, instanceId, proxyMode)}</code>
                       <CopyButton

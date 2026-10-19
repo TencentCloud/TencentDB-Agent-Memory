@@ -198,6 +198,59 @@ Anthropic Messages 客户端：
 | `GET`  | `/health` | 运行时健康检查（含 `storage.effective`） |
 | `GET`  | `/whoami` | API Key → keyId（纯文本，便于 curl） |
 
+## 订阅账号池（Codex）
+
+`codex` agent 可以使用一组 ChatGPT（Codex）订阅账号，代替单个上游 key。该功能是可选的：不在
+`subscription_pool` 模式分组里的 agent 与以前完全一致。账号、token、token 刷新和用量检查都在
+MemoryCore；Proxy 只负责逐请求选账号。账号池由 Panel 管理。
+
+**用户 key 头。** 请求带 `x-tdai-user-key` 头时，该头就是用户 key，`Authorization` / `x-api-key`
+是客户端自己的凭据；没有该头时，`Authorization`（或 `x-api-key`）仍是用户 key，与以前一致。该头不会转发给上游。
+
+**选择顺序。** 对账号池分组内的 agent：
+
+1. 会话已绑定的账号在用满配额前继续使用：启用、`active`、未耗尽，且所有共享窗口及所请求模型的窗口都
+   低于 100%（重置时间已过的窗口按已重置计算）。阈值只拦新会话，已绑定会话超过阈值仍保留；
+2. 否则按 round-robin 取下一个低于阈值的账号并绑定会话；
+3. 否则取未耗尽且用量最低的账号（可高于阈值）；
+4. 否则，若请求带了非空的 `x-tdai-user-key` 且 bearer 不是该用户 key，转发客户端自己的 `Authorization` 与 `chatgpt-account-id`；
+5. 否则返回 `429`，带 `retry-after`、`x-tdai-pool-status: exhausted`、`x-tdai-pool-earliest-reset`
+   （epoch 秒），body 形如 Codex 的 `usage_limit_reached` 错误。
+
+MemoryCore 无法列出账号且 Proxy 没有之前的列表时，第 5 步改为返回 `503`，带
+`x-tdai-pool-status: unavailable` 与 `retry-after: 30`，因为此时配额状态未知。
+
+会话 id 依次取 `x-parent-conversation-id`、`session-id`、`session_id`、body 的
+`client_metadata.session_id`；都没有则用用户 key。会话绑定存放在 ProxyStorage（重启不丢），2 天无请求后过期。
+**只支持单个 Proxy 副本**：绑定与 round-robin 游标不在副本间共享。辅助请求（`responses/compact`、
+`memories/trace_summarize`、`realtime/calls`、utility 路由）只读取绑定或任取一个可用账号，不创建也不移动绑定。
+
+**转发。** 请求发往 `https://chatgpt.com/backend-api/codex/<endpoint>`（分组设置了 `base_url` 时发往该地址），
+带 `authorization: Bearer <access token>` 与 `chatgpt-account-id: <account>`。模型名原样转发：不查价目表、
+不做 alias 改写；body 没有 `store` 字段时设为 `store: false`，其余 body 与客户端头不变，也不做任何客户端伪装。
+账号池流量不上报 TokenHub credit。
+
+**限额与重试。** 所有判断都在第一个字节发给客户端之前完成。
+
+- 上游 `429`：按响应里的重置时间把账号本地标记为耗尽（没有时 15 分钟），上报 Core，并在另一个账号上重试一次；
+- `401`：让 Core 刷新 token（`held_expires_at` 使并发 401 只触发一次真正刷新），用新 token 重试一次；
+  Core 刷新失败则换账号；
+- 成功响应里的限额头（`x-codex-primary-*`、`x-codex-secondary-primary-*`）以 `primary_window` /
+  `secondary_window` 上报 Core。上报不阻塞响应，每个账号最多每 5 秒一次，并带上已绑定会话数。
+
+**Codex 客户端配置。** 想保留客户端自己的 ChatGPT 登录作为最后兜底，把自定义 model provider 指向 Proxy，并在头里带用户 key：
+
+```toml
+[model_providers.pool]
+name = "Subscription pool"
+base_url = "http://<proxy-host>:8096/codex/<spaceId>"
+wire_api = "responses"
+requires_openai_auth = true
+http_headers = { "x-tdai-user-key" = "<user key>" }
+```
+
+**用量记录。** 配置了 ClickHouse 时，用量行有 `subscription_account_id` 列（非账号池流量为空）；Proxy 启动时会给已有表补列。
+
 ## 配置说明
 
 完整带注释的示例见 [`config.example.yaml`](./config.example.yaml)。配置优先级：**CLI 参数 > YAML 配置文件 > 内置默认值**。

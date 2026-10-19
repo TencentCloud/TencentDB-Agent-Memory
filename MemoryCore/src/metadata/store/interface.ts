@@ -57,6 +57,12 @@ import type {
   ToggleInstanceUpstreamGroupInput,
   DeleteInstanceUpstreamGroupInput,
   SupportedAgent,
+  MoveAgentBetweenUpstreamGroupsInput,
+  MoveAgentBetweenUpstreamGroupsResult,
+  SubscriptionAccountEntity,
+  UpsertSubscriptionAccountInput,
+  UpsertSubscriptionAccountResult,
+  UpdateSubscriptionAccountPatch,
 } from "../types.js";
 
 export type MaybePromise<T> = T | Promise<T>;
@@ -276,6 +282,18 @@ export interface IMetadataStore {
     input: ToggleInstanceUpstreamGroupInput,
   ): MaybePromise<InstanceUpstreamConfigEntity>;
 
+  /**
+   * Move one agent from some groups into another group in one transaction, so the agent is never
+   * left in no group or in two groups. The target can be created in the same transaction.
+   * Throws InstanceUpstreamWriteConflictError:
+   *   - group_not_found: a source or the target group does not exist (or is an extraction row)
+   *   - agents_overlap: a default / custom group other than the source and target holds the agent
+   *   - name_duplicate: the group to create has a name that is already used
+   */
+  moveAgentBetweenUpstreamGroups(
+    input: MoveAgentBetweenUpstreamGroupsInput,
+  ): MaybePromise<MoveAgentBetweenUpstreamGroupsResult>;
+
   /** 物理删除,不存在返 false。 */
   deleteInstanceUpstreamGroup(
     input: DeleteInstanceUpstreamGroupInput,
@@ -297,6 +315,40 @@ export interface IMetadataStore {
    * 不做 diff-append(方案 E 的收敛只在 list 时跑,避免所有写入路径都刷 snapshot)。
    */
   ensureDefaultSeeded(supported: SupportedAgent[]): MaybePromise<void>;
+
+  // ── Subscription accounts (accounts of groups in `subscription_pool` mode) ──
+  //
+  // Deleting an upstream group deletes its accounts. Writes use the `version` field as an
+  // optimistic lock. A failed check throws SubscriptionAccountWriteConflictError.
+
+  /** List accounts of one group, or of all groups when `groupId` is not given. Oldest first. */
+  listSubscriptionAccounts(groupId?: string): MaybePromise<SubscriptionAccountEntity[]>;
+
+  /** Get one account by `account_id`. Returns null when it does not exist. */
+  getSubscriptionAccount(accountId: string): MaybePromise<SubscriptionAccountEntity | null>;
+
+  /**
+   * Create an account, or replace the tokens of the account that has the same
+   * `provider_account_id` in the group. On replace, the name, enabled switch and usage stay.
+   * A status of `auth_error` becomes `active` because the new tokens fix it.
+   * Throws `group_not_found` and `name_duplicate`.
+   */
+  upsertSubscriptionAccountByProviderId(
+    input: UpsertSubscriptionAccountInput,
+  ): MaybePromise<UpsertSubscriptionAccountResult>;
+
+  /**
+   * Apply a patch. When `expectedVersion` is given and does not match, throws
+   * `version_mismatch`. Throws `account_not_found` and `name_duplicate`.
+   */
+  updateSubscriptionAccount(
+    accountId: string,
+    patch: UpdateSubscriptionAccountPatch,
+    expectedVersion?: number,
+  ): MaybePromise<SubscriptionAccountEntity>;
+
+  /** Delete one account. Returns false when it does not exist. */
+  deleteSubscriptionAccount(accountId: string): MaybePromise<boolean>;
 }
 
 /** 后端类型。 */

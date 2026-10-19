@@ -32,6 +32,7 @@ import {
   resolveLatestUserQuery,
   reportAnalyzerTrace,
   type ForwardTarget,
+  joinUrl,
 } from "../../guard-adapter.js";
 import { hasCostGuardMarker, isLegacyProxyPath, matchWhitelistEndpoint, resolveCostGuardMode } from "../../routes/whitelist.js";
 import { writeRequestLog } from "../../requestLog.js";
@@ -53,6 +54,7 @@ import { resolveModelId, isModelInPricing } from "../../pricing.js";
 import { inspectAndRecord } from "../../identity.js";
 import { writeFailedReportRaw } from "../../clickhouse.js";
 import { verifyUserKey } from "../../auth.js";
+import { openPoolRequest, applyPoolAuth } from "../../subscription-pool/pool-request.js";
 import { stageAuth } from "../stages/auth.js";
 import { stageParseBody } from "../stages/parse-body.js";
 import { stageModelGate } from "../stages/model-gate.js";
@@ -633,7 +635,10 @@ export async function runAnthropicPipeline(
   }
 
   // ── Resolve apiKey → project name ──────────────────────────────────────
-  const apiKey = extractApiKey(c);
+  // `apiKey` is the user key. With `x-tdai-user-key` the client's own credential is a different
+  // value and is the only one that may go upstream when a group passes the client key through.
+  const clientCredential = extractApiKey(c);
+  const apiKey = c.req.header("x-tdai-user-key") || clientCredential;
   let keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
   let wecomName = "";
   if (agentFromPath) {
@@ -1018,7 +1023,7 @@ export async function runAnthropicPipeline(
   // stageInstanceUpstreamOverride 内部替换手动拼接为 joinUrl(base, c.req.path)。
   const overrideResult = stageInstanceUpstreamOverride({
     earlyConvResolution: _earlyConvResolution,
-    target, forwardEndpoint, apiKey, body, modelId,
+    target, forwardEndpoint, apiKey: clientCredential, body, modelId,
     requestPath: c.req.path,
   });
   if (overrideResult.applied) {
@@ -1029,7 +1034,24 @@ export async function runAnthropicPipeline(
       modelId = overrideResult.newModelId;
     }
   }
-  const skipCreditReport = overrideResult.skipCreditReport;
+  let skipCreditReport = overrideResult.skipCreditReport;
+  // A Claude subscription pool swaps only the bearer. The client's own headers and body stay.
+  const poolRequest = _earlyConvResolution.kind === "pool"
+    ? openPoolRequest({
+        config,
+        spaceId,
+        row: _earlyConvResolution.row,
+        clientHeaders: c.req.raw.headers,
+        body,
+        userKey: earlyApiKey,
+        bindSession: requestKind === "main",
+        provider: "claude",
+      })
+    : null;
+  if (poolRequest) {
+    target.url = joinUrl(poolRequest.upstreamBase, c.req.path);
+    skipCreditReport = true;
+  }
 
   // ── Skill selection (proxy 选择 → 客户端加载) ─────────────────────────────
   // 新用户轮次选中 skill → 不调用上游，直接返回一条 tool_use，由客户端执行加载；
@@ -1227,16 +1249,26 @@ export async function runAnthropicPipeline(
     // 上游 quota 由用户自己管;proxy 的 QPM/TPM 桶是运营方按自家上游算的,套到 custom
     // 上等于错杀。传 undefined → forwardWithRetry 内 `if (rateLimitContext)` 自然跳过。
     // rateLimit gate 关闭时(codex/wb bootstrap)同样跳过。
-    const rateLimitContext = (_isCustomUpstream || !_gates.rateLimit) ? undefined : { config, instanceId: spaceId || undefined };
-    const result = await forwardWithRetry(
-      target, upstreamHeaders, upstreamBody,
-      retryBody, originalHeaders,
-      pipe, forwardTimeoutMs,
-      sessionKey,
-      rateLimitContext,
-    );
-    upstreamResp = result.resp;
-    retried = result.retried;
+    const rateLimitContext = (_isCustomUpstream || poolRequest || !_gates.rateLimit) ? undefined : { config, instanceId: spaceId || undefined };
+    if (poolRequest) {
+      upstreamResp = await poolRequest.send((auth) => fetch(target.url, {
+        method: "POST",
+        headers: applyPoolAuth(upstreamHeaders, c.req.raw.headers, auth, "claude"),
+        body: JSON.stringify(upstreamBody),
+        signal: AbortSignal.timeout(forwardTimeoutMs),
+      }));
+      retried = false;
+    } else {
+      const result = await forwardWithRetry(
+        target, upstreamHeaders, upstreamBody,
+        retryBody, originalHeaders,
+        pipe, forwardTimeoutMs,
+        sessionKey,
+        rateLimitContext,
+      );
+      upstreamResp = result.resp;
+      retried = result.retried;
+    }
   } catch (err: unknown) {
     if (isRateLimitExceededError(err)) {
       pipe.info("RATE_LIMIT", "TPM/QPM exceeded");

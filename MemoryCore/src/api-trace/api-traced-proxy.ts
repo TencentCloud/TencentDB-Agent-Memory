@@ -6,7 +6,7 @@ import type { IMetadataStore } from "../metadata/store/interface.js";
 import { getApiRequestContext } from "./api-request-context.js";
 import { getApiTraceConfig, isApiTraceActive } from "./api-log-config.js";
 import { logApiTrace } from "./api-trace-logger.js";
-import { sanitizeApiPayload } from "./api-sanitize.js";
+import { API_TRACE_SENSITIVE_KEYS, sanitizeApiPayload } from "./api-sanitize.js";
 
 const SERVICE_SKIP = new Set(["constructor", "scopedInstanceId"]);
 const STORE_SKIP = new Set(["constructor", "init", "close"]);
@@ -23,10 +23,14 @@ function summarizeValue(value: unknown, maxFieldChars: number): string {
   }
 }
 
-function summarizeArgs(args: unknown[], maxFieldChars: number): Record<string, string | number | boolean> {
+export function summarizeArgs(args: unknown[], maxFieldChars: number): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
   if (args.length > 0 && typeof args[0] === "object" && args[0] !== null && !Array.isArray(args[0])) {
     for (const [k, v] of Object.entries(args[0] as Record<string, unknown>).slice(0, 12)) {
+      if (API_TRACE_SENSITIVE_KEYS.has(k.toLowerCase())) {
+        out[k] = "[redacted]";
+        continue;
+      }
       if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
         out[k] = typeof v === "string" ? summarizeValue(v, maxFieldChars) : v;
       }

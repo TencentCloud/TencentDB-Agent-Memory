@@ -183,6 +183,75 @@ Anthropic Messages client:
 }
 ```
 
+## Subscription account pool (Codex)
+
+An agent can use a pool of ChatGPT (Codex) subscription accounts instead of one upstream key. The
+feature is optional: an agent that is not in a group of mode `subscription_pool` behaves exactly as
+before. Only the `codex` agent is supported. Accounts, their tokens, token refresh and usage checks
+live in MemoryCore; the proxy only picks an account per request. Panel manages the pool.
+
+**User key header.** If a request has the header `x-tdai-user-key`, that header is the user key, and
+`Authorization` / `x-api-key` are the client's own credentials. Without the header, `Authorization`
+(or `x-api-key`) is still the user key, as before. The header is never sent upstream.
+
+**Selection.** For a request of an agent in a pool group the proxy:
+
+1. keeps the account the session is bound to until that account reaches its quota: it stays while it
+   is enabled, `active`, not exhausted and below 100 % on every shared quota window and on the window
+   of the requested model (a window whose reset time has passed counts as reset). The threshold only
+   stops new sessions, so a bound session stays above it;
+2. otherwise takes the next account by round-robin that is below the threshold and binds the session
+   to it;
+3. otherwise takes the not-exhausted account with the lowest usage, even above the threshold;
+4. otherwise forwards the client's own `Authorization` and `chatgpt-account-id`, only if the request
+   carried a non-empty `x-tdai-user-key` and its bearer is not that user key;
+5. otherwise answers `429` with `retry-after`, `x-tdai-pool-status: exhausted` and
+   `x-tdai-pool-earliest-reset` (epoch seconds). The JSON body has the shape of a Codex
+   `usage_limit_reached` error.
+
+When MemoryCore cannot list the accounts and the proxy has no earlier list, step 5 answers `503` with
+`x-tdai-pool-status: unavailable` and `retry-after: 30` instead, because the quota state is unknown.
+
+The session id is the first of `x-parent-conversation-id`, `session-id`, `session_id`, and
+`client_metadata.session_id` in the body; without any, the user key. A Session Binding is stored in
+ProxyStorage (survives a restart) and expires after 2 days without requests. Run **one proxy replica**:
+the binding store and the round-robin cursor are not shared between replicas.
+Auxiliary requests (`responses/compact`, `memories/trace_summarize`, `realtime/calls`, utility routes)
+read the binding or take any eligible account. They never create or move a binding.
+
+**Forwarding.** Requests go to `https://chatgpt.com/backend-api/codex/<endpoint>` (or to the `base_url`
+of the pool group when it is set) with `authorization: Bearer <access token>` and
+`chatgpt-account-id: <account>`. The model name is forwarded unchanged: there is no pricing-table check
+and no alias rewrite. `store: false` is set in the body when the body has no `store` field. Nothing else
+in the body or in the client headers changes, and the proxy does not impersonate any client. Pool
+traffic is not reported as TokenHub credit.
+
+**Limits and retries.** All decisions happen before the first byte goes to the client.
+
+- `429` from the provider: the account is held as exhausted until the reset time of the response (15
+  minutes when none is given), reported to Core, and the same request is retried once on another account.
+- `401`: the proxy asks Core to refresh the token (`held_expires_at` makes concurrent 401s one provider
+  refresh) and retries once with the new token. If Core cannot refresh, the request moves to another
+  account.
+- Rate-limit headers of a successful response (`x-codex-primary-*`, `x-codex-secondary-primary-*`)
+  are reported to Core as the windows `primary_window` and `secondary_window`. Reports are
+  non-blocking, at most one per account every 5 s, and carry the number of bound sessions.
+
+**Codex client setup.** To keep the ChatGPT login of the client as the last fallback, point a custom
+model provider at the proxy and send the user key in a header:
+
+```toml
+[model_providers.pool]
+name = "Subscription pool"
+base_url = "http://<proxy-host>:8096/codex/<spaceId>"
+wire_api = "responses"
+requires_openai_auth = true
+http_headers = { "x-tdai-user-key" = "<user key>" }
+```
+
+**Usage record.** When ClickHouse is configured, the usage row has `subscription_account_id` (empty for
+traffic outside a pool). The proxy adds the column to an existing table at start.
+
 ## FAQ
 
 ### Is an API key mandatory?

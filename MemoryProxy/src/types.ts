@@ -1207,6 +1207,8 @@ export interface UsageLogEntry {
    * upstream did not return one. Used for cross-system tracing/audit.
    */
   upstreamRequestId?: string;
+  /** Subscription pool account that served the request. Absent outside a pool. */
+  subscriptionAccountId?: string;
 }
 
 /**

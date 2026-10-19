@@ -25,6 +25,7 @@ export type PageId =
   | 'team_members'
   | 'team_agents'
   | 'api_keys'
+  | 'subscription_pool'
   | 'analytics';
 
 /** 页面元数据 */
@@ -53,6 +54,7 @@ export function usePageMeta(): Record<PageId, PageMeta> {
     team_members:    { id: 'team_members',    label: t('menu.team_members'), desc: t('menu.desc.team_members'), group: t('menu.group.organization'), order: 0 },
     team_agents:     { id: 'team_agents',     label: t('menu.team_agents'), desc: t('menu.desc.team_agents'), group: t('menu.group.organization'), order: 1 },
     api_keys:        { id: 'api_keys',        label: t('menu.api_keys'), desc: t('menu.desc.api_keys'), group: t('menu.group.organization'), order: 2 },
+    subscription_pool: { id: 'subscription_pool', label: t('menu.subscription_pool'), desc: t('menu.desc.subscription_pool'), group: t('menu.group.organization'), order: 3 },
   };
 }
 
@@ -73,6 +75,14 @@ export const ITEM_ICON: Record<PageId, JSX.Element> = {
   team_members: <UserIcon size={16} />,
   team_agents: <UsergroupIcon size={16} />,
   api_keys: <LockOnIcon size={16} />,
+  subscription_pool: (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 3l4 4-4 4" />
+      <path d="M3 7h18" />
+      <path d="M7 21l-4-4 4-4" />
+      <path d="M21 17H3" />
+    </svg>
+  ),
   wiki: <BooksIcon size={16} />,
   code: <CodeIcon size={16} />,
   skills: <ToolsIcon size={16} />,

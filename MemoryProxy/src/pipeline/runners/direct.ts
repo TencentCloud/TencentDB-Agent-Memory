@@ -55,6 +55,9 @@ function buildDirectRequestHeaders(c: Context): Record<string, string> {
 }
 
 function extractApiKey(c: Context): string {
+  // The x-tdai-user-key header carries the user key when Authorization holds the client's own login.
+  const userKeyHeader = c.req.header("x-tdai-user-key");
+  if (userKeyHeader) return userKeyHeader;
   const xApiKey = c.req.header("x-api-key");
   if (xApiKey) return xApiKey;
   const authHeader = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";

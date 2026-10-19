@@ -49,7 +49,8 @@ import {
 } from "../../common/responses-payload.js";
 import { isLegacyProxyPath } from "../../routes/whitelist.js";
 import { verifyUserKey } from "../../auth.js";
-import { stageAuth } from "../stages/auth.js";
+import { stageAuth, extractApiKeyFromContext } from "../stages/auth.js";
+import { openPoolRequest, applyPoolAuth } from "../../subscription-pool/pool-request.js";
 import { stageParseBody } from "../stages/parse-body.js";
 import { stageSessionResetPreHook } from "../stages/session-reset-pre-hook.js";
 import { stageSessionResetConfirmation } from "../stages/session-reset-confirmation.js";
@@ -335,6 +336,8 @@ export async function runCodexPipeline(
   }
   const poolRejection = poolServiceRejection(config, body.model);
   if (poolRejection) return c.json(poolRejection, 400);
+  // A pool request goes to the ChatGPT backend, which only knows the client's own model name.
+  const clientModel = typeof body.model === "string" ? body.model : "";
   applyMainModel(body);
 
   // ── 3. Extract headers as plain object ─────────────────────────────────────
@@ -385,16 +388,23 @@ export async function runCodexPipeline(
   // (但 codex 老代码没走这个 early stage, 这里独立算一次 — 保守跳过 gate 只在 aux 场景)
   const _spaceIdForGate = extractSpaceIdFromPath(path) ?? "";
   let _codexIsCustomUpstream = false;
-  if (codexAgent.stageGates.modelGate && !isAuxiliary) {
+  // A subscription pool behaves like a custom upstream for the model: no pricing-table gate and no
+  // alias rewrite, the client's model name goes upstream unchanged. Auxiliary requests use the
+  // pool too, so the pool check does not depend on the gate being skipped for them.
+  let _codexIsPool = false;
+  if (codexAgent.stageGates.modelGate) {
     try {
       const { getInstanceUpstreamConfigs, resolveForAgent, shouldOverride } =
         await import("../../instance-upstream-cache.js");
       const cfgs = await getInstanceUpstreamConfigs(config.coreSkill, _spaceIdForGate, config.instanceUpstream);
-      _codexIsCustomUpstream = shouldOverride(resolveForAgent(cfgs, "codex"));
+      const _codexResolution = resolveForAgent(cfgs, "codex");
+      _codexIsPool = _codexResolution.kind === "pool";
+      _codexIsCustomUpstream = !isAuxiliary && (shouldOverride(_codexResolution) || _codexIsPool);
     } catch {
       _codexIsCustomUpstream = false;
+      _codexIsPool = false;
     }
-    if (!_codexIsCustomUpstream) {
+    if (!isAuxiliary && !_codexIsCustomUpstream) {
       const gateResult = stageModelGate(requestedModel, config, false);
       if (!gateResult.ok) {
         return c.json({
@@ -406,7 +416,8 @@ export async function runCodexPipeline(
     }
   }
 
-  const modelId = resolveModelId(config.creditPricing, requestedModel);
+  if (_codexIsPool && clientModel) body.model = clientModel;
+  const modelId = _codexIsPool ? (clientModel || requestedModel) : resolveModelId(config.creditPricing, requestedModel);
   // 对外展示名只用于客户端请求；TokenHub 只接受价目表中登记的真实服务 ID。
   if (typeof body.model === "string" && modelId !== requestedModel) {
     body.model = modelId;
@@ -1031,9 +1042,31 @@ async function forwardToUpstream(
     config,
     pathForOverride: c.req.path,
     forceOfficial: isLegacyProxyPath(c.req.path),
+    poolSupported: true,
   });
   if (isInstanceUpstreamBlocked(_upstreamResolve)) {
     return c.json(_upstreamResolve.errorBody, 400);
+  }
+  // Subscription pool: the account, its credentials and the retry on a limit come from the pool.
+  // The ChatGPT backend needs `store: false`; the rest of the body stays as the client sent it.
+  const poolRequest = _upstreamResolve.pool
+    ? openPoolRequest({
+        config,
+        spaceId,
+        row: _upstreamResolve.pool.row,
+        clientHeaders: c.req.raw.headers,
+        body,
+        userKey: extractApiKeyFromContext(c, "bearer-first"),
+        bindSession: lf !== null,
+      })
+    : null;
+  if (poolRequest) {
+    upstreamUrl = joinUrl(poolRequest.upstreamBase, c.req.path);
+    if (body.store === undefined) body.store = false;
+    // The account's credentials are set per attempt. Until then the headers must not carry the
+    // TokenHub key or the proxy user key, because hooks below may see them with the ChatGPT URL.
+    delete upstreamHeaders["authorization"];
+    delete upstreamHeaders["x-api-key"];
   }
   if (_upstreamResolve.overrideUrl) {
     upstreamUrl = _upstreamResolve.overrideUrl;
@@ -1142,15 +1175,22 @@ async function forwardToUpstream(
 
   let upstreamResp: Response;
   try {
-    const fetchOpts: RequestInit = {
-      method: "POST",
-      headers: upstreamHeaders,
-      body: JSON.stringify(body),
+    // Each attempt gets its own timeout signal, so a retry on another pool account is not cut short.
+    const buildFetchOpts = (headers: Record<string, string>): RequestInit => {
+      const fetchOpts: RequestInit = {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      };
+      if (forwardTimeoutMs > 0) {
+        fetchOpts.signal = AbortSignal.timeout(forwardTimeoutMs);
+      }
+      return fetchOpts;
     };
-    if (forwardTimeoutMs > 0) {
-      fetchOpts.signal = AbortSignal.timeout(forwardTimeoutMs);
-    }
-    upstreamResp = await fetch(upstreamUrl, fetchOpts);
+    upstreamResp = poolRequest
+      ? await poolRequest.send((auth) =>
+          fetch(upstreamUrl, buildFetchOpts(applyPoolAuth(upstreamHeaders, c.req.raw.headers, auth))))
+      : await fetch(upstreamUrl, buildFetchOpts(upstreamHeaders));
   } catch (err: unknown) {
     if (err instanceof DOMException && err.name === "TimeoutError") {
       pipe.error("CODEX_FORWARD", `Timeout after ${forwardTimeoutMs / 1000}s`);
@@ -1270,6 +1310,7 @@ async function forwardToUpstream(
         extensionStats: preparedStats ?? undefined,
         spaceId,
         upstreamRequestId,
+        ...(poolRequest?.accountId ? { subscriptionAccountId: poolRequest.accountId } : {}),
       });
       await stageRecordTokenUsage({
         config, gates: codexAgentForForward.stageGates,
@@ -1357,6 +1398,7 @@ async function forwardToUpstream(
     preparedStats,
     archiveCtx,
     sessionTurnCtx,
+    subscriptionAccountId: poolRequest?.accountId ?? undefined,
   });
 
   // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
@@ -1424,6 +1466,8 @@ export interface CodexTapContext {
   /** Upstream `x-request-id`, carried for cross-system tracing. */
   upstreamRequestId?: string;
   skipCreditReport?: boolean;
+  /** Subscription pool account that served the request; recorded in the usage row. */
+  subscriptionAccountId?: string;
   /** Opaque counters from the preparation stage, recorded with the usage log. */
   preparedStats?: Record<string, unknown> | null;
   /**
@@ -1504,6 +1548,7 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
           extensionStats: ctx.preparedStats ?? undefined,
           spaceId: ctx.spaceId,
           upstreamRequestId: ctx.upstreamRequestId,
+          ...(ctx.subscriptionAccountId ? { logMeta: { subscriptionAccountId: ctx.subscriptionAccountId } } : {}),
         });
       }
       if (ctx.config && ctx.requestPath) {

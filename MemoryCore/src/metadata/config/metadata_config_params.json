@@ -48,6 +48,18 @@
           "allowed_scopes": ["global", "user"]
         }
       ]
+    },
+    {
+      "module": "subscription_pool",
+      "description": "Subscription pool settings",
+      "params": [
+        {
+          "param_name": "threshold_pct",
+          "param_value": "95",
+          "description": "Usage threshold for new subscription sessions",
+          "allowed_scopes": ["global"]
+        }
+      ]
     }
   ]
 }

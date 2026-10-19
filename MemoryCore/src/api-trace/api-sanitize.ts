@@ -15,6 +15,8 @@ export const API_TRACE_SENSITIVE_KEYS = new Set([
   "authorization",
   "api_key",
   "token",
+  "access_token",
+  "refresh_token",
   "secret",
   "bearer",
 ]);

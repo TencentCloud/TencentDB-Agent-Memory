@@ -58,6 +58,8 @@ import { initObservabilityBackend } from "../core/report/factory.js";
 import type { ObservabilityConfig as CoreObservabilityConfig } from "../core/report/types.js";
 import { TracedTaskExecutor } from "../core/report/traced-task-executor.js";
 import { StorePool } from "../core/store/store-pool.js";
+import { readSubscriptionPoolConfig } from "../subscription-pool/config.js";
+import { SubscriptionPoolScheduler } from "../subscription-pool/pool-scheduler.js";
 import { validateAndNormalizeRaw, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
@@ -352,6 +354,8 @@ export class TdaiGateway {
 
   // ── Metadata (v3): shared store pool + per-instance MetadataService ──
   private metadataStorePool: MetadataStorePool | null = null;
+  /** Subscription pool timers. Null when `SUBSCRIPTION_POOL_ENABLED=false` or before start. */
+  private subscriptionPoolScheduler: SubscriptionPoolScheduler | null = null;
   private analyticsChClientInstance: AnalyticsChClient | null | undefined = undefined; // undefined = not yet initialized
   private analyticsChInitPromise: Promise<void> | null = null;
   private memorySystemUserConfig: MemorySystemUserConfig | undefined;
@@ -526,6 +530,9 @@ export class TdaiGateway {
       const configSvc = new ConfigParamService(store, registry);
       await configSvc.initDefaults(registry, this.config.metadata);
       rawSvc.setConfigParamService(configSvc);
+      rawSvc.setSubscriptionPoolHooks({
+        onAccountChanged: (changedInstanceId, change) => this.subscriptionPoolScheduler?.syncAccount(changedInstanceId, change),
+      });
 
       // 归档 Agent 时连带清掉它的 chat_memory 内容（L0–L3 + 向量 + 文件）。
       // metadata 层拿不到 IMemoryStore / StorageAdapter，所以这里把清理能力
@@ -543,6 +550,9 @@ export class TdaiGateway {
 
       svc = wrapApiServiceForTrace(rawSvc);
       this.metadataServiceByInstance.set(instanceId, svc);
+      // An instance gets its pool timers when Core first serves it. Detached: the startup pass
+      // calls the provider and must not delay this request.
+      void this.subscriptionPoolScheduler?.registerInstance(instanceId);
     }
     return svc;
   }
@@ -596,6 +606,15 @@ export class TdaiGateway {
       this.logger.info(
         `[META-V3] metadata store configured (backend=${metadataStoreCfg.backend})`,
       );
+    }
+
+    const poolConfig = readSubscriptionPoolConfig();
+    if (poolConfig.enabled) {
+      this.subscriptionPoolScheduler = new SubscriptionPoolScheduler({
+        getService: (poolInstanceId) => this.ensureMetadataService(poolInstanceId),
+        checkIntervalMs: poolConfig.checkIntervalMin * 60 * 1000,
+        logger: this.logger,
+      });
     }
 
     const metadataPool = await this.ensureMetadataStorePool();
@@ -787,6 +806,7 @@ export class TdaiGateway {
         this.startTime = Date.now();
         this.logger.info(`Gateway listening on http://${host}:${port}`);
         this.logSecurityPosture();
+        this.startSubscriptionPoolForLocalInstance();
         resolve();
       });
       this.server!.on("error", reject);
@@ -842,6 +862,18 @@ export class TdaiGateway {
   }
 
   /**
+   * Standalone Core serves one known instance, so its pool timers start at once. In service mode
+   * an instance starts its timers on its first metadata request after a restart.
+   */
+  private startSubscriptionPoolForLocalInstance(): void {
+    if (!this.subscriptionPoolScheduler || this.config.deployMode === "service") return;
+    const instanceId = this.config.instanceId ?? "default";
+    this.ensureMetadataService(instanceId).catch((err) => {
+      this.logger.warn(`[subscription-pool] start failed instance=${instanceId}: ${(err as Error).name}`);
+    });
+  }
+
+  /**
    * Gracefully stop the Gateway.
    */
   async stop(): Promise<void> {
@@ -855,6 +887,9 @@ export class TdaiGateway {
 
   private async doStop(): Promise<void> {
     this.logger.info("Shutting down gateway...");
+
+    this.subscriptionPoolScheduler?.stop();
+    this.subscriptionPoolScheduler = null;
 
     // 优雅关闭 OTel SDK（flush 剩余 Span/Log）
     try {

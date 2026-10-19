@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import type { Moment } from 'moment';
 import moment from 'moment';
 import {
@@ -46,6 +47,7 @@ const { autotip } = Table.addons;
 
 export default function ApiKeyPanel() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const role = useCurrentRole();
   const { auth } = useAuthStore();
   const [keys, setKeys] = useState<UserKey[]>([]);
@@ -193,6 +195,20 @@ export default function ApiKeyPanel() {
           ) : null
         }
       />
+
+      {/* ===== 订阅账号池提示：保留自己的 ChatGPT 登录时，用户 key 走 x-tdai-user-key 请求头 ===== */}
+      <Alert type="info">
+        {t('apiKey.poolHint')}{' '}
+        <a
+          href="#/guide"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate('/guide');
+          }}
+        >
+          {t('apiKey.poolHint.link')} →
+        </a>
+      </Alert>
 
       {/* ===== Key 列表：key_id / key_prefix / 创建时间 + 操作 ===== */}
       <Card>

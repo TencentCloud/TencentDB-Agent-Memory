@@ -116,7 +116,7 @@ expand_path() { echo "${1/#\~/$HOME}"; }
 HEADER_AGENTS=("hermes" "openclaw")
 
 # ─── Parse args ───────────────────────────────────────────────────────────────
-ARG_AGENT="" ; ARG_QUICK=false ; ARG_NONINTERACTIVE=false
+ARG_AGENT="" ; ARG_QUICK=false ; ARG_NONINTERACTIVE=false ; CODEX_OWN_LOGIN=false
 ARG_PROXY="" ; ARG_INSTANCE="" ; ARG_KEY="" ; ARG_MODEL=""
 ARG_TEAM_ID="" ; ARG_AGENT_ID="" ; ARG_TASK_ID="" ; ARG_CONV_ID=""
 ARG_CONFIG_PATH=""
@@ -124,6 +124,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --agent)          ARG_AGENT="$2"; shift 2 ;;
     --quick)          ARG_QUICK=true; shift ;;
+    --codex-own-login) CODEX_OWN_LOGIN=true; shift ;;
     --non-interactive) ARG_NONINTERACTIVE=true; shift ;;
     --proxy-host)     ARG_PROXY="$2"; shift 2 ;;
     --instance-id)    ARG_INSTANCE="$2"; shift 2 ;;
@@ -140,6 +141,7 @@ while [[ $# -gt 0 ]]; do
       echo "Interactive mode (default):"
       echo "  --agent <name>     Pre-select agent"
       echo "  --quick            Skip confirmations"
+      echo "  --codex-own-login  Codex: keep your own ChatGPT login as fallback (user key goes in x-tdai-user-key)"
       echo ""
       echo "Non-interactive mode (all params required):"
       echo "  --non-interactive  Skip all prompts, use flags below"
@@ -711,6 +713,16 @@ fi
 
 fi  # end if ! $ARG_NONINTERACTIVE
 
+# Codex: the user's own ChatGPT login serves as fallback when every pool account is at its limit.
+# The proxy user key then travels in x-tdai-user-key and Authorization carries the ChatGPT login.
+if [[ "$CHOSEN_AGENT" == "codex" ]] && ! $CODEX_OWN_LOGIN && ! $ARG_QUICK && ! $ARG_NONINTERACTIVE; then
+  echo ""
+  info "订阅账号池用尽时，可以回退到你自己的 ChatGPT 登录 (需先执行 codex login)。"
+  if confirm "是否保留自己的 ChatGPT 登录作为回退?" "n"; then
+    CODEX_OWN_LOGIN=true
+  fi
+fi
+
 # ─── Write Functions ──────────────────────────────────────────────────────────
 
 write_claude_code() {
@@ -808,6 +820,15 @@ write_codebuddy() {
   info "启动方式: 在 CodeBuddy 对话框中选择模型 ${BOLD}proxy-memory-agent${RESET}"
 }
 
+codex_auth_lines() {
+  if $CODEX_OWN_LOGIN; then
+    echo "requires_openai_auth = true"
+    echo "http_headers = { \"x-tdai-user-key\" = \"${USER_KEY}\" }"
+  else
+    echo "experimental_bearer_token = \"${USER_KEY}\""
+  fi
+}
+
 write_codex() {
   local filepath="$1"
   ensure_dir "$filepath"
@@ -852,7 +873,7 @@ write_codex() {
       echo "name       = \"TDAI team-proxy\""
       echo "wire_api   = \"responses\""
       echo "base_url   = \"${base_url}\""
-      echo "experimental_bearer_token = \"${USER_KEY}\""
+      codex_auth_lines
       echo ""
       echo "request_max_retries    = 2"
       echo "stream_max_retries     = 3"
@@ -873,7 +894,7 @@ disable_response_storage = true
 name       = "TDAI team-proxy"
 wire_api   = "responses"
 base_url   = "${base_url}"
-experimental_bearer_token = "${USER_KEY}"
+$(codex_auth_lines)
 
 request_max_retries    = 2
 stream_max_retries     = 3

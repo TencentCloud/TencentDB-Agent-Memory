@@ -576,6 +576,17 @@
   color: var(--tea-color-text-tertiary);
 }
 
+.guide-manual-fields label.guide-manual-switch span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guide-manual-fields label.guide-manual-switch input {
+  padding: 0;
+  width: auto;
+}
+
 .guide-code-card {
   border: 1px solid var(--tea-color-border-primary-default);
   border-radius: 8px;

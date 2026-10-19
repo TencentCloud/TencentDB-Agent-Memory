@@ -77,6 +77,8 @@ export interface ClickHouseRow {
   source_tag: string;          // 来源标记，恒定为 "proxy"
   host: string;
   upstream_request_id: string; // 上游响应 header `x-request-id`（tokenhub/OpenAI 兼容网关生成），用于跨系统追溯
+  /** Subscription pool account that served the request. Empty when no pool account was used. */
+  subscription_account_id: string;
   /**
    * 压缩节省的 token 数：max(0, pre_compress_tokens − post_compress_tokens)。
    * 来自 cost-guard extensionStats；未压缩时为 0。
@@ -251,6 +253,7 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     "  source_tag LowCardinality(String) DEFAULT 'proxy',",
     "  host LowCardinality(String),",
     "  upstream_request_id String DEFAULT '',",
+    "  subscription_account_id String DEFAULT '',",
     "  compress_tokens_saved UInt64 DEFAULT 0,",
     "  pre_compress_tokens UInt64 DEFAULT 0,",
     "  post_compress_tokens UInt64 DEFAULT 0,",
@@ -383,6 +386,8 @@ export async function migrateSchema(
     // 上游响应 header `x-request-id`（tokenhub 等 OpenAI/Anthropic 兼容网关返回）。
     // 本次新增：用于跨系统追溯（客户端 x-request-id → 我方 upstream_request_id → 上游日志）。
     { table: cfg.table, column: "upstream_request_id", type: "String DEFAULT ''" },
+    // Subscription pool account that served the request (empty for traffic outside a pool).
+    { table: cfg.table, column: "subscription_account_id", type: "String DEFAULT ''" },
     // cost-guard 压缩节省 token：max(0, preCompressTokens − postCompressTokens)
     { table: cfg.table, column: "compress_tokens_saved", type: "UInt64 DEFAULT 0" },
     // 压缩前后的原始计数，用于算压缩率——只有差值算不出分母。
@@ -524,6 +529,8 @@ export interface ClickHouseWriteEntry {
    * → 上游服务日志。
    */
   upstreamRequestId?: string;
+  /** Subscription pool account that served the request. */
+  subscriptionAccountId?: string;
   /**
    * Opaque scalar counters from the optional request-preparation stage
    * (cost-guard). `preCompressTokens` / `postCompressTokens` feed the three
@@ -699,6 +706,7 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
     source_tag: "proxy",
     host: HOST_ID,
     upstream_request_id: entry.upstreamRequestId ?? "",
+    subscription_account_id: entry.subscriptionAccountId ?? "",
     compress_tokens_saved: compressTokens.saved,
     pre_compress_tokens: compressTokens.pre,
     post_compress_tokens: compressTokens.post,

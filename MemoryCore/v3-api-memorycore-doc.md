@@ -1127,6 +1127,39 @@ InstanceUpstreamConfig v2 的 §6.D 接口：Proxy 拉该实例全量组配置�
 
 **响应** `data`：`{ items: InstanceUpstreamConfig[] }`。
 
+### POST /v3/meta/subscription-pool/*
+
+System Admin only. Only `codex` is supported; it moves agent `codex`. `claude` is accepted by `status` but `enable`, `account/oauth-start` and `account/oauth-complete` return `400 PROVIDER_NOT_SUPPORTED` (Anthropic's terms do not allow pooled subscription tokens). Public responses never include `access_token` or `refresh_token`.
+
+| Path | Body | Result |
+|---|---|---|
+| `status` | `provider?` (`claude` or `codex`) | Pool on/off, masked accounts, threshold |
+| `enable` | `provider` | Move the agent onto its pool group. `409 POOL_AGENT_CUSTOM_GROUP` when the agent already sits in another custom group |
+| `disable` | `provider` | Move the agent back to `default`. The pool group and its accounts stay |
+| `settings/update` | `threshold_pct` 50–100 | Global config param `subscription_pool.threshold_pct` |
+| `account/oauth-start` | `provider` | `{ state, authorize_url, expires_at }`. The code verifier stays in Core memory for 10 minutes |
+| `account/oauth-complete` | `provider`, `state`, `code?` or `redirect_url?`, `display_name?` | Masked account plus `created`. The same provider account logged in again keeps its row, name and state; only its tokens change. The login state works once. Accounts can be added before the pool is on: the first account creates the pool group switched off and without agents, so the proxy does not see it until `enable`. `502 OAUTH_EXCHANGE_FAILED` when the provider refuses the code |
+| `account/update` | `account_id`, `display_name?`, `enabled?`, `status?`, `expected_version?` | Masked account |
+| `account/delete` | `account_id` | `{ deleted }` |
+| `account/check-usage` | `account_id` | Masked account after a usage API call. `404 account_not_found` for an unknown id |
+| `check-all` | `{}` | `{ checked, failed }` for every enabled account |
+
+### POST /v3/internal/meta/subscription-pool/accounts/list
+
+Proxy service token. Accounts of enabled `subscription_pool` groups. Each row has `access_token` and `provider_account_id`. The proxy sends `provider_account_id` as the Codex `ChatGPT-Account-ID` header together with the bearer token. `refresh_token` is omitted.
+
+### POST /v3/internal/meta/subscription-pool/report
+
+Body `{ account_id, status_code?, retry_after?, active_sessions?, windows? }`. Per window the newest observation wins. A 429 marks the account exhausted until `retry_after`, the soonest window reset, or 15 minutes, and holds its windows at 100 % until then. Core arms a usage check 30 s after that time.
+
+### POST /v3/internal/meta/subscription-pool/refresh
+
+Body `{ account_id, held_expires_at? }`. Call it after a 401. `held_expires_at` is the `token_expires_at` of the token the proxy used. When the stored token is newer, Core returns it without a provider call; otherwise Core refreshes at once (one provider call for concurrent requests). Result `{ account_id, access_token, provider_account_id, token_expires_at }`. `502 token_refresh_failed` when the refresh fails; a refused refresh token also sets the account to `auth_error` (new login needed).
+
+### Subscription pool timers
+
+Core keeps the timers in memory and does not scan the database. When Core first serves an instance (at start in standalone mode, on the first metadata request in service mode) it refreshes tokens with less than 10 minutes left and reads usage for every account, one account per second. Timers: token refresh 10 minutes before expiry; usage check 30 s after an exhausted account's reset and after each reset of a window at or above the threshold; usage check of every account each `SUBSCRIPTION_POOL_CHECK_INTERVAL_MIN` minutes (default 30), which also refreshes tokens with less than 40 minutes left; retries after 1, 5 and 15 minutes when a refresh or a usage call fails. `SUBSCRIPTION_POOL_ENABLED=false` turns all timers off. Run one Core process per instance: several replicas would refresh the same rotating token.
+
 ### POST /v3/internal/meta/upstream/supported-agents
 
 §6.A 的内部镜像：返回支持的 agent 全集，数据源同 Core `tdai-gateway.yaml` 的 `upstream.supportedAgents`。供无 user-key 的控制面服务（shark 等，典型场景是**实例发货**）调用。

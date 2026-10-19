@@ -52,11 +52,18 @@ export type ApiKeyExtractionMode = "bearer-only" | "bearer-first" | "xapi-first"
 
 /**
  * 从 Hono Context 提取 API key。
+ *
+ * When `x-tdai-user-key` is present it is the user key, and `Authorization` / `x-api-key` stay
+ * the client's own credentials (for example the ChatGPT login of Codex). Without the header
+ * the behavior is unchanged.
  */
 export function extractApiKeyFromContext(
   c: Context,
   mode: ApiKeyExtractionMode = "bearer-first",
 ): string {
+  // An empty or blank header counts as absent, the same as for the pool's client-login check.
+  const userKeyHeader = c.req.header("x-tdai-user-key")?.trim();
+  if (userKeyHeader) return userKeyHeader;
   const xApiKey = c.req.header("x-api-key");
   const bearer = extractBearerToken(
     c.req.header("authorization") ?? c.req.header("Authorization") ?? "",

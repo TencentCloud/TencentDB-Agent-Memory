@@ -14,6 +14,7 @@ import { ChatMemoryPage } from '@/pages/ChatMemoryPage';
 import { MembersPage } from '@/pages/MembersPage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
+import { SubscriptionPoolPage } from '@/pages/SubscriptionPoolPage';
 import { GuidePage } from '@/pages/GuidePage';
 import { AnalyticsPage } from '@/pages/AnalyticsPage';
 
@@ -31,6 +32,7 @@ export const routes: RouteObject[] = [
       { path: 'team/members', element: <MembersPage /> },
       { path: 'team/agents', element: <AgentsPage /> },
       { path: 'team/api-keys', element: <ApiKeysPage /> },
+      { path: 'team/subscription-pool', element: <SubscriptionPoolPage /> },
       { path: 'guide', element: <GuidePage /> },
     ],
   },

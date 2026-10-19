@@ -643,6 +643,69 @@ when at least one asset injector is on the pipeline.
 >
 > In the next version, the Proxy will support automatic generation and management of conversation IDs, eliminating the need for clients to specify this field manually.
 
+## Optional: Subscription account pool (Codex, off by default)
+
+A team can share several ChatGPT Plus/Pro subscriptions between Codex users. The Proxy gives each
+new Codex session the next account, keeps the session on that account, moves it to another account
+when the account reaches its limit, and uses the account again after its reset time. Groups that do
+not use the pool keep their current behavior.
+
+Only ChatGPT (Codex) accounts are supported. Claude subscriptions are not pooled: Anthropic's terms
+do not allow a server to store or route Claude.ai subscription tokens for other people.
+
+**Risks to accept first.** Pooling personal subscriptions can break the provider's terms, and the
+provider can block an account. The login, refresh and usage endpoints are not documented by OpenAI
+and can change without notice; when the usage endpoint fails, the pool still works from response
+headers and 429 replies.
+
+### Turning it on
+
+1. Log into Memory Hub as a System Admin and open **Organization → Subscription Pool**, tab **Codex**.
+2. Turn the pool on. The `codex` agent moves from the `default` upstream group to the pool group.
+   If `codex` is in a custom upstream group, move it back to `default` first.
+3. Click **Add account**. Log in to ChatGPT in the new tab. The browser then opens
+   `http://localhost:1455/auth/callback?...`, which does not load; copy the full address from the
+   address bar and paste it into the dialog. Repeat for each account. Logging in again with the
+   same ChatGPT account replaces its tokens and keeps its name.
+4. Optional: change the threshold (default 95 %). An account at or above it gets no new sessions;
+   its current sessions continue.
+
+### How it behaves
+
+- Memory Core stores the tokens, refreshes each one 10 minutes before it expires, and reads usage
+  for every account every 30 minutes, at each reset time, and when Core starts.
+- A 429 from ChatGPT marks the account exhausted until its reset time; the request is retried once
+  on another account before anything reaches the client.
+- When every account is at its limit, the Proxy uses the account with the lowest usage; when all of
+  them return 429, it uses the user's own ChatGPT login if the client sends one (see below), or
+  returns 429 with the earliest reset time.
+
+**Keep your own ChatGPT login as fallback (optional).** Run `codex login` on the client, then run
+`bash agents/setup-proxy.sh --agent codex` and answer yes to the fallback question (or pass
+`--codex-own-login`). The Codex provider then uses `requires_openai_auth = true` and sends the proxy
+key in the `x-tdai-user-key` header.
+
+### Operations
+
+- Port 8420 must stay on a trusted network: the internal Core API returns the access tokens of the
+  subscription accounts to the Proxy.
+- Run one Memory Core process per instance; the timers that refresh tokens are not shared between
+  replicas.
+- Pool requests do not use TokenHub, credits or the proxy TPM/QPM limits. Memory extraction for
+  those conversations still calls TokenHub (or the instance's extraction group) and is billed as
+  before.
+- Start Memory Core before the Proxy. A Proxy that starts while Core is down does not know the
+  upstream groups yet and sends `codex` to the `default` group (TokenHub, billed per token) until
+  it can read them (about 30 seconds after Core is back). This is the existing behavior of every
+  custom upstream group.
+- Variables in `deploy/global-images/.env.example`: `SUBSCRIPTION_POOL_ENABLED=false` stops all pool
+  timers; `SUBSCRIPTION_POOL_CHECK_INTERVAL_MIN` changes the 30-minute usage check.
+
+### Turning it off
+
+Turn the pool off in **Subscription Pool**. The `codex` agent returns to the `default` group within
+about 30 seconds; the accounts stay stored until you delete them.
+
 ## Optional: Analytics & observability (off by default)
 
 **What it does.** The **Analytics** page in the Panel rolls up how this

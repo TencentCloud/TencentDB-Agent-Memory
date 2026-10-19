@@ -100,11 +100,33 @@ import type {
   SupportedAgent,
   GroupType,
   UpstreamMode,
+  SubscriptionAccountEntity,
+  SubscriptionAccountProxyView,
+  SubscriptionAccountStatus,
+  SubscriptionProvider,
 } from "../types.js";
+import {
+  createPendingSubscriptionOAuth,
+  parseSubscriptionOAuthCode,
+  subscriptionAuthorizeUrl,
+  type PendingSubscriptionOAuth,
+} from "../subscription-pool/authorize-url.js";
+import { applyQuotaReport, type SubscriptionQuotaReport } from "../subscription-pool/quota-report.js";
+import { subscriptionAdapterFor, SUPPORTED_SUBSCRIPTION_PROVIDERS } from "../../subscription-pool/providers/index.js";
+import type { SubscriptionProviderAdapter } from "../../subscription-pool/providers/types.js";
+import {
+  nextRetryDelayMs,
+  refreshAccountTokens,
+  withAccountLock,
+  type RefreshOptions,
+  type RefreshResult,
+} from "../../subscription-pool/token-refresher.js";
+import { checkAccountUsage, type UsageCheckResult } from "../../subscription-pool/usage-check.js";
 import {
   DEFAULT_GROUP_NAME,
   EXTRACTION_GROUP_NAME,
   InstanceUpstreamWriteConflictError,
+  SubscriptionAccountWriteConflictError,
 } from "../types.js";
 import { formatListResult, paginateArray, resolvePagination, wrapPaginated, DEFAULT_PAGINATION } from "../pagination.js";
 import { generateId, ID_PREFIX } from "../utils/id-generator.js";
@@ -162,6 +184,26 @@ export type ChatMemoryContentCleaner = (params: {
   teamId: string;
   agentId: string;
 }) => Promise<void>;
+
+/** A subscription account changed. `account` is null after a delete. */
+export interface SubscriptionAccountChange {
+  accountId: string;
+  account: SubscriptionAccountEntity | null;
+  thresholdPct: number;
+  /** Set after a transient refresh failure. */
+  retryRefreshAt?: number;
+  /** Set after one of the first three usage check failures in a row. */
+  retryUsageAt?: number;
+}
+
+/** Wiring of the subscription pool, set by the gateway. Tests replace the adapters. */
+export interface SubscriptionPoolHooks {
+  adapterFor: (provider: SubscriptionProvider) => SubscriptionProviderAdapter | null;
+  onAccountChanged?: (instanceId: string, change: SubscriptionAccountChange) => void;
+}
+
+/** Usage check failures that get a fast retry (after 1, 5 and 15 minutes). */
+const USAGE_FAST_RETRIES = 3;
 
 /** Detect unique constraint violation (SQLite UNIQUE or MongoDB E11000) on a specific column. */
 function isUniqueViolation(err: unknown, column?: string): boolean {
@@ -285,6 +327,9 @@ export class MetadataService {
 
   /** 由 gateway 注入的 chat_memory 内容清理器；未注入时归档只删资产不清内容。 */
   private _chatMemoryContentCleaner?: ChatMemoryContentCleaner;
+  /** In-flight Panel logins. A Core restart drops them. The verifier never leaves this process. */
+  private readonly subscriptionOAuthPending = new Map<string, PendingSubscriptionOAuth>();
+  private subscriptionPoolHooks: SubscriptionPoolHooks = { adapterFor: subscriptionAdapterFor };
 
   constructor(
     private readonly store: IMetadataStore,
@@ -310,6 +355,10 @@ export class MetadataService {
 
   setConfigParamService(svc: import("./config-param-service.js").IConfigParamService): void {
     this._configParams = svc;
+  }
+
+  setSubscriptionPoolHooks(hooks: Partial<SubscriptionPoolHooks>): void {
+    this.subscriptionPoolHooks = { ...this.subscriptionPoolHooks, ...hooks };
   }
 
   // ── UserSessionDefault (v3.3) ──
@@ -2239,6 +2288,366 @@ export class MetadataService {
     return { items: rows };
   }
 
+  // ── Subscription pool ────────────────────────────────────────────────
+
+  private toPublicSubscriptionAccount(account: SubscriptionAccountEntity): Record<string, unknown> {
+    return {
+      account_id: account.account_id,
+      group_id: account.group_id,
+      provider: account.provider,
+      display_name: account.display_name,
+      account_label: account.account_label,
+      enabled: account.enabled,
+      status: account.status,
+      token_expires_at: account.token_expires_at,
+      provider_account_id: account.provider_account_id,
+      usage: account.usage,
+      usage_updated_at: account.usage_updated_at,
+      exhausted_until: account.exhausted_until,
+      usage_fail_count: account.usage_fail_count,
+      refresh_fail_count: account.refresh_fail_count,
+      last_error: account.last_error,
+      active_sessions: account.active_sessions,
+      version: account.version,
+      created_at: account.created_at,
+      updated_at: account.updated_at,
+    };
+  }
+
+  private subscriptionPoolName(provider: SubscriptionProvider): string {
+    return `${provider} subscription pool`;
+  }
+
+  private subscriptionAgent(provider: SubscriptionProvider): string {
+    return provider === "claude" ? "claude-code" : "codex";
+  }
+
+  private toProxySubscriptionAccount(account: SubscriptionAccountEntity): SubscriptionAccountProxyView {
+    return {
+      account_id: account.account_id,
+      group_id: account.group_id,
+      provider: account.provider,
+      provider_account_id: account.provider_account_id,
+      status: account.status,
+      enabled: account.enabled,
+      access_token: account.access_token,
+      token_expires_at: account.token_expires_at,
+      usage: account.usage,
+      exhausted_until: account.exhausted_until,
+    };
+  }
+
+  async subscriptionThreshold(): Promise<number> {
+    if (!this._configParams) return 95;
+    return this._configParams.getEffectiveInt("subscription_pool", "threshold_pct");
+  }
+
+  async getSubscriptionPoolStatus(provider?: SubscriptionProvider): Promise<Record<string, unknown>> {
+    const groups = await this.store.listInstanceUpstreamGroups(undefined, []);
+    const accounts = await this.store.listSubscriptionAccounts();
+    const threshold_pct = await this.subscriptionThreshold();
+    const providers = provider ? [provider] : ["claude", "codex"] as const;
+    return {
+      threshold_pct,
+      providers: providers.map((p) => {
+        const group = groups.find((g) => g.group_type === "custom" && g.mode === "subscription_pool" && g.name === this.subscriptionPoolName(p));
+        const rows = accounts.filter((a) => a.provider === p && (!group || a.group_id === group.group_id));
+        const on = Boolean(group?.enabled && group.agents.includes(this.subscriptionAgent(p)));
+        const earliest_reset = rows.map((a) => a.exhausted_until).filter((v): v is number => v !== null).sort((a, b) => a - b)[0] ?? null;
+        return {
+          provider: p,
+          enabled: on,
+          group_id: group?.group_id ?? null,
+          accounts: rows.map((a) => this.toPublicSubscriptionAccount(a)),
+          summary: {
+            total: rows.length,
+            available: rows.filter((a) => a.enabled && a.status === "active" && (a.exhausted_until === null || a.exhausted_until <= Date.now())).length,
+            active_sessions: rows.reduce((n, a) => n + a.active_sessions, 0),
+            earliest_reset,
+          },
+        };
+      }),
+    };
+  }
+
+  async enableSubscriptionPool(provider: SubscriptionProvider, supportedAgents: SupportedAgent[]): Promise<Record<string, unknown>> {
+    this.subscriptionAdapter(provider);
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const agent = this.subscriptionAgent(provider);
+    const groups = await this.store.listInstanceUpstreamGroups(undefined, supportedAgents);
+    const existingPool = groups.find((g) => g.group_type === "custom" && g.mode === "subscription_pool" && g.name === this.subscriptionPoolName(provider));
+    const current = groups.find((g) => g.agents.includes(agent));
+    if (current?.group_type === "custom" && current.mode !== "subscription_pool") {
+      throw new MetadataError("POOL_AGENT_CUSTOM_GROUP", `agent ${agent} is already in a custom upstream group`);
+    }
+    try {
+      const result = await this.store.moveAgentBetweenUpstreamGroups({
+        agent,
+        from: current && current.group_id !== existingPool?.group_id ? [{ group_id: current.group_id }] : [],
+        to: existingPool
+          ? { group_id: existingPool.group_id, enabled: true }
+          : { create: { name: this.subscriptionPoolName(provider), mode: "subscription_pool", base_url: "", api_key: "", model_id: "", description: `${provider} subscription accounts` } },
+      });
+      return this.toPublicGroup(result.to);
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  async disableSubscriptionPool(provider: SubscriptionProvider, supportedAgents: SupportedAgent[]): Promise<Record<string, unknown>> {
+    await this.store.ensureDefaultSeeded(supportedAgents);
+    const agent = this.subscriptionAgent(provider);
+    const groups = await this.store.listInstanceUpstreamGroups(undefined, supportedAgents);
+    const pool = groups.find((g) => g.group_type === "custom" && g.mode === "subscription_pool" && g.agents.includes(agent));
+    const target = groups.find((g) => g.group_type === "default");
+    if (!pool || !target) throw new MetadataError("POOL_NOT_ENABLED", `subscription pool is not enabled for ${provider}`);
+    try {
+      const result = await this.store.moveAgentBetweenUpstreamGroups({
+        agent,
+        from: [{ group_id: pool.group_id, enabled: false }],
+        to: { group_id: target.group_id },
+      });
+      return { group_id: pool.group_id, disabled: true, default_group_id: result.to.group_id };
+    } catch (e) {
+      throw this.translateUpstreamConflict(e);
+    }
+  }
+
+  async updateSubscriptionPoolSettings(threshold_pct: number): Promise<Record<string, unknown>> {
+    if (!Number.isInteger(threshold_pct) || threshold_pct < 50 || threshold_pct > 100) {
+      throw new MetadataError("INVALID_THRESHOLD", "threshold_pct must be an integer from 50 to 100");
+    }
+    const row = await this.store.upsertConfigParam({ scope: "global", user_id: null, module: "subscription_pool", param_name: "threshold_pct", param_value: String(threshold_pct), description: "Usage threshold for new subscription pool sessions" });
+    return { threshold_pct: Number(row.param_value) };
+  }
+
+  private subscriptionAdapter(provider: SubscriptionProvider): SubscriptionProviderAdapter {
+    const adapter = SUPPORTED_SUBSCRIPTION_PROVIDERS.includes(provider) ? this.subscriptionPoolHooks.adapterFor(provider) : null;
+    if (!adapter) throw new MetadataError("PROVIDER_NOT_SUPPORTED", `subscription provider ${provider} is not supported`);
+    return adapter;
+  }
+
+  private async notifySubscriptionAccount(change: Omit<SubscriptionAccountChange, "thresholdPct">): Promise<void> {
+    const listener = this.subscriptionPoolHooks.onAccountChanged;
+    if (!listener) return;
+    // The write is committed already; a failing hook must not fail the caller.
+    try {
+      listener(this.instanceId, { ...change, thresholdPct: await this.subscriptionThreshold() });
+    } catch (e) {
+      this.logger.debug?.(`[subscription-pool] timer update failed account=${change.accountId}: ${e instanceof Error ? e.name : "error"}`);
+    }
+  }
+
+  private translateSubscriptionConflict(e: unknown): unknown {
+    return e instanceof SubscriptionAccountWriteConflictError ? new MetadataError(e.reason, e.message, e.detail) : e;
+  }
+
+  private async requireSubscriptionAccount(accountId: string): Promise<SubscriptionAccountEntity> {
+    const account = await this.store.getSubscriptionAccount(accountId);
+    if (!account) throw new MetadataError("account_not_found", `subscription account not found: ${accountId}`);
+    return account;
+  }
+
+  async updateSubscriptionAccount(accountId: string, patch: { display_name?: string; enabled?: boolean; status?: SubscriptionAccountStatus }, expectedVersion?: number): Promise<Record<string, unknown>> {
+    try {
+      const account = await withAccountLock(accountId, async () => this.store.updateSubscriptionAccount(accountId, patch, expectedVersion));
+      await this.notifySubscriptionAccount({ accountId, account });
+      return this.toPublicSubscriptionAccount(account);
+    } catch (e) {
+      throw this.translateSubscriptionConflict(e);
+    }
+  }
+
+  async deleteSubscriptionAccount(accountId: string): Promise<{ deleted: boolean }> {
+    const deleted = await this.store.deleteSubscriptionAccount(accountId);
+    if (deleted) await this.notifySubscriptionAccount({ accountId, account: null });
+    return { deleted };
+  }
+
+  /** Every account of this instance, with tokens. For the Core scheduler only. */
+  async listSubscriptionAccountEntities(): Promise<SubscriptionAccountEntity[]> {
+    return this.store.listSubscriptionAccounts();
+  }
+
+  async listSubscriptionAccountsInternal(): Promise<{ threshold_pct: number; accounts: SubscriptionAccountProxyView[] }> {
+    const groups = await this.store.listInstanceUpstreamGroups(undefined, []);
+    const openGroupIds = new Set(
+      groups
+        .filter((group) => group.group_type === "custom" && group.mode === "subscription_pool" && group.enabled)
+        .map((group) => group.group_id),
+    );
+    const accounts = (await this.store.listSubscriptionAccounts()).filter((account) => openGroupIds.has(account.group_id));
+    return {
+      threshold_pct: await this.subscriptionThreshold(),
+      accounts: accounts.map((account) => this.toProxySubscriptionAccount(account)),
+    };
+  }
+
+  async reportSubscriptionAccount(accountId: string, report: SubscriptionQuotaReport): Promise<Record<string, unknown>> {
+    // Same lock as the usage check, so a report and a usage reading never overwrite each other.
+    const updated = await withAccountLock(accountId, async () => {
+      const current = await this.requireSubscriptionAccount(accountId);
+      return this.store.updateSubscriptionAccount(accountId, applyQuotaReport(current, report, Date.now()));
+    });
+    await this.notifySubscriptionAccount({ accountId, account: updated });
+    return { account_id: updated.account_id, exhausted_until: updated.exhausted_until, status: updated.status };
+  }
+
+  startSubscriptionOAuth(provider: SubscriptionProvider): { provider: SubscriptionProvider; state: string; authorize_url: string; expires_at: number } {
+    this.subscriptionAdapter(provider);
+    const now = Date.now();
+    for (const [state, pending] of this.subscriptionOAuthPending) {
+      if (pending.expiresAt <= now) this.subscriptionOAuthPending.delete(state);
+    }
+    const pending = createPendingSubscriptionOAuth(provider, now);
+    this.subscriptionOAuthPending.set(pending.state, pending);
+    return {
+      provider,
+      state: pending.state,
+      authorize_url: subscriptionAuthorizeUrl(pending),
+      expires_at: pending.expiresAt,
+    };
+  }
+
+  /**
+   * Exchanges a pasted login code and adds the account to the provider's pool group. The same
+   * provider account logged in again keeps its row, name and state; only its tokens change.
+   * A usage check runs before the response, so the new row already has the current windows.
+   * A failed usage check does not undo the saved account.
+   */
+  async completeSubscriptionOAuth(input: { provider: SubscriptionProvider; state: string; code?: string; redirect_url?: string; display_name?: string }): Promise<Record<string, unknown>> {
+    const adapter = this.subscriptionAdapter(input.provider);
+    const pending = this.subscriptionOAuthPending.get(input.state);
+    if (!pending || pending.expiresAt <= Date.now() || pending.provider !== input.provider) {
+      throw new MetadataError("INVALID_OAUTH_STATE", "subscription login state is missing or expired");
+    }
+    const parsed = parseSubscriptionOAuthCode(input.code, input.redirect_url);
+    if (!parsed.code) throw new MetadataError("INVALID_OAUTH_CODE", "paste the provider code or the redirect URL");
+    if (parsed.pastedState && parsed.pastedState !== pending.state) {
+      throw new MetadataError("INVALID_OAUTH_STATE", "pasted state does not match the login that was started");
+    }
+    const groups = await this.store.listInstanceUpstreamGroups(undefined, []);
+    // Accounts can be added before the pool is turned on: the pool group then starts switched off
+    // and without agents, so the proxy does not see its accounts until `enable` moves the agent in.
+    const group = groups.find((g) => g.group_type === "custom" && g.mode === "subscription_pool" && g.name === this.subscriptionPoolName(input.provider))
+      ?? await this.store.createInstanceUpstreamGroup({
+        group_type: "custom",
+        name: this.subscriptionPoolName(input.provider),
+        agents: [],
+        enabled: false,
+        mode: "subscription_pool",
+        base_url: "",
+        api_key: "",
+        model_id: "",
+        description: `${input.provider} subscription accounts`,
+      });
+
+    // A code works once, so the login is used up whatever the exchange result is.
+    this.subscriptionOAuthPending.delete(pending.state);
+    let exchanged;
+    try {
+      exchanged = await adapter.exchangeCode({ code: parsed.code, codeVerifier: pending.codeVerifier, redirectUri: pending.redirectUri, state: pending.state });
+    } catch (e) {
+      this.logger.debug?.(`[subscription-pool] code exchange failed: ${e instanceof Error ? e.name : "error"}`);
+      throw new MetadataError("OAUTH_EXCHANGE_FAILED", "the provider did not accept the login code; start the login again");
+    }
+    try {
+      const upsert = async () => this.store.upsertSubscriptionAccountByProviderId({
+        group_id: group.group_id,
+        provider: input.provider,
+        provider_account_id: exchanged.providerAccountId,
+        display_name: input.display_name || exchanged.accountLabel || exchanged.providerAccountId,
+        account_label: exchanged.accountLabel,
+        access_token: exchanged.accessToken,
+        refresh_token: exchanged.refreshToken,
+        token_expires_at: exchanged.expiresAt,
+      });
+      // A re-login replaces tokens, so it waits for a running refresh of the same account.
+      const existing = (await this.store.listSubscriptionAccounts(group.group_id))
+        .find((a) => a.provider_account_id === exchanged.providerAccountId);
+      const { account, created } = existing ? await withAccountLock(existing.account_id, upsert) : await upsert();
+      await this.notifySubscriptionAccount({ accountId: account.account_id, account });
+      let published = account;
+      try {
+        published = (await this.runSubscriptionUsageCheck(account.account_id)).account;
+      } catch (e) {
+        this.logger.debug?.(`[subscription-pool] usage check after login failed: ${e instanceof Error ? e.name : "error"}`);
+      }
+      return { ...this.toPublicSubscriptionAccount(published), created };
+    } catch (e) {
+      throw this.translateSubscriptionConflict(e);
+    }
+  }
+
+  /** Usage check used by the route and the scheduler. Tells the scheduler the result. */
+  async runSubscriptionUsageCheck(accountId: string): Promise<UsageCheckResult> {
+    const current = await this.requireSubscriptionAccount(accountId);
+    const adapter = this.subscriptionAdapter(current.provider);
+    const result = await checkAccountUsage(this.store, accountId, adapter, await this.subscriptionThreshold());
+    const failCount = result.account.usage_fail_count;
+    await this.notifySubscriptionAccount({
+      accountId,
+      account: result.account,
+      retryUsageAt: result.failed && failCount <= USAGE_FAST_RETRIES ? Date.now() + nextRetryDelayMs(failCount) : undefined,
+    });
+    return result;
+  }
+
+  /** Token refresh used by the route and the scheduler. Tells the scheduler the result. */
+  async runSubscriptionTokenRefresh(accountId: string, options: RefreshOptions = {}): Promise<RefreshResult> {
+    const current = await this.requireSubscriptionAccount(accountId);
+    const adapter = this.subscriptionAdapter(current.provider);
+    let result: RefreshResult;
+    try {
+      result = await refreshAccountTokens(this.store, accountId, adapter, options);
+    } catch (e) {
+      throw this.translateSubscriptionConflict(e);
+    }
+    await this.notifySubscriptionAccount({ accountId, account: result.account, retryRefreshAt: result.retryAt ?? undefined });
+    return result;
+  }
+
+  async checkSubscriptionAccountUsage(accountId: string): Promise<Record<string, unknown>> {
+    try {
+      return this.toPublicSubscriptionAccount((await this.runSubscriptionUsageCheck(accountId)).account);
+    } catch (e) {
+      throw this.translateSubscriptionConflict(e);
+    }
+  }
+
+  async checkAllSubscriptionAccountUsage(): Promise<{ checked: number; failed: number }> {
+    let checked = 0;
+    let failed = 0;
+    for (const account of await this.store.listSubscriptionAccounts()) {
+      if (!account.enabled || account.status === "disabled" || account.status === "auth_error"
+        || !SUPPORTED_SUBSCRIPTION_PROVIDERS.includes(account.provider)) continue;
+      const result = await this.runSubscriptionUsageCheck(account.account_id);
+      checked += 1;
+      if (result.failed) failed += 1;
+    }
+    return { checked, failed };
+  }
+
+  /**
+   * Proxy call after a 401. `heldExpiresAt` is the expiry of the token the proxy used: when the
+   * stored token is newer, it is returned without a provider call; otherwise Core refreshes now.
+   */
+  async refreshSubscriptionAccount(accountId: string, heldExpiresAt?: number | null): Promise<{ account_id: string; access_token: string; provider_account_id: string; token_expires_at: number | null }> {
+    const current = await this.requireSubscriptionAccount(accountId);
+    const result = await this.runSubscriptionTokenRefresh(accountId, { heldExpiresAt: heldExpiresAt === undefined ? current.token_expires_at : heldExpiresAt });
+    if (result.failed) {
+      throw new MetadataError("token_refresh_failed", result.account.status === "auth_error"
+        ? "the account needs a new login"
+        : "token refresh failed; try another account");
+    }
+    return {
+      account_id: result.account.account_id,
+      access_token: result.account.access_token,
+      provider_account_id: result.account.provider_account_id,
+      token_expires_at: result.account.token_expires_at,
+    };
+  }
+
   /** Panel B2: 新建 custom 组。 */
   async createInstanceUpstreamCustomGroup(
     input: {
@@ -2256,10 +2665,13 @@ export class MetadataService {
     this.assertGroupName(input.name);
     this.assertAgents(input.agents, supportedAgents, "custom");
     this.assertModeForGroupType("custom", input.mode);
-    if (!input.base_url?.trim()) {
+    if (input.mode === "subscription_pool") {
+      if (input.base_url?.trim() || input.api_key?.trim()) {
+        throw new MetadataError("POOL_REJECTS_UPSTREAM_CREDENTIALS", "a subscription pool group has no base_url or api_key");
+      }
+    } else if (!input.base_url?.trim()) {
       throw new MetadataError("MISSING_BASE_URL", "base_url is required for custom group");
-    }
-    if (input.mode === "custom_unified" && !input.api_key?.trim()) {
+    } else if (input.mode === "custom_unified" && !input.api_key?.trim()) {
       throw new MetadataError("MISSING_API_KEY", "api_key is required for custom_unified mode");
     }
     // 存量实例首个请求可能不是 list 而是直接 create,兜底 seed default
@@ -2328,7 +2740,15 @@ export class MetadataService {
       if (input.name !== undefined) this.assertGroupName(input.name);
       if (input.agents !== undefined) this.assertAgents(input.agents, supportedAgents, "custom");
       if (input.mode !== undefined) this.assertModeForGroupType("custom", input.mode);
-      if (input.base_url !== undefined && !input.base_url.trim()) {
+      const existing = await this.store.getInstanceUpstreamGroup(input.group_id);
+      const mode = input.mode ?? existing?.mode;
+      if (mode === "subscription_pool") {
+        const baseUrl = input.base_url !== undefined ? input.base_url : existing?.base_url ?? "";
+        const apiKey = input.api_key !== undefined ? input.api_key : existing?.api_key ?? "";
+        if (baseUrl.trim() || apiKey.trim()) {
+          throw new MetadataError("POOL_REJECTS_UPSTREAM_CREDENTIALS", "a subscription pool group has no base_url or api_key");
+        }
+      } else if (input.base_url !== undefined && !input.base_url.trim()) {
         throw new MetadataError("MISSING_BASE_URL", "base_url must be non-empty");
       }
     }

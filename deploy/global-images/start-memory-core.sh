@@ -156,6 +156,11 @@ YAML
     ;;
 esac
 
+# ── 订阅账号池定时任务（可选；不设置时用 Core 默认值：开启、30 分钟）──────────
+POOL_ENV_ARGS=()
+[[ -n "${SUBSCRIPTION_POOL_ENABLED:-}" ]] && POOL_ENV_ARGS+=( -e "SUBSCRIPTION_POOL_ENABLED=$SUBSCRIPTION_POOL_ENABLED" )
+[[ -n "${SUBSCRIPTION_POOL_CHECK_INTERVAL_MIN:-}" ]] && POOL_ENV_ARGS+=( -e "SUBSCRIPTION_POOL_CHECK_INTERVAL_MIN=$SUBSCRIPTION_POOL_CHECK_INTERVAL_MIN" )
+
 pull_image "$MEMORY_CORE_IMAGE"
 rm_container_if_exists "$CONTAINER"
 
@@ -253,6 +258,7 @@ $DOCKER run -d --name "$CONTAINER" \
   -e TDAI_DATA_DIR=/data/tdai-memory \
   -e STORE_MODE="$MEMORY_CORE_STORE_MODE" \
   ${JEV_ENV_ARGS[@]+"${JEV_ENV_ARGS[@]}"} \
+  ${POOL_ENV_ARGS[@]+"${POOL_ENV_ARGS[@]}"} \
   ${MONGO_ENV_ARGS[@]+"${MONGO_ENV_ARGS[@]}"} \
   "$MEMORY_CORE_IMAGE" >/dev/null
 

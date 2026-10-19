@@ -435,6 +435,47 @@ const routeTable: Record<string, Handler> = {
     s.assertCanManageUsers(c);
     return s.deleteInstanceUpstreamExtraction(deps.getSupportedAgents());
   }),
+
+  [`${V3_PREFIX}/subscription-pool/status`]: bind(S.subscriptionPoolStatusSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.getSubscriptionPoolStatus(d.provider);
+  }),
+  [`${V3_PREFIX}/subscription-pool/enable`]: bind(S.subscriptionPoolEnableSchema, async (d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.enableSubscriptionPool(d.provider, deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/subscription-pool/disable`]: bind(S.subscriptionPoolDisableSchema, async (d, c, s, _reqId, deps) => {
+    s.assertCanManageUsers(c);
+    return s.disableSubscriptionPool(d.provider, deps.getSupportedAgents());
+  }),
+  [`${V3_PREFIX}/subscription-pool/settings/update`]: bind(S.subscriptionPoolSettingsSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.updateSubscriptionPoolSettings(d.threshold_pct);
+  }),
+  [`${V3_PREFIX}/subscription-pool/account/oauth-start`]: bind(S.subscriptionPoolOAuthStartSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.startSubscriptionOAuth(d.provider);
+  }),
+  [`${V3_PREFIX}/subscription-pool/account/oauth-complete`]: bind(S.subscriptionPoolOAuthCompleteSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.completeSubscriptionOAuth(d);
+  }),
+  [`${V3_PREFIX}/subscription-pool/account/update`]: bind(S.subscriptionPoolAccountUpdateSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.updateSubscriptionAccount(d.account_id, { display_name: d.display_name, enabled: d.enabled, status: d.status }, d.expected_version);
+  }),
+  [`${V3_PREFIX}/subscription-pool/account/delete`]: bind(S.subscriptionPoolAccountDeleteSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.deleteSubscriptionAccount(d.account_id);
+  }),
+  [`${V3_PREFIX}/subscription-pool/account/check-usage`]: bind(S.subscriptionPoolAccountCheckSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.checkSubscriptionAccountUsage(d.account_id);
+  }),
+  [`${V3_PREFIX}/subscription-pool/check-all`]: bind(S.subscriptionPoolCheckAllSchema, async (_d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.checkAllSubscriptionAccountUsage();
+  }),
 };
 
 /** 已注册的 v3 路由路径（供测试 / 文档）。 */
@@ -496,7 +537,20 @@ function mapErrorCode(code: string): number {
     case "EXTRACTION_NOT_CONFIGURED":
     case "CANNOT_CREATE_DEFAULT":
     case "GROUP_TYPE_MISMATCH":
+    case "POOL_REJECTS_UPSTREAM_CREDENTIALS":
+    case "INVALID_THRESHOLD":
+    case "INVALID_OAUTH_STATE":
+    case "INVALID_OAUTH_CODE":
       return 400;
+    case "POOL_AGENT_CUSTOM_GROUP":
+    case "POOL_NOT_ENABLED":
+      return 409;
+    case "PROVIDER_NOT_SUPPORTED":
+      return 400;
+    case "account_not_found":
+      return 404;
+    case "OAUTH_EXCHANGE_FAILED":
+      return 502;
     default:
       return 400;
   }

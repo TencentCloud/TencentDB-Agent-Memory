@@ -238,9 +238,8 @@ export function flattenMessagesForOpik(messages: unknown[]): unknown[] {
 }
 
 // SKIP header sets 已合并到 common/constants.ts
-// handler.ts 老行为: HOP_BY_HOP 4 项 (不含 x-tdai-user-key 泄漏保护) —
-// 保留兼容, 未来可升级到 WITH_INTERNAL 版本。
-import { SKIP_REQUEST_HEADERS_HOP_BY_HOP as SKIP_REQUEST_HEADERS, filterResponseHeaders } from "../../common/constants.js";
+// x-tdai-user-key can carry the user key (see stages/auth.ts) and must never reach the upstream.
+import { SKIP_REQUEST_HEADERS_WITH_INTERNAL as SKIP_REQUEST_HEADERS, filterResponseHeaders } from "../../common/constants.js";
 
 /** Extract usage object from a block of OpenAI SSE text. */
 export function extractSseUsage(sseText: string): Record<string, unknown> | null {
@@ -612,7 +611,10 @@ export async function runOpenaiChatPipeline(
 
   // ── Resolve apiKey → project name ──────────────────────────────────────
   const authHeader = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const apiKey = extractBearerToken(authHeader);
+  // `apiKey` is the user key. With `x-tdai-user-key` the client's own credential is a different
+  // value and is the only one that may go upstream when a group passes the client key through.
+  const clientCredential = extractBearerToken(authHeader);
+  const apiKey = c.req.header("x-tdai-user-key") || clientCredential;
   let keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
   let wecomName = "";
   if (agentFromPath) {
@@ -1041,7 +1043,7 @@ export async function runOpenaiChatPipeline(
   // (anthropic-only 判据), 行为与旧手拼一致。
   const overrideResult = stageInstanceUpstreamOverride({
     earlyConvResolution: _earlyConvResolution,
-    target, forwardEndpoint, apiKey, body, modelId,
+    target, forwardEndpoint, apiKey: clientCredential, body, modelId,
     requestPath: c.req.path,
   });
   if (overrideResult.applied) {

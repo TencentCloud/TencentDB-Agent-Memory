@@ -190,6 +190,9 @@ bash agents/skills/setup-proxy/setup-proxy.sh --non-interactive \
   --config-path "${CONFIG_PATH}"
 ```
 
+如果是 Codex，先询问用户：「订阅账号池用尽时，是否保留自己的 ChatGPT 登录作为回退？（需先执行 `codex login`，默认否）」。
+选是则追加 `--codex-own-login`：配置改为 `requires_openai_auth = true`，user key 通过 `x-tdai-user-key` 请求头发送。
+
 如果是 Hermes/OpenClaw，追加：
 ```bash
   --team-id "${TEAM_ID}" \

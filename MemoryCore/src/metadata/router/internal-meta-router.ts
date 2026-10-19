@@ -15,7 +15,7 @@ import type { Logger } from "../../core/types.js";
 import { MetadataService, MetadataError } from "../service/metadata-service.js";
 import { extractInstanceId, normalizeInstanceIdForRoute } from "./instance.js";
 import { resolvePagination } from "./pagination.js";
-import { internalListUsersByInstanceSchema, initAdminSchema, instanceUpstreamInternalListSchema, supportedAgentsSchema } from "./v3-meta-schemas.js";
+import { internalListUsersByInstanceSchema, initAdminSchema, instanceUpstreamInternalListSchema, subscriptionPoolAccountsListSchema, subscriptionPoolRefreshSchema, subscriptionPoolReportSchema, supportedAgentsSchema } from "./v3-meta-schemas.js";
 import {
   createMetaApiTraceContext,
   logMetaApiEntry,
@@ -105,6 +105,18 @@ const routeTable: Record<string, InternalHandler> = {
     async (_d, svc, _instanceId, runtime) =>
       svc.listInstanceUpstreamGroupsInternal(runtime.getSupportedAgents()),
   ),
+  [`${V3_INTERNAL_PREFIX}/subscription-pool/accounts/list`]: bind(
+    subscriptionPoolAccountsListSchema,
+    async (_d, svc) => svc.listSubscriptionAccountsInternal(),
+  ),
+  [`${V3_INTERNAL_PREFIX}/subscription-pool/report`]: bind(
+    subscriptionPoolReportSchema,
+    async (d, svc) => svc.reportSubscriptionAccount(d.account_id, d),
+  ),
+  [`${V3_INTERNAL_PREFIX}/subscription-pool/refresh`]: bind(
+    subscriptionPoolRefreshSchema,
+    async (d, svc) => svc.refreshSubscriptionAccount(d.account_id, d.held_expires_at),
+  ),
   // §6.A 的内部镜像:与 /v3/meta/upstream/supported-agents 同一份数据源
   // (Core 启动时从 gateway yaml 的 upstream.supportedAgents 读),供无 user-key 的
   // 控制面服务(shark 等)取 agent 全集。
@@ -142,6 +154,7 @@ function mapErrorCode(code: string): number {
   if (code === "missing_instance_id" || code === "invalid_instance_id") return 400;
   if (code === "already_initialized" || code === "last_system_admin" || code === "member_already_exists") return 409;
   if (code === "user_limit_exceeded" || code === "team_limit_exceeded") return 409;
+  if (code === "token_refresh_failed") return 502;
   return 400;
 }
 

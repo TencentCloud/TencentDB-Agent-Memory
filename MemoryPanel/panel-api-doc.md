@@ -182,8 +182,11 @@
 | auth | verify |
 | instance-quota | get |
 | config/user | get、set |
+| subscription-pool | status、enable、disable、settings/update、account/oauth-start、account/oauth-complete、account/update、account/delete、account/check-usage、check-all（仅 system_admin，见下） |
 
 **未开放（`501 NOT_IN_SCOPE`）**：`agent-fixed-asset/set`、`agent-fixed-asset/list`、`agent-fixed-asset/list-with-detail`、`agent-fixed-asset/summary-by-agents`。
+
+**订阅账号池（`subscription-pool/*`）**：纯透传到内核 `/v3/meta/subscription-pool/*`，仅 `system_admin` 可调用（内核校验）；仅开放 `codex`，`claude` 的 `enable`、`account/oauth-start`、`account/oauth-complete` 返回 `400`（`PROVIDER_NOT_SUPPORTED`）。响应不含任何登录令牌。内核的错误标识（如 `POOL_NOT_ENABLED`、`POOL_AGENT_CUSTOM_GROUP`、`INVALID_OAUTH_STATE`、`INVALID_OAUTH_CODE`、`OAUTH_EXCHANGE_FAILED`、`account_not_found`）位于信封 `message` 的开头（`"<CODE>: <说明>"`），信封 `code` 只是 HTTP 状态。请求与结果字段见 `MemoryCore/v3-api-memorycore-doc.md` 的 `POST /v3/meta/subscription-pool/*`。内核的 `internal/meta/subscription-pool/*` 不对 Panel 开放。Panel 页面 `#/team/subscription-pool` 每 60 秒（页面可见时）调用 `status` 刷新。
 
 **Panel 层特殊处理（不纯透传）**：
 
