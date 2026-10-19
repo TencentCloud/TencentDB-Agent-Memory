@@ -4,7 +4,7 @@ import path from "node:path";
 import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
-import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { formatLocalDateTime, startOfLocalDate, startOfLocalDay } from "./time.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -315,9 +315,15 @@ function extractShardDateFromFileName(
 }
 
 function localDayEndMs(year: number, month: number, day: number): number {
-  // End of day = start of next day minus 1ms (in configured timezone)
+  // End of day = start of next local calendar day minus 1ms.
+  // Add by UTC calendar components only to normalize month/year rollover;
+  // the resulting date components are still interpreted as local calendar date.
   const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
-  const nextDayStartMs = startOfLocalDay(nextDay);
+  const nextDayStartMs = startOfLocalDate(
+    nextDay.getUTCFullYear(),
+    nextDay.getUTCMonth() + 1,
+    nextDay.getUTCDate(),
+  );
   return nextDayStartMs - 1;
 }
 
