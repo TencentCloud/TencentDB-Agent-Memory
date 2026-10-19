@@ -89,6 +89,24 @@
             "description": "是否启用自动对话捕获 (L0)"
           }
         }
+      },
+      "agentFilter": {
+        "type": "object",
+        "description": "限制哪些 OpenClaw runtime agent 可以使用远端记忆",
+        "properties": {
+          "include": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "允许使用插件的 runtime agent id。非空时，其他 agent 和未知 agent 均跳过"
+          },
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "禁止使用插件的 runtime agent id；优先级高于 include"
+          }
+        }
       }
     }
   }
