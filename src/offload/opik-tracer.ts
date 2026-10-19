@@ -4,6 +4,7 @@
  */
 import type { PluginLogger } from "./types.js";
 import { getEnv } from "../utils/env.js";
+import { createRequire } from "node:module";
 
 // Opik client types (minimal shape to avoid hard dependency)
 interface OpikClient {
@@ -23,6 +24,18 @@ interface OpikSpan {
 let client: OpikClient | null = null;
 let tracerEnabled = false;
 let tracerInitTried = false;
+
+/**
+ * Max characters of any single string field emitted to Opik. Tool I/O (file
+ * contents, env vars, command output) routinely contains secrets; truncating
+ * limits (though does not eliminate) leakage to the Opik backend.
+ */
+const MAX_TRACE_FIELD_CHARS = 2000;
+
+function truncateForTrace(s: string): string {
+  if (typeof s !== "string" || s.length <= MAX_TRACE_FIELD_CHARS) return s;
+  return s.slice(0, MAX_TRACE_FIELD_CHARS) + `…[truncated ${s.length - MAX_TRACE_FIELD_CHARS} chars]`;
+}
 
 function extractLayerTag(stage: string): string {
   const match = stage.match(/^(L\d+(?:\.\d+)?)/i);
@@ -96,8 +109,11 @@ export function initOffloadOpikTracer(
     // Dynamic import — graceful when opik is not installed
     let OpikConstructor: new (params: Record<string, unknown>) => OpikClient;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const opikModule = require("opik") as { Opik: new (params: Record<string, unknown>) => OpikClient };
+      // createRequire lets an ESM module load a CommonJS dependency. A bare
+      // require() is undefined under Node ESM and silently disabled the tracer
+      // even when opik was installed.
+      const moduleRequire = createRequire(import.meta.url);
+      const opikModule = moduleRequire("opik") as { Opik: new (params: Record<string, unknown>) => OpikClient };
       OpikConstructor = opikModule.Opik;
     } catch {
       logger.debug?.("[context-offload] opik package not available, tracer disabled");
@@ -173,7 +189,8 @@ export function traceOffloadDecision(params: {
 
 /**
  * Serialize a single message into a diagnostic object for tracing.
- * Outputs full content text (no truncation) for debugging purposes.
+ * Content is truncated per MAX_TRACE_FIELD_CHARS so tool I/O (which may carry
+ * secrets) is not shipped verbatim to the Opik backend.
  */
 function serializeMessageForTrace(msg: any, index: number): Record<string, unknown> {
   const role = msg.role ?? msg.message?.role ?? msg.type ?? "unknown";
@@ -187,18 +204,18 @@ function serializeMessageForTrace(msg: any, index: number): Record<string, unkno
   let contentLength: number;
   if (typeof content === "string") {
     contentLength = content.length;
-    contentText = content;
+    contentText = truncateForTrace(content);
   } else if (Array.isArray(content)) {
     const parts: string[] = [];
     for (const c of content) {
       if (typeof c !== "object" || c === null) continue;
       if (c.type === "text" && typeof c.text === "string") {
-        parts.push(c.text);
+        parts.push(truncateForTrace(c.text));
       } else if (c.type === "tool_use") {
-        const inputStr = c.input != null ? JSON.stringify(c.input) : "";
+        const inputStr = c.input != null ? truncateForTrace(JSON.stringify(c.input)) : "";
         parts.push(`[tool_use: ${c.name ?? "?"} id=${c.id ?? "?"} input=${inputStr}]`);
       } else if (c.type === "tool_result") {
-        const resultStr = typeof c.content === "string" ? c.content : JSON.stringify(c.content ?? "");
+        const resultStr = typeof c.content === "string" ? truncateForTrace(c.content) : truncateForTrace(JSON.stringify(c.content ?? ""));
         parts.push(`[tool_result: id=${c.tool_use_id ?? "?"} content=${resultStr}]`);
       } else {
         parts.push(`[${c.type ?? "unknown_block"}]`);
@@ -339,8 +356,8 @@ export function traceOffloadModelIo(params: {
       provider: params.provider,
       input: {
         url: params.url,
-        systemPrompt: params.systemPrompt,
-        userPrompt: params.userPrompt,
+        systemPrompt: truncateForTrace(params.systemPrompt),
+        userPrompt: truncateForTrace(params.userPrompt),
       },
       metadata: {
         stage: params.stage,
@@ -352,7 +369,7 @@ export function traceOffloadModelIo(params: {
     });
     span.update({
       output: {
-        responseContent: params.responseContent,
+        responseContent: truncateForTrace(params.responseContent),
         usage: params.usage,
         durationMs: dur,
         duration: durStr,
