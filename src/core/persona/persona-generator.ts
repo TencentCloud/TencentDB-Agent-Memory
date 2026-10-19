@@ -24,12 +24,14 @@ export class PersonaGenerator {
   private logger: Logger | undefined;
   private backupCount: number;
   private instanceId: string | undefined;
+  private timeoutMs: number | undefined;
 
   constructor(opts: {
     dataDir: string;
     config: unknown;
     model?: string;
     backupCount?: number;
+    timeoutMs?: number;
     logger?: Logger;
     /** Plugin instance ID for metric reporting (optional) */
     instanceId?: string;
@@ -44,6 +46,7 @@ export class PersonaGenerator {
     this.logger = opts.logger;
     this.backupCount = opts.backupCount ?? 3;
     this.instanceId = opts.instanceId;
+    this.timeoutMs = opts.timeoutMs ?? (opts.llmRunner ? undefined : 180_000);
     // Use injected LLMRunner if available, otherwise fall back to CleanContextRunner
     this.runner = opts.llmRunner ?? new CleanContextRunner({
       config: opts.config,
@@ -150,7 +153,7 @@ export class PersonaGenerator {
         systemPrompt,
         prompt: userPrompt,
         taskId: "persona-generation",
-        timeoutMs: 180_000,
+        timeoutMs: this.timeoutMs,
         // maxTokens omitted → core uses the resolved model's maxTokens from catalog
         workspaceDir: this.dataDir,
       });
