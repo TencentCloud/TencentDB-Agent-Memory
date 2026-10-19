@@ -90,6 +90,9 @@ const pendingRecallEndTimestamps = new Map<string, number>();
 
 // 进程级单例，避免同一进程重复启动清理器导致并发清理竞态
 let sharedMemoryCleaner: LocalMemoryCleaner | undefined;
+/** Config signature (retentionDays|cleanTime) that sharedMemoryCleaner was
+ *  constructed with, so hot-reload config changes trigger recreation. */
+let sharedMemoryCleanerCfg: string | undefined;
 
 /**
  * Sweep both pendingOriginalPrompts and pendingRecallCache for stale entries.
@@ -299,15 +302,22 @@ export default function register(api: OpenClawPluginApi) {
   // Daily local JSONL cleaner (L0/L1), enabled only when retentionDays is configured.
   let memoryCleaner: LocalMemoryCleaner | undefined;
   if (cfg.memoryCleanup.enabled && cfg.memoryCleanup.retentionDays != null) {
-    if (!sharedMemoryCleaner) {
+    const desiredCfg = `${cfg.memoryCleanup.retentionDays}|${cfg.memoryCleanup.cleanTime}`;
+    if (!sharedMemoryCleaner || sharedMemoryCleanerCfg !== desiredCfg) {
+      // Recreate when the retention policy changed since the last register()
+      // (hot-reload) — the singleton previously kept the OLD config silently.
+      if (sharedMemoryCleaner) {
+        try { sharedMemoryCleaner.destroy(); } catch { /* best-effort */ }
+      }
       sharedMemoryCleaner = new LocalMemoryCleaner({
         baseDir: pluginDataDir,
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
       });
+      sharedMemoryCleanerCfg = desiredCfg;
       sharedMemoryCleaner.start();
-      api.logger.debug?.(`${TAG} Memory cleaner started (singleton)`);
+      api.logger.debug?.(`${TAG} Memory cleaner started (singleton) retentionDays=${cfg.memoryCleanup.retentionDays}`);
     } else {
       api.logger.debug?.(`${TAG} Memory cleaner already started in this process, reusing existing instance`);
     }
@@ -780,25 +790,28 @@ export default function register(api: OpenClawPluginApi) {
         await core.destroy();
       };
 
-      // Race cleanup against a hard timeout
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      // Await cleanup to completion rather than racing it against a hard
+      // timeout. Abandoning core.destroy() mid-flight previously cleared the
+      // store singleton (resetStores) while the old VectorStore's SQLite handle
+      // was still closing — on hot-reload a new registration reopened the same
+      // vectors.db path and hit SQLITE_BUSY. core.destroy() has its own
+      // internal budget, so the GATEWAY_STOP_TIMEOUT_MS is now a soft warning.
+      const cleanupPromise = doCleanup();
+      const timeoutId = setTimeout(
+        () => api.logger.warn(
+          `${TAG} [gateway_stop] Cleanup still running after ${GATEWAY_STOP_TIMEOUT_MS}ms — waiting it out to avoid hot-reload SQLITE_BUSY`,
+        ),
+        GATEWAY_STOP_TIMEOUT_MS,
+      );
       try {
-        await Promise.race([
-          doCleanup(),
-          new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(
-              () => reject(new Error("timeout")),
-              GATEWAY_STOP_TIMEOUT_MS,
-            );
-          }),
-        ]);
+        await cleanupPromise;
       } catch (err) {
         api.logger.warn(
-          `${TAG} [gateway_stop] Aborted (${Date.now() - hookStartMs}ms): ${err instanceof Error ? err.message : String(err)}. ` +
+          `${TAG} [gateway_stop] Cleanup failed (${Date.now() - hookStartMs}ms): ${err instanceof Error ? err.message : String(err)}. ` +
           `Pending work will recover on next startup.`,
         );
       } finally {
-        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        clearTimeout(timeoutId);
       }
 
       resetStores();
