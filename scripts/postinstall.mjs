@@ -3,7 +3,7 @@
  * Cross-platform postinstall hook.
  *
  * The OpenClaw runtime patch is a Bash-only convenience. It should never make
- * npm install fail, and it is not relevant for Windows-native Hermes installs.
+ * npm install fail or modify an installed OpenClaw unless the operator opts in.
  */
 
 import { spawnSync } from "node:child_process";
@@ -41,8 +41,15 @@ export function runPostinstall({
     return skip(`unsupported platform ${platform}`);
   }
 
+  if (!isTruthy(env.MEMORY_TENCENTDB_APPLY_OPENCLAW_PATCH)) {
+    return skip("OpenClaw patch requires MEMORY_TENCENTDB_APPLY_OPENCLAW_PATCH=1");
+  }
+
+  if (isTruthy(env.MEMORY_TENCENTDB_SKIP_OPENCLAW_PATCH)) {
+    return skip("MEMORY_TENCENTDB_SKIP_OPENCLAW_PATCH is set");
+  }
+
   if (
-    isTruthy(env.MEMORY_TENCENTDB_SKIP_OPENCLAW_PATCH) ||
     env.MEMORY_TENCENTDB_MODE === "hermes" ||
     env.HERMES_HOME ||
     env.HERMES_AGENT_DIR
