@@ -60,6 +60,15 @@ export const WHITELIST_ENDPOINTS: readonly WhitelistEndpoint[] = [
   },
   // ── 辅助端点（由 handleAuxiliaryEndpoint 处理，不走路由）─────────
   {
+    // 模型列表：base 通常已含 `/v1`，故上游后缀是 `/models`。
+    // 少了这一条，aux pipeline 会在 matchWhitelistEndpoint 处返回 404。
+    pathSuffix: "/v1/models",
+    upstreamEndpoint: "/models",
+    protocol: "anthropic",
+    supportsStream: false,
+    isPrimary: false,
+  },
+  {
     pathSuffix: "/v1/messages/count_tokens",
     upstreamEndpoint: "/messages/count_tokens",
     protocol: "anthropic",

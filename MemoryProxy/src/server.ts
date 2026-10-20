@@ -180,6 +180,10 @@ export function createApp(config: ProxyConfig): Hono {
   // ── Whitelisted auxiliary endpoints (must precede catch-all) ─────────────
   // 这些端点走轻量透传 handler（不进入路由模块，不构成对话回合）。
   // 详见 docs/design/2026-07-02-arbitrary-path-passthrough-design.md
+  // Claude Code 的模型发现打的是裸 GET /v1/models（不带 agent/spaceId 前缀）。
+  // 必须走 aux 透传：handleModels 用 extractSpaceIdFromPath 取 spaceId，裸路径
+  // 取不到会直接 400，结构上满足不了这个入口。
+  app.get("/v1/models", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/v1/messages/count_tokens", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
