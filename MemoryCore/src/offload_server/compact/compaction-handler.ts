@@ -127,7 +127,7 @@ export async function handleCompaction(
 
   // Recalculate totalTokens after fast-path:
   // totalTokens = tiktoken(remaining messages) + fixedOverhead
-  if (fp.deletedCount > 0) {
+  if (fp.replacedCount > 0 || fp.deletedCount > 0) {
     const postFpMsgsTokens = (messages as any[]).reduce(
       (s: number, msg: any) => s + preciseMessageTokens(msg), 0,
     );
