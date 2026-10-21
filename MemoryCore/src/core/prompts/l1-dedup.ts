@@ -48,26 +48,28 @@ export const CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。�
 
 ## 输出格式
 
-严格输出 JSON 数组，每个元素对应一条新记忆的决策。不输出任何其他内容：
+严格输出一个 JSON 对象（顶层只包含 decisions 数组），decisions 的每个元素对应一条新记忆的决策。不输出任何其他内容：
 
-[
-  {
-    "record_id": "新记忆的 record_id",
-    "action": "store|update|skip|merge",
-    "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
-    "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
-    "merged_type": "合并后的最佳 type：persona|episodic|instruction|work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
-    "merged_priority": 85,
-    "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
-  }
-]
+{
+  "decisions": [
+    {
+      "record_id": "新记忆的 record_id",
+      "action": "store|update|skip|merge",
+      "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
+      "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
+      "merged_type": "合并后的最佳 type：persona|episodic|instruction|work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
+      "merged_priority": 85,
+      "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
+    }
+  ]
+}
 
 字段说明：
 - target_ids：要删除替换的旧记忆 ID **数组**（可以 1 条或多条）。store/skip 时省略或为空。
-- merged_content：merge/update 时的最终记忆文本。store/skip 时省略。
-- merged_type：merge/update 后记忆应归属的 type。根据合并后内容本质判断。
-- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority（例如两条 priority 70 的记忆合并后可提升到 80）。参考标准：80-100（核心特质/重要事件），60-79（一般偏好/普通活动），<60（次要信息）。
-- merged_timestamps：合并后的时间戳数组。收集新记忆 + 所有被合并旧记忆的时间戳，去重排序。`;
+- merged_content：merge/update 时的最终记忆文本。store/skip 时省略或填 null。
+- merged_type：merge/update 后记忆应归属的 type。根据合并后内容本质判断。store/skip 时省略或填 null。
+- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority（例如两条 priority 70 的记忆合并后可提升到 80）。参考标准：80-100（核心特质/重要事件），60-79（一般偏好/普通活动），<60（次要信息）。store/skip 时省略或填 null。
+- merged_timestamps：合并后的时间戳数组。收集新记忆 + 所有被合并旧记忆的时间戳，去重排序。store/skip 时省略或填 null。`;
 
 export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆冲突检测器。批量比较多条【新记忆】与【统一候选记忆池】中的已有记忆，逐条决定如何处理。
 
@@ -112,26 +114,28 @@ export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆�
 
 ## 输出格式
 
-严格输出 JSON 数组，每个元素对应一条新记忆的决策。不输出任何其他内容：
+严格输出一个 JSON 对象（顶层只包含 decisions 数组），decisions 的每个元素对应一条新记忆的决策。不输出任何其他内容：
 
-[
-  {
-    "record_id": "新记忆的 record_id",
-    "action": "store|update|skip|merge",
-    "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
-    "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
-    "merged_type": "合并后的最佳 type：work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
-    "merged_priority": 85,
-    "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
-  }
-]
+{
+  "decisions": [
+    {
+      "record_id": "新记忆的 record_id",
+      "action": "store|update|skip|merge",
+      "target_ids": ["要删除的候选记忆 record_id 1", "record_id 2"],
+      "merged_content": "合并/更新后的记忆内容（merge/update 时必填）",
+      "merged_type": "合并后的最佳 type：work_fact|work_task|work_method|work_artifact（merge/update 时必填）",
+      "merged_priority": 85,
+      "merged_timestamps": ["合并后的时间戳数组，包含所有新旧记忆时间戳的并集（merge/update 时必填）"]
+    }
+  ]
+}
 
 字段说明：
 - target_ids：要删除替换的旧记忆 ID **数组**（可以 1 条或多条）。store/skip 时省略或为空。
-- merged_content：merge/update 时的最终记忆文本。store/skip 时省略。
-- merged_type：merge/update 后记忆应归属的 type。根据合并后内容本质判断。
-- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority。参考标准：80-100（关键事实/重要任务/核心方法/重要资产），60-79（一般工作信息），<60（次要信息）。
-- merged_timestamps：合并后的时间戳数组。收集新记忆 + 所有被合并旧记忆的时间戳，去重排序。`;
+- merged_content：merge/update 时的最终记忆文本。store/skip 时省略或填 null。
+- merged_type：merge/update 后记忆应归属的 type。根据合并后内容本质判断。store/skip 时省略或填 null。
+- merged_priority：merge/update 后的新优先级（0-100 整数，merge/update 时必填）。合并后信息更完整、更确定，通常应**酌情提升** priority。参考标准：80-100（关键事实/重要任务/核心方法/重要资产），60-79（一般工作信息），<60（次要信息）。store/skip 时省略或填 null。
+- merged_timestamps：合并后的时间戳数组。收集新记忆 + 所有被合并旧记忆的时间戳，去重排序。store/skip 时省略或填 null。`;
 
 export function getConflictDetectionSystemPrompt(mode: MemoryPromptMode = "chat"): string {
   return mode === "code" ? WORK_CONFLICT_DETECTION_SYSTEM_PROMPT : CONFLICT_DETECTION_SYSTEM_PROMPT;
