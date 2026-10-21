@@ -174,6 +174,9 @@ export class GitSourceFetcher implements ISourceFetcher {
         "repo_url must use https:// , git@host:path or ssh:// scheme",
       );
     }
+    if (/\s|-c|--/.test(sourceUrl)) {
+      throw new Error("invalid repo_url: contains illegal spaces or git CLI flags");
+    }
     const host = this.extractHost(sourceUrl);
     if (!host) {
       throw new Error(`invalid repo_url: cannot parse host from ${sourceUrl}`);
@@ -309,13 +312,16 @@ export class GitSourceFetcher implements ISourceFetcher {
   private extractHost(url: string): string {
     if (isSshUrl(url)) return parseSshHost(url);
     try {
-      return new URL(url).hostname;
+      return new URL(url).hostname.toLowerCase();
     } catch {
       return "";
     }
   }
 
   private isPrivateAddress(host: string): boolean {
-    return PRIVATE_ADDR_RE.test(host);
+    const clean = host.trim().toLowerCase();
+    if (PRIVATE_ADDR_RE.test(clean)) return true;
+    if (/\.(internal|local|lan|nip\.io|sslip\.io)$/i.test(clean)) return true;
+    return false;
   }
 }
