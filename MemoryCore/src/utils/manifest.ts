@@ -20,7 +20,7 @@ import path from "node:path";
 // ============================
 
 export interface ManifestStoreInfo {
-  type: "sqlite" | "tcvdb" | "mongodb";
+  type: "sqlite" | "tcvdb" | "mongodb" | "postgres";
   sqlite?: {
     /** Relative path to the SQLite DB file (relative to dataDir). */
     path: string;
@@ -34,6 +34,10 @@ export interface ManifestStoreInfo {
   mongodb?: {
     endpoint: string;
     database: string;
+  };
+  postgres?: {
+    /** Masked connection string (password redacted — informational only). */
+    connectionString: string;
   };
 }
 
@@ -105,13 +109,22 @@ export function writeManifest(dataDir: string, manifest: Manifest): void {
 // ============================
 
 export interface StoreConfigSnapshot {
-  type: "sqlite" | "tcvdb" | "mongodb";
+  type: "sqlite" | "tcvdb" | "mongodb" | "postgres";
   sqlitePath?: string;
   tcvdbUrl?: string;
   tcvdbDatabase?: string;
   tcvdbAlias?: string;
   mongoEndpoint?: string;
   mongoDatabase?: string;
+  postgresConnectionString?: string;
+}
+
+/**
+ * Redact the password from a postgres connection string so the manifest never
+ * persists credentials (manifest.json is informational / world-readable).
+ */
+function maskConnectionString(cs: string): string {
+  return cs.replace(/(postgres(?:ql)?:\/\/[^:]+:)[^@]+@/, "$1***@");
 }
 
 /**
@@ -125,6 +138,10 @@ export function buildStoreInfo(snapshot: StoreConfigSnapshot): ManifestStoreInfo
     info.mongodb = {
       endpoint: snapshot.mongoEndpoint!,
       database: snapshot.mongoDatabase!,
+    };
+  } else if (snapshot.type === "postgres") {
+    info.postgres = {
+      connectionString: maskConnectionString(snapshot.postgresConnectionString ?? ""),
     };
   } else {
     info.tcvdb = {
@@ -172,6 +189,12 @@ export function diffStoreBinding(
     }
     if (persisted.mongodb?.database !== current.mongodb?.database) {
       diffs.push(`mongodb database changed: ${persisted.mongodb?.database} → ${current.mongodb?.database}`);
+    }
+  }
+
+  if (persisted.type === "postgres" && current.type === "postgres") {
+    if (persisted.postgres?.connectionString !== current.postgres?.connectionString) {
+      diffs.push(`postgres connection changed: ${persisted.postgres?.connectionString} → ${current.postgres?.connectionString}`);
     }
   }
 
