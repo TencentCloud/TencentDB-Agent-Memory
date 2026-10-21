@@ -1360,15 +1360,17 @@ export async function runOpenaiChatPipeline(
       gates: _gates,
       sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
     };
-    const passthrough = createUsageTapTransform(tapCtx);
-    // 顺序要紧：tap 在前，读到的是模型原始输出；剥离在后，只影响客户端那一份。
-    const tappedStream = upstreamResp.body
-      .pipeThrough(passthrough)
-      .pipeThrough(createCfqStripStream(
-        "openai",
-        preparedStats,
-        createCfqStripObserver(pipe),
-      ));
+    // tap 必须与客户端解耦：客户端常常在流尾直接 abort 连接（dsh/pi-ai 每轮消费完都
+    // 无条件 abort），而 pipeThrough 的 flush 在流被 cancel 时按规范不执行，L0 就整轮丢。
+    // 所以照 anthropic 通道的做法 tee 出一支独立消费：客户端怎么断都不影响它读到结尾。
+    const [clientStream, tapStream] = upstreamResp.body.tee();
+    consumeOpenAiTapStream(tapStream, tapCtx);
+    // 顺序要紧：tap 读的是模型原始输出；剥离只作用于客户端那一份。
+    const tappedStream = clientStream.pipeThrough(createCfqStripStream(
+      "openai",
+      preparedStats,
+      createCfqStripObserver(pipe),
+    ));
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
   }
@@ -1795,10 +1797,11 @@ function mergeToolCallDeltas(
   }
 }
 
-/** Create a TransformStream that passes bytes through unchanged,
- *  while extracting usage/content/tool_calls from SSE events in-band.
+/** 消费 tee 出来的 tap 支：逐块解析 SSE，累计 usage / content / tool_calls，
+ *  读完统一收尾（L0、usage log、langfuse、credit 都挂在这条收尾链上）。
+ *  与客户端流解耦，所以客户端提前断开也一定会走到收尾。
  */
-function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, Uint8Array> {
+function consumeOpenAiTapStream(stream: ReadableStream<Uint8Array>, ctx: TapContext): void {
   const { config, modelId, keyId, sessionKey, upstreamUrl, traceId, forkTraceId, startTime, inputMessages, retried, logMeta, pipe, lf, spaceId, upstreamRequestId } = ctx;
 
   const decoder = new TextDecoder();
@@ -2013,21 +2016,30 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     }
   }
 
-  return new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      controller.enqueue(chunk);
-      try {
-        processSseChunk(decoder.decode(chunk, { stream: true }));
-      } catch (err: unknown) {
-        pipe.error("STREAM_TAP", err);
+  // 收尾只能跑一次：正常读完、读失败、上游中途出错都会走到这里。
+  let finalized = false;
+  async function finalizeOnce(): Promise<void> {
+    if (finalized) return;
+    finalized = true;
+    try {
+      await finalize();
+    } catch (err: unknown) {
+      pipe.error("STREAM_FINALIZE", err);
+    }
+  }
+
+  void (async () => {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) processSseChunk(decoder.decode(value, { stream: true }));
       }
-    },
-    async flush() {
-      try {
-        await finalize();
-      } catch (err: unknown) {
-        pipe.error("STREAM_FINALIZE", err);
-      }
-    },
-  });
+    } catch (err: unknown) {
+      // 上游中断 / 解析异常：已经收到的部分照样收尾，不整轮丢弃。
+      pipe.error("STREAM_TAP", err);
+    }
+    await finalizeOnce();
+  })().catch((err: unknown) => pipe.error("STREAM_FINALIZE", err));
 }
