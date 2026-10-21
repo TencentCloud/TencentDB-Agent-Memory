@@ -142,6 +142,8 @@ memory-core 通过 `MEMORY_PROMPT_MODE` 切换 L1/L2/L3 pipeline 的提示词族
 | chat | `MEMORY_PROMPT_MODE=chat` | persona / episodic / instruction | persona.md（个人画像） | 个人助手、闲聊、教学 |
 
 > **注意**：`code` 模式下纯闲聊可能抽出 0 条记忆（LLM 认为没有可沉淀的工程内容）。如果 L1 一直没产出，先检查 `MEMORY_PROMPT_MODE` 是否与实际对话场景匹配。
+>
+> `MEMORY_PROMPT_MODE` 以及 `MEMORY_LLM_BASE_URL`、`MEMORY_LLM_API_KEY`、`MEMORY_LLM_MODEL` 只在 gateway 配置生成或重新生成时写入 `tdai-gateway.yaml`。已有文件不会随 `.env` 改变；要让新值生效，执行 `./start-memory-core.sh --force-regenerate-config` 或设置 `MEMORY_CORE_REGENERATE_CONFIG=1`。
 
 ## 内部凭据（生产环境必看）
 
@@ -190,6 +192,16 @@ memory-core 通过 `MEMORY_PROMPT_MODE` 切换 L1/L2/L3 pipeline 的提示词族
 - `tdai-panel-data`（named volume）→ memory-hub 里 knowledge 的 SQLite / git clone / wiki 文件
 
 `docker volume rm` 之前数据一直保留。改名可在 `.env` 里改 `MEMORY_CORE_VOLUME` / `PANEL_VOLUME`。
+
+## Gateway 配置
+
+`start-memory-core.sh` 把 gateway 配置只读挂进容器的 `/data/config/tdai-gateway.yaml`。
+
+- 未设置 `MEMORY_CORE_CONFIG_FILE` 时，默认使用脚本目录下的 `${SCRIPT_DIR}/.memory-core-config/tdai-gateway.yaml`。`MEMORY_CORE_CONFIG_DIR` 为相对路径时按当前工作目录解析，再收成绝对路径后挂载。文件不存在才按当前环境生成一次；已经存在则原样复用，重启不会覆盖手工修改。
+- `MEMORY_PROMPT_MODE` 与 `MEMORY_LLM_BASE_URL`、`MEMORY_LLM_API_KEY`、`MEMORY_LLM_MODEL` 只在生成或重新生成时写入该文件。按当前 `.env` 重写：`./start-memory-core.sh --force-regenerate-config`，或 `MEMORY_CORE_REGENERATE_CONFIG=1`。
+- `MEMORY_CORE_CONFIG_FILE=/path/to/tdai-gateway.yaml` 指向已有文件时，脚本只校验它存在且可读，然后只读挂载，绝不修改。该选项与强制重生互斥。
+
+`./stop-all.sh --purge` 会删掉默认配置目录，不会动 `MEMORY_CORE_CONFIG_FILE` 指向的外部文件。
 
 ## 停止 / 清理
 

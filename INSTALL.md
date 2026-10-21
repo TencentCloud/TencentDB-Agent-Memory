@@ -778,6 +778,12 @@ Once configured, Core exposes 16 additional read-only
 `/v3/analytics/*` endpoints, and Panel uses them to render session-init
 / tool-call / usage charts.
 
+`deploy/global-images/start-memory-core.sh` keeps its generated
+`.memory-core-config/tdai-gateway.yaml` across restarts. Rebuild that
+default with `--force-regenerate-config` or `MEMORY_CORE_REGENERATE_CONFIG=1`.
+`MEMORY_CORE_CONFIG_FILE` mounts an existing file read-only and is never
+rewritten.
+
 ### Step 5: Restart the stack and verify
 
 ```bash
