@@ -255,6 +255,8 @@ export class MemoryPipelineManager {
 
   // Lifecycle
   private destroyed = false;
+  /** True while destroy() is draining work that it has already accepted. */
+  private flushing = false;
 
   /** Plugin instance ID for metric reporting (set externally after async init). */
   instanceId?: string;
@@ -535,6 +537,7 @@ export class MemoryPipelineManager {
   async destroy(): Promise<void> {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.flushing = true;
 
     this.logger?.info(
       `${TAG} Destroying pipeline (timeout=${this.DESTROY_TIMEOUT_MS}ms)...`,
@@ -549,9 +552,12 @@ export class MemoryPipelineManager {
         }),
       ]).finally(() => {
         if (timeoutId !== undefined) clearTimeout(timeoutId);
+        // Do not accept new cascade work after a successful drain or timeout.
+        this.flushing = false;
       });
       this.logger?.info(`${TAG} Pipeline flushed successfully`);
     } catch (err) {
+      this.flushing = false;
       this.logger?.warn(
         `${TAG} Pipeline flush timed out or failed: ${err instanceof Error ? err.message : String(err)}. ` +
         `Pending work will be recovered on next startup.`,
@@ -601,12 +607,12 @@ export class MemoryPipelineManager {
       }
     }
 
-    // Step 4: Wait for all remaining queues to drain
+    // Step 4: Wait for all remaining queues to drain. L2 can enqueue its L3
+    // cascade before becoming idle, so observe the dependency order rather
+    // than checking both queues concurrently.
     this.logger?.debug?.(`${TAG} Waiting for queues to drain (l2=${this.l2Queue.size}, l3=${this.l3Queue.size})`);
-    await Promise.all([
-      this.l2Queue.onIdle(),
-      this.l3Queue.onIdle(),
-    ]);
+    await this.l2Queue.onIdle();
+    await this.l3Queue.onIdle();
   }
 
   // ============================
@@ -990,7 +996,10 @@ export class MemoryPipelineManager {
   // ============================
 
   private triggerL3(): void {
-    if (this.destroyed) return;
+    // destroy() marks the manager as destroyed before draining timers. Allow
+    // L2 work already accepted by that drain to enqueue its required L3
+    // cascade, but reject any cascade that arrives after the drain ends.
+    if (this.destroyed && !this.flushing) return;
 
     if (this.l3Running) {
       // L3 is in progress — mark pending so it runs again after current finishes
@@ -1019,7 +1028,7 @@ export class MemoryPipelineManager {
       this.l3Running = false;
 
       // If new L2 completions happened while L3 was running, run again
-      if (this.l3Pending && !this.destroyed) {
+      if (this.l3Pending && (!this.destroyed || this.flushing)) {
         this.logger?.debug?.(`${TAG} L3 has pending work, re-running`);
         this.enqueueL3();
       }
