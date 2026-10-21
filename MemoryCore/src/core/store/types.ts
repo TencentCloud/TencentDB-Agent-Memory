@@ -612,7 +612,15 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── L1 Write ─────────────────────────────────────────────
 
   upsertL1(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
-  deleteL1(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
+  /**
+   * When `throwOnError` is true, backends that normally degrade failures to
+   * `false` must rethrow so callers can distinguish a store error from a miss.
+   */
+  deleteL1(
+    recordId: string,
+    filter?: IsolationFilter,
+    opts?: { throwOnError?: boolean },
+  ): MaybePromise<boolean>;
   deleteL1Batch(recordIds: string[], filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Expired(cutoffIso: string): MaybePromise<number>;
 
