@@ -25,6 +25,7 @@ import { getSessionStore } from "../session/store.js";
 import type { BindingRepo } from "../db/binding-repo.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
+import { verifyUserKey, isAuthEnabled } from "../auth.js";
 import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
@@ -195,6 +196,59 @@ function envelope(code: number, message: string, httpStatus = 200): Response {
   );
 }
 
+/**
+ * Bridge-layer secondary auth — verify the binding's user_key against core auth.
+ *
+ * Background: the bridge used to trust "session identity" only
+ * (x-conversation-id → binding → IdFields) and validated no credentials.
+ * Conv-ids appear in plaintext in client configs / docs / injection logs /
+ * the LLM system prompt — they are semi-public. On a public deployment,
+ * a leaked conv-id alone is enough to read the full L0/L1/L2 memory.
+ *
+ * The user_key stored in the binding (exchanged from the upstream request's
+ * api key during session-init — a server-trusted value, not client-supplied)
+ * is verified against core:
+ *   - auth disabled (single-instance / local dev) → skip, behavior unchanged
+ *   - user_key missing → programming error (session-init should have stored
+ *     it), return 500 instead of failing open
+ *   - verify fails → 401, same semantics as the model path (verifyUserKey)
+ *
+ * Zero client changes: bridge curl templates never carried Authorization;
+ * identity always comes from the session.
+ */
+export async function verifySessionUserKey(
+  ids: SessionIdFields,
+  spaceId: string,
+  sessionKey: string,
+): Promise<Response | null> {
+  // auth disabled → no tenant isolation concept, skip (single-instance / local dev).
+  if (!isAuthEnabled()) return null;
+
+  if (!ids.user_key) {
+    console.error(
+      `${TAG} session lacks user_key — session-init should have stored it (sessionKey=${sessionKey})`,
+    );
+    return envelope(
+      50001,
+      `${TAG} misconfigured: session has no user_key`,
+      500,
+    );
+  }
+
+  const { rejected, rejectReason } = await verifyUserKey(ids.user_key, spaceId);
+  if (rejected) {
+    console.warn(
+      `${TAG} user_key verification failed (sessionKey=${sessionKey}, reason=${rejectReason})`,
+    );
+    return envelope(
+      40101,
+      `${TAG} session user_key rejected: ${rejectReason ?? "invalid user_key"}`,
+      401,
+    );
+  }
+  return null;
+}
+
 function extractSubpath(path: string): string | null {
   const m = path.match(/^\/memory-bridge\/v3\/(.+)$/);
   if (!m) return null;
@@ -332,6 +386,18 @@ export function createMemoryBridgeHandler(
         executedEndpoint: sub, spaceId,
       });
       return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
+    }
+
+    // Secondary auth: the binding's user_key must still pass core auth verify.
+    // Conv-ids can leak via client configs / docs / injection logs — not sufficient alone.
+    const userKeyRejected = await verifySessionUserKey(ids, spaceId, sessionKey);
+    if (userKeyRejected) {
+      emitBridgeRejectTelemetry({
+        sessionKey, bridgeSource: "memory-bridge",
+        rejectReason: "user_key_rejected", httpStatus: userKeyRejected.status,
+        executedEndpoint: sub, spaceId,
+      });
+      return userKeyRejected;
     }
 
     let inboundBody: Record<string, unknown> = {};
