@@ -9,7 +9,7 @@
  * Scope (Phase-1 keyword-only surface — no vector assertions):
  *   - lifecycle + capability shape
  *   - L0 write/read/count + session query
- *   - L1 write/read/count + delete
+ *   - L1 write/read/count + delete + independent query filters
  *   - FTS (BM25) recall for L0 + L1 (jieba-tokenized query via buildFtsQuery)
  *   - isolation pushdown (team/agent) on counts + FTS
  *   - L2/L3 profile sync/read/count/delete
@@ -19,7 +19,7 @@
  * `ftsEventuallyConsistent: true` so search assertions poll until visible.
  */
 import { describe, it, expect } from "vitest";
-import type { IMemoryStore, ProfileFilter, ProfileSyncRecord } from "../types.js";
+import type { IMemoryStore, L1QueryFilter, ProfileFilter, ProfileSyncRecord } from "../types.js";
 import type { MemoryRecord } from "../../record/l1-writer.js";
 import { buildFtsQuery } from "../tokenize.js";
 import { isProfileRowStore } from "../profile-row-store.js";
@@ -153,6 +153,44 @@ export function runMemoryStoreContract(harness: MemoryStoreContractHarness): voi
 
         expect(await store.deleteL1Batch(["l1-a"])).toBe(true);
         expect(await store.countL1()).toBe(1);
+      } finally {
+        await harness.disposeStore(store);
+      }
+    });
+
+    it.each<{ dimension: keyof L1QueryFilter; filter: L1QueryFilter; distractor: Partial<MemoryRecord> }>([
+      { dimension: "recordIds", filter: { recordIds: ["l1-match"] }, distractor: {} },
+      { dimension: "sessionId", filter: { sessionId: "sid-contract" }, distractor: { sessionId: "sid-other" } },
+      { dimension: "sessionKey", filter: { sessionKey: "sk-contract" }, distractor: { sessionKey: "sk-other" } },
+      { dimension: "teamId", filter: { teamId: "team-a" }, distractor: { teamId: "team-b" } },
+      { dimension: "userId", filter: { userId: "user-a" }, distractor: { userId: "user-b" } },
+      { dimension: "agentId", filter: { agentId: "agent-a" }, distractor: { agentId: "agent-b" } },
+      { dimension: "taskId", filter: { taskId: "task-a" }, distractor: { taskId: "task-b" } },
+      {
+        dimension: "updatedAfter",
+        filter: { updatedAfter: "2026-01-02T00:00:00.000Z" },
+        distractor: { updatedAt: "2026-01-02T00:00:00.000Z" },
+      },
+    ])("L1 query applies $dimension independently", async ({ filter, distractor }) => {
+      const store = await harness.createStore();
+      try {
+        const match = makeL1("l1-match", "Identical contract content", {
+          teamId: "team-a",
+          userId: "user-a",
+          agentId: "agent-a",
+          taskId: "task-a",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-03T00:00:00.000Z",
+          timestamps: ["2026-01-01T00:00:00.000Z"],
+        });
+        // Apart from its unique identity, change only the tested dimension.
+        const other = { ...match, id: "l1-other", ...distractor };
+        expect(await store.upsertL1(match)).toBe(true);
+        expect(await store.upsertL1(other)).toBe(true);
+        expect((await store.queryL1Records()).map((r) => r.record_id).sort())
+          .toEqual(["l1-match", "l1-other"]);
+        expect((await store.queryL1Records(filter)).map((r) => r.record_id))
+          .toEqual(["l1-match"]);
       } finally {
         await harness.disposeStore(store);
       }
