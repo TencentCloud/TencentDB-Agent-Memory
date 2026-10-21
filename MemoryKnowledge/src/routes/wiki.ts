@@ -17,6 +17,7 @@
  */
 
 import { Hono } from "hono";
+import { createOkfValidationRoutes } from "./okf-validation.js";
 
 import type { WikiService } from "../store/index.js";
 import type { WikiSourceManager } from "../engines/wiki/index.js";
@@ -50,6 +51,7 @@ function maybeWriteError(outcome: unknown): Response | null {
 export function createWikiRoutes(deps: WikiRouteDeps): Hono {
   const app = new Hono();
   const { wikiService, wikiMgr, publicBaseUrl } = deps;
+  app.route("/okf", createOkfValidationRoutes());
 
   // ═══════════════════ Asset Layer ═══════════════════
 
