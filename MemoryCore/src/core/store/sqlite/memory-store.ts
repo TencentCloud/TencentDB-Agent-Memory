@@ -41,6 +41,7 @@ import type {
   L0CountFilter,
   L0PaginatedFilter,
   L0PaginatedResult,
+  L0SessionSummary,
   L1CountFilter,
   L1PaginatedFilter,
   L1PaginatedResult,
@@ -2418,40 +2419,7 @@ export class VectorStore implements IMemoryStore {
     if (this.degraded) return { rows: [], total: 0 };
 
     try {
-      const conditions: string[] = [];
-      const params: SQLInputValue[] = [];
-
-      if (filter.sessionId) {
-        conditions.push("(session_key = ? OR session_id = ?)");
-        params.push(filter.sessionId, filter.sessionId);
-      }
-      // Isolation dimensions — see docs/l0l3-tenant-isolation-design.md.
-      if (filter.teamId !== undefined) {
-        conditions.push("team_id = ?");
-        params.push(filter.teamId);
-      }
-      if (filter.userId !== undefined) {
-        conditions.push("user_id = ?");
-        params.push(filter.userId);
-      }
-      if (filter.agentId !== undefined) {
-        conditions.push("agent_id = ?");
-        params.push(filter.agentId);
-      }
-      if (filter.taskId !== undefined) {
-        conditions.push("task_id = ?");
-        params.push(filter.taskId);
-      }
-      if (filter.timeStartMs !== undefined) {
-        conditions.push("timestamp >= ?");
-        params.push(filter.timeStartMs);
-      }
-      if (filter.timeEndMs !== undefined) {
-        conditions.push("timestamp <= ?");
-        params.push(filter.timeEndMs);
-      }
-
-      const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+      const { where, params } = this.buildL0Where(filter);
 
       // Count total
       const countSql = `SELECT COUNT(*) AS cnt FROM l0_conversations ${where}`;
@@ -2466,6 +2434,71 @@ export class VectorStore implements IMemoryStore {
     } catch (err) {
       this.logger?.warn(`[sqlite] queryL0Paginated failed: ${err instanceof Error ? err.message : String(err)}`);
       return { rows: [], total: 0 };
+    }
+  }
+
+  /**
+   * L0 过滤条件构建（queryL0Paginated / listL0Sessions 共用，保证两处口径一致）。
+   */
+  private buildL0Where(filter: L0CountFilter): { where: string; params: SQLInputValue[] } {
+    const conditions: string[] = [];
+    const params: SQLInputValue[] = [];
+
+    if (filter.sessionId) {
+      conditions.push("(session_key = ? OR session_id = ?)");
+      params.push(filter.sessionId, filter.sessionId);
+    }
+    // Isolation dimensions — see docs/l0l3-tenant-isolation-design.md.
+    if (filter.teamId !== undefined) {
+      conditions.push("team_id = ?");
+      params.push(filter.teamId);
+    }
+    if (filter.userId !== undefined) {
+      conditions.push("user_id = ?");
+      params.push(filter.userId);
+    }
+    if (filter.agentId !== undefined) {
+      conditions.push("agent_id = ?");
+      params.push(filter.agentId);
+    }
+    if (filter.taskId !== undefined) {
+      conditions.push("task_id = ?");
+      params.push(filter.taskId);
+    }
+    if (filter.timeStartMs !== undefined) {
+      conditions.push("timestamp >= ?");
+      params.push(filter.timeStartMs);
+    }
+    if (filter.timeEndMs !== undefined) {
+      conditions.push("timestamp <= ?");
+      params.push(filter.timeEndMs);
+    }
+    return { where: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "", params };
+  }
+
+  /**
+   * Session-level listing for v2 `/conversation/sessions`（GROUP BY session）。
+   * 与 queryL0Paginated 共用过滤口径；按 last_active 倒序（运维视角：最近活跃的会话在前）。
+   */
+  listL0Sessions(filter: L0CountFilter & { limit?: number } = {}): L0SessionSummary[] {
+    if (this.degraded) return [];
+    try {
+      const { where, params } = this.buildL0Where(filter);
+      const limit = Math.min(Math.max(Math.trunc(filter.limit ?? 50), 1), 200);
+      const rows = this.db
+        .prepare(
+          `SELECT session_key, session_id, team_id, user_id, agent_id,
+                  COUNT(*) AS message_count, MIN(timestamp) AS first_active, MAX(timestamp) AS last_active
+           FROM l0_conversations ${where}
+           GROUP BY session_key, session_id
+           ORDER BY last_active DESC
+           LIMIT ?`,
+        )
+        .all(...params, limit) as unknown as L0SessionSummary[];
+      return rows;
+    } catch (err) {
+      this.logger?.warn(`[sqlite] listL0Sessions failed: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
     }
   }
 
