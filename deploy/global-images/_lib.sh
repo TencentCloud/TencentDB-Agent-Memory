@@ -78,6 +78,28 @@ find_docker() {
 DOCKER="$(find_docker)"
 
 # PULL=1 时拉取镜像最新版本。
+# Podman 下 `--add-host=host.docker.internal:host-gateway` 会直接报
+# "host containers internal IP address is empty" 导致容器起不来；而 Podman
+# Machine 本身已经注入 host.docker.internal / host.containers.internal，
+# 该 flag 是多余的。Docker Desktop 仍然需要它。
+is_podman_runtime() {
+  case "$DOCKER" in
+    *podman*) return 0 ;;
+  esac
+  local ver
+  ver="$($DOCKER version 2>/dev/null || $DOCKER -v 2>/dev/null || true)"
+  [[ "$ver" == *[Pp]odman* ]]
+}
+
+# 打印 0 个或 1 个 --add-host=… 参数。调用处不要加引号，让它按词展开：
+#   $DOCKER run -d $(docker_host_gateway_args) ...
+docker_host_gateway_args() {
+  if is_podman_runtime; then
+    return 0
+  fi
+  echo --add-host=host.docker.internal:host-gateway
+}
+
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。
 pull_image() {
