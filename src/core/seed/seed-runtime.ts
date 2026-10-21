@@ -5,10 +5,10 @@
  * L1 runner, L2 runner, L3 runner, and persister wiring — keeping this
  * module focused on seed-specific concerns:
  * - Synchronous per-round L0 capture with progress reporting
- * - waitForL1Idle polling (L1 only — see FIXME below)
+ * - Explicit L1 flushes at seed batch/session boundaries
  * - Ctrl+C graceful shutdown
  *
- * FIXME: Currently we only wait for L1 to become idle before destroying the
+ * FIXME: Currently we only flush and wait for L1 before destroying the
  * pipeline.  L2 (scene extraction) and L3 (persona generation) may still be
  * in-flight when `pipeline.destroy()` is called.  This is intentional for now
  * to avoid excessively long seed runs, but means seed output may not include
@@ -24,7 +24,6 @@ import { createPipeline, createL2Runner, createL3Runner } from "../../utils/pipe
 import type { PipelineInstance, PipelineLogger } from "../../utils/pipeline-factory.js";
 import { readManifest, writeManifest } from "../../utils/manifest.js";
 import { StandaloneLLMRunnerFactory } from "../../adapters/standalone/llm-runner.js";
-import type { MemoryPipelineManager } from "../../utils/pipeline-manager.js";
 import type { LLMRunner } from "../types.js";
 import type {
   NormalizedInput,
@@ -66,6 +65,8 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
 
   // Parse config — all values come from pluginConfig (or parseConfig defaults)
   const cfg = parseConfig(pluginConfig);
+  // Seed feeds historical rounds synchronously and flushes at explicit batch boundaries.
+  cfg.pipeline.enableWarmup = false;
 
   logger.info(
     `${TAG} Creating seed pipeline: outputDir=${outputDir}, ` +
@@ -126,74 +127,6 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
   }));
 
   return { pipeline, cfg };
-}
-
-// ============================
-// waitForL1Idle
-// ============================
-
-/**
- * Poll pipeline queue status until L1 is idle for a given session.
- * Modeled after benchmark-ingest.ts waitForPipelineIdle() but focused on L1 only.
- */
-async function waitForL1Idle(
-  scheduler: MemoryPipelineManager,
-  sessionKeys: string[],
-  logger: PipelineLogger,
-  opts: {
-    pollIntervalMs?: number;
-    stableRounds?: number;
-    maxWaitMs?: number;
-  } = {},
-): Promise<void> {
-  const pollInterval = opts.pollIntervalMs ?? 1_000;
-  const stableRounds = opts.stableRounds ?? 3;
-  const maxWait = opts.maxWaitMs ?? 300_000; // 5 min default
-
-  const startTime = Date.now();
-  let consecutiveIdle = 0;
-
-  while (true) {
-    const elapsed = Date.now() - startTime;
-    if (elapsed > maxWait) {
-      logger.warn(`${TAG} [waitL1] Max wait time reached (${(maxWait / 1000).toFixed(0)}s), proceeding`);
-      break;
-    }
-
-    const queues = scheduler.getQueueSizes();
-
-    // Check per-session: buffered messages + conversation count
-    let totalBuffered = 0;
-    let totalConversationCount = 0;
-    for (const key of sessionKeys) {
-      totalBuffered += scheduler.getBufferedMessageCount(key);
-      const state = scheduler.getSessionState(key);
-      if (state) {
-        totalConversationCount += state.conversation_count;
-      }
-    }
-
-    const isIdle =
-      queues.l1Idle &&
-      totalBuffered === 0 &&
-      totalConversationCount === 0;
-
-    if (isIdle) {
-      consecutiveIdle++;
-      if (consecutiveIdle >= stableRounds) {
-        logger.debug?.(`${TAG} [waitL1] L1 stable for ${stableRounds} consecutive polls`);
-        return;
-      }
-    } else {
-      consecutiveIdle = 0;
-      logger.debug?.(
-        `${TAG} [waitL1] Waiting: l1Queue=${queues.l1}, l1Pending=${queues.l1Pending}, l1Idle=${queues.l1Idle}, ` +
-        `buffered=${totalBuffered}, convCount=${totalConversationCount}`,
-      );
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, pollInterval));
-  }
 }
 
 // ============================
@@ -324,12 +257,7 @@ export async function executeSeed(
             `for session="${session.sessionKey}" — waiting for L1 to drain`,
           );
 
-          await waitForL1Idle(
-            pipeline.scheduler,
-            [session.sessionKey],
-            logger,
-            { pollIntervalMs: 500, stableRounds: 2, maxWaitMs: 120_000 },
-          );
+          await pipeline.scheduler.flushSession(session.sessionKey);
         }
       }
 
@@ -343,28 +271,12 @@ export async function executeSeed(
           stage: "l1_waiting",
         });
 
-        await waitForL1Idle(
-          pipeline.scheduler,
-          [session.sessionKey],
-          logger,
-          { pollIntervalMs: 1_000, stableRounds: 3, maxWaitMs: 300_000 },
-        );
+        await pipeline.scheduler.flushSession(session.sessionKey);
 
-        logger.info(`${TAG} L1 idle for session="${session.sessionKey}"`);
+        logger.info(`${TAG} L1 flushed for session="${session.sessionKey}"`);
       }
     }
 
-    // Final wait for all sessions
-    if (!interrupted) {
-      const allKeys = input.sessions.map((s) => s.sessionKey);
-      logger.info(`${TAG} Final L1 idle wait for all sessions...`);
-      await waitForL1Idle(
-        pipeline.scheduler,
-        allKeys,
-        logger,
-        { pollIntervalMs: 1_000, stableRounds: 3, maxWaitMs: 300_000 },
-      );
-    }
   } finally {
     process.removeListener("SIGINT", onSigint);
 
