@@ -1,6 +1,6 @@
 /**
  * 按实例解析元数据库名（v3.0 库级隔离）。
- * MongoDB database / SQLite 目录名均为 {mongoDbPrefix}_{sanitized_id}。
+ * MongoDB database / SQLite 目录名 / PostgreSQL schema 名均为 {mongoDbPrefix}_{sanitized_id}。
  */
 
 /** 未配置 `mongoDbPrefix` / `TDAI_METADATA_MONGO_DB_PREFIX` 时的默认值。 */
@@ -61,4 +61,15 @@ export function resolveSqliteDbDir(
 ): string {
   const dbName = resolveMetadataDbName(instanceId, dbPrefix);
   return `${baseDir.replace(/\/$/, "")}/${dbName}`;
+}
+
+/**
+ * PostgreSQL：每实例一个 schema，名 = 逻辑库名截断至 63 字节（NAMEDATALEN-1 上限，
+ * 超长会被 PG 静默截断导致实例间串库）。
+ */
+export function resolvePostgresSchemaName(
+  instanceId: string,
+  dbPrefix?: string,
+): string {
+  return resolveMetadataDbName(instanceId, dbPrefix).slice(0, 63);
 }
