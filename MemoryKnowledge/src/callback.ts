@@ -159,7 +159,7 @@ ${pageList}`;
     const text = await client.chat({
       system: "你是一个知识库摘要生成器。只输出摘要文本，不要输出其他内容。",
       prompt,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 4096, // reasoning models can spend >1024 tokens on hidden reasoning before emitting any text, which truncated the summary to empty (finishReason=length, len=0) even with a valid API key
       temperature: 0.3,
       label: `wiki-summary`,
     });
