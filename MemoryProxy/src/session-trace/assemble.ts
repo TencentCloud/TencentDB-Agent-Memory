@@ -22,21 +22,32 @@ function isRecord(v: unknown): v is Json {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Parse every `data:` line of one SSE event block; `[DONE]` and malformed lines are skipped. */
+/** Parse SSE event data, joining consecutive data fields before decoding JSON. */
 export function parseSseData(block: string): Json[] {
   const events: Json[] = [];
-  for (const line of block.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const data = trimmed.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
+  let dataLines: string[] = [];
+  const dispatch = () => {
+    const data = dataLines.join("\n");
+    dataLines = [];
+    if (!data || data.trim() === "[DONE]") return;
     try {
       const parsed = JSON.parse(data) as unknown;
       if (isRecord(parsed)) events.push(parsed);
     } catch {
       // not JSON — ignore
     }
+  };
+  for (const line of block.split(/\r\n|\r|\n/)) {
+    if (line === "") {
+      dispatch();
+    } else if (line === "data" || line.startsWith("data:")) {
+      let value = line === "data" ? "" : line.slice(5);
+      if (value.startsWith(" ")) value = value.slice(1);
+      dataLines.push(value);
+    }
   }
+  // The tap also hands over its final block when no separator was received.
+  dispatch();
   return events;
 }
 
