@@ -61,6 +61,10 @@ export interface ExtractionConfig {
   enabled: boolean;
   /** Enable L1 smart dedup (default: true) */
   enableDedup: boolean;
+  /** Fail-closed opt-in: re-throw batch-dedup failures instead of storing the
+   *  batch unchecked. Only enable when your pipeline defers on extraction
+   *  failure (does not advance the cursor) — see #1397/#1523. */
+  dedupFailFast?: boolean;
   /** Max memories per session (default: 20) */
   maxMemoriesPerSession: number;
   /** LLM model for extraction, format: "provider/model" (falls back to OpenClaw default model when omitted) */
@@ -655,6 +659,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     extraction: {
       enabled: bool(extractionGroup, "enabled") ?? true,
       enableDedup: bool(extractionGroup, "enableDedup") ?? true,
+      dedupFailFast: bool(extractionGroup, "dedupFailFast") ?? false,
       maxMemoriesPerSession: num(extractionGroup, "maxMemoriesPerSession") ?? 20,
       model: optStr(extractionGroup, "model"),
       promptMode: normalizePromptMode(str(extractionGroup, "promptMode"), globalPromptMode),

@@ -123,6 +123,10 @@ export async function extractL1Memories(params: {
     embeddingService?: EmbeddingService;
     /** Top-K candidates for conflict recall (default: 5) */
     conflictRecallTopK?: number;
+    /** Fail-closed opt-in: re-throw batch-dedup failures instead of storing the
+     *  batch unchecked. Only enable when your pipeline defers on extraction
+     *  failure (does not advance the cursor) — see #1397/#1523. */
+    dedupFailFast?: boolean;
     /** Override embedding timeout for capture-path calls (milliseconds) */
     embeddingTimeoutMs?: number;
     /**
@@ -319,6 +323,7 @@ export async function extractL1Memories(params: {
         conflictRecallTopK: options.conflictRecallTopK,
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
+        dedupFailFast: options.dedupFailFast,
         traceContext: { teamId, userId, agentId, sessionId },
         ...(teamId || userId || agentId || sessionId || taskId ? { filter: { teamId, userId, agentId, sessionId, taskId } } : {}),
       });
@@ -359,6 +364,12 @@ export async function extractL1Memories(params: {
       });
 
     } catch (err) {
+      if (options.dedupFailFast) {
+        // Fail-closed opt-in: re-throw so the batch defers (cursor unchanged)
+        // instead of being stored without dedup. Preserve the original error
+        // text so rate-limit errors still match the runner backoff heuristics.
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       logger?.warn?.(`${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
       storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage);
     }
