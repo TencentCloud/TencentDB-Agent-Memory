@@ -86,19 +86,25 @@ export type Message = Record<string, any>;
  * Extract the linked tool_use_id from a tool-result message (supports multiple formats).
  */
 export function extractToolResultId(msg: Message): string | null {
+  // Downstream replacement and pairing support one envelope, not recursive wrappers.
+  const wrapped = msg.type === "message" && !!msg.message;
+  if (wrapped) msg = msg.message;
+  if (msg.type === "message") return null;
+  if (isToolResultMessage(msg) && typeof msg.toolCallId === "string" && msg.toolCallId.length > 0) {
+    return msg.toolCallId;
+  }
   // OpenAI tool result: { role: "tool", tool_call_id: "..." }
   if (msg.tool_call_id) return msg.tool_call_id;
   // Anthropic tool_result: { type: "tool_result", tool_use_id: "..." }
   if (msg.tool_use_id) return msg.tool_use_id;
-  // OpenClaw wrapped: { type: "message", message: { id: "...", role: "toolResult" } }
-  if (msg.type === "message" && msg.message?.id) return msg.message.id;
   // Anthropic content block tool_result: { role: "user", content: [{type:"tool_result", tool_use_id}] }
   if (msg.role === "user" && Array.isArray(msg.content)) {
     for (const block of msg.content) {
       if (block?.type === "tool_result" && block.tool_use_id) return block.tool_use_id;
     }
   }
-  return null;
+  // Prefer explicit associations; only legacy wrapped tool results use their own id.
+  return wrapped && isToolResultMessage(msg) ? msg.id ?? null : null;
 }
 
 // ─── Message Type Checks ─────────────────────────────────────────────────────
@@ -107,6 +113,9 @@ export function extractToolResultId(msg: Message): string | null {
  * Check if a message is a tool result (contains tool output).
  */
 export function isToolResultMessage(msg: Message): boolean {
+  if (msg.type === "message" && msg.message) msg = msg.message;
+  if (msg.type === "message") return false;
+  if (msg.role === "toolResult" || msg.role === "tool_result") return true;
   if (msg.role === "tool") return true;
   if (msg.type === "tool_result") return true;
   const innerRole = msg.message?.role ?? msg.type;
@@ -155,9 +164,11 @@ export function isAssistantWithToolUse(msg: Message): boolean {
  */
 export function extractAllToolUseIds(msg: Message): string[] {
   const ids: string[] = [];
+  // Call IDs must come from the same single-layer envelope as result IDs.
+  const target = msg.type === "message" && msg.message ? msg.message : msg;
   // OpenAI format: tool_calls field
-  if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
-    for (const tc of msg.tool_calls) {
+  if (target.tool_calls && Array.isArray(target.tool_calls)) {
+    for (const tc of target.tool_calls) {
       if (tc.id) ids.push(tc.id);
     }
   }
@@ -188,26 +199,19 @@ export function replaceWithSummary(msg: Message, entry: OffloadEntry): void {
   }
   const summaryContent = parts.join("\n");
 
-  if (msg.type === "message" && msg.message) {
-    if (Array.isArray(msg.message.content)) {
-      msg.message.content = [{ type: "text", text: summaryContent }];
-    } else {
-      msg.message.content = summaryContent;
-    }
-  } else if (msg.role === "user" && Array.isArray(msg.content)) {
-    // Anthropic tool_result in user content blocks
-    for (let i = 0; i < msg.content.length; i++) {
-      if (msg.content[i]?.type === "tool_result") {
-        msg.content[i].content = summaryContent;
+  // Unwrap once so Anthropic results retain their tool_result block and association.
+  const target = msg.type === "message" && msg.message ? msg.message : msg;
+  if (target.role === "user" && Array.isArray(target.content)) {
+    for (let i = 0; i < target.content.length; i++) {
+      if (target.content[i]?.type === "tool_result") {
+        target.content[i].content = summaryContent;
         break;
       }
     }
+  } else if (Array.isArray(target.content)) {
+    target.content = [{ type: "text", text: summaryContent }];
   } else {
-    if (Array.isArray(msg.content)) {
-      msg.content = [{ type: "text", text: summaryContent }];
-    } else {
-      msg.content = summaryContent;
-    }
+    target.content = summaryContent;
   }
   msg._offloaded = true;
 }
