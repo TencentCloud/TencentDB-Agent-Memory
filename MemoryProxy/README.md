@@ -77,7 +77,7 @@ Skills and Knowledge follow the same idea:
 - npm or pnpm
 - A running **MemoryCore Gateway** (default `:8420`) providing Auth / Skill / Meta / Memory APIs
 - Redis (default backing store for session/injection/Skill state; switchable once `storage.enabled=true`)
-- An OpenAI-compatible upstream LLM API (TokenHub or others)
+- An OpenAI-compatible upstream LLM API (TokenHub, DeepSeek, OrcaRouter, or others)
 
 ## Quick start
 
