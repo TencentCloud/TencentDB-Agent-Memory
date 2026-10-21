@@ -416,7 +416,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             return False
         except Exception as e:
             self._last_recover_attempt = time.monotonic()
-            logger.warning("memory-tencentdb Gateway recovery raised: %s", e)
+            logger.warning("memory-tencentdb Gateway recovery raised: %s", type(e).__name__)
             return False
         finally:
             self._recover_lock.release()
@@ -465,7 +465,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     healthy = supervisor.is_running()
                 except Exception as e:
                     logger.debug(
-                        "memory-tencentdb watchdog health probe raised: %s", e,
+                        "memory-tencentdb watchdog health probe raised: %s", type(e).__name__,
                     )
 
                 if healthy:
@@ -487,7 +487,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 self._try_recover_gateway(bypass_cooldown=True)
             except Exception as e:
                 logger.warning(
-                    "memory-tencentdb watchdog iteration raised (continuing): %s", e,
+                    "memory-tencentdb watchdog iteration raised (continuing): %s", type(e).__name__,
                 )
 
         logger.debug("memory-tencentdb watchdog exiting")
@@ -572,7 +572,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     )
             except Exception as e:
                 logger.warning(
-                    "memory-tencentdb background Gateway start failed (non-fatal): %s", e
+                    "memory-tencentdb background Gateway start failed (non-fatal): %s", type(e).__name__
                 )
 
         if self._supervisor.is_running():
@@ -624,7 +624,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 try:
                     results[label] = fn()
                 except Exception as e:
-                    errors.append(f"{label}: {e}")
+                    errors.append(f"{label}: {type(e).__name__}")
 
             threads = [
                 threading.Thread(
@@ -709,7 +709,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             return "\n\n".join(parts) if parts else ""
         except Exception as e:
             self._record_failure()
-            logger.debug("memory-tencentdb prefetch failed: %s", e)
+            logger.debug("memory-tencentdb prefetch failed: %s", type(e).__name__)
             self._try_recover_gateway()
             return ""
 
@@ -750,7 +750,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 self._record_success()
             except Exception as e:
                 self._record_failure()
-                logger.warning("memory-tencentdb sync failed: %s", e)
+                logger.warning("memory-tencentdb sync failed: %s", type(e).__name__)
                 self._try_recover_gateway()
 
         oldest_to_join: Optional[threading.Thread] = None
@@ -811,7 +811,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             try:
                 supervisor.shutdown()
             except Exception as e:
-                logger.debug("memory-tencentdb supervisor shutdown failed: %s", e)
+                logger.debug("memory-tencentdb supervisor shutdown failed: %s", type(e).__name__)
 
         self._client = None
         self._gateway_available = False
@@ -904,7 +904,7 @@ class MemoryTencentdbProvider(MemoryProvider):
         except Exception as e:
             self._record_failure()
             self._try_recover_gateway()
-            return json.dumps({"error": f"Tool call failed: {e}"})
+            return json.dumps({"error": f"Tool call failed: {type(e).__name__}"})
 
     # -- Optional hooks -------------------------------------------------------
 
