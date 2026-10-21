@@ -420,6 +420,44 @@ Important: the plugin only handles the **client half**. Whether the Gateway actu
 
 If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_GATEWAY_API_KEY` as a fallback — handy when both processes share an env file and the operator only wants to set one variable name. The Gateway never reads `MEMORY_TENCENTDB_GATEWAY_API_KEY`; that name is plugin-side only.
 
+## 👥 Multi-User Stores (optional)
+
+By default the Gateway keeps **one** shared memory store. With multi-user routing enabled it lazily creates **one isolated store per user** (`vectors.db`, L0 history, persona, scene blocks, checkpoints) and routes every request by the `user_id` field the provider already attaches — so two teachers talking through the same Hermes instance never see each other's memories. **The switch defaults to off; existing deployments behave exactly as before.**
+
+| Field | env | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `multiUser.enabled` | `TDAI_MULTI_USER` | `false` | Master switch (`"true"` / `"1"`). When off, every request — with or without `user_id` — goes to the main store. |
+| `multiUser.ownerUserIds` | `TDAI_MULTI_USER_OWNERS` (comma-separated) | `[]` | User ids that keep using the **main** store even when routing is on (admins, cron identities). |
+
+Routing rules, in order: switch off → main store; missing or invalid `user_id` → main store (fail-closed, logged as a warning); owner id → main store; the legacy fallback id `default` → main store; any other valid id → its own store under `users/<uid>/`.
+
+Ids are normalized (`lowercase(ascii-trim(id))` — leading/trailing **ASCII whitespace only**; Unicode whitespace like U+FEFF is deliberately not trimmed so both the TS and Python implementations accept/reject identically) and must fully match `^[a-z0-9_-]{1,64}$`. Matching is all-or-nothing — characters are **never** stripped — so `wendy.li` is rejected to the main store rather than silently merged into `wendyli`. The restricted alphabet also makes `users/<uid>/` paths impossible to traverse.
+
+On-disk layout:
+
+```text
+<data.baseDir>/                      # main store (identity-less traffic, owners, cron)
+├── vectors.db
+├── conversations/
+└── users/
+    ├── a/                           # one fully isolated stack per valid uid
+    │   ├── vectors.db
+    │   └── conversations/
+    └── b/
+        ├── vectors.db
+        └── conversations/
+```
+
+More things to know:
+
+- **`GET /health` reflects the main core only.** The probe reports the main store's init state; a degraded per-user core degrades only its own routes and never flips `/health`.
+- **Mixed-version upgrades.** Upgrade the Gateway first, then the provider — that order is safe. An old provider that does not yet send `user_id` on searches simply lands everything in the main store, exactly like the pre-multi-user behaviour; nothing is misrouted or lost, and per-user stores fill up again once the provider is upgraded.
+- **`POST /seed` guard.** Seeding always writes to the main store, so while multi-user routing is enabled, a seed request carrying a regular user's `user_id` is refused with `403 {"error":"seed is not allowed for per-user stores"}`. Omit `user_id` (or use an owner id) to seed the main pool.
+- **Backend limitation.** Per-user isolation relies on the local SQLite layout above. With `storeBackend: "tcvdb"` every store targets the same remote database/collections regardless of `user_id` — keep multi-user routing on the default SQLite backend.
+- **Rolling back.** Turning `multiUser.enabled` back off deletes nothing: per-user data already on disk under `users/<uid>/` is preserved but becomes unreachable through the main pool (every request lands in the main store). Re-enabling the switch restores access to it.
+
+Trust boundary in one sentence: the Gateway has no **per-user** authentication — the shared optional Bearer token (`TDAI_GATEWAY_API_KEY`) authenticates the client, but nothing verifies *which* user is calling — so `user_id` is **caller-declared**; multi-user routing prevents accidents, not forgery. For real isolation combine it with `TDAI_GATEWAY_API_KEY` and network-level access control.
+
 ---
 
 

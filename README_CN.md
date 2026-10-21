@@ -423,6 +423,44 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 若 `MEMORY_TENCENTDB_GATEWAY_API_KEY` 没设置，插件还会回退读取 `TDAI_GATEWAY_API_KEY`，方便两个进程共享同一个 env 文件、只设一个变量名的场景。Gateway 永远不会读 `MEMORY_TENCENTDB_GATEWAY_API_KEY`，那是插件侧专用名字。
 
+## 👥 多用户记忆库（可选）
+
+默认情况下 Gateway 只维护**一份**共享记忆库。开启多用户路由后，它会按请求里的 `user_id` 字段（插件侧已自动附带）为每个用户**惰性创建一份完全隔离的记忆库**（`vectors.db`、L0 历史、画像、场景块、checkpoint 各自独立）——同一套 Hermes 实例上多位老师的记忆互不可见。**开关默认关闭，已有部署的行为完全不变。**
+
+| 字段 | env | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `multiUser.enabled` | `TDAI_MULTI_USER` | `false` | 总开关（`"true"` / `"1"`）。关闭时，无论是否带 `user_id`，所有请求都进主库。 |
+| `multiUser.ownerUserIds` | `TDAI_MULTI_USER_OWNERS`（逗号分隔） | `[]` | 即使路由开启也继续使用**主库**的用户 id（管理员、定时任务等）。 |
+
+路由规则按顺序判定：开关关闭 → 主库；`user_id` 缺失或不合法 → 主库（fail-closed，并打印告警）；owner id → 主库；遗留兜底 id `default` → 主库；其余合法 id → 各自的 `users/<uid>/` 独立库。
+
+id 会先做归一化（`lowercase(ascii-trim(id))`——只剔除首尾的 **ASCII 空白**；U+FEFF 等 Unicode 空白故意不剔除，保证 TS 与 Python 两侧行为完全一致），然后必须完整匹配 `^[a-z0-9_-]{1,64}$`。匹配是全有或全无——**绝不**剔除字符——所以 `wendy.li` 会被整体拒绝进主库，而不是被悄悄改写成 `wendyli` 造成两个用户的记忆串库。受限字符集同时也保证了 `users/<uid>/` 路径无法目录穿越。
+
+磁盘目录布局：
+
+```text
+<data.baseDir>/                      # 主库（无身份流量、owner、定时任务）
+├── vectors.db
+├── conversations/
+└── users/
+    ├── a/                           # 每个合法 uid 一套完全独立的存储栈
+    │   ├── vectors.db
+    │   └── conversations/
+    └── b/
+        ├── vectors.db
+        └── conversations/
+```
+
+另外几点需要了解：
+
+- **`GET /health` 只反映主 core。** 该探针只汇报主存储的初始化状态；某个 per-user core 降级只会影响它自己的路由，不会把 `/health` 打成不健康。
+- **混合版本升级。** 先升级 Gateway、后升级 provider 是安全顺序。尚未发送 `user_id` 的旧 provider 会把所有请求落到主库——与多用户功能上线前的行为完全一致，不会误路由、不会丢数据；provider 升级完成后各用户库会自动恢复写入。
+- **`POST /seed` 守卫。** seed 永远写入主库，因此多用户路由开启时，携带普通用户 `user_id` 的 seed 请求会被拒绝并返回 `403 {"error":"seed is not allowed for per-user stores"}`。要给主库灌历史数据，请省略 `user_id`（或使用 owner id）。
+- **后端限制。** 每用户隔离依赖上述本地 SQLite 目录布局。`storeBackend: "tcvdb"` 时所有存储都指向同一个远端 database/collection，与 `user_id` 无关——多用户路由请保持在默认 SQLite 后端上使用。
+- **回滚。** 把 `multiUser.enabled` 关回 `false` 不会删除任何数据：`users/<uid>/` 下已落盘的用户数据会完整保留，只是无法再通过主库访问（所有请求都落回主库）。重新开启开关即可恢复访问。
+
+信任边界一句话：Gateway 自身没有**按用户**的鉴权——共享的可选 Bearer token（`TDAI_GATEWAY_API_KEY`）只认证客户端，不校验**调用者究竟是哪个用户**——所以 `user_id` 是**调用方自行声明**的：多用户路由防的是误用，不是伪造；真正要隔离，请配合 `TDAI_GATEWAY_API_KEY` 与网络层访问控制。
+
 ---
 
 ## 🔧 可调参数

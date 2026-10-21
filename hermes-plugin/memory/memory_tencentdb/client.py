@@ -139,20 +139,37 @@ class MemoryTencentdbSdkClient:
             body["user_id"] = user_id
         return self._post("/capture", body)
 
-    def search_memories(self, query: str, limit: int = 5, type_filter: str = "", scene: str = "") -> Dict[str, Any]:
+    def search_memories(
+        self,
+        query: str,
+        limit: int = 5,
+        type_filter: str = "",
+        scene: str = "",
+        user_id: str = "",
+    ) -> Dict[str, Any]:
         """Search L1 structured memories."""
         body: Dict[str, Any] = {"query": query, "limit": limit}
         if type_filter:
             body["type"] = type_filter
         if scene:
             body["scene"] = scene
+        if user_id:
+            body["user_id"] = user_id
         return self._post("/search/memories", body)
 
-    def search_conversations(self, query: str, limit: int = 5, session_key: str = "") -> Dict[str, Any]:
+    def search_conversations(
+        self,
+        query: str,
+        limit: int = 5,
+        session_key: str = "",
+        user_id: str = "",
+    ) -> Dict[str, Any]:
         """Search L0 raw conversations."""
         body: Dict[str, Any] = {"query": query, "limit": limit}
         if session_key:
             body["session_key"] = session_key
+        if user_id:
+            body["user_id"] = user_id
         return self._post("/search/conversations", body)
 
     def end_session(self, session_key: str, user_id: str = "") -> Dict[str, Any]:

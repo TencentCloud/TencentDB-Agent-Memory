@@ -27,6 +27,7 @@
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
     "read-local-memory": "node ./bin/read-local-memory.mjs",
     "test": "vitest run",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "postinstall": "node scripts/postinstall.mjs"
