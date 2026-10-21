@@ -46,6 +46,80 @@ tags:
     description: Code repository indexing and structured code queries.
 
 paths:
+  /wiki/okf/export:
+    post:
+      tags: [LLM-Wiki]
+      summary: Export visible Wiki files as a byte-preserving native bundle
+      description: |
+        Requires a nonempty configured KNOWLEDGE_SERVICE_KEY and matching Bearer
+        credential even when existing read-only routes are unauthenticated.
+        Empty/missing key disables this operation with 503. The shared key is a
+        service-admin credential, not per-user or per-tenant authorization.
+        Resolves the exact service/team/Wiki tuple before filesystem reads.
+        Pending/processing Wikis return 409. No stored data/index is changed.
+        Visible regular-file bytes are encoded as base64; hidden names are skipped.
+        At most 1000 files and 10 MiB decoded content; request JSON at most 32 KiB.
+        The bundle is not converted or schema-preflighted. Coordinate writers and
+        use trusted ancestors/immutable snapshots for consistent export.
+      operationId: exportNativeOkfBundle
+      parameters:
+        - in: header
+          name: x-tdai-service-id
+          required: true
+          schema: {type: string, pattern: '^[A-Za-z0-9_-]+$'}
+        - in: header
+          name: Authorization
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [team_id, wiki_id]
+              properties:
+                team_id: {type: string, pattern: '^[A-Za-z0-9_-]+$'}
+                wiki_id: {type: string, pattern: '^[A-Za-z0-9_-]+$'}
+      responses:
+        '200':
+          description: Existing response envelope with sorted base64 file entries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [files]
+                        properties:
+                          files:
+                            type: array
+                            items:
+                              type: object
+                              required: [path, content, encoding]
+                              properties:
+                                path: {type: string}
+                                content: {type: string}
+                                encoding: {type: string, enum: [base64]}
+        '400':
+          description: Invalid identities, JSON, file paths or payload/file-count budget
+        '401':
+          description: Missing/wrong configured service credential
+        '404':
+          description: Missing Wiki or foreign service/team tuple
+        '409':
+          description: Processing or unsafe/unavailable filesystem state
+        '413':
+          description: Declared or actual request exceeds 32 KiB
+        '415':
+          description: Expected application/json
+        '500':
+          description: Generic internal stream/store/export fault
+        '503':
+          description: Full-file export disabled until service authentication is configured
   # ═══════════════════════════════════════════════
   # LLM-Wiki (15 endpoints)
   # ═══════════════════════════════════════════════
