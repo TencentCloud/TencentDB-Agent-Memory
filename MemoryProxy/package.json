@@ -9,6 +9,7 @@
     "dev": "node --import tsx/esm --watch src/index.ts",
     "dev:config": "node --import tsx/esm --watch src/index.ts --config config.yaml",
     "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },

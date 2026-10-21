@@ -5,6 +5,6 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     // e2e.test.ts is a standalone script invoked via `npx tsx`,
     // not a vitest suite (uses top-level `main()` + `process.exit`).
-    exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e.test.ts"],
+    exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e.test.ts", "**/*.integration.test.ts"],
   },
 });
