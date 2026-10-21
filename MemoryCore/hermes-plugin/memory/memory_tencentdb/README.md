@@ -297,3 +297,28 @@ aliases:
 - **Capture backlog warnings**: Gateway is slow or hung — `sync_turn` is
   tracking ≥ 4 in-flight threads. Inspect Gateway logs for stuck L1
   extractions or LLM timeouts.
+
+## HTTP security
+
+The client rejects HTTP redirects to prevent service credentials and conversation
+content from being forwarded to another endpoint. Configure the canonical gateway
+URL directly. HTTPS uses standard Python certificate/hostname verification.
+Error response bodies and application messages are returned to callers without
+being copied into the client's logs. Run the real HTTP regression suite from the
+repository root:
+
+```sh
+python3 -m unittest discover -s MemoryCore/hermes-plugin/tests -v
+```
+
+Redirect rejection includes same-origin redirects; configure the canonical URL
+rather than depending on an ingress redirect. Error status/code diagnostics remain,
+and exceptions/responses are still delivered to callers. This does not redact
+caller logs or a caller-supplied request path, prevent an operator from choosing
+a different base URL, or add per-user authorization. No new dependency is required.
+
+The client owns its standard urllib opener. Applications that previously replaced
+the global opener with `urllib.request.install_opener` should not expect that
+override to apply to this client. Standard environment proxy handling and Python
+HTTPS certificate verification remain in use; custom global opener integrations
+need an explicit compatibility review.
