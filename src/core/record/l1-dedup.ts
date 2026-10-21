@@ -307,7 +307,7 @@ const VALID_TYPES: MemoryType[] = ["persona", "episodic", "instruction"];
  *
  * Expected format: [{record_id, action, target_ids, merged_content, merged_type, merged_priority, merged_timestamps}]
  */
-function parseBatchResult(
+export function parseBatchResult(
   raw: string,
   memories: Array<ExtractedMemory & { record_id: string }>,
   logger?: Logger,
@@ -319,19 +319,9 @@ function parseBatchResult(
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     }
 
-    // Extract JSON array
-    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
-      logger?.warn?.(`${TAG} No JSON array found in conflict detection response`);
-      return fallbackStoreAll(memories);
-    }
-
-    // Sanitize control characters inside JSON string literals that LLM may produce
-    const sanitized = sanitizeJsonForParse(arrayMatch[0]);
-    const parsed = JSON.parse(sanitized) as unknown[];
-
-    if (!Array.isArray(parsed)) {
-      logger?.warn?.(`${TAG} Conflict detection response is not an array`);
+    const parsed = parseFirstDecisionPayload(cleaned);
+    if (!parsed) {
+      logger?.warn?.(`${TAG} No JSON decision payload found in conflict detection response`);
       return fallbackStoreAll(memories);
     }
 
@@ -384,6 +374,81 @@ function parseBatchResult(
     logger?.warn?.(`${TAG} Failed to parse conflict detection result: ${err instanceof Error ? err.message : String(err)}`);
     return fallbackStoreAll(memories);
   }
+}
+
+function parseFirstDecisionPayload(text: string): unknown[] | undefined {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch !== "[" && ch !== "{") continue;
+
+    const candidate = readBalancedJsonValue(text, i);
+    if (!candidate) continue;
+
+    try {
+      const parsed = JSON.parse(sanitizeJsonForParse(candidate));
+      const decisions = normalizeDecisionPayload(parsed);
+      if (decisions) return decisions;
+    } catch {
+      // Keep scanning: LLM prose often contains bracketed non-JSON hints.
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeDecisionPayload(parsed: unknown): unknown[] | undefined {
+  if (Array.isArray(parsed)) return parsed;
+  if (!parsed || typeof parsed !== "object") return undefined;
+
+  const obj = parsed as Record<string, unknown>;
+  for (const key of ["decisions", "results", "actions"]) {
+    if (Array.isArray(obj[key])) return obj[key];
+  }
+
+  return undefined;
+}
+
+function readBalancedJsonValue(text: string, start: number): string | undefined {
+  const opener = text[start];
+  const closer = opener === "[" ? "]" : opener === "{" ? "}" : undefined;
+  if (!closer) return undefined;
+
+  const stack: string[] = [closer];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start + 1; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "[" || ch === "{") {
+      stack.push(ch === "[" ? "]" : "}");
+      continue;
+    }
+
+    if (ch === "]" || ch === "}") {
+      if (stack[stack.length - 1] !== ch) return undefined;
+      stack.pop();
+      if (stack.length === 0) return text.slice(start, i + 1);
+    }
+  }
+
+  return undefined;
 }
 
 /**
