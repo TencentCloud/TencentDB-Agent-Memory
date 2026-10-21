@@ -48,7 +48,7 @@ if ! $DOCKER network inspect "$NETWORK" >/dev/null 2>&1; then
   $DOCKER network create "$NETWORK" >/dev/null
 fi
 
-# ── 存储后端：sqlite（默认）/ mongodb ─────────────────────────────────────
+# ── 存储后端：sqlite（默认）/ mongodb / qdrant ────────────────────────────
 # MEMORY_CORE_STORE_MODE=mongodb 时数据面走 MongoDB（L0/L1/profile/skill +
 # mongot 原生 BM25）。要求目标 Mongo 7.0+ 且带 mongot —— core 首次建连会拨测，
 # 无 mongot 直接 init 报错（FTS 是刚需，不静默降级）。
@@ -66,6 +66,9 @@ MONGODB_DATABASE="${MONGODB_DATABASE:-tdai_memory}"
 MONGO_LOCAL_CONTAINER="${MONGO_LOCAL_CONTAINER:-tdai-mongo-local}"
 MONGO_LOCAL_IMAGE="${MONGO_LOCAL_IMAGE:-mongodb/mongodb-atlas-local:8.3}"
 MONGO_ENV_ARGS=()
+QDRANT_LOCAL_CONTAINER="${QDRANT_LOCAL_CONTAINER:-tdai-qdrant-local}"
+QDRANT_LOCAL_IMAGE="${QDRANT_LOCAL_IMAGE:-qdrant/qdrant:v1.19.2}"
+QDRANT_ENV_ARGS=()
 
 if [[ "$MEMORY_CORE_METADATA_BACKEND" == "auto" ]]; then
   if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" ]]; then
@@ -112,6 +115,36 @@ fi
 if [[ "$MEMORY_CORE_STORE_MODE" == "mongodb" ]]; then
   MONGO_ENV_ARGS+=( -e "MONGODB_ENDPOINT=$MONGODB_ENDPOINT" -e "MONGODB_DATABASE=$MONGODB_DATABASE" )
   info "memory-core 数据面后端 = mongodb（endpoint=$MONGODB_ENDPOINT, db=${MONGODB_DATABASE}）"
+fi
+
+if [[ "$MEMORY_CORE_STORE_MODE" == "qdrant" ]]; then
+  if [[ -z "${QDRANT_URL:-}" ]]; then
+    info "未设 QDRANT_URL → 启动本地 qdrant（${QDRANT_LOCAL_IMAGE}）"
+    if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "$QDRANT_LOCAL_CONTAINER"; then
+      rm_container_if_exists "$QDRANT_LOCAL_CONTAINER"
+      $DOCKER run -d --name "$QDRANT_LOCAL_CONTAINER" \
+        --network "$NETWORK" \
+        --network-alias qdrant \
+        -e QDRANT__TELEMETRY_DISABLED=true \
+        -v qdrant-local-storage:/qdrant/storage \
+        "$QDRANT_LOCAL_IMAGE" >/dev/null
+    fi
+    info "等待 qdrant 就绪..."
+    qdrant_ready=0
+    for _ in $(seq 1 30); do
+      if $DOCKER logs "$QDRANT_LOCAL_CONTAINER" 2>&1 | grep "HTTP listening on" >/dev/null; then
+        qdrant_ready=1; break
+      fi
+      sleep 2
+    done
+    [[ "$qdrant_ready" == "1" ]] || die "qdrant 容器 60s 内未就绪，docker logs $QDRANT_LOCAL_CONTAINER 排查"
+    ok "qdrant 就绪（容器 ${QDRANT_LOCAL_CONTAINER}，网络内别名 qdrant）"
+    QDRANT_URL="http://qdrant:6333"
+  fi
+  QDRANT_ENV_ARGS+=( -e "QDRANT_URL=$QDRANT_URL" )
+  [[ -n "${QDRANT_API_KEY:-}" ]] && QDRANT_ENV_ARGS+=( -e "QDRANT_API_KEY=$QDRANT_API_KEY" )
+  [[ -n "${QDRANT_COLLECTION_PREFIX:-}" ]] && QDRANT_ENV_ARGS+=( -e "QDRANT_COLLECTION_PREFIX=$QDRANT_COLLECTION_PREFIX" )
+  info "memory-core 数据面后端 = qdrant（url=$QDRANT_URL, collection 前缀=${QDRANT_COLLECTION_PREFIX:-tdai}）"
 fi
 
 if [[ "$MEMORY_CORE_METADATA_BACKEND" == "mongodb" ]]; then
@@ -254,6 +287,7 @@ $DOCKER run -d --name "$CONTAINER" \
   -e STORE_MODE="$MEMORY_CORE_STORE_MODE" \
   ${JEV_ENV_ARGS[@]+"${JEV_ENV_ARGS[@]}"} \
   ${MONGO_ENV_ARGS[@]+"${MONGO_ENV_ARGS[@]}"} \
+  ${QDRANT_ENV_ARGS[@]+"${QDRANT_ENV_ARGS[@]}"} \
   "$MEMORY_CORE_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90

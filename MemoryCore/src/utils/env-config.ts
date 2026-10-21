@@ -122,6 +122,20 @@ export function readMongoEnvConfig(): MongoEnvConfig {
   };
 }
 
+export interface QdrantEnvConfig {
+  url: string;
+  apiKey: string;
+  collectionPrefix: string;
+}
+
+export function readQdrantEnvConfig(): QdrantEnvConfig {
+  return {
+    url: ENV.QDRANT_URL ?? "",
+    apiKey: ENV.QDRANT_API_KEY ?? "",
+    collectionPrefix: ENV.QDRANT_COLLECTION_PREFIX || "tdai",
+  };
+}
+
 /**
  * Optional COS credentials. Returns `null` if `COS_SECRET_ID` is unset
  * (the marker we use to mean "COS not configured for this deployment").

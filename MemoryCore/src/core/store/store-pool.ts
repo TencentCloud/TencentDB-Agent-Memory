@@ -20,7 +20,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import type { MemoryTdaiConfig } from "../../config.js";
 import type { IMemoryStore, StoreLogger } from "./types.js";
 import type { EmbeddingService } from "./embedding.js";
-import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
+import { NoopEmbeddingService } from "./embedding.js";
+import { createConfiguredEmbeddingService } from "./factory.js";
 import { VectorStore } from "./sqlite/memory-store.js";
 import { TcvdbMemoryStore } from "./tcvdb/memory-store.js";
 import { TcvdbSkillStore } from "./tcvdb/skill-store.js";
@@ -28,6 +29,11 @@ import { MongoMemoryStore } from "./mongodb/memory-store.js";
 import { MongoSkillStore } from "./mongodb/skill-store.js";
 import { getSharedMongoClientPool } from "./mongodb/client-pool.js";
 import type { MongoClientPool } from "./mongodb/client-pool.js";
+import { QdrantMemoryStore } from "./qdrant/memory-store.js";
+import { SqliteSkillStore } from "./sqlite/skill-store.js";
+import { openSkillDatabase } from "./sqlite/skill-db.js";
+import { readQdrantEnvConfig } from "../../utils/env-config.js";
+import type { DatabaseSync } from "node:sqlite";
 import { createBM25Encoder } from "./bm25-local.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
 import type { VdbConfig, MongoConfig } from "../instance-config-provider.js";
@@ -60,7 +66,7 @@ interface Logger {
   error: (message: string) => void;
 }
 
-export type StoreMode = "sqlite" | "tcvdb" | "mongodb";
+export type StoreMode = "sqlite" | "tcvdb" | "mongodb" | "qdrant";
 
 export interface KafkaMetricOptions {
   /** Kafka Broker 列表 (逗号分隔或数组) */
@@ -186,11 +192,13 @@ export class StorePool {
     // caller resolves, but the presence check is authoritative here.
     const backend: StoreMode = mongoConfig
       ? "mongodb"
-      : (this.mode === "tcvdb" && vdbConfig ? "tcvdb" : "sqlite");
+      : this.mode === "tcvdb" && vdbConfig ? "tcvdb"
+      : this.mode === "qdrant" ? "qdrant"
+      : "sqlite";
     const fingerprint =
       backend === "mongodb" && mongoConfig ? this.computeMongoFingerprint(mongoConfig)
       : backend === "tcvdb" && vdbConfig ? this.computeFingerprint(vdbConfig)
-      : `sqlite:${instanceId}`;
+      : `${backend}:${instanceId}`;
     const cached = this.pool.get(instanceId);
 
     // 命中且配置未变
@@ -214,6 +222,7 @@ export class StorePool {
     const pooledStore =
       backend === "mongodb" && mongoConfig ? this.createMongoStore(mongoConfig)
       : backend === "tcvdb" && vdbConfig ? this.createTcvdbStore(vdbConfig)
+      : backend === "qdrant" ? this.createQdrantStore(instanceId)
       : this.createSqliteStore(instanceId);
 
     this.pool.set(instanceId, {
@@ -225,6 +234,7 @@ export class StorePool {
     const storeDesc =
       backend === "mongodb" && mongoConfig ? `mongodb ${mongoConfig.endpoint} / ${mongoConfig.database}`
       : backend === "tcvdb" && vdbConfig ? `${vdbConfig.url} / ${vdbConfig.database}`
+      : backend === "qdrant" ? "qdrant"
       : `sqlite @ ${this.getSqlitePath(instanceId)}`;
     this.logger.info(
       `${TAG} Created ${backend} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
@@ -283,6 +293,12 @@ export class StorePool {
     // 等所有 pending close 完成 (含本次 + 之前 evict 留下的)
     await Promise.allSettled([...this.pendingCloses]);
 
+    for (const { db, closeTimer } of this.skillDbs.values()) {
+      clearTimeout(closeTimer);
+      db.close();
+    }
+    this.skillDbs.clear();
+
     // 关闭共享 MongoClient 连接池 (所有 store 已释放引用后再断连)
     if (this.mongoPool) {
       try {
@@ -312,6 +328,7 @@ export class StorePool {
       }
       this.skillStoreCache.delete(key);
       this.skillStoreAccessTimes.delete(key);
+      this.releaseSkillDb(instanceId);
       this.logger.info(`${TAG} Evicted skill store for ${instanceId} (cached: ${this.skillStoreCache.size})`);
     }
   }
@@ -363,6 +380,23 @@ export class StorePool {
       return mongoStore;
     }
 
+    if (!vdbConfig && this.mode === "qdrant") {
+      const dbPath = this.getSkillDbPath(instanceId);
+      let opened = this.skillDbs.get(dbPath);
+      if (!opened) {
+        const emb = this.memoryCfg.embedding;
+        opened = openSkillDatabase(dbPath, emb.enabled ? (emb.dimensions ?? 0) : 0, this.logger as StoreLogger);
+        this.skillDbs.set(dbPath, opened);
+      }
+      clearTimeout(opened.closeTimer);
+      opened.closeTimer = undefined;
+      const sqliteStore = new SqliteSkillStore({ db: opened.db, dimensions: opened.dimensions, logger: this.logger as StoreLogger });
+      sqliteStore.init();
+      this.skillStoreCache.set(key, sqliteStore);
+      this.skillStoreAccessTimes.set(key, Date.now());
+      return sqliteStore;
+    }
+
     if (!vdbConfig) {
       throw new Error(`${TAG} getSkillStore(${instanceId}) requires a vdbConfig (tcvdb) or mongoConfig (mongodb)`);
     }
@@ -385,6 +419,22 @@ export class StorePool {
   }
 
   private skillStoreCache = new Map<string, ISkillStore>();
+  private skillDbs = new Map<string, { db: DatabaseSync; dimensions: number; closeTimer?: ReturnType<typeof setTimeout> }>();
+
+  private getSkillDbPath(instanceId: string): string {
+    return path.join(path.dirname(this.getSqlitePath(instanceId)), "skills.db");
+  }
+
+  private releaseSkillDb(instanceId: string): void {
+    const dbPath = this.getSkillDbPath(instanceId);
+    const entry = this.skillDbs.get(dbPath);
+    if (!entry || entry.closeTimer) return;
+    entry.closeTimer = setTimeout(() => {
+      this.skillDbs.delete(dbPath);
+      entry.db.close();
+    }, this.graceCloseDelayMs);
+    entry.closeTimer.unref?.();
+  }
 
   // ════════════════════════════════════════════════════════
   // Internal — TCVDB Store
@@ -448,25 +498,32 @@ export class StorePool {
     return `mongodb:${mongoConfig.endpoint}|${mongoConfig.database}|${mongoConfig.user}`;
   }
 
+  private createQdrantStore(instanceId: string): PooledStore {
+    const qdrant = readQdrantEnvConfig();
+    const embeddingService = createConfiguredEmbeddingService(this.memoryCfg, this.logger as StoreLogger);
+    const store = new QdrantMemoryStore({
+      url: qdrant.url,
+      apiKey: qdrant.apiKey,
+      collectionPrefix: qdrant.collectionPrefix,
+      tenant: instanceId,
+      embedding: embeddingService,
+      queryEmbeddingTimeoutMs: this.memoryCfg.embedding.recallTimeoutMs ?? this.memoryCfg.embedding.timeoutMs,
+      logger: this.logger as StoreLogger,
+    });
+    return {
+      store,
+      embedding: (embeddingService ?? new NoopEmbeddingService()) as unknown as EmbeddingService,
+    };
+  }
+
   // ════════════════════════════════════════════════════════
   // Internal — SQLite Store
   // ════════════════════════════════════════════════════════
 
   private createSqliteStore(instanceId: string): PooledStore {
     // Embedding service (远端 API, 如 OpenAI text-embedding)
-    let embeddingService: EmbeddingService | undefined;
+    const embeddingService = createConfiguredEmbeddingService(this.memoryCfg, this.logger as StoreLogger);
     const embCfg = this.memoryCfg.embedding;
-    if (embCfg.enabled && embCfg.provider !== "local" && embCfg.provider !== "none" && embCfg.apiKey) {
-      embeddingService = createEmbeddingService({
-        provider: embCfg.provider,
-        baseUrl: embCfg.baseUrl,
-        apiKey: embCfg.apiKey,
-        model: embCfg.model,
-        dimensions: embCfg.dimensions,
-        maxInputChars: embCfg.maxInputChars,
-      }, this.logger as StoreLogger);
-    }
-
     const dims = embCfg.dimensions ?? 0;
     const dbPath = this.getSqlitePath(instanceId);
     // 确保数据库目录存在（对于非 default instance）
@@ -575,6 +632,7 @@ export class StorePool {
       }
       this.skillStoreCache.delete(oldestKey);
       this.skillStoreAccessTimes.delete(oldestKey);
+      this.releaseSkillDb(oldestKey.slice("skill:".length));
       this.logger.debug?.(`${TAG} LRU evicted skill store: ${oldestKey}`);
     }
   }
