@@ -13,8 +13,9 @@ import os
 import shlex
 import signal
 import subprocess
+import threading
 import time
-from typing import IO, Optional
+from typing import IO, Optional, Set
 
 from .client import MemoryTencentdbSdkClient
 
@@ -29,8 +30,12 @@ HEALTH_CHECK_INTERVAL = 0.5  # seconds between checks
 HEALTH_CHECK_MAX_WAIT = 30   # max seconds to wait for Gateway to start
 HEALTH_CHECK_RETRIES = 3     # retries for is_running check
 
-# Log file rotation parameters
+# Log file guard parameters
 LOG_TAIL_BYTES_ON_CRASH = 2048  # bytes of stderr log to surface on startup crash
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024  # hard target per active stdout/stderr file
+LOG_FILE_RETAIN_BYTES = 1 * 1024 * 1024  # diagnostic tail preserved as <path>.1
+LOG_GUARD_INTERVAL_SECS = 0.25
+LOG_GUARD_SHUTDOWN_TIMEOUT_SECS = 2.0
 
 
 class GatewaySupervisor:
@@ -76,7 +81,14 @@ class GatewaySupervisor:
         # Gateway's event loop would block on write() after ~64 KB of logs).
         self._stdout_log: Optional[IO[bytes]] = None
         self._stderr_log: Optional[IO[bytes]] = None
+        self._stdout_log_path: Optional[str] = None
         self._stderr_log_path: Optional[str] = None
+        self._log_guard_thread: Optional[threading.Thread] = None
+        self._log_guard_stop = threading.Event()
+        # A persistent filesystem failure must not emit a warning every 250ms.
+        # Clear a path from this set after a successful guard pass so a later,
+        # distinct failure is still visible.
+        self._log_guard_failed_paths: Set[str] = set()
 
         # Resolve Gateway command
         # Priority: explicit arg > MEMORY_TENCENTDB_GATEWAY_CMD env
@@ -212,10 +224,17 @@ class GatewaySupervisor:
                 # Append mode: preserve previous runs for postmortem.
                 self._stdout_log = open(stdout_path, "ab", buffering=0)
                 self._stderr_log = open(stderr_path, "ab", buffering=0)
+                self._stdout_log_path = stdout_path
                 self._stderr_log_path = stderr_path
+                # Bound files left by previous runs before the child starts.
+                # The same in-place truncation method is then used at runtime,
+                # preserving the inode referenced by the inherited handles.
+                self._enforce_log_limits()
                 stdout_target: object = self._stdout_log
                 stderr_target: object = self._stderr_log
             else:
+                self._stdout_log_path = None
+                self._stderr_log_path = None
                 stdout_target = subprocess.DEVNULL
                 stderr_target = subprocess.DEVNULL
 
@@ -239,6 +258,7 @@ class GatewaySupervisor:
                     stderr=stderr_target,
                     start_new_session=True,  # Detach from parent process group
                 )
+            self._start_log_guard()
         except Exception as e:
             logger.error("Failed to start memory-tencentdb Gateway: %s", e)
             self._close_log_handles()
@@ -270,7 +290,8 @@ class GatewaySupervisor:
         return os.path.join(os.getcwd(), ".memory-tencentdb-logs")
 
     def _close_log_handles(self) -> None:
-        """Close log file handles; safe to call multiple times."""
+        """Stop the log guard, then close handles; safe to call repeatedly."""
+        self._stop_log_guard()
         for attr in ("_stdout_log", "_stderr_log"):
             handle: Optional[IO[bytes]] = getattr(self, attr, None)
             if handle is not None:
@@ -279,6 +300,106 @@ class GatewaySupervisor:
                 except Exception:
                     pass
                 setattr(self, attr, None)
+
+    def _start_log_guard(self) -> None:
+        """Start the runtime log-size guard when file logging is active."""
+        if self._log_guard_thread is not None and self._log_guard_thread.is_alive():
+            return
+        if not any((self._stdout_log_path, self._stderr_log_path)):
+            return
+
+        self._log_guard_stop.clear()
+        thread = threading.Thread(
+            target=self._log_guard_loop,
+            name="memory-tencentdb-log-guard",
+            daemon=True,
+        )
+        self._log_guard_thread = thread
+        thread.start()
+
+    def _stop_log_guard(self) -> None:
+        """Signal and join the log guard before its file handles are closed."""
+        self._log_guard_stop.set()
+        thread = self._log_guard_thread
+        self._log_guard_thread = None
+        if thread is None or thread is threading.current_thread():
+            return
+
+        thread.join(timeout=LOG_GUARD_SHUTDOWN_TIMEOUT_SECS)
+        if thread.is_alive():
+            logger.warning(
+                "memory-tencentdb Gateway log guard did not exit within %.1fs; "
+                "continuing shutdown.",
+                LOG_GUARD_SHUTDOWN_TIMEOUT_SECS,
+            )
+
+    def _log_guard_loop(self) -> None:
+        """Periodically cap active Gateway logs without replacing their inode."""
+        while not self._log_guard_stop.wait(timeout=LOG_GUARD_INTERVAL_SECS):
+            self._enforce_log_limits()
+
+    def _enforce_log_limits(self) -> None:
+        """Preserve a bounded tail and truncate oversized active logs in place."""
+        pairs = (
+            (self._stdout_log_path, self._stdout_log),
+            (self._stderr_log_path, self._stderr_log),
+        )
+        for path, handle in pairs:
+            if not path or handle is None or handle.closed:
+                continue
+            try:
+                self._enforce_log_limit(path, handle)
+                self._log_guard_failed_paths.discard(path)
+            except Exception as e:
+                if path not in self._log_guard_failed_paths:
+                    logger.warning(
+                        "memory-tencentdb Gateway: failed to bound log file %s (%s); "
+                        "child logging remains active.",
+                        path,
+                        e,
+                    )
+                    self._log_guard_failed_paths.add(path)
+
+    @staticmethod
+    def _enforce_log_limit(path: str, handle: IO[bytes]) -> None:
+        """Rotate one oversized file while keeping ``handle`` and its inode live."""
+        size = os.path.getsize(path)
+        if size <= LOG_FILE_MAX_BYTES:
+            return
+
+        retain_bytes = min(LOG_FILE_RETAIN_BYTES, size)
+        with open(path, "rb") as source:
+            if retain_bytes < size:
+                source.seek(-retain_bytes, os.SEEK_END)
+            tail = source.read(retain_bytes)
+
+        rotated_path = f"{path}.1"
+        temporary_path = (
+            f"{rotated_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        try:
+            with open(temporary_path, "wb") as rotated:
+                rotated.write(tail)
+            os.replace(temporary_path, rotated_path)
+        finally:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+
+        # Truncate through the parent's existing handle. The child inherited
+        # the same open file description, so it keeps writing to this inode
+        # after truncation on both POSIX and Windows.
+        handle.flush()
+        handle.truncate(0)
+        logger.info(
+            "memory-tencentdb Gateway: bounded oversized log %s "
+            "(size=%d, retained=%d at %s)",
+            path,
+            size,
+            retain_bytes,
+            rotated_path,
+        )
 
     def _tail_stderr_log(self, max_bytes: int = LOG_TAIL_BYTES_ON_CRASH) -> str:
         """Return the last `max_bytes` of the stderr log for crash diagnostics."""
@@ -301,6 +422,9 @@ class GatewaySupervisor:
             # Check if process died
             if self._process and self._process.poll() is not None:
                 rc = self._process.returncode
+                # Freeze log rotation before reading the crash tail so the
+                # diagnostic does not race a concurrent truncate.
+                self._stop_log_guard()
                 # stderr was redirected to a log file; tail it for diagnostics.
                 stderr = self._tail_stderr_log()[:500]
                 logger.error(
@@ -333,6 +457,7 @@ class GatewaySupervisor:
     def shutdown(self) -> None:
         """Shut down the managed Gateway process (if we started it)."""
         if self._process is None:
+            self._close_log_handles()
             return
 
         logger.info("Shutting down memory-tencentdb Gateway...")
