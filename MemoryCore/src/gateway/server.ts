@@ -20,7 +20,7 @@ import { URL } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import zlib from "node:zlib";
 import dayjs from "dayjs";
-import { TdaiCore } from "../core/tdai-core.js";
+import { L2ExtractionError, TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig, parseBrokers } from "./config.js";
 import type { GatewayConfig, GatewayConfigOverrides } from "./config.js";
@@ -3120,7 +3120,18 @@ export class TdaiGateway {
             sessionId: task.sessionId,
           },
           resolveCheckpointLock(instanceId),
-        );
+        ).catch((err: unknown) => {
+          if (err instanceof L2ExtractionError && gateway.quotaManager) {
+            const reportCredit = gateway.reportedCreditFor(err.creditUsed, "L2");
+            if (reportCredit > 0) {
+              // Report this attempt's completed groups once, without masking its failure.
+              try {
+                gateway.quotaManager.reportUsage(instanceId, 0, reportCredit, "L2").catch(() => {});
+              } catch { /* preserve the extraction error */ }
+            }
+          }
+          throw err;
+        });
         task.data = {
           ...task.data,
           l2TaskId: task.id,
