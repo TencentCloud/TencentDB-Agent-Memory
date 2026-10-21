@@ -9,8 +9,8 @@
  * - `encodeQueries(texts)` — encode queries for search (IDF-based)
  */
 
-import { BM25Encoder } from "@tencentdb-agent-memory/tcvdb-text";
-import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
+import { BM25Encoder } from "#tcvdb-text";
+import type { SparseVector } from "#tcvdb-text";
 import type { Logger } from "../types.js";
 
 export type { SparseVector };
