@@ -77,6 +77,33 @@ export interface PipelineTriggerConfig {
   sessionActiveWindowHours: number;
 }
 
+/**
+ * Prompt-cache stability settings.
+ *
+ * OpenAI-compatible providers (DeepSeek, MiMo, Qwen, GLM, …) cache by **prefix
+ * matching**: any byte change in the system prompt or in an earlier message
+ * invalidates everything after it.  Memory injection is inherently dynamic, so
+ * these knobs bound how often it is allowed to move the prefix.
+ */
+export interface RecallCacheStabilityConfig {
+  /** Master switch (default: true). */
+  enabled: boolean;
+  /** Freeze `appendSystemContext` per session so pipeline writes don't bust the cache (default: true). */
+  freezeSystemContext: boolean;
+  /** Minimum wall-clock interval (ms) before a frozen system context may refresh (default: 1800000 = 30min). */
+  systemContextRefreshMs: number;
+  /** Minimum number of recall turns before a frozen system context may refresh (default: 20). */
+  systemContextRefreshTurns: number;
+  /** Skip L1 memories already injected earlier in the same session (default: true). */
+  dedupMemories: boolean;
+  /** Upper bound on remembered memory ids per session, FIFO eviction (default: 300). */
+  dedupMaxTracked: number;
+  /** Drop per-session cache state after this much inactivity in ms (default: 43200000 = 12h). */
+  sessionTtlMs: number;
+  /** Render scene navigation with heat tiers + deterministic sort instead of raw counters (default: true). */
+  stabilizeSceneNavigation: boolean;
+}
+
 /** Recall settings — controls memory retrieval for context injection. */
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
@@ -93,6 +120,8 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Prompt-cache stability policy for context injection. */
+  cacheStability: RecallCacheStabilityConfig;
 }
 
 /** Embedding service configuration for vector search. */
@@ -364,6 +393,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Recall ---
   const recallGroup = obj(c, "recall");
+  const cacheStabilityGroup = obj(recallGroup, "cacheStability");
 
   // --- Embedding ---
   const embeddingGroup = obj(c, "embedding");
@@ -535,6 +565,17 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      cacheStability: {
+        enabled: bool(cacheStabilityGroup, "enabled") ?? true,
+        freezeSystemContext: bool(cacheStabilityGroup, "freezeSystemContext") ?? true,
+        // Clamped to >= 0 so a negative value cannot make the gate always-open.
+        systemContextRefreshMs: clampMin(num(cacheStabilityGroup, "systemContextRefreshMs"), 0) ?? 30 * 60 * 1000,
+        systemContextRefreshTurns: clampMin(num(cacheStabilityGroup, "systemContextRefreshTurns"), 0) ?? 20,
+        dedupMemories: bool(cacheStabilityGroup, "dedupMemories") ?? true,
+        dedupMaxTracked: clampMin(num(cacheStabilityGroup, "dedupMaxTracked"), 1) ?? 300,
+        sessionTtlMs: clampMin(num(cacheStabilityGroup, "sessionTtlMs"), 60_000) ?? 12 * 60 * 60 * 1000,
+        stabilizeSceneNavigation: bool(cacheStabilityGroup, "stabilizeSceneNavigation") ?? true,
+      },
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -631,6 +672,17 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
   const v = src[key];
   if (!Array.isArray(v)) return undefined;
   return v.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+/**
+ * Reject out-of-range numeric config so the caller's `?? default` kicks in.
+ *
+ * Used by the cache-stability knobs: a negative refresh gate would make the
+ * "may I refresh?" check always true and silently disable the protection.
+ */
+function clampMin(value: number | undefined, min: number): number | undefined {
+  if (value == null || !Number.isFinite(value) || value < min) return undefined;
+  return value;
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];

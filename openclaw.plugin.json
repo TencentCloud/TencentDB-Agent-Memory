@@ -79,7 +79,21 @@
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "cacheStability": {
+            "type": "object",
+            "description": "Prompt 前缀缓存稳定性策略。DeepSeek/MiMo 等 OpenAI 兼容供应商按前缀匹配命中缓存，任何字节变动都会让其后全部失效；本组配置用于约束记忆注入对前缀的扰动频率",
+            "properties": {
+              "enabled": { "type": "boolean", "default": true, "description": "是否启用前缀缓存稳定化（关闭后回到旧的每轮全量注入行为）" },
+              "freezeSystemContext": { "type": "boolean", "default": true, "description": "会话级冻结 appendSystemContext（persona / 场景导航 / 工具指南），避免后台 L2/L3 流水线重写系统提示词尾部导致整段缓存失效" },
+              "systemContextRefreshMs": { "type": "number", "default": 1800000, "description": "冻结的系统上下文允许刷新的最小时间间隔（毫秒），默认 30 分钟" },
+              "systemContextRefreshTurns": { "type": "number", "default": 20, "description": "冻结的系统上下文允许刷新的最小轮次间隔；需与时间间隔同时满足才刷新" },
+              "dedupMemories": { "type": "boolean", "default": true, "description": "跳过本会话已注入过的 L1 记忆（它仍在上下文窗口内，重复注入只会白白打断前缀）" },
+              "dedupMaxTracked": { "type": "number", "default": 300, "description": "单会话最多记住多少条已注入记忆 id，超出后 FIFO 淘汰" },
+              "sessionTtlMs": { "type": "number", "default": 43200000, "description": "会话缓存状态的空闲回收时间（毫秒），默认 12 小时" },
+              "stabilizeSceneNavigation": { "type": "boolean", "default": true, "description": "场景导航按热度分档 + 文件名确定性排序渲染，不再输出原始热度计数与更新时间，避免每次场景命中都改写系统提示词" }
+            }
+          }
         }
       },
       "embedding": {
