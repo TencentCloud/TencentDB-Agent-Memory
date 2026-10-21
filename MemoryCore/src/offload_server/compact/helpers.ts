@@ -98,6 +98,9 @@ export function extractToolResultId(msg: Message): string | null {
       if (block?.type === "tool_result" && block.tool_use_id) return block.tool_use_id;
     }
   }
+  if (msg.role === "toolResult" && typeof msg.toolCallId === "string" && msg.toolCallId.length > 0) {
+    return msg.toolCallId;
+  }
   return null;
 }
 
@@ -108,6 +111,7 @@ export function extractToolResultId(msg: Message): string | null {
  */
 export function isToolResultMessage(msg: Message): boolean {
   if (msg.role === "tool") return true;
+  if (msg.role === "toolResult") return true;
   if (msg.type === "tool_result") return true;
   const innerRole = msg.message?.role ?? msg.type;
   if (innerRole === "toolResult" || innerRole === "tool_result") return true;
