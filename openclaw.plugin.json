@@ -79,7 +79,17 @@
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "taskSelector": {
+            "type": "object",
+            "description": "可选的任务感知 LLM 记忆选择器，仅用于自动召回注入",
+            "properties": {
+              "enabled": { "type": "boolean", "default": false, "description": "是否在检索后使用 LLM 按当前任务筛选记忆" },
+              "candidateMultiplier": { "type": "number", "default": 3, "minimum": 1, "maximum": 10, "description": "送入选择器的候选数倍数（相对于 maxResults，最多 100 条）" },
+              "timeoutMs": { "type": "number", "default": 3000, "minimum": 1, "description": "选择器 LLM 调用超时（毫秒）" },
+              "model": { "type": "string", "description": "可选的选择器模型，格式为 provider/model；未设置时使用宿主默认模型" }
+            }
+          }
         }
       },
       "embedding": {

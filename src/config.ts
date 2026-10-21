@@ -77,6 +77,18 @@ export interface PipelineTriggerConfig {
   sessionActiveWindowHours: number;
 }
 
+/** Optional LLM selector applied to auto-recall candidates after retrieval. */
+export interface TaskSelectorConfig {
+  /** Enable task-aware selection (default: false). */
+  enabled: boolean;
+  /** Retrieve this multiple of recall.maxResults before selection (default: 3). */
+  candidateMultiplier: number;
+  /** Selector LLM timeout in milliseconds (default: 3000). */
+  timeoutMs: number;
+  /** Optional selector model, format: "provider/model". */
+  model?: string;
+}
+
 /** Recall settings — controls memory retrieval for context injection. */
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
@@ -93,6 +105,8 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Optional task-aware LLM selection for auto-recall only. */
+  taskSelector: TaskSelectorConfig;
 }
 
 /** Embedding service configuration for vector search. */
@@ -364,6 +378,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Recall ---
   const recallGroup = obj(c, "recall");
+  const taskSelectorGroup = obj(recallGroup, "taskSelector");
 
   // --- Embedding ---
   const embeddingGroup = obj(c, "embedding");
@@ -535,6 +550,12 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      taskSelector: {
+        enabled: bool(taskSelectorGroup, "enabled") ?? false,
+        candidateMultiplier: num(taskSelectorGroup, "candidateMultiplier") ?? 3,
+        timeoutMs: num(taskSelectorGroup, "timeoutMs") ?? 3000,
+        model: str(taskSelectorGroup, "model"),
+      },
     },
     embedding: {
       enabled: embeddingEnabled,
