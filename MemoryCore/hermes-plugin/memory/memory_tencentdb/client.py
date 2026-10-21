@@ -154,6 +154,36 @@ class MemoryTencentdbSdkClient:
             body["session_id"] = session_id
         return self._post("/v3/conversation/search", body)
 
+    def write_explicit_memory(
+        self,
+        content: str,
+        *,
+        target: str = "memory",
+        action: str = "add",
+        session_id: str = "",
+        team_id: str = "default",
+        agent_id: str = "default",
+        user_id: str = "default",
+    ) -> Dict[str, Any]:
+        """Mirror a host-native durable-memory write directly into L1.
+
+        (#417) Hermes built-in ``memory(action="add", ...)`` writes are mirrored
+        here so they become retrievable via memory search, instead of being
+        swallowed by the provider. Stored on the v3 data plane so tenancy
+        isolation applies.
+        """
+        body: Dict[str, Any] = {
+            "team_id": team_id,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "action": action,
+            "target": target,
+            "content": content,
+        }
+        if session_id:
+            body["session_id"] = session_id
+        return self._post("/v3/memories/explicit", body)
+
     # ── v3: atomic (L1) ─────────────────────────────────────────────────────
 
     def atomic_search(
