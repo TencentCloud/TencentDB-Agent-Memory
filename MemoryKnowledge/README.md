@@ -94,6 +94,55 @@ pnpm dev:mcp      # MCP stdio（另开终端；需 HTTP 已起）
 pnpm typecheck
 pnpm test
 pnpm build        # tsdown → dist/
+pnpm wiki-sync    # 把 Wiki 投影到本地 Git 仓库（见下节）
+```
+
+## Wiki ⇄ 本地 Git 仓库（`knowledge-wiki-sync`）
+
+Wiki 是活的那一份，checkout 是它的工作副本。每次运行把**两边都与上次同步的状态**比较，谁变了就应用谁（`page/write` / `page/rm` 反向写回 Wiki）：
+
+| 变化 | 结果 |
+| --- | --- |
+| 只有 Wiki 变了 | 写入 checkout |
+| 只有（已提交的）git 变了 | 写入 Wiki |
+| 两边都变了、内容不同 | **冲突**：两边都不写，退出码 2 |
+| 两边都变了、内容相同 | 已收敛，无事发生 |
+| 两边都没变 | 无事发生 |
+
+```bash
+pnpm build                                       # 命令读 dist/
+export KNOWLEDGE_API_URL=http://127.0.0.1:8421
+export KNOWLEDGE_SERVICE_ID=<service_id>        # 即 x-tdai-service-id
+export KNOWLEDGE_API_TOKEN=<bearer>             # 可选
+pnpm wiki-sync -- --wiki-id wiki-xxxxxxxx --repo /path/to/checkout [--push]
+```
+
+三条底线：
+
+- **只认提交。** git 侧取的是**已提交的树**，不取工作区。未提交的改动只作为 drift 报告，不进 Wiki —— 半成品编辑进不去，未提交的删除也删不掉页面。
+- **冲突即整体中止。** 半个合并比不前进更糟；不静默丢弃任何一边，是唯一安全的结论。要强制选边用 `--on-conflict=prefer-git|prefer-wiki`。
+- **删除是对称的**，且逐条按名打日志 —— 这是唯一无法靠重读恢复的操作。
+
+| 行为 | 说明 |
+| --- | --- |
+| 路径 | 与 API ref 命名空间 1:1 —— `wiki/products/x/x.md` 原样落到仓库 |
+| 内容 | 每次运行结束后两边逐字节相同（服务写入会注入 `locked: true`，所以写回后重新读取再落盘） |
+| 边界 | `media/` 与结构性文件 `schema.md`/`purpose.md` 永不写入、永不删除 |
+| 首次运行 | 以 Wiki 为准重建 checkout；checkout 里的既有内容**不作为输入** |
+| 安全 | 任一页读不到即整体中止、不落盘；页面列表为空则拒绝执行（除非 `--allow-empty`） |
+| 状态 | 存于 `<git-dir>/wiki-sync-state.json`（每 checkout 一份，从不入库）：上次同步的 commit + 每页内容哈希 |
+
+其他开关：`--dry-run`（只报计划）、`--no-commit`（只写树，不保存状态）、`--api-url` / `--service-id` / `--token`。定时（cron）跑即可；两边都不变时不会产生提交。
+
+部署两点（两者都是实测踩到的）：
+
+- **服务启用了鉴权时**（`KNOWLEDGE_SERVICE_KEY` 非空），写端点 `/wiki/page/write`、`/wiki/page/rm` 需要 `Bearer` —— 把该 key 用 `--token`（或 `KNOWLEDGE_API_TOKEN`）传入；只读端点（`page/ls`、`page/read`、`wiki/get`）仍在白名单里，无需鉴权。
+- **git 提交需要身份**：目标 checkout 必须有 `user.name` / `user.email`（用仓库级或全局配置），否则第一次提交会失败。
+
+合并镜像（`deploy/panel-knowledge-combined`）会把 `knowledge/bin/` 一并打进 runtime，因此也可在容器内直接跑：
+
+```bash
+docker exec tdai-memory-hub node /app/knowledge/bin/wiki-sync.mjs --help
 ```
 
 ## 可选：ClickHouse 工具调用埋点
