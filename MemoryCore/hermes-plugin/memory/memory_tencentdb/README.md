@@ -208,6 +208,7 @@ node --import tsx src/gateway/server.ts
 | `MEMORY_TENCENTDB_GATEWAY_PORT`   | `8420`              | Gateway port (must be 1..65535; invalid values fall back) |
 | `MEMORY_TENCENTDB_GATEWAY_CMD`    | —                   | If set, the provider auto-starts the Gateway with this command. If unset, the provider auto-discovers `src/gateway/server.ts` next to the checkout or under `$HOME` (see Option A above) |
 | `MEMORY_TENCENTDB_LOG_DIR`        | `~/.hermes/logs/memory_tencentdb` | Where the supervisor writes `gateway.stdout.log` / `gateway.stderr.log` |
+| `MEMORY_TENCENTDB_AGENT_ID`       | `default`           | v3 agent id (`agt-...` from the Panel) to store memories under. Hermes only sends its profile name, which is not used as an id; set this in each profile's `.env` (`~/.hermes/profiles/<name>/.env`) to give that profile its own memory |
 
 ### Gateway data directory (owned by the Gateway, not this provider)
 
