@@ -14,11 +14,36 @@
 
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
+/** OKF 0.2 source objects; strings remain readable for legacy Wiki pages. */
+export interface OkfSource {
+  resource: string;
+  id?: string;
+  title?: string;
+  author?: string;
+  usage_count?: number;
+  last_modified?: string;
+  /** Exact raw-source key used by TencentDB; never infer deletion from a URL basename. */
+  tdai_raw_source?: string;
+  [key: string]: unknown;
+}
+export type SourceEntry = string | OkfSource;
+export interface ActorEvent { by: string; at?: string; [key: string]: unknown }
+
 export interface PageFrontmatter {
   type: string;
   title?: string;
   description?: string;
-  sources?: string[];
+  sources?: SourceEntry[];
+  resource?: string;
+  generated?: ActorEvent;
+  verified?: ActorEvent | ActorEvent[];
+  status?: string;
+  stale_after?: string;
+  runtime?: string;
+  parameters?: Array<Record<string, unknown>>;
+  computation?: string;
+  executor?: Record<string, unknown>;
+  attester?: Record<string, unknown>;
   tags?: string[];
   timestamp?: string;
   locked?: boolean;
@@ -33,7 +58,7 @@ export interface ParsedPage {
   hasFrontmatter: boolean;
 }
 
-const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
 /**
  * 拆分页内容为 frontmatter + 正文。无 frontmatter 时返回 `{type:"other"}` 占位。
@@ -53,7 +78,7 @@ export function parseFrontmatter(content: string): ParsedPage {
   } catch {
     return { frontmatter: { type: "other" }, body, hasFrontmatter: false };
   }
-  if (!parsed || typeof parsed !== "object") {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { frontmatter: { type: "other" }, body, hasFrontmatter: false };
   }
   const fm = parsed as Record<string, unknown>;
@@ -65,6 +90,12 @@ export function parseFrontmatter(content: string): ParsedPage {
 export function isLocked(content: string): boolean {
   const { frontmatter } = parseFrontmatter(content);
   return frontmatter.locked === true;
+}
+
+export function sourceEntries(value: unknown): SourceEntry[] {
+  return Array.isArray(value) ? value.filter((s): s is SourceEntry =>
+    typeof s === "string" || (s !== null && typeof s === "object" &&
+      !Array.isArray(s) && typeof s.resource === "string")) : [];
 }
 
 /** 读取页声明的 sources 列表（raw/rm 级联依赖）。 */
@@ -83,8 +114,8 @@ export function readSources(content: string): string[] {
  * - 字段顺序固定（type→title→description→sources→tags→timestamp→其它），可读性更稳。
  */
 export function buildPage(frontmatter: PageFrontmatter, body: string): string {
-  const fm: Record<string, unknown> = {};
-  fm.type = (frontmatter.type ?? "other").toString();
+  const fm: Record<string, unknown> = Object.create(null);
+  fm.type = typeof frontmatter.type === "string" && frontmatter.type.trim() ? frontmatter.type : "other";
   if (frontmatter.title != null) fm.title = frontmatter.title;
   if (frontmatter.description != null) fm.description = frontmatter.description;
   if (frontmatter.sources != null) fm.sources = frontmatter.sources;
@@ -93,7 +124,7 @@ export function buildPage(frontmatter: PageFrontmatter, body: string): string {
   // 透传其它自定义字段（排除 locked / 已处理字段）
   for (const [k, v] of Object.entries(frontmatter)) {
     if (["type", "title", "description", "sources", "tags", "timestamp", "locked"].includes(k)) continue;
-    if (v != null) fm[k] = v;
+    if (v !== undefined) fm[k] = v;
   }
 
   const yamlText = stringifyYaml(fm).trimEnd();
