@@ -452,6 +452,16 @@ function mapL1Row(row: Record<string, unknown>): Record<string, unknown> {
     metadata = {}
   }
 
+  let sourceMessageIds: string[] = []
+  try {
+    const parsed: unknown = JSON.parse(String(row.source_message_ids_json ?? "[]"))
+    if (Array.isArray(parsed)) {
+      sourceMessageIds = [...new Set(parsed.filter((id): id is string => typeof id === "string" && id.length > 0))]
+    }
+  } catch {
+    // Legacy or malformed rows have no usable provenance.
+  }
+
   const timestamps = [
     ...(new Set(
       [row.timestamp_str, row.timestamp_start, row.timestamp_end]
@@ -465,7 +475,7 @@ function mapL1Row(row: Record<string, unknown>): Record<string, unknown> {
     type: row.type,
     priority: row.priority,
     scene_name: row.scene_name,
-    source_message_ids: [],
+    source_message_ids: sourceMessageIds,
     metadata,
     timestamps,
     createdAt: row.created_time || "",
