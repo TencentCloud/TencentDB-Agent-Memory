@@ -67,6 +67,11 @@ export function normalizeSceneFilename(name: string): string {
   return (safe || "scene") + ".md";
 }
 
+/** Shared case-insensitive Markdown predicate for all scene-block consumers. */
+export function isSceneMarkdownFilename(name: string): boolean {
+  return name.toLowerCase().endsWith(".md");
+}
+
 /**
  * Return whether a filename already matches its normalized form.
  * Faster than computing the normalized form when callers only need a yes/no.
@@ -148,7 +153,7 @@ export async function normalizeSceneFilenames(
 
   let entries: string[];
   try {
-    entries = (await fs.readdir(blocksDir)).filter((f) => f.endsWith(".md"));
+    entries = (await fs.readdir(blocksDir)).filter(isSceneMarkdownFilename);
   } catch {
     return result;
   }
