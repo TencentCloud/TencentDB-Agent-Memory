@@ -105,5 +105,8 @@ function isRetryable(err: unknown): boolean {
   const m = msg.match(/HTTP (\d{3})/);
   if (!m) return true; // 无状态码信息 → 保守 retry
   const code = Number(m[1]);
+  if (code === 409) {
+    return /concurrent[\s\S]*conflict|conflict[\s\S]*retry/i.test(msg);
+  }
   return code >= 500 || code === 408 || code === 429;
 }
