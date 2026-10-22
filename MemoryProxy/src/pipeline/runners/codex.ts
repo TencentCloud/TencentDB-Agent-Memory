@@ -232,11 +232,11 @@ export function detectDefaultModeGate(input: unknown): boolean {
 // ── Asset injection (exported for unit tests) ────────────────────────────────
 
 /**
- * Inject `<tdai_injections>` wrapper into codex body.input[0].content[].
+ * Inject `<tdai_injections>` into the stable Responses API system prompt field.
  *
- * Appends the injection block to the developer message (input[0]) content.
- * Defensive: if input[0] is not a message with an array content, returns
- * the body unchanged.
+ * `input[0]` is not guaranteed to be a developer message during tool loops.
+ * Writing to top-level `instructions` keeps the assets in the system-level
+ * context and preserves any instructions supplied by the caller.
  *
  * Returns a shallow copy — original body is not mutated.
  */
@@ -244,23 +244,13 @@ export function injectCodexAssets(
   body: Record<string, unknown>,
   assets: CodexInjectionInput,
 ): Record<string, unknown> {
-  const input = body.input;
-  if (!Array.isArray(input) || input.length === 0) return body;
-
-  const devMsg = input[0] as Record<string, unknown> | null;
-  if (!devMsg || typeof devMsg !== "object") return body;
-  if (devMsg.type !== "message") return body;
-
-  const content = devMsg.content;
-  if (!Array.isArray(content)) return body;
-
-  const injectionBlock = buildCodexInjectionBlock(assets);
-
-  // Shallow-copy chain: body → input → input[0] → content
-  const newContent = [...content, injectionBlock];
-  const newDevMsg = { ...devMsg, content: newContent };
-  const newInput = [newDevMsg, ...input.slice(1)];
-  return { ...body, input: newInput };
+  const injectionText = buildCodexInjectionBlock(assets).text;
+  const existingInstructions =
+    typeof body.instructions === "string" ? body.instructions : "";
+  const instructions = existingInstructions
+    ? `${existingInstructions}\n\n${injectionText}`
+    : injectionText;
+  return { ...body, instructions };
 }
 
 // ── Upstream request helpers ─────────────────────────────────────────────────
