@@ -229,12 +229,12 @@ export async function performAutoCapture(params: {
         );
         l0UpsertTotalMs += performance.now() - tUpsertStart;
 
-        if (upsertOk) {
+        if (upsertOk && vectorSearchReady) {
           l0VectorsWritten++;
           if (supportsBgEmbed) {
             bgRecords.push({ recordId: l0Record.id, content: msg.content });
           }
-        } else {
+        } else if (!upsertOk) {
           logger?.warn(`${TAG} [L0-vec-index] upsertL0 returned false for message ${i}`);
         }
       } catch (err) {

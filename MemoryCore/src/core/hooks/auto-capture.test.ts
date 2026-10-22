@@ -44,6 +44,7 @@ describe("performAutoCapture L0 vector capability", () => {
     });
 
     expect(result.l0RecordedCount).toBe(1);
+    expect(result.l0VectorsWritten).toBe(0);
     expect(upsertL0).toHaveBeenCalledOnce();
     expect(upsertL0.mock.calls[0][1]).toBeUndefined();
     expect(embed).not.toHaveBeenCalled();
