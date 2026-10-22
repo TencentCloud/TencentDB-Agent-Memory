@@ -754,6 +754,20 @@ export function useWikiSources() {
         return;
       }
 
+      if (res.import_result?.failed.length) {
+        const detail = res.import_result.failed
+          .slice(0, 5)
+          .map((item) => `${item.id}: ${item.error}`)
+          .join('\n');
+        tea.notify.warning(
+          t('wiki.detail.upload.partialFail', {
+            ok: res.import_result.imported,
+            fail: res.import_result.failed.length,
+            detail,
+          }),
+        );
+      }
+
       // 触发一次立即刷新，避免等下一拍轮询才反映新状态
       fetchDetail(wikiId);
     } catch (err: unknown) {
