@@ -60,4 +60,39 @@ describe("VectorStore vec0 integrity", () => {
       reopened.close();
     }
   });
+
+  it("fails closed when a vec0 shadow table cannot be inspected", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tdai-vec-integrity-"));
+    tempDirs.push(dir);
+    const dbPath = join(dir, "vectors.db");
+
+    const initial = new VectorStore(dbPath, 2);
+    try {
+      initial.init();
+    } finally {
+      initial.close();
+    }
+
+    const db = new DatabaseSync(dbPath, { allowExtension: true });
+    db.exec("DROP TABLE l0_vec_vector_chunks00");
+    db.close();
+
+    const errors: string[] = [];
+    const reopened = new VectorStore(dbPath, 2, {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (message: string) => errors.push(message),
+    } as never);
+
+    try {
+      reopened.init();
+
+      expect(errors.some((message) => message.includes("integrity probe failed"))).toBe(true);
+      expect(reopened.getCapabilities().vectorSearch).toBe(false);
+      expect(reopened.getCapabilities().ftsSearch).toBe(true);
+    } finally {
+      reopened.close();
+    }
+  });
 });
