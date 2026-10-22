@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import { join, relative } from "node:path";
 import type { LlmClient } from "./llm.js";
 import { parseFrontmatter, buildPage } from "./frontmatter.js";
+import { isMarkdownFileName, stripMarkdownExtension } from "./safe-path.js";
 import { createLogger } from "../../../logger.js";
 
 const log = createLogger("wiki-overview");
@@ -46,7 +47,7 @@ function collectBriefs(wikiDir: string): PageBrief[] {
         if (entry !== "media") walk(full);
         continue;
       }
-      if (!entry.endsWith(".md")) continue;
+      if (!isMarkdownFileName(entry)) continue;
       const rel = relative(wikiDir, full).replace(/\\/g, "/");
       if (STRUCTURAL.has(rel)) continue;
       let content: string;
@@ -60,7 +61,7 @@ function collectBriefs(wikiDir: string): PageBrief[] {
         title:
           typeof frontmatter.title === "string" && frontmatter.title.trim()
             ? frontmatter.title.trim()
-            : entry.replace(/\.md$/, ""),
+            : stripMarkdownExtension(entry),
         type: frontmatter.type,
         description: typeof frontmatter.description === "string" ? frontmatter.description.trim() : "",
       });

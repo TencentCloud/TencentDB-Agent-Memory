@@ -43,6 +43,11 @@ import {
   sha256,
   type SourceStatus,
 } from "../engines/wiki/index-db.js";
+import {
+  ensureMarkdownExtension,
+  isMarkdownFileName,
+  stripMarkdownExtension,
+} from "../engines/wiki/ingest-v2/safe-path.js";
 
 export interface WikiBuildContext {
   wikiId: string;
@@ -1161,19 +1166,21 @@ export class WikiService {
     const wikiDirSep = wikiDir.endsWith("/") ? wikiDir : wikiDir + "/";
 
     // 先按原样尝试，再尝试补 .md 扩展。
-    const candidates = cleanRef.endsWith(".md") ? [cleanRef] : [cleanRef + ".md", cleanRef];
+    const candidates = isMarkdownFileName(cleanRef)
+      ? [cleanRef]
+      : [ensureMarkdownExtension(cleanRef), cleanRef];
     for (const c of candidates) {
       const safe = resolve(wikiDir, c);
       if (safe !== wikiDir && !safe.startsWith(wikiDirSep)) continue;
       if (opts.allowMissing) {
         // write 路径补 .md：允许任何其中一个
-        return c.endsWith(".md") ? safe : null;
+        return isMarkdownFileName(c) ? safe : null;
       }
       if (existsSync(safe)) return safe;
     }
     if (opts.allowMissing) {
       // 没匹配 .md 候选时，强制补 .md
-      const safe = resolve(wikiDir, cleanRef.endsWith(".md") ? cleanRef : cleanRef + ".md");
+      const safe = resolve(wikiDir, ensureMarkdownExtension(cleanRef));
       if (safe === wikiDir || !safe.startsWith(wikiDirSep)) return null;
       return safe;
     }
@@ -1185,11 +1192,11 @@ export class WikiService {
     const wikiDir = resolve(projectPath, "wiki");
     const prefix = wikiDir.endsWith("/") ? wikiDir : wikiDir + "/";
     if (!abs.startsWith(prefix)) return abs;
-    return abs.slice(prefix.length).replace(/\.md$/, "");
+    return stripMarkdownExtension(abs.slice(prefix.length));
   }
 
   private isForbiddenPageRef(ref: string): boolean {
-    const cleanRef = ref.replace(/^wiki\//, "").replace(/\.md$/, "");
+    const cleanRef = stripMarkdownExtension(ref.replace(/^wiki\//, ""));
     return PAGE_FORBIDDEN_REFS.has(cleanRef) || PAGE_FORBIDDEN_REFS.has(`wiki/${cleanRef}`);
   }
 
@@ -1212,7 +1219,7 @@ export class WikiService {
         this.scanPagesRecursive(baseDir, full, out);
         continue;
       }
-      if (!entry.endsWith(".md")) continue;
+      if (!isMarkdownFileName(entry)) continue;
       let content = "";
       try {
         content = readFileSync(full, "utf-8");
@@ -1220,11 +1227,11 @@ export class WikiService {
         continue;
       }
       const rel = full.slice(baseDir.length + 1).replace(/\\/g, "/");
-      const id = rel.replace(/\.md$/, "");
+      const id = stripMarkdownExtension(rel);
       const fm = parseFrontmatterMin(content);
       out.push({
         id,
-        title: fm.title || entry.replace(/\.md$/, "").replace(/-/g, " "),
+        title: fm.title || stripMarkdownExtension(entry).replace(/-/g, " "),
         type: fm.type || "other",
         path: `wiki/${rel}`,
         ...(fm.description ? { description: fm.description } : {}),

@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { parseFrontmatter } from "./frontmatter.js";
+import { isMarkdownFileName, stripMarkdownExtension } from "./safe-path.js";
 
 /** 结构性文件不列入 index。 */
 const STRUCTURAL = new Set(["index.md", "schema.md", "purpose.md", "log.md", "overview.md"]);
@@ -56,7 +57,7 @@ function collectEntries(wikiDir: string): IndexEntry[] {
         if (entry !== "media") walk(full);
         continue;
       }
-      if (!entry.endsWith(".md")) continue;
+      if (!isMarkdownFileName(entry)) continue;
       const rel = relative(wikiDir, full).replace(/\\/g, "/");
       if (STRUCTURAL.has(rel)) continue;
       let content: string;
@@ -69,7 +70,7 @@ function collectEntries(wikiDir: string): IndexEntry[] {
       const title =
         typeof frontmatter.title === "string" && frontmatter.title.trim()
           ? frontmatter.title.trim()
-          : entry.replace(/\.md$/, "");
+          : stripMarkdownExtension(entry);
       const description =
         typeof frontmatter.description === "string" ? frontmatter.description.trim() : "";
       out.push({ title, relPath: `/${rel}`, description, type: frontmatter.type });

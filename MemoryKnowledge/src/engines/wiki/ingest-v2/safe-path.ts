@@ -8,6 +8,21 @@
 
 import { resolve, sep } from "node:path";
 
+/** Markdown file extensions are case-insensitive on supported client volumes. */
+export function isMarkdownFileName(fileName: string): boolean {
+  return /\.md$/i.test(fileName);
+}
+
+/** Remove one trailing `.md` extension regardless of ASCII case. */
+export function stripMarkdownExtension(fileName: string): string {
+  return fileName.replace(/\.md$/i, "");
+}
+
+/** Append the canonical extension only when one is not already present. */
+export function ensureMarkdownExtension(fileName: string): string {
+  return isMarkdownFileName(fileName) ? fileName : `${fileName}.md`;
+}
+
 /**
  * candidate 解析后是否仍落在 root 之内（root 自身算在内）。
  *

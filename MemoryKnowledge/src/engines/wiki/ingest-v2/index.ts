@@ -25,7 +25,7 @@ import { parseFrontmatter, buildPage } from "./frontmatter.js";
 import { mergePage, type MergeOptions } from "./merge.js";
 import { chunkText } from "./chunker.js";
 import { slugify, dirForType } from "./slug.js";
-import { isInsideRoot } from "./safe-path.js";
+import { isInsideRoot, isMarkdownFileName, stripMarkdownExtension } from "./safe-path.js";
 import { rebuildIndexFile } from "./index-builder.js";
 import { appendIngestLog, appendIngestLogBatch } from "./log-writer.js";
 import { createLogger } from "../../../logger.js";
@@ -356,7 +356,7 @@ function walk(baseDir: string, dir: string, out: ExistingPageInfo[]): void {
     }
     if (st.isDirectory()) {
       if (entry !== "media") walk(baseDir, full, out);
-    } else if (entry.endsWith(".md")) {
+    } else if (isMarkdownFileName(entry)) {
       const rel = `wiki/${full.slice(baseDir.length + 1).replace(/\\/g, "/")}`;
       if (STRUCTURAL_FILES.has(rel)) continue;
       try {
@@ -364,7 +364,9 @@ function walk(baseDir: string, dir: string, out: ExistingPageInfo[]): void {
         const { frontmatter } = parseFrontmatter(content);
         out.push({
           relPath: rel,
-          title: typeof frontmatter.title === "string" ? frontmatter.title : basename(entry, ".md"),
+          title: typeof frontmatter.title === "string"
+            ? frontmatter.title
+            : stripMarkdownExtension(basename(entry)),
           type: frontmatter.type,
           description: typeof frontmatter.description === "string" ? frontmatter.description : undefined,
         });

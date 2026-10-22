@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync 
 import { join, basename, relative } from "node:path";
 import { parseFrontmatter, buildPage } from "./frontmatter.js";
 import { slugify } from "./slug.js";
+import { isMarkdownFileName, stripMarkdownExtension } from "./safe-path.js";
 
 export interface DeleteSourceFilesResult {
   /** 被级联删除的 wiki page 绝对路径。 */
@@ -46,7 +47,7 @@ function collectWikiPages(wikiDir: string): string[] {
       }
       if (st.isDirectory()) {
         if (entry !== "media") walk(full);
-      } else if (entry.endsWith(".md")) {
+      } else if (isMarkdownFileName(entry)) {
         out.push(full);
       }
     }
@@ -138,7 +139,7 @@ export interface CascadeDeletePagesResult {
 /** 从一个页路径与内容推导出它可能被 [[wikilink]] 引用的标识符（小写归一）。 */
 function linkAliasesFor(pagePath: string, content: string): Set<string> {
   const aliases = new Set<string>();
-  const base = basename(pagePath, ".md");
+  const base = stripMarkdownExtension(basename(pagePath));
   aliases.add(base.toLowerCase());
   aliases.add(slugify(base).toLowerCase());
   const { frontmatter } = parseFrontmatter(content);
