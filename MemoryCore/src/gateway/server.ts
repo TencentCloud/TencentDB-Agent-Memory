@@ -49,6 +49,7 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
+import { memoryStoreHealth, overallHealthStatus } from "./health.js";
 import type { Logger } from "../core/types.js";
 import { InstanceConfigProvider } from "../core/instance-config-provider.js";
 import type { VdbConfig, MongoConfig } from "../core/instance-config-provider.js";
@@ -1533,17 +1534,20 @@ export class TdaiGateway {
   }
 
   private handleHealth(res: http.ServerResponse): void {
+    const vectorStore = this.core.getVectorStore();
+    const vectorStoreState = memoryStoreHealth(vectorStore);
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: overallHealthStatus(vectorStore),
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: !!this.core.getVectorStore(),
+        vectorStore: !!vectorStore,
+        vectorStoreState,
         embeddingService: !!this.core.getEmbeddingService(),
         // BM25 keyword search depends on the FTS5 module, which is not
         // compiled into every official Node build (e.g. v22.13.1). When
         // false, recall degrades to embedding-only (issue #679).
-        ftsAvailable: this.core.getVectorStore()?.isFtsAvailable() ?? false,
+        ftsAvailable: vectorStore?.isFtsAvailable() ?? false,
       },
       // Integrated services status
       services: {
