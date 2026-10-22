@@ -163,4 +163,20 @@ describe("MongoFSBackend atomic replacement", () => {
     const current = await backend.getObject("state.json");
     expect(current?.content.toString()).toBe("old-valid");
   });
+
+  it("rejects metadata whose committed chunks are missing or truncated", async () => {
+    const db = new FakeDb();
+    db.objects.docs.push({
+      _id: "corrupt.json",
+      size: 11,
+      version: 1,
+      nextSeq: 1,
+      updatedAt: new Date(),
+    });
+    const backend = new MongoFSBackend({ db: db as any });
+
+    await expect(backend.getObject("corrupt.json")).rejects.toThrow(
+      "object corrupt.json is corrupt",
+    );
+  });
 });

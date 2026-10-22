@@ -273,6 +273,14 @@ export class MongoFSBackend implements IStorageBackend {
     const content = Buffer.concat(
       parts.map((p) => (p.data instanceof Binary ? Buffer.from(p.data.buffer) : p.data)),
     );
+    const contiguous = parts.every((part, index) => part.seq === index);
+    if (parts.length !== meta.nextSeq || !contiguous || content.length !== meta.size) {
+      throw new Error(
+        `${TAG} object ${key} is corrupt ` +
+          `(expected ${meta.nextSeq} chunks/${meta.size} bytes, ` +
+          `got ${parts.length} chunks/${content.length} bytes, contiguous=${contiguous})`,
+      );
+    }
     return {
       key,
       content,
