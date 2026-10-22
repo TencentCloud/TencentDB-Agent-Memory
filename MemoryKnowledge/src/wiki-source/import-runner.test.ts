@@ -171,4 +171,59 @@ describe("wiki import filenames", () => {
     expect(captured).toHaveLength(2);
     expect(captured[1].filename).toContain("-2.md");
   });
+
+  it("repairs case-folded collisions in a historical import map", async () => {
+    const provider = createProvider(
+      [
+        { externalId: "page-a", title: "Alpha", path: "Alpha" },
+        { externalId: "page-b", title: "alpha", path: "alpha" },
+      ],
+      [
+        {
+          externalId: "page-a",
+          markdown: "A",
+          fidelity: "lossless",
+        },
+        {
+          externalId: "page-b",
+          markdown: "B",
+          fidelity: "lossless",
+        },
+      ],
+    );
+    const captured: Array<{ filename: string; content: string }> = [];
+    const writeImportNameMap = vi.fn();
+    const service: WikiServiceLike = {
+      rawWriteMany: vi.fn((_serviceId, _teamId, _wikiId, files) => {
+        captured.push(...files);
+        return files.map((file) => ({
+          filename: file.filename,
+          size: Buffer.byteLength(file.content, "utf-8"),
+        }));
+      }),
+      readImportNameMap: () => ({
+        "page-a": "Alpha.md",
+        "page-b": "alpha.md",
+      }),
+      writeImportNameMap,
+    };
+
+    const result = await run(provider, service);
+
+    expect(result.imported).toBe(2);
+    expect(captured.map((file) => file.filename)).toEqual([
+      "Alpha.md",
+      "alpha-2.md",
+    ]);
+    expect(writeImportNameMap).toHaveBeenCalledWith(
+      "svc-test",
+      "team-test",
+      "wiki-test",
+      "test",
+      {
+        "page-a": "Alpha.md",
+        "page-b": "alpha-2.md",
+      },
+    );
+  });
 });

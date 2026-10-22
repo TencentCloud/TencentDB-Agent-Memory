@@ -127,9 +127,17 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
     ? p.wikiService.readImportNameMap!(p.serviceId, p.teamId, p.wikiId, p.providerId)
     : null;
   if (nameByExternalId) {
-    // 历史文件名先占座：防止新文档生成同名文件，顶掉旧文档的位置
-    for (const fn of Object.values(nameByExternalId)) {
-      if (fn) usedNames.add(filenameCollisionKey(fn));
+    // 历史文件名先占座：防止新文档生成同名文件，顶掉旧文档的位置。
+    // 旧版在大小写敏感系统上可能已写入两个仅大小写不同的名字；保留第一个，
+    // 其余映射删除并让本轮重新分配后缀，避免 Windows/macOS 上继续互相覆盖。
+    for (const [externalId, filename] of Object.entries(nameByExternalId)) {
+      if (!filename) continue;
+      const collisionKey = filenameCollisionKey(filename);
+      if (usedNames.has(collisionKey)) {
+        delete nameByExternalId[externalId];
+      } else {
+        usedNames.add(collisionKey);
+      }
     }
   }
 
