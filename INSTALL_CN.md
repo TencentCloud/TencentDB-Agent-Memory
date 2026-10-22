@@ -605,15 +605,15 @@ KNOWLEDGE_CLICKHOUSE_FLUSH_THRESHOLD=50
 KNOWLEDGE_CLICKHOUSE_TTL_DAYS=90
 
 # ═══ 查询接口鉴权（/v3/analytics/*）═══
-# 需要 x-tdai-user-key 匹配这把 key 才能查询；Panel 用 admin user_key 即可
-KNOWLEDGE_ANALYTICS_ADMIN_KEY=<admin sk-mem-... 或自定义字符串>
+# 与其他 /v3 路由共用 KNOWLEDGE_SERVICE_KEY；
+# 一键部署会自动生成，并通过 KNOWLEDGE_AUTH_TOKEN 注入 Panel。
 ```
 
-`KNOWLEDGE_ANALYTICS_ADMIN_KEY` 留空时,`/v3/analytics/*` 数据接口会返回
-`503`（`/config` 仍可用，Panel 会把 Wiki / Code-Graph 图表显示为"未启用"）；
-只有配好后 Panel 才拿得到数据。填 admin 的 `user_key`（即
-`.admin-key` 文件里那串 `sk-mem-...`）最省事，也可以是任意稳定字符串
-（前端向 Knowledge `/v3/analytics/*` 发请求时会带这把 key）。
+Knowledge 没有单独的 `KNOWLEDGE_ANALYTICS_ADMIN_KEY`。当
+`KNOWLEDGE_SERVICE_KEY` 非空时，`/v3/analytics/*` 与 Knowledge 的其他
+非只读 `/v3` 路由一样必须携带
+`Authorization: Bearer $KNOWLEDGE_SERVICE_KEY`。global-images 脚本会生成
+同一把 key，并分别注入 Knowledge 的校验侧与 Panel 的调用侧。
 
 ### 第 4 步：Core 打开 analytics 查询接口
 
@@ -654,12 +654,13 @@ curl -s http://localhost:8420/v3/analytics/config \
   -H "x-tdai-service-id: default" \
   -H "x-tdai-user-key: <admin sk-mem-...>" | jq
 
-# Knowledge 探针（无需 user_key）
+# Knowledge 探针（无需 user_key；需与 Panel 相同的服务 Bearer）
 curl -s http://localhost:8424/v3/analytics/config \
-  -H "x-tdai-service-id: default" | jq
+  -H "x-tdai-service-id: default" \
+  -H "Authorization: Bearer $KNOWLEDGE_SERVICE_KEY" | jq
 ```
 
-两条都返回 `{"configured": true, ...}` 才算通。之后打开 Panel
+两条都返回 `code=0` 且 `data.configured=true` 才算通。之后打开 Panel
 「数据分析」页，就能看到 Proxy / Knowledge 各类工具调用汇总；如果任一端
 返回 `configured: false`，Panel 会把对应图表显示为"未启用",不会报错。
 
@@ -670,8 +671,9 @@ curl -s http://localhost:8424/v3/analytics/config \
 - Proxy 有请求但 Core 查不到 → 十有八九 Core 的
   `analytics.clickhouse.database` / `endpoint` 跟 Proxy 的
   `clickhouse.database` / `url` 不一致
-- Knowledge `/v3/analytics/*` 401 → `KNOWLEDGE_ANALYTICS_ADMIN_KEY`
-  没配或者跟 Panel 传的 `x-tdai-user-key` 对不上
+- Knowledge `/v3/analytics/*` 401 → 请求缺少 `Authorization`，或者
+  `KNOWLEDGE_SERVICE_KEY`（Knowledge 校验侧）与 `KNOWLEDGE_AUTH_TOKEN`
+  （Panel 调用侧）不一致
 
 ## 停止 / 清理
 
