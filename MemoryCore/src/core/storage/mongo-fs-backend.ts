@@ -9,9 +9,10 @@
  * .metadata/, …) as the composite's others leg.
  *
  * Data model (two collections in the instance DB):
- *   fs_objects  { _id: key, size, version, nextSeq, contentType?, metadata?, updatedAt }
- *   fs_chunks   { _id: "{key} {seq}", key, seq, data: BinData, createdAt }
+ *   fs_objects  { _id: key, generation?, size, version, nextSeq, contentType?, metadata?, updatedAt }
+ *   fs_chunks   { _id: "{key} @{generation} {seq}", key, generation?, seq, data: BinData, createdAt }
  *
+ * Legacy chunk ids remain `"{key} {seq}"` when `generation` is absent.
  * All content lives in chunks (uniform model), which is what makes the two
  * contract-relevant behaviours natural:
  *   - append-after-put works (contract clause "appends to an existing
@@ -31,6 +32,7 @@
  */
 
 import { Binary, type Db } from "mongodb";
+import { randomUUID } from "node:crypto";
 import type {
   IStorageBackend,
   ListEntry,
@@ -57,6 +59,7 @@ interface ObjectDoc {
   size: number;
   version: number;
   nextSeq: number;
+  generation?: string;
   contentType?: string;
   metadata?: Record<string, string>;
   updatedAt: Date;
@@ -66,6 +69,7 @@ interface ChunkDoc {
   _id: string;
   key: string;
   seq: number;
+  generation?: string;
   /** Written as Buffer (driver serializes to BinData); read back as Binary. */
   data: Buffer | Binary;
   createdAt: Date;
@@ -102,7 +106,18 @@ export class MongoFSBackend implements IStorageBackend {
     if (!this.initPromise) {
       this.initPromise = (async () => {
         // _id (the key) is already indexed; chunks need per-key ordered scans.
-        await this.chunks().createIndex({ key: 1, seq: 1 }, { unique: true });
+        // Generation is part of uniqueness so a replacement can be built beside
+        // the still-visible old object.
+        await this.chunks().createIndex(
+          { key: 1, generation: 1, seq: 1 },
+          { unique: true },
+        );
+        try {
+          await this.chunks().dropIndex("key_1_seq_1");
+        } catch (err) {
+          const e = err as { code?: number; codeName?: string };
+          if (e.code !== 27 && e.codeName !== "IndexNotFound") throw err;
+        }
       })().catch((err) => {
         this.initPromise = null;
         throw err;
@@ -120,17 +135,23 @@ export class MongoFSBackend implements IStorageBackend {
     }
   }
 
-  private static chunkId(key: string, seq: number): string {
-    return `${key} ${seq}`;
+  private static chunkId(key: string, generation: string | undefined, seq: number): string {
+    return generation ? `${key} @${generation} ${seq}` : `${key} ${seq}`;
   }
 
-  private static toChunks(key: string, buf: Buffer, now: Date): ChunkDoc[] {
+  private static toChunks(
+    key: string,
+    buf: Buffer,
+    now: Date,
+    generation?: string,
+  ): ChunkDoc[] {
     const out: ChunkDoc[] = [];
     for (let seq = 0; seq * CHUNK_SIZE < buf.length; seq++) {
       out.push({
-        _id: MongoFSBackend.chunkId(key, seq),
+        _id: MongoFSBackend.chunkId(key, generation, seq),
         key,
         seq,
+        ...(generation ? { generation } : {}),
         data: buf.subarray(seq * CHUNK_SIZE, (seq + 1) * CHUNK_SIZE),
         createdAt: now,
       });
@@ -143,14 +164,14 @@ export class MongoFSBackend implements IStorageBackend {
     await this.ensureIndexes();
     const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
     const now = new Date();
+    const previous = await this.objects().findOne({ _id: key });
+    const previousGeneration = previous?.generation;
+    const generation = randomUUID();
 
-    // Replace: drop old chunks, write new ones, then bump the metadata doc.
-    // A crash mid-way can orphan old chunks under stale seqs — harmless: reads
-    // follow nextSeq/size from the metadata doc, and the next put/append
-    // reclaims the range. (TCS Mongo is a replica set; a transaction here is
-    // possible but buys nothing the version bump doesn't already give readers.)
-    await this.chunks().deleteMany({ key });
-    const chunks = MongoFSBackend.toChunks(key, buf, now);
+    // Write a new generation first. The metadata update below is the single
+    // visibility commit point, so readers keep using the old generation until
+    // every new chunk is durable.
+    const chunks = MongoFSBackend.toChunks(key, buf, now, generation);
     if (chunks.length > 0) await this.chunks().insertMany(chunks);
 
     await this.objects().updateOne(
@@ -159,6 +180,7 @@ export class MongoFSBackend implements IStorageBackend {
         $set: {
           size: buf.length,
           nextSeq: chunks.length,
+          generation,
           updatedAt: now,
           ...(opts?.contentType ? { contentType: opts.contentType } : {}),
           ...(opts?.metadata && Object.keys(opts.metadata).length > 0 ? { metadata: opts.metadata } : {}),
@@ -168,6 +190,16 @@ export class MongoFSBackend implements IStorageBackend {
       },
       { upsert: true },
     );
+
+    // Only remove the generation that was visible before this write. Failed or
+    // concurrent candidate generations may remain orphaned, but they are never
+    // selected by readers and cannot overwrite each other.
+    const staleFilter = previousGeneration
+      ? { key, generation: previousGeneration }
+      : { key, generation: { $exists: false } };
+    await this.chunks().deleteMany(staleFilter).catch((err) => {
+      this.logger?.warn?.(`${TAG} putObject stale cleanup failed for ${key}: ${String(err)}`);
+    });
     this.logger?.debug?.(`${TAG} putObject: ${key} (${buf.length} bytes, ${chunks.length} chunks)`);
   }
 
@@ -177,26 +209,44 @@ export class MongoFSBackend implements IStorageBackend {
     const buf = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
     if (buf.length === 0) return;
     const now = new Date();
-    const newChunks = MongoFSBackend.toChunks(key, buf, now);
+    const chunkCount = Math.ceil(buf.length / CHUNK_SIZE);
 
-    // Allocate the seq range atomically first — this is the COS
-    // position-checked append equivalent: concurrent appenders can never
-    // interleave or overwrite each other's chunks.
-    const meta = await this.objects().findOneAndUpdate(
-      { _id: key },
-      {
-        $inc: { nextSeq: newChunks.length, size: buf.length, version: 1 },
-        $set: { updatedAt: now },
-        $setOnInsert: { _id: key },
-      },
-      { upsert: true, returnDocument: "after" },
-    );
-    const baseSeq = (meta?.nextSeq ?? newChunks.length) - newChunks.length;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.objects().findOne({ _id: key });
+      const filter = current ? { _id: key, version: current.version } : { _id: key };
+      const newGeneration = randomUUID();
 
-    await this.chunks().insertMany(
-      newChunks.map((c, i) => ({ ...c, _id: MongoFSBackend.chunkId(key, baseSeq + c.seq), seq: baseSeq + i })),
-    );
-    this.logger?.debug?.(`${TAG} appendObject: ${key} (+${buf.length} bytes @seq ${baseSeq})`);
+      let meta;
+      try {
+        meta = await this.objects().findOneAndUpdate(
+          filter,
+          {
+            $inc: { nextSeq: chunkCount, size: buf.length, version: 1 },
+            $set: { updatedAt: now },
+            $setOnInsert: { _id: key, generation: newGeneration },
+          },
+          { upsert: !current, returnDocument: "after" },
+        );
+      } catch (err) {
+        if (!current && (err as { code?: number }).code === 11000) continue;
+        throw err;
+      }
+      if (!meta) continue;
+
+      const generation = meta.generation;
+      const baseSeq = meta.nextSeq - chunkCount;
+      const newChunks = MongoFSBackend.toChunks(key, buf, now, generation);
+      await this.chunks().insertMany(
+        newChunks.map((chunk, index) => ({
+          ...chunk,
+          _id: MongoFSBackend.chunkId(key, generation, baseSeq + index),
+          seq: baseSeq + index,
+        })),
+      );
+      this.logger?.debug?.(`${TAG} appendObject: ${key} (+${buf.length} bytes @seq ${baseSeq})`);
+      return;
+    }
+    throw new Error(`${TAG} appendObject concurrent metadata change for ${key}`);
   }
 
   async getObject(key: string): Promise<StorageObject | null> {
@@ -205,7 +255,10 @@ export class MongoFSBackend implements IStorageBackend {
     const meta = await this.objects().findOne({ _id: key });
     if (!meta) return null;
 
-    const parts = await this.chunks().find({ key }).sort({ seq: 1 }).toArray();
+    const chunkFilter = meta.generation
+      ? { key, generation: meta.generation }
+      : { key, generation: { $exists: false } };
+    const parts = await this.chunks().find(chunkFilter).sort({ seq: 1 }).toArray();
     const content = Buffer.concat(
       parts.map((p) => (p.data instanceof Binary ? Buffer.from(p.data.buffer) : p.data)),
     );
