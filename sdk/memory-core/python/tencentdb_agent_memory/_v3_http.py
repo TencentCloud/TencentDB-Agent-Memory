@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Dict, Optional
 
 import httpx
@@ -31,7 +32,12 @@ def _validate_transport_options(
         raise ParamError("api_key must be provided")
     if not service_id or not service_id.strip():
         raise ParamError("service_id must be provided")
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or timeout <= 0
+        or not math.isfinite(timeout)
+    ):
         raise ParamError("timeout must be a positive number")
 
 
