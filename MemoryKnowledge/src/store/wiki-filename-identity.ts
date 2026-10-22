@@ -1,5 +1,8 @@
+import { posix } from "node:path";
+
 export function filenameCollisionKey(name: string): string {
-  return name.normalize("NFC").toLocaleLowerCase("en-US");
+  const portablePath = posix.normalize(name.replace(/\\/g, "/"));
+  return portablePath.normalize("NFC").toLocaleLowerCase("en-US");
 }
 
 export function findDuplicateWikiFilename(names: string[]): string | null {

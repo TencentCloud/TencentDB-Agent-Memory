@@ -31,6 +31,12 @@ describe("wiki filename identity", () => {
     );
   });
 
+  it("folds path-equivalent names", () => {
+    expect(filenameCollisionKey("./nested//Alpha.md")).toBe(
+      filenameCollisionKey("nested/alpha.md"),
+    );
+  });
+
   it("finds exact duplicates", () => {
     expect(findDuplicateWikiFilename(["Notes.md", "Notes.md"])).toBe("Notes.md");
   });
@@ -43,6 +49,15 @@ describe("wiki filename identity", () => {
     expect(
       findDuplicateWikiFilename(["Café.md", "Cafe\u0301.md"]),
     ).toBe("Cafe\u0301.md");
+  });
+
+  it("finds path-equivalent duplicates", () => {
+    expect(
+      findDuplicateWikiFilename([
+        "nested/Alpha.md",
+        "./nested//alpha.md",
+      ]),
+    ).toBe("./nested//alpha.md");
   });
 
   it("accepts distinct portable names", () => {
@@ -60,6 +75,17 @@ describe("wiki filename identity", () => {
     ).toBe("duplicate_filename");
   });
 
+  it("rejects raw filenames that collide after path normalization", () => {
+    const service = createService();
+
+    expect(
+      service.rawWriteMany("svc-test", "team-test", "wiki-test", [
+        { filename: "nested/Alpha.md", content: "first" },
+        { filename: "./nested//alpha.md", content: "second" },
+      ]),
+    ).toBe("duplicate_filename");
+  });
+
   it("rejects page refs that resolve to the same markdown filename", () => {
     const service = createService();
 
@@ -67,6 +93,17 @@ describe("wiki filename identity", () => {
       service.pageWriteMany("svc-test", "team-test", "wiki-test", [
         { ref: "Guide", content: "first" },
         { ref: "guide.md", content: "second" },
+      ]),
+    ).toBe("duplicate_filename");
+  });
+
+  it("rejects page refs that collide after removing dot segments", () => {
+    const service = createService();
+
+    expect(
+      service.pageWriteMany("svc-test", "team-test", "wiki-test", [
+        { ref: "nested/Guide", content: "first" },
+        { ref: "./nested//guide.md", content: "second" },
       ]),
     ).toBe("duplicate_filename");
   });
