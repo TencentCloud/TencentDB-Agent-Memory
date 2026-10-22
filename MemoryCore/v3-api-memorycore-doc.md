@@ -114,7 +114,7 @@ v3 接口按鉴权方式分四层（均需 `Authorization: Bearer <KERNEL_AUTH_T
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| session_id | string | 是 | 业务会话 ID |
+| session_id | string | 是 | 业务会话 ID；为兼容 v1 客户端，`session_id` 缺省时也接受同值的 `session_key` |
 | messages | object[] | 是 | 1–100 条，`{ role: "user"\|"assistant", content: 1–8192 字, timestamp?, recorded_at? }` |
 | team_id / agent_id / user_id / task_id | string | 否* | 隔离字段（*v3 强制 team+agent+user，缺省回落 default 桶） |
 
