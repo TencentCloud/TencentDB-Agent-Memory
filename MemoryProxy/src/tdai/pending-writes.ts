@@ -62,7 +62,6 @@ export async function flushPendingWrites(deadlineMs: number = 10_000): Promise<{
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => resolve("timeout"), remainingMs);
-      timer.unref?.();
     });
     try {
       const outcome = await Promise.race([
