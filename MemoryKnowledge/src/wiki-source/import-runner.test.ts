@@ -226,4 +226,35 @@ describe("wiki import filenames", () => {
       },
     );
   });
+
+  it("makes Windows reserved titles portable instead of failing the batch", async () => {
+    const provider = createProvider(
+      [
+        { externalId: "page-a", title: "CON", path: "CON" },
+        { externalId: "page-b", title: "aux", path: "aux" },
+      ],
+      [
+        {
+          externalId: "page-a",
+          markdown: "A",
+          fidelity: "lossless",
+        },
+        {
+          externalId: "page-b",
+          markdown: "B",
+          fidelity: "lossless",
+        },
+      ],
+    );
+    const captured: Array<{ filename: string; content: string }> = [];
+    const service = createServiceCapturingWrites(captured);
+
+    const result = await run(provider, service);
+
+    expect(result.imported).toBe(2);
+    expect(captured.map((file) => file.filename)).toEqual([
+      "file-CON.md",
+      "file-aux.md",
+    ]);
+  });
 });

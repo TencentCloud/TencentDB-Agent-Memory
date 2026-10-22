@@ -246,7 +246,8 @@ function buildFilename(
   externalId: string,
   usedNameKeys: Set<string>,
 ): string {
-  const cleaned = (title ?? "")
+  const sanitizeStem = (value: string) =>
+    value
     // 去掉路径分隔符与 Windows 保留字符，防目录穿越
     .replace(/[/\\:*?"<>|]/g, "")
     // 去掉控制字符（换行/制表符等），避免文件名混入不可见字符
@@ -257,7 +258,14 @@ function buildFilename(
     .slice(0, 120) // 文件系统常见 255 字节上限，留足中文余量
     .trim();
 
-  const base = cleaned || externalId;
+  const cleaned = sanitizeStem(title ?? "");
+  const fallback = sanitizeStem(externalId);
+  const rawBase = cleaned || fallback || "page";
+  // CON.md / AUX.md 等名称即使带扩展名仍是 Windows 设备名；远程标题不应
+  // 因此让整批导入失败，因此自动加可读前缀。
+  const base = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(rawBase)
+    ? `file-${rawBase}`
+    : rawBase;
   let name = `${base}.md`;
   let n = 2;
   while (usedNameKeys.has(filenameCollisionKey(name))) {
