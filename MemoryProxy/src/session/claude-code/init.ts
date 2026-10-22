@@ -27,6 +27,7 @@ import {
   buildSessionContextBlockWithToggles,
 } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
+import { visibleSessionAgents } from "../agent-visibility.js";
 import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
 import { resolveUserSessionDefault } from "../user-default.js";
 
@@ -110,7 +111,7 @@ function containsSessionInitMarker(msg: Record<string, unknown>): boolean {
   return false;
 }
 
-async function fetchTeamsAndAgents(
+export async function fetchTeamsAndAgents(
   userId: string,
   config: SessionInitConfig,
   metadataClient: MetadataClient,
@@ -118,12 +119,13 @@ async function fetchTeamsAndAgents(
   const teamsRaw = await metadataClient.listTeams(userId);
   const teamResults = await Promise.all(
     teamsRaw.map(async (t) => {
-      const [agentsRaw, tasksRaw] = await Promise.all([
-        // Agents are scoped to (team, owner) — each user only sees the agents
-        // they created within the team. Tasks remain team-wide (unchanged).
-        metadataClient.listAgents(t.team_id, userId),
+      const [teamAgents, tasksRaw] = await Promise.all([
+        // Fetch team-wide, then expose the caller's agents plus explicitly
+        // shared team agents. Other users' private agents stay hidden.
+        metadataClient.listAgents(t.team_id),
         metadataClient.listTasks(t.team_id),
       ]);
+      const agentsRaw = visibleSessionAgents(teamAgents, userId);
       const tasks: TaskInTeam[] = tasksRaw.map((tk) => ({
         task_id: tk.task_id,
         task_name: tk.title,

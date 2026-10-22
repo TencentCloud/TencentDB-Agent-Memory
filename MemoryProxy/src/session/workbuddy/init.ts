@@ -8,6 +8,7 @@
  *   - session/preset.ts       （header解析 + 校验，client-agnostic）
  *   - session/registrar.ts    （SessionInfo 构造）
  *   - session/context-injector.ts（session_context XML 生成）
+ *   - session/agent-visibility.ts（caller-owned + team-visible agent 过滤）
  *   - session/types.ts（通用类型）
  *   - meta/client.ts          （TDAI kernel API客户端）
  *
@@ -36,6 +37,7 @@ import type { SessionInitConfig } from "../../types.js";
 import type { MetadataClient } from "../../meta/client.js";
 import type { SessionStore, SessionIdentity } from "../store.js";
 import { buildSessionInfo } from "../registrar.js";
+import { visibleSessionAgents } from "../agent-visibility.js";
 import type {
   AgentDetail,
   SessionInfo,
@@ -315,10 +317,11 @@ export async function handleWorkbuddySessionInit(
     const teamsRaw = await metadataClient.listTeams(identity.userId);
     teams = await Promise.all(
       teamsRaw.map(async (t) => {
-        const [agentsRaw, tasksRaw] = await Promise.all([
+        const [teamAgents, tasksRaw] = await Promise.all([
           metadataClient.listAgents(t.team_id).catch(() => []),
           metadataClient.listTasks(t.team_id).catch(() => []),
         ]);
+        const agentsRaw = visibleSessionAgents(teamAgents, identity.userId);
         return {
           team_id: t.team_id,
           team_name: t.name ?? t.team_id,
