@@ -34,6 +34,25 @@ const obsFileLogger = new FileLogger({
  */
 export const obsLogger = {
   /**
+   * DEBUG 级别日志 — 用于高频、无业务状态变化的轮询诊断。
+   * 后端不支持 DEBUG 时回退到 INFO，避免旧后端丢失事件。
+   */
+  debug(eventName: string, attrs: LogAttrs = {}): void {
+    try {
+      const backend = getObservabilityBackend().log;
+      if (backend.debug) {
+        backend.debug(eventName, attrs);
+        obsFileLogger.write("DEBUG", eventName, attrs as Record<string, unknown>);
+      } else {
+        backend.info(eventName, attrs);
+        obsFileLogger.write("INFO", eventName, attrs as Record<string, unknown>);
+      }
+    } catch {
+      // 静默失败，不影响业务
+    }
+  },
+
+  /**
    * INFO 级别日志 — 用于记录正常流程的关键节点。
    */
   info(eventName: string, attrs: LogAttrs = {}): void {

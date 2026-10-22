@@ -176,8 +176,8 @@ export function resolveSkillConfig(
   }
 
   // --------------- worker (2026-07-30) ---------------
-  // Worker pool concurrency. 优先级: env > yaml > 默认 60。无效值 warn 落回默认。
-  const DEFAULT_WORKER_CONCURRENCY = 60;
+  // Worker pool concurrency. 优先级: env > yaml > 默认 4。无效值 warn 落回默认。
+  const DEFAULT_WORKER_CONCURRENCY = 4;
   const DEFAULT_WORKER_BRPOP_MS = 5000;
   const DEFAULT_EXTRACT_LOCK_TTL_MS = 600_000;
   // 优先级: env (合法) > yaml (合法) > 默认。env/yaml 非法值都 warn 并继续
