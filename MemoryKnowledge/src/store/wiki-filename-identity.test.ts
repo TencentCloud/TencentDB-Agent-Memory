@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   filenameCollisionKey,
   findDuplicateWikiFilename,
+  isPortableWikiFilename,
 } from "./wiki-filename-identity.js";
 import { WikiService } from "./wiki-service.js";
 import type { IKnowledgeStore, WikiRow } from "./types.js";
@@ -64,6 +65,15 @@ describe("wiki filename identity", () => {
     expect(findDuplicateWikiFilename(["Alpha.md", "beta.md"])).toBeNull();
   });
 
+  it("rejects Windows reserved device names in any path segment", () => {
+    expect(isPortableWikiFilename("CON.md")).toBe(false);
+    expect(isPortableWikiFilename("nested/AUX.txt")).toBe(false);
+    expect(isPortableWikiFilename("nested/COM1.markdown")).toBe(false);
+    expect(isPortableWikiFilename("nested/COM10.md")).toBe(true);
+    expect(isPortableWikiFilename("bad:name.md")).toBe(false);
+    expect(isPortableWikiFilename("trailing.md ")).toBe(false);
+  });
+
   it("rejects duplicate raw filenames before touching the filesystem", () => {
     const service = createService();
 
@@ -73,6 +83,16 @@ describe("wiki filename identity", () => {
         { filename: "alpha.md", content: "second" },
       ]),
     ).toBe("duplicate_filename");
+  });
+
+  it("rejects Windows reserved raw filenames before touching the filesystem", () => {
+    const service = createService();
+
+    expect(
+      service.rawWriteMany("svc-test", "team-test", "wiki-test", [
+        { filename: "CON.md", content: "unsafe" },
+      ]),
+    ).toBe("unsafe_filename");
   });
 
   it("rejects raw filenames that collide after path normalization", () => {
@@ -95,6 +115,16 @@ describe("wiki filename identity", () => {
         { ref: "guide.md", content: "second" },
       ]),
     ).toBe("duplicate_filename");
+  });
+
+  it("rejects Windows reserved page refs", () => {
+    const service = createService();
+
+    expect(
+      service.pageWriteMany("svc-test", "team-test", "wiki-test", [
+        { ref: "nested/NUL", content: "unsafe" },
+      ]),
+    ).toBe("unsafe_filename");
   });
 
   it("rejects page refs that collide after removing dot segments", () => {

@@ -45,6 +45,7 @@ function maybeWriteError(outcome: unknown): Response | null {
   if (outcome === "forbidden_path") return Response.json(wrapError(400, "forbidden path (structural file or outside wiki/)"), { status: 400 });
   if (outcome === "too_large") return Response.json(wrapError(413, "content exceeds size limit"), { status: 413 });
   if (outcome === "duplicate_filename") return Response.json(wrapError(400, "duplicate filename after Unicode/case normalization"), { status: 400 });
+  if (outcome === "unsafe_filename") return Response.json(wrapError(400, "filename is not portable to Windows"), { status: 400 });
   return null;
 }
 
