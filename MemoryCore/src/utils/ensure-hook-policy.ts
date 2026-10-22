@@ -6,6 +6,7 @@
  * for non-bundled plugins (v2026.4.23+, PR #70786).
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getEnv } from "./env.js";
@@ -251,10 +252,57 @@ function manualPatch(logger: Logger): void {
   (entry.hooks as Record<string, unknown>).allowConversationAccess = true;
 
   try {
-    fs.writeFileSync(configPath, JSON.stringify(parsed, null, 2) + "\n");
+    replaceFileAtomically(configPath, JSON.stringify(parsed, null, 2) + "\n");
     logger.info(`${TAG} ✅ Auto-added hooks.allowConversationAccess to ${configPath}`);
     logger.warn(`${TAG} ⚠️  Gateway restart required. Run: openclaw gateway restart`);
   } catch (err) {
     logger.warn(`${TAG} Failed to write ${configPath}: ${err instanceof Error ? err.message : String(err)}. Add manually.`);
+  }
+}
+
+/**
+ * Replace a user-owned config file without exposing a partially written file.
+ * Resolve symlinks first so replacing a linked config updates its target rather
+ * than replacing the link itself.
+ */
+function replaceFileAtomically(filePath: string, content: string): void {
+  const targetPath = fs.realpathSync(filePath);
+  const dir = path.dirname(targetPath);
+  const tmpPath = path.join(
+    dir,
+    `.${path.basename(targetPath)}.tmp-${process.pid}-${randomUUID()}`,
+  );
+  const mode = fs.statSync(targetPath).mode & 0o777;
+
+  try {
+    const fd = fs.openSync(tmpPath, "wx", mode);
+    try {
+      fs.writeFileSync(fd, content, "utf8");
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.chmodSync(tmpPath, mode);
+    fs.renameSync(tmpPath, targetPath);
+
+    // Best-effort directory fsync. Windows does not permit opening directories
+    // through node:fs, but the file contents were already fsynced above.
+    try {
+      const dirFd = fs.openSync(dir, "r");
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // Directory fsync is not supported on every platform/filesystem.
+    }
+  } catch (err) {
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      // Preserve the original error.
+    }
+    throw err;
   }
 }
