@@ -14,6 +14,10 @@ Panel 的 WOA/IdP 身份绑定与 session secret 默认存储在
 `/data/knowledge/panel-auth-identities.json` 及同目录，位于持久化卷
 `PANEL_VOLUME` 内；容器重建不会丢失已有绑定。
 
+Proxy 的本地 SQLite 状态默认位于 `/data/tdai-memory-proxy/proxy.db`，由
+`PROXY_DATA_VOLUME` named volume 持久化；Session/Hook 缓存不会在
+`stop-all.sh` + `start-all.sh` 后消失。
+
 > 三个镜像都发布在 Docker Hub 的 [`agentmemory`](https://hub.docker.com/u/agentmemory) 命名空间下，
 > 多架构（`linux/amd64` + `linux/arm64`），公开可拉、无需登录。想固定版本时把 `.env` 里的 tag 从
 > `:latest` 换成具体版本即可，例如 `:1.0.0-beta.1`。

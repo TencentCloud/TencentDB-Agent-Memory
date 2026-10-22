@@ -22,4 +22,19 @@ describe("Panel deployment persistence", () => {
       'PANEL_AUTH_IDENTITY_STORE_PATH="${PANEL_AUTH_IDENTITY_STORE_PATH:-/data/knowledge/panel-auth-identities.json}"',
     );
   });
+
+  it("keeps Proxy session SQLite state on a named volume", () => {
+    const proxyLauncher = read("deploy/global-images/start-proxy.sh");
+    const stopAll = read("deploy/global-images/stop-all.sh");
+
+    expect(proxyLauncher).toContain(
+      'PROXY_DATA_VOLUME="${PROXY_DATA_VOLUME:-tdai-proxy-data}"',
+    );
+    expect(proxyLauncher).toContain(
+      '-v "${PROXY_DATA_VOLUME}:/data/tdai-memory-proxy"',
+    );
+    expect(stopAll).toContain(
+      '"$PROXY_DATA_VOLUME" mongo-local-db mongo-local-configdb mongo-local-mongot',
+    );
+  });
 });
