@@ -36,6 +36,7 @@ import type {
   L1PaginatedResult,
   ProfileFilter,
   IsolationFilter,
+  DeleteL1Options,
   L0Record,
   AuditEntry,
   AuditQueryFilter,
@@ -760,30 +761,38 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  async deleteL1(recordId: string): Promise<boolean> {
+  async deleteL1(recordId: string, _filter?: IsolationFilter, options?: DeleteL1Options): Promise<boolean> {
     try {
       await this._ensureInit();
-      if (this.degraded) return false;
+      if (this.degraded) {
+        if (options?.throwOnError) throw new Error("L1 store is degraded");
+        return false;
+      }
       const affected = await this.client.deleteDoc(this.l1Collection, {
         query: { documentIds: [recordId] },
       });
       return affected > 0;
     } catch (err) {
+      if (options?.throwOnError) throw err;
       this.logger?.warn(`${TAG} [L1-delete] FAILED id=${recordId}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
   }
 
-  async deleteL1Batch(recordIds: string[]): Promise<boolean> {
+  async deleteL1Batch(recordIds: string[], _filter?: IsolationFilter, options?: DeleteL1Options): Promise<boolean> {
     if (recordIds.length === 0) return true;
     try {
       await this._ensureInit();
-      if (this.degraded) return false;
+      if (this.degraded) {
+        if (options?.throwOnError) throw new Error("L1 store is degraded");
+        return false;
+      }
       await this.client.deleteDoc(this.l1Collection, {
         query: { documentIds: recordIds },
       });
       return true;
     } catch (err) {
+      if (options?.throwOnError) throw err;
       this.logger?.warn(`${TAG} [L1-deleteBatch] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
