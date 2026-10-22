@@ -45,6 +45,7 @@ import type {
   ProfileSyncRecord,
   ProfileFilter,
   IsolationFilter,
+  DeleteL1Options,
   AuditEntry,
   AuditQueryFilter,
   KnowledgeEntity,
@@ -295,13 +296,13 @@ export class MongoMemoryStore implements IMemoryStore {
     return true;
   }
 
-  async deleteL1(recordId: string, filter?: IsolationFilter): Promise<boolean> {
+  async deleteL1(recordId: string, filter?: IsolationFilter, _options?: DeleteL1Options): Promise<boolean> {
     const coll = await this.coll(COLLECTIONS.L1);
     const res = await coll.deleteOne({ _id: recordId, ...isolationToMatch(filter) } as never);
     return res.deletedCount > 0;
   }
 
-  async deleteL1Batch(recordIds: string[], filter?: IsolationFilter): Promise<boolean> {
+  async deleteL1Batch(recordIds: string[], filter?: IsolationFilter, _options?: DeleteL1Options): Promise<boolean> {
     if (recordIds.length === 0) return true;
     const coll = await this.coll(COLLECTIONS.L1);
     await coll.deleteMany({ _id: { $in: recordIds }, ...isolationToMatch(filter) } as never);
