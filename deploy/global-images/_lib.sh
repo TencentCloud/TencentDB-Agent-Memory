@@ -4,6 +4,65 @@
 
 set -euo pipefail
 
+# Convert a host path for Docker bind mounts. Git Bash/MSYS otherwise rewrites
+# the colon in `/c/path:/container/path` and silently corrupts the mount.
+host_path() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+      else
+        printf '%s\n' "$1"
+      fi
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+# Detect a non-loopback IPv4 address used in the Panel's client endpoint.
+# Windows' ipconfig.exe must be handled before the macOS ipconfig branch; the
+# Windows binary prints help text for `getifaddr`, which must never become the IP.
+detect_host_ip() {
+  local ip=""
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if command -v ipconfig >/dev/null 2>&1; then
+        ip=$(ipconfig 2>/dev/null | tr -d '\r' | awk '
+          /IPv4/ {
+            for (i = NF; i >= 1; i--) {
+              if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+                print $i
+                exit
+              }
+            }
+          }
+        ')
+        [[ -n "$ip" ]] && { printf '%s\n' "$ip"; return; }
+      fi
+      ;;
+    Darwin)
+      if command -v ipconfig >/dev/null 2>&1; then
+        for iface in en0 en1 en2; do
+          ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+          [[ -n "$ip" ]] && { printf '%s\n' "$ip"; return; }
+        done
+      fi
+      ;;
+  esac
+
+  if command -v hostname >/dev/null 2>&1; then
+    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
+    [[ -n "$ip" ]] && { printf '%s\n' "$ip"; return; }
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
+    [[ -n "$ip" ]] && { printf '%s\n' "$ip"; return; }
+  fi
+  printf 'localhost\n'
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 
