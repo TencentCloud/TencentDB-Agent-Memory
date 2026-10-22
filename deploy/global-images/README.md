@@ -10,6 +10,10 @@
 | **memory-hub**  | `tdai-memory-hub`  | [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)   | `8125` / `8424` | 管理面板 (Panel) + 知识服务 (Knowledge) 合并镜像 |
 | **proxy**       | `tdai-proxy`       | [`agentmemory/memory-proxy`](https://hub.docker.com/r/agentmemory/memory-proxy) | `8096` | LLM 请求转发代理，coding agent 的 API 入口 |
 
+Panel 的 WOA/IdP 身份绑定与 session secret 默认存储在
+`/data/knowledge/panel-auth-identities.json` 及同目录，位于持久化卷
+`PANEL_VOLUME` 内；容器重建不会丢失已有绑定。
+
 > 三个镜像都发布在 Docker Hub 的 [`agentmemory`](https://hub.docker.com/u/agentmemory) 命名空间下，
 > 多架构（`linux/amd64` + `linux/arm64`），公开可拉、无需登录。想固定版本时把 `.env` 里的 tag 从
 > `:latest` 换成具体版本即可，例如 `:1.0.0-beta.1`。
