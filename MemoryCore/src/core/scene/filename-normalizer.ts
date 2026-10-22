@@ -148,7 +148,7 @@ export async function normalizeSceneFilenames(
 
   let entries: string[];
   try {
-    entries = (await fs.readdir(blocksDir)).filter((f) => f.endsWith(".md"));
+    entries = (await fs.readdir(blocksDir)).filter((f) => f.toLowerCase().endsWith(".md"));
   } catch {
     return result;
   }
