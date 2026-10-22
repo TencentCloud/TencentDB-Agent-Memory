@@ -23,7 +23,10 @@ import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import type { SceneIndexEntry } from "../scene/scene-index.js";
 import { parseSceneBlock } from "../scene/scene-format.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
-import { normalizeSceneFilenames } from "./filename-normalizer.js";
+import {
+  isSceneMarkdownFilename,
+  normalizeSceneFilenames,
+} from "./filename-normalizer.js";
 import type { MemoryPromptMode } from "../../config.js";
 import { buildSceneExtractionPrompt } from "../prompts/scene-extraction.js";
 import { report } from "../report/reporter.js";
@@ -336,10 +339,14 @@ export class SceneExtractor {
     try {
       let allFiles: string[];
       if (this.storage) {
-        allFiles = await this.storage.readdirNames(StoragePaths.sceneBlocksDir, ".md");
+        allFiles = (await this.storage.readdirNames(StoragePaths.sceneBlocksDir)).filter(
+          isSceneMarkdownFilename,
+        );
       } else {
         const fs = await import("node:fs/promises");
-        allFiles = (await fs.default.readdir(sceneBlocksDir)).filter((f: string) => f.endsWith(".md"));
+        allFiles = (await fs.default.readdir(sceneBlocksDir)).filter(
+          isSceneMarkdownFilename,
+        );
       }
       for (const file of allFiles) {
         let raw: string | null;
