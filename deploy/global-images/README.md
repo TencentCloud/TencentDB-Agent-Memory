@@ -10,6 +10,11 @@
 | **memory-hub**  | `tdai-memory-hub`  | [`agentmemory/memory-hub`](https://hub.docker.com/r/agentmemory/memory-hub)   | `8125` / `8424` | 管理面板 (Panel) + 知识服务 (Knowledge) 合并镜像 |
 | **proxy**       | `tdai-proxy`       | [`agentmemory/memory-proxy`](https://hub.docker.com/r/agentmemory/memory-proxy) | `8096` | LLM 请求转发代理，coding agent 的 API 入口 |
 
+Panel 的「数据分析」入口默认关闭。需要时在 `.env` 设置
+`PANEL_FEATURE_ANALYTICS_ENABLED=true` 并重启；`start-memory-hub.sh` 会将该值
+传入容器。入口开关本身不会采集数据，完整配置步骤见 `INSTALL_CN.md` 的
+「数据分析与可观测性」章节。
+
 > 三个镜像都发布在 Docker Hub 的 [`agentmemory`](https://hub.docker.com/u/agentmemory) 命名空间下，
 > 多架构（`linux/amd64` + `linux/arm64`），公开可拉、无需登录。想固定版本时把 `.env` 里的 tag 从
 > `:latest` 换成具体版本即可，例如 `:1.0.0-beta.1`。

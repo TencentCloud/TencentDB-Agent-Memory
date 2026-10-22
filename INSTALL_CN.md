@@ -640,6 +640,13 @@ Core 反向去查 Proxy 已经写好的埋点库。
 
 ### 第 5 步：重启三件套并验证
 
+使用 `deploy/global-images` 一键部署时，先在 `.env` 打开 Panel 入口；该开关
+默认关闭，`start-memory-hub.sh` 会将其传入合并容器：
+
+```bash
+PANEL_FEATURE_ANALYTICS_ENABLED=true
+```
+
 ```bash
 # 重启（如果走一键部署）
 ./stop-all.sh
