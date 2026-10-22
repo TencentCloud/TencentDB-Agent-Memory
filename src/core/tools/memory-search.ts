@@ -14,6 +14,7 @@ import type { IMemoryStore, L1SearchResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
+import { normalizeMemoryProvenance } from "../record/l1-writer.js";
 
 // ============================
 // Types
@@ -28,6 +29,9 @@ export interface MemorySearchResultItem {
   score: number;
   created_at: string;
   updated_at: string;
+  source?: string;
+  credibility_score?: number;
+  namespace?: string;
 }
 
 export interface MemorySearchResult {
@@ -39,6 +43,20 @@ export interface MemorySearchResult {
 }
 
 const TAG = "[memory-tdai][tdai_memory_search]";
+
+function provenanceFromMetadataJson(metadataJson: string | undefined): {
+  source?: string;
+  credibility_score?: number;
+  namespace?: string;
+} {
+  if (!metadataJson || metadataJson === "{}") return {};
+  try {
+    const metadata = JSON.parse(metadataJson) as Record<string, unknown>;
+    return normalizeMemoryProvenance({ metadata });
+  } catch {
+    return {};
+  }
+}
 
 // ============================
 // RRF (Reciprocal Rank Fusion)
@@ -149,16 +167,20 @@ export async function executeMemorySearch(params: {
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
         const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 returned ${ftsResults.length} candidates`);
-        return ftsResults.map((r) => ({
-          id: r.record_id,
-          content: r.content,
-          type: r.type,
-          priority: r.priority,
-          scene_name: r.scene_name,
-          score: r.score,
-          created_at: r.timestamp_start,
-          updated_at: r.timestamp_end,
-        }));
+        return ftsResults.map((r) => {
+          const provenance = provenanceFromMetadataJson(r.metadata_json);
+          return {
+            id: r.record_id,
+            content: r.content,
+            type: r.type,
+            priority: r.priority,
+            scene_name: r.scene_name,
+            score: r.score,
+            created_at: r.timestamp_start,
+            updated_at: r.timestamp_end,
+            ...provenance,
+          };
+        });
       } catch (err) {
         logger?.warn?.(
           `${TAG} [hybrid-fts] FTS5 search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -178,16 +200,20 @@ export async function executeMemorySearch(params: {
         );
         const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, candidateK, query);
         logger?.debug?.(`${TAG} [hybrid-vec] Vector search returned ${vecResults.length} candidates`);
-        return vecResults.map((r) => ({
-          id: r.record_id,
-          content: r.content,
-          type: r.type,
-          priority: r.priority,
-          scene_name: r.scene_name,
-          score: r.score,
-          created_at: r.timestamp_start,
-          updated_at: r.timestamp_end,
-        }));
+        return vecResults.map((r) => {
+          const provenance = provenanceFromMetadataJson(r.metadata_json);
+          return {
+            id: r.record_id,
+            content: r.content,
+            type: r.type,
+            priority: r.priority,
+            scene_name: r.scene_name,
+            score: r.score,
+            created_at: r.timestamp_start,
+            updated_at: r.timestamp_end,
+            ...provenance,
+          };
+        });
       } catch (err) {
         logger?.warn?.(
           `${TAG} [hybrid-vec] Embedding search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -275,10 +301,20 @@ export function formatSearchResponse(result: MemorySearchResult): string {
     const scoreStr = typeof item.score === "number" ? ` (score: ${item.score.toFixed(3)})` : "";
     const sceneStr = item.scene_name ? ` [scene: ${item.scene_name}]` : "";
     const priorityStr = item.priority >= 0 ? ` (priority: ${item.priority})` : " (global instruction)";
-    lines.push(`- **[${item.type}]**${priorityStr}${sceneStr}${scoreStr}`);
+    const provenance = formatProvenance(item);
+    const provenanceStr = provenance ? ` (${provenance})` : "";
+    lines.push(`- **[${item.type}]**${priorityStr}${sceneStr}${scoreStr}${provenanceStr}`);
     lines.push(`  ${item.content}`);
     lines.push("");
   }
 
   return lines.join("\n");
+}
+
+function formatProvenance(item: Pick<MemorySearchResultItem, "source" | "credibility_score" | "namespace">): string | undefined {
+  const parts: string[] = [];
+  if (item.source) parts.push(`source: ${item.source}`);
+  if (typeof item.credibility_score === "number") parts.push(`credibility: ${item.credibility_score.toFixed(2)}`);
+  if (item.namespace) parts.push(`namespace: ${item.namespace}`);
+  return parts.length > 0 ? parts.join(", ") : undefined;
 }

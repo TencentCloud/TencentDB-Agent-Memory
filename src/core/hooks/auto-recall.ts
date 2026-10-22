@@ -22,6 +22,7 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
+import { normalizeMemoryProvenance } from "../record/l1-writer.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -667,6 +668,9 @@ interface FormatableMemory {
   type: string;
   content: string;
   scene_name?: string;
+  source?: string;
+  credibility_score?: number;
+  namespace?: string;
   /** Activity time range start (段时间 start), may be empty */
   activity_start_time?: string;
   /** Activity time range end (段时间 end), may be empty */
@@ -702,7 +706,20 @@ function formatMemoryLine(m: FormatableMemory): string {
   }
   // If all three are empty → no time info appended (graceful)
 
+  const provenance = formatProvenance(m);
+  if (provenance) {
+    line += ` (${provenance})`;
+  }
+
   return line;
+}
+
+function formatProvenance(m: FormatableMemory): string | undefined {
+  const parts: string[] = [];
+  if (m.source) parts.push(`source: ${m.source}`);
+  if (typeof m.credibility_score === "number") parts.push(`credibility: ${m.credibility_score.toFixed(2)}`);
+  if (m.namespace) parts.push(`namespace: ${m.namespace}`);
+  return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
 function applyRecallBudget(
@@ -818,10 +835,12 @@ function formatTimestamp(ts: string | undefined): string | undefined {
  */
 function recordToFormatable(record: MemoryRecord): FormatableMemory {
   const meta = record.metadata as { activity_start_time?: string; activity_end_time?: string } | undefined;
+  const provenance = normalizeMemoryProvenance(record);
   return {
     type: record.type,
     content: record.content,
     scene_name: record.scene_name || undefined,
+    ...provenance,
     activity_start_time: meta?.activity_start_time || undefined,
     activity_end_time: meta?.activity_end_time || undefined,
     timestamp: (record.timestamps && record.timestamps.length > 0) ? record.timestamps[0] : undefined,
@@ -835,17 +854,21 @@ function recordToFormatable(record: MemoryRecord): FormatableMemory {
 function vectorResultToFormatable(r: L1SearchResult): FormatableMemory {
   let activityStart: string | undefined;
   let activityEnd: string | undefined;
+  let metadata: Record<string, unknown> = {};
   if (r.metadata_json && r.metadata_json !== "{}") {
     try {
       const meta = typeof r.metadata_json === "string" ? JSON.parse(r.metadata_json) : r.metadata_json;
+      metadata = meta && typeof meta === "object" ? meta : {};
       activityStart = meta?.activity_start_time || undefined;
       activityEnd = meta?.activity_end_time || undefined;
     } catch { /* ignore parse errors — treat as no metadata */ }
   }
+  const provenance = normalizeMemoryProvenance({ metadata });
   return {
     type: r.type,
     content: r.content,
     scene_name: r.scene_name || undefined,
+    ...provenance,
     activity_start_time: activityStart,
     activity_end_time: activityEnd,
     timestamp: r.timestamp_str || undefined,
@@ -859,17 +882,21 @@ function vectorResultToFormatable(r: L1SearchResult): FormatableMemory {
 function ftsResultToFormatable(r: L1FtsResult): FormatableMemory {
   let activityStart: string | undefined;
   let activityEnd: string | undefined;
+  let metadata: Record<string, unknown> = {};
   if (r.metadata_json && r.metadata_json !== "{}") {
     try {
       const meta = typeof r.metadata_json === "string" ? JSON.parse(r.metadata_json) : r.metadata_json;
+      metadata = meta && typeof meta === "object" ? meta : {};
       activityStart = meta?.activity_start_time || undefined;
       activityEnd = meta?.activity_end_time || undefined;
     } catch { /* ignore parse errors — treat as no metadata */ }
   }
+  const provenance = normalizeMemoryProvenance({ metadata });
   return {
     type: r.type,
     content: r.content,
     scene_name: r.scene_name || undefined,
+    ...provenance,
     activity_start_time: activityStart,
     activity_end_time: activityEnd,
     timestamp: r.timestamp_str || undefined,

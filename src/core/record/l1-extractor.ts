@@ -40,6 +40,9 @@ interface SceneSegment {
     priority: number;
     source_message_ids: string[];
     metadata: Record<string, unknown>;
+    source?: string;
+    credibility_score?: number;
+    namespace?: string;
   }>;
 }
 
@@ -184,6 +187,9 @@ export async function extractL1Memories(params: {
         priority: typeof mem.priority === "number" ? mem.priority : 50,
         source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
         metadata: mem.metadata ?? {},
+        source: mem.source,
+        credibility_score: mem.credibility_score,
+        namespace: mem.namespace,
         scene_name: scene.scene_name,
       });
     }
@@ -396,6 +402,9 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
                 priority: typeof m.priority === "number" ? m.priority : 50,
                 source_message_ids: Array.isArray(m.source_message_ids) ? m.source_message_ids.map(String) : [],
                 metadata: (m.metadata && typeof m.metadata === "object" ? m.metadata : {}) as Record<string, unknown>,
+                source: typeof m.source === "string" ? m.source : undefined,
+                credibility_score: typeof m.credibility_score === "number" ? m.credibility_score : undefined,
+                namespace: typeof m.namespace === "string" ? m.namespace : undefined,
               }))
           : [],
       });
