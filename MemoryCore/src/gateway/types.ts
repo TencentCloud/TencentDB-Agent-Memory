@@ -21,6 +21,7 @@ export interface HealthResponse {
   uptime: number;
   stores: {
     vectorStore: boolean;
+    vectorStoreState: "ok" | "degraded" | "missing";
     embeddingService: boolean;
   };
   /** Integrated services status (only present when state_backend is configured) */
