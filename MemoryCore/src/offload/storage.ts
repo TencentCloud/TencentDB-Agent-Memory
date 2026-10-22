@@ -8,14 +8,33 @@
  *   - L2 aggregation reads all offload-*.jsonl in the agent dir
  *   - All I/O functions require a StorageContext (no global mutable state)
  */
-import { readFile, writeFile, appendFile, mkdir, readdir, unlink } from "node:fs/promises";
+import { readFile, appendFile, mkdir, open, readdir, rename, rm, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import type { OffloadEntry, PluginLogger } from "./types.js";
 
 /** Default root data directory (parent of all agent subdirectories) */
 export const DEFAULT_DATA_ROOT = join(homedir(), ".openclaw", "context-offload");
+
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(tempPath, "w");
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(tempPath, filePath);
+  } catch (err) {
+    await handle?.close().catch(() => {});
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
+}
 
 // ─── StorageContext ──────────────────────────────────────────────────────────
 
@@ -122,7 +141,7 @@ export async function registerSession(
     offloadFile: `offload-${realSessionId}.jsonl`,
     updatedAt: new Date().toISOString(),
   };
-  await writeFile(registryPath, JSON.stringify(registry, null, 2), "utf-8");
+  await atomicWriteFile(registryPath, JSON.stringify(registry, null, 2));
 }
 
 /** Look up the real sessionId for a given sessionKey from the registry. */
@@ -355,7 +374,7 @@ export async function rewriteOffloadEntries(
   const content =
     entries.map((e) => safeStringifyEntry(e as unknown as Record<string, unknown>)).join("\n") +
     (entries.length > 0 ? "\n" : "");
-  await writeFile(ctx.offloadJsonl, content, "utf-8");
+  await atomicWriteFile(ctx.offloadJsonl, content);
 }
 
 /** Mark offload entries by tool_call_id with an `offloaded` status. */
@@ -497,7 +516,7 @@ export async function rewriteAllOffloadEntries(
       const content =
         fileEntries.map(safeStringifyEntry).join("\n") +
         (fileEntries.length > 0 ? "\n" : "");
-      await writeFile(filePath, content, "utf-8");
+      await atomicWriteFile(filePath, content);
     }),
   );
 }
@@ -539,7 +558,7 @@ export async function writeRefMd(
   const filePath = join(ctx.refsDir, filename);
   const safeContent = (content ?? "").replace(UNSAFE_CHAR_RE, "");
   const header = `# Tool Result: ${toolName}\n\n**Timestamp:** ${timestamp}\n\n---\n\n`;
-  await writeFile(filePath, header + safeContent, "utf-8");
+  await atomicWriteFile(filePath, header + safeContent);
   return `refs/${filename}`;
 }
 
@@ -572,7 +591,7 @@ export async function writeMmd(
   content: string,
 ): Promise<void> {
   const filePath = join(ctx.mmdsDir, filename);
-  await writeFile(filePath, content, "utf-8");
+  await atomicWriteFile(filePath, content);
 }
 
 /** Apply incremental line-based replace blocks to an existing MMD file. */
@@ -605,7 +624,7 @@ export async function patchMmd(
   }
   const newContent = lines.join("\n");
   if (newContent !== original) {
-    await writeFile(filePath, newContent, "utf-8");
+    await atomicWriteFile(filePath, newContent);
   }
   return allValid;
 }
@@ -659,6 +678,5 @@ export async function writeStateFile<T>(
   ctx: StorageContext,
   state: T,
 ): Promise<void> {
-  await mkdir(dirname(ctx.stateFile), { recursive: true });
-  await writeFile(ctx.stateFile, JSON.stringify(state, null, 2), "utf-8");
+  await atomicWriteFile(ctx.stateFile, JSON.stringify(state, null, 2));
 }
