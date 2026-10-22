@@ -90,7 +90,7 @@ export interface SkillConfigInput {
    * 详见 docs/design/2026-07-30-skill-worker-instance-decoupling.md。
    */
   worker?: {
-    /** 池里 worker 数, 全进程 skill 抽取并发上限。默认 60。可被 env TDAI_SKILL_WORKER_CONCURRENCY 覆盖。 */
+    /** 池里 worker 数, 全进程 skill 抽取并发上限。默认 4。可被 env TDAI_SKILL_WORKER_CONCURRENCY 覆盖。 */
     concurrency?: number;
     /** dequeueAgent 单次自旋 deadline (ms)。默认 5000。 */
     brpopBlockMs?: number;
