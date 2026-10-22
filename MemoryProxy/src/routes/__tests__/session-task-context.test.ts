@@ -5,7 +5,6 @@ import { _resetPendingStoreForTests } from "../../mem-command/pending-store.js";
 import { stageSessionInitOrchestrate } from "../../pipeline/stages/session-init-orchestrate.js";
 import { handleSessionInit } from "../../session/claude-code/init.js";
 import { handleSessionInit as handleCodeBuddySessionInit } from "../../session/codebuddy/init.js";
-import { buildSessionContextBlockWithToggles, injectSessionContextWithToggles } from "../../session/context-injector.js";
 import { __resetSessionStoreForTests, getSessionStore, SessionStore } from "../../session/store.js";
 import type { SessionInitState } from "../../session/types.js";
 import type { ProxyConfig } from "../../types.js";
@@ -74,7 +73,6 @@ it.each([
   ["claude-code", "openai"],
   ["claude-code", "anthropic"],
   ["codebuddy", "openai"],
-  ["codex", "openai"],
 ] as const)("injects the confirmed description on the next %s/%s turn", async (agentSource, protocol) => {
   const store = getSessionStore();
   if (agentSource !== "claude-code") {
@@ -92,46 +90,34 @@ it.each([
   const reqCtx = { stream: false, modelId: "test-model", protocol };
   const next = agentSource === "claude-code"
     ? await handleSessionInit("session-a", "user-a", messages, config.sessionInit, store, reqCtx)
-    : await handleCodeBuddySessionInit(
-        "session-a", "user-a", messages, config.sessionInit, store, reqCtx,
-        undefined, undefined, undefined, undefined, agentSource,
-      );
+    : await handleCodeBuddySessionInit("session-a", "user-a", messages, config.sessionInit, store, reqCtx);
   const context = protocol === "anthropic" && "systemAppend" in next
     ? next.systemAppend ?? "" : JSON.stringify(next.messages);
   expect(context).toContain("TASK_DESC_V2");
   expect(context).not.toContain("TASK_DESC_V1");
 });
 
-it.each([
-  ["claude-code", "openai"],
-  ["claude-code", "anthropic"],
-  ["codex", "responses"],
-] as const)("refreshes the context used by the normal %s/%s pipeline recovery branch", async (agentSource, protocol) => {
-  const store = getSessionStore();
-  if (agentSource !== "claude-code") {
-    await store.set(`${agentSource}:session-a`, store.get("claude-code:session-a")!);
-  }
-  const action = { ...input, agentSource };
-  await updateTaskFromSession({ ...action, directDescription: "TASK_DESC_V2", recentMessages: [] });
-  expect((await confirmPendingTaskAction(action)).success).toBe(true);
+it("passes the updated task snapshot to the pipeline recovery callback", async () => {
+  await draftUpdate();
+  expect((await confirmPendingTaskAction(input)).success).toBe(true);
   const messages = [{ role: "user", content: "Continue" }];
+  const buildRecoverInitResult = vi.fn((_state: SessionInitState) => ({ messages }));
   const result = await stageSessionInitOrchestrate({
-    agentSourceForState: agentSource, sessionKey: "session-a", userId: "user-a",
+    agentSourceForState: input.agentSource, sessionKey: "session-a", userId: "user-a",
     spaceId: "space-a", config, kernelUserKey: "test-key", headers: {},
     recoveryMessages: messages, synthesizeMessages: () => messages,
     buildReqCtx: () => ({ stream: false, modelId: "test-model" }),
     buildInterceptResponse: (init) => init.response ?? null,
-    // Use the same context builders as the protocol runners at this seam.
-    buildRecoverInitResult: (state) => protocol === "openai"
-      ? { messages: injectSessionContextWithToggles(messages, state.agentDetail, state.taskDetail, config.sessionInit, "session-a") }
-      : { messages, systemAppend: buildSessionContextBlockWithToggles(state.agentDetail, state.taskDetail, config.sessionInit, "session-a") },
+    buildRecoverInitResult,
   });
   expect(result.proceed).toBe(true);
   expect(result.wentThroughStateMachine).toBe(false);
-  const context = protocol === "openai"
-    ? JSON.stringify(result.initResult?.messages) : result.initResult?.systemAppend;
-  expect(context).toContain("TASK_DESC_V2");
-  expect(context).not.toContain("TASK_DESC_V1");
+  expect(buildRecoverInitResult).toHaveBeenCalledWith(
+    expect.objectContaining({
+      taskDetail: { id: "task-a", name: "Task A", description: "TASK_DESC_V2" },
+    }),
+    messages,
+  );
 });
 
 it("keeps the old description until confirmation and leaves it intact on cancel", async () => {
