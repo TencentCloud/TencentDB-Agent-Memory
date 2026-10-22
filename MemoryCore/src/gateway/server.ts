@@ -182,13 +182,18 @@ function createConsoleLogger(): Logger {
  * triggered by the combination of env reads and the documented route
  * comments above.
  */
-import { resolveMaxBodyBytes, resolveSessionMaxBodyBytes } from "../utils/env-config.js";
+import {
+  resolveMaxBodyBytes,
+  resolveOffloadMaxBodyBytes,
+  resolveSessionMaxBodyBytes,
+} from "../utils/env-config.js";
 
 const MAX_BODY_BYTES = resolveMaxBodyBytes();
 const SESSION_MAX_BODY_BYTES = resolveSessionMaxBodyBytes();
+const OFFLOAD_MAX_BODY_BYTES = resolveOffloadMaxBodyBytes();
 
 /**
- * Thrown by `parseJsonBody` when the incoming body exceeds `MAX_BODY_BYTES`.
+ * Thrown by `parseJsonBody` when the incoming body exceeds its route limit.
  * Caught at the top-level request handler (and v2 router) and translated
  * to HTTP 413 instead of being conflated with HTTP 500.
  */
@@ -1166,7 +1171,15 @@ export class TdaiGateway {
         stateBackend: this.stateBackend,
         config: { ...this.config.offload, l1Model: "", l15Model: "", l2Model: "" },
       };
-      const offloadHandled = await handleOffloadV2Route(req, res, pathname, method, parseJsonBody, sendJson, offloadDeps);
+      const offloadHandled = await handleOffloadV2Route(
+        req,
+        res,
+        pathname,
+        method,
+        (r) => parseJsonBody(r, OFFLOAD_MAX_BODY_BYTES),
+        sendJson,
+        offloadDeps,
+      );
       if (offloadHandled) return;
 
       // Compose deps: V2RouterDeps fields + SkillRouterDeps fields. The

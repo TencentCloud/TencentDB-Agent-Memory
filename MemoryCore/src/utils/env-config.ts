@@ -77,6 +77,27 @@ export function resolveSessionMaxBodyBytes(): number {
   return n;
 }
 
+export const DEFAULT_OFFLOAD_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Resolve the request body limit for `/v2/offload/*` routes.
+ *
+ * Compaction uploads the complete message history and token array, so applying
+ * the ordinary API limit would reject the large contexts this route is meant
+ * to compress.
+ *
+ * Source: `MEMORY_OFFLOAD_MAX_BODY_BYTES` (positive integer). Falls back to
+ * {@link DEFAULT_OFFLOAD_MAX_BODY_BYTES} (32 MiB) if unset, non-numeric, or
+ * non-positive.
+ */
+export function resolveOffloadMaxBodyBytes(): number {
+  const raw = ENV.MEMORY_OFFLOAD_MAX_BODY_BYTES;
+  if (!raw) return DEFAULT_OFFLOAD_MAX_BODY_BYTES;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_OFFLOAD_MAX_BODY_BYTES;
+  return n;
+}
+
 /** Connection details for the per-instance vector store. */
 export interface VdbEnvConfig {
   url: string;
