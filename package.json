@@ -1,7 +1,7 @@
 {
   "name": "@tencentdb-agent-memory/memory-tencentdb",
   "version": "0.3.6",
-  "description": "Four-layer local memory system plugin for OpenClaw — auto-captures, structures, and profiles conversational knowledge using local LLM + SQLite vector search (L0→L1→L2→L3 pipeline)",
+  "description": "Four-layer local memory system plugin for OpenClaw \u2014 auto-captures, structures, and profiles conversational knowledge using local LLM + SQLite vector search (L0\u2192L1\u2192L2\u2192L3 pipeline)",
   "type": "module",
   "main": "./dist/index.mjs",
   "bin": {
@@ -107,12 +107,12 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.3.13",
-      "minGatewayVersion": ">=2026.3.13"
+      "pluginApi": ">=2026.3.13 <2027.0.0",
+      "minGatewayVersion": ">=2026.3.13 <2027.0.0"
     },
     "build": {
-      "openclawVersion": "2026.3.13",
-      "pluginSdkVersion": "2026.3.13"
+      "openclawVersion": ">=2026.3.13 <2027.0.0",
+      "pluginSdkVersion": ">=2026.3.13 <2027.0.0"
     },
     "bundle": {
       "stageRuntimeDependencies": true
