@@ -8,6 +8,7 @@
     "mock": "VITE_ENTRY=mock vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test:i18n-storage": "node --test tests/i18n-storage.test.mjs",
     "lint": "eslint src --ext .ts,.tsx --fix",
     "lint:check": "eslint src --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
