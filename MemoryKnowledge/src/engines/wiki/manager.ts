@@ -43,6 +43,7 @@ import { createLogger } from "../../logger.js";
 import { withSpan } from "../../telemetry.js";
 import { getIngestConcurrency } from "../../config.js";
 import { slugify } from "./ingest-v2/slug.js";
+import { findWikiSourceFiles } from "./source-files.js";
 import { DEFAULT_SCHEMA, DEFAULT_PURPOSE } from "./ingest-v2/template.js";
 
 const log = createLogger("wiki-mgr");
@@ -574,7 +575,7 @@ export async function runIngestIncremental(
   }
 
   // 扫描磁盘源，算 sha。filename = 相对 sourcesDir 的 posix 路径（与 rawWrite 的 filename 对齐）。
-  const disk = findMdFiles(sourcesDir).map((abs) => {
+  const disk = findWikiSourceFiles(sourcesDir).map((abs) => {
     const content = readFileSync(abs, "utf-8");
     return {
       abs,
@@ -778,16 +779,6 @@ export async function runIngestIncremental(
 
   // 全部失败检测：不在此处 throw（由上层写事务后判定，保证 source 状态已持久化）。
   return { results, processed, deletedSources: deleted };
-}
-
-function findMdFiles(dir: string): string[] {
-  const files: string[] = [];
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) files.push(...findMdFiles(full));
-    else if (entry.endsWith(".md") || entry.endsWith(".txt")) files.push(full);
-  }
-  return files;
 }
 
 // ── Factory ──
