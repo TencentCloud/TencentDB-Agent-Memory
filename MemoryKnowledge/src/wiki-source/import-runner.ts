@@ -111,7 +111,8 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
   const failed: Array<{ id: string; error: string }> = [];
   const warnings: string[] = [];
   let imported = 0;
-  // 整轮导入内保持，避免不同批次产出同名文件互相覆盖
+  // 整轮导入内保持。键使用 NFC + case-fold，覆盖 Windows / 默认 macOS
+  // 大小写不敏感文件系统，同时避免 Unicode 规范等价标题落到同一文件。
   const usedNames = new Set<string>();
   // 列表阶段（listPages）的标题是可靠的，而 fetchPage 拿到的内容常无 title
   // （不少平台的内容接口只回正文、不带标题），故落盘优先用这里的标题兜底。
@@ -128,7 +129,7 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
   if (nameByExternalId) {
     // 历史文件名先占座：防止新文档生成同名文件，顶掉旧文档的位置
     for (const fn of Object.values(nameByExternalId)) {
-      if (fn) usedNames.add(fn);
+      if (fn) usedNames.add(filenameCollisionKey(fn));
     }
   }
 
@@ -235,7 +236,7 @@ async function fetchOneByOne(
 function buildFilename(
   title: string | undefined,
   externalId: string,
-  usedNames: Set<string>,
+  usedNameKeys: Set<string>,
 ): string {
   const cleaned = (title ?? "")
     // 去掉路径分隔符与 Windows 保留字符，防目录穿越
@@ -251,12 +252,21 @@ function buildFilename(
   const base = cleaned || externalId;
   let name = `${base}.md`;
   let n = 2;
-  while (usedNames.has(name)) {
+  while (usedNameKeys.has(filenameCollisionKey(name))) {
     name = `${base}-${n}.md`;
     n += 1;
   }
-  usedNames.add(name);
+  usedNameKeys.add(filenameCollisionKey(name));
   return name;
+}
+
+/**
+ * Portable filename collision identity. Display names retain their original
+ * case, but Windows and default macOS volumes resolve case-only variants to the
+ * same path; APFS/HFS also treats canonically equivalent Unicode as one name.
+ */
+function filenameCollisionKey(name: string): string {
+  return name.normalize("NFC").toLocaleLowerCase("en-US");
 }
 
 /** 按「文件数 + 字节数」双上限分包。 */
