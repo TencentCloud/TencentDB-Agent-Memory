@@ -84,6 +84,8 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+  models:
+    - "${PROXY_UPSTREAM_MODEL}"
 
 log:
   file: ""
