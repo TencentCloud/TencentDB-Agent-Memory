@@ -213,36 +213,43 @@ export class MongoFSBackend implements IStorageBackend {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       const current = await this.objects().findOne({ _id: key });
-      const filter = current ? { _id: key, version: current.version } : { _id: key };
-      const newGeneration = randomUUID();
-
-      let meta;
-      try {
-        meta = await this.objects().findOneAndUpdate(
-          filter,
-          {
-            $inc: { nextSeq: chunkCount, size: buf.length, version: 1 },
-            $set: { updatedAt: now },
-            $setOnInsert: { _id: key, generation: newGeneration },
-          },
-          { upsert: !current, returnDocument: "after" },
-        );
-      } catch (err) {
-        if (!current && (err as { code?: number }).code === 11000) continue;
-        throw err;
+      if (!current) {
+        await this.putObject(key, buf);
+        return;
       }
-      if (!meta) continue;
-
-      const generation = meta.generation;
-      const baseSeq = meta.nextSeq - chunkCount;
-      const newChunks = MongoFSBackend.toChunks(key, buf, now, generation);
-      await this.chunks().insertMany(
-        newChunks.map((chunk, index) => ({
+      const generation = current.generation;
+      const baseSeq = current.nextSeq;
+      const newChunks = MongoFSBackend.toChunks(key, buf, now, generation).map(
+        (chunk, index) => ({
           ...chunk,
           _id: MongoFSBackend.chunkId(key, generation, baseSeq + index),
           seq: baseSeq + index,
-        })),
+        }),
       );
+      const chunkIds = newChunks.map((chunk) => chunk._id);
+
+      try {
+        await this.chunks().insertMany(newChunks);
+      } catch (err) {
+        await this.chunks().deleteMany({ _id: { $in: chunkIds } }).catch(() => {});
+        if ((err as { code?: number }).code === 11000) continue;
+        throw err;
+      }
+
+      const generationFilter = generation
+        ? { generation }
+        : { generation: { $exists: false } };
+      const updated = await this.objects().updateOne(
+        { _id: key, version: current.version, ...generationFilter },
+        {
+          $inc: { nextSeq: chunkCount, size: buf.length, version: 1 },
+          $set: { updatedAt: now },
+        },
+      );
+      if (updated.modifiedCount !== 1) {
+        await this.chunks().deleteMany({ _id: { $in: chunkIds } }).catch(() => {});
+        continue;
+      }
       this.logger?.debug?.(`${TAG} appendObject: ${key} (+${buf.length} bytes @seq ${baseSeq})`);
       return;
     }
@@ -255,9 +262,13 @@ export class MongoFSBackend implements IStorageBackend {
     const meta = await this.objects().findOne({ _id: key });
     if (!meta) return null;
 
-    const chunkFilter = meta.generation
-      ? { key, generation: meta.generation }
-      : { key, generation: { $exists: false } };
+    const chunkFilter = {
+      key,
+      ...(meta.generation
+        ? { generation: meta.generation }
+        : { generation: { $exists: false } }),
+      seq: { $lt: meta.nextSeq },
+    };
     const parts = await this.chunks().find(chunkFilter).sort({ seq: 1 }).toArray();
     const content = Buffer.concat(
       parts.map((p) => (p.data instanceof Binary ? Buffer.from(p.data.buffer) : p.data)),

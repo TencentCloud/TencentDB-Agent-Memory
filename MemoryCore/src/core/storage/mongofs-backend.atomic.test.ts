@@ -9,6 +9,12 @@ function matches(value: Record<string, unknown>, filter: Record<string, any>): b
     if (expected && typeof expected === "object" && "$ne" in expected) {
       return value[key] !== expected.$ne;
     }
+    if (expected && typeof expected === "object" && "$in" in expected) {
+      return expected.$in.includes(value[key]);
+    }
+    if (expected && typeof expected === "object" && "$lt" in expected) {
+      return value[key] < expected.$lt;
+    }
     return value[key] === expected;
   });
 }
@@ -142,5 +148,19 @@ describe("MongoFSBackend atomic replacement", () => {
 
     const current = await backend.getObject("state.json");
     expect(current?.content.toString()).toBe("hello-world");
+  });
+
+  it("keeps the committed length when an append chunk write is interrupted", async () => {
+    const db = new FakeDb();
+    const backend = new MongoFSBackend({ db: db as any });
+    await backend.putObject("state.json", "old-valid");
+
+    db.chunks.failNextInsert = true;
+    await expect(backend.appendObject("state.json", "-new")).rejects.toThrow(
+      "simulated chunk insert interruption",
+    );
+
+    const current = await backend.getObject("state.json");
+    expect(current?.content.toString()).toBe("old-valid");
   });
 });
