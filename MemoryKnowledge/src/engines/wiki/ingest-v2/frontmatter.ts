@@ -33,7 +33,7 @@ export interface ParsedPage {
   hasFrontmatter: boolean;
 }
 
-const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const FM_RE = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 /**
  * 拆分页内容为 frontmatter + 正文。无 frontmatter 时返回 `{type:"other"}` 占位。
