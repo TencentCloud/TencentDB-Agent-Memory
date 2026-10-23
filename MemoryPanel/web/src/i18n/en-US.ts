@@ -25,6 +25,9 @@ export const enUS = {
   'menu.desc.team_agents': 'Agent / scope / fixed assets',
   'menu.desc.api_keys': 'Manage your API keys for external clients',
 
+  // ===== TabBar =====
+  'tabbar.close': 'Close {{name}}',
+
   // ===== GlobalHeader =====
   'header.guide': 'Guide',
   'header.sync': 'Live Sync',
