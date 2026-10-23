@@ -47,6 +47,74 @@ const scene = await client.readScenario({ path: "work.md" });
 const core = await client.readCore();
 ```
 
+## Keep the model provider unchanged (direct-to-Core hooks)
+
+If a client exposes lifecycle hooks or plugins, it can call Memory Core directly
+through this SDK while leaving its existing model provider, endpoint, login and
+model selection unchanged. The model request stays on the client's normal path;
+the hook makes a separate request to the Memory Gateway and does not need to
+route model traffic through MemoryProxy.
+
+```text
+coding agent ───────────────► its existing model provider
+     └─ lifecycle hook ─────► Memory Core /v3/* via this SDK
+```
+
+Create the client from trusted deployment configuration, then use it from the
+client's recall and completed-turn capture hooks:
+
+```typescript
+import { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
+
+const memory = new MemoryClient({
+  endpoint: process.env.TDAI_MEMORY_ENDPOINT!,
+  apiKey: process.env.TDAI_MEMORY_API_KEY!,
+  serviceId: process.env.TDAI_MEMORY_SERVICE_ID!,
+  teamId: process.env.TDAI_MEMORY_TEAM_ID!,
+  agentId: process.env.TDAI_MEMORY_AGENT_ID!,
+  userId: process.env.TDAI_MEMORY_USER_ID!,
+});
+
+// Before prompt construction: keep the result count and injected text bounded.
+const recalled = await memory.searchConversation({ query: userPrompt, limit: 5 });
+const recalledContext = recalled.messages
+  .slice(0, 5)
+  .map((hit) => hit.content)
+  .join("\n")
+  .slice(0, 4000);
+// Pass recalledContext through the client's native untrusted-context mechanism.
+
+// After the logical turn is complete, capture the prompt/answer pair once.
+const turnMemory = memory.withIsolation({ sessionId });
+await turnMemory.addConversation({
+  messages: [
+    { role: "user", content: userPrompt },
+    { role: "assistant", content: finalAnswer },
+  ],
+});
+```
+
+### Hook integration boundaries
+
+- Make memory recall fail open: a Gateway timeout or error must not prevent the
+  client's normal model request. Treat recalled text as untrusted historical
+  context and cap how much is added to the prompt.
+- Capture once per completed logical turn, not once per provider/tool request.
+  `addConversation()` has no server-side idempotency key, so this pattern does
+  not guarantee exactly-once delivery. If the client retries hook events, use a
+  stable turn identifier for local deduplication; do not dedupe by message text,
+  since two distinct turns can have identical text.
+- Choose one owner for capture and recall on each turn. If MemoryProxy already
+  injects or records that turn, running direct hooks as well can duplicate it.
+- Keep API keys in the client's secret store or environment, never in prompts,
+  source control or logs. Load the `teamId` / `agentId` / `userId` tuple from
+  trusted configuration; those IDs scope SDK requests but are not credentials
+  or a replacement for Gateway authentication and authorization. Confirm the
+  Gateway's auth and tenant policy before exposing a remote endpoint.
+- This SDK example documents the common Core contract. It is not a turnkey
+  Codex, Claude Code, ZCode or OpenCode plugin; each client still needs an
+  adapter for its own hook lifecycle and event format.
+
 v3 数据面差异要点：
 
 - 路径统一走 `/v3/*`
