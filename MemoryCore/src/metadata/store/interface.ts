@@ -11,6 +11,8 @@
  *   - get* 找不到返回 null；delete* 返回 BatchDeleteResult。
  */
 
+import type { AtomicSkillStateStore } from "../../core/skill/skill-state-store.js";
+
 import type {
   UserEntity,
   UserKeyEntity,
@@ -78,6 +80,8 @@ export interface IMetadataStore {
   init(): MaybePromise<void>;
   /** 关闭存储连接。 */
   close(): MaybePromise<void>;
+  /** Atomic skill operation/publication controls; no raw database handle escapes. */
+  getSkillStateStore?(): MaybePromise<AtomicSkillStateStore>;
 
   // ── User ──
   createUser(input: CreateUserInput): MaybePromise<UserEntity>;

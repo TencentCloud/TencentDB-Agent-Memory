@@ -1,50 +1,19 @@
-/**
- * SkillConversationExtractWorker — §9。
- *
- * 常驻循环：
- *   ① BRPOP agent
- *   ② 抢 extract-lock；拿不到 → requeue + sleep
- *   ③ 抢 tasks-mutex 读队首 task
- *   ④ 读 archive:
- *        404 → 幽灵 task → 抢 mutex filter 删 task, 跳过
- *        成功 → SkillExtractor.extract → sink.applyCandidates → 抢 mutex filter 删 task
- *   ⑤ 判断是否重入队 (还有 task → requeue, 否则 removeAgent)
- *   ⑥ 释放 extract-lock
- *
- * 并发保护：
- *   - agent 级 extract-lock 保证同一 agent 只有一个 Worker 抽取
- *   - tasks-mutex 保护 _tasks.json 读改写（跟 Handler 归档段的 mutex 是同一把）
- */
-
-import type {
-  AgentTuple,
-  ExtractLockHandle,
-  ISkillAgentTaskQueue,
-} from "./agent-task-queue.js";
-import type {
-  SkillBufferStorage,
-  SkillDeadTaskEntry,
-  SkillTaskEntry,
-} from "./buffer-storage.js";
-import type {
-  ExtractedCandidate,
-  ExtractorLogger,
-  ISkillExtractor,
-} from "../queue/types.js";
+/** Skill-only agent queue consumer. Archive extraction and durable restructure
+ * operations share scheduling/lease protection, never each other's payloads. */
+import type { AgentTuple, ExtractLockHandle, ISkillAgentTaskQueue } from "./agent-task-queue.js";
+import type { SkillBufferStorage, SkillDeadTaskEntry, SkillExtractTaskEntry, SkillTaskEntry } from "./buffer-storage.js";
+import type { ExtractedCandidate, ExtractorLogger, ISkillExtractor, SkillRestructureProcessor } from "../queue/types.js";
+import type { SkillRestructureOperation } from "../skill-restructure-types.js";
 import { runInRootContext } from "../../report/otel-context.js";
 import { obsLogger } from "../../report/obs-logger.js";
 import { trace } from "../../report/trace.js";
 
-/**
- * 把 candidates 落到业务侧（例如调 SkillCore.create/patch，或者直接写 SkillStore）。
- * 由 wiring 层注入，Worker 不关心具体实现。必须幂等（Client 重试可能导致 task 被抽多次）。
- */
 export interface SkillCandidatesSink {
   applyCandidates(input: {
-    task: SkillTaskEntry;
+    task: SkillExtractTaskEntry;
     candidates: ExtractedCandidate[];
-    /** trace / logging 用途 */
     workerId: string;
+    abortSignal?: AbortSignal;
   }): Promise<void>;
 }
 
@@ -52,65 +21,52 @@ export interface SkillConversationExtractWorkerOptions {
   workerId: string;
   buffer: SkillBufferStorage;
   queue: ISkillAgentTaskQueue;
-  extractor: ISkillExtractor;
-  sink: SkillCandidatesSink;
+  /** Existing eager injections remain supported. Restructure does not need either. */
+  extractor?: ISkillExtractor;
+  sink?: SkillCandidatesSink;
+  resolveExtractor?: () => Promise<ISkillExtractor>;
+  resolveSink?: () => Promise<SkillCandidatesSink>;
+  processRestructure?: SkillRestructureProcessor;
   logger: ExtractorLogger;
-
-  /** BRPOP 阻塞时长 ms，默认 5000。 */
   brpopBlockMs?: number;
-  /** extract-lock TTL ms，默认 600_000 (10 min)。 */
   extractLockTtlMs?: number;
-  /**
-   * extract-lock 续约间隔 ms，默认 extractLockTtlMs / 4。
-   *
-   * 处理 skill extract 走 LLM tool-calling review agent，可能跨多轮 iteration，
-   * 累计耗时接近或超过 lockTtl。续约保证 Worker 忙着抽的时候不会被别的 Worker
-   * 抢锁。默认 lockRenewIntervalMs = ttl/4 (跟历史 V2 worker 参数对齐)。
-   */
   extractLockRenewIntervalMs?: number;
-  /** tasks-mutex 锁 TTL ms（进程崩溃兜底），默认 10000。 */
   tasksMutexLockTtlMs?: number;
-  /** tasks-mutex 争抢等待最长时间，默认 30000。 */
   tasksMutexWaitDeadlineMs?: number;
-  /** 抢 extract-lock 失败后重入队，睡多少 ms 再 dequeue。默认 2000 + 抖动。 */
   lockContentionSleepMs?: number;
   lockContentionSleepJitterMs?: number;
-  /**
-   * agent 一轮处理最多抽多少条 task 就 requeue 让位（保证公平），默认 1。
-   * 设计文档里 Worker 每次处理一条 task 就把 agent 塞回队头。
-   */
   tasksPerRound?: number;
-  /** 时间源，测试注入。 */
   now?: () => number;
-
-  // ── 失败处理（transient / permanent 分级 + DLQ） ────────────────────────
-  //
-  // 对齐设计文档 §3.6 (7) P0 修复：抽取失败原来 catch 里直接 requeue+break，
-  // runLoop 立刻 dequeue 同 agent 形成 ~100 次/秒 的 hot retry，浪费 LLM
-  // 额度、灌爆日志。现在按错误性质分两类：
-  //
-  //   A) transient (401/403/429/5xx/网络/timeout/fetch)
-  //      → sleep(failureRequeueSleepMs) → requeue
-  //      → retry_count 不变，不入 DLQ，无限重试等外部恢复
-  //      → warn 采样：每 transientLogSampleEvery 次打一条 warn
-  //   B) permanent (400/422/JSON parse/schema)
-  //      → sleep → retry_count++ 回写 _tasks.json → requeue
-  //      → retry_count >= permanentMaxRetries 时移到 _tasks_dlq.json
-  //      → 无法分类的错误按 A 处理（兜底不丢数据）
-  /**
-   * 失败后 requeue 前 sleep 多少 ms，固定值（不做指数退避、不做 jitter）。
-   * 默认 2000。
-   */
   failureRequeueSleepMs?: number;
-  /**
-   * permanent 错累计多少次进 DLQ，默认 3。
-   */
+  /** Legacy permanent extraction errors; transient extraction remains retryable. */
   permanentMaxRetries?: number;
-  /**
-   * transient 错误按 task_id 采样打 warn 的间隔（次）。第 1 次打 error，
-   * 之后每 N 次打一条 warn，防日志刷屏。默认 60。
-   */
+  /** All retryable restructure attempts, including busy/unknown. Default 8. */
+  restructureMaxRetries?: number;
   transientLogSampleEvery?: number;
+}
+
+export interface SkillAgentConsumeResult {
+  agent: AgentTuple;
+  processedTaskIds: string[];
+  lockContended?: boolean;
+  dropped?: string[];
+  cancelled?: boolean;
+}
+
+export class SkillTaskProcessingError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly retryable: boolean,
+    public readonly terminal = false,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "SkillTaskProcessingError";
+  }
+}
+
+function cancellation(message: string): Error {
+  return Object.assign(new Error(message), { name: "AbortError", code: "SKILL_WORKER_ABORTED", retryable: true });
 }
 
 export class SkillConversationExtractWorker {
@@ -119,14 +75,14 @@ export class SkillConversationExtractWorker {
   private closed = false;
   private started = false;
   private loopPromise: Promise<void> | null = null;
-  /**
-   * per-task_id transient 失败计数（进程内计数，不落盘）。用于 warn 采样：
-   * 首次失败打 error，之后每 transientLogSampleEvery 次打一条 warn。进程重启
-   * 后重新计数没关系——采样目的只是限日志频次，不是审计。
-   */
+  private readonly controllers = new Set<AbortController>();
+  private readonly activeRuns = new Set<Promise<SkillAgentConsumeResult>>();
   private readonly transientFailStreak = new Map<string, number>();
 
   constructor(opts: SkillConversationExtractWorkerOptions) {
+    if (opts.restructureMaxRetries !== undefined && (!Number.isSafeInteger(opts.restructureMaxRetries) || opts.restructureMaxRetries < 1)) {
+      throw new Error("restructureMaxRetries must be a positive finite integer");
+    }
     this.opts = opts;
     this.logger = opts.logger;
   }
@@ -135,570 +91,349 @@ export class SkillConversationExtractWorker {
     if (this.started) return;
     this.started = true;
     this.closed = false;
-    this.logger.info(
-      `[skill-conv-worker] start id=${this.opts.workerId} brpopBlockMs=${this.opts.brpopBlockMs ?? 5000} ` +
-        `extractLockTtlMs=${this.opts.extractLockTtlMs ?? 600_000}`,
-    );
-    // 关键：把 runLoop 放到 OTel ROOT_CONTEXT 里启动。
-    //
-    // 本 worker 常在某个 HTTP 请求 handler 里被懒启动（resolveConversationAdd →
-    // wireConversationAdd → start()）。若不脱离上下文，永不退出的 runLoop 会
-    // 永久继承"启动那一刻"的 active span，导致之后每次抽取的 LLM span 都挂进
-    // 那条请求 trace，被 Langfuse 合并成一条（tags 跨多 agent、sessionId 混乱）。
-    // 详见 report/otel-context.ts。
+    this.logger.info(`[skill-conv-worker] start id=${this.opts.workerId} brpopBlockMs=${this.opts.brpopBlockMs ?? 5000} extractLockTtlMs=${this.opts.extractLockTtlMs ?? 600_000}`);
     this.loopPromise = runInRootContext(() => this.runLoop());
-    // 静默 unhandled rejection
-    this.loopPromise.catch(() => { /* logged inside */ });
+    this.loopPromise.catch(() => { /* logged by runLoop */ });
   }
 
   async stop(): Promise<void> {
     this.closed = true;
+    for (const controller of this.controllers) controller.abort(cancellation("skill worker stopped"));
+    await Promise.allSettled([...this.activeRuns]);
     if (this.loopPromise) {
-      try {
-        await this.loopPromise;
-      } catch { /* swallow */ }
+      try { await this.loopPromise; } catch { /* logged by runLoop */ }
     }
   }
 
-  /**
-   * 单次消费一个 agent。测试专用（同步跑通）。返回处理结果，方便断言。
-   *
-   * 2026-08-03 crash-recovery §4.1: 取队用 peekAgent (RPOP+LPUSH 原子, LMOVE 语义),
-   * agent 从取到那一刻起始终在 List 里, worker 中途崩溃下一轮 peek 仍能拿到。
-   * 详见 docs/design/2026-07-21-skill-worker-crash-recovery.md §4。
-   */
-  async runOnce(): Promise<{
-    agent?: AgentTuple;
-    processedTaskIds: string[];
-    lockContended?: boolean;
-    dropped?: string[]; // 幽灵 / 抽取失败被丢弃的 task
-  }> {
+  async runOnce(): Promise<Omit<SkillAgentConsumeResult, "agent"> & { agent?: AgentTuple }> {
     const agent = await this.opts.queue.peekAgent(this.opts.brpopBlockMs ?? 5000);
-    if (!agent) return { processedTaskIds: [] };
-    return this.consumeAgent(agent);
+    return agent ? this.consumeAgent(agent) : { processedTaskIds: [] };
   }
 
   private async runLoop(): Promise<void> {
-    const blockMs = this.opts.brpopBlockMs ?? 5000;
     while (!this.closed) {
-      let agent: AgentTuple | null = null;
       try {
-        agent = await this.opts.queue.peekAgent(blockMs);
+        const agent = await this.opts.queue.peekAgent(this.opts.brpopBlockMs ?? 5000);
+        if (agent && !this.closed) await this.consumeAgent(agent);
       } catch (err) {
         if (this.closed) break;
-        this.logger.warn(`[skill-conv-worker] peek error: ${(err as Error).message}`);
+        this.logger.error(`[skill-conv-worker] consume/peek error: ${errorMessage(err)}`);
         await sleep(200);
-        continue;
-      }
-      if (!agent) continue;
-      try {
-        await this.consumeAgent(agent);
-      } catch (err) {
-        this.logger.error(`[skill-conv-worker] consumeAgent error: ${(err as Error).message}`);
       }
     }
   }
 
-  /**
-   * 消费一个 agent 的完整 8 步流程。默认走 runLoop 内部调用; 也对外暴露给
-   * SkillWorkerPool 复用 —— pool 里的每条 workerLoop 只承担调度 (dequeue +
-   * resolver + legacy 兜底), 具体抽取仍走这里, 避免重复实现。
-   */
-  async consumeAgent(agent: AgentTuple): Promise<{
-    agent: AgentTuple;
-    processedTaskIds: string[];
-    lockContended?: boolean;
-    dropped?: string[];
-  }> {
+  consumeAgent(agent: AgentTuple, signal?: AbortSignal): Promise<SkillAgentConsumeResult> {
+    const controller = new AbortController();
+    const relay = () => controller.abort(signal?.reason ?? cancellation("skill task cancelled"));
+    if (signal?.aborted) relay();
+    else signal?.addEventListener("abort", relay, { once: true });
+    if (this.closed) controller.abort(cancellation("skill worker stopped"));
+    this.controllers.add(controller);
+    const startedAt = Date.now();
+    const running = this.consumeWithLease(agent, controller).then(result => {
+      obsLogger.info("skill.worker.consume_done", { worker_id: this.opts.workerId, instance_id: agent.instance_id,
+        agent_key: `${agent.space_id}|${agent.user_id}|${agent.team_id}|${agent.agent_id}`,
+        outcome: result.cancelled ? "cancelled" : result.lockContended ? "lock_contended" : "ok",
+        processed: result.processedTaskIds.length, dropped: result.dropped?.length ?? 0, dur_ms: Date.now() - startedAt });
+      return result;
+    }).finally(() => {
+      signal?.removeEventListener("abort", relay);
+      this.controllers.delete(controller);
+      this.activeRuns.delete(running);
+    });
+    this.activeRuns.add(running);
+    return running;
+  }
+
+  private async consumeWithLease(agent: AgentTuple, controller: AbortController): Promise<SkillAgentConsumeResult> {
     const q = this.opts.queue;
-    const extractLockTtl = this.opts.extractLockTtlMs ?? 600_000;
-    const mutexOpts = {
-      lockTtlMs: this.opts.tasksMutexLockTtlMs ?? 10_000,
-      waitDeadlineMs: this.opts.tasksMutexWaitDeadlineMs ?? 30_000,
-    };
-    const perRound = this.opts.tasksPerRound ?? 1;
-    const processedTaskIds: string[] = [];
-    const dropped: string[] = [];
-
-    // 2026-08-03 crash-recovery: peek 策略决定失败/成功分支行为。
-    //   - lmove / evalsha / eval  → 原子路径, agent 已在 List, 各分支不再显式 requeue,
-    //     成功路径也不再 remove, 靠下一轮 peek 到空 tasks 时懒删除。
-    //   - rpop_lpush_downgrade    → 非原子 v1 语义: 失败/成功分支照旧 requeue / remove,
-    //     配合 pool 侧周期 selfHealScan 兜底。
-    // 详见 docs/design/2026-07-21-skill-worker-crash-recovery.md §5.3。
-    const isDowngrade =
-      (typeof q.getPeekStrategy === "function" ? q.getPeekStrategy() : "lmove") ===
-      "rpop_lpush_downgrade";
-
-    const instanceId = agent.instance_id;
-    // agentKey 保持 4 段 (space|user|team|agent) 语义, 不加 instance_id 段 ——
-    // 兼容老观测面板按 agent_key 做过滤/聚合的 SQL。instance_id 单独作为字段带上,
-    // 供后端按 instance 维度分组过滤 (对应池化重构后的排障需要)。
-    const agentKey = `${agent.space_id}|${agent.user_id}|${agent.team_id}|${agent.agent_id}`;
-    // [obs] worker 段结构化事件：consume_start → acquire_lock → read_head →
-    //   read_archive → extractor → apply_candidates → delete_task → consume_done。
-    // 拿到 task_id 之前用 agent_key + worker_id 定位；拿到 task_id 之后每条事件
-    // 都带 task_id —— handler 侧 skill.trigger.enqueue_agent 事件已带同一 task_id，
-    // 后端按 task_id 就能拉全 handler + worker 双段。
-    // obsLogger 内部 try/catch + 后端降级，不需要额外防御。
+    const signal = controller.signal;
+    const ttl = this.opts.extractLockTtlMs ?? 600_000;
+    const mutexOpts = { lockTtlMs: this.opts.tasksMutexLockTtlMs ?? 10_000, waitDeadlineMs: this.opts.tasksMutexWaitDeadlineMs ?? 30_000 };
+    const isDowngrade = (typeof q.getPeekStrategy === "function" ? q.getPeekStrategy() : "lmove") === "rpop_lpush_downgrade";
+    const processedTaskIds: string[] = [], dropped: string[] = [];
     const workerId = this.opts.workerId;
-    const t0Consume = Date.now();
-    obsLogger.info("skill.worker.consume_start", {
-      worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
-    });
-    this.logger.info(`[skill-conv-worker] dequeued agent=${agentKey}`);
-
-    // ② 抢 extract-lock
-    const t0Lock = Date.now();
-    const handle = await q.acquireExtractLock(agent, extractLockTtl);
-    obsLogger.info("skill.worker.acquire_lock", {
-      worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
-      dur_ms: Date.now() - t0Lock, acquired: !!handle,
-    });
-    if (!handle) {
-      // 2026-08-03: 原子路径下 agent 已在 List (peek 保证), 不需要 requeue;
-      // 降级路径下走 v1 语义, mutex 外 requeue 保证 agent 不丢。
-      if (isDowngrade) {
-        this.logger.info(`[skill-conv-worker] extract-lock contended agent=${agentKey}, requeue+sleep (downgrade)`);
-        await q.requeueAgent(agent);
-      } else {
-        this.logger.info(`[skill-conv-worker] extract-lock contended agent=${agentKey}, sleep (peek keeps agent in queue)`);
-      }
-      const jitter = Math.floor(Math.random() * (this.opts.lockContentionSleepJitterMs ?? 500));
-      await sleep((this.opts.lockContentionSleepMs ?? 2000) + jitter);
-      obsLogger.info("skill.worker.consume_done", {
-        worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
-        outcome: "lock_contended", dur_ms: Date.now() - t0Consume,
-      });
-      return { agent, processedTaskIds: [], lockContended: true };
-    }
-    this.logger.info(`[skill-conv-worker] acquired extract-lock agent=${agentKey}`);
-
-    // ②.5 启动续约定时器 —— 保证 LLM 长跑时锁不掉
-    const renewInterval = this.opts.extractLockRenewIntervalMs ?? Math.floor(extractLockTtl / 4);
+    const agentKey = `${agent.space_id}|${agent.user_id}|${agent.team_id}|${agent.agent_id}`;
+    let handle: ExtractLockHandle | null = null;
     let renewTimer: ReturnType<typeof setInterval> | undefined;
-    if (renewInterval > 0) {
-      renewTimer = setInterval(() => {
-        void (async () => {
+    let renewing: Promise<void> | undefined;
+    let unhandledFailure = false;
+    const stopRenewal = () => { if (renewTimer) clearInterval(renewTimer); renewTimer = undefined; };
+    signal.addEventListener("abort", stopRenewal, { once: true });
+
+    // Used immediately before side effects as well as by the background timer.
+    // Redis/COS are not one transaction: an already in-flight storage request
+    // cannot be recalled. Cancellation prevents starting subsequent writes/acks.
+    const ensureLease = async (): Promise<void> => {
+      signal.throwIfAborted();
+      if (!handle) throw cancellation("extract lease unavailable");
+      if (!renewing) {
+        const lock = handle;
+        renewing = (async () => {
           try {
-            const ok = await q.renewExtractLock(handle, extractLockTtl);
-            if (!ok) {
-              this.logger.warn(
-                `[skill-conv-worker] renew extract-lock lost agent=${agentKey}`,
-              );
-              if (renewTimer) clearInterval(renewTimer);
-              renewTimer = undefined;
+            if (!(await q.renewExtractLock(lock, ttl))) {
+              controller.abort(cancellation("extract lease lost"));
+              this.logger.warn(`[skill-conv-worker] renew extract-lock lost agent=${agentKey}`);
             }
           } catch (err) {
-            this.logger.warn(
-              `[skill-conv-worker] renew extract-lock error: ${(err as Error).message}`,
-            );
+            controller.abort(cancellation(`extract lease renewal failed: ${errorMessage(err)}`));
+            this.logger.warn(`[skill-conv-worker] renew extract-lock error: ${errorMessage(err)}`);
           }
-        })();
-      }, renewInterval);
-    }
+        })().finally(() => { renewing = undefined; });
+      }
+      await renewing;
+      signal.throwIfAborted();
+    };
 
     try {
-      for (let round = 0; round < perRound; round++) {
-        // ③ 抢 mutex 读队首 task。
-        //
-        // 关键修复（幽灵任务 root cause）：判空之后的 removeAgent 必须在
-        // 同一个 tasks-mutex 临界区内完成，不能等 mutex 释放后再调——否则
-        // TriggerService.archive() 可能在这个无锁窗口里抢到 mutex 写入新
-        // task，但此时 Redis Set 里 agent 还没被摘除（本函数的 removeAgent
-        // 还没跑），enqueueAgent 的 SADD 会因为「Set 已存在」返回 0 而跳过
-        // LPUSH——新 task 落地了但 Redis 队列毫无记录，永久卡死成幽灵任务。
-        // 把 removeAgent 收进同一把锁，跟 trigger-service.ts 的 fix
-        // （enqueueAgent 挪进写 task 的临界区）配合，保证两侧互斥。
-        const t0Head = Date.now();
+      signal.throwIfAborted();
+      obsLogger.info("skill.worker.consume_start", { worker_id: workerId, agent_key: agentKey, instance_id: agent.instance_id });
+      this.logger.info(`[skill-conv-worker] dequeued agent=${agentKey}`);
+      const lockStarted = Date.now();
+      handle = await q.acquireExtractLock(agent, ttl);
+      obsLogger.info("skill.worker.acquire_lock", { worker_id: workerId, agent_key: agentKey, instance_id: agent.instance_id,
+        acquired: !!handle, dur_ms: Date.now() - lockStarted });
+      signal.throwIfAborted();
+      if (!handle) {
+        if (isDowngrade) await q.requeueAgent(agent);
+        const jitter = Math.floor(Math.random() * (this.opts.lockContentionSleepJitterMs ?? 500));
+        await sleep((this.opts.lockContentionSleepMs ?? 2000) + jitter, signal);
+        return { agent, processedTaskIds, lockContended: true };
+      }
+      this.logger.info(`[skill-conv-worker] acquired extract-lock agent=${agentKey}`);
+      const interval = this.opts.extractLockRenewIntervalMs ?? Math.floor(ttl / 4);
+      if (interval > 0) renewTimer = setInterval(() => { void ensureLease().catch(() => { /* signal carries lease loss */ }); }, interval);
+
+      for (let round = 0; round < (this.opts.tasksPerRound ?? 1); round++) {
+        signal.throwIfAborted();
+        const readStarted = Date.now();
         const head = await q.withTasksMutex(agent, mutexOpts, async () => {
           const doc = await this.opts.buffer.readTasks(agent);
+          await ensureLease(); signal.throwIfAborted();
           const first = doc.tasks[0] ?? null;
-          if (!first) {
-            await q.removeAgent(agent);
-          }
+          if (!first) await q.removeAgent(agent);
           return first;
         });
-        obsLogger.info("skill.worker.read_head", {
-          worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
-          dur_ms: Date.now() - t0Head, has_head: !!head,
-        });
-
-        if (!head) {
-          // tasks 空 → agent 已在上面的临界区内下线，跳出
-          obsLogger.info("skill.worker.consume_done", {
-            worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
-            outcome: "empty", dur_ms: Date.now() - t0Consume,
-          });
-          return { agent, processedTaskIds, dropped };
-        }
-
-        // task_id 就位：从此往下所有事件都带 task_id，跟 handler 侧同 task_id
-        // 关联（handler 的 skill.trigger.enqueue_agent 已经带过一次）。
-        const t0Task = Date.now();
-        obsLogger.info("skill.worker.task_start", {
-          worker_id: workerId,
-          task_id: head.task_id,
-          instance_id: instanceId,
-          task_ref_id: head.task_ref_id,
-          session_id: head.session_id,
-          team_id: head.team_id,
-          agent_id: head.agent_id,
-          archive_key: head.archive_key,
-        });
-
-        // ④ 读 archive
+        obsLogger.info("skill.worker.read_head", { worker_id: workerId, agent_key: agentKey, instance_id: agent.instance_id,
+          has_head: !!head, dur_ms: Date.now() - readStarted });
+        if (!head) return { agent, processedTaskIds, dropped };
+        const started = Date.now();
         let candidates: ExtractedCandidate[] | null = null;
         let isGhost = false;
+        let restructure: SkillRestructureOperation | undefined;
+        obsLogger.info("skill.worker.task_start", { worker_id: workerId, task_id: head.task_id,
+          instance_id: agent.instance_id, kind: head.kind ?? "extract" });
+
         try {
-          this.logger.info(
-            `[skill-conv-worker] processing task_id=${head.task_id} archive_key=${head.archive_key}`,
-          );
-          const t0Arch = Date.now();
-          const archive = await this.opts.buffer.readArchive(head.archive_key);
-          obsLogger.info("skill.worker.read_archive", {
-            worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-            dur_ms: Date.now() - t0Arch,
-            found: !!archive,
-            msg_count: archive?.messages?.length ?? 0,
-          });
-          if (!archive) {
-            isGhost = true;
-            this.logger.warn(
-              `[skill-conv-worker] ghost task, dropping task_id=${head.task_id} archive_key=${head.archive_key}`,
-            );
-            obsLogger.warn("skill.worker.ghost", {
-              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-              archive_key: head.archive_key,
-            });
+          if (head.kind === "restructure") {
+            if (!this.opts.processRestructure) throw new SkillTaskProcessingError("SKILL_RESTRUCTURE_PENDING", `operation_id=${head.operation_id}; processor unavailable`, true);
+            await ensureLease(); signal.throwIfAborted();
+            restructure = await this.opts.processRestructure(head.operation_id, signal);
+            await ensureLease(); signal.throwIfAborted();
+            if (restructure.operation_id !== head.operation_id) {
+              throw new SkillTaskProcessingError("SKILL_RESTRUCTURE_RESULT_INVALID", `operation_id=${head.operation_id}; mismatched processor response`, false, true);
+            }
+            const outputIds = restructure.outputs.map(output => output.skill_id).join(",");
+            this.logger.info(`[skill-conv-worker] restructure operation=${head.operation_id} status=${restructure.status} outputs=${outputIds}`);
+            obsLogger.info("skill.worker.restructure", { worker_id: workerId, task_id: head.task_id,
+              instance_id: agent.instance_id, operation_id: head.operation_id, status: restructure.status, output_ids: outputIds });
+            if (["queued", "running", "prepared", "publishing"].includes(restructure.status)) {
+              throw new SkillTaskProcessingError("SKILL_RESTRUCTURE_PENDING", `operation_id=${head.operation_id} status=${restructure.status}`, true);
+            }
+            if (restructure.status !== "succeeded" && restructure.status !== "unchanged") {
+              throw new SkillTaskProcessingError(restructure.error?.code ?? "SKILL_RESTRUCTURE_FAILED",
+                `operation_id=${head.operation_id} status=${restructure.status}: ${restructure.error?.message ?? "terminal operation failure"}`, false, true);
+            }
           } else {
-            const conversation = (archive.messages ?? []).map((m) => ({
-              role: String(m.role ?? "user"),
-              content: String(m.content ?? ""),
-            }));
-            this.logger.info(
-              `[skill-conv-worker] extract start task_id=${head.task_id} messages=${conversation.length}`,
-            );
-            const t0Ext = Date.now();
-            const result = await this.opts.extractor.extract({
-              task_id: head.task_id,
-              team_id: head.team_id,
-              user_id: head.user_id,
-              agent_id: head.agent_id,
-              // Langfuse trace 绑定字段：不透传的话 skill.extract 的 trace
-              // sessionId=null / instanceId=unknown，页面按 session 过滤就找不到。
-              session_id: head.session_id,
-              space_id: head.space_id,
-              conversation,
-              // direct-trigger (`/v3/skill/extract`) 独占字段透传；conversation/add 归档
-              // 的 task 不带这两个字段, undefined 不影响 extractor (走默认)。
-              reason: head.reason,
-              options: head.max_iterations != null
-                ? { max_iterations: head.max_iterations }
-                : undefined,
-              // strict_mode 透传:老 task (未升级前入队) mode 字段不存在,undefined 透
-              // 给 extractor 恒走 SKILL_REVIEW_PROMPT (v2 宽松) — 零回归; 冷启动写入的
-              // task mode='strict' 才切到 SKILL_REVIEW_PROMPT_STRICT (v1 严格 gate)。
-              mode: head.mode,
-            });
-            candidates = result.candidates ?? [];
-            obsLogger.info("skill.worker.extractor", {
-              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-              dur_ms: Date.now() - t0Ext,
-              candidates: candidates.length,
-              msg_count: conversation.length,
-            });
-            this.logger.info(
-              `[skill-conv-worker] extract done task_id=${head.task_id} candidates=${candidates.length}`,
-            );
-            const t0Sink = Date.now();
-            await this.opts.sink.applyCandidates({
-              task: head,
-              candidates,
-              workerId: this.opts.workerId,
-            });
-            obsLogger.info("skill.worker.apply_candidates", {
-              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-              dur_ms: Date.now() - t0Sink,
-              candidates: candidates.length,
-            });
+            this.logger.info(`[skill-conv-worker] processing task_id=${head.task_id} archive_key=${head.archive_key}`);
+            const archiveStarted = Date.now();
+            const archive = await this.opts.buffer.readArchive(head.archive_key);
+            signal.throwIfAborted();
+            obsLogger.info("skill.worker.read_archive", { worker_id: workerId, task_id: head.task_id, instance_id: agent.instance_id,
+              found: !!archive, msg_count: archive?.messages?.length ?? 0, dur_ms: Date.now() - archiveStarted });
+            if (!archive) {
+              isGhost = true;
+              this.logger.warn(`[skill-conv-worker] ghost task, dropping task_id=${head.task_id} archive_key=${head.archive_key}`);
+              obsLogger.warn("skill.worker.ghost", { worker_id: workerId, task_id: head.task_id, instance_id: agent.instance_id, archive_key: head.archive_key });
+            } else {
+              const extractor = this.opts.extractor ?? await this.opts.resolveExtractor?.();
+              signal.throwIfAborted();
+              if (!extractor) throw new SkillTaskProcessingError("SKILL_EXTRACTOR_UNAVAILABLE", "extractor is not configured", true);
+              await ensureLease(); signal.throwIfAborted();
+              this.logger.info(`[skill-conv-worker] extract start task_id=${head.task_id} messages=${archive.messages?.length ?? 0}`);
+              const extractStarted = Date.now();
+              const result = await extractor.extract({ task_id: head.task_id, team_id: head.team_id, user_id: head.user_id,
+                agent_id: head.agent_id, session_id: head.session_id, space_id: head.space_id,
+                conversation: (archive.messages ?? []).map(message => ({ role: String(message.role ?? "user"), content: String(message.content ?? "") })),
+                reason: head.reason, options: head.max_iterations != null ? { max_iterations: head.max_iterations } : undefined,
+                mode: head.mode, signal, abortSignal: signal,
+              });
+              await ensureLease(); signal.throwIfAborted();
+              candidates = result.candidates ?? [];
+              this.logger.info(`[skill-conv-worker] extract done task_id=${head.task_id} candidates=${candidates.length}`);
+              obsLogger.info("skill.worker.extractor", { worker_id: workerId, task_id: head.task_id, instance_id: agent.instance_id,
+                candidates: candidates.length, msg_count: archive.messages?.length ?? 0, dur_ms: Date.now() - extractStarted });
+              const sink = this.opts.sink ?? await this.opts.resolveSink?.();
+              signal.throwIfAborted();
+              if (!sink) throw new SkillTaskProcessingError("SKILL_EXTRACTOR_UNAVAILABLE", "candidate sink is not configured", true);
+              await ensureLease(); signal.throwIfAborted();
+              const sinkStarted = Date.now();
+              await sink.applyCandidates({ task: head, candidates, workerId, abortSignal: signal });
+              signal.throwIfAborted();
+              obsLogger.info("skill.worker.apply_candidates", { worker_id: workerId, task_id: head.task_id, instance_id: agent.instance_id,
+                candidates: candidates.length, dur_ms: Date.now() - sinkStarted });
+            }
           }
         } catch (err) {
-          // 失败分级（对齐设计文档 §3.6 (7) P0 修复）：
-          //   transient → sleep + requeue，retry_count 不变
-          //   permanent → sleep + retry_count++ 回写；达阈值移进 DLQ
-          //   分类兜底 → 按 transient 处理（保守不丢数据）
-          const errMsg = (err as Error).message ?? String(err);
+          if (signal.aborted) throw err;
+          const message = errorMessage(err);
           const category = classifyError(err as Error);
-          if (category === "transient") {
-            this.logTransientFailure(head.task_id, errMsg);
-            // 注意：outcome 用 `retry_transient` 简写，不含 "transient" 关键字 ——
-            // DLQ 单测用 .includes("transient") 判定 transient 采样计数，
-            // 避免 obsLogger 事件也被算进去。
-            obsLogger.info("skill.worker.task_done", {
-              worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-              outcome: "retry_transient", dur_ms: Date.now() - t0Task,
-            });
-            await sleep(this.opts.failureRequeueSleepMs ?? 2000);
-            // 2026-08-03: 原子 peek 路径下 agent 仍在 List, task.json 也未动,
-            // 下一轮 peek 直接拿到同一 head 重跑; 降级路径显式 requeue。
-            if (isDowngrade) await q.requeueAgent(agent);
-            break;
+          if (head.kind !== "restructure" && category === "transient") {
+            this.logTransientFailure(head.task_id, message);
+            await sleep(this.opts.failureRequeueSleepMs ?? 2000, signal);
+            if (isDowngrade) { await ensureLease(); signal.throwIfAborted(); await q.requeueAgent(agent); }
+          } else {
+            this.transientFailStreak.delete(head.task_id);
+            await sleep(this.opts.failureRequeueSleepMs ?? 2000, signal);
+            const terminal = err instanceof SkillTaskProcessingError && err.terminal;
+            const maxRetries = terminal ? 1 : head.kind === "restructure" && category === "transient"
+              ? this.opts.restructureMaxRetries ?? 8 : this.opts.permanentMaxRetries ?? 3;
+            const diagnostic = head.kind === "restructure"
+              ? `operation_id=${head.operation_id} code=${errorCode(err) ?? "UNKNOWN"}: ${message}` : message;
+            await this.persistFailure(agent, head, diagnostic, maxRetries, mutexOpts, isDowngrade, ensureLease, signal);
           }
-          // permanent
-          // 清掉 transient 计数器，避免历史 transient 干扰后续采样。
-          this.transientFailStreak.delete(head.task_id);
-          obsLogger.info("skill.worker.task_done", {
-            worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-            outcome: "dlq_or_retry", dur_ms: Date.now() - t0Task,
-          });
-          await sleep(this.opts.failureRequeueSleepMs ?? 2000);
-          await this.handlePermanentFailure(agent, head, errMsg, mutexOpts, isDowngrade);
+          obsLogger.info("skill.worker.task_done", { worker_id: workerId, task_id: head.task_id, instance_id: agent.instance_id,
+            outcome: head.kind === "restructure" ? "restructure_retry_or_dlq" : category === "transient" ? "retry_transient" : "dlq_or_retry",
+            dur_ms: Date.now() - started });
           break;
         }
 
-        // ⑤ 抽取成功 or 幽灵 task → CAS filter 删 task（按 task_id）。
-        //
-        // 2026-08-03 crash-recovery §4.1: 原子 peek 路径下不再判定剩余 tasks
-        // 也不再 requeue/remove — agent 一直在 List, 靠下一轮 peek 读到空 tasks
-        // 时同 mutex 内懒删除 (见步骤 ③ tasks 空分支)。
-        //
-        // 降级路径 (peekAgent 只 pop 不 push) 走 v1 语义: 判定剩余 → requeue/remove,
-        // 跟 trigger-service.archive() 通过同一把 mutex 保序。
-        const t0Del = Date.now();
-        let remainingTasks = 0;
-        await q.withTasksMutex(agent, mutexOpts, async () => {
+        // Read-modify-write and queue membership stay in the same tasks mutex.
+        // Recheck after each await before starting a deletion/ack side effect.
+        const deleteStarted = Date.now();
+        const remaining = await q.withTasksMutex(agent, mutexOpts, async () => {
           const doc = await this.opts.buffer.readTasks(agent);
+          await ensureLease(); signal.throwIfAborted();
           const before = doc.tasks.length;
-          doc.tasks = doc.tasks.filter((t) => t.task_id !== head.task_id);
+          doc.tasks = doc.tasks.filter(task => task.task_id !== head.task_id);
           if (doc.tasks.length !== before) {
             doc.updated_at_ms = this.opts.now?.() ?? Date.now();
+            await ensureLease(); signal.throwIfAborted();
             await this.opts.buffer.writeTasks(agent, doc);
           }
-          remainingTasks = doc.tasks.length;
+          signal.throwIfAborted();
           if (isDowngrade) {
-            if (doc.tasks.length > 0) {
-              await q.requeueAgent(agent);
-            } else {
-              await q.removeAgent(agent);
-            }
+            await ensureLease(); signal.throwIfAborted();
+            if (doc.tasks.length) await q.requeueAgent(agent); else await q.removeAgent(agent);
           }
-          // 原子路径: 什么都不做, agent 已在 List, 下一轮 peek 触发懒删除。
+          return doc.tasks.length;
         });
-        obsLogger.info("skill.worker.delete_task", {
-          worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-          dur_ms: Date.now() - t0Del,
-          remaining: remainingTasks,
-        });
-
-        // trace.report 后端 span：跟 skill.extract / skill.conversation_add 对齐，
-        // 按 task_id 就能在 clickhouse / langfuse 里拉到 handler + worker 双段。
-        try {
-          trace.report("skill.worker.task_done", {
-            task_id: head.task_id,
-            instance_id: instanceId,
-            task_ref_id: head.task_ref_id,
-            team_id: head.team_id,
-            agent_id: head.agent_id,
-            session_id: head.session_id,
-            outcome: isGhost ? "ghost" : "ok",
-            candidates: candidates?.length ?? 0,
-            dur_ms: Date.now() - t0Task,
-            success: true,
-          });
-        } catch { /* noop */ }
-
-        obsLogger.info("skill.worker.task_done", {
-          worker_id: workerId, task_id: head.task_id, instance_id: instanceId,
-          outcome: isGhost ? "ghost" : "ok",
-          candidates: candidates?.length ?? 0,
-          dur_ms: Date.now() - t0Task,
-        });
-
-        if (isGhost) dropped.push(head.task_id);
-        else processedTaskIds.push(head.task_id);
+        signal.throwIfAborted();
+        obsLogger.info("skill.worker.delete_task", { worker_id: workerId, task_id: head.task_id, instance_id: agent.instance_id,
+          remaining, dur_ms: Date.now() - deleteStarted });
+        this.transientFailStreak.delete(head.task_id);
+        const outcome = restructure?.status ?? (isGhost ? "ghost" : "ok");
+        obsLogger.info("skill.worker.task_done", { worker_id: workerId, task_id: head.task_id, instance_id: agent.instance_id,
+          outcome, candidates: candidates?.length ?? 0, dur_ms: Date.now() - started });
+        try { trace.report("skill.worker.task_done", { task_id: head.task_id, instance_id: agent.instance_id,
+          team_id: head.team_id, agent_id: head.agent_id, outcome, success: true, dur_ms: Date.now() - started }); } catch { /* telemetry only */ }
+        if (isGhost) dropped.push(head.task_id); else processedTaskIds.push(head.task_id);
       }
-
-      obsLogger.info("skill.worker.consume_done", {
-        worker_id: workerId, agent_key: agentKey, instance_id: instanceId,
-        outcome: "ok",
-        processed: processedTaskIds.length,
-        dropped: dropped.length,
-        dur_ms: Date.now() - t0Consume,
-      });
       return { agent, processedTaskIds, dropped };
-    } finally {
-      // ⑥ 停续约 + 释放 extract-lock
-      if (renewTimer) {
-        clearInterval(renewTimer);
-        renewTimer = undefined;
+    } catch (err) {
+      if (signal.aborted) {
+        this.logger.warn(`[skill-conv-worker] cancelled agent=${agentKey}: ${errorMessage(signal.reason)}`);
+        return { agent, processedTaskIds, dropped, cancelled: true };
       }
-      try {
-        await q.releaseExtractLock(handle);
-      } catch (err) {
-        this.logger.warn(
-          `[skill-conv-worker] releaseExtractLock error: ${(err as Error).message}`,
-        );
+      unhandledFailure = true;
+      throw err;
+    } finally {
+      stopRenewal(); signal.removeEventListener("abort", stopRenewal);
+      // Non-atomic peek may have popped the scheduling signal. Restoring it is
+      // safe even after cancellation; it does not acknowledge or modify a task.
+      if (isDowngrade && (signal.aborted || unhandledFailure)) {
+        try { await q.requeueAgent(agent); } catch (err) { this.logger.warn(`[skill-conv-worker] recovery requeue failed: ${errorMessage(err)}`); }
+      }
+      if (handle) {
+        try { await q.releaseExtractLock(handle); } catch (err) { this.logger.warn(`[skill-conv-worker] releaseExtractLock error: ${errorMessage(err)}`); }
       }
     }
   }
 
-  /**
-   * transient 失败日志采样：首次以 error 级别打印，之后每 N 次以 warn 级
-   * 打一条摘要，防日志刷屏。N 由 `transientLogSampleEvery` 控制（默认 60）。
-   */
-  private logTransientFailure(taskId: string, errMsg: string): void {
-    const prev = this.transientFailStreak.get(taskId) ?? 0;
-    const streak = prev + 1;
+  private logTransientFailure(taskId: string, message: string): void {
+    const streak = (this.transientFailStreak.get(taskId) ?? 0) + 1;
     this.transientFailStreak.set(taskId, streak);
     const every = this.opts.transientLogSampleEvery ?? 60;
-    if (streak === 1) {
-      this.logger.error(
-        `[skill-conv-worker] transient extract failure task=${taskId}: ${errMsg}`,
-      );
-    } else if (every > 0 && streak % every === 0) {
-      this.logger.warn(
-        `[skill-conv-worker] transient extract failure (x${streak}) task=${taskId}: ${errMsg}`,
-      );
-    }
+    if (streak === 1) this.logger.error(`[skill-conv-worker] transient extract failure task=${taskId}: ${message}`);
+    else if (every > 0 && streak % every === 0) this.logger.warn(`[skill-conv-worker] transient extract failure (x${streak}) task=${taskId}: ${message}`);
   }
 
-  /**
-   * permanent 失败：抢 tasks-mutex 读改写 `_tasks.json`。
-   *
-   *   - retry_count+1 < permanentMaxRetries：写回 task 条目、requeue agent
-   *   - retry_count+1 >= permanentMaxRetries：从 `_tasks.json` 移除该 task、
-   *     追加到 `_tasks_dlq.json`，剩余 task 决定 requeue / remove
-   *
-   * 关键：读改写 `_tasks.json` 必须在同一临界区里，跟成功路径同 pattern（避免
-   * 和 trigger-service.archive() 竞态）。DLQ 写不占 mutex：Worker 已持
-   * extract-lock，同一 agent 只有一个写者。
-   */
-  private async handlePermanentFailure(
-    agent: AgentTuple,
-    head: SkillTaskEntry,
-    errMsg: string,
-    mutexOpts: { lockTtlMs: number; waitDeadlineMs: number },
-    isDowngrade: boolean,
+  private async persistFailure(
+    agent: AgentTuple, head: SkillTaskEntry, message: string, maxRetries: number,
+    mutexOpts: { lockTtlMs: number; waitDeadlineMs: number }, isDowngrade: boolean,
+    ensureLease: () => Promise<void>, signal: AbortSignal,
   ): Promise<void> {
     const q = this.opts.queue;
-    const maxRetries = this.opts.permanentMaxRetries ?? 3;
-    const truncated = errMsg.length > 1024 ? errMsg.slice(0, 1024) : errMsg;
-    const nowMs = () => this.opts.now?.() ?? Date.now();
-
-    let deadTask: SkillTaskEntry | null = null;
-
     await q.withTasksMutex(agent, mutexOpts, async () => {
       const doc = await this.opts.buffer.readTasks(agent);
-      const idx = doc.tasks.findIndex((t) => t.task_id === head.task_id);
-      if (idx < 0) {
-        // task 已被别处清掉（幽灵回收 / DLQ 重跑），本次 permanent 视为无效。
-        this.logger.warn(
-          `[skill-conv-worker] permanent failure but task gone task=${head.task_id}`,
-        );
-        // 2026-08-03: 原子路径不 requeue/remove, 靠下一轮懒删除; 降级路径 v1 语义。
-        if (isDowngrade) {
-          if (doc.tasks.length > 0) await q.requeueAgent(agent);
-          else await q.removeAgent(agent);
-        }
-        return;
-      }
-      const cur = doc.tasks[idx]!;
-      const nextRetry = (cur.retry_count ?? 0) + 1;
-      if (nextRetry >= maxRetries) {
-        // → DLQ：从 _tasks.json 摘除
-        deadTask = { ...cur, retry_count: nextRetry, last_error: truncated };
-        doc.tasks.splice(idx, 1);
-        doc.updated_at_ms = nowMs();
-        await this.opts.buffer.writeTasks(agent, doc);
-        this.logger.error(
-          `[skill-conv-worker] permanent failure → DLQ task=${head.task_id} ` +
-            `retries=${nextRetry}/${maxRetries} err=${truncated}`,
-        );
-      } else {
-        doc.tasks[idx] = { ...cur, retry_count: nextRetry, last_error: truncated };
-        doc.updated_at_ms = nowMs();
-        await this.opts.buffer.writeTasks(agent, doc);
-        this.logger.warn(
-          `[skill-conv-worker] permanent failure task=${head.task_id} ` +
-            `retries=${nextRetry}/${maxRetries} err=${truncated}`,
-        );
-      }
+      await ensureLease(); signal.throwIfAborted();
+      const index = doc.tasks.findIndex(task => task.task_id === head.task_id);
+      if (index < 0) return;
+      const current = doc.tasks[index];
+      const nextRetry = (current.retry_count ?? 0) + 1;
+      const failed: SkillTaskEntry = { ...current, retry_count: nextRetry, last_error: message.slice(0, 1024) };
+      const now = this.opts.now?.() ?? Date.now();
+      if (nextRetry >= Math.max(1, maxRetries)) {
+        const dead: SkillDeadTaskEntry = { ...failed, dead_lettered_at_ms: now };
+        await ensureLease(); signal.throwIfAborted();
+        // Persist first. An append error (including an unknown acknowledgement)
+        // leaves the original task; retrying appendDlq is task-id idempotent.
+        await this.opts.buffer.appendDlq(agent, dead, signal);
+        await ensureLease(); signal.throwIfAborted();
+        doc.tasks.splice(index, 1);
+      } else doc.tasks[index] = failed;
+      doc.updated_at_ms = now;
+      await ensureLease(); signal.throwIfAborted();
+      await this.opts.buffer.writeTasks(agent, doc);
+      signal.throwIfAborted();
+      const log = `[skill-conv-worker] ${nextRetry >= Math.max(1, maxRetries) ? "DLQ" : "retry"} task=${head.task_id} retries=${nextRetry}/${maxRetries} ${failed.last_error}`;
+      if (nextRetry >= Math.max(1, maxRetries)) this.logger.error(log); else this.logger.warn(log);
       if (isDowngrade) {
-        if (doc.tasks.length > 0) await q.requeueAgent(agent);
-        else await q.removeAgent(agent);
+        await ensureLease(); signal.throwIfAborted();
+        if (doc.tasks.length) await q.requeueAgent(agent); else await q.removeAgent(agent);
       }
     });
-
-    // 写 DLQ 放在 mutex 外：Worker 持 extract-lock 独占该 agent，DLQ 没有别的写者。
-    if (deadTask) {
-      const dead: SkillDeadTaskEntry = {
-        ...(deadTask as SkillTaskEntry),
-        dead_lettered_at_ms: nowMs(),
-      };
-      try {
-        await this.opts.buffer.appendDlq(agent, dead);
-      } catch (err) {
-        this.logger.error(
-          `[skill-conv-worker] appendDlq failed task=${head.task_id}: ${(err as Error).message}`,
-        );
-      }
-    }
   }
 }
 
-/**
- * 把 extract/sink 抛出的 Error 分成 transient (会自愈) 或 permanent (数据/schema)
- * 两类。规则简单，按错误消息里的 HTTP 状态码 + 关键字匹配；识别不出的按 transient
- * 兜底 —— 保守，不丢数据。
- *
- * 完整分类矩阵见 docs/design/2026-07-21-memorycore-standalone-e2e.md §3.6 (7)。
- */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+/** Structured service errors win over message heuristics. Legacy behavior for
+ * unclassified extraction failures remains conservative/transient. */
 export function classifyError(err: Error): "transient" | "permanent" {
-  const raw = `${err?.name ?? ""} ${err?.message ?? ""}`;
-  const msg = raw.toLowerCase();
-  // AbortError（LLM 请求被 signal cancel / timeout）视为 transient
-  if ((err?.name ?? "") === "AbortError") return "transient";
-
-  // ── permanent 优先匹配：显式的 4xx 数据/schema 错 ──
-  // HTTP 400 / 422
-  if (/(^|[^\d])(400|422)([^\d]|$)/.test(msg)) return "permanent";
-  // JSON 解析错 / schema 校验错 / "invalid response" 类
-  if (
-    msg.includes("json.parse") ||
-    msg.includes("unexpected token") ||
-    msg.includes("invalid json") ||
-    msg.includes("invalid response") ||
-    msg.includes("schema") ||
-    msg.includes("zod") ||
-    msg.includes("validation failed")
-  ) {
-    return "permanent";
-  }
-
-  // ── transient 识别 ──
-  // HTTP 401/403/429/5xx
-  if (/(^|[^\d])(401|403|429|5\d{2})([^\d]|$)/.test(msg)) return "transient";
-  // 网络错误常见错误码 / fetch 层
-  if (
-    msg.includes("econnrefused") ||
-    msg.includes("etimedout") ||
-    msg.includes("enotfound") ||
-    msg.includes("eai_again") ||
-    msg.includes("socket hang up") ||
-    msg.includes("client network socket disconnected") ||
-    msg.includes("fetch failed") ||
-    msg.includes("und_err_") ||
-    msg.includes("timeout") ||
-    msg.includes("timed out")
-  ) {
-    return "transient";
-  }
-
-  // 兜底：识别不出的按 transient 处理（不丢数据）
+  const retryable = (err as Error & { retryable?: boolean }).retryable;
+  if (retryable === true) return "transient";
+  if (["SKILL_RESTRUCTURE_PENDING", "SKILL_PUBLICATION_BUSY", "SKILL_PUBLICATION_UNKNOWN"].includes(errorCode(err) ?? "")) return "transient";
+  if (retryable === false) return "permanent";
+  if (err?.name === "AbortError") return "transient";
+  const message = `${err?.name ?? ""} ${err?.message ?? ""}`.toLowerCase();
+  if (/(^|[^\d])(400|422)([^\d]|$)/.test(message)) return "permanent";
+  if (["json.parse", "unexpected token", "invalid json", "invalid response", "schema", "zod", "validation failed"].some(text => message.includes(text))) return "permanent";
   return "transient";
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const finish = () => { signal?.removeEventListener("abort", abort); resolve(); };
+    const timer = setTimeout(finish, ms);
+    const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal?.reason ?? cancellation("skill worker cancelled")); };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }

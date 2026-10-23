@@ -31,8 +31,11 @@ import { applyTaskSourceEnvFromGatewayConfig } from "./task-source-env.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { WorkerPermitPool } from "../services/worker-permit-pool.js";
-import { createExtractorAdapter, SkillExtractor as SkillExtractorClass } from "../core/skill/skill-extractor.js";
-import type { SkillCore as SkillCoreType } from "../core/skill/skill-core.js";
+import { createExtractorAdapter, SkillExtractor as SkillExtractorClass, type ExtractorRunner } from "../core/skill/skill-extractor.js";
+import { SkillRestructureService, SkillRestructureServiceError } from "../core/skill/skill-restructure-service.js";
+import { SkillRestructureRecovery } from "../core/skill/skill-restructure-recovery.js";
+import { PersistentSkillPublicationCoordinator } from "../core/skill/skill-publication-coordinator.js";
+import { SkillCoreError, type SkillCore as SkillCoreType } from "../core/skill/skill-core.js";
 import type {
   HealthResponse,
   RecallRequest,
@@ -372,6 +375,7 @@ export class TdaiGateway {
   private skillSharedQueue: ISkillAgentTaskQueue | null = null;
   /** 2026-07-30: 全进程唯一的 skill 抽取 worker 池。 */
   private skillWorkerPool: SkillWorkerPool | null = null;
+  private skillRestructureRecovery?: SkillRestructureRecovery;
 
   constructor(configOverrides?: GatewayConfigOverrides) {
     this.config = loadGatewayConfig(configOverrides);
@@ -408,12 +412,12 @@ export class TdaiGateway {
 
     this.core = new TdaiCore({
       hostAdapter: adapter,
+      skillInstanceId: skillAssetInstanceId,
       config: this.config.memory,
       sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
+      beforeSkillPublish: () => gatewayRef.assertSkillPublicationQuota(skillAssetInstanceId),
       skillAssetHooks: {
-        // v1 首创前置 await：抛异常 = create 失败（避免「skill 已落库但 asset
-        // 缺失」的静默不一致）。standalone 模式下唯一的登记入口除了 handler 层的
-        // handleCreate 兜底之外就是这里 —— 无论谁调 SkillCore.create 都能触发。
+        // Registration follows the committed v1; failures remain recoverable through its mutation receipt.
         onSkillCreated: async ({ skill_id, team_id, agent_id, name }) => {
           if (!team_id || !agent_id) return; // 无租户上下文 → 跳过（OpenClaw local scope 等）
           const metaSvc = await gatewayRef.ensureMetadataService(skillAssetInstanceId);
@@ -437,19 +441,7 @@ export class TdaiGateway {
               );
             });
         },
-        // 归档级联：fire-and-forget，异常吞掉。二次 delete 会重触发钩子，最终收敛。
-        onSkillArchived: ({ skill_id, team_id }) => {
-          gatewayRef
-            .ensureMetadataService(skillAssetInstanceId)
-            .then((svc) => svc.deleteAssets([skill_id]))
-            .catch((err: unknown) => {
-              gatewayRef.logger.warn(
-                `[skill-asset-sync] deleteAssets(archive) failed for ${skill_id}`
-                  + ` (team=${team_id ?? "-"}): `
-                  + (err instanceof Error ? err.message : String(err)),
-              );
-            });
-        },
+        onSkillArchived: ({ skill_id }) => gatewayRef.removeSkillAssetRegistration(skillAssetInstanceId, skill_id),
       },
     });
   }
@@ -726,6 +718,14 @@ export class TdaiGateway {
       this.logger.warn(`${TAG} ensureSkillModuleWired failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    if (this.core.getResolvedSkillConfig()) {
+      await this.ensureSkillWorkerPool();
+      const instances = new Set(this.config.scanner.instances.split(",").map(value => value.trim()).filter(Boolean));
+      if (this.config.instanceId) instances.add(this.config.instanceId);
+      if (this.config.deployMode === "standalone") instances.add("default");
+      for (const instanceId of instances) this.trackSkillRecoveryInstance(instanceId);
+    }
+
     // Create HTTP server (with Trace middleware wrapping)
     //
     // [skill-perf 2026-07-21] Skill 接口可观测性埋点（issue：/v3/skill/extract
@@ -870,6 +870,7 @@ export class TdaiGateway {
     }
     // 2026-07-30 池化重构后, 全进程一个 SkillWorkerPool, 直接 stop 池就够。
     // conversationAddByInstance 里只是 handler bundle, 不持有生命周期资源。
+    await this.skillRestructureRecovery?.stop();
     if (this.skillWorkerPool) {
       await this.skillWorkerPool.stop().catch((e) =>
         this.logger.warn(`[skill-worker-pool] stop failed: ${e}`),
@@ -1086,11 +1087,11 @@ export class TdaiGateway {
         getResolvedSkillConfig: () => this.core.getResolvedSkillConfig(),
         quotaManager: this.quotaManager ?? undefined,
         logger: this.logger,
-        // Standalone 模式下 SkillCore 由 TdaiCore 全局构造（不带 onSkillCreated 钩子），
-        // handleCreate 用这个 dep 在 skill 创建成功后调 metaSvc.ensureSkillAsset()
-        // 完成 asset 登记 + agent fixed-asset 绑定。service 模式下 buildSkillCore 里
-        // 的 onSkillCreated 钩子做同样的事，两条路径都覆盖，ensureSkillAsset 本身幂等。
+        // Registration is idempotent across the core hook and the HTTP fallback.
         getMetadataService: (instanceId) => this.ensureMetadataService(instanceId),
+        resolveSkillRestructure: (instanceId) => this.resolveSkillRestructureForInstance(instanceId),
+        buildSkillExtractor: (core, instanceId) => this.buildSkillExtractorForInstance(core, instanceId),
+        resolveConversationAdd: (instanceId) => this.resolveSkillConversationAdd(instanceId),
         // handleListing mode='activity' 用: 读 proxy 侧 skill_usage_logs 计算 MRR。
         // 复用 /v3/analytics/* 的 lazy singleton (ensureAnalyticsChClient)。
         // CH 未配置 → 返回 null → activity 分支自动降级到原 auto 逻辑。
@@ -1139,23 +1140,7 @@ export class TdaiGateway {
           // per-instance resolvers 抽到了私有方法（同一份实现被 handler 和 skill worker 共用）。
           // tcvdb: TcvdbSkillStore + COS storage；mongodb: MongoSkillStore + (standalone) LocalStorage / (service) COS。
           skillDeps.resolveSkillCore = (instanceId: string) => this.resolveSkillCoreForInstance(instanceId);
-          skillDeps.buildSkillExtractor = (core, instanceId) => this.buildSkillExtractorForInstance(core, instanceId);
         }
-        // /v3/skill/conversation/add + /v3/skill/extract{,result} wiring:
-        //   - tcvdb (service) / mongodb: 走 ensureConversationAddForInstance
-        //     (per-instance store from StorePool + resolveStorageForInstance)，
-        //     抽取产出的 skill 落到 per-instance 后端（mongodb → MongoSkillStore）。
-        //   - sqlite (standalone): 走 ensureConversationAddForStandalone (单例 SqliteSkillStore + LocalStorage/内存队列)
-        //
-        // 返回完整 WiredConversationAdd:
-        //   - handleConversationAdd 用 .handler
-        //   - handleExtract 用 .trigger (direct-trigger)
-        skillDeps.resolveConversationAdd = async (instanceId: string) => {
-          const wired = storePool.mode === "tcvdb" || storePool.mode === "mongodb"
-            ? await this.ensureConversationAddForInstance(instanceId)
-            : await this.ensureConversationAddForStandalone(instanceId);
-          return wired;
-        };
       }
 
       // ── Offload V2 routes (async ingest + mmd query) ──
@@ -1520,6 +1505,7 @@ export class TdaiGateway {
     try {
       const pool = await this.ensureMetadataStorePool();
       const result = await pool.purgeInstance(instanceId);
+      this.skillRestructureRecovery?.forget(instanceId);
       this.metadataServiceByInstance.delete(instanceId);
       this.logger.info(
         `[instance/destroy] [v3] metadata purged: db=${result.db_name} dropped=${result.dropped}`,
@@ -2111,6 +2097,11 @@ export class TdaiGateway {
 
     const { vdbConfig, mongoConfig } = await this.resolveStoreBackendConfigs(instanceId);
     const skillStore = await storePool.getSkillStore(instanceId, vdbConfig, mongoConfig);
+    const metadata = await this.ensureMetadataService(instanceId);
+    skillStore.setPublicationCoordinator?.(new PersistentSkillPublicationCoordinator({
+      store: await metadata.getSkillStateStore(),
+      namespace: instanceId,
+    }));
 
     // Skill resource storage: reuse the shared per-instance resolver so the
     // fallback semantics match the memory path — standalone → LocalStorageBackend
@@ -2167,29 +2158,76 @@ export class TdaiGateway {
             );
           });
       },
-      onSkillArchived: ({ skill_id, team_id }) => {
-        resolveMetaSvc()
-          .then((svc) => svc.deleteAssets([skill_id]))
-          .catch((err: unknown) => {
-            logger.warn(
-              `[skill-asset-sync] deleteAssets(archive) failed for ${skill_id}`
-                + ` (team=${team_id ?? "-"}): `
-                + (err instanceof Error ? err.message : String(err)),
-            );
-          });
+      onSkillArchived: ({ skill_id }) => this.removeSkillAssetRegistration(instanceId, skill_id),
+    });
+  }
+
+  private async removeSkillAssetRegistration(instanceId: string, skillId: string): Promise<void> {
+    const metadata = await this.ensureMetadataService(instanceId);
+    const result = await metadata.deleteAssets([skillId]);
+    if (result.failed.length > 0) throw new Error(`Skill asset cleanup failed: ${result.failed.map(item => item.reason).join("; ")}`);
+  }
+
+  private async assertSkillPublicationQuota(instanceId: string): Promise<void> {
+    const check = await this.quotaManager?.checkMemoryQuota(instanceId, 1);
+    if (check && !check.allowed) {
+      throw new SkillRestructureServiceError("SKILL_QUOTA_EXCEEDED", `Memory limit exceeded (current=${check.current}, limit=${check.limit})`);
+    }
+  }
+
+  private trackSkillRecoveryInstance(instanceId: string): void {
+    if (this.stopPromise) return;
+    this.skillRestructureRecovery ??= new SkillRestructureRecovery({
+      resolve: id => this.resolveSkillRestructureForInstance(id, undefined, false),
+      logger: this.logger,
+    });
+    this.skillRestructureRecovery.register(instanceId);
+    this.skillRestructureRecovery.start();
+  }
+
+  private async resolveSkillRestructureForInstance(
+    instanceId: string,
+    skillCore?: SkillCoreType,
+    trackRecovery = true,
+  ): Promise<SkillRestructureService> {
+    const cfg = this.core.getResolvedSkillConfig();
+    if (!cfg) throw new SkillRestructureServiceError("SKILL_RESTRUCTURE_DISABLED", "Skill module is disabled");
+    const core = skillCore ?? (this.storePool?.mode === "tcvdb" || this.storePool?.mode === "mongodb"
+      ? await this.resolveSkillCoreForInstance(instanceId) : this.core.getSkillCore());
+    if (!core) throw new SkillRestructureServiceError("SKILL_RESTRUCTURE_DISABLED", "Skill storage is unavailable");
+    const metadata = await this.ensureMetadataService(instanceId);
+    if (trackRecovery) this.trackSkillRecoveryInstance(instanceId);
+    return new SkillRestructureService({
+      core,
+      storage: await this.resolveStorageForInstance(instanceId),
+      state: await metadata.getSkillStateStore(),
+      namespace: instanceId,
+      config: cfg.restructure,
+      beforePublish: () => this.assertSkillPublicationQuota(instanceId),
+      runner: () => this.buildSkillLlmRunnerForInstance(instanceId),
+      ensureAsset: async skill => {
+        const currentMetadata = await this.ensureMetadataService(instanceId);
+        await currentMetadata.ensureSkillAsset({ skill_id: skill.skill_id, team_id: skill.team_id,
+          agent_id: skill.owner_agent_id, name: skill.name });
+      },
+      enqueue: async (operation, actor) => {
+        if (this.stopPromise) throw new SkillRestructureServiceError("ABORTED", "Gateway is stopping", true);
+        const wired = await this.resolveSkillConversationAdd(instanceId);
+        if (this.stopPromise) throw new SkillRestructureServiceError("ABORTED", "Gateway is stopping", true);
+        await wired.trigger.enqueueRestructure({ instance_id: instanceId, space_id: instanceId,
+          user_id: actor.user_id, team_id: actor.team_id, agent_id: actor.agent_id,
+          task_ref_id: actor.task_id, operation_id: operation.operation_id, created_at_ms: operation.created_at_ms });
       },
     });
   }
 
-  /**
-   * 按 skillCore + instance_id 构造 per-instance SkillExtractor（含 LLM runner）。
-   * instance_id 参与 llm resolver 拼 upstream URL（provider=proxy 场景关键）。
-   */
-  private async buildSkillExtractorForInstance(
-    skillCore: SkillCoreType,
-    instanceId: string,
-  ): Promise<SkillExtractorClass> {
-    const { SKILL_REVIEW_PROMPT, SKILL_REVIEW_PROMPT_STRICT } = await import("../core/skill/index.js");
+  private resolveSkillConversationAdd(instanceId: string): Promise<WiredConversationAddHandler> {
+    return this.storePool?.mode === "tcvdb" || this.storePool?.mode === "mongodb"
+      ? this.ensureConversationAddForInstance(instanceId)
+      : this.ensureConversationAddForStandalone(instanceId);
+  }
+
+  private async buildSkillLlmRunnerForInstance(instanceId: string): Promise<ExtractorRunner> {
     const { StandaloneLLMRunner } = await import("../adapters/standalone/llm-runner.js");
     const { resolveStandaloneLlmForRuntime, LlmProviderResolveError } = await import("../adapters/standalone/llm-provider-resolver.js");
 
@@ -2208,23 +2246,37 @@ export class TdaiGateway {
       const msg = err instanceof LlmProviderResolveError ? err.message : String(err);
       throw new SkillCoreError("LLM_UNAVAILABLE", `LLM provider resolve failed: ${msg}`);
     }
+    const model = this.core.getResolvedSkillConfig()?.extraction.model ?? effective.model ?? "default";
     this.logger.debug?.(
-      `[skill-extractor] resolved LLM: provider=${llmCfg.provider ?? "openai"}, model=${effective.model}, baseUrl=${effective.baseUrl}`,
+      `[skill-extractor] resolved LLM: provider=${llmCfg.provider ?? "openai"}, model=${model}, baseUrl=${effective.baseUrl}`,
     );
 
-    const llmRunner = new StandaloneLLMRunner({
+    return new StandaloneLLMRunner({
       config: {
         baseUrl: effective.baseUrl,
         apiKey: effective.apiKey,
-        model: effective.model ?? "default",
+        model,
+        maxTokens: effective.maxTokens,
         timeoutMs: effective.timeoutMs ?? 120_000,
         stream: effective.stream ?? false,
       },
+      enableTools: true,
+      logger: this.logger,
     });
+  }
+
+  private async buildSkillExtractorForInstance(
+    skillCore: SkillCoreType,
+    instanceId: string,
+  ): Promise<SkillExtractorClass> {
+    const { SKILL_REVIEW_PROMPT, SKILL_REVIEW_PROMPT_STRICT } = await import("../core/skill/index.js");
     const cfg = this.core.getResolvedSkillConfig();
+    if (!cfg?.extraction.enabled) throw new SkillCoreError("LLM_UNAVAILABLE", "Skill extraction is disabled");
     return new SkillExtractorClass({
       core: skillCore,
-      runner: llmRunner,
+      runner: await this.buildSkillLlmRunnerForInstance(instanceId),
+      draftPublisher: cfg?.restructure?.enabled === false ? undefined
+        : await this.resolveSkillRestructureForInstance(instanceId, skillCore),
       systemPrompt: SKILL_REVIEW_PROMPT,
       // 冷启动/批量导入 (asset-import) 会传 strict_mode:true,经 SkillTaskEntry.mode
       // 一路带到 extract({mode:'strict'}); 老流量 mode 未传时仍用上面的 SKILL_REVIEW_PROMPT。
@@ -2425,11 +2477,12 @@ export class TdaiGateway {
    *
    * Resolver closure 复用现有 per-instance cache：
    *   - resolveBuffer  → resolveStorageForInstance + SkillBufferStorage
-   *   - resolveExtractor → buildSkillExtractorForInstance (service) 或
-   *     TdaiCore.getSkillExtractor (standalone)
+   *   - resolveExtractor → per-instance extractor, including SQLite for a shared operation namespace
+   *   - resolveRestructure → fresh service handles, without requiring a model for receipt recovery
    *   - resolveSink → ensureMetadataService + SkillCoreSink
    */
   private async ensureSkillWorkerPool(): Promise<SkillWorkerPool | null> {
+    if (this.stopPromise) throw new SkillRestructureServiceError("ABORTED", "Gateway is stopping", true);
     if (this.skillWorkerPool) return this.skillWorkerPool;
     const skillCfg = this.core.getResolvedSkillConfig();
     if (!skillCfg) {
@@ -2438,10 +2491,7 @@ export class TdaiGateway {
     }
     const queue = this.ensureSkillSharedQueue();
     const gateway = this;
-    // Where extracted skills land is decided by the *store mode*, not deployMode:
-    //   - tcvdb / mongodb → per-instance SkillCore from StorePool (TcvdbSkillStore /
-    //     MongoSkillStore). This holds even for standalone + STORE_MODE=mongodb.
-    //   - otherwise (sqlite singleton) → TdaiCore's standalone SkillExtractor.
+    // SQLite shares its Core, but uses the Gateway extractor's per-instance operation namespace.
     const usePerInstanceSkill =
       this.storePool?.mode === "tcvdb" || this.storePool?.mode === "mongodb";
 
@@ -2460,16 +2510,15 @@ export class TdaiGateway {
         return new Cls({ storage });
       },
       resolveExtractor: async (instanceId: string): Promise<ISkillExtractor> => {
-        if (!usePerInstanceSkill) {
-          const raw = gateway.core.getSkillExtractor();
-          if (!raw) {
-            throw new Error(`[skill-worker-pool] standalone SkillExtractor unavailable (instance=${instanceId})`);
-          }
-          return createExtractorAdapter(raw, gateway.logger);
-        }
-        const skillCore = await gateway.resolveSkillCoreForInstance(instanceId);
+        const skillCore = usePerInstanceSkill
+          ? await gateway.resolveSkillCoreForInstance(instanceId) : gateway.core.getSkillCore();
+        if (!skillCore) throw new Error(`[skill-worker-pool] SkillCore unavailable (instance=${instanceId})`);
         const raw = await gateway.buildSkillExtractorForInstance(skillCore, instanceId);
         return createExtractorAdapter(raw, gateway.logger);
+      },
+      resolveRestructure: async (instanceId: string) => {
+        const service = await gateway.resolveSkillRestructureForInstance(instanceId);
+        return (operationId, signal) => service.process(operationId, signal);
       },
       resolveSink: async (instanceId: string): Promise<SkillCandidatesSink> => {
         const metadataService = await gateway.ensureMetadataService(instanceId).catch(() => undefined);
@@ -2523,12 +2572,7 @@ export class TdaiGateway {
     // 但 wireConversationAddHandler 签名仍要求 extractor 参数 (兼容老 wireConversationAdd),
     // 传一个 noop 即可 —— handler 内部不会用 extractor, 只 worker 用。
 
-    // 1) storage: 复用 resolveSkillCoreForInstance 已建好的 per-instance COS adapter
-    await this.resolveSkillCoreForInstance(instanceId);
-    const storage = this.cosStorageCache?.get(instanceId);
-    if (!storage) {
-      throw new Error(`[skill-conversation-add] storage missing for instance=${instanceId} after resolveSkillCore`);
-    }
+    const storage = await this.resolveStorageForInstance(instanceId);
 
     // 2) queue: 全进程共享单例
     const queue = this.ensureSkillSharedQueue();
