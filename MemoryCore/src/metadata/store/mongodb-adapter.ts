@@ -75,7 +75,8 @@ import type {
 import { DEFAULT_GROUP_NAME, InstanceUpstreamWriteConflictError } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
-import { DuplicateUserKeyError } from "./interface.js";
+import { DuplicateUserKeyError, type IMetadataStore } from "./interface.js";
+import { MongoSkillStateStore, type AtomicSkillStateStore } from "../../core/skill/skill-state-store.js";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -117,6 +118,15 @@ export class MongoMetadataStore implements IMetadataStore {
   private readonly db: Db;
   private readonly useTransactions: boolean;
   private readonly ownsClient: boolean;
+  private skillStateStore?: Promise<AtomicSkillStateStore>;
+
+  getSkillStateStore(): Promise<AtomicSkillStateStore> {
+    return this.skillStateStore ??= (async () => {
+      const state = new MongoSkillStateStore(this.db);
+      await state.init();
+      return state;
+    })().catch(error => { this.skillStateStore = undefined; throw error; });
+  }
   /**
    * v1→v2 legacy sweep 一次性标记。true 表示本进程已在 list 路径上做过 index/文档
    * 清理,后续 list 直接跳过 —— sweep 是历史迁移动作 (dropIndex + deleteMany),
@@ -489,6 +499,7 @@ export class MongoMetadataStore implements IMetadataStore {
   }
 
   async close(): Promise<void> {
+    this.skillStateStore = undefined;
     if (this.ownsClient) {
       await this.client.close();
     }

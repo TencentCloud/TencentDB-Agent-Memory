@@ -1,5 +1,11 @@
 # Changelog — tencentdb-agent-memory-sdk-python
 
+## Unreleased — 2026-10-23
+
+### Added
+
+- Sync and async `SkillClient.restructure()` / `restructure_get()` submit semantic package restructuring and query its operation status. Requests retain the caller's stable `request_id` and expected source version; candidate packages and typed operation results are exported from `v3`.
+
 ## Unreleased — 2026-09-20
 
 ### Added

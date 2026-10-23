@@ -16,7 +16,7 @@ MemoryCore runs independently and exposes these capabilities through an HTTP Gat
 - **Memory recall**: supports keyword, embedding, and hybrid retrieval; BM25 remains available without an embedding provider.
 - **Knowledge metadata registry**: registers knowledge sources and tracks their identifiers, types, status, associations, and service locations.
 - **Asset metadata management**: manages users, teams, Agents, tasks, Skills, knowledge assets, memberships, ownership, and access relationships.
-- **Skill Memory**: supports Skill creation, versions, resources, search, routing, and conversation-driven extraction.
+- **Skill Memory**: supports Skill creation, versions, resources, search, routing, and conversation-driven extraction. [Semantic package restructuring](./SKILL-RESTRUCTURE.md) distills oversized generated skills, reorganizes resources, and separates genuinely independent capabilities after independent validation. See the [test plan and verification](./SKILL-RESTRUCTURE-TESTING.md) and [evaluation results](./SKILL-RESTRUCTURE-EVALUATION.md).
 - **Unified access**: provides HTTP APIs and TypeScript/Python SDKs for adapters and applications.
 
 ## Architecture

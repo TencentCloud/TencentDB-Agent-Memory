@@ -16,7 +16,7 @@ MemoryCore 独立运行，通过 HTTP Gateway 对外提供这些能力。OpenCla
 - **Memory 召回**：支持关键词、Embedding 与混合检索；没有 Embedding Provider 时仍可使用 BM25。
 - **Knowledge 元信息登记**：登记知识源并维护其标识、类型、状态、关联关系和服务地址。
 - **资产元信息管理**：管理 User、Team、Agent、Task、Skill、Knowledge Asset，以及成员、归属和访问关系。
-- **Skill Memory**：支持 Skill 创建、版本、资源、搜索、路由和对话抽取。
+- **Skill Memory**：支持 Skill 创建、版本、资源、搜索、路由和对话抽取。[语义重构](./SKILL-RESTRUCTURE.md)会理解过大的生成包、去重提炼规则、重组附件，仅将真正独立的能力拆成新 Skill，经独立校验后发布。参见[测试计划与验证记录](./SKILL-RESTRUCTURE-TESTING.md)和[效果说明](./SKILL-RESTRUCTURE-EVALUATION.md)。
 - **自定义 Memory Prompt**：支持 L1/L2/L3 Prompt CRUD 和 Agent、Team、Instance 绑定，按 `Agent > Team > Instance > 系统内置` 解析生效策略；自定义内容只能调整记忆关注点和归纳策略，不能修改固定输出协议。
 - **生成溯源**：记录 L1/L2/L3 实际使用的 Prompt ID、版本、来源、内容哈希以及输入输出引用，支持按 Memory ID 精确定位生成日志；不保存 Prompt 正文快照。
 - **统一访问接口**：通过 HTTP API 和 TypeScript/Python SDK 为 Adapter 与应用提供能力。

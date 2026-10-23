@@ -24,6 +24,7 @@
  */
 
 import { SkillCoreError } from "./skill-core.js";
+import { DEFAULT_SKILL_RESTRUCTURE_CONFIG } from "./skill-restructure-types.js";
 import type {
   ResolvedSkillConfig,
   SkillConfigInput,
@@ -224,6 +225,11 @@ export function resolveSkillConfig(
 
   const resolved: ResolvedSkillConfig = {
     enabled: true,
+    restructure: {
+      ...DEFAULT_SKILL_RESTRUCTURE_CONFIG,
+      ...input.restructure,
+      budgets: { ...DEFAULT_SKILL_RESTRUCTURE_CONFIG.budgets, ...input.restructure?.budgets },
+    },
     storeBackend,
     contentBackend,
     routing: {

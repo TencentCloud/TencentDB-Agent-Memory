@@ -297,6 +297,11 @@ export class MetadataService {
     this.memorySystemUser = memorySystemUser;
   }
 
+  async getSkillStateStore(): Promise<import("../../core/skill/skill-state-store.js").AtomicSkillStateStore> {
+    if (!this.store.getSkillStateStore) throw new Error("Metadata backend does not support atomic skill operation controls");
+    return this.store.getSkillStateStore();
+  }
+
   get scopedInstanceId(): string {
     return this.instanceId;
   }
