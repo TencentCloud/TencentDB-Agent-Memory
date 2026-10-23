@@ -313,7 +313,7 @@ function extractUserInfoFromBody(body: Record<string, unknown>): UserInfoFromPro
   };
 }
 
-function extractBodySessionId(body: Record<string, unknown>): string | null {
+export function extractBodySessionId(body: Record<string, unknown>): string | null {
   const metadata =
     body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
       ? body.metadata as Record<string, unknown>
