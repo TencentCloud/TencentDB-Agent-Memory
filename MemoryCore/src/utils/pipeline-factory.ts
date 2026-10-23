@@ -857,8 +857,9 @@ export function createL2Runner(opts: {
       }));
       const extractResult = await extractor.extract(memories);
       if (!extractResult.success) {
+        const detail = extractResult.error?.trim() || "unknown extraction error";
         throw new Error(
-          `${TAG} [L2] Scene extraction failed (scope=${groupScope}): ${extractResult.error ?? "unknown error"}`,
+          `${TAG} [L2] Scene extraction failed (scope=${groupScope}): ${detail}`,
         );
       }
       if (extractResult.memoriesProcessed <= 0) continue;

@@ -56,14 +56,8 @@ describe("createL2Runner", () => {
     }]);
   });
 
-  it("propagates extraction failures instead of reporting no new data", async () => {
-    extract.mockResolvedValue({
-      memoriesProcessed: 0,
-      success: false,
-      error: "upstream request timed out",
-    });
-
-    const runner = createL2Runner({
+  function makeRunner() {
+    return createL2Runner({
       pluginDataDir: "test-data",
       cfg: {
         persona: {
@@ -77,9 +71,22 @@ describe("createL2Runner", () => {
       vectorStore: vectorStore as never,
       logger,
     });
+  }
+
+  it("propagates extraction failures instead of reporting no new data", async () => {
+    extract.mockResolvedValue({
+      memoriesProcessed: 0,
+      success: false,
+      error: " upstream request timed out ",
+    });
+
+    const runner = makeRunner();
 
     await expect(runner("profile:team:team-1|user:user-1|agent:agent-1"))
-      .rejects.toThrow("upstream request timed out");
+      .rejects.toThrow(
+        "[memory-tdai] [pipeline-factory] [L2] Scene extraction failed " +
+        "(scope=team:team-1|agent:agent-1): upstream request timed out",
+      );
   });
 
   it("rejects without processing later groups when a group fails", async () => {
@@ -119,20 +126,7 @@ describe("createL2Runner", () => {
       .mockResolvedValueOnce({ memoriesProcessed: 1, success: true })
       .mockResolvedValueOnce({ memoriesProcessed: 0, success: false, error: "group failed" });
 
-    const runner = createL2Runner({
-      pluginDataDir: "test-data",
-      cfg: {
-        persona: {
-          model: "test-model",
-          promptMode: "default",
-          maxScenes: 10,
-          sceneBackupCount: 1,
-        },
-      } as never,
-      openclawConfig: {},
-      vectorStore: vectorStore as never,
-      logger,
-    });
+    const runner = makeRunner();
 
     await expect(runner("profile:team:team-1|user:user-1|agent:agent-1"))
       .rejects.toThrow("group failed");
@@ -142,13 +136,7 @@ describe("createL2Runner", () => {
   it("preserves the successful no-new-data result", async () => {
     queryMemoryRecords.mockResolvedValue([]);
 
-    const runner = createL2Runner({
-      pluginDataDir: "test-data",
-      cfg: { persona: {} } as never,
-      openclawConfig: {},
-      vectorStore: vectorStore as never,
-      logger,
-    });
+    const runner = makeRunner();
 
     await expect(runner("profile:team:team-1|user:user-1|agent:agent-1"))
       .resolves.toEqual({ skipped: true });
@@ -158,20 +146,7 @@ describe("createL2Runner", () => {
   it("preserves a successful extraction that processes no memories", async () => {
     extract.mockResolvedValue({ memoriesProcessed: 0, success: true });
 
-    const runner = createL2Runner({
-      pluginDataDir: "test-data",
-      cfg: {
-        persona: {
-          model: "test-model",
-          promptMode: "default",
-          maxScenes: 10,
-          sceneBackupCount: 1,
-        },
-      } as never,
-      openclawConfig: {},
-      vectorStore: vectorStore as never,
-      logger,
-    });
+    const runner = makeRunner();
 
     await expect(runner("profile:team:team-1|user:user-1|agent:agent-1"))
       .resolves.toBeUndefined();
