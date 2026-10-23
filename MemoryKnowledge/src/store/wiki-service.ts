@@ -12,7 +12,15 @@
  *   lib 层 cascadeDeleteWikiPagesWithRefs 做引用级联。
  */
 
-import { join, resolve, normalize, dirname } from "node:path";
+import {
+  join,
+  resolve,
+  normalize,
+  dirname,
+  relative,
+  sep,
+  isAbsolute,
+} from "node:path";
 import {
   rmSync,
   mkdirSync,
@@ -23,7 +31,6 @@ import {
   existsSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-
 import type {
   AuditAction,
   IKnowledgeStore,
@@ -43,6 +50,12 @@ import {
   sha256,
   type SourceStatus,
 } from "../engines/wiki/index-db.js";
+
+/** Return whether target is lexically contained by base on the current platform. */
+function isPathWithin(base: string, target: string): boolean {
+  const rel = relative(base, target);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
 
 export interface WikiBuildContext {
   wikiId: string;
@@ -1137,8 +1150,7 @@ export class WikiService {
     // （如 KNOWLEDGE_DATA_DIR=./data）与 resolve 出来的绝对路径比较失败。
     const base = resolve(sourcesDir);
     const safe = resolve(base, normalized);
-    const dirWithSep = base.endsWith("/") ? base : base + "/";
-    if (safe !== base && !safe.startsWith(dirWithSep)) return null;
+    if (!isPathWithin(base, safe)) return null;
     return safe;
   }
 
@@ -1153,18 +1165,19 @@ export class WikiService {
     opts: { allowMissing?: boolean } = {},
   ): string | null {
     if (!ref || ref.includes("..") || ref.startsWith("/")) return null;
-    const cleanRef = ref.replace(/^wiki\//, "");
+    // API refs use slash separators, but accept Windows callers that send backslashes.
+    const portableRef = ref.replace(/\\/g, "/");
+    const cleanRef = portableRef.replace(/^wiki\//, "");
     if (cleanRef.includes("..")) return null;
 
     // resolve 成绝对路径，避免 projectPath 是相对路径时比较失败。
     const wikiDir = resolve(projectPath, "wiki");
-    const wikiDirSep = wikiDir.endsWith("/") ? wikiDir : wikiDir + "/";
 
     // 先按原样尝试，再尝试补 .md 扩展。
     const candidates = cleanRef.endsWith(".md") ? [cleanRef] : [cleanRef + ".md", cleanRef];
     for (const c of candidates) {
       const safe = resolve(wikiDir, c);
-      if (safe !== wikiDir && !safe.startsWith(wikiDirSep)) continue;
+      if (safe !== wikiDir && !isPathWithin(wikiDir, safe)) continue;
       if (opts.allowMissing) {
         // write 路径补 .md：允许任何其中一个
         return c.endsWith(".md") ? safe : null;
@@ -1174,7 +1187,7 @@ export class WikiService {
     if (opts.allowMissing) {
       // 没匹配 .md 候选时，强制补 .md
       const safe = resolve(wikiDir, cleanRef.endsWith(".md") ? cleanRef : cleanRef + ".md");
-      if (safe === wikiDir || !safe.startsWith(wikiDirSep)) return null;
+      if (safe === wikiDir || !isPathWithin(wikiDir, safe)) return null;
       return safe;
     }
     return null;
@@ -1183,9 +1196,9 @@ export class WikiService {
   /** 把 wiki/.../page.md 绝对路径转换回 ref（如 "concepts/redis"）。 */
   private absToPageRef(projectPath: string, abs: string): string {
     const wikiDir = resolve(projectPath, "wiki");
-    const prefix = wikiDir.endsWith("/") ? wikiDir : wikiDir + "/";
-    if (!abs.startsWith(prefix)) return abs;
-    return abs.slice(prefix.length).replace(/\.md$/, "");
+    const rel = relative(wikiDir, abs);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return abs;
+    return rel.replace(/\\/g, "/").replace(/\.md$/, "");
   }
 
   private isForbiddenPageRef(ref: string): boolean {
