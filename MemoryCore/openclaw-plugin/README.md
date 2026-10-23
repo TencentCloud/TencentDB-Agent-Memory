@@ -9,6 +9,7 @@ This directory is the **OpenClaw client adapter** for Memory Gateway **`/v3/*`**
 | Plugin ID | `memory-tencentdb-client` (same historical ID; implementation is v3) |
 | SDK | [`@tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2`](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-sdk-ts-v2/v/1.0.0-beta.2) (npm; root = v3) |
 | Data plane | `MemoryClient` → `/v3/*` + isolation (`teamId` / `agentId` / `userId`) |
+| Native memory | OpenClaw provider runtime when the host exposes `registerMemoryCapability` with `providerRuntime` |
 | COS read | Tool `tdai_read_file` via `createMemoryFileReader` (`POST /v2/cos/secret` + STS) |
 | Not included | Offload / Context Engine |
 
@@ -21,6 +22,7 @@ More design detail: `../docs/design/2026-07-20-v3-plugin-install-dual-mode-desig
 ```text
 OpenClaw runtime
   └─ memory-tencentdb-client plugin
+       ├─ native provider runtime      memory.search/get/health → caller-scoped v3 SDK
        ├─ hooks/capture.ts             agent_end → addConversation (L0, /v3)
        ├─ hooks/recall.ts              before_prompt_build → search + prompt injection
        ├─ tools/memory-search.ts       tdai_memory_search → searchAtomic (L1)
@@ -163,11 +165,20 @@ openclaw gateway restart
 
 | Area | Implementation | Description |
 |------|----------------|-------------|
+| Native provider | `src/native-memory-provider.ts` | Registers OpenClaw's provider-neutral memory runtime when the host supports it |
 | Capture | `src/hooks/capture.ts` | Writes completed turns to L0 via v3 `addConversation()` |
 | Recall | `src/hooks/recall.ts` | Searches before prompt build and injects concise context |
 | L1 tool | `src/tools/memory-search.ts` | Agent search of structured memories |
 | L0 tool | `src/tools/conversation-search.ts` | Agent search of raw conversation history |
 | File read | `src/tools/read-cos.ts` | Agent read of pipeline artifacts via COS STS |
+
+### Native OpenClaw memory runtime
+
+OpenClaw hosts that expose `registerMemoryCapability({ providerRuntime })` use this plugin as their native memory provider. The manifest declares `kind: "memory"`. Hosts without that registration API keep the existing prompt hooks and `tdai_*` tools.
+
+The provider maps `memory` search to v3 L1 atomic memories. It exposes the `sessions` source only when OpenClaw supplies a current, host-minted conversation audience; those requests carry that audience's session ID through the SDK isolation context. Owner-private and operator calls do not gain conversation search. The provider advertises no pagination, project filtering, or candidate enumeration because the v3 client does not implement those contracts.
+
+Every open handle is bound to the caller's live authority. Its agent ID comes from the current OpenClaw open context, so agents sharing one plugin configuration keep separate Gateway isolation. Team and user IDs come from plugin configuration; missing IDs are rejected instead of guessed. A session caller must have a matching host agent and audience. References are opaque and valid only for the handle that produced them. A get re-runs the original bounded search in the same configured isolation and session scope before returning content. Caller cancellation reaches the HTTP request, all source searches share one 30-second deadline, and closing a handle aborts its in-flight requests and clears its references.
 
 ## Configuration
 
@@ -194,6 +205,7 @@ openclaw-plugin/
 ├── openclaw.plugin.json       # plugin manifest (id = memory-tencentdb-client)
 ├── package.json               # npm: @tencentdb-agent-memory/memory-sdk-ts-v2
 ├── index.ts                   # OpenClaw entrypoint (v3 client + COS reader)
+├── src/native-memory-provider.ts # caller-bound native provider runtime
 ├── src/hooks/capture.ts       # L0 capture
 ├── src/hooks/recall.ts        # recall + prompt injection
 ├── src/tools/                 # Agent-callable tools (incl. read-cos)
