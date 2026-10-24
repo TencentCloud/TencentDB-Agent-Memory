@@ -11,11 +11,11 @@ on:
 jobs:
   deployment:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        shell: [powershell, pwsh]
     steps:
       - uses: actions/checkout@v4
-      - name: Test native deployment without Docker or model credentials
-        shell: ${{ matrix.shell }}
+      - name: Test native deployment on Windows PowerShell 5.1
+        shell: powershell
+        run: ./deploy/global-images/tests/windows-deploy.tests.ps1
+      - name: Test native deployment on PowerShell 7
+        shell: pwsh
         run: ./deploy/global-images/tests/windows-deploy.tests.ps1
