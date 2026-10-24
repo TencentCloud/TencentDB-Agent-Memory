@@ -13,7 +13,8 @@
  */
 
 import type { ProxyConfig } from "../../types.js";
-import { tryReportCreditFromPath } from "../../credit-reporter.js";
+import { tryReportCreditFromPath, extractSpaceIdFromPath } from "../../credit-reporter.js";
+import { recordCustomUpstreamUsage } from "../../upstream-usage.js";
 import { writeFailedReportRaw } from "../../clickhouse.js";
 import type { Pipeline } from "../../logger.js";
 
@@ -35,6 +36,14 @@ export interface CreditStageInput {
   stream: boolean;
   keyId: string;
   routedFrom: string;
+  /**
+   * 命中自定义上游分组时的组标识（group_id / name）。
+   *
+   * 仅在 skipCreditReport=true 时消费：把这笔「用户自付、不计入平台账单」的流量
+   * **完整纳入用量统计**，口径见 ../../upstream-usage.js 文件头。
+   * 未传（undefined）时该笔不进统计 —— 例如官方组 / 未命中 override 的请求。
+   */
+  customUpstream?: { groupId: string; groupName: string; teamId?: string };
 }
 
 export interface CreditStageResult {
@@ -58,6 +67,31 @@ export interface CreditStageResult {
  */
 export async function stageCredit(input: CreditStageInput, pipe: Pipeline): Promise<CreditStageResult> {
   if (input.skipCreditReport) {
+    // ── 不纳入平台计费，但**纳入用量统计** ──────────────────────────────
+    // 命中 instance-upstream custom 组：费用由用户与其自有供应商结算，平台不出账，
+    // 因此这里不调用 tryReportCreditFromPath（CreditDelta 不上报 MemoryPlus）。
+    // 但该请求的 token 用量必须可见 —— 否则「这一项」的贡献在统计里完全是黑洞。
+    // 故在此记录到独立的用量统计口径（equivalentCredit 为按平台价目表折算的
+    // 参考值，非账单金额，不可与已上报的 CreditDelta 混加）。
+    if (input.customUpstream) {
+      try {
+        const segments = (input.path || "").split("/").filter(Boolean);
+        recordCustomUpstreamUsage({
+          usage: input.usage,
+          upstreamUrl: input.upstreamUrl,
+          modelId: input.effectiveModel,
+          spaceId: extractSpaceIdFromPath(input.path) ?? (segments[1] ?? ""),
+          agent: segments[0] ?? "",
+          groupId: input.customUpstream.groupId,
+          groupName: input.customUpstream.groupName,
+          teamId: input.customUpstream.teamId ?? "",
+          pricing: input.config.creditPricing,
+          requestTime: input.startTime,
+        });
+      } catch {
+        /* 统计失败绝不影响主链路 */
+      }
+    }
     return { attempted: false, ok: false };
   }
   const outcome = await tryReportCreditFromPath(

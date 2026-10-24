@@ -1030,6 +1030,15 @@ export async function runAnthropicPipeline(
     }
   }
   const skipCreditReport = overrideResult.skipCreditReport;
+  // 命中自定义上游分组时，把组标识带给计费 stage：该笔流量不计入平台账单，
+  // 但要完整纳入用量统计（详见 src/upstream-usage.ts 口径说明）。
+  const _customUpstream = overrideResult.applied && overrideResult.groupId
+    ? {
+        groupId: overrideResult.groupId,
+        groupName: overrideResult.groupName,
+        teamId: overrideResult.teamId,
+      }
+    : undefined;
 
   // ── Skill selection (proxy 选择 → 客户端加载) ─────────────────────────────
   // 新用户轮次选中 skill → 不调用上游，直接返回一条 tool_use，由客户端执行加载；
@@ -1352,6 +1361,7 @@ export async function runAnthropicPipeline(
       debugMetadata,
       preparedStats,
       skipCreditReport,
+      customUpstream: _customUpstream,
       isCustomUpstream: _isCustomUpstream,
       gates: _gates,
       sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
@@ -1610,6 +1620,7 @@ export async function runAnthropicPipeline(
   if (_gates.creditReport) {
     const creditResult = await stageCredit({
       skipCreditReport,
+      customUpstream: _customUpstream,
       config,
       path: c.req.path,
       usage,

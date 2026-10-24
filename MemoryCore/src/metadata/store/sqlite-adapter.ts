@@ -355,6 +355,8 @@ export class SqliteMetadataStore implements IMetadataStore {
         base_url TEXT NOT NULL DEFAULT '',
         api_key TEXT NOT NULL DEFAULT '',
         model_id TEXT NOT NULL DEFAULT '',
+        model_ids TEXT NOT NULL DEFAULT '[]',
+        team_id TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '',
         version INTEGER NOT NULL DEFAULT 1,
         supported_agents_snapshot TEXT NOT NULL DEFAULT '[]',
@@ -367,6 +369,14 @@ export class SqliteMetadataStore implements IMetadataStore {
         ON meta_instance_upstream_config(group_type)
         WHERE group_type IN ('default','extraction');
     `);
+    // P1: model_ids 多模型清单,旧库幂等加列
+    try {
+      this.run("ALTER TABLE meta_instance_upstream_config ADD COLUMN model_ids TEXT NOT NULL DEFAULT '[]'");
+    } catch { /* 列已存在 */ }
+    // P3: team_id 团队专属维度,旧库幂等加列
+    try {
+      this.run("ALTER TABLE meta_instance_upstream_config ADD COLUMN team_id TEXT NOT NULL DEFAULT ''");
+    } catch { /* 列已存在 */ }
     this.migrateUserTypeColumn();
     this.migrateLegacyUserKeys();
   }
@@ -2191,7 +2201,7 @@ export class SqliteMetadataStore implements IMetadataStore {
 
       // 2. agents 全域唯一校验(仅 default/custom 参与)
       if (input.group_type !== "extraction") {
-        this.assertAgentsNotOverlap(agents, null);
+        this.assertAgentsNotOverlap(agents, null, input.team_id ?? "");
       }
 
       // 2b. 组名全域唯一(仅 custom 参与写入方,校验目标含 default/extraction 保留名)
@@ -2204,8 +2214,8 @@ export class SqliteMetadataStore implements IMetadataStore {
       // 3. INSERT(custom/extraction 的 snapshot 恒 [];default 由 seed 路径独立处理,不走此 create 分支)
       this.run(
         `INSERT INTO meta_instance_upstream_config
-          (group_id, group_type, name, agents, enabled, mode, base_url, api_key, model_id, description, version, supported_agents_snapshot, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', ?, ?)`,
+          (group_id, group_type, name, agents, enabled, mode, base_url, api_key, model_id, model_ids, team_id, description, version, supported_agents_snapshot, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', ?, ?)`,
         groupId,
         input.group_type,
         input.name ?? "",
@@ -2215,6 +2225,8 @@ export class SqliteMetadataStore implements IMetadataStore {
         input.base_url ?? "",
         input.api_key ?? "",
         input.model_id ?? "",
+        JSON.stringify(input.model_ids ?? []),
+        input.team_id ?? "",
         input.description ?? "",
         now,
         now,
@@ -2257,7 +2269,7 @@ export class SqliteMetadataStore implements IMetadataStore {
       // agents 变更 → 校验全域唯一(排除自身)
       const nextAgents = input.agents ?? current.agents;
       if (input.agents !== undefined && current.group_type !== "extraction") {
-        this.assertAgentsNotOverlap(nextAgents, current.group_id);
+        this.assertAgentsNotOverlap(nextAgents, current.group_id, current.team_id);
       }
 
       // name 变更 → 校验全域唯一(仅 custom;default/extraction 的 name 由 service 层
@@ -2283,12 +2295,13 @@ export class SqliteMetadataStore implements IMetadataStore {
         base_url: input.base_url ?? current.base_url,
         api_key: input.api_key ?? current.api_key,
         model_id: input.model_id ?? current.model_id,
+        model_ids: input.model_ids ?? current.model_ids,
         description: input.description ?? current.description,
       };
       const now = nowIso();
       this.run(
         `UPDATE meta_instance_upstream_config
-         SET name = ?, agents = ?, enabled = ?, mode = ?, base_url = ?, api_key = ?, model_id = ?, description = ?, version = version + 1, updated_at = ?
+         SET name = ?, agents = ?, enabled = ?, mode = ?, base_url = ?, api_key = ?, model_id = ?, model_ids = ?, description = ?, version = version + 1, updated_at = ?
          WHERE group_id = ?`,
         merged.name,
         JSON.stringify(merged.agents),
@@ -2297,6 +2310,7 @@ export class SqliteMetadataStore implements IMetadataStore {
         merged.base_url,
         merged.api_key,
         merged.model_id,
+        JSON.stringify(merged.model_ids ?? []),
         merged.description,
         now,
         input.group_id,
@@ -2358,12 +2372,15 @@ export class SqliteMetadataStore implements IMetadataStore {
    * `selfGroupId` 传入时排除自己(update 场景);create 时传 null。
    * 冲突 → InstanceUpstreamWriteConflictError("agents_overlap", detail.conflict_groups)。
    */
-  private assertAgentsNotOverlap(candidate: string[], selfGroupId: string | null): void {
+  private assertAgentsNotOverlap(candidate: string[], selfGroupId: string | null, candidateTeamId = ""): void {
     if (candidate.length === 0) return;
     const candidateSet = new Set(candidate);
+    // P3: 团队维度感知 —— 只与「同 team 或同为全局」的组判重；
+    // team 专属组优先于全局组,故允许与全局组/跨 team 组共存同一 agent。
     const rows = this.all<Row>(
-      `SELECT group_id, group_type, name, agents FROM meta_instance_upstream_config
-       WHERE group_type IN ('default','custom')`,
+      `SELECT group_id, group_type, name, agents, team_id FROM meta_instance_upstream_config
+       WHERE group_type IN ('default','custom') AND team_id = ?`,
+      candidateTeamId,
     );
     const conflicts: Array<{ group_id: string; group_type: string; name: string; overlapping_agents: string[] }> = [];
     for (const r of rows) {
@@ -2460,6 +2477,15 @@ export class SqliteMetadataStore implements IMetadataStore {
       base_url: String(r.base_url ?? ""),
       api_key: String(r.api_key ?? ""),
       model_id: String(r.model_id ?? ""),
+      model_ids: (() => {
+        try {
+          const v = JSON.parse(String(r.model_ids ?? "[]"));
+          return Array.isArray(v) ? v.map((x) => String(x)) : [];
+        } catch {
+          return [];
+        }
+      })(),
+      team_id: String(r.team_id ?? ""),
       description: String(r.description ?? ""),
       version: Number(r.version ?? 1),
       supported_agents_snapshot: snapshot,

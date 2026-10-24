@@ -28,6 +28,11 @@ const PATH_TO_PAGE: Record<string, PageId> = {
   '/team/members': 'team_members',
   '/team/agents': 'team_agents',
   '/team/api-keys': 'api_keys',
+  // 新增菜单：模型管理 / 向量检索 / 系统状态
+  // 必须与 routes/index.tsx 中的子路由 path 完全一致，否则导航映射为空、点击无反应
+  '/models': 'model_admin',
+  '/vector': 'vector',
+  '/system': 'system_status',
 };
 
 /** PageId → 路由 path */

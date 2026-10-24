@@ -59,6 +59,10 @@ export interface InstanceUpstreamRow {
   base_url: string;
   api_key: string;      // 内部接口拿到明文,供 Proxy 转发上游
   model_id: string;
+  /** 多模型清单(P1);旧 Core 返回无此字段。空/缺 = 未配置清单。 */
+  model_ids?: string[];
+  /** 团队专属(P3):空/缺 = 全局组。 */
+  team_id?: string;
   // ── Core 真实返回里还带的字段 ─────────────────────────────────────────────
   // Proxy 本身不消费它们, 但真实 API 返回里有, 测试 mock 也会填, 不写进类型
   // 会让任何按真实返回构造数据的测试 TS2353。
@@ -201,6 +205,7 @@ export async function getInstanceUpstreamConfigs(
 export function resolveForAgent(
   items: InstanceUpstreamRow[],
   agentSource: string,
+  teamId = "",
 ): Resolution {
   // 只关心 conversation 用的组行(default + custom),忽略 extraction 行
   const convRows = items.filter(
@@ -212,9 +217,28 @@ export function resolveForAgent(
     return { kind: "official", row: null };
   }
 
-  // 1. 找显式覆盖该 agent 的 custom 组
+  // 0.5 P3: 团队专属组优先于全局组（teamId 非空时才参与）
+  if (teamId) {
+    const teamGroup = convRows.find(
+      (r) =>
+        r.group_type === "custom" &&
+        (r.team_id ?? "") === teamId &&
+        r.agents.includes(agentSource),
+    );
+    if (teamGroup) {
+      if (!teamGroup.enabled) {
+        return { kind: "blocked", reason: "custom_disabled", group_id: teamGroup.group_id };
+      }
+      return { kind: "override", row: teamGroup };
+    }
+  }
+
+  // 1. 找显式覆盖该 agent 的全局 custom 组（P3: 排除团队专属组 —— 后者只由 0.5 分支按 team 命中）
   const custom = convRows.find(
-    (r) => r.group_type === "custom" && r.agents.includes(agentSource),
+    (r) =>
+      r.group_type === "custom" &&
+      (r.team_id ?? "") === "" &&
+      r.agents.includes(agentSource),
   );
   if (custom) {
     if (!custom.enabled) {
@@ -230,6 +254,11 @@ export function resolveForAgent(
   if (def) {
     if (!def.enabled) {
       return { kind: "blocked", reason: "default_disabled", group_id: def.group_id };
+    }
+    // P2: default 组显式配置了 base_url → 管理员自建上游,走 override 路径;
+    // 留空 → 沿用 config.yaml 全局 upstream(向后兼容)。
+    if (def.base_url) {
+      return { kind: "override", row: def };
     }
     return { kind: "official", row: def };
   }
