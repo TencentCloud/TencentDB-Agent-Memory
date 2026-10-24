@@ -10,6 +10,8 @@ $sessionInit = $full -or (Get-Setting 'PROXY_ENABLE_SESSION_INIT' '0') -eq '1'
 $auth = $full -or $sessionInit -or (Get-Setting 'PROXY_ENABLE_AUTH' '0') -eq '1'
 $tdai = $full -or (Get-Setting 'PROXY_ENABLE_TDAI' '0') -eq '1'
 $gatewayKey = Get-Setting 'MEMORY_CORE_GATEWAY_API_KEY'
+# Core's v3 data routes and Knowledge injector still require a nonempty token.
+if (-not $gatewayKey) { $gatewayKey = 'local' }
 $config = @{
     server = @{ host = '0.0.0.0'; port = 8096; forwardTimeoutMs = 600000 }
     upstream = @{ url = Get-Setting 'PROXY_UPSTREAM_URL'; apiKey = Get-Setting 'PROXY_UPSTREAM_API_KEY' }

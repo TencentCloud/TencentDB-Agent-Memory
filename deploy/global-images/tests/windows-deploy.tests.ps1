@@ -93,7 +93,7 @@ try {
     Assert-True ($core.memory.persona.triggerMode -eq 'current' -and -not $core.memory.persona.jev) 'JEV remains disabled by default'
     Assert-True ($runs[0].argv -contains ((Join-Path $sandbox '.memory-core-config/tdai-gateway.yaml') + ':/data/config/tdai-gateway.yaml:ro')) 'Docker receives a single intact bind argument for a Chinese path with spaces and brackets'
     Assert-True ($runs[1].environment.LLM_API_KEY -ceq $secret -and ($runs[1].argv -join ' ') -notmatch [regex]::Escape($secret)) 'Docker inherits exact credentials without embedding them in argv'
-    Assert-True ($runs[0].environment.TDAI_GATEWAY_API_KEY -eq '' -and $runs[1].environment.REMOTE_INSTANCE_KEY -eq '') 'Empty internal credential is consistent across services'
+    Assert-True ($runs[0].environment.TDAI_GATEWAY_API_KEY -eq '' -and $runs[1].environment.REMOTE_INSTANCE_KEY -eq 'local' -and $proxy.tdai.apiKey -eq 'local' -and $proxy.skill.serviceToken -eq 'local' -and $proxy.knowledge.serviceToken -eq 'local') 'Core gate stays disabled while Hub and Proxy receive the required nonempty placeholder'
     Assert-True ($runs[1].environment.KNOWLEDGE_SERVICE_KEY -match '^ks-svc-' -and $runs[1].environment.KNOWLEDGE_SERVICE_KEY -eq $runs[1].environment.KNOWLEDGE_AUTH_TOKEN) 'Hub shares one generated Knowledge service key'
     $keyFile = Join-Path $sandbox '.admin-key'
     $firstKey = [IO.File]::ReadAllText($keyFile)
