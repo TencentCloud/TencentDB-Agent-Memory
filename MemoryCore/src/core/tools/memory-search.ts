@@ -131,7 +131,10 @@ export async function executeMemorySearch(params: {
     };
   }
 
-  const candidateK = limit * 3;
+  // Over-fetch a deeper candidate pool before RRF merge (see rationale in
+  // auto-recall.ts): a small pool can drop specific/rare matches for broad
+  // multi-term queries before fusion. Keep both call sites aligned.
+  const candidateK = Math.max(50, limit * 10);
   const recalled = await recallL1Candidates({
     query,
     topK: candidateK,
