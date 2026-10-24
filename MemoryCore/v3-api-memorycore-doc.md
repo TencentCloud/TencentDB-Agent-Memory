@@ -955,6 +955,8 @@ upsert 知识明细（幂等）。
 
 **AgentEntity 响应**：`{ agent_id, team_id, owner_user_id, name, description?, prompt?, visibility, status, created_at, updated_at, metadata_json }`。
 
+**get/list 读取范围**：以请求头用户 Key 鉴权。`system_admin` 和 owner 可读（owner 离队后仍可读）；其他用户须为 Agent 所属团队的 active 成员，且 `visibility=team`。无权 get 返回 404；list 先过滤再分页，`total` 仅计可见项。
+
 **示例**（create）
 
 ```json
@@ -984,6 +986,8 @@ upsert 知识明细（幂等）。
 **create 请求体**：`team_id`、`creator_user_id`、`title`、`description?`、`source_type?`(manual/tapd/github/other)、`source_url?`、`status?`(running/completed)、`auto_assign_floating_assets?`、`risk_level?`、`metadata_json?`、`linked_agents?`(`[{ agent_id, role_in_task? }]`)。
 
 **TaskEntity 响应**：`{ task_id, team_id, creator_user_id, title, description?, source_type, source_url?, status, auto_assign_floating_assets, risk_level?, created_at, updated_at, metadata_json }`。
+
+**get/list 读取范围**：`system_admin`、creator（包括离队后）及所属团队的 active 成员可读。无权 get 返回 404；list 先过滤再分页，`total` 仅计可见项。
 
 ### 3.7.7 Task-Agent（3）
 

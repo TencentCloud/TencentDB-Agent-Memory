@@ -1038,6 +1038,16 @@ export class SqliteMetadataStore implements IMetadataStore {
     return result;
   }
 
+  /** 同一权限条件用于 COUNT 和分页查询，避免先分页后过滤造成遗漏或泄露总数。 */
+  private teamResourceReadWhere(table: "meta_agents" | "meta_tasks"): string {
+    const ownerColumn = table === "meta_agents" ? "owner_user_id" : "creator_user_id";
+    const teamVisibility = table === "meta_agents" ? " AND meta_agents.visibility = 'team'" : "";
+    return ` AND (${table}.${ownerColumn} = ? OR EXISTS (
+      SELECT 1 FROM meta_team_members m
+      WHERE m.team_id = ${table}.team_id AND m.user_id = ? AND m.status = 'active'${teamVisibility}
+    ))`;
+  }
+
   listAgentsByTeam(teamId: string, pagination?: PaginationParams | null, filter?: AgentFilter): ListPage<AgentEntity> {
     let where = "WHERE team_id = ?";
     const params: SQLInputValue[] = [teamId];
@@ -1052,6 +1062,11 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (filter?.name) {
       where += " AND name = ?";
       params.push(filter.name);
+    }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_agents");
+      params.push(callerUserId, callerUserId);
     }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_agents ${where}`,
@@ -1073,6 +1088,11 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (filter?.name) {
       where += " AND name = ?";
       params.push(filter.name);
+    }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_agents");
+      params.push(callerUserId, callerUserId);
     }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_agents ${where}`,
@@ -1176,6 +1196,11 @@ export class SqliteMetadataStore implements IMetadataStore {
       where += " AND title = ?";
       params.push(filter.title);
     }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_tasks");
+      params.push(callerUserId, callerUserId);
+    }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_tasks ${where}`,
       params,
@@ -1200,6 +1225,11 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (filter.title) {
       where += " AND title = ?";
       params.push(filter.title);
+    }
+    const callerUserId = filter.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_tasks");
+      params.push(callerUserId, callerUserId);
     }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_tasks ${where}`,
