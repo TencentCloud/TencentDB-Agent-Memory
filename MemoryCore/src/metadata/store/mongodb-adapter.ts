@@ -960,11 +960,21 @@ export class MongoMetadataStore implements IMetadataStore {
     return result;
   }
 
+  /** 仅查询成员关系；资源过滤、total 和分页仍由数据库完成。 */
+  private async teamResourceReadFilter(ownerField: "owner_user_id" | "creator_user_id", userId?: string): Promise<Document> {
+    if (userId === undefined) return {};
+    const teamIds = await this.col("meta_team_members").distinct("team_id", { user_id: userId, status: "active" });
+    const teamFilter: Document = { team_id: { $in: teamIds } };
+    if (ownerField === "owner_user_id") teamFilter.visibility = "team";
+    return { $or: [{ [ownerField]: userId }, teamFilter] };
+  }
+
   async listAgentsByTeam(teamId: string, pagination?: PaginationParams | null, filter?: AgentFilter): Promise<ListPage<AgentEntity>> {
     const q: Document = { team_id: teamId };
     if (filter?.status) q.status = filter.status;
     if (filter?.owner_user_id) q.owner_user_id = filter.owner_user_id;
     if (filter?.name) q.name = filter.name;
+    if (filter?.readable_by_user_id !== undefined) Object.assign(q, await this.teamResourceReadFilter("owner_user_id", filter.readable_by_user_id));
     return this.paginatedFind("meta_agents", q, pagination, { created_at: -1 }, (d) => d as AgentEntity);
   }
 
@@ -972,6 +982,7 @@ export class MongoMetadataStore implements IMetadataStore {
     const q: Document = { owner_user_id: userId };
     if (filter?.status) q.status = filter.status;
     if (filter?.name) q.name = filter.name;
+    if (filter?.readable_by_user_id !== undefined) Object.assign(q, await this.teamResourceReadFilter("owner_user_id", filter.readable_by_user_id));
     return this.paginatedFind("meta_agents", q, pagination, { created_at: -1 }, (d) => d as AgentEntity);
   }
 
@@ -1046,6 +1057,7 @@ export class MongoMetadataStore implements IMetadataStore {
     if (filter?.status) q.status = filter.status;
     if (filter?.creator_user_id) q.creator_user_id = filter.creator_user_id;
     if (filter?.title) q.title = filter.title;
+    if (filter?.readable_by_user_id !== undefined) Object.assign(q, await this.teamResourceReadFilter("creator_user_id", filter.readable_by_user_id));
     return this.paginatedFind("meta_tasks", q, pagination, { created_at: -1 }, (d) => d as TaskEntity);
   }
 
@@ -1054,6 +1066,7 @@ export class MongoMetadataStore implements IMetadataStore {
     if (filter.status) q.status = filter.status;
     if (filter.creator_user_id) q.creator_user_id = filter.creator_user_id;
     if (filter.title) q.title = filter.title;
+    if (filter.readable_by_user_id !== undefined) Object.assign(q, await this.teamResourceReadFilter("creator_user_id", filter.readable_by_user_id));
     return this.paginatedFind("meta_tasks", q, pagination, { created_at: -1 }, (d) => d as TaskEntity);
   }
 

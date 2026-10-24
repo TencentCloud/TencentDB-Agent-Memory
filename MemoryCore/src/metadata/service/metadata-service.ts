@@ -998,6 +998,12 @@ export class MetadataService {
     return this.store.getAgentById(agentId);
   }
 
+  async getAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity | null> {
+    const agent = await this.getAgentById(agentId);
+    if (!agent || !await this.canReadTeamResource(ctx, agent.team_id, agent.owner_user_id, agent.visibility === "team")) return null;
+    return agent;
+  }
+
   async updateAgent(agentId: string, patch: Partial<AgentEntity>): Promise<AgentEntity> {
     if (!(await this.getAgentById(agentId))) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
     const updated = await this.store.updateAgent(agentId, patch);
@@ -1084,6 +1090,12 @@ export class MetadataService {
 
   async getTaskById(taskId: string): Promise<TaskEntity | null> {
     return this.store.getTaskById(taskId);
+  }
+
+  async getTaskForCaller(taskId: string, ctx: V3AuthContext): Promise<TaskEntity | null> {
+    const task = await this.getTaskById(taskId);
+    if (!task || !await this.canReadTeamResource(ctx, task.team_id, task.creator_user_id)) return null;
+    return task;
   }
 
   async updateTask(taskId: string, patch: Partial<TaskEntity>): Promise<TaskEntity> {
@@ -1800,6 +1812,21 @@ export class MetadataService {
       throw new MetadataError("permission_denied", "authentication required");
     }
     return ctx.userId;
+  }
+
+  /** 列表读取范围只取认证身份，避免请求中的 owner/creator 改变调用者权限。 */
+  getTeamResourceReadFilterForCaller(ctx: V3AuthContext): Pick<AgentFilter, "readable_by_user_id"> {
+    return { readable_by_user_id: ctx.isSystemAdmin ? undefined : this.requireCallerId(ctx) };
+  }
+
+  /** 保留 owner / system_admin 权限；其他活跃成员只可读取允许团队共享的资源。 */
+  private async canReadTeamResource(ctx: V3AuthContext, teamId: string, ownerUserId: string, allowTeamMembers = true): Promise<boolean> {
+    if (ctx.isSystemAdmin) return true;
+    if (!ctx.userId) return false;
+    if (ctx.userId === ownerUserId) return true;
+    if (!allowTeamMembers) return false;
+    const member = await this.store.getTeamMember(teamId, ctx.userId);
+    return member?.status === "active";
   }
 
   private assertCallerIsResourceOwner(ctx: V3AuthContext, ownerUserId: string): void {
