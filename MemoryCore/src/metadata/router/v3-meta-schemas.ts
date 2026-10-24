@@ -480,6 +480,9 @@ export const upstreamGroupsCreateSchema = z.object({
   base_url: z.string().min(1),
   api_key: z.string().optional(),
   model_id: z.string().optional(),
+  model_ids: z.array(z.string().min(1)).max(50).optional(),
+  /** P3: 团队专属组归属（空/缺省 = 全局组） */
+  team_id: z.string().optional(),
   description: z.string().optional(),
 });
 
@@ -495,6 +498,7 @@ export const upstreamGroupsUpdateSchema = z.object({
   base_url: z.string().optional(),
   api_key: z.string().optional(),
   model_id: z.string().optional(),
+  model_ids: z.array(z.string().min(1)).max(50).optional(),
   description: z.string().optional(),
 });
 

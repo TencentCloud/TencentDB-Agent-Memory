@@ -80,6 +80,19 @@ export const META_ACTIONS = [
   'instance-quota/get',
   'config/user/get',
   'config/user/set',
+  // ── InstanceUpstream v2：模型管理（菜单 1）──────────────────────────
+  // 数据面在 Proxy（9 个 agent 全部支持 per-agent 上游），配置面在 Core。
+  'upstream/supported-agents',
+  'instance-upstream/groups/list',
+  'instance-upstream/groups/create',
+  'instance-upstream/groups/update',
+  'instance-upstream/groups/toggle',
+  'instance-upstream/groups/delete',
+  'instance-upstream/extraction/get',
+  'instance-upstream/extraction/create',
+  'instance-upstream/extraction/update',
+  'instance-upstream/extraction/toggle',
+  'instance-upstream/extraction/delete',
   // UserSessionDefault (v3.3) — 用户级 session 默认 (team, agent, task) 三元组
   // 详见 MemoryProxy/docs/design/2026-10-10-user-session-default-design.md
   'user-session-default/get',

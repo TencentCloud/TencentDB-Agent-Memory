@@ -306,6 +306,7 @@ function buildUpstreamHeaders(
   // cost-guard's `target.authHeaders` still gets to override everything.
   if (effectiveApiKey && !target.authHeaders) {
     headers["authorization"] = `Bearer ${effectiveApiKey}`;
+    delete headers["x-api-key"];
   }
 
   if (target.authHeaders) {
@@ -687,7 +688,7 @@ export async function runOpenaiChatPipeline(
   // 但走独立的 header-driven session-init 分支(见下方 opencode 特化块),
   // 因此不需要走这里的 headless bypass —— opencode 能吃 mem 命令纯文本响应,
   // 也需要 injection / L0 / skill 提取,只是不能弹 form。
-  const _dshHeadless = agentSource === "dsh" && (() => {
+  const _dshHeadlessRaw = agentSource === "dsh" && (() => {
     const tools = (body as { tools?: unknown }).tools;
     if (!Array.isArray(tools) || tools.length === 0) return false;
     return !tools.some((t) => {
@@ -696,6 +697,18 @@ export async function runOpenaiChatPipeline(
       return n === "ask_user_question";
     });
   })();
+  // 无 ask_user_question preset（headless）时，若配置了 sessionInit.debugForceIdentity，
+  // 用它合成 team/agent header，让 session-init 走 header 预选直接注册（不弹表单）。
+  // 目的：dsh 会话也能绑定 team/agent → 记忆注入 + L0 trace 归档到面板，而不是落到 _unassigned。
+  const _dshForceBind = _dshHeadlessRaw ? config.sessionInit?.debugForceIdentity : undefined;
+  const _dshHeaderAuto = config.sessionInit?.headerAutoSelect;
+  if (_dshForceBind && _dshHeaderAuto?.enabled) {
+    lcHeaders[_dshHeaderAuto.teamHeader] = _dshForceBind.team_id;
+    lcHeaders[_dshHeaderAuto.agentHeader] = _dshForceBind.agent_id;
+    if (_dshForceBind.task_id) lcHeaders[_dshHeaderAuto.taskHeader] = _dshForceBind.task_id;
+    console.log(`[request-classify] session=${sessionKey} agent=dsh headless → auto-bind team=${_dshForceBind.team_id} agent=${_dshForceBind.agent_id} (via sessionInit.debugForceIdentity)`);
+  }
+  const _dshHeadless = _dshHeadlessRaw && !(_dshForceBind && _dshHeaderAuto?.enabled);
   if (_dshHeadless) {
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
   }
@@ -1053,6 +1066,15 @@ export async function runOpenaiChatPipeline(
     }
   }
   const skipCreditReport = overrideResult.skipCreditReport;
+  // 命中自定义上游分组时，把组标识带给计费 stage：该笔流量不计入平台账单，
+  // 但要完整纳入用量统计（详见 src/upstream-usage.ts 口径说明）。
+  const _customUpstream = overrideResult.applied && overrideResult.groupId
+    ? {
+        groupId: overrideResult.groupId,
+        groupName: overrideResult.groupName,
+        teamId: overrideResult.teamId,
+      }
+    : undefined;
 
   // ── Skill selection (proxy 选择 → 客户端加载) ─────────────────────────────
   // 与 anthropicHandler 对称：新用户轮次选中 skill → 直接返回 tool_calls，由客户端
@@ -1204,6 +1226,7 @@ export async function runOpenaiChatPipeline(
   // on the client's own key, preserving the passthrough intent.
   if (effectiveApiKey) {
     originalHeaders["authorization"] = `Bearer ${effectiveApiKey}`;
+    delete originalHeaders["x-api-key"];
   }
 
   // Inject stream_options.include_usage for OpenAI compat
@@ -1356,6 +1379,7 @@ export async function runOpenaiChatPipeline(
       debugMetadata,
       preparedStats,
       skipCreditReport,
+      customUpstream: _customUpstream,
       isCustomUpstream: _isCustomUpstream,
       gates: _gates,
       sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
@@ -1612,6 +1636,7 @@ export async function runOpenaiChatPipeline(
   if (_gates.creditReport) {
     const creditResult = await stageCredit({
       skipCreditReport,
+      customUpstream: _customUpstream,
       config,
       path: c.req.path,
       usage,

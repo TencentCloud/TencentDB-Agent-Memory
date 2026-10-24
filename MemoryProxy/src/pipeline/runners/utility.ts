@@ -17,6 +17,7 @@ import {
   tryReportCreditFromPath,
   extractSpaceIdFromPath,
 } from "../../credit-reporter.js";
+import { recordCustomUpstreamUsage } from "../../upstream-usage.js";
 import { matchWhitelistEndpoint, type WhitelistEndpoint } from "../../routes/whitelist.js";
 import { joinUrl } from "../../guard-adapter.js";
 import { log } from "../../report/log.js";
@@ -123,14 +124,18 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
   // 命中 custom 组时同时置 skipCreditReport —— 与 stages/instance-upstream-override.ts
   // 的语义一致: custom upstream 由用户自付, 不算平台账。
   let skipCreditReport = false;
+  let _customUpstreamGroup: { groupId: string; groupName: string; teamId: string } | undefined;
   {
     const instanceConfigs = await getInstanceUpstreamConfigs(config.coreSkill, spaceId, config.instanceUpstream);
     const agentFromPath = c.req.path.split("/").filter(Boolean)[0] ?? undefined;
-    const resolution = resolveForAgent(instanceConfigs, agentFromPath ?? "");
+    const teamId = (c.req.header("x-team-id") ?? "").toLowerCase();
+    const resolution = resolveForAgent(instanceConfigs, agentFromPath ?? "", teamId);
     if (resolution.kind === "override") {
       const row = resolution.row;
       upstreamUrl = joinUrl(row.base_url, c.req.path);
+      // 不纳入平台计费（用户自付），但纳入用量统计 —— 见 upstream-usage.ts
       skipCreditReport = true;
+      _customUpstreamGroup = { groupId: row.group_id ?? "", groupName: row.name ?? "", teamId: row.team_id ?? "" };
       if (row.mode === "custom_unified" && row.api_key) {
         if (entry.protocol === "anthropic") {
           upstreamHeaders["x-api-key"] = row.api_key;
@@ -184,6 +189,19 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
     // custom upstream (instance 配了 override 组) 不上报计费 —— 与
     // anthropic/openai-chat/codex/workbuddy 的 skipCreditReport 语义对齐。
     if (skipCreditReport) {
+      // ── 不纳入平台计费，但**纳入用量统计** ────────────────────────────
+      recordCustomUpstreamUsage({
+        usage,
+        upstreamUrl,
+        modelId,
+        spaceId: spaceId ?? "",
+        agent: c.req.path.split("/").filter(Boolean)[0] ?? "",
+        groupId: _customUpstreamGroup?.groupId ?? "",
+        groupName: _customUpstreamGroup?.groupName ?? "",
+        teamId: _customUpstreamGroup?.teamId ?? "",
+        pricing: config.creditPricing,
+        requestTime: new Date(startTime),
+      });
       log.debug("aux.credit_report_skipped", { path: c.req.path, upstreamUrl, reason: "custom_upstream" });
     } else {
       try {

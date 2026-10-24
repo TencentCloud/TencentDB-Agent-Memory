@@ -645,6 +645,10 @@ export interface InstanceUpstreamConfigEntity {
   base_url: string;
   api_key: string;
   model_id: string;
+  /** 多模型清单(P1):空 = 未配置,语义回落单值 model_id;[0] 为默认模型。 */
+  model_ids: string[];
+  /** 团队专属(P3):空 = 全局组;非空 = 仅该 team 命中,解析优先级高于全局组。 */
+  team_id: string;
   description: string;
   created_at: string;
   updated_at: string;
@@ -681,6 +685,9 @@ export interface CreateInstanceUpstreamGroupInput {
   base_url?: string;
   api_key?: string;
   model_id?: string;
+  model_ids?: string[];
+  /** P3: 团队专属组归属（空 = 全局）。 */
+  team_id?: string;
   description?: string;
 }
 
@@ -701,6 +708,7 @@ export interface UpdateInstanceUpstreamGroupInput {
   base_url?: string;
   api_key?: string;
   model_id?: string;
+  model_ids?: string[];
   description?: string;
 }
 

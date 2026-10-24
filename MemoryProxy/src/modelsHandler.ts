@@ -1,6 +1,7 @@
 /** OpenAI-compatible model discovery backed by the local pricing table. */
 
 import type { Context } from "hono";
+import { getInstanceUpstreamConfigs, resolveForAgent } from "./instance-upstream-cache.js";
 import { verifyUserKey } from "./auth.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { poolServiceFor } from "./guard-adapter.js";
@@ -59,5 +60,32 @@ export async function handleModels(c: Context, config: ProxyConfig): Promise<Res
 
   c.header("cache-control", "no-store");
   const pool = poolServiceFor(config);
+
+  // P1: 该 agent 命中的组若配置了 model_ids 清单,则只暴露清单内模型
+  // (正常客户端经 /models 选模型,清单外请求不会发生);
+  // 未命中/未配置/获取失败 → 维持全局目录(向后兼容)。手工构造的清单外请求
+  // 在 override 阶段回落清单第一个,不报错 —— 口径见 instance-upstream-override.ts。
+  let groupModelIds: string[] | null = null;
+  try {
+    const agent = c.req.path.split("/").filter(Boolean)[0] ?? "";
+    if (agent) {
+      const items = await getInstanceUpstreamConfigs(
+        config.coreSkill, spaceId, config.instanceUpstream,
+      );
+      const teamId = (c.req.header("x-team-id") ?? "").toLowerCase();
+      const res = resolveForAgent(items, agent, teamId);
+      const row = "row" in res ? res.row : null;
+      if (row?.model_ids && row.model_ids.length > 0) groupModelIds = row.model_ids;
+    }
+  } catch {
+    // 清单获取失败 → 退回全局目录
+  }
+
+  if (groupModelIds) {
+    return c.json({
+      object: "list",
+      data: groupModelIds.map((id) => ({ id, object: "model", created: 0, owned_by: "context-proxy" })),
+    });
+  }
   return c.json(buildModelsResponse(config.creditPricing, pool.active ? [pool.serviceName] : []));
 }

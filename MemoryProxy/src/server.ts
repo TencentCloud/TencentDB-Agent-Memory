@@ -1,6 +1,7 @@
 /** Hono app factory — registers all routes. */
 
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { accessKeyMiddleware } from "./accessKeys.js";
 import { runOpenaiChatPipeline } from "./pipeline/runners/openai-chat.js";
 import { runAnthropicPipeline } from "./pipeline/runners/anthropic.js";
@@ -92,6 +93,13 @@ export function createApp(config: ProxyConfig): Hono {
   // 返回 503 + degraded=true，让 k8s LB 把该 pod 摘掉，避免"两个节点各写各
   // 的内存"这种数据一致性事故。sqlite 也算 process-local——多节点各自本地
   // 文件也是不共享的。见 docs/design/2026-07-13-proxy-multinode-state-audit.md P0-2。
+  // 自定义上游用量统计（面板「系统状态」消费）。
+  // 仅暴露聚合后的 token/credit 数字，不含任何密钥或上游地址。
+  app.get("/internal/upstream-usage", async (c) => {
+    const mod = await import("./upstream-usage.js");
+    return c.json(mod.snapshotUpstreamUsage());
+  });
+
   app.get("/health", (c) => {
     const eff = getEffectiveBackend();
     const wantsShared = config.storage?.enabled && eff.requested === "cos";
@@ -365,8 +373,15 @@ export function createApp(config: ProxyConfig): Hono {
     app.post("/opencode/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
   }
 
+  // CORS for model-catalog probing: dsh 等客户端的设置页在浏览器里发 GET {baseURL}/models，
+  // 需要 Access-Control-Allow-Origin 与 OPTIONS 预检支持，否则跨域被浏览器拦截。
+  app.use("/:agent/:spaceId/models", cors());
+  app.use("/:agent/:spaceId/v1/models", cors());
+  app.use("/:agent/:spaceId/v1/models/*", cors());
   // OpenAI Models API — tenant-scoped and generated locally from the public pricing catalog.
   app.get("/:agent/:spaceId/v1/models", (c) => handleModels(c, config));
+  // 兼容不带 /v1 的模型目录探测（dsh 等客户端按 baseURL + /models 拉取）
+  app.get("/:agent/:spaceId/models", (c) => handleModels(c, config));
   app.post("/:agent/:spaceId/v1/messages", (c) => handleAnthropicMessages(c, config));
   app.post("/:agent/:spaceId/v1/messages/count_tokens", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
