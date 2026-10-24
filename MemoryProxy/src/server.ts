@@ -1,6 +1,7 @@
 /** Hono app factory — registers all routes. */
 
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { accessKeyMiddleware } from "./accessKeys.js";
 import { runOpenaiChatPipeline } from "./pipeline/runners/openai-chat.js";
 import { runAnthropicPipeline } from "./pipeline/runners/anthropic.js";
@@ -372,6 +373,11 @@ export function createApp(config: ProxyConfig): Hono {
     app.post("/opencode/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
   }
 
+  // CORS for model-catalog probing: dsh 等客户端的设置页在浏览器里发 GET {baseURL}/models，
+  // 需要 Access-Control-Allow-Origin 与 OPTIONS 预检支持，否则跨域被浏览器拦截。
+  app.use("/:agent/:spaceId/models", cors());
+  app.use("/:agent/:spaceId/v1/models", cors());
+  app.use("/:agent/:spaceId/v1/models/*", cors());
   // OpenAI Models API — tenant-scoped and generated locally from the public pricing catalog.
   app.get("/:agent/:spaceId/v1/models", (c) => handleModels(c, config));
   // 兼容不带 /v1 的模型目录探测（dsh 等客户端按 baseURL + /models 拉取）
