@@ -33,6 +33,7 @@ const PATH_TO_PAGE: Record<string, PageId> = {
   '/models': 'model_admin',
   '/vector': 'vector',
   '/system': 'system_status',
+  '/session-default': 'session_default',
 };
 
 /** PageId → 路由 path */

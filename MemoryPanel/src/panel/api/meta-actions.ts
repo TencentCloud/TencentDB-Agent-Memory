@@ -96,6 +96,7 @@ export const META_ACTIONS = [
   // UserSessionDefault (v3.3) — 用户级 session 默认 (team, agent, task) 三元组
   // 详见 MemoryProxy/docs/design/2026-10-10-user-session-default-design.md
   'user-session-default/get',
+  'user-session-default/list',
   'user-session-default/set',
   'user-session-default/delete',
 ] as const;

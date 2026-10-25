@@ -19,6 +19,7 @@ import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { ModelAdminPage } from '@/pages/ModelAdminPage';
 import { VectorPage } from '@/pages/VectorPage';
 import { SystemStatusPage } from '@/pages/SystemStatusPage';
+import { SessionDefaultPage } from '@/pages/SessionDefaultPage';
 
 export const routes: RouteObject[] = [
   {
@@ -37,6 +38,7 @@ export const routes: RouteObject[] = [
       { path: 'models', element: <ModelAdminPage /> },
       { path: 'vector', element: <VectorPage /> },
       { path: 'system', element: <SystemStatusPage /> },
+      { path: 'session-default', element: <SessionDefaultPage /> },
       { path: 'guide', element: <GuidePage /> },
     ],
   },

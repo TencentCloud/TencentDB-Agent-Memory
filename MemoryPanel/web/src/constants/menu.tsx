@@ -28,7 +28,8 @@ export type PageId =
   | 'analytics'
   | 'model_admin'
   | 'vector'
-  | 'system_status';
+  | 'system_status'
+  | 'session_default';
 
 /** 页面元数据 */
 export interface PageMeta {
@@ -60,6 +61,7 @@ export function usePageMeta(): Record<PageId, PageMeta> {
     model_admin:     { id: 'model_admin',     label: '模型管理', desc: '为每个 Agent 配置模型供应商', group: t('menu.group.organization'), order: 3 },
     vector:          { id: 'vector',          label: '向量检索', desc: '配置语义向量模型服务', group: t('menu.group.assets'), order: 6 },
     system_status:   { id: 'system_status',   label: '系统状态', desc: '健康检查与用量统计', group: t('menu.group.organization'), order: 5 },
+    session_default: { id: 'session_default', label: '会话绑定', desc: '按工作区配置新会话默认 Team/Agent', group: t('menu.group.organization'), order: 4 },
   };
 }
 
@@ -80,6 +82,14 @@ export const ITEM_ICON: Record<PageId, JSX.Element> = {
   team_members: <UserIcon size={16} />,
   team_agents: <UsergroupIcon size={16} />,
   api_keys: <LockOnIcon size={16} />,
+  session_default: (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="5" width="18" height="5" rx="1.5" />
+      <rect x="3" y="14" width="18" height="5" rx="1.5" />
+      <line x1="8" y1="7.5" x2="8.01" y2="7.5" />
+      <line x1="8" y1="16.5" x2="8.01" y2="16.5" />
+    </svg>
+  ),
   model_admin: (
     <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="18" height="6" rx="1.5" />

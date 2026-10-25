@@ -146,7 +146,8 @@ export function registerAgentLifecycleRoutes(api: Hono, deps: PanelDeps): void {
     }
 
     // 5. agent/archive —— 内核仍然会顺手清 chat_memory
-    const archiveEnv = await deps.metaKernel.invoke('agent/archive', { agent_id: agentId }, ctx);
+    // v3.4：删除 = 真删除（Core deleteAgents 会清理记忆内容，store 级联删资产/关联）
+    const archiveEnv = await deps.metaKernel.invoke('agent/delete', { agent_ids: [agentId] }, ctx);
     if (archiveEnv.code !== 0) return respondEnvelope(c, archiveEnv);
 
     return respondEnvelope(

@@ -24,8 +24,8 @@
  *   - EditTeamDialog 已迁到 TeamSwitcher 共用（@/layouts/GlobalHeader/TeamSwitcher）
  */
 
-import { useState, useMemo } from 'react';
-import { Button } from 'tea-component';
+import { useState, useMemo, useEffect } from 'react';
+import { Button, Table } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { UsergroupIcon, AddIcon } from 'tea-icons-react';
 import {
@@ -43,6 +43,15 @@ import { useDisplayNameResolver } from '@/services/user-profile-store';
 import { tea } from '@/lib/tea-bridge';
 import { getErrorMessage } from '@/lib/error-message';
 import './team-management-panel.css';
+
+/** v3.4：已归档 Agent 行（归档=可逆停用；删除=真删除） */
+type ArchivedAgentRow = {
+  agent_id: string;
+  name: string;
+  status: string;
+  owner_user_id?: string;
+  updated_at?: string;
+};
 
 import { MAX_IMPORTED_CHAT_MEMORIES, importedChatMemoryIds, type AgentCard } from './types';
 import { useAgentMountedCounts, syncChatMemoryBindings } from './useAgentAssets';
@@ -199,6 +208,54 @@ export default function TeamManagementPanel({
     }
   }
 
+  // ── v3.4：归档/恢复（语义对齐：归档=可逆停用；删除=真删除）──
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedAgents, setArchivedAgents] = useState<ArchivedAgentRow[]>([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+
+  async function loadArchived() {
+    if (!activeTeamId) return;
+    setArchivedLoading(true);
+    try {
+      const all = await agentsApi.list(activeTeamId, { includeArchived: true });
+      setArchivedAgents((all as unknown as ArchivedAgentRow[]).filter((a) => a.status !== 'active'));
+    } catch (err) {
+      tea.notify.error(getErrorMessage(err));
+    }
+    setArchivedLoading(false);
+  }
+
+  useEffect(() => {
+    if (showArchived) void loadArchived();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showArchived, activeTeamId]);
+
+  async function handleArchiveAgent(agent: StoreAgent) {
+    const ok = await tea.confirm({
+      message: '归档「' + agent.name + '」？',
+      description: '归档只停用 Agent（可随时恢复），不会删除记忆与技能。',
+      okText: '归档',
+    });
+    if (!ok) return;
+    try {
+      await agentsApi.archive(agent.agent_id);
+      invalidateBackendCache();
+      if (showArchived) await loadArchived();
+    } catch (err) {
+      tea.notify.error(getErrorMessage(err));
+    }
+  }
+
+  async function handleRestoreAgent(agent: ArchivedAgentRow) {
+    try {
+      await agentsApi.restore(agent.agent_id);
+      invalidateBackendCache();
+      await loadArchived();
+    } catch (err) {
+      tea.notify.error(getErrorMessage(err));
+    }
+  }
+
   async function handleCreateTeam(input: { name: string; description: string }) {
     setBusy(true);
     try {
@@ -310,8 +367,41 @@ export default function TeamManagementPanel({
               onCreateAgent={() => setShowCreateAgent(true)}
               onEditAgent={setEditingAgent}
               onDeleteAgent={handleDeleteAgent}
+              onArchiveAgent={handleArchiveAgent}
             />
           )}
+
+      {/* ── v3.4：已归档 Agent（可逆；恢复不改数据）── */}
+      <div className="_memory-panel-card" style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+          <Button type="link" onClick={() => setShowArchived((v) => !v)}>
+            {showArchived ? '收起已归档 Agent' : '查看已归档 Agent'}
+          </Button>
+          <span style={{ color: 'var(--muted-foreground)', fontSize: 12 }}>
+            归档 = 可逆停用（不清理数据）；删除 = 彻底删除（清理技能与记忆）
+          </span>
+        </div>
+        {showArchived && (
+          archivedLoading ? (
+            <div style={{ color: 'var(--muted-foreground)' }}>加载中…</div>
+          ) : (
+            <Table
+              records={archivedAgents}
+              recordKey="agent_id"
+              columns={[
+                { key: 'name', header: '名称', render: (a: ArchivedAgentRow) => a.name },
+                { key: 'agent_id', header: 'ID', render: (a: ArchivedAgentRow) => a.agent_id },
+                { key: 'status', header: '状态', render: (a: ArchivedAgentRow) => a.status },
+                {
+                  key: 'actions', header: '操作', render: (a: ArchivedAgentRow) => (
+                    <Button type="link" onClick={() => handleRestoreAgent(a)}>恢复</Button>
+                  ),
+                },
+              ]}
+            />
+          )
+        )}
+      </div>
         </>
       )}
 
