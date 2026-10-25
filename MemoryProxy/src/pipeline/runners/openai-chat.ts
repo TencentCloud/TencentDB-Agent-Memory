@@ -708,7 +708,10 @@ export async function runOpenaiChatPipeline(
     if (_dshForceBind.task_id) lcHeaders[_dshHeaderAuto.taskHeader] = _dshForceBind.task_id;
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless → auto-bind team=${_dshForceBind.team_id} agent=${_dshForceBind.agent_id} (via sessionInit.debugForceIdentity)`);
   }
-  const _dshHeadless = _dshHeadlessRaw && !(_dshForceBind && _dshHeaderAuto?.enabled);
+  // v3.4：headerAutoSelect 开启即放行进入 session-init —— 身份由「会话默认绑定」
+  // （workspace 维度）或 header preset 解析，不再强依赖 debugForceIdentity；
+  // 两者都缺才 bypass（fail-closed，不注入/不归档）。
+  const _dshHeadless = _dshHeadlessRaw && !_dshHeaderAuto?.enabled;
   if (_dshHeadless) {
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
   }
@@ -741,11 +744,17 @@ export async function runOpenaiChatPipeline(
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("../../injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
+  // v3.6b：PC 桌面端 dsh 实测不带任何会话头（custom 头只有 x-stainless-*），
+  // conversationId=null 会让 session-init 整个被跳过 → 待命绑定（arm）永远无法
+  // 消费、记忆永不归档。对 dsh 交互请求回退用 sessionKey（keyId 维度）作为会话
+  // 标识：同一 key 下所有对话共享一个绑定（桌面端无会话维度时的最优近似）。
+  const initConvId = conversationId
+    ?? (agentSource === "dsh" && !_dshHeadless && !isAuxiliary ? sessionKey : null);
+  let injectedSkipped = !initConvId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
-  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
+  if (config.sessionInit?.enabled && initConvId && !isAuxiliary && !_dshHeadless) {
     try {
       // Round 18: session-init 主编排走 shared stageSessionInitOrchestrate;
       // openai-chat 4 个 callback:
@@ -1079,7 +1088,7 @@ export async function runOpenaiChatPipeline(
   // ── Skill selection (proxy 选择 → 客户端加载) ─────────────────────────────
   // 与 anthropicHandler 对称：新用户轮次选中 skill → 直接返回 tool_calls，由客户端
   // 执行加载。session-init 刚完成的这一轮不触发（避免与表单伪造响应叠加）。
-  if (!isAuxiliary && !_dshHeadless && !injectedSkipped && !sessionJustRegistered && sessionInfo && conversationId) {
+  if (!isAuxiliary && !_dshHeadless && !injectedSkipped && !sessionJustRegistered && sessionInfo && initConvId) {
     const { tryClientToolDelivery } = await import("../../skill/selection/delivery/client-tool.js");
     const resp = await tryClientToolDelivery(config, {
       protocol: "openai",
@@ -1089,7 +1098,7 @@ export async function runOpenaiChatPipeline(
       stream: isStream,
       model: String(modelId ?? ""),
       session: sessionInfo as Parameters<typeof tryClientToolDelivery>[1]["session"],
-      conversationId,
+      conversationId: initConvId,
       sessionKey,
       agentSource,
       skillCapability: assetCapabilities?.skill !== false,

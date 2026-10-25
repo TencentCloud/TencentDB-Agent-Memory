@@ -98,6 +98,9 @@ export interface TaskEntity {
  */
 export interface UserSessionDefaultEntity {
   user_id: string;
+  workspace_id: string;
+  workspace_id: string;
+  workspace_id: string;
   team_id: string;
   agent_id: string;
   task_id: string;
@@ -378,11 +381,11 @@ export class MetadataClient {
    *   - 未配置: Core 侧返 entity_not_found (code=404), 本方法吞成 `null`
    *   - 其他异常 (网络 / 鉴权失败): 原样抛出, 由 caller 决定降级
    */
-  async getUserSessionDefault(userId: string): Promise<UserSessionDefaultEntity | null> {
+  async getUserSessionDefault(userId: string, workspaceId: string = ""): Promise<UserSessionDefaultEntity | null> {
     try {
       return await this.fetch<UserSessionDefaultEntity>(
         "/v3/meta/user-session-default/get",
-        { user_id: userId },
+        { user_id: userId, workspace_id: workspaceId },
       );
     } catch (err) {
       // Core 把 "未设置"表达为 envelope code=404 (entity_not_found);
@@ -390,9 +393,24 @@ export class MetadataClient {
       if (err instanceof Error && /\b404\b|entity_not_found/.test(err.message)) {
         return null;
       }
+      // v3.5: Core 对未设置也可能返回 code=0 + data:null (fetch 层抛
+      // "unexpected null data"), 同样视为未配置而非异常。
+      if (err instanceof Error && /unexpected null data/.test(err.message)) {
+        return null;
+      }
       throw err;
     }
   }
+
+  async listUserSessionDefaults(userId: string): Promise<UserSessionDefaultEntity[]> {
+    const result = await this.fetch<{ items?: UserSessionDefaultEntity[] } | UserSessionDefaultEntity[]>(
+      "/v3/meta/user-session-default/list",
+      { user_id: userId },
+    );
+    if (Array.isArray(result)) return result;
+    return result?.items ?? [];
+  }
+
 
   /**
    * 设置 / 覆盖用户默认配置。
@@ -408,6 +426,7 @@ export class MetadataClient {
       "/v3/meta/user-session-default/set",
       {
         user_id: userId,
+        workspace_id: input.workspace_id ?? "",
         team_id: input.team_id,
         agent_id: input.agent_id,
         task_id: input.task_id,
@@ -416,10 +435,10 @@ export class MetadataClient {
   }
 
   /** 清除用户默认配置。幂等: 不存在也返 ok。 */
-  async deleteUserSessionDefault(userId: string): Promise<{ ok: true }> {
+  async deleteUserSessionDefault(userId: string, workspaceId: string = ""): Promise<{ ok: true }> {
     return this.fetch<{ ok: true }>(
       "/v3/meta/user-session-default/delete",
-      { user_id: userId },
+      { user_id: userId, workspace_id: workspaceId },
     );
   }
 

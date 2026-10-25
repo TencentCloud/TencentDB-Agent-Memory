@@ -777,6 +777,10 @@ async function handleSessionInitInner(
       metadataClient,
       compositeKey,
       defaultTaskId: config.defaultTaskId,
+      // v3.5：传 sessionKey，resolver 内部先查会话级绑定（session:<id>）
+      sessionKey,
+      // v3.6：传 agentSource，resolver 据此匹配待命绑定（arm:<brand>:<ts>）
+      agentSource,
     });
     if (userDefaultResolution && userDefaultResolution.canRegister) {
       const seedState: SessionInitState = {
