@@ -275,8 +275,10 @@ describe("usage boost bench (mechanism-level, prints report)", () => {
             if (rank > 0) { t.r5++; t.mrr += 1 / rank; }
           }
           if (name !== "old") {
-            if (oldRank === 1 && rank !== 1) roundAcc[name][s.klass].regressed++;
-            if (oldRank !== 1 && rank === 1) roundAcc[name][s.klass].rescued++;
+            for (const t of [a, all]) {
+              if (oldRank === 1 && rank !== 1) t.regressed++;
+              if (oldRank !== 1 && rank === 1) t.rescued++;
+            }
           }
         }
         // The agent confirms only a result it actually used in the reply.
