@@ -576,6 +576,8 @@ export const DEFAULT_TASK_SENTINEL = "default";
 
 export interface UserSessionDefaultEntity {
   user_id: string;
+  /** 工作区维度；'' = 全局默认。 */
+  workspace_id: string;
   team_id: string;
   agent_id: string;
   /** 真实 task_id 或字面量 DEFAULT_TASK_SENTINEL。 */
@@ -586,6 +588,8 @@ export interface UserSessionDefaultEntity {
 
 export interface UpsertUserSessionDefaultInput {
   user_id: string;
+  /** 工作区维度；缺省/'' = 全局默认。 */
+  workspace_id?: string;
   team_id: string;
   agent_id: string;
   task_id: string;

@@ -122,6 +122,7 @@ export class SqliteMetadataStore implements IMetadataStore {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.createSchema();
+    this.migrateUserSessionDefaultsV2();
     this.initialized = true;
   }
 
@@ -326,12 +327,14 @@ export class SqliteMetadataStore implements IMetadataStore {
       -- user_id PK 天然保证"至多一条"。task_id 存真实 id 或字面量 "default"
       -- (与 Proxy sessionInit.defaultTaskId 契约一致, 见 types.ts::DEFAULT_TASK_SENTINEL)。
       CREATE TABLE IF NOT EXISTS meta_user_session_defaults (
-        user_id    TEXT PRIMARY KEY,
-        team_id    TEXT NOT NULL,
-        agent_id   TEXT NOT NULL,
-        task_id    TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
+        user_id      TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT '',
+        team_id      TEXT NOT NULL,
+        agent_id     TEXT NOT NULL,
+        task_id      TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        PRIMARY KEY (user_id, workspace_id),
         FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_meta_user_session_defaults_team
@@ -1933,17 +1936,179 @@ export class SqliteMetadataStore implements IMetadataStore {
     };
   }
 
+  /** v3.4: meta_user_session_defaults 增加 workspace 维度（旧 user 单例表原位重建）。 */
+  private migrateUserSessionDefaultsV2(): void {
+    const cols = this.db
+      .prepare("PRAGMA table_info(meta_user_session_defaults)")
+      .all() as Array<{ name: string; pk: number }>;
+    if (cols.length === 0) return; // 全新库，DDL 已是新结构
+    const hasWorkspace = cols.some((c) => c.name === "workspace_id");
+    const pkCols = cols.filter((c) => c.pk).map((c) => c.name).sort().join(",");
+    if (hasWorkspace && pkCols === "user_id,workspace_id") return;
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(`
+        CREATE TABLE meta_user_session_defaults_v2 (
+          user_id      TEXT NOT NULL,
+          workspace_id TEXT NOT NULL DEFAULT '',
+          team_id      TEXT NOT NULL,
+          agent_id     TEXT NOT NULL,
+          task_id      TEXT NOT NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL,
+          PRIMARY KEY (user_id, workspace_id),
+          FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
+        );
+        INSERT OR IGNORE INTO meta_user_session_defaults_v2
+          (user_id, workspace_id, team_id, agent_id, task_id, created_at, updated_at)
+        SELECT user_id, ${hasWorkspace ? "workspace_id" : "''"}, team_id, agent_id, task_id, created_at, updated_at
+          FROM meta_user_session_defaults;
+        DROP TABLE meta_user_session_defaults;
+        ALTER TABLE meta_user_session_defaults_v2 RENAME TO meta_user_session_defaults;
+      `);
+      this.db.exec("COMMIT");
+      console.log("[sqlite-adapter] meta_user_session_defaults migrated to (user_id, workspace_id) PK");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  /** v3.4: meta_user_session_defaults 增加 workspace 维度（旧 user 单例表原位重建）。 */
+  private migrateUserSessionDefaultsV2(): void {
+    const cols = this.db
+      .prepare("PRAGMA table_info(meta_user_session_defaults)")
+      .all() as Array<{ name: string; pk: number }>;
+    if (cols.length === 0) return; // 全新库，DDL 已是新结构
+    const hasWorkspace = cols.some((c) => c.name === "workspace_id");
+    const pkCols = cols.filter((c) => c.pk).map((c) => c.name).sort().join(",");
+    if (hasWorkspace && pkCols === "user_id,workspace_id") return;
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(`
+        CREATE TABLE meta_user_session_defaults_v2 (
+          user_id      TEXT NOT NULL,
+          workspace_id TEXT NOT NULL DEFAULT '',
+          team_id      TEXT NOT NULL,
+          agent_id     TEXT NOT NULL,
+          task_id      TEXT NOT NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL,
+          PRIMARY KEY (user_id, workspace_id),
+          FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
+        );
+        INSERT OR IGNORE INTO meta_user_session_defaults_v2
+          (user_id, workspace_id, team_id, agent_id, task_id, created_at, updated_at)
+        SELECT user_id, ${hasWorkspace ? "workspace_id" : "''"}, team_id, agent_id, task_id, created_at, updated_at
+          FROM meta_user_session_defaults;
+        DROP TABLE meta_user_session_defaults;
+        ALTER TABLE meta_user_session_defaults_v2 RENAME TO meta_user_session_defaults;
+      `);
+      this.db.exec("COMMIT");
+      console.log("[sqlite-adapter] meta_user_session_defaults migrated to (user_id, workspace_id) PK");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  /** v3.4: meta_user_session_defaults 增加 workspace 维度（旧 user 单例表原位重建）。 */
+  private migrateUserSessionDefaultsV2(): void {
+    const cols = this.db
+      .prepare("PRAGMA table_info(meta_user_session_defaults)")
+      .all() as Array<{ name: string; pk: number }>;
+    if (cols.length === 0) return; // 全新库，DDL 已是新结构
+    const hasWorkspace = cols.some((c) => c.name === "workspace_id");
+    const pkCols = cols.filter((c) => c.pk).map((c) => c.name).sort().join(",");
+    if (hasWorkspace && pkCols === "user_id,workspace_id") return;
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(`
+        CREATE TABLE meta_user_session_defaults_v2 (
+          user_id      TEXT NOT NULL,
+          workspace_id TEXT NOT NULL DEFAULT '',
+          team_id      TEXT NOT NULL,
+          agent_id     TEXT NOT NULL,
+          task_id      TEXT NOT NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL,
+          PRIMARY KEY (user_id, workspace_id),
+          FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
+        );
+        INSERT OR IGNORE INTO meta_user_session_defaults_v2
+          (user_id, workspace_id, team_id, agent_id, task_id, created_at, updated_at)
+        SELECT user_id, ${hasWorkspace ? "workspace_id" : "''"}, team_id, agent_id, task_id, created_at, updated_at
+          FROM meta_user_session_defaults;
+        DROP TABLE meta_user_session_defaults;
+        ALTER TABLE meta_user_session_defaults_v2 RENAME TO meta_user_session_defaults;
+      `);
+      this.db.exec("COMMIT");
+      console.log("[sqlite-adapter] meta_user_session_defaults migrated to (user_id, workspace_id) PK");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  /** v3.4: meta_user_session_defaults 增加 workspace 维度（旧 user 单例表原位重建）。 */
+  private migrateUserSessionDefaultsV2(): void {
+    const cols = this.db
+      .prepare("PRAGMA table_info(meta_user_session_defaults)")
+      .all() as Array<{ name: string; pk: number }>;
+    if (cols.length === 0) return; // 全新库，DDL 已是新结构
+    const hasWorkspace = cols.some((c) => c.name === "workspace_id");
+    const pkCols = cols.filter((c) => c.pk).map((c) => c.name).sort().join(",");
+    if (hasWorkspace && pkCols === "user_id,workspace_id") return;
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(`
+        CREATE TABLE meta_user_session_defaults_v2 (
+          user_id      TEXT NOT NULL,
+          workspace_id TEXT NOT NULL DEFAULT '',
+          team_id      TEXT NOT NULL,
+          agent_id     TEXT NOT NULL,
+          task_id      TEXT NOT NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL,
+          PRIMARY KEY (user_id, workspace_id),
+          FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
+        );
+        INSERT OR IGNORE INTO meta_user_session_defaults_v2
+          (user_id, workspace_id, team_id, agent_id, task_id, created_at, updated_at)
+        SELECT user_id, ${hasWorkspace ? "workspace_id" : "''"}, team_id, agent_id, task_id, created_at, updated_at
+          FROM meta_user_session_defaults;
+        DROP TABLE meta_user_session_defaults;
+        ALTER TABLE meta_user_session_defaults_v2 RENAME TO meta_user_session_defaults;
+      `);
+      this.db.exec("COMMIT");
+      console.log("[sqlite-adapter] meta_user_session_defaults migrated to (user_id, workspace_id) PK");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
   // ============================================================
   // UserSessionDefault (v3.3) — 用户级 (team, agent, task) 默认三元组
   // ============================================================
 
-  getUserSessionDefault(userId: string): UserSessionDefaultEntity | null {
+  getUserSessionDefault(userId: string, workspaceId: string = ""): UserSessionDefaultEntity | null {
     return this.mapUserSessionDefault(
       this.get<Row>(
-        "SELECT * FROM meta_user_session_defaults WHERE user_id = ?",
+        "SELECT * FROM meta_user_session_defaults WHERE user_id = ? AND workspace_id = ?",
         userId,
+        workspaceId,
       ),
     );
+  }
+
+  listUserSessionDefaults(userId: string): UserSessionDefaultEntity[] {
+    const rows = this.db
+      .prepare("SELECT * FROM meta_user_session_defaults WHERE user_id = ? ORDER BY workspace_id")
+      .all(userId) as Row[];
+    return rows
+      .map((r) => this.mapUserSessionDefault(r))
+      .filter((x): x is UserSessionDefaultEntity => !!x);
   }
 
   upsertUserSessionDefault(
@@ -1953,23 +2118,25 @@ export class SqliteMetadataStore implements IMetadataStore {
     // upsert 事务:若已存在,保留原 created_at,仅刷新 updated_at + 其他字段。
     this.db.exec("BEGIN");
     try {
+      const workspaceId = input.workspace_id ?? "";
       const existing = this.get<Row>(
-        "SELECT created_at FROM meta_user_session_defaults WHERE user_id = ?",
+        "SELECT created_at FROM meta_user_session_defaults WHERE user_id = ? AND workspace_id = ?",
         input.user_id,
+        workspaceId,
       );
       if (existing) {
         this.run(
           `UPDATE meta_user_session_defaults
              SET team_id = ?, agent_id = ?, task_id = ?, updated_at = ?
-           WHERE user_id = ?`,
-          input.team_id, input.agent_id, input.task_id, now, input.user_id,
+           WHERE user_id = ? AND workspace_id = ?`,
+          input.team_id, input.agent_id, input.task_id, now, input.user_id, workspaceId,
         );
       } else {
         this.run(
           `INSERT INTO meta_user_session_defaults
-             (user_id, team_id, agent_id, task_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          input.user_id, input.team_id, input.agent_id, input.task_id, now, now,
+             (user_id, workspace_id, team_id, agent_id, task_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          input.user_id, workspaceId, input.team_id, input.agent_id, input.task_id, now, now,
         );
       }
       this.db.exec("COMMIT");
@@ -1978,17 +2145,17 @@ export class SqliteMetadataStore implements IMetadataStore {
       throw err;
     }
 
-    const row = this.getUserSessionDefault(input.user_id);
+    const row = this.getUserSessionDefault(input.user_id, input.workspace_id ?? "");
     if (!row) {
       throw new Error("upsertUserSessionDefault: row disappeared after write");
     }
     return row;
   }
 
-  deleteUserSessionDefault(userId: string): number {
+  deleteUserSessionDefault(userId: string, workspaceId: string = ""): number {
     const info = this.db
-      .prepare("DELETE FROM meta_user_session_defaults WHERE user_id = ?")
-      .run(userId);
+      .prepare("DELETE FROM meta_user_session_defaults WHERE user_id = ? AND workspace_id = ?")
+      .run(userId, workspaceId);
     return info.changes;
   }
 
@@ -1997,6 +2164,7 @@ export class SqliteMetadataStore implements IMetadataStore {
     const r = row as Record<string, unknown>;
     return {
       user_id: String(r.user_id),
+      workspace_id: String(r.workspace_id ?? ""),
       team_id: String(r.team_id),
       agent_id: String(r.agent_id),
       task_id: String(r.task_id),

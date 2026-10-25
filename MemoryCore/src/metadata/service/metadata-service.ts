@@ -1006,6 +1006,18 @@ export class MetadataService {
   }
 
   async deleteAgents(agentIds: string[]): Promise<BatchDeleteResult> {
+    // v3.4：真删除前清理各 agent 的记忆内容（L0-L3/向量/文件）；
+    // chat_memory 资产记录由 store.deleteAgents 级联删除。
+    for (const agentId of agentIds) {
+      const existing = await this.getAgentById(agentId);
+      if (!existing) continue;
+      if (this._chatMemoryContentCleaner) {
+        await this._chatMemoryContentCleaner({
+          teamId: existing.team_id,
+          agentId: existing.agent_id,
+        });
+      }
+    }
     return this.store.deleteAgents(agentIds);
   }
 
@@ -1048,18 +1060,9 @@ export class MetadataService {
   async archiveAgent(agentId: string): Promise<AgentEntity> {
     const existing = await this.getAgentById(agentId);
     if (!existing) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
-    const archived = await this.updateAgent(agentId, { status: "inactive" });
-
-    if (this._chatMemoryContentCleaner) {
-      await this._chatMemoryContentCleaner({
-        teamId: existing.team_id,
-        agentId: existing.agent_id,
-      });
-    }
-
-    const selfMemoryAssetId = buildChatMemoryAssetId(existing.team_id, existing.agent_id);
-    await this.store.deleteAssets([selfMemoryAssetId]);
-    return archived;
+    // v3.4 语义对齐：归档 = 可逆停用（仅 status→inactive），不再清理记忆/资产。
+    // 记忆内容与 chat_memory 资产的彻底清除移至 deleteAgents（真删除）路径。
+    return await this.updateAgent(agentId, { status: "inactive" });
   }
 
   // ============================================================

@@ -28,15 +28,18 @@ import {
 /** 面向 Router 的输入 (user_id 必传, task_id 必填, 可为 DEFAULT_TASK_SENTINEL)。 */
 export interface SetUserSessionDefaultInput {
   user_id: string;
+  /** 工作区维度；'' = 全局默认。 */
+  workspace_id?: string;
   team_id: string;
   agent_id: string;
   task_id: string;
 }
 
 export interface IUserSessionDefaultService {
-  get(callerId: string, userId: string): Promise<UserSessionDefaultEntity | null>;
+  get(callerId: string, userId: string, workspaceId?: string): Promise<UserSessionDefaultEntity | null>;
+  list(callerId: string, userId: string): Promise<UserSessionDefaultEntity[]>;
   set(callerId: string, input: SetUserSessionDefaultInput): Promise<UserSessionDefaultEntity>;
-  delete(callerId: string, userId: string): Promise<{ ok: true }>;
+  delete(callerId: string, userId: string, workspaceId?: string): Promise<{ ok: true }>;
 }
 
 export class UserSessionDefaultService implements IUserSessionDefaultService {
@@ -45,9 +48,14 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
     private readonly metaService: MetadataService,
   ) {}
 
-  async get(callerId: string, userId: string): Promise<UserSessionDefaultEntity | null> {
+  async get(callerId: string, userId: string, workspaceId: string = ""): Promise<UserSessionDefaultEntity | null> {
     this.metaService.assertCallerIsOwner(userId, callerId);
-    return (await this.store.getUserSessionDefault(userId)) ?? null;
+    return (await this.store.getUserSessionDefault(userId, workspaceId)) ?? null;
+  }
+
+  async list(callerId: string, userId: string): Promise<UserSessionDefaultEntity[]> {
+    this.metaService.assertCallerIsOwner(userId, callerId);
+    return (await this.store.listUserSessionDefaults(userId)) ?? [];
   }
 
   async set(callerId: string, input: SetUserSessionDefaultInput): Promise<UserSessionDefaultEntity> {
@@ -127,6 +135,7 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
     // 5. upsert
     const payload: UpsertUserSessionDefaultInput = {
       user_id: input.user_id,
+      workspace_id: (input.workspace_id ?? "").trim(),
       team_id: input.team_id,
       agent_id: input.agent_id,
       task_id: input.task_id,
@@ -134,9 +143,9 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
     return await this.store.upsertUserSessionDefault(payload);
   }
 
-  async delete(callerId: string, userId: string): Promise<{ ok: true }> {
+  async delete(callerId: string, userId: string, workspaceId: string = ""): Promise<{ ok: true }> {
     this.metaService.assertCallerIsOwner(userId, callerId);
-    await this.store.deleteUserSessionDefault(userId);
+    await this.store.deleteUserSessionDefault(userId, workspaceId);
     return { ok: true };
   }
 }
