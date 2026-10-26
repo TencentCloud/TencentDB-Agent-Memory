@@ -1049,11 +1049,18 @@ export function createL3Runner(opts: {
   instanceId?: string;
   /** Host-neutral LLM runner for L3 persona generation (standalone/gateway mode). Must have enableTools=true. */
   llmRunner?: import("../core/types.js").LLMRunner;
+  /**
+   * Text-only LLM runner used by the JEV gate's `semantic` overflow policy to
+   * rewrite oversized scene bodies before the decision. Must be tool-free
+   * (`enableTools: false`). When absent, that policy falls back to positional
+   * trimming.
+   */
+  semanticLlmRunner?: import("../core/types.js").LLMRunner;
   /** StorageAdapter for file operations (COS/local). */
   storage?: StorageAdapter;
   checkpointLock?: import("./checkpoint.js").CheckpointLockOptions;
 }): ((context?: L3JevExecutionContext) => Promise<void>) {
-  const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage } = opts;
+  const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, semanticLlmRunner, storage } = opts;
 
   return async (context?: L3JevExecutionContext) => {
     const scopes = await discoverProfileScopes(pluginDataDir, storage, logger);
@@ -1116,6 +1123,7 @@ export function createL3Runner(opts: {
           storage: scopedStore,
           checkpointLock: opts.checkpointLock,
           triggerReason: triggerResult.reason,
+          llmRunner: semanticLlmRunner,
           context: {
             ...context,
             teamId: scopeIsolation.teamId ?? context?.teamId,
