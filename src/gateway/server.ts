@@ -386,6 +386,7 @@ export class TdaiGateway {
       context: result.appendSystemContext ?? "",
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
+      recalledL3_persona: result.recalledL3Persona ?? null,
     };
     sendJson(res, 200, response);
   }
