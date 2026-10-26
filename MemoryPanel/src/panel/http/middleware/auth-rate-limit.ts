@@ -3,9 +3,12 @@
  * endpoints (user-key preview/login, woa preview-key) — brute force of
  * user-chosen keys and unlimited account creation otherwise.
  *
- * Keyed by socket remote address (NOT x-forwarded-for — spoofable).
- * Entries are pruned opportunistically on each check so the map cannot
- * grow unbounded. The clock is injectable for tests.
+ * Keyed by socket remote address by default (NOT x-forwarded-for — spoofable).
+ * Behind a reverse proxy / load balancer every client shares the proxy's
+ * address; set PANEL_AUTH_RATE_LIMIT_TRUST_PROXY=1 there to key on the last
+ * X-Forwarded-For hop (the address your proxy appended), or raise/disable
+ * the limit. Expired entries are pruned at most once per window so the map
+ * cannot grow unbounded. The clock is injectable for tests.
  */
 import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Context, Next } from 'hono';
@@ -21,6 +24,7 @@ export class FixedWindowRateLimiter {
   private readonly limitPerMinute: number;
   private readonly now: () => number;
   private readonly hits = new Map<string, WindowEntry>();
+  private lastPruneAt = 0;
 
   constructor(opts: { limitPerMinute: number; now?: () => number }) {
     this.limitPerMinute = opts.limitPerMinute;
@@ -34,10 +38,13 @@ export class FixedWindowRateLimiter {
   check(key: string): number | null {
     if (this.limitPerMinute <= 0) return null; // disabled
     const now = this.now();
-    // Opportunistic prune of expired windows — bounds map size to the
-    // number of distinct keys seen inside a single window.
-    for (const [k, e] of this.hits) {
-      if (now - e.windowStart >= WINDOW_MS) this.hits.delete(k);
+    // Prune expired windows at most once per window — bounds map size to the
+    // keys seen in ~two windows without an O(n) scan on every request.
+    if (now - this.lastPruneAt >= WINDOW_MS) {
+      this.lastPruneAt = now;
+      for (const [k, e] of this.hits) {
+        if (now - e.windowStart >= WINDOW_MS) this.hits.delete(k);
+      }
     }
 
     const entry = this.hits.get(key);
@@ -59,7 +66,18 @@ export function resolveAuthRateLimitPerMinute(raw?: string): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60;
 }
 
-export function authRateLimitMiddleware(limiter: FixedWindowRateLimiter) {
+/** PANEL_AUTH_RATE_LIMIT_TRUST_PROXY — "1"/"true" keys on the last X-Forwarded-For hop. */
+export function resolveAuthRateLimitTrustProxy(raw?: string): boolean {
+  return raw === '1' || raw?.toLowerCase() === 'true';
+}
+
+/** Last X-Forwarded-For entry: the client address as seen by the nearest (trusted) proxy. */
+export function lastForwardedFor(header: string | undefined): string | null {
+  const hops = (header ?? '').split(',').map((h) => h.trim()).filter(Boolean);
+  return hops.length > 0 ? hops[hops.length - 1]! : null;
+}
+
+export function authRateLimitMiddleware(limiter: FixedWindowRateLimiter, opts: { trustProxy?: boolean } = {}) {
   return async (c: Context, next: Next) => {
     let key = 'unknown';
     try {
@@ -67,6 +85,7 @@ export function authRateLimitMiddleware(limiter: FixedWindowRateLimiter) {
     } catch {
       // conninfo unavailable in this runtime — bucket under "unknown"
     }
+    if (opts.trustProxy) key = lastForwardedFor(c.req.header('x-forwarded-for')) ?? key;
     const retryAfter = limiter.check(key);
     if (retryAfter !== null) {
       c.header('Retry-After', String(retryAfter));

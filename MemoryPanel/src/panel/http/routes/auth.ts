@@ -2,7 +2,12 @@ import type { Context, Hono, Next } from 'hono';
 import type { PanelDeps } from '../../panel-deps.js';
 import { buildExpiredSessionCookie, buildSessionCookie, buildTransientCookie, readCookie } from '../../auth/cookies.js';
 import { PanelAuthError } from '../../auth/service.js';
-import { FixedWindowRateLimiter, authRateLimitMiddleware, resolveAuthRateLimitPerMinute } from '../middleware/auth-rate-limit.js';
+import {
+  FixedWindowRateLimiter,
+  authRateLimitMiddleware,
+  resolveAuthRateLimitPerMinute,
+  resolveAuthRateLimitTrustProxy,
+} from '../middleware/auth-rate-limit.js';
 
 const INSTANCE_QUERY = 'instance_id';
 const RETURN_QUERY = 'return_to';
@@ -52,6 +57,7 @@ export function registerAuthRoutes(api: Hono, deps: PanelDeps): void {
     new FixedWindowRateLimiter({
       limitPerMinute: resolveAuthRateLimitPerMinute(process.env.PANEL_AUTH_RATE_LIMIT_PER_MINUTE),
     }),
+    { trustProxy: resolveAuthRateLimitTrustProxy(process.env.PANEL_AUTH_RATE_LIMIT_TRUST_PROXY) },
   );
   api.use('/auth/user-key/preview', authRateLimited);
   api.use('/auth/user-key/login', authRateLimited);
