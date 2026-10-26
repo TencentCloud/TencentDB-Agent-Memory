@@ -151,7 +151,8 @@ function ssrfCheckEnabledFromEnv(): boolean {
 const DEFAULT_GIT_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * 每个 git 子进程（clone/fetch/reset/clean/ls-remote/revparse）的阻塞超时。
+ * 每个 git 子进程（clone/fetch/reset/clean/ls-remote/revparse）的无输出超时
+ *（simple-git `block`：stdout/stderr 每有数据就重新计时）。
  * 卡死的远端会永远占住构建队列槽位。默认 10 分钟；
  * KNOWLEDGE_GIT_TIMEOUT_MS 正整数可覆盖，非法值回落默认。
  */
@@ -215,6 +216,9 @@ export class GitSourceFetcher implements ISourceFetcher {
       await this.gitFor(sourceUrl, undefined, opts).clone(sourceUrl, localPath, {
         "--depth": 1,
         "--branch": branch,
+        // 非 TTY 下 git 默认不输出进度；--progress 让 stderr 持续有数据，
+        // 超时只在真正卡住（无任何输出）时触发，而不是大仓库正常下载时。
+        "--progress": null,
       });
     } catch (err) {
       // 「远端没有这个分支」是最常见的注册失败原因（前端默认填 main，
@@ -267,7 +271,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     // ★ 增量同步同样要带 SSH 私钥：`git fetch origin` 走的还是 ssh 传输，
     //   缺 GIT_SSH_COMMAND 会因为拿不到 key 而认证失败。
     const git = this.gitFor(sourceUrl, localPath, opts); // baseDir = 已存在的仓库目录
-    await git.fetch("origin", branch, { "--depth": 1 });
+    await git.fetch("origin", branch, { "--depth": 1, "--progress": null });
     await git.reset(ResetMode.HARD, [`origin/${branch}`]);
     // Bug 修复（方案 A）：clean 排除 .codegraph/，否则会删掉 codegraph 的索引库，
     // 导致增量 sync 永远失败、每次回退到全量 clone。
