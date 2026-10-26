@@ -560,9 +560,9 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - [x] 短期记忆压缩（Context Offload + Mermaid 画布）
 - [x] 可用本地 SQLite 后端与腾讯云向量数据库 TCVDB 后端
 - [x] OpenClaw 插件与 Hermes Gateway 适配
-- [ ] 记忆可迁移：跨 Agent / 跨框架 / 跨设备的导入导出与热迁移
-- [ ] Skill自动生成
-- [ ] 可视化调试与记忆观测面板
+- [x] 记忆可迁移：跨 Agent / 跨框架 / 跨设备的导入导出与热迁移
+- [x] Skill自动生成
+- [x] 可视化调试与记忆观测面板
 
 ---
 
