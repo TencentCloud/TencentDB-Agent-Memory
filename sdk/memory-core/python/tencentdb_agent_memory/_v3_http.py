@@ -86,6 +86,7 @@ class HttpStub(Stub):
     ) -> None:
         _validate_transport_options(endpoint, api_key, service_id, timeout)
         self.endpoint = endpoint.rstrip("/")
+        self._owns_client = client is None
         self.client = client or httpx.Client(timeout=timeout, verify=verify)
         self.headers: Dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
@@ -116,7 +117,7 @@ class HttpStub(Stub):
         return _decode_response(resp)
 
     def close(self) -> None:
-        if isinstance(self.client, httpx.Client):
+        if self._owns_client and isinstance(self.client, httpx.Client):
             self.client.close()
 
 
@@ -135,6 +136,7 @@ class AsyncHttpStub:
     ) -> None:
         _validate_transport_options(endpoint, api_key, service_id, timeout)
         self.endpoint = endpoint.rstrip("/")
+        self._owns_client = client is None
         self.client = client or httpx.AsyncClient(timeout=timeout, verify=verify)
         self.headers: Dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
@@ -165,5 +167,5 @@ class AsyncHttpStub:
         return _decode_response(resp)
 
     async def close(self) -> None:
-        if isinstance(self.client, httpx.AsyncClient):
+        if self._owns_client and isinstance(self.client, httpx.AsyncClient):
             await self.client.aclose()
