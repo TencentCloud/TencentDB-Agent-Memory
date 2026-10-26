@@ -29,6 +29,7 @@ function decode(file: BundleFile, remaining: number): Buffer {
     return Buffer.from(file.content, "base64");
   }
   if (file.encoding !== undefined && file.encoding !== "utf-8") throw new BundleValidationError("Unsupported encoding");
+  if (/[\uD800-\uDFFF]/u.test(file.content)) throw new BundleValidationError("Malformed Unicode text; use base64 for raw bytes");
   if (Buffer.byteLength(file.content, "utf-8") > remaining) throw new BundleValidationError("Bundle exceeds 10 MiB");
   return Buffer.from(file.content, "utf-8");
 }

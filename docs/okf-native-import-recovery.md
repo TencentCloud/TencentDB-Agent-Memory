@@ -170,3 +170,21 @@ internal inputs, not request fields. The journal protocol does not fsync every
 file/directory and is not a power-loss transaction guarantee. Synthetic fault
 tests establish neither full application/secret-provider recovery nor actual
 production rollback, independent final review or absence of vulnerabilities.
+
+## Unicode text content
+
+UTF-8/default text content rejects unpaired UTF-16 surrogates with HTTP 400.
+Node would otherwise silently encode these as U+FFFD, losing the supplied text.
+Valid surrogate pairs (astral characters) and an explicit U+FFFD remain accepted.
+Use base64 for arbitrary file bytes; Markdown still requires valid UTF-8.
+
+The focused content follow-up was checked with the existing validation and actual
+HTTP/auth/SQLite suites in a non-root Linux Node.js 22 container, with network
+disabled and synthetic data only. The preflight snapshot passed 64 tests and the
+native import snapshot passed 70; this does not replace whole-project dependency,
+build, deployment or independent-review acceptance. Both proposals carry the
+same pure-validator change and need coordinated integration. Their original
+upstream base remains unchanged; a current-upstream rebase is not claimed.
+
+The final native import/recovery check passed all 94 cases across six files,
+including recovery/state/path regressions and the content follow-up.
