@@ -287,43 +287,6 @@ export async function parseJsonBody<T>(
   });
 }
 
-/**
- * Parse a JSON body that must be an object. `null`, arrays and scalars are
- * rejected as "Invalid JSON body" (→ 400) instead of crashing later with a
- * TypeError on property access (→ 500).
- */
-export async function parseJsonObjectBody<T extends object>(
-  req: http.IncomingMessage,
-  maxBytes: number = MAX_BODY_BYTES,
-): Promise<Partial<T>> {
-  const body = await parseJsonBody<unknown>(req, maxBytes);
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new Error("Invalid JSON body");
-  }
-  return body as Partial<T>;
-}
-
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-/** Upper bound for `limit` on the v1 search routes (plugin tools cap at 20). */
-export const V1_SEARCH_MAX_LIMIT = 100;
-
-/**
- * Normalize a v1 search `limit`: default 5, integer in [1, V1_SEARCH_MAX_LIMIT].
- * Without this a client-supplied limit flowed straight into `candidateK = limit * 3`.
- */
-export function clampV1SearchLimit(raw: unknown): number {
-  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
-  if (!Number.isFinite(n)) return 5;
-  return Math.min(Math.max(Math.floor(n), 1), V1_SEARCH_MAX_LIMIT);
-}
-
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
   res.writeHead(status, {
@@ -349,6 +312,36 @@ function safeEqual(a: string, b: string): boolean {
   const bb = Buffer.from(b, "utf-8");
   if (ab.length !== bb.length) return false;
   return timingSafeEqual(ab, bb);
+}
+
+/**
+ * A request body of `null`, `[]`, `"x"` or `1` parses fine but crashes on
+ * property access (`body.x`) — handlers must reject non-object JSON with
+ * 400 instead of falling into a TypeError → 500.
+ */
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+export function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Upper bound for `limit` on the v1 search routes (plugin tools cap at 20). */
+export const V1_SEARCH_MAX_LIMIT = 100;
+
+/**
+ * Normalize a v1 search `limit`: default 5, integer in [1, V1_SEARCH_MAX_LIMIT].
+ * Without this a client-supplied limit flowed straight into `candidateK = limit * 3`.
+ */
+export function clampV1SearchLimit(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return 5;
+  return Math.min(Math.max(Math.floor(n), 1), V1_SEARCH_MAX_LIMIT);
 }
 
 // ============================
@@ -1412,6 +1405,10 @@ export class TdaiGateway {
    */
   private async handleInstanceDestroy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<{ instance_id?: string }>(req);
+    if (!isPlainObject(body)) {
+      sendJson(res, 400, { code: 400, message: "Request body must be a JSON object" });
+      return;
+    }
     const instanceId = body?.instance_id;
 
     if (!instanceId || typeof instanceId !== "string") {
@@ -1438,6 +1435,10 @@ export class TdaiGateway {
    */
   private async handleInstanceDestroyV3(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<{ instance_id?: string }>(req);
+    if (!isPlainObject(body)) {
+      sendJson(res, 400, { code: 400, message: "Request body must be a JSON object" });
+      return;
+    }
     const instanceId = body?.instance_id;
 
     if (!instanceId || typeof instanceId !== "string") {
@@ -1593,8 +1594,12 @@ export class TdaiGateway {
   }
 
   private async handleRecall(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await parseJsonObjectBody<RecallRequest>(req);
+    const body = await parseJsonBody<RecallRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!isNonEmptyString(body.query) || !isNonEmptyString(body.session_key)) {
       sendError(res, 400, "Missing required fields: query, session_key");
       return;
@@ -1629,8 +1634,12 @@ export class TdaiGateway {
   }
 
   private async handleCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await parseJsonObjectBody<CaptureRequest>(req);
+    const body = await parseJsonBody<CaptureRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (
       !isNonEmptyString(body.user_content) ||
       !isNonEmptyString(body.assistant_content) ||
@@ -1663,8 +1672,12 @@ export class TdaiGateway {
   }
 
   private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await parseJsonObjectBody<MemorySearchRequest>(req);
+    const body = await parseJsonBody<MemorySearchRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!isNonEmptyString(body.query)) {
       sendError(res, 400, "Missing required field: query");
       return;
@@ -1686,8 +1699,12 @@ export class TdaiGateway {
   }
 
   private async handleSearchConversations(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await parseJsonObjectBody<ConversationSearchRequest>(req);
+    const body = await parseJsonBody<ConversationSearchRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!isNonEmptyString(body.query)) {
       sendError(res, 400, "Missing required field: query");
       return;
@@ -1707,8 +1724,12 @@ export class TdaiGateway {
   }
 
   private async handleSessionEnd(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await parseJsonObjectBody<SessionEndRequest>(req);
+    const body = await parseJsonBody<SessionEndRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!isNonEmptyString(body.session_key)) {
       sendError(res, 400, "Missing required field: session_key");
       return;
@@ -1721,8 +1742,12 @@ export class TdaiGateway {
   }
 
   private async handleSeed(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await parseJsonObjectBody<SeedRequest>(req);
+    const body = await parseJsonBody<SeedRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.data) {
       sendError(res, 400, "Missing required field: data");
       return;

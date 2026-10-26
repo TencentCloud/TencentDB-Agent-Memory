@@ -1,38 +1,70 @@
-import http from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
-import { clampV1SearchLimit, isNonEmptyString, parseJsonObjectBody, V1_SEARCH_MAX_LIMIT } from "./server.js";
+import { PassThrough } from "node:stream";
+import type http from "node:http";
+import { describe, expect, it, vi } from "vitest";
+import { clampV1SearchLimit, isNonEmptyString, TdaiGateway, V1_SEARCH_MAX_LIMIT } from "./server.js";
 
-let server: http.Server | undefined;
-
-afterEach(async () => {
-  if (server) await new Promise<void>((r) => server!.close(() => r()));
-  server = undefined;
-});
-
-/** POST `raw` to a server whose handler runs parseJsonObjectBody and reports the outcome. */
-async function parse(raw: string): Promise<{ ok: boolean; value?: unknown; error?: string }> {
-  server = http.createServer(async (req, res) => {
-    try {
-      const value = await parseJsonObjectBody(req);
-      res.end(JSON.stringify({ ok: true, value }));
-    } catch (err) {
-      res.end(JSON.stringify({ ok: false, error: (err as Error).message }));
-    }
-  });
-  await new Promise<void>((r) => server!.listen(0, "127.0.0.1", r));
-  const port = (server.address() as AddressInfo).port;
-  const res = await fetch(`http://127.0.0.1:${port}/`, { method: "POST", body: raw });
-  return (await res.json()) as { ok: boolean; value?: unknown; error?: string };
+function fakeReq(bodyJson: string): http.IncomingMessage {
+  const pt = new PassThrough();
+  const req = pt as unknown as http.IncomingMessage;
+  req.headers = {};
+  queueMicrotask(() => pt.end(bodyJson));
+  return req;
 }
 
-describe("parseJsonObjectBody", () => {
-  it("accepts JSON objects", async () => {
-    expect(await parse('{"query":"q"}')).toEqual({ ok: true, value: { query: "q" } });
+function fakeRes() {
+  return {
+    status: 0,
+    body: "",
+    writeHead(status: number) {
+      this.status = status;
+    },
+    end(body?: string) {
+      if (body) this.body = body;
+    },
+  };
+}
+
+function gatewayWith(core: Record<string, unknown>) {
+  const gw = Object.create(TdaiGateway.prototype) as Record<string, unknown>;
+  gw.logger = { debug() {}, info() {}, warn() {}, error() {} };
+  gw.core = core;
+  return gw as unknown as Record<string, (req: http.IncomingMessage, res: unknown) => Promise<void>>;
+}
+
+describe("v1 handlers reject wrongly-typed required fields", () => {
+  it.each([
+    '{"query":123,"session_key":"s"}',
+    '{"query":{"a":1},"session_key":"s"}',
+    '{"query":"q","session_key":["s"]}',
+  ])("recall %s -> 400 without calling core", async (bodyJson) => {
+    const handleBeforeRecall = vi.fn();
+    const res = fakeRes();
+    await gatewayWith({ handleBeforeRecall }).handleRecall(fakeReq(bodyJson), res);
+    expect(res.status).toBe(400);
+    expect(handleBeforeRecall).not.toHaveBeenCalled();
   });
 
-  it.each(["null", "[]", "[1,2]", '"str"', "42", "true"])("rejects non-object body %s as Invalid JSON body", async (raw) => {
-    expect(await parse(raw)).toEqual({ ok: false, error: "Invalid JSON body" });
+  it("search/memories with non-string query -> 400", async () => {
+    const searchMemories = vi.fn();
+    const res = fakeRes();
+    await gatewayWith({ searchMemories }).handleSearchMemories(fakeReq('{"query":42}'), res);
+    expect(res.status).toBe(400);
+    expect(searchMemories).not.toHaveBeenCalled();
+  });
+
+  it("search/memories clamps an oversized limit before reaching core", async () => {
+    const searchMemories = vi.fn(async () => ({ text: "", total: 0, strategy: "x" }));
+    const res = fakeRes();
+    await gatewayWith({ searchMemories }).handleSearchMemories(fakeReq('{"query":"q","limit":1000000000}'), res);
+    expect(res.status).toBe(200);
+    expect(searchMemories).toHaveBeenCalledWith(expect.objectContaining({ query: "q", limit: V1_SEARCH_MAX_LIMIT }));
+  });
+
+  it("search/conversations defaults a missing limit to 5", async () => {
+    const searchConversations = vi.fn(async () => ({ text: "", total: 0 }));
+    const res = fakeRes();
+    await gatewayWith({ searchConversations }).handleSearchConversations(fakeReq('{"query":"q"}'), res);
+    expect(searchConversations).toHaveBeenCalledWith(expect.objectContaining({ limit: 5 }));
   });
 });
 
