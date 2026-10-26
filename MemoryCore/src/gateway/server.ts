@@ -315,6 +315,36 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 // ============================
+// CORS
+// ============================
+
+/**
+ * Advertised in preflight responses by both applyCorsHeaders branches.
+ *
+ * Methods: exactly those the router dispatches (GET + POST; OPTIONS is the
+ * preflight itself). No PUT/DELETE/PATCH routes exist.
+ *
+ * Headers: Content-Type / Authorization / Content-Encoding plus every
+ * x-tdai-* request header the v2/v3/metadata routers actually read —
+ * omitting them makes every browser preflight fail when corsOrigins is
+ * configured.
+ */
+const CORS_ALLOW_METHODS = "GET, POST, OPTIONS";
+const CORS_ALLOW_HEADERS = [
+  "Content-Type",
+  "Authorization",
+  "Content-Encoding",
+  "x-tdai-service-id",
+  "x-tdai-user-key",
+  "x-tdai-team-id",
+  "x-tdai-agent-id",
+  "x-tdai-user-id",
+  "x-tdai-session-id",
+  "x-tdai-task-id",
+].join(", ");
+const CORS_MAX_AGE = "600";
+
+// ============================
 // Gateway Server
 // ============================
 
@@ -1344,8 +1374,9 @@ export class TdaiGateway {
       // not echo back the request Origin and do not send `Vary: Origin`,
       // mirroring how the gateway behaved before this change.
       res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader("Access-Control-Allow-Methods", CORS_ALLOW_METHODS);
+      res.setHeader("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
+      res.setHeader("Access-Control-Max-Age", CORS_MAX_AGE);
       return;
     }
 
@@ -1357,8 +1388,9 @@ export class TdaiGateway {
       return;
     }
     res.setHeader("Access-Control-Allow-Origin", requestOrigin);
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Methods", CORS_ALLOW_METHODS);
+    res.setHeader("Access-Control-Allow-Headers", CORS_ALLOW_HEADERS);
+    res.setHeader("Access-Control-Max-Age", CORS_MAX_AGE);
     res.setHeader("Vary", "Origin");
   }
 
