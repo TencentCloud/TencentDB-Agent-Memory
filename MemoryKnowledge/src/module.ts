@@ -499,7 +499,8 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
       for (const row of allSyncedWikis) {
         const dir = join(dataDir, row.service_id, row.team_id, row.wiki_id);
         try {
-          wikiMgr.init({ name: row.wiki_id, path: dir });
+          // Restoring existing content must not seed producer templates.
+          wikiMgr.register({ name: row.wiki_id, path: dir });
           const pages = wikiMgr.getPages(row.wiki_id);
           if (pages.length > 0) {
             store.updateWikiStatus(row.service_id, row.wiki_id, { page_count: pages.length });
