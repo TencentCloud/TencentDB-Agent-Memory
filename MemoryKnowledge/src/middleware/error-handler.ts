@@ -9,7 +9,10 @@ import { createLogger } from "../logger.js";
 const log = createLogger("error-handler");
 
 export function errorHandler(err: Error, c: Context) {
-  const msg = err instanceof Error ? err.message : String(err);
-  log.error(`unhandled error: ${msg}`);
-  return c.json(wrapError(500, msg), 500);
+  if (err instanceof SyntaxError && err.message.includes("JSON")) {
+    return c.json(wrapError(400, "malformed JSON"), 400);
+  }
+  // Caller paths may contain private identifiers; keep this diagnostic fixed.
+  log.error("unhandled request error");
+  return c.json(wrapError(500, "Internal Server Error"), 500);
 }
