@@ -64,3 +64,12 @@ scripts/soak-*
 
 # 保留必要的 md 文件（被上面 *.md 排除了，但 README.md 等对运行无影响，不需要保留）
 # 如果需要在容器中读取 README.md，删除上面的 *.md 行
+
+# Preserve reviewed native compatibility adapters in runtime builds.
+!vendor/jieba-loader.cjs
+!vendor/jieba-loader.LICENSE
+!vendor/jieba-loader.provenance.json
+!vendor/tcvdb-text/
+!vendor/tcvdb-text/**
+scripts/vendor-jieba-loader.py
+scripts/vendor-tcvdb-text.py
