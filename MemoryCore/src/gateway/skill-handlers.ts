@@ -27,6 +27,8 @@ import { ZodError } from "zod";
 import { errorEnvelope, successEnvelope } from "./v2-router.js";
 import {
   createRequestSchema,
+  restructureRequestSchema,
+  restructureGetRequestSchema,
   updateRequestSchema,
   patchRequestSchema,
   deleteRequestSchema,
@@ -45,8 +47,9 @@ import {
   forceArchiveRequestSchema,
 } from "./skill-schemas.js";
 import type { ApiResponseEnvelope, V2AuthContext } from "./v2-schemas.js";
-import { SkillCoreError, type SkillCore } from "../core/skill/skill-core.js";
+import type { SkillCore } from "../core/skill/skill-core.js";
 import type { SkillExtractor } from "../core/skill/skill-extractor.js";
+import { SkillRestructureServiceError, type SkillRestructureService } from "../core/skill/skill-restructure-service.js";
 import type { Logger } from "../core/types.js";
 import type { Skill, ResolvedSkillConfig } from "../core/skill/types.js";
 import { DEFAULT_COMPRESS_OPTIONS } from "../core/skill/conversation-add/message-compressor.js";
@@ -82,6 +85,8 @@ export interface SkillRouterDeps {
    * that carry x-tdai-service-id.
    */
   resolveSkillCore?: (instanceId: string) => Promise<SkillCore | undefined>;
+  /** Resolve the asynchronous semantic restructuring service within this instance only. */
+  resolveSkillRestructure?: (instanceId: string) => Promise<SkillRestructureService | undefined>;
   /** Quota manager for skill count limit checks (like memory's checkMemoryQuota). */
   quotaManager?: import("../core/quota/quota-manager.js").QuotaManager;
   /**
@@ -155,11 +160,29 @@ const ERROR_CODE_MAP: Record<string, number> = {
   SKILL_ID_COLLISION: 50304,
   SKILL_VERSION_EXPIRED: 41002,
   SKILL_EXPORT_TOO_LARGE: 41301,
+  SKILL_OPERATION_NOT_FOUND: 40401,
+  SKILL_PROTECTED: 40303,
+  SKILL_MUTATION_CONFLICT: 40902,
+  SKILL_PUBLICATION_BUSY: 40903,
+  SKILL_RESTRUCTURE_DISABLED: 50301,
+  SKILL_PUBLICATION_UNKNOWN: 50301,
+  SKILL_PUBLICATION_COORDINATOR_REQUIRED: 50301,
+  RESOURCE_INTEGRITY_ERROR: 50301,
+  ASSET_REGISTRATION_PENDING: 50301,
+  SKILL_ASSET_REGISTRATION_PENDING: 50301,
+  SKILL_QUOTA_EXCEEDED: 4291,
+  SKILL_DELETION_PENDING: 50301,
 };
 
 function mapCoreError(e: unknown, requestId: string, deps?: SkillRouterDeps, meta?: Record<string, unknown>): ApiResponseEnvelope {
-  if (e instanceof SkillCoreError) {
+  if (e instanceof Error && "code" in e && typeof e.code === "string") {
     const code = ERROR_CODE_MAP[e.code] ?? 50001;
+
+    if (e.code === "ASSET_REGISTRATION_PENDING" || e.code === "SKILL_ASSET_REGISTRATION_PENDING") {
+      // The version is already committed. Retry registration/recovery; never
+      // compensate by deleting the published skill or its resource directory.
+      return errorEnvelope(code, e.message, requestId, { error_code: e.code, publication_committed: true });
+    }
 
     // 版本冲突时记录 warn 日志，便于后续统计冲突频率
     if (e.code === "SKILL_VERSION_STALE" && deps) {
@@ -185,7 +208,7 @@ function mapCoreError(e: unknown, requestId: string, deps?: SkillRouterDeps, met
 
     return errorEnvelope(code, e.message, requestId);
   }
-  return errorEnvelope(50001, (e as Error).message ?? "internal error", requestId);
+  return errorEnvelope(50001, e instanceof Error ? e.message : "internal error", requestId);
 }
 
 function formatZodErr(err: ZodError): string {
@@ -284,6 +307,63 @@ function toSummary(s: Skill) {
 // ═════════════════════════════════════════════════════════════════════
 //  Handlers
 // ═════════════════════════════════════════════════════════════════════
+
+async function precheckRestructure<T>(
+  schema: { safeParse(body: unknown): { success: true; data: T } | { success: false; error: ZodError } },
+  body: unknown, auth: V2AuthContext, requestId: string, deps: SkillRouterDeps,
+): Promise<{ ok: true; service: SkillRestructureService; data: T } | { ok: false; envelope: ApiResponseEnvelope }> {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) return { ok: false, envelope: errorEnvelope(40001, formatZodErr(parsed.error), requestId) };
+  const service = await deps.resolveSkillRestructure?.(auth.serviceId);
+  // Never fall back to another instance or synchronous CRUD for this operation.
+  if (!service) return { ok: false, envelope: errorEnvelope(50301, "Skill restructuring is not enabled for this instance", requestId) };
+  return { ok: true, service, data: parsed.data };
+}
+
+/** Queue explicit semantic work; request_id is the caller's durable intent, not our trace ID. */
+export async function handleRestructure(body: unknown, auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
+  const t0 = Date.now();
+  try {
+    const pre = await precheckRestructure(restructureRequestSchema, body, auth, requestId, deps);
+    if (!pre.ok) {
+      obsLogger.warn("skill.handleRestructure.done", { req_id: requestId, code: pre.envelope.code, dur_ms: Date.now() - t0, reason: "precheck" });
+      return pre.envelope;
+    }
+    const quotaManager = deps.quotaManager;
+    const beforeSubmit = quotaManager ? async () => {
+      const check = await quotaManager.checkMemoryQuota(auth.serviceId, 1);
+      if (!check.allowed) throw new SkillRestructureServiceError("SKILL_QUOTA_EXCEEDED",
+        `Memory limit exceeded (current=${check.current}, limit=${check.limit})`);
+    } : undefined;
+    const operation = "candidate" in pre.data
+      ? await pre.service.submitCandidate({ ...pre.data, force: true }, beforeSubmit)
+      : await pre.service.start(pre.data, beforeSubmit);
+    obsLogger.info("skill.handleRestructure.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0,
+      operation_id: operation.operation_id, status: operation.status });
+    return successEnvelope(operation, requestId);
+  } catch (error) {
+    obsLogger.error("skill.handleRestructure.done", { req_id: requestId, dur_ms: Date.now() - t0 }, error instanceof Error ? error : undefined);
+    return mapCoreError(error, requestId, deps);
+  }
+}
+
+export async function handleRestructureGet(body: unknown, auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
+  const t0 = Date.now();
+  try {
+    const pre = await precheckRestructure(restructureGetRequestSchema, body, auth, requestId, deps);
+    if (!pre.ok) {
+      obsLogger.warn("skill.handleRestructureGet.done", { req_id: requestId, code: pre.envelope.code, dur_ms: Date.now() - t0, reason: "precheck" });
+      return pre.envelope;
+    }
+    const operation = await pre.service.get(pre.data);
+    obsLogger.info("skill.handleRestructureGet.done", { req_id: requestId, code: 0, dur_ms: Date.now() - t0,
+      operation_id: operation.operation_id, status: operation.status });
+    return successEnvelope(operation, requestId);
+  } catch (error) {
+    obsLogger.error("skill.handleRestructureGet.done", { req_id: requestId, dur_ms: Date.now() - t0 }, error instanceof Error ? error : undefined);
+    return mapCoreError(error, requestId, deps);
+  }
+}
 
 export async function handleCreate(body: unknown, auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
   const t0 = Date.now();
@@ -1414,6 +1494,8 @@ export type SkillHandler = (
 export function makeSkillRouteTable(): Record<string, SkillHandler> {
   return {
     "/v3/skill/create": handleCreate,
+    "/v3/skill/restructure": handleRestructure,
+    "/v3/skill/restructure/get": handleRestructureGet,
     "/v3/skill/update": handleUpdate,
     "/v3/skill/patch": handlePatch,
     "/v3/skill/delete": handleDelete,

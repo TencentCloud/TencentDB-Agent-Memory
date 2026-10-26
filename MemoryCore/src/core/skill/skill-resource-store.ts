@@ -9,6 +9,7 @@
  * 设计文档对应：§2.4 物理 storage 布局；§3.5.9~3.5.11 接口。
  */
 
+import { createHash } from "node:crypto";
 import type { StorageAdapter } from "../storage/adapter.js";
 import type { SkillManifestEntry } from "./types.js";
 
@@ -17,7 +18,7 @@ const FILES_SUBDIR = "files";
 const DEFAULT_MAX_RESOURCE_SIZE_BYTES = 5_000_000;
 const DEFAULT_MAX_SKILL_TOTAL_BYTES = 50_000_000;
 
-export type ResourceErrorCode = "INVALID_PATH" | "RESOURCE_TOO_LARGE";
+export type ResourceErrorCode = "INVALID_PATH" | "RESOURCE_TOO_LARGE" | "RESOURCE_INTEGRITY_ERROR";
 
 export class SkillResourceError extends Error {
   constructor(public readonly code: ResourceErrorCode, message?: string) {
@@ -62,6 +63,10 @@ export class SkillResourceStore {
     this.maxTotalBytes = opts.maxSkillTotalBytes ?? DEFAULT_MAX_SKILL_TOTAL_BYTES;
   }
 
+  getMaxResourceSizeBytes(): number {
+    return this.maxBytes;
+  }
+
   /** 整 skill 总字节数上限（外部用于聚合校验前查阅）。 */
   getMaxSkillTotalBytes(): number {
     return this.maxTotalBytes;
@@ -104,7 +109,7 @@ export class SkillResourceStore {
   }
 
   /** 写入资源字节，校验 path 和 size。如果 path 已存在则覆盖。 */
-  async writeResource(skillId: string, version: number, payload: SkillResourcePayload): Promise<SkillManifestEntry> {
+  async writeResource(skillId: string, version: number, payload: SkillResourcePayload, storageDir?: string): Promise<SkillManifestEntry> {
     this.assertPath(payload.path);
     const buf = decodeContent(payload.content, payload.encoding);
     if (buf.length > this.maxBytes) {
@@ -113,8 +118,8 @@ export class SkillResourceStore {
         `${payload.path} (${buf.length} bytes) exceeds max ${this.maxBytes} bytes`,
       );
     }
-    const key = this.fileKey(skillId, version, payload.path);
-    const mime = payload.mime_type ?? guessMime(payload.path);
+    const key = this.fileKey(skillId, version, payload.path, storageDir);
+    const mime = payload.mime_type ?? guessSkillResourceMime(payload.path);
     const isExec = payload.is_executable ?? false;
     // 用 backend.putObject 直接写以保留 metadata（is_executable）
     await this.storage.getBackend().putObject(key, buf, {
@@ -123,6 +128,7 @@ export class SkillResourceStore {
     });
     return {
       path: payload.path,
+      content_sha256: createHash("sha256").update(buf).digest("hex"),
       size_bytes: buf.length,
       mime_type: mime,
       is_executable: isExec,
@@ -135,9 +141,10 @@ export class SkillResourceStore {
     version: number,
     path: string,
     encoding: "utf-8" | "base64",
+    storageDir?: string,
   ): Promise<SkillResourceReadResult | null> {
     this.assertPath(path);
-    const key = this.fileKey(skillId, version, path);
+    const key = this.fileKey(skillId, version, path, storageDir);
     const buf = await this.storage.readFileBuffer(key);
     if (!buf) return null;
     return {
@@ -145,26 +152,24 @@ export class SkillResourceStore {
       content: encoding === "base64" ? buf.toString("base64") : buf.toString("utf-8"),
       encoding,
       size_bytes: buf.length,
-      mime_type: guessMime(path),
+      mime_type: guessSkillResourceMime(path),
       is_executable: false, // 不从 storage 元数据反推（local-fs 与 COS 行为不一致）
       version,
     };
   }
 
   /** 删除资源（幂等：不存在不抛错）。 */
-  async removeResource(skillId: string, version: number, path: string): Promise<void> {
+  async removeResource(skillId: string, version: number, path: string, storageDir?: string): Promise<void> {
     this.assertPath(path);
-    const key = this.fileKey(skillId, version, path);
-    try {
-      await this.storage.unlink(key);
-    } catch {
-      /* idempotent */
-    }
+    const key = this.fileKey(skillId, version, path, storageDir);
+    // Backends implement missing-object deletion as a no-op. Do not swallow
+    // permission/transport errors and then claim the resource was removed.
+    await this.storage.unlink(key);
   }
 
   /** 列出某版本目录下的全部资源元信息（不含字节）。 */
-  async listResources(skillId: string, version: number): Promise<SkillManifestEntry[]> {
-    const prefix = this.filesPrefix(skillId, version);
+  async listResources(skillId: string, version: number, storageDir?: string): Promise<SkillManifestEntry[]> {
+    const prefix = this.filesPrefix(skillId, version, storageDir);
     const result = await this.storage.getBackend().listObjects(prefix, {
       recursive: true,
       maxKeys: 100_000,
@@ -176,7 +181,7 @@ export class SkillResourceStore {
       // 读元数据拿到 is_executable / contentType（开销比读字节小很多）
       const obj = await this.storage.getBackend().getObject(e.key);
       const isExec = obj?.metadata?.is_executable === "1";
-      const mime = obj?.contentType ?? guessMime(path);
+      const mime = obj?.contentType ?? guessSkillResourceMime(path);
       out.push({
         path,
         size_bytes: e.size,
@@ -187,19 +192,21 @@ export class SkillResourceStore {
     return out;
   }
 
-  /** 拿到该版本目录的相对前缀，便于 skill-versioning 调 storage.copyTree。 */
+  /** Legacy directory convention; new publications persist an attempt-specific storage_dir. */
   versionDir(skillId: string, version: number): string {
     return `${STORAGE_PREFIX}${skillId}/v${version}`;
   }
 
   // ── helpers ──
 
-  private fileKey(skillId: string, version: number, path: string): string {
-    return `${this.filesPrefix(skillId, version)}${path}`;
+  private fileKey(skillId: string, version: number, path: string, storageDir?: string): string {
+    return `${this.filesPrefix(skillId, version, storageDir)}${path}`;
   }
 
-  private filesPrefix(skillId: string, version: number): string {
-    return `${this.versionDir(skillId, version)}/${FILES_SUBDIR}/`;
+  private filesPrefix(skillId: string, version: number, storageDir?: string): string {
+    const dir = storageDir ?? this.versionDir(skillId, version);
+    this.assertPath(dir);
+    return `${dir.replace(/\/$/, "")}/${FILES_SUBDIR}/`;
   }
 
   private assertPath(path: string): void {
@@ -245,7 +252,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-function guessMime(path: string): string {
+export function guessSkillResourceMime(path: string): string {
   const idx = path.lastIndexOf(".");
   if (idx < 0) return "application/octet-stream";
   const ext = path.slice(idx).toLowerCase();

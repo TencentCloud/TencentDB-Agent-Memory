@@ -5,6 +5,8 @@
  * 设计文档：docs/design/2026-06-17-skill-redesign-v2.md
  */
 
+import type { SkillRestructureConfig } from "./skill-restructure-types.js";
+
 // ============================
 // Configuration types (input from user / openclaw.json)
 // ============================
@@ -15,6 +17,8 @@
  */
 export interface SkillConfigInput {
   enabled?: boolean;
+  /** Whole-package semantic review; independent from publication size limits. */
+  restructure?: Partial<SkillRestructureConfig>;
 
   /** Override for skill metadata + vector store backend. Falls back to outer storeBackend, then 'sqlite'. */
   storeBackend?: "sqlite" | "tcvdb" | "mongodb";
@@ -107,6 +111,7 @@ export interface SkillConfigInput {
 
 export interface ResolvedSkillConfig {
   enabled: true; // when this object exists, skill is enabled
+  restructure?: SkillRestructureConfig;
   storeBackend: "sqlite" | "tcvdb" | "mongodb";
   contentBackend: "local" | "cos";
 
@@ -243,6 +248,8 @@ export interface SkillManifestEntry {
   size_bytes: number;
   mime_type: string;
   is_executable: boolean;
+  /** SHA-256 of decoded bytes. Legacy manifests may omit it. */
+  content_sha256?: string;
 }
 
 // ============================
@@ -293,10 +300,20 @@ export interface Skill {
   metadata_json: string;
   created_at_ms: number;
   updated_at_ms: number;
+  /** Internal publication receipt; kept separate from user metadata. */
+  mutation_id?: string;
+  mutation_payload_hash?: string;
+  mutation_request_hash?: string;
 }
 
 /** `appendVersion` 的入参。store 内部基于 head 推导 version+1。 */
 export interface AppendVersionInput {
+  /** Optimistic concurrency precondition; 0 means creation. Omitted for legacy callers. */
+  expected_version?: number;
+  /** Stable intent ID, scoped to (team_id, skill_id), never an attempt ID. */
+  mutation_id?: string;
+  /** Versioning's request fingerprint, in addition to the store-verified row payload hash. */
+  mutation_request_hash?: string;
   /** 写入身份。不传则写 "default"。 */
   user_id?: string;
   team_id?: string;

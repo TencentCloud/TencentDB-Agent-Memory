@@ -11,6 +11,10 @@
  * 与 skill-extractor.ts 复用。
  */
 
+import type { SkillRestructureOperation } from "../skill-restructure-types.js";
+
+export type SkillRestructureProcessor = (operationId: string, signal: AbortSignal) => Promise<SkillRestructureOperation>;
+
 // ─────────────────────────────────────────────────────────────
 // 队列内部用的 conversation / candidate 形状
 // ─────────────────────────────────────────────────────────────
@@ -65,6 +69,8 @@ export interface ISkillExtractor {
     conversation: ConversationMessage[];
     context?: { loaded_skills?: string[] };
     signal?: AbortSignal;
+    /** Same cancellation signal; adapters may use either spelling. */
+    abortSignal?: AbortSignal;
     /**
      * direct-trigger 场景：主 Agent 的抽取提示，透传给 extractor 注入 prompt。
      * 由 conversation-add extract-worker 从 SkillTaskEntry.reason 读取。

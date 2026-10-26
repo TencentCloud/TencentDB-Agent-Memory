@@ -25,11 +25,12 @@ import {
   type ISkillAgentTaskQueue,
 } from "./agent-task-queue.js";
 import type { SkillBufferStorage } from "./buffer-storage.js";
-import type { ExtractorLogger, ISkillExtractor } from "../queue/types.js";
+import type { ExtractorLogger, ISkillExtractor, SkillRestructureProcessor } from "../queue/types.js";
 import { runInRootContext } from "../../report/otel-context.js";
 import { obsLogger } from "../../report/obs-logger.js";
 import {
   SkillConversationExtractWorker,
+  SkillTaskProcessingError,
   type SkillCandidatesSink,
   type SkillConversationExtractWorkerOptions,
 } from "./extract-worker.js";
@@ -42,6 +43,7 @@ export interface SkillWorkerResolvers {
   resolveBuffer(instanceId: string): Promise<SkillBufferStorage>;
   resolveExtractor(instanceId: string): Promise<ISkillExtractor>;
   resolveSink(instanceId: string): Promise<SkillCandidatesSink>;
+  resolveRestructure?(instanceId: string): Promise<SkillRestructureProcessor | undefined>;
 }
 
 export interface SkillWorkerPoolOptions extends SkillWorkerResolvers {
@@ -64,6 +66,7 @@ export interface SkillWorkerPoolOptions extends SkillWorkerResolvers {
   tasksPerRound?: number;
   failureRequeueSleepMs?: number;
   permanentMaxRetries?: number;
+  restructureMaxRetries?: number;
   transientLogSampleEvery?: number;
   now?: () => number;
 
@@ -93,10 +96,14 @@ export class SkillWorkerPool {
   private started = false;
   private loopPromises: Promise<void>[] = [];
   private selfHealTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly stopController = new AbortController();
 
   constructor(opts: SkillWorkerPoolOptions) {
     if (!Number.isInteger(opts.concurrency) || opts.concurrency < 1) {
       throw new Error(`[skill-worker-pool] concurrency must be positive integer, got ${opts.concurrency}`);
+    }
+    if (opts.restructureMaxRetries !== undefined && (!Number.isSafeInteger(opts.restructureMaxRetries) || opts.restructureMaxRetries < 1)) {
+      throw new Error("restructureMaxRetries must be a positive finite integer");
     }
     this.opts = opts;
     this.logger = opts.logger;
@@ -186,6 +193,7 @@ export class SkillWorkerPool {
 
   async stop(): Promise<void> {
     this.closed = true;
+    this.stopController.abort(new Error("skill worker pool stopped"));
     if (this.selfHealTimer) {
       clearInterval(this.selfHealTimer);
       this.selfHealTimer = undefined;
@@ -335,7 +343,7 @@ export class SkillWorkerPool {
         const result = await this.consumeAgent(agent, workerId);
         // consumeAgent 只抛未处理错误, lock contention 是 result.lockContended=true。
         // 抢锁失败也进抑制, 让别的 loop 拿别的 agent。
-        if (result?.lockContended) suppressAgent(agent);
+        if (result?.lockContended || result?.cancelled) suppressAgent(agent);
       } catch (err) {
         this.logger.error(
           `[skill-worker-pool] ${workerId} consumeAgent error: ${(err as Error).message}`,
@@ -348,8 +356,8 @@ export class SkillWorkerPool {
   }
 
   /**
-   * 拿到 agent 后按 instance_id resolver 现取 3 份 per-instance 资源,
-   * 构造一次性 SkillConversationExtractWorker 委托 consumeAgent 走 8 步流程。
+   * Resolve the per-instance buffer, then defer extractor/sink/restructure
+   * resources until the task kind is known by the one-shot consumer.
    *
    * 这里不缓存 worker 实例 —— 每次都 new 是 O(1) 分配 + 常量字段拷贝,
    * 相对 20-90 秒的 LLM 抽取可忽略, 换来的是 worker pool 本身完全无状态。
@@ -357,20 +365,27 @@ export class SkillWorkerPool {
   private async consumeAgent(
     agent: AgentTuple,
     workerId: string,
-  ): Promise<{ lockContended?: boolean }> {
+  ): Promise<{ lockContended?: boolean; cancelled?: boolean }> {
     const instanceId = agent.instance_id;
-    const [buffer, extractor, sink] = await Promise.all([
-      this.opts.resolveBuffer(instanceId),
-      this.opts.resolveExtractor(instanceId),
-      this.opts.resolveSink(instanceId),
-    ]);
+    this.stopController.signal.throwIfAborted();
+    const buffer = await this.opts.resolveBuffer(instanceId);
+    this.stopController.signal.throwIfAborted();
 
     const extractWorkerOpts: SkillConversationExtractWorkerOptions = {
       workerId,
       buffer,
       queue: this.opts.queue,
-      extractor,
-      sink,
+      // Resolve only after the task discriminant is known. Prepared operation
+      // recovery must not depend on LLM construction or a legacy candidate sink.
+      resolveExtractor: () => this.opts.resolveExtractor(instanceId),
+      resolveSink: () => this.opts.resolveSink(instanceId),
+      processRestructure: this.opts.resolveRestructure ? async (operationId, signal) => {
+        signal.throwIfAborted();
+        const processor = await this.opts.resolveRestructure!(instanceId);
+        signal.throwIfAborted();
+        if (!processor) throw new SkillTaskProcessingError("SKILL_RESTRUCTURE_PENDING", `operation_id=${operationId}; processor unavailable`, true);
+        return processor(operationId, signal);
+      } : undefined,
       logger: this.logger,
       brpopBlockMs: this.opts.brpopBlockMs,
       extractLockTtlMs: this.opts.extractLockTtlMs,
@@ -382,6 +397,7 @@ export class SkillWorkerPool {
       tasksPerRound: this.opts.tasksPerRound,
       failureRequeueSleepMs: this.opts.failureRequeueSleepMs,
       permanentMaxRetries: this.opts.permanentMaxRetries,
+      restructureMaxRetries: this.opts.restructureMaxRetries,
       transientLogSampleEvery: this.opts.transientLogSampleEvery,
       now: this.opts.now,
     };
@@ -389,8 +405,8 @@ export class SkillWorkerPool {
     // 直接调 consumeAgent —— 走同一份 8 步流程 (extract-lock / renewTimer /
     // tasks-mutex / transient-permanent / DLQ / 幽灵检测)。返回 lockContended 供
     // 上游短抑制表使用。
-    const result = await oneShot.consumeAgent(agent);
-    return { lockContended: result.lockContended };
+    const result = await oneShot.consumeAgent(agent, this.stopController.signal);
+    return { lockContended: result.lockContended, cancelled: result.cancelled };
   }
 }
 

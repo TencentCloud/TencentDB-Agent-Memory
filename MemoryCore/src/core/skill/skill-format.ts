@@ -22,11 +22,24 @@
  */
 
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import type { SkillFile } from "./types.js";
+
+export interface SkillFile {
+  frontmatter: {
+    name: string;
+    description: string;
+    category?: string;
+    created_at?: string;
+    updated_at?: string;
+    source?: "auto" | "manual";
+    resources?: Array<{ path: string; type: "text" | "executable" | "binary" }>;
+  };
+  body: string;
+  raw: string;
+}
 
 const NAME_MAX = 64;
 const DESCRIPTION_MAX = 1024;
-const BODY_MAX = 50_000;
+export const SKILL_BODY_MAX = 50_000;
 const NAME_REGEX = /^[a-z0-9][a-z0-9-]*$/;
 const RESOURCE_TYPES = new Set(["text", "executable", "binary"]);
 
@@ -116,8 +129,8 @@ export function parseSkillFile(raw: string): SkillFile {
 
   return {
     frontmatter: {
-      name: fm.name,
-      description: fm.description,
+      name,
+      description,
       category: typeof fm.category === "string" ? fm.category : undefined,
       created_at: typeof fm.created_at === "string" ? fm.created_at : undefined,
       updated_at: typeof fm.updated_at === "string" ? fm.updated_at : undefined,
@@ -149,8 +162,8 @@ export function validateSkillFile(file: SkillFile): void {
       `[skill][format] description length ${description.length} exceeds max ${DESCRIPTION_MAX}`,
     );
   }
-  if (file.body.length > BODY_MAX) {
-    throw new Error(`[skill][format] body length ${file.body.length} exceeds max ${BODY_MAX}`);
+  if (file.body.length > SKILL_BODY_MAX) {
+    throw new Error(`[skill][format] body length ${file.body.length} exceeds max ${SKILL_BODY_MAX}`);
   }
   if (resources) {
     for (const r of resources) {

@@ -3,8 +3,8 @@
  *
  * 设计文档：docs/design/2026-06-17-skill-redesign-v2.md
  *
- * 单表多版本（skill_id, version 联合唯一），DB 是 SKILL.md 与 manifest 的权威
- * 源；storage 只存资源字节。绑定语义全部上交管控面，数据面按
+ * skill_id 跨版本保持稳定；正文、manifest 与发布回执确定可见版本，storage
+ * 只存资源字节。绑定语义全部上交管控面，数据面按
  * (user_id, owner_agent_id, team_id, task_id, skill_id) 五元组身份记录。
  */
 
@@ -145,3 +145,18 @@ export { SKILL_REVIEW_PROMPT_STRICT } from "./prompts/skill-review-prompt-strict
 
 // 抽取链路里 worker / dedupe 共用的 ExtractorLLMRunner（与 v2 ExtractorRunner 形状兼容）。
 export type { ExtractorLLMRunner } from "./types.js";
+
+export { SkillRestructureService, SkillRestructureServiceError, type SkillRestructureServiceOptions } from "./skill-restructure-service.js";
+export { DEFAULT_SKILL_RESTRUCTURE_CONFIG } from "./skill-restructure-types.js";
+export type {
+  SkillRestructureConfig,
+  SkillRestructureOperation,
+  SkillRestructureOutput,
+  SkillPackageCandidate,
+  SkillCandidateSubmission,
+  StartSkillRestructureInput,
+  SkillDraftPublisher,
+} from "./skill-restructure-types.js";
+export { PersistentSkillPublicationCoordinator } from "./skill-publication-coordinator.js";
+export { SqliteSkillStateStore, MongoSkillStateStore, type AtomicSkillStateStore } from "./skill-state-store.js";
+export type { SkillPublicationCoordinator } from "./skill-store.interface.js";

@@ -4,15 +4,20 @@
  * 与旧 SkillExtractor 的差异：
  *   - 入参 messages 必须是 `ExtractMessage[]`，不再接受裸字符串
  *   - 内部把 messages 串成 transcript（保留 role 标记）
- *   - 工具调用走 SkillToolsV2（操作 SkillCore）
- *   - 候选返回 ExtractedSkillCandidate 形态（含 skill_id / version）
+ *   - 注入 publisher 后工具仅修改私有草稿；未注入时使用 legacy SkillCore 工具
+ *   - 生产候选只来自成功发布回执（含真实 skill_id / version）
  *
- * 每次调用都走 LLM，不做任何对话级去重/缓存 —— 缓存机制已移除。
+ * 注入 draftPublisher 时先写私有草稿，冻结完整批次后才走可恢复发布。
+ * 未注入时保留旧工具构造器语义，不宣称提供语义重构或原子草稿发布。
  */
 
 import type { ExtractMessage } from "./types.js";
 import type { SkillCore } from "./skill-core.js";
 import { createSkillTools, type ExtractedSkillCandidate } from "./skill-tools.js";
+import { SkillDraftSession, SKILL_DRAFT_PROTOCOL } from "./skill-draft-session.js";
+import { createSkillDraftTools } from "./skill-draft-tools.js";
+import type { SkillDraftPublisher, SkillDraftBatch, SkillDraftBatchInput, SkillRestructureOperation } from "./skill-restructure-types.js";
+import { canonical, hash } from "./restructure/snapshot.js";
 import type {
   ISkillExtractor,
   ConversationMessage,
@@ -23,6 +28,14 @@ import { trace } from "../report/trace.js";
 import { obsLogger } from "../report/obs-logger.js";
 
 const TAG = "[skill-extractor]";
+
+const SKILL_LEGACY_PROTOCOL = `## Active tool protocol: direct skill publication
+Write tools publish immediately. Successful writes return a live skill version; automatic semantic restructuring is not available in this mode.
+skill_list(query?, top_k?) returns an array of visible skills. skill_view(skill_id, version?) returns a full SKILL.md and resource manifest, using the current head when version is omitted.
+skill_create(name, content) returns skill_id/version. skill_update, skill_patch, and skill_files_write require skill_id and expected_version from the latest successful read or write. After a version conflict, re-read the live skill and reconsider the edit before retrying.
+Before overwriting a resource, use skill_files_read(skill_id, version, path, encoding?) with the exact version from skill_view. Never infer resource content from a link or execute scripts.
+Ordinary body and resource limits apply; do not drop rules or unread resources to force an oversized write.
+Your final line names only skills confirmed saved by successful tool results. A tool error is not a successful save.`;
 
 export interface ExtractorRunner {
   run(params: {
@@ -36,6 +49,7 @@ export interface ExtractorRunner {
     taskId: string;
     timeoutMs?: number;
     signal?: AbortSignal;
+    abortSignal?: AbortSignal;
     /** Langfuse trace name（用于 UI 筛选与命名，见 core/types.ts LLMRunParams）。 */
     traceName?: string;
     /** Langfuse tags（用于 UI 筛选）。 */
@@ -52,6 +66,8 @@ export interface ExtractorRunner {
 export interface ExtractorOptions {
   core: SkillCore;
   runner?: ExtractorRunner;
+  /** Production extraction stages private drafts and publishes only a frozen complete batch. */
+  draftPublisher?: SkillDraftPublisher;
   systemPrompt?: string;
   /**
    * 冷启动 / 批量导入使用的严格版 systemPrompt (SKILL_REVIEW_PROMPT_STRICT)。
@@ -90,6 +106,9 @@ export interface ExtractInput {
   /** 实例 id（= space_id）；透传成 runner telemetry 的 instanceId。 */
   space_id?: string;
   messages: ExtractMessage[];
+  abortSignal?: AbortSignal;
+  /** Compatibility alias; abortSignal takes precedence. */
+  signal?: AbortSignal;
   options?: {
     max_iterations?: number;
   };
@@ -110,11 +129,19 @@ export interface ExtractInput {
 export interface ExtractResult {
   candidates: ExtractedSkillCandidate[];
   text?: string;
+  operations?: SkillRestructureOperation[];
+}
+
+export class SkillDraftPublishError extends Error {
+  constructor(public readonly code: string, message: string, public readonly operations: SkillRestructureOperation[] = [], public readonly retryable = true) {
+    super(message); this.name = "SkillDraftPublishError";
+  }
 }
 
 export class SkillExtractor {
   private readonly core: SkillCore;
   private readonly runner?: ExtractorRunner;
+  private readonly draftPublisher?: SkillDraftPublisher;
   private readonly systemPrompt: string;
   /** 冷启动/批量导入用的严格 prompt; undefined 时 mode==='strict' 也退回 systemPrompt。 */
   private readonly strictSystemPrompt?: string;
@@ -128,7 +155,8 @@ export class SkillExtractor {
   constructor(opts: ExtractorOptions) {
     this.core = opts.core;
     this.runner = opts.runner;
-    this.systemPrompt = opts.systemPrompt ?? "You are a Skill Review Agent. Use tools to look at existing skills, decide what to add/improve, and call skill_create / skill_update / skill_patch / skill_files_write to persist.";
+    this.draftPublisher = opts.draftPublisher;
+    this.systemPrompt = opts.systemPrompt ?? "You are a Skill Review Agent. Use tools to look at existing skills, decide what to add/improve, and call skill_create / skill_update / skill_patch / skill_files_write to record appropriate changes.";
     this.strictSystemPrompt = opts.strictSystemPrompt;
     this.maxIterations = opts.maxIterations ?? 16;
     this.headChars = opts.headChars ?? 8000;
@@ -149,6 +177,16 @@ export class SkillExtractor {
     const { messages } = input;
     if (!Array.isArray(messages) || messages.length === 0) {
       throw new Error("ExtractV2: messages must be a non-empty array of ExtractMessage");
+    }
+    const batchInput = this.draftPublisher ? draftBatchInput(input) : undefined;
+    if (this.draftPublisher) {
+      assertDraftActive(input);
+      let cached: SkillDraftBatch | null;
+      try { cached = await this.draftPublisher.loadDraftBatch(batchInput!); }
+      catch (error) { throw new SkillDraftPublishError("SKILL_DRAFT_BATCH_RETRYABLE", `Cannot load the frozen draft batch: ${(error as Error).message}`); }
+      assertDraftActive(input);
+      // Resume before prefix retrieval/query generation: frozen names and inputs are authoritative.
+      if (cached) return this.publishDraftBatch(input, cached);
     }
     // [obs] 一次抽取一条汇总事件；LLM 内部 iteration 走 langfuse trace（trace.report
     // → OTel Span → Langfuse SpanProcessor 过滤上报），这里只做「入口→出口」
@@ -202,6 +240,7 @@ export class SkillExtractor {
               prefixQuery = relevant.query;
             }
           } catch (e) {
+            if (this.draftPublisher) throw e;
             this.logger?.warn(`${TAG} buildRelevantSkillsBlock failed: ${(e as Error).message}`);
           }
           if (!prefixBlock) {
@@ -232,9 +271,12 @@ export class SkillExtractor {
     //   - input.mode 缺省 / 'default'   → 恒用 this.systemPrompt (老流量零回归)
     //   - input.mode === 'strict' 但构造器没注入 strictSystemPrompt (测试环境 /
     //     未升级 wiring) → 退回 this.systemPrompt (不崩、不静默改行为)
-    const effectiveSystemPrompt = input.mode === 'strict' && this.strictSystemPrompt
+    const baseSystemPrompt = input.mode === 'strict' && this.strictSystemPrompt
       ? this.strictSystemPrompt
       : this.systemPrompt;
+    const toolProtocol = this.draftPublisher ? SKILL_DRAFT_PROTOCOL : SKILL_LEGACY_PROTOCOL;
+    const effectiveSystemPrompt = baseSystemPrompt.includes(toolProtocol)
+      ? baseSystemPrompt : `${baseSystemPrompt}\n\n${toolProtocol}`;
     // 观测用: 记录实际生效的模式 (相对 input 判定, 而非"是否真启用 strict prompt")。
     //   requested_strict = 上游是否要求走严格模式
     //   effective_mode   = 实际用了哪一个 prompt (strict / default)
@@ -243,10 +285,11 @@ export class SkillExtractor {
       input.mode === 'strict' && this.strictSystemPrompt ? 'strict' : 'default';
 
     if (!this.runner) {
+      if (this.draftPublisher) throw new SkillDraftPublishError("SKILL_DRAFT_RUNNER_UNAVAILABLE", "A runner is required to prepare a new private draft batch");
       // No runner injected (test environment / disabled) → 返回空候选
       this.logger?.info(`${TAG} no runner provided; returning empty candidates`);
       obsLogger.info("skill.extractor.extract", {
-        task_id: input.task_id,
+        task_id: input.task_id ?? "",
         dur_ms: Date.now() - t0,
         msg_count: messages.length,
         candidates: 0,
@@ -257,7 +300,8 @@ export class SkillExtractor {
       return { candidates: [] };
     }
 
-    const tools = createSkillTools({
+    const session = this.draftPublisher ? new SkillDraftSession({ core: this.core, request_id: batchInput!.request_id, user_id: input.user_id, team_id: input.team_id, agent_id: input.agent_id, task_id: input.task_id }) : undefined;
+    const tools = session ? createSkillDraftTools(session) : createSkillTools({
       core: this.core,
       user_id: input.user_id,
       team_id: input.team_id,
@@ -268,7 +312,9 @@ export class SkillExtractor {
     });
 
     let text: string;
+    let operations: SkillRestructureOperation[] | undefined;
     try {
+      assertDraftActive(input);
       text = await this.runner.run({
         prompt,
         systemPrompt: effectiveSystemPrompt,
@@ -276,6 +322,8 @@ export class SkillExtractor {
         enableTools: true,
         maxIterations: input.options?.max_iterations ?? this.maxIterations,
         maxTokens: this.maxTokens,
+        signal: input.abortSignal ?? input.signal,
+        abortSignal: input.abortSignal ?? input.signal,
         taskId: `skill-extract-${input.task_id ?? "unknown"}`,
         // Langfuse trace 语义：让此次抽取在 Langfuse UI 有稳定 name / 可筛选 tags。
         // 详见 core/types.ts LLMRunParams 的 traceName/tags/sessionId/userId 注释。
@@ -289,12 +337,24 @@ export class SkillExtractor {
         userId: input.user_id,
         instanceId: input.space_id,
       });
+      assertDraftActive(input);
+      if (session && this.draftPublisher) {
+        const prepared = await session.finalize();
+        assertDraftActive(input);
+        let frozen: SkillDraftBatch;
+        try { frozen = await this.draftPublisher.freezeDraftBatch({ ...batchInput!, ...prepared }); }
+        catch (error) { throw new SkillDraftPublishError("SKILL_DRAFT_BATCH_RETRYABLE", `Cannot freeze the complete draft batch: ${(error as Error).message}`); }
+        assertDraftActive(input);
+        const published = await this.publishDraftBatch(input, frozen);
+        auditSink.push(...published.candidates); operations = published.operations; text = published.text ?? text;
+      }
     } catch (e) {
+      session?.discard();
       // 一条 warn 汇总失败，包含 task_id / err_name / dur —— Worker 侧再按分类
       // (transient / permanent) 决定 requeue 还是 DLQ。这里不吞异常。
       const dur = Date.now() - t0;
       obsLogger.warn("skill.extractor.extract", {
-        task_id: input.task_id,
+        task_id: input.task_id ?? "",
         dur_ms: dur,
         msg_count: messages.length,
         candidates: auditSink.length,
@@ -325,14 +385,14 @@ export class SkillExtractor {
 
     const dur = Date.now() - t0;
     obsLogger.info("skill.extractor.extract", {
-      task_id: input.task_id,
+      task_id: input.task_id ?? "",
       dur_ms: dur,
       msg_count: messages.length,
       candidates: auditSink.length,
       prompt_chars: prompt.length,
       prefix_mode: prefixMode,
       // 只截前 60 字符 (够识别关键词; 长了对 obs 无用)。
-      prefix_query: prefixQuery ? prefixQuery.slice(0, 60) : undefined,
+      prefix_query: prefixQuery ? prefixQuery.slice(0, 60) : "",
       requested_mode: input.mode ?? 'default',
       effective_mode: effectiveMode,
     });
@@ -352,7 +412,30 @@ export class SkillExtractor {
       });
     } catch { /* noop */ }
 
-    return { candidates: auditSink, text };
+    return { candidates: auditSink, text, ...(operations ? { operations } : {}) };
+  }
+
+  private async publishDraftBatch(input: ExtractInput, batch: SkillDraftBatch): Promise<ExtractResult> {
+    const candidates: ExtractedSkillCandidate[] = [];
+    const operations: SkillRestructureOperation[] = [];
+    for (const candidate of batch.candidates) {
+      assertDraftActive(input, operations);
+      let operation: SkillRestructureOperation;
+      try { operation = await this.draftPublisher!.runCandidate(candidate, input.abortSignal ?? input.signal); }
+      catch (error) { throw new SkillDraftPublishError("SKILL_DRAFT_PUBLISH_RETRYABLE", `Resume the frozen batch after publisher interruption: ${(error as Error).message}`, operations); }
+      operations.push(operation);
+      assertDraftActive(input, operations);
+      if (!["succeeded", "unchanged", "failed", "rejected", "conflict"].includes(operation.status)) throw new SkillDraftPublishError("SKILL_DRAFT_PUBLISH_RETRYABLE", `Operation ${operation.operation_id} is ${operation.status}; resume the frozen batch`, operations);
+      if (operation.status !== "succeeded") continue;
+      for (const output of operation.outputs) {
+        if (output.reused) continue;
+        candidates.push({ action: output.role === "root" && candidate.source ? "update" : "create", name: output.name, skill_id: output.skill_id, version: output.version });
+      }
+    }
+    const text = operations.length
+      ? operations.map(operation => `${operation.operation_id}: ${operation.status}${operation.error ? ` (${operation.error.code}: ${operation.error.message})` : ""}`).join("; ")
+      : "Nothing to save.";
+    return { candidates, operations, text };
   }
 
   /**
@@ -436,6 +519,8 @@ export class SkillExtractor {
       // 仍是短短几个词, 不会真吃到上限; A₂ 派 reasoning 段能完整走完再输出
       // 关键词。query-gen 就一次调用, 成本可控。
       maxTokens: 8192,
+      signal: input.abortSignal ?? input.signal,
+      abortSignal: input.abortSignal ?? input.signal,
       taskId: `skill-extract-query-${input.task_id ?? "unknown"}`,
       // Langfuse 上可按此 traceName 单独筛这类 query-gen call, 跟主 skill.extract 分开。
       traceName: "skill.extract.query-gen",
@@ -474,6 +559,16 @@ export class SkillExtractor {
  * f546ab8c-c7c5-4598-a310-6b2162372e7c，抽取 LLM 完全忽略 SKILL_REVIEW_PROMPT
  * 契约，产出 1235 tokens 的主对话续写，零 tool call、零 "Nothing to save."）。
  */
+function draftBatchInput(input: ExtractInput): SkillDraftBatchInput {
+  // Hash the original data, never the head/tail prompt projection or generated search query.
+  const input_hash = hash(canonical({ messages: input.messages, reason: input.reason ?? null, mode: input.mode ?? null }));
+  const identity = { user_id: input.user_id, team_id: input.team_id, agent_id: input.agent_id, task_id: input.task_id };
+  return { ...identity, input_hash, request_id: `extract:${hash(canonical({ ...identity, input_hash }))}` };
+}
+function assertDraftActive(input: ExtractInput, operations: SkillRestructureOperation[] = []): void {
+  if ((input.abortSignal ?? input.signal)?.aborted) throw new SkillDraftPublishError("SKILL_DRAFT_PUBLISH_RETRYABLE", "Extraction was cancelled or lost its lease; do not flush private drafts", operations);
+}
+
 function formatTranscript(messages: ExtractMessage[]): string {
   const body = messages.map((m) => `<<past-${m.role}>>\n${m.content}`).join("\n\n");
   return `${body}\n\n<<end-of-transcript>>\nAbove is the past conversation to review. Now decide, and respond only per the output contract in the system prompt.`;
@@ -597,7 +692,7 @@ function toExtractMessages(conv: ConversationMessage[]): ExtractMessage[] {
   }));
 }
 
-function toLegacyCandidates(items: ExtractedSkillCandidate[]): ExtractedCandidate[] {
+function toLegacyCandidates(items: Array<ExtractedSkillCandidate & Pick<ExtractedCandidate, "confidence" | "reason" | "file_path" | "file_type">>): ExtractedCandidate[] {
   return items.map((c) => ({
     action: c.action as ExtractedCandidate["action"],
     name: c.name,
@@ -642,6 +737,7 @@ export function createExtractorAdapter(
         session_id: input.session_id,
         space_id: input.space_id,
         messages: toExtractMessages(input.conversation),
+        abortSignal: (input as { abortSignal?: AbortSignal }).abortSignal ?? input.signal,
         reason: (input as { reason?: string }).reason,
         options: (input as { options?: { max_iterations?: number } }).options,
         // strict_mode 透传:Worker → adapter → SkillExtractor 三段链路完整,
@@ -649,7 +745,7 @@ export function createExtractorAdapter(
         // 本行是 adff8768 遗漏的一环 (adapter 显式 map 字段, 未覆盖 mode)。
         mode: (input as { mode?: 'default' | 'strict' }).mode,
       });
-      return { candidates: toLegacyCandidates(r.candidates) };
+      return { candidates: toLegacyCandidates(r.candidates), ...(r.operations ? { operations: r.operations } : {}), ...(r.text !== undefined ? { text: r.text } : {}) };
     },
   };
 }
