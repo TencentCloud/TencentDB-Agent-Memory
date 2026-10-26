@@ -148,12 +148,30 @@ function ssrfCheckEnabledFromEnv(): boolean {
   return !(v === "off" || v === "false" || v === "0" || v === "no");
 }
 
+const DEFAULT_GIT_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * 每个 git 子进程（clone/fetch/reset/clean/ls-remote/revparse）的阻塞超时。
+ * 卡死的远端会永远占住构建队列槽位。默认 10 分钟；
+ * KNOWLEDGE_GIT_TIMEOUT_MS 正整数可覆盖，非法值回落默认。
+ */
+function gitTimeoutMsFromEnv(): number {
+  const raw = process.env.KNOWLEDGE_GIT_TIMEOUT_MS;
+  const parsed = raw == null ? NaN : Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GIT_TIMEOUT_MS;
+}
+
 export interface GitSourceFetcherOptions {
   /**
    * 是否启用 SSRF 私网 / 环回地址黑名单校验。
    * 默认读环境变量 KNOWLEDGE_SSRF_CHECK（默认开启）；显式传入时优先于环境变量。
    */
   ssrfCheck?: boolean;
+  /**
+   * Git 子进程阻塞超时（毫秒）。显式传入时优先于
+   * KNOWLEDGE_GIT_TIMEOUT_MS（默认 10 分钟）。
+   */
+  timeoutMs?: number;
 }
 
 export class GitSourceFetcher implements ISourceFetcher {
@@ -161,9 +179,12 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   /** SSRF 私网黑名单校验开关（协议白名单始终生效，不受此开关影响）。 */
   private readonly ssrfCheck: boolean;
+  /** 每个 git 操作的超时；经 simple-git `timeout: { block }` 传入。 */
+  private readonly timeoutMs: number;
 
   constructor(opts?: GitSourceFetcherOptions) {
     this.ssrfCheck = opts?.ssrfCheck ?? ssrfCheckEnabledFromEnv();
+    this.timeoutMs = opts?.timeoutMs ?? gitTimeoutMsFromEnv();
   }
 
   validate(sourceUrl: string): void {
@@ -281,12 +302,14 @@ export class GitSourceFetcher implements ISourceFetcher {
    */
   private gitFor(sourceUrl: string, localPath?: string, opts?: GitFetchOptions): SimpleGit {
     if (!isSshUrl(sourceUrl) || !opts?.ssh) {
-      return localPath ? simpleGit(localPath) : simpleGit();
+      return localPath
+        ? simpleGit(localPath, { timeout: { block: this.timeoutMs } })
+        : simpleGit({ timeout: { block: this.timeoutMs } });
     }
     // 放行开关只在这一个分支里开，作用域最小。
     const git = localPath
-      ? simpleGit(localPath, { unsafe: UNSAFE_SSH_COMMAND })
-      : simpleGit({ unsafe: UNSAFE_SSH_COMMAND });
+      ? simpleGit(localPath, { unsafe: UNSAFE_SSH_COMMAND, timeout: { block: this.timeoutMs } })
+      : simpleGit({ unsafe: UNSAFE_SSH_COMMAND, timeout: { block: this.timeoutMs } });
     // simple-git 无 options.env：用链式 env() 注入，语义等价且是官方支持写法。
     return git.env({ GIT_SSH_COMMAND: buildSshCommand(opts.ssh) });
   }
@@ -299,7 +322,7 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   private async headCommit(localPath: string): Promise<string | null> {
     try {
-      return (await simpleGit(localPath).revparse(["HEAD"])).trim().slice(0, 12);
+      return (await simpleGit(localPath, { timeout: { block: this.timeoutMs } }).revparse(["HEAD"])).trim().slice(0, 12);
     } catch {
       return null;
     }
