@@ -985,10 +985,16 @@ export async function runOpenaiChatPipeline(
   // OpenCode places a fresh human turn at the end of messages. A tool-loop
   // continuation ends with a tool message and must not be counted as another
   // human input. Capture this before injection can prepend recalled memories.
-  const lastInboundMessage = messages[messages.length - 1] as Record<string, unknown> | undefined;
+  //
+  // 2026-10-26 fix: 58e4c55 required last==user, but the session-init form
+  // replay appends [assistant(form tool_call), tool(form answer)] AFTER the
+  // user message, so the turn's first forwarded request ends with tool and
+  // its L0 write was silently dropped (write-l0 never logged, hub stayed
+  // empty). extractL0UserQuery scans backward past those form artifacts;
+  // real tool-loop tails still yield "" (keeps #1551/#1621 amplification fix).
   const opencodeUserQuery = agentSource === "opencode"
-    ? (lastInboundMessage?.role === "user" && !isAuxiliary
-        ? (opencodeAdapter.extractUserText(lastInboundMessage.content) ?? "")
+    ? (!isAuxiliary && opencodeAdapter.extractL0UserQuery
+        ? opencodeAdapter.extractL0UserQuery(messages)
         : "")
     : null;
   const tdaiUserMessage: TdaiMessage | null = agentSource === "opencode"

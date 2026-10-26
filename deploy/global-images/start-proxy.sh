@@ -126,6 +126,10 @@ sessionInit:
   maxRetries: 3
   injectAgentContext: true
   injectTaskContext: true
+  # 跳过"是否关联团队资产"前置表单（默认视为"是"）。单 team/agent/task 时
+  # 级联自动选择、静默完成注册，避免表单回执把首轮转发请求变成 tool 结尾
+  # 导致 L0 丢失（配合 adapter 侧 extractL0UserQuery 的向后扫描双保险）。
+  skipAssetConfirm: true
   headerAutoSelect:
     enabled: true
     teamHeader: "x-team-id"
