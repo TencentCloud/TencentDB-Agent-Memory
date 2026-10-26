@@ -143,6 +143,17 @@ export type ScenarioCountRequest = z.infer<typeof scenarioCountRequestSchema>;
 export const coreCountRequestSchema = z.object({});
 export type CoreCountRequest = z.infer<typeof coreCountRequestSchema>;
 
+// L3 persona has exactly one file per (team, user, agent) triplet, so delete
+// takes no body and removes the caller-scoped persona. Response mirrors the
+// sibling delete endpoints' `deleted_count` and additionally lists the removed
+// storage paths.
+export const coreDeleteRequestSchema = z.object({});
+export type CoreDeleteRequest = z.infer<typeof coreDeleteRequestSchema>;
+export interface CoreDeleteData {
+  deleted_count: number;
+  paths: string[];
+}
+
 // ============================
 // Override: atomic response version exposure
 // ============================
