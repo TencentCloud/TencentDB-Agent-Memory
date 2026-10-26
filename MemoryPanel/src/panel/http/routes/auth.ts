@@ -2,6 +2,7 @@ import type { Context, Hono, Next } from 'hono';
 import type { PanelDeps } from '../../panel-deps.js';
 import { buildExpiredSessionCookie, buildSessionCookie, buildTransientCookie, readCookie } from '../../auth/cookies.js';
 import { PanelAuthError } from '../../auth/service.js';
+import { FixedWindowRateLimiter, authRateLimitMiddleware, resolveAuthRateLimitPerMinute } from '../middleware/auth-rate-limit.js';
 
 const INSTANCE_QUERY = 'instance_id';
 const RETURN_QUERY = 'return_to';
@@ -45,6 +46,17 @@ function handleAuthError(c: Context, err: unknown): Response {
 }
 
 export function registerAuthRoutes(api: Hono, deps: PanelDeps): void {
+  // Throttle the unauthenticated key-accepting endpoints — they brute-force
+  // user keys and create accounts otherwise. Read once at registration.
+  const authRateLimited = authRateLimitMiddleware(
+    new FixedWindowRateLimiter({
+      limitPerMinute: resolveAuthRateLimitPerMinute(process.env.PANEL_AUTH_RATE_LIMIT_PER_MINUTE),
+    }),
+  );
+  api.use('/auth/user-key/preview', authRateLimited);
+  api.use('/auth/user-key/login', authRateLimited);
+  api.use('/auth/idp/woa/preview-key', authRateLimited);
+
   api.get('/auth/methods', (c) => c.json({ methods: deps.auth.listMethods() }));
 
   /**
