@@ -144,3 +144,18 @@ returns 404; its two configured-key authentication cases already pass. This
 feature adds a reachable operation and does not claim to repair that auth policy.
 
 Paths must contain Unicode scalar values. Lone UTF-16 surrogate halves are rejected because Node filesystem encoding would replace them with U+FFFD and collapse distinct JSON names into one filename. Valid astral characters and the actual replacement character remain accepted. The 56 focused tests include five dedicated Unicode cases; this preflight itself does not write files.
+
+## Unicode text content
+
+UTF-8/default text content rejects unpaired UTF-16 surrogates with HTTP 400.
+Node would otherwise silently encode these as U+FFFD, losing the supplied text.
+Valid surrogate pairs (astral characters) and an explicit U+FFFD remain accepted.
+Use base64 for arbitrary file bytes; Markdown still requires valid UTF-8.
+
+The focused content follow-up was checked with the existing validation and actual
+HTTP/auth/SQLite suites in a non-root Linux Node.js 22 container, with network
+disabled and synthetic data only. The preflight snapshot passed 64 tests and the
+native import snapshot passed 70; this does not replace whole-project dependency,
+build, deployment or independent-review acceptance. Both proposals carry the
+same pure-validator change and need coordinated integration. Their original
+upstream base remains unchanged; a current-upstream rebase is not claimed.
