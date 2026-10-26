@@ -32,6 +32,7 @@ const EXPECTED_TDAI_HEADERS = [
   "x-tdai-user-id",
   "x-tdai-session-id",
   "x-tdai-task-id",
+  "x-request-id",
 ];
 
 describe("TdaiGateway.applyCorsHeaders", () => {

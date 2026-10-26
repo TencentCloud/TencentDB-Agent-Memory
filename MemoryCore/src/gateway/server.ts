@@ -324,8 +324,9 @@ function safeEqual(a: string, b: string): boolean {
  * Methods: exactly those the router dispatches (GET + POST; OPTIONS is the
  * preflight itself). No PUT/DELETE/PATCH routes exist.
  *
- * Headers: Content-Type / Authorization / Content-Encoding plus every
- * x-tdai-* request header the v2/v3/metadata routers actually read —
+ * Headers: Content-Type / Authorization / Content-Encoding / x-request-id
+ * (request-id propagation) plus every x-tdai-* request header the
+ * v2/v3/metadata routers actually read —
  * omitting them makes every browser preflight fail when corsOrigins is
  * configured.
  */
@@ -341,6 +342,7 @@ const CORS_ALLOW_HEADERS = [
   "x-tdai-user-id",
   "x-tdai-session-id",
   "x-tdai-task-id",
+  "x-request-id",
 ].join(", ");
 const CORS_MAX_AGE = "600";
 
