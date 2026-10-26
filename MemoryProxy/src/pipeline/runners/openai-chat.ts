@@ -62,11 +62,13 @@ import { stageResolveTurnSeq } from "../stages/turn-seq.js";
 import { stageSessionResetPreHook } from "../stages/session-reset-pre-hook.js";
 import { stageSessionResetConfirmation } from "../stages/session-reset-confirmation.js";
 import { stageMemCommandIntercept } from "../stages/mem-command-intercept.js";
+import type { Transformer as NodeWebTransformer } from "node:stream/web";
 import {
   stageWriteUsageLog,
   stageRecordTokenUsage,
   stageEmitModelIntent,
   stageOpikStreamSpan,
+  createOnceFinalizer,
 } from "../stages/stream-finalize.js";
 import { stagePrewarmInjection } from "../stages/prewarm-injection.js";
 import { stageAssetCapabilities } from "../stages/asset-capabilities.js";
@@ -2019,7 +2021,18 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     }
   }
 
-  return new TransformStream<Uint8Array, Uint8Array>({
+  // 2026-10-26 fix: OpenCode (and other SSE clients) close their connection the
+  // instant they read `data: [DONE]`. When that client-close wins the race
+  // against the upstream FIN, the runtime cancels this transform chain and
+  // flush() never ran — silently dropping the turn's L0 write / skill trigger /
+  // credit report (write-l0 never logged; hub memory stays empty; same family
+  // as #964 / #1733). Run the identical finalization from cancel(), guarded by
+  // a once-flag so flush-then-cancel can never double-fire.
+  //
+  // 类型注解走 node:stream/web —— lib.dom.d.ts 的 Transformer 还没跟上
+  // WHATWG 规范（缺 cancel 字段），Node 22 运行时本身完全支持。
+  const finalizeOnce = createOnceFinalizer(finalize, (err: unknown) => pipe.error("STREAM_FINALIZE", err));
+  const tapTransformer: NodeWebTransformer<Uint8Array, Uint8Array> = {
     transform(chunk, controller) {
       controller.enqueue(chunk);
       try {
@@ -2029,11 +2042,11 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       }
     },
     async flush() {
-      try {
-        await finalize();
-      } catch (err: unknown) {
-        pipe.error("STREAM_FINALIZE", err);
-      }
+      await finalizeOnce();
     },
-  });
+    async cancel() {
+      await finalizeOnce();
+    },
+  };
+  return new TransformStream<Uint8Array, Uint8Array>(tapTransformer);
 }
