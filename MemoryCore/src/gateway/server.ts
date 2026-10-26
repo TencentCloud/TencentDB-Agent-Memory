@@ -3028,6 +3028,7 @@ export class TdaiGateway {
           embedding,
           storage ?? undefined,
           resolveCheckpointLock(instanceId),
+          instanceId,
         );
 
         (task as any)._l2ProfileScopes = result.profileScopes;
@@ -3120,6 +3121,7 @@ export class TdaiGateway {
             sessionId: task.sessionId,
           },
           resolveCheckpointLock(instanceId),
+          instanceId,
         );
         task.data = {
           ...task.data,
@@ -3195,6 +3197,7 @@ export class TdaiGateway {
             sessionId: task.sessionId,
           },
           resolveCheckpointLock(instanceId),
+          instanceId,
         );
 
         // Report credit + memory (only +1 on first persona creation)

@@ -638,7 +638,7 @@ export class TdaiCore {
    * provider=openai 时透传；provider=proxy 时替换 baseUrl 为 `${baseUrl}/proxy/<iid>/v1`，
    * apiKey 用 env.TDAI_MEMORY_SYSTEM_USER_KEY。四个 runner factory 构造点共用。
    */
-  private resolveRuntimeLlm(): {
+  private resolveRuntimeLlm(instanceId: string | undefined = this.instanceId): {
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -646,7 +646,7 @@ export class TdaiCore {
     timeoutMs: number;
     stream: boolean;
   } {
-    const resolved = resolveStandaloneLlmForRuntime(this.cfg.llm, this.instanceId);
+    const resolved = resolveStandaloneLlmForRuntime(this.cfg.llm, instanceId);
     return {
       baseUrl: resolved.baseUrl,
       apiKey: resolved.apiKey,
@@ -1072,7 +1072,17 @@ export class TdaiCore {
      * standalone 单进程不需要传（进程内 withFileLock 已足够）。
      */
     checkpointLock?: import("../utils/checkpoint.js").CheckpointLockOptions,
+    /**
+     * service 模式下调用方必须传：本任务归属的 instanceId。
+     *
+     * shared TdaiCore 单例会被 worker 并发用于不同 instance —— 若继续读
+     * this.instanceId（buildTaskExecutor 里 setInstanceId 的最后写者胜出），
+     * proxy 路由 /proxy/<iid>/v1、credit 上报与 generation log 会被归到
+     * 错误的 tenant。未传时回落 this.instanceId（standalone / OpenClaw）。
+     */
+    instanceId?: string,
   ): Promise<{ storedCount: number; creditUsed: number; hasMore: boolean; hasFullBacklog: boolean; profileScopes: string[] }> {
+    const iid = instanceId ?? this.instanceId;
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
       ? (this.hostAdapter as { getOpenClawConfig?(): unknown }).getOpenClawConfig?.()
@@ -1080,7 +1090,7 @@ export class TdaiCore {
 
     let runnerFactory = this.runnerFactory;
     if (this.shouldOverrideRunnerFactory(useStandaloneRunner)) {
-      const runtimeLlm = this.resolveRuntimeLlm();
+      const runtimeLlm = this.resolveRuntimeLlm(iid);
       runnerFactory = new StandaloneLLMRunnerFactory({
         config: runtimeLlm,
         logger: this.logger,
@@ -1091,7 +1101,7 @@ export class TdaiCore {
       );
     }
     // 用 MetricTrackingRunnerFactory 装饰器包装（非侵入式 credit 上报）
-    const trackingFactory = new MetricTrackingRunnerFactory(runnerFactory, () => this.instanceId);
+    const trackingFactory = new MetricTrackingRunnerFactory(runnerFactory, () => iid);
     const llmRunner = useStandaloneRunner
       ? trackingFactory.createRunner({ enableTools: false })
       : undefined;
@@ -1103,7 +1113,7 @@ export class TdaiCore {
       vectorStore: store,
       embeddingService: embedding,
       logger: this.logger,
-      getInstanceId: () => this.instanceId,
+      getInstanceId: () => iid,
       llmRunner,
       storage: storage ?? this.getStorage(),
       checkpointLock,
@@ -1129,12 +1139,15 @@ export class TdaiCore {
     cursor?: string,
     executionContext?: L3JevExecutionContext,
     checkpointLock?: import("../utils/checkpoint.js").CheckpointLockOptions,
+    /** 见 runL1WithStore 同名参数 —— service 模式并发任务的租户归属。 */
+    instanceId?: string,
   ): Promise<{
     creditUsed: number;
     skipped: boolean;
     sceneDiff?: L2SceneDiffDiagnostic;
     jevGateId?: string;
   }> {
+    const iid = instanceId ?? this.instanceId;
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
       ? (this.hostAdapter as { getOpenClawConfig?(): unknown }).getOpenClawConfig?.()
@@ -1142,7 +1155,7 @@ export class TdaiCore {
 
     let runnerFactory = this.runnerFactory;
     if (this.shouldOverrideRunnerFactory(useStandaloneRunner)) {
-      const runtimeLlm = this.resolveRuntimeLlm();
+      const runtimeLlm = this.resolveRuntimeLlm(iid);
       runnerFactory = new StandaloneLLMRunnerFactory({
         config: runtimeLlm,
         logger: this.logger,
@@ -1153,7 +1166,7 @@ export class TdaiCore {
       );
     }
     // 用 MetricTrackingRunnerFactory 装饰器包装（非侵入式 credit 上报）
-    const trackingFactory = new MetricTrackingRunnerFactory(runnerFactory, () => this.instanceId);
+    const trackingFactory = new MetricTrackingRunnerFactory(runnerFactory, () => iid);
     const llmRunner = useStandaloneRunner
       ? trackingFactory.createRunner({ enableTools: true })
       : undefined;
@@ -1164,7 +1177,7 @@ export class TdaiCore {
       openclawConfig,
       vectorStore: store,
       logger: this.logger,
-      instanceId: this.instanceId,
+      instanceId: iid,
       llmRunner,
       storage: storage ?? this.getStorage(),
       executionContext,
@@ -1190,7 +1203,10 @@ export class TdaiCore {
     storage?: StorageAdapter,
     executionContext?: L3JevExecutionContext,
     checkpointLock?: import("../utils/checkpoint.js").CheckpointLockOptions,
+    /** 见 runL1WithStore 同名参数 —— service 模式并发任务的租户归属。 */
+    instanceId?: string,
   ): Promise<{ creditUsed: number }> {
+    const iid = instanceId ?? this.instanceId;
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
       ? (this.hostAdapter as { getOpenClawConfig?(): unknown }).getOpenClawConfig?.()
@@ -1198,7 +1214,7 @@ export class TdaiCore {
 
     let runnerFactory = this.runnerFactory;
     if (this.shouldOverrideRunnerFactory(useStandaloneRunner)) {
-      const runtimeLlm = this.resolveRuntimeLlm();
+      const runtimeLlm = this.resolveRuntimeLlm(iid);
       runnerFactory = new StandaloneLLMRunnerFactory({
         config: runtimeLlm,
         logger: this.logger,
@@ -1209,7 +1225,7 @@ export class TdaiCore {
       );
     }
     // 用 MetricTrackingRunnerFactory 装饰器包装（非侵入式 credit 上报）
-    const trackingFactory = new MetricTrackingRunnerFactory(runnerFactory, () => this.instanceId);
+    const trackingFactory = new MetricTrackingRunnerFactory(runnerFactory, () => iid);
     const llmRunner = useStandaloneRunner
       ? trackingFactory.createRunner({ enableTools: true })
       : undefined;
@@ -1220,7 +1236,7 @@ export class TdaiCore {
       openclawConfig,
       vectorStore: store,
       logger: this.logger,
-      instanceId: this.instanceId,
+      instanceId: iid,
       llmRunner,
       storage: storage ?? this.getStorage(),
       checkpointLock,
