@@ -354,8 +354,10 @@ export class LocalSkillAgentTaskQueue implements ISkillAgentTaskQueue {
 
   async renewExtractLock(handle: ExtractLockHandle, ttlMs: number): Promise<boolean> {
     const cur = this.extractLocks.get(handle.key);
-    if (!cur || cur.token !== handle.token) return false;
-    cur.expireAt = Date.now() + ttlMs;
+    const now = Date.now();
+    // 与 Redis GET 过期 key 的语义一致：已过期的租约不能通过续约复活。
+    if (!cur || cur.token !== handle.token || cur.expireAt <= now) return false;
+    cur.expireAt = now + ttlMs;
     return true;
   }
 
