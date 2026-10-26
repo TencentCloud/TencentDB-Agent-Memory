@@ -14,6 +14,8 @@ describe("pythonCanonicalJson", () => {
     expect(pythonCanonicalJson({ k: "𝌆", nested: { b: 1, a: [null, "café"] } })).toBe(
       '{"k":"\\ud834\\udf06","nested":{"a":[null,"caf\\u00e9"],"b":1}}',
     );
+    // python3: json.dumps({"a":"x\x7fy","b":"\u2028"}, sort_keys=True, separators=(",",":"))
+    expect(pythonCanonicalJson({ b: "\u2028", a: "x\x7fy" })).toBe('{"a":"x\\u007fy","b":"\\u2028"}');
   });
 
   it("changes when only one user's hash changes", () => {

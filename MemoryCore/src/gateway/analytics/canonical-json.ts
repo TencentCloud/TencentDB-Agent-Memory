@@ -6,7 +6,7 @@
  *  - object keys sorted recursively (Python sorts str keys by Unicode code
  *    point; UTF-16 code-unit order matches for BMP chars)
  *  - compact separators "," and ":"
- *  - non-ASCII escaped as \uXXXX (lowercase hex, surrogate pairs as two
+ *  - DEL and non-ASCII escaped as \uXXXX (lowercase hex, surrogate pairs as two
  *    escapes — Python's default ensure_ascii=True)
  *  - numbers/booleans/null via JSON.stringify (Python-compatible for
  *    finite numbers; NaN/Infinity are not produced upstream)
@@ -17,7 +17,9 @@ function escStr(s: string): string {
   let out = "";
   for (let i = 0; i < json.length; i++) {
     const code = json.charCodeAt(i);
-    out += code > 0x7f ? `\\u${code.toString(16).padStart(4, "0")}` : json[i];
+    // Python's ensure_ascii escapes everything outside printable ASCII
+    // (0x20-0x7E); JSON.stringify already escapes < 0x20, so escape >= 0x7F.
+    out += code >= 0x7f ? `\\u${code.toString(16).padStart(4, "0")}` : json[i];
   }
   return out;
 }
