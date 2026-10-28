@@ -10,6 +10,8 @@
  * 3. RuntimeContext is the single source of truth for session/user identity.
  */
 
+import type { IsolationFilter } from "./store/isolation.js";
+
 // ============================
 // Logger (unified across all layers)
 // ============================
@@ -323,6 +325,7 @@ export interface MemorySearchParams {
   limit?: number;
   type?: string;
   scene?: string;
+  filter?: IsolationFilter;
 }
 
 /** Search parameters for L0 conversation search. */
