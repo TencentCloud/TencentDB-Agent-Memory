@@ -295,7 +295,7 @@ export class MongoMemoryStore implements IMemoryStore {
     return true;
   }
 
-  async deleteL1(recordId: string, filter?: IsolationFilter): Promise<boolean> {
+  async deleteL1(recordId: string, filter?: IsolationFilter, _opts?: { throwOnError?: boolean }): Promise<boolean> {
     const coll = await this.coll(COLLECTIONS.L1);
     const res = await coll.deleteOne({ _id: recordId, ...isolationToMatch(filter) } as never);
     return res.deletedCount > 0;

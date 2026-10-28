@@ -1312,12 +1312,19 @@ async function handleAtomicDelete(body: unknown, auth: V2AuthContext, requestId:
   } : undefined;
   let deletedCount = 0;
   const deletedIds: string[] = [];
-  for (const id of ids) {
-    const ok = await store.deleteL1(id, deleteFilter);
-    if (ok) {
-      deletedCount++;
-      deletedIds.push(id);
+  try {
+    for (const id of ids) {
+      const ok = await store.deleteL1(id, deleteFilter, { throwOnError: true });
+      if (ok) {
+        deletedCount++;
+        deletedIds.push(id);
+      }
     }
+  } catch (err) {
+    deps.logger.error(
+      `[${TAG}] L1 delete failed for ${ids.length} id(s): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return errorEnvelope(502, "L1 delete failed", requestId);
   }
 
   // 审计：L1 delete — 每条删除一行 audit
