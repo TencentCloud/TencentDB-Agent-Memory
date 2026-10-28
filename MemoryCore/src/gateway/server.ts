@@ -135,6 +135,7 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import type { StatefulPipelineManager } from "../utils/stateful-pipeline-manager.js";
 import type { PipelineLogger } from "../utils/pipeline-factory.js";
 import { parsePipelineTimerMember } from "../core/state/timer-member.js";
+import { escapeRedisGlob } from "../utils/redis-glob.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -2333,12 +2334,17 @@ export class TdaiGateway {
       const setKey = `${keyPrefix}:pending-agents-set`;
       const listKey = `${keyPrefix}:pending-agents`;
       let tuplesRemoved = 0;
+      // instanceId 里可能含 glob 元字符 (* ? [ ] \) —— 作为字面量拼进
+      // MATCH pattern 前必须转义，否则 destroy "*" 会清掉所有实例的 tuple。
+      const matchPrefix = escapeRedisGlob(prefixSegment);
       // SSCAN + MATCH 匹配 5 段 tuple
       let cursor = "0";
       do {
-        const [next, members] = await client.sscan(setKey, cursor, "MATCH", `${prefixSegment}*`, "COUNT", 500);
+        const [next, members] = await client.sscan(setKey, cursor, "MATCH", `${matchPrefix}*`, "COUNT", 500);
         cursor = next;
         for (const m of members) {
+          // 防御性复核：即使 MATCH 语义有出入，也只删真正属于本实例的 member。
+          if (!m.startsWith(prefixSegment)) continue;
           await client.srem(setKey, m);
           await client.lrem(listKey, 0, m);
           tuplesRemoved++;
@@ -2351,8 +2357,8 @@ export class TdaiGateway {
 
       // SCAN + MATCH 清 extract-lock / tasks-mutex
       const patterns = [
-        `${keyPrefix}:extract-lock:${prefixSegment}*`,
-        `${keyPrefix}:tasks-mutex:${prefixSegment}*`,
+        `${keyPrefix}:extract-lock:${matchPrefix}*`,
+        `${keyPrefix}:tasks-mutex:${matchPrefix}*`,
       ];
       let locksRemoved = 0;
       for (const pattern of patterns) {
