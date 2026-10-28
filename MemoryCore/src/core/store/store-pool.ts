@@ -93,6 +93,14 @@ export interface StorePoolOptions {
 
 export class StorePool {
   private pool = new Map<string, PoolEntry>();
+  /**
+   * In-flight dedupe for getStore(): the create path (close-old → evict →
+   * create → pool.set → init) is stored before the first await so
+   * concurrent first calls for the same instance+config share one store
+   * instead of returning an un-initialized entry or leaking a second
+   * store whose pool.set gets overwritten (never closed).
+   */
+  private creating = new Map<string, { fingerprint: string; promise: Promise<PooledStore> }>();
   private maxStores: number;
   readonly mode: StoreMode;
   private memoryCfg: MemoryTdaiConfig;
@@ -191,6 +199,13 @@ export class StorePool {
       backend === "mongodb" && mongoConfig ? this.computeMongoFingerprint(mongoConfig)
       : backend === "tcvdb" && vdbConfig ? this.computeFingerprint(vdbConfig)
       : `sqlite:${instanceId}`;
+    // 并发去重必须查在 pool 之前：创建中的 entry 已 pool.set 但 init 还没
+    // 完成 —— 命中 creating 的调用方要等同一个 promise，而不是拿走半成品。
+    const inflight = this.creating.get(instanceId);
+    if (inflight && inflight.fingerprint === fingerprint) {
+      return inflight.promise;
+    }
+
     const cached = this.pool.get(instanceId);
 
     // 命中且配置未变
@@ -199,45 +214,57 @@ export class StorePool {
       return cached.pooledStore;
     }
 
-    // 配置变了 → 关闭旧的
-    if (cached) {
-      this.logger.info(`${TAG} Config changed for ${instanceId}, recreating store`);
-      await this.closeEntry(instanceId, cached);
-    }
+    const promise = (async (): Promise<PooledStore> => {
+      // 配置变了 → 关闭旧的
+      if (cached) {
+        this.logger.info(`${TAG} Config changed for ${instanceId}, recreating store`);
+        await this.closeEntry(instanceId, cached);
+      }
 
-    // LRU 淘汰
-    if (this.pool.size >= this.maxStores) {
-      await this.evictLru();
-    }
+      // LRU 淘汰
+      if (this.pool.size >= this.maxStores) {
+        await this.evictLru();
+      }
 
-    // 创建新 Store
-    const pooledStore =
-      backend === "mongodb" && mongoConfig ? this.createMongoStore(mongoConfig)
-      : backend === "tcvdb" && vdbConfig ? this.createTcvdbStore(vdbConfig)
-      : this.createSqliteStore(instanceId);
+      // 创建新 Store
+      const pooledStore =
+        backend === "mongodb" && mongoConfig ? this.createMongoStore(mongoConfig)
+        : backend === "tcvdb" && vdbConfig ? this.createTcvdbStore(vdbConfig)
+        : this.createSqliteStore(instanceId);
 
-    this.pool.set(instanceId, {
-      pooledStore,
-      configFingerprint: fingerprint,
-      lastAccessedAt: now,
-    });
+      this.pool.set(instanceId, {
+        pooledStore,
+        configFingerprint: fingerprint,
+        lastAccessedAt: now,
+      });
 
-    const storeDesc =
-      backend === "mongodb" && mongoConfig ? `mongodb ${mongoConfig.endpoint} / ${mongoConfig.database}`
-      : backend === "tcvdb" && vdbConfig ? `${vdbConfig.url} / ${vdbConfig.database}`
-      : `sqlite @ ${this.getSqlitePath(instanceId)}`;
-    this.logger.info(
-      `${TAG} Created ${backend} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
-    );
+      const storeDesc =
+        backend === "mongodb" && mongoConfig ? `mongodb ${mongoConfig.endpoint} / ${mongoConfig.database}`
+        : backend === "tcvdb" && vdbConfig ? `${vdbConfig.url} / ${vdbConfig.database}`
+        : `sqlite @ ${this.getSqlitePath(instanceId)}`;
+      this.logger.info(
+        `${TAG} Created ${backend} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
+      );
 
-    // 初始化 Store (建表/检查连接)
+      // 初始化 Store (建表/检查连接)
+      try {
+        await pooledStore.store.init();
+      } catch (e) {
+        this.logger.warn(`${TAG} Store init failed for ${instanceId}: ${e}`);
+      }
+
+      return pooledStore;
+    })();
+
+    this.creating.set(instanceId, { fingerprint, promise });
     try {
-      await pooledStore.store.init();
-    } catch (e) {
-      this.logger.warn(`${TAG} Store init failed for ${instanceId}: ${e}`);
+      return await promise;
+    } finally {
+      // Guard: a different-fingerprint caller may have replaced our entry.
+      if (this.creating.get(instanceId)?.promise === promise) {
+        this.creating.delete(instanceId);
+      }
     }
-
-    return pooledStore;
   }
 
   /**
