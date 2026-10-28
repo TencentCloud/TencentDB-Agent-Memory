@@ -17,6 +17,7 @@ import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../promp
 import { batchDedup } from "./l1-dedup.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
+import { preExtractHighConfidenceMemories } from "./pre-extractor.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse, shouldExtractL1 } from "../../utils/sanitize.js";
 import type { IMemoryStore } from "../store/types.js";
@@ -148,44 +149,57 @@ export async function extractL1Memories(params: {
 
   logger?.debug?.(`${TAG} Extracting from ${newMessages.length} new messages (+ ${backgroundMessages.length} background) [${qualifiedMessages.length} qualified from ${messages.length} input]`);
 
-  // Step 1: LLM extraction (scene segmentation + memory extraction)
-  let scenes: SceneSegment[];
-  try {
-    scenes = await callLlmExtraction({
-      newMessages,
-      backgroundMessages,
-      previousSceneName: options.previousSceneName,
-      config,
-      logger,
-      model: options.model,
-      llmRunner: options.llmRunner,
-    });
-    logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
-  } catch (err) {
-    logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
-    return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
-  }
-
-  // Flatten all memories across scenes
   const allExtracted: ExtractedMemory[] = [];
   const sceneNames: string[] = [];
 
-  for (const scene of scenes) {
-    sceneNames.push(scene.scene_name);
-    for (const mem of scene.memories) {
-      const memType = normalizeType(mem.type);
-      if (!memType) {
-        logger?.warn?.(`${TAG} Skipping memory with invalid type "${mem.type}"`);
-        continue;
+  const preExtraction = preExtractHighConfidenceMemories(newMessages);
+  if (preExtraction.canBypassLlm) {
+    for (const memory of preExtraction.memories) {
+      allExtracted.push(memory);
+      if (!sceneNames.includes(memory.scene_name)) {
+        sceneNames.push(memory.scene_name);
       }
-      allExtracted.push({
-        content: mem.content,
-        type: memType,
-        priority: typeof mem.priority === "number" ? mem.priority : 50,
-        source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
-        metadata: mem.metadata ?? {},
-        scene_name: scene.scene_name,
+    }
+    logger?.debug?.(
+      `${TAG} Rule pre-extraction bypassed LLM: ${allExtracted.length} high-confidence memor${allExtracted.length === 1 ? "y" : "ies"}`,
+    );
+  } else {
+    // Step 1: LLM extraction (scene segmentation + memory extraction)
+    let scenes: SceneSegment[];
+    try {
+      scenes = await callLlmExtraction({
+        newMessages,
+        backgroundMessages,
+        previousSceneName: options.previousSceneName,
+        config,
+        logger,
+        model: options.model,
+        llmRunner: options.llmRunner,
       });
+      logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
+    } catch (err) {
+      logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
+    }
+
+    // Flatten all memories across scenes
+    for (const scene of scenes) {
+      sceneNames.push(scene.scene_name);
+      for (const mem of scene.memories) {
+        const memType = normalizeType(mem.type);
+        if (!memType) {
+          logger?.warn?.(`${TAG} Skipping memory with invalid type "${mem.type}"`);
+          continue;
+        }
+        allExtracted.push({
+          content: mem.content,
+          type: memType,
+          priority: typeof mem.priority === "number" ? mem.priority : 50,
+          source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
+          metadata: mem.metadata ?? {},
+          scene_name: scene.scene_name,
+        });
+      }
     }
   }
 
