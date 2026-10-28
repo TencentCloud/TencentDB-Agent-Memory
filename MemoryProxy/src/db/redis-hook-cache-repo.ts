@@ -2,7 +2,7 @@
  * RedisHookCacheRepo — Redis-backed persistence for prewarmed injection blocks.
  *
  * Implements the HookCacheRepo interface. Uses Redis Hash:
- *   inj:hook:{spaceId}:{userId}:{agentSource}:{sessionId}  Hash  field=hookId  value=ContextBlock[] JSON
+ *   inj:hook:{spaceId}:{userId}:{agentSource}:{sessionId}  Hash  field=storageHookId  value=ContextBlock[] JSON
  *
  * spaceId 是 P4 kernel-sts 新增的隔离段。老 caller 传空字符串时用 `_default` 兜底。
  *
