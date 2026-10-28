@@ -655,9 +655,9 @@ export async function runAnthropicPipeline(
     lcHeaders[k.toLowerCase()] = v;
   }
 
-// ── Session key: prefer conversation header, fallback to agent profile ───────────
+  // ── Session key: headers, request-body metadata, then agent profile ───────────
   const { resolveConversationId } = await import("../../session/session-key.js");
-  const conversationId = resolveConversationId(c);
+  const conversationId = resolveConversationId(c, body);
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
