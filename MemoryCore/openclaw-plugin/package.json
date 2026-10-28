@@ -13,6 +13,7 @@
   "scripts": {
     "clean": "rm -rf dist *.tgz",
     "build": "tsc",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "prepack": "npm run clean && npm install --no-save --no-audit --no-fund && npm run build"
   },
   "dependencies": {
