@@ -73,6 +73,23 @@ export function runMetadataStoreContract(
         expect(await store.getUserByKey(defaultKey!.key_value)).toMatchObject({ user_id: u.user_id });
       });
 
+      it("按完整凭证精确查回 Key ID，末四位相同也不混淆", async () => {
+        const user = await store.createUser(uniqueUserInput());
+        const first = await store.createUserKey({
+          user_id: user.user_id,
+          key_value: "sk-mem-first-abcd",
+        });
+        const second = await store.createUserKey({
+          user_id: user.user_id,
+          key_value: "sk-mem-second-abcd",
+        });
+        expect((await store.getUserKeyByValue(first.key_value))?.key_id).toBe(first.key_id);
+        expect((await store.getUserKeyByValue(second.key_value))?.key_id).toBe(second.key_id);
+        expect(await store.getUserKeyByValue("sk-mem-missing-abcd")).toBeNull();
+        await store.revokeUserKey(first.key_id);
+        expect(await store.getUserKeyByValue(first.key_value)).toBeNull();
+      });
+
       it("createUser 写入 meta_user_keys 默认行", async () => {
         const u = await store.createUser(uniqueUserInput());
         const keys = (await store.listUserKeys(u.user_id, P)).items;
