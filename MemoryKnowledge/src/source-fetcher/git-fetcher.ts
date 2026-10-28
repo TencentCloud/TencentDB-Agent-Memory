@@ -148,12 +148,31 @@ function ssrfCheckEnabledFromEnv(): boolean {
   return !(v === "off" || v === "false" || v === "0" || v === "no");
 }
 
+const DEFAULT_GIT_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * 每个 git 子进程（clone/fetch/reset/clean/ls-remote/revparse）的无输出超时
+ *（simple-git `block`：stdout/stderr 每有数据就重新计时）。
+ * 卡死的远端会永远占住构建队列槽位。默认 10 分钟；
+ * KNOWLEDGE_GIT_TIMEOUT_MS 正整数可覆盖，非法值回落默认。
+ */
+function gitTimeoutMsFromEnv(): number {
+  const raw = process.env.KNOWLEDGE_GIT_TIMEOUT_MS;
+  const parsed = raw == null ? NaN : Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_GIT_TIMEOUT_MS;
+}
+
 export interface GitSourceFetcherOptions {
   /**
    * 是否启用 SSRF 私网 / 环回地址黑名单校验。
    * 默认读环境变量 KNOWLEDGE_SSRF_CHECK（默认开启）；显式传入时优先于环境变量。
    */
   ssrfCheck?: boolean;
+  /**
+   * Git 子进程阻塞超时（毫秒）。显式传入时优先于
+   * KNOWLEDGE_GIT_TIMEOUT_MS（默认 10 分钟）。
+   */
+  timeoutMs?: number;
 }
 
 export class GitSourceFetcher implements ISourceFetcher {
@@ -161,9 +180,12 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   /** SSRF 私网黑名单校验开关（协议白名单始终生效，不受此开关影响）。 */
   private readonly ssrfCheck: boolean;
+  /** 每个 git 操作的超时；经 simple-git `timeout: { block }` 传入。 */
+  private readonly timeoutMs: number;
 
   constructor(opts?: GitSourceFetcherOptions) {
     this.ssrfCheck = opts?.ssrfCheck ?? ssrfCheckEnabledFromEnv();
+    this.timeoutMs = opts?.timeoutMs ?? gitTimeoutMsFromEnv();
   }
 
   validate(sourceUrl: string): void {
@@ -194,6 +216,9 @@ export class GitSourceFetcher implements ISourceFetcher {
       await this.gitFor(sourceUrl, undefined, opts).clone(sourceUrl, localPath, {
         "--depth": 1,
         "--branch": branch,
+        // 非 TTY 下 git 默认不输出进度；--progress 让 stderr 持续有数据，
+        // 超时只在真正卡住（无任何输出）时触发，而不是大仓库正常下载时。
+        "--progress": null,
       });
     } catch (err) {
       // 「远端没有这个分支」是最常见的注册失败原因（前端默认填 main，
@@ -246,7 +271,7 @@ export class GitSourceFetcher implements ISourceFetcher {
     // ★ 增量同步同样要带 SSH 私钥：`git fetch origin` 走的还是 ssh 传输，
     //   缺 GIT_SSH_COMMAND 会因为拿不到 key 而认证失败。
     const git = this.gitFor(sourceUrl, localPath, opts); // baseDir = 已存在的仓库目录
-    await git.fetch("origin", branch, { "--depth": 1 });
+    await git.fetch("origin", branch, { "--depth": 1, "--progress": null });
     await git.reset(ResetMode.HARD, [`origin/${branch}`]);
     // Bug 修复（方案 A）：clean 排除 .codegraph/，否则会删掉 codegraph 的索引库，
     // 导致增量 sync 永远失败、每次回退到全量 clone。
@@ -281,12 +306,14 @@ export class GitSourceFetcher implements ISourceFetcher {
    */
   private gitFor(sourceUrl: string, localPath?: string, opts?: GitFetchOptions): SimpleGit {
     if (!isSshUrl(sourceUrl) || !opts?.ssh) {
-      return localPath ? simpleGit(localPath) : simpleGit();
+      return localPath
+        ? simpleGit(localPath, { timeout: { block: this.timeoutMs } })
+        : simpleGit({ timeout: { block: this.timeoutMs } });
     }
     // 放行开关只在这一个分支里开，作用域最小。
     const git = localPath
-      ? simpleGit(localPath, { unsafe: UNSAFE_SSH_COMMAND })
-      : simpleGit({ unsafe: UNSAFE_SSH_COMMAND });
+      ? simpleGit(localPath, { unsafe: UNSAFE_SSH_COMMAND, timeout: { block: this.timeoutMs } })
+      : simpleGit({ unsafe: UNSAFE_SSH_COMMAND, timeout: { block: this.timeoutMs } });
     // simple-git 无 options.env：用链式 env() 注入，语义等价且是官方支持写法。
     return git.env({ GIT_SSH_COMMAND: buildSshCommand(opts.ssh) });
   }
@@ -299,7 +326,7 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   private async headCommit(localPath: string): Promise<string | null> {
     try {
-      return (await simpleGit(localPath).revparse(["HEAD"])).trim().slice(0, 12);
+      return (await simpleGit(localPath, { timeout: { block: this.timeoutMs } }).revparse(["HEAD"])).trim().slice(0, 12);
     } catch {
       return null;
     }
