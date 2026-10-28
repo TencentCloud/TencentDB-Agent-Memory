@@ -27,6 +27,7 @@ import { MetadataError, type MetadataService } from "../../metadata/service/meta
 import type { AnalyticsChClient } from "./analytics-ch-client.js";
 import * as schemas from "./analytics-schemas.js";
 import * as sql from "./analytics-sql.js";
+import { pythonCanonicalJson } from "./canonical-json.js";
 import { formatZodError } from "../v2-schemas.js";
 import { createHash } from "node:crypto";
 
@@ -381,28 +382,12 @@ async function handleToolCallWatermark(
     }
   }
 
-  const canonical = JSON.stringify(
-    { count, max_timestamp: maxTimestamp, users },
-    Object.keys({ count: 0, max_timestamp: "", users: {} }).sort(),
-  );
-  // Deterministic serialization for watermark
-  const canonicalSorted = JSON.stringify(
-    { count, max_timestamp: maxTimestamp, users },
-    null, 0,
-  ).split("").sort().join(""); // fallback — use proper canonical below
-  const watermark = createHash("sha256")
-    .update(JSON.stringify({ count, max_timestamp: maxTimestamp, users }, null, 0)
-      // proper canonical: sort keys, no spaces
-      .replace(/\s/g, ""))
-    .digest("hex");
-
-  // Proper canonical matching check-recall-telemetry.py:
-  // json.dumps({"count": count, "max_timestamp": max_ts, "users": users}, sort_keys=True, separators=(",",":"))
-  const canonicalObj: Record<string, unknown> = { count, max_timestamp: maxTimestamp, users };
-  const sortedCanonical = JSON.stringify(canonicalObj, Object.keys(canonicalObj).sort());
-  // Remove spaces after colons (JSON.stringify adds them)
-  const compactCanonical = sortedCanonical.replace(/:\s/g, ":").replace(/,\s/g, ",");
-  const correctWatermark = createHash("sha256").update(compactCanonical).digest("hex");
+  // Canonical matching check-recall-telemetry.py:
+  // json.dumps(obj, sort_keys=True, separators=(",",":")) — keys sorted
+  // recursively; a naive replacer-array JSON.stringify would drop the
+  // nested per-user hash map entirely.
+  const canonicalJson = pythonCanonicalJson({ count, max_timestamp: maxTimestamp, users });
+  const correctWatermark = createHash("sha256").update(canonicalJson).digest("hex");
 
   return {
     watermark: correctWatermark,
