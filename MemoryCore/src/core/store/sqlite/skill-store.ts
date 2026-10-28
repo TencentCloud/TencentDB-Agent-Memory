@@ -127,6 +127,37 @@ function toSkill(raw: SkillRowRaw): Skill {
 //  Store 实现
 // ═══════════════════════════════════════════════════════════════════════
 
+/**
+ * RRF（Reciprocal Rank Fusion, k=60）融合 BM25 与向量两路排名（patch skill-hybrid-vec）。
+ * 只依赖各自列表内的名次，与两路 score 量纲无关。snippet 优先取非空（BM25 侧带高亮）。
+ */
+function rrfFuseSkillHits(
+  bm25Hits: SkillSearchResult[],
+  vecHits: SkillSearchResult[],
+  topK: number,
+  k = 60,
+): SkillSearchResult[] {
+  const rrf = new Map<string, number>();
+  const rep = new Map<string, SkillSearchResult>();
+  bm25Hits.forEach((h, i) => {
+    const id = h.skill.skill_id;
+    rrf.set(id, (rrf.get(id) ?? 0) + 1 / (k + i + 1));
+    if (!rep.has(id)) rep.set(id, h);
+  });
+  vecHits.forEach((h, i) => {
+    const id = h.skill.skill_id;
+    rrf.set(id, (rrf.get(id) ?? 0) + 1 / (k + i + 1));
+    if (!rep.has(id)) rep.set(id, h);
+  });
+  return [...rrf.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topK)
+    .map(([id, score]) => {
+      const hit = rep.get(id)!;
+      return { ...hit, score };
+    });
+}
+
 export class SqliteSkillStore implements ISkillStore {
   private readonly db: DatabaseSync;
   private readonly dimensions: number;
@@ -534,19 +565,29 @@ export class SqliteSkillStore implements ISkillStore {
     const query = (opts.query ?? "").trim();
     if (!query) return [];
 
-    // mode 透传：当前 store 仅实现 BM25 路径。
+    // mode 透传（patch skill-hybrid-vec：补全真实向量路径）。
     // - 'bm25' / 未传  → 直接走 BM25（默认）
-    // - 'embedding' / 'hybrid' 但 vec 不可用或未给 queryEmbedding → 降级到 BM25 + 一条 warn
-    // 真实 hybrid (RRF) / 纯 vec 路径是后置项；契约层面 mode 不会被静默吞掉。
+    // - 'embedding' → 纯 vec0 KNN（需 vecAvailable + queryEmbedding）
+    // - 'hybrid'    → BM25 + vec0 KNN，RRF(k=60) 融合
+    // - vec 不可用或未给 queryEmbedding → 降级到 BM25 + 一条 warn
     const requestedMode = opts.mode ?? "bm25";
     const wantsVec = requestedMode === "embedding" || requestedMode === "hybrid";
-    if (wantsVec && (!this.vecAvailable || !opts.queryEmbedding)) {
+    const vecReady =
+      wantsVec &&
+      this.vecAvailable &&
+      !!opts.queryEmbedding &&
+      opts.queryEmbedding.length === this.dimensions;
+    if (wantsVec && !vecReady) {
       this.logger?.warn(
         `[skill-store] search mode='${requestedMode}' downgraded to 'bm25' ` +
           `(vec_available=${this.vecAvailable}, has_embedding=${!!opts.queryEmbedding})`,
       );
     }
-    // pure embedding 路径暂未实现 → 仍回 BM25；hybrid 同样回 BM25（后续 RRF 融合）。
+
+    // 纯向量路径：vec 就绪时直接走 KNN，不触碰 FTS。
+    if (requestedMode === "embedding" && vecReady) {
+      return this.searchSkillsVec(opts, topK);
+    }
 
     // FTS5 查询：使用 buildFtsQuery（与 L0/L1 一致的 jieba 分词 + 引号包裹 + OR 连接）。
     // jieba cutForSearch 能正确处理中文分词；fallback 到 Unicode 正则切分。
@@ -612,7 +653,62 @@ export class SqliteSkillStore implements ISkillStore {
       });
       if (hits.length >= topK) break;
     }
+
+    // hybrid：BM25 候选 + vec0 KNN 候选做 RRF(k=60) 融合（patch skill-hybrid-vec）。
+    if (requestedMode === "hybrid" && vecReady) {
+      const vecHits = this.searchSkillsVec(opts, topK * 2);
+      if (vecHits.length > 0) {
+        return rrfFuseSkillHits(hits, vecHits, topK);
+      }
+    }
     return hits;
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  //  searchSkillsVec — vec0 KNN（patch skill-hybrid-vec）
+  // ────────────────────────────────────────────────────────────────────
+  /**
+   * 纯向量 KNN 检索。skill_vec 每 skill_id 一条向量（写路径 upsertEmbedding 维护）。
+   * KNN 结果回查 skills 主表过滤 is_head=1 AND status='active' + 隔离四元组
+   * （vec0 虚拟表无这些列，与 FTS 路径的"回查主表"策略一致）。
+   * score = 1 - cosine_distance（越大越好）；snippet 为空串（调用方 fallback description）。
+   */
+  private searchSkillsVec(opts: SearchSkillsOptions, topK: number): SkillSearchResult[] {
+    const embedding = opts.queryEmbedding!;
+    try {
+      // 过量召回 ×3，补偿主表过滤（head/active/隔离）造成的损耗。
+      const rows = this.db
+        .prepare(
+          `SELECT skill_id, distance FROM skill_vec
+           WHERE embedding MATCH ? AND k = ?
+           ORDER BY distance`,
+        )
+        .all(Buffer.from(embedding.buffer), topK * 3) as Array<{
+        skill_id: string;
+        distance: number | null;
+      }>;
+      const hits: SkillSearchResult[] = [];
+      for (const r of rows) {
+        // sqlite-vec 对零向量返回 NULL distance（cosine 未定义）——跳过占位残留。
+        if (r.distance == null || Number.isNaN(r.distance)) continue;
+        const row = this.db
+          .prepare(
+            `SELECT * FROM skills WHERE skill_id=? AND is_head=1 AND status='active' LIMIT 1`,
+          )
+          .get(r.skill_id) as unknown as SkillRowRaw | undefined;
+        if (!row) continue;
+        if (opts.team_id && row.team_id !== opts.team_id) continue;
+        if (opts.agent_id && row.owner_agent_id !== opts.agent_id) continue;
+        if (opts.task_id && row.task_id !== opts.task_id) continue;
+        if (opts.user_id && row.user_id !== opts.user_id) continue;
+        hits.push({ skill: toSkill(row), score: 1 - r.distance, snippet: "" });
+        if (hits.length >= topK) break;
+      }
+      return hits;
+    } catch (e) {
+      this.logger?.warn(`[skill-store] vec query failed: ${(e as Error).message}`);
+      return [];
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────
