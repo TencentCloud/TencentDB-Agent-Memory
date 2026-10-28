@@ -27,6 +27,7 @@ import {
   isValidIdSegment,
   wrapOk,
   wrapError,
+  clampListPagination,
   toWikiDetail,
   type BatchDeleteResult,
 } from "../api-helpers.js";
@@ -216,8 +217,7 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     if (!ids) return c.json(wrapError(400, "x-tdai-service-id header and team_id are required"), 400);
 
     const status = typeof body.status === "string" ? (body.status as WikiStatus) : undefined;
-    const limit = typeof body.limit === "number" ? body.limit : 20;
-    const offset = typeof body.offset === "number" ? body.offset : 0;
+    const { limit, offset } = clampListPagination(body);
 
     const items = wikiService.list(ids.service_id, ids.team_id, { syncStatus: status, limit, offset });
     const total = wikiService.count(ids.service_id, ids.team_id, status ? { syncStatus: status } : undefined);
