@@ -1,0 +1,21 @@
+name: Windows deployment scripts
+
+on:
+  pull_request:
+    branches: [main, feat/server, feat/server_team]
+    paths:
+      - 'deploy/global-images/**'
+      - '.github/workflows/windows-deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  deployment:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test native deployment on Windows PowerShell 5.1
+        shell: powershell
+        run: ./deploy/global-images/tests/windows-deploy.tests.ps1
+      - name: Test native deployment on PowerShell 7
+        shell: pwsh
+        run: ./deploy/global-images/tests/windows-deploy.tests.ps1
