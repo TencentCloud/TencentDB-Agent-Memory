@@ -70,7 +70,7 @@ export class TapdMcpClient {
       throw new TaskSourceError("task_source_upstream_error", `TAPD returned HTTP ${res.status}`);
     }
 
-    const json = (await res.json()) as JsonRpcResponse;
+    const json = parseJsonRpcBody(res.body, res.contentType);
     if (json.error) {
       throw new TaskSourceError(
         "task_source_upstream_error",
@@ -158,17 +158,63 @@ function parseMaybeJson(text: string): unknown {
   }
 }
 
+interface BufferedResponse {
+  status: number;
+  ok: boolean;
+  contentType: string;
+  body: string;
+}
+
+/**
+ * 解析 JSON-RPC 响应体。请求头声明了 `text/event-stream`，按 MCP Streamable HTTP
+ * 规范网关可以用 SSE 回包：取最后一个能解析为 JSON-RPC 响应的 `data:` 事件。
+ * 非法响应体统一映射为 task_source_upstream_error，而不是抛出裸 SyntaxError。
+ */
+export function parseJsonRpcBody(body: string, contentType: string): JsonRpcResponse {
+  const candidates: string[] = [];
+  if (/text\/event-stream/i.test(contentType)) {
+    for (const event of body.split(/\r?\n\r?\n/)) {
+      const data = event
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""))
+        .join("\n");
+      if (data) candidates.push(data);
+    }
+  } else {
+    candidates.push(body);
+  }
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(candidates[i]!) as unknown;
+      if (parsed && typeof parsed === "object" && ("result" in parsed || "error" in parsed)) {
+        return parsed as JsonRpcResponse;
+      }
+    } catch {
+      // 尝试上一个事件
+    }
+  }
+  throw new TaskSourceError("task_source_upstream_error", "TAPD returned an unparseable response");
+}
+
+/** 请求与读取响应体共用同一个超时；否则网关发完响应头后卡住会永久挂起。 */
 async function fetchWithTimeout(
   url: string,
   init: RequestInit & { timeoutMs: number },
-): Promise<Response> {
+): Promise<BufferedResponse> {
   const { timeoutMs, ...rest } = init;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...rest, signal: controller.signal });
+    const res = await fetch(url, { ...rest, signal: controller.signal });
+    return {
+      status: res.status,
+      ok: res.ok,
+      contentType: res.headers.get("content-type") ?? "",
+      body: await res.text(),
+    };
   } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (err instanceof Error && (err.name === "AbortError" || controller.signal.aborted)) {
       throw new TaskSourceError("task_source_timeout", "TAPD request timed out");
     }
     throw new TaskSourceError(
