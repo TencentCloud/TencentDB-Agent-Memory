@@ -72,7 +72,8 @@ export interface SessionRequestContext {
    *   - `askUserQuestion === false` → 无卡片能力，走文字模式（content chunk + 纯文字解析）
    *   - `askUserQuestion === true` / `undefined` → 走原卡片模式
    *
-   * 未设置时相当于 `{ askUserQuestion: true }`（对齐既有行为）。
+   * 未设置时相当于 `{ askUserQuestion: true, memoryPipeline: true }`
+   * （对齐既有行为）。
    */
   capabilities?: ClientCapabilities;
   /**

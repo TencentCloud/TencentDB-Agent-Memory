@@ -679,46 +679,18 @@ export async function runOpenaiChatPipeline(
     startedAt: startTime,
   });
 
-  // ── dsh (deepseek-harness) CLI headless / no-preset bypass ──────────────
-  // dsh 客户端在 headless bundle 或未挂 ask-user preset 时,body.tools 里
-  // 不含 `ask_user_question` 工具。proxy 塞 fake `ask_user_question` tool_call
-  // 会被 dsh agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass
-  // session-init 而非弹 form —— 没 UI 场景强弹表单没意义。
-  //
-  // 判定:agentSource=dsh 且 body.tools 非空且不含 ask_user_question。
-  // (tools 空数组表示纯对话/aux,不用兜底;tools 里就有 ask_user_question 说明
-  // 有 preset 挂 UI 工具,正常走 form。)
-  //
-  // NOTE(opencode): opencode CLI 同样不支持虚拟 ask_followup_question tool,
-  // 但走独立的 header-driven session-init 分支(见下方 opencode 特化块),
-  // 因此不需要走这里的 headless bypass —— opencode 能吃 mem 命令纯文本响应,
-  // 也需要 injection / L0 / skill 提取,只是不能弹 form。
-  const _dshHeadless = agentSource === "dsh" && (() => {
-    const tools = (body as { tools?: unknown }).tools;
-    if (!Array.isArray(tools) || tools.length === 0) return false;
-    return !tools.some((t) => {
-      const fn = (t as { function?: { name?: string }; name?: string })?.function;
-      const n = fn?.name ?? (t as { name?: string })?.name;
-      return n === "ask_user_question";
-    });
-  })();
-  if (_dshHeadless) {
-    console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
-  }
-
   // ── Client capabilities detection ─────────────────────────────────────────
-  // 探测客户端"能否响应 proxy 发起的 fake ask tool_call"。
+  // 探测客户端"能否响应 proxy 发起的 fake ask tool_call"，并单独保留记忆域能力。
   //
-  // 当前仅对 workbuddy 做实质判定：新版 workbuddy 官方 tools 集合里拿掉了
-  // AskUserQuestion（现只剩 20 个工具），proxy 侧继续发 tool_calls 会被客户端
-  // 收下但不知道怎么渲染 → 卡死在 pending。此时需要降级走文字模式
-  // （content chunk + markdown + 纯文字解析）。
-  //
-  // 其他客户端（codebuddy / claude-code / dsh / codex / opencode / hermes /
-  // openclaw）一律 askUserQuestion=true，保持既有行为不变。dsh headless 场景走
-  // 上面独立的 _dshHeadless bypass 分支，不受本探测影响。
+  // dsh PTC 的 tools 通常只有 run_code，不能承载 fake ask tool_call，但仍可使用
+  // 已恢复的 team / agent 身份做 injection、L0 和 skill 提取。表单能力与记忆能力
+  // 必须拆开，不能再用"无 ask_user_question"关掉整个记忆链路。
   const { detectClientCapabilities } = await import("../../session/client-capabilities.js");
   const _capabilities = detectClientCapabilities(agentSource, body);
+  const _dshNoForm = agentSource === "dsh" && !_capabilities.askUserQuestion;
+  if (_dshNoForm) {
+    console.log(`[request-classify] session=${sessionKey} agent=dsh no-form request → bypass session-init form, keep memory pipeline`);
+  }
   if (agentSource === "workbuddy" && !_capabilities.askUserQuestion) {
     console.log(`[request-classify] session=${sessionKey} agent=workbuddy no-AskUserQuestion tool → text-mode session-init`);
   }
@@ -736,17 +708,19 @@ export async function runOpenaiChatPipeline(
   // ── mem:session-reset pre-hook (via shared stage) ──
   const resetResp = await stageSessionResetPreHook({
     c, config, body, agentSource, sessionKey, spaceId, userId,
-    isAuxiliary, dshHeadless: _dshHeadless, isStream,
+    isAuxiliary, dshHeadless: _dshNoForm, isStream,
     protocol: "openai",
-    enabled: !isAuxiliary && !_dshHeadless && teamMemoryEnabled,
+    enabled: !isAuxiliary && !_dshNoForm && teamMemoryEnabled,
   });
   if (resetResp) return resetResp;
 
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("../../injection/types.js").AssetCapabilityFlags | undefined;
-  // Team memory off → force the full injection skip too.
-  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless || !teamMemoryEnabled;
+  // Team memory off → force the full injection skip too. A dsh no-form request
+  // must still run the memory pipeline, so form capability is deliberately not
+  // part of this gate.
+  let injectedSkipped = !conversationId || isAuxiliary || !teamMemoryEnabled;
   let sessionJustRegistered = false;
   /**
    * v3.3 user-session-default: 命中账户默认时, 由 session-init 填充的用户可见
@@ -755,8 +729,8 @@ export async function runOpenaiChatPipeline(
    */
   let defaultBindingNotice: string | null = null;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId} teamMemoryEnabled=${teamMemoryEnabled}`);
-  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless && teamMemoryEnabled) {
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshNoForm=${_dshNoForm} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId} teamMemoryEnabled=${teamMemoryEnabled}`);
+  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && teamMemoryEnabled) {
     try {
       // Round 18: session-init 主编排走 shared stageSessionInitOrchestrate;
       // openai-chat 4 个 callback:
@@ -774,6 +748,7 @@ export async function runOpenaiChatPipeline(
         sessionKey, userId: userId || null, spaceId,
         config: config as ProxyConfig & { sessionInit: NonNullable<ProxyConfig["sessionInit"]> },
         kernelUserKey,
+        allowStateMachine: !_dshNoForm,
         headers: lcHeaders,
         recoveryMessages: (body.messages as Array<Record<string, unknown>>) ?? [],
         synthesizeMessages: () => (body.messages as Array<Record<string, unknown>>) ?? [],
@@ -866,7 +841,7 @@ export async function runOpenaiChatPipeline(
       // fallback 语义：sessionJustRegistered 在此已定型（见上文 L786），
       // checkFirst 场景可安全复用。
       let memCommandPending = false;
-      if (!isAuxiliary && !_dshHeadless) {
+      if (!isAuxiliary && !_dshNoForm) {
         try {
           const { parseMemCommand } = await import("../../mem-command/index.js");
           let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -981,7 +956,7 @@ export async function runOpenaiChatPipeline(
   {
     const { extractSimpleMessages } = await import("../../mem-command/index.js");
     const memResp = await stageMemCommandIntercept({
-      enabled: !isAuxiliary && !_dshHeadless && teamMemoryEnabled,
+      enabled: !isAuxiliary && !_dshNoForm && teamMemoryEnabled,
       body: body as Record<string, unknown>,
       agentSource, sessionKey,
       sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
@@ -1006,8 +981,10 @@ export async function runOpenaiChatPipeline(
     if (memResp) return memResp;
   }
 
-  // aux 请求(compaction/title)/ dsh headless(无 UI 无 preset)不写 L0 —— 直接透传
-  const tdaiClient = isAuxiliary || _dshHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
+  // aux 请求(compaction/title)不写 L0；dsh no-form 仍可使用已恢复的会话身份。
+  const tdaiClient = isAuxiliary || !_capabilities.memoryPipeline || assetCapabilities?.chat_memory === false
+    ? null
+    : createTdaiClient(config, spaceId);
   const tdaiIdentity = injectedSkipped
     ? null
     : deriveTdaiIdentity({
@@ -1090,7 +1067,7 @@ export async function runOpenaiChatPipeline(
   // ── Skill selection (proxy 选择 → 客户端加载) ─────────────────────────────
   // 与 anthropicHandler 对称：新用户轮次选中 skill → 直接返回 tool_calls，由客户端
   // 执行加载。session-init 刚完成的这一轮不触发（避免与表单伪造响应叠加）。
-  if (!isAuxiliary && !_dshHeadless && !injectedSkipped && !sessionJustRegistered && sessionInfo && conversationId) {
+  if (!isAuxiliary && !injectedSkipped && !sessionJustRegistered && sessionInfo && conversationId) {
     const { tryClientToolDelivery } = await import("../../skill/selection/delivery/client-tool.js");
     const resp = await tryClientToolDelivery(config, {
       protocol: "openai",
@@ -1389,7 +1366,6 @@ export async function runOpenaiChatPipeline(
       sessionKeyForSkill: sessionKey,
       agentSource,
       isAuxiliary,
-      isDshHeadless: _dshHeadless,
       sessionInfo,
       lf,
       spaceId,
@@ -1653,8 +1629,8 @@ export async function runOpenaiChatPipeline(
 
   // Skill extract trigger — count tool calls + buffer conversation.
   // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-  // aux 请求(compaction/title)/dsh headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
-  if (!isAuxiliary && !_dshHeadless && isExtractionAllowed(config, "skill")) {
+  // aux 请求(compaction/title)不触发 skill 提取 —— 保持归档 buffer 语义纯净
+  if (!isAuxiliary && isExtractionAllowed(config, "skill")) {
     await triggerSkillExtractIfReady({
       config,
       sessionKey,
@@ -1665,7 +1641,7 @@ export async function runOpenaiChatPipeline(
       protocol: "openai",
       assetCapabilities,
     });
-  } else if (!isAuxiliary && !_dshHeadless) {
+  } else if (!isAuxiliary) {
     logExtractionSkipped(config, "skill", sessionKey);
   }
 
@@ -1772,9 +1748,6 @@ interface TapContext {
   /** True when this request was classified as auxiliary (compaction/title-gen) —
    * downstream L0/skill extract paths must skip to keep buffer semantics clean. */
   isAuxiliary: boolean;
-  /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
-   * in tools) — behaves like aux for downstream side-effects. */
-  isDshHeadless: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
@@ -2053,8 +2026,8 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
 
     // Skill extract trigger — after stream finalization.
     // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-    // aux 请求(compaction/title)/dsh headless 跳过 skill 触发,保持归档 buffer 语义纯净。
-    if (!ctx.isAuxiliary && !ctx.isDshHeadless && isExtractionAllowed(ctx.config, "skill")) {
+    // aux 请求(compaction/title)跳过 skill 触发,保持归档 buffer 语义纯净。
+    if (!ctx.isAuxiliary && isExtractionAllowed(ctx.config, "skill")) {
       await triggerSkillExtractIfReady({
         config: ctx.config,
         sessionKey: ctx.sessionKeyForSkill,
@@ -2066,7 +2039,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         assetCapabilities: ctx.assetCapabilities,
         toolCallCountOverride: toolCallAccumulators.size,
       });
-    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless) {
+    } else if (!ctx.isAuxiliary) {
       logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
     }
 
