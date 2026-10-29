@@ -9,7 +9,12 @@
  */
 
 import type { WikiSourceRegistry } from "./registry.js";
-import type { RemotePageContent, SourceContext, WikiSourceProvider } from "./types.js";
+import type {
+  RemotePageContent,
+  RemotePageRef,
+  SourceContext,
+  WikiSourceProvider,
+} from "./types.js";
 import type { RawWriteManyItem, WriteOutcome } from "../store/wiki-service.js";
 
 /**
@@ -100,15 +105,31 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
   const root = await provider.resolveRoot(ctx, p.sourceUrl);
   const all = await provider.listPages(ctx, root);
 
-  // 目录节点不可下载
-  const targets = p.pageIds?.length
-    ? all.filter((n) => !n.isDir && p.pageIds!.includes(n.externalId))
-    : all.filter((n) => !n.isDir);
-  const skippedDirs = all.length - targets.length;
+  // 目录节点不可下载。显式选择必须是当前列表中的真实叶子节点；
+  // 列表到导入之间被删除/改型的页面要进入 failed，不能静默成功。
+  const requestedIds = p.pageIds ? [...new Set(p.pageIds)] : undefined;
+  const nodesById = new Map(all.map((node) => [node.externalId, node]));
+  const pages = all.filter((node) => !node.isDir);
+  const targets = requestedIds
+    ? requestedIds
+        .map((id) => nodesById.get(id))
+        .filter((node): node is RemotePageRef => node !== undefined && !node.isDir)
+    : pages;
+  const skippedDirs = all.filter((node) => node.isDir).length;
 
   const pageDelayMs = Number(process.env.WIKI_IMPORT_PAGE_DELAY_MS ?? 200) || 0;
 
   const failed: Array<{ id: string; error: string }> = [];
+  if (requestedIds) {
+    for (const id of requestedIds) {
+      const node = nodesById.get(id);
+      if (!node) {
+        failed.push({ id, error: "requested page not found in current source listing" });
+      } else if (node.isDir) {
+        failed.push({ id, error: "requested id is a directory and cannot be imported as a page" });
+      }
+    }
+  }
   const warnings: string[] = [];
   let imported = 0;
   // 整轮导入内保持，避免不同批次产出同名文件互相覆盖
