@@ -4,7 +4,7 @@
  * 从 request body.messages 中检测最后一条 user message 是否为 mem: 命令。
  *
  * 判定规则：
- * 1. 取 messages 数组最后一条 role="user" 的消息
+ * 1. 从末尾跳过客户端附加的 role="system" 元数据，再取最后一条 role="user" 消息
  * 2. 通过 agentAdapter.extractUserText 按客户端规则提取用户真实输入：
  *    - claude-code: 取最后一个 text block（跳过 <system-reminder> 前缀元数据）
  *    - codebuddy / unknown: 走保守的"拼接所有 text"（待抓包适配）
@@ -22,6 +22,14 @@ export interface ParsedMemCommand {
   /** 原始 user 消息（审计 / L0 写入用） */
   rawMessage: string;
 }
+
+/**
+ * OpenClaw 2026.10.5 prepends the rendered user envelope to captured user text.
+ * Strip only the exact weekday/date/time/timezone shape so arbitrary bracketed
+ * user text cannot become a command by accident.
+ */
+const OPENCLAW_TIMESTAMP_ENVELOPE =
+  /^\s*\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? GMT[+-]\d{1,2}(?::\d{2})?\]\s*/i;
 
 /**
  * 已知 mem 命令的 args 约束表。
@@ -78,15 +86,26 @@ export function parseMemCommand(
   if (options?.checkFirst) {
     targetMsg = messages.find((m: any) => m && m.role === "user");
   } else {
-    targetMsg = messages[messages.length - 1];
+    let targetIndex = messages.length - 1;
+    // Claude Code may append a synthetic system reminder after the real user
+    // turn. Skip only contiguous system metadata; never search past assistant
+    // or tool messages, which would re-execute commands from earlier turns.
+    while (targetIndex >= 0 && messages[targetIndex]?.role === "system") {
+      targetIndex--;
+    }
+    targetMsg = targetIndex >= 0 ? messages[targetIndex] : undefined;
   }
   if (!targetMsg || targetMsg.role !== "user") return null;
   const lastMsg = targetMsg;
 
   // 通过 adapter 按客户端规则提取纯文本
   const adapter = resolveAgentAdapter(agentSource);
-  const text = adapter.extractUserText(lastMsg.content);
+  let text = adapter.extractUserText(lastMsg.content);
   if (text === null) return null;
+
+  if (agentSource.toLowerCase() === "openclaw") {
+    text = text.replace(OPENCLAW_TIMESTAMP_ENVELOPE, "");
+  }
 
   return parseCommandFromText(text);
 }
