@@ -121,6 +121,13 @@ export interface FormData {
   retry?: boolean;
   stream?: boolean;
   modelId?: string;
+  /**
+   * v3.3: 表单顶部追加的一行说明（账户默认回退原因等），拼进 question 前缀展示。
+   *
+   * opencode 由 `session/index.ts` 在 CB 产出 formData 后外层重渲染，转换时必须
+   * 带上，否则账户默认失效的原因在 opencode 客户端上会静默丢失。
+   */
+  notice?: string;
 }
 
 // ── opencode `question` input schema ───────────────────────────────────────────
@@ -140,8 +147,9 @@ interface OCAskQuestion {
 }
 
 function buildQuestionArgs(data: FormData): { questions: OCAskQuestion[] } {
-  const { teams, stage, selectedTeamId, retry } = data;
-  const titlePrefix = retry ? "⚠️ " : "";
+  const { teams, stage, selectedTeamId, retry, notice } = data;
+  // v3.3: 回退原因横幅 —— 与 CC/WB/DSH 同款挂在每个 question 前缀上。
+  const titlePrefix = (retry ? "⚠️ " : "") + (notice ? `ℹ️ ${notice} ` : "");
   const questions: OCAskQuestion[] = [];
 
   if (stage === "asset_confirm") {

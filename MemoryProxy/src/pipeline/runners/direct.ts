@@ -21,6 +21,8 @@ import type { Context } from "hono";
 import type { ProxyConfig } from "../../types.js";
 import { writeLog } from "../../logger.js";
 import { log } from "../../report/log.js";
+import { buildSafeTraceRequestBody, writeRequestLog } from "../../requestLog.js";
+import { logStandaloneUpstreamError } from "../../upstream-error-log.js";
 import {
   apiKeyToKeyId,
   extractBearerToken,
@@ -33,6 +35,7 @@ import { extractSseUsage, flattenMessagesForOpik } from "./openai-chat.js";
 import { resolveSessionKey } from "../../guard-adapter.js";
 import { poolServiceRejection } from "../../pool-service.js";
 import { SKIP_REQUEST_HEADERS_WITH_INTERNAL, filterResponseHeaders } from "../../common/constants.js";
+import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import {
   stripDirectPrefix,
   buildDirectUpstreamUrl,
@@ -281,6 +284,7 @@ function parseOpenAiResponse(respText: string): {
 export async function runDirectPipeline(c: Context, config: ProxyConfig): Promise<Response> {
   const traceId = uuidv7();
   const startTime = new Date().toISOString();
+  const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 3_600_000;
 
   const stripped = stripDirectPrefix(c.req.path);
   const upstreamUrl = buildDirectUpstreamUrl(config.upstream.url, c.req.path, c.req.url);
@@ -300,16 +304,37 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
         headers,
         body,
         ...(body ? { duplex: "half" } : {}),
+        ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
       } as RequestInit);
     } catch (err: unknown) {
       log.error("direct.forward_failed",
-        { method, requestPath: c.req.path, upstreamUrl },
+        {
+          requestId: traceId,
+          clientRequestId: c.req.header("x-request-id"),
+          method,
+          requestPath: c.req.path,
+          upstreamUrl,
+        },
         err instanceof Error ? err : new Error(String(err)));
       return c.json({
         error: "Upstream request failed",
         detail: err instanceof Error ? err.message : String(err),
       }, 502);
     }
+    log.debug("direct.forward_done", {
+      requestId: traceId,
+      clientRequestId: c.req.header("x-request-id"),
+      upstreamRequestId: upstreamResp.headers.get("x-request-id") ?? "",
+      upstreamUrl,
+      status: upstreamResp.status,
+    });
+    await logStandaloneUpstreamError({
+      response: upstreamResp,
+      requestId: traceId,
+      clientRequestId: c.req.header("x-request-id"),
+      upstreamUrl,
+      event: "direct.upstream_error",
+    });
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
       headers: filterResponseHeaders(upstreamResp.headers),
@@ -353,6 +378,9 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
   const sessionKey = resolveSessionKey(config, lcHeaders, c.req.path, parsedBody ?? {}, keyId);
 
   const headers = buildDirectRequestHeaders(c);
+  if (parsedBody) {
+    writeRequestLog(config, parsedBody, traceId, c.req.header("x-request-id"));
+  }
 
   log.debug("direct.forward_start", {
     method, requestPath: c.req.path, upstreamUrl,
@@ -361,16 +389,42 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
 
   let upstreamResp: Response;
   try {
-    upstreamResp = await fetch(upstreamUrl, { method, headers, body: rawBody });
+    upstreamResp = await fetch(upstreamUrl, {
+      method,
+      headers,
+      body: rawBody,
+      ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
+    });
   } catch (err: unknown) {
     log.error("direct.forward_failed",
-      { method, requestPath: c.req.path, upstreamUrl, protocol },
+      {
+        requestId: traceId,
+        clientRequestId: c.req.header("x-request-id"),
+        method,
+        requestPath: c.req.path,
+        upstreamUrl,
+        protocol,
+      },
       err instanceof Error ? err : new Error(String(err)));
     return c.json({
       error: "Upstream request failed",
       detail: err instanceof Error ? err.message : String(err),
     }, 502);
   }
+  log.debug("direct.forward_done", {
+    requestId: traceId,
+    clientRequestId: c.req.header("x-request-id"),
+    upstreamRequestId: upstreamResp.headers.get("x-request-id") ?? "",
+    upstreamUrl,
+    status: upstreamResp.status,
+  });
+  await logStandaloneUpstreamError({
+    response: upstreamResp,
+    requestId: traceId,
+    clientRequestId: c.req.header("x-request-id"),
+    upstreamUrl,
+    event: "direct.upstream_error",
+  });
 
   const upstreamRequestId = upstreamResp.headers.get("x-request-id") ?? "";
   const respHeaders = filterResponseHeaders(upstreamResp.headers);
@@ -385,7 +439,10 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
       projectName,
       name: `${modelId} / ${projectName}`,
       startTime,
-      input: { messages: flatMessages },
+      input: {
+        messages: flatMessages,
+        request: buildSafeTraceRequestBody(parsedBody),
+      },
       tags: [
         `protocol:${protocol}`,
         isStream ? "stream" : "non-stream",
@@ -405,7 +462,16 @@ export async function runDirectPipeline(c: Context, config: ProxyConfig): Promis
     if (!upstreamResp.body) {
       return new Response(null, { status: upstreamResp.status, headers: respHeaders });
     }
-    const [clientStream, tapStream] = upstreamResp.body.tee();
+    const observedStream = withStreamIdleWarning(upstreamResp.body, {
+      spaceId,
+      traceId,
+      requestId: traceId,
+      upstreamRequestId,
+      model: modelId,
+      protocol,
+      branch: "upstream_body",
+    });
+    const [clientStream, tapStream] = observedStream.tee();
     if (parsedBody) {
       if (protocol === "anthropic") consumeAnthropicStreamForObs(tapStream, obsCtx);
       else consumeOpenAiStreamForObs(tapStream, obsCtx);

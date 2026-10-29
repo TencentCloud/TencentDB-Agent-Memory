@@ -19,12 +19,18 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "../../types.js";
+import { buildSafeTraceRequestBody, writeRequestLog } from "../../requestLog.js";
+import { logPipelineUpstreamError } from "../../upstream-error-log.js";
 import { apiKeyToKeyId, extractBearerToken, opikCreateTrace, uuidv7 } from "../../opik.js";
 import { createPipeline, writeLog } from "../../logger.js";
 import { extractSpaceIdFromPath } from "../../credit-reporter.js";
 import { writeFailedReportRaw } from "../../clickhouse.js";
 import { joinUrl } from "../../guard-adapter.js";
 import { poolServiceRejection } from "../../pool-service.js";
+import {
+  prependNoticeToResponsesStream,
+  prependNoticeToResponsesJson,
+} from "./default-binding-notice.js";
 import {
   stageInstanceUpstreamResponses,
   isInstanceUpstreamBlocked,
@@ -39,6 +45,7 @@ import {
   createCfqStripObserver,
   stripCfqFromResponseText,
 } from "../../common/cfq-strip.js";
+import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import {
   collectResponsesOutputText,
   mergeResponsesToolCalls,
@@ -48,6 +55,7 @@ import { stageAuth } from "../stages/auth.js";
 import { stageParseBody } from "../stages/parse-body.js";
 import { stageSessionResetPreHook } from "../stages/session-reset-pre-hook.js";
 import { stageSessionResetConfirmation } from "../stages/session-reset-confirmation.js";
+import { stageMemCommandIntercept } from "../stages/mem-command-intercept.js";
 import { countHumanTurnsResponses } from "../../turnSeq.js";
 import { stageCredit } from "../stages/credit.js";
 import { resolveModelId } from "../../pricing.js";
@@ -98,6 +106,7 @@ import {
 } from "../stages/stream-finalize.js";
 import { stagePrewarmInjection } from "../stages/prewarm-injection.js";
 import { stageAssetCapabilities } from "../stages/asset-capabilities.js";
+import { stageTeamMemorySwitch } from "../stages/team-memory-switch.js";
 import { stageSessionBypass } from "../stages/session-bypass.js";
 import { stageSessionInitOrchestrate } from "../stages/session-init-orchestrate.js";
 import { buildMemResponse } from "../../mem-command/response-builder.js";
@@ -435,14 +444,7 @@ async function triggerWorkbuddyArchiveHooks(
  *   - 都缺失         → 返回 undefined（langfuse 侧不写 input 字段）
  */
 function buildWorkbuddyLangfuseInput(body: Record<string, unknown>): unknown {
-  const hasInput = Array.isArray(body.input);
-  const hasInstructions =
-    typeof body.instructions === "string" && (body.instructions as string).length > 0;
-  if (!hasInput && !hasInstructions) return undefined;
-  if (hasInput && hasInstructions) {
-    return { input: body.input, instructions: body.instructions };
-  }
-  return hasInput ? body.input : { instructions: body.instructions };
+  return buildSafeTraceRequestBody(body);
 }
 
 function buildUpstreamHeaders(c: Context, config: ProxyConfig): Record<string, string> {
@@ -476,6 +478,12 @@ async function forwardToUpstream(
   lf: LangfuseTurnContext | null,
   archiveCtx: WorkbuddyArchiveCtx | null = null,
   sessionTurn: PendingSessionTurn | null = null,
+  /**
+   * v3.3 user-session-default: 命中账户默认时, Proxy 在客户端响应最前面插的
+   * ✅ 绑定提示文本(markdown)。null = 不插(非命中默认 / 后续轮次 / aux)。
+   * 实现见 pipeline/runners/default-binding-notice.ts。
+   */
+  defaultBindingNotice: string | null = null,
 ): Promise<Response> {
   // ── Per-agent upstream override ──
   // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
@@ -563,6 +571,8 @@ async function forwardToUpstream(
 
   // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
   pipe.forwardStart(upstreamUrl);
+  const traceRequestBody = buildSafeTraceRequestBody(body);
+  writeRequestLog(config, body, traceId, c.req.header("x-request-id"));
 
   // ── Opik: create trace (bug B7 fix 迁移时丢失, 本次补回) ──────────────────
   // 与 codex.ts / anthropic.ts 对齐。⚠️ 必须用**独立的 v7 UUID** 作 Opik
@@ -577,7 +587,7 @@ async function forwardToUpstream(
       projectName: obsProjectName,
       name: `${modelId} / ${obsProjectName}`,
       startTime,
-      input: { messages: inputMessages },
+      input: { messages: inputMessages, request: traceRequestBody },
       tags: lf?.tags ?? [],
       forkProjectName: "request_log",
       forkMetadata: {
@@ -626,7 +636,7 @@ async function forwardToUpstream(
   }
 
   // Bug B9 fix: 老 wb 无 AbortSignal.timeout, 上游卡死 fetch 永久 hang
-  const wbForwardTimeoutMs = config.server?.forwardTimeoutMs ?? 600_000;
+  const wbForwardTimeoutMs = config.server?.forwardTimeoutMs ?? 3_600_000;
 
   let upstreamResp: Response;
   try {
@@ -650,6 +660,7 @@ async function forwardToUpstream(
       try {
         langfuseReportFailure({
           lf,
+          requestId: traceId,
           model: modelId,
           startTime,
           endTime: new Date().toISOString(),
@@ -677,12 +688,15 @@ async function forwardToUpstream(
   const isSSE = contentType.includes("text/event-stream");
 
   pipe.forwardDone(upstreamResp.status, upstreamResp.headers.get("x-request-id") ?? undefined);
+  await logPipelineUpstreamError(pipe, upstreamResp);
 
   // 上游 4xx/5xx → langfuse failure 上报（body 已被上游消费，不重读，避免破坏流）
   if (lf && upstreamResp.status >= 400) {
     try {
       langfuseReportFailure({
         lf,
+        requestId: traceId,
+        upstreamRequestId,
         model: modelId,
         startTime,
         endTime: new Date().toISOString(),
@@ -729,7 +743,7 @@ async function forwardToUpstream(
         text: outputText,
         toolCalls: [...toolCalls.values()],
         usage: usage ?? {},
-      }, pipe);
+      }, pipe, preparedStats);
     }
     if (usage && Object.keys(usage).length > 0) {
       writeLog(config, {
@@ -772,7 +786,19 @@ async function forwardToUpstream(
       preparedStats,
       createCfqStripObserver(pipe),
     );
-    return new Response(clientResponseText, {
+    // v3.3 user-session-default: 命中账户默认时在 output[] 前面插 ✅ 绑定提示 message。
+    let finalResponseText = clientResponseText;
+    if (defaultBindingNotice) {
+      try {
+        const parsed = JSON.parse(clientResponseText);
+        const patched = prependNoticeToResponsesJson(parsed, defaultBindingNotice);
+        finalResponseText = JSON.stringify(patched);
+      } catch {
+        // 非 JSON (理论上不会) → 原样返回, 丢 notice 但不破坏响应
+      }
+    }
+    pipe.responseDone(usage ?? null);
+    return new Response(finalResponseText, {
       status: upstreamResp.status,
       headers: respHeaders,
     });
@@ -782,14 +808,19 @@ async function forwardToUpstream(
   // are tapped for credit only.
   if (!upstreamResp.body || (!lf && skipCreditReport)) {
     // 不 tap 也要剥离：注入与否跟观测无关，客户端校验一样会拒。
+    // v3.3: 若命中账户默认, 同样在最前面插 ✅ 绑定提示 (流式)。
+    const stripped = upstreamResp.body
+      ? upstreamResp.body.pipeThrough(createCfqStripStream(
+          "responses",
+          preparedStats,
+          createCfqStripObserver(pipe),
+        ))
+      : null;
+    const clientStream = stripped
+      ? prependNoticeToResponsesStream(stripped, defaultBindingNotice)
+      : null;
     return new Response(
-      upstreamResp.body
-        ? upstreamResp.body.pipeThrough(createCfqStripStream(
-            "responses",
-            preparedStats,
-            createCfqStripObserver(pipe),
-          ))
-        : null,
+      clientStream,
       {
         status: upstreamResp.status,
         headers: respHeaders,
@@ -798,7 +829,16 @@ async function forwardToUpstream(
   }
 
   // SSE + langfuse: tee & tap
-  const [passStream, tapStream] = upstreamResp.body.tee();
+  const observedStream = withStreamIdleWarning(upstreamResp.body, {
+    spaceId,
+    traceId,
+    requestId: traceId,
+    upstreamRequestId,
+    model: modelId,
+    protocol: "responses",
+    branch: "upstream_body",
+  });
+  const [passStream, tapStream] = observedStream.tee();
   void consumeWorkbuddyStream(tapStream, {
     startTime,
     modelId,
@@ -821,12 +861,17 @@ async function forwardToUpstream(
   });
 
   // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
-  return new Response(
+  // v3.3: 命中账户默认时在客户端那份流前面插 ✅ 绑定提示事件。
+  const clientStream = prependNoticeToResponsesStream(
     passStream.pipeThrough(createCfqStripStream(
       "responses",
       preparedStats,
       createCfqStripObserver(pipe),
     )),
+    defaultBindingNotice,
+  );
+  return new Response(
+    clientStream,
     {
       status: upstreamResp.status,
       headers: respHeaders,
@@ -882,7 +927,7 @@ interface WorkbuddyTapContext {
  * Runs asynchronously without blocking the downstream response.
  *
  * 关键机制（对齐 codex 但保留 workbuddy 现有 try/finally 风格）：
- *   - 5 分钟兜底 setTimeout：客户端断开或上游卡住不释放时强制收尾一次
+ *   - 上游流生命周期由 server.forwardTimeoutMs 的 AbortSignal 统一约束
  *   - toolUseCount 累积：Responses API 里 `response.output_item.done` +
  *     `item.type==="function_call"` 计一次工具调用；透传给 skill 归档做
  *     round 边界判据
@@ -905,23 +950,6 @@ async function consumeWorkbuddyStream(
   // 与 completed 会重复给出同一条，Map 去重后以终态为准。
   const toolCalls = new Map<string, UpstreamToolCall>();
   const replyAssembler = ctx.sessionTurnCtx ? new ResponsesAssembler() : null;
-
-  // P: 5 分钟超时兜底。上游或客户端断链可能让 reader.read() 一直挂起，
-  // 用 setTimeout 强制 cancel，避免 tap coroutine 泄漏。用 flag 而不是
-  // 直接 throw，因为 fetch 的 ReadableStream cancel 会让主循环自然退出。
-  let streamCompleted = false;
-  const timeoutHandle = setTimeout(() => {
-    if (!streamCompleted) {
-      ctx.pipe.error(
-        "STREAM_TIMEOUT",
-        new Error("Workbuddy stream reading exceeded 5 minutes"),
-      );
-      // 主动 cancel reader，读循环会因此收到 done=true 或 error 退出
-      void reader.cancel().catch(() => {
-        /* best-effort */
-      });
-    }
-  }, 5 * 60 * 1000);
 
   try {
     for (;;) {
@@ -978,8 +1006,6 @@ async function consumeWorkbuddyStream(
   } catch (err) {
     ctx.pipe.info("WORKBUDDY_STREAM_ERR", err instanceof Error ? err.message : String(err));
   } finally {
-    streamCompleted = true;
-    clearTimeout(timeoutHandle);
     try {
       reader.releaseLock();
     } catch {
@@ -1003,7 +1029,7 @@ async function consumeWorkbuddyStream(
       text: assistantText,
       toolCalls: [...toolCalls.values()],
       usage: usage ?? {},
-    }, ctx.pipe);
+    }, ctx.pipe, ctx.preparedStats);
   }
   if (usage && Object.keys(usage).length > 0) {
     // wb 老行为: writeLog(usage) 无 gate 恒写 (与 codex 对齐, 避免任何 preset 档位让 wb 停写)
@@ -1046,6 +1072,8 @@ async function consumeWorkbuddyStream(
       // R: 用结构化 input 上报（body.input + instructions），便于 langfuse UI 排障
     langfuseReportGeneration({
       traceId: ctx.lf.traceId,
+      requestId: ctx.traceId,
+      upstreamRequestId: ctx.upstreamRequestId,
       name: `workbuddy:${ctx.modelId}`,
       model: ctx.modelId,
       startTime: ctx.startTime,
@@ -1133,6 +1161,7 @@ async function consumeWorkbuddyStream(
       },
     );
   }
+  ctx.pipe.streamDone(usage && Object.keys(usage).length > 0 ? usage : null);
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
@@ -1159,6 +1188,7 @@ export async function runWorkbuddyPipeline(
 ): Promise<Response> {
   const traceId = uuidv7();
   const startTime = new Date().toISOString();
+  const requestStartMono = performance.now();
   const path = c.req.path;
 
   // ── 1. Auth (via shared stageAuth) ───────────────────────────────────
@@ -1245,7 +1275,13 @@ export async function runWorkbuddyPipeline(
   if (typeof body.model === "string" && modelId !== requestedModel) {
     body.model = modelId;
   }
-  const pipe = createPipeline(config, traceId, modelId);
+  const pipe = createPipeline(config, traceId, modelId, {
+    spaceId: _wbSpaceIdForGate,
+    protocol: "responses",
+    startedAt: startTime,
+    startedMono: requestStartMono,
+  });
+  pipe.requestReceived(Array.isArray(body.input) ? body.input.length : 0, body.stream !== false);
 
   // ── 5. Aux passthrough ───────────────────────────────────────────────────
   if (isAuxiliary) {
@@ -1305,11 +1341,29 @@ export async function runWorkbuddyPipeline(
   let injectionSkipped = false;
   /** session-init 状态机在本轮完成注册 —— 本轮不触发 client_tool skill 加载。 */
   let sessionJustRegistered = false;
+  /**
+   * v3.3 user-session-default: 命中账户默认时, 由 session-init 填充的用户可见
+   * 绑定提示文本 (markdown)。runner 层把它作为参数传给 forwardToUpstream,
+   * 后者在响应最前面插入(非流式改 output[], 流式插 output_text 事件组)。
+   */
+  let defaultBindingNotice: string | null = null;
   let cachedAgentDetail: unknown = null;
   let cachedTaskDetail: unknown = null;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamIdShort: string; taskName?: string | null; bypassed?: boolean } | null = null;
+  // injectionSkipped is finalized once teamMemoryEnabled is known (a few lines below).
 
   const input = Array.isArray(body.input) ? body.input : [];
+
+  // Instance-level team_memory master switch. Flipping to "0" at Core bypasses
+  // session_init + mem commands + injection; cost-guard / credit / forward
+  // untouched. See MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md §6.
+  const teamMemoryEnabled = await stageTeamMemorySwitch({
+    config, spaceId, userKey: callerUserKey, userId,
+  });
+  if (!teamMemoryEnabled) {
+    console.log(`[team-memory-switch] disabled: spaceId=${spaceId} user=${userId} → team memory off (workbuddy)`);
+    injectionSkipped = true;
+  }
 
   // ── mem:session-reset pre-hook (via shared stage) ──
   // wb 用 `codex:${sessionKey}` 作 compositeKey (workbuddy agent 复用 codex adapter/state)
@@ -1319,13 +1373,12 @@ export async function runWorkbuddyPipeline(
     const _resetResp = await stageSessionResetPreHook({
       c, config, body: body as Record<string, unknown>, agentSource, sessionKey, spaceId, userId,
       isAuxiliary: false, dshHeadless: false, isStream,
-      protocol: "responses", userText, enabled: true,
+      protocol: "responses", userText, enabled: teamMemoryEnabled,
       compositeKeyOverride: `codex:${sessionKey}`,
     });
     if (_resetResp) return _resetResp;
   }
-
-  if (config.sessionInit?.enabled && sessionId) {
+  if (config.sessionInit?.enabled && sessionId && teamMemoryEnabled) {
     try {
       // Round 18: session-init 主编排走 shared stageSessionInitOrchestrate;
       // workbuddy 4 个 callback:
@@ -1388,6 +1441,8 @@ export async function runWorkbuddyPipeline(
             teamPage: initResult.formData.teamPage ?? 0,
             agentPage: initResult.formData.agentPage ?? 0,
             taskPage: initResult.formData.taskPage ?? 0,
+            // v3.3: 账户默认失效原因透传给 codex form（workbuddy 借用 codex builder）。
+            notice: initResult.formData.notice,
             stream: isStream,
             modelId: initResult.formData.modelId ?? (modelId as string),
           });
@@ -1477,6 +1532,14 @@ export async function runWorkbuddyPipeline(
       cachedTaskDetail = initResult.taskDetail ?? null;
 
       if (initResult.justRegistered) sessionJustRegistered = true;
+
+      // v3.3 user-session-default: 命中账户默认时, 把绑定提示捞出来传给 forwardToUpstream。
+      // 只在 justRegistered 的那一次插; 后续轮次 initResult.defaultBindingNotice 为 null。
+      if (initResult.justRegistered && (initResult as any).defaultBindingNotice) {
+        defaultBindingNotice = (initResult as any).defaultBindingNotice as string;
+        console.log(`[session-init] session=${sessionKey} default-binding-notice staged (len=${defaultBindingNotice.length})`);
+      }
+
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
@@ -1515,121 +1578,59 @@ export async function runWorkbuddyPipeline(
     });
   }
 
-  // ── 8. mem-command intercept ────────────────────────────────────────────
+  // ── 8. mem-command intercept (via shared stage) ─────────────────────────
+  // 迁移说明: 本块原为 ~130 行 inline 实现 (解析 / 执行 / L0 / skill / langfuse
+  // 各自手写一遍), 与 CC/CB/Codex 的 `stageMemCommandIntercept` 分家。分家的代价
+  // 是: 新增 mem 命令要改多处, 且 wb 独有的 extractUserText 边界问题无法被
+  // 其他客户端的修复覆盖 —— 用户实测 `mem:config-lock` / `mem:config-unlock`
+  // 在 wb 上被透传给 LLM (LLM 只能瞎编回复), 而 CC/CB/Codex 正常。
+  //
+  // 现在统一走 stage:
+  //   - protocol="responses" + userText → stage 内部用 parseCommandFromText,
+  //     正是 Responses API (body.input[]) 的正确解析路径;
+  //   - assistantContentFormat="responses-message" → 命令响应按 Responses 形态渲染;
+  //   - langfuseCtx 复用 wb 已构造的 lf, 保持 traceId 空间不变;
+  //   - upstreamProtocol="openai" 保留 wb 独有语义 (主链路上游走 chat/completions,
+  //     与 protocol="responses"(仅用于渲染响应骨架) 无关)。
   {
-    const userText = workbuddyAdapter.extractUserText(input);
-    if (userText) {
-      const { parseCommandFromText, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } =
-        await import("../../mem-command/index.js");
-      // ⚠️ 不用 parseMemCommand(body, "workbuddy") —— 它只解 body.messages[] (CC/CB 形态),
-      // WorkBuddy 用的是 Responses API (body.input[])，传进去永远返 null → 命令静默透传给 LLM。
-      // 改用 parseCommandFromText(userText) 直接解析用户文本。对齐 codexHandler 的做法。
-      let memCmd = parseCommandFromText(userText);
-      // session-reset 已由 pre-hook 处理，跳过防止重复执行
-      if (memCmd?.command === "session-reset") memCmd = null;
-      if (memCmd) {
-        if (!sessionInfo || injectionSkipped) {
-          const errText = `⚠️ 会话未初始化，命令不可用。请先完成 session 初始化（选择 Team/Agent）后重试。`;
-          const errResponse = buildMemResponse(errText, {
-            protocol: "responses",
-            stream: isStream,
-            requestId: `mem-cmd-${Date.now()}`,
-          });
-          console.log(
-            `[workbuddy] mem-command cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} blocked: session not initialized`,
-          );
-          return errResponse;
-        }
-        pipe.info("WORKBUDDY_MEM_CMD", `mem command intercepted: ${memCmd.command}`);
-        const memResult = await executeMemCommand(memCmd, {
-          sessionKey,
-          agentSource: "workbuddy",
-          config,
-          spaceId,
-          userId: userId || "",
-          apiKey: apiKey || "",
-          sessionInfo: sessionInfo as Record<string, unknown>,
-          // ⚠️ WorkBuddy 走 Responses API，与 codex 同协议。传 "responses"，
-          // executeMemCommand 内部会用对应的 responses SSE 骨架渲染命令响应。
-          protocol: "responses",
-          stream: isStream,
-          args: memCmd.args,
-          // task 命令族用最近对话生成草稿。Responses API body.input[] 结构：
-          //   { type:"message", role, content:[{type:"input_text"|"output_text", text}] }
-          // extractSimpleMessages 已内置对该形态的识别，转成 {role, content} 极简格式。
-          bodyMessages: extractSimpleMessages(input),
-          // 方案 D：taskDraft LLM 跟随主模型 —— workbuddy 固定 agent，上游复用 per-agent url
-          model: modelId,
-          upstreamUrl: config.upstream.agents?.["workbuddy"]?.url || config.upstream.url,
-          // ⚠️ workbuddy 客户端主链路的 upstream 走 OpenAI chat/completions
-          // (path 结尾: /workbuddy/<id>/chat/completions), 与 ctx.protocol="responses"
-          // 无关 (那个只用来渲染响应 SSE 骨架)。
-          upstreamProtocol: "openai",
-        });
-
-        // ── TDAI L0 write + Skill extraction (fire-and-forget) ──
-        // 对齐 codexHandler 的 mem-command 后归档逻辑: 命令执行结果不阻塞响应,
-        // 异步触发 L0 write + skill 提取 + langfuse 上报。
-        //
-        // assistantText 用 memResult.messageText (proxy 给用户的命令响应), 不是
-        // userText (用户输入的命令) —— L0 write 把"用户问了什么 / 系统答了什么"
-        // 配对写入, 用 userText 当 assistant 会颠倒语义。
-        const memArchiveCtx = buildWorkbuddyArchiveCtx({
-          config,
-          sessionInfo,
-          injectionSkipped,
-          input,
-          sessionKey,
-          userId: userId || "",
-          callerUserKey,
-          assetCapabilities,
-        });
-        if (memArchiveCtx) {
-          void triggerWorkbuddyArchiveHooks(memArchiveCtx, memResult.messageText ?? "").catch((err: unknown) => {
-            pipe.info(
-              "WORKBUDDY_MEM_ARCHIVE_ERR",
-              err instanceof Error ? err.message : String(err),
-            );
-          });
-        }
-
-        // ── Langfuse report for mem-command ──
-        const endTime = new Date().toISOString();
-        try {
-          langfuseReportGeneration({
-            traceId: lf.traceId,
-            name: `workbuddy:${modelId}:mem-${memCmd.command}`,
-            model: modelId,
-            startTime: startTime,
-            endTime,
-            input: userText ?? undefined,
-            output: memResult.messageText ?? "OK",
-            usage: undefined,
-            traceName: lf.traceName,
-            userId: lf.userId,
-            sessionId: lf.sessionId,
-            instanceId: lf.instanceId,
-            tags: [...lf.tags, `mem_cmd:${memCmd.command}`],
-            traceInput: userText ?? undefined,
-            traceOutput: memResult.messageText ?? "OK",
-            observationMetadata: {
-              mem_command: memCmd.command,
-              protocol: "responses",
-            },
-          });
-        } catch (err: unknown) {
-          pipe.info(
-            "WORKBUDDY_MEM_LANGFUSE_ERR",
-            err instanceof Error ? err.message : String(err),
-          );
-        }
-
-        console.log(
-          `[workbuddy] mem-command cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} success=${memResult.success}`,
-        );
-        return memResult.response;
-      }
-    }
+    const { extractSimpleMessages } = await import("../../mem-command/index.js");
+    const memResp = await stageMemCommandIntercept({
+      enabled: teamMemoryEnabled,
+      body,
+      agentSource,
+      sessionKey,
+      sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
+      injectionSkipped,
+      sessionJustRegistered,
+      config,
+      spaceId,
+      userId: userId || "",
+      apiKey: apiKey || "",
+      callerUserKey: callerUserKey ?? undefined,
+      isStream,
+      protocol: "responses",
+      modelId: modelId as string,
+      upstreamUrl: config.upstream.agents?.["workbuddy"]?.url || config.upstream.url,
+      // Responses API: 从 body.input[] 提取的最后一条 user 文本 → parseCommandFromText。
+      // stage 在 protocol==="responses" 且 userText 非 undefined 时走这条解析链。
+      userText: workbuddyAdapter.extractUserText(input) ?? undefined,
+      messages: input,
+      createTdaiClientFn: createWorkbuddyTdaiClient,
+      bodyMessages: extractSimpleMessages(input),
+      assistantContentFormat: "responses-message",
+      startTime,
+      keyId,
+      assetCapabilities,
+      upstreamProtocol: "openai",
+      langfuseCtx: {
+        traceId: lf.traceId,
+        userId: lf.userId,
+        sessionId: lf.sessionId,
+        tags: lf.tags,
+        instanceId: lf.instanceId,
+      },
+    });
+    if (memResp) return memResp;
   }
 
   // ── 9. Asset injection (每轮都跑) ────────────────────────────────────────
@@ -1734,5 +1735,5 @@ export async function runWorkbuddyPipeline(
     seed: sessionTurnSeed,
     sessionInfo,
     authUserId: userId,
-  });
+  }, defaultBindingNotice);
 }

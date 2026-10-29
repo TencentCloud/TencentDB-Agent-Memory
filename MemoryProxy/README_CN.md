@@ -194,7 +194,7 @@ Anthropic Messages 客户端：
 | `ALL`  | `/skill-bridge/**` | 反向代理 MemoryCore skill HTTP 工具 |
 | `ALL`  | `/memory-bridge/**` | 反向代理 MemoryCore memory HTTP 工具 |
 | `POST` | `/v3/instance/proxy-destroy` | 运维口：实例销毁时清 COS 缓存 |
-| `GET/PUT/DELETE` | `/v3/admin/rate-limits` | 查询 / 修改实例 × 模型 TPM/QPM |
+| `GET/PUT/DELETE` | `/v3/admin/rate-limits` | 查询 / 修改全局、实例（所有模型）、实例 × 模型 TPM/QPM |
 | `GET`  | `/health` | 运行时健康检查（含 `storage.effective`） |
 | `GET`  | `/whoami` | API Key → keyId（纯文本，便于 curl） |
 

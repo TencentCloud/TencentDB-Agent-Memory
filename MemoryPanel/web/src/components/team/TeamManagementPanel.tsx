@@ -53,6 +53,7 @@ import CreateTeamDialog from './CreateTeamDialog';
 import CreateAgentDialog from './CreateAgentDialog';
 import AgentEditDialog from './AgentEditDialog';
 import DefaultAgentTemplateSection from './DefaultAgentTemplateSection';
+import SessionDefaultSection from './SessionDefaultSection';
 
 function errMsg(e: unknown): string {
   return getErrorMessage(e);
@@ -295,6 +296,13 @@ export default function TeamManagementPanel({
               teamName={activeTeam.name}
             />
           )}
+
+          {/* === 我的 Session 默认配置（v3.3；所有登录用户均可见，但仅配自己）===
+            PRD 70195170 (session 默认配置)：每次 Session Init 都要重复选 team/agent/task 影响
+            效率，在面板一次性设好默认，之后新 Session 直接命中跳过 4 阶段表单。
+            Core 侧 assertCallerIsOwner 守住：admin 也只能配自己的，不能代设成员。
+            放 Agent grid 之前，和「默认 Agent 模板」并列：都是对 Agents 面板的"预设"类配置。 */}
+          {showAgents && <SessionDefaultSection />}
 
           {/* === Agent grid === */}
           {showAgents && (
