@@ -1486,14 +1486,14 @@ export class WikiService {
 
 /** 极简 frontmatter 解析（取 title/type/description/locked），与 manager 一致风格。 */
 function parseFrontmatterMin(content: string): { title: string; type: string; description: string; locked: boolean } {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  const fmMatch = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/);
   const fm = fmMatch ? fmMatch[1] : "";
-  const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
-  const typeMatch = fm.match(/^type:\s*["']?(.+?)["']?\s*$/m);
+  const titleMatch = fm.match(/^title:[ \t]*["']?(.+?)["']?[ \t]*\r?$/m);
+  const typeMatch = fm.match(/^type:[ \t]*["']?(.+?)["']?[ \t]*\r?$/m);
   // description 由 ingest-v2 写入（见 engines/wiki/ingest-v2/frontmatter.ts），
   // 是页面的一句话概述——比标题更能说明内容，用于生成 wiki summary。
-  const descMatch = fm.match(/^description:\s*["']?(.+?)["']?\s*$/m);
-  const lockedMatch = fm.match(/^locked:\s*(true|false)\s*$/m);
+  const descMatch = fm.match(/^description:[ \t]*["']?(.+?)["']?[ \t]*\r?$/m);
+  const lockedMatch = fm.match(/^locked:[ \t]*(true|false)[ \t]*\r?$/m);
   return {
     title: titleMatch ? titleMatch[1].trim() : "",
     type: typeMatch ? typeMatch[1].trim().toLowerCase() : "",
@@ -1511,22 +1511,30 @@ function parseFrontmatterMin(content: string): { title: string; type: string; de
  * 字段（已是 true 也算 lockedInjected=false，因为没有改动）。
  */
 function injectLockedTrue(content: string): { content: string; lockedInjected: boolean } {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  const fmMatch = content.match(/^\uFEFF?---(\r?\n)([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!fmMatch) {
-    const wrapped = `---\nlocked: true\n---\n${content.startsWith("\n") ? content.slice(1) : content}`;
+    const body = content.startsWith("\r\n")
+      ? content.slice(2)
+      : content.startsWith("\n") ? content.slice(1) : content;
+    const wrapped = `---\nlocked: true\n---\n${body}`;
     return { content: wrapped, lockedInjected: true };
   }
-  const fmBody = fmMatch[1];
-  const lockedMatch = fmBody.match(/^locked:\s*(true|false)\s*$/m);
+  const eol = fmMatch[1];
+  const fmBody = fmMatch[2];
+  const lockedMatch = fmBody.match(/^locked:[ \t]*(true|false)[ \t]*(\r?\n|$)/m);
   if (lockedMatch) {
     if (lockedMatch[1] === "true") return { content, lockedInjected: false };
-    const newFmBody = fmBody.replace(/^locked:\s*(true|false)\s*$/m, "locked: true");
+    const newFmBody = fmBody.replace(
+      /^locked:[ \t]*(true|false)[ \t]*(\r?\n|$)/m,
+      "locked: true$2",
+    );
     return {
       content: content.replace(fmBody, newFmBody),
       lockedInjected: true,
     };
   }
-  const newFmBody = fmBody.endsWith("\n") ? `${fmBody}locked: true` : `${fmBody}\nlocked: true`;
+  const needsEol = fmBody.length > 0 && !fmBody.endsWith("\n") && !fmBody.endsWith("\r");
+  const newFmBody = `${fmBody}${needsEol ? eol : ""}locked: true`;
   return {
     content: content.replace(fmBody, newFmBody),
     lockedInjected: true,
