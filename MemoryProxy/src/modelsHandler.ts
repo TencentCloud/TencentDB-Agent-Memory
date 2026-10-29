@@ -59,5 +59,9 @@ export async function handleModels(c: Context, config: ProxyConfig): Promise<Res
 
   c.header("cache-control", "no-store");
   const pool = poolServiceFor(config);
-  return c.json(buildModelsResponse(config.creditPricing, pool.active ? [pool.serviceName] : []));
+  const extraIds = [
+    ...(pool.active ? [pool.serviceName] : []),
+    ...(config.upstream.models ?? []),
+  ];
+  return c.json(buildModelsResponse(config.creditPricing, extraIds));
 }
