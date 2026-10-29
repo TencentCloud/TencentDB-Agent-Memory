@@ -343,7 +343,7 @@ Core **不做协议转换**，只校验路径段和记录顶层字段，`message
 
 ID 类取值（含 body 中的 `subagent`）会成为路径的一段：非空、不超过 256 字节、不含 `/`、`\` 或控制字符、不等于 `.` / `..`。Core 不做 trim 和转义，不满足返回 `400`。本接口不做用户级鉴权，信任 Bearer + `x-tdai-service-id`。
 
-**请求体**（上限 **32 MiB**，可用环境变量 `MEMORY_SESSION_MAX_BODY_BYTES` 调整；其它接口仍为 1 MiB）
+**请求体**（上限 **32 MiB**，可用环境变量 `MEMORY_SESSION_MAX_BODY_BYTES` 调整；`/v2/offload/*` 默认同为 32 MiB，可用 `MEMORY_OFFLOAD_MAX_BODY_BYTES` 调整；其它接口默认 1 MiB）
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -1216,6 +1216,6 @@ InstanceUpstreamConfig v2 的 §6.D 接口：Proxy 拉该实例全量组配置�
 | 403 | Knowledge team_id mismatch | 归属不一致 |
 | 404 | Knowledge not found / MEMORY_PROMPT_NOT_FOUND / MEMORY_GENERATION_LOG_NOT_FOUND | 资源不存在 |
 | 409 | PROMPT_LIMIT_EXCEEDED | 超限 |
-| 413 | Request body exceeds N bytes limit | 请求体超限（session/add 默认 32 MiB，其它 1 MiB） |
+| 413 | Request body exceeds N bytes limit | 请求体超限（session/add 与 `/v2/offload/*` 默认 32 MiB，其它 1 MiB） |
 | 422 | unknown field: extra / missing field: model / field not allowed: user | session/add 记录字段不符合 cos-format.md |
 | 503 | Store not available / Storage not available / Session storage unavailable / Metadata service not available / GENERATION_LOG_STORE_UNAVAILABLE | 依赖不可用 |
