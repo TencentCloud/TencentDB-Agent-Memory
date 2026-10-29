@@ -21,6 +21,11 @@ import {
   readdirSync,
   statSync,
   existsSync,
+  closeSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  unlinkSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 
@@ -253,6 +258,28 @@ const RAW_READ_MAX = 50;
 const RAW_WRITE_MAX = 50;
 const PAGE_READ_MAX = 20;
 const PAGE_WRITE_MAX = 20;
+
+function writeJsonAtomic(filePath: string, value: unknown): void {
+  const directory = dirname(filePath);
+  const tempPath = join(directory, `.import-map.${randomUUID()}.tmp`);
+  mkdirSync(directory, { recursive: true });
+
+  let fd: number | undefined;
+  try {
+    fd = openSync(tempPath, "wx", 0o600);
+    writeFileSync(fd, JSON.stringify(value, null, 2), "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(tempPath, filePath);
+  } finally {
+    try {
+      if (fd !== undefined) closeSync(fd);
+    } finally {
+      if (existsSync(tempPath)) unlinkSync(tempPath);
+    }
+  }
+}
 
 /** wiki/ 下不允许 page/write 与 page/rm 触碰的结构性文件（去掉 .md 也算）。 */
 const PAGE_FORBIDDEN_REFS = new Set([
@@ -881,8 +908,7 @@ export class WikiService {
         }
       }
       file.providers[providerId] = map;
-      mkdirSync(dirname(p), { recursive: true });
-      writeFileSync(p, JSON.stringify(file, null, 2), "utf-8");
+      writeJsonAtomic(p, file);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger?.warn?.(`import-map write failed: ${msg}`);
