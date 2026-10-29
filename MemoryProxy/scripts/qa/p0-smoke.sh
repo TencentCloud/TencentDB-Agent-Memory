@@ -77,7 +77,7 @@ req "/claude-code/$SPACE/v1/messages" \
 if [[ "$HTTP_CODE" == "200" && -n "$BODY" ]]; then
   ok "P0-A1" "非 stream 转发 200 (body $(printf '%s' "$BODY" | wc -c) bytes)"
 else
-  bad "P0-A1" "期望 200，实际 $HTTP_CODE｜$(printf '%s' "$BODY" | head -c 150)"
+  bad "P0-A1" "期望 200，实际 ${HTTP_CODE}｜$(printf '%s' "$BODY" | head -c 150)"
 fi
 
 # P0-A2 合法 key + stream → 200 + SSE
@@ -98,7 +98,7 @@ code=$(printf '%s' "$out" | tail -1); body=$(printf '%s' "$out" | sed '$d')
 if [[ "$code" == "401" ]]; then
   ok "P0-A3" "非法 key → 401"
 else
-  bad "P0-A3" "期望 401，实际 $code｜$(printf '%s' "$body" | head -c 150)"
+  bad "P0-A3" "期望 401，实际 ${code}｜$(printf '%s' "$body" | head -c 150)"
 fi
 
 # P0-A4 空 Authorization → 401
@@ -107,7 +107,7 @@ req_noauth "/claude-code/$SPACE/v1/messages" \
 if [[ "$HTTP_CODE" == "401" ]]; then
   ok "P0-A4" "空 Authorization → 401"
 else
-  bad "P0-A4" "期望 401，实际 $HTTP_CODE｜$(printf '%s' "$BODY" | head -c 150)"
+  bad "P0-A4" "期望 401，实际 ${HTTP_CODE}｜$(printf '%s' "$BODY" | head -c 150)"
 fi
 
 # P0-A5 非 JSON body → 400
@@ -115,7 +115,7 @@ req_badjson "/claude-code/$SPACE/v1/messages"
 if [[ "$HTTP_CODE" == "400" ]] && printf '%s' "$BODY" | grep -qi "invalid json\|parse\|JSON"; then
   ok "P0-A5" "非 JSON → 400 + Invalid JSON"
 else
-  bad "P0-A5" "期望 400+Invalid JSON，实际 $HTTP_CODE｜$(printf '%s' "$BODY" | head -c 150)"
+  bad "P0-A5" "期望 400+Invalid JSON，实际 ${HTTP_CODE}｜$(printf '%s' "$BODY" | head -c 150)"
 fi
 
 # P0-A6 上游不可达 → 502

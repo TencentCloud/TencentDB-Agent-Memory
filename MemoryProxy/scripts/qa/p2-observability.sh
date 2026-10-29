@@ -201,7 +201,7 @@ n_wrl=$(
 )
 if printf '%s' "$n_wrl" | grep -q "openai-chat=1" && printf '%s' "$n_wrl" | grep -q "anthropic=1"; then
   if printf '%s' "$n_wrl" | grep -qE "codex=0"; then
-    skip "P2-T3" "writeRequestLog 覆盖: $n_wrl（codex/wb 缺, 与状态文档已知项一致）"
+    skip "P2-T3" "writeRequestLog 覆盖: ${n_wrl}（codex/wb 缺, 与状态文档已知项一致）"
   else
     ok "P2-T3" "writeRequestLog 全覆盖: $n_wrl"
   fi
