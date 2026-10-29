@@ -375,8 +375,23 @@ export class MetadataClient {
    *
    * 行为:
    *   - 已配置: 返回完整 entity
-   *   - 未配置: Core 侧返 entity_not_found (code=404), 本方法吞成 `null`
+   *   - 未配置: 返回 `null`
    *   - 其他异常 (网络 / 鉴权失败): 原样抛出, 由 caller 决定降级
+   *
+   * ── "未配置"在 Core 侧有两种表达, 必须都吞成 null ──────────────────────
+   *
+   *   1. envelope `{code:0, data:null}` —— **当前线上实际路径**。
+   *      Core router 直接 `return s.userSessionDefault.get(...)`, service 层
+   *      是 `?? null`, 未设置时返回 JS null。而 `fetch()` 对 `data == null`
+   *      **无条件抛** `unexpected null data`(见本文件 fetch 实现)。
+   *
+   *   2. envelope `code=404` (entity_not_found) —— 早期注释假设的形态,
+   *      保留兼容以防 Core 后续改口径。
+   *
+   * ⚠️ 只吞这两种。真正的网络 / 鉴权 / 500 必须照常抛出 —— 否则
+   *    resolveUserSessionDefault 会把"系统故障"和"用户没配默认"混成同一个
+   *    fallbackReason="get_failed": 既污染 ClickHouse 埋点(海量假 get_failed),
+   *    又掩盖真实故障。
    */
   async getUserSessionDefault(userId: string): Promise<UserSessionDefaultEntity | null> {
     try {
@@ -385,10 +400,11 @@ export class MetadataClient {
         { user_id: userId },
       );
     } catch (err) {
-      // Core 把 "未设置"表达为 envelope code=404 (entity_not_found);
-      // fetch() 层把它翻译成 Error 带 "404" 字样。
-      if (err instanceof Error && /\b404\b|entity_not_found/.test(err.message)) {
-        return null;
+      if (err instanceof Error) {
+        // 形态 1: 未配置 → Core 返 {code:0,data:null}, fetch 抛这个
+        if (err.message.includes("unexpected null data")) return null;
+        // 形态 2: 未配置 → envelope 404
+        if (/\b404\b|entity_not_found/.test(err.message)) return null;
       }
       throw err;
     }

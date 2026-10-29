@@ -37,6 +37,35 @@ export function applyPoolService(config: ProxyConfig, body: Record<string, unkno
   return { clientFacingModel: info.serviceName, routed: false };
 }
 
+const POOL_SKIP_REASONS: Record<string, string> = {
+  "tool-loop": "pinned",
+  "no-tools": "no-tools",
+  passthrough: "no-tools",
+  compression: "compression",
+  "plan-mode": "plan-mode",
+  "user-judge-latch": "user-judge",
+  "analyzer-unavailable": "analyzer-failed",
+  "pool-analyzer-skipped": "analyzer-skipped",
+};
+
+/**
+ * How the pool settled on this request's member, read off the extension's tags:
+ * `analyzer` (the pool analyzer picked it), `pinned` (tool loop reusing the
+ * turn's pick), or the reason the analyzer was bypassed. `retry:` prefixes a
+ * request whose member failed and was re-sent to the primary. Empty for
+ * requests the pool did not serve.
+ */
+export function poolRouteReason(tags: readonly string[], retried: boolean): string {
+  if (!tags.includes("route:pool")) return "";
+  const skip = tags.find((t) => t.startsWith("skip:"))?.slice("skip:".length);
+  const reason = tags.includes("upgrade:true")
+    ? "user-judge"
+    : skip === undefined
+      ? "analyzer"
+      : POOL_SKIP_REASONS[skip] ?? skip;
+  return retried ? `retry:${reason}` : reason;
+}
+
 /** 400 body for entrances that never route, or null when the request may proceed. */
 export function poolServiceRejection(config: ProxyConfig, model: unknown): Record<string, unknown> | null {
   const { serviceName } = poolServiceFor(config);

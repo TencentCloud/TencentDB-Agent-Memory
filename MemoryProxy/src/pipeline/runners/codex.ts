@@ -34,6 +34,10 @@ import { poolServiceRejection } from "../../pool-service.js";
 import { extractSpaceIdFromPath } from "../../credit-reporter.js";
 import { joinUrl } from "../../guard-adapter.js";
 import {
+  prependNoticeToResponsesStream,
+  prependNoticeToResponsesJson,
+} from "./default-binding-notice.js";
+import {
   prepareUpstreamRequest,
   notifyUpstreamResponse,
   type UpstreamToolCall,
@@ -43,6 +47,7 @@ import {
   createCfqStripObserver,
   stripCfqFromResponseText,
 } from "../../common/cfq-strip.js";
+import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import {
   collectResponsesOutputText,
   collectResponsesToolCalls,
@@ -68,6 +73,8 @@ import {
 } from "../../session/codex/form.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "../../common/codex-injection.js";
 import { log } from "../../report/log.js";
+import { buildSafeTraceRequestBody, writeRequestLog } from "../../requestLog.js";
+import { logPipelineUpstreamError } from "../../upstream-error-log.js";
 import {
   langfuseReportGeneration,
   langfuseReportFailure,
@@ -97,6 +104,7 @@ import {
 } from "../stages/stream-finalize.js";
 import { stagePrewarmInjection } from "../stages/prewarm-injection.js";
 import { stageAssetCapabilities } from "../stages/asset-capabilities.js";
+import { stageTeamMemorySwitch } from "../stages/team-memory-switch.js";
 import { stageSessionBypass } from "../stages/session-bypass.js";
 import { stageSessionInitOrchestrate } from "../stages/session-init-orchestrate.js";
 import {
@@ -300,6 +308,7 @@ export async function runCodexPipeline(
 ): Promise<Response> {
   const traceId = uuidv7();
   const startTime = new Date().toISOString();
+  const requestStartMono = performance.now();
   const path = c.req.path;
 
   // ── 1. Auth (via shared stageAuth) ─────────────────────────────────────
@@ -412,7 +421,13 @@ export async function runCodexPipeline(
     body.model = modelId;
   }
 
-  const pipe = createPipeline(config, traceId, modelId);
+  const pipe = createPipeline(config, traceId, modelId, {
+    spaceId: _spaceIdForGate,
+    protocol: "responses",
+    startedAt: startTime,
+    startedMono: requestStartMono,
+  });
+  pipe.requestReceived(Array.isArray(body.input) ? body.input.length : 0, body.stream !== false);
 
   // ── 5. Aux passthrough ─────────────────────────────────────────────────────
   if (isAuxiliary) {
@@ -483,6 +498,13 @@ export async function runCodexPipeline(
   let assetCapabilities: import("../../injection/types.js").AssetCapabilityFlags | undefined;
   let injectionSkipped = false;
   let sessionJustRegistered = false;
+  /**
+   * v3.3 user-session-default: 命中账户默认时, 由 session-init 填充的用户可见
+   * 绑定提示文本 (markdown)。见 session/user-default.ts。
+   * runner 层在响应最前面插一段 output_text 片段 / content block, 和 LLM 回复独立。
+   * null = 不插 (非命中默认 / 后续轮次 / bypass)。
+   */
+  let defaultBindingNotice: string | null = null;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   // 存 initResult 的 agent/task detail 供 § 9 注入阶段构造 <session_context>。
   // handleSessionInit 内部本会通过 messages[0] 塞进 session_context，但那份
@@ -494,6 +516,17 @@ export async function runCodexPipeline(
 
   const input = Array.isArray(body.input) ? body.input : [];
 
+  // Instance-level team_memory master switch. Flipping to "0" at Core bypasses
+  // session_init + mem commands + injection; cost-guard / credit / forward
+  // untouched. See MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md §6.
+  const teamMemoryEnabled = await stageTeamMemorySwitch({
+    config, spaceId, userKey: callerUserKey, userId,
+  });
+  if (!teamMemoryEnabled) {
+    console.log(`[team-memory-switch] disabled: spaceId=${spaceId} user=${userId} → team memory off (codex)`);
+    injectionSkipped = true;
+  }
+
   // ── mem:session-reset pre-hook (via shared stage) ──
   {
     const { codexAdapter } = await import("../../agent-adapters/codex.js");
@@ -501,7 +534,7 @@ export async function runCodexPipeline(
     const _resetResp = await stageSessionResetPreHook({
       c, config, body: body as Record<string, unknown>, agentSource, sessionKey, spaceId, userId,
       isAuxiliary: false, dshHeadless: false, isStream,
-      protocol: "responses", userText, enabled: true,
+      protocol: "responses", userText, enabled: teamMemoryEnabled,
     });
     if (_resetResp) return _resetResp;
   }
@@ -513,7 +546,7 @@ export async function runCodexPipeline(
   // 负责把 body.input[] 透传给 reqCtx.codexAnswerInput 让状态机自己识别 gate/MORE。
   // 首次 Default gate 命中会拿到 initResult.bypassReason === "default-gate", 由
   // 本 handler 返一次 Plan 模式提示；后续同 session 请求 bypass 稳态透传。
-  if (config.sessionInit?.enabled && sessionId) {
+  if (config.sessionInit?.enabled && sessionId && teamMemoryEnabled) {
     try {
       // Round 18: session-init 主编排走 shared stageSessionInitOrchestrate;
       // codex 4 个 callback:
@@ -567,6 +600,8 @@ export async function runCodexPipeline(
             teamPage: initResult.formData.teamPage ?? 0,
             agentPage: initResult.formData.agentPage ?? 0,
             taskPage: initResult.formData.taskPage ?? 0,
+            // v3.3: 账户默认失效原因透传给 codex form（同 WB/DSH/opencode 段）。
+            notice: initResult.formData.notice,
             // Override stream with 当前请求的 stream flag (form 建时的值可能过期)
             stream: isStream,
             modelId: initResult.formData.modelId ?? (modelId as string),
@@ -600,6 +635,15 @@ export async function runCodexPipeline(
       }
 
       if (initResult.justRegistered) sessionJustRegistered = true;
+
+      // v3.3 user-session-default: 命中账户默认时, Proxy 在首次响应最前面插一段
+      // 绑定提示。只在 justRegistered 的那一次插; 后续轮次 initResult.defaultBindingNotice
+      // 为 null, 不插。见 session/user-default.ts。
+      if (initResult.justRegistered && (initResult as any).defaultBindingNotice) {
+        defaultBindingNotice = (initResult as any).defaultBindingNotice as string;
+        console.log(`[session-init] session=${sessionKey} default-binding-notice staged (len=${defaultBindingNotice.length})`);
+      }
+
       // Bypass path → skip injection (via shared stageSessionBypass)
       const _bypassResult = stageSessionBypass({
         bypassed: !!initResult.bypassed,
@@ -707,7 +751,7 @@ export async function runCodexPipeline(
     if (userText) {
       const { extractSimpleMessages } = await import("../../mem-command/index.js");
       const memResp = await stageMemCommandIntercept({
-        enabled: true,
+        enabled: teamMemoryEnabled,
         body: body as Record<string, unknown>,
         agentSource: "codex", sessionKey,
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
@@ -868,7 +912,7 @@ export async function runCodexPipeline(
     seed: sessionTurnSeed,
     sessionInfo,
     authUserId: userId,
-  });
+  }, defaultBindingNotice);
 }
 
 // ── Archive context (skill/conversation/add + TDAI L0 write) ─────────────────
@@ -999,6 +1043,12 @@ async function forwardToUpstream(
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
   sessionTurn: PendingSessionTurn | null = null,
+  /**
+   * v3.3 user-session-default: 命中账户默认时, Proxy 在客户端响应最前面插的
+   * ✅ 绑定提示文本(markdown)。null = 不插(非命中默认 / 后续轮次 / aux)。
+   * 实现见 pipeline/runners/default-binding-notice.ts。
+   */
+  defaultBindingNotice: string | null = null,
 ): Promise<Response> {
   // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
   // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
@@ -1086,6 +1136,8 @@ async function forwardToUpstream(
     : null;
 
   pipe.forwardStart(upstreamUrl);
+  const traceRequestBody = buildSafeTraceRequestBody(body);
+  writeRequestLog(config, body, traceId, c.req.header("x-request-id"));
 
   // ── Opik: create trace (bug B7 fix 迁移时丢失, 本次补回) ──────────────────
   // 与 anthropic.ts / openai-chat.ts 对齐: 必须在 span 之前 create trace,
@@ -1101,7 +1153,7 @@ async function forwardToUpstream(
       projectName: obsProjectName,
       name: `${modelId} / ${obsProjectName}`,
       startTime,
-      input: { messages: inputMessages },
+      input: { messages: inputMessages, request: traceRequestBody },
       tags: lf?.tags ?? [],
       forkProjectName: "request_log",
       forkMetadata: {
@@ -1117,7 +1169,7 @@ async function forwardToUpstream(
 
   // Bug B9 fix (handler-audit): 老 codex 无 AbortSignal.timeout, 上游卡死时 fetch
   // 永久 hang, pod OOM 才终止。加超时兜底 (跟 openai-chat/anthropic 对齐)。
-  const forwardTimeoutMs = config.server?.forwardTimeoutMs ?? 600_000;
+  const forwardTimeoutMs = config.server?.forwardTimeoutMs ?? 3_600_000;
 
   // Bug B1 fix (handler-audit): 老 codex 完全不接 enforceRateLimit, 上游 quota 被
   // 打爆时无法保护自家运营账号。由 codex agent.stageGates.rateLimit 门控 (现走 full
@@ -1162,6 +1214,7 @@ async function forwardToUpstream(
       try {
         langfuseReportFailure({
           lf,
+          requestId: traceId,
           model: modelId,
           startTime,
           endTime: new Date().toISOString(),
@@ -1180,7 +1233,9 @@ async function forwardToUpstream(
     );
   }
 
+  const upstreamRequestId = upstreamResp.headers.get("x-request-id") ?? "";
   pipe.forwardDone(upstreamResp.status, upstreamResp.headers.get("x-request-id") ?? undefined);
+  await logPipelineUpstreamError(pipe, upstreamResp);
 
   // Log usage
   writeLog(config, {
@@ -1203,6 +1258,8 @@ async function forwardToUpstream(
       try {
         langfuseReportFailure({
           lf,
+          requestId: traceId,
+          upstreamRequestId,
           model: modelId,
           startTime,
           endTime: new Date().toISOString(),
@@ -1224,7 +1281,6 @@ async function forwardToUpstream(
 
   const responseHeaders = filterResponseHeaders(upstreamResp.headers);
   // 上游请求 id —— 跨系统追溯用：客户端拿到的 x-request-id → 我方 usage_logs → 上游日志。
-  const upstreamRequestId = upstreamResp.headers.get("x-request-id") ?? "";
   const contentType = upstreamResp.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
     const responseText = await upstreamResp.text();
@@ -1252,7 +1308,7 @@ async function forwardToUpstream(
         text: outputText,
         toolCalls,
         usage: usage ?? {},
-      }, pipe);
+      }, pipe, preparedStats);
     }
     if (usage && Object.keys(usage).length > 0) {
       writeLog(config, {
@@ -1305,7 +1361,20 @@ async function forwardToUpstream(
       preparedStats,
       createCfqStripObserver(pipe),
     );
-    return new Response(clientResponseText, {
+    // v3.3 user-session-default: 命中账户默认时, 把 ✅ 绑定提示作为**新的 message
+    // item** 插到 output[] 最前面(非流式)。json 解析失败或非标准结构时原样返回, 不破坏客户端。
+    let finalResponseText = clientResponseText;
+    if (defaultBindingNotice) {
+      try {
+        const parsed = JSON.parse(clientResponseText);
+        const patched = prependNoticeToResponsesJson(parsed, defaultBindingNotice);
+        finalResponseText = JSON.stringify(patched);
+      } catch {
+        // 非 JSON (理论上不该出现) → 保留原文, 丢掉 notice 但不破坏响应
+      }
+    }
+    pipe.responseDone(usage ?? null);
+    return new Response(finalResponseText, {
       status: upstreamResp.status,
       headers: responseHeaders,
     });
@@ -1319,14 +1388,19 @@ async function forwardToUpstream(
   const needTap = Boolean(lf) || Boolean(archiveCtx) || !skipCreditReport;
   if (!needTap || !upstreamResp.body) {
     // 不 tap 也要剥离：注入与否跟观测无关，客户端校验一样会拒。
+    // v3.3: 若命中账户默认, 同样在最前面插 ✅ 绑定提示。
+    const stripped = upstreamResp.body
+      ? upstreamResp.body.pipeThrough(createCfqStripStream(
+          "responses",
+          preparedStats,
+          createCfqStripObserver(pipe),
+        ))
+      : null;
+    const clientStream = stripped
+      ? prependNoticeToResponsesStream(stripped, defaultBindingNotice)
+      : null;
     return new Response(
-      upstreamResp.body
-        ? upstreamResp.body.pipeThrough(createCfqStripStream(
-            "responses",
-            preparedStats,
-            createCfqStripObserver(pipe),
-          ))
-        : null,
+      clientStream,
       {
         status: upstreamResp.status,
         headers: filterResponseHeaders(upstreamResp.headers),
@@ -1334,7 +1408,16 @@ async function forwardToUpstream(
     );
   }
 
-  const [rawClientStream, tapStream] = upstreamResp.body.tee();
+  const observedStream = withStreamIdleWarning(upstreamResp.body, {
+    spaceId,
+    traceId,
+    requestId: traceId,
+    upstreamRequestId,
+    model: modelId,
+    protocol: "responses",
+    branch: "upstream_body",
+  });
+  const [rawClientStream, tapStream] = observedStream.tee();
   consumeCodexStream(tapStream, {
     lf,
     modelId,
@@ -1360,12 +1443,19 @@ async function forwardToUpstream(
   });
 
   // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
-  return new Response(
+  // v3.3 user-session-default: 命中账户默认时, 在客户端那份流最前面插 ✅ 绑定
+  // 提示事件(Responses API output_item + text delta)。prepend 在 strip 之后,
+  // 原因与 openai-chat 相同: tap/strip 不感知 Proxy 自造事件, 日志/埋点干净。
+  const clientStream = prependNoticeToResponsesStream(
     rawClientStream.pipeThrough(createCfqStripStream(
       "responses",
       preparedStats,
       createCfqStripObserver(pipe),
     )),
+    defaultBindingNotice,
+  );
+  return new Response(
+    clientStream,
     {
     status: upstreamResp.status,
     headers: filterResponseHeaders(upstreamResp.headers),
@@ -1386,11 +1476,7 @@ export { countHumanTurnsResponses as countHumanTurnsCodex } from "../../turnSeq.
  * 补齐上下文（codex 的 system prompt 在 body.instructions 而非 input）。
  */
 function buildCodexLangfuseInput(body: Record<string, unknown>): unknown {
-  const out: Record<string, unknown> = { input: body.input };
-  if (typeof body.instructions === "string" && body.instructions.length > 0) {
-    out.instructions = body.instructions;
-  }
-  return out;
+  return buildSafeTraceRequestBody(body);
 }
 
 export interface CodexTapContext {
@@ -1458,18 +1544,9 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
     let stopReason: string | undefined;
     let streamCompleted = false;
     const replyAssembler = ctx.sessionTurnCtx ? new ResponsesAssembler() : null;
-    // 5 分钟兜底：客户端断开可能让上游流卡住，这里超时也强制收尾一次。
-    const timeoutHandle = setTimeout(() => {
-      if (!streamCompleted) {
-        pipe.error("STREAM_TIMEOUT", "Codex stream reading exceeded 5 minutes");
-        void completeStream().catch((err) => pipe.error("STREAM_TIMEOUT_COMPLETE", err));
-      }
-    }, 5 * 60 * 1000);
-
     async function completeStream(): Promise<void> {
       if (streamCompleted) return;
       streamCompleted = true;
-      clearTimeout(timeoutHandle);
 
       if (replyAssembler) {
         parseSseData(sseBuf).forEach((evt) => replyAssembler.push(evt));
@@ -1487,7 +1564,7 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
           text: outputText,
           toolCalls,
           usage,
-        }, pipe);
+        }, pipe, ctx.preparedStats);
       }
       if (ctx.config && Object.keys(usage).length > 0) {
         // codex 老行为: writeLog(usage) 无 gate 恒写 (B6 已在 pipeline 迁移时补齐,
@@ -1535,6 +1612,8 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
               : undefined;
           langfuseReportGeneration({
             traceId: lf.traceId,
+            requestId: ctx.traceId,
+            upstreamRequestId: ctx.upstreamRequestId,
             name: modelId,
             model: modelId,
             startTime,
@@ -1629,6 +1708,7 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
           pipe.error("CODEX_ARCHIVE", archiveErr instanceof Error ? archiveErr : new Error(String(archiveErr)));
         }
       }
+      pipe.streamDone(Object.keys(usage).length > 0 ? usage : null);
     }
 
     try {
