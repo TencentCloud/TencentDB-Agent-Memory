@@ -5,11 +5,9 @@ through the [TencentDB Agent Memory v2](https://github.com/TencentCloud/TencentD
 proxy for team memory: L3 persona, L2 scene index, L0 conversation capture, and
 on-demand L0/L1/L2 search.
 
-The plugin carries **only routing + a dynamic per-session `x-conversation-id`
-header**. All memory capability is delivered server-side by the proxy
-(injected into the system prompt and captured from the response). This keeps
-the extension minimal and keeps memory logic in one place. (Scope: routing +
-header; no client-side recall/capture.)
+The plugin supplies routing, a dynamic per-session `x-conversation-id` header,
+and six native read-only memory tools. The proxy still owns identity/scoping,
+L3/L2 injection and conversation capture; reads happen only when requested.
 
 ## Prerequisites
 
@@ -62,6 +60,49 @@ docker logs tdai-proxy --tail 30 2>&1 | grep -E "agentSource|write-l0|register d
 Expect `agentSource=pi`, `register directly`, and a `write-l0` line. If you see
 `agentSource=codebuddy` (or the default) or no `write-l0`, the base URL or
 identity headers are wrong.
+
+## Native memory reads
+
+With the `tdai` provider selected, Pi exposes `tdai_memory_search`,
+`tdai_atomic_query`, `tdai_conversation_search`, `tdai_conversation_query`,
+`tdai_scenario_ls` and `tdai_read_scene`. These call the existing Memory Bridge
+using the configured user key and the current Pi session. A historical
+`session_id` argument selects records; it does not replace the authenticating
+session header. Imported memory still requires the index's source `agent_id`
+and remains subject to server authorization.
+
+The tools send UTF-8 JSON bytes directly. This avoids a Windows Git Bash/native
+curl combination converting non-ASCII `-d` arguments to the active legacy code
+page. Changing only the Content-Type charset or using `curl.exe` does not fix
+that conversion. HTTP and HTTPS use the existing `TDAI_PROXY_URL`; HTTPS uses
+Node's normal certificate validation (including `NODE_EXTRA_CA_CERTS` supplied
+at process startup), with no embedded certificate paths or disabled validation.
+
+Restart Pi (or the Pi Web server process) after upgrading. In a new conversation,
+ask Pi to list scenes with `tdai_scenario_ls` and pass one exact returned path to
+`tdai_read_scene`. Verify the returned path matches and the body is readable.
+A missing body or mismatched path is an explicit error. Offline mode, network
+errors, cancellation and the 15-second deadline also report errors without
+silently falling back to curl.
+
+The existing server guidance still applies: at most three L0/L1 search calls
+per turn; L3 and the initial L2 index arrive through injection. Other clients
+without the native tools retain the server's curl instructions.
+
+### Synthetic encoding reproduction
+
+From `MemoryCore/pi-plugin` in Git Bash (Node 22+, Bash and curl on PATH):
+
+```bash
+node scripts/repro-utf8.mjs
+```
+
+The script sends only `场景/中文-路径.md` to an ephemeral loopback HTTP server,
+prints received byte sequences for inline JSON and UTF-8 stdin, then closes its
+server and child processes. It creates no files and uses no credentials or
+model. On an affected Windows toolchain the inline path differs while stdin
+matches; other toolchains may preserve both. Automated native-tool regression:
+`npm test` in this directory with the development dependencies available.
 
 ## Troubleshooting
 
