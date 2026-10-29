@@ -64,6 +64,7 @@ import { stageModelGate } from "../stages/model-gate.js";
 import { resolveAgentStrategy } from "../strategies/agent/index.js";
 import { enforceRateLimit, isRateLimitExceededError } from "../../rate-limit/guard.js";
 import { workbuddyAdapter } from "../../agent-adapters/workbuddy.js";
+import { sseDataValue } from "./anthropic.js";
 import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
@@ -961,8 +962,8 @@ async function consumeWorkbuddyStream(
       for (const frame of frames) {
         const dataLines = frame
           .split("\n")
-          .filter((l) => l.startsWith("data: "))
-          .map((l) => l.slice(6));
+          .map((l) => sseDataValue(l))
+          .filter((v): v is string => v !== undefined);
         if (dataLines.length === 0) continue;
         const payload = dataLines.join("\n");
         if (payload === "[DONE]") continue;
