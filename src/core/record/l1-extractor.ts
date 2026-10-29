@@ -56,6 +56,14 @@ export interface L1ExtractionResult {
   sceneNames: string[];
   /** Last scene name (for continuity in next extraction) */
   lastSceneName?: string;
+  /**
+   * Why the extraction failed (only set when `success` is false).
+   *
+   * Callers use this to distinguish a *failed* extraction (retryable — the L0
+   * batch must not be marked as processed) from a *valid empty* extraction
+   * (nothing worth remembering — the batch may be marked as processed).
+   */
+  failureReason?: string;
 }
 
 // ============================
@@ -151,7 +159,7 @@ export async function extractL1Memories(params: {
   // Step 1: LLM extraction (scene segmentation + memory extraction)
   let scenes: SceneSegment[];
   try {
-    scenes = await callLlmExtraction({
+    const outcome = await callLlmExtraction({
       newMessages,
       backgroundMessages,
       previousSceneName: options.previousSceneName,
@@ -160,10 +168,34 @@ export async function extractL1Memories(params: {
       model: options.model,
       llmRunner: options.llmRunner,
     });
+    if (!outcome.ok) {
+      // The model answered, but the answer could not be parsed into the expected
+      // scene/memory array (truncated output, prose instead of JSON, ...).
+      // This is a *failure*, not an empty extraction: the caller must not mark
+      // this L0 batch as processed, otherwise it is silently lost forever.
+      logger?.error(`${TAG} LLM extraction response is not usable: ${outcome.reason}`);
+      return {
+        success: false,
+        extractedCount: 0,
+        storedCount: 0,
+        records: [],
+        sceneNames: [],
+        failureReason: outcome.reason,
+      };
+    }
+    scenes = outcome.scenes;
     logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
   } catch (err) {
-    logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
-    return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
+    const reason = err instanceof Error ? err.message : String(err);
+    logger?.error(`${TAG} LLM extraction failed: ${reason}`);
+    return {
+      success: false,
+      extractedCount: 0,
+      storedCount: 0,
+      records: [],
+      sceneNames: [],
+      failureReason: `llm error: ${reason}`,
+    };
   }
 
   // Flatten all memories across scenes
@@ -291,6 +323,16 @@ export async function extractL1Memories(params: {
 // ============================
 
 /**
+ * Outcome of parsing the LLM's extraction response.
+ *
+ * `ok: false` means the response could not be turned into the expected
+ * scene/memory array — a failed extraction, not an empty one.
+ */
+type ExtractionParseOutcome =
+  | { ok: true; scenes: SceneSegment[] }
+  | { ok: false; reason: string };
+
+/**
  * Call LLM to extract scene-segmented memories from conversation messages.
  */
 async function callLlmExtraction(params: {
@@ -302,7 +344,7 @@ async function callLlmExtraction(params: {
   model?: string;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
-}): Promise<SceneSegment[]> {
+}): Promise<ExtractionParseOutcome> {
   const { newMessages, backgroundMessages, previousSceneName, config, logger, model, llmRunner } = params;
 
   const userPrompt = formatExtractionPrompt({
@@ -349,8 +391,12 @@ async function callLlmExtraction(params: {
 /**
  * Parse the LLM's JSON response into SceneSegment array.
  * Expected format: [{scene_name, message_ids, memories: [...]}]
+ *
+ * A response that cannot be parsed is reported as a failure (`ok: false`) so the
+ * caller can keep the L0 cursor where it is and retry the batch later. Only a
+ * *valid* response — including a valid but empty array — counts as success.
  */
-function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
+function parseExtractionResult(raw: string, logger?: Logger): ExtractionParseOutcome {
   try {
     // Strip markdown code block wrappers if present
     let cleaned = raw.trim();
@@ -367,7 +413,7 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       logger?.warn?.(
         `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
-      return [];
+      return { ok: false, reason: "no_json_array" };
     }
 
     // Sanitize control characters inside JSON string literals that LLM may produce
@@ -376,7 +422,7 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
 
     if (!Array.isArray(parsed)) {
       logger?.warn?.(`${TAG} Extraction response is not an array`);
-      return [];
+      return { ok: false, reason: "not_an_array" };
     }
 
     const scenes: SceneSegment[] = [];
@@ -401,10 +447,11 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       });
     }
 
-    return scenes;
+    return { ok: true, scenes };
   } catch (err) {
-    logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    const reason = err instanceof Error ? err.message : String(err);
+    logger?.warn?.(`${TAG} Failed to parse extraction result: ${reason}`);
+    return { ok: false, reason: `invalid_json: ${reason}` };
   }
 }
 

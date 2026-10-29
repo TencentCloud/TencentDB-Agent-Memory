@@ -246,6 +246,21 @@ async function _doInitStores(
 // ============================
 
 /**
+ * Raised when the L1 extraction of a batch failed.
+ *
+ * The pipeline manager treats a thrown runner error as a retryable failure:
+ * the message buffer is restored and the L1 idle timer is re-armed (bounded by
+ * the manager's retry limit). The L1 cursor is left untouched, so the failed
+ * L0 batch is re-read on the next attempt instead of being skipped forever.
+ */
+export class L1ExtractionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "L1ExtractionError";
+  }
+}
+
+/**
  * Create the standard L1 runner function.
  *
  * Reads L0 messages (from VectorStore DB or JSONL fallback), groups by sessionId,
@@ -287,7 +302,9 @@ export function createL1Runner(opts: {
 
     try {
       let groups: Array<{ sessionId: string; messages: ConversationMessage[] }>;
-      let maxRecordedAtMs = 0;
+      /** Per-group cursor (max recordedAt of the group's messages), used to
+       *  advance the L1 cursor only over the groups that were actually extracted. */
+      let groupCursorMs: number[] = [];
 
       if (vectorStore && !vectorStore.isDegraded()) {
         const l1Cursor = runnerState.last_l1_cursor > 0
@@ -303,12 +320,10 @@ export function createL1Runner(opts: {
             timestamp: m.timestamp,
           })),
         }));
-        // Compute max recordedAtMs across all groups for cursor advancement
-        for (const g of dbGroups) {
-          for (const m of g.messages) {
-            if (m.recordedAtMs > maxRecordedAtMs) maxRecordedAtMs = m.recordedAtMs;
-          }
-        }
+        // Compute max recordedAtMs per group for cursor advancement
+        groupCursorMs = dbGroups.map((g) =>
+          g.messages.reduce((max, m) => (m.recordedAtMs > max ? m.recordedAtMs : max), 0),
+        );
         logger.debug?.(`${TAG} [l1] L0 data source: VectorStore DB`);
       } else {
         logger.debug?.(`${TAG} [l1] L0 data source: JSONL files (VectorStore unavailable)`);
@@ -323,12 +338,10 @@ export function createL1Runner(opts: {
           sessionId: g.sessionId,
           messages: g.messages,
         }));
-        // Compute max recordedAtMs from JSONL groups
-        for (const g of jsonlGroups) {
-          for (const m of g.messages) {
-            if (m.recordedAtMs > maxRecordedAtMs) maxRecordedAtMs = m.recordedAtMs;
-          }
-        }
+        // Compute max recordedAtMs per group from JSONL groups
+        groupCursorMs = jsonlGroups.map((g) =>
+          g.messages.reduce((max, m) => (m.recordedAtMs > max ? m.recordedAtMs : max), 0),
+        );
       }
 
       if (groups.length === 0) {
@@ -344,8 +357,13 @@ export function createL1Runner(opts: {
       let totalExtracted = 0;
       let totalStored = 0;
       let lastSceneName: string | undefined;
+      /** Cursor of the last successfully extracted group (0 = nothing extracted yet). */
+      let extractedCursorMs = 0;
+      /** Set when a group failed — the batch must not be marked as processed. */
+      let failure: { sessionId: string; reason: string } | undefined;
 
-      for (const group of groups) {
+      for (let i = 0; i < groups.length; i++) {
+        const group = groups[i]!;
         logger.debug?.(
           `${TAG} [l1] Group sessionId=${group.sessionId || "(empty)"}: ${group.messages.length} messages`,
         );
@@ -371,15 +389,43 @@ export function createL1Runner(opts: {
           instanceId: getInstanceId?.(),
         });
 
+        if (!l1Result.success) {
+          // The extraction failed (LLM error or an unusable response). Stop here:
+          // the remaining groups are left untouched and the L1 cursor is not
+          // advanced past this group, so the whole batch is retried later
+          // instead of being silently dropped.
+          failure = {
+            sessionId: group.sessionId,
+            reason: l1Result.failureReason ?? "unknown extraction failure",
+          };
+          break;
+        }
+
         totalExtracted += l1Result.extractedCount;
         totalStored += l1Result.storedCount;
         if (l1Result.lastSceneName) {
           lastSceneName = l1Result.lastSceneName;
         }
+        extractedCursorMs = Math.max(extractedCursorMs, groupCursorMs[i] ?? 0);
       }
 
-      // Use maxRecordedAtMs (write time) as cursor — always positive, TCVDB-safe
-      await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
+      if (failure) {
+        // Keep the cursor at the last successfully extracted group so the failed
+        // batch (and everything after it) is re-read on the next L1 run.
+        if (extractedCursorMs > 0) {
+          await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, extractedCursorMs, lastSceneName);
+        }
+        const message =
+          `L1 extraction failed for session=${sessionKey} ` +
+          `(group sessionId=${failure.sessionId || "(empty)"}): ${failure.reason}. ` +
+          `L1 cursor kept at ${extractedCursorMs || runnerState.last_l1_cursor || 0} — ` +
+          `the batch will be retried instead of being skipped.`;
+        throw new L1ExtractionError(message);
+      }
+
+      // Use the recordedAt (write time) of the extracted messages as cursor —
+      // always positive, TCVDB-safe
+      await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, extractedCursorMs || undefined, lastSceneName);
       logger.info(
         `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`,
       );
