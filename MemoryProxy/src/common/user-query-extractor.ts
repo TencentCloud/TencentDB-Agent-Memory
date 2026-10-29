@@ -70,6 +70,74 @@ const CC_INTERNAL_PROMPT_PATTERNS: RegExp[] = [
   //     只应剥除自身、保留用户后续输入。
 ];
 
+const XML_WRAPPER_TAGS = [
+  "system-reminder", "system_reminder",
+  "additional_data",
+  "user_info",
+  "open_and_recently_viewed_files",
+  "session",
+  "persisted-output", "persisted_output",
+  "tool_use_error", "tool-use-error",
+  "tool_result", "tool-result",
+  // The proxy may prepend L1 recall inside a user-role message. It is
+  // context for the model, not text typed by the user.
+  "tdai_recalled_l1_memories",
+] as const;
+
+/**
+ * Extract non-overlapping exact-tag bodies in one pass.
+ *
+ * A lazy `/<tag>[\\s\\S]*?<\\/tag>/g` regex is linear for well-formed input,
+ * but an unclosed `<tag>` followed by many more openings makes the engine
+ * retry a near-full suffix from every opening. Tokenizing openings/closings
+ * first keeps malformed harness input linear.
+ */
+function extractExactTagContents(text: string, tag: string): string[] {
+  const events = new RegExp(`<${tag}>|<\\/${tag}>`, "gi");
+  const out: string[] = [];
+  let contentStart = -1;
+
+  for (const match of text.matchAll(events)) {
+    if (match[0].startsWith("</")) {
+      if (contentStart !== -1) {
+        const content = text.slice(contentStart, match.index).trim();
+        if (content) out.push(content);
+        contentStart = -1;
+      }
+    } else if (contentStart === -1) {
+      contentStart = match.index + match[0].length;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Remove paired XML wrappers without rescanning the remaining suffix for
+ * every unmatched opening. Nested same-name openings retain the old
+ * first-open/first-close behavior.
+ */
+function stripPairedTag(text: string, tag: string): string {
+  const events = new RegExp(`<${tag}[^>]*>|<\\/${tag}>`, "gi");
+  let openStart = -1;
+  let last = 0;
+  let out = "";
+
+  for (const match of text.matchAll(events)) {
+    if (match[0].startsWith("</")) {
+      if (openStart !== -1) {
+        out += text.slice(last, openStart);
+        last = match.index + match[0].length;
+        openStart = -1;
+      }
+    } else if (openStart === -1) {
+      openStart = match.index;
+    }
+  }
+
+  return last === 0 ? text : out + text.slice(last);
+}
+
 function isClaudeCodeInternalPrompt(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
@@ -107,13 +175,7 @@ export function extractUserQueryText(raw: string): string {
 
   // 1) 优先：显式 <user_query> 块（即便同一条消息里还夹着 session-init 问答，
   //    也只取真实 query，用户输入完整保留）。
-  const queries: string[] = [];
-  const re = /<user_query>([\s\S]*?)<\/user_query>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) {
-    const inner = m[1].trim();
-    if (inner) queries.push(inner);
-  }
+  const queries = extractExactTagContents(raw, "user_query");
   if (queries.length > 0) return queries.join("\n\n");
 
   // 2) 没有显式 user_query：剥离所有"非用户键入"的内容片段，保留剩余的
@@ -122,7 +184,7 @@ export function extractUserQueryText(raw: string): string {
   let text = raw;
 
   // 2a) session-init 表单回答 <question_answer>...</question_answer>
-  text = text.replace(/<question_answer[^>]*>[\s\S]*?<\/question_answer>/gi, "");
+  text = stripPairedTag(text, "question_answer");
 
   // 2b) XML 包裹类：CC / CodeBuddy 塞进 user role 的各种 harness 段
   //     - system-reminder / system_reminder（两种拼写都覆盖）
@@ -132,21 +194,7 @@ export function extractUserQueryText(raw: string): string {
   //     - session（proxy 自己注入的 session context 包裹）
   //     - persisted-output（CC "Output too large" 大文件占位）
   //     - tool_use_error / tool-use-error / tool-result / tool_result（伪 wrapper）
-  for (const tag of [
-    "system-reminder", "system_reminder",
-    "additional_data",
-    "user_info",
-    "open_and_recently_viewed_files",
-    "session",
-    "persisted-output", "persisted_output",
-    "tool_use_error", "tool-use-error",
-    "tool_result", "tool-result",
-    // The proxy may prepend L1 recall inside a user-role message. It is
-    // context for the model, not text typed by the user.
-    "tdai_recalled_l1_memories",
-  ]) {
-    text = text.replace(new RegExp(`<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`, "gi"), "");
-  }
+  for (const tag of XML_WRAPPER_TAGS) text = stripPairedTag(text, tag);
 
   // 2c) 行级过滤：单行匹配的 tool 回显 / 文件片段 / memory frontmatter
   //     每条规则单行判定，匹配则删除该行；不阻断其它行的用户输入。
