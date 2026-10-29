@@ -125,6 +125,59 @@ export function getGlobalLlmConcurrency(env: NodeJS.ProcessEnv = process.env): n
   return clamp(Number.isNaN(raw) ? 5 : raw, 1, 20);
 }
 
+/**
+ * 单文件·文本档大小上限（字节）。
+ * WIKI_TEXT_FILE_MAX_BYTES，默认 512KB，clamp 1KB~100MB。
+ *
+ * 变量名不加 `KNOWLEDGE_` 前缀：标准部署下 Panel 与 Knowledge 同处 memory-hub 容器、
+ * 共用同一份 .env（deploy/global-images/start-memory-hub.sh），两端同名才不会
+ * 出现「Panel 放行、KS 拒绝」的割裂。
+ */
+export function getWikiTextFileMaxBytes(): number {
+  return clamp(envInt("WIKI_TEXT_FILE_MAX_BYTES", 512 * 1024), 1024, 100 * 1024 * 1024);
+}
+
+/**
+ * 单文件·富文档档大小上限（字节），覆盖 docx/xlsx/pptx/pdf 等。
+ * WIKI_BINARY_FILE_MAX_BYTES，默认 10MB，clamp 1KB~200MB。
+ *
+ * KS service 层的落盘兜底上限同样取此值（不区分扩展名），避免出现语义重复的配置项。
+ * 按格式的精确校验在路由层 `maxBytesOf()` 完成（含逐 ext 覆盖）。
+ */
+export function getWikiBinaryFileMaxBytes(): number {
+  return clamp(envInt("WIKI_BINARY_FILE_MAX_BYTES", 10 * 1024 * 1024), 1024, 200 * 1024 * 1024);
+}
+
+/**
+ * 单格式大小上限的**覆盖表**（可选）。
+ *
+ * 默认按档位取（`WIKI_TEXT_FILE_MAX_BYTES` / `WIKI_BINARY_FILE_MAX_BYTES`），
+ * 部署方可对某一种格式单独设限，格式：`WIKI_FILE_MAX_BYTES__<EXT>=<字节数>`。
+ * 例：`WIKI_FILE_MAX_BYTES__PDF=20971520` → pdf 放宽到 20MB。
+ *
+ * 扩展名大小写不敏感（统一转小写匹配），未配置的格式回落到档位默认值。
+ * clamp 1KB~200MB，非法值（非数字/越界）按档位默认处理，不阻断启动。
+ *
+ * 与档位上限共用 `WIKI_` 前缀：两端同处 memory-hub 容器共用一份 .env，
+ * 命名规则一致才不会出现「Panel 放行、KS 拒绝」的割裂。
+ */
+export function getWikiFileMaxBytesOverrides(): Record<string, number> {
+  const out: Record<string, number> = {};
+  const prefix = "WIKI_FILE_MAX_BYTES__";
+  for (const [key, val] of Object.entries(process.env)) {
+    if (!key.startsWith(prefix) || val === undefined || val === "") continue;
+    const ext = key.slice(prefix.length).trim().toLowerCase();
+    // 去掉可能存在的点号（允许 WIKI_FILE_MAX_BYTES__PDF 或 ...__pdf）
+    if (!/^[a-z0-9]+$/.test(ext.replace(/^\./, ""))) continue;
+    const n = parseInt(val, 10);
+    if (Number.isNaN(n)) continue;
+    const normalized = ext.replace(/^\./, "");
+    if (!normalized) continue;
+    out[normalized] = clamp(n, 1024, 200 * 1024 * 1024);
+  }
+  return out;
+}
+
 function envBool(key: string, fallback: boolean): boolean {
   const val = process.env[key];
   if (val === undefined || val === "") return fallback;

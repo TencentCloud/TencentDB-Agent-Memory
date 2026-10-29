@@ -75,7 +75,12 @@ export type MemCommandName =
   | "sync"
   | "create-skill"
   | "create-task"
-  | "update-task";
+  | "update-task"
+  // v3.3 user-session-default (TAPD 1070195170):
+  //   config-lock   把当前 session 的 (team, agent, task) 存为账户级默认
+  //   config-unlock 清除账户级默认
+  | "config-lock"
+  | "config-unlock";
 
 export interface MemCommandResult {
   success: boolean;

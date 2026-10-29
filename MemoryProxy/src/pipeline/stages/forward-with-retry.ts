@@ -5,7 +5,6 @@
  * 差异通过参数化保留:
  *   - protocol: 'openai' | 'anthropic' — rate-limit tag
  *   - retryBodyBuilder: openai 覆写 model, anthropic 不改
- *   - timeoutBehavior: openai 走 gate > 0, anthropic 恒开
  *   - debugOutboundMd5: openai/anthropic 各有独立打印格式, 由 caller 传函数
  *
  * ⚠️ debug dump body 部分保留在 caller (openai 有, anthropic 没有), 因为它
@@ -17,6 +16,7 @@ import type { ProxyConfig } from "../../types.js";
 import type { ForwardTarget } from "../../guard-adapter.js";
 import type { createPipeline } from "../../logger.js";
 import { enforceRateLimit, isRateLimitExceededError } from "../../rate-limit/guard.js";
+import { logPipelineUpstreamError } from "../../upstream-error-log.js";
 
 export interface ForwardWithRetryInput {
   target: ForwardTarget;
@@ -29,12 +29,6 @@ export interface ForwardWithRetryInput {
   sessionKeyForDebug?: string;
   rateLimitContext?: { config: ProxyConfig; instanceId?: string };
   protocol: "openai" | "anthropic";
-  /**
-   * timeout gating semantics:
-   *   - "gated": openai style, 只有 forwardTimeoutMs > 0 才设 AbortSignal
-   *   - "always": anthropic style, 总是设 AbortSignal.timeout
-   */
-  timeoutBehavior: "gated" | "always";
   /**
    * retry body 构建函数. openai 版本: `{...originalBody, model: retryTarget.model}`;
    * anthropic 版本: originalBody 原样返回。
@@ -56,12 +50,15 @@ export async function stageForwardWithRetry(
 ): Promise<ForwardWithRetryResult> {
   let upstreamResp: Response | undefined;
   let forwardFailed = false;
+  let forwardDeadline = 0;
 
   const setTimeoutSignal = (init: RequestInit) => {
-    if (input.timeoutBehavior === "always") {
-      init.signal = AbortSignal.timeout(input.forwardTimeoutMs);
-    } else if (input.forwardTimeoutMs > 0) {
-      init.signal = AbortSignal.timeout(input.forwardTimeoutMs);
+    if (input.forwardTimeoutMs > 0) {
+      const remainingMs = Math.ceil(forwardDeadline - performance.now());
+      if (remainingMs <= 0) {
+        throw new DOMException("Upstream forward timeout budget exhausted", "TimeoutError");
+      }
+      init.signal = AbortSignal.timeout(remainingMs);
     }
   };
 
@@ -73,6 +70,7 @@ export async function stageForwardWithRetry(
       protocol: input.protocol,
     });
   }
+  forwardDeadline = performance.now() + input.forwardTimeoutMs;
 
   const primaryFetchOpts: RequestInit = {
     method: "POST",
@@ -94,9 +92,12 @@ export async function stageForwardWithRetry(
 
   if (upstreamResp) {
     input.pipe.forwardDone(upstreamResp.status, upstreamResp.headers.get("x-request-id") ?? undefined);
+    await logPipelineUpstreamError(input.pipe, upstreamResp);
   }
 
-  const shouldRetry = input.target.retryTarget &&
+  const hasRetryBudget =
+    input.forwardTimeoutMs <= 0 || performance.now() < forwardDeadline;
+  const shouldRetry = input.target.retryTarget && hasRetryBudget &&
     (forwardFailed || (upstreamResp && upstreamResp.status >= 400 && upstreamResp.status < 500));
 
   if (shouldRetry && input.target.retryTarget) {
@@ -131,6 +132,11 @@ export async function stageForwardWithRetry(
       };
       setTimeoutSignal(retryFetchOpts);
       upstreamResp = await fetch(retryTarget.url, retryFetchOpts);
+      input.pipe.forwardDone(
+        upstreamResp.status,
+        upstreamResp.headers.get("x-request-id") ?? undefined,
+      );
+      await logPipelineUpstreamError(input.pipe, upstreamResp, "RETRY_UPSTREAM_ERROR");
       if (upstreamResp.ok) {
         input.pipe.info("RETRY_SUCCESS", `Retry returned ${upstreamResp.status}`);
       } else {

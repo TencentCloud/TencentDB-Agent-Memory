@@ -36,12 +36,13 @@ import {
   recordSourceIngestResult,
   deleteSources,
   classifySources,
-  sha256,
+  sha256Bytes,
   type SourceStatus,
 } from "./index-db.js";
 import { createLogger } from "../../logger.js";
 import { withSpan } from "../../telemetry.js";
 import { getIngestConcurrency } from "../../config.js";
+import { extractableExtensions } from "../../document-converter/format-registry.js";
 import { slugify } from "./ingest-v2/slug.js";
 import { DEFAULT_SCHEMA, DEFAULT_PURPOSE } from "./ingest-v2/template.js";
 
@@ -574,13 +575,15 @@ export async function runIngestIncremental(
   }
 
   // 扫描磁盘源，算 sha。filename = 相对 sourcesDir 的 posix 路径（与 rawWrite 的 filename 对齐）。
-  const disk = findMdFiles(sourcesDir).map((abs) => {
-    const content = readFileSync(abs, "utf-8");
+  // sha 打在**原始字节**上（与 rawWrite 登记口径一致）：换解析库或调转换配置都不会改变 sha，
+  // 避免存量文件被误判为变更而全量重跑 LLM。对纯文本文件与 sha256(utf-8 字符串) 等价。
+  const disk = findSourceFiles(sourcesDir).map((abs) => {
+    const bytes = readFileSync(abs);
     return {
       abs,
       filename: relative(sourcesDir, abs).replace(/\\/g, "/"),
-      sha256: sha256(content),
-      size: Buffer.byteLength(content, "utf-8"),
+      sha256: sha256Bytes(bytes),
+      size: bytes.length,
     };
   });
 
@@ -780,12 +783,24 @@ export async function runIngestIncremental(
   return { results, processed, deletedSources: deleted };
 }
 
-function findMdFiles(dir: string): string[] {
+/**
+ * 扫描 raw/sources 下所有**可抽取**的源文件。
+ *
+ * 只收 `isExtractable()` 为真的格式（`converter !== "none"`）——
+ * 图片等不可抽取的格式会被排除，避免 ingest 阶段对它们强行调用解析器而报错。
+ *
+ * 扩展名集合取自格式注册表（单一真源），新增格式时只改注册表，
+ * 扫描侧自动跟随，无需再动本函数。
+ */
+function findSourceFiles(dir: string): string[] {
+  const exts = extractableExtensions().map((e) => `.${e}`);
   const files: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) files.push(...findMdFiles(full));
-    else if (entry.endsWith(".md") || entry.endsWith(".txt")) files.push(full);
+    if (statSync(full).isDirectory()) files.push(...findSourceFiles(full));
+    else if (exts.some((e) => entry.endsWith(e))) {
+      files.push(full);
+    }
   }
   return files;
 }

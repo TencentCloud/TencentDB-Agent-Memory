@@ -14,7 +14,11 @@ import type { Hono } from 'hono';
 import { validatePanelMetaHeaders } from '../../middleware/validate-panel-headers.js';
 import { respondControlError } from '../../envelope.js';
 import type { PanelDeps } from '../../../panel-deps.js';
-import type { WikiRawWriteFile } from '../../../kernel/ports/knowledge-client-port.js';
+import { loadPanelConfig } from '../../../config/panel-config.js';
+import type {
+  WikiRawWriteFile,
+  WikiFileFormat,
+} from '../../../kernel/ports/knowledge-client-port.js';
 import { respondEnvelope } from '../../envelope.js';
 import {
   buildCtx,
@@ -32,20 +36,84 @@ import {
 } from './common.js';
 
 // 上传大小限制（W9 raw/write 与 import-and-ingest 共用，避免复合端点绕过 W9 限制）
-const MAX_FILE_SIZE = 512 * 1024;        // 单文件 512KB
 const MAX_FILES_PER_REQUEST = 10;        // 单次最多 10 个文件
-const MAX_TOTAL_SIZE = 5 * 1024 * 1024;  // 单次总大小 5MB
+const MAX_TOTAL_SIZE = 20 * 1024 * 1024; // 单次总大小 20MB
+
+/**
+ * 大小档位判定：**从 KS 格式注册表派生**（单一真源），此处不再硬编码扩展名。
+ *
+ * 注册表由 `wikiFormats()` 拉取并缓存成功结果；**失败不永久标记**——下个请求
+ * 会重试。此前 `formatsFetchFailed` 一旦置位就永远跳过拉取，若 KS 恰在启动
+ * 期不可达，整个进程生命周期内都退化为"无档位信息"，叠加旧的单文件降级逻辑
+ * 会把 PDF/docx 全按 512KB 误杀。
+ */
+let cachedFormats: Map<string, WikiFileFormat> | null = null;
+
+async function wikiFormatMap(
+  kc: { wikiFormats(): Promise<{ items: WikiFileFormat[] }> },
+): Promise<Map<string, WikiFileFormat> | null> {
+  if (cachedFormats) return cachedFormats;
+  try {
+    const { items } = await kc.wikiFormats();
+    cachedFormats = new Map(items.map((f) => [f.ext, f]));
+    return cachedFormats;
+  } catch {
+    // 本请求内无档位信息：checkFileSizes 会跳过单文件拦截、交给 KS 兜底。
+    // 不缓存失败状态，下次请求重试拉取。
+    return null;
+  }
+}
+
+/** 取扩展名（小写，不含点）。 */
+function extOfName(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  return dot <= 0 ? '' : filename.slice(dot + 1).toLowerCase();
+}
+
+/**
+ * 按**原始字节**计费。base64 串长比原始字节膨胀约 33%，
+ * 若按 `Buffer.byteLength(content,'utf-8')` 会误杀合规文件。
+ */
+function decodedByteSize(f: WikiRawWriteFile): number {
+  if (f?.encoding !== 'base64') return Buffer.byteLength(f?.content ?? '', 'utf-8');
+  const s = f.content ?? '';
+  const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((s.length * 3) / 4) - pad);
+}
+
+/** 懒加载并缓存上传阈值：避免每个请求都重新解析一遍 env。 */
+let cachedLimits: { textFileMaxBytes: number; binaryFileMaxBytes: number } | null = null;
+function wikiUploadLimits(): { textFileMaxBytes: number; binaryFileMaxBytes: number } {
+  if (!cachedLimits) cachedLimits = loadPanelConfig().wiki;
+  return cachedLimits;
+}
 
 /** 校验一批待写文件是否满足大小限制；违规返回错误码，否则返回 null。 */
-function checkFileSizes(files: WikiRawWriteFile[]): string | null {
+async function checkFileSizes(
+  files: WikiRawWriteFile[],
+  kc?: { wikiFormats(): Promise<{ items: WikiFileFormat[] }> },
+): Promise<string | null> {
   if (files.length > MAX_FILES_PER_REQUEST) {
     return `TOO_MANY_FILES (max ${MAX_FILES_PER_REQUEST})`;
   }
+  // 单文件阈值按档位取：文本档保持 512KB，富文档档 10MB（均可由环境变量配置）
+  const { textFileMaxBytes, binaryFileMaxBytes } = wikiUploadLimits();
+  const formats = kc ? await wikiFormatMap(kc) : null;
   let totalSize = 0;
   for (const f of files) {
-    const size = Buffer.byteLength(f?.content ?? '', 'utf-8');
-    if (size > MAX_FILE_SIZE) {
-      return `FILE_TOO_LARGE (max ${MAX_FILE_SIZE} bytes, got ${size})`;
+    const size = decodedByteSize(f);
+    // 单文件上限：优先用 KS 下发的 maxBytes（已含逐 ext 覆盖，与 KS 校验严格一致）。
+    //
+    // ⚠ fmt 缺失（注册表不可达或扩展名未注册）时**跳过拦截、交给 KS 兜底**：
+    // 旧写法 `fmt?.sizeTier === 'binary' ? bin : text` 会把"档位未知"误判成
+    // text 档 → PDF/docx 等富文档全被 512KB 误杀（实际应为 10MB）。
+    // KS 侧 maxBytesOf 有完整真源（含未注册格式回落 text 档），权威拦截在那。
+    const fmt = formats?.get(extOfName(f?.filename ?? ''));
+    if (fmt) {
+      const max = fmt.maxBytes ?? (fmt.sizeTier === 'binary' ? binaryFileMaxBytes : textFileMaxBytes);
+      if (size > max) {
+        return `FILE_TOO_LARGE (max ${max} bytes, got ${size})`;
+      }
     }
     totalSize += size;
   }
@@ -256,6 +324,18 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     return runKs(c, () => kc.wikiRawLs(wikiId));
   });
 
+  /**
+   * 格式注册表转发 —— 前端白名单 / 上传通道的唯一来源。
+   *
+   * 真源在 KS（`document-converter/format-registry.ts`）。前端不再硬编码
+   * 扩展名清单，改为启动时拉一次并缓存，新增格式时前端零改动。
+   */
+  api.post('/knowledge/wiki/formats', mw, async (c) => {
+    const ctx = buildCtx(c);
+    const kc = deps.knowledgeClientFactory(ctx.instanceId);
+    return runKs(c, () => kc.wikiFormats());
+  });
+
   // W8 raw/read — id-only
   api.post('/knowledge/wiki/raw/read', mw, async (c) => {
     const ctx = buildCtx(c);
@@ -300,7 +380,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     if (files.length === 0) return respondControlError(c, 400, 'MISSING_FILES');
     // 大小校验复用模块级 checkFileSizes，与 import-and-ingest 同源：
     // 阈值与错误码只有一份定义，避免两处各自维护导致复合端点绕过 W9 限制。
-    const sizeErr = checkFileSizes(files);
+    const sizeErr = await checkFileSizes(files, deps.knowledgeClientFactory(ctx.instanceId));
     if (sizeErr) return respondControlError(c, 413, sizeErr);
     const gate = await requireTeamMember(deps, c, ctx, teamId);
     if ('error' in gate) return gate.error;
@@ -358,7 +438,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
           (f) => !f || typeof f.filename !== 'string' || f.filename.trim() === '' || typeof f.content !== 'string',
         );
         if (badFile) return respondControlError(c, 400, 'INVALID_FILE_ITEM');
-        const sizeErr = checkFileSizes(files);
+        const sizeErr = await checkFileSizes(files, kc);
         if (sizeErr) return respondControlError(c, 413, sizeErr);
 
         const w0 = Date.now();
