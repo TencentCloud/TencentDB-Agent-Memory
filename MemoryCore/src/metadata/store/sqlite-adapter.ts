@@ -20,7 +20,7 @@ import {
 } from "./relation-id-insert.js";
 import { generateUserKey } from "../utils/crypto.js";
 import { isUserKeyExpired } from "../utils/user-key.js";
-import { DEFAULT_GROUP_NAME, EXTRACTION_GROUP_NAME, InstanceUpstreamWriteConflictError } from "../types.js";
+import { DEFAULT_GROUP_NAME, EXTRACTION_GROUP_NAME, InstanceUpstreamWriteConflictError, DEFAULT_TASK_SENTINEL } from "../types.js";
 import type {
   UserEntity,
   UserKeyEntity,
@@ -1038,6 +1038,16 @@ export class SqliteMetadataStore implements IMetadataStore {
     return result;
   }
 
+  /** 同一权限条件用于 COUNT 和分页查询，避免先分页后过滤造成遗漏或泄露总数。 */
+  private teamResourceReadWhere(table: "meta_agents" | "meta_tasks"): string {
+    const ownerColumn = table === "meta_agents" ? "owner_user_id" : "creator_user_id";
+    const teamVisibility = table === "meta_agents" ? " AND meta_agents.visibility = 'team'" : "";
+    return ` AND (${table}.${ownerColumn} = ? OR EXISTS (
+      SELECT 1 FROM meta_team_members m
+      WHERE m.team_id = ${table}.team_id AND m.user_id = ? AND m.status = 'active'${teamVisibility}
+    ))`;
+  }
+
   listAgentsByTeam(teamId: string, pagination?: PaginationParams | null, filter?: AgentFilter): ListPage<AgentEntity> {
     let where = "WHERE team_id = ?";
     const params: SQLInputValue[] = [teamId];
@@ -1052,6 +1062,11 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (filter?.name) {
       where += " AND name = ?";
       params.push(filter.name);
+    }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_agents");
+      params.push(callerUserId, callerUserId);
     }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_agents ${where}`,
@@ -1074,6 +1089,11 @@ export class SqliteMetadataStore implements IMetadataStore {
       where += " AND name = ?";
       params.push(filter.name);
     }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_agents");
+      params.push(callerUserId, callerUserId);
+    }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_agents ${where}`,
       params,
@@ -1088,6 +1108,16 @@ export class SqliteMetadataStore implements IMetadataStore {
   // Task（含 linkAgents 原子）
   // ============================================================
   createTask(input: CreateTaskInput): TaskEntity {
+    // v3.3 reserved id 守卫 (深度防御二道墙): service 层 createTask 已经先过了
+    // 守卫, 走 Router / API 路径的调用根本到不了这里; 但迁移脚本 / seed 工具可能
+    // 绕过 service 直调 store, 这道墙保证即便绕过也无法写入 id="default" 的真实
+    // task (会让 Proxy 的虚拟值短路链路串味)。详见 service/metadata-service.ts
+    // createTask 的 reserved id 守卫注释。
+    if (input.task_id === DEFAULT_TASK_SENTINEL) {
+      throw new Error(
+        `createTask: task_id "${DEFAULT_TASK_SENTINEL}" is reserved by Proxy sessionInit.defaultTaskId as a virtual "no-task" marker; let store auto-generate task_id instead`,
+      );
+    }
     const now = nowIso();
     for (let attempt = 0; attempt < PK_RETRY_LIMIT; attempt++) {
       const taskId = input.task_id ?? generateId(ID_PREFIX.task);
@@ -1176,6 +1206,11 @@ export class SqliteMetadataStore implements IMetadataStore {
       where += " AND title = ?";
       params.push(filter.title);
     }
+    const callerUserId = filter?.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_tasks");
+      params.push(callerUserId, callerUserId);
+    }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_tasks ${where}`,
       params,
@@ -1200,6 +1235,11 @@ export class SqliteMetadataStore implements IMetadataStore {
     if (filter.title) {
       where += " AND title = ?";
       params.push(filter.title);
+    }
+    const callerUserId = filter.readable_by_user_id;
+    if (callerUserId !== undefined) {
+      where += this.teamResourceReadWhere("meta_tasks");
+      params.push(callerUserId, callerUserId);
     }
     return this.selectList(
       `SELECT COUNT(*) AS c FROM meta_tasks ${where}`,

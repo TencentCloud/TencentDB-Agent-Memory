@@ -533,6 +533,37 @@ export function createSkillBridgeHandler(
       });
       return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
     }
+
+    // Team-memory master switch gate. Blocks LLM-side curl calls after the
+    // instance admin flips team_memory.enabled → "0" at Core. Residual tool
+    // definitions in old prompts would otherwise still work via the ids
+    // we just resolved from the binding. See
+    // MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md §6.4.
+    try {
+      const { fetchTeamMemoryEnabled } = await import("../tdai/team-memory-switch.js");
+      const teamMemoryEnabled = await fetchTeamMemoryEnabled({
+        endpoint: config.tdai.endpoint,
+        apiKey: config.tdai.apiKey,
+        instanceId: spaceId,
+        userKey: ids.user_key ?? null,
+        userId: ids.user_id,
+        timeoutMs: config.tdai.memory.timeoutMs,
+      });
+      if (!teamMemoryEnabled) {
+        emitBridgeRejectTelemetry({
+          sessionKey, bridgeSource: "skill-bridge",
+          rejectReason: "team_memory_disabled", httpStatus: 503,
+          executedEndpoint: sub, spaceId,
+          userId: ids.user_id, teamId: ids.team_id,
+          agentId: ids.agent_id, agentSource: ids.agent_source,
+        });
+        return envelope(50301, `${TAG} team memory disabled for this instance`, 503);
+      }
+    } catch (err) {
+      // Fail-open: a transient Core error must not block existing LLM tool calls.
+      console.warn(`${TAG} team-memory gate error (allowing through):`, err instanceof Error ? err.message : String(err));
+    }
+
     // backing.redis 之前给老链路 SkillExtractTrigger 用, 老链路已删,
     // 本函数体内不再直接使用 redis; backing 结构上保留是因为 pinRepo
     // 走 redis 的分支还需要它。

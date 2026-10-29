@@ -105,6 +105,9 @@ import {
   DEFAULT_GROUP_NAME,
   EXTRACTION_GROUP_NAME,
   InstanceUpstreamWriteConflictError,
+  // v3.3 user-session-default: Proxy sessionInit.defaultTaskId 的虚拟值字面量,
+  // Service 层用它来拒绝新建 id="default" 的真实 Task (reserved id 守卫)。
+  DEFAULT_TASK_SENTINEL,
 } from "../types.js";
 import { formatListResult, paginateArray, resolvePagination, wrapPaginated, DEFAULT_PAGINATION } from "../pagination.js";
 import { generateId, ID_PREFIX } from "../utils/id-generator.js";
@@ -998,6 +1001,12 @@ export class MetadataService {
     return this.store.getAgentById(agentId);
   }
 
+  async getAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity | null> {
+    const agent = await this.getAgentById(agentId);
+    if (!agent || !await this.canReadTeamResource(ctx, agent.team_id, agent.owner_user_id, agent.visibility === "team")) return null;
+    return agent;
+  }
+
   async updateAgent(agentId: string, patch: Partial<AgentEntity>): Promise<AgentEntity> {
     if (!(await this.getAgentById(agentId))) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
     const updated = await this.store.updateAgent(agentId, patch);
@@ -1063,9 +1072,32 @@ export class MetadataService {
   }
 
   // ============================================================
-  // Task（校验 team 存在 + linked agents 同 team）
+  // Task（校验 team 存在 + linked agents 同 team + reserved id 守卫）
   // ============================================================
+  //
+  // Reserved id 守卫 (v3.3 user-session-default):
+  //   禁止 task_id 显式传入 DEFAULT_TASK_SENTINEL ("default")。
+  //
+  //   背景: Proxy sessionInit.defaultTaskId 把字面量 "default" 用作
+  //   "不绑定任何 Task" 的虚拟值 (Proxy 10+ 处 `task_id === config.defaultTaskId`
+  //   短路识别)。若让运营真的建一条 id="default" 的 TaskEntity, 整条短路链路
+  //   会在"命中真实 task 但按虚拟值处理" —— 该 task 永远拿不到参与日志 /
+  //   skill 召回 / task context, 变成 dormant bug。
+  //
+  //   校验只对**新建**生效; 历史脏数据 (若有) 不受影响, 不会卡升级。详见
+  //   MemoryProxy/docs/design/2026-10-10-user-session-default-design.md §4.2。
+  //
+  //   深度防御: service + store 两层都挡, store 层守 service 可能被绕过
+  //   (如数据迁移脚本直调 store) 的场景; Router 层 taskCreateSchema 本来就
+  //   不接受 task_id 参数, 构成三层防线。
   async createTask(input: CreateTaskInput): Promise<TaskEntity> {
+    // Reserved id 守卫: 本人在最前拦一次, 快速失败不触及后续校验与 store 事务。
+    if (input.task_id === DEFAULT_TASK_SENTINEL) {
+      throw new MetadataError(
+        "reserved_task_id",
+        `task_id "${DEFAULT_TASK_SENTINEL}" is reserved (used by Proxy sessionInit.defaultTaskId as a virtual "no-task" marker); please let the system auto-generate task_id instead`,
+      );
+    }
     await this.assertTeamExists(input.team_id);
     for (const link of input.linked_agents ?? []) {
       const agent = await this.getAgentById(link.agent_id);
@@ -1084,6 +1116,12 @@ export class MetadataService {
 
   async getTaskById(taskId: string): Promise<TaskEntity | null> {
     return this.store.getTaskById(taskId);
+  }
+
+  async getTaskForCaller(taskId: string, ctx: V3AuthContext): Promise<TaskEntity | null> {
+    const task = await this.getTaskById(taskId);
+    if (!task || !await this.canReadTeamResource(ctx, task.team_id, task.creator_user_id)) return null;
+    return task;
   }
 
   async updateTask(taskId: string, patch: Partial<TaskEntity>): Promise<TaskEntity> {
@@ -1800,6 +1838,21 @@ export class MetadataService {
       throw new MetadataError("permission_denied", "authentication required");
     }
     return ctx.userId;
+  }
+
+  /** 列表读取范围只取认证身份，避免请求中的 owner/creator 改变调用者权限。 */
+  getTeamResourceReadFilterForCaller(ctx: V3AuthContext): Pick<AgentFilter, "readable_by_user_id"> {
+    return { readable_by_user_id: ctx.isSystemAdmin ? undefined : this.requireCallerId(ctx) };
+  }
+
+  /** 保留 owner / system_admin 权限；其他活跃成员只可读取允许团队共享的资源。 */
+  private async canReadTeamResource(ctx: V3AuthContext, teamId: string, ownerUserId: string, allowTeamMembers = true): Promise<boolean> {
+    if (ctx.isSystemAdmin) return true;
+    if (!ctx.userId) return false;
+    if (ctx.userId === ownerUserId) return true;
+    if (!allowTeamMembers) return false;
+    const member = await this.store.getTeamMember(teamId, ctx.userId);
+    return member?.status === "active";
   }
 
   private assertCallerIsResourceOwner(ctx: V3AuthContext, ownerUserId: string): void {

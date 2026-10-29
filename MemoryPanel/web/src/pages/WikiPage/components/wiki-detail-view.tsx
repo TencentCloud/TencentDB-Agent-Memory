@@ -19,9 +19,14 @@ import {
   LoadingIcon,
   SearchIcon,
 } from 'tea-icons-react';
-import { knowledgeApi, type SourceProviderMeta, type SourceProviderFormField } from '@/lib/api/knowledge-api';
+import { type SourceProviderMeta, type SourceProviderFormField } from '@/lib/api/knowledge-api';
 import { tea } from '@/lib/tea-bridge';
-import { WIKI_ALLOWED_FILE_RE, TYPE_COLORS, TYPE_COLOR_FALLBACK, type DetailTab } from '../constants/wiki-constants';
+import {
+  TYPE_COLORS,
+  TYPE_COLOR_FALLBACK,
+  type DetailTab,
+} from '../constants/wiki-constants';
+import { isAllowedFile, acceptAttr } from '../utils/wiki-format-store';
 import { WikiStatusBadge } from './wiki-ui';
 import { GraphTabContent, PagesTabContent } from './wiki-detail-components';
 import { WikiSourcePageTree } from './wiki-source-page-tree';
@@ -47,6 +52,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
     typeCounts,
     edgeCount,
     handleReadPage,
+    handleReadRaw,
     filteredPages,
     pageTypeFilter,
     setPageTypeFilter,
@@ -54,12 +60,11 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
     readLoading,
     displayContent,
     metadata,
+    rawPreview,
     rawRefreshKey,
     handleDeletePage,
     handleDeleteRaw,
     setSelectedPage,
-    setReadContent,
-    setReadLoading,
     searchQuery,
     setSearchQuery,
     handleSearch,
@@ -393,29 +398,13 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
             readLoading={readLoading}
             displayContent={displayContent}
             metadata={metadata}
+            rawPreview={rawPreview}
             wikiId={selectedWikiId}
             rawRefreshKey={rawRefreshKey}
             onReadPage={handleReadPage}
             onDeletePage={handleDeletePage}
             onDeleteRaw={handleDeleteRaw}
-            onReadRaw={(filename) => {
-              const rawPage = {
-                path: `raw/${filename}`,
-                title: filename,
-                type: 'raw',
-              } as any;
-              setSelectedPage(rawPage);
-              setReadContent('');
-              setReadLoading(true);
-              knowledgeApi.wiki
-                .rawRead(selectedWikiId, [filename])
-                .then((result: any) => setReadContent(result?.items?.[0]?.content || ''))
-                .catch((error: any) => {
-                  setReadContent('');
-                  tea.notify.error(error?.message || t('wiki.notify.readRawFailed'));
-                })
-                .finally(() => setReadLoading(false));
-            }}
+            onReadRaw={handleReadRaw}
           />
         </TabPanel>
         <TabPanel id="search">
@@ -519,7 +508,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
                     onDrop={(e) => {
                       e.preventDefault();
                       const all = Array.from(e.dataTransfer.files);
-                      const allowed = all.filter((f) => WIKI_ALLOWED_FILE_RE.test(f.name));
+                      const allowed = all.filter((f) => isAllowedFile(f.name));
                       const rejected = all.length - allowed.length;
                       if (rejected > 0) {
                         tea.notify.warning(
@@ -803,14 +792,14 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".md,.txt,.markdown"
+              accept={acceptAttr()}
               multiple
               className="_wiki-detail-hidden-input"
               onChange={(e) => {
                 // accept 属性只是浏览器建议，用户可在选择器切换"所有文件"绕过，
                 // 这里做二次校验，与拖拽入口一致，避免二进制文件被读成乱码上传。
                 const all = Array.from(e.target.files ?? []);
-                const allowed = all.filter((f) => WIKI_ALLOWED_FILE_RE.test(f.name));
+                const allowed = all.filter((f) => isAllowedFile(f.name));
                 const rejected = all.length - allowed.length;
                 if (rejected > 0) {
                   tea.notify.warning(
