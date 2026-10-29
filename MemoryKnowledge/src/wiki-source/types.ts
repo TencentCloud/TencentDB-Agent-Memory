@@ -53,6 +53,20 @@ export type CrawlMode = "tree" | "links";
 /** links 策略的默认遍历深度（只从入口页的直接链接走一层）。 */
 export const DEFAULT_LINKS_MAX_DEPTH = 1;
 
+/** links 策略的最大遍历深度，限制外部 API 调用和导入成本。 */
+export const MAX_LINKS_CRAWL_DEPTH = 10;
+
+/** links 策略单次发现的最大页面数，防止高扇出入口放大外部请求。 */
+export const MAX_LINKS_CRAWL_PAGES = 1_000;
+
+/** 归一化 programmatic 调用方传入的 links 深度。 */
+export function resolveLinksMaxDepth(maxDepth?: number): number {
+  if (maxDepth === undefined || !Number.isFinite(maxDepth)) {
+    return DEFAULT_LINKS_MAX_DEPTH;
+  }
+  return Math.min(MAX_LINKS_CRAWL_DEPTH, Math.max(1, Math.floor(maxDepth)));
+}
+
 /** 遍历选项。 */
 export interface CrawlOptions {
   mode?: CrawlMode;

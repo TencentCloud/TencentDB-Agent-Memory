@@ -19,7 +19,7 @@ import type {
   SourceContext,
   WikiSourceProvider,
 } from "../../types.js";
-import { DEFAULT_LINKS_MAX_DEPTH } from "../../types.js";
+import { resolveLinksMaxDepth } from "../../types.js";
 import { getDocument, getMetadata, getSpaceRoot } from "./mcp-client.js";
 import { crawlTree } from "./crawlers/tree.js";
 import { crawlLinks } from "./crawlers/links.js";
@@ -130,7 +130,7 @@ export const iwikiProvider: WikiSourceProvider = {
             ? [root.rootDocId]
             : (await getSpaceRoot(ctx, root.rootId)).map((n) => String(n.docid));
 
-      const maxDepth = Math.max(1, opts?.maxDepth ?? DEFAULT_LINKS_MAX_DEPTH);
+      const maxDepth = resolveLinksMaxDepth(opts?.maxDepth);
       return crawlLinks(ctx, entries, maxDepth);
     }
 

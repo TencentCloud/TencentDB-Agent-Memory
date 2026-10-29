@@ -9,6 +9,7 @@
  */
 
 import type { RemotePageRef, SourceContext } from "../../../types.js";
+import { MAX_LINKS_CRAWL_PAGES } from "../../../types.js";
 import { getDocument, getMetadata } from "../mcp-client.js";
 
 /**
@@ -53,17 +54,19 @@ export async function crawlLinks(
   maxDepth: number,
 ): Promise<RemotePageRef[]> {
   const out: RemotePageRef[] = [];
-  const visited = new Set<string>(rootIds);
+  const roots = rootIds.slice(0, MAX_LINKS_CRAWL_PAGES);
+  const visited = new Set<string>(roots);
 
   // 先取入口页自身
-  let frontier: Array<{ id: string; parentId: string | null; depth: number }> = rootIds.map(
+  let frontier: Array<{ id: string; parentId: string | null; depth: number }> = roots.map(
     (id) => ({ id, parentId: null, depth: 0 }),
   );
 
-  while (frontier.length > 0) {
+  outer: while (frontier.length > 0) {
     const next: typeof frontier = [];
 
     for (const item of frontier) {
+      if (out.length >= MAX_LINKS_CRAWL_PAGES) break outer;
       // 标题优先从 metadata 取（getDocument 只回正文、不带 title）
       let title = item.id;
       let markdown = "";
@@ -92,6 +95,7 @@ export async function crawlLinks(
 
       for (const childId of extractDocIds(markdown)) {
         if (visited.has(childId)) continue;
+        if (visited.size >= MAX_LINKS_CRAWL_PAGES) break;
         visited.add(childId);
         next.push({ id: childId, parentId: item.id, depth: item.depth + 1 });
       }
