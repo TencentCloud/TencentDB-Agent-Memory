@@ -12,12 +12,14 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from "
 import { join, relative } from "node:path";
 import type { LlmClient } from "./llm.js";
 import { parseFrontmatter, buildPage } from "./frontmatter.js";
+import {
+  isMarkdownFileName,
+  isStructuralWikiFile,
+  stripMarkdownExtension,
+} from "./safe-path.js";
 import { createLogger } from "../../../logger.js";
 
 const log = createLogger("wiki-overview");
-
-/** 结构性文件不纳入综述输入，也不被综述覆盖。 */
-const STRUCTURAL = new Set(["index.md", "schema.md", "purpose.md", "log.md", "overview.md"]);
 
 interface PageBrief {
   title: string;
@@ -46,9 +48,9 @@ function collectBriefs(wikiDir: string): PageBrief[] {
         if (entry !== "media") walk(full);
         continue;
       }
-      if (!entry.endsWith(".md")) continue;
+      if (!isMarkdownFileName(entry)) continue;
       const rel = relative(wikiDir, full).replace(/\\/g, "/");
-      if (STRUCTURAL.has(rel)) continue;
+      if (isStructuralWikiFile(rel)) continue;
       let content: string;
       try {
         content = readFileSync(full, "utf-8");
@@ -60,7 +62,7 @@ function collectBriefs(wikiDir: string): PageBrief[] {
         title:
           typeof frontmatter.title === "string" && frontmatter.title.trim()
             ? frontmatter.title.trim()
-            : entry.replace(/\.md$/, ""),
+            : stripMarkdownExtension(entry),
         type: frontmatter.type,
         description: typeof frontmatter.description === "string" ? frontmatter.description.trim() : "",
       });
