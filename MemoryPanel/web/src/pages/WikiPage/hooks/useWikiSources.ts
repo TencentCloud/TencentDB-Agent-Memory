@@ -766,6 +766,20 @@ export function useWikiSources() {
         return;
       }
 
+      if (res.import_result?.failed.length) {
+        const detail = res.import_result.failed
+          .slice(0, 5)
+          .map((item) => `${item.id}: ${item.error}`)
+          .join('\n');
+        tea.notify.warning(
+          t('wiki.detail.upload.partialFail', {
+            ok: res.import_result.imported,
+            fail: res.import_result.failed.length,
+            detail,
+          }),
+        );
+      }
+
       // ✅ 复合请求被接受（任务真的排上了）才显示进度卡片：
       // 复位"已清除"标记让卡片出现，并把检查计数清零——否则第二次导入会
       // 接着上一次的数字往下数。

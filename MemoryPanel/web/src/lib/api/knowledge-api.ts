@@ -82,6 +82,8 @@ export interface ImportAndIngestResult {
   error_code?: string;
   error_message?: string;
   raw_persisted?: boolean;
+  /** External-source import summary; partial imports still continue to ingest. */
+  import_result?: WikiSourceImportResult;
 }
 
 export interface WikiDetail {
