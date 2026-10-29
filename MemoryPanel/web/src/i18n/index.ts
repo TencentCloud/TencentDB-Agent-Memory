@@ -13,15 +13,23 @@ import { enUS } from './en-US';
 const STORAGE_KEY = 'tdai-memory.lang';
 
 function detectInitialLanguage(): string {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored === 'zh-CN' || stored === 'en-US') return stored;
-  const nav = navigator.language || 'zh-CN';
+  try {
+    const stored = globalThis.localStorage?.getItem(STORAGE_KEY);
+    if (stored === 'zh-CN' || stored === 'en-US') return stored;
+  } catch {
+    // Storage can be unavailable under browser privacy or sandbox policies.
+  }
+  const nav = (typeof navigator !== 'undefined' && navigator.language) || 'zh-CN';
   return nav.startsWith('zh') ? 'zh-CN' : 'en-US';
 }
 
 export function changeLanguage(lang: string): void {
-  i18n.changeLanguage(lang);
-  localStorage.setItem(STORAGE_KEY, lang);
+  void i18n.changeLanguage(lang);
+  try {
+    globalThis.localStorage?.setItem(STORAGE_KEY, lang);
+  } catch {
+    // Persisting the preference is optional; the in-memory switch still stands.
+  }
 }
 
 export function getCurrentLanguage(): string {

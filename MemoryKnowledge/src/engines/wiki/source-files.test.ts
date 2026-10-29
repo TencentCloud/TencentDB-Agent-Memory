@@ -30,7 +30,7 @@ describe("findWikiSourceFiles", () => {
       writeFile(path.join(dir, "Guide.markdown"), "B", "utf-8"),
       writeFile(path.join(dir, "Notes.TXT"), "C", "utf-8"),
       writeFile(path.join(nested, "Doc.Markdown"), "D", "utf-8"),
-      writeFile(path.join(dir, "ignored.pdf"), "E", "utf-8"),
+      writeFile(path.join(dir, "ignored.exe"), "E", "utf-8"),
     ]);
 
     const files = findWikiSourceFiles(dir)
@@ -42,6 +42,16 @@ describe("findWikiSourceFiles", () => {
       "Notes.TXT",
       "README.MD",
       "nested/Doc.Markdown",
+    ]);
+  });
+
+  it("preserves registered rich documents while excluding unsupported files", async () => {
+    const dir = await makeTempDir();
+    const names = ["Report.PDF", "Slides.Pptx", "Document.DOCX", "Table.XLSX", "Data.CSV", "image.PNG", "unknown.bin"];
+    await Promise.all(names.map((name) => writeFile(path.join(dir, name), Buffer.from([0xff, 0x00, 0x81]))));
+
+    expect(findWikiSourceFiles(dir).map((file) => path.basename(file)).sort()).toEqual([
+      "Data.CSV", "Document.DOCX", "Report.PDF", "Slides.Pptx", "Table.XLSX",
     ]);
   });
 });

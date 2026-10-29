@@ -1,11 +1,12 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-
-const SUPPORTED_SOURCE_EXTENSIONS = [".md", ".markdown", ".txt"] as const;
+import { formatSpec } from "../../document-converter/format-registry.js";
 
 export function isSupportedWikiSourceFilename(name: string): boolean {
-  const lower = name.toLowerCase();
-  return SUPPORTED_SOURCE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+  // Follow the same registry as upload/conversion, including newly supported
+  // rich documents. Unknown formats and preview-only formats are not ingested.
+  const spec = formatSpec(name);
+  return spec !== undefined && spec.converter !== "none";
 }
 
 export function findWikiSourceFiles(dir: string): string[] {

@@ -53,6 +53,34 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
   async set(callerId: string, input: SetUserSessionDefaultInput): Promise<UserSessionDefaultEntity> {
     this.metaService.assertCallerIsOwner(input.user_id, callerId);
 
+    // PRD "后端要求": 记录设置 / 覆盖 / 解除日志。日志只含 ID, 不含任何 Token
+    // 或凭证。面板保存路径(经 BFF)和 IDE 命令路径(mem:config-lock)都经过这里,
+    // 因此这三处 log 同时覆盖两个入口。
+    //
+    // 先探测"是否已有旧配置"用于区分 create / overwrite, 但**成功日志要等 upsert
+    // 之后再打** —— 否则校验失败(team 不存在 / agent 不可见 / task 已结束等)时也
+    // 会留下一条 "set create/overwrite" 记录, 排查时会被误导成"已经写进去了"。
+    const existed = await this.store.getUserSessionDefault(input.user_id);
+
+    // 校验失败统一记 rejected (含具体 error code), 与"写库失败"区分。
+    // 这样日志里 set 只有三种终态: create / overwrite / rejected。
+    try {
+      return await this.setValidated(input, existed);
+    } catch (err) {
+      const code = err instanceof MetadataError ? err.code : "write_failed";
+      console.warn(
+        `[user-session-default] set rejected user=${input.user_id} reason=${code} ` +
+          `team=${input.team_id} agent=${input.agent_id} task=${input.task_id}`,
+      );
+      throw err;
+    }
+  }
+
+  /** 实际的四级校验 + upsert。抽出来只为让外层能统一记 rejected 日志。 */
+  private async setValidated(
+    input: SetUserSessionDefaultInput,
+    existed: UserSessionDefaultEntity | null,
+  ): Promise<UserSessionDefaultEntity> {
     // 1. Team 必须存在
     const team = await this.store.getTeamById(input.team_id);
     if (!team) {
@@ -131,11 +159,25 @@ export class UserSessionDefaultService implements IUserSessionDefaultService {
       agent_id: input.agent_id,
       task_id: input.task_id,
     };
-    return await this.store.upsertUserSessionDefault(payload);
+
+    const saved = await this.store.upsertUserSessionDefault(payload);
+    console.log(
+      `[user-session-default] set user=${input.user_id} ` +
+        `${existed ? "overwrite" : "create"} ` +
+        `team=${input.team_id} agent=${input.agent_id} task=${input.task_id}`,
+    );
+    return saved;
   }
 
   async delete(callerId: string, userId: string): Promise<{ ok: true }> {
     this.metaService.assertCallerIsOwner(userId, callerId);
+    // 幂等: 没有配置也返回 ok。日志区分"真的删掉了"与"本来就没有", 便于
+    // 排查"用户反馈解除无效"类问题。
+    const existed = await this.store.getUserSessionDefault(userId);
+    console.log(
+      `[user-session-default] delete user=${userId} ` +
+        `${existed ? "removed" : "no-op (not set)"}`,
+    );
     await this.store.deleteUserSessionDefault(userId);
     return { ok: true };
   }

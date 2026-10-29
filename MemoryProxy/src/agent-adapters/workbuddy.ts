@@ -135,26 +135,36 @@ function isWorkbuddyAuxiliary(
 // ── User text extraction ─────────────────────────────────────────────────────
 
 /**
- * 从 workbuddy responses API `body.input[]` 提取最后一条
- * `type=message && role=user` 的 `content[].input_text` 拼接文本。
+ * 从 workbuddy 请求体提取最后一条 user 消息的纯文本 —— **双形态兼容**。
  *
- *抓包证据：workbuddy 底层用 @openai/agents SDK，wire body 结构与
- * OpenAI Responses API 完全一致。input[] item 已知类型：
- *   - {type:"message", role:"user"|"assistant"|"developer"|"system",
- *      content:[{type:"input_text"|"output_text"|"input_image",...}]}
- *   - {type:"function_call", name, arguments}
- *   - {type:"function_call_output", output}
- *   - {type:"reasoning", encrypted_content, ...}
+ * ⚠️ 关键事实（2026-10-19 实测修正，此前本文档假设是错的）：
+ *   workbuddy 有**两条**链路，body 形态完全不同：
  *
- * 只关心 type=message && role=user 的 content 里type=input_text 段。
+ *   1) **主对话** → `/workbuddy/<sid>/v1/chat/completions`
+ *      由 `openai-chat.ts` runner 处理（server.ts:384 通配路由命中）。
+ *      body 是 **OpenAI Chat Completions** 形态：
+ *        messages: [{ role:"user", content:[{type:"text", text:"..."}] }, ...]
+ *      ⚠️ item **没有** `type:"message"` 字段，block type 是 `"text"`。
  *
- * 注：独立于 codex 实现（重复算法但零耦合）；未来若 workbuddy input[]
- * 结构分化（如新增 workbuddy 特有 content type），在此文件内演进。
+ *   2) **aux 端点** → `/workbuddy/<sid>/v1/responses`（+ compact / realtime /
+ *      memories）由 `workbuddy.ts` runner 处理。
+ *      body 是 **OpenAI Responses API** 形态（底层 @openai/agents SDK）：
+ *        input: [{ type:"message", role:"user",
+ *                  content:[{type:"input_text", text:"..."}] }, ...]
+ *
+ * 原实现只认形态 2，导致主对话（形态 1）的 `content[{type:"text"}]`
+ * 在两个 `continue` 上全部落空 → 返回 null → `parseMemCommand` 提前
+ * return null → **mem: 命令被静默透传给上游 LLM**（LLM 只能编造回复）。
+ * 用户实测 `mem:config-lock` / `mem:config-unlock` 在 workbuddy 上完全
+ * 不可用，而 codebuddy / claude-code 正常 —— 根因就在这里。
+ *
+ * 修复策略：**先按形态 2 找（保持 aux 行为不变），找不到再按形态 1 找**。
+ * block type 同时认 `input_text` 与 `text`，两条形态共用同一套拼接语义。
  */
 function extractWorkbuddyUserText(input: unknown): string | null {
   if (!Array.isArray(input)) return null;
 
-  // 从后往前找最后一条 role=user 的 message
+  // ── 形态 1: Responses API (aux 端点) —— {type:"message", role:"user"} ──
   for (let i = input.length - 1; i >= 0; i--) {
     const item = input[i] as Record<string, unknown> | null | undefined;
     if (!item || typeof item !== "object") continue;
@@ -172,6 +182,32 @@ function extractWorkbuddyUserText(input: unknown): string | null {
       }
     }
     return texts.length > 0 ? texts.join("\n") : null;
+  }
+
+  // ── 形态 2: Chat Completions (主对话) —— {role:"user"}，无 type:"message" ──
+  // 与形态 1 分开扫：形态 1 命中即返回，只有它没命中才走到这里，
+  // 保证 aux 链路行为字节级不变。
+  for (let i = input.length - 1; i >= 0; i--) {
+    const item = input[i] as Record<string, unknown> | null | undefined;
+    if (!item || typeof item !== "object") continue;
+    if (item.role !== "user") continue;
+
+    const content = item.content;
+    if (!Array.isArray(content)) continue;
+
+    const texts: string[] = [];
+    for (const block of content) {
+      const b = block as Record<string, unknown> | null | undefined;
+      if (!b || typeof b !== "object") continue;
+      // 主对话 block type 是 "text"；兼容少数客户端发 "input_text"。
+      if (
+        (b.type === "text" || b.type === "input_text") &&
+        typeof b.text === "string"
+      ) {
+        texts.push(b.text);
+      }
+    }
+    if (texts.length > 0) return texts.join("\n");
   }
 
   return null;
@@ -210,12 +246,42 @@ export const workbuddyAdapter: AgentAdapter = {
   },
 
   extractUserText(content: unknown): string | null {
-    // 网页版 chat/completions：content 是字符串（可能带 <user_query> / wrapper）
+    // ── 形态 A: 字符串 content（网页版 chat/completions，可能带 <user_query> wrapper）
     if (typeof content === "string") {
       const extracted = extractUserQueryText(content);
-      return extracted.length > 0 ? extracted : null;
+      if (extracted.length > 0) return extracted;
+      return null;
     }
-    // 桌面客户端 /v1/responses：content 是 input[] 数组
-    return extractWorkbuddyUserText(content);
+
+    if (!Array.isArray(content)) return null;
+
+    // ── 形态 B: Responses API input[]（{type:"message", role:"user", ...}）
+    //    只有 aux 端点走这条，先判，命中即返回，保持 aux 行为不变。
+    const responsesText = extractWorkbuddyUserText(content);
+    if (responsesText) return responsesText;
+
+    // ── 形态 C: Chat Completions 的**单条消息 content 数组**
+    //    parseMemCommand 传的是 lastMsg.content = [{type:"text", text:"..."}]，
+    //    元素是 block（没有 role / type:"message" 字段），形态 B 必然落空。
+    //
+    //    ⚠️ 这是 2026-10-19 修复的核心：workbuddy **主对话**走
+    //    /workbuddy/<sid>/v1/chat/completions（由 openai-chat runner 处理），
+    //    body 就是这个形态。修复前落到形态 B 返回 null → mem: 命令静默透传给
+    //    LLM。这里对齐 codebuddyAdapter：无 wrapper 时用 defaultAdapter 语义
+    //    （收集所有 type==="text" 的 block）。
+    //
+    //    有 <user_query> wrapper 时（形态 C 也可能带）优先走剥离逻辑，
+    //    与字符串分支保持同一份语义。
+    for (let i = content.length - 1; i >= 0; i--) {
+      const b = content[i] as Record<string, unknown> | null | undefined;
+      if (!b || typeof b !== "object") continue;
+      if (typeof b.text !== "string") continue;
+      // 主对话 block type 是 "text"；aux 兼容 "input_text"。
+      if (b.type !== "text" && b.type !== "input_text") continue;
+      const extracted = extractUserQueryText(b.text);
+      if (extracted.length > 0) return extracted;
+    }
+
+    return null;
   },
 };

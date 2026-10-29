@@ -211,6 +211,17 @@ export function sha256(text: string): string {
 }
 
 /**
+ * 按**原始字节**计算 SHA-256，用于二进制源文件（docx/pdf/...）的登记与增量判断。
+ *
+ * 与 `sha256()` 的关系：对纯文本 `sha256Bytes(Buffer.from(s,'utf-8')) === sha256(s)`，
+ * 两者等价，故存量 md/txt 的 sha 不变、不会触发全量重跑。
+ * 分开两个函数是为了让「按字节」与「按 utf-8 字符串」的语义显式化，避免改错存量行为。
+ */
+export function sha256Bytes(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
  * rawWrite 登记 source（设计 §3.4，先查再更新，非盲 UPSERT）。必须在 withWriteDb 事务内调用。
  * - 新文件 → INSERT，status=uploaded，last_modified_by=创建人；
  * - sha 变化 → UPDATE，**保留 created_at**，重置 uploaded、记最后变更人、清 ingest_error；

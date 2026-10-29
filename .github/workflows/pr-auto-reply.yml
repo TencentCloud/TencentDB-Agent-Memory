@@ -1,0 +1,77 @@
+name: External PR Auto Reply
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: pr-auto-reply-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  reply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reply to unanswered external PR
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.issue.number;
+            const internal = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            const reply =
+              "Thank you for your contribution! This is an automated acknowledgment. We'll review it internally soon and share all feedback in the discussion below.";
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+
+            if (pr.state !== "open") return;
+            if (pr.user?.type === "Bot") return;
+            if (internal.has(pr.author_association)) return;
+
+            const [comments, reviews, reviewComments] = await Promise.all([
+              github.paginate(github.rest.issues.listComments, {
+                owner,
+                repo,
+                issue_number: pull_number,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number,
+                per_page: 100,
+              }),
+              github.paginate(github.rest.pulls.listReviewComments, {
+                owner,
+                repo,
+                pull_number,
+                per_page: 100,
+              }),
+            ]);
+
+            const hasMaintainerReply = [
+              ...comments,
+              ...reviews,
+              ...reviewComments,
+            ].some((item) => internal.has(item.author_association));
+
+            const alreadyReplied = comments.some(
+              (comment) => comment.body?.trim() === reply,
+            );
+
+            if (hasMaintainerReply || alreadyReplied) return;
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pull_number,
+              body: reply,
+            });

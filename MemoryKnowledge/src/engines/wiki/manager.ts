@@ -36,7 +36,7 @@ import {
   recordSourceIngestResult,
   deleteSources,
   classifySources,
-  sha256,
+  sha256Bytes,
   type SourceStatus,
 } from "./index-db.js";
 import { createLogger } from "../../logger.js";
@@ -575,13 +575,15 @@ export async function runIngestIncremental(
   }
 
   // 扫描磁盘源，算 sha。filename = 相对 sourcesDir 的 posix 路径（与 rawWrite 的 filename 对齐）。
+  // sha 打在**原始字节**上（与 rawWrite 登记口径一致）：换解析库或调转换配置都不会改变 sha，
+  // 避免存量文件被误判为变更而全量重跑 LLM。对纯文本文件与 sha256(utf-8 字符串) 等价。
   const disk = findWikiSourceFiles(sourcesDir).map((abs) => {
-    const content = readFileSync(abs, "utf-8");
+    const bytes = readFileSync(abs);
     return {
       abs,
       filename: relative(sourcesDir, abs).replace(/\\/g, "/"),
-      sha256: sha256(content),
-      size: Buffer.byteLength(content, "utf-8"),
+      sha256: sha256Bytes(bytes),
+      size: bytes.length,
     };
   });
 
