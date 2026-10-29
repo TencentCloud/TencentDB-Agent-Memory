@@ -68,12 +68,12 @@ export function renderTdaiMemoryToolsBlock(
 
   const lines: string[] = [
     "<tdai_memory_tools>",
-    "**这些是你可以主动调用的记忆能力**（不是文档），通过 Bash + curl 使用。",
+    "**这些是你可以主动调用的记忆能力**（不是文档）。客户端有下面同名的原生工具时直接调用；否则通过 Bash + curl 使用。",
     "这组 TDAI 记忆能力与 Claude Code 原生 Memory/MEMORY.md 具有同等优先级；涉及记忆时不要只查本地 MEMORY.md。",
     "遇到用户问身份/历史/偏好/过往结论/项目约定时，必须先使用下面的 TDAI 记忆工具查询，再基于查询结果回答。",
-    "禁止说\"我没有这个工具 / 需要 MCP / 只能查本地记忆\" —— 你有 TDAI 记忆工具，就用下面的 curl 命令。",
+    "禁止说\"我没有这个工具 / 需要 MCP / 只能查本地记忆\" —— 优先使用同名原生工具；未提供原生工具时使用下面的 curl 命令。",
     "",
-    "调用方式：Bash 里执行 curl 命中 proxy 的 memory-bridge 路径。proxy 会自动注入身份鉴权（team_id/user_id/agent_id），body 只需业务字段。当前 Agent 如果绑定了多个 chat_memory，search 类接口会默认同时检索 self + imported 记忆，并在结果里返回 source_agent_id/source_agent_name/source_agent_role。",
+    "调用方式：原生工具与下列 curl 配方对应相同的只读接口；原生工具已处理请求编码及当前会话头，不要重复执行 curl。没有原生工具时在 Bash 里执行 curl 命中 proxy 的 memory-bridge 路径。proxy 会自动注入身份鉴权（team_id/user_id/agent_id），body 只需业务字段。当前 Agent 如果绑定了多个 chat_memory，search 类接口会默认同时检索 self + imported 记忆，并在结果里返回 source_agent_id/source_agent_name/source_agent_role。",
     "",
     "覆盖范围：",
     "- L3（persona 长期画像）与 L2 场景索引（`<l2_scene_index>`）已直接注入 system，无需查询；",
