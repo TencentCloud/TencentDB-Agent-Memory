@@ -59,8 +59,8 @@ MemoryProxy 的 v3 接口信封分两类，**与卷一 MemoryCore、卷二 Memor
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/v3/instance/proxy-destroy` | 运维：清理 proxy 侧实例缓存 + STS pool（唯一有鉴权） |
-| GET | `/v3/admin/rate-limits` | 查频控配置（全局 / 维度 override） |
-| PUT | `/v3/admin/rate-limits` | 设频控配置（全局 / 维度 override） |
+| GET | `/v3/admin/rate-limits` | 查频控配置（全局 / 实例 override / 维度 override） |
+| PUT | `/v3/admin/rate-limits` | 设频控配置（全局 / 实例 override / 维度 override） |
 | DELETE | `/v3/admin/rate-limits` | 删频控配置（恢复默认 / 删 override） |
 | POST | `/v3/session/refresh-cache` | 刷新 session 注入缓存（重拉 agent/task detail + prewarm） |
 | POST | `/v3/session/force-archive-skill` | 手动强制归档 session skill buffer |
@@ -127,20 +127,23 @@ Authorization: Bearer <admin.apiKey>
 
 ## 3.2 频控配置（3 方法，均无鉴权）
 
-> 频控分两层：**全局**（`config.rateLimit`）与**维度 override**（`instance_id + model_id`）。维度 override 优先于全局。
+> 频控分三层，优先级从高到低：**维度 override**（`instance_id + model_id`）> **实例 override**（只传 `instance_id`，对该实例下所有模型生效）> **全局**（`config.rateLimit`，可被 PUT 全局覆盖）。
+>
+> 计数始终按 `instance × model` 维度独立统计：实例 override 表示"该实例的**每个**模型各自享有这份配额"，不是所有模型共享一个池子。设置实例 override 后，已有维度 override 的模型仍以维度 override 为准（可用 `clear_model_overrides` 一并清掉）。
 
 ### GET /v3/admin/rate-limits
 
 查询频控配置。
 
-**Query**：`instance_id` + `model_id`（**必须成对出现**）。
+**Query**：可选 `instance_id`、`model_id`（`model_id` 必须搭配 `instance_id`）。
 
 **响应** `data`：
 
-- 不带参数（查全局）：`{ enabled, tpm, qpm, window_seconds: 60, overrides: [...] }`
-- 带 instance_id+model_id（查维度）：`{ enabled, instance_id, model_id, input_tpm, qpm, source: "global"|"override", global }`
+- 不带参数（查全局）：`{ enabled, tpm, qpm, window_seconds: 60, instance_overrides: [{ instanceId, tpm, qpm }], overrides: [...] }`
+- 只带 instance_id（查实例）：`{ enabled, instance_id, input_tpm, qpm, source: "global"|"instance_override", global, model_overrides: [{ model_id, input_tpm, qpm }] }`
+- 带 instance_id+model_id（查维度，返回最终生效值）：`{ enabled, instance_id, model_id, input_tpm, qpm, source: "global"|"instance_override"|"override", instance_override, global }`
 
-**错误**：`400`（只传 instance_id 或 model_id 之一）、`503`（store 错误）。
+**错误**：`400`（只传 model_id / 参数非法）、`503`（store 错误）。
 
 ### PUT /v3/admin/rate-limits
 
@@ -152,12 +155,17 @@ Authorization: Bearer <admin.apiKey>
 |---|---|---|---|
 | input_tpm | number | 是 | 输入 token/分钟，**正整数** |
 | qpm | number | 是 | 请求/分钟，**正整数** |
-| instance_id | string | 否 | 与 model_id 成对 |
-| model_id | string | 否 | 与 instance_id 成对（≤256，不含控制字符） |
+| instance_id | string | 否 | 只传 instance_id = 设实例 override（该实例所有模型） |
+| model_id | string | 否 | 必须搭配 instance_id（≤256，不含控制字符） |
+| clear_model_overrides | boolean | 否 | 仅实例 override 可用；`true` 时同时删除该实例下所有维度 override，让实例配额对所有模型生效 |
 
-**响应** `data`：不带维度返回 `{ tpm, qpm }`；带维度返回 `{ instance_id, model_id, input_tpm, qpm }`。
+**响应** `data`：
 
-**错误**：`400`（JSON 非法 / 非正整数 / 维度只传一个 / model_id 非法）、`503`。
+- 不带维度：`{ tpm, qpm }`
+- 只带 instance_id：`{ instance_id, input_tpm, qpm, cleared_model_overrides, model_overrides: [...] }`（`model_overrides` 为仍优先于实例配额的维度 override）
+- 带 instance_id+model_id：`{ instance_id, model_id, input_tpm, qpm }`
+
+**错误**：`400`（JSON 非法 / 非正整数 / 只传 model_id / model_id 非法 / clear_model_overrides 非布尔或用在非实例维度）、`503`。
 
 **示例**
 
@@ -168,15 +176,26 @@ PUT /v3/admin/rate-limits
 
 // 响应
 { "code": 0, "message": "ok", "data": { "tpm": 100000, "qpm": 300 } }
+
+// 请求（调整某实例所有模型，并清掉该实例原有的单模型 override）
+PUT /v3/admin/rate-limits
+{ "instance_id": "mem-xxx", "input_tpm": 2000000, "qpm": 300, "clear_model_overrides": true }
+
+// 响应
+{ "code": 0, "message": "ok", "data": { "instance_id": "mem-xxx", "input_tpm": 2000000, "qpm": 300, "cleared_model_overrides": 2, "model_overrides": [] } }
 ```
 
 ### DELETE /v3/admin/rate-limits
 
 删除频控配置（恢复默认）。
 
-**请求体**：可选 `instance_id` + `model_id`（成对）。
+**请求体**：可选 `instance_id`、`model_id`（`model_id` 必须搭配 `instance_id`）。
 
-**响应** `data`：不带维度返回 `{ tpm, qpm }`（回退到 config 默认值）；带维度返回 `{ instance_id, model_id, deleted: true }`。
+**响应** `data`：
+
+- 不带维度：`{ tpm, qpm }`（回退到 config 默认值）
+- 只带 instance_id：`{ instance_id, deleted: true }`（删实例 override，不影响该实例的维度 override）
+- 带 instance_id+model_id：`{ instance_id, model_id, deleted: true }`
 
 **错误**：`400`、`503`。
 

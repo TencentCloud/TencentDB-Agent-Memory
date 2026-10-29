@@ -129,6 +129,14 @@ export interface FormData {
   teamPage?: number;
   agentPage?: number;
   taskPage?: number;
+  /**
+   * v3.3: 表单顶部追加的一行说明（账户默认回退原因等），拼进 question 前缀展示。
+   *
+   * codex 由 runner（codex.ts / workbuddy.ts 的 buildInterceptResponse）在 CB 产出
+   * formData 后外层重渲染，转换时必须带上，否则账户默认失效的原因在 codex /
+   * workbuddy 客户端上会静默丢失。
+   */
+  notice?: string;
 }
 
 // ── Answer extraction ────────────────────────────────────────────────────────
@@ -428,8 +436,11 @@ function pageSuffix(pageIndex: number, totalPages: number): string {
 }
 
 function buildQuestions(data: FormData): CodexQuestion[] {
-  const { teams, stage, selectedTeamId, retry } = data;
+  const { teams, stage, selectedTeamId, retry, notice } = data;
   const retryHint = retry ? "（上次未识别，请重新选择）" : "";
+  // v3.3: 账户默认失效原因。codex 的 question 文案已带 pageSuffix / retryHint 等
+  // 后缀, 这里按同样的"追加到 question 尾部"方式处理, 不新增渲染分支。
+  const noticeHint = notice ? `（${notice}）` : "";
   const teamPage = Math.max(0, data.teamPage ?? 0);
   const agentPage = Math.max(0, data.agentPage ?? 0);
   const taskPage = Math.max(0, data.taskPage ?? 0);
@@ -438,7 +449,7 @@ function buildQuestions(data: FormData): CodexQuestion[] {
     return [{
       id: "asset_confirm",
       header: clampHeader("是否关联资产"),
-      question: `本次对话是否要关联团队资产（Skill / Memory / Agent / Task / Knowledge）？${retryHint}`,
+      question: `本次对话是否要关联团队资产（Skill / Memory / Agent / Task / Knowledge）？${retryHint}${noticeHint}`,
       options: [
         {
           label: ASSET_CONFIRM_YES,
@@ -461,7 +472,7 @@ function buildQuestions(data: FormData): CodexQuestion[] {
     return [{
       id: "team_select",
       header: clampHeader("选 Team"),
-      question: `请选择本次会话所属的 Team${pageSuffix(teamPage, pageInfo.totalPages)}${retryHint}：`,
+      question: `请选择本次会话所属的 Team${pageSuffix(teamPage, pageInfo.totalPages)}${retryHint}${noticeHint}：`,
       options: buildOptions(entries, teamPage),
     }];
   }
@@ -482,7 +493,7 @@ function buildQuestions(data: FormData): CodexQuestion[] {
     questions.push({
       id: "agent_select",
       header: clampHeader("选 Agent"),
-      question: `请选择「${team.team_name}」下要使用的 Agent${pageSuffix(agentPage, pageInfo.totalPages)}${retryHint}：`,
+      question: `请选择「${team.team_name}」下要使用的 Agent${pageSuffix(agentPage, pageInfo.totalPages)}${retryHint}${noticeHint}：`,
       options: buildOptions(entries, agentPage),
     });
   }
@@ -500,7 +511,7 @@ function buildQuestions(data: FormData): CodexQuestion[] {
     questions.push({
       id: "task_select",
       header: clampHeader("选 Task"),
-      question: `请选择「${team.team_name}」下关联的任务${pageSuffix(taskPage, pageInfo.totalPages)}${retryHint}：`,
+      question: `请选择「${team.team_name}」下关联的任务${pageSuffix(taskPage, pageInfo.totalPages)}${retryHint}${noticeHint}：`,
       options: opts,
     });
   }

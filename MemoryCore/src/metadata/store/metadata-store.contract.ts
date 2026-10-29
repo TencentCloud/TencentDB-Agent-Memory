@@ -298,6 +298,26 @@ export function runMetadataStoreContract(
         const result = (await store.listTasks({ creator_user_id: owner.user_id }, P)).items;
         expect(result.map((t) => t.task_id).sort()).toEqual([t1.task_id, t2.task_id].sort());
       });
+
+      // v3.3 user-session-default (TAPD 1070195170): Store 层 reserved id 守卫
+      // (对称于 service 层 createTask 的 reserved_task_id 校验)。防止迁移/seed
+      // 脚本绕过 service 直调 store 把 id="default" 写进去让 Proxy 虚拟值短路
+      // 链路串味。守卫在 SQLite + MongoDB 两端等价。
+      it("createTask 显式传 task_id=\"default\" (reserved) → throws", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        await expect(
+          store.createTask({
+            task_id: "default",
+            team_id: team.team_id,
+            creator_user_id: owner.user_id,
+            title: "T",
+          }),
+        ).rejects.toThrow(/reserved/i);
+        // 守卫失败不留下 orphan row
+        const got = await store.getTaskById("default");
+        expect(got).toBeNull();
+      });
     });
 
     // ── ParticipationLog ──
@@ -612,6 +632,26 @@ export function runMetadataStoreContract(
         await store.deleteUsers([owner.user_id]);
         expect((await store.listTeamMembers(team.team_id, P)).items).toHaveLength(0);
         expect((await store.listAclBySubject("user", owner.user_id, P)).items).toHaveLength(0);
+      });
+
+      // v3.3 user-session-default: user 销号时 meta_user_session_defaults 也要清
+      // (SQLite 走 FK CASCADE; MongoDB 由 deleteUsers 应用层 deleteMany 对齐)。
+      it("deleteUsers 级联清理 meta_user_session_defaults", async () => {
+        const owner = await store.createUser(uniqueUserInput());
+        const team = await store.createTeam(teamInput(owner.user_id));
+        const agent = await store.createAgent({
+          team_id: team.team_id, owner_user_id: owner.user_id, name: "A",
+        });
+        await store.upsertUserSessionDefault({
+          user_id: owner.user_id,
+          team_id: team.team_id,
+          agent_id: agent.agent_id,
+          task_id: "default",
+        });
+        expect(await store.getUserSessionDefault(owner.user_id)).not.toBeNull();
+
+        await store.deleteUsers([owner.user_id]);
+        expect(await store.getUserSessionDefault(owner.user_id)).toBeNull();
       });
 
       it("deleteAgents 级联清理 task_agents + fixed_assets", async () => {
