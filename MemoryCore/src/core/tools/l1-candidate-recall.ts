@@ -12,6 +12,7 @@
 import type { IMemoryStore, IsolationFilter, L1FtsResult, L1SearchResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/tokenize.js";
 import { hasClientEmbedding, type EmbeddingService } from "../store/embedding.js";
+import { embedQuery } from "../store/query-embedding.js";
 import type { Logger } from "../types.js";
 
 const DEFAULT_TAG = "[memory-tdai][l1-candidate-recall]";
@@ -221,8 +222,8 @@ async function recallVector(
     if (!vec) {
       logger?.debug?.(`${tag} [hybrid-vec] Generating query embedding...`);
       vec = embeddingTimeoutMs != null
-        ? await embeddingService!.embed(query, { timeoutMs: embeddingTimeoutMs })
-        : await embeddingService!.embed(query);
+        ? await embedQuery(embeddingService!, query, { timeoutMs: embeddingTimeoutMs })
+        : await embedQuery(embeddingService!, query);
     }
     if (!vec || vec.length === 0) {
       logger?.debug?.(`${tag} [hybrid-vec] Empty query embedding, skipping vector path`);
