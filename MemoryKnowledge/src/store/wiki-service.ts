@@ -43,6 +43,10 @@ import {
   sha256Bytes,
   type SourceStatus,
 } from "../engines/wiki/index-db.js";
+import {
+  findDuplicateWikiFilename,
+  isPortableWikiFilename,
+} from "./wiki-filename-identity.js";
 import { previewModeOf, toPreviewFormat, type PreviewFormat } from "../document-converter/format-registry.js";
 import { getWikiBinaryFileMaxBytes } from "../config.js";
 import { toSourceText } from "../document-converter/index.js";
@@ -217,6 +221,8 @@ export interface PageRmResult {
  * - `"invalid_path"`：路径穿越校验失败
  * - `"forbidden_path"`：写入了结构性文件等禁止路径
  * - `"too_large"`：超过容量限制
+ * - `"duplicate_filename"`：同批文件名在 NFC + case-fold 后重复
+ * - `"unsafe_filename"`：文件名不是 Windows 可移植名称
  * - 否则：实际结果对象
  */
 export type WriteOutcome<T> =
@@ -225,7 +231,9 @@ export type WriteOutcome<T> =
   | "processing"
   | "invalid_path"
   | "forbidden_path"
-  | "too_large";
+  | "too_large"
+  | "duplicate_filename"
+  | "unsafe_filename";
 
 const PAGE_WRITE_MAX_BYTES = 512 * 1024;
 
@@ -738,6 +746,12 @@ export class WikiService {
     if (files.length > RAW_WRITE_MAX) {
       throw new Error(`files exceeds max ${RAW_WRITE_MAX}`);
     }
+    if (files.some((file) => !isPortableWikiFilename(file.filename))) {
+      return "unsafe_filename";
+    }
+    if (findDuplicateWikiFilename(files.map((file) => file.filename))) {
+      return "duplicate_filename";
+    }
 
     const sourcesDir = join(this.dirFor(serviceId, teamId, wikiId), "raw", "sources");
     type Plan = {
@@ -1073,6 +1087,16 @@ export class WikiService {
     if (row.status === "processing") return "processing";
     if (pages.length > PAGE_WRITE_MAX) {
       throw new Error(`pages exceeds max ${PAGE_WRITE_MAX}`);
+    }
+    const pageFilenames = pages.map(({ ref }) => {
+      const clean = ref.replace(/^wiki\//, "");
+      return clean.endsWith(".md") ? clean : `${clean}.md`;
+    });
+    if (pageFilenames.some((filename) => !isPortableWikiFilename(filename))) {
+      return "unsafe_filename";
+    }
+    if (findDuplicateWikiFilename(pageFilenames)) {
+      return "duplicate_filename";
     }
 
     const projectPath = this.dirFor(serviceId, teamId, wikiId);
