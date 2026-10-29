@@ -446,6 +446,8 @@ export interface GrantAclInput {
 // ============================
 
 export interface AgentFilter {
+  /** 内部读取范围，由认证上下文填入；省略保留内部/管理员查询行为。 */
+  readable_by_user_id?: string;
   status?: AgentStatus;
   /**
    * 组合过滤：与 team_id 一起使用时表示"团队内某用户 owner 的 agent"。
@@ -457,6 +459,8 @@ export interface AgentFilter {
 }
 
 export interface TaskFilter {
+  /** 内部读取范围，由认证上下文填入；不属于公开 API 请求参数。 */
+  readable_by_user_id?: string;
   status?: TaskStatus;
   creator_user_id?: string;
   /** 精确匹配 task 标题（用于查重等场景）。 */

@@ -649,6 +649,13 @@ export async function confirmPendingTaskAction(
     };
   }
 
+  // config-lock 的 pending 由 mem-command 侧自行消费，不属于 task action。
+  // 显式判 kind 而不是靠 "非 create 即 update" 收窄 —— PendingPayload 加了
+  // config-lock 后那种隐式收窄会失效。
+  if (payload.kind !== "update") {
+    return { success: false, error: `unsupported pending kind: ${payload.kind}` };
+  }
+
   // update 分支
   const client = getClientFromResolved(resolved, input.config, input.spaceId);
   let updated: TaskEntity;
