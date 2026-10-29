@@ -173,11 +173,14 @@ import {
   buildFtsQuery,
   tokenizeForFts,
   bm25RankToScore,
+  rankByTokenCoverage,
+  parseFtsQueryTokens,
+  TOKEN_SCAN_LIMIT,
   _resetJiebaForTest,
   _setJiebaForTest,
 } from "../tokenize.js";
 
-export { buildFtsQuery, tokenizeForFts, bm25RankToScore, _resetJiebaForTest, _setJiebaForTest };
+export { buildFtsQuery, tokenizeForFts, bm25RankToScore, rankByTokenCoverage, parseFtsQueryTokens, _resetJiebaForTest, _setJiebaForTest };
 
 /** FTS5 search result for L1 records. */
 export interface FtsSearchResult {
@@ -2997,7 +3000,10 @@ export class VectorStore implements IMemoryStore {
 
   /**
    * FTS5 keyword search on L1 records.
-   * Returns top-`limit` results sorted by BM25 relevance (highest first).
+   * Returns top-`limit` results sorted by **token coverage first, BM25 second**
+   * (see `rankByTokenCoverage`: with OR-joined tokens, BM25 alone lets a short
+   * document matching a common word outrank a long one matching the rare
+   * keyword — measured, not theoretical).
    *
    * @param ftsQuery  A pre-built FTS5 MATCH expression (from `buildFtsQuery()`).
    * @param limit     Maximum number of results to return.
@@ -3007,7 +3013,8 @@ export class VectorStore implements IMemoryStore {
   searchL1Fts(ftsQuery: string, limit = 20, filter?: IsolationFilter): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const retrieveLimit = filter ? Math.max(limit * 5, limit) : limit;
+      // Over-fetch: re-ranking cannot rescue a document BM25 ranked past the cut.
+      const retrieveLimit = Math.max(limit * 5, limit, 20);
       const rows = this.stmtL1FtsSearch.all(ftsQuery, retrieveLimit) as Array<{
         record_id: string;
         content: string;
@@ -3028,9 +3035,8 @@ export class VectorStore implements IMemoryStore {
         rank: number;
       }>;
 
-      return rows
+      const mapped = rows
         .filter((r) => rowMatchesIsolation(r, filter))
-        .slice(0, limit)
         .map((r) => ({
           record_id: r.record_id,
           content: r.content,
@@ -3050,6 +3056,43 @@ export class VectorStore implements IMemoryStore {
           agent_id: r.agent_id ?? "",
           metadata_json: r.metadata_json,
         }));
+
+      // Re-rank by query-token coverage. Single-token queries skip it; a failure
+      // here must never cost recall, so we fall back to plain BM25 order.
+      const tokens = parseFtsQueryTokens(ftsQuery);
+      let ranked = mapped;
+      if (tokens.length > 1 && mapped.length > 1) {
+        try {
+          const totalDocs = (this.db.prepare("SELECT COUNT(*) AS c FROM l1_fts").get() as { c: number }).c;
+          const tokenDocIds = new Map<string, Set<string>>();
+          let scanTruncated = false;
+          for (const token of tokens) {
+            const perToken = this.stmtL1FtsSearch.all(`"${token.replaceAll('"', "")}"`, TOKEN_SCAN_LIMIT) as Array<{
+              record_id: string;
+            }>;
+            // A truncated per-token scan cannot distinguish "document does not
+            // contain this token" from "document was never scanned": a document
+            // that matches two very common tokens can rank 4th in the combined
+            // search yet fall outside the top-N of each individual scan, and the
+            // coverage gate would then drop a high-ranked hit entirely. When any
+            // scan may be truncated, skip re-ranking rather than rank on partial
+            // membership sets — and stop scanning: once scanTruncated is set the
+            // final branch returns the existing BM25 order, so every later scan
+            // and membership set is dead work.
+            if (perToken.length >= TOKEN_SCAN_LIMIT) {
+              scanTruncated = true;
+              break;
+            }
+            tokenDocIds.set(token, new Set(perToken.map((r) => r.record_id)));
+          }
+          ranked = scanTruncated ? mapped.slice(0, limit) : rankByTokenCoverage(mapped, tokenDocIds, totalDocs);
+        } catch (err) {
+          this.logger?.debug?.(
+            `${TAG} [L1-fts-search] token-coverage rerank skipped: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      return ranked.slice(0, limit);
     } catch (err) {
       this.logger?.warn(
         `${TAG} [L1-fts-search] FAILED (non-fatal, returning empty): ${err instanceof Error ? err.message : String(err)}`,
