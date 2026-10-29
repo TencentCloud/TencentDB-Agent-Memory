@@ -49,6 +49,23 @@ export interface RunnerSessionState {
   last_l1_cursor: number;
   /** Last scene name from the most recent L1 extraction (for cross-batch continuity) */
   last_scene_name: string;
+  /**
+   * L1 replay guard (issue #1210 review R2): message ids whose group already
+   * completed in a partially-failed batch but whose recorded_at_ms lies
+   * AFTER the persisted cursor (interleaved sessions / same-ms batches).
+   * They are filtered out of subsequent queries so a retry never re-extracts
+   * (and duplicates) them. Cleared when the batch fully succeeds (the cursor
+   * watermark then covers everything).
+   */
+  l1_replay_guard: string[];
+  /**
+   * L1 profile scopes awaiting L2 scheduling (issue #1210 review R3): scopes
+   * of groups stored successfully in a partially-failed batch. The failing
+   * run throws before its return value (which carries profileScopes) reaches
+   * the scheduler, so they are persisted here and merged into the next
+   * successful run's result.
+   */
+  l1_pending_profile_scopes: string[];
 }
 
 /**
@@ -112,6 +129,8 @@ const DEFAULT_RUNNER_STATE: RunnerSessionState = {
   last_captured_timestamp: 0,
   last_l1_cursor: 0,
   last_scene_name: "",
+  l1_replay_guard: [],
+  l1_pending_profile_scopes: [],
 };
 
 const DEFAULT_PIPELINE_STATE: PipelineSessionState = {
@@ -643,6 +662,19 @@ export class CheckpointManager {
     memoriesExtracted: number,
     cursorRecordedAtMs?: number,
     lastSceneName?: string,
+    /**
+     * Partial-failure bookkeeping (issue #1210 reviews R2/R3). Both fields
+     * are overwritten wholesale with the caller's values; omitting the option
+     * clears them (a plain completion has no replay guard and no pending
+     * scopes — the cursor watermark covers everything).
+     */
+    completion?: {
+      /** Message ids to exclude from subsequent L1 queries (interleaved /
+       *  same-ms groups already processed but still past the cursor). */
+      replayGuard?: string[];
+      /** Profile scopes awaiting L2 scheduling on the next successful run. */
+      pendingProfileScopes?: string[];
+    },
   ): Promise<void> {
     let regressed = false;
     await this.mutate((cp) => {
@@ -663,6 +695,8 @@ export class CheckpointManager {
       if (lastSceneName !== undefined) {
         state.last_scene_name = lastSceneName;
       }
+      state.l1_replay_guard = completion?.replayGuard ?? [];
+      state.l1_pending_profile_scopes = completion?.pendingProfileScopes ?? [];
       cp.total_memories_extracted += memoriesExtracted;
       cp.memories_since_last_persona += memoriesExtracted;
     });

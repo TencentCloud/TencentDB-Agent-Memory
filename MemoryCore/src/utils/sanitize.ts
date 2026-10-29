@@ -403,3 +403,65 @@ function escapeControlCharsInJsonStrings(text: string): string {
 
   return out.join("");
 }
+
+// ============================
+// Reasoning-wrapper-aware payload location (issue #1210 reviews R4/N1/F7)
+// ============================
+
+/**
+ * Closed `<think>…</think>` spans (including trailing whitespace) in raw text.
+ * Shared by the L1 extraction and dedup parsers: wrapper reasoning lives
+ * OUTSIDE the JSON payload, while literal `<think>` strings inside memory
+ * content live INSIDE it and must survive verbatim.
+ */
+export function findClosedThinkSpans(raw: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  const re = /<think>[\s\S]*?<\/think>\s*/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    spans.push({ start: m.index, end: m.index + m[0].length });
+  }
+  return spans;
+}
+
+function insideClosedThinkSpan(idx: number, spans: Array<{ start: number; end: number }>): boolean {
+  return spans.some((s) => idx >= s.start && idx < s.end);
+}
+
+/**
+ * First occurrence of `needle` at/after `from` that is NOT inside a closed
+ * think span. Skipping span-interior hits prevents stray `[` in think prose
+ * from anchoring the payload search (F7) while leaving in-content literals
+ * untouched (R4).
+ */
+export function indexOfOutsideThinkSpan(
+  needle: string,
+  raw: string,
+  spans: Array<{ start: number; end: number }>,
+  from = 0,
+): number {
+  let idx = raw.indexOf(needle, from);
+  while (idx !== -1 && insideClosedThinkSpan(idx, spans)) {
+    idx = raw.indexOf(needle, idx + 1);
+  }
+  return idx;
+}
+
+/**
+ * LAST occurrence of `needle` that is NOT inside a closed think span — the
+ * payload-end counterpart of indexOfOutsideThinkSpan (review ②: a trailing
+ * `<think>…{debug:[1]}</think>` block must not extend the payload into
+ * reasoning prose). Brackets inside the payload's own JSON strings lie
+ * before the real payload end and are unaffected.
+ */
+export function lastIndexOfOutsideThinkSpan(
+  needle: string,
+  raw: string,
+  spans: Array<{ start: number; end: number }>,
+): number {
+  let idx = raw.lastIndexOf(needle);
+  while (idx !== -1 && insideClosedThinkSpan(idx, spans)) {
+    idx = raw.lastIndexOf(needle, idx - 1);
+  }
+  return idx;
+}
