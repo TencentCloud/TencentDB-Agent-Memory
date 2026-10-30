@@ -622,13 +622,15 @@ export async function handleSessionInit(
   userKey?: string,
   spaceId?: string,
   presetIdentity?: PresetIdentity,
+  agentSource: string = "claude-code",
+  workspaceId: string = "",
 ): Promise<SessionInitResult> {
   const compositeKey = `claude-code:${sessionKey}`;
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     return await handleSessionInitInner(
       sessionKey, userId, messages, config, store, reqCtx,
-      metadataClient, userKey, spaceId, presetIdentity,
+      metadataClient, userKey, spaceId, presetIdentity, agentSource, workspaceId,
     );
   } finally {
     // 无论正常/异常返回都尝试发一次埋点；装饰器内部自吞异常。
@@ -652,6 +654,8 @@ async function handleSessionInitInner(
   userKey?: string,
   spaceId?: string,
   presetIdentity?: PresetIdentity,
+  agentSource: string = "claude-code",
+  workspaceId: string = "",
 ): Promise<SessionInitResult> {
   const compositeKey = `claude-code:${sessionKey}`;
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
@@ -819,6 +823,7 @@ async function handleSessionInitInner(
       sessionKey,
       // v3.6：传 agentSource，resolver 据此匹配待命绑定（arm:<brand>:<ts>）
       agentSource,
+      workspaceId,
     });
     const userDefaultResolution = userDefaultResult.resolution;
     const userDefaultFallbackReason = userDefaultResult.fallbackReason;

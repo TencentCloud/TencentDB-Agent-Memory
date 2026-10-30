@@ -137,7 +137,7 @@ export async function resolveUserSessionDefault(
           { team_id: row.team_id, agent_id: row.agent_id, task_id: row.task_id, workspace_id: 'session:' + input.sessionKey },
         );
         const armed = await resolveForWorkspace(input, 'session:' + input.sessionKey, 'arm-binding');
-        if (armed) {
+        if (armed.resolution) {
           // 转正成功后才删 arm 行；删除失败仅残留一条无害的过期待命行（幂等：重复 set 同键为覆盖）
           try {
             await input.metadataClient.deleteUserSessionDefault(input.userId, row.workspace_id);
@@ -163,7 +163,7 @@ export async function resolveUserSessionDefault(
 
   if (input.sessionKey) {
     const sessionBound = await resolveForWorkspace(input, 'session:' + input.sessionKey, 'session-binding');
-    if (sessionBound) return sessionBound;
+    if (sessionBound.resolution) return sessionBound;
   }
   return resolveForWorkspace(input, input.workspaceId ?? '', 'user-default');
 }
@@ -173,7 +173,7 @@ async function resolveForWorkspace(
   input: ResolveUserSessionDefaultInput,
   wsId: string,
   mode: string,
-): Promise<PresetResolution | null> {
+): Promise<UserDefaultResolveResult> {
   // Step 1: 读 Core
   let def;
   try {

@@ -99,8 +99,6 @@ export interface TaskEntity {
 export interface UserSessionDefaultEntity {
   user_id: string;
   workspace_id: string;
-  workspace_id: string;
-  workspace_id: string;
   team_id: string;
   agent_id: string;
   task_id: string;
@@ -109,6 +107,8 @@ export interface UserSessionDefaultEntity {
 }
 
 export interface SetUserSessionDefaultInput {
+  /** 工作区维度；'' = 全局默认。 */
+  workspace_id?: string;
   team_id: string;
   agent_id: string;
   task_id: string;

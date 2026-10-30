@@ -1412,7 +1412,6 @@ export async function runAnthropicPipeline(
       traceRequestBody,
       preparedStats,
       skipCreditReport,
-      customUpstream: _customUpstream,
       isCustomUpstream: _isCustomUpstream,
       gates: _gates,
       sessionTurnCtx: upstreamResp.ok ? sessionTurnCtx : null,
