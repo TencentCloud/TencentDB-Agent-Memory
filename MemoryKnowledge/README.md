@@ -96,6 +96,16 @@ pnpm test
 pnpm build        # tsdown → dist/
 ```
 
+MCP 必须配置 `KNOWLEDGE_API_SERVICE_ID`（与 Wiki 所属 service_id 一致），例如：
+
+```bash
+KNOWLEDGE_API_SERVICE_ID=default KNOWLEDGE_API_URL=http://127.0.0.1:8421 node bin/mcp.mjs
+```
+
+源码开发可使用同样的环境变量运行 `pnpm dev:mcp`。可选
+`KNOWLEDGE_API_TOKEN` 保留 Bearer 鉴权能力；它不能替代实例标识。
+MCP 通过 stdio 提供查询工具，模型配置由客户端保留；知识 API 的原有访问控制不变。
+
 ## 可选：ClickHouse 工具调用埋点
 
 默认关闭。设置以下环境变量后，Knowledge Service 会把 `POST /v3/tools/call` 写入与 Memory/Skill 兼容的 `tool_call_logs`；启动时会幂等建表，批写或建表失败均不阻断业务请求。

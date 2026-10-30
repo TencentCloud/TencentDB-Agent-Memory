@@ -5,7 +5,7 @@
  * the server forwards the request to the Hono HTTP API via callApi().
  *
  * Usage:
- *   KNOWLEDGE_API_URL=http://localhost:8421 node dist/mcp/server.js
+ *   KNOWLEDGE_API_SERVICE_ID=default KNOWLEDGE_API_URL=http://localhost:8421 node dist/mcp/server.mjs
  *
  * The agent connects via stdio; the server translates tool calls to HTTP
  * requests against the knowledge service.
@@ -13,6 +13,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { pathToFileURL } from "node:url";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -21,6 +22,7 @@ import {
 import { MCP_TOOLS, type McpToolDef } from "./tools.js";
 import { callApi, type HttpClientOptions } from "./http-client.js";
 import { createLogger } from "../logger.js";
+import { isValidIdSegment } from "../api-helpers.js";
 
 const log = createLogger("mcp-server");
 
@@ -89,20 +91,23 @@ export function createMcpServer(httpOpts: HttpClientOptions): Server {
   return server;
 }
 
-// Start server when run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+export async function startMcpServer(): Promise<void> {
   const baseUrl = process.env.KNOWLEDGE_API_URL || "http://localhost:8421";
   const token = process.env.KNOWLEDGE_API_TOKEN;
+  const serviceId = process.env.KNOWLEDGE_API_SERVICE_ID ?? "";
+  if (!isValidIdSegment(serviceId)) {
+    throw new Error("KNOWLEDGE_API_SERVICE_ID must be a valid service instance ID");
+  }
 
-  log.info(`MCP server starting, API URL: ${baseUrl}`);
-
-  const server = createMcpServer({ baseUrl, token });
+  const server = createMcpServer({ baseUrl, token, serviceId });
   const transport = new StdioServerTransport();
+  // stdout is reserved for the MCP protocol.
+  await server.connect(transport);
+}
 
-  server.connect(transport).then(() => {
-    log.info("MCP server connected via stdio");
-  }).catch((err) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startMcpServer().catch((err) => {
     log.error(`Failed to connect: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }
