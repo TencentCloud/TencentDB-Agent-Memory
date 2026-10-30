@@ -16,6 +16,7 @@ import { performCapture } from "./src/hooks/capture.js";
 import { handleMemorySearch } from "./src/tools/memory-search.js";
 import { handleConversationSearch } from "./src/tools/conversation-search.js";
 import { handleReadCos } from "./src/tools/read-cos.js";
+import { createNativeMemoryProviderRuntime } from "./src/native-memory-provider.js";
 
 const TAG = "[memory-client]";
 
@@ -90,6 +91,28 @@ export default function register(api: any) {
     `recall(persona=${includePersona},sceneNav=${includeSceneNav},max=${recallMaxResults}), ` +
     `capture=${captureEnabled}, cosRead=on, rejectUnauthorized=${rejectUnauthorized}`,
   );
+
+  // Native provider-runtime is an additive OpenClaw capability. Older hosts
+  // keep using the existing hooks and tools without loading this registration.
+  if (typeof api.registerMemoryCapability === "function") {
+    try {
+      api.registerMemoryCapability({
+        providerRuntime: createNativeMemoryProviderRuntime(api.id || "memory-tencentdb-client", cfg),
+      });
+      api.logger.info?.(
+        `${TAG} Registered native memory provider runtime (caller-scoped v3 search/get)`,
+      );
+    } catch (err) {
+      api.logger.warn(
+        `${TAG} Native memory provider registration is unavailable; retaining hook/tool compatibility: ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  } else {
+    api.logger.info?.(
+      `${TAG} Host has no native memory capability API; retaining hook/tool compatibility`,
+    );
+  }
 
   // ── Register Tools (same pattern as extensions/memory-tencentdb/index.ts) ──
 
