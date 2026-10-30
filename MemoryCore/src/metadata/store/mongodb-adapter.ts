@@ -1556,12 +1556,20 @@ export class MongoMetadataStore implements IMetadataStore {
   // UserSessionDefault (v3.3) — 用户级 (team, agent, task) 默认三元组
   // ============================================================
 
-  async getUserSessionDefault(userId: string): Promise<UserSessionDefaultEntity | null> {
+  async getUserSessionDefault(userId: string, workspaceId: string = ""): Promise<UserSessionDefaultEntity | null> {
     const doc = await this.col("meta_user_session_defaults").findOne(
-      { user_id: userId },
+      { user_id: userId, workspace_id: workspaceId },
       PROJECT_NO_ID,
     );
     return doc ? (doc as unknown as UserSessionDefaultEntity) : null;
+  }
+
+  async listUserSessionDefaults(userId: string): Promise<UserSessionDefaultEntity[]> {
+    const docs = await this.col("meta_user_session_defaults")
+      .find({ user_id: userId }, { projection: PROJECT_NO_ID })
+      .sort({ workspace_id: 1 })
+      .toArray();
+    return docs as unknown as UserSessionDefaultEntity[];
   }
 
   async upsertUserSessionDefault(
@@ -1570,8 +1578,9 @@ export class MongoMetadataStore implements IMetadataStore {
     const now = nowIso();
     // upsert: 存在则更新 team/agent/task + updated_at, 不存在则插入含 created_at。
     // 不用 _id = user_id 的习惯 —— 保持与 SQLite 的字段结构字节一致(避免序列化处漂移)。
+    const workspaceId = input.workspace_id ?? "";
     await this.col("meta_user_session_defaults").findOneAndUpdate(
-      { user_id: input.user_id },
+      { user_id: input.user_id, workspace_id: workspaceId },
       {
         $set: {
           team_id: input.team_id,
@@ -1581,20 +1590,22 @@ export class MongoMetadataStore implements IMetadataStore {
         },
         $setOnInsert: {
           user_id: input.user_id,
+          workspace_id: workspaceId,
           created_at: now,
         },
       },
       { upsert: true, returnDocument: "after" },
     );
-    const row = await this.getUserSessionDefault(input.user_id);
+    const row = await this.getUserSessionDefault(input.user_id, workspaceId);
     if (!row) {
       throw new Error("upsertUserSessionDefault: row disappeared after write");
     }
     return row;
   }
 
-  async deleteUserSessionDefault(userId: string): Promise<number> {
-    const res = await this.col("meta_user_session_defaults").deleteOne({ user_id: userId });
+  async deleteUserSessionDefault(userId: string, workspaceId: string = ""): Promise<number> {
+    const res = await this.col("meta_user_session_defaults")
+      .deleteOne({ user_id: userId, workspace_id: workspaceId });
     return res.deletedCount ?? 0;
   }
 

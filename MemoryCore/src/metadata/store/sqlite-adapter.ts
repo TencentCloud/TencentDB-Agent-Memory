@@ -122,6 +122,7 @@ export class SqliteMetadataStore implements IMetadataStore {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.createSchema();
+    this.migrateUserSessionDefaultsV2();
     this.initialized = true;
   }
 
@@ -326,12 +327,14 @@ export class SqliteMetadataStore implements IMetadataStore {
       -- user_id PK 天然保证"至多一条"。task_id 存真实 id 或字面量 "default"
       -- (与 Proxy sessionInit.defaultTaskId 契约一致, 见 types.ts::DEFAULT_TASK_SENTINEL)。
       CREATE TABLE IF NOT EXISTS meta_user_session_defaults (
-        user_id    TEXT PRIMARY KEY,
-        team_id    TEXT NOT NULL,
-        agent_id   TEXT NOT NULL,
-        task_id    TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
+        user_id      TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT '',
+        team_id      TEXT NOT NULL,
+        agent_id     TEXT NOT NULL,
+        task_id      TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        PRIMARY KEY (user_id, workspace_id),
         FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_meta_user_session_defaults_team
@@ -355,6 +358,8 @@ export class SqliteMetadataStore implements IMetadataStore {
         base_url TEXT NOT NULL DEFAULT '',
         api_key TEXT NOT NULL DEFAULT '',
         model_id TEXT NOT NULL DEFAULT '',
+        model_ids TEXT NOT NULL DEFAULT '[]',
+        team_id TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '',
         version INTEGER NOT NULL DEFAULT 1,
         supported_agents_snapshot TEXT NOT NULL DEFAULT '[]',
@@ -367,6 +372,14 @@ export class SqliteMetadataStore implements IMetadataStore {
         ON meta_instance_upstream_config(group_type)
         WHERE group_type IN ('default','extraction');
     `);
+    // P1: model_ids 多模型清单,旧库幂等加列
+    try {
+      this.run("ALTER TABLE meta_instance_upstream_config ADD COLUMN model_ids TEXT NOT NULL DEFAULT '[]'");
+    } catch { /* 列已存在 */ }
+    // P3: team_id 团队专属维度,旧库幂等加列
+    try {
+      this.run("ALTER TABLE meta_instance_upstream_config ADD COLUMN team_id TEXT NOT NULL DEFAULT ''");
+    } catch { /* 列已存在 */ }
     this.migrateUserTypeColumn();
     this.migrateLegacyUserKeys();
   }
@@ -1963,17 +1976,65 @@ export class SqliteMetadataStore implements IMetadataStore {
     };
   }
 
+  /** v3.4: meta_user_session_defaults 增加 workspace 维度（旧 user 单例表原位重建）。 */
+  private migrateUserSessionDefaultsV2(): void {
+    const cols = this.db
+      .prepare("PRAGMA table_info(meta_user_session_defaults)")
+      .all() as Array<{ name: string; pk: number }>;
+    if (cols.length === 0) return; // 全新库，DDL 已是新结构
+    const hasWorkspace = cols.some((c) => c.name === "workspace_id");
+    const pkCols = cols.filter((c) => c.pk).map((c) => c.name).sort().join(",");
+    if (hasWorkspace && pkCols === "user_id,workspace_id") return;
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(`
+        CREATE TABLE meta_user_session_defaults_v2 (
+          user_id      TEXT NOT NULL,
+          workspace_id TEXT NOT NULL DEFAULT '',
+          team_id      TEXT NOT NULL,
+          agent_id     TEXT NOT NULL,
+          task_id      TEXT NOT NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL,
+          PRIMARY KEY (user_id, workspace_id),
+          FOREIGN KEY (user_id) REFERENCES meta_users(user_id) ON DELETE CASCADE
+        );
+        INSERT OR IGNORE INTO meta_user_session_defaults_v2
+          (user_id, workspace_id, team_id, agent_id, task_id, created_at, updated_at)
+        SELECT user_id, ${hasWorkspace ? "workspace_id" : "''"}, team_id, agent_id, task_id, created_at, updated_at
+          FROM meta_user_session_defaults;
+        DROP TABLE meta_user_session_defaults;
+        ALTER TABLE meta_user_session_defaults_v2 RENAME TO meta_user_session_defaults;
+      `);
+      this.db.exec("COMMIT");
+      console.log("[sqlite-adapter] meta_user_session_defaults migrated to (user_id, workspace_id) PK");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
   // ============================================================
   // UserSessionDefault (v3.3) — 用户级 (team, agent, task) 默认三元组
   // ============================================================
 
-  getUserSessionDefault(userId: string): UserSessionDefaultEntity | null {
+  getUserSessionDefault(userId: string, workspaceId: string = ""): UserSessionDefaultEntity | null {
     return this.mapUserSessionDefault(
       this.get<Row>(
-        "SELECT * FROM meta_user_session_defaults WHERE user_id = ?",
+        "SELECT * FROM meta_user_session_defaults WHERE user_id = ? AND workspace_id = ?",
         userId,
+        workspaceId,
       ),
     );
+  }
+
+  listUserSessionDefaults(userId: string): UserSessionDefaultEntity[] {
+    const rows = this.db
+      .prepare("SELECT * FROM meta_user_session_defaults WHERE user_id = ? ORDER BY workspace_id")
+      .all(userId) as Row[];
+    return rows
+      .map((r) => this.mapUserSessionDefault(r))
+      .filter((x): x is UserSessionDefaultEntity => !!x);
   }
 
   upsertUserSessionDefault(
@@ -1983,23 +2044,25 @@ export class SqliteMetadataStore implements IMetadataStore {
     // upsert 事务:若已存在,保留原 created_at,仅刷新 updated_at + 其他字段。
     this.db.exec("BEGIN");
     try {
+      const workspaceId = input.workspace_id ?? "";
       const existing = this.get<Row>(
-        "SELECT created_at FROM meta_user_session_defaults WHERE user_id = ?",
+        "SELECT created_at FROM meta_user_session_defaults WHERE user_id = ? AND workspace_id = ?",
         input.user_id,
+        workspaceId,
       );
       if (existing) {
         this.run(
           `UPDATE meta_user_session_defaults
              SET team_id = ?, agent_id = ?, task_id = ?, updated_at = ?
-           WHERE user_id = ?`,
-          input.team_id, input.agent_id, input.task_id, now, input.user_id,
+           WHERE user_id = ? AND workspace_id = ?`,
+          input.team_id, input.agent_id, input.task_id, now, input.user_id, workspaceId,
         );
       } else {
         this.run(
           `INSERT INTO meta_user_session_defaults
-             (user_id, team_id, agent_id, task_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          input.user_id, input.team_id, input.agent_id, input.task_id, now, now,
+             (user_id, workspace_id, team_id, agent_id, task_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          input.user_id, workspaceId, input.team_id, input.agent_id, input.task_id, now, now,
         );
       }
       this.db.exec("COMMIT");
@@ -2008,17 +2071,17 @@ export class SqliteMetadataStore implements IMetadataStore {
       throw err;
     }
 
-    const row = this.getUserSessionDefault(input.user_id);
+    const row = this.getUserSessionDefault(input.user_id, input.workspace_id ?? "");
     if (!row) {
       throw new Error("upsertUserSessionDefault: row disappeared after write");
     }
     return row;
   }
 
-  deleteUserSessionDefault(userId: string): number {
+  deleteUserSessionDefault(userId: string, workspaceId: string = ""): number {
     const info = this.db
-      .prepare("DELETE FROM meta_user_session_defaults WHERE user_id = ?")
-      .run(userId);
+      .prepare("DELETE FROM meta_user_session_defaults WHERE user_id = ? AND workspace_id = ?")
+      .run(userId, workspaceId);
     return info.changes;
   }
 
@@ -2027,6 +2090,7 @@ export class SqliteMetadataStore implements IMetadataStore {
     const r = row as Record<string, unknown>;
     return {
       user_id: String(r.user_id),
+      workspace_id: String(r.workspace_id ?? ""),
       team_id: String(r.team_id),
       agent_id: String(r.agent_id),
       task_id: String(r.task_id),
@@ -2231,7 +2295,7 @@ export class SqliteMetadataStore implements IMetadataStore {
 
       // 2. agents 全域唯一校验(仅 default/custom 参与)
       if (input.group_type !== "extraction") {
-        this.assertAgentsNotOverlap(agents, null);
+        this.assertAgentsNotOverlap(agents, null, input.team_id ?? "");
       }
 
       // 2b. 组名全域唯一(仅 custom 参与写入方,校验目标含 default/extraction 保留名)
@@ -2244,8 +2308,8 @@ export class SqliteMetadataStore implements IMetadataStore {
       // 3. INSERT(custom/extraction 的 snapshot 恒 [];default 由 seed 路径独立处理,不走此 create 分支)
       this.run(
         `INSERT INTO meta_instance_upstream_config
-          (group_id, group_type, name, agents, enabled, mode, base_url, api_key, model_id, description, version, supported_agents_snapshot, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', ?, ?)`,
+          (group_id, group_type, name, agents, enabled, mode, base_url, api_key, model_id, model_ids, team_id, description, version, supported_agents_snapshot, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', ?, ?)`,
         groupId,
         input.group_type,
         input.name ?? "",
@@ -2255,6 +2319,8 @@ export class SqliteMetadataStore implements IMetadataStore {
         input.base_url ?? "",
         input.api_key ?? "",
         input.model_id ?? "",
+        JSON.stringify(input.model_ids ?? []),
+        input.team_id ?? "",
         input.description ?? "",
         now,
         now,
@@ -2297,7 +2363,7 @@ export class SqliteMetadataStore implements IMetadataStore {
       // agents 变更 → 校验全域唯一(排除自身)
       const nextAgents = input.agents ?? current.agents;
       if (input.agents !== undefined && current.group_type !== "extraction") {
-        this.assertAgentsNotOverlap(nextAgents, current.group_id);
+        this.assertAgentsNotOverlap(nextAgents, current.group_id, current.team_id);
       }
 
       // name 变更 → 校验全域唯一(仅 custom;default/extraction 的 name 由 service 层
@@ -2323,12 +2389,13 @@ export class SqliteMetadataStore implements IMetadataStore {
         base_url: input.base_url ?? current.base_url,
         api_key: input.api_key ?? current.api_key,
         model_id: input.model_id ?? current.model_id,
+        model_ids: input.model_ids ?? current.model_ids,
         description: input.description ?? current.description,
       };
       const now = nowIso();
       this.run(
         `UPDATE meta_instance_upstream_config
-         SET name = ?, agents = ?, enabled = ?, mode = ?, base_url = ?, api_key = ?, model_id = ?, description = ?, version = version + 1, updated_at = ?
+         SET name = ?, agents = ?, enabled = ?, mode = ?, base_url = ?, api_key = ?, model_id = ?, model_ids = ?, description = ?, version = version + 1, updated_at = ?
          WHERE group_id = ?`,
         merged.name,
         JSON.stringify(merged.agents),
@@ -2337,6 +2404,7 @@ export class SqliteMetadataStore implements IMetadataStore {
         merged.base_url,
         merged.api_key,
         merged.model_id,
+        JSON.stringify(merged.model_ids ?? []),
         merged.description,
         now,
         input.group_id,
@@ -2398,12 +2466,15 @@ export class SqliteMetadataStore implements IMetadataStore {
    * `selfGroupId` 传入时排除自己(update 场景);create 时传 null。
    * 冲突 → InstanceUpstreamWriteConflictError("agents_overlap", detail.conflict_groups)。
    */
-  private assertAgentsNotOverlap(candidate: string[], selfGroupId: string | null): void {
+  private assertAgentsNotOverlap(candidate: string[], selfGroupId: string | null, candidateTeamId = ""): void {
     if (candidate.length === 0) return;
     const candidateSet = new Set(candidate);
+    // P3: 团队维度感知 —— 只与「同 team 或同为全局」的组判重；
+    // team 专属组优先于全局组,故允许与全局组/跨 team 组共存同一 agent。
     const rows = this.all<Row>(
-      `SELECT group_id, group_type, name, agents FROM meta_instance_upstream_config
-       WHERE group_type IN ('default','custom')`,
+      `SELECT group_id, group_type, name, agents, team_id FROM meta_instance_upstream_config
+       WHERE group_type IN ('default','custom') AND team_id = ?`,
+      candidateTeamId,
     );
     const conflicts: Array<{ group_id: string; group_type: string; name: string; overlapping_agents: string[] }> = [];
     for (const r of rows) {
@@ -2500,6 +2571,15 @@ export class SqliteMetadataStore implements IMetadataStore {
       base_url: String(r.base_url ?? ""),
       api_key: String(r.api_key ?? ""),
       model_id: String(r.model_id ?? ""),
+      model_ids: (() => {
+        try {
+          const v = JSON.parse(String(r.model_ids ?? "[]"));
+          return Array.isArray(v) ? v.map((x) => String(x)) : [];
+        } catch {
+          return [];
+        }
+      })(),
+      team_id: String(r.team_id ?? ""),
       description: String(r.description ?? ""),
       version: Number(r.version ?? 1),
       supported_agents_snapshot: snapshot,

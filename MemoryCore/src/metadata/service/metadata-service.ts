@@ -1015,6 +1015,18 @@ export class MetadataService {
   }
 
   async deleteAgents(agentIds: string[]): Promise<BatchDeleteResult> {
+    // v3.4：真删除前清理各 agent 的记忆内容（L0-L3/向量/文件）；
+    // chat_memory 资产记录由 store.deleteAgents 级联删除。
+    for (const agentId of agentIds) {
+      const existing = await this.getAgentById(agentId);
+      if (!existing) continue;
+      if (this._chatMemoryContentCleaner) {
+        await this._chatMemoryContentCleaner({
+          teamId: existing.team_id,
+          agentId: existing.agent_id,
+        });
+      }
+    }
     return this.store.deleteAgents(agentIds);
   }
 
@@ -1057,18 +1069,9 @@ export class MetadataService {
   async archiveAgent(agentId: string): Promise<AgentEntity> {
     const existing = await this.getAgentById(agentId);
     if (!existing) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
-    const archived = await this.updateAgent(agentId, { status: "inactive" });
-
-    if (this._chatMemoryContentCleaner) {
-      await this._chatMemoryContentCleaner({
-        teamId: existing.team_id,
-        agentId: existing.agent_id,
-      });
-    }
-
-    const selfMemoryAssetId = buildChatMemoryAssetId(existing.team_id, existing.agent_id);
-    await this.store.deleteAssets([selfMemoryAssetId]);
-    return archived;
+    // v3.4 语义对齐：归档 = 可逆停用（仅 status→inactive），不再清理记忆/资产。
+    // 记忆内容与 chat_memory 资产的彻底清除移至 deleteAgents（真删除）路径。
+    return await this.updateAgent(agentId, { status: "inactive" });
   }
 
   // ============================================================
@@ -2302,6 +2305,9 @@ export class MetadataService {
       base_url: string;
       api_key?: string;
       model_id?: string;
+      model_ids?: string[];
+      /** P3: 团队专属组归属（空 = 全局）。 */
+      team_id?: string;
       description?: string;
     },
     supportedAgents: SupportedAgent[],
@@ -2329,6 +2335,8 @@ export class MetadataService {
         base_url: input.base_url.trim(),
         api_key: input.api_key ?? "",
         model_id: input.model_id ?? "",
+        model_ids: input.model_ids,
+        team_id: input.team_id ?? "",
         description: input.description ?? "",
       });
       return this.toPublicGroup(row);
@@ -2349,6 +2357,7 @@ export class MetadataService {
       base_url?: string;
       api_key?: string;
       model_id?: string;
+      model_ids?: string[];
       description?: string;
       expected_version?: number;
     },
@@ -2358,15 +2367,14 @@ export class MetadataService {
       throw new MetadataError("USE_EXTRACTION_ENDPOINT", "use /extraction/update for extraction row");
     }
 
-    // default 组的 immutable 字段守卫
+    // default 组的 immutable 字段守卫。
+    // P2 起 base_url/api_key/model_id/model_ids/description 可编辑（默认上游可视化）：
+    //   - base_url 留空 = 沿用 config.yaml 全局 upstream
+    //   - name/mode 仍不可改（保持 official 语义）
     if (input.group_type === "default") {
       const rejected: string[] = [];
       if (input.name !== undefined) rejected.push("name");
       if (input.mode !== undefined) rejected.push("mode");
-      if (input.base_url !== undefined) rejected.push("base_url");
-      if (input.api_key !== undefined) rejected.push("api_key");
-      if (input.model_id !== undefined) rejected.push("model_id");
-      if (input.description !== undefined) rejected.push("description");
       if (rejected.length > 0) {
         throw new MetadataError(
           "DEFAULT_GROUP_IMMUTABLE_FIELDS",
@@ -2400,6 +2408,7 @@ export class MetadataService {
         base_url: input.base_url?.trim(),
         api_key: input.api_key,
         model_id: input.model_id,
+        model_ids: input.model_ids,
         description: input.description,
       });
       return this.toPublicGroup(row);
@@ -2682,6 +2691,8 @@ export class MetadataService {
       base_url: row.base_url,
       api_key_masked: row.api_key ? maskKeyValue(row.api_key) : "",
       model_id: row.model_id,
+      model_ids: row.model_ids,
+      team_id: row.team_id,
       description: row.description,
       version: row.version,
       updated_at: row.updated_at,
