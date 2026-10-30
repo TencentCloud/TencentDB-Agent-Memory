@@ -630,8 +630,6 @@ export const V3_SCHEMAS = {
   // UserSessionDefault (v3.3)
   "/v3/meta/user-session-default/get": userSessionDefaultGetSchema,
   "/v3/meta/user-session-default/list": userSessionDefaultListSchema,
-  "/v3/meta/user-session-default/list": userSessionDefaultListSchema,
-  "/v3/meta/user-session-default/list": userSessionDefaultListSchema,
   "/v3/meta/user-session-default/set": userSessionDefaultSetSchema,
   "/v3/meta/user-session-default/delete": userSessionDefaultDeleteSchema,
   // v2 InstanceUpstream (§6.A / §6.B / §6.C)
