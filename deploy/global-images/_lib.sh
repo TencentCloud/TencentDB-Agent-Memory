@@ -153,6 +153,15 @@ print_endpoints() {
 # LLM 通路检查（与 verify.sh 同源逻辑；供 start-all.sh 交互式流程复用）
 # ═══════════════════════════════════════════════════════════════
 
+# ── MSYS / 原生 Windows 路径对齐 ─────────────────────────────────────────
+# Git Bash 的 /tmp 指向 %TEMP%，而原生 Windows 程序（curl.exe）会把
+# "/tmp/xxx" 解析成 "<当前盘>\\tmp\\xxx" —— 两者不是同一个目录。
+# 于是 curl 写进去的文件，后续用 MSYS 工具（head/grep）去读就找不到，
+# 表现为 "head: cannot open '/tmp/xxx': No such file or directory"。
+# 解决：传给原生 curl 的路径统一用 cygpath -w 转换，
+#       读文件时仍用 MSYS 路径 —— 两者指向同一个真实文件。
+to_win() { cygpath -w "$1" 2>/dev/null || echo "$1"; }
+
 CURL="${CURL:-/usr/bin/curl}"
 if [[ ! -x "$CURL" ]]; then
   if command -v curl >/dev/null 2>&1; then
@@ -170,8 +179,9 @@ check_llm_openai() {
   base="${base%/messages}"
   base="${base%/chat/completions}"
   local url="${base}/models"
-  local code body_file=/tmp/llm-check.$$
-  code=$("$CURL" -sS --max-time 10 -o "$body_file" -w "%{http_code}" \
+  local code body_file body_file_win
+  body_file="$(mktemp)"; body_file_win="$(to_win "$body_file")"
+  code=$("$CURL" -sS --max-time 10 -o "$body_file_win" -w "%{http_code}" \
     -H "Authorization: Bearer $key" "$url" 2>/dev/null || echo "000")
   local rc=0
   if [[ "$code" == "200" ]]; then
@@ -210,8 +220,9 @@ check_llm_anthropic() {
   else
     url="${base}/v1/messages"
   fi
-  local code body_file=/tmp/llm-check.$$
-  code=$("$CURL" -sS --max-time 15 -o "$body_file" -w "%{http_code}" \
+  local code body_file body_file_win
+  body_file="$(mktemp)"; body_file_win="$(to_win "$body_file")"
+  code=$("$CURL" -sS --max-time 15 -o "$body_file_win" -w "%{http_code}" \
     -X POST -H "Content-Type: application/json" \
     -H "x-api-key: $key" -H "Authorization: Bearer $key" \
     -H "anthropic-version: 2023-06-01" \

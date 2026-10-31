@@ -139,3 +139,12 @@ MemoryCore/scripts/bench-l0-mongo/reports/
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
 z_config/
+
+# ── 本地私有资产（不得入库）──
+# client-configs/ 内脚本硬编码了明文 user_key（sk-mem-…）与本地路径
+client-configs/
+# github-skills/ 是 import-github-skills.mjs 的抓取目录（125MB 第三方仓库克隆，含嵌套 .git）
+github-skills/
+
+# 备份产物（含 .admin-key 与数据库快照，不得入库）
+deploy/global-images/backups/

@@ -135,6 +135,10 @@ sessionInit:
 
 costGuard:
   enabled: false
+  # Anthropic 协议（claude-code）专用上游；仅影响 anthropic 协议，
+  # 不影响同一路径上的 openai 协议。base 不带 /v1 时 proxy 会自动补 /v1。
+  anthropicUpstream:
+    url: "${PROXY_ANTHROPIC_UPSTREAM_URL:-${PROXY_UPSTREAM_URL%/v1}/anthropic/v1}"
 
 # 打开 skill + knowledge + tdai-memory 三个注入器；
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
@@ -149,13 +153,18 @@ redis:
   enabled: false
 YAML
 
+# Windows/Git Bash 兼容：禁用 MSYS 参数路径转换，bind mount source 转 Windows 格式
+export MSYS2_ARG_CONV_EXCL="*"
+CONFIG_WIN=$(cygpath -w "$CONFIG_FILE" 2>/dev/null || echo "$CONFIG_FILE")
+
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
+  --restart unless-stopped \
   --network "$NETWORK" \
   --network-alias proxy \
   --add-host=host.docker.internal:host-gateway \
   -p "${PROXY_PORT}:8096" \
-  -v "$CONFIG_FILE:/data/config.yaml:ro" \
+  -v "$CONFIG_WIN:/data/config.yaml:ro" \
   "$PROXY_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90

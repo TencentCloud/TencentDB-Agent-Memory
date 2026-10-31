@@ -124,6 +124,23 @@ else
   info "memory-core 元数据后端 = sqlite（容器 volume 内）"
 fi
 
+# ── Embedding（语义召回）配置 ────────────────────────────────────────────
+# provider: none=关闭向量检索（仅 FTS 全文检索）；其余值走 OpenAI 兼容远端。
+# 默认使用硅基流动 SiliconFlow：https://api.siliconflow.cn/v1/embeddings
+#   模型维度对照：BAAI/bge-m3=1024 / BAAI/bge-large-zh-v1.5=1024
+#                 Qwen/Qwen3-Embedding-0.6B=1024 / Qwen3-Embedding-4B=2560
+#                 Qwen/Qwen3-Embedding-8B=4096 / moka-ai/m3e-base=768
+# sendDimensions: BGE 系列不支持 matryoshka，发送 dimensions 会返回 HTTP 400，
+#                 故 OSS 模型必须设为 false（仅 text-embedding-3-* 才可 true）。
+MEMORY_CORE_EMBEDDING_PROVIDER="${MEMORY_CORE_EMBEDDING_PROVIDER:-none}"
+MEMORY_CORE_EMBEDDING_BASE_URL="${MEMORY_CORE_EMBEDDING_BASE_URL:-https://api.siliconflow.cn/v1}"
+MEMORY_CORE_EMBEDDING_API_KEY="${MEMORY_CORE_EMBEDDING_API_KEY:-}"
+MEMORY_CORE_EMBEDDING_MODEL="${MEMORY_CORE_EMBEDDING_MODEL:-BAAI/bge-m3}"
+MEMORY_CORE_EMBEDDING_DIMENSIONS="${MEMORY_CORE_EMBEDDING_DIMENSIONS:-1024}"
+MEMORY_CORE_EMBEDDING_SEND_DIMENSIONS="${MEMORY_CORE_EMBEDDING_SEND_DIMENSIONS:-false}"
+MEMORY_CORE_EMBEDDING_MAX_INPUT_CHARS="${MEMORY_CORE_EMBEDDING_MAX_INPUT_CHARS:-5000}"
+MEMORY_CORE_EMBEDDING_TIMEOUT_MS="${MEMORY_CORE_EMBEDDING_TIMEOUT_MS:-10000}"
+
 # ── L3 即时更新决策（默认 current；显式启用才生成 JEV 配置）──────────────
 MEMORY_CORE_PERSONA_TRIGGER_MODE="${MEMORY_CORE_PERSONA_TRIGGER_MODE:-current}"
 JEV_ENV_ARGS=()
@@ -217,8 +234,18 @@ ${PERSONA_TRIGGER_YAML}
   # gateway 形态下存储后端实际由 STORE_MODE 环境变量决定（见 docker run -e STORE_MODE），
   # 此处保持同值仅为可读性；插件/SDK 形态才读这个字段。
   storeBackend: ${MEMORY_CORE_STORE_MODE}
+  # Embedding（语义召回）。provider=none 时下面几项被忽略且 dimensions 强制为 0，
+  # 向量表 vec0 不会创建 —— 首次启用远端 provider 属于干净创建，无需重建索引。
   embedding:
-    provider: none
+    enabled: true
+    provider: "${MEMORY_CORE_EMBEDDING_PROVIDER}"
+    baseUrl: "${MEMORY_CORE_EMBEDDING_BASE_URL}"
+    apiKey: "${MEMORY_CORE_EMBEDDING_API_KEY}"
+    model: "${MEMORY_CORE_EMBEDDING_MODEL}"
+    dimensions: ${MEMORY_CORE_EMBEDDING_DIMENSIONS}
+    sendDimensions: ${MEMORY_CORE_EMBEDDING_SEND_DIMENSIONS}
+    maxInputChars: ${MEMORY_CORE_EMBEDDING_MAX_INPUT_CHARS}
+    timeoutMs: ${MEMORY_CORE_EMBEDDING_TIMEOUT_MS}
 
 # ── Skill 模块 ──
 skill:
@@ -240,13 +267,19 @@ skill:
     maxResourceSizeBytes: 5000000
 YAML
 
+# Windows/Git Bash 兼容：禁用 MSYS 参数路径转换，bind mount source 转 Windows 格式
+# （否则 -v 的 "/data/..." target 会被错误转换成 PortableGit 里的路径，容器内配置文件缺失）
+export MSYS2_ARG_CONV_EXCL="*"
+CORE_CONFIG_WIN=$(cygpath -w "$CORE_CONFIG_FILE" 2>/dev/null || echo "$CORE_CONFIG_FILE")
+
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
+  --restart unless-stopped \
   --network "$NETWORK" \
   --network-alias memory-core \
   -p "${MEMORY_CORE_PORT}:8420" \
   -v "${MEMORY_CORE_VOLUME}:/data/tdai-memory" \
-  -v "$CORE_CONFIG_FILE:/data/config/tdai-gateway.yaml:ro" \
+  -v "$CORE_CONFIG_WIN:/data/config/tdai-gateway.yaml:ro" \
   -e TDAI_GATEWAY_PORT=8420 \
   -e TDAI_GATEWAY_HOST=0.0.0.0 \
   -e TDAI_GATEWAY_API_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
@@ -284,14 +317,19 @@ generate_user_key() {
 
 verify_user_key() {
   local key="$1"
-  local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
-    -X POST -H "Content-Type: application/json" \
-    -H "x-tdai-service-id: default" \
-    "${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"}" \
-    "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify" \
-    -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || echo "000")
-  [[ "$code" == "200" ]]
+  local code attempt body_file
+  # 注意：不能用 `-o /dev/null` —— Git-Bash 下的原生 Windows curl 无法写 /dev/null
+  #      （curl: (23) client returned ERROR on write），会把 %{http_code} 污染成
+  #      "200000"。改用临时文件承接响应体（与 _lib.sh 同一套路）。
+  # 另：容器刚启动时 auth 路由可能尚未注册，重试 5 次、间隔 1s。
+  for attempt in 1 2 3 4 5; do
+    body_file="$(mktemp)"
+    code=$($CURL -sS --max-time 5 -o "$body_file" -w "%{http_code}"       -X POST -H "Content-Type: application/json"       -H "x-tdai-service-id: default"       "${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"}"       "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify"       -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || echo "000")
+    rm -f "$body_file"
+    [[ "$code" == "200" ]] && return 0
+    [[ "$attempt" -lt 5 ]] && sleep 1
+  done
+  return 1
 }
 
 info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → ${ADMIN_KEY_FILE}）..."
@@ -306,7 +344,7 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
+init_resp=$($CURL -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   "${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"}" \
   -H "x-tdai-service-id: default" \
