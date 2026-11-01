@@ -138,6 +138,10 @@ openclaw plugins install -l .
           },
           "capture": {
             "enabled": true
+          },
+          "agentFilter": {
+            "include": ["coding-agent"],
+            "exclude": []
           }
         }
       }
@@ -145,6 +149,11 @@ openclaw plugins install -l .
   }
 }
 ```
+
+`agentFilter` 用于把自动召回、自动捕获和远端记忆工具限制到指定的
+OpenClaw runtime agent id。`include` 非空时，未列出的 agent 和无法识别
+agent id 的上下文都会被拒绝；`exclude` 的优先级高于 `include`。两个列表
+均为空时保持原有的“所有 Agent 可用”行为。
 
 **示例 B —— OpenClaw `< 2026.4.24`：** 完全省略 `hooks` 块；`config`（含 isolation）保持一致。
 
