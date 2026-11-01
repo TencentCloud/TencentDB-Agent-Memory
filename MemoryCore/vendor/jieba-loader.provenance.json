@@ -1,0 +1,10 @@
+{
+  "upstream_package": "@node-rs/jieba",
+  "version": "2.0.3",
+  "resolved": "https://registry.npmjs.org/@node-rs/jieba/-/jieba-2.0.3.tgz",
+  "integrity": "sha512-WfTweEAbwHNPV4BvbhyQfG5E4wUQWnjy7x9Li4yYgwm+c4hlkuREkMcpCS0tTo+eTyDIBZ/kFVylns2blPBZxg==",
+  "original_loader_sha256": "66142a6f48caafba6851216935720526cc55037506cde62d6098aedb165fdc53",
+  "derived_loader_sha256": "e5535ccade969bf2befb0f21e1f32a2bdfc86272ded52ae6e67f2c3f5eb5a9b4",
+  "license_sha256": "c748f2e7f93fadae76fcb1ccf6b4199e2a4013611871b5fa61000d11a50011c7",
+  "changes": "54 generated expected-version literals 2.0.1 -> 2.0.3; lazy package-scoped CommonJS wrapper; reject unsupported main metadata. Native binaries unchanged."
+}

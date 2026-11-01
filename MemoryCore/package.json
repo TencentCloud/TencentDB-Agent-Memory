@@ -78,7 +78,11 @@
     "!src/**/*.spec.ts",
     "!src/**/__tests__/",
     "!hermes-plugin/**/__pycache__/**",
-    "!hermes-plugin/**/*.pyc"
+    "!hermes-plugin/**/*.pyc",
+    "vendor/jieba-loader.cjs",
+    "vendor/jieba-loader.LICENSE",
+    "vendor/jieba-loader.provenance.json",
+    "vendor/tcvdb-text/"
   ],
   "keywords": [
     "openclaw",
@@ -101,7 +105,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
-    "@node-rs/jieba": "^2.0.1",
+    "@node-rs/jieba": "2.0.3",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/api-logs": "^0.218.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.218.0",
@@ -112,7 +116,7 @@
     "@opentelemetry/sdk-trace-base": "^2.7.1",
     "@opentelemetry/semantic-conventions": "^1.41.1",
     "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1",
-    "@tencentdb-agent-memory/tcvdb-text": "^0.1.1",
+    "@tencentdb-agent-memory/tcvdb-text": "0.1.1",
     "ai": "^6.0.164",
     "crc-32": "^1.2.2",
     "dayjs": "^1.11.20",
@@ -126,7 +130,8 @@
     "tsx": "^4.21.0",
     "undici": "^8.1.0",
     "yaml": "^2.8.3",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "murmurhash": "2.0.1"
   },
   "optionalDependencies": {
     "@clickhouse/client": "^1.18.5",
@@ -178,5 +183,12 @@
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
+  },
+  "imports": {
+    "#jieba-loader": "./vendor/jieba-loader.cjs",
+    "#tcvdb-text": {
+      "types": "./vendor/tcvdb-text/dist/index.d.ts",
+      "default": "./vendor/tcvdb-text/dist/index.js"
+    }
   }
 }
