@@ -8,7 +8,7 @@
 
 import { createLogger } from "../logger.js";
 
-const log = createLogger("mcp-http");
+const log = createLogger("mcp-http", { stderrOnly: true });
 
 export interface HttpClientOptions {
   baseUrl: string;
