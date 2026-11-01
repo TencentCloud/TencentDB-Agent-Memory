@@ -172,6 +172,10 @@ export interface LangfuseTurnContext {
 export interface LangfuseGenerationReport {
   /** 所属 turn 的确定性 traceId（langfuseTurnTraceId 生成）。 */
   traceId: string;
+  /** 本次代理 HTTP 请求 ID（与 pipeline/request log 中的 requestId 一致）。 */
+  requestId?: string;
+  /** 上游响应头 `x-request-id`；上游未返回或尚未响应时缺省。 */
+  upstreamRequestId?: string;
   /** observation 名称（一般为模型名，或 `[internal] <model>`）。 */
   name: string;
   /** 模型名。 */
@@ -312,6 +316,21 @@ export function mergeInstanceId(
   return { ...(metadata ?? {}), instanceId };
 }
 
+/** 将本次请求的关联 ID 合进 observation metadata，显式 metadata 值优先。 */
+export function mergeRequestIds(
+  metadata: Record<string, unknown> | undefined,
+  requestId: string | undefined,
+  upstreamRequestId: string | undefined,
+): Record<string, unknown> | undefined {
+  const additions: Record<string, string> = {};
+  if (requestId && metadata?.requestId === undefined) additions.requestId = requestId;
+  if (upstreamRequestId && metadata?.upstreamRequestId === undefined) {
+    additions.upstreamRequestId = upstreamRequestId;
+  }
+  if (Object.keys(additions).length === 0) return metadata;
+  return { ...(metadata ?? {}), ...additions };
+}
+
 /**
  * 上报一次 LLM 调用：在指定 turn trace 下创建一个 generation observation，
  * 并把 trace 级属性写到该 span 上（SDK 会据此设置所属 trace 的字段）。
@@ -329,7 +348,10 @@ export function langfuseReportGeneration(report: LangfuseGenerationReport): void
         input: report.input,
         output: report.output,
         usageDetails: report.usage ? normalizeUsageDetails(report.usage) : undefined,
-        metadata: mergeInstanceId(report.observationMetadata, report.instanceId),
+        metadata: mergeInstanceId(
+          mergeRequestIds(report.observationMetadata, report.requestId, report.upstreamRequestId),
+          report.instanceId,
+        ),
         level: report.level,
         statusMessage: report.statusMessage,
       },
@@ -386,6 +408,10 @@ export function langfuseReportGeneration(report: LangfuseGenerationReport): void
 export interface LangfuseFailureReport {
   /** turn 上下文。 */
   lf: LangfuseTurnContext;
+  /** 本次代理 HTTP 请求 ID（与 pipeline/request log 中的 requestId 一致）。 */
+  requestId?: string;
+  /** 上游响应头 `x-request-id`；上游未返回或尚未响应时缺省。 */
+  upstreamRequestId?: string;
   /** observation 名称（一般为模型名）。 */
   model: string;
   /** ISO 8601 开始时间。 */
@@ -419,6 +445,8 @@ export function langfuseReportFailure(report: LangfuseFailureReport): void {
   const { lf } = report;
   langfuseReportGeneration({
     traceId: lf.traceId,
+    requestId: report.requestId,
+    upstreamRequestId: report.upstreamRequestId,
     name: report.model,
     model: report.model,
     startTime: report.startTime,

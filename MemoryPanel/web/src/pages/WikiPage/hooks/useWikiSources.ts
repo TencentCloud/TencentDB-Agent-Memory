@@ -8,8 +8,21 @@ import { knowledgeApi, wikiProgressPercent, wikiStageLabel, type GraphData, type
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea, confirmThenRun } from '@/lib/tea-bridge';
-import { findExistingRawFilenames, formatOverwriteFilenames } from '../utils/wiki-upload-utils';
-import { type DetailTab, type SearchResult, type StatusFilter, type SubView, type ViewMode, type WikiScopeTab } from '../constants/wiki-constants';
+import {
+  findExistingRawFilenames,
+  formatOverwriteFilenames,
+  readUploadFile,
+} from '../utils/wiki-upload-utils';
+import { maxBytesForFile } from '../utils/wiki-format-store';
+import {
+  RAW_PREVIEW_ERROR_KEYS,
+  type DetailTab,
+  type SearchResult,
+  type StatusFilter,
+  type SubView,
+  type ViewMode,
+  type WikiScopeTab,
+} from '../constants/wiki-constants';
 
 export function useWikiSources() {
   const { t } = useTranslation();
@@ -340,6 +353,15 @@ export function useWikiSources() {
   const [selectedPage, setSelectedPage] = useState<WikiPage | null>(null);
   const [readContent, setReadContent] = useState('');
   const [readLoading, setReadLoading] = useState(false);
+  // 原始文档预览：
+  // - format='native'：PDF/HTML/文本 → 原始字节交浏览器原生渲染（真正无损）
+  // - format='html'  ：OOXML 等 → 转换后的 HTML（有损）
+  // - 其余           ：Markdown 渲染
+  // - error：转换失败时给出可读原因，而不是空白面板
+  const [rawPreview, setRawPreview] = useState<{
+    format?: 'native' | 'client' | 'html' | 'markdown';
+    error?: string;
+  }>({});
   const [pageTypeFilter, setPageTypeFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -415,6 +437,7 @@ export function useWikiSources() {
     setPages([]);
     setGraphData(null);
     setReadContent('');
+    setRawPreview({});
     setShowAddDoc(false);
   }, [activeTeamId]);
 
@@ -708,27 +731,16 @@ export function useWikiSources() {
   const submitAddAndIngest = async (params: {
     wikiId: string;
     mode: 'files' | 'markdown' | 'external' | 'reingest';
-    files?: { filename: string; content: string }[];
-    markdown?: { filename: string; content: string }[];
+    // encoding 必须保留并透传：Knowledge 默认按 base64 解码，手工粘贴 MD
+    // 需显式 'utf8'，否则被判非法 base64。见 import-and-ingest-modal.tsx 注释。
+    files?: { filename: string; content: string; encoding?: 'utf8' | 'base64' }[];
+    markdown?: { filename: string; content: string; encoding?: 'utf8' | 'base64' }[];
     source_url?: string;
     provider_id?: string;
     page_ids?: string[];
   }): Promise<void> => {
     const { wikiId, mode } = params;
     if (!wikiId) return;
-
-    // 提交即进入新一轮：复位"已清除"标记让卡片重新出现，
-    // 并把检查计数清零——否则第二次导入会接着上一次的数字往下数。
-    setIngestCardCleared(false);
-    setPollCount(0);
-    setPollAt('');
-    // 屏蔽"上一个任务留下的终态"：从现在起直到新任务真正进入 processing，
-    // 该 wiki 上任何 ready/failed 都视为陈旧值、不展示给用户。
-    setPendingTakeover((prev) => {
-      const next = new Set(prev);
-      next.add(wikiId);
-      return next;
-    });
 
     try {
       const res = await knowledgeApi.wiki.importAndIngest({
@@ -753,6 +765,24 @@ export function useWikiSources() {
         fetchDetail(wikiId);
         return;
       }
+
+      // ✅ 复合请求被接受（任务真的排上了）才显示进度卡片：
+      // 复位"已清除"标记让卡片出现，并把检查计数清零——否则第二次导入会
+      // 接着上一次的数字往下数。
+      //
+      // ⚠ 此前这套复位放在**发请求之前**：文件超限被 413/FILE_TOO_LARGE 拒时
+      // 卡片已经弹出并进入轮询态，用户看到"报错了却在跑进度"的矛盾画面。
+      // 现在改为"确认受理后才复位"，被拒则完全不展示进度。
+      setIngestCardCleared(false);
+      setPollCount(0);
+      setPollAt('');
+      // 屏蔽"上一个任务留下的终态"：从现在起直到新任务真正进入 processing，
+      // 该 wiki 上任何 ready/failed 都视为陈旧值、不展示给用户。
+      setPendingTakeover((prev) => {
+        const next = new Set(prev);
+        next.add(wikiId);
+        return next;
+      });
 
       // 触发一次立即刷新，避免等下一拍轮询才反映新状态
       fetchDetail(wikiId);
@@ -799,6 +829,7 @@ export function useWikiSources() {
     setPages([]);
     setGraphData(null);
     setReadContent('');
+    setRawPreview({});
     setSubView('detail');
     fetchDetail(wikiId);
   };
@@ -809,6 +840,8 @@ export function useWikiSources() {
     // 会在新内容返回前残留上一个文档的标签，视觉上就是"闪一下旧文档"。
     setSelectedPage(page);
     setReadContent('');
+    // wiki 页是 markdown，按 markdown 渲染
+    setRawPreview({});
     setReadLoading(true);
     try {
       const r = await knowledgeApi.wiki.read(
@@ -819,6 +852,48 @@ export function useWikiSources() {
     } catch (e: unknown) {
       setReadContent('');
       tea.notify.error((e instanceof Error ? e.message : String(e)) || t('wiki.notify.readPageFailed'));
+    } finally {
+      setReadLoading(false);
+    }
+  };
+
+  /**
+   * 读取原始文档（raw/sources/ 下的上传文件）用于预览。
+   *
+   * 预览要的是**渲染原始文档本身**，不是把内容转成文本再显示：
+   * - 富文档（docx/pptx/xlsx/pdf/odt/...）→ KS 转成完整 HTML（保留分页幻灯片、
+   *   Excel 行列头、分页页面等原始版式）→ 前端 iframe 沙箱渲染；
+   * - 文本类（md/txt/csv）→ 原文 → Markdown 渲染。
+   * 形态由后端 `preview_format` 告知，前端据此选渲染器。
+   * 转换失败时展示可读原因而非空白面板。
+   */
+  const handleReadRaw = async (filename: string) => {
+    if (!selectedWikiId) return;
+    setSelectedPage({ path: `raw/${filename}`, title: filename, type: 'raw' });
+    setReadContent('');
+    setRawPreview({});
+    setReadLoading(true);
+    try {
+      const r = await knowledgeApi.wiki.rawRead(selectedWikiId, [filename]);
+      const item = r?.items?.[0];
+      if (!item || item.not_found) {
+        setRawPreview({ error: t('wiki.notify.rawNotFound') });
+        return;
+      }
+      // 只看 preview_error，不要求 binary —— html/htm 是文本源（binary=false），
+      // 但预览同样要经转换层，失败时一样要给出可读原因。
+      if (item.preview_error) {
+        setRawPreview({
+          error: RAW_PREVIEW_ERROR_KEYS[item.preview_error] ?? t('wiki.rawPreview.failed'),
+        });
+        return;
+      }
+      setReadContent(item.content || '');
+      setRawPreview({ format: item.preview_format ?? 'markdown' });
+    } catch (e: unknown) {
+      setRawPreview({
+        error: (e instanceof Error ? e.message : String(e)) || t('wiki.notify.readRawFailed'),
+      });
     } finally {
       setReadLoading(false);
     }
@@ -860,6 +935,7 @@ export function useWikiSources() {
         if (selectedPage?.path === `raw/${filename}`) {
           setSelectedPage(null);
           setReadContent('');
+          setRawPreview({});
         }
         await fetchDetail(selectedWikiId);
       },
@@ -966,11 +1042,42 @@ export function useWikiSources() {
       return;
     }
     setUploadProgress(Object.fromEntries(pendingFiles.map((f) => [f.name, 'pending'])));
-    // 并发上传所有文件
+    // 前端预校验：按格式注册表下发的 maxBytes 拦超限文件，**不发请求**。
+    // 此前无此检查，超限文件要走完 base64 编码 + Panel/KS 往返才被 413 拒，
+    // 大文件白等且报错文案是写死的"512KB"（与实际档位不符，误导）。
+    const maxOf = (f: File) => maxBytesForFile(f.name);
+    const oversize = pendingFiles.filter((f) => {
+      const max = maxOf(f);
+      return max !== undefined && f.size > max;
+    });
+    if (oversize.length) {
+      for (const f of oversize) {
+        setUploadProgress((prev) => ({ ...prev, [f.name]: 'error' }));
+        tea.notify.error(
+          t('wiki.detail.upload.fileTooLarge', {
+            filename: f.name,
+            maxMB: ((maxOf(f) ?? 0) / 1024 / 1024).toFixed(1),
+          }),
+        );
+      }
+    }
+    const uploadables = pendingFiles.filter((f) => !oversize.includes(f));
+    if (!uploadables.length) {
+      uploadInFlightRef.current = false;
+      setSubmitting(false);
+      return;
+    }
+    // 并发上传所有文件（仅未超限的）
     const results = await Promise.allSettled(
-      pendingFiles.map(async (f) => {
-        const content = await f.text();
-        await knowledgeApi.wiki.upload({ teamId: activeTeamId, wikiId: selectedWikiId, filename: f.name, content });
+      uploadables.map(async (f) => {
+        const { content, encoding } = await readUploadFile(f);
+        await knowledgeApi.wiki.upload({
+          teamId: activeTeamId,
+          wikiId: selectedWikiId,
+          filename: f.name,
+          content,
+          encoding,
+        });
         setUploadProgress((prev) => ({ ...prev, [f.name]: 'done' }));
       }),
     );
@@ -1109,6 +1216,9 @@ export function useWikiSources() {
     setReadContent,
     readLoading,
     setReadLoading,
+    rawPreview,
+    setRawPreview,
+    handleReadRaw,
     pageTypeFilter,
     setPageTypeFilter,
     searchQuery,

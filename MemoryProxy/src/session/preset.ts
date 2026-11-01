@@ -66,6 +66,15 @@ export interface PresetResolution {
    * back to the interactive form (or bypass) per `headerAutoSelect.onMismatch`.
    */
   hadMismatch: boolean;
+  /**
+   * v3.3 user-session-default: 命中账户默认时携带的 agent 展示名。
+   *
+   * 用途: 账户默认允许选 team 可见的、别人 owner 的 agent, 而 `cachedTeams[].agents`
+   * 只含 owner=self 的 agent —— 下游 findTeamIdForAgent 会匹配不到。调用方需要把
+   * 命中 agent 补进 cachedTeams 时用此名字填充 agent_name(仅展示用)。
+   * header preset 路径不设置该字段(undefined)。
+   */
+  agentName?: string;
 }
 
 /**

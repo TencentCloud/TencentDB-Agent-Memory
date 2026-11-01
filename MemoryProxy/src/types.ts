@@ -563,7 +563,7 @@ export interface ProxyConfig {
   server: {
     host: string; // default: "0.0.0.0"
     port: number; // default: 8096
-    /** Upstream forward timeout in ms. 0 = no timeout. Default: 600_000 (10 min). */
+    /** Upstream forward timeout in ms. 0 = no timeout. Default: 3_600_000 (1 hour). */
     forwardTimeoutMs?: number;
   };
   upstream: {
@@ -1192,6 +1192,10 @@ export interface UsageLogEntry {
   /** Request receipt time used for deterministic time-based credit pricing. */
   requestReceivedAt?: string;
   routedFrom?: string;     // original model if routing was applied
+  /** `body.model` as the client sent it, before pool-service / main-model rewrites. */
+  requestedModel?: string;
+  /** How the model pool picked this request's member (`poolRouteReason`); pool requests only. */
+  routeReason?: string;
   /**
    * Scalar counters reported by the optional private request-preparation
    * stage, recorded verbatim. The host neither defines nor interprets the key

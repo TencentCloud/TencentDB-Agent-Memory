@@ -299,6 +299,8 @@ export const enUS = {
   'wiki.import.selectedPages': '{{count}} pages selected',
   'wiki.detail.mdName': 'File name (e.g. note.md)',
   'wiki.detail.mdContent': 'Markdown content',
+  'wiki.detail.mdNameRequired': 'Please enter a file name (e.g. note.md)',
+  'wiki.detail.mdContentRequired': 'Please enter Markdown content',
   'common.remove': 'Remove',
   'wiki.title': 'Wiki Knowledge Base',
   'wiki.breadcrumb': 'Wiki',
@@ -364,13 +366,14 @@ export const enUS = {
   'wiki.detail.addDoc.file': 'Upload Files',
   'wiki.detail.addDoc.markdown': 'Markdown',
   'wiki.detail.addDoc.external': 'External source (iWiki, ...)',
-  'wiki.detail.dropzone': 'Drag or click to select Markdown files (multi-select supported)',
+  'wiki.detail.dropzone': 'Drag or click to select files (multi-select; .md/.txt/.docx/.xlsx/.pptx/.pdf supported)',
   'wiki.detail.upload.footer': '{{count}} files pending upload',
+  'wiki.detail.upload.fileTooLarge': '{{filename}} exceeds the size limit ({{maxMB}} MB). Upload cancelled.',
   'wiki.detail.upload.submitting': 'Uploading…',
   'wiki.detail.upload.confirm': 'Confirm Upload',
   'wiki.detail.md.add': '+ Add Entry',
   'wiki.detail.md.pending': '{{count}} pending upload',
-  'wiki.detail.ignored': 'Ignored {{count}} non-Markdown files (only .md/.txt/.markdown supported)',
+  'wiki.detail.ignored': 'Ignored {{count}} unsupported files (supported: .md/.markdown/.txt/.html/.htm/.csv/.docx/.xlsx/.pptx/.pdf/.odt/.ods/.odp/.odg/.rtf/.epub)',
   'wiki.detail.overwrite.title': 'Detected {{count}} files with the same name',
   'wiki.detail.overwrite.desc': 'Continuing will overwrite existing content: {{files}}',
   'wiki.detail.overwrite.ok': 'Overwrite & Upload',
@@ -1279,9 +1282,18 @@ export const enUS = {
   'wiki.ingest.stateRecovery': 'State recovered: {{stage}}{{pageHint}}',
   'wiki.ingest.currentPage': ', {{count}} pages so far',
   'wiki.notify.readRawFailed': 'Failed to read raw document',
+  'wiki.notify.rawNotFound': 'Raw document does not exist or has been deleted',
   'wiki.notify.uploadCancelled': 'Failed to fetch existing documents. Upload cancelled.',
   'wiki.error.selectTeam': 'Please select a team first',
   'wiki.detail.md.placeholder': '# Title',
+  // Raw document preview failure reasons (codes from the KS converter layer)
+  'wiki.rawPreview.unsupported': 'Preview is not supported for this file type',
+  'wiki.rawPreview.mismatch': 'File content does not match its extension and cannot be parsed',
+  'wiki.rawPreview.encrypted': 'Document is encrypted and requires a password to parse',
+  'wiki.rawPreview.scannedPdf': 'Scanned PDF has no extractable text (OCR is disabled)',
+  'wiki.rawPreview.notReady': 'Document parser is not ready, please contact the administrator',
+  'wiki.rawPreview.timeout': 'Document parsing timed out, the file may be too large',
+  'wiki.rawPreview.failed': 'Document parsing failed, preview unavailable',
 
   // ===== skill-api =====
   'skillApi.error.unauthorized': 'Unauthorized - Your session has expired or user key is missing',
@@ -1409,10 +1421,12 @@ export const enUS = {
   'error.NO_VALID_MESSAGES': 'No valid messages to import.',
   'error.MISSING_WIKI_ID': 'Missing Wiki information.',
   'error.WIKI_NOT_FOUND': 'The Wiki does not exist or has been deleted.',
-  'error.WIKI_EMPTY_NO_SOURCES': 'No source files have been uploaded for this Wiki. Please upload .md files before extracting.',
+  'error.WIKI_EMPTY_NO_SOURCES': 'No source files have been uploaded for this Wiki. Please upload files before extracting.',
   'error.MISSING_FILES': 'Please upload at least one file.',
   'error.TOO_MANY_FILES': 'The number of uploaded files exceeds the limit (max 10). Please upload in batches.',
-  'error.FILE_TOO_LARGE': 'A single file cannot exceed 512KB. Please trim it before uploading.',
+  // Not hardcoded to 512KB: the limit is per-format (text 512KB / binary 10MB,
+  // overridable per extension).
+  'error.FILE_TOO_LARGE': 'A single file exceeds the size limit for its format. Please trim it before uploading.',
   'error.TOTAL_TOO_LARGE': 'The total upload size cannot exceed 5MB. Please upload in batches.',
   'error.MISSING_CODE_GRAPH_ID': 'Missing CodeGraph information.',
   'error.CODE_GRAPH_NOT_FOUND': 'The CodeGraph does not exist or has been deleted.',
@@ -1479,7 +1493,7 @@ export const enUS = {
   // Each description follows "what it is → how to import → how to use" for first-time users)
   'onboarding.guide.asset.wiki.title': 'Wiki: team document assets',
   'onboarding.guide.asset.wiki.desc':
-    'What: a knowledge base for shared team documents. Import: click "Create Wiki" → open it and upload Markdown files (.md/.txt, multi-select & drag-drop supported) → trigger "Extract" to build searchable knowledge pages. Use: click "Allocate to Agent" on a Wiki card, or tick it in the Agent edit dialog — bound Agents can then retrieve and cite these documents in chat.',
+    'What: a knowledge base for shared team documents. Import: click "Create Wiki" → open it and upload files (.md/.txt/.docx/.xlsx/.pptx/.pdf supported, multi-select & drag-drop supported) → trigger "Extract" to build searchable knowledge pages. Use: click "Allocate to Agent" on a Wiki card, or tick it in the Agent edit dialog — bound Agents can then retrieve and cite these documents in chat.',
   'onboarding.guide.asset.code.title': 'CodeGraph: team code assets',
   'onboarding.guide.asset.code.desc':
     'What: an index and call graph built over team code repositories. Import: click "Register repo" and paste a Git HTTPS URL — indexing runs automatically. Use: once allocated to an Agent, the Agent can search code and explore call chains in chat to answer repo-related questions.',
@@ -1920,4 +1934,51 @@ export const enUS = {
   'analytics.drill.categoryHint': 'calls for this asset type',
   'analytics.drill.knowledgeAmbiguous':
     'Wiki and Code Graph share the knowledge-service bridge source, and the kernel only filters by bridge_source — so the results below include all knowledge calls and cannot be narrowed to a single type.',
+
+  // ===== SessionDefault (v3.3 user-level Session default Team/Agent/Task) =====
+  'sessionDefault.title': 'Session Default Config',
+  'sessionDefault.desc': 'New Sessions use it automatically, skipping selection.',
+  'sessionDefault.empty': 'Not set',
+  'sessionDefault.create': 'Set Default',
+  'sessionDefault.create.tooltip': 'Pick the default Team / Agent / Task',
+  'sessionDefault.edit': 'Edit',
+  'sessionDefault.edit.tooltip': 'Edit the default',
+  'sessionDefault.clear': 'Clear',
+  'sessionDefault.clear.tooltip': 'New Sessions will fall back to manual selection',
+  'sessionDefault.clear.confirm': 'Clear the default configuration?',
+  'sessionDefault.clear.desc': 'New Sessions fall back to manual selection; running sessions are unaffected.',
+  'sessionDefault.clear.ok': 'Clear',
+
+  // Dialog
+  'sessionDefault.dialog.create.caption': 'Set Session Default',
+  'sessionDefault.dialog.edit.caption': 'Edit Session Default',
+  'sessionDefault.dialog.desc': 'Pick Team, Agent, then Task. If the config becomes invalid, it silently falls back to manual selection without interrupting you.',
+  'sessionDefault.dialog.submit': 'Save',
+  'sessionDefault.dialog.cancel': 'Cancel',
+
+  // Fields
+  'sessionDefault.field.team': 'Team',
+  'sessionDefault.field.agent': 'Agent',
+  'sessionDefault.field.task': 'Task',
+
+  // Placeholders
+  'sessionDefault.team.placeholder.select': 'Select a Team',
+  'sessionDefault.team.placeholder.empty': 'You are not a member of any Team',
+  'sessionDefault.agent.placeholder.select': 'Select an Agent',
+  'sessionDefault.agent.placeholder.needTeam': 'Select a Team first',
+  'sessionDefault.agent.placeholder.empty': 'No available Agent under the current Team',
+  'sessionDefault.task.placeholder.select': 'Select a Task or "no task binding"',
+  'sessionDefault.task.placeholder.needTeam': 'Select a Team first',
+  'sessionDefault.task.extra': 'Pick "default" to bind no Task — recall spans all memories of the Agent.',
+  'sessionDefault.task.sentinel.label': 'default (no task binding)',
+
+  // Summary rows
+  'sessionDefault.summary.team': 'Team',
+  'sessionDefault.summary.agent': 'Agent',
+  'sessionDefault.summary.task': 'Task',
+  'sessionDefault.summary.unresolved': '(invalid / cannot resolve)',
+
+  // Toast
+  'sessionDefault.notify.saved': 'Default saved; new Sessions will use it automatically',
+  'sessionDefault.notify.cleared': 'Default cleared',
 };

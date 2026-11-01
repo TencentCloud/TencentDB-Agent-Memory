@@ -129,6 +129,47 @@ export interface SessionInitState {
   resetFlow?: boolean;
   /** mem:session-reset 触发的时间戳，跨节点一致性校验用。 */
   resetEpoch?: number;
+
+  /**
+   * v3.3 user-session-default: 本次 session-init 身份识别的来源, 用于
+   * ClickHouse session_init_logs 的 preset_source 字段埋点。
+   *
+   * 枚举:
+   *   - "user_default" — 命中账户级默认 (本功能)
+   *   - "header"       — 命中 header preset (x-team-id/x-agent-id/x-task-id)
+   *   - "form"         — 走完交互表单
+   *   - undefined      — 老路径 / recovered / sidequery / bypass
+   *
+   * 持久化到 state 是**必须的**: emitSessionInitTelemetryIfCompleted 在
+   * handleSessionInit 的 finally 分支里读取, 彼时只有 state 是单一真源。
+   */
+  presetSource?: "user_default" | "header" | "form";
+
+  /**
+   * v3.3 user-session-default: 账户默认未生效时的失败原因, 用于
+   * ClickHouse 的 default_fallback_reason 字段埋点。
+   *
+   * 枚举 (见 session/user-default.ts logFallback):
+   *   - "team_not_accessible"
+   *   - "agent_not_accessible"
+   *   - "task_not_accessible"
+   *   - "get_failed"
+   *   - undefined — 命中成功 / 根本没配 / 本次不走账户默认
+   *
+   * 只在 resolveUserSessionDefault 返回 null 但确实查到配置的分支上写入;
+   * 用于后续运营分析"默认配置失效率"。命中成功时该字段恒为空。
+   */
+  defaultFallbackReason?: string;
+  /**
+   * v3.3: 账户默认失效时**给用户看**的中文说明（见
+   * `describeUserDefaultFallback`）。只在需要打扰用户的原因上写入；
+   * "" / get_failed 不写（前者是正常未配置，后者是系统侧瞬时故障）。
+   *
+   * 回退后的首个表单把它拼进标题，满足 PRD "提示原因并回退到手动选择"。
+   * 与 `defaultFallbackReason` 的区别：那个是英文枚举、只入埋点；这个
+   * 是用户可读文案、只用于展示。两者可并存。
+   */
+  defaultFallbackNotice?: string;
 }
 
 /**

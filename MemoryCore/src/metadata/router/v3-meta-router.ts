@@ -197,25 +197,25 @@ const routeTable: Record<string, Handler> = {
 
   // Agent
   [`${V3_PREFIX}/agent/create`]: bind(S.agentCreateSchema, (d, c, s) => s.createAgentForCaller(d, c)),
-  [`${V3_PREFIX}/agent/get`]: bind(S.agentGetSchema, async (d, _c, s) => orNotFound(await s.getAgentById(d.agent_id), "agent_not_found", d.agent_id)),
+  [`${V3_PREFIX}/agent/get`]: bind(S.agentGetSchema, async (d, c, s) => orNotFound(await s.getAgentForCaller(d.agent_id, c), "agent_not_found", d.agent_id)),
   [`${V3_PREFIX}/agent/update`]: bind(S.agentUpdateSchema, async (d, c, s) => {
     const { agent_id, ...patch } = d;
     return s.updateAgentForCaller(agent_id, patch, c);
   }),
   [`${V3_PREFIX}/agent/delete`]: bind(S.agentDeleteSchema, (d, c, s) => s.deleteAgentsForCaller(d.agent_ids, c)),
-  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, _c, s) => {
+  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, c, s) => {
     const pagination = resolvePagination(d);
     if (d.team_id) {
       // team_id 分支：owner_user_id 若同传则叠加过滤（"团队内我 owner 的 agent"），
-      // 用于面板"私有 agent 可见性"场景。不传时行为不变（团队全量）。
-      const filter: AgentFilter = {};
+      // 用于面板"私有 agent 可见性"场景。不传时返回调用者可访问的团队 Agent。
+      const filter: AgentFilter = s.getTeamResourceReadFilterForCaller(c);
       if (d.status) filter.status = d.status;
       if (d.owner_user_id) filter.owner_user_id = d.owner_user_id;
       if (d.name) filter.name = d.name;
       return s.listAgentsByTeam(d.team_id, pagination, filter);
     }
     const ownerId = d.owner_user_id ?? await resolveUserId(s, { user_key: d.owner_user_key });
-    const filter2: AgentFilter = {};
+    const filter2: AgentFilter = s.getTeamResourceReadFilterForCaller(c);
     if (d.status) filter2.status = d.status;
     if (d.name) filter2.name = d.name;
     return s.listAgentsByOwner(ownerId, pagination, Object.keys(filter2).length ? filter2 : undefined);
@@ -224,14 +224,14 @@ const routeTable: Record<string, Handler> = {
 
   // Task
   [`${V3_PREFIX}/task/create`]: bind(S.taskCreateSchema, (d, c, s) => s.createTaskForCaller(d, c)),
-  [`${V3_PREFIX}/task/get`]: bind(S.taskGetSchema, async (d, _c, s) => orNotFound(await s.getTaskById(d.task_id), "task_not_found", d.task_id)),
+  [`${V3_PREFIX}/task/get`]: bind(S.taskGetSchema, async (d, c, s) => orNotFound(await s.getTaskForCaller(d.task_id, c), "task_not_found", d.task_id)),
   [`${V3_PREFIX}/task/update`]: bind(S.taskUpdateSchema, (d, c, s) => {
     const { task_id, ...patch } = d;
     return s.updateTaskForCaller(task_id, patch, c);
   }),
   [`${V3_PREFIX}/task/delete`]: bind(S.taskDeleteSchema, (d, c, s) => s.deleteTasksForCaller(d.task_ids, c)),
-  [`${V3_PREFIX}/task/list`]: bind(S.taskListSchema, async (d, _c, s) => {
-    const filter: TaskFilter = {};
+  [`${V3_PREFIX}/task/list`]: bind(S.taskListSchema, async (d, c, s) => {
+    const filter: TaskFilter = s.getTeamResourceReadFilterForCaller(c);
     if (d.status) filter.status = d.status;
     if (d.title) filter.title = d.title;
     if (d.creator_user_id) {
@@ -341,6 +341,18 @@ const routeTable: Record<string, Handler> = {
     await requireEntity(s, EntityType.User, d.user_id);
     s.assertCallerIsOwner(d.user_id, c.userId!);
     return s.configParams.setUserConfigForCaller(d);
+  }),
+
+  // ConfigParam instance scope (system_admin only).
+  // 实例级配置读写; 首个用例 team_memory.enabled 主开关
+  // (see MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md).
+  [`${V3_PREFIX}/config/instance/get`]: bind(S.configInstanceGetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.configParams.getInstanceConfigForCaller(d);
+  }),
+  [`${V3_PREFIX}/config/instance/set`]: bind(S.configInstanceSetSchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.configParams.setInstanceConfigForCaller(d);
   }),
 
   // UserSessionDefault (v3.3) — 用户级 session 默认 (team, agent, task) 三元组

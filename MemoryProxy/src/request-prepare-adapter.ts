@@ -49,6 +49,7 @@ import { log } from "./report/log.js";
 import { langfuseReportGeneration, type LangfuseTurnContext } from "./langfuse.js";
 import { opikCreateLlmSpan } from "./opik.js";
 import { protectSkillResults } from "./skill/selection/delivery/protect-results.js";
+import { registerResponseStatsReady } from "./response-stats-ready.js";
 
 // ─── Dynamic import + no-op fallback ────────────────────────────────────────
 
@@ -62,6 +63,8 @@ let _available = false;
  * releases it with the request.
  */
 const responseCleanupPolicies = new WeakMap<Record<string, unknown>, ReadonlySet<string>>();
+/** Never hold a usage/ClickHouse row indefinitely if fallback telemetry stalls. */
+const RESPONSE_STATS_MAX_WAIT_MS = 60_000;
 
 const EXTENSION_MODULE = "@context-proxy/cost-guard";
 try {
@@ -269,6 +272,83 @@ function scalarProjection(result: unknown): Record<string, unknown> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+// ─── Where the prepared content sits in the prompt ──────────────────────────
+
+/** An item the model produced on an earlier turn, as opposed to user or tool input. */
+function isModelOutput(item: unknown): boolean {
+  if (!item || typeof item !== "object") return false;
+  const it = item as Record<string, unknown>;
+  return it.role === "assistant" || it.type === "function_call" || it.type === "reasoning";
+}
+
+/**
+ * Index of the first item this request sends for the first time.
+ *
+ * The previous request ended right before the model's last reply, so that reply
+ * — one assistant message, or a run of Responses output items — and everything
+ * after it is new input. Upstream prefix caches cannot have it yet: it lands in
+ * the uncached / cache-write region, while everything before it was already
+ * sent. With no earlier reply the whole request is new.
+ */
+function findNewInputStart(items: unknown[]): number {
+  let i = items.length - 1;
+  while (i >= 0 && !isModelOutput(items[i])) i--;
+  if (i < 0) return 0;
+  while (i > 0 && isModelOutput(items[i - 1])) i--;
+  return i;
+}
+
+/** Total length of every string reachable from `value`. */
+function textLength(value: unknown): number {
+  if (typeof value === "string") return value.length;
+  if (!value || typeof value !== "object") return 0;
+  let n = 0;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) n += textLength(child);
+  return n;
+}
+
+interface TextFootprint {
+  all: number;
+  newInput: number;
+}
+
+function measureFootprint(
+  body: Record<string, unknown>,
+  messages: unknown[],
+  newInputStart: number,
+): TextFootprint {
+  let newInput = 0;
+  for (let i = newInputStart; i < messages.length; i++) newInput += textLength(messages[i]);
+  let history = 0;
+  for (let i = 0; i < newInputStart; i++) history += textLength(messages[i]);
+  // Anthropic `system` / Responses `instructions` head the prompt and are never new input.
+  const head = textLength(body.system) + textLength(body.instructions);
+  return { all: head + history + newInput, newInput };
+}
+
+/**
+ * Record which share of the text the stage removed sat in this request's new
+ * input. Mutated in place: `responseCleanupPolicies` is keyed by the object.
+ *
+ * In this host the stage is pinned to its message-rewriting step only, so a
+ * shrinking message array is that step and nothing else; the split is by position, independent of
+ * whether the stage's own cache hit. Characters, not tokens — the host has no
+ * tokenizer — so consumers scale the extension's token counts by the share.
+ */
+function attachNewInputShare(
+  stats: Record<string, unknown> | null,
+  before: TextFootprint,
+  after: TextFootprint,
+): void {
+  if (!stats) return;
+  const removed = before.all - after.all;
+  if (removed <= 0) return;
+  const removedFromNew = Math.min(Math.max(before.newInput - after.newInput, 0), removed);
+  stats.compressCharsSaved = removed;
+  stats.newInputCompressCharsSaved = removedFromNew;
+  stats.newInputCompressShare = removedFromNew / removed;
+}
+
 /**
  * Run the preparation stage over a pending upstream request.
  *
@@ -288,6 +368,19 @@ export async function prepareUpstreamRequest(
   if (!options) return null;
   if (typeof _mod.prepareUpstreamRequest !== "function") return null;
 
+  // Measured outside the skill protection below, which swaps skill bodies for a
+  // placeholder and back: both readings see the real bodies.
+  const newInputStart = findNewInputStart(args.messages);
+  const before = measureFootprint(args.body, args.messages, newInputStart);
+  const stats = await runPrepareStage(args, options);
+  attachNewInputShare(stats, before, measureFootprint(args.body, args.messages, newInputStart));
+  return stats;
+}
+
+async function runPrepareStage(
+  args: PrepareUpstreamRequestArgs,
+  options: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
   // skill 正文不参与压缩（见 protect-skill-results.ts）；finally 保证异常时也写回。
   const restoreSkillResults = protectSkillResults(args.messages);
   try {
@@ -486,19 +579,96 @@ export interface UpstreamResponse {
  *
  * Fire-and-forget, and never throws — nothing here is on the critical path.
  */
-export async function notifyUpstreamResponse(
+export function notifyUpstreamResponse(
   config: ProxyConfig,
   response: UpstreamResponse,
   pipe: Pipeline,
+  preparedStats?: Record<string, unknown> | null,
 ): Promise<void> {
-  if (!stageOptions(config)) return;
-  if (typeof _mod.observeUpstreamResponse !== "function") return;
+  if (!stageOptions(config)) return Promise.resolve();
+  let markStatsReady: () => void = () => {};
+  const rawStatsReady = new Promise<void>((resolve) => {
+    markStatsReady = resolve;
+  });
+  const work = observeUpstreamResponse(response, pipe, preparedStats, markStatsReady);
+  // Older extensions do not expose detailed counters, and unexpected failures
+  // can happen before the callback. Either way, release the usage row when the
+  // response-side observer finishes.
+  void work.then(markStatsReady, markStatsReady);
+  if (preparedStats) {
+    registerResponseStatsReady(
+      preparedStats,
+      withStatsDeadline(rawStatsReady, pipe),
+    );
+  }
+  return work;
+}
+
+async function observeUpstreamResponse(
+  response: UpstreamResponse,
+  pipe: Pipeline,
+  preparedStats?: Record<string, unknown> | null,
+  markStatsReady?: () => void,
+): Promise<void> {
   try {
+    if (typeof _mod.observeUpstreamResponseDetailed === "function") {
+      const eligible = preparedStats ? responseCleanupPolicies.get(preparedStats) : undefined;
+      let callbackCalled = false;
+      const observation = await _mod.observeUpstreamResponseDetailed(
+        response,
+        eligible ? [...eligible] : undefined,
+        (stats: { expected?: unknown; generated?: unknown }) => {
+          callbackCalled = true;
+          if (preparedStats) {
+            preparedStats.cfqExpectedCalls = nonNegativeInteger(stats.expected);
+            preparedStats.cfqGeneratedCalls = nonNegativeInteger(stats.generated);
+          }
+          markStatsReady?.();
+        },
+      ) as { expected?: unknown; generated?: unknown; retained?: unknown };
+      // Compatibility with an extension that returns detailed stats but does
+      // not yet invoke the pre-write callback.
+      if (preparedStats && !callbackCalled) {
+        preparedStats.cfqExpectedCalls = nonNegativeInteger(observation.expected);
+        preparedStats.cfqGeneratedCalls = nonNegativeInteger(observation.generated);
+      }
+      markStatsReady?.();
+      reportSideChannelRetention(response, observation.retained, pipe);
+      return;
+    }
+    if (typeof _mod.observeUpstreamResponse !== "function") return;
     const retained = await _mod.observeUpstreamResponse(response);
     reportSideChannelRetention(response, retained, pipe);
   } catch (err: unknown) {
     pipe.error("UPSTREAM_RESPONSE_NOTIFY", err);
   }
+}
+
+function withStatsDeadline(ready: Promise<void>, pipe: Pipeline): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      pipe.info(
+        "CFQ_STATS_TIMEOUT",
+        `generation counters not ready after ${RESPONSE_STATS_MAX_WAIT_MS}ms; writing usage without them`,
+      );
+      finish();
+    }, RESPONSE_STATS_MAX_WAIT_MS);
+    timer.unref?.();
+    void ready.then(finish, finish);
+  });
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0;
 }
 
 /**

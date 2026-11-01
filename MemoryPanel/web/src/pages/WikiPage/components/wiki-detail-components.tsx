@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Card, StatusTip, Tag, Text } from 'tea-component';
+import { Alert, Button, Card, StatusTip, Tag, Text } from 'tea-component';
 import {
   BooksIcon,
   ChevronRightIcon,
@@ -21,6 +21,9 @@ import { knowledgeApi, type GraphData, type GraphNode, type WikiDetail, type Wik
 import { useResizable } from '@/lib/useResizable';
 import { tea } from '@/lib/tea-bridge';
 import { AssetMarkdown } from '@/components/asset/AssetMarkdown';
+import { AssetDocumentFrame } from '@/components/asset/AssetDocumentFrame';
+import { AssetNativeFile } from '@/components/asset/AssetNativeFile';
+import { AssetOfficeFile } from '@/components/asset/AssetOfficeFile';
 import { TYPE_COLORS, TYPE_COLOR_FALLBACK, type WikiScopeTab } from '../constants/wiki-constants';
 import { KnowledgeGraphEmbed } from './wiki-ui';
 
@@ -181,6 +184,7 @@ export function PagesTabContent({
   readLoading,
   displayContent,
   metadata,
+  rawPreview,
   wikiId,
   rawRefreshKey,
   onReadPage,
@@ -198,6 +202,11 @@ export function PagesTabContent({
   readLoading: boolean;
   displayContent: string;
   metadata: Record<string, string> | null;
+  /**
+   * 原始文档预览：format 决定渲染器
+   * （native→浏览器原生渲染 / html→iframe / markdown→AssetMarkdown）；error 为失败原因。
+   */
+  rawPreview: { format?: 'native' | 'client' | 'html' | 'markdown'; error?: string };
   wikiId: string;
   rawRefreshKey: number;
   onReadPage: (p: WikiPage) => void;
@@ -301,7 +310,24 @@ export function PagesTabContent({
             )}
             {readLoading ? (
               <StatusTip status="loading" />
+            ) : rawPreview.error ? (
+              // 转换失败必须给出可读原因，不能留空白面板（此前 docx 预览全白的根因）
+              <Card className="_wiki-detail-content-card">
+                <Card.Body>
+                  <Alert type="error">{rawPreview.error}</Alert>
+                </Card.Body>
+              </Card>
+            ) : rawPreview.format === 'native' ? (
+              // 无损预览：原始字节交给浏览器原生渲染（PDF 由内置引擎渲染，100% 保真）
+              <AssetNativeFile base64={displayContent} filename={selectedPage.title} />
+            ) : rawPreview.format === 'client' ? (
+              // 高保真预览：原始字节交给前端专用库渲染（docx→docx-preview、xlsx→SheetJS）
+              <AssetOfficeFile base64={displayContent} filename={selectedPage.title} />
+            ) : rawPreview.format === 'html' ? (
+              // OOXML/csv 无浏览器渲染器，转 HTML 后沙箱渲染
+              <AssetDocumentFrame html={displayContent} />
             ) : (
+              // 其余按 Markdown 渲染
               <Card className="_wiki-detail-content-card">
                 <Card.Body>
                   <AssetMarkdown content={displayContent} />

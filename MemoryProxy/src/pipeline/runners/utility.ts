@@ -10,6 +10,7 @@
  */
 
 import type { Context } from "hono";
+import { logPipelineUpstreamError } from "../../upstream-error-log.js";
 import type { ProxyConfig } from "../../types.js";
 import { createPipeline, writeLog } from "../../logger.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "../../opik.js";
@@ -30,6 +31,7 @@ import {
   resolveForAgent,
 } from "../../instance-upstream-cache.js";
 import { SKIP_REQUEST_HEADERS_WITH_INTERNAL, SKIP_RESPONSE_HEADERS, filterResponseHeaders } from "../../common/constants.js";
+import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 
 function buildAuxUpstreamHeaders(
   c: Context,
@@ -89,6 +91,7 @@ function extractUsageFromResponse(
 export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promise<Response> {
   const traceId = uuidv7();
   const startTime = new Date().toISOString();
+  const requestStartMono = performance.now();
 
   const entry = matchWhitelistEndpoint(c.req.path);
   if (!entry) return c.json({ error: "Unregistered endpoint" }, 404);
@@ -144,16 +147,23 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
   }
 
   // 4. pipe log + forward
-  const pipe = createPipeline(config, traceId, modelId);
+  const pipe = createPipeline(config, traceId, modelId, {
+    spaceId,
+    protocol: entry.protocol,
+    startedAt: startTime,
+    startedMono: requestStartMono,
+  });
   pipe.info("AUX_ENDPOINT", `${entry.pathSuffix} → ${entry.upstreamEndpoint} (${entry.protocol})`);
   pipe.forwardStart();
 
   let upstreamResp: Response;
+  const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 3_600_000;
   try {
     upstreamResp = await fetch(upstreamUrl, {
       method: "POST",
       headers: upstreamHeaders,
       body: rawBody,
+      ...(forwardTimeoutMs > 0 ? { signal: AbortSignal.timeout(forwardTimeoutMs) } : {}),
     });
   } catch (err: unknown) {
     pipe.error("AUX_FORWARD", err instanceof Error ? err : new Error(String(err)));
@@ -163,6 +173,7 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
     }, 502);
   }
   pipe.forwardDone(upstreamResp.status, upstreamResp.headers.get("x-request-id") ?? undefined);
+  await logPipelineUpstreamError(pipe, upstreamResp);
 
   // 5. stream vs non-stream
   const contentType = upstreamResp.headers.get("content-type") ?? "";
@@ -170,7 +181,18 @@ export async function runUtilityPipeline(c: Context, config: ProxyConfig): Promi
 
   if (isStream) {
     log.debug("aux.stream.passthrough", { path: c.req.path, upstreamUrl });
-    return new Response(upstreamResp.body, {
+    const observedStream = upstreamResp.body
+      ? withStreamIdleWarning(upstreamResp.body, {
+          spaceId,
+          traceId,
+          requestId: traceId,
+          upstreamRequestId: upstreamResp.headers.get("x-request-id") ?? "",
+          model: modelId,
+          protocol: entry.protocol,
+          branch: "client_pipeline",
+        })
+      : null;
+    return new Response(observedStream, {
       status: upstreamResp.status,
       headers: filterResponseHeaders(upstreamResp.headers),
     });

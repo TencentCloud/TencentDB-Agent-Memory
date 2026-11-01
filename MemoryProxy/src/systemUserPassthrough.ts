@@ -42,6 +42,7 @@
  */
 
 import type { Context } from "hono";
+import { logStandaloneUpstreamError } from "./upstream-error-log.js";
 import { writeLog } from "./logger.js";
 import { log } from "./report/log.js";
 import { joinUrl } from "./guard-adapter.js";
@@ -557,7 +558,7 @@ export async function handleSystemUserPassthrough(
     headers["authorization"] = `Bearer ${extractionApiKeyOverride}`;
     delete headers["x-api-key"];
   }
-  const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
+  const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 3_600_000;
 
   let upstreamResp: Response;
   // custom extraction upstream(用户自定义 extraction base_url + api_key)不走 proxy
@@ -597,7 +598,13 @@ export async function handleSystemUserPassthrough(
         : String(err);
     log.error(
       "systemUser.forward_failed",
-      { systemUser: match.name, upstreamUrl, path },
+      {
+        requestId: traceId,
+        clientRequestId: c.req.header("x-request-id"),
+        systemUser: match.name,
+        upstreamUrl,
+        path,
+      },
       err instanceof Error ? err : new Error(String(err)),
     );
 
@@ -619,6 +626,20 @@ export async function handleSystemUserPassthrough(
   const contentType = upstreamResp.headers.get("content-type") ?? "";
   const isStream = contentType.includes("event-stream");
   const status = upstreamResp.status;
+  log.debug("systemUser.forward_done", {
+    requestId: traceId,
+    clientRequestId: c.req.header("x-request-id"),
+    upstreamRequestId: upstreamRequestId ?? "",
+    upstreamUrl,
+    status,
+  });
+  await logStandaloneUpstreamError({
+    response: upstreamResp,
+    requestId: traceId,
+    clientRequestId: c.req.header("x-request-id"),
+    upstreamUrl,
+    event: "systemUser.upstream_error",
+  });
 
   if (isStream && upstreamResp.body) {
     // Tee the stream: one branch to the client immediately, one consumed in

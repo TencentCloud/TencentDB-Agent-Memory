@@ -22,6 +22,7 @@ import type {
   WikiRawWriteFile,
   WikiRawWriteItem,
   WikiRawRmResult,
+  WikiFileFormat,
   WikiPageReadItem,
   WikiPageWriteItem,
   WikiPageWriteResultItem,
@@ -266,6 +267,10 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
 
   async wikiRawLs(wikiId: string): Promise<{ items: RawFileEntry[] }> {
     return this.post('/v3/wiki/raw/ls', { wiki_id: wikiId });
+  }
+
+  async wikiFormats(): Promise<{ items: WikiFileFormat[] }> {
+    return this.post('/v3/wiki/formats', {});
   }
 
   async wikiRawRead(wikiId: string, filenames: string[]): Promise<{ items: WikiRawReadItem[] }> {

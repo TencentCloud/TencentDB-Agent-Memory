@@ -71,31 +71,47 @@ export interface ClickHouseRow {
   cache_creation_ephemeral_5m_input_tokens: number;      // 5m TTL 缓存写入
   cache_creation_ephemeral_1h_input_tokens: number;      // 1h TTL 缓存写入
   credit: number;
-  credit_saved: number;        // 路由节省的 credit（仅 event=usage 且 routed_from 非空时有值）
+  /**
+   * 相对「不路由也不做 request-prepare」少花的 credit：`假设费用 − 实际费用`，路由与
+   * request-prepare 合在一个数里（见 {@link computeCreditSaved}）。仅 event=usage；
+   * 路由与 request-prepare 都未生效时为 0。
+   *
+   * request-prepare 那部分按被缩减内容的位置计价：新增输入里的按本行尾部单价
+   * （未缓存 / cache write），历史里的按 cache read。
+   *
+   * 口径提示：它是**上界**——request-prepare 打穿上游前缀缓存的代价不在其中。
+   */
+  credit_saved: number;
   routed_from: string;
+  requested_model: string;     // 客户端原始 body.model（模型池 tdai-code-o5 等改写前）；未知时为空
+  route_reason: string;        // 模型池选成员的方式：analyzer / pinned / no-tools / compression / …，retry: 前缀表示失败回退；非池请求为空
   space_id: string;            // 空间/租户标识（从 /proxy/<spaceId>/... 路径提取）
   source_tag: string;          // 来源标记，恒定为 "proxy"
   host: string;
   upstream_request_id: string; // 上游响应 header `x-request-id`（tokenhub/OpenAI 兼容网关生成），用于跨系统追溯
   /**
-   * 压缩节省的 token 数：max(0, pre_compress_tokens − post_compress_tokens)。
-   * 来自 cost-guard extensionStats；未压缩时为 0。
+   * Request-prepare 节省的 token 数：max(0, pre_compress_tokens − post_compress_tokens)。
+   * 来自 cost-guard extensionStats；未做 request-prepare 时为 0。
    */
   compress_tokens_saved: number;
   /**
-   * 压缩服务报告的压缩前 token 数（仅统计它真的返回过数字的内容）。
+   * Request-prepare 阶段报告的处理前 token 数（仅统计它真的返回过数字的内容）。
    *
-   * 口径提示：这是压缩服务自己的 tokenizer 数出来的，与同一行的 `input_tokens`
-   * （上游模型的计费口径）不是同一把尺子，两者不可相减、也不能直接折算成费用。
-   * 它的用途是算压缩率 `post / pre`。
+   * 口径提示：这是 request-prepare 服务自己的 tokenizer 数出来的，与同一行的
+   * `input_tokens`（上游模型的计费口径）不是同一把尺子，两者不可相减、也不能直接
+   * 折算成费用。它的用途是算缩减率 `post / pre`。
    */
   pre_compress_tokens: number;
-  /** 同一批内容压缩后的 token 数；保留原文的项记为与压缩前相同。 */
+  /** 同一批内容处理后的 token 数；保留原文的项记为与处理前相同。 */
   post_compress_tokens: number;
-  /** 实际访问压缩模型的次数；缓存命中和本地跳过不计入。 */
+  /** 实际访问 request-prepare 服务的次数；缓存命中和本地跳过不计入。 */
   compress_remote_count: number;
-  /** 实际压缩模型请求耗时之和（毫秒），用于跨请求计算加权平均。 */
+  /** 实际 request-prepare 服务请求耗时之和（毫秒），用于跨请求计算加权平均。 */
   compress_remote_total_ms: number;
+  /** 本轮按注入策略应生成 CFQ 的工具调用数。 */
+  cfq_expected_calls: number;
+  /** Redis 写入前已生成的有效 CFQ 数量（主模型 + 分析模型兜底）。 */
+  cfq_generated_calls: number;
 }
 
 /**
@@ -247,6 +263,8 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     "  credit Float64,",
     "  credit_saved Float64 DEFAULT 0,",
     "  routed_from LowCardinality(String),",
+    "  requested_model LowCardinality(String) DEFAULT '',",
+    "  route_reason LowCardinality(String) DEFAULT '',",
     "  space_id String DEFAULT '',",
     "  source_tag LowCardinality(String) DEFAULT 'proxy',",
     "  host LowCardinality(String),",
@@ -255,7 +273,9 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     "  pre_compress_tokens UInt64 DEFAULT 0,",
     "  post_compress_tokens UInt64 DEFAULT 0,",
     "  compress_remote_count UInt64 DEFAULT 0,",
-    "  compress_remote_total_ms UInt64 DEFAULT 0",
+    "  compress_remote_total_ms UInt64 DEFAULT 0,",
+    "  cfq_expected_calls UInt32 DEFAULT 0,",
+    "  cfq_generated_calls UInt32 DEFAULT 0",
     ") ENGINE = MergeTree()",
     "ORDER BY (user_id, session_key, timestamp)",
     ttlClause,
@@ -383,14 +403,21 @@ export async function migrateSchema(
     // 上游响应 header `x-request-id`（tokenhub 等 OpenAI/Anthropic 兼容网关返回）。
     // 本次新增：用于跨系统追溯（客户端 x-request-id → 我方 upstream_request_id → 上游日志）。
     { table: cfg.table, column: "upstream_request_id", type: "String DEFAULT ''" },
-    // cost-guard 压缩节省 token：max(0, preCompressTokens − postCompressTokens)
+    // cost-guard request-prepare 节省 token：max(0, preCompressTokens − postCompressTokens)
     { table: cfg.table, column: "compress_tokens_saved", type: "UInt64 DEFAULT 0" },
-    // 压缩前后的原始计数，用于算压缩率——只有差值算不出分母。
+    // request-prepare 前后的原始计数，用于算缩减率——只有差值算不出分母。
     { table: cfg.table, column: "pre_compress_tokens", type: "UInt64 DEFAULT 0" },
     { table: cfg.table, column: "post_compress_tokens", type: "UInt64 DEFAULT 0" },
-    // 实际压缩服务访问次数及总耗时；两者结合可算跨请求加权平均耗时。
+    // 实际 request-prepare 服务访问次数及总耗时；两者结合可算跨请求加权平均耗时。
     { table: cfg.table, column: "compress_remote_count", type: "UInt64 DEFAULT 0" },
     { table: cfg.table, column: "compress_remote_total_ms", type: "UInt64 DEFAULT 0" },
+    // CFQ 生成率保留可加和的分子/分母；老行默认 0，不污染升级后的聚合。
+    { table: cfg.table, column: "cfq_expected_calls", type: "UInt32 DEFAULT 0" },
+    { table: cfg.table, column: "cfq_generated_calls", type: "UInt32 DEFAULT 0" },
+    // 客户端原始请求模型；模型池服务名（tdai-code-o5）在转发前会被改写成主模型。
+    { table: cfg.table, column: "requested_model", type: "LowCardinality(String) DEFAULT ''" },
+    // 模型池决策来源；区分真正跑了池分析的请求与工具循环沿用、辅助请求、压缩检测等绕过分析的请求。
+    { table: cfg.table, column: "route_reason", type: "LowCardinality(String) DEFAULT ''" },
   ];
 
   // usage_raw：追溯表补齐（本次新增 6 列 + model_name + upstream_request_id）
@@ -421,6 +448,25 @@ export async function migrateSchema(
     column: "reject_reason",
     type: "LowCardinality(String) DEFAULT ''",
   });
+
+  // session_init_logs：补 v3.3 新增的两列。
+  //
+  // ⚠️ 该表由 `createTableIfNotExists` 创建(走 CREATE TABLE IF NOT EXISTS),
+  // 对**已存在的存量表是 no-op** —— 此前这两列只加进了 DDL, 没同步到本迁移
+  // 清单, 导致老表升上来后永远缺列, 新代码写入时埋点静默丢失。
+  // 这里补上 ALTER, 保证全新库(DDL 已含)与存量库(本清单补齐)两种状况都能 work。
+  migrations.push(
+    {
+      table: SESSION_INIT_TABLE,
+      column: "preset_source",
+      type: "LowCardinality(String) DEFAULT ''",
+    },
+    {
+      table: SESSION_INIT_TABLE,
+      column: "default_fallback_reason",
+      type: "LowCardinality(String) DEFAULT ''",
+    },
+  );
 
   let ok = 0;
   let failed = 0;
@@ -515,6 +561,10 @@ export interface ClickHouseWriteEntry {
   stream: boolean;
   usage?: Record<string, unknown>;
   routedFrom?: string;
+  /** `body.model` as the client sent it, before pool-service / main-model rewrites. */
+  requestedModel?: string;
+  /** How the model pool picked this request's member; pool requests only. */
+  routeReason?: string;
   /** Space/tenant ID extracted from /proxy/<spaceId>/... path. */
   spaceId?: string;
   /**
@@ -527,7 +577,7 @@ export interface ClickHouseWriteEntry {
   /**
    * Opaque scalar counters from the optional request-preparation stage
    * (cost-guard). `preCompressTokens` / `postCompressTokens` feed the three
-   * compression columns; the rest is carried to the JSONL log untouched.
+   * request-prepare columns; the rest is carried to the JSONL log untouched.
    */
   extensionStats?: Record<string, unknown>;
   /** Original request receipt time used for time-based credit pricing. */
@@ -536,43 +586,204 @@ export interface ClickHouseWriteEntry {
   pricingConfig?: CreditPricingConfig;
 }
 
+/** 承载**计费输入** token 的顶层 usage 字段，三种协议的别名都列在这里。 */
+const HYPOTHETICAL_SCALED_FIELDS = [
+  "prompt_tokens",
+  "input_tokens",
+  "prompt_cache_hit_tokens",
+  "cache_read_tokens",
+  "cache_read_input_tokens",
+  "cache_write_tokens",
+  "prompt_cache_write_tokens",
+  "cache_creation_input_tokens",
+] as const;
+
+/** 拆分缓存前缀的嵌套计数。只放计费字段，`completion_tokens_details` 不在其中。 */
+const HYPOTHETICAL_SCALED_SUBFIELDS: Record<string, readonly string[]> = {
+  prompt_tokens_details: ["cached_tokens"],
+  input_tokens_details: ["cached_tokens"],
+  cache_creation: ["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"],
+};
+
+/** Multiply a numeric field in place; anything else is left alone. */
+function scaleField(target: Record<string, unknown>, key: string, factor: number): void {
+  const value = target[key];
+  if (typeof value === "number" && Number.isFinite(value)) target[key] = value * factor;
+}
+
 /**
- * Compute expected credit saved by routing to a different model.
- * Only applies when event='usage' AND routed_from is non-empty.
- * credit_saved = credit_if_original_model - actual_credit
+ * Request-prepare 节省里落在本次请求**新增输入**中的 token 数：`savedTokens × 宿主测得的字符占比`。
+ * 宿主没测到（旧版本、request-prepare 未改动任何文本）时返回 undefined，调用方退回整行平均口径。
+ */
+function newInputCompressTokens(
+  extensionStats: Record<string, unknown> | undefined,
+  savedTokens: number,
+): number | undefined {
+  const share = extensionStats?.newInputCompressShare;
+  if (typeof share !== "number" || !Number.isFinite(share)) return undefined;
+  return savedTokens * Math.min(Math.max(share, 0), 1);
+}
+
+/**
+ * 把 usage 放大成「这次请求如果没做 request-prepare，会是什么样」，交给 {@link computeCreditDelta}
+ * 定价——协议分支、5m/1h 拆分、时段 rule 与分档都留在那里，不在这里重写。
+ *
+ * 被缩减的 token 按它们**所在的位置**计价，而不是按整行平均：
+ *
+ * - 落在新增输入里的 `newInputTokens`（模型上一条回复及之后的内容）本次是第一次
+ *   发送，不做 request-prepare 时会按本行尾部的实际构成计费——未缓存 input，或 cache write；
+ * - 其余的在之前轮次已经发过，处于上游前缀缓存里，不做 request-prepare 时按 cache read 计费。
+ *
+ * 一行请求九成以上是已缓存的历史，若按整行平均分摊，新压的那段也会被当成 cache read，
+ * 而两档单价可差两个数量级。`newInputTokens` 缺失时退回整行平均，结果偏低但不会高估。
+ *
+ * 输出侧不动：不假设更短的 prompt 会改变回复长度。
+ *
+ * 返回新对象而非就地改写 —— `computeCreditDelta` 的结果缓存以 usage 对象标识为
+ * key，复用同一个对象会读到实际用量那条缓存。
+ */
+function buildHypotheticalUsage(
+  usage: Record<string, unknown>,
+  upstreamUrl: string,
+  promptTokens: number,
+  savedTokens: number,
+  newInputTokens: number | undefined,
+): Record<string, unknown> {
+  if (savedTokens <= 0 || promptTokens <= 0) return usage;
+  if (newInputTokens === undefined) {
+    return scaleUsageUniformly(usage, (promptTokens + savedTokens) / promptTokens);
+  }
+
+  const scaled: Record<string, unknown> = { ...usage };
+  const group = (name: string): Record<string, unknown> | null => {
+    const nested = usage[name];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) return null;
+    const copy = { ...(nested as Record<string, unknown>) };
+    scaled[name] = copy;
+    return copy;
+  };
+  let toNew = Math.min(Math.max(newInputTokens, 0), savedTokens);
+  let toCached = savedTokens - toNew;
+  const protocol = detectUsageProtocol(upstreamUrl);
+
+  if (protocol === "anthropic") {
+    // input_tokens 已扣除缓存：未缓存与写入各自成字段，按它们的实际比例分摊。
+    const cachedTokens = num(usage.cache_read_input_tokens);
+    const tailTokens = num(usage.input_tokens) + num(usage.cache_creation_input_tokens);
+    if (cachedTokens <= 0) {
+      toNew += toCached;
+      toCached = 0;
+    }
+    if (toCached > 0) scaleField(scaled, "cache_read_input_tokens", (cachedTokens + toCached) / cachedTokens);
+    if (tailTokens > 0) {
+      const factor = (tailTokens + toNew) / tailTokens;
+      scaleField(scaled, "input_tokens", factor);
+      scaleField(scaled, "cache_creation_input_tokens", factor);
+      const creation = group("cache_creation");
+      if (creation) {
+        scaleField(creation, "ephemeral_5m_input_tokens", factor);
+        scaleField(creation, "ephemeral_1h_input_tokens", factor);
+      }
+    } else {
+      scaled.input_tokens = num(usage.input_tokens) + toNew;
+    }
+    if (typeof usage.prompt_tokens === "number") scaled.prompt_tokens = usage.prompt_tokens + savedTokens;
+    return scaled;
+  }
+
+  // OpenAI Chat / Responses：总量字段已含缓存，未缓存 = 总量 − 缓存。总量加满 D、缓存
+  // 字段只加落在历史里的部分，新增输入那部分就自然落进未缓存。这两种协议的写入字段
+  // 没有 TTL 语义，保持原值。
+  const totalKey = protocol === "responses" ? "input_tokens" : "prompt_tokens";
+  const detailsKey = protocol === "responses" ? "input_tokens_details" : "prompt_tokens_details";
+  const details = usage[detailsKey] as Record<string, unknown> | undefined;
+  const cachedTokens = num(usage.cache_read_tokens) || num(details?.cached_tokens);
+  scaled[totalKey] = num(usage[totalKey]) + savedTokens;
+  if (cachedTokens > 0 && toCached > 0) {
+    const factor = (cachedTokens + toCached) / cachedTokens;
+    scaleField(scaled, "cache_read_tokens", factor);
+    scaleField(scaled, "prompt_cache_hit_tokens", factor);
+    const copy = group(detailsKey);
+    if (copy) scaleField(copy, "cached_tokens", factor);
+  }
+  return scaled;
+}
+
+/** 整行平均口径：对每个计费输入字段乘同一个系数，复现本行的实际计费构成。 */
+function scaleUsageUniformly(
+  usage: Record<string, unknown>,
+  scale: number,
+): Record<string, unknown> {
+  const scaled: Record<string, unknown> = { ...usage };
+  for (const field of HYPOTHETICAL_SCALED_FIELDS) {
+    const value = usage[field];
+    if (typeof value === "number" && Number.isFinite(value)) scaled[field] = value * scale;
+  }
+  for (const [group, fields] of Object.entries(HYPOTHETICAL_SCALED_SUBFIELDS)) {
+    const nested = usage[group];
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+    const source = nested as Record<string, unknown>;
+    const out: Record<string, unknown> = { ...source };
+    for (const field of fields) {
+      const value = source[field];
+      if (typeof value === "number" && Number.isFinite(value)) out[field] = value * scale;
+    }
+    scaled[group] = out;
+  }
+  return scaled;
+}
+
+/**
+ * 本次请求相对「所有优化都关掉」少花的 credit：`假设费用 − 实际费用`。
+ *
+ * 假设费用 = request-prepare 前的 usage，按客户端**原本要的**模型定价；实际费用就是同一行的
+ * `credit`。一次相减同时覆盖路由与 request-prepare，于是不需要手工决定交叉项归谁：
+ *
+ *     p_o·Q_u − p_r·Q_c  =  p_o·(Q_u − Q_c)  +  (p_o − p_r)·Q_c
+ *                           └── req-prepare ──┘    └──── 路由 ────┘
+ *
+ * 两种退化情形自动正确：没有 request-prepare（savedTokens = 0）时假设 usage 就是实际 usage，
+ * 剩下的正是这列一直以来的纯路由值；没有路由时基准模型就是实际调用的模型，只剩
+ * request-prepare 项。两者都关则为 0。
+ *
+ * 口径是**单请求反事实**。`pre/post` 含缓存命中的历史段，所以同一次 request-prepare 会在后续
+ * 每一轮各记一次 —— 在这个口径下这是对的：每一轮都确实少发了那些 token，逐行求和
+ * 就是总量。它不是「request-prepare 这段内容的一次性价值」。
+ *
+ * 不含缓存状态代价：假设费用用的是本行**实际**缓存构成，所以 request-prepare 打穿上游前缀缓存
+ * 造成的损失在相减时被约掉了。因此它是节省的**上界**，净收益需要配合 cache_write
+ * 占比随轮次的变化一起看。
  */
 function computeCreditSaved(
   entry: ClickHouseWriteEntry,
   usage: Record<string, unknown>,
+  actualCredit: number,
+  promptTokens: number,
+  savedTokens: number,
+  newInputTokens: number | undefined,
 ): number {
-  // Only for main usage events with routing
   if (entry.event !== "usage") return 0;
-  if (!entry.routedFrom) return 0;
+  // 定价没解析出来（未知模型 / 非 TokenHub 上游）时 actualCredit 为 0，此时没有可比
+  // 的基准：照算会把整个假设费用当成节省记下来。
+  if (actualCredit <= 0) return 0;
+
   const requestTime = entry.requestReceivedAt ? new Date(entry.requestReceivedAt) : undefined;
-
-  // Compute what credit would have been if using the original model
-  const creditIfOriginal = computeCreditDelta(
-    usage,
+  // 客户端原本要的模型；按请求转发时就是实际调用的那个。
+  const baselineModel = entry.routedFrom || entry.modelId;
+  const creditIfUntouched = computeCreditDelta(
+    buildHypotheticalUsage(usage, entry.upstreamUrl, promptTokens, savedTokens, newInputTokens),
     entry.pricingConfig,
-    entry.routedFrom,
-    entry.upstreamUrl,
-    requestTime,
-  );
-  // Actual credit (using the routed model)
-  const actualCredit = computeCreditDelta(
-    usage,
-    entry.pricingConfig,
-    entry.modelId,
+    baselineModel,
     entry.upstreamUrl,
     requestTime,
   );
 
-  const saved = creditIfOriginal - actualCredit;
+  const saved = creditIfUntouched - actualCredit;
   return saved > 0 ? saved : 0;
 }
 
 /**
- * Read the compression token pair out of extensionStats.
+ * Read the request-prepare token pair out of extensionStats.
  *
  * Both columns are written together or not at all: a post without a pre has no
  * denominator and would read as a 100% saving. Anything missing or non-finite
@@ -597,7 +808,7 @@ function computeCompressTokens(
   };
 }
 
-/** Read actual compression-service call count and aggregate latency. */
+/** Read actual request-prepare service call count and aggregate latency. */
 function computeCompressRemoteStats(
   extensionStats: Record<string, unknown> | undefined,
 ): { count: number; totalMs: number } {
@@ -668,8 +879,17 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
   const totalTokens = num(usage.total_tokens) || (promptTokens + completionTokens);
 
   const compressTokens = computeCompressTokens(entry.extensionStats);
+  const newInputSaved = newInputCompressTokens(entry.extensionStats, compressTokens.saved);
   const compressRemote = computeCompressRemoteStats(entry.extensionStats);
   const requestTime = entry.requestReceivedAt ? new Date(entry.requestReceivedAt) : undefined;
+  // 算一次复用：`credit_saved` 要拿它当实际费用，重算一遍会多一个口径漂移的机会。
+  const credit = computeCreditDelta(
+    usage,
+    entry.pricingConfig,
+    entry.modelId,
+    entry.upstreamUrl,
+    requestTime,
+  );
 
   return {
     timestamp: toChTimestamp(entry.timestamp),
@@ -692,9 +912,18 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
     input_tokens: inputTokens,
     cache_creation_ephemeral_5m_input_tokens: num(cacheCreation?.ephemeral_5m_input_tokens),
     cache_creation_ephemeral_1h_input_tokens: num(cacheCreation?.ephemeral_1h_input_tokens),
-    credit: computeCreditDelta(usage, entry.pricingConfig, entry.modelId, entry.upstreamUrl, requestTime),
-    credit_saved: computeCreditSaved(entry, usage),
+    credit,
+    credit_saved: computeCreditSaved(
+      entry,
+      usage,
+      credit,
+      promptTokens,
+      compressTokens.saved,
+      newInputSaved,
+    ),
     routed_from: entry.routedFrom ?? "",
+    requested_model: entry.requestedModel ?? "",
+    route_reason: entry.routeReason ?? "",
     space_id: entry.spaceId ?? "",
     source_tag: "proxy",
     host: HOST_ID,
@@ -704,6 +933,8 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
     post_compress_tokens: compressTokens.post,
     compress_remote_count: compressRemote.count,
     compress_remote_total_ms: compressRemote.totalMs,
+    cfq_expected_calls: num(entry.extensionStats?.cfqExpectedCalls),
+    cfq_generated_calls: num(entry.extensionStats?.cfqGeneratedCalls),
   };
 }
 
@@ -917,7 +1148,14 @@ export async function flush(): Promise<void> {
       table: config.table,
       values: rows,
       format: "JSONEachRow",
-      clickhouse_settings: { async_insert: 1, wait_for_async_insert: 1 },
+      // Rolling-upgrade safety: if ALTER is temporarily unavailable, new
+      // writers may still send the two CFQ fields to an old table without
+      // breaking the billing row. Once migration succeeds they are persisted.
+      clickhouse_settings: {
+        async_insert: 1,
+        wait_for_async_insert: 1,
+        input_format_skip_unknown_fields: 1,
+      },
     });
     log.debug("clickhouse.flush.ok", { rows: rows.length });
   } catch (err: unknown) {
@@ -1038,6 +1276,27 @@ export interface SessionInitLogInput {
   bypassReason: string;
   /** 恒为 "initialized"，未来若加更多终态可扩展 */
   finalStatus: string;
+  /**
+   * v3.3 user-session-default: 本次 session-init 身份识别的来源。
+   * 枚举:
+   *   - "user_default" — 命中账户级默认配置 (本功能)
+   *   - "header"       — 命中 header preset (x-team-id / x-agent-id / x-task-id)
+   *   - "form"         — 走完交互表单
+   *   - ""             — 未进入 state machine (sidequery / recovered / bypass 等)
+   * 老 agent 不传该字段时, buildSessionInitLogRow 落入空串 (与 CH DEFAULT '' 对齐)。
+   */
+  presetSource?: string;
+  /**
+   * v3.3 user-session-default: 账户默认未生效时的失败原因。
+   * 枚举 (见 session/user-default.ts logFallback):
+   *   - "team_not_accessible"
+   *   - "agent_not_accessible"
+   *   - "task_not_accessible"
+   *   - "get_failed"           — Core RPC 异常
+   *   - ""                     — 命中成功 / 根本没配 / 本次不走账户默认
+   * 用于后续运营分析"默认配置失效率"。
+   */
+  defaultFallbackReason?: string;
 }
 
 /** ClickHouse `session_init_logs` 表一行的最终形态。 */
@@ -1052,6 +1311,10 @@ export interface SessionInitLogRow {
   bypassed: number;
   bypass_reason: string;
   final_status: string;
+  /** v3.3: 身份来源, LowCardinality String, DEFAULT '' 兼容老行 */
+  preset_source: string;
+  /** v3.3: 账户默认失败原因, LowCardinality String, DEFAULT '' */
+  default_fallback_reason: string;
   source_tag: string;
   host: string;
 }
@@ -1125,6 +1388,10 @@ function bodyHash16(body: string): string {
 /** 构造 session_init 行；纯函数便于测试。 */
 export function buildSessionInitLogRow(input: SessionInitLogInput): SessionInitLogRow {
   const reason = (input.bypassReason ?? "").slice(0, BYPASS_REASON_MAX_CHARS);
+  // v3.3: preset_source / default_fallback_reason 也走 LowCardinality,
+  // 为了防止意外脏值导致基数爆炸, 同样截断到 BYPASS_REASON_MAX_CHARS。
+  const presetSource = (input.presetSource ?? "").slice(0, BYPASS_REASON_MAX_CHARS);
+  const defaultFallbackReason = (input.defaultFallbackReason ?? "").slice(0, BYPASS_REASON_MAX_CHARS);
   return {
     timestamp: toChTimestamp(input.timestamp),
     session_key: input.sessionKey ?? "",
@@ -1136,6 +1403,8 @@ export function buildSessionInitLogRow(input: SessionInitLogInput): SessionInitL
     bypassed: input.bypassed ? 1 : 0,
     bypass_reason: reason,
     final_status: input.finalStatus,
+    preset_source: presetSource,
+    default_fallback_reason: defaultFallbackReason,
     source_tag: "proxy",
     host: HOST_ID,
   };
@@ -1371,6 +1640,10 @@ export function sessionInitTableDdl(): string {
     "  bypassed UInt8,",
     "  bypass_reason String,",
     "  final_status LowCardinality(String),",
+    // v3.3 user-session-default: 身份来源与账户默认失败原因。
+    // DEFAULT '' 保证老 CH 升级新列后不需要回填; LowCardinality 保基数稳。
+    "  preset_source LowCardinality(String) DEFAULT '',",
+    "  default_fallback_reason LowCardinality(String) DEFAULT '',",
     "  source_tag LowCardinality(String) DEFAULT 'proxy',",
     "  host LowCardinality(String)",
     ") ENGINE = MergeTree()",

@@ -16,6 +16,7 @@ import { resolve, dirname } from "node:path";
 import type { LogEntry, ProxyConfig } from "./types.js";
 import { log } from "./report/log.js";
 import { writeClickHouse } from "./clickhouse.js";
+import { takeResponseStatsReady } from "./response-stats-ready.js";
 
 // ── JSONL file logger (usage events only) ─────────────────────────────────────
 
@@ -38,6 +39,21 @@ async function ensureDir(dir: string): Promise<void> {
 
 /** Append a single usage log entry as a JSON line. Fire-and-forget (no await needed). */
 export function writeLog(config: ProxyConfig, entry: LogEntry): void {
+  const extensionStats = "extensionStats" in entry ? entry.extensionStats : undefined;
+  const responseStatsReady = takeResponseStatsReady(extensionStats);
+  if (responseStatsReady) {
+    // Keep CFQ fallback off the client response path. Only observability waits
+    // for the response-side generation counters.
+    void responseStatsReady.then(
+      () => writeLogNow(config, entry),
+      () => writeLogNow(config, entry),
+    );
+    return;
+  }
+  writeLogNow(config, entry);
+}
+
+function writeLogNow(config: ProxyConfig, entry: LogEntry): void {
   // ── ClickHouse async write (if enabled) ──────────────────────────────────
     if (config.clickhouse.enabled && (entry.event === "usage" || entry.event === "analyzer_usage")) {
     writeClickHouse({
@@ -52,6 +68,8 @@ export function writeLog(config: ProxyConfig, entry: LogEntry): void {
       stream: entry.stream,
       usage: entry.usage,
       routedFrom: "routedFrom" in entry ? entry.routedFrom : undefined,
+      requestedModel: "requestedModel" in entry ? entry.requestedModel : undefined,
+      routeReason: "routeReason" in entry ? entry.routeReason : undefined,
       spaceId: "spaceId" in entry ? entry.spaceId : undefined,
       upstreamRequestId:
         "upstreamRequestId" in entry ? entry.upstreamRequestId : undefined,
@@ -154,17 +172,30 @@ export interface PipelineIds {
   upstreamRequestId: string;
 }
 
+export interface PipelineContext {
+  spaceId?: string;
+  protocol?: string;
+  /** Handler 入口的墙钟时间与单调时钟，用于真正的端到端耗时。 */
+  startedAt?: string;
+  startedMono?: number;
+}
+
 export function createPipeline(
   config: ProxyConfig,
   requestId: string,
   modelId: string,
+  context: PipelineContext = {},
 ): Pipeline {
-  const pipeStart = Date.now();
+  const requestStartedAt = context.startedAt ?? new Date().toISOString();
+  const parsedStart = Date.parse(requestStartedAt);
+  const pipeStart = Number.isFinite(parsedStart) ? parsedStart : Date.now();
+  const pipeStartMono = context.startedMono ?? performance.now();
   const tag = `[${requestId.slice(0, 8)}]`;
   const stages: string[] = [];
   let forwardMs = 0;
   let forwardStartMs = 0;
   let upstreamRequestId = "";
+  let completionLogged = false;
 
   /** Correlation fields stamped onto every structured line this pipeline emits. */
   function ids(): PipelineIds {
@@ -178,8 +209,38 @@ export function createPipeline(
     stages.push(stage);
   }
 
+  function logCompletion(kind: "stream" | "response", hasUsage: boolean): void {
+    if (completionLogged) return;
+    completionLogged = true;
+    log.info("pipeline.request.complete", {
+      ...ids(),
+      requestId,
+      requestTag: tag,
+      model: modelId,
+      ...(context.spaceId ? { spaceId: context.spaceId } : {}),
+      ...(context.protocol ? { protocol: context.protocol } : {}),
+      kind,
+      hasUsage,
+      startedAt: requestStartedAt,
+      endedAt: new Date().toISOString(),
+      totalMs: Math.round(performance.now() - pipeStartMono),
+      forwardMs,
+    });
+  }
+
   return {
     requestReceived(msgCount, isStream) {
+      log.info("pipeline.request.start", {
+        ...ids(),
+        requestId,
+        requestTag: tag,
+        model: modelId,
+        ...(context.spaceId ? { spaceId: context.spaceId } : {}),
+        ...(context.protocol ? { protocol: context.protocol } : {}),
+        msgCount,
+        stream: isStream,
+        startedAt: requestStartedAt,
+      });
       log.debug("pipeline.request.received", { ...ids(), model: modelId, msgCount, stream: isStream });
       pipeLog("→ REQ", `model=${modelId} msgs=${msgCount} stream=${isStream}`);
     },
@@ -211,6 +272,7 @@ export function createPipeline(
         pipeLog("  ✓ STREAM", "done (no usage extracted)");
       }
       pipeLog("← DONE", `total=${total}`);
+      logCompletion("stream", usage !== null);
     },
 
     responseDone(usage) {
@@ -221,6 +283,7 @@ export function createPipeline(
         pipeLog("  ✓ RESP", "done (no usage)");
       }
       pipeLog("← DONE", `total=${total}`);
+      logCompletion("response", usage !== null);
     },
 
     info(stage, detail) {

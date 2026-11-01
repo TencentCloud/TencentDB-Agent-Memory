@@ -48,7 +48,7 @@ const DEFAULT_SKILL_SELECTION: SkillSelectionConfig = {
 };
 
 export const DEFAULT_CONFIG: ProxyConfig = {
-  server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 600_000 },
+  server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 3_600_000 },
   upstream: { url: DEFAULT_UPSTREAM, apiKey: "", agents: {} },
   log: {
     file: "",
@@ -236,6 +236,16 @@ export function loadYamlConfig(filePath: string): RawYamlConfig {
   }
 }
 
+/** Reload-time loader: unlike startup, never falls back when the file is absent/empty. */
+export function loadYamlConfigStrict(filePath: string): RawYamlConfig {
+  const text = readFileSync(filePath, "utf-8");
+  const parsed = yamlLoad(text);
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Config ${filePath} must contain a non-empty YAML object`);
+  }
+  return parsed as RawYamlConfig;
+}
+
 /** CLI override options (all optional). */
 export interface CliOverrides {
   configFile?: string;
@@ -330,9 +340,14 @@ function parseUpstreamAgents(
  * Build the final ProxyConfig.
  * Priority (high → low): CLI overrides > YAML config file > defaults.
  */
-export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
+export function buildConfig(
+  overrides: CliOverrides = {},
+  options: { strict?: boolean } = {},
+): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
-  const yaml = loadYamlConfig(configPath);
+  const yaml = options.strict
+    ? loadYamlConfigStrict(configPath)
+    : loadYamlConfig(configPath);
   const defaultWecomIdentity = DEFAULT_CONFIG.wecomIdentity!;
 
   const selection = buildSelectionConfig(yaml.selection, configPath);

@@ -291,6 +291,8 @@ export const zhCN = {
   'wiki.import.selectedPages': '已选 {{count}} 个页面',
   'wiki.detail.mdName': '文件名（如 note.md）',
   'wiki.detail.mdContent': 'Markdown 内容',
+  'wiki.detail.mdNameRequired': '请填写文件名（如 note.md）',
+  'wiki.detail.mdContentRequired': '请填写 Markdown 内容',
   'common.remove': '移除',
   'wiki.title': 'Wiki 知识库',
   'wiki.breadcrumb': 'Wiki 知识库',
@@ -355,13 +357,14 @@ export const zhCN = {
   'wiki.detail.addDoc.file': '上传文件',
   'wiki.detail.addDoc.markdown': 'Markdown',
   'wiki.detail.addDoc.external': '外部来源（iWiki 等）',
-  'wiki.detail.dropzone': '拖拽或点击选择 Markdown 文件（可多选）',
+  'wiki.detail.dropzone': '拖拽或点击选择文件（可多选，支持 .md/.txt/.docx/.xlsx/.pptx/.pdf 等）',
   'wiki.detail.upload.footer': '{{count}} 个文件待上传',
+  'wiki.detail.upload.fileTooLarge': '{{filename}} 超过大小上限（{{maxMB}} MB），已取消上传。',
   'wiki.detail.upload.submitting': '上传中…',
   'wiki.detail.upload.confirm': '确认上传',
   'wiki.detail.md.add': '+ 添加一条',
   'wiki.detail.md.pending': '{{count}} 个待上传',
-  'wiki.detail.ignored': '已忽略 {{count}} 个非 Markdown 文件（仅支持 .md/.txt/.markdown）',
+  'wiki.detail.ignored': '已忽略 {{count}} 个不支持的文件（支持 .md/.markdown/.txt/.html/.htm/.csv/.docx/.xlsx/.pptx/.pdf/.odt/.ods/.odp/.odg/.rtf/.epub）',
   'wiki.detail.overwrite.title': '检测到 {{count}} 个同名文件',
   'wiki.detail.overwrite.desc': '继续上传将覆盖原有内容：{{files}}',
   'wiki.detail.overwrite.ok': '覆盖并上传',
@@ -1250,9 +1253,18 @@ export const zhCN = {
   'wiki.ingest.stateRecovery': '状态恢复：{{stage}}{{pageHint}}',
   'wiki.ingest.currentPage': '，当前 {{count}} 页',
   'wiki.notify.readRawFailed': '读取原始文档失败',
+  'wiki.notify.rawNotFound': '原始文档不存在或已被删除',
   'wiki.notify.uploadCancelled': '获取已有文档失败，已取消上传',
   'wiki.error.selectTeam': '请先选择 team',
   'wiki.detail.md.placeholder': '# 标题',
+  // 原始文档预览失败原因（错误码来自 KS 转换层）
+  'wiki.rawPreview.unsupported': '暂不支持预览该文件类型',
+  'wiki.rawPreview.mismatch': '文件内容与扩展名不符，无法解析',
+  'wiki.rawPreview.encrypted': '文档已加密，需要密码才能解析',
+  'wiki.rawPreview.scannedPdf': '扫描件 PDF 无可提取文本（未开启 OCR）',
+  'wiki.rawPreview.notReady': '文档解析组件未就绪，请联系管理员',
+  'wiki.rawPreview.timeout': '文档解析超时，文件可能过大',
+  'wiki.rawPreview.failed': '文档解析失败，无法预览',
 
   // ===== skill-api =====
   'skillApi.error.unauthorized': 'Unauthorized - 用户登录已失效或缺少用户密钥',
@@ -1378,10 +1390,12 @@ export const zhCN = {
   'error.NO_VALID_MESSAGES': '没有可导入的有效消息。',
   'error.MISSING_WIKI_ID': '缺少 Wiki 信息。',
   'error.WIKI_NOT_FOUND': 'Wiki 不存在或已被删除。',
-  'error.WIKI_EMPTY_NO_SOURCES': 'Wiki 还没有上传源文件，请先上传 .md 文件后再抽取。',
+  'error.WIKI_EMPTY_NO_SOURCES': 'Wiki 还没有上传源文件，请先上传文件后再抽取。',
   'error.MISSING_FILES': '请至少上传一个文件。',
   'error.TOO_MANY_FILES': '上传文件数量超过限制（最多 10 个），请分批上传。',
-  'error.FILE_TOO_LARGE': '单个文件不能超过 512KB，请精简后再上传。',
+  // 不写死 512KB：上限按格式档位动态取（文本档 512KB / 富文档档 10MB，
+  // 且支持按格式覆盖），写死会误导用户以为所有格式都是 512KB。
+  'error.FILE_TOO_LARGE': '单个文件超过该格式的大小上限，请精简后再上传。',
   'error.TOTAL_TOO_LARGE': '单次上传总量不能超过 5MB，请分批上传。',
   'error.MISSING_CODE_GRAPH_ID': '缺少 CodeGraph 信息。',
   'error.CODE_GRAPH_NOT_FOUND': 'CodeGraph 不存在或已被删除。',
@@ -1446,7 +1460,7 @@ export const zhCN = {
   // 文案统一按「是什么 → 怎么导入 → 怎么使用」三段展开，帮首次用户建立完整心智）
   'onboarding.guide.asset.wiki.title': 'Wiki 知识库：团队文档资产',
   'onboarding.guide.asset.wiki.desc':
-    '是什么：沉淀团队共享文档的知识库。怎么导入：点击「新建 Wiki」创建知识库 → 进入详情上传 Markdown 文件（.md/.txt，支持多选与拖拽）→ 手动触发「知识抽取」生成可检索的知识页面。怎么用：在 Wiki 卡片点「分配给 Agent」，或在 Agent 编辑弹窗勾选；绑定后 Agent 对话时即可检索引用这些文档。',
+    '是什么：沉淀团队共享文档的知识库。怎么导入：点击「新建 Wiki」创建知识库 → 进入详情上传文件（支持 .md/.txt/.docx/.xlsx/.pptx/.pdf 等，支持多选与拖拽）→ 手动触发「知识抽取」生成可检索的知识页面。怎么用：在 Wiki 卡片点「分配给 Agent」，或在 Agent 编辑弹窗勾选；绑定后 Agent 对话时即可检索引用这些文档。',
   'onboarding.guide.asset.code.title': 'CodeGraph：团队代码资产',
   'onboarding.guide.asset.code.desc':
     '是什么：对团队代码仓库建立的索引与调用关系图谱。怎么导入：点击「注册仓库」，粘贴 Git HTTPS 地址，系统自动完成索引构建。怎么用：「分配给 Agent」后，Agent 对话时可直接检索代码、探索调用链，回答仓库相关问题。',
@@ -1894,4 +1908,51 @@ export const zhCN = {
   'analytics.drill.categoryHint': '该类资产的调用',
   'analytics.drill.knowledgeAmbiguous':
     'Wiki 与 Code Graph 同属 knowledge-service，内核仅支持按 bridge_source 过滤，因此以下结果包含 knowledge 全部调用，无法只显示单一类别。',
+
+  // ===== SessionDefault（v3.3 用户级 Session 默认 Team/Agent/Task 三元组）=====
+  'sessionDefault.title': 'Session 默认配置',
+  'sessionDefault.desc': '新 Session 自动使用，跳过选择。',
+  'sessionDefault.empty': '尚未设置',
+  'sessionDefault.create': '设置默认',
+  'sessionDefault.create.tooltip': '选择默认的 Team / Agent / Task',
+  'sessionDefault.edit': '修改',
+  'sessionDefault.edit.tooltip': '修改默认配置',
+  'sessionDefault.clear': '清除',
+  'sessionDefault.clear.tooltip': '清除后新 Session 恢复手动选择',
+  'sessionDefault.clear.confirm': '确认清除默认配置？',
+  'sessionDefault.clear.desc': '清除后新 Session 恢复手动选择，已开始的会话不受影响。',
+  'sessionDefault.clear.ok': '清除',
+
+  // Dialog
+  'sessionDefault.dialog.create.caption': '设置 Session 默认',
+  'sessionDefault.dialog.edit.caption': '修改 Session 默认',
+  'sessionDefault.dialog.desc': '依次选择 Team、Agent、Task。配置失效时会自动回退到手动选择，不会打断对话。',
+  'sessionDefault.dialog.submit': '保存',
+  'sessionDefault.dialog.cancel': '取消',
+
+  // Fields
+  'sessionDefault.field.team': 'Team',
+  'sessionDefault.field.agent': 'Agent',
+  'sessionDefault.field.task': 'Task',
+
+  // Placeholders
+  'sessionDefault.team.placeholder.select': '选择 Team',
+  'sessionDefault.team.placeholder.empty': '你尚未加入任何 Team',
+  'sessionDefault.agent.placeholder.select': '选择 Agent',
+  'sessionDefault.agent.placeholder.needTeam': '请先选择 Team',
+  'sessionDefault.agent.placeholder.empty': '当前 Team 下没有可用的 Agent',
+  'sessionDefault.task.placeholder.select': '选择 Task 或"不绑定任何 Task"',
+  'sessionDefault.task.placeholder.needTeam': '请先选择 Team',
+  'sessionDefault.task.extra': '选"default"则不关联 Task，记忆在该 Agent 全部记忆中召回。',
+  'sessionDefault.task.sentinel.label': 'default（不绑定任何 Task）',
+
+  // Summary rows
+  'sessionDefault.summary.team': 'Team',
+  'sessionDefault.summary.agent': 'Agent',
+  'sessionDefault.summary.task': 'Task',
+  'sessionDefault.summary.unresolved': '（已失效 / 无法读取）',
+
+  // Toast
+  'sessionDefault.notify.saved': '默认配置已保存，新 Session 将自动使用',
+  'sessionDefault.notify.cleared': '默认配置已清除',
 };

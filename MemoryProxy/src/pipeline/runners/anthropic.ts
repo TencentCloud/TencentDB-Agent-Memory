@@ -11,7 +11,7 @@ import type { Context } from "hono";
 import { createHash } from "node:crypto";
 import { writeLog, createPipeline } from "../../logger.js";
 import { applyMainModel } from "../../mainModel.js";
-import { applyPoolService } from "../../pool-service.js";
+import { applyPoolService, poolRouteReason } from "../../pool-service.js";
 import {
   apiKeyToKeyId,
   opikCreateLlmSpan,
@@ -34,13 +34,14 @@ import {
   type ForwardTarget,
 } from "../../guard-adapter.js";
 import { hasCostGuardMarker, isLegacyProxyPath, matchWhitelistEndpoint, resolveCostGuardMode } from "../../routes/whitelist.js";
-import { writeRequestLog } from "../../requestLog.js";
+import { buildSafeTraceRequestBody, writeRequestLog } from "../../requestLog.js";
 import { prepareUpstreamRequest, notifyUpstreamResponse } from "../../request-prepare-adapter.js";
 import {
   createCfqStripStream,
   createCfqStripObserver,
   stripCfqFromResponseText,
 } from "../../common/cfq-strip.js";
+import { withStreamIdleWarning } from "../../common/stream-idle-watchdog.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "../../credit-reporter.js";
 import {
   getInstanceUpstreamConfigs,
@@ -64,6 +65,7 @@ import {
 } from "../stages/stream-finalize.js";
 import { stagePrewarmInjection } from "../stages/prewarm-injection.js";
 import { stageAssetCapabilities } from "../stages/asset-capabilities.js";
+import { stageTeamMemorySwitch } from "../stages/team-memory-switch.js";
 import { stageSessionBypass } from "../stages/session-bypass.js";
 import { stageSessionInitOrchestrate } from "../stages/session-init-orchestrate.js";
 import { stageCredit } from "../stages/credit.js";
@@ -108,6 +110,10 @@ import {
   isRateLimitExceededError,
   recordInputTokenUsage,
 } from "../../rate-limit/guard.js";
+import {
+  prependNoticeToAnthropicStream,
+  prependNoticeToAnthropicJson,
+} from "./default-binding-notice.js";
 
 // SKIP header sets 已合并到 common/constants.ts
 // anthropic 老行为: WITH_INTERNAL 5 项 (含 x-tdai-user-key 泄漏保护)
@@ -462,7 +468,6 @@ async function forwardWithRetry(
     target, upstreamHeaders, upstreamBody, originalBody, originalHeaders,
     pipe, forwardTimeoutMs, sessionKeyForDebug, rateLimitContext,
     protocol: "anthropic",
-    timeoutBehavior: "always",
     buildRetryBody: (orig, _retryModel) => orig, // anthropic 不覆写 model
   });
 }
@@ -473,6 +478,7 @@ export async function runAnthropicPipeline(
   config: ProxyConfig,
 ): Promise<Response> {
   const startTime = new Date().toISOString();
+  const requestStartMono = performance.now();
   const traceId = uuidv7();
 
   // ── Early auth (via shared stageAuth) ────────────────────────────────────
@@ -500,6 +506,7 @@ export async function runAnthropicPipeline(
   }
   // eslint-disable-next-line prefer-const
   let body = parseResult.body;
+  const clientModel = typeof body.model === "string" ? body.model : "";
   const poolService = applyPoolService(config, body);
   if (poolService.clientFacingModel) c.set("clientFacingModel", poolService.clientFacingModel);
   const mainModelFrom = poolService.routed ? null : applyMainModel(body);
@@ -680,6 +687,16 @@ export async function runAnthropicPipeline(
     getInjectionPipeline(config);
   }
 
+  // Instance-level team_memory master switch. Flipping to "0" at Core bypasses
+  // session_init + mem commands + injection; cost-guard / credit / forward
+  // untouched. See MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md §6.
+  const teamMemoryEnabled = await stageTeamMemorySwitch({
+    config, spaceId, userKey: callerUserKey, userId,
+  });
+  if (!teamMemoryEnabled) {
+    console.log(`[team-memory-switch] disabled: spaceId=${spaceId} user=${userId} → team memory off (anthropic)`);
+  }
+
   // ── mem:session-reset pre-hook (via shared stage) ──
   // anthropic 用 memoryTurn 作 gate (requestKind=main && !legacyProxy).
   // header-only agent 拒绝分支 + 主 reset 流程都收敛在 stage 内部。
@@ -687,22 +704,29 @@ export async function runAnthropicPipeline(
   const _resetResp = await stageSessionResetPreHook({
     c, config, body, agentSource, sessionKey, spaceId, userId,
     isAuxiliary: false, dshHeadless: false, isStream,
-    protocol: "anthropic", enabled: memoryTurn,
+    protocol: "anthropic", enabled: memoryTurn && teamMemoryEnabled,
   });
   if (_resetResp) return stageResponseTailFix(_resetResp, agentSource, isStream);
 
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("../../injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId;
+  // Team memory off → force the full injection skip too (initial value already
+  // true if there's no conversationId).
+  let injectedSkipped = !conversationId || !teamMemoryEnabled;
   let sessionJustRegistered = false;
+  // v3.3 user-session-default: 命中账户默认时, session-init 会把需要给用户看的
+  // 绑定提示塞在 initResult.defaultBindingNotice; 走 recover / 非 user_default
+  // 分支时为 null。流式分支在响应流前拼 content_block_* 事件, 非流式分支在
+  // content[] 最前插一个 text block。
+  let defaultBindingNotice: string | null = null;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamName?: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped}`);
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} teamMemoryEnabled=${teamMemoryEnabled}`);
   // CC 分流：SIDEQUERY 完全跳过 session-init（独立小请求无对话概念）。
-  //          FORK 允许走 L2b recovery 复用 MAIN 已建的 session，但不进 form 交互路径
+  //          FORK 允许走 L2b recovery 复用 MAIN 已建的 session,但不进 form 交互路径
   //          （借用 MAIN 的 sessionInfo，见下方的 kind === 'fork' 分支保护）。
   const skipSessionInit = requestKind === "sidequery" || legacyProxy;
-  if (config.sessionInit?.enabled && conversationId && !skipSessionInit) {
+  if (config.sessionInit?.enabled && conversationId && !skipSessionInit && teamMemoryEnabled) {
     try {
       // Round 18: session-init 主编排走 shared stageSessionInitOrchestrate;
       // anthropic 4 个 callback:
@@ -756,6 +780,13 @@ export async function runAnthropicPipeline(
       // init 过程，此时不设 sessionJustRegistered——否则 mem-command 会永久扒对话历史
       // 第一条 user，把用户最开始的 mem:help 当"未消化的命令"每 turn 重复执行。
       if (wentThroughSessionInitStateMachine && initResult.justRegistered) sessionJustRegistered = true;
+      // v3.3 user-session-default: 只在"真正走 state machine + 本轮 justRegistered"
+      // 的分支捕获 notice。L2b recovery 分支的 justRegistered=true 只是重建信号,
+      // 用户已见过提示, 不再重复发;非 user_default 分支 initResult 不带 notice。
+      if (wentThroughSessionInitStateMachine && initResult.justRegistered && (initResult as any).defaultBindingNotice) {
+        defaultBindingNotice = (initResult as any).defaultBindingNotice as string;
+        console.log(`[session-init] session=${sessionKey} default-binding-notice staged (len=${defaultBindingNotice.length}) [anthropic]`);
+      }
       // Bypass path → skip ALL injection hooks (via shared stageSessionBypass)
       // reset 流程中用户选了"跳过" → 也需要返回确认文案，不转发 LLM
       const _bypassResult = stageSessionBypass({
@@ -924,7 +955,7 @@ export async function runAnthropicPipeline(
   {
     const { extractSimpleMessages } = await import("../../mem-command/index.js");
     const memResp = await stageMemCommandIntercept({
-      enabled: memoryTurn,
+      enabled: memoryTurn && teamMemoryEnabled,
       body: body as Record<string, unknown>,
       agentSource, sessionKey,
       sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
@@ -1056,7 +1087,12 @@ export async function runAnthropicPipeline(
   }
 
   // ── Create pipeline logger ──────────────────────────────────────────────
-  const pipe = createPipeline(config, traceId, target.model);
+  const pipe = createPipeline(config, traceId, target.model, {
+    spaceId,
+    protocol: "anthropic",
+    startedAt: startTime,
+    startedMono: requestStartMono,
+  });
   pipe.requestReceived(messages.length, isStream);
   if (target.logLine) pipe.info("COST_GUARD", target.logLine);
   if (target.logLineExtra) pipe.info("COST_GUARD_DETAIL", target.logLineExtra);
@@ -1105,6 +1141,7 @@ export async function runAnthropicPipeline(
   // 抓 CB / CC 客户端指纹用；关闭时恒返回 {}，不污染线上 metadata。
   // 详见 common/langfuse-debug.ts。
   const langfuseDebug = config.langfuse.debug === true;
+  let traceRequestBody = buildSafeTraceRequestBody(body);
   const debugMetadata = buildRequestDebugMetadata({
     debug: langfuseDebug,
     body: body as Record<string, unknown>,
@@ -1117,13 +1154,15 @@ export async function runAnthropicPipeline(
     protocol: "anthropic",
   });
 
-  // ── Opik: create trace ───────────────────────────────────────────────────
   const forkTraceId = _gates.opik ? opikCreateTrace(config, {
     traceId,
     projectName: wecomName || keyId,
     name: `${target.model} / ${wecomName || keyId}`,
     startTime,
-    input: { messages: flattenAnthropicMessagesForOpik(messages, body.system) },
+    input: {
+      messages: flattenAnthropicMessagesForOpik(messages, body.system),
+      request: traceRequestBody,
+    },
     tags: [...traceTags, ...target.tags],
     forkProjectName: "request_log",
     forkMetadata: {
@@ -1133,9 +1172,6 @@ export async function runAnthropicPipeline(
       upstreamUrl: target.url,
     },
   }) : undefined;
-
-  // ── Request debug log ────────────────────────────────────────────────────
-  writeRequestLog(config, body);
 
   // ── Build upstream request ───────────────────────────────────────────────
   // Per-agent apiKey resolution — three cases:
@@ -1174,6 +1210,8 @@ export async function runAnthropicPipeline(
   });
 
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
+  traceRequestBody = buildSafeTraceRequestBody(upstreamBody);
+  writeRequestLog(config, upstreamBody, traceId, c.req.header("x-request-id"));
   if (sanitizedCount > 0) {
     pipe.info(
       "FORWARD",
@@ -1211,10 +1249,8 @@ export async function runAnthropicPipeline(
   const retryBody = sanitizeThinkingBlocks(body).body;
 
   // ── Forward to upstream (with automatic retry if configured) ──────────────
-  // forwardTimeout gate 关 (codex/wb bootstrap) → 传 0,anthropic timeoutBehavior='always' 分支
-  // 会用 0 作为 AbortSignal.timeout,行为 = 立即 abort;所以关闭仅在 caller 明确要"永不超时"时用。
-  // 目前 anthropic runner 只服务 CC (full preset gates.forwardTimeout=true),不会踩到 0-timeout。
-  const forwardTimeoutMs = _gates.forwardTimeout ? (config.server.forwardTimeoutMs ?? 600_000) : 0;
+  // 所有协议统一由 server.forwardTimeoutMs 控制；0 表示不主动超时。
+  const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 3_600_000;
   // 传 target.url:override 生效时(instance-upstream custom 组)与 cost-guard 便宜模型路由
   // 都会改 target.url,不传参会 fallback 到 config.upstream.url 打错日志(实际 fetch 用 target.url,
   // 但 log 上会误导排障)。handler.ts 已对这么做,anthropicHandler 之前漏了。
@@ -1244,10 +1280,11 @@ export async function runAnthropicPipeline(
     }
     langfuseReportFailure({
       lf,
+      requestId: traceId,
       model: target.model,
       startTime,
       endTime: new Date().toISOString(),
-      input: buildLangfuseInput(messages, body.system, langfuseDebug),
+      input: traceRequestBody,
       statusMessage: err instanceof Error ? err.message : "Upstream request failed",
       extraTags: ["error"],
       observationMetadata: { stage: "forward", ...debugMetadata },
@@ -1270,8 +1307,11 @@ export async function runAnthropicPipeline(
   // up costing what it would have cost unrouted — no saving to attribute.
   const routedFrom = retried ? "" : target.routedFrom;
   const { routedFrom: _ignoredRoutedFrom, ...routeLogMeta } = target.logMeta;
+  const routeReason = poolService.routed ? poolRouteReason(target.tags, retried) : "";
   const responseLogMeta = {
     ...routeLogMeta,
+    ...(clientModel ? { requestedModel: clientModel } : {}),
+    ...(routeReason ? { routeReason } : {}),
     ...(retried ? { retrySuccess: true } : {}),
   };
 
@@ -1286,7 +1326,6 @@ export async function runAnthropicPipeline(
     if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
       const [errStream, clientStream] = upstreamResp.body.tee();
       const errText = await new Response(errStream).text();
-      pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
       writeLog(config, {
         timestamp: new Date().toISOString(),
         event: "usage",
@@ -1303,10 +1342,12 @@ export async function runAnthropicPipeline(
       });
       langfuseReportFailure({
         lf,
+        requestId: traceId,
+        upstreamRequestId,
         model: effectiveModel,
         startTime,
         endTime: new Date().toISOString(),
-        input: buildLangfuseInput(messages, body.system, langfuseDebug),
+        input: traceRequestBody,
         status: upstreamResp.status,
         statusMessage: errText.slice(0, 500),
         extraTags: ["error"],
@@ -1316,7 +1357,16 @@ export async function runAnthropicPipeline(
       return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
-    const [rawClientStream, tapStream] = upstreamResp.body.tee();
+    const observedStream = withStreamIdleWarning(upstreamResp.body, {
+      spaceId,
+      traceId,
+      requestId: traceId,
+      upstreamRequestId,
+      model: effectiveModel,
+      protocol: "anthropic",
+      branch: "upstream_body",
+    });
+    const [rawClientStream, tapStream] = observedStream.tee();
     pipe.streamStart();
 
     // Background: consume tap stream for Anthropic SSE → extract usage
@@ -1350,6 +1400,7 @@ export async function runAnthropicPipeline(
       requestKind,
       langfuseDebug,
       debugMetadata,
+      traceRequestBody,
       preparedStats,
       skipCreditReport,
       isCustomUpstream: _isCustomUpstream,
@@ -1358,13 +1409,21 @@ export async function runAnthropicPipeline(
     });
 
     // CFQ 剥离排在最后：tap 走的是另一条 tee 分支，读到的仍是模型原始输出。
-    const clientStream = rawClientStream
+    let clientStream: ReadableStream<Uint8Array> = rawClientStream
       .pipeThrough(createSseThinkingFixStream(pipe))
       .pipeThrough(createCfqStripStream(
         "anthropic",
         preparedStats,
         createCfqStripObserver(pipe),
       ));
+
+    // v3.3 user-session-default: 命中账户默认时, Proxy 在客户端那份流最前面拼
+    // 一段 markdown 绑定提示(✅ Team/Agent/Task)。放在 tap/strip 之后是为了:
+    //   - tap 走 tee 的另一分支, 不受本改写影响 → usage 统计不含 Proxy 自造内容;
+    //   - thinking-fix / cfq-strip 只处理上游输出, 不碰 Proxy 自加的前缀 block;
+    //   - 该流仅给客户端, 不被日志/埋点消费。
+    // notice 为 null 时 helper 短路直接 return original, 零开销。
+    clientStream = prependNoticeToAnthropicStream(clientStream, defaultBindingNotice);
 
     return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
   }
@@ -1434,6 +1493,7 @@ export async function runAnthropicPipeline(
           usage: usage ?? {},
         },
         pipe,
+        preparedStats,
       );
 
       // 内部使用埋点：非流式响应 tool_use 块逐个记 model_intent。
@@ -1534,11 +1594,13 @@ export async function runAnthropicPipeline(
       : undefined;
     langfuseReportGeneration({
       traceId: lf.traceId,
+      requestId: traceId,
+      upstreamRequestId,
       name: effectiveModel,
       model: effectiveModel,
       startTime,
       endTime,
-      input: buildLangfuseInput(messages, body.system, langfuseDebug),
+      input: traceRequestBody,
       output: langfuseOutput,
       usage,
       traceName: lf.traceName,
@@ -1552,21 +1614,20 @@ export async function runAnthropicPipeline(
       observationMetadata: { retried, ...logMeta, ...debugMetadata },
     });
   } else if (upstreamResp.status >= 400) {
-    pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${respText.slice(0, 1000)}`);
     langfuseReportFailure({
       lf,
+      requestId: traceId,
+      upstreamRequestId,
       model: effectiveModel,
       startTime,
       endTime,
-      input: buildLangfuseInput(messages, body.system, langfuseDebug),
+      input: traceRequestBody,
       status: upstreamResp.status,
       statusMessage: respText.slice(0, 500),
       extraTags: ["error"],
       observationMetadata: { stage: "upstream", stream: false, ...debugMetadata },
     });
   }
-
-  pipe.responseDone(usage);
 
   // CC 分流：FORK/SIDEQUERY 是 CC 客户端后台自发调用，不是用户真实对话轮，
   //          跳过 skill/L0 副作用。Credit 仍上报（token 消耗真实）。
@@ -1628,14 +1689,29 @@ export async function runAnthropicPipeline(
       respHeaders.set("x-credit-report-error", creditResult.responseErrorHeader);
     }
   }
+  pipe.responseDone(usage);
 
   // 最后一公里：notify / 日志 / 计费都已经看过原始响应，这里才动给客户端的那份。
-  const clientRespText = stripCfqFromResponseText(
+  let clientRespText = stripCfqFromResponseText(
     "anthropic",
     respText,
     preparedStats,
     createCfqStripObserver(pipe),
   );
+
+  // v3.3 user-session-default: 命中账户默认时, 在非流式 content[] 前插入 text block。
+  // 放在 cfq-strip 之后: strip 只处理上游产物, Proxy 自加的 notice 不该被剥。
+  // 上游响应非 JSON / status 非 2xx 时跳过(保留原响应给客户端排错)。
+  if (defaultBindingNotice && upstreamResp.ok) {
+    try {
+      const parsed = JSON.parse(clientRespText) as Record<string, unknown>;
+      const patched = prependNoticeToAnthropicJson(parsed, defaultBindingNotice);
+      clientRespText = JSON.stringify(patched);
+    } catch {
+      // 非 JSON 响应 → 原样透传, 避免破坏客户端解析。
+    }
+  }
+
   return new Response(clientRespText, {
     status: upstreamResp.status,
     headers: respHeaders,
@@ -1787,6 +1863,8 @@ interface AnthropicTapContext {
   langfuseDebug: boolean;
   /** buildRequestDebugMetadata 求值结果；debug=false 时为 {}。 */
   debugMetadata: Record<string, unknown>;
+  /** Final sanitized outbound request, stored once as the Langfuse generation input. */
+  traceRequestBody: Record<string, unknown>;
   /** Opaque counters from the request-preparation stage; null when it didn't run. */
   preparedStats: Record<string, unknown> | null;
   /** Instance upstream config: skip credit reporting for custom model. */
@@ -1821,22 +1899,32 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
     const toolUseAcc = new Map<number, { id: string; name: string; inputJson: string }>();
     const replyAssembler = ctx.sessionTurnCtx ? new AnthropicMessageAssembler() : null;
 
-    const timeoutHandle = setTimeout(() => {
-      if (!streamCompleted) {
-        pipe.error("STREAM_TIMEOUT", "Anthropic stream reading exceeded 5 minutes");
-        // completeStream 是 async；这里 fire-and-forget（timeout 里已经无法 await）
-        void completeStream().catch((err) => pipe.error("STREAM_TIMEOUT_COMPLETE", err));
-      }
-    }, 5 * 60 * 1000);
-
     async function completeStream(): Promise<void> {
       if (streamCompleted) return;
       streamCompleted = true;
-      clearTimeout(timeoutHandle);
 
       if (replyAssembler) submitSessionTurn(ctx.sessionTurnCtx, replyAssembler.result(), modelId);
 
       const endTime = new Date().toISOString();
+      // Register response-side CFQ counters before building the usage row.
+      // The row waits on counter readiness without blocking the client stream.
+      void notifyUpstreamResponse(
+        ctx.config,
+        {
+          protocol: "anthropic",
+          sessionKey: ctx.sessionKey ?? "",
+          model: modelId,
+          stream: true,
+          turnSeq: lf.turnSeq,
+          text: outputText,
+          toolCalls: Array.from(toolUseAcc.values())
+            .filter((v) => v.id && v.inputJson)
+            .map((v) => ({ id: v.id, name: v.name, arguments: v.inputJson })),
+          usage,
+        },
+        pipe,
+        ctx.preparedStats,
+      );
 
       if (Object.keys(usage).length > 0) {
         await stageRecordTokenUsage({
@@ -1873,11 +1961,13 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
             : {};
           langfuseReportGeneration({
             traceId: lf.traceId,
+            requestId: traceId,
+            upstreamRequestId,
             name: modelId,
             model: modelId,
             startTime,
             endTime,
-            input: buildLangfuseInput(inputMessages, system, ctx.langfuseDebug),
+            input: ctx.traceRequestBody,
             output: outputText ? { role: "assistant", content: outputText } : undefined,
             usage,
             traceName: lf.traceName,
@@ -1921,27 +2011,6 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
       } else if (!isMainDialog) {
         console.log(`[cc-routing] skip L0 write (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`);
       }
-
-      pipe.streamDone(Object.keys(usage).length > 0 ? usage : null);
-
-      // Report the completed response to the extension. Fire-and-forget; the
-      // client has already been served by this point.
-      void notifyUpstreamResponse(
-        ctx.config,
-        {
-          protocol: "anthropic",
-          sessionKey: ctx.sessionKey ?? "",
-          model: modelId,
-          stream: true,
-          turnSeq: lf.turnSeq,
-          text: outputText,
-          toolCalls: Array.from(toolUseAcc.values())
-            .filter((v) => v.id && v.inputJson)
-            .map((v) => ({ id: v.id, name: v.name, arguments: v.inputJson })),
-          usage,
-        },
-        pipe,
-      );
 
       // 内部使用埋点：SSE 流累积的 tool_use 各出一条 model_intent。
       // 详见 docs/design/2026-08-03-internal-usage-telemetry-plan.md §7.2 F。
@@ -2002,6 +2071,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
           routedFrom: ctx.routedFrom,
         }, pipe).catch((err: unknown) => pipe.error("CREDIT_REPORT", err));
       }
+      pipe.streamDone(Object.keys(usage).length > 0 ? usage : null);
     }
 
     try {

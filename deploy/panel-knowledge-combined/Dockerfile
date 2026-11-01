@@ -23,14 +23,14 @@ WORKDIR /app
 FROM base AS panel-ui-builder
 WORKDIR /build/panel-web
 COPY panel/web/package*.json ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY panel/web/ ./
 RUN npm run build
 
 FROM base AS panel-builder
 WORKDIR /build/panel
 COPY panel/package*.json ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY panel/ ./
 COPY --from=panel-ui-builder /build/panel-web/dist ./web/dist
 RUN npm run build
@@ -38,7 +38,7 @@ RUN npm run build
 FROM base AS knowledge-builder
 WORKDIR /build/knowledge
 COPY knowledge/package*.json ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY knowledge/ ./
 RUN npm run build
 

@@ -23,6 +23,44 @@
   gap: 4px;
 }
 
+/* Markdown 手工粘贴入口（导入弹窗 markdown tab）。
+ *
+ * ⚠️ 此前该 class 只有使用处（import-and-ingest-modal.tsx）而无定义 —— 上面的
+ * `_wiki-detail-*` 组合选择器也没带上它 —— 于是 textarea 落到浏览器默认样式：
+ * 与上方文件名 Input 挤在同一行、蓝色聚焦粗边框、宽度不可控。
+ * 这里补齐定义，与 tea `Input` 的视觉保持一致。
+ */
+._wiki-detail-md-editor {
+  /* 块级独占一行：文件名输入与内容输入上下堆叠，不再挤在一行 */
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--tea-color-border, #d9d9d9);
+  border-radius: 2px;
+  background: var(--tea-color-bg-base, #fff);
+  color: var(--tea-color-text-primary, #333);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+._wiki-detail-md-editor:hover {
+  border-color: var(--tea-color-border-hover, #b3b3b3);
+}
+
+._wiki-detail-md-editor:focus {
+  border-color: var(--tea-color-primary, #006eff);
+  box-shadow: 0 0 0 2px rgb(0 110 255 / 10%);
+}
+
+._wiki-detail-md-editor::placeholder {
+  color: var(--tea-color-text-disabled, #bbb);
+}
+
 ._wiki-detail-header-body {
   --card-body-padding: 16px;
 }
@@ -703,4 +741,109 @@
 ._wikilist-token-doc:hover {
   text-decoration: underline;
   color: var(--tea-color-text-link-hover, #0052cc);
+}
+
+/* 原始文档原生渲染：iframe 沙箱承载转换后的完整 HTML。
+   独立滚动 + 白底，避免透明继承导致文档底色异常。 */
+._asset-document-frame {
+  width: 100%;
+  height: calc(100vh - 320px);
+  min-height: 460px;
+  margin-top: 12px;
+  border: 1px solid var(--tea-color-border-secondary-default);
+  border-radius: 4px;
+  background: #fff;
+  display: block;
+}
+
+/* 原生渲染不可用时的兜底提示 */
+._asset-native-file-fallback {
+  margin-top: 12px;
+  padding: 24px;
+  border: 1px dashed var(--tea-color-border-secondary-default);
+  border-radius: 4px;
+  color: var(--tea-color-text-tertiary);
+  font-size: 13px;
+  text-align: center;
+}
+
+
+/* Office 文档前端专用库渲染容器（docx-preview / SheetJS） */
+._asset-office-file {
+  margin-top: 12px;
+  max-height: calc(100vh - 300px);
+  /* 纸张已由 JS 等比缩放适配宽度，不需要横向滚动；只保留纵向滚动翻页。 */
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #f3f4f6;
+  border: 1px solid var(--tea-color-border-secondary-default);
+  border-radius: 4px;
+  padding: 16px;
+}
+
+/* docx-preview 产出的文档页（保留纸张感与分页）。
+   库以 DOCX_CLASS 为前缀生成选择器（见 AssetOfficeFile.tsx），注入
+   `${DOCX_CLASS}-wrapper { background: gray }` 的外框样式，与面板主题不和谐。
+   这里用真实类名（_asset-office-docx-wrapper）+ !important 覆盖；
+   组件内同时会改写注入样式本身，双保险。 */
+._asset-office-file ._asset-office-docx-wrapper {
+  background: transparent !important;
+  padding: 0 !important;
+  display: block !important;
+}
+._asset-office-file ._asset-office-docx-wrapper > section._asset-office-docx {
+  background: #fff !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12) !important;
+  /* 纸张宽度由库内联（A4 612pt≈816px），CSS 覆盖不了 ——
+     由 JS 用 zoom 等比缩放适配容器（见 AssetOfficeFile.tsx）：
+     zoom 缩小布局盒，margin auto 正常居中，不横向滚动。 */
+  margin: 0 auto 16px !important;
+}
+
+/* xlsx 多 sheet 标题与表格 */
+._asset-office-sheetname {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+._asset-office-file table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  font-size: 12px;
+}
+._asset-office-file table td,
+._asset-office-file table th {
+  border: 1px solid var(--tea-color-border-secondary-default);
+  padding: 6px 8px;
+  text-align: left;
+}
+._asset-office-file table tr:first-child td,
+._asset-office-file table th {
+  background: #fafafa;
+  font-weight: 600;
+}
+/* 合并单元格（SheetJS 输出 colspan/rowspan）：保留边框，避免合并区域看起来空缺 */
+._asset-office-file table td[colspan],
+._asset-office-file table td[rowspan] {
+  background: #fff;
+  vertical-align: middle;
+}
+/* 多 sheet：表格之间留白，边界清晰 */
+._asset-office-file table + ._asset-office-sheetname {
+  margin-top: 28px;
+}
+
+/* xlsx 单元格内图片：按 drawing 锚定插入到对应 td（SheetJS 不输出图片） */
+._asset-office-file table img._asset-office-cellimg {
+  display: block;
+  max-width: 220px;
+  max-height: 180px;
+  width: auto;
+  height: auto;
+  margin-top: 4px;
+  border: 1px solid var(--tea-color-border-secondary-default);
+  border-radius: 3px;
+  background: #fff;
 }

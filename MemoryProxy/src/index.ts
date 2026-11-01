@@ -24,6 +24,7 @@ import {
   isRequestPrepareEnabledByDefault,
   shutdownRequestPrepare,
 } from "./request-prepare-adapter.js";
+import { DynamicConfigRuntime } from "./config-runtime.js";
 import { initLogger, shutdownLogger, log } from "./report/log.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
@@ -111,7 +112,13 @@ if (isRequestPrepareActive(config)) {
   });
 }
 
-const app = createApp(config);
+const configRuntime = new DynamicConfigRuntime({
+  overrides,
+  initial: config,
+});
+configRuntime.start();
+
+const app = createApp(configRuntime.getSnapshot, () => configRuntime.getInfo());
 
 log.info("server.starting", {
   host: config.server.host,
@@ -161,6 +168,7 @@ serve(
 // k8s 默认 terminationGracePeriodSeconds=30s，10s 留出充足余量。
 async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   log.info("server.shutdown", { signal });
+  configRuntime.stop();
   const pending = pendingWriteCount();
   if (pending > 0) {
     log.info("server.shutdown.flush_l0", { pending });

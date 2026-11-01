@@ -39,6 +39,24 @@ export interface WikiListResult {
   total: number;
 }
 
+/**
+ * KS 下发给 Panel 的单条文件格式项（**wire 契约**，由 `toWireFormats()` 投影）。
+ *
+ * 字段兼容性策略：
+ * - 保留 `converter` / `note`：Panel 旧契约已声明，向后兼容
+ * - 剔除 `htmlPostProcessor` / `markdownPostProcessor` / `nonHtmlPassthrough`：
+ *   KS 内部实现细节，Panel 从未声明，不应通过 API 泄漏
+ */
+export interface WikiFileFormat {
+  ext: string;
+  sizeTier: 'text' | 'binary';
+  /** 单文件大小上限（字节）。可选：降级快照可能缺失。 */
+  maxBytes?: number;
+  preview: 'native' | 'client' | 'converted' | 'markdown';
+  converter: 'officeparser' | 'passthrough' | 'none';
+  note?: string;
+}
+
 export interface WikiIngestResult {
   wiki_id: string;
   /** 设计 2026-09-21 §3.3：新增 'cancelling' 中间态（旧任务取消中，新任务已排队）。 */
@@ -67,11 +85,30 @@ export interface WikiRawReadItem {
   filename: string;
   content?: string;
   not_found?: boolean;
+  /**
+   * true = 非文本源文件（docx/pdf/...）。
+   * 此时 `content` 是**转换后的纯文本预览**，不是原始字节。
+   */
+  binary?: boolean;
+  /** 预览实际使用的 converter id（仅 binary 且转换成功时出现）。 */
+  converterId?: string;
+  /** 预览失败的错误码（仅 binary 且转换失败时出现）。 */
+  preview_error?: string;
+  /**
+   * 预览产物形态，前端据此选渲染器：
+   * `native` = 原始字节 base64，交浏览器原生渲染（无损，PDF/HTML/文本）；
+   * `client` = 原始字节 base64，交前端专用库渲染（高保真，docx/xlsx）；
+   * `html` = 转换后的完整 HTML（有损，pptx/ODF/csv 等）；
+   * `markdown` = Markdown（文本类源）。
+   */
+  preview_format?: 'native' | 'client' | 'html' | 'markdown';
 }
 
 export interface WikiRawWriteFile {
   filename: string;
   content: string;
+  /** 缺省 'utf8'：手工粘贴 MD 场景直接按 utf8 落盘；文件上传路径显式传 'base64'。 */
+  encoding?: 'utf8' | 'base64';
 }
 
 export interface WikiRawWriteItem {
@@ -267,6 +304,12 @@ export interface KnowledgeClientPort {
   wikiDelete(wikiIds: string[]): Promise<BatchDeleteResult>;
   wikiList(teamId: string, opts?: { status?: string; limit?: number; offset?: number }): Promise<WikiListResult>;
   wikiUpdateMeta(wikiId: string, patch: { name?: string; summary?: string | null }): Promise<WikiDetail>;
+  /**
+   * 拉取 KS 侧的格式注册表（单一真源）。
+   * Panel 的大小分档 / 上传通道判据、前端的白名单均由此派生，
+   * 避免两端各自硬编码扩展名清单。
+   */
+  wikiFormats(): Promise<{ items: WikiFileFormat[] }>;
 
   // Wiki — raw 文件层（ls/read 仅资产 id；write/rm 带 IdFields）
   wikiRawLs(wikiId: string): Promise<{ items: RawFileEntry[] }>;

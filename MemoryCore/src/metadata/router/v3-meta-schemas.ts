@@ -433,6 +433,20 @@ export const configUserSetSchema = z.object({
   params: z.record(z.string().min(1), z.string()),
 });
 
+// ── ConfigParam (instance scope, system_admin only) ──
+// 实例级配置读写入口。首个用例是 team_memory.enabled 主开关
+// (see MemoryProxy/docs/design/2026-10-13-team-memory-master-switch.md)。
+export const configInstanceGetSchema = z.object({
+  module: nonEmpty,
+  param_name: z.string().min(1).optional(),
+});
+
+export const configInstanceSetSchema = z.object({
+  module: nonEmpty,
+  param_name: nonEmpty,
+  param_value: z.string(), // 允许空串; 具体合法集 (bool "0/1" / int / 任意) 由 service 的 validateParamValue 判断
+});
+
 // ── UserSessionDefault (v3.3) ──
 // 用户级 session 默认 (team, agent, task) 三元组。
 // task_id 必填非空: "不绑定任何 Task" 场景显式传字面量 "default"
@@ -594,6 +608,8 @@ export const V3_SCHEMAS = {
   "/v3/meta/instance-quota/get": instanceQuotaGetSchema,
   "/v3/meta/config/user/get": configUserGetSchema,
   "/v3/meta/config/user/set": configUserSetSchema,
+  "/v3/meta/config/instance/get": configInstanceGetSchema,
+  "/v3/meta/config/instance/set": configInstanceSetSchema,
   // UserSessionDefault (v3.3)
   "/v3/meta/user-session-default/get": userSessionDefaultGetSchema,
   "/v3/meta/user-session-default/set": userSessionDefaultSetSchema,

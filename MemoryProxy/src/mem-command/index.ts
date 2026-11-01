@@ -18,6 +18,8 @@ import { executeCreateSkill } from "./commands/create-skill.js";
 import { executeCreateTask } from "./commands/create-task.js";
 import { executeUpdateTask } from "./commands/update-task.js";
 import { executeSessionReset } from "./commands/session-reset.js";
+import { executeConfigLock } from "./commands/config-lock.js";
+import { executeConfigUnlock } from "./commands/config-unlock.js";
 
 export { parseMemCommand, parseCommandFromText, type ParsedMemCommand } from "./parser.js";
 export { buildMemResponse } from "./response-builder.js";
@@ -32,6 +34,9 @@ const KNOWN_COMMANDS = new Set([
   "create-task",
   "update-task",
   "session-reset",
+  // v3.3 user-session-default (TAPD 1070195170): 设置/清除用户级 Session 默认 (team, agent, task)
+  "config-lock",
+  "config-unlock",
   "help",
 ]);
 
@@ -67,6 +72,10 @@ export async function executeMemCommand(
       return executeUpdateTask(ctx);
     case "session-reset":
       return executeSessionReset(ctx);
+    case "config-lock":
+      return executeConfigLock(ctx);
+    case "config-unlock":
+      return executeConfigUnlock(ctx);
     default: {
       const text = `❌ 未知命令：\`mem:${cmd.command}\``;
       return {

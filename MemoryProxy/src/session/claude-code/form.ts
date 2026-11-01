@@ -111,6 +111,13 @@ export interface FormData {
   retry?: boolean;
   stream?: boolean;
   modelId?: string;
+  /**
+   * v3.3: 表单顶部追加的一行说明（账户默认回退原因等），拼进 question 前缀展示。
+   *
+   * 满足 PRD "配置已失效或无权限：不使用该配置，**提示原因**并回退到手动选择"。
+   * 为空 / 不传时文案与历史完全一致。
+   */
+  notice?: string;
 }
 
 // ── Claude Code AskUserQuestion input schema ───────────────────────────────────
@@ -123,8 +130,9 @@ interface CCAskQuestion {
 }
 
 function buildAskUserQuestionArgs(data: FormData): { questions: CCAskQuestion[] } {
-  const { teams, stage, selectedTeamId, retry } = data;
-  const titlePrefix = retry ? "⚠️ " : "";
+  const { teams, stage, selectedTeamId, retry, notice } = data;
+  // v3.3: 回退原因横幅 —— CC 没有独立标题位，挂在每个 question 前缀上。
+  const titlePrefix = (retry ? "⚠️ " : "") + (notice ? `ℹ️ ${notice} ` : "");
   const questions: CCAskQuestion[] = [];
 
   if (stage === "asset_confirm") {

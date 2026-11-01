@@ -11,12 +11,40 @@
  *     则用 "-" 占位，兼容未来 agent_id 缺失的路径。
  */
 
-export type PendingKind = "create" | "update";
+export type PendingKind = "create" | "update" | "config-lock";
 
 export interface PendingCreateDraft {
   title: string;
   description: string;
   hint?: string;
+}
+
+/**
+ * v3.3 `mem:config-lock` 的待确认草稿。
+ *
+ * PRD: "执行 mem:config-lock 前需展示待保存的配置并让用户确认，避免误覆盖。"
+ * 因此首次调用**不落库**，只把将要写入的三元组（+ 展示名 + 将被覆盖的旧配置）
+ * 存进 pending，等用户回 `mem:config-lock confirm` 才真正写入 Core。
+ *
+ * 只在「已有旧配置且新旧不同」时才走这条路 —— 无旧配置或完全相同直接落库，
+ * 避免给用户增加无意义的确认步骤。
+ */
+export interface PendingConfigLockDraft {
+  teamId: string;
+  agentId: string;
+  taskId: string;
+  /** 展示名，取不到时为 null（回显时回退到 id）。 */
+  teamName: string | null;
+  agentName: string | null;
+  taskName: string | null;
+  /** task_id 是否为虚拟 default（不绑定任何 Task）。 */
+  isVirtualDefault: boolean;
+  /** 将被覆盖的旧配置（null = 当前无配置）。仅用于确认文案展示。 */
+  previous: {
+    teamId: string;
+    agentId: string;
+    taskId: string;
+  } | null;
 }
 
 export interface PendingUpdateDraft {
@@ -47,7 +75,15 @@ export interface PendingUpdatePayload {
   draft: PendingUpdateDraft;
 }
 
-export type PendingPayload = PendingCreatePayload | PendingUpdatePayload;
+export interface PendingConfigLockPayload {
+  kind: "config-lock";
+  draft: PendingConfigLockDraft;
+}
+
+export type PendingPayload =
+  | PendingCreatePayload
+  | PendingUpdatePayload
+  | PendingConfigLockPayload;
 
 interface PendingEntry {
   payload: PendingPayload;
