@@ -546,6 +546,33 @@ export async function joinKnowledgeAssetsWithKs(
 
 // ── KS-only items（meta 未注册，如创建中/失败的 code-graph）──────────
 
+/** KS list 单页大小 —— 与 META_LIST_PAGE / 内核单页 schema 上限（max(100)）对齐。 */
+const KS_LIST_PAGE = 100;
+/** 安全上限：最多翻 10 页（1000 条），防 total 异常时循环失控。 */
+const KS_LIST_MAX_PAGES = 10;
+
+/**
+ * 分页拉取 KS 侧 list 全部 items。内核 `DEFAULT_PAGINATION = {limit: 20}`，
+ * 调用方不传 limit 只会拿到前 20 条（issue #1636：团队 28 个 code graph 面板只见 20）。
+ * 与 fetchAllMetaListItems 同款终止条件：total 封顶、空页/短页收尾。
+ */
+async function fetchAllKsListItems<T>(
+  fetchPage: (opts: { limit: number; offset: number }) => Promise<{ items: T[]; total: number }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  let offset = 0;
+  for (let page = 0; page < KS_LIST_MAX_PAGES; page++) {
+    const res = await fetchPage({ limit: KS_LIST_PAGE, offset });
+    const batch = res.items ?? [];
+    all.push(...batch);
+    const total = res.total;
+    if (typeof total === 'number' && offset + batch.length >= total) break;
+    if (batch.length < KS_LIST_PAGE) break;
+    offset += KS_LIST_PAGE;
+  }
+  return all;
+}
+
 /** 从 KS 侧查列表，构造 meta 未注册的 KnowledgeAssetListItem。 */
 async function fetchKsOnlyItems(
   kc: ReturnType<PanelDeps['knowledgeClientFactory']>,
@@ -554,8 +581,8 @@ async function fetchKsOnlyItems(
 ): Promise<KnowledgeAssetListItem[]> {
   try {
     if (assetType === ASSET_TYPE_WIKI) {
-      const res = await kc.wikiList(teamId);
-      return res.items.map((ks) => ({
+      const items = await fetchAllKsListItems((opts) => kc.wikiList(teamId, opts));
+      return items.map((ks) => ({
         knowledge_id: ks.wiki_id,
         asset_type: ASSET_TYPE_WIKI,
         name: ks.name,
@@ -577,8 +604,8 @@ async function fetchKsOnlyItems(
         updated_at: ks.updated_at,
       }));
     }
-    const res = await kc.codeGraphList(teamId);
-    return res.items.map((ks) => ({
+    const items = await fetchAllKsListItems((opts) => kc.codeGraphList(teamId, opts));
+    return items.map((ks) => ({
       knowledge_id: ks.code_graph_id,
       asset_type: ASSET_TYPE_CODE_GRAPH,
       name: ks.repo_name || ks.repo_url || ks.code_graph_id,
