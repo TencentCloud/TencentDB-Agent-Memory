@@ -30,6 +30,38 @@ from agent.memory_provider import MemoryProvider
 
 logger = logging.getLogger("memory_tencentdb_v2")
 
+# Gateway schema caps (MemoryCore 1.0.3, POST /v2/{atomic,conversation}/search):
+# query 1..2048 characters, limit 1..100. Hermes hands the recall hook the raw
+# user message, so a long paste used to be rejected with 400 "query: Too big:
+# expected string to have <=2048 characters" — every prefetch of that turn lost
+# its memory recall (and retried 5x). Clamp at the client edge, where the
+# payload is built, so both prefetch and the agent tools stay under the cap.
+_SEARCH_QUERY_MAX = 2048
+_SEARCH_LIMIT_MAX = 100
+
+
+def _clamp_search(query: Any, limit: Any = 5) -> "tuple[str, int]":
+    """Fit a recall query/limit to the search endpoints' schema.
+
+    Returns ``("", 5)`` when nothing searchable is left, so callers can skip
+    the request instead of provoking a 400 on an empty query.
+    """
+    if not isinstance(query, str):
+        query = "" if query is None else str(query)
+    # The gateway validates with a JS string, whose .length counts UTF-16 units:
+    # cut by code points first, then shave the astral chars (emoji) that count twice.
+    if len(query) > _SEARCH_QUERY_MAX or len(query.encode("utf-16-le")) // 2 > _SEARCH_QUERY_MAX:
+        query = query[:_SEARCH_QUERY_MAX]
+        while query and len(query.encode("utf-16-le")) // 2 > _SEARCH_QUERY_MAX:
+            query = query[:-1]
+    if not query.strip():
+        return "", 5
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        n = 5
+    return query, max(1, min(n, _SEARCH_LIMIT_MAX))
+
 # ════════════════════════════════════════════
 # SDK import (lazy to allow graceful degradation)
 # ════════════════════════════════════════════
@@ -137,8 +169,11 @@ class MemoryTencentdbV2Provider(MemoryProvider):
         sid = session_id or self._session_id
 
         def _do():
-            # Search L1 memories (atomic)
-            memories_result = self._client.search_atomic(query=query, limit=5)
+            # Search L1 memories (atomic) — clamped to the gateway's query cap
+            safe_query, safe_limit = _clamp_search(query, 5)
+            if not safe_query:
+                return None
+            memories_result = self._client.search_atomic(query=safe_query, limit=safe_limit)
             memories = memories_result.get("results", [])
 
             # Read L3 core (formerly persona)
@@ -300,8 +335,10 @@ class MemoryTencentdbV2Provider(MemoryProvider):
         return None
 
     def _handle_memory_search(self, args: Dict[str, Any]) -> str:
-        query = args.get("query", "")
-        limit = args.get("limit", 5)
+        # Clamped: the agent can hand over a long query, the gateway caps it at 2048.
+        query, limit = _clamp_search(args.get("query", ""), args.get("limit", 5))
+        if not query:
+            return "Error: query is required"
 
         def _do():
             result = self._client.search_atomic(query=query, limit=limit)
@@ -316,8 +353,10 @@ class MemoryTencentdbV2Provider(MemoryProvider):
         return self._safe_call("memory_search", _do) or "Memory search failed."
 
     def _handle_conversation_search(self, args: Dict[str, Any]) -> str:
-        query = args.get("query", "")
-        limit = args.get("limit", 5)
+        # Same gateway caps as /atomic/search (query <= 2048, limit <= 100).
+        query, limit = _clamp_search(args.get("query", ""), args.get("limit", 5))
+        if not query:
+            return "Error: query is required"
 
         def _do():
             result = self._client.search_conversation(query=query, limit=limit)
