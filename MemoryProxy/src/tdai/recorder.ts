@@ -30,12 +30,12 @@ export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | nul
 }
 
 export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity | null, userMessage: TdaiMessage | null, assistantContent: string | null | undefined): Promise<void> {
-  if (!identity || !userMessage) return;
-  const messages: TdaiMessage[] = [userMessage];
+  if (!identity) return;
+  const messages: TdaiMessage[] = userMessage ? [userMessage] : [];
   if (assistantContent?.trim()) {
     messages.push({ role: "assistant", content: assistantContent });
   }
-  await client.addConversation(identity, messages);
+  if (messages.length > 0) await client.addConversation(identity, messages);
 }
 
 function extractContentText(content: unknown): string {
