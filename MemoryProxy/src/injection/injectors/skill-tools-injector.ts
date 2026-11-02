@@ -71,6 +71,28 @@ export function renderSkillToolsBlock(
   const tenantHeader = spaceId ? ` -H 'x-tdai-service-id: ${spaceId}'` : "";
   const authHeader = `${tenantHeader}${sessionHeader}`;
 
+  // ── skill_view 用 skill_id(get) 还是 skill_name(get-by-name) ──
+  // 默认 id → skill_view 打 /get，body 传 skill_id（配合 available_skills 渲染带 id）。
+  // SKILL_VIEW_MODE=name → 回退到 /get-by-name + skill_name（旧行为）。
+  // 依据 skill_eval v9(name) vs v10(id) 对比实验：id 模式有调用时 correct% 更高、unknown 减半。
+  const skillViewMode = (process.env.SKILL_VIEW_MODE ?? "id").toLowerCase() === "name" ? "name" : "id";
+  const skillViewTool =
+    skillViewMode === "id"
+      ? [
+          `  <tool name="skill_view">`,
+          `    path: ${bridge}/get`,
+          `    body: {"skill_id": "<skill 的 id, 形如 skl-xxx>", "include_content": true, "include_manifest": true}`,
+          `    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_id 取 <available_skills> 里每行的 \`id=\` 字段值（形如 skl-xxxxxx），或 skill_search 结果里的 skill_id 字段。`,
+          `  </tool>`,
+        ]
+      : [
+          `  <tool name="skill_view">`,
+          `    path: ${bridge}/get-by-name`,
+          `    body: {"skill_name": "<skill 名字>", "include_content": true, "include_manifest": true}`,
+          `    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_name 用 <available_skills> 里 \`- name: description\` 那个 name，或 skill_search 结果里的 name 字段。`,
+          `  </tool>`,
+        ];
+
   const readTools = [
     `  <tool name="skill_search">`,
     `    path: ${bridge}/search`,
@@ -86,11 +108,7 @@ export function renderSkillToolsBlock(
     // `    use:  列出 head + active skill；按 owner / 前缀过滤`,
     // `  </tool>`,
     // "",
-    `  <tool name="skill_view">`,
-    `    path: ${bridge}/get-by-name`,
-    `    body: {"skill_name": "<skill 名字>", "include_content": true, "include_manifest": true}`,
-    `    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_name 用 <available_skills> 里 \`- name: description\` 那个 name，或 skill_search 结果里的 name 字段。`,
-    `  </tool>`,
+    ...skillViewTool,
     "",
     `  <tool name="skill_files_read">`,
     `    path: ${bridge}/files/read`,
@@ -127,7 +145,7 @@ export function renderSkillToolsBlock(
     `  <tool name="skill_delete">`,
     `    path: ${bridge}/delete`,
     `    body: {"skill_id": "skl-xxx"}`,
-    `    use:  软删（archived；不递增版本）`,
+    `    use:  物理删除 skill 全部版本`,
     `  </tool>`,
     "",
     `  <tool name="skill_files_write">`,
@@ -237,8 +255,9 @@ export class SkillToolsInjector implements InjectionHook {
       content,
       metadata: {
         source: this.id,
-        // Stable cache-dedup key — varies by allowLlmWrite to avoid stale cache
-        cacheKey: `skill-tools-injector:catalog:${allowLlmWrite ? "rw" : "ro"}`,
+        // Stable cache-dedup key — varies by allowLlmWrite + skillViewMode to avoid stale cache
+        // (SKILL_VIEW_MODE=id/name 须区分缓存,否则两模式串同一份 session_init 块)
+        cacheKey: `skill-tools-injector:catalog:${allowLlmWrite ? "rw" : "ro"}:${(process.env.SKILL_VIEW_MODE ?? "id").toLowerCase() === "name" ? "name" : "id"}`,
       },
     }];
   }

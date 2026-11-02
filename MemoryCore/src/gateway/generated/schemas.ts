@@ -452,7 +452,7 @@ export const userStatusSchema = z.enum(["active", "inactive"]) as unknown as z.Z
 
 export const agentStatusSchema = z.enum(["active", "inactive"]) as unknown as z.ZodType<AgentStatus>
 
-export const taskSourceTypeSchema = z.enum(["manual", "github", "tapd", "other"]) as unknown as z.ZodType<TaskSourceType>
+export const taskSourceTypeSchema = z.enum(["manual", "external", "other"]) as unknown as z.ZodType<TaskSourceType>
 
 export const agentVisibilitySchema = z.enum(["team", "restricted"]) as unknown as z.ZodType<AgentVisibility>
 

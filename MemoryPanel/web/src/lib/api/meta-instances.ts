@@ -19,10 +19,31 @@ export interface MetadataInstance {
   proxy_endpoint?: string;
 }
 
+/** 面板级能力开关（随实例列表顺带下发，用于菜单/路由可见性控制）。 */
+export interface PanelCapabilities {
+  /** 「可观测」入口是否开放（面板 env PANEL_FEATURE_ANALYTICS_ENABLED，默认关）。 */
+  analyticsEnabled: boolean;
+}
+
+/** 老版本 Panel 未下发 capabilities 时的兜底值（保守：不展示入口）。 */
+const DEFAULT_CAPABILITIES: PanelCapabilities = { analyticsEnabled: false };
+
 export const metaInstancesApi = {
   /** 登录前选实例；GET /api/v1/meta/instances，公开、无需鉴权、无分页 */
   list: () =>
     dedupeInFlight('meta/instances', () =>
       request<{ instances: MetadataInstance[] }>('GET', '/api/v1/meta/instances').then((r) => r.instances),
+    ),
+
+  /**
+   * 面板能力开关。与 list() 同一去重 key：并发时共享同一次网络请求，
+   * 各自从响应中提取所需字段（list 取 instances、本函数取 capabilities）。
+   * 老版本 Panel 响应中没有该字段 → 按关闭兜底。
+   */
+  capabilities: () =>
+    dedupeInFlight('meta/instances', () =>
+      request<{ capabilities?: PanelCapabilities }>('GET', '/api/v1/meta/instances').then(
+        (r) => r.capabilities ?? DEFAULT_CAPABILITIES,
+      ),
     ),
 };

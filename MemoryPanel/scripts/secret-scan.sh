@@ -34,7 +34,15 @@ else
 fi
 
 # 已知安全的占位字符串，命中即视为非泄漏
-PLACEHOLDER='xxx|your-|example|REPLACE_|placeholder|<[A-Z_]+>|dummy|fake|test-|demo-|sample|bogus|invalid-|knowledge-debug|-debug"|task-draft-generator'
+# 注：`\$\{[A-Za-z_]+\}` 覆盖一切 `${VAR}` 模板占位引用（如 `"apiKey": "${KEY_PLACEHOLDER}"`）——
+# 这类命中是源码里的常量引用（真值在别处定义为用户自填），不是泄漏；`_PLACEHOLDER`
+# 是其兜底。不要为此加 EXEMPT_PATH 豁免整条路径，那会放过该文件里真正的 secret。
+#
+# 注：`sk-optional-memory` 是**误报豁免**，不是占位符——它来自注释
+# "See PR feat/task-optional-memory."。规则 1 已加词边界（sk- 前不能是单词字符），
+# 词中场景不会再命中；此豁免兜底该串独立出现的场景。已验证 sk-mem-* / sk-proj-*
+# 等真实形态仍会被拦截，本豁免不会放过真密钥。
+PLACEHOLDER='xxx|your-|example|REPLACE_|placeholder|<[A-Z_]+>|\$\{[A-Za-z_]+\}|dummy|fake|test-|demo-|sample|bogus|invalid-|knowledge-debug|-debug"|task-draft-generator|_PLACEHOLDER|sk-optional-memory'
 
 # 需要豁免的路径（示例代码 / 已知 demo 密码 / gitignored 本地文件）
 EXEMPT_PATH='node_modules/|/dist/|/build/|\.example\.|/docs/|README\.md|\.md:|\.test\.|__tests__/'
@@ -47,8 +55,8 @@ trap "rm -f $tmp" EXIT
 
 for t in "${TARGETS[@]}"; do
   [[ -e "$t" ]] || continue
-  # ── 规则 1: sk- prefix keys ──
-  grep -rEn "sk-[a-zA-Z0-9_-]{15,}" "$t" 2>/dev/null | grep -Ev "$PLACEHOLDER" >> "$tmp" || true
+  # ── 规则 1: sk- prefix keys（sk- 前不能紧跟单词字符，避免 task-optional-memory 这类词中误报）──
+  grep -rEn "(^|[^A-Za-z0-9_-])sk-[a-zA-Z0-9_-]{15,}" "$t" 2>/dev/null | grep -Ev "$PLACEHOLDER" >> "$tmp" || true
 
   # ── 规则 2: Bearer tokens ──
   grep -rEn 'Bearer[[:space:]]+[A-Za-z0-9._+/=~-]{15,}' "$t" 2>/dev/null | grep -Ev "$PLACEHOLDER" >> "$tmp" || true
@@ -86,7 +94,9 @@ if [[ -n "$final" ]]; then
   echo
   echo "$final"
   echo
-  echo "如果确认是误报，加进 EXEMPT_PATH 或用 // secret-scan-ignore 注释豁免所在行"
+  # 提示只指向 PLACEHOLDER：EXEMPT_PATH 会放过整条路径（同文件真 secret 一起漏网），
+  # 行内注释豁免则要改上游源码（污染他人模块 + 下游 rebase 反复冲突），两者都不推荐。
+  echo "如果确认是误报，把该具体字符串加进脚本顶部的 PLACEHOLDER 白名单（值级豁免）"
   exit 1
 fi
 

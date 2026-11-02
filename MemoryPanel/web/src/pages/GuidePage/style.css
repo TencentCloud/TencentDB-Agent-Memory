@@ -57,7 +57,7 @@
 /* ===== 主 tab ===== */
 .guide-main-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   margin: 16px 0;
 }
@@ -624,6 +624,43 @@
 }
 
 /* ===== 获取历史数据 ===== */
+/* 配置成功验证提示：明确告诉用户「看到关联团队资产选项 = 配置成功」 */
+.guide-verify {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--tea-color-border-success-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-success-lighten-default);
+}
+
+.guide-verify-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-success-default);
+}
+
+.guide-verify-badge {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--tea-color-bg-success-default);
+  color: #fff;
+  font-size: 12px;
+}
+
+.guide-verify-desc {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--tea-color-text-primary);
+}
+
 .guide-history h3 {
   margin: 0 0 8px;
   font-size: 15px;
@@ -893,8 +930,190 @@
   opacity: 0.9;
 }
 
+/* ===== 记忆指令（mem: 命令）===== */
+.guide-mem-intro {
+  margin-bottom: 20px;
+}
+
+.guide-mem-intro h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.guide-mem-intro p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tea-color-text-secondary);
+  line-height: 20px;
+}
+
+.guide-mem-format {
+  margin-top: 8px !important;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--tea-color-bg-secondary-hover);
+  font-size: 12px !important;
+  color: var(--tea-color-text-tertiary) !important;
+}
+
+.guide-mem-group {
+  margin-bottom: 20px;
+}
+
+.guide-mem-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--tea-color-border-primary-default);
+}
+
+.guide-mem-group-head b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-mem-group-head small {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-mem-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.guide-mem-card {
+  padding: 14px 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+}
+
+.guide-mem-card .guide-command {
+  margin: 0;
+}
+
+.guide-mem-desc {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-mem-details {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--tea-color-text-secondary);
+}
+
+.guide-mem-options {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--tea-color-border-primary-default);
+}
+
+.guide-mem-options-title {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tea-color-text-secondary);
+}
+
+.guide-mem-option {
+  display: grid;
+  grid-template-columns: minmax(0, 260px) 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.guide-mem-option:last-child {
+  margin-bottom: 0;
+}
+
+.guide-mem-option .guide-command {
+  margin: 0;
+}
+
+.guide-mem-option-effect {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--tea-color-text-secondary);
+}
+
+.guide-mem-option.recommended .guide-command {
+  outline: 1px solid var(--tea-color-border-brand-default);
+}
+
+.guide-mem-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--tea-color-bg-brand-lighten-default);
+  color: var(--tea-color-text-brand-default);
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.guide-mem-examples {
+  margin-top: 8px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.guide-mem-examples header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--tea-color-border-primary-default);
+  background: var(--tea-color-bg-secondary-hover);
+}
+
+.guide-mem-examples header b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-mem-examples header small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-mem-examples pre {
+  margin: 0;
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--tea-color-text-primary);
+}
+
 /* ===== 窄屏适配 ===== */
 @media (max-width: 720px) {
+  .guide-main-tabs {
+    grid-template-columns: 1fr;
+  }
+
   .guide-practice-detail {
     grid-template-columns: 1fr;
   }
@@ -905,6 +1124,11 @@
 
   .guide-practice-rules {
     grid-template-columns: 1fr;
+  }
+
+  .guide-mem-option {
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 
   .guide-titlebar {

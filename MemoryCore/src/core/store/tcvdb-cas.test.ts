@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MemoryRecord } from "../record/l1-writer.js";
-import { TcvdbMemoryStore } from "./tcvdb.js";
+import { TcvdbMemoryStore } from "./tcvdb/memory-store.js";
 
 function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   return {
@@ -49,9 +49,9 @@ describe("TcvdbMemoryStore.compareAndSwapL1", () => {
     const { store, client } = makeStore();
     client.update.mockResolvedValue(1);
 
-    const result = await store.compareAndSwapL1(makeRecord(), 2, undefined);
+    const result = await store.compareAndSwapL1(makeRecord({ version: 999 }), 2, undefined);
 
-    expect(result).toEqual({ status: "updated" });
+    expect(result).toEqual({ status: "updated", version: 3 });
     expect(client.update).toHaveBeenCalledTimes(1);
     expect(client.update).toHaveBeenCalledWith(
       "test_l1_memories",
@@ -59,8 +59,9 @@ describe("TcvdbMemoryStore.compareAndSwapL1", () => {
         documentIds: ["memory-1"],
         filter:
           'version = 2 and team_id = "team-1" and user_id = "user-1" and agent_id = "agent-1" and task_id = "task-1"',
+        update: expect.objectContaining({ text: "edited content", version: 3 }),
       },
-      expect.objectContaining({ text: "edited content", version: 3 }),
+      { maxRetries: 0 },
     );
   });
 
@@ -69,7 +70,7 @@ describe("TcvdbMemoryStore.compareAndSwapL1", () => {
     client.update.mockResolvedValue(0);
     client.query.mockResolvedValue({ documents: [{ id: "memory-1", version: 4 }] });
 
-    const result = await store.compareAndSwapL1(makeRecord(), 2, undefined);
+    const result = await store.compareAndSwapL1(makeRecord({ version: 999 }), 2, undefined);
 
     expect(result).toEqual({ status: "conflict", currentVersion: 4 });
     expect(client.query).toHaveBeenCalledWith("test_l1_memories", {
@@ -85,8 +86,22 @@ describe("TcvdbMemoryStore.compareAndSwapL1", () => {
     client.update.mockResolvedValue(0);
     client.query.mockResolvedValue({ documents: [] });
 
-    const result = await store.compareAndSwapL1(makeRecord(), 2, undefined);
+    const result = await store.compareAndSwapL1(makeRecord({ version: 999 }), 2, undefined);
 
     expect(result).toEqual({ status: "not_found" });
   });
+  it("does not retry an ambiguous update failure or query a misleading result", async () => {
+    const { store, client } = makeStore();
+    client.update.mockRejectedValue(new Error("response lost after possible commit"));
+    expect(await store.compareAndSwapL1(makeRecord(), 2, undefined)).toEqual({ status: "failed" });
+    expect(client.update).toHaveBeenCalledTimes(1);
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+  it.each([Number.MAX_SAFE_INTEGER, -1, NaN, 1.5])("rejects unsafe internal expected version %s", async (version) => {
+    const { store, client } = makeStore();
+    expect(await store.compareAndSwapL1(makeRecord(), version, undefined)).toEqual({ status: "failed" });
+    expect(client.update).not.toHaveBeenCalled();
+  });
+
 });

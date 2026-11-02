@@ -82,6 +82,36 @@ export interface TaskEntity {
 }
 
 /**
+ * /v3/meta/user-session-default/get · set · delete 的实体返回。
+ *
+ * 用户级 session 默认 (team, agent, task) 三元组, 一个 user_id 至多一行。
+ *
+ * task_id 字段可能为:
+ *   - 真实 task_id (如 `tsk-xxx`)
+ *   - 字面量字符串 `"default"` (= DEFAULT_TASK_SENTINEL) —— 表示"不绑定任何 Task"
+ *
+ * 这个字面量与 Proxy 侧 `config.sessionInit.defaultTaskId` 契约对称, 下游
+ * injection / participation-log / getTask 等 10+ 处 `task_id !== defaultTaskId`
+ * 短路天然适用, 不需要额外处理。
+ *
+ * 详见设计文档 `docs/design/2026-10-10-user-session-default-design.md` §3.1.1。
+ */
+export interface UserSessionDefaultEntity {
+  user_id: string;
+  team_id: string;
+  agent_id: string;
+  task_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SetUserSessionDefaultInput {
+  team_id: string;
+  agent_id: string;
+  task_id: string;
+}
+
+/**
  * /v3/meta/task/create 请求入参。
  *
  * 权限约束（内核）：caller 必须是 team 活跃成员，且 creator_user_id 强制 == caller。
@@ -335,6 +365,80 @@ export class MetadataClient {
     return this.fetch<TaskEntity>("/v3/meta/task/update", body);
   }
 
+  // ── UserSessionDefault (v3.3) ──────────────────────────────────────────
+  //
+  // 用户级 session 默认 (team, agent, task) 三元组。详见 UserSessionDefaultEntity
+  // 类型注释与 docs/design/2026-10-10-user-session-default-design.md。
+
+  /**
+   * 查询用户的默认 (team, agent, task) 配置。
+   *
+   * 行为:
+   *   - 已配置: 返回完整 entity
+   *   - 未配置: 返回 `null`
+   *   - 其他异常 (网络 / 鉴权失败): 原样抛出, 由 caller 决定降级
+   *
+   * ── "未配置"在 Core 侧有两种表达, 必须都吞成 null ──────────────────────
+   *
+   *   1. envelope `{code:0, data:null}` —— **当前线上实际路径**。
+   *      Core router 直接 `return s.userSessionDefault.get(...)`, service 层
+   *      是 `?? null`, 未设置时返回 JS null。而 `fetch()` 对 `data == null`
+   *      **无条件抛** `unexpected null data`(见本文件 fetch 实现)。
+   *
+   *   2. envelope `code=404` (entity_not_found) —— 早期注释假设的形态,
+   *      保留兼容以防 Core 后续改口径。
+   *
+   * ⚠️ 只吞这两种。真正的网络 / 鉴权 / 500 必须照常抛出 —— 否则
+   *    resolveUserSessionDefault 会把"系统故障"和"用户没配默认"混成同一个
+   *    fallbackReason="get_failed": 既污染 ClickHouse 埋点(海量假 get_failed),
+   *    又掩盖真实故障。
+   */
+  async getUserSessionDefault(userId: string): Promise<UserSessionDefaultEntity | null> {
+    try {
+      return await this.fetch<UserSessionDefaultEntity>(
+        "/v3/meta/user-session-default/get",
+        { user_id: userId },
+      );
+    } catch (err) {
+      if (err instanceof Error) {
+        // 形态 1: 未配置 → Core 返 {code:0,data:null}, fetch 抛这个
+        if (err.message.includes("unexpected null data")) return null;
+        // 形态 2: 未配置 → envelope 404
+        if (/\b404\b|entity_not_found/.test(err.message)) return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * 设置 / 覆盖用户默认配置。
+   *
+   * task_id 字段可传真实 task_id 或字面量 `"default"` (= 不绑定任何 Task);
+   * Core Service 识别 "default" 字面量时跳过 task 实体校验。
+   */
+  async setUserSessionDefault(
+    userId: string,
+    input: SetUserSessionDefaultInput,
+  ): Promise<UserSessionDefaultEntity> {
+    return this.fetch<UserSessionDefaultEntity>(
+      "/v3/meta/user-session-default/set",
+      {
+        user_id: userId,
+        team_id: input.team_id,
+        agent_id: input.agent_id,
+        task_id: input.task_id,
+      },
+    );
+  }
+
+  /** 清除用户默认配置。幂等: 不存在也返 ok。 */
+  async deleteUserSessionDefault(userId: string): Promise<{ ok: true }> {
+    return this.fetch<{ ok: true }>(
+      "/v3/meta/user-session-default/delete",
+      { user_id: userId },
+    );
+  }
+
   /**
    * List assets the given user can access in a team, applying kernel-side
    * visibility × ACL filtering (see permission-checker.ts). Paginated aggregation.
@@ -423,12 +527,19 @@ export class MetadataClient {
    * 后 injection / memory-bridge 只会拿到当前仍然可用的绑定。
    *
    * 传 false 只用于需要看到"物理绑定"的场景（e.g. 管理面板 debug）。
+   *
+   * `assetTypes` 可选：交给 core 在 SQL 层按类型过滤（依赖
+   * v3-meta-schemas.ts:fixedAssetListWithDetailSchema `asset_types`）。
+   * caller 只关心某几类时应务必传 —— 否则 skill 一多（实际线上见过单
+   * agent 519 skill）会把 chat_memory / wiki / code_graph 挤出 PAGINATION_HARD_LIMIT
+   * 翻页窗口，导致运行时注入漏掉 imported 记忆或 knowledge 绑定。
    */
   async getAgentFixedAssets(
     agentId: string,
-    opts: { applyVisibilityFilter?: boolean } = {},
+    opts: { applyVisibilityFilter?: boolean; assetTypes?: string[] } = {},
   ): Promise<AgentFixedAssetDetail> {
     const applyVisibilityFilter = opts.applyVisibilityFilter !== false;
+    const assetTypes = opts.assetTypes && opts.assetTypes.length > 0 ? opts.assetTypes : undefined;
     const allItems: FixedAssetItem[] = [];
     let agent: Record<string, unknown> | null = null;
     let offset = 0;
@@ -442,6 +553,7 @@ export class MetadataClient {
           limit: FA_PAGE_SIZE,
           offset,
           apply_visibility_filter: applyVisibilityFilter,
+          ...(assetTypes ? { asset_types: assetTypes } : {}),
         },
       );
       agent = agent ?? resp.agent;

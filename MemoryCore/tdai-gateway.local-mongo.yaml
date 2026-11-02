@@ -1,0 +1,78 @@
+# ============================================================
+# TDAI Gateway — 本地 Mongo 形态配置（配合 docker-compose.local-mongo.yaml）
+# ============================================================
+# 适用场景: 本地容器化验证 Mongo 后端（atlas-local mongot + gateway 单容器）
+# 存储选择: **由环境变量决定，本文件不含存储后端配置** —
+#   STORE_MODE=mongodb            数据面走 Mongo（gateway 形态不读 memory.storeBackend）
+#   MONGODB_ENDPOINT/DATABASE     Mongo 连接信息（compose 内指向 mongo-search 服务）
+#   STATE_BACKEND=local           进程内状态/pipeline（免 Redis）
+# 元数据: 不设 TDAI_METADATA_MONGO_URI → 自动 sqlite（落 baseDir，Phase 4 才收敛）
+# ============================================================
+
+deployMode: standalone
+stateBackend: "local"
+
+server:
+  port: 8420
+  host: "0.0.0.0"                      # 容器内必须监听全网卡，否则端口映射不生效
+  apiKey: "${TDAI_GATEWAY_API_KEY}"    # 本地置空 = 关闭 Layer1 鉴权（同 .env.knowledge-local 语义）
+
+data:
+  baseDir: /data/tdai-memory
+
+# ── LLM (必填，经环境变量注入) ──
+llm:
+  baseUrl: "${TDAI_LLM_BASE_URL}"
+  apiKey: "${TDAI_LLM_API_KEY}"
+  model: "${TDAI_LLM_MODEL}"
+  maxTokens: 65536
+  timeoutMs: 300000
+
+# ── Memory 引擎配置 ──
+memory:
+  capture:
+    enabled: true
+  extraction:
+    enabled: true
+    enableDedup: true
+    maxMemoriesPerSession: 20
+  persona:
+    triggerEveryN: 50
+    maxScenes: 15
+  pipeline:
+    everyNConversations: 5
+    enableWarmup: true
+    l1IdleTimeoutSeconds: 600
+    l2DelayAfterL1Seconds: 90
+    l2MinIntervalSeconds: 900
+    l2MaxIntervalSeconds: 3600
+  recall:
+    enabled: true
+    maxResults: 5
+    scoreThreshold: 0.3
+    strategy: "hybrid"
+    timeoutMs: 5000
+  embedding:
+    provider: "none"                   # 关闭向量，仅 mongot 原生 BM25
+  bm25:
+    enabled: true
+    language: "zh"
+
+# ── Skill 模块 ──
+skill:
+  enabled: true
+  routing:
+    mode: "bm25"
+    searchTopK: 20
+  extraction:
+    enabled: true
+    maxIterations: 16
+  resources:
+    maxResourceSizeBytes: 5000000
+    allowExecutable: false
+
+# ── 元数据（meta_assets / ACL）──
+metadata:
+  maxUsersPerInstance: 500
+  maxTeamsPerInstance: 100
+  passwordPepper: "${TDAI_PASSWORD_PEPPER:-local-dev-pepper}"

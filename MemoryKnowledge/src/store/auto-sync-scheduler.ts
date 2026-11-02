@@ -25,7 +25,9 @@
 
 import { createLogger } from "../logger.js";
 import type { CodeGraphService, SyncResult } from "./code-graph-service.js";
-import type { IKnowledgeStore, CodeGraphRow } from "./types.js";
+import type { IKnowledgeStore } from "./types.js";
+import { toCodeGraphTarget, toWikiTarget, type SyncTarget } from "./auto-sync-target.js";
+import type { ICredentialStore, SourceCredential } from "../source-auth/types.js";
 
 const log = createLogger("auto-sync-scheduler");
 
@@ -62,10 +64,27 @@ export function resolveAutoSyncConfig(env: Record<string, string | undefined> = 
 
 // ───────────────────────── Scheduler ─────────────────────────
 
+/**
+ * wiki 拉取服务（外部 wiki 定时同步用）。
+ * 返回本次写入的页面数。实现在 wiki-source/，接入后由 module.ts 注入。
+ */
+export interface WikiImporter {
+  run(
+    serviceId: string,
+    teamId: string,
+    wikiId: string,
+    cred: SourceCredential,
+  ): Promise<number>;
+}
+
 export interface AutoSyncSchedulerDeps {
   store: IKnowledgeStore;
   cgService: CodeGraphService;
   config: AutoSyncConfig;
+  /** 外部 wiki 拉取服务；未注入时 wiki 同步目标一律跳过（不影响 code-graph）。 */
+  wikiImporter?: WikiImporter;
+  /** 外部来源凭据存储；未注入时 wiki 同步目标一律跳过。 */
+  credentialStore?: ICredentialStore;
 }
 
 export interface AutoSyncStatus {
@@ -83,6 +102,8 @@ export class AutoSyncScheduler {
   private readonly store: IKnowledgeStore;
   private readonly cgService: CodeGraphService;
   private readonly config: AutoSyncConfig;
+  private readonly wikiImporter?: WikiImporter;
+  private readonly credentialStore?: ICredentialStore;
 
   /** 启动延迟 + 周期 scan 的 timer。 */
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,8 +111,8 @@ export class AutoSyncScheduler {
   /** worker 空转 sleep 的 timer 集合（stop 时统一清理）。 */
   private readonly workerSleepTimers = new Set<ReturnType<typeof setTimeout>>();
 
-  /** FIFO 待处理队列 + 去重 Set（队列内 + 处理中的 id）。 */
-  private readonly queue: CodeGraphRow[] = [];
+  /** FIFO 待处理队列 + 去重 Set（存 target.key，跨类型不冲突）。 */
+  private readonly queue: SyncTarget[] = [];
   private readonly inFlight = new Set<string>();
 
   /** 当前正在执行 sync 的 worker 数。 */
@@ -107,6 +128,8 @@ export class AutoSyncScheduler {
     this.store = deps.store;
     this.cgService = deps.cgService;
     this.config = deps.config;
+    this.wikiImporter = deps.wikiImporter;
+    this.credentialStore = deps.credentialStore;
   }
 
   /**
@@ -210,11 +233,11 @@ export class AutoSyncScheduler {
       }
 
       let enqueued = 0;
-      for (const row of candidates) {
+      for (const target of candidates) {
         if (this.stopped) break;
-        if (this.inFlight.has(row.code_graph_id)) continue; // 已在队列或处理中
-        this.inFlight.add(row.code_graph_id);
-        this.queue.push(row);
+        if (this.inFlight.has(target.key)) continue; // 已在队列或处理中
+        this.inFlight.add(target.key);
+        this.queue.push(target);
         enqueued++;
       }
       log.info(`[auto-sync] enqueued ${enqueued} repo(s) (queue=${this.queue.length}, active=${this.activeSyncs})`);
@@ -230,21 +253,34 @@ export class AutoSyncScheduler {
    * 已在队列或 worker 处理中的仓库由 scan() 里的 inFlight Set 去重，不重复入队；
    * 单仓库的同步节奏天然由 max(sync 耗时, scanIntervalMs) 决定，无需额外冷却。
    */
-  private listSyncCandidates(): CodeGraphRow[] {
-    const syncedRefs = this.store.listSyncedCodeGraphs();
-    if (syncedRefs.length === 0) return [];
+  private listSyncCandidates(): SyncTarget[] {
+    const candidates: SyncTarget[] = [];
 
-    const candidates: CodeGraphRow[] = [];
-    for (const ref of syncedRefs) {
+    // ① code-graph：status = ready（原逻辑，仅包一层 target）
+    for (const ref of this.store.listSyncedCodeGraphs()) {
       try {
         const row = this.store.getCodeGraph(ref.service_id, ref.team_id, ref.code_graph_id);
         if (!row) continue;
         if (row.status !== "ready") continue;
-        candidates.push(row);
+        candidates.push(toCodeGraphTarget(row));
       } catch (err) {
         log.warn(`[auto-sync] failed to check ${ref.code_graph_id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    // ② wiki：**有凭据行的 wiki**（等价于「外部导入」，§4.2）
+    if (this.credentialStore) {
+      for (const ref of this.credentialStore.listAllByType("wiki")) {
+        try {
+          const row = this.store.getWikiById(ref.serviceId, ref.resourceId);
+          if (!row) continue;                              // 资源已删
+          candidates.push(toWikiTarget(row));
+        } catch (err) {
+          log.warn(`[auto-sync] failed to check wiki ${ref.resourceId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
     return candidates;
   }
 
@@ -257,28 +293,34 @@ export class AutoSyncScheduler {
   private async runWorker(workerIdx: number): Promise<void> {
     log.debug(`[auto-sync] worker#${workerIdx} started`);
     while (!this.stopped) {
-      const row = this.queue.shift();
-      if (!row) {
+      const target = this.queue.shift();
+      if (!target) {
         await this.sleep(WORKER_IDLE_POLL_MS);
         continue;
       }
 
       this.activeSyncs++;
       try {
-        await this.syncOne(row);
+        await this.syncOne(target);
       } catch (err) {
         // syncOne 内已捕获，这里是兜底
         log.error(`[auto-sync] worker#${workerIdx} unexpected error: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         this.activeSyncs--;
-        this.inFlight.delete(row.code_graph_id);
+        this.inFlight.delete(target.key);
       }
     }
     log.debug(`[auto-sync] worker#${workerIdx} exiting`);
   }
 
+  /** 按目标类型分派。 */
+  private async syncOne(target: SyncTarget): Promise<void> {
+    return target.kind === "code-graph" ? this.syncCodeGraph(target) : this.syncWiki(target);
+  }
+
   /** 对单个 code-graph 执行 sync（复用 CodeGraphService.sync 的判别联合）。 */
-  private async syncOne(row: CodeGraphRow): Promise<void> {
+  private async syncCodeGraph(t: Extract<SyncTarget, { kind: "code-graph" }>): Promise<void> {
+    const row = t.row;
     const startMs = Date.now();
     log.info(`[auto-sync] sync ${row.code_graph_id} (${row.repo_url}@${row.branch})`);
     try {
@@ -300,6 +342,42 @@ export class AutoSyncScheduler {
       }
     } catch (err) {
       log.error(`[auto-sync] sync failed for ${row.code_graph_id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * 同步一个外部 wiki：取 owner 令牌 → 调 WikiImportService 拉取 + ingest。
+   *
+   * 关键约束（设计 §5.4）：**失败不写 knowledge_wiki.sync_error** —— 那字段是
+   * ingest 抽取错误，混用会导致"wiki 到底好不好"无法判断。同步失败只记日志。
+   *
+   * 当前 wiki provider（iWiki）尚未接入：无拉取服务时直接跳过，
+   * 保证 code-graph 自动同步行为与改造前完全一致。
+   */
+  private async syncWiki(t: Extract<SyncTarget, { kind: "wiki" }>): Promise<void> {
+    const wiki = t.row;
+    if (!this.wikiImporter) {
+      log.debug(`[auto-sync] wiki sync skipped (no importer wired): ${wiki.wiki_id}`);
+      return;
+    }
+    const cred = this.credentialStore?.get({
+      type: "wiki",
+      serviceId: t.serviceId,
+      resourceId: wiki.wiki_id,
+    });
+    if (!cred) {
+      // 无凭据行 = 手工上传的 wiki，不应进入候选（防御式检查）；或用户删了凭据。
+      log.warn(`[auto-sync] wiki ${wiki.wiki_id} credential missing, skip sync`);
+      return;
+    }
+    try {
+      const n = await this.wikiImporter.run(t.serviceId, t.teamId, wiki.wiki_id, cred);
+      log.info(`[auto-sync] wiki ${wiki.wiki_id} synced (${n} pages)`);
+    } catch (err) {
+      // 只记日志，不写 sync_error（见上）。
+      log.error(
+        `[auto-sync] wiki sync failed for ${wiki.wiki_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

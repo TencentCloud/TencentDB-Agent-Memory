@@ -19,8 +19,8 @@
  * 运行（需先 source .env.devcloud 提供 VDB_URL / VDB_API_KEY）：
  *   node --import tsx scripts/verify-tcvdb-clear.ts
  */
-import { TcvdbMemoryStore } from "../src/core/store/tcvdb.js";
-import { TcvdbClient } from "../src/core/store/tcvdb-client.js";
+import { TcvdbMemoryStore } from "../src/core/store/tcvdb/memory-store.js";
+import { TcvdbClient } from "../src/core/store/tcvdb/client.js";
 
 const VDB_URL = process.env.VDB_URL;
 const VDB_API_KEY = process.env.VDB_API_KEY;

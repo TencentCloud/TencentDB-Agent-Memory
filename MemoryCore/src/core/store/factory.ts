@@ -14,8 +14,11 @@
 import path from "node:path";
 import type { MemoryTdaiConfig } from "../../config.js";
 import type { IMemoryStore, IEmbeddingService, StoreLogger } from "./types.js";
-import { VectorStore } from "./sqlite.js";
-import { TcvdbMemoryStore } from "./tcvdb.js";
+import { VectorStore } from "./sqlite/memory-store.js";
+import { TcvdbMemoryStore } from "./tcvdb/memory-store.js";
+import { MongoMemoryStore } from "./mongodb/memory-store.js";
+import { getSharedMongoClientPool } from "./mongodb/client-pool.js";
+import { readMongoEnvConfig } from "../../utils/env-config.js";
 import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
 import type { EmbeddingService } from "./embedding.js";
 import { createBM25Encoder } from "./bm25-local.js";
@@ -90,6 +93,36 @@ export function createStoreBundle(
           tcvdbUrl: tcvdbCfg.url,
           tcvdbDatabase: database,
           tcvdbAlias: tcvdbCfg.alias || undefined,
+        },
+      };
+    }
+
+    case "mongodb": {
+      // Singleton/core path Mongo backend. Connection info comes from
+      // MONGODB_* env (standalone) — mirrors how the gateway's StorePool
+      // resolves per-instance Mongo config. Native mongot/BM25 → no local
+      // embedding or bm25 encoder.
+      const mongoConfig = readMongoEnvConfig();
+      if (!mongoConfig.endpoint || !mongoConfig.database) {
+        throw new Error(`${TAG} mongodb backend requires MONGODB_ENDPOINT and MONGODB_DATABASE`);
+      }
+      const store = new MongoMemoryStore({
+        pool: getSharedMongoClientPool(logger),
+        mongoConfig,
+        logger,
+      });
+
+      logger?.debug?.(
+        `${TAG} Store created: backend=mongodb, endpoint=${mongoConfig.endpoint}, database=${mongoConfig.database}`,
+      );
+
+      return {
+        store,
+        embedding: new NoopEmbeddingService(),
+        storeSnapshot: {
+          type: "mongodb",
+          mongoEndpoint: mongoConfig.endpoint,
+          mongoDatabase: mongoConfig.database,
         },
       };
     }

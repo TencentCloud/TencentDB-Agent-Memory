@@ -11,7 +11,7 @@
 | --- | --- |
 | **LLM-Wiki** | 上传/拉取文档 → LLM 抽取结构化页面 → FTS5 全文检索 + 知识图谱 |
 | **Code-Graph** | `git clone` 仓库 → CodeGraph 索引（符号、调用、文件树）→ 探索查询 |
-| **Auto-Sync**（可选） | 定时扫描 code-graph，FIFO 队列 + worker pool 自动拉取 git 更新并重建索引。默认关闭，见 `docs/data-flow.md` §9。 |
+| **Auto-Sync**（可选） | 定时扫描 code-graph，FIFO 队列 + worker pool 自动拉取 git 更新并重建索引。默认关闭，见下方「可选：Auto-Sync」。 |
 | **Tools** | `POST /v3/tools/list`、`/v3/tools/call`，供 Agent / Kernel 自发现调用 |
 | **状态回调** | ingest/sync 完成后回调 Panel（`TMC_CALLBACK_URL`），再写远端 meta / knowledge |
 
@@ -115,3 +115,15 @@ KNOWLEDGE_CLICKHOUSE_PASSWORD=              # 仅从环境注入，不写入代�
 
 配置 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`（及可选 `LANGFUSE_BASE_URL`）即可上报 Wiki LLM 调用。  
 未配置时关闭 Trace，不影响业务。
+
+## 可选：Auto-Sync
+
+默认关闭。设置 `KNOWLEDGE_AUTO_SYNC_ENABLED=true` 后，Knowledge Service 会定时扫描 code-graph，以 FIFO 队列 + worker pool 自动拉取 git 更新并重建索引。
+
+```dotenv
+KNOWLEDGE_AUTO_SYNC_ENABLED=true
+KNOWLEDGE_AUTO_SYNC_SCAN_INTERVAL_MIN=10   # 扫描间隔（分钟），范围 1–60
+KNOWLEDGE_AUTO_SYNC_MAX_CONCURRENT=3       # 最大并发 sync worker 数，范围 1–20
+```
+
+启动后延迟 30 秒执行首次扫描；禁用期间调用 `POST /v3/auto-sync/trigger` 为空操作（返回 `triggered: false`）。

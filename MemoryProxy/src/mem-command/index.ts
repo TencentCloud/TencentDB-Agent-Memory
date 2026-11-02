@@ -4,10 +4,11 @@
  * 提供：
  *  - parseMemCommand()  — 检测是否为 mem: 命令
  *  - executeMemCommand() — 执行命令并返回结果
- *  - isMemCommandEnabled() — 检查配置开关
+ *
+ * 命令拦截**恒定启用**（无配置开关），命令白名单已废弃 —— 未知命令由
+ * executeMemCommand 内的 KNOWN_COMMANDS 兜底返回"未知命令"提示。
  */
 
-import type { MemCommandConfig } from "../types.js";
 import type { MemCommandContext, MemCommandResult } from "./types.js";
 import { parseMemCommand, parseCommandFromText, type ParsedMemCommand } from "./parser.js";
 import { buildMemResponse } from "./response-builder.js";
@@ -17,6 +18,8 @@ import { executeCreateSkill } from "./commands/create-skill.js";
 import { executeCreateTask } from "./commands/create-task.js";
 import { executeUpdateTask } from "./commands/update-task.js";
 import { executeSessionReset } from "./commands/session-reset.js";
+import { executeConfigLock } from "./commands/config-lock.js";
+import { executeConfigUnlock } from "./commands/config-unlock.js";
 
 export { parseMemCommand, parseCommandFromText, type ParsedMemCommand } from "./parser.js";
 export { buildMemResponse } from "./response-builder.js";
@@ -31,23 +34,14 @@ const KNOWN_COMMANDS = new Set([
   "create-task",
   "update-task",
   "session-reset",
+  // v3.3 user-session-default (TAPD 1070195170): 设置/清除用户级 Session 默认 (team, agent, task)
+  "config-lock",
+  "config-unlock",
   "help",
 ]);
 
 /**
- * 检查 memCommand 功能是否启用，且命令是否在白名单中。
- */
-export function isMemCommandAllowed(config: MemCommandConfig, command: string): boolean {
-  if (!config.enabled) return false;
-  // session-reset 豁免白名单(session 管理命令)
-  if (command === "session-reset") return true;
-  if (config.allowedCommands.length === 0) return true;
-  return config.allowedCommands.includes(command);
-}
-
-/**
  * 执行已解析的 mem: 命令。
- * 调用方已确认 isMemCommandAllowed 通过。
  */
 export async function executeMemCommand(
   cmd: ParsedMemCommand,
@@ -78,6 +72,10 @@ export async function executeMemCommand(
       return executeUpdateTask(ctx);
     case "session-reset":
       return executeSessionReset(ctx);
+    case "config-lock":
+      return executeConfigLock(ctx);
+    case "config-unlock":
+      return executeConfigUnlock(ctx);
     default: {
       const text = `❌ 未知命令：\`mem:${cmd.command}\``;
       return {

@@ -36,10 +36,18 @@ export function main(): void {
     );
   }
 
-  const shutdown = (): void => {
+  // API 调用审计初始化（建表 + schema 自愈 + 启动定时刷盘）。非阻塞，失败只 warn。
+  // 建完表后异步跑 user_id 回填，用 telemetry_meta 表版本号防重跑。
+  void (async () => {
+    await deps.apiCallTelemetry.initialize();
+    await deps.apiCallTelemetry.runBackfillIfNeeded(deps.userIdResolver);
+  })();
+
+  const shutdown = async (): Promise<void> => {
     deps.logger.info('panel shutting down');
+    await deps.apiCallTelemetry.shutdown();
     process.exit(0);
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
 }

@@ -38,7 +38,7 @@ function makeStore(version: number) {
   return {
     queryL1Records: vi.fn().mockResolvedValue([record(version)]),
     upsertL1: vi.fn().mockResolvedValue(true),
-    compareAndSwapL1: vi.fn(),
+    compareAndSwapL1: vi.fn().mockImplementation(async (_record, expected) => ({ status: "updated", version: expected + 1 })),
   };
 }
 
@@ -103,7 +103,7 @@ describe("POST /v3/atomic/update expected_version", () => {
 
   it("uses CAS for a fresh edit and returns the incremented version", async () => {
     const store = makeStore(3);
-    store.compareAndSwapL1.mockResolvedValue({ status: "updated" });
+    store.compareAndSwapL1.mockResolvedValue({ status: "updated", version: 4 });
 
     const response = await dispatch({ ...requestBody, expected_version: 3 }, store);
 
@@ -124,8 +124,8 @@ describe("POST /v3/atomic/update expected_version", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.version).toBe("v8");
-    expect(store.upsertL1).toHaveBeenCalledTimes(1);
-    expect(store.compareAndSwapL1).not.toHaveBeenCalled();
+    expect(store.upsertL1).not.toHaveBeenCalled();
+    expect(store.compareAndSwapL1).toHaveBeenCalledTimes(1);
   });
 
   it("rejects a version whose increment would exceed the safe-integer range", async () => {
@@ -172,4 +172,75 @@ describe("POST /v3/atomic/update expected_version", () => {
     expect(response.body.message).toBe("ATOMIC_UPDATE_FAILED");
     expect(store.upsertL1).not.toHaveBeenCalled();
   });
+  it("rebases legacy writes only on explicit advancing conflicts and audits the committed version", async () => {
+    const store = { ...makeStore(2), appendAudit: vi.fn() };
+    store.compareAndSwapL1
+      .mockResolvedValueOnce({ status: "conflict", currentVersion: 4 })
+      .mockResolvedValueOnce({ status: "updated", version: 5 });
+    const response = await dispatch(requestBody, store);
+    expect(response.status).toBe(200);
+    expect(response.body.data.version).toBe("v5");
+    expect(store.appendAudit).toHaveBeenCalledWith(expect.objectContaining({ version: 5 }));
+    expect(store.compareAndSwapL1.mock.calls.map((call) => call[1])).toEqual([2, 4]);
+    expect(store.upsertL1).not.toHaveBeenCalled();
+  });
+
+  it("bounds legacy retries under continued contention", async () => {
+    const store = makeStore(2);
+    store.compareAndSwapL1.mockImplementation(async (_record, expected) => ({
+      status: "conflict", currentVersion: expected + 1,
+    }));
+    const response = await dispatch(requestBody, store);
+    expect(response.status).toBe(503);
+    expect(response.body.message).toBe("ATOMIC_UPDATE_CONTENTION");
+    expect(store.compareAndSwapL1).toHaveBeenCalledTimes(8);
+    expect(store.upsertL1).not.toHaveBeenCalled();
+  });
+
+  it.each([2, 1])("does not retry a non-advancing conflict (%s), including an isolation mismatch", async (currentVersion) => {
+    const store = makeStore(2);
+    store.compareAndSwapL1.mockResolvedValue({ status: "conflict", currentVersion });
+    expect((await dispatch(requestBody, store)).status).toBe(503);
+    expect(store.compareAndSwapL1).toHaveBeenCalledTimes(1);
+    expect(store.upsertL1).not.toHaveBeenCalled();
+  });
+
+  it("does not retry an ambiguous legacy write failure or append a success audit", async () => {
+    const store = { ...makeStore(2), appendAudit: vi.fn() };
+    store.compareAndSwapL1.mockResolvedValue({ status: "failed" });
+    expect((await dispatch(requestBody, store)).status).toBe(500);
+    expect(store.compareAndSwapL1).toHaveBeenCalledTimes(1);
+    expect(store.upsertL1).not.toHaveBeenCalled();
+    expect(store.appendAudit).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect a record deleted during a legacy update", async () => {
+    const store = makeStore(2);
+    store.compareAndSwapL1.mockResolvedValue({ status: "not_found" });
+    expect((await dispatch(requestBody, store)).status).toBe(404);
+    expect(store.compareAndSwapL1).toHaveBeenCalledTimes(1);
+    expect(store.upsertL1).not.toHaveBeenCalled();
+  });
+
+  it.each([Number.MAX_SAFE_INTEGER, NaN, -1, 1.5])("rejects unsafe stored legacy version %s", async (version) => {
+    const store = makeStore(version);
+    expect((await dispatch(requestBody, store)).status).toBe(500);
+    expect(store.compareAndSwapL1).not.toHaveBeenCalled();
+    expect(store.upsertL1).not.toHaveBeenCalled();
+  });
+
+  it("stops if a conflict reports an exhausted version", async () => {
+    const store = makeStore(2);
+    store.compareAndSwapL1.mockResolvedValue({ status: "conflict", currentVersion: Number.MAX_SAFE_INTEGER });
+    expect((await dispatch(requestBody, store)).status).toBe(500);
+    expect(store.compareAndSwapL1).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves unguarded compatibility for stores that cannot perform CAS at all", async () => {
+    const store = makeStore(7);
+    (store as { compareAndSwapL1?: unknown }).compareAndSwapL1 = undefined;
+    expect((await dispatch(requestBody, store)).body.data.version).toBe("v8");
+    expect(store.upsertL1).toHaveBeenCalledTimes(1);
+  });
+
 });

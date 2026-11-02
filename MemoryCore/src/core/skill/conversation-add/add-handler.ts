@@ -71,6 +71,13 @@ export interface AddConversationInput {
   task_id?: string;
   messages: CompressibleMessage[];
   /**
+   * 抽取模式;仅当上游 handler 收到 body.strict_mode:true 时传 'strict'。
+   * 归档段透传给 SkillTriggerService.archive({mode}) → SkillTaskEntry.mode
+   * → Worker → SkillExtractor.extract({mode:'strict'}) → 使用 STRICT prompt。
+   * 缺省不传即走 default (SKILL_REVIEW_PROMPT v2 宽松), 老 client 完全兼容。
+   */
+  mode?: 'strict';
+  /**
    * 上游 HTTP handler 的 req_id，用于 obsLogger 分段事件关联链路。
    * 缺省则事件字段少一个 req_id，业务逻辑不受影响。
    */
@@ -226,6 +233,10 @@ export class SkillConversationAddHandler {
         session: sess,
         bufferAtTrigger: { messages: combinedMessages as Array<Record<string, unknown>> },
         taskRefId: input.task_id,
+        // strict_mode 透传:input.mode 仅在上游 handler 收到 body.strict_mode:true 时有值,
+        // 走 trigger → SkillTaskEntry.mode → Worker → SkillExtractor STRICT prompt。
+        // 缺省不传即走 default,老 client 一字节不变。
+        ...(input.mode ? { mode: input.mode } : {}),
         // 透传 req_id 给 trigger 内部分段事件（write_archive / mutex_* / enqueue_agent）
         perfRequestId: input.perfRequestId,
       });

@@ -60,6 +60,23 @@ export function resolveMaxBodyBytes(): number {
   return n;
 }
 
+export const DEFAULT_SESSION_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Resolve the request body limit for the `/v3/session/add` route.
+ *
+ * Source: `MEMORY_SESSION_MAX_BODY_BYTES` (positive integer). Falls back to
+ * {@link DEFAULT_SESSION_MAX_BODY_BYTES} (32 MiB) if unset, non-numeric, or
+ * non-positive. Other routes keep {@link resolveMaxBodyBytes}.
+ */
+export function resolveSessionMaxBodyBytes(): number {
+  const raw = ENV.MEMORY_SESSION_MAX_BODY_BYTES;
+  if (!raw) return DEFAULT_SESSION_MAX_BODY_BYTES;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_SESSION_MAX_BODY_BYTES;
+  return n;
+}
+
 /** Connection details for the per-instance vector store. */
 export interface VdbEnvConfig {
   url: string;
@@ -75,6 +92,33 @@ export function readVdbEnvConfig(): VdbEnvConfig {
     user: ENV.VDB_USER ?? "root",
     apiKey: ENV.VDB_API_KEY ?? "",
     database: ENV.VDB_DATABASE ?? "default",
+  };
+}
+
+/** Connection details for the per-instance MongoDB store (phase-1 backend). */
+export interface MongoEnvConfig {
+  endpoint: string;
+  user: string;
+  password: string;
+  database: string;
+}
+
+/**
+ * Read `MONGODB_*` environment variables into a structured config object.
+ *
+ * Mirrors {@link readVdbEnvConfig} but with an independent namespace so the two
+ * data-plane backends never share variables:
+ *   MONGODB_ENDPOINT   — connection string (e.g. mongodb://host:27017/?directConnection=true)
+ *   MONGODB_USER       — username (empty when the connection string carries auth)
+ *   MONGODB_PASSWORD   — password (empty when the connection string carries auth)
+ *   MONGODB_DATABASE   — per-instance database name (delivered verbatim, not derived)
+ */
+export function readMongoEnvConfig(): MongoEnvConfig {
+  return {
+    endpoint: ENV.MONGODB_ENDPOINT ?? "",
+    user: ENV.MONGODB_USER ?? "",
+    password: ENV.MONGODB_PASSWORD ?? "",
+    database: ENV.MONGODB_DATABASE ?? "",
   };
 }
 
@@ -103,7 +147,7 @@ export function readCosEnvConfig(): CosEnvConfig | null {
 }
 
 /**
- * Config consumed by the `tdai_read_cos` tool. Unlike {@link CosEnvConfig}
+ * Config consumed by the `tdai_read_file` tool. Unlike {@link CosEnvConfig}
  * (which is for the storage-backend hot path and is loaded from the same
  * env vars used by the gateway), this variant supports a layered lookup:
  * environment variables override the values read from `cos.env`, which

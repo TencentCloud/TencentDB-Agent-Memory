@@ -151,6 +151,44 @@
   font-weight: 500;
 }
 
+._tdai-login-field-label {
+  margin: 18px 0 6px;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+._tdai-login-pending-title {
+  margin: 20px 0 10px;
+  color: #172033;
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+}
+
+._tdai-login-pending ._tdai-login-submit.tea-btn {
+  width: 100%;
+}
+
+/*
+ * 登录方式互跳链接（user_key 页 → iOA，iOA 确认页 → user_key）。
+ *
+ * 用链接而非整宽按钮：它是"换一种方式"的旁路入口，不能和主操作
+ * （登录 / 确认创建）抢视觉权重，否则又变回一个隐性的方式选择页。
+ */
+._tdai-login-switch {
+  margin-top: 16px;
+  text-align: center;
+}
+
+._tdai-login-switch ._tdai-login-switch-link.tea-btn {
+  height: auto;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
 ._tdai-login-footer {
   margin: 20px 0 0;
   font-size: 12px;
@@ -225,4 +263,26 @@
 .dark ._tdai-login-hint,
 .dark ._tdai-login-footer {
   color: #64748b;
+}
+
+._tdai-login-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+._tdai-login-switch-label {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+._tdai-login-copy {
+  margin-top: 8px;
+  width: 100%;
+}
+
+._tdai-login-warn {
+  color: #d54941;
 }

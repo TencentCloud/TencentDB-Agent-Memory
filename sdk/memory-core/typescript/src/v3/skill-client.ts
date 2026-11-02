@@ -229,12 +229,11 @@ export class SkillClient {
     return this.http.post(`${V3}/patch`, body);
   }
 
-  /** `POST /v3/skill/delete` — soft-archive; does not bump version. */
+  /** `POST /v3/skill/delete` — physically remove all versions. */
   delete(params: SkillDeleteRequest): Promise<SkillDeleteData> {
     const body = stripUndefined({
       ...this.ids(params),
       skill_id: params.skill_id,
-      expected_version: params.expected_version,
     });
     return this.http.post(`${V3}/delete`, body);
   }
@@ -384,6 +383,9 @@ export class SkillClient {
       messages: params.messages,
       reason: params.reason,
       options: params.options,
+      // Optional strict-mode flag for cold-start / bulk-import (asset-import).
+      // Omit or false → server keeps default broad-capture v2 prompt (backward compat).
+      strict_mode: params.strict_mode,
     });
     validateRequiredStrings(body, ["user_id", "team_id", "agent_id"], "extract");
     validateMessages(params.messages, "extract");
@@ -414,6 +416,9 @@ export class SkillClient {
       agent_id: params.agent_id,
       task_id: params.task_id,
       messages: params.messages,
+      // Optional strict-mode flag for cold-start / bulk-import (asset-import).
+      // Omit or false → server keeps default broad-capture v2 prompt (backward compat).
+      strict_mode: params.strict_mode,
     });
     validateRequiredStrings(body, ["session_id", "user_id", "team_id", "agent_id"], "conversationAdd");
     validateMessages(params.messages, "conversationAdd");

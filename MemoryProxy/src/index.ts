@@ -24,9 +24,11 @@ import {
   isRequestPrepareEnabledByDefault,
   shutdownRequestPrepare,
 } from "./request-prepare-adapter.js";
+import { DynamicConfigRuntime } from "./config-runtime.js";
 import { initLogger, shutdownLogger, log } from "./report/log.js";
 import { initClickHouse, shutdownClickHouse } from "./clickhouse.js";
 import { initLangfuse, shutdownLangfuse } from "./langfuse.js";
+import { initTraceArchive, shutdownTraceArchive } from "./trace-archive.js";
 import { initAuth } from "./auth.js";
 import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
@@ -49,6 +51,12 @@ setExtensionDebug(config.log.level === "debug");
 
 // ── Initialize ClickHouse writer ─────────────────────────────────────────────
 initClickHouse(config.clickhouse);
+
+// ── Initialize local JSONL trace archive (disabled by default) ───────────────
+{
+  const projectRoot = new URL("../", import.meta.url).pathname;
+  initTraceArchive(projectRoot, config.traceArchive);
+}
 
 // ── Initialize Langfuse tracing (official SDK) ───────────────────────────────
 initLangfuse(config).catch((err: unknown) => {
@@ -104,7 +112,13 @@ if (isRequestPrepareActive(config)) {
   });
 }
 
-const app = createApp(config);
+const configRuntime = new DynamicConfigRuntime({
+  overrides,
+  initial: config,
+});
+configRuntime.start();
+
+const app = createApp(configRuntime.getSnapshot, () => configRuntime.getInfo());
 
 log.info("server.starting", {
   host: config.server.host,
@@ -128,6 +142,7 @@ log.info("server.starting", {
   systemUsers: config.systemUsers.length > 0
     ? config.systemUsers.map((u) => u.name || "unnamed").join(",")
     : "disabled",
+  traceArchive: config.traceArchive.enabled ? config.traceArchive.dir : "disabled",
 });
 
 serve(
@@ -153,6 +168,7 @@ serve(
 // k8s 默认 terminationGracePeriodSeconds=30s，10s 留出充足余量。
 async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   log.info("server.shutdown", { signal });
+  configRuntime.stop();
   const pending = pendingWriteCount();
   if (pending > 0) {
     log.info("server.shutdown.flush_l0", { pending });
@@ -162,6 +178,7 @@ async function gracefulShutdown(signal: "SIGTERM" | "SIGINT"): Promise<void> {
   await shutdownGuard();
   await shutdownPrivateControlPlane();
   await shutdownRequestPrepare();
+  await shutdownTraceArchive();
   await shutdownLangfuse();
   await shutdownClickHouse();
   await shutdownLogger();

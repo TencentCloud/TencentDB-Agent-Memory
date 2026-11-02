@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MemoryRecord } from "../record/l1-writer.js";
-import { VectorStore } from "./sqlite.js";
+import { VectorStore } from "./sqlite/memory-store.js";
 
 const opened: VectorStore[] = [];
 const dirs: string[] = [];
@@ -51,11 +51,11 @@ describe("VectorStore.compareAndSwapL1", () => {
     expect(await store.upsertL1(makeRecord(), undefined)).toBe(true);
 
     const first = await store.compareAndSwapL1(
-      makeRecord({ content: "first edit", version: 3 }),
+      makeRecord({ content: "first edit", version: 999 }),
       2,
       undefined,
     );
-    expect(first).toEqual({ status: "updated" });
+    expect(first).toEqual({ status: "updated", version: 3 });
 
     const stale = await store.compareAndSwapL1(
       makeRecord({ content: "stale edit", version: 3 }),
@@ -74,4 +74,17 @@ describe("VectorStore.compareAndSwapL1", () => {
     const result = await store.compareAndSwapL1(makeRecord({ id: "missing" }), 2, undefined);
     expect(result).toEqual({ status: "not_found" });
   });
+  it("retains isolation predicates and does not modify another owner's record", async () => {
+    const store = makeStore();
+    store.upsertL1(makeRecord(), undefined);
+    expect(store.compareAndSwapL1(makeRecord({ teamId: "other-team" }), 2, undefined))
+      .toEqual({ status: "conflict", currentVersion: 2 });
+    expect((await store.queryL1Records({ recordIds: ["memory-1"] }))[0].content).toBe("original");
+  });
+
+  it.each([Number.MAX_SAFE_INTEGER, -1, NaN, 1.5])("rejects unsafe internal expected version %s", (version) => {
+    const store = makeStore();
+    expect(store.compareAndSwapL1(makeRecord(), version, undefined)).toEqual({ status: "failed" });
+  });
+
 });

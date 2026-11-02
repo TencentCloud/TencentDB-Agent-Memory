@@ -212,13 +212,15 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       //   - 解绑操作：允许（清理脏 binding 的入口）
       // 若用 filter=true 会直接把已私密条目从 items 里剔除 → 使用者永远无法
       // 知晓/清理这些残留绑定；filter=false + 前端标记是"感知 + 可清理"的更好体验。
-      // 分页注意：list-with-detail 默认 limit=20（DEFAULT_PAGINATION），排序
-      // priority DESC, created_at DESC。当 agent 绑定资产较多（skill/wiki/code_graph/
-      // chat_memory 混排）时，priority 较低的 chat_memory 绑定会被排到 20 名之外而
-      // 被整页截断 → 固定资产记忆 tab 丢失记忆块。这里做翻页聚合（对齐
-      // MetadataClient.getAgentFixedAssets 的 FA_PAGE_SIZE 循环模式），把该 agent 的
-      // 全部固定资产绑定拉回来再过滤，避免"拍上限"导致 skill 一多仍会丢。
-      // list-with-detail 返回的 items（AgentAssetView）不带 owner_user_id
+      //
+      // 类型过滤下推：core `agent-fixed-asset/list-with-detail` 支持
+      // `asset_types` 参数（v3-meta-schemas.ts:fixedAssetListWithDetailSchema），
+      // 在 SQL 层按类型过滤 —— 无关类型（skill / wiki / code_graph）不会占分页额度。
+      // 之前"拉全量再内存 filter(asset_type==='chat_memory')"的写法，在 skill 特别
+      // 多的 agent（如实际线上 519 skill + 1 chat_memory 场景）上，chat_memory
+      // 绑定按 priority DESC/created_at DESC 排在第 520 位，会被 500 硬上限翻页
+      // 窗口截断，前端拿到空数组、"固定资产记忆"tab 完全空白（case: zcchizhang）。
+      // 现在直接让内核只返 chat_memory 那 1 条，分页/硬上限都无需再考虑。
       interface FixedAssetDetailRaw {
         asset_id: string;
         asset_type: string;
@@ -227,46 +229,29 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         visibility: string;
         created_at: string;
       }
-      const FA_PAGE_SIZE = 100;
-      const FA_PAGE_HARD_LIMIT = 500;
-      const fixedAssets: FixedAssetDetailRaw[] = [];
-      let offset = 0;
-      while (true) {
-        const listEnv = await deps.metaKernel.invoke(
-          "agent-fixed-asset/list-with-detail",
-          {
-            agent_id: agentId,
-            apply_visibility_filter: false,
-            touch_usage: false,
-            limit: FA_PAGE_SIZE,
-            offset,
-          },
-          ctx,
-        );
-        if (listEnv.code !== 0) return respondEnvelope(c, listEnv);
-        const data =
-          listEnv.data as ListEnvelopeData<FixedAssetDetailRaw> | null;
-        const page = Array.isArray(data?.items) ? data.items : [];
-        fixedAssets.push(...page);
-        const total =
-          typeof data?.total === "number" ? data.total : fixedAssets.length;
-        offset += FA_PAGE_SIZE;
-        if (
-          fixedAssets.length >= total ||
-          page.length === 0 ||
-          offset >= FA_PAGE_HARD_LIMIT
-        )
-          break;
-      }
+      let listError: MetaEnvelope<unknown> | null = null;
+      const fixedAssets = await fetchAllMetaListItems<FixedAssetDetailRaw>(
+        deps,
+        ctx,
+        "agent-fixed-asset/list-with-detail",
+        {
+          agent_id: agentId,
+          apply_visibility_filter: false,
+          touch_usage: false,
+          asset_types: ["chat_memory"],
+        },
+        (env) => {
+          listError = env;
+        },
+      );
+      if (listError) return respondEnvelope(c, listError);
 
-      const items = fixedAssets
-        .filter((it) => it.asset_type === "chat_memory")
-        .filter(
-          (it) =>
-            it.status !== "archived" &&
-            it.status !== "deprecated" &&
-            it.status !== "failed",
-        );
+      const items = fixedAssets.filter(
+        (it) =>
+          it.status !== "archived" &&
+          it.status !== "deprecated" &&
+          it.status !== "failed",
+      );
 
       // 拿真实 owner_user_id 和 updated_at（list-with-detail 不返这两个字段）
       const out: MemoryBlockOut[] = await Promise.all(
@@ -535,6 +520,10 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
     // 权限：agent.owner = me
     const meUserId = await resolveCallerUserId(deps, ctx);
     if (!meUserId) return respondControlError(c, 401, "INVALID_USER_KEY");
+    c.set('resolvedUserId', meUserId);
+    // 顺手把 user_key → user_id 塞进 resolver，让同 user_key 的后续
+    // skill/create、skill/conversation/add 等埋点也能立刻命中（asset-import 冷启动场景）。
+    if (ctx.userKey) deps.userIdResolver.warm(ctx.userKey, meUserId, ctx.instanceId);
     const agentEnv = await deps.metaKernel.invoke(
       "agent/get",
       { agent_id: agentId },

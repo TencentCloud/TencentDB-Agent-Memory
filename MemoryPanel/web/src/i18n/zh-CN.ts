@@ -25,13 +25,15 @@ export const zhCN = {
   'menu.desc.team_agents': 'Agent / 可配置范围 / 固定资产',
   'menu.desc.api_keys': '管理你的 API Key，用于外部客户端接入',
 
+  // ===== TabBar =====
+  'tabbar.close': '关闭{{name}}',
+
   // ===== GlobalHeader =====
   'header.guide': '使用说明',
   'header.sync': '实时同步',
   'header.sync.title': '实时同步已连接',
   'header.settings': '设置',
   'header.profile': '我的资料',
-  'header.replayGuide': '回顾引导',
   'header.logout': '退出登录',
   'header.profile.caption': '我的资料',
   'header.profile.username': '用户名',
@@ -77,6 +79,36 @@ export const zhCN = {
   'login.placeholder.userKey': 'user_key，如 sk-mem-xxxxxxxxxxxxxxxx',
   'login.hint.userKey': '请使用管理员为你分配的 user_key；若还没有，请联系团队管理员开号。',
   'login.submit': '登录',
+  // 无独立的"登录方式选择页"：user_key 登录页与 iOA 流程各自内嵌一个跳转链接，
+  // 用户点一下直达另一种方式，不经过中间选择页。
+  // 站在 user_key 页 → 去 iOA 是"使用另一种方式"，用"使用 X 登录"。
+  // 处在 iOA 流程里 → 去 user_key 是"离开当前流程"，用"切换到 X 登录"。
+  'login.useWoa': '使用 iOA 登录',
+  'login.switchUserKey': '切换到 user_key 登录',
+  'login.woa.pendingTitle': '创建登录账号',
+  'login.woa.pendingIdentity': '已通过 WOA 认证：{{name}}。首次登录将为你创建 Memory 账号。',
+  'login.woa.usernameLabel': '用户名',
+  'login.woa.usernamePlaceholder': '仅支持字母、数字、下划线、连字符',
+  'login.woa.usernameHint': '将作为你在 Memory 中的账号名，默认取自 WOA 登录名。',
+  'login.woa.invalidUsername': '用户名仅支持字母、数字、下划线、连字符，不能包含其他符号或空格。',
+  'login.woa.createAccount': '创建账号并登录',
+  'login.woa.userKeyLabel': 'user_key',
+  'login.woa.userKeyPlaceholder': '输入你的 user_key',
+  'login.woa.userKeyHint': '若该 key 在系统内已存在，将绑定到那个已有账号（原有记忆与团队数据完整保留）；不存在则用此 key 新建账号。',
+  'login.woa.userKeyRequired': '请输入 user_key。',
+  'login.woa.previewNext': '下一步',
+  // 预览到 key 已属于某账号：明确告知用户将绑定到它（而非新建），避免误绑。
+  'login.woa.keyExistsHint': '该 user_key 已属于账号「{{name}}」，确认后将绑定此账号，原有数据完整保留。',
+  'login.woa.keyMissingHint': '该 user_key 在系统内不存在，确认后将用它创建新账号。',
+  'login.woa.confirmBind': '确认绑定此账号',
+  'login.woa.confirmCreate': '确认创建账号',
+  'login.woa.keyReadyTitle': '账号已创建',
+  'login.woa.keyReadyHint': '下面是你的 user_key，用于在 CodeBuddy / ClaudeCode 等客户端连接 proxy。',
+  'login.woa.yourUserKey': '你的 user_key',
+  'login.woa.copyKey': '复制',
+  'login.woa.copied': '已复制',
+  'login.woa.keyReadyWarn': '请立即妥善保存：自动生成的 key 仅此一次完整展示，离开后无法再次查看。',
+  'login.woa.savedEnter': '我已保存，进入',
   'login.submitting': '登录中…',
   'login.error.loadInstances': '加载记忆实例列表失败，请刷新页面重试{{detail}}',
   'login.error.selectInstance': '请选择记忆实例。',
@@ -108,6 +140,8 @@ export const zhCN = {
   // ===== Common =====
   'common.cancel': '取消',
   'common.confirm': '确认',
+  'common.selectAll': '全选',
+  'common.deselectAll': '取消全选',
   'common.delete': '删除',
   'common.create': '创建',
   'common.save': '保存',
@@ -167,6 +201,52 @@ export const zhCN = {
   'task.sessionAgents': '实际参与 Agent',
   'task.sessionAgents.tooltip': 'proxy 侧观测到起过 session 的 agent · agent_id={{id}}',
   'task.description': '任务描述',
+  'task.sourceLink': '在 {{source}} 中查看',
+
+
+  // ===== Task 外部来源（导入 Task）=====
+  'task.import': '导入 Task',
+  'task.importFrom': '从 {{source}} 导入',
+  'task.source': '来源',
+  'task.source.tapd': 'TAPD',
+  'taskImport.caption': '导入 Task',
+  'taskImport.captionFrom': '从 {{source}} 导入 Task',
+  'taskImport.authHint': '需要授权以访问 {{provider}}。点击下方按钮完成授权，令牌不会保存在浏览器。',
+  'taskImport.connect': '连接',
+  'taskImport.refresh': '刷新状态',
+  'taskImport.workspace': '项目：',
+  'taskImport.selectWorkspace': '请选择项目',
+  'taskImport.next': '下一步',
+  'taskImport.searchPlaceholder': '按标题搜索',
+  'taskImport.search': '搜索',
+  'taskImport.filter': '过滤',
+  'taskImport.total': '共 {{count}} 条',
+  'taskImport.type': '类型：',
+  'taskImport.title': '标题：',
+  'taskImport.status': '状态',
+  'taskImport.updated': '更新时间',
+  'taskImport.import': '导入 {{count}} 项',
+  'taskImport.overLimit': '单次最多导入 {{max}} 项，请取消部分勾选。',
+  'taskImport.result': '成功导入 {{created}} 项，失败 {{failed}} 项。',
+  'taskImport.notConnected': '尚未连接来源系统，请先完成授权。',
+  'taskImport.tokenPlaceholder': '请输入令牌',
+  // 与 iWiki / 工蜂来源注册弹窗的「如何获取令牌？」保持同一文案与行为：
+  // 链接地址由部署配置下发，未配置则整条不显示。
+  'taskImport.tokenDoc': '如何获取令牌？',
+  'taskImport.allWorkspaces': '所有项目',
+  'taskImport.needWorkspace': '请先选择项目（TAPD 接口要求必须指定项目）',
+  'taskImport.tokenInvalid.empty': '请输入令牌',
+  'taskImport.tokenInvalid.placeholder': '检测到占位符文本，请填写完整令牌（不要复制示例中的省略号）',
+  'taskImport.tokenInvalid.tooShort': '令牌长度不足，请检查是否复制完整',
+  'taskImport.noWorkspaces': '令牌已通过校验，但该账号下没有可访问的项目。请确认令牌所属账号有 TAPD 项目权限。',
+  'taskImport.allTypes': '全部类型',
+  'taskImport.titlePlaceholder': '按标题关键字',
+  'taskImport.ownerPlaceholder': '输入处理人账号',
+  'taskImport.owner': '处理人：',
+  'taskImport.onlyTodo': '待办',
+  'taskImport.onlyTodoHint': '待办接口不支持标题与处理人筛选',
+  'taskImport.submit': '提交',
+  'taskImport.selected': '已选 {{count}} 项',
   'task.descriptionPlaceholder': '包含背景、目标、验收标准…',
   'task.footer': '创建：{{created}} · 更新：{{updated}}',
   'task.noPermissionEdit': '你不是该 team 的成员，无权修改此 task。',
@@ -177,6 +257,11 @@ export const zhCN = {
   'task.agents.tooltip': '实际参与 Agent：\n{{agents}}',
   'task.peopleCount': '{{count}} 人',
   'task.agentCount': '{{count}} 个 Agent',
+  // ===== 任务卡片 =====
+  'task.noDesc': '暂无描述',
+  'task.createdAt': '创建于 {{time}}',
+  'task.source.manual': '手动创建',
+  'task.source.other': '其他',
 
   // ===== TaskCreateDialog =====
   'taskCreate.caption': '新建 Task',
@@ -197,6 +282,18 @@ export const zhCN = {
     'Admin 账号当前仅用于组织管理（新建 Team、新增成员）。资源管理请使用普通成员账号操作。',
 
   // ===== Wiki =====
+  // 设计 2026-09-21：合并后的单一导入入口（替代原「添加」+「Ingest」）
+  'wiki.detail.import': '导入文档',
+  'wiki.import.caption': '导入文档',
+  'wiki.import.uploadAndIngest': '上传并抽取',
+  'wiki.import.importAndIngest': '导入并抽取',
+  'wiki.import.reingest': '重新抽取',
+  'wiki.import.selectedPages': '已选 {{count}} 个页面',
+  'wiki.detail.mdName': '文件名（如 note.md）',
+  'wiki.detail.mdContent': 'Markdown 内容',
+  'wiki.detail.mdNameRequired': '请填写文件名（如 note.md）',
+  'wiki.detail.mdContentRequired': '请填写 Markdown 内容',
+  'common.remove': '移除',
   'wiki.title': 'Wiki 知识库',
   'wiki.breadcrumb': 'Wiki 知识库',
   'wiki.scope.all': '全部',
@@ -259,13 +356,15 @@ export const zhCN = {
   'wiki.detail.addDoc.hint': '选择方式导入文档',
   'wiki.detail.addDoc.file': '上传文件',
   'wiki.detail.addDoc.markdown': 'Markdown',
-  'wiki.detail.dropzone': '拖拽或点击选择 Markdown 文件（可多选）',
+  'wiki.detail.addDoc.external': '外部来源（iWiki 等）',
+  'wiki.detail.dropzone': '拖拽或点击选择文件（可多选，支持 .md/.txt/.docx/.xlsx/.pptx/.pdf 等）',
   'wiki.detail.upload.footer': '{{count}} 个文件待上传',
+  'wiki.detail.upload.fileTooLarge': '{{filename}} 超过大小上限（{{maxMB}} MB），已取消上传。',
   'wiki.detail.upload.submitting': '上传中…',
   'wiki.detail.upload.confirm': '确认上传',
   'wiki.detail.md.add': '+ 添加一条',
   'wiki.detail.md.pending': '{{count}} 个待上传',
-  'wiki.detail.ignored': '已忽略 {{count}} 个非 Markdown 文件（仅支持 .md/.txt/.markdown）',
+  'wiki.detail.ignored': '已忽略 {{count}} 个不支持的文件（支持 .md/.markdown/.txt/.html/.htm/.csv/.docx/.xlsx/.pptx/.pdf/.odt/.ods/.odp/.odg/.rtf/.epub）',
   'wiki.detail.overwrite.title': '检测到 {{count}} 个同名文件',
   'wiki.detail.overwrite.desc': '继续上传将覆盖原有内容：{{files}}',
   'wiki.detail.overwrite.ok': '覆盖并上传',
@@ -398,16 +497,68 @@ export const zhCN = {
   'code.register.caption': '注册代码仓库',
   'code.register.gitUrl': 'Git URL',
   'code.register.gitUrlExtra': '注册后将自动 clone 并建立代码索引。',
+  // Git URL 输入框示例：按「来源」切换（SSH 来源显示 git@，其余保持 https://）。
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
+  'code.register.gitUrlPlaceholderSsh': 'git@github.com:namespace/repo.git 或 ssh://git@host:2222/namespace/repo.git',
   'code.register.branch': '分支',
-  'code.register.sshWarning':
-    '当前版本不支持 SSH 格式的仓库地址，请改用 HTTPS 格式（如 https://gitlab.example.com/namespace/repo.git）。',
+  'code.register.sshHint':
+    '已识别为 SSH 仓库。点击「注册」后会先为你生成 SSH 公钥，请把公钥添加到代码平台后再继续。',
   'code.register.urlError':
-    '请输入合法的 HTTP(S) Git 仓库地址，且必须以 .git 结尾（如 https://gitlab.example.com/namespace/repo.git），不能含空格。',
+    '请输入合法的 Git 仓库地址（HTTPS 或 SSH），且必须以 .git 结尾，不能含空格。',
   'code.register.invalidUrl':
-    '请输入合法的 HTTPS Git 仓库地址，且必须以 .git 结尾（如 https://gitlab.example.com/namespace/repo.git），不能含空格。',
+    '请输入合法的 Git 仓库地址：HTTPS 形如 https://gitlab.example.com/namespace/repo.git，SSH 形如 git@github.com:namespace/repo.git 或 ssh://git@host:2222/namespace/repo.git。',
   'code.register.submitting': '注册中…',
   'code.register.submit': '注册',
+  'code.register.source': '来源',
+  'code.register.sourceExtra': '私有仓库请选择来源并填写访问令牌；公开仓库保持「公开」即可。',
+  'code.register.sourceSshExtra': 'SSH 仓库无需令牌，使用你账号下的 SSH 密钥拉取。',
+  'code.register.sourcePublic': '公开（无需令牌）',
+  // 来源展示名按来源 id 本地化；后端若下发 display_name 则以其为准（见 CodeSourcesPanel）。
+  'code.source.gongfeng': '腾讯工蜂',
+  'code.source.ssh': 'SSH',
+  // SSH 公钥（两段式注册第 1 段）
+  'code.sshKey.caption': '配置 SSH 公钥',
+  'code.sshKey.publicKey': 'SSH 公钥',
+  'code.sshKey.copy': '复制',
+  'code.sshKey.guideTitle': '请按以下步骤完成配置：',
+  'code.sshKey.guideStep1': '复制上方公钥；',
+  'code.sshKey.guideStep2': '到代码平台的 SSH Keys 设置页添加该公钥；',
+  'code.sshKey.guideStep3': '确认添加完成后，点击右下角「已配置，继续注册」。',
+  'code.sshKey.guideNote': '同一账号只会生成一次密钥，之后注册其它 SSH 仓库可直接复用，无需重复配置。',
+  'code.sshKey.continue': '已配置，继续注册',
+  'code.register.token': '访问令牌',
+  // 凭据字段 i18n：按 form_field.name 组织，支持不同认证方式的动态渲染
+  'code.credField.secret.label': '访问令牌',
+  'code.credField.secret.placeholder': '粘贴你的 Personal Access Token',
+  'code.credField.username.label': '用户名',
+  'code.credField.username.placeholder': '仓库账户名',
+  // wiki 外部来源（iWiki 等）
+  'wiki.source.iwiki': 'iWiki',
+  'wiki.register.source': '来源',
+  'wiki.register.sourcePublic': '本地上传',
+  'wiki.register.sourceUrl': '来源地址',
+  'wiki.register.sourceUrlPlaceholder': '粘贴空间或文档链接（…/spaces/xxx 或 …/p/xxx）',
+  'wiki.register.sourceUrlExtra': 'iWiki 空间地址导入整库，单文档地址只导入该页。',
+  'wiki.register.fetch': '获取文档列表',
+  'wiki.register.fetching': '正在获取…',
+  'wiki.register.saveAndFetch': '保存令牌并获取',
+  'wiki.register.credHint': '令牌按 wiki 保存，同一 wiki 只需填写一次；保存后才可拉取文档。',
+  'wiki.register.crawlMode': '遍历方式',
+  'wiki.register.crawlMode.tree': '遍历子文档',
+  'wiki.register.crawlMode.links': '遍历文本超链接',
+  'wiki.register.crawlHint.tree': '按目录结构逐层展开，覆盖完整；空间较大时耗时较长。',
+  'wiki.register.crawlHint.links': '从页面正文里的超链接发现文档，固定 1 层（只取入口页直接链接到的页面）。',
+  'wiki.register.selectPages': '选择要导入的文档',
+  'wiki.register.selectedCount': '已选 {{count}} / {{total}} 篇',
+  'wiki.register.dirCount': '{{count}} 篇',
+  'wiki.register.emptyTree': '该地址下没有可导入的文档',
+  'wiki.register.import': '确认导入',
+  'wiki.register.importing': '正在导入…',
+  'wiki.register.imported': '已导入 {{n}} 篇文档',
+  'wiki.register.dirHint': '目录（不可单独导入）',
+  'code.register.tokenPlaceholder': '粘贴你的 Personal Access Token',
+  'code.register.tokenDoc': '如何获取令牌？',
+  'code.register.tokenRequired': '选择了外部来源，请填写访问令牌',
   'code.confirm.delete': '确定要删除仓库「{{name}} ({{branch}})」吗？',
   'code.confirm.unbind': '确认解绑该代码图谱？',
   'code.confirm.unbind.desc': '将从当前 agent 移除该代码图谱绑定。',
@@ -447,7 +598,7 @@ export const zhCN = {
   'skills.import.tooltip.noAgent': '当前 team 暂无 agent，请先创建 agent',
   'skills.export': '导出 Skill',
   'skills.export.tooltip.empty': '请先选择一个 Skill',
-  'skills.export.partial': '部分文件导出失败：{warnings}',
+  'skills.export.partial': '部分文件导出失败：{{warnings}}',
   'skills.export.timeout': '导出超时，请稍后重试',
   'skills.tag.private': '私密',
   'skills.tag.shared': '共享',
@@ -518,6 +669,7 @@ export const zhCN = {
   'skills.detail.versionColTime': '更新时间',
   'skills.detail.versionColActions': '操作',
   'skills.detail.versionCaption': 'v{{version}} · SKILL.md',
+  'skills.versionTag.title': '当前版本：v{{version}}',
   'skills.ownerTag.title': 'owner user: {{name}}（{{id}}）',
   'skills.ownerTag.you': '（你）',
   'skills.agentTag.title': 'owner agent: {{name}}（{{id}}）',
@@ -654,7 +806,8 @@ export const zhCN = {
   'memory.detail.updated': '更新：{{time}}',
   'memory.detail.noL0': '该记忆块未保留 L0 对话原文。',
   'memory.detail.noL0InRange': '当前时间范围内没有 L0 对话原文，可调整右上角的时间筛选范围试试。',
-  'memory.detail.emptyLayerInRange': '当前时间范围内在 {{layer}} 层暂无条目，可调整右上角的时间筛选范围试试。',
+  'memory.detail.emptyLayerInRange':
+    '当前时间范围内在 {{layer}} 层暂无条目，可调整右上角的时间筛选范围试试。',
   'memory.detail.rangeTooLarge': '记忆条数过多，建议缩短筛选的时间范围',
   'memory.detail.loadMore': '加载更早的对话',
   'memory.detail.allLoaded': '已加载全部对话',
@@ -676,8 +829,10 @@ export const zhCN = {
   'memory.detail.searchScore': '相关度 {{score}}',
   'memory.detail.clickToLoad': '点击加载该层内容',
   'memory.detail.modeBrowse': '浏览',
+  'memory.detail.refresh': '刷新',
   'memory.detail.modeSearch': '搜索',
-  'memory.detail.searchPrompt': '输入关键词按语义搜索本记忆，搜索结果按相关度排序（不受时间范围限制）。',
+  'memory.detail.searchPrompt':
+    '输入关键词按语义搜索本记忆，搜索结果按相关度排序（不受时间范围限制）。',
   'memory.detail.emptyLayer': '该记忆块在 {{layer}} 层暂无条目。可由 curator / 高层提炼后写入。',
   'memory.detail.loading': '加载中…',
   'memory.detail.collapseBody': '收起原文',
@@ -789,7 +944,8 @@ export const zhCN = {
   'team.editTeam': '编辑 Team',
   'team.editTeam.tooltip': '修改当前 team 的名称 / 描述（仅 owner / 管理员）',
   'team.deleteTeam': '删除当前 Team',
-  'team.deleteTeam.tooltip': '删除当前 team 及其全部成员 / Agent / 任务 / 资产（仅 owner / 管理员）',
+  'team.deleteTeam.tooltip':
+    '删除当前 team 及其全部成员 / Agent / 任务 / 资产（仅 owner / 管理员）',
   'team.deleteTeam.confirm': '确认删除 team「{{name}}」？',
   'team.deleteTeam.desc':
     '删除后将级联移除 {{members}} 名成员、{{agents}} 个 Agent，以及该 team 下的全部任务与资产，且不可恢复。',
@@ -985,10 +1141,12 @@ export const zhCN = {
   'addMember.error.invalidName': '用户名仅支持英文字母、数字、下划线，不能包含其他符号或空格。',
   'addMember.error.emptyKey': '已开启自定义 User_Key，请填写要下发给用户的 key。',
   'addMember.customKey.label': '自定义 User_Key',
-  'addMember.customKey.hint': '默认关闭时由后端自动生成一次性 key；开启后由你手动指定用户初始 key。',
+  'addMember.customKey.hint':
+    '默认关闭时由后端自动生成一次性 key；开启后由你手动指定用户初始 key。',
   'addMember.customKey.value': 'User_Key',
   'addMember.customKey.placeholder': '例如 sk-mem-xxxxxxxxxxxxxxxx',
-  'addMember.customKey.valueHint': '将作为该用户的默认 User_Key；不可与已有用户的 key 重复，否则创建会被拒绝。',
+  'addMember.customKey.valueHint':
+    '将作为该用户的默认 User_Key；不可与已有用户的 key 重复，否则创建会被拒绝。',
 
   // ===== CreatedUserKeyModal =====
   'createdUserKey.caption': '用户创建成功',
@@ -1096,9 +1254,18 @@ export const zhCN = {
   'wiki.ingest.stateRecovery': '状态恢复：{{stage}}{{pageHint}}',
   'wiki.ingest.currentPage': '，当前 {{count}} 页',
   'wiki.notify.readRawFailed': '读取原始文档失败',
+  'wiki.notify.rawNotFound': '原始文档不存在或已被删除',
   'wiki.notify.uploadCancelled': '获取已有文档失败，已取消上传',
   'wiki.error.selectTeam': '请先选择 team',
   'wiki.detail.md.placeholder': '# 标题',
+  // 原始文档预览失败原因（错误码来自 KS 转换层）
+  'wiki.rawPreview.unsupported': '暂不支持预览该文件类型',
+  'wiki.rawPreview.mismatch': '文件内容与扩展名不符，无法解析',
+  'wiki.rawPreview.encrypted': '文档已加密，需要密码才能解析',
+  'wiki.rawPreview.scannedPdf': '扫描件 PDF 无可提取文本（未开启 OCR）',
+  'wiki.rawPreview.notReady': '文档解析组件未就绪，请联系管理员',
+  'wiki.rawPreview.timeout': '文档解析超时，文件可能过大',
+  'wiki.rawPreview.failed': '文档解析失败，无法预览',
 
   // ===== skill-api =====
   'skillApi.error.unauthorized': 'Unauthorized - 用户登录已失效或缺少用户密钥',
@@ -1178,9 +1345,12 @@ export const zhCN = {
 
   // ===== 接口错误消息（error-message.ts） =====
   'error.UNAUTHORIZED': '登录状态已失效，请重新登录。',
-  'error.INVALID_USER_KEY': '用户密钥无效或已失效，请重新登录。',
+  'error.INVALID_USER_KEY': '该 user_key 无效，请确认已从 https://tencent.sso.codebuddy.cn/profile/keys 复制正确的 key。',
   'error.MISSING_USER_KEY': '缺少用户密钥，请重新登录。',
   'error.MISSING_INSTANCE_ID': '缺少实例信息，请重新选择实例后重试。',
+  'error.WOA_LOGIN_EXPIRED': 'WOA 登录确认已过期，请重新发起 WOA 登录。',
+  'error.WOA_LOGIN_PENDING_REQUIRED': 'WOA 登录确认状态不存在，请重新发起 WOA 登录。',
+  'error.WOA_PROVISION_NOT_CONFIGURED': '服务端未配置自动创建用户所需的管理员密钥，请联系管理员。',
   'error.INVALID_INSTANCE': '实例配置无效，请检查当前选择的实例。',
   'error.NOT_TEAM_MEMBER': '你不是该团队成员，无法执行此操作。',
   'error.PERMISSION_DENIED': '没有权限执行此操作。',
@@ -1213,17 +1383,20 @@ export const zhCN = {
   'error.ALREADY_ALLOCATED': '这条资产已经分配给该 Agent，无需重复分配。',
   'error.IMPORT_LIMIT_EXCEEDED': '该 Agent 最多只能借入 2 条其它 Agent 的记忆。',
   'error.ASSET_PRIVATE_INACCESSIBLE': '该资产已被 owner 设为私密，你无权访问。',
-  'error.ASSET_NOT_BINDABLE': '该资产的可见范围不允许绑定到此 Agent。请让 owner 将它设为团队可见后重试。',
+  'error.ASSET_NOT_BINDABLE':
+    '该资产的可见范围不允许绑定到此 Agent。请让 owner 将它设为团队可见后重试。',
   'error.INVALID_TITLE': '标题不能为空且不能超过长度限制。',
   'error.MISSING_MESSAGES': '缺少对话消息。',
   'error.TOO_MANY_MESSAGES': '一次最多导入 100 条消息。',
   'error.NO_VALID_MESSAGES': '没有可导入的有效消息。',
   'error.MISSING_WIKI_ID': '缺少 Wiki 信息。',
   'error.WIKI_NOT_FOUND': 'Wiki 不存在或已被删除。',
-  'error.WIKI_EMPTY_NO_SOURCES': 'Wiki 还没有上传源文件，请先上传 .md 文件后再抽取。',
+  'error.WIKI_EMPTY_NO_SOURCES': 'Wiki 还没有上传源文件，请先上传文件后再抽取。',
   'error.MISSING_FILES': '请至少上传一个文件。',
   'error.TOO_MANY_FILES': '上传文件数量超过限制（最多 10 个），请分批上传。',
-  'error.FILE_TOO_LARGE': '单个文件不能超过 512KB，请精简后再上传。',
+  // 不写死 512KB：上限按格式档位动态取（文本档 512KB / 富文档档 10MB，
+  // 且支持按格式覆盖），写死会误导用户以为所有格式都是 512KB。
+  'error.FILE_TOO_LARGE': '单个文件超过该格式的大小上限，请精简后再上传。',
   'error.TOTAL_TOO_LARGE': '单次上传总量不能超过 5MB，请分批上传。',
   'error.MISSING_CODE_GRAPH_ID': '缺少 CodeGraph 信息。',
   'error.CODE_GRAPH_NOT_FOUND': 'CodeGraph 不存在或已被删除。',
@@ -1232,6 +1405,9 @@ export const zhCN = {
   'error.VALIDATION_ERROR': '请求参数不正确，请检查输入后重试。',
   'error.RATE_LIMITED': '请求过于频繁，请稍后重试。',
   'error.INTERNAL_ERROR': '服务内部错误，请稍后重试。',
+  // 自持 user_key 首次登录（key 不存在 → 自动建号）时建号失败。
+  // 与"key 无效"是两回事：这里 key 本身没问题，是服务端建号动作失败了。
+  'error.USER_CREATE_FAILED': '使用该 user_key 创建账号失败，请稍后重试或联系管理员。',
   'error.network': '网络请求失败，请检查服务是否可用后重试。',
   'error.timeout': '请求超时，请稍后重试。',
   'error.emptyResponse': '服务返回为空，请稍后重试。',
@@ -1285,7 +1461,7 @@ export const zhCN = {
   // 文案统一按「是什么 → 怎么导入 → 怎么使用」三段展开，帮首次用户建立完整心智）
   'onboarding.guide.asset.wiki.title': 'Wiki 知识库：团队文档资产',
   'onboarding.guide.asset.wiki.desc':
-    '是什么：沉淀团队共享文档的知识库。怎么导入：点击「新建 Wiki」创建知识库 → 进入详情上传 Markdown 文件（.md/.txt，支持多选与拖拽）→ 手动触发「知识抽取」生成可检索的知识页面。怎么用：在 Wiki 卡片点「分配给 Agent」，或在 Agent 编辑弹窗勾选；绑定后 Agent 对话时即可检索引用这些文档。',
+    '是什么：沉淀团队共享文档的知识库。怎么导入：点击「新建 Wiki」创建知识库 → 进入详情上传文件（支持 .md/.txt/.docx/.xlsx/.pptx/.pdf 等，支持多选与拖拽）→ 手动触发「知识抽取」生成可检索的知识页面。怎么用：在 Wiki 卡片点「分配给 Agent」，或在 Agent 编辑弹窗勾选；绑定后 Agent 对话时即可检索引用这些文档。',
   'onboarding.guide.asset.code.title': 'CodeGraph：团队代码资产',
   'onboarding.guide.asset.code.desc':
     '是什么：对团队代码仓库建立的索引与调用关系图谱。怎么导入：点击「注册仓库」，粘贴 Git HTTPS 地址，系统自动完成索引构建。怎么用：「分配给 Agent」后，Agent 对话时可直接检索代码、探索调用链，回答仓库相关问题。',
@@ -1339,9 +1515,14 @@ export const zhCN = {
   'guide.quick.ide.sub': '配置 Proxy 与模型',
   'guide.quick.history.title': '获取历史数据',
   'guide.quick.history.sub': '让多 Agent 共享记忆和 Skill',
-  'guide.quick.history.desc': '在仓库根目录运行脚本，从本机 IDE 导入历史 Session 和 Skill，让多个 Agent 共享已有记忆与能力。',
-  'guide.quick.history.sources': '{{sources}} 等 source 均可导入；将目标 Team 和 Agent ID 替换后运行。',
+  'guide.quick.history.desc':
+    '在仓库根目录运行脚本，从本机 IDE 导入历史 Session 和 Skill，让多个 Agent 共享已有记忆与能力。',
+  'guide.quick.history.sources':
+    '{{sources}} 等 source 均可导入；将目标 Team 和 Agent ID 替换后运行。',
   'guide.quick.history.dupHint': ' 若已在脚本配置最后选择导入，则无需重复执行。',
+  'guide.verify.title': '配置成功验证：回到 IDE 开始新对话',
+  'guide.verify.desc':
+    '在已接入的 IDE 中发起一次新对话，会话初始化时会出现「是否关联团队资产」选项——看到它并选择「是」，即代表本次接入配置成功，Agent 将能读取你关联的团队资产。',
 
   // 准备信息
   'guide.proxyHint.reading': '正在读取本机 Proxy 地址…',
@@ -1368,11 +1549,13 @@ export const zhCN = {
   'guide.method.skill.sub': '推荐 · 由 Agent 引导配置',
   'guide.method.skill.step1': '在仓库根目录准备 Skill',
   'guide.method.skill.step2': '将下面的提示词发送给 Agent',
-  'guide.method.skill.hint': 'Agent 会探测环境和 Proxy，再调用配套脚本写入配置，并询问是否导入本地 Skill 与历史对话。',
+  'guide.method.skill.hint':
+    'Agent 会探测环境和 Proxy，再调用配套脚本写入配置，并询问是否导入本地 Skill 与历史对话。',
   'guide.method.script.title': '方式二：脚本配置',
   'guide.method.script.sub': '在终端运行交互向导',
   'guide.method.script.step1': '在仓库根目录运行',
-  'guide.method.script.hint': '脚本会扫描现有配置、检查 Proxy 并写入所选 IDE；最后可选择导入本地 Skill 与历史对话。',
+  'guide.method.script.hint':
+    '脚本会扫描现有配置、检查 Proxy 并写入所选 IDE；最后可选择导入本地 Skill 与历史对话。',
 
   // 手动配置
   'guide.manual.expand': '无法启动命令？手动配置',
@@ -1421,6 +1604,68 @@ export const zhCN = {
   'guide.replay.button': '引导回放',
   'guide.replayStarted': '即将重新开始引导，请跟随提示操作。',
 
+  // 记忆指令（mem: 命令）
+  'guide.mem.title': '记忆指令',
+  'guide.mem.sub': '会话中可用的 mem: 命令',
+  'guide.mem.intro.title': '在对话中使用 mem: 命令',
+  'guide.mem.intro.desc':
+    '接入 Memory 后，可在与 Agent 的对话里直接输入以下命令，管理本次会话的资产绑定、归档 Skill 与任务。',
+  'guide.mem.intro.format': '标准格式为 mem:<命令>，冒号后不加空格；命令名大小写不敏感。',
+  'guide.mem.optionsTitle': '可回复以下命令：',
+  'guide.mem.recommended': '推荐',
+
+  // 命令分组
+  'guide.mem.group.session.title': '日常高频',
+  'guide.mem.group.session.sub': '会话绑定 · 资产同步 · 归档',
+  'guide.mem.group.task.title': '任务管理',
+  'guide.mem.group.task.sub': '创建与更新绑定的 Task（含确认流程）',
+
+  // 命令：日常高频
+  'guide.mem.cmd.sessionReset.desc': '重置本次会话的团队 / Agent / 任务绑定，立即弹出重新选择。',
+  'guide.mem.cmd.sync.desc':
+    '刷新本次会话的全部资产注入（Skill / 记忆 / Knowledge / Task & Agent 描述）。',
+  'guide.mem.cmd.createSkill.desc':
+    '把本次对话归档为 Skill，后台异步提取；可在命令后附带提示词聚焦重点。',
+  'guide.mem.cmd.help.desc': '显示全部 mem: 命令的帮助说明。',
+
+  // 命令：任务管理
+  'guide.mem.cmd.createTask.desc': '从当前会话上下文创建 Task 并绑定到本 session。',
+  'guide.mem.cmd.createTask.detail1': '无参数：由 Agent 从最近对话推断标题与描述。',
+  'guide.mem.cmd.createTask.detail2':
+    '有参数：参数作为标题（超过 40 字截断），Agent 只生成描述。若本 session 已绑定真实 Task，会返回新 Task 预览并等待你确认。',
+  'guide.mem.cmd.createTask.opt.confirm': '覆盖绑定，创建新 Task。',
+  'guide.mem.cmd.createTask.opt.update': '继续复用当前 Task，只更新描述（推荐）。',
+  'guide.mem.cmd.createTask.opt.cancel': '取消，不做任何改动。',
+  'guide.mem.cmd.updateTask.desc': '更新已绑定 Task 的描述。',
+  'guide.mem.cmd.updateTask.detail1':
+    '无参数：Agent 对比“当前描述 + 最近对话”生成新描述；判定无实质改动则提示无需更新（幂等，可安全重试）。',
+  'guide.mem.cmd.updateTask.detail2':
+    '有参数：参数直接作为新描述并返回预览。若本 session 未绑定 Task，会提示先执行 mem:create-task；若绑定的 Task 非你创建，则拒绝更新。',
+  'guide.mem.cmd.updateTask.opt.confirm': '确认更新描述。',
+  'guide.mem.cmd.updateTask.opt.cancel': '取消更新。',
+
+  // 命令示例
+  'guide.mem.examples.title': '命令示例',
+  'guide.mem.examples.sub': '一组常用命令，可整体复制',
+  'guide.mem.examples.copyAll': '复制全部',
+  'guide.mem.examples.list': [
+    'mem:sync',
+    'mem:create-skill 重点总结数据库迁移步骤和踩坑',
+    'mem:create-task 重构 SessionRegistrar',
+    'mem:create-task confirm',
+    'mem:create-task cancel',
+    'mem:update-task 补充今天完成的进度与遗留风险',
+    'mem:update-task confirm',
+    'mem:update-task cancel',
+    'mem:session-reset',
+    'mem:help',
+  ].join('\n'),
+
+  // 命令参数占位符
+  'guide.mem.arg.title': '[标题]',
+  'guide.mem.arg.newDesc': '[新描述]',
+  'guide.mem.arg.prompt': '[提示词]',
+
   // 最佳实践分步内容（团队 Coding）
   'guide.practice.team.step1.title': '统一身份',
   'guide.practice.team.step1.short': '不同 IDE 使用同一套团队身份',
@@ -1468,7 +1713,8 @@ export const zhCN = {
   // 手动配置注意事项
   'guide.manual.note.claude': '直接启动 claude 即可从 settings.json 读取环境变量',
   'guide.manual.note.codebuddy': '在 CodeBuddy 对话框中选择模型 proxy-memory-agent',
-  'guide.manual.note.codex': '首次对话前先切到 Plan 模式（Shift+Tab）选 Team→Agent→Task，再切回 Agent 模式',
+  'guide.manual.note.codex':
+    '首次对话前先切到 Plan 模式（Shift+Tab）选 Team→Agent→Task，再切回 Agent 模式',
   'guide.manual.note.workbuddy': '在 WorkBuddy 自定义模型列表中选择该模型',
   'guide.manual.note.dsh.0': '需同时配置两个文件',
   'guide.manual.note.dsh.1': '权限要求：chmod 700 ~/.dsh，chmod 600 ~/.dsh/.credentials.yaml',
@@ -1479,4 +1725,235 @@ export const zhCN = {
   'guide.manual.note.openclaw.0': '需 Header 预选：team-id / agent-id / task-id / conversation-id',
   'guide.manual.note.openclaw.1': 'x-conversation-id 标识当前会话，每次新对话需手动更换',
   'guide.manual.note.openclaw.2': 'x-task-id 当前版本必填，无 Task 可填 no-task',
+
+  // ===== Analytics（可观测） =====
+  'menu.analytics': '线上调用情况',
+  'menu.group.observability': '数据分析',
+  'menu.desc.analytics': '团队记忆使用指标看板（仅管理员）',
+  'analytics.title': '线上调用情况',
+  'analytics.subtitle':
+    '团队记忆使用指标 · Session 渗透 / 工具调用 / bypass（数据源：ClickHouse 埋点）',
+  'analytics.range': '最近 {{days}} 天',
+  'analytics.allSpaces': '全部 Space',
+  'analytics.refresh': '刷新',
+  'analytics.loading': '加载中…',
+  'analytics.notLoaded': '尚未加载',
+  'analytics.updatedAt': '更新于 {{time}}',
+  'analytics.chUnreachable': 'ClickHouse 已配置但当前不可达，数据无法加载。',
+  'analytics.chNotConfigured': 'ClickHouse 未配置，可观测数据暂不可用。',
+  'analytics.featureDisabled.title': '功能未开放',
+  'analytics.featureDisabled.desc':
+    '当前部署未启用可观测功能（未接入 ClickHouse 埋点，或已由管理员关闭入口）。',
+  'analytics.chProbeFailed': 'ClickHouse 状态探测失败，请稍后重试或联系管理员。',
+  'analytics.unit.times': '次',
+  'analytics.trend.max': '峰值 {{value}}',
+  'analytics.trend.singlePoint':
+    '当前时间窗仅覆盖 1 个自然日，暂无法形成趋势对比；可切换到更长时间窗查看走势。',
+  'analytics.noPermission.title': '暂无权限',
+  'analytics.noPermission.desc': '可观测页面仅管理员（system_admin）可访问。',
+  'analytics.kpi.rate': '工具调用渗透率',
+  'analytics.kpi.avg': '平均调用次数',
+  'analytics.kpi.bypass': 'bypass 使用率',
+  'analytics.kpi.sessions': '独立 Session 数',
+  'analytics.kpi.total': '总调用次数',
+  'analytics.vsPrev': '较上一周期',
+  'analytics.perInitSession': '每个 init Session',
+  'analytics.bypassSub': '{{bypass}} bypass / {{normal}} normal',
+  'analytics.initSessionsSub': '当前周期 init 数',
+  'analytics.totalCallsSub': 'bridge_call 累计',
+  'analytics.section.endpointShare': '各接口调用占比',
+  'analytics.section.timeseries': '每日趋势（Session Init / 有调用 / bypass）',
+  'analytics.section.topBodies': '调用内容 TopN',
+  'analytics.section.bypassReasons': 'bypass 原因分布',
+  'analytics.empty.bridge': '没有 bridge_call 数据',
+  'analytics.empty.bypass': '没有 bypass 记录',
+  'analytics.empty.trend': '没有历史数据',
+  'analytics.empty.trace': '没有 trace 记录',
+  'analytics.trend.init': 'Init Sessions',
+  'analytics.trend.called': '有调用 Session',
+  'analytics.trend.bypass': 'bypass Session',
+  'analytics.calls.col.endpoint': '接口',
+  'analytics.calls.col.body': 'Body 摘要（前 200 字符）',
+  'analytics.calls.col.hash': '请求指纹',
+  'analytics.calls.col.count': '次数',
+  'analytics.calls.col.pct': '占比',
+
+  // 四类资产分布
+  'analytics.section.assetCategory': '资产调用分布',
+  'analytics.section.assetCategorySub': '按资产类别归并（全量口径）· 点击卡片可下钻调用明细',
+  'analytics.category.memory': 'Memory',
+  'analytics.category.skill': 'Skill',
+  'analytics.category.wiki': 'Wiki',
+  'analytics.category.codegraph': 'Code Graph',
+  'analytics.category.other': '其他',
+  'analytics.category.memory.desc': '长期记忆与历史经验召回',
+  'analytics.category.skill.desc': '标准流程与专业能力调用',
+  'analytics.category.wiki.desc': '团队知识与设计文档检索',
+  'analytics.category.codegraph.desc': '代码结构与调用关系分析',
+  'analytics.category.other.desc': '未归类端点，需补充归类规则',
+  'analytics.category.calls': '调用次数',
+  'analytics.category.noEndpoint': '暂无调用端点',
+
+  // 成员维度
+  'analytics.section.members': '成员使用情况',
+  'analytics.section.membersSub': '按成员归并调用行为 · 用于识别谁已用起来、谁还没有',
+  'analytics.member.col.user': '成员 / user_id',
+  'analytics.member.col.calls': '调用次数',
+  'analytics.member.col.sessions': '会话数',
+  'analytics.member.col.topCategory': '主要资产',
+  'analytics.member.col.avgElapsed': '平均耗时',
+  'analytics.member.col.errors': '失败数',
+  'analytics.member.col.lastCall': '最近调用',
+  'analytics.member.col.op': '操作',
+  'analytics.member.unassigned': '未归属（上报未带成员）',
+  'analytics.member.unrecognized': '未识别用户',
+  'analytics.member.sampled':
+    '成员统计基于最近 {{sampled}} 条调用（共 {{total}} 条），非全量口径；如需全量请缩小时间窗或按 Space 过滤。',
+  'analytics.empty.member': '暂无成员调用数据',
+
+  // Trace 明细
+  'analytics.section.trace': '调用明细（Trace）',
+  'analytics.section.traceSub': '每行对应一次真实调用 · 点击行展开完整请求体',
+  'analytics.trace.col.time': '时间',
+  'analytics.trace.col.user': '成员',
+  'analytics.trace.col.agent': '客户端',
+  'analytics.trace.col.tool': '发起工具',
+  'analytics.trace.col.endpoint': '实际端点',
+  'analytics.trace.col.status': '状态',
+  'analytics.trace.col.elapsed': '耗时',
+  'analytics.trace.endpointPlaceholder': '按端点搜索（模糊匹配）',
+  'analytics.trace.search': '搜索',
+  'analytics.trace.clearFilters': '清除筛选',
+  'analytics.trace.range': '{{from}}–{{to}} / 共 {{total}} 条',
+  'analytics.trace.prev': '上一页',
+  'analytics.trace.next': '下一页',
+  'analytics.trace.emptyBody': '（无请求体）',
+
+  // 视角切换
+  'analytics.tab.behavior': '使用情况',
+  'analytics.tab.cost': '成本与模型',
+
+  // 成本 KPI
+  'analytics.usage.kpi.requests': '模型请求数',
+  'analytics.usage.kpi.sessions': '会话数',
+  'analytics.usage.kpi.users': '成员数',
+  'analytics.usage.kpi.totalTokens': 'Token 总量',
+  'analytics.usage.kpi.prompt': '输入',
+  'analytics.usage.kpi.completion': '输出',
+  'analytics.usage.kpi.cacheHit': '缓存命中率',
+  'analytics.usage.kpi.cacheTokens': '命中 Token',
+  'analytics.usage.kpi.cacheHitHint': '占输入 Token 比例',
+  'analytics.usage.kpi.credit': 'Credit 消耗',
+  'analytics.usage.kpi.models': '模型数',
+  'analytics.usage.kpi.saved': 'Credit 节省',
+  'analytics.usage.kpi.compressSaved': '压缩省 Token',
+  'analytics.usage.kpi.savedHint': '缓存与压缩带来的节省',
+
+  // 成本趋势
+  'analytics.usage.section.tokenTrend': 'Token 每日趋势',
+  'analytics.usage.section.creditTrend': 'Credit 每日趋势',
+  'analytics.usage.section.creditTrendSub':
+    '与 Token 分图展示 · 两者量级差异大，同图会压平 Credit 曲线',
+  'analytics.usage.trend.prompt': '输入 Token',
+  'analytics.usage.trend.completion': '输出 Token',
+  'analytics.usage.trend.cacheHit': '缓存命中 Token',
+  'analytics.usage.trend.credit': 'Credit 消耗',
+  'analytics.usage.trend.creditSaved': 'Credit 节省',
+
+  // 模型分布
+  'analytics.usage.section.byModel': '模型用量与成本分布',
+  'analytics.usage.section.byModelSub': '按 Credit 消耗降序 · 路由列表示由其他模型转发而来的请求数',
+  'analytics.usage.model.col.model': '模型',
+  'analytics.usage.model.col.requests': '请求数',
+  'analytics.usage.model.col.pctRequests': '请求占比',
+  'analytics.usage.model.col.tokens': 'Token',
+  'analytics.usage.model.col.credit': 'Credit',
+  'analytics.usage.model.col.pctCredit': 'Credit 占比',
+  'analytics.usage.model.col.routed': '路由转入',
+
+  // 用量原始留档（注意：non_tokenhub 是正常通道标记，不是异常）
+  'analytics.usage.section.raw': '用量原始留档',
+  'analytics.usage.section.rawSub':
+    '未走 TokenHub 计费通道或计费解析失败的上报会原样留档 · 点击行查看原始载荷',
+  'analytics.usage.raw.actionable': '需处理（计费缺口）',
+  'analytics.usage.raw.passthrough': '非 TokenHub 通道（正常留档）',
+  'analytics.usage.raw.col.time': '时间',
+  'analytics.usage.raw.col.reason': '留档原因',
+  'analytics.usage.raw.col.model': '模型',
+  'analytics.usage.raw.col.user': '成员',
+  'analytics.usage.raw.col.key': '密钥 ID',
+  'analytics.usage.raw.col.space': 'Space',
+  'analytics.usage.raw.allReasons': '全部原因',
+  'analytics.usage.raw.emptyPayload': '（无原始载荷）',
+  'analytics.usage.reason.non_tokenhub': '非 TokenHub 通道',
+  'analytics.usage.reason.unknown_model': '模型未在定价表',
+  'analytics.usage.reason.invalid_format': '用量格式非法',
+  'analytics.usage.reason.invalid_credit': 'Credit 计算异常',
+  'analytics.usage.reason.report_failed': '上报失败',
+
+  'analytics.usage.empty.model': '暂无模型用量数据',
+  'analytics.usage.empty.raw': '当前筛选下没有留档记录',
+  'analytics.usage.empty.trend': '暂无用量历史数据',
+  'analytics.usage.empty.detail': '暂无用量明细',
+
+  // 用量明细列
+  'analytics.usage.detail.col.flags': '标记',
+  'analytics.usage.detail.stream': '流式',
+  'analytics.usage.detail.routed': '已路由',
+  'analytics.usage.detail.routedFrom': '由 {{model}} 路由而来',
+
+  // 下钻抽屉
+  'analytics.drill.open': '查看明细',
+  'analytics.drill.view.trace': '调用明细',
+  'analytics.drill.view.usage': '用量明细',
+  'analytics.drill.categoryHint': '该类资产的调用',
+  'analytics.drill.knowledgeAmbiguous':
+    'Wiki 与 Code Graph 同属 knowledge-service，内核仅支持按 bridge_source 过滤，因此以下结果包含 knowledge 全部调用，无法只显示单一类别。',
+
+  // ===== SessionDefault（v3.3 用户级 Session 默认 Team/Agent/Task 三元组）=====
+  'sessionDefault.title': 'Session 默认配置',
+  'sessionDefault.desc': '新 Session 自动使用，跳过选择。',
+  'sessionDefault.empty': '尚未设置',
+  'sessionDefault.create': '设置默认',
+  'sessionDefault.create.tooltip': '选择默认的 Team / Agent / Task',
+  'sessionDefault.edit': '修改',
+  'sessionDefault.edit.tooltip': '修改默认配置',
+  'sessionDefault.clear': '清除',
+  'sessionDefault.clear.tooltip': '清除后新 Session 恢复手动选择',
+  'sessionDefault.clear.confirm': '确认清除默认配置？',
+  'sessionDefault.clear.desc': '清除后新 Session 恢复手动选择，已开始的会话不受影响。',
+  'sessionDefault.clear.ok': '清除',
+
+  // Dialog
+  'sessionDefault.dialog.create.caption': '设置 Session 默认',
+  'sessionDefault.dialog.edit.caption': '修改 Session 默认',
+  'sessionDefault.dialog.desc': '依次选择 Team、Agent、Task。配置失效时会自动回退到手动选择，不会打断对话。',
+  'sessionDefault.dialog.submit': '保存',
+  'sessionDefault.dialog.cancel': '取消',
+
+  // Fields
+  'sessionDefault.field.team': 'Team',
+  'sessionDefault.field.agent': 'Agent',
+  'sessionDefault.field.task': 'Task',
+
+  // Placeholders
+  'sessionDefault.team.placeholder.select': '选择 Team',
+  'sessionDefault.team.placeholder.empty': '你尚未加入任何 Team',
+  'sessionDefault.agent.placeholder.select': '选择 Agent',
+  'sessionDefault.agent.placeholder.needTeam': '请先选择 Team',
+  'sessionDefault.agent.placeholder.empty': '当前 Team 下没有可用的 Agent',
+  'sessionDefault.task.placeholder.select': '选择 Task 或"不绑定任何 Task"',
+  'sessionDefault.task.placeholder.needTeam': '请先选择 Team',
+  'sessionDefault.task.extra': '选"default"则不关联 Task，记忆在该 Agent 全部记忆中召回。',
+  'sessionDefault.task.sentinel.label': 'default（不绑定任何 Task）',
+
+  // Summary rows
+  'sessionDefault.summary.team': 'Team',
+  'sessionDefault.summary.agent': 'Agent',
+  'sessionDefault.summary.task': 'Task',
+  'sessionDefault.summary.unresolved': '（已失效 / 无法读取）',
+
+  // Toast
+  'sessionDefault.notify.saved': '默认配置已保存，新 Session 将自动使用',
+  'sessionDefault.notify.cleared': '默认配置已清除',
 };

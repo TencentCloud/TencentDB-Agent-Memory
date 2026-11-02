@@ -38,6 +38,11 @@ export interface CostGuardConfig {
    */
   anthropicUpstream?: {
     url: string;
+    /**
+     * 发往该上游时强制覆盖的请求头（键名已小写）。只作用于目标地址等于 `url`
+     * 的请求，per-agent override 等其他上游不受影响。
+     */
+    headers?: Record<string, string>;
   };
   /**
    * Opaque private options, forwarded to the extension as-is.
@@ -135,6 +140,14 @@ export interface RedisConfig {
   ttlSeconds: number;
   /** Injection layer TTL override (seconds). Defaults to ttlSeconds. */
   injectionTtlSeconds?: number;
+  /**
+   * Per-session turn-sequence counter TTL, in days. Default: 30.
+   *
+   * Must outlive `ttlSeconds` by a wide margin: session state expiring only
+   * costs a cache miss, but the turn sequence expiring restarts the session at
+   * 1 and collides with the usage rows it already wrote.
+   */
+  turnSeqTtlDays?: number;
 }
 
 /** Per-Memory-instance input-token rate limiting. */
@@ -276,6 +289,12 @@ export interface SessionInitConfig {
    * 默认 "default"（开启）。若想关闭，在 YAML 中配为空字符串 `defaultTaskId: ""`。
    */
   defaultTaskId?: string;
+  /**
+   * 跳过 asset_confirm 前置对话框，默认视为用户选了"是，关联团队资产"。
+   * 开启后首轮直接进入 team → agent → task 选择流程（或 auto-select 级联）。
+   * 默认 false（保持原有行为，弹 asset_confirm 对话框）。
+   */
+  skipAssetConfirm?: boolean;
   headerAutoSelect?: {
     /** 是否启用 header 自动预选。默认 true。 */
     enabled: boolean;
@@ -306,6 +325,11 @@ export interface TdaiConfig {
     l2Limit: number;
     timeoutMs: number;
   };
+  /** Online session trace uploads to `/v3/session/add`. */
+  sessionTrace?: {
+    /** Byte budget for in-flight uploads; turns beyond it are dropped. Default 1 GiB. */
+    maxQueuedBytes?: number;
+  };
 }
 
 /**
@@ -331,6 +355,26 @@ export interface CoreSkillConfig {
 }
 
 /**
+ * Instance-upstream 配置缓存(自定义模型分流的每实例配置)。
+ *
+ * proxy 每次 handler 会走 skill.endpoint + /v3/internal/meta/instance-upstream/list
+ * 拉本 spaceId 的模型分组配置(default / custom / extraction 三类行),结果按 spaceId
+ * 缓存在进程内。缓存内部固定语义(hard expiry + stale-if-error + 256 LRU +
+ * 空数组零行 fallback = official),此配置仅暴露唯一可调项 TTL。
+ *
+ * 详见 `docs/design/2026-08-25-instance-upstream-config.md` §7.1。
+ */
+export interface InstanceUpstreamConfig {
+  /**
+   * 缓存 TTL(秒)。默认 30。决定"Panel 改完自定义模型 → proxy 生效"的最长延迟。
+   *
+   * 只接受正整数;非法/负数/0/NaN/小数一律回退默认 30s + warn 一行。
+   * 别调到 <5s:会把 core /v3/internal/meta/instance-upstream/list 打成热点。
+   */
+  cacheTtlSec: number;
+}
+
+/**
  * Knowledge tools injector configuration.
  *
  * Independent from `coreSkill` so knowledge gateway routing can diverge from
@@ -347,6 +391,94 @@ export interface KnowledgeConfig {
   timeoutMs: number;
 }
 
+/**
+ * 选择策略参数（`selection.strategies.<name>`）。
+ *
+ * 每个策略 = 一个 decision provider 实例 + 选择规则参数。`provider` 决定用哪种
+ * 判定服务（内置 `jev`；其他 decision API 在 `src/decision/registry.ts` 注册后可用）。
+ *
+ * apiKey 解析优先级：策略 `apiKeyEnv`（`jev` 默认 `TYPESAFE_API_KEY`）> YAML（支持 `${VAR}` 展开）> 空。
+ * 空 → 该策略不可用，引用它的资产回退到不使用选择的路径。
+ */
+export interface SelectionStrategyConfig {
+  /** decision provider 类型名，默认 `jev`。 */
+  provider: string;
+  /** 判定服务 endpoint。是否允许非 https 由 provider 自行校验（jev 仅允许 loopback http）。 */
+  endpoint: string;
+  apiKey: string;
+  /** 模型 / 服务 ID。建议固定版本，保证实验可复现。 */
+  model: string;
+  /** 单次调用超时（ms）。 */
+  timeoutMs: number;
+  /** 选中项置信度门槛（0~1），低于则视为都不选。0 = 不设门槛。 */
+  minConfidence: number;
+  /** provider 私有参数（原样透传，由 provider 自行校验）。 */
+  options?: Record<string, unknown>;
+}
+
+/** @deprecated 使用 `SelectionStrategyConfig`。保留别名兼容已有引用。 */
+export type JevStrategyConfig = SelectionStrategyConfig;
+
+/**
+ * 策略名 → 策略参数。`jev` 恒存在（默认值），以兼容旧配置与 `strategy: jev` 默认引用；
+ * 其余策略名由 YAML 定义。
+ */
+export interface SelectionStrategiesConfig {
+  jev: SelectionStrategyConfig;
+  [name: string]: SelectionStrategyConfig;
+}
+
+/**
+ * 通用选择模块配置（顶层 `selection:`）—— 只定义策略本身，与资产无关。
+ * 各资产（`skillRuntime.selection` / 以后的 memory 等）按名引用其中的策略。
+ */
+export interface SelectionConfig {
+  strategies: SelectionStrategiesConfig;
+}
+
+/**
+ * Proxy 侧 skill 选择配置（`skillRuntime.selection`）。
+ *
+ * `enabled=false`（默认）→ legacy：注入 `<available_skills>` 目录 +
+ * `<skill_tools>` curl 说明，由主模型自行加载，行为与改造前一致。
+ *
+ * `enabled=true` 且策略可用 → 不注入目录/工具说明；在新用户轮次由 proxy 用
+ * `strategy` 从候选里选 0..1 个 skill，直接返回一条 tool_use 让客户端加载
+ * （结果进入客户端历史，当轮生效、不回补、前缀缓存稳定）。
+ *
+ * `enabled=true` 但策略不可用（如未配 apiKey）→ 构建期回退 legacy。
+ * 运行期单次失败（超时 / 非法响应）→ 本轮不加载，不回退。
+ */
+export interface SkillSelectionConfig {
+  /** 总开关。默认 false。 */
+  enabled: boolean;
+  /** 引用的策略名（`selection.strategies` 下的 key，且已在注册表中）。默认 `jev`。 */
+  strategy: string;
+  /** 发给策略模型的对话上下文字符预算。 */
+  contextCharBudget: number;
+  /** 加载 skill 正文的字符上限。超限 → 不加载，避免残缺步骤。 */
+  contentCharBudget: number;
+  /** 参与判断的候选上限（1..50，对齐 core search top_k 上限）。 */
+  maxCandidates: number;
+  /** 用当前对话派生的 query 检索候选（hybrid search），而非 activity / list-head。 */
+  useConversationQuery: boolean;
+}
+
+/** YAML 原始形状（`skillRuntime.selection`）。 */
+export interface RawSkillSelectionYaml {
+  enabled?: boolean;
+  strategy?: string;
+  contextCharBudget?: number;
+  contentCharBudget?: number;
+  maxCandidates?: number;
+  useConversationQuery?: boolean;
+}
+
+/** YAML 原始形状（顶层 `selection`）。 */
+export interface RawSelectionYaml {
+  strategies?: Record<string, (Partial<SelectionStrategyConfig> & { apiKeyEnv?: string }) | undefined>;
+}
+
 /** Skill runtime-side configuration. */
 export interface SkillRuntimeConfig {
   /**
@@ -358,8 +490,21 @@ export interface SkillRuntimeConfig {
    * false 时：
    *   - <skill_tools> 只注入只读工具（search/list/view/files_read）
    *   - /skill-bridge 拒绝写操作返回 403
+   *
+   * 注意：`selection.enabled === true` 时主模型看不到 <skill_tools>，该开关
+   * 对 prompt 无影响，但 /skill-bridge 的放行策略仍按它生效（人工 / 其他
+   * 客户端仍可能直连 bridge）。
    */
   allowLlmWrite: boolean;
+
+  /**
+   * Proxy 侧 skill 选择配置。
+   *
+   * 可选：`buildConfig()` 始终填充完整值（缺省 `enabled: false`），声明为可选
+   * 只是为了让手工构造 `ProxyConfig` 的调用点（测试 / mock）无需改动 ——
+   * 缺省即 legacy，行为与改造前一致。
+   */
+  selection?: SkillSelectionConfig;
 
   // 历史字段 (已删除):
   //   extractToolCallThreshold / maxBucketCount:
@@ -418,7 +563,7 @@ export interface ProxyConfig {
   server: {
     host: string; // default: "0.0.0.0"
     port: number; // default: 8096
-    /** Upstream forward timeout in ms. 0 = no timeout. Default: 600_000 (10 min). */
+    /** Upstream forward timeout in ms. 0 = no timeout. Default: 3_600_000 (1 hour). */
     forwardTimeoutMs?: number;
   };
   upstream: {
@@ -464,6 +609,8 @@ export interface ProxyConfig {
     /** Data retention TTL in days. 0 = no TTL. Default: 0. */
     ttlDays: number;
   };
+  /** Optional API-key-hash → 企业微信名称 attribution gate. */
+  wecomIdentity?: WecomIdentityConfig;
   redis: RedisConfig;
   rateLimit: RateLimitConfig;
   storage: StorageConfig;
@@ -475,8 +622,14 @@ export interface ProxyConfig {
   sessionInit: SessionInitConfig;
   tdai: TdaiConfig;
   coreSkill: CoreSkillConfig;
+  instanceUpstream: InstanceUpstreamConfig;
   knowledge: KnowledgeConfig;
   skillRuntime: SkillRuntimeConfig;
+  /**
+   * 通用选择策略配置。可选：`buildConfig()` 始终填充；手工构造 `ProxyConfig`
+   * 的调用点（测试 / mock）缺省时等同于「所有策略未配置」。
+   */
+  selection?: SelectionConfig;
   auth: AuthConfig;
   /**
    * Internal service accounts allowed to passthrough the proxy without any
@@ -504,11 +657,13 @@ export interface ProxyConfig {
   /**
    * `mem:` 特殊命令配置。
    *
-   * 当 enabled=false（默认）时，handler 不会检测 mem: 命令，所有请求走原有链路。
-   * 启用后，handler 在 session init 之后检测最后一条 user message 是否为 mem: 命令，
-   * 命中则执行对应操作并直接返回伪造 LLM 响应（不注入 / 不转发 / 不计费）。
+   * 命令拦截恒定启用（无配置开关）：handler 在 session init 之后检测最后一条 user
+   * message 是否为 mem: 命令，命中已知命令（sync/create-skill/help/create-task/
+   * update-task/session-reset）则执行对应操作并直接返回伪造 LLM 响应（不注入 /
+   * 不转发 / 不计费）；未知命令由 executeMemCommand 内置提示兜底。
    *
-   * allowedCommands 为命令白名单，空数组表示全部允许。
+   * 结构仅承载 `taskDraft`（create-task / update-task 依赖的 LLM 草稿生成器）；
+   * 未配置时 task 命令族返回"未配置 task_draft"错误，其它命令不受影响。
    */
   memCommand: MemCommandConfig;
 
@@ -538,6 +693,23 @@ export interface ProxyConfig {
    *   分流已在生产跑通并有日志验证，此开关是"保守回滚"保险而非"灰度上线"开关。
    */
   workbuddyRequestRouting: WorkbuddyRequestRoutingConfig;
+
+  /**
+   * 本地 JSONL trace 归档配置。
+   *
+   * 启用后，每个 trace + span 以 JSONL 行写入本地文件（按日期分文件），
+   * 可配合 crontab 定时压缩上传到 COS/S3 归档存储。
+   *
+   * 默认关闭。启用后不影响 Opik / Langfuse 等远程上报链路。
+   */
+  traceArchive: TraceArchiveConfig;
+}
+
+export interface TraceArchiveConfig {
+  /** 是否启用本地 JSONL trace 归档。默认 false（关闭）。 */
+  enabled: boolean;
+  /** 归档目录（相对于项目根目录或绝对路径）。默认 "logs/traces"。 */
+  dir: string;
 }
 
 export interface CcRequestRoutingConfig {
@@ -551,17 +723,9 @@ export interface WorkbuddyRequestRoutingConfig {
 }
 
 export interface MemCommandConfig {
-  /** 是否启用 mem: 命令拦截。默认 false。 */
-  enabled: boolean;
-  /**
-   * 命令白名单。空数组 = 全部允许。
-   * 例如 ["sync", "help"] 表示只允许 mem:sync 和 mem:help，其他命令不识别。
-   */
-  allowedCommands: string[];
   /**
    * mem:create-task / mem:update-task 使用的 LLM 草稿生成器配置。可选。
    * 未配置或 enabled=false 时，task 命令族会返回"未配置 task_draft"错误。
-   * 结构与 packages/cost-guard 的 LLMInferConfig 保持形状一致。
    */
   taskDraft?: {
     enabled: boolean;
@@ -690,7 +854,60 @@ export interface CreditReportConfig {
 }
 
 /** Credit pricing entry for a single model (Credit / 1K Token). */
-export interface CreditPricingEntry {
+/**
+ * 分档定价条目。按 input token 总量 (nonCacheInput + cacheRead) 命中对应档位，
+ * 该请求全部 token 类型都按该档单价计费（整体定档，非分段累进）。
+ *
+ * `tiers` 数组须按 `maxInputTokens` 升序排列，最后一档以 `null` 表示兜底（无上限）。
+ */
+export interface PricingTier {
+  /** 该档 input token 上限（包含）。null = 兜底档（无上限）。 */
+  maxInputTokens: number | null;
+  /** Standard input tokens (non-cache) — credit per 1K tokens. */
+  input: number;
+  /** Output tokens — credit per 1K tokens. */
+  output: number;
+  /** Cache read (cache hit) tokens — credit per 1K tokens. */
+  cacheRead: number;
+  /** Cache write with 5-minute TTL (ephemeral) — credit per 1K tokens. */
+  cacheWrite5m: number;
+  /** Cache write with 1-hour TTL (standard cache creation) — credit per 1K tokens. */
+  cacheWrite1h: number;
+}
+
+/** A complete set of token prices, optionally split by total input length. */
+export interface TieredPricing {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+  tiers?: PricingTier[];
+}
+
+export type PricingWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+
+/** A half-open local-time interval: start is inclusive, end is exclusive. */
+export interface PricingTimeRange {
+  start: string;
+  end: string;
+}
+
+/** Conditions for choosing a time-based price rule. Omitted fields match all requests. */
+export interface PricingRuleWhen {
+  weekdays?: PricingWeekday[];
+  timeRanges?: PricingTimeRange[];
+}
+
+/** A time-based price override. Highest priority matching rule wins. */
+export interface PricingRule {
+  id: string;
+  priority?: number;
+  when?: PricingRuleWhen;
+  pricing: TieredPricing;
+}
+
+export interface CreditPricingEntry extends TieredPricing {
   /**
    * Model ID for matching (case-insensitive full-word match against usage.model).
    * 语义是「唯一 ID」，如 `ep-pksklwtb` / `deepseek-v4-pro`。
@@ -702,21 +919,34 @@ export interface CreditPricingEntry {
    * 写入 usage_logs.model_name / usage_raw.model_name 供前端展示。
    */
   modelName?: string;
-  /** Standard input tokens (non-cache). */
-  input: number;
-  /** Output tokens. */
-  output: number;
-  /** Cache read (cache hit) tokens. */
-  cacheRead: number;
-  /** Cache write with 5-minute TTL (ephemeral). */
-  cacheWrite5m: number;
-  /** Cache write with 1-hour TTL (standard cache creation). */
-  cacheWrite1h: number;
+  /**
+   * 按 input token 总量 (nonCacheInput + cacheRead) 分档定价。
+   * 升序排列，最后一档 maxInputTokens 为 null（兜底）。
+   * 不配置时使用顶层 input/output/cacheRead/cacheWrite5m/cacheWrite1h 单价。
+   */
+  rules?: PricingRule[];
 }
 
 /** Credit pricing configuration section. */
 export interface CreditPricingConfig {
   models: CreditPricingEntry[];
+  /**
+   * IANA 时区名（如 "Asia/Shanghai"）用于 ClickHouse 按日分片时的时区锚点。
+   * 可选, 不传时沿用 ClickHouse server 的默认时区。只在测试里显式设置。
+   */
+  timezone?: string;
+}
+
+/** API-key-hash → 企业微信名称 mapping used for observability attribution. */
+export interface WecomIdentityConfig {
+  /** Disabled by default to preserve existing request behaviour. */
+  enabled: boolean;
+  /** ClickHouse table holding only SHA-256 hashes, never raw API keys. */
+  table: string;
+  /** In-process positive-cache lifetime. */
+  cacheTtlMs: number;
+  /** Maximum length accepted from the interactive form. */
+  maxNameLength: number;
 }
 
 /** Raw YAML config file shape (all fields optional). */
@@ -758,6 +988,7 @@ export interface RawYamlConfig {
     keyPrefix?: string;
     ttlSeconds?: number;
     injectionTtlSeconds?: number;
+    turnSeqTtlDays?: number;
   };
   rateLimit?: {
     tpm?: number;
@@ -785,7 +1016,7 @@ export interface RawYamlConfig {
   costGuard?: {
     enabled?: boolean;
     agentProfile?: string;
-    anthropicUpstream?: { url?: string };
+    anthropicUpstream?: { url?: string; headers?: Record<string, unknown> };
     /** Opaque private options, kept unparsed and forwarded to the extension. */
     [key: string]: unknown;
   };
@@ -801,6 +1032,12 @@ export interface RawYamlConfig {
     flushThreshold?: number;
     ttlDays?: number;
   };
+  wecomIdentity?: {
+    enabled?: boolean;
+    table?: string;
+    cacheTtlMs?: number;
+    maxNameLength?: number;
+  };
   langfuse?: {
     enabled?: boolean;
     host?: string;
@@ -812,7 +1049,15 @@ export interface RawYamlConfig {
     flushInterval?: number;
   };
   creditReport?: { url?: string; timeoutMs?: number };
-  creditPricing?: { models?: Partial<CreditPricingEntry>[] };
+  creditPricing?: {
+    models?: (Partial<CreditPricingEntry> & {
+      tiers?: Partial<PricingTier>[];
+      rules?: (Partial<PricingRule> & {
+        when?: PricingRuleWhen;
+        pricing?: Partial<TieredPricing> & { tiers?: Partial<PricingTier>[] };
+      })[];
+    })[];
+  };
   /** Opaque private review options, forwarded to the extension untouched. */
   badcaseCollector?: Record<string, unknown>;
   injection?: {
@@ -834,6 +1079,8 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    /** 一步到位: 预选 team/agent 都命中时, 跳过 asset_confirm 直接 initialized。 */
+    skipAssetConfirm?: boolean;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
@@ -855,6 +1102,7 @@ export interface RawYamlConfig {
     apiKey?: string;
     serviceId?: string;
     memory?: Partial<TdaiConfig["memory"]>;
+    sessionTrace?: TdaiConfig["sessionTrace"];
   };
   /**
    * Skill/Kernel bridge config. Historically named `coreSkill`; accepted under
@@ -864,10 +1112,15 @@ export interface RawYamlConfig {
    */
   skill?: Partial<CoreSkillConfig>;
   coreSkill?: Partial<CoreSkillConfig>;
+  instanceUpstream?: Partial<InstanceUpstreamConfig>;
   knowledge?: Partial<KnowledgeConfig>;
   skillRuntime?: {
     allowLlmWrite?: boolean;
+    /** 见 `SkillSelectionConfig`。 */
+    selection?: RawSkillSelectionYaml;
   };
+  /** 见 `SelectionConfig`。 */
+  selection?: RawSelectionYaml;
   auth?: {
     enabled?: boolean;
     url?: string;
@@ -879,11 +1132,9 @@ export interface RawYamlConfig {
   };
   /**
    * mem: 命令族配置（含 create-task / update-task 的 LLM 草稿生成器）。
-   * 与 ProxyConfig.memCommand 对应；未配置则命令族按默认禁用行为。
+   * 与 ProxyConfig.memCommand 对应；命令拦截恒定启用，taskDraft 未配置则 task 命令族按现有 fallback 行为。
    */
   memCommand?: {
-    enabled?: boolean;
-    allowedCommands?: unknown[];
     taskDraft?: {
       enabled?: unknown;
       model?: unknown;
@@ -891,6 +1142,10 @@ export interface RawYamlConfig {
       apiKey?: unknown;
       timeoutMs?: unknown;
     };
+  };
+  traceArchive?: {
+    enabled?: boolean;
+    dir?: string;
   };
 }
 
@@ -913,6 +1168,11 @@ export interface RequestLogEntry {
    * upstream did not return one. Used for cross-system tracing/audit.
    */
   upstreamRequestId?: string;
+  /**
+   * pipeline 内部的 traceId（uuidv7, 用于日志串联）；
+   * codex runner 把它塞进 request 事件便于跨协议 join。
+   */
+  traceId?: string;
 }
 
 /** usage event — written after LLM response is received. */
@@ -929,7 +1189,13 @@ export interface UsageLogEntry {
   upstreamUrl: string;
   stream: boolean;
   usage: Record<string, unknown>; // raw LLM usage object, unmodified
+  /** Request receipt time used for deterministic time-based credit pricing. */
+  requestReceivedAt?: string;
   routedFrom?: string;     // original model if routing was applied
+  /** `body.model` as the client sent it, before pool-service / main-model rewrites. */
+  requestedModel?: string;
+  /** How the model pool picked this request's member (`poolRouteReason`); pool requests only. */
+  routeReason?: string;
   /**
    * Scalar counters reported by the optional private request-preparation
    * stage, recorded verbatim. The host neither defines nor interprets the key

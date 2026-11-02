@@ -42,3 +42,13 @@
   font-size: 12px;
   color: var(--tea-color-text-secondary);
 }
+
+/* ===== 版本 Tag（标题行名称前）=====
+   紧凑展示，且不被 flex 压缩；名称过长时省略号仍由 ._alp-item-name 负责。 */
+._memory-skills-body ._alp-item-header ._memory-skill-item-version {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}

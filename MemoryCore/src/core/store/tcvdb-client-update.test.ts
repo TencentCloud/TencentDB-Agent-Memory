@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { TcvdbClient } from "./tcvdb-client.js";
+import { TcvdbClient } from "./tcvdb/client.js";
 
 describe("TcvdbClient.update", () => {
   it("disables transport retries for non-idempotent conditional updates", async () => {
@@ -16,8 +16,8 @@ describe("TcvdbClient.update", () => {
 
     const affected = await client.update(
       "test_l1_memories",
-      { documentIds: ["memory-1"], filter: "version = 2" },
-      { text: "edited content", version: 3 },
+      { documentIds: ["memory-1"], filter: "version = 2", update: { text: "edited content", version: 3 } },
+      { maxRetries: 0 },
     );
 
     expect(affected).toBe(1);
@@ -32,4 +32,13 @@ describe("TcvdbClient.update", () => {
       { maxRetries: 0 },
     );
   });
+  it("retains the upstream skill-update signature and default retry policy", async () => {
+    const client = new TcvdbClient({ url: "https://example.invalid", username: "user", apiKey: "key", database: "test", timeout: 1000 });
+    const request = vi.spyOn(client, "request").mockResolvedValue({ affectedCount: 1 });
+    expect(await client.update("skills", { filter: "is_head = 1", update: { is_head: 0 } })).toBe(1);
+    expect(request).toHaveBeenCalledWith("/document/update", {
+      database: "test", collection: "skills", query: { filter: "is_head = 1" }, update: { is_head: 0 },
+    }, {});
+  });
+
 });

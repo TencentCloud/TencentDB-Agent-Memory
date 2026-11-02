@@ -9,7 +9,7 @@ This directory is the **OpenClaw client adapter** for Memory Gateway **`/v3/*`**
 | Plugin ID | `memory-tencentdb-client` (same historical ID; implementation is v3) |
 | SDK | [`@tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2`](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-sdk-ts-v2/v/1.0.0-beta.2) (npm; root = v3) |
 | Data plane | `MemoryClient` → `/v3/*` + isolation (`teamId` / `agentId` / `userId`) |
-| COS read | Tool `tdai_read_cos` via `createMemoryFileReader` (`POST /v2/cos/secret` + STS) |
+| COS read | Tool `tdai_read_file` via `createMemoryFileReader` (`POST /v2/cos/secret` + STS) |
 | Not included | Offload / Context Engine |
 
 For local standalone Gateway, use `http://127.0.0.1:8420` with `apiKey = "local"`, `instanceId = "default"`, and isolation triple `"default"` (aligned with `DEFAULT_ISOLATION_ID`). If the Gateway enables `TDAI_GATEWAY_API_KEY`, set `server.apiKey` to the same value.
@@ -25,7 +25,7 @@ OpenClaw runtime
        ├─ hooks/recall.ts              before_prompt_build → search + prompt injection
        ├─ tools/memory-search.ts       tdai_memory_search → searchAtomic (L1)
        ├─ tools/conversation-search.ts tdai_conversation_search → searchConversation (L0)
-       └─ tools/read-cos.ts            tdai_read_cos → MemoryFileReader (COS STS)
+       └─ tools/read-cos.ts            tdai_read_file → MemoryFileReader (COS STS)
             │
             ▼
        @tencentdb-agent-memory/memory-sdk-ts-v2
@@ -41,7 +41,7 @@ OpenClaw runtime
 |------|---------|
 | `tdai_memory_search` | Search L1 structured memories |
 | `tdai_conversation_search` | Search L0 conversation history |
-| `tdai_read_cos` | Read memory files by relative path (`scene_blocks/…`, `persona.md`, …) |
+| `tdai_read_file` | Read memory files by relative path (`scene_blocks/…`, `persona.md`, …) |
 
 ## Dual mode (Gateway deployment)
 
@@ -214,5 +214,5 @@ When adapting another Agent framework, reuse the same pattern:
 ## Notes
 
 - Client adapter only: do not start a Memory Gateway subprocess or implement extraction locally.
-- Standalone without COS/STS: `tdai_read_cos` returns a readable error; capture/recall must not depend on it.
+- Standalone without COS/STS: `tdai_read_file` returns a readable error; capture/recall must not depend on it.
 - For Gateway startup and broader SDK examples, see the repository root README.

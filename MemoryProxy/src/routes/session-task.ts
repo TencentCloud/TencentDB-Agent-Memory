@@ -28,7 +28,7 @@ import { getSessionStore } from "../session/store.js";
 import type { SessionInitState, SessionInfo } from "../session/types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { TaskEntity } from "../meta/client.js";
-import { generateTaskDraft } from "../mem-command/task-draft-generator.js";
+import { generateTaskDraft, type TaskDraftConfig } from "../mem-command/task-draft-generator.js";
 import {
   clearPending,
   getPending,
@@ -40,7 +40,25 @@ import {
 
 // ── 输入 / 输出类型 ────────────────────────────────────────────────────────
 
-export interface CreateTaskFromSessionInput {
+/**
+ * taskDraft LLM 主模型跟随（方案 D）：客户当次请求实际使用的模型 / 上游 / 密钥。
+ * handler 已按 per-agent 规则解析好，session-task 只做透传给 task-draft-generator。
+ *
+ * 三字段任意一个缺失 → resolveTaskDraftConfig 会返 "not configured"，
+ * 命令层拼错误文案给用户（不做兜底，也不再依赖 config.memCommand.taskDraft）。
+ */
+export interface TaskDraftUpstream {
+  /** 客户端当次请求的模型（body.model 归一化后的真实 model_id）。 */
+  model?: string;
+  /** per-agent 解析后的上游 base url（不含具体 endpoint）。 */
+  upstreamUrl?: string;
+  /** 上游 API 家族，决定 generator 请求形状。 */
+  protocol?: "openai" | "anthropic" | "responses";
+  /** 转发时用的 apiKey（客户端透传的 user key）。 */
+  apiKey?: string;
+}
+
+export interface CreateTaskFromSessionInput extends TaskDraftUpstream {
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -57,7 +75,7 @@ export interface CreateTaskFromSessionInput {
   lockedTitle?: string;
 }
 
-export interface UpdateTaskFromSessionInput {
+export interface UpdateTaskFromSessionInput extends TaskDraftUpstream {
   sessionKey: string;
   agentSource: string;
   config: ProxyConfig;
@@ -166,7 +184,7 @@ function resolveSession(
     return { error: "session missing team_id/user_id (initialization incomplete)" };
   }
 
-  // "本次不关联任务" 走 config.sessionInit.defaultTaskId（虚拟值，kernel 不存在），
+  // "暂时跳过" 走 config.sessionInit.defaultTaskId（虚拟值，kernel 不存在），
   // 视为**未绑真实 task** —— 允许 create-task，禁止 update-task（后者会用 no-task 分支返错）。
   const rawTaskId = sessionInfo.task_id;
   const defaultTaskId = config.sessionInit?.defaultTaskId;
@@ -178,12 +196,109 @@ function resolveSession(
 
 // ── 内部：检查并取 taskDraft 配置 ─────────────────────────────────────────
 
-function resolveTaskDraftConfig(config: ProxyConfig) {
-  const draft = config.memCommand?.taskDraft;
-  if (!draft || !draft.enabled) {
-    return { error: "task_draft is not configured (see config.memCommand.taskDraft)" } as const;
+const DEFAULT_TASK_DRAFT_TIMEOUT_MS = 20000;
+
+/**
+ * 解析 taskDraft LLM 用的上游 apiKey。**严格复刻主链路的 per-agent 三档语义**
+ * （权威定义见 config.example.yaml 的 upstream.agents 表 / anthropicHandler.ts:1293），
+ * 避免 taskDraft 跟主链路用不同的 key 导致鉴权行为不一致：
+ *
+ *   ┌──────────────────────────────┬────────────────────────────────────┐
+ *   │ agent 配置                   │ 用的 apiKey                        │
+ *   ├──────────────────────────────┼────────────────────────────────────┤
+ *   │ 不在 agents 表里             │ upstream.apiKey（外层兜底）        │
+ *   │ 在表里，配了 apiKey          │ agent.apiKey                       │
+ *   │ 在表里，只有 url（无 apiKey）│ 透传客户端 key（外层兜底被切断！） │
+ *   └──────────────────────────────┴────────────────────────────────────┘
+ *
+ * ⚠️ 关键：用"agent 在不在表里"的三元判断，**不能用 `||` 兜底** —— 否则
+ * "在表里但没配 key"（应透传客户端 key）会被错误回落到外层 upstream.apiKey，
+ * 与主链路行为不一致（这正是 2026-09-21 测试环境暴露的 bug）。
+ *
+ * @param clientKey 客户端透传的原始 key（handler 里 input.apiKey）
+ */
+function resolveUpstreamApiKeyForAgent(
+  config: ProxyConfig,
+  agentSource: string,
+  clientKey: string,
+): string {
+  // value 在类型里未必声明 apiKey，窄化断言安全取值；upstream 用可选链防御空壳 config。
+  const agents = config.upstream?.agents as
+    | Record<string, { url?: string; apiKey?: string }>
+    | undefined;
+  const entry = agents?.[agentSource];
+  if (entry) {
+    // 在表里：有 apiKey 用它；没配 apiKey → 透传客户端 key（不回落外层）
+    const agentKey = entry.apiKey ?? "";
+    return agentKey || clientKey;
   }
-  return { cfg: draft } as const;
+  // 不在表里：用外层 upstream.apiKey；外层留空同样透传客户端 key
+  // （对齐主链路 buildUpstreamHeaders：`if (config.upstream.apiKey)` 为空则不覆盖，
+  //  客户端原始 Authorization 原样透传 —— 见 config.example.yaml:35-36）。
+  return (config.upstream?.apiKey ?? "") || clientKey;
+}
+
+/**
+ * 解析 taskDraft LLM 配置。取值优先级（从高到低）：
+ *
+ *   1) 环境变量覆盖（ops escape hatch，运维部署时完全接管）：
+ *        MEMORY_LLM_PROTOCOL / MEMORY_LLM_API_KEY / MEMORY_LLM_BASE_URL / MEMORY_LLM_MODEL
+ *   2) 主链路上游（真·跟随主模型，方案 D）：
+ *        key   = resolveUpstreamApiKeyForAgent（严格复刻主链路 per-agent 三档语义）
+ *        url   = handler 透传的 upstreamUrl（已按 per-agent 解析）
+ *        model = handler 透传的客户端当次 model
+ *   3) taskDraft 专用配置（运维为草稿生成单独配的凭据）：config.memCommand.taskDraft.*
+ *
+ * 都取不到必需字段 → 返 "not configured"。
+ *
+ * ⚠️ 为什么 key 要跟随主链路而非客户端入口 key：
+ *   客户端请求头里的 key 是"入口鉴权 key"（verifyUserKey 用）。主链路 forward 会
+ *   按三档语义决定用 upstream.apiKey / agent.apiKey / 透传客户端 key，taskDraft 必须
+ *   用同一把，否则打上游鉴权行为不一致（历史 bug：现网全 401 → "未命名任务_"）。
+ *
+ * 环境变量场景：部署在 OpenAI 兼容网关（如 rcaaitoken）后，客户端传的 protocol
+ * 与上游实际协议不匹配导致 401 时，运维可用 MEMORY_LLM_* 覆盖，无需改代码。
+ */
+export function resolveTaskDraftConfig(
+  input: TaskDraftUpstream & { config: ProxyConfig; agentSource: string },
+): { cfg: TaskDraftConfig } | { error: string } {
+  const { config, agentSource } = input;
+  const td = config.memCommand?.taskDraft;
+
+  // 环境变量覆盖（最高优先级，运维可完全接管 task-draft 的 LLM 配置）
+  const envProtocol = process.env.MEMORY_LLM_PROTOCOL as "openai" | "anthropic" | "responses" | undefined;
+  const envApiKey = process.env.MEMORY_LLM_API_KEY;
+  const envBaseUrl = process.env.MEMORY_LLM_BASE_URL;
+  const envModel = process.env.MEMORY_LLM_MODEL;
+
+  // 主链路上游 key（复刻三档语义）→ taskDraft 专用 key
+  const upstreamKey = resolveUpstreamApiKeyForAgent(config, agentSource, input.apiKey ?? "");
+
+  // 优先级：env 覆盖 > 主链路三档 > taskDraft 专用
+  const apiKey = envApiKey || upstreamKey || td?.apiKey || "";
+  const url = envBaseUrl || input.upstreamUrl || td?.url || "";
+  const model = envModel || input.model || td?.model || "";
+  const protocol = envProtocol || input.protocol;
+
+  if (!model || !url || !apiKey) {
+    return {
+      error:
+        "task_draft is not configured (missing model / upstream url / apiKey). " +
+        "Checked: env (MEMORY_LLM_*), main upstream (config.upstream[.agents], per-agent 三档语义), " +
+        "config.memCommand.taskDraft — all empty. Set MEMORY_LLM_* env or check handler wiring / config.",
+    };
+  }
+
+  return {
+    cfg: {
+      enabled: true,
+      model,
+      url,
+      apiKey,
+      timeoutMs: td?.timeoutMs ?? DEFAULT_TASK_DRAFT_TIMEOUT_MS,
+      ...(protocol ? { protocol } : {}),
+    },
+  };
 }
 
 function getClientFromResolved(resolved: ResolvedSession, config: ProxyConfig, fallbackSpaceId: string) {
@@ -257,7 +372,7 @@ export async function createTaskFromSession(
   const resolved = resolveSession(input.sessionKey, input.agentSource, input.config);
   if ("error" in resolved) return { success: false, error: resolved.error };
 
-  const draftCfg = resolveTaskDraftConfig(input.config);
+  const draftCfg = resolveTaskDraftConfig(input);
   if ("error" in draftCfg) return { success: false, error: draftCfg.error };
 
   // Step 1: LLM 生成草稿（lockedTitle 情况下只出 description）
@@ -388,14 +503,14 @@ export async function updateTaskFromSession(
     return {
       success: false,
       error:
-        "no task bound to this session (session is in \"本次不关联任务\" mode or task_id missing); " +
+        "no task bound to this session (session is in \"暂时跳过\" mode or task_id missing); " +
         "use mem:create-task to create and bind a new task first",
     };
   }
 
   // 无参数分支才需要 LLM 配置
   if (!input.directDescription) {
-    const draftCfg = resolveTaskDraftConfig(input.config);
+    const draftCfg = resolveTaskDraftConfig(input);
     if ("error" in draftCfg) return { success: false, error: draftCfg.error };
   }
 
@@ -426,7 +541,7 @@ export async function updateTaskFromSession(
     // 有参数：直接替换，不调 LLM，也不出 status 建议
     newDescription = input.directDescription;
   } else {
-    const draftCfg = resolveTaskDraftConfig(input.config);
+    const draftCfg = resolveTaskDraftConfig(input);
     if ("error" in draftCfg) return { success: false, error: draftCfg.error };
 
     const draft = await generateTaskDraft(draftCfg.cfg, {
@@ -532,6 +647,13 @@ export async function confirmPendingTaskAction(
       previousTaskId,
       ...(persisted.bindWarning ? { error: persisted.bindWarning } : {}),
     };
+  }
+
+  // config-lock 的 pending 由 mem-command 侧自行消费，不属于 task action。
+  // 显式判 kind 而不是靠 "非 create 即 update" 收窄 —— PendingPayload 加了
+  // config-lock 后那种隐式收窄会失效。
+  if (payload.kind !== "update") {
+    return { success: false, error: `unsupported pending kind: ${payload.kind}` };
   }
 
   // update 分支

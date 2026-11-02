@@ -45,6 +45,29 @@ cd TencentDB-Agent-Memory/deploy/global-images
 > 想跳过交互、直接读 `.env` 也可以：手动 `cp .env.example .env` 并填好 LLM 后，
 > 运行 `./start-all.sh` 一路回车确认即可（默认值就是 `.env` 里的值）。
 
+### MongoDB 存储后端（试验特性，可选）
+
+默认存储仍是 **sqlite**（零依赖，数据落容器卷）。MongoDB 数据面是**试验特性**，
+默认关闭，不建议作为生产默认后端。开启后走 L0/L1/profile/skill 文档 + mongot
+原生 BM25 检索，元数据默认同步落 Mongo：
+
+```bash
+./start-all-mongo.sh    # 与 start-all.sh 流程完全一致；写入 MEMORY_CORE_STORE_MODE=mongodb 到 .env
+```
+
+- 脚本会把 `MEMORY_CORE_STORE_MODE=mongodb` 写入 `.env`，此后 `./start-all.sh`
+  也会保持 MongoDB，不会静默回退到 sqlite。要回 sqlite：注释掉该行或改为
+  `sqlite`，再跑 `./start-all.sh`；
+- 未设 `MONGODB_ENDPOINT` 时，脚本会自动起一个本地 `mongodb-atlas-local` 容器
+  （mongod + mongot 一体，**不是**云上 Atlas；数据卷 `mongo-local-*` 持久化，
+  `stop-all.sh --purge` 一并清理）；
+- 想用外部 Mongo（云 Atlas / 自建带 mongot 的副本集），在 `.env` 填
+  `MONGODB_ENDPOINT` 即可；
+- **切换存储后端不会迁移已有数据。** sqlite 在 `MEMORY_CORE_VOLUME` 卷，mongo
+  在 `mongo-local-*` 卷（或外部实例），切换后原数据仍留在原后端。当前版本需
+  自行备份并手工迁移；后续版本将提供官方迁移工具。L2/L3 文件两种模式都在
+  `MEMORY_CORE_VOLUME` 卷。
+
 ### 干跑校验（可选）
 
 `verify.sh` 仍可单独使用，只检查环境不启动容器：
@@ -109,6 +132,17 @@ proxy 接到用户请求后转发到这组端点。
 
 参数缺失时脚本会**在启动前一次性列出所有缺失项**并 `exit 1`，不会跑到一半才失败。
 
+## 记忆提示词模式（chat / code）
+
+memory-core 通过 `MEMORY_PROMPT_MODE` 切换 L1/L2/L3 pipeline 的提示词族：
+
+| 模式 | `.env` 值 | 抽取内容 | L3 产物 | 适用场景 |
+|---|---|---|---|---|
+| **code**（默认） | `MEMORY_PROMPT_MODE=code` | 项目事实 / 任务 / 决策 / SOP / 禁忌 | Team Operating Doctrine | coding agent、团队协作、工程项目 |
+| chat | `MEMORY_PROMPT_MODE=chat` | persona / episodic / instruction | persona.md（个人画像） | 个人助手、闲聊、教学 |
+
+> **注意**：`code` 模式下纯闲聊可能抽出 0 条记忆（LLM 认为没有可沉淀的工程内容）。如果 L1 一直没产出，先检查 `MEMORY_PROMPT_MODE` 是否与实际对话场景匹配。
+
 ## 内部凭据（生产环境必看）
 
 三件套之间用 `MEMORY_CORE_GATEWAY_API_KEY` 互相认证，首次启动还会通过
@@ -119,6 +153,12 @@ proxy 接到用户请求后转发到这组端点。
 | `MEMORY_CORE_GATEWAY_API_KEY` | `local` | memory-hub / proxy → memory-core 的 Bearer |
 | `MEMORY_CORE_ADMIN_USERNAME` | `admin` | 初始化的 system_admin 用户名 |
 | `MEMORY_CORE_ADMIN_USER_KEY` | `admin` | 该 admin 用户的登录 key |
+| `KNOWLEDGE_SERVICE_KEY` | **自动生成随机值** | Panel ↔ Knowledge 服务间 Bearer（写/管理端点强制） |
+
+> `KNOWLEDGE_SERVICE_KEY` 不留固定默认值：首次启动时脚本自动生成 `ks-svc-*` 随机串
+> 并写回 `.env`（重启复用不漂移），同一个值注入 memory-hub 容器两次——
+> `KNOWLEDGE_SERVICE_KEY`（Knowledge 校验侧）+ `KNOWLEDGE_AUTH_TOKEN`（Panel 调用侧）。
+> 如需自行分发（多机/外部编排），在 `.env` 显式设置即可，脚本尊重既有值。
 
 > 这三个默认值只适合个人本地跑通流程。**生产/联调/公网暴露前必须替换成随机长串**，
 > 否则任何拿到端口的人都能拿到 system_admin 权限。

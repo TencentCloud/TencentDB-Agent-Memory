@@ -150,7 +150,7 @@ export const READ_COS_TOOL_SCHEMA = {
 };
 
 /** Tool name constant. */
-export const READ_COS_TOOL_NAME = "tdai_read_cos";
+export const READ_COS_TOOL_NAME = "tdai_read_file";
 
 /** Tool description visible to the LLM. */
 export const READ_COS_TOOL_DESCRIPTION =

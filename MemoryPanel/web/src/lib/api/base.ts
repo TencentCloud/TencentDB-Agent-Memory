@@ -95,15 +95,18 @@ export async function request<T>(
   extraHeaders?: Record<string, string>
 ): Promise<T> {
   const headers: Record<string, string> = { ...extraHeaders };
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers, credentials: 'include' };
   if (body !== undefined) {
     headers['content-type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
   const res = await fetch(path, init);
   if (res.status === 401) {
-    emitUnauthorized();
-    throw new ApiError(res.status, res.statusText, 'Unauthorized');
+    const text = await res.text().catch(() => '');
+    const env = parseMetaErrorEnvelope(text);
+    // WOA 登录确认尚未建立业务会话，失败时不能清空整个登录页状态。
+    if (!path.endsWith('/auth/idp/woa/complete')) emitUnauthorized();
+    throw new ApiError(res.status, res.statusText, text || 'Unauthorized', env);
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -137,6 +140,30 @@ export async function getCurrentUser(): Promise<PublicUser> {
 }
 
 /**
+ * 解包内核统一信封：`code !== 0` 或 `data` 为空时抛 ApiError。
+ *
+ * meta（/api/v1/meta/*）与 analytics（/api/v1/analytics/*）等透明代理的信封结构
+ * 完全一致，解包逻辑由本函数统一承载，避免各 client 重复实现导致行为漂移。
+ */
+export function unwrapEnvelope<T>(envelope: MetaEnvelope<T>, emptyMessage: string): T {
+  if (envelope.code !== 0) {
+    throw new ApiError(200, envelope.message, '', {
+      code: envelope.code,
+      requestId: envelope.request_id,
+      rawMessage: envelope.message,
+    });
+  }
+  if (envelope.data === null || envelope.data === undefined) {
+    throw new ApiError(200, envelope.message || emptyMessage, '', {
+      code: envelope.code,
+      requestId: envelope.request_id,
+      rawMessage: envelope.message || emptyMessage,
+    });
+  }
+  return envelope.data;
+}
+
+/**
  * meta 透明代理的公共调用：注入指定 Header，POST body，解析信封。
  * `auth/verify` 走此函数但只传 X-Tdai-Service-Id（不带 user-key），
  * 其余 action 走 `metaPost`（自动从 session 注入双 Header）。
@@ -146,21 +173,7 @@ export async function getCurrentUser(): Promise<PublicUser> {
   headers: Record<string, string>
 ): Promise<T> {
   const envelope = await request<MetaEnvelope<T>>('POST', `${META_PREFIX}/${action}`, body, headers);
-  if (envelope.code !== 0) {
-    throw new ApiError(200, envelope.message, '', {
-      code: envelope.code,
-      requestId: envelope.request_id,
-      rawMessage: envelope.message,
-    });
-  }
-  if (envelope.data === null || envelope.data === undefined) {
-    throw new ApiError(200, envelope.message || 'empty meta response', '', {
-      code: envelope.code,
-      requestId: envelope.request_id,
-      rawMessage: envelope.message || 'empty meta response',
-    });
-  }
-  return envelope.data;
+  return unwrapEnvelope(envelope, 'empty meta response');
 }
 
 export async function metaPost<T>(action: string, body: Record<string, unknown> = {}): Promise<T> {
@@ -168,10 +181,10 @@ export async function metaPost<T>(action: string, body: Record<string, unknown> 
   if (!session) {
     throw new ApiError(401, 'Unauthorized', 'no active panel session');
   }
-  return metaCall<T>(action, body, {
-    'X-Tdai-Service-Id': session.instanceId,
-    'X-Tdai-User-Key': session.userKey,
-  });
+  const headers: Record<string, string> = { 'X-Tdai-Service-Id': session.instanceId };
+  // IdP Session 用 HttpOnly Cookie 认证，user_key 不下发到浏览器。
+  if (session.userKey) headers['X-Tdai-User-Key'] = session.userKey;
+  return metaCall<T>(action, body, headers);
 }
 
 /**

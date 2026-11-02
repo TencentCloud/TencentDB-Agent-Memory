@@ -7,48 +7,14 @@ import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-na
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
-
-export const DEFAULT_PROFILE_SCOPE = "global";
-
-export type ProfileIsolation = { teamId?: string; userId?: string; agentId?: string; sessionId?: string };
-
-export interface ProfileScopeOptions {
-  scope?: string;
-  isolation?: ProfileIsolation;
-}
-
-export function buildProfileIsolationScope(ctx?: ProfileIsolation): string {
-  if (!ctx) return DEFAULT_PROFILE_SCOPE;
-  const teamId = ctx.teamId || ctx.userId || "default";
-  const agentId = ctx.agentId || "default";
-  // L2/L3 are team+agent-level memories. L0/L1 keep user/session/task-level
-  // isolation, but profiles intentionally ignore userId/sessionId/taskId so
-  // one team's agent memory can accumulate across multiple sessions/users.
-  return `team:${teamId}|agent:${agentId}`;
-}
-
-export function parseProfileIsolationScope(scope: string): ProfileIsolation | undefined {
-  const parts = scope.split("|");
-  const values: Record<string, string> = {};
-  for (const part of parts) {
-    const idx = part.indexOf(":");
-    if (idx <= 0) return undefined;
-    values[part.slice(0, idx)] = part.slice(idx + 1);
-  }
-  if (!values.agent) return undefined;
-  const sessionId = values.session ? safeDecodeURIComponent(values.session) : undefined;
-  if (values.team) return { teamId: values.team, agentId: values.agent, ...(sessionId ? { sessionId } : {}) };
-  if (values.user) return { userId: values.user, agentId: values.agent, ...(sessionId ? { sessionId } : {}) };
-  return undefined;
-}
-
-function safeDecodeURIComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
+import {
+  DEFAULT_PROFILE_SCOPE,
+  buildProfileIsolationScope,
+  buildProfileStableId,
+  parseProfileIsolationScope,
+  type ProfileIsolation,
+  type ProfileScopeOptions,
+} from "./profile-scope.js";
 
 function resolveProfileScope(options?: ProfileScopeOptions): { scope: string; isolation?: ProfileIsolation } {
   const scope = options?.scope ?? buildProfileIsolationScope(options?.isolation);
@@ -76,13 +42,6 @@ export interface ProfileBaseline {
   version: number;
   contentMd5: string;
   createdAtMs: number;
-}
-
-export function buildProfileStableId(scope: string, type: "l2" | "l3", filename: string): string {
-  const hash = createHash("sha256")
-    .update(`${scope}\u0000${type}\u0000${filename}`)
-    .digest("hex");
-  return `profile:v1:${hash}`;
 }
 
 function md5(text: string): string {
@@ -263,6 +222,13 @@ export async function pullProfilesToLocal(
   options?: ProfileScopeOptions,
 ): Promise<Map<string, ProfileBaseline>> {
   if (!store.pullProfiles) return new Map();
+
+  // P2-D6: rowfs 文件模式下 L2/L3 读走行视图，不把行灌成本地文件——
+  // 灌了就是永远不被读取的第二份副本（行即文件）。
+  if (storage?.getBackend().type === "rowfs") {
+    logger.debug?.(`[memory-tdai][profile-sync] rowfs mode: skip profile pull (rows are read via row view)`);
+    return new Map();
+  }
 
   const { scope, isolation } = resolveProfileScope(options);
   const allRecords = await store.pullProfiles();
@@ -459,6 +425,12 @@ export async function syncLocalProfilesToStore(
   storage?: StorageAdapter,
   options?: ProfileScopeOptions,
 ): Promise<ProfileRecord[]> {
+  // P2-D6: rowfs 模式下写已经通过行视图直接落行；回灌只会拿着空 baseline
+  // 把所有行无意义地重写一遍（版本空转，还会掩盖真实的乐观锁冲突）。
+  if (storage?.getBackend().type === "rowfs") {
+    logger.debug?.(`[memory-tdai][profile-sync] rowfs mode: skip profile sync-back (writes already landed on rows)`);
+    return [];
+  }
   const localProfiles = await listLocalProfiles(dataDir, storage, options);
   const localIds = new Set(localProfiles.map((profile) => profile.id));
 
