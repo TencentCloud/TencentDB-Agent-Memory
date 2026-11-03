@@ -8,7 +8,7 @@
  * 后续可在 TABS 数组里追加其他 Tab（如通知、偏好设置等）。
  *
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -24,6 +24,7 @@ import {
   ChatIcon,
 } from 'tea-icons-react';
 import { userConfigApi, type AssetCapabilityKey } from '@/lib/teamApi';
+import { AssetToggleSaver } from '@/lib/assetToggleSaver';
 import { tea } from '@/lib/tea-bridge';
 
 // ===== 资源模块 =====
@@ -80,7 +81,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     chat_memory: true,
   }));
   const [loading, setLoading] = useState(true);
-  const [savingKey, setSavingKey] = useState<AssetCapabilityKey | null>(null);
+  // 每个开关独立的保存状态集合：并发保存互不影响，任一项完成不会提前解锁其他项
+  const [savingKeys, setSavingKeys] = useState<ReadonlySet<string>>(new Set());
+  const saverRef = useRef<AssetToggleSaver | null>(null);
+  if (!saverRef.current) saverRef.current = new AssetToggleSaver();
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -107,20 +111,36 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   async function handleToggle(mod: ResourceModule, next: boolean) {
+    const saver = saverRef.current!;
+    const requestId = saver.begin(mod.paramKey);
+    // 同一项保存未完成时禁止重复提交（Switch 同时也被禁用）
+    if (requestId === null) return;
     const previous = enabled[mod.id];
     setEnabled((prev) => ({ ...prev, [mod.id]: next }));
-    setSavingKey(mod.paramKey);
+    setSavingKeys((prev) => new Set(prev).add(mod.paramKey));
     setError('');
     try {
       await userConfigApi.setAssetCapability(mod.paramKey, next);
+      // 过期响应不再提示，避免干扰该开关后续的操作
+      if (!saver.isLatest(mod.paramKey, requestId)) return;
       tea.notify.success(t(next ? 'settings.notify.enabled' : 'settings.notify.disabled', { label: t(mod.labelKey) }));
     } catch (e) {
+      // 过期失败响应不得回滚已经更新的操作
+      if (!saver.isLatest(mod.paramKey, requestId)) return;
       setEnabled((prev) => ({ ...prev, [mod.id]: previous }));
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      tea.notify.error(t('settings.notify.saveFailed', { msg }));
+      const failure = t('settings.notify.saveFailed', { label: t(mod.labelKey), msg });
+      setError(failure);
+      tea.notify.error(failure);
     } finally {
-      setSavingKey(null);
+      // 仅清除本项本次请求的保存状态，不影响其他仍在保存中的开关
+      if (saver.finish(mod.paramKey, requestId)) {
+        setSavingKeys((prev) => {
+          const nextKeys = new Set(prev);
+          nextKeys.delete(mod.paramKey);
+          return nextKeys;
+        });
+      }
     }
   }
 
@@ -165,7 +185,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         <Text style={{ fontSize: 13, fontWeight: 500 }}>
                           {t(mod.labelKey)}
                         </Text>
-                        {savingKey === mod.paramKey ? (
+                        {savingKeys.has(mod.paramKey) ? (
                           <Tag theme="warning" variant="soft" size="sm">{t('settings.tag.saving')}</Tag>
                         ) : enabled[mod.id] ? (
                           <Tag theme="success" variant="soft" size="sm">{t('settings.tag.enabled')}</Tag>
@@ -180,7 +200,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </div>
                   <Switch
                     value={enabled[mod.id]}
-                    disabled={loading || savingKey === mod.paramKey}
+                    disabled={loading || savingKeys.has(mod.paramKey)}
                     onChange={(v) => void handleToggle(mod, v)}
                   />
                 </div>

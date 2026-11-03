@@ -136,7 +136,7 @@ export const enUS = {
   'settings.module.chatMemory.desc': 'Tool injection and new conversation ingestion stop',
   'settings.notify.enabled': '{{label}} enabled',
   'settings.notify.disabled': '{{label}} disabled',
-  'settings.notify.saveFailed': 'Save failed: {{msg}}',
+  'settings.notify.saveFailed': 'Failed to save {{label}}: {{msg}}',
 
   // ===== Common =====
   'common.cancel': 'Cancel',
