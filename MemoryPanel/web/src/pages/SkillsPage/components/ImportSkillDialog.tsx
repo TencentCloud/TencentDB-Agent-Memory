@@ -256,7 +256,8 @@ export default function ImportSkillDialog(props: {
       if (!partition?.mainFile) {
         throw new Error(partition?.warning ?? t('importSkill.error.noMainFile'));
       }
-      const content = await readAsUtf8(partition.mainFile);
+      // Match Core's newline normalization before extracting the name or sending the main file.
+      const content = (await readAsUtf8(partition.mainFile)).replace(/\r\n?/g, '\n');
       const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
       const nameMatch = fmMatch?.[1].match(/^name:\s*(.+)$/m);
       const name = nameMatch?.[1].trim().replace(/^["']|["']$/g, '') || partition.skillName || '';
