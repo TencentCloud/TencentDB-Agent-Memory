@@ -98,6 +98,29 @@ cd TencentDB-Agent-Memory/deploy/global-images
 
 ---
 
+## 可选能力：Qdrant 存储后端（默认关闭）
+
+**作用**：把记忆数据面（L0/L1/L2/L3、memory prompt、审计）存入 [Qdrant](https://qdrant.tech)。关键词召回使用 BM25 稀疏向量（服务端计算 IDF）；配置 embedding 后叠加稠密向量，并与 BM25 用 RRF 融合。Skill 与元数据仍留在容器 volume 内的 sqlite。
+
+### 开启
+
+在 `.env` 中设置后执行 `./start-all.sh`：
+
+```bash
+MEMORY_CORE_STORE_MODE=qdrant
+# 外部 Qdrant（自建或 Qdrant Cloud）：
+# QDRANT_URL=https://your-cluster.cloud.qdrant.io:6333
+# QDRANT_API_KEY=<YOUR_QDRANT_API_KEY>
+```
+
+`QDRANT_URL` 留空时，脚本会在同一网络内启动本地 `qdrant/qdrant` 容器，数据落在 `qdrant-local-storage` 卷，`./stop-all.sh --purge` 会一并清理。
+
+### 关闭
+
+注释掉 `.env` 中的 `MEMORY_CORE_STORE_MODE` 或改为 `sqlite`，再执行 `./start-all.sh`。与 MongoDB 相同，**切换后端不会迁移已有数据**，请先备份。环境变量与检索细节见 [`MemoryCore/README_CN.md`](./MemoryCore/README_CN.md)。
+
+---
+
 ## 部署完成后：把它跑起来
 
 服务起来只是第一步。要让 coding agent 用上团队记忆，

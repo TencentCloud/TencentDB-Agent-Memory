@@ -225,6 +225,38 @@ Configuration templates:
 
 Every business request should identify its memory instance through `x-tdai-service-id`. New adapters should use the v3 data plane and always provide Team, Agent, and User isolation dimensions.
 
+### Qdrant storage backend (optional)
+
+Set `STORE_MODE=qdrant` to keep the memory data plane — L0 conversations, L1 atoms, L2/L3 profiles, memory prompts, generation refs, audit and knowledge records — in [Qdrant](https://qdrant.tech) (tested with 1.19). Skills stay in a local SQLite `skills.db` (per instance under `instances/{id}/` in the gateway) and metadata in its usual store.
+
+```bash
+export STORE_MODE=qdrant
+export QDRANT_URL="http://localhost:6333"
+# export QDRANT_API_KEY=...              # Qdrant Cloud / secured clusters
+# export QDRANT_COLLECTION_PREFIX=tdai    # default
+node --import tsx src/gateway/server.ts
+```
+
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `QDRANT_URL` | Unset (required) | Qdrant REST endpoint. Standard URL semantics: without a port the scheme default (80/443) is used, and a path (e.g. `https://gw/qdrant`) is kept as the request prefix |
+| `QDRANT_API_KEY` | Empty | API key |
+| `QDRANT_COLLECTION_PREFIX` | `tdai` | Collections are named `{prefix}_{l0,l1,profiles,…}` and shared by all instances |
+
+The plugin/SDK form selects it with `storeBackend: qdrant` and reads the same environment variables.
+
+How search works:
+
+- **Keyword**: every L0/L1 point carries a BM25 sparse vector built from the same jieba tokens the other backends use. The collection applies Qdrant's `idf` modifier, so corpus IDF is computed server-side. Works without any embedding provider.
+- **Vector**: when `memory.embedding` is configured, points also carry a cosine dense vector named after the embedding configuration (`dense_{dims}_{hash(provider, model)}`).
+- **Hybrid**: dense and BM25 candidates are fused with RRF (k=60) in a single Query API call. The query is embedded within `embedding.recallTimeoutMs`; on failure or timeout the search falls back to BM25.
+- **Multitenancy**: following Qdrant's [multitenancy guide](https://qdrant.tech/documentation/guides/multiple-partitions/), all instances share one set of collections. Each point carries its instance id in a `_tenant` payload field indexed with `is_tenant: true`, every read and write is filtered by it, and dense vectors use per-tenant HNSW graphs (`m: 0, payload_m: 16`).
+- **Changing the embedding provider, model or dimensions** adds a new dense vector next to the old one — nothing is deleted, so pods with different configs can run side by side during a rolling deploy. The store backfills, in the background, every point that lacks the current vector: after start-up, after any write stored without one (embedding failed or another config rewrote the text), and every 10 minutes. No manual reindex is needed, and keyword search keeps working meanwhile. Vectors of retired configs can be dropped with `DELETE /collections/{collection}/vectors/{name}` once no pod uses them.
+
+`FILE_STORE_MODE=rowfs` is supported, since the Qdrant store serves L2/L3 profile rows; their optimistic lock is enforced server-side with a conditional upsert. Switching backends does not migrate existing data.
+
+Tests run against a live server: `QDRANT_TEST_URL=http://localhost:6333 npx vitest run src/core/store/qdrant`.
+
 ## Project layout
 
 ```text

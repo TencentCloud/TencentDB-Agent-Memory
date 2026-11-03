@@ -64,6 +64,7 @@ export class LocalBackendResolver implements BackendResolver {
       this.deps.storeMode ?? (this.deps.deployMode === "service" ? "tcvdb" : "sqlite");
     switch (kind) {
       case "sqlite":
+      case "qdrant":
         return { kind, conn: null };
       case "tcvdb":
         return { kind, conn: await this.deps.source.resolveVdb(instanceId) };

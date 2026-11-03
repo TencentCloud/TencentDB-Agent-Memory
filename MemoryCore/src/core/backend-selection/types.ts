@@ -14,7 +14,7 @@
 
 import type { CosConfig, MongoConfig, VdbConfig } from "../instance-config-provider.js";
 
-export type DbKind = "sqlite" | "tcvdb" | "mongodb";
+export type DbKind = "sqlite" | "tcvdb" | "mongodb" | "qdrant";
 
 /**
  * Env-surface vocabulary for `FILE_STORE_MODE` (两轴模型定稿 §5 映射的输入侧).
@@ -53,7 +53,8 @@ export type FsOthersKind = "local" | "cos" | "mongofs";
 export type DbChoice =
   | { kind: "sqlite"; conn: null }
   | { kind: "tcvdb"; conn: VdbConfig }
-  | { kind: "mongodb"; conn: MongoConfig };
+  | { kind: "mongodb"; conn: MongoConfig }
+  | { kind: "qdrant"; conn: null };
 
 export type FsOthersChoice =
   | { kind: "local"; conn: null }

@@ -18,7 +18,8 @@ import { VectorStore } from "./sqlite/memory-store.js";
 import { TcvdbMemoryStore } from "./tcvdb/memory-store.js";
 import { MongoMemoryStore } from "./mongodb/memory-store.js";
 import { getSharedMongoClientPool } from "./mongodb/client-pool.js";
-import { readMongoEnvConfig } from "../../utils/env-config.js";
+import { QdrantMemoryStore } from "./qdrant/memory-store.js";
+import { readMongoEnvConfig, readQdrantEnvConfig } from "../../utils/env-config.js";
 import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
 import type { EmbeddingService } from "./embedding.js";
 import { createBM25Encoder } from "./bm25-local.js";
@@ -35,6 +36,25 @@ export interface StoreBundle {
   bm25Encoder?: BM25LocalEncoder;
   /** Snapshot of current store config for manifest writing. */
   storeSnapshot: import("../../utils/manifest.js").StoreConfigSnapshot;
+}
+
+export function createConfiguredEmbeddingService(
+  config: MemoryTdaiConfig,
+  logger?: StoreLogger,
+): EmbeddingService | undefined {
+  const { enabled, provider, apiKey } = config.embedding;
+  if (!enabled || provider === "local" || provider === "none" || !apiKey) {
+    return undefined;
+  }
+  return createEmbeddingService({
+    provider: config.embedding.provider,
+    baseUrl: config.embedding.baseUrl,
+    apiKey: config.embedding.apiKey,
+    model: config.embedding.model,
+    dimensions: config.embedding.dimensions,
+    sendDimensions: config.embedding.sendDimensions,
+    maxInputChars: config.embedding.maxInputChars,
+  }, logger);
 }
 
 /**
@@ -127,21 +147,31 @@ export function createStoreBundle(
       };
     }
 
+    case "qdrant": {
+      const qdrant = readQdrantEnvConfig();
+      if (!qdrant.url) {
+        throw new Error(`${TAG} qdrant backend requires QDRANT_URL`);
+      }
+      const embeddingService = createConfiguredEmbeddingService(config, logger);
+      const store = new QdrantMemoryStore({
+        url: qdrant.url,
+        apiKey: qdrant.apiKey,
+        collectionPrefix: qdrant.collectionPrefix,
+        embedding: embeddingService,
+        queryEmbeddingTimeoutMs: config.embedding.recallTimeoutMs ?? config.embedding.timeoutMs,
+        logger,
+      });
+      return {
+        store,
+        embedding: (embeddingService ?? new NoopEmbeddingService()) as unknown as IEmbeddingService,
+        storeSnapshot: { type: "qdrant", qdrantUrl: qdrant.url, qdrantCollectionPrefix: qdrant.collectionPrefix },
+      };
+    }
+
     case "sqlite":
     default: {
       // ── Embedding service (only when enabled) ──
-      let embeddingService: EmbeddingService | undefined;
-      if (config.embedding.enabled && config.embedding.provider !== "local" && config.embedding.apiKey) {
-        embeddingService = createEmbeddingService({
-          provider: config.embedding.provider,
-          baseUrl: config.embedding.baseUrl,
-          apiKey: config.embedding.apiKey,
-          model: config.embedding.model,
-          dimensions: config.embedding.dimensions,
-          sendDimensions: config.embedding.sendDimensions,
-          maxInputChars: config.embedding.maxInputChars,
-        }, logger);
-      }
+      const embeddingService = createConfiguredEmbeddingService(config, logger);
 
       // dimensions from config (0 when provider="none" → vec0 deferred)
       const dims = config.embedding.dimensions;

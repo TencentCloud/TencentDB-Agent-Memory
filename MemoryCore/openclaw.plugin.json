@@ -21,9 +21,9 @@
       },
       "storeBackend": {
         "type": "string",
-        "enum": ["sqlite", "tcvdb"],
+        "enum": ["sqlite", "tcvdb", "qdrant"],
         "default": "sqlite",
-        "description": "存储后端：sqlite（本地 SQLite + sqlite-vec）或 tcvdb（腾讯云向量数据库）。仅 local/function 模式生效"
+        "description": "存储后端：sqlite（本地 SQLite + sqlite-vec）、tcvdb（腾讯云向量数据库）或 qdrant（Qdrant，通过 QDRANT_* 环境变量连接；Skill 仍存本地 SQLite）。仅 local/function 模式生效"
       },
       "server": {
         "type": "object",
