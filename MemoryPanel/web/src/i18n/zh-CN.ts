@@ -135,7 +135,7 @@ export const zhCN = {
   'settings.module.chatMemory.desc': '关闭后工具注入与新对话写入均停止',
   'settings.notify.enabled': '{{label}} 已开启',
   'settings.notify.disabled': '{{label}} 已关闭',
-  'settings.notify.saveFailed': '保存失败：{{msg}}',
+  'settings.notify.saveFailed': '保存「{{label}}」失败：{{msg}}',
 
   // ===== Common =====
   'common.cancel': '取消',
