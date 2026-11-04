@@ -286,7 +286,8 @@ export function deleteSources(db: Database.Database, filenames: string[]): void 
 /**
  * ingest 后登记单个源的抽取结果（设计 §3.6 step 6，在索引重建同事务内调用）。
  * - 已有行：只更新 status/ingested_at/ingest_error，**不动** created_at/updated_at/sha256/size
- *   （sha 由 rawWrite 维护、内容未变；updated_at 表示"内容变更"，抽取不算内容变更）；
+ *   （sha 由 rawWrite 维护；updated_at 表示"内容变更"，抽取不算内容变更）。
+ *   仅更新同一 sha 的版本：分批上传期间旧抽取可能结束，不得把新内容标成已抽取。
  * - 无行（源文件未经 rawWrite 直接落盘）：以磁盘现值 INSERT（created_at=updated_at=now）。
  * ok=true → ingested + ingested_at；ok=false → failed + ingest_error。
  */
@@ -301,8 +302,8 @@ export function recordSourceIngestResult(
   const exists = db.prepare("SELECT 1 FROM source WHERE filename = ?").get(entry.filename);
   if (exists) {
     db.prepare(
-      "UPDATE source SET status = ?, ingested_at = ?, ingest_error = ? WHERE filename = ?",
-    ).run(status, ingestedAt, ingestError, entry.filename);
+      "UPDATE source SET status = ?, ingested_at = ?, ingest_error = ? WHERE filename = ? AND sha256 = ?",
+    ).run(status, ingestedAt, ingestError, entry.filename, entry.sha256);
   } else {
     db.prepare(
       `INSERT INTO source(filename, sha256, size, status, created_at, updated_at, last_modified_by, ingested_at, ingest_error)

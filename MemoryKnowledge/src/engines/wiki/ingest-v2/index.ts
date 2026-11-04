@@ -8,7 +8,7 @@
  * ingestSource() 保留为薄封装（= extract + commit 串行），现有单测/外部调用不变。 */
 
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, relative } from "node:path";
 import type { LimitFunction } from "p-limit";
 import { createLlmClient, type LlmClient, type RawLlmConfig } from "./llm.js";
 import { loadTemplate } from "./template.js";
@@ -122,7 +122,10 @@ export async function extractSource(
   // 原始文件原样落盘，此处按字节读出后交给转换层：
   // 文本类直通，富文档类（docx/pdf/...）转纯文本。转换失败抛 ConvertError，
   // 由 runIngestIncremental 的 try/catch 标记该源 failed，不影响同批其它源。
-  const sourceName = basename(sourcePath);
+  const sourcesDir = join(projectPath, "raw", "sources");
+  const sourceName = isInsideRoot(sourcesDir, sourcePath)
+    ? relative(sourcesDir, sourcePath).replace(/\\/g, "/")
+    : basename(sourcePath);
   const { text: sourceText } = await toSourceText({
     bytes: readFileSync(sourcePath),
     filename: sourceName,
@@ -319,7 +322,10 @@ export async function ingestSource(
   const existingPages = scanExistingPages(projectPath);
   const candidates = await extractSource(projectPath, sourcePath, llmConfig, existingPages, options);
   const llm = options.llm ?? createLlmClient(llmConfig);
-  const sourceName = basename(sourcePath);
+  const sourcesDir = join(projectPath, "raw", "sources");
+  const sourceName = isInsideRoot(sourcesDir, sourcePath)
+    ? relative(sourcesDir, sourcePath).replace(/\\/g, "/")
+    : basename(sourcePath);
   const { written } = await commitCandidates(
     projectPath,
     [{ sourceFilename: sourceName, candidates }],
