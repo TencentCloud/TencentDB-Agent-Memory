@@ -29,8 +29,15 @@ export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | nul
   return null;
 }
 
-export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity | null, userMessage: TdaiMessage | null, assistantContent: string | null | undefined): Promise<void> {
-  if (!identity) return;
+export async function recordTdaiTurn(
+  client: TdaiClient,
+  identity: TdaiIdentity | null,
+  userMessage: TdaiMessage | null,
+  assistantContent: string | null | undefined,
+  options: { allowAssistantOnly?: boolean } = {},
+): Promise<void> {
+  // Direct callers retain the user-message gate; Codex continuations opt in.
+  if (!identity || (!userMessage && !options.allowAssistantOnly)) return;
   const messages: TdaiMessage[] = userMessage ? [userMessage] : [];
   if (assistantContent?.trim()) {
     messages.push({ role: "assistant", content: assistantContent });

@@ -41,7 +41,9 @@ describe("Codex L0 tool continuations", () => {
     const client = { addConversation } as unknown as TdaiClient;
     const history: unknown[] = [user()];
     for (const reply of ["I'll inspect the code", "", "Here is the flow"]) {
-      await recordTdaiTurn(client, identity, extractNewCodexUserMessage(history), reply);
+      await recordTdaiTurn(client, identity, extractNewCodexUserMessage(history), reply, {
+        allowAssistantOnly: true,
+      });
       history.push(assistant, { type: "custom_tool_call_output", output: "result" });
     }
     expect(addConversation.mock.calls.flatMap((call) => call[1])).toEqual([

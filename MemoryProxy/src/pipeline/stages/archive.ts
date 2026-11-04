@@ -132,7 +132,9 @@ export async function stageArchive(input: ArchiveStageInput): Promise<void> {
         // stream 场景: 挂全局 in-flight set, retry 3 次, catch 后 warn 不 throw
         trackWrite(
           withL0Retry(() =>
-            recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage ?? null, assistant.text || null),
+            recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage ?? null, assistant.text || null, {
+              allowAssistantOnly: input.tdaiAllowAssistantOnly,
+            }),
           ).catch((err: unknown) => {
             console.warn(
               `${input.logPrefix ?? "[archive-tdai-l0]"} failed:`,
@@ -142,7 +144,9 @@ export async function stageArchive(input: ArchiveStageInput): Promise<void> {
         );
       } else {
         // non-stream 场景: 直接 await, 让 handler 顶端能感知失败
-        await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage ?? null, assistant.text);
+        await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage ?? null, assistant.text, {
+          allowAssistantOnly: input.tdaiAllowAssistantOnly,
+        });
       }
     } else {
       logExtractionSkipped(config, "tdai-memory", sessionKey);
