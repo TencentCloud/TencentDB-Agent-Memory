@@ -52,6 +52,8 @@ export interface ArchiveStageInput {
   tdaiClient?: TdaiClient | null;
   tdaiIdentity?: TdaiIdentity;
   tdaiUserMessage?: TdaiMessage;
+  /** Codex tool continuations have new assistant text but no new user turn. */
+  tdaiAllowAssistantOnly?: boolean;
 
   /** archive-hook 短路旗标:
    *   - isAuxiliary = codex/dsh sideRequest → 完全跳过 (不写 L0, 不 trigger skill)
@@ -121,18 +123,18 @@ export async function stageArchive(input: ArchiveStageInput): Promise<void> {
     tdaiUserMessage,
   } = input;
 
-  // 1. TDAI L0 write (若 client + identity + userMessage 都齐才写)
-  // codex/wb 老 archive-hook 只要求 tdaiClient + tdaiIdentity, tdaiUserMessage 可空 (会写 null message);
-  // openai-chat/anthropic 老 handler 三者都要求; 这里保留"三者都齐"最保守判据。
-  // TODO: 若发现 codex/wb 依赖"tdaiUserMessage null 时仍写 L0", 需要放宽此判据。
+  // Codex continuations must retain assistant text without replaying the user.
+  // Other runners retain the existing requirement for a user message.
   const writeMode = input.tdaiWriteMode ?? "sync-await";
-  if (tdaiClient && tdaiIdentity && tdaiUserMessage) {
+  if (tdaiClient && tdaiIdentity && (tdaiUserMessage || (input.tdaiAllowAssistantOnly && assistant.text.trim()))) {
     if (isExtractionAllowed(config, "tdai-memory")) {
       if (writeMode === "fire-and-forget-tracked") {
         // stream 场景: 挂全局 in-flight set, retry 3 次, catch 后 warn 不 throw
         trackWrite(
           withL0Retry(() =>
-            recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistant.text || null),
+            recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage ?? null, assistant.text || null, {
+              allowAssistantOnly: input.tdaiAllowAssistantOnly,
+            }),
           ).catch((err: unknown) => {
             console.warn(
               `${input.logPrefix ?? "[archive-tdai-l0]"} failed:`,
@@ -142,7 +144,9 @@ export async function stageArchive(input: ArchiveStageInput): Promise<void> {
         );
       } else {
         // non-stream 场景: 直接 await, 让 handler 顶端能感知失败
-        await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistant.text);
+        await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage ?? null, assistant.text, {
+          allowAssistantOnly: input.tdaiAllowAssistantOnly,
+        });
       }
     } else {
       logExtractionSkipped(config, "tdai-memory", sessionKey);
