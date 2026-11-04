@@ -1,6 +1,29 @@
 /** English translation — en-US */
 
 export const enUS = {
+  'skills.github.installedCommit': 'Installed commit',
+  'skills.github.declaredVersion': 'Declared version',
+  'skills.github.installedCheck': 'Last installed check',
+  'skills.github.hint': "Import one Skill from a public GitHub repository. Preview the pinned commit before confirming. Files are stored, never executed.",
+  'skills.github.repository': "Repository URL",
+  'skills.github.ref': "Branch, tag or commit",
+  'skills.github.path': "Skill subdirectory (empty for repository root)",
+  'skills.github.check': "Check GitHub updates",
+  'skills.github.preview': "Preview Skill",
+  'skills.github.commit': "Pinned commit",
+  'skills.github.checked': "Checked at",
+  'skills.github.current': "Already at the latest checked commit.",
+  'skills.github.conflict': "This Skill has local edits. Review the comparison before replacing them, or detach to keep the local version. Closing this dialog cancels the update.",
+  'skills.github.overwrite': "Replace my local edits with this preview",
+  'skills.github.before': "Current SKILL.md",
+  'skills.github.after': "Incoming SKILL.md",
+  'skills.github.added': "Added resources",
+  'skills.github.changed': "Changed resources",
+  'skills.github.removed': "Removed resources",
+  'skills.github.install': "Confirm installation",
+  'skills.github.upgrade': "Confirm upgrade",
+  'skills.github.detach': "Detach and keep local version",
+
   // ===== App =====
   'app.checkingSession': 'Checking session…',
 

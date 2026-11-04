@@ -91,3 +91,9 @@ textarea._memory-isd-mono-input {
 ._memory-isd-result-text {
   white-space: pre-wrap;
 }
+
+._memory-github-skill { display: grid; gap: 12px; }
+._memory-github-skill dd { overflow-wrap: anywhere; }
+._memory-github-diff { display: flex; gap: 16px; flex-wrap: wrap; }
+._memory-github-diff section { flex: 1 1 260px; min-width: 0; }
+._memory-github-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }

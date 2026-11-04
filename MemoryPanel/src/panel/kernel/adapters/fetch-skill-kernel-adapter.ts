@@ -16,7 +16,9 @@ export class FetchSkillKernelAdapter implements SkillKernelPort {
   ) {}
 
   invoke(action: string, body: Record<string, unknown>, ctx: MetaCallContext) {
-    const cred = toKernelCredentials(ctx, { timeoutMs: this.timeoutMs });
+    // A bounded GitHub snapshot download may outlast the normal metadata timeout.
+    const timeoutMs = action.startsWith('github/') ? Math.max(this.timeoutMs, 75_000) : this.timeoutMs;
+    const cred = toKernelCredentials(ctx, { timeoutMs });
     return this.http.postEnvelope(`/v3/skill/${action}`, body, cred);
   }
 }

@@ -1,6 +1,29 @@
 /** 中文翻译 — zh-CN */
 
 export const zhCN = {
+  'skills.github.installedCommit': '当前安装提交',
+  'skills.github.declaredVersion': '声明版本',
+  'skills.github.installedCheck': '当前安装版本的检查时间',
+  'skills.github.hint': "从公开 GitHub 仓库导入一个 Skill，先预览固定提交再确认。导入只保存文件，不执行脚本。",
+  'skills.github.repository': "仓库地址",
+  'skills.github.ref': "分支、标签或提交",
+  'skills.github.path': "Skill 子目录（留空使用仓库根目录）",
+  'skills.github.check': "检查 GitHub 更新",
+  'skills.github.preview': "预览 Skill",
+  'skills.github.commit': "固定提交",
+  'skills.github.checked': "检查时间",
+  'skills.github.current': "已是本次检查的最新提交。",
+  'skills.github.conflict': "此 Skill 有本地修改。请先比较内容，再确认覆盖；也可脱离来源并保留本地版本。关闭弹窗即可取消升级。",
+  'skills.github.overwrite': "确认用此预览覆盖本地修改",
+  'skills.github.before': "当前 SKILL.md",
+  'skills.github.after': "待导入 SKILL.md",
+  'skills.github.added': "新增附件",
+  'skills.github.changed': "修改附件",
+  'skills.github.removed': "删除附件",
+  'skills.github.install': "确认安装",
+  'skills.github.upgrade': "确认升级",
+  'skills.github.detach': "脱离来源并保留本地版本",
+
   // ===== App =====
   'app.checkingSession': '正在检测登录态…',
 

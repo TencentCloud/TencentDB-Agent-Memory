@@ -297,6 +297,8 @@ export interface Skill {
 
 /** `appendVersion` 的入参。store 内部基于 head 推导 version+1。 */
 export interface AppendVersionInput {
+  /** Compare the observed head in the store before publishing (0 = absent). */
+  expected_version?: number;
   /** 写入身份。不传则写 "default"。 */
   user_id?: string;
   team_id?: string;

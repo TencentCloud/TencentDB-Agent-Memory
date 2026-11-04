@@ -193,11 +193,15 @@ export class TcvdbSkillStore implements ISkillStore {
     }
 
     // 3. 版本唯一性校验
+    if (input.expected_version !== undefined && ((head?.version ?? 0) !== input.expected_version || (head && head.status !== "active"))) {
+      throw new SkillStoreError("SKILL_VERSION_STALE", "head changed during publication");
+    }
     const newVersion = head ? head.version + 1 : 1;
     const existing = await this._queryOneAsync(
       `skill_id="${this._escape(sid)}" and version=${newVersion} and team_id="${this._escape(tid)}"`,
     );
     if (existing) {
+      if (input.expected_version !== undefined) throw new SkillStoreError("SKILL_VERSION_STALE");
       // 同一版本已存在 → 幂等返回
       return existing;
     }
@@ -206,7 +210,7 @@ export class TcvdbSkillStore implements ISkillStore {
     const userIdForRow = input.user_id ?? "default";
     const ts = this.now();
     const rowId = this.ulid();
-    const storageDir = `skills/${sid}/v${newVersion}`;
+    const storageDir = input.storage_dir;
 
     // 4. 构建新行文档
     const doc: Record<string, unknown> = {

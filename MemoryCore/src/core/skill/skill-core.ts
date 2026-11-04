@@ -23,6 +23,9 @@
  *   - readFile      读资源字节
  */
 
+import { fetchGitHubSkill } from "./github-source.js";
+import { GitHubSkillManager, type GitHubRequest, type GitHubApplyRequest } from "./github-manager.js";
+
 import { parseSkillFile, validateSkillFile } from "./skill-format.js";
 import { SkillResourceStore, type SkillResourcePayload } from "./skill-resource-store.js";
 import type { ISkillStore, SkillSearchResult } from "./skill-store.interface.js";
@@ -69,7 +72,9 @@ export type SkillCoreErrorCode =
   | "STORAGE_NOT_FOUND"
   | "LLM_UNAVAILABLE"
   | "SKILL_COS_REQUIRED"
-  | "SKILL_EXPORT_TOO_LARGE";
+  | "SKILL_EXPORT_TOO_LARGE"
+  | "SKILL_QUOTA_EXCEEDED"
+  | "GITHUB_UNAVAILABLE";
 
 export class SkillCoreError extends Error {
   constructor(public readonly code: SkillCoreErrorCode, message?: string) {
@@ -94,6 +99,8 @@ function toCoreError(e: unknown): never {
 // ═════════════════════════════════════════════════════════════════════
 
 export interface SkillCoreOptions {
+  /** HTTP boundary injection for deterministic GitHub integration tests. */
+  githubFetch?: typeof fetch;
   store: ISkillStore;
   resources: SkillResourceStore;
   versioning: SkillVersioning;
@@ -217,6 +224,7 @@ export interface ListVersionsInput extends IdFields {
 // ═════════════════════════════════════════════════════════════════════
 
 export class SkillCore {
+  private readonly github: GitHubSkillManager;
   private readonly store: ISkillStore;
   private readonly resources: SkillResourceStore;
   private readonly versioning: SkillVersioning;
@@ -228,6 +236,7 @@ export class SkillCore {
   private readonly onSkillAccessed?: SkillCoreOptions["onSkillAccessed"];
 
   constructor(opts: SkillCoreOptions) {
+    this.github = new GitHubSkillManager({ ...opts, fetcher: input => fetchGitHubSkill(input, opts.githubFetch) });
     this.store = opts.store;
     this.resources = opts.resources;
     this.versioning = opts.versioning;
@@ -240,6 +249,16 @@ export class SkillCore {
     this.maxNonHeadVersions = opts.maxNonHeadVersions ?? 0;
     this.onSkillArchived = opts.onSkillArchived;
     this.onSkillAccessed = opts.onSkillAccessed;
+  }
+
+  async githubPreview(input: GitHubRequest) {
+    try { return await this.github.preview(input); } catch (error) { toCoreError(error); }
+  }
+  async githubApply(input: GitHubApplyRequest, beforePublish?: () => Promise<void>) {
+    try { return await this.github.apply(input, beforePublish); } catch (error) { toCoreError(error); }
+  }
+  async githubDetach(input: GitHubRequest & { expected_version: number }) {
+    try { return await this.github.detach(input); } catch (error) { toCoreError(error); }
   }
 
   /** 读路径读到具体 skill 后 fire。异常吞掉，不阻塞读。 */
@@ -560,7 +579,7 @@ export class SkillCore {
     const exists = target.manifest.some((m) => m.path === input.path);
     if (!exists) throw new SkillCoreError("SKILL_NOT_FOUND", `path ${input.path} not in manifest of v${ver}`);
 
-    const r = await this.resources.readResource(input.skill_id, ver, input.path, input.encoding ?? "utf-8");
+    const r = await this.resources.readResource(input.skill_id, ver, input.path, input.encoding ?? "utf-8", target.storage_dir);
     if (!r) throw new SkillCoreError("STORAGE_NOT_FOUND", "version directory missing (may be GC'd)");
     this.notifyAccessed(head);
     return {
@@ -613,7 +632,7 @@ export class SkillCore {
 
     for (const entry of target.manifest) {
       const r = await this.resources.readResource(
-        input.skill_id, target.version, entry.path, "base64",
+        input.skill_id, target.version, entry.path, "base64", target.storage_dir,
       );
       if (!r) {
         warnings.push(`${entry.path}: missing in storage, skipped`);

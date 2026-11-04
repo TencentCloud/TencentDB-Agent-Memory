@@ -304,6 +304,13 @@ export class SqliteSkillStore implements ISkillStore {
     // 必须保持 synchronous（不要在中间 await），与 sqlite-transaction-guard 同思路。
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      if (input.expected_version !== undefined) {
+        const current = this.db.prepare("SELECT version, status FROM skills WHERE skill_id=? AND team_id=? AND is_head=1 ORDER BY version DESC LIMIT 1")
+          .get(input.skill_id, tid) as { version: number; status: string } | undefined;
+        if ((current?.version ?? 0) !== input.expected_version || (current && current.status !== "active")) {
+          throw new SkillStoreError("SKILL_VERSION_STALE", "head changed during publication");
+        }
+      }
       if (head) {
         this.db
           .prepare("UPDATE skills SET is_head=0 WHERE skill_id=? AND version=?")

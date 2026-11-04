@@ -11,6 +11,8 @@
  * 保证下一次编辑携带的 expected_version 是最新值。
  */
 
+import GitHubSkillForm from './GitHubSkillForm';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -25,6 +27,7 @@ import {
   removeSkillFiles,
   listSkillVersions,
   type SkillDetail,
+  type GitHubSkillSource,
   type SkillSummary,
   type ReadFileResult,
 } from '@/lib/api/skill-api';
@@ -140,6 +143,7 @@ export default function SkillDetailPane(props: {
   const [newFileSaving, setNewFileSaving] = useState(false);
 
   // 版本历史
+  const [showGitHub, setShowGitHub] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [versions, setVersions] = useState<SkillSummary[] | null>(null);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -178,6 +182,7 @@ export default function SkillDetailPane(props: {
     setEditingBody(false);
     setVersions(null);
     setShowVersions(false);
+    setShowGitHub(false);
     setVersionView(null);
     setVersionFile(null);
     setFilePreview(null);
@@ -188,6 +193,7 @@ export default function SkillDetailPane(props: {
   // 视为「尚未加载」，避免切换时闪一帧上一个 skill 的正文 / 描述。
   const stale = !!view && view.skill_id !== skillId;
   const currentView = stale ? null : view;
+  const githubSource = currentView?.metadata?.github_source as GitHubSkillSource | undefined;
   const showLoading = !!skillId && (loading || stale);
 
   const fileTree = useMemo(
@@ -431,6 +437,10 @@ export default function SkillDetailPane(props: {
   return (
     <Card className="_memory-skill-detail-card">
       <Card.Body className="_memory-skill-detail-body">
+        {showGitHub && writeCtx && <Modal visible size="l" caption={t('skills.github.check')} onClose={() => setShowGitHub(false)}>
+          <Modal.Body><GitHubSkillForm key={skillId} context={{ ...writeCtx, skill_id: skillId }}
+            onImported={() => { setShowGitHub(false); reload(); }} /></Modal.Body>
+        </Modal>}
         {/* 固定悬浮头部：skill 名 + 描述 + 操作栏（不随内容滚动，避免用户滑很久才点到功能） */}
         <div className="_memory-skill-detail-head">
           <div className="_memory-skill-detail-head-main">
@@ -455,6 +465,7 @@ export default function SkillDetailPane(props: {
             </div>
             {currentView && (
               <div className="_memory-skill-detail-actions">
+                {editable && currentView.metadata?.github_source != null && <Button onClick={() => setShowGitHub(true)}>{t('skills.github.check')}</Button>}
                 {editable && !editingBody && (
                   <Button type="primary" onClick={startEditBody}>
                     {t('skills.detail.edit')}
@@ -499,6 +510,14 @@ export default function SkillDetailPane(props: {
           {currentView && (
             <>
               {/* Metadata */}
+              {githubSource && <div className="_memory-skill-detail-section">
+                <strong>GitHub</strong>
+                <p>{githubSource.repository} / {githubSource.path || '/'}</p>
+                <p>{t('skills.github.ref')}: {githubSource.ref}</p>
+                <p>{t('skills.github.commit')}: <code>{githubSource.commit}</code></p>
+                {githubSource.declared_version && <p>{t('skills.github.declaredVersion')}: {githubSource.declared_version}</p>}
+                <p>{t('skills.github.installedCheck')}: {githubSource.checked_at}</p>
+              </div>}
               <div className="_memory-skill-detail-section">
                 <Text theme="label" parent="div" className="_memory-skill-detail-section-title">
                   {t('skills.detail.frontmatter')}

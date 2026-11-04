@@ -23,6 +23,8 @@
  * YAML 语法错），改由目录导入引导用户放好 SKILL.md 更稳。
  */
 
+import GitHubSkillForm from './GitHubSkillForm';
+
 import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -37,7 +39,7 @@ import { FolderOpenIcon } from 'tea-icons-react';
 import i18n from '@/i18n';
 import '../styles/import-skill-dialog.css';
 
-type Mode = 'directory' | 'session';
+type Mode = 'directory' | 'session' | 'github';
 
 /**
  * Read a File as base64. Used for binary/executable resources where we
@@ -343,8 +345,12 @@ export default function ImportSkillDialog(props: {
         options={[
           { value: 'directory', text: t('importSkill.mode.directory') },
           { value: 'session', text: t('importSkill.mode.session') },
+          { value: 'github', text: 'GitHub' },
         ]}
       />
+
+      {mode === 'github' && <GitHubSkillForm key={`${props.teamId}:${selectedAgentId}`}
+        context={{ team_id: props.teamId, agent_id: selectedAgentId, user_id: props.userId }} onImported={props.onImported} />}
 
       {mode === 'directory' && (
         <div className="_memory-isd-section">
@@ -440,7 +446,7 @@ export default function ImportSkillDialog(props: {
       {result && <Alert type="success"><span className="_memory-isd-result-text">{result}</span></Alert>}
       </Modal.Body>
       <Modal.Footer>
-        <Button
+        {mode !== 'github' && <Button
           type="primary"
           onClick={() => void submit()}
           disabled={
@@ -452,7 +458,7 @@ export default function ImportSkillDialog(props: {
           loading={submitting}
         >
           {mode === 'session' ? t('importSkill.session.submit') : t('importSkill.submit')}
-        </Button>
+        </Button>}
         <Button onClick={props.onClose} disabled={submitting}>{t('importSkill.cancel')}</Button>
       </Modal.Footer>
     </Modal>
