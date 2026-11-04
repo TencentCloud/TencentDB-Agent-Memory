@@ -96,6 +96,8 @@ $DOCKER run -d --name "$CONTAINER" \
   -p "${PANEL_PORT}:8125" \
   -p "${KNOWLEDGE_PORT}:8424" \
   -v "${PANEL_VOLUME}:/data/knowledge" \
+  -v "${SCRIPT_DIR}/.memory-core-config:/app/core-config" \
+  -v "${SCRIPT_DIR}/.proxy-config:/app/proxy-config" \
   -e PANEL_PORT=8125 \
   -e KNOWLEDGE_PORT=8424 \
   -e KNOWLEDGE_PUBLIC_BASE_URL="$KNOWLEDGE_PUBLIC_BASE_URL" \
@@ -112,6 +114,7 @@ $DOCKER run -d --name "$CONTAINER" \
   -e LLM_BASE_URL="$MEMORY_LLM_BASE_URL" \
   -e LLM_MODEL="$MEMORY_LLM_MODEL" \
   -e KNOWLEDGE_LLM_BINDING_SYNC=0 \
+  -e PANEL_PROXY_BASE_URL="http://tdai-proxy:8096" \
   "$MEMORY_HUB_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 120

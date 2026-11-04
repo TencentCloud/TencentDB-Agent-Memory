@@ -126,6 +126,8 @@ sessionInit:
   maxRetries: 3
   injectAgentContext: true
   injectTaskContext: true
+  # dsh headless（无 ask_user_question preset）时自动绑定的身份，避免会话落到 _unassigned
+  # v3.4: debugForceIdentity removed — workspace-scoped session defaults instead
   headerAutoSelect:
     enabled: true
     teamHeader: "x-team-id"
@@ -144,6 +146,12 @@ injection:
     - skill
     - knowledge
     - tdai-memory
+
+# models catalog for client discovery (dsh 'fetch available models')
+creditPricing:
+  models:
+    - name: deepseek-v4.1-flash-1017
+      modelName: deepseek-v4.1-flash-1017
 
 redis:
   enabled: false

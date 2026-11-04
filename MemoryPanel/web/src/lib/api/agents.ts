@@ -42,12 +42,22 @@ export const agentsApi = {
    *   如 Skill 面板固定资产 tab）；不传则返 team 全量。`agent/list` 支持
    *   `team_id + owner_user_id` 组合过滤。
    */
-  list: (teamId: string, params?: { owner_user_id?: string }) =>
+  list: (
+    teamId: string,
+    params?: { owner_user_id?: string; includeArchived?: boolean },
+  ) =>
     metaListAll<Agent>('agent/list', {
       team_id: teamId,
-      status: 'active',
+      ...(params?.includeArchived ? {} : { status: 'active' as const }),
       owner_user_id: params?.owner_user_id,
     }),
+
+  /** 归档（可逆停用，仅 status→inactive，不清理记忆/技能/资产）。 */
+  archive: (agentId: string) => metaPost<Agent>('agent/archive', { agent_id: agentId }),
+
+  /** 恢复已归档 Agent（status→active）。 */
+  restore: (agentId: string) =>
+    metaPost<Agent>('agent/update', { agent_id: agentId, status: 'active' }),
 
   /** agent 详情 */
   get: (agentId: string) => metaPost<Agent>('agent/get', { agent_id: agentId }),
