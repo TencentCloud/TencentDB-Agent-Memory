@@ -103,6 +103,25 @@ npm run dev
 | `cd web && npm run build` | 构建前端到 `web/dist/` |
 | `bash scripts/secret-scan.sh` | 扫描敏感信息 |
 
+## Wiki 本地文件夹导入
+
+在 Wiki 详情页打开「导入文档」，在文件页选择「选择文件夹」，再点击「上传并抽取」。支持格式和单文件大小限制与普通文件上传相同。
+
+- 保留所选文件夹根目录及其下的相对路径。例如 `handbook/frontend/README.md` 和 `handbook/backend/README.md` 是两个独立来源，不会相互覆盖。
+- 再次选择同一文件夹会更新相同路径的来源；已成功抽取且内容哈希未变的文件跳过抽取。新增、变更或上次抽取失败的来源会被处理。
+- 文件按每批最多 10 个、原始字节总计最多 20 MiB 顺序上传，全部上传成功后触发一次抽取。上传失败时弹窗保留选择，可以重试；刷新页面后需重新选择同一文件夹。已保存的文件会按原路径复用。
+- 导入是增量追加/更新，不会自动删除本次未选择的旧文件。重命名文件或根目录会产生新的来源路径；不再需要的旧来源请在素材列表中删除。
+
+回归测试（先安装 `MemoryPanel`、`MemoryPanel/web`、`MemoryKnowledge` 的依赖，在仓库根目录执行）：
+
+```bash
+npm --prefix MemoryPanel test
+node MemoryPanel/node_modules/vitest/vitest.mjs run --root MemoryPanel/web --config vite.config.ts tests/wiki-folder-modal.test.ts
+npm --prefix MemoryKnowledge test -- src/store/wiki-folder-import.test.ts
+```
+
+Knowledge 测试使用临时 SQLite 数据库和本机 HTTP 服务。模型响应来自确定性测试端点，无需外部模型凭证；覆盖上传、增量抽取、失败重试、来源引用和团队隔离，不评估模型生成质量。
+
 ## 公开 API
 
 Control 的公开入口统一位于 `/api/v1`：

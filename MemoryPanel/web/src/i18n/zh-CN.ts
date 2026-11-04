@@ -284,6 +284,8 @@ export const zhCN = {
   // ===== Wiki =====
   // 设计 2026-09-21：合并后的单一导入入口（替代原「添加」+「Ingest」）
   'wiki.detail.import': '导入文档',
+  'wiki.import.chooseFolder': '选择文件夹',
+  'wiki.import.folderHint': '保留文件夹路径。重新选择同一文件夹可更新变更文档或重试中断的上传，未选中的旧文件会保留。',
   'wiki.import.caption': '导入文档',
   'wiki.import.uploadAndIngest': '上传并抽取',
   'wiki.import.importAndIngest': '导入并抽取',

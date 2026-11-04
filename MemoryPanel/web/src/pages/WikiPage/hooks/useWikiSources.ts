@@ -12,6 +12,7 @@ import {
   findExistingRawFilenames,
   formatOverwriteFilenames,
   readUploadFile,
+  uploadWikiFiles,
 } from '../utils/wiki-upload-utils';
 import { maxBytesForFile } from '../utils/wiki-format-store';
 import {
@@ -722,7 +723,7 @@ export function useWikiSources() {
   /**
    * 导入并抽取（设计 2026-09-21 合并入口）。
    *
-   * 一次复合请求完成"写 raw + 触发 ingest"；打断旧任务由 Panel/KS 的
+   * 本地文件分批写 raw 后触发一次 ingest；其它模式使用复合请求。打断旧任务由 Panel/KS 的
    * onBusy:'replace' 在后台完成，用户不可感知（无 confirm、无 Alert）。
    *
    * 本函数不自己轮询进度 —— 提交后立即 fetchSources 拿到新状态（KS 真值，
@@ -733,25 +734,34 @@ export function useWikiSources() {
     mode: 'files' | 'markdown' | 'external' | 'reingest';
     // encoding 必须保留并透传：Knowledge 默认按 base64 解码，手工粘贴 MD
     // 需显式 'utf8'，否则被判非法 base64。见 import-and-ingest-modal.tsx 注释。
+    localFiles?: File[];
     files?: { filename: string; content: string; encoding?: 'utf8' | 'base64' }[];
     markdown?: { filename: string; content: string; encoding?: 'utf8' | 'base64' }[];
     source_url?: string;
     provider_id?: string;
     page_ids?: string[];
-  }): Promise<void> => {
+  }): Promise<boolean> => {
     const { wikiId, mode } = params;
-    if (!wikiId) return;
+    // Capture the target before awaiting: all batches belong to this wiki/team.
+    const teamId = activeTeamId;
+    if (!wikiId || (params.localFiles && !teamId)) return false;
 
     try {
-      const res = await knowledgeApi.wiki.importAndIngest({
-        wiki_id: wikiId,
-        mode,
-        ...(params.files ? { files: params.files } : {}),
-        ...(params.markdown ? { markdown: params.markdown } : {}),
-        ...(params.source_url ? { source_url: params.source_url } : {}),
-        ...(params.provider_id ? { provider_id: params.provider_id } : {}),
-        ...(params.page_ids ? { page_ids: params.page_ids } : {}),
-      });
+      const res = params.localFiles && teamId
+        ? await uploadWikiFiles(
+            params.localFiles,
+            (files) => knowledgeApi.wiki.uploadMany({ teamId, wikiId, files }),
+            () => knowledgeApi.wiki.importAndIngest({ wiki_id: wikiId, mode: 'reingest' }),
+          )
+        : await knowledgeApi.wiki.importAndIngest({
+            wiki_id: wikiId,
+            mode,
+            ...(params.files ? { files: params.files } : {}),
+            ...(params.markdown ? { markdown: params.markdown } : {}),
+            ...(params.source_url ? { source_url: params.source_url } : {}),
+            ...(params.provider_id ? { provider_id: params.provider_id } : {}),
+            ...(params.page_ids ? { page_ids: params.page_ids } : {}),
+          });
 
       // 复合请求已回执：无论成功与否都可能改动 raw。
       // fetchSources 拉回新状态（pending/processing）—— sources 是唯一真相源，
@@ -763,7 +773,7 @@ export function useWikiSources() {
         const msg = res.error_message || t('wiki.notify.ingestFailed');
         tea.notify.error(msg);
         fetchDetail(wikiId);
-        return;
+        return false;
       }
 
       // ✅ 复合请求被接受（任务真的排上了）才显示进度卡片：
@@ -786,11 +796,13 @@ export function useWikiSources() {
 
       // 触发一次立即刷新，避免等下一拍轮询才反映新状态
       fetchDetail(wikiId);
+      return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       tea.notify.error(msg);
       setRawRefreshKey((k) => k + 1);
       fetchDetail(wikiId);
+      return false;
     }
   };
 

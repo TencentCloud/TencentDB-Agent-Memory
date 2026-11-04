@@ -849,12 +849,11 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
           },
         }}
         onClose={() => setShowImportModal(false)}
-        onSubmit={(payload) => {
-          // 设计 2026-09-21 §2.2：提交后立即关闭 Modal，进度由页面顶部进度条接管。
-          // submitAddAndIngest 内部已完成错误 toast / 进度回调 / 刷新，无需在此 await
-          // 整个抽取流程（否则 Modal 会一直转到 ingest 结束）。
-          void store.submitAddAndIngest({ wikiId: selectedWikiId, ...payload });
-          setShowImportModal(false);
+        onSubmit={async (payload) => {
+          // Retain the selection on failure; wait for queue acceptance, not extraction.
+          if (await store.submitAddAndIngest({ wikiId: selectedWikiId, ...payload })) {
+            setShowImportModal(false);
+          }
         }}
       />
     </div>

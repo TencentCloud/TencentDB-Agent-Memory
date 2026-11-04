@@ -591,6 +591,9 @@ export const knowledgeApi = {
      * - `encoding='base64'`：从 File 读的原始字节走 base64（docx/pdf/md/txt 等）
      * - 缺省：手工粘贴 MD 等纯文本场景，`content` 直接按 UTF-8 落盘
      */
+    uploadMany: (opts: { teamId: string; wikiId: string; files: { filename: string; content: string; encoding: 'base64' }[] }): Promise<unknown> =>
+      panelPost('/wiki/raw/write', { team_id: opts.teamId, wiki_id: opts.wikiId, files: opts.files }),
+
     upload: (opts: { teamId: string; wikiId: string; filename: string; content: string; encoding?: 'utf8' | 'base64' }): Promise<void> =>
       panelPost('/wiki/raw/write', { team_id: opts.teamId, wiki_id: opts.wikiId, files: [{ filename: opts.filename, content: opts.content, encoding: opts.encoding }] }),
 

@@ -21,6 +21,8 @@ import {
   readdirSync,
   statSync,
   existsSync,
+  lstatSync,
+  renameSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 
@@ -712,17 +714,16 @@ export class WikiService {
     const safe = this.resolveRawPath(sourcesDir, filename);
     if (!safe) return "invalid_path";
 
-    mkdirSync(sourcesDir, { recursive: true });
-    writeFileSync(safe, buf);
+    this.writeRawAtomically(safe, buf);
     this.registerSources(serviceId, teamId, wikiId, [{ filename, content: buf, size }], userId);
     return { filename, size };
   }
 
   /**
-   * 批量写入 raw 文件（整批原子）。
+   * 批量写入 raw 文件；单文件原子替换，捕获写入错误时回滚本批已写文件。
    * - 先全部校验：路径穿越 → "invalid_path"；任一项超 5MB → "too_large"
-   * - 全部通过后逐文件落盘；任一落盘失败回滚之前已写文件（删原有的不在请求里
-   *   的文件），保证整批要么都成功要么都没生效。
+   * - 全部通过后逐文件落盘；失败时恢复旧内容、删除本批新增文件。
+   * - 进程退出可能留下已完成的文件；重新提交相同路径可安全续传，未提交的旧文件保留。
    * 错误码同 rawWrite。
    */
   rawWriteMany(
@@ -748,18 +749,20 @@ export class WikiService {
       preExistingContent: Buffer | null; // 落盘前已有则记下来，回滚要还原
     };
     const plans: Plan[] = [];
+    const paths = new Set<string>();
     for (const { filename, content } of files) {
       if (typeof content !== "string" && !Buffer.isBuffer(content)) return "invalid_path";
       const buf = toRawBuffer(content);
       const size = buf.length;
       if (size > rawWriteMaxBytes()) return "too_large";
       const safe = this.resolveRawPath(sourcesDir, filename);
-      if (!safe) return "invalid_path";
+      if (!safe || paths.has(safe)) return "invalid_path";
+      paths.add(safe);
       let pre: Buffer | null = null;
       try {
         pre = readFileSync(safe);
-      } catch {
-        pre = null;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
       plans.push({ filename, safePath: safe, content: buf, size, preExistingContent: pre });
     }
@@ -768,7 +771,8 @@ export class WikiService {
     const written: Plan[] = [];
     try {
       for (const p of plans) {
-        writeFileSync(p.safePath, p.content);   // Buffer → 原始字节落盘
+        if (p.preExistingContent?.equals(p.content)) continue;
+        this.writeRawAtomically(p.safePath, p.content);
         written.push(p);
       }
     } catch (err) {
@@ -778,7 +782,7 @@ export class WikiService {
           if (p.preExistingContent === null) {
             rmSync(p.safePath, { force: true });
           } else {
-            writeFileSync(p.safePath, p.preExistingContent, "utf-8");
+            this.writeRawAtomically(p.safePath, p.preExistingContent);
           }
         } catch {
           // 回滚也失败的话，只能记录由调用方重新跑 ingest 兜底
@@ -798,7 +802,7 @@ export class WikiService {
     // 拉取入盘后 bump version + 更新 last_sync_at（设计 §3.1⑥）。
     // - version 用于下游变更检测（ingest 时对比源文件版本 vs 已抽取版本）
     // - last_sync_at 用于外部同步观测点（"上次拉取时间"）
-    // 幂等：即使 files 内容全部相同，写盘 + 登记也走一遍，版本仍会前进，
+    // 幂等：相同内容跳过写盘，登记仍会执行以修复中断后的索引；版本仍会前进，
     //   这是 SoT（wiki 表状态）的期望行为：raw 一旦被写过就算作新版本，
     //   由下游 ingest 决定是否真的重新抽取（sha 相同则跳过）。
     if (plans.length > 0) {
@@ -1232,8 +1236,21 @@ export class WikiService {
     }
   }
 
+  /** A failed write must never truncate a previously imported source. */
+  private writeRawAtomically(target: string, content: Buffer): void {
+    mkdirSync(dirname(target), { recursive: true });
+    const temporary = join(dirname(target), `.upload-${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temporary, content, { flag: "wx" });
+      renameSync(temporary, target);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  }
+
   private resolveRawPath(sourcesDir: string, filename: string): string | null {
-    if (!filename || filename.includes("..") || filename.startsWith("/")) return null;
+    if (!filename || filename.includes("\\") || filename.includes("\0") ||
+        filename.split("/").some((part) => !part || part === "." || part === "..")) return null;
     const normalized = normalize(filename);
     if (normalized.startsWith("..") || normalized.startsWith("/")) return null;
     // resolve(sourcesDir) 转成绝对路径，避免 sourcesDir 是相对路径时
@@ -1241,7 +1258,17 @@ export class WikiService {
     const base = resolve(sourcesDir);
     const safe = resolve(base, normalized);
     const dirWithSep = base.endsWith("/") ? base : base + "/";
-    if (safe !== base && !safe.startsWith(dirWithSep)) return null;
+    if (safe === base || !safe.startsWith(dirWithSep)) return null;
+    // Folder imports must not follow an existing symlink into another wiki/team.
+    let current = base;
+    for (const part of ["", ...filename.split("/")]) {
+      current = join(current, part);
+      try {
+        if (lstatSync(current).isSymbolicLink()) return null;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+    }
     return safe;
   }
 
