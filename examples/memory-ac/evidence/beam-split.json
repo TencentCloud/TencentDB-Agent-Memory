@@ -1,0 +1,639 @@
+{
+  "version": "ac-beam-groups-v9.0",
+  "seed": "v9-beam-split",
+  "schema_smoke": "100K:1 assigned train before outcome evaluation",
+  "dataset_manifest_sha256": "459a117e800d6ec24f20887b6c4444cc7215406f38774ee938eec8fd4439ca28",
+  "subjects": [
+    {
+      "scale": "100K",
+      "id": "1",
+      "group_id": "426e1059b4e98fbad3ca7c19",
+      "category": "Coding",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "2",
+      "group_id": "3ec1a0cc5c168058cbbf24c5",
+      "category": "Coding",
+      "split": "protected_test"
+    },
+    {
+      "scale": "100K",
+      "id": "3",
+      "group_id": "d5cf36ca7d9c3af5dd25d2a6",
+      "category": "Coding",
+      "split": "protected_test"
+    },
+    {
+      "scale": "100K",
+      "id": "4",
+      "group_id": "ea64de547f44783a85c42c97",
+      "category": "Math",
+      "split": "calibration"
+    },
+    {
+      "scale": "100K",
+      "id": "5",
+      "group_id": "52aaa8c2d3b72fa4aebd82e9",
+      "category": "Math",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "6",
+      "group_id": "fb64cd0378d69870bfe25340",
+      "category": "Writing Assistant & Learning",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "7",
+      "group_id": "bb87b5ecd56f007012d10c82",
+      "category": "Writing Assistant & Learning",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "8",
+      "group_id": "e801e7be5f294fffdfc4661e",
+      "category": "Writing Assistant & Learning",
+      "split": "calibration"
+    },
+    {
+      "scale": "100K",
+      "id": "9",
+      "group_id": "107db8022a037b7874bb7b61",
+      "category": "Writing Assistant & Learning",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "10",
+      "group_id": "afbf10b5bcdd4a334330bbd1",
+      "category": "Writing Assistant & Learning",
+      "split": "protected_test"
+    },
+    {
+      "scale": "100K",
+      "id": "11",
+      "group_id": "12b0427cac652553fab7e180",
+      "category": "Philosophical or Ethical Discussion",
+      "split": "calibration"
+    },
+    {
+      "scale": "100K",
+      "id": "12",
+      "group_id": "7a3aea266817660612778467",
+      "category": "Philosophical or Ethical Discussion",
+      "split": "protected_test"
+    },
+    {
+      "scale": "100K",
+      "id": "13",
+      "group_id": "10594c427c754a6397b2c051",
+      "category": "Asking Recommendation",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "14",
+      "group_id": "3801d956db421f5698f2fc55",
+      "category": "Asking Recommendation",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "15",
+      "group_id": "38007ef6dabbaeedfc8f71a2",
+      "category": "Asking Recommendation",
+      "split": "calibration"
+    },
+    {
+      "scale": "100K",
+      "id": "16",
+      "group_id": "ead243e28d1bd5d8d23970b3",
+      "category": "Lifestyle",
+      "split": "calibration"
+    },
+    {
+      "scale": "100K",
+      "id": "17",
+      "group_id": "0c8ada5a38306835e5553a2f",
+      "category": "Lifestyle",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "18",
+      "group_id": "513f96cbc6cd175ff6b47e70",
+      "category": "Therapy and Emotional Support",
+      "split": "protected_test"
+    },
+    {
+      "scale": "100K",
+      "id": "19",
+      "group_id": "6e8721a0f57f868a9d91d914",
+      "category": "Legal and Administrative",
+      "split": "train"
+    },
+    {
+      "scale": "100K",
+      "id": "20",
+      "group_id": "26fc2ae109faf454f5c1c2bf",
+      "category": "Legal and Administrative",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "1",
+      "group_id": "114a45d5913a38a91b06598e",
+      "category": "Coding",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "2",
+      "group_id": "0fd3ee1b0d1cde068db71f21",
+      "category": "Coding",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "3",
+      "group_id": "73f0c5a0104aac30e7246c0a",
+      "category": "Coding",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "4",
+      "group_id": "3a021e19c98e3de6f6876480",
+      "category": "Coding",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "5",
+      "group_id": "e794b9157129d65b5b2c9245",
+      "category": "Coding",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "6",
+      "group_id": "903ccce2a99da193fefc1a20",
+      "category": "Math",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "7",
+      "group_id": "0cebb37fb8b0c202520c8218",
+      "category": "Math",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "8",
+      "group_id": "06964f8dfd9cbdd92dbee47a",
+      "category": "Math",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "9",
+      "group_id": "a02c8b4719d7df5b45c2dcf8",
+      "category": "Math",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "10",
+      "group_id": "7310d7d4a6b59bbb3ec091ac",
+      "category": "Math",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "11",
+      "group_id": "6df1bb42746aa7479dc70205",
+      "category": "Asking Recommendation",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "12",
+      "group_id": "580d395a1bab5a7dfa187905",
+      "category": "Asking Recommendation",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "13",
+      "group_id": "e2c4ebb121cd628ba3baaccd",
+      "category": "Relationship & Family",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "14",
+      "group_id": "262f741e72b2363254e97fdd",
+      "category": "Relationship & Family",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "15",
+      "group_id": "95f56b944c431703bf0c42a4",
+      "category": "Relationship & Family",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "16",
+      "group_id": "6c93a04855524956d3e48694",
+      "category": "Therapy and Emotional Support",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "17",
+      "group_id": "8ae2d053b4c8f21bde09504e",
+      "category": "Therapy and Emotional Support",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "18",
+      "group_id": "b58b65faf75d5817484be2c7",
+      "category": "Therapy and Emotional Support",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "19",
+      "group_id": "28686591fde8e13c648906b4",
+      "category": "Career and Professional Development",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "20",
+      "group_id": "f5a63e81ba22cf2102d5b02d",
+      "category": "Career and Professional Development",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "21",
+      "group_id": "bf148a234d66aed6858e6c07",
+      "category": "Financial Investment",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "22",
+      "group_id": "d2af7329088a3a9865554c19",
+      "category": "Financial Investment",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "23",
+      "group_id": "b7fdababf0be62c62dda8387",
+      "category": "Health & Wellness",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "24",
+      "group_id": "4c3cd430eb8b6ebef72ded51",
+      "category": "Health & Wellness",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "25",
+      "group_id": "6778ee95c48cbc2e38f47228",
+      "category": "Education & Learning",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "26",
+      "group_id": "33a8d4984612e83bce14cf7d",
+      "category": "Education & Learning",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "27",
+      "group_id": "7248bb8315e5991851452e50",
+      "category": "Home & Real Estate",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "28",
+      "group_id": "4a4e595958274acd815e2a8a",
+      "category": "Home & Real Estate",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "29",
+      "group_id": "0928788b68d772dc3be45079",
+      "category": "Cooking",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "30",
+      "group_id": "cb7382766ba8cf6dd25c8b25",
+      "category": "Cooking",
+      "split": "calibration"
+    },
+    {
+      "scale": "500K",
+      "id": "31",
+      "group_id": "99b0825de15c666fb11d8004",
+      "category": "Cooking",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "32",
+      "group_id": "c6cd0eb94595b15a6222428a",
+      "category": "Business & Entrepreneurship",
+      "split": "protected_test"
+    },
+    {
+      "scale": "500K",
+      "id": "33",
+      "group_id": "847792a4f9ed9e75fffa1c52",
+      "category": "Sport",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "34",
+      "group_id": "c9aa56ee3fb63ff0e33f72a9",
+      "category": "Sport",
+      "split": "train"
+    },
+    {
+      "scale": "500K",
+      "id": "35",
+      "group_id": "65cd310d17d6155f6f3ac3f7",
+      "category": "Legal and Administrative",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "1",
+      "group_id": "a1d36c021a116af750e1a24b",
+      "category": "Coding",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "2",
+      "group_id": "604cd9dfd25ef7f9dc3a0ea4",
+      "category": "Coding",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "3",
+      "group_id": "31cc045da1f8bb04088a2e94",
+      "category": "Coding",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "4",
+      "group_id": "49bb4638ce5a8eb9aa3eceb0",
+      "category": "Coding",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "5",
+      "group_id": "5b002c7084d8e22a1ffaed39",
+      "category": "Coding",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "6",
+      "group_id": "6cd99ff2ce3c01229478a99e",
+      "category": "Math",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "7",
+      "group_id": "690a8e8f3f18e5f78af0ef6e",
+      "category": "Math",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "8",
+      "group_id": "b19beb28545fcdea90771337",
+      "category": "Math",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "9",
+      "group_id": "697e2cdf6193cec4f8c5f53d",
+      "category": "Math",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "10",
+      "group_id": "8bb66865a49984db38d57b83",
+      "category": "Math",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "11",
+      "group_id": "7c003e44a3002829a1f68962",
+      "category": "Career and Professional Development",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "12",
+      "group_id": "5971cb9a93a409c5a645cb3f",
+      "category": "Career and Professional Development",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "13",
+      "group_id": "a0632dd8b90eab4d297cf782",
+      "category": "Financial Investment",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "14",
+      "group_id": "6aede797d81e9a13f6612942",
+      "category": "Financial Investment",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "15",
+      "group_id": "8fd651a3ffbb5fb45a4d6fb6",
+      "category": "Health & Wellness",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "16",
+      "group_id": "3f3177a7deb37d4c75c22ddf",
+      "category": "Health & Wellness",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "17",
+      "group_id": "4aacf4a1949579f0da74f035",
+      "category": "Health & Wellness",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "18",
+      "group_id": "ec661ffdcdea658e99cc60a5",
+      "category": "Relationship & Family",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "19",
+      "group_id": "51efd17e6afcab4bfa17325a",
+      "category": "Education & Learning",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "20",
+      "group_id": "acf5c32e91fe1710c8dee795",
+      "category": "Home & Real Estate",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "21",
+      "group_id": "18a6d5c8cb9fbf9e68073b58",
+      "category": "Home & Real Estate",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "22",
+      "group_id": "4e869bb11b5d0b7a830e7f86",
+      "category": "Home & Real Estate",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "23",
+      "group_id": "dc444b3226d588cb4aa8bc75",
+      "category": "Cooking",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "24",
+      "group_id": "7c5e29a6c4c128258deef3a2",
+      "category": "Cooking",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "25",
+      "group_id": "81e56dbb43f540319aef82ff",
+      "category": "Business & Entrepreneurship",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "26",
+      "group_id": "cd048a700e1245653b619735",
+      "category": "Business & Entrepreneurship",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "27",
+      "group_id": "3fb8a5ffd4c51bd60e2e3358",
+      "category": "Sport",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "28",
+      "group_id": "a8e98ebdee27e582417cdb56",
+      "category": "Sport",
+      "split": "calibration"
+    },
+    {
+      "scale": "1M",
+      "id": "29",
+      "group_id": "e5714935b48838dee46c78ec",
+      "category": "Sport",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "30",
+      "group_id": "6b01c384a9e46f8e471b4828",
+      "category": "Trip Planning",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "31",
+      "group_id": "1a5d122fe4003a193ac188f2",
+      "category": "Trip Planning",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "32",
+      "group_id": "0397da7da66e570085544a36",
+      "category": "Trip Planning",
+      "split": "protected_test"
+    },
+    {
+      "scale": "1M",
+      "id": "33",
+      "group_id": "669248452bf41eb0ec8df470",
+      "category": "Event Planning",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "34",
+      "group_id": "108f2f1bcd668a7c5eef96b5",
+      "category": "Event Planning",
+      "split": "train"
+    },
+    {
+      "scale": "1M",
+      "id": "35",
+      "group_id": "e1d5f43cb4ca35891b082347",
+      "category": "Event Planning",
+      "split": "train"
+    }
+  ],
+  "protected_rule": "No model scoring, training, QA or outcome inspection for protected_test until final code and policy lock"
+}
