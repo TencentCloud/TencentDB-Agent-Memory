@@ -100,6 +100,7 @@
         "description": "记忆召回设置",
         "properties": {
           "enabled": { "type": "boolean", "default": true, "description": "是否启用自动召回" },
+          "showInjected": { "type": "boolean", "default": false, "description": "本地 OpenClaw 模式：在用户消息历史中保留自动召回内容，便于检查；L0 采集仍会清理注入内容" },
           "maxResults": { "type": "number", "default": 5, "description": "召回最大结果数" },
           "maxCharsPerMemory": { "type": "number", "default": 0, "description": "单条 L1 记忆注入的最大字符数；填 0 表示不限制" },
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
