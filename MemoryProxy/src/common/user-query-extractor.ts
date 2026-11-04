@@ -178,8 +178,10 @@ export function extractUserQueryText(raw: string): string {
   //       ---
   //     只匹配"至少含 name / description / metadata / node_type 关键字"的 frontmatter
   //     以避免误伤 markdown 分割线。
+  //     Keep line/whitespace quantifiers disjoint: `\s*` + `.*` can split the
+  //     same spaces exponentially when an aligned block has no closing fence.
   text = text.replace(
-    /(?:^|\n)---\s*\n(?:[a-z_][a-z0-9_]*:\s*.*\n)*?(?:name|description|metadata|node_type|originSessionId):[\s\S]*?\n---\s*(?:\n|$)/gi,
+    /(?:^|\r?\n)---[ \t]*\r?\n(?:[a-z_][a-z0-9_]*:[^\r\n]*\r?\n)*?(?:name|description|metadata|node_type|originSessionId):[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/gi,
     "\n",
   );
 
