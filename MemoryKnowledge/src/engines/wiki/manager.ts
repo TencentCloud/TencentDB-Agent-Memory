@@ -11,13 +11,16 @@
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join, basename, relative } from "path";
+import { createRequire } from "node:module";
 import Graph from "graphology";
+import louvain from "graphology-communities-louvain";
 import type DatabaseType from "better-sqlite3";
 import pLimit, { type LimitFunction } from "p-limit";
 import type {
   WikiPage,
   WikiSourceConfig,
   WikiSourceState,
+  WikiGraphStats,
   GraphNode,
   GraphEdge,
   CommunityInfo,
@@ -45,6 +48,8 @@ import { getIngestConcurrency } from "../../config.js";
 import { extractableExtensions } from "../../document-converter/format-registry.js";
 import { slugify } from "./ingest-v2/slug.js";
 import { DEFAULT_SCHEMA, DEFAULT_PURPOSE } from "./ingest-v2/template.js";
+
+const require = createRequire(import.meta.url);
 
 const log = createLogger("wiki-mgr");
 
@@ -160,7 +165,12 @@ export interface WikiSourceManager {
   list(): WikiSourceState[];
   remove(name: string): void;
   search(name: string, query: string, limit?: number, options?: SearchOptions): SearchResponse;
-  graph(name: string): { nodes: GraphNode[]; edges: GraphEdge[]; communities: CommunityInfo[] };
+  graph(name: string): {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    communities: CommunityInfo[];
+    stats?: WikiGraphStats;
+  };
   readPage(name: string, relPath: string): string | null;
   getPages(name: string): WikiPage[];
   init(config: WikiSourceConfig): WikiSourceState;
@@ -169,6 +179,9 @@ export interface WikiSourceManager {
 
 /** 图谱中不参与建边/展示的页类型（如内部 query 页）。 */
 const HIDDEN_TYPES = new Set(["query"]);
+
+/** 结构性文件（wiki 根目录固定页），不算内容孤页。 */
+const STRUCTURAL_IDS = new Set(["index", "schema", "purpose", "log", "overview"]);
 
 // ── 图谱缓存结构（读时从 index.db 的 graph_edge 临时构建） ──
 
@@ -197,11 +210,18 @@ interface PageMeta {
 /**
  * 解析页间 wikilink，产出有向边（source → target）用于写入 graph_edge。
  * 只在 visible（非 hidden 类型）页之间建边，过滤自环与无法解析的坏链接，(source,target) 去重。
+ *
+ * 同时统计坏链（解析不到目标的 wikilink 次数）与孤页（无任何有效边的内容页），
+ * 供 ingest/sync 上报图质量 —— 此前坏链被静默丢弃，无处发现。
  */
-function resolveEdges(pages: WikiPage[]): Array<{ source: string; target: string }> {
+export function resolveEdges(pages: WikiPage[]): {
+  edges: Array<{ source: string; target: string }>;
+  brokenLinks: number;
+  orphanPages: number;
+} {
   const visible = pages.filter((p) => !HIDDEN_TYPES.has(p.type));
-  const out: Array<{ source: string; target: string }> = [];
-  if (visible.length === 0) return out;
+  const edges: Array<{ source: string; target: string }> = [];
+  if (visible.length === 0) return { edges, brokenLinks: 0, orphanPages: 0 };
 
   const nodeIds = new Set(visible.map((p) => p.id));
   // title 的 slug → page id 映射：支持 wikilink 以页面标题（而非文件名）引用。
@@ -211,18 +231,30 @@ function resolveEdges(pages: WikiPage[]): Array<{ source: string; target: string
     if (ts && !titleSlugToId.has(ts)) titleSlugToId.set(ts, p.id);
   }
 
+  let brokenLinks = 0;
+  const connected = new Set<string>();
   const seen = new Set<string>();
   for (const page of visible) {
     for (const targetRaw of page.links) {
       const targetId = resolveTarget(targetRaw, nodeIds, titleSlugToId);
-      if (!targetId || targetId === page.id) continue;
+      if (!targetId) {
+        brokenLinks++;
+        continue;
+      }
+      if (targetId === page.id) continue;
+      connected.add(page.id);
+      connected.add(targetId);
       const key = `${page.id}\u0000${targetId}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ source: page.id, target: targetId });
+      edges.push({ source: page.id, target: targetId });
     }
   }
-  return out;
+
+  const orphanPages = visible.filter(
+    (p) => !STRUCTURAL_IDS.has(p.id) && !connected.has(p.id),
+  ).length;
+  return { edges, brokenLinks, orphanPages };
 }
 
 /**
@@ -278,6 +310,56 @@ function buildPageGraphFromDb(
   return { view: { nodes, edges, communities: [] }, graph, outAdj, inAdj, degree };
 }
 
+/** 固定种子的伪随机数生成器（mulberry32）。 */
+function seededRandom(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Louvain 社区检测，填充节点 community 与 communities 列表（PRD FR-4）。
+ *
+ * 只在 graph() 视图上计算：search 不需要社区，避免每次检索都为全图跑一遍。
+ * 固定 rng 种子：同一张图每次返回相同的社区编号，Panel 颜色不闪。
+ */
+function populateCommunities(pg: PageGraph): void {
+  const { nodes, edges } = pg.view;
+  if (nodes.length === 0) return;
+
+  const membership = louvain(pg.graph, { rng: seededRandom(42) });
+  const members = new Map<number, string[]>();
+  for (const node of nodes) {
+    const id = membership[node.id] ?? 0;
+    node.community = id;
+    const list = members.get(id);
+    if (list) list.push(node.id);
+    else members.set(id, [node.id]);
+  }
+
+  const communities: CommunityInfo[] = [];
+  for (const [id, ids] of members) {
+    const idSet = new Set(ids);
+    const internal = edges.filter((e) => idSet.has(e.source) && idSet.has(e.target)).length;
+    const possible = (ids.length * (ids.length - 1)) / 2;
+    const topNodes = [...ids]
+      .sort((a, b) => (pg.degree.get(b) ?? 0) - (pg.degree.get(a) ?? 0))
+      .slice(0, 5);
+    communities.push({
+      id,
+      nodeCount: ids.length,
+      cohesion: possible > 0 ? Math.round((internal / possible) * 1000) / 1000 : 0,
+      topNodes,
+    });
+  }
+  communities.sort((a, b) => b.nodeCount - a.nodeCount || a.id - b.id);
+  pg.view.communities = communities;
+}
+
 function resolveTarget(
   raw: string,
   nodeIds: Set<string>,
@@ -330,10 +412,39 @@ function makeSnippet(page: WikiPage): string {
   return [...body].slice(0, SNIPPET_CONTEXT).join("").replace(/\n/g, " ").trim();
 }
 
+interface JiebaInstance {
+  cutForSearch(text: string, hmm: boolean): string[];
+}
+
+let jieba: JiebaInstance | null | undefined; // undefined = 尚未尝试加载
+
+/** 懒加载 jieba（与 MemoryCore 同一分词方案）；不可用时返回 null，永久降级到 bigram。 */
+function getJieba(): JiebaInstance | null {
+  if (jieba !== undefined) return jieba;
+  try {
+    const { Jieba } = require("@node-rs/jieba");
+    const { dict } = require("@node-rs/jieba/dict");
+    jieba = Jieba.withDict(dict) as JiebaInstance;
+  } catch {
+    jieba = null;
+  }
+  return jieba;
+}
+
+/** 无 jieba 时的降级分词：bigram + 完整词。 */
+function cjkBigrams(text: string): string[] {
+  const chars = [...text];
+  const out: string[] = [];
+  for (let i = 0; i < chars.length - 1; i++) out.push(chars[i] + chars[i + 1]);
+  out.push(text);
+  return out;
+}
+
 /**
  * 分词器：中英文混合处理。
  * - 英文：按空格/标点切分，保留完整单词，过滤 stop words
- * - 中文：bigram + 单字
+ * - 中文：jieba `cutForSearch`（搜索模式，输出完整词 + 子词，与 MemoryCore 一致）；
+ *   依赖缺失时回落 bigram，保证功能可用
  *
  * 导出供 FTS5 预分词复用（006）与 bm25 评测：写入 FTS5 时把 content/title
  * 经此函数分词后以空格拼接存入，查询时对 query 用同一分词，保证中文逻辑一致。
@@ -344,31 +455,23 @@ export function tokenize(text: string): string[] {
     .split(/[\s,，。！？、；：""''（）()\-_/\\·~～…\[\]【】{}《》<>]+/)
     .filter((t) => t.length > 0);
 
+  const jieba = getJieba();
   const result: string[] = [];
   for (const token of rawTokens) {
-    const hasCJK = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(token);
-    const hasLatin = /[a-z]/.test(token);
-
-    if (hasCJK && hasLatin) {
-      // 混合 token（如 "l0录入"）：拆分中英文部分分别处理
-      const parts = token.split(/(?<=[a-z0-9])(?=[\u4e00-\u9fff])|(?<=[\u4e00-\u9fff])(?=[a-z0-9])/);
-      for (const part of parts) {
-        if (/[\u4e00-\u9fff]/.test(part) && part.length > 1) {
-          const chars = [...part];
-          for (let i = 0; i < chars.length - 1; i++) result.push(chars[i] + chars[i + 1]);
-          result.push(part);
-        } else if (part.length > 0 && !STOP_WORDS.has(part)) {
-          result.push(part);
-        }
-      }
-    } else if (hasCJK && token.length > 1) {
-      // 纯中文：bigram
-      const chars = [...token];
-      for (let i = 0; i < chars.length - 1; i++) result.push(chars[i] + chars[i + 1]);
-      result.push(token);
-    } else if (!STOP_WORDS.has(token) && token.length > 0) {
+    if (!/[\u4e00-\u9fff\u3400-\u4dbf]/.test(token)) {
       // 纯英文/数字：保留完整 token
-      result.push(token);
+      if (!STOP_WORDS.has(token)) result.push(token);
+      continue;
+    }
+    // 含中文（也覆盖 "l0录入" 这类混合 token）：交给 jieba 统一切分。
+    const parts = jieba
+      ? jieba.cutForSearch(token, true)
+      : token
+          .split(/(?<=[a-z0-9])(?=[\u4e00-\u9fff])|(?<=[\u4e00-\u9fff])(?=[a-z0-9])/)
+          .flatMap((part) => (/[\u4e00-\u9fff]/.test(part) && part.length > 1 ? cjkBigrams(part) : [part]));
+    for (const part of parts) {
+      const t = part.trim();
+      if (t && /[\p{L}\p{N}]/u.test(t) && !STOP_WORDS.has(t)) result.push(t);
     }
   }
   return result;
@@ -392,7 +495,7 @@ function ftsSearch(db: DatabaseType.Database, query: string, limit: number): Arr
 }
 
 /** 事务内重建三张索引表（wiki_fts + page_meta + graph_edge）。由 withWriteDb 调用。 */
-function writeIndex(db: DatabaseType.Database, pages: WikiPage[]): void {
+function writeIndex(db: DatabaseType.Database, pages: WikiPage[]): WikiGraphStats {
   db.prepare("DELETE FROM wiki_fts").run();
   db.prepare("DELETE FROM page_meta").run();
   db.prepare("DELETE FROM graph_edge").run();
@@ -409,7 +512,9 @@ function writeIndex(db: DatabaseType.Database, pages: WikiPage[]): void {
     insMeta.run(p.id, p.title, p.type, p.relPath, makeSnippet(p));
   }
   // graph_edge 只在 visible 页间。
-  for (const e of resolveEdges(pages)) insEdge.run(e.source, e.target);
+  const { edges, brokenLinks, orphanPages } = resolveEdges(pages);
+  for (const e of edges) insEdge.run(e.source, e.target);
+  return { pages: pages.length, edges: edges.length, brokenLinks, orphanPages };
 }
 
 /** 从读连接加载读模型：页元数据表 + 图（graph_edge 构建的内存图）。 */
@@ -854,12 +959,22 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
   }
 
   /** 重建 wiki 的 index.db 索引（幂等建库 → 事务重建三表 → 驱逐读连接防 stale）。 */
-  function rebuildIndex(name: string, pages: WikiPage[]) {
+  function rebuildIndex(name: string, pages: WikiPage[]): WikiGraphStats {
     const state = sources.get(name);
     if (!state) throw new Error(`rebuildIndex: unknown wiki ${name}`);
     initIndexDb(state.path); // 幂等：首次注册即建库+4表；已存在则无操作
-    withWriteDb(state.path, (db) => writeIndex(db, pages));
+    const stats = withWriteDb(state.path, (db) => writeIndex(db, pages));
     evictWikiDb(name); // 丢弃可能持有旧快照的读连接，下次查询重开
+    reportGraphStats(name, stats);
+    return stats;
+  }
+
+  /** 记录图质量统计：坏链是可直接修复的图缺陷，单独告警。 */
+  function reportGraphStats(name: string, stats: WikiGraphStats): void {
+    log.info("wiki 图质量", { name, ...stats });
+    if (stats.brokenLinks > 0) {
+      log.warn("wiki 存在无法解析的 wikilink", { name, brokenLinks: stats.brokenLinks });
+    }
   }
 
   function searchInternal(name: string, query: string, limit: number, options: SearchOptions): SearchResponse {
@@ -942,7 +1057,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     }
     try {
       const pages = scanWikiDir(state.path);
-      rebuildIndex(name, pages);
+      state.graphStats = rebuildIndex(name, pages);
       restored++;
       log.info("Restored wiki index", { name, pageCount: pages.length });
     } catch (err) {
@@ -961,7 +1076,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     sources.set(config.name, state);
     try {
       const pages = scanWikiDir(config.path);
-      rebuildIndex(config.name, pages);
+      state.graphStats = rebuildIndex(config.name, pages);
       state.status = "ready"; state.pageCount = pages.length; state.lastSyncAt = new Date().toISOString();
     } catch (err) { state.status = "error"; state.error = String(err); }
     persist();
@@ -975,7 +1090,7 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     const t0 = Date.now();
     try {
       const pages = scanWikiDir(state.path);
-      rebuildIndex(name, pages);
+      state.graphStats = rebuildIndex(name, pages);
       state.status = "ready"; state.pageCount = pages.length; state.lastSyncAt = new Date().toISOString(); state.error = undefined;
       log.info("sync 完成（索引已重建）", { name, pageCount: pages.length, ms: Date.now() - t0 });
     } catch (err) {
@@ -1021,11 +1136,14 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
     const t0 = Date.now();
     try {
       const pages = scanWikiDir(projectPath);
-      withWriteDb(projectPath, (db) => {
-        writeIndex(db, pages);
+      const stats = withWriteDb(projectPath, (db) => {
+        const s = writeIndex(db, pages);
         for (const p of outcome.processed) recordSourceIngestResult(db, p);
         if (outcome.deletedSources.length > 0) deleteSources(db, outcome.deletedSources);
+        return s;
       });
+      state.graphStats = stats;
+      reportGraphStats(name, stats);
       evictWikiDb(name); // 丢弃可能持旧快照的读连接
 
       const attempted = outcome.processed.length;
@@ -1077,7 +1195,9 @@ export function createWikiSourceManager(dataDir: string): WikiSourceManager {
       if (!state) return { nodes: [], edges: [], communities: [] };
       try {
         const db = getReadDb(name, state.path);
-        return loadReadModel(db).pg.view;
+        const { pg } = loadReadModel(db);
+        populateCommunities(pg);
+        return state.graphStats ? { ...pg.view, stats: state.graphStats } : pg.view;
       } catch {
         return { nodes: [], edges: [], communities: [] };
       }
