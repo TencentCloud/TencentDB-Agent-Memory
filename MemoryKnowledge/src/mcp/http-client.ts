@@ -7,11 +7,13 @@
  */
 
 import { createLogger } from "../logger.js";
+import { isValidIdSegment, SERVICE_ID_HEADER } from "../api-helpers.js";
 
 const log = createLogger("mcp-http");
 
 export interface HttpClientOptions {
   baseUrl: string;
+  serviceId: string;
   /** Optional bearer token for auth. */
   token?: string;
 }
@@ -33,11 +35,15 @@ export async function callApi(
   endpoint: string,
   body: Record<string, unknown>,
 ): Promise<unknown> {
+  if (!isValidIdSegment(opts.serviceId)) {
+    throw new Error("KNOWLEDGE_API_SERVICE_ID must be a valid service instance ID");
+  }
   const url = `${opts.baseUrl.replace(/\/$/, "")}/v3${endpoint}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    [SERVICE_ID_HEADER]: opts.serviceId,
+  };
   if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
-
-  log.debug(`POST ${url}`);
 
   let resp: Response;
   try {
