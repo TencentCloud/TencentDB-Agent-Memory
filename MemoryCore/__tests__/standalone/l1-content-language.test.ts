@@ -2,22 +2,22 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test, type TestContext } from "vitest";
 
-import { extractL1Memories } from "../../src/core/record/l1-extractor.ts";
-import { writeMemory } from "../../src/core/record/l1-writer.ts";
-import { VectorStore } from "../../src/core/store/sqlite/memory-store.ts";
-import { handleAtomicUpdate } from "../../src/gateway/v2-router.ts";
+import { extractL1Memories } from "../../src/core/record/l1-extractor.js";
+import { writeMemory, type ExtractedMemory } from "../../src/core/record/l1-writer.js";
+import { VectorStore } from "../../src/core/store/sqlite/memory-store.js";
+import { handleAtomicUpdate } from "../../src/gateway/v2-router.js";
 
 const content = "用户喜欢玩掌机。";
-const memory = { content, type: "persona", priority: 50, metadata: {}, source_message_ids: ["msg-1"], scene_name: "游戏" };
+const memory: ExtractedMemory = { content, type: "persona", priority: 50, metadata: {}, source_message_ids: ["msg-1"], scene_name: "游戏" };
 
-async function fixture(t) {
+async function fixture(t: TestContext) {
   const baseDir = await mkdtemp(join(tmpdir(), "l1-lang-"));
-  t.after(() => rm(baseDir, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(baseDir, { recursive: true, force: true }));
   const vectorStore = new VectorStore(":memory:", 0);
   vectorStore.init();
-  t.after(() => vectorStore.close());
+  t.onTestFinished(() => vectorStore.close());
   return { baseDir, vectorStore, sessionKey: "language-demo" };
 }
 
@@ -48,10 +48,17 @@ test("merge and explicit edits compute the tag from the replacement text", async
     ...ctx, memory: { ...memory, type: "episodic", metadata: { activity_start_time: "2026-01-01" } },
     decision: { record_id: "merged", action: "merge", target_ids: [], merged_content: "I prefer handheld games." },
   });
+  assert.ok(merged);
   assert.equal(merged.metadata.lang, "en");
   const response = await handleAtomicUpdate(
     { id: merged.id, content: "携帯ゲームが好きです。" }, { serviceId: "default" }, "test",
-    { getStore: () => ctx.vectorStore, getEmbedding: () => undefined },
+    {
+      getStore: () => ctx.vectorStore,
+      getEmbedding: () => undefined,
+      getStorage: () => undefined,
+      deployMode: "standalone",
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+    },
   );
   assert.equal(response.code, 0);
   const [row] = await ctx.vectorStore.queryL1Records({ recordIds: [merged.id] });
@@ -68,6 +75,7 @@ test("script heuristic handles mixed text, unsupported scripts and non-letter in
       ...ctx, memory: { ...memory, content: text },
       decision: { record_id: "", action: "store", target_ids: [] },
     });
+    assert.ok(saved);
     assert.equal(saved.metadata.lang, expected, text);
     assert.equal(saved.content, text);
   }
