@@ -67,7 +67,7 @@ function fixture(
   return { request, invoke, meta };
 }
 describe("GitHub Skill Panel authorization", () => {
-  it.each(["github/preview", "github/apply", "github/detach", "versions/restore-preview", "versions/restore"])(
+  it.each(["github/preview", "github/apply", "github/detach", "versions/restore-preview", "versions/restore", "github/preview-file", "versions/restore-file"])(
     "binds %s to the authenticated user and instance",
     async (action) => {
       const f = fixture();

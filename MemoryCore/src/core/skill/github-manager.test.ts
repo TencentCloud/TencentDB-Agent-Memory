@@ -687,4 +687,68 @@ describe("GitHub Skill publication with SQLite and filesystem storage", () => {
       ).github_check.status,
     ).toBe("current");
   });
+  it("pins attachment review to the preview and rejects wrong digests, stale heads and foreign teams", async () => {
+    const f = await fixture();
+    const row = await f.install();
+    const next = snapshot("b", "upstream");
+    f.fetcher.mockResolvedValue(next);
+    const p = await f.manager.preview({ ...ctx, skill_id: row.skill_id });
+    const request = {
+      ...ctx,
+      skill_id: row.skill_id,
+      expected_version: 1,
+      commit: p.source.commit,
+      digest: p.source.digest,
+      file_path: "guide.md",
+    };
+    const review = await f.manager.previewFile(request);
+    expect(f.fetcher).toHaveBeenLastCalledWith({
+      ...location,
+      ref: "b".repeat(40),
+    });
+    expect(review).toMatchObject({
+      before: { text: "old" },
+      after: { text: "upstream" },
+      status: "changed",
+    });
+    await expect(
+      f.manager.previewFile({ ...request, digest: "f".repeat(64) }),
+    ).rejects.toThrow("Preview changed");
+    f.fetcher.mockClear();
+    await expect(
+      f.manager.previewFile({ ...request, team_id: "other" }),
+    ).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" });
+    expect(f.fetcher).not.toHaveBeenCalled();
+    await f.core.update({
+      ...ctx,
+      skill_id: row.skill_id,
+      expected_version: 1,
+      content: row.content + "\nlocal",
+    });
+    await expect(f.manager.previewFile(request)).rejects.toMatchObject({
+      code: "SKILL_VERSION_STALE",
+    });
+    const restore = await f.manager.previewRestore({
+      ...ctx,
+      skill_id: row.skill_id,
+      source_version: 1,
+    });
+    const input = {
+      ...ctx,
+      skill_id: row.skill_id,
+      source_version: 1,
+      expected_version: 2,
+      digest: restore.digest,
+      file_path: "SKILL.md",
+    };
+    expect((await f.manager.previewRestoreFile(input)).before?.text).toContain(
+      "local",
+    );
+    await expect(
+      f.manager.previewRestoreFile({ ...input, digest: "f".repeat(64) }),
+    ).rejects.toThrow("Historical package changed");
+    await expect(
+      f.manager.previewRestoreFile({ ...input, agent_id: "other-agent" }),
+    ).rejects.toMatchObject({ code: "SKILL_NOT_OWNER" });
+  });
 });

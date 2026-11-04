@@ -146,6 +146,7 @@ export default function SkillDetailPane(props: {
 
   // 版本历史
   const [restoreVersion, setRestoreVersion] = useState<number | null>(null);
+  const [githubBusy, setGithubBusy] = useState(false);
   const [showGitHub, setShowGitHub] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [versions, setVersions] = useState<SkillSummary[] | null>(null);
@@ -444,10 +445,10 @@ export default function SkillDetailPane(props: {
     <Card className="_memory-skill-detail-card">
       <Card.Body className="_memory-skill-detail-body">
         {restoreVersion != null && writeCtx && <RestoreSkillDialog key={`${skillId}:${restoreVersion}`}
-          context={{ ...writeCtx, skill_id: skillId }} sourceVersion={restoreVersion}
+          autoPreview context={{ ...writeCtx, skill_id: skillId }} sourceVersion={restoreVersion}
           onClose={() => setRestoreVersion(null)} onRestored={() => { setRestoreVersion(null); setVersionView(null); setShowVersions(false); setVersions(null); reload(); }} />}
-        {showGitHub && writeCtx && <Modal visible size="l" caption={t('skills.github.check')} onClose={() => { setShowGitHub(false); loadDetail(); }}>
-          <Modal.Body><GitHubSkillForm key={skillId} context={{ ...writeCtx, skill_id: skillId }}
+        {showGitHub && writeCtx && <Modal visible size="calc(100vw - 48px)" className="skill-review-modal" disableEscape={githubBusy} disableCloseIcon={githubBusy} caption={t('skills.github.check')} onClose={() => { setShowGitHub(false); loadDetail(); }}>
+          <Modal.Body><GitHubSkillForm key={skillId} onBusyChange={setGithubBusy} autoPreview onClose={() => { setShowGitHub(false); loadDetail(); }} context={{ ...writeCtx, skill_id: skillId }}
             onImported={() => { setShowGitHub(false); reload(); }} /></Modal.Body>
         </Modal>}
         {/* 固定悬浮头部：skill 名 + 描述 + 操作栏（不随内容滚动，避免用户滑很久才点到功能） */}
@@ -817,7 +818,7 @@ export default function SkillDetailPane(props: {
             ) : null}
           </Modal.Body>
           {editable && versionView && versionView.version !== currentView?.version && <Modal.Footer>
-            <Button type="primary" onClick={() => setRestoreVersion(versionView.version)}>{t('skills.restore.open')}</Button>
+            <Button type="primary" onClick={() => { setRestoreVersion(versionView.version); setShowVersions(false); setVersionView(null); setVersionFile(null); }}>{t('skills.restore.open')}</Button>
           </Modal.Footer>}
         </Modal>
       )}

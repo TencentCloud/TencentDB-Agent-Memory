@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@react-sigma/core": "^5.0.6",
+    "diff": "^9.0.0",
     "docx-preview": "^0.4.1",
     "fflate": "^0.8.3",
     "graphology": "^0.26.0",

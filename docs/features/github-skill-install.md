@@ -12,8 +12,20 @@ check (time, remote commit, success/update/error status). Checks persist indepen
 of content versions, including failed requests, so reloading does not lose their
 results. A stale check cannot write into an obsolete or different-team head.
 
-**Check GitHub updates** compares current/incoming `SKILL.md` and added/changed/removed
-resource paths. Confirming creates a complete new Skill version. If the body, resource
+**Check GitHub updates** opens the same near-full-screen package reviewer used for
+installation and historical restore. A searchable file list distinguishes added,
+changed and removed files; unchanged files are hidden initially. Select `SKILL.md`
+or any text attachment to review numbered additions/deletions, expand unchanged
+context, or jump between changes (buttons or Alt+Up/Down). Wide layouts use aligned
+columns and narrow layouts default to a unified diff; the layout can also be switched
+manually. Markdown has a separate reading view without loading embedded images.
+Source details are collapsed and commit IDs are shortened with full-value copy.
+
+Text attachments load on selection against the exact preview commit/digest and
+current version. Switching files cancels obsolete requests; refreshing the preview
+clears file caches and replacement consent. Binary and oversized files show sizes,
+file modes and SHA-256 summaries instead of partial or fabricated text differences.
+Confirming creates a complete new Skill version. If the body, resource
 bytes, paths or executable bits were edited locally, upgrade requires explicit
 replacement consent. **Detach and keep local version** creates a version retaining
 the package and removing tracking. Closing the dialog cancels the update.
@@ -27,9 +39,9 @@ restore returns the same version, including a retry after a lost response.
 
 ## API
 
-Panel routes are `POST /api/v1/skill/github/{preview,apply,detach}` and proxy the
+Panel routes are `POST /api/v1/skill/github/{preview,preview-file,apply,detach}` and proxy the
 corresponding `/v3/skill/github/*` routes. Restore routes are
-`POST /api/v1/skill/versions/{restore-preview,restore}` (the Gateway uses `/v3/skill/versions/*`).
+`POST /api/v1/skill/versions/{restore-preview,restore-file,restore}` (the Gateway uses `/v3/skill/versions/*`).
 Panel verifies the authenticated user's
 team membership and agent ownership, and supplies the authenticated `user_id`.
 Direct Kernel callers use the existing authenticated service API boundary.
@@ -50,13 +62,19 @@ Preview an installation:
 To check an installed Skill, supply `skill_id` and the identity fields; the server
 loads its saved source. The response includes `source.commit`, `source.digest`,
 `expected_version`, `local_modified`, `update_available`, content comparison and
-resource change lists. Apply includes the same identity/location (or `skill_id`),
+resource change lists, and `review_files` descriptors (path, status, before/after
+size, executable bit, hash and any non-text reason). `github/preview-file` takes
+the apply identity/location, commit, digest, expected version and `file_path`;
+`versions/restore-file` takes the restore identity, source version, expected version,
+digest and `file_path`. Each returns one descriptor with bounded text on either side.
+Paths must be members of the compared packages; stale previews and foreign owners
+are rejected before returning contents. Apply includes the same identity/location (or `skill_id`),
 that exact commit/digest/expected version, and `overwrite_local: true` only after
 explicit consent. The server loads the verified immutable commit and verifies its
 bundle digest. Moving a branch after preview cannot change the approved package.
 Detach takes the identity, `skill_id` and `expected_version`.
 Restore preview takes the identity, `skill_id` and `source_version`; confirmation
-also requires the returned `expected_version` and `digest`. Neither restore endpoint
+also requires the returned `expected_version` and `digest`. No restore endpoint
 reads from GitHub: rollback remains available during an upstream outage.
 
 Repeated confirmation of an already published, unchanged package returns its
@@ -75,6 +93,10 @@ may require storage housekeeping; this change does not introduce a background re
   Git execution, install hooks, automatic polling, or other hosting platforms.
 - At most 100 resources plus `SKILL.md`, 5 MB per file, 50 MB per package, bounded API
   responses and a 60-second download deadline. Truncated repository trees are rejected.
+- Text review is capped at 100,000 bytes and 2,000 lines per side. Invalid UTF-8 and
+  control-character content is summarized as binary. Browser diff calculation has
+  a 50 ms / 1,500-edit bound and falls back to an explicit summary for complex changes.
+  These display limits do not truncate the package saved on confirmation.
 - Only regular Git blobs are imported; symlinks, submodules and unsafe paths fail
   before publication. Every downloaded blob is checked against its Git object hash.
 - Anonymous GitHub access works without configuration but has a small shared API quota.
@@ -114,6 +136,8 @@ interrupted writes, lost acknowledgments, asset-registration retries, version ra
 and team/instance isolation. Restore tests cover full-package recovery, idempotence,
 interrupted writes, expired history, stale previews and tenant boundaries. UI tests
 render the real Tea components and verify preview/confirmation, conflict consent,
-detach, restore consent/cancel/retry, preview invalidation, and version-cache refresh
-and isolation. The feature requires Gateway + Panel + Web; GitHub import and restore
+detach, restore consent/cancel/retry, preview invalidation, version-cache refresh
+and isolation, lazy attachment loading, obsolete response cancellation, binary and
+large-file summaries, EOF/line numbering, context folding, stale-preview refresh,
+and first-install modal expansion/dismissal locking. The feature requires Gateway + Panel + Web; GitHub import and restore
 do not require a configured LLM, Knowledge service or MemoryProxy.

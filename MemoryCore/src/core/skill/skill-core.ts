@@ -255,6 +255,12 @@ export class SkillCore {
   async githubPreview(input: GitHubRequest) {
     try { return await this.github.preview(input); } catch (error) { toCoreError(error); }
   }
+  async githubPreviewFile(input: GitHubApplyRequest & { file_path: string }) {
+    try { return await this.github.previewFile(input); } catch (error) { toCoreError(error); }
+  }
+  async previewRestoreFile(input: GitHubRequest & { source_version: number; expected_version: number; digest: string; file_path: string }) {
+    try { return await this.github.previewRestoreFile(input); } catch (error) { toCoreError(error); }
+  }
   async githubApply(input: GitHubApplyRequest, beforePublish?: () => Promise<void>) {
     try { return await this.github.apply(input, beforePublish); } catch (error) { toCoreError(error); }
   }

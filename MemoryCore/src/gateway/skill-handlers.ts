@@ -1425,12 +1425,14 @@ const githubApplySchema = githubRequestSchema.extend({
 const githubDetachSchema = githubRequestSchema.extend({ skill_id: z.string().min(1), expected_version: z.number().int().positive() });
 const restorePreviewSchema = githubRequestSchema.extend({ skill_id: z.string().min(1), source_version: z.number().int().positive() });
 const restoreSchema = restorePreviewSchema.extend({ expected_version: z.number().int().positive(), digest: z.string().regex(/^[a-f0-9]{64}$/) });
-function githubHandler(action: "preview" | "apply" | "detach" | "restore-preview" | "restore"): SkillHandler {
+function githubHandler(action: "preview" | "apply" | "detach" | "restore-preview" | "restore" | "preview-file" | "restore-file"): SkillHandler {
   return async (body, auth, requestId, deps) => {
     try {
       // Never fall back to the standalone tenant when instance resolution fails.
       const core = deps.resolveSkillCore ? await deps.resolveSkillCore(auth.serviceId) : deps.getSkillCore();
       if (!core) return errorEnvelope(40401, "Skill module not enabled", requestId);
+      if (action === "preview-file") return successEnvelope(await core.githubPreviewFile(githubApplySchema.extend({ file_path: z.string().min(1).max(1024) }).parse(body)), requestId);
+      if (action === "restore-file") return successEnvelope(await core.previewRestoreFile(restoreSchema.extend({ file_path: z.string().min(1).max(1024) }).parse(body)), requestId);
       if (action === "preview") return successEnvelope(await core.githubPreview(githubRequestSchema.parse(body)), requestId);
       if (action === "restore-preview") return successEnvelope(await core.previewRestore(restorePreviewSchema.parse(body)), requestId);
       const beforePublish = async () => {
@@ -1456,6 +1458,8 @@ function githubHandler(action: "preview" | "apply" | "detach" | "restore-preview
 
 export function makeSkillRouteTable(): Record<string, SkillHandler> {
   return {
+    "/v3/skill/github/preview-file": githubHandler("preview-file"),
+    "/v3/skill/versions/restore-file": githubHandler("restore-file"),
     "/v3/skill/versions/restore-preview": githubHandler("restore-preview"),
     "/v3/skill/versions/restore": githubHandler("restore"),
     "/v3/skill/github/preview": githubHandler("preview"),

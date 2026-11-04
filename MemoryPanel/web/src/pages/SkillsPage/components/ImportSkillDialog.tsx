@@ -304,163 +304,204 @@ export default function ImportSkillDialog(props: {
     }
   }
 
-  // 是否需要在弹窗内显示「归属 Agent」选择器：
-  //   - 仅 fixed-target 才有 agent 归属概念
-  //   - 必须传了 agents 才能渲染下拉
+  const [githubReview, setGithubReview] = useState(false);
+  const [githubBusy, setGithubBusy] = useState(false);
   const showAgentPicker = props.target === 'fixed' && !!props.agents;
 
   return (
-    <Modal visible caption={t('importSkill.caption')} size="l" onClose={props.onClose} disableEscape={submitting}>
+    <Modal
+      visible
+      caption={t('importSkill.caption')}
+      size="l"
+      className={githubReview ? 'skill-review-modal' : undefined}
+      onClose={props.onClose}
+      disableCloseIcon={submitting || githubBusy}
+      disableEscape={submitting || githubBusy}
+    >
       <Modal.Body>
-        <Alert type="info">{t('importSkill.hint')}</Alert>
-      {/* 归属 Agent —— 必选项。始终展示在导入方式上方，
+        {!githubReview && (
+          <>
+            <Alert type="info">{t('importSkill.hint')}</Alert>
+            {/* 归属 Agent —— 必选项。始终展示在导入方式上方，
           与 ChatMemoryPanel.ImportBlockDialog 一致：即便外层已经传了 agentId
           也允许在弹窗里重选。 */}
-      {showAgentPicker && (
-        <Form layout="vertical" style={{ width: '100%' }}>
-          <Form.Item
-            label={t('importSkill.agent')}
-            extra={t('importSkill.agent.extra')}
-          >
-            {props.agents!.length === 0 ? (
-              <Alert type="warning">{t('importSkill.agent.noAgent')}</Alert>
-            ) : (
-              <Select
-                size="full"
-                value={selectedAgentId}
-                onChange={setSelectedAgentId}
-                placeholder={t('importSkill.agent.placeholder')}
-                options={props.agents!.map((a) => ({ value: a.id, text: `${a.name}（${a.id}）` }))}
-              />
+            {showAgentPicker && (
+              <Form layout="vertical" style={{ width: '100%' }}>
+                <Form.Item label={t('importSkill.agent')} extra={t('importSkill.agent.extra')}>
+                  {props.agents!.length === 0 ? (
+                    <Alert type="warning">{t('importSkill.agent.noAgent')}</Alert>
+                  ) : (
+                    <Select
+                      size="full"
+                      value={selectedAgentId}
+                      disabled={githubBusy}
+                      onChange={setSelectedAgentId}
+                      placeholder={t('importSkill.agent.placeholder')}
+                      options={props.agents!.map((a) => ({
+                        value: a.id,
+                        text: `${a.name}（${a.id}）`,
+                      }))}
+                    />
+                  )}
+                </Form.Item>
+              </Form>
             )}
-          </Form.Item>
-        </Form>
-      )}
 
-      {/* Mode tabs：只保留 directory（目录导入）/ session（对话导入）两种 */}
-      <Segment
-        className="_memory-isd-mode-segment"
-        value={mode}
-        onChange={(v) => setMode(v as Mode)}
-        options={[
-          { value: 'directory', text: t('importSkill.mode.directory') },
-          { value: 'session', text: t('importSkill.mode.session') },
-          { value: 'github', text: 'GitHub' },
-        ]}
-      />
+            {/* Mode tabs：只保留 directory（目录导入）/ session（对话导入）两种 */}
+            <Segment
+              className="_memory-isd-mode-segment"
+              value={mode}
+              disabled={githubBusy}
+              onChange={(v) => setMode(v as Mode)}
+              options={[
+                { value: 'directory', text: t('importSkill.mode.directory') },
+                { value: 'session', text: t('importSkill.mode.session') },
+                { value: 'github', text: 'GitHub' },
+              ]}
+            />
+          </>
+        )}
+        {mode === 'github' && (
+          <GitHubSkillForm
+            key={`${props.teamId}:${selectedAgentId}`}
+            onReviewChange={setGithubReview}
+            onBusyChange={setGithubBusy}
+            context={{ team_id: props.teamId, agent_id: selectedAgentId, user_id: props.userId }}
+            onImported={props.onImported}
+          />
+        )}
 
-      {mode === 'github' && <GitHubSkillForm key={`${props.teamId}:${selectedAgentId}`}
-        context={{ team_id: props.teamId, agent_id: selectedAgentId, user_id: props.userId }} onImported={props.onImported} />}
-
-      {mode === 'directory' && (
-        <div className="_memory-isd-section">
-          <div className="_memory-isd-label">{t('importSkill.directory.label')}</div>
-          {/*
+        {mode === 'directory' && (
+          <div className="_memory-isd-section">
+            <div className="_memory-isd-label">{t('importSkill.directory.label')}</div>
+            {/*
             目录选择无 Tea 组件等价物，此处保留原生 input 作为唯一豁免，隐藏后由下方
             Tea Button 触发点击。webkitdirectory/directory 是非标准但广泛支持的浏览器
             属性，React 类型定义未收录，用 spread + any 透传而非逐属性 @ts-expect-error。
           */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            onChange={(e) => {
-              const list = e.target.files;
-              if (!list) return;
-              setPickedFiles(Array.from(list));
-            }}
-            className="_memory-isd-hidden-file-input"
-            {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
-          />
-          <Button onClick={() => fileInputRef.current?.click()}>
-            <FolderOpenIcon size={14} /> {t('importSkill.directory.selectFile')}
-          </Button>
-          {pickedFiles.length > 0 && (
-            <span className="_memory-isd-picked-count">{t('importSkill.directory.picked', { count: pickedFiles.length })}</span>
-          )}
-          {pickedFiles.length > 0 && partition && (
-            <div className="_memory-isd-partition-box">
-              <div>
-                {t('importSkill.directory.mainFile')}
-                {partition.mainFile ? (
-                  <span className="_memory-isd-main-file">
-                    {partition.mainFile.webkitRelativePath || partition.mainFile.name}
-                  </span>
-                ) : (
-                  <span className="_memory-isd-error-text">{t('importSkill.directory.noSkillMd')}</span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={(e) => {
+                const list = e.target.files;
+                if (!list) return;
+                setPickedFiles(Array.from(list));
+              }}
+              className="_memory-isd-hidden-file-input"
+              {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+            />
+            <Button onClick={() => fileInputRef.current?.click()}>
+              <FolderOpenIcon size={14} /> {t('importSkill.directory.selectFile')}
+            </Button>
+            {pickedFiles.length > 0 && (
+              <span className="_memory-isd-picked-count">
+                {t('importSkill.directory.picked', { count: pickedFiles.length })}
+              </span>
+            )}
+            {pickedFiles.length > 0 && partition && (
+              <div className="_memory-isd-partition-box">
+                <div>
+                  {t('importSkill.directory.mainFile')}
+                  {partition.mainFile ? (
+                    <span className="_memory-isd-main-file">
+                      {partition.mainFile.webkitRelativePath || partition.mainFile.name}
+                    </span>
+                  ) : (
+                    <span className="_memory-isd-error-text">
+                      {t('importSkill.directory.noSkillMd')}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  {t('importSkill.directory.resources', { count: partition.resources.length })}
+                </div>
+                {partition.resources.length > 0 && (
+                  <ul className="_memory-isd-resource-list">
+                    {partition.resources.map((r) => (
+                      <li key={r.path}>
+                        · {r.path} ({Math.round(r.file.size / 1024)}KB)
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {partition.warning && (
+                  <div className="_memory-isd-warning-text">{partition.warning}</div>
                 )}
               </div>
-              <div>{t('importSkill.directory.resources', { count: partition.resources.length })}</div>
-              {partition.resources.length > 0 && (
-                <ul className="_memory-isd-resource-list">
-                  {partition.resources.map((r) => (
-                    <li key={r.path}>· {r.path} ({Math.round(r.file.size / 1024)}KB)</li>
-                  ))}
-                </ul>
-              )}
-              {partition.warning && (
-                <div className="_memory-isd-warning-text">{partition.warning}</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
 
-      {mode === 'session' && (
-        <div className="_memory-isd-section">
-          <Alert type="info">
-            {t('importSkill.session.hintPrefix')}
-            <span className="_memory-isd-mono-inline">messages</span>
-            {t('importSkill.session.hintSuffix')}
+        {mode === 'session' && (
+          <div className="_memory-isd-section">
+            <Alert type="info">
+              {t('importSkill.session.hintPrefix')}
+              <span className="_memory-isd-mono-inline">messages</span>
+              {t('importSkill.session.hintSuffix')}
+            </Alert>
+            <Form layout="vertical" style={{ width: '100%' }}>
+              <Form.Item label={t('importSkill.session.label')}>
+                <Input.TextArea
+                  size="full"
+                  value={sessionPayload}
+                  onChange={setSessionPayload}
+                  rows={16}
+                  placeholder={JSON.stringify(
+                    {
+                      session_id: 'demo-user-extract-demo-1',
+                      task_id: 'default',
+                      messages: [
+                        { role: 'user', content: t('importSkill.sample.user') },
+                        { role: 'assistant', content: t('importSkill.sample.assistant') },
+                        { role: 'tool_call', content: t('importSkill.sample.toolCall') },
+                        { role: 'tool_result', content: t('importSkill.sample.toolResult') },
+                        { role: 'assistant', content: t('importSkill.sample.assistant2') },
+                      ],
+                    },
+                    null,
+                    2,
+                  )}
+                  className="_memory-isd-mono-input"
+                />
+              </Form.Item>
+            </Form>
+          </div>
+        )}
+
+        {error && <Alert type="error">{error}</Alert>}
+        {result && (
+          <Alert type="success">
+            <span className="_memory-isd-result-text">{result}</span>
           </Alert>
-          <Form layout="vertical" style={{ width: '100%' }}>
-            <Form.Item label={t('importSkill.session.label')}>
-              <Input.TextArea
-                size="full"
-                value={sessionPayload}
-                onChange={setSessionPayload}
-                rows={16}
-                placeholder={JSON.stringify(
-                  {
-                    session_id: 'demo-user-extract-demo-1',
-                    task_id: 'default',
-                    messages: [
-                      { role: 'user', content: t('importSkill.sample.user') },
-                      { role: 'assistant', content: t('importSkill.sample.assistant') },
-                      { role: 'tool_call', content: t('importSkill.sample.toolCall') },
-                      { role: 'tool_result', content: t('importSkill.sample.toolResult') },
-                      { role: 'assistant', content: t('importSkill.sample.assistant2') },
-                    ],
-                  },
-                  null,
-                  2,
-                )}
-                className="_memory-isd-mono-input"
-              />
-            </Form.Item>
-          </Form>
-        </div>
-      )}
-
-      {error && <Alert type="error">{error}</Alert>}
-      {result && <Alert type="success"><span className="_memory-isd-result-text">{result}</span></Alert>}
+        )}
       </Modal.Body>
-      <Modal.Footer>
-        {mode !== 'github' && <Button
-          type="primary"
-          onClick={() => void submit()}
-          disabled={
-            submitting
-            || (mode === 'directory' ? !partition?.mainFile : !sessionPayload.trim())
-            || (props.target === 'fixed' && !selectedAgentId)
-          }
-          title={props.target === 'fixed' && !selectedAgentId ? t('importSkill.error.noAgentHint') : ''}
-          loading={submitting}
-        >
-          {mode === 'session' ? t('importSkill.session.submit') : t('importSkill.submit')}
-        </Button>}
-        <Button onClick={props.onClose} disabled={submitting}>{t('importSkill.cancel')}</Button>
-      </Modal.Footer>
+      {!githubReview && (
+        <Modal.Footer>
+          {mode !== 'github' && (
+            <Button
+              type="primary"
+              onClick={() => void submit()}
+              disabled={
+                submitting ||
+                (mode === 'directory' ? !partition?.mainFile : !sessionPayload.trim()) ||
+                (props.target === 'fixed' && !selectedAgentId)
+              }
+              title={
+                props.target === 'fixed' && !selectedAgentId
+                  ? t('importSkill.error.noAgentHint')
+                  : ''
+              }
+              loading={submitting}
+            >
+              {mode === 'session' ? t('importSkill.session.submit') : t('importSkill.submit')}
+            </Button>
+          )}
+          <Button onClick={props.onClose} disabled={submitting || githubBusy}>
+            {t('importSkill.cancel')}
+          </Button>
+        </Modal.Footer>
+      )}
     </Modal>
   );
 }

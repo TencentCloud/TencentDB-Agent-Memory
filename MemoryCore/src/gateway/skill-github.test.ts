@@ -162,6 +162,32 @@ describe("GitHub Skill HTTP workflow", () => {
     });
     expect(checked!.version).toBe(1);
     expect(update.data.files.changed).toEqual(["guide.md"]);
+    const reviewed = await f.call("github/preview-file", {
+      ...ids,
+      skill_id,
+      expected_version: 1,
+      commit: update.data.source.commit,
+      digest: update.data.source.digest,
+      file_path: "guide.md",
+    });
+    expect(reviewed.code).toBe(0);
+    expect(reviewed.data).toMatchObject({
+      before: { text: "a" },
+      after: { text: "b" },
+    });
+    expect(
+      (
+        await f.call("github/preview-file", {
+          ...ids,
+          skill_id,
+          expected_version: 1,
+          commit: update.data.source.commit,
+          digest: update.data.source.digest,
+          file_path: "../secret",
+        })
+      ).code,
+    ).not.toBe(0);
+
     const applied = await f.call("github/apply", {
       ...ids,
       skill_id,
@@ -191,6 +217,19 @@ describe("GitHub Skill HTTP workflow", () => {
     });
     expect(restore.code).toBe(0);
     expect(restore.data.files.changed).toEqual(["guide.md"]);
+    const restoredFile = await f.call("versions/restore-file", {
+      ...ids,
+      skill_id,
+      source_version: 1,
+      expected_version: 2,
+      digest: restore.data.digest,
+      file_path: "guide.md",
+    });
+    expect(restoredFile.data).toMatchObject({
+      before: { text: "b" },
+      after: { text: "a" },
+    });
+
     const request = {
       ...ids,
       skill_id,

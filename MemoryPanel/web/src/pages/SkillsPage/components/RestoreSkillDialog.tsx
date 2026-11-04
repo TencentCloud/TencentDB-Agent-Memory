@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import SkillReview, { reviewFileList } from './SkillReview';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Checkbox, Modal } from 'tea-component';
 import {
   previewSkillRestore,
+  previewRestoreFile,
   restoreSkillVersion,
   type GitHubSkillContext,
   type SkillRestorePreview,
@@ -14,6 +16,7 @@ export default function RestoreSkillDialog(props: {
   sourceVersion: number;
   onClose: () => void;
   onRestored: () => void;
+  autoPreview?: boolean;
 }) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<SkillRestorePreview | null>(null);
@@ -44,10 +47,14 @@ export default function RestoreSkillDialog(props: {
       setBusy(false);
     }
   }
+  useEffect(() => {
+    if (props.autoPreview) void run(false);
+  }, []);
   return (
     <Modal
       visible
-      size="xl"
+      size="calc(100vw - 48px)"
+      className="skill-review-modal"
       caption={t('skills.restore.caption', { version: props.sourceVersion })}
       disableEscape={busy}
       onClose={() => {
@@ -55,68 +62,85 @@ export default function RestoreSkillDialog(props: {
       }}
     >
       <Modal.Body>
-        <div className="_memory-github-skill">
-          <Alert type="warning">{t('skills.restore.hint')}</Alert>
-          <Button disabled={busy} loading={busy} onClick={() => void run(false)}>
-            {t('skills.restore.preview')}
-          </Button>
-          {error && <Alert type="error">{error}</Alert>}
-          {preview && (
-            <>
-              <p>
-                {t('skills.restore.versions', {
-                  current: preview.expected_version,
-                  source: preview.source_version,
-                  next: preview.expected_version + 1,
-                })}
-              </p>
-              {preview.source && (
+        {preview ? (
+          <SkillReview
+            key={`${preview.expected_version}:${preview.digest}`}
+            name={preview.name}
+            beforeLabel={`v${preview.expected_version}`}
+            afterLabel={t('skills.review.restoreTarget', { version: preview.source_version })}
+            files={reviewFileList(preview)}
+            beforeContent={preview.previous_content}
+            afterContent={preview.content}
+            loadFile={(file_path, signal) =>
+              previewRestoreFile(
+                {
+                  ...props.context,
+                  source_version: props.sourceVersion,
+                  expected_version: preview.expected_version,
+                  digest: preview.digest,
+                  file_path,
+                },
+                signal,
+              )
+            }
+            details={
+              <>
                 <p>
-                  GitHub: {preview.source.repository} · <code>{preview.source.commit}</code>
+                  {t('skills.restore.versions', {
+                    current: preview.expected_version,
+                    source: preview.source_version,
+                    next: preview.expected_version + 1,
+                  })}
                 </p>
-              )}
-              <div className="_memory-github-diff">
-                <section>
-                  <h4>{t('skills.github.before')}</h4>
-                  <pre>{preview.previous_content}</pre>
-                </section>
-                <section>
-                  <h4>{t('skills.restore.after')}</h4>
-                  <pre>{preview.content}</pre>
-                </section>
-              </div>
-              {(['added', 'changed', 'removed'] as const).map((kind) => (
-                <div key={kind}>
-                  <strong>{t(`skills.github.${kind}`)}</strong>
-                  <ul>
-                    {preview.files[kind].map((file) => (
-                      <li key={file}>
-                        <code>{file}</code>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-              <Checkbox value={confirmed} disabled={busy} onChange={setConfirmed}>
-                {t('skills.restore.consent')}
-              </Checkbox>
-            </>
-          )}
-        </div>
+                {preview.source && (
+                  <>
+                    <p>{preview.source.repository}</p>
+                    <p>
+                      {preview.source.path} · {preview.source.ref}
+                    </p>
+                    <code>{preview.source.commit}</code>
+                  </>
+                )}
+              </>
+            }
+            notice={
+              error ? <span role="alert">{error}</span> : <span>{t('skills.restore.hint')}</span>
+            }
+            actions={
+              <>
+                <span className="skill-review-consent">
+                  <Checkbox value={confirmed} disabled={busy} onChange={setConfirmed}>
+                    {t('skills.restore.consent')}
+                  </Checkbox>
+                </span>
+                <Button disabled={busy} onClick={() => void run(false)}>
+                  {t('skills.restore.preview')}
+                </Button>
+                <Button disabled={busy} onClick={props.onClose}>
+                  {t('importSkill.cancel')}
+                </Button>
+                <Button
+                  type="primary"
+                  disabled={busy || !confirmed}
+                  loading={busy}
+                  onClick={() => void run(true)}
+                >
+                  {t('skills.restore.confirm')}
+                </Button>
+              </>
+            }
+          />
+        ) : (
+          <div className="skill-review-state">
+            <p>{t('skills.restore.hint')}</p>
+            {error && <Alert type="error">{error}</Alert>}
+            <Button loading={busy} disabled={busy} onClick={() => void run(false)}>
+              {t('skills.restore.preview')}
+            </Button>
+            <Button disabled>{t('skills.restore.confirm')}</Button>
+          </div>
+        )}
       </Modal.Body>
-      <Modal.Footer>
-        <Button
-          type="primary"
-          disabled={busy || !preview || !confirmed}
-          loading={busy}
-          onClick={() => void run(true)}
-        >
-          {t('skills.restore.confirm')}
-        </Button>
-        <Button disabled={busy} onClick={props.onClose}>
-          {t('importSkill.cancel')}
-        </Button>
-      </Modal.Footer>
     </Modal>
   );
 }

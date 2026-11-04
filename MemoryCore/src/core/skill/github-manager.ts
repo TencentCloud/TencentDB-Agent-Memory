@@ -1,3 +1,4 @@
+import { reviewFiles } from "./skill-review.js";
 import { createHash } from "node:crypto";
 import {
   bundleDigest,
@@ -164,6 +165,7 @@ export class GitHubSkillManager {
       content: snapshot.content,
       previous_content: current.content,
       files,
+      review_files: reviewFiles(head ? current : null, snapshot),
       expected_version: head?.version ?? 0,
       local_modified:
         !!head &&
@@ -174,6 +176,42 @@ export class GitHubSkillManager {
         snapshot.source.commit !== this.source(head).commit ||
         snapshot.source.digest !== this.source(head).digest,
     };
+  }
+  async previewFile(input: GitHubApplyRequest & { file_path: string }) {
+    const head = await this.head(input);
+    if (head) assertVersionFresh(head, input.expected_version);
+    else if (input.expected_version !== 0)
+      throw new SkillPermissionError("SKILL_VERSION_STALE");
+    const snapshot = await this.fetcher({
+      ...this.location(input, head),
+      ref: input.commit,
+    });
+    if (
+      snapshot.source.commit !== input.commit ||
+      bundleDigest(snapshot.content, snapshot.resources) !== input.digest
+    ) {
+      throw new GitHubSourceError("Preview changed; check again");
+    }
+    const current = head ? await this.bundle(head) : null;
+    return reviewFiles(current, snapshot, input.file_path)[0];
+  }
+  async previewRestoreFile(
+    input: GitHubRequest & {
+      source_version: number;
+      expected_version: number;
+      digest: string;
+      file_path: string;
+    },
+  ) {
+    const head = await this.head(input);
+    if (!head) throw new SkillPermissionError("SKILL_NOT_FOUND");
+    assertVersionFresh(head, input.expected_version);
+    const target = await this.restoreTarget(input, head);
+    const before = await this.bundle(head),
+      after = await this.bundle(target);
+    if (bundleDigest(after.content, after.resources) !== input.digest)
+      throw new GitHubSourceError("Historical package changed; preview again");
+    return reviewFiles(before, after, input.file_path)[0];
   }
   async apply(
     input: GitHubApplyRequest,
@@ -340,6 +378,7 @@ export class GitHubSkillManager {
       content: after.content,
       previous_content: before.content,
       files: diffFiles(before.resources, after.resources),
+      review_files: reviewFiles(before, after),
       source: JSON.parse(target.metadata_json).github_source ?? null,
     };
   }

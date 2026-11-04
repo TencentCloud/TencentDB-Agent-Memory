@@ -66,7 +66,9 @@ describe('historical Skill restore confirmation', () => {
     for (const value of ['historical content', 'current content', 'old.md', 'guide.md', 'new.md'])
       expect(document.body.textContent).toContain(value);
     expect(button('skills.restore.confirm').disabled).toBe(true);
-    await click(document.querySelector('input[type="checkbox"]') as HTMLElement);
+    await click(
+      document.querySelector('.skill-review-consent input[type="checkbox"]') as HTMLElement,
+    );
     await click(button('skills.restore.confirm'));
     expect(restoreSkillVersion).toHaveBeenCalledWith({
       ...context,
@@ -79,7 +81,9 @@ describe('historical Skill restore confirmation', () => {
   it('does not publish on cancel and resets consent when refreshing a preview', async () => {
     const done = await render();
     await click(button('skills.restore.preview'));
-    await click(document.querySelector('input[type="checkbox"]') as HTMLElement);
+    await click(
+      document.querySelector('.skill-review-consent input[type="checkbox"]') as HTMLElement,
+    );
     await click(button('skills.restore.preview'));
     expect(button('skills.restore.confirm').disabled).toBe(true);
     await click(button('importSkill.cancel'));
@@ -90,13 +94,17 @@ describe('historical Skill restore confirmation', () => {
     vi.mocked(restoreSkillVersion).mockRejectedValueOnce(new Error('Skill changed; preview again'));
     const done = await render();
     await click(button('skills.restore.preview'));
-    await click(document.querySelector('input[type="checkbox"]') as HTMLElement);
+    await click(
+      document.querySelector('.skill-review-consent input[type="checkbox"]') as HTMLElement,
+    );
     await click(button('skills.restore.confirm'));
     expect(done.onRestored).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain('Skill changed; preview again');
     vi.mocked(previewSkillRestore).mockResolvedValue({ ...preview, expected_version: 5 });
     await click(button('skills.restore.preview'));
-    await click(document.querySelector('input[type="checkbox"]') as HTMLElement);
+    await click(
+      document.querySelector('.skill-review-consent input[type="checkbox"]') as HTMLElement,
+    );
     await click(button('skills.restore.confirm'));
     expect(restoreSkillVersion).toHaveBeenLastCalledWith({
       ...context,
