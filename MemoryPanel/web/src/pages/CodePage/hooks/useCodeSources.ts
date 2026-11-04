@@ -24,6 +24,8 @@ export function useCodeSources() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('card');
   const [inFlight, setInFlight] = useState<CodeGraphDetail[]>([]);
+  // Failed graphs may not have a team asset yet. Keep them visible without polling.
+  const [failedSources, setFailedSources] = useState<CodeGraphDetail[]>([]);
 
   // Detail view state
   const [subView, setSubView] = useState<SubView>('list');
@@ -108,16 +110,15 @@ export function useCodeSources() {
   }, [scopeTab, fetchFixedBindings]);
 
   const displaySources = useMemo(() => {
-    // inFlight = 刚注册或刚点过「同步」的仓库，其状态由 code.get 轮询实时刷新。
-    // 同 id 时以 inFlight 为准覆盖 sources：否则详情头只会显示 202 那一刻
-    // teamAssets 快照里的状态，轮询结果永远反映不到界面上。
-    if (inFlight.length === 0) return sources;
-    const inFlightMap = new Map(inFlight.map((x) => [x.code_graph_id, x]));
+    // Local results override stale teamAssets snapshots, including failures that
+    // have not been registered as team assets. Only inFlight drives polling.
+    const overrides = [...failedSources, ...inFlight];
+    if (overrides.length === 0) return sources;
+    const overrideMap = new Map(overrides.map((x) => [x.code_graph_id, x]));
     const sourceIds = new Set(sources.map((s) => s.code_graph_id));
-    // 还没进 teamAssets 的（刚注册、meta 尚未登记）排在最前占位
-    const extras = inFlight.filter((x) => x.code_graph_id && !sourceIds.has(x.code_graph_id));
-    return [...extras, ...sources.map((s) => inFlightMap.get(s.code_graph_id) ?? s)];
-  }, [sources, inFlight]);
+    const extras = overrides.filter((x) => x.code_graph_id && !sourceIds.has(x.code_graph_id));
+    return [...extras, ...sources.map((s) => overrideMap.get(s.code_graph_id) ?? s)];
+  }, [sources, inFlight, failedSources]);
 
   const scopeSources = useMemo(() => {
     if (scopeTab === 'team') return displaySources;
@@ -217,59 +218,73 @@ export function useCodeSources() {
   const inFlightRef = useRef<CodeGraphDetail[]>([]);
   inFlightRef.current = inFlight;
   const hasInFlight = inFlight.length > 0;
+  const trackingScopeRef = useRef({ active: false });
+
+  useEffect(() => {
+    // Local polling/display state belongs to the team that created it.
+    const scope = { active: true };
+    trackingScopeRef.current = scope;
+    inFlightRef.current = [];
+    setInFlight([]);
+    setFailedSources([]);
+    setSubmitting(false);
+    return () => { scope.active = false; };
+  }, [activeTeamId]);
 
   useEffect(() => {
     if (!activeTeamId || !hasInFlight) return;
+    let active = true;
+    let polling = false;
     const poll = async () => {
-      const items = inFlightRef.current;
-      if (items.length === 0) return;
-      const toRemove: string[] = [];
-      const updates: CodeGraphDetail[] = [];
-      for (const item of items) {
-        if (!item.code_graph_id) continue;
-        try {
-          const detail = await knowledgeApi.code.get(item.code_graph_id);
-          if (detail.status === 'ready') {
-            try {
-              await knowledgeApi.code.registerMeta(activeTeamId, detail.code_graph_id);
-            } catch (e: unknown) {
-              // 幂等：asset 已存在 / 409 → 忽略；其它真错报出来便于排查
-              // （callback S2S 是主力，这里只是兜底，但失败要可见）
-              const msg = e instanceof Error ? e.message : String(e);
-              if (!/already|exist|409|registered|ok/i.test(msg)) {
-                tea.notify.error(t('code.notify.metaFailed', { msg }));
+      if (polling) return; // A slow GET must not start overlapping poll batches.
+      polling = true;
+      try {
+        for (const item of inFlightRef.current) {
+          if (!active) return;
+          if (!item.code_graph_id) continue;
+          // A manual retry replaces the entry. Its predecessor must not publish
+          // an old failure or register an old ready result over the new attempt.
+          const isCurrent = () => active && inFlightRef.current.includes(item);
+          try {
+            const detail = await knowledgeApi.code.get(item.code_graph_id);
+            if (!isCurrent()) continue;
+            if (detail.status === 'ready') {
+              try {
+                await knowledgeApi.code.registerMeta(activeTeamId, detail.code_graph_id);
+              } catch (e: unknown) {
+                if (!isCurrent()) continue;
+                // Registration remains idempotent; report non-conflict errors.
+                const msg = e instanceof Error ? e.message : String(e);
+                if (!/already|exist|409|registered|ok/i.test(msg)) {
+                  tea.notify.error(t('code.notify.metaFailed', { msg }));
+                }
               }
+              if (!isCurrent()) continue;
+              setInFlight((prev) => prev.filter((x) => x !== item));
+              void fetchSources();
+            } else if (detail.status === 'failed' || detail.status === 'missing') {
+              setFailedSources((prev) => [
+                ...prev.filter((x) => x.code_graph_id !== detail.code_graph_id),
+                detail,
+              ]);
+              setInFlight((prev) => prev.filter((x) => x !== item));
+            } else if (detail.status !== item.status) {
+              setInFlight((prev) => prev.map((x) => x === item ? detail : x));
             }
-            toRemove.push(detail.code_graph_id);
-            void fetchSources();
-          } else {
-            // 只在状态真正变化时才记录更新，避免无意义的 setInFlight 触发重渲染
-            if (detail.status !== item.status) updates.push(detail);
+          } catch {
+            /* Transport errors are transient; keep polling the task. */
           }
-        } catch {
-          /* ignore transient poll errors */
         }
-      }
-      if (toRemove.length > 0 || updates.length > 0) {
-        setInFlight((prev) => {
-          let next = prev;
-          if (toRemove.length > 0) {
-            const removeSet = new Set(toRemove);
-            next = next.filter((x) => !removeSet.has(x.code_graph_id));
-          }
-          if (updates.length > 0) {
-            const updMap = new Map(updates.map((u) => [u.code_graph_id, u]));
-            next = next.map((x) => updMap.get(x.code_graph_id) ?? x);
-          }
-          return next;
-        });
+      } finally {
+        polling = false;
       }
     };
     void poll();
-    const timer = setInterval(() => {
-      void poll();
-    }, 8000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => { void poll(); }, 8000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
   }, [hasInFlight, activeTeamId, fetchSources, t]);
 
   async function handleUnbindCode(codeGraphId: string) {
@@ -336,6 +351,7 @@ export function useCodeSources() {
   };
 
   const submitCreate = async (): Promise<void> => {
+    const scope = trackingScopeRef.current;
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
     if (!isValidGitUrl(repo)) {
@@ -376,6 +392,7 @@ export function useCodeSources() {
               }
             : {}),
       });
+      if (!scope.active) return;
 
       setShowRegister(false);
       setShowSshKey(false);
@@ -385,6 +402,7 @@ export function useCodeSources() {
       setFormSourceType('');
       setFormCredential({});
       setScopeTab('team');
+      setFailedSources((prev) => prev.filter((x) => x.code_graph_id !== detail.code_graph_id));
       setInFlight((prev) => [
         ...prev.filter((x) => x.code_graph_id !== detail.code_graph_id),
         detail,
@@ -392,9 +410,9 @@ export function useCodeSources() {
       tea.notify.info(t('code.notify.registered'));
       fetchSources();
     } catch (e: unknown) {
-      tea.notify.error(e);
+      if (scope.active) tea.notify.error(e);
     } finally {
-      setSubmitting(false);
+      if (scope.active) setSubmitting(false);
     }
   };
 
@@ -414,23 +432,29 @@ export function useCodeSources() {
   };
 
   const handleSync = async (cgId: string) => {
+    const scope = trackingScopeRef.current;
+    // Capture the graph before awaiting sync: the old poll can move it from
+    // inFlight to failedSources while the acknowledgment is still pending.
+    const current =
+      inFlightRef.current.find((x) => x.code_graph_id === cgId) ??
+      failedSources.find((x) => x.code_graph_id === cgId) ??
+      sources.find((s) => s.code_graph_id === cgId);
     try {
       await knowledgeApi.code.sync(cgId);
+      if (!scope.active) return;
       // sync 是异步的，202 只代表已入队。这里把该仓库放回 inFlight（与 handleRegister 对齐），
-      // 交给上面的 GET 轮询直到 status 回到 ready；否则只会拉一次 teamAssets 快照，
+      // 交给上面的 GET 轮询直到 ready / failed / missing；否则只会拉一次 teamAssets 快照，
       // 详情头会永远停在那一刻的「构建中」。
-      const current =
-        sources.find((s) => s.code_graph_id === cgId) ??
-        inFlightRef.current.find((x) => x.code_graph_id === cgId);
       if (current) {
+        setFailedSources((prev) => prev.filter((x) => x.code_graph_id !== cgId));
         setInFlight((prev) => [
           ...prev.filter((x) => x.code_graph_id !== cgId),
-          { ...current, status: 'processing' },
+          { ...current, status: 'processing', sync_error: null },
         ]);
       }
       void fetchSources();
     } catch (e: unknown) {
-      tea.notify.error(e);
+      if (scope.active) tea.notify.error(e);
     }
   };
 
@@ -452,6 +476,7 @@ export function useCodeSources() {
       // fetchSources 仅作兜底对齐。
       setSources((prev) => prev.filter((x) => x.code_graph_id !== cgId));
       setInFlight((prev) => prev.filter((x) => x.code_graph_id !== cgId));
+      setFailedSources((prev) => prev.filter((x) => x.code_graph_id !== cgId));
       if (selectedCodeAsset?.cgId === cgId) setSelectedCodeAsset(null);
       if (selectedCgId === cgId) setSubView('list');
       tea.notify.success(t('code.notify.deleted'));

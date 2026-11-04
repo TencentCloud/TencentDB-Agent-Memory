@@ -262,6 +262,9 @@ export default function CodeSourcesPanel() {
                     <div className="_codelist-card-id">
                       {t('code.card.id', { id: source.code_graph_id })}
                     </div>
+                    {(source.status === 'failed' || source.status === 'missing') && source.sync_error && (
+                      <Alert type="error">{source.sync_error}</Alert>
+                    )}
                     <div
                       className="_codelist-card-actions"
                       onClick={(event) => event.stopPropagation()}
