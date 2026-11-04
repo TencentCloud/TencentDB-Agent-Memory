@@ -17,6 +17,7 @@
  */
 
 import crypto from "node:crypto";
+import { detectContentLanguage, type ContentLanguage } from "./l1-language.js";
 import { DEFAULT_ISOLATION_ID, type IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
@@ -65,8 +66,8 @@ export interface MemoryRecord {
   scene_name: string;
   /** Source message IDs that contributed to this memory */
   source_message_ids: string[];
-  /** Type-specific metadata (e.g., activity_start_time for episodic) */
-  metadata: EpisodicMetadata | Record<string, never>;
+  /** Older records may predate the stored-content language tag. */
+  metadata: ExtractedMemory["metadata"] & { lang?: ContentLanguage };
   /** Timestamp trail: all timestamps related to this memory (for merge history tracking) */
   timestamps: string[];
   /** Creation timestamp (ISO) */
@@ -225,7 +226,7 @@ export async function writeMemory(params: {
     priority: finalPriority,
     scene_name: memory.scene_name,
     source_message_ids: memory.source_message_ids,
-    metadata: memory.metadata,
+    metadata: { ...memory.metadata, lang: detectContentLanguage(finalContent) },
     timestamps: finalTimestamps,
     createdAt: now,
     updatedAt: now,
