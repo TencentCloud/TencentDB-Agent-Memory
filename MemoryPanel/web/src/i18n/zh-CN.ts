@@ -1,6 +1,18 @@
 /** 中文翻译 — zh-CN */
 
 export const zhCN = {
+  "skills.restore.caption": "恢复版本 {{version}}",
+  "skills.restore.hint": "将正文、全部附件和来源跟踪信息恢复为一个新版本，当前版本仍保留在历史中。请先预览差异再确认。",
+  "skills.restore.preview": "预览恢复差异",
+  "skills.restore.versions": "当前 v{{current}} → 将 v{{source}} 恢复为新版本 v{{next}}",
+  "skills.restore.after": "恢复后的 SKILL.md",
+  "skills.restore.consent": "我已查看差异，同意替换当前 Skill 包。",
+  "skills.restore.confirm": "确认恢复",
+  "skills.restore.open": "恢复此版本",
+  "skills.github.checkStatus.current": "最近检查：上游没有更新。",
+  "skills.github.checkStatus.update_available": "最近检查：发现上游更新：",
+  "skills.github.checkStatus.error": "最近检查失败，已安装版本未改变。",
+
   'skills.github.installedCommit': '当前安装提交',
   'skills.github.declaredVersion': '声明版本',
   'skills.github.installedCheck': '当前安装版本的检查时间',

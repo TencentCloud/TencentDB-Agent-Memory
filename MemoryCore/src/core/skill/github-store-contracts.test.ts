@@ -82,6 +82,22 @@ describe("MongoDB Skill publication contract", () => {
     });
     expect(await store.countVersions(input.skill_id, input.team_id)).toBe(2);
     expect(await store.getHead(input.skill_id, "other-team")).toBeNull();
+    const head = (await store.getHead(input.skill_id, input.team_id))!;
+    const check = {
+      checked_at: new Date().toISOString(),
+      status: "current" as const,
+      remote_commit: "a".repeat(40),
+    };
+    expect(await store.recordGitHubCheck(head, check)).toBe(true);
+    expect(await store.recordGitHubCheck(first, check)).toBe(false);
+    expect(
+      await store.recordGitHubCheck({ ...head, team_id: "other-team" }, check),
+    ).toBe(false);
+    expect(
+      JSON.parse(
+        (await store.getHead(input.skill_id, input.team_id))!.metadata_json,
+      ).github_check,
+    ).toEqual(check);
   });
 });
 describe("TCVDB Skill transport contract (no cloud service)", () => {

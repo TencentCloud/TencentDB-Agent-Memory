@@ -1423,13 +1423,16 @@ const githubApplySchema = githubRequestSchema.extend({
   digest: z.string().regex(/^[a-f0-9]{64}$/), overwrite_local: z.boolean().optional(),
 });
 const githubDetachSchema = githubRequestSchema.extend({ skill_id: z.string().min(1), expected_version: z.number().int().positive() });
-function githubHandler(action: "preview" | "apply" | "detach"): SkillHandler {
+const restorePreviewSchema = githubRequestSchema.extend({ skill_id: z.string().min(1), source_version: z.number().int().positive() });
+const restoreSchema = restorePreviewSchema.extend({ expected_version: z.number().int().positive(), digest: z.string().regex(/^[a-f0-9]{64}$/) });
+function githubHandler(action: "preview" | "apply" | "detach" | "restore-preview" | "restore"): SkillHandler {
   return async (body, auth, requestId, deps) => {
     try {
       // Never fall back to the standalone tenant when instance resolution fails.
       const core = deps.resolveSkillCore ? await deps.resolveSkillCore(auth.serviceId) : deps.getSkillCore();
       if (!core) return errorEnvelope(40401, "Skill module not enabled", requestId);
       if (action === "preview") return successEnvelope(await core.githubPreview(githubRequestSchema.parse(body)), requestId);
+      if (action === "restore-preview") return successEnvelope(await core.previewRestore(restorePreviewSchema.parse(body)), requestId);
       const beforePublish = async () => {
         if (deps.quotaManager) {
           const check = await deps.quotaManager.checkMemoryQuota(auth.serviceId, 1);
@@ -1437,6 +1440,7 @@ function githubHandler(action: "preview" | "apply" | "detach"): SkillHandler {
         }
       };
       const row = action === "apply" ? await core.githubApply(githubApplySchema.parse(body), beforePublish)
+        : action === "restore" ? await core.restoreVersion(restoreSchema.parse(body), beforePublish)
         : await core.githubDetach(githubDetachSchema.parse(body));
       if (deps.getMetadataService) {
         const meta = await deps.getMetadataService(auth.serviceId);
@@ -1452,6 +1456,8 @@ function githubHandler(action: "preview" | "apply" | "detach"): SkillHandler {
 
 export function makeSkillRouteTable(): Record<string, SkillHandler> {
   return {
+    "/v3/skill/versions/restore-preview": githubHandler("restore-preview"),
+    "/v3/skill/versions/restore": githubHandler("restore"),
     "/v3/skill/github/preview": githubHandler("preview"),
     "/v3/skill/github/apply": githubHandler("apply"),
     "/v3/skill/github/detach": githubHandler("detach"),

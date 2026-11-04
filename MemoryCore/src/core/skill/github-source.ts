@@ -89,12 +89,90 @@ export function bundleDigest(
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
-/** Public API only: no shell, credentials, redirects or caller-controlled API hosts. */
+/** Bounded cache of verified immutable packages; callers never receive cache-owned objects. */
+export class GitHubSnapshotCache {
+  private entries = new Map<
+    string,
+    { value: GitHubSnapshot; bytes: number; expires: number }
+  >();
+  private bytes = 0;
+  constructor(
+    private readonly maxBytes = 32_000_000,
+    private readonly ttlMs = 600_000,
+    private readonly now = Date.now,
+  ) {}
+  get(key: string): GitHubSnapshot | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    if (entry.expires <= this.now()) {
+      this.entries.delete(key);
+      this.bytes -= entry.bytes;
+      return undefined;
+    }
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return structuredClone(entry.value);
+  }
+  set(key: string, value: GitHubSnapshot): void {
+    const bytes =
+      Buffer.byteLength(value.content) +
+      value.resources.reduce(
+        (n, r) => n + Buffer.byteLength(r.content) + Buffer.byteLength(r.path),
+        0,
+      );
+    if (bytes > this.maxBytes) return;
+    const existing = this.entries.get(key);
+    if (existing) {
+      this.bytes -= existing.bytes;
+      this.entries.delete(key);
+    }
+    while (this.bytes + bytes > this.maxBytes && this.entries.size) {
+      const oldest = this.entries.keys().next().value!;
+      this.bytes -= this.entries.get(oldest)!.bytes;
+      this.entries.delete(oldest);
+    }
+    this.entries.set(key, {
+      value: structuredClone(value),
+      bytes,
+      expires: this.now() + this.ttlMs,
+    });
+    this.bytes += bytes;
+  }
+}
+const sharedSnapshotCache = new GitHubSnapshotCache();
+
+/** Public repositories only; optional operator token is sent only to the fixed GitHub API host. */
 export async function fetchGitHubSkill(
   input: GitHubLocation,
   client: typeof fetch = fetch,
+  cache: GitHubSnapshotCache | undefined = client === fetch
+    ? sharedSnapshotCache
+    : undefined,
+  token: string | undefined = client === fetch
+    ? process.env.TDAI_SKILL_GITHUB_TOKEN
+    : undefined,
 ): Promise<GitHubSnapshot> {
   const location = normalizeGitHubLocation(input);
+  const cacheKey = (commit: string) =>
+    JSON.stringify([location.repository, location.path, commit]);
+  const cachedResult = (commit: string) => {
+    const cached = cache?.get(cacheKey(commit));
+    return cached
+      ? {
+          ...cached,
+          source: {
+            ...cached.source,
+            ...location,
+            checked_at: new Date().toISOString(),
+          },
+        }
+      : undefined;
+  };
+  if (token && /\s/.test(token))
+    throw new GitHubSourceError(
+      "Invalid server GitHub token configuration",
+      "GITHUB_UNAVAILABLE",
+    );
   const api = `https://api.github.com/repos/${location.repository.slice("https://github.com/".length)}`;
   const signal = AbortSignal.timeout(60_000);
   async function json(path: string, limit = 8_000_000): Promise<unknown> {
@@ -105,6 +183,7 @@ export async function fetchGitHubSkill(
         "User-Agent": "TencentDB-Agent-Memory-Skill-Import",
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
     if (!response.ok) {
@@ -131,6 +210,19 @@ export async function fetchGitHubSkill(
       await reader.cancel();
     }
   }
+  // An operator token raises the public API quota; it must never enable private imports.
+  if (token) {
+    const repository = decode(
+      z.object({ private: z.boolean() }),
+      await json("", 1_000_000),
+    );
+    if (repository.private)
+      fail("Only public GitHub repositories can be imported");
+  }
+  if (sha(location.ref)) {
+    const cached = cachedResult(location.ref);
+    if (cached) return cached;
+  }
   const revision = decode(
     z.object({
       sha: z.string(),
@@ -140,6 +232,8 @@ export async function fetchGitHubSkill(
   );
   if (!sha(revision.sha) || !sha(revision.commit?.tree?.sha))
     fail("Invalid GitHub commit response");
+  const cached = cachedResult(revision.sha);
+  if (cached) return cached;
   const tree = decode(
     z.object({
       truncated: z.boolean(),
@@ -224,7 +318,7 @@ export async function fetchGitHubSkill(
     typeof version === "string" || typeof version === "number"
       ? String(version).slice(0, 256)
       : undefined;
-  return {
+  const snapshot: GitHubSnapshot = {
     content,
     resources,
     source: {
@@ -235,6 +329,8 @@ export async function fetchGitHubSkill(
       declared_version: declaredVersion,
     },
   };
+  cache?.set(cacheKey(snapshot.source.commit), snapshot);
+  return snapshot;
 }
 
 function decode<T>(schema: z.ZodType<T>, value: unknown): T {

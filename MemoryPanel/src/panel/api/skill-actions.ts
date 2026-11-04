@@ -14,6 +14,8 @@
 export const SKILL_LIST_ACTIONS = new Set(['list', 'search', 'versions']);
 
 export const SKILL_ACTIONS = [
+  'versions/restore-preview',
+  'versions/restore',
   'github/preview',
   'github/apply',
   'github/detach',

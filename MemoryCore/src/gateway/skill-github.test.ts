@@ -155,6 +155,12 @@ describe("GitHub Skill HTTP workflow", () => {
     const skill_id = installed.data.skill_id;
     const update = await f.call("github/preview", { ...ids, skill_id });
     expect(update.data.update_available).toBe(true);
+    const checked = await f.store.getHead(skill_id, ids.team_id);
+    expect(JSON.parse(checked!.metadata_json).github_check).toMatchObject({
+      status: "update_available",
+      remote_commit: "b".repeat(40),
+    });
+    expect(checked!.version).toBe(1);
     expect(update.data.files.changed).toEqual(["guide.md"]);
     const applied = await f.call("github/apply", {
       ...ids,
@@ -178,13 +184,52 @@ describe("GitHub Skill HTTP workflow", () => {
     });
     expect(old.data.content).toBe("a");
     expect(current.data.content).toBe("b");
+    const restore = await f.call("versions/restore-preview", {
+      ...ids,
+      skill_id,
+      source_version: 1,
+    });
+    expect(restore.code).toBe(0);
+    expect(restore.data.files.changed).toEqual(["guide.md"]);
+    const request = {
+      ...ids,
+      skill_id,
+      source_version: 1,
+      expected_version: 2,
+      digest: restore.data.digest,
+    };
+    const denied = await f.call("versions/restore", {
+      ...request,
+      team_id: "team-other",
+    });
+    expect(denied.code).not.toBe(0);
+    expect(
+      (await f.call("versions/restore", { ...request, digest: "f".repeat(64) }))
+        .code,
+    ).not.toBe(0);
+    expect((await f.call("versions/restore", request)).data.version).toBe(3);
+    expect((await f.call("versions/restore", request)).data.version).toBe(3);
+    expect(
+      (await f.call("files/read", { ...ids, skill_id, path: "guide.md" })).data
+        .content,
+    ).toBe("a");
+    expect(
+      (
+        await f.call("files/read", {
+          ...ids,
+          skill_id,
+          version: 2,
+          path: "guide.md",
+        })
+      ).data.content,
+    ).toBe("b");
     const detached = await f.call("github/detach", {
       ...ids,
       skill_id,
-      expected_version: 2,
+      expected_version: 3,
     });
     expect(detached.code).toBe(0);
-    expect(detached.data.version).toBe(3);
+    expect(detached.data.version).toBe(4);
     expect(detached.data.metadata?.github_source).toBeUndefined();
   });
   it("rejects malformed requests and never falls back from an unresolved service", async () => {

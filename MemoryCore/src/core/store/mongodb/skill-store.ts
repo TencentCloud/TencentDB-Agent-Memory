@@ -1,3 +1,4 @@
+import type { GitHubCheck } from "../../skill/types.js";
 /**
  * MongoSkillStore — MongoDB (mongot `$search` BM25) backend for `ISkillStore`
  * (phase-1). Stores skill **version rows** with inline `SKILL.md` content and
@@ -152,6 +153,13 @@ export class MongoSkillStore implements ISkillStore {
   }
 
   // ── CRUD ────────────────────────────────────────────────
+
+  async recordGitHubCheck(head: Skill, check: GitHubCheck): Promise<boolean> {
+    const coll = await this.coll();
+    const result = await coll.updateOne({ _id: head.row_id, team_id: head.team_id, version: head.version, is_head: true, status: "active" } as never,
+      { $set: { metadata_json: JSON.stringify({ ...JSON.parse(head.metadata_json), github_check: check }) } } as never);
+    return result.matchedCount === 1;
+  }
 
   async appendVersion(input: AppendVersionInput): Promise<Skill> {
     const coll = await this.coll();

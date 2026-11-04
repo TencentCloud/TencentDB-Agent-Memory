@@ -470,3 +470,18 @@ export function applyGitHubSkill(params: GitHubSkillContext & {
 export function detachGitHubSkill(params: GitHubSkillContext & { expected_version: number }): Promise<SkillSummary> {
   return skillCall('github/detach', { ...params });
 }
+
+export interface SkillRestorePreview {
+  source_version: number; expected_version: number; digest: string; name: string;
+  content: string; previous_content: string; source: GitHubSkillSource | null;
+  files: { added: string[]; changed: string[]; removed: string[] };
+}
+export function previewSkillRestore(params: GitHubSkillContext & { skill_id: string; source_version: number }): Promise<SkillRestorePreview> {
+  return skillCall('versions/restore-preview', { ...params });
+}
+export function restoreSkillVersion(params: GitHubSkillContext & { skill_id: string; source_version: number; expected_version: number; digest: string }): Promise<SkillSummary> {
+  return skillCall('versions/restore', { ...params });
+}
+export interface GitHubCheckState {
+  checked_at: string; status: 'current' | 'update_available' | 'error'; remote_commit?: string; message?: string;
+}

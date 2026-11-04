@@ -1,3 +1,4 @@
+import type { GitHubCheck } from "../../skill/types.js";
 /**
  * TcvdbSkillStore — Skill 存储层的 TCVDB (Service 模式) 实现
  *
@@ -171,6 +172,17 @@ export class TcvdbSkillStore implements ISkillStore {
   }
 
   // ── ISkillStore: CRUD ─────────────────────────────────────────────────
+
+  async recordGitHubCheck(head: Skill, check: GitHubCheck): Promise<boolean> {
+    await this._ensureInit();
+    if (this.degraded) throw new Error("TcvdbSkillStore degraded");
+    const count = await this.client.update(this.skillsCollection, {
+      documentIds: [head.row_id],
+      filter: `skill_id="${this._escape(head.skill_id)}" and team_id="${this._escape(head.team_id)}" and version=${head.version} and is_head=1 and status="active"`,
+      update: { metadata_json: JSON.stringify({ ...JSON.parse(head.metadata_json), github_check: check }) },
+    });
+    return count > 0;
+  }
 
   async appendVersion(input: AppendVersionInput): Promise<Skill> {
     await this._ensureInit();

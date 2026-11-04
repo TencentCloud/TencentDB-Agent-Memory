@@ -1,3 +1,4 @@
+import type { GitHubCheck } from "./types.js";
 /**
  * ISkillStore — Skill 存储层抽象接口
  *
@@ -95,6 +96,8 @@ export interface ISkillStore {
   // ── CRUD ──
   /** 追加一个版本行。store 不负责幂等校验（由上层 SkillVersioning 处理）。 */
   appendVersion(input: AppendVersionInput): Promise<Skill>;
+  /** Update only an observed active head; checks never create content versions. */
+  recordGitHubCheck(head: Skill, check: GitHubCheck): Promise<boolean>;
   /**
    * 获取当前 head 版本（is_head=1 且 status='active'）。
    *

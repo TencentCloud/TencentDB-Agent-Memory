@@ -1,6 +1,18 @@
 /** English translation — en-US */
 
 export const enUS = {
+  "skills.restore.caption": "Restore version {{version}}",
+  "skills.restore.hint": "Restore the complete body, resources and source tracking as a new version. The current version stays in history. Preview the changes before confirming.",
+  "skills.restore.preview": "Preview restore changes",
+  "skills.restore.versions": "Current v{{current}} → restore v{{source}} as new v{{next}}",
+  "skills.restore.after": "Restored SKILL.md",
+  "skills.restore.consent": "I reviewed the changes and agree to replace the current package.",
+  "skills.restore.confirm": "Confirm restore",
+  "skills.restore.open": "Restore this version",
+  "skills.github.checkStatus.current": "No upstream update at last check.",
+  "skills.github.checkStatus.update_available": "Upstream update available:",
+  "skills.github.checkStatus.error": "Last check failed; the installed version is unchanged.",
+
   'skills.github.installedCommit': 'Installed commit',
   'skills.github.declaredVersion': 'Declared version',
   'skills.github.installedCheck': 'Last installed check',

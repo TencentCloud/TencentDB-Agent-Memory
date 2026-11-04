@@ -467,4 +467,224 @@ describe("GitHub Skill publication with SQLite and filesystem storage", () => {
       ).content,
     ).toBe("published");
   });
+  it("persists successful and failed update checks without creating a content version", async () => {
+    const f = await fixture();
+    const row = await f.install();
+    f.fetcher.mockResolvedValue(snapshot("b", "upstream"));
+    const preview = await f.manager.preview({ ...ctx, skill_id: row.skill_id });
+    let head = (await f.store.getHead(row.skill_id, ctx.team_id))!;
+    expect(JSON.parse(head.metadata_json).github_check).toMatchObject({
+      checked_at: preview.source.checked_at,
+      status: "update_available",
+      remote_commit: "b".repeat(40),
+    });
+    expect(head.version).toBe(1);
+    expect(head.content_hash).toBe(row.content_hash);
+    f.fetcher.mockRejectedValueOnce(new Error("GitHub rate limited"));
+    await expect(
+      f.manager.preview({ ...ctx, skill_id: row.skill_id }),
+    ).rejects.toThrow("rate limited");
+    head = (await f.store.getHead(row.skill_id, ctx.team_id))!;
+    expect(JSON.parse(head.metadata_json).github_check).toMatchObject({
+      status: "error",
+      message: "GitHub rate limited",
+    });
+    expect(await f.store.countVersions(row.skill_id, ctx.team_id)).toBe(1);
+  });
+  it("restores a historical complete package and provenance as a new idempotent version", async () => {
+    const f = await fixture();
+    const installed = await f.install();
+    await f.core.update({
+      ...ctx,
+      skill_id: installed.skill_id,
+      expected_version: 1,
+      content: installed.content + "\nlocal edits",
+    });
+    await f.core.writeFiles({
+      ...ctx,
+      skill_id: installed.skill_id,
+      expected_version: 2,
+      files: [
+        { path: "extra.md", content: "new local resource", encoding: "utf-8" },
+      ],
+    });
+    const preview = await f.manager.previewRestore({
+      ...ctx,
+      skill_id: installed.skill_id,
+      source_version: 1,
+    });
+    expect(preview.files.removed).toEqual(["extra.md"]);
+    expect(preview.expected_version).toBe(3);
+    const input = {
+      ...ctx,
+      skill_id: installed.skill_id,
+      source_version: 1,
+      expected_version: 3,
+      digest: preview.digest,
+    };
+    const restored = await f.manager.restore(input);
+    expect(restored.version).toBe(4);
+    expect(restored.content).toBe(installed.content);
+    expect(JSON.parse(restored.metadata_json).github_source).toEqual(
+      JSON.parse(installed.metadata_json).github_source,
+    );
+    expect(restored.manifest.map((r) => r.path)).toEqual(["guide.md"]);
+    expect((await f.manager.restore(input)).version).toBe(4);
+    expect(
+      (
+        await f.core.readFile({
+          ...ctx,
+          skill_id: installed.skill_id,
+          version: 3,
+          path: "extra.md",
+        })
+      ).content,
+    ).toBe("new local resource");
+    expect(
+      (
+        await f.core.readFile({
+          ...ctx,
+          skill_id: installed.skill_id,
+          path: "guide.md",
+        })
+      ).content,
+    ).toBe("old");
+  });
+  it("rejects cross-team restore and changes made after a restore preview", async () => {
+    const f = await fixture();
+    const row = await f.install();
+    await f.core.update({
+      ...ctx,
+      skill_id: row.skill_id,
+      expected_version: 1,
+      content: row.content + "\nchanged",
+    });
+    await expect(
+      f.manager.previewRestore({
+        ...ctx,
+        team_id: "other",
+        skill_id: row.skill_id,
+        source_version: 1,
+      }),
+    ).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" });
+    const preview = await f.manager.previewRestore({
+      ...ctx,
+      skill_id: row.skill_id,
+      source_version: 1,
+    });
+    await f.core.update({
+      ...ctx,
+      skill_id: row.skill_id,
+      expected_version: 2,
+      content: row.content + "\nnewer",
+    });
+    await expect(
+      f.manager.restore({
+        ...ctx,
+        skill_id: row.skill_id,
+        source_version: 1,
+        expected_version: 2,
+        digest: preview.digest,
+      }),
+    ).rejects.toMatchObject({ code: "SKILL_VERSION_STALE" });
+  });
+
+  it("does not publish a partial restore and can retry without consuming another version", async () => {
+    const f = await fixture();
+    const row = await f.install();
+    await f.core.update({
+      ...ctx,
+      skill_id: row.skill_id,
+      expected_version: 1,
+      content: row.content + "\nlocal",
+    });
+    const preview = await f.core.previewRestore({
+      ...ctx,
+      skill_id: row.skill_id,
+      source_version: 1,
+    });
+    const request = {
+      ...ctx,
+      skill_id: row.skill_id,
+      source_version: 1,
+      expected_version: 2,
+      digest: preview!.digest,
+    };
+    vi.spyOn(f.backend, "putObject").mockRejectedValueOnce(
+      new Error("storage unavailable"),
+    );
+    await expect(f.core.restoreVersion(request)).rejects.toThrow(
+      "storage unavailable",
+    );
+    expect((await f.store.getHead(row.skill_id, ctx.team_id))!.version).toBe(2);
+    expect(
+      (
+        await f.core.readFile({
+          ...ctx,
+          skill_id: row.skill_id,
+          version: 1,
+          path: "guide.md",
+        })
+      ).content,
+    ).toBe("old");
+    expect((await f.core.restoreVersion(request))!.version).toBe(3);
+    expect((await f.core.restoreVersion(request))!.version).toBe(3);
+  });
+  it("enforces history expiration on both restore preview and confirmation", async () => {
+    const f = await fixture();
+    const row = await f.install();
+    await f.core.update({
+      ...ctx,
+      skill_id: row.skill_id,
+      expected_version: 1,
+      content: row.content + "\nlocal",
+    });
+    let now = row.created_at_ms + 500;
+    const core = new SkillCore({
+      store: f.store,
+      resources: f.resources,
+      versioning: f.versioning,
+      versionTtlSeconds: 1,
+      now: () => now,
+    });
+    const request = { ...ctx, skill_id: row.skill_id, source_version: 1 };
+    const preview = await core.previewRestore(request);
+    now = row.created_at_ms + 1500;
+    await expect(
+      core.restoreVersion({
+        ...request,
+        expected_version: 2,
+        digest: preview!.digest,
+      }),
+    ).rejects.toMatchObject({ code: "SKILL_VERSION_EXPIRED" });
+    await expect(core.previewRestore(request)).rejects.toMatchObject({
+      code: "SKILL_VERSION_EXPIRED",
+    });
+    expect((await f.store.getHead(row.skill_id, ctx.team_id))!.version).toBe(2);
+  });
+  it("does not persist a check onto an obsolete or foreign-team head", async () => {
+    const f = await fixture();
+    const row = await f.install();
+    const check = {
+      checked_at: new Date().toISOString(),
+      status: "error" as const,
+      message: "test",
+    };
+    expect(
+      await f.store.recordGitHubCheck({ ...row, team_id: "other-team" }, check),
+    ).toBe(false);
+    await f.core.update({
+      ...ctx,
+      skill_id: row.skill_id,
+      expected_version: 1,
+      content: row.content + "\nlocal",
+    });
+    expect(await f.store.recordGitHubCheck(row, check)).toBe(false);
+    expect(
+      JSON.parse(
+        (await f.store.getByVersion(row.skill_id, 1, ctx.team_id))!
+          .metadata_json,
+      ).github_check.status,
+    ).toBe("current");
+  });
 });

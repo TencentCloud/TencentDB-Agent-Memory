@@ -47,7 +47,7 @@ export function registerSkillProxyRoutes(api: Hono, deps: PanelDeps): void {
       reqId: c.get('reqId'),
     };
 
-    if (action.startsWith('github/')) {
+    if (action.startsWith('github/') || action.startsWith('versions/restore')) {
       if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.team_id !== 'string' || typeof body.agent_id !== 'string') {
         return respondControlError(c, 400, 'TEAM_AND_AGENT_REQUIRED');
       }

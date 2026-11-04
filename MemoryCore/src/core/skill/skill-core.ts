@@ -236,7 +236,8 @@ export class SkillCore {
   private readonly onSkillAccessed?: SkillCoreOptions["onSkillAccessed"];
 
   constructor(opts: SkillCoreOptions) {
-    this.github = new GitHubSkillManager({ ...opts, fetcher: input => fetchGitHubSkill(input, opts.githubFetch) });
+    this.github = new GitHubSkillManager({ ...opts, fetcher: input => fetchGitHubSkill(input, opts.githubFetch),
+      assertReadableVersion: (target, head) => this.assertVersionNotExpired(target, head.version) });
     this.store = opts.store;
     this.resources = opts.resources;
     this.versioning = opts.versioning;
@@ -259,6 +260,13 @@ export class SkillCore {
   }
   async githubDetach(input: GitHubRequest & { expected_version: number }) {
     try { return await this.github.detach(input); } catch (error) { toCoreError(error); }
+  }
+
+  async previewRestore(input: GitHubRequest & { source_version: number }) {
+    try { return await this.github.previewRestore(input); } catch (error) { toCoreError(error); }
+  }
+  async restoreVersion(input: GitHubRequest & { source_version: number; expected_version: number; digest: string }, beforePublish?: () => Promise<void>) {
+    try { return await this.github.restore(input, beforePublish); } catch (error) { toCoreError(error); }
   }
 
   /** 读路径读到具体 skill 后 fire。异常吞掉，不阻塞读。 */

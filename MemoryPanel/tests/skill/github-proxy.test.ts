@@ -67,7 +67,7 @@ function fixture(
   return { request, invoke, meta };
 }
 describe("GitHub Skill Panel authorization", () => {
-  it.each(["github/preview", "github/apply", "github/detach"])(
+  it.each(["github/preview", "github/apply", "github/detach", "versions/restore-preview", "versions/restore"])(
     "binds %s to the authenticated user and instance",
     async (action) => {
       const f = fixture();
@@ -94,7 +94,7 @@ describe("GitHub Skill Panel authorization", () => {
     { agentTeam: "team-b" },
   ])("blocks unauthorized access: %j", async (options) => {
     const f = fixture(options);
-    const response = await f.request();
+    const response = await f.request("versions/restore");
     expect(response.status).toBeGreaterThanOrEqual(400);
     expect(f.invoke).not.toHaveBeenCalled();
   });

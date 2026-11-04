@@ -14,7 +14,7 @@ import type {
   SkillResourcePayload,
 } from "./skill-resource-store.js";
 import type { SkillVersioning } from "./skill-versioning.js";
-import type { Skill } from "./types.js";
+import type { Skill, GitHubCheck } from "./types.js";
 import {
   assertOwner,
   assertTeamMatch,
@@ -43,6 +43,7 @@ interface Options {
   resources: SkillResourceStore;
   versioning: SkillVersioning;
   fetcher?: (input: GitHubLocation) => Promise<GitHubSnapshot>;
+  assertReadableVersion?: (target: Skill, head: Skill) => void;
 }
 // Coalesce retries within a store instance; database expected_version remains authoritative.
 const locks = new WeakMap<ISkillStore, Map<string, Promise<unknown>>>();
@@ -111,7 +112,23 @@ export class GitHubSkillManager {
   }
   async preview(input: GitHubRequest) {
     const head = await this.head(input);
-    const snapshot = await this.fetcher(this.location(input, head));
+    let snapshot: GitHubSnapshot;
+    try {
+      snapshot = await this.fetcher(this.location(input, head));
+    } catch (error) {
+      if (head)
+        await this.opts.store
+          .recordGitHubCheck(head, {
+            checked_at: new Date().toISOString(),
+            status: "error",
+            message:
+              error instanceof Error
+                ? error.message.slice(0, 500)
+                : "GitHub check failed",
+          })
+          .catch(() => {});
+      throw error;
+    }
     const current = head
       ? await this.bundle(head)
       : { content: "", resources: [] };
@@ -122,6 +139,23 @@ export class GitHubSkillManager {
       throw new GitHubSourceError(
         "Upstream renamed this Skill; install it separately",
       );
+    if (head) {
+      const check: GitHubCheck = {
+        checked_at: snapshot.source.checked_at,
+        status:
+          snapshot.source.commit === this.source(head).commit &&
+          snapshot.source.digest === this.source(head).digest
+            ? "current"
+            : "update_available",
+        remote_commit: snapshot.source.commit,
+      };
+      if (!(await this.opts.store.recordGitHubCheck(head, check))) {
+        throw new SkillPermissionError(
+          "SKILL_VERSION_STALE",
+          "Skill changed while checking; check again",
+        );
+      }
+    }
     return {
       source: snapshot.source,
       previous_source: head ? this.source(head) : null,
@@ -232,6 +266,11 @@ export class GitHubSkillManager {
         metadata_json: JSON.stringify({
           ...(head ? JSON.parse(head.metadata_json) : {}),
           github_source: { ...snapshot.source, ...location },
+          github_check: {
+            checked_at: snapshot.source.checked_at,
+            status: "current",
+            remote_commit: snapshot.source.commit,
+          },
         }),
       });
     });
@@ -247,6 +286,7 @@ export class GitHubSkillManager {
       const metadata = JSON.parse(current.metadata_json);
       if (!metadata.github_source) return current;
       delete metadata.github_source;
+      delete metadata.github_check;
       const bundle = await this.bundle(current);
       return this.opts.versioning.replaceBundle(
         current.skill_id,
@@ -260,6 +300,96 @@ export class GitHubSkillManager {
           metadata_json: JSON.stringify(metadata),
         },
       );
+    });
+  }
+  private async restoreTarget(
+    input: GitHubRequest & { source_version: number },
+    head: Skill,
+  ) {
+    if (
+      !Number.isSafeInteger(input.source_version) ||
+      input.source_version < 1 ||
+      input.source_version >= head.version
+    ) {
+      throw new GitHubSourceError("Select an earlier version to restore");
+    }
+    const target = await this.opts.store.getByVersion(
+      head.skill_id,
+      input.source_version,
+      input.team_id,
+    );
+    if (!target)
+      throw new SkillPermissionError(
+        "SKILL_NOT_FOUND",
+        "Historical version is unavailable",
+      );
+    this.opts.assertReadableVersion?.(target, head);
+    return target;
+  }
+  async previewRestore(input: GitHubRequest & { source_version: number }) {
+    const head = await this.head(input);
+    if (!head) throw new SkillPermissionError("SKILL_NOT_FOUND");
+    const target = await this.restoreTarget(input, head);
+    const before = await this.bundle(head);
+    const after = await this.bundle(target);
+    return {
+      source_version: target.version,
+      expected_version: head.version,
+      digest: bundleDigest(after.content, after.resources),
+      name: target.name,
+      content: after.content,
+      previous_content: before.content,
+      files: diffFiles(before.resources, after.resources),
+      source: JSON.parse(target.metadata_json).github_source ?? null,
+    };
+  }
+  async restore(
+    input: GitHubRequest & {
+      source_version: number;
+      expected_version: number;
+      digest: string;
+    },
+    beforePublish?: () => Promise<void>,
+  ): Promise<Skill> {
+    const initial = await this.head(input);
+    if (!initial) throw new SkillPermissionError("SKILL_NOT_FOUND");
+    return this.locked(initial.skill_id, async () => {
+      const head = (await this.head(input))!;
+      const receipt = JSON.parse(head.metadata_json).restored_from;
+      if (
+        head.version === input.expected_version + 1 &&
+        receipt?.version === input.source_version &&
+        receipt?.digest === input.digest &&
+        receipt?.expected_version === input.expected_version
+      ) {
+        const current = await this.bundle(head);
+        if (bundleDigest(current.content, current.resources) === input.digest) {
+          await this.opts.versioning.ensureBundleAsset(head);
+          return head;
+        }
+      }
+      assertVersionFresh(head, input.expected_version);
+      const target = await this.restoreTarget(input, head);
+      const bundle = await this.bundle(target);
+      if (bundleDigest(bundle.content, bundle.resources) !== input.digest)
+        throw new GitHubSourceError(
+          "Historical package changed; preview again",
+        );
+      const metadata = JSON.parse(target.metadata_json);
+      delete metadata.github_check;
+      metadata.restored_from = {
+        version: target.version,
+        expected_version: head.version,
+        digest: input.digest,
+      };
+      await beforePublish?.();
+      return this.opts.versioning.replaceBundle(head.skill_id, head, input, {
+        content: target.content,
+        name: target.name,
+        description: target.description,
+        resourcesToWrite: bundle.resources,
+        metadata_json: JSON.stringify(metadata),
+      });
     });
   }
   private async locked<T>(key: string, fn: () => Promise<T>): Promise<T> {

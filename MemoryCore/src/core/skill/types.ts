@@ -380,3 +380,11 @@ export interface ExtractorLLMRunner {
     signal?: AbortSignal;
   }): Promise<string>;
 }
+
+/** Mutable check state, separate from immutable installed provenance. */
+export interface GitHubCheck {
+  checked_at: string;
+  status: "current" | "update_available" | "error";
+  remote_commit?: string;
+  message?: string;
+}

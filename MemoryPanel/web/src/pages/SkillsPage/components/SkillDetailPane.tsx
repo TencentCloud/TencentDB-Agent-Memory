@@ -12,6 +12,7 @@
  */
 
 import GitHubSkillForm from './GitHubSkillForm';
+import RestoreSkillDialog from './RestoreSkillDialog';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -28,6 +29,7 @@ import {
   listSkillVersions,
   type SkillDetail,
   type GitHubSkillSource,
+  type GitHubCheckState,
   type SkillSummary,
   type ReadFileResult,
 } from '@/lib/api/skill-api';
@@ -143,6 +145,7 @@ export default function SkillDetailPane(props: {
   const [newFileSaving, setNewFileSaving] = useState(false);
 
   // 版本历史
+  const [restoreVersion, setRestoreVersion] = useState<number | null>(null);
   const [showGitHub, setShowGitHub] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [versions, setVersions] = useState<SkillSummary[] | null>(null);
@@ -183,6 +186,7 @@ export default function SkillDetailPane(props: {
     setVersions(null);
     setShowVersions(false);
     setShowGitHub(false);
+    setRestoreVersion(null);
     setVersionView(null);
     setVersionFile(null);
     setFilePreview(null);
@@ -194,6 +198,7 @@ export default function SkillDetailPane(props: {
   const stale = !!view && view.skill_id !== skillId;
   const currentView = stale ? null : view;
   const githubSource = currentView?.metadata?.github_source as GitHubSkillSource | undefined;
+  const githubCheck = currentView?.metadata?.github_check as GitHubCheckState | undefined;
   const showLoading = !!skillId && (loading || stale);
 
   const fileTree = useMemo(
@@ -214,6 +219,7 @@ export default function SkillDetailPane(props: {
 
   // 写成功后：重新拉详情拿最新 version，并通知父组件刷新列表
   const reload = useCallback(() => {
+    setVersions(null);
     loadDetail();
     props.onChanged?.();
   }, [loadDetail, props]);
@@ -437,7 +443,10 @@ export default function SkillDetailPane(props: {
   return (
     <Card className="_memory-skill-detail-card">
       <Card.Body className="_memory-skill-detail-body">
-        {showGitHub && writeCtx && <Modal visible size="l" caption={t('skills.github.check')} onClose={() => setShowGitHub(false)}>
+        {restoreVersion != null && writeCtx && <RestoreSkillDialog key={`${skillId}:${restoreVersion}`}
+          context={{ ...writeCtx, skill_id: skillId }} sourceVersion={restoreVersion}
+          onClose={() => setRestoreVersion(null)} onRestored={() => { setRestoreVersion(null); setVersionView(null); setShowVersions(false); setVersions(null); reload(); }} />}
+        {showGitHub && writeCtx && <Modal visible size="l" caption={t('skills.github.check')} onClose={() => { setShowGitHub(false); loadDetail(); }}>
           <Modal.Body><GitHubSkillForm key={skillId} context={{ ...writeCtx, skill_id: skillId }}
             onImported={() => { setShowGitHub(false); reload(); }} /></Modal.Body>
         </Modal>}
@@ -517,6 +526,11 @@ export default function SkillDetailPane(props: {
                 <p>{t('skills.github.commit')}: <code>{githubSource.commit}</code></p>
                 {githubSource.declared_version && <p>{t('skills.github.declaredVersion')}: {githubSource.declared_version}</p>}
                 <p>{t('skills.github.installedCheck')}: {githubSource.checked_at}</p>
+                {githubCheck && <>
+                  <p>{t('skills.github.checked')}: {githubCheck.checked_at}</p>
+                  <p>{t(`skills.github.checkStatus.${githubCheck.status}`)} {githubCheck.remote_commit && <code>{githubCheck.remote_commit}</code>}</p>
+                  {githubCheck.message && <Text theme="danger">{githubCheck.message}</Text>}
+                </>}
               </div>}
               <div className="_memory-skill-detail-section">
                 <Text theme="label" parent="div" className="_memory-skill-detail-section-title">
@@ -802,6 +816,9 @@ export default function SkillDetailPane(props: {
               </>
             ) : null}
           </Modal.Body>
+          {editable && versionView && versionView.version !== currentView?.version && <Modal.Footer>
+            <Button type="primary" onClick={() => setRestoreVersion(versionView.version)}>{t('skills.restore.open')}</Button>
+          </Modal.Footer>}
         </Modal>
       )}
 

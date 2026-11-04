@@ -7,24 +7,30 @@ must contain `SKILL.md`; other regular files become resources, preserving paths
 relative to that directory and executable bits. Nothing is executed during import.
 
 The detail pane displays the repository, directory, requested ref, resolved commit,
-optional frontmatter `version`, and the check timestamp associated with the installed
-snapshot. **Check GitHub updates** performs a fresh read without modifying the Skill.
-The dialog displays that check's timestamp, incoming commit, current/incoming
-`SKILL.md`, and added/changed/removed resource paths. Confirming creates a complete
-new Skill version. Existing history, resource reads and ZIP exports continue to work.
-A manually checked timestamp is returned in the preview; it is persisted with the
-source metadata only when a version is installed, avoiding a new version for a read.
+optional frontmatter `version`, installed snapshot timestamp, and the last manual
+check (time, remote commit, success/update/error status). Checks persist independently
+of content versions, including failed requests, so reloading does not lose their
+results. A stale check cannot write into an obsolete or different-team head.
 
-If the body, resource bytes, paths or executable bits were edited locally, upgrade
-requires explicit replacement consent. **Detach and keep local version** creates a
-new version retaining the local package and removing its GitHub tracking metadata.
-Closing the dialog before confirmation cancels the update. Historical versions keep
-their original provenance. This MVP does not add a separate history-restore action.
+**Check GitHub updates** compares current/incoming `SKILL.md` and added/changed/removed
+resource paths. Confirming creates a complete new Skill version. If the body, resource
+bytes, paths or executable bits were edited locally, upgrade requires explicit
+replacement consent. **Detach and keep local version** creates a version retaining
+the package and removing tracking. Closing the dialog cancels the update.
+
+Open **History**, view an earlier version, and select **Restore this version**. Preview
+shows the current and historical bodies and resource differences. After explicit
+confirmation, the entire historical package (body, all attachments and provenance)
+is published as a new version; existing versions remain readable. Expired history,
+concurrent changes and changed package digests are rejected. Repeating a successful
+restore returns the same version, including a retry after a lost response.
 
 ## API
 
 Panel routes are `POST /api/v1/skill/github/{preview,apply,detach}` and proxy the
-corresponding `/v3/skill/github/*` routes. Panel verifies the authenticated user's
+corresponding `/v3/skill/github/*` routes. Restore routes are
+`POST /api/v1/skill/versions/{restore-preview,restore}` (the Gateway uses `/v3/skill/versions/*`).
+Panel verifies the authenticated user's
 team membership and agent ownership, and supplies the authenticated `user_id`.
 Direct Kernel callers use the existing authenticated service API boundary.
 
@@ -46,9 +52,12 @@ loads its saved source. The response includes `source.commit`, `source.digest`,
 `expected_version`, `local_modified`, `update_available`, content comparison and
 resource change lists. Apply includes the same identity/location (or `skill_id`),
 that exact commit/digest/expected version, and `overwrite_local: true` only after
-explicit consent. The server downloads the immutable commit again and verifies its
+explicit consent. The server loads the verified immutable commit and verifies its
 bundle digest. Moving a branch after preview cannot change the approved package.
 Detach takes the identity, `skill_id` and `expected_version`.
+Restore preview takes the identity, `skill_id` and `source_version`; confirmation
+also requires the returned `expected_version` and `digest`. Neither restore endpoint
+reads from GitHub: rollback remains available during an upstream outage.
 
 Repeated confirmation of an already published, unchanged package returns its
 existing version, including retries after lost responses or asset registration
@@ -68,8 +77,16 @@ may require storage housekeeping; this change does not introduce a background re
   responses and a 60-second download deadline. Truncated repository trees are rejected.
 - Only regular Git blobs are imported; symlinks, submodules and unsafe paths fail
   before publication. Every downloaded blob is checked against its Git object hash.
-- GitHub's anonymous API quota applies. HTTP errors, including rate limiting, leave
-  the installed package intact and are returned to the user for retry.
+- Anonymous GitHub access works without configuration but has a small shared API quota.
+  Operators may set `TDAI_SKILL_GITHUB_TOKEN` on the Gateway to raise the public-read
+  quota. Use a dedicated token with only the access required for public repositories.
+  The token is never accepted from the browser or a repository URL, nor returned in
+  responses. Authenticated fetches first verify the repository is public; private
+  imports remain unsupported. Redirects are refused, including authenticated requests.
+- Verified snapshots are cached by repository, directory and immutable commit (32 MB,
+  10 minutes, LRU eviction). Branch/tag checks still resolve the ref each time; pinned
+  confirmation reuses verified bytes. Each caller receives an isolated copy. Errors,
+  including rate limiting, leave the installed package intact and remain retryable.
 - SQLite checks `expected_version` inside its transaction. MongoDB uses its existing
   unique version index; duplicate publication is translated to a version conflict.
   TCVDB retains its existing head-flip CAS and read-time head repair semantics.
@@ -94,5 +111,9 @@ Core tests start loopback HTTP and temporary MongoDB servers. Tests cover pinned
 commits, bounded downloads, integrity checks, duplicate confirmation, attachment-only
 updates/deletions, local-edit conflicts, detach, historical resources/exports,
 interrupted writes, lost acknowledgments, asset-registration retries, version races,
-and team/instance isolation. UI tests render the real Tea components and verify the
-preview/confirmation, conflict consent, detach, retry and preview-invalidation flows.
+and team/instance isolation. Restore tests cover full-package recovery, idempotence,
+interrupted writes, expired history, stale previews and tenant boundaries. UI tests
+render the real Tea components and verify preview/confirmation, conflict consent,
+detach, restore consent/cancel/retry, preview invalidation, and version-cache refresh
+and isolation. The feature requires Gateway + Panel + Web; GitHub import and restore
+do not require a configured LLM, Knowledge service or MemoryProxy.

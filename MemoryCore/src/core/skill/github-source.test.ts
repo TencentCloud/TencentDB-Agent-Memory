@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { fetchGitHubSkill } from "./github-source.js";
+import { fetchGitHubSkill, GitHubSnapshotCache } from "./github-source.js";
 const commit = "a".repeat(40);
 const skill =
   "---\nname: demo\ndescription: Demo skill\nversion: 1.0\n---\nRead references/guide.md.";
@@ -163,5 +163,108 @@ describe("GitHub import boundaries", () => {
         async () => new Response("", { status: 429 }),
       ),
     ).rejects.toThrow("429");
+  });
+});
+
+describe("immutable GitHub package cache", () => {
+  it("reuses verified bytes for confirmation and checks only the ref on subsequent preview", async () => {
+    const f = github();
+    const cache = new GitHubSnapshotCache();
+    const first = await fetchGitHubSkill(
+      { repository: "https://github.com/example/skills", path: "skills/demo" },
+      f.client,
+      cache,
+    );
+    const before = f.requests.length;
+    first.resources[0].content = "caller modification";
+    const confirmed = await fetchGitHubSkill(
+      {
+        repository: first.source.repository,
+        path: first.source.path,
+        ref: commit,
+      },
+      f.client,
+      cache,
+    );
+    expect(f.requests.length).toBe(before);
+    expect(
+      Buffer.from(confirmed.resources[0].content, "base64").toString(),
+    ).toBe("Guide");
+    await fetchGitHubSkill(
+      { repository: first.source.repository, path: first.source.path },
+      f.client,
+      cache,
+    );
+    expect(f.requests.length).toBe(before + 1);
+  });
+});
+
+describe("operator token and immutable cache boundaries", () => {
+  const location = {
+    repository: "https://github.com/example/skills",
+    path: "skills/demo",
+  };
+  it("uses the operator token only on the fixed API host after verifying a public repository", async () => {
+    const f = github();
+    const urls: string[] = [];
+    const client: typeof fetch = async (url, init) => {
+      urls.push(String(url));
+      expect(new URL(String(url)).origin).toBe("https://api.github.com");
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer test-operator-token",
+      );
+      if (String(url).endsWith("/repos/example/skills"))
+        return Response.json({ private: false });
+      return f.client(url, init);
+    };
+    const result = await fetchGitHubSkill(
+      location,
+      client,
+      undefined,
+      "test-operator-token",
+    );
+    expect(result.content).toBe(skill);
+    expect(urls[0]).toBe("https://api.github.com/repos/example/skills");
+    expect(JSON.stringify(result)).not.toContain("test-operator-token");
+  });
+  it("rejects private repositories even when a previously public snapshot is cached", async () => {
+    const cache = new GitHubSnapshotCache();
+    await fetchGitHubSkill(location, github().client, cache);
+    let requests = 0;
+    const client: typeof fetch = async () => {
+      requests++;
+      return Response.json({ private: true });
+    };
+    await expect(
+      fetchGitHubSkill(
+        { ...location, ref: commit },
+        client,
+        cache,
+        "test-token",
+      ),
+    ).rejects.toThrow("Only public");
+    expect(requests).toBe(1);
+  });
+  it("evicts least recently used snapshots and expires entries without returning mutable cache data", async () => {
+    const snapshot = await fetchGitHubSkill(location, github().client);
+    const bytes =
+      Buffer.byteLength(snapshot.content) +
+      snapshot.resources.reduce(
+        (n, r) => n + Buffer.byteLength(r.content) + Buffer.byteLength(r.path),
+        0,
+      );
+    let now = 0;
+    const cache = new GitHubSnapshotCache(bytes * 2, 100, () => now);
+    cache.set("a", snapshot);
+    cache.set("b", snapshot);
+    cache.get("a");
+    cache.set("c", snapshot);
+    expect(cache.get("b")).toBeUndefined();
+    expect(cache.get("a")?.source.commit).toBe(commit);
+    now = 101;
+    expect(cache.get("a")).toBeUndefined();
+    expect(cache.get("c")).toBeUndefined();
+    cache.set("large", { ...snapshot, content: "x".repeat(bytes * 3) });
+    expect(cache.get("large")).toBeUndefined();
   });
 });
