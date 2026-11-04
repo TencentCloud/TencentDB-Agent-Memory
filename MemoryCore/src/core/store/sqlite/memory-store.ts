@@ -1229,7 +1229,8 @@ export class VectorStore implements IMemoryStore {
           : " (no embedding — metadata-only write)"),
       );
 
-      this.db.exec("BEGIN");
+      // A savepoint also composes with the atomic recovery transaction.
+      this.db.exec("SAVEPOINT upsert_l1");
       try {
         // Upsert metadata (INSERT OR UPDATE).
         // user_id / agent_id appended at the end to match the prepared statement
@@ -1301,10 +1302,10 @@ export class VectorStore implements IMemoryStore {
           }
         }
 
-        this.db.exec("COMMIT");
+        this.db.exec("RELEASE upsert_l1");
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.db.exec("ROLLBACK TO upsert_l1; RELEASE upsert_l1");
         } catch { /* ignore rollback errors */ }
         throw err;
       }
