@@ -284,6 +284,7 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 
 ## 相关文档
 
+- [中文文档导览](./docs/README_CN.md)（按部署、模块和开发目标查找文档）
 - [路线图](./ROADMAP_CN.md)（接下来要做什么）
 - [完整安装指南](./INSTALL_CN.md)（Memory Core + Hub + Proxy 一键部署）
 - [Roadmap](./ROADMAP_CN.md)（我们接下来在做什么；English: [ROADMAP.md](./ROADMAP.md)）
