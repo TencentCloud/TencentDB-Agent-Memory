@@ -94,6 +94,24 @@ export async function isTeamMember(
   }
 }
 
+/** 校验 user 是否是 team admin（team-member/get 且 role === 'admin'）。异常保守返 false。 */
+export async function isTeamAdmin(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+  teamId: string,
+  userId: string,
+): Promise<boolean> {
+  if (!teamId || !userId) return false;
+  try {
+    const env = await deps.metaKernel.invoke('team-member/get', { team_id: teamId, user_id: userId }, ctx);
+    if (env.code !== 0 || !env.data) return false;
+    const member = env.data as { role?: string };
+    return member.role === 'admin';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * team 门控：要求 caller 是有效用户且为 team 成员。
  * 通过返回 { userId }；不通过返回 { error: Response }（路由直接 return）。
