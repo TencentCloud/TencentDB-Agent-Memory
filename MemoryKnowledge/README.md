@@ -124,6 +124,10 @@ KNOWLEDGE_CLICKHOUSE_PASSWORD=              # 仅从环境注入，不写入代�
 KNOWLEDGE_AUTO_SYNC_ENABLED=true
 KNOWLEDGE_AUTO_SYNC_SCAN_INTERVAL_MIN=10   # 扫描间隔（分钟），范围 1–60
 KNOWLEDGE_AUTO_SYNC_MAX_CONCURRENT=3       # 最大并发 sync worker 数，范围 1–20
+KNOWLEDGE_CODEGRAPH_BUILD_TIMEOUT_MIN=30   # 单次建图硬超时（分钟），0 表示关闭
 ```
+
+单次 code-graph 构建超过硬超时后会转为 `failed`，写入 `sync_error`，
+并释放串行队列；迟到的 worker 结果不会覆盖该终态。
 
 启动后延迟 30 秒执行首次扫描；禁用期间调用 `POST /v3/auto-sync/trigger` 为空操作（返回 `triggered: false`）。
