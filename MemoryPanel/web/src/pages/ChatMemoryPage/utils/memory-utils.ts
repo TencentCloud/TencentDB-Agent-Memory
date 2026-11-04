@@ -33,6 +33,7 @@ export function mapLayerItem(i: ChatMemoryLayerItem) {
     id: i.id,
     title: i.title,
     body: i.body,
+    version: i.version,
     refs: i.refs,
     tags: i.tags,
     created_at: i.created_at,

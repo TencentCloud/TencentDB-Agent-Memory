@@ -53,6 +53,7 @@ import type {
   BatchDeleteResult,
   MemoryContentClearFilter,
   MemoryContentClearResult,
+  L1CompareAndSwapResult,
 } from "../types.js";
 import type { MemoryRecord } from "../../record/l1-writer.js";
 import {
@@ -293,6 +294,47 @@ export class MongoMemoryStore implements IMemoryStore {
       { upsert: true },
     );
     return true;
+  }
+
+  /** Atomically update one existing L1 revision without recreating deleted rows. */
+  async compareAndSwapL1(
+    record: MemoryRecord,
+    expectedVersion: number,
+    _embedding?: Float32Array,
+  ): Promise<L1CompareAndSwapResult> {
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion >= Number.MAX_SAFE_INTEGER) {
+      return { status: "failed" };
+    }
+    try {
+      const coll = await this.coll(COLLECTIONS.L1);
+      const { _id, version: _suppliedVersion, created_time: _createdTime, ...fields } = l1RecordToDoc(record);
+      const result = await coll.updateOne(
+        {
+          _id,
+          version: expectedVersion,
+          team_id: fields.team_id,
+          agent_id: fields.agent_id,
+          user_id: fields.user_id,
+          task_id: fields.task_id,
+        } as never,
+        { $set: fields, $inc: { version: 1 } },
+        { upsert: false },
+      );
+      // Mongo's native retryable writes reuse the session/transaction identity
+      // and deduplicate at the server. Do not add an application-level retry:
+      // an exception after a possible commit has an unknown outcome.
+      if (!result.acknowledged) return { status: "failed" };
+      if (result.matchedCount === 1) {
+        return { status: "updated", version: expectedVersion + 1 };
+      }
+      const current = await coll.findOne({ _id } as never, { projection: { version: 1 } });
+      return current
+        ? { status: "conflict", currentVersion: Number(current.version ?? 0) }
+        : { status: "not_found" };
+    } catch (err) {
+      this.logger?.warn?.(`${TAG} [L1-CAS] FAILED id=${record.id}: ${err instanceof Error ? err.message : String(err)}`);
+      return { status: "failed" };
+    }
   }
 
   async deleteL1(recordId: string, filter?: IsolationFilter): Promise<boolean> {
