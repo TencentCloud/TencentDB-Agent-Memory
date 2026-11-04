@@ -18,6 +18,24 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10  # seconds
+_MAX_QUERY_UNITS = 2048  # Gateway counts JavaScript UTF-16 code units.
+_QUERY_TAIL_UNITS = 400
+_QUERY_GAP = "\n...\n"
+
+
+def _bound_search_query(query: str) -> str:
+    """Keep the opening context and the user's trailing question in long turns."""
+    # Encode only the ends: tool and cron prompts can be much larger than the limit.
+    prefix = query[:_MAX_QUERY_UNITS].encode("utf-16-le", errors="surrogatepass")
+    if len(query) <= _MAX_QUERY_UNITS and len(prefix) <= 2 * _MAX_QUERY_UNITS:
+        return query
+
+    head_units = _MAX_QUERY_UNITS - len(_QUERY_GAP) - _QUERY_TAIL_UNITS
+    suffix = query[-_QUERY_TAIL_UNITS:].encode("utf-16-le", errors="surrogatepass")
+    # A cut can land halfway through an emoji. Drop the incomplete code point.
+    head = prefix[:2 * head_units].decode("utf-16-le", errors="ignore")
+    tail = suffix[-2 * _QUERY_TAIL_UNITS:].decode("utf-16-le", errors="ignore")
+    return head + _QUERY_GAP + tail
 
 
 class MemoryTencentdbSdkClient:
@@ -147,7 +165,7 @@ class MemoryTencentdbSdkClient:
             "team_id": team_id,
             "agent_id": agent_id,
             "user_id": user_id,
-            "query": query,
+            "query": _bound_search_query(query),
             "limit": limit,
         }
         if session_id:
@@ -171,7 +189,7 @@ class MemoryTencentdbSdkClient:
             "team_id": team_id,
             "agent_id": agent_id,
             "user_id": user_id,
-            "query": query,
+            "query": _bound_search_query(query),
             "limit": limit,
         }
         if type_filter:
@@ -233,7 +251,7 @@ class MemoryTencentdbSdkClient:
 
     def recall(self, query: str, session_key: str, user_id: str = "") -> Dict[str, Any]:
         """[DEPRECATED] v1 recall — replaced by atomic_search + core_read + scenario_ls."""
-        body: Dict[str, Any] = {"query": query, "session_key": session_key}
+        body: Dict[str, Any] = {"query": _bound_search_query(query), "session_key": session_key}
         if user_id:
             body["user_id"] = user_id
         return self._post("/recall", body)
@@ -260,7 +278,7 @@ class MemoryTencentdbSdkClient:
 
     def search_memories(self, query: str, limit: int = 5, type_filter: str = "", scene: str = "") -> Dict[str, Any]:
         """[DEPRECATED] v1 search_memories — replaced by atomic_search."""
-        body: Dict[str, Any] = {"query": query, "limit": limit}
+        body: Dict[str, Any] = {"query": _bound_search_query(query), "limit": limit}
         if type_filter:
             body["type"] = type_filter
         if scene:
@@ -269,7 +287,7 @@ class MemoryTencentdbSdkClient:
 
     def search_conversations(self, query: str, limit: int = 5, session_key: str = "") -> Dict[str, Any]:
         """[DEPRECATED] v1 search_conversations — replaced by conversation_search."""
-        body: Dict[str, Any] = {"query": query, "limit": limit}
+        body: Dict[str, Any] = {"query": _bound_search_query(query), "limit": limit}
         if session_key:
             body["session_key"] = session_key
         return self._post("/search/conversations", body)
