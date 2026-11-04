@@ -70,6 +70,7 @@ test("script heuristic handles mixed text, unsupported scripts and non-letter in
   for (const [text, expected] of [
     ["掌机 OLED", "zh"], ["abcd中", "en"], ["한글 메모", "ko"],
     ["Привет", "unknown"], ["🎮 123！", "unknown"],
+    ["ЯⅩ", "unknown"], ["Я⼀", "unknown"],
   ]) {
     const saved = await writeMemory({
       ...ctx, memory: { ...memory, content: text },
