@@ -270,9 +270,14 @@ Chat Memory、Skill、Wiki 和 CodeGraph 都被统一登记为 Memory Asset。Me
 
 ## Benchmark
 
-| Benchmark | 无 TencentDB Agent Memory | 启用后 | 相对提升 |
-| :--- | :---: | :---: | :---: |
-| **PersonaMem** | 48% | **76%** | **+59%** |
+| 记忆能力 | Benchmark | OpenClaw 成功率 | 启用 TencentDB Agent Memory | 相对变化 | OpenClaw Tokens | 启用 TencentDB Agent Memory | 相对变化 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **短期记忆** | WideSearch | 33% | **50%** | **+51.52%** | 221.31M | **85.64M** | **−61.38%** |
+| **短期记忆** | SWE-bench | 58.4% | **64.2%** | **+9.93%** | 3474.1M | **2375.4M** | **−31.63%** |
+| **短期记忆** | AA-LCR | 44.0% | **47.5%** | **+7.95%** | 112.0M | **77.3M** | **−30.98%** |
+| **长期记忆** | PersonaMem | 48% | **76%** | **+59%** | — | — | — |
+
+以上结果来自连续长任务会话，而不是孤立的单轮测试。Token 总量在展示时经过四舍五入；SWE-bench 的降幅已与表中前后总量对齐（`(3474.1M − 2375.4M) / 3474.1M = 31.63%`）。
 
 PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息。
 
