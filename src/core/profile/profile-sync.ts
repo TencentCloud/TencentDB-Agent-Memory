@@ -4,6 +4,7 @@ import path from "node:path";
 import type { IMemoryStore, ProfileRecord, ProfileSyncRecord } from "../store/types.js";
 import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { normalizeSceneFilename } from "../scene/filename-normalizer.js";
 import type { Logger } from "../types.js";
 
 const PROFILE_SCOPE = "global";
@@ -132,11 +133,12 @@ export async function pullProfilesToLocal(
       });
 
       if (record.type === "l2") {
-        const target = path.join(tempBlocksDir, record.filename);
+        const filename = normalizeSceneFilename(record.filename);
+        const target = path.join(tempBlocksDir, filename);
         await fs.writeFile(target, record.content, "utf-8");
         if (md5(record.content) !== record.contentMd5) {
           await fs.rm(target, { force: true });
-          logger.debug?.(`[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (will re-pull on next sync)`);
+          logger.debug?.(`[memory-tdai][profile-sync] MD5 mismatch for ${filename} (will re-pull on next sync)`);
         }
         continue;
       }
