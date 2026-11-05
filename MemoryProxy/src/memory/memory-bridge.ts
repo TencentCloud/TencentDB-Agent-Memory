@@ -24,6 +24,8 @@ import type { Context } from "hono";
 import { authorizeBridgeSession } from "../bridge-auth.js";
 import { getSessionStore } from "../session/store.js";
 import type { BindingRepo } from "../db/binding-repo.js";
+import { KvBindingRepo } from "../db/kv-binding-repo.js";
+import { getProxyStorage } from "../storage/factory.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { AgentContext } from "../injection/types.js";
@@ -319,7 +321,9 @@ export function createMemoryBridgeHandler(
       ?? config.tdai?.serviceId
       ?? config.coreSkill?.serviceId
       ?? "";
-    const bindingRepo = getSessionStore().getBindingRepo() ?? null;
+    // A tool can be the first request after restart, before pipeline initialization.
+    const bindingRepo = getSessionStore().getBindingRepo()
+      ?? (config.storage?.enabled ? new KvBindingRepo(getProxyStorage(config.storage)) : null);
 
     let ids = loadSessionIdsL1(sessionKey);
     if (!ids && bindingRepo && spaceId) {
