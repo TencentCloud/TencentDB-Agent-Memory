@@ -160,6 +160,12 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
       if (fields) return fields;
     }
   }
+  // Codex stores the initialized state under `codex:<conversation-id>`.
+  if (!sessionId.includes(":")) {
+    const codexKey = `codex:${sessionId}`;
+    const codexState = getSessionStore().get(codexKey);
+    if (codexState) return toIdFields(codexState, codexKey);
+  }
   return null;
 }
 
