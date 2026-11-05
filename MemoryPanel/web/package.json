@@ -8,12 +8,13 @@
     "mock": "VITE_ENTRY=mock vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:i18n-storage": "node --test tests/i18n-storage.test.mjs",
+    "test:i18n-storage": "vitest run tests/i18n-storage.test.mjs",
     "lint": "eslint src --ext .ts,.tsx --fix",
     "lint:check": "eslint src --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\"",
-    "test:skill-github": "vitest run --config vitest.config.ts"
+    "test:skill-github": "vitest run",
+    "test": "vitest run"
   },
   "dependencies": {
     "@react-sigma/core": "^5.0.6",
@@ -57,6 +58,6 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
-    "vitest": "^2.1.9"
+    "vitest": "^3.2.7"
   }
 }

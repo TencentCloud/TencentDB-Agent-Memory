@@ -120,12 +120,19 @@ may require storage housekeeping; this change does not introduce a background re
 
 ## Validation
 
+Web tests have one default entry, `npm --prefix MemoryPanel/web test`. It collects
+`.test.ts`, `.test.tsx` and `.test.mjs`, including the existing language-storage
+regressions. The test configuration merges the application's Vite configuration
+so React transforms and aliases cannot drift. Individual tests may select Node;
+component tests use jsdom. `test:skill-github` remains an alias to the same runner,
+and `test:i18n-storage` filters it to the language tests.
+
 ```sh
 npm --prefix MemoryCore test
 npm --prefix MemoryCore run build:plugin
 npm --prefix MemoryPanel test
 npm --prefix MemoryPanel run typecheck
-npm --prefix MemoryPanel/web run test:skill-github
+npm --prefix MemoryPanel/web test
 npm --prefix MemoryPanel/web run build
 ```
 
@@ -141,3 +148,28 @@ and isolation, lazy attachment loading, obsolete response cancellation, binary a
 large-file summaries, EOF/line numbering, context folding, stale-preview refresh,
 and first-install modal expansion/dismissal locking. The feature requires Gateway + Panel + Web; GitHub import and restore
 do not require a configured LLM, Knowledge service or MemoryProxy.
+
+## Review guide
+
+The implementation can be reviewed in these dependency groups. The complete
+installation, update, restore and package-review flow is available in this PR.
+These are review/split boundaries, not the boundaries of the existing commits.
+
+| Group | Entry files | What to verify |
+| --- | --- | --- |
+| A: GitHub download and source model | `MemoryCore/src/core/skill/github-source.ts`, source types, `github-source.test.ts` | Public-only immutable snapshots, bounded download, path/blob verification, no execution or redirects, provenance |
+| B: Complete-package publication and lifecycle (depends on A) | `skill-versioning.ts`, resource/store implementations, `github-manager.ts`, `skill-review.ts`, Core/Gateway handlers and tests | Private resource staging, expected-head checks, retry/idempotence, lost acknowledgments, update/detach/restore and exact-file preview authorization |
+| C: Panel and Web integration (depends on A/B) | Panel skill actions/adapter, Web skill API, `SkillReview`, `GitHubSkillForm`, `RestoreSkillDialog`, shared test configuration | Authenticated identity, tenant boundaries, pinned previews, consent reset, obsolete-request cancellation, responsive review and cache refresh |
+
+If separate PRs are preferred, A is a tested downloader/model foundation, B adds
+the runnable lifecycle/API, and C completes the UI. Each boundary needs its own
+build/tests and the final integration must preserve the full package semantics;
+splitting by the current commits would not guarantee those dependencies.
+
+The Web lockfile is already tracked despite the generic lockfile ignore rule.
+It is kept consistent with the added `diff` runtime dependency and Vitest test
+dependency. Vitest 3 shares the application's Vite 6, avoiding a separate Vite 5
+and its esbuild platform packages. Against the PR base, the lockfile adds 36
+package entries and upgrades/removes no pre-existing package versions. Reproduce
+with `npm ci` and inspect `npm ls vitest vite esbuild --depth=4`; ignoring the
+tracked lockfile update would make a clean install inconsistent with the manifest.

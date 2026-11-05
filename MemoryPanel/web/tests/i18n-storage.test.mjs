@@ -1,5 +1,6 @@
+// @vitest-environment node
 import assert from 'node:assert/strict';
-import { after, before, test } from 'node:test';
+import { afterAll as after, beforeAll as before, afterEach, it as test, vi } from 'vitest';
 import { createServer } from 'vite';
 
 let server;
@@ -30,26 +31,18 @@ function storageDouble({ storedValue = null, readError, writeError } = {}) {
 
 async function loadI18n({ storedValue = null, readError, writeError, navigatorLanguage }) {
   const storage = storageDouble({ storedValue, readError, writeError });
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: storage,
-  });
-  Object.defineProperty(globalThis, 'navigator', {
-    configurable: true,
-    value: { language: navigatorLanguage },
-  });
+  vi.stubGlobal('localStorage', storage);
+  vi.stubGlobal('navigator', { language: navigatorLanguage });
 
   server.moduleGraph.invalidateAll();
-  const i18nModule = await server.ssrLoadModule(
-    `/src/i18n/index.ts?case=${crypto.randomUUID()}`,
-  );
+  const i18nModule = await server.ssrLoadModule(`/src/i18n/index.ts?case=${crypto.randomUUID()}`);
   return { ...i18nModule, storage };
 }
 
 before(async () => {
   server = await createServer({
     appType: 'custom',
-    server: { middlewareMode: true },
+    server: { middlewareMode: true, hmr: false },
     logLevel: 'silent',
   });
 });
@@ -57,6 +50,7 @@ before(async () => {
 after(async () => {
   await server.close();
 });
+afterEach(() => vi.unstubAllGlobals());
 
 test('initializes from navigator.language when storage reads throw', async () => {
   const { getCurrentLanguage } = await loadI18n({

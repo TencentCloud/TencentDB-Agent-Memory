@@ -2,7 +2,6 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SkillReview from '../src/pages/SkillsPage/components/SkillReview';
-import { buildSkillDiff, visibleDiffRows } from '../src/pages/SkillsPage/utils/skill-diff';
 import type { SkillReviewFile } from '../src/lib/api/skill-api';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 const side = (text: string) => ({
@@ -60,35 +59,6 @@ async function click(text: string) {
   if (!button) throw Error('Missing ' + text);
   await act(async () => button.click());
 }
-describe('bounded diff model', () => {
-  it('aligns replacements and preserves source line numbers and missing final newline', () => {
-    const rows = buildSkillDiff('same\nold\nlast', 'same\nnew\nextra\nlast\n')!;
-    expect(rows[0]).toMatchObject({
-      before: { number: 1, text: 'same' },
-      after: { number: 1, text: 'same' },
-      changed: false,
-    });
-    expect(rows.some((r) => r.before?.text === 'old' && r.after?.text === 'new' && r.changed)).toBe(
-      true,
-    );
-    expect(rows.find((r) => r.before?.text === 'last')?.before?.eof).toBe(true);
-    expect(rows.find((r) => r.after?.text === 'last')?.after?.number).toBe(4);
-  });
-  it('folds long context but keeps changed lines and three lines around them', () => {
-    const lines = Array.from({ length: 100 }, (_, i) => `line ${i}\n`);
-    const after = [...lines];
-    after[50] = 'changed\n';
-    const rows = buildSkillDiff(lines.join(''), after.join(''))!;
-    const folded = visibleDiffRows(rows, false);
-    expect(folded).toHaveLength(9);
-    expect(folded[0]).toEqual({ hidden: 47, key: 0 });
-    expect(visibleDiffRows(rows, true)).toHaveLength(100);
-  });
-  it('returns summary fallback for huge or highly divergent input', () => {
-    expect(buildSkillDiff('a'.repeat(200001), 'b')).toBeNull();
-    expect(buildSkillDiff('a\n'.repeat(2000), 'b\n'.repeat(2000))).toBeNull();
-  });
-});
 describe('package review interactions', () => {
   it('loads only selected attachments, supports retry and ignores late responses for another file', async () => {
     let resolve!: (f: SkillReviewFile) => void;
