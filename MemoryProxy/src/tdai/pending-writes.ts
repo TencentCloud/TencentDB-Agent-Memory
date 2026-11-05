@@ -47,19 +47,33 @@ export function pendingWriteCount(): number {
 }
 
 /**
- * 等待所有 in-flight 写结束或 deadline 到期。
+ * 反复快照并等待 in-flight 写，直到集合为空或统一的 deadline 到期。
+ * 这样 flush 期间新登记的写不会被首个快照漏掉。
  * SIGTERM handler 调；超时后返回未完成数便于日志观测（不阻塞退出）。
  */
 export async function flushPendingWrites(deadlineMs: number = 10_000): Promise<{
   drained: boolean;
   remaining: number;
 }> {
-  if (pendingWrites.size === 0) return { drained: true, remaining: 0 };
-  const snapshot = [...pendingWrites];
-  const settled = Promise.allSettled(snapshot);
-  const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), deadlineMs));
-  const outcome = await Promise.race([settled.then(() => "ok" as const), timeout]);
-  return { drained: outcome === "ok", remaining: pendingWrites.size };
+  const deadline = Date.now() + Math.max(0, deadlineMs);
+  while (pendingWrites.size > 0 && Date.now() < deadline) {
+    const snapshot = [...pendingWrites];
+    const remainingMs = deadline - Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), remainingMs);
+    });
+    try {
+      const outcome = await Promise.race([
+        Promise.allSettled(snapshot).then(() => "ok" as const),
+        timeout,
+      ]);
+      if (outcome === "timeout") break;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return { drained: pendingWrites.size === 0, remaining: pendingWrites.size };
 }
 
 /**
