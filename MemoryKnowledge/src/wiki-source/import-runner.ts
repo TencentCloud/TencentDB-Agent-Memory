@@ -111,7 +111,8 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
   const failed: Array<{ id: string; error: string }> = [];
   const warnings: string[] = [];
   let imported = 0;
-  // 整轮导入内保持，避免不同批次产出同名文件互相覆盖
+  // 整轮导入内保持。键使用 NFC + case-fold，覆盖 Windows / 默认 macOS
+  // 大小写不敏感文件系统，同时避免 Unicode 规范等价标题落到同一文件。
   const usedNames = new Set<string>();
   // 列表阶段（listPages）的标题是可靠的，而 fetchPage 拿到的内容常无 title
   // （不少平台的内容接口只回正文、不带标题），故落盘优先用这里的标题兜底。
@@ -126,9 +127,17 @@ export async function runImport(p: ImportParams): Promise<ImportResult> {
     ? p.wikiService.readImportNameMap!(p.serviceId, p.teamId, p.wikiId, p.providerId)
     : null;
   if (nameByExternalId) {
-    // 历史文件名先占座：防止新文档生成同名文件，顶掉旧文档的位置
-    for (const fn of Object.values(nameByExternalId)) {
-      if (fn) usedNames.add(fn);
+    // 历史文件名先占座：防止新文档生成同名文件，顶掉旧文档的位置。
+    // 旧版在大小写敏感系统上可能已写入两个仅大小写不同的名字；保留第一个，
+    // 其余映射删除并让本轮重新分配后缀，避免 Windows/macOS 上继续互相覆盖。
+    for (const [externalId, filename] of Object.entries(nameByExternalId)) {
+      if (!filename) continue;
+      const collisionKey = filenameCollisionKey(filename);
+      if (usedNames.has(collisionKey)) {
+        delete nameByExternalId[externalId];
+      } else {
+        usedNames.add(collisionKey);
+      }
     }
   }
 
@@ -235,9 +244,10 @@ async function fetchOneByOne(
 function buildFilename(
   title: string | undefined,
   externalId: string,
-  usedNames: Set<string>,
+  usedNameKeys: Set<string>,
 ): string {
-  const cleaned = (title ?? "")
+  const sanitizeStem = (value: string) =>
+    value
     // 去掉路径分隔符与 Windows 保留字符，防目录穿越
     .replace(/[/\\:*?"<>|]/g, "")
     // 去掉控制字符（换行/制表符等），避免文件名混入不可见字符
@@ -248,15 +258,31 @@ function buildFilename(
     .slice(0, 120) // 文件系统常见 255 字节上限，留足中文余量
     .trim();
 
-  const base = cleaned || externalId;
+  const cleaned = sanitizeStem(title ?? "");
+  const fallback = sanitizeStem(externalId);
+  const rawBase = cleaned || fallback || "page";
+  // CON.md / AUX.md 等名称即使带扩展名仍是 Windows 设备名；远程标题不应
+  // 因此让整批导入失败，因此自动加可读前缀。
+  const base = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(rawBase)
+    ? `file-${rawBase}`
+    : rawBase;
   let name = `${base}.md`;
   let n = 2;
-  while (usedNames.has(name)) {
+  while (usedNameKeys.has(filenameCollisionKey(name))) {
     name = `${base}-${n}.md`;
     n += 1;
   }
-  usedNames.add(name);
+  usedNameKeys.add(filenameCollisionKey(name));
   return name;
+}
+
+/**
+ * Portable filename collision identity. Display names retain their original
+ * case, but Windows and default macOS volumes resolve case-only variants to the
+ * same path; APFS/HFS also treats canonically equivalent Unicode as one name.
+ */
+function filenameCollisionKey(name: string): string {
+  return name.normalize("NFC").toLocaleLowerCase("en-US");
 }
 
 /** 按「文件数 + 字节数」双上限分包。 */
