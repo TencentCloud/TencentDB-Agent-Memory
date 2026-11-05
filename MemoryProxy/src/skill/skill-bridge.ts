@@ -18,6 +18,7 @@
  */
 
 import type { Context } from "hono";
+import { authorizeBridgeSession } from "../bridge-auth.js";
 import type { Redis } from "ioredis";
 import { getSessionStore } from "../session/store.js";
 import type { BindingRepo } from "../db/binding-repo.js";
@@ -532,6 +533,14 @@ export function createSkillBridgeHandler(
         executedEndpoint: sub, spaceId,
       });
       return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
+    }
+
+    const authRejection = await authorizeBridgeSession(c, config.auth, ids, spaceId);
+    if (authRejection) {
+      emitBridgeRejectTelemetry({ sessionKey, bridgeSource: "skill-bridge",
+        rejectReason: "session_access_denied", httpStatus: authRejection.status,
+        executedEndpoint: sub, spaceId });
+      return authRejection;
     }
 
     // Team-memory master switch gate. Blocks LLM-side curl calls after the

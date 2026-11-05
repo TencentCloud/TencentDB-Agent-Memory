@@ -805,6 +805,8 @@ export interface ExtractionConfig {
 /** Auth service configuration — verify user_key and resolve user_id via auth/verify API. */
 export interface AuthConfig {
   enabled: boolean;
+  /** Require a verified session-owner key for memory and skill bridges. */
+  requireBridgeUserKey?: boolean;
   /** Auth service base URL (e.g. http://kernel.example.com:8420). */
   url: string;
   /** Request timeout in ms. Default: 5000. */
@@ -1123,6 +1125,7 @@ export interface RawYamlConfig {
   selection?: RawSelectionYaml;
   auth?: {
     enabled?: boolean;
+    requireBridgeUserKey?: boolean;
     url?: string;
     timeoutMs?: number;
   };

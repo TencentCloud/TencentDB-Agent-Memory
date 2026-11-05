@@ -480,6 +480,9 @@ wecomIdentity:
 # x-tdai-service-id 从请求路径 /proxy/<spaceId>/... 自动提取。
 # 验证通过后 user_id 写入 ClickHouse key_id 列，并作为全链路用户标识。
 auth:
+  # Set true for session-owner authentication on memory/skill bridges.
+  # Requires auth.enabled=true; tool callers must supply x-tdai-user-key (or Bearer).
+  requireBridgeUserKey: false
   enabled: true            # 是否启用鉴权
   url: "http://kernel.example.com:8420"   # 内核鉴权服务 base URL（自动拼接 /v3/meta/auth/verify）
   timeoutMs: 5000          # 鉴权请求超时（毫秒）

@@ -192,6 +192,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   selection: DEFAULT_SELECTION,
   auth: {
     enabled: false,
+    requireBridgeUserKey: false,
     url: "",
     timeoutMs: 5000,
   },
@@ -614,6 +615,7 @@ export function buildConfig(
     selection,
     auth: {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
+      requireBridgeUserKey: yaml.auth?.requireBridgeUserKey ?? DEFAULT_CONFIG.auth.requireBridgeUserKey,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
       timeoutMs: yaml.auth?.timeoutMs ?? DEFAULT_CONFIG.auth.timeoutMs,
     },

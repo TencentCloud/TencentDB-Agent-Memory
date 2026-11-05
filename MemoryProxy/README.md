@@ -193,6 +193,15 @@ Starting the proxy itself needs **no** API key. A user key (`x-tdai-user-key` / 
 - With `auth.enabled=true`, a missing or invalid key is rejected with `401 Authentication failed` before the body is parsed. Keep it on when listening on non-loopback addresses or deploying multi-node.
 - Independently of user auth, an **upstream LLM credential** is still required at forward time: set `upstream.apiKey` (or a per-agent `upstream.agents[<agent>].apiKey`) in `config.yaml`, or leave it empty to pass the client's own key through unchanged.
 
+For multi-project installations, also set `auth.requireBridgeUserKey=true`. Memory and
+skill bridges then verify `x-tdai-user-key` (or a Bearer user key) against the session's
+instance and require the verified user to own that session. Missing/invalid keys return
+401, and another user's key returns 403. This fails closed when auth is disabled or
+unavailable. Legacy bridge callers supplying only a conversation ID must add an
+authenticated local tool adapter; keep keys out of prompts. The default is false for
+compatibility with existing trusted-local clients. For project isolation, provision a
+separate user per project: this check distinguishes users, not projects sharing a user.
+
 ### Can the local Codex CLI be used to start the proxy?
 
 No. MemoryProxy is a standalone Node.js process — start it with `npm run start:config` (or `./proxy.sh start` / Docker). There is no Codex-CLI-based startup path: the proxy never shells out to any agent CLI, and startup is identical regardless of which coding agent connects later.
