@@ -44,6 +44,7 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import { mapRecallResultToOpenClawPromptBuild } from "./src/adapters/openclaw/prompt-build.js";
 
 const TAG = "[memory-tdai]";
 
@@ -589,12 +590,13 @@ export default function register(api: OpenClawPluginApi) {
           const prependLen = result.prependContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${appendLen} chars -> prependSystemContext, ` +
+            `prependContext=${prependLen} chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return mapRecallResultToOpenClawPromptBuild(result);
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
