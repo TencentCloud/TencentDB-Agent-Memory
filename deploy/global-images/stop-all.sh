@@ -18,6 +18,9 @@ fi
 # .env 不存在时也允许运行（用默认卷名兜底）
 if [[ -f "$ENV_FILE" ]]; then
   set -a; source "$ENV_FILE"; set +a
+  if [[ -n "${_TDAI_OUTPUT_LANGUAGE_OVERRIDE:-}" ]]; then
+    TDAI_OUTPUT_LANGUAGE="$_TDAI_OUTPUT_LANGUAGE_OVERRIDE"
+  fi
 fi
 MEMORY_CORE_VOLUME="${MEMORY_CORE_VOLUME:-tdai-memory-core-data}"
 PANEL_VOLUME="${PANEL_VOLUME:-tdai-panel-data}"
