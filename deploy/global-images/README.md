@@ -19,9 +19,9 @@
 
 ## 环境要求
 
-- macOS / Linux
-- Docker（Docker Desktop / colima / OrbStack 任一）
-- `bash` 4+（macOS 自带 3.2 也能跑）
+- macOS / Linux，或 Windows 10/11（原生 PowerShell 入口见下文）
+- Docker（Windows 使用 Docker Desktop 的 **Linux containers** 模式）
+- macOS / Linux 使用 `bash` 4+（macOS 自带 3.2 也能跑）；Windows 使用 PowerShell 5.1 或 7+
 
 ## 快速开始
 
@@ -44,6 +44,62 @@ cd TencentDB-Agent-Memory/deploy/global-images
 
 > 想跳过交互、直接读 `.env` 也可以：手动 `cp .env.example .env` 并填好 LLM 后，
 > 运行 `./start-all.sh` 一路回车确认即可（默认值就是 `.env` 里的值）。
+
+### Windows 原生 PowerShell
+
+安装并启动 Docker Desktop，等待引擎就绪，确认使用 Linux 容器，然后在 PowerShell 中执行：
+
+```powershell
+cd TencentDB-Agent-Memory\deploy\global-images
+.\start-all.ps1
+```
+
+脚本会从 `.env.example` 创建 `.env`，交互式填写两组 LLM 配置、预检端口和通路，再依次启动
+Core、Hub、Proxy。API Key 输入隐藏；生成的 admin key 保存到 `.admin-key`，重启复用。
+不依赖 Git Bash、WSL、curl 或额外 PowerShell 模块，支持包含中文和空格的仓库路径。
+
+如果执行策略阻止脚本运行，可只对本次进程使用：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\start-all.ps1
+```
+
+也可手动复制并填好 `.env`，使用非交互模式。以下命令均在 PowerShell 中运行：
+
+```powershell
+Copy-Item .env.example .env                 # 仅首次需要；之后编辑 .env
+.\verify.ps1                              # 检查环境，不启动容器
+.\verify.ps1 -SkipLlm                     # 跳过外部模型通路检查
+.\start-all.ps1 -NonInteractive           # 使用已有 .env 配置
+$env:PULL = '1'; .\start-all.ps1 -NonInteractive  # 更新镜像后启动
+.\stop-all.ps1                            # 移除容器，保留数据卷和凭据
+.\stop-all.ps1 -Purge                     # 彻底删除部署数据、凭据和生成的配置
+```
+
+`start-all.ps1` 也接受 `-SkipLlm`（仍检查 Docker、必填配置和端口）。OpenAI 通路检查只请求
+`/models`；Anthropic 检查会发送 `max_tokens=1` 的最小消息。没有 `/models` 的兼容上游可使用
+`-SkipLlm`，由实际请求验证模型能力。
+
+`.env` 支持 `KEY=value`、单/双引号、行尾空白后的注释和 UTF-8/CRLF；配置按字面值读取，
+不执行命令或展开环境变量。包含空格、`#` 等字符的值请加引号。脚本生成的配置为合法 YAML
+的 JSON 表示，以保留引号、反斜杠及 API Key 中的特殊字符。
+
+可单独运行 `start-memory-core.ps1`、`start-memory-hub.ps1`、`start-proxy.ps1`。
+完整启动默认开启 Proxy 的 auth/sessionInit/tdai 流水线；单独启动 Proxy 时可加 `-FullStack`。
+Windows 的 Panel 接入地址默认是 `localhost`；供其他机器访问时，在 `.env` 中设置
+`MEMORY_HUB_PROXY_PUBLIC_URL=http://<宿主机局域网IP>:8096`。
+
+Windows 脚本同样读取 `MEMORY_CORE_STORE_MODE=mongodb` 等已有 Mongo 配置；未填 endpoint 时启动
+本地 Atlas 容器。Mongo 仍是试验特性，切换后端不会迁移数据。
+也支持 `.env.example` 中的可选 L3/JEV 配置；默认 `current`，显式启用 `jev` 时检查必填项，
+`TYPESAFE_API_KEY` 通过容器环境变量传入，生成的配置仅保存环境变量引用。
+
+脚本回归测试不启动 Docker、不调用外部模型，分别用两个 PowerShell 版本运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\windows-deploy.tests.ps1
+pwsh.exe -NoProfile -File .\tests\windows-deploy.tests.ps1
+```
 
 ### MongoDB 存储后端（试验特性，可选）
 
