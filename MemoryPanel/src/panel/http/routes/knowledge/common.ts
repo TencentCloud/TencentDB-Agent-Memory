@@ -546,16 +546,37 @@ export async function joinKnowledgeAssetsWithKs(
 
 // ── KS-only items（meta 未注册，如创建中/失败的 code-graph）──────────
 
+/** KS 列表接口单页上限（KS 侧会把 limit 夹到 100）。 */
+export const KS_LIST_PAGE_SIZE = 100;
+/** 最多翻页数，防止 KS 返回异常 total 时无限循环。 */
+export const KS_LIST_MAX_PAGES = 50;
+
+/**
+ * 逐页拉取 KS 列表。KS 缺省 limit=20，不翻页会让第 21 个及之后的未注册资源永远不显示。
+ */
+export async function fetchAllKsPages<T>(
+  fetchPage: (opts: { limit: number; offset: number }) => Promise<{ items: T[]; total: number }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let page = 0; page < KS_LIST_MAX_PAGES; page++) {
+    const res = await fetchPage({ limit: KS_LIST_PAGE_SIZE, offset: all.length });
+    all.push(...res.items);
+    if (res.items.length === 0) break;
+    if (typeof res.total === 'number' ? all.length >= res.total : res.items.length < KS_LIST_PAGE_SIZE) break;
+  }
+  return all;
+}
+
 /** 从 KS 侧查列表，构造 meta 未注册的 KnowledgeAssetListItem。 */
-async function fetchKsOnlyItems(
+export async function fetchKsOnlyItems(
   kc: ReturnType<PanelDeps['knowledgeClientFactory']>,
   teamId: string,
   assetType: typeof ASSET_TYPE_WIKI | typeof ASSET_TYPE_CODE_GRAPH,
 ): Promise<KnowledgeAssetListItem[]> {
   try {
     if (assetType === ASSET_TYPE_WIKI) {
-      const res = await kc.wikiList(teamId);
-      return res.items.map((ks) => ({
+      const items = await fetchAllKsPages((opts) => kc.wikiList(teamId, opts));
+      return items.map((ks) => ({
         knowledge_id: ks.wiki_id,
         asset_type: ASSET_TYPE_WIKI,
         name: ks.name,
@@ -577,8 +598,8 @@ async function fetchKsOnlyItems(
         updated_at: ks.updated_at,
       }));
     }
-    const res = await kc.codeGraphList(teamId);
-    return res.items.map((ks) => ({
+    const items = await fetchAllKsPages((opts) => kc.codeGraphList(teamId, opts));
+    return items.map((ks) => ({
       knowledge_id: ks.code_graph_id,
       asset_type: ASSET_TYPE_CODE_GRAPH,
       name: ks.repo_name || ks.repo_url || ks.code_graph_id,
