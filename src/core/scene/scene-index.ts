@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseSceneBlock } from "./scene-format.js";
+import { normalizeSceneFilename } from "./filename-normalizer.js";
 
 export interface SceneIndexEntry {
   filename: string;
@@ -31,7 +32,7 @@ export async function readSceneIndex(dataDir: string): Promise<SceneIndexEntry[]
     for (const item of parsed) {
       if (!item || typeof item !== "object") continue;
 
-      const filename = typeof item.filename === "string" ? item.filename : "";
+      const filename = typeof item.filename === "string" ? normalizeSceneFilename(item.filename) : "";
       if (!filename) continue;
 
       entries.push({
