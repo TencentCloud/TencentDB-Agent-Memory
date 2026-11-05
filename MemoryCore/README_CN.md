@@ -41,6 +41,9 @@ MemoryKnowledge
 
 ## 运行方式
 
+历史 L0 因提取失败被游标跳过时，可使用 [SQLite L1 恢复命令](docs/replay-l1.md)。
+它支持只读预览、按租户与会话限定范围、幂等重试和持久化回执；当前恢复范围为 L1 元数据和全文索引。
+
 MemoryCore 以 Standalone Runtime 形式开源，适合本地开发、单机部署和 Agent sidecar：
 
 - 默认监听 `127.0.0.1:8420`。

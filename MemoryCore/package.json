@@ -5,6 +5,7 @@
   "type": "module",
   "main": "./dist/index.mjs",
   "bin": {
+    "replay-l1": "./bin/replay-l1.mjs",
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
     "read-local-memory": "./bin/read-local-memory.mjs"
@@ -49,6 +50,8 @@
     "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
   },
   "files": [
+    "docs/replay-l1.md",
+    "bin/replay-l1.mjs",
     "dist/",
     "bin/migrate-sqlite-to-tcvdb.mjs",
     "bin/export-tencent-vdb.mjs",

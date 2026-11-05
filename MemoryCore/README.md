@@ -39,6 +39,10 @@ MemoryKnowledge
 
 ## Runtime
 
+For L0 messages skipped after an extraction failure, see the supported
+[SQLite L1 replay command](docs/replay-l1.md), including dry-run, scoped recovery,
+idempotent retries, and persisted receipts.
+
 MemoryCore is distributed as a standalone runtime for local development, single-node deployment, and Agent sidecars:
 
 - Listens on `127.0.0.1:8420` by default.
