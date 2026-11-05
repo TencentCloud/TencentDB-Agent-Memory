@@ -1187,7 +1187,9 @@ export class VectorStore implements IMemoryStore {
 
   /**
    * Write or update a memory record (metadata + vector).
-   * Uses a manual transaction for atomicity.
+   * Uses a savepoint for metadata/vector atomicity. With no caller transaction,
+   * RELEASE commits the write. Inside a caller transaction it releases only this
+   * savepoint, so the caller can still roll back its entire unit of work.
    *
    * If `embedding` is `undefined` or a zero vector (all elements are 0), only
    * the metadata row is written — the vec0 table is left untouched.  This
@@ -1229,7 +1231,10 @@ export class VectorStore implements IMemoryStore {
           : " (no embedding — metadata-only write)"),
       );
 
-      // A savepoint also composes with the atomic recovery transaction.
+      // Recovery commits L1, FTS and receipts together in an outer transaction.
+      // BEGIN/COMMIT here would reject nesting or prematurely commit that work.
+      // Keep the ordinary best-effort FTS policy below; recovery validates FTS
+      // before its outer commit and rolls back a batch if indexing failed.
       this.db.exec("SAVEPOINT upsert_l1");
       try {
         // Upsert metadata (INSERT OR UPDATE).

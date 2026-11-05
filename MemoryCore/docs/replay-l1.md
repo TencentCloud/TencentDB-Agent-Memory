@@ -122,9 +122,26 @@ after recovery finishes.
 
 ## Validation
 
+### Shared L1 transaction boundary
+
+`VectorStore.upsertL1` uses a savepoint because replay calls it inside an outer
+SQLite transaction. Without an outer transaction, releasing the savepoint commits
+the ordinary write. When nested, release does not publish the caller's work;
+the caller can still roll back L1, FTS and the recovery receipt together. A failed
+metadata/vector write rolls back only that inner write, leaving unrelated earlier
+caller changes and the transaction available for subsequent writes.
+
+This affects all SQLite L1 writes, so dedicated tests exercise real sqlite-vec,
+FTS and a second database connection. They verify standalone commit visibility,
+vector-insertion failure after metadata update/vector deletion, outer rollback,
+and a valid write following a failed nested write. Ordinary upsert retains its
+existing best-effort FTS behavior; replay additionally verifies its FTS entries
+before committing the batch and fails closed if they are missing.
+
 ```bash
 npx vitest run src/core/record/l1-replay.test.ts \
-  src/core/record/l1-replay-extractor.test.ts src/cli/replay-l1.test.ts
+  src/core/record/l1-replay-extractor.test.ts src/cli/replay-l1.test.ts \
+  src/core/store/sqlite/l1-transaction.test.ts
 npm run build:plugin
 node bin/replay-l1.mjs --help
 ```
