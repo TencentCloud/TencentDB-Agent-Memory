@@ -80,6 +80,7 @@ export function normalizeWikiPath(raw: string): string | null {
 export function parseFileBlocks(text: string): ParseResult {
   const files: ParsedFile[] = [];
   const warnings: string[] = [];
+  const fileIndexByPath = new Map<string, number>();
   if (!text) return { files, warnings };
 
   OPEN_RE.lastIndex = 0;
@@ -99,6 +100,15 @@ export function parseFileBlocks(text: string): ParseResult {
 
     // 防止下一次匹配跨过本块的 END
     const closeIdx = closeMatch.index;
+    // 若下一个 FILE 开标签先于 END 出现，当前块已被截断；
+    // 不能把后续开标签和合法内容吞进当前块。
+    OPEN_RE.lastIndex = bodyStart;
+    const nextOpen = OPEN_RE.exec(text);
+    if (nextOpen && nextOpen.index < closeIdx) {
+      warnings.push(`未闭合的 FILE 块，已丢弃: path="${rawPath}"`);
+      OPEN_RE.lastIndex = nextOpen.index;
+      continue;
+    }
     const rawContent = text.slice(bodyStart, closeIdx);
     OPEN_RE.lastIndex = closeIdx + closeMatch[0].length;
 
@@ -115,6 +125,13 @@ export function parseFileBlocks(text: string): ParseResult {
       continue;
     }
 
+    const existingIndex = fileIndexByPath.get(normPath);
+    if (existingIndex !== undefined) {
+      warnings.push(`重复 FILE path，后块覆盖前块: "${normPath}"`);
+      files[existingIndex] = { path: normPath, content };
+      continue;
+    }
+    fileIndexByPath.set(normPath, files.length);
     files.push({ path: normPath, content });
   }
 
