@@ -22,7 +22,7 @@ export interface ApiTracePolicy {
 }
 
 export function resolveProfile(backend: MetadataBackend = "sqlite"): ApiTraceProfile {
-  return backend === "mongodb" ? "full" : "lite";
+  return backend === "mongodb" || backend === "postgres" ? "full" : "lite";
 }
 
 export function resolvePolicy(backend: MetadataBackend = "sqlite"): ApiTracePolicy {
