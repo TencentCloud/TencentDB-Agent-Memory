@@ -17,6 +17,9 @@ Config via environment variables:
                                   unset, the provider auto-discovers
                                   ``src/gateway/server.ts`` next to the plugin
                                   checkout or under ``$HOME``)
+  MEMORY_TENCENTDB_TEAM_ID / MEMORY_TENCENTDB_AGENT_ID / MEMORY_TENCENTDB_USER_ID
+                                — Optional v3 tenancy IDs used when Hermes does
+                                  not pass IDs to ``initialize``
 
 The on-disk data directory (L0~L3 storage) is owned by the Gateway, not by
 this provider. Point the Gateway at a custom location with ``TDAI_DATA_DIR``
@@ -81,6 +84,20 @@ _DEFAULT_GATEWAY_PORT = 8420
 _DEFAULT_TEAM_ID = "default"
 _DEFAULT_AGENT_ID = "default"
 _DEFAULT_USER_ID = "default"
+
+
+def _resolve_identity_id(value: Any, env_var: str, default: str) -> str:
+    """Resolve one v3 tenancy ID without forcing the literal ``default``.
+
+    Hermes versions that do not expose team/agent context still need a way to
+    target an existing v2 agent after migration. An explicit initialize
+    argument wins, then the corresponding environment variable, and only then
+    do we retain the legacy default for backwards compatibility.
+    """
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    configured = os.environ.get(env_var, "").strip()
+    return configured or default
 
 
 def _resolve_gateway_port(default: int = _DEFAULT_GATEWAY_PORT) -> int:
@@ -537,9 +554,15 @@ class MemoryTencentdbProvider(MemoryProvider):
         All default to "default".
         """
         self._session_id = session_id
-        self._user_id = kwargs.get("user_id", _DEFAULT_USER_ID)
-        self._team_id = kwargs.get("team_id", _DEFAULT_TEAM_ID)
-        self._agent_id = kwargs.get("agent_id", _DEFAULT_AGENT_ID)
+        self._user_id = _resolve_identity_id(
+            kwargs.get("user_id"), "MEMORY_TENCENTDB_USER_ID", _DEFAULT_USER_ID,
+        )
+        self._team_id = _resolve_identity_id(
+            kwargs.get("team_id"), "MEMORY_TENCENTDB_TEAM_ID", _DEFAULT_TEAM_ID,
+        )
+        self._agent_id = _resolve_identity_id(
+            kwargs.get("agent_id"), "MEMORY_TENCENTDB_AGENT_ID", _DEFAULT_AGENT_ID,
+        )
 
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
