@@ -49,7 +49,7 @@ const DEFAULT_SKILL_SELECTION: SkillSelectionConfig = {
 
 export const DEFAULT_CONFIG: ProxyConfig = {
   server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 3_600_000 },
-  upstream: { url: DEFAULT_UPSTREAM, apiKey: "", agents: {} },
+  upstream: { url: DEFAULT_UPSTREAM, apiKey: "", models: [], agents: {} },
   log: {
     file: "",
     verbose: false,
@@ -312,6 +312,18 @@ function parseHeaderMap(raw: unknown): Record<string, string> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function parseUpstreamModels(raw: unknown): string[] {
+  const candidates = typeof raw === "string"
+    ? [raw]
+    : Array.isArray(raw)
+      ? raw
+      : [];
+  return candidates
+    .filter((model): model is string => typeof model === "string")
+    .map((model) => model.trim())
+    .filter(Boolean);
+}
+
 /**
  * Parse `upstream.agents` from raw YAML into the normalized `AgentUpstreamEntry`
  * map. Entries without a non-empty `url` are silently dropped — an empty url
@@ -370,6 +382,7 @@ export function buildConfig(
       apiKey:
         readKeyFile(process.env.TDAI_PROXY_UPSTREAM_API_KEY_FILE) ||
         (yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey),
+      models: parseUpstreamModels(yaml.upstream?.models),
       agents: parseUpstreamAgents(yaml.upstream?.agents),
     },
     log: {

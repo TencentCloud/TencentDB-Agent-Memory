@@ -35,6 +35,10 @@ upstream:
   # 若非空，则替换所有转发请求中的 Authorization: Bearer <apiKey>。
   # 留空则透传客户端原始 API Key。
   apiKey: "<YOUR_TOKENHUB_API_KEY>"
+  # `/v1/models` 除价目表/模型池外，还会发布这里的模型 ID。
+  # global-images 会从 PROXY_UPSTREAM_MODEL 自动写入此项。
+  models: []
+    # - deepseek-chat
 
   # ── Per-Agent 覆盖 ─────────────────────────────────────────────────────────
   # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url + apiKey。
