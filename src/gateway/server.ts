@@ -43,6 +43,7 @@ import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
+import { buildGatewayCaptureTurn } from "./capture-request.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -399,15 +400,14 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
+    const turn = buildGatewayCaptureTurn(body, startMs);
     const result = await this.core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
+      messages: turn.messages,
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: turn.startedAt,
     });
     const elapsed = Date.now() - startMs;
 
