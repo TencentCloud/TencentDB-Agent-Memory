@@ -25,6 +25,8 @@ export function useCodeSources() {
   const [viewMode, setViewMode] = useState<ViewMode>('card');
   const [inFlight, setInFlight] = useState<CodeGraphDetail[]>([]);
   // Failed graphs may not have a team asset yet. Keep them visible without polling.
+  // A later backend self-heal is not discovered automatically. Explicit Sync
+  // clears this overlay and resumes checks; refreshing teamAssets alone does not.
   const [failedSources, setFailedSources] = useState<CodeGraphDetail[]>([]);
 
   // Detail view state

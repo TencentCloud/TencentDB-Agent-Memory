@@ -4,6 +4,13 @@ These tests exercise the real `useCodeSources` hook and the real CodePage UI.
 They use controlled API responses; they do **not** deploy the Panel/Core/Knowledge
 backends or verify real authentication, repository indexing, or persistence.
 
+Failed/missing graphs stop automatic checks and retain their diagnostic even if
+the backend later recovers on its own. Both card and table views explain that
+**Sync** retries the graph and resumes polling. Refreshing the team-assets list
+does not clear the local failure overlay; it is intentionally not a retry.
+`codegraph-failure-notice.test.ts` renders the real Tea notice, including absent
+diagnostics, safe text rendering, and removal after recovery.
+
 ## Hook tests
 
 Install the existing lockfiles (Node >= 22, tested with Node 26.5.0):

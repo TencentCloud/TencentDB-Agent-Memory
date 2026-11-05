@@ -265,6 +265,25 @@ describe("CodeGraph polling lifecycle", () => {
     expect(mocks.api.get).toHaveBeenCalledTimes(1);
   });
 
+  it("requires explicit sync after an external recovery, keeping list refresh separate from retry", async () => {
+    mocks.api.get.mockResolvedValue(graph("new", "failed", "clone failed"));
+    await create();
+    // The backend has recovered, but a team-list snapshot may still be stale.
+    mocks.api.teamAssets.mockResolvedValue([graph("new", "ready")]);
+    mocks.api.get.mockResolvedValue(graph("new", "ready"));
+    await act(async () => store.fetchSources());
+    await advance(32000);
+    expect(store.filteredSources).toEqual([graph("new", "failed", "clone failed")]);
+    expect(mocks.api.get).toHaveBeenCalledTimes(1);
+    expect(mocks.api.sync).not.toHaveBeenCalled();
+    await act(async () => store.handleSync("new"));
+    expect(store.filteredSources).toEqual([graph("new", "ready")]);
+    expect(mocks.api.registerMeta).toHaveBeenCalledWith("team-A", "new");
+    await advance(32000);
+    expect(mocks.api.get).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("retries transient transport errors rather than treating them as terminal states", async () => {
     mocks.api.get
       .mockRejectedValueOnce(new Error("offline"))
