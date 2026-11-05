@@ -7,6 +7,7 @@ import type { IStateBackend } from "../core/state/types.js";
 import type { OffloadExecutorConfig } from "./types.js";
 import { defaultOffloadConfig } from "./types.js";
 import { parseV2Auth, successEnvelope, errorEnvelope, makeRequestId } from "../gateway/v2-router.js";
+import { resolveOffloadMaxBodyBytes } from "../utils/env-config.js";
 import { handleIngest } from "./ingest-handler.js";
 import { handleMmdQuery } from "./mmd-handler.js";
 import { handleCompaction } from "./compact/compaction-handler.js";
@@ -20,6 +21,9 @@ export interface OffloadV2Deps {
   config?: OffloadExecutorConfig;
 }
 
+/** Body limit is resolved once; most routes keep the injected default. */
+const OFFLOAD_MAX_BODY_BYTES = resolveOffloadMaxBodyBytes();
+
 /**
  * Handle offload V2 routes. Returns true if the request was handled.
  */
@@ -28,7 +32,7 @@ export async function handleOffloadV2Route(
   res: http.ServerResponse,
   pathname: string,
   method: string,
-  parseJsonBody: <T>(req: http.IncomingMessage) => Promise<T>,
+  parseJsonBody: <T>(req: http.IncomingMessage, maxBytes?: number) => Promise<T>,
   sendJson: (res: http.ServerResponse, status: number, body: unknown) => void,
   deps: OffloadV2Deps,
 ): Promise<boolean> {
@@ -75,11 +79,13 @@ export async function handleOffloadV2Route(
     }
 
     case "POST /v2/offload/compact":
+      // Compaction receives the full message history + per-message token
+      // array, so it gets its own body limit instead of the 1 MiB default.
       await handleCompaction(req, res, auth, {
         storage,
         config,
         logger: deps.logger,
-      }, requestId, parseJsonBody, sendJson, successEnvelope, errorEnvelope);
+      }, requestId, (r) => parseJsonBody(r, OFFLOAD_MAX_BODY_BYTES), sendJson, successEnvelope, errorEnvelope);
       return true;
 
     default:
