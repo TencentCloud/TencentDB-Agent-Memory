@@ -107,21 +107,18 @@ export function formatLocalDateTime(d: Date = new Date()): string {
   return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
-/**
- * Compute the start-of-day (00:00:00.000) in the configured timezone for a given date.
- * Returns a UTC millisecond timestamp.
- * Used by memory-cleaner for cutoff calculations.
- */
-export function startOfLocalDay(d: Date = new Date()): number {
-  // Get the local date components in the configured timezone
-  const dateStr = formatLocalDate(d);
-  // Parse as midnight in the configured timezone
-  // Use a trick: format "YYYY-MM-DDT00:00:00" and find the UTC equivalent
-  const midnightLocal = new Date(`${dateStr}T00:00:00`);
+export interface LocalDateTimeParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
 
-  // We need to find the UTC instant that corresponds to midnight in _resolvedTz.
-  // Approach: binary search isn't needed — we can use the timezone offset.
-  const formatter = new Intl.DateTimeFormat("en-US", {
+/** Return calendar components for an instant in the configured timezone. */
+export function getLocalDateTimeParts(d: Date = new Date()): LocalDateTimeParts {
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: _resolvedTz,
     year: "numeric",
     month: "2-digit",
@@ -130,29 +127,61 @@ export function startOfLocalDay(d: Date = new Date()): number {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-  });
+  }).formatToParts(d);
 
-  // Start with an estimate: the date at UTC midnight
-  const utcMidnight = new Date(`${dateStr}T00:00:00Z`);
-  // Check what local time that corresponds to
-  const localParts = formatter.formatToParts(utcMidnight);
-  const localHour = parseInt(localParts.find((p) => p.type === "hour")!.value, 10);
-  const localMinute = parseInt(localParts.find((p) => p.type === "minute")!.value, 10);
-  const localDay = localParts.find((p) => p.type === "day")!.value;
-  const targetDay = dateStr.slice(8, 10); // DD from YYYY-MM-DD
+  const get = (type: string) => parts.find((p) => p.type === type)!.value;
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    hour: normalizeIntlHour(Number(get("hour"))),
+    minute: Number(get("minute")),
+    second: Number(get("second")),
+  };
+}
 
-  // The offset from UTC to local is: if UTC midnight shows as localHour:localMinute on localDay
-  // then local midnight = UTC midnight - (localHour*60 + localMinute) minutes
-  // But we need to handle day boundary crossings
-  let offsetMinutes = localHour * 60 + localMinute;
-  if (localDay !== targetDay) {
-    // Day wrapped — means local is behind UTC (negative offset zones)
-    // e.g. UTC midnight = previous day 19:00 in America/New_York
-    offsetMinutes = offsetMinutes - 24 * 60;
+/**
+ * Compute the start-of-day (00:00:00.000) in the configured timezone for a given date.
+ * Returns a UTC millisecond timestamp.
+ * Used by memory-cleaner for cutoff calculations.
+ */
+export function startOfLocalDay(d: Date = new Date()): number {
+  // Get the local date components in the configured timezone
+  const dateStr = formatLocalDate(d);
+  const [year, month, day] = dateStr.split("-").map(Number) as [number, number, number];
+  return localDateTimeToInstant(year, month, day, 0, 0, 0);
+}
+
+/** Convert configured-timezone local calendar components to a UTC instant. */
+export function localDateTimeToInstant(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+  millisecond = 0,
+): number {
+  const desiredWallMs = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  let candidateMs = desiredWallMs;
+
+  for (let i = 0; i < 4; i++) {
+    const observed = getLocalDateTimeParts(new Date(candidateMs));
+    const observedWallMs = Date.UTC(
+      observed.year,
+      observed.month - 1,
+      observed.day,
+      observed.hour,
+      observed.minute,
+      observed.second,
+      millisecond,
+    );
+    const delta = observedWallMs - desiredWallMs;
+    if (delta === 0) return candidateMs;
+    candidateMs -= delta;
   }
 
-  // Local midnight in UTC = UTC midnight - offset
-  return utcMidnight.getTime() - offsetMinutes * 60 * 1000;
+  return candidateMs;
 }
 
 // ============================
@@ -241,6 +270,10 @@ function validateTimeZone(tz: string): boolean {
   } catch {
     return false;
   }
+}
+
+function normalizeIntlHour(hour: number): number {
+  return hour === 24 ? 0 : hour;
 }
 
 /**
