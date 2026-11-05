@@ -83,6 +83,7 @@ export default function SkillsPanel({
     skillsWithCache,
     // handlers
     refresh,
+    refreshAfterChange,
     handleDelete,
     handleExport,
     handleToggleVisibility,
@@ -292,7 +293,7 @@ export default function SkillsPanel({
             userId={myUserId}
             // 编辑权限与删除一致：仅 skill 的 owner（owner_user_id === 当前用户）可编辑
             canEdit={!!myUserId && selectedSkill?.owner_user_id === myUserId}
-            onChanged={() => void refresh()}
+            onChanged={refreshAfterChange}
           />
         }
       />

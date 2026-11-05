@@ -105,7 +105,7 @@ export function useSkillsPanel() {
   // 对 skills 列表应用缓存：已拉过的 skill 更新为真实 version / owner_agent_id。
   const skillsWithCache = useMemo(
     () => skills.map((s) => applyCachedDetail(s)),
-    [skills, cacheVersion],
+    [skills, cacheVersion, applyCachedDetail],
   );
 
   // 选中某条 skill 时按需预拉其数据面详情（幂等，已缓存则跳过）。
@@ -444,6 +444,10 @@ export function useSkillsPanel() {
     cacheVersion,
     // handlers
     refresh,
+    refreshAfterChange: () => {
+      if (selectedSkillId) void preloadSkillDetail(selectedSkillId, true);
+      void refresh();
+    },
     handleDelete,
     handleExport,
     handleToggleVisibility,

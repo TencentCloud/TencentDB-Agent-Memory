@@ -1,3 +1,4 @@
+import type { GitHubCheck } from "../../skill/types.js";
 /**
  * SqliteSkillStore — 新版 skill 数据访问层。
  *
@@ -270,6 +271,12 @@ export class SqliteSkillStore implements ISkillStore {
   //  幂等语义（content + manifest 都没变 → 不写新版本）由 skill-versioning 在
   //  上层判断，因为只有它同时知道 content_hash 与新 manifest_json。
   // ────────────────────────────────────────────────────────────────────
+  async recordGitHubCheck(head: Skill, check: GitHubCheck): Promise<boolean> {
+    const result = this.db.prepare("UPDATE skills SET metadata_json=json_set(metadata_json, '$.github_check', json(?)) WHERE row_id=? AND team_id=? AND version=? AND is_head=1 AND status='active'")
+      .run(JSON.stringify(check), head.row_id, head.team_id, head.version);
+    return Number(result.changes) === 1;
+  }
+
   async appendVersion(input: AppendVersionInput): Promise<Skill> {
     const tid = input.team_id ?? "default";
     const head = await this.getHead(input.skill_id, tid);
@@ -304,6 +311,13 @@ export class SqliteSkillStore implements ISkillStore {
     // 必须保持 synchronous（不要在中间 await），与 sqlite-transaction-guard 同思路。
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      if (input.expected_version !== undefined) {
+        const current = this.db.prepare("SELECT version, status FROM skills WHERE skill_id=? AND team_id=? AND is_head=1 ORDER BY version DESC LIMIT 1")
+          .get(input.skill_id, tid) as { version: number; status: string } | undefined;
+        if ((current?.version ?? 0) !== input.expected_version || (current && current.status !== "active")) {
+          throw new SkillStoreError("SKILL_VERSION_STALE", "head changed during publication");
+        }
+      }
       if (head) {
         this.db
           .prepare("UPDATE skills SET is_head=0 WHERE skill_id=? AND version=?")

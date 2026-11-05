@@ -1,3 +1,4 @@
+import { requireTeamMember } from '../knowledge/common.js';
 import type { Hono } from 'hono';
 import { isAllowedSkillAction } from '../../../api/skill-actions.js';
 import type { PanelDeps } from '../../../panel-deps.js';
@@ -46,6 +47,19 @@ export function registerSkillProxyRoutes(api: Hono, deps: PanelDeps): void {
       reqId: c.get('reqId'),
     };
 
+    if (action.startsWith('github/') || action.startsWith('versions/restore')) {
+      if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.team_id !== 'string' || typeof body.agent_id !== 'string') {
+        return respondControlError(c, 400, 'TEAM_AND_AGENT_REQUIRED');
+      }
+      const caller = await requireTeamMember(deps, c, ctx, body.team_id);
+      if ('error' in caller) return caller.error;
+      const agentEnv = await deps.metaKernel.invoke('agent/get', { agent_id: body.agent_id }, ctx);
+      const agent = agentEnv.data as { owner_user_id?: string; team_id?: string } | null;
+      if (agentEnv.code !== 0 || agent?.team_id !== body.team_id || agent?.owner_user_id !== caller.userId) {
+        return respondControlError(c, 403, 'NOT_AGENT_OWNER');
+      }
+      body.user_id = caller.userId;
+    }
     const envelope = await deps.skillKernel.invoke(action, body, ctx);
     return respondEnvelope(c, envelope);
   });

@@ -13,7 +13,7 @@
  *   6. 失败时尝试清理已写入的 storage 副本（best-effort）
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { ISkillStore } from "./skill-store.interface.js";
 import { IdempotentNoOpError, SkillStoreError } from "./skill-store.interface.js";
@@ -92,6 +92,48 @@ export class SkillVersioning {
     this.logger = opts.logger;
     this.onSkillVdbChanged = opts.onSkillVdbChanged;
     this.onSkillCreated = opts.onSkillCreated;
+  }
+
+  /** Publish a complete bundle from a private directory. Never clean another writer's files. */
+  async replaceBundle(skillId: string, head: Skill | null, ctx: AppendVersionContext, mut: AppendVersionMutation): Promise<Skill> {
+    const version = (head?.version ?? 0) + 1;
+    // Keep imports outside lexical vN prefixes used by ordinary writes and historical cleanup.
+    const storageDir = `skills/${skillId}/github/${randomUUID()}/v${version}`;
+    const payloads = mut.resourcesToWrite ?? [];
+    this.resources.assertTotalSize([], payloads);
+    const manifest: SkillManifestEntry[] = [];
+    try {
+      for (const payload of payloads) manifest.push(await this.resources.writeResource(skillId, version, payload, storageDir));
+    } catch (error) {
+      await this.cleanupVersionDir(storageDir).catch(() => {});
+      throw error;
+    }
+    let row: Skill;
+    try {
+      row = await this.store.appendVersion({ ...ctx, skill_id: skillId,
+        expected_version: head?.version ?? 0, owner_agent_id: ctx.agent_id,
+        name: mut.name, description: mut.description, content: mut.content,
+        content_hash: computeContentHash(mut.content), manifest, storage_dir: storageDir,
+        metadata_json: mut.metadata_json });
+    } catch (error) {
+      // A transport failure may happen after commit. Never delete possibly published bytes.
+      if (error instanceof SkillStoreError && error.code === "SKILL_VERSION_STALE") {
+        await this.cleanupVersionDir(storageDir).catch(() => {});
+        throw error;
+      }
+      const recovered = await this.store.getByVersion(skillId, version, ctx.team_id).catch(() => null);
+      if (recovered?.storage_dir === storageDir) row = recovered;
+      else throw error;
+    }
+    this.onSkillVdbChanged?.(1);
+    // A failed asset hook leaves a complete, readable bundle. A retry repairs registration.
+    await this.ensureBundleAsset(row);
+    return row;
+  }
+
+  async ensureBundleAsset(row: Skill): Promise<void> {
+    await this.onSkillCreated?.({ skill_id: row.skill_id, team_id: row.team_id,
+      agent_id: row.owner_agent_id, user_id: row.user_id, name: row.name, description: row.description });
   }
 
   /**
@@ -281,6 +323,7 @@ export class SkillVersioning {
         agent_id: ctx.agent_id,
         task_id: ctx.task_id,
         skill_id: head.skill_id,
+        expected_version: head.version,
         name: mut.name,
         description: mut.description,
         content: mut.content,

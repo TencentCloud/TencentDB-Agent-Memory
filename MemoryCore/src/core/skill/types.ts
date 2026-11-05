@@ -297,6 +297,8 @@ export interface Skill {
 
 /** `appendVersion` 的入参。store 内部基于 head 推导 version+1。 */
 export interface AppendVersionInput {
+  /** Compare the observed head in the store before publishing (0 = absent). */
+  expected_version?: number;
   /** 写入身份。不传则写 "default"。 */
   user_id?: string;
   team_id?: string;
@@ -377,4 +379,12 @@ export interface ExtractorLLMRunner {
     /** Worker 在锁失效时通过 abort 信号取消 LLM 调用。 */
     signal?: AbortSignal;
   }): Promise<string>;
+}
+
+/** Mutable check state, separate from immutable installed provenance. */
+export interface GitHubCheck {
+  checked_at: string;
+  status: "current" | "update_available" | "error";
+  remote_commit?: string;
+  message?: string;
 }
