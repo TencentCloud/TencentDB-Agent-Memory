@@ -46,6 +46,81 @@ tags:
     description: Code repository indexing and structured code queries.
 
 paths:
+  /wiki/okf/validate:
+    post:
+      tags: [LLM-Wiki]
+      summary: Preflight a native OKF bundle without accessing stored Wikis
+      description: |
+        Stateless validation only: no import, indexing, model calls or execution.
+        Requires x-tdai-service-id. Existing configured service-key authentication
+        applies; an empty key preserves upstream's unauthenticated configuration.
+        Actual UTF-8 JSON request bytes are capped at 20 MiB, independently of
+        Content-Length. Decoded file content is capped at 10 MiB across 1..1000 files.
+        Warning paths originate only from the supplied input. Errors omit filenames.
+      operationId: validateNativeOkfBundle
+      parameters:
+        - in: header
+          name: x-tdai-service-id
+          required: true
+          schema: {type: string, pattern: '^[A-Za-z0-9_-]+$'}
+        - in: header
+          name: Authorization
+          required: false
+          description: Bearer service key when KNOWLEDGE_SERVICE_KEY is configured
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [path, content]
+                    properties:
+                      path: {type: string}
+                      content: {type: string}
+                      encoding: {type: string, enum: [utf-8, base64]}
+      responses:
+        '200':
+          description: ApiResponseEnvelope with file/concept counts and path/message warnings
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponseEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [files, concepts, warnings]
+                        properties:
+                          files: {type: integer, minimum: 1, maximum: 1000}
+                          concepts: {type: integer, minimum: 0}
+                          warnings:
+                            type: array
+                            items:
+                              type: object
+                              required: [path, message]
+                              properties:
+                                path: {type: string}
+                                message: {type: string}
+        '400':
+          description: Invalid identity, UTF-8 JSON, root object or bundle
+        '401':
+          description: Missing or wrong configured service key
+        '413':
+          description: Declared or streamed request exceeds 20 MiB
+        '415':
+          description: Media type is not application/json
+        '500':
+          description: Generic internal stream/validation failure
   # ═══════════════════════════════════════════════
   # LLM-Wiki (15 endpoints)
   # ═══════════════════════════════════════════════
