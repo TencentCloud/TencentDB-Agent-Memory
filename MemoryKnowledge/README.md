@@ -96,6 +96,20 @@ pnpm test
 pnpm build        # tsdown → dist/
 ```
 
+## 多项目部署：知识读取权限
+
+默认的只读接口信任内网调用者，`KNOWLEDGE_SERVICE_KEY` 本身不会保护只读接口。
+多个项目共用服务时，同时设置 `KNOWLEDGE_READ_AUTH_BASE_URL` 为可信 Memory Panel 的地址
+（例如同容器部署的 `http://127.0.0.1:8125`），并保留非空的 `KNOWLEDGE_SERVICE_KEY`。
+
+启用后，Agent 调用 `tools/list`、`tools/call` 或按 ID 读取 Wiki/代码图时，需携带
+`x-tdai-service-id` 和自己的 `x-tdai-user-key`。服务通过 Panel 核验资源权限和团队成员资格，
+不信任请求中的 team/user 字段。缺少凭据、无权读取或权限服务不可用都会拒绝读取。
+资源列表请使用 Panel 的权限过滤接口；不能用一项资源的读取权限换取整个团队列表。
+
+Panel 等内部服务继续使用服务 Bearer Key；不要将服务 Key 提供给 Agent。
+现有只提供遥测身份头的 Agent 工具配置需要补充用户认证，否则严格模式下会返回 401。
+
 ## 可选：ClickHouse 工具调用埋点
 
 默认关闭。设置以下环境变量后，Knowledge Service 会把 `POST /v3/tools/call` 写入与 Memory/Skill 兼容的 `tool_call_logs`；启动时会幂等建表，批写或建表失败均不阻断业务请求。

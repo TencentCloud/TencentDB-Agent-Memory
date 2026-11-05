@@ -27,6 +27,8 @@ const log = createLogger("auth");
 
 export interface KnowledgeAuthConfig {
   serviceKey: string;
+  /** Panel origin used to authorize agent reads. Empty retains trusted-network mode. */
+  readAuthBaseUrl?: string;
 }
 
 /**
@@ -92,6 +94,34 @@ export function verifyBearer(authHeader: string | undefined, serviceKey: string)
   return safeEqual(m[1], serviceKey);
 }
 
+async function authorizeRead(
+  baseUrl: string,
+  path: string,
+  body: Record<string, unknown>,
+  serviceId: string,
+  userKey: string,
+): Promise<boolean> {
+  // The Panel checks both resource ACL and team membership; never trust supplied team/user IDs.
+  const knowledgeId = path.startsWith('/tools/') ? body.knowledge_id
+    : path.startsWith('/wiki/') ? body.wiki_id : body.code_graph_id;
+  if (typeof knowledgeId !== 'string' || !/^(wiki|cg)-[A-Za-z0-9_-]+$/.test(knowledgeId)) return false;
+  const type = knowledgeId.startsWith('wiki-') ? 'wiki' : 'code-graph';
+  if ((path.startsWith('/wiki/') && type !== 'wiki') ||
+      (path.startsWith('/code-graph/') && type !== 'code-graph')) return false;
+  const idField = type === 'wiki' ? 'wiki_id' : 'code_graph_id';
+  const response = await fetch(`${baseUrl}/api/v1/knowledge/${type}/get`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-tdai-service-id': serviceId,
+      'x-tdai-user-key': userKey },
+    body: JSON.stringify({ [idField]: knowledgeId }),
+    signal: AbortSignal.timeout(10_000),
+    redirect: 'error',
+  });
+  if (!response.ok) return false;
+  const envelope = await response.json() as { code?: unknown; data?: unknown };
+  return envelope.code === 0 && envelope.data !== null && typeof envelope.data === 'object';
+}
+
 /**
  * Hono 中间件工厂。挂在 /v3 子 app 上（server.ts），
  * c.req.path 为完整路径，先 strip apiPrefix 再匹配白名单。
@@ -100,15 +130,53 @@ export function createServiceAuthMiddleware(
   cfg: KnowledgeAuthConfig,
   apiPrefix: string,
 ): MiddlewareHandler {
+  const readAuthBaseUrl = cfg.readAuthBaseUrl?.replace(/\/+$/, '');
+  if (readAuthBaseUrl) {
+    const url = new URL(readAuthBaseUrl);
+    if (!cfg.serviceKey || !['http:', 'https:'].includes(url.protocol) ||
+        url.username || url.password || url.search || url.hash) {
+      throw new Error('Read authorization requires a service key and a trusted HTTP(S) Panel URL');
+    }
+  }
   return async (c, next) => {
     // 未配置 key = 不启用鉴权（向后兼容，启动时另有 posture warn 日志）
     if (!cfg.serviceKey) return next();
 
     const full = c.req.path;
     const path = full.startsWith(apiPrefix) ? full.slice(apiPrefix.length) : full;
-    if (isReadonlyPath(c.req.method, path)) return next();
-
     if (verifyBearer(c.req.header("authorization"), cfg.serviceKey)) return next();
+
+    if (isReadonlyPath(c.req.method, path)) {
+      if (!readAuthBaseUrl) return next();
+      const userKey = c.req.header('x-tdai-user-key');
+      if (!userKey) return c.json(wrapError(401, 'project user key required'), 401);
+      // Listing without a resource ID cannot reuse an individual asset ACL check.
+      // Agents discover tools by ID; general lists must use the ACL-filtered Panel API.
+      if (c.req.method !== 'POST' || path === '/wiki/list' || path === '/code-graph/list') {
+        return c.json(wrapError(403, 'use the protected Panel API'), 403);
+      }
+      const serviceId = c.req.header('x-tdai-service-id');
+      if (!serviceId || !/^[A-Za-z0-9_-]{1,200}$/.test(serviceId)) {
+        return c.json(wrapError(400, 'valid x-tdai-service-id required'), 400);
+      }
+      let body: Record<string, unknown>;
+      try {
+        const parsed: unknown = await c.req.json();
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid body');
+        body = parsed as Record<string, unknown>;
+      } catch {
+        return c.json(wrapError(400, 'JSON object required'), 400);
+      }
+      try {
+        if (!await authorizeRead(readAuthBaseUrl, path, body, serviceId, userKey)) {
+          return c.json(wrapError(403, 'resource read forbidden; lists require the protected Panel API'), 403);
+        }
+      } catch {
+        // A failed permission service must never restore the trusted-network bypass.
+        return c.json(wrapError(503, 'read authorization unavailable'), 503);
+      }
+      return next();
+    }
 
     log.warn(`rejected unauthenticated request: ${c.req.method} ${full}`);
     return c.json(wrapError(401, "unauthorized: valid service key required"), 401);

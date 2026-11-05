@@ -67,6 +67,7 @@ export interface ServiceConfig {
    */
   auth: {
     serviceKey: string;
+    readAuthBaseUrl?: string;
   };
   /** Data root directory for knowledge assets (git clones, wiki dirs, SQLite). */
   dataDir: string;
@@ -224,6 +225,7 @@ export function loadConfig(): ServiceConfig {
     port: envInt("PORT", 8421),
     auth: {
       serviceKey: env("KNOWLEDGE_SERVICE_KEY", ""),
+      readAuthBaseUrl: env("KNOWLEDGE_READ_AUTH_BASE_URL", ""),
     },
     dataDir,
     // 未显式配置 → 落在数据卷内，随 /data/knowledge 一起持久化。

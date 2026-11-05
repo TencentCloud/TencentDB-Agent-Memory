@@ -166,6 +166,11 @@ async function startServer(): Promise<void> {
   // Security posture：空 key 只 warn 不拒启（向后兼容），与 Core gateway 的默认开放语义一致。
   if (config.auth.serviceKey) {
     log.info("Service auth: enabled (KNOWLEDGE_SERVICE_KEY) — write/admin endpoints require Bearer");
+    if (config.auth.readAuthBaseUrl) {
+      log.info('Agent read auth: enabled — user key and Panel resource permission required');
+    } else {
+      log.warn('Agent read auth: DISABLED — read-only endpoints trust the internal network');
+    }
   } else {
     log.warn(
       "Service auth: DISABLED — KNOWLEDGE_SERVICE_KEY is empty, all /v3 endpoints are open. " +
