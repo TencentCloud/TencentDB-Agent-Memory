@@ -64,4 +64,16 @@ export interface AgentAdapter {
    * 返回 null 表示"content 里没有用户键入的文本"（比如全是 tool_result）。
    */
   extractUserText(content: unknown): string | null;
+
+  /**
+   * 【可选，目前仅 opencode 实现】从请求的完整 messages 里定位"本轮用户
+   * 真实输入"，供 L0 写入 / Langfuse trace input / 用量日志取值。
+   *
+   * - 返回非空字符串：本轮用户输入（应写 L0）
+   * - 返回 ""：本轮不应写（aux 请求 / 工具循环续轮 / 无用户输入）
+   *
+   * 默认实现：undefined —— 未实现该方法的 adapter 不走此路径（调用方
+   * 保留各自的原有逻辑）。
+   */
+  extractL0UserQuery?(messages: unknown[]): string;
 }

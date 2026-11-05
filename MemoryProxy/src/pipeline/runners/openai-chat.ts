@@ -62,11 +62,13 @@ import { stageResolveTurnSeq } from "../stages/turn-seq.js";
 import { stageSessionResetPreHook } from "../stages/session-reset-pre-hook.js";
 import { stageSessionResetConfirmation } from "../stages/session-reset-confirmation.js";
 import { stageMemCommandIntercept } from "../stages/mem-command-intercept.js";
+import type { Transformer as NodeWebTransformer } from "node:stream/web";
 import {
   stageWriteUsageLog,
   stageRecordTokenUsage,
   stageEmitModelIntent,
   stageOpikStreamSpan,
+  createOnceFinalizer,
 } from "../stages/stream-finalize.js";
 import { stagePrewarmInjection } from "../stages/prewarm-injection.js";
 import { stageAssetCapabilities } from "../stages/asset-capabilities.js";
@@ -1018,10 +1020,16 @@ export async function runOpenaiChatPipeline(
   // OpenCode places a fresh human turn at the end of messages. A tool-loop
   // continuation ends with a tool message and must not be counted as another
   // human input. Capture this before injection can prepend recalled memories.
-  const lastInboundMessage = messages[messages.length - 1] as Record<string, unknown> | undefined;
+  //
+  // 2026-10-26 fix: 58e4c55 required last==user, but the session-init form
+  // replay appends [assistant(form tool_call), tool(form answer)] AFTER the
+  // user message, so the turn's first forwarded request ends with tool and
+  // its L0 write was silently dropped (write-l0 never logged, hub stayed
+  // empty). extractL0UserQuery scans backward past those form artifacts;
+  // real tool-loop tails still yield "" (keeps #1551/#1621 amplification fix).
   const opencodeUserQuery = agentSource === "opencode"
-    ? (lastInboundMessage?.role === "user" && !isAuxiliary
-        ? (opencodeAdapter.extractUserText(lastInboundMessage.content) ?? "")
+    ? (!isAuxiliary && opencodeAdapter.extractL0UserQuery
+        ? opencodeAdapter.extractL0UserQuery(messages)
         : "")
     : null;
   const tdaiUserMessage: TdaiMessage | null = agentSource === "opencode"
@@ -2093,7 +2101,18 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     pipe.streamDone(lastUsage);
   }
 
-  return new TransformStream<Uint8Array, Uint8Array>({
+  // 2026-10-26 fix: OpenCode (and other SSE clients) close their connection the
+  // instant they read `data: [DONE]`. When that client-close wins the race
+  // against the upstream FIN, the runtime cancels this transform chain and
+  // flush() never ran — silently dropping the turn's L0 write / skill trigger /
+  // credit report (write-l0 never logged; hub memory stays empty; same family
+  // as #964 / #1733). Run the identical finalization from cancel(), guarded by
+  // a once-flag so flush-then-cancel can never double-fire.
+  //
+  // 类型注解走 node:stream/web —— lib.dom.d.ts 的 Transformer 还没跟上
+  // WHATWG 规范（缺 cancel 字段），Node 22 运行时本身完全支持。
+  const finalizeOnce = createOnceFinalizer(finalize, (err: unknown) => pipe.error("STREAM_FINALIZE", err));
+  const tapTransformer: NodeWebTransformer<Uint8Array, Uint8Array> = {
     transform(chunk, controller) {
       controller.enqueue(chunk);
       try {
@@ -2103,11 +2122,11 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       }
     },
     async flush() {
-      try {
-        await finalize();
-      } catch (err: unknown) {
-        pipe.error("STREAM_FINALIZE", err);
-      }
+      await finalizeOnce();
     },
-  });
+    async cancel() {
+      await finalizeOnce();
+    },
+  };
+  return new TransformStream<Uint8Array, Uint8Array>(tapTransformer);
 }

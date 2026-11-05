@@ -217,3 +217,38 @@ export function stageOpikStreamSpan(input: OpikStreamSpanInput): void {
     input.pipe.error("OPIK_SPAN", opikErr);
   }
 }
+
+// ── 5. once-finalizer（flush/cancel 双路径共用） ─────────────────────────────
+
+/**
+ * 把一段 finalize 逻辑包成幂等版本，供流式 TransformStream 的 `flush()` 与
+ * `cancel()` 双路径共用。
+ *
+ * # 背景（2026-10-26 实抓）
+ * OpenCode 等 SSE 客户端读到 `data: [DONE]` 就立即断开连接；当客户端断开
+ * 赢得与上游 FIN 的竞态，运行时会 cancel 掉整条 pipeThrough 链，`flush()`
+ * 永远不执行 —— 该轮的 L0 写入 / skill 触发 / credit 上报全部静默丢失
+ * （write-l0 从不打印，hub 记忆为空）。openai-chat 的 tap 只有 flush 没有
+ * cancel；anthropic 路径用独立 reader 循环消费上游，天然免疫。
+ *
+ * # 语义
+ * - 第一次调用执行 finalize；后续调用（flush→cancel 交错、并发触发）直接返回
+ * - finalize 抛错交给 onError 吞掉 —— flush/cancel 回调里绝不能二次抛异常
+ * - 失败不重试（once 旗标在调用前置位）：与 L0 写入侧 withL0Retry 的重试语义
+ *   分工明确，这里只保证「至多一次」
+ */
+export function createOnceFinalizer(
+  finalize: () => Promise<void>,
+  onError: (err: unknown) => void,
+): () => Promise<void> {
+  let finalized = false;
+  return async (): Promise<void> => {
+    if (finalized) return;
+    finalized = true;
+    try {
+      await finalize();
+    } catch (err: unknown) {
+      onError(err);
+    }
+  };
+}
