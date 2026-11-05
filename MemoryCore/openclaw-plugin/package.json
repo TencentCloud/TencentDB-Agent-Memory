@@ -13,14 +13,17 @@
   "scripts": {
     "clean": "rm -rf dist *.tgz",
     "build": "tsc",
+    "test:native": "tsx --test ./tests/native-memory-provider.test.ts",
     "prepack": "npm run clean && npm install --no-save --no-audit --no-fund && npm run build"
   },
   "dependencies": {
-    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1"
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.1-beta.1",
+    "undici": "^6.21.3"
   },
   "devDependencies": {
     "typescript": "^5.5.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0"
   },
   "engines": {
     "node": ">=22.0.0"
