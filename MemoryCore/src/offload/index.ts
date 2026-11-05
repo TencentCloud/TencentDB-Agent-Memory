@@ -66,6 +66,10 @@ import { SessionRegistry } from "./session-registry.js";
 import { reclaimOffloadData } from "./reclaimer.js";
 import { buildL3TriggerReport, reportL3Trigger } from "./state-reporter.js";
 import { resolveUserId, getUserIdSource } from "./user-id.js";
+import {
+  TurnAdvancementLedger,
+  type TurnAdvancementRecord,
+} from "./turn-advancement-ledger.js";
 
 // ─── Module-level state ──────────────────────────────────────────────────────
 // OpenClaw calls registerOffload() multiple times during lifecycle.
@@ -1325,6 +1329,7 @@ class OffloadContextEngine {
   private _backendClient: BackendClient | null;
   private _judgeL15: (mgr: OffloadStateManager, event: any, ctx: any) => Promise<void>;
   private _disposeL15: () => void;
+  private _turnLedger?: TurnAdvancementLedger;
 
   constructor(opts: any) {
     this.update(opts);
@@ -1348,10 +1353,26 @@ class OffloadContextEngine {
     this._backendClient = opts.backendClient;
     this._judgeL15 = opts.judgeL15;
     this._disposeL15 = opts.disposeL15 ?? (() => {});
+    this._turnLedger = opts.dataRoot
+      ? new TurnAdvancementLedger(opts.dataRoot)
+      : undefined;
   }
 
   get info() {
-    return { id: "openclaw-context-offload", name: "Context Offload Engine", version: "0.7.0", ownsCompaction: true };
+    return {
+      id: "openclaw-context-offload",
+      name: "Context Offload Engine",
+      version: "0.7.0",
+      ownsCompaction: true,
+      ...(this._turnLedger
+        ? {
+            transcriptSemantics: {
+              currentTurnFence: "before-current-turn-entry-v1" as const,
+              turnAdvancementIdempotency: "atomic-idempotent-v1" as const,
+            },
+          }
+        : {}),
+    };
   }
 
   async bootstrap(params: any) {
@@ -1392,6 +1413,17 @@ class OffloadContextEngine {
       }
     }
     return { ingested: false };
+  }
+
+  async commitTurn(record: TurnAdvancementRecord) {
+    if (!this._turnLedger) {
+      throw new Error("[context-offload] durable turn ledger is not configured");
+    }
+    const result = await this._turnLedger.commit(record);
+    this._logger.debug?.(
+      `[context-offload] commitTurn: status=${result.status}, session=${record.sessionId}, messages=${record.messages.length}`,
+    );
+    return result;
   }
 
   async assemble(params: any) {
