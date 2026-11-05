@@ -51,6 +51,11 @@ export function emitSessionInitTelemetryIfCompleted(args: EmitSessionInitTelemet
       bypassed: state.bypassed === true,
       bypassReason: args.bypassReason ?? "",
       finalStatus: "initialized",
+      // v3.3 user-session-default: 身份来源与账户默认失败原因。
+      // 由 session/{codebuddy,claude-code}/init.ts 在产生终态前写入 state,
+      // 这里原样透传给 ClickHouse (无值即空串, DEFAULT '' 兼容)。
+      presetSource: state.presetSource,
+      defaultFallbackReason: state.defaultFallbackReason,
     };
     const sink = args.sink ?? writeSessionInitRow;
     try {

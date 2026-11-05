@@ -3,6 +3,7 @@
  *
  * 使用 Tea Design Token 统一样式。
  */
+import { useTranslation } from 'react-i18next';
 import { ITEM_ICON, usePageMeta, type PageId } from '@/constants/menu';
 import './style.css';
 
@@ -17,6 +18,7 @@ export function TabBar({
   onNavigate: (id: PageId) => void;
   onClose: (id: PageId) => void;
 }) {
+  const { t } = useTranslation();
   const PAGE_META = usePageMeta();
   return (
     <div className="_memory-tabbar">
@@ -32,6 +34,7 @@ export function TabBar({
             data-guide={`tab-${id}`}
             onClick={() => onNavigate(id)}
             onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 onNavigate(id);
@@ -44,7 +47,7 @@ export function TabBar({
             {!meta.affix && (
               <button
                 type="button"
-                aria-label={`${meta.label} close`}
+                aria-label={t('tabbar.close', { name: meta.label })}
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose(id);

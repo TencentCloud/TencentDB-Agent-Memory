@@ -37,7 +37,8 @@ export function accessLog(): MiddlewareHandler {
     const requestId = c.req.header("x-request-id") || crypto.randomUUID();
     c.set("requestId", requestId);
 
-    // Hono's text() caches the body itself; later json() reads that cache.
+    // 缓存 request body（body 只能读一次，失败时用于日志）
+    // c.req.text() already caches the body through Hono; do not overwrite its cache.
     let reqBody: unknown = undefined;
     if (c.req.method === 'POST' || c.req.method === 'PUT') {
       try {

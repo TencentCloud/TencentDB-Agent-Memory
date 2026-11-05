@@ -27,6 +27,11 @@ import { createToolsRoutes } from "./routes/tools.js";
 import { createHealthRoutes } from "./routes/health.js";
 import { createLlmBindingRoutes } from "./routes/llm-binding.js";
 import { createAutoSyncRoutes } from "./routes/auto-sync.js";
+import { createSourceCredentialRoutes } from "./routes/source-credential.js";
+import { createSourceProviderRoutes } from "./routes/source-provider.js";
+import { createSshKeyRoutes } from "./routes/ssh-key.js";
+import { SshKeyStore } from "./ssh-key/store.js";
+import { createWikiSourceRoutes } from "./wiki-source/routes.js";
 import { accessLog } from "./middleware/response-envelope.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createServiceAuthMiddleware } from "./middleware/auth.js";
@@ -46,21 +51,24 @@ export function createApp() {
   // Acquire before metadata migration and especially before startup recovery.
   // A second process must never classify this process's active build as crashed.
   const dataRootOwnership = acquireKnowledgeStoreOwnership(config.dataDir, config.dbPath);
+  let sshKeyStore: SshKeyStore;
   let connection: ReturnType<typeof createDb> | undefined;
   let knowledgeModule: ReturnType<typeof createKnowledgeModule>;
   try {
+    sshKeyStore = new SshKeyStore({ rootDir: config.sshKeyDir });
     connection = createDb({ path: config.dbPath });
     knowledgeModule = createKnowledgeModule({
       dataDir: config.dataDir,
       dbPath: config.dbPath,
       db: connection.db,
       dataRootOwnership,
+      sshKeyStore,
       llmConfig: config.llm,
       tmcCallbackUrl: config.tmcCallbackUrl,
     });
   } catch (err) {
-    connection?.raw.close();
-    dataRootOwnership.release();
+    try { connection?.raw.close(); }
+    finally { dataRootOwnership.release(); }
     throw err;
   }
 
@@ -110,6 +118,28 @@ export function createApp() {
   api.route("/", createAutoSyncRoutes({
     scheduler: knowledgeModule.autoSyncScheduler,
     config: knowledgeModule.autoSyncConfig,
+  }));
+
+  // source-credential / source-provider — 外部知识源令牌 + 来源列表
+  api.route("/source-credential", createSourceCredentialRoutes({
+    credentialStore: knowledgeModule.credentialStore,
+    store: knowledgeModule.store,
+  }));
+  api.route("/source-provider", createSourceProviderRoutes({
+    registry: knowledgeModule.codeSourceRegistry,
+    wikiRegistry: knowledgeModule.wikiSourceRegistry,
+  }));
+
+  // ssh-key — 每用户 SSH 密钥对（SSH 仓库 clone 用）
+  api.route("/ssh-key", createSshKeyRoutes({
+    sshKeyStore: knowledgeModule.sshKeyStore ?? sshKeyStore,
+  }));
+
+  // wiki-source — 外部 wiki 列文档 / 导入（不触发 ingest）
+  api.route("/wiki-source", createWikiSourceRoutes({
+    registry: knowledgeModule.wikiSourceRegistry,
+    credentialStore: knowledgeModule.credentialStore,
+    wikiService: knowledgeModule.wikiService,
   }));
 
   // analytics — CH telemetry query endpoints (Panel dashboard)

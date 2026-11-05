@@ -60,6 +60,35 @@ describe("CodeGraph bridge indexing contract", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it("accepts a completed scan with a small number of file errors", async () => {
+    const root = projectRoot();
+    const CodeGraph = await codeGraphClass();
+    vi.spyOn(CodeGraph.prototype, "indexAll").mockResolvedValue({
+      success: true, filesDiscovered: 5000, filesIndexed: 4999,
+      filesSkipped: 0, filesErrored: 1,
+      errors: [{ severity: "error", code: "read_error", filePath: "vendor/broken.ts", message: "vendor file unreadable" }],
+    });
+    const instance = await indexProject(root);
+    instance.cg.close();
+  });
+
+  it.each([
+    { filesIndexed: 4989, filesErrored: 26, errors: [] },
+    { filesIndexed: 0, filesErrored: 1, errors: [] },
+    { filesIndexed: 4999, filesErrored: 1, errors: [{ severity: "error", message: "database failure" }] },
+    { filesIndexed: 4999, filesErrored: 1, errors: [{ severity: "error", code: "path_traversal", filePath: "../outside.ts" }] },
+    { filesIndexed: 5000, filesErrored: 0, errors: [{ severity: "error", code: "read_error", filePath: "vendor/broken.ts" }] },
+  ])("rejects excessive, wholly failed, or fatal scans: %j", async (counts) => {
+    const root = projectRoot();
+    const CodeGraph = await codeGraphClass();
+    const close = vi.spyOn(CodeGraph.prototype, "close");
+    vi.spyOn(CodeGraph.prototype, "indexAll").mockResolvedValue({
+      success: true, filesSkipped: 0, ...counts,
+    });
+    await expect(indexProject(root)).rejects.toThrow("CodeGraph index incomplete");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("exposes a handle when closing after an indexing failure also fails", async () => {
     const root = projectRoot();
     const CodeGraph = await codeGraphClass();

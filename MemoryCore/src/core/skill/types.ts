@@ -78,6 +78,13 @@ export interface SkillConfigInput {
   versionTtlDays?: number;
 
   /**
+   * 每个 skill 最多保留的**非 head** 版本数。默认 0（关闭）。
+   * 设 100 = 非 head 版本最多 100 个，超出则删最老的（head 永不受影响）。
+   * 与 versionTtlDays 取并集：两者同时开启时，谁更严谁生效。
+   */
+  maxVersions?: number;
+
+  /**
    * Skill 抽取 worker 池 (2026-07-30 引入)。整个进程一个池, 全 instance
    * 共享一条 skill agent 队列, 池里 N 条无状态 worker loop 从队列拿活。
    * 详见 docs/design/2026-07-30-skill-worker-instance-decoupling.md。
@@ -157,6 +164,9 @@ export interface ResolvedSkillConfig {
 
   /** 旧版本 TTL 秒数。0 = 关闭。 */
   versionTtlSeconds: number;
+
+  /** 每个 skill 最多保留的非 head 版本数。0 = 关闭。 */
+  maxNonHeadVersions: number;
 
   /** Skill 抽取 worker 池配置 (2026-07-30)。见 SkillConfigInput.worker 注释。 */
   worker: {

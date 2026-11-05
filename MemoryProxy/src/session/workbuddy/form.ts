@@ -72,6 +72,14 @@ export interface FormData {
   retry?: boolean;
   stream?: boolean;
   modelId?: string;
+  /**
+   * v3.3: 表单顶部追加的一行说明（账户默认回退原因等），拼进 question 前缀展示。
+   *
+   * WB 是 CB 状态机 + CC form shape 的混合体：`session/index.ts` 在 CB 产出
+   * formData 后**外层重渲染**成 WB form，转换时必须带上这个字段，否则账户默认
+   * 失效的原因在 WB 客户端上会静默丢失（其余客户端都有）。
+   */
+  notice?: string;
 }
 
 // ── AskUserQuestion input schema (与 CC 完全一致) ──────────────────────────────
@@ -84,8 +92,9 @@ interface WBAskQuestion {
 }
 
 function buildAskUserQuestionArgs(data: FormData): { questions: WBAskQuestion[] } {
-  const { teams, stage, selectedTeamId, retry } = data;
-  const titlePrefix = retry ? "⚠️ " : "";
+  const { teams, stage, selectedTeamId, retry, notice } = data;
+  // v3.3: 回退原因横幅 —— WB 无独立标题位, 与 CC 同款挂在每个 question 前缀上。
+  const titlePrefix = (retry ? "⚠️ " : "") + (notice ? `ℹ️ ${notice} ` : "");
   const questions: WBAskQuestion[] = [];
 
   if (stage === "asset_confirm") {

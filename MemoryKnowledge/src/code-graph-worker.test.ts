@@ -589,7 +589,63 @@ describe("failed CodeGraph retry with an untrusted canonical snapshot", () => {
     allowClose = true;
     expect(pool.tryPause("cg-1")).toBe(true);
     pool.resume("cg-1");
-    await worker(f.ctx);
-    expect(existsSync(firstCandidate)).toBe(false);
+    // Cleanup must complete even when the deleted asset is never built again.
+    await vi.waitFor(() => expect(existsSync(firstCandidate)).toBe(false));
+  });
+});
+
+describe("local CodeGraph rebuild", () => {
+  function localFixture() {
+    const f = fixture();
+    const resolveFetcher = vi.fn(() => f.fetcher);
+    const worker = createCodeGraphWorker({
+      instancePool: f.instancePool, fromLocalDir: true,
+      localCommitHash: async () => "local-commit", resolveFetcher,
+      indexOps: f,
+    });
+    writeFileSync(join(f.dir, "source.ts"), "export const value = 1;");
+    return { ...f, worker, resolveFetcher };
+  }
+
+  it("indexes an isolated copy and rolls back after metadata failure without fetching", async () => {
+    const f = localFixture();
+    f.indexProject.mockImplementation(async (path) => {
+      expect(path).not.toBe(f.dir);
+      expect(readFileSync(join(path, "source.ts"), "utf8")).toContain("value");
+      writeFileSync(join(path, ".codegraph", "index.db"), "new-index");
+      return { projectRoot: path, cg: {}, handler: {} } as CodeGraphInstance;
+    });
+    const result = await f.worker(f.ctx);
+    expect(result.commitHash).toBe("local-commit");
+    expect(readFileSync(join(f.dir, ".codegraph", "index.db"), "utf8")).toBe("new-index");
+    expect(f.resolveFetcher).not.toHaveBeenCalled();
+    await result.rollback?.();
+    expect(readFileSync(join(f.dir, ".codegraph", "index.db"), "utf8")).toBe("old-index");
+    expect(readFileSync(join(f.dir, "source.ts"), "utf8")).toContain("value");
+  });
+
+  it("keeps the last-good index when local indexing fails", async () => {
+    const f = localFixture();
+    f.indexProject.mockRejectedValue(new Error("local parse failed"));
+    await expect(f.worker(f.ctx)).rejects.toBeInstanceOf(PreservedCodeGraphError);
+    expect(readFileSync(join(f.dir, ".codegraph", "index.db"), "utf8")).toBe("old-index");
+    expect(f.resolveFetcher).not.toHaveBeenCalled();
+    expect(readdirSync(f.root)).toEqual(["graph"]);
+  });
+
+  it("rebuilds failed local source without copying the untrusted index", async () => {
+    const f = localFixture();
+    f.indexProject.mockImplementation(async (path) => {
+      expect(existsSync(join(path, ".codegraph"))).toBe(false);
+      expect(readFileSync(join(path, "source.ts"), "utf8")).toContain("value");
+      mkdirSync(join(path, ".codegraph"));
+      writeFileSync(join(path, ".codegraph", "index.db"), "rebuilt-index");
+      return { projectRoot: path, cg: {}, handler: {} } as CodeGraphInstance;
+    });
+    const result = await f.worker({ ...f.ctx, hadReadyIndex: false, preserveUntrustedCanonical: true });
+    expect(readFileSync(join(f.dir, ".codegraph", "index.db"), "utf8")).toBe("rebuilt-index");
+    expect(f.resolveFetcher).not.toHaveBeenCalled();
+    await result.rollback?.();
+    expect(readFileSync(join(f.dir, ".codegraph", "index.db"), "utf8")).toBe("old-index");
   });
 });

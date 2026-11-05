@@ -190,20 +190,26 @@ export function renderTextForm(data: FormData, options: BuildTextFormOptions = {
   const retry = options.retry;
   const pageIndex = data.pageIndex ?? 0;
 
-  switch (data.stage) {
-    case "asset_confirm":
-      return renderAssetConfirmText(retry);
-    case "team":
-      return renderTeamText(data.teams, pageIndex, retry);
-    case "agent_select":
-    case "agent_task": // legacy: 也当 agent 渲染
-      return renderAgentText(data.teams, data.selectedTeamId, pageIndex, retry);
-    case "task_select":
-      return renderTaskText(data.teams, data.selectedTeamId, pageIndex, retry);
-    default:
-      // Unreachable in practice, but keep a graceful fallback.
-      return renderBypassNotice();
-  }
+  const body = (() => {
+    switch (data.stage) {
+      case "asset_confirm":
+        return renderAssetConfirmText(retry);
+      case "team":
+        return renderTeamText(data.teams, pageIndex, retry);
+      case "agent_select":
+      case "agent_task": // legacy: 也当 agent 渲染
+        return renderAgentText(data.teams, data.selectedTeamId, pageIndex, retry);
+      case "task_select":
+        return renderTaskText(data.teams, data.selectedTeamId, pageIndex, retry);
+      default:
+        // Unreachable in practice, but keep a graceful fallback.
+        return renderBypassNotice();
+    }
+  })();
+
+  // v3.3: 账户默认失效原因横幅。文字模式没有 question 前缀可挂(不像卡片模式),
+  // 因此统一在最前面加一行, 保证 WB 文字模式下用户同样能看到"为什么没走默认"。
+  return data.notice ? `ℹ️ ${data.notice}\n\n${body}` : body;
 }
 
 /**

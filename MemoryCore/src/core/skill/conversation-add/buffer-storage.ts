@@ -90,6 +90,16 @@ export interface SkillTaskEntry {
    * 排查；对 Worker 调度逻辑无影响。
    */
   last_error?: string;
+  /**
+   * 抽取模式;仅在归档时 Handler 侧显式收到 body.strict_mode:true 时才写入
+   * 'strict'。默认路径 (老 client / conversation-add 阈值归档)不写此字段,
+   * Worker 消费时 head.mode === undefined,透传给 SkillExtractor 也是 undefined,
+   * 恒走 SKILL_REVIEW_PROMPT (v2 宽松) — 老 task 反序列化零影响。
+   *
+   * 冷启动 / 批量导入 (agents/asset-import.ts) 会传 strict_mode:true → 落
+   * mode:'strict' → SkillExtractor 用 SKILL_REVIEW_PROMPT_STRICT (v1 严格 gate)。
+   */
+  mode?: 'strict';
 }
 
 /** _tasks.json 整体结构。 */

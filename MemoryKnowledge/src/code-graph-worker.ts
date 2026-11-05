@@ -6,7 +6,7 @@ import { cp, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 
 import { CodeGraphHandleCloseError, closeIndex, getStats, indexProject, openIndex, syncIndex, type CodeGraphInstance } from "./engines/code/index.js";
-import { PreservedCodeGraphError, type CodeGraphWorker } from "./store/code-graph-service.js";
+import { PreservedCodeGraphError, type CodeGraphWorker, type CodeGraphBuildContext } from "./store/code-graph-service.js";
 import type { CodeGraphInstancePool } from "./module.js";
 import type { ISourceFetcher } from "./source-fetcher/index.js";
 
@@ -27,7 +27,10 @@ export interface CodeGraphIndexOps {
 
 export interface CodeGraphWorkerOptions {
   instancePool: CodeGraphInstancePool;
-  resolveFetcher: (repoUrl: string) => ISourceFetcher;
+  resolveFetcher: (repoUrl: string, context: CodeGraphBuildContext) => ISourceFetcher;
+  /** Rebuild an isolated copy of existing source files without network access. */
+  fromLocalDir?: boolean;
+  localCommitHash?: (dir: string) => Promise<string | undefined>;
   indexOps?: CodeGraphIndexOps;
   renameDir?: typeof rename;
   logger?: { warn: (message: string) => void };
@@ -60,7 +63,15 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
     leakedCandidates.set(id, entry);
     if (instancePool.retainUnclosed) {
       try {
-        instancePool.retainUnclosed(id, instance, () => { entry.closed = true; });
+        instancePool.retainUnclosed(id, instance, () => {
+          entry.closed = true;
+          // Delete and shutdown also drain the pool; another build may never run.
+          // Do not retain a closed handle in the worker until that hypothetical retry.
+          if (leakedCandidates.get(id) === entry) leakedCandidates.delete(id);
+          void rm(dir, { recursive: true, force: true }).catch((err) => {
+            logger?.warn(`[code-graph] could not remove closed candidate for ${id}: ${String(err)}`);
+          });
+        });
         entry.registered = true;
       } catch (err) {
         logger?.warn(`[code-graph] could not register unclosed candidate for ${id}: ${String(err)}`);
@@ -89,7 +100,19 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
       try { await rm(leaked.dir, { recursive: true, force: true }); }
       catch (err) { logger?.warn(`[code-graph] could not remove closed candidate for ${codeGraphId}: ${String(err)}`); }
     }
-    const fetcher = resolveFetcher(repoUrl);
+    const fromLocalDir = options.fromLocalDir === true;
+    let fetcher: ISourceFetcher | undefined;
+    try { fetcher = fromLocalDir ? undefined : resolveFetcher(repoUrl, context); }
+    catch (err) { throw hadReadyIndex ? new PreservedCodeGraphError(err) : err; }
+    const fetchSource = async (target: string) => {
+      if (!fromLocalDir) return fetcher!.fetch(repoUrl, branch, target);
+      // A failed index is not trusted. Copy source only and create a fresh index.
+      await cp(dir, target, {
+        recursive: true, mode: constants.COPYFILE_FICLONE, verbatimSymlinks: true,
+        filter: (source) => relative(dir, source).split(sep)[0] !== ".codegraph",
+      });
+      return { version: await options.localCommitHash?.(target) };
+    };
 
     // Stop new reads and wait for in-flight reads before touching an index.
     // Rollback must work even when the metadata store is the failed component.
@@ -103,7 +126,7 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
     };
 
     // There is no last-good version to preserve on the first build.
-    if (!hadReadyIndex && !preserveUntrustedCanonical) {
+    if (!hadReadyIndex && !preserveUntrustedCanonical && !fromLocalDir) {
       // An earlier initial build can fail after opening SQLite (for example,
       // while committing metadata). Drain and close that handle before rm.
       await withPausedIndex(undefined, async () => {
@@ -118,8 +141,8 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
 
       let instance: CodeGraphInstance | undefined;
       try {
-        setInternalStatus("cloning");
-        const result = await fetcher.fetch(repoUrl, branch, dir);
+        setInternalStatus(fromLocalDir ? "copying" : "cloning");
+        const result = await fetchSource(dir);
         setInternalStatus("indexing");
         instance = await indexOps.indexProject(dir);
         // Do not expose the handle until all worker-side steps have succeeded.
@@ -161,7 +184,7 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
       }
     }
 
-    if (preserveUntrustedCanonical) {
+    if (preserveUntrustedCanonical || (fromLocalDir && !hadReadyIndex)) {
       const candidateDir = join(dirname(dir), `.${basename(dir)}.candidate-${randomUUID()}`);
       const suspectDir = `${dir}.suspect`;
       let candidateInstance: CodeGraphInstance | undefined;
@@ -184,8 +207,8 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
         // but its status is failed: never expose it as a last-good index.
         await withPausedIndex(undefined, async () => { closeServingHandle(); });
         mkdirSync(candidateDir, { recursive: true });
-        setInternalStatus("cloning");
-        const fetched = await fetcher.fetch(repoUrl, branch, candidateDir);
+        setInternalStatus(fromLocalDir ? "copying" : "cloning");
+        const fetched = await fetchSource(candidateDir);
         setInternalStatus("indexing");
         candidateInstance = await indexOps.indexProject(candidateDir);
         const stats = statsFor(candidateInstance, indexOps);
@@ -306,11 +329,15 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
         // time, while queries can keep using the unchanged canonical index.
         instancePool.set(codeGraphId, await indexOps.openIndex(dir));
       });
-      setInternalStatus("fetching");
+      if (!fromLocalDir) setInternalStatus("fetching");
 
-      let version: string | null;
-      try {
-        const result = await fetcher.sync(repoUrl, branch, candidateDir);
+      let version: string | null | undefined;
+      if (fromLocalDir) {
+        setInternalStatus("indexing");
+        candidateInstance = await indexOps.indexProject(candidateDir);
+        version = await options.localCommitHash?.(candidateDir);
+      } else try {
+        const result = await fetcher!.sync(repoUrl, branch, candidateDir);
         version = result.version;
         setInternalStatus("indexing");
         candidateInstance = await indexOps.openIndex(candidateDir);
@@ -327,8 +354,8 @@ export function createCodeGraphWorker(options: CodeGraphWorkerOptions): CodeGrap
         candidateInstance = undefined;
         await rm(candidateDir, { recursive: true, force: true });
         mkdirSync(candidateDir, { recursive: true });
-        setInternalStatus("cloning");
-        const result = await fetcher.fetch(repoUrl, branch, candidateDir);
+        setInternalStatus(fromLocalDir ? "copying" : "cloning");
+        const result = await fetchSource(candidateDir);
         version = result.version;
         setInternalStatus("indexing");
         candidateInstance = await indexOps.indexProject(candidateDir);

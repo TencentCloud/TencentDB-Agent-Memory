@@ -565,3 +565,43 @@ describe("CodeGraphService refresh failure", () => {
     expect(row.sync_error).toBe("SQLite status write failed");
   });
 });
+
+
+describe("local build admission", () => {
+  it("rejects a lost CAS without queuing either worker", async () => {
+    const { row, store } = fixture("2026-01-01T00:00:00Z");
+    const root = mkdtempSync(join(tmpdir(), "knowledge-local-admission-"));
+    const dir = join(root, "svc-1", "team-1", "cg-1");
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    const worker = vi.fn(async () => ({}));
+    const localWorker = vi.fn(async () => ({}));
+    const admit = vi.spyOn(store, "tryAdmitCodeGraphSync").mockImplementation(() => {
+      row.version += 2;
+      return false;
+    });
+    const service = new CodeGraphService({ store, dataRoot: root, worker, localWorker });
+    try {
+      expect(service.build("svc-1", "team-1", "cg-1")).toEqual({ kind: "conflict" });
+      await service.onIdle();
+      expect(admit).toHaveBeenCalledWith("svc-1", "team-1", "cg-1", 1);
+      expect(worker).not.toHaveBeenCalled();
+      expect(localWorker).not.toHaveBeenCalled();
+      expect(row.status).toBe("ready");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("never falls back to a network worker when the local worker is missing", async () => {
+    const { row, store } = fixture("2026-01-01T00:00:00Z");
+    const root = mkdtempSync(join(tmpdir(), "knowledge-local-worker-"));
+    mkdirSync(join(root, "svc-1", "team-1", "cg-1", ".git"), { recursive: true });
+    const worker = vi.fn(async () => ({}));
+    const service = new CodeGraphService({ store, dataRoot: root, worker });
+    try {
+      expect(service.build("svc-1", "team-1", "cg-1").kind).toBe("ok");
+      await service.onIdle();
+      expect(worker).not.toHaveBeenCalled();
+      expect(row.sync_error).toContain("Local CodeGraph worker is not configured");
+      expect(row.status).toBe("ready");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});

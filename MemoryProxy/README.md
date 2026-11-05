@@ -210,7 +210,7 @@ Codex appears only as an agent-name routing boundary on an already-running proxy
 | `ALL`  | `/skill-bridge/**` | reverse-proxy for MemoryCore skill HTTP tools |
 | `ALL`  | `/memory-bridge/**` | reverse-proxy for MemoryCore memory HTTP tools |
 | `POST` | `/v3/instance/proxy-destroy` | ops endpoint: clear COS cache on instance destroy |
-| `GET/PUT/DELETE` | `/v3/admin/rate-limits` | query / modify per-instance × model TPM/QPM |
+| `GET/PUT/DELETE` | `/v3/admin/rate-limits` | query / modify global, per-instance (all models), and per-instance × model TPM/QPM |
 | `GET`  | `/health` | runtime health check (includes `storage.effective`) |
 | `GET`  | `/whoami` | API Key → keyId (plain text, handy with curl) |
 

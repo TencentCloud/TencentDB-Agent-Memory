@@ -6,6 +6,8 @@ import { FetchKernelHttpAdapter } from './kernel/adapters/fetch-kernel-http-adap
 import { FetchMetaKernelAdapter } from './kernel/adapters/fetch-meta-kernel-adapter.js';
 import { FetchSkillKernelAdapter } from './kernel/adapters/fetch-skill-kernel-adapter.js';
 import { FetchAnalyticsKernelAdapter } from './kernel/adapters/fetch-analytics-kernel-adapter.js';
+import { FetchTaskSourceAdapter } from './kernel/adapters/fetch-task-source-adapter.js';
+import type { TaskSourceKernelPort } from './kernel/ports/task-source-kernel-port.js';
 import type { KernelHttpPort } from './kernel/ports/kernel-http-port.js';
 import type { MetaKernelPort } from './kernel/ports/meta-kernel-port.js';
 import type { SkillKernelPort } from './kernel/ports/skill-kernel-port.js';
@@ -30,6 +32,8 @@ export interface PanelDeps {
   skillKernel: SkillKernelPort;
   /** 内核 /v3/analytics/* 查询面透明代理（GET/POST 按 action 分流）。 */
   analyticsKernel: AnalyticsKernelPort;
+  /** 内核 /v3/task-source/* 调用面（Task 外部来源导入，令牌随请求体透传）。 */
+  taskSourceKernel: TaskSourceKernelPort;
   /** Knowledge 抽取任务内存态：create 时 stash owner key，callback ready 时取出注册 meta asset。 */
   knowledgeTaskRegistry: KnowledgeTaskRegistry;
   /** Wiki ingest 细粒度进度（KS ingest_progress 回调写入；wiki/get 聚合读出）。 */
@@ -59,6 +63,7 @@ export function buildPanelDeps(config: PanelConfig): PanelDeps {
     });
   const skillKernel = new FetchSkillKernelAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
   const analyticsKernel = new FetchAnalyticsKernelAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
+  const taskSourceKernel = new FetchTaskSourceAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
   const knowledgeTaskRegistry = new KnowledgeTaskRegistry();
   const ingestProgressStore = new IngestProgressStore();
   // instance_id → gateway 参数：telemetry backfill 需要 per-instance 调 auth/verify
@@ -91,6 +96,7 @@ export function buildPanelDeps(config: PanelConfig): PanelDeps {
     knowledgeClientFactory,
     skillKernel,
     analyticsKernel,
+    taskSourceKernel,
     knowledgeTaskRegistry,
     ingestProgressStore,
     apiCallTelemetry,

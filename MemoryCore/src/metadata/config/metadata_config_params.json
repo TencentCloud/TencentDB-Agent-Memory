@@ -48,6 +48,18 @@
           "allowed_scopes": ["global", "user"]
         }
       ]
+    },
+    {
+      "module": "team_memory",
+      "description": "团队记忆实例级总开关 (system_admin only)",
+      "params": [
+        {
+          "param_name": "enabled",
+          "param_value": "1",
+          "description": "是否启用团队记忆全套能力(session_init + 4 类资产注入 + L0 写入 + mem 命令 + skill extract)。关闭后仅保留压缩路由、成本管控与普通转发。",
+          "allowed_scopes": ["global"]
+        }
+      ]
     }
   ]
 }

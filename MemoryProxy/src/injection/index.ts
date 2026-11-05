@@ -101,7 +101,9 @@ export {
 // ── Pipeline Factory ──────────────────────────────────────────────────────────
 
 import os from "os";
-import type { ProxyConfig } from "../types.js";
+import type { ProxyConfig, SelectionConfig } from "../types.js";
+import { DEFAULT_CONFIG } from "../config.js";
+import { ClientToolDelivery } from "../skill/selection/delivery/client-tool.js";
 import { InjectionPipeline } from "./pipeline.js";
 import { HookRegistryImpl } from "./registry.js";
 import { OpenAIAdapter } from "./adapters/openai.js";
@@ -140,6 +142,8 @@ interface PipelineBundle {
   pipeline: InjectionPipeline;
   registry: HookRegistry;
   hookCacheRepo?: HookCacheRepo;
+  /** skill 选择启用且策略可用时的交付器（与 pipeline 同生命周期）。 */
+  clientToolDelivery?: ClientToolDelivery;
 }
 
 let cachedBundle: PipelineBundle | null = null;
@@ -253,6 +257,14 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   // Register configured injectors. Each injector reads its own kernel config
   // (`coreSkill`, `tdai`, ...); there is no shared external endpoint anymore.
   const injectors = config.injection?.injectors ?? [];
+  let clientToolDelivery: ClientToolDelivery | undefined;
+
+  // Skill 链路 —— selection.enabled 决定注册 legacy 的「目录 + 工具说明」还是
+  // 「proxy 侧策略选择 + 客户端加载」。两条链路都需要 proxyBaseUrl（后者用于
+  // 下发给客户端的加载命令地址，必须跨节点稳定）。
+  const skillSelection = config.skillRuntime?.selection;
+  const skillSelectionEnabled = skillSelection?.enabled === true;
+  const needsSkillToolsUrl = injectors.includes("skill");
 
   // proxyBaseUrl 在 skill-tools-injector 和 tdai-tools-injector 之间共享。
   //
@@ -263,7 +275,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   //
   // 未配时 fallback 到本机 host:port（仅单节点 / 本地开发场景可用），启动时 warn 一次。
   let proxyBaseUrl: string | undefined;
-  if (injectors.includes("skill") || (injectors.includes("tdai-memory") && config.tdai.enabled)) {
+  if (needsSkillToolsUrl || (injectors.includes("tdai-memory") && config.tdai.enabled)) {
     const externalBase = config.injection?.externalGatewayUrl;
     if (externalBase && externalBase.length > 0) {
       proxyBaseUrl = externalBase.replace(/\/$/, "");
@@ -297,18 +309,69 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   }
 
   if (injectors.includes("skill")) {
-    // RAG-driven `<cloud_skills>` block. Calls /v3/skill/search at prewarm time.
-    // When coreSkill is unconfigured (no serviceToken), the searchSkills call
-    // will fail and the injector silently degrades to no <cloud_skills> block.
-    registry.register(
-      new SkillInjector({ coreSkill: config.coreSkill }),
-    );
+    // ── 两种 skill 链路互斥 ────────────────────────────────────────────────
+    //
+    // legacy (默认, selection.enabled=false): `<available_skills>` 目录 +
+    //   `<skill_tools>` curl 说明, 由主模型自己判断并 curl skill_view 加载。
+    //
+    // selection (enabled=true 且策略可用): 不注入目录、不注入工具说明; 在新用户轮次
+    //   由 handler 调交付器选 0..1 个 skill，直接返回 tool_use 让客户端加载。
+    //
+    // ⚠️ 必须是「不注册」而不是「让旧 injector 返回空」——SkillInjector /
+    // SkillToolsInjector 的 cacheStrategy 是 session_init, pipeline 命中缓存时
+    // 直接读缓存、根本不会调 execute(), 返回空拦不住已缓存的工具说明。
+    //
+    // 策略不可用（如未配 apiKey）时在**构建期**回退 legacy：bundle 按配置 hash 缓存，
+    // 同一份配置始终走同一条链路，不会出现运行期在两条链路间来回切换（破坏前缀缓存）。
+    // 运行期的单次失败（超时 / 非法响应）仍按「本轮不加载」处理，不回退。
+    let selectionActive = false;
+    if (skillSelectionEnabled && skillSelection) {
+      // 未注册的策略名在这里抛错 —— 配置错误应在启动期暴露。
+      const delivery = new ClientToolDelivery({
+        selection: skillSelection,
+        strategies: (config.selection ?? DEFAULT_CONFIG.selection!).strategies,
+        coreSkill: config.coreSkill,
+        defaultTaskId: config.sessionInit?.defaultTaskId,
+        proxyBaseUrl: proxyBaseUrl!,
+      });
+      if (delivery.service.strategy.isUsable()) {
+        clientToolDelivery = delivery;
+        selectionActive = true;
+        console.log(
+          `[injection] skill selection enabled strategy=${skillSelection.strategy} `
+            + `candidates<=${skillSelection.maxCandidates} — legacy skill catalog/tools injectors disabled`,
+        );
+      } else {
+        console.warn(
+          `[injection] skillRuntime.selection.strategy=${skillSelection.strategy} is not configured `
+            + "(e.g. missing API key) — falling back to legacy skill catalog/tools injectors.",
+        );
+      }
+    }
 
-    // Always inject the curl-recipe `<skill_tools>` block alongside the
-    // dynamic `<cloud_skills>` block. Even when there are no skills to
-    // recommend, the LLM still needs to know how to create / search them.
-    const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
-    registry.register(new SkillToolsInjector({ proxyBaseUrl: proxyBaseUrl!, allowLlmWrite }));
+    if (!selectionActive) {
+      // RAG-driven `<cloud_skills>` block. Calls /v3/skill/search at prewarm time.
+      // When coreSkill is unconfigured (no serviceToken), the searchSkills call
+      // will fail and the injector silently degrades to no <cloud_skills> block.
+      //
+      // `defaultTaskId` (from sessionInit config, defaults to "default") is passed
+      // through so the injector can detect the virtual default-task fallback and
+      // switch to activity-based recall. When absent (deployment 关闭了默认 task),
+      // activity 模式 gate 永远为 false, listing 走原 BM25 逻辑 —— 完全向后兼容。
+      // 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+      registry.register(
+        new SkillInjector({
+          coreSkill: config.coreSkill,
+          defaultTaskId: config.sessionInit?.defaultTaskId,
+        }),
+      );
+
+      // Always inject the curl-recipe `<skill_tools>` block alongside the
+      // dynamic `<cloud_skills>` block. Even when there are no skills to
+      // recommend, the LLM still needs to know how to create / search them.
+      const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
+      registry.register(new SkillToolsInjector({ proxyBaseUrl: proxyBaseUrl!, allowLlmWrite }));
+    }
   }
 
   if (injectors.includes("knowledge")) {
@@ -432,7 +495,18 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     })(),
   }, observer);
 
-  return { pipeline, registry, hookCacheRepo };
+  return { pipeline, registry, hookCacheRepo, clientToolDelivery };
+}
+
+/** 把各策略参数里的 apiKey 替换为 `<set>` / ""，用于 hash，不泄露明文。 */
+function redactSelectionSecrets(selection: SelectionConfig | undefined): unknown {
+  if (!selection) return undefined;
+  const strategies: Record<string, unknown> = {};
+  for (const [name, params] of Object.entries(selection.strategies ?? {})) {
+    const p = (params ?? {}) as unknown as Record<string, unknown>;
+    strategies[name] = "apiKey" in p ? { ...p, apiKey: p.apiKey ? "<set>" : "" } : p;
+  }
+  return { strategies };
 }
 
 function getOrBuildBundle(config: ProxyConfig): PipelineBundle {
@@ -441,6 +515,12 @@ function getOrBuildBundle(config: ProxyConfig): PipelineBundle {
     tdai: config.tdai,
     coreSkill: config.coreSkill,
     knowledge: config.knowledge,
+    // skillRuntime 决定注册 legacy 还是 selection 的 skill injector（以及
+    // allowLlmWrite 影响 <skill_tools> 内容），必须参与 hash —— 否则改了
+    // selection.enabled 仍会命中旧 bundle，注册的 injector 与配置不一致。
+    // 策略密钥以 set/unset 参与（仍能反映「配上密钥」这一变化），不放明文。
+    skillRuntime: config.skillRuntime,
+    selection: redactSelectionSecrets(config.selection),
     server: config.server,
   });
   if (cachedBundle && cachedConfigHash === configHash) {
@@ -457,6 +537,16 @@ function getOrBuildBundle(config: ProxyConfig): PipelineBundle {
  */
 export function getInjectionPipeline(config: ProxyConfig): InjectionPipeline {
   return getOrBuildBundle(config).pipeline;
+}
+
+/**
+ * skill 选择启用且策略可用时返回交付器，否则 null（含 injection 未启用 /
+ * 未配置 skill injector / 策略不可用而回退 legacy）。与 pipeline 共用同一份 bundle 缓存。
+ */
+export function getClientToolDelivery(config: ProxyConfig): ClientToolDelivery | null {
+  if (!config.injection?.enabled || !(config.injection.injectors ?? []).includes("skill")) return null;
+  if (!config.skillRuntime?.selection?.enabled) return null;
+  return getOrBuildBundle(config).clientToolDelivery ?? null;
 }
 
 /**

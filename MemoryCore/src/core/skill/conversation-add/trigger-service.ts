@@ -53,6 +53,11 @@ export interface TriggerArchiveInput {
    */
   maxIterations?: number;
   /**
+   * 抽取模式;仅当 handler 收到 body.strict_mode:true 时传入 'strict',落到
+   * SkillTaskEntry.mode。缺省不写字段,恒走 default (SKILL_REVIEW_PROMPT v2 宽松)。
+   */
+  mode?: 'strict';
+  /**
    * 上游 handler 生成的 request_id。传入后 trigger 内部分段 obsLogger 事件
    * 会带上，方便按 req_id 过滤 handler + trigger + worker 全链路。缺省不影响功能。
    */
@@ -137,6 +142,9 @@ export class SkillTriggerService {
       enqueued_at_ms: archivedAtMs,
       reason: input.reason,
       max_iterations: input.maxIterations,
+      // mode 只在 strict 时写入; 默认 undefined 让老 task 反序列化 + 老 Worker
+      // 消费路径都跟历史一致 (extract() 不传 mode → SKILL_REVIEW_PROMPT)。
+      ...(input.mode ? { mode: input.mode } : {}),
     };
 
     // [obs] 归档段五个关键 IO：writeArchive / mutex acquire / readTasks /

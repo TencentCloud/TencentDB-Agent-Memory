@@ -4,6 +4,10 @@ set -euo pipefail
 # 先确保 config 目录存在，避免用户 bind-mount 文件时父目录缺失被当成目录挂载。
 mkdir -p /app/panel/config "${KNOWLEDGE_DATA_DIR:-/data/knowledge}" "$(dirname "${KNOWLEDGE_DB_PATH:-/data/knowledge/knowledge.db}")"
 
+# SSH 密钥目录（每用户一对 RSA，落在持久化数据卷内；代码仓 clone 用）
+mkdir -p "${KNOWLEDGE_SSH_KEY_DIR:-${KNOWLEDGE_DATA_DIR:-/data/knowledge}/ssh-keys}"
+chmod 700 "${KNOWLEDGE_SSH_KEY_DIR:-${KNOWLEDGE_DATA_DIR:-/data/knowledge}/ssh-keys}" 2>/dev/null || true
+
 # 用户可通过挂载 /app/panel/config/metadata-instances.json 提供多实例配置；
 # 此时 REMOTE_INSTANCE_* env 不再必需，脚本也不会覆盖该文件。
 INSTANCES_FILE="/app/panel/config/metadata-instances.json"
@@ -64,6 +68,7 @@ export API_PREFIX="${API_PREFIX:-/v3}"
 export KNOWLEDGE_DATA_DIR="${KNOWLEDGE_DATA_DIR:-/data/knowledge}"
 export KNOWLEDGE_DB_PATH="${KNOWLEDGE_DB_PATH:-/data/knowledge/knowledge.db}"
 export TDAI_AGENT_TEMPLATE_DIR="${TDAI_AGENT_TEMPLATE_DIR:-/data/knowledge/agent-templates}"
+export KNOWLEDGE_SSH_KEY_DIR="${KNOWLEDGE_SSH_KEY_DIR:-${KNOWLEDGE_DATA_DIR}/ssh-keys}"
 export KNOWLEDGE_PUBLIC_BASE_URL="${KS_PUBLIC_URL}"
 export TMC_CALLBACK_URL="${TMC_CALLBACK_URL:-http://127.0.0.1:${PANEL_PORT}}"
 

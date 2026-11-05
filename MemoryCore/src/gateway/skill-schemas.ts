@@ -208,6 +208,20 @@ export const listingRequestSchema = z.object({
   ...idFieldsShape,
   query: z.string().max(2048).optional(),
   char_budget: z.number().int().min(0).max(64_000).optional(),
+  /**
+   * 召回模式:
+   *  - undefined / 'auto': 走原逻辑 —— query 非空走 search, 空走 mode=full head
+   *  - 'activity': default-task 活跃度召回 —— 读 skill_usage_logs 按 MRR 排序
+   *
+   * 设计: docs/design/2026-09-09-skill-usage-telemetry-and-default-task-recall.md
+   *
+   * `activity` 模式在下列任一情况会自动 fallback 到原逻辑, 完全向后兼容:
+   *   - CH 未配置 (analytics.clickhouse.enabled=false 或 endpoint 空)
+   *   - CH 查询失败 / 超时
+   *   - 该 agent 近 30 天 0 活跃 skill (冷启动)
+   *   - store 批查异常
+   */
+  mode: z.enum(["auto", "activity"]).optional(),
 }).superRefine(refineAgentNeedsTeam);
 
 /**
@@ -237,6 +251,12 @@ export const extractRequestSchema = z.object({
   options: z.object({
     max_iterations: z.number().int().min(1).max(64).optional(),
   }).optional(),
+  /**
+   * 冷启动/批量导入场景 (agents/asset-import.ts) 显式传 true 触发严格 gate 抽取
+   * (SKILL_REVIEW_PROMPT_STRICT v1 五分类+四维打分)。日常实时调用不传即可,
+   * 走当前 v2 SKILL_REVIEW_PROMPT (宽松, 广召回), 老 client 完全兼容。
+   */
+  strict_mode: z.boolean().optional(),
 });
 
 /**
@@ -260,6 +280,13 @@ export const conversationAddRequestSchema = z.object({
   agent_id: z.string().min(1).refine((v) => !v.includes("|"), "agent_id must not contain '|'"),
   task_id: z.string().min(1).max(128).optional(),
   messages: z.array(conversationMessageSchema).min(1).max(500),
+  /**
+   * 冷启动/批量导入场景 (agents/asset-import.ts) 显式传 true 触发严格 gate 抽取
+   * (SKILL_REVIEW_PROMPT_STRICT v1 五分类+四维打分)。归档时 handler 把该字段
+   * 存进 SkillTaskEntry.mode='strict', worker 拿到后透传给 SkillExtractor。
+   * 老 client 不传即可, 走当前 v2 SKILL_REVIEW_PROMPT (宽松, 广召回), 零回归。
+   */
+  strict_mode: z.boolean().optional(),
 });
 
 // ═════════════════════════════════════════════════════════════════════

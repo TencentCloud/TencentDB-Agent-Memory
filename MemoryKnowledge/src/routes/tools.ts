@@ -363,7 +363,7 @@ async function executeWikiTool(
       if (!Array.isArray(filenames) || filenames.length === 0) {
         return Response.json(wrapError(400, "filenames is required (non-empty array)"), { status: 400 });
       }
-      const result = wikiService.rawReadMany(serviceId, team_id, wiki_id, filenames as string[]);
+      const result = await wikiService.rawReadMany(serviceId, team_id, wiki_id, filenames as string[]);
       return Response.json(wrapOk({ items: result }));
     }
     default:

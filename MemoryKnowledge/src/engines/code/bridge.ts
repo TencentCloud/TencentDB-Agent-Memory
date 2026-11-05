@@ -122,13 +122,29 @@ function assertCompleteIndex(result: any): void {
   const discovered = result?.filesDiscovered;
   const accounted = (result?.filesIndexed ?? 0) + (result?.filesSkipped ?? 0) + (result?.filesErrored ?? 0);
   const errors = Array.isArray(result?.errors) ? result.errors : [];
+  const fileErrors = errors.filter((error: any) => error?.severity === "error" &&
+    typeof error.filePath === "string" && error.filePath.length > 0 &&
+    (error.code === "read_error" || error.code === "parse_error"));
+  const failedFiles = new Set(fileErrors.map((error: any) => error.filePath));
+  // Tolerate isolated file failures, but never an engine-wide error or an
+  // index with no usable files. Large repositories get a 0.5% error budget.
+  const toleratedFileErrors = Math.max(10, Math.floor(accounted * 0.005));
   if (
     result?.success === true &&
     [result.filesIndexed, result.filesSkipped, result.filesErrored].every((count) => Number.isInteger(count) && count >= 0) &&
-    result?.filesErrored === 0 &&
+    result.filesErrored <= toleratedFileErrors &&
+    (result.filesErrored === 0 || result.filesIndexed + result.filesSkipped > 0) &&
     (discovered === undefined || (Number.isInteger(discovered) && discovered >= 0 && accounted >= discovered)) &&
-    !errors.some((error: any) => error.severity === "error")
-  ) return;
+    failedFiles.size <= result.filesErrored &&
+    !errors.some((error: any) => error?.severity === "error" && !fileErrors.includes(error))
+  ) {
+    if (result.filesErrored > 0) {
+      log.warn("CodeGraph index completed with file errors", {
+        filesErrored: result.filesErrored, filesAccounted: accounted, toleratedFileErrors,
+      });
+    }
+    return;
+  }
   const detail = errors.slice(0, 3).map((error: any) => error.message).filter(Boolean).join("; ");
   throw new Error(`CodeGraph index incomplete${detail ? `: ${detail}` : ""}`);
 }

@@ -11,10 +11,12 @@ cc-session-reset-smoke.py —— 用 pexpect PTY 起真 Claude Code 交互式会
   5. 再发一条消息 → form 再次弹出(证明 reset 生效)
 
 依赖: pexpect (`pip install pexpect`)
-环境: CLAUDE_CONFIG_DIR 指向 ~/.claude-inter (已配 proxy base_url)
+环境变量:
+    CLAUDE_CONFIG_DIR   指向一个已配好 proxy base_url 的 CC 配置目录
+                        (若未设, 透传当前环境, 让 claude 自己找)
 
 用法:
-    python3 scripts/qa/cc-session-reset-smoke.py
+    CLAUDE_CONFIG_DIR=~/.my-claude-cfg python3 scripts/qa/cc-session-reset-smoke.py
     python3 scripts/qa/cc-session-reset-smoke.py --log /tmp/cc-reset.log
 """
 import argparse
@@ -80,11 +82,11 @@ def main():
 
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
-    env["CLAUDE_CONFIG_DIR"] = os.path.expanduser("~/.claude-inter")
+    # 若调用方已设 CLAUDE_CONFIG_DIR 则沿用, 否则不动, 让 claude 走默认
     # 防止 CC 自动更新检查
     env["CLAUDE_DISABLE_UPDATE_CHECK"] = "1"
 
-    print(f"[INFO] CLAUDE_CONFIG_DIR={env['CLAUDE_CONFIG_DIR']}")
+    print(f"[INFO] CLAUDE_CONFIG_DIR={env.get('CLAUDE_CONFIG_DIR', '<default>')}")
     print(f"[INFO] cwd={args.cwd}")
     print(f"[INFO] log={args.log}")
     print()

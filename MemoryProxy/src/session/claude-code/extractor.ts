@@ -17,7 +17,12 @@ import { SKIP_LABEL, MORE_LABEL, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./f
 
 // ── Markers ────────────────────────────────────────────────────────────────────
 
-const SKIP_RE = /跳过|不关联|skip/i;
+// SKIP_RE（`/跳过|不关联|skip/i` 自由文本正则）已于 2026-09-21 删除：它历史上
+// 作为"用户自由文本回复 → BYPASS"的兜底路径，但 team/agent/task 阶段的 CC
+// form 现在**不再提供主动跳过按钮**（唯一入口是 asset_confirm 的
+// ASSET_CONFIRM_NO），这条兜底既无正当业务场景又会误伤。删除后契约变成：
+// extractor 只识别 SKIP_LABEL 精确文本；匹配失败一律 return null → 上层
+// attemptCount ≥ maxRetries 兜底。
 export const BYPASS_MARKER = "__bypass__" as const;
 export const MORE_MARKER = "__more__" as const;
 
@@ -211,8 +216,9 @@ export function extractTeamFromOptionText(
 
   const teamText = extractAnswerFromJson(content);
 
-  // 检测"本次不关联"→ bypass
-  if (teamText && (teamText.includes(SKIP_LABEL) || SKIP_RE.test(teamText.trim()))) {
+  // 检测"本次不关联"→ bypass（只识别 SKIP_LABEL 精确文本，SKIP_RE 自由文本
+  // 兜底已删，见文件顶部说明）
+  if (teamText && teamText.includes(SKIP_LABEL)) {
     return BYPASS_MARKER;
   }
 
@@ -336,15 +342,11 @@ export function extractTaskFromOptionText(
   // 翻页
   if (answer.includes(MORE_LABEL)) return MORE_MARKER;
 
-  // 兼容旧表单：用户手打 "跳过 / skip / 不关联" → 显式 bypass。注意：defaultTaskId
-  // 虚拟条目的 label 是"暂时跳过"，SKIP_RE 会命中，所以先尝试正常匹配
-  // 再走 bypass。
+  // 先尝试正常匹配 —— defaultTaskId 虚拟条目的 label 是"暂时跳过"，能命中
+  // matchTaskInTeam 返回 defaultTaskId（不算 BYPASS）。SKIP_RE 自由文本兜底
+  // 已删（见文件顶部说明），未命中一律 return null，交由上层 attemptCount 兜底。
   const taskId = matchTaskInTeam(answer, team);
   if (taskId) return taskId;
-
-  if (SKIP_RE.test(answer.trim())) {
-    return BYPASS_MARKER;
-  }
 
   return null;
 }
@@ -377,8 +379,9 @@ export function extractFromOptionText(
     return { agent_id: MORE_MARKER };
   }
 
-  // 检测 "本次不关联" → bypass
-  if (agentText && (agentText.includes(SKIP_LABEL) || SKIP_RE.test(agentText.trim()))) {
+  // 检测 "本次不关联" → bypass（只识别 SKIP_LABEL 精确文本，SKIP_RE 自由文本
+  // 兜底已删，见文件顶部说明）
+  if (agentText && agentText.includes(SKIP_LABEL)) {
     return { agent_id: BYPASS_MARKER };
   }
 
@@ -388,12 +391,11 @@ export function extractFromOptionText(
   if (!agentId) agentId = matchAgentInTeam(content, team);
   if (!agentId) return null;
 
-  // Resolve task
+  // Resolve task —— SKIP_RE 自由文本兜底已删（见文件顶部说明），无条件调用
+  // matchTaskInTeam；未命中即保持 taskId=undefined 走默认 task 逻辑。
   let taskId: string | undefined;
   const taskHay = taskText ?? content;
-  if (!SKIP_RE.test(taskHay)) {
-    taskId = matchTaskInTeam(taskHay, team);
-  }
+  taskId = matchTaskInTeam(taskHay, team);
 
   return { agent_id: agentId, task_id: taskId };
 }

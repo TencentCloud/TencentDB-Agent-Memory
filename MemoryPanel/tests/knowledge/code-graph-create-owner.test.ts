@@ -98,7 +98,9 @@ describe('CodeGraph idempotent create owner credential', () => {
     const response = await f.post();
 
     expect(response.status).toBe(200);
-    expect(f.codeGraphCreate).toHaveBeenCalledWith('team-1', 'https://example.com/repo', undefined, 'user-b', undefined);
+    expect(f.codeGraphCreate).toHaveBeenCalledWith('team-1', 'https://example.com/repo', undefined, 'user-b', undefined, {
+      providerId: undefined, secret: undefined, username: undefined,
+    });
     expect(f.codeGraphGet).not.toHaveBeenCalled();
     expect(f.metaInvoke).not.toHaveBeenCalledWith('asset/create', expect.anything(), expect.anything());
     expect(f.taskRegistry.peek('cg-1')).toMatchObject({ owner_user_id: 'user-a', owner_user_key: 'key-a' });

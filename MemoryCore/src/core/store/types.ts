@@ -254,6 +254,8 @@ export interface StoreCapabilities {
   ftsSearch: boolean;
   /** Whether native hybrid search is supported (e.g., TCVDB hybridSearch). */
   nativeHybridSearch: boolean;
+  /** FTS accepts raw text and returns normalized BM25 scores without client fusion. */
+  nativeBm25Search?: boolean;
   /** Whether the store supports sparse vectors (BM25 encoding). */
   sparseVectors: boolean;
   /**
@@ -405,7 +407,8 @@ export type TeamStatus = "active" | "archived";
 export type UserStatus = "active" | "inactive";
 export type AgentStatus = "active" | "inactive";
 export type AgentVisibility = "team" | "restricted";
-export type TaskSourceType = "manual" | "github" | "tapd" | "other";
+/** 大类，不含具体来源（来源读 metadata_json.external.provider）。 */
+export type TaskSourceType = "manual" | "external" | "other";
 
 export interface TeamEntity {
   team_id: string;

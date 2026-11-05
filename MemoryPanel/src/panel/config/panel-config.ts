@@ -22,6 +22,11 @@ function envInt(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** 收敛到 [min, max]：非法/越界配置不至于让服务异常，与 KS 侧 clamp 语义一致。 */
+function clampInt(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
 /** 可选 ClickHouse API 调用审计配置。enabled=false 或 url 为空时全静默跳过。 */
 export interface PanelClickHouseConfig {
   enabled: boolean;
@@ -114,6 +119,17 @@ export interface PanelConfig {
   featureAnalyticsEnabled: boolean;
   /** 可选 ClickHouse API 调用审计。不配则全静默不上报。 */
   clickhouse: PanelClickHouseConfig;
+  /**
+   * wiki 源文件上传限制。与 KS 侧共用同名环境变量（`WIKI_TEXT_FILE_MAX_BYTES` /
+   * `WIKI_BINARY_FILE_MAX_BYTES`）——标准部署下 Panel 与 Knowledge 同处 memory-hub 容器、
+   * 共用同一份 .env，两端保持同名才不会出现「Panel 放行、KS 拒绝」的割裂。
+   */
+  wiki: {
+    /** 单文件·文本档上限（字节），默认 512KB。 */
+    textFileMaxBytes: number;
+    /** 单文件·富文档档上限（字节），默认 10MB。 */
+    binaryFileMaxBytes: number;
+  };
   auth: PanelAuthConfig;
 }
 
@@ -144,6 +160,23 @@ export interface PanelAuthConfig {
      * 默认 'local' 与 Core 的 DEFAULT_AUTH_PROVIDER 对齐（零配置即一致）。
      */
     authProvider: string;
+  };
+  /**
+   * 任务看板「导入 Task」的第三方来源。
+   *
+   * 所有地址与客户端标识**全部来自配置、无内置默认值**：它们属内网基础设施信息，
+   * 硬编码进源码既是信息暴露，也会让漏配退化成「跳到错误地址且无报错」的静默错误。
+   * 缺失时由使用点显式抛错（fail-fast）。
+   */
+  taskSource: {
+    /** 启用的来源 id（逗号分隔）。空 → 面板不显示「导入 Task」入口。 */
+    enabled: string[];
+    tapd: {
+      /** MCP 资源地址（Core 侧端点）。 */
+      mcpUrl: string;
+      /** 站点根：详情页 URL 构造（task 接口不返回 detail_link）。 */
+      siteBaseUrl: string;
+    };
   };
 }
 
@@ -201,6 +234,16 @@ function buildAuthConfig(): PanelAuthConfig {
         'local',
       ),
     },
+    taskSource: {
+      enabled: env('TASK_SOURCE_ENABLED', '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      tapd: {
+        mcpUrl: env('TASK_SOURCE_TAPD_MCP_URL', ''),
+        siteBaseUrl: env('TASK_SOURCE_TAPD_SITE_BASE_URL', ''),
+      },
+    },
   };
 }
 
@@ -242,6 +285,15 @@ export function loadPanelConfig(): PanelConfig {
       flushThreshold: envInt('PANEL_CLICKHOUSE_FLUSH_THRESHOLD', 50),
       ttlDays: envInt('PANEL_CLICKHOUSE_TTL_DAYS', 90),
       requestTimeoutMs: envInt('PANEL_CLICKHOUSE_REQUEST_TIMEOUT_MS', 5000),
+    },
+    // 与 KS 侧同名同默认值（两端通常共用一份 .env），详见接口注释。
+    wiki: {
+      textFileMaxBytes: clampInt(envInt('WIKI_TEXT_FILE_MAX_BYTES', 512 * 1024), 1024, 100 * 1024 * 1024),
+      binaryFileMaxBytes: clampInt(
+        envInt('WIKI_BINARY_FILE_MAX_BYTES', 10 * 1024 * 1024),
+        1024,
+        200 * 1024 * 1024,
+      ),
     },
     auth: buildAuthConfig(),
   };
