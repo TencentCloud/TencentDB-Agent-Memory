@@ -473,6 +473,7 @@ export const enUS = {
   'code.status.error': 'Error',
   'code.status.missing': 'Missing',
   'code.statusHint.processing': ' · May take several minutes',
+  'code.statusHint.terminal': 'Automatic checks stopped. Use Sync to retry.',
   'code.teamPool': 'Team Code Pool',
   'code.teamPool.short': 'Team Pool',
   'code.fixedAsset': 'Fixed Asset · {{agent}}',

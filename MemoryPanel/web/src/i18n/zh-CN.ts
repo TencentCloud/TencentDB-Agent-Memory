@@ -463,6 +463,7 @@ export const zhCN = {
   'code.status.error': '错误',
   'code.status.missing': '已丢失',
   'code.statusHint.processing': ' · 可能需要数分钟',
+  'code.statusHint.terminal': '已停止自动检查。点击“同步”可重试。',
   'code.teamPool': '团队 Code 池',
   'code.teamPool.short': '团队池',
   'code.fixedAsset': '固定资产 · {{agent}}',

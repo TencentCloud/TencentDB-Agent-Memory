@@ -14,6 +14,7 @@ import { formatRepoName, formatShortTime, isSshGitUrl, isValidGitUrl, SSH_SOURCE
 import { CodeOwnerLabel, statusLabel } from './code-ui';
 import { useCodeSources } from '../hooks/useCodeSources';
 import { CodeDetailView } from './code-detail-view';
+import CodeGraphFailureNotice from './CodeGraphFailureNotice';
 import '@/components/asset/asset-card.css';
 import '../styles/code-sources-panel.css';
 
@@ -262,6 +263,7 @@ export default function CodeSourcesPanel() {
                     <div className="_codelist-card-id">
                       {t('code.card.id', { id: source.code_graph_id })}
                     </div>
+                    <CodeGraphFailureNotice status={source.status} sync_error={source.sync_error} />
                     <div
                       className="_codelist-card-actions"
                       onClick={(event) => event.stopPropagation()}
@@ -335,8 +337,8 @@ export default function CodeSourcesPanel() {
                 {
                   key: 'status',
                   header: t('code.table.status'),
-                  width: 120,
-                  render: (source) => statusLabel(t, source.status),
+                  width: 220,
+                  render: (source) => <>{statusLabel(t, source.status)}<CodeGraphFailureNotice status={source.status} sync_error={source.sync_error} /></>,
                 },
                 {
                   key: 'branch',
