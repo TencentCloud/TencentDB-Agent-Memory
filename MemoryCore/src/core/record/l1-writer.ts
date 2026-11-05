@@ -178,11 +178,22 @@ export async function writeMemory(params: {
   embeddingService?: EmbeddingService;
   /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
   storage?: StorageAdapter;
+  /**
+   * Return null unless the write reaches the searchable VectorStore index.
+   * Used by explicit-memory ingest (#417): a host-native durable-memory write
+   * must be retrievable via memory search, so a JSONL-only write is not enough.
+   */
+  requireVectorStoreWrite?: boolean;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage } = params;
+  const { memory, decision, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, vectorStore, embeddingService, storage, requireVectorStoreWrite = false } = params;
 
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
+    return null;
+  }
+
+  if (requireVectorStoreWrite && !vectorStore) {
+    logger?.warn?.(`${TAG} VectorStore write required but VectorStore is unavailable; rejecting memory write`);
     return null;
   }
 
@@ -327,6 +338,15 @@ export async function writeMemory(params: {
             `norm=${Math.sqrt(Array.from(embedding).reduce((s, v) => s + v * v, 0)).toFixed(4)}`,
           );
         } catch (embedErr) {
+          if (requireVectorStoreWrite) {
+            // Explicit-memory ingest (#417): the memory must be searchable, so
+            // a metadata-only write is not acceptable — fail the whole write.
+            logger?.warn?.(
+              `${TAG} [vec-dual-write] Embedding FAILED for id=${record.id}, ` +
+              `required vector write rejected: ${embedErr instanceof Error ? embedErr.message : String(embedErr)}`,
+            );
+            throw embedErr;
+          }
           // Embedding failed — pass undefined to upsert() which writes
           // metadata + FTS only, skipping the vec0 table.
           logger?.warn(
@@ -338,12 +358,21 @@ export async function writeMemory(params: {
 
       const upsertOk = await vectorStore.upsertL1(record, embedding);
       logger?.debug?.(`${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`);
+      if (requireVectorStoreWrite && !upsertOk) {
+        logger?.warn?.(
+          `${TAG} [vec-dual-write] upsert returned false for required write id=${record.id}`,
+        );
+        throw new Error(`VectorStore upsert failed for explicit memory ${record.id}`);
+      }
     } catch (err) {
+      if (requireVectorStoreWrite) throw err;
       // Vector write failure should NOT block the main JSONL write
       logger?.warn?.(
         `${TAG} [vec-dual-write] FAILED (JSONL already written) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  } else if (requireVectorStoreWrite) {
+    throw new Error("VectorStore write required but VectorStore is unavailable");
   } else {
     logger?.debug?.(
       `${TAG} [vec-dual-write] SKIPPED id=${record.id}: vectorStore=${!!vectorStore}`,
