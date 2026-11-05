@@ -43,6 +43,7 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
     setSubView,
     fetchSources,
     displayIngestState,
+    resumeIngestPolling,
     ingestCardCleared,
     setIngestCardCleared,
     activeTab,
@@ -186,7 +187,9 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
               <div className="_wiki-detail-ingest">
                 <div className="_wiki-detail-ingest-head">
                   <Text className="_wiki-detail-ingest-title">
-                    {displayIngestState.active ? (
+                    {displayIngestState.paused ? (
+                      <CloseCircleIcon size={14} />
+                    ) : displayIngestState.active ? (
                       <LoadingIcon size={14} />
                     ) : (
                       <CheckCircleIcon size={14} />
@@ -199,6 +202,14 @@ export function WikiDetailView({ store }: { store: WikiSourcesStore }) {
                       onClick={() => setIngestCardCleared(true)}
                     >
                       {t('wiki.detail.clear')}
+                    </Button>
+                  )}
+                  {displayIngestState.paused && (
+                    <Button
+                      type="text"
+                      onClick={() => resumeIngestPolling(displayIngestState.wikiId)}
+                    >
+                      {t('wiki.detail.recheck')}
                     </Button>
                   )}
                 </div>

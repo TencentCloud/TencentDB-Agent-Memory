@@ -15,6 +15,11 @@ import {
 } from '../utils/wiki-upload-utils';
 import { maxBytesForFile } from '../utils/wiki-format-store';
 import {
+  INITIAL_INGEST_POLL_HEALTH,
+  advanceIngestPollHealth,
+  type IngestPollPauseReason,
+} from '../utils/ingest-poll-policy';
+import {
   RAW_PREVIEW_ERROR_KEYS,
   type DetailTab,
   type SearchResult,
@@ -332,6 +337,10 @@ export function useWikiSources() {
   const [pollAt, setPollAt] = useState('');
   /** 本轮轮询的检查次数（每次成功轮询 +1），展示"第 N 次检查 / 已实际查询 N 次"。 */
   const [pollCount, setPollCount] = useState(0);
+  /** Automatic checks stop after a bounded wait or repeated read failures. */
+  const [pollPauseByWiki, setPollPauseByWiki] = useState<Record<string, IngestPollPauseReason>>({});
+  /** Per-wiki budget survives stage changes (scanning -> ingesting -> rebuilding). */
+  const pollHealthRef = useRef<Map<string, typeof INITIAL_INGEST_POLL_HEALTH>>(new Map());
   /**
    * 已提交、但新任务尚未真正开跑（还没进入 processing）的 wiki id 集合。
    *
@@ -468,10 +477,17 @@ export function useWikiSources() {
   const runningWikiKey = useMemo(
     () =>
       sources
-        .filter((s) => s.status === 'pending' || s.status === 'processing')
-        .map((s) => `${s.wiki_id}:${s.status}:${s.internal_status ?? ''}`)
+        .filter(
+          (s) =>
+            (s.status === 'pending' || s.status === 'processing' || pendingTakeover.has(s.wiki_id)) &&
+            !pollPauseByWiki[s.wiki_id],
+        )
+        .map(
+          (s) =>
+            `${s.wiki_id}:${s.status}:${s.internal_status ?? ''}:${pendingTakeover.has(s.wiki_id) ? 'takeover' : ''}`,
+        )
         .join('|'),
-    [sources],
+    [sources, pendingTakeover, pollPauseByWiki],
   );
 
   useEffect(() => {
@@ -481,7 +497,8 @@ export function useWikiSources() {
         // 除了 pending/processing，还要覆盖"已提交但新任务尚未接管"的 wiki：
         // 它表面上是终态（上一个任务留下的），实际还有新任务在排队，必须继续
         // 轮询才能观察到新任务真正开跑的时刻。
-        (s.status === 'pending' || s.status === 'processing' || pendingTakeover.has(s.wiki_id)),
+        (s.status === 'pending' || s.status === 'processing' || pendingTakeover.has(s.wiki_id)) &&
+        !pollPauseByWiki[s.wiki_id],
     );
     if (running.length === 0) return;
     let cancelled = false;
@@ -496,6 +513,16 @@ export function useWikiSources() {
         }),
       );
       if (cancelled) return;
+      const pause: Record<string, IngestPollPauseReason> = {};
+      running.forEach((source, index) => {
+        const health = pollHealthRef.current.get(source.wiki_id) ?? INITIAL_INGEST_POLL_HEALTH;
+        const next = advanceIngestPollHealth(health, Boolean(items[index]));
+        pollHealthRef.current.set(source.wiki_id, {
+          attempts: next.attempts,
+          consecutiveFailures: next.consecutiveFailures,
+        });
+        if (next.pauseReason) pause[source.wiki_id] = next.pauseReason;
+      });
       const map = new Map(items.filter(Boolean).map((w) => [w!.wiki_id, w!]));
       setSources((prev) =>
         prev.map((s) => (map.get(s.wiki_id) ? { ...s, ...map.get(s.wiki_id)! } : s)),
@@ -513,13 +540,20 @@ export function useWikiSources() {
         }
         return changed ? next : prev;
       });
+      if (Object.keys(pause).length > 0) {
+        setPollPauseByWiki((prev) => ({ ...prev, ...pause }));
+        return;
+      }
       // 每次成功轮询递增检查计数 + 记录时间 —— 进度卡片据此展示
       // "第 N 次检查：…"与"已实际查询 N 次，最近 HH:MM:SS"，让用户确认进度在动。
       setPollCount((n) => n + 1);
       setPollAt(new Date().toLocaleTimeString());
       if (selectedWikiId && map.has(selectedWikiId)) {
         const d = map.get(selectedWikiId)!;
-        if (d.status === 'ready' || d.status === 'failed') void fetchDetail(selectedWikiId);
+        if (d.status === 'ready' || d.status === 'failed') {
+          pollHealthRef.current.delete(selectedWikiId);
+          void fetchDetail(selectedWikiId);
+        }
       }
     };
     void poll();
@@ -557,6 +591,7 @@ export function useWikiSources() {
     const pageCount = staleTerminal ? null : (wiki?.page_count ?? null);
 
     const inFlight = status === 'pending' || status === 'processing';
+    const pauseReason = inFlight ? pollPauseByWiki[selectedWikiId] : undefined;
     const isTerminal = status === 'ready' || status === 'failed';
     // 会话迁移：active → （终态）→ done。
     // 注：ready 之后进度卡片会自动收起（终态由标题栏徽章 + 页数体现），
@@ -580,7 +615,11 @@ export function useWikiSources() {
     // pending / draft 同样按正常阶段文案展示（"扫描文件"档位），不再自造
     // "排队中，等待上一次任务让位"之类文案 —— 状态行只描述 KS 真实状态。
     let detail: string;
-    if (status === 'ready') {
+    if (pauseReason === 'timeout') {
+      detail = t('wiki.ingest.pollTimeout');
+    } else if (pauseReason === 'network') {
+      detail = t('wiki.ingest.pollNetworkError');
+    } else if (status === 'ready') {
       detail = t('wiki.ingest.done', { count: pageCount ?? 0 });
     } else if (status === 'failed') {
       detail = wiki?.sync_error || t('wiki.ingest.failed');
@@ -590,6 +629,7 @@ export function useWikiSources() {
 
     return {
       active: session === 'active',
+      paused: Boolean(pauseReason),
       /** 'done' 会话 = 本会话内观察到"加工中 → 终态"迁移，仍展示结果卡片。 */
       session,
       /** 屏蔽后的展示状态 —— 徽章与卡片共用，保证两者永远一致。 */
@@ -604,7 +644,22 @@ export function useWikiSources() {
       lastCheckedAt: session === 'active' ? pollAt : '',
       log: [] as { file: string; status: 'error' | 'done'; error?: string }[],
     };
-  }, [sources, selectedWikiId, pollAt, pollCount, pendingTakeover]);
+  }, [sources, selectedWikiId, pollAt, pollCount, pendingTakeover, pollPauseByWiki]);
+
+  const resumeIngestPolling = useCallback((wikiId: string) => {
+    if (!wikiId) return;
+    pollHealthRef.current.delete(wikiId);
+    setPollPauseByWiki((prev) => {
+      if (!(wikiId in prev)) return prev;
+      const next = { ...prev };
+      delete next[wikiId];
+      return next;
+    });
+    setPollCount(0);
+    setPollAt('');
+    setRawRefreshKey((k) => k + 1);
+    void fetchSources();
+  }, [fetchSources]);
 
   async function handleUnbindWiki(wikiId: string) {
     if (!agentFilter) return;
@@ -776,6 +831,13 @@ export function useWikiSources() {
       setIngestCardCleared(false);
       setPollCount(0);
       setPollAt('');
+      pollHealthRef.current.delete(wikiId);
+      setPollPauseByWiki((prev) => {
+        if (!(wikiId in prev)) return prev;
+        const next = { ...prev };
+        delete next[wikiId];
+        return next;
+      });
       // 屏蔽"上一个任务留下的终态"：从现在起直到新任务真正进入 processing，
       // 该 wiki 上任何 ready/failed 都视为陈旧值、不展示给用户。
       setPendingTakeover((prev) => {
@@ -1274,6 +1336,7 @@ export function useWikiSources() {
     handleIngest,
     isCurrentWikiIngesting,
     submitAddAndIngest,
+    resumeIngestPolling,
     handleDelete,
     openDetail,
     handleReadPage,
