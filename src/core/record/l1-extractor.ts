@@ -316,18 +316,16 @@ async function callLlmExtraction(params: {
     `${TAG} [l1-debug] ENTRY taskId=l1-extraction, newMsgs=${newMessages.length}, bgMsgs=${backgroundMessages.length}, userPromptLen=${userPrompt.length}, sysPromptLen=${EXTRACT_MEMORIES_SYSTEM_PROMPT.length}, model=${model ?? "(default)"}, previousSceneName=${previousSceneName ? JSON.stringify(previousSceneName) : "(none)"}, runnerKind=${llmRunner ? "llmRunner" : "CleanContextRunner"}`,
   );
 
-  let result: string;
+  const runTextOnly = async (taskId: string, prompt: string, timeoutMs: number): Promise<string> => {
+    if (llmRunner) {
+      return llmRunner.run({
+        prompt,
+        systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
+        taskId,
+        timeoutMs,
+      });
+    }
 
-  if (llmRunner) {
-    // Use the host-neutral LLMRunner interface
-    result = await llmRunner.run({
-      prompt: userPrompt,
-      systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
-      taskId: "l1-extraction",
-      timeoutMs: 180_000,
-    });
-  } else {
-    // Fallback: create CleanContextRunner (OpenClaw path)
     const runner = new CleanContextRunner({
       config,
       modelRef: model,
@@ -335,15 +333,28 @@ async function callLlmExtraction(params: {
       logger,
     });
 
-    result = await runner.run({
-      prompt: userPrompt,
+    return runner.run({
+      prompt,
       systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
-      taskId: "l1-extraction",
-      timeoutMs: 180_000,
+      taskId,
+      timeoutMs,
     });
-  }
+  };
 
-  return parseExtractionResult(result, logger);
+  const result = await runTextOnly("l1-extraction", userPrompt, 180_000);
+  let scenes = parseExtractionResult(result, logger);
+  if (scenes.length > 0) return scenes;
+
+  const trimmed = result.trim();
+  const retryPrompt = `${userPrompt}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n上一次输出无效：必须返回且仅返回合法 JSON 数组，不能输出解释文本或 Markdown。${trimmed ? `\n上一次无效输出如下（仅供修正参考）：\n${trimmed}` : `\n上一次输出为空。`}\n\n请重新输出且只输出合法 JSON 数组。`;
+
+  logger?.warn?.(`${TAG} Primary extraction output was not parseable; retrying once with stricter JSON-only instruction`);
+  const retried = await runTextOnly("l1-extraction-retry", retryPrompt, 120_000);
+  scenes = parseExtractionResult(retried, logger);
+  if (scenes.length > 0) {
+    logger?.debug?.(`${TAG} Retry recovered ${scenes.length} scene(s) from previously invalid extraction output`);
+  }
+  return scenes;
 }
 
 /**

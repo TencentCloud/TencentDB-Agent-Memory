@@ -1047,7 +1047,15 @@ export class MemoryPipelineManager {
       obj[k] = { ...v };
     }
     try {
-      this.logger?.debug?.(`Persisting states: ${JSON.stringify(obj)}`);
+      const sessionKeys = Object.keys(obj);
+      const activeKeys = sessionKeys.filter((key) => {
+        const state = obj[key];
+        return (state?.conversation_count ?? 0) > 0 || (state?.l2_pending_l1_count ?? 0) > 0;
+      });
+      const sampleKeys = sessionKeys.slice(0, 5);
+      this.logger?.debug?.(
+        `${TAG} Persisting states summary: total=${sessionKeys.length}, active=${activeKeys.length}, sample=${sampleKeys.join(",")}`,
+      );
       await this.persister(obj);
     } catch (err) {
       this.logger?.error(
