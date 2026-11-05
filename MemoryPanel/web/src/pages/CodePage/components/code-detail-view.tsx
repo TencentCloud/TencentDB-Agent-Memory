@@ -9,6 +9,19 @@ import { AssetMarkdown } from '@/components/asset/AssetMarkdown';
 import { formatRepoName } from '../constants/code-constants';
 import { statusLabel } from './code-ui';
 import type { CodeSourcesStore } from '../hooks/useCodeSources';
+import type { CodeGraphServedIndex } from '../hooks/code-query-error';
+
+function ServedIndexNotice({ index }: { index: CodeGraphServedIndex | null }) {
+  const { t } = useTranslation();
+  if (!index) return null;
+  return (
+    <Alert type="warning">
+      {t('code.detail.previousIndex')}
+      {index.commitHash && ` · ${t('code.detail.servedCommit', { commit: index.commitHash })}`}
+      {index.lastSyncAt && ` · ${t('code.detail.servedAt', { time: new Date(index.lastSyncAt).toLocaleString() })}`}
+    </Alert>
+  );
+}
 
 export function CodeDetailView({ store }: { store: CodeSourcesStore }) {
   const { t } = useTranslation();
@@ -20,11 +33,13 @@ export function CodeDetailView({ store }: { store: CodeSourcesStore }) {
     setSearchQuery,
     searching,
     searchResult,
+    searchServedIndex,
     handleSearch,
     exploreQuery,
     setExploreQuery,
     exploring,
     exploreResult,
+    exploreServedIndex,
     handleExplore,
   } = store;
 
@@ -144,6 +159,7 @@ export function CodeDetailView({ store }: { store: CodeSourcesStore }) {
           {searching && <StatusTip status="loading" />}
           {!searching && searchResult && (
             <div className="_codedetail-result-box">
+              <ServedIndexNotice index={searchServedIndex} />
               <AssetMarkdown content={searchResult} compact />
             </div>
           )}
@@ -168,6 +184,7 @@ export function CodeDetailView({ store }: { store: CodeSourcesStore }) {
           {exploring && <StatusTip status="loading" />}
           {!exploring && exploreResult && (
             <div className="_codedetail-result-box">
+              <ServedIndexNotice index={exploreServedIndex} />
               <AssetMarkdown content={exploreResult} compact />
             </div>
           )}
