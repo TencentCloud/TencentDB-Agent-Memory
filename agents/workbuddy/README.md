@@ -36,6 +36,21 @@ WB 通过**配置文件** `~/.workbuddy/models.json` 配置自定义模型：
 配置完成后在 WorkBuddy 模型选择器的「自定义模型」中选择该模型。  
 Session init 与 CC/CB 一致（选 Team → Agent → Task），session ID 由客户端自动管理。
 
+### 内置模型（官方额度）的接入边界
+
+> 以下说明针对 [Issue #1741](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1741) 所报告的 WorkBuddy Desktop 行为，不代表所有未来客户端版本。
+
+上面的 `models.json` 方式适用于**可以自定义模型请求地址**的模型。WorkBuddy 某些内置模型的请求目标由客户端管理：即使在 `models.json` 中使用相同的模型 ID 配置 Proxy 地址，客户端仍可能请求内置的官方端点，而**不经过 MemoryProxy**。因此不能仅凭配置文件成功加载，就认定内置模型的对话已接入腾讯记忆系统。
+
+确认是否生效时，应同时检查 WorkBuddy 请求日志里的实际 URL 与 MemoryProxy 的请求日志：
+
+1. **请求确实经过 Proxy**：再检查鉴权、会话初始化与记忆注入/归档状态。
+2. **请求直接发往 WorkBuddy 官方端点**：Proxy 无法在该请求上进行上下文注入或自动归档；更改本地自定义模型配置并不能保证覆盖内置模型路由。
+
+Issue #1741 中有用户实验性地使用 WorkBuddy `Stop` Hook 读取会话转录并调用 Core 的 `/v3/conversation/add`，让内置模型产生的对话进入 L0。这属于**社区验证过的独立写入思路**，并非此仓库已提供或承诺支持的 WorkBuddy 官方适配功能。它也**不等同于 Proxy 的上下文注入**：写入历史不能让正在执行的内置模型自动获得已存储的记忆。多会话并行、重复写入、隐私与凭证管理还需要额外处理。
+
+目前如需使用本指南介绍的完整 Proxy 接入流程，应选择能配置实际请求地址、且上游协议匹配的**自定义模型**；不要为了验证文档而把真实凭证、转录内容或私有 URL 贴到公开 Issue。
+
 请求路径：
 - Desktop: `POST /workbuddy/:spaceId/v1/responses` 或 `/workbuddy/:spaceId/responses`
 - Web: `POST /workbuddy/:spaceId/v1/chat/completions`
