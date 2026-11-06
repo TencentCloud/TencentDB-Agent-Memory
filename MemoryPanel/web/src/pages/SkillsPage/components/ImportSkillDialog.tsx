@@ -32,6 +32,7 @@ import {
   type SkillResourcePayload,
   type ExtractParams,
 } from '@/lib/api/skill-api';
+import { extractFrontmatterName, normalizeNewlines } from '@/lib/skillFrontmatter';
 import { Alert, Button, Form, Input, Modal, Segment, Select } from 'tea-component';
 import { FolderOpenIcon } from 'tea-icons-react';
 import i18n from '@/i18n';
@@ -256,10 +257,10 @@ export default function ImportSkillDialog(props: {
       if (!partition?.mainFile) {
         throw new Error(partition?.warning ?? t('importSkill.error.noMainFile'));
       }
-      const content = await readAsUtf8(partition.mainFile);
-      const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-      const nameMatch = fmMatch?.[1].match(/^name:\s*(.+)$/m);
-      const name = nameMatch?.[1].trim().replace(/^["']|["']$/g, '') || partition.skillName || '';
+      // 统一换行：Windows 上保存的 SKILL.md 是 CRLF，Core 解析前也会做同样的归一化。
+      // 主文件统一成 LF 后既用于提取 name，也作为发给 Core 的内容；资源文件仍按字节处理。
+      const content = normalizeNewlines(await readAsUtf8(partition.mainFile));
+      const name = extractFrontmatterName(content) ?? partition.skillName ?? '';
       if (!name) {
         throw new Error(t('importSkill.error.noName'));
       }
