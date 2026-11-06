@@ -28,6 +28,7 @@ import { MongoMemoryStore } from "./mongodb/memory-store.js";
 import { MongoSkillStore } from "./mongodb/skill-store.js";
 import { getSharedMongoClientPool } from "./mongodb/client-pool.js";
 import type { MongoClientPool } from "./mongodb/client-pool.js";
+import { PgMemoryStore } from "./postgres/memory-store.js";
 import { createBM25Encoder } from "./bm25-local.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
 import type { VdbConfig, MongoConfig } from "../instance-config-provider.js";
@@ -60,7 +61,7 @@ interface Logger {
   error: (message: string) => void;
 }
 
-export type StoreMode = "sqlite" | "tcvdb" | "mongodb";
+export type StoreMode = "sqlite" | "tcvdb" | "mongodb" | "postgres";
 
 export interface KafkaMetricOptions {
   /** Kafka Broker 列表 (逗号分隔或数组) */
@@ -182,14 +183,17 @@ export class StorePool {
     const now = Date.now();
     // D11: backend selected per-instance from the config actually delivered —
     // mongoConfig present → mongodb; else tcvdb when in tcvdb mode with a vdb;
+    // postgres when the process mode is postgres (standalone, config-level);
     // else sqlite. `mode` is the process default that drives which config the
     // caller resolves, but the presence check is authoritative here.
     const backend: StoreMode = mongoConfig
       ? "mongodb"
-      : (this.mode === "tcvdb" && vdbConfig ? "tcvdb" : "sqlite");
+      : (this.mode === "postgres" ? "postgres"
+        : this.mode === "tcvdb" && vdbConfig ? "tcvdb" : "sqlite");
     const fingerprint =
       backend === "mongodb" && mongoConfig ? this.computeMongoFingerprint(mongoConfig)
       : backend === "tcvdb" && vdbConfig ? this.computeFingerprint(vdbConfig)
+      : backend === "postgres" ? `postgres:${instanceId}|${this.memoryCfg.postgres.connectionString}`
       : `sqlite:${instanceId}`;
     const cached = this.pool.get(instanceId);
 
@@ -214,6 +218,7 @@ export class StorePool {
     const pooledStore =
       backend === "mongodb" && mongoConfig ? this.createMongoStore(mongoConfig)
       : backend === "tcvdb" && vdbConfig ? this.createTcvdbStore(vdbConfig)
+      : backend === "postgres" ? this.createPostgresStore(instanceId)
       : this.createSqliteStore(instanceId);
 
     this.pool.set(instanceId, {
@@ -225,6 +230,7 @@ export class StorePool {
     const storeDesc =
       backend === "mongodb" && mongoConfig ? `mongodb ${mongoConfig.endpoint} / ${mongoConfig.database}`
       : backend === "tcvdb" && vdbConfig ? `${vdbConfig.url} / ${vdbConfig.database}`
+      : backend === "postgres" ? `postgres @ ${this.memoryCfg.postgres.connectionString}`
       : `sqlite @ ${this.getSqlitePath(instanceId)}`;
     this.logger.info(
       `${TAG} Created ${backend} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
@@ -446,6 +452,41 @@ export class StorePool {
 
   private computeMongoFingerprint(mongoConfig: MongoConfig): string {
     return `mongodb:${mongoConfig.endpoint}|${mongoConfig.database}|${mongoConfig.user}`;
+  }
+
+  // ════════════════════════════════════════════════════════
+  // Internal — PostgreSQL Store
+  // ════════════════════════════════════════════════════════
+
+  /**
+   * PostgreSQL store — pgvector (cosine) + tsvector FTS, embeddings computed
+   * by the application-layer embedding service (same wiring as sqlite).
+   */
+  private createPostgresStore(instanceId: string): PooledStore {
+    let embeddingService: EmbeddingService | undefined;
+    const embCfg = this.memoryCfg.embedding;
+    if (embCfg.enabled && embCfg.provider !== "local" && embCfg.provider !== "none" && embCfg.apiKey) {
+      embeddingService = createEmbeddingService({
+        provider: embCfg.provider,
+        baseUrl: embCfg.baseUrl,
+        apiKey: embCfg.apiKey,
+        model: embCfg.model,
+        dimensions: embCfg.dimensions,
+        sendDimensions: embCfg.sendDimensions,
+        maxInputChars: embCfg.maxInputChars,
+      }, this.logger as StoreLogger);
+    }
+    const dims = embCfg.dimensions ?? 0;
+    const store = new PgMemoryStore({
+      connectionString: this.memoryCfg.postgres.connectionString,
+      dimensions: dims,
+      logger: this.logger as StoreLogger,
+    });
+    return {
+      store,
+      embedding: (embeddingService ?? new NoopEmbeddingService()) as unknown as EmbeddingService,
+      bm25Encoder: this.sharedBm25Encoder,
+    };
   }
 
   // ════════════════════════════════════════════════════════
