@@ -25,6 +25,7 @@ import {
 } from 'tea-icons-react';
 import { userConfigApi, type AssetCapabilityKey } from '@/lib/teamApi';
 import { tea } from '@/lib/tea-bridge';
+import { createToggleSaver } from '@/lib/toggleSaving';
 
 // ===== 资源模块 =====
 
@@ -80,13 +81,20 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     chat_memory: true,
   }));
   const [loading, setLoading] = useState(true);
-  const [savingKey, setSavingKey] = useState<AssetCapabilityKey | null>(null);
-  const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  // 保存状态按开关键独立记录：多个开关可并发保存，互不解除对方的 saving 状态
+  const [savingKeys, setSavingKeys] = useState<ReadonlySet<AssetCapabilityKey>>(() => new Set());
+  // 失败提示同样按开关键归属，避免一个开关的错误清掉另一个开关的提示
+  const [toggleErrors, setToggleErrors] = useState<Partial<Record<AssetCapabilityKey, string>>>({});
+  // 在途请求的记录必须跨渲染保留，且与 savingKeys 分开：后者只负责展示
+  const [saver] = useState(() =>
+    createToggleSaver<AssetCapabilityKey>(userConfigApi.setAssetCapability),
+  );
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError('');
+    setLoadError('');
     userConfigApi.getAssetCapabilities()
       .then((cfg) => {
         if (cancelled) return;
@@ -98,7 +106,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         });
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -107,20 +115,37 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   async function handleToggle(mod: ResourceModule, next: boolean) {
+    const key = mod.paramKey;
     const previous = enabled[mod.id];
+    // 同一项已有请求在途时返回 null：本次是重复提交，不改动任何状态
+    const task = saver.toggle(key, next);
+    if (!task) return;
+
+    // 乐观更新：先改 UI，失败再回滚
+    setSavingKeys((prev) => new Set(prev).add(key));
+    setToggleErrors((prev) => {
+      const remaining = { ...prev };
+      delete remaining[key];
+      return remaining;
+    });
     setEnabled((prev) => ({ ...prev, [mod.id]: next }));
-    setSavingKey(mod.paramKey);
-    setError('');
+
     try {
-      await userConfigApi.setAssetCapability(mod.paramKey, next);
+      await task;
       tea.notify.success(t(next ? 'settings.notify.enabled' : 'settings.notify.disabled', { label: t(mod.labelKey) }));
     } catch (e) {
-      setEnabled((prev) => ({ ...prev, [mod.id]: previous }));
+      // 同一项已由 saver 的在途记录保证不会并发，这里再比对一次当前值：
+      // 防御性判断，将来放宽同一项的并发限制时也不会用旧结果覆盖新状态
+      setEnabled((prev) => (prev[mod.id] === next ? { ...prev, [mod.id]: previous } : prev));
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      setToggleErrors((prev) => ({ ...prev, [key]: msg }));
       tea.notify.error(t('settings.notify.saveFailed', { msg }));
     } finally {
-      setSavingKey(null);
+      setSavingKeys((prev) => {
+        const remaining = new Set(prev);
+        remaining.delete(key);
+        return remaining;
+      });
     }
   }
 
@@ -136,7 +161,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <Text theme="weak" style={{ display: 'block', marginBottom: 16, fontSize: 12 }}>
               {t('settings.desc')}
             </Text>
-            {error && <Alert type="error" style={{ marginBottom: 12 }}>{error}</Alert>}
+            {loadError && <Alert type="error" style={{ marginBottom: 12 }}>{loadError}</Alert>}
             {loading && <Alert type="info" style={{ marginBottom: 12 }}>{t('settings.loadingConfig')}</Alert>}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -165,7 +190,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                         <Text style={{ fontSize: 13, fontWeight: 500 }}>
                           {t(mod.labelKey)}
                         </Text>
-                        {savingKey === mod.paramKey ? (
+                        {savingKeys.has(mod.paramKey) ? (
                           <Tag theme="warning" variant="soft" size="sm">{t('settings.tag.saving')}</Tag>
                         ) : enabled[mod.id] ? (
                           <Tag theme="success" variant="soft" size="sm">{t('settings.tag.enabled')}</Tag>
@@ -176,11 +201,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                       <Text theme="weak" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
                         {t(mod.descKey)}
                       </Text>
+                      {toggleErrors[mod.paramKey] && (
+                        <Text theme="danger" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
+                          {toggleErrors[mod.paramKey]}
+                        </Text>
+                      )}
                     </div>
                   </div>
                   <Switch
                     value={enabled[mod.id]}
-                    disabled={loading || savingKey === mod.paramKey}
+                    disabled={loading || savingKeys.has(mod.paramKey)}
                     onChange={(v) => void handleToggle(mod, v)}
                   />
                 </div>
