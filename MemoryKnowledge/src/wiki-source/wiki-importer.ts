@@ -37,8 +37,8 @@ export function createWikiImporter(deps: WikiImporterDeps): WikiImporter {
   return {
     async run(serviceId, teamId, wikiId, cred): Promise<number> {
       const row = deps.store.getWikiById(serviceId, wikiId);
-      if (!row) {
-        log.warn(`[wiki-sync] wiki ${wikiId} not found, skip`);
+      if (!row || row.team_id !== teamId) {
+        log.warn(`[wiki-sync] wiki ${wikiId} not found for team, skip`);
         return 0;
       }
 

@@ -360,6 +360,11 @@ export class AutoSyncScheduler {
       log.debug(`[auto-sync] wiki sync skipped (no importer wired): ${wiki.wiki_id}`);
       return;
     }
+    // A queued target may outlive deletion or a team reassignment. Revalidate
+    // before reading the resource credential, not only before writing files.
+    const current = this.store.getWikiById(t.serviceId, wiki.wiki_id);
+    if (!current || current.team_id !== t.teamId) return;
+
     const cred = this.credentialStore?.get({
       type: "wiki",
       serviceId: t.serviceId,
