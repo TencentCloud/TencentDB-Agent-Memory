@@ -355,7 +355,7 @@ export class TdaiGateway {
   private analyticsChClientInstance: AnalyticsChClient | null | undefined = undefined; // undefined = not yet initialized
   private analyticsChInitPromise: Promise<void> | null = null;
   private memorySystemUserConfig: MemorySystemUserConfig | undefined;
-  private readonly metadataServiceByInstance = new Map<string, MetadataService>();
+  private readonly metadataServiceByInstance = new Map<string, Promise<MetadataService>>();
 
   // ── Skill conversation-add (§21): per-instance handler cache ──
   //
@@ -506,45 +506,57 @@ export class TdaiGateway {
     return this.analyticsChClientInstance ?? null;
   }
 
-  private async ensureMetadataService(instanceId: string): Promise<MetadataService> {
-    let svc = this.metadataServiceByInstance.get(instanceId);
-    if (!svc) {
-      const [store, pool] = await Promise.all([
-        this.ensureMetadataStore(instanceId),
-        this.ensureMetadataStorePool(),
-      ]);
-      const storeSource = pool.backend === "mongodb" ? "mongodb-adapter.ts" : "sqlite-adapter.ts";
-      const rawSvc = new MetadataService(
-        wrapApiStoreForTrace(store, storeSource),
-        instanceId,
-        this.logger,
-        this.config.metadata,
-        this.memorySystemUserConfig,
-      );
+  private ensureMetadataService(instanceId: string): Promise<MetadataService> {
+    // In-flight cache: 同 instanceId 的并发首请求共享同一个 build promise，
+    // 避免并发同时 await 完成后各自构造一个 MetadataService 并重复跑
+    // initDefaults（与 ensureConversationAddForInstance 同一模式）。
+    const cached = this.metadataServiceByInstance.get(instanceId);
+    if (cached) return cached;
 
-      const registry = loadDefaultRegistry(this.config.metadata.configParamsFile);
-      const configSvc = new ConfigParamService(store, registry);
-      await configSvc.initDefaults(registry, this.config.metadata);
-      rawSvc.setConfigParamService(configSvc);
+    const inflight = this.buildMetadataService(instanceId);
+    this.metadataServiceByInstance.set(instanceId, inflight);
+    inflight.catch(() => {
+      if (this.metadataServiceByInstance.get(instanceId) === inflight) {
+        this.metadataServiceByInstance.delete(instanceId);
+      }
+    });
+    return inflight;
+  }
 
-      // 归档 Agent 时连带清掉它的 chat_memory 内容（L0–L3 + 向量 + 文件）。
-      // metadata 层拿不到 IMemoryStore / StorageAdapter，所以这里把清理能力
-      // 注入进去；与 /v3/chat-memory/clear 共用同一份清理实现 + 重试策略，
-      // 避免出现"资产已删、内容还在"的孤儿数据。
-      //
-      // 必须按 instanceId 解析 store/storage：service 模式下每个实例有独立的
-      // TCVDB + COS，用全局单例会清到错误的库。
-      rawSvc.setChatMemoryContentCleaner(async ({ teamId, agentId }) => {
-        const { store: memoryStore, storage } = await this.resolveMemoryContentTargets(instanceId);
-        await clearChatMemoryContentResilient({
-          store: memoryStore, storage, teamId, agentId, logger: this.logger,
-        });
+  private async buildMetadataService(instanceId: string): Promise<MetadataService> {
+    const [store, pool] = await Promise.all([
+      this.ensureMetadataStore(instanceId),
+      this.ensureMetadataStorePool(),
+    ]);
+    const storeSource = pool.backend === "mongodb" ? "mongodb-adapter.ts" : "sqlite-adapter.ts";
+    const rawSvc = new MetadataService(
+      wrapApiStoreForTrace(store, storeSource),
+      instanceId,
+      this.logger,
+      this.config.metadata,
+      this.memorySystemUserConfig,
+    );
+
+    const registry = loadDefaultRegistry(this.config.metadata.configParamsFile);
+    const configSvc = new ConfigParamService(store, registry);
+    await configSvc.initDefaults(registry, this.config.metadata);
+    rawSvc.setConfigParamService(configSvc);
+
+    // 归档 Agent 时连带清掉它的 chat_memory 内容（L0–L3 + 向量 + 文件）。
+    // metadata 层拿不到 IMemoryStore / StorageAdapter，所以这里把清理能力
+    // 注入进去；与 /v3/chat-memory/clear 共用同一份清理实现 + 重试策略，
+    // 避免出现"资产已删、内容还在"的孤儿数据。
+    //
+    // 必须按 instanceId 解析 store/storage：service 模式下每个实例有独立的
+    // TCVDB + COS，用全局单例会清到错误的库。
+    rawSvc.setChatMemoryContentCleaner(async ({ teamId, agentId }) => {
+      const { store: memoryStore, storage } = await this.resolveMemoryContentTargets(instanceId);
+      await clearChatMemoryContentResilient({
+        store: memoryStore, storage, teamId, agentId, logger: this.logger,
       });
+    });
 
-      svc = wrapApiServiceForTrace(rawSvc);
-      this.metadataServiceByInstance.set(instanceId, svc);
-    }
-    return svc;
+    return wrapApiServiceForTrace(rawSvc);
   }
 
   /**
