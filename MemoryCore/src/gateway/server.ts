@@ -314,6 +314,15 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
+/**
+ * A request body of `null`, `[]`, `"x"` or `1` parses fine but crashes on
+ * property access (`body.x`) — handlers must reject non-object JSON with
+ * 400 instead of falling into a TypeError → 500.
+ */
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 // ============================
 // Gateway Server
 // ============================
@@ -1375,6 +1384,10 @@ export class TdaiGateway {
    */
   private async handleInstanceDestroy(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<{ instance_id?: string }>(req);
+    if (!isPlainObject(body)) {
+      sendJson(res, 400, { code: 400, message: "Request body must be a JSON object" });
+      return;
+    }
     const instanceId = body?.instance_id;
 
     if (!instanceId || typeof instanceId !== "string") {
@@ -1401,6 +1414,10 @@ export class TdaiGateway {
    */
   private async handleInstanceDestroyV3(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<{ instance_id?: string }>(req);
+    if (!isPlainObject(body)) {
+      sendJson(res, 400, { code: 400, message: "Request body must be a JSON object" });
+      return;
+    }
     const instanceId = body?.instance_id;
 
     if (!instanceId || typeof instanceId !== "string") {
@@ -1558,6 +1575,10 @@ export class TdaiGateway {
   private async handleRecall(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<RecallRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.query || !body.session_key) {
       sendError(res, 400, "Missing required fields: query, session_key");
       return;
@@ -1594,6 +1615,10 @@ export class TdaiGateway {
   private async handleCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<CaptureRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.user_content || !body.assistant_content || !body.session_key) {
       sendError(res, 400, "Missing required fields: user_content, assistant_content, session_key");
       return;
@@ -1624,6 +1649,10 @@ export class TdaiGateway {
   private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<MemorySearchRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.query) {
       sendError(res, 400, "Missing required field: query");
       return;
@@ -1647,6 +1676,10 @@ export class TdaiGateway {
   private async handleSearchConversations(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<ConversationSearchRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.query) {
       sendError(res, 400, "Missing required field: query");
       return;
@@ -1668,6 +1701,10 @@ export class TdaiGateway {
   private async handleSessionEnd(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<SessionEndRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.session_key) {
       sendError(res, 400, "Missing required field: session_key");
       return;
@@ -1682,6 +1719,10 @@ export class TdaiGateway {
   private async handleSeed(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<SeedRequest>(req);
 
+    if (!isPlainObject(body)) {
+      sendError(res, 400, "Request body must be a JSON object");
+      return;
+    }
     if (!body.data) {
       sendError(res, 400, "Missing required field: data");
       return;
