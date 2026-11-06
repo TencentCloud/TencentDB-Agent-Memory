@@ -350,7 +350,9 @@ export function parseV2Auth(
   const authHeader = req.headers["authorization"] ?? "";
   const serviceId = (req.headers["x-tdai-service-id"] as string) ?? "";
 
-  if (!authHeader.startsWith("Bearer ") || !authHeader.slice(7).trim()) {
+  // RFC 7235: the auth scheme is case-insensitive ("bearer x" is valid).
+  const bearer = /^Bearer\s+(.+)$/i.exec(authHeader);
+  if (!bearer || !bearer[1].trim()) {
     sendJsonFn(res, 401, errorEnvelope(401, "Missing or invalid Authorization header. Expected: Bearer {api_key}", requestId));
     return null;
   }
@@ -360,7 +362,7 @@ export function parseV2Auth(
   }
 
   return Object.fromEntries([
-    ["apiKey", authHeader.slice(7).trim()],
+    ["apiKey", bearer[1].trim()],
     ["serviceId", serviceId.trim()],
   ]) as V2AuthContext;
 }
