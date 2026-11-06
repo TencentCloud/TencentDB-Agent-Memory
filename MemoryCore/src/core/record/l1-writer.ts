@@ -22,7 +22,7 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 import type { Logger } from "../types.js";
-import { timestampsForWrite, uniqueSortedTimestamps } from "./l1-timestamps.js";
+import { timestampsForWrite } from "./l1-timestamps.js";
 
 // ============================
 // Types
@@ -110,12 +110,6 @@ export interface ExtractedMemory {
   metadata: EpisodicMetadata | Record<string, never>;
   /** Scene name this memory was extracted in */
   scene_name: string;
-  /**
-   * ISO timestamps of the source L0 messages (`source_message_ids`).
-   * Empty when none of the source IDs could be resolved. Distinct from
-   * event time in `metadata` and from `createdAt`/`updatedAt`.
-   */
-  timestamps?: string[];
 }
 
 export type DedupAction = "store" | "update" | "merge" | "skip";
@@ -140,8 +134,9 @@ export interface DedupDecision {
   /** Priority after merge (for update/merge) */
   merged_priority?: number;
   /**
-   * Union of new-memory source timestamps and selected candidate timestamps.
-   * Filled in code after conflict detection — not taken from the model.
+   * Selected target records' existing timestamps (for update/merge).
+   * Populated in code by applyDedupProvenance and unioned with `now` in writeMemory —
+   * never taken from model output.
    */
   merged_timestamps?: string[];
 }
@@ -160,52 +155,53 @@ export function generateMemoryId(): string {
 }
 
 /**
- * Merge/update may delete existing records. Keep that action only when the
- * new memory has source timestamps AND at least one non-blank target. Otherwise
- * store the original extracted memory (no merged_content, no deletes).
+ * Independent safety hardening (`target_ids` guard):
+ * `merge` / `update` may delete existing records, so require at least one
+ * non-blank target ID. Blank target IDs are stripped; when none remain,
+ * fall back to `store` with the original extracted memory (no `merged_content`,
+ * no target deletes).
  *
- * `merged_timestamps` is not enough to keep merge/update: that field can be
- * model-invented or copied from old records. This guard looks at the new
- * memory's own source timestamps, matching `applyDedupProvenance`.
- *
- * Blank target ids are stripped. Hallucinated ids that look non-blank cannot
- * be detected here — the writer has no candidate pool. `applyDedupProvenance`
- * is the check for "every listed target is in this batch's pool". This is
- * only a last-line guard for writeMemory called with a raw decision.
+ * Pool membership for listed targets is checked upstream in `applyDedupProvenance`.
+ * This is a last-line guard when `writeMemory` is called with a raw decision.
  */
 export function normalizeDedupDecisionForWrite(
   decision: DedupDecision,
-  memory: ExtractedMemory,
+  _memory?: ExtractedMemory,
 ): DedupDecision {
   if (decision.action !== "merge" && decision.action !== "update") {
     return decision;
   }
 
-  const listedTargets = decision.target_ids.filter((id) => id.trim() !== "");
+  const listedTargets = [
+    ...new Set(decision.target_ids.map((id) => id.trim()).filter((id) => id !== "")),
+  ];
   if (listedTargets.length === 0) {
     return { record_id: decision.record_id, action: "store", target_ids: [] };
   }
 
-  const sourceTimestamps = uniqueSortedTimestamps(memory.timestamps ?? []);
-  if (sourceTimestamps.length === 0) {
-    return { record_id: decision.record_id, action: "store", target_ids: [] };
-  }
+  const mergedContent =
+    typeof decision.merged_content === "string" && decision.merged_content.trim() !== ""
+      ? decision.merged_content
+      : undefined;
 
-  return listedTargets.length === decision.target_ids.length
+  const targetsUnchanged =
+    listedTargets.length === decision.target_ids.length &&
+    listedTargets.every((id, idx) => id === decision.target_ids[idx]);
+
+  return targetsUnchanged && mergedContent === decision.merged_content
     ? decision
-    : { ...decision, target_ids: listedTargets };
+    : { ...decision, target_ids: listedTargets, merged_content: mergedContent };
 }
 
 /**
  * Write a memory record according to the dedup decision.
  *
- * - store: append new record
- * - update: remove target records + append updated record
- * - merge: remove target records + append merged record
+ * - store: append new record with `[now]`
+ * - update: remove target records + append updated record with `union(target.timestamps, [now])`
+ * - merge: remove target records + append merged record with `union(target.timestamps, [now])`
  * - skip: do nothing
  *
- * Merge/update without source timestamps or without targets is coerced to store
- * so existing records are not deleted. This does not re-check the candidate pool.
+ * Merge/update without targets is coerced to store so existing records are not deleted.
  *
  * v3: supports multi-target removal for update/merge.
  * v3.1: optional VectorStore + EmbeddingService for dual-write (JSONL + vector).
@@ -264,7 +260,10 @@ export async function writeMemory(params: {
   let finalTimestamps: string[];
 
   if (decision.action === "merge" || decision.action === "update") {
-    finalContent = decision.merged_content ?? memory.content;
+    finalContent =
+      decision.merged_content && decision.merged_content.trim() !== ""
+        ? decision.merged_content
+        : memory.content;
     finalType = decision.merged_type ?? memory.type;
     finalPriority = decision.merged_priority ?? memory.priority;
   } else {
@@ -276,7 +275,6 @@ export async function writeMemory(params: {
 
   finalTimestamps = timestampsForWrite({
     action: decision.action,
-    memoryTimestamps: memory.timestamps,
     mergedTimestamps: decision.merged_timestamps,
     nowIso: now,
   });

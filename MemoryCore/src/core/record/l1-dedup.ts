@@ -386,7 +386,10 @@ function parseBatchResult(
         record_id: recordId,
         action: validActions.includes(action) ? (action as DedupDecision["action"]) : "store",
         target_ids: Array.isArray(d.target_ids) ? d.target_ids.map(String) : [],
-        merged_content: typeof d.merged_content === "string" ? d.merged_content : undefined,
+        merged_content:
+          typeof d.merged_content === "string" && d.merged_content.trim() !== ""
+            ? d.merged_content
+            : undefined,
         merged_type: VALID_TYPES.includes(d.merged_type as MemoryType) ? (d.merged_type as MemoryType) : undefined,
         merged_priority: typeof d.merged_priority === "number" ? d.merged_priority : undefined,
         // merged_timestamps is computed in applyDedupProvenance — ignore model output.
@@ -414,15 +417,19 @@ function parseBatchResult(
 }
 
 /**
- * Fill `merged_timestamps` from code (new-memory source times ∪ selected
- * candidate times). Model-invented timestamps are ignored.
+ * Populate `merged_timestamps` in code from the selected candidate records'
+ * existing timestamps (unioned with `now` at write time in `writeMemory()`).
+ * Model-invented `merged_timestamps` is ignored.
  *
- * Merge/update is kept only when the new memory has source timestamps AND every
- * non-blank listed target is in this batch's unified candidate pool. Otherwise
- * fall back to `store` with the original memory (no merged_content, no target
- * deletes): missing provenance, empty targets, all-invalid IDs, and mixed
- * valid/invalid targets must not replace existing records. Hallucinated IDs are
- * not silently dropped from a merge/update. Blank ids are ignored, not mixed.
+ * Missing `source_message_ids` does not block `merge` / `update` because
+ * `MemoryRecord.timestamps` represents the L1 processing/write timeline.
+ *
+ * Independent safety hardening (`target_ids` guard):
+ * `merge` / `update` is kept only when at least one non-blank target is listed
+ * and every non-blank listed target exists in this batch's unified candidate
+ * pool. Empty targets, all-invalid IDs, and mixed valid/invalid IDs fall back
+ * to `store` with the original memory (no `merged_content`, no target deletes).
+ * Blank IDs are stripped rather than treated as mixed.
  */
 export function applyDedupProvenance(
   decisions: DedupDecision[],
@@ -430,52 +437,55 @@ export function applyDedupProvenance(
   logger?: Logger,
 ): DedupDecision[] {
   const pool = new Map<string, MemoryRecord>();
-  const memoryById = new Map<string, ExtractedMemory & { record_id: string }>();
   for (const m of matches) {
-    memoryById.set(m.newMemory.record_id, m.newMemory);
     for (const candidate of m.candidates) {
       if (!pool.has(candidate.id)) pool.set(candidate.id, candidate);
     }
   }
 
   return decisions.map((decision) => {
-    const listedTargets = decision.target_ids.filter((id) => id.trim() !== "");
+    const listedTargets = [
+      ...new Set(decision.target_ids.map((id) => id.trim()).filter((id) => id !== "")),
+    ];
     const allowedTargets = listedTargets.filter((id) => pool.has(id));
-    const mem = memoryById.get(decision.record_id);
-    const sourceTimestamps = uniqueSortedTimestamps(mem?.timestamps ?? []);
+    const mergedContent =
+      typeof decision.merged_content === "string" && decision.merged_content.trim() !== ""
+        ? decision.merged_content
+        : undefined;
 
     if (decision.action === "merge" || decision.action === "update") {
-      const reason = mergeUpdateStoreReason(
-        sourceTimestamps.length,
-        allowedTargets.length,
-        listedTargets.length,
-      );
+      const reason = invalidTargetReason(allowedTargets.length, listedTargets.length);
       if (reason) {
         logger?.warn?.(
           `${TAG} Falling back to store for ${decision.record_id} (${decision.action} → store, reason=${reason})`,
         );
         return storeOriginalMemory(decision);
       }
+
+      const targetTimestamps = uniqueSortedTimestamps(
+        allowedTargets.flatMap((id) => pool.get(id)?.timestamps ?? []),
+      );
+      return {
+        ...decision,
+        target_ids: allowedTargets,
+        merged_content: mergedContent,
+        merged_timestamps: targetTimestamps,
+      };
     }
 
-    const union = uniqueSortedTimestamps([
-      ...sourceTimestamps,
-      ...allowedTargets.flatMap((id) => pool.get(id)?.timestamps ?? []),
-    ]);
     return {
       ...decision,
-      target_ids: allowedTargets,
-      merged_timestamps: union.length > 0 ? union : undefined,
+      target_ids: decision.action === "store" ? [] : allowedTargets,
+      merged_content: decision.action === "store" ? undefined : mergedContent,
+      merged_timestamps: undefined,
     };
   });
 }
 
-function mergeUpdateStoreReason(
-  sourceTimestampCount: number,
+function invalidTargetReason(
   allowedTargetCount: number,
   listedTargetCount: number,
-): "empty_source_timestamps" | "no_valid_targets" | "mixed_targets" | undefined {
-  if (sourceTimestampCount === 0) return "empty_source_timestamps";
+): "no_valid_targets" | "mixed_targets" | undefined {
   if (allowedTargetCount === 0) return "no_valid_targets";
   if (allowedTargetCount !== listedTargetCount) return "mixed_targets";
   return undefined;

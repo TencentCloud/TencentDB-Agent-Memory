@@ -43,8 +43,8 @@ export const CONFLICT_DETECTION_SYSTEM_PROMPT = `你是记忆冲突检测器。�
    - 跨类型示例：一条 episodic "用户在 2018 年开始做播客" + 一条 persona "用户有播客制作经验" → 可 merge 为一条 persona 或 episodic（取决于信息侧重）
 
 5. **timestamp 处理**：
-   - 每条新记忆和候选记忆都已带 \`timestamps\`（来源消息时间，ISO 8601）。
-   - merge / update 时系统会用「新记忆 timestamps + 你选中的 target_ids 对应候选 timestamps」做并集，**不要编造时间戳**。\`merged_timestamps\` 可省略，填写也会被忽略。
+   - 候选记忆已带 \`timestamps\`（L1 记忆写入时间线，ISO 8601）。
+   - merge / update 时系统会用「你选中的 target_ids 对应候选 timestamps + 本次写入时间」自动计算并集，**不要编造时间戳**。\`merged_timestamps\` 可省略，填写也会被忽略。
 
 ## 输出格式
 
@@ -105,8 +105,8 @@ export const WORK_CONFLICT_DETECTION_SYSTEM_PROMPT = `你是团队工作记忆�
    - 跨类型示例：一条 work_fact "团队决定 L1 type 保持少量高层分类" + 一条 work_method "L1 type 不宜过细，否则影响 L2/L3 聚合" → 可 merge 为 work_method。
 
 5. **timestamp 处理**：
-   - 每条新记忆和候选记忆都已带 \`timestamps\`（来源消息时间，ISO 8601）。
-   - merge / update 时系统会用「新记忆 timestamps + 你选中的 target_ids 对应候选 timestamps」做并集，**不要编造时间戳**。\`merged_timestamps\` 可省略，填写也会被忽略。
+   - 候选记忆已带 \`timestamps\`（L1 记忆写入时间线，ISO 8601）。
+   - merge / update 时系统会用「你选中的 target_ids 对应候选 timestamps + 本次写入时间」自动计算并集，**不要编造时间戳**。\`merged_timestamps\` 可省略，填写也会被忽略。
 
 ## 输出格式
 
@@ -205,7 +205,6 @@ export function formatBatchConflictPrompt(matches: CandidateMatch[]): string {
         type: m.newMemory.type,
         priority: m.newMemory.priority,
         scene_name: m.newMemory.scene_name,
-        timestamps: m.newMemory.timestamps ?? [],
       },
       null,
       2,
