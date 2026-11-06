@@ -23,12 +23,14 @@
  *   - readFile      读资源字节
  */
 
-import { parseSkillFile, validateSkillFile } from "./skill-format.js";
+import { createHash } from "node:crypto";
+import { strToU8, zipSync } from "fflate";
+import { parse as parseYaml } from "yaml";
+import { parseSkillFile, SKILL_BODY_MAX, validateSkillFile } from "./skill-format.js";
 import { SkillResourceStore, type SkillResourcePayload } from "./skill-resource-store.js";
-import type { ISkillStore, SkillSearchResult } from "./skill-store.interface.js";
+import { assertSkillDeletionTargets, type ISkillStore, type SkillSearchResult } from "./skill-store.interface.js";
 import { SkillVersioning } from "./skill-versioning.js";
 import { randomBase62 } from "../../utils/short-id.js";
-import { strToU8, zipSync } from "fflate";
 import {
   SkillPermissionError,
   assertOwner,
@@ -64,6 +66,14 @@ export type SkillCoreErrorCode =
   | "SKILL_VERSION_STALE"
   | "SKILL_VERSION_EXPIRED"
   | "SKILL_ID_COLLISION"
+  | "SKILL_MUTATION_CONFLICT"
+  | "SKILL_PUBLICATION_UNKNOWN"
+  | "SKILL_PUBLICATION_COORDINATOR_REQUIRED"
+  | "SKILL_PUBLICATION_BUSY"
+  | "SKILL_ASSET_REGISTRATION_PENDING"
+  | "SKILL_DELETION_PENDING"
+  | "SKILL_PROTECTED"
+  | "RESOURCE_INTEGRITY_ERROR"
   | "INVALID_PATH"
   | "RESOURCE_TOO_LARGE"
   | "STORAGE_NOT_FOUND"
@@ -110,14 +120,11 @@ export interface SkillCoreOptions {
   /** 每个 skill 最多保留的非 head 版本数。0 = 关闭。 */
   maxNonHeadVersions?: number;
   /**
-   * `delete` 成功归档 head 后同步触发。fire-and-forget：钩子抛异常
-   * 会被吞掉，不影响 delete 返回值（asset 状态漂移可容忍：skill 已经
-   * archived，asset 慢一步同步不影响业务）。
-   *
-   * 与 `SkillVersioning.onSkillCreated` 成对：一个负责 v1 登记，一个
-   * 负责整 skill 归档，二者共同覆盖 asset 生命周期两端。
+   * Idempotent asset lifecycle cleanup. Durable remote deletion awaits this
+   * promise before marking its receipt complete; failures remain recoverable.
+   * The legacy SQLite deletion path retains its existing best-effort behavior.
    */
-  onSkillArchived?: (params: { skill_id: string; team_id?: string }) => void;
+  onSkillArchived?: (params: { skill_id: string; team_id?: string }) => void | Promise<void>;
   /**
    * 读路径自愈补登记钩子。
    *
@@ -140,6 +147,27 @@ export interface CreateInput extends IdFields {
   content: string;
   resources?: SkillResourcePayload[];
   metadata?: Record<string, unknown>;
+}
+
+export interface CreatePackageVersionInput extends CreateInput {
+  skill_id: string;
+  mutation_id: string;
+}
+
+export interface ApplyPackageMutationInput extends IdFields {
+  skill_id: string;
+  expected_version: number;
+  mutation_id: string;
+  content: string;
+  /** Complete final resource set, not a partial patch. */
+  resources: SkillResourcePayload[];
+  /** Caller supplies merged user metadata; omission preserves the base version. */
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReadPackageInput extends IdFields {
+  skill_id: string;
+  expected_version: number;
 }
 
 export interface UpdateInput extends IdFields {
@@ -251,6 +279,121 @@ export class SkillCore {
   // ───────────────────────────────────────────────────────────────────
   //  WRITE actions
   // ───────────────────────────────────────────────────────────────────
+
+  /** Create a service-assigned identity; the backend owns durable intent replay. */
+  async createPackageVersion(input: CreatePackageVersionInput): Promise<Skill> {
+    const ctx = this.packageContext(input);
+    this.assertMutationId(input.mutation_id);
+    const file = this.parseAndValidate(input.content);
+    if (file.frontmatter.name !== input.name) {
+      throw new SkillCoreError("INVALID_FRONTMATTER", "frontmatter name must match the package name");
+    }
+    const payloads = this.packageResources(input.resources ?? []);
+    this.assertPackageAllowed(input.content, input.metadata ?? {});
+    try {
+      // Global identity lookup prevents a caller from claiming another team's ID.
+      const current = await this.store.getHeadIncludingArchived(input.skill_id);
+      if (current) {
+        assertTeamMatchWrap(current, ctx.team_id);
+        assertOwnerWrap(current, ctx.agent_id, ctx.team_id);
+        if (current.status !== "active") throw new SkillCoreError("SKILL_NOT_FOUND");
+        this.assertPackageAllowed(current.content, this.packageMetadata(current));
+      }
+      const receipt = await this.store.getByMutationId(input.skill_id, input.mutation_id, ctx.team_id);
+      if (receipt) {
+        assertTeamMatchWrap(receipt, ctx.team_id);
+        assertOwnerWrap(receipt, ctx.agent_id, ctx.team_id);
+        // Receipts survive deletion. Replaying one must not recreate its asset.
+        if (!current) throw new SkillCoreError("SKILL_NOT_FOUND", "the original package has been deleted");
+      } else if (current) {
+        throw new SkillCoreError("SKILL_ID_COLLISION", "the stable skill_id already belongs to a package");
+      }
+      return await this.versioning.createNewSkill(input.skill_id, ctx.agent_id, ctx, {
+        mutation_id: input.mutation_id, expected_version: 0,
+        content: input.content, name: input.name, description: file.frontmatter.description,
+        resourcesToWrite: payloads,
+        metadata_json: JSON.stringify(input.metadata ?? {}),
+      });
+    } catch (error) { toCoreError(error); }
+  }
+
+  /** Publish body, resource set and metadata together in one immutable version. */
+  async applyPackageMutation(input: ApplyPackageMutationInput): Promise<Skill> {
+    const ctx = this.packageContext(input);
+    this.assertMutationId(input.mutation_id);
+    this.assertPackageVersion(input.expected_version);
+    const current = await this.requirePackageHead(input.skill_id, ctx);
+    const file = this.parseAndValidate(input.content);
+    if (file.frontmatter.name !== current.name) {
+      throw new SkillCoreError("INVALID_FRONTMATTER", "name change is not allowed across package versions");
+    }
+    const payloads = this.packageResources(input.resources);
+    try {
+      // Derive removals and inherited metadata from the original expected version,
+      // not today's head, so advancing the head cannot alter a retry's request hash.
+      const base = current.version === input.expected_version ? current
+        : await this.store.getByVersion(input.skill_id, input.expected_version, ctx.team_id);
+      if (!base) throw new SkillCoreError("SKILL_VERSION_STALE", "the requested package base is unavailable");
+      assertTeamMatchWrap(base, ctx.team_id);
+      assertOwnerWrap(base, ctx.agent_id, ctx.team_id);
+      this.assertPackageAllowed(base.content, this.packageMetadata(base));
+      const metadata = input.metadata ?? this.packageMetadata(base);
+      this.assertPackageAllowed(input.content, metadata);
+      const finalPaths = new Set(payloads.map(payload => payload.path));
+      const remove = base.manifest.map(entry => entry.path).filter(path => !finalPaths.has(path)).sort();
+      // Authorization above is always checked, but stale checking stays in
+      // versioning AFTER its durable receipt/request-hash lookup.
+      return await this.versioning.appendNextVersion(base, {
+        team_id: base.team_id, agent_id: base.owner_agent_id,
+        user_id: ctx.user_id, task_id: ctx.task_id,
+      }, {
+        mutation_id: input.mutation_id, expected_version: input.expected_version,
+        content: input.content, name: base.name, description: file.frontmatter.description,
+        resourcesToWrite: payloads, resourcesToRemove: remove,
+        metadata_json: input.metadata === undefined ? base.metadata_json : JSON.stringify(metadata),
+      });
+    } catch (error) { toCoreError(error); }
+  }
+
+  getPackageLimits(): { bodyChars: number; resourceBytes: number; totalResourceBytes: number } {
+    return { bodyChars: SKILL_BODY_MAX, resourceBytes: this.resources.getMaxResourceSizeBytes(), totalResourceBytes: this.resources.getMaxSkillTotalBytes() };
+  }
+
+  /** Historical commit evidence for recovery, not proof that its resources remain live. */
+  async lookupPackageMutation(input: IdFields & { skill_id: string; mutation_id: string }): Promise<Skill | null> {
+    const ctx = this.packageContext(input);
+    this.assertMutationId(input.mutation_id);
+    const receipt = await this.store.getByMutationId(input.skill_id, input.mutation_id, ctx.team_id);
+    if (receipt) {
+      assertTeamMatchWrap(receipt, ctx.team_id);
+      assertOwnerWrap(receipt, ctx.agent_id, ctx.team_id);
+    }
+    return receipt;
+  }
+
+  /** Strict semantic snapshot read; ordinary get/readFile retain their existing policy. */
+  async readPackage(input: ReadPackageInput): Promise<{ skill: Skill; resources: SkillResourcePayload[] }> {
+    const ctx = this.packageContext(input);
+    this.assertPackageVersion(input.expected_version);
+    const skill = await this.requirePackageHead(input.skill_id, ctx);
+    assertVersionFreshWrap(skill, input.expected_version);
+    const payloads: SkillResourcePayload[] = [];
+    const seen = new Set<string>();
+    try {
+      for (const entry of skill.manifest) {
+        if (seen.has(entry.path)) throw new SkillCoreError("RESOURCE_INTEGRITY_ERROR", "duplicate manifest resource path");
+        seen.add(entry.path);
+        const data = await this.resources.readResource(skill.skill_id, skill.version, entry.path, "base64", skill.storage_dir || undefined);
+        if (!data || data.size_bytes !== entry.size_bytes ||
+            (entry.content_sha256 !== undefined && createHash("sha256").update(Buffer.from(data.content, "base64")).digest("hex") !== entry.content_sha256)) {
+          throw new SkillCoreError("RESOURCE_INTEGRITY_ERROR", `missing or corrupt package resource: ${entry.path}`);
+        }
+        payloads.push({ path: entry.path, content: data.content, encoding: "base64",
+          mime_type: entry.mime_type, is_executable: entry.is_executable });
+      }
+      return { skill, resources: payloads };
+    } catch (error) { toCoreError(error); }
+  }
 
   async create(input: CreateInput): Promise<Skill> {
     // 1) parse + validate
@@ -375,28 +518,53 @@ export class SkillCore {
   }
 
   async delete(input: DeleteInput): Promise<{ skill_id: string; archived: boolean }> {
-    // 语义：物理真删除（2026-07 变更，原为软删）。
-    // - head 不存在（skill 不存在 / 已被删）→ SKILL_NOT_FOUND
-    // - 用 getHeadIncludingArchived 兼容历史遗留 archived 行：老数据里可能还有
-    //   未被清理的 archived head（旧软删语义留下的），此时 delete 应视为"补物理删"
-    //   而不是 404。
-    const head = await this.store.getHeadIncludingArchived(input.skill_id, input.team_id);
-    if (input.team_id) assertTeamMatchWrap(head, input.team_id);
-    if (!head) throw new SkillCoreError("SKILL_NOT_FOUND");
-    if (input.agent_id) assertOwnerWrap(head, input.agent_id, input.team_id);
+    try {
+      const head = await this.store.getHeadIncludingArchived(input.skill_id, input.team_id);
+      if (this.store.deleteWithReceipt && this.store.getDeletionReceipt) {
+        const retired = head ? null : await this.store.getDeletionReceipt(input.skill_id, input.team_id);
+        if (!head && !retired) throw new SkillCoreError("SKILL_NOT_FOUND");
+        const teamId = head?.team_id ?? retired!.scope.team_id;
+        const ownerId = head?.owner_agent_id ?? retired!.owner_agent_id;
+        if (input.team_id && teamId !== input.team_id) throw new SkillCoreError("SKILL_NOT_FOUND");
+        if (input.agent_id && ownerId !== input.agent_id) throw new SkillCoreError("SKILL_NOT_OWNER");
+        const scope = { skill_id: input.skill_id, team_id: teamId };
+        const expected = head ? { row_id: head.row_id, version: head.version, mutation_id: head.mutation_id ?? `legacy:${head.row_id}`, status: head.status } : retired!.original_head;
+        const versionDirectory = (version: number) => this.resources.versionDir(input.skill_id, version);
+        const result = await this.store.deleteWithReceipt({ scope, owner_agent_id: ownerId, expected_head: expected, versionDirectory,
+          ...(head ? { previous_head: head } : {}) }, async (receipt, guard) => {
+          if (receipt.scope.skill_id !== scope.skill_id || receipt.scope.team_id !== teamId || receipt.owner_agent_id !== ownerId) {
+            throw new SkillCoreError("SKILL_NOT_OWNER", "cleanup receipt identity changed");
+          }
+          assertSkillDeletionTargets(scope, receipt.targets, versionDirectory);
+          // The durable target list survives DB-row deletion and partial storage
+          // cleanup. Directory removal is idempotent and must propagate failures.
+          const directories = new Set(receipt.targets.map(target => target.storage_dir).filter(Boolean));
+          for (const directory of directories) {
+            await guard();
+            await this.versioning.removeVersionDirectory(directory);
+          }
+          await guard();
+          await this.onSkillArchived?.({ skill_id: input.skill_id, team_id: teamId });
+          await guard();
+        });
+        if (result.completed_now) {
+          // Best-effort existing metric callback, not crash-exactly-once. A
+          // completed receipt prevents duplicate decrements on normal retries.
+          try { this.versioning.reportDeletedVersions(result.receipt.targets.length); } catch { /* metric delivery is not the deletion authority */ }
+        }
+        return { skill_id: input.skill_id, archived: true };
+      }
 
-    // 物理删除所有版本 + 清 storage + 汇总上报 shark(-N)
-    const deleted = await this.versioning.deleteSkill(input.skill_id, input.team_id);
-
-    // fire-and-forget：asset 状态同步失败不回滚 delete
-    // deleted > 0 才触发 —— 与 store.deleteAllVersions 语义对齐
-    if (deleted > 0 && this.onSkillArchived) {
-      try { this.onSkillArchived({ skill_id: input.skill_id, team_id: input.team_id }); }
-      catch { /* swallow */ }
-    }
-
-    // 返回结构保持 wire 兼容：archived=true 表示"已完成删除"（真删也复用该字段）
-    return { skill_id: input.skill_id, archived: deleted > 0 };
+      // Keep the pre-existing local SQLite path outside the remote coordinator.
+      if (input.team_id) assertTeamMatchWrap(head, input.team_id);
+      if (!head) throw new SkillCoreError("SKILL_NOT_FOUND");
+      if (input.agent_id) assertOwnerWrap(head, input.agent_id, input.team_id);
+      const deleted = await this.versioning.deleteSkill(input.skill_id, input.team_id);
+      if (deleted > 0 && this.onSkillArchived) {
+        try { await this.onSkillArchived({ skill_id: input.skill_id, team_id: input.team_id }); } catch { /* legacy best-effort hook */ }
+      }
+      return { skill_id: input.skill_id, archived: deleted > 0 };
+    } catch (error) { toCoreError(error); }
   }
 
   async writeFiles(input: WriteFilesInput): Promise<Skill> {
@@ -560,7 +728,7 @@ export class SkillCore {
     const exists = target.manifest.some((m) => m.path === input.path);
     if (!exists) throw new SkillCoreError("SKILL_NOT_FOUND", `path ${input.path} not in manifest of v${ver}`);
 
-    const r = await this.resources.readResource(input.skill_id, ver, input.path, input.encoding ?? "utf-8");
+    const r = await this.resources.readResource(input.skill_id, ver, input.path, input.encoding ?? "utf-8", target.storage_dir || undefined);
     if (!r) throw new SkillCoreError("STORAGE_NOT_FOUND", "version directory missing (may be GC'd)");
     this.notifyAccessed(head);
     return {
@@ -613,7 +781,7 @@ export class SkillCore {
 
     for (const entry of target.manifest) {
       const r = await this.resources.readResource(
-        input.skill_id, target.version, entry.path, "base64",
+        input.skill_id, target.version, entry.path, "base64", target.storage_dir || undefined,
       );
       if (!r) {
         warnings.push(`${entry.path}: missing in storage, skipped`);
@@ -652,6 +820,87 @@ export class SkillCore {
   // ───────────────────────────────────────────────────────────────────
   //  helpers
   // ───────────────────────────────────────────────────────────────────
+
+  private packageContext(input: IdFields & { skill_id: string }) {
+    if (typeof input.skill_id !== "string" || !/^skl-[A-Za-z0-9][A-Za-z0-9_-]{0,123}$/.test(input.skill_id)) {
+      throw new SkillCoreError("SKILL_MUTATION_CONFLICT", "invalid stable skill_id");
+    }
+    for (const value of [input.team_id, input.agent_id, input.user_id, input.task_id]) {
+      if (value !== undefined && (typeof value !== "string" || !value.trim() || value !== value.trim() || value.length > 256 || /[\x00-\x1f]/.test(value))) {
+        throw new SkillCoreError("SKILL_MUTATION_CONFLICT", "invalid package identity");
+      }
+    }
+    return { team_id: input.team_id ?? "default", agent_id: input.agent_id ?? "default",
+      user_id: input.user_id ?? "default", task_id: input.task_id ?? "default" };
+  }
+
+  private assertMutationId(id: string): void {
+    if (typeof id !== "string" || !id.trim() || id !== id.trim() || id.length > 256 || /[\x00-\x1f]/.test(id)) {
+      throw new SkillCoreError("SKILL_MUTATION_CONFLICT", "invalid package mutation_id");
+    }
+  }
+
+  private assertPackageVersion(version: number): void {
+    if (!Number.isSafeInteger(version) || version < 1) throw new SkillCoreError("SKILL_VERSION_STALE", "expected_version must be a positive safe integer");
+  }
+
+  private async requirePackageHead(skillId: string, ctx: { team_id: string; agent_id: string }): Promise<Skill> {
+    const head = await this.requireHead(skillId, ctx.team_id);
+    assertOwnerWrap(head, ctx.agent_id, ctx.team_id);
+    this.assertPackageAllowed(head.content, this.packageMetadata(head));
+    return head;
+  }
+
+  private packageMetadata(skill: Skill): Record<string, unknown> {
+    let metadata: unknown;
+    try { metadata = JSON.parse(skill.metadata_json); }
+    catch { throw new SkillCoreError("SKILL_MUTATION_CONFLICT", "invalid package metadata JSON"); }
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      throw new SkillCoreError("SKILL_MUTATION_CONFLICT", "package metadata must be an object");
+    }
+    return metadata as Record<string, unknown>;
+  }
+
+  private assertPackageAllowed(content: string, metadata: Record<string, unknown>): void {
+    try {
+      const file = parseSkillFile(content);
+      validateSkillFile({ ...file, body: "" });
+    } catch (error) {
+      throw new SkillCoreError("SKILL_FRONTMATTER_INVALID", (error as Error).message);
+    }
+    // parseSkillFile intentionally projects only known fields. Parse the same
+    // YAML fence to inspect guards without mistaking quoted strings/body text for booleans.
+    const lines = content.replace(/\r\n?/g, "\n").split("\n");
+    const end = lines.findIndex((line, index) => index > 0 && line === "---");
+    const frontmatter = parseYaml(lines.slice(1, end).join("\n")) as Record<string, unknown>;
+    const guarded = (value: unknown): boolean => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const flags = value as Record<string, unknown>;
+      return flags.protected === true || flags.pinned === true || flags.external_managed === true ||
+        flags.managed_by === "external" || flags.source === "external" || flags.source === "external-managed";
+    };
+    if (guarded(metadata) || guarded(metadata.source) || guarded(frontmatter) || guarded(frontmatter.metadata) || guarded(frontmatter.source)) {
+      throw new SkillCoreError("SKILL_PROTECTED", "protected, pinned or externally managed packages cannot be semantically changed");
+    }
+  }
+
+  private packageResources(payloads: SkillResourcePayload[]): SkillResourcePayload[] {
+    if (!Array.isArray(payloads)) throw new SkillCoreError("INVALID_PATH", "resources must be a complete array");
+    const seen = new Set<string>();
+    for (const payload of payloads) {
+      // Reject aliases such as a//b, ./a and backslashes: complete sets must have
+      // one canonical name per physical resource on both local and object storage.
+      if (!payload || typeof payload.path !== "string" || !payload.path || payload.path.includes("\\") || payload.path.includes("\0") ||
+          payload.path.split("/").some(part => !part || part === "." || part === "..") || seen.has(payload.path)) {
+        throw new SkillCoreError("INVALID_PATH", "package resource paths must be unique relative POSIX paths");
+      }
+      if (typeof payload.content !== "string" || (payload.encoding !== "utf-8" && payload.encoding !== "base64")) {
+        throw new SkillCoreError("RESOURCE_INTEGRITY_ERROR", "invalid package resource content or encoding");
+      }
+      seen.add(payload.path);
+    }
+    return [...payloads].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  }
 
   private parseAndValidate(raw: string) {
     let file;

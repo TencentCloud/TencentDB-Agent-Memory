@@ -1,9 +1,10 @@
 /**
  * SkillToolsV2 — 给 Review Agent 的工具集（绑定到 SkillCore）
  *
- * 暴露 4 个写动作 + 2 个读动作，覆盖 SkillExtractor 的需要：
+ * 暴露 4 个写动作 + 3 个读动作，覆盖 SkillExtractor 的需要：
  *   - skill_list      列出团队内可见 skill
  *   - skill_view      查看单个 skill 详情
+ *   - skill_files_read 读取指定版本的资源
  *   - skill_create    新建 skill
  *   - skill_update    全量替换 SKILL.md
  *   - skill_patch     单点串替
@@ -115,6 +116,25 @@ export function createSkillTools(opts: CreateSkillToolsOptions) {
             skill_id: r.skill_id, version: r.version, name: r.name, description: r.description,
             content: r.content, manifest: r.manifest,
           });
+        } catch (e) { return jsonError(e); }
+      },
+    }),
+
+    skill_files_read: tool({
+      description: "Read a resource from the manifest returned by skill_view. Use that exact version before changing an external section; do not infer its content from the SKILL.md link.",
+      inputSchema: jsonSchema<{ skill_id: string; version: number; path: string; encoding?: "utf-8" | "base64" }>({
+        type: "object",
+        properties: {
+          skill_id: { type: "string" },
+          version: { type: "integer", minimum: 1, description: "Version returned by skill_view" },
+          path: { type: "string", description: "Exact resource path from the manifest" },
+          encoding: { type: "string", enum: ["utf-8", "base64"] },
+        },
+        required: ["skill_id", "version", "path"],
+      }),
+      execute: async ({ skill_id, version, path, encoding }) => {
+        try {
+          return JSON.stringify(await core.readFile({ ...readIds, skill_id, version, path, encoding }));
         } catch (e) { return jsonError(e); }
       },
     }),

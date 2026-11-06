@@ -92,6 +92,60 @@ export interface SkillUpdateRequest extends SkillIdFields {
   content: string;
 }
 
+// ── /v3/skill/restructure and /v3/skill/restructure/get ──
+export interface SkillPackageCandidate {
+  name: string;
+  /** Complete unpublished SKILL.md; may exceed ordinary CRUD body limits. */
+  content: string;
+  /** Complete final set, including binary bytes and metadata; at most 4096 resources. */
+  resources: SkillResourcePayload[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface SkillRestructureSource {
+  skill_id: string;
+  expected_version: number;
+}
+
+/** A stable caller request_id is mandatory. Do not generate a new one on retry. */
+export type SkillRestructureRequest = SkillIdFields & { request_id: string } & (
+  | { skill_id: string; expected_version: number; reason?: string; candidate?: never; source?: never }
+  | { candidate: SkillPackageCandidate; source?: SkillRestructureSource; skill_id?: never; expected_version?: never; reason?: never }
+);
+
+export interface SkillRestructureGetRequest extends SkillIdFields {
+  operation_id: string;
+}
+
+export type SkillRestructureStatus =
+  | "queued" | "running" | "prepared" | "publishing"
+  | "succeeded" | "unchanged" | "rejected" | "conflict" | "failed";
+
+export interface SkillRestructureOutput {
+  key: string;
+  skill_id: string;
+  version: number;
+  name: string;
+  role: "root" | "child";
+  reused: boolean;
+}
+
+/** Asynchronous operation state, not a published SkillSummary. Poll restructureGet. */
+export interface SkillRestructureOperation {
+  operation_id: string;
+  status: SkillRestructureStatus;
+  source_skill_id: string;
+  /** Zero denotes an unpublished candidate. */
+  source_version: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+  attempts: number;
+  outputs: SkillRestructureOutput[];
+  rationale?: string;
+  review_summary?: string;
+  error?: { code: string; message: string };
+}
+
 // ── /v3/skill/patch ──
 export interface SkillPatchRequest extends SkillIdFields {
   skill_id: string;
@@ -483,5 +537,15 @@ export const SkillErrorCode = {
   STORAGE_NOT_FOUND: 50301,
   LLM_UNAVAILABLE: 50302,
   COS_REQUIRED: 50303,
+  OPERATION_NOT_FOUND: 40401,
+  PROTECTED: 40303,
+  MUTATION_CONFLICT: 40902,
+  PUBLICATION_BUSY: 40903,
+  RESTRUCTURE_DISABLED: 50301,
+  PUBLICATION_UNKNOWN: 50301,
+  PUBLICATION_COORDINATOR_REQUIRED: 50301,
+  RESOURCE_INTEGRITY_ERROR: 50301,
+  /** Version already committed; retry registration/recovery, never roll it back. */
+  ASSET_REGISTRATION_PENDING: 50301,
 } as const;
 export type SkillErrorCodeValue = (typeof SkillErrorCode)[keyof typeof SkillErrorCode];

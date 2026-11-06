@@ -70,6 +70,19 @@ export interface TriggerArchiveResult {
   archiveKey: string;
 }
 
+export type EnqueueRestructureInput = AgentTuple & {
+  operation_id: string;
+  created_at_ms: number;
+  task_ref_id?: string;
+  session_id?: string;
+};
+
+export interface EnqueueRestructureResult {
+  taskId: string;
+  operationId: string;
+  created: boolean;
+}
+
 export interface SkillTriggerServiceOptions {
   buffer: SkillBufferStorage;
   queue: ISkillAgentTaskQueue;
@@ -101,6 +114,38 @@ export class SkillTriggerService {
     this.tasksMutexLockTtlMs = opts.tasksMutexLockTtlMs ?? 10_000;
     this.tasksMutexWaitDeadlineMs = opts.tasksMutexWaitDeadlineMs ?? 30_000;
     this.now = opts.now ?? (() => Date.now());
+  }
+
+  /** Enqueue an already durable restructure operation without inventing an archive. */
+  async enqueueRestructure(input: EnqueueRestructureInput): Promise<EnqueueRestructureResult> {
+    if (!input.operation_id.trim() || !Number.isFinite(input.created_at_ms)) {
+      throw new Error("SKILL_RESTRUCTURE_INVALID_TASK: operation_id and created_at_ms are required");
+    }
+    const agent: AgentTuple = { instance_id: input.instance_id, space_id: input.space_id,
+      user_id: input.user_id, team_id: input.team_id, agent_id: input.agent_id };
+    const taskId = `skill-restructure-task-${input.operation_id}`;
+    return this.queue.withTasksMutex(agent,
+      { lockTtlMs: this.tasksMutexLockTtlMs, waitDeadlineMs: this.tasksMutexWaitDeadlineMs }, async () => {
+        const doc = await this.buffer.readTasks(agent);
+        const existing = doc.tasks.find(task => task.task_id === taskId);
+        if (existing && (existing.kind !== "restructure" || existing.operation_id !== input.operation_id)) {
+          throw new Error(`SKILL_RESTRUCTURE_INVALID_TASK: conflicting task ${taskId}`);
+        }
+        if (!existing) {
+          doc.tasks.push({ kind: "restructure", task_id: taskId, operation_id: input.operation_id,
+            created_at_ms: input.created_at_ms, enqueued_at_ms: this.now(), user_id: input.user_id,
+            team_id: input.team_id, agent_id: input.agent_id, space_id: input.space_id,
+            ...(input.task_ref_id !== undefined ? { task_ref_id: input.task_ref_id } : {}),
+            ...(input.session_id !== undefined ? { session_id: input.session_id } : {}),
+          });
+          doc.updated_at_ms = this.now();
+          await this.buffer.writeTasks(agent, doc);
+        }
+        // Even duplicate requests re-establish the scheduling signal; they must
+        // not reset a task's retry diagnostics or replace an in-flight entry.
+        await this.queue.enqueueAgent(agent);
+        return { taskId, operationId: input.operation_id, created: !existing };
+      });
   }
 
   /**
@@ -151,7 +196,7 @@ export class SkillTriggerService {
     // writeTasks / enqueueAgent。历史事故里就是 writeArchive 慢 10s 拖崩了
     // worker 侧的判空逻辑；这里逐段结构化事件，字段按 req_id / task_id 关联。
     // obsLogger 内部 try/catch + 后端降级，不需要额外防御。
-    const rid = input.perfRequestId;
+    const rid = input.perfRequestId ?? "";
     const instanceId = session.instance_id;
 
     // ② 先写 archive（已存在视为成功）

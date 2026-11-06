@@ -1,10 +1,11 @@
 /**
- * v3 SkillClient — thin wrapper around the 17 `/v3/skill/*` endpoints
+ * v3 SkillClient — thin wrapper around the 19 `/v3/skill/*` endpoints
  * defined by `src/gateway/skill-handlers.ts`:
  *
  *   create / update / patch / delete / get / get-by-name / list / search
  *   versions / files/write / files/remove / files/read / export / listing
  *   extract / conversation/add / conversation/force-archive
+ *   restructure / restructure/get
  *
  * Unlike v3 `MemoryClient`, skill isolation fields for the CRUD/file/
  * listing/search endpoints are *all optional* at the schema layer (see
@@ -51,6 +52,9 @@ import type {
   SkillListingRequest,
   SkillPatchRequest,
   SkillResourcePayload,
+  SkillRestructureRequest,
+  SkillRestructureGetRequest,
+  SkillRestructureOperation,
   SkillSearchData,
   SkillSearchRequest,
   SkillSummary,
@@ -214,6 +218,32 @@ export class SkillClient {
       content: params.content,
     });
     return this.http.post(`${V3}/update`, body);
+  }
+
+  /**
+   * `POST /v3/skill/restructure` — queue explicit semantic review of an existing
+   * version or a complete candidate. The server forces candidate review; this
+   * does not call ordinary CRUD. Reuse request_id unchanged when retrying.
+   */
+  restructure(params: SkillRestructureRequest): Promise<SkillRestructureOperation> {
+    const body = stripUndefined({
+      ...this.ids(params),
+      request_id: params.request_id,
+      skill_id: params.skill_id,
+      expected_version: params.expected_version,
+      reason: params.reason,
+      candidate: params.candidate,
+      source: params.source,
+    });
+    validateRequiredStrings(body, ["request_id"], "restructure");
+    return this.http.post(`${V3}/restructure`, body);
+  }
+
+  /** `POST /v3/skill/restructure/get` — poll using the same instance and actor identities. */
+  restructureGet(params: SkillRestructureGetRequest): Promise<SkillRestructureOperation> {
+    const body = stripUndefined({ ...this.ids(params), operation_id: params.operation_id });
+    validateRequiredStrings(body, ["operation_id"], "restructureGet");
+    return this.http.post(`${V3}/restructure/get`, body);
   }
 
   /** `POST /v3/skill/patch` — string replacement; version+1. */

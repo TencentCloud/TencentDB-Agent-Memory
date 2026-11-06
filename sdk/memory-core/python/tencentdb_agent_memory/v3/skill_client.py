@@ -1,7 +1,8 @@
-"""TencentDB Agent Memory v3 Skill SDK — 17 ``/v3/skill/*`` endpoints:
+"""TencentDB Agent Memory v3 Skill SDK — 19 ``/v3/skill/*`` endpoints:
 ``create / update / patch / delete / get / get-by-name / list / search
 / versions / files/write / files/remove / files/read / export / listing
-/ extract / conversation/add / conversation/force-archive``.
+/ extract / conversation/add / conversation/force-archive
+/ restructure / restructure/get``.
 
 Design & auth
 -------------
@@ -26,7 +27,17 @@ and are validated locally before a request is sent.
 from __future__ import annotations
 
 import base64
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 
 from .._http import Stub
 from .._v3_http import AsyncHttpStub, HttpStub
@@ -51,7 +62,74 @@ SKILL_ERROR_CODE: Dict[str, int] = {
     "STORAGE_NOT_FOUND": 50301,
     "LLM_UNAVAILABLE": 50302,
     "COS_REQUIRED": 50303,
+    "OPERATION_NOT_FOUND": 40401,
+    "PROTECTED": 40303,
+    "MUTATION_CONFLICT": 40902,
+    "PUBLICATION_BUSY": 40903,
+    "RESTRUCTURE_DISABLED": 50301,
+    "PUBLICATION_UNKNOWN": 50301,
+    "PUBLICATION_COORDINATOR_REQUIRED": 50301,
+    "RESOURCE_INTEGRITY_ERROR": 50301,
+    # Already committed: recover asset registration, never roll back the version.
+    "ASSET_REGISTRATION_PENDING": 50301,
 }
+
+
+SkillRestructureStatus = Literal[
+    "queued", "running", "prepared", "publishing", "succeeded",
+    "unchanged", "rejected", "conflict", "failed",
+]
+
+
+class _SkillPackageCandidateOptional(TypedDict, total=False):
+    metadata: Dict[str, Any]
+
+
+class SkillPackageCandidate(_SkillPackageCandidateOptional):
+    """Complete unpublished package; resources is the final set (up to 4096)."""
+    name: str
+    content: str
+    resources: List[Dict[str, Any]]
+
+
+class SkillRestructureSource(TypedDict):
+    skill_id: str
+    expected_version: int
+
+
+class SkillRestructureOutput(TypedDict):
+    key: str
+    skill_id: str
+    version: int
+    name: str
+    role: Literal["root", "child"]
+    reused: bool
+
+
+class _SkillRestructureOperationOptional(TypedDict, total=False):
+    rationale: str
+    review_summary: str
+    error: Dict[str, str]
+
+
+class SkillRestructureOperation(_SkillRestructureOperationOptional):
+    """Asynchronous status, not a SkillSummary.
+
+    source_version=0 is an unpublished draft.
+    """
+    operation_id: str
+    status: SkillRestructureStatus
+    source_skill_id: str
+    source_version: int
+    created_at_ms: int
+    updated_at_ms: int
+    attempts: int
+    outputs: List[SkillRestructureOutput]
+
+
+def _validate_restructure_id(value: str, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ParamError(f"restructure requires non-empty {field}")
 
 
 def _strip_none(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -254,6 +332,65 @@ class SkillClient:
             "content": content,
         })
         return self._stub.post(f"{_V3}/update", body)
+
+    def restructure(
+        self,
+        *,
+        request_id: str,
+        skill_id: Optional[str] = None,
+        expected_version: Optional[int] = None,
+        reason: Optional[str] = None,
+        candidate: Optional[SkillPackageCandidate] = None,
+        source: Optional[SkillRestructureSource] = None,
+        team_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> SkillRestructureOperation:
+        """Queue explicit semantic work with a stable caller ``request_id``.
+
+        Supply either ``skill_id`` + ``expected_version`` (+ optional ``reason``),
+        or a complete ``candidate`` (+ optional ``source``). Candidate review is
+        forced by the server, even below automatic thresholds. This is not CRUD;
+        poll :meth:`restructure_get`. Reuse request_id unchanged for retries.
+        """
+        _validate_restructure_id(request_id, "request_id")
+        body = _strip_none({
+            **self._defaults.merge(team_id, agent_id, user_id, task_id),
+            "request_id": request_id,
+            "skill_id": skill_id,
+            "expected_version": expected_version,
+            "reason": reason,
+            "candidate": candidate,
+            "source": source,
+        })
+        return cast(
+            SkillRestructureOperation,
+            self._stub.post(f"{_V3}/restructure", body),
+        )
+
+    def restructure_get(
+        self,
+        operation_id: str,
+        *,
+        team_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> SkillRestructureOperation:
+        """Poll ``POST /v3/skill/restructure/get``.
+
+        Use the same instance/actor IDs.
+        """
+        _validate_restructure_id(operation_id, "operation_id")
+        body = _strip_none({
+            **self._defaults.merge(team_id, agent_id, user_id, task_id),
+            "operation_id": operation_id,
+        })
+        return cast(
+            SkillRestructureOperation,
+            self._stub.post(f"{_V3}/restructure/get", body),
+        )
 
     def patch(
         self,
@@ -780,6 +917,62 @@ class AsyncSkillClient:
             "content": content,
         })
         return await self._stub.post(f"{_V3}/update", body)
+
+    async def restructure(
+        self,
+        *,
+        request_id: str,
+        skill_id: Optional[str] = None,
+        expected_version: Optional[int] = None,
+        reason: Optional[str] = None,
+        candidate: Optional[SkillPackageCandidate] = None,
+        source: Optional[SkillRestructureSource] = None,
+        team_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> SkillRestructureOperation:
+        """Async counterpart of SkillClient.restructure.
+
+        Never invents a request_id.
+        """
+        _validate_restructure_id(request_id, "request_id")
+        body = _strip_none({
+            **self._defaults.merge(team_id, agent_id, user_id, task_id),
+            "request_id": request_id,
+            "skill_id": skill_id,
+            "expected_version": expected_version,
+            "reason": reason,
+            "candidate": candidate,
+            "source": source,
+        })
+        return cast(
+            SkillRestructureOperation,
+            await self._stub.post(f"{_V3}/restructure", body),
+        )
+
+    async def restructure_get(
+        self,
+        operation_id: str,
+        *,
+        team_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> SkillRestructureOperation:
+        """Poll operation status.
+
+        Use the original instance and actor identities.
+        """
+        _validate_restructure_id(operation_id, "operation_id")
+        body = _strip_none({
+            **self._defaults.merge(team_id, agent_id, user_id, task_id),
+            "operation_id": operation_id,
+        })
+        return cast(
+            SkillRestructureOperation,
+            await self._stub.post(f"{_V3}/restructure/get", body),
+        )
 
     async def patch(
         self,
