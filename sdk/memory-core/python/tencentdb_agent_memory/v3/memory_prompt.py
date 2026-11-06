@@ -21,10 +21,17 @@ def _required(name: str, value: str) -> str:
 
 
 def _ids(values: Iterable[str], name: str) -> List[str]:
-    result = list(dict.fromkeys(values))
+    message = f"{name} must be a non-empty list of non-empty strings"
+    # A scalar string is iterable, but must never become a list of character IDs.
+    if isinstance(values, (str, bytes, bytearray)):
+        raise ParamError(message)
+    try:
+        result = list(values)
+    except TypeError as exc:
+        raise ParamError(message) from exc
     if not result or any(not isinstance(item, str) or not item.strip() for item in result):
-        raise ParamError(f"{name} must be a non-empty list of non-empty strings")
-    return result
+        raise ParamError(message)
+    return list(dict.fromkeys(result))
 
 
 def _target(team_id: Optional[str], agent_ids: Optional[List[str]]) -> None:
