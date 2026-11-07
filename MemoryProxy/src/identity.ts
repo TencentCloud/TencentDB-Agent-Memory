@@ -14,6 +14,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { derivePiSessionId, readPiBranchHeader } from "./agent-adapters/pi.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -183,6 +184,10 @@ export function extractClientIdentity(
   // If session ID wasn't found in headers, check if prompt has one
   if (!sessionId && userInfo?.sessionIdFromPrompt) {
     sessionId = userInfo.sessionIdFromPrompt;
+  }
+
+  if (agentSource === "pi") {
+    sessionId = derivePiSessionId(sessionId, readPiBranchHeader(headers));
   }
 
   // If wechat/work ID wasn't found in headers, try username from workspace path

@@ -5,9 +5,18 @@
  * ExtensionAPI has no plugin config object). The extension carries only
  * routing + the dynamic per-session x-conversation-id header; all memory
  * capability (L3/L2 injection, L0 capture, L0/L1/L2 search via curl
- * recipes) arrives server-side from the proxy. (Scope C.)
+ * recipes) arrives server-side from the proxy. Pi `/tree` branches add a
+ * versioned routing marker while unmarked sessions retain the legacy id.
+ * (Scope C.)
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  BRANCH_ENTRY_TYPE,
+  BRANCH_HEADER,
+  branchIsolationEnabled,
+  createBranchId,
+  restoreBranchId,
+} from "./branch-identity.js";
 
 export default function (pi: ExtensionAPI) {
   const proxyBase = process.env.TDAI_PROXY_URL ?? "http://127.0.0.1:8096";
@@ -18,6 +27,9 @@ export default function (pi: ExtensionAPI) {
   const teamId = process.env.TDAI_TEAM_ID ?? "";
   const agentId = process.env.TDAI_AGENT_ID ?? "";
   const taskId = process.env.TDAI_TASK_ID ?? "";
+  const isolateTreeBranches = branchIsolationEnabled(process.env.TDAI_BRANCH_ISOLATION);
+  const branchBySessionId = new Map<string, string>();
+  const warnedLegacySessions = new Set<string>();
 
   // Graceful degradation: if required identity env vars are missing, warn and
   // skip registration so Pi still starts. The user sees the warning at load
@@ -81,9 +93,56 @@ export default function (pi: ExtensionAPI) {
     ],
   });
 
+  const warnLegacyFallback = (sessionId: string) => {
+    if (warnedLegacySessions.has(sessionId)) return;
+    warnedLegacySessions.add(sessionId);
+    console.warn(
+      `[pi-tdai-client] No ${BRANCH_ENTRY_TYPE} marker is visible for session ${sessionId}; `
+        + `using the legacy per-session memory identity.`,
+    );
+  };
+
+  pi.on("session_start", (_event: any, ctx: any) => {
+    if (!isolateTreeBranches) return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const branchId = restoreBranchId(ctx.sessionManager.getBranch());
+    if (branchId) {
+      branchBySessionId.set(sessionId, branchId);
+      return;
+    }
+    branchBySessionId.delete(sessionId);
+    warnLegacyFallback(sessionId);
+  });
+
+  pi.on("session_tree", (_event: any, ctx: any) => {
+    if (!isolateTreeBranches) return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const restored = restoreBranchId(ctx.sessionManager.getBranch());
+    if (restored) {
+      branchBySessionId.set(sessionId, restored);
+      return;
+    }
+    const branchId = createBranchId();
+    branchBySessionId.set(sessionId, branchId);
+    pi.appendEntry(BRANCH_ENTRY_TYPE, {
+      branchId,
+      createdAt: new Date().toISOString(),
+    });
+  });
+
   pi.on("before_provider_headers", (event: any, ctx: any) => {
     if (ctx.model?.provider !== "tdai") return;
     const sid = ctx.sessionManager.getSessionId();
     event.headers["x-conversation-id"] = `pi-${sid}`;
+    delete event.headers[BRANCH_HEADER];
+    if (!isolateTreeBranches) return;
+
+    const branchId = restoreBranchId(ctx.sessionManager.getBranch()) ?? branchBySessionId.get(sid);
+    if (branchId) {
+      branchBySessionId.set(sid, branchId);
+      event.headers[BRANCH_HEADER] = branchId;
+    } else {
+      warnLegacyFallback(sid);
+    }
   });
 }
