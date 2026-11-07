@@ -437,17 +437,16 @@ export class VectorStore implements IMemoryStore {
   }
 
   /**
-   * Defensive guard: ensure no stale write transaction is left open.
+   * End a leftover transaction before a public read operation.
    *
-   * In WAL mode, if a previous `BEGIN` was issued but the corresponding
-   * `COMMIT` / `ROLLBACK` was swallowed by an error path (e.g. the catch
-   * block itself threw), the connection remains inside an unclosed
-   * transaction.  Subsequent read queries then operate on a stale snapshot
-   * that predates the uncommitted writes — producing empty results even
-   * though the data exists on disk and is visible to other connections.
+   * In WAL mode, a read transaction that already established a snapshot
+   * does not see later commits made by another connection. Ending that
+   * transaction allows the next read to acquire a fresh snapshot. This is
+   * a defensive recovery mechanism, not a confirmed root cause of #987.
    *
-   * This method issues a harmless `ROLLBACK` — a no-op when no transaction
-   * is active — before every read operation to guarantee a fresh snapshot.
+   * VectorStore owns its transactions; public reads must run outside an
+   * active write. ROLLBACK would discard pending writes in such a transaction.
+   * With no transaction it throws "no transaction is active", caught below.
    *
    * Background: https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/987
    */
