@@ -16,6 +16,7 @@ import { performCapture } from "./src/hooks/capture.js";
 import { handleMemorySearch } from "./src/tools/memory-search.js";
 import { handleConversationSearch } from "./src/tools/conversation-search.js";
 import { handleReadCos } from "./src/tools/read-cos.js";
+import { resolveRequestAgentId } from "./src/agent-id.js";
 
 const TAG = "[memory-client]";
 
@@ -64,8 +65,9 @@ export default function register(api: any) {
   const rejectUnauthorized = server.rejectUnauthorized !== false;
 
   // ── Initialize v3 SDK ──
-  // Isolation (team/agent/user) is required by Gateway /v3/*; sessionId may be
-  // narrowed per-hook via client.withIsolation({ sessionId }).
+  // Gateway /v3/* requires team/agent/user. `agentId` here is only the fallback
+  // used when a hook or tool has no runtime agent id. Each request overrides it
+  // from the OpenClaw context (sessionKey, then ctx.agentId).
   const client = new MemoryClient({
     endpoint: serverUrl,
     apiKey,
@@ -84,6 +86,19 @@ export default function register(api: any) {
     serviceId: instanceId,
   });
 
+  // Tools omit includeSession. The SDK copies a client sessionId into search
+  // bodies when the call omits session_id, so an omitted session_key would
+  // only search the current session. Hooks still scope the turn.
+  function clientFor(
+    ctx: { sessionKey?: unknown; agentId?: unknown; sessionId?: unknown } | null | undefined,
+    opts?: { includeSession?: boolean },
+  ) {
+    const requestAgentId = resolveRequestAgentId(ctx, server.agentId);
+    const rawSession = opts?.includeSession ? ctx?.sessionId : undefined;
+    const sessionId = typeof rawSession === "string" && rawSession ? rawSession : undefined;
+    return client.withIsolation(sessionId ? { agentId: requestAgentId, sessionId } : { agentId: requestAgentId });
+  }
+
   api.logger.info?.(
     `${TAG} Initialized: server=${serverUrl}, instance=${instanceId}, ` +
     `isolation(team=${teamId},agent=${agentId},user=${userId}), ` +
@@ -94,7 +109,7 @@ export default function register(api: any) {
   // ── Register Tools (same pattern as extensions/memory-tencentdb/index.ts) ──
 
   api.registerTool(
-    {
+    (toolCtx: { sessionKey?: unknown; agentId?: unknown; sessionId?: unknown }) => ({
       name: "tdai_memory_search",
       label: "Memory Search",
       description:
@@ -110,14 +125,14 @@ export default function register(api: any) {
         required: ["query"],
       },
       async execute(_toolCallId: string, params: Record<string, unknown>) {
-        return handleMemorySearch(client, params as any, api.logger);
+        return handleMemorySearch(clientFor(toolCtx), params as any, api.logger);
       },
-    },
+    }),
     { name: "tdai_memory_search" },
   );
 
   api.registerTool(
-    {
+    (toolCtx: { sessionKey?: unknown; agentId?: unknown; sessionId?: unknown }) => ({
       name: "tdai_conversation_search",
       label: "Conversation Search",
       description:
@@ -132,9 +147,9 @@ export default function register(api: any) {
         required: ["query"],
       },
       async execute(_toolCallId: string, params: Record<string, unknown>) {
-        return handleConversationSearch(client, params as any, api.logger);
+        return handleConversationSearch(clientFor(toolCtx), params as any, api.logger);
       },
-    },
+    }),
     { name: "tdai_conversation_search" },
   );
 
@@ -190,10 +205,8 @@ export default function register(api: any) {
     }
 
     try {
-      // Scope L0/L1 recall to this session when sessionId is available
-      const sessionClient = ctx?.sessionId
-        ? client.withIsolation({ sessionId: ctx.sessionId })
-        : client;
+      // Scope recall to this turn's runtime agent, and to the session when present.
+      const sessionClient = clientFor(ctx, { includeSession: true });
 
       const result = await performRecall(sessionClient, {
         query: userText,
@@ -246,9 +259,7 @@ export default function register(api: any) {
       // or let it be overwritten on next before_prompt_build.
 
       try {
-        const sessionClient = ctx?.sessionId
-          ? client.withIsolation({ sessionId: ctx.sessionId })
-          : client;
+        const sessionClient = clientFor(ctx, { includeSession: true });
 
         const result = await performCapture(
           sessionClient,
