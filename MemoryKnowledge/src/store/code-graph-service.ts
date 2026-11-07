@@ -28,6 +28,7 @@ import type {
   CountOpts,
 } from "./types.js";
 import { BuildQueue } from "./build-queue.js";
+import { repositoryUrlValidationError } from "../code-source/clone-url.js";
 import type { ICredentialStore } from "../source-auth/types.js";
 import { SSH_PROVIDER_ID } from "../code-source/providers/ssh.js";
 import type { AuthMethodKind } from "../code-source/auth-methods/types.js";
@@ -196,6 +197,8 @@ export class CodeGraphService {
    * - 新建 → 入库 pending + 后台建图。
    */
   create(params: CreateCodeGraphParams): { row: CodeGraphRow; existed: boolean } {
+    const urlError = repositoryUrlValidationError(params.repo_url);
+    if (urlError) throw new Error(urlError);
     const { row, existed } = this.store.createCodeGraph(params);
     if (!existed) {
       // ① 私有仓：入队前先落凭据（否则 worker 立刻 clone 时凭据还不存在 → 401）。
