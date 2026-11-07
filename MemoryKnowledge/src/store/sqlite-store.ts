@@ -548,12 +548,12 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
     const ts = nowIso();
     const a = this.db
       .update(knowledgeCodeGraph)
-      .set({ status: "failed", syncError: reason, updatedAt: ts })
+      .set({ status: "failed", internalStatus: null, syncError: reason, updatedAt: ts })
       .where(sql`status IN ('pending','processing')`)
       .run();
     const b = this.db
       .update(knowledgeWiki)
-      .set({ status: "failed", syncError: reason, updatedAt: ts })
+      .set({ status: "failed", internalStatus: null, syncError: reason, updatedAt: ts })
       .where(sql`status IN ('pending','processing')`)
       .run();
     return a.changes + b.changes;
