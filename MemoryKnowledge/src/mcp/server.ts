@@ -5,7 +5,7 @@
  * the server forwards the request to the Hono HTTP API via callApi().
  *
  * Usage:
- *   KNOWLEDGE_API_URL=http://localhost:8421 node dist/mcp/server.js
+ *   KNOWLEDGE_API_URL=http://localhost:8421 node dist/mcp/server.mjs
  *
  * The agent connects via stdio; the server translates tool calls to HTTP
  * requests against the knowledge service.
