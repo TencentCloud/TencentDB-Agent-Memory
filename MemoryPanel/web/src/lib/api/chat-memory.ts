@@ -12,7 +12,8 @@ export interface ChatMemoryBlock {
   summary?: string;
   uploaded_by_user_id: string;
   updated_at_ms: number;
-  layer_counts: { L0_messages: number; L1: number; L2: number; L3: number };
+  /** 列表不预加载分层统计；选中后通过 layer 接口读取真实数量。 */
+  layer_counts?: { L0_messages: number; L1: number; L2: number; L3: number };
   /** 仅 team-assets */
   bound_agent_count?: number;
   /** 仅 agent-fixed */
