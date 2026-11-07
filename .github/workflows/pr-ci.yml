@@ -9,6 +9,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NPM_VERSION: "11.12.1"
+
 jobs:
   # ── 1. Install dependencies ────────────────────────────────
   install:
@@ -21,12 +24,15 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Use npm ${{ env.NPM_VERSION }}
+        run: npm install --global "npm@${{ env.NPM_VERSION }}"
+
       - name: Cache node_modules
         uses: actions/cache@v4
         id: cache-deps
         with:
           path: node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: deps-${{ runner.os }}-node22-npm${{ env.NPM_VERSION }}-${{ hashFiles('package.json') }}
 
       - name: npm install
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -44,11 +50,14 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Use npm ${{ env.NPM_VERSION }}
+        run: npm install --global "npm@${{ env.NPM_VERSION }}"
+
       - name: Restore node_modules
         uses: actions/cache@v4
         with:
           path: node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: deps-${{ runner.os }}-node22-npm${{ env.NPM_VERSION }}-${{ hashFiles('package.json') }}
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
