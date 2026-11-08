@@ -2219,6 +2219,7 @@ export class TdaiGateway {
         model: effective.model ?? "default",
         timeoutMs: effective.timeoutMs ?? 120_000,
         stream: effective.stream ?? false,
+        strictOpenAICompat: effective.strictOpenAICompat,
       },
     });
     const cfg = this.core.getResolvedSkillConfig();
