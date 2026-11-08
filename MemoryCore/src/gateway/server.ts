@@ -49,6 +49,7 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
+import { getStoreHealth } from "./health.js";
 import type { Logger } from "../core/types.js";
 import { InstanceConfigProvider } from "../core/instance-config-provider.js";
 import type { VdbConfig, MongoConfig } from "../core/instance-config-provider.js";
@@ -1533,12 +1534,16 @@ export class TdaiGateway {
   }
 
   private handleHealth(res: http.ServerResponse): void {
+    const vectorStore = this.core.getVectorStore();
+    const vectorStoreHealth = getStoreHealth(vectorStore);
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: vectorStoreHealth.status === "ok" ? "ok" : "degraded",
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: !!this.core.getVectorStore(),
+        vectorStore: !!vectorStore,
+        vectorStoreStatus: vectorStoreHealth.status,
+        ...(vectorStoreHealth.reason ? { vectorStoreReason: vectorStoreHealth.reason } : {}),
         embeddingService: !!this.core.getEmbeddingService(),
         // BM25 keyword search depends on the FTS5 module, which is not
         // compiled into every official Node build (e.g. v22.13.1). When
@@ -1552,6 +1557,8 @@ export class TdaiGateway {
         stateBackend: this.stateBackend ? "connected" : "none",
       },
     };
+    // Keep liveness successful even when memory storage is degraded; callers
+    // can inspect vectorStoreStatus for default-store readiness.
     sendJson(res, 200, response);
   }
 

@@ -2,6 +2,8 @@
  * TDAI Gateway — Request/Response types for the HTTP API.
  */
 
+import type { StoreHealthStatus } from "./health.js";
+
 // ============================
 // Common
 // ============================
@@ -16,11 +18,17 @@ export interface GatewayErrorResponse {
 // ============================
 
 export interface HealthResponse {
+  /** Liveness/diagnostic state; both values are returned with HTTP 200. */
   status: "ok" | "degraded";
   version: string;
   uptime: number;
   stores: {
+    /** Whether a store exists, including one serving degraded no-ops. */
     vectorStore: boolean;
+    /** Operational state of the default store; `ok` means it is usable. */
+    vectorStoreStatus: StoreHealthStatus;
+    /** Present when the active store can explain why it is degraded. */
+    vectorStoreReason?: string;
     embeddingService: boolean;
   };
   /** Integrated services status (only present when state_backend is configured) */
