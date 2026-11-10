@@ -80,6 +80,24 @@ function tryParse<T>(s: string): T | null {
 }
 
 function fixTrailingCommas(s: string): string {
-  // Remove trailing commas before } or ]
-  return s.replace(/,\s*([}\]])/g, "$1");
+  // Repair structural commas only; quoted summaries and Mermaid text are data.
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const char = s[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === ",") {
+      let next = i + 1;
+      while (next < s.length && /\s/.test(s[next])) next++;
+      if (s[next] === "}" || s[next] === "]") continue;
+    }
+    result += char;
+  }
+  return result;
 }
