@@ -56,8 +56,7 @@ TencentDB Agent Memory 帮助 Agent 学会你的流程、保留任务上下文�
 
 > **让 Agent 记住该记的，让人把注意力留给判断、创造和真正有价值的工作。**
 <p align="center">
-<img src="https://github.com/user-attachments/assets/a4ba50f7-20a9-4174-8201-715f241e389b" width="360" alt="Agent Memory 微信社群二维码" />
-
+<img src="https://github.com/user-attachments/assets/0c0423a7-b844-4d67-b131-e4796fee9d7c" width="360" alt="Agent Memory 微信社群二维码" />
 
   <br/>
   <sub>📱 扫码加入 <b>Agent Memory 微信社群</b>，与早期开发者直接对话</sub>
@@ -551,7 +550,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/a4ba50f7-20a9-4174-8201-715f241e389b" width="200" alt="Agent Memory 微信社群二维码" />
+<p align="center"><img src="https://github.com/user-attachments/assets/0c0423a7-b844-4d67-b131-e4796fee9d7c" width="200" alt="Agent Memory 微信社群二维码" />
 
 ---
 
