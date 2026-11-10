@@ -1,0 +1,9 @@
+{
+  "endpoint": "http://127.0.0.1:8420",
+  "service_id": "default",
+  "user_key": "<Memory Hub business user key>",
+  "gateway_key": "",
+  "team_id": "<existing team ID>",
+  "agent_id": "<existing agent ID with chat_memory asset>",
+  "capture": false
+}
