@@ -120,7 +120,7 @@ Existing information → Reusable memory assets → Fewer turns → Less rework 
 
 - After completing complex work, Agents can extract and manage reusable Skills from conversations and tool calls, and import them into the context of a designated Agent when needed. Skills can be edited and exported from the panel.
 - A Skill isn't just a prompt snippet; it has versions, resource files, trigger boundaries, execution steps, and validation rules.
-- Personal Skills are private by default; after review, they can be shared with the team and assigned to other Agents.
+- Personal Skills are private by default; they can be shared with the team and assigned to other Agents.
 
 <img width="" src="assets/images/skill.png" alt="image.png" />
 
@@ -157,11 +157,11 @@ Most Agents' first task is re-learning your project. TencentDB Agent Memory turn
 
 Admins can configure a default Agent template for the team so new members can pick up the team's way of working.
 
-Specifically, these existing assets can be imported directly and processed automatically in the panel:
+Specifically, you can import codebases and documents in the panel and use the client import script for past conversation sessions:
 
 - **Codebases**: Import public repositories or private repositories with configured credentials — **CodeGraph** automatically indexes symbols, files, call relationships, and impact paths.
 - **Documents & files**: Import relevant docs and files, including from configured external sources — **Wiki** automatically generates structured pages with a link graph.
-- **Conversation sessions**: Import past Agent conversation sessions from [supported clients](./agents/README.md#本地资产导入) — **Skills and Chat Memory** are automatically extracted as reusable assets.
+- **Conversation sessions**: Use the [local asset import script](./agents/README.md#本地资产导入) to import past sessions from supported clients. By default, the script triggers both **Skill and Chat Memory** extraction; you can also choose to trigger just one.
 
 > Stop retraining every Agent. Give it the save file.
 
@@ -293,8 +293,8 @@ PersonaMem tests whether an Agent can correctly understand and apply user inform
 ## Notes
 
 - Wiki and CodeGraph are built asynchronously; allow some processing time before they reach `ready` status.
-- CodeGraph supports public HTTPS repositories and private repositories with team credentials. To clone a private repository over SSH, get the public key from the panel and grant it access on your code hosting platform.
-- The Hub supports manual asset binding. On-demand Skill selection in the Proxy is off by default. When enabled, the Proxy chooses which Skills to load for the current conversation.
+- CodeGraph supports public HTTPS repositories and private repositories with configured credentials. To clone a private repository over SSH, get the public key from the panel and grant it access on your code hosting platform.
+- The Hub supports manual asset binding. On-demand Skill selection in the Proxy is off by default. Once you enable it and configure a selection strategy, the Proxy can select up to one relevant Skill to load per turn.
 
 ## Related Documentation
 
