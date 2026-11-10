@@ -8,7 +8,7 @@
  * 后续可在 TABS 数组里追加其他 Tab（如通知、偏好设置等）。
  *
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -69,36 +69,47 @@ const RESOURCE_MODULES: ResourceModule[] = [
 
 type SettingsTab = 'permissions';
 
+// 每个开关一条状态记录：值、状态、失败原因放在一起，互斥状态由联合类型约束。
+// saving 带 requestId，用于丢弃过期响应；failed 带上失败原因，只显示在对应开关上。
+type SwitchState =
+  | { status: 'idle'; value: boolean }
+  | { status: 'saving'; value: boolean; requestId: number }
+  | { status: 'failed'; value: boolean; error: string; requestId: number };
+
+function initialSwitches(): Record<string, SwitchState> {
+  return Object.fromEntries(
+    RESOURCE_MODULES.map((mod) => [mod.id, { status: 'idle', value: true } as SwitchState]),
+  );
+}
+
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const activeTab: SettingsTab = 'permissions';
 
-  const [enabled, setEnabled] = useState<Record<string, boolean>>(() => ({
-    wiki: true,
-    code: true,
-    skill: true,
-    chat_memory: true,
-  }));
+  const [switches, setSwitches] = useState<Record<string, SwitchState>>(initialSwitches);
   const [loading, setLoading] = useState(true);
-  const [savingKey, setSavingKey] = useState<AssetCapabilityKey | null>(null);
-  const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError('');
+    setLoadError('');
     userConfigApi.getAssetCapabilities()
       .then((cfg) => {
         if (cancelled) return;
-        setEnabled({
-          wiki: cfg['llm_wiki.enabled'],
-          code: cfg['code_graph.enabled'],
-          skill: cfg['skill.enabled'],
-          chat_memory: cfg['chat_memory.enabled'],
+        setSwitches((prev) => {
+          const next = { ...prev };
+          for (const mod of RESOURCE_MODULES) {
+            // 加载结果不覆盖仍在保存中的开关。
+            if (next[mod.id].status === 'saving') continue;
+            next[mod.id] = { status: 'idle', value: cfg[mod.paramKey] };
+          }
+          return next;
         });
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -107,20 +118,33 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   }, []);
 
   async function handleToggle(mod: ResourceModule, next: boolean) {
-    const previous = enabled[mod.id];
-    setEnabled((prev) => ({ ...prev, [mod.id]: next }));
-    setSavingKey(mod.paramKey);
-    setError('');
+    const record = switches[mod.id];
+    // 同一开关还在保存中时拒绝重复提交。
+    if (record.status === 'saving') return;
+    const requestId = ++requestSeq.current;
+    const previousValue = record.value;
+    setSwitches((prev) => ({
+      ...prev,
+      [mod.id]: { status: 'saving', value: next, requestId },
+    }));
     try {
       await userConfigApi.setAssetCapability(mod.paramKey, next);
+      setSwitches((prev) => {
+        const current = prev[mod.id];
+        // 只接受本次请求的响应，过期响应不写状态。
+        if (current.status !== 'saving' || current.requestId !== requestId) return prev;
+        return { ...prev, [mod.id]: { status: 'idle', value: next } };
+      });
       tea.notify.success(t(next ? 'settings.notify.enabled' : 'settings.notify.disabled', { label: t(mod.labelKey) }));
     } catch (e) {
-      setEnabled((prev) => ({ ...prev, [mod.id]: previous }));
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      setSwitches((prev) => {
+        const current = prev[mod.id];
+        if (current.status !== 'saving' || current.requestId !== requestId) return prev;
+        // 失败只回滚本次请求写入的值，失败原因留在对应开关上。
+        return { ...prev, [mod.id]: { status: 'failed', value: previousValue, error: msg, requestId } };
+      });
       tea.notify.error(t('settings.notify.saveFailed', { msg }));
-    } finally {
-      setSavingKey(null);
     }
   }
 
@@ -136,55 +160,64 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <Text theme="weak" style={{ display: 'block', marginBottom: 16, fontSize: 12 }}>
               {t('settings.desc')}
             </Text>
-            {error && <Alert type="error" style={{ marginBottom: 12 }}>{error}</Alert>}
+            {loadError && <Alert type="error" style={{ marginBottom: 12 }}>{loadError}</Alert>}
             {loading && <Alert type="info" style={{ marginBottom: 12 }}>{t('settings.loadingConfig')}</Alert>}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {RESOURCE_MODULES.map((mod) => (
-                <div
-                  key={mod.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '10px 12px',
-                    border: '1px solid var(--tea-color-border-primary-default)',
-                    borderRadius: 6,
-                    background: enabled[mod.id]
-                      ? 'var(--tea-color-bg-brand-lighten-default)'
-                      : 'var(--tea-color-bg-primary-default)',
-                    transition: 'background-color 0.15s',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    <span style={{ color: 'var(--tea-color-text-secondary)', flexShrink: 0 }}>
-                      {mod.icon}
-                    </span>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Text style={{ fontSize: 13, fontWeight: 500 }}>
-                          {t(mod.labelKey)}
+              {RESOURCE_MODULES.map((mod) => {
+                const record = switches[mod.id];
+                const isSaving = record.status === 'saving';
+                return (
+                  <div
+                    key={mod.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '10px 12px',
+                      border: '1px solid var(--tea-color-border-primary-default)',
+                      borderRadius: 6,
+                      background: record.value
+                        ? 'var(--tea-color-bg-brand-lighten-default)'
+                        : 'var(--tea-color-bg-primary-default)',
+                      transition: 'background-color 0.15s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                      <span style={{ color: 'var(--tea-color-text-secondary)', flexShrink: 0 }}>
+                        {mod.icon}
+                      </span>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Text style={{ fontSize: 13, fontWeight: 500 }}>
+                            {t(mod.labelKey)}
+                          </Text>
+                          {isSaving ? (
+                            <Tag theme="warning" variant="soft" size="sm">{t('settings.tag.saving')}</Tag>
+                          ) : record.value ? (
+                            <Tag theme="success" variant="soft" size="sm">{t('settings.tag.enabled')}</Tag>
+                          ) : (
+                            <Tag theme="default" variant="soft" size="sm">{t('settings.tag.disabled')}</Tag>
+                          )}
+                        </div>
+                        <Text theme="weak" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
+                          {t(mod.descKey)}
                         </Text>
-                        {savingKey === mod.paramKey ? (
-                          <Tag theme="warning" variant="soft" size="sm">{t('settings.tag.saving')}</Tag>
-                        ) : enabled[mod.id] ? (
-                          <Tag theme="success" variant="soft" size="sm">{t('settings.tag.enabled')}</Tag>
-                        ) : (
-                          <Tag theme="default" variant="soft" size="sm">{t('settings.tag.disabled')}</Tag>
+                        {record.status === 'failed' && (
+                          <Text theme="danger" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
+                            {record.error}
+                          </Text>
                         )}
                       </div>
-                      <Text theme="weak" style={{ fontSize: 12, marginTop: 2, display: 'block' }}>
-                        {t(mod.descKey)}
-                      </Text>
                     </div>
+                    <Switch
+                      value={record.value}
+                      disabled={loading || isSaving}
+                      onChange={(v) => void handleToggle(mod, v)}
+                    />
                   </div>
-                  <Switch
-                    value={enabled[mod.id]}
-                    disabled={loading || savingKey === mod.paramKey}
-                    onChange={(v) => void handleToggle(mod, v)}
-                  />
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
