@@ -285,6 +285,17 @@ export interface V2RouterDeps {
    */
   pipelineWorker?: PipelineWorker;
 
+  /**
+   * Thunk returning the standalone pipeline manager, used by
+   * /v2/pipeline/l1/trigger to enqueue an immediate L1 drain for a session
+   * whose L0 backlog is stuck (counter race, failed batch, etc.). Standalone
+   * only — the handler returns 404 in service mode. A thunk because the
+   * manager is assigned after the router deps are built at startup.
+   */
+  getStatefulPipelineManager?: () => {
+    enqueueL1Drain(sessionKey: string, instanceId?: string, teamId?: string, agentId?: string): Promise<void>;
+  } | null;
+
   // ── Tenancy isolation (three-dim) ──
   //
   // `isolationConfig` is set once at gateway start.  `requestIsolation` and
@@ -466,6 +477,7 @@ const routeTable: Record<string, RouteHandler> = {
   [`${V2_PREFIX}/task/delete`]: handleTaskDelete, // @deprecated 改用 /v3/meta/task/delete
   // ── end @deprecated v2 entity 路由 ──
   [`${V2_PREFIX}/pipeline/status`]: handlePipelineStatus,
+  [`${V2_PREFIX}/pipeline/l1/trigger`]: handlePipelineL1Trigger,
 };
 
 export async function handleV2Route(
@@ -2252,6 +2264,63 @@ async function handlePipelineStatus(
   };
 
   return successEnvelope<PipelineStatusData>(data, requestId);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// /v2/pipeline/l1/trigger — standalone-only manual L1 drain.
+//
+// Recovery + control-side companion to the stranded-backlog guard in
+// gateway/server.ts executeL1. Two motivating cases:
+//   1. a timer-fired L1 was (historically) skipped on a stale
+//      conversation_count, leaving rows past the cursor with no re-arm —
+//      this endpoint enqueues the L1 that should have run;
+//   2. an operator explicitly wants pending L0 distilled now instead of
+//      waiting for everyN/idle thresholds.
+//
+// Body: { session_key: string } (required — callers enumerate pending
+// sessions themselves, which keeps the endpoint precise and side-effect-free
+// about which sessions exist).
+// Service mode returns 404 (route not exposed).
+// ─────────────────────────────────────────────────────────────────────────
+
+interface PipelineL1TriggerData {
+  queued: string[];
+}
+
+async function handlePipelineL1Trigger(
+  body: unknown,
+  _auth: V2AuthContext,
+  requestId: string,
+  deps: V2RouterDeps,
+): Promise<ApiResponseEnvelope> {
+  if (deps.deployMode !== "standalone") {
+    return errorEnvelope(404, "Not found", requestId);
+  }
+
+  const sessionKey =
+    typeof (body as { session_key?: unknown })?.session_key === "string"
+      ? ((body as { session_key: string }).session_key).trim()
+      : "";
+  if (!sessionKey) {
+    return errorEnvelope(400, "session_key is required", requestId);
+  }
+
+  const manager = deps.getStatefulPipelineManager?.();
+  if (!manager) {
+    return errorEnvelope(503, "Pipeline manager not available", requestId);
+  }
+
+  try {
+    await manager.enqueueL1Drain(sessionKey);
+  } catch (err) {
+    return errorEnvelope(
+      500,
+      `Failed to enqueue L1 drain: ${err instanceof Error ? err.message : String(err)}`,
+      requestId,
+    );
+  }
+
+  return successEnvelope<PipelineL1TriggerData>({ queued: [sessionKey] }, requestId);
 }
 
 // ============================
