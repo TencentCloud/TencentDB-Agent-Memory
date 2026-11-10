@@ -18,6 +18,8 @@
  * - CLICKHOUSE_ENABLED             : "true" 启用 ClickHouse 双写
  */
 
+import { createOTelResource } from "./otel-resource.js";
+
 // 防御性加载 @opentelemetry/api — 即使包缺失也不影响启动
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let diag: any;
@@ -119,17 +121,6 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
       import("@opentelemetry/context-async-hooks"),
     ]);
 
-    // 兼容新旧版本 @opentelemetry/resources
-    // 新版使用 resourceFromAttributes()，旧版使用 new Resource()
-    const createResource = (attrs: Record<string, string>) => {
-      if ("resourceFromAttributes" in resourcesModule) {
-        return (resourcesModule as { resourceFromAttributes: (a: Record<string, string>) => unknown }).resourceFromAttributes(attrs);
-      }
-      // 旧版 fallback
-      const ResourceClass = (resourcesModule as { Resource: new (a: Record<string, string>) => unknown }).Resource;
-      return new ResourceClass(attrs);
-    };
-
     const logsApiModule = "@opentelemetry/api-logs";
     const { logs } = await import(logsApiModule);
 
@@ -164,7 +155,7 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
     if (tenantId) {
       resourceAttrs["tps.tenant.id"] = tenantId;
     }
-    const resource = createResource(resourceAttrs);
+    const resource = createOTelResource(resourcesModule, resourceAttrs);
 
     // Trace Exporter（仅当有主 OTel endpoint 时创建）
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
