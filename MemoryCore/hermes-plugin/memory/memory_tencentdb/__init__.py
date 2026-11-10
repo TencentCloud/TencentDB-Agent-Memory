@@ -224,6 +224,33 @@ def _coerce_limit(
     return value
 
 
+def _unwrap_search_hits(
+    result: Any,
+    preferred_key: str,
+    fallback_key: str = "",
+) -> List[Dict[str, Any]]:
+    """Extract search hits from a v3 success envelope.
+
+    Gateway search responses use different data keys:
+      - /v3/atomic/search        → data.items[]     (L1 memory_search)
+      - /v3/conversation/search  → data.messages[]  (L0 conversation_search)
+
+    If ``preferred_key`` is present as a list (including empty), it wins —
+    that is the documented shape. Only when the key is missing do we try
+    ``fallback_key`` for older/unified envelopes.
+    """
+    data = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(data, dict):
+        return []
+    for key in (preferred_key, fallback_key):
+        if not key:
+            continue
+        hits = data.get(key)
+        if isinstance(hits, list):
+            return hits
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Tool schemas
 # ---------------------------------------------------------------------------
@@ -851,8 +878,9 @@ class MemoryTencentdbProvider(MemoryProvider):
                     user_id=self._user_id,
                 )
                 self._record_success()
-                # Unwrap v3 envelope for LLM consumption
-                items = result.get("data", {}).get("items", [])
+                # Unwrap v3 envelope for LLM consumption.
+                # atomic/search documents hits under data.items[].
+                items = _unwrap_search_hits(result, "items")
                 if not items:
                     return "No memories found for this query."
                 lines = []
@@ -872,11 +900,15 @@ class MemoryTencentdbProvider(MemoryProvider):
                     user_id=self._user_id,
                 )
                 self._record_success()
-                items = result.get("data", {}).get("items", [])
-                if not items:
+                # conversation/search documents hits under data.messages[]
+                # (NOT data.items — that key belongs to atomic/search). Reading
+                # items here made this tool always return "No conversations
+                # found" even when the Gateway had hits. See #1380.
+                messages = _unwrap_search_hits(result, "messages", "items")
+                if not messages:
                     return "No conversations found for this query."
                 lines = []
-                for m in items:
+                for m in messages:
                     role = m.get("role", "?")
                     content = m.get("content", "")
                     lines.append(f"[{role}] {content}")
