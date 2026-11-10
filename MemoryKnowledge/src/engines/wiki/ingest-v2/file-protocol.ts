@@ -50,7 +50,8 @@ const CLOSE_RE = /<<<\s*END\s*>>>/g;
  *   - 规范化后必须以 "wiki/" 开头（只允许写 wiki/**）。
  */
 export function normalizeWikiPath(raw: string): string | null {
-  if (!raw) return null;
+  // Node encodes lone UTF-16 surrogates as U+FFFD, aliasing distinct paths.
+  if (!raw || /[\uD800-\uDFFF]/u.test(raw)) return null;
   // 统一分隔符为 /
   let p = raw.trim().replace(/\\/g, "/");
   if (!p) return null;
@@ -105,6 +106,12 @@ export function parseFileBlocks(text: string): ParseResult {
     const normPath = normalizeWikiPath(rawPath);
     if (!normPath) {
       warnings.push(`非法 path 已跳过: "${rawPath}"`);
+      continue;
+    }
+
+    // Reject before UTF-8 encoding can silently replace malformed text.
+    if (/[\uD800-\uDFFF]/u.test(rawContent)) {
+      warnings.push("Malformed Unicode content; FILE block skipped");
       continue;
     }
 
