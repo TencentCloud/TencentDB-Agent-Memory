@@ -498,13 +498,23 @@ export class MongoMemoryStore implements IMemoryStore {
     return q;
   }
 
-  async queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0QueryRow[]> {
+  async queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit = 50, afterRecordId?: string): Promise<L0QueryRow[]> {
     const coll = await this.coll(COLLECTIONS.L0);
     const q: Record<string, unknown> = { session_key: sessionKey };
-    if (afterRecordedAtMs && afterRecordedAtMs > 0) q.recorded_at_ms = { $gt: afterRecordedAtMs };
+    if (afterRecordedAtMs && afterRecordedAtMs > 0) {
+      if (afterRecordId) {
+        // 复合游标（issue #1979）：同一毫秒超过 LIMIT 时用 _id 继续推进
+        q.$or = [
+          { recorded_at_ms: { $gt: afterRecordedAtMs } },
+          { recorded_at_ms: afterRecordedAtMs, _id: { $gt: afterRecordId } },
+        ];
+      } else {
+        q.recorded_at_ms = { $gt: afterRecordedAtMs };
+      }
+    }
     const docs = await coll
       .find(q as never)
-      .sort({ recorded_at_ms: 1 })
+      .sort({ recorded_at_ms: 1, _id: 1 })
       .limit(limit)
       .toArray();
     return docs.map((d) => {
@@ -514,8 +524,8 @@ export class MongoMemoryStore implements IMemoryStore {
     });
   }
 
-  async queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0SessionGroup[]> {
-    const rows = await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
+  async queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit = 50, afterRecordId?: string): Promise<L0SessionGroup[]> {
+    const rows = await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit, afterRecordId);
     const groupMap = new Map<string, L0SessionGroup>();
     for (const row of rows) {
       const sid = row.session_id || DEFAULT_ISOLATION_ID;

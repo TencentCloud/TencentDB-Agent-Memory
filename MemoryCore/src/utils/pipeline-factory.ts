@@ -453,7 +453,15 @@ export function createL1Runner(opts: {
         const l1Cursor = runnerState.last_l1_cursor > 0
           ? runnerState.last_l1_cursor
           : undefined;
-        const dbGroups = await vectorStore.queryL0GroupedBySessionId(sessionKey, l1Cursor, L1_BATCH_QUERY);
+        // 复合游标（issue #1979）：同一毫秒内继续用 record_id 推进，
+        // 避免同毫秒行数超过 L1_BATCH_QUERY 时剩余行被永久跳过。
+        const l1CursorId = l1Cursor ? runnerState.last_l1_cursor_id || undefined : undefined;
+        const dbGroups = await vectorStore.queryL0GroupedBySessionId(
+          sessionKey,
+          l1Cursor,
+          L1_BATCH_QUERY,
+          l1CursorId,
+        );
         for (const g of dbGroups) {
           for (const m of g.messages) {
             flat.push({
@@ -543,8 +551,14 @@ export function createL1Runner(opts: {
       // ── Step 3: re-group sliced messages by isolation tuple + sessionId (chronological within each group) ──
       const groupMap = new Map<string, { sessionId: string; teamId?: string; taskId?: string; userId: string; agentId: string; messages: ConversationMessage[] }>();
       let maxRecordedAtMs = 0;
+      let maxRecordedId = "";
       for (const m of processed) {
-        if (m.recordedAtMs > maxRecordedAtMs) maxRecordedAtMs = m.recordedAtMs;
+        if (m.recordedAtMs > maxRecordedAtMs) {
+          maxRecordedAtMs = m.recordedAtMs;
+          maxRecordedId = m.id;
+        } else if (m.recordedAtMs === maxRecordedAtMs && m.id > maxRecordedId) {
+          maxRecordedId = m.id;
+        }
         const groupKey = `${m.userId}\u0000${m.agentId}\u0000${m.sessionId}`;
         let g = groupMap.get(groupKey);
         if (!g) {
@@ -666,7 +680,13 @@ export function createL1Runner(opts: {
       // Use maxRecordedAtMs (write time) of the **processed** slice as cursor —
       // always positive, TCVDB-safe. Boundary alignment guarantees we will not
       // skip same-ms siblings on the next round.
-      await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
+      await checkpoint.markL1ExtractionComplete(
+        sessionKey,
+        totalStored,
+        maxRecordedAtMs || undefined,
+        lastSceneName,
+        maxRecordedId || undefined,
+      );
       logger.info(
         `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`,
       );
