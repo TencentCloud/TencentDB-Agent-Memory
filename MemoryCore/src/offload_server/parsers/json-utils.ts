@@ -27,23 +27,15 @@ export function extractJson<T>(raw: string): T | null {
     }
   }
 
-  // 3. Extract first { ... } (greedy last })
-  const objStart = trimmed.indexOf("{");
-  const objEnd = trimmed.lastIndexOf("}");
-  if (objStart !== -1 && objEnd > objStart) {
+  // Try the outer array/object first, rather than an object nested in an array.
+  const candidates = [
+    { start: trimmed.indexOf("{"), end: trimmed.lastIndexOf("}") },
+    { start: trimmed.indexOf("["), end: trimmed.lastIndexOf("]") },
+  ].filter(({ start, end }) => start >= 0 && end > start)
+    .sort((a, b) => a.start - b.start);
+  for (const { start, end } of candidates) {
     try {
-      return JSON.parse(trimmed.slice(objStart, objEnd + 1)) as T;
-    } catch {
-      // continue
-    }
-  }
-
-  // 4. Extract first [ ... ] (greedy last ])
-  const arrStart = trimmed.indexOf("[");
-  const arrEnd = trimmed.lastIndexOf("]");
-  if (arrStart !== -1 && arrEnd > arrStart) {
-    try {
-      return JSON.parse(trimmed.slice(arrStart, arrEnd + 1)) as T;
+      return JSON.parse(trimmed.slice(start, end + 1)) as T;
     } catch {
       // continue
     }
