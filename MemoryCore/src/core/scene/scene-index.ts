@@ -3,6 +3,7 @@
  */
 
 import { parseSceneBlock } from "./scene-format.js";
+import { isSceneMarkdownFilename } from "./filename-normalizer.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
 
@@ -44,11 +45,11 @@ async function fsWriteFile(absPath: string, content: string): Promise<void> {
   await fs.default.writeFile(absPath, content, "utf-8");
 }
 
-async function fsReaddir(absDir: string, suffix: string): Promise<string[]> {
+async function fsReaddir(absDir: string): Promise<string[]> {
   const fs = await import("node:fs/promises");
   try {
     const entries = await fs.default.readdir(absDir);
-    return entries.filter((f) => f.endsWith(suffix));
+    return entries.filter(isSceneMarkdownFilename);
   } catch { return []; }
 }
 
@@ -122,10 +123,12 @@ export async function syncSceneIndex(dataDir: string, storage?: StorageAdapter):
   if (derivable) return derivable.deriveSceneIndex();
   let files: string[];
   if (storage) {
-    files = await storage.readdirNames(StoragePaths.sceneBlocksDir, ".md");
+    files = (await storage.readdirNames(StoragePaths.sceneBlocksDir)).filter(
+      isSceneMarkdownFilename,
+    );
   } else {
     const path = await import("node:path");
-    files = await fsReaddir(path.default.join(dataDir, "scene_blocks"), ".md");
+    files = await fsReaddir(path.default.join(dataDir, "scene_blocks"));
   }
 
   const entries: SceneIndexEntry[] = [];
