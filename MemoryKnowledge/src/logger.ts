@@ -2,13 +2,20 @@
  * Logger — simple leveled logging module
  */
 
+import dayjs from "dayjs";
+
 type Level = "debug" | "info" | "warn" | "error";
 
 const LEVEL_PRIORITY: Record<Level, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = (process.env.LOG_LEVEL || "debug") as Level;
 
 function ts() {
-  return new Date().toISOString().replace("T", " ").slice(0, 23);
+  // Local time with explicit UTC offset, consistent with MemoryCore's
+  // nowLocalIso() (see MemoryCore/src/gateway/server.ts): the wall-clock
+  // matches what the operator sees in tmux / tail -f while the line stays
+  // ISO 8601 compliant and round-trippable. Previously this was UTC with no
+  // timezone marker, which made cross-service incident correlation error-prone.
+  return dayjs().format("YYYY-MM-DDTHH:mm:ss.SSSZ");
 }
 
 function shouldLog(level: Level) {
