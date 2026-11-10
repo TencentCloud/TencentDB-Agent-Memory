@@ -192,23 +192,35 @@ export function ensurePluginHookPolicy(params: {
   }
 
   // Try SDK path first (handles everything + triggers restart)
-  if (params.runtimeConfig?.mutateConfigFile) {
+  if (typeof params.runtimeConfig?.mutateConfigFile === "function") {
     logger.info(`${TAG} Missing allowConversationAccess, patching via SDK...`);
-    params.runtimeConfig.mutateConfigFile({
-      afterWrite: { mode: "restart", reason: "memory-tencentdb hook policy auto-patch" },
-      mutate: (draft: any) => {
-        if (!draft.plugins) draft.plugins = {};
-        if (!draft.plugins.entries) draft.plugins.entries = {};
-        if (!draft.plugins.entries[PLUGIN_ID]) draft.plugins.entries[PLUGIN_ID] = {};
-        if (!draft.plugins.entries[PLUGIN_ID].hooks) draft.plugins.entries[PLUGIN_ID].hooks = {};
-        draft.plugins.entries[PLUGIN_ID].hooks.allowConversationAccess = true;
-      },
-    }).then(() => {
-      logger.info(`${TAG} ✅ Patched via SDK — gateway will restart automatically.`);
-    }).catch((err: unknown) => {
-      logger.warn(`${TAG} SDK mutateConfigFile failed: ${err instanceof Error ? err.message : String(err)}, trying manual fallback...`);
-      manualPatch(logger);
-    });
+    const runtimeConfig = params.runtimeConfig;
+    const mutateConfigFile = runtimeConfig.mutateConfigFile!;
+    // The SDK may throw before returning a promise (e.g. a changed signature).
+    // Catch invocation failures as well as rejections so registration can still
+    // use the manual fallback. Do not claim success for an incompatible return.
+    void (async () => {
+      try {
+        const pending = mutateConfigFile.call(runtimeConfig, {
+          afterWrite: { mode: "restart", reason: "memory-tencentdb hook policy auto-patch" },
+          mutate: (draft: any) => {
+            if (!draft.plugins) draft.plugins = {};
+            if (!draft.plugins.entries) draft.plugins.entries = {};
+            if (!draft.plugins.entries[PLUGIN_ID]) draft.plugins.entries[PLUGIN_ID] = {};
+            if (!draft.plugins.entries[PLUGIN_ID].hooks) draft.plugins.entries[PLUGIN_ID].hooks = {};
+            draft.plugins.entries[PLUGIN_ID].hooks.allowConversationAccess = true;
+          },
+        });
+        if (!pending || typeof pending.then !== "function") {
+          throw new Error("mutateConfigFile did not return a promise");
+        }
+        await pending;
+        logger.info(`${TAG} ✅ Patched via SDK — gateway will restart automatically.`);
+      } catch (err) {
+        logger.warn(`${TAG} SDK mutateConfigFile failed: ${err instanceof Error ? err.message : String(err)}, trying manual fallback...`);
+        manualPatch(logger);
+      }
+    })();
     return;
   }
 
@@ -228,7 +240,12 @@ function manualPatch(logger: Logger): void {
   let parsed: Record<string, unknown>;
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
-    parsed = JSON5.parse(raw);
+    const value: unknown = JSON5.parse(raw);
+    if (!isObj(value)) {
+      logger.warn(`${TAG} Config root in ${configPath} must be an object — please add hooks.allowConversationAccess manually`);
+      return;
+    }
+    parsed = value;
   } catch {
     logger.warn(`${TAG} Failed to parse ${configPath} — please add hooks.allowConversationAccess manually`);
     return;
