@@ -100,7 +100,11 @@ class _MetadataMethodsMixin:
         return self._stub.post(f"{_V3}/user-key/revoke", {"key_id": key_id})
 
     def _update_user_key(self, p: Dict[str, Any]) -> Dict[str, Any]:
-        return self._stub.post(f"{_V3}/user-key/update", _body(p))
+        payload = _body(p)
+        # A JSON null explicitly clears expiration; omission keeps it unchanged.
+        if "expires_at" in p:
+            payload["expires_at"] = p["expires_at"]
+        return self._stub.post(f"{_V3}/user-key/update", payload)
 
     # ── Team ──
 
