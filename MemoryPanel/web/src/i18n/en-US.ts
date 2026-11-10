@@ -358,6 +358,7 @@ export const enUS = {
   'wiki.detail.ingest': 'Ingest',
   'wiki.detail.processing': 'Processing',
   'wiki.detail.clear': 'Clear',
+  'wiki.detail.recheck': 'Check again',
   'wiki.detail.ingestTitle': 'Ingest: {{name}}',
   'wiki.detail.queryCount': 'Queried {{count}} times',
   'wiki.detail.lastQuery': ', last at {{time}}',
@@ -1310,6 +1311,8 @@ export const enUS = {
   'knowledgeApi.ingest.failed': 'Ingestion failed',
   'knowledgeApi.ingest.timeout':
     'Ingestion timed out. Please refresh later to check the latest status.',
+  'wiki.ingest.pollTimeout': 'Automatic checks stopped after 10 minutes. Processing may still be running; check again later.',
+  'wiki.ingest.pollNetworkError': 'Automatic checks stopped after 3 consecutive status-read failures.',
   'knowledgeApi.pageNotFound': 'Page not found: {{path}}',
   'knowledgeApi.wikiIngestTimeout': 'Wiki {{wikiId}} ingest timed out',
   'knowledgeApi.codeGraphSyncTimeout': 'CodeGraph {{codeGraphId}} sync timed out',
