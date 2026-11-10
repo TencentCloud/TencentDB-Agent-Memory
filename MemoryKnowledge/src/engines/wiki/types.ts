@@ -44,6 +44,16 @@ export interface CommunityInfo {
   topNodes: string[];
 }
 
+/** 图质量统计（索引重建时计算，随 wiki 状态持久化）。 */
+export interface WikiGraphStats {
+  pages: number;
+  edges: number;
+  /** 无法解析到任何页面的 [[wikilink]] 出现次数。 */
+  brokenLinks: number;
+  /** 无任何有效入边/出边的内容页数量。 */
+  orphanPages: number;
+}
+
 export interface RelatedPage {
   title: string;
   path: string;
@@ -92,6 +102,8 @@ export interface WikiSourceState {
   error?: string;
   pageCount?: number;
   lastSyncAt?: string;
+  /** 最近一次索引重建得到的图质量统计。 */
+  graphStats?: WikiGraphStats;
 }
 
 export const GENERATION_WIKI_TYPES = [
