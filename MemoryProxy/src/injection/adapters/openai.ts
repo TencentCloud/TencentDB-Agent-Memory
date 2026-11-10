@@ -67,10 +67,16 @@ export class OpenAIAdapter implements ProtocolAdapter {
 
     if (role === "tool") {
       // Tool role: { role: "tool", content: string, tool_call_id: string }
+      const toolContent = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
       blocks.push({
         type: "tool_result",
-        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
-        metadata: { tool_use_id: m.tool_call_id as string },
+        content: toolContent,
+        // Chat Completions also accepts an array of text parts here; remember it so
+        // serialize can send the parts back instead of their JSON text.
+        metadata: {
+          tool_use_id: m.tool_call_id as string,
+          ...(Array.isArray(m.content) ? { content_parts: m.content } : {}),
+        },
       });
       return { role, blocks };
     }
@@ -162,9 +168,12 @@ export class OpenAIAdapter implements ProtocolAdapter {
     if (msg.role === "tool") {
       // Serialize tool role message
       const toolResult = msg.blocks.find((b) => b.type === "tool_result");
+      const parts = toolResult?.metadata?.content_parts;
+      // Only reuse the original parts if nothing rewrote the block's text since parse.
+      const keepParts = Array.isArray(parts) && toolResult?.content === JSON.stringify(parts);
       return {
         role: "tool",
-        content: toolResult?.content ?? "",
+        content: keepParts ? parts : (toolResult?.content ?? ""),
         tool_call_id: toolResult?.metadata?.tool_use_id ?? "",
       };
     }
