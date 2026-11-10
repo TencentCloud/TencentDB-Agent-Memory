@@ -433,6 +433,7 @@ export class VectorStore implements IMemoryStore {
   private stmtL0DeleteVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtL0InsertVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtL0DeleteMeta!: StatementSync;
+  private stmtL0MetaExists!: StatementSync;
   private stmtL0GetMeta!: StatementSync;
   private stmtL0SearchVec?: StatementSync;   // optional — only set when vecTablesReady
   /** L0 query for L1 runner: all messages for a session key */
@@ -761,6 +762,12 @@ export class VectorStore implements IMemoryStore {
       SELECT session_key, session_id, role, message_text, recorded_at, timestamp
       FROM l0_conversations WHERE record_id = ?
     `);
+
+    // PK lookup, O(log n): used to decide whether the FTS5 sync below
+    // needs the unindexed-column DELETE at all (issue #1876).
+    this.stmtL0MetaExists = this.db.prepare(
+      "SELECT 1 FROM l0_conversations WHERE record_id = ?",
+    );
 
     if (this.dimensions > 0) {
       this.stmtL0SearchVec = this.db.prepare(`
@@ -1503,6 +1510,16 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
+        // Decide before the meta upsert makes the row exist: `record_id`
+        // is UNINDEXED in `l0_fts`, so the per-message FTS DELETE is a
+        // full virtual-table scan even when the id is brand new — a batch
+        // of M messages over N historical rows costs M × N (#1876). For
+        // a new record there is nothing to delete; updates (the rare
+        // case) keep the delete+re-insert sync. deleteL0/deleteL0Expired
+        // remove FTS rows together with the metadata row, so
+        // "metadata absent ⇒ FTS absent" holds for this skip.
+        const recordExists = this.stmtL0MetaExists.get(record.id) !== undefined;
+
         this.stmtL0UpsertMeta.run(
           record.id,
           record.sessionKey,
@@ -1526,7 +1543,9 @@ export class VectorStore implements IMemoryStore {
         // Sync FTS5 (delete + re-insert to handle updates)
         if (this.ftsAvailable) {
           try {
-            this.stmtL0FtsDelete.run(record.id);
+            if (recordExists) {
+              this.stmtL0FtsDelete.run(record.id);
+            }
             this.stmtL0FtsInsert.run(
               tokenizeForFts(record.messageText), // message_text — segmented for indexing
               record.messageText,                 // message_text_original — raw for display
@@ -1769,6 +1788,17 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
+        // Collect the ids first: each FTS DELETE filters on the UNINDEXED
+        // `record_id` column, which is a full virtual-table scan, so they
+        // must run while the metadata rows can still identify them (#1876).
+        const expiredIds: string[] = [];
+        if (this.ftsAvailable) {
+          for (const row of this.db.prepare(
+            "SELECT record_id FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?",
+          ).iterate(cutoffIso) as IterableIterator<{ record_id: string }>) {
+            expiredIds.push(row.record_id);
+          }
+        }
         if (this.vecTablesReady) {
           this.db.prepare(
             "DELETE FROM l0_vec WHERE recorded_at != '' AND recorded_at < ?",
@@ -1777,6 +1807,16 @@ export class VectorStore implements IMemoryStore {
         this.db.prepare(
           "DELETE FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?",
         ).run(cutoffIso);
+        // Remove the FTS rows too — skipping this left orphaned FTS rows
+        // behind, which both bloated searches and later made the
+        // metadata-existence skip in upsertL0 unsound (#1876).
+        if (this.ftsAvailable) {
+          for (const id of expiredIds) {
+            try {
+              this.stmtL0FtsDelete.run(id);
+            } catch { /* non-fatal, same as deleteL0 */ }
+          }
+        }
         this.db.exec("COMMIT");
         this.logger?.info?.(
           `${TAG} [L0-deleteExpired] Deleted ${expiredCount}/${total} records (cutoff=${cutoffIso})`,
