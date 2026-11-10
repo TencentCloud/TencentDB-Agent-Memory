@@ -80,7 +80,7 @@ class HttpStub(Stub):
             url=url,
             json=body,
             headers=self.headers,
-            timeout=timeout or self.client.timeout,
+            timeout=self.client.timeout if timeout is None else timeout,
         )
         logger.debug("Response %s %s", path, resp.text)
         resp.raise_for_status()
@@ -140,7 +140,7 @@ class AsyncHttpStub:
             url=url,
             json=body,
             headers=self.headers,
-            timeout=timeout or self.client.timeout,
+            timeout=self.client.timeout if timeout is None else timeout,
         )
         logger.debug("Response %s %s", path, resp.text)
         resp.raise_for_status()
