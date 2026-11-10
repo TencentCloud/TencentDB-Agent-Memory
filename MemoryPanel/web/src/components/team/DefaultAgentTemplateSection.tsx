@@ -9,7 +9,7 @@
  * 仅 system_admin 可调用，因此本组件只在 isAdmin=true 时渲染。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from 'tea-component';
 import { AddIcon, EditIcon } from 'tea-icons-react';
@@ -27,43 +27,74 @@ export default function DefaultAgentTemplateSection({
 }) {
   const { t } = useTranslation();
   const [template, setTemplate] = useState<AgentTemplateConfig | null>(null);
+  const [loadedTeamId, setLoadedTeamId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!teamId) return;
-    setLoading(true);
-    try {
-      const data = await agentsApi.getDefaultTemplate(teamId);
-      // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
-      setTemplate(data && data.name ? data : null);
-    } catch (err) {
-      tea.notify.error(getErrorMessage(err));
-      setTemplate(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [teamId]);
+  const requestSeq = useRef(0);
+  const teamIdRef = useRef(teamId);
+  teamIdRef.current = teamId;
 
   useEffect(() => {
-    load();
-  }, [load]);
+    const requestId = requestSeq.current + 1;
+    requestSeq.current = requestId;
+    setTemplate(null);
+    setLoadedTeamId(null);
+    setShowDialog(false);
+    setLoading(true);
+
+    if (!teamId) {
+      setLoadedTeamId(teamId);
+      setLoading(false);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const data = await agentsApi.getDefaultTemplate(teamId);
+        if (requestSeq.current !== requestId) return;
+        // 未配置时后端返回 {}；以 name 是否存在判断是否已配置
+        setTemplate(data && data.name ? data : null);
+      } catch (err) {
+        if (requestSeq.current !== requestId) return;
+        tea.notify.error(getErrorMessage(err));
+        setTemplate(null);
+      } finally {
+        if (requestSeq.current === requestId) {
+          setLoadedTeamId(teamId);
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      if (requestSeq.current === requestId) requestSeq.current += 1;
+    };
+  }, [teamId]);
 
   function handleSaved(saved: AgentTemplateConfig) {
+    if (teamIdRef.current !== teamId) return;
     setTemplate(saved);
+    setLoadedTeamId(teamId);
     setShowDialog(false);
     tea.notify.success(t('defaultAgent.notify.saved'));
   }
 
-  const hasTemplate = !!template;
+  const isCurrentTeam = loadedTeamId === teamId;
+  const isLoading = loading || !isCurrentTeam;
+  const hasTemplate = isCurrentTeam && !!template;
   const actionButton = hasTemplate ? (
-    <Button onClick={() => setShowDialog(true)} title={t('defaultAgent.edit.tooltip')}>
+    <Button
+      onClick={() => setShowDialog(true)}
+      disabled={isLoading}
+      title={t('defaultAgent.edit.tooltip')}
+    >
       <EditIcon size={14} /> {t('defaultAgent.edit')}
     </Button>
   ) : (
     <Button
       type="primary"
       onClick={() => setShowDialog(true)}
+      disabled={isLoading}
       title={t('defaultAgent.create.tooltip')}
     >
       <AddIcon size={14} /> {t('defaultAgent.create')}
@@ -80,7 +111,7 @@ export default function DefaultAgentTemplateSection({
         <div className="_memory-default-agent-actions">{actionButton}</div>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="_memory-default-agent-body">
           <span className="_memory-default-agent-placeholder">{t('team.loading')}</span>
         </div>
@@ -95,13 +126,11 @@ export default function DefaultAgentTemplateSection({
         </div>
       ) : (
         <div className="_memory-default-agent-body">
-          <span className="_memory-default-agent-placeholder">
-            {t('defaultAgent.empty')}
-          </span>
+          <span className="_memory-default-agent-placeholder">{t('defaultAgent.empty')}</span>
         </div>
       )}
 
-      {showDialog && (
+      {showDialog && isCurrentTeam && !loading && (
         <DefaultAgentTemplateDialog
           team={{ team_id: teamId, name: teamName }}
           initial={template}
