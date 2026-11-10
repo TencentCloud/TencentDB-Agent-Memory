@@ -920,6 +920,15 @@
   cursor: default;
 }
 
+/* 整行是 role="button" 的可点击展开区，但它不是按钮本身：全局 index.css 的
+   [role='button']:active { transform: scale(0.97) } 会在按下任意子按钮时
+   把整行一起缩小，右侧「更多操作(⋯)」随之左移 ~10px，导致 mouseup 落在
+   按钮外、click 丢失（#1708）。整行不需要按压缩放反馈，这里显式取消。
+   选择器比全局规则多一个元素选择器（0,3,1 > 0,3,0），不依赖加载顺序。 */
+div[role='button']._memory-detail-atomic-head--btn:active {
+  transform: none;
+}
+
 ._memory-detail-atomic-layer {
   flex-shrink: 0;
   font-size: 10px;
