@@ -446,3 +446,53 @@ export function exportSkill(params: ExportSkillParams, signal?: AbortSignal): Pr
 // `/v3/skill/extract/result` 已下线。SkillCoreSink 会在 worker
 // drain 后直接把 skill 写入表，提取结果通过 `/v3/skill/list` 拿到（不再有独立
 // 的 result 查询接口）。前端拿到 extract 的 task_id 即视为"任务已受理"。
+
+export interface GitHubSkillSource {
+  repository: string; ref: string; path: string; commit: string; digest: string; checked_at: string; declared_version?: string;
+}
+export interface GitHubSkillContext {
+  team_id: string; agent_id: string; user_id: string;
+  skill_id?: string; repository?: string; ref?: string; path?: string;
+}
+export interface GitHubSkillPreview {
+  previous_source?: GitHubSkillSource | null;
+  source: GitHubSkillSource; name: string; description: string;
+  content: string; previous_content: string; expected_version: number;
+  local_modified: boolean; update_available: boolean;
+  review_files?: SkillReviewFile[];
+  files: { added: string[]; changed: string[]; removed: string[] };
+}
+export function previewGitHubSkill(params: GitHubSkillContext): Promise<GitHubSkillPreview> {
+  return skillCall('github/preview', { ...params });
+}
+export function applyGitHubSkill(params: GitHubSkillContext & {
+  expected_version: number; commit: string; digest: string; overwrite_local: boolean;
+}): Promise<SkillSummary> { return skillCall('github/apply', { ...params }); }
+export function detachGitHubSkill(params: GitHubSkillContext & { expected_version: number }): Promise<SkillSummary> {
+  return skillCall('github/detach', { ...params });
+}
+
+export interface SkillRestorePreview {
+  source_version: number; expected_version: number; digest: string; name: string;
+  content: string; previous_content: string; source: GitHubSkillSource | null;
+  review_files?: SkillReviewFile[];
+  files: { added: string[]; changed: string[]; removed: string[] };
+}
+export function previewSkillRestore(params: GitHubSkillContext & { skill_id: string; source_version: number }): Promise<SkillRestorePreview> {
+  return skillCall('versions/restore-preview', { ...params });
+}
+export function restoreSkillVersion(params: GitHubSkillContext & { skill_id: string; source_version: number; expected_version: number; digest: string }): Promise<SkillSummary> {
+  return skillCall('versions/restore', { ...params });
+}
+export interface GitHubCheckState {
+  checked_at: string; status: 'current' | 'update_available' | 'error'; remote_commit?: string; message?: string;
+}
+
+export interface SkillReviewSide { size: number; executable: boolean; hash: string; text?: string; reason?: 'binary' | 'large' }
+export interface SkillReviewFile { path: string; status: 'added' | 'removed' | 'changed' | 'unchanged'; before: SkillReviewSide | null; after: SkillReviewSide | null }
+export function previewGitHubFile(params: GitHubSkillContext & { expected_version: number; commit: string; digest: string; file_path: string }, signal?: AbortSignal): Promise<SkillReviewFile> {
+  return skillCall('github/preview-file', { ...params }, signal);
+}
+export function previewRestoreFile(params: GitHubSkillContext & { source_version: number; expected_version: number; digest: string; file_path: string }, signal?: AbortSignal): Promise<SkillReviewFile> {
+  return skillCall('versions/restore-file', { ...params }, signal);
+}

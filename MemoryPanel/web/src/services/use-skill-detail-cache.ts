@@ -24,25 +24,27 @@ export interface CachedSkillDetail {
 }
 
 export function useSkillDetailCache(teamId: string | null | undefined) {
-  /** skill_id → 已拉取的数据面详情（version + owner_agent_id）。 */
+  /** (team_id, skill_id) → 数据面详情，避免跨团队复用缓存。 */
   const cacheRef = useRef(new Map<string, CachedSkillDetail>());
 
-  /** 正在请求中的 skill_id 集合，防止同一 skill 并发重复请求。 */
-  const inFlightRef = useRef(new Set<string>());
+  /** 请求标记用于去重，并阻止旧响应覆盖写入后的刷新结果。 */
+  const inFlightRef = useRef(new Map<string, symbol>());
 
   /** 每次缓存写入后 +1，父组件依赖此值在 useMemo 中重算列表项。 */
   const [cacheVersion, setCacheVersion] = useState(0);
 
   /** 同步读取缓存（不会触发请求）。 */
   const getFromCache = useCallback((skillId: string): CachedSkillDetail | undefined => {
-    return cacheRef.current.get(skillId);
-  }, []);
+    return cacheRef.current.get(JSON.stringify([teamId, skillId]));
+  }, [teamId]);
 
-  /** 预加载一条 skill 的数据面详情（幂等，已缓存或正在请求的直接跳过）。 */
-  const preload = useCallback(async (skillId: string) => {
+  /** 按需预加载；写成功后 force=true 强制刷新这一条。 */
+  const preload = useCallback(async (skillId: string, force = false) => {
     if (!teamId || !skillId) return;
-    if (cacheRef.current.has(skillId) || inFlightRef.current.has(skillId)) return;
-    inFlightRef.current.add(skillId);
+    const key = JSON.stringify([teamId, skillId]);
+    if (!force && (cacheRef.current.has(key) || inFlightRef.current.has(key))) return;
+    const request = Symbol();
+    inFlightRef.current.set(key, request);
     try {
       const full = await getSkill({
         skill_id: skillId,
@@ -50,7 +52,8 @@ export function useSkillDetailCache(teamId: string | null | undefined) {
         include_content: false,
         include_manifest: false,
       });
-      cacheRef.current.set(skillId, {
+      if (inFlightRef.current.get(key) !== request) return;
+      cacheRef.current.set(key, {
         version: full.version,
         owner_agent_id: full.owner_agent_id,
       });
@@ -58,7 +61,7 @@ export function useSkillDetailCache(teamId: string | null | undefined) {
     } catch {
       // 静默失败：列表仍用 asset 默认值（v1 / 空 owner_agent_id）
     } finally {
-      inFlightRef.current.delete(skillId);
+      if (inFlightRef.current.get(key) === request) inFlightRef.current.delete(key);
     }
   }, [teamId]);
 
@@ -69,10 +72,10 @@ export function useSkillDetailCache(teamId: string | null | undefined) {
   const applyCachedDetail = useCallback(<T extends { skill_id: string; version: number; owner_agent_id: string }>(
     skill: T,
   ): T => {
-    const cached = cacheRef.current.get(skill.skill_id);
+    const cached = cacheRef.current.get(JSON.stringify([teamId, skill.skill_id]));
     if (!cached) return skill;
     return { ...skill, version: cached.version, owner_agent_id: cached.owner_agent_id };
-  }, []);
+  }, [teamId]);
 
   return { getFromCache, preload, applyCachedDetail, cacheRef, cacheVersion };
 }

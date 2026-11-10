@@ -104,7 +104,7 @@ export class SkillResourceStore {
   }
 
   /** 写入资源字节，校验 path 和 size。如果 path 已存在则覆盖。 */
-  async writeResource(skillId: string, version: number, payload: SkillResourcePayload): Promise<SkillManifestEntry> {
+  async writeResource(skillId: string, version: number, payload: SkillResourcePayload, storageDir = this.versionDir(skillId, version)): Promise<SkillManifestEntry> {
     this.assertPath(payload.path);
     const buf = decodeContent(payload.content, payload.encoding);
     if (buf.length > this.maxBytes) {
@@ -113,7 +113,7 @@ export class SkillResourceStore {
         `${payload.path} (${buf.length} bytes) exceeds max ${this.maxBytes} bytes`,
       );
     }
-    const key = this.fileKey(skillId, version, payload.path);
+    const key = `${storageDir}/files/${payload.path}`;
     const mime = payload.mime_type ?? guessMime(payload.path);
     const isExec = payload.is_executable ?? false;
     // 用 backend.putObject 直接写以保留 metadata（is_executable）
@@ -135,9 +135,10 @@ export class SkillResourceStore {
     version: number,
     path: string,
     encoding: "utf-8" | "base64",
+    storageDir = this.versionDir(skillId, version),
   ): Promise<SkillResourceReadResult | null> {
     this.assertPath(path);
-    const key = this.fileKey(skillId, version, path);
+    const key = `${storageDir}/files/${path}`;
     const buf = await this.storage.readFileBuffer(key);
     if (!buf) return null;
     return {
