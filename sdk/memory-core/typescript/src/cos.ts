@@ -110,9 +110,26 @@ export interface MemoryFileReaderConfig {
   timeout?: number;
 }
 
+/** An STS refresh in flight, tagged with the epoch it was started in. */
+interface StsCredentialRefresh {
+  epoch: number;
+  promise: Promise<StsCredential>;
+}
+
 export class StsCredentialManager {
   private credential: StsCredential | null = null;
-  private fetchPromise: Promise<StsCredential> | null = null;
+  /**
+   * The refresh currently in flight, tagged with the epoch it was started
+   * in. The epoch tells a stale completion apart from a current one, and
+   * the promise identity tells a cleanup apart from another owner.
+   */
+  private inFlight: StsCredentialRefresh | null = null;
+  /**
+   * Bumped by every accepted invalidation. A refresh may only write the
+   * shared cache while the epoch it started in is still the current one,
+   * so a late completion cannot resurrect a rejected credential.
+   */
+  private epoch = 0;
   private readonly bufferMs: number;
   private readonly endpoint: string;
   private readonly apiKey: string;
@@ -134,23 +151,57 @@ export class StsCredentialManager {
     if (this.credential?.isValid(this.bufferMs)) {
       return this.credential;
     }
-    // Coalesce concurrent requests
-    if (!this.fetchPromise) {
-      this.fetchPromise = this.refresh();
-    }
-    try {
-      return await this.fetchPromise;
-    } finally {
-      this.fetchPromise = null;
-    }
+    // Coalesce concurrent requests. An in-flight refresh is joinable only
+    // while it still belongs to the current epoch; an older one exists
+    // because it was invalidated, and its result must not be cached.
+    const current = this.inFlight;
+    const joined = current && current.epoch === this.epoch
+      ? current
+      : this.startRefresh();
+    return this.awaitRefresh(joined.promise);
   }
 
-  invalidate(): void {
+  /**
+   * Drop the cached credential so the next read replaces it.
+   *
+   * @param rejected The credential whose request was rejected. When given,
+   *   the call is ignored unless it is still the cached one, so a late 403
+   *   for an already-replaced credential discards nothing.
+   */
+  invalidate(rejected?: StsCredential): void {
+    if (rejected && this.credential !== rejected) {
+      return;
+    }
     this.credential = null;
-    this.fetchPromise = null;
+    // Opening a new epoch is what protects the cache: a refresh already in
+    // flight may still complete, but it can no longer write its result.
+    // The in-flight slot itself is deliberately left alone, since detaching
+    // it is what let every rejected reader start its own STS request.
+    this.epoch++;
   }
 
-  private async refresh(): Promise<StsCredential> {
+  private startRefresh(): StsCredentialRefresh {
+    const epoch = this.epoch;
+    const entry: StsCredentialRefresh = {
+      epoch,
+      promise: this.refresh(epoch),
+    };
+    this.inFlight = entry;
+    return entry;
+  }
+
+  private async awaitRefresh(promise: Promise<StsCredential>): Promise<StsCredential> {
+    try {
+      return await promise;
+    } finally {
+      // Clear only the slot this call joined; a newer refresh may own it.
+      if (this.inFlight?.promise === promise) {
+        this.inFlight = null;
+      }
+    }
+  }
+
+  private async refresh(startEpoch: number): Promise<StsCredential> {
     const url = `${this.endpoint}/v2/cos/secret`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
@@ -174,7 +225,12 @@ export class StsCredentialManager {
 
       const data = (await resp.json()) as CosSecretResponse;
       const cred = new StsCredential(data);
-      this.credential = cred;
+      // Share the result only while this refresh still owns the cache. A
+      // caller awaiting a superseded refresh still receives its credential;
+      // it just cannot overwrite a newer one.
+      if (this.epoch === startEpoch) {
+        this.credential = cred;
+      }
       return cred;
     } finally {
       clearTimeout(timer);
@@ -259,7 +315,7 @@ export class MemoryFileReader {
 
     // 403 → invalidate and retry once
     if (result.status === 403) {
-      this.stsManager.invalidate();
+      this.stsManager.invalidate(cred);
       cred = await this.stsManager.getCredential();
       result = await this.doGet(cred, path);
     }
