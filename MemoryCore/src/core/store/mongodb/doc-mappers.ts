@@ -14,6 +14,7 @@ import type { MemoryRecord } from "../../record/l1-writer.js";
 import type {
   L0Record,
   L0QueryRow,
+  L0SessionGroup,
   L0SearchResult,
   L0FtsResult,
   L1RecordRow,
@@ -91,6 +92,33 @@ export function docToL0SearchResult(doc: L0Doc, score: number): L0SearchResult {
 
 export function docToL0FtsResult(doc: L0Doc, score: number): L0FtsResult {
   return { ...docToL0QueryRow(doc), score };
+}
+
+export function groupL0RowsBySession(rows: L0QueryRow[]): L0SessionGroup[] {
+  const groupMap = new Map<string, L0SessionGroup>();
+  for (const row of rows) {
+    const sid = row.session_id || DEFAULT_ISOLATION_ID;
+    const teamId = row.team_id || "";
+    const userId = row.user_id || "";
+    const agentId = row.agent_id || "";
+    const taskId = row.task_id || "";
+    const groupKey = `${teamId}\u0000${userId}\u0000${agentId}\u0000${taskId}\u0000${sid}`;
+    let group = groupMap.get(groupKey);
+    if (!group) {
+      group = { sessionId: sid, teamId, userId, agentId, taskId, messages: [] };
+      groupMap.set(groupKey, group);
+    }
+    group.messages.push({
+      id: row.record_id,
+      role: row.role,
+      content: row.message_text,
+      timestamp: row.timestamp,
+      recordedAtMs: row.recorded_at ? Date.parse(row.recorded_at) || 0 : 0,
+    });
+  }
+  const groups = [...groupMap.values()].filter((g) => g.messages.length > 0);
+  groups.sort((a, b) => a.messages[0].timestamp - b.messages[0].timestamp);
+  return groups;
 }
 
 // ════════════════════════════════════════════════════════

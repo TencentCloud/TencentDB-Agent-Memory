@@ -45,6 +45,7 @@ Open the panel: [http://localhost:8125](http://localhost:8125).
 Complete installation documentation (standalone Memory Hub deployment, Proxy + Claude Code / CodeBuddy usage, stop and cleanup, port reference, etc.) is available in [**INSTALL.md**](./INSTALL.md) (中文: [INSTALL_CN.md](./INSTALL_CN.md)).
 The MongoDB storage backend is **experimental** (off by default); see
 [INSTALL.md · MongoDB storage backend](./INSTALL.md#optional-mongodb-storage-backend-experimental-off-by-default).
+The Qdrant storage backend is optional (off by default); see [INSTALL.md · Qdrant storage backend](./INSTALL.md#optional-qdrant-storage-backend-off-by-default).
 
 ### Migrating data from an older version
 

@@ -68,6 +68,21 @@ cd TencentDB-Agent-Memory/deploy/global-images
   自行备份并手工迁移；后续版本将提供官方迁移工具。L2/L3 文件两种模式都在
   `MEMORY_CORE_VOLUME` 卷。
 
+### Qdrant 存储后端（可选）
+
+默认存储仍是 **sqlite**。设置 `MEMORY_CORE_STORE_MODE=qdrant` 后，记忆数据面（L0/L1/L2/L3、memory prompt、审计）走 Qdrant：关键词检索用 BM25 稀疏向量，配置 embedding 后叠加稠密向量混合检索；skill 与元数据仍留在容器卷内的 sqlite。
+
+```bash
+# .env
+MEMORY_CORE_STORE_MODE=qdrant
+```
+
+然后照常运行 `./start-all.sh`：
+
+- 未设 `QDRANT_URL` 时，脚本会自动起一个本地 `qdrant/qdrant` 容器（数据卷 `qdrant-local-storage` 持久化，`stop-all.sh --purge` 一并清理）；
+- 想用外部 Qdrant（自建 / Qdrant Cloud），在 `.env` 填 `QDRANT_URL`（以及 `QDRANT_API_KEY`）即可；
+- **切换存储后端不会迁移已有数据。** 要回 sqlite：注释掉 `MEMORY_CORE_STORE_MODE` 或改为 `sqlite`，再跑 `./start-all.sh`。
+
 ### 干跑校验（可选）
 
 `verify.sh` 仍可单独使用，只检查环境不启动容器：

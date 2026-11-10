@@ -20,7 +20,7 @@ import path from "node:path";
 // ============================
 
 export interface ManifestStoreInfo {
-  type: "sqlite" | "tcvdb" | "mongodb";
+  type: "sqlite" | "tcvdb" | "mongodb" | "qdrant";
   sqlite?: {
     /** Relative path to the SQLite DB file (relative to dataDir). */
     path: string;
@@ -34,6 +34,10 @@ export interface ManifestStoreInfo {
   mongodb?: {
     endpoint: string;
     database: string;
+  };
+  qdrant?: {
+    url: string;
+    collectionPrefix: string;
   };
 }
 
@@ -105,13 +109,15 @@ export function writeManifest(dataDir: string, manifest: Manifest): void {
 // ============================
 
 export interface StoreConfigSnapshot {
-  type: "sqlite" | "tcvdb" | "mongodb";
+  type: "sqlite" | "tcvdb" | "mongodb" | "qdrant";
   sqlitePath?: string;
   tcvdbUrl?: string;
   tcvdbDatabase?: string;
   tcvdbAlias?: string;
   mongoEndpoint?: string;
   mongoDatabase?: string;
+  qdrantUrl?: string;
+  qdrantCollectionPrefix?: string;
 }
 
 /**
@@ -125,6 +131,11 @@ export function buildStoreInfo(snapshot: StoreConfigSnapshot): ManifestStoreInfo
     info.mongodb = {
       endpoint: snapshot.mongoEndpoint!,
       database: snapshot.mongoDatabase!,
+    };
+  } else if (snapshot.type === "qdrant") {
+    info.qdrant = {
+      url: snapshot.qdrantUrl!,
+      collectionPrefix: snapshot.qdrantCollectionPrefix!,
     };
   } else {
     info.tcvdb = {
@@ -172,6 +183,15 @@ export function diffStoreBinding(
     }
     if (persisted.mongodb?.database !== current.mongodb?.database) {
       diffs.push(`mongodb database changed: ${persisted.mongodb?.database} → ${current.mongodb?.database}`);
+    }
+  }
+
+  if (persisted.type === "qdrant" && current.type === "qdrant") {
+    if (persisted.qdrant?.url !== current.qdrant?.url) {
+      diffs.push(`qdrant url changed: ${persisted.qdrant?.url} → ${current.qdrant?.url}`);
+    }
+    if (persisted.qdrant?.collectionPrefix !== current.qdrant?.collectionPrefix) {
+      diffs.push(`qdrant collectionPrefix changed: ${persisted.qdrant?.collectionPrefix} → ${current.qdrant?.collectionPrefix}`);
     }
   }
 

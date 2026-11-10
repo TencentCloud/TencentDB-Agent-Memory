@@ -128,6 +128,11 @@ export function extractQueryTokens(raw: string): string[] {
   );
 }
 
+export function segmentWords(raw: string): string[] {
+  const jieba = getJieba();
+  return jieba ? jieba.cutForSearch(raw, true) : (raw.match(/[\p{L}\p{N}_]+/gu) ?? []);
+}
+
 /**
  * Tokenize text for keyword indexing (write-side).
  *

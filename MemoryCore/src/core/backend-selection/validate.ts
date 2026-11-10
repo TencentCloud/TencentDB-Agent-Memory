@@ -45,7 +45,7 @@ export function validateResolution(resolution: BackendResolution): void {
   // rows, and mongodb is the only DB whose store implements the profile-row
   // methods — sqlite has no rows to map, tcvdb has not implemented them (the
   // assembly guard would fail-fast anyway). Reject both before assembly.
-  if (fs.profile === "rows" && db.kind !== "mongodb") {
+  if (fs.profile === "rows" && db.kind !== "mongodb" && db.kind !== "qdrant") {
     throw new BackendCapabilityError({
       dbKind: db.kind,
       fsKind: "rowfs",
