@@ -47,6 +47,9 @@ export interface RunnerSessionState {
   // ═══ L1 — cursor & continuity ═══
   /** L0 JSONL cursor: epoch ms of last message processed by L1 */
   last_l1_cursor: number;
+  /** 复合游标的第二段：同一毫秒内已处理到的 record_id（issue #1979）。
+   *  老 checkpoint 没有该字段时为空串，查询退回 `recorded_at > cursor` 语义。 */
+  last_l1_cursor_id: string;
   /** Last scene name from the most recent L1 extraction (for cross-batch continuity) */
   last_scene_name: string;
 }
@@ -111,6 +114,7 @@ export interface Checkpoint {
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
   last_captured_timestamp: 0,
   last_l1_cursor: 0,
+  last_l1_cursor_id: "",
   last_scene_name: "",
 };
 
@@ -305,6 +309,7 @@ export class CheckpointManager {
             ...DEFAULT_RUNNER_STATE,
             last_captured_timestamp: (state.last_captured_timestamp as number) ?? 0,
             last_l1_cursor: (state.last_l1_cursor as number) ?? 0,
+            last_l1_cursor_id: (state.last_l1_cursor_id as string) ?? "",
             last_scene_name: (state.last_scene_name as string) ?? "",
           };
           cp.pipeline_states[key] = {
@@ -643,6 +648,7 @@ export class CheckpointManager {
     memoriesExtracted: number,
     cursorRecordedAtMs?: number,
     lastSceneName?: string,
+    cursorRecordedId?: string,
   ): Promise<void> {
     let regressed = false;
     await this.mutate((cp) => {
@@ -656,7 +662,15 @@ export class CheckpointManager {
         // 反复抽取，新数据永远排不上。取大后写入天然幂等。
         if (cursorRecordedAtMs > state.last_l1_cursor) {
           state.last_l1_cursor = cursorRecordedAtMs;
-        } else if (cursorRecordedAtMs < state.last_l1_cursor) {
+          // 跨到新的毫秒时必须同时重置 id；否则旧的 id 会和新的 ms 组合，
+          // 在 `recorded_at = ms AND record_id > id` 分支上误跳过行。
+          state.last_l1_cursor_id = cursorRecordedId ?? "";
+        } else if (cursorRecordedAtMs === state.last_l1_cursor) {
+          // 同一毫秒内继续用 record_id 推进（issue #1979）
+          if (cursorRecordedId && cursorRecordedId > (state.last_l1_cursor_id ?? "")) {
+            state.last_l1_cursor_id = cursorRecordedId;
+          }
+        } else {
           regressed = true;
         }
       }

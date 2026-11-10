@@ -272,6 +272,8 @@ export class VectorStore implements IMemoryStore {
   private stmtL0QueryAll!: StatementSync;
   /** L0 query for L1 runner: messages after a timestamp cursor */
   private stmtL0QueryAfter!: StatementSync;
+  /** L0 query for L1 runner: composite (recorded_at, record_id) cursor (issue #1979) */
+  private stmtL0QueryAfterId!: StatementSync;
   /** L1 cursor-based pagination for migration (by PK) */
   private stmtL1QueryMigrationCursor!: StatementSync;
   /** L0 cursor-based pagination for migration (by PK) */
@@ -722,7 +724,7 @@ export class VectorStore implements IMemoryStore {
       SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id, role, message_text, recorded_at, timestamp
       FROM l0_conversations
       WHERE session_key = ?
-      ORDER BY recorded_at ASC
+      ORDER BY recorded_at ASC, record_id ASC
       LIMIT ?
     `);
 
@@ -730,7 +732,17 @@ export class VectorStore implements IMemoryStore {
       SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id, role, message_text, recorded_at, timestamp
       FROM l0_conversations
       WHERE session_key = ? AND recorded_at > ?
-      ORDER BY recorded_at ASC
+      ORDER BY recorded_at ASC, record_id ASC
+      LIMIT ?
+    `);
+
+    // 复合游标（issue #1979）：同一毫秒内可能有超过 LIMIT 的行。只按
+    // `recorded_at > cursor` 推进会把这些行永久跳过；这里用 record_id 继续推进。
+    this.stmtL0QueryAfterId = this.db.prepare(`
+      SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id, role, message_text, recorded_at, timestamp
+      FROM l0_conversations
+      WHERE session_key = ? AND (recorded_at > ? OR (recorded_at = ? AND record_id > ?))
+      ORDER BY recorded_at ASC, record_id ASC
       LIMIT ?
     `);
 
@@ -2247,6 +2259,7 @@ export class VectorStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    afterRecordId?: string,
   ): L0QueryRow[] {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L0-query] SKIPPED (degraded mode)`);
@@ -2259,7 +2272,15 @@ export class VectorStore implements IMemoryStore {
       if (afterRecordedAtMs && afterRecordedAtMs > 0) {
         // Convert epoch ms to ISO string for recorded_at comparison
         const afterRecordedAtIso = new Date(afterRecordedAtMs).toISOString();
-        rows = this.stmtL0QueryAfter.all(sessionKey, afterRecordedAtIso, limit) as Array<Record<string, unknown>>;
+        rows = afterRecordId
+          ? (this.stmtL0QueryAfterId.all(
+              sessionKey,
+              afterRecordedAtIso,
+              afterRecordedAtIso,
+              afterRecordId,
+              limit,
+            ) as Array<Record<string, unknown>>)
+          : (this.stmtL0QueryAfter.all(sessionKey, afterRecordedAtIso, limit) as Array<Record<string, unknown>>);
       } else {
         rows = this.stmtL0QueryAll.all(sessionKey, limit) as Array<Record<string, unknown>>;
       }
@@ -2301,13 +2322,14 @@ export class VectorStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    afterRecordId?: string,
   ): Array<{ sessionId: string; teamId?: string; taskId?: string; userId: string; agentId: string; messages: Array<{ id: string; role: string; content: string; timestamp: number; recordedAtMs: number }> }> {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L0-query-grouped] SKIPPED (degraded mode)`);
       return [];
     }
     try {
-      const rows = this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
+      const rows = this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit, afterRecordId);
 
       // Group by full isolation tuple + session_id to avoid cross-tenant merging.
       const groupMap = new Map<string, {

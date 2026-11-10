@@ -655,8 +655,8 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── L0 Read ──────────────────────────────────────────────
 
   countL0(filter?: L0CountFilter): MaybePromise<number>;
-  queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0QueryRow[]>;
-  queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0SessionGroup[]>;
+  queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number, afterRecordId?: string): MaybePromise<L0QueryRow[]>;
+  queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number, afterRecordId?: string): MaybePromise<L0SessionGroup[]>;
   getAllL0Texts(): MaybePromise<Array<{ record_id: string; message_text: string; recorded_at: string }>>;
 
   // ── L0 Search ────────────────────────────────────────────

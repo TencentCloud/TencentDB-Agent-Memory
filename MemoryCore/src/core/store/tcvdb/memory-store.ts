@@ -1272,27 +1272,58 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  async queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0QueryRow[]> {
+  async queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit = 50, afterRecordId?: string): Promise<L0QueryRow[]> {
     try {
       await this._ensureInit();
       if (this.degraded) return [];
 
-      const conditions: string[] = [eqFilter("session_key", sessionKey)];
-      if (afterRecordedAtMs && afterRecordedAtMs > 0) {
-        conditions.push(`recorded_at_ms > ${afterRecordedAtMs}`);
-      }
-      const filterExpr = conditions.join(" and ");
+      const baseConditions: string[] = [eqFilter("session_key", sessionKey)];
 
       // Query oldest-first (ASC) — preserves backlog ordering so callers that
       // advance a recorded_at cursor never skip older rows. See sqlite.ts
       // queryL0ForL1 for the full rationale.
-      const docs = await this._queryAllDocs(
-        this.l0Collection,
-        filterExpr,
-        L0_OUTPUT_FIELDS,
-        limit,
-        [{ fieldName: "recorded_at_ms", direction: "asc" }],
-      );
+      let docs: Array<Record<string, unknown>>;
+      if (afterRecordedAtMs && afterRecordedAtMs > 0 && afterRecordId) {
+        // 复合游标（issue #1979）：TCVDB 的 filter 不支持引用主键字段 `id`，
+        // 无法在服务端表达 `(recorded_at = ? AND id > ?)`。这里拆成两次查询：
+        //   1) recorded_at_ms > cursorMs 的行（原有语义）；
+        //   2) 把 cursor 所在毫秒的行全部取回，在客户端按 id 过滤。
+        // 正常情况下同一毫秒只有同一批 capture 写入的少量行，第二次查询很小。
+        const afterDocs = await this._queryAllDocs(
+          this.l0Collection,
+          [...baseConditions, `recorded_at_ms > ${afterRecordedAtMs}`].join(" and "),
+          L0_OUTPUT_FIELDS,
+          limit,
+          [{ fieldName: "recorded_at_ms", direction: "asc" }],
+        );
+        const sameMsDocs = await this._queryAllDocs(
+          this.l0Collection,
+          [...baseConditions, `recorded_at_ms = ${afterRecordedAtMs}`].join(" and "),
+          L0_OUTPUT_FIELDS,
+          undefined,
+          [{ fieldName: "recorded_at_ms", direction: "asc" }],
+        );
+        const remainingSameMs = sameMsDocs
+          .filter((d) => String(d.id ?? "") > afterRecordId)
+          .sort((a, b) => {
+            const ai = String(a.id ?? "");
+            const bi = String(b.id ?? "");
+            return ai < bi ? -1 : ai > bi ? 1 : 0;
+          });
+        docs = [...remainingSameMs, ...afterDocs].slice(0, limit);
+      } else {
+        const conditions = [...baseConditions];
+        if (afterRecordedAtMs && afterRecordedAtMs > 0) {
+          conditions.push(`recorded_at_ms > ${afterRecordedAtMs}`);
+        }
+        docs = await this._queryAllDocs(
+          this.l0Collection,
+          conditions.join(" and "),
+          L0_OUTPUT_FIELDS,
+          limit,
+          [{ fieldName: "recorded_at_ms", direction: "asc" }],
+        );
+      }
 
       const rows: L0QueryRow[] = docs.map((doc) => ({
         record_id: String(doc.id ?? ""),
@@ -1317,9 +1348,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  async queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0SessionGroup[]> {
+  async queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit = 50, afterRecordId?: string): Promise<L0SessionGroup[]> {
     try {
-      const rows = await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
+      const rows = await this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit, afterRecordId);
 
       // Group by full isolation tuple + session_id to avoid cross-tenant merging.
       // 注意：必须把 teamId / taskId 带进 group。L2 scope (team:T|agent:A) 依赖
