@@ -7,14 +7,14 @@
 
 <a href="https://trendshift.io/repositories/29310?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-29310" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/29310" alt="TencentCloud%2FTencentDB-Agent-Memory | Trendshift" width="250" height="55"/></a>
 
-[![npm](https://img.shields.io/npm/v/@tencentdb-agent-memory/memory-tencentdb?color=blue)](https://www.npmjs.com/package/@tencentdb-agent-memory/memory-tencentdb)
+[![GitHub Release](https://img.shields.io/github/v/release/TencentCloud/TencentDB-Agent-Memory?label=release)](https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E=2026.3.13-orange)](https://github.com/openclaw/openclaw)
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[Installation](#installation) · [Supported Agents](#all-agents-share-the-same-memory-server) · [What is it?](#what-is-tencentdb-agent-memory) · [Team Play](#one-play-style-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
+[Installation](#installation) · [Supported Agents](#all-agents-share-the-same-memory-server) · [Best Practices](#best-practices) · [What Is It?](#what-is-tencentdb-agent-memory) · [Team Play](#example-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
 [**English**](./README.md) · [简体中文](./README_CN.md)
 
@@ -22,158 +22,169 @@
 
 ---
 
-> **Latest:** Team Memory Beta is evolving quickly — install it and start exploring in minutes.
-
 <td>
    <video src="https://github.com/user-attachments/assets/efb1a808-1f86-4cfe-802c-f7453f7ca938" width="100%" controls autoplay loop muted playsinline></video>
 </td>
 
+
 # Installation
 
-Start all three services in one go (`memory-core` + `memory-hub` + `proxy`):
+Start the full stack with one command: `memory-core`, `memory-hub`, and `proxy`.
 
 ```bash
-git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/deploy/global-images
 cp .env.example .env
-$EDITOR .env       # Fill in two sets of LLM parameters (memory group + proxy group)
-./start-all.sh     # Launch everything with one command; when finished, it prints a one-liner you can paste directly into Claude
+$EDITOR .env       # Configure both sets of LLM settings: memory and proxy
+./start-all.sh     # Start the stack and print a command you can copy to launch Claude Code
 ```
 
-Open the panel: [http://localhost:8125](http://localhost:8125).
+Open the panel at [http://localhost:8125](http://localhost:8125).
 
-Complete installation documentation (standalone Memory Hub deployment, Proxy + Claude Code / CodeBuddy usage, stop and cleanup, port reference, etc.) is available in [**INSTALL.md**](./INSTALL.md) (中文: [INSTALL_CN.md](./INSTALL_CN.md)).
-The MongoDB storage backend is **experimental** (off by default); see
-[INSTALL.md · MongoDB storage backend](./INSTALL.md#optional-mongodb-storage-backend-experimental-off-by-default).
+For standalone Memory Hub deployment, Proxy setup for Claude Code and CodeBuddy, shutdown and cleanup, and port configuration,
+see [**INSTALL.md**](./INSTALL.md) ([Chinese](./INSTALL_CN.md)).
 
-### Migrating data from an older version
+### Migrating Data from Older Versions
 
-If you're already on an older release (v1.x / v0.x) and want to bring your existing data over to v2.0.0+, we provide a migration tool:
-
-See [**Data Migration Tool (v2 → v3)**](./MemoryCore/scripts/migrate-v2-to-v3/README.md) for full usage and flags. New installations can skip this.
+If you're upgrading from v0.x or v1.x to v2.0.0 or later, you can migrate your existing data.
+See the [**Data Migration Tool (v2 → v3)**](./MemoryCore/scripts/migrate-v2-to-v3/README.md) for instructions and options. Skip this step for a fresh install.
 
 ## All Agents Share the Same Memory Server
 
-One Proxy, unchanged protocol, zero-code integration — point the Agent's base URL to the Proxy and it's done. No plugin, hook, or MCP server is required.
+Follow your client's setup guide to configure the Proxy URL and User Key. Supported clients connect using their existing model protocols, without an additional plugin, hook, or MCP server.
 
 <table>
 <tr>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-deepseek-harness-dsh"><img src="./assets/images/agents/dsh.png" width="48" height="48" /><br /><sub><b>DeepSeek Harness</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-claude-code"><img src="./assets/images/agents/claude-code.png" width="48" height="48" /><br /><sub><b>Claude Code</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-codex"><img src="./assets/images/agents/codex.png" width="48" height="48" /><br /><sub><b>Codex</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-codebuddy"><img src="./assets/images/agents/codebuddy.png" width="48" height="48" /><br /><sub><b>CodeBuddy</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/dsh/"><img src="./assets/images/agents/dsh.png" width="48" height="48" /><br /><sub><b>DeepSeek Harness</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/claude-code/"><img src="./assets/images/agents/claude-code.png" width="48" height="48" /><br /><sub><b>Claude Code</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/codex/"><img src="./assets/images/agents/codex.png" width="48" height="48" /><br /><sub><b>Codex</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/codebuddy/"><img src="./assets/images/agents/codebuddy.png" width="48" height="48" /><br /><sub><b>CodeBuddy</b></sub></a></td>
 </tr>
 <tr>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-workbuddy"><img src="./assets/images/agents/workbuddy.png" width="48" height="48" /><br /><sub><b>WorkBuddy</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-hermes"><img src="./assets/images/agents/hermes.png" width="48" height="48" /><br /><sub><b>Hermes</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-openclaw"><img src="./assets/images/agents/openclaw.png" width="48" height="48" /><br /><sub><b>OpenClaw</b></sub></a></td>
-<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-other-platforms-generic"><sub><b>More frameworks coming soon...</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/workbuddy/"><img src="./assets/images/agents/workbuddy.png" width="48" height="48" /><br /><sub><b>WorkBuddy</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/hermes/"><img src="./assets/images/agents/hermes.png" width="48" height="48" /><br /><sub><b>Hermes</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/openclaw/"><img src="./assets/images/agents/openclaw.png" width="48" height="48" /><br /><sub><b>OpenClaw</b></sub></a></td>
+<td align="center" width="140"><a href="./agents/adapter-agent-development.md"><sub><b>More integrations coming soon...</b></sub></a></td>
+</tr>
+<tr>
+<td align="center" width="140" colspan="2"><a href="./agents/opencode/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://opencode.ai/brand/files/opencode-logo-dark-square.png" /><img src="https://opencode.ai/brand/files/opencode-logo-light-square.png" width="48" height="48" alt="" /></picture><br /><sub><b>OpenCode</b></sub></a></td>
+<td align="center" width="140" colspan="2"><a href="https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/tag/v2.0.2"><img src="https://pi.dev/favicon.svg" width="48" height="48" alt="" /><br /><sub><b>Pi</b></sub></a></td>
 </tr>
 </table>
 
-See [**INSTALL.md**](./INSTALL.md) for the exact configuration steps of each client.
+See the table above or the [integration overview](./agents/README.md) for client-specific setup instructions.
 
-Don't see your favorite Agent? You can try adapting it yourself with the [Generic integration guide](./INSTALL.md#using-proxy-with-other-platforms-generic) — and we'd love a PR adding native support for it. See [**CONTRIBUTING.md**](./CONTRIBUTING.md) to get started.
+OpenCode has a [ready-to-use adapter configuration](./adapters/opencode/README.md), and Pi connects through OpenAI Chat Completions. After binding a session, you can save a Team, Agent, and Task combination as the default for new sessions.
 
-# What is TencentDB Agent Memory?
+Don't see your preferred Agent? The [new client integration guide](./agents/adapter-agent-development.md) explains how to add support. PRs are welcome; see [**CONTRIBUTING.md**](./CONTRIBUTING.md) to get started.
 
-We started from a practical question: **How do you reduce repetitive work when using Agents?**
+### Best Practices
 
-If project context has already been explained, it shouldn't need to be repeated in a new session. If documents have already been read, every Agent shouldn't have to start again from page one. A workflow that already works shouldn't have to be rediscovered next time.
+Once you've deployed the stack and connected your Agents, use the guide to set up a team, import and assign memory assets, and see how well they work on a real task.
 
-Memory here means more than just "remembering conversations." **Any information that helps the next Agent avoid reinventing the wheel should be saved, organized, and reused.**
+See the [Best Practices guide](https://tencentcloud.github.io/TencentDB-Agent-Memory/best-practices).
+
+# What Is TencentDB Agent Memory?
+
+We started with a practical question: **How can we stop doing the same work every time we use an Agent?**
+
+You shouldn't have to explain the project again every time you start a session. Agents shouldn't have to reread the same documents from page one. Once a workflow works, the next Agent should be able to pick it up.
+
+Memory goes beyond the conversation itself. **If information can save the next Agent time or help it avoid a mistake, it should be saved, organized, and reused.**
 
 ```text
-Existing information → Reusable memory assets → Fewer turns → Less rework → More stable results and higher efficiency
+Existing information → Reusable memory assets → Fewer turns and less rework → More consistent results in less time
 ```
 
-### Let experience accumulate, flow, and pass on to the next Agent
+### Capture Experience and Pass It to the Next Agent
 
-**Memory Hub** for Agent teams closes the loop across the entire experience lifecycle: work produces assets, assets circulate through the team, and new members can load the team's save file on day one.
+**Memory Hub** gives Agent teams a place to capture what they learn on the job, share it across the team, and put it to work from a new member's first session.
 
-1. **Automatic asset extraction**: Extract Chat Memory and Skills from conversations and tasks; convert documents and code into Wiki and CodeGraph; then manage, review, and route them consistently.
-2. **Portable & multi-Agent compatible**: Memory assets are decoupled from Agent frameworks — they can move across frameworks and be shared and maintained by multiple Agents and team members.
-3. **Cold-start friendly**: Import existing documents, codebases, and Agent conversation sessions. New Agent teams can start from existing experience instead of learning from scratch.
+1. **Automatic asset extraction**: Turn conversations and tasks into Chat Memory and Skills, and documents and code into Wiki and CodeGraph assets. Manage, review, and route them from one place.
+2. **Portable across Agent frameworks**: Memory assets are independent of the framework. Move them between frameworks, or let multiple Agents and team members share and maintain them.
+3. **Easier cold starts**: Import existing documents, repositories, and Agent sessions so a new team can build on work that's already been done.
 
-### 🧠 A brain that remembers people and context
+### 🧠 Chat Memory: Remember People and Context
 
-- **Chat Memory** retains preferences, facts, decisions, and interaction history.
-- Each Agent automatically gets its own memory when created — no need to re-introduce yourself next time.
-- L0 Conversation → L1 Atom → L2 Scenario → L3 Persona — raw conversations are distilled layer by layer.
+- **Chat Memory** keeps track of preferences, facts, decisions, and past interactions.
+- Session bindings and permissions determine which memories an Agent can access. When an Agent returns to the same work, it can reuse the context.
+- Raw conversations are distilled through four layers: L0 Conversation → L1 Atom → L2 Scenario → L3 Persona.
 
-<img width="" src="assets/images/chat_memory.png" alt="image.png" />
+<img src="assets/images/chat_memory.png" alt="Chat Memory in Memory Hub" />
 
-> "Don't refactor the old auth module — mobile is still using it." — Context this costly shouldn't depend on humans repeating it every time.
+> “Leave the old authentication module alone. The mobile app still uses it.” An Agent should remember a constraint like this without someone having to repeat it.
 
-### ⚡ A Skill library that accumulates expertise
+### ⚡ A Skill Library That Captures What Works
 
-- After completing complex work, Agents can extract and manage reusable Skills from conversations and tool calls, and import them into the context of a designated Agent when needed.
-- A Skill isn't just a prompt snippet; it has versions, resource files, trigger boundaries, execution steps, and validation rules.
-- Personal Skills are private by default; after review, they can be shared with the team and assigned to other Agents.
+- After a complex task, Agents can turn conversations and tool calls into reusable Skills. Assign a Skill to a specific Agent so it can load it when needed. Skills can be edited and exported from the panel.
+- A Skill includes a version, resource files, trigger conditions, steps to follow, and validation rules.
+- Personal Skills are private by default. After review, they can be shared with the team and assigned to other Agents.
 
-<img width="" src="assets/images/skill.png" alt="image.png" />
+<img src="assets/images/skill.png" alt="Skill library in Memory Hub" />
 
-> Troubleshooting, code review, release checklists — learn it once, and the whole team can use it.
+> Troubleshooting, code reviews, release checks: work out the steps once and the whole team can reuse them.
 
-### 📖 A knowledge map that reads both docs and code
+### 📖 A Knowledge Map for Docs and Code
 
-- **Wiki** turns product docs, design specs, and ops runbooks into structured pages with a link graph. (Inspired by Karpathy's LLM knowledge base.)
+- **Wiki** turns product docs, design proposals, and runbooks into structured pages and a link graph. It imports Markdown, plain text, HTML, Word, Excel, PowerPoint, and PDF files.
 
-<img src="./assets/images/wiki.png" alt="image.png" />
+<img src="./assets/images/wiki.png" alt="Wiki pages and their link graph" />
 
 - **CodeGraph** indexes code symbols, files, call relationships, and impact paths.
-<img width="" src="assets/images/codegraph.png" alt="image.png" />
 
-- Agents can search, read, inspect callers/callees, and perform impact analysis before modifying code.
+<img src="assets/images/codegraph.png" alt="CodeGraph repository view" />
 
-> Wiki keeps Agents from reading every file list before getting to work. CodeGraph doesn't just tell them "the code is here" — it tells them "changing this might affect those."
+- Agents can search and read the indexed material, look up callers and callees, and run impact analysis before changing code.
 
-### 🛡️ A team memory panel controlled by humans
+> Wiki helps an Agent get to the right document without browsing every folder. CodeGraph shows where the code lives and what a change could affect.
 
-- Create teams and Agents in Memory Hub; review, share, and equip memory assets.
-- Manage ownership, versions, status, visibility, usage counts, and Agent bindings in one place.
-- `private` belongs strictly to the Owner; `team` is visible to all team members; `restricted` grants precise access via User / Role / Agent ACLs.
-- Two role layers: **global System Admin** manages users and teams (creating teams, adding members) and can also use Wiki, CodeGraph, Skill, and other asset management features; **Team-level roles** include Admin (team manager) and Member (regular member), responsible for asset collaboration and access control within a team. Asset ownership is tracked via Owner — the Owner automatically has management permissions for their assets.
+### 🛡️ A Team Memory Panel That People Control
 
-<img width="" src="assets/images/asset.png" alt="image.png" />
+- Create Teams and Agents in Memory Hub, then review, share, and assign memory assets.
+- Manage asset ownership, versions, status, visibility, usage counts, and Agent bindings in one place.
+- Use `private` for the Owner only, `team` for the whole team, and `restricted` to grant access through User, Role, or Agent ACLs.
+- Roles operate at two levels. A **global System Admin** creates teams, adds members, manages users, and can use asset management features for Wiki, CodeGraph, and Skills. Within a team, **Admin** and **Member** roles govern how people collaborate on assets and control access. Each asset has an Owner who automatically has permission to manage it.
+<img src="assets/images/asset.png" alt="Memory Hub asset management" />
 
 
 ## Cold Start: Load the Save File, Then Get to Work
 
-Most Agents' first task is re-learning your project. TencentDB Agent Memory turns the learning cost you've already paid into a save file:
+Most Agents start by learning your project all over again. TencentDB Agent Memory saves what your team has already learned so the next Agent can start there:
 
-<img alt="Cold Start: import codebase, docs, and history into Memory Hub" src="assets/images/flowchart3.png" />
+<img alt="Cold start: import code, documents, and conversation history into Memory Hub" src="assets/images/flowchart3.png" />
 
-Specifically, these existing assets can be imported directly and processed automatically in the panel:
+Admins can configure a default Agent template for the team so new members can pick up the team's way of working.
 
-- **Codebases**: Import existing repositories — **CodeGraph** automatically indexes symbols, files, call relationships, and impact paths.
-- **Documents & files**: Import relevant docs and files — **Wiki** automatically generates structured pages with a link graph.
-- **Conversation sessions**: Import past Agent conversation sessions — **Skills and Chat Memory** are automatically extracted as reusable assets.
+Import these assets from the panel and let Memory Hub process them:
 
-> Stop retraining every Agent. Give it the save file.
+- **Codebases**: Import a public repository or a private repository with credentials configured. **CodeGraph** indexes symbols, files, call relationships, and impact paths.
+- **Documents and files**: Upload files or import them from a configured external source. **Wiki** organizes them into structured pages and a link graph.
+- **Conversation sessions**: Import past sessions from [supported clients](./agents/README.md#本地资产导入). **Skills and Chat Memory** are extracted from those conversations for reuse.
 
-## One Play Style: Build a Growing Agent Team for a One-Person Company
+> Give each new Agent the team's save file so it can pick up where the last one left off.
 
-Open Memory Hub and create a team:
+## Example: Build a Growing Agent Team for a One-Person Company
+
+Open Memory Hub and create a Team:
 
 ```text
 Tiny but Serious Inc.
 ├── 👤 You · Set goals / Make decisions
-├── 🔭 Scout · Research / Find opportunities
-├── 🛠 Builder · Write code / Build products
-├── 🧪 Reviewer · Test / Find issues
-└── 🧠 Agent Memory · Preserve the team's experience
+├── 🔭 Scout · Research / Spot opportunities
+├── 🛠 Builder · Write code / Build the product
+├── 🧪 Reviewer · Test / Find problems
+└── 🧠 Agent Memory · Keep what the team learns
 ```
 
-You're not opening four disconnected chat windows — you're assembling a squad with different roles that can inherit the team's accumulated experience.
+Instead of working across four disconnected chat windows, you have a team with distinct roles and a shared body of experience to draw from.
 
-### Recruit first, then equip
+### Recruit Your Agents, Then Equip Them
 
 ```text
 🔭 Scout
-   ├── User interview Chat Memory
-   ├── Market research Wiki
-   └── Competitive analysis Skill
+   ├── User Interview Chat Memory
+   ├── Market Research Wiki
+   └── Competitor Analysis Skill
 
 🛠 Builder
    ├── Product Wiki
@@ -181,162 +192,164 @@ You're not opening four disconnected chat windows — you're assembling a squad 
    └── Feature Delivery Skill
 
 🧪 Reviewer
-   ├── Historical incident Chat Memory
+   ├── Past Incident Chat Memory
    ├── Project CodeGraph
    └── Release Checklist Skill
 ```
 
-Different roles, different loadouts. Less noise — give each Agent the memory assets it actually needs to get work done.
+Each role gets its own Loadout. Give Agents the memory they need to do their jobs without crowding out the task at hand.
 
-**The company can be tiny. Experience can compound forever.**
+**Even a one-person company can build up experience that pays off with every task.**
 
-## Memory Assets, Not a Chat Log Warehouse
+## Memory Assets Go Beyond Chat History
 
-RAG answers "what can be found?" Team Memory also answers "who can use it, which version is valid, and which Agent should receive it."
+RAG helps an Agent find relevant information. Team Memory also tracks who can use it, which version is current, and which Agent should receive it.
 
-| | Chat History | Standard RAG | TencentDB Agent Memory |
+| | Chat History | Basic RAG | TencentDB Agent Memory |
 | :--- | :---: | :---: | :---: |
-| Cross-session user understanding | △ | △ | ✅ Chat Memory |
-| Distilled executable experience | — | — | ✅ Skill |
-| Document structure & relationships | — | △ Chunk retrieval | ✅ Wiki + Link Graph |
-| Code call graphs & impact scope | — | △ Text match | ✅ CodeGraph |
-| Ownership / Version / Status | — | — | ✅ |
-| Team sharing & Agent loadout | — | — | ✅ |
+| Understanding the user across sessions | △ | △ | ✅ Chat Memory |
+| Capturing reusable workflows | — | — | ✅ Skill |
+| Document structure and relationships | — | △ Chunk retrieval | ✅ Wiki + Link Graph |
+| Code calls and change impact | — | △ Text matches | ✅ CodeGraph |
+| Owner / Version / Status | — | — | ✅ |
+| Team sharing and Agent Loadout | — | — | ✅ |
 | Private / Team / ACL | — | △ | ✅ |
 
-## Memory Hub Is Not a Display Board — It's a Control Panel
+## What You Can Do in Memory Hub
 
-| Play Style | What you do in the Hub |
+| Capability | What you can do in Memory Hub |
 | :--- | :--- |
-| **Team Up** | Create teams, add people and Agents, define sharing boundaries |
+| **Team Setup** | Create a Team, add people and Agents, and decide what they can share |
 | **Asset Library** | Browse, search, review, and manage Chat Memory, Skills, Wiki, and CodeGraph |
-| **Agent Loadout** | Bind different memory assets to different Agents; adjust priority and usage mode |
-| **Knowledge Workshop** | Build Wiki and CodeGraph; monitor processing status and asset metadata |
-| **Access Control** | Switch between private, team, and ACL-based access; revoke sharing when needed |
+| **Agent Loadout** | Bind memory assets to individual Agents, adjust priority and usage, and configure the team's default template |
+| **Knowledge Workshop** | Build Wiki and CodeGraph assets and check their status and metadata |
+| **Access Control** | Choose private, team, or ACL-based access and revoke sharing when needed |
+| **Asset Usage Analytics** | Enable optional analytics to see how often memory, skill, and knowledge tools are called |
 
-When you open an asset, what matters is not just "what it says," but also "where it came from, which version it is, who it's assigned to, and whether it's been used recently."
+Open an asset to see what it contains, where it came from, which version you're looking at, who it was assigned to, and whether it was used recently.
 
-## Every Loop Gains Experience
+## Carry Experience from One Loop to the Next
 
-<img alt="Every Loop Gains Experience: continuous accumulation, making every use smarter" src="assets/images/flowchart4.png" />
+<img alt="How memory carries useful results into the next Agent loop" src="assets/images/flowchart4.png" />
 
-Memory doesn't run the Agent loop; it ensures the next iteration inherits the previous one's results: valuable interactions stay in Chat Memory, proven workflows are distilled into Skills, and document/code changes are updated through Wiki ingest and CodeGraph sync.
+The Agent runs the loop; Memory carries its results forward. Useful interactions go into Chat Memory, proven workflows become Skills, and changes to docs and code are reflected through Wiki ingest and CodeGraph sync.
 
-**Without Memory, loops may just repeat faster. With inherited memory, each iteration has the chance to be better than the last.**
+**A faster loop can still repeat the same mistakes. Memory gives each iteration a chance to build on the last one.**
 
-## One Agent Team: Shared Experience, Not Shared Privacy
+## Share Team Experience and Keep Private Assets Private
 
-New Chat Memory and Skills are private by default. Sharing is an explicit action, not a default leak.
+New Chat Memory and Skills are private by default. You decide when to share them.
 
-| Visibility | Semantics |
+| Visibility | Meaning |
 | :--- | :--- |
-| `private` | Only the Owner can read — not even team admins |
-| `team` | Team members can read; the Owner / Admin can manage |
-| `restricted` | Precise access via User / Role / Agent ACL |
-| `agent` | For targeted equipping of Agents within the same team |
+| `private` | Only the Owner can read the asset; Team Admins have no special access |
+| `team` | Team members can read it; the Owner or Admin can manage it |
+| `restricted` | Grant access through User, Role, or Agent ACLs |
+| `agent` | Assign the asset to specific Agents within the same team |
 
-You can assign the "Release Skill" to the Release Agent, the "Architecture Wiki" to all development Agents, and CodeGraph to Coder and Reviewer.
+For example, give the Release Skill to the Release Agent, share the Architecture Wiki with all development Agents, and assign CodeGraph to both the Coder and Reviewer.
 
 ## Technical Implementation
 
-TencentDB Agent Memory doesn't aim to "store everything." It solves three problems: **what's worth keeping, who can use it, and how to retrieve less while retrieving the right things next time.**
+TencentDB Agent Memory focuses on three questions: **What is worth keeping, who can use it, and how can the next Agent retrieve just what it needs?**
 
-<img alt="Technical overview: layering (L0–L3), Memory Assets, Memory Hub, identity-based assembly for Agents" src="assets/images/flowchart5.png" />
+<img alt="Technical overview: L0–L3 memory layers, Memory Assets, Memory Hub, and asset assignment by Agent identity" src="assets/images/flowchart5.png" />
 
-### 1. Memory isn't flat records — it grows in layers
 
-Conversations are first saved as L0, then refined by an async pipeline into multiple levels of granularity:
+### 1. Memory Builds Up in Layers
 
-| Layer | What it stores | Primary use |
+Conversations are saved at L0. An asynchronous pipeline then distills them into layers with different levels of detail:
+
+| Layer | What it stores | Main use |
 | :--- | :--- | :--- |
-| **L0 Conversation** | Raw conversations with full context | Verify exact wording, timestamps, and sources |
-| **L1 Atom** | Facts, preferences, constraints, and events extracted from conversations | Precise recall of actionable information |
-| **L2 Scenario** | Knowledge blocks organized around projects or scenarios | Quickly restore a working context |
-| **L3 Core / Persona** | Long-term profiles, stable patterns, and high-level cognition | Let Agents rapidly enter a user's and team's context |
+| **L0 Conversation** | Raw conversations with full context | Verify the original wording, time, and source |
+| **L1 Atom** | Facts, preferences, constraints, and events extracted from conversations | Retrieve precise information an Agent can act on |
+| **L2 Scenario** | Blocks of knowledge organized by project or scenario | Restore the context for a piece of work |
+| **L3 Core / Persona** | Long-term profiles, recurring patterns, and higher-level insights | Help the Agent quickly understand the user and team |
 
-Both generation and retrieval are layered: normally, L2/L3 provide a quick context bootstrap; when specific facts are needed, BM25 + vector retrieval + RRF fall back to L1/L0. Results are further capped by item count, character budget, and timeout limits to prevent memory from overwhelming the context window.
+Retrieval follows the same layers. L2 and L3 give the Agent context quickly; when it needs a specific fact, BM25, vector search, and reciprocal rank fusion (RRF) retrieve details from L1 and L0. Result limits, character budgets, and timeouts keep memory from taking over the context window.
 
-### 2. Memory isn't a global prompt — it's the Agent's loadout
+### 2. Memory Is Part of Each Agent's Loadout
 
-Chat Memory, Skills, Wiki, and CodeGraph are all registered uniformly as Memory Assets. Memory Hub uses **Fixed Binding + ACL** to determine which assets a given Agent can use: first narrow the permission scope by Team, User, Agent, and visibility, then retrieve based on the current query.
+Chat Memory, Skills, Wiki, and CodeGraph are all registered as Memory Assets. Memory Hub uses **Fixed Binding + ACL** to determine what an Agent can use. It first limits access by Team, User, Agent, and visibility, then retrieves relevant assets for the current query.
 
-This lets teams share experience without exposing all their private information; switching Agents or frameworks only requires re-equipping, not retraining.
+This lets teams share what they've learned while keeping private assets protected. When you switch Agents or frameworks, you can reassign existing assets without retraining.
 
-### 3. Knowledge isn't injected wholesale — it's called on demand
+### 3. Agents Retrieve Knowledge on Demand
 
-Documents are organized into searchable Wiki pages that support link-graph drill-down; codebases are indexed into CodeGraph assets containing files, symbols, and call relationships. Agents first discover capabilities via `/v3/tools/list`, then use `/v3/tools/call` to read relevant pages, source code, or impact paths.
+Documents become searchable Wiki pages whose links the Agent can follow. CodeGraph indexes repository files, symbols, and call relationships. Agents call the knowledge tools they have access to when they need a page, a source file, or an impact path. The Knowledge service exposes `/v3/tools/list` and `/v3/tools/call` for integrations.
 
-This makes documents and code part of memory as well — but they remain available tools that only enter context when truly needed.
+Documents and code stay available as memory without taking up space in the Agent's context until needed.
 
 ## Benchmark
 
-| Benchmark | Without TencentDB Agent Memory | With it enabled | Relative improvement |
+| Benchmark | Without TencentDB Agent Memory | With TencentDB Agent Memory | Relative Improvement |
 | :--- | :---: | :---: | :---: |
 | **PersonaMem** | 48% | **76%** | **+59%** |
 
-PersonaMem tests whether an Agent can correctly understand and apply user information after extended interactions.
+PersonaMem measures how well an Agent understands and applies information about a user after extended interactions.
 
 ## Notes
 
-- Wiki and CodeGraph are built asynchronously; allow some processing time before they reach `ready` status.
-- CodeGraph currently prioritizes public HTTPS repositories; support for private repositories and SSH credentials is still being refined.
-- The Hub supports manual asset binding; fully automated memory routing is still under iteration.
+- Wiki and CodeGraph build asynchronously. Wait until they report `ready` before using them.
+- CodeGraph supports public HTTPS repositories and private repositories with team credentials. To clone a private repository over SSH, get the public key from the panel and grant it access on your code hosting platform.
+- Memory Hub lets you assign assets manually. On-demand Skill selection in the Proxy is off by default. When enabled, the Proxy chooses which Skills to load for the current conversation.
 
 ## Related Documentation
 
-- [Roadmap](./ROADMAP.md) (what we're building next)
-- [Full Installation Guide](./INSTALL.md) (Memory Core + Hub + Proxy one-click deployment)
-- [Roadmap](./ROADMAP.md) (what we're building next; 中文: [ROADMAP_CN.md](./ROADMAP_CN.md))
-- [Data Migration Tool (v2 → v3)](./MemoryCore/scripts/migrate-v2-to-v3/README.md) (if you're on an older release and want to migrate existing data)
+- [Full Installation Guide](./INSTALL.md)
+- [Client Integration and Local Asset Import](./agents/README.md)
+- [Data Migration Tool (v2 → v3)](./MemoryCore/scripts/migrate-v2-to-v3/README.md)
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
 - **API Documentation**:
   - [Memory Core v3 API](./MemoryCore/v3-api-memorycore-doc.md)
   - [Memory Knowledge v3 API](./MemoryKnowledge/v3-api-memoryknowledge-doc.md)
   - [Memory Proxy v3 API](./MemoryProxy/v3-api-memoryproxy-doc.md)
   - [Memory Panel API](./MemoryPanel/panel-api-doc.md)
-- [Contributing Guide](./CONTRIBUTING.md)
+- [Contribution Guide](./CONTRIBUTING.md)
 
-Agent Memory doesn't have a settled standard yet. Bug reports, documentation, benchmarks, new framework adapters, and more creative Memory Hub use cases are all welcome.
 
 ---
 ## Roadmap
 
-Current release is **v2.0.0**. Next up (**v2.0.1**): zero-config cold start, faster Wiki generation, user/team custom prompts, Skill export, and Codex (IDE Plan mode) support.
+[v2.0.3](https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/tag/v2.0.3) adds default session bindings and support for rich document formats in Wiki. See [GitHub Releases](https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/latest) for the latest stable release and [CHANGELOG.md](./CHANGELOG.md) for the release history.
 
-👉 See the full plan in [**ROADMAP.md**](./ROADMAP.md) (中文: [ROADMAP_CN.md](./ROADMAP_CN.md)).
+See [**ROADMAP.md**](./ROADMAP.md) ([Chinese](./ROADMAP_CN.md)) for earlier plans.
 
 ---
 ## Acknowledgements
 
-TencentDB Agent Memory stands on the shoulders of the open-source community:
+TencentDB Agent Memory builds on the work of the open-source community:
 
-- [**CodeGraph**](https://github.com/colbymchenry/codegraph) — our CodeGraph asset module **uses code from this project**. Its design of a pre-indexed code graph is the foundation of our implementation.
-- [**Hermes Agent**](https://github.com/nousresearch/hermes-agent) (Nous Research) — our Skill asset management **uses part of the Skill-related code from Hermes Agent and builds further optimizations base on it**.
-- [**"LLM Wiki"** by Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — the idea of treating documentation as an LLM-maintained, incrementally growing knowledge artifact directly informed how our Wiki layer is built and kept up to date.
+- [**CodeGraph**](https://github.com/colbymchenry/codegraph): We **reuse code from this project** in our CodeGraph asset module. Its pre-indexed code graph is the basis for our implementation.
+- [**Hermes Agent**](https://github.com/nousresearch/hermes-agent) (Nous Research): We **reuse and extend parts of the Hermes Agent Skill implementation** to manage Skill assets.
+- [**Andrej Karpathy's “LLM Wiki”**](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): The idea of an LLM maintaining a knowledge base incrementally, so it becomes more useful over time, shaped how we build and maintain the Wiki layer.
 
-We are grateful to the authors and contributors of these projects.
+Thank you to the authors and contributors of these projects.
 
 ---
 ## Community & Contributing
 
-We welcome contributions of all kinds — bug reports, feature suggestions, documentation fixes, benchmark reproductions, ecosystem integrations, or pull requests. Agent memory is far from settled, and we hope to build it together with the community.
+We welcome bug reports, feature ideas, documentation fixes, benchmark reproductions, integrations, and pull requests. There is still a lot to figure out about Agent memory, and we'd like to build it with you.
 
-- 🐞 **Found a bug or have a question?** Open an issue in [GitHub Issues](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues) — we respond within 24 hours.
+- 🐞 **Found a bug or have a question?** Open a [GitHub Issue](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues). We'll respond within 24 hours.
 - 💡 **Have an idea to share?** Start a thread in [GitHub Discussions](https://github.com/TencentCloud/TencentDB-Agent-Memory/discussions).
-- 🛠️ **Want to contribute code?** Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
-- 💬 **Want to chat with us?** Join our [Discord community](https://discord.gg/dJQM6mKMF) and talk to the core developers directly.
+- 🛠️ **Want to contribute code?** Start with the [contribution guide](./CONTRIBUTING.md).
+- ☁️ **Try the hosted version**: [Tencent Cloud Agent Memory](https://cloud.tencent.com/product/agm) is now available.
+- 💬 **Want to join the community?** Scan the QR code to join the **Agent Memory WeChat group** and talk directly with the early developers.
+<p align="center"><img src="https://github.com/user-attachments/assets/41ed193d-e70e-484e-8627-0e363a4b1eb0" width="200" alt="Agent Memory WeChat community QR code" /></p>
 
 ---
 
 <p align="center">
- Let the path the team has walked become the next Agent's starting line.
+  Let the next Agent start where your team left off.
 </p>
 
 ---
 
 ## ✨ Contributors
 
-> 💡 Thanks to the following contributors building with us — you make TencentDB Agent Memory better.
+> 💡 Thank you to everyone who has helped make TencentDB Agent Memory better.
 
 <div align="center">
   <a href="https://github.com/TencentCloud/TencentDB-Agent-Memory/graphs/contributors">
@@ -345,7 +358,7 @@ We welcome contributions of all kinds — bug reports, feature suggestions, docu
 
   <br /><br />
 <a href="https://github.com/TencentCloud/TencentDB-Agent-Memory/issues">
-  <img src="https://img.shields.io/badge/Contributions_Welcome-006eff?style=for-the-badge&logo=github&logoColor=white" alt="Contributions Welcome" />
+  <img src="https://img.shields.io/badge/Contribute-006eff?style=for-the-badge&logo=github&logoColor=white" alt="Contribute" />
 </a>
 
 </div>
@@ -354,8 +367,8 @@ We welcome contributions of all kinds — bug reports, feature suggestions, docu
 <table width="100%">
   <tr>
     <td width="68%">
-      <b>If TencentDB Agent Memory has been helpful to you, please consider starring the project.</b><br />
-      If you have any suggestions, feel free to open an issue for discussion.
+      <b>If TencentDB Agent Memory helps you, give the project a ⭐ on GitHub.</b><br />
+      Have a suggestion? Open an issue and tell us what you have in mind.
     </td>
     <td width="32%" align="right">
       <img src="./assets/images/star-helper.png" alt="Star TencentDB Agent Memory" width="260" />
