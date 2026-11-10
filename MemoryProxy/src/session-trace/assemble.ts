@@ -70,6 +70,7 @@ interface OpenAIToolCall {
 export class OpenAIChatAssembler {
   private readonly fields = new Map<string, string | unknown[]>();
   private readonly toolCalls = new Map<number, OpenAIToolCall>();
+  private functionCall: { name: string; arguments: string } | null = null;
   private role = "assistant";
   private finishReason: string | null = null;
 
@@ -86,6 +87,10 @@ export class OpenAIChatAssembler {
     for (const [key, value] of Object.entries(delta)) {
       if (key === "role") {
         if (typeof value === "string") this.role = value;
+      } else if (key === "function_call" && isRecord(value)) {
+        this.functionCall ??= { name: "", arguments: "" };
+        if (typeof value.name === "string") this.functionCall.name += value.name;
+        if (typeof value.arguments === "string") this.functionCall.arguments += value.arguments;
       } else if (key === "tool_calls") {
         if (Array.isArray(value)) value.forEach((tc) => this.mergeToolCall(tc));
       } else if (typeof value === "string") {
@@ -116,11 +121,12 @@ export class OpenAIChatAssembler {
   result(): ModelReply {
     const output: Json = { role: this.role };
     for (const [key, value] of this.fields) output[key] = value;
-    if (!("content" in output)) output.content = this.toolCalls.size > 0 ? null : "";
+    if (!("content" in output)) output.content = this.toolCalls.size > 0 || this.functionCall ? null : "";
+    if (this.functionCall) output.function_call = this.functionCall;
     if (this.toolCalls.size > 0) {
       output.tool_calls = [...this.toolCalls.entries()].sort(([a], [b]) => a - b).map(([, tc]) => tc);
     }
-    return { output, stopReason: this.finishReason, toolCallCount: this.toolCalls.size };
+    return { output, stopReason: this.finishReason, toolCallCount: this.toolCalls.size + (this.functionCall ? 1 : 0) };
   }
 }
 
