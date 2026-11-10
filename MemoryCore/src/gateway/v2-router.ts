@@ -28,6 +28,7 @@ import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
 import type { MemoryRecord } from "../core/record/l1-writer.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
+import { runWithSkillAssetInstance } from "../core/skill/skill-asset-context.js";
 
 // ── Zod schemas (validated types + defaults) ──
 import {
@@ -632,7 +633,12 @@ export async function handleV2Route(
     const handlerStart = Date.now();
     const envelope = handler
       ? await handler(body, auth, requestId, depsWithIsolation)
-      : await extra!(body, auth, requestId, depsWithIsolation as unknown);
+      : pathname.startsWith("/v3/skill/")
+        ? await runWithSkillAssetInstance(
+            auth.serviceId,
+            () => extra!(body, auth, requestId, depsWithIsolation as unknown),
+          )
+        : await extra!(body, auth, requestId, depsWithIsolation as unknown);
     perfMark("handler", `dur=${Date.now() - handlerStart}ms envelope_code=${envelope.code}`);
     const httpStatus = envelope.code === 0 ? 200 : envelope.code >= 400 && envelope.code < 600 ? envelope.code : 200;
     const sendStart = Date.now();

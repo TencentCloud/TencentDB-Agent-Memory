@@ -101,9 +101,10 @@ export interface SkillRouterDeps {
    * 拿到 (per instance) 的 MetadataService。用于 handleCreate 成功后自动登记
    * skill 资产（asset_id === skill_id）并绑定到 owner agent 的 fixed-asset。
    *
-   * standalone 模式下 SkillCore 是 TdaiCore 全局构造的（不带钩子），所以由 handler
-   * 层做这个登记；service 模式下 buildSkillCore 里的 onSkillCreated 钩子会做同样的
-   * 事（幂等，重复调用无副作用）。两条路径都覆盖，保证前端管控页永远能看到 skill。
+   * standalone 模式下 TdaiCore 的全局 SkillCore 也会触发钩子，并通过
+   * request-scoped serviceId 选择正确的 MetadataService；handler 层仍保留这次
+   * 幂等登记作为兜底。service 模式下 buildSkillCore 的 per-instance 钩子做同样
+   * 的事。两条路径都覆盖，保证前端管控页永远能看到 skill。
    *
    * 语义与 v2-router 里 handleConversationAdd 用同一 dep 自动登记 chat_memory 资产
    * 一致（详见 v2-router.ts:648 及 metadata-service.ts:ensureSkillAsset）。
@@ -306,9 +307,10 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
     // ── 自动登记 skill 资产（asset_id === skill_id）+ 绑定到 owner agent 的 fixed-asset ──
     //
     // 为什么要在这里做：
-    //   - standalone 模式下 SkillCore 由 TdaiCore 全局构造（无 onSkillCreated 钩子）；
-    //   - 若不在这里补登记，asset/list-accessible / acl/* 等元数据层接口就查不到这个 skill，
-    //     前端管控页的"团队资产 / 授权"链路完全断开。
+    //   - standalone 模式下全局 SkillCore 钩子会通过 request-scoped serviceId
+    //     登记一次；这里保留同样的幂等调用作为兜底；
+    //   - asset/list-accessible / acl/* 等元数据层接口依赖这次登记，
+    //     否则前端管控页的"团队资产 / 授权"链路完全断开。
     //
     // 与 service 模式的关系：
     //   - service 模式下 gateway 用 buildSkillCore 构造 per-instance SkillCore 时挂了同名钩子，
@@ -403,8 +405,8 @@ export async function handleDelete(body: unknown, _auth: V2AuthContext, requestI
     // 为什么在这里再做一次：
     //   - service 模式：buildSkillCore 里的 onSkillArchived 钩子已经调过一次；这里再
     //     调是幂等收敛（deleteAssets 对已不存在的 asset 视为成功，无副作用）。
-    //   - standalone 模式：SkillCore 由 TdaiCore 全局构造，未注入钩子（避免耦合
-    //     MetadataService 拉起时序）。handler 层这一次调用是唯一联动入口。
+    //   - standalone 模式：全局 SkillCore 钩子与这里的兜底都会执行；handler
+    //     使用请求的 auth.serviceId，保证多实例部署删除正确的 metadata 资产。
     //
     // 失败策略：fire-and-forget，warn 不回退 delete。二次 delete 会重触发 core 钩子
     // 与本次兜底，最终收敛。参考 handleCreate 里 ensureSkillAsset 的对称做法
