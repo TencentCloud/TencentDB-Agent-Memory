@@ -31,7 +31,7 @@ v3 与 v2 的主要差异：
 - Offload / COS 文件读取等非 L0-L3 能力仍使用 v2 客户端。
 
 ```typescript
-import { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts/v3";
+import { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 
 const client = new MemoryClient({
   endpoint: "http://127.0.0.1:8420",
@@ -98,6 +98,66 @@ await client.addConversation({
   ],
 });
 ```
+
+## 不改模型供应商的直连方式
+
+如果客户端支持生命周期 hook 或插件，可以用本 SDK 直接访问 Memory Core，
+同时保留原来的模型供应商、API 地址、登录方式和模型选择。模型请求仍走客户端
+原有链路；hook 单独调用 Memory Gateway `/v3/*`，不需要把模型流量转发给 MemoryProxy。
+
+```text
+编码 Agent ─────────────────► 原有模型供应商
+    └─ 生命周期 hook ────────► Memory Core /v3/*（本 SDK）
+```
+
+从可信部署配置创建客户端，在召回和完整回合结束后的采集 hook 中使用：
+
+```typescript
+import { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
+
+const memory = new MemoryClient({
+  endpoint: process.env.TDAI_MEMORY_ENDPOINT!,
+  apiKey: process.env.TDAI_MEMORY_API_KEY!,
+  serviceId: process.env.TDAI_MEMORY_SERVICE_ID!,
+  teamId: process.env.TDAI_MEMORY_TEAM_ID!,
+  agentId: process.env.TDAI_MEMORY_AGENT_ID!,
+  userId: process.env.TDAI_MEMORY_USER_ID!,
+});
+
+// 构造 prompt 前召回，并限制结果数量和注入长度。
+const recalled = await memory.searchConversation({ query: userPrompt, limit: 5 });
+const recalledContext = recalled.messages
+  .slice(0, 5)
+  .map((hit) => hit.content)
+  .join("\n")
+  .slice(0, 4000);
+// 通过客户端原生的“不可信上下文”机制传入 recalledContext。
+
+// 逻辑回合完成后只采集一次。
+const turnMemory = memory.withIsolation({ sessionId });
+await turnMemory.addConversation({
+  messages: [
+    { role: "user", content: userPrompt },
+    { role: "assistant", content: finalAnswer },
+  ],
+});
+```
+
+### Hook 接入边界
+
+- 召回失败时应 fail open，不阻断客户端正常请求。召回内容是历史上下文，
+  应按不可信文本处理并限制注入长度。
+- 在完整逻辑回合结束时采集，不要对同一回合的每个模型/工具请求重复采集。
+  `addConversation()` 没有服务端幂等键，因此不能保证 exactly-once。客户端需要重试
+  hook 时，可用稳定的回合 ID 做本地去重；不要只按消息文本去重，因为不同回合
+  可能有相同文本。
+- 每个回合只选一个召回/采集入口。如果 MemoryProxy 已负责注入或记录该回合，
+  再运行直连 hook 可能产生重复内容。
+- API key 放在客户端密钥存储或环境变量里，不要写入 prompt、源码或日志。
+  `teamId` / `agentId` / `userId` 从可信配置读取；这些 ID 用于请求隔离，不能替代
+  Gateway 认证与授权。向远端暴露服务前，应确认 Gateway 的认证和租户策略。
+- 本节说明通用 SDK 接入方式，不是 Codex、Claude Code、ZCode 或 OpenCode 的即插即用插件；
+  每个客户端仍需适配自己的 hook 生命周期和事件格式。
 
 ## API 方法
 
