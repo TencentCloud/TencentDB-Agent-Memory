@@ -342,7 +342,7 @@ We welcome bug reports, feature ideas, documentation fixes, benchmark reproducti
 ---
 
 <p align="center">
-  Let the next Agent start where your team left off.
+Let the path the team has walked become the next Agent's starting line.
 </p>
 
 ---
