@@ -737,6 +737,16 @@ async function applyDecisions(params: {
 
       if (record) {
         storedRecords.push(record);
+        // Observability anchor (#1874): a dedup judgment that merges or updates
+        // existing records persists silently today — aggregate decision counters
+        // cannot be traced back to individual decisions during audits. Log
+        // decision metadata only (ids/action/length), never content, so PII
+        // stays out of logs. Judgment behavior is unchanged.
+        if (decision.action === "merge" || decision.action === "update") {
+          logger?.info(
+            `${TAG} l1-dedup-merge-decision record=${decision.record_id} action=${decision.action} targets=${decision.target_ids.join(",") || "(none)"} contentLen=${memoryWithId.content.length} - merge/update decision persisted (mis-merge observation anchor)`,
+          );
+        }
       }
     } catch (err) {
       logger?.warn?.(
