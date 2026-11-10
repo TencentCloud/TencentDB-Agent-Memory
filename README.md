@@ -51,7 +51,7 @@ See the [**Data Migration Tool (v2 → v3)**](./MemoryCore/scripts/migrate-v2-to
 
 ## All Agents Share the Same Memory Server
 
-Follow your client's setup guide to configure the Proxy URL and User Key. Supported clients connect using their existing model protocols, without an additional plugin, hook, or MCP server.
+Follow your client's setup guide to configure the Proxy URL and User Key. Most supported clients connect using their existing model protocols without an additional plugin, hook, or MCP server.
 
 <table>
 <tr>
@@ -68,13 +68,13 @@ Follow your client's setup guide to configure the Proxy URL and User Key. Suppor
 </tr>
 <tr>
 <td align="center" width="140" colspan="2"><a href="./agents/opencode/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://opencode.ai/brand/files/opencode-logo-dark-square.png" /><img src="https://opencode.ai/brand/files/opencode-logo-light-square.png" width="48" height="48" alt="" /></picture><br /><sub><b>OpenCode</b></sub></a></td>
-<td align="center" width="140" colspan="2"><a href="https://github.com/TencentCloud/TencentDB-Agent-Memory/releases/tag/v2.0.2"><img src="https://pi.dev/favicon.svg" width="48" height="48" alt="" /><br /><sub><b>Pi</b></sub></a></td>
+<td align="center" width="140" colspan="2"><a href="./MemoryCore/pi-plugin/README.md"><img src="https://pi.dev/favicon.svg" width="48" height="48" alt="" /><br /><sub><b>Pi</b></sub></a></td>
 </tr>
 </table>
 
 See the table above or the [integration overview](./agents/README.md) for client-specific setup instructions.
 
-OpenCode has a [ready-to-use adapter configuration](./adapters/opencode/README.md), and Pi connects through OpenAI Chat Completions. After binding a session, you can save a Team, Agent, and Task combination as the default for new sessions.
+OpenCode has a [ready-to-use adapter configuration](./adapters/opencode/README.md), and Pi uses the [`pi-plugin` extension](./MemoryCore/pi-plugin/README.md) to connect through OpenAI Chat Completions. After binding a session, you can save a Team, Agent, and Task combination as the default for new sessions.
 
 Don't see your preferred Agent? The [new client integration guide](./agents/adapter-agent-development.md) explains how to add support. PRs are welcome; see [**CONTRIBUTING.md**](./CONTRIBUTING.md) to get started.
 
@@ -335,7 +335,7 @@ We welcome bug reports, feature ideas, documentation fixes, benchmark reproducti
 - 🐞 **Found a bug or have a question?** Open a [GitHub Issue](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues). We'll respond within 24 hours.
 - 💡 **Have an idea to share?** Start a thread in [GitHub Discussions](https://github.com/TencentCloud/TencentDB-Agent-Memory/discussions).
 - 🛠️ **Want to contribute code?** Start with the [contribution guide](./CONTRIBUTING.md).
-- ☁️ **Try the hosted version**: [Tencent Cloud Agent Memory](https://cloud.tencent.com/product/agm) is now available.
+- ☁️ **Try the cloud-hosted version**: [Tencent Cloud Agent Memory](https://cloud.tencent.com/product/agm) is now available.
 - 💬 **Want to join the community?** Scan the QR code to join the **Agent Memory WeChat group** and talk directly with the early developers.
 <p align="center"><img src="https://github.com/user-attachments/assets/41ed193d-e70e-484e-8627-0e363a4b1eb0" width="200" alt="Agent Memory WeChat community QR code" /></p>
 
